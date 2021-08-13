@@ -1,8 +1,41 @@
+<!DOCTYPE html>
 <html>
+
 <head>
-<title>Garden of Æther</title>
+<title>_garden</title>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="render.js"></script>
+<script src="aether.js"></script>
+<script src="mote.js"></script>
+<script src="wave.js"></script>
+<script src="particle.js"></script>
+<script src="glob.js"></script>
+<script src="element.js"></script>
+
+<script src="test.js"></script>
+
+<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="description" content="garden">
+<meta name="keywords" content="garden">
+<meta property="og:type" content="website" />
+
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="android-chrome-192x192.png">
+<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+<link rel="manifest" href="manifest.json">
+<link rel="mask-icon" href="safari-pinned-tab.svg" color="#5bbad5">
+<meta name="msapplication-TileColor" content="#00a300">
+<meta name="theme-color" content="#ffffff">
 </head>
-<body>
-bong
+
+<body style="margin: 0px; padding: 0px; width: 100%; height: 100%;">
+    <!-- <div id="vrButton" style="z-index: 1; position: absolute;">XXX</div> -->
+
+<div id="canvas_container" style=" position: fixed; width: 100%; height: 100%;">
+<canvas id="canvas" style="width: 100%; height: 100%; touch-action: none;"></canvas>
+</div>
 </body>
+
 </html>

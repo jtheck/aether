@@ -100,6 +100,15 @@ window.addEventListener('DOMContentLoaded', function() {
 
         var tetrahedron = BABYLON.MeshBuilder.CreatePolyhedron("tetrahedron", {type: 0, size: .01}, scene);
         tetrahedron.position.y = 2;
+
+        for (var ix=-10;ix<10;ix+=.5) {
+          for (var iz=-10;iz<10;iz+=.5){
+            tt = tetrahedron.createInstance();
+            tt.position.x = ix;
+            tt.position.y = Math.cos(ix)+Math.sin(iz);
+            tt.position.z = iz;
+          }
+        }
         
 
         // Create a built-in "sphere" shape. 

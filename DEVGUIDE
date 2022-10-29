@@ -1,3 +1,8 @@
+
+
+
 To deploy:
-1) Upload/overwrite to S3
-2) Run Cloudfront invalidation /*
+ - Go to AWS S3 bucket
+  - Upload changed files
+ - Go to CLoudfront -> Distributions
+  - Run Invalidation " /* "

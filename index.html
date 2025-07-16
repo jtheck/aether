@@ -1,53 +1,229 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-<title>_garden</title>
-<script src="https://cdn.babylonjs.com/babylon.js"></script>
-<script src="ae/render.js"></script>
-<script src="ae/aether.js"></script>
-<script src="ae/mote.js"></script>
-<script src="ae/wave.js"></script>
-<script src="ae/particle.js"></script>
-<script src="ae/glob.js"></script>
-<script src="ae/element.js"></script>
-
-<script src="test.js"></script>
-
-<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="description" content="garden">
-<meta name="keywords" content="garden">
-<meta property="og:type" content="website" />
-
-<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
-<link rel="icon" type="image/png" sizes="192x192" href="android-chrome-192x192.png">
-<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
-<link rel="manifest" href="manifest.json">
-<link rel="mask-icon" href="safari-pinned-tab.svg" color="#5bbad5">
-<meta name="msapplication-TileColor" content="#00a300">
-<meta name="theme-color" content="#ffffff">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>_garden</title>
+    <meta name="description" content="Choose between two unique experiences">
+    <meta name="keywords" content="garden, experience, interactive">
+    <meta property="og:type" content="website" />
+    
+    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="icons/android-chrome-192x192.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16x16.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="mask-icon" href="icons/safari-pinned-tab.svg" color="#5bbad5">
+    <meta name="msapplication-TileColor" content="#00a300">
+    <meta name="theme-color" content="#ffffff">
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        .half {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+        
+        .half::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.3);
+            transition: all 0.3s ease;
+        }
+        
+        .half:hover::before {
+            background: rgba(0, 0, 0, 0.1);
+        }
+        
+        .half:hover {
+            transform: scale(1.02);
+        }
+        
+        .left {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .right {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        
+        .content {
+            text-align: center;
+            color: white;
+            z-index: 2;
+            position: relative;
+            padding: 2rem;
+        }
+        
+        .title {
+            font-size: 3rem;
+            font-weight: 300;
+            margin-bottom: 1rem;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-bottom: 2rem;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+        }
+        
+        .enter-btn {
+            display: inline-block;
+            padding: 1rem 2rem;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50px;
+            color: white;
+            text-decoration: none;
+            font-size: 1.1rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        .enter-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .divider {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 4px;
+            height: 80px;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+            z-index: 3;
+        }
+        
+        .particles {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            animation: float 6s infinite ease-in-out;
+        }
+        
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0px) rotate(0deg);
+                opacity: 0;
+            }
+            50% {
+                opacity: 1;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                flex-direction: column;
+            }
+            
+            .title {
+                font-size: 2rem;
+            }
+            
+            .subtitle {
+                font-size: 1rem;
+            }
+            
+            .divider {
+                width: 80px;
+                height: 4px;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+            }
+        }
+    </style>
 </head>
-
-<body style="margin: 0px; padding: 0px; width: 100%; height: 100%;">
-  <div id="xr_button" style="z-index: 1; position: absolute;  right: 20px;
-  height: 50px;
-  width: 80px;background-image: url(data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%222048%22%20height%3D%221152%22%20viewBox%3D%220%200%202048%201152%22%20version%3D%221.1%22%3E%3Cpath%20transform%3D%22rotate%28180%201024%2C576.0000000000001%29%22%20d%3D%22m1109%2C896q17%2C0%2030%2C-12t13%2C-30t-12.5%2C-30.5t-30.5%2C-12.5l-170%2C0q-18%2C0%20-30.5%2C12.5t-12.5%2C30.5t13%2C30t30%2C12l170%2C0zm-85%2C256q59%2C0%20132.5%2C-1.5t154.5%2C-5.5t164.5%2C-11.5t163%2C-20t150%2C-30t124.5%2C-41.5q23%2C-11%2042%2C-24t38%2C-30q27%2C-25%2041%2C-61.5t14%2C-72.5l0%2C-257q0%2C-123%20-47%2C-232t-128%2C-190t-190%2C-128t-232%2C-47l-81%2C0q-37%2C0%20-68.5%2C14t-60.5%2C34.5t-55.5%2C45t-53%2C45t-53%2C34.5t-55.5%2C14t-55.5%2C-14t-53%2C-34.5t-53%2C-45t-55.5%2C-45t-60.5%2C-34.5t-68.5%2C-14l-81%2C0q-123%2C0%20-232%2C47t-190%2C128t-128%2C190t-47%2C232l0%2C257q0%2C68%2038%2C115t97%2C73q54%2C24%20124.5%2C41.5t150%2C30t163%2C20t164.5%2C11.5t154.5%2C5.5t132.5%2C1.5zm939%2C-298q0%2C39%20-24.5%2C67t-58.5%2C42q-54%2C23%20-122%2C39.5t-143.5%2C28t-155.5%2C19t-157%2C11t-148.5%2C5t-129.5%2C1.5q-59%2C0%20-130%2C-1.5t-148%2C-5t-157%2C-11t-155.5%2C-19t-143.5%2C-28t-122%2C-39.5q-34%2C-14%20-58.5%2C-42t-24.5%2C-67l0%2C-257q0%2C-106%2040.5%2C-199t110%2C-162.5t162.5%2C-109.5t199%2C-40l81%2C0q27%2C0%2052%2C14t50%2C34.5t51%2C44.5t55.5%2C44.5t63.5%2C34.5t74%2C14t74%2C-14t63.5%2C-34.5t55.5%2C-44.5t51%2C-44.5t50%2C-34.5t52%2C-14l14%2C0q37%2C0%2070%2C0.5t64.5%2C4.5t63.5%2C12t68%2C23q71%2C30%20128.5%2C78.5t98.5%2C110t63.5%2C133.5t22.5%2C149l0%2C257z%22%20fill%3D%22white%22%20/%3E%3C/svg%3E%0A);
-  background-color: rgba(51,51,51,0.7);
-  background-size: 80%;
-  background-repeat: no-repeat;
-  background-position: center;
-  border: none;
-  outline: none;
-  transition: transform 0.125s ease-out;
-  display: none;"></div>
-
-<div id="canvas_container" style=" position: fixed; width: 100%; height: 100%;">
-  <canvas id="canvas" style="width: 100%; height: 100%; touch-action: none;"></canvas>
-</div>
-
-<div id="console_log" style="position: absolute; z-index: 1; background-color: #fff5;"></div>
+<body>
+    <div class="container">
+        <div class="half left" onclick="window.location.href='./ae/ae.html'">
+            <div class="particles">
+                <div class="particle" style="left: 20%; animation-delay: 0s;"></div>
+                <div class="particle" style="left: 40%; animation-delay: 1s;"></div>
+                <div class="particle" style="left: 60%; animation-delay: 2s;"></div>
+                <div class="particle" style="left: 80%; animation-delay: 3s;"></div>
+            </div>
+            <div class="content">
+                <h1 class="title">Aether</h1>
+                <p class="subtitle">Explore the ethereal realm</p>
+                <a href="./ae/ae.html" class="enter-btn">Enter Aether</a>
+            </div>
+        </div>
+        
+        <div class="half right" onclick="window.location.href='./rt/rt.html'">
+            <div class="particles">
+                <div class="particle" style="left: 20%; animation-delay: 0.5s;"></div>
+                <div class="particle" style="left: 40%; animation-delay: 1.5s;"></div>
+                <div class="particle" style="left: 60%; animation-delay: 2.5s;"></div>
+                <div class="particle" style="left: 80%; animation-delay: 3.5s;"></div>
+            </div>
+            <div class="content">
+                <h1 class="title">Realtime</h1>
+                <p class="subtitle">Experience the moment</p>
+                <a href="rt/rt.html" class="enter-btn">Enter Realtime</a>
+            </div>
+        </div>
+        
+        <div class="divider"></div>
+    </div>
+    
+    <script>
+        // Simple hover effects for the landing page
+        document.querySelectorAll('.half').forEach(half => {
+            half.addEventListener('mouseenter', () => {
+                half.style.transform = 'scale(1.02)';
+            });
+            
+            half.addEventListener('mouseleave', () => {
+                half.style.transform = 'scale(1)';
+            });
+        });
+    </script>
 </body>
-
 </html>

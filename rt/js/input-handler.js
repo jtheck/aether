@@ -12,6 +12,8 @@ class InputHandler {
     this.pointerStartTime = 0;
     this.longPressTimeout = null;
     this.longPressDelay = 500; // ms
+    this.tapHandled = false; // Flag to prevent long press after tap
+    this.touchLocked = false; // Flag to prevent multiple rapid touches
     
     // Touch tracking for mobile
     this.touchStartX = undefined;
@@ -59,7 +61,7 @@ class InputHandler {
   
   adjustForMobile() {
     // Adjust settings for mobile devices
-    this.longPressDelay = 300; // Shorter long press delay on mobile
+    this.longPressDelay = 800; // Longer long press delay on mobile to avoid conflicts with taps
     
     // Add mobile-specific CSS classes
     document.body.classList.add('mobile-device');
@@ -98,15 +100,21 @@ class InputHandler {
       this.handlePointerUp(evt);
     });
     
-    // Tap events for quick actions
-    this.ftxx.on(this.canvas, 'tap', (evt) => {
-      this.handleTap(evt);
-    });
+    // Tap events for quick actions - disabled for touch devices to avoid conflicts
+    // We handle taps manually in handlePointerUp for better control
+    if (!this.isMobile) {
+      this.ftxx.on(this.canvas, 'tap', (evt) => {
+        this.handleTap(evt);
+      });
+    }
     
-    // Long press events for context menus
-    this.ftxx.on(this.canvas, 'longpress', (evt) => {
-      this.handleLongPress(evt);
-    });
+    // Long press events for context menus - disabled for touch devices to avoid conflicts
+    // We handle long press manually in handlePointerDown for better control
+    if (!this.isMobile) {
+      this.ftxx.on(this.canvas, 'longpress', (evt) => {
+        this.handleLongPress(evt);
+      });
+    }
     
     // Wheel events for zoom
     this.ftxx.on(this.canvas, 'wheel', (evt) => {
@@ -149,11 +157,6 @@ class InputHandler {
     this.lastPointerY = pointer.y;
     this.pointerStartTime = Date.now();
     
-    // Start long press timer
-    this.longPressTimeout = setTimeout(() => {
-      this.handleLongPress(evt);
-    }, this.longPressDelay);
-    
     // Handle multi-touch gestures
     if (evt.pointers.length === 2) {
       this.handleTwoFingerGesture(evt);
@@ -162,11 +165,27 @@ class InputHandler {
     
     // Handle different pointer types
     if (pointer.type === 'touch') {
+      // Check if touch is locked (prevent rapid touches)
+      if (this.touchLocked) {
+        console.log('Touch ignored - touch is locked');
+        return;
+      }
+      
       // Touch input - don't immediately start dragging
       // Wait to see if it's a tap or drag
       this.touchStartX = pointer.x;
       this.touchStartY = pointer.y;
       this.touchStartTime = Date.now();
+      this.tapHandled = false; // Reset tap handled flag
+      this.touchLocked = true; // Lock touch to prevent rapid touches
+      
+      console.log(`Touch down at (${pointer.x}, ${pointer.y})`);
+      
+      // Start long press timer for touch (delayed to avoid conflicts with taps)
+      this.longPressTimeout = setTimeout(() => {
+        this.handleLongPress(evt);
+      }, this.longPressDelay);
+      console.log(`Long press timer started for touch (${this.longPressDelay}ms)`);
       
       // Prevent default touch behaviors on mobile
       if (evt.preventDefault) {
@@ -178,6 +197,12 @@ class InputHandler {
       if (originalEvent.button === 0) { // Left mouse button
         this.handleLeftClick(pointer.x, pointer.y);
         this.isDragging = true;
+        
+        // Start long press timer for mouse
+        this.longPressTimeout = setTimeout(() => {
+          this.handleLongPress(evt);
+        }, this.longPressDelay);
+        console.log(`Long press timer started for mouse (${this.longPressDelay}ms)`);
       } else if (originalEvent.button === 1) { // Middle mouse button
         this.isCameraPanning = true;
       }
@@ -245,12 +270,20 @@ class InputHandler {
   }
   
   handlePointerUp(evt) {
+    // Check if there are any pointers before accessing the first one
+    if (!evt.pointers || evt.pointers.length === 0) {
+      // Clear gesture tracking when all fingers are lifted
+      this.gestureStart = null;
+      return;
+    }
+    
     const pointer = evt.pointers[0];
     
     // Clear long press timer
     if (this.longPressTimeout) {
       clearTimeout(this.longPressTimeout);
       this.longPressTimeout = null;
+      console.log('Long press timer cleared');
     }
     
     // Clear gesture tracking when all fingers are lifted
@@ -259,15 +292,27 @@ class InputHandler {
     }
     
     // Handle touch tap detection
-    if (pointer.type === 'touch' && this.touchStartX !== undefined) {
+    if (pointer && pointer.type === 'touch' && this.touchStartX !== undefined) {
       const moveDistance = Math.sqrt(
         Math.pow(pointer.x - this.touchStartX, 2) + 
         Math.pow(pointer.y - this.touchStartY, 2)
       );
       const touchDuration = Date.now() - this.touchStartTime;
       
+      console.log(`Touch up: distance=${moveDistance.toFixed(2)}, duration=${touchDuration}ms, isDragging=${this.isDragging}, isCameraPanning=${this.isCameraPanning}, tapHandled=${this.tapHandled}`);
+      
       // If it's a quick tap (short distance, short duration), handle as tap
-      if (moveDistance < 10 && touchDuration < 300 && !this.isDragging && !this.isCameraPanning) {
+      if (moveDistance < 15 && touchDuration < 500 && !this.isDragging && !this.isCameraPanning) {
+        console.log('Touch detected as tap, calling handleLeftClick');
+        this.tapHandled = true; // Mark that we handled a tap
+        
+        // Immediately clear the long press timer since we're handling this as a tap
+        if (this.longPressTimeout) {
+          clearTimeout(this.longPressTimeout);
+          this.longPressTimeout = null;
+          console.log('Long press timer cleared due to tap detection');
+        }
+        
         this.handleLeftClick(pointer.x, pointer.y);
       }
       
@@ -275,6 +320,13 @@ class InputHandler {
       this.touchStartX = undefined;
       this.touchStartY = undefined;
       this.touchStartTime = undefined;
+      
+      // Reset flags after a short delay to allow for next touch
+      setTimeout(() => {
+        this.tapHandled = false;
+        this.touchLocked = false;
+        console.log('Touch flags reset');
+      }, 200);
     }
     
     if (this.isDragging) {
@@ -301,14 +353,27 @@ class InputHandler {
     // Touch devices handle taps in handlePointerUp
     if (!this.isDragging && evt.pointers && evt.pointers.length > 0) {
       const pointer = evt.pointers[0];
-      if (pointer.type !== 'touch') {
+      if (pointer && pointer.type !== 'touch') {
         this.handleLeftClick(pointer.x, pointer.y);
       }
     }
   }
   
   handleLongPress(evt) {
+    if (!evt.pointers || evt.pointers.length === 0) {
+      return;
+    }
+    
     const pointer = evt.pointers[0];
+    if (!pointer) {
+      return;
+    }
+    
+    // Don't handle long press if we already handled a tap
+    if (this.tapHandled) {
+      console.log('Long press ignored - tap was already handled');
+      return;
+    }
     
     // Handle long press (context menu, etc.)
     console.log('Long press detected at:', pointer.x, pointer.y);
@@ -321,14 +386,17 @@ class InputHandler {
   }
   
   handleLeftClick(screenX, screenY) {
+    console.log(`handleLeftClick called at (${screenX}, ${screenY})`);
     const pickResult = this.scene.pick(screenX, screenY);
     
     if (pickResult.hit) {
       const hitObject = pickResult.pickedMesh;
+      console.log('Hit object:', hitObject.name || 'unnamed');
       
       // Check if it's a unit
       if (this.game.unitManager) {
         const unitId = this.getUnitIdFromMesh(hitObject);
+        console.log('Unit ID found:', unitId);
         if (unitId !== null) {
           // Check if this unit is already selected
           if (this.game.unitManager.selectedUnits.has(unitId)) {
@@ -444,16 +512,23 @@ class InputHandler {
   getUnitIdFromMesh(mesh) {
     if (!this.game.unitManager) return null;
     
+    console.log('getUnitIdFromMesh called with mesh:', mesh.name || 'unnamed');
+    console.log('Total units in manager:', this.game.unitManager.units.size);
+    
     // Check if the mesh is a unit
     for (const [unitId, unit] of this.game.unitManager.units) {
-      if (unit === mesh) {
+      console.log(`Checking unit ${unitId}:`, unit.mesh.name || 'unnamed');
+      if (unit.mesh === mesh) {
+        console.log(`Found match! Unit ${unitId}`);
         return unitId;
       }
       // Check if it's a child of the unit (for unit parts)
-      if (unit.getChildMeshes && unit.getChildMeshes().includes(mesh)) {
+      if (unit.mesh.getChildMeshes && unit.mesh.getChildMeshes().includes(mesh)) {
+        console.log(`Found child match! Unit ${unitId}`);
         return unitId;
       }
     }
+    console.log('No unit found for this mesh');
     return null;
   }
   

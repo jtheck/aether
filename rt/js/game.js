@@ -72,16 +72,81 @@ class Game {
     const halfTile = centerTileSize / 2;
     
     // Blue team units on the left side of center tile
-    this.unitManager.createUnit('infantry', new BABYLON.Vector3(-halfTile + 2, 0.5, -halfTile + 2), 'blue');
-    this.unitManager.createUnit('tank', new BABYLON.Vector3(-halfTile + 6, 0.5, -halfTile + 2), 'blue');
-    this.unitManager.createUnit('artillery', new BABYLON.Vector3(-halfTile + 10, 0.5, -halfTile + 2), 'blue');
+    const blueUnits = [
+      { type: 'infantry', pos: new BABYLON.Vector3(-halfTile + 2, 0.5, -halfTile + 2) },
+      { type: 'tank', pos: new BABYLON.Vector3(-halfTile + 6, 0.5, -halfTile + 2) },
+      { type: 'artillery', pos: new BABYLON.Vector3(-halfTile + 10, 0.5, -halfTile + 2) },
+      { type: 'cavalry', pos: new BABYLON.Vector3(-halfTile + 2, 0.5, -halfTile + 6) },
+      { type: 'scout', pos: new BABYLON.Vector3(-halfTile + 6, 0.5, -halfTile + 6) },
+      { type: 'heavy_tank', pos: new BABYLON.Vector3(-halfTile + 10, 0.5, -halfTile + 6) },
+      { type: 'anti_air', pos: new BABYLON.Vector3(-halfTile + 2, 0.5, -halfTile + 10) },
+      { type: 'engineer', pos: new BABYLON.Vector3(-halfTile + 6, 0.5, -halfTile + 10) },
+      { type: 'medic', pos: new BABYLON.Vector3(-halfTile + 10, 0.5, -halfTile + 10) },
+      { type: 'sniper', pos: new BABYLON.Vector3(-halfTile + 2, 0.5, -halfTile + 14) },
+      { type: 'infantry', pos: new BABYLON.Vector3(-halfTile + 6, 0.5, -halfTile + 14) },
+      { type: 'tank', pos: new BABYLON.Vector3(-halfTile + 10, 0.5, -halfTile + 14) },
+      { type: 'cavalry', pos: new BABYLON.Vector3(-halfTile + 2, 0.5, -halfTile + 18) },
+      { type: 'scout', pos: new BABYLON.Vector3(-halfTile + 6, 0.5, -halfTile + 18) },
+      { type: 'artillery', pos: new BABYLON.Vector3(-halfTile + 10, 0.5, -halfTile + 18) }
+    ];
     
     // Red team units on the right side of center tile
-    this.unitManager.createUnit('infantry', new BABYLON.Vector3(halfTile - 2, 0.5, halfTile - 2), 'red');
-    this.unitManager.createUnit('tank', new BABYLON.Vector3(halfTile - 6, 0.5, halfTile - 2), 'red');
-    this.unitManager.createUnit('artillery', new BABYLON.Vector3(halfTile - 10, 0.5, halfTile - 2), 'red');
+    const redUnits = [
+      { type: 'infantry', pos: new BABYLON.Vector3(halfTile - 2, 0.5, halfTile - 2) },
+      { type: 'tank', pos: new BABYLON.Vector3(halfTile - 6, 0.5, halfTile - 2) },
+      { type: 'artillery', pos: new BABYLON.Vector3(halfTile - 10, 0.5, halfTile - 2) },
+      { type: 'cavalry', pos: new BABYLON.Vector3(halfTile - 2, 0.5, halfTile - 6) },
+      { type: 'scout', pos: new BABYLON.Vector3(halfTile - 6, 0.5, halfTile - 6) },
+      { type: 'heavy_tank', pos: new BABYLON.Vector3(halfTile - 10, 0.5, halfTile - 6) },
+      { type: 'anti_air', pos: new BABYLON.Vector3(halfTile - 2, 0.5, halfTile - 10) },
+      { type: 'engineer', pos: new BABYLON.Vector3(halfTile - 6, 0.5, halfTile - 10) },
+      { type: 'medic', pos: new BABYLON.Vector3(halfTile - 10, 0.5, halfTile - 10) },
+      { type: 'sniper', pos: new BABYLON.Vector3(halfTile - 2, 0.5, halfTile - 14) },
+      { type: 'infantry', pos: new BABYLON.Vector3(halfTile - 6, 0.5, halfTile - 14) },
+      { type: 'tank', pos: new BABYLON.Vector3(halfTile - 10, 0.5, halfTile - 14) },
+      { type: 'cavalry', pos: new BABYLON.Vector3(halfTile - 2, 0.5, halfTile - 18) },
+      { type: 'scout', pos: new BABYLON.Vector3(halfTile - 6, 0.5, halfTile - 18) },
+      { type: 'artillery', pos: new BABYLON.Vector3(halfTile - 10, 0.5, halfTile - 18) }
+    ];
     
-    console.log('Units spawned on guaranteed flat center tile');
+    // Create blue team units
+    blueUnits.forEach(unit => {
+      this.unitManager.createUnit(unit.type, unit.pos, 'blue');
+    });
+    
+    // Create red team units
+    redUnits.forEach(unit => {
+      this.unitManager.createUnit(unit.type, unit.pos, 'red');
+    });
+    
+    console.log(`Created ${blueUnits.length + redUnits.length} units (${blueUnits.length} blue, ${redUnits.length} red)`);
+    
+    // Create additional scattered units around the map
+    this.createScatteredUnits();
+  }
+  
+  createScatteredUnits() {
+    // Create neutral units scattered around the map
+    const neutralUnits = [
+      { type: 'scout', pos: new BABYLON.Vector3(20, 0.5, 20), team: 'neutral' },
+      { type: 'infantry', pos: new BABYLON.Vector3(-20, 0.5, 20), team: 'neutral' },
+      { type: 'cavalry', pos: new BABYLON.Vector3(20, 0.5, -20), team: 'neutral' },
+      { type: 'engineer', pos: new BABYLON.Vector3(-20, 0.5, -20), team: 'neutral' },
+      { type: 'medic', pos: new BABYLON.Vector3(0, 0.5, 30), team: 'neutral' },
+      { type: 'sniper', pos: new BABYLON.Vector3(0, 0.5, -30), team: 'neutral' },
+      { type: 'anti_air', pos: new BABYLON.Vector3(30, 0.5, 0), team: 'neutral' },
+      { type: 'heavy_tank', pos: new BABYLON.Vector3(-30, 0.5, 0), team: 'neutral' },
+      { type: 'artillery', pos: new BABYLON.Vector3(40, 0.5, 40), team: 'neutral' },
+      { type: 'tank', pos: new BABYLON.Vector3(-40, 0.5, 40), team: 'neutral' },
+      { type: 'infantry', pos: new BABYLON.Vector3(40, 0.5, -40), team: 'neutral' },
+      { type: 'cavalry', pos: new BABYLON.Vector3(-40, 0.5, -40), team: 'neutral' }
+    ];
+    
+    neutralUnits.forEach(unit => {
+      this.unitManager.createUnit(unit.type, unit.pos, unit.team);
+    });
+    
+    console.log(`Created ${neutralUnits.length} additional scattered neutral units`);
   }
   
   findFlatPositions(minX, minZ, maxX, maxZ, count) {

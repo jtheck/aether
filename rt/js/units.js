@@ -23,11 +23,31 @@ class Unit {
     this.pathIndex = 0;
   }
   
+  getTeamColor() {
+    switch (this.team) {
+      case 'blue':
+        return new BABYLON.Color3(0.2, 0.4, 0.8);
+      case 'red':
+        return new BABYLON.Color3(0.8, 0.2, 0.2);
+      case 'neutral':
+        return new BABYLON.Color3(0.6, 0.6, 0.6);
+      default:
+        return new BABYLON.Color3(0.5, 0.5, 0.5);
+    }
+  }
+  
   getUnitSpeed() {
     switch (this.type) {
-      case 'infantry': return 0.15; // 3x faster
-      case 'tank': return 0.12; // 4x faster
-      case 'artillery': return 0.08; // 4x faster
+      case 'infantry': return 0.15;
+      case 'tank': return 0.12;
+      case 'artillery': return 0.08;
+      case 'cavalry': return 0.25; // Fastest unit
+      case 'scout': return 0.20; // Very fast
+      case 'heavy_tank': return 0.08; // Slow but powerful
+      case 'anti_air': return 0.10; // Medium speed
+      case 'engineer': return 0.12; // Medium speed
+      case 'medic': return 0.14; // Slightly faster than infantry
+      case 'sniper': return 0.13; // Medium speed
       default: return 0.12;
     }
   }
@@ -37,6 +57,13 @@ class Unit {
       case 'infantry': return 100;
       case 'tank': return 300;
       case 'artillery': return 150;
+      case 'cavalry': return 120;
+      case 'scout': return 80;
+      case 'heavy_tank': return 500;
+      case 'anti_air': return 200;
+      case 'engineer': return 90;
+      case 'medic': return 110;
+      case 'sniper': return 85;
       default: return 100;
     }
   }
@@ -53,9 +80,7 @@ class Unit {
           height: 0.6,
           depth: 0.3
         }, this.scene);
-        material.diffuseColor = this.team === 'blue' ? 
-          new BABYLON.Color3(0.2, 0.4, 0.8) : 
-          new BABYLON.Color3(0.8, 0.2, 0.2);
+        material.diffuseColor = this.getTeamColor();
         break;
         
       case 'tank':
@@ -65,9 +90,7 @@ class Unit {
           height: 0.4,
           depth: 1.2
         }, this.scene);
-        material.diffuseColor = this.team === 'blue' ? 
-          new BABYLON.Color3(0.1, 0.3, 0.7) : 
-          new BABYLON.Color3(0.7, 0.1, 0.1);
+        material.diffuseColor = this.getTeamColor();
         break;
         
       case 'artillery':
@@ -76,9 +99,76 @@ class Unit {
           height: 0.6,
           diameter: 0.5
         }, this.scene);
-        material.diffuseColor = this.team === 'blue' ? 
-          new BABYLON.Color3(0.3, 0.5, 0.9) : 
-          new BABYLON.Color3(0.9, 0.3, 0.3);
+        material.diffuseColor = this.getTeamColor();
+        break;
+        
+      case 'cavalry':
+        // Horse-like shape (elongated box)
+        mesh = BABYLON.MeshBuilder.CreateBox(`unit_${this.type}`, {
+          width: 0.4,
+          height: 0.8,
+          depth: 0.6
+        }, this.scene);
+        material.diffuseColor = this.getTeamColor();
+        break;
+        
+      case 'scout':
+        // Small, fast unit
+        mesh = BABYLON.MeshBuilder.CreateBox(`unit_${this.type}`, {
+          width: 0.25,
+          height: 0.5,
+          depth: 0.25
+        }, this.scene);
+        material.diffuseColor = this.getTeamColor();
+        break;
+        
+      case 'heavy_tank':
+        // Large, heavy tank
+        mesh = BABYLON.MeshBuilder.CreateBox(`unit_${this.type}`, {
+          width: 1.0,
+          height: 0.6,
+          depth: 1.5
+        }, this.scene);
+        material.diffuseColor = this.getTeamColor();
+        break;
+        
+      case 'anti_air':
+        // Cylinder with radar dish
+        mesh = BABYLON.MeshBuilder.CreateCylinder(`unit_${this.type}`, {
+          height: 0.7,
+          diameter: 0.6
+        }, this.scene);
+        material.diffuseColor = this.getTeamColor();
+        break;
+        
+      case 'engineer':
+        // Medium box with tools
+        mesh = BABYLON.MeshBuilder.CreateBox(`unit_${this.type}`, {
+          width: 0.35,
+          height: 0.7,
+          depth: 0.35
+        }, this.scene);
+        material.diffuseColor = this.getTeamColor();
+        break;
+        
+      case 'medic':
+        // Medium box with medical cross
+        mesh = BABYLON.MeshBuilder.CreateBox(`unit_${this.type}`, {
+          width: 0.35,
+          height: 0.7,
+          depth: 0.35
+        }, this.scene);
+        material.diffuseColor = this.getTeamColor();
+        break;
+        
+      case 'sniper':
+        // Thin, tall unit
+        mesh = BABYLON.MeshBuilder.CreateBox(`unit_${this.type}`, {
+          width: 0.25,
+          height: 0.8,
+          depth: 0.25
+        }, this.scene);
+        material.diffuseColor = this.getTeamColor();
         break;
         
       default:

@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FTXX Pointer Test - Simplified</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #1e1e1e;
+            color: #fff;
+        }
+        
+        .container {
+            display: flex;
+            gap: 20px;
+            height: 100vh;
+        }
+        
+        .test-area {
+            flex: 1;
+            background: #2f3542;
+            border: 2px solid #5352ed;
+            border-radius: 10px;
+            position: relative;
+            min-height: 400px;
+        }
+        
+        .test-square {
+            position: absolute;
+            width: 100px;
+            height: 100px;
+            background: linear-gradient(45deg, #ff4757, #5352ed);
+            border: 3px solid #fff;
+            border-radius: 10px;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            cursor: grab;
+            user-select: none;
+            transition: transform 0.1s ease;
+        }
+        
+        .test-square:active {
+            cursor: grabbing;
+        }
+        
+        .event-log {
+            width: 400px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 20px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        
+        .event-entry {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 5px;
+            border-left: 3px solid #00d2d3;
+        }
+        
+        .event-type {
+            font-weight: bold;
+            color: #ffa502;
+        }
+        
+        .event-data {
+            color: #ddd;
+            margin-top: 5px;
+        }
+        
+        .pointer-indicator {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid #fff;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 10;
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.2); }
+            100% { transform: translate(-50%, -50%) scale(1); }
+        }
+        
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #5352ed;
+            color: #fff;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: bold;
+            z-index: 100;
+        }
+        
+        .copy-btn:hover {
+            background: #3742fa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="test-area" id="testArea">
+            <h2>Test Area - Click/Touch Here</h2>
+            <div class="test-square" id="testSquare">
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-weight: bold; text-align: center; font-size: 12px;">
+                    DRAG<br>ROTATE<br>SCALE
+                </div>
+            </div>
+        </div>
+        
+        <div class="event-log" id="eventLog">
+            <div class="event-entry">
+                <div class="event-type">🚀 FTXX Pointer Test Started</div>
+                <div class="event-data">Ready to capture events...</div>
+            </div>
+        </div>
+    </div>
+    
+    <button class="copy-btn" id="copyLogs">📋 Copy All Logs</button>
+
+    <script src="vendor/ftxx_pointer.js"></script>
+    <script>
+        class SimpleFTXXTest {
+            constructor() {
+                this.testArea = document.getElementById('testArea');
+                this.testSquare = document.getElementById('testSquare');
+                this.eventLog = document.getElementById('eventLog');
+                this.copyLogs = document.getElementById('copyLogs');
+                
+                this.squareTransform = {
+                    x: 0,
+                    y: 0,
+                    scale: 1,
+                    rotation: 0
+                };
+                
+                // Track active pointers to ensure proper cleanup
+                this.activePointers = new Set();
+                
+                this.initFTXX();
+                this.setupEventListeners();
+                this.setupCopyButton();
+            }
+            
+            initFTXX() {
+                if (!window.ftxxPointer) {
+                    this.logEvent('ERROR', 'FTXX Pointer library not found!');
+                    return;
+                }
+                
+                window.ftxxPointer.init({ debug: false });
+                this.logEvent('INFO', 'FTXX Pointer initialized successfully');
+            }
+            
+            setupEventListeners() {
+                // Simple pointer events
+                window.ftxxPointer.on(this.testArea, 'pointerdown', (evt) => {
+                    this.handlePointerEvent('POINTERDOWN', evt);
+                });
+                
+                window.ftxxPointer.on(this.testArea, 'pointerup', (evt) => {
+                    this.handlePointerEvent('POINTERUP', evt);
+                });
+                
+                window.ftxxPointer.on(this.testArea, 'pointermove', (evt) => {
+                    // Don't log pointer move - too noisy!
+                    this.handlePointerEvent('POINTERMOVE', evt);
+                });
+                
+                // Gesture events
+                window.ftxxPointer.on(this.testArea, 'pinch', (evt) => {
+                    this.logEvent('GESTURE', 'PINCH', { scale: evt.scale.toFixed(2), center: `(${Math.round(evt.centerX)},${Math.round(evt.centerY)})` });
+                    this.handlePinch(evt);
+                });
+                
+                window.ftxxPointer.on(this.testArea, 'pan', (evt) => {
+                    this.logEvent('GESTURE', 'PAN', { delta: `(${Math.round(evt.deltaX)},${Math.round(evt.deltaY)})` });
+                    this.handlePan(evt);
+                });
+                
+                window.ftxxPointer.on(this.testArea, 'rotate', (evt) => {
+                    this.logEvent('GESTURE', 'ROTATE', { rot: (evt.rotation * 180 / Math.PI).toFixed(1) + '°' });
+                    this.handleRotate(evt);
+                });
+                
+                // Special events
+                window.ftxxPointer.on(this.testArea, 'tap', (evt) => {
+                    this.logEvent('TAP', 'TAP', { pos: `(${Math.round(evt.pointers[0].x)},${Math.round(evt.pointers[0].y)})` });
+                });
+                
+                window.ftxxPointer.on(this.testArea, 'longpress', (evt) => {
+                    this.logEvent('LONGPRESS', 'LONGPRESS', { pos: `(${Math.round(evt.pointers[0].x)},${Math.round(evt.pointers[0].y)})` });
+                });
+                
+                window.ftxxPointer.on(this.testArea, 'wheel', (evt) => {
+                    this.logEvent('WHEEL', 'WHEEL', { delta: `(${Math.round(evt.wheel.deltaX)},${Math.round(evt.wheel.deltaY)})` });
+                });
+            }
+            
+            setupCopyButton() {
+                this.copyLogs.addEventListener('click', () => {
+                    const logEntries = this.eventLog.querySelectorAll('.event-entry');
+                    let allLogs = '';
+                    
+                    logEntries.forEach(entry => {
+                        const timestamp = entry.querySelector('.event-type').textContent;
+                        const data = entry.querySelector('.event-data').textContent;
+                        allLogs += `${timestamp}\n${data}\n\n`;
+                    });
+                    
+                    navigator.clipboard.writeText(allLogs).then(() => {
+                        alert('All logs copied to clipboard!');
+                    }).catch(() => {
+                        alert('Failed to copy logs');
+                    });
+                });
+            }
+            
+            handlePointerEvent(type, evt) {
+                // Only log pointerdown and pointerup - skip pointermove
+                if (type === 'POINTERDOWN' || type === 'POINTERUP') {
+                    this.logEvent(type, type, {
+                        count: evt.pointers.length,
+                        pointers: evt.pointers.map(p => `${p.id}@(${Math.round(p.x)},${Math.round(p.y)})`)
+                    });
+                }
+                
+                // SUPER SIMPLE: Show visual indicators
+                if (type === 'POINTERDOWN') {
+                    evt.pointers.forEach(pointer => {
+                        // Create indicators for mouse events (LMB, RMB, etc.)
+                        if (evt.originalEvent.type.includes('mouse')) {
+                            this.activePointers.add(pointer.id);
+                            this.createPointerIndicator(pointer);
+                        }
+                        // Create indicators for touch events, but only if they're not duplicates
+                        else if (evt.originalEvent.type.includes('touch') && !evt.originalEvent.type.includes('pointer')) {
+                            this.activePointers.add(pointer.id);
+                            this.createPointerIndicator(pointer);
+                        }
+                    });
+                } else if (type === 'POINTERUP') {
+                    evt.pointers.forEach(pointer => {
+                        this.activePointers.delete(pointer.id);
+                        this.removePointerIndicator(pointer.id);
+                    });
+                    
+                    // CRITICAL FIX: If no pointers in event but we have active pointers,
+                    // remove all active pointers (this happens with mouse events)
+                    if (evt.pointers.length === 0 && this.activePointers.size > 0) {
+                        this.activePointers.forEach(pointerId => {
+                            this.removePointerIndicator(pointerId);
+                        });
+                        this.activePointers.clear();
+                    }
+                } else if (type === 'POINTERMOVE') {
+                    evt.pointers.forEach(pointer => {
+                        this.updatePointerIndicator(pointer);
+                    });
+                }
+            }
+            
+            createPointerIndicator(pointer) {
+                // Remove existing indicator for this pointer
+                this.removePointerIndicator(pointer.id);
+                
+                const indicator = document.createElement('div');
+                indicator.className = 'pointer-indicator';
+                indicator.id = `pointer-${pointer.id}`;
+                indicator.style.left = pointer.x + 'px';
+                indicator.style.top = pointer.y + 'px';
+                
+                // Color based on type
+                if (pointer.button && pointer.button !== 'touch') {
+                    indicator.style.backgroundColor = '#ff4757'; // Mouse
+                    indicator.title = `${pointer.button} (${pointer.id})`;
+                } else {
+                    indicator.style.backgroundColor = '#2ed573'; // Touch
+                    indicator.title = `Touch ${pointer.id}`;
+                }
+                
+                this.testArea.appendChild(indicator);
+            }
+            
+            updatePointerIndicator(pointer) {
+                const indicator = document.getElementById(`pointer-${pointer.id}`);
+                if (indicator) {
+                    indicator.style.left = pointer.x + 'px';
+                    indicator.style.top = pointer.y + 'px';
+                } else {
+                    // CRITICAL FIX: If no indicator found for this ID, try to find any active indicator
+                    // This handles the case where pointer IDs are inconsistent
+                    const activeIndicators = document.querySelectorAll('.pointer-indicator');
+                    if (activeIndicators.length > 0) {
+                        // Update the first active indicator
+                        const firstIndicator = activeIndicators[0];
+                        firstIndicator.style.left = pointer.x + 'px';
+                        firstIndicator.style.top = pointer.y + 'px';
+                    }
+                }
+            }
+            
+            removePointerIndicator(pointerId) {
+                const indicator = document.getElementById(`pointer-${pointerId}`);
+                if (indicator) {
+                    indicator.remove();
+                }
+            }
+            
+            handlePan(evt) {
+                this.squareTransform.x += evt.deltaX;
+                this.squareTransform.y += evt.deltaY;
+                this.updateSquareTransform();
+            }
+            
+            handlePinch(evt) {
+                // CRITICAL FIX: The library sends scale ratios, not incremental changes
+                // We need to track the base scale and apply the ratio correctly
+                if (!this.baseScale) {
+                    this.baseScale = 1.0; // Initial base scale
+                }
+                
+                // Apply the scale ratio to the base scale
+                this.baseScale *= evt.scale;
+                this.baseScale = Math.max(0.5, Math.min(3, this.baseScale)); // Limit scale
+                
+                // Set the current scale to the calculated base scale
+                this.squareTransform.scale = this.baseScale;
+                
+                // Debug: Log scale changes to understand shrinking
+                if (evt.scale < 1) {
+                    console.log('PINCH SHRINK:', evt.scale, 'baseScale:', this.baseScale);
+                }
+                
+                this.updateSquareTransform();
+            }
+            
+            handleRotate(evt) {
+                this.squareTransform.rotation += evt.rotation;
+                this.updateSquareTransform();
+            }
+            
+            updateSquareTransform() {
+                const transform = `translate(${this.squareTransform.x}px, ${this.squareTransform.y}px) scale(${this.squareTransform.scale}) rotate(${this.squareTransform.rotation}rad)`;
+                this.testSquare.style.transform = transform;
+            }
+            
+            logEvent(category, type, data) {
+                const entry = document.createElement('div');
+                entry.className = 'event-entry';
+                
+                const timestamp = new Date().toLocaleTimeString();
+                const typeElement = document.createElement('div');
+                typeElement.className = 'event-type';
+                typeElement.textContent = `[${timestamp}] ${type}`;
+                
+                const dataElement = document.createElement('div');
+                dataElement.className = 'event-data';
+                dataElement.textContent = JSON.stringify(data, null, 2);
+                
+                entry.appendChild(typeElement);
+                entry.appendChild(dataElement);
+                
+                this.eventLog.appendChild(entry);
+                this.eventLog.scrollTop = this.eventLog.scrollHeight;
+            }
+        }
+        
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new SimpleFTXXTest();
+        });
+    </script>
+</body>
+</html> 

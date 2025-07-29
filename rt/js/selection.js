@@ -30,7 +30,7 @@ class SelectionRectangle {
     document.addEventListener('keydown', (evt) => {
       if (evt.key === 'Escape') {
         this.unitManager.deselectAllUnits();
-        console.log('Deselected all units (Escape key)');
+
       }
     });
   }
@@ -49,7 +49,7 @@ class SelectionRectangle {
     this.rectangleElement.style.display = 'block';
     this.updateRectangleVisual();
     
-    console.log('Selection started at:', screenX, screenY);
+    
   }
   
   updateSelection(screenX, screenY) {
@@ -58,7 +58,7 @@ class SelectionRectangle {
     this.endScreenPoint = { x: screenX, y: screenY };
     this.updateRectangleVisual();
     
-    console.log('Selection updated to:', screenX, screenY);
+    
   }
   
   endSelection() {

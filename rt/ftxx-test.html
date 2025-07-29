@@ -3,20 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FTXX Pointer Test - Simplified</title>
+    <title>FTXX Pointer Test</title>
     <style>
         body {
             margin: 0;
-            padding: 20px;
+            padding: 0;
             font-family: Arial, sans-serif;
             background: #1e1e1e;
             color: #fff;
+            overflow: hidden;
+            height: 100vh;
         }
         
         .container {
             display: flex;
             gap: 20px;
             height: 100vh;
+            padding: 20px;
+            box-sizing: border-box;
         }
         
         .test-area {
@@ -35,55 +39,47 @@
             background: linear-gradient(45deg, #ff4757, #5352ed);
             border: 3px solid #fff;
             border-radius: 10px;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
             cursor: grab;
             user-select: none;
             transition: transform 0.1s ease;
+            pointer-events: auto;
         }
         
         .test-square:active {
             cursor: grabbing;
         }
         
-        .event-log {
-            width: 400px;
-            background: rgba(0, 0, 0, 0.8);
-            color: #fff;
-            padding: 20px;
-            overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.4;
+        .test-square:nth-child(2) {
+            background: linear-gradient(45deg, #2ed573, #ffa502);
+            top: 20%;
+            left: 20%;
+            transform: translate(-50%, -50%);
         }
         
-        .event-entry {
-            margin-bottom: 10px;
-            padding: 8px;
-            border-radius: 5px;
-            border-left: 3px solid #00d2d3;
+        .test-square:nth-child(3) {
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            top: 80%;
+            left: 80%;
+            transform: translate(-50%, -50%);
         }
         
-        .event-type {
-            font-weight: bold;
-            color: #ffa502;
-        }
-        
-        .event-data {
-            color: #ddd;
-            margin-top: 5px;
+        .test-square:nth-child(4) {
+            background: linear-gradient(45deg, #a55eea, #fd79a8);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
         }
         
         .pointer-indicator {
             position: absolute;
             width: 20px;
             height: 20px;
+            background-color: #ff6b6b;
             border-radius: 50%;
             border: 2px solid #fff;
             transform: translate(-50%, -50%);
             pointer-events: none;
-            z-index: 10;
+            z-index: 1000;
             animation: pulse 1s infinite;
         }
         
@@ -116,60 +112,121 @@
 <body>
     <div class="container">
         <div class="test-area" id="testArea">
-            <h2>Test Area - Click/Touch Here</h2>
-            <div class="test-square" id="testSquare">
+            <h2>Test Area - Multi-touch Gestures</h2>
+            <div class="test-square" id="testSquare1">
                 <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-weight: bold; text-align: center; font-size: 12px;">
-                    DRAG<br>ROTATE<br>SCALE
+                    SQUARE 1<br>DRAG/ROTATE/SCALE
                 </div>
             </div>
-        </div>
-        
-        <div class="event-log" id="eventLog">
-            <div class="event-entry">
-                <div class="event-type">🚀 FTXX Pointer Test Started</div>
-                <div class="event-data">Ready to capture events...</div>
+            <div class="test-square" id="testSquare2">
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-weight: bold; text-align: center; font-size: 12px;">
+                    SQUARE 2<br>DRAG/ROTATE/SCALE
+                </div>
+            </div>
+            <div class="test-square" id="testSquare3">
+                <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-weight: bold; text-align: center; font-size: 12px;">
+                    SQUARE 3<br>DRAG/ROTATE/SCALE
+                </div>
             </div>
         </div>
     </div>
     
-    <button class="copy-btn" id="copyLogs">📋 Copy All Logs</button>
+    <button class="copy-btn" id="testPointer">🧪 Test Pointer</button>
 
     <script src="vendor/ftxx_pointer.js"></script>
     <script>
         class SimpleFTXXTest {
             constructor() {
                 this.testArea = document.getElementById('testArea');
-                this.testSquare = document.getElementById('testSquare');
-                this.eventLog = document.getElementById('eventLog');
-                this.copyLogs = document.getElementById('copyLogs');
+                this.testSquare1 = document.getElementById('testSquare1');
+                this.testSquare2 = document.getElementById('testSquare2');
+                this.testSquare3 = document.getElementById('testSquare3');
                 
-                this.squareTransform = {
-                    x: 0,
-                    y: 0,
-                    scale: 1,
-                    rotation: 0
+                // Individual transform states for each square
+                this.squareTransforms = {
+                    testSquare1: { x: 0, y: 0, scale: 1, rotation: 0 },
+                    testSquare2: { x: 0, y: 0, scale: 1, rotation: 0 },
+                    testSquare3: { x: 0, y: 0, scale: 1, rotation: 0 }
                 };
                 
-                // Track active pointers to ensure proper cleanup
+                // Track active pointers
                 this.activePointers = new Set();
+                
+                // Track gesture state per group ID
+                this.gestureStates = new Map();
                 
                 this.initFTXX();
                 this.setupEventListeners();
-                this.setupCopyButton();
+                this.setupTestPointerButton();
+                this.setupSquareEventPrevention();
             }
             
             initFTXX() {
                 if (!window.ftxxPointer) {
-                    this.logEvent('ERROR', 'FTXX Pointer library not found!');
                     return;
                 }
                 
-                window.ftxxPointer.init({ debug: false });
-                this.logEvent('INFO', 'FTXX Pointer initialized successfully');
+                // Initialize FTXX
+                window.ftxxPointer.init({
+                    debug: false,
+                    preventDefault: true,
+                    passive: false,
+                    gestureThresholds: { 
+                        pan: 0.01,
+                        rotation: 0.0001,
+                        zoom: 0.01
+                    }
+                });
+                
+                // Clear any existing gesture state
+                window.ftxxPointer.clearGestureState();
+                
+                // Set up gesture start validation
+                window.ftxxPointer.onGestureStart((gestureData) => {
+                    const squares = [
+                        { id: 'testSquare1', element: this.testSquare1 },
+                        { id: 'testSquare2', element: this.testSquare2 },
+                        { id: 'testSquare3', element: this.testSquare3 }
+                    ];
+                    
+                    const hitSquares = new Set();
+                    
+                    // Check direct touches
+                    for (const touch of gestureData.touches) {
+                        for (const square of squares) {
+                            if (this.isPointInSquare(touch.x, touch.y, square.element)) {
+                                hitSquares.add(square);
+                            }
+                        }
+                    }
+                    
+                    // Check center point if no direct hits
+                    if (hitSquares.size === 0) {
+                        for (const square of squares) {
+                            if (this.isPointInSquare(gestureData.center.x, gestureData.center.y, square.element)) {
+                                hitSquares.add(square);
+                            }
+                        }
+                    }
+                    
+                    // Check proximity if no direct hits or center hits
+                    if (hitSquares.size === 0) {
+                        for (const square of squares) {
+                            if (this.isPointNearSquare(gestureData.center.x, gestureData.center.y, square.element, 50)) {
+                                hitSquares.add(square);
+                            }
+                        }
+                    }
+                    
+                    return {
+                        keep: hitSquares.size > 0,
+                        targets: Array.from(hitSquares)
+                    };
+                });
             }
             
             setupEventListeners() {
-                // Simple pointer events
+                // Listen for events on the test area
                 window.ftxxPointer.on(this.testArea, 'pointerdown', (evt) => {
                     this.handlePointerEvent('POINTERDOWN', evt);
                 });
@@ -179,81 +236,433 @@
                 });
                 
                 window.ftxxPointer.on(this.testArea, 'pointermove', (evt) => {
-                    // Don't log pointer move - too noisy!
                     this.handlePointerEvent('POINTERMOVE', evt);
                 });
                 
-                // Gesture events
+                // Gesture events on test area
                 window.ftxxPointer.on(this.testArea, 'pinch', (evt) => {
-                    this.logEvent('GESTURE', 'PINCH', { scale: evt.scale.toFixed(2), center: `(${Math.round(evt.centerX)},${Math.round(evt.centerY)})` });
-                    this.handlePinch(evt);
+                    this.handleGesture('pinch', evt);
                 });
                 
                 window.ftxxPointer.on(this.testArea, 'pan', (evt) => {
-                    this.logEvent('GESTURE', 'PAN', { delta: `(${Math.round(evt.deltaX)},${Math.round(evt.deltaY)})` });
-                    this.handlePan(evt);
+                    this.handleGesture('pan', evt);
                 });
                 
                 window.ftxxPointer.on(this.testArea, 'rotate', (evt) => {
-                    this.logEvent('GESTURE', 'ROTATE', { rot: (evt.rotation * 180 / Math.PI).toFixed(1) + '°' });
-                    this.handleRotate(evt);
+                    this.handleGesture('rotate', evt);
                 });
                 
-                // Special events
-                window.ftxxPointer.on(this.testArea, 'tap', (evt) => {
-                    this.logEvent('TAP', 'TAP', { pos: `(${Math.round(evt.pointers[0].x)},${Math.round(evt.pointers[0].y)})` });
+                // Also listen for events on the squares themselves (pointer events only)
+                const allSquares = [this.testSquare1, this.testSquare2, this.testSquare3];
+                allSquares.forEach(square => {
+                    window.ftxxPointer.on(square, 'pointerdown', (evt) => {
+                        this.handlePointerEvent('POINTERDOWN', evt);
+                    });
+                    
+                    window.ftxxPointer.on(square, 'pointerup', (evt) => {
+                        this.handlePointerEvent('POINTERUP', evt);
+                    });
+                    
+                    window.ftxxPointer.on(square, 'pointermove', (evt) => {
+                        this.handlePointerEvent('POINTERMOVE', evt);
+                    });
                 });
                 
-                window.ftxxPointer.on(this.testArea, 'longpress', (evt) => {
-                    this.logEvent('LONGPRESS', 'LONGPRESS', { pos: `(${Math.round(evt.pointers[0].x)},${Math.round(evt.pointers[0].y)})` });
+                // Listen for gestures on document body to catch all gestures
+                window.ftxxPointer.on(document.body, 'pinch', (evt) => {
+                    this.handleGesture('pinch', evt);
                 });
                 
-                window.ftxxPointer.on(this.testArea, 'wheel', (evt) => {
-                    this.logEvent('WHEEL', 'WHEEL', { delta: `(${Math.round(evt.wheel.deltaX)},${Math.round(evt.wheel.deltaY)})` });
+                window.ftxxPointer.on(document.body, 'pan', (evt) => {
+                    this.handleGesture('pan', evt);
+                });
+                
+                window.ftxxPointer.on(document.body, 'rotate', (evt) => {
+                    this.handleGesture('rotate', evt);
                 });
             }
             
-            setupCopyButton() {
-                this.copyLogs.addEventListener('click', () => {
-                    const logEntries = this.eventLog.querySelectorAll('.event-entry');
-                    let allLogs = '';
+            // Handle gestures from FTXX's multi-gesture system
+            handleGesture(gestureType, evt) {
+                if (evt.targets && evt.targets.length > 0) {
+                    // Create gesture group indicator
+                    this.updateGestureGroupIndicator(evt.groupId, evt.pointerIds, evt.targets, evt);
                     
-                    logEntries.forEach(entry => {
-                        const timestamp = entry.querySelector('.event-type').textContent;
-                        const data = entry.querySelector('.event-data').textContent;
-                        allLogs += `${timestamp}\n${data}\n\n`;
+                    evt.targets.forEach(target => {
+                        switch (gestureType) {
+                            case 'pinch':
+                                this.handlePinchForSquare(evt, target.id);
+                                break;
+                            case 'pan':
+                                this.handlePanForSquare(evt, target.id);
+                                break;
+                            case 'rotate':
+                                this.handleRotateForSquare(evt, target.id);
+                                break;
+                        }
                     });
                     
-                    navigator.clipboard.writeText(allLogs).then(() => {
-                        alert('All logs copied to clipboard!');
-                    }).catch(() => {
-                        alert('Failed to copy logs');
+                    this.updateHighlightsForAllGestures();
+                }
+            }
+            
+            // Handle pinch gesture
+            handlePinchForSquare(evt, squareId) {
+                const transform = this.squareTransforms[squareId];
+                
+                if (!this.baseScales) {
+                    this.baseScales = {
+                        testSquare1: 1,
+                        testSquare2: 1,
+                        testSquare3: 1
+                    };
+                }
+                
+                this.baseScales[squareId] *= evt.scale;
+                this.baseScales[squareId] = Math.max(0.5, Math.min(3, this.baseScales[squareId]));
+                transform.scale = this.baseScales[squareId];
+                
+                this.updateSquareTransform(squareId);
+            }
+            
+            // Handle pan gesture
+            handlePanForSquare(evt, squareId) {
+                const transform = this.squareTransforms[squareId];
+                
+                if (evt.centerX !== undefined && evt.centerY !== undefined) {
+                    const groupId = evt.groupId;
+                    let gestureState = this.gestureStates.get(groupId);
+                    
+                    if (!gestureState) {
+                        gestureState = {
+                            isActive: true,
+                            startCenterX: evt.centerX,
+                            startCenterY: evt.centerY,
+                            startTransforms: {}
+                        };
+                        this.gestureStates.set(groupId, gestureState);
+                    }
+                    
+                    if (!gestureState.startTransforms[squareId]) {
+                        gestureState.startTransforms[squareId] = { 
+                            x: transform.x || 0, 
+                            y: transform.y || 0 
+                        };
+                    }
+                    
+                    // Calculate movement from gesture center
+                    const deltaX = evt.centerX - gestureState.startCenterX;
+                    const deltaY = evt.centerY - gestureState.startCenterY;
+                    
+                    const startTransform = gestureState.startTransforms[squareId];
+                    if (startTransform) {
+                        transform.x = startTransform.x + deltaX;
+                        transform.y = startTransform.y + deltaY;
+                        this.updateSquareTransform(squareId);
+                    }
+                }
+            }
+            
+            // Handle rotate gesture
+            handleRotateForSquare(evt, squareId) {
+                const transform = this.squareTransforms[squareId];
+                
+                if (evt.rotation !== undefined) {
+                    const groupId = evt.groupId;
+                    let gestureState = this.gestureStates.get(groupId);
+                    
+                    if (!gestureState) {
+                        gestureState = {
+                            isActive: true,
+                            totalDeltaX: 0,
+                            totalDeltaY: 0,
+                            totalRotation: 0,
+                            startTransforms: {}
+                        };
+                        this.gestureStates.set(groupId, gestureState);
+                    }
+                    
+                    if (!gestureState.startTransforms[squareId]) {
+                        gestureState.startTransforms[squareId] = { 
+                            x: transform.x || 0, 
+                            y: transform.y || 0,
+                            rotation: transform.rotation || 0
+                        };
+                    }
+                    
+                    gestureState.totalRotation += evt.rotation;
+                    
+                    const startTransform = gestureState.startTransforms[squareId];
+                    if (startTransform) {
+                        transform.rotation = startTransform.rotation + gestureState.totalRotation;
+                        
+                        this.updateSquareTransform(squareId);
+                    }
+                }
+            }
+            
+            // Update the visual transform of a square
+            updateSquareTransform(squareId) {
+                const transform = this.squareTransforms[squareId];
+                const squareElement = document.getElementById(squareId);
+                
+                if (squareElement) {
+                    const transformString = `translate(${transform.x}px, ${transform.y}px) scale(${transform.scale}) rotate(${transform.rotation}rad)`;
+                    squareElement.style.transform = transformString;
+                }
+            }
+            
+            // Create a visual indicator for a pointer/touch point
+            createPointerIndicator(pointer) {
+                this.removePointerIndicator(pointer.id);
+                
+                const indicator = document.createElement('div');
+                indicator.id = `pointer-${pointer.id}`;
+                indicator.className = 'pointer-indicator';
+                indicator.style.left = pointer.x + 'px';
+                indicator.style.top = pointer.y + 'px';
+                indicator.style.backgroundColor = '#ff6b6b';
+                indicator.style.width = '30px';
+                indicator.style.height = '30px';
+                indicator.style.borderRadius = '50%';
+                indicator.style.border = '3px solid #fff';
+                indicator.style.position = 'fixed';
+                indicator.style.pointerEvents = 'none';
+                indicator.style.zIndex = '10000';
+                indicator.style.transform = 'translate(-50%, -50%)';
+                
+                const label = document.createElement('div');
+                label.style.position = 'absolute';
+                label.style.top = '-30px';
+                label.style.left = '50%';
+                label.style.transform = 'translateX(-50%)';
+                label.style.color = '#fff';
+                label.style.fontSize = '14px';
+                label.style.fontWeight = 'bold';
+                label.style.textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+                label.style.backgroundColor = 'rgba(0,0,0,0.7)';
+                label.style.padding = '2px 6px';
+                label.style.borderRadius = '4px';
+                label.textContent = `ID: ${pointer.id}`;
+                indicator.appendChild(label);
+                
+                document.body.appendChild(indicator);
+            }
+            
+            // Remove a pointer indicator
+            removePointerIndicator(pointerId) {
+                const indicator = document.getElementById(`pointer-${pointerId}`);
+                if (indicator) {
+                    indicator.remove();
+                }
+            }
+            
+            // Update a pointer indicator position
+            updatePointerIndicator(pointer) {
+                const indicator = document.getElementById(`pointer-${pointer.id}`);
+                if (indicator) {
+                    indicator.style.left = pointer.x + 'px';
+                    indicator.style.top = pointer.y + 'px';
+                }
+            }
+            
+            // Update gesture group indicator
+            updateGestureGroupIndicator(groupId, pointerIds, activeSquares, evt) {
+                if (pointerIds.length < 2) return; // Need at least 2 pointers for a gesture group
+                
+                // Check if we already have a gesture group indicator for this group
+                const existingIndicator = document.getElementById(`gesture-group-${groupId}`);
+                if (existingIndicator) {
+                    // Update the existing indicator position to follow the gesture center
+                    if (evt.centerX !== undefined && evt.centerY !== undefined) {
+                        existingIndicator.style.left = evt.centerX + 'px';
+                        existingIndicator.style.top = evt.centerY + 'px';
+                    }
+                    return;
+                }
+                
+                // Use the gesture center from the event data
+                let centerX, centerY;
+                if (evt.centerX !== undefined && evt.centerY !== undefined) {
+                    centerX = evt.centerX;
+                    centerY = evt.centerY;
+                } else {
+                    // Fallback: calculate center from pointer positions
+                    const pointers = [];
+                    pointerIds.forEach(id => {
+                        const indicator = document.getElementById(`pointer-${id}`);
+                        if (indicator) {
+                            const x = parseFloat(indicator.style.left);
+                            const y = parseFloat(indicator.style.top);
+                            if (!isNaN(x) && !isNaN(y)) {
+                                pointers.push({ x, y });
+                            }
+                        }
+                    });
+                    
+                    if (pointers.length < 2) {
+                        // Fallback: create a circle at a reasonable position
+                        centerX = window.innerWidth / 2;
+                        centerY = window.innerHeight / 2;
+                    } else {
+                        centerX = pointers.reduce((sum, p) => sum + p.x, 0) / pointers.length;
+                        centerY = pointers.reduce((sum, p) => sum + p.y, 0) / pointers.length;
+                    }
+                }
+                
+                // Use a fixed radius for the gesture center indicator
+                const radius = 80;
+                
+                this.createGestureGroupCircle(groupId, centerX, centerY, radius, pointerIds);
+            }
+            
+            // Create the actual gesture group circle
+            createGestureGroupCircle(groupId, centerX, centerY, radius, pointerIds) {
+                // Create gesture group indicator
+                const indicator = document.createElement('div');
+                indicator.id = `gesture-group-${groupId}`;
+                indicator.style.position = 'fixed';
+                indicator.style.left = centerX + 'px';
+                indicator.style.top = centerY + 'px';
+                indicator.style.width = (radius * 2) + 'px';
+                indicator.style.height = (radius * 2) + 'px';
+                indicator.style.borderRadius = '50%';
+                indicator.style.border = '3px solid #00ff00';
+                indicator.style.backgroundColor = 'rgba(0, 255, 0, 0.1)';
+                indicator.style.transform = 'translate(-50%, -50%)';
+                indicator.style.pointerEvents = 'none';
+                indicator.style.zIndex = '9999';
+                
+                // Add a label showing the group ID and pointer count
+                const label = document.createElement('div');
+                label.style.position = 'absolute';
+                label.style.top = '-30px';
+                label.style.left = '50%';
+                label.style.transform = 'translateX(-50%)';
+                label.style.color = '#00ff00';
+                label.style.fontSize = '12px';
+                label.style.fontWeight = 'bold';
+                label.style.textShadow = '2px 2px 4px rgba(0,0,0,0.8)';
+                label.style.backgroundColor = 'rgba(0,0,0,0.7)';
+                label.style.padding = '2px 6px';
+                label.style.borderRadius = '4px';
+                label.textContent = `Group ${groupId} (${pointerIds.length} fingers)`;
+                indicator.appendChild(label);
+                
+                // Add animation to make it more visible
+                indicator.style.animation = 'pulse 1s infinite';
+                indicator.style.boxShadow = '0 0 20px #00ff00, 0 0 40px #00ff00';
+                
+                document.body.appendChild(indicator);
+            }
+            
+            // Remove gesture group indicator
+            removeGestureGroupIndicator(groupId) {
+                const indicator = document.getElementById(`gesture-group-${groupId}`);
+                if (indicator) {
+                    indicator.remove();
+                }
+            }
+            
+            // Update highlights for all active gestures
+            updateHighlightsForAllGestures() {
+                const squaresToHighlight = new Set();
+                
+                this.gestureStates.forEach((gestureState, groupId) => {
+                    const gestureTargets = window.ftxxPointer.getGestureTargets(groupId);
+                    gestureTargets.forEach(target => {
+                        if (target && target.id) {
+                            squaresToHighlight.add(target.id);
+                        }
                     });
                 });
+                
+                // Reset all squares to normal appearance
+                const allSquares = [this.testSquare1, this.testSquare2, this.testSquare3];
+                allSquares.forEach(square => {
+                    square.style.boxShadow = '';
+                    square.style.border = '3px solid #fff';
+                });
+                
+                // Highlight all squares that are being gestured
+                squaresToHighlight.forEach(squareId => {
+                    const squareElement = document.getElementById(squareId);
+                    if (squareElement) {
+                        squareElement.style.boxShadow = '0 0 20px #00ff00, 0 0 40px #00ff00';
+                        squareElement.style.border = '3px solid #00ff00';
+                    }
+                });
+            }
+            
+            // Clear square highlights when gestures end
+            clearSquareHighlights() {
+                const allSquares = [this.testSquare1, this.testSquare2, this.testSquare3];
+                allSquares.forEach(square => {
+                    square.style.boxShadow = '';
+                    square.style.border = '3px solid #fff';
+                });
+                
+                // Clear gesture group indicators
+                const gestureGroups = document.querySelectorAll('[id^="gesture-group-"]');
+                gestureGroups.forEach(group => {
+                    group.remove();
+                });
+                
+                this.gestureStates.clear();
+            }
+            
+            // Prevent default events on squares
+            setupSquareEventPrevention() {
+                const allSquares = [this.testSquare1, this.testSquare2, this.testSquare3];
+                allSquares.forEach(square => {
+                    square.addEventListener('dragstart', (e) => e.preventDefault());
+                    square.addEventListener('mousedown', (e) => e.preventDefault());
+                    square.addEventListener('selectstart', (e) => e.preventDefault());
+                });
+            }
+            
+            setupTestPointerButton() {
+                const testPointerBtn = document.getElementById('testPointer');
+                testPointerBtn.addEventListener('click', () => {
+                    this.clearAllPointerIndicators();
+                    
+                    const testPointer = {
+                        id: 'test_' + Date.now(),
+                        x: 200,
+                        y: 200
+                    };
+                    this.createPointerIndicator(testPointer);
+                    
+                    setTimeout(() => {
+                        this.removePointerIndicator(testPointer.id);
+                    }, 3000);
+                });
+            }
+            
+            // Clear all pointer indicators
+            clearAllPointerIndicators() {
+                const indicators = document.querySelectorAll('.pointer-indicator');
+                indicators.forEach(indicator => {
+                    indicator.remove();
+                });
+                
+                // Clear gesture group indicators
+                const gestureGroups = document.querySelectorAll('[id^="gesture-group-"]');
+                gestureGroups.forEach(group => {
+                    group.remove();
+                });
+                
+                this.activePointers.clear();
             }
             
             handlePointerEvent(type, evt) {
-                // Only log pointerdown and pointerup - skip pointermove
-                if (type === 'POINTERDOWN' || type === 'POINTERUP') {
-                    this.logEvent(type, type, {
-                        count: evt.pointers.length,
-                        pointers: evt.pointers.map(p => `${p.id}@(${Math.round(p.x)},${Math.round(p.y)})`)
-                    });
-                }
-                
-                // SUPER SIMPLE: Show visual indicators
                 if (type === 'POINTERDOWN') {
                     evt.pointers.forEach(pointer => {
-                        // Create indicators for mouse events (LMB, RMB, etc.)
-                        if (evt.originalEvent.type.includes('mouse')) {
-                            this.activePointers.add(pointer.id);
-                            this.createPointerIndicator(pointer);
+                        if (pointer.id === undefined || pointer.id === null) {
+                            pointer.id = 'unknown_' + Date.now() + '_' + Math.random();
                         }
-                        // Create indicators for touch events, but only if they're not duplicates
-                        else if (evt.originalEvent.type.includes('touch') && !evt.originalEvent.type.includes('pointer')) {
-                            this.activePointers.add(pointer.id);
-                            this.createPointerIndicator(pointer);
-                        }
+                        this.activePointers.add(pointer.id);
+                        this.createPointerIndicator(pointer);
                     });
                 } else if (type === 'POINTERUP') {
                     evt.pointers.forEach(pointer => {
@@ -261,13 +670,36 @@
                         this.removePointerIndicator(pointer.id);
                     });
                     
-                    // CRITICAL FIX: If no pointers in event but we have active pointers,
-                    // remove all active pointers (this happens with mouse events)
                     if (evt.pointers.length === 0 && this.activePointers.size > 0) {
                         this.activePointers.forEach(pointerId => {
                             this.removePointerIndicator(pointerId);
                         });
                         this.activePointers.clear();
+                    }
+                    
+                    // If no active pointers remain, clear everything
+                    if (this.activePointers.size === 0) {
+                        this.clearSquareHighlights();
+                        this.gestureStates.clear();
+                        window.ftxxPointer.clearGestureState();
+                        
+                        // Force clear any lingering gesture group indicators
+                        const gestureGroups = document.querySelectorAll('[id^="gesture-group-"]');
+                        gestureGroups.forEach(group => {
+                            group.remove();
+                        });
+                    }
+                    
+                    if (this.activePointers.size < 2) {
+                        this.clearSquareHighlights();
+                        this.gestureStates.clear();
+                        window.ftxxPointer.clearGestureState();
+                        
+                        // Force clear any lingering gesture group indicators
+                        const gestureGroups = document.querySelectorAll('[id^="gesture-group-"]');
+                        gestureGroups.forEach(group => {
+                            group.remove();
+                        });
                     }
                 } else if (type === 'POINTERMOVE') {
                     evt.pointers.forEach(pointer => {
@@ -276,116 +708,35 @@
                 }
             }
             
-            createPointerIndicator(pointer) {
-                // Remove existing indicator for this pointer
-                this.removePointerIndicator(pointer.id);
+            // Check if a point is within a square's bounds
+            isPointInSquare(x, y, squareElement) {
+                const squareRect = squareElement.getBoundingClientRect();
                 
-                const indicator = document.createElement('div');
-                indicator.className = 'pointer-indicator';
-                indicator.id = `pointer-${pointer.id}`;
-                indicator.style.left = pointer.x + 'px';
-                indicator.style.top = pointer.y + 'px';
-                
-                // Color based on type
-                if (pointer.button && pointer.button !== 'touch') {
-                    indicator.style.backgroundColor = '#ff4757'; // Mouse
-                    indicator.title = `${pointer.button} (${pointer.id})`;
-                } else {
-                    indicator.style.backgroundColor = '#2ed573'; // Touch
-                    indicator.title = `Touch ${pointer.id}`;
-                }
-                
-                this.testArea.appendChild(indicator);
+                return x >= squareRect.left && 
+                       x <= squareRect.right &&
+                       y >= squareRect.top && 
+                       y <= squareRect.bottom;
             }
             
-            updatePointerIndicator(pointer) {
-                const indicator = document.getElementById(`pointer-${pointer.id}`);
-                if (indicator) {
-                    indicator.style.left = pointer.x + 'px';
-                    indicator.style.top = pointer.y + 'px';
-                } else {
-                    // CRITICAL FIX: If no indicator found for this ID, try to find any active indicator
-                    // This handles the case where pointer IDs are inconsistent
-                    const activeIndicators = document.querySelectorAll('.pointer-indicator');
-                    if (activeIndicators.length > 0) {
-                        // Update the first active indicator
-                        const firstIndicator = activeIndicators[0];
-                        firstIndicator.style.left = pointer.x + 'px';
-                        firstIndicator.style.top = pointer.y + 'px';
-                    }
-                }
-            }
-            
-            removePointerIndicator(pointerId) {
-                const indicator = document.getElementById(`pointer-${pointerId}`);
-                if (indicator) {
-                    indicator.remove();
-                }
-            }
-            
-            handlePan(evt) {
-                this.squareTransform.x += evt.deltaX;
-                this.squareTransform.y += evt.deltaY;
-                this.updateSquareTransform();
-            }
-            
-            handlePinch(evt) {
-                // CRITICAL FIX: The library sends scale ratios, not incremental changes
-                // We need to track the base scale and apply the ratio correctly
-                if (!this.baseScale) {
-                    this.baseScale = 1.0; // Initial base scale
-                }
+            // Check if a point is near a square (within a certain distance)
+            isPointNearSquare(x, y, squareElement, distance) {
+                const squareRect = squareElement.getBoundingClientRect();
+                const squareCenterX = squareRect.left + squareRect.width / 2;
+                const squareCenterY = squareRect.top + squareRect.height / 2;
                 
-                // Apply the scale ratio to the base scale
-                this.baseScale *= evt.scale;
-                this.baseScale = Math.max(0.5, Math.min(3, this.baseScale)); // Limit scale
-                
-                // Set the current scale to the calculated base scale
-                this.squareTransform.scale = this.baseScale;
-                
-                // Debug: Log scale changes to understand shrinking
-                if (evt.scale < 1) {
-                    console.log('PINCH SHRINK:', evt.scale, 'baseScale:', this.baseScale);
-                }
-                
-                this.updateSquareTransform();
-            }
-            
-            handleRotate(evt) {
-                this.squareTransform.rotation += evt.rotation;
-                this.updateSquareTransform();
-            }
-            
-            updateSquareTransform() {
-                const transform = `translate(${this.squareTransform.x}px, ${this.squareTransform.y}px) scale(${this.squareTransform.scale}) rotate(${this.squareTransform.rotation}rad)`;
-                this.testSquare.style.transform = transform;
-            }
-            
-            logEvent(category, type, data) {
-                const entry = document.createElement('div');
-                entry.className = 'event-entry';
-                
-                const timestamp = new Date().toLocaleTimeString();
-                const typeElement = document.createElement('div');
-                typeElement.className = 'event-type';
-                typeElement.textContent = `[${timestamp}] ${type}`;
-                
-                const dataElement = document.createElement('div');
-                dataElement.className = 'event-data';
-                dataElement.textContent = JSON.stringify(data, null, 2);
-                
-                entry.appendChild(typeElement);
-                entry.appendChild(dataElement);
-                
-                this.eventLog.appendChild(entry);
-                this.eventLog.scrollTop = this.eventLog.scrollHeight;
+                const pointDistance = Math.sqrt((x - squareCenterX) ** 2 + (y - squareCenterY) ** 2);
+                return pointDistance <= distance;
             }
         }
         
-        // Initialize when page loads
-        document.addEventListener('DOMContentLoaded', () => {
-            new SimpleFTXXTest();
-        });
+        // Initialize when DOM is ready
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => {
+                window.testApp = new SimpleFTXXTest();
+            });
+        } else {
+            window.testApp = new SimpleFTXXTest();
+        }
     </script>
 </body>
-</html> 
+</html>

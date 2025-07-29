@@ -119,7 +119,7 @@ class Game {
       this.unitManager.createUnit(unit.type, unit.pos, 'red');
     });
     
-    console.log(`Created ${blueUnits.length + redUnits.length} units (${blueUnits.length} blue, ${redUnits.length} red)`);
+
     
     // Create additional scattered units around the map
     this.createScatteredUnits();
@@ -146,7 +146,7 @@ class Game {
       this.unitManager.createUnit(unit.type, unit.pos, unit.team);
     });
     
-    console.log(`Created ${neutralUnits.length} additional scattered neutral units`);
+
   }
   
   findFlatPositions(minX, minZ, maxX, maxZ, count) {
@@ -169,7 +169,7 @@ class Game {
       }
     }
     
-    console.log(`Found ${flatPositions.length} flat positions after ${attemptsMade} attempts`);
+
     return flatPositions;
   }
   
@@ -289,7 +289,7 @@ class Game {
       this.lassoSelection.enable();
     }
     
-    console.log(`Selection mode changed to: ${mode}`);
+
   }
   
   toggleSelectionMode() {

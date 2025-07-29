@@ -65,17 +65,16 @@ class LassoSelection {
   }
   
   startLasso(screenX, screenY) {
+    console.log('LASSO START:', { x: screenX, y: screenY, wasSelecting: this.isSelecting });
     this.isSelecting = true;
     this.points = [{ x: screenX, y: screenY }];
     
-    // Show lasso canvas
+    // Show lasso canvas but keep pointer events disabled
     this.overlay.style.display = 'block';
-    this.overlay.style.pointerEvents = 'auto';
+    this.overlay.style.pointerEvents = 'none';
     
     // Clear canvas
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    
-    // console.log('Lasso started at:', screenX, screenY);
   }
   
   updateLasso(screenX, screenY) {
@@ -91,6 +90,7 @@ class LassoSelection {
   }
   
   endLasso() {
+    console.log('LASSO END:', { wasSelecting: this.isSelecting, pointsCount: this.points.length });
     if (!this.isSelecting) return;
     
     this.isSelecting = false;
@@ -105,7 +105,12 @@ class LassoSelection {
       // Select units within the lasso
       this.selectUnitsInLasso();
     }
+    
+    // Clear points array
+    this.points = [];
   }
+  
+
   
   drawLasso() {
     if (this.points.length < 2) return;

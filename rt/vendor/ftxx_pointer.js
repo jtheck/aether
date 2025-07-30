@@ -100,10 +100,7 @@
         abs: Math.abs, min: Math.min, max: Math.max, round: Math.round
     };
 
-    // Thresholds for gesture detection and tap validation
-    const THRESHOLDS = {
-        TAP_MOVEMENT: 100, PAN_MOVEMENT: 10000, ROTATION_MAX: 0.5, SCALE_MIN: 0.5, SCALE_MAX: 2.0, GESTURE_FRAMES: 3
-    };
+
 
     let viewportScalingEnabled = true;
     let contextMenuDisabled = true;
@@ -176,10 +173,30 @@
             passive: false,
             disableContextMenu: true,
             preventViewportScaling: true,
-            gestureThresholds: { pan: 0.5, rotation: 0.002, zoom: 0.5 },
+            gestureThresholds: { pan: 1.0, rotation: 1.0, zoom: 1.0 },
+            gestureSensitivity: { pan: 1.0, rotation: 1.0, zoom: 1.0 }, // Multipliers for output deltas
             tap: { threshold: 10, timeout: 300 },
             longpress: { timeout: 500 },
             debug: false // Added debug mode
+        },
+
+        // Internal tuning constants (adjust these to tune the library behavior)
+        _tuning: {
+            // Base thresholds that get multiplied by config values
+            baseThresholds: { pan: 0.2, rotation: 0.001, zoom: 0.5 },
+            // Base sensitivity multipliers that get multiplied by config values  
+            baseSensitivity: { pan: 0.8, rotation: 1.2, zoom: 1.0 },
+            // Dampening factors for secondary gestures when one is dominant
+            gestureDampening: { pan: 0.9, rotation: 0.9, zoom: 0.9 }, // 0.1 = 90% dampening
+            // Smoothing factors (0.0 = no smoothing, 1.0 = maximum smoothing)
+            smoothing: { pan: 0.8, rotation: 0.5, zoom: 0.5 },
+            // Internal thresholds for gesture validation
+            tapMovement: 100,      // Max movement for tap detection
+            panMovement: 10000,    // Max movement before gesture rejection
+            rotationMax: 0.5,      // Max rotation before gesture rejection
+            scaleMin: 0.5,         // Min scale before gesture rejection
+            scaleMax: 2.0,         // Max scale before gesture rejection
+            gestureFrames: 3       // Frames to wait before gesture detection
         },
 
         // Internal state management
@@ -360,6 +377,7 @@
                             this._state.tapStart = null;
                             this._state.gestureGroups.clear();
                             this._state.gestureTargets && this._state.gestureTargets.clear();
+                            this._state.unifiedTransforms && this._state.unifiedTransforms.clear();
                             this._state.nextGestureGroupId = 1;
                         }
                     } else if (e.type === 'touchmove') {
@@ -368,7 +386,7 @@
                         
                         if (this._state.tapStart && this._state.tapStart.id === touch.identifier) {
                             const distanceSquared = MathUtils.distanceSquared(touch.clientX, touch.clientY, this._state.tapStart.x, this._state.tapStart.y);
-                            if (distanceSquared > THRESHOLDS.TAP_MOVEMENT) {
+                            if (distanceSquared > this._tuning.tapMovement) {
                                 this._state.tapStart = null;
                                 this._clearLongpressTimer(touch.identifier);
                             }
@@ -451,6 +469,7 @@
                         this._state.tapStart = null;
                         this._state.gestureGroups.clear();
                         this._state.gestureTargets && this._state.gestureTargets.clear();
+                        this._state.unifiedTransforms && this._state.unifiedTransforms.clear();
                         this._state.nextGestureGroupId = 1;
                     }
                 } else if (e.type === 'pointermove') {
@@ -460,7 +479,7 @@
                         
                         if (this._state.tapStart && this._state.tapStart.id === pointerId) {
                             const distanceSquared = MathUtils.distanceSquared(e.clientX, e.clientY, this._state.tapStart.x, this._state.tapStart.y);
-                            if (distanceSquared > THRESHOLDS.TAP_MOVEMENT) {
+                            if (distanceSquared > this._tuning.tapMovement) {
                                 this._state.tapStart = null;
                                 this._clearLongpressTimer(pointerId);
                             }
@@ -774,7 +793,7 @@
 
             // Skip first few frames to stabilize gesture detection
             gestureState.frameCount++;
-            if (gestureState.frameCount < THRESHOLDS.GESTURE_FRAMES) {
+            if (gestureState.frameCount < this._tuning.gestureFrames) {
                 if (this.config.debug) {
                     console.log(`FTXX: Group ${groupId} frame ${gestureState.frameCount}, skipping for stabilization`);
                 }
@@ -786,7 +805,7 @@
             }
             
             // Initialize last values on first valid frame
-            if (gestureState.frameCount === THRESHOLDS.GESTURE_FRAMES) {
+            if (gestureState.frameCount === this._tuning.gestureFrames) {
                 if (this.config.debug) {
                     console.log(`FTXX: Group ${groupId} frame ${gestureState.frameCount}, initializing last values`);
                 }
@@ -801,9 +820,11 @@
                 console.log(`FTXX: Group ${groupId} processing gesture detection on frame ${gestureState.frameCount}`);
             }
             
+
+            
             // Calculate scale and validate within bounds
             const scale = distance / gestureState.lastDistance;
-            if (scale < THRESHOLDS.SCALE_MIN || scale > THRESHOLDS.SCALE_MAX) {
+            if (scale < this._tuning.scaleMin || scale > this._tuning.scaleMax) {
                 gestureState.lastCenterX = center.x; 
                 gestureState.lastCenterY = center.y;
                 gestureState.lastDistance = distance; 
@@ -819,7 +840,7 @@
             
             // Check if movement is too large (likely not a gesture)
             const panDistanceSquared = deltaCenterX * deltaCenterX + deltaCenterY * deltaCenterY;
-            if (panDistanceSquared > THRESHOLDS.PAN_MOVEMENT) {
+            if (panDistanceSquared > this._tuning.panMovement) {
                 gestureState.lastCenterX = center.x; 
                 gestureState.lastCenterY = center.y;
                 gestureState.lastDistance = distance; 
@@ -829,7 +850,7 @@
             
             // Check if rotation is too large
             const rotationRadians = MathUtils.abs(deltaAngle);
-            if (rotationRadians > THRESHOLDS.ROTATION_MAX) {
+            if (rotationRadians > this._tuning.rotationMax) {
                 gestureState.lastCenterX = center.x; 
                 gestureState.lastCenterY = center.y;
                 gestureState.lastDistance = distance; 
@@ -843,27 +864,37 @@
             const angleChange = MathUtils.abs(deltaAngle);
 
             // Determine which gesture is most prominent
-            const thresholds = this.config.gestureThresholds;
-            const pinchRatio = distanceChange / thresholds.zoom;
-            const panRatio = centerChange / thresholds.pan;
-            const rotateRatio = angleChange / thresholds.rotation;
+            const configThresholds = this.config.gestureThresholds;
+            const baseThresholds = this._tuning.baseThresholds;
+            const actualThresholds = {
+                pan: configThresholds.pan * baseThresholds.pan,
+                rotation: configThresholds.rotation * baseThresholds.rotation,
+                zoom: configThresholds.zoom * baseThresholds.zoom
+            };
+            
+            const pinchRatio = distanceChange / actualThresholds.zoom;
+            const panRatio = centerChange / actualThresholds.pan;
             
             let primaryGesture = null;
             let maxRatio = 0;
             
             if (pinchRatio > 1 && pinchRatio > maxRatio) {
-                primaryGesture = { type: 'pinch', value: distanceChange, threshold: thresholds.zoom };
+                primaryGesture = { type: 'pinch', value: distanceChange, threshold: actualThresholds.zoom };
                 maxRatio = pinchRatio;
             }
             
             if (panRatio > 1 && panRatio > maxRatio) {
-                primaryGesture = { type: 'pan', value: centerChange, threshold: thresholds.pan };
+                primaryGesture = { type: 'pan', value: centerChange, threshold: actualThresholds.pan };
                 maxRatio = panRatio;
             }
             
-            if (rotateRatio > 1 && rotateRatio > maxRatio) {
-                primaryGesture = { type: 'rotate', value: angleChange, threshold: thresholds.rotation };
-                maxRatio = rotateRatio;
+            // For rotation, compare raw angle change to threshold (not normalized)
+            if (this.config.debug) {
+                console.log(`FTXX: Angle change: ${angleChange}, threshold: ${actualThresholds.rotation}, maxRatio: ${maxRatio}`);
+            }
+            if (angleChange > actualThresholds.rotation && angleChange / actualThresholds.rotation > maxRatio) {
+                primaryGesture = { type: 'rotate', value: angleChange, threshold: actualThresholds.rotation };
+                maxRatio = angleChange / actualThresholds.rotation;
             }
             
             // Emit the detected gesture event with group information
@@ -872,6 +903,8 @@
                     groupId: groupId,
                     pointerIds: gestureState.pointerIds,
                     pointerCount: groupPointers.length,
+                    type: primaryGesture.type,
+                    frameCount: gestureState.frameCount,
                     ...this._getGestureData(primaryGesture.type, scale, center.x, center.y, deltaCenterX, deltaCenterY, deltaAngle, originalEvent)
                 };
                 
@@ -955,34 +988,178 @@
 
         // Get gesture-specific data for event emission
         _getGestureData: function(gestureType, scale, centerX, centerY, deltaCenterX, deltaCenterY, deltaAngle, originalEvent) {
+            const configThresholds = this.config.gestureThresholds;
+            const configSensitivity = this.config.gestureSensitivity;
+            const baseThresholds = this._tuning.baseThresholds;
+            const baseSensitivity = this._tuning.baseSensitivity;
+            
+            // Calculate actual thresholds and sensitivity
+            const actualThresholds = {
+                pan: configThresholds.pan * baseThresholds.pan,
+                rotation: configThresholds.rotation * baseThresholds.rotation,
+                zoom: configThresholds.zoom * baseThresholds.zoom
+            };
+            const actualSensitivity = {
+                pan: configSensitivity.pan * baseSensitivity.pan,
+                rotation: configSensitivity.rotation * baseSensitivity.rotation,
+                zoom: configSensitivity.zoom * baseSensitivity.zoom
+            };
+            
             switch (gestureType) {
                 case 'pinch':
-                    return { scale: scale, centerX: centerX, centerY: centerY, originalEvent: originalEvent };
+                    // Normalize scale: 1.0 = standard sensitivity, then apply sensitivity multiplier
+                    const normalizedScale = 1.0 + (scale - 1.0) / actualThresholds.zoom;
+                    const adjustedScale = 1.0 + (normalizedScale - 1.0) * actualSensitivity.zoom;
+                    return { scale: adjustedScale, centerX: centerX, centerY: centerY, originalEvent: originalEvent };
                 case 'pan':
-                    return { deltaX: deltaCenterX, deltaY: deltaCenterY, centerX: centerX, centerY: centerY, originalEvent: originalEvent };
+                    // Normalize pan: 1.0 = standard sensitivity, then apply sensitivity multiplier
+                    const normalizedDeltaX = deltaCenterX / actualThresholds.pan;
+                    const normalizedDeltaY = deltaCenterY / actualThresholds.pan;
+                    return { 
+                        deltaX: normalizedDeltaX * actualSensitivity.pan, 
+                        deltaY: normalizedDeltaY * actualSensitivity.pan, 
+                        centerX: centerX, 
+                        centerY: centerY, 
+                        originalEvent: originalEvent 
+                    };
                 case 'rotate':
-                    return { rotation: deltaAngle, centerX: centerX, centerY: centerY, originalEvent: originalEvent };
+                    // Apply sensitivity multiplier to raw rotation (in radians)
+                    const adjustedRotation = deltaAngle * actualSensitivity.rotation;
+                    return { rotation: adjustedRotation, centerX: centerX, centerY: centerY, originalEvent: originalEvent };
                 default:
                     return { originalEvent: originalEvent };
             }
         },
 
-        // Emit gesture events to registered listeners
+        // Emit unified transform event that combines all gesture changes
         _emitGestureEvent: function(gestureType, targetElement, data) {
             // Get the targets that were stored when the gesture group was created
             const gestureTargets = this._state.gestureTargets && this._state.gestureTargets.get(data.groupId);
             
+            // Only emit unified transform event
+            this._emitUnifiedTransformEvent(targetElement, data, gestureTargets);
+        },
+        
+        // Emit unified transform event that combines all gesture changes
+        _emitUnifiedTransformEvent: function(targetElement, data, gestureTargets) {
+            // Get current transform state for this gesture group
+            const groupId = data.groupId;
+            let transformState = this._state.unifiedTransforms && this._state.unifiedTransforms.get(groupId);
+            
+            if (!transformState) {
+                transformState = {
+                    groupId: groupId,
+                    deltaX: 0, deltaY: 0,
+                    deltaScale: 1, deltaRotation: 0,
+                    centerX: data.centerX || 0, centerY: data.centerY || 0,
+                    timestamp: Date.now(),
+                    frameCount: 0,
+                    dominantGesture: null,
+                    // Previous values for smoothing
+                    prevDeltaX: 0, prevDeltaY: 0,
+                    prevDeltaScale: 1, prevDeltaRotation: 0
+                };
+                if (!this._state.unifiedTransforms) this._state.unifiedTransforms = new Map();
+                this._state.unifiedTransforms.set(groupId, transformState);
+            }
+            
+            // Reset deltas at the start of each frame
+            if (transformState.frameCount !== data.frameCount) {
+                // Store previous values for smoothing
+                transformState.prevDeltaX = transformState.deltaX;
+                transformState.prevDeltaY = transformState.deltaY;
+                transformState.prevDeltaScale = transformState.deltaScale;
+                transformState.prevDeltaRotation = transformState.deltaRotation;
+                
+                transformState.deltaX = 0;
+                transformState.deltaY = 0;
+                transformState.deltaScale = 1;
+                transformState.deltaRotation = 0;
+                transformState.frameCount = data.frameCount;
+                transformState.dominantGesture = null;
+            }
+            
+            // Always update center point with current gesture data
+            transformState.centerX = data.centerX || 0;
+            transformState.centerY = data.centerY || 0;
+            
+            // Track dominant gesture (first one in the frame becomes dominant)
+            if (!transformState.dominantGesture) {
+                transformState.dominantGesture = data.type;
+            }
+            
+            // Update transform state based on gesture type (accumulate deltas)
+            switch (data.type || 'unknown') {
+                case 'pan':
+                    transformState.deltaX += data.deltaX || 0;
+                    transformState.deltaY += data.deltaY || 0;
+                    break;
+                case 'pinch':
+                    transformState.deltaScale *= data.scale || 1;
+                    break;
+                case 'rotate':
+                    transformState.deltaRotation += data.rotation || 0;
+                    break;
+            }
+            
+            // Apply dampening to secondary gestures (affects sensitivity, not thresholds)
+            if (transformState.dominantGesture && transformState.dominantGesture !== data.type) {
+                const dampening = this._tuning.gestureDampening;
+                switch (transformState.dominantGesture) {
+                    case 'pan':
+                        // If pan is dominant, dampen rotation and zoom
+                        transformState.deltaRotation *= dampening.rotation;
+                        transformState.deltaScale = 1 + (transformState.deltaScale - 1) * dampening.zoom;
+                        break;
+                    case 'rotate':
+                        // If rotate is dominant, dampen pan and zoom
+                        transformState.deltaX *= dampening.pan;
+                        transformState.deltaY *= dampening.pan;
+                        transformState.deltaScale = 1 + (transformState.deltaScale - 1) * dampening.zoom;
+                        break;
+                    case 'pinch':
+                        // If pinch is dominant, dampen pan and rotation
+                        transformState.deltaX *= dampening.pan;
+                        transformState.deltaY *= dampening.pan;
+                        transformState.deltaRotation *= dampening.rotation;
+                        break;
+                }
+            }
+            
+            // Apply exponential moving average smoothing (more responsive, less laggy)
+            const smoothing = this._tuning.smoothing;
+            if (smoothing.pan > 0) {
+                transformState.deltaX = transformState.deltaX * smoothing.pan + transformState.prevDeltaX * (1 - smoothing.pan);
+                transformState.deltaY = transformState.deltaY * smoothing.pan + transformState.prevDeltaY * (1 - smoothing.pan);
+            }
+            if (smoothing.rotation > 0) {
+                transformState.deltaRotation = transformState.deltaRotation * smoothing.rotation + transformState.prevDeltaRotation * (1 - smoothing.rotation);
+            }
+            if (smoothing.zoom > 0) {
+                transformState.deltaScale = transformState.deltaScale * smoothing.zoom + transformState.prevDeltaScale * (1 - smoothing.zoom);
+            }
+            
+            transformState.timestamp = Date.now();
+            
+            // Emit unified transform event
             this._state.listeners.forEach((listenerData, key) => {
-                if (listenerData.event === gestureType) {
-                    const gestureEvent = {
-                        type: gestureType, 
-                        targets: gestureTargets || [], // Include the targets from gesture validation
-                        target: gestureTargets && gestureTargets[0], // Backward compatibility
-                        ...data,
+                if (listenerData.event === 'transform') {
+                    const transformEvent = {
+                        type: 'transform',
+                        targets: gestureTargets || [],
+                        target: gestureTargets && gestureTargets[0],
+                        groupId: groupId,
+                        deltaX: transformState.deltaX,
+                        deltaY: transformState.deltaY,
+                        deltaScale: transformState.deltaScale,
+                        deltaRotation: transformState.deltaRotation,
+                        centerX: transformState.centerX,
+                        centerY: transformState.centerY,
+                        timestamp: transformState.timestamp,
                         preventDefault: () => data.originalEvent.preventDefault(),
                         stopPropagation: () => data.originalEvent.stopPropagation()
                     };
-                    listenerData.callback(gestureEvent);
+                    listenerData.callback(transformEvent);
                 }
             });
         },
@@ -996,7 +1173,7 @@
                 ['pointerenter', ['pointerenter']],
                 ['pointerleave', ['pointerleave']],
                 ['tap', []], ['longpress', ['touchstart']],
-                ['pinch', []], ['pan', []], ['rotate', []]
+                ['transform', []]
             ]);
             return mappings.get(eventType) || [eventType];
         },
@@ -1040,7 +1217,7 @@
             const distanceSquared = MathUtils.distanceSquared(endX, endY, this._state.tapStart.x, this._state.tapStart.y);
             
             // Emit tap if within time and distance thresholds
-            if (timeDiff <= this.config.tap.timeout && distanceSquared <= THRESHOLDS.TAP_MOVEMENT) {
+            if (timeDiff <= this.config.tap.timeout && distanceSquared <= this._tuning.tapMovement) {
                 const tapEvent = {
                     type: 'tap', pointers: [{ id: this._state.tapStart.id, x: endX, y: endY, pressure: 1, type: 'touch' }],
                     originalEvent: null, target: targetElement, currentTarget: targetElement,

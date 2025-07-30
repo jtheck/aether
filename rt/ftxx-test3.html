@@ -328,13 +328,9 @@
 
                         
                         // Apply transform to the box
-                        console.log(`BOX ${boxId} PAN DATA:`, {
-                            deltaX: evt.deltaX,
-                            deltaY: evt.deltaY,
-                            currentPos: { x: box.x, y: box.y }
-                        });
                         if (evt.deltaX !== 0 || evt.deltaY !== 0) {
-                            box.setPosition(box.x + evt.deltaX, box.y + evt.deltaY);
+                            // Use absolute gesture center coordinates instead of relative deltas
+                            box.setPosition(evt.centerX, evt.centerY);
                         }
                         if (evt.deltaScale !== 1) {
                             box.setScale(box.scale * evt.deltaScale);

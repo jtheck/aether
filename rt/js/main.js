@@ -16,8 +16,7 @@ document.addEventListener('DOMContentLoaded', function() {
   camera.detachControl(canvas); // Disable automatic camera controls
   camera.lowerRadiusLimit = 8;
   camera.upperRadiusLimit = 100; // Much further zoom out
-  camera.lowerAlphaLimit = -Math.PI / 3; // More horizontal freedom
-  camera.upperAlphaLimit = Math.PI / 3;
+  // Removed alpha limits to allow full 360-degree rotation
   
   // RTS-style camera controls
   camera.panningSensibility = 1000; // Faster panning

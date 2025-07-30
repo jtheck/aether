@@ -236,11 +236,11 @@
         // Internal tuning constants (adjust these to tune the library behavior)
         _tuning: {
             // Base thresholds that get multiplied by config values
-            baseThresholds: { pan: 0.2, rotation: 0.001, zoom: 1.2 },
+            baseThresholds: { pan: 0.2, rotation: 0.001, zoom: 0.5 },
             // Base sensitivity multipliers that get multiplied by config values  
-            baseSensitivity: { pan: 0.8, rotation: 1.1, zoom: 0.8 },
+            baseSensitivity: { pan: 0.8, rotation: 1.2, zoom: 1.0 },
             // Dampening factors for secondary gestures when one is dominant
-            gestureDampening: { pan: 0.9, rotation: 0.8, zoom: 0.7 }, // 0.1 = 90% dampening
+            gestureDampening: { pan: 0.9, rotation: 0.9, zoom: 0.9 }, // 0.1 = 90% dampening
             // Smoothing factors (0.0 = no smoothing, 1.0 = maximum smoothing)
             smoothing: { pan: 0.8, rotation: 0.5, zoom: 0.5 },
             // Internal thresholds for gesture validation
@@ -1019,20 +1019,14 @@
             let primaryGesture = null;
             let maxRatio = 0;
             
-            // Get targets for this gesture group
-            const targets = this._state.gestureTargets ? this._state.gestureTargets.get(groupId) : [];
-            
-            // Determine which gesture types are enabled for each target
-            const enabledGestureTypes = this._getEnabledGestureTypes(targets);
-            
             // Emit all gestures that exceed their thresholds
             const gesturesToEmit = [];
             
-            if (pinchRatio > 1 && enabledGestureTypes.includes('pinch')) {
+            if (pinchRatio > 1) {
                 gesturesToEmit.push({ type: 'pinch', value: distanceChange, threshold: actualThresholds.zoom });
             }
             
-            if (panRatio > 1 && enabledGestureTypes.includes('pan')) {
+            if (panRatio > 1) {
                 gesturesToEmit.push({ type: 'pan', value: centerChange, threshold: actualThresholds.pan });
             }
             
@@ -1040,28 +1034,19 @@
             if (this.config.debug) {
                 console.log(`FTXX: Angle change: ${angleChange}, threshold: ${actualThresholds.rotation}`);
             }
-            if (angleChange > actualThresholds.rotation && enabledGestureTypes.includes('rotate')) {
+            if (angleChange > actualThresholds.rotation) {
                 gesturesToEmit.push({ type: 'rotate', value: angleChange, threshold: actualThresholds.rotation });
             }
             
-            // Apply dampening to gestures if multiple are detected
-            const dampenedGestures = this._applyDampening(gesturesToEmit, enabledGestureTypes);
-            
             // Emit all detected gestures
-            dampenedGestures.forEach(gesture => {
-                // Apply dampening to the gesture values
-                const dampenedDeltaX = gesture.type === 'pan' ? deltaCenterX * (gesture.value / centerChange) : deltaCenterX;
-                const dampenedDeltaY = gesture.type === 'pan' ? deltaCenterY * (gesture.value / centerChange) : deltaCenterY;
-                const dampenedDeltaScale = gesture.type === 'pinch' ? (gesture.value / distanceChange) : 1;
-                const dampenedDeltaRotation = gesture.type === 'rotate' ? deltaAngle * (gesture.value / angleChange) : deltaAngle;
-                
+            gesturesToEmit.forEach(gesture => {
                 const gestureData = {
                     groupId: groupId,
                     pointerIds: gestureState.pointerIds,
                     pointerCount: groupPointers.length,
                     type: gesture.type,
                     frameCount: gestureState.frameCount,
-                    ...this._getGestureData(gesture.type, scale, center.x, center.y, dampenedDeltaX, dampenedDeltaY, dampenedDeltaRotation, originalEvent)
+                    ...this._getGestureData(gesture.type, scale, center.x, center.y, deltaCenterX, deltaCenterY, deltaAngle, originalEvent)
                 };
                 
                 if (this.config.debug) {
@@ -1565,72 +1550,6 @@
             this._state.activePointerData.clear();
             
             this._state.isInitialized = false;
-        },
-
-        // Determine which gesture types are enabled for the given targets
-        _getEnabledGestureTypes: function(targets) {
-            const enabledTypes = new Set();
-            
-            if (!targets || !Array.isArray(targets)) {
-                return ['pan', 'pinch', 'rotate']; // Default to all gestures if no targets
-            }
-            
-            targets.forEach(target => {
-                if (typeof target === 'string') {
-                    if (target === 'page') {
-                        // Page (BEEFY) only supports scale and rotate, no pan
-                        enabledTypes.add('pinch');
-                        enabledTypes.add('rotate');
-                    } else if (target.startsWith('box')) {
-                        // Boxes support all gesture types
-                        enabledTypes.add('pan');
-                        enabledTypes.add('pinch');
-                        enabledTypes.add('rotate');
-                    }
-                }
-            });
-            
-            const result = Array.from(enabledTypes);
-            
-            // If no enabled types were found, default to all gestures
-            if (result.length === 0) {
-                return ['pan', 'pinch', 'rotate'];
-            }
-            
-            return result;
-        },
-
-        // Apply dampening to gesture values when multiple gestures are detected
-        _applyDampening: function(gestures, enabledTypes) {
-            if (gestures.length <= 1) {
-                return gestures; // No dampening needed for single gesture
-            }
-            
-            // Find the primary gesture (highest value)
-            let primaryGesture = gestures[0];
-            let maxValue = gestures[0].value;
-            
-            for (let i = 1; i < gestures.length; i++) {
-                if (gestures[i].value > maxValue) {
-                    maxValue = gestures[i].value;
-                    primaryGesture = gestures[i];
-                }
-            }
-            
-            // Apply dampening to secondary gestures
-            const dampeningFactor = 0.3; // Reduce secondary gestures by 70%
-            
-            return gestures.map(gesture => {
-                if (gesture === primaryGesture) {
-                    return gesture; // Keep primary gesture unchanged
-                } else {
-                    // Dampen secondary gestures
-                    return {
-                        ...gesture,
-                        value: gesture.value * dampeningFactor
-                    };
-                }
-            });
         }
     };
 

@@ -65,7 +65,6 @@ class LassoSelection {
   }
   
   startLasso(screenX, screenY) {
-    console.log('LASSO START:', { x: screenX, y: screenY, wasSelecting: this.isSelecting });
     this.isSelecting = true;
     this.points = [{ x: screenX, y: screenY }];
     
@@ -90,7 +89,6 @@ class LassoSelection {
   }
   
   endLasso() {
-    console.log('LASSO END:', { wasSelecting: this.isSelecting, pointsCount: this.points.length });
     if (!this.isSelecting) return;
     
     this.isSelecting = false;

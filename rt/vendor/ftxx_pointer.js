@@ -1,9 +1,9 @@
 /**
- * FTXX Pointer Library v1.2.0
+ * FTXX Pointer Library v1.3.0
  * Touch + pointer library for unified input handling
  * 
  * USAGE: ftxxPointer.on(element, events, callback)
- * EVENTS: pointerdown, pointerup, pointermove, pointerenter, pointerleave, tap, longpress, pinch, pan, rotate
+ * EVENTS: pointerdown, pointerup, pointermove, pointerenter, pointerleave, tap, longpress, transform
  * 
  * INPUT TYPES: The library detects and provides input type information:
  * - mouse: Traditional mouse input (LMB, RMB, etc.)
@@ -15,6 +15,12 @@
  * - isMouse: boolean flag for mouse input
  * - isTouch: boolean flag for touch input  
  * - isStylus: boolean flag for stylus input
+ * 
+ * TRANSFORM EVENTS: The 'transform' event combines pan, pinch, and rotate into a unified event:
+ * - deltaX, deltaY: Pan movement deltas
+ * - deltaScale: Scale change (multiplier)
+ * - deltaRotation: Rotation change (radians)
+ * - centerX, centerY: Gesture center point
  */
 
 (function() {
@@ -97,7 +103,54 @@
         distance: (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1),
         distanceSquared: (x1, y1, x2, y2) => { const dx = x2 - x1; const dy = y2 - y1; return dx * dx + dy * dy; },
         angle: (x1, y1, x2, y2) => Math.atan2(y2 - y1, x2 - x1),
-        abs: Math.abs, min: Math.min, max: Math.max, round: Math.round
+        sqrt: Math.sqrt, abs: Math.abs, min: Math.min, max: Math.max, round: Math.round
+    };
+
+    // Pointer ID management utilities
+    const PointerIdManager = {
+        // Get next available pointer ID (0-9)
+        getNextId: function() {
+            const state = window.ftxxPointer._state;
+            let id = 0;
+            while (state.usedPointerIds.has(id) && id < 10) {
+                id++;
+            }
+            if (id >= 10) {
+                // All IDs in use, find the lowest available
+                for (let i = 0; i < 10; i++) {
+                    if (!state.usedPointerIds.has(i)) {
+                        id = i;
+                        break;
+                    }
+                }
+            }
+            return id;
+        },
+
+        // Allocate a pointer ID for a browser pointer
+        allocateId: function(browserPointerId) {
+            const state = window.ftxxPointer._state;
+            const normalizedId = this.getNextId();
+            state.usedPointerIds.add(normalizedId);
+            state.pointerIdMap.set(browserPointerId.toString(), normalizedId);
+            return normalizedId;
+        },
+
+        // Get normalized ID for a browser pointer
+        getNormalizedId: function(browserPointerId) {
+            const state = window.ftxxPointer._state;
+            return state.pointerIdMap.get(browserPointerId.toString());
+        },
+
+        // Release a pointer ID
+        releaseId: function(browserPointerId) {
+            const state = window.ftxxPointer._state;
+            const normalizedId = state.pointerIdMap.get(browserPointerId.toString());
+            if (normalizedId !== undefined) {
+                state.usedPointerIds.delete(normalizedId);
+                state.pointerIdMap.delete(browserPointerId.toString());
+            }
+        }
     };
 
 
@@ -213,7 +266,11 @@
             recentEvents: null, // Duplicate event filtering
             eventCleanupCounter: 0,
             nextGestureGroupId: 1, // Unique ID for each gesture group
-            gestureStartCallback: null // Callback for gesture start validation
+            gestureStartCallback: null, // Callback for gesture start validation
+            // Pointer ID management for 0-9 range
+            nextPointerId: 0, // Next available pointer ID (0-9)
+            usedPointerIds: new Set(), // Currently used pointer IDs
+            pointerIdMap: new Map() // Maps browser pointer ID to normalized ID
         },
 
         // Initialize the library with custom options
@@ -261,6 +318,26 @@
         // Create event listener with duplicate filtering and gesture detection
         _createListener: function(eventType, callback) {
             return (e) => {
+                // Prevent processing touchstart events when we already have pointerdown
+                // This prevents duplicate pointer tracking
+                if (e.type === 'touchstart' && eventType === 'pointerdown') {
+                    // Skip touchstart events for pointerdown - let pointerdown handle it
+                    if (this.config.debug) {
+                        console.log(`FTXX: Skipping touchstart -> pointerdown to prevent duplicate tracking`);
+                    }
+                    return;
+                }
+                
+                // Prevent processing touchend events when we already have pointerup
+                // This prevents duplicate pointer up events that cause ID incrementing
+                if (e.type === 'touchend' && eventType === 'pointerup') {
+                    // Skip touchend events for pointerup - let pointerup handle it
+                    if (this.config.debug) {
+                        console.log(`FTXX: Skipping touchend -> pointerup to prevent duplicate pointer up`);
+                    }
+                    return;
+                }
+                
                 // Debug logging for event processing
                 if (this.config.debug) {
                     console.log(`FTXX: Processing ${e.type} -> ${eventType}`, {
@@ -343,7 +420,23 @@
                 for (let i = 0; i < e.touches.length; i++) {
                     const touch = e.touches[i];
                     const pointerData = pointerDataPool.acquire();
-                    pointerData.id = touch.identifier;
+                    
+                    // Use normalized pointer ID (0-9)
+                    let normalizedId;
+                    if (e.type === 'touchstart') {
+                        normalizedId = PointerIdManager.allocateId(touch.identifier);
+                    } else {
+                        normalizedId = PointerIdManager.getNormalizedId(touch.identifier);
+                        // If we don't have a normalized ID for this touch, skip the event
+                        if (normalizedId === undefined) {
+                            if (this.config.debug) {
+                                console.log(`FTXX: Skipping event for unknown touch ID: ${touch.identifier}`);
+                            }
+                            return;
+                        }
+                    }
+                    
+                    pointerData.id = normalizedId;
                     pointerData.x = touch.clientX;
                     pointerData.y = touch.clientY;
                     pointerData.pressure = touch.force || 1;
@@ -354,19 +447,20 @@
                     
                     // Track touch start for tap and longpress detection
                     if (e.type === 'touchstart') {
-                        this._state.pointers[touch.identifier] = pointerData;
+                        this._state.pointers[normalizedId] = pointerData;
                         if (e.touches.length === 1) {
-                            this._state.tapStart = { x: touch.clientX, y: touch.clientY, time: Date.now(), id: touch.identifier };
-                            this._startLongpressTimer(touch.identifier, e.target);
+                            this._state.tapStart = { x: touch.clientX, y: touch.clientY, time: Date.now(), id: normalizedId };
+                            this._startLongpressTimer(normalizedId, e.target);
                         }
                     } else if (e.type === 'touchend') {
                         // Handle touch end and check for tap
-                        const storedPointer = this._state.pointers[touch.identifier];
+                        const storedPointer = this._state.pointers[normalizedId];
                         if (storedPointer) pointers.push(storedPointer);
-                        delete this._state.pointers[touch.identifier];
-                        this._clearLongpressTimer(touch.identifier);
+                        delete this._state.pointers[normalizedId];
+                        this._clearLongpressTimer(normalizedId);
+                        PointerIdManager.releaseId(touch.identifier);
                         
-                        if (this._state.tapStart && this._state.tapStart.id === touch.identifier) {
+                        if (this._state.tapStart && this._state.tapStart.id === normalizedId) {
                             const endX = touch.clientX !== undefined ? touch.clientX : this._state.tapStart.x;
                             const endY = touch.clientY !== undefined ? touch.clientY : this._state.tapStart.y;
                             this._checkForTap(endX, endY, e.target);
@@ -380,44 +474,62 @@
                             this._state.unifiedTransforms && this._state.unifiedTransforms.clear();
                             this._state.nextGestureGroupId = 1;
                         }
+                        
+                        // Clean up gesture groups that no longer have enough pointers
+                        // Do this after processing all touches in the event
+                        if (i === e.touches.length - 1) {
+                            this._cleanupInvalidGestureGroups();
+                        }
                     } else if (e.type === 'touchmove') {
                         // Update pointer position and check for tap cancellation
-                        this._state.pointers[touch.identifier] = pointerData;
+                        this._state.pointers[normalizedId] = pointerData;
                         
-                        if (this._state.tapStart && this._state.tapStart.id === touch.identifier) {
+                        if (this._state.tapStart && this._state.tapStart.id === normalizedId) {
                             const distanceSquared = MathUtils.distanceSquared(touch.clientX, touch.clientY, this._state.tapStart.x, this._state.tapStart.y);
                             if (distanceSquared > this._tuning.tapMovement) {
                                 this._state.tapStart = null;
-                                this._clearLongpressTimer(touch.identifier);
+                                this._clearLongpressTimer(normalizedId);
                             }
                         }
                     }
                 }
                 
-                // Detect multi-touch gestures only on initial touch (touchstart) or if already tracking
-                if (pointers.length >= 2) {
+                // Detect multi-touch gestures based on total active pointers
+                const activePointerCount = Object.keys(this._state.pointers).length;
+                if (activePointerCount >= 2) {
+                    // Create pointers array from active pointers
+                    const activePointers = [];
+                    for (const pointerId in this._state.pointers) {
+                        activePointers.push(this._state.pointers[pointerId]);
+                    }
                     if (e.type === 'touchstart') {
                         // Only validate on initial touch
-                        this._detectGestures(e, pointers, e.target);
+                        this._detectGestures(e, activePointers, e.target);
                     } else if (e.type === 'touchmove' && this._state.gestureGroups.size > 0) {
                         // Continue tracking existing gestures
-                        this._detectGestures(e, pointers, e.target);
+                        this._detectGestures(e, activePointers, e.target);
                     }
                 }
                 
-                // Clean up ended touches
-                if (e.type === 'touchend') {
-                    const activeTouchIds = new Set(Array.from(e.touches).map(t => t.identifier));
-                    for (const pointerId in this._state.pointers) {
-                        if (!activeTouchIds.has(parseInt(pointerId))) {
-                            delete this._state.pointers[pointerId];
-                            this._clearLongpressTimer(parseInt(pointerId));
-                        }
-                    }
-                }
+
             } else if (isPointer) {
                 // Handle pointer events (stylus, touch, mouse)
-                const pointerId = e.pointerId !== undefined ? e.pointerId : 'pointer';
+                const browserPointerId = e.pointerId !== undefined ? e.pointerId.toString() : 'pointer';
+                
+                // Use normalized pointer ID (0-9)
+                let normalizedId;
+                if (e.type === 'pointerdown') {
+                    normalizedId = PointerIdManager.allocateId(browserPointerId);
+                } else {
+                    normalizedId = PointerIdManager.getNormalizedId(browserPointerId);
+                    // If we don't have a normalized ID for this browser pointer, skip the event
+                    if (normalizedId === undefined) {
+                        if (this.config.debug) {
+                            console.log(`FTXX: Skipping event for unknown browser pointer ID: ${browserPointerId}`);
+                        }
+                        return;
+                    }
+                }
                 
                 // Determine input type from pointer event
                 let inputType = 'unknown';
@@ -440,7 +552,7 @@
                 }
                 
                 const pointerData = pointerDataPool.acquire();
-                pointerData.id = pointerId;
+                pointerData.id = normalizedId;
                 pointerData.x = e.clientX;
                 pointerData.y = e.clientY;
                 pointerData.pressure = e.pressure || 1;
@@ -451,39 +563,64 @@
                 
                 // Track pointer down for tap and longpress detection
                 if (e.type === 'pointerdown') {
-                    this._state.pointers[pointerId] = pointerData;
+                    this._state.pointers[normalizedId] = pointerData;
                     if (Object.keys(this._state.pointers).length === 1) {
-                        this._state.tapStart = { x: e.clientX, y: e.clientY, time: Date.now(), id: pointerId };
-                        this._startLongpressTimer(pointerId, e.target);
+                        this._state.tapStart = { x: e.clientX, y: e.clientY, time: Date.now(), id: normalizedId };
+                        this._startLongpressTimer(normalizedId, e.target);
                     }
                 } else if (e.type === 'pointerup') {
                     // Handle pointer up and check for tap
-                    delete this._state.pointers[pointerId];
-                    this._clearLongpressTimer(pointerId);
+                    delete this._state.pointers[normalizedId];
+                    this._clearLongpressTimer(normalizedId);
+                    PointerIdManager.releaseId(browserPointerId);
                     
-                    if (this._state.tapStart && this._state.tapStart.id === pointerId) {
+                    if (this._state.tapStart && this._state.tapStart.id === normalizedId) {
                         this._checkForTap(e.clientX, e.clientY, e.target);
                     }
                     
+                    // Clean up gesture groups that no longer have enough pointers
+                    this._cleanupInvalidGestureGroups();
+                    
                     if (Object.keys(this._state.pointers).length === 0) {
                         this._state.tapStart = null;
-                        this._state.gestureGroups.clear();
-                        this._state.gestureTargets && this._state.gestureTargets.clear();
-                        this._state.unifiedTransforms && this._state.unifiedTransforms.clear();
-                        this._state.nextGestureGroupId = 1;
+                    }
+                    
+                    // For pointerup, only include the pointer that was actually lifted
+                    // The client should track their own active pointers
+                    
+                    // Debug logging to help track pointer cleanup
+                    if (this.config.debug) {
+                        console.log(`FTXX: Pointer ${normalizedId} lifted, remaining: [${Object.keys(this._state.pointers)}]`);
                     }
                 } else if (e.type === 'pointermove') {
                     // Update pointer position and check for tap cancellation
-                    if (this._state.pointers.hasOwnProperty(pointerId)) {
-                        this._state.pointers[pointerId] = pointerData;
+                    if (this._state.pointers.hasOwnProperty(normalizedId)) {
+                        this._state.pointers[normalizedId] = pointerData;
                         
-                        if (this._state.tapStart && this._state.tapStart.id === pointerId) {
+                        if (this._state.tapStart && this._state.tapStart.id === normalizedId) {
                             const distanceSquared = MathUtils.distanceSquared(e.clientX, e.clientY, this._state.tapStart.x, this._state.tapStart.y);
                             if (distanceSquared > this._tuning.tapMovement) {
                                 this._state.tapStart = null;
-                                this._clearLongpressTimer(pointerId);
+                                this._clearLongpressTimer(normalizedId);
                             }
                         }
+                    }
+                }
+                
+                // Detect multi-touch gestures for pointer events based on total active pointers
+                const activePointerCount = Object.keys(this._state.pointers).length;
+                if (activePointerCount >= 2) {
+                    // Create pointers array from active pointers
+                    const activePointers = [];
+                    for (const pointerId in this._state.pointers) {
+                        activePointers.push(this._state.pointers[pointerId]);
+                    }
+                    if (e.type === 'pointerdown') {
+                        // Only validate on initial touch
+                        this._detectGestures(e, activePointers, e.target);
+                    } else if (e.type === 'pointermove' && this._state.gestureGroups.size > 0) {
+                        // Continue tracking existing gestures
+                        this._detectGestures(e, activePointers, e.target);
                     }
                 }
             }
@@ -724,10 +861,10 @@
             let minY = groupPointers[0].y, maxY = groupPointers[0].y;
             
             groupPointers.forEach(pointer => {
-                minX = Math.min(minX, pointer.x);
-                maxX = Math.max(maxX, pointer.x);
-                minY = Math.min(minY, pointer.y);
-                maxY = Math.max(maxY, pointer.y);
+                minX = MathUtils.min(minX, pointer.x);
+                maxX = MathUtils.max(maxX, pointer.x);
+                minY = MathUtils.min(minY, pointer.y);
+                maxY = MathUtils.max(maxY, pointer.y);
             });
             
             return {
@@ -860,7 +997,7 @@
 
             // Calculate gesture magnitudes
             const distanceChange = MathUtils.abs(deltaDistance);
-            const centerChange = Math.sqrt(panDistanceSquared);
+            const centerChange = MathUtils.sqrt(panDistanceSquared);
             const angleChange = MathUtils.abs(deltaAngle);
 
             // Determine which gesture is most prominent
@@ -875,51 +1012,57 @@
             const pinchRatio = distanceChange / actualThresholds.zoom;
             const panRatio = centerChange / actualThresholds.pan;
             
+            if (this.config.debug) {
+                console.log(`FTXX: Gesture ratios - pinch: ${pinchRatio.toFixed(3)}, pan: ${panRatio.toFixed(3)}, distanceChange: ${distanceChange.toFixed(3)}, centerChange: ${centerChange.toFixed(3)}`);
+            }
+            
             let primaryGesture = null;
             let maxRatio = 0;
             
-            if (pinchRatio > 1 && pinchRatio > maxRatio) {
-                primaryGesture = { type: 'pinch', value: distanceChange, threshold: actualThresholds.zoom };
-                maxRatio = pinchRatio;
+            // Emit all gestures that exceed their thresholds
+            const gesturesToEmit = [];
+            
+            if (pinchRatio > 1) {
+                gesturesToEmit.push({ type: 'pinch', value: distanceChange, threshold: actualThresholds.zoom });
             }
             
-            if (panRatio > 1 && panRatio > maxRatio) {
-                primaryGesture = { type: 'pan', value: centerChange, threshold: actualThresholds.pan };
-                maxRatio = panRatio;
+            if (panRatio > 1) {
+                gesturesToEmit.push({ type: 'pan', value: centerChange, threshold: actualThresholds.pan });
             }
             
-            // For rotation, compare raw angle change to threshold (not normalized)
+            // For rotation, compare raw angle change to threshold
             if (this.config.debug) {
-                console.log(`FTXX: Angle change: ${angleChange}, threshold: ${actualThresholds.rotation}, maxRatio: ${maxRatio}`);
+                console.log(`FTXX: Angle change: ${angleChange}, threshold: ${actualThresholds.rotation}`);
             }
-            if (angleChange > actualThresholds.rotation && angleChange / actualThresholds.rotation > maxRatio) {
-                primaryGesture = { type: 'rotate', value: angleChange, threshold: actualThresholds.rotation };
-                maxRatio = angleChange / actualThresholds.rotation;
+            if (angleChange > actualThresholds.rotation) {
+                gesturesToEmit.push({ type: 'rotate', value: angleChange, threshold: actualThresholds.rotation });
             }
             
-            // Emit the detected gesture event with group information
-            if (primaryGesture) {
+            // Emit all detected gestures
+            gesturesToEmit.forEach(gesture => {
                 const gestureData = {
                     groupId: groupId,
                     pointerIds: gestureState.pointerIds,
                     pointerCount: groupPointers.length,
-                    type: primaryGesture.type,
+                    type: gesture.type,
                     frameCount: gestureState.frameCount,
-                    ...this._getGestureData(primaryGesture.type, scale, center.x, center.y, deltaCenterX, deltaCenterY, deltaAngle, originalEvent)
+                    ...this._getGestureData(gesture.type, scale, center.x, center.y, deltaCenterX, deltaCenterY, deltaAngle, originalEvent)
                 };
                 
                 if (this.config.debug) {
-                    console.log(`FTXX: About to emit ${primaryGesture.type} for group ${groupId}`, gestureData);
+                    console.log(`FTXX: About to emit ${gesture.type} for group ${groupId}`, gestureData);
                 }
                 
-                this._emitGestureEvent(primaryGesture.type, targetElement, gestureData);
+                this._emitGestureEvent(gesture.type, targetElement, gestureData);
                 
                 if (this.config.debug) {
-                    console.log(`FTXX: Emitted ${primaryGesture.type} for group ${groupId} with ${groupPointers.length} pointers`);
+                    console.log(`FTXX: Emitted ${gesture.type} for group ${groupId} with ${groupPointers.length} pointers`);
                 }
-            } else {
+            });
+            
+            if (gesturesToEmit.length === 0) {
                 if (this.config.debug) {
-                    console.log(`FTXX: No primary gesture detected for group ${groupId}`);
+                    console.log(`FTXX: No gestures detected for group ${groupId}`);
                 }
             }
 
@@ -1167,7 +1310,7 @@
         // Map high-level event types to native DOM events
         _getEventMapping: function(eventType) {
             const mappings = new Map([
-                ['pointerdown', ['pointerdown', 'touchstart']],
+                ['pointerdown', ['pointerdown']],  // Only listen to pointerdown, not touchstart
                 ['pointerup', ['pointerup', 'touchend']],
                 ['pointermove', ['pointermove', 'touchmove']],
                 ['pointerenter', ['pointerenter']],
@@ -1266,6 +1409,33 @@
             }
         },
 
+        // Clean up gesture groups that no longer have enough active pointers
+        _cleanupInvalidGestureGroups: function() {
+            const activePointerIds = new Set(Object.keys(this._state.pointers));
+            
+            // Check each gesture group to see if it still has enough pointers
+            for (const [groupId, gestureState] of this._state.gestureGroups) {
+                const groupPointerIds = gestureState.pointerIds;
+                const activeGroupPointers = groupPointerIds.filter(id => activePointerIds.has(id.toString()));
+                
+                // Remove group if it has fewer than 2 active pointers
+                if (activeGroupPointers.length < 2) {
+                    if (this.config.debug) {
+                        console.log(`FTXX: Removing gesture group ${groupId} - only ${activeGroupPointers.length} active pointers (was ${groupPointerIds.length})`);
+                    }
+                    this._state.gestureGroups.delete(groupId);
+                    this._state.gestureTargets && this._state.gestureTargets.delete(groupId);
+                    this._state.unifiedTransforms && this._state.unifiedTransforms.delete(groupId);
+                } else {
+                    // Update the group's pointer IDs to only include active ones
+                    if (this.config.debug && activeGroupPointers.length !== groupPointerIds.length) {
+                        console.log(`FTXX: Updated gesture group ${groupId} - ${activeGroupPointers.length} active pointers (was ${groupPointerIds.length})`);
+                    }
+                    gestureState.pointerIds = activeGroupPointers;
+                }
+            }
+        },
+
         // Public API methods
         clearGestureState: function() {
             this._state.gestureGroups.clear();
@@ -1273,6 +1443,27 @@
             this._state.nextGestureGroupId = 1;
             if (this.config.debug) {
                 console.log('FTXX: Cleared all gesture state');
+            }
+        },
+
+        // Clean up invalid gesture groups (public method)
+        cleanupInvalidGestureGroups: function() {
+            this._cleanupInvalidGestureGroups();
+        },
+
+        // Force cleanup of all pointers (for debugging)
+        forceCleanupAllPointers: function() {
+            this._state.pointers = {};
+            this._state.tapStart = null;
+            this._state.gestureGroups.clear();
+            this._state.gestureTargets && this._state.gestureTargets.clear();
+            this._state.unifiedTransforms && this._state.unifiedTransforms.clear();
+            this._state.nextGestureGroupId = 1;
+            // Clear pointer ID management
+            this._state.usedPointerIds.clear();
+            this._state.pointerIdMap.clear();
+            if (this.config.debug) {
+                console.log('FTXX: Force cleaned up all pointers and gesture state');
             }
         },
 
@@ -1289,8 +1480,28 @@
             return Array.from(this._state.gestureGroups.keys());
         },
 
+        // Get which gesture group a specific pointer belongs to
+        getGestureGroupForPointer: function(pointerId) {
+            for (const [groupId, gestureState] of this._state.gestureGroups) {
+                if (gestureState.pointerIds.includes(pointerId.toString())) {
+                    return groupId;
+                }
+            }
+            return null;
+        },
+
         getActivePointersCount: function() {
             return Object.keys(this._state.pointers).length;
+        },
+
+        // Get current pointer state for debugging
+        getPointerState: function() {
+            return {
+                pointers: Object.keys(this._state.pointers),
+                pointerCount: Object.keys(this._state.pointers).length,
+                gestureGroups: Array.from(this._state.gestureGroups.keys()),
+                tapStart: this._state.tapStart
+            };
         },
 
         getConfig: function() {
@@ -1324,7 +1535,9 @@
             // Clear all state
             this._state.listeners.clear();
             for (const key in this._state.pointers) delete this._state.pointers[key];
-            this._state.gestureStates.clear();
+            this._state.gestureGroups.clear();
+            this._state.gestureTargets && this._state.gestureTargets.clear();
+            this._state.unifiedTransforms && this._state.unifiedTransforms.clear();
             this._state.longpressTimers.forEach(timer => clearTimeout(timer));
             this._state.longpressTimers.clear();
             if (this._state.recentEvents) this._state.recentEvents.clear();

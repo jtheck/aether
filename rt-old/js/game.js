@@ -44,26 +44,25 @@ class Game {
   }
   
   createGameObjects() {
-    // Create tiled terrain first
+    // Create tiled terrain first (this now includes scattered objects)
     const terrainTiles = this.terrainGenerator.createTiledTerrain();
-    
-    // Add scattered objects to terrain
-    const scatteredObjects = this.terrainGenerator.addScatteredObjects();
     
     // Create some initial units
     this.createInitialUnits();
     
-    // Add scattered rocks to game objects
-    scatteredObjects.forEach((rock, index) => {
-      this.gameObjects.set(rock, {
-        type: 'rock',
-        name: `Rock ${index + 1}`,
-        isSelected: false,
-        originalColor: rock.material.diffuseColor.clone()
+    // Add scattered objects to game objects if they exist
+    if (this.terrainGenerator.scatteredObjects) {
+      this.terrainGenerator.scatteredObjects.forEach((obj, index) => {
+        this.gameObjects.set(obj, {
+          type: 'scattered',
+          name: `Scattered Object ${index + 1}`,
+          isSelected: false,
+          originalColor: obj.material ? obj.material.diffuseColor.clone() : new BABYLON.Color3(0.5, 0.5, 0.5)
+        });
       });
-    });
-    
-    this.objects = [...scatteredObjects];
+      
+      this.objects = [...this.terrainGenerator.scatteredObjects];
+    }
   }
   
   createInitialUnits() {
@@ -278,6 +277,9 @@ class Game {
   setSelectionMode(mode) {
     this.selectionMode = mode;
     
+    console.log('Setting selection mode:', mode);
+    console.log('Lasso selection object:', this.lassoSelection);
+    
     // Disable both selection systems
     this.selectionRectangle.disable();
     this.lassoSelection.disable();
@@ -285,11 +287,11 @@ class Game {
     // Enable the selected mode
     if (mode === 'rectangle') {
       this.selectionRectangle.enable();
+      console.log('Rectangle selection enabled');
     } else if (mode === 'lasso') {
       this.lassoSelection.enable();
+      console.log('Lasso selection enabled');
     }
-    
-
   }
   
   toggleSelectionMode() {

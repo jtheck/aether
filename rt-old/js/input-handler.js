@@ -4,7 +4,21 @@ class InputHandler {
     this.game = game;
     this.canvas = document.getElementById('rt-canvas');
     
-
+    // Debug: Check if canvas is found
+    if (!this.canvas) {
+      console.error('Canvas element with ID "rt-canvas" not found!');
+    } else {
+  
+    }
+    
+    // Camera Controls:
+    // - Mouse wheel: Zoom in/out
+    // - Middle mouse button (wheel click) + drag: Rotate camera
+    // - Left mouse button: Select units (no lasso)
+    // - Right mouse button: Move selected units
+    // - Arrow keys: Pan camera
+    // - [ and ] keys: Rotate camera left/right
+    // - Touch gestures: Multi-touch pan/rotate/zoom + lasso selection
     
     // PERFORMANCE OPTIMIZATION: Add caching for expensive operations
     this._screenPosCache = new Map();
@@ -15,6 +29,18 @@ class InputHandler {
     this._isInGesture = false;
     this._gestureStartTime = 0;
     this._gestureResetTimer = null;
+    // Mouse lasso state
+    this._mouseLassoPending = false; // left down but not moved beyond threshold
+    this._mouseLassoActive = false;  // actively drawing lasso
+    this._mouseDownX = 0;
+    this._mouseDownY = 0;
+    this._lassoMoveThresholdSq = 36; // 6px threshold squared
+    // Right-click state for unit movement
+    this._rightClickX = undefined;
+    this._rightClickY = undefined;
+    
+    // Setup mouse events FIRST, before FTXX
+    this.setupMouseEvents();
     
     // Initialize FTXX Pointer
     this.initFTXXPointer();
@@ -210,6 +236,20 @@ class InputHandler {
           const cameraForward2 = camera.getDirection(BABYLON.Axis.Z);
           camera.target.addInPlace(cameraForward2.scale(panSpeed));
           break;
+        case '[':
+          // Rotate camera left (decrease alpha)
+          if (camera && typeof camera.alpha !== 'undefined') {
+            camera.alpha -= 0.1;
+    
+          }
+          break;
+        case ']':
+          // Rotate camera right (increase alpha)
+          if (camera && typeof camera.alpha !== 'undefined') {
+            camera.alpha += 0.1;
+    
+          }
+          break;
       }
     });
   }
@@ -224,28 +264,228 @@ class InputHandler {
     this._screenPosCache.clear();
   }
   
+  // Setup mouse events BEFORE FTXX, using pointer events + capture for robustness
+  setupMouseEvents() {
+    const canvas = this.canvas;
+    if (!canvas) return;
+
+    // Ensure middle-button drag works reliably across browsers:
+    // - Use pointer events
+    // - Use setPointerCapture to keep receiving moves
+    // - Check e.buttons bitmask during move (middle = 4)
+
+    const onPointerDown = (e) => {
+
+      
+      if (e.pointerType === 'mouse') {
+        // Left button: selection (no lasso)
+        if (e.button === 0) {
+
+          // Prepare for lasso; start pending and activate on movement threshold
+          this._mouseLassoPending = true;
+          this._mouseLassoActive = false;
+          this._mouseDownX = e.clientX;
+          this._mouseDownY = e.clientY;
+          try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+          return;
+        }
+        // Right button: unit movement
+        if (e.button === 2) {
+
+          // Store right-click position for movement
+          this._rightClickX = e.clientX;
+          this._rightClickY = e.clientY;
+          try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+          e.preventDefault(); // Prevent context menu
+          e.stopPropagation();
+          return;
+        }
+        // Middle button: start rotation
+        if (e.button === 1) {
+
+          this.isMiddleMouseDown = true;
+          this.lastMouseX = e.clientX;
+          this.lastMouseY = e.clientY;
+          canvas.style.cursor = 'grabbing';
+          try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
+    };
+
+    const onPointerMove = (e) => {
+
+
+      // Handle middle mouse rotation first
+      const isMiddleHeld = (e.pointerType === 'mouse') && ((e.buttons & 4) === 4);
+      if (isMiddleHeld || this.isMiddleMouseDown) {
+        this.handleMiddleMouseMove({
+          type: 'mousemove',
+          button: 1,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          target: e.target,
+          currentTarget: e.currentTarget,
+          preventDefault: () => e.preventDefault(),
+          stopPropagation: () => e.stopPropagation()
+        });
+        return;
+      }
+
+      // Handle left-button lasso activation and updates when not in a gesture
+      const isLeftHeld = (e.pointerType === 'mouse') && ((e.buttons & 1) === 1);
+      if (isLeftHeld && !this._isInGesture) {
+
+        
+        if (this._mouseLassoPending && !this._mouseLassoActive) {
+          const dx = e.clientX - this._mouseDownX;
+          const dy = e.clientY - this._mouseDownY;
+          const distanceSq = dx*dx + dy*dy;
+
+          
+          if (distanceSq >= this._lassoMoveThresholdSq) {
+
+            this._mouseLassoActive = true;
+            this.startLasso(this._mouseDownX, this._mouseDownY);
+          }
+        }
+        
+        if (this._mouseLassoActive) {
+
+          this.updateLasso(e.clientX, e.clientY);
+        }
+      }
+    };
+
+    const onPointerUp = (e) => {
+
+      
+      if (e.pointerType === 'mouse' && e.button === 1) {
+        this.handleMiddleMouseUp({
+          type: 'mouseup',
+          button: 1,
+          clientX: e.clientX,
+          clientY: e.clientY,
+          preventDefault: () => e.preventDefault(),
+          stopPropagation: () => e.stopPropagation()
+        });
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        return;
+      }
+
+      // Finish lasso on left button up
+      if (e.pointerType === 'mouse' && e.button === 0) {
+
+        if (this._mouseLassoActive) {
+
+          this.endLasso(e.clientX, e.clientY);
+        } else if (this._mouseLassoPending) {
+
+          // Treat as tap/click select if no drag occurred
+          this.handleTap(e.clientX, e.clientY);
+        }
+        this._mouseLassoPending = false;
+        this._mouseLassoActive = false;
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        return;
+      }
+
+      // Handle right button up for unit movement
+      if (e.pointerType === 'mouse' && e.button === 2) {
+
+        // Execute unit movement to the right-click position
+        if (this._rightClickX !== undefined && this._rightClickY !== undefined) {
+          this.handleRightClick(this._rightClickX, this._rightClickY);
+        }
+        this._rightClickX = undefined;
+        this._rightClickY = undefined;
+        try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+        return;
+      }
+    };
+
+    canvas.addEventListener('pointerdown', onPointerDown, { capture: true });
+    canvas.addEventListener('pointermove', onPointerMove, { capture: true });
+    canvas.addEventListener('pointerup', onPointerUp, { capture: true });
+    canvas.addEventListener('pointercancel', onPointerUp, { capture: true });
+    
+    // Prevent context menu on right-click to enable unit movement
+    canvas.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, { capture: true });
+
+    // Smooth zoom on wheel
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.handleMouseWheel(e);
+    }, { capture: true, passive: false });
+  }
+  
+  // Create a test button to verify mouse events are working
+  createTestButton() {
+    const testButton = document.createElement('button');
+    testButton.textContent = 'TEST MOUSE EVENTS';
+    testButton.style.position = 'fixed';
+    testButton.style.top = '10px';
+    testButton.style.right = '10px';
+    testButton.style.zIndex = '9999';
+    testButton.style.padding = '10px';
+    testButton.style.backgroundColor = 'red';
+    testButton.style.color = 'white';
+    testButton.style.border = 'none';
+    testButton.style.cursor = 'pointer';
+    
+    testButton.addEventListener('click', (e) => {
+
+      alert('Mouse events are working! Now try middle mouse button on canvas.');
+    });
+    
+    testButton.addEventListener('mousedown', (e) => {
+
+    });
+    
+    document.body.appendChild(testButton);
+
+  }
+
   // Initialize FTXX Pointer library
   initFTXXPointer() {
-    // Initialize the ftxx pointer library with custom configuration
-    this.ftxx = window.ftxxPointer.init({
-      preventDefault: true,
-      passive: false,
-      disableContextMenu: true,
-      preventViewportScaling: true,
-      gestureThresholds: { pan: 1.5, rotation: 1.5, zoom: 1.5 }, // Higher thresholds for less sensitive triggering
-      gestureSensitivity: { pan: 0.8, rotation: 0.8, zoom: 0.8 }, // Lower sensitivity
-      tap: { threshold: 10, timeout: 300 },
-      longpress: { timeout: 500 },
-      debug: false // Disable debug mode for production
-    });
+    // Configure FTXX to only handle touch events, not mouse events
+    try {
+      this.ftxx = window.ftxxPointer.init({
+        preventDefault: false, // Don't prevent default mouse events
+        passive: true, // Make events passive
+        disableContextMenu: false, // Allow context menu
+        preventViewportScaling: false, // Don't prevent scaling
+        skipMouseEvents: true, // Skip mouse events to prevent interference with camera rotation
+        // Minimal gesture configuration
+        gestureThresholds: { pan: 999, rotation: 999, zoom: 999 }, // Very high thresholds to disable gestures
+        gestureSensitivity: { pan: 0, rotation: 0, zoom: 0 }, // Zero sensitivity
+        tap: { threshold: 999, timeout: 999999 }, // Disable tap detection
+        longpress: { timeout: 999999 }, // Disable longpress
+        debug: false // Disable debug to reduce console spam
+      });
+      
+      // Debug: Check if FTXX is initialized
+      if (this.ftxx) {
+    
+      } else {
+        console.error('Failed to initialize FTXX Pointer');
+      }
+    } catch (error) {
+      console.error('Error initializing FTXX Pointer:', error);
+      this.ftxx = null;
+    }
   }
   
   // Setup event listeners for touch and pointer events
   setupEventListeners() {
     if (!this.ftxx || !this.canvas) return;
     
-
-    
+    // Only handle touch events, not pointer events that could interfere with mouse
     // Handle tap events for unit selection
     this.ftxx.on(this.canvas, 'tap', (event) => {
       if (event.pointers.length === 1) {
@@ -281,22 +521,22 @@ class InputHandler {
     // Note: Individual gesture events (pinch, pan, rotate) are not emitted by ftxx_pointer
     // The library only emits unified 'transform' events that combine all gestures
     
-    // Listen to basic pointer events - these are needed for gesture detection to work
-    this.ftxx.on(this.canvas, 'pointerdown', (event) => {
+    // Handle touch events for lasso selection (restore selection functionality)
+    this.ftxx.on(this.canvas, 'touchstart', (event) => {
       // Start lasso selection only on single touch (not during gestures)
       if (event.pointers.length === 1 && !this._isInGesture) {
         this.startLasso(event.pointers[0].x, event.pointers[0].y);
       }
     });
     
-    this.ftxx.on(this.canvas, 'pointermove', (event) => {
+    this.ftxx.on(this.canvas, 'touchmove', (event) => {
       // Update lasso selection only on single touch drag (not during gestures)
       if (event.pointers.length === 1 && !this._isInGesture) {
         this.updateLasso(event.pointers[0].x, event.pointers[0].y);
       }
     });
     
-    this.ftxx.on(this.canvas, 'pointerup', (event) => {
+    this.ftxx.on(this.canvas, 'touchend', (event) => {
       // End lasso selection only on single touch release (not during gestures)
       if (event.pointers.length === 1 && !this._isInGesture) {
         this.endLasso(event.pointers[0].x, event.pointers[0].y);
@@ -323,9 +563,15 @@ class InputHandler {
         }, 500); // Reset after 500ms of inactivity
       }
     });
+
+    // Add mouse wheel zoom
+    this.canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.handleMouseWheel(e);
+    });
   }
   
-  // Handle tap events for unit selection
+  // Handle tap events for unit selection (left-click)
   handleTap(x, y) {
     // Find unit at tap position
     const unitId = this.findUnitByProximity(x, y);
@@ -336,26 +582,29 @@ class InputHandler {
         this.game.unitManager.selectUnit(unitId);
       }
     } else {
-      // Check if we have selected units - if so, move them to tap location
-      if (this.game.unitManager && this.game.unitManager.selectedUnits && this.game.unitManager.selectedUnits.size > 0) {
-        // Convert screen coordinates to world coordinates for movement
-        const worldPos = this.screenToWorld(x, y);
-        if (worldPos) {
-          // Use the unit manager's move method for proper animation
-          this.game.unitManager.moveSelectedUnits(worldPos);
-        }
-      } else {
-        // Deselect all units if tapping on empty space and no units are selected
-        if (this.game.unitManager) {
-          this.game.unitManager.deselectAllUnits();
-        }
-        if (this.game) {
-          this.game.deselectAll();
-        }
+      // Left-click on empty space deselects units
+      if (this.game.unitManager) {
+        this.game.unitManager.deselectAllUnits();
+      }
+      if (this.game) {
+        this.game.deselectAll();
       }
     }
   }
   
+  // Handle right-click events for unit movement
+  handleRightClick(x, y) {
+    // Right-click on empty space moves selected units
+    if (this.game.unitManager && this.game.unitManager.selectedUnits && this.game.unitManager.selectedUnits.size > 0) {
+      // Convert screen coordinates to world coordinates for movement
+      const worldPos = this.screenToWorld(x, y);
+      if (worldPos) {
+        // Use the unit manager's move method for proper animation
+        this.game.unitManager.moveSelectedUnits(worldPos);
+      }
+    }
+  }
+
   // Handle long press events
   handleLongPress(x, y) {
     // Find unit at long press position
@@ -437,5 +686,82 @@ class InputHandler {
     if (this.game && this.game.lassoSelection && !this._isInGesture) {
       this.game.lassoSelection.endLasso(x, y);
     }
+  }
+
+  handleMouseWheel(e) {
+    const camera = this.scene.activeCamera;
+    if (!camera || !camera.radius) return;
+    
+    // Zoom in/out with mouse wheel
+    const zoomSpeed = 0.1;
+    const delta = e.deltaY > 0 ? 1 : -1;
+    const newRadius = camera.radius + (delta * zoomSpeed * camera.radius);
+    
+    // Clamp to camera limits
+    if (newRadius >= camera.lowerRadiusLimit && newRadius <= camera.upperRadiusLimit) {
+      camera.radius = newRadius;
+    }
+  }
+
+  handleMiddleMouseDown(e) {
+    if (!this.scene || !this.scene.activeCamera) {
+      console.error("No scene or active camera found!");
+      return;
+    }
+    
+    this.isMiddleMouseDown = true;
+    this.lastMouseX = e.clientX;
+    this.lastMouseY = e.clientY;
+    this.canvas.style.cursor = 'grabbing';
+    
+    // Prevent default behavior
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  handleMiddleMouseMove(e) {
+    if (!this.isMiddleMouseDown) {
+      return;
+    }
+    
+    const camera = this.scene.activeCamera;
+    
+    if (!camera) {
+      console.warn("No active camera found for rotation");
+      return;
+    }
+    
+    if (typeof camera.alpha === 'undefined' || typeof camera.beta === 'undefined') {
+      console.warn("Camera doesn't support rotation (alpha/beta properties missing)");
+      return;
+    }
+    
+    const deltaX = e.clientX - this.lastMouseX;
+    const deltaY = e.clientY - this.lastMouseY;
+    
+    // Rotate camera around target with proper sensitivity
+    const sensitivity = 0.01;
+    
+    camera.alpha -= deltaX * sensitivity; // Negative for intuitive rotation
+    camera.beta += deltaY * sensitivity;
+    
+    // Clamp beta to prevent camera flipping
+    camera.beta = Math.max(0.1, Math.min(Math.PI - 0.1, camera.beta));
+    
+    this.lastMouseX = e.clientX;
+    this.lastMouseY = e.clientY;
+    
+    // Prevent default behavior
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  handleMiddleMouseUp(e) {
+    this.isMiddleMouseDown = false;
+    this.canvas.style.cursor = 'default';
+    
+    // Prevent default behavior
+    e.preventDefault();
+    e.stopPropagation();
   }
 } 

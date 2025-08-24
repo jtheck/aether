@@ -1,0 +1,117 @@
+
+
+
+
+// Namespaces
+window.app = {};  // Application
+window.ui = {};   // Interface
+window.gfx = {};  // Graphics
+window.tr = {};   // Game
+window.net = {};  // Network
+window.aud = {};  // Audio
+
+
+(function(app) {
+  
+
+
+  app.init = function(){
+    
+    // initProgressiveWebApp();
+    // initUXListeners();
+  
+    ui.init();
+
+    gfx.init();
+
+
+    // tr.initPlayer();
+    // net.init();
+    // gfx.crank()
+    app.initInputListeners();
+
+    log("©'25 Aether.Garden");
+  }; // end app.init
+
+
+
+
+  function initProgressiveWebApp(){
+    // Add Service Worker for Progressive Web App capabilities
+    if ("serviceWorker" in navigator) {
+      if (navigator.serviceWorker.controller) {
+        // console.log("[PWA Builder] active service worker found, no need to register");
+      } else {
+        // Register the service worker
+        navigator.serviceWorker
+          .register("/sw-treha.js", {
+            scope: "./"
+          })
+          .then(function (reg) {
+            // console.log("[PWA Builder] Service worker has been registered for scope: " + reg.scope);
+          });
+      }
+    }
+  };
+
+
+
+  function initUXListeners() {
+    // // listeners
+    // window.addEventListener('resize', app.resize.debounce(150,false), false);
+    // window.addEventListener('orientationchange', function() {app.resize.debounce(150,false)}, {once : true});
+    // window.addEventListener("beforeunload", function(){net.send('tr_'+tr.self.world, makeMessage({type:"exit"}))});
+
+    // // console    
+    // document.getElementById("util_b").addEventListener("click", function(){ui.toggleConsole()});
+   
+    // prevent browser back
+    history.pushState(null, "", location.href);
+    window.addEventListener("popstate", function () {
+      history.pushState(null, "", location.href);
+    });
+  };
+
+
+
+  app.initInputListeners = function() {
+    // document.addEventListener('keydown', ui.keyInput, false);
+    // document.addEventListener('keyup', ui.keyInput, false);
+  
+    // document.addEventListener('pointermove', (e) => {ui.handlePointer(e)});
+    // document.addEventListener('pointerup', (e) => {ui.handlePointer(e)});
+    // document.addEventListener('pointerdown', (e) => {ui.handlePointer(e)});
+  
+    // window.addEventListener('deviceorientation', (e) => {ui.handleOrientation(e)});
+    
+      // Disable Right Click menu
+    document.addEventListener("contextmenu", ui.rightClick, false);
+    // document.addEventListener('wheel', ui.wheelInput, false);
+  };
+
+  app.injectIcons = function(){
+    loadIcon('seeds', 'bb_seeds');
+  }
+
+
+
+
+
+  app.resize = function() {
+    // gfx.canvas.height = window.innerHeight-12;
+    // gfx.canvas.width = window.innerWidth-12;
+    // gfx.engine.resize();
+  };
+
+
+  // log to in-game console
+  app.log = function (log) {
+    // // log = JSON.stringify(log) + '<br />';
+    // log = log + '<br />';
+    // // document.getElementById("console_log").innerHTML += log;
+    // document.getElementById("console_log").insertAdjacentHTML('afterbegin', log);
+
+    // var objDiv = document.getElementById("console_log");
+    // objDiv.scrollTop = 0;// objDiv.scrollHeight;
+  };
+}(window.app = window.app || {}));

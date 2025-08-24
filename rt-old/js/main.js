@@ -21,12 +21,14 @@ document.addEventListener('DOMContentLoaded', function() {
   // RTS-style camera controls
   camera.panningSensibility = 1000; // Faster panning
   camera.wheelPrecision = 50; // Faster zoom
-  camera.angularSensibilityX = 1000; // Faster horizontal rotation
-  camera.angularSensibilityY = 1000; // Faster vertical rotation
+  // Disable automatic camera rotation sensitivity to allow manual control
+  camera.angularSensibilityX = 0; // Allow manual horizontal rotation
+  camera.angularSensibilityY = 0; // Allow manual vertical rotation
   
   // Enable panning with middle mouse button
   camera.panningInertia = 0.9;
-  camera.panningAxis = new BABYLON.Vector3(1, 0, 1); // Only pan on X and Z
+  // Remove panning axis constraint to allow full camera movement
+  // camera.panningAxis = new BABYLON.Vector3(1, 0, 1); // Only pan on X and Z
   
   // Create lights
   const ambientLight = new BABYLON.HemisphericLight('ambientLight', new BABYLON.Vector3(0, 1, 0), scene);

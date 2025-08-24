@@ -226,6 +226,7 @@
             passive: false,
             disableContextMenu: true,
             preventViewportScaling: true,
+            skipMouseEvents: false, // Skip mouse events to prevent interference
             gestureThresholds: { pan: 1.0, rotation: 1.0, zoom: 1.0 },
             gestureSensitivity: { pan: 1.0, rotation: 1.0, zoom: 1.0 }, // Multipliers for output deltas
             tap: { threshold: 10, timeout: 300 },
@@ -349,6 +350,8 @@
                         pointerId: e.pointerId
                     });
                 }
+                
+
                 
                 // Skip tap events if gesture was detected
                 if (eventType === 'tap' && this._state.gestureDetected) {
@@ -1324,6 +1327,20 @@
 
         // Map high-level event types to native DOM events
         _getEventMapping: function(eventType) {
+            // Skip mouse events to prevent interference with camera rotation
+            if (this.config.skipMouseEvents) {
+                const mappings = new Map([
+                    ['pointerdown', ['touchstart']],  // Only touch events, no mouse
+                    ['pointerup', ['touchend']],
+                    ['pointermove', ['touchmove']],
+                    ['pointerenter', []],
+                    ['pointerleave', []],
+                    ['tap', []], ['longpress', ['touchstart']],
+                    ['transform', []]
+                ]);
+                return mappings.get(eventType) || [];
+            }
+            
             const mappings = new Map([
                 ['pointerdown', ['pointerdown']],  // Only listen to pointerdown, not touchstart
                 ['pointerup', ['pointerup', 'touchend']],

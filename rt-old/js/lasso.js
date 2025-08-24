@@ -39,18 +39,29 @@ class LassoSelection {
     
     this.ctx = this.canvas.getContext('2d');
     
-    // Add to the canvas container
-    const gameCanvas = document.getElementById('rt-canvas');
-    gameCanvas.parentNode.appendChild(this.overlay);
-    this.overlay.appendChild(this.canvas);
-    
-    // Set canvas size
-    this.resizeCanvas();
+    // Try to add to the canvas container, with retry mechanism
+    this.trySetupCanvas();
     
     // Handle window resize
     window.addEventListener('resize', () => {
       this.resizeCanvas();
     });
+  }
+  
+  trySetupCanvas() {
+    const gameCanvas = document.getElementById('rt-canvas');
+    console.log('Lasso setup - canvas element:', gameCanvas);
+    if (gameCanvas && gameCanvas.parentNode) {
+      // Canvas is available, set it up
+      gameCanvas.parentNode.appendChild(this.overlay);
+      this.overlay.appendChild(this.canvas);
+      this.resizeCanvas();
+      console.log('Lasso canvas setup successful');
+    } else {
+      // Canvas not available yet, retry after a short delay
+      console.log('Canvas not ready yet, retrying lasso setup...');
+      setTimeout(() => this.trySetupCanvas(), 100);
+    }
   }
   
   resizeCanvas() {
@@ -65,6 +76,15 @@ class LassoSelection {
   }
   
   startLasso(screenX, screenY) {
+    console.log('LassoSelection.startLasso called with:', screenX, screenY);
+    console.log('Lasso canvas state:', {
+      canvas: this.canvas,
+      ctx: this.ctx,
+      overlay: this.overlay,
+      canvasWidth: this.canvas?.width,
+      canvasHeight: this.canvas?.height
+    });
+    
     this.isSelecting = true;
     this.points = [{ x: screenX, y: screenY }];
     
@@ -73,7 +93,12 @@ class LassoSelection {
     this.overlay.style.pointerEvents = 'none';
     
     // Clear canvas
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    if (this.ctx && this.canvas) {
+      this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+      console.log('Lasso started, overlay visible:', this.overlay.style.display);
+    } else {
+      console.error('Lasso canvas or context not available!');
+    }
   }
   
   updateLasso(screenX, screenY) {
@@ -85,12 +110,13 @@ class LassoSelection {
     // Draw lasso
     this.drawLasso();
     
-    // console.log('Lasso updated to:', screenX, screenY);
+    console.log('Lasso updated, points:', this.points.length);
   }
   
   endLasso() {
     if (!this.isSelecting) return;
     
+    console.log('LassoSelection.endLasso called, points:', this.points.length);
     this.isSelecting = false;
     this.overlay.style.display = 'none';
     this.overlay.style.pointerEvents = 'none';
@@ -106,6 +132,7 @@ class LassoSelection {
     
     // Clear points array
     this.points = [];
+    console.log('Lasso ended');
   }
   
 

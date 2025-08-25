@@ -15,14 +15,13 @@
   <!-- <script src="vendor/ftxx_pointer.js"></script> -->
 
 
-
 </head>
 <body>
   <canvas id="canvas"></canvas>
 
   <div id="menu_b" onclick="ui.showMenu('ingame_menu')"></div>
   <div id="menu">
-    <div id="title" title="Æther.Garden" onclick="ui.showMenu('main_menu')">Æther.Garden</div>
+    <div id="title_b" title="Æther.Garden" onclick="ui.showMenu('main_menu')">Æther.Garden</div>
     <div id="player_b" title="Player" onclick="ui.showMenu('player_menu')"></div>
     <div id="trophy_b" title="Hall-of-Fame" onclick="ui.showMenu('trophy_menu')"></div>
     <div id="close_b" title="Close" onclick="ui.hideMenu()"></div>
@@ -184,19 +183,19 @@
   </div>
   
   <script src="application.js"></script>
+  <script src="game/utility.js"></script>
   <script src="game/constants.js"></script>
   <script src="game/ui.js"></script>
   <script src="game/gfx.js"></script>
+  <script src="game/map.js"></script>
+  <script src="game/player.js"></script>
+  <script src="game/game.js"></script>
 
-    <!-- <script src="js/utility.js"></script>
-  <script src="js/input-handler.js"></script>
-  <script src="js/terrain.js"></script>
+    <!-- 
   <script src="js/units.js"></script>
   <script src="js/selection.js"></script>
   <script src="js/lasso.js"></script>
-  <script src="js/game.js"></script>
-  <script src="js/onscreen-ui.js"></script>
-  <script src="js/main.js"></script> -->
+   -->
   <script>
     window.addEventListener('DOMContentLoaded', function(){app.init()});
   </script>

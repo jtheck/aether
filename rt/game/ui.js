@@ -111,6 +111,54 @@ function getRandomColor() {
   }
 
 	
+
+
+  ui.keyInput = function(evt) {
+    // let assignedFunction = activeKeyboardConfig[evt.code];
+    let state = evt.type == 'keydown' ? true : false;
+  
+    // // cancel on input typing
+    // var activeElement = document.activeElement;
+    // var inputs = ['input', 'select', 'button', 'textarea'];
+    // if (activeElement && inputs.indexOf(activeElement.tagName.toLowerCase()) !== -1) {
+    //     return false;
+    // }
+  
+    // if (typeof assignedFunction !== 'undefined'){
+    //   ui.registerKeyboardInput(assignedFunction, state);
+    // } else {
+    //   // console.log(evt.code)
+    
+    // }
+  
+    switch(evt.code){  
+      // scene explorer
+      case 'Escape':
+        ui.hideMenu();
+      break;
+      case 'F9':
+        if (state == true){
+          if (gfx.scene.debugLayer.isVisible())
+            gfx.scene.debugLayer.hide();
+          else
+            gfx.scene.debugLayer.show();
+        }       
+      break;
+    }
+
+    //   // update key state
+    //   // broadcast keystate change to network
+    //   // if (tr.prevKeyState[key] != tr.self.keyState[key]) {
+    //   //   // console.log(tr.self.keyState)
+    //   //   var payload = makeMessage({type:"action"});
+    //   //   // console.log(payload);
+    //   //   net.send('tr_'+tr.self.world, payload);
+    //   // }
+  
+    //   tr.prevKeyState[key] = tr.self.keyState[key];
+    //   return true;
+  }; // end keyInput
+
 }(window.ui = window.ui || {}));
 
 

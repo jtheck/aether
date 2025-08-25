@@ -75,33 +75,32 @@ window.aud = {};  // Audio
 
 
   app.initInputListeners = function() {
-    // document.addEventListener('keydown', ui.keyInput, false);
-    // document.addEventListener('keyup', ui.keyInput, false);
+    window.addEventListener('resize', app.resize.debounce(150,false), false);
+    window.addEventListener('orientationchange', function() {app.resize.debounce(150,false)}, {once : true});
+    
+    document.addEventListener('keydown', ui.keyInput, false);
+    document.addEventListener('keyup', ui.keyInput, false);
   
     // document.addEventListener('pointermove', (e) => {ui.handlePointer(e)});
     // document.addEventListener('pointerup', (e) => {ui.handlePointer(e)});
     // document.addEventListener('pointerdown', (e) => {ui.handlePointer(e)});
+
   
-    // window.addEventListener('deviceorientation', (e) => {ui.handleOrientation(e)});
-    
-      // Disable Right Click menu
+    // Disable Right Click menu
     document.addEventListener("contextmenu", ui.rightClick, false);
-    // document.addEventListener('wheel', ui.wheelInput, false);
   };
 
-  app.injectIcons = function(){
-    loadIcon('seeds', 'bb_seeds');
-  }
+  
 
 
 
-
-
+  
   app.resize = function() {
     // gfx.canvas.height = window.innerHeight-12;
     // gfx.canvas.width = window.innerWidth-12;
-    // gfx.engine.resize();
+    gfx.engine.resize();
   };
+
 
 
   // log to in-game console

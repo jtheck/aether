@@ -91,16 +91,16 @@ html, body {
   fill: darkmagenta;
 }
 
-#title {
+#title_b {
   text-align: center;
   font-size: 1.5em;
   font-weight: bold;
   cursor: pointer;
 }
-#title:hover {
+#title_b:hover {
   color: aqua;
 }
-#title:active {
+#title_b:active {
   color: darkmagenta;
 }
 
@@ -287,6 +287,12 @@ a:visited {
 a[href^="mailto"] {
   color: White;
 }
+a[href^="mailto"]:hover {
+  color: aqua;
+}
+a[href^="mailto"]:active {
+  color: darkmagenta;
+}
 a:before{
   content:"\300C\000A0";
 }
@@ -304,4 +310,13 @@ a:after{
   color: lightgrey;
   background: black;
   overflow: auto;
+}
+
+/* inspector */
+#scene-explorer-host {
+  z-index: 10;
+  position: absolute! important;
+}
+#inspector-host {
+  position: absolute! important;
 }

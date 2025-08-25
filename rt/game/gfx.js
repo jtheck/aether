@@ -112,59 +112,78 @@ function updateTile() {
 // Initialize with first tile
 updateTile();
 
-// Create 10x10 grid of individual tiles with 16 materials (one for each atlas tile)
+// Create 10x10 grid as a single mesh with custom UVs for atlas mapping
 const tileSize = 4; // Size of each tile in world units
-const tiles = [];
 
-// Create 16 materials, one for each atlas tile
-const atlasMaterials = [];
-for (let i = 0; i < 16; i++) {
-    const material = new BABYLON.StandardMaterial(`atlasMat_${i}`, scene);
-    const texture = new BABYLON.Texture("assets/textures/atlas.png", scene);
-    
-    // Set up the texture with bleeding prevention
-    texture.uScale = 0.25 - 0.05;  // 0.05 = 0.025 from each side
-    texture.vScale = 0.25 - 0.05;  // 0.05 = 0.025 from each side
-    
-    // Calculate UV offset for this atlas tile
-    const tileRow = Math.floor(i / 4);
-    const tileCol = i % 4;
-    texture.uOffset = tileCol * 0.25 + 0.025;  // +0.025 to center the smaller tile
-    texture.vOffset = tileRow * 0.25 + 0.025;  // +0.025 to center the smaller tile
-    
-    material.diffuseTexture = texture;
-    atlasMaterials.push(material);
-}
+// Create one material with the atlas texture
+const terrainMaterial = new BABYLON.StandardMaterial("terrainMaterial", scene);
+const terrainAtlasTexture = new BABYLON.Texture("assets/textures/atlas.png", scene);
+terrainMaterial.diffuseTexture = terrainAtlasTexture;
 
+// No texture scaling needed - we control UVs directly in the vertex data
+// terrainAtlasTexture.uScale = 1.0;  // Default scale
+// terrainAtlasTexture.vScale = 1.0;  // Default scale
+
+// Create vertex data for 10x10 grid
+const verts = [];
+const uvs = [];
+const indices = [];
+
+// Generate vertices and UVs for each tile
 for (let row = 0; row < 10; row++) {
     for (let col = 0; col < 10; col++) {
-        // Create individual tile mesh
-        const tile = BABYLON.MeshBuilder.CreateGround(`tile_${row}_${col}`, {
-            width: tileSize, 
-            height: tileSize, 
-            subdivisions: 1
-        }, scene);
-        
-        // Position tiles in a grid starting from (0,0) origin
-        tile.position.x = col * tileSize; // Start from 0, go positive
-        tile.position.z = row * tileSize; // Start from 0, go positive
-        tile.position.y = 0; // No Y offset - tiles should be flush
-        
         // Random atlas tile (0-15)
         const randomTile = Math.floor(Math.random() * 16);
+        const tileRow = Math.floor(randomTile / 4);
+        const tileCol = randomTile % 4;
         
-        // Save the atlas tile info on the tile mesh for later reference
-        tile.atlasTile = randomTile;
+        // Calculate world positions for this tile
+        const x1 = col * tileSize;
+        const x2 = (col + 1) * tileSize;
+        const z1 = row * tileSize;
+        const z2 = (row + 1) * tileSize;
         
-        // Apply the corresponding material for this atlas tile
-        tile.material = atlasMaterials[randomTile];
+        // Calculate UV coordinates for this atlas tile (with bleeding prevention)
+        const u1 = tileCol * 0.25 + 0.025;
+        const u2 = (tileCol + 1) * 0.25 - 0.025;
+        const v1 = tileRow * 0.25 + 0.025;
+        const v2 = (tileRow + 1) * 0.25 - 0.025;
         
-        tiles.push(tile);
+        // Add 4 vertices for this tile (counter-clockwise)
+        const baseIndex = (row * 10 + col) * 4;
+        
+        // Vertex positions (x, y, z)
+        verts.push(x1, 0, z1);  // Bottom-left
+        verts.push(x2, 0, z1);  // Bottom-right
+        verts.push(x2, 0, z2);  // Top-right
+        verts.push(x1, 0, z2);  // Top-left
+        
+        // UV coordinates (u, v)
+        uvs.push(u1, v1);  // Bottom-left
+        uvs.push(u2, v1);  // Bottom-right
+        uvs.push(u2, v2);  // Top-right
+        uvs.push(u1, v2);  // Top-left
+        
+        // Add indices for 2 triangles (counter-clockwise)
+        indices.push(baseIndex, baseIndex + 1, baseIndex + 2);     // First triangle
+        indices.push(baseIndex, baseIndex + 2, baseIndex + 3);     // Second triangle
     }
 }
 
-console.log(`Created ${tiles.length} tiles with random atlas textures!`);
-console.log("Each tile has unique UV coordinates for different atlas slices");
+// Create the mesh with custom geometry
+const terrainMesh = new BABYLON.Mesh("terrainMesh", scene);
+const vertexData = new BABYLON.VertexData();
+vertexData.positions = verts;
+vertexData.indices = indices;
+vertexData.uvs = uvs;
+vertexData.applyToMesh(terrainMesh);
+
+// Apply the material
+terrainMesh.material = terrainMaterial;
+
+console.log(`Created single terrain mesh with ${verts.length / 4} tiles!`);
+console.log("Each tile maps to different atlas region via custom UVs");
+console.log("One mesh, one material, one texture - efficient rendering!");
 
 const box = BABYLON.MeshBuilder.CreateBox("box", {size: 1}, scene);
 

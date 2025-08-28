@@ -269,7 +269,7 @@
     }
     beforeRenderObserver = hud.scene.onBeforeRenderObservable.add(() => {
       if (radialMenuVisible && radialMenu && menuCameraLocalPos && hud.camera) {
-        // Reconstruct world position from camera-local coordinates
+        // Use camera position directly for radial menu - position and orientation must match
         const cameraForward = hud.camera.getForwardRay().direction.normalize();
         const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
         const cameraUp = BABYLON.Vector3.Cross(cameraRight, cameraForward).normalize();
@@ -625,8 +625,10 @@
   function updateEdgeIndicator(unit, index, unitWorldPos) {
     const rect = hud.canvas.getBoundingClientRect();
     
-    // Use current camera position for consistent tracking
-    const currentCameraPos = hud.camera.position;
+    // Use cameraTarget position if available for instant tracking, otherwise use camera position
+    const currentCameraPos = window.gfx && window.gfx.cameraTarget 
+      ? window.gfx.cameraTarget.position 
+      : hud.camera.position;
     const toUnit = unitWorldPos.subtract(currentCameraPos).normalize();
     const cameraForward = hud.camera.getForwardRay().direction.normalize();
     const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
@@ -684,6 +686,10 @@
     const ray = hud.scene.createPickingRay(edgePos.x, edgePos.y, BABYLON.Matrix.Identity(), hud.camera);
     const worldPos = ray.origin.add(ray.direction.scale(menuConfig.distance)); // Same distance as radial menu
     
+    // Check if this unit is selected
+    const isSelected = window.ai && window.ai.getCurrentSelection && 
+                      window.ai.getCurrentSelection().includes(unit);
+    
     // Reuse existing indicator or create new one
     let indicator;
     if (index < minimapIndicators.length) {
@@ -694,14 +700,25 @@
       // Create new sphere
       indicator = BABYLON.MeshBuilder.CreateSphere(`minimap_${index}`, {diameter: 0.15}, hud.scene);
       
-      // Green glowing material (like center sphere)
+      // Create material that will be updated below
       const material = new BABYLON.StandardMaterial(`minimap_mat_${index}`, hud.scene);
-      material.diffuseColor = new BABYLON.Color3(0, 1, 0);
-      material.emissiveColor = new BABYLON.Color3(0, 0.8, 0);
       material.disableLighting = true; // Make them glow like the center sphere
       indicator.material = material;
       
       minimapIndicators.push(indicator);
+    }
+    
+    // Update colors based on selection status
+    if (isSelected) {
+      // Selected units: bright yellow/gold
+      indicator.material.diffuseColor = new BABYLON.Color3(1, 1, 0);
+      indicator.material.emissiveColor = new BABYLON.Color3(1, 0.8, 0);
+      indicator.scaling = new BABYLON.Vector3(1.5, 1.5, 1.5); // Make selected units bigger
+    } else {
+      // Unselected units: normal green
+      indicator.material.diffuseColor = new BABYLON.Color3(0, 1, 0);
+      indicator.material.emissiveColor = new BABYLON.Color3(0, 0.8, 0);
+      indicator.scaling = new BABYLON.Vector3(1, 1, 1); // Normal size
     }
     
     // Set position directly for instant response - no catchup lag

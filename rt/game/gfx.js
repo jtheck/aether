@@ -11,6 +11,12 @@
   gfx.scene;
   gfx.camera;
   gfx.cameraTarget;
+  gfx.cursorFrog; // Frog model to show cursor position
+  gfx.table;
+
+  // Progressive chunk loading queue
+  const chunkQueue = [];
+  const CHUNKS_PER_FRAME = 1; // Only process 1 chunk per frame
 
   // Load textures at the top so they're available everywhere
   let grassAtlasTexture, dirtAtlasTexture, rockAtlasTexture, sandAtlasTexture, waterAtlasTexture;
@@ -134,7 +140,7 @@
       billboardMaterial.ambientColor = new BABYLON.Color3(0.7, 0.7, 0.7); // More ambient light
       billboardMaterial.diffuseColor = new BABYLON.Color3(0.9, 0.9, 0.9); // Softer diffuse
       billboardMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce harsh specular
-      billboardMaterial.emissiveColor = new BABYLON.Color3(0.15, 0.15, 0.15); // Slight self-illumination
+      billboardMaterial.emissiveColor = new BABYLON.Color3(.36, .35, .35); // More self-illumination for visibility
       
       billboardMaterial.backFaceCulling = false;
       
@@ -167,7 +173,7 @@
       billboardInstancedMeshes.set(modelType, masterMesh);
       billboardInstancePools.set(modelType, []); // Initialize pool for this type
       
-      console.log(`Created billboard master mesh for type: ${modelType}`);
+      // console.log(`Created billboard master mesh for type: ${modelType}`);
     }
     
     return billboardInstancedMeshes.get(modelType);
@@ -213,7 +219,7 @@
       u1, v1   // top-left
     ];
     
-    console.log(`Model ${modelPath} -> Cell ${cellX} -> UVs: ${u1.toFixed(3)}-${u2.toFixed(3)}`);
+    // console.log(`Model ${modelPath} -> Cell ${cellX} -> UVs: ${u1.toFixed(3)}-${u2.toFixed(3)}`);
     
     modelUVCache.set(modelPath, uvs);
     return uvs;
@@ -249,13 +255,20 @@
     
     // Configure the instance (reuse existing objects to avoid GC)
     instance.position.copyFrom(position);
-    instance.position.y += 2.0; // Lift billboard up so bottom edge sits on ground level
     
-    // No pivot point adjustment needed - position handles ground placement
+    // Set pivot to bottom of billboard so scaling keeps it grounded
+    instance.setPivotPoint(new BABYLON.Vector3(0, -0.5, 0)); // Bottom of a unit plane
+    
+    // Random rotation variation - just 180° flip for horizontal variety
+    // const shouldRotate = Math.random() < 0.5; // 50% chance to rotate 180°
     
     instance.scaling.x = scale;
     instance.scaling.y = scale;
     instance.scaling.z = 1;
+    
+    // Rotate 180 degrees around Y axis for variation
+    instance.rotationQuaternion = null; // Force Euler angles
+    // instance.rotation.y = shouldRotate ? Math.PI : 0;
     instance.isPickable = false; // Make billboards non-pickable too
     instance.setEnabled(true);
     
@@ -293,7 +306,12 @@
     if (pool.length > 0) {
       const model = pool.pop();
       model.root.position.copyFrom(position);
+      // Disable quaternions like we do with units/buildings
+      model.root.rotationQuaternion = null;
       model.root.rotation.y = rotation;
+      
+      // Set pivot to bottom before scaling so models stay grounded
+      model.root.setPivotPoint(new BABYLON.Vector3(0, 0, 0));
       model.root.scaling.x = scale;
       model.root.scaling.y = scale;
       model.root.scaling.z = scale;
@@ -303,6 +321,8 @@
       // Create new instance if pool is empty
       return getModel(modelPath, scene).then(model => {
         model.root.position.copyFrom(position);
+        // Disable quaternions like we do with units/buildings
+        model.root.rotationQuaternion = null;
         model.root.rotation.y = rotation;
         model.root.scaling.x = scale;
         model.root.scaling.y = scale;
@@ -399,19 +419,23 @@
     // Grass tiles (0-15) - trees, mushrooms, etc.
     5: { // GRASS_IN
       models: [
-        { path: "assets/models/mushroom.glb", chance: 0.1, scale: 0.1, billboardScale: 0.5, lodDistance: 75 },
-        // { path: "assets/models/ae.glb", chance: 0.05, scale: 0.1 }
-        { path: "assets/models/tortle.glb", chance: 0.32, scale: 0.1, billboardScale: 1, lodDistance: 75 },
-        { path: "assets/models/frog.glb", chance: 0.39, scale: 0.1, billboardScale: 0.5, lodDistance: 50 },
-
-        { path: "assets/models/tree.glb", chance: 0.3, scale: 1, billboardScale: 2, lodDistance: 200 }
+        // Ordered rarest to most common for priority spawning - THICKER SPAWNS
+        { path: "assets/models/mushroom.glb", chance: 0.2, scale: 0.1, billboardScale: 0.5, lodDistance: 75 }, // 20% - rare finds
+        { path: "assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 2.5, lodDistance: 100 }, // 30% - plain rocks
+        { path: "assets/models/rocks_moss.glb", chance: 0.4, scale: 6.5, billboardScale: 4.5, lodDistance: 120 }, // 40% - moss rocks
+        { path: "assets/models/tree.glb", chance: 0.75, scale: .9, billboardScale: 2.8, lodDistance: 200 }, // 70% - THICK FORESTS!
+        { path: "assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 1, lodDistance: 75 }, // 50% - more tortles
+        { path: "assets/models/frog.glb", chance: 0.6, scale: 0.1, billboardScale: 0.5, lodDistance: 50 }, // 60% - more frogs
+        { path: "assets/models/rocks_snow.glb", chance: 0.95, scale: 11.5, billboardScale: 7.5, lodDistance: 200 } // 95% - snow everywhere!
 
       ]
     },
     // Dirt tiles (20-35) - rocks, gates, etc.
-    25: { // DIRT_IN
+    15: { // DIRT_IN
       models: [
-        { path: "assets/models/gate.glb", chance: 0.08, scale: .01, billboardScale: 1.5, lodDistance: 100 },
+        { path: "assets/models/tree.glb", chance: 0.5, scale: 1.15, billboardScale: 2, lodDistance: 200 }, // 70% - THICK FORESTS!
+
+        { path: "assets/models/gate.glb", chance: 0.08, scale: .1, billboardScale: 1.2, lodDistance: 100 },
       ]
     },
     // Rock tiles (40-55) - more rocks, windvanes
@@ -448,7 +472,7 @@
     
     isProcessingQueue = true;
     skipLODUpdates = true; // Prevent LOD flickering during batch loading
-    const BATCH_SIZE = 2; // Load max 1 model per frame to prevent hitches
+    const BATCH_SIZE = 4; // Load max 1 model per frame to prevent hitches
     
     for (let i = 0; i < Math.min(BATCH_SIZE, modelLoadQueue.length); i++) {
       const task = modelLoadQueue.shift();
@@ -474,13 +498,51 @@
           model.root.isPickable = false;
           model.root.getChildMeshes().forEach(mesh => {
             mesh.isPickable = false;
+            
+            // Ensure models receive proper lighting
+            if (mesh.material) {
+              // mesh.material.disableLighting = false; // Enable lighting
+              if (mesh.material.emissiveColor) {
+                // Reduce emissive so it doesn't glow in the dark
+                mesh.material.emissiveColor = new BABYLON.Color3(0, 0, 0);
+              }
+            }
           });
           
-          // Add LOD billboard - let LOD system manage all visibility
+          // Add LOD billboard first
           addLODBillboard(model, task.scene, task.modelRule, gfx.camera ? gfx.camera.position : null);
           
-          // Start with 3D model disabled - LOD system will enable what's needed
-          model.root.setEnabled(false);
+          // Immediately set correct LOD state based on current camera position
+          if (gfx.camera) {
+            const modelPos = model.root.position;
+            const camPos = gfx.camera.position;
+            const dx = camPos.x - modelPos.x;
+            const dy = camPos.y - modelPos.y;
+            const dz = camPos.z - modelPos.z;
+            const distanceSquared = dx * dx + dy * dy + dz * dz;
+            const lodDistanceSquared = task.modelRule.lodDistance * task.modelRule.lodDistance;
+            
+            // Find the LOD entry we just created to enable the right part
+            const lodEntry = lodModels[lodModels.length - 1]; // Last added entry
+            
+            // Set initial state based on distance
+            if (distanceSquared > lodDistanceSquared) {
+              // Far away - start with billboard enabled, model disabled
+              model.root.setEnabled(false);
+              if (lodEntry && lodEntry.billboard) {
+                lodEntry.billboard.setEnabled(true);
+              }
+            } else {
+              // Close - start with 3D model enabled, billboard disabled
+              model.root.setEnabled(true);
+              if (lodEntry && lodEntry.billboard) {
+                lodEntry.billboard.setEnabled(false);
+              }
+            }
+          } else {
+            // No camera yet - start disabled
+            model.root.setEnabled(false);
+          }
         })
         .catch(err => console.warn('Model loading failed:', err));
     }
@@ -494,6 +556,31 @@
       // Re-enable LOD updates when queue is empty
       skipLODUpdates = false;
     }
+  }
+
+  // Function to queue models for a chunk individually (prevents snap-in)
+  function queueModelsForChunk(chunk, scene) {
+    chunk.tiles.forEach((tile, index) => {
+      const localX = index % (chunk.endX - chunk.startX);
+      const localZ = Math.floor(index / (chunk.endX - chunk.startX));
+      
+      // Calculate world position for this tile
+      const worldX = (chunk.startX + localX) * TILE_SIZE;
+      const worldZ = (chunk.startZ + localZ) * TILE_SIZE;
+      
+      // Check if this tile type has model rules
+      const rules = modelRules[tile.type];
+      if (rules && rules.length > 0) {
+        // Try to place a model (only one per tile)
+        for (const rule of rules) {
+          if (Math.random() < rule.chance) {
+            // Add this model to the queue instead of placing immediately
+            addModelToQueue(rule.path, new BABYLON.Vector3(worldX, 0, worldZ), rule.scale, scene);
+            break; // Only one model per tile
+          }
+        }
+      }
+    });
   }
 
   // Function to place models on a chunk (now uses batched loading)
@@ -511,37 +598,46 @@
       // Check if this tile type has model rules
       const rule = modelRules[tile.type];
       if (rule) {
-        rule.models.forEach(modelRule => {
-          // Random chance to place model
+        // Only place one model per tile - pick randomly from available models
+        let selectedModel = null;
+        
+        // Go through models and test chance, but stop at first success
+        for (const modelRule of rule.models) {
           if (Math.random() < modelRule.chance) {
-            // Add some randomness to position within tile
-            const offsetX = (Math.random() - 0.5) * 0.6;
-            const offsetZ = (Math.random() - 0.5) * 0.6;
-            const position = new BABYLON.Vector3(
-              worldX + offsetX, 
-              0, 
-              worldZ + offsetZ
-            );
-            
-            // Random rotation
-            const rotation = Math.random() * Math.PI * 2;
-            
-            // Initialize billboard atlas if needed
-            initBillboardAtlas(scene);
-            
-            // Queue model for batched loading instead of loading immediately
-            modelLoadQueue.push({
-              modelPath: modelRule.path,
-              scene: scene,
-              position: position,
-              rotation: rotation,
-              scale: modelRule.scale,
-              chunk: chunk,
-              models: models,
-              modelRule: modelRule
-            });
+            selectedModel = modelRule;
+            break; // Only place one model per tile
           }
-        });
+        }
+        
+        // If a model was selected, place it
+        if (selectedModel) {
+          // Add some randomness to position within tile
+          const offsetX = (Math.random() - 0.5) * 0.6;
+          const offsetZ = (Math.random() - 0.5) * 0.6;
+          const position = new BABYLON.Vector3(
+            worldX + offsetX, 
+            0, 
+            worldZ + offsetZ
+          );
+          
+          // Random rotation
+          const rotation = Math.random() * Math.PI * 2;
+          
+          // Initialize billboard atlas if needed
+          initBillboardAtlas(scene);
+          
+          // Queue model for batched loading instead of loading immediately
+          modelLoadQueue.push({
+            modelPath: selectedModel.path,
+            scene: scene,
+            position: position,
+            rotation: rotation,
+            scale: selectedModel.scale,
+            chunk: chunk,
+            models: models,
+            modelRule: selectedModel
+          });
+        }
       }
     });
     
@@ -724,6 +820,19 @@
         gfx.showWorldAxes(1024, gfx.scene, new Vec3(0,0,0));
       }
       
+      // Load cursor frog indicator
+      BABYLON.SceneLoader.LoadAssetContainerAsync("assets/models/frog.glb", undefined, gfx.scene)
+        .then(container => {
+          const result = container.instantiateModelsToScene();
+          gfx.cursorFrog = result.rootNodes[0];
+          gfx.cursorFrog.scaling = new BABYLON.Vector3(.2, .2, .2); // Make it visible
+          gfx.cursorFrog.position.y = 1; // Float above ground
+          console.log("Cursor frog loaded");
+        })
+        .catch(error => {
+          console.warn("Could not load cursor frog:", error);
+        });
+      
       // Initialize HUD system after scene and camera are ready
       if (window.hud && gfx.camera && gfx.canvas) {
         hud.init(gfx.scene, gfx.camera, gfx.canvas);
@@ -750,20 +859,34 @@
     // Player physics and position updates are now handled in the game loop
     // This render loop only handles rendering and chunk management
     
-    // Super fast camera snap - get there immediately, no catchup lag
-    if (window.cameraTargetDestination && gfx.cameraTarget) {
-      const lerpSpeed = 0.9; // Ultra fast - basically instant
-      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraTargetDestination.x, lerpSpeed);
-      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraTargetDestination.z, lerpSpeed);
+    // First, lerp cursor destination towards player flag position
+    if (window.player && window.player.pbody && window.player.pbody.state && window.player.pbody.state.loc) {
+      const playerPos = window.player.pbody.state.loc;
       
-      // Much tighter tolerance - stop immediately when close
-      const distance = BABYLON.Vector3.Distance(gfx.cameraTarget.position, window.cameraTargetDestination);
-      if (distance < 0.01) {
-        // Snap to exact position and stop
-        gfx.cameraTarget.position.x = window.cameraTargetDestination.x;
-        gfx.cameraTarget.position.z = window.cameraTargetDestination.z;
-        window.cameraTargetDestination = null;
+      // If we don't have a cursor destination yet, initialize it to current camera target
+      if (!window.cameraTargetDestination && gfx.cameraTarget) {
+        window.cameraTargetDestination = gfx.cameraTarget.position.clone();
       }
+      
+      // Lerp cursor destination towards player flag position
+      if (window.cameraTargetDestination) {
+        const cursorLerpSpeed = 0.02; // Slower cursor chase
+        window.cameraTargetDestination.x = BABYLON.Scalar.Lerp(window.cameraTargetDestination.x, playerPos.x, cursorLerpSpeed);
+        window.cameraTargetDestination.z = BABYLON.Scalar.Lerp(window.cameraTargetDestination.z, playerPos.z, cursorLerpSpeed);
+      }
+    }
+    
+    // Then, smooth camera target lerping towards cursor destination
+    if (window.cameraTargetDestination && gfx.cameraTarget) {
+      const cameraLerpSpeed = 0.05; // Normal smooth camera movement
+      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraTargetDestination.x, cameraLerpSpeed);
+      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraTargetDestination.z, cameraLerpSpeed);
+    }
+    
+    // Update cursor frog position to show the cursor destination
+    if (gfx.cursorFrog && window.cameraTargetDestination) {
+      gfx.cursorFrog.position.x = window.cameraTargetDestination.x;
+      gfx.cursorFrog.position.z = window.cameraTargetDestination.z;
     }
     
     // Update unit logic and behaviors
@@ -791,18 +914,31 @@
       const targetPos = gfx.cameraTarget.position || gfx.cameraTarget;
       liveField.updateVisibleChunks(targetPos.x, targetPos.z); // Use field's default radius
       
-      // Create meshes for chunks that need them
+      // Add chunks that need processing to the queue (don't process them all at once)
       for (const [key, chunk] of liveField.chunks) {
-        if (chunk.needsMesh) {
+        if (chunk.needsMesh && !chunkQueue.some(item => item.key === key && item.type === 'mesh')) {
           const [chunkX, chunkZ] = key.split(',').map(Number);
-          liveField.createChunkMesh(chunkX, chunkZ, gfx.scene, createTerrainMesh);
+          chunkQueue.push({ key, chunk, chunkX, chunkZ, type: 'mesh' });
         }
         
-        // Load models for chunks that need them (lazy loading)
-        if (chunk.needsModels && chunk.mesh) {
-          chunk.models = placeModelsOnChunk(chunk, gfx.scene);
-          chunk.needsModels = false;
+        if (chunk.needsModels && chunk.mesh && !chunkQueue.some(item => item.key === key && item.type === 'models')) {
+          chunkQueue.push({ key, chunk, type: 'models' });
         }
+      }
+      
+      // Process only a limited number of chunks per frame
+      let processed = 0;
+      while (chunkQueue.length > 0 && processed < CHUNKS_PER_FRAME) {
+        const item = chunkQueue.shift();
+        
+        if (item.type === 'mesh') {
+          liveField.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
+        } else if (item.type === 'models') {
+          item.chunk.models = placeModelsOnChunk(item.chunk, gfx.scene);
+          item.chunk.needsModels = false;
+        }
+        
+        processed++;
       }
     }
     
@@ -870,16 +1006,46 @@
 
 
 
+  gfx.table = {
+    SW: {
+      mesh: BABYLON.MeshBuilder.CreateBox("SW", {size: 1}, scene), 
+    },
+    SE: {
+      mesh: BABYLON.MeshBuilder.CreateBox("SE", {size: 1}, scene), 
+    },
+    NE: {
+      mesh: BABYLON.MeshBuilder.CreateBox("NE", {size: 1}, scene),
+    },
+    NW: { 
+      mesh: BABYLON.MeshBuilder.CreateBox("NW", {size: 1}, scene),
+    },
+    N: {
+      mesh: BABYLON.MeshBuilder.CreateBox("N", {size: 1}, scene),
+    },
+    E: {
+      mesh: BABYLON.MeshBuilder.CreateBox("E", {size: 1}, scene),
+    },
+    S: {
+      mesh: BABYLON.MeshBuilder.CreateBox("S", {size: 1}, scene),
+    },
+    W: {
+      mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
+    },
+    FLOOR: {
+      mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
 
-
-const box = BABYLON.MeshBuilder.CreateBox("box", {size: 1}, scene);
-
+    }
+  };
+  // log(gfx.table)
+  
+  // Position the table border after it's created
+  // (Will be called from field.js when ready)
+ 
 // Note: showWorldAxis is called after scene is ready, not during module initialization
 
 
 
   };
-
 
 
 
@@ -894,9 +1060,10 @@ const box = BABYLON.MeshBuilder.CreateBox("box", {size: 1}, scene);
 
     // Camera setup complete
 
-    camera.upperRadiusLimit = 9111;
+    camera.upperRadiusLimit = 999;
     camera.lowerRadiusLimit = 25;
-    camera.maxZ = 9111; // max render distance
+    camera.upperBetaLimit = 1.26; // Limit how high you can look (prevent going too high)
+    camera.maxZ = 2001; // max render distance
     camera.minZ = 1.5; // minimum render distance
     camera.fov = .8; // default .8
  
@@ -919,7 +1086,7 @@ const box = BABYLON.MeshBuilder.CreateBox("box", {size: 1}, scene);
     // Set up camera properties for forge editing
     camera.fov = 0.8;
     camera.minZ = 1;
-    camera.maxZ = 9001;
+    camera.maxZ = 2001;
     
     // Camera controls
     camera.keysUp.push(87);    // W key
@@ -951,9 +1118,10 @@ const box = BABYLON.MeshBuilder.CreateBox("box", {size: 1}, scene);
     camera.panningInertia = 0;
     
     // Set up camera constraints for forge editing
-    camera.lowerRadiusLimit = 5;   // Minimum zoom distance
-    camera.upperRadiusLimit = 500; // Maximum zoom distance for larger field
-    
+    camera.lowerRadiusLimit = 4;   // Minimum zoom distance
+    camera.upperRadiusLimit = 200; // Maximum zoom distance for larger field
+    camera.upperBetaLimit = 1.29;
+    camera.beta = 1;
     // Set initial position and target
     camera.setTarget(new Vec3(0, 0, 0));
     

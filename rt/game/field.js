@@ -108,7 +108,7 @@ function Field(ops = {}) {
   
   // Show tilemap before proof
   // console.log("=== TILEMAP BEFORE PROOF ===");
-  this.showTilemap();
+  // this.showTilemap();
   
   this.proof();
   // this.testatlas();
@@ -123,27 +123,28 @@ function Field(ops = {}) {
 
 
 
-Field.prototype.testatlas = function(){
-  // Fill the field with tiles 0-15 in order to test the atlas
-  let tileIndex = 0;
+// Field.prototype.testatlas = function(){
+//   // Fill the field with tiles 0-15 in order to test the atlas
+//   let tileIndex = 0;
   
-  for(let y = 0; y < this.height; y++) {
-    for(let x = 0; x < this.width; x++) {
-      const tile = this.tiles[y * this.width + x];
-      tile.type = tileIndex % 16; // Cycle through 0-15
-      tile.updateAtlasCoordinates();
-      tileIndex++;
-    }
-  }
+//   for(let y = 0; y < this.height; y++) {
+//     for(let x = 0; x < this.width; x++) {
+//       const tile = this.tiles[y * this.width + x];
+//       tile.type = tileIndex % 16; // Cycle through 0-15
+//       tile.updateAtlasCoordinates();
+//       tileIndex++;
+//     }
+//   }
   
-  // console.log("Atlas test complete - field filled with tiles 0-15 in order");
-}
+//   // console.log("Atlas test complete - field filled with tiles 0-15 in order");
+// }
 
 // 16 tiles marching squares corner wang tiles
 
+
 Field.prototype.proof = function(){
   // Brush-based marching squares: paint with grass brush and fix adjacent tiles
-  
+
   // console.log("=== STARTING MARCHING CUBES PROOF ===");
   
   // Step 1: Paint some random grass patches (like drawing with a brush)
@@ -399,7 +400,7 @@ Field.prototype.showTilemap = function(){
 
 // Add chunk management to Field class
 Field.prototype.chunks = new Map(); // Store chunk data + meshes
-Field.prototype.chunkSize = 32; // 32x32 tiles per chunk for larger visible areas
+Field.prototype.chunkSize = 13; // 32x32 tiles per chunk for larger visible areas
 
 Field.prototype.getChunk = function(chunkX, chunkZ) {
   const chunkKey = `${chunkX},${chunkZ}`;
@@ -452,7 +453,7 @@ Field.prototype.unloadChunk = function(chunkX, chunkZ) {
   }
 };
 
-Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = 2) {
+Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = 4) {
   const playerChunkX = Math.floor(playerX / (this.chunkSize * TILE_SIZE)); // Use TILE_SIZE constant
   const playerChunkZ = Math.floor(playerZ / (this.chunkSize * TILE_SIZE)); // Use TILE_SIZE constant
   
@@ -522,7 +523,7 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
 
 
 
-let liveField = new Field({width: 33, height: 33, seed: 52});
+let liveField = new Field({width: 130, height: 130, seed: 52});
 
 // Set random time of day for this field (0 = midnight, 0.5 = noon, 1 = midnight)
 // Bias toward daytime hours (0.2 to 0.8) for better visibility

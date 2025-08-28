@@ -216,6 +216,19 @@ function getRandomColor() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
+    // Handle different types of clicks
+    if (e.type === 'pointerdown' && e.button === 0) { // Left click only
+      // Check if we clicked on a unit first (before terrain)
+      if (window.ai && window.ai.handleUnitClick) {
+        const isCtrlHeld = e.ctrlKey || e.metaKey; // Support Ctrl or Cmd
+        const unitClicked = window.ai.handleUnitClick(x, y, isCtrlHeld);
+        
+        if (unitClicked) {
+          return; // Unit was selected, don't process terrain click
+        }
+      }
+    }
+    
     // Convert screen coordinates to world coordinates
     // All models are non-pickable so ray will pass through to terrain
     const pickResult = gfx.scene.pick(x, y);
@@ -259,11 +272,11 @@ function getRandomColor() {
           
           // Set target destination for smooth camera movement
           if (gfx.cameraTarget) {
-            // Store the target destination for lerping
+            // Store the target destination for lerping - camera will smoothly move there
             window.cameraTargetDestination = new BABYLON.Vector3(worldPos.x, gfx.cameraTarget.position.y, worldPos.z);
           }
           
-          // Also move the player physics body to the same position
+          // Move the player flag instantly to clicked position
           if (window.player && window.player.pbody) {
             window.player.pbody.state.loc.x = worldPos.x;
             window.player.pbody.state.loc.z = worldPos.z;

@@ -27,6 +27,8 @@ window.aud = {};  // Audio
     // Wait for the scene to be ready before initializing the player
     gfx.scene.whenReadyAsync().then(function() {
       initPlayer();
+      gfx.stretchTable(gfx.table);
+
     });
 
     

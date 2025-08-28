@@ -96,6 +96,7 @@ function Unit(unitType, position, options = {}) {
     Object.assign(this, def);
     
     // Unit instance properties
+    this.type = unitType; // Store the original unit type
     this.id = options.id || Math.random().toString(36).substr(2, 9);
     this.position = position || { x: 0, y: 0, z: 0 };
     this.currentHealth = this.health;
@@ -124,7 +125,7 @@ function Unit(unitType, position, options = {}) {
     // 3D model reference (will be set when spawned)
     this.mesh = null;
     
-    console.log(`Created ${this.name} at position`, this.position);
+    // console.log(`Created ${this.name} at position`, this.position);
 }
 
 // Helper function to get unit definition by type
@@ -147,15 +148,25 @@ function sprinkleUnits() {
     
     const unitTypes = ['frog_scout', 'mushroom_mage', 'bird_messenger']; // No villagers in neutral spawn
     
-    // Spread units from (0,0) to (20,20) with more spacing
-    for (let x = 2; x <= 20; x += 4) {
-        for (let z = 2; z <= 20; z += 4) {
+    // Spread units across the whole field using actual field dimensions in world coordinates
+    const fieldWidth = window.liveField ? window.liveField.width : 66;
+    const fieldHeight = window.liveField ? window.liveField.height : 66;
+    const tileSpacing = 8; // Much wider spacing to reduce memory usage
+    const worldSpacing = tileSpacing * TILE_SIZE; // Convert to world units
+    
+    for (let x = worldSpacing; x < (fieldWidth - tileSpacing) * TILE_SIZE; x += worldSpacing) {
+        for (let z = worldSpacing; z < (fieldHeight - tileSpacing) * TILE_SIZE; z += worldSpacing) {
+            // Only spawn unit 50% of the time to further reduce count
+            if (Math.random() < 0.5) {
+                continue;
+            }
+            
             // Random unit type
             const randomType = unitTypes[Math.floor(Math.random() * unitTypes.length)];
             
-            // Add some random offset within the grid cell
-            const offsetX = (Math.random() - 0.5) * 3;
-            const offsetZ = (Math.random() - 0.5) * 3;
+            // Add some random offset within the grid cell (in world units)
+            const offsetX = (Math.random() - 0.5) * TILE_SIZE * 1.5;
+            const offsetZ = (Math.random() - 0.5) * TILE_SIZE * 1.5;
             
             const unit = new Unit(randomType, {
                 x: x + offsetX, 
@@ -171,7 +182,7 @@ function sprinkleUnits() {
             unit.rotation = randomRotation;
             if (unit.pb.state && unit.pb.state.rot) {
                 unit.pb.state.rot.y = randomRotation;
-                console.log(`Unit ${unit.name} rotation set to:`, randomRotation, 'rad =', (randomRotation * 180/Math.PI).toFixed(1), 'deg');
+                // console.log(`Unit ${unit.name} rotation set to:`, randomRotation, 'rad =', (randomRotation * 180/Math.PI).toFixed(1), 'deg');
             }
             
             // Add to neutral units AND gameUnits for rendering
@@ -190,17 +201,23 @@ function spawnUnitModels(scene) {
     gameUnits.forEach(unit => {
         if (!unit.mesh && window.gfx && window.gfx.getModel) {
             // Load the 3D model for this unit
-            console.log(`🎮 Loading model ${unit.model} for ${unit.name} (scale: ${unit.scale})`);
+            // console.log(`🎮 Loading model ${unit.model} for ${unit.name} (scale: ${unit.scale})`);
             window.gfx.getModel(unit.model, scene).then(model => {
                 unit.mesh = model.root;
                 unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
+                
+                // Make unit meshes pickable for selection
+                unit.mesh.isPickable = true;
+                unit.mesh.getChildMeshes().forEach(child => {
+                    child.isPickable = true;
+                });
                 
                 // Initial position from physics body
                 if (unit.pb && unit.pb.state && unit.pb.state.loc) {
                     unit.mesh.position.x = unit.pb.state.loc.x;
                     unit.mesh.position.y = unit.pb.state.loc.y;
                     unit.mesh.position.z = unit.pb.state.loc.z;
-                    console.log(`📍 ${unit.name} positioned at (${unit.mesh.position.x.toFixed(1)}, ${unit.mesh.position.y.toFixed(1)}, ${unit.mesh.position.z.toFixed(1)}) with scale ${unit.scale}`);
+                    // console.log(`📍 ${unit.name} positioned at (${unit.mesh.position.x.toFixed(1)}, ${unit.mesh.position.y.toFixed(1)}, ${unit.mesh.position.z.toFixed(1)}) with scale ${unit.scale}`);
                 }
                 
                 // Apply random rotation
@@ -208,7 +225,7 @@ function spawnUnitModels(scene) {
                     unit.mesh.rotation.y = unit.rotation;
                 }
                 
-                console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
+                // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
                 console.warn(`Failed to load model for ${unit.name}:`, err);
             });
@@ -258,8 +275,31 @@ function updateUnits(deltaTime) {
     });
 }
 
+// Pre-calculate sin/cos lookup table for performance
+const ANGLE_CACHE_SIZE = 360;
+const sinCache = new Array(ANGLE_CACHE_SIZE);
+const cosCache = new Array(ANGLE_CACHE_SIZE);
+for (let i = 0; i < ANGLE_CACHE_SIZE; i++) {
+    const angle = (i / ANGLE_CACHE_SIZE) * Math.PI * 2;
+    sinCache[i] = Math.sin(angle);
+    cosCache[i] = Math.cos(angle);
+}
+
+function getCachedSin(angle) {
+    const normalizedAngle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const index = Math.floor((normalizedAngle / (Math.PI * 2)) * ANGLE_CACHE_SIZE);
+    return sinCache[index];
+}
+
+function getCachedCos(angle) {
+    const normalizedAngle = ((angle % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    const index = Math.floor((normalizedAngle / (Math.PI * 2)) * ANGLE_CACHE_SIZE);
+    return cosCache[index];
+}
+
 // Update unit mesh positions and rotations every frame
 function updateUnitMeshes() {
+    const currentTime = Date.now(); // Cache time for performance
     gameUnits.forEach((unit, index) => {
         if (unit.mesh && unit.pb && unit.pb.state) {
             // Visual follows physics - position
@@ -270,8 +310,47 @@ function updateUnitMeshes() {
                 // Flying units get altitude boost
                 if (unit.abilities && unit.abilities.includes('fly')) {
                     // Add some flying height with slight bobbing
-                    const flyHeight = 8 + Math.sin(Date.now() * 0.002 + unit.id.charCodeAt(0)) * 1.5;
+                    const flyHeight = 8 + getCachedSin(currentTime * 0.002 + unit.id.charCodeAt(0)) * 1.5;
                     unit.mesh.position.y = unit.pb.state.loc.y + flyHeight;
+                    
+                    // Birds fly in circles
+                    if (unit.type === 'bird_messenger') {
+                        // Get unique time offset and radius for this bird
+                        const timeOffset = unit.id.charCodeAt(0) * 100;
+                        const radiusOffset = unit.id.charCodeAt(1) || 0;
+                        const radius = 4 + (radiusOffset % 4); // 4-7 unit radius
+                        
+                        // Calculate circle position using cached time and trig
+                        const circleTime = currentTime * 0.0008 + timeOffset; // Slow circular movement
+                        const circleX = getCachedCos(circleTime) * radius;
+                        const circleZ = getCachedSin(circleTime) * radius;
+                        
+                        // Debug removed - circular movement confirmed working
+                        
+                        // Update position (relative to spawn point stored in mesh data)
+                        if (!unit.mesh.spawnPoint) {
+                            unit.mesh.spawnPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+                        }
+                        
+                        // Update both physics and visual position to avoid fighting
+                        const newX = unit.mesh.spawnPoint.x + circleX;
+                        const newZ = unit.mesh.spawnPoint.z + circleZ;
+                        
+                        unit.pb.state.loc.x = newX;
+                        unit.pb.state.loc.z = newZ;
+                        unit.mesh.position.x = newX;
+                        unit.mesh.position.z = newZ;
+                        
+                        // Face flight direction (tangent to circle) - add 90° to fix wing-first issue
+                        const facingAngle = (-circleTime * 0.5 + Math.PI / 2 + Math.PI /4) % (Math.PI * 2);
+                        
+                        // Update physics body rotation (this probably drives the visual)
+                        unit.pb.state.rot.y = facingAngle;
+                        
+                        // Also try mesh rotation as backup
+                        unit.mesh.rotationQuaternion = null;
+                        unit.mesh.rotation.y = facingAngle;
+                    }
                 } else {
                     // Ground units with occasional hopping
                     let hopHeight = 0;
@@ -391,11 +470,11 @@ function spawnAgoraVillagers() {
     const agoraX = window.player.agora.x * TILE_SIZE;
     const agoraZ = window.player.agora.y * TILE_SIZE;
     
-    console.log(`📍 Agora at (${agoraX}, ${agoraZ}), spawning villagers...`);
+    // console.log(`📍 Agora at (${agoraX}, ${agoraZ}), spawning villagers...`);
     
     // Spawn 8-12 villagers around the agora
     const villagerCount = 8 + Math.floor(Math.random() * 5);
-    console.log(`👥 Will spawn ${villagerCount} villagers`);
+    // console.log(`👥 Will spawn ${villagerCount} villagers`);
     
     for (let i = 0; i < villagerCount; i++) {
         // Random position around agora (within 3-6 tiles)
@@ -419,10 +498,10 @@ function spawnAgoraVillagers() {
         window.player.units.push(villager);
         gameUnits.push(villager); // Also add to global array for rendering (but NOT neutralUnits)
         
-        console.log(`🏘️ Spawned villager ${i+1} at agora`);
+        // console.log(`🏘️ Spawned villager ${i+1} at agora`);
     }
     
-    console.log(`✅ Spawned ${villagerCount} villagers around the agora`);
+    // console.log(`✅ Spawned ${villagerCount} villagers around the agora`);
 }
 
 // Auto-initialize units when the scene is ready

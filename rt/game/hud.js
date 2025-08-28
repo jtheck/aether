@@ -3,6 +3,10 @@
   
   // Radial menu state
   let radialMenu = null;
+  
+  // Minimap system state
+  let minimapIndicators = [];
+  let minimapContainer = null;
   let radialMenuVisible = false;
   let radialMenuItems = [];
   let currentMenuLevel = 'main'; // Track which menu level we're in
@@ -36,7 +40,7 @@
     info: [
       { text: "Stats", icon: "📊", callback: () => console.log("Unit Stats!"), color: new BABYLON.Color3(1, 0.8, 0.2) },
       { text: "Health", icon: "❤️", callback: () => console.log("Health Status!"), color: new BABYLON.Color3(1, 0.2, 0.2) },
-      { text: "Upgrade", icon: "⬆️", callback: () => console.log("Upgrade Unit!"), color: new BABYLON.Color3(0.2, 1, 0.8) },
+      { text: "Upgrade", icon: "⬆️", callback: () => {/* Unit upgrade logic */}, color: new BABYLON.Color3(0.2, 1, 0.8) },
       { text: "History", icon: "📜", callback: () => console.log("Battle History!"), color: new BABYLON.Color3(0.6, 0.4, 0.2) }
     ],
     magic: [
@@ -67,6 +71,9 @@
     
     // Create radial menu container
     createRadialMenu();
+    
+    // Initialize minimap system
+    initMinimap();
     
     // Set up middle mouse button handling
     setupMiddleMouseControl();
@@ -273,12 +280,6 @@
           .add(cameraUp.scale(menuCameraLocalPos.up));
           
         radialMenu.position.copyFrom(newPosition);
-        
-        // Debug: log if position changes significantly
-        const distance = BABYLON.Vector3.Distance(radialMenu.position, hud.camera.position);
-        if (Math.abs(distance - 3) > 0.1) { // menuConfig.distance should be 3
-          console.log('Menu drift detected - distance:', distance.toFixed(2));
-        }
       }
     });
     
@@ -289,7 +290,7 @@
     // Animate menu items based on original click position for spreading logic
     animateMenuItems(screenX, screenY);
     
-    console.log('Radial menu shown at anchor:', selectedAnchor, 'click pos:', screenX, screenY);
+    // Radial menu positioned and shown
   };
   
   // Hide radial menu
@@ -306,7 +307,7 @@
       beforeRenderObserver = null;
     }
     
-    console.log('3D Radial menu hidden');
+    // Radial menu hidden and cleaned up
   };
   
   // Animate menu items spreading out from center
@@ -560,11 +561,178 @@
     hud.addRadialMenuItem("Info", "ℹ️", () => console.log("Info selected"));
   };
   
+  // Initialize the minimap edge indicator system
+  function initMinimap() {
+    console.log("🗺️ Initializing minimap system...");
+    
+    // Create 3D container for minimap indicators (like radial menu)
+    minimapContainer = new BABYLON.TransformNode("MinimapContainer", hud.scene);
+    
+    // Minimap will be updated from main render loop after camera lerp
+    console.log("✅ Minimap will update after camera positioning");
+    
+    console.log("✅ Minimap system ready");
+  }
+  
+  // Update minimap indicators by moving existing spheres
+  function updateMinimap() {
+    if (!hud.camera || !window.player || !window.player.units) return;
+    
+    let indicatorIndex = 0;
+    
+    // Process each player unit
+    window.player.units.forEach((unit, index) => {
+      if (!unit.mesh || !unit.pb.state.loc) return;
+      
+      const unitWorldPos = new BABYLON.Vector3(
+        unit.pb.state.loc.x,
+        unit.pb.state.loc.y,
+        unit.pb.state.loc.z
+      );
+      
+      // Check if unit is visible in camera frustum
+      if (!isUnitInFrustum(unitWorldPos)) {
+        // Unit is outside view, update or create edge indicator
+        updateEdgeIndicator(unit, indicatorIndex, unitWorldPos);
+        indicatorIndex++;
+      }
+    });
+    
+    // Hide any extra indicators we're not using
+    for (let i = indicatorIndex; i < minimapIndicators.length; i++) {
+      minimapIndicators[i].setEnabled(false);
+    }
+  }
+  
+  // Check if unit is visible in camera frustum
+  function isUnitInFrustum(unitWorldPos) {
+    // Project world position to screen space
+    const screenPos = BABYLON.Vector3.Project(
+      unitWorldPos,
+      BABYLON.Matrix.Identity(),
+      hud.scene.getTransformMatrix(),
+      hud.camera.viewport
+    );
+    
+    // Check if it's within screen bounds (0-1 range with small margin)
+    const margin = 0.05;
+    return screenPos.x >= -margin && screenPos.x <= 1 + margin &&
+           screenPos.y >= -margin && screenPos.y <= 1 + margin &&
+           screenPos.z >= 0 && screenPos.z <= 1;
+  }
+  
+  // Update or create a screen edge indicator for off-screen units
+  function updateEdgeIndicator(unit, index, unitWorldPos) {
+    const rect = hud.canvas.getBoundingClientRect();
+    
+    // Use current camera position for consistent tracking
+    const currentCameraPos = hud.camera.position;
+    const toUnit = unitWorldPos.subtract(currentCameraPos).normalize();
+    const cameraForward = hud.camera.getForwardRay().direction.normalize();
+    const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
+    const cameraUp = BABYLON.Vector3.Cross(cameraRight, cameraForward).normalize();
+    
+    // Project unit direction onto current camera plane
+    const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight); // Flip to correct left/right
+    const upDot = BABYLON.Vector3.Dot(toUnit, cameraUp);
+    
+    // Fixed buffer distance from screen edges (like anchor system)
+    let edgePos;
+    const buffer = 30; // Fixed pixel distance from screen edge
+    
+    // Clamp the dot values to determine direction
+    const clampedRightDot = Math.max(-1, Math.min(1, rightDot));
+    const clampedUpDot = Math.max(-1, Math.min(1, upDot));
+    
+    if (Math.abs(clampedRightDot) > Math.abs(clampedUpDot)) {
+      // RAIL: Left or right edge with fixed buffer
+      if (clampedRightDot > 0) {
+        // RIGHT RAIL - fixed distance from right edge
+        edgePos = {
+          x: rect.width - buffer, // Fixed buffer from right edge
+          y: Math.max(buffer, Math.min(rect.height - buffer, 
+              rect.height * (0.5 + clampedUpDot * 0.4))) // Centered with movement range
+        };
+      } else {
+        // LEFT RAIL - fixed distance from left edge
+        edgePos = {
+          x: buffer, // Fixed buffer from left edge
+          y: Math.max(buffer, Math.min(rect.height - buffer, 
+              rect.height * (0.5 + clampedUpDot * 0.4))) // Centered with movement range
+        };
+      }
+    } else {
+      // RAIL: Top or bottom edge with fixed buffer
+      if (clampedUpDot > 0) {
+        // TOP RAIL - fixed distance from top edge
+        edgePos = {
+          x: Math.max(buffer, Math.min(rect.width - buffer, 
+              rect.width * (0.5 + clampedRightDot * 0.4))), // Centered with movement range
+          y: buffer // Fixed buffer from top edge
+        };
+      } else {
+        // BOTTOM RAIL - fixed distance from bottom edge
+        edgePos = {
+          x: Math.max(buffer, Math.min(rect.width - buffer, 
+              rect.width * (0.5 + clampedRightDot * 0.4))), // Centered with movement range
+          y: rect.height - buffer // Fixed buffer from bottom edge
+        };
+      }
+    }
+    
+    // Use same screen-to-world positioning as radial menu for consistent results
+    const ray = hud.scene.createPickingRay(edgePos.x, edgePos.y, BABYLON.Matrix.Identity(), hud.camera);
+    const worldPos = ray.origin.add(ray.direction.scale(menuConfig.distance)); // Same distance as radial menu
+    
+    // Reuse existing indicator or create new one
+    let indicator;
+    if (index < minimapIndicators.length) {
+      // Reuse existing sphere
+      indicator = minimapIndicators[index];
+      indicator.setEnabled(true);
+    } else {
+      // Create new sphere
+      indicator = BABYLON.MeshBuilder.CreateSphere(`minimap_${index}`, {diameter: 0.15}, hud.scene);
+      
+      // Green glowing material (like center sphere)
+      const material = new BABYLON.StandardMaterial(`minimap_mat_${index}`, hud.scene);
+      material.diffuseColor = new BABYLON.Color3(0, 1, 0);
+      material.emissiveColor = new BABYLON.Color3(0, 0.8, 0);
+      material.disableLighting = true; // Make them glow like the center sphere
+      indicator.material = material;
+      
+      minimapIndicators.push(indicator);
+    }
+    
+    // Set position directly for instant response - no catchup lag
+    indicator.position.copyFrom(worldPos);
+    
+    // Store edge info for this unit
+    unit.hudCoord = { edgePos, rightDot, upDot };
+  }
+  
+  // Clear all minimap indicators
+  function clearMinimapIndicators() {
+    minimapIndicators.forEach(indicator => {
+      indicator.dispose();
+    });
+    minimapIndicators = [];
+  }
+
+  // Expose minimap update function
+  hud.updateMinimap = updateMinimap;
+  
   // Dispose of HUD resources
   hud.dispose = function() {
     if (beforeRenderObserver) {
       hud.scene.onBeforeRenderObservable.remove(beforeRenderObserver);
       beforeRenderObserver = null;
+    }
+    
+    // Clean up minimap
+    clearMinimapIndicators();
+    if (minimapContainer) {
+      minimapContainer.dispose();
     }
   };
   

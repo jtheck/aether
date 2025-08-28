@@ -335,26 +335,7 @@
     const scale = modelRule.billboardScale || 1;
     
     billboard = getBillboardInstance(modelPath, model.root.position, scale, scene);
-    billboard.setEnabled(false); // Start with billboard disabled
-    
-    // Set initial state based on camera distance to avoid pop-in
-    if (cameraPosition) {
-      const distance = BABYLON.Vector3.Distance(cameraPosition, model.root.position);
-      
-      if (distance > customLodDistance) {
-        // Start far away - show billboard or hide model
-        model.root.setEnabled(false);
-        if (lodType === 'billboard' && billboard) {
-          billboard.setEnabled(true);
-        }
-      } else {
-        // Start close up - show model, hide billboard
-        model.root.setEnabled(true);
-        if (billboard) {
-          billboard.setEnabled(false);
-        }
-      }
-    }
+    billboard.setEnabled(false); // Start with billboard disabled - LOD system will manage visibility
     
     // Store for manual LOD management
     lodModels.push({
@@ -423,7 +404,7 @@
         { path: "assets/models/tortle.glb", chance: 0.32, scale: 0.1, billboardScale: 1, lodDistance: 75 },
         { path: "assets/models/frog.glb", chance: 0.39, scale: 0.1, billboardScale: 0.5, lodDistance: 50 },
 
-        { path: "assets/models/tree.glb", chance: 0.3, scale: 1, billboardScale: 2, lodDistance: 100 }
+        { path: "assets/models/tree.glb", chance: 0.3, scale: 1, billboardScale: 2, lodDistance: 200 }
 
       ]
     },
@@ -495,30 +476,11 @@
             mesh.isPickable = false;
           });
           
-          // Add LOD billboard but don't trigger LOD updates yet (prevents flickering)
+          // Add LOD billboard - let LOD system manage all visibility
           addLODBillboard(model, task.scene, task.modelRule, gfx.camera ? gfx.camera.position : null);
           
-          // Set initial state based on distance without triggering LOD system
-          if (gfx.camera) {
-            const distance = BABYLON.Vector3.Distance(gfx.camera.position, model.root.position);
-            const lodDistance = task.modelRule.lodDistance || LOD_DISTANCE;
-            
-            if (distance > lodDistance) {
-              // Far away - start with billboard if applicable
-              model.root.setEnabled(false);
-              const lodEntry = lodModels.find(lod => lod.model === model.root);
-              if (lodEntry && lodEntry.billboard && lodEntry.lodType === 'billboard') {
-                lodEntry.billboard.setEnabled(true);
-              }
-            } else {
-              // Close up - start with 3D model
-              model.root.setEnabled(true);
-              const lodEntry = lodModels.find(lod => lod.model === model.root);
-              if (lodEntry && lodEntry.billboard) {
-                lodEntry.billboard.setEnabled(false);
-              }
-            }
-          }
+          // Start with 3D model disabled - LOD system will enable what's needed
+          model.root.setEnabled(false);
         })
         .catch(err => console.warn('Model loading failed:', err));
     }
@@ -788,6 +750,27 @@
     // Player physics and position updates are now handled in the game loop
     // This render loop only handles rendering and chunk management
     
+    // Super fast camera snap - get there immediately, no catchup lag
+    if (window.cameraTargetDestination && gfx.cameraTarget) {
+      const lerpSpeed = 0.9; // Ultra fast - basically instant
+      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraTargetDestination.x, lerpSpeed);
+      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraTargetDestination.z, lerpSpeed);
+      
+      // Much tighter tolerance - stop immediately when close
+      const distance = BABYLON.Vector3.Distance(gfx.cameraTarget.position, window.cameraTargetDestination);
+      if (distance < 0.01) {
+        // Snap to exact position and stop
+        gfx.cameraTarget.position.x = window.cameraTargetDestination.x;
+        gfx.cameraTarget.position.z = window.cameraTargetDestination.z;
+        window.cameraTargetDestination = null;
+      }
+    }
+    
+    // Update unit logic and behaviors
+    if (window.updateUnits) {
+      updateUnits(0.016); // ~60fps deltaTime
+    }
+    
     // Update unit mesh positions and rotations
     if (window.updateUnitMeshes) {
       updateUnitMeshes();
@@ -796,6 +779,11 @@
     // Update LOD system based on camera position
     if (gfx.camera) {
       updateLOD(gfx.camera.position);
+    }
+    
+    // Update minimap AFTER camera position is finalized
+    if (window.hud && window.hud.updateMinimap) {
+      window.hud.updateMinimap();
     }
     
     // Update visible chunks around camera target
@@ -907,9 +895,9 @@ const box = BABYLON.MeshBuilder.CreateBox("box", {size: 1}, scene);
     // Camera setup complete
 
     camera.upperRadiusLimit = 9111;
-    camera.lowerRadiusLimit = 5;
+    camera.lowerRadiusLimit = 25;
     camera.maxZ = 9111; // max render distance
-    camera.minZ = .5; // minimum render distance
+    camera.minZ = 1.5; // minimum render distance
     camera.fov = .8; // default .8
  
 
@@ -930,7 +918,7 @@ const box = BABYLON.MeshBuilder.CreateBox("box", {size: 1}, scene);
     
     // Set up camera properties for forge editing
     camera.fov = 0.8;
-    camera.minZ = 0.1;
+    camera.minZ = 1;
     camera.maxZ = 9001;
     
     // Camera controls

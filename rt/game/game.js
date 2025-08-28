@@ -31,9 +31,17 @@ window.gameLoop = {
       this.deltaTime = 0.1; // Cap at 100ms
     }
     
+
+
     // Debug: log dt values
     // console.log("Game loop dt:", this.deltaTime, "ms:", this.deltaTime * 1000);
     
+
+    // Update units
+    if (window.units && window.units.update) {
+      window.units.update();
+    }
+
     // Update physics
     if (window.player && window.player.pbody && window.player.pbody.integrate) {
       window.player.pbody.integrate(this.deltaTime, true, true);
@@ -48,3 +56,6 @@ window.gameLoop = {
     requestAnimationFrame(() => this.update());
   }
 };
+
+
+

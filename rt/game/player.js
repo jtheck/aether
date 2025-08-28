@@ -25,6 +25,11 @@ function Player(ops){
   this.name;
   this.color;
 
+  // Player's agora location (in tile coordinates)
+  this.agora = { x: 15, y: 15 };
+
+  // Player's controlled units
+  this.units = [];
 
   this.cursor = new PBody();
   

@@ -257,10 +257,10 @@ function getRandomColor() {
           // Get world position where we right-clicked
           const worldPos = pickResult.pickedPoint;
           
-          // Move camera target to this position
+          // Set target destination for smooth camera movement
           if (gfx.cameraTarget) {
-            gfx.cameraTarget.position.x = worldPos.x;
-            gfx.cameraTarget.position.z = worldPos.z;
+            // Store the target destination for lerping
+            window.cameraTargetDestination = new BABYLON.Vector3(worldPos.x, gfx.cameraTarget.position.y, worldPos.z);
           }
           
           // Also move the player physics body to the same position

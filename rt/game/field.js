@@ -522,11 +522,14 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
 
 
 
-let liveField = new Field({width: 118, height: 118, seed: 52});
+let liveField = new Field({width: 33, height: 33, seed: 52});
 
 // Set random time of day for this field (0 = midnight, 0.5 = noon, 1 = midnight)
 // Bias toward daytime hours (0.2 to 0.8) for better visibility
 liveField.timeOfDay = 0.2 + (Math.random() * 0.6);
+
+// Make liveField available globally for other systems
+window.liveField = liveField;
 
 
 

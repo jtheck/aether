@@ -7,8 +7,8 @@ const UnitTypes = {
   villager: {
     name: "Villager",
     category: "npc",
-    model: "assets/models/tortle.glb",
-    scale: 0.1,
+    model: "assets/models/villager.glb",
+    scale: 0.5, // Made bigger so they're visible
     health: 50,
     speed: 2,
     size: 1,
@@ -137,30 +137,34 @@ function getUnitsByCategory(category) {
     return Object.keys(UnitTypes).filter(type => UnitTypes[type].category === category);
 }
 
-// Global units array
-const gameUnits = [];
+// Global units arrays
+const gameUnits = []; // All units combined (for rendering)
+const neutralUnits = []; // Wild/neutral units only
 
 // Sprinkle units across the terrain
 function sprinkleUnits() {
     console.log("Sprinkling units across the terrain...");
     
-    const unitTypes = ['villager', 'frog_scout', 'mushroom_mage', 'bird_messenger'];
+    const unitTypes = ['frog_scout', 'mushroom_mage', 'bird_messenger']; // No villagers in neutral spawn
     
-    // Spread units from (0,0) to (10,10) 
-    for (let x = 1; x <= 10; x += 2) {
-        for (let z = 1; z <= 10; z += 2) {
+    // Spread units from (0,0) to (20,20) with more spacing
+    for (let x = 2; x <= 20; x += 4) {
+        for (let z = 2; z <= 20; z += 4) {
             // Random unit type
             const randomType = unitTypes[Math.floor(Math.random() * unitTypes.length)];
             
             // Add some random offset within the grid cell
-            const offsetX = (Math.random() - 0.5) * 1.5;
-            const offsetZ = (Math.random() - 0.5) * 1.5;
+            const offsetX = (Math.random() - 0.5) * 3;
+            const offsetZ = (Math.random() - 0.5) * 3;
             
             const unit = new Unit(randomType, {
                 x: x + offsetX, 
                 y: 0, 
                 z: z + offsetZ
             });
+            
+            // Set as neutral unit
+            unit.owner = 'neutral';
             
             // Add random rotation to the unit and physics body
             const randomRotation = Math.random() * Math.PI * 2;
@@ -170,6 +174,8 @@ function sprinkleUnits() {
                 console.log(`Unit ${unit.name} rotation set to:`, randomRotation, 'rad =', (randomRotation * 180/Math.PI).toFixed(1), 'deg');
             }
             
+            // Add to neutral units AND gameUnits for rendering
+            neutralUnits.push(unit);
             gameUnits.push(unit);
         }
     }
@@ -184,6 +190,7 @@ function spawnUnitModels(scene) {
     gameUnits.forEach(unit => {
         if (!unit.mesh && window.gfx && window.gfx.getModel) {
             // Load the 3D model for this unit
+            console.log(`🎮 Loading model ${unit.model} for ${unit.name} (scale: ${unit.scale})`);
             window.gfx.getModel(unit.model, scene).then(model => {
                 unit.mesh = model.root;
                 unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
@@ -193,6 +200,7 @@ function spawnUnitModels(scene) {
                     unit.mesh.position.x = unit.pb.state.loc.x;
                     unit.mesh.position.y = unit.pb.state.loc.y;
                     unit.mesh.position.z = unit.pb.state.loc.z;
+                    console.log(`📍 ${unit.name} positioned at (${unit.mesh.position.x.toFixed(1)}, ${unit.mesh.position.y.toFixed(1)}, ${unit.mesh.position.z.toFixed(1)}) with scale ${unit.scale}`);
                 }
                 
                 // Apply random rotation
@@ -200,11 +208,53 @@ function spawnUnitModels(scene) {
                     unit.mesh.rotation.y = unit.rotation;
                 }
                 
-                console.log(`Spawned model for ${unit.name} at`, unit.pb.state.loc);
+                console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
                 console.warn(`Failed to load model for ${unit.name}:`, err);
             });
         }
+    });
+}
+
+// Update unit logic, AI, and behaviors
+function updateUnits(deltaTime) {
+    gameUnits.forEach(unit => {
+        if (!unit.pb || !unit.pb.state) return;
+        
+        // Update unit behaviors based on type
+        if (unit.name.includes('Tortle')) {
+            // Tortles get random turning impulses
+            const turnTimeOffset = unit.id.charCodeAt(1) * 50;
+            const turnCycle = Math.sin((Date.now() + turnTimeOffset) * 0.00008); // Very slow
+            
+            // Only apply impulse when cycle is near peaks/valleys (occasional turns)
+            if (Math.abs(turnCycle) > 0.95) {
+                const turnImpulse = Math.sign(turnCycle) * 0.001; // Small angular impulse
+                
+                // Initialize angular velocity if it doesn't exist
+                if (!unit.pb.state.angularVel) {
+                    unit.pb.state.angularVel = { x: 0, y: 0, z: 0 };
+                }
+                
+                // Apply turning impulse to angular velocity
+                unit.pb.state.angularVel.y += turnImpulse;
+            }
+            
+            // Apply angular velocity to rotation (with damping)
+            if (unit.pb.state.angularVel) {
+                unit.pb.state.rot.y += unit.pb.state.angularVel.y * deltaTime;
+                
+                // Angular damping (tortles slow down naturally)
+                unit.pb.state.angularVel.y *= 0.98; // 2% damping per frame
+            }
+        }
+        
+        // Add more unit AI/behavior updates here
+        // - Movement towards targets
+        // - State changes (idle -> moving -> attacking)
+        // - Resource gathering
+        // - Combat logic
+        // etc.
     });
 }
 
@@ -223,7 +273,56 @@ function updateUnitMeshes() {
                     const flyHeight = 8 + Math.sin(Date.now() * 0.002 + unit.id.charCodeAt(0)) * 1.5;
                     unit.mesh.position.y = unit.pb.state.loc.y + flyHeight;
                 } else {
-                    unit.mesh.position.y = unit.pb.state.loc.y;
+                    // Ground units with occasional hopping
+                    let hopHeight = 0;
+                    
+                    // Different behavior by unit type
+                    if (unit.name.includes('Mushroom')) {
+                        // Mushrooms breathe (scale) instead of hop
+                        const breatheTimeOffset = unit.id.charCodeAt(0) * 50;
+                        const breatheCycle = Math.sin((Date.now() + breatheTimeOffset) * 0.001); // Slow breathing
+                        const scaleVariation = 1.0 + (breatheCycle * 0.08); // ±8% size variation
+                        
+                        unit.mesh.scaling.setAll(unit.scale * scaleVariation);
+                        unit.mesh.position.y = unit.pb.state.loc.y; // No hopping
+                        
+                    } else if (unit.name.includes('Tortle')) {
+                        // Tortles don't hop - they're slow and steady, just pivot occasionally
+                        unit.mesh.position.y = unit.pb.state.loc.y; // No hopping - stay on ground!
+                        
+                        // Reset scaling to base scale (no breathing like mushrooms)
+                        unit.mesh.scaling.setAll(unit.scale);
+                        
+                    } else {
+                        // Only frogs and villagers hop
+                        let hopFrequency, hopAmplitude;
+                        if (unit.name.includes('Frog')) {
+                            // Each frog gets a unique hop frequency stretch factor
+                            const stretchFactor = 0.7 + (unit.id.charCodeAt(2) % 100) / 100 * 0.6; // 0.7x to 1.3x speed
+                            hopFrequency = 0.0012 * stretchFactor; // Individual hop timing!
+                            hopAmplitude = 1.2;
+                        } else if (unit.name.includes('Villager')) {
+                            hopFrequency = 0.0003; // Occasional subtle hops
+                            hopAmplitude = 0.4;
+                        } else {
+                            // Other units (if any) get rare tiny hops
+                            hopFrequency = 0.0002;
+                            hopAmplitude = 0.3;
+                        }
+                        
+                        // Create a pulsing hop pattern based on time and unit ID
+                        const timeOffset = unit.id.charCodeAt(0) * 100;
+                        const hopCycle = Math.sin((Date.now() + timeOffset) * hopFrequency);
+                        
+                        // Only hop when the sine wave is positive and above threshold
+                        if (hopCycle > 0.7) {
+                            // Quick hop up and down
+                            const hopPhase = (hopCycle - 0.7) / 0.3; // Normalize to 0-1
+                            hopHeight = Math.sin(hopPhase * Math.PI) * hopAmplitude;
+                        }
+                        
+                        unit.mesh.position.y = unit.pb.state.loc.y + hopHeight;
+                    }
                 }
             }
             
@@ -231,6 +330,8 @@ function updateUnitMeshes() {
             if (unit.pb.state.rot) {
                 // Disable quaternion rotation to force Euler angles
                 unit.mesh.rotationQuaternion = null;
+                
+                // Visual follows physics rotation directly (logic updates handle behavior)
                 unit.mesh.rotation.x = unit.pb.state.rot.x;
                 unit.mesh.rotation.y = unit.pb.state.rot.y;
                 unit.mesh.rotation.z = unit.pb.state.rot.z;
@@ -265,6 +366,7 @@ function debugUnitRotations() {
     });
 }
 
+
 // Clear and respawn all units
 function respawnUnits(scene) {
     gameUnits.length = 0; // Clear existing units
@@ -272,11 +374,62 @@ function respawnUnits(scene) {
     spawnUnitModels(scene);
 }
 
+// Spawn villagers around the player's agora
+function spawnAgoraVillagers() {
+    console.log("🏘️ spawnAgoraVillagers called!");
+    
+    if (!window.player || !window.player.agora) {
+        console.warn("❌ Player or agora not found for villager spawning");
+        return;
+    }
+    
+    if (!TILE_SIZE) {
+        console.warn("❌ TILE_SIZE not defined");
+        return;
+    }
+    
+    const agoraX = window.player.agora.x * TILE_SIZE;
+    const agoraZ = window.player.agora.y * TILE_SIZE;
+    
+    console.log(`📍 Agora at (${agoraX}, ${agoraZ}), spawning villagers...`);
+    
+    // Spawn 8-12 villagers around the agora
+    const villagerCount = 8 + Math.floor(Math.random() * 5);
+    console.log(`👥 Will spawn ${villagerCount} villagers`);
+    
+    for (let i = 0; i < villagerCount; i++) {
+        // Random position around agora (within 3-6 tiles)
+        const angle = (i / villagerCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+        const distance = 3 + Math.random() * 3;
+        
+        const x = agoraX + Math.cos(angle) * distance * TILE_SIZE;
+        const z = agoraZ + Math.sin(angle) * distance * TILE_SIZE;
+        
+        const villager = new Unit('villager', { x, y: 0, z });
+        villager.owner = 'player';
+        
+        // Random rotation
+        const randomRotation = Math.random() * Math.PI * 2;
+        villager.rotation = randomRotation;
+        if (villager.pb.state && villager.pb.state.rot) {
+            villager.pb.state.rot.y = randomRotation;
+        }
+        
+        // Add to player's units
+        window.player.units.push(villager);
+        gameUnits.push(villager); // Also add to global array for rendering (but NOT neutralUnits)
+        
+        console.log(`🏘️ Spawned villager ${i+1} at agora`);
+    }
+    
+    console.log(`✅ Spawned ${villagerCount} villagers around the agora`);
+}
+
 // Auto-initialize units when the scene is ready
 function autoInitUnits() {
     if (window.gfx && window.gfx.scene) {
         console.log("Auto-initializing units...");
-        sprinkleUnits();
+        sprinkleUnits(); // Neutral units spread across map
         spawnUnitModels(window.gfx.scene);
     } else {
         // Try again in 1 second if scene isn't ready
@@ -288,11 +441,14 @@ function autoInitUnits() {
 if (typeof window !== 'undefined') {
     window.UnitTypes = UnitTypes;
     window.Unit = Unit;
+    window.spawnAgoraVillagers = spawnAgoraVillagers;
     window.getUnitDef = getUnitDef;
     window.getUnitsByCategory = getUnitsByCategory;
-    window.gameUnits = gameUnits;
+    window.gameUnits = gameUnits; // All units (for rendering)
+    window.neutralUnits = neutralUnits; // Just neutral units
     window.sprinkleUnits = sprinkleUnits;
     window.spawnUnitModels = spawnUnitModels;
+    window.updateUnits = updateUnits;
     window.updateUnitMeshes = updateUnitMeshes;
     window.respawnUnits = respawnUnits;
     window.debugUnitRotations = debugUnitRotations;

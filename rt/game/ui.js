@@ -89,7 +89,10 @@ function getRandomColor() {
   }
 
 
+  let prevMenu = 'main_menu';
   ui.showMenu = function(menuId){
+    prevMenu = menuId;
+
     // Hide all menus
     document.getElementById('main_menu').style.display = 'none';
     document.getElementById('settings_menu').style.display = 'none';
@@ -132,11 +135,51 @@ function getRandomColor() {
     // }
   
     switch(evt.code){  
-      // scene explorer
+      case 'KeyS':
+        if (state == true){
+          // Move player physics body left
+          if (window.player && window.player.pbody) {
+            window.player.pbody.state.loc.x -= 1;
+          }
+        }
+      break;
+      case 'KeyF':
+        if (state == true){
+          // Move player physics body right
+          if (window.player && window.player.pbody) {
+            window.player.pbody.state.loc.x += 1;
+          }
+        }
+      break;
+      case 'KeyE':
+        if (state == true){
+          // Apply forward impulse
+          if (window.player && window.player.pbody && window.player.pbody.imp) {
+            window.player.pbody.imp.z += 1000; // MAXIMUM POWER!
+            // console.log("Applied forward impulse, new imp.z:", window.player.pbody.imp.z);
+          }
+        }
+      break;
+      case 'KeyD':
+        if (state == true){
+          // Apply backward impulse
+          if (window.player && window.player.pbody && window.player.pbody.imp) {
+            window.player.pbody.imp.z -= 1000; // MAXIMUM POWER!
+            // console.log("Applied backward impulse, new imp.z:", window.player.pbody.imp.z);
+          }
+        }
+      break;
       case 'Escape':
-        ui.hideMenu();
+        if (state == true){
+          if (document.getElementById('menu').style.display == 'none'){
+            ui.showMenu(prevMenu);
+          } else {
+            ui.hideMenu();
+          }
+        }
       break;
       case 'F9':
+        // scene explorer
         if (state == true){
           if (gfx.scene.debugLayer.isVisible())
             gfx.scene.debugLayer.hide();
@@ -159,6 +202,97 @@ function getRandomColor() {
     //   return true;
   }; // end keyInput
 
+  ui.rightClick = function(e) {
+    e.preventDefault();
+    return false;
+  };
+
+  // Handle pointer events (mouse clicks, touch)
+  ui.handlePointer = function(e) {
+    e.preventDefault();
+    
+    // Get pointer position
+    const rect = gfx.canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    
+    // Convert screen coordinates to world coordinates
+    // All models are non-pickable so ray will pass through to terrain
+    const pickResult = gfx.scene.pick(x, y);
+    
+    if (pickResult.hit) {
+      // Handle different types of clicks
+      if (e.type === 'pointerdown') {
+        // Left click - could be for placing tiles, selecting objects, etc.
+        
+        // If clicking on terrain, get precise tile coordinates
+        if (pickResult.pickedMesh.name.includes('Mesh')) {
+          // Get the world position where we clicked
+          const worldPos = pickResult.pickedPoint;
+          
+          // Convert world position to tile coordinates
+          const tileX = Math.floor(worldPos.x);
+          const tileZ = Math.floor(worldPos.z);
+          
+          // Get the specific tile at these coordinates
+          if (liveField && liveField.tiles) {
+            const tileIndex = tileZ * liveField.width + tileX;
+            if (liveField.tiles[tileIndex]) {
+              const tile = liveField.tiles[tileIndex];
+              
+              // Now you can modify this tile!
+              // Example: tile.type = 25; // Change to dirt
+              // Example: tile.type = 5;  // Change to grass
+            }
+          }
+        }
+      }
+      
+      // Handle right click for moving camera target
+      if (e.type === 'pointerdown' && e.button === 2) { // Right mouse button
+        if (pickResult.hit) {
+          // Prevent default only for our custom right-click action
+          e.preventDefault();
+          
+          // Get world position where we right-clicked
+          const worldPos = pickResult.pickedPoint;
+          
+          // Move camera target to this position
+          if (gfx.cameraTarget) {
+            gfx.cameraTarget.position.x = worldPos.x;
+            gfx.cameraTarget.position.z = worldPos.z;
+          }
+          
+          // Also move the player physics body to the same position
+          if (window.player && window.player.pbody) {
+            window.player.pbody.state.loc.x = worldPos.x;
+            window.player.pbody.state.loc.z = worldPos.z;
+            
+            // Update the player's transform node position
+            if (window.player.transformNode) {
+              window.player.transformNode.position.x = worldPos.x;
+              window.player.transformNode.position.z = worldPos.z;
+            }
+          }
+        }
+      }
+    } else {
+      // Clicked on empty space
+      if (e.type === 'pointerdown') {
+        // Empty space clicked
+      }
+    }
+  };
+
+
+
+
+
+
+
+
+
+  
 }(window.ui = window.ui || {}));
 
 

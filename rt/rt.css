@@ -58,7 +58,7 @@ html, body {
   width: 259px;
   height: 259px;
   background-image: url('assets/menu-bg.jpg');
-
+  display: block;
 }
 /* #menu::before {
   content: '';
@@ -78,6 +78,7 @@ html, body {
   top: 0px;
   left: 0px;
   width: 24px;
+  height: 24px;
   padding: 4px;
   fill: White;
   cursor: pointer;
@@ -222,6 +223,14 @@ html, body {
 #settings_menu {
   display: none;
 }
+#fps_meter {
+
+  position: absolute;
+  top: 6px;
+  right: 34px;
+  font-size: .8em;
+  font-family: monospace;
+}
 
 #player_menu {
   display: none;
@@ -305,8 +314,8 @@ a:after{
   text-align: right;
   height: 42px;
   margin: 24px;
-  margin-top: -16px;
-  margin-bottom: 0px;
+  margin-top: -8px;
+  margin-bottom: -3px;
   color: lightgrey;
   background: black;
   overflow: auto;
@@ -316,7 +325,10 @@ a:after{
 #scene-explorer-host {
   z-index: 10;
   position: absolute! important;
+  /* pointer-events: auto !important; */
 }
 #inspector-host {
+  /* pointer-events: auto !important; */
+  /* z-index: 10; */
   position: absolute! important;
 }

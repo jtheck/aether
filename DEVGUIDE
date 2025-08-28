@@ -6,3 +6,34 @@ To deploy:
   - Upload changed files
  - Go to CLoudfront -> Distributions
   - Run Invalidation " /* "
+
+
+
+
+
+The Bitmask Logic:
+Bit 0 (North): Set if North neighbor is different
+Bit 1 (East): Set if East neighbor is different
+Bit 2 (South): Set if South neighbor is different
+Bit 3 (West): Set if West neighbor is different
+"Bridges Cross" Mapping:
+
+  // bridges cross mapping
+  const caseToAtlasTile = {
+    0: 0,   // Case 0 (all corners empty) → Atlas tile 0
+    1: 12,  // Case 1 (bottom-left only) → Atlas tile 12
+    2: 3,   // Case 2 (top-left only) → Atlas tile 3
+    3: 7,   // Case 3 (bottom-left + top-left) → Atlas tile 6
+    4: 1,   // Case 4 (bottom-right only) → Atlas tile 1
+    5: 15,  // Case 5 (bottom-left + bottom-right) → Atlas tile 15
+    6: 8,   // Case 6 (top-left + bottom-right) → Atlas tile 8
+    7: 14,   // Case 7 (three corners) → Atlas tile 9
+    8: 4,   // Case 8 (top-right only) → Atlas tile 4
+    9: 2,   // Case 9 (three corners) → Atlas tile 2
+    10: 5,  // Case 10 (top-left + top-right) → Atlas tile 5
+    11: 11, // Case 11 (three corners) → Atlas tile 11
+    12: 13, // Case 12 (bottom-right + top-right) → Atlas tile 13
+    13: 9, // Case 13 (three corners) → Atlas tile 14
+    14: 6,  // Case 14 (three corners) → Atlas tile 7
+    15: 10  // Case 15 (all corners filled) → Atlas tile 10
+  };

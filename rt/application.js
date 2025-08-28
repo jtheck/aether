@@ -24,8 +24,12 @@ window.aud = {};  // Audio
 
     gfx.init();
 
+    // Wait for the scene to be ready before initializing the player
+    gfx.scene.whenReadyAsync().then(function() {
+      initPlayer();
+    });
 
-    // tr.initPlayer();
+    
     // net.init();
     // gfx.crank()
     app.initInputListeners();
@@ -81,9 +85,9 @@ window.aud = {};  // Audio
     document.addEventListener('keydown', ui.keyInput, false);
     document.addEventListener('keyup', ui.keyInput, false);
   
-    // document.addEventListener('pointermove', (e) => {ui.handlePointer(e)});
-    // document.addEventListener('pointerup', (e) => {ui.handlePointer(e)});
-    // document.addEventListener('pointerdown', (e) => {ui.handlePointer(e)});
+    document.addEventListener('pointermove', (e) => {ui.handlePointer(e)});
+    document.addEventListener('pointerup', (e) => {ui.handlePointer(e)});
+    document.addEventListener('pointerdown', (e) => {ui.handlePointer(e)});
 
   
     // Disable Right Click menu

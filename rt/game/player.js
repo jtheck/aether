@@ -172,6 +172,21 @@ Player.prototype.loadFrogMesh = function() {
     model.root.parent = self.transformNode;
     // Scale the frog appropriately for the player
     model.root.scaling = new BABYLON.Vector3(0.21, 0.21, 0.21);
+    
+    // Apply the player's color to the frog model
+    if (window.currentPlayerColor) {
+      self.color = window.currentPlayerColor;
+      
+      // Create a material with the player's color
+      const playerMaterial = new BABYLON.StandardMaterial('playerMaterial', self.scene);
+      playerMaterial.diffuseColor = BABYLON.Color3.FromHexString(window.currentPlayerColor.replace('#', ''));
+      playerMaterial.emissiveColor = BABYLON.Color3.FromHexString(window.currentPlayerColor.replace('#', '')).scale(0.2); // Add slight glow
+      
+      // Apply the material to the frog model
+      model.root.material = playerMaterial;
+      
+      console.log('🎨 Applied player color to frog:', window.currentPlayerColor);
+    }
   }).catch(function(error) {
     console.error("Failed to load frog mesh:", error);
   });

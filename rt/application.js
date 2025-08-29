@@ -91,7 +91,9 @@ window.aud = {};  // Audio
     document.addEventListener('pointerup', (e) => {ui.handlePointer(e)});
     document.addEventListener('pointerdown', (e) => {ui.handlePointer(e)});
 
-  
+    // Add wheel event for camera rotation
+    document.addEventListener('wheel', ui.handleWheel, { passive: false });
+
     // Disable Right Click menu
     document.addEventListener("contextmenu", ui.rightClick, false);
   };

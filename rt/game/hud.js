@@ -195,11 +195,26 @@
     centerMesh.material = centerMaterial;
     centerMesh.parent = radialMenu;
     
+    // Make center mesh pickable for click detection
+    centerMesh.isPickable = true;
+    
     // Render on top of terrain
     centerMesh.renderingGroupId = 1;
     
     // Store center mesh reference
     hud.centerMesh = centerMesh;
+    
+    // Add click detection for center mesh
+    centerMesh.actionManager = new BABYLON.ActionManager(hud.scene);
+    centerMesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+      BABYLON.ActionManager.OnPickTrigger,
+      function() {
+        if (radialMenuVisible) {
+          console.log('🎯 Center mesh clicked - closing radial menu');
+          hud.hideRadialMenu();
+        }
+      }
+    ));
     
     console.log('3D Radial menu created with billboard mode');
   }
@@ -696,6 +711,9 @@
       // Reuse existing sphere
       indicator = minimapIndicators[index];
       indicator.setEnabled(true);
+      
+      // Update the linked unit reference for reused indicators
+      indicator.linkedUnit = unit;
     } else {
       // Create new sphere
       indicator = BABYLON.MeshBuilder.CreateSphere(`minimap_${index}`, {diameter: 0.15}, hud.scene);
@@ -704,6 +722,9 @@
       const material = new BABYLON.StandardMaterial(`minimap_mat_${index}`, hud.scene);
       material.disableLighting = true; // Make them glow like the center sphere
       indicator.material = material;
+      
+      // Make indicator clickable for unit selection
+      indicator.isPickable = true;
       
       minimapIndicators.push(indicator);
     }
@@ -726,6 +747,70 @@
     
     // Store edge info for this unit
     unit.hudCoord = { edgePos, rightDot, upDot };
+    
+          // Add click functionality to the indicator (only for newly created ones)
+      if (!indicator.actionManager) {
+        indicator.actionManager = new BABYLON.ActionManager(hud.scene);
+        
+        // Store direct reference to the unit this indicator represents
+        indicator.linkedUnit = unit;
+        
+        // Add double-click detection for "select all of type"
+        let lastClickTime = 0;
+        const DOUBLE_CLICK_DELAY = 300;
+        
+        // Single click action - select the unit
+        indicator.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+          BABYLON.ActionManager.OnPickTrigger,
+          function() {
+            const currentTime = Date.now();
+            const linkedUnit = indicator.linkedUnit; // Get the unit from the indicator
+            
+            if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY) {
+              // Double-click detected! Select all units of this type
+              console.log(`🔄 Double-clicked minimap indicator for ${linkedUnit.name} (${linkedUnit.type}) - selecting all units of this type`);
+              
+              if (window.ai && window.ai.clearSelection && window.ai.selectUnit && window.player && window.player.units) {
+                // Clear current selection
+                window.ai.clearSelection();
+                
+                // Find all units of the same type and select them
+                const unitsOfSameType = window.player.units.filter(u => 
+                  u.type === linkedUnit.type && u.health > 0
+                );
+                
+                console.log(`🎯 Found ${unitsOfSameType.length} units of type ${linkedUnit.type}`);
+                
+                // Select all units of the same type
+                unitsOfSameType.forEach(u => {
+                  window.ai.selectUnit(u);
+                });
+              }
+              
+              lastClickTime = 0; // Reset for next double-click
+            } else {
+              // Single click - select just this unit
+              console.log(`🗺️ Minimap indicator clicked for unit: ${linkedUnit.name}`);
+              
+              // Handle unit selection the same way as normal unit clicks
+              if (window.ai && window.ai.handleUnitClick) {
+                // Convert edge position to screen coordinates for the AI system
+                const rect = hud.canvas.getBoundingClientRect();
+                const screenX = edgePos.x + rect.left;
+                const screenY = edgePos.y + rect.top;
+                
+                // Use the same logic as normal unit clicks
+                window.ai.handleUnitClick(screenX, screenY, false); // false = not Ctrl+click
+              }
+              
+              lastClickTime = currentTime;
+              
+              // IMPORTANT: Return true to prevent the click from propagating to terrain
+              return true;
+            }
+          }
+        ));
+      }
   }
   
   // Clear all minimap indicators

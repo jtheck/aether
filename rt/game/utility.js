@@ -3,7 +3,48 @@
 
 
 
-
+gfx.makeTable = function(scene){
+  return {
+    SW: {
+      mesh: BABYLON.MeshBuilder.CreateBox("SW", {size: 1}, scene), 
+    },
+    SE: {
+      mesh: BABYLON.MeshBuilder.CreateBox("SE", {size: 1}, scene), 
+    },
+    NE: {
+      mesh: BABYLON.MeshBuilder.CreateBox("NE", {size: 1}, scene),
+    },
+    NW: { 
+      mesh: BABYLON.MeshBuilder.CreateBox("NW", {size: 1}, scene),
+    },
+    N: {
+      mesh: BABYLON.MeshBuilder.CreateBox("N", {size: 1}, scene),
+    },
+    E: {
+      mesh: BABYLON.MeshBuilder.CreateBox("E", {size: 1}, scene),
+    },
+    S: {
+      mesh: BABYLON.MeshBuilder.CreateBox("S", {size: 1}, scene),
+    },
+    W: {
+      mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
+    },
+    NT: {
+      mesh: BABYLON.MeshBuilder.CreateBox("NT", {size: 1}, scene),
+    },
+    ET: {
+      mesh: BABYLON.MeshBuilder.CreateBox("ET", {size: 1}, scene),
+    },
+    ST: {
+      mesh: BABYLON.MeshBuilder.CreateBox("ST", {size: 1}, scene),
+    },
+    WT: {
+      mesh: BABYLON.MeshBuilder.CreateBox("WT", {size: 1}, scene),
+    },
+    FLOOR: {
+      mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
+    }};
+}
 
 
 gfx.stretchTable = function(table) {
@@ -15,7 +56,7 @@ gfx.stretchTable = function(table) {
 
   const halfWidth = width / 2;
   const halfHeight = height / 2;
-  const borderThickness = 4.3;
+  const borderThickness = 3.8;
   // Corners
   let cy=.1;
   table.SW.mesh.position.set(0, cy, 0);
@@ -39,28 +80,62 @@ gfx.stretchTable = function(table) {
   // floorMat.roughness = 0.8; // Slightly rough finish
   // floorMat.disableLighting = false; // Keep this false for emissive to work
 
+  if (liveField.width >= 128){
+    table.NT.mesh.scaling.set(s,sh,s);
+    table.ST.mesh.scaling.set(s,sh,s);
+    table.NT.mesh.position.set(halfWidth, cy, height);
+    table.ST.mesh.position.set(halfWidth, cy, 0);
+    
+    table.NT.mesh.isVisible = true;
+    table.ST.mesh.isVisible = true;
+  } else {
+    table.NT.mesh.isVisible = false;
+    table.ST.mesh.isVisible = false;
+  }
+  if (liveField.height >= 128){
+    table.ET.mesh.scaling.set(s,sh,s);
+    table.WT.mesh.scaling.set(s,sh,s);
+    table.ET.mesh.position.set(height, cy, halfHeight);
+    table.WT.mesh.position.set(0, cy, halfHeight);
+
+    table.ET.mesh.isVisible = true;
+    table.WT.mesh.isVisible = true;
+  } else {
+    table.ET.mesh.isVisible = false;
+    table.WT.mesh.isVisible = false;
+  }
+
+
+
+
 
   // table.FLOOR.mesh.material = floorMat;
 
   let yy= .3;
   let rr=.11;
+  let ss=.6;
   // Side stretches
   table.S.mesh.position.set(halfWidth, yy, height);
-  table.S.mesh.scaling.set(width, .5, borderThickness);
-  table.S.mesh.rotation.set(-rr, 0,0);
+  table.S.mesh.scaling.set(width, ss, borderThickness);
+  table.S.mesh.rotation.set(rr, 0,0);
 
   table.N.mesh.position.set(halfWidth, yy, 0);
-  table.N.mesh.scaling.set(width, .5, borderThickness);
-  table.N.mesh.rotation.set(rr, 0,0);
+  table.N.mesh.scaling.set(width, ss, borderThickness);
+  table.N.mesh.rotation.set(-rr, 0,0);
 
   
   table.E.mesh.position.set(width, yy, halfHeight);
-  table.E.mesh.scaling.set(borderThickness, .5, height);
-  table.E.mesh.rotation.set(0,0,rr);
+  table.E.mesh.scaling.set(borderThickness, ss, height);
+  table.E.mesh.rotation.set(0,0,-rr);
 
   table.W.mesh.position.set(0, yy, halfHeight);
-  table.W.mesh.scaling.set(borderThickness, .5, height);
-  table.W.mesh.rotation.set(0,0,-rr);
+  table.W.mesh.scaling.set(borderThickness, ss, height);
+  table.W.mesh.rotation.set(0,0,rr);
+
+
+
+
+
 
 }
 

@@ -105,6 +105,11 @@
   }
   
   // Billboard texture atlas (single texture with all billboard sprites)
+  // Atlas layout: 8 columns x 8 rows = 64 total slots
+  // Row 0: tree, gate, windvane, tortle, birdy, mushroom, frog, flag
+  // Row 1: rocks_plain, rocks_moss, rocks_snow, windmill, factory, gnome, villager, ae
+  // Row 2: trees, agora, [unused slots 2-7]
+  // Rows 3-7: [unused] - reserved for future models
   let billboardAtlas = null;
   let billboardMaterial = null;
   
@@ -129,6 +134,9 @@
       billboardMaterial = new BABYLON.StandardMaterial('billboardAtlasMat', scene);
       
       // Use the atlas-hd texture for billboards
+      // Expected format: 8 columns x 8 rows (64 total slots) for 1024x1024 texture
+      // Each slot should be 128x128 pixels for optimal quality
+      // Current usage: ~20 slots, plenty of room for expansion
       billboardMaterial.diffuseTexture = new BABYLON.Texture('assets/textures/atlas-hd.png', scene);
       
       // Enable transparency for PNG alpha channel
@@ -150,7 +158,7 @@
   
   // Get or create instanced mesh for a specific model type
   function getBillboardMasterMesh(modelPath, scene) {
-    // Determine model type from path
+    // Determine model type from path - expanded to handle more model types
     let modelType = 'other';
     if (modelPath.includes('tree')) modelType = 'tree';
     else if (modelPath.includes('gate')) modelType = 'gate';
@@ -159,6 +167,17 @@
     else if (modelPath.includes('birdy')) modelType = 'birdy';
     else if (modelPath.includes('mushroom')) modelType = 'mushroom';
     else if (modelPath.includes('frog')) modelType = 'frog';
+    else if (modelPath.includes('flag')) modelType = 'flag';
+    else if (modelPath.includes('rocks_plain')) modelType = 'rocks_plain';
+    else if (modelPath.includes('rocks_moss')) modelType = 'rocks_moss';
+    else if (modelPath.includes('rocks_snow')) modelType = 'rocks_snow';
+    else if (modelPath.includes('windmill')) modelType = 'windmill';
+    else if (modelPath.includes('factory')) modelType = 'factory';
+    else if (modelPath.includes('gnome')) modelType = 'gnome';
+    else if (modelPath.includes('villager')) modelType = 'villager';
+    else if (modelPath.includes('ae')) modelType = 'ae';
+    else if (modelPath.includes('trees')) modelType = 'trees';
+    else if (modelPath.includes('agora')) modelType = 'agora';
     
     // Create master mesh for this type if it doesn't exist
     if (!billboardInstancedMeshes.has(modelType)) {
@@ -186,8 +205,12 @@
       return modelUVCache.get(modelPath);
     }
     
-    const cellSize = 1/8;
+    // 1024x1024 atlas: 8 columns x 8 rows = 64 total slots
+    const cellSizeX = 1/8;  // 8 columns
+    const cellSizeY = 1/8;  // 8 rows
     let cellX = 0, cellY = 0;
+    
+    // Row 0: Basic models
     if (modelPath.includes('tree')) {
       cellX = 0; cellY = 0; // Trees - first cell
     } else if (modelPath.includes('gate')) {
@@ -202,15 +225,42 @@
       cellX = 5; cellY = 0; // Mushrooms - sixth cell
     } else if (modelPath.includes('frog')) {
       cellX = 6; cellY = 0; // Frogs - seventh cell
+    } else if (modelPath.includes('flag')) {
+      cellX = 7; cellY = 0; // Flags - eighth cell
+    }
+    // Row 1: Rock variants and structures
+    else if (modelPath.includes('rocks_plain')) {
+      cellX = 0; cellY = 1; // Plain rocks
+    } else if (modelPath.includes('rocks_moss')) {
+      cellX = 1; cellY = 1; // Mossy rocks
+    } else if (modelPath.includes('rocks_snow')) {
+      cellX = 2; cellY = 1; // Snowy rocks
+    } else if (modelPath.includes('windmill')) {
+      cellX = 3; cellY = 1; // Windmill
+    } else if (modelPath.includes('factory')) {
+      cellX = 4; cellY = 1; // Factory
+    } else if (modelPath.includes('gnome')) {
+      cellX = 5; cellY = 1; // Gnome
+    } else if (modelPath.includes('villager')) {
+      cellX = 6; cellY = 1; // Villager
+    } else if (modelPath.includes('ae')) {
+      cellX = 7; cellY = 1; // AE model
+    }
+    // Row 2: Additional models and variants
+    else if (modelPath.includes('trees')) {
+      cellX = 0; cellY = 2; // Trees (plural)
+    } else if (modelPath.includes('agora')) {
+      cellX = 1; cellY = 2; // Agora
     } else {
-      cellX = 7; cellY = 0; // Others - eighth cell
+      // Default to first slot of row 3 for any other models
+      cellX = 0; cellY = 3;
     }
     
     // UV coordinates for a quad - flipped V to fix upside-down
-    const u1 = cellX * cellSize;
-    const u2 = (cellX + 1) * cellSize;
-    const v1 = 1.0;  // top of texture (flipped)
-    const v2 = 0.0;  // bottom of texture (flipped)
+    const u1 = cellX * cellSizeX;
+    const u2 = (cellX + 1) * cellSizeX;
+    const v1 = 1.0 - (cellY * cellSizeY);      // top of texture (flipped)
+    const v2 = 1.0 - ((cellY + 1) * cellSizeY); // bottom of texture (flipped)
     
     const uvs = [
       u1, v2,  // bottom-left
@@ -219,7 +269,7 @@
       u1, v1   // top-left
     ];
     
-    // console.log(`Model ${modelPath} -> Cell ${cellX} -> UVs: ${u1.toFixed(3)}-${u2.toFixed(3)}`);
+    // console.log(`Model ${modelPath} -> Cell (${cellX},${cellY}) -> UVs: ${u1.toFixed(3)}-${u2.toFixed(3)}, ${v1.toFixed(3)}-${v2.toFixed(3)}`);
     
     modelUVCache.set(modelPath, uvs);
     return uvs;
@@ -227,7 +277,7 @@
 
   // Get a billboard instance from the pool (optimized)
   function getBillboardInstance(modelPath, position, scale, scene) {
-    // Determine model type
+    // Determine model type - expanded to handle more model types
     let modelType = 'other';
     if (modelPath.includes('tree')) modelType = 'tree';
     else if (modelPath.includes('gate')) modelType = 'gate';
@@ -236,6 +286,17 @@
     else if (modelPath.includes('birdy')) modelType = 'birdy';
     else if (modelPath.includes('mushroom')) modelType = 'mushroom';
     else if (modelPath.includes('frog')) modelType = 'frog';
+    else if (modelPath.includes('flag')) modelType = 'flag';
+    else if (modelPath.includes('rocks_plain')) modelType = 'rocks_plain';
+    else if (modelPath.includes('rocks_moss')) modelType = 'rocks_moss';
+    else if (modelPath.includes('rocks_snow')) modelType = 'rocks_snow';
+    else if (modelPath.includes('windmill')) modelType = 'windmill';
+    else if (modelPath.includes('factory')) modelType = 'factory';
+    else if (modelPath.includes('gnome')) modelType = 'gnome';
+    else if (modelPath.includes('villager')) modelType = 'villager';
+    else if (modelPath.includes('ae')) modelType = 'ae';
+    else if (modelPath.includes('trees')) modelType = 'trees';
+    else if (modelPath.includes('agora')) modelType = 'agora';
     
     // Get the master mesh for this type
     const masterMesh = getBillboardMasterMesh(modelPath, scene);
@@ -257,7 +318,7 @@
     instance.position.copyFrom(position);
     
     // Set pivot to bottom of billboard so scaling keeps it grounded
-    instance.setPivotPoint(new BABYLON.Vector3(0, -0.5, 0)); // Bottom of a unit plane
+    instance.setPivotPoint(new BABYLON.Vector3(0, -0.5, 0)); // Bottom of unit plane
     
     // Random rotation variation - just 180° flip for horizontal variety
     // const shouldRotate = Math.random() < 0.5; // 50% chance to rotate 180°
@@ -288,6 +349,17 @@
     else if (instanceName.includes('_birdy_')) billboardInstancePools.get('birdy').push(instance);
     else if (instanceName.includes('_mushroom_')) billboardInstancePools.get('mushroom').push(instance);
     else if (instanceName.includes('_frog_')) billboardInstancePools.get('frog').push(instance);
+    else if (instanceName.includes('_flag_')) billboardInstancePools.get('flag').push(instance);
+    else if (instanceName.includes('_rocks_plain_')) billboardInstancePools.get('rocks_plain').push(instance);
+    else if (instanceName.includes('_rocks_moss_')) billboardInstancePools.get('rocks_moss').push(instance);
+    else if (instanceName.includes('_rocks_snow_')) billboardInstancePools.get('rocks_snow').push(instance);
+    else if (instanceName.includes('_windmill_')) billboardInstancePools.get('windmill').push(instance);
+    else if (instanceName.includes('_factory_')) billboardInstancePools.get('factory').push(instance);
+    else if (instanceName.includes('_gnome_')) billboardInstancePools.get('gnome').push(instance);
+    else if (instanceName.includes('_villager_')) billboardInstancePools.get('villager').push(instance);
+    else if (instanceName.includes('_ae_')) billboardInstancePools.get('ae').push(instance);
+    else if (instanceName.includes('_trees_')) billboardInstancePools.get('trees').push(instance);
+    else if (instanceName.includes('_agora_')) billboardInstancePools.get('agora').push(instance);
     else billboardInstancePools.get('other').push(instance);
   }
 
@@ -421,10 +493,10 @@
       models: [
         // Ordered rarest to most common for priority spawning - THICKER SPAWNS
         { path: "assets/models/mushroom.glb", chance: 0.2, scale: 0.1, billboardScale: 0.5, lodDistance: 75 }, // 20% - rare finds
-        { path: "assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 2.5, lodDistance: 100 }, // 30% - plain rocks
-        { path: "assets/models/rocks_moss.glb", chance: 0.4, scale: 6.5, billboardScale: 4.5, lodDistance: 120 }, // 40% - moss rocks
-        { path: "assets/models/tree.glb", chance: 0.75, scale: .9, billboardScale: 2.8, lodDistance: 200 }, // 70% - THICK FORESTS!
-        { path: "assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 1, lodDistance: 75 }, // 50% - more tortles
+        { path: "assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 3, lodDistance: 150 }, // 30% - plain rocks
+        { path: "assets/models/rocks_moss.glb", chance: 0.4, scale: 7.5, billboardScale: 5.9, lodDistance: 200 }, // 40% - moss rocks
+        { path: "assets/models/trees.glb", chance: 0.75, scale: .9, billboardScale: 3, lodDistance: 150 }, // 70% - THICK FORESTS!
+        { path: "assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 11, lodDistance: 75 }, // 50% - more tortles
         { path: "assets/models/frog.glb", chance: 0.6, scale: 0.1, billboardScale: 0.5, lodDistance: 50 }, // 60% - more frogs
         { path: "assets/models/rocks_snow.glb", chance: 0.95, scale: 11.5, billboardScale: 7.5, lodDistance: 200 } // 95% - snow everywhere!
 
@@ -433,7 +505,7 @@
     // Dirt tiles (20-35) - rocks, gates, etc.
     15: { // DIRT_IN
       models: [
-        { path: "assets/models/tree.glb", chance: 0.5, scale: 1.15, billboardScale: 2, lodDistance: 200 }, // 70% - THICK FORESTS!
+        { path: "assets/models/trees.glb", chance: 0.5, scale: 1.15, billboardScale: 2, lodDistance: 200 }, // 70% - THICK FORESTS!
 
         { path: "assets/models/gate.glb", chance: 0.08, scale: .1, billboardScale: 1.2, lodDistance: 100 },
       ]
@@ -881,6 +953,8 @@
       const cameraLerpSpeed = 0.05; // Normal smooth camera movement
       gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraTargetDestination.x, cameraLerpSpeed);
       gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraTargetDestination.z, cameraLerpSpeed);
+      gfx.cameraTarget.position.y = 5;
+
     }
     
     // Update cursor frog position to show the cursor destination
@@ -902,6 +976,11 @@
     // Update LOD system based on camera position
     if (gfx.camera) {
       updateLOD(gfx.camera.position);
+    }
+    
+    // Update camera rotation smoothly
+    if (window.ui && window.ui.updateCameraRotation) {
+      window.ui.updateCameraRotation();
     }
     
     // Update minimap AFTER camera position is finalized
@@ -1005,45 +1084,7 @@
 
 
 
-
-  gfx.table = {
-    SW: {
-      mesh: BABYLON.MeshBuilder.CreateBox("SW", {size: 1}, scene), 
-    },
-    SE: {
-      mesh: BABYLON.MeshBuilder.CreateBox("SE", {size: 1}, scene), 
-    },
-    NE: {
-      mesh: BABYLON.MeshBuilder.CreateBox("NE", {size: 1}, scene),
-    },
-    NW: { 
-      mesh: BABYLON.MeshBuilder.CreateBox("NW", {size: 1}, scene),
-    },
-    N: {
-      mesh: BABYLON.MeshBuilder.CreateBox("N", {size: 1}, scene),
-    },
-    E: {
-      mesh: BABYLON.MeshBuilder.CreateBox("E", {size: 1}, scene),
-    },
-    S: {
-      mesh: BABYLON.MeshBuilder.CreateBox("S", {size: 1}, scene),
-    },
-    W: {
-      mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
-    },
-    FLOOR: {
-      mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
-
-    }
-  };
-  // log(gfx.table)
-  
-  // Position the table border after it's created
-  // (Will be called from field.js when ready)
- 
-// Note: showWorldAxis is called after scene is ready, not during module initialization
-
-
+    gfx.table = gfx.makeTable(scene);
 
   };
 
@@ -1053,16 +1094,30 @@
   
   gfx.makeCamera = function(scene) {
     let radius = 0;
-    let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 1.25, radius, new Vec3(0, 0, 0), scene);
+    // Set better default camera angle: alpha=-2.5 (horizontal), beta=0.9 (looking slightly down, not straight down)
+    let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 0.9, radius, new Vec3(0, 0, 0), scene);
     gfx.cameraTarget = new BABYLON.TransformNode("zCameraFocus");
+    gfx.cameraTarget.position.y = 5;
     camera.lockedTarget = gfx.cameraTarget;
-    camera.attachControl(gfx.canvas, true);
+    // Attach camera controls but disable left mouse button (only allow right-click and wheel)
+    camera.attachControl(gfx.canvas, false); // false = don't prevent default events
+    
+    // Disable left mouse button camera rotation
+    if (camera.inputs && camera.inputs.attached.pointers) {
+      camera.inputs.attached.pointers.buttons = [1, 2]; // Only middle (1) and right (2) mouse buttons
+    }
+
+    // Disable built-in wheel input since we're handling both rotation and zoom manually
+    if (camera.inputs && camera.inputs.attached.mousewheel) {
+      camera.inputs.attached.mousewheel.detachControl();
+    }
 
     // Camera setup complete
 
-    camera.upperRadiusLimit = 999;
-    camera.lowerRadiusLimit = 25;
-    camera.upperBetaLimit = 1.26; // Limit how high you can look (prevent going too high)
+    camera.upperRadiusLimit = 175;
+    camera.lowerRadiusLimit = 33;
+    camera.upperBetaLimit = 2.1; // Limit how high you can look (prevent going too high)
+    camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
     camera.maxZ = 2001; // max render distance
     camera.minZ = 1.5; // minimum render distance
     camera.fov = .8; // default .8
@@ -1075,6 +1130,11 @@
     camera.angularSensibilityX *= .5;
     camera.angularSensibilityY *= .5;
 
+    // Sync camera rotation targets for smooth wheel control
+    if (window.ui && window.ui.syncCameraRotationTargets) {
+      window.ui.syncCameraRotationTargets();
+    }
+
     return camera;
   };
   
@@ -1083,47 +1143,47 @@
     // Create a universal camera for forge editing - start high above for top-down view
     let camera = new BABYLON.UniversalCamera("forgeCamera", new Vec3(0, 200, 0), scene);
     
-    // Set up camera properties for forge editing
-    camera.fov = 0.8;
-    camera.minZ = 1;
-    camera.maxZ = 2001;
+    // // Set up camera properties for forge editing
+    // camera.fov = 0.8;
+    // camera.minZ = 1;
+    // camera.maxZ = 2001;
     
-    // Camera controls
-    camera.keysUp.push(87);    // W key
-    camera.keysDown.push(83);  // S key
-    camera.keysLeft.push(65);  // A key
-    camera.keysRight.push(68); // D key
-    camera.keysUpward.push(81);   // Q key (rotate up)
-    camera.keysDownward.push(69); // E key (rotate down)
+    // // Camera controls
+    // camera.keysUp.push(87);    // W key
+    // camera.keysDown.push(83);  // S key
+    // camera.keysLeft.push(65);  // A key
+    // camera.keysRight.push(68); // D key
+    // camera.keysUpward.push(81);   // Q key (rotate up)
+    // camera.keysDownward.push(69); // E key (rotate down)
     
-    // Make keyboard movement MUCH faster
-    camera.speed = 2.0;        // Base movement speed
-    camera.angularSpeed = 0.5; // Rotation speed
+    // // Make keyboard movement MUCH faster
+    // camera.speed = 2.0;        // Base movement speed
+    // camera.angularSpeed = 0.5; // Rotation speed
     
-    // Mouse controls
-    camera.attachControl(gfx.canvas, true);
+    // // Mouse controls
+    // camera.attachControl(gfx.canvas, true);
     
-    // Adjust sensitivity for precise editing - MUCH faster now!
-    camera.angularSensibilityX = 5; // 10x faster mouse look
-    camera.angularSensibilityY = 5; // 10x faster mouse look
+    // // Adjust sensitivity for precise editing - MUCH faster now!
+    // camera.angularSensibilityX = 5; // 10x faster mouse look
+    // camera.angularSensibilityY = 5; // 10x faster mouse look
     
-    // Pan and zoom settings - MUCH faster now!
-    camera.panningSensibility = 5; // 10x faster panning
-    camera.wheelPrecision = 0.1; // 5x faster zoom (lower = faster)
+    // // Pan and zoom settings - MUCH faster now!
+    // camera.panningSensibility = 5; // 10x faster panning
+    // camera.wheelPrecision = 0.1; // 5x faster zoom (lower = faster)
     
-    // Disable inertia for precise control
-    camera.inertia = 0;
+    // // Disable inertia for precise control
+    // camera.inertia = 0;
     
-    // Enable right-click panning
-    camera.panningInertia = 0;
+    // // Enable right-click panning
+    // camera.panningInertia = 0;
     
-    // Set up camera constraints for forge editing
-    camera.lowerRadiusLimit = 4;   // Minimum zoom distance
-    camera.upperRadiusLimit = 200; // Maximum zoom distance for larger field
-    camera.upperBetaLimit = 1.29;
-    camera.beta = 1;
-    // Set initial position and target
-    camera.setTarget(new Vec3(0, 0, 0));
+    // // Set up camera constraints for forge editing
+    // camera.lowerRadiusLimit = 2;   // Minimum zoom distance
+    // camera.upperRadiusLimit = 200; // Maximum zoom distance for larger field
+    // camera.upperBetaLimit = 1.29;
+    // camera.beta = 1;
+    // // Set initial position and target
+    // camera.setTarget(new Vec3(0, 0, 0));
     
     return camera;
   };

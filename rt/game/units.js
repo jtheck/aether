@@ -33,8 +33,8 @@ const UnitTypes = {
   tree_guardian: {
     name: "Tree Guardian",
     category: "military", 
-    model: "assets/models/tree.glb",
-    scale: 0.8,
+    model: "assets/models/trees.glb",
+    scale: 11.8,
     health: 150,
     speed: 1,
     size: 2,

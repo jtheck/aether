@@ -78,6 +78,9 @@ function getRandomColor() {
     let pName = getRandomName();
     let pColor = getRandomColor();
 
+    // Store the color globally so the player can access it
+    window.currentPlayerColor = pColor;
+
     const playerName = document.getElementById('player_b');
     playerName.innerHTML = pName;
     playerName.style.color = pColor;
@@ -85,6 +88,47 @@ function getRandomColor() {
     const playerTitle = document.getElementById('player_menu_title');
     playerTitle.innerHTML = pName;
     playerTitle.style.color = pColor;
+    
+    // Set up color picker event listener
+    const colorPicker = document.getElementById('colorPicker');
+    if (colorPicker) {
+      // Set initial color picker value to current player color
+      colorPicker.value = pColor;
+      
+      // Listen for color changes
+      colorPicker.addEventListener('change', function(e) {
+        const newColor = e.target.value;
+        
+        // Update both player name locations with new color
+        if (playerName) {
+          playerName.style.color = newColor;
+        }
+        if (playerTitle) {
+          playerTitle.style.color = newColor;
+        }
+        
+        // Update the player's color property and apply to frog model
+        if (window.player) {
+          window.player.color = newColor;
+          
+          // Apply color to the frog model if it exists
+          if (window.player.frog && window.player.frog.root) {
+            // Create a new material with the player's color
+            const playerMaterial = new BABYLON.StandardMaterial('playerMaterial', gfx.scene);
+            playerMaterial.diffuseColor = BABYLON.Color3.FromHexString(newColor.replace('#', ''));
+            playerMaterial.emissiveColor = BABYLON.Color3.FromHexString(newColor.replace('#', '')).scale(0.2); // Add slight glow
+            
+            // Apply the material to the frog model
+            window.player.frog.root.material = playerMaterial;
+          }
+        }
+        
+        // Store the new color for persistence (optional)
+        window.currentPlayerColor = newColor;
+        
+        console.log('Player color updated to:', newColor);
+      });
+    }
 
   }
 
@@ -187,6 +231,38 @@ function getRandomColor() {
             gfx.scene.debugLayer.show();
         }       
       break;
+      
+      // Camera rotation controls
+      case 'KeyQ':
+        if (state == true && gfx.camera) {
+          // Rotate camera left
+          cameraRotationTarget.alpha -= 0.2;
+        }
+      break;
+      case 'KeyE':
+        if (state == true && gfx.camera) {
+          // Rotate camera right
+          cameraRotationTarget.alpha += 0.2;
+        }
+      break;
+      case 'KeyR':
+        if (state == true && gfx.camera) {
+          // Rotate camera up
+          cameraRotationTarget.beta = Math.max(0.1, cameraRotationTarget.beta - 0.2);
+        }
+      break;
+      case 'KeyC':
+        if (state == true && gfx.camera) {
+          // Rotate camera down
+          cameraRotationTarget.beta = Math.min(1.5, cameraRotationTarget.beta + 0.2);
+        }
+      break;
+      case 'KeyV':
+        if (state == true && gfx.camera) {
+          // Reset camera to reasonable viewing angle
+          ui.resetCameraView();
+        }       
+      break;
     }
 
     //   // update key state
@@ -207,6 +283,12 @@ function getRandomColor() {
     return false;
   };
 
+  // Double-click detection system
+  let lastClickTime = 0;
+  let lastClickPosition = { x: 0, y: 0 };
+  const DOUBLE_CLICK_DELAY = 300; // milliseconds
+  const DOUBLE_CLICK_DISTANCE = 10; // pixels - how far apart clicks can be to count as double-click
+
   // Handle pointer events (mouse clicks, touch)
   ui.handlePointer = function(e) {
     e.preventDefault();
@@ -216,8 +298,61 @@ function getRandomColor() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    // Handle different types of clicks
+    // Track RMB state for field position checking
+    if (e.type === 'pointerdown' && e.button === 2) {
+      rmbDown = true;
+      lastRmbPosition = { x, y };
+    } else if (e.type === 'pointerup' && e.button === 2) {
+      rmbDown = false;
+    } else if (e.type === 'pointermove' && rmbDown) {
+      // Update position while RMB is held
+      lastRmbPosition = { x, y };
+    }
+    
+    // Handle double-click detection for left mouse button
     if (e.type === 'pointerdown' && e.button === 0) { // Left click only
+      const currentTime = Date.now();
+      const distance = Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2);
+      
+      // Check if this is a double-click
+      if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
+        // Double-click detected! Check if we're clicking on a unit first
+        if (window.ai && window.ai.findUnitAtPosition) {
+          const clickedUnit = window.ai.findUnitAtPosition(e.clientX, e.clientY);
+          
+          if (clickedUnit) {
+            // Double-clicked on a unit - select all units of that type
+            console.log(`🔄 Double-clicked on ${clickedUnit.name} (${clickedUnit.type}) - selecting all units of this type`);
+            
+            // Clear current selection
+            window.ai.clearSelection();
+            
+            // Find all units of the same type and select them
+            if (window.player && window.player.units) {
+              const unitsOfSameType = window.player.units.filter(unit => 
+                unit.type === clickedUnit.type && unit.health > 0
+              );
+              
+              console.log(`🎯 Found ${unitsOfSameType.length} units of type ${clickedUnit.type}`);
+              
+              // Select all units of the same type
+              unitsOfSameType.forEach(unit => {
+                window.ai.selectUnit(unit);
+              });
+            }
+          }
+        }
+        
+        // Reset double-click detection
+        lastClickTime = 0;
+        lastClickPosition = { x: 0, y: 0 };
+        return;
+      }
+      
+      // Update last click info for next potential double-click
+      lastClickTime = currentTime;
+      lastClickPosition = { x, y };
+      
       // Check if we clicked on a unit first (before terrain)
       if (window.ai && window.ai.handleUnitClick) {
         const isCtrlHeld = e.ctrlKey || e.metaKey; // Support Ctrl or Cmd
@@ -227,6 +362,34 @@ function getRandomColor() {
           return; // Unit was selected, don't process terrain click
         }
       }
+    }
+    
+    // Handle double-click detection for right mouse button (menu)
+    if (e.type === 'pointerdown' && e.button === 2) { // Right click only
+      const currentTime = Date.now();
+      const distance = Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2);
+
+      // Check if this is a double-click
+      if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
+        // Double-click detected! Always show/reposition the 3D radial menu
+        if (window.hud && window.hud.showRadialMenu) {
+          const screenX = e.clientX;
+          const screenY = e.clientY;
+          
+          // Always show the menu at the new location (never close it)
+          console.log('🔄 Right double-click: showing radial menu at new location');
+          window.hud.showRadialMenu(screenX, screenY);
+        }
+        
+        // Reset double-click detection
+        lastClickTime = 0;
+        lastClickPosition = { x: 0, y: 0 };
+        return;
+      }
+
+      // Update last click info for next potential double-click
+      lastClickTime = currentTime;
+      lastClickPosition = { x, y };
     }
     
     // Convert screen coordinates to world coordinates
@@ -272,8 +435,16 @@ function getRandomColor() {
           
           // Set target destination for smooth camera movement
           if (gfx.cameraTarget) {
-            // Store the target destination for lerping - camera will smoothly move there
-            window.cameraTargetDestination = new BABYLON.Vector3(worldPos.x, gfx.cameraTarget.position.y, worldPos.z);
+            // Use the RMB field position for smooth camera movement instead of instant teleport
+            if (rmbFieldPosition.length() > 0) {
+              // Set the camera movement target to the RMB field position
+              cameraMovementTarget = new BABYLON.Vector3(rmbFieldPosition.x, gfx.cameraTarget.position.y, rmbFieldPosition.z);
+              console.log(`🎯 Camera moving to RMB position: ${cameraMovementTarget.toString()}`);
+            } else {
+              // Fallback to clicked position if no RMB field position
+              cameraMovementTarget = new BABYLON.Vector3(worldPos.x, gfx.cameraTarget.position.y, worldPos.z);
+              console.log(`🎯 Camera moving to clicked position: ${cameraMovementTarget.toString()}`);
+            }
           }
           
           // Move the player flag instantly to clicked position
@@ -293,6 +464,242 @@ function getRandomColor() {
       // Clicked on empty space
       if (e.type === 'pointerdown') {
         // Empty space clicked
+      }
+    }
+  };
+
+  // Smooth camera rotation system for quick, responsive control
+  let cameraRotationTarget = { alpha: 0, beta: 0 };
+  let cameraRotationSpeed = 0.25; // How fast camera moves to target (0.25 = much faster and responsive)
+  
+  // Camera momentum system
+  let cameraVelocity = { alpha: 0, beta: 0, radius: 0 };
+  let cameraMomentum = 0.24; // How much momentum to keep (0.95 = 95% momentum - almost no bounce)
+  let cameraDamping = 0.999; // How quickly momentum fades (0.98 = 2% fade per frame - almost no bounce)
+  
+  // Camera movement target system
+  let cameraMovementTarget = null; // Target position to move camera to
+  let cameraMovementSpeed = 0.02; // How fast to move towards target (0.02 = smooth movement)
+  
+  // RMB tracking system
+  let rmbDown = false;
+  let rmbLastCheck = 0;
+  let rmbCheckThrottle = 39; // Check every 100ms (10 times per second)
+  let lastRmbPosition = { x: 0, y: 0 };
+  let rmbFieldPosition = new BABYLON.Vector3(0, 0, 0); // Track the 3D world position where RMB is pointing
+  
+    // Handle wheel events for camera rotation and zoom
+  // Controls:
+  // - Normal scroll wheel: Rotate camera horizontally (left/right)
+  // - Right-click + scroll wheel: Zoom camera in/out
+  // - Shift + scroll wheel: Zoom camera in/out (alternative method)
+  ui.handleWheel = function(e) {
+    // Only handle wheel events when we have a camera
+    if (!gfx.camera || !gfx.camera.alpha) {
+      return;
+    }
+    let INVERSEROT = -1;
+    let INVERSEZOOM = 1;
+    
+    // Get wheel delta (positive = scroll up, negative = scroll down)
+    const delta = e.deltaY;
+    
+    // Check if right mouse button OR shift key is held down
+    if ((e.buttons && (e.buttons & 2) !== 0) || e.shiftKey) {
+      // Right-click + scroll wheel OR Shift + scroll wheel = Camera zoom
+      e.preventDefault();
+      
+      // Handle zoom manually since we're preventing default
+      const zoomSpeed = 0.085; // Adjust this for zoom sensitivity
+      const zoomAmount = INVERSEZOOM*delta * zoomSpeed;
+      
+      // Add zoom velocity instead of directly changing radius (momentum-based zoom)
+      if (gfx.camera.radius !== undefined) {
+        cameraVelocity.radius += zoomAmount;
+      }
+      
+      // Log for debugging (remove this in production)
+      const zoomMethod = e.shiftKey ? "Shift + Wheel" : "Right-click + Wheel";
+      console.log(`${zoomMethod}: delta=${delta}, zoom amount=${zoomAmount.toFixed(4)}, radius=${gfx.camera.radius?.toFixed(4)}`);
+    } else {
+      // Normal scroll wheel = Camera rotation
+      e.preventDefault();
+      
+      // Convert wheel delta to rotation target
+      // Adjust sensitivity - you can modify these values
+      const rotationAmount = 0.001; // How much to rotate per scroll unit (faster for more responsive feel)
+      
+      // Only horizontal rotation (alpha) with scroll wheel - keep beta unchanged
+      // Normal scroll wheel = horizontal rotation (look left/right)
+      cameraRotationTarget.alpha += INVERSEROT*delta * rotationAmount;
+      
+      // Keep beta at current camera value to prevent unwanted vertical movement
+      cameraRotationTarget.beta = gfx.camera.beta;
+      
+      // Log for debugging (remove this in production)
+    }
+  };
+  
+  // Update camera rotation smoothly towards target (call this every frame)
+  ui.updateCameraRotation = function() {
+    if (!gfx.camera || !gfx.camera.alpha) {
+      return;
+    }
+    
+    // Apply zoom-to-beta ratio for more natural camera behavior
+    if (gfx.camera.radius !== undefined) {
+      // Calculate ideal beta based on zoom level
+      // As you zoom out (larger radius), beta increases (look more upward)
+      // As you zoom in (smaller radius), beta decreases (look more level)
+      const minRadius = gfx.camera.lowerRadiusLimit || 15;
+      const maxRadius = gfx.camera.upperRadiusLimit || 199;
+      const currentRadius = gfx.camera.radius;
+      
+      // Normalize radius between 0 and 1
+      const normalizedRadius = (currentRadius - minRadius) / (maxRadius - minRadius);
+      
+      // Beta range: 0.6 (looking down) to 1.1 (looking straight ahead)
+      // INVERTED: minBeta = looking up (zoomed in), maxBeta = looking down (zoomed out)
+      // const minBeta = 1.11; //min // Looking down (zoomed out)
+      // const maxBeta = 0.88; //max // Looking up (zoomed in)
+      const maxBeta = 1.11; //min // Looking down (zoomed out)
+      const minBeta = 0.88; //max // Looking up (zoomed in)
+      
+      // Calculate target beta based on zoom (inverted)
+      const targetBeta = minBeta - (normalizedRadius * (minBeta - maxBeta));
+      
+      // Smoothly adjust beta target towards the zoom-based ideal
+      cameraRotationTarget.beta = BABYLON.Scalar.Lerp(cameraRotationTarget.beta, targetBeta, 0.4);
+    }
+    
+    // Apply momentum-based camera movement
+    // Calculate velocity towards target
+    const alphaDiff = cameraRotationTarget.alpha - gfx.camera.alpha;
+    const betaDiff = cameraRotationTarget.beta - gfx.camera.beta;
+    
+    // Add velocity towards target
+    cameraVelocity.alpha += alphaDiff * cameraRotationSpeed;
+    cameraVelocity.beta += betaDiff * cameraRotationSpeed;
+    
+    // Apply momentum (keep some of the previous velocity)
+    cameraVelocity.alpha *= cameraMomentum;
+    cameraVelocity.beta *= cameraMomentum;
+    cameraVelocity.radius *= cameraMomentum;
+    
+    // Apply damping (gradually reduce velocity)
+    cameraVelocity.alpha *= cameraDamping;
+    cameraVelocity.beta *= cameraDamping;
+    cameraVelocity.radius *= cameraDamping;
+    
+    // Move camera based on velocity
+    gfx.camera.alpha += cameraVelocity.alpha;
+    gfx.camera.beta += cameraVelocity.beta;
+    
+    // Apply zoom velocity and clamp to limits
+    if (gfx.camera.radius !== undefined) {
+      gfx.camera.radius += cameraVelocity.radius;
+      gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit, Math.min(gfx.camera.upperRadiusLimit, gfx.camera.radius));
+    }
+    
+    // Clamp beta to prevent camera flipping
+    gfx.camera.beta = Math.max(0.1, Math.min(1.5, gfx.camera.beta));
+    
+    // Smooth camera movement towards target position
+    if (cameraMovementTarget && gfx.cameraTarget) {
+      // Lerp camera target towards the movement target
+      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, cameraMovementTarget.x, cameraMovementSpeed);
+      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, cameraMovementTarget.z, cameraMovementSpeed);
+      
+      // Check if we're close enough to the target to stop moving
+      const distance = BABYLON.Vector3.Distance(gfx.cameraTarget.position, cameraMovementTarget);
+      if (distance < 0.1) {
+        cameraMovementTarget = null; // Stop moving when we reach the target
+        console.log('🎯 Camera reached target position');
+      }
+    }
+    
+    // Check field position when RMB is held (throttled)
+    if (rmbDown) {
+      const currentTime = Date.now();
+      if (currentTime - rmbLastCheck > rmbCheckThrottle) {
+        ui.checkRmbFieldPosition();
+        rmbLastCheck = currentTime;
+      }
+    }
+  };
+  
+  // Sync rotation targets with current camera position (call this when camera is initialized)
+  ui.syncCameraRotationTargets = function() {
+    if (gfx.camera && gfx.camera.alpha !== undefined) {
+      cameraRotationTarget.alpha = gfx.camera.alpha;
+      
+      // Set a reasonable default beta (not too high, not too low)
+      // 0.6 = looking down, 0.9 = looking slightly down, 1.1 = looking straight ahead
+      const defaultBeta = 0.6; // Looking slightly down (better for gameplay)
+      
+      // Only use current beta if it's reasonable, otherwise use default
+      if (gfx.camera.beta >= 0.6 && gfx.camera.beta <= 1.1) {
+        cameraRotationTarget.beta = gfx.camera.beta;
+      } else {
+        cameraRotationTarget.beta = defaultBeta;
+        // Also fix the camera's current beta if it's way off
+        gfx.camera.beta = defaultBeta;
+      }
+      
+      console.log('Camera rotation targets synced:', cameraRotationTarget);
+    }
+  };
+  
+  // Reset camera to a good viewing angle (call this if you get stuck looking down)
+  ui.resetCameraView = function() {
+    if (gfx.camera) {
+      // Set reasonable viewing angles
+      cameraRotationTarget.alpha = gfx.camera.alpha; // Keep current horizontal rotation
+      cameraRotationTarget.beta = 1.0; // Look straight ahead
+      
+      // Immediately fix the camera if it's way off
+      if (gfx.camera.beta < 0.5 || gfx.camera.beta > 1.3) {
+        gfx.camera.beta = 0.6;
+      }
+      
+      console.log('Camera view reset to reasonable angle');
+    }
+  };
+  
+  // Check field position when RMB is held (throttled to avoid performance issues)
+  ui.checkRmbFieldPosition = function() {
+    if (!gfx.scene || !lastRmbPosition) return;
+    
+    // Convert screen coordinates to world coordinates
+    const pickResult = gfx.scene.pick(lastRmbPosition.x, lastRmbPosition.y);
+    
+    if (pickResult.hit && pickResult.pickedMesh.name.includes('Mesh')) {
+      // Get the world position where RMB is pointing
+      const worldPos = pickResult.pickedPoint;
+      
+      // Convert world position to tile coordinates
+      const tileX = Math.floor(worldPos.x);
+      const tileZ = Math.floor(worldPos.z);
+      
+      // Get the specific tile at these coordinates
+      if (window.liveField && window.liveField.tiles) {
+        const tileIndex = tileZ * window.liveField.width + tileX;
+        if (window.liveField.tiles[tileIndex]) {
+          const tile = window.liveField.tiles[tileIndex];
+          
+          // Store the 3D world position in Vec3
+          rmbFieldPosition.copyFrom(worldPos);
+          
+          // Log tile information (you can modify this to do whatever you want)
+          console.log(`🗺️ RMB HIT: Tile (${tileX}, ${tileZ}) - Type: ${tile.type}, Position: (${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)})`);
+          console.log(`📍 Stored Vec3: ${rmbFieldPosition.toString()}`);
+          
+          // You can add more logic here:
+          // - Show tile info in HUD
+          // - Highlight the tile
+          // - Check if tile is buildable
+          // - etc.
+        }
       }
     }
   };

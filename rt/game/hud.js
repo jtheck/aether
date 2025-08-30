@@ -701,9 +701,8 @@
     const ray = hud.scene.createPickingRay(edgePos.x, edgePos.y, BABYLON.Matrix.Identity(), hud.camera);
     const worldPos = ray.origin.add(ray.direction.scale(menuConfig.distance)); // Same distance as radial menu
     
-    // Check if this unit is selected
-    const isSelected = window.ai && window.ai.getCurrentSelection && 
-                      window.ai.getCurrentSelection().includes(unit);
+    // Check if this unit is selected using player's selection system
+    const isSelected = window.player && window.player.isUnitSelected(unit);
     
     // Reuse existing indicator or create new one
     let indicator;
@@ -770,21 +769,9 @@
               // Double-click detected! Select all units of this type
               console.log(`🔄 Double-clicked minimap indicator for ${linkedUnit.name} (${linkedUnit.type}) - selecting all units of this type`);
               
-              if (window.ai && window.ai.clearSelection && window.ai.selectUnit && window.player && window.player.units) {
-                // Clear current selection
-                window.ai.clearSelection();
-                
-                // Find all units of the same type and select them
-                const unitsOfSameType = window.player.units.filter(u => 
-                  u.type === linkedUnit.type && u.health > 0
-                );
-                
-                console.log(`🎯 Found ${unitsOfSameType.length} units of type ${linkedUnit.type}`);
-                
-                // Select all units of the same type
-                unitsOfSameType.forEach(u => {
-                  window.ai.selectUnit(u);
-                });
+              // Use player's selection system for double-click functionality
+              if (window.player && window.player.selectAllUnitsOfType) {
+                window.player.selectAllUnitsOfType(linkedUnit.type);
               }
               
               lastClickTime = 0; // Reset for next double-click
@@ -792,15 +779,11 @@
               // Single click - select just this unit
               console.log(`🗺️ Minimap indicator clicked for unit: ${linkedUnit.name}`);
               
-              // Handle unit selection the same way as normal unit clicks
-              if (window.ai && window.ai.handleUnitClick) {
-                // Convert edge position to screen coordinates for the AI system
-                const rect = hud.canvas.getBoundingClientRect();
-                const screenX = edgePos.x + rect.left;
-                const screenY = edgePos.y + rect.top;
-                
-                // Use the same logic as normal unit clicks
-                window.ai.handleUnitClick(screenX, screenY, false); // false = not Ctrl+click
+              // Use player's selection system for single-click unit selection
+              if (window.player && window.player.selectUnit) {
+                // Clear current selection and select just this unit
+                window.player.clearSelection();
+                window.player.selectUnit(linkedUnit);
               }
               
               lastClickTime = currentTime;

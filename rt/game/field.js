@@ -523,7 +523,7 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
 
 
 let tilect = 33; // menu screen
-tilect = 128; // half zone
+// tilect = 128; // half zone
 // tilect = 256; // full zone
 let liveField = new Field({width: tilect, height: tilect, seed: 52});
 

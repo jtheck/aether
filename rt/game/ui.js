@@ -309,6 +309,56 @@ function getRandomColor() {
       lastRmbPosition = { x, y };
     }
     
+    // Handle LMB selection system move and up events
+    if (e.type === 'pointermove') {
+      // Handle LMB move for selection (button is not set during move events)
+      // console.log('🔥🔥🔥 UI: pointermove event, checking lasso system...');
+      if (window.lassoSelection && window.lassoSelection.handleLmbMove) {
+        // console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbMove...');
+        window.lassoSelection.handleLmbMove(x, y);
+      } else {
+        console.log('🔥🔥🔥 UI: Lasso system not available for move:', { 
+          hasLasso: !!window.lassoSelection, 
+          hasHandleLmbMove: !!(window.lassoSelection && window.lassoSelection.handleLmbMove) 
+        });
+      }
+    } else if (e.type === 'pointerup' && e.button === 0) {
+      // Handle LMB up for selection
+      // console.log('🔥🔥🔥 UI: pointerup event received, button:', e.button, 'checking lasso system...');
+      if (window.lassoSelection && window.lassoSelection.handleLmbUp) {
+        // console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbUp...');
+        window.lassoSelection.handleLmbUp(x, y);
+      } else {
+        // console.log('🔥🔥🔥 UI: Lasso system not available for up:', { 
+        //   hasLasso: !!window.lassoSelection, 
+        //   hasHandleLmbUp: !!(window.lassoSelection && window.lassoSelection.handleLmbUp) 
+        // });
+      }
+    }
+    
+    // Handle LMB selection system FIRST (before double-click detection)
+    if (e.type === 'pointerdown' && e.button === 0) { // Left click only
+      console.log('🔥🔥🔥 UI: Checking lasso selection system... 🔥🔥🔥');
+      if (window.lassoSelection && window.lassoSelection.handleLmbDown) {
+        console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbDown... 🔥🔥🔥');
+        const isHandlingSelection = window.lassoSelection.handleLmbDown(x, y, e);
+        console.log('🔥🔥🔥 UI: lassoSelection.handleLmbDown returned:', isHandlingSelection);
+        if (isHandlingSelection) {
+          // Update last click info for potential double-click even when selection is active
+          const currentTime = Date.now();
+          lastClickTime = currentTime;
+          lastClickPosition = { x, y };
+          console.log('🔥🔥🔥 UI: Lasso system handling click, but NOT returning early - need to capture move events! 🔥🔥🔥');
+          // Don't return early - we need to capture the move events!
+        }
+      } else {
+        console.log('🔥🔥🔥 UI: Lasso system not available:', { 
+          hasLasso: !!window.lassoSelection, 
+          hasHandleLmbDown: !!(window.lassoSelection && window.lassoSelection.handleLmbDown) 
+        });
+      }
+    }
+    
     // Handle double-click detection for left mouse button
     if (e.type === 'pointerdown' && e.button === 0) { // Left click only
       const currentTime = Date.now();
@@ -316,32 +366,8 @@ function getRandomColor() {
       
       // Check if this is a double-click
       if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
-        // Double-click detected! Check if we're clicking on a unit first
-        if (window.ai && window.ai.findUnitAtPosition) {
-          const clickedUnit = window.ai.findUnitAtPosition(e.clientX, e.clientY);
-          
-          if (clickedUnit) {
-            // Double-clicked on a unit - select all units of that type
-            console.log(`🔄 Double-clicked on ${clickedUnit.name} (${clickedUnit.type}) - selecting all units of this type`);
-            
-            // Clear current selection
-            window.ai.clearSelection();
-            
-            // Find all units of the same type and select them
-            if (window.player && window.player.units) {
-              const unitsOfSameType = window.player.units.filter(unit => 
-                unit.type === clickedUnit.type && unit.health > 0
-              );
-              
-              console.log(`🎯 Found ${unitsOfSameType.length} units of type ${clickedUnit.type}`);
-              
-              // Select all units of the same type
-              unitsOfSameType.forEach(unit => {
-                window.ai.selectUnit(unit);
-              });
-            }
-          }
-        }
+        // TODO: Implement double-click unit selection using player's selection system
+        console.log('🔄 Double-click selection not yet implemented - would use player.selectAllUnitsOfType()');
         
         // Reset double-click detection
         lastClickTime = 0;
@@ -354,13 +380,10 @@ function getRandomColor() {
       lastClickPosition = { x, y };
       
       // Check if we clicked on a unit first (before terrain)
-      if (window.ai && window.ai.handleUnitClick) {
-        const isCtrlHeld = e.ctrlKey || e.metaKey; // Support Ctrl or Cmd
-        const unitClicked = window.ai.handleUnitClick(x, y, isCtrlHeld);
-        
-        if (unitClicked) {
-          return; // Unit was selected, don't process terrain click
-        }
+      // But only if we're not in the middle of a selection
+      if (!window.lassoSelection || !window.lassoSelection.isSelectionActive()) {
+        // TODO: Implement unit clicking using lasso system instead of old AI system
+        console.log('🔄 Unit click handling not yet implemented in new system');
       }
     }
     

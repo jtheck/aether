@@ -98,6 +98,46 @@ html, body {
   font-weight: bold;
   cursor: pointer;
 }
+
+/* Lasso Selection Box Styles */
+#lasso-selection-box {
+  position: fixed;
+  border: 2px solid #00ff00;
+  background-color: rgba(0, 255, 0, 0.1);
+  pointer-events: none;
+  z-index: 1000;
+  border-radius: 2px;
+  box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+  transition: all 0.05s ease-out;
+}
+
+#lasso-selection-box::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  bottom: -1px;
+  border: 1px solid rgba(0, 255, 0, 0.5);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Selection Count Indicator Styles */
+#selection-count-indicator {
+  animation: selectionCountFadeIn 0.3s ease-out;
+}
+
+@keyframes selectionCountFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
 #title_b:hover {
   color: aqua;
 }

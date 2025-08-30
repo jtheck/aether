@@ -10,6 +10,13 @@
 initPlayer = function(){
   window.player = new Player();
   
+  // Initialize the game
+  window.game = new Game({
+    type: 'default',
+    map: 'default',
+    players: [window.player]
+  });
+  
   // Start the game loop for physics updates
   if (window.gameLoop && window.gameLoop.start) {
     window.gameLoop.start();
@@ -30,6 +37,9 @@ function Player(ops){
 
   // Player's controlled units
   this.units = [];
+  
+  // Player's selected units
+  this.selectedUnits = [];
 
   this.cursor = new PBody();
   
@@ -234,4 +244,60 @@ Player.prototype.updatePosition = function() {
   } else {
     // console.log("Missing physics body or state:", this.pbody, this.pbody?.state);
   }
+};
+
+// Selection management methods
+Player.prototype.selectUnit = function(unit) {
+  if (!unit || this.selectedUnits.includes(unit)) {
+    return false; // Already selected or invalid unit
+  }
+  
+  this.selectedUnits.push(unit);
+  console.log(`🎯 Selected unit: ${unit.name || unit.type}`);
+  return true;
+};
+
+Player.prototype.deselectUnit = function(unit) {
+  const index = this.selectedUnits.indexOf(unit);
+  if (index > -1) {
+    this.selectedUnits.splice(index, 1);
+    console.log(`❌ Deselected unit: ${unit.name || unit.type}`);
+    return true;
+  }
+  return false;
+};
+
+Player.prototype.clearSelection = function() {
+  const count = this.selectedUnits.length;
+  this.selectedUnits = [];
+  if (count > 0) {
+    console.log(`🗑️ Cleared selection of ${count} units`);
+  }
+  return count;
+};
+
+Player.prototype.isUnitSelected = function(unit) {
+  return this.selectedUnits.includes(unit);
+};
+
+Player.prototype.getSelectedUnits = function() {
+  return [...this.selectedUnits]; // Return copy to prevent external modification
+};
+
+Player.prototype.getSelectedUnitsOfType = function(type) {
+  return this.selectedUnits.filter(unit => unit.type === type);
+};
+
+Player.prototype.selectAllUnitsOfType = function(type) {
+  // Clear current selection first
+  this.clearSelection();
+  
+  // Find all units of the specified type
+  const unitsOfType = this.units.filter(unit => unit.type === type && unit.health > 0);
+  
+  // Select them all
+  unitsOfType.forEach(unit => this.selectUnit(unit));
+  
+  console.log(`🎯 Selected all ${unitsOfType.length} units of type: ${type}`);
+  return unitsOfType.length;
 };

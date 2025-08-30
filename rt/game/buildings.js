@@ -61,23 +61,23 @@ function Building(buildingType, position, options = {}) {
   // 3D model reference
   this.mesh = null;
   
-  console.log(`Created ${this.name} at position`, this.position);
+  // console.log(`Created ${this.name} at position`, this.position);
 }
 
 // Place a specific building at coordinates
 function placeBuilding(buildingType, x, z, scene) {
-  console.log(`🏗️ Placing building: ${buildingType} at tile (${x}, ${z})`);
+  // console.log(`🏗️ Placing building: ${buildingType} at tile (${x}, ${z})`);
   
   const worldPosition = new BABYLON.Vector3(x * TILE_SIZE, 0, z * TILE_SIZE);
-  console.log(`🌍 World position: (${worldPosition.x}, ${worldPosition.y}, ${worldPosition.z})`);
+  // console.log(`🌍 World position: (${worldPosition.x}, ${worldPosition.y}, ${worldPosition.z})`);
   
   const building = new Building(buildingType, { x: worldPosition.x, y: 0, z: worldPosition.z });
-  console.log(`🏛️ Building created:`, building.name, 'Model path:', building.model);
+  // console.log(`🏛️ Building created:`, building.name, 'Model path:', building.model);
   
   if (window.gfx && window.gfx.getModel) {
-    console.log(`📦 Loading model: ${building.model}`);
+    // console.log(`📦 Loading model: ${building.model}`);
     window.gfx.getModel(building.model, scene).then(model => {
-      console.log(`✅ Model loaded successfully:`, model);
+      // console.log(`✅ Model loaded successfully:`, model);
       building.mesh = model.root;
       building.mesh.position = worldPosition;
       building.mesh.scaling = new BABYLON.Vector3(building.scale, building.scale, building.scale);
@@ -87,10 +87,10 @@ function placeBuilding(buildingType, x, z, scene) {
         // Force Euler angles like we do with units
         building.mesh.rotationQuaternion = null;
         building.mesh.rotation.y = building.rotation;
-        console.log(`🔄 Applied rotation: ${(building.rotation * 180/Math.PI).toFixed(1)}°`);
+        // console.log(`🔄 Applied rotation: ${(building.rotation * 180/Math.PI).toFixed(1)}°`);
       }
       
-      console.log(`🎯 ${building.name} successfully placed at (${x}, ${z}) with world position:`, worldPosition);
+      // console.log(`🎯 ${building.name} successfully placed at (${x}, ${z}) with world position:`, worldPosition);
     }).catch(err => {
       console.error(`❌ Failed to load ${building.name} model:`, err);
     });
@@ -114,7 +114,7 @@ function placeAgora(scene) {
 
 // Initialize buildings when scene is ready
 function initBuildings(scene) {
-  console.log("Initializing buildings...");
+  // console.log("Initializing buildings...");
   placeAgora(scene);
 }
 
@@ -131,15 +131,15 @@ function updateBuildings(deltaTime) {
 
 // Auto-initialize buildings when scene is ready
 function autoInitBuildings() {
-  console.log("autoInitBuildings called - checking dependencies...");
-  console.log("gfx exists:", !!window.gfx);
-  console.log("scene exists:", !!window.gfx?.scene);
-  console.log("liveField exists:", !!window.liveField);
-  console.log("player exists:", !!window.player);
-  console.log("player.agora exists:", !!window.player?.agora);
+  // console.log("autoInitBuildings called - checking dependencies...");
+  // console.log("gfx exists:", !!window.gfx);
+  // console.log("scene exists:", !!window.gfx?.scene);
+  // console.log("liveField exists:", !!window.liveField);
+  // console.log("player exists:", !!window.player);
+  // console.log("player.agora exists:", !!window.player?.agora);
   
   if (window.gfx && window.gfx.scene && window.liveField && window.player && window.player.agora) {
-    console.log("✓ All dependencies ready - auto-initializing buildings...");
+    // console.log("✓ All dependencies ready - auto-initializing buildings...");
     
     // Get agora position from player
     const agoraPosition = new BABYLON.Vector3(
@@ -148,22 +148,22 @@ function autoInitBuildings() {
       window.player.agora.y * TILE_SIZE
     );
     
-    console.log("Agora will be placed at:", agoraPosition);
+    // console.log("Agora will be placed at:", agoraPosition);
     
     // Move camera to agora position FIRST (before loading terrain)
     if (window.gfx.cameraTarget) {
       window.gfx.cameraTarget.position = agoraPosition;
-      console.log("✓ Camera moved to player's agora position:", agoraPosition);
+      // console.log("✓ Camera moved to player's agora position:", agoraPosition);
     }
     
     // Small delay to let camera settle, then load terrain around new position
     setTimeout(() => {
-      console.log("✓ Loading terrain around agora...");
+      // console.log("✓ Loading terrain around agora...");
       window.liveField.updateVisibleChunks(agoraPosition.x, agoraPosition.z);
       
       // Another small delay for terrain to load, then place buildings and spawn villagers
       setTimeout(() => {
-        console.log("✓ Calling initBuildings...");
+        // console.log("✓ Calling initBuildings...");
         initBuildings(window.gfx.scene);
         
         // Spawn villagers at the agora after buildings are placed
@@ -173,12 +173,12 @@ function autoInitBuildings() {
           window.spawnUnitModels(window.gfx.scene);
         }
         
-        console.log("✓ Buildings and villagers initialized at player's agora");
+        // console.log("✓ Buildings and villagers initialized at player's agora");
       }, 300);
     }, 100);
     
   } else {
-    console.log("⏳ Dependencies not ready, retrying in 1 second...");
+    // console.log("⏳ Dependencies not ready, retrying in 1 second...");
     setTimeout(autoInitBuildings, 1000);
   }
 }

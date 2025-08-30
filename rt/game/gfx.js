@@ -921,11 +921,19 @@
       
       gfx.engine.runRenderLoop(mainRenderLoop);
 
+      // Initialize lasso selection system
+      if (window.lassoSelection && window.lassoSelection.init) {
+        window.lassoSelection.init();
+        console.log("🎯 Lasso selection system initialized");
+      }
 
     });
   }
 
   function mainRenderLoop(){
+    // Increment frame counter for LOD system
+    window.frameCounter = (window.frameCounter || 0) + 1;
+    
     gfx.scene.render();
     
     // Player physics and position updates are now handled in the game loop

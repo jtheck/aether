@@ -84,6 +84,13 @@ const UnitTypes = {
   }
 };
 
+// Simple LOD system - just update frequency based on distance
+const LOD_DISTANCES = {
+  NEAR: 100,   // Update every frame
+  FAR: 300,    // Update every 3rd frame
+  HIDDEN: 400  // Hide completely beyond this distance
+};
+
 // Unit constructor that uses the definitions
 function Unit(unitType, position, options = {}) {
     const def = UnitTypes[unitType];
@@ -106,6 +113,10 @@ function Unit(unitType, position, options = {}) {
     this.state = 'idle'; // idle, moving, attacking, working, etc.
     this.target = null;
     this.inventory = options.inventory || {};
+    
+    // Simple LOD properties
+    this.distanceToCamera = 0;
+    this.lastUpdateFrame = 0;
     
     // Physics body
     this.pb = new PBody();
@@ -136,6 +147,44 @@ function getUnitDef(unitType) {
 // Helper function to list all unit types in a category
 function getUnitsByCategory(category) {
     return Object.keys(UnitTypes).filter(type => UnitTypes[type].category === category);
+}
+
+// Simple LOD: check if unit should update this frame
+function shouldUpdateUnit(unit, currentFrame) {
+    if (unit.distanceToCamera <= LOD_DISTANCES.NEAR) {
+        return true; // Update every frame
+    } else if (unit.distanceToCamera <= LOD_DISTANCES.FAR) {
+        return (currentFrame - unit.lastUpdateFrame) >= 2; // Update every 3rd frame
+    } else if (unit.distanceToCamera <= LOD_DISTANCES.HIDDEN) {
+        return (currentFrame - unit.lastUpdateFrame) >= 5; // Update every 6th frame
+    } else {
+        return false; // Hidden - never update
+    }
+}
+
+// Calculate distance to camera for LOD and hide/show units
+function updateUnitDistances() {
+    const cameraPosition = window.gfx && window.gfx.camera ? window.gfx.camera.position : null;
+    if (!cameraPosition) return;
+    
+    gameUnits.forEach(unit => {
+        if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+            const dx = unit.pb.state.loc.x - cameraPosition.x;
+            const dz = unit.pb.state.loc.z - cameraPosition.z;
+            unit.distanceToCamera = Math.sqrt(dx * dx + dz * dz);
+            
+            // Hide/show units based on distance
+            if (unit.mesh) {
+                if (unit.distanceToCamera > LOD_DISTANCES.HIDDEN) {
+                    // Hide unit completely
+                    unit.mesh.setEnabled(false);
+                } else {
+                    // Show unit
+                    unit.mesh.setEnabled(true);
+                }
+            }
+        }
+    });
 }
 
 // Global units arrays
@@ -225,6 +274,11 @@ function spawnUnitModels(scene) {
                     unit.mesh.rotation.y = unit.rotation;
                 }
                 
+                // Initialize default linger behavior
+                if (window.behaviorManager) {
+                    window.behaviorManager.setBehavior(unit, 'linger');
+                }
+                
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
                 console.warn(`Failed to load model for ${unit.name}:`, err);
@@ -235,8 +289,26 @@ function spawnUnitModels(scene) {
 
 // Update unit logic, AI, and behaviors
 function updateUnits(deltaTime) {
+    const currentFrame = window.frameCounter || 0;
+    
+    // Update distances for LOD
+    updateUnitDistances();
+    
+    // Step all unit behaviors (this handles movement commands)
+    if (window.behaviorManager) {
+        window.behaviorManager.stepBehaviors();
+    }
+    
     gameUnits.forEach(unit => {
         if (!unit.pb || !unit.pb.state) return;
+        
+        // Check if this unit should update this frame based on LOD
+        if (!shouldUpdateUnit(unit, currentFrame)) {
+            return; // Skip this unit this frame
+        }
+        
+        // Mark this unit as updated
+        unit.lastUpdateFrame = currentFrame;
         
         // Update unit behaviors based on type
         if (unit.name.includes('Tortle')) {
@@ -300,107 +372,123 @@ function getCachedCos(angle) {
 // Update unit mesh positions and rotations every frame
 function updateUnitMeshes() {
     const currentTime = Date.now(); // Cache time for performance
+    const currentFrame = window.frameCounter || 0;
+    
     gameUnits.forEach((unit, index) => {
         if (unit.mesh && unit.pb && unit.pb.state) {
+            // Check if this unit should update this frame based on LOD
+            if (!shouldUpdateUnit(unit, currentFrame)) {
+                return; // Skip this unit this frame
+            }
+            
+            // Check if unit has active behavior - if so, skip animation system
+            const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+            
             // Visual follows physics - position
             if (unit.pb.state.loc) {
                 unit.mesh.position.x = unit.pb.state.loc.x;
                 unit.mesh.position.z = unit.pb.state.loc.z;
                 
-                // Flying units get altitude boost
-                if (unit.abilities && unit.abilities.includes('fly')) {
-                    // Add some flying height with slight bobbing
-                    const flyHeight = 8 + getCachedSin(currentTime * 0.002 + unit.id.charCodeAt(0)) * 1.5;
-                    unit.mesh.position.y = unit.pb.state.loc.y + flyHeight;
-                    
-                    // Birds fly in circles
-                    if (unit.type === 'bird_messenger') {
-                        // Get unique time offset and radius for this bird
-                        const timeOffset = unit.id.charCodeAt(0) * 100;
-                        const radiusOffset = unit.id.charCodeAt(1) || 0;
-                        const radius = 4 + (radiusOffset % 4); // 4-7 unit radius
-                        
-                        // Calculate circle position using cached time and trig
-                        const circleTime = currentTime * 0.0008 + timeOffset; // Slow circular movement
-                        const circleX = getCachedCos(circleTime) * radius;
-                        const circleZ = getCachedSin(circleTime) * radius;
-                        
-                        // Debug removed - circular movement confirmed working
-                        
-                        // Update position (relative to spawn point stored in mesh data)
-                        if (!unit.mesh.spawnPoint) {
-                            unit.mesh.spawnPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
-                        }
-                        
-                        // Update both physics and visual position to avoid fighting
-                        const newX = unit.mesh.spawnPoint.x + circleX;
-                        const newZ = unit.mesh.spawnPoint.z + circleZ;
-                        
-                        unit.pb.state.loc.x = newX;
-                        unit.pb.state.loc.z = newZ;
-                        unit.mesh.position.x = newX;
-                        unit.mesh.position.z = newZ;
-                        
-                        // Face flight direction (tangent to circle) - add 90° to fix wing-first issue
-                        const facingAngle = (-circleTime * 0.5 + Math.PI / 2 + Math.PI /4) % (Math.PI * 2);
-                        
-                        // Update physics body rotation (this probably drives the visual)
-                        unit.pb.state.rot.y = facingAngle;
-                        
-                        // Also try mesh rotation as backup
-                        unit.mesh.rotationQuaternion = null;
-                        unit.mesh.rotation.y = facingAngle;
-                    }
+                // Skip animation system for units with active behaviors
+                if (hasActiveBehavior) {
+                    // Just set Y position and continue to rotation
+                    unit.mesh.position.y = unit.pb.state.loc.y;
                 } else {
-                    // Ground units with occasional hopping
-                    let hopHeight = 0;
-                    
-                    // Different behavior by unit type
-                    if (unit.name.includes('Mushroom')) {
-                        // Mushrooms breathe (scale) instead of hop
-                        const breatheTimeOffset = unit.id.charCodeAt(0) * 50;
-                        const breatheCycle = Math.sin((Date.now() + breatheTimeOffset) * 0.001); // Slow breathing
-                        const scaleVariation = 1.0 + (breatheCycle * 0.08); // ±8% size variation
+                    // Flying units get altitude boost
+                    if (unit.abilities && unit.abilities.includes('fly')) {
+                        // Add some flying height with slight bobbing
+                        const flyHeight = 8 + getCachedSin(currentTime * 0.002 + unit.id.charCodeAt(0)) * 1.5;
+                        unit.mesh.position.y = unit.pb.state.loc.y + flyHeight;
                         
-                        unit.mesh.scaling.setAll(unit.scale * scaleVariation);
-                        unit.mesh.position.y = unit.pb.state.loc.y; // No hopping
-                        
-                    } else if (unit.name.includes('Tortle')) {
-                        // Tortles don't hop - they're slow and steady, just pivot occasionally
-                        unit.mesh.position.y = unit.pb.state.loc.y; // No hopping - stay on ground!
-                        
-                        // Reset scaling to base scale (no breathing like mushrooms)
-                        unit.mesh.scaling.setAll(unit.scale);
-                        
+                        // Birds fly in circles
+                        if (unit.type === 'bird_messenger') {
+                            // Get unique time offset and radius for this bird
+                            const timeOffset = unit.id.charCodeAt(0) * 100;
+                            const radiusOffset = unit.id.charCodeAt(1) || 0;
+                            const radius = 4 + (radiusOffset % 4); // 4-7 unit radius
+                            
+                            // Calculate circle position using cached time and trig
+                            const circleTime = currentTime * 0.0008 + timeOffset; // Slow circular movement
+                            const circleX = getCachedCos(circleTime) * radius;
+                            const circleZ = getCachedSin(circleTime) * radius;
+                            
+                            // Debug removed - circular movement confirmed working
+                            
+                            // Update position (relative to spawn point stored in mesh data)
+                            if (!unit.mesh.spawnPoint) {
+                                unit.mesh.spawnPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+                            }
+                            
+                            // Update both physics and visual position to avoid fighting
+                            const newX = unit.mesh.spawnPoint.x + circleX;
+                            const newZ = unit.mesh.spawnPoint.z + circleZ;
+                            
+                            unit.pb.state.loc.x = newX;
+                            unit.pb.state.loc.z = newZ;
+                            unit.mesh.position.x = newX;
+                            unit.mesh.position.z = newZ;
+                            
+                            // Face flight direction (tangent to circle) - add 90° to fix wing-first issue
+                            const facingAngle = (-circleTime * 0.5 + Math.PI / 2 + Math.PI /4) % (Math.PI * 2);
+                            
+                            // Update physics body rotation (this probably drives the visual)
+                            unit.pb.state.rot.y = facingAngle;
+                            
+                            // Also try mesh rotation as backup
+                            unit.mesh.rotationQuaternion = null;
+                            unit.mesh.rotation.y = facingAngle;
+                        }
                     } else {
-                        // Only frogs and villagers hop
-                        let hopFrequency, hopAmplitude;
-                        if (unit.name.includes('Frog')) {
-                            // Each frog gets a unique hop frequency stretch factor
-                            const stretchFactor = 0.7 + (unit.id.charCodeAt(2) % 100) / 100 * 0.6; // 0.7x to 1.3x speed
-                            hopFrequency = 0.0012 * stretchFactor; // Individual hop timing!
-                            hopAmplitude = 1.2;
-                        } else if (unit.name.includes('Villager')) {
-                            hopFrequency = 0.0003; // Occasional subtle hops
-                            hopAmplitude = 0.4;
+                        // Ground units with occasional hopping
+                        let hopHeight = 0;
+                        
+                        // Different behavior by unit type
+                        if (unit.name.includes('Mushroom')) {
+                            // Mushrooms breathe (scale) instead of hop
+                            const breatheTimeOffset = unit.id.charCodeAt(0) * 50;
+                            const breatheCycle = Math.sin((Date.now() + breatheTimeOffset) * 0.001); // Slow breathing
+                            const scaleVariation = 1.0 + (breatheCycle * 0.08); // ±8% size variation
+                            
+                            unit.mesh.scaling.setAll(unit.scale * scaleVariation);
+                            unit.mesh.position.y = unit.pb.state.loc.y; // No hopping
+                            
+                        } else if (unit.name.includes('Tortle')) {
+                            // Tortles don't hop - they're slow and steady, just pivot occasionally
+                            unit.mesh.position.y = unit.pb.state.loc.y; // No hopping - stay on ground!
+                            
+                            // Reset scaling to base scale (no breathing like mushrooms)
+                            unit.mesh.scaling.setAll(unit.scale);
+                            
                         } else {
-                            // Other units (if any) get rare tiny hops
-                            hopFrequency = 0.0002;
-                            hopAmplitude = 0.3;
+                            // Only frogs and villagers hop
+                            let hopFrequency, hopAmplitude;
+                            if (unit.name.includes('Frog')) {
+                                // Each frog gets a unique hop frequency stretch factor
+                                const stretchFactor = 0.7 + (unit.id.charCodeAt(2) % 100) / 100 * 0.6; // 0.7x to 1.3x speed
+                                hopFrequency = 0.0012 * stretchFactor; // Individual hop timing!
+                                hopAmplitude = 1.2;
+                            } else if (unit.name.includes('Villager')) {
+                                hopFrequency = 0.0003; // Occasional subtle hops
+                                hopAmplitude = 0.4;
+                            } else {
+                                // Other units (if any) get rare tiny hops
+                                hopFrequency = 0.0002;
+                                hopAmplitude = 0.3;
+                            }
+                            
+                            // Create a pulsing hop pattern based on time and unit ID
+                            const timeOffset = unit.id.charCodeAt(0) * 100;
+                            const hopCycle = Math.sin((Date.now() + timeOffset) * hopFrequency);
+                            
+                            // Only hop when the sine wave is positive and above threshold
+                            if (hopCycle > 0.7) {
+                                // Quick hop up and down
+                                const hopPhase = (hopCycle - 0.7) / 0.3; // Normalize to 0-1
+                                hopHeight = Math.sin(hopPhase * Math.PI) * hopAmplitude;
+                            }
+                            
+                            unit.mesh.position.y = unit.pb.state.loc.y + hopHeight;
                         }
-                        
-                        // Create a pulsing hop pattern based on time and unit ID
-                        const timeOffset = unit.id.charCodeAt(0) * 100;
-                        const hopCycle = Math.sin((Date.now() + timeOffset) * hopFrequency);
-                        
-                        // Only hop when the sine wave is positive and above threshold
-                        if (hopCycle > 0.7) {
-                            // Quick hop up and down
-                            const hopPhase = (hopCycle - 0.7) / 0.3; // Normalize to 0-1
-                            hopHeight = Math.sin(hopPhase * Math.PI) * hopAmplitude;
-                        }
-                        
-                        unit.mesh.position.y = unit.pb.state.loc.y + hopHeight;
                     }
                 }
             }
@@ -443,6 +531,31 @@ function debugUnitRotations() {
             });
         }
     });
+}
+
+// Debug function to show LOD statistics
+function debugLODStats() {
+    const stats = { NEAR: 0, FAR: 0, VERY_FAR: 0, HIDDEN: 0 };
+    let totalUnits = 0;
+    
+    gameUnits.forEach(unit => {
+        if (unit.distanceToCamera <= LOD_DISTANCES.NEAR) {
+            stats.NEAR++;
+        } else if (unit.distanceToCamera <= LOD_DISTANCES.FAR) {
+            stats.FAR++;
+        } else if (unit.distanceToCamera <= LOD_DISTANCES.HIDDEN) {
+            stats.VERY_FAR++;
+        } else {
+            stats.HIDDEN++;
+        }
+        totalUnits++;
+    });
+    
+    console.log(`LOD Stats (${totalUnits} total units):`);
+    console.log(`  NEAR (≤${LOD_DISTANCES.NEAR}): ${stats.NEAR} units (${((stats.NEAR/totalUnits)*100).toFixed(1)}%)`);
+    console.log(`  FAR (≤${LOD_DISTANCES.FAR}): ${stats.FAR} units (${((stats.FAR/totalUnits)*100).toFixed(1)}%)`);
+    console.log(`  VERY_FAR (≤${LOD_DISTANCES.HIDDEN}): ${stats.VERY_FAR} units (${((stats.VERY_FAR/totalUnits)*100).toFixed(1)}%)`);
+    console.log(`  HIDDEN (>${LOD_DISTANCES.HIDDEN}): ${stats.HIDDEN} units (${((stats.HIDDEN/totalUnits)*100).toFixed(1)}%)`);
 }
 
 
@@ -531,6 +644,11 @@ if (typeof window !== 'undefined') {
     window.updateUnitMeshes = updateUnitMeshes;
     window.respawnUnits = respawnUnits;
     window.debugUnitRotations = debugUnitRotations;
+    
+    // LOD system exports
+    window.LOD_DISTANCES = LOD_DISTANCES;
+    window.debugLODStats = debugLODStats;
+    window.updateUnitDistances = updateUnitDistances;
     
     // Auto-start the initialization
     setTimeout(autoInitUnits, 2000); // Wait 2 seconds for scene to be ready

@@ -21,7 +21,7 @@
   
   // Initialize the lasso system
   lasso.init = function() {
-    console.log("🎯 Lasso selection system initialized");
+    // console.log("🎯 Lasso selection system initialized");
     // Create selection box mesh (invisible initially)
     createSelectionBox();
   };
@@ -31,6 +31,7 @@
     if (!window.gfx || !window.gfx.scene) return;
     
     // Create 4 vertical planes around the edges for a fence-like selection box
+    // These will face the camera so they're always visible
     const lineMaterial = new BABYLON.StandardMaterial("selectionLineMat", window.gfx.scene);
     lineMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1); // Cyan
     lineMaterial.alpha = 0.3; // Semi-transparent
@@ -39,46 +40,46 @@
     // Create 4 vertical planes for the edges
     const planes = [];
     
-    // Top edge (facing north)
+    // Top edge (facing north - outward from selection area)
     const topPlane = BABYLON.MeshBuilder.CreatePlane("topPlane", {
       width: 1,
       height: 1
     }, window.gfx.scene);
     topPlane.material = lineMaterial;
-    topPlane.rotation.y = 0; // Face north
+    topPlane.rotation.y = 0; // Face north (outward)
     topPlane.position.y = 0.5; // Half height above ground
     topPlane.material.backFaceCulling = false; // Show both sides
     planes.push(topPlane);
     
-    // Right edge (facing east)
+    // Right edge (facing east - outward from selection area)
     const rightPlane = BABYLON.MeshBuilder.CreatePlane("rightPlane", {
       width: 1,
       height: 1
     }, window.gfx.scene);
     rightPlane.material = lineMaterial;
-    rightPlane.rotation.y = Math.PI / 2; // Face east
+    rightPlane.rotation.y = Math.PI / 2; // Face east (outward)
     rightPlane.position.y = 0.5; // Half height above ground
     rightPlane.material.backFaceCulling = false; // Show both sides
     planes.push(rightPlane);
     
-    // Bottom edge (facing south)
+    // Bottom edge (facing south - outward from selection area)
     const bottomPlane = BABYLON.MeshBuilder.CreatePlane("bottomPlane", {
       width: 1,
       height: 1
     }, window.gfx.scene);
     bottomPlane.material = lineMaterial;
-    bottomPlane.rotation.y = Math.PI; // Face south
+    bottomPlane.rotation.y = Math.PI; // Face south (outward)
     bottomPlane.position.y = 0.5; // Half height above ground
     bottomPlane.material.backFaceCulling = false; // Show both sides
     planes.push(bottomPlane);
     
-    // Left edge (facing west)
+    // Left edge (facing west - outward from selection area)
     const leftPlane = BABYLON.MeshBuilder.CreatePlane("leftPlane", {
       width: 1,
       height: 1
     }, window.gfx.scene);
     leftPlane.material = lineMaterial;
-    leftPlane.rotation.y = -Math.PI / 2; // Face west
+    leftPlane.rotation.y = -Math.PI / 2; // Face west (outward)
     leftPlane.position.y = 0.5; // Half height above ground
     leftPlane.material.backFaceCulling = false; // Show both sides
     planes.push(leftPlane);
@@ -92,7 +93,7 @@
       plane.isPickable = false;
     });
     
-    console.log("🎯 Selection fence created (4 vertical planes)");
+    // console.log("🎯 3D fence selection box created (camera-facing)");
   }
   
   // Handle left mouse button down
@@ -103,7 +104,7 @@
     dragStartTime = Date.now();
     isDragActive = false;
     
-    console.log("🎯 Lasso: Mouse down at", { x, y, event: e });
+    // console.log("🎯 Lasso: Mouse down at", { x, y, event: e });
     
     // Show selection box at start point
     if (selectionBox) {
@@ -111,7 +112,9 @@
       updateSelectionBox();
     }
     
-    return true; // We're handling this event
+    // Don't claim we're handling the event yet - wait to see if it becomes a drag
+    // Return false so the UI system can handle clicks normally
+    return false;
   };
   
   // Handle left mouse button move
@@ -127,7 +130,7 @@
     
     if (distance > DRAG_THRESHOLD && !isDragActive) {
       isDragActive = true;
-      console.log("🎯 Lasso: Drag started at distance", distance);
+      // console.log("🎯 Lasso: Drag started at distance", distance);
     }
     
     // Update visual selection box
@@ -141,38 +144,26 @@
     if (!isSelecting) return;
     
     endPoint = { x, y };
-    const dragEndTime = Date.now();
-    const dragDuration = dragEndTime - dragStartTime;
     
     // Check if this was a drag or a click
     const dx = endPoint.x - startPoint.x;
     const dy = endPoint.y - startPoint.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
     
+    console.log("🎯 Lasso: Mouse up analysis:", { 
+      distance, 
+      threshold: DRAG_THRESHOLD, 
+      isDragActive, 
+      wasDrag: distance > DRAG_THRESHOLD && isDragActive 
+    });
+    
     if (distance > DRAG_THRESHOLD && isDragActive) {
       // This was a drag - perform area selection
-      console.log("🎯 Lasso: Drag completed, selecting units in area");
+      // console.log("🎯 Lasso: Drag completed, selecting units in area");
       performAreaSelection();
     } else {
-      // This was a click - check for double-click
-      const currentTime = Date.now();
-      const clickDistance = Math.sqrt(
-        Math.pow(x - lastClickPoint.x, 2) + 
-        Math.pow(y - lastClickPoint.y, 2)
-      );
-      
-      if (currentTime - lastClickTime < 300 && clickDistance < 10) {
-        // Double-click detected - select all units of clicked type
-        console.log("🎯 Lasso: Double-click detected");
-        handleDoubleClick(x, y);
-      } else {
-        // Single click - select unit at position
-        console.log("🎯 Lasso: Single click detected");
-        handleSingleClick(x, y);
-      }
-      
-      lastClickTime = currentTime;
-      lastClickPoint = { x, y };
+      // This was a click - don't handle it here, let UI system handle it
+      // console.log("🎯 Lasso: Click detected, letting UI system handle it");
     }
     
     // Clean up selection state
@@ -184,11 +175,22 @@
     return isSelecting;
   };
   
+  // Check if the lasso system actually performed a drag selection
+  lasso.wasDragSelection = function() {
+    return isDragActive;
+  };
+  
+  // Check if the current click should be handled by the lasso system (i.e., it was a drag)
+  lasso.shouldHandleClick = function() {
+    // console.log("🎯 Lasso: shouldHandleClick called, isDragActive:", isDragActive);
+    return isDragActive;
+  };
+  
   // Update the visual selection box
   function updateSelectionBox() {
     if (!selectionBox || !Array.isArray(selectionBox) || !window.gfx || !window.gfx.camera) return;
     
-    // Convert screen coordinates to world coordinates
+    // Convert screen coordinates to world coordinates for positioning
     const startWorld = screenToWorld(startPoint.x, startPoint.y);
     const endWorld = screenToWorld(endPoint.x, endPoint.y);
     
@@ -200,50 +202,50 @@
     const width = Math.abs(endWorld.x - startWorld.x);
     const height = Math.abs(endWorld.z - startWorld.z);
     
-    console.log("🎯 Selection fence update:", { 
-      start: startWorld, 
-      end: endWorld, 
-      center: { x: centerX, z: centerZ }, 
-      size: { width, height } 
-    });
+    // // console.log("🎯 3D fence selection update:", { 
+    //   start: startWorld, 
+    //   end: endWorld, 
+    //   center: { x: centerX, z: centerZ }, 
+    //   size: { width, height } 
+    // });
     
     // Update each plane to form the fence around the selection area
     const [topPlane, rightPlane, bottomPlane, leftPlane] = selectionBox;
     
-    // Top edge (north-facing plane)
+    // Top edge (camera-facing plane)
     topPlane.position.x = centerX;
     topPlane.position.z = centerZ - height/2;
     topPlane.scaling.x = Math.max(width, 0.1);
     topPlane.isVisible = true;
     
-    // Right edge (east-facing plane)
+    // Right edge (camera-facing plane)
     rightPlane.position.x = centerX + width/2;
     rightPlane.position.z = centerZ;
     rightPlane.scaling.x = Math.max(height, 0.1);
     rightPlane.isVisible = true;
     
-    // Bottom edge (south-facing plane)
+    // Bottom edge (camera-facing plane)
     bottomPlane.position.x = centerX;
     bottomPlane.position.z = centerZ + height/2;
     bottomPlane.scaling.x = Math.max(width, 0.1);
     bottomPlane.isVisible = true;
     
-    // Left edge (west-facing plane)
+    // Left edge (camera-facing plane)
     leftPlane.position.x = centerX - width/2;
     leftPlane.position.z = centerZ;
     leftPlane.scaling.x = Math.max(height, 0.1);
     leftPlane.isVisible = true;
     
-    console.log("🎯 Selection fence updated with new dimensions");
+    // console.log("🎯 3D fence selection updated");
   }
   
   // Convert screen coordinates to world coordinates
   function screenToWorld(screenX, screenY) {
     if (!window.gfx || !window.gfx.camera || !window.gfx.scene) return null;
     
-    console.log("🎯 Creating ray for screen coords:", { x: screenX, y: screenY });
-    console.log("🎯 Camera position:", window.gfx.camera.position);
-    console.log("🎯 Camera rotation:", window.gfx.camera.rotation);
+    // console.log("🎯 Creating ray for screen coords:", { x: screenX, y: screenY });
+    // console.log("🎯 Camera position:", window.gfx.camera.position);
+    // console.log("🎯 Camera rotation:", window.gfx.camera.rotation);
     
     // Create picking ray
     const ray = window.gfx.scene.createPickingRay(
@@ -253,21 +255,21 @@
       window.gfx.camera
     );
     
-    console.log("🎯 Ray created:", { origin: ray.origin, direction: ray.direction });
+    // console.log("🎯 Ray created:", { origin: ray.origin, direction: ray.direction });
     
     // Pick against ground plane (y = 0) using the correct API
     const groundPlane = new BABYLON.Plane(0, 1, 0, 0);
     const intersection = ray.intersectsPlane(groundPlane);
     
-    console.log("🎯 Ground plane intersection:", intersection);
+    // console.log("🎯 Ground plane intersection:", intersection);
     
     if (intersection) {
       const worldPos = ray.origin.add(ray.direction.scale(intersection));
-      console.log("🎯 Screen to world:", { screen: { x: screenX, y: screenY }, world: worldPos });
+      // console.log("🎯 Screen to world:", { screen: { x: screenX, y: screenY }, world: worldPos });
       return worldPos;
     }
     
-    console.warn("🎯 Screen to world failed for:", { x: screenX, y: screenY });
+    // console.warn("🎯 Screen to world failed for:", { x: screenX, y: screenY });
     return null;
   }
   
@@ -289,7 +291,7 @@
     const minZ = Math.min(startWorld.z, endWorld.z);
     const maxZ = Math.max(startWorld.z, endWorld.z);
     
-    console.log("🎯 Lasso: Selection area:", { minX, maxX, minZ, maxZ });
+    // console.log("🎯 Lasso: Selection area:", { minX, maxX, minZ, maxZ });
     
     // Find units within selection area
     let selectedCount = 0;
@@ -305,7 +307,7 @@
       }
     });
     
-    console.log(`🎯 Lasso: Selected ${selectedCount} units in area`);
+    // console.log(`🎯 Lasso: Selected ${selectedCount} units in area`);
   }
   
   // Handle single click on unit
@@ -319,7 +321,7 @@
     const unit = findUnitAtPosition(x, y);
     if (unit) {
       window.player.selectUnit(unit);
-      console.log(`🎯 Lasso: Selected unit ${unit.name || unit.type}`);
+      // console.log(`🎯 Lasso: Selected unit ${unit.name || unit.type}`);
     }
   }
   
@@ -375,18 +377,16 @@
       });
     }
     
-    console.log("🎯 Lasso: Selection cleanup complete");
+    // console.log("🎯 Lasso: Selection cleanup complete");
   }
   
   // Dispose of lasso resources
   lasso.dispose = function() {
-    if (selectionBox && Array.isArray(selectionBox)) {
-      selectionBox.forEach(plane => {
-        plane.dispose();
-      });
+    if (selectionBox) {
+      selectionBox.dispose();
       selectionBox = null;
     }
-    console.log("🎯 Lasso: Resources disposed");
+    // console.log("🎯 Lasso: Resources disposed");
   };
   
 })(window.lassoSelection = {});

@@ -7,6 +7,9 @@
   fx.init = function(gameScene) {
     scene = gameScene;
     console.log('FX system initialized');
+    
+    // Enable explosion scale testing with keyboard shortcuts
+    fx.setupExplosionScaleTesting();
   };
   
   // Launch barrel explosion on T key
@@ -22,27 +25,27 @@
   }
   
   // Create explosion at impact point
-  function Explode(impact) {
+  function Explode(impact, scale = 1.0) {
     // Create default particle systems
-    var fireBlast = BABYLON.ParticleHelper.CreateDefault(impact, 100);
+    var fireBlast = BABYLON.ParticleHelper.CreateDefault(impact, 100 * scale);
 
     // Emitter
-    var fireBlastHemisphere = fireBlast.createHemisphericEmitter(.2, 0);
+    var fireBlastHemisphere = fireBlast.createHemisphericEmitter(.2 * scale, 0);
 
     // Set emission rate
-    fireBlast.emitRate = 5000;
+    fireBlast.emitRate = 5000 * scale;
 
     // Start size
-    fireBlast.minSize = 6;
-    fireBlast.maxSize = 12;
+    fireBlast.minSize = 6 * scale;
+    fireBlast.maxSize = 12 * scale;
 
     // Lifetime
-    fireBlast.minLifeTime = 1;
-    fireBlast.maxLifeTime = 3;
+    fireBlast.minLifeTime = 1 * scale;
+    fireBlast.maxLifeTime = 3 * scale;
 
     // Emission power
-    fireBlast.minEmitPower = 30;
-    fireBlast.maxEmitPower = 60;
+    fireBlast.minEmitPower = 30 * scale;
+    fireBlast.maxEmitPower = 60 * scale;
 
     // Limit velocity over time
     fireBlast.addLimitVelocityGradient(0, 40);
@@ -99,17 +102,32 @@
   }
   
   // Public API for creating explosions
-  fx.createExplosion = function(position) {
+  fx.createExplosion = function(position, scale = 1.0) {
     if (!scene) {
       console.warn('FX system not initialized');
       return;
     }
-    Explode(position);
+    console.log(`💥 Creating explosion with scale: ${scale}`);
+    Explode(position, scale);
   };
   
   // Public API for launching barrel (spacebar)
   fx.setupBarrelLauncher = function() {
     document.addEventListener('keydown', LaunchBarrel);
+  };
+  
+  // Setup explosion scale testing with keyboard shortcuts
+  fx.setupExplosionScaleTesting = function() {
+    document.addEventListener('keydown', function(e) {
+      // Test different explosion scales with number keys
+      if (e.key >= '1' && e.key <= '9') {
+        const scale = parseFloat(e.key);
+        const position = new BABYLON.Vector3(0, 0, 0);
+        console.log(`🎮 Testing explosion scale ${scale} at position ${position}`);
+        fx.createExplosion(position, scale);
+      }
+    });
+    console.log('💥 Explosion scale testing enabled! Press 1-9 for different scales');
   };
   
   // Clean up

@@ -65,9 +65,9 @@ function Player(ops){
 
 
 function PBody(ops){
-  this.mass = ops?.mass ? 1/ops.mass : 1/200;
-  this.friction = -75;  // Strong friction - quick slowdown, snappy feel
-  this.rotFriction = -75;  // Strong rotation friction
+  this.mass = ops?.mass ? 1/ops.mass : 100;
+  this.friction = -1;  // Strong friction - quick slowdown, snappy feel
+  this.rotFriction = -1;  // Strong rotation friction
   
 
   this.imp = new BABYLON.Vector3();
@@ -109,25 +109,11 @@ PBody.prototype.integrate = function(dt, player, self) {
   this.prevState.loc = this.state.loc.clone();
   this.prevState.rot = this.state.rot.clone();
 
-  // imp -> acc
-  // Friction
-  if (self && window.tr && window.tr.self && window.tr.self.aloft) {
-    // console.log("Applying airborne friction");
-    this.imp.addInPlace(this.vel.scale(this.friction * 0.32));
-  } else {
-    // console.log("Applying normal friction");
-    this.imp.addInPlace(this.vel.scale(this.friction));
-  }
+
+  this.imp.addInPlace(this.vel.scale(this.friction));
   
   // console.log("After friction, imp:", this.imp);
   
-  // Airborne Impulse Whiff
-  if (player && window.tr && window.tr.self && window.tr.self.aloft) {
-    const airMod = 0.5; // You might need to define this constant
-    // console.log("Applying air modifier:", airMod);
-    this.imp.scaleInPlace(airMod);
-  }
-
   // Convert impulse to acceleration
   // console.log("Before acc calculation, imp:", this.imp, "mass:", this.mass);
   this.acc.copyFrom(this.imp.scale(this.mass));
@@ -147,9 +133,9 @@ PBody.prototype.integrate = function(dt, player, self) {
   // console.log("Before vel update, vel:", this.vel, "dt:", dt);
   this.vel.addInPlace(this.acc.scale(dt));
   // console.log("After vel update, vel:", this.vel);
-  
+  // log(this.vel)
   // Zero velocity threshold
-  const ZEROVELOCITY = 0.01; // You might need to define this constant
+  const ZEROVELOCITY = 0.1; // You might need to define this constant
   const velCheck = new BABYLON.Vector3(this.vel.x, this.vel.y * 0.2, this.vel.z);
   if (velCheck.length() < ZEROVELOCITY) {
     this.vel.set(0, 0, 0);

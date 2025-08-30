@@ -44,7 +44,7 @@
       { text: "History", icon: "📜", callback: () => console.log("Battle History!"), color: new BABYLON.Color3(0.6, 0.4, 0.2) }
     ],
     magic: [
-      { text: "Fireball", icon: "🔥", callback: () => fx.createExplosion(new BABYLON.Vector3(0, 0, 0)), color: new BABYLON.Color3(1, 0.4, 0) },
+      { text: "Fireball", icon: "🔥", callback: () => fx.createExplosion(new BABYLON.Vector3(0, 0, 0), 2.0), color: new BABYLON.Color3(1, 0.4, 0) },
       { text: "Heal", icon: "✨", callback: () => console.log("Healing Magic!"), color: new BABYLON.Color3(0.2, 1, 0.2) },
       { text: "Shield", icon: "🛡️", callback: () => console.log("Protection Spell!"), color: new BABYLON.Color3(0.6, 0.6, 1) },
       { text: "Teleport", icon: "🌀", callback: () => console.log("Teleportation!"), color: new BABYLON.Color3(0.8, 0.2, 0.8) }

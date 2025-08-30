@@ -261,6 +261,9 @@ function spawnUnitModels(scene) {
                     child.isPickable = true;
                 });
                 
+                // Create selection indicator (glowing ring)
+                createSelectionIndicator(unit);
+                
                 // Initial position from physics body
                 if (unit.pb && unit.pb.state && unit.pb.state.loc) {
                     unit.mesh.position.x = unit.pb.state.loc.x;
@@ -287,6 +290,62 @@ function spawnUnitModels(scene) {
     });
 }
 
+// Create a selection indicator for a unit
+function createSelectionIndicator(unit) {
+    if (!unit.mesh || !window.gfx || !window.gfx.scene) return;
+    
+    // Create a ring around the unit for selection indicator
+    const ring = BABYLON.MeshBuilder.CreateTorus("selectionRing", {
+        diameter: 1.5,
+        thickness: 0.05,
+        tessellation: 16
+    }, window.gfx.scene);
+    
+    // Create glowing material
+    const ringMaterial = new BABYLON.StandardMaterial("selectionRingMat", window.gfx.scene);
+    ringMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1); // Cyan to match selection box
+    ringMaterial.emissiveColor = new BABYLON.Color3(0, 0.5, 0.5);
+    ringMaterial.alpha = 0.8;
+    
+    ring.material = ringMaterial;
+    ring.isVisible = false; // Hidden by default
+    ring.isPickable = false; // Don't interfere with unit selection
+    
+    // Position ring around the unit
+    ring.position.y = 0.1; // Slightly above ground
+    ring.parent = unit.mesh; // Parent to unit so it moves with it
+    
+    // Store reference to the selection indicator
+    unit.selectionIndicator = ring;
+    
+    console.log(`🎯 Created selection indicator for ${unit.name}`);
+}
+
+// Update selection indicators for all units
+function updateSelectionIndicators() {
+    if (!window.player || !window.player.units) return;
+    
+    const selectedUnits = window.player.getSelectedUnits();
+    
+    // Update all units' selection indicators
+    window.player.units.forEach(unit => {
+        if (unit.selectionIndicator) {
+            const isSelected = selectedUnits.includes(unit);
+            unit.selectionIndicator.isVisible = isSelected;
+            
+            // Add some animation for selected units
+            if (isSelected) {
+                // Rotate the ring slowly
+                unit.selectionIndicator.rotation.y += 0.02;
+                
+                // Pulse the alpha slightly
+                const pulse = Math.sin(Date.now() * 0.005) * 0.2 + 0.8;
+                unit.selectionIndicator.material.alpha = pulse;
+            }
+        }
+    });
+}
+
 // Update unit logic, AI, and behaviors
 function updateUnits(deltaTime) {
     const currentFrame = window.frameCounter || 0;
@@ -294,10 +353,10 @@ function updateUnits(deltaTime) {
     // Update distances for LOD
     updateUnitDistances();
     
-    // Step all unit behaviors (this handles movement commands)
-    if (window.behaviorManager) {
-        window.behaviorManager.stepBehaviors();
-    }
+    // // Step all unit behaviors (this handles movement commands)
+    // if (window.behaviorManager) {
+    //     window.behaviorManager.stepBehaviors();
+    // }
     
     gameUnits.forEach(unit => {
         if (!unit.pb || !unit.pb.state) return;
@@ -309,6 +368,9 @@ function updateUnits(deltaTime) {
         
         // Mark this unit as updated
         unit.lastUpdateFrame = currentFrame;
+        
+        // Update selection indicators
+        updateSelectionIndicators();
         
         // Update unit behaviors based on type
         if (unit.name.includes('Tortle')) {

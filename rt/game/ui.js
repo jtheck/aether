@@ -343,12 +343,11 @@ function getRandomColor() {
         console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbDown... 🔥🔥🔥');
         const isHandlingSelection = window.lassoSelection.handleLmbDown(x, y, e);
         console.log('🔥🔥🔥 UI: lassoSelection.handleLmbDown returned:', isHandlingSelection);
-        if (isHandlingSelection) {
-          // Update last click info for potential double-click even when selection is active
-          const currentTime = Date.now();
-          lastClickTime = currentTime;
-          lastClickPosition = { x, y };
-          console.log('🔥🔥🔥 UI: Lasso system handling click, but NOT returning early - need to capture move events! 🔥🔥🔥');
+        
+        // Always capture move events when lasso is active, even if it's not handling selection yet
+        // This allows us to detect if a click becomes a drag
+        if (window.lassoSelection.isSelectionActive()) {
+          console.log('🔥🔥🔥 UI: Lasso system active, will capture move events to detect drags');
           // Don't return early - we need to capture the move events!
         }
       } else {
@@ -381,9 +380,24 @@ function getRandomColor() {
       
       // Check if we clicked on a unit first (before terrain)
       // But only if we're not in the middle of a selection
+      console.log('🎯 UI: Checking for unit click, lasso active:', window.lassoSelection?.isSelectionActive());
+      
       if (!window.lassoSelection || !window.lassoSelection.isSelectionActive()) {
-        // TODO: Implement unit clicking using lasso system instead of old AI system
-        console.log('🔄 Unit click handling not yet implemented in new system');
+        // Handle unit clicking - find unit at click position
+        console.log('🎯 UI: Lasso not active, checking for unit at position:', x, y);
+        const unit = findUnitAtPosition(x, y);
+        if (unit) {
+          // Single click - select just this unit
+          if (window.player && window.player.selectUnit) {
+            window.player.clearSelection();
+            window.player.selectUnit(unit);
+            console.log(`🎯 UI: Selected unit ${unit.name || unit.type}`);
+          }
+        } else {
+          console.log('🎯 UI: No unit found at click position');
+        }
+      } else {
+        console.log('🎯 UI: Lasso is active, skipping unit click');
       }
     }
     
@@ -415,9 +429,24 @@ function getRandomColor() {
       lastClickPosition = { x, y };
     }
     
+    // Check if the lasso system should handle this click (i.e., it was a drag selection)
+    if (window.lassoSelection && window.lassoSelection.shouldHandleClick && window.lassoSelection.shouldHandleClick()) {
+      console.log('🎯 Lasso system handled this as a drag selection, skipping field click');
+      return;
+    }
+    
     // Convert screen coordinates to world coordinates
     // All models are non-pickable so ray will pass through to terrain
     const pickResult = gfx.scene.pick(x, y);
+    
+    // console.log('🎯 Field click debug:', { 
+    //   hit: pickResult.hit, 
+    //   meshName: pickResult.pickedMesh?.name,
+    //   button: e.button,
+    //   type: e.type,
+    //   fxAvailable: !!window.fx,
+    //   createExplosionAvailable: !!(window.fx && window.fx.createExplosion)
+    // });
     
     if (pickResult.hit) {
       // Handle different types of clicks
@@ -432,6 +461,62 @@ function getRandomColor() {
           // Convert world position to tile coordinates
           const tileX = Math.floor(worldPos.x);
           const tileZ = Math.floor(worldPos.z);
+          
+          console.log('🎯 Terrain hit:', { worldPos, tileX, tileZ });
+          
+          // Handle field actions based on click type
+          if (e.button === 0) { // Left click
+            console.log('🎯 Left click on terrain, attempting explosion...');
+            // Single click - create explosion at clicked position
+            if (window.fx && window.fx.createExplosion) {
+              // Small explosion for clicks - scale 0.3 for tiny effect
+              window.fx.createExplosion(worldPos, 0.3);
+              console.log(`💥 Field action: Small explosion at (${tileX}, ${tileZ})`);
+              
+              // Make selected units walk to the explosion location
+              if (window.player && window.player.getSelectedUnits) {
+                const selectedUnits = window.player.getSelectedUnits();
+                if (selectedUnits.length > 0) {
+                  console.log(`🚶 Making ${selectedUnits.length} selected units walk to explosion location`);
+                  
+                  // Create a visual target marker at the explosion location
+                  if (window.gfx && window.gfx.scene) {
+                    createTargetMarker(worldPos);
+                  }
+                  
+                  // Apply walk behavior to each selected unit
+                  selectedUnits.forEach(unit => {
+                    if (window.behaviorManager && unit) {
+                      // Create target point slightly offset from explosion center for natural spread
+                      const offsetX = worldPos.x + (Math.random() - 0.5) * 2; // Random spread ±1 unit
+                      const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
+                      const targetPoint = { x: offsetX, z: offsetZ };
+                      
+                      console.log(`🚶 Setting walk behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                      
+                      window.behaviorManager.setBehavior(unit, 'walk', { 
+                        targetPoint: targetPoint,
+                        walkSpeed: 2.0 // Normal walking speed
+                      });
+                      
+                      console.log(`🚶 Unit ${unit.name || unit.type} walking to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                    } else {
+                      console.warn(`⚠️ Cannot set behavior for unit:`, { 
+                        hasBehaviorManager: !!window.behaviorManager, 
+                        unit: unit,
+                        unitPhysics: unit?.pb,
+                        unitState: unit?.pb?.state
+                      });
+                    }
+                  });
+                } else {
+                  console.log('🚶 No units selected, skipping walk behavior');
+                }
+              }
+            } else {
+              console.warn('💥 FX system not available for explosion');
+            }
+          }
           
           // Get the specific tile at these coordinates
           if (liveField && liveField.tiles) {
@@ -726,16 +811,99 @@ function getRandomColor() {
       }
     }
   };
-
-
-
-
-
-
-
-
-
   
+  // Find unit at screen position
+  function findUnitAtPosition(screenX, screenY) {
+    if (!window.gfx || !window.gfx.scene || !window.player || !window.player.units) return null;
+    
+    // Create picking ray
+    const ray = window.gfx.scene.createPickingRay(
+      screenX, 
+      screenY, 
+      BABYLON.Matrix.Identity(), 
+      window.gfx.camera
+    );
+    
+    // Check each unit for intersection
+    let closestUnit = null;
+    let closestDistance = Infinity;
+    
+    window.player.units.forEach(unit => {
+      if (unit.mesh && unit.mesh.isPickable) {
+        const pickResult = ray.intersectsMesh(unit.mesh);
+        if (pickResult.hit && pickResult.distance < closestDistance) {
+          closestUnit = unit;
+          closestDistance = pickResult.distance;
+        }
+      }
+    });
+    
+    return closestUnit;
+  }
+  
+  // Create a visual target marker at the specified world position
+  function createTargetMarker(worldPos) {
+    if (!window.gfx || !window.gfx.scene) return;
+    
+    // Create a simple target marker (ring) at the explosion location
+    const targetRing = BABYLON.MeshBuilder.CreateTorus("targetMarker", {
+      diameter: 1.0,
+      thickness: 0.1,
+      tessellation: 16
+    }, window.gfx.scene);
+    
+    // Position the marker at the explosion location
+    targetRing.position.x = worldPos.x;
+    targetRing.position.y = 0.1; // Slightly above ground
+    targetRing.position.z = worldPos.z;
+    
+    // Create material for the target marker
+    const markerMaterial = new BABYLON.StandardMaterial("targetMarkerMat", window.gfx.scene);
+    markerMaterial.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red color
+    markerMaterial.emissiveColor = new BABYLON.Color3(0.5, 0, 0); // Glowing red
+    markerMaterial.alpha = 0.8; // Semi-transparent
+    
+    targetRing.material = markerMaterial;
+    targetRing.isPickable = false; // Don't interfere with clicking
+    
+    // Animate the marker (pulse and fade)
+    let alpha = 0.8;
+    let growing = false;
+    
+    const animateMarker = () => {
+      if (growing) {
+        alpha += 0.02;
+        if (alpha >= 0.8) {
+          alpha = 0.8;
+          growing = false;
+        }
+      } else {
+        alpha -= 0.02;
+        if (alpha <= 0.2) {
+          alpha = 0.2;
+          growing = true;
+        }
+      }
+      
+      markerMaterial.alpha = alpha;
+      
+      // Continue animation
+      requestAnimationFrame(animateMarker);
+    };
+    
+    // Start the animation
+    animateMarker();
+    
+    // Remove the marker after 3 seconds
+    setTimeout(() => {
+      if (targetRing && !targetRing.isDisposed()) {
+        targetRing.dispose();
+      }
+    }, 3000);
+    
+    console.log(`🎯 Created target marker at (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+  }
+
 }(window.ui = window.ui || {}));
 
 

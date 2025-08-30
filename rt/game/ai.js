@@ -111,6 +111,7 @@ class WalkBehavior extends Behavior {
         if (distance <= this.params.arrivalRadius) {
             // Arrived at destination
             this.completed = true;
+            console.log(`🎯 Unit ${this.unit.name || this.unit.type} arrived at destination (${this.targetPoint.x.toFixed(1)}, ${this.targetPoint.z.toFixed(1)})`);
             return true;
         }
         
@@ -130,9 +131,14 @@ class WalkBehavior extends Behavior {
             this.unit.pb.state.vel = { x: 0, y: 0, z: 0 };
         }
         
-        // Apply movement
-        this.unit.pb.state.vel.x = direction.x * this.params.walkSpeed;
-        this.unit.pb.state.vel.z = direction.z * this.params.walkSpeed;
+// Apply impulse to physics body for immediate movement
+if (!this.unit.pb.imp) {
+    this.unit.pb.imp = { x: 0, y: 0, z: 0 };
+}
+
+// Apply impulse in movement direction
+this.unit.pb.imp.x += direction.x * 3; // Adjust strength as needed
+this.unit.pb.imp.z += direction.z * 3;
         
         return false;
     }
@@ -215,7 +221,7 @@ class UnitBehaviorManager {
         
         if (behavior) {
             this.behaviors.set(unit, behavior);
-            // console.log(`🔥🔥🔥 Set ${unit.name || unit.type} behavior to: ${behaviorType}, total behaviors: ${this.behaviors.size}`);
+            console.log(`🎯 Set ${unit.name || unit.type} behavior to: ${behaviorType}, total behaviors: ${this.behaviors.size}`);
         }
     }
     
@@ -226,13 +232,14 @@ class UnitBehaviorManager {
             return;
         }
         
-        // console.log(`🔥🔥🔥 Stepping ${this.behaviors.size} behaviors`);
         this.behaviors.forEach((behavior, unit) => {
-            if (behavior && !behavior.isComplete()) {
+            if (behavior) {
+                // console.log(`🔥🔥🔥 Stepping ${this.behaviors.size} behaviors`);
                 const completed = behavior.step();
                 if (completed) {
-                    // Behavior completed, fall back to linger
-                    this.setBehavior(unit, 'linger');
+                    // Behavior completed, remove behavior (don't auto-fallback to linger)
+                    console.log(`🎯 Behavior completed for unit ${unit.name || unit.type}, removing behavior`);
+                    this.behaviors.delete(unit);
                 }
             }
         });

@@ -1123,8 +1123,8 @@
     // Camera setup complete
 
     camera.upperRadiusLimit = 175;
-    camera.lowerRadiusLimit = 33;
-    camera.upperBetaLimit = 2.1; // Limit how high you can look (prevent going too high)
+    camera.lowerRadiusLimit = 17;
+    camera.upperBetaLimit = 2.0; // Limit how high you can look (prevent going too high)
     camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
     camera.maxZ = 2001; // max render distance
     camera.minZ = 1.5; // minimum render distance

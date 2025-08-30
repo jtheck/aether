@@ -105,7 +105,10 @@ window.gameLoop = {
   if (window.behaviorManager) {
     window.behaviorManager.stepBehaviors();
   }
-  
+  // Update idle units (give them wander behaviors)
+  if (window.updateIdleUnits) {
+    window.updateIdleUnits();
+  }
   // Update physics for all units
   if (window.gameUnits) {
     // log(window.gameUnits[0].pb.state.loc)

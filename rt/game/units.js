@@ -280,6 +280,9 @@ function spawnUnitModels(scene) {
                 // Initialize default linger behavior
                 if (window.behaviorManager) {
                     window.behaviorManager.setBehavior(unit, 'linger');
+                    console.log(`🎯 ${unit.name || unit.type} initialized with linger behavior`);
+                } else {
+                    console.warn(`⚠️ Behavior manager not available for ${unit.name || unit.type}`);
                 }
                 
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
@@ -673,7 +676,7 @@ function spawnAgoraVillagers() {
         window.player.units.push(villager);
         gameUnits.push(villager); // Also add to global array for rendering (but NOT neutralUnits)
         
-        // console.log(`🏘️ Spawned villager ${i+1} at agora`);
+        console.log(`🏘️ Spawned villager ${i+1} at agora, total villagers: ${window.player.units.length}`);
     }
     
     // console.log(`✅ Spawned ${villagerCount} villagers around the agora`);

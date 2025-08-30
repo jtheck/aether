@@ -365,8 +365,55 @@ function getRandomColor() {
       
       // Check if this is a double-click
       if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
-        // TODO: Implement double-click unit selection using player's selection system
-        console.log('🔄 Double-click selection not yet implemented - would use player.selectAllUnitsOfType()');
+        // Double-click detected! Make selected units RUN to this position
+        console.log('🏃‍♂️ Double-click detected! Making units RUN!');
+        
+        // Get world position from the click
+        const pickResult = gfx.scene.pick(x, y);
+        if (pickResult.hit && pickResult.pickedMesh.name.includes('Mesh')) {
+          const worldPos = pickResult.pickedPoint;
+          
+          // Make selected units RUN to the clicked location
+          if (window.player && window.player.getSelectedUnits) {
+            const selectedUnits = window.player.getSelectedUnits();
+            if (selectedUnits.length > 0) {
+              console.log(`🏃‍♂️ Making ${selectedUnits.length} selected units RUN to location`);
+              
+              // Create a visual target marker at the clicked location
+              if (window.gfx && window.gfx.scene) {
+                createTargetMarker(worldPos);
+              }
+              
+              // Apply RUN behavior to each selected unit
+              selectedUnits.forEach(unit => {
+                if (window.behaviorManager && unit) {
+                  // Create target point slightly offset for natural spread
+                  const offsetX = worldPos.x + (Math.random() - 0.5) * 2;
+                  const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
+                  const targetPoint = { x: offsetX, z: offsetZ };
+                  
+                  console.log(`🏃‍♂️ Setting RUN behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                  
+                  window.behaviorManager.setBehavior(unit, 'run', { 
+                    targetPoint: targetPoint,
+                    runSpeed: 4.0 // Fast running speed!
+                  });
+                  
+                  console.log(`🏃‍♂️ Unit ${unit.name || unit.type} RUNNING to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                } else {
+                  console.warn(`⚠️ Cannot set run behavior for unit:`, { 
+                    hasBehaviorManager: !!window.behaviorManager, 
+                    unit: unit,
+                    unitPhysics: unit?.pb,
+                    unitState: unit?.pb?.state
+                  });
+                }
+              });
+            } else {
+              console.log('🏃‍♂️ No units selected, skipping run behavior');
+            }
+          }
+        }
         
         // Reset double-click detection
         lastClickTime = 0;

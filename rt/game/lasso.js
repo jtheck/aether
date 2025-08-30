@@ -19,6 +19,10 @@
   let lastClickTime = 0;
   let lastClickPoint = { x: 0, y: 0 };
   
+  // RMB tracking during drag operations
+  let rmbDownDuringDrag = false;
+  let rmbPositionDuringDrag = { x: 0, y: 0 };
+  
   // Initialize the lasso system
   lasso.init = function() {
     // console.log("🎯 Lasso selection system initialized");
@@ -104,6 +108,10 @@
     dragStartTime = Date.now();
     isDragActive = false;
     
+    // Reset RMB tracking for new drag operation
+    rmbDownDuringDrag = false;
+    rmbPositionDuringDrag = { x: 0, y: 0 };
+    
     // console.log("🎯 Lasso: Mouse down at", { x, y, event: e });
     
     // Show selection box at start point
@@ -161,13 +169,18 @@
       // This was a drag - perform area selection
       // console.log("🎯 Lasso: Drag completed, selecting units in area");
       performAreaSelection();
+      
+      // Delay cleanup to allow RMB events to detect recent lasso activity
+      setTimeout(() => {
+        cleanupSelection();
+      }, 100); // 100ms delay
     } else {
       // This was a click - don't handle it here, let UI system handle it
       // console.log("🎯 Lasso: Click detected, letting UI system handle it");
+      
+      // Clean up immediately for clicks
+      cleanupSelection();
     }
-    
-    // Clean up selection state
-    cleanupSelection();
   };
   
   // Check if selection is currently active
@@ -184,6 +197,45 @@
   lasso.shouldHandleClick = function() {
     // console.log("🎯 Lasso: shouldHandleClick called, isDragActive:", isDragActive);
     return isDragActive;
+  };
+  
+  // Handle RMB events during drag operations
+  lasso.handleRmbDown = function(x, y, e) {
+    if (isSelecting && isDragActive) {
+      rmbDownDuringDrag = true;
+      rmbPositionDuringDrag = { x, y };
+      console.log("🎯 Lasso: RMB DOWN during drag at", { x, y });
+      return true; // Claim this RMB event
+    }
+    return false; // Let UI system handle it
+  };
+  
+  lasso.handleRmbUp = function(x, y, e) {
+    if (rmbDownDuringDrag) {
+      rmbDownDuringDrag = false;
+      console.log("🎯 Lasso: RMB UP during drag at", { x, y });
+      return true; // Claim this RMB event
+    }
+    return false; // Let UI system handle it
+  };
+  
+  lasso.handleRmbMove = function(x, y, e) {
+    if (rmbDownDuringDrag && isSelecting && isDragActive) {
+      rmbPositionDuringDrag = { x, y };
+      console.log("🎯 Lasso: RMB MOVE during drag at", { x, y });
+      return true; // Claim this RMB event
+    }
+    return false; // Let UI system handle it
+  };
+  
+  // Check if RMB is currently active during drag
+  lasso.isRmbActiveDuringDrag = function() {
+    return rmbDownDuringDrag && isSelecting && isDragActive;
+  };
+  
+  // Get RMB position during drag
+  lasso.getRmbPositionDuringDrag = function() {
+    return rmbPositionDuringDrag;
   };
   
   // Update the visual selection box

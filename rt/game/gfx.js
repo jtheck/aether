@@ -910,11 +910,10 @@
         hud.init(gfx.scene, gfx.camera, gfx.canvas);
         
         // Set up main radial menu categories (these will expand into sub-menus)
-        hud.addRadialMenuItem("Build", "🏗️", () => hud.showSubMenu("build"), new BABYLON.Color3(0, 1, 0)); // Green
-        hud.addRadialMenuItem("Attack", "⚔️", () => hud.showSubMenu("attack"), new BABYLON.Color3(1, 0, 0)); // Red
-        hud.addRadialMenuItem("Move", "👣", () => hud.showSubMenu("move"), new BABYLON.Color3(0, 0, 1)); // Blue
-        hud.addRadialMenuItem("Info", "ℹ️", () => hud.showSubMenu("info"), new BABYLON.Color3(1, 1, 0)); // Yellow
-        hud.addRadialMenuItem("Magic", "🔮", () => hud.showSubMenu("magic"), new BABYLON.Color3(0.8, 0, 1)); // Purple
+        hud.addRadialMenuItem("Units", "👥", () => hud.showSubMenu("units"), new BABYLON.Color3(0.2, 0.6, 1)); // Blue
+        hud.addRadialMenuItem("Buildings", "🏗️", () => hud.showSubMenu("buildings"), new BABYLON.Color3(0, 1, 0)); // Green
+        hud.addRadialMenuItem("Research", "🔬", () => hud.showSubMenu("research"), new BABYLON.Color3(1, 1, 0)); // Yellow
+        hud.addRadialMenuItem("Rally", "🚩", () => hud.showSubMenu("rally"), new BABYLON.Color3(1, 0, 0)); // Red
         
         console.log("HUD initialized with default radial menu");
       }

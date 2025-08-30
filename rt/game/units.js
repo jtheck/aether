@@ -11,6 +11,8 @@ const UnitTypes = {
     scale: 0.5, // Made bigger so they're visible
     health: 50,
     speed: 2,
+    rotationSpeed: 15.0, // Snappy turning for responsive movement
+    modelOrientation: Math.PI * 1.5, // 270 degrees - flipped around to face forward
     size: 1,
     cost: { food: 25 },
     abilities: ["gather", "build"],
@@ -24,6 +26,7 @@ const UnitTypes = {
     scale: 0.12,
     health: 30,
     speed: 4,
+    rotationSpeed: 25.0, // Very fast turning for agile scouts
     size: 0.8,
     cost: { food: 20, wood: 10 },
     abilities: ["scout", "stealth"],
@@ -37,6 +40,7 @@ const UnitTypes = {
     scale: 11.8,
     health: 150,
     speed: 1,
+    rotationSpeed: 5.0, // Slow turning for massive units
     size: 2,
     cost: { wood: 50, stone: 25 },
     abilities: ["defend", "root_slam"],
@@ -50,6 +54,7 @@ const UnitTypes = {
     scale: 0.15,
     health: 40,
     speed: 1.5,
+    rotationSpeed: 12.0, // Medium turning for casters
     size: 1,
     cost: { food: 30, magic: 20 },
     abilities: ["heal", "poison_cloud", "grow"],
@@ -63,6 +68,7 @@ const UnitTypes = {
     scale: 0.08,
     health: 20,
     speed: 8,
+    rotationSpeed: 30.0, // Very fast turning for agile birds
     size: 0.5,
     cost: { food: 15 },
     abilities: ["fly", "message", "scout"],
@@ -77,6 +83,7 @@ const UnitTypes = {
     scale: 0.12,
     health: 60,
     speed: 2,
+    rotationSpeed: 18.0, // Fast turning for skilled workers
     size: 1,
     cost: { food: 30, stone: 15 },
     abilities: ["build", "repair", "fortify"],
@@ -86,9 +93,16 @@ const UnitTypes = {
 
 // Simple LOD system - just update frequency based on distance
 const LOD_DISTANCES = {
-  NEAR: 100,   // Update every frame
-  FAR: 300,    // Update every 3rd frame
-  HIDDEN: 400  // Hide completely beyond this distance
+  NEAR: 150,   // Update every frame (increased from 100)
+  FAR: 450,    // Update every 3rd frame (increased from 300)
+  HIDDEN: 600  // Hide completely beyond this distance (increased from 400)
+};
+
+// Special LOD distances for flying units (they should be visible from further away)
+const FLYING_LOD_DISTANCES = {
+  NEAR: 300,   // Update every frame (increased from 200)
+  FAR: 900,    // Update every 3rd frame (increased from 600)
+  HIDDEN: 1200 // Hide completely beyond this distance (increased from 800)
 };
 
 // Unit constructor that uses the definitions
@@ -151,11 +165,14 @@ function getUnitsByCategory(category) {
 
 // Simple LOD: check if unit should update this frame
 function shouldUpdateUnit(unit, currentFrame) {
-    if (unit.distanceToCamera <= LOD_DISTANCES.NEAR) {
+    // Use flying LOD distances for flying units
+    const distances = (unit.abilities && unit.abilities.includes('fly')) ? FLYING_LOD_DISTANCES : LOD_DISTANCES;
+    
+    if (unit.distanceToCamera <= distances.NEAR) {
         return true; // Update every frame
-    } else if (unit.distanceToCamera <= LOD_DISTANCES.FAR) {
+    } else if (unit.distanceToCamera <= distances.FAR) {
         return (currentFrame - unit.lastUpdateFrame) >= 2; // Update every 3rd frame
-    } else if (unit.distanceToCamera <= LOD_DISTANCES.HIDDEN) {
+    } else if (unit.distanceToCamera <= distances.HIDDEN) {
         return (currentFrame - unit.lastUpdateFrame) >= 5; // Update every 6th frame
     } else {
         return false; // Hidden - never update
@@ -175,11 +192,14 @@ function updateUnitDistances() {
             
             // Hide/show units based on distance
             if (unit.mesh) {
-                if (unit.distanceToCamera > LOD_DISTANCES.HIDDEN) {
-                    // Hide unit completely
+                // Birds and flying units should always be visible (they're in the sky!)
+                if (unit.abilities && unit.abilities.includes('fly')) {
+                    unit.mesh.setEnabled(true);
+                } else if (unit.distanceToCamera > LOD_DISTANCES.HIDDEN) {
+                    // Hide ground units completely when too far
                     unit.mesh.setEnabled(false);
                 } else {
-                    // Show unit
+                    // Show ground units when in range
                     unit.mesh.setEnabled(true);
                 }
             }
@@ -280,14 +300,14 @@ function spawnUnitModels(scene) {
                 // Initialize default linger behavior
                 if (window.behaviorManager) {
                     window.behaviorManager.setBehavior(unit, 'linger');
-                    console.log(`🎯 ${unit.name || unit.type} initialized with linger behavior`);
+                    // console.log(`🎯 ${unit.name || unit.type} initialized with linger behavior`);
                 } else {
-                    console.warn(`⚠️ Behavior manager not available for ${unit.name || unit.type}`);
+                    // console.warn(`⚠️ Behavior manager not available for ${unit.name || unit.type}`);
                 }
                 
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
-                console.warn(`Failed to load model for ${unit.name}:`, err);
+                // console.warn(`Failed to load model for ${unit.name}:`, err);
             });
         }
     });
@@ -321,7 +341,7 @@ function createSelectionIndicator(unit) {
     // Store reference to the selection indicator
     unit.selectionIndicator = ring;
     
-    console.log(`🎯 Created selection indicator for ${unit.name}`);
+    // console.log(`🎯 Created selection indicator for ${unit.name}`);
 }
 
 // Update selection indicators for all units
@@ -467,6 +487,11 @@ function updateUnitMeshes() {
                         
                         // Birds fly in circles
                         if (unit.type === 'bird_messenger') {
+                            // Debug: log bird status occasionally
+                            if (Math.random() < 0.01) { // 1% chance to log
+                                // console.log(`🐦 Bird ${unit.id}: physics=${!!unit.pb}, state=${!!unit.pb?.state}, loc=${!!unit.pb?.state?.loc}, rot=${!!unit.pb?.state?.rot}`);
+                            }
+                            
                             // Get unique time offset and radius for this bird
                             const timeOffset = unit.id.charCodeAt(0) * 100;
                             const radiusOffset = unit.id.charCodeAt(1) || 0;
@@ -477,31 +502,67 @@ function updateUnitMeshes() {
                             const circleX = getCachedCos(circleTime) * radius;
                             const circleZ = getCachedSin(circleTime) * radius;
                             
-                            // Debug removed - circular movement confirmed working
-                            
                             // Update position (relative to spawn point stored in mesh data)
                             if (!unit.mesh.spawnPoint) {
-                                unit.mesh.spawnPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+                                // Store the original spawn point permanently
+                                unit.mesh.spawnPoint = { 
+                                    x: unit.pb.state.loc.x, 
+                                    z: unit.pb.state.loc.z 
+                                };
+                                // console.log(`🐦 Bird ${unit.id} set permanent spawn point at (${unit.mesh.spawnPoint.x.toFixed(1)}, ${unit.mesh.spawnPoint.z.toFixed(1)})`);
+                            }
+                            
+                            // Debug: log if spawn point changes unexpectedly
+                            if (unit.mesh.spawnPoint && Math.random() < 0.001) { // 0.1% chance to log
+                                const currentSpawn = unit.mesh.spawnPoint;
+                                const expectedSpawn = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+                                const distance = Math.sqrt(
+                                    Math.pow(currentSpawn.x - expectedSpawn.x, 2) + 
+                                    Math.pow(currentSpawn.z - expectedSpawn.z, 2)
+                                );
+                                
+                                if (distance > 10) { // If spawn point is more than 10 units from expected
+                                    // console.warn(`🐦 Bird ${unit.id} spawn point may have drifted! Current: (${currentSpawn.x.toFixed(1)}, ${currentSpawn.z.toFixed(1)}), Expected: (${expectedSpawn.x.toFixed(1)}, ${expectedSpawn.z.toFixed(1)}), Distance: ${distance.toFixed(1)}`);
+                                }
                             }
                             
                             // Update both physics and visual position to avoid fighting
                             const newX = unit.mesh.spawnPoint.x + circleX;
                             const newZ = unit.mesh.spawnPoint.z + circleZ;
                             
-                            unit.pb.state.loc.x = newX;
-                            unit.pb.state.loc.z = newZ;
-                            unit.mesh.position.x = newX;
-                            unit.mesh.position.z = newZ;
-                            
-                            // Face flight direction (tangent to circle) - add 90° to fix wing-first issue
-                            const facingAngle = (-circleTime * 0.5 + Math.PI / 2 + Math.PI /4) % (Math.PI * 2);
-                            
-                            // Update physics body rotation (this probably drives the visual)
-                            unit.pb.state.rot.y = facingAngle;
-                            
-                            // Also try mesh rotation as backup
-                            unit.mesh.rotationQuaternion = null;
-                            unit.mesh.rotation.y = facingAngle;
+                            // Safety check for physics body
+                            if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+                                unit.pb.state.loc.x = newX;
+                                unit.pb.state.loc.z = newZ;
+                                unit.mesh.position.x = newX;
+                                unit.mesh.position.z = newZ;
+                                
+                                // Face flight direction (tangent to circle) - add 90° to fix wing-first issue
+                                const facingAngle = (-circleTime * 0.5 + Math.PI / 2 + Math.PI /4) % (Math.PI * 2);
+                                
+                                // Use rotation impulse system instead of directly setting rotation
+                                // This works with our new movement system and prevents spinning
+                                if (!unit.pb.rotImp) {
+                                    unit.pb.rotImp = { x: 0, y: 0, z: 0 };
+                                }
+                                
+                                // Calculate rotation difference and apply as impulse
+                                const currentRotation = unit.pb.state.rot.y || 0;
+                                let rotationDiff = facingAngle - currentRotation;
+                                
+                                // Handle angle wrapping
+                                if (Math.abs(rotationDiff) > Math.PI) {
+                                    rotationDiff = rotationDiff > 0 ? rotationDiff - Math.PI * 2 : rotationDiff + Math.PI * 2;
+                                }
+                                
+                                // Apply rotation impulse (very gentle turning for smooth circular flight)
+                                unit.pb.rotImp.y += rotationDiff * 0.1; // Super gentle for smooth bird flight
+                                
+                                // Don't set mesh rotation directly - let physics handle it
+                                unit.mesh.rotationQuaternion = null;
+                            } else {
+                                // console.warn(`🐦 Bird ${unit.id} missing physics body or state!`);
+                            }
                         }
                     } else {
                         // Ground units with occasional hopping
@@ -676,7 +737,7 @@ function spawnAgoraVillagers() {
         window.player.units.push(villager);
         gameUnits.push(villager); // Also add to global array for rendering (but NOT neutralUnits)
         
-        console.log(`🏘️ Spawned villager ${i+1} at agora, total villagers: ${window.player.units.length}`);
+        // console.log(`🏘️ Spawned villager ${i+1} at agora, total villagers: ${window.player.units.length}`);
     }
     
     // console.log(`✅ Spawned ${villagerCount} villagers around the agora`);

@@ -147,6 +147,8 @@ function getRandomColor() {
     document.getElementById('onevsone_lobby').style.display = 'none';
     document.getElementById('ffa_lobby').style.display = 'none';
     document.getElementById('koth_lobby').style.display = 'none';
+    document.getElementById('teams_lobby').style.display = 'none';
+
     
     // Show the requested menu
     document.getElementById(menuId).style.display = 'block';
@@ -302,11 +304,14 @@ function getRandomColor() {
     if (e.type === 'pointerdown' && e.button === 2) {
       rmbDown = true;
       lastRmbPosition = { x, y };
+      console.log('🎯 RMB DOWN detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
     } else if (e.type === 'pointerup' && e.button === 2) {
       rmbDown = false;
+      console.log('🎯 RMB UP detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
     } else if (e.type === 'pointermove' && rmbDown) {
       // Update position while RMB is held
       lastRmbPosition = { x, y };
+      console.log('🎯 RMB MOVE detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
     }
     
     // Handle LMB selection system move and up events
@@ -317,10 +322,10 @@ function getRandomColor() {
         // console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbMove...');
         window.lassoSelection.handleLmbMove(x, y);
       } else {
-        console.log('🔥🔥🔥 UI: Lasso system not available for move:', { 
-          hasLasso: !!window.lassoSelection, 
-          hasHandleLmbMove: !!(window.lassoSelection && window.lassoSelection.handleLmbMove) 
-        });
+        // console.log('🔥🔥🔥 UI: Lasso system not available for move:', { 
+        //   hasLasso: !!window.lassoSelection, 
+        //   hasHandleLmbMove: !!(window.lassoSelection && window.lassoSelection.handleLmbMove) 
+        // });
       }
     } else if (e.type === 'pointerup' && e.button === 0) {
       // Handle LMB up for selection
@@ -338,16 +343,16 @@ function getRandomColor() {
     
     // Handle LMB selection system FIRST (before double-click detection)
     if (e.type === 'pointerdown' && e.button === 0) { // Left click only
-      console.log('🔥🔥🔥 UI: Checking lasso selection system... 🔥🔥🔥');
+      // console.log('🔥🔥🔥 UI: Checking lasso selection system... 🔥🔥🔥');
       if (window.lassoSelection && window.lassoSelection.handleLmbDown) {
-        console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbDown... 🔥🔥🔥');
+        // console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbDown... 🔥🔥🔥');
         const isHandlingSelection = window.lassoSelection.handleLmbDown(x, y, e);
-        console.log('🔥🔥🔥 UI: lassoSelection.handleLmbDown returned:', isHandlingSelection);
+        // console.log('🔥🔥🔥 UI: lassoSelection.handleLmbDown returned:', isHandlingSelection);
         
         // Always capture move events when lasso is active, even if it's not handling selection yet
         // This allows us to detect if a click becomes a drag
         if (window.lassoSelection.isSelectionActive()) {
-          console.log('🔥🔥🔥 UI: Lasso system active, will capture move events to detect drags');
+          // console.log('🔥🔥🔥 UI: Lasso system active, will capture move events to detect drags');
           // Don't return early - we need to capture the move events!
         }
       } else {
@@ -366,7 +371,7 @@ function getRandomColor() {
       // Check if this is a double-click
       if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
         // Double-click detected! Make selected units RUN to this position
-        console.log('🏃‍♂️ Double-click detected! Making units RUN!');
+        // console.log('🏃‍♂️ Double-click detected! Making units RUN!');
         
         // Get world position from the click
         const pickResult = gfx.scene.pick(x, y);
@@ -377,7 +382,7 @@ function getRandomColor() {
           if (window.player && window.player.getSelectedUnits) {
             const selectedUnits = window.player.getSelectedUnits();
             if (selectedUnits.length > 0) {
-              console.log(`🏃‍♂️ Making ${selectedUnits.length} selected units RUN to location`);
+              // console.log(`🏃‍♂️ Making ${selectedUnits.length} selected units RUN to location`);
               
               // Create a visual target marker at the clicked location
               if (window.gfx && window.gfx.scene) {
@@ -392,25 +397,25 @@ function getRandomColor() {
                   const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
                   const targetPoint = { x: offsetX, z: offsetZ };
                   
-                  console.log(`🏃‍♂️ Setting RUN behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                  // console.log(`🏃‍♂️ Setting RUN behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
                   
                   window.behaviorManager.setBehavior(unit, 'run', { 
                     targetPoint: targetPoint,
                     runSpeed: 4.0 // Fast running speed!
                   });
                   
-                  console.log(`🏃‍♂️ Unit ${unit.name || unit.type} RUNNING to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                  // console.log(`🏃‍♂️ Unit ${unit.name || unit.type} RUNNING to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
                 } else {
-                  console.warn(`⚠️ Cannot set run behavior for unit:`, { 
-                    hasBehaviorManager: !!window.behaviorManager, 
-                    unit: unit,
-                    unitPhysics: unit?.pb,
-                    unitState: unit?.pb?.state
-                  });
+                  // console.warn(`⚠️ Cannot set run behavior for unit:`, { 
+                  //   hasBehaviorManager: !!window.behaviorManager, 
+                  //   unit: unit,
+                  //   unitPhysics: unit?.pb,
+                  //   unitState: unit?.pb?.state
+                  // });
                 }
               });
             } else {
-              console.log('🏃‍♂️ No units selected, skipping run behavior');
+              // console.log('🏃‍♂️ No units selected, skipping run behavior');
             }
           }
         }
@@ -427,24 +432,24 @@ function getRandomColor() {
       
       // Check if we clicked on a unit first (before terrain)
       // But only if we're not in the middle of a selection
-      console.log('🎯 UI: Checking for unit click, lasso active:', window.lassoSelection?.isSelectionActive());
+      // console.log('🎯 UI: Checking for unit click, lasso active:', window.lassoSelection?.isSelectionActive());
       
       if (!window.lassoSelection || !window.lassoSelection.isSelectionActive()) {
         // Handle unit clicking - find unit at click position
-        console.log('🎯 UI: Lasso not active, checking for unit at position:', x, y);
+        // console.log('🎯 UI: Lasso not active, checking for unit at position:', x, y);
         const unit = findUnitAtPosition(x, y);
         if (unit) {
           // Single click - select just this unit
           if (window.player && window.player.selectUnit) {
             window.player.clearSelection();
             window.player.selectUnit(unit);
-            console.log(`🎯 UI: Selected unit ${unit.name || unit.type}`);
+            // console.log(`🎯 UI: Selected unit ${unit.name || unit.type}`);
           }
         } else {
-          console.log('🎯 UI: No unit found at click position');
+          // console.log('🎯 UI: No unit found at click position');
         }
       } else {
-        console.log('🎯 UI: Lasso is active, skipping unit click');
+        // console.log('🎯 UI: Lasso is active, skipping unit click');
       }
     }
     
@@ -594,11 +599,11 @@ function getRandomColor() {
             if (rmbFieldPosition.length() > 0) {
               // Set the camera movement target to the RMB field position
               cameraMovementTarget = new BABYLON.Vector3(rmbFieldPosition.x, gfx.cameraTarget.position.y, rmbFieldPosition.z);
-              console.log(`🎯 Camera moving to RMB position: ${cameraMovementTarget.toString()}`);
+              // console.log(`🎯 Camera moving to RMB position: ${cameraMovementTarget.toString()}`);
             } else {
               // Fallback to clicked position if no RMB field position
               cameraMovementTarget = new BABYLON.Vector3(worldPos.x, gfx.cameraTarget.position.y, worldPos.z);
-              console.log(`🎯 Camera moving to clicked position: ${cameraMovementTarget.toString()}`);
+              // console.log(`🎯 Camera moving to clicked position: ${cameraMovementTarget.toString()}`);
             }
           }
           
@@ -662,9 +667,9 @@ function getRandomColor() {
     // Check if right mouse button OR shift key is held down
     if ((e.buttons && (e.buttons & 2) !== 0) || e.shiftKey) {
       // Right-click + scroll wheel OR Shift + scroll wheel = Camera zoom
-      e.preventDefault();
+      // Don't prevent default - let both zoom AND rotation happen!
       
-      // Handle zoom manually since we're preventing default
+      // Handle zoom manually
       const zoomSpeed = 0.085; // Adjust this for zoom sensitivity
       const zoomAmount = INVERSEZOOM*delta * zoomSpeed;
       

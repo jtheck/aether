@@ -1,4 +1,11 @@
 // HUD System - Radial Menu and UI Elements
+// 
+// Key Features:
+// - 3D radial menu with sub-categories
+// - Menu stays open after selecting options (except Back button)
+// - Visual feedback on item selection
+// - Comprehensive building, combat, movement, info, and magic options
+// - Manual close option on main menu
 (function(hud) {
   
   // Radial menu state
@@ -18,37 +25,43 @@
   
   // Menu definitions with sub-categories
   let menuDefinitions = {
-    main: [],
-    build: [
-      { text: "Barracks", icon: "🏛️", callback: () => console.log("Build Barracks!"), color: new BABYLON.Color3(0.4, 0.8, 0.4) },
-      { text: "Factory", icon: "🏭", callback: () => console.log("Build Factory!"), color: new BABYLON.Color3(0.6, 0.6, 0.6) },
-      { text: "Tower", icon: "🗼", callback: () => console.log("Build Tower!"), color: new BABYLON.Color3(0.8, 0.6, 0.4) },
-      { text: "Wall", icon: "🧱", callback: () => console.log("Build Wall!"), color: new BABYLON.Color3(0.5, 0.5, 0.5) }
-    ],
-    attack: [
-      { text: "Strike", icon: "⚡", callback: () => console.log("Lightning Strike!"), color: new BABYLON.Color3(1, 1, 0) },
-      { text: "Charge", icon: "🐎", callback: () => console.log("Cavalry Charge!"), color: new BABYLON.Color3(0.8, 0.4, 0.2) },
-      { text: "Siege", icon: "🏹", callback: () => console.log("Siege Attack!"), color: new BABYLON.Color3(0.6, 0.3, 0.1) },
-      { text: "Bombard", icon: "💣", callback: () => console.log("Bombardment!"), color: new BABYLON.Color3(0.9, 0.1, 0.1) }
-    ],
-    move: [
-      { text: "March", icon: "🚶", callback: () => console.log("March Formation!"), color: new BABYLON.Color3(0.2, 0.6, 1) },
-      { text: "Patrol", icon: "👁️", callback: () => console.log("Patrol Route!"), color: new BABYLON.Color3(0.4, 0.4, 1) },
-      { text: "Retreat", icon: "🏃", callback: () => console.log("Tactical Retreat!"), color: new BABYLON.Color3(0.6, 0.2, 0.8) },
-      { text: "Flank", icon: "↗️", callback: () => console.log("Flanking Maneuver!"), color: new BABYLON.Color3(0.8, 0.2, 0.6) }
-    ],
-    info: [
-      { text: "Stats", icon: "📊", callback: () => console.log("Unit Stats!"), color: new BABYLON.Color3(1, 0.8, 0.2) },
-      { text: "Health", icon: "❤️", callback: () => console.log("Health Status!"), color: new BABYLON.Color3(1, 0.2, 0.2) },
-      { text: "Upgrade", icon: "⬆️", callback: () => {/* Unit upgrade logic */}, color: new BABYLON.Color3(0.2, 1, 0.8) },
-      { text: "History", icon: "📜", callback: () => console.log("Battle History!"), color: new BABYLON.Color3(0.6, 0.4, 0.2) }
-    ],
-    magic: [
-      { text: "Fireball", icon: "🔥", callback: () => fx.createExplosion(new BABYLON.Vector3(0, 0, 0), 2.0), color: new BABYLON.Color3(1, 0.4, 0) },
-      { text: "Heal", icon: "✨", callback: () => console.log("Healing Magic!"), color: new BABYLON.Color3(0.2, 1, 0.2) },
-      { text: "Shield", icon: "🛡️", callback: () => console.log("Protection Spell!"), color: new BABYLON.Color3(0.6, 0.6, 1) },
-      { text: "Teleport", icon: "🌀", callback: () => console.log("Teleportation!"), color: new BABYLON.Color3(0.8, 0.2, 0.8) }
-    ]
+    main: { title: "Main Menu", items: [] },
+    units: { 
+      title: "👥 Units", 
+      items: [
+        { text: "Select All", icon: "🎯", callback: () => hud.selectAllUnits(), color: new BABYLON.Color3(0.2, 0.6, 1) },
+        { text: "Deselect", icon: "❌", callback: () => hud.deselectAllUnits(), color: new BABYLON.Color3(0.8, 0.2, 0.2) },
+        { text: "Formation", icon: "⚔️", callback: () => hud.setUnitFormation(), color: new BABYLON.Color3(0.6, 0.4, 0.8) },
+        { text: "Upgrade", icon: "⬆️", callback: () => hud.upgradeUnits(), color: new BABYLON.Color3(0.2, 0.8, 0.4) }
+      ]
+    },
+    buildings: { 
+      title: "🏗️ Buildings", 
+      items: [
+        { text: "Camp", icon: "⛺", callback: () => hud.startBuildingPlacement("camp"), color: new BABYLON.Color3(0.4, 0.8, 0.4) },
+        { text: "Barracks", icon: "🏛️", callback: () => hud.startBuildingPlacement("barracks"), color: new BABYLON.Color3(0.6, 0.6, 0.6) },
+        { text: "Tower", icon: "🗼", callback: () => hud.startBuildingPlacement("tower"), color: new BABYLON.Color3(0.8, 0.6, 0.4) },
+        { text: "Wall", icon: "🧱", callback: () => hud.startBuildingPlacement("wall"), color: new BABYLON.Color3(0.5, 0.5, 0.5) }
+      ]
+    },
+    research: { 
+      title: "🔬 Research", 
+      items: [
+        { text: "Weapons", icon: "⚔️", callback: () => hud.researchWeapons(), color: new BABYLON.Color3(1, 0.4, 0.2) },
+        { text: "Armor", icon: "🛡️", callback: () => hud.researchArmor(), color: new BABYLON.Color3(0.4, 0.6, 1) },
+        { text: "Speed", icon: "⚡", callback: () => hud.researchSpeed(), color: new BABYLON.Color3(1, 1, 0.4) },
+        { text: "Efficiency", icon: "⚙️", callback: () => hud.researchEfficiency(), color: new BABYLON.Color3(0.6, 0.4, 0.8) }
+      ]
+    },
+    rally: { 
+      title: "🚩 Rally", 
+      items: [
+        { text: "Set Point", icon: "📍", callback: () => hud.setRallyPoint(), color: new BABYLON.Color3(1, 0.2, 0.2) },
+        { text: "Clear", icon: "🗑️", callback: () => hud.clearRallyPoint(), color: new BABYLON.Color3(0.6, 0.6, 0.6) },
+        { text: "Patrol", icon: "👁️", callback: () => hud.setPatrolRoute(), color: new BABYLON.Color3(0.2, 0.6, 1) },
+        { text: "Defend", icon: "🛡️", callback: () => hud.setDefenseMode(), color: new BABYLON.Color3(0.8, 0.4, 0.2) }
+      ]
+    }
   };
   
   // Radial menu configuration
@@ -77,6 +90,9 @@
     
     // Set up middle mouse button handling
     setupMiddleMouseControl();
+    
+    // Initialize building system
+    initBuildingSystem();
   };
   
   // Configure radial menu appearance and positioning
@@ -188,12 +204,15 @@
     radialMenu.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
     
     // Create center mesh - a glowing sphere
-    const centerMesh = BABYLON.MeshBuilder.CreateSphere("radialCenter", {diameter: 0.3}, hud.scene);
+    const centerMesh = BABYLON.MeshBuilder.CreateSphere("radialCenter", {diameter: 0.15}, hud.scene);
     const centerMaterial = new BABYLON.StandardMaterial("centerMat", hud.scene);
     centerMaterial.emissiveColor = new BABYLON.Color3(0.2, 0.8, 1); // Cyan glow
     centerMaterial.disableLighting = true;
     centerMesh.material = centerMaterial;
     centerMesh.parent = radialMenu;
+    
+    // Position center mesh at origin (0,0,0) relative to radial menu
+    centerMesh.position.set(0, 0, 0);
     
     // Make center mesh pickable for click detection
     centerMesh.isPickable = true;
@@ -204,17 +223,15 @@
     // Store center mesh reference
     hud.centerMesh = centerMesh;
     
-    // Add click detection for center mesh
-    centerMesh.actionManager = new BABYLON.ActionManager(hud.scene);
-    centerMesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-      BABYLON.ActionManager.OnPickTrigger,
-      function() {
-        if (radialMenuVisible) {
-          console.log('🎯 Center mesh clicked - closing radial menu');
-          hud.hideRadialMenu();
-        }
-      }
-    ));
+    console.log('🎯 Center mesh created at position (0,0,0) with diameter 0.15');
+    
+    // Store center mesh reference
+    hud.centerMesh = centerMesh;
+    
+    // Don't make center mesh clickable yet - will be enabled after menu opens
+    centerMesh.isPickable = false;
+    
+    console.log('🎯 Center mesh created at position (0,0,0) with diameter 0.15');
     
     console.log('3D Radial menu created with billboard mode');
   }
@@ -302,8 +319,42 @@
     radialMenu.setEnabled(true);
     radialMenuVisible = true;
     
+    console.log('🎯 Radial menu shown - currentMenuLevel:', currentMenuLevel, 'anchor:', currentAnchor);
+    
+    // Always initialize main menu layout when showing the menu
+    // This ensures we always start with the 4 main categories
+    initializeMainMenuLayout();
+    
     // Animate menu items based on original click position for spreading logic
     animateMenuItems(screenX, screenY);
+    
+    // Enable center mesh clickability AFTER menu is fully opened
+    setTimeout(() => {
+      if (hud.centerMesh) {
+        hud.centerMesh.isPickable = true;
+        
+        // Add click detection for center mesh
+        hud.centerMesh.actionManager = new BABYLON.ActionManager(hud.scene);
+        hud.centerMesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+          BABYLON.ActionManager.OnPickTrigger,
+          function() {
+            if (radialMenuVisible) {
+              console.log('🎯 Center mesh clicked - currentMenuLevel:', currentMenuLevel);
+              // Only close menu if we're at the root level (main menu)
+              if (currentMenuLevel === 'main') {
+                console.log('🎯 Center mesh clicked - closing radial menu');
+                hud.hideRadialMenu();
+              } else {
+                console.log('🎯 Center mesh clicked in submenu - going back to main');
+                hud.goBackMenu();
+              }
+            }
+          }
+        ));
+        
+        console.log('🎯 Center mesh click handler enabled');
+      }
+    }, 200); // 200ms delay to ensure menu is fully opened
     
     // Radial menu positioned and shown
   };
@@ -421,12 +472,14 @@
     }
   };
   
-  // Navigate to a sub-menu
+  // Navigate to a sub-menu - CLEAN TREE SYSTEM
   hud.showSubMenu = function(menuLevel, screenX, screenY) {
     if (!menuDefinitions[menuLevel]) {
       console.warn('Menu level not found:', menuLevel);
       return;
     }
+    
+    console.log('🌳 Navigating to sub-menu:', menuLevel);
     
     // Save current position in navigation stack
     menuStack.push({level: currentMenuLevel, items: [...radialMenuItems]});
@@ -434,22 +487,197 @@
     // Switch to new menu level
     currentMenuLevel = menuLevel;
     
-    // Clear current items and load new ones
-    clearMenuItems();
-    loadMenuLevel(menuLevel);
+    // Retract all buttons except the clicked one, then spread new items
+    retractAndExpand(menuLevel, screenX, screenY);
     
-    // Show the menu at the same position
-    if (radialMenuVisible) {
-      animateMenuItems(screenX, screenY);
-    }
-    
-    console.log('Switched to sub-menu:', menuLevel);
+    console.log('✅ Sub-menu loaded:', menuLevel);
   };
   
-  // Go back to previous menu level
+  // Retract all buttons except clicked one, then expand new items
+  function retractAndExpand(menuLevel, screenX, screenY) {
+    const menuData = menuDefinitions[menuLevel];
+    if (!menuData || !menuData.items) {
+      console.warn('Submenu data not found:', menuLevel);
+      return;
+    }
+    
+    // Find the clicked button to keep at anchor
+    const clickedButton = radialMenuItems.find(item => item.text === getCategoryName(menuLevel));
+    
+    // Retract all other buttons
+    radialMenuItems.forEach(item => {
+      if (item.mesh && item !== clickedButton) {
+        retractButton(item);
+      }
+    });
+    
+    // Clear the menu items array, keeping only the clicked button
+    const keptButton = clickedButton ? [clickedButton] : [];
+    radialMenuItems = keptButton;
+    
+    // Add new submenu items
+    const subItems = menuData.items;
+    subItems.forEach((itemDef, index) => {
+      // Check if this item has a callback (end action) or is a submenu
+      if (itemDef.callback) {
+        // This is an end action - add it normally
+        hud.addRadialMenuItem(itemDef.text, itemDef.icon, itemDef.callback, itemDef.color);
+      } else if (itemDef.submenu) {
+        // This is a submenu - add it with navigation callback
+        hud.addRadialMenuItem(itemDef.text, itemDef.icon, () => {
+          hud.showSubMenu(itemDef.submenu, screenX, screenY);
+        }, itemDef.color);
+      } else {
+        // Fallback - treat as end action
+        hud.addRadialMenuItem(itemDef.text, itemDef.icon, () => {
+          console.log(`🎯 Executed: ${itemDef.text}`);
+        }, itemDef.color);
+      }
+    });
+    
+    // Add back button
+    hud.addRadialMenuItem("Back", "↩️", () => hud.goBackMenu(screenX, screenY), new BABYLON.Color3(0.5, 0.5, 0.5));
+    
+    // Position all items at the same anchor with same spread
+    positionItemsAtAnchor(screenX, screenY);
+  }
+  
+  // Get the display name for a menu level
+  function getCategoryName(menuLevel) {
+    const names = {
+      'units': 'Units',
+      'buildings': 'Buildings', 
+      'research': 'Research',
+      'rally': 'Rally'
+    };
+    return names[menuLevel] || menuLevel;
+  }
+  
+  // Retract a button (animate it away)
+  function retractButton(item) {
+    if (!item.mesh) return;
+    
+    // Animate button scaling down and fading out
+    const retractAnimation = new BABYLON.Animation(
+      "retractButton",
+      "scaling",
+      15,
+      BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+      BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+    );
+    
+    const keyFrames = [];
+    keyFrames.push({ frame: 0, value: new BABYLON.Vector3(1, 1, 1) });
+    keyFrames.push({ frame: 15, value: new BABYLON.Vector3(0, 0, 0) });
+    
+    retractAnimation.setKeys(keyFrames);
+    
+    // Add easing for smooth retraction
+    const easingFunction = new BABYLON.QuadraticEase();
+    easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEIN);
+    retractAnimation.setEasingFunction(easingFunction);
+    
+    item.mesh.animations = [retractAnimation];
+    hud.scene.beginAnimation(item.mesh, 0, 15, false);
+    
+    // Dispose of the mesh after animation
+    setTimeout(() => {
+      if (item.mesh) {
+        item.mesh.dispose();
+      }
+    }, 150);
+  }
+  
+  // Position all items at the same anchor with same spread
+  function positionItemsAtAnchor(screenX, screenY) {
+    // Get the current anchor direction
+    const anchorDirection = getAnchorDirection();
+    const baseAngle = calculateBaseAngleForAnchor(anchorDirection);
+    
+    // Position items in a 180° arc spread, same as main menu
+    const totalItems = radialMenuItems.length;
+    const angleSpread = 180;
+    const angleStep = angleSpread / Math.max(totalItems - 1, 1);
+    
+    // Use larger radius for submenu items to avoid center overlap
+    const radius = currentMenuLevel === 'main' ? Math.max(menuConfig.itemRadius, 1.0) : Math.max(menuConfig.itemRadius * 1.5, 1.5);
+    
+    radialMenuItems.forEach((item, index) => {
+      if (item.mesh) {
+        // Spread items across 180° arc from the anchor direction
+        let angle = baseAngle + (index * angleStep) - (angleSpread / 2);
+        
+        // Normalize angle to 0-360 range
+        while (angle < 0) angle += 360;
+        while (angle >= 360) angle -= 360;
+        
+        const radians = (angle * Math.PI) / 180;
+        const x = Math.sin(radians) * radius;
+        const z = Math.cos(radians) * radius;
+        
+        item.mesh.position.set(x, 0, z);
+        console.log(`📍 Positioned ${item.text} at angle ${angle.toFixed(1)}° (${x.toFixed(2)}, ${z.toFixed(2)}) - radius: ${radius}`);
+      }
+    });
+  }
+  
+  // Animate expanded menu items
+  function animateExpandedMenu(screenX, screenY) {
+    radialMenuItems.forEach((item, index) => {
+      if (!item.mesh) return;
+      
+      if (item.isSubItem) {
+        // Sub-items animate from center outward
+        const targetPos = calculateExpandedItemPosition(item, screenX, screenY);
+        
+        // Start from center
+        item.mesh.position.set(0, 0, 0);
+        
+        // Animate to expanded position
+        const animation = new BABYLON.Animation(
+          "expandItem",
+          "position",
+          30,
+          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+        );
+        
+        const keyFrames = [];
+        keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0, 0, 0) });
+        keyFrames.push({ frame: 30, value: targetPos });
+        
+        animation.setKeys(keyFrames);
+        
+        // Add easing for smooth expansion
+        const easingFunction = new BABYLON.QuadraticEase();
+        easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+        animation.setEasingFunction(easingFunction);
+        
+        item.mesh.animations = [animation];
+        hud.scene.beginAnimation(item.mesh, 0, 30, false);
+      }
+    });
+  }
+  
+  // Calculate position for expanded sub-items
+  function calculateExpandedItemPosition(item, screenX, screenY) {
+    if (item.text === "Back") {
+      return new BABYLON.Vector3(0, 0, 0); // Center
+    }
+    
+    const radians = (item.angle * Math.PI) / 180;
+    const x = Math.sin(radians) * item.radius;
+    const z = Math.cos(radians) * item.radius;
+    
+    return new BABYLON.Vector3(x, 0, z);
+  }
+  
+  // Go back to previous menu level - STABLE SYSTEM
   hud.goBackMenu = function(screenX, screenY) {
     if (menuStack.length === 0) {
-      hud.hideRadialMenu();
+      // If we're at the root, return to main menu
+      console.log('🔄 Returning to main menu');
+      returnToMainMenu(screenX, screenY);
       return;
     }
     
@@ -468,13 +696,118 @@
       }
     });
     
-    // Re-animate the menu
+    // Re-animate the menu with collapse effect
+    if (radialMenuVisible) {
+      animateMenuCollapse(screenX, screenY);
+    }
+    
+    console.log('🔄 Returned to menu level:', currentMenuLevel);
+  };
+  
+  // Return to main menu - STABLE SYSTEM
+  function returnToMainMenu(screenX, screenY) {
+    console.log('🏠 Returning to main menu with 4 main categories');
+    
+    // Clear the menu stack completely
+    menuStack = [];
+    
+    // Reset to main menu level
+    currentMenuLevel = 'main';
+    
+    // Clear all current items
+    clearMenuItems();
+    
+    // Re-add only the main menu items (these are set up in gfx.js)
+    if (window.hud && window.hud.addRadialMenuItem) {
+      // The main menu items are already added in gfx.js, so we just need to reinitialize
+      initializeMainMenuLayout();
+    }
+    
+    // Re-animate the main menu
     if (radialMenuVisible) {
       animateMenuItems(screenX, screenY);
     }
     
-    console.log('Returned to menu level:', currentMenuLevel);
-  };
+    console.log('✅ Main menu restored with 4 main categories');
+  }
+  
+  // Animate menu collapse back to main level - DREAM SYSTEM
+  function animateMenuCollapse(screenX, screenY) {
+    // First, restore main menu items to full size
+    restoreMainMenuItems();
+    
+    radialMenuItems.forEach((item, index) => {
+      if (!item.mesh) return;
+      
+      // Animate from current position back to main menu positions
+      const targetPos = calculateMainItemPosition(item, screenX, screenY);
+      
+      const animation = new BABYLON.Animation(
+        "collapseItem",
+        "position",
+        20,
+        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+      );
+      
+      const keyFrames = [];
+      keyFrames.push({ frame: 0, value: item.mesh.position.clone() });
+      keyFrames.push({ frame: 20, value: targetPos });
+      
+      animation.setKeys(keyFrames);
+      
+      // Add easing for smooth collapse
+      const easingFunction = new BABYLON.QuadraticEase();
+      easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEIN);
+      animation.setEasingFunction(easingFunction);
+      
+      item.mesh.animations = [animation];
+      hud.scene.beginAnimation(item.mesh, 0, 20, false);
+    });
+  }
+  
+  // Restore main menu items to full size when returning from submenu
+  function restoreMainMenuItems() {
+    radialMenuItems.forEach(item => {
+      if (!item.isSubItem && item.mesh) {
+        // Animate restoring to full size
+        const restoreAnimation = new BABYLON.Animation(
+          "restoreMainItem",
+          "scaling",
+          20,
+          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+        );
+        
+        const keyFrames = [];
+        keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0.5, 0.5, 0.5) });
+        keyFrames.push({ frame: 20, value: new BABYLON.Vector3(1, 1, 1) });
+        
+        restoreAnimation.setKeys(keyFrames);
+        
+        // Add easing for smooth restoration
+        const easingFunction = new BABYLON.QuadraticEase();
+        easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+        restoreAnimation.setEasingFunction(easingFunction);
+        
+        item.mesh.animations = [restoreAnimation];
+        hud.scene.beginAnimation(item.mesh, 0, 20, false);
+      }
+    });
+  }
+  
+  // Calculate position for main menu items
+  function calculateMainItemPosition(item, screenX, screenY) {
+    const radians = (item.angle * Math.PI) / 180;
+    // Ensure main menu items are positioned far enough from center to avoid overlap
+    const safeRadius = Math.max(menuConfig.itemRadius, 1.0); // At least 1.0 units from center
+    const x = Math.sin(radians) * safeRadius;
+    const z = Math.cos(radians) * safeRadius;
+    
+    console.log(`📍 Main menu item "${item.text}" positioned at (${x.toFixed(2)}, ${z.toFixed(2)}) - radius: ${safeRadius}`);
+    
+    return new BABYLON.Vector3(x, 0, z);
+  }
   
   // Clear all menu item meshes
   function clearMenuItems() {
@@ -488,11 +821,22 @@
   
   // Load menu items for a specific level
   function loadMenuLevel(level) {
-    const items = menuDefinitions[level] || [];
+    const menuData = menuDefinitions[level];
+    if (!menuData) {
+      console.warn('Menu level not found:', level);
+      return;
+    }
+    
+    const items = menuData.items || [];
     
     // Add back button for sub-menus
     if (level !== 'main') {
       hud.addRadialMenuItem("Back", "↩️", () => hud.goBackMenu(), new BABYLON.Color3(0.5, 0.5, 0.5));
+    }
+    
+    // Add close menu button for main menu
+    if (level === 'main') {
+      hud.addRadialMenuItem("Close", "❌", () => hud.hideRadialMenu(), new BABYLON.Color3(0.8, 0.2, 0.2));
     }
     
     // Add all items for this level
@@ -501,14 +845,75 @@
     });
   }
   
-  // Add item to radial menu
+  // Initialize main menu layout (called when menu is first shown) - STABLE SYSTEM
+  function initializeMainMenuLayout() {
+    console.log('🏠 Initializing main menu with 4 main categories');
+    
+    // Clear any existing submenu items to ensure clean main menu
+    clearSubmenuItems();
+    
+    // Reset to main menu level
+    currentMenuLevel = 'main';
+    
+    // Position main menu items in a circle
+    radialMenuItems.forEach((item, index) => {
+      if (!item.isSubItem && item.mesh) {
+        const pos = calculateMainItemPosition(item, 0, 0);
+        item.mesh.position.copyFrom(pos);
+        
+        // Ensure main menu items are at full scale and visible
+        item.mesh.scaling.setAll(1.0);
+        if (item.mesh.material) {
+          item.mesh.material.alpha = 1.0;
+        }
+        
+        console.log(`📍 Main menu item "${item.text}" positioned at (${pos.x.toFixed(2)}, ${pos.z.toFixed(2)})`);
+      }
+    });
+    
+    console.log('✅ Main menu initialized with', radialMenuItems.filter(item => !item.isSubItem).length, 'main categories');
+  }
+  
+  // Clear any submenu items to ensure clean main menu
+  function clearSubmenuItems() {
+    // Store submenu items before filtering
+    const submenuItems = radialMenuItems.filter(item => item.isSubItem);
+    
+    // Remove submenu items from the array
+    radialMenuItems = radialMenuItems.filter(item => !item.isSubItem);
+    
+    // Clean up any existing submenu meshes
+    submenuItems.forEach(item => {
+      if (item.mesh) {
+        item.mesh.dispose();
+      }
+    });
+  }
+  
+  // Add item to radial menu - DIRECTIONAL SYSTEM
   hud.addRadialMenuItem = function(text, icon, callback, color) {
+    // Calculate angle based on total items (including this one)
+    const totalItems = radialMenuItems.length + 1;
+    
+    // Get the current anchor direction to determine starting angle
+    const anchorDirection = getAnchorDirection();
+    const baseAngle = calculateBaseAngleForAnchor(anchorDirection);
+    
+    // Spread items across 180° arc, starting from anchor direction
+    const angleSpread = 180;
+    const angleStep = angleSpread / (Math.max(totalItems, 4) - 1);
+    const angle = baseAngle + ((totalItems - 1) * angleStep) - (angleSpread / 2);
+    
+    console.log(`🎯 Adding menu item "${text}" at angle ${angle.toFixed(1)}° (anchor: ${anchorDirection}, base: ${baseAngle}°)`);
+    
     const item = {
       text: text,
       icon: icon,
       callback: callback,
       color: color || new BABYLON.Color3(0.8, 0.4, 0.1), // Default orange
-      angle: radialMenuItems.length * (360 / 8), // Distribute up to 8 items around circle
+      angle: angle,
+      radius: menuConfig.itemRadius, // Use config radius for main menu items
+      isSubItem: false, // Mark as main menu item
       mesh: null
     };
     
@@ -543,18 +948,41 @@
     mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
       BABYLON.ActionManager.OnPickTrigger,
       () => {
+        // Prevent event propagation to center mesh
+        event?.stopPropagation?.();
+        
+        // Visual feedback - briefly scale up the clicked item
+        const originalScale = mesh.scaling.clone();
+        mesh.scaling.scaleInPlace(1.3);
+        setTimeout(() => {
+          mesh.scaling.copyFrom(originalScale);
+        }, 150);
+        
+        console.log(`🎯 Menu item "${item.text}" clicked - executing callback`);
+        
         if (item.callback) {
           item.callback();
         }
-        hud.hideRadialMenu();
+        
+        // Only hide menu for "Back" button, keep it open for other actions
+        if (item.text === "Back") {
+          hud.hideRadialMenu();
+        }
       }
     ));
     
     // Store mesh reference
     item.mesh = mesh;
     
-    // Start at center position (will animate out when shown)
-    mesh.position.set(0, 0, 0);
+    // Position based on item type
+    if (item.isSubItem) {
+      // Sub-items start at center (will expand outward)
+      mesh.position.set(0, 0, 0);
+    } else {
+      // Main menu items start at their final positions
+      const pos = calculateMainItemPosition(item, 0, 0);
+      mesh.position.copyFrom(pos);
+    }
   }
   
   // Check if point is inside radial menu
@@ -806,6 +1234,315 @@
 
   // Expose minimap update function
   hud.updateMinimap = updateMinimap;
+  
+  // ===== BUILDING SYSTEM =====
+  
+  // Building system state
+  let buildingMode = false;
+  let currentBuildingType = null;
+  let buildingPreview = null;
+  
+  // Initialize building system
+  function initBuildingSystem() {
+    console.log('🏗️ Building system initialized');
+  }
+  
+  // Start building placement mode - DREAM SYSTEM
+  hud.startBuildingPlacement = function(buildingType) {
+    console.log(`🏗️ Starting building placement for: ${buildingType}`);
+    buildingMode = true;
+    currentBuildingType = buildingType;
+    
+    if (buildingType === 'camp') {
+      console.log('⛺ Camp placement mode activated! Click to place your camp.');
+      
+      // Expand the camp menu with building options
+      expandCampBuildingMenu();
+      
+      // Hide the main buildings menu temporarily
+      hideBuildingsMenu();
+    }
+  }
+  
+  // Expand camp building menu with placement options - DIRECTIONAL SYSTEM
+  function expandCampBuildingMenu() {
+    // Find the Buildings button to get its angle and anchor direction
+    const buildingsButton = radialMenuItems.find(item => item.text === "Buildings");
+    if (!buildingsButton) {
+      console.warn('Buildings button not found for camp expansion');
+      return;
+    }
+    
+    // Get the anchor direction from the current menu position
+    const anchorDirection = getAnchorDirection();
+    console.log('🏗️ Expanding camp from Buildings button at angle:', buildingsButton.angle, 'Anchor direction:', anchorDirection);
+    
+    // Create camp building options
+    const campOptions = [
+      { text: "Place Camp", icon: "📍", callback: () => activateCampPlacement(), color: new BABYLON.Color3(0.4, 0.8, 0.4) },
+      { text: "Cancel", icon: "❌", callback: () => cancelCampPlacement(), color: new BABYLON.Color3(0.8, 0.2, 0.2) }
+    ];
+    
+    // Calculate the base angle for camp options based on anchor direction
+    const baseAngle = calculateBaseAngleForAnchor(anchorDirection);
+    const angleSpread = 120; // Spread camp options across 120° arc
+    
+    // Add camp options in expanded radius, following anchor direction
+    campOptions.forEach((option, index) => {
+      // Calculate angle relative to anchor direction
+      const relativeAngle = baseAngle + (index * (angleSpread / (campOptions.length - 1))) - (angleSpread / 2);
+      const expandedRadius = menuConfig.itemRadius * 3.5; // Even further out than buildings
+      
+      const campOption = {
+        text: option.text,
+        icon: option.icon,
+        callback: option.callback,
+        color: option.color,
+        angle: relativeAngle,
+        radius: expandedRadius,
+        isSubItem: true,
+        isCampOption: true, // Mark as camp-specific option
+        mesh: null
+      };
+      
+      radialMenuItems.push(campOption);
+      createMenuItemMesh(campOption);
+    });
+    
+    // Animate camp options expanding outward
+    animateCampOptions();
+  }
+  
+  // Get the current anchor direction for the menu
+  function getAnchorDirection() {
+    return currentAnchor || 'bottom'; // Default to bottom if not set
+  }
+  
+  // Calculate base angle for submenu items based on anchor direction
+  function calculateBaseAngleForAnchor(anchor) {
+    switch (anchor) {
+      case 'top':
+        return 90; // Downward (away from top edge)
+      case 'bottom':
+        return 270; // Upward (away from bottom edge)
+      case 'left':
+        return 0; // Rightward (away from left edge)
+      case 'right':
+        return 180; // Leftward (away from right edge)
+      default:
+        return 270; // Default to upward (bottom anchor)
+    }
+  }
+  
+  // Animate camp options expanding outward
+  function animateCampOptions() {
+    radialMenuItems.forEach(item => {
+      if (item.isCampOption && item.mesh) {
+        const targetPos = calculateExpandedItemPosition(item, 0, 0);
+        
+        // Start from center
+        item.mesh.position.set(0, 0, 0);
+        
+        // Animate to expanded position
+        const animation = new BABYLON.Animation(
+          "expandCampOption",
+          "position",
+          30,
+          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+        );
+        
+        const keyFrames = [];
+        keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0, 0, 0) });
+        keyFrames.push({ frame: 30, value: targetPos });
+        
+        animation.setKeys(keyFrames);
+        
+        // Add easing for smooth expansion
+        const easingFunction = new BABYLON.QuadraticEase();
+        easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+        animation.setEasingFunction(easingFunction);
+        
+        item.mesh.animations = [animation];
+        hud.scene.beginAnimation(item.mesh, 0, 30, false);
+      }
+    });
+  }
+  
+  // Hide buildings menu when camp is selected
+  function hideBuildingsMenu() {
+    radialMenuItems.forEach(item => {
+      if (item.isSubItem && !item.isCampOption && item.mesh) {
+        // Fade out buildings menu items
+        const fadeAnimation = new BABYLON.Animation(
+          "fadeBuildings",
+          "material.alpha",
+          15,
+          BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+        );
+        
+        const keyFrames = [];
+        keyFrames.push({ frame: 0, value: 1.0 });
+        keyFrames.push({ frame: 15, value: 0.3 });
+        
+        fadeAnimation.setKeys(keyFrames);
+        
+        item.mesh.animations = [fadeAnimation];
+        hud.scene.beginAnimation(item.mesh, 0, 15, false);
+      }
+    });
+  }
+  
+  // Activate camp placement mode
+  function activateCampPlacement() {
+    console.log('⛺ Camp placement mode activated! Click on terrain to place your camp.');
+    
+    // Set up click handler for terrain placement
+    if (hud.canvas) {
+      hud.canvas.addEventListener('click', handleCampPlacementClick);
+    }
+    
+    // Show placement instructions
+    showCampPlacementInstructions();
+  }
+  
+  // Handle camp placement clicks
+  function handleCampPlacementClick(event) {
+    if (!buildingMode || currentBuildingType !== 'camp') return;
+    
+    // Get click position in world coordinates
+    const rect = hud.canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    // Raycast to get world position
+    const ray = hud.scene.createPickingRay(x, y, BABYLON.Matrix.Identity(), hud.camera);
+    const hit = hud.scene.pickWithRay(ray);
+    
+    if (hit && hit.pickedMesh && hit.pickedMesh.name.includes('Mesh')) {
+      // Place camp at clicked position
+      placeCamp(hit.pickedPoint);
+      
+      // Exit building mode
+      exitBuildingMode();
+    }
+  }
+  
+  // Place the camp building
+  function placeCamp(position) {
+    console.log(`⛺ Placing camp at position:`, position.toString());
+    
+    // Create a simple camp mesh
+    const camp = BABYLON.MeshBuilder.CreateCylinder('camp', { height: 1.5, diameter: 2 }, hud.scene);
+    const material = new BABYLON.StandardMaterial('campMaterial', hud.scene);
+    material.diffuseColor = new BABYLON.Color3(0.8, 0.6, 0.4); // Brown
+    camp.material = material;
+    camp.position.copyFrom(position);
+    camp.position.y = 0.75; // Half height to sit on ground
+    
+    // Add tent structure on top
+    const tent = BABYLON.MeshBuilder.CreateCone('tent', { height: 1, diameter: 1.8 }, hud.scene);
+    tent.material = material;
+    tent.position.y = 1.5;
+    tent.parent = camp;
+    
+    console.log('✅ Camp placed successfully!');
+    
+    // You can add more camp logic here:
+    // - Add to building list
+    // - Trigger camp effects
+    // - Spawn camp-related units
+    // - etc.
+  }
+  
+  // Cancel camp placement
+  function cancelCampPlacement() {
+    console.log('❌ Camp placement cancelled');
+    exitBuildingMode();
+  }
+  
+  // Exit building mode and return to main menu
+  function exitBuildingMode() {
+    console.log('🏗️ Exiting building mode');
+    
+    // Reset building system state
+    buildingMode = false;
+    currentBuildingType = null;
+    
+    // Remove click handler for building placement
+    if (hud.canvas) {
+      hud.canvas.removeEventListener('click', handleCampPlacementClick);
+    }
+    
+    // Return to main menu
+    returnToMainMenu(0, 0);
+  }
+  
+  // Show camp placement instructions
+  function showCampPlacementInstructions() {
+    console.log('📋 Click on terrain to place your camp. The camp will provide shelter and basic resources.');
+  }
+  
+  // ===== UNIT MANAGEMENT FUNCTIONS =====
+  
+  hud.selectAllUnits = function() {
+    console.log('👥 Selecting all units');
+    if (window.player && window.player.selectAllUnits) {
+      window.player.selectAllUnits();
+    }
+  }
+  
+  hud.deselectAllUnits = function() {
+    console.log('❌ Deselecting all units');
+    if (window.player && window.player.clearSelection) {
+      window.player.clearSelection();
+    }
+  }
+  
+  hud.setUnitFormation = function() {
+    console.log('⚔️ Setting unit formation');
+  }
+  
+  hud.upgradeUnits = function() {
+    console.log('⬆️ Upgrading units');
+  }
+  
+  // ===== RESEARCH FUNCTIONS =====
+  
+  hud.researchWeapons = function() {
+    console.log('⚔️ Researching weapons');
+  }
+  
+  hud.researchArmor = function() {
+    console.log('🛡️ Researching armor');
+  }
+  
+  hud.researchSpeed = function() {
+    console.log('⚡ Researching speed');
+  }
+  
+  hud.researchEfficiency = function() {
+    console.log('⚙️ Researching efficiency');
+  }
+  
+  // ===== RALLY FUNCTIONS =====
+  
+  hud.setRallyPoint = function() {
+    console.log('📍 Setting rally point');
+  }
+  
+  hud.clearRallyPoint = function() {
+    console.log('🗑️ Clearing rally point');
+  }
+  
+  hud.setPatrolRoute = function() {
+    console.log('👁️ Setting patrol route');
+  }
+  
+  hud.setDefenseMode = function() {
+    console.log('🛡️ Setting defense mode');
+  }
   
   // Dispose of HUD resources
   hud.dispose = function() {

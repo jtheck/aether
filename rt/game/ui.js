@@ -60,7 +60,6 @@ function getRandomColor() {
 
 
 (function(ui) {
-  
 
   ui.init = function(){
 
@@ -217,7 +216,10 @@ function getRandomColor() {
       break;
       case 'Escape':
         if (state == true){
-          if (document.getElementById('menu').style.display == 'none'){
+          // Check if we're in building placement mode
+          if (window.buildingSystem && window.buildingSystem.isPlacing) {
+            window.buildingSystem.cancelPlacement();
+          } else if (document.getElementById('menu').style.display == 'none'){
             ui.showMenu(prevMenu);
           } else {
             ui.hideMenu();
@@ -548,7 +550,7 @@ function getRandomColor() {
                       
                       window.behaviorManager.setBehavior(unit, 'walk', { 
                         targetPoint: targetPoint,
-                        walkSpeed: 2.0 // Normal walking speed
+                        walkSpeed: 6.0 // Normal walking speed
                       });
                       
                       console.log(`🚶 Unit ${unit.name || unit.type} walking to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
@@ -586,6 +588,11 @@ function getRandomColor() {
       
       // Handle right click for moving camera target
       if (e.type === 'pointerdown' && e.button === 2) { // Right mouse button
+        // Check if building system is active - if so, let it handle the event
+        if (window.buildingSystem && window.buildingSystem.isPlacing) {
+          return; // Let building system handle this
+        }
+        
         if (pickResult.hit) {
           // Prevent default only for our custom right-click action
           e.preventDefault();
@@ -607,23 +614,89 @@ function getRandomColor() {
             }
           }
           
-          // Move the player flag instantly to clicked position
-          if (window.player && window.player.pbody) {
-            window.player.pbody.state.loc.x = worldPos.x;
-            window.player.pbody.state.loc.z = worldPos.z;
+          // Start player drag system
+          playerDragActive = true;
+          playerDragStart = {
+            x: e.clientX,
+            y: e.clientY,
+            worldX: worldPos.x,
+            worldZ: worldPos.z
+          };
+          playerDragVelocity = { x: 0, z: 0 };
+        }
+      } else if (e.type === 'pointermove' && playerDragActive) {
+        // Check if building system is active - if so, let it handle the event
+        if (window.buildingSystem && window.buildingSystem.isPlacing) {
+          return; // Let building system handle this
+        }
+        
+        // Handle drag movement for momentum-based player movement
+        const worldPos = ui.getWorldPositionFromScreen(e.clientX, e.clientY);
+        if (worldPos && window.player && window.player.pbody) {
+          // Calculate drag velocity based on mouse movement
+          const dragDeltaX = e.clientX - playerDragStart.x;
+          const dragDeltaY = e.clientY - playerDragStart.y;
+          
+          // Convert screen delta to world velocity (adjust sensitivity as needed)
+          const dragSensitivity = 0.05; // Increased sensitivity for more responsive movement
+          // Fix the coordinate mapping: screen right = world right, screen down = world forward
+          playerDragVelocity.x = dragDeltaX * dragSensitivity; // Remove the negative sign
+          playerDragVelocity.z = dragDeltaY * dragSensitivity; // Remove the negative sign
+          
+          // Apply velocity to player physics body CONTINUOUSLY during drag
+          if (window.player.pbody.imp) {
+            // Add to existing impulse instead of replacing it
+            window.player.pbody.imp.x += playerDragVelocity.x;
+            window.player.pbody.imp.z += playerDragVelocity.z;
             
-            // Update the player's transform node position
-            if (window.player.transformNode) {
-              window.player.transformNode.position.x = worldPos.x;
-              window.player.transformNode.position.z = worldPos.z;
-            }
+            // Log the impulse being applied
+            console.log('🎯 Drag impulse applied:', { x: playerDragVelocity.x, z: playerDragVelocity.z });
           }
         }
-      }
-    } else {
-      // Clicked on empty space
-      if (e.type === 'pointerdown') {
-        // Empty space clicked
+      } else if (e.type === 'pointerup' && e.button === 2) {
+        // Check if building system is active - if so, let it handle the event
+        if (window.buildingSystem && window.buildingSystem.isPlacing) {
+          return; // Let building system handle this
+        }
+        
+        // Right mouse button released
+        if (playerDragActive) {
+          // Check if this was a drag or just a click
+          const dragDistance = Math.sqrt(
+            Math.pow(e.clientX - playerDragStart.x, 2) + 
+            Math.pow(e.clientY - playerDragStart.y, 2)
+          );
+          
+          if (dragDistance < 5) {
+            // This was just a click (not a drag) - clear unit selection
+            if (window.player && window.player.selectedUnits) {
+              window.player.selectedUnits = [];
+              console.log('🎯 Right-click: Cleared unit selection');
+            }
+                             } else {
+                     // This was a drag - apply final momentum
+                     if (window.player && window.player.pbody && window.player.pbody.imp) {
+                       // Apply the accumulated drag velocity as final impulse with more boost
+                       const finalBoost = 5; // Increased from 2 to 5 for more noticeable movement
+                       window.player.pbody.imp.x = playerDragVelocity.x * finalBoost;
+                       window.player.pbody.imp.z = playerDragVelocity.z * finalBoost;
+                       console.log('🎯 Right-click drag: Applied final momentum boost', { 
+                         original: playerDragVelocity, 
+                         boosted: { x: playerDragVelocity.x * finalBoost, z: playerDragVelocity.z * finalBoost } 
+                       });
+                     }
+                   }
+          
+          // Reset drag state
+          playerDragActive = false;
+          playerDragStart = { x: 0, y: 0, worldX: 0, worldZ: 0 };
+          playerDragVelocity = { x: 0, z: 0 };
+        }
+      } else {
+        // Clicked on empty space
+        if (e.type === 'pointerdown') {
+          // Empty space clicked
+        }
       }
     }
   };
@@ -636,6 +709,13 @@ function getRandomColor() {
   let cameraVelocity = { alpha: 0, beta: 0, radius: 0 };
   let cameraMomentum = 0.24; // How much momentum to keep (0.95 = 95% momentum - almost no bounce)
   let cameraDamping = 0.999; // How quickly momentum fades (0.98 = 2% fade per frame - almost no bounce)
+  
+  // Player drag momentum system
+  let playerDragActive = false;
+  let playerDragStart = { x: 0, y: 0, worldX: 0, worldZ: 0 };
+  let playerDragVelocity = { x: 0, z: 0 };
+  let playerDragMomentum = 0.85; // How much momentum to keep (0.85 = 85% momentum)
+  let playerDragDamping = 0.98; // How quickly momentum fades
   
   // Camera movement target system
   let cameraMovementTarget = null; // Target position to move camera to
@@ -955,6 +1035,35 @@ function getRandomColor() {
     
     console.log(`🎯 Created target marker at (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
   }
+
+  // Helper function to get world position from screen coordinates
+  ui.getWorldPositionFromScreen = function(screenX, screenY) {
+    if (!gfx.scene || !gfx.camera) return null;
+    
+    // Create picking ray from screen coordinates
+    const ray = gfx.scene.createPickingRay(
+      screenX, 
+      screenY, 
+      BABYLON.Matrix.Identity(), 
+      gfx.camera
+    );
+    
+    // Pick against the ground plane (assuming Y=0)
+    const groundPlane = new BABYLON.Plane(0, 1, 0, 0);
+    const intersection = ray.intersectsPlane(groundPlane);
+    
+    if (intersection) {
+      return intersection;
+    }
+    
+    // Fallback: try to pick against the scene
+    const pickResult = gfx.scene.pick(screenX, screenY);
+    if (pickResult.hit) {
+      return pickResult.pickedPoint;
+    }
+    
+    return null;
+  };
 
 }(window.ui = window.ui || {}));
 

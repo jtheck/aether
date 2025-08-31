@@ -29,7 +29,7 @@
     lights.sun.intensity = 0.9;
     lights.sun.specularScale = 1.0; // Increase for better reflections
     lights.sun.diffuse = new BABYLON.Color3(1, 0.95, 0.8); // Warm sunlight
-    lights.sun.specular = new BABYLON.Color3(1, 0.95, 0.8); // Match diffuse for proper reflections
+    lights.sun.specular = new ColorHex("#222222"); // Match diffuse for proper reflections
     
     // Create moon as ambient lighting (this is what we actually see as moonlight)
     lights.moon = new BABYLON.HemisphericLight("moonLight", new BABYLON.Vector3(0, 1, 0), scene);

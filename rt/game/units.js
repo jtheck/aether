@@ -11,7 +11,7 @@ const UnitTypes = {
     scale: 0.5, // Made bigger so they're visible
     health: 50,
     speed: 2,
-    rotationSpeed: 15.0, // Snappy turning for responsive movement
+    rotationSpeed: 5.0, // Snappy turning for responsive movement
     modelOrientation: Math.PI * 1.5, // 270 degrees - flipped around to face forward
     size: 1,
     cost: { food: 25 },

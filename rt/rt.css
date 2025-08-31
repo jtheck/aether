@@ -375,3 +375,20 @@ a:after{
   /* z-index: 10; */
   position: absolute! important;
 }
+
+#anchor {
+
+
+  position: absolute;
+  bottom: 15px;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px outset White;
+  border-radius: 7px;
+  color: White;
+  padding: 5px;
+  width: 59px;
+  height: 59px;
+  background-image: url('assets/menu-bg.jpg');
+  display: block;
+}

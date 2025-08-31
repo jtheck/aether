@@ -485,20 +485,21 @@
       }
     });
   }
-
-  // Model placement rules for different tile types
+let pov1 = 170;
+let pov2 = 240;
+  // Model rules for different tile types
   const modelRules = {
     // Grass tiles (0-15) - trees, mushrooms, etc.
     5: { // GRASS_IN
       models: [
         // Ordered rarest to most common for priority spawning - THICKER SPAWNS
-        { path: "assets/models/mushroom.glb", chance: 0.2, scale: 0.1, billboardScale: 0.5, lodDistance: 75 }, // 20% - rare finds
-        { path: "assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 3, lodDistance: 150 }, // 30% - plain rocks
-        { path: "assets/models/rocks_moss.glb", chance: 0.4, scale: 7.5, billboardScale: 5.9, lodDistance: 200 }, // 40% - moss rocks
-        { path: "assets/models/trees.glb", chance: 0.75, scale: .9, billboardScale: 3, lodDistance: 150 }, // 70% - THICK FORESTS!
-        { path: "assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 11, lodDistance: 75 }, // 50% - more tortles
-        { path: "assets/models/frog.glb", chance: 0.6, scale: 0.1, billboardScale: 0.5, lodDistance: 50 }, // 60% - more frogs
-        { path: "assets/models/rocks_snow.glb", chance: 0.95, scale: 11.5, billboardScale: 7.5, lodDistance: 200 } // 95% - snow everywhere!
+        { path: "assets/models/mushroom.glb", chance: 0.2, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 20% - rare finds
+        { path: "assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 3, lodDistance: pov1 }, // 30% - plain rocks
+        { path: "assets/models/rocks_moss.glb", chance: 0.4, scale: 7.5, billboardScale: 5.9, lodDistance: pov2 }, // 40% - moss rocks
+        { path: "assets/models/trees.glb", chance: 0.75, scale: .9, billboardScale: 3, lodDistance: pov1 }, // 70% - THICK FORESTS!
+        { path: "assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 11, lodDistance: pov1 }, // 50% - more tortles
+        { path: "assets/models/frog.glb", chance: 0.6, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 60% - more frogs
+        { path: "assets/models/rocks_snow.glb", chance: 0.95, scale: 11.5, billboardScale: 7.5, lodDistance: pov2 } // 95% - snow everywhere!
 
       ]
     },
@@ -960,7 +961,7 @@
       const cameraLerpSpeed = 0.05; // Normal smooth camera movement
       gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraTargetDestination.x, cameraLerpSpeed);
       gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraTargetDestination.z, cameraLerpSpeed);
-      gfx.cameraTarget.position.y = 5;
+      gfx.cameraTarget.position.y = 9;
 
     }
     
@@ -1104,7 +1105,7 @@
     // Set better default camera angle: alpha=-2.5 (horizontal), beta=0.9 (looking slightly down, not straight down)
     let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 0.9, radius, new Vec3(0, 0, 0), scene);
     gfx.cameraTarget = new BABYLON.TransformNode("zCameraFocus");
-    gfx.cameraTarget.position.y = 5;
+    gfx.cameraTarget.position.y = 9;
     camera.lockedTarget = gfx.cameraTarget;
     // Attach camera controls but disable left mouse button (only allow right-click and wheel)
     camera.attachControl(gfx.canvas, false); // false = don't prevent default events
@@ -1121,8 +1122,8 @@
 
     // Camera setup complete
 
-    camera.upperRadiusLimit = 175;
-    camera.lowerRadiusLimit = 17;
+    camera.upperRadiusLimit = 222;
+    camera.lowerRadiusLimit = 1;
     camera.upperBetaLimit = 2.0; // Limit how high you can look (prevent going too high)
     camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
     camera.maxZ = 2001; // max render distance

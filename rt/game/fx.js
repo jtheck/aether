@@ -6,7 +6,7 @@
   // Initialize the FX system
   fx.init = function(gameScene) {
     scene = gameScene;
-    console.log('FX system initialized');
+    // console.log('FX system initialized');
     
     // Enable explosion scale testing with keyboard shortcuts
     fx.setupExplosionScaleTesting();
@@ -104,10 +104,10 @@
   // Public API for creating explosions
   fx.createExplosion = function(position, scale = 1.0) {
     if (!scene) {
-      console.warn('FX system not initialized');
+      // console.warn('FX system not initialized');
       return;
     }
-    console.log(`💥 Creating explosion with scale: ${scale}`);
+    // console.log(`💥 Creating explosion with scale: ${scale}`);
     Explode(position, scale);
   };
   
@@ -127,7 +127,7 @@
         fx.createExplosion(position, scale);
       }
     });
-    console.log('💥 Explosion scale testing enabled! Press 1-9 for different scales');
+    // console.log('💥 Explosion scale testing enabled! Press 1-9 for different scales');
   };
   
   // Clean up

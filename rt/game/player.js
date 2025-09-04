@@ -40,6 +40,14 @@ function Player(ops){
   
   // Player's selected units
   this.selectedUnits = [];
+  
+  // Player's resources
+  this.resources = {
+    food: 100,
+    wood: 50,
+    stone: 25,
+    magic: 10
+  };
 
   this.cursor = new PBody();
   
@@ -55,6 +63,9 @@ function Player(ops){
   
   // Add a flag to follow the player
   this.loadFlag();
+  
+  // Spawn initial villagers around the agora
+  this.spawnInitialVillagers();
 
 }
 
@@ -181,10 +192,10 @@ Player.prototype.loadFrogMesh = function() {
       // Apply the material to the frog model
       model.root.material = playerMaterial;
       
-      console.log('🎨 Applied player color to frog:', window.currentPlayerColor);
+      // console.log('🎨 Applied player color to frog:', window.currentPlayerColor);
     }
   }).catch(function(error) {
-    console.error("Failed to load frog mesh:", error);
+    // console.error("Failed to load frog mesh:", error);
   });
 };
 
@@ -208,10 +219,10 @@ Player.prototype.loadFlag = function() {
       // Stop any animations
       result.animationGroups.forEach(g => g.stop());
       
-      console.log("🚩 Flag attached to player!");
+      // console.log("🚩 Flag attached to player!");
     })
     .catch(error => {
-      console.warn("⚠️ Could not load flag.glb:", error);
+      // console.warn("⚠️ Could not load flag.glb:", error);
     });
 };
 
@@ -239,7 +250,7 @@ Player.prototype.selectUnit = function(unit) {
   }
   
   this.selectedUnits.push(unit);
-  console.log(`🎯 Selected unit: ${unit.name || unit.type}`);
+  // console.log(`🎯 Selected unit: ${unit.name || unit.type}`);
   return true;
 };
 
@@ -247,7 +258,7 @@ Player.prototype.deselectUnit = function(unit) {
   const index = this.selectedUnits.indexOf(unit);
   if (index > -1) {
     this.selectedUnits.splice(index, 1);
-    console.log(`❌ Deselected unit: ${unit.name || unit.type}`);
+    // console.log(`❌ Deselected unit: ${unit.name || unit.type}`);
     return true;
   }
   return false;
@@ -257,7 +268,7 @@ Player.prototype.clearSelection = function() {
   const count = this.selectedUnits.length;
   this.selectedUnits = [];
   if (count > 0) {
-    console.log(`🗑️ Cleared selection of ${count} units`);
+    // console.log(`🗑️ Cleared selection of ${count} units`);
   }
   return count;
 };
@@ -286,4 +297,86 @@ Player.prototype.selectAllUnitsOfType = function(type) {
   
   console.log(`🎯 Selected all ${unitsOfType.length} units of type: ${type}`);
   return unitsOfType.length;
+};
+
+// Resource management methods
+Player.prototype.addResource = function(resourceType, amount) {
+  if (this.resources.hasOwnProperty(resourceType)) {
+    this.resources[resourceType] += amount;
+    console.log(`💰 Added ${amount} ${resourceType}. Total: ${this.resources[resourceType]}`);
+    return true;
+  }
+  console.warn(`❌ Unknown resource type: ${resourceType}`);
+  return false;
+};
+
+Player.prototype.removeResource = function(resourceType, amount) {
+  if (this.resources.hasOwnProperty(resourceType)) {
+    if (this.resources[resourceType] >= amount) {
+      this.resources[resourceType] -= amount;
+      console.log(`💰 Removed ${amount} ${resourceType}. Total: ${this.resources[resourceType]}`);
+      return true;
+    } else {
+      console.warn(`❌ Not enough ${resourceType}. Have: ${this.resources[resourceType]}, Need: ${amount}`);
+      return false;
+    }
+  }
+  console.warn(`❌ Unknown resource type: ${resourceType}`);
+  return false;
+};
+
+Player.prototype.hasResource = function(resourceType, amount) {
+  return this.resources.hasOwnProperty(resourceType) && this.resources[resourceType] >= amount;
+};
+
+Player.prototype.getResource = function(resourceType) {
+  return this.resources[resourceType] || 0;
+};
+
+Player.prototype.getResources = function() {
+  return { ...this.resources }; // Return copy to prevent external modification
+};
+
+// Spawn initial villagers around the player's agora
+Player.prototype.spawnInitialVillagers = function() {
+  if (!window.Unit || !window.gameUnits || !TILE_SIZE) {
+    console.warn('❌ Required systems not ready for villager spawning');
+    return;
+  }
+  
+  const agoraX = this.agora.x * TILE_SIZE;
+  const agoraZ = this.agora.y * TILE_SIZE;
+  
+  // Spawn 8-12 villagers around the agora
+  const villagerCount = 8 + Math.floor(Math.random() * 5);
+  
+  for (let i = 0; i < villagerCount; i++) {
+    // Random position around agora (within 3-6 tiles)
+    const angle = (i / villagerCount) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
+    const distance = 3 + Math.random() * 3;
+    
+    const x = agoraX + Math.cos(angle) * distance * TILE_SIZE;
+    const z = agoraZ + Math.sin(angle) * distance * TILE_SIZE;
+    
+    const villager = new window.Unit('villager', { x, y: 0, z });
+    if (!villager) {
+      console.warn('❌ Failed to create villager unit');
+      continue;
+    }
+    
+    villager.owner = 'player';
+    
+    // Random rotation
+    const randomRotation = Math.random() * Math.PI * 2;
+    villager.rotation = randomRotation;
+    if (villager.pb.state && villager.pb.state.rot) {
+      villager.pb.state.rot.y = randomRotation;
+    }
+    
+    // Add to player's units and global array
+    this.units.push(villager);
+    window.gameUnits.push(villager);
+  }
+  
+  console.log(`🏘️ Spawned ${villagerCount} villagers around player's agora`);
 };

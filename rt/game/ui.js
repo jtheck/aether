@@ -267,6 +267,29 @@ function getRandomColor() {
           ui.resetCameraView();
         }       
       break;
+      case 'KeyB':
+        if (state == true){
+          // Open building menu
+          if (window.hud && window.hud.showRadialMenu && window.hud.showSubMenu) {
+            // console.log('🏗️ B key pressed - opening building menu');
+            
+            // First show the radial menu at the bottom center of the screen
+            const rect = gfx.canvas.getBoundingClientRect();
+            const centerX = rect.width / 2;
+            const centerY = rect.height * 0.9; // Bottom of screen
+            
+            // Show the radial menu first
+            window.hud.showRadialMenu(centerX, centerY, 'bottom');
+            
+            // Then navigate to the buildings submenu after a short delay
+            setTimeout(() => {
+              window.hud.showSubMenu("buildings", centerX, centerY);
+            }, 100);
+          } else {
+            // console.warn('🏗️ HUD system not available for building menu');
+          }
+        }
+      break;
     }
 
     //   // update key state
@@ -306,14 +329,14 @@ function getRandomColor() {
     if (e.type === 'pointerdown' && e.button === 2) {
       rmbDown = true;
       lastRmbPosition = { x, y };
-      console.log('🎯 RMB DOWN detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
+      // console.log('🎯 RMB DOWN detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
     } else if (e.type === 'pointerup' && e.button === 2) {
       rmbDown = false;
-      console.log('🎯 RMB UP detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
+      // console.log('🎯 RMB UP detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
     } else if (e.type === 'pointermove' && rmbDown) {
       // Update position while RMB is held
       lastRmbPosition = { x, y };
-      console.log('🎯 RMB MOVE detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
+      // console.log('🎯 RMB MOVE detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
     }
     
     // Handle LMB selection system move and up events
@@ -403,7 +426,7 @@ function getRandomColor() {
                   
                   window.behaviorManager.setBehavior(unit, 'run', { 
                     targetPoint: targetPoint,
-                    runSpeed: 4.0 // Fast running speed!
+                    runSpeed: (unit.speed || 20) * 1.5 // 1.5x faster than unit's base speed
                   });
                   
                   // console.log(`🏃‍♂️ Unit ${unit.name || unit.type} RUNNING to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
@@ -468,7 +491,7 @@ function getRandomColor() {
           const screenY = e.clientY;
           
           // Always show the menu at the new location (never close it)
-          console.log('🔄 Right double-click: showing radial menu at new location');
+          // console.log('🔄 Right double-click: showing radial menu at new location');
           window.hud.showRadialMenu(screenX, screenY);
         }
         
@@ -485,7 +508,7 @@ function getRandomColor() {
     
     // Check if the lasso system should handle this click (i.e., it was a drag selection)
     if (window.lassoSelection && window.lassoSelection.shouldHandleClick && window.lassoSelection.shouldHandleClick()) {
-      console.log('🎯 Lasso system handled this as a drag selection, skipping field click');
+      // console.log('🎯 Lasso system handled this as a drag selection, skipping field click');
       return;
     }
     
@@ -516,22 +539,22 @@ function getRandomColor() {
           const tileX = Math.floor(worldPos.x);
           const tileZ = Math.floor(worldPos.z);
           
-          console.log('🎯 Terrain hit:', { worldPos, tileX, tileZ });
+          // console.log('🎯 Terrain hit:', { worldPos, tileX, tileZ });
           
           // Handle field actions based on click type
           if (e.button === 0) { // Left click
-            console.log('🎯 Left click on terrain, attempting explosion...');
+            // console.log('🎯 Left click on terrain, attempting explosion...');
             // Single click - create explosion at clicked position
             if (window.fx && window.fx.createExplosion) {
               // Small explosion for clicks - scale 0.3 for tiny effect
               window.fx.createExplosion(worldPos, 0.123);
-              console.log(`💥 Field action: Small explosion at (${tileX}, ${tileZ})`);
+              // console.log(`💥 Field action: Small explosion at (${tileX}, ${tileZ})`);
               
               // Make selected units walk to the explosion location
               if (window.player && window.player.getSelectedUnits) {
                 const selectedUnits = window.player.getSelectedUnits();
                 if (selectedUnits.length > 0) {
-                  console.log(`🚶 Making ${selectedUnits.length} selected units walk to explosion location`);
+                  // console.log(`🚶 Making ${selectedUnits.length} selected units walk to explosion location`);
                   
                   // Create a visual target marker at the explosion location
                   if (window.gfx && window.gfx.scene) {
@@ -546,29 +569,29 @@ function getRandomColor() {
                       const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
                       const targetPoint = { x: offsetX, z: offsetZ };
                       
-                      console.log(`🚶 Setting walk behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                      // console.log(`🚶 Setting walk behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
                       
                       window.behaviorManager.setBehavior(unit, 'walk', { 
                         targetPoint: targetPoint,
                         walkSpeed: 6.0 // Normal walking speed
                       });
                       
-                      console.log(`🚶 Unit ${unit.name || unit.type} walking to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                      // console.log(`🚶 Unit ${unit.name || unit.type} walking to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
                     } else {
-                      console.warn(`⚠️ Cannot set behavior for unit:`, { 
-                        hasBehaviorManager: !!window.behaviorManager, 
-                        unit: unit,
-                        unitPhysics: unit?.pb,
-                        unitState: unit?.pb?.state
-                      });
+                      // console.warn(`⚠️ Cannot set behavior for unit:`, { 
+                      //   hasBehaviorManager: !!window.behaviorManager, 
+                      //   unit: unit,
+                      //   unitPhysics: unit?.pb,
+                      //   unitState: unit?.pb?.state
+                      // });
                     }
                   });
                 } else {
-                  console.log('🚶 No units selected, skipping walk behavior');
+                  // console.log('🚶 No units selected, skipping walk behavior');
                 }
               }
             } else {
-              console.warn('💥 FX system not available for explosion');
+              // console.warn('💥 FX system not available for explosion');
             }
           }
           
@@ -650,7 +673,7 @@ function getRandomColor() {
             window.player.pbody.imp.z += playerDragVelocity.z;
             
             // Log the impulse being applied
-            console.log('🎯 Drag impulse applied:', { x: playerDragVelocity.x, z: playerDragVelocity.z });
+            // console.log('🎯 Drag impulse applied:', { x: playerDragVelocity.x, z: playerDragVelocity.z });
           }
         }
       } else if (e.type === 'pointerup' && e.button === 2) {
@@ -671,7 +694,7 @@ function getRandomColor() {
             // This was just a click (not a drag) - clear unit selection
             if (window.player && window.player.selectedUnits) {
               window.player.selectedUnits = [];
-              console.log('🎯 Right-click: Cleared unit selection');
+              // console.log('🎯 Right-click: Cleared unit selection');
             }
                              } else {
                      // This was a drag - apply final momentum
@@ -680,10 +703,10 @@ function getRandomColor() {
                        const finalBoost = 5; // Increased from 2 to 5 for more noticeable movement
                        window.player.pbody.imp.x = playerDragVelocity.x * finalBoost;
                        window.player.pbody.imp.z = playerDragVelocity.z * finalBoost;
-                       console.log('🎯 Right-click drag: Applied final momentum boost', { 
-                         original: playerDragVelocity, 
-                         boosted: { x: playerDragVelocity.x * finalBoost, z: playerDragVelocity.z * finalBoost } 
-                       });
+                      //  console.log('🎯 Right-click drag: Applied final momentum boost', { 
+                      //    original: playerDragVelocity, 
+                      //    boosted: { x: playerDragVelocity.x * finalBoost, z: playerDragVelocity.z * finalBoost } 
+                      //  });
                      }
                    }
           
@@ -760,7 +783,7 @@ function getRandomColor() {
       
       // Log for debugging (remove this in production)
       const zoomMethod = e.shiftKey ? "Shift + Wheel" : "Right-click + Wheel";
-      console.log(`${zoomMethod}: delta=${delta}, zoom amount=${zoomAmount.toFixed(4)}, radius=${gfx.camera.radius?.toFixed(4)}`);
+      // console.log(`${zoomMethod}: delta=${delta}, zoom amount=${zoomAmount.toFixed(4)}, radius=${gfx.camera.radius?.toFixed(4)}`);
     } else {
       // Normal scroll wheel = Camera rotation
       e.preventDefault();
@@ -854,7 +877,7 @@ function getRandomColor() {
       const distance = BABYLON.Vector3.Distance(gfx.cameraTarget.position, cameraMovementTarget);
       if (distance < 0.1) {
         cameraMovementTarget = null; // Stop moving when we reach the target
-        console.log('🎯 Camera reached target position');
+        // console.log('🎯 Camera reached target position');
       }
     }
     
@@ -886,7 +909,7 @@ function getRandomColor() {
         gfx.camera.beta = defaultBeta;
       }
       
-      console.log('Camera rotation targets synced:', cameraRotationTarget);
+      // console.log('Camera rotation targets synced:', cameraRotationTarget);
     }
   };
   
@@ -902,7 +925,7 @@ function getRandomColor() {
         gfx.camera.beta = 0.6;
       }
       
-      console.log('Camera view reset to reasonable angle');
+      // console.log('Camera view reset to reasonable angle');
     }
   };
   
@@ -931,8 +954,8 @@ function getRandomColor() {
           rmbFieldPosition.copyFrom(worldPos);
           
           // Log tile information (you can modify this to do whatever you want)
-          console.log(`🗺️ RMB HIT: Tile (${tileX}, ${tileZ}) - Type: ${tile.type}, Position: (${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)})`);
-          console.log(`📍 Stored Vec3: ${rmbFieldPosition.toString()}`);
+          // console.log(`🗺️ RMB HIT: Tile (${tileX}, ${tileZ}) - Type: ${tile.type}, Position: (${worldPos.x.toFixed(2)}, ${worldPos.z.toFixed(2)})`);
+          // console.log(`📍 Stored Vec3: ${rmbFieldPosition.toString()}`);
           
           // You can add more logic here:
           // - Show tile info in HUD
@@ -1033,7 +1056,7 @@ function getRandomColor() {
       }
     }, 3000);
     
-    console.log(`🎯 Created target marker at (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+    // console.log(`🎯 Created target marker at (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
   }
 
   // Helper function to get world position from screen coordinates

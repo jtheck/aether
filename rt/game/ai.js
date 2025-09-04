@@ -32,9 +32,12 @@ class Behavior {
             this.unit.pb.state.vel = { x: 0, y: 0, z: 0 };
         }
         
+        // Use unit's speed property if available, otherwise use impulseStrength
+        const effectiveSpeed = this.unit.speed ? this.unit.speed * 0.1 : impulseStrength; // Scale down speed for physics
+        
         // Apply impulse in movement direction
-        this.unit.pb.imp.x += direction.x * impulseStrength;
-        this.unit.pb.imp.z += direction.z * impulseStrength;
+        this.unit.pb.imp.x += direction.x * effectiveSpeed;
+        this.unit.pb.imp.z += direction.z * effectiveSpeed;
         
         // Calculate target rotation to face movement direction
         let targetRotation = Math.atan2(direction.x, direction.z);
@@ -73,8 +76,8 @@ class Behavior {
         const momentumBoost = 1.0 + (forwardSpeed * 0.3); // Up to 30% speed boost for forward movement
         
         // Apply momentum boost to velocity
-        this.unit.pb.state.vel.x = direction.x * impulseStrength * momentumBoost;
-        this.unit.pb.state.vel.z = direction.z * impulseStrength * momentumBoost;
+        this.unit.pb.state.vel.x = direction.x * effectiveSpeed * momentumBoost;
+        this.unit.pb.state.vel.z = direction.z * effectiveSpeed * momentumBoost;
         
         // Debug logging occasionally
         if (Math.random() < 0.01) { // 1% chance to log
@@ -154,7 +157,7 @@ class LingerBehavior extends Behavior {
         direction.z /= distance;
         
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, 2.0);
+        this.applyMovementWithRotation(direction, (this.unit.speed || 20) * 0.1);
         }
     }
 }
@@ -210,7 +213,7 @@ class WalkBehavior extends Behavior {
         this.unit.lastMoveTime = Date.now();
         
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, 3.0);
+        this.applyMovementWithRotation(direction, (this.unit.speed || 20) * 0.15);
                 
         return false;
     }
@@ -220,7 +223,7 @@ class RunBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
             arrivalRadius: 1.5,
-            runSpeed: 28,         // Faster than walk
+            runSpeed: (unit.speed || 20) * 1.5,  // 1.5x faster than unit's base speed
             ...params
         });
         
@@ -261,13 +264,509 @@ class RunBehavior extends Behavior {
 }
 
 
+class WorkBehavior extends Behavior {
+    constructor(unit, building, params = {}) {
+        super(unit, {
+            workDuration: 30000, // Work for 30 seconds before taking a break
+            breakDuration: 5000, // 5 second break
+            workSpeed: (unit.speed || 20) * 0.15, // 20% of unit's base speed for working
+            ...params
+        });
+        
+        this.building = building;
+        this.workStartTime = Date.now();
+        this.isOnBreak = false;
+        this.breakStartTime = 0;
+    }
+    
+    step() {
+        const currentTime = Date.now();
+        const elapsed = currentTime - this.workStartTime;
+        
+        // Check if we should take a break
+        if (!this.isOnBreak && elapsed > this.params.workDuration) {
+            this.isOnBreak = true;
+            this.breakStartTime = currentTime;
+            // console.log(`🔨 ${this.unit.name || this.unit.type} taking a break from work`);
+            return false;
+        }
+        
+        // Check if break is over
+        if (this.isOnBreak && (currentTime - this.breakStartTime) > this.params.breakDuration) {
+            this.isOnBreak = false;
+            this.workStartTime = currentTime;
+            // console.log(`🔨 ${this.unit.name || this.unit.type} returning to work`);
+            return false;
+        }
+        
+        // If on break, just stay near the building
+        if (this.isOnBreak) {
+            this.stayNearBuilding();
+        } else {
+            // Work behavior - move around the building area
+            this.performWork();
+        }
+        
+        return false; // Keep working
+    }
+    
+    performWork() {
+        if (!this.building || !this.building.position) return;
+        
+        // Move around the building in a small area
+        const workRadius = 2; // Work within 2 tiles of building
+        const angle = (Date.now() * 0.001) % (Math.PI * 2); // Slow rotation
+        const distance = workRadius * TILE_SIZE * 0.5; // Half radius for closer work
+        
+        const workX = this.building.position.x + Math.cos(angle) * distance;
+        const workZ = this.building.position.z + Math.sin(angle) * distance;
+        
+        const direction = {
+            x: workX - this.unit.pb.state.loc.x,
+            z: workZ - this.unit.pb.state.loc.z
+        };
+        
+        const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+        if (length > 0.1) {
+            direction.x /= length;
+            direction.z /= length;
+            this.applyMovementWithRotation(direction, this.params.workSpeed);
+        }
+    }
+    
+    stayNearBuilding() {
+        if (!this.building || !this.building.position) return;
+        
+        // Stay close to the building during break
+        const dx = this.building.position.x - this.unit.pb.state.loc.x;
+        const dz = this.building.position.z - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        if (distance > TILE_SIZE * 1.5) {
+            // Move closer to building
+            const direction = { x: dx / distance, z: dz / distance };
+            this.applyMovementWithRotation(direction, this.params.workSpeed * 0.5);
+        }
+    }
+}
+
+class GatherWorkBehavior extends WorkBehavior {
+    constructor(unit, building, params = {}) {
+        super(unit, building, {
+            workType: "gather",
+            gatherRadius: 9, // How far to look for resources
+            gatherDuration: 15000, // How long to gather (15 seconds)
+            returnDuration: 3000, // How long to stay at camp (3 seconds)
+            ...params
+        });
+        
+        this.gatherState = 'seeking'; // seeking, gathering, returning
+        this.gatherTarget = null;
+        this.gatherStartTime = 0;
+        this.returnStartTime = 0;
+    }
+    
+    step() {
+        const currentTime = Date.now();
+        
+        // Handle different gather states
+        switch (this.gatherState) {
+            case 'seeking':
+                this.seekResources();
+                break;
+            case 'gathering':
+                this.gatherResources(currentTime);
+                break;
+            case 'returning':
+                this.returnToCamp(currentTime);
+                break;
+        }
+        
+        return false; // Keep working
+    }
+    
+    seekResources() {
+        if (!this.building || !this.building.position) return;
+        
+        // Find nearest resource within gather radius
+        const nearestResource = this.findNearestResource();
+        
+        if (nearestResource) {
+            this.gatherTarget = nearestResource;
+            this.gatherState = 'gathering';
+            this.gatherStartTime = Date.now();
+            
+            // Move to resource
+            const direction = {
+                x: nearestResource.x - this.unit.pb.state.loc.x,
+                z: nearestResource.z - this.unit.pb.state.loc.z
+            };
+            
+            const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+            if (length > 0.1) {
+                direction.x /= length;
+                direction.z /= length;
+                this.applyMovementWithRotation(direction, this.params.workSpeed);
+            }
+        } else {
+            // No resources found, just wander around camp
+            super.performWork();
+        }
+    }
+    
+    gatherResources(currentTime) {
+        if (!this.gatherTarget) {
+            this.gatherState = 'seeking';
+            return;
+        }
+        
+        // Check if we've reached the resource
+        const dx = this.gatherTarget.x - this.unit.pb.state.loc.x;
+        const dz = this.gatherTarget.z - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        if (distance < TILE_SIZE * 0.5) {
+            // We're at the resource, stay and gather
+            if (currentTime - this.gatherStartTime > this.params.gatherDuration) {
+                // Finished gathering, return to camp
+                this.gatherState = 'returning';
+                this.returnStartTime = currentTime;
+                this.gatherTarget = null;
+            }
+            // Just stay put while gathering
+        } else {
+            // Move towards resource
+            const direction = { x: dx / distance, z: dz / distance };
+            this.applyMovementWithRotation(direction, this.params.workSpeed);
+        }
+    }
+    
+    returnToCamp(currentTime) {
+        if (!this.building || !this.building.position) return;
+        
+        // Move back to camp
+        const dx = this.building.position.x - this.unit.pb.state.loc.x;
+        const dz = this.building.position.z - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        if (distance > TILE_SIZE * 1.5) {
+            // Move towards camp
+            const direction = { x: dx / distance, z: dz / distance };
+            this.applyMovementWithRotation(direction, this.params.workSpeed);
+        } else {
+            // We're back at camp, stay briefly then seek more resources
+            if (currentTime - this.returnStartTime > this.params.returnDuration) {
+                this.gatherState = 'seeking';
+            }
+            // Just stay put while at camp
+        }
+    }
+    
+    findNearestResource() {
+        if (!this.building || !this.building.position) return null;
+        
+        const gatherRadius = this.params.gatherRadius * TILE_SIZE;
+        let nearestResource = null;
+        let nearestDistance = Infinity;
+        
+        // Look for rock resources (stone)
+        const rockResources = this.findResourceNodes('rock', this.building.position, gatherRadius);
+        for (const resource of rockResources) {
+            const dx = resource.x - this.building.position.x;
+            const dz = resource.z - this.building.position.z;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            
+            if (distance < nearestDistance) {
+                nearestResource = resource;
+                nearestDistance = distance;
+            }
+        }
+        
+        // Look for forest resources (wood)
+        const forestResources = this.findResourceNodes('forest', this.building.position, gatherRadius);
+        for (const resource of forestResources) {
+            const dx = resource.x - this.building.position.x;
+            const dz = resource.z - this.building.position.z;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            
+            if (distance < nearestDistance) {
+                nearestResource = resource;
+                nearestDistance = distance;
+            }
+        }
+        
+        return nearestResource;
+    }
+    
+    findResourceNodes(resourceType, centerPos, radius) {
+        // For now, generate some mock resource nodes around the area
+        // In a real implementation, you'd query your terrain system for actual resources
+        const resources = [];
+        const numResources = 3 + Math.floor(Math.random() * 3); // 3-5 resources
+        
+        for (let i = 0; i < numResources; i++) {
+            const angle = (i / numResources) * Math.PI * 2 + Math.random() * 0.5;
+            const distance = (Math.random() * 0.7 + 0.3) * radius; // 30-100% of radius
+            
+            resources.push({
+                x: centerPos.x + Math.cos(angle) * distance,
+                z: centerPos.z + Math.sin(angle) * distance,
+                type: resourceType
+            });
+        }
+        
+        return resources;
+    }
+}
+
+class FarmWorkBehavior extends WorkBehavior {
+    constructor(unit, building, params = {}) {
+        super(unit, building, {
+            workType: "farm",
+            workDuration: 45000, // Farm work takes longer
+            breakDuration: 8000, // Longer breaks for farming
+            patrolRadius: 3, // How far from building to patrol
+            patrolSpeed: 0.5, // Slower patrol speed
+            ...params
+        });
+        
+        this.patrolPoints = [];
+        this.currentPatrolIndex = 0;
+        this.patrolDirection = 1; // 1 for forward, -1 for backward
+        this.generatePatrolPoints();
+    }
+    
+    step() {
+        const currentTime = Date.now();
+        
+        // Check if we should take a break
+        if (!this.isOnBreak && (currentTime - this.workStartTime) > this.params.workDuration) {
+            this.isOnBreak = true;
+            this.breakStartTime = currentTime;
+            return false;
+        }
+        
+        // Check if break is over
+        if (this.isOnBreak && (currentTime - this.breakStartTime) > this.params.breakDuration) {
+            this.isOnBreak = false;
+            this.workStartTime = currentTime;
+            return false;
+        }
+        
+        // If on break, stay near building
+        if (this.isOnBreak) {
+            this.stayNearBuilding();
+        } else {
+            // Patrol the farm perimeter
+            this.patrolPerimeter();
+        }
+        
+        return false; // Keep working
+    }
+    
+    generatePatrolPoints() {
+        if (!this.building || !this.building.position) return;
+        
+        this.patrolPoints = [];
+        const centerX = this.building.position.x;
+        const centerZ = this.building.position.z;
+        const radius = this.params.patrolRadius * TILE_SIZE;
+        
+        // Create 8 patrol points around the perimeter
+        const numPoints = 8;
+        for (let i = 0; i < numPoints; i++) {
+            const angle = (i / numPoints) * Math.PI * 2;
+            const x = centerX + Math.cos(angle) * radius;
+            const z = centerZ + Math.sin(angle) * radius;
+            
+            this.patrolPoints.push({ x, z });
+        }
+    }
+    
+    patrolPerimeter() {
+        if (this.patrolPoints.length === 0) {
+            this.generatePatrolPoints();
+            return;
+        }
+        
+        const currentPoint = this.patrolPoints[this.currentPatrolIndex];
+        const dx = currentPoint.x - this.unit.pb.state.loc.x;
+        const dz = currentPoint.z - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        if (distance < TILE_SIZE * 0.3) {
+            // Reached current patrol point, move to next
+            this.currentPatrolIndex += this.patrolDirection;
+            
+            // Handle wrapping around
+            if (this.currentPatrolIndex >= this.patrolPoints.length) {
+                this.currentPatrolIndex = 0;
+            } else if (this.currentPatrolIndex < 0) {
+                this.currentPatrolIndex = this.patrolPoints.length - 1;
+            }
+            
+            // Occasionally reverse direction for more natural movement
+            if (Math.random() < 0.1) { // 10% chance
+                this.patrolDirection *= -1;
+            }
+        } else {
+            // Move towards current patrol point
+            const direction = { x: dx / distance, z: dz / distance };
+            this.applyMovementWithRotation(direction, this.params.workSpeed * this.params.patrolSpeed);
+        }
+    }
+}
+
+class EngineerWorkBehavior extends WorkBehavior {
+    constructor(unit, building, params = {}) {
+        super(unit, building, {
+            workType: "engineer",
+            workDuration: 60000, // Engineers work longer
+            breakDuration: 10000, // Longer breaks
+            inspectionRadius: 12, // How far to look for buildings to inspect
+            inspectionDuration: 20000, // How long to inspect each building
+            ...params
+        });
+        
+        this.inspectionTarget = null;
+        this.inspectionStartTime = 0;
+        this.visitedBuildings = new Set();
+        this.currentState = 'seeking'; // seeking, inspecting, returning
+    }
+    
+    step() {
+        const currentTime = Date.now();
+        
+        // Handle different engineer states
+        switch (this.currentState) {
+            case 'seeking':
+                this.seekBuildingsToInspect();
+                break;
+            case 'inspecting':
+                this.inspectBuilding(currentTime);
+                break;
+            case 'returning':
+                this.returnToBase(currentTime);
+                break;
+        }
+        
+        return false; // Keep working
+    }
+    
+    seekBuildingsToInspect() {
+        if (!this.building || !this.building.position) return;
+        
+        // Find nearest building to inspect
+        const nearestBuilding = this.findNearestBuildingToInspect();
+        
+        if (nearestBuilding) {
+            this.inspectionTarget = nearestBuilding;
+            this.currentState = 'inspecting';
+            this.inspectionStartTime = Date.now();
+            
+            // Move to building
+            const direction = {
+                x: nearestBuilding.position.x - this.unit.pb.state.loc.x,
+                z: nearestBuilding.position.z - this.unit.pb.state.loc.z
+            };
+            
+            const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+            if (length > 0.1) {
+                direction.x /= length;
+                direction.z /= length;
+                this.applyMovementWithRotation(direction, this.params.workSpeed);
+            }
+        } else {
+            // No buildings to inspect, just wander around base
+            super.performWork();
+        }
+    }
+    
+    inspectBuilding(currentTime) {
+        if (!this.inspectionTarget) {
+            this.currentState = 'seeking';
+            return;
+        }
+        
+        // Check if we've reached the building
+        const dx = this.inspectionTarget.position.x - this.unit.pb.state.loc.x;
+        const dz = this.inspectionTarget.position.z - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        if (distance < TILE_SIZE * 1.5) {
+            // We're at the building, inspect it
+            if (currentTime - this.inspectionStartTime > this.params.inspectionDuration) {
+                // Finished inspecting, mark as visited and return to base
+                this.visitedBuildings.add(this.inspectionTarget.id);
+                this.currentState = 'returning';
+                this.inspectionTarget = null;
+            }
+            // Just stay put while inspecting
+        } else {
+            // Move towards building
+            const direction = { x: dx / distance, z: dz / distance };
+            this.applyMovementWithRotation(direction, this.params.workSpeed);
+        }
+    }
+    
+    returnToBase(currentTime) {
+        if (!this.building || !this.building.position) return;
+        
+        // Move back to base building
+        const dx = this.building.position.x - this.unit.pb.state.loc.x;
+        const dz = this.building.position.z - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        if (distance > TILE_SIZE * 2) {
+            // Move towards base
+            const direction = { x: dx / distance, z: dz / distance };
+            this.applyMovementWithRotation(direction, this.params.workSpeed);
+        } else {
+            // We're back at base, start seeking again
+            this.currentState = 'seeking';
+        }
+    }
+    
+    findNearestBuildingToInspect() {
+        if (!this.building || !this.building.position) return null;
+        
+        const inspectionRadius = this.params.inspectionRadius * TILE_SIZE;
+        let nearestBuilding = null;
+        let nearestDistance = Infinity;
+        
+        // Look through all buildings
+        for (const building of gameBuildings) {
+            if (!building.position) continue;
+            if (building.id === this.building.id) continue; // Don't inspect own building
+            if (this.visitedBuildings.has(building.id)) continue; // Already visited recently
+            
+            const dx = building.position.x - this.building.position.x;
+            const dz = building.position.z - this.building.position.z;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            
+            if (distance <= inspectionRadius && distance < nearestDistance) {
+                nearestBuilding = building;
+                nearestDistance = distance;
+            }
+        }
+        
+        // If no unvisited buildings, reset visited list and try again
+        if (!nearestBuilding && this.visitedBuildings.size > 0) {
+            this.visitedBuildings.clear();
+            return this.findNearestBuildingToInspect();
+        }
+        
+        return nearestBuilding;
+    }
+}
+
 class WanderBehavior extends Behavior {
     constructor(unit, params = {}) {
         super(unit, {
             wanderArea: { x: 8, z: 8 }, // 8x8 unit area around spawn point
             wanderDuration: 8000 + Math.random() * 4000, // 8-12 seconds
             microMoveChance: 0.3, // 30% chance per second
-            wanderSpeed: 1, // Slower than walking
+            wanderSpeed: (unit.speed || 20) * 0.3, // 30% of unit's base speed for wandering
             ...params
         });
         
@@ -415,6 +914,26 @@ class UnitBehaviorManager {
             case 'wander':
                 behavior = new WanderBehavior(unit, params);
                 break;
+            case 'work':
+                if (params.building) {
+                    behavior = new WorkBehavior(unit, params.building, params);
+                }
+                break;
+            case 'gather_work':
+                if (params.building) {
+                    behavior = new GatherWorkBehavior(unit, params.building, params);
+                }
+                break;
+            case 'farm_work':
+                if (params.building) {
+                    behavior = new FarmWorkBehavior(unit, params.building, params);
+                }
+                break;
+            case 'engineer_work':
+                if (params.building) {
+                    behavior = new EngineerWorkBehavior(unit, params.building, params);
+                }
+                break;
             default:
                 console.warn(`Unknown behavior type: ${behaviorType}`);
                 return;
@@ -480,6 +999,10 @@ if (typeof window !== 'undefined') {
     window.WalkBehavior = WalkBehavior;
     window.RunBehavior = RunBehavior;
     window.WanderBehavior = WanderBehavior;
+    window.WorkBehavior = WorkBehavior;
+    window.GatherWorkBehavior = GatherWorkBehavior;
+    window.FarmWorkBehavior = FarmWorkBehavior;
+    window.EngineerWorkBehavior = EngineerWorkBehavior;
     
     // // console.log('🔥🔥🔥 AI Behavior System initialized:', {
     //     behaviorManager: !!window.behaviorManager,
@@ -796,7 +1319,7 @@ function updateIdleUnits() {
                     },
                     wanderDuration: 8000 + Math.random() * 4000, // 8-12 seconds
                     microMoveChance: 0.2 + Math.random() * 0.2, // 20-40% chance
-                    wanderSpeed: 1.2 + Math.random() * 0.6 // 1.2-1.8 speed
+                    wanderSpeed: (unit.speed || 20) * (0.3 + Math.random() * 0.2) // 30-50% of unit's base speed
                 });
             }
         }

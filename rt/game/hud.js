@@ -25,43 +25,6 @@
   
   // Menu definitions with sub-categories
   let menuDefinitions = {
-    main: { title: "Main Menu", items: [] },
-    units: { 
-      title: "👥 Units", 
-      items: [
-        { text: "Select All", icon: "🎯", callback: () => hud.selectAllUnits(), color: new BABYLON.Color3(0.2, 0.6, 1) },
-        { text: "Deselect", icon: "❌", callback: () => hud.deselectAllUnits(), color: new BABYLON.Color3(0.8, 0.2, 0.2) },
-        { text: "Formation", icon: "⚔️", callback: () => hud.setUnitFormation(), color: new BABYLON.Color3(0.6, 0.4, 0.8) },
-        { text: "Upgrade", icon: "⬆️", callback: () => hud.upgradeUnits(), color: new BABYLON.Color3(0.2, 0.8, 0.4) }
-      ]
-    },
-    buildings: { 
-      title: "🏗️ Buildings", 
-      items: [
-        { text: "Camp", icon: "⛺", callback: () => hud.startBuildingPlacement("camp"), color: new BABYLON.Color3(0.4, 0.8, 0.4) },
-        { text: "Barracks", icon: "🏛️", callback: () => hud.startBuildingPlacement("barracks"), color: new BABYLON.Color3(0.6, 0.6, 0.6) },
-        { text: "Tower", icon: "🗼", callback: () => hud.startBuildingPlacement("tower"), color: new BABYLON.Color3(0.8, 0.6, 0.4) },
-        { text: "Wall", icon: "🧱", callback: () => hud.startBuildingPlacement("wall"), color: new BABYLON.Color3(0.5, 0.5, 0.5) }
-      ]
-    },
-    research: { 
-      title: "🔬 Research", 
-      items: [
-        { text: "Weapons", icon: "⚔️", callback: () => hud.researchWeapons(), color: new BABYLON.Color3(1, 0.4, 0.2) },
-        { text: "Armor", icon: "🛡️", callback: () => hud.researchArmor(), color: new BABYLON.Color3(0.4, 0.6, 1) },
-        { text: "Speed", icon: "⚡", callback: () => hud.researchSpeed(), color: new BABYLON.Color3(1, 1, 0.4) },
-        { text: "Efficiency", icon: "⚙️", callback: () => hud.researchEfficiency(), color: new BABYLON.Color3(0.6, 0.4, 0.8) }
-      ]
-    },
-    rally: { 
-      title: "🚩 Rally", 
-      items: [
-        { text: "Set Point", icon: "📍", callback: () => hud.setRallyPoint(), color: new BABYLON.Color3(1, 0.2, 0.2) },
-        { text: "Clear", icon: "🗑️", callback: () => hud.clearRallyPoint(), color: new BABYLON.Color3(0.6, 0.6, 0.6) },
-        { text: "Patrol", icon: "👁️", callback: () => hud.setPatrolRoute(), color: new BABYLON.Color3(0.2, 0.6, 1) },
-        { text: "Defend", icon: "🛡️", callback: () => hud.setDefenseMode(), color: new BABYLON.Color3(0.8, 0.4, 0.2) }
-      ]
-    }
   };
   
   // Radial menu configuration
@@ -77,7 +40,7 @@
   
   // Initialize HUD system
   hud.init = function(scene, camera, canvas) {
-    console.log('HUD system initialized');
+    // console.log('HUD system initialized');
     hud.scene = scene;
     hud.camera = camera;
     hud.canvas = canvas;
@@ -119,7 +82,7 @@
       });
     }
     
-    console.log('Radial menu configured:', menuConfig);
+    // console.log('Radial menu configured:', menuConfig);
   };
   
   // Set up middle mouse button and spacebar control for radial menu
@@ -189,7 +152,7 @@
       }
     });
     
-    console.log('Middle mouse button and spacebar control set up for radial menu');
+    // console.log('Middle mouse button and spacebar control set up for radial menu');
   }
   
   // Create the radial menu with 3D meshes
@@ -223,7 +186,7 @@
     // Store center mesh reference
     hud.centerMesh = centerMesh;
     
-    console.log('🎯 Center mesh created at position (0,0,0) with diameter 0.15');
+    // console.log('🎯 Center mesh created at position (0,0,0) with diameter 0.15');
     
     // Store center mesh reference
     hud.centerMesh = centerMesh;
@@ -231,9 +194,9 @@
     // Don't make center mesh clickable yet - will be enabled after menu opens
     centerMesh.isPickable = false;
     
-    console.log('🎯 Center mesh created at position (0,0,0) with diameter 0.15');
+    // console.log('🎯 Center mesh created at position (0,0,0) with diameter 0.15');
     
-    console.log('3D Radial menu created with billboard mode');
+    // console.log('3D Radial menu created with billboard mode');
   }
   
   // Show radial menu at specific anchor point
@@ -319,7 +282,7 @@
     radialMenu.setEnabled(true);
     radialMenuVisible = true;
     
-    console.log('🎯 Radial menu shown - currentMenuLevel:', currentMenuLevel, 'anchor:', currentAnchor);
+    // console.log('🎯 Radial menu shown - currentMenuLevel:', currentMenuLevel, 'anchor:', currentAnchor);
     
     // Always initialize main menu layout when showing the menu
     // This ensures we always start with the 4 main categories
@@ -339,20 +302,20 @@
           BABYLON.ActionManager.OnPickTrigger,
           function() {
             if (radialMenuVisible) {
-              console.log('🎯 Center mesh clicked - currentMenuLevel:', currentMenuLevel);
+              // console.log('🎯 Center mesh clicked - currentMenuLevel:', currentMenuLevel);
               // Only close menu if we're at the root level (main menu)
               if (currentMenuLevel === 'main') {
-                console.log('🎯 Center mesh clicked - closing radial menu');
+                // console.log('🎯 Center mesh clicked - closing radial menu');
                 hud.hideRadialMenu();
               } else {
-                console.log('🎯 Center mesh clicked in submenu - going back to main');
+                // console.log('🎯 Center mesh clicked in submenu - going back to main');
                 hud.goBackMenu();
               }
             }
           }
         ));
         
-        console.log('🎯 Center mesh click handler enabled');
+        // console.log('🎯 Center mesh click handler enabled');
       }
     }, 200); // 200ms delay to ensure menu is fully opened
     
@@ -475,11 +438,11 @@
   // Navigate to a sub-menu - CLEAN TREE SYSTEM
   hud.showSubMenu = function(menuLevel, screenX, screenY) {
     if (!menuDefinitions[menuLevel]) {
-      console.warn('Menu level not found:', menuLevel);
+      // console.warn('Menu level not found:', menuLevel);
       return;
     }
     
-    console.log('🌳 Navigating to sub-menu:', menuLevel);
+    // console.log('🌳 Navigating to sub-menu:', menuLevel);
     
     // Save current position in navigation stack
     menuStack.push({level: currentMenuLevel, items: [...radialMenuItems]});
@@ -490,14 +453,14 @@
     // Retract all buttons except the clicked one, then spread new items
     retractAndExpand(menuLevel, screenX, screenY);
     
-    console.log('✅ Sub-menu loaded:', menuLevel);
+    // console.log('✅ Sub-menu loaded:', menuLevel);
   };
   
   // Retract all buttons except clicked one, then expand new items
   function retractAndExpand(menuLevel, screenX, screenY) {
     const menuData = menuDefinitions[menuLevel];
     if (!menuData || !menuData.items) {
-      console.warn('Submenu data not found:', menuLevel);
+      // console.warn('Submenu data not found:', menuLevel);
       return;
     }
     
@@ -530,7 +493,7 @@
       } else {
         // Fallback - treat as end action
         hud.addRadialMenuItem(itemDef.text, itemDef.icon, () => {
-          console.log(`🎯 Executed: ${itemDef.text}`);
+          // console.log(`🎯 Executed: ${itemDef.text}`);
         }, itemDef.color);
       }
     });
@@ -590,33 +553,13 @@
   
   // Position all items at the same anchor with same spread
   function positionItemsAtAnchor(screenX, screenY) {
-    // Get the current anchor direction
-    const anchorDirection = getAnchorDirection();
-    const baseAngle = calculateBaseAngleForAnchor(anchorDirection);
-    
-    // Position items in a 180° arc spread, same as main menu
-    const totalItems = radialMenuItems.length;
-    const angleSpread = 180;
-    const angleStep = angleSpread / Math.max(totalItems - 1, 1);
-    
-    // Use larger radius for submenu items to avoid center overlap
-    const radius = currentMenuLevel === 'main' ? Math.max(menuConfig.itemRadius, 1.0) : Math.max(menuConfig.itemRadius * 1.5, 1.5);
-    
+    // Use the unified positioning function for all items
     radialMenuItems.forEach((item, index) => {
       if (item.mesh) {
-        // Spread items across 180° arc from the anchor direction
-        let angle = baseAngle + (index * angleStep) - (angleSpread / 2);
-        
-        // Normalize angle to 0-360 range
-        while (angle < 0) angle += 360;
-        while (angle >= 360) angle -= 360;
-        
-        const radians = (angle * Math.PI) / 180;
-        const x = Math.sin(radians) * radius;
-        const z = Math.cos(radians) * radius;
-        
-        item.mesh.position.set(x, 0, z);
-        console.log(`📍 Positioned ${item.text} at angle ${angle.toFixed(1)}° (${x.toFixed(2)}, ${z.toFixed(2)}) - radius: ${radius}`);
+        // Use the same positioning logic as main menu items
+        const position = calculateMenuItemPosition(item);
+        item.mesh.position.copyFrom(position);
+        // console.log(`📍 Positioned ${item.text} at angle ${item.angle.toFixed(1)}° (${position.x.toFixed(2)}, 0, ${position.z.toFixed(2)}) - radius: ${item.radius} - plane: Y=0`);
       }
     });
   }
@@ -676,7 +619,7 @@
   hud.goBackMenu = function(screenX, screenY) {
     if (menuStack.length === 0) {
       // If we're at the root, return to main menu
-      console.log('🔄 Returning to main menu');
+      // console.log('🔄 Returning to main menu');
       returnToMainMenu(screenX, screenY);
       return;
     }
@@ -701,12 +644,12 @@
       animateMenuCollapse(screenX, screenY);
     }
     
-    console.log('🔄 Returned to menu level:', currentMenuLevel);
+    // console.log('🔄 Returned to menu level:', currentMenuLevel);
   };
   
   // Return to main menu - STABLE SYSTEM
   function returnToMainMenu(screenX, screenY) {
-    console.log('🏠 Returning to main menu with 4 main categories');
+    // console.log('🏠 Returning to main menu with 4 main categories');
     
     // Clear the menu stack completely
     menuStack = [];
@@ -728,7 +671,7 @@
       animateMenuItems(screenX, screenY);
     }
     
-    console.log('✅ Main menu restored with 4 main categories');
+    // console.log('✅ Main menu restored with 4 main categories');
   }
   
   // Animate menu collapse back to main level - DREAM SYSTEM
@@ -796,17 +739,21 @@
     });
   }
   
-  // Calculate position for main menu items
-  function calculateMainItemPosition(item, screenX, screenY) {
+  // Calculate position for menu items (unified for main menu and submenu)
+  function calculateMenuItemPosition(item) {
     const radians = (item.angle * Math.PI) / 180;
-    // Ensure main menu items are positioned far enough from center to avoid overlap
-    const safeRadius = Math.max(menuConfig.itemRadius, 1.0); // At least 1.0 units from center
-    const x = Math.sin(radians) * safeRadius;
-    const z = Math.cos(radians) * safeRadius;
+    const x = Math.sin(radians) * item.radius;
+    const z = Math.cos(radians) * item.radius;
     
-    console.log(`📍 Main menu item "${item.text}" positioned at (${x.toFixed(2)}, ${z.toFixed(2)}) - radius: ${safeRadius}`);
-    
+    // All items sit on the same Y=0 plane
     return new BABYLON.Vector3(x, 0, z);
+  }
+  
+  // Calculate position for main menu items (legacy function for compatibility)
+  function calculateMainItemPosition(item, screenX, screenY) {
+    const position = calculateMenuItemPosition(item);
+    // console.log(`📍 Main menu item "${item.text}" positioned at (${position.x.toFixed(2)}, 0, ${position.z.toFixed(2)}) - radius: ${item.radius} - plane: Y=0`);
+    return position;
   }
   
   // Clear all menu item meshes
@@ -847,7 +794,7 @@
   
   // Initialize main menu layout (called when menu is first shown) - STABLE SYSTEM
   function initializeMainMenuLayout() {
-    console.log('🏠 Initializing main menu with 4 main categories');
+    // console.log('🏠 Initializing main menu with 4 main categories');
     
     // Clear any existing submenu items to ensure clean main menu
     clearSubmenuItems();
@@ -867,11 +814,11 @@
           item.mesh.material.alpha = 1.0;
         }
         
-        console.log(`📍 Main menu item "${item.text}" positioned at (${pos.x.toFixed(2)}, ${pos.z.toFixed(2)})`);
+        // console.log(`📍 Main menu item "${item.text}" positioned at (${pos.x.toFixed(2)}, ${pos.z.toFixed(2)})`);
       }
     });
     
-    console.log('✅ Main menu initialized with', radialMenuItems.filter(item => !item.isSubItem).length, 'main categories');
+    // console.log('✅ Main menu initialized with', radialMenuItems.filter(item => !item.isSubItem).length, 'main categories');
   }
   
   // Clear any submenu items to ensure clean main menu
@@ -904,7 +851,11 @@
     const angleStep = angleSpread / (Math.max(totalItems, 4) - 1);
     const angle = baseAngle + ((totalItems - 1) * angleStep) - (angleSpread / 2);
     
-    console.log(`🎯 Adding menu item "${text}" at angle ${angle.toFixed(1)}° (anchor: ${anchorDirection}, base: ${baseAngle}°)`);
+    // Use larger radius for submenu items to avoid center overlap
+    const isSubmenu = currentMenuLevel !== 'main';
+    const radius = isSubmenu ? Math.max(menuConfig.itemRadius * 1.5, 1.5) : menuConfig.itemRadius;
+    
+    // console.log(`🎯 Adding menu item "${text}" at angle ${angle.toFixed(1)}° (anchor: ${anchorDirection}, base: ${baseAngle}°, radius: ${radius}, submenu: ${isSubmenu})`);
     
     const item = {
       text: text,
@@ -912,8 +863,8 @@
       callback: callback,
       color: color || new BABYLON.Color3(0.8, 0.4, 0.1), // Default orange
       angle: angle,
-      radius: menuConfig.itemRadius, // Use config radius for main menu items
-      isSubItem: false, // Mark as main menu item
+      radius: radius,
+      isSubItem: isSubmenu, // Mark as submenu item if not in main menu
       mesh: null
     };
     
@@ -958,7 +909,7 @@
           mesh.scaling.copyFrom(originalScale);
         }, 150);
         
-        console.log(`🎯 Menu item "${item.text}" clicked - executing callback`);
+        // console.log(`🎯 Menu item "${item.text}" clicked - executing callback`);
         
         if (item.callback) {
           item.callback();
@@ -1006,17 +957,55 @@
   
   // Initialize the minimap edge indicator system
   function initMinimap() {
-    console.log("🗺️ Initializing minimap system...");
+    // console.log("🗺️ Initializing minimap system...");
     
     // Create 3D container for minimap indicators (like radial menu)
     minimapContainer = new BABYLON.TransformNode("MinimapContainer", hud.scene);
     
     // Minimap will be updated from main render loop after camera lerp
-    console.log("✅ Minimap will update after camera positioning");
+    // console.log("✅ Minimap will update after camera positioning");
     
-    console.log("✅ Minimap system ready");
+    // console.log("✅ Minimap system ready");
   }
   
+  // Update resource display in the UI
+  function updateResourceDisplay() {
+    if (!window.player || !window.player.getResources) return;
+    
+    const resources = window.player.getResources();
+    
+    // Update food display
+    const foodElement = document.getElementById('stat_food');
+    if (foodElement) {
+      foodElement.textContent = `🍎 ${resources.food || 0}`;
+    }
+    
+    // Update wood display
+    const woodElement = document.getElementById('stat_wood');
+    if (woodElement) {
+      woodElement.textContent = `🪵 ${resources.wood || 0}`;
+    }
+    
+    // Update stone display
+    const stoneElement = document.getElementById('stat_stone');
+    if (stoneElement) {
+      stoneElement.textContent = `🪨 ${resources.stone || 0}`;
+    }
+    
+    // Update minerals display (using magic as minerals for now)
+    const mineralsElement = document.getElementById('stat_minerals');
+    if (mineralsElement) {
+      mineralsElement.textContent = `💎 ${resources.magic || 0}`;
+    }
+    
+    // Update population display (count of player units)
+    const popElement = document.getElementById('stat_pop');
+    if (popElement && window.player.units) {
+      const population = window.player.units.length;
+      popElement.textContent = `👥 ${population}`;
+    }
+  }
+
   // Update minimap indicators by moving existing spheres
   function updateMinimap() {
     if (!hud.camera || !window.player || !window.player.units) return;
@@ -1195,7 +1184,7 @@
             
             if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY) {
               // Double-click detected! Select all units of this type
-              console.log(`🔄 Double-clicked minimap indicator for ${linkedUnit.name} (${linkedUnit.type}) - selecting all units of this type`);
+              // console.log(`🔄 Double-clicked minimap indicator for ${linkedUnit.name} (${linkedUnit.type}) - selecting all units of this type`);
               
               // Use player's selection system for double-click functionality
               if (window.player && window.player.selectAllUnitsOfType) {
@@ -1205,7 +1194,7 @@
               lastClickTime = 0; // Reset for next double-click
             } else {
               // Single click - select just this unit
-              console.log(`🗺️ Minimap indicator clicked for unit: ${linkedUnit.name}`);
+              // console.log(`🗺️ Minimap indicator clicked for unit: ${linkedUnit.name}`);
               
               // Use player's selection system for single-click unit selection
               if (window.player && window.player.selectUnit) {
@@ -1235,6 +1224,9 @@
   // Expose minimap update function
   hud.updateMinimap = updateMinimap;
   
+  // Expose resource display update function
+  hud.updateResourceDisplay = updateResourceDisplay;
+  
   // ===== BUILDING SYSTEM =====
   
   // Building system state
@@ -1254,7 +1246,7 @@
     currentBuildingType = buildingType;
     
     if (buildingType === 'camp') {
-      console.log('⛺ Camp placement mode activated! Click to place your camp.');
+      // console.log('⛺ Camp placement mode activated! Click to place your camp.');
       
       // Expand the camp menu with building options
       expandCampBuildingMenu();
@@ -1269,13 +1261,13 @@
     // Find the Buildings button to get its angle and anchor direction
     const buildingsButton = radialMenuItems.find(item => item.text === "Buildings");
     if (!buildingsButton) {
-      console.warn('Buildings button not found for camp expansion');
+      // console.warn('Buildings button not found for camp expansion');
       return;
     }
     
     // Get the anchor direction from the current menu position
     const anchorDirection = getAnchorDirection();
-    console.log('🏗️ Expanding camp from Buildings button at angle:', buildingsButton.angle, 'Anchor direction:', anchorDirection);
+    // console.log('🏗️ Expanding camp from Buildings button at angle:', buildingsButton.angle, 'Anchor direction:', anchorDirection);
     
     // Create camp building options
     const campOptions = [
@@ -1396,7 +1388,7 @@
   
   // Activate camp placement mode
   function activateCampPlacement() {
-    console.log('⛺ Camp placement mode activated! Click on terrain to place your camp.');
+    // console.log('⛺ Camp placement mode activated! Click on terrain to place your camp.');
     
     // Set up click handler for terrain placement
     if (hud.canvas) {
@@ -1431,7 +1423,7 @@
   
   // Place the camp building
   function placeCamp(position) {
-    console.log(`⛺ Placing camp at position:`, position.toString());
+    // console.log(`⛺ Placing camp at position:`, position.toString());
     
     // Create a simple camp mesh
     const camp = BABYLON.MeshBuilder.CreateCylinder('camp', { height: 1.5, diameter: 2 }, hud.scene);
@@ -1447,7 +1439,7 @@
     tent.position.y = 1.5;
     tent.parent = camp;
     
-    console.log('✅ Camp placed successfully!');
+    // console.log('✅ Camp placed successfully!');
     
     // You can add more camp logic here:
     // - Add to building list
@@ -1458,13 +1450,13 @@
   
   // Cancel camp placement
   function cancelCampPlacement() {
-    console.log('❌ Camp placement cancelled');
+    // console.log('❌ Camp placement cancelled');
     exitBuildingMode();
   }
   
   // Exit building mode and return to main menu
   function exitBuildingMode() {
-    console.log('🏗️ Exiting building mode');
+    // console.log('🏗️ Exiting building mode');
     
     // Reset building system state
     buildingMode = false;
@@ -1481,68 +1473,10 @@
   
   // Show camp placement instructions
   function showCampPlacementInstructions() {
-    console.log('📋 Click on terrain to place your camp. The camp will provide shelter and basic resources.');
+    // console.log('📋 Click on terrain to place your camp. The camp will provide shelter and basic resources.');
   }
   
-  // ===== UNIT MANAGEMENT FUNCTIONS =====
   
-  hud.selectAllUnits = function() {
-    console.log('👥 Selecting all units');
-    if (window.player && window.player.selectAllUnits) {
-      window.player.selectAllUnits();
-    }
-  }
-  
-  hud.deselectAllUnits = function() {
-    console.log('❌ Deselecting all units');
-    if (window.player && window.player.clearSelection) {
-      window.player.clearSelection();
-    }
-  }
-  
-  hud.setUnitFormation = function() {
-    console.log('⚔️ Setting unit formation');
-  }
-  
-  hud.upgradeUnits = function() {
-    console.log('⬆️ Upgrading units');
-  }
-  
-  // ===== RESEARCH FUNCTIONS =====
-  
-  hud.researchWeapons = function() {
-    console.log('⚔️ Researching weapons');
-  }
-  
-  hud.researchArmor = function() {
-    console.log('🛡️ Researching armor');
-  }
-  
-  hud.researchSpeed = function() {
-    console.log('⚡ Researching speed');
-  }
-  
-  hud.researchEfficiency = function() {
-    console.log('⚙️ Researching efficiency');
-  }
-  
-  // ===== RALLY FUNCTIONS =====
-  
-  hud.setRallyPoint = function() {
-    console.log('📍 Setting rally point');
-  }
-  
-  hud.clearRallyPoint = function() {
-    console.log('🗑️ Clearing rally point');
-  }
-  
-  hud.setPatrolRoute = function() {
-    console.log('👁️ Setting patrol route');
-  }
-  
-  hud.setDefenseMode = function() {
-    console.log('🛡️ Setting defense mode');
-  }
   
   // Dispose of HUD resources
   hud.dispose = function() {

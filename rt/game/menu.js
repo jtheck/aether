@@ -12,12 +12,12 @@ const menu = {
     engineer: {},
     brigand: {},
     // Nature units
-    villager: {},
-    frog_scout: {},
-    tree_guardian: {},
-    mushroom_mage: {},
-    bird_messenger: {},
-    gnome_builder: {}
+    // villager: {},
+    // frog_scout: {},
+    // tree_guardian: {},
+    // mushroom_mage: {},
+    // bird_messenger: {},
+    // gnome_builder: {}
   },
   buildings: {
     camp: {},
@@ -27,7 +27,8 @@ const menu = {
   },
   research: {
     scribes: {},
-    drayage: {}
+    drayage: {},
+    prospecting: {}
   },
   rally: {
   }

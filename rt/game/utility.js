@@ -4,6 +4,23 @@
 
 
 gfx.makeTable = function(scene){
+  // Create materials for different table parts
+  const cornerMat = new BABYLON.StandardMaterial("cornerMat", scene);
+  cornerMat.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1); // Dark brown for corners
+  cornerMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+  
+  const sideMat = new BABYLON.StandardMaterial("sideMat", scene);
+  sideMat.diffuseColor = new BABYLON.Color3(0.6, 0.3, 0.15); // Medium brown for sides
+  sideMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+  
+  const topMat = new BABYLON.StandardMaterial("topMat", scene);
+  topMat.diffuseColor = new BABYLON.Color3(0.5, 0.25, 0.12); // Slightly darker brown for tops
+  topMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+  
+  const floorMat = new BABYLON.StandardMaterial("floorMat", scene);
+  floorMat.diffuseColor = new BABYLON.Color3(0.1, 0.3, 0.1); // Dark green for the playing surface
+  floorMat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
+
   return {
     SW: {
       mesh: BABYLON.MeshBuilder.CreateBox("SW", {size: 1}, scene), 
@@ -43,7 +60,15 @@ gfx.makeTable = function(scene){
     },
     FLOOR: {
       mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
-    }};
+    },
+    // Store materials for later use
+    materials: {
+      corner: cornerMat,
+      side: sideMat,
+      top: topMat,
+      floor: floorMat
+    }
+  };
 }
 
 
@@ -72,13 +97,24 @@ gfx.stretchTable = function(table) {
 
   table.FLOOR.mesh.position.set(halfWidth,-.5,halfHeight);
   table.FLOOR.mesh.scaling.set(width,.40,height);
-  // const floorMat = new BABYLON.PBRMaterial("floorMat", gfx.scene);
-  // floorMat.specularColor = new BABYLON.Color3(0.07, 0.07, 0.07);
-  // floorMat.diffuseColor = new ColorHex("#123524"); // Remove diffuse
-  // floorMat.specularColor = new BABYLON.Color3(1,1,1); // Remove diffuse
-  // floorMat.metallic = 0.0; // Non-metallic
-  // floorMat.roughness = 0.8; // Slightly rough finish
-  // floorMat.disableLighting = false; // Keep this false for emissive to work
+  
+  // Apply materials to table parts
+  table.SW.mesh.material = table.materials.corner;
+  table.SE.mesh.material = table.materials.corner;
+  table.NE.mesh.material = table.materials.corner;
+  table.NW.mesh.material = table.materials.corner;
+  
+  table.N.mesh.material = table.materials.side;
+  table.E.mesh.material = table.materials.side;
+  table.S.mesh.material = table.materials.side;
+  table.W.mesh.material = table.materials.side;
+  
+  table.NT.mesh.material = table.materials.top;
+  table.ET.mesh.material = table.materials.top;
+  table.ST.mesh.material = table.materials.top;
+  table.WT.mesh.material = table.materials.top;
+  
+  table.FLOOR.mesh.material = table.materials.floor;
 
   if (liveField.width >= 128){
     table.NT.mesh.scaling.set(s,sh,s);
@@ -109,7 +145,6 @@ gfx.stretchTable = function(table) {
 
 
 
-  // table.FLOOR.mesh.material = floorMat;
 
   let yy= .3;
   let rr=.11;

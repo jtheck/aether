@@ -10,9 +10,9 @@ const UnitTypes = {
     model: "assets/models/villager.glb",
     scale: 0.5, // Made bigger so they're visible
     health: 50,
-    speed: 2,
-    rotationSpeed: 5.0, // Snappy turning for responsive movement
-    modelOrientation: Math.PI * 1.5, // 270 degrees - flipped around to face forward
+    speed: 20,
+    rotationSpeed: 3.0, // Snappy turning for responsive movement
+    // modelOrientation: Math.PI * 1.5, // 270 degrees - flipped around to face forward
     size: 1,
     cost: { food: 25 },
     abilities: ["gather", "build"],
@@ -26,7 +26,7 @@ const UnitTypes = {
     scale: 0.12,
     health: 30,
     speed: 4,
-    rotationSpeed: 25.0, // Very fast turning for agile scouts
+    rotationSpeed: 5.0, // Very fast turning for agile scouts
     size: 0.8,
     cost: { food: 20, wood: 10 },
     abilities: ["scout", "stealth"],
@@ -97,7 +97,7 @@ const UnitTypes = {
     model: "assets/models/monk.glb",
     scale: 0.5,
     health: 45,
-    speed: 1.5,
+    speed: 25,
     rotationSpeed: 8.0,
     size: 1,
     cost: { food: 25, magic: 15 },
@@ -111,7 +111,7 @@ const UnitTypes = {
     model: "assets/models/wizard.glb",
     scale: 0.5,
     health: 40,
-    speed: 1.5,
+    speed: 50,
     rotationSpeed: 10.0,
     size: 1,
     cost: { food: 30, magic: 25 },
@@ -125,8 +125,8 @@ const UnitTypes = {
     model: "assets/models/engineer.glb",
     scale: 0.5,
     health: 50,
-    speed: 2.0,
-    rotationSpeed: 15.0,
+    speed: 21.0,
+    rotationSpeed: 4.0,
     size: 1,
     cost: { food: 35, stone: 20 },
     abilities: ["build", "repair", "upgrade"],
@@ -139,8 +139,8 @@ const UnitTypes = {
     model: "assets/models/brigand.glb",
     scale: 0.5,
     health: 65,
-    speed: 3.0,
-    rotationSpeed: 20.0,
+    speed: 31.0,
+    rotationSpeed: 4.0,
     size: 1,
     cost: { food: 40, wood: 15 },
     abilities: ["sneak", "ambush", "steal"],
@@ -166,7 +166,7 @@ const FLYING_LOD_DISTANCES = {
 function Unit(unitType, position, options = {}) {
     const def = UnitTypes[unitType];
     if (!def) {
-        console.error(`Unknown unit type: ${unitType}`);
+        // console.error(`Unknown unit type: ${unitType}`);
         return null;
     }
     
@@ -270,7 +270,7 @@ const neutralUnits = []; // Wild/neutral units only
 
 // Sprinkle units across the terrain
 function sprinkleUnits() {
-    console.log("Sprinkling units across the terrain...");
+    // console.log("Sprinkling units across the terrain...");
     
     const unitTypes = ['frog_scout', 'mushroom_mage', 'bird_messenger']; // No villagers in neutral spawn
     
@@ -317,12 +317,12 @@ function sprinkleUnits() {
         }
     }
     
-    console.log(`Created ${gameUnits.length} units`);
+    // console.log(`Created ${gameUnits.length} units`);
 }
 
 // Spawn visual models for all units
 function spawnUnitModels(scene) {
-    console.log("Spawning visual models for units...");
+    // console.log("Spawning visual models for units...");
     
     gameUnits.forEach(unit => {
         if (!unit.mesh && window.gfx && window.gfx.getModel) {
@@ -386,8 +386,8 @@ function createSelectionIndicator(unit) {
     
     // Create a ring around the unit for selection indicator
     const ring = BABYLON.MeshBuilder.CreateTorus("selectionRing", {
-        diameter: 1.5,
-        thickness: 0.05,
+        diameter: 2.5,
+        thickness: 0.06,
         tessellation: 16
     }, window.gfx.scene);
     
@@ -696,6 +696,11 @@ function updateUnitMeshes() {
                 unit.mesh.rotation.y = unit.pb.state.rot.y;
                 unit.mesh.rotation.z = unit.pb.state.rot.z;
                 
+                // Apply model orientation offset if specified (for units like villagers that need to face forward)
+                if (unit.modelOrientation) {
+                    unit.mesh.rotation.y += unit.modelOrientation;
+                }
+                
                             // Handle child meshes - preserve their original rotations
             unit.mesh.getChildMeshes().forEach(mesh => {
                 if (mesh.rotationQuaternion) {
@@ -715,14 +720,14 @@ function updateUnitMeshes() {
 
 // Debug function to check current mesh rotations
 function debugUnitRotations() {
-    console.log("Current unit rotations:");
+    // console.log("Current unit rotations:");
     gameUnits.slice(0, 5).forEach((unit, i) => {
         if (unit.mesh) {
-            console.log(`Unit ${i}: pb.rot.y=${unit.pb.state.rot.y.toFixed(2)}, mesh.rot.y=${unit.mesh.rotation.y.toFixed(2)}, mesh.name=${unit.mesh.name}`);
-            console.log(`  Children count: ${unit.mesh.getChildren().length}`);
+            // console.log(`Unit ${i}: pb.rot.y=${unit.pb.state.rot.y.toFixed(2)}, mesh.rot.y=${unit.mesh.rotation.y.toFixed(2)}, mesh.name=${unit.mesh.name}`);
+            // console.log(`  Children count: ${unit.mesh.getChildren().length}`);
             unit.mesh.getChildren().forEach((child, ci) => {
                 if (child.rotation) {
-                    console.log(`    Child ${ci}: ${child.name}, rot.y=${child.rotation.y.toFixed(2)}`);
+                    // console.log(`    Child ${ci}: ${child.name}, rot.y=${child.rotation.y.toFixed(2)}`);
                 }
             });
         }
@@ -747,11 +752,11 @@ function debugLODStats() {
         totalUnits++;
     });
     
-    console.log(`LOD Stats (${totalUnits} total units):`);
-    console.log(`  NEAR (≤${LOD_DISTANCES.NEAR}): ${stats.NEAR} units (${((stats.NEAR/totalUnits)*100).toFixed(1)}%)`);
-    console.log(`  FAR (≤${LOD_DISTANCES.FAR}): ${stats.FAR} units (${((stats.FAR/totalUnits)*100).toFixed(1)}%)`);
-    console.log(`  VERY_FAR (≤${LOD_DISTANCES.HIDDEN}): ${stats.VERY_FAR} units (${((stats.VERY_FAR/totalUnits)*100).toFixed(1)}%)`);
-    console.log(`  HIDDEN (>${LOD_DISTANCES.HIDDEN}): ${stats.HIDDEN} units (${((stats.HIDDEN/totalUnits)*100).toFixed(1)}%)`);
+    // console.log(`LOD Stats (${totalUnits} total units):`);
+    // console.log(`  NEAR (≤${LOD_DISTANCES.NEAR}): ${stats.NEAR} units (${((stats.NEAR/totalUnits)*100).toFixed(1)}%)`);
+    // console.log(`  FAR (≤${LOD_DISTANCES.FAR}): ${stats.FAR} units (${((stats.FAR/totalUnits)*100).toFixed(1)}%)`);
+    // console.log(`  VERY_FAR (≤${LOD_DISTANCES.HIDDEN}): ${stats.VERY_FAR} units (${((stats.VERY_FAR/totalUnits)*100).toFixed(1)}%)`);
+    // console.log(`  HIDDEN (>${LOD_DISTANCES.HIDDEN}): ${stats.HIDDEN} units (${((stats.HIDDEN/totalUnits)*100).toFixed(1)}%)`);
 }
 
 
@@ -764,15 +769,15 @@ function respawnUnits(scene) {
 
 // Spawn villagers around the player's agora
 function spawnAgoraVillagers() {
-    console.log("🏘️ spawnAgoraVillagers called!");
+    // console.log("🏘️ spawnAgoraVillagers called!");
     
     if (!window.player || !window.player.agora) {
-        console.warn("❌ Player or agora not found for villager spawning");
+        // console.warn("❌ Player or agora not found for villager spawning");
         return;
     }
     
     if (!TILE_SIZE) {
-        console.warn("❌ TILE_SIZE not defined");
+        // console.warn("❌ TILE_SIZE not defined");
         return;
     }
     
@@ -816,7 +821,7 @@ function spawnAgoraVillagers() {
 // Auto-initialize units when the scene is ready
 function autoInitUnits() {
     if (window.gfx && window.gfx.scene) {
-        console.log("Auto-initializing units...");
+        // console.log("Auto-initializing units...");
         sprinkleUnits(); // Neutral units spread across map
         spawnUnitModels(window.gfx.scene);
     } else {

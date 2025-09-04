@@ -169,12 +169,12 @@
     const dy = endPoint.y - startPoint.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
     
-    console.log("🎯 Lasso: Mouse up analysis:", { 
-      distance, 
-      threshold: DRAG_THRESHOLD, 
-      isDragActive, 
-      wasDrag: distance > DRAG_THRESHOLD && isDragActive 
-    });
+    // console.log("🎯 Lasso: Mouse up analysis:", { 
+    //   distance, 
+    //   threshold: DRAG_THRESHOLD, 
+    //   isDragActive, 
+    //   wasDrag: distance > DRAG_THRESHOLD && isDragActive 
+    // });
     
     if (distance > DRAG_THRESHOLD && isDragActive) {
       // This was a drag - perform area selection
@@ -215,7 +215,7 @@
     if (isSelecting && isDragActive) {
       rmbDownDuringDrag = true;
       rmbPositionDuringDrag = { x, y };
-      console.log("🎯 Lasso: RMB DOWN during drag at", { x, y });
+      // console.log("🎯 Lasso: RMB DOWN during drag at", { x, y });
       return true; // Claim this RMB event
     }
     return false; // Let UI system handle it
@@ -224,7 +224,7 @@
   lasso.handleRmbUp = function(x, y, e) {
     if (rmbDownDuringDrag) {
       rmbDownDuringDrag = false;
-      console.log("🎯 Lasso: RMB UP during drag at", { x, y });
+      // console.log("🎯 Lasso: RMB UP during drag at", { x, y });
       return true; // Claim this RMB event
     }
     return false; // Let UI system handle it
@@ -233,7 +233,7 @@
   lasso.handleRmbMove = function(x, y, e) {
     if (rmbDownDuringDrag && isSelecting && isDragActive) {
       rmbPositionDuringDrag = { x, y };
-      console.log("🎯 Lasso: RMB MOVE during drag at", { x, y });
+      // console.log("🎯 Lasso: RMB MOVE during drag at", { x, y });
       return true; // Claim this RMB event
     }
     return false; // Let UI system handle it

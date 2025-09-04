@@ -152,7 +152,7 @@
       
       billboardMaterial.backFaceCulling = false;
       
-      console.log('Billboard atlas material initialized with atlas-hd.png, transparency, and soft lighting');
+      // console.log('Billboard atlas material initialized with atlas-hd.png, transparency, and soft lighting');
     }
   }
   
@@ -845,7 +845,17 @@ let pov2 = 240;
         vertexDataObj.positions = data.verts;
         vertexDataObj.indices = data.indices;
         vertexDataObj.uvs = data.uvs;
-        
+
+
+//         // ... existing code ...
+// const vertexCount = data.verts.length / 3;
+// const maxIndex = data.indices.length ? Math.max.apply(null, data.indices) : -1;
+
+// if (data.verts.length % 3 !== 0) console.error('positions not multiple of 3', key);
+// if (data.uvs.length !== vertexCount * 2) console.error('uv length mismatch', key, data.uvs.length, 'vs', vertexCount * 2);
+// if (maxIndex >= vertexCount) console.error('index out of range', key, maxIndex, '>=', vertexCount);
+// // ... existing code ...
+// // vertexDataObj.applyToMesh(meshes[key]);
         vertexDataObj.applyToMesh(meshes[key]);
         
         // Compute normals after applying vertex data
@@ -980,6 +990,11 @@ let pov2 = 240;
       updateUnitMeshes();
     }
     
+    // Update building logic (villager spawning, etc.)
+    if (window.updateBuildings) {
+      updateBuildings(0.016); // ~60fps deltaTime
+    }
+    
     // Update LOD system based on camera position
     if (gfx.camera) {
       updateLOD(gfx.camera.position);
@@ -993,6 +1008,11 @@ let pov2 = 240;
     // Update minimap AFTER camera position is finalized
     if (window.hud && window.hud.updateMinimap) {
       window.hud.updateMinimap();
+    }
+    
+    // Update resource display
+    if (window.hud && window.hud.updateResourceDisplay) {
+      window.hud.updateResourceDisplay();
     }
     
     // Update visible chunks around camera target
@@ -1038,10 +1058,10 @@ let pov2 = 240;
     // Use forge camera if in forge mode, otherwise use regular camera
     if (window.ENABLE_FORGE) {
       gfx.camera = gfx.makeForgeCamera(scene);
-      console.log('Using forge camera');
+      // console.log('Using forge camera');
     } else {
       gfx.camera = gfx.makeCamera(scene);
-      console.log('Using regular camera');
+      // console.log('Using regular camera');
     }
 
     // Initialize orbital lighting system (without auto-movement)
@@ -1063,16 +1083,16 @@ let pov2 = 240;
       const randomMoonTime = minTime + Math.random() * (maxTime - minTime);
       
       lighting.setBothTimes(randomSunTime, randomMoonTime);
-      console.log('Set lighting - Sun:', randomSunTime.toFixed(2), 'Moon:', randomMoonTime.toFixed(2));
+      // console.log('Set lighting - Sun:', randomSunTime.toFixed(2), 'Moon:', randomMoonTime.toFixed(2));
       
-      console.log('Orbital lighting system ready - use lighting.setTimeOfDay(0-1) to adjust');
+      // console.log('Orbital lighting system ready - use lighting.setTimeOfDay(0-1) to adjust');
     }
 
     // Initialize FX system
     if (window.fx) {
       fx.init(scene);
       fx.setupBarrelLauncher();
-      console.log('FX system ready - press T for explosions!');
+      // console.log('FX system ready - press T for explosions!');
     } else {
       // Fallback to basic lighting if lighting.js not loaded
       scene.ambientColor = new ColorHex('#696969');

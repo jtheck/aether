@@ -975,7 +975,6 @@ let pov2 = 240;
     if (window.updateUnits) {
       updateUnits(0.016); // ~60fps deltaTime
     }
-    
     // Update unit mesh positions and rotations
     if (window.updateUnitMeshes) {
       updateUnitMeshes();
@@ -1126,8 +1125,8 @@ let pov2 = 240;
     camera.lowerRadiusLimit = 1;
     camera.upperBetaLimit = 2.0; // Limit how high you can look (prevent going too high)
     camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
-    camera.maxZ = 2001; // max render distance
-    camera.minZ = 1.5; // minimum render distance
+    camera.maxZ = 1001; // max render distance
+    camera.minZ = 5; // minimum render distance
     camera.fov = .8; // default .8
  
 

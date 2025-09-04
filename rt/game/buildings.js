@@ -15,28 +15,37 @@ const BuildingTypes = {
   camp: {
     name: "Camp",
     model: "assets/models/camp.glb",
-    scale: .51,
+    scale: .4,
     rotation: 0, // No rotation by default
     size: { width: 2, height: 2 },
     cost: { wood: 30, stone: 10 },
     description: "Basic work camp",
     category: "residential"
   }, 
-  house: {
+  village: {
     name: "Village",
     model: "assets/models/village.glb",
-    scale: 1,
+    scale: .2,
     rotation: 0, // No rotation by default
     size: { width: 2, height: 2 },
     cost: { wood: 30, stone: 10 },
     description: "Basic housing for villagers",
     category: "residential"
   },
-  
+  farm: {
+    name: "Farm",
+    model: "assets/models/farm.glb",
+    scale: .4,
+    rotation: 0,
+    size: { width: 2, height: 2 },
+    cost: { wood: 20, stone: 10 },
+    description: "Food production",
+    category: "production"
+  },
   tower: {
     name: "Watchtower",
     model: "assets/models/tower.glb", 
-    scale: 1,
+    scale: .1,
     rotation: Math.PI / 6, // 30 degrees
     size: { width: 2, height: 2 },
     cost: { stone: 80, wood: 20 },
@@ -45,8 +54,9 @@ const BuildingTypes = {
   }
 };
 
-// Global buildings array
+// Global buildings array and model pools
 const gameBuildings = [];
+const buildingModelPools = new Map(); // path -> array of model instances
 
 // Building constructor
 function Building(buildingType, position, options = {}) {
@@ -83,28 +93,97 @@ function placeBuilding(buildingType, x, z, scene) {
   const building = new Building(buildingType, { x: worldPosition.x, y: 0, z: worldPosition.z });
   // console.log(`🏛️ Building created:`, building.name, 'Model path:', building.model);
   
-  if (window.gfx && window.gfx.getModel) {
-    // console.log(`📦 Loading model: ${building.model}`);
-    window.gfx.getModel(building.model, scene).then(model => {
-      // console.log(`✅ Model loaded successfully:`, model);
+  if (window.gfx) {
+    // Try to get from pool first
+    let pool = buildingModelPools.get(building.model);
+    let modelPromise;
+
+    if (pool && pool.length > 0) {
+      // Reuse instance from pool
+      const model = pool.pop();
+      modelPromise = Promise.resolve(model);
+    } else {
+      // Create new instance
+      modelPromise = window.gfx.getModel(building.model, scene);
+    }
+
+    modelPromise.then(model => {
       building.mesh = model.root;
-      building.mesh.position = worldPosition;
-      building.mesh.scaling = new BABYLON.Vector3(building.scale, building.scale, building.scale);
       
-      // Apply rotation if specified
-      if (building.rotation !== undefined) {
-        // Force Euler angles like we do with units
-        building.mesh.rotationQuaternion = null;
-        building.mesh.rotation.y = building.rotation;
-        // console.log(`🔄 Applied rotation: ${(building.rotation * 180/Math.PI).toFixed(1)}°`);
-      }
+      // Set initial state
+      building.mesh.rotationQuaternion = null;
+      building.mesh.rotation.y = building.targetRotation || 0;
       
-      // console.log(`🎯 ${building.name} successfully placed at (${x}, ${z}) with world position:`, worldPosition);
+      // Keep child meshes' original rotations
+      building.mesh.getChildMeshes().forEach(mesh => {
+        if (mesh.rotationQuaternion) {
+          const quaternion = mesh.rotationQuaternion.clone();
+          mesh.rotationQuaternion = null;
+          mesh.rotation = quaternion.toEulerAngles();
+        }
+      });
+      
+      // Set position and initial scale/height
+      building.mesh.position = worldPosition.clone();
+      building.mesh.position.y = -2; // Start below ground
+      const targetScale = building.scale;
+      building.mesh.scaling = new BABYLON.Vector3(targetScale, 0.1, targetScale); // Start squished
+      
+      // Make it visible
+      building.mesh.setEnabled(true);
+      
+      // Create the animations
+      const riseAnimation = new BABYLON.Animation(
+        "buildingRise",
+        "position.y",
+        30,
+        BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+      );
+      
+      const scaleAnimation = new BABYLON.Animation(
+        "buildingScale",
+        "scaling.y",
+        30,
+        BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+      );
+
+      // Create animation keys
+      const keyFrames = [
+        { frame: 0, value: -2 },
+        { frame: 20, value: 0 }
+      ];
+      
+      const scaleFrames = [
+        { frame: 0, value: 0.1 },
+        { frame: 20, value: targetScale }
+      ];
+
+      riseAnimation.setKeys(keyFrames);
+      scaleAnimation.setKeys(scaleFrames);
+
+      // Add easing
+      const ease = new BABYLON.CubicEase();
+      ease.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUTBOUNCE);
+      riseAnimation.setEasingFunction(ease);
+      scaleAnimation.setEasingFunction(ease);
+
+      // Stop any existing animations
+      building.mesh.animations = [];
+      scene.stopAnimation(building.mesh);
+
+      // Add and start new animations
+      building.mesh.animations = [riseAnimation, scaleAnimation];
+      scene.beginAnimation(building.mesh, 0, 20, false, 1.0, () => {
+        building.mesh.position.y = 0;
+        building.mesh.scaling.y = targetScale;
+      });
     }).catch(err => {
       console.error(`❌ Failed to load ${building.name} model:`, err);
     });
   } else {
-    console.error(`❌ gfx.getModel not available! gfx:`, !!window.gfx, 'getModel:', !!window.gfx?.getModel);
+    console.error(`❌ Graphics system not available!`);
   }
   
   gameBuildings.push(building);
@@ -198,6 +277,8 @@ const buildingSystem = {
   selectedBuildingType: null,
   previewMesh: null,
   placementRotation: 0,
+  lastValidPosition: null,
+  lastValidRotation: null,
   
   // Start building placement mode
   selectBuilding: function(buildingType) {
@@ -215,11 +296,6 @@ const buildingSystem = {
     
     console.log(`🏗️ Building placement mode activated for: ${buildingType}`);
     
-    // Hide the building menu
-    if (window.ui && window.ui.hideMenu) {
-      window.ui.hideMenu();
-    }
-    
     // Create preview mesh
     this.createPreviewMesh();
     
@@ -228,7 +304,7 @@ const buildingSystem = {
   },
   
   // Create a preview mesh for the building
-  createPreviewMesh: function() {
+  createPreviewMesh: function(initialPosition = null) {
     if (!window.gfx || !window.gfx.scene) {
       console.error('Graphics system not available for preview');
       return;
@@ -240,34 +316,80 @@ const buildingSystem = {
       return;
     }
     
-    const size = buildingDef.size;
-    console.log('🏗️ Creating preview for building:', buildingDef.name, 'size:', size);
+    console.log('🏗️ Creating preview for building:', buildingDef.name);
     
-    // Create a simple box preview
-    this.previewMesh = BABYLON.MeshBuilder.CreateBox(
-      'buildingPreview', 
-      { 
-        width: size.width * TILE_SIZE, 
-        height: 0.5, 
-        depth: size.height * TILE_SIZE 
-      }, 
-      window.gfx.scene
-    );
+    // Load the actual model
+    window.gfx.getModel(buildingDef.model, window.gfx.scene).then(model => {
+      this.previewMesh = model.root;
+      
+      // Force Euler angles for rotation
+      this.previewMesh.rotationQuaternion = null;
+      
+      // Apply building scale
+      this.previewMesh.scaling = new BABYLON.Vector3(
+        buildingDef.scale,
+        buildingDef.scale,
+        buildingDef.scale
+      );
+      
+      // Create preview material
+      const previewMaterial = new BABYLON.StandardMaterial('previewMaterial', window.gfx.scene);
+      previewMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0);
+      previewMaterial.emissiveColor = new BABYLON.Color3(0, 0.3, 0);
+      previewMaterial.alpha = 0.6;
+      
+      // Keep child meshes' original rotations but update materials
+      this.previewMesh.getChildMeshes().forEach(mesh => {
+        mesh.material = previewMaterial;
+        mesh.isPickable = false;
+        // Preserve original rotations
+        if (mesh.rotationQuaternion) {
+          const quaternion = mesh.rotationQuaternion.clone();
+          mesh.rotationQuaternion = null;
+          mesh.rotation = quaternion.toEulerAngles();
+        }
+      });
+      
+      // Only set rotation mode on the root mesh
+      this.previewMesh.rotationQuaternion = null;
+      this.previewMesh.isPickable = false;
+      
+      // Set initial rotation
+      this.placementRotation = buildingDef.rotation || 0;
+      this.previewMesh.rotation.y = this.placementRotation;
+      
+      // Position it at the provided position or current mouse position
+      if (initialPosition) {
+        this.previewMesh.position = initialPosition.clone();
+        this.previewMesh.position.y = 0.25; // Slightly above ground
+      } else {
+        // Try to get current mouse position
+        const pickResult = window.gfx.scene.pick(
+          window.gfx.scene.pointerX,
+          window.gfx.scene.pointerY
+        );
+        
+        if (pickResult.hit && pickResult.pickedPoint) {
+          this.previewMesh.position = pickResult.pickedPoint.clone();
+          this.previewMesh.position.y = 0.25;
+        } else if (window.gfx.cameraTarget) {
+          // Fallback to camera target
+          this.previewMesh.position = window.gfx.cameraTarget.position.clone();
+          this.previewMesh.position.y = 0.25;
+        } else {
+          // Last resort fallback
+          this.previewMesh.position = new BABYLON.Vector3(0, 0.25, 0);
+        }
+      }
+      
+      console.log('✅ Building preview created at position:', this.previewMesh.position);
+    }).catch(err => {
+      console.error('Failed to create preview mesh:', err);
+    });
     
-    // Make it semi-transparent and green
-    this.previewMesh.material = new BABYLON.StandardMaterial('previewMaterial', window.gfx.scene);
-    this.previewMesh.material.alpha = 0.6;
-    this.previewMesh.material.diffuseColor = new BABYLON.Color3(0, 1, 0);
-    this.previewMesh.material.emissiveColor = new BABYLON.Color3(0, 0.3, 0);
-    
-    // Position it at camera target
-    if (window.gfx.cameraTarget) {
-      this.previewMesh.position = window.gfx.cameraTarget.position.clone();
-      this.previewMesh.position.y = 0.25; // Slightly above ground
-    } else {
-      // Fallback position if no camera target
-      this.previewMesh.position = new BABYLON.Vector3(0, 0.25, 0);
-    }
+    // Return early since we're handling positioning in the promise
+    return;
+
     
     console.log('✅ Building preview created at position:', this.previewMesh.position);
   },
@@ -304,9 +426,20 @@ const buildingSystem = {
       }
     };
     
-    // Add click handler for placement
+    // Add click handlers for placement and cancel
     this.clickHandler = (e) => {
       if (!this.isPlacing || !this.previewMesh) return;
+      
+      // Right click to cancel
+      if (e.button === 2) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cancelPlacement();
+        return;
+      }
+      
+      // Only handle left clicks for placement
+      if (e.button !== 0) return;
       
       try {
         // Get world position from mouse
@@ -322,6 +455,10 @@ const buildingSystem = {
           
           // Place the building
           this.placeBuildingAt(gridX, gridZ);
+          
+          // Prevent event from bubbling up and closing menus
+          e.preventDefault();
+          e.stopPropagation();
         }
       } catch (error) {
         console.warn('Error in click handler:', error);
@@ -331,6 +468,22 @@ const buildingSystem = {
     // Add event listeners
     document.addEventListener('mousemove', this.mouseMoveHandler);
     document.addEventListener('click', this.clickHandler);
+    document.addEventListener('contextmenu', (e) => {
+      if (this.isPlacing) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cancelPlacement();
+        return false;
+      }
+    });
+    
+    // Also prevent right-click from bubbling up in click handler
+    document.addEventListener('mousedown', (e) => {
+      if (this.isPlacing && e.button === 2) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    });
     
     console.log('✅ Placement mode enabled');
   },
@@ -368,18 +521,45 @@ const buildingSystem = {
     const building = placeBuilding(this.selectedBuildingType, gridX, gridZ, window.gfx.scene);
     
     if (building) {
-      // Apply the rotation from preview
-      if (building.mesh) {
-        building.mesh.rotation.y = this.placementRotation;
-      }
+      // Store the target rotation for when the mesh loads
+      building.targetRotation = this.placementRotation;
+      
+      // Set up a callback to apply rotation after mesh loads
+      const checkInterval = setInterval(() => {
+        if (building.mesh) {
+          // Only rotate the root mesh
+          building.mesh.rotationQuaternion = null;
+          building.mesh.rotation.y = building.targetRotation;
+          
+          clearInterval(checkInterval);
+        }
+      }, 100);
+      
+      // Reset cached position and rotation
+      this.lastValidPosition = null;
+      this.lastValidRotation = null;
       
       console.log(`✅ ${building.name} placed at (${gridX}, ${gridZ})`);
       
       // Show success message
       this.showPlacementSuccess(`${building.name} placed successfully!`);
       
-      // Exit placement mode
-      this.exitPlacementMode();
+      // Get current mouse position for new preview
+      const pickResult = window.gfx.scene.pick(
+        window.gfx.scene.pointerX,
+        window.gfx.scene.pointerY
+      );
+      
+      // Reset preview mesh and state but stay in placement mode
+      this.previewMesh.dispose();
+      this.previewMesh = null;
+      
+      // Create new preview at current mouse position
+      if (pickResult.hit && pickResult.pickedPoint) {
+        this.createPreviewMesh(pickResult.pickedPoint);
+      } else {
+        this.createPreviewMesh();
+      }
     }
   },
   
@@ -401,8 +581,28 @@ const buildingSystem = {
     this.exitPlacementMode();
   },
   
+  // Return a building's model to the pool
+  returnBuildingToPool: function(building) {
+    if (building.mesh && building.model) {
+      // Hide the mesh
+      building.mesh.setEnabled(false);
+      
+      // Get or create pool for this model
+      if (!buildingModelPools.has(building.model)) {
+        buildingModelPools.set(building.model, []);
+      }
+      
+      // Add mesh to pool
+      const pool = buildingModelPools.get(building.model);
+      pool.push({ root: building.mesh });
+      
+      // Clear building's reference
+      building.mesh = null;
+    }
+  },
+
   // Exit placement mode
-  exitPlacementMode: function() {
+  exitPlacementMode: function(keepListeners = false) {
     this.isPlacing = false;
     this.selectedBuildingType = null;
     
@@ -412,18 +612,20 @@ const buildingSystem = {
       this.previewMesh = null;
     }
     
-    // Remove event listeners
-    if (this.mouseMoveHandler) {
-      document.removeEventListener('mousemove', this.mouseMoveHandler);
-      this.mouseMoveHandler = null;
+    // Only remove event listeners if we're fully exiting
+    if (!keepListeners) {
+      if (this.mouseMoveHandler) {
+        document.removeEventListener('mousemove', this.mouseMoveHandler);
+        this.mouseMoveHandler = null;
+      }
+      
+      if (this.clickHandler) {
+        document.removeEventListener('click', this.clickHandler);
+        this.clickHandler = null;
+      }
+      
+      console.log('✅ Building placement mode exited');
     }
-    
-    if (this.clickHandler) {
-      document.removeEventListener('click', this.clickHandler);
-      this.clickHandler = null;
-    }
-    
-    console.log('✅ Building placement mode exited');
   },
   
   // Show placement error message
@@ -484,9 +686,61 @@ const buildingSystem = {
     }, 2000);
   },
   
+  // Find best rotation based on surroundings
+  findBestRotation: function(gridX, gridZ) {
+    const SEARCH_RADIUS = 3; // How far to look for nearby objects
+    const worldX = gridX * TILE_SIZE;
+    const worldZ = gridZ * TILE_SIZE;
+    
+    // Check for nearby buildings
+    let nearestBuilding = null;
+    let minDistance = Infinity;
+    
+    for (const building of gameBuildings) {
+      const dx = building.position.x - worldX;
+      const dz = building.position.z - worldZ;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      
+      if (distance < SEARCH_RADIUS * TILE_SIZE && distance < minDistance) {
+        nearestBuilding = building;
+        minDistance = distance;
+      }
+    }
+    
+    // If we found a nearby building, face away from it
+    if (nearestBuilding) {
+      const dx = worldX - nearestBuilding.position.x;
+      const dz = worldZ - nearestBuilding.position.z;
+      return Math.atan2(dz, dx);
+    }
+    
+    // Check for terrain features (if we have access to them)
+    if (window.liveField && window.liveField.getTerrainType) {
+      // Check surrounding tiles for terrain features
+      // Check in a circle around the building in 15-degree increments
+      const angles = [];
+      for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 12) {
+        const radius = 1;
+        const x = Math.round(gridX + Math.cos(angle) * radius);
+        const z = Math.round(gridZ + Math.sin(angle) * radius);
+        angles.push({ x, z, angle: (angle + Math.PI) % (Math.PI * 2) }); // Face away from feature
+      }
+      
+      for (const tile of angles) {
+        const terrainType = window.liveField.getTerrainType(tile.x, tile.z);
+        if (terrainType === 'forest' || terrainType === 'mountain' || terrainType === 'rock') {
+          return tile.angle; // Face away from the terrain feature
+        }
+      }
+    }
+    
+    // Default to a random rotation in 15-degree increments
+    return Math.floor(Math.random() * 24) * (Math.PI / 12); // 24 * 15 degrees = 360 degrees
+  },
+
   // Update preview validity and color
   updatePreviewValidity: function(gridX, gridZ) {
-    if (!this.previewMesh || !this.previewMesh.material) return;
+    if (!this.previewMesh) return;
     
     let isValid = true;
     
@@ -512,13 +766,51 @@ const buildingSystem = {
       }
     }
     
-    // Update preview color based on validity
-    if (isValid) {
-      this.previewMesh.material.diffuseColor = new BABYLON.Color3(0, 1, 0); // Green
-      this.previewMesh.material.emissiveColor = new BABYLON.Color3(0, 0.3, 0);
-    } else {
-      this.previewMesh.material.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red
-      this.previewMesh.material.emissiveColor = new BABYLON.Color3(0.3, 0, 0);
+    // Update preview appearance and rotation
+    if (this.previewMesh) {
+      // Update color based on validity
+      this.previewMesh.getChildMeshes().forEach(mesh => {
+        if (mesh.material) {
+          if (isValid) {
+            mesh.material.diffuseColor = new BABYLON.Color3(0, 1, 0); // Green
+            mesh.material.emissiveColor = new BABYLON.Color3(0, 0.3, 0);
+          } else {
+            mesh.material.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red
+            mesh.material.emissiveColor = new BABYLON.Color3(0.3, 0, 0);
+          }
+        }
+      });
+
+      // Update rotation based on surroundings
+      if (isValid) {
+        // Only recalculate rotation if we've moved to a new grid position
+        const posKey = `${gridX},${gridZ}`;
+        if (this.lastValidPosition !== posKey) {
+          this.lastValidPosition = posKey;
+          this.lastValidRotation = this.findBestRotation(gridX, gridZ);
+        }
+        
+        const targetRotation = this.lastValidRotation;
+        
+        // Force Euler angles
+        this.previewMesh.rotationQuaternion = null;
+        
+        // Smoothly interpolate to the target rotation
+        const currentAngle = this.previewMesh.rotation.y;
+        let angleDiff = targetRotation - currentAngle;
+        
+        // Normalize angle difference to [-PI, PI]
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        
+        // Smooth interpolation with slower rotation
+        const smoothing = 0.15; // Slower, more stable rotation
+        const newAngle = currentAngle + angleDiff * smoothing;
+        
+        // Apply rotation
+        this.previewMesh.rotation.y = newAngle;
+        this.placementRotation = targetRotation; // Store target rotation for placement
+      }
     }
   }
 };

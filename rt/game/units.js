@@ -37,7 +37,7 @@ const UnitTypes = {
     name: "Tree Guardian",
     category: "military", 
     model: "assets/models/trees.glb",
-    scale: 11.8,
+    scale: .8,
     health: 150,
     speed: 1,
     rotationSpeed: 5.0, // Slow turning for massive units
@@ -88,6 +88,63 @@ const UnitTypes = {
     cost: { food: 30, stone: 15 },
     abilities: ["build", "repair", "fortify"],
     description: "Specialized construction unit with enhanced building abilities"
+  },
+
+  // Your original units
+  monk: {
+    name: "Monk",
+    category: "support",
+    model: "assets/models/monk.glb",
+    scale: 0.5,
+    health: 45,
+    speed: 1.5,
+    rotationSpeed: 8.0,
+    size: 1,
+    cost: { food: 25, magic: 15 },
+    abilities: ["heal", "bless", "convert"],
+    description: "Holy unit with healing and conversion abilities"
+  },
+
+  wizard: {
+    name: "Wizard",
+    category: "caster",
+    model: "assets/models/wizard.glb",
+    scale: 0.5,
+    health: 40,
+    speed: 1.5,
+    rotationSpeed: 10.0,
+    size: 1,
+    cost: { food: 30, magic: 25 },
+    abilities: ["fireball", "teleport", "shield"],
+    description: "Powerful magic user with offensive spells"
+  },
+
+  engineer: {
+    name: "Engineer",
+    category: "worker",
+    model: "assets/models/engineer.glb",
+    scale: 0.5,
+    health: 50,
+    speed: 2.0,
+    rotationSpeed: 15.0,
+    size: 1,
+    cost: { food: 35, stone: 20 },
+    abilities: ["build", "repair", "upgrade"],
+    description: "Advanced builder with special upgrade abilities"
+  },
+
+  brigand: {
+    name: "Brigand",
+    category: "military",
+    model: "assets/models/brigand.glb",
+    scale: 0.5,
+    health: 65,
+    speed: 3.0,
+    rotationSpeed: 20.0,
+    size: 1,
+    cost: { food: 40, wood: 15 },
+    abilities: ["sneak", "ambush", "steal"],
+    description: "Stealthy unit specializing in ambush tactics"
   }
 };
 
@@ -277,8 +334,18 @@ function spawnUnitModels(scene) {
                 
                 // Make unit meshes pickable for selection
                 unit.mesh.isPickable = true;
-                unit.mesh.getChildMeshes().forEach(child => {
-                    child.isPickable = true;
+                
+                // Handle child meshes - preserve their original rotations
+                unit.mesh.getChildMeshes().forEach(mesh => {
+                    mesh.isPickable = true;
+                    
+                    // Store their original rotations if they have them
+                    if (mesh.rotationQuaternion) {
+                        const quaternion = mesh.rotationQuaternion.clone();
+                        mesh.rotationQuaternion = null;
+                        mesh.originalRotation = quaternion.toEulerAngles();
+                        mesh.rotation.copyFrom(mesh.originalRotation);
+                    }
                 });
                 
                 // Create selection indicator (glowing ring)
@@ -629,15 +696,18 @@ function updateUnitMeshes() {
                 unit.mesh.rotation.y = unit.pb.state.rot.y;
                 unit.mesh.rotation.z = unit.pb.state.rot.z;
                 
-                // Also rotate child meshes (where the actual geometry is)
-                unit.mesh.getChildren().forEach(child => {
-                    if (child.rotation) {
-                        child.rotationQuaternion = null; // Disable quaternions
-                        child.rotation.x = unit.pb.state.rot.x;
-                        child.rotation.y = unit.pb.state.rot.y;
-                        child.rotation.z = unit.pb.state.rot.z;
+                            // Handle child meshes - preserve their original rotations
+            unit.mesh.getChildMeshes().forEach(mesh => {
+                if (mesh.rotationQuaternion) {
+                    // Store their original rotations if they have them
+                    if (!mesh.originalRotation) {
+                        const quaternion = mesh.rotationQuaternion.clone();
+                        mesh.rotationQuaternion = null;
+                        mesh.originalRotation = quaternion.toEulerAngles();
+                        mesh.rotation.copyFrom(mesh.originalRotation);
                     }
-                });
+                }
+            });
             }
         }
     });

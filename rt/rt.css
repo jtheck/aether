@@ -101,14 +101,16 @@ html, body {
 
 /* Lasso Selection Box Styles */
 #lasso-selection-box {
-  position: fixed;
-  border: 2px solid #00ff00;
-  background-color: rgba(0, 255, 0, 0.1);
+  position: absolute;
+  border: 1px dashed aqua;
+  /* background-color: rgba(0, 255, 0, 0.1); */
   pointer-events: none;
   z-index: 1000;
-  border-radius: 2px;
-  box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
-  transition: all 0.05s ease-out;
+  /* border-radius: 2px; */
+  /* box-shadow: 0 0 10px rgba(0, 255, 0, 0.3); */
+  display: none;
+  top: 0;
+  left: 0;
 }
 
 #lasso-selection-box::before {
@@ -376,19 +378,97 @@ a:after{
   position: absolute! important;
 }
 
-#anchor {
-
-
+.menu_anchor{
   position: absolute;
-  bottom: 15px;
-  left: 50%;
   transform: translate(-50%, -50%);
-  border: 2px outset White;
+  border: 2px outset #ffffff3d;
   border-radius: 7px;
   color: White;
-  padding: 5px;
-  width: 59px;
-  height: 59px;
-  background-image: url('assets/menu-bg.jpg');
+  width: 33px;
+  height: 33px;
+  cursor: pointer;
+  /* background-image: url('assets/menu-bg.jpg'); */
   display: block;
 }
+.menu_anchor:hover {
+  border-color: aqua;
+}
+#anchor_n {
+  top: 58px;
+  left: 50%;
+}
+#anchor_s {
+  bottom: 25px;
+  left: 50%;
+}
+#anchor_e {
+  right: 25px;
+  top: 50%;
+}
+#anchor_w {
+  left: 58px;
+  top: 50%;
+}
+
+/* Radial Menu System */
+.radial-menu-button {
+  position: absolute;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.5);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+  z-index: 1000;
+}
+
+.radial-menu-button.visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+  pointer-events: auto;
+}
+
+.radial-menu-button:hover {
+  background: rgba(0, 255, 255, 0.2);
+  border-color: aqua;
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+.radial-menu-button:active {
+  background: rgba(139, 0, 139, 0.2);
+  border-color: darkmagenta;
+  transform: translate(-50%, -50%) scale(0.95);
+}
+
+.radial-menu-button.selected {
+  background: rgba(0, 255, 255, 0.3);
+  border-color: aqua;
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+/* Container for tooltip/label */
+.radial-menu-label {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.radial-menu-button:hover .radial-menu-label {
+  opacity: 1;
+}
+

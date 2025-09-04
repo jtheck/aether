@@ -524,7 +524,7 @@ function getRandomColor() {
             // Single click - create explosion at clicked position
             if (window.fx && window.fx.createExplosion) {
               // Small explosion for clicks - scale 0.3 for tiny effect
-              window.fx.createExplosion(worldPos, 0.3);
+              window.fx.createExplosion(worldPos, 0.123);
               console.log(`💥 Field action: Small explosion at (${tileX}, ${tileZ})`);
               
               // Make selected units walk to the explosion location

@@ -10,6 +10,7 @@
   <script src="vendor/babylon8.js"></script>
   <script src="vendor/babylonjs.loaders.min.js"></script>
   <script src="vendor/babylon.inspector.bundle.js"></script>
+  <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
 
 
   <!-- <script src="vendor/ftxx_pointer.js"></script> -->
@@ -82,19 +83,18 @@
     <div id="settings_menu" class="menu_menu">
       <div class="menu_title">Settings<div id="fps_meter">fps</div></div>
       
-      1
+      lasso style 
       <br>
-      2
+      graphics
       <br>
-      3
+      audio
       <br>
 
       <hr style="width: 60%;">
       <h4>About</h4>
-      <a href="https://echo.aether.garden" target="_blank" title="Live and Replays">Echo</a>
-      <br>
+      <!-- <a href="https://echo.aether.garden" target="_blank" title="Live and Replays">Echo</a> -->
       <a href="https://forge.aether.garden" target="_blank" title="Field Editor">Forge</a>
-      <br>
+      <br><br><br>
       Privacy
       <div id="privacy_poli"><br>
         This Privacy Policy governs the manner in which Aether.Garden collects, uses, maintains and discloses information collected from users (each, a "User") of the <a href="https://aether.garden">Aether.Garden</a> website ("Site"). This privacy policy applies to the Site and all products and services offered by Aether.Garden.
@@ -140,7 +140,8 @@
       <!-- <br>
       <a href="https://nexus.aether.garden" target="_blank" title="Community">Nexus</a> -->
       <hr>
-      <a href="https://axiom.aether.garden" target="_blank" title="ToE">ÆæXi0m</a>
+      ÆæXi0m
+      <!-- <a href="https://axiom.aether.garden" target="_blank" title="ToE">ÆæXi0m</a> -->
       <span style="font-size: .7em;">©'25 Aether.Garden</span>
     </div>
 
@@ -186,9 +187,18 @@
 
 
   <div id="2d_hud">
-
-    <div id="anchor"></div>
+    <div id="lasso-selection-box"></div>
+    <div id="2d_b_die" class="2d_b"></div>
+    <div id="anchor_n" class="menu_anchor"></div>
+    <div id="anchor_s" class="menu_anchor"></div>
+    <div id="anchor_e" class="menu_anchor"></div>
+    <div id="anchor_w" class="menu_anchor"></div>
     
+    <div id="stat_1"></div>
+    <div id="stat_1"></div>
+    <div id="stat_1"></div>
+    <div id="stat_1"></div>
+
     <!-- <div id="building_b" title="Buildings" onclick="ui.showMenu('building_menu')">🏗️</div>
 
     <div id="building_menu" class="menu_menu">
@@ -239,11 +249,9 @@
   <script src="game/buildings.js"></script>
   <script src="game/ai.js"></script>
   <script src="game/lasso.js"></script>
+  <script src="game/menu.js"></script>
 
-    <!-- 
-  <script src="js/units.js"></script>
-  <script src="js/selection.js"></script>
-   -->
+
   <script>
     window.addEventListener('DOMContentLoaded', function(){app.init()});
   </script>

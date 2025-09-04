@@ -6,8 +6,8 @@
 const
   DRAW_FPS = true,
   TILE_SIZE = 4,
-  ENABLE_FORGE = true,
-
+  ENABLE_FORGE = false,
+  USE_2D_SELECTION = true,
 
 
 

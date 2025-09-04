@@ -12,6 +12,7 @@
   // Configuration
   const DRAG_THRESHOLD = 5; // pixels - minimum movement to start drag
   const CLICK_TIMEOUT = 200; // ms - time to wait before treating as click
+  // const USE_2D_SELECTION = true; // Set to false to use 3D fence selection
   
   // State tracking
   let dragStartTime = 0;
@@ -32,8 +33,18 @@
   
   // Create the visual selection box
   function createSelectionBox() {
-    if (!window.gfx || !window.gfx.scene) return;
+    if (USE_2D_SELECTION) {
+      // Get the HTML selection box element
+      selectionBox = document.getElementById('lasso-selection-box');
+      if (!selectionBox) {
+        console.error('Selection box element not found');
+        return;
+      }
+      selectionBox.style.display = 'none';
+      return;
+    }
     
+    // 3D Selection Box Code
     // Create 4 vertical planes around the edges for a fence-like selection box
     // These will face the camera so they're always visible
     const lineMaterial = new BABYLON.StandardMaterial("selectionLineMat", window.gfx.scene);
@@ -240,19 +251,46 @@
   
   // Update the visual selection box
   function updateSelectionBox() {
-    if (!selectionBox || !Array.isArray(selectionBox) || !window.gfx || !window.gfx.camera) return;
+    if (!selectionBox || !window.gfx) return;
+
+    if (USE_2D_SELECTION) {
+      // Calculate rectangle dimensions
+      const left = Math.min(startPoint.x, endPoint.x);
+      const top = Math.min(startPoint.y, endPoint.y);
+      const width = Math.abs(endPoint.x - startPoint.x);
+      const height = Math.abs(endPoint.y - startPoint.y);
+      
+      // Batch style updates
+      const style = selectionBox.style;
+      style.display = 'block';
+      style.left = left + 'px';
+      style.top = top + 'px';
+      style.width = width + 'px';
+      style.height = height + 'px';
+      return;
+    }
+
+    // 3D Selection Box Code
+    if (!Array.isArray(selectionBox) || !window.gfx.camera) return;
     
-    // Convert screen coordinates to world coordinates for positioning
-    const startWorld = screenToWorld(startPoint.x, startPoint.y);
-    const endWorld = screenToWorld(endPoint.x, endPoint.y);
+    // Get the four corners of our 2D selection box in screen space
+    const corners = {
+      topLeft: { x: Math.min(startPoint.x, endPoint.x), y: Math.min(startPoint.y, endPoint.y) },
+      topRight: { x: Math.max(startPoint.x, endPoint.x), y: Math.min(startPoint.y, endPoint.y) },
+      bottomLeft: { x: Math.min(startPoint.x, endPoint.x), y: Math.max(startPoint.y, endPoint.y) },
+      bottomRight: { x: Math.max(startPoint.x, endPoint.x), y: Math.max(startPoint.y, endPoint.y) }
+    };
     
-    if (!startWorld || !endWorld) return;
+    // Project all corners to world space
+    const worldCorners = {
+      topLeft: screenToWorld(corners.topLeft.x, corners.topLeft.y),
+      topRight: screenToWorld(corners.topRight.x, corners.topRight.y),
+      bottomLeft: screenToWorld(corners.bottomLeft.x, corners.bottomLeft.y),
+      bottomRight: screenToWorld(corners.bottomRight.x, corners.bottomRight.y)
+    };
     
-    // Calculate box dimensions and position
-    const centerX = (startWorld.x + endWorld.x) / 2;
-    const centerZ = (startWorld.z + endWorld.z) / 2;
-    const width = Math.abs(endWorld.x - startWorld.x);
-    const height = Math.abs(endWorld.z - startWorld.z);
+    if (!worldCorners.topLeft || !worldCorners.topRight || 
+        !worldCorners.bottomLeft || !worldCorners.bottomRight) return;
     
     // // console.log("🎯 3D fence selection update:", { 
     //   start: startWorld, 
@@ -264,28 +302,71 @@
     // Update each plane to form the fence around the selection area
     const [topPlane, rightPlane, bottomPlane, leftPlane] = selectionBox;
     
-    // Top edge (camera-facing plane)
-    topPlane.position.x = centerX;
-    topPlane.position.z = centerZ - height/2;
-    topPlane.scaling.x = Math.max(width, 0.1);
-    topPlane.isVisible = true;
+    // Calculate lengths for each edge
+    const topLength = BABYLON.Vector3.Distance(
+      new BABYLON.Vector3(worldCorners.topLeft.x, 0, worldCorners.topLeft.z),
+      new BABYLON.Vector3(worldCorners.topRight.x, 0, worldCorners.topRight.z)
+    );
+    const rightLength = BABYLON.Vector3.Distance(
+      new BABYLON.Vector3(worldCorners.topRight.x, 0, worldCorners.topRight.z),
+      new BABYLON.Vector3(worldCorners.bottomRight.x, 0, worldCorners.bottomRight.z)
+    );
+    const bottomLength = BABYLON.Vector3.Distance(
+      new BABYLON.Vector3(worldCorners.bottomLeft.x, 0, worldCorners.bottomLeft.z),
+      new BABYLON.Vector3(worldCorners.bottomRight.x, 0, worldCorners.bottomRight.z)
+    );
+    const leftLength = BABYLON.Vector3.Distance(
+      new BABYLON.Vector3(worldCorners.topLeft.x, 0, worldCorners.topLeft.z),
+      new BABYLON.Vector3(worldCorners.bottomLeft.x, 0, worldCorners.bottomLeft.z)
+    );
     
-    // Right edge (camera-facing plane)
-    rightPlane.position.x = centerX + width/2;
-    rightPlane.position.z = centerZ;
-    rightPlane.scaling.x = Math.max(height, 0.1);
+    const FENCE_HEIGHT = 2; // Height of the selection fence
+
+    // Right edge - lay flat on ground
+    rightPlane.position.x = (worldCorners.topRight.x + worldCorners.bottomRight.x) / 2;
+    rightPlane.position.z = (worldCorners.topRight.z + worldCorners.bottomRight.z) / 2;
+    rightPlane.position.y = FENCE_HEIGHT / 2; // Raise up
+    rightPlane.scaling.x = Math.max(rightLength, 0.1);
+    rightPlane.rotation.x = -Math.PI/2; // Lay flat
+    rightPlane.rotation.y = Math.atan2(
+      worldCorners.bottomRight.x - worldCorners.topRight.x,
+      worldCorners.bottomRight.z - worldCorners.topRight.z
+    ) + Math.PI / 2;
     rightPlane.isVisible = true;
     
-    // Bottom edge (camera-facing plane)
-    bottomPlane.position.x = centerX;
-    bottomPlane.position.z = centerZ + height/2;
-    bottomPlane.scaling.x = Math.max(width, 0.1);
-    bottomPlane.isVisible = true;
+    // Left edge - lay flat on ground
+    leftPlane.position.x = (worldCorners.topLeft.x + worldCorners.bottomLeft.x) / 2;
+    leftPlane.position.z = (worldCorners.topLeft.z + worldCorners.bottomLeft.z) / 2;
+    leftPlane.position.y = FENCE_HEIGHT / 2; // Raise up
+    leftPlane.scaling.x = Math.max(leftLength, 0.1);
+    leftPlane.rotation.x = -Math.PI/2; // Lay flat
+    leftPlane.rotation.y = Math.atan2(
+      worldCorners.bottomLeft.x - worldCorners.topLeft.x,
+      worldCorners.bottomLeft.z - worldCorners.topLeft.z
+    ) - Math.PI / 2;
+    leftPlane.isVisible = true;
+
+    // Top edge - vertical plane connecting left and right at top
+    topPlane.position.x = (worldCorners.topLeft.x + worldCorners.topRight.x) / 2;
+    topPlane.position.z = (worldCorners.topLeft.z + worldCorners.topRight.z) / 2;
+    topPlane.position.y = FENCE_HEIGHT / 2; // Center at same height as sides
+    topPlane.scaling.x = Math.max(topLength, 0.1);
+    topPlane.rotation.y = Math.atan2(
+      worldCorners.topRight.x - worldCorners.topLeft.x,
+      worldCorners.topRight.z - worldCorners.topLeft.z
+    ) + Math.PI/2; // Add 90 degrees to align plane with edge
+    topPlane.isVisible = true;
     
-    // Left edge (camera-facing plane)
-    leftPlane.position.x = centerX - width/2;
-    leftPlane.position.z = centerZ;
-    leftPlane.scaling.x = Math.max(height, 0.1);
+    // Bottom edge - vertical plane connecting left and right at bottom
+    bottomPlane.position.x = (worldCorners.bottomLeft.x + worldCorners.bottomRight.x) / 2;
+    bottomPlane.position.z = (worldCorners.bottomLeft.z + worldCorners.bottomRight.z) / 2;
+    bottomPlane.position.y = FENCE_HEIGHT / 2; // Center at same height as sides
+    bottomPlane.scaling.x = Math.max(bottomLength, 0.1);
+    bottomPlane.rotation.y = Math.atan2(
+      worldCorners.bottomRight.x - worldCorners.bottomLeft.x,
+      worldCorners.bottomRight.z - worldCorners.bottomLeft.z
+    ) + Math.PI + Math.PI/2; // Add 90 degrees to align plane with edge
+    bottomPlane.isVisible = true;
     leftPlane.isVisible = true;
     
     // console.log("🎯 3D fence selection updated");
@@ -327,39 +408,45 @@
   
   // Perform area selection based on selection box
   function performAreaSelection() {
-    if (!window.player || !window.player.units) return;
+    if (!window.player || !window.player.units || !window.gfx || !window.gfx.scene) return;
     
     // Clear current selection
     window.player.clearSelection();
     
-    // Get selection box bounds in world coordinates
-    const startWorld = screenToWorld(startPoint.x, startPoint.y);
-    const endWorld = screenToWorld(endPoint.x, endPoint.y);
+    // Get selection box bounds in screen space
+    const minX = Math.min(startPoint.x, endPoint.x);
+    const maxX = Math.max(startPoint.x, endPoint.x);
+    const minY = Math.min(startPoint.y, endPoint.y);
+    const maxY = Math.max(startPoint.y, endPoint.y);
     
-    if (!startWorld || !endWorld) return;
-    
-    const minX = Math.min(startWorld.x, endWorld.x);
-    const maxX = Math.max(startWorld.x, endWorld.x);
-    const minZ = Math.min(startWorld.z, endWorld.z);
-    const maxZ = Math.max(startWorld.z, endWorld.z);
-    
-    // console.log("🎯 Lasso: Selection area:", { minX, maxX, minZ, maxZ });
-    
-    // Find units within selection area
+    // Find units within selection area by checking their screen positions
     let selectedCount = 0;
     window.player.units.forEach(unit => {
-      if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-        const unitX = unit.pb.state.loc.x;
-        const unitZ = unit.pb.state.loc.z;
+      if (unit.mesh && unit.pb && unit.pb.state) {
+        // Get unit's world position
+        const worldPos = unit.mesh.position;
         
-        if (unitX >= minX && unitX <= maxX && unitZ >= minZ && unitZ <= maxZ) {
+        // Project world position to screen coordinates
+        const screenPos = BABYLON.Vector3.Project(
+          worldPos,
+          BABYLON.Matrix.Identity(),
+          window.gfx.scene.getTransformMatrix(),
+          window.gfx.camera.viewport.toGlobal(
+            window.gfx.engine.getRenderWidth(),
+            window.gfx.engine.getRenderHeight()
+          )
+        );
+        
+        // Check if screen position is within selection box
+        if (screenPos.x >= minX && screenPos.x <= maxX && 
+            screenPos.y >= minY && screenPos.y <= maxY) {
           window.player.selectUnit(unit);
           selectedCount++;
         }
       }
     });
     
-    // console.log(`🎯 Lasso: Selected ${selectedCount} units in area`);
+    // console.log(`🎯 Lasso: Selected ${selectedCount} units in screen area`);
   }
   
   // Handle single click on unit
@@ -422,11 +509,17 @@
     isSelecting = false;
     isDragActive = false;
     
-    // Hide all selection fence planes
-    if (selectionBox && Array.isArray(selectionBox)) {
-      selectionBox.forEach(plane => {
-        plane.isVisible = false;
-      });
+    if (USE_2D_SELECTION) {
+      if (selectionBox) {
+        selectionBox.style.display = 'none';
+      }
+    } else {
+      // Hide all selection fence planes
+      if (selectionBox && Array.isArray(selectionBox)) {
+        selectionBox.forEach(plane => {
+          plane.isVisible = false;
+        });
+      }
     }
     
     // console.log("🎯 Lasso: Selection cleanup complete");
@@ -434,9 +527,16 @@
   
   // Dispose of lasso resources
   lasso.dispose = function() {
-    if (selectionBox) {
-      selectionBox.dispose();
-      selectionBox = null;
+    if (USE_2D_SELECTION) {
+      if (selectionBox) {
+        selectionBox.style.display = 'none';
+        selectionBox = null;
+      }
+    } else {
+      if (selectionBox) {
+        selectionBox.forEach(plane => plane.dispose());
+        selectionBox = null;
+      }
     }
     // console.log("🎯 Lasso: Resources disposed");
   };

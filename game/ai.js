@@ -364,6 +364,9 @@ class GatherWorkBehavior extends WorkBehavior {
         this.gatherTarget = null;
         this.gatherStartTime = 0;
         this.returnStartTime = 0;
+        this.resourceIndicator = null; // Visual indicator when carrying resources
+        this.gatheredResourceType = null; // What resource this worker is carrying
+        this.gatheredResourceAmount = 0; // How much of that resource
     }
     
     step() {
@@ -385,6 +388,16 @@ class GatherWorkBehavior extends WorkBehavior {
         return false; // Keep working
     }
     
+    // Called when worker is reassigned - handle any carried resources
+    onReassignment() {
+        // If worker is carrying resources, drop them off first
+        if (this.gatheredResourceType && this.gatheredResourceAmount > 0) {
+            // console.log(`🔄 ${this.unit.name || this.unit.type} reassigned while carrying ${this.gatheredResourceAmount} ${this.gatheredResourceType}, dropping off first`);
+            this.addGatheredResources();
+            this.removeResourceIndicator();
+        }
+    }
+    
     seekResources() {
         if (!this.building || !this.building.position) return;
         
@@ -395,6 +408,8 @@ class GatherWorkBehavior extends WorkBehavior {
             this.gatherTarget = nearestResource;
             this.gatherState = 'gathering';
             this.gatherStartTime = Date.now();
+            
+            // console.log(`🔍 ${this.unit.name || this.unit.type} seeking ${nearestResource.type} at (${nearestResource.x.toFixed(1)}, ${nearestResource.z.toFixed(1)})`);
             
             // Move to resource
             const direction = {
@@ -410,6 +425,7 @@ class GatherWorkBehavior extends WorkBehavior {
             }
         } else {
             // No resources found, just wander around camp
+            // console.log(`⚠️ ${this.unit.name || this.unit.type} found no resources near ${this.building.name}`);
             super.performWork();
         }
     }
@@ -427,10 +443,24 @@ class GatherWorkBehavior extends WorkBehavior {
         
         if (distance < TILE_SIZE * 0.5) {
             // We're at the resource, stay and gather
+            const gatherProgress = (currentTime - this.gatherStartTime) / this.params.gatherDuration;
+            if (gatherProgress < 1.0) {
+                // console.log(`⛏️ ${this.unit.name || this.unit.type} gathering ${this.gatherTarget.type} (${Math.floor(gatherProgress * 100)}%)`);
+            }
+            
             if (currentTime - this.gatherStartTime > this.params.gatherDuration) {
                 // Finished gathering, return to camp
+                // console.log(`📦 ${this.unit.name || this.unit.type} finished gathering ${this.gatherTarget.type}, returning to camp`);
                 this.gatherState = 'returning';
                 this.returnStartTime = currentTime;
+                
+                // Store what was gathered
+                this.gatheredResourceType = this.gatherTarget.type;
+                this.gatheredResourceAmount = this.gatherTarget.amount || 1; // Default to 1 if no amount specified
+                
+                // Create visual indicator for carrying resources
+                this.createResourceIndicator(this.gatherTarget.type);
+                
                 this.gatherTarget = null;
             }
             // Just stay put while gathering
@@ -449,14 +479,24 @@ class GatherWorkBehavior extends WorkBehavior {
         const dz = this.building.position.z - this.unit.pb.state.loc.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         
-        if (distance > TILE_SIZE * 1.5) {
+        // Get much closer to camp for drop-off (within 0.5 tiles)
+        if (distance > TILE_SIZE * 0.5) {
             // Move towards camp
             const direction = { x: dx / distance, z: dz / distance };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
+            // console.log(`🏃 ${this.unit.name || this.unit.type} returning to camp (${distance.toFixed(1)}m away)`);
         } else {
             // We're back at camp, stay briefly then seek more resources
             if (currentTime - this.returnStartTime > this.params.returnDuration) {
+                // console.log(`✅ ${this.unit.name || this.unit.type} dropped off resources at camp`);
+                
+                // Actually add resources to player when worker returns
+                this.addGatheredResources();
+                
                 this.gatherState = 'seeking';
+                
+                // Remove visual indicator when dropping off resources
+                this.removeResourceIndicator();
             }
             // Just stay put while at camp
         }
@@ -465,37 +505,74 @@ class GatherWorkBehavior extends WorkBehavior {
     findNearestResource() {
         if (!this.building || !this.building.position) return null;
         
-        const gatherRadius = this.params.gatherRadius * TILE_SIZE;
-        let nearestResource = null;
-        let nearestDistance = Infinity;
+        // Use the building's detected available resources
+        const availableResources = this.building.availableResources || [];
+        if (availableResources.length === 0) return null;
         
-        // Look for rock resources (stone)
-        const rockResources = this.findResourceNodes('rock', this.building.position, gatherRadius);
-        for (const resource of rockResources) {
-            const dx = resource.x - this.building.position.x;
-            const dz = resource.z - this.building.position.z;
-            const distance = Math.sqrt(dx * dx + dz * dz);
-            
-            if (distance < nearestDistance) {
-                nearestResource = resource;
-                nearestDistance = distance;
-            }
+        // Pick any available resource (not necessarily the nearest)
+        // This spreads workers out across different resource tiles
+        const randomIndex = Math.floor(Math.random() * availableResources.length);
+        const resource = availableResources[randomIndex];
+        
+        return {
+            x: resource.worldX,
+            z: resource.worldZ,
+            type: resource.type,
+            amount: resource.amount
+        };
+    }
+    
+    createResourceIndicator(resourceType) {
+        if (!this.unit.mesh || this.resourceIndicator) return;
+        
+        // Create a simple floating icon above the unit
+        const indicator = BABYLON.MeshBuilder.CreateSphere("resourceIndicator", {
+            diameter: 0.3
+        }, window.gfx.scene);
+        
+        // Position above the unit
+        indicator.position = new BABYLON.Vector3(0, 2.5, 0);
+        indicator.parent = this.unit.mesh;
+        
+        // Color based on resource type
+        const material = new BABYLON.StandardMaterial("resourceIndicatorMaterial", window.gfx.scene);
+        if (resourceType === 'wood') {
+            material.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1); // Brown for wood
+            material.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.02);
+        } else if (resourceType === 'stone') {
+            material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5); // Gray for stone
+            material.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+        }
+        material.alpha = 0.8;
+        indicator.material = material;
+        
+        // Add a subtle glow effect
+        indicator.renderingGroupId = 1; // Render after main scene
+        
+        this.resourceIndicator = indicator;
+        // console.log(`💎 Created ${resourceType} indicator for ${this.unit.name || this.unit.type}`);
+    }
+    
+    removeResourceIndicator() {
+        if (this.resourceIndicator) {
+            this.resourceIndicator.dispose();
+            this.resourceIndicator = null;
+            // console.log(`🗑️ Removed resource indicator from ${this.unit.name || this.unit.type}`);
+        }
+    }
+    
+    addGatheredResources() {
+        if (!this.gatheredResourceType || this.gatheredResourceAmount <= 0) return;
+        
+        // Add the specific resources this worker gathered
+        if (window.player && window.player.addResource) {
+            window.player.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
+            // console.log(`💰 ${this.unit.name || this.unit.type} delivered ${this.gatheredResourceAmount} ${this.gatheredResourceType} to player`);
         }
         
-        // Look for forest resources (wood)
-        const forestResources = this.findResourceNodes('forest', this.building.position, gatherRadius);
-        for (const resource of forestResources) {
-            const dx = resource.x - this.building.position.x;
-            const dz = resource.z - this.building.position.z;
-            const distance = Math.sqrt(dx * dx + dz * dz);
-            
-            if (distance < nearestDistance) {
-                nearestResource = resource;
-                nearestDistance = distance;
-            }
-        }
-        
-        return nearestResource;
+        // Reset gathered resources
+        this.gatheredResourceType = null;
+        this.gatheredResourceAmount = 0;
     }
     
     findResourceNodes(resourceType, centerPos, radius) {
@@ -525,7 +602,7 @@ class FarmWorkBehavior extends WorkBehavior {
             workType: "farm",
             workDuration: 45000, // Farm work takes longer
             breakDuration: 8000, // Longer breaks for farming
-            patrolRadius: 3, // How far from building to patrol
+            patrolRadius: 1.9, // How far from building to patrol (reduced by 50%)
             patrolSpeed: 0.5, // Slower patrol speed
             ...params
         });
@@ -895,6 +972,12 @@ class UnitBehaviorManager {
     
     // Set a unit's active behavior
     setBehavior(unit, behaviorType, params = {}) {
+        // If unit has an existing behavior, call onReassignment if it exists
+        const currentBehavior = this.behaviors.get(unit);
+        if (currentBehavior && currentBehavior.onReassignment) {
+            currentBehavior.onReassignment();
+        }
+        
         let behavior;
         
         switch (behaviorType) {

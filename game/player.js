@@ -295,7 +295,7 @@ Player.prototype.selectAllUnitsOfType = function(type) {
   // Select them all
   unitsOfType.forEach(unit => this.selectUnit(unit));
   
-  console.log(`🎯 Selected all ${unitsOfType.length} units of type: ${type}`);
+  // console.log(`🎯 Selected all ${unitsOfType.length} units of type: ${type}`);
   return unitsOfType.length;
 };
 
@@ -303,10 +303,10 @@ Player.prototype.selectAllUnitsOfType = function(type) {
 Player.prototype.addResource = function(resourceType, amount) {
   if (this.resources.hasOwnProperty(resourceType)) {
     this.resources[resourceType] += amount;
-    console.log(`💰 Added ${amount} ${resourceType}. Total: ${this.resources[resourceType]}`);
+    // console.log(`💰 Added ${amount} ${resourceType}. Total: ${this.resources[resourceType]}`);
     return true;
   }
-  console.warn(`❌ Unknown resource type: ${resourceType}`);
+  // console.warn(`❌ Unknown resource type: ${resourceType}`);
   return false;
 };
 
@@ -314,14 +314,14 @@ Player.prototype.removeResource = function(resourceType, amount) {
   if (this.resources.hasOwnProperty(resourceType)) {
     if (this.resources[resourceType] >= amount) {
       this.resources[resourceType] -= amount;
-      console.log(`💰 Removed ${amount} ${resourceType}. Total: ${this.resources[resourceType]}`);
+      // console.log(`💰 Removed ${amount} ${resourceType}. Total: ${this.resources[resourceType]}`);
       return true;
     } else {
-      console.warn(`❌ Not enough ${resourceType}. Have: ${this.resources[resourceType]}, Need: ${amount}`);
+      // console.warn(`❌ Not enough ${resourceType}. Have: ${this.resources[resourceType]}, Need: ${amount}`);
       return false;
     }
   }
-  console.warn(`❌ Unknown resource type: ${resourceType}`);
+  // console.warn(`❌ Unknown resource type: ${resourceType}`);
   return false;
 };
 
@@ -340,7 +340,7 @@ Player.prototype.getResources = function() {
 // Spawn initial villagers around the player's agora
 Player.prototype.spawnInitialVillagers = function() {
   if (!window.Unit || !window.gameUnits || !TILE_SIZE) {
-    console.warn('❌ Required systems not ready for villager spawning');
+    // console.warn('❌ Required systems not ready for villager spawning');
     return;
   }
   
@@ -360,7 +360,7 @@ Player.prototype.spawnInitialVillagers = function() {
     
     const villager = new window.Unit('villager', { x, y: 0, z });
     if (!villager) {
-      console.warn('❌ Failed to create villager unit');
+      // console.warn('❌ Failed to create villager unit');
       continue;
     }
     
@@ -378,5 +378,5 @@ Player.prototype.spawnInitialVillagers = function() {
     window.gameUnits.push(villager);
   }
   
-  console.log(`🏘️ Spawned ${villagerCount} villagers around player's agora`);
+  // console.log(`🏘️ Spawned ${villagerCount} villagers around player's agora`);
 };

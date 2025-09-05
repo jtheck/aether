@@ -1,229 +1,268 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>_garden</title>
-    <meta name="description" content="Choose between two unique experiences">
-    <meta name="keywords" content="garden, experience, interactive">
-    <meta property="og:type" content="website" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+  <title>ÆG</title>
+  <meta name="description" content="Æther.Garden Real Time Strategy">
+  <meta name="keywords" content="garden, experience, interactive, strategy, multiplayer, rts, rtd, game">
+  <meta property="og:type" content="website" />
+  
     
-    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
-    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="192x192" href="icons/android-chrome-192x192.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16x16.png">
-    <link rel="manifest" href="manifest.json">
-    <link rel="mask-icon" href="icons/safari-pinned-tab.svg" color="#5bbad5">
-    <meta name="msapplication-TileColor" content="#00a300">
-    <meta name="theme-color" content="#ffffff">
-    
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        
-        .container {
-            display: flex;
-            width: 100vw;
-            height: 100vh;
-        }
-        
-        .half {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            position: relative;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            overflow: hidden;
-        }
-        
-        .half::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.3);
-            transition: all 0.3s ease;
-        }
-        
-        .half:hover::before {
-            background: rgba(0, 0, 0, 0.1);
-        }
-        
-        .half:hover {
-            transform: scale(1.02);
-        }
-        
-        .left {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-        
-        .right {
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        }
-        
-        .content {
-            text-align: center;
-            color: white;
-            z-index: 2;
-            position: relative;
-            padding: 2rem;
-        }
-        
-        .title {
-            font-size: 3rem;
-            font-weight: 300;
-            margin-bottom: 1rem;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-        }
-        
-        .subtitle {
-            font-size: 1.2rem;
-            opacity: 0.9;
-            margin-bottom: 2rem;
-            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
-        }
-        
-        .enter-btn {
-            display: inline-block;
-            padding: 1rem 2rem;
-            background: rgba(255, 255, 255, 0.2);
-            border: 2px solid rgba(255, 255, 255, 0.3);
-            border-radius: 50px;
-            color: white;
-            text-decoration: none;
-            font-size: 1.1rem;
-            font-weight: 500;
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-        }
-        
-        .enter-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            border-color: rgba(255, 255, 255, 0.5);
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
-        }
-        
-        .divider {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 4px;
-            height: 80px;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 2px;
-            z-index: 3;
-        }
-        
-        .particles {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-        }
-        
-        .particle {
-            position: absolute;
-            width: 4px;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.6);
-            border-radius: 50%;
-            animation: float 6s infinite ease-in-out;
-        }
-        
-        @keyframes float {
-            0%, 100% {
-                transform: translateY(0px) rotate(0deg);
-                opacity: 0;
-            }
-            50% {
-                opacity: 1;
-            }
-        }
-        
-        @media (max-width: 768px) {
-            .container {
-                flex-direction: column;
-            }
-            
-            .title {
-                font-size: 2rem;
-            }
-            
-            .subtitle {
-                font-size: 1rem;
-            }
-            
-            .divider {
-                width: 80px;
-                height: 4px;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-            }
-        }
-    </style>
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/android-chrome-192x192.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16x16.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="mask-icon" href="icons/safari-pinned-tab.svg" color="#5bbad5">
+  <meta name="msapplication-TileColor" content="#00a300">
+  <meta name="theme-color" content="#ffffff">
+
+  <link rel="stylesheet" href="rt.css">
+
+  <script src="vendor/babylon8.js"></script>
+  <script src="vendor/babylonjs.loaders.min.js"></script>
+  <script src="vendor/babylon.inspector.bundle.js"></script>
+  <!-- <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script> -->
+
+
+  <!-- <script src="vendor/ftxx_pointer.js"></script> -->
+
+
 </head>
 <body>
-    <div class="container">
-        <div class="half left" onclick="window.location.href='./ae/ae.html'">
-            <div class="particles">
-                <div class="particle" style="left: 20%; animation-delay: 0s;"></div>
-                <div class="particle" style="left: 40%; animation-delay: 1s;"></div>
-                <div class="particle" style="left: 60%; animation-delay: 2s;"></div>
-                <div class="particle" style="left: 80%; animation-delay: 3s;"></div>
-            </div>
-            <div class="content">
-                <h1 class="title">Aether</h1>
-                <p class="subtitle">Explore the ethereal realm</p>
-                <a href="./ae/ae.html" class="enter-btn">Enter Aether</a>
-            </div>
-        </div>
-        
-        <div class="half right" onclick="window.location.href='./rt/rt.html'">
-            <div class="particles">
-                <div class="particle" style="left: 20%; animation-delay: 0.5s;"></div>
-                <div class="particle" style="left: 40%; animation-delay: 1.5s;"></div>
-                <div class="particle" style="left: 60%; animation-delay: 2.5s;"></div>
-                <div class="particle" style="left: 80%; animation-delay: 3.5s;"></div>
-            </div>
-            <div class="content">
-                <h1 class="title">Realtime</h1>
-                <p class="subtitle">Experience the moment</p>
-                <a href="rt/rt.html" class="enter-btn">Enter Realtime</a>
-            </div>
-        </div>
-        
-        <div class="divider"></div>
+  <canvas id="canvas"></canvas>
+
+  <div id="menu_b" onclick="ui.showMenu('ingame_menu')"></div>
+  <div id="menu">
+    <div id="title_b" title="Æther.Garden" onclick="ui.showMenu('main_menu')">Æther.Garden</div>
+    <div id="player_b" title="Player" onclick="ui.showMenu('player_menu')"></div>
+    <div id="trophy_b" title="Hall-of-Fame" onclick="ui.showMenu('trophy_menu')"></div>
+    <div id="close_b" title="Close" onclick="ui.hideMenu()"></div>
+    <div id="settings_b" title="Preferences" onclick="ui.showMenu('settings_menu')"></div>
+
+    <div id="main_menu">
+      <br>
+      <table id="game_menu">
+        <tr id="game_menu_header">
+          <td id="game_menu_type">Game Type</td>
+          <td>Lobbies</td>
+          <td>Games</td>
+          <td>Players</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="game_menu_type_b disabled_b" title="Adventure" onclick="ui.showMenu('adventure_lobby')">Adventure</div>
+          </td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="game_menu_type_b" title="1 vs 1" onclick="ui.showMenu('onevsone_lobby')">1 vs 1</div>
+          </td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="game_menu_type_b" title="Free For All" onclick="ui.showMenu('ffa_lobby')">Free For All</div>
+          </td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="game_menu_type_b" title="King of the Hill" onclick="ui.showMenu('koth_lobby')">King of the Hill</div>
+          </td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="game_menu_type_b" title="Teams" onclick="ui.showMenu('teams_lobby')">Teams</div>
+          </td>
+          <td>-</td>
+          <td>-</td>
+          <td>-</td>
+        </tr>
+      </table>
     </div>
+
+    <div id="settings_menu" class="menu_menu">
+      <div class="menu_title">Settings<div id="fps_meter">fps</div></div>
+      
+      lasso style 
+      <br>
+      graphics
+      <br>
+      audio
+      <br>
+
+      <hr style="width: 60%;">
+      <h4>About</h4>
+      <!-- <a href="https://echo.aether.garden" target="_blank" title="Live and Replays">Echo</a> -->
+      <a href="https://aether.garden/forge" target="_blank" title="Field Editor">Forge</a>
+      <br><br><br>
+      Privacy
+      <div id="privacy_poli"><br>
+        This Privacy Policy governs the manner in which Aether.Garden collects, uses, maintains and discloses information collected from users (each, a "User") of the <a href="https://aether.garden">Aether.Garden</a> website ("Site"). This privacy policy applies to the Site and all products and services offered by Aether.Garden.
+        <br><br><b>Personal identification information</b><br><br>
+        We may collect personal identification information from Users in a variety of ways, including, but not limited to, when Users visit our site, register on the site, and in connection with other activities, services, features or resources we make available on our Site. Users may be asked for, as appropriate, name, e-mail address. We will collect personal identification information from Users only if they voluntarily submit such information to us. Users can always refuse to supply personally identification information, except that it may prevent them from engaging in certain Site related activities.
+        <br><br><b>Non-personal identification information</b><br><br>
+        We may collect non-personal identification information about Users whenever they interact with our Site. Non-personal identification information may include the browser name, the type of computer and technical information about Users means of connection to our Site, such as the operating system and the Internet service providers utilized and other similar information.
+        <br><br><b>Web browser cookies</b><br><br>
+        Our Site may use "cookies" to enhance User experience. User's web browser places cookies on their hard drive for record-keeping purposes and sometimes to track information about them. User may choose to set their web browser to refuse cookies, or to alert you when cookies are being sent. If they do so, note that some parts of the Site may not function properly.
+        <br><br><b>How we use collected information</b><br><br>
+        Aether.Garden may collect and use Users personal information for the following purposes:<br>
+        <ul><li>
+            <i>- To improve customer service</i><br>
+            Information you provide helps us respond to your customer service requests and support needs more efficiently.
+          </li><li>
+            <i>- To personalize user experience</i><br>
+            We may use information in the aggregate to understand how our Users as a group use the services and resources provided on our Site.
+          </li><li>
+            <i>- To improve our Site</i><br>
+            We may use feedback you provide to improve our products and services.
+          </li><li>
+            <i>- To send periodic e-mails</i><br>
+            We may use the e-mail address to respond to their inquiries, questions, and/or other requests.
+        </li></ul>
+        <b>How we protect your information</b><br><br>
+        We adopt appropriate data collection, storage and processing practices and security measures to protect against unauthorized access, alteration, disclosure or destruction of your personal information, username, password, transaction information and data stored on our Site.
+        <br><br>Sensitive and private data exchange between the Site and its Users happens over a SSL secured communication channel and is encrypted and protected with digital signatures.
+        <br><br><b>Sharing your personal information</b><br><br>
+        We do not sell, trade, or rent Users personal identification information to others. We may share generic aggregated demographic information not linked to any personal identification information regarding visitors and users with our business partners, trusted affiliates and advertisers for the purposes outlined above.
+        <br><br><b>Compliance with children's online privacy protection act</b><br><br>
+        Protecting the privacy of the very young is especially important. For that reason, we never collect or maintain information at our Site from those we actually know are under 13, and no part of our website is structured to attract anyone under 13.
+        <br><br><b>Changes to this privacy policy</b><br><br>
+        Aether.Garden has the discretion to update this privacy policy at any time. When we do, we will revise the updated date at the bottom of this page. We encourage Users to frequently check this page for any changes to stay informed about how we are helping to protect the personal information we collect. You acknowledge and agree that it is your responsibility to review this privacy policy periodically and become aware of modifications.
+        <br><br><b>Your acceptance of these terms</b><br><br>
+        By using this Site, you signify your acceptance of this policy. If you do not agree to this policy, please do not use our Site. Your continued use of the Site following the posting of changes to this policy will be deemed your acceptance of those changes.
+        <br><br><b>Contacting us</b><br><br>
+        If you have any questions about this Privacy Policy, the practices of this site, or your dealings with this site, please contact us at:
+        <br>Aether.Garden<br>aethergarden123@pm.me<br><br>
+        This document was last updated on August 23, 2025
+        <br><br>
+      </div>
+      <a href="mailto:aethergarden123@pm.me" title="Contact e-mail">Contact</a>
+      <!-- <br>
+      <a href="https://nexus.aether.garden" target="_blank" title="Community">Nexus</a> -->
+      <hr>
+      ÆæXi0m
+      <!-- <a href="https://axiom.aether.garden" target="_blank" title="ToE">ÆæXi0m</a> -->
+      <span style="font-size: .7em;">©'25 Aether.Garden</span>
+    </div>
+
+    <div id="trophy_menu" class="menu_menu">
+      <div class="menu_title">Hall-of-Fame</div>
+      <table>
+        <tr>-</tr>
+      </table>
+    </div>
+
+    <div id="player_menu" class="menu_menu">
+      <div id="player_menu_title" class="menu_title"></div>
+      <input type="color" id="colorPicker" value="#ff0000">
+    </div>
+
+    <div id="ingame_menu" class="menu_menu">
+      <div class="menu_title">INGAME</div>
+      Pause
+    </div>
+
+    <div id="adventure_lobby">
+      <div class="menu_title">Adventure</div>
+      <br><br>
+      <div class="lobby_b" title="Start Adventure" onclick="">Game Start</div>
+    </div>
+    <div id="onevsone_lobby">
+      <div class="menu_title">1 vs 1</div>
+      <br><br>
+      <div style="margin-bottom: 10px;">
+        <label for="fieldSize">Field Size:</label>
+        <select id="fieldSize" style="margin-left: 10px;">
+          <option value="tiny">Tiny (32x32)</option>
+          <option value="small">Small (64x64)</option>
+          <option value="medium" selected>Medium (128x128)</option>
+          <option value="large">Large (256x256)</option>
+          <option value="huge">Huge (512x512)</option>
+        </select>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <label for="mapSeed">Map Seed:</label>
+        <input type="number" id="mapSeed" value="12345" min="1" max="999999" style="margin-left: 10px; width: 80px;" placeholder="12345">
+        <button onclick="document.getElementById('mapSeed').value = window.Lobby.generateRandomSeed();" style="margin-left: 5px;">Random</button>
+      </div>
+      <br>
+      <div class="lobby_b" title="Start 1v1 Match" onclick="">Game Start</div>
+
+    </div>
+    <div id="ffa_lobby">
+      <div class="menu_title">Free For All</div>
+      <br><br>
+      <div class="lobby_b" title="Start FFA" onclick="">Game Start</div>
+    </div>
+    <div id="koth_lobby">
+      <div class="menu_title">King of the Hill</div>
+      <br><br>
+      <div class="lobby_b" title="Start KOTH" onclick="">Game Start</div>
+    </div>
+    <div id="teams_lobby">
+      <div class="menu_title">Teams</div>
+      <br><br>
+      <div class="lobby_b" title="Start Teams" onclick="">Game Start</div>
+    </div>
+
+  </div>
+
+
+  <div id="2d_hud">
+    <div id="lasso-selection-box"></div>
+    <div id="2d_b_die" class="2d_b"></div>
+    <div id="anchor_n" class="menu_anchor"></div>
+    <div id="anchor_s" class="menu_anchor"></div>
+    <div id="anchor_e" class="menu_anchor"></div>
+    <div id="anchor_w" class="menu_anchor"></div>
     
-    <script>
-        // Simple hover effects for the landing page
-        document.querySelectorAll('.half').forEach(half => {
-            half.addEventListener('mouseenter', () => {
-                half.style.transform = 'scale(1.02)';
-            });
-            
-            half.addEventListener('mouseleave', () => {
-                half.style.transform = 'scale(1)';
-            });
-        });
-    </script>
+    <div id="stat_w">
+      <div id="stat_food"></div>
+      <div id="stat_wood"></div>
+      <div id="stat_stone"></div>
+      <div id="stat_minerals"></div>
+      <div id="stat_pop"></div>
+    </div>
+  </div>
+
+
+  
+  <script src="application.js"></script>
+  <script src="game/utility.js"></script>
+  <script src="game/constants.js"></script>
+  <script src="game/ui.js"></script>
+  <script src="game/lighting.js"></script>
+  <script src="game/gfx.js"></script>
+  <script src="game/field.js"></script>
+  <script src="game/player.js"></script>
+  <script src="game/game.js"></script>
+  <script src="game/hud.js"></script>
+  <script src="game/fx.js"></script>
+  <script src="game/units.js"></script>
+  <script src="game/buildings.js"></script>
+  <script src="game/ai.js"></script>
+  <script src="game/lasso.js"></script>
+  <script src="game/menu.js"></script>
+  <script src="game/lobby.js"></script>
+  <script src="game/opponent.js"></script>
+
+
+  <script>
+    window.addEventListener('DOMContentLoaded', function(){app.init()});
+  </script>
+
 </body>
 </html>

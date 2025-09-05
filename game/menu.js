@@ -5,6 +5,12 @@ const ANIMATION_DELAY = 24; // Delay between each button animation in ms
 const ARC_SPACING = 60; // Distance between successive arcs
 
 const menu = {
+  buildings: {
+    camp: {},
+    village: {},
+    farm: {},
+    tower: {}
+  },
   units: {
     // Original units
     monk: {},
@@ -19,18 +25,13 @@ const menu = {
     // bird_messenger: {},
     // gnome_builder: {}
   },
-  buildings: {
-    camp: {},
-    village: {},
-    farm: {},
-    tower: {}
-  },
   research: {
     scribes: {},
     drayage: {},
     prospecting: {}
   },
   rally: {
+    home: {}
   }
 };
 

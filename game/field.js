@@ -352,6 +352,14 @@ Field.prototype.showTilemap = function(){
   // console.log(`Legend: G=Grass | Numbers are tile variants (0-15)`);
 }
 
+// Method to get a tile at specific coordinates
+Field.prototype.getTile = function(x, y) {
+  if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
+    return this.tiles[y * this.width + x];
+  }
+  return null;
+}
+
   // Method to get height variation for terrain
   Field.prototype.getHeightVariation = function(x, y, amplitude = .11) {
     // Fast fractal noise using simple hash as base

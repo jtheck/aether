@@ -108,10 +108,11 @@ const BuildingTypes = {
     // Work assignment properties
     needsWorkers: true,
     maxWorkers: 9,
-    workRadius: 25, // How far to look for idle villagers
+    workRadius: 5, // How far to look for idle villagers
     workType: "gather", // Type of work this building provides
     workInterval: 10000, // How often workers produce resources (10 seconds)
-    workOutput: { wood: 2, stone: 1 } // Resources produced per work cycle
+    workOutput: { wood: 0, stone: 0 }, // Will be calculated based on nearby resources
+    availableResources: [] // Will store detected resource tiles
   }, 
   village: {
     name: "Village",
@@ -507,24 +508,37 @@ function assignVillagerToWork(villager, building) {
 function processWorkProduction(building) {
   if (!building || !building.needsWorkers || building.assignedWorkers.length === 0) return;
   
+  // For camps, workers now deliver resources directly when they return
+  // No need for automatic resource generation
+  if (building.name.toLowerCase() === 'camp') {
+    return; // Workers handle resource delivery directly
+  }
+  
+  // For farms and other food buildings, use automatic resource generation
+  // since farmers don't have the same gathering/delivery system
+  
   const currentTime = Date.now();
   if (currentTime - building.lastWorkTime < building.workInterval) return;
   
-  // Generate resources based on number of workers
+  // For other buildings, use the old automatic system
   const workerCount = building.assignedWorkers.length;
-  const workOutput = building.workOutput || {};
   
   // Apply worker efficiency (more workers = more output, but with diminishing returns)
   const efficiency = Math.min(workerCount, building.maxWorkers) / building.maxWorkers;
-  const outputMultiplier = 0.5 + (efficiency * 0.5); // 50-100% efficiency based on workers
+  const outputMultiplier = 0.3 + (efficiency * 0.7); // 30-100% efficiency based on workers
   
-  for (const [resource, amount] of Object.entries(workOutput)) {
-    const actualAmount = Math.floor(amount * outputMultiplier);
-    if (actualAmount > 0) {
-      // Add resources to player (you'll need to implement this based on your resource system)
-      if (window.player && window.player.addResource) {
-        window.player.addResource(resource, actualAmount);
-        console.log(`💰 ${building.name} produced ${actualAmount} ${resource} (${workerCount} workers)`);
+  // Generate resources based on building's workOutput
+  const workOutput = building.workOutput || {};
+  for (const [resourceType, baseAmount] of Object.entries(workOutput)) {
+    if (baseAmount > 0) {
+      const actualAmount = Math.floor(baseAmount * outputMultiplier);
+      
+      if (actualAmount > 0) {
+        // Add resources to player
+        if (window.player && window.player.addResource) {
+          window.player.addResource(resourceType, actualAmount);
+          console.log(`💰 ${building.name} produced ${actualAmount} ${resourceType} (${workerCount} workers)`);
+        }
       }
     }
   }
@@ -644,6 +658,9 @@ const buildingSystem = {
   placementRotation: 0,
   lastValidPosition: null,
   lastValidRotation: null,
+  radiusVisualization: null, // For showing camp work radius
+  resourceIndicators: [], // For showing trees/rocks within radius
+  highlightedTiles: [], // For tracking highlighted terrain tiles
   
   // Start building placement mode
   selectBuilding: function(buildingType) {
@@ -747,6 +764,11 @@ const buildingSystem = {
         }
       }
       
+      // Create radius visualization for camp
+      if (this.selectedBuildingType === 'camp') {
+        this.createRadiusVisualization(this.previewMesh.position);
+      }
+      
       console.log('✅ Building preview created at position:', this.previewMesh.position);
     }).catch(err => {
       console.error('Failed to create preview mesh:', err);
@@ -758,6 +780,310 @@ const buildingSystem = {
     
     console.log('✅ Building preview created at position:', this.previewMesh.position);
   },
+  
+  // Create radius visualization for camp work area
+  createRadiusVisualization: function(centerPosition) {
+    if (!window.gfx || !window.gfx.scene) return;
+    
+    // Clean up existing visualization
+    this.clearRadiusVisualization();
+    
+    const buildingDef = BuildingTypes[this.selectedBuildingType];
+    if (!buildingDef || !buildingDef.workRadius) return;
+    
+    const radius = buildingDef.workRadius * TILE_SIZE;
+    
+    // Create a circle mesh to show the work radius (horizontal)
+    const circle = BABYLON.MeshBuilder.CreateDisc("workRadius", {
+      radius: radius,
+      tessellation: 32 // Reduced from 64 for better performance
+    }, window.gfx.scene);
+    
+    // Position the circle at the building location
+    circle.position = centerPosition.clone();
+    circle.position.y = 0.05; // Very close to ground
+    
+    // Rotate to be horizontal (disc is vertical by default)
+    circle.rotation.x = Math.PI / 2; // 90 degrees to make it horizontal
+    
+    // Create material for the radius circle
+    const radiusMaterial = new BABYLON.StandardMaterial("radiusMaterial", window.gfx.scene);
+    radiusMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.8, 0.2); // Green
+    radiusMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.3, 0.1);
+    radiusMaterial.alpha = 0.2; // More transparent
+    radiusMaterial.backFaceCulling = false; // Show from both sides
+    
+    circle.material = radiusMaterial;
+    circle.isPickable = false;
+    
+    this.radiusVisualization = circle;
+    
+    // Find and highlight resources within the radius (with performance optimization)
+    this.highlightResourcesInRadius(centerPosition, radius);
+  },
+  
+  // Clear radius visualization
+  clearRadiusVisualization: function() {
+    if (this.radiusVisualization) {
+      this.radiusVisualization.dispose();
+      this.radiusVisualization = null;
+    }
+    
+    // Clear resource indicators
+    this.resourceIndicators.forEach(indicator => {
+      if (indicator && indicator.dispose) {
+        indicator.dispose();
+      }
+    });
+    this.resourceIndicators = [];
+    
+    // Clear highlighted tiles
+    this.highlightedTiles.forEach(highlight => {
+      if (highlight && highlight.dispose) {
+        highlight.dispose();
+      }
+    });
+    this.highlightedTiles = [];
+    
+    // Clean up shared materials
+    if (this.woodIndicatorMaterial) {
+      this.woodIndicatorMaterial.dispose();
+      this.woodIndicatorMaterial = null;
+    }
+    if (this.stoneIndicatorMaterial) {
+      this.stoneIndicatorMaterial.dispose();
+      this.stoneIndicatorMaterial = null;
+    }
+    if (this.woodTileMaterial) {
+      this.woodTileMaterial.dispose();
+      this.woodTileMaterial = null;
+    }
+    if (this.stoneTileMaterial) {
+      this.stoneTileMaterial.dispose();
+      this.stoneTileMaterial = null;
+    }
+  },
+  
+  // Update radius visualization position
+  updateRadiusVisualization: function(newPosition) {
+    if (this.radiusVisualization && this.selectedBuildingType === 'camp') {
+      this.radiusVisualization.position = newPosition.clone();
+      this.radiusVisualization.position.y = 0.1;
+      
+      // Update resource highlights
+      const buildingDef = BuildingTypes[this.selectedBuildingType];
+      if (buildingDef && buildingDef.workRadius) {
+        this.highlightResourcesInRadius(newPosition, buildingDef.workRadius * TILE_SIZE);
+      }
+    }
+  },
+  
+  // Highlight resources (trees and rocks) within the camp's work radius
+  highlightResourcesInRadius: function(centerPosition, radius) {
+    if (!window.gfx || !window.gfx.scene) return;
+    
+    // Clear existing indicators
+    this.resourceIndicators.forEach(indicator => {
+      if (indicator && indicator.dispose) {
+        indicator.dispose();
+      }
+    });
+    this.resourceIndicators = [];
+    
+    // Clear existing resource data
+    this.detectedResources = [];
+    
+    // Get the field system to check for resources
+    if (!window.liveField) return;
+    
+    // Convert world position to grid coordinates
+    const gridX = Math.floor(centerPosition.x / TILE_SIZE);
+    const gridZ = Math.floor(centerPosition.z / TILE_SIZE);
+    const gridRadius = Math.ceil(radius / TILE_SIZE);
+    
+    // Count resources within the radius
+    let resourceCount = 0;
+    
+    // Check tiles within the radius
+    for (let x = gridX - gridRadius; x <= gridX + gridRadius; x++) {
+      for (let z = gridZ - gridRadius; z <= gridZ + gridRadius; z++) {
+        // Check if this tile is within the radius
+        const worldX = x * TILE_SIZE;
+        const worldZ = z * TILE_SIZE;
+        const distance = Math.sqrt(
+          Math.pow(worldX - centerPosition.x, 2) + 
+          Math.pow(worldZ - centerPosition.z, 2)
+        );
+        
+        if (distance <= radius) {
+          // Check if this tile has resources (trees or rocks)
+          const resourceInfo = this.checkTileForResources(x, z);
+          if (resourceInfo) {
+            // Store resource data for saving later
+            this.detectedResources.push({
+              gridX: x,
+              gridZ: z,
+              worldX: worldX,
+              worldZ: worldZ,
+              type: resourceInfo.type,
+              amount: resourceInfo.amount
+            });
+            
+            console.log(`🌲 Resource detected at (${x}, ${z}): ${resourceInfo.type} x${resourceInfo.amount}`);
+            resourceCount++;
+          }
+        }
+      }
+    }
+    
+    // Update circle color based on resource density
+    this.updateCircleColor(resourceCount);
+    
+    console.log(`🌳 Found ${resourceCount} resource tiles within camp radius`);
+  },
+  
+  // Update circle color based on resource density
+  updateCircleColor: function(resourceCount) {
+    if (!this.radiusVisualization) return;
+    
+    // Calculate resource density (0-1 scale)
+    const maxResources = 20; // Maximum expected resources in radius
+    const density = Math.min(resourceCount / maxResources, 1.0);
+    
+    // Create color based on density
+    let color, emissiveColor, alpha;
+    
+    if (resourceCount === 0) {
+      // No resources - red and weak
+      color = new BABYLON.Color3(0.8, 0.2, 0.2); // Red
+      emissiveColor = new BABYLON.Color3(0.2, 0.05, 0.05);
+      alpha = 0.1; // Very weak
+    } else if (resourceCount < 4) {
+      // Good resources - light green and strong
+      color = new BABYLON.Color3(0.2, 0.6, 0.2); // Light green
+      emissiveColor = new BABYLON.Color3(0.05, 0.15, 0.05);
+      alpha = 0.3; // Strong
+    } else if (resourceCount < 7) {
+      // Many resources - bright green and very strong
+      color = new BABYLON.Color3(0.2, 0.6, 0.2); // Light green
+      emissiveColor = new BABYLON.Color3(0.05, 0.3, 0.05);
+      alpha = 0.4; // Very strong
+    } else if (resourceCount < 10) {
+      // Many resources - bright green and very strong
+      color = new BABYLON.Color3(0.1, 0.8, 0.1); // Bright green
+      emissiveColor = new BABYLON.Color3(0.05, 0.3, 0.05);
+      alpha = 0.5; // Very strong
+    } else {
+      // Many resources - bright green and very strong
+      color = new BABYLON.Color3(0.1, 0.8, 0.1); // Bright green
+      emissiveColor = new BABYLON.Color3(0.05, 0.3, 0.05);
+      alpha = 0.6; // Very strong
+    }
+    
+    // Update the circle material
+    if (this.radiusVisualization.material) {
+      this.radiusVisualization.material.diffuseColor = color;
+      this.radiusVisualization.material.emissiveColor = emissiveColor;
+      this.radiusVisualization.material.alpha = alpha;
+    }
+    
+    console.log(`🎨 Circle color updated: ${resourceCount} resources, density: ${density.toFixed(2)}, alpha: ${alpha}`);
+  },
+  
+  // Check if a tile contains resources (trees or rocks)
+  checkTileForResources: function(gridX, gridZ) {
+    if (!window.liveField) return null;
+    
+    // Get the tile type from the field system
+    const tile = window.liveField.getTile(gridX, gridZ);
+    if (!tile) return null;
+    
+    // Check if this tile type typically has trees or rocks
+    // Based on the model rules in gfx.js, grass tiles (type 5) have trees and rocks
+    if (tile.type === 5) {
+      // Use a better deterministic random number generation
+      const seed = window.liveField.seed + gridX * 1000 + gridZ;
+      
+      // Simple but effective hash function
+      let hash = seed;
+      hash = hash * 1664525 + 1013904223; // Linear congruential generator constants
+      hash = hash >>> 0; // Ensure unsigned 32-bit
+      
+      // Convert to 0-1 range
+      const random = hash / 0x100000000;
+      
+      // Debug: Check if we're getting a good distribution
+      console.log(`🔍 Seed: ${window.liveField.seed}, Grid: (${gridX}, ${gridZ}), Hash: ${hash}, Random: ${random.toFixed(6)}`);
+      
+      // Use deterministic seed-based resource generation
+      // Create a balanced distribution: 50% wood, 40% stone, 10% nothing
+      console.log(`🎲 Resource check at (${gridX}, ${gridZ}): random=${random.toFixed(3)}`);
+      
+      if (random < 0.5) {
+        // Wood resources - 50% chance
+        console.log(`🌲 Found wood at (${gridX}, ${gridZ})`);
+        return {
+          type: 'wood',
+          amount: Math.floor(random * 3) + 1, // 1-3 wood
+          gridX: gridX,
+          gridZ: gridZ
+        };
+      } else if (random < 0.9) {
+        // Stone resources - 40% chance (0.5 to 0.9)
+        console.log(`🪨 Found stone at (${gridX}, ${gridZ})`);
+        return {
+          type: 'stone',
+          amount: Math.floor((random - 0.5) * 2) + 1, // 1-2 stone
+          gridX: gridX,
+          gridZ: gridZ
+        };
+      } else {
+        // No resources - 10% chance (0.9 to 1.0)
+        console.log(`❌ No resource at (${gridX}, ${gridZ}) - random=${random.toFixed(3)}`);
+        return null;
+      }
+    }
+    
+    return null;
+  },
+  
+  // Create a visual indicator for a resource tile
+  createResourceIndicator: function(worldX, worldZ, resourceType) {
+    if (!window.gfx || !window.gfx.scene) return;
+    
+    // Create a small glowing sphere to indicate resources (smaller for performance)
+    const indicator = BABYLON.MeshBuilder.CreateSphere("resourceIndicator", {
+      diameter: 0.3 // Smaller size
+    }, window.gfx.scene);
+    
+    indicator.position = new BABYLON.Vector3(worldX, 0.2, worldZ);
+    
+    // Create material based on resource type
+    let material;
+    if (resourceType === 'wood') {
+      if (!this.woodIndicatorMaterial) {
+        this.woodIndicatorMaterial = new BABYLON.StandardMaterial("woodIndicatorMaterial", window.gfx.scene);
+        this.woodIndicatorMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.8, 0.2); // Green for wood
+        this.woodIndicatorMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.4, 0.1);
+        this.woodIndicatorMaterial.alpha = 0.7;
+      }
+      material = this.woodIndicatorMaterial;
+    } else if (resourceType === 'stone') {
+      if (!this.stoneIndicatorMaterial) {
+        this.stoneIndicatorMaterial = new BABYLON.StandardMaterial("stoneIndicatorMaterial", window.gfx.scene);
+        this.stoneIndicatorMaterial.diffuseColor = new BABYLON.Color3(0.6, 0.6, 0.6); // Gray for stone
+        this.stoneIndicatorMaterial.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+        this.stoneIndicatorMaterial.alpha = 0.7;
+      }
+      material = this.stoneIndicatorMaterial;
+    }
+    
+    indicator.material = material;
+    indicator.isPickable = false;
+    
+    this.resourceIndicators.push(indicator);
+  },
+  
   
   // Enable placement mode with mouse tracking
   enablePlacementMode: function() {
@@ -782,6 +1108,11 @@ const buildingSystem = {
           
           // Apply rotation
           this.previewMesh.rotation.y = this.placementRotation;
+          
+          // Update radius visualization for camp
+          if (this.selectedBuildingType === 'camp') {
+            this.updateRadiusVisualization(this.previewMesh.position);
+          }
           
           // Check if position is valid and update preview color
           this.updatePreviewValidity(gridX / TILE_SIZE, gridZ / TILE_SIZE);
@@ -889,6 +1220,12 @@ const buildingSystem = {
       // Store the target rotation for when the mesh loads
       building.targetRotation = this.placementRotation;
       
+      // Save detected resources to the building
+      if (this.detectedResources && this.detectedResources.length > 0) {
+        building.availableResources = [...this.detectedResources];
+        console.log(`🌳 Camp will have access to ${this.detectedResources.length} resource tiles:`, this.detectedResources);
+      }
+      
       // Set up a callback to apply rotation after mesh loads
       const checkInterval = setInterval(() => {
         if (building.mesh) {
@@ -906,9 +1243,11 @@ const buildingSystem = {
       
       console.log(`✅ ${building.name} placed at (${gridX}, ${gridZ})`);
       
-      // Show success message
-      this.showPlacementSuccess(`${building.name} placed successfully!`);
-      
+      // Show success message with resource count
+      const resourceCount = this.detectedResources ? this.detectedResources.length : 0;
+      // this.showPlacementSuccess(`${building.name} placed successfully! Found ${resourceCount} resource tiles.`);
+      // this.showPlacementSuccess(`${building.name} placed successfully!`);
+
       // Get current mouse position for new preview
       const pickResult = window.gfx.scene.pick(
         window.gfx.scene.pointerX,
@@ -976,6 +1315,9 @@ const buildingSystem = {
       this.previewMesh.dispose();
       this.previewMesh = null;
     }
+    
+    // Clear radius visualization
+    this.clearRadiusVisualization();
     
     // Only remove event listeners if we're fully exiting
     if (!keepListeners) {

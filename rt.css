@@ -550,3 +550,10 @@ a:after{
 #stat_pop {
   color: #2196F3; /* Blue for population */
 }
+
+
+.disabled_b {
+  pointer-events: none;
+  cursor: default;
+  opacity: 0.5;  
+}

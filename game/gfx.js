@@ -910,10 +910,10 @@ let pov2 = 240;
           gfx.cursorFrog = result.rootNodes[0];
           gfx.cursorFrog.scaling = new BABYLON.Vector3(.2, .2, .2); // Make it visible
           gfx.cursorFrog.position.y = 1; // Float above ground
-          console.log("Cursor frog loaded");
+          // console.log("Cursor frog loaded");
         })
         .catch(error => {
-          console.warn("Could not load cursor frog:", error);
+          // console.warn("Could not load cursor frog:", error);
         });
       
       // Initialize HUD system after scene and camera are ready
@@ -926,7 +926,7 @@ let pov2 = 240;
         hud.addRadialMenuItem("Research", "🔬", () => hud.showSubMenu("research"), new BABYLON.Color3(1, 1, 0)); // Yellow
         hud.addRadialMenuItem("Rally", "🚩", () => hud.showSubMenu("rally"), new BABYLON.Color3(1, 0, 0)); // Red
         
-        console.log("HUD initialized with default radial menu");
+        // console.log("HUD initialized with default radial menu");
       }
       
       gfx.engine.runRenderLoop(mainRenderLoop);
@@ -934,7 +934,7 @@ let pov2 = 240;
       // Initialize lasso selection system
       if (window.lassoSelection && window.lassoSelection.init) {
         window.lassoSelection.init();
-        console.log("🎯 Lasso selection system initialized");
+        // console.log("🎯 Lasso selection system initialized");
       }
 
     });

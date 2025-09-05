@@ -1274,7 +1274,7 @@
   
   // Initialize building system
   function initBuildingSystem() {
-    console.log('🏗️ Building system initialized');
+    // console.log('🏗️ Building system initialized');
   }
   
   // Start building placement mode - DREAM SYSTEM

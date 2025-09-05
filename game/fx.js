@@ -391,13 +391,13 @@
   // Attach particle effect to a building using named anchor mesh
   fx.attachParticleEffect = function(building, effectType, anchorName = "particle_anchor", options = {}) {
     if (!building || !building.mesh) {
-      console.warn('Building or building mesh not found');
+      // console.warn('Building or building mesh not found');
       return null;
     }
     
     const preset = ParticlePresets[effectType];
     if (!preset) {
-      console.warn(`Particle preset '${effectType}' not found`);
+      // console.warn(`Particle preset '${effectType}' not found`);
       return null;
     }
     
@@ -406,8 +406,8 @@
     if (anchorName) {
       anchorMesh = findMeshByName(building.mesh, anchorName);
       if (!anchorMesh) {
-        console.warn(`Anchor mesh '${anchorName}' not found in building ${building.name}`);
-        console.log(`Available meshes in ${building.name}:`);
+        // console.warn(`Anchor mesh '${anchorName}' not found in building ${building.name}`);
+        // console.log(`Available meshes in ${building.name}:`);
         debugMeshNames(building.mesh);
         
         // Try alternative names
@@ -415,7 +415,7 @@
         for (let altName of alternatives) {
           const altMesh = findMeshByName(building.mesh, altName);
           if (altMesh) {
-            console.log(`Found alternative anchor: '${altName}', using that instead`);
+            // console.log(`Found alternative anchor: '${altName}', using that instead`);
             anchorMesh = altMesh;
             break;
           }
@@ -423,7 +423,7 @@
         
         // Final fallback - skip if no suitable anchor found
         if (!anchorMesh) {
-          console.log(`No suitable anchor found for ${building.name}, skipping particle effect`);
+          // console.log(`No suitable anchor found for ${building.name}, skipping particle effect`);
           return null;
         }
       }
@@ -459,7 +459,7 @@
     // Start the particle system
     particleSystem.start();
     
-    console.log(`🔥 Attached ${effectType} particle effect to ${building.name} at anchor '${anchorName}' (scale: ${options.scale || 1.0})`);
+    // console.log(`🔥 Attached ${effectType} particle effect to ${building.name} at anchor '${anchorName}' (scale: ${options.scale || 1.0})`);
     return particleSystem;
   }
   
@@ -503,7 +503,7 @@
   // Debug function to list all mesh names in a building
   function debugMeshNames(rootMesh, depth = 0) {
     const indent = "  ".repeat(depth);
-    console.log(`${indent}Mesh: "${rootMesh.name}" (${rootMesh.constructor.name})`);
+    // console.log(`${indent}Mesh: "${rootMesh.name}" (${rootMesh.constructor.name})`);
     
     for (let child of rootMesh.getChildMeshes()) {
       debugMeshNames(child, depth + 1);
@@ -588,13 +588,13 @@
       // Test particle effects with F key
       if (e.key === 'f' || e.key === 'F') {
         const position = new BABYLON.Vector3(0, 0, 0);
-        console.log('🔥 Testing particle effects (F key)');
+        // console.log('🔥 Testing particle effects (F key)');
         fx.testParticleEffects(position);
       }
       
       // Test building particle effects with B key
       if (e.key === 'b' || e.key === 'B') {
-        console.log('🏗️ Testing building particle effects (B key)');
+        // console.log('🏗️ Testing building particle effects (B key)');
         fx.testBuildingEffects();
       }
       
@@ -607,16 +607,16 @@
       if (e.key === '1') {
         const position = new BABYLON.Vector3(0, 0, 0);
         fx.createParticleEffect('fire', position);
-        console.log('🔥 Created fire effect');
+        // console.log('🔥 Created fire effect');
       }
       
       if (e.key === '2') {
         const position = new BABYLON.Vector3(0, 0, 0);
         fx.createParticleEffect('smoke', position);
-        console.log('💨 Created smoke effect');
+        // console.log('💨 Created smoke effect');
       }
     });
-    console.log('🔥 Particle testing enabled! Press F for all effects, B for building effects, P for explosion at mouse, 1 for fire, 2 for smoke');
+    // console.log('🔥 Particle testing enabled! Press F for all effects, B for building effects, P for explosion at mouse, 1 for fire, 2 for smoke');
   };
   
   // Get available particle effect types
@@ -627,7 +627,7 @@
   // Add a new particle preset
   fx.addParticlePreset = function(name, preset) {
     ParticlePresets[name] = preset;
-    console.log(`🔥 Added particle preset: ${name}`);
+    // console.log(`🔥 Added particle preset: ${name}`);
   };
   
   // Test particle effects (for debugging)
@@ -637,7 +637,7 @@
       return;
     }
     
-    console.log('🔥 Testing particle effects...');
+    // console.log('🔥 Testing particle effects...');
     
     // Test fire effect
     setTimeout(() => {
@@ -657,7 +657,7 @@
       return;
     }
     
-    console.log('🔥 Testing building particle effects...');
+    // console.log('🔥 Testing building particle effects...');
     
     // Test with the first building
     const building = window.gameBuildings[0];
@@ -697,22 +697,22 @@
     }
     
     buildings.forEach(building => {
-      console.log(`\n🏗️ Building: ${building.name}`);
-      console.log('Mesh hierarchy:');
+      // console.log(`\n🏗️ Building: ${building.name}`);
+      // console.log('Mesh hierarchy:');
       debugMeshNames(building.mesh);
     });
   };
   
   // Explode at mouse position and damage nearby buildings
   fx.explodeAtMouse = function() {
-    console.log('💥 P key pressed - attempting explosion at mouse position');
+    // console.log('💥 P key pressed - attempting explosion at mouse position');
     
     if (!scene || !window.gfx || !window.gfx.camera) {
-      console.warn('Scene or camera not available for explosion');
+      // console.warn('Scene or camera not available for explosion');
       return;
     }
     
-    console.log(`Mouse position: ${scene.pointerX}, ${scene.pointerY}`);
+    // console.log(`Mouse position: ${scene.pointerX}, ${scene.pointerY}`);
     
     // Get mouse position in world coordinates
     const pickInfo = scene.pick(scene.pointerX, scene.pointerY);
@@ -720,17 +720,17 @@
     
     if (pickInfo && pickInfo.pickedPoint) {
       explosionPosition = pickInfo.pickedPoint;
-      console.log('Picked point:', explosionPosition);
+      // console.log('Picked point:', explosionPosition);
     } else {
       // Fallback: project mouse to ground plane
       const ray = scene.createPickingRay(scene.pointerX, scene.pointerY, window.gfx.camera);
       const groundY = 0;
       const t = (groundY - ray.origin.y) / ray.direction.y;
       explosionPosition = ray.origin.add(ray.direction.scale(t));
-      console.log('Ray projected to ground:', explosionPosition);
+      // console.log('Ray projected to ground:', explosionPosition);
     }
     
-    console.log(`💥 Exploding at mouse position:`, explosionPosition);
+    // console.log(`💥 Exploding at mouse position:`, explosionPosition);
     
     // Create explosion effect
     fx.createExplosion(explosionPosition, 1.0);
@@ -740,18 +740,18 @@
     const damageAmount = 33; // 1/3 of building health
     
     if (window.gameBuildings && window.gameBuildings.length > 0) {
-      console.log(`Checking ${window.gameBuildings.length} buildings for damage`);
+      // console.log(`Checking ${window.gameBuildings.length} buildings for damage`);
       
       window.gameBuildings.forEach(building => {
         if (!building.mesh) {
-          console.log(`Building ${building.name} has no mesh, skipping`);
+          // console.log(`Building ${building.name} has no mesh, skipping`);
           return;
         }
         
         const buildingPos = building.mesh.getAbsolutePosition();
         const distance = BABYLON.Vector3.Distance(explosionPosition, buildingPos);
         
-        console.log(`Building ${building.name} at distance ${distance.toFixed(2)} (radius: ${explosionRadius})`);
+        // console.log(`Building ${building.name} at distance ${distance.toFixed(2)} (radius: ${explosionRadius})`);
         
         if (distance <= explosionRadius) {
           // Calculate damage based on distance
@@ -761,7 +761,7 @@
           // Apply damage
           building.health = Math.max(0, building.health - actualDamage);
           
-          console.log(`💥 Damaged ${building.name}: ${actualDamage} damage (${building.health}/${building.maxHealth} health remaining)`);
+          // console.log(`💥 Damaged ${building.name}: ${actualDamage} damage (${building.health}/${building.maxHealth} health remaining)`);
           
           // Add damage effects
           addBuildingDamageEffects(building);
@@ -773,7 +773,7 @@
         }
       });
     } else {
-      console.log('No buildings found to damage');
+      // console.log('No buildings found to damage');
     }
   };
   
@@ -789,7 +789,7 @@
       }
     });
     
-    console.log(`📍 Available anchors for ${building.name}:`, availableAnchors);
+    // console.log(`📍 Available anchors for ${building.name}:`, availableAnchors);
     
     // Helper to find best matching anchor
     function findBestAnchor(preferredTypes) {
@@ -810,7 +810,7 @@
         // Try to find best fire anchor
         const fireAnchor = findBestAnchor(['fire_anchor', 'particle_anchor', 'smoke_anchor']);
         if (fireAnchor) {
-          console.log(`🔥 Using ${fireAnchor} for fire effect on ${building.name}`);
+          // console.log(`🔥 Using ${fireAnchor} for fire effect on ${building.name}`);
           fx.attachParticleEffect(building, 'fire', fireAnchor, {
             scale: 0.5,
             emitRate: 30,
@@ -848,7 +848,7 @@
   function destroyBuilding(building) {
     if (!building || destroyedBuildings.has(building)) return;
     
-    console.log(`💥 Destroying building: ${building.name}`);
+    // console.log(`💥 Destroying building: ${building.name}`);
     
     try {
       // Store position for effects

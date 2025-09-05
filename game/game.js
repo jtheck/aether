@@ -17,11 +17,11 @@ function Game(ops) {
 }
 
 Game.prototype.init = function() {
-  console.log('🎮 Game initializing...', {
-    type: this.type,
-    map: this.map,
-    startTime: new Date(this.startTime).toLocaleTimeString()
-  });
+  // console.log('🎮 Game initializing...', {
+  //   type: this.type,
+  //   map: this.map,
+  //   startTime: new Date(this.startTime).toLocaleTimeString()
+  // });
   
   // Set game state to running
   this.gameState = 'running';
@@ -33,14 +33,14 @@ Game.prototype.init = function() {
 };
 
 Game.prototype.spawnInitialUnits = function() {
-  console.log('🏘️ Spawning initial game units...');
+  // console.log('🏘️ Spawning initial game units...');
   
   // Spawn player villagers around their agora
   if (window.spawnAgoraVillagers) {
     window.spawnAgoraVillagers();
-    console.log('✅ Player villagers spawned');
+    // console.log('✅ Player villagers spawned');
   } else {
-    console.warn('❌ spawnAgoraVillagers function not found');
+    // console.warn('❌ spawnAgoraVillagers function not found');
   }
   
   // Add other initial unit spawning here as needed

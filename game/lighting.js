@@ -5,7 +5,7 @@
   let config = {
     sunTime: 0.4,        // Independent sun position (0-1) - morning sun
     moonTime: 0.6,       // Independent moon position (0-1) - afternoon moon
-    cycleSpeed: 0.001,   // How fast time progresses (adjust for faster/slower days)
+    cycleSpeed: 0.1,   // How fast time progresses (adjust for faster/slower days)
     orbitRadius: 200,    // How far the lights orbit from center
     orbitHeight: 100,    // Maximum height of the orbit
     orbitTilt: 0.3,      // Tilt of the orbital plane (0 = flat, 1 = vertical)
@@ -43,7 +43,7 @@
     // Set initial positions
     updateOrbitalPositions();
     
-    console.log('Orbital lighting system initialized');
+    // console.log('Orbital lighting system initialized');
   };
   
   // Configure the orbital system

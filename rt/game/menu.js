@@ -1,8 +1,8 @@
 // Menu configuration and state
 const BUTTON_SPACING = 60; // Distance between buttons in pixels
 const ARC_ANGLE = 120; // Total angle of the arc in degrees
-const ANIMATION_DELAY = 30; // Delay between each button animation in ms
-const ARC_SPACING = 70; // Distance between successive arcs
+const ANIMATION_DELAY = 24; // Delay between each button animation in ms
+const ARC_SPACING = 60; // Distance between successive arcs
 
 const menu = {
   units: {

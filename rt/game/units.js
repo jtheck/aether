@@ -264,6 +264,58 @@ function updateUnitDistances() {
     });
 }
 
+// Add particle effects to units based on their type
+function addUnitParticleEffects(unit) {
+  if (!window.fx || !unit.mesh) {
+    return;
+  }
+  
+  // Add particle effects based on unit type
+  switch (unit.type.toLowerCase()) {
+    case 'brigand':
+      // Add torch effects for brigand (multiple anchors)
+      window.fx.attachMultipleParticleEffects(unit, [
+        { type: 'torch', anchor: 'torch_anchor.001', options: { scale: 0.2 } },
+        { type: 'torch', anchor: 'torch_anchor.002', options: { scale: 0.2 } }
+      ]);
+      break;
+      
+    case 'wizard':
+      // Add magical particle effects for wizard
+      window.fx.attachMultipleParticleEffects(unit, [
+        { type: 'particle', anchor: 'particle_anchor.001', options: { scale: 0.3 } },
+        { type: 'particle', anchor: 'particle_anchor.002', options: { scale: 0.3 } },
+        { type: 'smoke', anchor: 'smoke_anchor', options: { scale: 0.2 } }
+      ]);
+      break;
+      
+    case 'monk':
+      // Add subtle holy particle effect for monk
+      window.fx.attachParticleEffect(unit, 'particle', 'holy_anchor', {
+        scale: 0.2,
+        emitRate: 10,
+        minSize: 0.1,
+        maxSize: 0.2
+      });
+      break;
+      
+    case 'engineer':
+      // Add subtle smoke effect for engineer (workshop)
+      window.fx.attachParticleEffect(unit, 'smoke', 'workshop_anchor', {
+        scale: 0.1,
+        emitRate: 5,
+        minSize: 0.1,
+        maxSize: 0.2
+      });
+      break;
+      
+    // Add more unit types as needed
+    default:
+      // No default particle effects for other units
+      break;
+  }
+}
+
 // Global units arrays
 const gameUnits = []; // All units combined (for rendering)
 const neutralUnits = []; // Wild/neutral units only
@@ -371,6 +423,9 @@ function spawnUnitModels(scene) {
                 } else {
                     // console.warn(`⚠️ Behavior manager not available for ${unit.name || unit.type}`);
                 }
+                
+                // Add particle effects to units
+                addUnitParticleEffects(unit);
                 
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
@@ -760,9 +815,68 @@ function debugLODStats() {
 }
 
 
+// Destroy a unit completely with particle cleanup
+function destroyUnit(unit) {
+    console.log(`💥 Destroying unit: ${unit.name || unit.type}`);
+    
+    // Add destruction effects
+    if (unit.mesh) {
+        const pos = unit.mesh.getAbsolutePosition();
+        
+        // Create destruction explosion (smaller than building)
+        if (window.fx) {
+            window.fx.createExplosion(pos, 0.3);
+        }
+    }
+    
+    // Remove particle effects
+    if (window.fx) {
+        window.fx.removeParticleEffects(unit);
+    }
+    
+    // Remove from behavior manager
+    if (window.behaviorManager) {
+        window.behaviorManager.removeBehavior(unit);
+    }
+    
+    // Remove from scene
+    if (unit.mesh) {
+        unit.mesh.dispose();
+    }
+    
+    // Remove from global units array
+    const globalIndex = gameUnits.indexOf(unit);
+    if (globalIndex > -1) {
+        gameUnits.splice(globalIndex, 1);
+    }
+    
+    // Remove from player units if applicable
+    if (window.player && window.player.units) {
+        const playerIndex = window.player.units.indexOf(unit);
+        if (playerIndex > -1) {
+            window.player.units.splice(playerIndex, 1);
+        }
+    }
+    
+    // Remove from opponent units if applicable
+    if (window.opponent && window.opponent.units) {
+        const opponentIndex = window.opponent.units.indexOf(unit);
+        if (opponentIndex > -1) {
+            window.opponent.units.splice(opponentIndex, 1);
+        }
+    }
+    
+    console.log(`🗑️ Unit ${unit.name || unit.type} completely destroyed`);
+}
+
 // Clear and respawn all units
 function respawnUnits(scene) {
-    gameUnits.length = 0; // Clear existing units
+    // Properly destroy all existing units with cleanup
+    gameUnits.forEach(unit => {
+        destroyUnit(unit);
+    });
+    
+    gameUnits.length = 0; // Clear the array
     sprinkleUnits();
     spawnUnitModels(scene);
 }
@@ -845,6 +959,7 @@ if (typeof window !== 'undefined') {
     window.updateUnitMeshes = updateUnitMeshes;
     window.respawnUnits = respawnUnits;
     window.debugUnitRotations = debugUnitRotations;
+    window.destroyUnit = destroyUnit;
     
     // LOD system exports
     window.LOD_DISTANCES = LOD_DISTANCES;

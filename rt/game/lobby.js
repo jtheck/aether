@@ -10,10 +10,12 @@ const Lobby = {
       window.gameLoop.stop();
     }
     
-    // Clear existing game units
+    // Clear existing game units with proper cleanup
     if (window.gameUnits) {
       window.gameUnits.forEach(unit => {
-        if (unit.mesh && unit.mesh.dispose) {
+        if (window.destroyUnit) {
+          window.destroyUnit(unit);
+        } else if (unit.mesh && unit.mesh.dispose) {
           unit.mesh.dispose();
         }
       });
@@ -23,7 +25,9 @@ const Lobby = {
     // Clear player units
     if (window.player && window.player.units) {
       window.player.units.forEach(unit => {
-        if (unit.mesh && unit.mesh.dispose) {
+        if (window.destroyUnit) {
+          window.destroyUnit(unit);
+        } else if (unit.mesh && unit.mesh.dispose) {
           unit.mesh.dispose();
         }
       });

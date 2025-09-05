@@ -11,6 +11,9 @@
   // Radial menu state
   let radialMenu = null;
   
+  // Track current mouse position for space key handler
+  let currentMousePosition = { x: 0, y: 0 };
+  
   // Minimap system state
   let minimapIndicators = [];
   let minimapContainer = null;
@@ -89,6 +92,13 @@
   function setupMiddleMouseControl() {
     if (!hud.canvas) return;
     
+    // Track mouse position for space key handler
+    hud.canvas.addEventListener('mousemove', function(e) {
+      const rect = hud.canvas.getBoundingClientRect();
+      currentMousePosition.x = e.clientX - rect.left;
+      currentMousePosition.y = e.clientY - rect.top;
+    });
+    
     hud.canvas.addEventListener('pointerdown', function(e) {
       if (e.button === 1) { // Middle mouse button
         e.preventDefault();
@@ -135,19 +145,47 @@
     // Menu items handle their own clicks via 3D mesh picking
     // Only middle-click and spacebar control the menu now
     
-    // Add spacebar support
+    // Add spacebar support - now opens 2D menu instead of 3D radial menu
     document.addEventListener('keydown', function(e) {
       if (e.code === 'Space') {
         e.preventDefault();
         
-        if (radialMenuVisible) {
-          hud.hideRadialMenu();
-        } else {
-          // Show with configured screen offset when using spacebar
-          const rect = hud.canvas.getBoundingClientRect();
-          const centerX = rect.width / 2 + (menuConfig.screenOffsetX * rect.width / 2);
-          const centerY = rect.height / 2 - (menuConfig.screenOffsetY * rect.height / 2); // Flipped: negative Y = bottom
-          hud.showRadialMenu(centerX, centerY);
+        // Find the closest anchor to current mouse position
+        const anchors = {
+          n: document.getElementById('anchor_n'),
+          s: document.getElementById('anchor_s'),
+          e: document.getElementById('anchor_e'),
+          w: document.getElementById('anchor_w')
+        };
+        
+        // Get anchor positions
+        const anchorPositions = {};
+        for (const [direction, anchor] of Object.entries(anchors)) {
+          if (anchor) {
+            const rect = anchor.getBoundingClientRect();
+            const canvasRect = hud.canvas.getBoundingClientRect();
+            anchorPositions[direction] = {
+              x: rect.left + rect.width / 2 - canvasRect.left,
+              y: rect.top + rect.height / 2 - canvasRect.top
+            };
+          }
+        }
+        
+        // Find closest anchor to current mouse position
+        let minDist = Infinity;
+        let closestAnchor = 's'; // Default to south if no anchors found
+        
+        for (const [direction, pos] of Object.entries(anchorPositions)) {
+          const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+          if (dist < minDist) {
+            minDist = dist;
+            closestAnchor = direction;
+          }
+        }
+        
+        // Click the closest anchor
+        if (anchors[closestAnchor]) {
+          anchors[closestAnchor].click();
         }
       }
     });

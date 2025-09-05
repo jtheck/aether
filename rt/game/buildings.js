@@ -1,5 +1,89 @@
 // Building system for structures like agora, houses, towers, etc.
 
+// Add particle effects to buildings based on their type
+function addBuildingParticleEffects(building) {
+  if (!window.fx || !building.mesh) {
+    return;
+  }
+  
+  // Add particle effects based on building type
+  switch (building.name.toLowerCase()) {
+    case 'camp':
+      // Add small campfire effect
+      window.fx.attachParticleEffect(building, 'fire', 'fire_anchor', {
+        scale: 0.3, // Small campfire
+        emitRate: 15,
+        minSize: 0.5,
+        maxSize: 1.0
+      });
+      break;
+      
+    case 'village':
+      // Add moderate smoke effect
+      window.fx.attachParticleEffect(building, 'smoke', 'smoke_anchor', {
+        scale: 0.5, // Moderate village smoke
+        emitRate: 20,
+        minSize: 1.0,
+        maxSize: 2.0
+      });
+      break;
+      
+    case 'farm':
+      // Add subtle smoke effect
+      window.fx.attachParticleEffect(building, 'smoke', 'smoke_anchor', {
+        scale: 0.2, // Very subtle farm smoke
+        emitRate: 8,
+        minSize: 0.8,
+        maxSize: 1.5,
+        minLifeTime: 1.0,
+        maxLifeTime: 2.0
+      });
+      break;
+      
+    case 'tower':
+      // Add torch fire effect
+      window.fx.attachParticleEffect(building, 'fire', 'torch_anchor', {
+        scale: 0.4, // Small torch flame
+        emitRate: 20,
+        minSize: 0.3,
+        maxSize: 0.8
+      });
+      break;
+      
+    case 'agora':
+      // Add grand fire effect for agora
+      window.fx.attachParticleEffect(building, 'fire', 'fire_anchor', {
+        scale: 1.5, // Large ceremonial fire
+        emitRate: 80,
+        minSize: 1.5,
+        maxSize: 3.0
+      });
+      break;
+      
+    case 'brigand':
+      // Add torch effects for brigand (multiple anchors)
+      window.fx.attachMultipleParticleEffects(building, [
+        { type: 'torch', anchor: 'torch_anchor.001', options: { scale: 0.3 } },
+        { type: 'torch', anchor: 'torch_anchor.002', options: { scale: 0.3 } }
+      ]);
+      break;
+      
+    case 'wizard':
+      // Add magical particle effects for wizard
+      window.fx.attachMultipleParticleEffects(building, [
+        { type: 'particle', anchor: 'particle_anchor.001', options: { scale: 0.5 } },
+        { type: 'particle', anchor: 'particle_anchor.002', options: { scale: 0.5 } },
+        { type: 'smoke', anchor: 'smoke_anchor', options: { scale: 0.3 } }
+      ]);
+      break;
+      
+    // Add more building types as needed
+    default:
+      // No default particle effects
+      break;
+  }
+}
+
 // Building type definitions
 const BuildingTypes = {
   agora: {
@@ -205,6 +289,9 @@ function placeBuilding(buildingType, x, z, scene) {
       scene.beginAnimation(building.mesh, 0, 20, false, 1.0, () => {
         building.mesh.position.y = 0;
         building.mesh.scaling.y = targetScale;
+        
+        // Add particle effects based on building type
+        addBuildingParticleEffects(building);
       });
     }).catch(err => {
       console.error(`❌ Failed to load ${building.name} model:`, err);
@@ -1090,6 +1177,26 @@ const buildingSystem = {
         this.placementRotation = targetRotation; // Store target rotation for placement
       }
     }
+  },
+  
+  // Add particle effect to a specific building
+  addParticleEffect: function(building, effectType, anchorName = "particle_anchor", options = {}) {
+    if (window.fx && building) {
+      return window.fx.attachParticleEffect(building, effectType, anchorName, options);
+    }
+    return null;
+  },
+  
+  // Remove particle effects from a building
+  removeParticleEffects: function(building, effectType = null) {
+    if (window.fx && building) {
+      window.fx.removeParticleEffects(building, effectType);
+    }
+  },
+  
+  // Get all buildings with particle effects
+  getBuildingsWithEffects: function() {
+    return gameBuildings.filter(building => building.particleEffects && building.particleEffects.length > 0);
   }
 };
 

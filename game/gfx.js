@@ -900,7 +900,7 @@ let pov2 = 240;
     gfx.scene.whenReadyAsync().then(function() {
       // Add world axis after scene is ready
       if (gfx.showWorldAxes) {
-        gfx.showWorldAxes(1024, gfx.scene, new Vec3(0,0,0));
+        // gfx.showWorldAxes(1024, gfx.scene, new Vec3(0,0,0));
       }
       
       // Load cursor frog indicator

@@ -114,31 +114,75 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
         // Get the unit type from the path
         const unitType = itemPath[itemPath.length - 1];
         
-        // Get agora position
-        const agoraX = window.player.agora.x * TILE_SIZE;
-        const agoraZ = window.player.agora.y * TILE_SIZE;
-        
-        // Create unit at agora
-        const unit = new window.Unit(unitType, { x: agoraX, y: 0, z: agoraZ });
-        unit.owner = 'player';
-        
-        // Random rotation
-        const randomRotation = Math.random() * Math.PI * 2;
-        unit.rotation = randomRotation;
-        if (unit.pb.state && unit.pb.state.rot) {
-          unit.pb.state.rot.y = randomRotation;
+        // Don't transform for wizard - create new unit at agora
+        if (unitType === 'wizard') {
+          // Get agora position
+          const agoraX = window.player.agora.x * TILE_SIZE;
+          const agoraZ = window.player.agora.y * TILE_SIZE;
+          
+          // Create wizard at agora
+          const unit = new window.Unit(unitType, { x: agoraX, y: 0, z: agoraZ });
+          unit.owner = 'player';
+          
+          // Random rotation
+          const randomRotation = Math.random() * Math.PI * 2;
+          unit.rotation = randomRotation;
+          if (unit.pb.state && unit.pb.state.rot) {
+            unit.pb.state.rot.y = randomRotation;
+          }
+          
+          // Add to player's units and global array
+          window.player.units.push(unit);
+          window.gameUnits.push(unit);
+          
+          // Spawn the model
+          if (window.gfx && window.gfx.scene) {
+            window.spawnUnitModels(window.gfx.scene);
+          }
+          
+          console.log(`✨ Created ${unit.name} at agora`);
+        } else {
+          // For other unit types, find a nearby idle villager to transform
+          const villagers = window.player.units.filter(unit => unit.type === 'villager');
+          if (villagers.length <= 2) {
+            console.log('Need to keep at least 2 villagers - cannot transform!');
+            return;
+          }
+          
+          // Find the closest idle villager
+          let closestVillager = null;
+          let closestDistance = Infinity;
+          
+          villagers.forEach(villager => {
+            // Skip if villager is already transforming
+            const currentBehavior = window.behaviorManager.getBehavior(villager);
+            if (currentBehavior && currentBehavior.constructor.name === 'TransformBehavior') {
+              return;
+            }
+            
+            // Calculate distance to agora
+            const agoraX = window.player.agora.x * TILE_SIZE;
+            const agoraZ = window.player.agora.y * TILE_SIZE;
+            const dx = villager.pb.state.loc.x - agoraX;
+            const dz = villager.pb.state.loc.z - agoraZ;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            
+            if (distance < closestDistance) {
+              closestVillager = villager;
+              closestDistance = distance;
+            }
+          });
+          
+          if (closestVillager) {
+            // Start transform behavior on the villager
+            window.behaviorManager.setBehavior(closestVillager, 'transform', {
+              transformType: unitType
+            });
+            console.log(`🔄 Transforming villager into ${unitType}`);
+          } else {
+            console.log('No available villagers found to transform!');
+          }
         }
-        
-        // Add to player's units and global array
-        window.player.units.push(unit);
-        window.gameUnits.push(unit);
-        
-        // Spawn the model
-        if (window.gfx && window.gfx.scene) {
-          window.spawnUnitModels(window.gfx.scene);
-        }
-        
-        console.log(`✨ Created ${unit.name} at agora`);
       } else {
         console.log('Selected:', path);
         // TODO: Handle other selection actions

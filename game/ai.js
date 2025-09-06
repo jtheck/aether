@@ -771,12 +771,26 @@ class EngineerWorkBehavior extends WorkBehavior {
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance < TILE_SIZE * 1.5) {
-            // We're at the building, inspect it
+            // We're at the building, inspect and repair it
             if (currentTime - this.inspectionStartTime > this.params.inspectionDuration) {
+                // Apply engineer's effects:
+                // 1. Repair to full health
+                this.inspectionTarget.health = this.inspectionTarget.maxHealth || 100;
+                
+                // 2. Apply efficiency boost
+                if (!this.inspectionTarget.engineerBoostUntil) {
+                    this.inspectionTarget.engineerBoostUntil = 0;
+                }
+                // Set boost for 30 seconds
+                this.inspectionTarget.engineerBoostUntil = currentTime + 30000;
+                this.inspectionTarget.engineerBoostAmount = 1.2; // 20% boost
+                
                 // Finished inspecting, mark as visited and return to base
                 this.visitedBuildings.add(this.inspectionTarget.id);
                 this.currentState = 'returning';
                 this.inspectionTarget = null;
+                
+                // console.log(`🔧 Engineer repaired building and applied 20% efficiency boost for 30 seconds`);
             }
             // Just stay put while inspecting
         } else {
@@ -1017,6 +1031,12 @@ class UnitBehaviorManager {
                     behavior = new EngineerWorkBehavior(unit, params.building, params);
                 }
                 break;
+            case 'eat':
+                behavior = new EatBehavior(unit, params);
+                break;
+            case 'transform':
+                behavior = new TransformBehavior(unit, params);
+                break;
             default:
                 console.warn(`Unknown behavior type: ${behaviorType}`);
                 return;
@@ -1074,6 +1094,343 @@ class UnitBehaviorManager {
 // Global behavior manager instance
 const behaviorManager = new UnitBehaviorManager();
 
+// EatBehavior - Villagers occasionally need to eat
+class TransformBehavior extends Behavior {
+    constructor(unit, params = {}) {
+        super(unit, {
+            transformDuration: 3000, // Takes 3 seconds to transform
+            transformType: null, // What to transform into
+            revertDelay: 60000, // Brigands revert after 60 seconds of inactivity
+            ...params
+        });
+        
+        this.startTime = Date.now();
+        this.transformIndicator = null;
+        this.hasTransformed = false;
+        
+        // Store previous behavior to resume after transforming
+        this.previousBehavior = window.behaviorManager.getBehavior(unit);
+        if (this.previousBehavior) {
+            window.behaviorManager.behaviors.delete(unit);
+        }
+        
+        // Create visual indicator for transforming
+        this.createTransformIndicator();
+    }
+    
+    step() {
+        const currentTime = Date.now();
+        const elapsed = currentTime - this.startTime;
+        
+        // If we haven't transformed yet and enough time has passed, transform the unit
+        if (!this.hasTransformed && elapsed > this.params.transformDuration) {
+            this.transformUnit();
+        }
+        
+        // Keep behavior active for brigands to track inactivity
+        if (this.params.transformType === 'brigand' && this.hasTransformed) {
+            // Check if brigand has been inactive
+            const timeSinceLastAction = currentTime - (this.unit.lastMoveTime || 0);
+            if (timeSinceLastAction > this.params.revertDelay) {
+                // Revert back to villager
+                this.revertToVillager();
+                return true; // Complete the behavior
+            }
+            return false; // Keep monitoring brigand activity
+        }
+        
+        // For other transformations, complete after transforming
+        if (this.hasTransformed) {
+            this.removeTransformIndicator();
+            return true;
+        }
+        
+        return false;
+    }
+    
+    transformUnit() {
+        if (!this.params.transformType) return;
+        
+        // Store original position and physics state
+        const originalPos = this.unit.pb.state.loc.clone();
+        const originalRot = this.unit.pb.state.rot.clone();
+        
+        // Store owner and other important properties
+        const owner = this.unit.owner;
+        
+        // Create the new unit
+        const newUnit = new Unit(this.params.transformType, {
+            x: originalPos.x,
+            y: originalPos.y,
+            z: originalPos.z
+        });
+        
+        // Copy over important properties
+        newUnit.owner = owner;
+        newUnit.pb.state.rot.copyFrom(originalRot);
+        
+        // Add to appropriate unit arrays
+        if (owner === 'player' && window.player) {
+            // Remove old unit from player's array
+            const index = window.player.units.indexOf(this.unit);
+            if (index > -1) {
+                window.player.units.splice(index, 1);
+            }
+            window.player.units.push(newUnit);
+        }
+        
+        // Remove old unit from game units
+        const gameIndex = window.gameUnits.indexOf(this.unit);
+        if (gameIndex > -1) {
+            window.gameUnits.splice(gameIndex, 1);
+        }
+        window.gameUnits.push(newUnit);
+        
+        // Clean up old unit's mesh
+        if (this.unit.mesh) {
+            this.unit.mesh.dispose();
+        }
+        
+        // Spawn visual model for new unit
+        if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
+            window.spawnUnitModels(window.gfx.scene);
+        }
+        
+        // Update unit reference
+        this.unit = newUnit;
+        this.hasTransformed = true;
+        
+        // For brigands, initialize activity tracking
+        if (this.params.transformType === 'brigand') {
+            this.unit.lastMoveTime = Date.now();
+        }
+    }
+    
+    revertToVillager() {
+        // Similar to transform but always goes back to villager
+        const originalPos = this.unit.pb.state.loc.clone();
+        const originalRot = this.unit.pb.state.rot.clone();
+        const owner = this.unit.owner;
+        
+        // Create new villager
+        const newVillager = new Unit('villager', {
+            x: originalPos.x,
+            y: originalPos.y,
+            z: originalPos.z
+        });
+        
+        // Copy over important properties
+        newVillager.owner = owner;
+        newVillager.pb.state.rot.copyFrom(originalRot);
+        
+        // Update unit arrays
+        if (owner === 'player' && window.player) {
+            const index = window.player.units.indexOf(this.unit);
+            if (index > -1) {
+                window.player.units.splice(index, 1);
+            }
+            window.player.units.push(newVillager);
+        }
+        
+        const gameIndex = window.gameUnits.indexOf(this.unit);
+        if (gameIndex > -1) {
+            window.gameUnits.splice(gameIndex, 1);
+        }
+        window.gameUnits.push(newVillager);
+        
+        // Clean up old unit's mesh
+        if (this.unit.mesh) {
+            this.unit.mesh.dispose();
+        }
+        
+        // Spawn visual model for new villager
+        if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
+            window.spawnUnitModels(window.gfx.scene);
+        }
+    }
+    
+    createTransformIndicator() {
+        if (!this.unit.mesh || this.transformIndicator) return;
+        
+        // Create a simple floating icon above the unit
+        const indicator = BABYLON.MeshBuilder.CreateSphere("transformIndicator", {
+            diameter: 0.3
+        }, window.gfx.scene);
+        
+        // Position above the unit (higher than resource indicators)
+        indicator.position = new BABYLON.Vector3(0, 3.0, 0);
+        indicator.parent = this.unit.mesh;
+        
+        // Color based on transform type
+        const material = new BABYLON.StandardMaterial("transformIndicatorMaterial", window.gfx.scene);
+        switch (this.params.transformType) {
+            case 'monk':
+                material.diffuseColor = new BABYLON.Color3(1, 1, 0.5); // Gold for monk
+                material.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0.2);
+                break;
+            case 'engineer':
+                material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 1); // Blue for engineer
+                material.emissiveColor = new BABYLON.Color3(0.2, 0.2, 0.5);
+                break;
+            case 'brigand':
+                material.diffuseColor = new BABYLON.Color3(0.8, 0.2, 0.2); // Red for brigand
+                material.emissiveColor = new BABYLON.Color3(0.4, 0.1, 0.1);
+                break;
+            default:
+                material.diffuseColor = new BABYLON.Color3(1, 1, 1);
+                material.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+        }
+        material.alpha = 0.9;
+        indicator.material = material;
+        
+        // Add a subtle glow effect
+        indicator.renderingGroupId = 1;
+        
+        this.transformIndicator = indicator;
+    }
+    
+    removeTransformIndicator() {
+        if (this.transformIndicator) {
+            this.transformIndicator.dispose();
+            this.transformIndicator = null;
+        }
+    }
+    
+    onReassignment() {
+        this.removeTransformIndicator();
+    }
+}
+
+class EatBehavior extends Behavior {
+    constructor(unit, params = {}) {
+        super(unit, {
+            eatingDuration: 5000, // Takes 5 seconds to eat
+            foodCost: 1, // How much food is consumed
+            ...params
+        });
+        
+        this.startTime = Date.now();
+        this.foodIndicator = null;
+        this.hasEaten = false;
+        
+        // Store previous behavior to resume after eating
+        this.previousBehavior = window.behaviorManager.getBehavior(unit);
+        if (this.previousBehavior) {
+            window.behaviorManager.behaviors.delete(unit);
+        }
+        
+        // Create visual indicator for eating
+        this.createFoodIndicator();
+    }
+    
+    // Called when behavior is forcibly changed
+    onReassignment() {
+        this.removeFoodIndicator();
+    }
+    
+    step() {
+        const currentTime = Date.now();
+        const elapsed = currentTime - this.startTime;
+        
+        // If we haven't eaten yet and have been "eating" for a second, consume the food
+        if (!this.hasEaten && elapsed > 1000) {
+            this.consumeFood();
+        }
+        
+        // Finish eating after duration
+        if (elapsed > this.params.eatingDuration) {
+            this.removeFoodIndicator();
+            
+            // Resume previous behavior if it exists
+            if (this.previousBehavior) {
+                window.behaviorManager.behaviors.set(this.unit, this.previousBehavior);
+            }
+            
+            return true; // Behavior complete
+        }
+        
+        return false; // Keep eating
+    }
+    
+    consumeFood() {
+        if (window.player && window.player.removeResource) {
+            if (window.player.removeResource('food', this.params.foodCost)) {
+                this.hasEaten = true;
+                // console.log(`🍎 ${this.unit.name || this.unit.type} ate ${this.params.foodCost} food`);
+            } else {
+                // No food available! Time to leave
+                console.log("😢 No food! Villager is leaving...");
+                
+                // Clean up any work assignments
+                if (this.unit.assignedBuilding) {
+                    const building = this.unit.assignedBuilding;
+                    building.assignedWorkers = building.assignedWorkers.filter(w => w !== this.unit);
+                    this.unit.assignedBuilding = null;
+                }
+                
+                // Pick a random direction far away
+                const angle = Math.random() * Math.PI * 2;
+                const distance = 50 * TILE_SIZE; // Walk really far!
+                const targetX = this.unit.pb.state.loc.x + Math.cos(angle) * distance;
+                const targetZ = this.unit.pb.state.loc.z + Math.sin(angle) * distance;
+                
+                // Start walking away sadly
+                window.behaviorManager.setBehavior(this.unit, 'walk', {
+                    targetPoint: { x: targetX, z: targetZ },
+                    walkSpeed: 0.5 // Walk slowly, dejectedly
+                });
+                
+                // Remove from player's units and game units
+                if (window.player) {
+                    window.player.units = window.player.units.filter(u => u !== this.unit);
+                }
+                window.gameUnits = window.gameUnits.filter(u => u !== this.unit);
+                
+                // Clean up the unit's mesh
+                if (this.unit.mesh) {
+                    this.unit.mesh.dispose();
+                }
+                
+                // Clean up food indicator
+                this.removeFoodIndicator();
+                return true;
+            }
+        }
+    }
+    
+    createFoodIndicator() {
+        if (!this.unit.mesh || this.foodIndicator) return;
+        
+        // Create a simple floating icon above the unit
+        const indicator = BABYLON.MeshBuilder.CreateSphere("foodIndicator", {
+            diameter: 0.3
+        }, window.gfx.scene);
+        
+        // Position above the unit (higher than resource indicators)
+        indicator.position = new BABYLON.Vector3(0, 3.0, 0);
+        indicator.parent = this.unit.mesh;
+        
+        // Food color (red/brown apple-like color)
+        const material = new BABYLON.StandardMaterial("foodIndicatorMaterial", window.gfx.scene);
+        material.diffuseColor = new BABYLON.Color3(0.8, 0.2, 0.1);
+        material.emissiveColor = new BABYLON.Color3(0.2, 0.05, 0.02);
+        material.alpha = 0.9;
+        indicator.material = material;
+        
+        // Add a subtle glow effect
+        indicator.renderingGroupId = 1;
+        
+        this.foodIndicator = indicator;
+    }
+    
+    removeFoodIndicator() {
+        if (this.foodIndicator) {
+            this.foodIndicator.dispose();
+            this.foodIndicator = null;
+        }
+    }
+}
+
 // Export for use in other files
 if (typeof window !== 'undefined') {
     window.behaviorManager = behaviorManager;
@@ -1086,6 +1443,7 @@ if (typeof window !== 'undefined') {
     window.GatherWorkBehavior = GatherWorkBehavior;
     window.FarmWorkBehavior = FarmWorkBehavior;
     window.EngineerWorkBehavior = EngineerWorkBehavior;
+    window.EatBehavior = EatBehavior;
     
     // // console.log('🔥🔥🔥 AI Behavior System initialized:', {
     //     behaviorManager: !!window.behaviorManager,
@@ -1360,19 +1718,28 @@ function updateIdleUnits() {
     }
     
     gameUnits.forEach(unit => {
+        const currentTime = Date.now();
+        
+        // Initialize unit tracking properties if they don't exist
+        if (!unit.lastWanderTime) unit.lastWanderTime = 0;
+        if (!unit.lastMoveTime) unit.lastMoveTime = 0;
+        if (!unit.lastEatTime) unit.lastEatTime = 0;
+        
+        // Check if villager needs to eat (0.02% chance per second, at least 180 seconds since last meal)
+        if (unit.type === 'villager' && 
+            currentTime - unit.lastEatTime > 180000 && // At least 3 minutes between meals
+            Math.random() < 0.0002) { // 0.02% chance per second
+            
+            // Set eating behavior
+            window.behaviorManager.setBehavior(unit, 'eat');
+            unit.lastEatTime = currentTime;
+            return; // Skip other behavior checks
+        }
+        
         // Only process units with no active behavior
         if (!window.behaviorManager.getBehavior(unit)) {
             idleCount++;
             
-            // Initialize wander delay tracking if it doesn't exist
-            if (!unit.lastWanderTime) {
-                unit.lastWanderTime = 0;
-            }
-            if (!unit.lastMoveTime) {
-                unit.lastMoveTime = 0;
-            }
-            
-            const currentTime = Date.now();
             const timeSinceWander = currentTime - unit.lastWanderTime;
             const timeSinceMove = currentTime - unit.lastMoveTime;
             

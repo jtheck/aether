@@ -107,7 +107,7 @@ const BuildingTypes = {
     category: "residential",
     // Work assignment properties
     needsWorkers: true,
-    maxWorkers: 9,
+    maxWorkers: 10,
     workRadius: 5, // How far to look for idle villagers
     workType: "gather", // Type of work this building provides
     workInterval: 10000, // How often workers produce resources (10 seconds)
@@ -125,9 +125,9 @@ const BuildingTypes = {
     category: "residential",
     // Villager spawning properties
     spawnsVillagers: true,
-    spawnInterval: 90000, // 90 seconds in milliseconds
+    spawnInterval: 60000, // 60 seconds in milliseconds
     maxVillagers: 15, // Maximum villagers this village can support
-    spawnRadius: 5 // Spawn villagers within 3 tiles of the village
+    spawnRadius: 4 // Spawn villagers within 3 tiles of the village
   },
   farm: {
     name: "Farm",
@@ -143,14 +143,14 @@ const BuildingTypes = {
     maxWorkers: 4,
     workRadius: 8, // How far to look for idle villagers
     workType: "farm", // Type of work this building provides
-    workInterval: 15000, // How often workers produce resources (15 seconds)
-    workOutput: { food: 3 } // Resources produced per work cycle
+    workInterval: 10000, // How often workers produce resources (10 seconds)
+    workOutput: { food: 4 } // Resources produced per work cycle
   },
   tower: {
     name: "Watchtower",
     model: "assets/models/tower.glb", 
-    scale: .1,
-    rotation: Math.PI / 6, // 30 degrees
+    scale: .429,
+    rotation: 0, // 30 degrees
     size: { width: 2, height: 2 },
     cost: { stone: 80, wood: 20 },
     description: "Defensive structure with long sight range",
@@ -341,6 +341,22 @@ function spawnVillagerFromVillage(village) {
     return;
   }
   
+  // First two villagers are free (founders)
+  if (village.spawnedVillagers >= 2) {
+    // Check if there's enough food to support new villagers
+    if (window.player && window.player.getResources) {
+      const resources = window.player.getResources();
+      if (!resources.food || resources.food <= 0) {
+        // No food - double the spawn interval to simulate hardship
+        village.lastSpawnTime = currentTime + village.spawnInterval;
+        console.log("😢 Village has no food - delaying next villager spawn");
+        return;
+      }
+    }
+  } else {
+    console.log(`🏠 New village spawning founder ${village.spawnedVillagers + 1} of 2`);
+  }
+  
   // Find a spawn position near the village
   const spawnPosition = findVillagerSpawnPosition(village);
   if (!spawnPosition) {
@@ -525,19 +541,33 @@ function processWorkProduction(building) {
   
   // Apply worker efficiency (more workers = more output, but with diminishing returns)
   const efficiency = Math.min(workerCount, building.maxWorkers) / building.maxWorkers;
-  const outputMultiplier = 0.3 + (efficiency * 0.7); // 30-100% efficiency based on workers
+  let outputMultiplier = 0.3 + (efficiency * 0.7); // 30-100% efficiency based on workers
+  
+  // Apply engineer's boost if active
+  if (building.engineerBoostUntil && Date.now() < building.engineerBoostUntil) {
+    outputMultiplier *= building.engineerBoostAmount || 1.5; // 50% boost
+  }
   
   // Generate resources based on building's workOutput
   const workOutput = building.workOutput || {};
   for (const [resourceType, baseAmount] of Object.entries(workOutput)) {
     if (baseAmount > 0) {
-      const actualAmount = Math.floor(baseAmount * outputMultiplier);
+      let actualAmount = Math.floor(baseAmount * outputMultiplier);
+      
+      // For farms, add extra food per worker
+      if (building.name === 'Farm' && resourceType === 'food') {
+        actualAmount += (workerCount - 1) * 1; // +3 food per additional worker
+      }
       
       if (actualAmount > 0) {
         // Add resources to player
         if (window.player && window.player.addResource) {
           window.player.addResource(resourceType, actualAmount);
-          console.log(`💰 ${building.name} produced ${actualAmount} ${resourceType} (${workerCount} workers)`);
+          if (building.name === 'Farm') {
+            // console.log(`🌾 Farm produced ${actualAmount} food (${workerCount} farmers, base:${baseAmount}, worker bonus:${(workerCount - 1) * 3})`);
+          } else {
+            // console.log(`💰 ${building.name} produced ${actualAmount} ${resourceType} (${workerCount} workers)`);
+          }
         }
       }
     }

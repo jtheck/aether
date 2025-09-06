@@ -14,7 +14,7 @@
       twoFingerDoubleTapCenterMaxMovePx: 80,
       rotateSensitivity: 0.4,
       pinchSensitivity: 0.85,
-      panSensitivity: 15.0,
+      panSensitivity: 5,
       dragStartThresholdPx: 14,
       suppressSingleTapAfterTwoFingerMs: 300,
       // Gesture unification
@@ -33,7 +33,9 @@
       initialPinchMinSpanPx: 10,
       maxRadiusStepPerFrame: 4,
       gestureEngageTimeMs: 20,
-      gestureForceCommitMs: 150
+      gestureForceCommitMs: 150,
+      // Building placement UX
+      buildPlaceMinHoldMs: 200
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -74,6 +76,15 @@
     let gestureActive = false;
     let gestureCommitted = false; // Only apply camera changes after commit
     let gestureInitial = null; // { centroid, distance, angle, radius, cameraAlpha, cameraBeta, startTime }
+    // Coalesce touch move handling to one frame
+    let moveRafScheduled = false;
+    let lastTouchClientX = 0, lastTouchClientY = 0;
+
+    // Building placement session flags
+    let placingTouchId = null;
+    let placingPreviewMoved = false;
+    let placingLastTileX = null;
+    let placingLastTileZ = null;
 
     function now() { return performance.now(); }
 
@@ -460,6 +471,13 @@
       beginGestureIfNeeded();
 
       // If only one finger, defer synthetic left button down until drag threshold is crossed
+      // Also initialize building placement session tracking
+      if (window.buildingSystem && window.buildingSystem.isPlacing) {
+        placingTouchId = e.pointerId;
+        placingPreviewMoved = false;
+        placingLastTileX = null;
+        placingLastTileZ = null;
+      }
     }
 
     function onPointerMove(e) {
@@ -467,67 +485,104 @@
       e.preventDefault();
       e.stopPropagation();
 
-      // Building placement preview tracking should run regardless of pointer tracking state
-      if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
-        let worldPos = screenToWorld(e.clientX, e.clientY);
-        // Fallback to scene.pick with canvas-local coordinates if needed
-        if ((!worldPos || !Number.isFinite(worldPos.x) || !Number.isFinite(worldPos.z)) && window.gfx && window.gfx.scene && window.gfx.canvas) {
-          const rect2 = window.gfx.canvas.getBoundingClientRect();
-          const lx = e.clientX - rect2.left;
-          const ly = e.clientY - rect2.top;
-          const pr = window.gfx.scene.pick(lx, ly);
-          if (pr && pr.hit && pr.pickedPoint) {
-            worldPos = pr.pickedPoint;
-          }
-        }
-        if (worldPos && Number.isFinite(worldPos.x) && Number.isFinite(worldPos.z)) {
-          const tile = (window.TILE_SIZE || 4);
-          const gridXWorld = Math.round(worldPos.x / tile) * tile;
-          const gridZWorld = Math.round(worldPos.z / tile) * tile;
-          window.buildingSystem.previewMesh.position.x = gridXWorld;
-          window.buildingSystem.previewMesh.position.z = gridZWorld;
-          window.buildingSystem.previewMesh.position.y = 0.25;
-          window.buildingSystem.previewMesh.rotation.y = window.buildingSystem.placementRotation || 0;
-          if (window.buildingSystem.selectedBuildingType === 'camp' && window.buildingSystem.updateRadiusVisualization) {
-            window.buildingSystem.updateRadiusVisualization(window.buildingSystem.previewMesh.position);
-          }
-          if (window.buildingSystem.updatePreviewValidity) {
-            const gx = Math.round(worldPos.x / tile);
-            const gz = Math.round(worldPos.z / tile);
-            window.buildingSystem.updatePreviewValidity(gx, gz);
-            if (window.buildingSystem.detectResourcesForCamp && window.buildingSystem.selectedBuildingType === 'camp') {
-              window.buildingSystem.detectResourcesForCamp(gx, gz);
-            }
-          }
-        }
-      }
-
       const ps = activePointers.get(e.pointerId);
       if (ps) updatePointerState(ps, e);
-
-      if (activePointers.size >= 2) {
-        beginGestureIfNeeded();
-        applyTwoFingerGesture();
-      } else if (activePointers.size === 1) {
-        // During building placement, do not emit synthetic moves (reserved for preview)
-        if (window.buildingSystem && window.buildingSystem.isPlacing) return;
-        // Single-finger drag -> emit synthetic down only after movement exceeds threshold, then send moves
-        if (ps) {
-          const dx = ps.x - ps.startX;
-          const dy = ps.y - ps.startY;
-          const movedSq = dx*dx + dy*dy;
-          const thresh = config.dragStartThresholdPx;
-          if (!ps.syntheticDownEmitted && movedSq >= thresh*thresh) {
-            // If a two-finger double-tap was just recognized, don't allow lasso to start immediately (prevents sticky lasso)
-            if (now() >= suppressSingleTapUntil) {
-              sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
-              ps.syntheticDownEmitted = true;
+      lastTouchClientX = e.clientX;
+      lastTouchClientY = e.clientY;
+      if (!moveRafScheduled) {
+        moveRafScheduled = true;
+        requestAnimationFrame(() => {
+          moveRafScheduled = false;
+          // Building placement preview tracking should run regardless of pointer tracking state
+          if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
+            let worldPos = screenToWorld(lastTouchClientX, lastTouchClientY);
+            // Fallback to scene.pick with canvas-local coordinates if needed
+            if ((!worldPos || !Number.isFinite(worldPos.x) || !Number.isFinite(worldPos.z)) && window.gfx && window.gfx.scene && window.gfx.canvas) {
+              const rect2 = window.gfx.canvas.getBoundingClientRect();
+              const lx = lastTouchClientX - rect2.left;
+              const ly = lastTouchClientY - rect2.top;
+              const pr = window.gfx.scene.pick(lx, ly);
+              if (pr && pr.hit && pr.pickedPoint) {
+                worldPos = pr.pickedPoint;
+              }
+            }
+            if (worldPos && Number.isFinite(worldPos.x) && Number.isFinite(worldPos.z)) {
+              const tile = (window.TILE_SIZE || 4);
+              const gridXWorld = Math.round(worldPos.x / tile) * tile;
+              const gridZWorld = Math.round(worldPos.z / tile) * tile;
+              window.buildingSystem.previewMesh.position.x = gridXWorld;
+              window.buildingSystem.previewMesh.position.z = gridZWorld;
+              window.buildingSystem.previewMesh.position.y = 0.25;
+              window.buildingSystem.previewMesh.rotation.y = window.buildingSystem.placementRotation || 0;
+              // Update placement moved flag based on tile changes
+              if (placingTouchId !== null) {
+                const gx = Math.round(worldPos.x / tile);
+                const gz = Math.round(worldPos.z / tile);
+                if (placingLastTileX === null || placingLastTileZ === null) {
+                  placingLastTileX = gx; placingLastTileZ = gz;
+                } else if (gx !== placingLastTileX || gz !== placingLastTileZ) {
+                  placingPreviewMoved = true;
+                  placingLastTileX = gx; placingLastTileZ = gz;
+                }
+              }
+              if (window.buildingSystem.selectedBuildingType === 'camp' && window.buildingSystem.updateRadiusVisualization) {
+                window.buildingSystem.updateRadiusVisualization(window.buildingSystem.previewMesh.position);
+              }
+              if (window.buildingSystem.updatePreviewValidity) {
+                const gx = Math.round(worldPos.x / tile);
+                const gz = Math.round(worldPos.z / tile);
+                window.buildingSystem.updatePreviewValidity(gx, gz);
+                if (window.buildingSystem.detectResourcesForCamp && window.buildingSystem.selectedBuildingType === 'camp') {
+                  window.buildingSystem.detectResourcesForCamp(gx, gz);
+                }
+              }
             }
           }
-          if (ps.syntheticDownEmitted) {
-            sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+
+          if (activePointers.size >= 2) {
+            beginGestureIfNeeded();
+            applyTwoFingerGesture();
+            // Auxiliary during gesture
+            const primary = getTwoPrimaryPointers();
+            if (primary) {
+              const primaryIds = new Set([primary[0].id, primary[1].id]);
+              for (const aps of activePointers.values()) {
+                if (!primaryIds.has(aps.id)) {
+                  if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
+                    const dx = aps.x - aps.startX;
+                    const dy = aps.y - aps.startY;
+                    const movedSq = dx*dx + dy*dy;
+                    const thresh = config.dragStartThresholdPx;
+                    if (!aps.syntheticDownEmitted && movedSq >= thresh*thresh && now() >= suppressSingleTapUntil) {
+                      sendSyntheticPointer('pointerdown', aps.startX, aps.startY, 0, { suppressTerrainClick: true });
+                      aps.syntheticDownEmitted = true;
+                    }
+                    if (aps.syntheticDownEmitted) {
+                      sendSyntheticPointer('pointermove', aps.x, aps.y, 0, { suppressTerrainClick: true });
+                    }
+                  }
+                }
+              }
+            }
+          } else if (activePointers.size === 1) {
+            if (window.buildingSystem && window.buildingSystem.isPlacing) return;
+            for (const only of activePointers.values()) {
+              const dx = only.x - only.startX;
+              const dy = only.y - only.startY;
+              const movedSq = dx*dx + dy*dy;
+              const thresh = config.dragStartThresholdPx;
+              if (!only.syntheticDownEmitted && movedSq >= thresh*thresh) {
+                if (now() >= suppressSingleTapUntil) {
+                  sendSyntheticPointer('pointerdown', only.startX, only.startY, 0, { suppressTerrainClick: true });
+                  only.syntheticDownEmitted = true;
+                }
+              }
+              if (only.syntheticDownEmitted) {
+                sendSyntheticPointer('pointermove', only.x, only.y, 0, { suppressTerrainClick: true });
+              }
+            }
           }
-        }
+        });
       }
     }
 
@@ -542,6 +597,14 @@
       ps.isDown = false;
 
       const wasGesture = gestureActive && activePointers.size >= 2;
+      // Determine if this pointer was one of the two gesture primaries
+      let isPrimaryGesturePointer = false;
+      if (gestureActive) {
+        const pairUp = getTwoPrimaryPointers();
+        if (pairUp) {
+          isPrimaryGesturePointer = (ps.id === pairUp[0].id || ps.id === pairUp[1].id);
+        }
+      }
 
       // Remove pointer first
       activePointers.delete(e.pointerId);
@@ -558,8 +621,8 @@
       const clientX = ps.x;
       const clientY = ps.y;
 
-      if (wasGesture) {
-        // Gesture fingers lifted; nothing further for taps
+      if (isPrimaryGesturePointer) {
+        // Primary gesture finger lifted; don't treat as tap
         if (activePointers.size === 0) {
           // Reset initial to avoid jump on next gesture
           gestureInitial = null;
@@ -577,13 +640,22 @@
         if (dt <= config.tapMaxTimeMs && moveSq <= (config.tapMaxMovePx * config.tapMaxMovePx)) {
           // If building placement mode, tap places the building
           if (window.buildingSystem && window.buildingSystem.isPlacing) {
-            const worldPos = screenToWorld(clientX, clientY);
-            if (worldPos && window.buildingSystem.placeBuildingAt) {
-              const tile = (window.TILE_SIZE || 4);
-              const gx = Math.round(worldPos.x / tile);
-              const gz = Math.round(worldPos.z / tile);
-              window.buildingSystem.placeBuildingAt(gx, gz);
-              return;
+            // Require that the preview actually moved or the touch held long enough before allowing a tap place
+            const heldLongEnough = (now() - ps.startTime) >= (config.buildPlaceMinHoldMs || 200);
+            if (placingPreviewMoved || heldLongEnough) {
+              const worldPos = screenToWorld(clientX, clientY);
+              if (worldPos && window.buildingSystem.placeBuildingAt) {
+                const tile = (window.TILE_SIZE || 4);
+                const gx = Math.round(worldPos.x / tile);
+                const gz = Math.round(worldPos.z / tile);
+                window.buildingSystem.placeBuildingAt(gx, gz);
+                // Reset placement session state
+                placingTouchId = null;
+                placingPreviewMoved = false;
+                placingLastTileX = null;
+                placingLastTileZ = null;
+                return;
+              }
             }
           }
           // If we emitted a synthetic drag, close it and skip tap logic
@@ -618,10 +690,34 @@
             ps.syntheticDownEmitted = false;
           }
         }
-      } else if (activePointers.size === 1) {
-        // If exactly one other finger remains, consider two-finger tap
-        // Check if both finished within thresholds: we can only detect when second up occurs; handled when last pointer lifts
-        // Do nothing here; the last up handler will evaluate two-finger tap based on stored tap candidates
+      } else if (activePointers.size >= 1) {
+        // Auxiliary pointer up while other gesture fingers remain
+        if (ps.syntheticDownEmitted) {
+          sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
+          ps.syntheticDownEmitted = false;
+          return;
+        }
+        // Tap behavior for auxiliary pointer
+        if (skipNextSingleTap || now() < suppressSingleTapUntil) {
+          skipNextSingleTap = false;
+          return;
+        }
+        if (dt <= config.tapMaxTimeMs && moveSq <= (config.tapMaxMovePx * config.tapMaxMovePx)) {
+          // Building placement tap during gesture
+          if (window.buildingSystem && window.buildingSystem.isPlacing) {
+            const worldPos = screenToWorld(clientX, clientY);
+            if (worldPos && window.buildingSystem.placeBuildingAt) {
+              const tile = (window.TILE_SIZE || 4);
+              const gx = Math.round(worldPos.x / tile);
+              const gz = Math.round(worldPos.z / tile);
+              window.buildingSystem.placeBuildingAt(gx, gz);
+              return;
+            }
+          }
+          // Otherwise synthesize a click to issue action
+          sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
+          sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
+        }
       }
     }
 

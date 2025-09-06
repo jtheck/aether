@@ -326,9 +326,13 @@ function getRandomColor() {
   // Handle pointer events (mouse clicks, touch)
   ui.handlePointer = function(e) {
     e.preventDefault();
+    // Cache frequently used locals
+    const canvas = gfx.canvas;
+    const camera = gfx.camera;
+    const cameraTarget = gfx.cameraTarget;
     
     // Get pointer position
-    const rect = gfx.canvas.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
@@ -351,23 +355,23 @@ function getRandomColor() {
       rmbLastScreen.x = e.clientX;
       rmbLastScreen.y = e.clientY;
     } else if (e.pointerType === 'mouse' && e.type === 'pointermove' && rmbPanActive) {
-      if (gfx && gfx.camera && gfx.canvas && gfx.cameraTarget) {
-        const cam = gfx.camera;
-        const rectC = gfx.canvas.getBoundingClientRect();
+      if (camera && canvas && cameraTarget) {
+        const cam = camera;
+        const rectC = canvas.getBoundingClientRect();
         const pixelsToWorld = (2 * (cam.radius || 60) * Math.tan((cam.fov || 0.8)/2)) / Math.max(1, rectC.height);
         const screenDx = (e.clientX - rmbLastScreen.x);
         const screenDy = (e.clientY - rmbLastScreen.y);
         rmbLastScreen.x = e.clientX;
         rmbLastScreen.y = e.clientY;
-        const toTarget = gfx.cameraTarget.position.subtract(cam.position).normalize();
+        const toTarget = cameraTarget.position.subtract(cam.position).normalize();
         const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
         if (groundForward.lengthSquared() > 1e-6) {
           groundForward.normalize();
           const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
           const wx = groundRight.x * screenDx * pixelsToWorld + groundForward.x * screenDy * pixelsToWorld;
           const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
-          const panSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 15) : 15);
-          if (!window.cameraAnchor) window.cameraAnchor = gfx.cameraTarget.position.clone();
+          const panSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5);
+          if (!window.cameraAnchor) window.cameraAnchor = cameraTarget.position.clone();
           window.cameraAnchor.x += wx * panSens;
           window.cameraAnchor.z += wz * panSens;
         }
@@ -472,13 +476,13 @@ function getRandomColor() {
       return;
     }
     
-    // Convert screen coordinates to world coordinates
-    // All models are non-pickable so ray will pass through to terrain
-    const pickResult = gfx.scene.pick(x, y);
     // If event is from touch synthetic drag or selection, suppress terrain click -> no move orders
     if (e.suppressTerrainClick) {
       return;
     }
+    // Convert screen coordinates to world coordinates
+    // All models are non-pickable so ray will pass through to terrain
+    const pickResult = gfx.scene.pick(x, y);
     
     // console.log('🎯 Field click debug:', { 
     //   hit: pickResult.hit, 

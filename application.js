@@ -29,6 +29,14 @@ window.aud = {};  // Audio
       initPlayer();
       gfx.stretchTable(gfx.table);
 
+      // Disable auto-follow to prevent cameraTarget jumps during touch gestures
+      window.cameraAutoFollowEnabled = false;
+
+      // Initialize touch manager on the canvas once gfx is ready
+      if (window.touch && window.gfx && window.gfx.canvas) {
+        window.touch.init(window.gfx.canvas);
+      }
+
     });
 
     

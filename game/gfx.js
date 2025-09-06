@@ -944,37 +944,80 @@ let pov2 = 240;
     // Increment frame counter for LOD system
     window.frameCounter = (window.frameCounter || 0) + 1;
     
+    // Guard camera params before rendering to avoid NaNs breaking frustum
+    if (gfx.camera) {
+      if (!Number.isFinite(gfx.camera.alpha)) gfx.camera.alpha = 0;
+      if (!Number.isFinite(gfx.camera.beta)) gfx.camera.beta = 0.9;
+      if (!Number.isFinite(gfx.camera.radius)) gfx.camera.radius = 60;
+      gfx.camera.beta = Math.max(0.2, Math.min(1.5, gfx.camera.beta));
+      if (typeof gfx.camera.lowerRadiusLimit === 'number' && typeof gfx.camera.upperRadiusLimit === 'number') {
+        gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit, Math.min(gfx.camera.upperRadiusLimit, gfx.camera.radius));
+      }
+      // Clamp camera position finite as a safety
+      if (!Number.isFinite(gfx.camera.position.x)) gfx.camera.position.x = 0;
+      if (!Number.isFinite(gfx.camera.position.y)) gfx.camera.position.y = 30;
+      if (!Number.isFinite(gfx.camera.position.z)) gfx.camera.position.z = 0;
+    }
+
     gfx.scene.render();
+
+    // Initialize camera limits based on field scale (once liveField is ready)
+    if (!window._cameraLimitsSet && window.liveField && gfx.camera) {
+      const worldWidth = Math.max(1, window.liveField.width || 256);
+      const worldHeight = Math.max(1, window.liveField.height || 256);
+      const maxDim = Math.max(worldWidth, worldHeight);
+      const minDim = Math.min(worldWidth, worldHeight);
+
+      // Set dynamic zoom limits relative to field size
+      gfx.camera.lowerRadiusLimit = Math.max(5, minDim * 0.05);
+      gfx.camera.upperRadiusLimit = Math.max(50, maxDim * 2.5);
+
+      // Clamp current radius into new limits
+      if (typeof gfx.camera.radius === 'number') {
+        gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit, Math.min(gfx.camera.upperRadiusLimit, gfx.camera.radius));
+      }
+
+      window._cameraLimitsSet = true;
+    }
     
     // Player physics and position updates are now handled in the game loop
     // This render loop only handles rendering and chunk management
     
-    // First, lerp cursor destination towards player flag position
-    if (window.player && window.player.pbody && window.player.pbody.state && window.player.pbody.state.loc) {
-      const playerPos = window.player.pbody.state.loc;
-      
-      // If we don't have a cursor destination yet, initialize it to current camera target
-      if (!window.cameraTargetDestination && gfx.cameraTarget) {
-        window.cameraTargetDestination = gfx.cameraTarget.position.clone();
+    // Anchor-driven camera: lerp target toward anchor every frame
+    if (gfx.cameraTarget) {
+      // Initialize anchor if missing
+      if (!window.cameraAnchor) {
+        window.cameraAnchor = gfx.cameraTarget.position.clone();
       }
-      
-      // Lerp cursor destination towards player flag position
-      if (window.cameraTargetDestination) {
-        const cursorLerpSpeed = 0.02; // Slower cursor chase
-        window.cameraTargetDestination.x = BABYLON.Scalar.Lerp(window.cameraTargetDestination.x, playerPos.x, cursorLerpSpeed);
-        window.cameraTargetDestination.z = BABYLON.Scalar.Lerp(window.cameraTargetDestination.z, playerPos.z, cursorLerpSpeed);
-      }
-    }
-    
-    // Then, smooth camera target lerping towards cursor destination
-    if (window.cameraTargetDestination && gfx.cameraTarget) {
-      const cameraLerpSpeed = 0.05; // Normal smooth camera movement
-      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraTargetDestination.x, cameraLerpSpeed);
-      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraTargetDestination.z, cameraLerpSpeed);
+      const cameraLerpSpeed = 0.12; // responsive pan toward anchor
+      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraAnchor.x, cameraLerpSpeed);
+      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraAnchor.z, cameraLerpSpeed);
       gfx.cameraTarget.position.y = 9;
-
+      // Safety clamp camera target to field bounds
+      const tileSize = (window.TILE_SIZE || 4);
+      const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+      const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+      const margin = 2 * tileSize;
+      const minX = margin, minZ = margin;
+      const maxX = Math.max(minX, w - margin);
+      const maxZ = Math.max(minZ, h - margin);
+      gfx.cameraTarget.position.x = Math.max(minX, Math.min(maxX, gfx.cameraTarget.position.x));
+      gfx.cameraTarget.position.z = Math.max(minZ, Math.min(maxZ, gfx.cameraTarget.position.z));
+      if (window.debugPan) {
+        try {
+          console.log('[TARGET]', {
+            anchor: { x: +window.cameraAnchor.x.toFixed(3), z: +window.cameraAnchor.z.toFixed(3) },
+            target: { x: +gfx.cameraTarget.position.x.toFixed(3), z: +gfx.cameraTarget.position.z.toFixed(3) }
+          });
+        } catch (e) {}
+      }
     }
     
+    // Keep camera target at fixed height
+    if (gfx.cameraTarget) {
+      gfx.cameraTarget.position.y = 9;
+    }
+
     // Update cursor frog position to show the cursor destination
     if (gfx.cursorFrog && window.cameraTargetDestination) {
       gfx.cursorFrog.position.x = window.cameraTargetDestination.x;
@@ -1125,13 +1168,16 @@ let pov2 = 240;
     let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 0.9, radius, new Vec3(0, 0, 0), scene);
     gfx.cameraTarget = new BABYLON.TransformNode("zCameraFocus");
     gfx.cameraTarget.position.y = 9;
+    // Lock camera to target; we will drive the target via an anchor with lerp
     camera.lockedTarget = gfx.cameraTarget;
-    // Attach camera controls but disable left mouse button (only allow right-click and wheel)
+    // Initialize camera anchor (desired target position)
+    window.cameraAnchor = gfx.cameraTarget.position.clone();
+    // Attach camera controls but we will disable built-in pointer inputs to avoid conflicts with custom gestures
     camera.attachControl(gfx.canvas, false); // false = don't prevent default events
     
-    // Disable left mouse button camera rotation
-    if (camera.inputs && camera.inputs.attached.pointers) {
-      camera.inputs.attached.pointers.buttons = [1, 2]; // Only middle (1) and right (2) mouse buttons
+    // Remove built-in pointer input (mouse/touch orbit/pinch) to prevent double transforms with our gesture system
+    if (camera.inputs && camera.inputs.attached && camera.inputs.attached.pointers) {
+      try { camera.inputs.attached.pointers.detachControl(); } catch (e) {}
     }
 
     // Disable built-in wheel input since we're handling both rotation and zoom manually
@@ -1145,9 +1191,31 @@ let pov2 = 240;
     camera.lowerRadiusLimit = 1;
     camera.upperBetaLimit = 2.0; // Limit how high you can look (prevent going too high)
     camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
-    camera.maxZ = 1001; // max render distance
-    camera.minZ = 5; // minimum render distance
+    camera.maxZ = 50000; // extend far plane to avoid terrain popping on wide zoom
+    camera.minZ = 0.1; // allow closer near plane for low zoom
     camera.fov = .8; // default .8
+
+    // Safety clamps
+    const clampCamera = () => {
+      if (!camera) return;
+      // Ensure finite camera parameters to prevent scene disappearing
+      if (!Number.isFinite(camera.alpha)) camera.alpha = 0;
+      if (!Number.isFinite(camera.beta)) camera.beta = 0.9;
+      if (!Number.isFinite(camera.radius)) camera.radius = 60;
+      // Keep beta reasonable
+      camera.beta = Math.max(0.2, Math.min(1.5, camera.beta));
+      // Keep radius within limits
+      if (typeof camera.lowerRadiusLimit === 'number' && typeof camera.upperRadiusLimit === 'number') {
+        camera.radius = Math.max(camera.lowerRadiusLimit, Math.min(camera.upperRadiusLimit, camera.radius));
+      }
+    };
+    // Clamp on init
+    clampCamera();
+
+    // Prevent browser/touch default gestures on the canvas
+    if (gfx.canvas) {
+      try { gfx.canvas.style.touchAction = 'none'; } catch (e) {}
+    }
  
 
     camera.wheelPrecision = 1.15;

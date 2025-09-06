@@ -315,6 +315,10 @@ function getRandomColor() {
   let lastClickPosition = { x: 0, y: 0 };
   const DOUBLE_CLICK_DELAY = 300; // milliseconds
   const DOUBLE_CLICK_DISTANCE = 10; // pixels - how far apart clicks can be to count as double-click
+  
+  // RMB pan state (anchor-based, matches touch pan)
+  let rmbPanActive = false;
+  let rmbLastScreen = { x: 0, y: 0 };
 
   // Handle pointer events (mouse clicks, touch)
   ui.handlePointer = function(e) {
@@ -325,15 +329,46 @@ function getRandomColor() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    // Track RMB state for field position checking
+    // RMB pan (hold RMB to pan like touch)
     if (e.type === 'pointerdown' && e.button === 2) {
+      rmbPanActive = true;
+      rmbLastScreen.x = e.clientX;
+      rmbLastScreen.y = e.clientY;
+    } else if (e.type === 'pointermove' && rmbPanActive) {
+      if (gfx && gfx.camera && gfx.canvas && gfx.cameraTarget) {
+        const cam = gfx.camera;
+        const rectC = gfx.canvas.getBoundingClientRect();
+        const pixelsToWorld = (2 * (cam.radius || 60) * Math.tan((cam.fov || 0.8)/2)) / Math.max(1, rectC.height);
+        const screenDx = (e.clientX - rmbLastScreen.x);
+        const screenDy = (e.clientY - rmbLastScreen.y);
+        rmbLastScreen.x = e.clientX;
+        rmbLastScreen.y = e.clientY;
+        const toTarget = gfx.cameraTarget.position.subtract(cam.position).normalize();
+        const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
+        if (groundForward.lengthSquared() > 1e-6) {
+          groundForward.normalize();
+          const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
+          const wx = groundRight.x * screenDx * pixelsToWorld + groundForward.x * screenDy * pixelsToWorld;
+          const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
+          const panSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 15) : 15);
+          if (!window.cameraAnchor) window.cameraAnchor = gfx.cameraTarget.position.clone();
+          window.cameraAnchor.x += wx * panSens;
+          window.cameraAnchor.z += wz * panSens;
+        }
+      }
+    } else if (e.type === 'pointerup' && e.button === 2) {
+      rmbPanActive = false;
+    }
+
+    // Track RMB state for field position checking (mouse-only and gated)
+    if (window.enableRmbCameraDrag && e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 2) {
       rmbDown = true;
       lastRmbPosition = { x, y };
       // console.log('🎯 RMB DOWN detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
-    } else if (e.type === 'pointerup' && e.button === 2) {
+    } else if (window.enableRmbCameraDrag && e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
       rmbDown = false;
       // console.log('🎯 RMB UP detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
-    } else if (e.type === 'pointermove' && rmbDown) {
+    } else if (window.enableRmbCameraDrag && e.pointerType === 'mouse' && e.type === 'pointermove' && rmbDown) {
       // Update position while RMB is held
       lastRmbPosition = { x, y };
       // console.log('🎯 RMB MOVE detected during event:', e.type, 'lasso active:', window.lassoSelection?.isSelectionActive());
@@ -341,50 +376,28 @@ function getRandomColor() {
     
     // Handle LMB selection system move and up events
     if (e.type === 'pointermove') {
-      // Handle LMB move for selection (button is not set during move events)
-      // console.log('🔥🔥🔥 UI: pointermove event, checking lasso system...');
-      if (window.lassoSelection && window.lassoSelection.handleLmbMove) {
-        // console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbMove...');
-        window.lassoSelection.handleLmbMove(x, y);
-      } else {
-        // console.log('🔥🔥🔥 UI: Lasso system not available for move:', { 
-        //   hasLasso: !!window.lassoSelection, 
-        //   hasHandleLmbMove: !!(window.lassoSelection && window.lassoSelection.handleLmbMove) 
-        // });
+      // Skip lasso while placing buildings
+      if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
+        // Handle LMB move for selection (button is not set during move events)
+        if (window.lassoSelection && window.lassoSelection.handleLmbMove) {
+          window.lassoSelection.handleLmbMove(x, y);
+        }
       }
     } else if (e.type === 'pointerup' && e.button === 0) {
-      // Handle LMB up for selection
-      // console.log('🔥🔥🔥 UI: pointerup event received, button:', e.button, 'checking lasso system...');
-      if (window.lassoSelection && window.lassoSelection.handleLmbUp) {
-        // console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbUp...');
-        window.lassoSelection.handleLmbUp(x, y);
-      } else {
-        // console.log('🔥🔥🔥 UI: Lasso system not available for up:', { 
-        //   hasLasso: !!window.lassoSelection, 
-        //   hasHandleLmbUp: !!(window.lassoSelection && window.lassoSelection.handleLmbUp) 
-        // });
+      // Handle LMB up for selection (skip during building placement)
+      if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
+        if (window.lassoSelection && window.lassoSelection.handleLmbUp) {
+          window.lassoSelection.handleLmbUp(x, y);
+        }
       }
     }
     
     // Handle LMB selection system FIRST (before double-click detection)
     if (e.type === 'pointerdown' && e.button === 0) { // Left click only
-      // console.log('🔥🔥🔥 UI: Checking lasso selection system... 🔥🔥🔥');
-      if (window.lassoSelection && window.lassoSelection.handleLmbDown) {
-        // console.log('🔥🔥🔥 UI: Calling lassoSelection.handleLmbDown... 🔥🔥🔥');
-        const isHandlingSelection = window.lassoSelection.handleLmbDown(x, y, e);
-        // console.log('🔥🔥🔥 UI: lassoSelection.handleLmbDown returned:', isHandlingSelection);
-        
-        // Always capture move events when lasso is active, even if it's not handling selection yet
-        // This allows us to detect if a click becomes a drag
-        if (window.lassoSelection.isSelectionActive()) {
-          // console.log('🔥🔥🔥 UI: Lasso system active, will capture move events to detect drags');
-          // Don't return early - we need to capture the move events!
+      if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
+        if (window.lassoSelection && window.lassoSelection.handleLmbDown) {
+          window.lassoSelection.handleLmbDown(x, y, e);
         }
-      } else {
-        console.log('🔥🔥🔥 UI: Lasso system not available:', { 
-          hasLasso: !!window.lassoSelection, 
-          hasHandleLmbDown: !!(window.lassoSelection && window.lassoSelection.handleLmbDown) 
-        });
       }
     }
     
@@ -395,54 +408,11 @@ function getRandomColor() {
       
       // Check if this is a double-click
       if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
-        // Double-click detected! Make selected units RUN to this position
-        // console.log('🏃‍♂️ Double-click detected! Making units RUN!');
-        
-        // Get world position from the click
+        // Double-click detected! Trigger special abilities on selected units
         const pickResult = gfx.scene.pick(x, y);
-        if (pickResult.hit && pickResult.pickedMesh.name.includes('Mesh')) {
-          const worldPos = pickResult.pickedPoint;
-          
-          // Make selected units RUN to the clicked location
-          if (window.player && window.player.getSelectedUnits) {
-            const selectedUnits = window.player.getSelectedUnits();
-            if (selectedUnits.length > 0) {
-              // console.log(`🏃‍♂️ Making ${selectedUnits.length} selected units RUN to location`);
-              
-              // Create a visual target marker at the clicked location
-              if (window.gfx && window.gfx.scene) {
-                createTargetMarker(worldPos);
-              }
-              
-              // Apply RUN behavior to each selected unit
-              selectedUnits.forEach(unit => {
-                if (window.behaviorManager && unit) {
-                  // Create target point slightly offset for natural spread
-                  const offsetX = worldPos.x + (Math.random() - 0.5) * 2;
-                  const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
-                  const targetPoint = { x: offsetX, z: offsetZ };
-                  
-                  // console.log(`🏃‍♂️ Setting RUN behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
-                  
-                  window.behaviorManager.setBehavior(unit, 'run', { 
-                    targetPoint: targetPoint,
-                    runSpeed: (unit.speed || 20) * 1.5 // 1.5x faster than unit's base speed
-                  });
-                  
-                  // console.log(`🏃‍♂️ Unit ${unit.name || unit.type} RUNNING to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
-                } else {
-                  // console.warn(`⚠️ Cannot set run behavior for unit:`, { 
-                  //   hasBehaviorManager: !!window.behaviorManager, 
-                  //   unit: unit,
-                  //   unitPhysics: unit?.pb,
-                  //   unitState: unit?.pb?.state
-                  // });
-                }
-              });
-            } else {
-              // console.log('🏃‍♂️ No units selected, skipping run behavior');
-            }
-          }
+        const worldPos = pickResult.hit ? pickResult.pickedPoint : null;
+        if (window.ui && window.ui.triggerSpecialAbilityAt) {
+          window.ui.triggerSpecialAbilityAt(worldPos);
         }
         
         // Reset double-click detection
@@ -609,8 +579,8 @@ function getRandomColor() {
         }
       }
       
-      // Handle right click for moving camera target
-      if (e.type === 'pointerdown' && e.button === 2) { // Right mouse button
+      // Handle right click for moving camera target (mouse-only and gated)
+      if (window.enableRmbCameraDrag && e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 2) { // Right mouse button
         // Check if building system is active - if so, let it handle the event
         if (window.buildingSystem && window.buildingSystem.isPlacing) {
           return; // Let building system handle this
@@ -647,7 +617,7 @@ function getRandomColor() {
           };
           playerDragVelocity = { x: 0, z: 0 };
         }
-      } else if (e.type === 'pointermove' && playerDragActive) {
+      } else if (window.enableRmbCameraDrag && e.pointerType === 'mouse' && e.type === 'pointermove' && playerDragActive) {
         // Check if building system is active - if so, let it handle the event
         if (window.buildingSystem && window.buildingSystem.isPlacing) {
           return; // Let building system handle this
@@ -676,7 +646,7 @@ function getRandomColor() {
             // console.log('🎯 Drag impulse applied:', { x: playerDragVelocity.x, z: playerDragVelocity.z });
           }
         }
-      } else if (e.type === 'pointerup' && e.button === 2) {
+      } else if (window.enableRmbCameraDrag && e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
         // Check if building system is active - if so, let it handle the event
         if (window.buildingSystem && window.buildingSystem.isPlacing) {
           return; // Let building system handle this
@@ -727,11 +697,13 @@ function getRandomColor() {
   // Smooth camera rotation system for quick, responsive control
   let cameraRotationTarget = { alpha: 0, beta: 0 };
   let cameraRotationSpeed = 0.25; // How fast camera moves to target (0.25 = much faster and responsive)
+  // Only animate camera after explicit user input (wheel/gesture)
+  let cameraHasBeenNudged = false;
   
   // Camera momentum system
   let cameraVelocity = { alpha: 0, beta: 0, radius: 0 };
-  let cameraMomentum = 0.24; // How much momentum to keep (0.95 = 95% momentum - almost no bounce)
-  let cameraDamping = 0.999; // How quickly momentum fades (0.98 = 2% fade per frame - almost no bounce)
+  let cameraMomentum = 0.9; // keep most of the momentum for longer glides
+  let cameraDamping = 0.995; // very light damping to avoid immediate nullification
   
   // Player drag momentum system
   let playerDragActive = false;
@@ -751,6 +723,9 @@ function getRandomColor() {
   let lastRmbPosition = { x: 0, y: 0 };
   let rmbFieldPosition = new BABYLON.Vector3(0, 0, 0); // Track the 3D world position where RMB is pointing
   
+  // Gate legacy RMB camera drag to mouse-only to avoid conflicts with touch gestures
+  window.enableRmbCameraDrag = false;
+  
     // Handle wheel events for camera rotation and zoom
   // Controls:
   // - Normal scroll wheel: Rotate camera horizontally (left/right)
@@ -761,6 +736,7 @@ function getRandomColor() {
     if (!gfx.camera || !gfx.camera.alpha) {
       return;
     }
+    cameraHasBeenNudged = true;
     let INVERSEROT = -1;
     let INVERSEZOOM = 1;
     
@@ -785,21 +761,14 @@ function getRandomColor() {
       const zoomMethod = e.shiftKey ? "Shift + Wheel" : "Right-click + Wheel";
       // console.log(`${zoomMethod}: delta=${delta}, zoom amount=${zoomAmount.toFixed(4)}, radius=${gfx.camera.radius?.toFixed(4)}`);
     } else {
-      // Normal scroll wheel = Camera rotation
+      // Normal scroll wheel = Camera rotation via momentum (no spring-back)
       e.preventDefault();
-      
-      // Convert wheel delta to rotation target
-      // Adjust sensitivity - you can modify these values
-      const rotationAmount = 0.001; // How much to rotate per scroll unit (faster for more responsive feel)
-      
-      // Only horizontal rotation (alpha) with scroll wheel - keep beta unchanged
-      // Normal scroll wheel = horizontal rotation (look left/right)
-      cameraRotationTarget.alpha += INVERSEROT*delta * rotationAmount;
-      
-      // Keep beta at current camera value to prevent unwanted vertical movement
+      const rotationAmount = 0.001;
+      const impulse = INVERSEROT * delta * rotationAmount;
+      const maxImpulse = 0.25;
+      cameraVelocity.alpha += Math.max(-maxImpulse, Math.min(maxImpulse, impulse));
+      // Keep beta fixed during wheel rotation
       cameraRotationTarget.beta = gfx.camera.beta;
-      
-      // Log for debugging (remove this in production)
     }
   };
   
@@ -808,9 +777,16 @@ function getRandomColor() {
     if (!gfx.camera || !gfx.camera.alpha) {
       return;
     }
+    // Leave camera exactly where it starts until the user interacts
+    if (!cameraHasBeenNudged) {
+      // Keep targets in sync with current camera so no drift accumulates
+      cameraRotationTarget.alpha = gfx.camera.alpha;
+      cameraRotationTarget.beta = gfx.camera.beta;
+      return;
+    }
     
-    // Apply zoom-to-beta ratio for more natural camera behavior
-    if (gfx.camera.radius !== undefined) {
+    // Disable zoom→beta coupling to keep pinch/wheel from tilting the camera
+    if (false) {
       // Calculate ideal beta based on zoom level
       // As you zoom out (larger radius), beta increases (look more upward)
       // As you zoom in (smaller radius), beta decreases (look more level)
@@ -831,13 +807,15 @@ function getRandomColor() {
       // Calculate target beta based on zoom (inverted)
       const targetBeta = minBeta - (normalizedRadius * (minBeta - maxBeta));
       
-      // Smoothly adjust beta target towards the zoom-based ideal
+      // Only adjust beta target if we've already begun camera motion
       cameraRotationTarget.beta = BABYLON.Scalar.Lerp(cameraRotationTarget.beta, targetBeta, 0.4);
     }
     
     // Apply momentum-based camera movement
-    // Calculate velocity towards target
-    const alphaDiff = cameraRotationTarget.alpha - gfx.camera.alpha;
+    // Keep alpha target synced to current to remove restoring force; only momentum drives alpha
+    cameraRotationTarget.alpha = gfx.camera.alpha;
+    // Calculate velocity towards target (beta only)
+    const alphaDiff = cameraRotationTarget.alpha - gfx.camera.alpha; // zero
     const betaDiff = cameraRotationTarget.beta - gfx.camera.beta;
     
     // Add velocity towards target
@@ -927,6 +905,34 @@ function getRandomColor() {
       
       // console.log('Camera view reset to reasonable angle');
     }
+  };
+
+  // Touch-friendly camera nudges (exposed for gesture control)
+  ui.nudgeRotation = function(deltaAlpha) {
+    if (!gfx.camera) return;
+    cameraHasBeenNudged = true;
+    // Push rotation as momentum with clamp to avoid snap/bounce
+    const maxImpulse = 0.2;
+    const impulse = Math.max(-maxImpulse, Math.min(maxImpulse, deltaAlpha));
+    cameraVelocity.alpha += impulse;
+    // Sync target to current to avoid restoring force
+    cameraRotationTarget.alpha = gfx.camera.alpha;
+  };
+
+  ui.nudgeZoom = function(deltaRadius) {
+    if (!gfx.camera) return;
+    if (typeof gfx.camera.radius !== 'number') return;
+    cameraHasBeenNudged = true;
+    cameraVelocity.radius += deltaRadius;
+  };
+
+  ui.nudgePan = function(deltaX, deltaZ) {
+    if (!gfx.cameraTarget) return;
+    cameraHasBeenNudged = true;
+    // Directly move target to avoid fighting with touch controls
+    gfx.cameraTarget.position.x += deltaX;
+    gfx.cameraTarget.position.z += deltaZ;
+    cameraMovementTarget = null;
   };
   
   // Check field position when RMB is held (throttled to avoid performance issues)
@@ -1061,12 +1067,17 @@ function getRandomColor() {
 
   // Helper function to get world position from screen coordinates
   ui.getWorldPositionFromScreen = function(screenX, screenY) {
-    if (!gfx.scene || !gfx.camera) return null;
+    if (!gfx.scene || !gfx.camera || !gfx.canvas) return null;
     
-    // Create picking ray from screen coordinates
+    // Convert from client/screen coordinates to canvas-local coordinates
+    const rect = gfx.canvas.getBoundingClientRect();
+    const localX = screenX - rect.left;
+    const localY = screenY - rect.top;
+    
+    // Create picking ray from canvas-local coordinates
     const ray = gfx.scene.createPickingRay(
-      screenX, 
-      screenY, 
+      localX, 
+      localY, 
       BABYLON.Matrix.Identity(), 
       gfx.camera
     );
@@ -1079,13 +1090,49 @@ function getRandomColor() {
       return intersection;
     }
     
-    // Fallback: try to pick against the scene
-    const pickResult = gfx.scene.pick(screenX, screenY);
+    // Fallback: try to pick against the scene using canvas-local x/y
+    const pickResult = gfx.scene.pick(localX, localY);
     if (pickResult.hit) {
       return pickResult.pickedPoint;
     }
     
     return null;
+  };
+
+  // Trigger unit special abilities at optional world position
+  ui.triggerSpecialAbilityAt = function(worldPos) {
+    if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) return;
+    const units = window.player.getSelectedUnits();
+    units.forEach(unit => {
+      const type = unit.type || unit.name || '';
+      if (/engineer/i.test(type)) {
+        window.behaviorManager.setBehavior(unit, 'engineer_productivity_boost', {
+          radius: 6,
+          bonus: 1.5,
+          duration: 7000,
+          vfx: 'aura_blue'
+        });
+      } else if (/brigand/i.test(type)) {
+        window.behaviorManager.setBehavior(unit, 'brigand_sprint', {
+          speedMultiplier: 2.25,
+          duration: 3000,
+          vfx: 'speed_trail'
+        });
+      } else if (/monk/i.test(type)) {
+        window.behaviorManager.setBehavior(unit, 'monk_stealth', {
+          invisibility: true,
+          duration: 5000,
+          vfx: 'smoke_puff'
+        });
+      } else if (/wizard/i.test(type)) {
+        window.behaviorManager.setBehavior(unit, 'wizard_cast', {
+          targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
+          spell: 'arc_blast',
+          power: 1.5,
+          vfx: 'spell_flash'
+        });
+      }
+    });
   };
 
 }(window.ui = window.ui || {}));

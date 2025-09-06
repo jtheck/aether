@@ -986,6 +986,26 @@ class UnitBehaviorManager {
     
     // Set a unit's active behavior
     setBehavior(unit, behaviorType, params = {}) {
+        // Handle special-ability cooldowns
+        const now = Date.now();
+        unit._abilityCooldowns = unit._abilityCooldowns || {};
+        const abilityDurations = {
+            'wizard_cast': 400, // brief cast action
+            'monk_stealth': (params && params.duration) || 4000,
+            'brigand_sprint': (params && params.duration) || 2500
+        };
+        const abilityCooldowns = {
+            'wizard_cast': 3000,
+            'monk_stealth': 8000,
+            'brigand_sprint': 6000
+        };
+        if (abilityDurations[behaviorType] !== undefined) {
+            const nextReady = unit._abilityCooldowns[behaviorType] || 0;
+            if (now < nextReady) {
+                // On cooldown, ignore
+                return;
+            }
+        }
         // If unit has an existing behavior, call onReassignment if it exists
         const currentBehavior = this.behaviors.get(unit);
         if (currentBehavior && currentBehavior.onReassignment) {
@@ -1040,11 +1060,25 @@ class UnitBehaviorManager {
             default:
                 console.warn(`Unknown behavior type: ${behaviorType}`);
                 return;
+            case 'brigand_sprint':
+                behavior = new BrigandSprintBehavior(unit, params);
+                break;
+            case 'monk_stealth':
+                behavior = new MonkStealthBehavior(unit, params);
+                break;
+            case 'wizard_cast':
+                behavior = new WizardCastBehavior(unit, params);
+                break;
         }
         
         if (behavior) {
             this.behaviors.set(unit, behavior);
             // console.log(`🎯 Set ${unit.name || unit.type} behavior to: ${behaviorType}, total behaviors: ${this.behaviors.size}`);
+            // Start cooldown timer for specials
+            if (abilityDurations[behaviorType] !== undefined) {
+                const cd = abilityCooldowns[behaviorType] || 3000;
+                unit._abilityCooldowns[behaviorType] = now + cd;
+            }
         } else {
             // console.warn(`⚠️ Failed to create behavior for ${unit.name || unit.type}, type: ${behaviorType}`);
         }
@@ -1088,6 +1122,84 @@ class UnitBehaviorManager {
     clearBehavior(unit) {
         this.behaviors.delete(unit);
         this.setBehavior(unit, 'linger');
+    }
+}
+
+// Minimal special behaviors
+class BrigandSprintBehavior {
+    constructor(unit, params = {}) {
+        this.unit = unit;
+        this.params = params;
+        this.startTime = Date.now();
+        this.duration = params.duration || 2500;
+        this.mult = params.speedMultiplier || 2.0;
+        // Store and use a consistent base speed so repeated sprints don't drift
+        if (typeof unit._baseSpeed === 'undefined') {
+            unit._baseSpeed = unit.speed || 4;
+        }
+        this.baseSpeed = unit._baseSpeed;
+        unit.speed = this.baseSpeed * this.mult;
+    }
+    step() {
+        // Let existing movement behaviors handle movement; we just boost speed
+        if (Date.now() - this.startTime > this.duration) {
+            this.unit.speed = this.baseSpeed;
+            return true;
+        }
+        return false;
+    }
+    onReassignment() {
+        // Ensure speed is restored if this behavior is interrupted/replaced
+        this.unit.speed = this.baseSpeed;
+    }
+}
+
+class MonkStealthBehavior {
+    constructor(unit, params = {}) {
+        this.unit = unit;
+        this.params = params;
+        this.startTime = Date.now();
+        this.duration = params.duration || 4000;
+        // Apply stealth flag and simple visual hint if available
+        unit.isStealthed = true;
+        if (unit.mesh) {
+            unit._origAlpha = unit.mesh.visibility !== undefined ? unit.mesh.visibility : 1;
+            unit.mesh.visibility = 0.4;
+        }
+    }
+    step() {
+        if (Date.now() - this.startTime > this.duration) {
+            this.unit.isStealthed = false;
+            if (this.unit.mesh && this.unit._origAlpha !== undefined) {
+                this.unit.mesh.visibility = this.unit._origAlpha;
+            }
+            return true;
+        }
+        return false;
+    }
+    onReassignment() {
+        // Restore immediately if interrupted
+        this.unit.isStealthed = false;
+        if (this.unit.mesh && this.unit._origAlpha !== undefined) {
+            this.unit.mesh.visibility = this.unit._origAlpha;
+        }
+    }
+}
+
+class WizardCastBehavior {
+    constructor(unit, params = {}) {
+        this.unit = unit;
+        this.params = params;
+        this.startTime = Date.now();
+        this.duration = 400; // quick cast
+        // Optional: spawn simple VFX at target or unit position if available
+        if (window.fx && window.fx.createExplosion) {
+            const p = params.targetPoint ? new BABYLON.Vector3(params.targetPoint.x, 0, params.targetPoint.z) : (unit.mesh ? unit.mesh.position.clone() : new BABYLON.Vector3(0,0,0));
+            try { window.fx.createExplosion(p, 0.2); } catch (e) {}
+        }
+    }
+    step() {
+        return Date.now() - this.startTime > this.duration;
     }
 }
 

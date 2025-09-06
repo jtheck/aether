@@ -990,22 +990,34 @@ class UnitBehaviorManager {
         const now = Date.now();
         unit._abilityCooldowns = unit._abilityCooldowns || {};
         const abilityDurations = {
-            'wizard_cast': 400, // brief cast action
+            'wizard_cast': 2000, // spell casting animation
             'monk_stealth': (params && params.duration) || 4000,
-            'brigand_sprint': (params && params.duration) || 2500
+            'brigand_sprint': (params && params.duration) || 6000
         };
         const abilityCooldowns = {
             'wizard_cast': 3000,
             'monk_stealth': 8000,
-            'brigand_sprint': 6000
+            'brigand_sprint': 12000
         };
-        if (abilityDurations[behaviorType] !== undefined) {
+        
+        // Special abilities are modifiers - they don't replace existing behaviors
+        const specialAbilities = ['brigand_sprint', 'monk_stealth', 'wizard_cast', 'engineer_productivity_boost'];
+        const isSpecialAbility = specialAbilities.includes(behaviorType);
+        
+        if (isSpecialAbility) {
             const nextReady = unit._abilityCooldowns[behaviorType] || 0;
             if (now < nextReady) {
                 // On cooldown, ignore
                 return;
             }
+            // For special abilities, add them as modifiers instead of replacing behavior
+            this.addSpecialAbilityModifier(unit, behaviorType, params);
+            return;
         }
+        
+        // Special abilities are now modifiers that don't prevent movement commands
+        // They enhance existing behaviors rather than replacing them
+        
         // If unit has an existing behavior, call onReassignment if it exists
         const currentBehavior = this.behaviors.get(unit);
         if (currentBehavior && currentBehavior.onReassignment) {
@@ -1060,15 +1072,6 @@ class UnitBehaviorManager {
             default:
                 console.warn(`Unknown behavior type: ${behaviorType}`);
                 return;
-            case 'brigand_sprint':
-                behavior = new BrigandSprintBehavior(unit, params);
-                break;
-            case 'monk_stealth':
-                behavior = new MonkStealthBehavior(unit, params);
-                break;
-            case 'wizard_cast':
-                behavior = new WizardCastBehavior(unit, params);
-                break;
         }
         
         if (behavior) {
@@ -1105,6 +1108,20 @@ class UnitBehaviorManager {
                     this.behaviors.delete(unit);
                 }
             }
+            
+            // Step special ability modifiers
+            if (unit._specialModifiers) {
+                Object.keys(unit._specialModifiers).forEach(modifierType => {
+                    const modifier = unit._specialModifiers[modifierType];
+                    if (modifier && modifier.step()) {
+                        // Modifier completed, remove it
+                        delete unit._specialModifiers[modifierType];
+                        if (modifier.onReassignment) {
+                            modifier.onReassignment();
+                        }
+                    }
+                });
+            }
         });
     }
     
@@ -1123,6 +1140,43 @@ class UnitBehaviorManager {
         this.behaviors.delete(unit);
         this.setBehavior(unit, 'linger');
     }
+    
+    // Add a special ability as a modifier (doesn't replace existing behavior)
+    addSpecialAbilityModifier(unit, abilityType, params = {}) {
+        // Store the modifier on the unit
+        unit._specialModifiers = unit._specialModifiers || {};
+        
+        // Create the modifier behavior
+        let modifier;
+        switch (abilityType) {
+            case 'brigand_sprint':
+                modifier = new BrigandSprintBehavior(unit, params);
+                break;
+            case 'monk_stealth':
+                modifier = new MonkStealthBehavior(unit, params);
+                break;
+            case 'wizard_cast':
+                modifier = new WizardCastBehavior(unit, params);
+                break;
+            case 'engineer_productivity_boost':
+                modifier = new EngineerProductivityBoostBehavior(unit, params);
+                break;
+        }
+        
+        if (modifier) {
+            unit._specialModifiers[abilityType] = modifier;
+            // Set cooldown
+            const now = Date.now();
+            const abilityCooldowns = {
+                'wizard_cast': 3000,
+                'monk_stealth': 8000,
+                'brigand_sprint': 6000,
+                'engineer_productivity_boost': 5000
+            };
+            unit._abilityCooldowns[abilityType] = now + abilityCooldowns[abilityType];
+        }
+    }
+    
 }
 
 // Minimal special behaviors
@@ -1131,7 +1185,7 @@ class BrigandSprintBehavior {
         this.unit = unit;
         this.params = params;
         this.startTime = Date.now();
-        this.duration = params.duration || 2500;
+        this.duration = params.duration || 6000;
         this.mult = params.speedMultiplier || 2.0;
         // Store and use a consistent base speed so repeated sprints don't drift
         if (typeof unit._baseSpeed === 'undefined') {
@@ -1140,14 +1194,16 @@ class BrigandSprintBehavior {
         this.baseSpeed = unit._baseSpeed;
         unit.speed = this.baseSpeed * this.mult;
     }
+    
     step() {
-        // Let existing movement behaviors handle movement; we just boost speed
+        // Just check if sprint duration is over - let normal movement behaviors handle movement
         if (Date.now() - this.startTime > this.duration) {
             this.unit.speed = this.baseSpeed;
             return true;
         }
         return false;
     }
+    
     onReassignment() {
         // Ensure speed is restored if this behavior is interrupted/replaced
         this.unit.speed = this.baseSpeed;
@@ -1191,7 +1247,7 @@ class WizardCastBehavior {
         this.unit = unit;
         this.params = params;
         this.startTime = Date.now();
-        this.duration = 400; // quick cast
+        this.duration = 2000; // spell casting animation
         // Optional: spawn simple VFX at target or unit position if available
         if (window.fx && window.fx.createExplosion) {
             const p = params.targetPoint ? new BABYLON.Vector3(params.targetPoint.x, 0, params.targetPoint.z) : (unit.mesh ? unit.mesh.position.clone() : new BABYLON.Vector3(0,0,0));
@@ -1200,6 +1256,24 @@ class WizardCastBehavior {
     }
     step() {
         return Date.now() - this.startTime > this.duration;
+    }
+}
+
+class EngineerProductivityBoostBehavior {
+    constructor(unit, params = {}) {
+        this.unit = unit;
+        this.params = params;
+        this.startTime = Date.now();
+        this.duration = params.duration || 7000;
+        this.radius = params.radius || 6;
+        this.bonus = params.bonus || 1.5;
+    }
+    
+    step() {
+        if (Date.now() - this.startTime > this.duration) {
+            return true;
+        }
+        return false;
     }
 }
 

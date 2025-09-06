@@ -2,7 +2,10 @@
 
 // Add particle effects to buildings based on their type
 function addBuildingParticleEffects(building) {
+  console.log(`🔥 addBuildingParticleEffects called for ${building.name}`);
+  
   if (!window.fx || !building.mesh) {
+    console.log(`❌ Missing dependencies - fx: ${!!window.fx}, mesh: ${!!building.mesh}`);
     return;
   }
   
@@ -41,9 +44,10 @@ function addBuildingParticleEffects(building) {
       break;
       
     case 'tower':
+    case 'watchtower':
       // Add torch fire effect
       window.fx.attachParticleEffect(building, 'fire', 'torch_anchor', {
-        scale: 0.4, // Small torch flame
+        scale: 0.4,
         emitRate: 20,
         minSize: 0.3,
         maxSize: 0.8
@@ -244,6 +248,13 @@ function placeBuilding(buildingType, x, z, scene) {
       // Make it visible
       building.mesh.setEnabled(true);
       
+      // Add particle effects after a short delay to ensure mesh is fully ready (for towers)
+      if (building.name.toLowerCase() === 'tower' && window.fx) {
+        setTimeout(() => {
+          addBuildingParticleEffects(building);
+        }, 100); // Small delay to ensure mesh hierarchy is ready
+      }
+      
       // Create the animations
       const riseAnimation = new BABYLON.Animation(
         "buildingRise",
@@ -291,8 +302,19 @@ function placeBuilding(buildingType, x, z, scene) {
         building.mesh.position.y = 0;
         building.mesh.scaling.y = targetScale;
         
-        // Add particle effects based on building type
-        addBuildingParticleEffects(building);
+        // Add particle effects based on building type (for non-towers)
+        if (building.name.toLowerCase() !== 'tower') {
+          addBuildingParticleEffects(building);
+        }
+        
+        // Backup particle effect for towers (in case the first one failed)
+        if (building.name.toLowerCase() === 'tower' && window.fx) {
+          setTimeout(() => {
+            if (!building.particleEffects || building.particleEffects.length === 0) {
+              addBuildingParticleEffects(building);
+            }
+          }, 500);
+        }
       });
     }).catch(err => {
       console.error(`❌ Failed to load ${building.name} model:`, err);
@@ -1777,4 +1799,6 @@ if (typeof window !== 'undefined') {
     
     console.log(`🔧 Spawned ${engineerCount} engineers - they should start working at nearby buildings!`);
   };
+  
+  
 }

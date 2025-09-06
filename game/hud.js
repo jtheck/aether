@@ -103,47 +103,49 @@
       if (e.button === 1) { // Middle mouse button
         e.preventDefault();
         
-        const rect = hud.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
+        // Find the closest anchor to current mouse position (same as spacebar)
+        const anchors = {
+          n: document.getElementById('anchor_n'),
+          s: document.getElementById('anchor_s'),
+          e: document.getElementById('anchor_e'),
+          w: document.getElementById('anchor_w')
+        };
         
-        if (radialMenuVisible) {
-          // Menu is already open - determine which anchor this click would select
-          const anchors = {
-            top: { x: rect.width / 2, y: rect.height * 0.1 },
-            bottom: { x: rect.width / 2, y: rect.height * 0.9 },
-            left: { x: rect.width * 0.1, y: rect.height / 2 },
-            right: { x: rect.width * 0.9, y: rect.height / 2 }
-          };
-          
-          let minDist = Infinity;
-          let closestAnchor = 'bottom';
-          
-          for (const [name, pos] of Object.entries(anchors)) {
-            const dist = Math.sqrt((x - pos.x)**2 + (y - pos.y)**2);
-            if (dist < minDist) {
-              minDist = dist;
-              closestAnchor = name;
-            }
+        // Get anchor positions
+        const anchorPositions = {};
+        for (const [direction, anchor] of Object.entries(anchors)) {
+          if (anchor) {
+            const rect = anchor.getBoundingClientRect();
+            const canvasRect = hud.canvas.getBoundingClientRect();
+            anchorPositions[direction] = {
+              x: rect.left + rect.width / 2 - canvasRect.left,
+              y: rect.top + rect.height / 2 - canvasRect.top
+            };
           }
-          
-          if (closestAnchor === currentAnchor) {
-            // Same anchor - close menu
-            hud.hideRadialMenu();
-          } else {
-            // Different anchor - move menu
-            hud.showRadialMenu(x, y);
+        }
+        
+        // Find closest anchor to current mouse position
+        let minDist = Infinity;
+        let closestAnchor = 's'; // Default to south if no anchors found
+        
+        for (const [direction, pos] of Object.entries(anchorPositions)) {
+          const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+          if (dist < minDist) {
+            minDist = dist;
+            closestAnchor = direction;
           }
-        } else {
-          // Menu not open - show it
-          hud.showRadialMenu(x, y);
+        }
+        
+        // Click the closest anchor
+        if (anchors[closestAnchor]) {
+          anchors[closestAnchor].click();
         }
       }
     });
     
     // Don't auto-close menu on left/right clicks anymore
     // Menu items handle their own clicks via 3D mesh picking
-    // Only middle-click and spacebar control the menu now
+    // Middle mouse and spacebar both open the menu at closest anchor
     
     // Add spacebar support - now opens 2D menu instead of 3D radial menu
     document.addEventListener('keydown', function(e) {

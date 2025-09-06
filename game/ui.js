@@ -312,7 +312,7 @@ function getRandomColor() {
 
   // Double-click detection system
   let lastClickTime = 0;
-  let lastClickPosition = { x: 0, y: 0 };
+  let lastClickPosition = null; // Use null to indicate no previous click
   const DOUBLE_CLICK_DELAY = 300; // milliseconds
   const DOUBLE_CLICK_DISTANCE = 10; // pixels - how far apart clicks can be to count as double-click
   // Separate tracking for right mouse button double-click
@@ -370,7 +370,7 @@ function getRandomColor() {
           const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
           const wx = groundRight.x * screenDx * pixelsToWorld + groundForward.x * screenDy * pixelsToWorld;
           const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
-          const panSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5);
+          const panSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 0.3; // Reduced by 70%
           if (!window.cameraAnchor) window.cameraAnchor = cameraTarget.position.clone();
           window.cameraAnchor.x += wx * panSens;
           window.cameraAnchor.z += wz * panSens;
@@ -424,20 +424,22 @@ function getRandomColor() {
     // Handle double-click detection for left mouse button (mouse only; touch handled in touch.js)
     if (e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 0) { // Left click only
       const currentTime = Date.now();
-      const distance = Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2);
+      const distance = lastClickPosition ? Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2) : Infinity;
       
       // Check if this is a double-click
-      if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
+      if (lastClickPosition && currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
         // Double-click detected! Trigger special abilities on selected units
+        console.log('🖱️ Mouse double click detected - triggering special abilities');
         const pickResult = gfx.scene.pick(x, y);
         const worldPos = pickResult.hit ? pickResult.pickedPoint : null;
         if (window.ui && window.ui.triggerSpecialAbilityAt) {
+          console.log('🖱️ Calling triggerSpecialAbilityAt with worldPos:', worldPos);
           window.ui.triggerSpecialAbilityAt(worldPos);
         }
         
         // Reset double-click detection
         lastClickTime = 0;
-        lastClickPosition = { x: 0, y: 0 };
+        lastClickPosition = null;
         return;
       }
       
@@ -478,6 +480,16 @@ function getRandomColor() {
     
     // If event is from touch synthetic drag or selection, suppress terrain click -> no move orders
     if (e.suppressTerrainClick) {
+      return;
+    }
+    
+    // Check if we clicked on a menu element - if so, don't process as terrain click
+    const clickedElement = document.elementFromPoint(x, y);
+    if (clickedElement && (
+      clickedElement.closest('.radial-menu-button') ||
+      clickedElement.closest('[id^="anchor_"]') ||
+      clickedElement.closest('.radial-menu-label')
+    )) {
       return;
     }
     // Convert screen coordinates to world coordinates
@@ -629,7 +641,7 @@ function getRandomColor() {
           const dragDeltaY = e.clientY - playerDragStart.y;
           
           // Convert screen delta to world velocity (adjust sensitivity as needed)
-          const dragSensitivity = 0.05; // Increased sensitivity for more responsive movement
+          const dragSensitivity = 0.015; // Reduced from 0.05 to 0.015 (70% reduction)
           // Fix the coordinate mapping: screen right = world right, screen down = world forward
           playerDragVelocity.x = dragDeltaX * dragSensitivity; // Remove the negative sign
           playerDragVelocity.z = dragDeltaY * dragSensitivity; // Remove the negative sign
@@ -747,7 +759,7 @@ function getRandomColor() {
       // Don't prevent default - let both zoom AND rotation happen!
       
       // Handle zoom manually
-      const zoomSpeed = 0.085; // Adjust this for zoom sensitivity
+      const zoomSpeed = 0.025; // Reduced from 0.085 to 0.025 (70% reduction)
       const zoomAmount = INVERSEZOOM*delta * zoomSpeed;
       
       // Add zoom velocity instead of directly changing radius (momentum-based zoom)
@@ -761,9 +773,9 @@ function getRandomColor() {
     } else {
       // Normal scroll wheel = Camera rotation via momentum (no spring-back)
       e.preventDefault();
-      const rotationAmount = 0.001;
+      const rotationAmount = 0.0003; // Reduced from 0.001 to 0.0003 (70% reduction)
       const impulse = INVERSEROT * delta * rotationAmount;
-      const maxImpulse = 0.25;
+      const maxImpulse = 0.08; // Reduced from 0.25 to 0.08 (68% reduction)
       cameraVelocity.alpha += Math.max(-maxImpulse, Math.min(maxImpulse, impulse));
       // Keep beta fixed during wheel rotation
       cameraRotationTarget.beta = gfx.camera.beta;
@@ -1099,8 +1111,13 @@ function getRandomColor() {
 
   // Trigger unit special abilities at optional world position
   ui.triggerSpecialAbilityAt = function(worldPos) {
-    if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) return;
+    console.log('🎯 triggerSpecialAbilityAt called with worldPos:', worldPos);
+    if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) {
+      console.log('🎯 Missing dependencies - player:', !!window.player, 'getSelectedUnits:', !!window.player?.getSelectedUnits, 'behaviorManager:', !!window.behaviorManager);
+      return;
+    }
     const units = window.player.getSelectedUnits();
+    console.log('🎯 Selected units:', units.length);
     units.forEach(unit => {
       const type = unit.type || unit.name || '';
       if (/engineer/i.test(type)) {
@@ -1113,13 +1130,14 @@ function getRandomColor() {
       } else if (/brigand/i.test(type)) {
         window.behaviorManager.setBehavior(unit, 'brigand_sprint', {
           speedMultiplier: 2.25,
-          duration: 3000,
+          duration: 6000, // Match behavior manager duration
+          targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
           vfx: 'speed_trail'
         });
       } else if (/monk/i.test(type)) {
         window.behaviorManager.setBehavior(unit, 'monk_stealth', {
           invisibility: true,
-          duration: 5000,
+          duration: 4000, // Match behavior manager duration
           vfx: 'smoke_puff'
         });
       } else if (/wizard/i.test(type)) {

@@ -16,7 +16,7 @@
 
   // Progressive chunk loading queue
   const chunkQueue = [];
-  const CHUNKS_PER_FRAME = 1; // Only process 1 chunk per frame
+  const CHUNKS_PER_FRAME = 3; // Process 3 chunks per frame for faster loading
 
   // Load textures at the top so they're available everywhere
   let grassAtlasTexture, dirtAtlasTexture, rockAtlasTexture, sandAtlasTexture, waterAtlasTexture;
@@ -768,6 +768,22 @@ let pov2 = 240;
         index: 0
       };
     });
+    
+    // Pre-calculate material lookup table for faster tile type to material mapping
+    const materialLookup = new Array(96); // 0-95 tile types
+    for (let i = 0; i < 96; i++) {
+      if (i >= 80) {
+        materialLookup[i] = 'water';
+      } else if (i >= 60) {
+        materialLookup[i] = 'sand';
+      } else if (i >= 40) {
+        materialLookup[i] = 'rock';
+      } else if (i >= 20) {
+        materialLookup[i] = 'dirt';
+      } else {
+        materialLookup[i] = 'grass';
+      }
+    }
 
     // Generate vertices and UVs for each tile in the chunk
     for (let i = 0; i < chunk.tiles.length; i++) {
@@ -785,19 +801,14 @@ let pov2 = 240;
       const tileRow = tile.atlasRow;
       const tileCol = tile.atlasCol;
       
-      // Determine which material to use based on tile type
-      let materialKey;
-      if (tile.type >= 80) {
-        materialKey = 'water'; // Water atlas (types 80-95)
-      } else if (tile.type >= 60) {
-        materialKey = 'sand';  // Sand atlas (types 60-75)
-      } else if (tile.type >= 40) {
-        materialKey = 'rock';  // Rock atlas (types 40-55)
-      } else if (tile.type >= 20) {
-        materialKey = 'dirt';  // Dirt atlas (types 20-35)
-      } else {
-        materialKey = 'grass'; // Grass atlas (types 0-15)
-      }
+      // Pre-calculate UV coordinates to avoid repeated calculations
+      const u1 = tileCol * 0.25 + 0.01;
+      const u2 = (tileCol + 1) * 0.25 - 0.01;
+      const v1 = tileRow * 0.25 + 0.01;
+      const v2 = (tileRow + 1) * 0.25 - 0.01;
+      
+      // Determine which material to use based on tile type (using lookup table)
+      const materialKey = materialLookup[tile.type];
       
       // Add to the appropriate mesh
       const data = vertexData[materialKey];
@@ -821,11 +832,7 @@ let pov2 = 240;
       // Vertex positions (x, y, z) with individual height variation for each corner
       data.verts.push(x1, height1, z1, x2, height2, z1, x2, height3, z2, x1, height4, z2);
       
-      // UV coordinates (u, v) - increased offset to prevent seams
-      const u1 = tileCol * 0.25 + 0.01;
-      const u2 = (tileCol + 1) * 0.25 - 0.01;
-      const v1 = tileRow * 0.25 + 0.01;
-      const v2 = (tileRow + 1) * 0.25 - 0.01;
+      // UV coordinates (u, v) - pre-calculated above
       data.uvs.push(u1, v1, u2, v1, u2, v2, u1, v2);
       
       // Indices for 2 triangles
@@ -845,25 +852,17 @@ let pov2 = 240;
         vertexDataObj.positions = data.verts;
         vertexDataObj.indices = data.indices;
         vertexDataObj.uvs = data.uvs;
-
-
-//         // ... existing code ...
-// const vertexCount = data.verts.length / 3;
-// const maxIndex = data.indices.length ? Math.max.apply(null, data.indices) : -1;
-
-// if (data.verts.length % 3 !== 0) console.error('positions not multiple of 3', key);
-// if (data.uvs.length !== vertexCount * 2) console.error('uv length mismatch', key, data.uvs.length, 'vs', vertexCount * 2);
-// if (maxIndex >= vertexCount) console.error('index out of range', key, maxIndex, '>=', vertexCount);
-// // ... existing code ...
-// // vertexDataObj.applyToMesh(meshes[key]);
+        
+        // Apply vertex data first
         vertexDataObj.applyToMesh(meshes[key]);
         
-        // Compute normals after applying vertex data
+        // Compute normals more efficiently
         const normals = new Array(data.verts.length);
         BABYLON.VertexData.ComputeNormals(data.verts, data.indices, normals);
         meshes[key].setVerticesData(BABYLON.VertexBuffer.NormalKind, normals);
         
-        meshes[key].material = sharedMaterials[key]; // Use shared materials
+        // Assign material (pre-created shared materials)
+        meshes[key].material = sharedMaterials[key];
       }
     });
 

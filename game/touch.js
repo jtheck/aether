@@ -3,12 +3,16 @@
 
   // Public API
   touch.init = function initTouchManager(canvas, options) {
-    if (!canvas || touch._initialized) return;
+    if (!canvas || touch._initialized) {
+      console.log('📱 Touch init skipped - canvas:', !!canvas, 'initialized:', touch._initialized);
+      return;
+    }
+    console.log('📱 Touch system initializing...');
 
     const config = Object.assign({
       tapMaxTimeMs: 250,
       tapMaxMovePx: 12,
-      doubleTapDelayMs: 300,
+      doubleTapDelayMs: 500, // Increased from 300ms to 500ms for better mobile detection
       twoFingerTapMaxTimeMs: 300,
       twoFingerTapMaxMovePx: 16,
       twoFingerDoubleTapCenterMaxMovePx: 80,
@@ -63,7 +67,7 @@
 
     // Single tap/double tap tracking
     let lastSingleTapTime = 0;
-    let lastSingleTapPos = { x: 0, y: 0 };
+    let lastSingleTapPos = null; // Use null to indicate no previous tap
 
     // Two-finger tap/double-tap tracking
     let lastTwoTapTime = 0;
@@ -145,8 +149,13 @@
     }
 
     function screenToWorld(screenX, screenY) {
-      if (!window.ui || !window.ui.getWorldPositionFromScreen) return null;
-      return window.ui.getWorldPositionFromScreen(screenX, screenY);
+      if (!window.ui || !window.ui.getWorldPositionFromScreen) {
+        console.log('📱 screenToWorld failed - ui:', !!window.ui, 'getWorldPositionFromScreen:', !!window.ui?.getWorldPositionFromScreen);
+        return null;
+      }
+      const worldPos = window.ui.getWorldPositionFromScreen(screenX, screenY);
+      console.log('📱 screenToWorld result:', worldPos, 'for screen coords:', screenX, screenY);
+      return worldPos;
     }
 
     function sendSyntheticPointer(type, clientX, clientY, button, options) {
@@ -664,16 +673,21 @@
             ps.syntheticDownEmitted = false;
           } else {
             const timeSinceLast = now() - lastSingleTapTime;
-            const distSinceLastSq = distanceSq(clientX, clientY, lastSingleTapPos.x, lastSingleTapPos.y);
-            if (timeSinceLast < config.doubleTapDelayMs && distSinceLastSq < (config.tapMaxMovePx * config.tapMaxMovePx)) {
+            const distSinceLastSq = lastSingleTapPos ? distanceSq(clientX, clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
+            console.log('📱 Tap detection - current:', {x: clientX, y: clientY}, 'last:', lastSingleTapPos, 'timeSinceLast:', timeSinceLast, 'doubleTapDelayMs:', config.doubleTapDelayMs, 'distSinceLastSq:', distSinceLastSq, 'tapMaxMovePx^2:', config.tapMaxMovePx * config.tapMaxMovePx);
+            if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distSinceLastSq < (config.tapMaxMovePx * config.tapMaxMovePx)) {
               // Double tap: trigger special ability at world position
+              console.log('📱 Mobile double tap detected - triggering special abilities');
               const worldPos = screenToWorld(clientX, clientY);
               if (worldPos && window.ui && window.ui.triggerSpecialAbilityAt) {
+                console.log('📱 Calling triggerSpecialAbilityAt with worldPos:', worldPos);
                 window.ui.triggerSpecialAbilityAt(worldPos);
+              } else {
+                console.log('📱 Failed to trigger special ability - worldPos:', worldPos, 'ui:', !!window.ui, 'triggerSpecialAbilityAt:', !!window.ui?.triggerSpecialAbilityAt);
               }
               // Reset double-tap tracking so a third tap doesn't chain
               lastSingleTapTime = 0;
-              lastSingleTapPos = { x: 0, y: 0 };
+              lastSingleTapPos = null;
             } else {
               // Single tap: synthesize a click
               sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
@@ -681,6 +695,7 @@
               // Update last tap for double-tap detection
               lastSingleTapTime = now();
               lastSingleTapPos = { x: clientX, y: clientY };
+              console.log('📱 Single tap recorded at:', lastSingleTapPos, 'time:', lastSingleTapTime);
             }
           }
         } else {
@@ -800,6 +815,7 @@
     canvas.addEventListener('pointermove', onPointerMove, { passive: false });
     canvas.addEventListener('pointerup', onPointerUp, { passive: false });
     canvas.addEventListener('pointercancel', onPointerCancel, { passive: false });
+    console.log('📱 Touch event listeners registered');
 
     touch._initialized = true;
   };

@@ -362,6 +362,16 @@ Field.prototype.getTile = function(x, y) {
 
   // Method to get height variation for terrain
   Field.prototype.getHeightVariation = function(x, y, amplitude = .11) {
+    // Cache for height variations to avoid recalculating
+    if (!this._heightCache) {
+      this._heightCache = new Map();
+    }
+    
+    const cacheKey = `${Math.floor(x)},${Math.floor(y)}`;
+    if (this._heightCache.has(cacheKey)) {
+      return this._heightCache.get(cacheKey) * amplitude;
+    }
+    
     // Fast fractal noise using simple hash as base
     let total = 0;
     let frequency = 1;
@@ -378,12 +388,6 @@ Field.prototype.getTile = function(x, y) {
       hash = ((hash << 13) ^ (hash + Math.floor(x * frequency) * 19349663)) >>> 0;
       hash = ((hash << 13) ^ (hash + Math.floor(y * frequency) * 73856093)) >>> 0;
       
-      // const noiseValue = (hash / 0x7fffffff) * 2 - 1;
-      // Landscape noise: base(0.05) + medium(0.03) + fine(0.07) detail
-      // Lower values = more spread out terrain, Higher values = more compressed
-      // 0.05 = large features, 0.03 = medium features, 0.07 = fine details
-      // const noiseValue = Math.sin(hash * 0.05) + Math.sin(hash * 0.03) * 0.5 + Math.sin(hash * 0.07) * 0.25;
-      // const noiseValue = Math.sin(hash * 0.1) + Math.sin(hash * 0.06) * 0.5 + Math.sin(hash * 0.14) * 0.25;
       const noiseValue = Math.sin(hash * 0.5) + Math.sin(hash * 0.1) * 0.5 + Math.sin(hash * 0.01) * 0.25;
 
       total += noiseValue * amplitude_octave;
@@ -394,6 +398,10 @@ Field.prototype.getTile = function(x, y) {
     }
     
     const finalNoise = total / maxValue;
+    
+    // Cache the result (without amplitude)
+    this._heightCache.set(cacheKey, finalNoise);
+    
     return finalNoise * amplitude;
   }
 
@@ -408,7 +416,7 @@ Field.prototype.getTile = function(x, y) {
 
 // Add chunk management to Field class
 Field.prototype.chunks = new Map(); // Store chunk data + meshes
-Field.prototype.chunkSize = 13; // 32x32 tiles per chunk for larger visible areas
+Field.prototype.chunkSize = 16; // 16x16 tiles per chunk for better performance
 
 Field.prototype.getChunk = function(chunkX, chunkZ) {
   const chunkKey = `${chunkX},${chunkZ}`;
@@ -531,8 +539,8 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
 
 
 let tilect = 33; // menu screen
-// tilect = 64; // 1/4 zone
-tilect = 128; // half zone
+tilect = 64; // 1/4 zone
+// tilect = 128; // half zone
 // tilect = 256; // full zone
 let liveField = new Field({width: tilect, height: tilect, seed: 52});
 

@@ -315,6 +315,9 @@ function getRandomColor() {
   let lastClickPosition = { x: 0, y: 0 };
   const DOUBLE_CLICK_DELAY = 300; // milliseconds
   const DOUBLE_CLICK_DISTANCE = 10; // pixels - how far apart clicks can be to count as double-click
+  // Separate tracking for right mouse button double-click
+  let lastRightClickTime = 0;
+  let lastRightClickPosition = { x: 0, y: 0 };
   
   // RMB pan state (anchor-based, matches touch pan)
   let rmbPanActive = false;
@@ -330,11 +333,24 @@ function getRandomColor() {
     const y = e.clientY - rect.top;
     
     // RMB pan (hold RMB to pan like touch)
-    if (e.type === 'pointerdown' && e.button === 2) {
+    if (e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 2) {
+      // Detect double right-click to clear selection (and block RMB pan)
+      const currentTime = Date.now();
+      const distance = Math.sqrt((x - lastRightClickPosition.x) ** 2 + (y - lastRightClickPosition.y) ** 2);
+      if (currentTime - lastRightClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
+        if (window.player && window.player.clearSelection) window.player.clearSelection();
+        lastRightClickTime = 0;
+        lastRightClickPosition = { x: 0, y: 0 };
+        // Prevent RMB pan from starting on this double-click
+        e.preventDefault();
+        return;
+      }
+      lastRightClickTime = currentTime;
+      lastRightClickPosition = { x, y };
       rmbPanActive = true;
       rmbLastScreen.x = e.clientX;
       rmbLastScreen.y = e.clientY;
-    } else if (e.type === 'pointermove' && rmbPanActive) {
+    } else if (e.pointerType === 'mouse' && e.type === 'pointermove' && rmbPanActive) {
       if (gfx && gfx.camera && gfx.canvas && gfx.cameraTarget) {
         const cam = gfx.camera;
         const rectC = gfx.canvas.getBoundingClientRect();
@@ -356,7 +372,7 @@ function getRandomColor() {
           window.cameraAnchor.z += wz * panSens;
         }
       }
-    } else if (e.type === 'pointerup' && e.button === 2) {
+    } else if (e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
       rmbPanActive = false;
     }
 
@@ -401,8 +417,8 @@ function getRandomColor() {
       }
     }
     
-    // Handle double-click detection for left mouse button
-    if (e.type === 'pointerdown' && e.button === 0) { // Left click only
+    // Handle double-click detection for left mouse button (mouse only; touch handled in touch.js)
+    if (e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 0) { // Left click only
       const currentTime = Date.now();
       const distance = Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2);
       
@@ -448,33 +464,7 @@ function getRandomColor() {
       }
     }
     
-    // Handle double-click detection for right mouse button (menu)
-    if (e.type === 'pointerdown' && e.button === 2) { // Right click only
-      const currentTime = Date.now();
-      const distance = Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2);
-
-      // Check if this is a double-click
-      if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
-        // Double-click detected! Always show/reposition the 3D radial menu
-        if (window.hud && window.hud.showRadialMenu) {
-          const screenX = e.clientX;
-          const screenY = e.clientY;
-          
-          // Always show the menu at the new location (never close it)
-          // console.log('🔄 Right double-click: showing radial menu at new location');
-          window.hud.showRadialMenu(screenX, screenY);
-        }
-        
-        // Reset double-click detection
-        lastClickTime = 0;
-        lastClickPosition = { x: 0, y: 0 };
-        return;
-      }
-
-      // Update last click info for next potential double-click
-      lastClickTime = currentTime;
-      lastClickPosition = { x, y };
-    }
+    // Disable RMB double-click radial menu to avoid gesture interference
     
     // Check if the lasso system should handle this click (i.e., it was a drag selection)
     if (window.lassoSelection && window.lassoSelection.shouldHandleClick && window.lassoSelection.shouldHandleClick()) {
@@ -485,6 +475,10 @@ function getRandomColor() {
     // Convert screen coordinates to world coordinates
     // All models are non-pickable so ray will pass through to terrain
     const pickResult = gfx.scene.pick(x, y);
+    // If event is from touch synthetic drag or selection, suppress terrain click -> no move orders
+    if (e.suppressTerrainClick) {
+      return;
+    }
     
     // console.log('🎯 Field click debug:', { 
     //   hit: pickResult.hit, 
@@ -497,7 +491,7 @@ function getRandomColor() {
     
     if (pickResult.hit) {
       // Handle different types of clicks
-      if (e.type === 'pointerdown') {
+      if (e.type === 'pointerup' && e.button === 0) {
         // Left click - could be for placing tiles, selecting objects, etc.
         
         // If clicking on terrain, get precise tile coordinates

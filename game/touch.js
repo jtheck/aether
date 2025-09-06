@@ -11,9 +11,12 @@
       doubleTapDelayMs: 300,
       twoFingerTapMaxTimeMs: 300,
       twoFingerTapMaxMovePx: 16,
+      twoFingerDoubleTapCenterMaxMovePx: 80,
       rotateSensitivity: 0.4,
       pinchSensitivity: 0.85,
       panSensitivity: 15.0,
+      dragStartThresholdPx: 14,
+      suppressSingleTapAfterTwoFingerMs: 300,
       // Gesture unification
       dominantOnly: false,
       dampSecondary: 0.6,
@@ -63,6 +66,9 @@
     // Two-finger tap/double-tap tracking
     let lastTwoTapTime = 0;
     let lastTwoTapPos = { x: 0, y: 0 };
+    // Guard to prevent single-tap actions when a 2-finger tap/double-tap is recognized
+    let skipNextSingleTap = false;
+    let suppressSingleTapUntil = 0;
 
     // Gesture state when 2+ pointers
     let gestureActive = false;
@@ -83,7 +89,8 @@
         y: e.clientY,
         startTime: now(),
         lastTime: now(),
-        isDown: true
+        isDown: true,
+        syntheticDownEmitted: false
       };
     }
 
@@ -131,7 +138,7 @@
       return window.ui.getWorldPositionFromScreen(screenX, screenY);
     }
 
-    function sendSyntheticPointer(type, clientX, clientY, button) {
+    function sendSyntheticPointer(type, clientX, clientY, button, options) {
       // Synthesize a minimal PointerEvent-like object for ui.handlePointer
       if (!window.ui || !window.ui.handlePointer) return;
       const synthetic = {
@@ -139,39 +146,17 @@
         clientX: clientX,
         clientY: clientY,
         button: button,
+        pointerType: 'touch',
+        suppressTerrainClick: !!(options && options.suppressTerrainClick),
         preventDefault: function() {},
         stopPropagation: function() {}
       };
       window.ui.handlePointer(synthetic);
     }
 
-    function moveSelectedUnitsToScreen(x, y, runInstead = false) {
-      if (!window.gfx || !window.gfx.scene || !window.player || !window.player.getSelectedUnits) return;
-      const pickResult = window.gfx.scene.pick(x, y);
-      if (pickResult && pickResult.hit && pickResult.pickedMesh && pickResult.pickedMesh.name && pickResult.pickedMesh.name.includes('Mesh')) {
-        const worldPos = pickResult.pickedPoint;
-        const selectedUnits = window.player.getSelectedUnits();
-        if (!selectedUnits || selectedUnits.length === 0) return;
-        selectedUnits.forEach(unit => {
-          if (window.behaviorManager && unit) {
-            const offsetX = worldPos.x + (Math.random() - 0.5) * 2;
-            const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
-            const targetPoint = { x: offsetX, z: offsetZ };
-            if (runInstead) {
-              window.behaviorManager.setBehavior(unit, 'run', { targetPoint: targetPoint, runSpeed: (unit.speed || 20) * 1.5 });
-            } else {
-              window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: targetPoint, walkSpeed: 6.0 });
-            }
-          }
-        });
-      }
-    }
+    // Removed direct moveSelectedUnitsToScreen flow; defer to ui.handlePointer via synthetic events
 
-    function showMoveOptionsUIAt(x, y) {
-      if (window.hud && window.hud.showRadialMenu) {
-        window.hud.showRadialMenu(x, y);
-      }
-    }
+    // Removed: showMoveOptionsUIAt (single-finger double-tap now triggers special ability)
 
     function fireTwoFingerTap(x, y) {
       // Simulate a right-click tap (down + up)
@@ -246,6 +231,19 @@
       const [a, b] = pair;
       const cNow = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const da = computeDistanceAndAngle(a, b);
+      
+      // If both fingers look like a quick tap (low move, short time), suppress gesture to avoid interfering with 2-tap or double 2-tap
+      const aMoveSq = distanceSq(a.startX, a.startY, a.x, a.y);
+      const bMoveSq = distanceSq(b.startX, b.startY, b.x, b.y);
+      const aDt = now() - a.startTime;
+      const bDt = now() - b.startTime;
+      const tapMoveSq = (window.touchConfig ? window.touchConfig.twoFingerTapMaxMovePx : 32) ** 2; // relaxed
+      const tapTimeMs = (window.touchConfig ? window.touchConfig.twoFingerTapMaxTimeMs : 350); // slightly relaxed
+      const bothTapLike = (aMoveSq <= tapMoveSq && bMoveSq <= tapMoveSq && aDt <= tapTimeMs && bDt <= tapTimeMs);
+      if (bothTapLike) {
+        // Do not allow commit or any camera nudge; wait for pointerup to evaluate 2-finger tap/double-tap
+        return;
+      }
       
       // Movement thresholds
       const pinchDelta = Math.abs(da.dist - gestureInitial.distance);
@@ -448,22 +446,20 @@
         pointerOrder.push(e.pointerId);
       }
 
-      // If we were doing a single-finger drag and a second finger comes down, end the drag
+      // If we were doing a single-finger drag and a second finger comes down, end the drag ONLY if we had emitted synthetic down
       if (activePointers.size === 2) {
-        // Send an up to close any synthetic drag
         if (pointerOrder.length > 0) {
           const primary = activePointers.get(pointerOrder[0]);
-          if (primary) sendSyntheticPointer('pointerup', primary.x, primary.y, 0);
+          if (primary && primary.syntheticDownEmitted) {
+            sendSyntheticPointer('pointerup', primary.x, primary.y, 0, { suppressTerrainClick: true });
+            primary.syntheticDownEmitted = false;
+          }
         }
       }
 
       beginGestureIfNeeded();
 
-      // If only one finger, start a synthetic left button down for drag/selection
-      if (activePointers.size === 1) {
-        const ps = activePointers.get(e.pointerId);
-        if (ps) sendSyntheticPointer('pointerdown', ps.x, ps.y, 0);
-      }
+      // If only one finger, defer synthetic left button down until drag threshold is crossed
     }
 
     function onPointerMove(e) {
@@ -515,8 +511,23 @@
       } else if (activePointers.size === 1) {
         // During building placement, do not emit synthetic moves (reserved for preview)
         if (window.buildingSystem && window.buildingSystem.isPlacing) return;
-        // Single-finger drag -> synthetic left button move
-        if (ps) sendSyntheticPointer('pointermove', ps.x, ps.y, 0);
+        // Single-finger drag -> emit synthetic down only after movement exceeds threshold, then send moves
+        if (ps) {
+          const dx = ps.x - ps.startX;
+          const dy = ps.y - ps.startY;
+          const movedSq = dx*dx + dy*dy;
+          const thresh = config.dragStartThresholdPx;
+          if (!ps.syntheticDownEmitted && movedSq >= thresh*thresh) {
+            // If a two-finger double-tap was just recognized, don't allow lasso to start immediately (prevents sticky lasso)
+            if (now() >= suppressSingleTapUntil) {
+              sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
+              ps.syntheticDownEmitted = true;
+            }
+          }
+          if (ps.syntheticDownEmitted) {
+            sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+          }
+        }
       }
     }
 
@@ -558,6 +569,11 @@
 
       if (activePointers.size === 0) {
         // Single finger scenario (no other pointers active)
+        if (skipNextSingleTap || now() < suppressSingleTapUntil) {
+          // Consume the skip and avoid triggering any single-tap actions
+          skipNextSingleTap = false;
+          return;
+        }
         if (dt <= config.tapMaxTimeMs && moveSq <= (config.tapMaxMovePx * config.tapMaxMovePx)) {
           // If building placement mode, tap places the building
           if (window.buildingSystem && window.buildingSystem.isPlacing) {
@@ -570,24 +586,37 @@
               return;
             }
           }
-          const timeSinceLast = now() - lastSingleTapTime;
-          const distSinceLastSq = distanceSq(clientX, clientY, lastSingleTapPos.x, lastSingleTapPos.y);
-          if (timeSinceLast < config.doubleTapDelayMs && distSinceLastSq < (config.tapMaxMovePx * config.tapMaxMovePx)) {
-            // Double tap: bring up move options UI
-            showMoveOptionsUIAt(clientX, clientY);
-            // Reset double-tap tracking so a third tap doesn't chain
-            lastSingleTapTime = 0;
-            lastSingleTapPos = { x: 0, y: 0 };
+          // If we emitted a synthetic drag, close it and skip tap logic
+          if (ps.syntheticDownEmitted) {
+            sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
+            ps.syntheticDownEmitted = false;
           } else {
-            // Single tap: move selected units to location
-            moveSelectedUnitsToScreen(clientX, clientY, false);
-            // Update last tap for double-tap detection
-            lastSingleTapTime = now();
-            lastSingleTapPos = { x: clientX, y: clientY };
+            const timeSinceLast = now() - lastSingleTapTime;
+            const distSinceLastSq = distanceSq(clientX, clientY, lastSingleTapPos.x, lastSingleTapPos.y);
+            if (timeSinceLast < config.doubleTapDelayMs && distSinceLastSq < (config.tapMaxMovePx * config.tapMaxMovePx)) {
+              // Double tap: trigger special ability at world position
+              const worldPos = screenToWorld(clientX, clientY);
+              if (worldPos && window.ui && window.ui.triggerSpecialAbilityAt) {
+                window.ui.triggerSpecialAbilityAt(worldPos);
+              }
+              // Reset double-tap tracking so a third tap doesn't chain
+              lastSingleTapTime = 0;
+              lastSingleTapPos = { x: 0, y: 0 };
+            } else {
+              // Single tap: synthesize a click
+              sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
+              sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
+              // Update last tap for double-tap detection
+              lastSingleTapTime = now();
+              lastSingleTapPos = { x: clientX, y: clientY };
+            }
           }
         } else {
-          // End of drag
-          sendSyntheticPointer('pointerup', clientX, clientY, 0);
+          // End of drag if one was started
+          if (ps.syntheticDownEmitted) {
+            sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
+            ps.syntheticDownEmitted = false;
+          }
         }
       } else if (activePointers.size === 1) {
         // If exactly one other finger remains, consider two-finger tap
@@ -621,36 +650,41 @@
         const moveSq = distanceSq(ps.startX, ps.startY, ps.x, ps.y);
         recordQuickUp(ps.x, ps.y, dt, moveSq);
       }
-      _onPointerUpOriginal(e);
 
-      // When there are no active pointers, check if we have a two-finger tap (two quick-ups close in time/space)
-      if (activePointers.size === 0 && recentQuickUps.length >= 2) {
+      // Pre-emptively detect two-finger tap/double-tap BEFORE original handler (so we can suppress single-tap moves)
+      if (recentQuickUps.length >= 2) {
         const a = recentQuickUps[recentQuickUps.length - 1];
         const b = recentQuickUps[recentQuickUps.length - 2];
-        const distSq = distanceSq(a.x, a.y, b.x, b.y);
         const timeDiff = Math.abs(a.t - b.t);
-        if (timeDiff < config.twoFingerTapMaxTimeMs && distSq < (config.twoFingerTapMaxMovePx * config.twoFingerTapMaxMovePx * 4)) {
+        if (timeDiff < config.twoFingerTapMaxTimeMs) {
           const cx = (a.x + b.x) / 2;
           const cy = (a.y + b.y) / 2;
-          // For two-finger gestures: single two-finger tap = skip; double two-finger tap = clear selection
           const timeSinceLastTwo = now() - lastTwoTapTime;
           const distTwoSq = distanceSq(cx, cy, lastTwoTapPos.x, lastTwoTapPos.y);
-          if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < (config.twoFingerTapMaxMovePx * config.twoFingerTapMaxMovePx)) {
-            // Double 2-tap: clear active selection
+          const centerThresh = (config.twoFingerDoubleTapCenterMaxMovePx || 80);
+          if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < (centerThresh * centerThresh)) {
+            // Double 2-tap: clear active selection immediately
             if (window.player && window.player.clearSelection) {
               window.player.clearSelection();
             }
+            // Suppress any ensuing single-tap/lasso start
+            skipNextSingleTap = true;
+            suppressSingleTapUntil = now() + (config.suppressSingleTapAfterTwoFingerMs || 300);
             lastTwoTapTime = 0;
             lastTwoTapPos = { x: 0, y: 0 };
           } else {
-            // Single 2-tap: skip (do nothing), just record
+            // Single 2-tap: record center and suppress single-tap briefly so it remains a no-op
             lastTwoTapTime = now();
             lastTwoTapPos = { x: cx, y: cy };
+            suppressSingleTapUntil = now() + Math.max(150, config.twoFingerTapMaxTimeMs || 300);
+            skipNextSingleTap = true;
           }
-          // Clear window
+          // Consume the quick-ups so we don't double-handle after original
           recentQuickUps.length = 0;
         }
       }
+
+      _onPointerUpOriginal(e);
     };
 
     function onPointerCancel(e) {

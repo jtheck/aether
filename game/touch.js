@@ -340,7 +340,7 @@
           const deltaAngle = rawAngleDelta;
           // Normalize to [-PI, PI]
           const normalized = ((deltaAngle + Math.PI) % (2*Math.PI)) - Math.PI;
-          const deltaAlpha = -normalized * config.rotateSensitivity;
+          const deltaAlpha = normalized * config.rotateSensitivity;
           const maxAlphaStep = 1.25;
           let step = Math.max(-maxAlphaStep, Math.min(maxAlphaStep, deltaAlpha));
           step *= (primary === 'rotate' ? 1 : config.dampSecondary);

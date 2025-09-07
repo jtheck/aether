@@ -12,7 +12,7 @@
   // Configuration
   const DRAG_THRESHOLD = 5; // pixels - minimum movement to start drag
   const CLICK_TIMEOUT = 200; // ms - time to wait before treating as click
-  // const USE_2D_SELECTION = true; // Set to false to use 3D fence selection
+  // const !USE_3D_HUD = true; // Set to false to use 3D fence selection
   
   // State tracking
   let dragStartTime = 0;
@@ -29,24 +29,69 @@
     // console.log("🎯 Lasso selection system initialized");
     // Create selection box mesh (invisible initially)
     createSelectionBox();
+    
+    // If selection box wasn't created, try again after a short delay
+    if (!selectionBox) {
+      setTimeout(() => {
+        console.log('Retrying selection box initialization...');
+        createSelectionBox();
+      }, 100);
+    }
+  };
+  
+  // Reinitialize lasso when HUD mode changes
+  lasso.reinit = function() {
+    // console.log('Reinitializing lasso for HUD mode change...');
+    
+    // Clean up existing selection box
+    if (selectionBox) {
+      if (Array.isArray(selectionBox)) {
+        // 3D mode cleanup
+        selectionBox.forEach(plane => plane.dispose());
+      } else if (selectionBox.style) {
+        // 2D mode cleanup
+        selectionBox.style.display = 'none';
+      }
+      selectionBox = null;
+    }
+    
+    // Create new selection box for current mode
+    createSelectionBox();
+    
+    // If selection box wasn't created, try again after a short delay
+    if (!selectionBox) {
+      setTimeout(() => {
+        console.log('Retrying selection box reinitialization...');
+        createSelectionBox();
+      }, 100);
+    }
   };
   
   // Create the visual selection box
   function createSelectionBox() {
-    if (USE_2D_SELECTION) {
+    if (!USE_3D_HUD) {
       // Get the HTML selection box element
       selectionBox = document.getElementById('lasso-selection-box');
       if (!selectionBox) {
-        console.error('Selection box element not found');
+        // console.error('Selection box element not found - 2D lasso selection will not work');
+        // console.error('Available elements:', document.querySelectorAll('[id*="lasso"]'));
+        selectionBox = null; // Ensure it's explicitly null
         return;
       }
       selectionBox.style.display = 'none';
+      // console.log('2D selection box initialized successfully');
       return;
     }
     
     // 3D Selection Box Code
     // Create 4 vertical planes around the edges for a fence-like selection box
     // These will face the camera so they're always visible
+    if (!window.gfx || !window.gfx.scene) {
+      // console.error('3D selection box creation failed: gfx.scene not available');
+      selectionBox = null;
+      return;
+    }
+    
     const lineMaterial = new BABYLON.StandardMaterial("selectionLineMat", window.gfx.scene);
     lineMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1); // Cyan
     lineMaterial.alpha = 0.3; // Semi-transparent
@@ -108,7 +153,7 @@
       plane.isPickable = false;
     });
     
-    // console.log("🎯 3D fence selection box created (camera-facing)");
+    // console.log("3D fence selection box created successfully with", planes.length, "planes");
   }
   
   // Handle left mouse button down
@@ -127,8 +172,24 @@
     
     // Show selection box at start point
     if (selectionBox) {
-      selectionBox.isVisible = true;
+      if (USE_3D_HUD) {
+        // 3D mode - selectionBox should be an array of planes
+        if (Array.isArray(selectionBox)) {
+          selectionBox.forEach(plane => {
+            plane.isVisible = true;
+          });
+        } else {
+          // console.error('3D selection box is not an array:', selectionBox);
+          return false;
+        }
+      } else {
+        // 2D mode - selectionBox is a single element
+        selectionBox.isVisible = true;
+      }
       updateSelectionBox();
+    } else {
+      // console.warn('Selection box not initialized');
+      return false;
     }
     
     // Don't claim we're handling the event yet - wait to see if it becomes a drag
@@ -251,9 +312,20 @@
   
   // Update the visual selection box
   function updateSelectionBox() {
-    if (!selectionBox || !window.gfx) return;
+    if (!selectionBox) {
+      // console.warn('Selection box not initialized');
+      return;
+    }
+    
+    if (!window.gfx) return;
 
-    if (USE_2D_SELECTION) {
+    if (!USE_3D_HUD) {
+      // 2D mode - selectionBox should be an HTML element
+      if (!selectionBox.style) {
+        // console.error('Selection box is not an HTML element in 2D mode');
+        return;
+      }
+      
       // Calculate rectangle dimensions
       const left = Math.min(startPoint.x, endPoint.x);
       const top = Math.min(startPoint.y, endPoint.y);
@@ -402,7 +474,7 @@
       return worldPos;
     }
     
-    // console.warn("🎯 Screen to world failed for:", { x: screenX, y: screenY });
+    console.warn("🎯 Screen to world failed for:", { x: screenX, y: screenY });
     return null;
   }
   
@@ -509,7 +581,7 @@
     isSelecting = false;
     isDragActive = false;
     
-    if (USE_2D_SELECTION) {
+    if (!USE_3D_HUD) {
       if (selectionBox) {
         selectionBox.style.display = 'none';
       }
@@ -527,7 +599,7 @@
   
   // Dispose of lasso resources
   lasso.dispose = function() {
-    if (USE_2D_SELECTION) {
+    if (!USE_3D_HUD) {
       if (selectionBox) {
         selectionBox.style.display = 'none';
         selectionBox = null;

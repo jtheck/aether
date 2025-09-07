@@ -2,10 +2,10 @@
 
 // Add particle effects to buildings based on their type
 function addBuildingParticleEffects(building) {
-  console.log(`🔥 addBuildingParticleEffects called for ${building.name}`);
+  // // console.log(`🔥 addBuildingParticleEffects called for ${building.name}`);
   
   if (!window.fx || !building.mesh) {
-    console.log(`❌ Missing dependencies - fx: ${!!window.fx}, mesh: ${!!building.mesh}`);
+    // // console.log(`❌ Missing dependencies - fx: ${!!window.fx}, mesh: ${!!building.mesh}`);
     return;
   }
   
@@ -170,7 +170,7 @@ const buildingModelPools = new Map(); // path -> array of model instances
 function Building(buildingType, position, options = {}) {
   const def = BuildingTypes[buildingType];
   if (!def) {
-    console.error(`Unknown building type: ${buildingType}`);
+    // console.error(`Unknown building type: ${buildingType}`);
     return null;
   }
   
@@ -196,18 +196,18 @@ function Building(buildingType, position, options = {}) {
   // 3D model reference
   this.mesh = null;
   
-  // console.log(`Created ${this.name} at position`, this.position);
+  // // console.log(`Created ${this.name} at position`, this.position);
 }
 
 // Place a specific building at coordinates
 function placeBuilding(buildingType, x, z, scene) {
-  // console.log(`🏗️ Placing building: ${buildingType} at tile (${x}, ${z})`);
+  // // console.log(`🏗️ Placing building: ${buildingType} at tile (${x}, ${z})`);
   
   const worldPosition = new BABYLON.Vector3(x * TILE_SIZE, 0, z * TILE_SIZE);
-  // console.log(`🌍 World position: (${worldPosition.x}, ${worldPosition.y}, ${worldPosition.z})`);
+  // // console.log(`🌍 World position: (${worldPosition.x}, ${worldPosition.y}, ${worldPosition.z})`);
   
   const building = new Building(buildingType, { x: worldPosition.x, y: 0, z: worldPosition.z });
-  // console.log(`🏛️ Building created:`, building.name, 'Model path:', building.model);
+  // // console.log(`🏛️ Building created:`, building.name, 'Model path:', building.model);
   
   if (window.gfx) {
     // Try to get from pool first
@@ -317,10 +317,10 @@ function placeBuilding(buildingType, x, z, scene) {
         }
       });
     }).catch(err => {
-      console.error(`❌ Failed to load ${building.name} model:`, err);
+      // console.error(`❌ Failed to load ${building.name} model:`, err);
     });
   } else {
-    console.error(`❌ Graphics system not available!`);
+    // console.error(`❌ Graphics system not available!`);
   }
   
   gameBuildings.push(building);
@@ -332,14 +332,14 @@ function placeAgora(scene) {
   if (window.player && window.player.agora) {
     return placeBuilding('agora', window.player.agora.x, window.player.agora.y, scene);
   } else {
-    console.warn("Player agora location not found, using default (15, 15)");
+    // console.warn("Player agora location not found, using default (15, 15)");
     return placeBuilding('agora', 15, 15, scene);
   }
 }
 
 // Initialize buildings when scene is ready
 function initBuildings(scene) {
-  // console.log("Initializing buildings...");
+  // // console.log("Initializing buildings...");
   placeAgora(scene);
 }
 
@@ -371,12 +371,12 @@ function spawnVillagerFromVillage(village) {
       if (!resources.food || resources.food <= 0) {
         // No food - double the spawn interval to simulate hardship
         village.lastSpawnTime = currentTime + village.spawnInterval;
-        console.log("😢 Village has no food - delaying next villager spawn");
+        // console.log("😢 Village has no food - delaying next villager spawn");
         return;
       }
     }
   } else {
-    console.log(`🏠 New village spawning founder ${village.spawnedVillagers + 1} of 2`);
+    // console.log(`🏠 New village spawning founder ${village.spawnedVillagers + 1} of 2`);
   }
   
   // Find a spawn position near the village
@@ -411,7 +411,7 @@ function spawnVillagerFromVillage(village) {
     window.spawnUnitModels(window.gfx.scene);
   }
   
-  console.log(`🏘️ Village spawned villager #${village.spawnedVillagers} at (${spawnPosition.x.toFixed(1)}, ${spawnPosition.z.toFixed(1)})`);
+  // console.log(`🏘️ Village spawned villager #${village.spawnedVillagers} at (${spawnPosition.x.toFixed(1)}, ${spawnPosition.z.toFixed(1)})`);
 }
 
 // Find a valid spawn position near a village
@@ -538,7 +538,7 @@ function assignVillagerToWork(villager, building) {
   // Mark villager as assigned to this building
   villager.assignedBuilding = building;
   
-  console.log(`🔨 Assigned ${villager.name || villager.type} to work at ${building.name}`);
+  // console.log(`🔨 Assigned ${villager.name || villager.type} to work at ${building.name}`);
   return true;
 }
 
@@ -586,9 +586,9 @@ function processWorkProduction(building) {
         if (window.player && window.player.addResource) {
           window.player.addResource(resourceType, actualAmount);
           if (building.name === 'Farm') {
-            // console.log(`🌾 Farm produced ${actualAmount} food (${workerCount} farmers, base:${baseAmount}, worker bonus:${(workerCount - 1) * 3})`);
+            // // console.log(`🌾 Farm produced ${actualAmount} food (${workerCount} farmers, base:${baseAmount}, worker bonus:${(workerCount - 1) * 3})`);
           } else {
-            // console.log(`💰 ${building.name} produced ${actualAmount} ${resourceType} (${workerCount} workers)`);
+            // // console.log(`💰 ${building.name} produced ${actualAmount} ${resourceType} (${workerCount} workers)`);
           }
         }
       }
@@ -650,15 +650,15 @@ function updateBuildings(deltaTime) {
 
 // Auto-initialize buildings when scene is ready
 function autoInitBuildings() {
-  // console.log("autoInitBuildings called - checking dependencies...");
-  // console.log("gfx exists:", !!window.gfx);
-  // console.log("scene exists:", !!window.gfx?.scene);
-  // console.log("liveField exists:", !!window.liveField);
-  // console.log("player exists:", !!window.player);
-  // console.log("player.agora exists:", !!window.player?.agora);
+  // // console.log("autoInitBuildings called - checking dependencies...");
+  // // console.log("gfx exists:", !!window.gfx);
+  // // console.log("scene exists:", !!window.gfx?.scene);
+  // // console.log("liveField exists:", !!window.liveField);
+  // // console.log("player exists:", !!window.player);
+  // // console.log("player.agora exists:", !!window.player?.agora);
   
   if (window.gfx && window.gfx.scene && window.liveField && window.player && window.player.agora) {
-    // console.log("✓ All dependencies ready - auto-initializing buildings...");
+    // // console.log("✓ All dependencies ready - auto-initializing buildings...");
     
     // Get agora position from player
     const agoraPosition = new BABYLON.Vector3(
@@ -667,22 +667,22 @@ function autoInitBuildings() {
       window.player.agora.y * TILE_SIZE
     );
     
-    // console.log("Agora will be placed at:", agoraPosition);
+    // // console.log("Agora will be placed at:", agoraPosition);
     
     // Move camera to agora position FIRST (before loading terrain)
     if (window.gfx.cameraTarget) {
       window.gfx.cameraTarget.position = agoraPosition;
-      // console.log("✓ Camera moved to player's agora position:", agoraPosition);
+      // // console.log("✓ Camera moved to player's agora position:", agoraPosition);
     }
     
     // Small delay to let camera settle, then load terrain around new position
     setTimeout(() => {
-      // console.log("✓ Loading terrain around agora...");
+      // // console.log("✓ Loading terrain around agora...");
       window.liveField.updateVisibleChunks(agoraPosition.x, agoraPosition.z);
       
       // Another small delay for terrain to load, then place buildings and spawn villagers
       setTimeout(() => {
-        // console.log("✓ Calling initBuildings...");
+        // // console.log("✓ Calling initBuildings...");
         initBuildings(window.gfx.scene);
         
         // Spawn villagers at the agora after buildings are placed
@@ -692,12 +692,12 @@ function autoInitBuildings() {
           window.spawnUnitModels(window.gfx.scene);
         }
         
-        // console.log("✓ Buildings and villagers initialized at player's agora");
+        // // console.log("✓ Buildings and villagers initialized at player's agora");
       }, 300);
     }, 100);
     
   } else {
-    // console.log("⏳ Dependencies not ready, retrying in 1 second...");
+    // // console.log("⏳ Dependencies not ready, retrying in 1 second...");
     setTimeout(autoInitBuildings, 1000);
   }
 }
@@ -716,11 +716,11 @@ const buildingSystem = {
   
   // Start building placement mode
   selectBuilding: function(buildingType) {
-    console.log(`🏗️ selectBuilding called with: ${buildingType}`);
-    console.log(`🏗️ BuildingTypes available:`, Object.keys(BuildingTypes));
+    // console.log(`🏗️ selectBuilding called with: ${buildingType}`);
+    // console.log(`🏗️ BuildingTypes available:`, Object.keys(BuildingTypes));
     
     if (!BuildingTypes[buildingType]) {
-      console.error(`Unknown building type: ${buildingType}`);
+      // console.error(`Unknown building type: ${buildingType}`);
       return;
     }
     
@@ -728,7 +728,7 @@ const buildingSystem = {
     this.selectedBuildingType = buildingType;
     this.placementRotation = 0;
     
-    console.log(`🏗️ Building placement mode activated for: ${buildingType}`);
+    // console.log(`🏗️ Building placement mode activated for: ${buildingType}`);
     
     // Create preview mesh
     this.createPreviewMesh();
@@ -740,17 +740,17 @@ const buildingSystem = {
   // Create a preview mesh for the building
   createPreviewMesh: function(initialPosition = null) {
     if (!window.gfx || !window.gfx.scene) {
-      console.error('Graphics system not available for preview');
+      // console.error('Graphics system not available for preview');
       return;
     }
     
     const buildingDef = BuildingTypes[this.selectedBuildingType];
     if (!buildingDef) {
-      console.error('Building definition not found for:', this.selectedBuildingType);
+      // console.error('Building definition not found for:', this.selectedBuildingType);
       return;
     }
     
-    console.log('🏗️ Creating preview for building:', buildingDef.name);
+    // console.log('🏗️ Creating preview for building:', buildingDef.name);
     
     // Load the actual model
     window.gfx.getModel(buildingDef.model, window.gfx.scene).then(model => {
@@ -821,16 +821,16 @@ const buildingSystem = {
         this.createRadiusVisualization(this.previewMesh.position);
       }
       
-      console.log('✅ Building preview created at position:', this.previewMesh.position);
+      // console.log('✅ Building preview created at position:', this.previewMesh.position);
     }).catch(err => {
-      console.error('Failed to create preview mesh:', err);
+      // console.error('Failed to create preview mesh:', err);
     });
     
     // Return early since we're handling positioning in the promise
     return;
 
     
-    console.log('✅ Building preview created at position:', this.previewMesh.position);
+    // console.log('✅ Building preview created at position:', this.previewMesh.position);
   },
   
   // Create radius visualization for camp work area
@@ -981,7 +981,7 @@ const buildingSystem = {
               amount: resourceInfo.amount
             });
             
-            console.log(`🌲 Resource detected at (${x}, ${z}): ${resourceInfo.type} x${resourceInfo.amount}`);
+            // console.log(`🌲 Resource detected at (${x}, ${z}): ${resourceInfo.type} x${resourceInfo.amount}`);
             resourceCount++;
           }
         }
@@ -991,7 +991,7 @@ const buildingSystem = {
     // Update circle color based on resource density
     this.updateCircleColor(resourceCount);
     
-    console.log(`🌳 Found ${resourceCount} resource tiles within camp radius`);
+    // console.log(`🌳 Found ${resourceCount} resource tiles within camp radius`);
   },
   
   // Update circle color based on resource density
@@ -1039,7 +1039,7 @@ const buildingSystem = {
       this.radiusVisualization.material.alpha = alpha;
     }
     
-    console.log(`🎨 Circle color updated: ${resourceCount} resources, density: ${density.toFixed(2)}, alpha: ${alpha}`);
+    // console.log(`🎨 Circle color updated: ${resourceCount} resources, density: ${density.toFixed(2)}, alpha: ${alpha}`);
   },
   
   // Check if a tile contains resources (trees or rocks)
@@ -1065,15 +1065,15 @@ const buildingSystem = {
       const random = hash / 0x100000000;
       
       // Debug: Check if we're getting a good distribution
-      console.log(`🔍 Seed: ${window.liveField.seed}, Grid: (${gridX}, ${gridZ}), Hash: ${hash}, Random: ${random.toFixed(6)}`);
+      // console.log(`🔍 Seed: ${window.liveField.seed}, Grid: (${gridX}, ${gridZ}), Hash: ${hash}, Random: ${random.toFixed(6)}`);
       
       // Use deterministic seed-based resource generation
       // Create a balanced distribution: 50% wood, 40% stone, 10% nothing
-      console.log(`🎲 Resource check at (${gridX}, ${gridZ}): random=${random.toFixed(3)}`);
+      // console.log(`🎲 Resource check at (${gridX}, ${gridZ}): random=${random.toFixed(3)}`);
       
       if (random < 0.5) {
         // Wood resources - 50% chance
-        console.log(`🌲 Found wood at (${gridX}, ${gridZ})`);
+        // console.log(`🌲 Found wood at (${gridX}, ${gridZ})`);
         return {
           type: 'wood',
           amount: Math.floor(random * 3) + 1, // 1-3 wood
@@ -1082,7 +1082,7 @@ const buildingSystem = {
         };
       } else if (random < 0.9) {
         // Stone resources - 40% chance (0.5 to 0.9)
-        console.log(`🪨 Found stone at (${gridX}, ${gridZ})`);
+        // console.log(`🪨 Found stone at (${gridX}, ${gridZ})`);
         return {
           type: 'stone',
           amount: Math.floor((random - 0.5) * 2) + 1, // 1-2 stone
@@ -1091,7 +1091,7 @@ const buildingSystem = {
         };
       } else {
         // No resources - 10% chance (0.9 to 1.0)
-        console.log(`❌ No resource at (${gridX}, ${gridZ}) - random=${random.toFixed(3)}`);
+        // console.log(`❌ No resource at (${gridX}, ${gridZ}) - random=${random.toFixed(3)}`);
         return null;
       }
     }
@@ -1170,7 +1170,7 @@ const buildingSystem = {
           this.updatePreviewValidity(gridX / TILE_SIZE, gridZ / TILE_SIZE);
         }
       } catch (error) {
-        console.warn('Error in mouse move handler:', error);
+        // console.warn('Error in mouse move handler:', error);
       }
     };
     
@@ -1199,7 +1199,7 @@ const buildingSystem = {
           const gridX = Math.round(worldPos.x / TILE_SIZE);
           const gridZ = Math.round(worldPos.z / TILE_SIZE);
           
-          console.log(`🏗️ Attempting to place building at grid coordinates: (${gridX}, ${gridZ})`);
+          // console.log(`🏗️ Attempting to place building at grid coordinates: (${gridX}, ${gridZ})`);
           
           // Place the building
           this.placeBuildingAt(gridX, gridZ);
@@ -1209,7 +1209,7 @@ const buildingSystem = {
           e.stopPropagation();
         }
       } catch (error) {
-        console.warn('Error in click handler:', error);
+        // console.warn('Error in click handler:', error);
       }
     };
     
@@ -1233,7 +1233,7 @@ const buildingSystem = {
       }
     });
     
-    console.log('✅ Placement mode enabled');
+    // console.log('✅ Placement mode enabled');
   },
   
   // Place building at grid coordinates
@@ -1247,7 +1247,7 @@ const buildingSystem = {
       const distance = Math.sqrt((gridX - agoraX) ** 2 + (gridZ - agoraZ) ** 2);
       
       if (distance < 3) {
-        console.log('❌ Building too close to agora');
+        // console.log('❌ Building too close to agora');
         this.showPlacementError('Building too close to agora');
         return;
       }
@@ -1259,7 +1259,7 @@ const buildingSystem = {
     
     for (const building of gameBuildings) {
       if (building.position.x === worldX && building.position.z === worldZ) {
-        console.log('❌ Position already occupied');
+        // console.log('❌ Position already occupied');
         this.showPlacementError('Position already occupied');
         return;
       }
@@ -1275,7 +1275,7 @@ const buildingSystem = {
       // Save detected resources to the building
       if (this.detectedResources && this.detectedResources.length > 0) {
         building.availableResources = [...this.detectedResources];
-        console.log(`🌳 Camp will have access to ${this.detectedResources.length} resource tiles:`, this.detectedResources);
+        // console.log(`🌳 Camp will have access to ${this.detectedResources.length} resource tiles:`, this.detectedResources);
       }
       
       // Set up a callback to apply rotation after mesh loads
@@ -1293,7 +1293,7 @@ const buildingSystem = {
       this.lastValidPosition = null;
       this.lastValidRotation = null;
       
-      console.log(`✅ ${building.name} placed at (${gridX}, ${gridZ})`);
+      // console.log(`✅ ${building.name} placed at (${gridX}, ${gridZ})`);
       
       // Show success message with resource count
       const resourceCount = this.detectedResources ? this.detectedResources.length : 0;
@@ -1329,7 +1329,7 @@ const buildingSystem = {
     }
     
     this.previewMesh.rotation.y = this.placementRotation;
-    console.log(`🔄 Building rotated to ${(this.placementRotation * 180 / Math.PI).toFixed(0)}°`);
+    // console.log(`🔄 Building rotated to ${(this.placementRotation * 180 / Math.PI).toFixed(0)}°`);
   },
   
   // Cancel building placement
@@ -1383,7 +1383,7 @@ const buildingSystem = {
         this.clickHandler = null;
       }
       
-      console.log('✅ Building placement mode exited');
+      // console.log('✅ Building placement mode exited');
     }
   },
   
@@ -1606,21 +1606,21 @@ if (typeof window !== 'undefined') {
   window.buildingSystem = buildingSystem;
   
   // Debug logging
-  console.log('🏗️ Building system loaded:', {
-    buildingTypes: Object.keys(BuildingTypes),
-    buildingSystem: !!buildingSystem,
-    placeBuilding: !!placeBuilding
-  });
+  // console.log('🏗️ Building system loaded:', {
+  //   buildingTypes: Object.keys(BuildingTypes),
+  //   buildingSystem: !!buildingSystem,
+  //   placeBuilding: !!placeBuilding
+  // });
   
   // Auto-start building initialization
   setTimeout(autoInitBuildings, 2500); // Wait a bit after units initialize
   
   // Test function to create a village for testing villager spawning
   window.testVillageSpawn = function() {
-    console.log('🏘️ Creating test village for villager spawning...');
+    // console.log('🏘️ Creating test village for villager spawning...');
     
     if (!window.gfx || !window.gfx.scene) {
-      console.error('❌ Scene not ready for village creation');
+      // console.error('❌ Scene not ready for village creation');
       return;
     }
     
@@ -1636,42 +1636,42 @@ if (typeof window !== 'undefined') {
       village.buildProgress = 1.0;
       village.lastSpawnTime = 0; // Allow immediate spawning
       
-      console.log(`🏘️ Test village created at (${villageX}, ${villageZ}) - will spawn villagers every 60 seconds`);
-      console.log('🏘️ Village properties:', {
-        spawnsVillagers: village.spawnsVillagers,
-        spawnInterval: village.spawnInterval,
-        maxVillagers: village.maxVillagers,
-        spawnRadius: village.spawnRadius
-      });
+      // console.log(`🏘️ Test village created at (${villageX}, ${villageZ}) - will spawn villagers every 60 seconds`);
+      // console.log('🏘️ Village properties:', {
+      //   spawnsVillagers: village.spawnsVillagers,
+      //   spawnInterval: village.spawnInterval,
+      //   maxVillagers: village.maxVillagers,
+      //   spawnRadius: village.spawnRadius
+      // });
     }
   };
   
   // Function to check village spawn status
   window.checkVillageStatus = function() {
     const villages = gameBuildings.filter(building => building.spawnsVillagers);
-    console.log(`🏘️ Found ${villages.length} villages:`);
+    // console.log(`🏘️ Found ${villages.length} villages:`);
     
     villages.forEach((village, index) => {
       const timeSinceLastSpawn = Date.now() - village.lastSpawnTime;
       const timeUntilNextSpawn = village.spawnInterval - timeSinceLastSpawn;
       
-      console.log(`🏘️ Village ${index + 1}:`, {
-        position: `(${village.position.x.toFixed(1)}, ${village.position.z.toFixed(1)})`,
-        spawnedVillagers: village.spawnedVillagers,
-        maxVillagers: village.maxVillagers,
-        buildProgress: village.buildProgress,
-        timeSinceLastSpawn: `${(timeSinceLastSpawn / 1000).toFixed(1)}s`,
-        timeUntilNextSpawn: timeUntilNextSpawn > 0 ? `${(timeUntilNextSpawn / 1000).toFixed(1)}s` : 'Ready to spawn!'
-      });
+      // console.log(`🏘️ Village ${index + 1}:`, {
+      //   position: `(${village.position.x.toFixed(1)}, ${village.position.z.toFixed(1)})`,
+      //   spawnedVillagers: village.spawnedVillagers,
+      //   maxVillagers: village.maxVillagers,
+      //   buildProgress: village.buildProgress,
+      //   timeSinceLastSpawn: `${(timeSinceLastSpawn / 1000).toFixed(1)}s`,
+      //   timeUntilNextSpawn: timeUntilNextSpawn > 0 ? `${(timeUntilNextSpawn / 1000).toFixed(1)}s` : 'Ready to spawn!'
+      // });
     });
   };
   
   // Function to create test work buildings
   window.testWorkBuildings = function() {
-    console.log('🔨 Creating test work buildings...');
+    // console.log('🔨 Creating test work buildings...');
     
     if (!window.gfx || !window.gfx.scene) {
-      console.error('❌ Scene not ready for building creation');
+      // console.error('❌ Scene not ready for building creation');
       return;
     }
     
@@ -1683,7 +1683,7 @@ if (typeof window !== 'undefined') {
     const camp = placeBuilding('camp', campX, campZ, window.gfx.scene);
     if (camp) {
       camp.buildProgress = 1.0; // Complete the building
-      console.log(`🔨 Test camp created at (${campX}, ${campZ})`);
+      // console.log(`🔨 Test camp created at (${campX}, ${campZ})`);
     }
     
     // Create a farm nearby
@@ -1693,31 +1693,31 @@ if (typeof window !== 'undefined') {
     const farm = placeBuilding('farm', farmX, farmZ, window.gfx.scene);
     if (farm) {
       farm.buildProgress = 1.0; // Complete the building
-      console.log(`🌾 Test farm created at (${farmX}, ${farmZ})`);
+      // console.log(`🌾 Test farm created at (${farmX}, ${farmZ})`);
     }
     
-    console.log('🔨 Test buildings created - villagers should automatically start working!');
+    // console.log('🔨 Test buildings created - villagers should automatically start working!');
   };
   
   // Function to check work building status
   window.checkWorkStatus = function() {
     const workBuildings = gameBuildings.filter(building => building.needsWorkers);
-    console.log(`🔨 Found ${workBuildings.length} work buildings:`);
+    // console.log(`🔨 Found ${workBuildings.length} work buildings:`);
     
     workBuildings.forEach((building, index) => {
       const timeSinceLastWork = Date.now() - building.lastWorkTime;
       const timeUntilNextWork = building.workInterval - timeSinceLastWork;
       
-      console.log(`🔨 ${building.name} ${index + 1}:`, {
-        position: `(${building.position.x.toFixed(1)}, ${building.position.z.toFixed(1)})`,
-        assignedWorkers: building.assignedWorkers.length,
-        maxWorkers: building.maxWorkers,
-        workType: building.workType,
-        workOutput: building.workOutput,
-        buildProgress: building.buildProgress,
-        timeSinceLastWork: `${(timeSinceLastWork / 1000).toFixed(1)}s`,
-        timeUntilNextWork: timeUntilNextWork > 0 ? `${(timeUntilNextWork / 1000).toFixed(1)}s` : 'Ready to work!'
-      });
+      // console.log(`🔨 ${building.name} ${index + 1}:`, {
+      //   position: `(${building.position.x.toFixed(1)}, ${building.position.z.toFixed(1)})`,
+      //   assignedWorkers: building.assignedWorkers.length,
+      //   maxWorkers: building.maxWorkers,
+      //   workType: building.workType,
+      //   workOutput: building.workOutput,
+      //   buildProgress: building.buildProgress,
+      //   timeSinceLastWork: `${(timeSinceLastWork / 1000).toFixed(1)}s`,
+      //   timeUntilNextWork: timeUntilNextWork > 0 ? `${(timeUntilNextWork / 1000).toFixed(1)}s` : 'Ready to work!'
+      // });
     });
   };
   
@@ -1725,18 +1725,18 @@ if (typeof window !== 'undefined') {
   window.checkResources = function() {
     if (window.player && window.player.getResources) {
       const resources = window.player.getResources();
-      console.log('💰 Player resources:', resources);
+      // console.log('💰 Player resources:', resources);
     } else {
-      console.error('❌ Player or resource system not available');
+      // console.error('❌ Player or resource system not available');
     }
   };
   
   // Function to test resource display
   window.testResourceDisplay = function() {
-    console.log('💰 Testing resource display...');
+    // console.log('💰 Testing resource display...');
     
     if (!window.player) {
-      console.error('❌ Player not available');
+      // console.error('❌ Player not available');
       return;
     }
     
@@ -1749,18 +1749,18 @@ if (typeof window !== 'undefined') {
     // Force update the display
     if (window.hud && window.hud.updateResourceDisplay) {
       window.hud.updateResourceDisplay();
-      console.log('💰 Resource display updated!');
+      // console.log('💰 Resource display updated!');
     } else {
-      console.error('❌ Resource display function not available');
+      // console.error('❌ Resource display function not available');
     }
   };
   
   // Function to spawn test engineers
   window.spawnTestEngineers = function() {
-    console.log('🔧 Spawning test engineers...');
+    // console.log('🔧 Spawning test engineers...');
     
     if (!window.player || !window.gfx || !window.gfx.scene) {
-      console.error('❌ Player or scene not available');
+      // console.error('❌ Player or scene not available');
       return;
     }
     
@@ -1789,7 +1789,7 @@ if (typeof window !== 'undefined') {
       window.player.units.push(engineer);
       gameUnits.push(engineer);
       
-      console.log(`🔧 Spawned engineer ${i + 1} at (${x.toFixed(1)}, ${z.toFixed(1)})`);
+      // console.log(`🔧 Spawned engineer ${i + 1} at (${x.toFixed(1)}, ${z.toFixed(1)})`);
     }
     
     // Spawn the visual models
@@ -1797,7 +1797,7 @@ if (typeof window !== 'undefined') {
       window.spawnUnitModels(window.gfx.scene);
     }
     
-    console.log(`🔧 Spawned ${engineerCount} engineers - they should start working at nearby buildings!`);
+    // console.log(`🔧 Spawned ${engineerCount} engineers - they should start working at nearby buildings!`);
   };
   
   

@@ -95,9 +95,15 @@
 
     <div id="settings_menu" class="menu_menu">
       <div class="menu_title">Settings<div id="fps_meter">fps</div></div>
-      
-      lasso style 
       <br>
+      <div class="settings_option">
+        <span>2D HUD</span>
+        <div id="hud_switch" class="binary_switch" onclick="window.hud.toggleHUDMode()" data-on="false">
+          <div id="hud_handle" class="switch_handle"></div>
+        </div>
+        <span>3D HUD</span>
+      </div>
+      
       graphics
       <br>
       audio
@@ -262,7 +268,9 @@
 
 
   <script>
-    window.addEventListener('DOMContentLoaded', function(){app.init()});
+    window.addEventListener('DOMContentLoaded', function(){
+      app.init();
+    });
   </script>
 
 </body>

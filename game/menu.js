@@ -110,7 +110,14 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
         window.buildingSystem.cancelPlacement();
         // Start building placement mode
         window.buildingSystem.selectBuilding(buildingType);
-      } else if (category === 'units' && window.Unit && window.player && window.player.agora) {
+      } else {
+        // For non-building menu items, exit building placement mode if currently placing
+        if (window.buildingSystem && window.buildingSystem.isPlacing) {
+          window.buildingSystem.cancelPlacement();
+        }
+      }
+      
+      if (category === 'units' && window.Unit && window.player && window.player.agora) {
         // Get the unit type from the path
         const unitType = itemPath[itemPath.length - 1];
         
@@ -140,12 +147,12 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
             window.spawnUnitModels(window.gfx.scene);
           }
           
-          console.log(`✨ Created ${unit.name} at agora`);
+          // console.log(`✨ Created ${unit.name} at agora`);
         } else {
           // For other unit types, find a nearby idle villager to transform
           const villagers = window.player.units.filter(unit => unit.type === 'villager');
           if (villagers.length <= 2) {
-            console.log('Need to keep at least 2 villagers - cannot transform!');
+            // console.log('Need to keep at least 2 villagers - cannot transform!');
             return;
           }
           
@@ -178,13 +185,13 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
             window.behaviorManager.setBehavior(closestVillager, 'transform', {
               transformType: unitType
             });
-            console.log(`🔄 Transforming villager into ${unitType}`);
+            // console.log(`🔄 Transforming villager into ${unitType}`);
           } else {
-            console.log('No available villagers found to transform!');
+            // console.log('No available villagers found to transform!');
           }
         }
       } else {
-        console.log('Selected:', path);
+        // console.log('Selected:', path);
         // TODO: Handle other selection actions
       }
     }
@@ -304,6 +311,11 @@ function getIconForItem(key) {
 
 // Initialize the menu system
 function initMenu() {
+  // Only initialize 2D menu if not using 3D HUD
+  if (USE_3D_HUD) {
+    return;
+  }
+  
   // Add click handlers to anchor points
   const anchors = {
     n: document.getElementById('anchor_n'),
@@ -315,28 +327,52 @@ function initMenu() {
   Object.entries(anchors).forEach(([direction, anchor]) => {
     anchor.addEventListener('click', (e) => {
       e.stopPropagation();
-      const rect = anchor.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.top + rect.height / 2;
       
-      // Hide any visible buttons first
-      hideButtons(activeButtons);
-      activeButtons = [];
-      menuDepth = 0;
+      // Exit building placement mode if currently placing
+      if (window.buildingSystem && window.buildingSystem.isPlacing) {
+        window.buildingSystem.cancelPlacement();
+      }
       
-      // Create and show top-level buttons
-      const buttons = Object.entries(menu).map(([key, value]) => {
-        return createMenuButton(
-          `menu-${key}`,
-          getIconForItem(key),
-          key,
-          [key],
-          0
-        );
-      });
-      
-      currentAnchor = { x, y, direction };
-      showButtonsInArc(buttons, x, y, 0, direction);
+      if (USE_3D_HUD) {
+        // 3D HUD mode - show 3D radial menu
+        const rect = anchor.getBoundingClientRect();
+        const canvasRect = window.gfx ? window.gfx.canvas.getBoundingClientRect() : { left: 0, top: 0 };
+        const x = rect.left + rect.width / 2 - canvasRect.left;
+        const y = rect.top + rect.height / 2 - canvasRect.top;
+        
+        // Convert direction to anchor name for 3D menu
+        const anchorMap = { n: 'top', s: 'bottom', e: 'right', w: 'left' };
+        const anchorName = anchorMap[direction] || 'bottom';
+        
+        // Show 3D menu at this anchor
+        if (window.hud && window.hud.showRadialMenu) {
+          window.hud.showRadialMenu(x, y, anchorName);
+        }
+      } else {
+        // 2D HUD mode - show 2D radial menu
+        const rect = anchor.getBoundingClientRect();
+        const x = rect.left + rect.width / 2;
+        const y = rect.top + rect.height / 2;
+        
+        // Hide any visible buttons first
+        hideButtons(activeButtons);
+        activeButtons = [];
+        menuDepth = 0;
+        
+        // Create and show top-level buttons
+        const buttons = Object.entries(menu).map(([key, value]) => {
+          return createMenuButton(
+            `menu-${key}`,
+            getIconForItem(key),
+            key,
+            [key],
+            0
+          );
+        });
+        
+        currentAnchor = { x, y, direction };
+        showButtonsInArc(buttons, x, y, 0, direction);
+      }
     });
   });
   

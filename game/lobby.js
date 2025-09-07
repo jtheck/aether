@@ -158,13 +158,13 @@ const Lobby = {
   
   // Initialize the lobby system
   init: function() {
-    console.log('🏛️ Lobby system initialized');
+    // console.log('🏛️ Lobby system initialized');
     
     // Set up the Game Start button event listener
     const gameStartButton = document.querySelector('#onevsone_lobby .lobby_b');
     if (gameStartButton) {
       gameStartButton.addEventListener('click', () => {
-        console.log('🎮 Game Start button clicked');
+        // console.log('🎮 Game Start button clicked');
         
         // Get selected field size from dropdown
         const fieldSizeSelect = document.getElementById('fieldSize');
@@ -174,7 +174,7 @@ const Lobby = {
         const mapSeedInput = document.getElementById('mapSeed');
         const selectedSeed = mapSeedInput ? parseInt(mapSeedInput.value) : null;
         
-        console.log(`🎮 Starting with field size: ${selectedFieldSize}, seed: ${selectedSeed}`);
+        // console.log(`🎮 Starting with field size: ${selectedFieldSize}, seed: ${selectedSeed}`);
         
         this.startMatch('1v1', selectedFieldSize, selectedSeed);
       });

@@ -23,6 +23,11 @@ window.aud = {};  // Audio
     ui.init();
 
     gfx.init();
+    
+    // Initialize HUD mode from saved preference or default
+    if (window.hud && window.hud.initializeHUDMode) {
+      window.hud.initializeHUDMode();
+    }
 
     // Wait for the scene to be ready before initializing the player
     gfx.scene.whenReadyAsync().then(function() {

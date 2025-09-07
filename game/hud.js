@@ -26,8 +26,140 @@
   let beforeRenderObserver = null; // Scene observer for camera updates
   let currentAnchor = null; // Track which anchor the menu is currently at
   
-  // Menu definitions with sub-categories
+  // Menu definitions with sub-categories - mirrors the 2D menu structure
   let menuDefinitions = {
+    buildings: {
+      camp: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('camp');
+          }
+        }
+      },
+      village: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('village');
+          }
+        }
+      },
+      farm: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('farm');
+          }
+        }
+      },
+      tower: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('tower');
+          }
+        }
+      }
+    },
+    units: {
+      monk: {
+        callback: () => {
+          if (window.Unit && window.player && window.player.agora) {
+            const agoraX = window.player.agora.x * TILE_SIZE;
+            const agoraZ = window.player.agora.y * TILE_SIZE;
+            const unit = new window.Unit('monk', { x: agoraX, y: 0, z: agoraZ });
+            unit.owner = 'player';
+            const randomRotation = Math.random() * Math.PI * 2;
+            unit.rotation = randomRotation;
+            if (unit.pb.state && unit.pb.state.rot) {
+              unit.pb.state.rot.y = randomRotation;
+            }
+            window.player.units.push(unit);
+            window.gameUnits.push(unit);
+            if (window.gfx && window.gfx.scene) {
+              window.spawnUnitModels(window.gfx.scene);
+            }
+          }
+        }
+      },
+      wizard: {
+        callback: () => {
+          if (window.Unit && window.player && window.player.agora) {
+            const agoraX = window.player.agora.x * TILE_SIZE;
+            const agoraZ = window.player.agora.y * TILE_SIZE;
+            const unit = new window.Unit('wizard', { x: agoraX, y: 0, z: agoraZ });
+            unit.owner = 'player';
+            const randomRotation = Math.random() * Math.PI * 2;
+            unit.rotation = randomRotation;
+            if (unit.pb.state && unit.pb.state.rot) {
+              unit.pb.state.rot.y = randomRotation;
+            }
+            window.player.units.push(unit);
+            window.gameUnits.push(unit);
+            if (window.gfx && window.gfx.scene) {
+              window.spawnUnitModels(window.gfx.scene);
+            }
+          }
+        }
+      },
+      engineer: {
+        callback: () => {
+          if (window.Unit && window.player && window.player.agora) {
+            const agoraX = window.player.agora.x * TILE_SIZE;
+            const agoraZ = window.player.agora.y * TILE_SIZE;
+            const unit = new window.Unit('engineer', { x: agoraX, y: 0, z: agoraZ });
+            unit.owner = 'player';
+            const randomRotation = Math.random() * Math.PI * 2;
+            unit.rotation = randomRotation;
+            if (unit.pb.state && unit.pb.state.rot) {
+              unit.pb.state.rot.y = randomRotation;
+            }
+            window.player.units.push(unit);
+            window.gameUnits.push(unit);
+            if (window.gfx && window.gfx.scene) {
+              window.spawnUnitModels(window.gfx.scene);
+            }
+          }
+        }
+      },
+      brigand: {
+        callback: () => {
+          if (window.Unit && window.player && window.player.agora) {
+            const agoraX = window.player.agora.x * TILE_SIZE;
+            const agoraZ = window.player.agora.y * TILE_SIZE;
+            const unit = new window.Unit('brigand', { x: agoraX, y: 0, z: agoraZ });
+            unit.owner = 'player';
+            const randomRotation = Math.random() * Math.PI * 2;
+            unit.rotation = randomRotation;
+            if (unit.pb.state && unit.pb.state.rot) {
+              unit.pb.state.rot.y = randomRotation;
+            }
+            window.player.units.push(unit);
+            window.gameUnits.push(unit);
+            if (window.gfx && window.gfx.scene) {
+              window.spawnUnitModels(window.gfx.scene);
+            }
+          }
+        }
+      }
+    },
+    research: {
+      scribes: {
+        callback: () => console.log("Research: Scribes selected")
+      },
+      drayage: {
+        callback: () => console.log("Research: Drayage selected")
+      },
+      prospecting: {
+        callback: () => console.log("Research: Prospecting selected")
+      }
+    },
+    rally: {
+      home: {
+        callback: () => console.log("Rally: Home selected")
+      }
+    }
   };
   
   // Radial menu configuration
@@ -103,42 +235,85 @@
       if (e.button === 1) { // Middle mouse button
         e.preventDefault();
         
-        // Find the closest anchor to current mouse position (same as spacebar)
-        const anchors = {
-          n: document.getElementById('anchor_n'),
-          s: document.getElementById('anchor_s'),
-          e: document.getElementById('anchor_e'),
-          w: document.getElementById('anchor_w')
-        };
-        
-        // Get anchor positions
-        const anchorPositions = {};
-        for (const [direction, anchor] of Object.entries(anchors)) {
-          if (anchor) {
-            const rect = anchor.getBoundingClientRect();
-            const canvasRect = hud.canvas.getBoundingClientRect();
-            anchorPositions[direction] = {
-              x: rect.left + rect.width / 2 - canvasRect.left,
-              y: rect.top + rect.height / 2 - canvasRect.top
-            };
+        if (USE_3D_HUD) {
+          // 3D HUD mode - show 3D radial menu
+          const anchors = {
+            n: document.getElementById('anchor_n'),
+            s: document.getElementById('anchor_s'),
+            e: document.getElementById('anchor_e'),
+            w: document.getElementById('anchor_w')
+          };
+          
+          // Get anchor positions
+          const anchorPositions = {};
+          for (const [direction, anchor] of Object.entries(anchors)) {
+            if (anchor) {
+              const rect = anchor.getBoundingClientRect();
+              const canvasRect = hud.canvas.getBoundingClientRect();
+              anchorPositions[direction] = {
+                x: rect.left + rect.width / 2 - canvasRect.left,
+                y: rect.top + rect.height / 2 - canvasRect.top
+              };
+            }
           }
-        }
-        
-        // Find closest anchor to current mouse position
-        let minDist = Infinity;
-        let closestAnchor = 's'; // Default to south if no anchors found
-        
-        for (const [direction, pos] of Object.entries(anchorPositions)) {
-          const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
-          if (dist < minDist) {
-            minDist = dist;
-            closestAnchor = direction;
+          
+          // Find closest anchor to current mouse position
+          let minDist = Infinity;
+          let closestAnchor = 's'; // Default to south if no anchors found
+          
+          for (const [direction, pos] of Object.entries(anchorPositions)) {
+            const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+            if (dist < minDist) {
+              minDist = dist;
+              closestAnchor = direction;
+            }
           }
-        }
-        
-        // Click the closest anchor
-        if (anchors[closestAnchor]) {
-          anchors[closestAnchor].click();
+          
+          // Convert direction to anchor name for 3D menu
+          const anchorMap = { n: 'top', s: 'bottom', e: 'right', w: 'left' };
+          const anchorName = anchorMap[closestAnchor] || 'bottom';
+          
+          // Show 3D menu at closest anchor
+          if (anchorPositions[closestAnchor]) {
+            hud.showRadialMenu(anchorPositions[closestAnchor].x, anchorPositions[closestAnchor].y, anchorName);
+          }
+        } else {
+          // 2D HUD mode - find closest anchor and trigger 2D menu
+          const anchors = {
+            n: document.getElementById('anchor_n'),
+            s: document.getElementById('anchor_s'),
+            e: document.getElementById('anchor_e'),
+            w: document.getElementById('anchor_w')
+          };
+          
+          // Get anchor positions
+          const anchorPositions = {};
+          for (const [direction, anchor] of Object.entries(anchors)) {
+            if (anchor) {
+              const rect = anchor.getBoundingClientRect();
+              anchorPositions[direction] = {
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2
+              };
+            }
+          }
+          
+          // Find closest anchor to current mouse position
+          let minDist = Infinity;
+          let closestAnchor = 's'; // Default to south if no anchors found
+          
+          for (const [direction, pos] of Object.entries(anchorPositions)) {
+            const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+            if (dist < minDist) {
+              minDist = dist;
+              closestAnchor = direction;
+            }
+          }
+          
+          // Click the closest anchor
+          if (anchors[closestAnchor]) {
+            anchors[closestAnchor].click();
+          }
         }
       }
     });
@@ -147,47 +322,90 @@
     // Menu items handle their own clicks via 3D mesh picking
     // Middle mouse and spacebar both open the menu at closest anchor
     
-    // Add spacebar support - now opens 2D menu instead of 3D radial menu
+    // Add spacebar support - opens menu at closest anchor based on HUD mode
     document.addEventListener('keydown', function(e) {
       if (e.code === 'Space') {
         e.preventDefault();
         
-        // Find the closest anchor to current mouse position
-        const anchors = {
-          n: document.getElementById('anchor_n'),
-          s: document.getElementById('anchor_s'),
-          e: document.getElementById('anchor_e'),
-          w: document.getElementById('anchor_w')
-        };
-        
-        // Get anchor positions
-        const anchorPositions = {};
-        for (const [direction, anchor] of Object.entries(anchors)) {
-          if (anchor) {
-            const rect = anchor.getBoundingClientRect();
-            const canvasRect = hud.canvas.getBoundingClientRect();
-            anchorPositions[direction] = {
-              x: rect.left + rect.width / 2 - canvasRect.left,
-              y: rect.top + rect.height / 2 - canvasRect.top
-            };
+        if (USE_3D_HUD) {
+          // 3D HUD mode - show 3D radial menu
+          const anchors = {
+            n: document.getElementById('anchor_n'),
+            s: document.getElementById('anchor_s'),
+            e: document.getElementById('anchor_e'),
+            w: document.getElementById('anchor_w')
+          };
+          
+          // Get anchor positions
+          const anchorPositions = {};
+          for (const [direction, anchor] of Object.entries(anchors)) {
+            if (anchor) {
+              const rect = anchor.getBoundingClientRect();
+              const canvasRect = hud.canvas.getBoundingClientRect();
+              anchorPositions[direction] = {
+                x: rect.left + rect.width / 2 - canvasRect.left,
+                y: rect.top + rect.height / 2 - canvasRect.top
+              };
+            }
           }
-        }
-        
-        // Find closest anchor to current mouse position
-        let minDist = Infinity;
-        let closestAnchor = 's'; // Default to south if no anchors found
-        
-        for (const [direction, pos] of Object.entries(anchorPositions)) {
-          const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
-          if (dist < minDist) {
-            minDist = dist;
-            closestAnchor = direction;
+          
+          // Find closest anchor to current mouse position
+          let minDist = Infinity;
+          let closestAnchor = 's'; // Default to south if no anchors found
+          
+          for (const [direction, pos] of Object.entries(anchorPositions)) {
+            const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+            if (dist < minDist) {
+              minDist = dist;
+              closestAnchor = direction;
+            }
           }
-        }
-        
-        // Click the closest anchor
-        if (anchors[closestAnchor]) {
-          anchors[closestAnchor].click();
+          
+          // Convert direction to anchor name for 3D menu
+          const anchorMap = { n: 'top', s: 'bottom', e: 'right', w: 'left' };
+          const anchorName = anchorMap[closestAnchor] || 'bottom';
+          
+          // Show 3D menu at closest anchor
+          if (anchorPositions[closestAnchor]) {
+            hud.showRadialMenu(anchorPositions[closestAnchor].x, anchorPositions[closestAnchor].y, anchorName);
+          }
+        } else {
+          // 2D HUD mode - find closest anchor and trigger 2D menu
+          const anchors = {
+            n: document.getElementById('anchor_n'),
+            s: document.getElementById('anchor_s'),
+            e: document.getElementById('anchor_e'),
+            w: document.getElementById('anchor_w')
+          };
+          
+          // Get anchor positions
+          const anchorPositions = {};
+          for (const [direction, anchor] of Object.entries(anchors)) {
+            if (anchor) {
+              const rect = anchor.getBoundingClientRect();
+              anchorPositions[direction] = {
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2
+              };
+            }
+          }
+          
+          // Find closest anchor to current mouse position
+          let minDist = Infinity;
+          let closestAnchor = 's'; // Default to south if no anchors found
+          
+          for (const [direction, pos] of Object.entries(anchorPositions)) {
+            const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+            if (dist < minDist) {
+              minDist = dist;
+              closestAnchor = direction;
+            }
+          }
+          
+          // Click the closest anchor
+          if (anchors[closestAnchor]) {
+            anchors[closestAnchor].click();
+          }
         }
       }
     });
@@ -342,15 +560,9 @@
           BABYLON.ActionManager.OnPickTrigger,
           function() {
             if (radialMenuVisible) {
-              // console.log('🎯 Center mesh clicked - currentMenuLevel:', currentMenuLevel);
-              // Only close menu if we're at the root level (main menu)
-              if (currentMenuLevel === 'main') {
-                // console.log('🎯 Center mesh clicked - closing radial menu');
-                hud.hideRadialMenu();
-              } else {
-                // console.log('🎯 Center mesh clicked in submenu - going back to main');
-                hud.goBackMenu();
-              }
+              // console.log('🎯 Center mesh clicked - closing radial menu');
+              // Center mesh always closes the menu, no back button behavior
+              hud.hideRadialMenu();
             }
           }
         ));
@@ -377,6 +589,11 @@
     }
     
     // Radial menu hidden and cleaned up
+  };
+  
+  // Check if radial menu is visible
+  hud.isRadialMenuVisible = function() {
+    return radialMenuVisible;
   };
   
   // Animate menu items spreading out from center
@@ -423,7 +640,7 @@
       const maxDistance = Math.sqrt((rect.width/2)**2 + (rect.height/2)**2);
       const distanceFactor = distanceFromCenter / maxDistance; // 0 = center, 1 = corner
       
-      const radius = 0.8 + (distanceFactor * 0.6); // 0.8 in center, 1.4 near edges (smaller overall)
+      const radius = item.radius || (0.8 + (distanceFactor * 0.6)); // Use item's radius, fallback to calculated radius
       const angleStep = availableArc / radialMenuItems.length;
       const angle = availableStart + (index * angleStep) + (angleStep / 2); // Center items in their segments
       
@@ -478,11 +695,24 @@
   // Navigate to a sub-menu - CLEAN TREE SYSTEM
   hud.showSubMenu = function(menuLevel, screenX, screenY) {
     if (!menuDefinitions[menuLevel]) {
-      // console.warn('Menu level not found:', menuLevel);
+      console.warn('3D Menu level not found:', menuLevel);
       return;
     }
     
-    // console.log('🌳 Navigating to sub-menu:', menuLevel);
+    // If screenX/screenY are NaN or invalid, we need to get the actual button position
+    let validScreenX = screenX;
+    let validScreenY = screenY;
+    
+    if (isNaN(screenX) || isNaN(screenY) || screenX === undefined || screenY === undefined) {
+      // We need to find the actual position of the clicked button
+      // For now, use the center of the screen as fallback
+      const rect = hud.canvas.getBoundingClientRect();
+      validScreenX = rect.width / 2;
+      validScreenY = rect.height / 2;
+      // console.log(`🎯 Using fallback coordinates: (${validScreenX}, ${validScreenY}) - need to get actual button position`);
+    }
+    
+    // console.log('🌳 3D Menu: Navigating to sub-menu:', menuLevel, 'using clicked button at:', validScreenX, validScreenY);
     
     // Save current position in navigation stack
     menuStack.push({level: currentMenuLevel, items: [...radialMenuItems]});
@@ -490,8 +720,27 @@
     // Switch to new menu level
     currentMenuLevel = menuLevel;
     
-    // Retract all buttons except the clicked one, then spread new items
-    retractAndExpand(menuLevel, screenX, screenY);
+    // Clear only submenu items, keep main menu items
+    clearSubmenuItems();
+    
+    // Create submenu items that spread out from the clicked button
+    const submenuData = menuDefinitions[menuLevel];
+    const submenuItems = Object.entries(submenuData);
+    
+    // Add each submenu item (will be marked as submenu item automatically)
+    submenuItems.forEach(([key, value]) => {
+      const itemName = key.charAt(0).toUpperCase() + key.slice(1); // Capitalize first letter
+      const icon = getIconForItem(key);
+      const color = getColorForCategory(menuLevel);
+      
+      // Add as submenu item (isSubItem will be true because currentMenuLevel !== 'main')
+      hud.addRadialMenuItem(itemName, icon, value.callback, color);
+    });
+    
+    // No back button needed
+    
+    // Position all items in an arc like the main menu, but spread from the anchor
+    positionSubmenuItemsInArc(validScreenX, validScreenY);
     
     // console.log('✅ Sub-menu loaded:', menuLevel);
   };
@@ -528,6 +777,10 @@
       } else if (itemDef.submenu) {
         // This is a submenu - add it with navigation callback
         hud.addRadialMenuItem(itemDef.text, itemDef.icon, () => {
+          // Exit building placement mode if currently placing and this is not a building submenu
+          if (window.buildingSystem && window.buildingSystem.isPlacing && itemDef.submenu !== 'buildings') {
+            window.buildingSystem.cancelPlacement();
+          }
           hud.showSubMenu(itemDef.submenu, screenX, screenY);
         }, itemDef.color);
       } else {
@@ -539,7 +792,7 @@
     });
     
     // Add back button
-    hud.addRadialMenuItem("Back", "↩️", () => hud.goBackMenu(screenX, screenY), new BABYLON.Color3(0.5, 0.5, 0.5));
+    // No back button needed
     
     // Position all items at the same anchor with same spread
     positionItemsAtAnchor(screenX, screenY);
@@ -554,6 +807,269 @@
       'rally': 'Rally'
     };
     return names[menuLevel] || menuLevel;
+  }
+  
+  // Get icon for menu item (mirrors 2D menu icons)
+  function getIconForItem(key) {
+    const icons = {
+      // Buildings
+      camp: '⛺',
+      village: '🏘️',
+      farm: '🚜',
+      tower: '🗼',
+      
+      // Units
+      monk: '🧘',
+      wizard: '🧙',
+      engineer: '🔧',
+      brigand: '⚔️',
+      
+      // Research
+      scribes: '📝',
+      drayage: '🚛',
+      prospecting: '⛏️',
+      
+      // Rally
+      home: '🏠',
+      
+      // Default icons for categories
+      units: '👥',
+      buildings: '🏗️',
+      research: '📚',
+      rally: '🚩'
+    };
+    
+    return icons[key] || '❓';
+  }
+  
+  // Get color for category (mirrors 2D menu colors)
+  function getColorForCategory(category) {
+    const colors = {
+      'buildings': new BABYLON.Color3(0, 1, 0), // Green
+      'units': new BABYLON.Color3(0.2, 0.6, 1), // Blue
+      'research': new BABYLON.Color3(1, 1, 0), // Yellow
+      'rally': new BABYLON.Color3(1, 0, 0) // Red
+    };
+    return colors[category] || new BABYLON.Color3(0.5, 0.5, 0.5); // Default gray
+  }
+  
+  // Clear all menu items
+  function clearMenuItems() {
+    radialMenuItems.forEach(item => {
+      if (item.mesh) {
+        item.mesh.dispose();
+      }
+    });
+    radialMenuItems = [];
+  }
+  
+  // Clear only submenu items, keep main menu items
+  function clearSubmenuItems() {
+    // Find and remove only submenu items
+    const submenuItems = radialMenuItems.filter(item => item.isSubItem);
+    submenuItems.forEach(item => {
+      if (item.mesh) {
+        item.mesh.dispose();
+      }
+    });
+    
+    // Remove submenu items from the array
+    radialMenuItems = radialMenuItems.filter(item => !item.isSubItem);
+    
+    // console.log(`🧹 Cleared ${submenuItems.length} submenu items, kept ${radialMenuItems.length} main menu items`);
+  }
+  
+  // Position submenu items in an arc relative to the CLICKED CATEGORY BUTTON
+  function positionSubmenuItemsInArc(screenX, screenY) {
+    const rect = hud.canvas.getBoundingClientRect();
+    
+    // Use the clicked category button position (screenX, screenY) as the anchor
+    const buttonX = screenX;
+    const buttonY = screenY;
+    
+    // console.log(`🎯 Submenu positioning using CLICKED CATEGORY BUTTON at (${buttonX}, ${buttonY})`);
+    // console.log(`🔍 DEBUG: currentAnchor = "${currentAnchor}", screenX = ${screenX}, screenY = ${screenY}`);
+    
+    // Calculate the correct direction based on the current anchor
+    // Submenus should spread AWAY from the screen edge where the anchor is
+    let buttonAngle;
+    switch (currentAnchor) {
+      case 'top':
+        // Top anchor: submenus should spread DOWN (away from top edge)
+        buttonAngle = 3 * Math.PI / 2; // 270° = down
+        break;
+      case 'bottom':
+        // Bottom anchor: submenus should spread UP (away from bottom edge)
+        buttonAngle = Math.PI / 2; // 90° = up
+        break;
+      case 'left':
+        // Left anchor: submenus should spread RIGHT (away from left edge)
+        buttonAngle = 0; // 0° = right
+        break;
+      case 'right':
+        // Right anchor: submenus should spread LEFT (away from right edge)
+        buttonAngle = Math.PI; // 180° = left
+        break;
+      default:
+        // Fallback to bottom behavior
+        buttonAngle = Math.PI / 2; // 90° = up
+        break;
+    }
+    
+    // console.log(`🔍 Using anchor-based angle: ${buttonAngle} (${currentAnchor} anchor)`);
+    
+    // Spread submenu items in an arc around the button-to-center direction
+    const arcSpread = Math.PI / 3; // 60 degrees total spread
+    const startAngle = buttonAngle - arcSpread / 2;
+    const endAngle = buttonAngle + arcSpread / 2;
+    
+    // console.log(`🔍 Arc spread: ${arcSpread}, Start: ${startAngle}, End: ${endAngle}`);
+    
+    // Only position submenu items, keep main menu items in their original positions
+    const submenuItems = radialMenuItems.filter(item => item.isSubItem);
+    
+    submenuItems.forEach((item, index) => {
+      if (!item.mesh) return;
+      
+      // Calculate angle for this item
+      let angle;
+      if (submenuItems.length === 1) {
+        // Single item - place it directly in the center of the arc
+        angle = (startAngle + endAngle) / 2;
+      } else {
+        // Multiple items - spread them across the arc
+        const angleStep = (endAngle - startAngle) / (submenuItems.length - 1);
+        angle = startAngle + (index * angleStep);
+      }
+      
+      // console.log(`🔍 Submenu item ${index}: angle=${angle} (${submenuItems.length} items)`);
+      
+      // Validate angle
+      if (isNaN(angle)) {
+        console.warn(`⚠️ Invalid angle for submenu item ${index}: ${angle}`);
+        return;
+      }
+      
+      // Calculate position in 3D world space relative to the clicked button
+      const radius = item.radius || 1.5; // Use item's radius, fallback to 1.5
+      const itemX = Math.cos(angle) * radius;
+      const itemY = Math.sin(angle) * radius;
+      const itemZ = 0; // Keep items in the same plane
+      
+      // console.log(`🔍 Submenu item ${index}: calculated position (${itemX}, ${itemY}, ${itemZ})`);
+      
+      // Position the item in 3D space relative to the radial menu position
+      item.mesh.position.set(itemX, itemY, itemZ);
+      item.mesh.scaling.setAll(0.01); // Start very small
+      
+      // Animate scale growing out with bounce
+      const scaleAnimation = new BABYLON.Animation(
+        `submenuGrow${index}`,
+        "scaling",
+        60, // 60 fps
+        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+      );
+      
+      const keyFrames = [];
+      keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0.01, 0.01, 0.01) });
+      keyFrames.push({ frame: 30, value: new BABYLON.Vector3(1.2, 1.2, 1.2) }); // Bounce
+      keyFrames.push({ frame: 60, value: new BABYLON.Vector3(1, 1, 1) }); // Settle
+      
+      scaleAnimation.setKeys(keyFrames);
+      
+      // Add easing for smooth bounce
+      const easingFunction = new BABYLON.CubicEase();
+      easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+      scaleAnimation.setEasingFunction(easingFunction);
+      
+      item.mesh.animations = [scaleAnimation];
+      hud.scene.beginAnimation(item.mesh, 0, 60, false);
+      
+      // console.log(`📍 Submenu item "${item.text}" positioned at 3D world (${itemX.toFixed(2)}, ${itemY.toFixed(2)}, ${itemZ.toFixed(2)}) relative to clicked button`);
+    });
+  }
+  
+  // Position items in an arc (like the main menu)
+  function positionItemsInArc(screenX, screenY) {
+    const rect = hud.canvas.getBoundingClientRect();
+    
+    // Use the anchor that was already determined to set spread direction
+    let anchorAngle = null;
+    
+    // Convert current anchor to spread direction (items spread AWAY from edges)
+    if (currentAnchor === 'top') {
+      anchorAngle = 3*Math.PI/2; // 270° = down (away from top)
+    } else if (currentAnchor === 'bottom') {
+      anchorAngle = Math.PI/2; // 90° = up (away from bottom)
+    } else if (currentAnchor === 'left') {
+      anchorAngle = 0; // 0° = right (away from left)
+    } else if (currentAnchor === 'right') {
+      anchorAngle = Math.PI; // 180° = left (away from right)
+    } else {
+      // Fallback to bottom behavior if somehow no anchor is set
+      anchorAngle = Math.PI/2; // 90° = up
+    }
+    
+    // If anchored, use a smaller arc centered on the anchor direction
+    let availableStart = 0;
+    let availableEnd = 2 * Math.PI;
+    let availableArc = 2 * Math.PI;
+    
+    if (anchorAngle !== null) {
+      const halfSpread = Math.PI/2.2; // ~82° each side = ~164° total arc (bigger spread)
+      availableStart = anchorAngle - halfSpread;
+      availableEnd = anchorAngle + halfSpread;
+      availableArc = halfSpread * 2; // ~164° total arc
+    }
+    
+    radialMenuItems.forEach((item, index) => {
+      if (!item.mesh) return;
+      
+      // Distribute items only within the available arc
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      const distanceFromCenter = Math.sqrt((screenX - centerX)**2 + (screenY - centerY)**2);
+      const maxDistance = Math.sqrt((rect.width/2)**2 + (rect.height/2)**2);
+      const distanceFactor = distanceFromCenter / maxDistance; // 0 = center, 1 = corner
+      
+      const radius = 0.8 + (distanceFactor * 0.6); // 0.8 in center, 1.4 near edges (smaller overall)
+      const angleStep = availableArc / radialMenuItems.length;
+      const angle = availableStart + (index * angleStep) + (angleStep / 2); // Center items in their segments
+      
+      // Standard circle math: 0° = right, 90° = up, etc.
+      const targetX = Math.cos(angle) * radius;
+      const targetY = Math.sin(angle) * radius; 
+      const targetZ = 0; // Keep items in the menu's local plane
+      
+      // Start at final position but tiny scale
+      item.mesh.position.set(targetX, targetY, targetZ);
+      item.mesh.scaling.setAll(0.01); // Start very small
+      
+      // Animate scale growing out with bounce
+      const scaleAnimation = new BABYLON.Animation(
+        `menuGrow${index}`,
+        "scaling",
+        60, // 60 fps
+        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
+        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
+      );
+      
+      const keyFrames = [];
+      keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0.01, 0.01, 0.01) });
+      keyFrames.push({ frame: 30, value: new BABYLON.Vector3(1.2, 1.2, 1.2) }); // Bounce
+      keyFrames.push({ frame: 60, value: new BABYLON.Vector3(1, 1, 1) }); // Settle
+      
+      scaleAnimation.setKeys(keyFrames);
+      
+      // Add easing for smooth bounce
+      const easingFunction = new BABYLON.CubicEase();
+      easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
+      scaleAnimation.setEasingFunction(easingFunction);
+      
+      item.mesh.animations = [scaleAnimation];
+      hud.scene.beginAnimation(item.mesh, 0, 60, false);
+    });
   }
   
   // Retract a button (animate it away)
@@ -668,9 +1184,16 @@
     const previous = menuStack.pop();
     currentMenuLevel = previous.level;
     
-    // Clear current items and restore previous ones
-    clearMenuItems();
-    radialMenuItems = previous.items;
+    // Clear only submenu items, keep main menu items
+    clearSubmenuItems();
+    
+    // If going back to main menu, we don't need to restore items
+    if (currentMenuLevel === 'main') {
+      console.log('🔄 Back to main menu - main menu items should already be visible');
+    } else {
+      // Restore previous menu items
+      radialMenuItems = previous.items;
+    }
     
     // Re-create meshes for restored items
     radialMenuItems.forEach(item => {
@@ -785,6 +1308,8 @@
     const x = Math.sin(radians) * item.radius;
     const z = Math.cos(radians) * item.radius;
     
+    // console.log(`🔍 calculateMenuItemPosition: "${item.text}" angle=${item.angle}°, radius=${item.radius}, pos=(${x.toFixed(2)}, ${z.toFixed(2)})`);
+    
     // All items sit on the same Y=0 plane
     return new BABYLON.Vector3(x, 0, z);
   }
@@ -818,7 +1343,7 @@
     
     // Add back button for sub-menus
     if (level !== 'main') {
-      hud.addRadialMenuItem("Back", "↩️", () => hud.goBackMenu(), new BABYLON.Color3(0.5, 0.5, 0.5));
+      // No back button needed
     }
     
     // Add close menu button for main menu
@@ -841,6 +1366,38 @@
     
     // Reset to main menu level
     currentMenuLevel = 'main';
+    
+    // If no main menu items exist, create them
+    if (radialMenuItems.length === 0) {
+      // console.log('🎮 Creating main menu items...');
+      
+      // Create main menu items in same order as 2D menu: buildings, units, research, rally
+      hud.addRadialMenuItem("Buildings", "🏗️", () => hud.showSubMenu("buildings"), new BABYLON.Color3(0, 1, 0)); // Green
+      
+      hud.addRadialMenuItem("Units", "👥", () => {
+        // Exit building placement mode if currently placing
+        if (window.buildingSystem && window.buildingSystem.isPlacing) {
+          window.buildingSystem.cancelPlacement();
+        }
+        hud.showSubMenu("units");
+      }, new BABYLON.Color3(0.2, 0.6, 1)); // Blue
+      
+      hud.addRadialMenuItem("Research", "🔬", () => {
+        // Exit building placement mode if currently placing
+        if (window.buildingSystem && window.buildingSystem.isPlacing) {
+          window.buildingSystem.cancelPlacement();
+        }
+        hud.showSubMenu("research");
+      }, new BABYLON.Color3(1, 1, 0)); // Yellow
+      
+      hud.addRadialMenuItem("Rally", "🚩", () => {
+        // Exit building placement mode if currently placing
+        if (window.buildingSystem && window.buildingSystem.isPlacing) {
+          window.buildingSystem.cancelPlacement();
+        }
+        hud.showSubMenu("rally");
+      }, new BABYLON.Color3(1, 0, 0)); // Red
+    }
     
     // Position main menu items in a circle
     radialMenuItems.forEach((item, index) => {
@@ -881,19 +1438,34 @@
   hud.addRadialMenuItem = function(text, icon, callback, color) {
     // Calculate angle based on total items (including this one)
     const totalItems = radialMenuItems.length + 1;
+    const currentIndex = radialMenuItems.length; // Index of current item being added
     
     // Get the current anchor direction to determine starting angle
     const anchorDirection = getAnchorDirection();
     const baseAngle = calculateBaseAngleForAnchor(anchorDirection);
     
     // Spread items across 180° arc, starting from anchor direction
+    // Use the same order as 2D menu: buildings, units, research, rally
     const angleSpread = 180;
     const angleStep = angleSpread / (Math.max(totalItems, 4) - 1);
-    const angle = baseAngle + ((totalItems - 1) * angleStep) - (angleSpread / 2);
+    
+    // Map the order to match 2D menu bottom anchor: rally=0, buildings=1, units=2, research=3
+    let orderIndex = currentIndex;
+    if (text === "Rally") orderIndex = 0;
+    else if (text === "Buildings") orderIndex = 1;
+    else if (text === "Units") orderIndex = 2;
+    else if (text === "Research") orderIndex = 3;
+    
+    const angle = baseAngle + (orderIndex * angleStep) - (angleSpread / 2);
     
     // Use larger radius for submenu items to avoid center overlap
     const isSubmenu = currentMenuLevel !== 'main';
-    const radius = isSubmenu ? Math.max(menuConfig.itemRadius * 1.5, 1.5) : menuConfig.itemRadius;
+    const radius = isSubmenu ? menuConfig.itemRadius * 0.8 : menuConfig.itemRadius * 0.3; // Median distance for main menu
+    
+    // console.log(`🎯 Item "${text}": isSubmenu=${isSubmenu}, radius=${radius}, baseRadius=${menuConfig.itemRadius}`);
+    
+    // Make both main menu and submenu items smaller
+    const scale = isSubmenu ? 0.7 : 0.5;
     
     // console.log(`🎯 Adding menu item "${text}" at angle ${angle.toFixed(1)}° (anchor: ${anchorDirection}, base: ${baseAngle}°, radius: ${radius}, submenu: ${isSubmenu})`);
     
@@ -904,6 +1476,7 @@
       color: color || new BABYLON.Color3(0.8, 0.4, 0.1), // Default orange
       angle: angle,
       radius: radius,
+      scale: scale,
       isSubItem: isSubmenu, // Mark as submenu item if not in main menu
       mesh: null
     };
@@ -918,8 +1491,10 @@
   function createMenuItemMesh(item) {
     if (!hud.scene || !radialMenu) return;
     
-    // Create a simple box for the menu item
-    const mesh = BABYLON.MeshBuilder.CreateBox(`menuItem_${item.text}`, {size: 0.4}, hud.scene);
+    // Create a simple box for the menu item with proper scaling
+    const baseSize = 0.4;
+    const finalSize = item.scale ? baseSize * item.scale : baseSize;
+    const mesh = BABYLON.MeshBuilder.CreateBox(`menuItem_${item.text}`, {size: finalSize}, hud.scene);
     
     // Create material with the item's color
     const material = new BABYLON.StandardMaterial(`menuMat_${item.text}`, hud.scene);
@@ -952,6 +1527,10 @@
         // console.log(`🎯 Menu item "${item.text}" clicked - executing callback`);
         
         if (item.callback) {
+          // Exit building placement mode if currently placing (for non-building items)
+          if (window.buildingSystem && window.buildingSystem.isPlacing && !item.text.toLowerCase().includes('building')) {
+            window.buildingSystem.cancelPlacement();
+          }
           item.callback();
         }
         
@@ -1267,6 +1846,99 @@
   // Expose resource display update function
   hud.updateResourceDisplay = updateResourceDisplay;
   
+  // Expose radialMenu for external access
+  hud.radialMenu = radialMenu;
+  
+  // ===== HUD MODE SELECTION =====
+  
+  // Toggle between 2D and 3D HUD modes
+  hud.toggleHUDMode = function() {
+    const switchElement = document.getElementById('hud_switch');
+    const handle = document.getElementById('hud_handle');
+    const isOn = switchElement.dataset.on === 'true';
+    
+    if (isOn) {
+      // Switch to 2D HUD (left position)
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+      
+      // Update HUD constants
+      window.USE_3D_HUD = false;
+      
+      // Reinitialize lasso for new mode
+      if (window.lassoSelection && window.lassoSelection.reinit) {
+        window.lassoSelection.reinit();
+      }
+      
+      // Save preference
+      localStorage.setItem('hudMode', '2d');
+      // console.log('Switched to 2D HUD - Value:', {
+      //   USE_3D_HUD: window.USE_3D_HUD
+      // });
+    } else {
+      // Switch to 3D HUD (right position)
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+      
+      // Update HUD constants
+      window.USE_3D_HUD = true;
+      
+      // Reinitialize lasso for new mode
+      if (window.lassoSelection && window.lassoSelection.reinit) {
+        window.lassoSelection.reinit();
+      }
+      
+      // Save preference
+      localStorage.setItem('hudMode', '3d');
+      // console.log('Switched to 3D HUD - Value:', {
+      //   USE_3D_HUD: window.USE_3D_HUD
+      // });
+    }
+  };
+  
+  // Initialize HUD mode from saved preference or default
+  hud.initializeHUDMode = function() {
+    const savedMode = localStorage.getItem('hudMode');
+    const switchElement = document.getElementById('hud_switch');
+    const handle = document.getElementById('hud_handle');
+    
+    if (savedMode === '3d') {
+      // Set to 3D HUD
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+      
+      window.USE_3D_HUD = true;
+      
+      // Reinitialize lasso for new mode
+      if (window.lassoSelection && window.lassoSelection.reinit) {
+        window.lassoSelection.reinit();
+      }
+      
+      // console.log('Initialized to 3D HUD - Value:', {
+      //   USE_3D_HUD: window.USE_3D_HUD
+      // });
+    } else {
+      // Default to 2D HUD
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+      
+      window.USE_3D_HUD = false;
+      
+      // Reinitialize lasso for new mode
+      if (window.lassoSelection && window.lassoSelection.reinit) {
+        window.lassoSelection.reinit();
+      }
+      
+      // console.log('Initialized to 2D HUD - Value:', {
+      //   USE_3D_HUD: window.USE_3D_HUD
+      // });
+    }
+  };
+  
   // ===== BUILDING SYSTEM =====
   
   // Building system state
@@ -1281,7 +1953,7 @@
   
   // Start building placement mode - DREAM SYSTEM
   hud.startBuildingPlacement = function(buildingType) {
-    console.log(`🏗️ Starting building placement for: ${buildingType}`);
+    // console.log(`🏗️ Starting building placement for: ${buildingType}`);
     buildingMode = true;
     currentBuildingType = buildingType;
     

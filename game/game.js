@@ -29,7 +29,7 @@ Game.prototype.init = function() {
   // Spawn initial game elements
   this.spawnInitialUnits();
   
-  console.log('🎮 Game initialized and running!');
+  // console.log('🎮 Game initialized and running!');
 };
 
 Game.prototype.spawnInitialUnits = function() {

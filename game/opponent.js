@@ -241,7 +241,7 @@ OpponentPlayer.prototype.loadOpponentMesh = function() {
     
     model.root.material = opponentMaterial;
     
-    console.log('🤖 Opponent mesh loaded');
+    // console.log('🤖 Opponent mesh loaded');
   }).catch(function(error) {
     console.warn('⚠️ Could not load opponent mesh:', error);
   });
@@ -344,7 +344,7 @@ OpponentPlayer.prototype.spawnInitialVillagers = function() {
     window.gameUnits.push(villager);
   }
   
-  console.log(`🤖 Spawned ${villagerCount} opponent villagers`);
+  // console.log(`🤖 Spawned ${villagerCount} opponent villagers`);
 };
 
 // Make OpponentSystem available globally
@@ -352,5 +352,5 @@ window.OpponentSystem = OpponentSystem;
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-  console.log('🤖 Opponent system initialized');
+  // console.log('🤖 Opponent system initialized');
 });

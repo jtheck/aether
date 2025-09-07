@@ -919,13 +919,10 @@ let pov2 = 240;
       if (window.hud && gfx.camera && gfx.canvas) {
         hud.init(gfx.scene, gfx.camera, gfx.canvas);
         
-        // Set up main radial menu categories (these will expand into sub-menus)
-        hud.addRadialMenuItem("Units", "👥", () => hud.showSubMenu("units"), new BABYLON.Color3(0.2, 0.6, 1)); // Blue
-        hud.addRadialMenuItem("Buildings", "🏗️", () => hud.showSubMenu("buildings"), new BABYLON.Color3(0, 1, 0)); // Green
-        hud.addRadialMenuItem("Research", "🔬", () => hud.showSubMenu("research"), new BABYLON.Color3(1, 1, 0)); // Yellow
-        hud.addRadialMenuItem("Rally", "🚩", () => hud.showSubMenu("rally"), new BABYLON.Color3(1, 0, 0)); // Red
-        
-        // console.log("HUD initialized with default radial menu");
+        // Only initialize 3D HUD if USE_3D_HUD is true
+        if (USE_3D_HUD) {
+          console.log("🎮 3D HUD initialized - main menu items will be created when first shown");
+        }
       }
       
       gfx.engine.runRenderLoop(mainRenderLoop);

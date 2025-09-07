@@ -4,10 +4,10 @@
   // Public API
   touch.init = function initTouchManager(canvas, options) {
     if (!canvas || touch._initialized) {
-      console.log('📱 Touch init skipped - canvas:', !!canvas, 'initialized:', touch._initialized);
+      // console.log('📱 Touch init skipped - canvas:', !!canvas, 'initialized:', touch._initialized);
       return;
     }
-    console.log('📱 Touch system initializing...');
+    // console.log('📱 Touch system initializing...');
 
     const config = Object.assign({
       tapMaxTimeMs: 250,
@@ -398,6 +398,24 @@
               nz = Math.max(minZ, Math.min(maxZ, nz));
               if (Number.isFinite(nx)) window.cameraAnchor.x = nx;
               if (Number.isFinite(nz)) window.cameraAnchor.z = nz;
+              
+              // Only snap camera target if it would go beyond bounds after lerping
+              // This prevents aggressive snapping when just getting close to edges
+              if (window.gfx && window.gfx.cameraTarget) {
+                const cameraLerpSpeed = 0.12; // Same as in gfx.js
+                const nextTargetX = BABYLON.Scalar.Lerp(window.gfx.cameraTarget.position.x, window.cameraAnchor.x, cameraLerpSpeed);
+                const nextTargetZ = BABYLON.Scalar.Lerp(window.gfx.cameraTarget.position.z, window.cameraAnchor.z, cameraLerpSpeed);
+                
+                // Check if the next camera target position would be out of bounds
+                const wouldBeOutOfBoundsX = nextTargetX < minX || nextTargetX > maxX;
+                const wouldBeOutOfBoundsZ = nextTargetZ < minZ || nextTargetZ > maxZ;
+                
+                if (wouldBeOutOfBoundsX || wouldBeOutOfBoundsZ) {
+                  // Only snap if the camera target would actually go out of bounds
+                  window.gfx.cameraTarget.position.x = Math.max(minX, Math.min(maxX, nextTargetX));
+                  window.gfx.cameraTarget.position.z = Math.max(minZ, Math.min(maxZ, nextTargetZ));
+                }
+              }
               if (window.debugPan) {
                 try {
                   console.log('[PAN]', {
@@ -774,8 +792,12 @@
           const distTwoSq = distanceSq(cx, cy, lastTwoTapPos.x, lastTwoTapPos.y);
           const centerThresh = (config.twoFingerDoubleTapCenterMaxMovePx || 80);
           if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < (centerThresh * centerThresh)) {
-            // Double 2-tap: clear active selection immediately
-            if (window.player && window.player.clearSelection) {
+            // Double 2-tap: exit building placement mode if placing, otherwise clear selection
+            if (window.buildingSystem && window.buildingSystem.isPlacing) {
+              // Exit building placement mode but keep selection
+              window.buildingSystem.cancelPlacement();
+            } else if (window.player && window.player.clearSelection) {
+              // Clear active selection if not in building placement mode
               window.player.clearSelection();
             }
             // Suppress any ensuing single-tap/lasso start
@@ -815,7 +837,7 @@
     canvas.addEventListener('pointermove', onPointerMove, { passive: false });
     canvas.addEventListener('pointerup', onPointerUp, { passive: false });
     canvas.addEventListener('pointercancel', onPointerCancel, { passive: false });
-    console.log('📱 Touch event listeners registered');
+    // console.log('📱 Touch event listeners registered');
 
     touch._initialized = true;
   };

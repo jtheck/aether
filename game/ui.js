@@ -269,24 +269,59 @@ function getRandomColor() {
       break;
       case 'KeyB':
         if (state == true){
-          // Open building menu
-          if (window.hud && window.hud.showRadialMenu && window.hud.showSubMenu) {
-            // console.log('🏗️ B key pressed - opening building menu');
+          // Open building menu - choose between 2D and 3D based on constants
+          if (USE_3D_HUD && window.hud && window.hud.showRadialMenu) {
+            // console.log('🏗️ B key pressed - opening 3D main menu');
             
-            // First show the radial menu at the bottom center of the screen
-            const rect = gfx.canvas.getBoundingClientRect();
-            const centerX = rect.width / 2;
-            const centerY = rect.height * 0.9; // Bottom of screen
+            // Find the closest anchor to current mouse position
+            const anchors = {
+              n: document.getElementById('anchor_n'),
+              s: document.getElementById('anchor_s'),
+              e: document.getElementById('anchor_e'),
+              w: document.getElementById('anchor_w')
+            };
             
-            // Show the radial menu first
-            window.hud.showRadialMenu(centerX, centerY, 'bottom');
+            // Get anchor positions
+            const anchorPositions = {};
+            for (const [direction, anchor] of Object.entries(anchors)) {
+              if (anchor) {
+                const rect = anchor.getBoundingClientRect();
+                const canvasRect = gfx.canvas.getBoundingClientRect();
+                anchorPositions[direction] = {
+                  x: rect.left + rect.width / 2 - canvasRect.left,
+                  y: rect.top + rect.height / 2 - canvasRect.top
+                };
+              }
+            }
             
-            // Then navigate to the buildings submenu after a short delay
-            setTimeout(() => {
-              window.hud.showSubMenu("buildings", centerX, centerY);
-            }, 100);
+            // Find closest anchor to current mouse position
+            let minDist = Infinity;
+            let closestAnchor = 's'; // Default to south if no anchors found
+            
+            for (const [direction, pos] of Object.entries(anchorPositions)) {
+              const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+              if (dist < minDist) {
+                minDist = dist;
+                closestAnchor = direction;
+              }
+            }
+            
+            // Convert direction to anchor name for 3D menu
+            const anchorMap = { n: 'top', s: 'bottom', e: 'right', w: 'left' };
+            const anchorName = anchorMap[closestAnchor] || 'bottom';
+            
+            // Show 3D menu at closest anchor
+            if (anchorPositions[closestAnchor]) {
+              window.hud.showRadialMenu(anchorPositions[closestAnchor].x, anchorPositions[closestAnchor].y, anchorName);
+            }
+          } else if (!USE_3D_HUD) {
+            // Fallback to 2D menu system - trigger anchor click
+            const anchor = document.getElementById('anchor_s'); // Bottom anchor
+            if (anchor) {
+              anchor.click();
+            }
           } else {
-            // console.warn('🏗️ HUD system not available for building menu');
+            // console.warn('🏗️ No menu system available for building menu');
           }
         }
       break;
@@ -323,6 +358,9 @@ function getRandomColor() {
   let rmbPanActive = false;
   let rmbLastScreen = { x: 0, y: 0 };
 
+  // Track current mouse position for menu positioning
+  let currentMousePosition = { x: 0, y: 0 };
+
   // Handle pointer events (mouse clicks, touch)
   ui.handlePointer = function(e) {
     e.preventDefault();
@@ -335,6 +373,31 @@ function getRandomColor() {
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    
+    // Update current mouse position for menu positioning
+    currentMousePosition.x = x;
+    currentMousePosition.y = y;
+    
+    // Handle 3D menu closing on clicks outside menu
+    if (e.type === 'pointerdown' && e.button === 0) { // Left click only
+      if (window.hud && window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible()) {
+        // Check if click is on a 3D menu element
+        const pickResult = gfx.scene.pick(x, y);
+        const isMenuClick = pickResult.hit && (
+          pickResult.pickedMesh && (
+            pickResult.pickedMesh.name.includes('menuItem_') ||
+            pickResult.pickedMesh.name.includes('radialCenter') ||
+            pickResult.pickedMesh.parent === window.hud.radialMenu
+          )
+        );
+        
+        if (!isMenuClick) {
+          // Click outside 3D menu - close it
+          window.hud.hideRadialMenu();
+          return; // Don't process this click further
+        }
+      }
+    }
     
     // RMB pan (hold RMB to pan like touch)
     if (e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 2) {
@@ -372,8 +435,39 @@ function getRandomColor() {
           const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
           const panSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 0.3; // Reduced by 70%
           if (!window.cameraAnchor) window.cameraAnchor = cameraTarget.position.clone();
-          window.cameraAnchor.x += wx * panSens;
-          window.cameraAnchor.z += wz * panSens;
+          
+          // Calculate new anchor position
+          const newX = window.cameraAnchor.x + wx * panSens;
+          const newZ = window.cameraAnchor.z + wz * panSens;
+          
+          // Apply bounds clamping to anchor
+          const tileSize = (window.TILE_SIZE || 4);
+          const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+          const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+          const margin = 2 * tileSize;
+          const minX = margin, minZ = margin;
+          const maxX = Math.max(minX, w - margin);
+          const maxZ = Math.max(minZ, h - margin);
+          
+          // Clamp anchor within field bounds
+          window.cameraAnchor.x = Math.max(minX, Math.min(maxX, newX));
+          window.cameraAnchor.z = Math.max(minZ, Math.min(maxZ, newZ));
+          
+          // Only snap camera target if it would go beyond bounds after lerping
+          // This prevents aggressive snapping when just getting close to edges
+          const cameraLerpSpeed = 0.12; // Same as in gfx.js
+          const nextTargetX = BABYLON.Scalar.Lerp(cameraTarget.position.x, window.cameraAnchor.x, cameraLerpSpeed);
+          const nextTargetZ = BABYLON.Scalar.Lerp(cameraTarget.position.z, window.cameraAnchor.z, cameraLerpSpeed);
+          
+          // Check if the next camera target position would be out of bounds
+          const wouldBeOutOfBoundsX = nextTargetX < minX || nextTargetX > maxX;
+          const wouldBeOutOfBoundsZ = nextTargetZ < minZ || nextTargetZ > maxZ;
+          
+          if (wouldBeOutOfBoundsX || wouldBeOutOfBoundsZ) {
+            // Only snap if the camera target would actually go out of bounds
+            cameraTarget.position.x = Math.max(minX, Math.min(maxX, nextTargetX));
+            cameraTarget.position.z = Math.max(minZ, Math.min(maxZ, nextTargetZ));
+          }
         }
       }
     } else if (e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
@@ -396,16 +490,16 @@ function getRandomColor() {
     
     // Handle LMB selection system move and up events
     if (e.type === 'pointermove') {
-      // Skip lasso while placing buildings
-      if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
+      // Skip lasso while placing buildings or when 3D menu is visible
+      if (!(window.buildingSystem && window.buildingSystem.isPlacing) && !(window.hud && window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible())) {
         // Handle LMB move for selection (button is not set during move events)
         if (window.lassoSelection && window.lassoSelection.handleLmbMove) {
           window.lassoSelection.handleLmbMove(x, y);
         }
       }
     } else if (e.type === 'pointerup' && e.button === 0) {
-      // Handle LMB up for selection (skip during building placement)
-      if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
+      // Handle LMB up for selection (skip during building placement or when 3D menu is visible)
+      if (!(window.buildingSystem && window.buildingSystem.isPlacing) && !(window.hud && window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible())) {
         if (window.lassoSelection && window.lassoSelection.handleLmbUp) {
           window.lassoSelection.handleLmbUp(x, y);
         }
@@ -414,7 +508,7 @@ function getRandomColor() {
     
     // Handle LMB selection system FIRST (before double-click detection)
     if (e.type === 'pointerdown' && e.button === 0) { // Left click only
-      if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
+      if (!(window.buildingSystem && window.buildingSystem.isPlacing) && !(window.hud && window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible())) {
         if (window.lassoSelection && window.lassoSelection.handleLmbDown) {
           window.lassoSelection.handleLmbDown(x, y, e);
         }
@@ -429,11 +523,11 @@ function getRandomColor() {
       // Check if this is a double-click
       if (lastClickPosition && currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
         // Double-click detected! Trigger special abilities on selected units
-        console.log('🖱️ Mouse double click detected - triggering special abilities');
+        // console.log('🖱️ Mouse double click detected - triggering special abilities');
         const pickResult = gfx.scene.pick(x, y);
         const worldPos = pickResult.hit ? pickResult.pickedPoint : null;
         if (window.ui && window.ui.triggerSpecialAbilityAt) {
-          console.log('🖱️ Calling triggerSpecialAbilityAt with worldPos:', worldPos);
+          // console.log('🖱️ Calling triggerSpecialAbilityAt with worldPos:', worldPos);
           window.ui.triggerSpecialAbilityAt(worldPos);
         }
         
@@ -747,7 +841,7 @@ function getRandomColor() {
       return;
     }
     cameraHasBeenNudged = true;
-    let INVERSEROT = -1;
+    let INVERSEROT = 1;
     let INVERSEZOOM = 1;
     
     // Get wheel delta (positive = scroll up, negative = scroll down)
@@ -1111,13 +1205,13 @@ function getRandomColor() {
 
   // Trigger unit special abilities at optional world position
   ui.triggerSpecialAbilityAt = function(worldPos) {
-    console.log('🎯 triggerSpecialAbilityAt called with worldPos:', worldPos);
+    // console.log('🎯 triggerSpecialAbilityAt called with worldPos:', worldPos);
     if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) {
-      console.log('🎯 Missing dependencies - player:', !!window.player, 'getSelectedUnits:', !!window.player?.getSelectedUnits, 'behaviorManager:', !!window.behaviorManager);
+      // console.log('🎯 Missing dependencies - player:', !!window.player, 'getSelectedUnits:', !!window.player?.getSelectedUnits, 'behaviorManager:', !!window.behaviorManager);
       return;
     }
     const units = window.player.getSelectedUnits();
-    console.log('🎯 Selected units:', units.length);
+    // console.log('🎯 Selected units:', units.length);
     units.forEach(unit => {
       const type = unit.type || unit.name || '';
       if (/engineer/i.test(type)) {

@@ -573,3 +573,53 @@ a:after{
   cursor: default;
   opacity: 0.5;  
 }
+
+
+
+
+.binary_switch {
+  width: 50px; 
+  height: 25px;
+  background: #ccc;
+  border-radius: 2px; 
+  position: relative; 
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+/* Default state - 2D HUD (left position) */
+.binary_switch[data-on="false"] {
+  background: #ccc;
+}
+
+.binary_switch[data-on="false"] .switch_handle {
+  left: 2px;
+}
+
+/* 3D HUD state (right position) */
+.binary_switch[data-on="true"] {
+  background: #4CAF50;
+}
+
+.binary_switch[data-on="true"] .switch_handle {
+  left: 27px;
+}
+
+.switch_handle {
+  width: 21px; 
+  height: 21px; 
+  background: white; 
+  border-radius: 2px;
+  position: absolute; 
+  top: 2px; left: 2px; 
+  transition: left 0.1s; 
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.settings_option {
+  margin: 10px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}

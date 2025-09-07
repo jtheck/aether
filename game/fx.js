@@ -384,7 +384,7 @@
       }
     });
     
-    console.log(`🔥 Attached ${attachedEffects.length} particle effects to ${building.name}`);
+    // console.log(`🔥 Attached ${attachedEffects.length} particle effects to ${building.name}`);
     return attachedEffects;
   };
   

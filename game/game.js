@@ -109,11 +109,15 @@ window.gameLoop = {
   if (window.updateIdleUnits) {
     window.updateIdleUnits();
   }
-  // Update physics for all units
+  // Update physics for all units with LOD optimization
   if (window.gameUnits) {
     // log(window.gameUnits[0].pb.state.loc)
     window.gameUnits.forEach(unit => {
       if (unit.pb && unit.pb.integrate) {
+        // Skip physics updates for neutral units that are far away (use squared distance)
+        if (unit.owner === 'neutral' && unit.distanceToCameraSquared > 90000) { // 300^2
+          return; // Skip physics integration for distant neutral units
+        }
         unit.pb.integrate(this.physicsTimestep, false, false);
       }
     });

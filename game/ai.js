@@ -1094,12 +1094,17 @@ class UnitBehaviorManager {
             return;
         }
         
-        // Debug: log behavior count occasionally
-        if (Math.random() < 0.01) { // 1% chance to log
-            // console.log(`🎯 Stepping ${this.behaviors.size} behaviors`);
-        }
+        // Debug: log behavior count occasionally (disabled for performance)
+        // if (Math.random() < 0.01) { // 1% chance to log
+        //     // console.log(`🎯 Stepping ${this.behaviors.size} behaviors`);
+        // }
         
         this.behaviors.forEach((behavior, unit) => {
+            // Skip behavior updates for neutral units that are far away (use squared distance)
+            if (unit.owner === 'neutral' && unit.distanceToCameraSquared > 90000) { // 300^2
+                return; // Skip behavior stepping for distant neutral units
+            }
+            
             if (behavior) {
                 const completed = behavior.step();
                 if (completed) {
@@ -1372,14 +1377,65 @@ class TransformBehavior extends Behavior {
         }
         window.gameUnits.push(newUnit);
         
-        // Clean up old unit's mesh
+        // Clean up old unit's mesh and selection indicator
         if (this.unit.mesh) {
+            // Dispose of selection indicator first
+            if (this.unit.selectionIndicator) {
+                this.unit.selectionIndicator.dispose();
+                this.unit.selectionIndicator = null;
+            }
+            
+            // Dispose of the mesh
             this.unit.mesh.dispose();
+            this.unit.mesh = null;
         }
         
-        // Spawn visual model for new unit
-        if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
-            window.spawnUnitModels(window.gfx.scene);
+        // Spawn visual model for new unit immediately
+        if (window.gfx && window.gfx.scene && window.gfx.getModel) {
+            window.gfx.getModel(newUnit.model, window.gfx.scene).then(model => {
+                newUnit.mesh = model.root;
+                newUnit.mesh.scaling = new BABYLON.Vector3(newUnit.scale, newUnit.scale, newUnit.scale);
+                
+                // Make unit mesh pickable for selection
+                newUnit.mesh.isPickable = true;
+                
+                // Handle child meshes
+                newUnit.mesh.getChildMeshes().forEach(mesh => {
+                    mesh.isPickable = true;
+                    
+                    if (mesh.rotationQuaternion) {
+                        const quaternion = mesh.rotationQuaternion.clone();
+                        mesh.rotationQuaternion = null;
+                        mesh.originalRotation = quaternion.toEulerAngles();
+                        mesh.rotation.copyFrom(mesh.originalRotation);
+                    }
+                });
+                
+                // Create selection indicator
+                if (window.createSelectionIndicator) {
+                    window.createSelectionIndicator(newUnit);
+                }
+                
+                // Set position and rotation
+                if (newUnit.pb && newUnit.pb.state && newUnit.pb.state.loc) {
+                    newUnit.mesh.position.x = newUnit.pb.state.loc.x;
+                    newUnit.mesh.position.y = newUnit.pb.state.loc.y;
+                    newUnit.mesh.position.z = newUnit.pb.state.loc.z;
+                }
+                
+                if (newUnit.pb && newUnit.pb.state && newUnit.pb.state.rot) {
+                    newUnit.mesh.rotationQuaternion = null;
+                    newUnit.mesh.rotation.y = newUnit.pb.state.rot.y;
+                }
+                
+                // Apply team colors to the transformed unit
+                if (window.applyTeamColorsToMesh) {
+                    const teamColor = window.getTeamColorForOwner ? window.getTeamColorForOwner(newUnit.owner) : '#4A90E2';
+                    window.applyTeamColorsToMesh(newUnit.mesh, teamColor);
+                }
+            }).catch(error => {
+                console.warn('Failed to load transformed unit model:', error);
+            });
         }
         
         // Update unit reference
@@ -1424,14 +1480,65 @@ class TransformBehavior extends Behavior {
         }
         window.gameUnits.push(newVillager);
         
-        // Clean up old unit's mesh
+        // Clean up old unit's mesh and selection indicator
         if (this.unit.mesh) {
+            // Dispose of selection indicator first
+            if (this.unit.selectionIndicator) {
+                this.unit.selectionIndicator.dispose();
+                this.unit.selectionIndicator = null;
+            }
+            
+            // Dispose of the mesh
             this.unit.mesh.dispose();
+            this.unit.mesh = null;
         }
         
-        // Spawn visual model for new villager
-        if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
-            window.spawnUnitModels(window.gfx.scene);
+        // Spawn visual model for new villager immediately
+        if (window.gfx && window.gfx.scene && window.gfx.getModel) {
+            window.gfx.getModel(newVillager.model, window.gfx.scene).then(model => {
+                newVillager.mesh = model.root;
+                newVillager.mesh.scaling = new BABYLON.Vector3(newVillager.scale, newVillager.scale, newVillager.scale);
+                
+                // Make unit mesh pickable for selection
+                newVillager.mesh.isPickable = true;
+                
+                // Handle child meshes
+                newVillager.mesh.getChildMeshes().forEach(mesh => {
+                    mesh.isPickable = true;
+                    
+                    if (mesh.rotationQuaternion) {
+                        const quaternion = mesh.rotationQuaternion.clone();
+                        mesh.rotationQuaternion = null;
+                        mesh.originalRotation = quaternion.toEulerAngles();
+                        mesh.rotation.copyFrom(mesh.originalRotation);
+                    }
+                });
+                
+                // Create selection indicator
+                if (window.createSelectionIndicator) {
+                    window.createSelectionIndicator(newVillager);
+                }
+                
+                // Set position and rotation
+                if (newVillager.pb && newVillager.pb.state && newVillager.pb.state.loc) {
+                    newVillager.mesh.position.x = newVillager.pb.state.loc.x;
+                    newVillager.mesh.position.y = newVillager.pb.state.loc.y;
+                    newVillager.mesh.position.z = newVillager.pb.state.loc.z;
+                }
+                
+                if (newVillager.pb && newVillager.pb.state && newVillager.pb.state.rot) {
+                    newVillager.mesh.rotationQuaternion = null;
+                    newVillager.mesh.rotation.y = newVillager.pb.state.rot.y;
+                }
+                
+                // Apply team colors to the reverted villager
+                if (window.applyTeamColorsToMesh) {
+                    const teamColor = window.getTeamColorForOwner ? window.getTeamColorForOwner(newVillager.owner) : '#4A90E2';
+                    window.applyTeamColorsToMesh(newVillager.mesh, teamColor);
+                }
+            }).catch(error => {
+                console.warn('Failed to load reverted villager model:', error);
+            });
         }
     }
     
@@ -1898,13 +2005,19 @@ function updateIdleUnits() {
     let idleCount = 0;
     let wanderAttempts = 0;
     
-    // Debug: log when function is called
-    if (Math.random() < 0.05) { // 5% chance to log
-        // console.log(`🌍 updateIdleUnits called, total units: ${gameUnits.length}`);
-    }
+    // Debug: log when function is called (disabled for performance)
+    // if (Math.random() < 0.05) { // 5% chance to log
+    //     // console.log(`🌍 updateIdleUnits called, total units: ${gameUnits.length}`);
+    // }
+    
+    const currentTime = window.cachedTime || Date.now(); // Use cached time for performance
     
     gameUnits.forEach(unit => {
-        const currentTime = Date.now();
+        
+        // Skip idle updates for neutral units that are far away (use squared distance)
+        if (unit.owner === 'neutral' && unit.distanceToCameraSquared > 90000) { // 300^2
+            return; // Skip idle updates for distant neutral units
+        }
         
         // Initialize unit tracking properties if they don't exist
         if (!unit.lastWanderTime) unit.lastWanderTime = 0;

@@ -1851,6 +1851,158 @@
   
   // ===== HUD MODE SELECTION =====
   
+  // Toggle shadows on/off
+  hud.toggleShadowsMode = function() {
+    const switchElement = document.getElementById('shadows_switch');
+    const handle = document.getElementById('shadows_handle');
+    const isOn = switchElement.dataset.on === 'true';
+    
+    if (isOn) {
+      // Turn shadows off (left position)
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+      
+      // Disable shadows
+      window.SHADOWS_ENABLED = false;
+      
+      // Update all meshes to not receive shadows
+      if (window.gfx && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows();
+      }
+      
+      // Save preference
+      localStorage.setItem('shadowsEnabled', 'false');
+      // console.log('Shadows disabled');
+    } else {
+      // Turn shadows on (right position)
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+      
+      // Enable shadows
+      window.SHADOWS_ENABLED = true;
+      
+      // Initialize shadow generator if it doesn't exist
+      if (window.gfx && window.gfx.autoInitializeShadows) {
+        window.gfx.autoInitializeShadows();
+      }
+      
+      // Update all meshes to receive shadows
+      if (window.gfx && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows();
+      }
+      
+      // Save preference
+      localStorage.setItem('shadowsEnabled', 'true');
+    }
+  };
+  
+  // Initialize LOD slider
+  hud.initLODSlider = function() {
+    const slider = document.getElementById('lod_slider');
+    const valueDisplay = document.getElementById('lod_value');
+    
+    // console.log('🎚️ Initializing LOD slider:', { slider: !!slider, valueDisplay: !!valueDisplay });
+    
+    if (!slider || !valueDisplay) {
+      console.warn('🎚️ LOD slider elements not found, retrying in 100ms...');
+      setTimeout(() => hud.initLODSlider(), 100);
+      return;
+    }
+    
+    // Load saved LOD setting or use default
+    const savedLOD = localStorage.getItem('lodLevel');
+    const initialValue = savedLOD ? parseInt(savedLOD) : 50;
+    slider.value = initialValue;
+    valueDisplay.textContent = initialValue + '%';
+    
+    // Update LOD distances based on slider value
+    hud.updateLODDistances(initialValue);
+    
+    // Add event listener for slider changes
+    slider.addEventListener('input', function() {
+      const value = parseInt(this.value);
+      // console.log('🎚️ LOD slider changed to:', value);
+      valueDisplay.textContent = value + '%';
+      
+      // Update LOD distances
+      hud.updateLODDistances(value);
+      
+      // Save setting
+      localStorage.setItem('lodLevel', value.toString());
+      
+      // Update slider background color
+      hud.updateSliderColor(slider, value);
+    });
+    
+    // Add change event listener for when user releases mouse
+    slider.addEventListener('change', function() {
+      const value = parseInt(this.value);
+      // Ensure the final value is properly saved
+      localStorage.setItem('lodLevel', value.toString());
+    });
+    
+
+    // Set initial color
+    hud.updateSliderColor(slider, initialValue);
+  };
+  
+  // Get current LOD multiplier for new models
+  hud.getCurrentLODMultiplier = function() {
+    const savedLOD = localStorage.getItem('lodLevel');
+    const level = savedLOD ? parseInt(savedLOD) : 50;
+    return 0.3 + (level / 100) * 1.4; // Range from 0.3x to 1.7x
+  };
+
+  // Update LOD distances based on slider value (0-100)
+  hud.updateLODDistances = function(level) {
+    // Level 0 = minimum LOD (very close distances)
+    // Level 50 = default LOD (current distances)
+    // Level 100 = maximum LOD (very far distances)
+    
+    const multiplier = 0.3 + (level / 100) * 1.4; // Range from 0.3x to 1.7x
+    
+    // Update unit LOD distances
+    if (window.LOD_DISTANCES) {
+      window.LOD_DISTANCES.NEAR = Math.round(150 * multiplier);
+      window.LOD_DISTANCES.FAR = Math.round(450 * multiplier);
+      window.LOD_DISTANCES.HIDDEN = Math.round(600 * multiplier);
+    }
+    
+    // Update flying unit LOD distances
+    if (window.FLYING_LOD_DISTANCES) {
+      window.FLYING_LOD_DISTANCES.NEAR = Math.round(300 * multiplier);
+      window.FLYING_LOD_DISTANCES.FAR = Math.round(900 * multiplier);
+      window.FLYING_LOD_DISTANCES.HIDDEN = Math.round(1200 * multiplier);
+    }
+    
+    // Update graphics LOD distances if they exist
+    if (window.gfx && window.gfx.updateLODDistances) {
+      window.gfx.updateLODDistances(multiplier);
+    }
+    
+  };
+  
+  // Update slider background color based on value
+  hud.updateSliderColor = function(slider, value) {
+    // Remove existing color classes
+    slider.classList.remove('lod-low', 'lod-medium-low', 'lod-medium', 'lod-medium-high', 'lod-high');
+    
+    // Add appropriate color class
+    if (value <= 20) {
+      slider.classList.add('lod-low');
+    } else if (value <= 40) {
+      slider.classList.add('lod-medium-low');
+    } else if (value <= 60) {
+      slider.classList.add('lod-medium');
+    } else if (value <= 80) {
+      slider.classList.add('lod-medium-high');
+    } else {
+      slider.classList.add('lod-high');
+    }
+  };
+
   // Toggle between 2D and 3D HUD modes
   hud.toggleHUDMode = function() {
     const switchElement = document.getElementById('hud_switch');
@@ -1936,6 +2088,48 @@
       // console.log('Initialized to 2D HUD - Value:', {
       //   USE_3D_HUD: window.USE_3D_HUD
       // });
+    }
+  };
+  
+  // Initialize shadows mode from saved preference or default
+  hud.initializeShadowsMode = function() {
+    const savedShadows = localStorage.getItem('shadowsEnabled');
+    const switchElement = document.getElementById('shadows_switch');
+    const handle = document.getElementById('shadows_handle');
+    
+    if (savedShadows === 'true') {
+      // Set to shadows on
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+      
+      window.SHADOWS_ENABLED = true;
+      
+      // Initialize shadow generator if it doesn't exist
+      if (window.gfx && window.gfx.autoInitializeShadows) {
+        window.gfx.autoInitializeShadows();
+      }
+      
+      // Update all meshes to receive shadows
+      if (window.gfx && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows();
+      }
+      
+      // console.log('Initialized to shadows ON');
+    } else {
+      // Default to shadows off
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+      
+      window.SHADOWS_ENABLED = false;
+      
+      // Update all meshes to not receive shadows
+      if (window.gfx && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows();
+      }
+      
+      // console.log('Initialized to shadows OFF');
     }
   };
   

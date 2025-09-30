@@ -35,7 +35,7 @@
       panBias: 1.2,
       primaryOverrideFactor: 1.6,
       initialPinchMinSpanPx: 10,
-      maxRadiusStepPerFrame: 4,
+      maxRadiusStepPerFrame: 1.5,
       gestureEngageTimeMs: 20,
       gestureForceCommitMs: 150,
       // Building placement UX
@@ -353,8 +353,12 @@
         if (window.gfx && window.gfx.cameraTarget && gestureInitial.worldAtCentroid) {
           const worldNow = screenToWorld(cNow.x, cNow.y);
           if (worldNow) {
-            let dx = (gestureInitial.worldAtCentroid.x - worldNow.x) * config.panSensitivity;
-            let dz = (gestureInitial.worldAtCentroid.z - worldNow.z) * config.panSensitivity;
+            // Zoom-aware pan sensitivity for touch
+            const zoomFactor = window.gfx && window.gfx.camera ? Math.min(1.0, Math.pow(60 / (window.gfx.camera.radius || 60), 1.5)) : 1.0;
+            const adjustedPanSensitivity = config.panSensitivity * zoomFactor;
+            
+            let dx = (gestureInitial.worldAtCentroid.x - worldNow.x) * adjustedPanSensitivity;
+            let dz = (gestureInitial.worldAtCentroid.z - worldNow.z) * adjustedPanSensitivity;
             if (!Number.isFinite(dx)) dx = 0;
             if (!Number.isFinite(dz)) dz = 0;
             // Fallback: if world delta is negligible, approximate from screen delta
@@ -373,59 +377,15 @@
                 // Map screen movement: right += x, forward += y
                 const wx = groundRight.x * screenDx * pixelsToWorld + groundForward.x * screenDy * pixelsToWorld;
                 const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
-                dx = wx * config.panSensitivity;
-                dz = wz * config.panSensitivity;
+                dx = wx * adjustedPanSensitivity;
+                dz = wz * adjustedPanSensitivity;
               }
             }
             const k = (primary === 'pan' ? 1 : config.dampSecondary);
             dx *= k; dz *= k;
-            // Apply to anchor; camera target will lerp toward anchor
-            if (!window.cameraAnchor && window.gfx && window.gfx.cameraTarget) {
-              window.cameraAnchor = window.gfx.cameraTarget.position.clone();
-            }
-            if (window.cameraAnchor) {
-              const tileSize = (window.TILE_SIZE || 4);
-              const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
-              const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
-              const margin = 2 * tileSize;
-              const minX = margin, minZ = margin;
-              const maxX = Math.max(minX, w - margin);
-              const maxZ = Math.max(minZ, h - margin);
-              let nx = window.cameraAnchor.x + dx;
-              let nz = window.cameraAnchor.z + dz;
-              // Clamp anchor within field
-              nx = Math.max(minX, Math.min(maxX, nx));
-              nz = Math.max(minZ, Math.min(maxZ, nz));
-              if (Number.isFinite(nx)) window.cameraAnchor.x = nx;
-              if (Number.isFinite(nz)) window.cameraAnchor.z = nz;
-              
-              // Only snap camera target if it would go beyond bounds after lerping
-              // This prevents aggressive snapping when just getting close to edges
-              if (window.gfx && window.gfx.cameraTarget) {
-                const cameraLerpSpeed = 0.12; // Same as in gfx.js
-                const nextTargetX = BABYLON.Scalar.Lerp(window.gfx.cameraTarget.position.x, window.cameraAnchor.x, cameraLerpSpeed);
-                const nextTargetZ = BABYLON.Scalar.Lerp(window.gfx.cameraTarget.position.z, window.cameraAnchor.z, cameraLerpSpeed);
-                
-                // Check if the next camera target position would be out of bounds
-                const wouldBeOutOfBoundsX = nextTargetX < minX || nextTargetX > maxX;
-                const wouldBeOutOfBoundsZ = nextTargetZ < minZ || nextTargetZ > maxZ;
-                
-                if (wouldBeOutOfBoundsX || wouldBeOutOfBoundsZ) {
-                  // Only snap if the camera target would actually go out of bounds
-                  window.gfx.cameraTarget.position.x = Math.max(minX, Math.min(maxX, nextTargetX));
-                  window.gfx.cameraTarget.position.z = Math.max(minZ, Math.min(maxZ, nextTargetZ));
-                }
-              }
-              if (window.debugPan) {
-                try {
-                  console.log('[PAN]', {
-                    dx: +dx.toFixed(3), dz: +dz.toFixed(3),
-                    anchor: { x: +window.cameraAnchor.x.toFixed(3), z: +window.cameraAnchor.z.toFixed(3) },
-                    target: window.gfx && window.gfx.cameraTarget ? { x: +window.gfx.cameraTarget.position.x.toFixed(3), z: +window.gfx.cameraTarget.position.z.toFixed(3) } : null,
-                    cam: window.gfx && window.gfx.camera ? { alpha: +window.gfx.camera.alpha.toFixed(3), beta: +window.gfx.camera.beta.toFixed(3), radius: +window.gfx.camera.radius.toFixed(3) } : null
-                  });
-                } catch (e) {}
-              }
+            // Apply pan velocity instead of updating anchor
+            if (window.ui && window.ui.nudgePan) {
+              window.ui.nudgePan(dx, dz);
             }
           }
         }
@@ -474,6 +434,26 @@
 
     function onPointerDown(e) {
       if (!isTouchLike(e)) return; // leave mouse to existing system
+      
+      // Check if we're interacting with a UI element - if so, allow normal behavior
+      const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
+      if (clickedElement && (
+        clickedElement.closest('.lod_slider') ||
+        clickedElement.closest('.lod_slider_container') ||
+        clickedElement.closest('#lod_slider') ||
+        clickedElement.closest('#lod_value') ||
+        clickedElement.closest('.binary_switch') ||
+        clickedElement.closest('.switch_handle') ||
+        clickedElement.closest('#hud_switch') ||
+        clickedElement.closest('#shadows_switch') ||
+        clickedElement.closest('input') ||
+        clickedElement.closest('select') ||
+        clickedElement.closest('button')
+      )) {
+        // Allow normal UI behavior for form elements and controls
+        return;
+      }
+      
       e.preventDefault();
       e.stopPropagation();
 
@@ -509,6 +489,26 @@
 
     function onPointerMove(e) {
       if (!isTouchLike(e)) return;
+      
+      // Check if we're interacting with a UI element - if so, allow normal behavior
+      const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
+      if (clickedElement && (
+        clickedElement.closest('.lod_slider') ||
+        clickedElement.closest('.lod_slider_container') ||
+        clickedElement.closest('#lod_slider') ||
+        clickedElement.closest('#lod_value') ||
+        clickedElement.closest('.binary_switch') ||
+        clickedElement.closest('.switch_handle') ||
+        clickedElement.closest('#hud_switch') ||
+        clickedElement.closest('#shadows_switch') ||
+        clickedElement.closest('input') ||
+        clickedElement.closest('select') ||
+        clickedElement.closest('button')
+      )) {
+        // Allow normal UI behavior for form elements and controls
+        return;
+      }
+      
       e.preventDefault();
       e.stopPropagation();
 
@@ -615,6 +615,26 @@
 
     function onPointerUp(e) {
       if (!isTouchLike(e)) return;
+      
+      // Check if we're interacting with a UI element - if so, allow normal behavior
+      const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
+      if (clickedElement && (
+        clickedElement.closest('.lod_slider') ||
+        clickedElement.closest('.lod_slider_container') ||
+        clickedElement.closest('#lod_slider') ||
+        clickedElement.closest('#lod_value') ||
+        clickedElement.closest('.binary_switch') ||
+        clickedElement.closest('.switch_handle') ||
+        clickedElement.closest('#hud_switch') ||
+        clickedElement.closest('#shadows_switch') ||
+        clickedElement.closest('input') ||
+        clickedElement.closest('select') ||
+        clickedElement.closest('button')
+      )) {
+        // Allow normal UI behavior for form elements and controls
+        return;
+      }
+      
       e.preventDefault();
       e.stopPropagation();
 

@@ -21,7 +21,10 @@ gfx.makeTable = function(scene){
   floorMat.diffuseColor = new BABYLON.Color3(0.1, 0.3, 0.1); // Dark green for the playing surface
   floorMat.specularColor = new BABYLON.Color3(0.05, 0.05, 0.05);
 
-  return {
+  // Create parent mesh for the entire table
+  const tableParent = new BABYLON.TransformNode("tableParent", scene);
+
+  const tableParts = {
     SW: {
       mesh: BABYLON.MeshBuilder.CreateBox("SW", {size: 1}, scene), 
     },
@@ -59,7 +62,7 @@ gfx.makeTable = function(scene){
       mesh: BABYLON.MeshBuilder.CreateBox("WT", {size: 1}, scene),
     },
     FLOOR: {
-      mesh: BABYLON.MeshBuilder.CreateBox("W", {size: 1}, scene),
+      mesh: BABYLON.MeshBuilder.CreateBox("FLOOR", {size: 1}, scene),
     },
     // Store materials for later use
     materials: {
@@ -68,6 +71,19 @@ gfx.makeTable = function(scene){
       top: topMat,
       floor: floorMat
     }
+  };
+
+  // Parent all table parts to the table parent
+  Object.values(tableParts).forEach(part => {
+    if (part.mesh) {
+      part.mesh.setParent(tableParent);
+    }
+  });
+
+  // Return both the parent and the parts
+  return {
+    parent: tableParent,
+    parts: tableParts
   };
 }
 
@@ -82,63 +98,66 @@ gfx.stretchTable = function(table) {
   const halfWidth = width / 2;
   const halfHeight = height / 2;
   const borderThickness = 3.8;
+  // Access table parts through the new structure
+  const parts = table.parts;
+  
   // Corners
   let cy=.1;
-  table.SW.mesh.position.set(0, cy, 0);
-  table.SE.mesh.position.set(width, cy, 0);
-  table.NE.mesh.position.set(width, cy, height);
-  table.NW.mesh.position.set(0, cy, height);
+  parts.SW.mesh.position.set(0, cy, 0);
+  parts.SE.mesh.position.set(width, cy, 0);
+  parts.NE.mesh.position.set(width, cy, height);
+  parts.NW.mesh.position.set(0, cy, height);
   let s = 6.9;
   let sh = 2.1;
-  table.SW.mesh.scaling.set(s,sh,s);
-  table.SE.mesh.scaling.set(s,sh,s);
-  table.NE.mesh.scaling.set(s,sh,s);
-  table.NW.mesh.scaling.set(s,sh,s);
+  parts.SW.mesh.scaling.set(s,sh,s);
+  parts.SE.mesh.scaling.set(s,sh,s);
+  parts.NE.mesh.scaling.set(s,sh,s);
+  parts.NW.mesh.scaling.set(s,sh,s);
 
-  table.FLOOR.mesh.position.set(halfWidth,-.5,halfHeight);
-  table.FLOOR.mesh.scaling.set(width,.40,height);
+  parts.FLOOR.mesh.position.set(halfWidth,-.5,halfHeight);
+  parts.FLOOR.mesh.scaling.set(width,.40,height);
   
   // Apply materials to table parts
-  table.SW.mesh.material = table.materials.corner;
-  table.SE.mesh.material = table.materials.corner;
-  table.NE.mesh.material = table.materials.corner;
-  table.NW.mesh.material = table.materials.corner;
+  parts.SW.mesh.material = parts.materials.corner;
+  parts.SE.mesh.material = parts.materials.corner;
+  parts.NE.mesh.material = parts.materials.corner;
+  parts.NW.mesh.material = parts.materials.corner;
   
-  table.N.mesh.material = table.materials.side;
-  table.E.mesh.material = table.materials.side;
-  table.S.mesh.material = table.materials.side;
-  table.W.mesh.material = table.materials.side;
+  parts.N.mesh.material = parts.materials.side;
+  parts.E.mesh.material = parts.materials.side;
+  parts.S.mesh.material = parts.materials.side;
+  parts.W.mesh.material = parts.materials.side;
   
-  table.NT.mesh.material = table.materials.top;
-  table.ET.mesh.material = table.materials.top;
-  table.ST.mesh.material = table.materials.top;
-  table.WT.mesh.material = table.materials.top;
+  parts.NT.mesh.material = parts.materials.top;
+  parts.ET.mesh.material = parts.materials.top;
+  parts.ST.mesh.material = parts.materials.top;
+  parts.WT.mesh.material = parts.materials.top;
   
-  table.FLOOR.mesh.material = table.materials.floor;
+  parts.FLOOR.mesh.material = parts.materials.floor;
 
   if (liveField.width >= 128){
-    table.NT.mesh.scaling.set(s,sh,s);
-    table.ST.mesh.scaling.set(s,sh,s);
-    table.NT.mesh.position.set(halfWidth, cy, height);
-    table.ST.mesh.position.set(halfWidth, cy, 0);
+    parts.NT.mesh.scaling.set(s,sh,s);
+    parts.ST.mesh.scaling.set(s,sh,s);
+    parts.NT.mesh.position.set(halfWidth, cy, height);
+    parts.ST.mesh.position.set(halfWidth, cy, 0);
     
-    table.NT.mesh.isVisible = true;
-    table.ST.mesh.isVisible = true;
+    parts.NT.mesh.isVisible = true;
+    parts.ST.mesh.isVisible = true;
   } else {
-    table.NT.mesh.isVisible = false;
-    table.ST.mesh.isVisible = false;
+    parts.NT.mesh.isVisible = false;
+    parts.ST.mesh.isVisible = false;
   }
   if (liveField.height >= 128){
-    table.ET.mesh.scaling.set(s,sh,s);
-    table.WT.mesh.scaling.set(s,sh,s);
-    table.ET.mesh.position.set(height, cy, halfHeight);
-    table.WT.mesh.position.set(0, cy, halfHeight);
-
-    table.ET.mesh.isVisible = true;
-    table.WT.mesh.isVisible = true;
+    parts.ET.mesh.scaling.set(s,sh,s);
+    parts.WT.mesh.scaling.set(s,sh,s);
+    parts.ET.mesh.position.set(height, cy, halfHeight);
+    parts.WT.mesh.position.set(0, cy, halfHeight);
+    
+    parts.ET.mesh.isVisible = true;
+    parts.WT.mesh.isVisible = true;
   } else {
-    table.ET.mesh.isVisible = false;
-    table.WT.mesh.isVisible = false;
+    parts.ET.mesh.isVisible = false;
+    parts.WT.mesh.isVisible = false;
   }
 
 
@@ -150,22 +169,22 @@ gfx.stretchTable = function(table) {
   let rr=.11;
   let ss=.6;
   // Side stretches
-  table.S.mesh.position.set(halfWidth, yy, height);
-  table.S.mesh.scaling.set(width, ss, borderThickness);
-  table.S.mesh.rotation.set(rr, 0,0);
+  parts.S.mesh.position.set(halfWidth, yy, height);
+  parts.S.mesh.scaling.set(width, ss, borderThickness);
+  parts.S.mesh.rotation.set(rr, 0,0);
 
-  table.N.mesh.position.set(halfWidth, yy, 0);
-  table.N.mesh.scaling.set(width, ss, borderThickness);
-  table.N.mesh.rotation.set(-rr, 0,0);
+  parts.N.mesh.position.set(halfWidth, yy, 0);
+  parts.N.mesh.scaling.set(width, ss, borderThickness);
+  parts.N.mesh.rotation.set(-rr, 0,0);
 
   
-  table.E.mesh.position.set(width, yy, halfHeight);
-  table.E.mesh.scaling.set(borderThickness, ss, height);
-  table.E.mesh.rotation.set(0,0,-rr);
+  parts.E.mesh.position.set(width, yy, halfHeight);
+  parts.E.mesh.scaling.set(borderThickness, ss, height);
+  parts.E.mesh.rotation.set(0,0,-rr);
 
-  table.W.mesh.position.set(0, yy, halfHeight);
-  table.W.mesh.scaling.set(borderThickness, ss, height);
-  table.W.mesh.rotation.set(0,0,rr);
+  parts.W.mesh.position.set(0, yy, halfHeight);
+  parts.W.mesh.scaling.set(borderThickness, ss, height);
+  parts.W.mesh.rotation.set(0,0,rr);
 
 
 

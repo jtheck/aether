@@ -25,6 +25,9 @@
   <script src="vendor/babylon.inspector.bundle.js"></script>
   <!-- <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script> -->
 
+  <script src="vendor/getfire.js" type="text/javascript"></script>
+  <link rel="stylesheet" type="text/css" href="vendor/getfire.css">
+ 
 
   <!-- <script src="vendor/ftxx_pointer.js"></script> -->
 
@@ -102,11 +105,20 @@
           <div id="hud_handle" class="switch_handle"></div>
         </div>
       </div>
-      
-      graphics
-      <br>
-      audio
-      <br>
+      <div class="settings_option">
+        <span>Shadows</span>
+        <div id="shadows_switch" class="binary_switch" onclick="window.hud.toggleShadowsMode()" data-on="false">
+          <div id="shadows_handle" class="switch_handle"></div>
+        </div>
+      </div>
+      <div class="settings_option">
+        <span>LOD</span>
+        <div class="lod_slider_container">
+          <input type="range" id="lod_slider" class="lod_slider" min="0" max="100" value="50">
+          <div class="lod_value" id="lod_value">50%</div>
+        </div>
+      </div>
+
 
       <hr style="width: 60%;">
       <h4>About</h4>

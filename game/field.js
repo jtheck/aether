@@ -361,7 +361,10 @@ Field.prototype.getTile = function(x, y) {
 }
 
   // Method to get height variation for terrain
-  Field.prototype.getHeightVariation = function(x, y, amplitude = .11) {
+  Field.prototype.getHeightVariation = function(x, y, amplitude = null) {
+    // Use LOD-controlled amplitude if available, otherwise use default
+    const effectiveAmplitude = amplitude || this.currentHeightVariation || this.originalHeightVariation || 0.11;
+    
     // Cache for height variations to avoid recalculating
     if (!this._heightCache) {
       this._heightCache = new Map();
@@ -369,7 +372,7 @@ Field.prototype.getTile = function(x, y) {
     
     const cacheKey = `${Math.floor(x)},${Math.floor(y)}`;
     if (this._heightCache.has(cacheKey)) {
-      return this._heightCache.get(cacheKey) * amplitude;
+      return this._heightCache.get(cacheKey) * effectiveAmplitude;
     }
     
     // Fast fractal noise using simple hash as base
@@ -402,7 +405,7 @@ Field.prototype.getTile = function(x, y) {
     // Cache the result (without amplitude)
     this._heightCache.set(cacheKey, finalNoise);
     
-    return finalNoise * amplitude;
+    return finalNoise * effectiveAmplitude;
   }
 
 
@@ -469,7 +472,10 @@ Field.prototype.unloadChunk = function(chunkX, chunkZ) {
   }
 };
 
-Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = 4) {
+Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = null) {
+  // Use LOD-controlled distance if available, otherwise use default
+  const effectiveLoadDistance = loadDistance || this.currentLoadDistance || this.originalLoadDistance || 4;
+  
   const playerChunkX = Math.floor(playerX / (this.chunkSize * TILE_SIZE)); // Use TILE_SIZE constant
   const playerChunkZ = Math.floor(playerZ / (this.chunkSize * TILE_SIZE)); // Use TILE_SIZE constant
   
@@ -477,14 +483,15 @@ Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = 
   let chunksUnloaded = 0;
   
   // Load chunks within circular radius (more efficient than square)
-  for (let x = playerChunkX - loadDistance; x <= playerChunkX + loadDistance; x++) {
-    for (let z = playerChunkZ - loadDistance; z <= playerChunkZ + loadDistance; z++) {
-      // Check if chunk is within circular radius
+  for (let x = playerChunkX - effectiveLoadDistance; x <= playerChunkX + effectiveLoadDistance; x++) {
+    for (let z = playerChunkZ - effectiveLoadDistance; z <= playerChunkZ + effectiveLoadDistance; z++) {
+      // Check if chunk is within circular radius (use squared distance for performance)
       const dx = x - playerChunkX;
       const dz = z - playerChunkZ;
-      const distance = Math.sqrt(dx * dx + dz * dz);
+      const distanceSquared = dx * dx + dz * dz;
+      const effectiveLoadDistanceSquared = effectiveLoadDistance * effectiveLoadDistance;
       
-      if (distance <= loadDistance && x >= 0 && z >= 0 && 
+      if (distanceSquared <= effectiveLoadDistanceSquared && x >= 0 && z >= 0 && 
           x < Math.ceil(this.width / this.chunkSize) && z < Math.ceil(this.height / this.chunkSize)) {
         const chunk = this.getChunk(x, z);
         
@@ -497,14 +504,15 @@ Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = 
     }
   }
   
-  // Unload chunks outside circular radius
+  // Unload chunks outside circular radius (use squared distance for performance)
   for (const [key, chunk] of this.chunks) {
     const [chunkX, chunkZ] = key.split(',').map(Number);
     const dx = chunkX - playerChunkX;
     const dz = chunkZ - playerChunkZ;
-    const distance = Math.sqrt(dx * dx + dz * dz);
+    const distanceSquared = dx * dx + dz * dz;
+    const effectiveLoadDistanceSquared = effectiveLoadDistance * effectiveLoadDistance;
     
-    if (distance > loadDistance) {
+    if (distanceSquared > effectiveLoadDistanceSquared) {
       this.unloadChunk(chunkX, chunkZ);
       chunksUnloaded++;
     }
@@ -540,7 +548,7 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
 
 let tilect = 33; // menu screen
 tilect = 64; // 1/4 zone
-// tilect = 128; // half zone
+tilect = 128; // half zone
 // tilect = 256; // full zone
 let liveField = new Field({width: tilect, height: tilect, seed: 52});
 

@@ -152,6 +152,12 @@ function getRandomColor() {
     // Show the requested menu
     document.getElementById(menuId).style.display = 'block';
     document.getElementById('menu').style.display = 'block';
+    
+    // Initialize LOD slider when settings menu is shown
+    if (menuId === 'settings_menu' && window.hud && window.hud.initLODSlider) {
+      // console.log('🎚️ Settings menu shown, initializing LOD slider...');
+      window.hud.initLODSlider();
+    }
   }
 
   ui.hideMenu = function(){
@@ -363,6 +369,25 @@ function getRandomColor() {
 
   // Handle pointer events (mouse clicks, touch)
   ui.handlePointer = function(e) {
+    // Check if we clicked on a UI element - if so, allow normal behavior
+    const targetElement = document.elementFromPoint(e.clientX, e.clientY);
+    if (targetElement && (
+      targetElement.closest('.lod_slider') ||
+      targetElement.closest('.lod_slider_container') ||
+      targetElement.closest('#lod_slider') ||
+      targetElement.closest('#lod_value') ||
+      targetElement.closest('.binary_switch') ||
+      targetElement.closest('.switch_handle') ||
+      targetElement.closest('#hud_switch') ||
+      targetElement.closest('#shadows_switch') ||
+      targetElement.closest('input') ||
+      targetElement.closest('select') ||
+      targetElement.closest('button')
+    )) {
+      // Allow normal UI behavior for form elements and controls
+      return;
+    }
+    
     e.preventDefault();
     // Cache frequently used locals
     const canvas = gfx.canvas;
@@ -433,41 +458,15 @@ function getRandomColor() {
           const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
           const wx = groundRight.x * screenDx * pixelsToWorld + groundForward.x * screenDy * pixelsToWorld;
           const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
-          const panSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 0.3; // Reduced by 70%
-          if (!window.cameraAnchor) window.cameraAnchor = cameraTarget.position.clone();
           
-          // Calculate new anchor position
-          const newX = window.cameraAnchor.x + wx * panSens;
-          const newZ = window.cameraAnchor.z + wz * panSens;
+          // Zoom-aware pan sensitivity - reduce sensitivity when zoomed out
+          const basePanSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 0.3;
+          const zoomFactor = Math.min(1.0, Math.pow(60 / (cam.radius || 60), 1.5)); // More aggressive reduction
+          const panSens = basePanSens * zoomFactor;
           
-          // Apply bounds clamping to anchor
-          const tileSize = (window.TILE_SIZE || 4);
-          const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
-          const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
-          const margin = 2 * tileSize;
-          const minX = margin, minZ = margin;
-          const maxX = Math.max(minX, w - margin);
-          const maxZ = Math.max(minZ, h - margin);
-          
-          // Clamp anchor within field bounds
-          window.cameraAnchor.x = Math.max(minX, Math.min(maxX, newX));
-          window.cameraAnchor.z = Math.max(minZ, Math.min(maxZ, newZ));
-          
-          // Only snap camera target if it would go beyond bounds after lerping
-          // This prevents aggressive snapping when just getting close to edges
-          const cameraLerpSpeed = 0.12; // Same as in gfx.js
-          const nextTargetX = BABYLON.Scalar.Lerp(cameraTarget.position.x, window.cameraAnchor.x, cameraLerpSpeed);
-          const nextTargetZ = BABYLON.Scalar.Lerp(cameraTarget.position.z, window.cameraAnchor.z, cameraLerpSpeed);
-          
-          // Check if the next camera target position would be out of bounds
-          const wouldBeOutOfBoundsX = nextTargetX < minX || nextTargetX > maxX;
-          const wouldBeOutOfBoundsZ = nextTargetZ < minZ || nextTargetZ > maxZ;
-          
-          if (wouldBeOutOfBoundsX || wouldBeOutOfBoundsZ) {
-            // Only snap if the camera target would actually go out of bounds
-            cameraTarget.position.x = Math.max(minX, Math.min(maxX, nextTargetX));
-            cameraTarget.position.z = Math.max(minZ, Math.min(maxZ, nextTargetZ));
-          }
+          // Add pan velocity instead of updating anchor
+          cameraVelocity.panX += wx * panSens;
+          cameraVelocity.panZ += wz * panSens;
         }
       }
     } else if (e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
@@ -582,7 +581,11 @@ function getRandomColor() {
     if (clickedElement && (
       clickedElement.closest('.radial-menu-button') ||
       clickedElement.closest('[id^="anchor_"]') ||
-      clickedElement.closest('.radial-menu-label')
+      clickedElement.closest('.radial-menu-label') ||
+      clickedElement.closest('.lod_slider') ||
+      clickedElement.closest('.lod_slider_container') ||
+      clickedElement.closest('#lod_slider') ||
+      clickedElement.closest('#lod_value')
     )) {
       return;
     }
@@ -604,10 +607,33 @@ function getRandomColor() {
       if (e.type === 'pointerup' && e.button === 0) {
         // Left click - could be for placing tiles, selecting objects, etc.
         
-        // If clicking on terrain, get precise tile coordinates
-        if (pickResult.pickedMesh.name.includes('Mesh')) {
+        // Check if we clicked on a building - if so, ignore the building and pick through to terrain
+        let actualPickResult = pickResult;
+        if (pickResult.pickedMesh && !pickResult.pickedMesh.name.includes('Mesh')) {
+          // We clicked on a building or other non-terrain object, try to pick through to terrain
+          // Create a new pick ray that ignores the building mesh
+          const ray = gfx.scene.createPickingRay(x, y, BABYLON.Matrix.Identity(), gfx.camera);
+          
+          // Temporarily make the building mesh non-pickable
+          const originalPickable = pickResult.pickedMesh.isPickable;
+          pickResult.pickedMesh.isPickable = false;
+          
+          // Pick again to get terrain
+          const terrainPickResult = gfx.scene.pick(x, y);
+          
+          // Restore original pickable state
+          pickResult.pickedMesh.isPickable = originalPickable;
+          
+          // If we found terrain, use that instead
+          if (terrainPickResult.hit && terrainPickResult.pickedMesh.name.includes('Mesh')) {
+            actualPickResult = terrainPickResult;
+          }
+        }
+        
+        // If clicking on terrain (or we successfully picked through to terrain), get precise tile coordinates
+        if (actualPickResult.pickedMesh.name.includes('Mesh')) {
           // Get the world position where we clicked
-          const worldPos = pickResult.pickedPoint;
+          const worldPos = actualPickResult.pickedPoint;
           
           // Convert world position to tile coordinates
           const tileX = Math.floor(worldPos.x);
@@ -800,14 +826,14 @@ function getRandomColor() {
 
   // Smooth camera rotation system for quick, responsive control
   let cameraRotationTarget = { alpha: 0, beta: 0 };
-  let cameraRotationSpeed = 0.25; // How fast camera moves to target (0.25 = much faster and responsive)
+  let cameraRotationSpeed = 0.15; // How fast camera moves to target (reduced for smoother movement)
   // Only animate camera after explicit user input (wheel/gesture)
   let cameraHasBeenNudged = false;
   
-  // Camera momentum system
-  let cameraVelocity = { alpha: 0, beta: 0, radius: 0 };
-  let cameraMomentum = 0.9; // keep most of the momentum for longer glides
-  let cameraDamping = 0.995; // very light damping to avoid immediate nullification
+  // Camera momentum system (beta handled directly, no momentum)
+  let cameraVelocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
+  let cameraMomentum = 0.95; // keep more momentum for smoother glides
+  let cameraDamping = 0.998; // lighter damping for smoother movement
   
   // Player drag momentum system
   let playerDragActive = false;
@@ -840,6 +866,33 @@ function getRandomColor() {
     if (!gfx.camera || !gfx.camera.alpha) {
       return;
     }
+    
+    // Check if mouse is over the settings menu
+    const settingsMenu = document.getElementById('settings_menu');
+    const isSettingsMenuVisible = settingsMenu && settingsMenu.style.display !== 'none';
+    
+    if (isSettingsMenuVisible) {
+      // Get mouse position
+      const rect = gfx.canvas.getBoundingClientRect();
+      const mouseX = e.clientX;
+      const mouseY = e.clientY;
+      
+      // Check if mouse is over the settings menu
+      const menuRect = settingsMenu.getBoundingClientRect();
+      const isOverSettingsMenu = mouseX >= menuRect.left && 
+                                mouseX <= menuRect.right && 
+                                mouseY >= menuRect.top && 
+                                mouseY <= menuRect.bottom;
+      
+      if (isOverSettingsMenu) {
+        // Handle scrolling within the settings menu
+        e.preventDefault();
+        const delta = e.deltaY;
+        settingsMenu.scrollTop += delta * 0.5; // Adjust scroll speed as needed
+        return; // Don't process camera rotation
+      }
+    }
+    
     cameraHasBeenNudged = true;
     let INVERSEROT = 1;
     let INVERSEZOOM = 1;
@@ -889,56 +942,90 @@ function getRandomColor() {
       return;
     }
     
-    // Disable zoom→beta coupling to keep pinch/wheel from tilting the camera
-    if (false) {
-      // Calculate ideal beta based on zoom level
-      // As you zoom out (larger radius), beta increases (look more upward)
-      // As you zoom in (smaller radius), beta decreases (look more level)
-      const minRadius = gfx.camera.lowerRadiusLimit || 15;
-      const maxRadius = gfx.camera.upperRadiusLimit || 199;
-      const currentRadius = gfx.camera.radius;
-      
-      // Normalize radius between 0 and 1
-      const normalizedRadius = (currentRadius - minRadius) / (maxRadius - minRadius);
-      
-      // Beta range: 0.6 (looking down) to 1.1 (looking straight ahead)
-      // INVERTED: minBeta = looking up (zoomed in), maxBeta = looking down (zoomed out)
-      // const minBeta = 1.11; //min // Looking down (zoomed out)
-      // const maxBeta = 0.88; //max // Looking up (zoomed in)
-      const maxBeta = 1.11; //min // Looking down (zoomed out)
-      const minBeta = 0.88; //max // Looking up (zoomed in)
-      
-      // Calculate target beta based on zoom (inverted)
-      const targetBeta = minBeta - (normalizedRadius * (minBeta - maxBeta));
-      
-      // Only adjust beta target if we've already begun camera motion
-      cameraRotationTarget.beta = BABYLON.Scalar.Lerp(cameraRotationTarget.beta, targetBeta, 0.4);
-    }
-    
-    // Apply momentum-based camera movement
+    // Apply momentum-based camera movement for alpha only
     // Keep alpha target synced to current to remove restoring force; only momentum drives alpha
     cameraRotationTarget.alpha = gfx.camera.alpha;
-    // Calculate velocity towards target (beta only)
     const alphaDiff = cameraRotationTarget.alpha - gfx.camera.alpha; // zero
-    const betaDiff = cameraRotationTarget.beta - gfx.camera.beta;
-    
-    // Add velocity towards target
     cameraVelocity.alpha += alphaDiff * cameraRotationSpeed;
-    cameraVelocity.beta += betaDiff * cameraRotationSpeed;
     
-    // Apply momentum (keep some of the previous velocity)
+    // Handle zoom→beta coupling directly (no momentum conflict)
+    const minRadius = gfx.camera.lowerRadiusLimit || 35;
+    const maxRadius = gfx.camera.upperRadiusLimit || 199;
+    const currentRadius = gfx.camera.radius;
+    
+    // Normalize radius between 0 and 1
+    const normalizedRadius = (currentRadius - minRadius) / (maxRadius - minRadius);
+    
+    // Beta range: 0.8 (looking less down when zoomed in) to 1.1 (looking toward ground when zoomed out)
+    const minBeta = 0.8;  // Looking less down (zoomed in)
+    const maxBeta = 1.1;  // Looking toward ground (zoomed out)
+    
+    // Calculate target beta based on zoom and apply directly with smooth lerp
+    const targetBeta = minBeta + (normalizedRadius * (maxBeta - minBeta));
+    gfx.camera.beta = BABYLON.Scalar.Lerp(gfx.camera.beta, targetBeta, 0.08);
+    
+    // Apply momentum (keep some of the previous velocity) - alpha and radius only
     cameraVelocity.alpha *= cameraMomentum;
-    cameraVelocity.beta *= cameraMomentum;
     cameraVelocity.radius *= cameraMomentum;
+    // Split the difference for panning - more direct than rotation/zoom but not too aggressive
+    cameraVelocity.panX *= 0.8; // Between 0.9 (original) and 0.7 (aggressive)
+    cameraVelocity.panZ *= 0.8; // Between 0.9 (original) and 0.7 (aggressive)
     
-    // Apply damping (gradually reduce velocity)
+    // Apply damping (gradually reduce velocity) - alpha and radius only
     cameraVelocity.alpha *= cameraDamping;
-    cameraVelocity.beta *= cameraDamping;
     cameraVelocity.radius *= cameraDamping;
+    // Split the difference for panning damping
+    cameraVelocity.panX *= 0.975; // Between 0.995 (original) and 0.95 (aggressive)
+    cameraVelocity.panZ *= 0.975; // Between 0.995 (original) and 0.95 (aggressive)
     
-    // Move camera based on velocity
+    // Zero velocity threshold to stop imperceptible movement
+    const CAMERA_ROTATION_THRESHOLD = 0.01; // Stop rotation when velocity is very small
+    const CAMERA_ZOOM_THRESHOLD = 0.1; // Stop zoom when velocity is very small
+    const CAMERA_PAN_THRESHOLD = 0.001; // Stop pan when velocity is very small
+    
+    if (Math.abs(cameraVelocity.alpha) < CAMERA_ROTATION_THRESHOLD) {
+      cameraVelocity.alpha = 0;
+    }
+    if (Math.abs(cameraVelocity.radius) < CAMERA_ZOOM_THRESHOLD) {
+      cameraVelocity.radius = 0;
+    }
+    if (Math.abs(cameraVelocity.panX) < CAMERA_PAN_THRESHOLD) {
+      cameraVelocity.panX = 0;
+    }
+    if (Math.abs(cameraVelocity.panZ) < CAMERA_PAN_THRESHOLD) {
+      cameraVelocity.panZ = 0;
+    }
+    
+    // Move camera based on velocity (alpha only, beta handled directly above)
     gfx.camera.alpha += cameraVelocity.alpha;
-    gfx.camera.beta += cameraVelocity.beta;
+    
+    // Apply pan velocity to camera target with bounds checking
+    if (gfx.cameraTarget) {
+      const newX = gfx.cameraTarget.position.x + cameraVelocity.panX;
+      const newZ = gfx.cameraTarget.position.z + cameraVelocity.panZ;
+      
+      // Apply bounds clamping
+      const tileSize = (window.TILE_SIZE || 4);
+      const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+      const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+      const margin = 2 * tileSize;
+      const minX = margin, minZ = margin;
+      const maxX = Math.max(minX, w - margin);
+      const maxZ = Math.max(minZ, h - margin);
+      
+      // Only apply velocity if it doesn't go out of bounds
+      if (newX >= minX && newX <= maxX) {
+        gfx.cameraTarget.position.x = newX;
+      } else {
+        cameraVelocity.panX = 0; // Stop velocity if hitting bounds
+      }
+      
+      if (newZ >= minZ && newZ <= maxZ) {
+        gfx.cameraTarget.position.z = newZ;
+      } else {
+        cameraVelocity.panZ = 0; // Stop velocity if hitting bounds
+      }
+    }
     
     // Apply zoom velocity and clamp to limits
     if (gfx.camera.radius !== undefined) {
@@ -946,22 +1033,10 @@ function getRandomColor() {
       gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit, Math.min(gfx.camera.upperRadiusLimit, gfx.camera.radius));
     }
     
-    // Clamp beta to prevent camera flipping
+    // Clamp beta to prevent camera flipping (beta is now handled directly above)
     gfx.camera.beta = Math.max(0.1, Math.min(1.5, gfx.camera.beta));
     
-    // Smooth camera movement towards target position
-    if (cameraMovementTarget && gfx.cameraTarget) {
-      // Lerp camera target towards the movement target
-      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, cameraMovementTarget.x, cameraMovementSpeed);
-      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, cameraMovementTarget.z, cameraMovementSpeed);
-      
-      // Check if we're close enough to the target to stop moving
-      const distance = BABYLON.Vector3.Distance(gfx.cameraTarget.position, cameraMovementTarget);
-      if (distance < 0.1) {
-        cameraMovementTarget = null; // Stop moving when we reach the target
-        // console.log('🎯 Camera reached target position');
-      }
-    }
+    // Camera movement target system removed - now using velocity-based panning
     
     // Check field position when RMB is held (throttled)
     if (rmbDown) {
@@ -1033,9 +1108,9 @@ function getRandomColor() {
   ui.nudgePan = function(deltaX, deltaZ) {
     if (!gfx.cameraTarget) return;
     cameraHasBeenNudged = true;
-    // Directly move target to avoid fighting with touch controls
-    gfx.cameraTarget.position.x += deltaX;
-    gfx.cameraTarget.position.z += deltaZ;
+    // Add pan velocity instead of direct movement
+    cameraVelocity.panX += deltaX;
+    cameraVelocity.panZ += deltaZ;
     cameraMovementTarget = null;
   };
   

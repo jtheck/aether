@@ -158,6 +158,25 @@
   
   // Handle left mouse button down
   lasso.handleLmbDown = function(x, y, e) {
+    // Check if we clicked on a UI element - if so, don't start selection
+    const clickedElement = document.elementFromPoint(x, y);
+    if (clickedElement && (
+      clickedElement.closest('.radial-menu-button') ||
+      clickedElement.closest('[id^="anchor_"]') ||
+      clickedElement.closest('.radial-menu-label') ||
+      clickedElement.closest('.lod_slider') ||
+      clickedElement.closest('.lod_slider_container') ||
+      clickedElement.closest('#lod_slider') ||
+      clickedElement.closest('#lod_value') ||
+      clickedElement.closest('.binary_switch') ||
+      clickedElement.closest('.switch_handle') ||
+      clickedElement.closest('#hud_switch') ||
+      clickedElement.closest('#shadows_switch')
+    )) {
+      // console.log("🎯 Lasso: Clicked on UI element, skipping selection");
+      return false;
+    }
+    
     isSelecting = true; // Start selection mode
     startPoint = { x, y };
     endPoint = { x, y };

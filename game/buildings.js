@@ -248,6 +248,11 @@ function placeBuilding(buildingType, x, z, scene) {
       // Make it visible
       building.mesh.setEnabled(true);
       
+      // Set up shadows for building mesh
+      if (window.gfx && window.gfx.setupMeshShadows) {
+        window.gfx.setupMeshShadows(building.mesh);
+      }
+      
       // Add particle effects after a short delay to ensure mesh is fully ready (for towers)
       if (building.name.toLowerCase() === 'tower' && window.fx) {
         setTimeout(() => {
@@ -406,9 +411,54 @@ function spawnVillagerFromVillage(village) {
   village.lastSpawnTime = currentTime;
   village.spawnedVillagers++;
   
-  // Spawn the visual model
-  if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
-    window.spawnUnitModels(window.gfx.scene);
+  // Spawn the visual model immediately for this specific villager
+  if (window.gfx && window.gfx.scene && window.gfx.getModel) {
+    window.gfx.getModel(villager.model, window.gfx.scene).then(model => {
+      villager.mesh = model.root;
+      villager.mesh.scaling = new BABYLON.Vector3(villager.scale, villager.scale, villager.scale);
+      
+      // Make unit mesh pickable for selection
+      villager.mesh.isPickable = true;
+      
+      // Handle child meshes - preserve their original rotations
+      villager.mesh.getChildMeshes().forEach(mesh => {
+        mesh.isPickable = true;
+        
+        // Store their original rotations if they have them
+        if (mesh.rotationQuaternion) {
+          const quaternion = mesh.rotationQuaternion.clone();
+          mesh.rotationQuaternion = null;
+          mesh.originalRotation = quaternion.toEulerAngles();
+          mesh.rotation.copyFrom(mesh.originalRotation);
+        }
+      });
+      
+      // Create selection indicator (glowing ring)
+      if (window.createSelectionIndicator) {
+        window.createSelectionIndicator(villager);
+      }
+      
+      // Set initial position from physics body
+      if (villager.pb && villager.pb.state && villager.pb.state.loc) {
+        villager.mesh.position.x = villager.pb.state.loc.x;
+        villager.mesh.position.y = villager.pb.state.loc.y;
+        villager.mesh.position.z = villager.pb.state.loc.z;
+      }
+      
+      // Apply rotation
+      if (villager.pb && villager.pb.state && villager.pb.state.rot) {
+        villager.mesh.rotationQuaternion = null;
+        villager.mesh.rotation.y = villager.pb.state.rot.y;
+      }
+      
+      // Apply team colors to the villager
+      if (window.applyTeamColorsToMesh) {
+        const teamColor = window.getTeamColorForOwner ? window.getTeamColorForOwner(villager.owner) : '#4A90E2';
+        window.applyTeamColorsToMesh(villager.mesh, teamColor);
+      }
+    }).catch(error => {
+      console.warn('Failed to load villager model:', error);
+    });
   }
   
   // console.log(`🏘️ Village spawned villager #${village.spawnedVillagers} at (${spawnPosition.x.toFixed(1)}, ${spawnPosition.z.toFixed(1)})`);
@@ -690,6 +740,11 @@ function autoInitBuildings() {
           window.spawnAgoraVillagers();
           // Load models for the new villagers
           window.spawnUnitModels(window.gfx.scene);
+        }
+        
+        // Trigger LOD ramp-up after buildings are initialized
+        if (window.gfx && window.gfx.startLODRampUp) {
+          window.gfx.startLODRampUp();
         }
         
         // // console.log("✓ Buildings and villagers initialized at player's agora");
@@ -1278,12 +1333,18 @@ const buildingSystem = {
         // console.log(`🌳 Camp will have access to ${this.detectedResources.length} resource tiles:`, this.detectedResources);
       }
       
-      // Set up a callback to apply rotation after mesh loads
+      // Set up a callback to apply rotation and team colors after mesh loads
       const checkInterval = setInterval(() => {
         if (building.mesh) {
           // Only rotate the root mesh
           building.mesh.rotationQuaternion = null;
           building.mesh.rotation.y = building.targetRotation;
+          
+          // Apply team colors to the building
+          if (window.applyTeamColorsToMesh) {
+            const teamColor = window.getTeamColorForOwner ? window.getTeamColorForOwner(building.owner) : '#4A90E2';
+            window.applyTeamColorsToMesh(building.mesh, teamColor);
+          }
           
           clearInterval(checkInterval);
         }

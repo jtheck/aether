@@ -28,11 +28,30 @@ window.aud = {};  // Audio
     if (window.hud && window.hud.initializeHUDMode) {
       window.hud.initializeHUDMode();
     }
-
+    
     // Wait for the scene to be ready before initializing the player
     gfx.scene.whenReadyAsync().then(function() {
       initPlayer();
-      gfx.stretchTable(gfx.table);
+      
+      // Initialize shadow generator after lighting system is ready
+      // Add a small delay to ensure lighting system is fully initialized
+      setTimeout(() => {
+        if (gfx.initializeShadowGenerator) {
+          gfx.initializeShadowGenerator();
+        }
+        
+        // Initialize shadows mode AFTER shadow generator is ready
+        if (window.hud && window.hud.initializeShadowsMode) {
+          window.hud.initializeShadowsMode();
+        }
+      }, 100); // 100ms delay
+      
+      // Ensure table exists before stretching it
+      if (gfx.table && gfx.table.parts && gfx.table.parts.SW) {
+        gfx.stretchTable(gfx.table);
+      } else {
+        console.warn('Table not available for stretching - gfx.table:', gfx.table);
+      }
 
       // Disable auto-follow to prevent cameraTarget jumps during touch gestures
       window.cameraAutoFollowEnabled = false;
@@ -44,6 +63,20 @@ window.aud = {};  // Audio
 
     });
 
+    let chat;
+    // Init chat
+    if (typeof GETFIRE !== "undefined"){
+      chat = GETFIRE({topicNames: ["test"],
+        defaultName: "Strategist",
+        startOpen: false,
+        startPreview: false,
+        clickAwayHide: false,
+        mouseOutFade: true,
+        titleAlerts: true,
+        // topCorner: true,
+        devMode: (window.location.protocol != 'https:')
+      });
+    }
     
     // net.init();
     // gfx.crank()

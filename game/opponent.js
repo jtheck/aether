@@ -241,6 +241,11 @@ OpponentPlayer.prototype.loadOpponentMesh = function() {
     
     model.root.material = opponentMaterial;
     
+    // Set up shadows for opponent mesh
+    if (window.gfx && window.gfx.setupMeshShadows) {
+      window.gfx.setupMeshShadows(model.root);
+    }
+    
     // console.log('🤖 Opponent mesh loaded');
   }).catch(function(error) {
     console.warn('⚠️ Could not load opponent mesh:', error);

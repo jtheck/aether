@@ -301,6 +301,9 @@ html, body {
 
 #settings_menu {
   display: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  max-height: 200px;
 }
 #fps_meter {
 
@@ -407,11 +410,11 @@ a:after{
 #scene-explorer-host {
   z-index: 10;
   position: absolute! important;
-  /* pointer-events: auto !important; */
+  pointer-events: auto !important;
 }
 #inspector-host {
-  /* pointer-events: auto !important; */
-  /* z-index: 10; */
+  pointer-events: auto !important;
+  z-index: 10;
   position: absolute! important;
 }
 
@@ -622,4 +625,120 @@ a:after{
   align-items: center;
   justify-content: center;
   gap: 10px;
+}
+
+/* LOD Slider Styles */
+.lod_slider_container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100px;
+  pointer-events: auto;
+}
+
+.lod_slider {
+  width: 100px;
+  height: 25px;
+  background: #ccc;
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  position: relative;
+  transition: background 0.2s ease;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+.lod_slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 21px;
+  height: 21px;
+  background: white;
+  border-radius: 2px;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+}
+
+.lod_slider::-moz-range-thumb {
+  width: 21px;
+  height: 21px;
+  background: white;
+  border-radius: 2px;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.lod_slider::-webkit-slider-track {
+  width: 100%;
+  height: 25px;
+  background: #ccc;
+  border-radius: 2px;
+  position: relative;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.lod_slider::-moz-range-track {
+  width: 100%;
+  height: 25px;
+  background: #ccc;
+  border-radius: 2px;
+  border: none;
+}
+
+/* Dynamic background color based on value */
+.lod_slider[value="0"] {
+  background: #ff5252; /* Red for low LOD */
+}
+
+.lod_slider[value="25"] {
+  background: #ff9800; /* Orange */
+}
+
+.lod_slider[value="50"] {
+  background: #4CAF50; /* Green for medium LOD */
+}
+
+.lod_slider[value="75"] {
+  background: #2196F3; /* Blue */
+}
+
+.lod_slider[value="100"] {
+  background: #9C27B0; /* Purple for high LOD */
+}
+
+/* Dynamic color classes for smooth transitions */
+.lod_slider.lod-low {
+  background: #ff5252; /* Red for low LOD (0-20%) */
+}
+
+.lod_slider.lod-medium-low {
+  background: #ff9800; /* Orange for medium-low LOD (21-40%) */
+}
+
+.lod_slider.lod-medium {
+  background: #4CAF50; /* Green for medium LOD (41-60%) */
+}
+
+.lod_slider.lod-medium-high {
+  background: #2196F3; /* Blue for medium-high LOD (61-80%) */
+}
+
+.lod_slider.lod-high {
+  background: #9C27B0; /* Purple for high LOD (81-100%) */
+}
+
+.lod_value {
+  font-size: 0.8em;
+  color: white;
+  min-width: 30px;
+  text-align: center;
+  font-weight: bold;
 }

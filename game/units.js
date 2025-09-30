@@ -222,14 +222,41 @@ function getUnitsByCategory(category) {
 
 // Simple LOD: check if unit should update this frame
 function shouldUpdateUnit(unit, currentFrame) {
-    // Use flying LOD distances for flying units
-    const distances = (unit.abilities && unit.abilities.includes('fly')) ? FLYING_LOD_DISTANCES : LOD_DISTANCES;
+    // Use squared distance for performance (avoid sqrt)
+    const distanceSquared = unit.distanceToCameraSquared || 0;
     
-    if (unit.distanceToCamera <= distances.NEAR) {
+    // Neutral units get much more aggressive LOD to improve performance
+    if (unit.owner === 'neutral') {
+        const NEUTRAL_LOD_DISTANCES_SQ = {
+            NEAR: 100 * 100,    // 10000
+            FAR: 250 * 250,     // 62500
+            HIDDEN: 400 * 400   // 160000
+        };
+        
+        if (distanceSquared <= NEUTRAL_LOD_DISTANCES_SQ.NEAR) {
+            return (currentFrame - unit.lastUpdateFrame) >= 1; // Update every 2nd frame
+        } else if (distanceSquared <= NEUTRAL_LOD_DISTANCES_SQ.FAR) {
+            return (currentFrame - unit.lastUpdateFrame) >= 5; // Update every 6th frame
+        } else if (distanceSquared <= NEUTRAL_LOD_DISTANCES_SQ.HIDDEN) {
+            return (currentFrame - unit.lastUpdateFrame) >= 15; // Update every 16th frame
+        } else {
+            return false; // Hidden - never update
+        }
+    }
+    
+    // Player units use normal LOD distances
+    const distances = (unit.abilities && unit.abilities.includes('fly')) ? FLYING_LOD_DISTANCES : LOD_DISTANCES;
+    const distancesSquared = {
+        NEAR: distances.NEAR * distances.NEAR,
+        FAR: distances.FAR * distances.FAR,
+        HIDDEN: distances.HIDDEN * distances.HIDDEN
+    };
+    
+    if (distanceSquared <= distancesSquared.NEAR) {
         return true; // Update every frame
-    } else if (unit.distanceToCamera <= distances.FAR) {
+    } else if (distanceSquared <= distancesSquared.FAR) {
         return (currentFrame - unit.lastUpdateFrame) >= 2; // Update every 3rd frame
-    } else if (unit.distanceToCamera <= distances.HIDDEN) {
+    } else if (distanceSquared <= distancesSquared.HIDDEN) {
         return (currentFrame - unit.lastUpdateFrame) >= 5; // Update every 6th frame
     } else {
         return false; // Hidden - never update
@@ -241,22 +268,46 @@ function updateUnitDistances() {
     const cameraPosition = window.gfx && window.gfx.camera ? window.gfx.camera.position : null;
     if (!cameraPosition) return;
     
+    // Cache camera position for performance
+    const camX = cameraPosition.x;
+    const camZ = cameraPosition.z;
+    
+    // Pre-calculate squared distances for comparison (avoid sqrt)
+    const NEUTRAL_HIDE_DISTANCE_SQ = 400 * 400; // 160000
+    const LOD_HIDDEN_DISTANCE_SQ = LOD_DISTANCES.HIDDEN * LOD_DISTANCES.HIDDEN; // 360000
+    const NEAR_DISTANCE_SQ = LOD_DISTANCES.NEAR * LOD_DISTANCES.NEAR; // 22500
+    const FAR_DISTANCE_SQ = LOD_DISTANCES.FAR * LOD_DISTANCES.FAR; // 202500
+    const FLYING_NEAR_DISTANCE_SQ = FLYING_LOD_DISTANCES.NEAR * FLYING_LOD_DISTANCES.NEAR; // 90000
+    const FLYING_FAR_DISTANCE_SQ = FLYING_LOD_DISTANCES.FAR * FLYING_LOD_DISTANCES.FAR; // 810000
+    const FLYING_HIDDEN_DISTANCE_SQ = FLYING_LOD_DISTANCES.HIDDEN * FLYING_LOD_DISTANCES.HIDDEN; // 1440000
+    
     gameUnits.forEach(unit => {
         if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-            const dx = unit.pb.state.loc.x - cameraPosition.x;
-            const dz = unit.pb.state.loc.z - cameraPosition.z;
-            unit.distanceToCamera = Math.sqrt(dx * dx + dz * dz);
+            const dx = unit.pb.state.loc.x - camX;
+            const dz = unit.pb.state.loc.z - camZ;
+            const distanceSquared = dx * dx + dz * dz;
             
-            // Hide/show units based on distance
+            // Store squared distance for LOD calculations (only calculate sqrt when needed)
+            unit.distanceToCameraSquared = distanceSquared;
+            unit.distanceToCamera = Math.sqrt(distanceSquared); // Only calculate sqrt when actually needed
+            
+            // Hide/show units based on distance (using squared distances for comparison)
             if (unit.mesh) {
                 // Birds and flying units should always be visible (they're in the sky!)
                 if (unit.abilities && unit.abilities.includes('fly')) {
                     unit.mesh.setEnabled(true);
-                } else if (unit.distanceToCamera > LOD_DISTANCES.HIDDEN) {
-                    // Hide ground units completely when too far
+                } else if (unit.owner === 'neutral') {
+                    // Neutral units get much more aggressive culling
+                    if (distanceSquared > NEUTRAL_HIDE_DISTANCE_SQ) {
+                        unit.mesh.setEnabled(false);
+                    } else {
+                        unit.mesh.setEnabled(true);
+                    }
+                } else if (distanceSquared > LOD_HIDDEN_DISTANCE_SQ) {
+                    // Hide player ground units completely when too far
                     unit.mesh.setEnabled(false);
                 } else {
-                    // Show ground units when in range
+                    // Show player ground units when in range
                     unit.mesh.setEnabled(true);
                 }
             }
@@ -387,6 +438,11 @@ function spawnUnitModels(scene) {
                 // Make unit meshes pickable for selection
                 unit.mesh.isPickable = true;
                 
+                // Set up shadows for unit mesh
+                if (window.gfx && window.gfx.setupMeshShadows) {
+                    window.gfx.setupMeshShadows(unit.mesh);
+                }
+                
                 // Handle child meshes - preserve their original rotations
                 unit.mesh.getChildMeshes().forEach(mesh => {
                     mesh.isPickable = true;
@@ -426,6 +482,12 @@ function spawnUnitModels(scene) {
                 
                 // Add particle effects to units
                 addUnitParticleEffects(unit);
+                
+                // Apply team colors to the unit
+                if (window.applyTeamColorsToMesh) {
+                    const teamColor = window.getTeamColorForOwner ? window.getTeamColorForOwner(unit.owner) : '#4A90E2';
+                    window.applyTeamColorsToMesh(unit.mesh, teamColor);
+                }
                 
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
@@ -498,6 +560,9 @@ function updateUnits(deltaTime) {
     // Update distances for LOD
     updateUnitDistances();
     
+    // Update selection indicators once per frame (not per unit)
+    updateSelectionIndicators();
+    
     // // Step all unit behaviors (this handles movement commands)
     // if (window.behaviorManager) {
     //     window.behaviorManager.stepBehaviors();
@@ -514,14 +579,11 @@ function updateUnits(deltaTime) {
         // Mark this unit as updated
         unit.lastUpdateFrame = currentFrame;
         
-        // Update selection indicators
-        updateSelectionIndicators();
-        
         // Update unit behaviors based on type
         if (unit.name.includes('Tortle')) {
-            // Tortles get random turning impulses
+            // Tortles get random turning impulses (use cached time)
             const turnTimeOffset = unit.id.charCodeAt(1) * 50;
-            const turnCycle = Math.sin((Date.now() + turnTimeOffset) * 0.00008); // Very slow
+            const turnCycle = Math.sin((currentTime + turnTimeOffset) * 0.00008); // Very slow
             
             // Only apply impulse when cycle is near peaks/valleys (occasional turns)
             if (Math.abs(turnCycle) > 0.95) {
@@ -578,7 +640,7 @@ function getCachedCos(angle) {
 
 // Update unit mesh positions and rotations every frame
 function updateUnitMeshes() {
-    const currentTime = Date.now(); // Cache time for performance
+    const currentTime = window.cachedTime || Date.now(); // Use cached time for performance
     const currentFrame = window.frameCounter || 0;
     
     gameUnits.forEach((unit, index) => {
@@ -968,4 +1030,127 @@ if (typeof window !== 'undefined') {
     
     // Auto-start the initialization
     setTimeout(autoInitUnits, 2000); // Wait 2 seconds for scene to be ready
+}
+
+
+
+// Apply team colors using material replacement
+function applyTeamColorsToMesh(mesh, teamColor) {
+  if (!mesh || !teamColor) return false;
+  
+  const scene = mesh.getScene();
+  if (!scene) return false;
+  
+  let changed = false;
+  
+  // Parse the team color
+  const cleanColor = teamColor.replace('#', '');
+  const r = parseInt(cleanColor.substr(0, 2), 16) / 255;
+  const g = parseInt(cleanColor.substr(2, 2), 16) / 255;
+  const b = parseInt(cleanColor.substr(4, 2), 16) / 255;
+  const color = new BABYLON.Color3(r, g, b);
+  
+  // Check main mesh
+  if (mesh.material && mesh.material.name && mesh.material.name.includes('TeamColor')) {
+    const teamMaterial = mesh.material.clone(`team_${teamColor}_${Date.now()}`);
+    
+    // Apply team color with disabled lighting
+    teamMaterial.diffuseColor = new BABYLON.Color3(0, 0, 0);
+    teamMaterial.emissiveColor = color.scale(0.4);
+    teamMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
+    teamMaterial.roughness = 1.0;
+    teamMaterial.metallic = 0.0;
+    teamMaterial.disableLighting = true;
+    
+    // Disable textures
+    teamMaterial.diffuseTexture = null;
+    teamMaterial.emissiveTexture = null;
+    teamMaterial.specularTexture = null;
+    teamMaterial.normalTexture = null;
+    teamMaterial.ambientTexture = null;
+    
+    mesh.material = teamMaterial;
+    changed = true;
+  }
+  
+  // Check child meshes
+  if (mesh.getChildMeshes) {
+    mesh.getChildMeshes().forEach((childMesh) => {
+      if (childMesh.material && childMesh.material.name && childMesh.material.name.includes('TeamColor')) {
+        const teamMaterial = childMesh.material.clone(`team_${teamColor}_${Date.now()}`);
+        
+        // Apply team color with disabled lighting
+        teamMaterial.diffuseColor = new BABYLON.Color3(0, 0, 0);
+        teamMaterial.emissiveColor = color.scale(0.4);
+        teamMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
+        teamMaterial.roughness = 1.0;
+        teamMaterial.metallic = 0.0;
+        teamMaterial.disableLighting = true;
+        
+        // Disable textures
+        teamMaterial.diffuseTexture = null;
+        teamMaterial.emissiveTexture = null;
+        teamMaterial.specularTexture = null;
+        teamMaterial.normalTexture = null;
+        teamMaterial.ambientTexture = null;
+        
+        childMesh.material = teamMaterial;
+        changed = true;
+      }
+    });
+  }
+  
+  return changed;
+}
+
+
+// Apply team colors to all units and buildings
+function applyTeamColorsToAll() {
+  let processedCount = 0;
+  
+  // Apply to all units
+  if (window.gameUnits) {
+    window.gameUnits.forEach(unit => {
+      if (unit.mesh) {
+        const teamColor = getTeamColorForOwner(unit.owner || 'neutral');
+        const changed = applyTeamColorsToMesh(unit.mesh, teamColor);
+        if (changed) processedCount++;
+      }
+    });
+  }
+  
+  // Apply to all buildings
+  if (window.gameBuildings) {
+    window.gameBuildings.forEach(building => {
+      if (building.mesh) {
+        const teamColor = getTeamColorForOwner(building.owner || 'neutral');
+        const changed = applyTeamColorsToMesh(building.mesh, teamColor);
+        if (changed) processedCount++;
+      }
+    });
+  }
+  
+  return processedCount;
+}
+
+// Get team color for an owner
+function getTeamColorForOwner(owner) {
+  if (owner === 'player') {
+    return window.player ? window.player.color : '#4A90E2';
+  }
+  
+  const teamColors = {
+    'opponent': '#E24A4A',  // Red
+    'neutral': '#8A8A8A'    // Gray
+  };
+  
+  return teamColors[owner] || teamColors.neutral;
+}
+
+
+// Export team color functions
+if (typeof window !== 'undefined') {
+    window.applyTeamColorsToAll = applyTeamColorsToAll;
+    window.applyTeamColorsToMesh = applyTeamColorsToMesh;
+    window.getTeamColorForOwner = getTeamColorForOwner;
 }

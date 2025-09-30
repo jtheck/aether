@@ -333,6 +333,8 @@
     instance.isPickable = false; // Make billboards non-pickable too
     instance.setEnabled(true);
     
+    // Billboards don't cast shadows - they're just 2D sprites
+    
     return instance;
   }
   
@@ -388,6 +390,12 @@
       model.root.scaling.y = scale;
       model.root.scaling.z = scale;
       model.root.setEnabled(true);
+      
+      // Set up shadows for the model
+      if (window.gfx && window.gfx.setupMeshShadows) {
+        window.gfx.setupMeshShadows(model.root);
+      }
+      
       return Promise.resolve(model);
     } else {
       // Create new instance if pool is empty
@@ -399,6 +407,12 @@
         model.root.scaling.x = scale;
         model.root.scaling.y = scale;
         model.root.scaling.z = scale;
+        
+        // Set up shadows for the model
+        if (window.gfx && window.gfx.setupMeshShadows) {
+          window.gfx.setupMeshShadows(model.root);
+        }
+        
         return model;
       });
     }
@@ -435,8 +449,29 @@
       billboard: billboard,
       lodType: lodType,
       lodDistance: customLodDistance,
-      cullDistance: modelRule.cullDistance || customLodDistance * 2
+      cullDistance: modelRule.cullDistance || customLodDistance * 2,
+      // Store original values for LOD scaling
+      originalLodDistance: customLodDistance,
+      originalCullDistance: modelRule.cullDistance || customLodDistance * 2
     });
+    
+    // Apply current LOD multiplier to new model if LOD system is active
+    if (window.hud && window.hud.getCurrentLODMultiplier) {
+      let currentMultiplier;
+      
+      // During loading, use minimum LOD (0.3x multiplier)
+      if (loadingLODActive && !loadingComplete) {
+        currentMultiplier = 0.3; // Minimum LOD during loading
+      } else {
+        currentMultiplier = window.hud.getCurrentLODMultiplier();
+      }
+      
+      if (currentMultiplier !== 1.0) {
+        const lastLod = lodModels[lodModels.length - 1];
+        lastLod.lodDistance = lastLod.originalLodDistance * currentMultiplier;
+        lastLod.cullDistance = lastLod.originalCullDistance * currentMultiplier;
+      }
+    }
     
     // console.log('Created LOD for:', modelPath, 'Type:', lodType, 'Distance:', customLodDistance, 'Initial state:', cameraPosition ? (BABYLON.Vector3.Distance(cameraPosition, model.root.position) > customLodDistance ? 'LOD' : '3D') : 'Unknown');
   }
@@ -460,6 +495,8 @@
       const distanceSquared = dx * dx + dy * dy + dz * dz;
       const lodDistanceSquared = lod.lodDistance * lod.lodDistance;
       const cullDistanceSquared = (lod.cullDistance || lod.lodDistance * 2) * (lod.cullDistance || lod.lodDistance * 2);
+      
+      
       
       if (distanceSquared > cullDistanceSquared) {
         // Very far away - completely cull everything for performance
@@ -485,6 +522,87 @@
       }
     });
   }
+
+  // Update LOD distances for graphics system
+  gfx.updateLODDistances = function(multiplier) {
+    // Update model LOD distances
+    if (lodModels) {
+      lodModels.forEach(lod => {
+        // Scale LOD distances based on multiplier
+        lod.lodDistance = (lod.originalLodDistance || lod.lodDistance) * multiplier;
+        lod.cullDistance = (lod.originalCullDistance || lod.cullDistance || lod.lodDistance * 2) * multiplier;
+      });
+      
+      // console.log(`🎚️ Updated LOD distances for ${lodModels.length} models with multiplier ${multiplier.toFixed(2)}`);
+    }
+    
+    // Update terrain chunk loading distance
+    if (window.liveField && window.liveField.updateVisibleChunks) {
+      // Store the original load distance if not already stored
+      if (!window.liveField.originalLoadDistance) {
+        window.liveField.originalLoadDistance = 4; // Default load distance
+      }
+      
+      // Update load distance based on LOD level
+      const newLoadDistance = Math.round(window.liveField.originalLoadDistance * multiplier);
+      window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance)); // Clamp between 2-8
+    }
+    
+    // Update shadow quality based on LOD level
+    if (gfx.shadowGenerator) {
+      // Store original shadow map size if not already stored
+      if (!gfx.originalShadowMapSize) {
+        gfx.originalShadowMapSize = 1024; // Default shadow map size
+      }
+      
+      // Calculate new shadow map size based on LOD level
+      let newShadowMapSize;
+      if (multiplier < 0.5) {
+        newShadowMapSize = 512; // Low LOD = lower quality shadows
+      } else if (multiplier < 0.8) {
+        newShadowMapSize = 1024; // Medium LOD = medium quality shadows
+      } else {
+        newShadowMapSize = 2048; // High LOD = high quality shadows
+      }
+      
+      // Only update if shadow map size changed
+      if (gfx.shadowGenerator.getShadowMap().getSize().width !== newShadowMapSize) {
+        gfx.shadowGenerator.dispose();
+        if (window.lighting && window.lighting.lights && window.lighting.lights.sun) {
+          gfx.shadowGenerator = new BABYLON.ShadowGenerator(newShadowMapSize, window.lighting.lights.sun);
+          gfx.shadowGenerator.useBlurExponentialShadowMap = false;
+          gfx.shadowGenerator.darkness = 0.8;
+          gfx.shadowGenerator.setTransparencyShadow(false);
+          gfx.shadowGenerator.bias = 0.00001;
+          gfx.shadowGenerator.normalBias = 0.02;
+          gfx.shadowGenerator.depthScale = 50;
+          gfx.shadowGenerator.minDistance = 0.1;
+          gfx.shadowGenerator.maxDistance = 1500 * multiplier; // Scale shadow distance (increased by 50%)
+          
+          // Re-add all meshes to shadow generator
+          if (gfx.updateAllMeshShadows) {
+            gfx.updateAllMeshShadows();
+          }
+          
+          // console.log(`🎚️ Shadow quality updated: ${newShadowMapSize}x${newShadowMapSize} map, max distance: ${1000 * multiplier}`);
+        }
+      }
+    }
+    
+    // Update terrain detail level
+    if (window.liveField) {
+      // Store original height variation if not already stored
+      if (!window.liveField.originalHeightVariation) {
+        window.liveField.originalHeightVariation = 0.11; // Default height variation
+      }
+      
+      // Scale height variation based on LOD level
+      window.liveField.currentHeightVariation = window.liveField.originalHeightVariation * multiplier;
+    }
+    
+    // console.log(`🎚️ Graphics LOD updated: multiplier=${multiplier.toFixed(2)}, terrain chunks=${window.liveField?.currentLoadDistance || 4}, shadow map=${gfx.shadowGenerator?.getShadowMap()?.getSize()?.width || 'N/A'}`);
+  };
+
 let pov1 = 170;
 let pov2 = 240;
   // Model rules for different tile types
@@ -539,6 +657,27 @@ let pov2 = 240;
   let isProcessingQueue = false;
   let skipLODUpdates = false; // Flag to prevent LOD flickering during loading
   
+  // Loading LOD system - start at minimum, ramp up to user setting
+  let loadingLODActive = true;
+  let loadingLODTarget = 50; // Default LOD level to ramp up to
+  let loadingLODCurrent = 0; // Start at minimum LOD
+  let loadingLODRampSpeed = 2; // LOD levels per second
+  let loadingComplete = false;
+  
+  // Function to start LOD ramp-up after loading is complete
+  function startLODRampUp() {
+    if (loadingComplete) return; // Already started
+    
+    loadingComplete = true;
+    loadingLODActive = true;
+    
+    // Get user's saved LOD setting
+    const savedLOD = localStorage.getItem('lodLevel');
+    loadingLODTarget = savedLOD ? parseInt(savedLOD) : 50;
+    
+    console.log(`🚀 Loading complete! Starting LOD ramp-up from ${loadingLODCurrent} to ${loadingLODTarget}`);
+  }
+  
   // Process model loading queue in batches to prevent blocking
   function processModelQueue() {
     if (isProcessingQueue || modelLoadQueue.length === 0) return;
@@ -552,6 +691,11 @@ let pov2 = 240;
       
       getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale)
         .then(model => {
+          // Set up shadows for the model
+          if (window.gfx && window.gfx.setupMeshShadows) {
+            window.gfx.setupMeshShadows(model.root);
+          }
+          
           // All the same model setup logic
           task.models.push(model);
           model.root.parent = task.chunk.mesh;
@@ -628,6 +772,16 @@ let pov2 = 240;
     } else {
       // Re-enable LOD updates when queue is empty
       skipLODUpdates = false;
+      
+      // Check if loading is complete (no more models in queue)
+      if (!loadingComplete) {
+        // Small delay to ensure all models are processed
+        setTimeout(() => {
+          if (modelLoadQueue.length === 0) {
+            startLODRampUp();
+          }
+        }, 1000);
+      }
     }
   }
 
@@ -738,22 +892,32 @@ let pov2 = 240;
     if (!sharedMaterials.grass) {
       sharedMaterials.grass = new BABYLON.StandardMaterial("grassMaterial", scene);
       sharedMaterials.grass.diffuseTexture = grassAtlasTexture;
+      sharedMaterials.grass.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce reflectivity
+      sharedMaterials.grass.specularPower = 32; // Reduce specular power
     }
     if (!sharedMaterials.dirt) {
       sharedMaterials.dirt = new BABYLON.StandardMaterial("dirtMaterial", scene);
       sharedMaterials.dirt.diffuseTexture = dirtAtlasTexture;
+      sharedMaterials.dirt.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce reflectivity
+      sharedMaterials.dirt.specularPower = 32; // Reduce specular power
     }
     if (!sharedMaterials.rock) {
       sharedMaterials.rock = new BABYLON.StandardMaterial("rockMaterial", scene);
       sharedMaterials.rock.diffuseTexture = rockAtlasTexture;
+      sharedMaterials.rock.specularColor = new BABYLON.Color3(0.2, 0.2, 0.2); // Slightly more reflective for rocks
+      sharedMaterials.rock.specularPower = 64; // Higher specular power for rocks
     }
     if (!sharedMaterials.sand) {
       sharedMaterials.sand = new BABYLON.StandardMaterial("sandMaterial", scene);
       sharedMaterials.sand.diffuseTexture = sandAtlasTexture;
+      sharedMaterials.sand.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce reflectivity
+      sharedMaterials.sand.specularPower = 32; // Reduce specular power
     }
     if (!sharedMaterials.water) {
       sharedMaterials.water = new BABYLON.StandardMaterial("waterMaterial", scene);
       sharedMaterials.water.diffuseTexture = waterAtlasTexture;
+      sharedMaterials.water.specularColor = new BABYLON.Color3(0.8, 0.8, 0.9); // Water can be more reflective
+      sharedMaterials.water.specularPower = 128; // Higher specular power for water
     }
     
 
@@ -863,6 +1027,9 @@ let pov2 = 240;
         
         // Assign material (pre-created shared materials)
         meshes[key].material = sharedMaterials[key];
+        
+        // Set up shadows for this mesh (terrain receives shadows but doesn't cast them)
+        gfx.setupMeshShadows(meshes[key], false);
       }
     });
 
@@ -873,6 +1040,9 @@ let pov2 = 240;
         meshes[key].parent = terrainMesh;
       }
     });
+    
+    // Set up shadows for the parent terrain mesh (terrain receives shadows but doesn't cast them)
+    gfx.setupMeshShadows(terrainMesh, false);
 
     // Debug mesh properties
     const totalTiles = Object.values(vertexData).reduce((sum, data) => sum + data.index, 0);
@@ -886,11 +1056,21 @@ let pov2 = 240;
     gfx.engine = new BABYLON.Engine(gfx.canvas, false, engineOptions, false);
     gfx.scene = new BABYLON.Scene(gfx.engine);
     
+    // Initialize loading LOD system - start at minimum LOD
+    loadingLODActive = true;
+    loadingLODCurrent = 0;
+    loadingComplete = false;
+    
+    // Set initial LOD to minimum during loading
+    if (window.hud && window.hud.updateLODDistances) {
+      window.hud.updateLODDistances(0); // Start at minimum LOD
+    }
+    
     // Load textures now that we have a scene
     grassAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass.png", gfx.scene);
-    dirtAtlasTexture = new BABYLON.Texture("assets/textures/atlas-dirt.png", gfx.scene);
-    rockAtlasTexture = new BABYLON.Texture("assets/textures/atlas-rock.png", gfx.scene);
-    sandAtlasTexture = new BABYLON.Texture("assets/textures/atlas-sand.png", gfx.scene);
+    dirtAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass.png", gfx.scene); // Using grass as fallback
+    rockAtlasTexture = new BABYLON.Texture("assets/textures/atlas-hd.png", gfx.scene); // Using hd as fallback
+    sandAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass.png", gfx.scene); // Using grass as fallback
     waterAtlasTexture = new BABYLON.Texture("assets/textures/atlas-water.png", gfx.scene);
 
     gfx.makeScene(gfx.scene);
@@ -919,6 +1099,11 @@ let pov2 = 240;
       if (window.hud && gfx.camera && gfx.canvas) {
         hud.init(gfx.scene, gfx.camera, gfx.canvas);
         
+        // Initialize LOD slider
+        if (hud.initLODSlider) {
+          hud.initLODSlider();
+        }
+        
         // Only initialize 3D HUD if USE_3D_HUD is true
         if (USE_3D_HUD) {
           console.log("🎮 3D HUD initialized - main menu items will be created when first shown");
@@ -940,11 +1125,14 @@ let pov2 = 240;
     // Increment frame counter for LOD system
     window.frameCounter = (window.frameCounter || 0) + 1;
     
+    // Cache current time for performance (used by units, etc.)
+    window.cachedTime = Date.now();
+    
     // Guard camera params before rendering to avoid NaNs breaking frustum
     if (gfx.camera) {
       if (!Number.isFinite(gfx.camera.alpha)) gfx.camera.alpha = 0;
       if (!Number.isFinite(gfx.camera.beta)) gfx.camera.beta = 0.9;
-      if (!Number.isFinite(gfx.camera.radius)) gfx.camera.radius = 60;
+      if (!Number.isFinite(gfx.camera.radius)) gfx.camera.radius = 80;
       gfx.camera.beta = Math.max(0.2, Math.min(1.5, gfx.camera.beta));
       if (typeof gfx.camera.lowerRadiusLimit === 'number' && typeof gfx.camera.upperRadiusLimit === 'number') {
         gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit, Math.min(gfx.camera.upperRadiusLimit, gfx.camera.radius));
@@ -965,8 +1153,8 @@ let pov2 = 240;
       const minDim = Math.min(worldWidth, worldHeight);
 
       // Set dynamic zoom limits relative to field size
-      gfx.camera.lowerRadiusLimit = Math.max(5, minDim * 0.05);
-      gfx.camera.upperRadiusLimit = Math.max(50, maxDim * 2.5);
+      gfx.camera.lowerRadiusLimit = Math.max(35, minDim * 0.25);  // Increased minimum to keep camera further from ground
+      gfx.camera.upperRadiusLimit = Math.max(300, maxDim * 3.0); // Increased maximum for better horizon view
 
       // Clamp current radius into new limits
       if (typeof gfx.camera.radius === 'number') {
@@ -979,37 +1167,7 @@ let pov2 = 240;
     // Player physics and position updates are now handled in the game loop
     // This render loop only handles rendering and chunk management
     
-    // Anchor-driven camera: lerp target toward anchor every frame
-    if (gfx.cameraTarget) {
-      // Initialize anchor if missing
-      if (!window.cameraAnchor) {
-        window.cameraAnchor = gfx.cameraTarget.position.clone();
-      }
-      const cameraLerpSpeed = 0.12; // responsive pan toward anchor
-      gfx.cameraTarget.position.x = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.x, window.cameraAnchor.x, cameraLerpSpeed);
-      gfx.cameraTarget.position.z = BABYLON.Scalar.Lerp(gfx.cameraTarget.position.z, window.cameraAnchor.z, cameraLerpSpeed);
-      gfx.cameraTarget.position.y = 9;
-      // Safety clamp camera target to field bounds
-      const tileSize = (window.TILE_SIZE || 4);
-      const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
-      const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
-      const margin = 2 * tileSize;
-      const minX = margin, minZ = margin;
-      const maxX = Math.max(minX, w - margin);
-      const maxZ = Math.max(minZ, h - margin);
-      gfx.cameraTarget.position.x = Math.max(minX, Math.min(maxX, gfx.cameraTarget.position.x));
-      gfx.cameraTarget.position.z = Math.max(minZ, Math.min(maxZ, gfx.cameraTarget.position.z));
-      if (window.debugPan) {
-        try {
-          console.log('[TARGET]', {
-            anchor: { x: +window.cameraAnchor.x.toFixed(3), z: +window.cameraAnchor.z.toFixed(3) },
-            target: { x: +gfx.cameraTarget.position.x.toFixed(3), z: +gfx.cameraTarget.position.z.toFixed(3) }
-          });
-        } catch (e) {}
-      }
-    }
-    
-    // Keep camera target at fixed height
+    // Keep camera target at fixed height (panning now handled by velocity system)
     if (gfx.cameraTarget) {
       gfx.cameraTarget.position.y = 9;
     }
@@ -1037,6 +1195,49 @@ let pov2 = 240;
     // Update LOD system based on camera position
     if (gfx.camera) {
       updateLOD(gfx.camera.position);
+    }
+    
+    // Handle loading LOD ramp-up
+    if (loadingLODActive && loadingComplete) {
+      const deltaTime = 0.016; // ~60fps
+      const rampAmount = loadingLODRampSpeed * deltaTime;
+      
+      if (loadingLODCurrent < loadingLODTarget) {
+        loadingLODCurrent = Math.min(loadingLODTarget, loadingLODCurrent + rampAmount);
+        
+        // Update LOD distances with current loading level
+        if (window.hud && window.hud.updateLODDistances) {
+          window.hud.updateLODDistances(Math.round(loadingLODCurrent));
+        }
+        
+        // Check if ramp-up is complete
+        if (loadingLODCurrent >= loadingLODTarget) {
+          loadingLODActive = false;
+          console.log(`✅ LOD ramp-up complete! Reached target level ${loadingLODTarget}`);
+        }
+      }
+    }
+    
+    // Update shadow LoD system for performance optimization
+    if (gfx.updateShadowLOD) {
+      gfx.updateShadowLOD();
+    }
+    
+    // Update shadow performance monitoring
+    if (gfx.shadowPerformanceMonitor) {
+      gfx.shadowPerformanceMonitor.update();
+    }
+    
+    // Update lighting system (only when autoAdvance is enabled)
+    if (window.lighting && window.lighting.update) {
+      window.lighting.update(0.016); // ~60fps deltaTime
+    } else {
+      // Debug: check if lighting system is available
+      if (!window.lighting) {
+        console.log('⚠️ Lighting system not available');
+      } else if (!window.lighting.update) {
+        console.log('⚠️ Lighting update function not available');
+      }
     }
     
     // Update camera rotation smoothly
@@ -1107,25 +1308,217 @@ let pov2 = 240;
     if (window.lighting) {
       lighting.init(scene);
       
-      // Set up a nice default lighting position (afternoon)
+      // Set up daytime lighting (good shadows but always bright)
       lighting.configure({
         autoAdvance: false,  // No automatic movement
         orbitRadius: 200,
         orbitHeight: 100,
-        orbitTilt: 0.2
+        orbitTilt: 0.25  // Lower tilt to keep sun higher in sky
       });
-      // Generate random variations for sun and moon within 0.4-0.6 range
-      const minTime = 0.4;
-      const maxTime = 0.6;
+      // Generate random sun position in solid daytime range
+      const minTime = 0.4;   // Mid-morning
+      const maxTime = 0.6;   // Mid-afternoon
       
-      const randomSunTime = minTime + Math.random() * (maxTime - minTime);
-      const randomMoonTime = minTime + Math.random() * (maxTime - minTime);
-      
-      lighting.setBothTimes(randomSunTime, randomMoonTime);
-      // console.log('Set lighting - Sun:', randomSunTime.toFixed(2), 'Moon:', randomMoonTime.toFixed(2));
+      // Use dramatic sun angle for better shadows
+      lighting.setDramaticSunAngle();
       
       // console.log('Orbital lighting system ready - use lighting.setTimeOfDay(0-1) to adjust');
+      
+      // Auto-initialize shadows when scene is stable (no fixed delay)
+      // console.log('🎭 Starting shadow initialization with stability checks...');
+      setTimeout(() => {
+        if (gfx.autoInitializeShadows) {
+          gfx.autoInitializeShadows();
+        }
+      }, 1000);
+      
+      // Additional fallback - initialize shadows when scene is fully loaded
+      if (gfx.scene.onReadyObservable) {
+        gfx.scene.onReadyObservable.addOnce(() => {
+          // console.log('🎭 Scene fully loaded, checking stability for shadows...');
+          setTimeout(() => {
+            if (gfx.autoInitializeShadows) {
+              gfx.autoInitializeShadows();
+            }
+          }, 1000);
+        });
+      }
     }
+
+    // Create table first
+    gfx.table = gfx.makeTable(scene);
+    
+  // Store shadow state globally
+  window.SHADOWS_ENABLED = false;
+  
+  // Scene stability tracking
+  gfx.sceneStability = {
+    isStable: false,
+    stabilityCheckInterval: 1000, // Check every 1 second
+    lastStabilityCheck: 0,
+    consecutiveStableFrames: 0,
+    requiredStableFrames: 10, // Need 10 consecutive stable frames
+    lastMeshCount: 0,
+    lastFrameTime: 0,
+    stabilityThreshold: 16.67 // 60fps = 16.67ms per frame
+  };
+  
+  // Shadow LoD configuration - increased by 50% for better visibility
+  gfx.shadowLODConfig = {
+    enabled: true,
+    maxShadowDistance: 123.75, // Maximum distance for shadow casting (82.5 * 1.5)
+    nearShadowDistance: 49.5, // Distance for high quality shadows (33 * 1.5)
+    farShadowDistance: 99, // Distance for low quality shadows (66 * 1.5)
+    cullingDistance: 148.5, // Distance beyond which no shadows are cast (99 * 1.5)
+    updateInterval: 100 // Update shadow casters every 100ms
+  };
+  
+  // Shadow LoD tracking
+  gfx.lastShadowUpdate = 0;
+    
+    // Initialize shadow generator after lighting system is ready
+    gfx.initializeShadowGenerator = function() {
+      if (window.lighting && window.lighting.lights && window.lighting.lights.sun) {
+        const sunLight = window.lighting.lights.sun;
+        // console.log('Initializing shadow generator with sun light:', sunLight.name);
+        
+        try {
+          gfx.shadowGenerator = new BABYLON.ShadowGenerator(1024, sunLight);
+          gfx.shadowGenerator.useBlurExponentialShadowMap = false; // Disable blur for sharper shadows
+          gfx.shadowGenerator.darkness = 0.8; // Make shadows darker and more visible
+          gfx.shadowGenerator.setTransparencyShadow(false); // Disable transparency for better performance
+          gfx.shadowGenerator.bias = 0.00001; // Reduce shadow acne
+          gfx.shadowGenerator.normalBias = 0.02; // Reduce shadow acne
+          gfx.shadowGenerator.depthScale = 50; // Better depth scaling
+          
+          // Set near and far planes for shadow rendering
+          gfx.shadowGenerator.minDistance = 0.1;
+          gfx.shadowGenerator.maxDistance = 1500; // Increased by 50% for better visibility
+          
+          // Set up automatic shadow updates for new meshes
+          gfx.scene.onNewMeshAddedObservable.add(gfx.autoUpdateShadows);
+          
+          // console.log('Shadow generator initialized successfully');
+          return true;
+        } catch (error) {
+          console.warn('Failed to initialize shadow generator:', error);
+          gfx.shadowGenerator = null;
+          return false;
+        }
+      } else {
+        // console.log('No sun light available - shadow generator not created');
+        gfx.shadowGenerator = null;
+        return false;
+      }
+    };
+
+    // Check if scene is stable for shadow initialization
+    gfx.checkSceneStability = function() {
+      const currentTime = Date.now();
+      const currentFrameTime = currentTime - gfx.sceneStability.lastFrameTime;
+      gfx.sceneStability.lastFrameTime = currentTime;
+      
+      // Check if enough time has passed since last check
+      if (currentTime - gfx.sceneStability.lastStabilityCheck < gfx.sceneStability.stabilityCheckInterval) {
+        return gfx.sceneStability.isStable;
+      }
+      
+      gfx.sceneStability.lastStabilityCheck = currentTime;
+      
+      // Check if scene exists and has meshes
+      if (!gfx.scene || gfx.scene.meshes.length === 0) {
+        gfx.sceneStability.consecutiveStableFrames = 0;
+        return false;
+      }
+      
+      // Check if scene is still loading
+      if (gfx.scene.isLoading) {
+        gfx.sceneStability.consecutiveStableFrames = 0;
+        return false;
+      }
+      
+      // Check if mesh count is stable (not growing rapidly)
+      const currentMeshCount = gfx.scene.meshes.length;
+      const meshCountChanged = currentMeshCount !== gfx.sceneStability.lastMeshCount;
+      gfx.sceneStability.lastMeshCount = currentMeshCount;
+      
+      // Check if frame rate is stable (not dropping below threshold)
+      const frameRateStable = currentFrameTime <= gfx.sceneStability.stabilityThreshold;
+      
+      // Check if lighting system is ready
+      const lightingReady = window.lighting && window.lighting.lights && window.lighting.lights.sun;
+      
+      if (meshCountChanged || !frameRateStable || !lightingReady) {
+        gfx.sceneStability.consecutiveStableFrames = 0;
+        return false;
+      }
+      
+      // Increment stable frames
+      gfx.sceneStability.consecutiveStableFrames++;
+      
+      // Check if we've reached the required stable frames
+      if (gfx.sceneStability.consecutiveStableFrames >= gfx.sceneStability.requiredStableFrames) {
+        gfx.sceneStability.isStable = true;
+        console.log('✅ Scene is stable! Ready for shadow initialization.');
+        return true;
+      }
+      
+      return false;
+    };
+
+    // Auto-initialize shadows with stability checks
+    gfx.autoInitializeShadows = function() {
+      // Check if shadows are enabled
+      if (!window.SHADOWS_ENABLED) {
+        return;
+      }
+
+      // Check if shadow generator already exists
+      if (gfx.shadowGenerator) {
+        return;
+      }
+
+      // Check if scene is stable
+      if (!gfx.checkSceneStability()) {
+        console.log('⏳ Scene not stable yet, retrying shadow init in 1 second...');
+        setTimeout(() => gfx.autoInitializeShadows(), 1000);
+        return;
+      }
+
+      // Try to initialize shadows
+      console.log('🎭 Scene is stable! Initializing shadows (scene has', gfx.scene.meshes.length, 'meshes)...');
+      const success = gfx.initializeShadowGenerator();
+      
+      if (success) {
+        // Update all existing meshes to receive shadows
+        if (gfx.updateAllMeshShadows) {
+          gfx.updateAllMeshShadows();
+        }
+        console.log('✅ Shadows initialized and applied to', gfx.scene.meshes.length, 'meshes');
+      } else {
+        // Retry after a longer delay
+        console.log('⏳ Shadow initialization failed, retrying in 2 seconds...');
+        setTimeout(() => gfx.autoInitializeShadows(), 2000);
+      }
+    };
+
+    // Force shadow initialization (bypass stability checks)
+    gfx.forceInitializeShadows = function() {
+      console.log('🎭 Force initializing shadows...');
+      gfx.sceneStability.isStable = true; // Mark as stable
+      gfx.autoInitializeShadows();
+    };
+
+    // Reset stability tracking (useful for debugging)
+    gfx.resetStabilityTracking = function() {
+      gfx.sceneStability.isStable = false;
+      gfx.sceneStability.consecutiveStableFrames = 0;
+      gfx.sceneStability.lastMeshCount = 0;
+      gfx.sceneStability.lastFrameTime = 0;
+      console.log('🔄 Stability tracking reset');
+    };
+    
+    // console.log('Shadow generator initialized (disabled by default)');
 
     // Initialize FX system
     if (window.fx) {
@@ -1150,8 +1543,303 @@ let pov2 = 240;
 
 
 
-    gfx.table = gfx.makeTable(scene);
-
+  };
+  
+  // Helper function to set up shadows for a mesh with LoD support
+  gfx.setupMeshShadows = function(mesh, shouldCastShadows = true) {
+    if (!mesh || !gfx.shadowGenerator) return;
+    
+    // Skip UI elements and indicators
+      const isUIMesh = mesh.name.includes('table') || 
+                      mesh.name.includes('UI') || 
+                      mesh.name.includes('menu') ||
+                      mesh.name.includes('Indicator') ||
+                      mesh.name.includes('indicator') ||
+                      mesh.name.includes('HUD') ||
+                      mesh.name.includes('hud') ||
+                      mesh.name.includes('minimap') ||
+                      mesh.name.includes('Minimap') ||
+                      mesh.name.includes('radial') ||
+                      mesh.name.includes('Radial') ||
+                      mesh.name.includes('selectionRing') ||
+                      mesh.name.includes('SelectionRing') ||
+                      mesh.name.includes('billboard') ||
+                      mesh.name.includes('Billboard') ||
+                      mesh.name.includes('center') ||
+                      mesh.name.includes('Center') ||
+                      mesh.name.includes('anchor') ||
+                      mesh.name.includes('Anchor') ||
+                      (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
+                      (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
+                      (mesh.parent && mesh.parent.name && (
+                        mesh.parent.name.includes('table') ||
+                        mesh.parent.name.includes('radial') ||
+                        mesh.parent.name.includes('Radial') ||
+                        mesh.parent.name.includes('HUD') ||
+                        mesh.parent.name.includes('hud') ||
+                        mesh.parent.name.includes('minimap') ||
+                        mesh.parent.name.includes('Minimap')
+                      ));
+    if (isUIMesh) return;
+    
+    // Always set receiveShadows based on current state
+    mesh.receiveShadows = window.SHADOWS_ENABLED;
+    
+    // Mesh will be tracked by the existing LOD system
+    
+    // Only add to shadow generator if shadows are enabled and it should cast shadows
+    if (window.SHADOWS_ENABLED && shouldCastShadows) {
+      gfx.shadowGenerator.addShadowCaster(mesh);
+    }
+    
+    // Handle child meshes recursively
+    if (mesh.getChildMeshes) {
+      mesh.getChildMeshes().forEach(childMesh => {
+        // Skip UI child meshes too
+        const isUIChild = childMesh.name.includes('selectionRing') ||
+                         childMesh.name.includes('SelectionRing') ||
+                         childMesh.name.includes('Indicator') ||
+                         childMesh.name.includes('indicator') ||
+                         childMesh.name.includes('HUD') ||
+                         childMesh.name.includes('hud') ||
+                         childMesh.name.includes('minimap') ||
+                         childMesh.name.includes('Minimap') ||
+                         childMesh.name.includes('radial') ||
+                         childMesh.name.includes('Radial') ||
+                         childMesh.name.includes('center') ||
+                         childMesh.name.includes('Center') ||
+                         childMesh.name.includes('anchor') ||
+                         childMesh.name.includes('Anchor');
+        if (isUIChild) return;
+        
+        childMesh.receiveShadows = window.SHADOWS_ENABLED;
+        if (window.SHADOWS_ENABLED && shouldCastShadows) {
+          gfx.shadowGenerator.addShadowCaster(childMesh);
+        }
+      });
+    }
+  };
+  
+  // Auto-update shadows when new meshes are added (called from scene.onNewMeshAddedObservable)
+  gfx.autoUpdateShadows = function(mesh) {
+    if (!mesh || !gfx.shadowGenerator || !window.SHADOWS_ENABLED) return;
+    
+    // Small delay to ensure mesh is fully initialized
+    setTimeout(() => {
+      gfx.setupMeshShadows(mesh);
+    }, 10);
+  };
+  
+  // Force refresh all shadows (useful for debugging or after major scene changes)
+  gfx.refreshAllShadows = function() {
+    if (!gfx.scene || !gfx.shadowGenerator) return;
+    
+    console.log('Refreshing all shadows...');
+    gfx.updateAllMeshShadows();
+  };
+  
+  // Helper function to update all meshes when shadow state changes
+  gfx.updateAllMeshShadows = function() {
+    if (!gfx.scene || !gfx.shadowGenerator) {
+      console.log('Shadow generator not available - shadows disabled');
+      return;
+    }
+    
+    // Shadow caster tracking is now handled by the existing LOD system
+    
+    let shadowCasterCount = 0;
+    
+    gfx.scene.meshes.forEach(mesh => {
+      // Skip UI elements - check if mesh is part of UI system
+      const isUIMesh = mesh.name.includes('table') || 
+                      mesh.name.includes('UI') || 
+                      mesh.name.includes('menu') ||
+                      mesh.name.includes('Indicator') ||
+                      mesh.name.includes('indicator') ||
+                      mesh.name.includes('HUD') ||
+                      mesh.name.includes('hud') ||
+                      mesh.name.includes('minimap') ||
+                      mesh.name.includes('Minimap') ||
+                      mesh.name.includes('radial') ||
+                      mesh.name.includes('Radial') ||
+                      mesh.name.includes('selectionRing') ||
+                      mesh.name.includes('SelectionRing') ||
+                      mesh.name.includes('billboard') ||
+                      mesh.name.includes('Billboard') ||
+                      mesh.name.includes('center') ||
+                      mesh.name.includes('Center') ||
+                      mesh.name.includes('anchor') ||
+                      mesh.name.includes('Anchor') ||
+                      // Single letter directional indicators (N, E, S, W)
+                      (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
+                      // Two letter directional indicators (SW, SE, NE, NW, etc.)
+                      (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
+                      // Check if mesh is a child of a UI parent
+                      (mesh.parent && mesh.parent.name && (
+                        mesh.parent.name.includes('table') ||
+                        mesh.parent.name.includes('radial') ||
+                        mesh.parent.name.includes('Radial') ||
+                        mesh.parent.name.includes('HUD') ||
+                        mesh.parent.name.includes('hud') ||
+                        mesh.parent.name.includes('minimap') ||
+                        mesh.parent.name.includes('Minimap')
+                      ));
+      if (isUIMesh) return;
+      
+      // All game meshes can receive shadows
+      mesh.receiveShadows = window.SHADOWS_ENABLED;
+      
+      // Only non-terrain meshes should cast shadows
+      const isTerrainMesh = mesh.name.includes('terrainMesh') || mesh.name.includes('Mesh');
+      
+      if (window.SHADOWS_ENABLED && !isTerrainMesh) {
+        // Add to shadow generator immediately
+        gfx.shadowGenerator.addShadowCaster(mesh);
+        shadowCasterCount++;
+      } else {
+        gfx.shadowGenerator.removeShadowCaster(mesh);
+      }
+      
+      // Handle child meshes
+      if (mesh.getChildMeshes) {
+        mesh.getChildMeshes().forEach(childMesh => {
+          // Skip UI child meshes
+            const isUIChild = childMesh.name.includes('selectionRing') ||
+                             childMesh.name.includes('SelectionRing') ||
+                             childMesh.name.includes('Indicator') ||
+                             childMesh.name.includes('indicator') ||
+                             childMesh.name.includes('HUD') ||
+                             childMesh.name.includes('hud') ||
+                             childMesh.name.includes('minimap') ||
+                             childMesh.name.includes('Minimap') ||
+                             childMesh.name.includes('radial') ||
+                             childMesh.name.includes('Radial') ||
+                             childMesh.name.includes('center') ||
+                             childMesh.name.includes('Center') ||
+                             childMesh.name.includes('anchor') ||
+                             childMesh.name.includes('Anchor');
+          if (isUIChild) return;
+          
+          childMesh.receiveShadows = window.SHADOWS_ENABLED;
+          if (window.SHADOWS_ENABLED && !isTerrainMesh) {
+            gfx.shadowGenerator.addShadowCaster(childMesh);
+            shadowCasterCount++;
+          } else {
+            gfx.shadowGenerator.removeShadowCaster(childMesh);
+          }
+        });
+      }
+    });
+    
+    // console.log('Shadows', window.SHADOWS_ENABLED ? 'enabled' : 'disabled', '- Shadow casters:', shadowCasterCount);
+  };
+  
+  // LoD-based shadow caster management - integrated with existing LOD system
+  gfx.updateShadowLOD = function() {
+    if (!gfx.shadowGenerator || !window.SHADOWS_ENABLED || !gfx.shadowLODConfig.enabled) return;
+    
+    const currentTime = Date.now();
+    if (currentTime - gfx.lastShadowUpdate < gfx.shadowLODConfig.updateInterval) return;
+    
+    gfx.lastShadowUpdate = currentTime;
+    
+    // Use the same camera position as the existing LOD system
+    const camera = gfx.camera;
+    if (!camera) return;
+    
+    const cameraPos = camera.position;
+    let activeShadowCasters = 0;
+    let culledShadowCasters = 0;
+    
+    // Use the existing lodModels array for shadow LoD
+    lodModels.forEach(lod => {
+      if (!lod.model || !lod.model.position) return;
+      
+      // Calculate full 3D distance (same as existing LOD system)
+      const distance = BABYLON.Vector3.Distance(cameraPos, lod.model.position);
+      
+      // Check if mesh is currently a shadow caster
+      const isCurrentlyCasting = gfx.shadowGenerator.getShadowMap().renderList.includes(lod.model);
+      
+      if (distance <= gfx.shadowLODConfig.maxShadowDistance) {
+        // Should cast shadows
+        if (!isCurrentlyCasting) {
+          gfx.shadowGenerator.addShadowCaster(lod.model);
+          activeShadowCasters++;
+        }
+      } else {
+        // Too far, remove from shadow casters
+        if (isCurrentlyCasting) {
+          gfx.shadowGenerator.removeShadowCaster(lod.model);
+          culledShadowCasters++;
+        }
+      }
+    });
+    
+    // // Debug info (only log when there are changes)
+    // if (culledShadowCasters > 0) {
+    //   console.log(`Shadow LoD: Culled ${culledShadowCasters} distant shadow casters, ${activeShadowCasters} active`);
+    // }
+  };
+  
+  // Configure shadow LoD settings
+  gfx.configureShadowLOD = function(config) {
+    Object.assign(gfx.shadowLODConfig, config);
+    console.log('Shadow LoD configured:', gfx.shadowLODConfig);
+  };
+  
+  // Get current shadow LoD statistics
+  gfx.getShadowLODStats = function() {
+    const activeCasters = gfx.shadowGenerator ? gfx.shadowGenerator.getShadowMap().renderList.length : 0;
+    const totalCasters = lodModels.length;
+    const fieldSize = window.liveField ? Math.max(window.liveField.width, window.liveField.height) : 0;
+    
+    return {
+      activeShadowCasters: activeCasters,
+      totalShadowCasters: totalCasters,
+      culledShadowCasters: totalCasters - activeCasters,
+      fieldSize: fieldSize,
+      lodEnabled: gfx.shadowLODConfig.enabled,
+      config: gfx.shadowLODConfig
+    };
+  };
+  
+  // Performance monitoring for shadow system
+  gfx.shadowPerformanceMonitor = {
+    frameCount: 0,
+    lastFPS: 0,
+    shadowUpdateCount: 0,
+    lastUpdateTime: 0,
+    
+    update: function() {
+      this.frameCount++;
+      this.shadowUpdateCount++;
+      
+      // Calculate FPS every 60 frames
+      if (this.frameCount % 60 === 0) {
+        const currentTime = performance.now();
+        const deltaTime = currentTime - this.lastUpdateTime;
+        this.lastFPS = 60000 / deltaTime; // 60 frames / time in ms * 1000
+        this.lastUpdateTime = currentTime;
+        
+        // Log performance info if FPS is low
+        if (this.lastFPS < 30) {
+          const stats = gfx.getShadowLODStats();
+          // console.log(`⚠️ Low FPS: ${this.lastFPS.toFixed(1)} - Shadow casters: ${stats.activeShadowCasters}/${stats.totalShadowCasters} (${stats.culledShadowCasters} culled)`);
+        }
+      }
+    },
+    
+    getStats: function() {
+      const stats = gfx.getShadowLODStats();
+      return {
+        fps: this.lastFPS,
+        activeShadowCasters: stats.activeShadowCasters,
+        totalShadowCasters: stats.totalShadowCasters,
+        culledShadowCasters: stats.culledShadowCasters,
+        shadowUpdateCount: this.shadowUpdateCount
+      };
+    }
   };
 
 
@@ -1159,7 +1847,7 @@ let pov2 = 240;
 
   
   gfx.makeCamera = function(scene) {
-    let radius = 0;
+    let radius = 80; // Start at a good middle distance within the zoom range
     // Set better default camera angle: alpha=-2.5 (horizontal), beta=0.9 (looking slightly down, not straight down)
     let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 0.9, radius, new Vec3(0, 0, 0), scene);
     gfx.cameraTarget = new BABYLON.TransformNode("zCameraFocus");
@@ -1183,8 +1871,8 @@ let pov2 = 240;
 
     // Camera setup complete
 
-    camera.upperRadiusLimit = 222;
-    camera.lowerRadiusLimit = 1;
+    camera.upperRadiusLimit = 300; // Increased for better horizon view
+    camera.lowerRadiusLimit = 35;  // Increased minimum to keep camera further from ground
     camera.upperBetaLimit = 2.0; // Limit how high you can look (prevent going too high)
     camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
     camera.maxZ = 50000; // extend far plane to avoid terrain popping on wide zoom
@@ -1197,7 +1885,7 @@ let pov2 = 240;
       // Ensure finite camera parameters to prevent scene disappearing
       if (!Number.isFinite(camera.alpha)) camera.alpha = 0;
       if (!Number.isFinite(camera.beta)) camera.beta = 0.9;
-      if (!Number.isFinite(camera.radius)) camera.radius = 60;
+      if (!Number.isFinite(camera.radius)) camera.radius = 80;
       // Keep beta reasonable
       camera.beta = Math.max(0.2, Math.min(1.5, camera.beta));
       // Keep radius within limits
@@ -1308,6 +1996,9 @@ let pov2 = 240;
     axisZ.position.addInPlace(pos);
     axisZ.color = new BABYLON.Color3(0, 0, 1);
   };
+
+  // Expose LOD ramp-up function
+  gfx.startLODRampUp = startLODRampUp;
 
 }(window.gfx = window.gfx || {}));
 

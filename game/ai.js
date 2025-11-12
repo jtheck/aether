@@ -89,24 +89,30 @@ class Behavior {
 class LingerBehavior extends Behavior {
     constructor(unit, params = {}) {
         super(unit, {
-            radius: 5,           // Stay within this radius
+            radius: params.radius || 5,           // Stay within this radius
             wanderChance: 0.02,  // 2% chance to wander each tick
             wanderDistance: 2,   // How far to wander
             ...params
         });
         
-        this.centerPoint = unit.pb.state.loc.clone();
-        this.lastWanderTime = 0;
-        this.wanderInterval = 3000; // Wander every 3 seconds
+        // Use custom center if provided, otherwise use current position
+        this.centerPoint = params.center || { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+        
+        // Use tick-based timing for multiplayer sync instead of Date.now()
+        this.lastWanderTick = window.currentMatch?.tick || 0;
+        this.wanderInterval = params.wanderInterval || 3000; // Wander every 3 seconds (converted to ticks later)
     }
     
     step() {
-        const currentTime = Date.now();
+        // Use tick-based timing for multiplayer sync
+        const currentTick = window.currentMatch?.tick || 0;
+        const ticksSinceWander = currentTick - this.lastWanderTick;
+        const wanderIntervalTicks = Math.floor(this.wanderInterval / 1000 * 20); // Convert ms to ticks (20 ticks/sec)
         
-        // Occasionally wander around
-        if (currentTime - this.lastWanderTime > this.wanderInterval) {
+        // Occasionally wander around (deterministic timing)
+        if (ticksSinceWander > wanderIntervalTicks) {
             this.wander();
-            this.lastWanderTime = currentTime;
+            this.lastWanderTick = currentTick;
         }
         
         // Check if we've wandered too far from center
@@ -118,18 +124,9 @@ class LingerBehavior extends Behavior {
             this.moveToward(this.centerPoint);
         }
         
-        // Occasionally complete linger behavior to allow wandering
-        // CRITICAL: Use deterministic tick-based probability instead of Math.random() for multiplayer sync
-        const currentTick = window.currentMatch?.tick || 0;
-        const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const deterministicRandom = ((currentTick + unitIdHash) % 1000) / 1000; // 0-1 based on tick + unit ID
-        
-        if (deterministicRandom < 0.001) { // 0.1% chance per tick (roughly every 10 seconds at 60Hz)
-            // console.log(`🌍 ${this.unit.name || this.unit.type} finished lingering, becoming idle`);
-            return true; // Complete the behavior
-        }
-        
-        return false; // Usually keep lingering
+        // Never auto-complete linger behavior for player/AI units (let commands override it)
+        // This prevents units from becoming truly "idle" and losing their anti-stacking behavior
+        return false;
     }
     
     wander() {
@@ -174,7 +171,7 @@ class LingerBehavior extends Behavior {
 class WalkBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
-            arrivalRadius: 1.5,  // Consider arrived when within this distance
+            arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
             walkSpeed: 2,        // Movement speed
             ...params
         });
@@ -235,7 +232,7 @@ class WalkBehavior extends Behavior {
 class RunBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
-            arrivalRadius: 1.5,
+            arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
             runSpeed: (unit.speed || 20) * 1.5,  // 1.5x faster than unit's base speed
             ...params
         });
@@ -289,19 +286,21 @@ class WorkBehavior extends Behavior {
         });
         
         this.building = building;
-        this.workStartTime = Date.now();
+        this.workStartTick = window.currentMatch?.tick || 0;
         this.isOnBreak = false;
-        this.breakStartTime = 0;
+        this.breakStartTick = 0;
     }
     
     step() {
-        const currentTime = Date.now();
-        const elapsed = currentTime - this.workStartTime;
+        const currentTick = window.currentMatch?.tick || 0;
+        const elapsedTicks = currentTick - this.workStartTick;
+        const currentTime = currentTick * 50; // Convert to ms for compatibility
+        const elapsed = elapsedTicks * 50;
         
         // Check if we should take a break
         if (!this.isOnBreak && elapsed > this.params.workDuration) {
             this.isOnBreak = true;
-            this.breakStartTime = currentTime;
+            this.breakStartTick = currentTick;
             // console.log(`🔨 ${this.unit.name || this.unit.type} taking a break from work`);
             return false;
         }
@@ -330,7 +329,7 @@ class WorkBehavior extends Behavior {
         
         // Move around the building in a small area
         const workRadius = 2; // Work within 2 tiles of building
-        const angle = (Date.now() * 0.001) % (Math.PI * 2); // Slow rotation
+        const angle = ((window.currentMatch?.tick || 0) * 0.05) % (Math.PI * 2); // Deterministic slow rotation
         const distance = workRadius * TILE_SIZE * 0.5; // Half radius for closer work
         
         const workX = this.building.position.x + Math.cos(angle) * distance;
@@ -385,12 +384,13 @@ class GatherWorkBehavior extends WorkBehavior {
     }
     
     step() {
-        const currentTime = Date.now();
+        const currentTick = window.currentMatch?.tick || 0;
+        const currentTime = currentTick * 50; // Convert to ms for compatibility
         
         // Handle different gather states
         switch (this.gatherState) {
             case 'seeking':
-                this.seekResources();
+                this.seekResources(currentTime);
                 break;
             case 'gathering':
                 this.gatherResources(currentTime);
@@ -413,7 +413,7 @@ class GatherWorkBehavior extends WorkBehavior {
         }
     }
     
-    seekResources() {
+    seekResources(currentTime) {
         if (!this.building || !this.building.position) return;
         
         // Find nearest resource within gather radius
@@ -422,7 +422,7 @@ class GatherWorkBehavior extends WorkBehavior {
         if (nearestResource) {
             this.gatherTarget = nearestResource;
             this.gatherState = 'gathering';
-            this.gatherStartTime = Date.now();
+            this.gatherStartTime = currentTime;
             
             // console.log(`🔍 ${this.unit.name || this.unit.type} seeking ${nearestResource.type} at (${nearestResource.x.toFixed(1)}, ${nearestResource.z.toFixed(1)})`);
             
@@ -526,7 +526,10 @@ class GatherWorkBehavior extends WorkBehavior {
         
         // Pick any available resource (not necessarily the nearest)
         // This spreads workers out across different resource tiles
-        const randomIndex = Math.floor(Math.random() * availableResources.length);
+        // Use deterministic selection based on unit ID and tick
+        const currentTick = window.currentMatch?.tick || 0;
+        const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const randomIndex = (currentTick + unitIdHash) % availableResources.length;
         const resource = availableResources[randomIndex];
         
         return {
@@ -629,7 +632,8 @@ class FarmWorkBehavior extends WorkBehavior {
     }
     
     step() {
-        const currentTime = Date.now();
+        const currentTick = window.currentMatch?.tick || 0;
+        const currentTime = currentTick * 50; // Convert to ms for compatibility
         
         // Check if we should take a break
         if (!this.isOnBreak && (currentTime - this.workStartTime) > this.params.workDuration) {
@@ -697,8 +701,10 @@ class FarmWorkBehavior extends WorkBehavior {
                 this.currentPatrolIndex = this.patrolPoints.length - 1;
             }
             
-            // Occasionally reverse direction for more natural movement
-            if (Math.random() < 0.1) { // 10% chance
+            // Occasionally reverse direction for more natural movement (deterministic)
+            const currentTick = window.currentMatch?.tick || 0;
+            const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            if (((currentTick + unitIdHash) % 100) < 10) { // 10% chance based on tick
                 this.patrolDirection *= -1;
             }
         } else {
@@ -727,7 +733,8 @@ class EngineerWorkBehavior extends WorkBehavior {
     }
     
     step() {
-        const currentTime = Date.now();
+        const currentTick = window.currentMatch?.tick || 0;
+        const currentTime = currentTick * 50; // Convert to ms for compatibility
         
         // Handle different engineer states
         switch (this.currentState) {
@@ -754,7 +761,7 @@ class EngineerWorkBehavior extends WorkBehavior {
         if (nearestBuilding) {
             this.inspectionTarget = nearestBuilding;
             this.currentState = 'inspecting';
-            this.inspectionStartTime = Date.now();
+            this.inspectionStartTime = currentTime;
             
             // Move to building
             const direction = {
@@ -882,9 +889,9 @@ class WanderBehavior extends Behavior {
             return;
         }
         
-        this.startTime = Date.now();
+        this.startTick = window.currentMatch?.tick || 0;
         this.currentDirection = this.getRandomDirection();
-        this.wanderTime = 0;
+        this.wanderTimeTicks = 0;
         this.spawnPoint = { 
             x: unit.pb.state.loc.x, 
             y: unit.pb.state.loc.y, 
@@ -895,28 +902,35 @@ class WanderBehavior extends Behavior {
     }
     
     step() {
-        const elapsed = Date.now() - this.startTime;
+        const currentTick = window.currentMatch?.tick || 0;
+        const elapsedTicks = currentTick - this.startTick;
+        const elapsed = elapsedTicks * 50; // Convert to ms
         
         // Complete after duration
         if (elapsed > this.params.wanderDuration) {
             // console.log(`🌍 ${this.unit.name || this.unit.type} finished wandering`);
-            // Track when this unit finished wandering
-            this.unit.lastWanderTime = Date.now();
+            // Track when this unit finished wandering (use ticks in multiplayer)
+            this.unit.lastWanderTick = currentTick;
             return true;
         }
         
-        // Change direction every 3-5 seconds
-        if (elapsed - this.wanderTime > 3000 + Math.random() * 2000) {
+        // Change direction deterministically based on ticks
+        const ticksSinceDirectionChange = elapsedTicks - this.wanderTimeTicks;
+        const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const directionChangeInterval = 60 + ((currentTick + unitIdHash) % 40); // 60-100 ticks (3-5 seconds)
+        
+        if (ticksSinceDirectionChange > directionChangeInterval) {
             this.currentDirection = this.getRandomDirection();
-            this.wanderTime = elapsed;
+            this.wanderTimeTicks = elapsedTicks;
             // console.log(`🌍 ${this.unit.name || this.unit.type} changed wander direction to (${this.currentDirection.x.toFixed(2)}, ${this.currentDirection.z.toFixed(2)})`);
         }
         
         // Apply movement in current direction
         this.applyWanderMovement();
         
-        // Occasional micro-movements
-        if (Math.random() < this.params.microMoveChance * 0.016) { // Adjust for 60Hz
+        // Occasional micro-movements (deterministic) - reuse unitIdHash
+        const microMoveThreshold = this.params.microMoveChance * 0.016 * 1000; // Scale to 0-1000
+        if (((currentTick + unitIdHash) % 1000) < microMoveThreshold) {
             this.applyMicroMovement();
         }
         
@@ -929,7 +943,10 @@ class WanderBehavior extends Behavior {
     }
     
     getRandomDirection() {
-        const angle = Math.random() * Math.PI * 2;
+        // Use deterministic angle based on tick and unit ID
+        const currentTick = window.currentMatch?.tick || 0;
+        const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const angle = ((currentTick + unitIdHash) % 628) / 100; // 0 to 2π (6.28)
         return {
             x: Math.cos(angle),
             z: Math.sin(angle)
@@ -1001,27 +1018,17 @@ class UnitBehaviorManager {
     
     // Set a unit's active behavior
     setBehavior(unit, behaviorType, params = {}) {
-        // Handle special-ability cooldowns
-        const now = Date.now();
+        // Handle special-ability cooldowns (tick-based)
+        const currentTick = window.currentMatch?.tick || 0;
         unit._abilityCooldowns = unit._abilityCooldowns || {};
-        const abilityDurations = {
-            'wizard_cast': 2000, // spell casting animation
-            'monk_stealth': (params && params.duration) || 4000,
-            'brigand_sprint': (params && params.duration) || 6000
-        };
-        const abilityCooldowns = {
-            'wizard_cast': 3000,
-            'monk_stealth': 8000,
-            'brigand_sprint': 12000
-        };
         
         // Special abilities are modifiers - they don't replace existing behaviors
         const specialAbilities = ['brigand_sprint', 'monk_stealth', 'wizard_cast', 'engineer_productivity_boost'];
         const isSpecialAbility = specialAbilities.includes(behaviorType);
         
         if (isSpecialAbility) {
-            const nextReady = unit._abilityCooldowns[behaviorType] || 0;
-            if (now < nextReady) {
+            const nextReadyTick = unit._abilityCooldowns[behaviorType] || 0;
+            if (currentTick < nextReadyTick) {
                 // On cooldown, ignore
                 return;
             }
@@ -1092,11 +1099,6 @@ class UnitBehaviorManager {
         if (behavior) {
             this.behaviors.set(unit, behavior);
             // console.log(`🎯 Set ${unit.name || unit.type} behavior to: ${behaviorType}, total behaviors: ${this.behaviors.size}`);
-            // Start cooldown timer for specials
-            if (abilityDurations[behaviorType] !== undefined) {
-                const cd = abilityCooldowns[behaviorType] || 3000;
-                unit._abilityCooldowns[behaviorType] = now + cd;
-            }
         } else {
             // console.warn(`⚠️ Failed to create behavior for ${unit.name || unit.type}, type: ${behaviorType}`);
         }
@@ -1123,9 +1125,23 @@ class UnitBehaviorManager {
             if (behavior) {
                 const completed = behavior.step();
                 if (completed) {
-                    // Behavior completed, remove behavior (don't auto-fallback to linger)
-                    // console.log(`🎯 Behavior completed for unit ${unit.name || unit.type}, removing behavior`);
                     this.behaviors.delete(unit);
+                    
+                    // After movement completes, give units a subtle idle/linger behavior to spread out
+                    // Only apply to player/AI units that just finished moving (not working/gathering)
+                    const isPlayerUnit = unit.owner !== 'neutral';
+                    const wasMoving = behavior instanceof WalkBehavior || behavior instanceof RunBehavior;
+                    
+                    if (isPlayerUnit && wasMoving && unit.pb && unit.pb.state) {
+                        // Set a subtle linger behavior centered at arrival point with small radius
+                        // This makes units naturally spread out a bit instead of stacking
+                        const arrivalPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+                        this.setBehavior(unit, 'linger', { 
+                            center: arrivalPoint, 
+                            radius: 1.5,  // Small wander radius
+                            wanderInterval: 8000  // Wander every 8 seconds
+                        });
+                    }
                 }
             }
             
@@ -1185,15 +1201,15 @@ class UnitBehaviorManager {
         
         if (modifier) {
             unit._specialModifiers[abilityType] = modifier;
-            // Set cooldown
-            const now = Date.now();
-            const abilityCooldowns = {
-                'wizard_cast': 3000,
-                'monk_stealth': 8000,
-                'brigand_sprint': 6000,
-                'engineer_productivity_boost': 5000
+            // Set cooldown (tick-based)
+            const currentTick = window.currentMatch?.tick || 0;
+            const abilityCooldownTicks = {
+                'wizard_cast': 60,      // 3000ms / 50ms = 60 ticks
+                'monk_stealth': 160,    // 8000ms / 50ms = 160 ticks
+                'brigand_sprint': 120,  // 6000ms / 50ms = 120 ticks
+                'engineer_productivity_boost': 100  // 5000ms / 50ms = 100 ticks
             };
-            unit._abilityCooldowns[abilityType] = now + abilityCooldowns[abilityType];
+            unit._abilityCooldowns[abilityType] = currentTick + abilityCooldownTicks[abilityType];
         }
     }
     
@@ -1204,8 +1220,10 @@ class BrigandSprintBehavior {
     constructor(unit, params = {}) {
         this.unit = unit;
         this.params = params;
-        this.startTime = Date.now();
-        this.duration = params.duration || 6000;
+        // DETERMINISTIC: Use tick-based timing
+        const currentTick = window.currentMatch?.tick || 0;
+        this.startTick = currentTick;
+        this.durationTicks = (params.duration || 6000) / 50; // Convert ms to ticks
         this.mult = params.speedMultiplier || 2.0;
         // Store and use a consistent base speed so repeated sprints don't drift
         if (typeof unit._baseSpeed === 'undefined') {
@@ -1217,7 +1235,8 @@ class BrigandSprintBehavior {
     
     step() {
         // Just check if sprint duration is over - let normal movement behaviors handle movement
-        if (Date.now() - this.startTime > this.duration) {
+        const currentTick = window.currentMatch?.tick || 0;
+        if ((currentTick - this.startTick) > this.durationTicks) {
             this.unit.speed = this.baseSpeed;
             return true;
         }
@@ -1234,8 +1253,10 @@ class MonkStealthBehavior {
     constructor(unit, params = {}) {
         this.unit = unit;
         this.params = params;
-        this.startTime = Date.now();
-        this.duration = params.duration || 4000;
+        // DETERMINISTIC: Use tick-based timing
+        const currentTick = window.currentMatch?.tick || 0;
+        this.startTick = currentTick;
+        this.durationTicks = (params.duration || 4000) / 50; // Convert ms to ticks
         // Apply stealth flag and simple visual hint if available
         unit.isStealthed = true;
         if (unit.mesh) {
@@ -1244,7 +1265,8 @@ class MonkStealthBehavior {
         }
     }
     step() {
-        if (Date.now() - this.startTime > this.duration) {
+        const currentTick = window.currentMatch?.tick || 0;
+        if ((currentTick - this.startTick) > this.durationTicks) {
             this.unit.isStealthed = false;
             if (this.unit.mesh && this.unit._origAlpha !== undefined) {
                 this.unit.mesh.visibility = this.unit._origAlpha;
@@ -1266,8 +1288,10 @@ class WizardCastBehavior {
     constructor(unit, params = {}) {
         this.unit = unit;
         this.params = params;
-        this.startTime = Date.now();
-        this.duration = 2000; // spell casting animation
+        // DETERMINISTIC: Use tick-based timing
+        const currentTick = window.currentMatch?.tick || 0;
+        this.startTick = currentTick;
+        this.durationTicks = 40; // 2000ms / 50ms = 40 ticks
         // Optional: spawn simple VFX at target or unit position if available
         if (window.fx && window.fx.createExplosion) {
             const p = params.targetPoint ? new BABYLON.Vector3(params.targetPoint.x, 0, params.targetPoint.z) : (unit.mesh ? unit.mesh.position.clone() : new BABYLON.Vector3(0,0,0));
@@ -1275,7 +1299,8 @@ class WizardCastBehavior {
         }
     }
     step() {
-        return Date.now() - this.startTime > this.duration;
+        const currentTick = window.currentMatch?.tick || 0;
+        return (currentTick - this.startTick) > this.durationTicks;
     }
 }
 
@@ -1283,14 +1308,17 @@ class EngineerProductivityBoostBehavior {
     constructor(unit, params = {}) {
         this.unit = unit;
         this.params = params;
-        this.startTime = Date.now();
-        this.duration = params.duration || 7000;
+        // DETERMINISTIC: Use tick-based timing
+        const currentTick = window.currentMatch?.tick || 0;
+        this.startTick = currentTick;
+        this.durationTicks = (params.duration || 7000) / 50; // Convert ms to ticks
         this.radius = params.radius || 6;
         this.bonus = params.bonus || 1.5;
     }
     
     step() {
-        if (Date.now() - this.startTime > this.duration) {
+        const currentTick = window.currentMatch?.tick || 0;
+        if ((currentTick - this.startTick) > this.durationTicks) {
             return true;
         }
         return false;
@@ -1304,13 +1332,15 @@ const behaviorManager = new UnitBehaviorManager();
 class TransformBehavior extends Behavior {
     constructor(unit, params = {}) {
         super(unit, {
-            transformDuration: 3000, // Takes 3 seconds to transform
+            transformDuration: 3000, // Takes 3 seconds to transform (3000ms = 60 ticks at 20Hz)
             transformType: null, // What to transform into
             revertDelay: 60000, // Brigands revert after 60 seconds of inactivity
             ...params
         });
         
-        this.startTime = Date.now();
+        // DETERMINISTIC: Use tick-based timing instead of Date.now()
+        const currentTick = window.currentMatch?.tick || 0;
+        this.startTick = currentTick;
         this.transformIndicator = null;
         this.hasTransformed = false;
         
@@ -1325,19 +1355,22 @@ class TransformBehavior extends Behavior {
     }
     
     step() {
-        const currentTime = Date.now();
-        const elapsed = currentTime - this.startTime;
+        // DETERMINISTIC: Use tick-based timing
+        const currentTick = window.currentMatch?.tick || 0;
+        const ticksElapsed = currentTick - this.startTick;
+        const msElapsed = ticksElapsed * 50; // Convert ticks to ms (20Hz = 50ms per tick)
         
         // If we haven't transformed yet and enough time has passed, transform the unit
-        if (!this.hasTransformed && elapsed > this.params.transformDuration) {
+        if (!this.hasTransformed && msElapsed > this.params.transformDuration) {
             this.transformUnit();
         }
         
         // Keep behavior active for brigands to track inactivity
         if (this.params.transformType === 'brigand' && this.hasTransformed) {
-            // Check if brigand has been inactive
-            const timeSinceLastAction = currentTime - (this.unit.lastMoveTime || 0);
-            if (timeSinceLastAction > this.params.revertDelay) {
+            // Check if brigand has been inactive (use tick-based timing)
+            const ticksSinceLastMove = currentTick - (this.unit.lastMoveTick || 0);
+            const msSinceLastMove = ticksSinceLastMove * 50;
+            if (msSinceLastMove > this.params.revertDelay) {
                 // Revert back to villager
                 this.revertToVillager();
                 return true; // Complete the behavior
@@ -1364,15 +1397,14 @@ class TransformBehavior extends Behavior {
         // Store owner and other important properties
         const owner = this.unit.owner;
         
-        // Create the new unit
+        // CRITICAL: Pass owner in constructor options
         const newUnit = new Unit(this.params.transformType, {
             x: originalPos.x,
             y: originalPos.y,
             z: originalPos.z
-        });
+        }, { owner: owner });
         
-        // Copy over important properties
-        newUnit.owner = owner;
+        // Copy over rotation
         newUnit.pb.state.rot.copyFrom(originalRot);
         
         // Add to appropriate unit arrays

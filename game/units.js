@@ -1,5 +1,7 @@
 
 
+// Multiplayer interpolation settings
+const REMOTE_UNIT_INTERPOLATION_SPEED = 0.2; // Competitive smoothing - quick catch-up without jarring snaps
 
 // Unit type definitions - all unit attributes in one place
 const UnitTypes = {
@@ -194,7 +196,7 @@ function Unit(unitType, position, options = {}) {
     
     // Visual interpolation for smooth remote player movement
     this.visualPosition = null; // Current visual position (for interpolation)
-    this.interpolationSpeed = 0.15; // How fast to catch up (0.15 = 15% per frame)
+    this.interpolationSpeed = REMOTE_UNIT_INTERPOLATION_SPEED;
     
     // Physics body
     this.pb = new PBody();
@@ -1081,10 +1083,63 @@ function autoInitUnits() {
     }
 }
 
+// Recruit a unit (handles both single-player and multiplayer)
+function recruitUnit(unitType, options = {}) {
+  // MULTIPLAYER: Use synchronized train command
+  if (window.isMultiplayer && window.currentMatch && window.player) {
+    const normalizedPlayerId = window.player.id?.length > 6 ? window.player.id.slice(-6) : window.player.id;
+    
+    const agoraBuilding = window.playerBuildings?.find(b => {
+      const normalizedOwner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
+      return b.type === 'agora' && normalizedOwner === normalizedPlayerId;
+    });
+    
+    if (agoraBuilding) {
+      // CRITICAL: Always use normalized player ID in commands
+      window.currentMatch.submitCommand({
+        type: 'train',
+        playerId: normalizedPlayerId,  // Use normalized ID, not window.player.id
+        buildingId: agoraBuilding.id,
+        unitType: unitType
+      });
+      return true;
+    } else {
+      console.warn(`❌ Cannot recruit ${unitType}: No agora found`);
+      return false;
+    }
+  }
+  
+  // SINGLE-PLAYER: Create directly at agora
+  if (window.player && window.player.agora) {
+    const agoraX = window.player.agora.x * TILE_SIZE;
+    const agoraZ = window.player.agora.y * TILE_SIZE;
+    
+    const unit = new Unit(unitType, { x: agoraX, y: 0, z: agoraZ });
+    unit.owner = 'player';
+    
+    const randomRotation = Math.random() * Math.PI * 2;
+    unit.rotation = randomRotation;
+    if (unit.pb && unit.pb.state && unit.pb.state.rot) {
+      unit.pb.state.rot.y = randomRotation;
+    }
+    
+    window.player.units.push(unit);
+    window.gameUnits.push(unit);
+    
+    if (window.gfx && window.gfx.scene) {
+      window.spawnUnitModels(window.gfx.scene);
+    }
+    return true;
+  }
+  
+  return false;
+}
+
 // Export for use in other files
 if (typeof window !== 'undefined') {
     window.UnitTypes = UnitTypes;
     window.Unit = Unit;
+    window.recruitUnit = recruitUnit;
     window.spawnAgoraVillagers = spawnAgoraVillagers;
     window.getUnitDef = getUnitDef;
     window.getUnitsByCategory = getUnitsByCategory;

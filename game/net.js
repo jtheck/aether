@@ -377,6 +377,17 @@
           }
           break;
           
+        case 'lobby_closed':
+          // Host closed the lobby - return to browser
+          if (window.Lobby && actualMessage.lobbyId === window.Lobby.currentLobbyId) {
+            console.log('🚪 Host closed lobby - returning to browser');
+            window.Lobby.leaveLobby();
+            if (window.ui && window.ui.showMenu) {
+              window.ui.showMenu('main_menu');
+            }
+          }
+          break;
+          
         case 'player_joined':
           // Add player to lobby
           if (window.Lobby && actualMessage.playerId && actualMessage.playerId !== localPlayerId) {
@@ -623,6 +634,24 @@
     // Update lobby connection status
     if (window.Lobby) {
       window.Lobby.playerConnectionStates[peerId] = 'connected';
+      
+      // Update connected players list - merge with existing player info
+      const currentPeers = p2p.getConnectedPeers();
+      
+      // Deduplicate peer IDs (sometimes P2P library returns duplicates)
+      const uniquePeers = [...new Set(currentPeers)];
+      
+      // Keep existing player objects with info, add new peers as strings
+      const existingPlayerMap = new Map();
+      window.Lobby.connectedPlayers.forEach(p => {
+        const id = p.id || p;
+        existingPlayerMap.set(id, p);
+      });
+      
+      window.Lobby.connectedPlayers = uniquePeers.map(peerId => {
+        // If we already have player info for this peer, use it
+        return existingPlayerMap.get(peerId) || peerId;
+      });
     }
     
     // Send ready signal with local player ID
@@ -639,11 +668,8 @@
       });
       
       // Update lobby UI to show connection status
-      if (window.Lobby.currentGameType && window.Lobby.currentLobbyId) {
-        const lobby = window.Lobby.availableLobbies[window.Lobby.currentGameType]?.find(l => l.id === window.Lobby.currentLobbyId);
-        if (lobby) {
-          window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, lobby);
-        }
+      if (window.Lobby.currentGameType && window.Lobby.currentLobby) {
+        window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
       }
     } else {
       // console.log('⚠️ Not in lobby, skipping player_joined');
@@ -699,18 +725,18 @@
     // Update lobby connection status
     if (window.Lobby) {
       window.Lobby.playerConnectionStates[peerId] = 'disconnected';
-      window.Lobby.connectedPlayers = window.Lobby.connectedPlayers.filter(p => p.id !== peerId);
+      
+      // Update connected players list with current peer list
+      const currentPeers = p2p.getConnectedPeers();
+      window.Lobby.connectedPlayers = currentPeers;
       
       // Update lobby UI
-      if (window.Lobby.currentGameType && window.Lobby.currentLobbyId) {
-        const lobby = window.Lobby.availableLobbies[window.Lobby.currentGameType]?.find(l => l.id === window.Lobby.currentLobbyId);
-        if (lobby) {
-          window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, lobby);
-          
-          // If we're the host, announce updated lobby (player count changed)
-          if (window.Lobby.isHost) {
-            window.Lobby.announceLobby(lobby);
-          }
+      if (window.Lobby.currentGameType && window.Lobby.currentLobby) {
+        window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
+        
+        // If we're the host, announce updated lobby (player count changed)
+        if (window.Lobby.isHost && window.Lobby.currentLobby) {
+          window.Lobby.announceLobby(window.Lobby.currentLobby);
         }
       }
     }
@@ -868,6 +894,16 @@
         // Show invite UI
         if (window.ui && window.ui.showGameInvite) {
           window.ui.showGameInvite(data.from, data.gameType);
+        }
+        break;
+      case 'lobby_closed':
+        // Host closed the lobby - return to browser
+        if (window.Lobby && data.lobbyId === window.Lobby.currentLobbyId) {
+          console.log('🚪 Host closed lobby (broadcast) - returning to browser');
+          window.Lobby.leaveLobby();
+          if (window.ui && window.ui.showMenu) {
+            window.ui.showMenu('main_menu');
+          }
         }
         break;
       default:

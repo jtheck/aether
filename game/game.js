@@ -39,7 +39,9 @@ Game.prototype.init = function() {
 };
 
 Game.prototype.spawnInitialUnits = function() {
-  // console.log('🏘️ Spawning initial game units for all players...');
+  console.log('🏘️ Spawning initial game units for all players...');
+  console.log('   window.player.id:', window.player?.id);
+  console.log('   this.players:', this.players.map(p => ({ id: p.id, name: p.name, isLocalPlayer: p === window.player })));
   
   // Spawn villagers and buildings for ALL players (local + opponents)
   if (this.players && this.players.length > 0) {
@@ -50,7 +52,7 @@ Game.prototype.spawnInitialUnits = function() {
       }
       
       const isLocalPlayer = player === window.player;
-      // console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y})`);
+      console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y}), ID: ${player.id}`);
       
       // Spawn agora building for this player
       if (window.playerBuildings) {
@@ -64,6 +66,32 @@ Game.prototype.spawnInitialUnits = function() {
             placed.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
             player.buildings.push(placed);
             window.playerBuildings.push(placed);
+            
+            // Rotate agora to face center of map
+            if (window.liveField) {
+              const mapCenterX = (window.liveField.width / 2) * TILE_SIZE;
+              const mapCenterZ = (window.liveField.height / 2) * TILE_SIZE;
+              const agoraX = player.agora.x * TILE_SIZE;
+              const agoraZ = player.agora.y * TILE_SIZE;
+              const dx = mapCenterX - agoraX;
+              const dz = mapCenterZ - agoraZ;
+              
+              // KOTH: Face inward (+90°)
+              // Other modes: Face outward (+90° +180° = +270°)
+              const isKOTH = window.currentMatch?.gameType === 'koth';
+              const angleToCenter = Math.atan2(dx, dz) + (isKOTH ? Math.PI / 2 : Math.PI * 1.5);
+              
+              placed.targetRotation = angleToCenter;
+              
+              // Apply rotation when mesh loads
+              const checkInterval = setInterval(() => {
+                if (placed.mesh) {
+                  placed.mesh.rotationQuaternion = null;
+                  placed.mesh.rotation.y = angleToCenter;
+                  clearInterval(checkInterval);
+                }
+              }, 100);
+            }
             // console.log(`🏛️ Spawned agora for ${player.name || player.id}`);
           }
         } else if (window.Building) {

@@ -172,6 +172,9 @@ function Building(buildingType, position, options = {}) {
   Object.assign(this, def);
   
   // Building instance properties
+  // Store the original building type (for lookups)
+  this.type = buildingType;
+  
   // MULTIPLAYER: Generate deterministic IDs based on match seed and building count
   this.id = options.id || (window.isMultiplayer && window.currentMatch ? 
       `building-${window.currentMatch.mapSeed}-${(window.playerBuildings?.length || 0)}` : 
@@ -315,19 +318,9 @@ function placeBuilding(buildingType, x, z, scene) {
         building.mesh.position.y = 0;
         building.mesh.scaling.y = targetScale;
         
-        // Add particle effects based on building type (for non-towers)
-        if (building.name.toLowerCase() !== 'tower') {
-          addBuildingParticleEffects(building);
-        }
-        
-        // Backup particle effect for towers (in case the first one failed)
-        if (building.name.toLowerCase() === 'tower' && window.fx) {
-          setTimeout(() => {
-            if (!building.particleEffects || building.particleEffects.length === 0) {
-              addBuildingParticleEffects(building);
-            }
-          }, 500);
-        }
+        // Add particle effects immediately for all buildings (including towers)
+        // Removed setTimeout to ensure deterministic timing
+        addBuildingParticleEffects(building);
       });
     }).catch(err => {
       // console.error(`❌ Failed to load ${building.name} model:`, err);
@@ -402,11 +395,13 @@ function spawnVillagerFromVillage(village) {
   const villager = new Unit('villager', spawnPosition);
   villager.owner = village.owner;
   
-  // Random rotation
-  const randomRotation = Math.random() * Math.PI * 2;
-  villager.rotation = randomRotation;
+  // Deterministic rotation based on building ID and spawn count
+  const buildingIdHash = (village.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const currentTick = window.currentMatch?.tick || 0;
+  const deterministicRotation = ((buildingIdHash + village.spawnedVillagers + currentTick) % 628) / 100; // 0 to ~6.28 (2π)
+  villager.rotation = deterministicRotation;
   if (villager.pb.state && villager.pb.state.rot) {
-    villager.pb.state.rot.y = randomRotation;
+    villager.pb.state.rot.y = deterministicRotation;
   }
   
   // Add to appropriate unit arrays
@@ -479,10 +474,18 @@ function findVillagerSpawnPosition(village) {
   const maxAttempts = 20;
   const spawnRadius = village.spawnRadius || 3;
   
+  // Use deterministic values based on building ID, spawn count, and current tick
+  const buildingIdHash = (village.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const currentTick = window.currentMatch?.tick || 0;
+  const spawnCount = village.spawnedVillagers || 0;
+  
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    // Generate random position within spawn radius
-    const angle = Math.random() * Math.PI * 2;
-    const distance = Math.random() * spawnRadius * TILE_SIZE;
+    // Generate deterministic position within spawn radius
+    const angleSeed = (buildingIdHash + spawnCount + currentTick + attempt * 37) % 628;
+    const angle = angleSeed / 100; // 0 to ~6.28 (2π)
+    
+    const distanceSeed = (buildingIdHash + spawnCount + currentTick + attempt * 73) % 1000;
+    const distance = (distanceSeed / 1000) * spawnRadius * TILE_SIZE;
     
     const spawnX = village.position.x + Math.cos(angle) * distance;
     const spawnZ = village.position.z + Math.sin(angle) * distance;
@@ -495,11 +498,13 @@ function findVillagerSpawnPosition(village) {
     }
   }
   
-  // If no valid position found, spawn at village position
+  // If no valid position found, spawn at village position (deterministic offset)
+  const offsetSeed = (buildingIdHash + spawnCount + currentTick) % 1000;
+  const offset = (offsetSeed / 1000 - 0.5) * TILE_SIZE;
   return { 
-    x: village.position.x + (Math.random() - 0.5) * TILE_SIZE, 
+    x: village.position.x + offset, 
     y: 0, 
-    z: village.position.z + (Math.random() - 0.5) * TILE_SIZE 
+    z: village.position.z + offset 
   };
 }
 
@@ -669,6 +674,22 @@ function updateBuildings(deltaTime) {
     // - Health regeneration
     // - Production cycles
     // - Defensive actions
+    
+    // Handle deterministic mesh setup for multiplayer buildings
+    if (building.needsMeshSetup && building.mesh && window.currentMatch) {
+      // Apply rotation and team colors
+      building.mesh.rotationQuaternion = null;
+      building.mesh.rotation.y = building.targetRotation || 0;
+      
+      // Apply team colors
+      if (window.applyTeamColorsToMesh && window.getTeamColorForOwner) {
+        const teamColor = window.getTeamColorForOwner(building.owner);
+        window.applyTeamColorsToMesh(building.mesh, teamColor);
+      }
+      
+      // Mark as complete
+      building.needsMeshSetup = false;
+    }
     
     // Handle villager spawning for villages (only if game is running)
     if (building.spawnsVillagers && building.buildProgress >= 1.0 && window.currentMatch && window.currentMatch.state === 'playing') {
@@ -1315,7 +1336,26 @@ const buildingSystem = {
       }
     }
     
-    // Place the building
+    // MULTIPLAYER: Submit building command instead of placing directly
+    if (window.isMultiplayer && window.currentMatch) {
+      const command = {
+        type: 'build',
+        buildingType: this.selectedBuildingType,
+        gridX: gridX,
+        gridZ: gridZ,
+        rotation: this.placementRotation,
+        resources: this.detectedResources ? [...this.detectedResources] : []
+      };
+      window.currentMatch.submitCommand(command);
+      
+      // Preview cleanup - stay in placement mode
+      this.previewMesh.dispose();
+      this.previewMesh = null;
+      this.createPreviewMesh();
+      return;
+    }
+    
+    // SINGLE PLAYER: Place building directly
     const building = placeBuilding(this.selectedBuildingType, gridX, gridZ, window.gfx.scene);
     
     if (building) {

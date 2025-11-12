@@ -29,7 +29,7 @@ const Lobby = {
       name: '1 vs 1',
       maxPlayers: 2,
       lobbyKey: 'aether-1v1-quick',
-      defaultFieldSize: 'medium'
+      defaultFieldSize: 'tiny'
     },
     'koth': {
       name: 'King of the Hill',
@@ -501,6 +501,7 @@ const Lobby = {
   
   // Join global stats channel
   joinGlobalStatsChannel: function() {
+    // console.log('🌍 Attempting to join global stats channel...');
     // Initialize network ONCE (just for broadcast, no P2P matching yet)
     if (!window.net || !window.net.initialized) {
       const isLocalhost = window.location.hostname === 'localhost' || 
@@ -529,14 +530,38 @@ const Lobby = {
       // Announce our presence periodically
       this.startAnnouncingGlobalStatus();
     }).catch(err => {
-      console.error('Failed to join global stats channel:', err);
+      console.error('❌ Failed to join global stats channel:', err);
     });
   },
 
   // Wait for P2P to be ready, then join global stats
   waitForP2PAndJoinGlobalStats: function() {
+    // console.log('⏳ Waiting for P2P to be ready for global stats...');
+    
+    // First, make sure network is initialized
+    if (!window.net || !window.net.initialized) {
+      // console.log('🌐 Network not initialized, initializing for global stats...');
+      const isLocalhost = window.location.hostname === 'localhost' || 
+                         window.location.hostname === '127.0.0.1';
+      
+      // Initialize network module if it exists
+      if (window.net && window.net.init) {
+        window.net.init({
+          gameType: 'global',
+          devMode: isLocalhost,
+          lobbyBrowserMode: true,
+          broadcastChannel: 'aether-global-stats'
+        });
+      } else {
+        console.error('❌ window.net.init not available!');
+        return;
+      }
+    }
+    
+    // Then wait for P2P to be ready
     const checkP2P = () => {
       if (window.net && window.net.p2p && window.net.p2p.joinBroadcast) {
+        // console.log('✅ P2P ready! Joining global stats channel...');
         this.joinGlobalStatsChannel();
       } else {
         // Retry in 500ms
@@ -549,12 +574,14 @@ const Lobby = {
   // Wait for broadcast channel to connect (track ourselves)
   waitForBroadcastChannel: function(channelName, timeout = 2500) {
     return new Promise((resolve, reject) => {
+      // console.log(`📡 Joining broadcast channel: ${channelName}`);
       // Try to join
       if (window.net && window.net.p2p && window.net.p2p.joinBroadcast) {
         window.net.p2p.joinBroadcast(channelName);
         
         // Mark as "joining"
         this.connectedChannels[channelName] = 'connecting';
+        // console.log(`⏳ Waiting 2s for ${channelName} to connect...`);
         
         // Wait for ActionCable WebSocket connection
         setTimeout(() => {
@@ -563,6 +590,7 @@ const Lobby = {
           resolve();
         }, 2000); // 2 seconds for WebSocket + ActionCable subscription
       } else {
+        console.error(`❌ P2P not ready for ${channelName}`);
         reject(new Error('P2P not ready'));
       }
     });
@@ -582,7 +610,7 @@ const Lobby = {
         actualMessage = data.content;
       }
       
-      // console.log('📡 Received global broadcast:', actualMessage.type);
+      // console.log('📡 Received global broadcast:', actualMessage.type, actualMessage);
       
       // Handle global stats messages
       if (actualMessage.type === 'player_status') {
@@ -593,7 +621,7 @@ const Lobby = {
           timestamp: actualMessage.timestamp
         };
         
-        // console.log(`👥 Player status updated: ${Object.keys(this.playerStatuses).length} players tracked`);
+        // console.log(`👥 Player status updated: ${Object.keys(this.playerStatuses).length} players tracked`, this.playerStatuses);
         
         // Clean up stale statuses (not seen in 30 seconds)
         const now = Date.now();
@@ -695,6 +723,7 @@ const Lobby = {
     
     // console.log(`🎮 Opening ${config.name} lobby browser...`);
     
+    // Set currentGameType FIRST before announcing (announceStatusToGlobal uses it)
     this.currentGameType = gameType;
     window.gameType = gameType;
     
@@ -711,7 +740,7 @@ const Lobby = {
       }
     }, 3100); // Slightly after the 3s search window
     
-    // Announce status change to global stats
+    // Announce status change to global stats (AFTER setting currentGameType)
     this.announceStatusToGlobal('browsing');
     
     // Network should already be initialized from global stats
@@ -821,37 +850,170 @@ const Lobby = {
       return;
     }
     
+    // Clear any existing connection timeout
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+    
+    // Clear any existing status check interval
+    if (this.connectionStatusInterval) {
+      clearInterval(this.connectionStatusInterval);
+      this.connectionStatusInterval = null;
+    }
+    
+    // Disconnect from any existing P2P connections first
+    if (window.net && window.net.p2p) {
+      const peers = window.net.p2p.getConnectedPeers();
+      if (peers.length > 0) {
+        console.log(`🔌 Disconnecting from ${peers.length} existing peers before joining new lobby`);
+        peers.forEach(peerId => {
+          if (window.net.p2p.disconnectFromPeer) {
+            window.net.p2p.disconnectFromPeer(peerId);
+          }
+        });
+        
+        // Force a small delay to ensure disconnection completes
+        return new Promise(resolve => {
+          setTimeout(() => {
+            this._continueJoinLobby(gameType, lobbyId, lobby, config);
+            resolve();
+          }, 300);
+        });
+      }
+    }
+    
+    this._continueJoinLobby(gameType, lobbyId, lobby, config);
+  },
+  
+  // Internal: Continue joining lobby after cleanup
+  _continueJoinLobby: function(gameType, lobbyId, lobby, config) {
+    // Clear any existing lobby update interval
+    if (this.lobbyUpdateInterval) {
+      clearInterval(this.lobbyUpdateInterval);
+      this.lobbyUpdateInterval = null;
+    }
+    
     this.currentLobbyId = lobbyId;
+    this.currentLobby = lobby; // Store the lobby data
     this.isHost = false;
     this.connectedPlayers = []; // Reset connected players list
     this.playerReadyStates = {};
+    this.playerConnectionStates = {};
     this.playerReadyStates[window.net.getStatus().localPlayerId] = false;
     
     // Join the actual P2P match lobby
     const actualLobbyKey = `${config.lobbyKey}-${lobbyId}`;
     const myId = window.net ? window.net.getStatus().localPlayerId : 'unknown';
-    // console.log(`🔗 [${myId}] Switching to match lobby: ${actualLobbyKey}`);
+    console.log(`🔗 [${myId}] Switching to match lobby: ${actualLobbyKey}`);
     if (window.net.switchLobby) {
       window.net.switchLobby(actualLobbyKey);
     } else {
       console.error('❌ net.switchLobby not available!');
+      return;
     }
     
-    // Log current P2P status
-    setTimeout(() => {
-      if (window.net && window.net.getStatus) {
-        const status = window.net.getStatus();
-        // console.log(`👥 [${myId}] P2P Status: ${status.peers?.length || 0} peers connected`, status.peers);
-      }
-    }, 2000); // Wait longer for presence announcement
-    
-    // Update UI to show lobby room
-    this.updateLobbyRoomUI(gameType, lobby);
+    // Update UI to show lobby room immediately
+    this.updateLobbyRoomUI(gameType, this.currentLobby);
     
     // Announce status change to global stats
     this.announceStatusToGlobal('in_lobby');
     
-    // console.log(`🚪 Joined lobby: ${lobby.name}`);
+    // Start monitoring connection status
+    let connectionAttempts = 0;
+    const maxAttempts = 5;
+    const joinStartTime = Date.now();
+    
+    this.connectionStatusInterval = setInterval(() => {
+      if (!this.currentLobbyId || this.currentLobbyId !== lobbyId) {
+        // User left the lobby
+        clearInterval(this.connectionStatusInterval);
+        this.connectionStatusInterval = null;
+        return;
+      }
+      
+      const status = window.net.getStatus();
+      const elapsed = Date.now() - joinStartTime;
+      
+      if (status.peers && status.peers.length > 0) {
+        // Successfully connected!
+        console.log(`✅ [${myId}] Connected to ${status.peers.length} peer(s)`);
+        
+        // Deduplicate peer IDs (sometimes P2P library returns duplicates)
+        const uniquePeers = [...new Set(status.peers)];
+        
+        // Update connected players list - merge with existing player info
+        const existingPlayerMap = new Map();
+        this.connectedPlayers.forEach(p => {
+          const id = p.id || p;
+          existingPlayerMap.set(id, p);
+        });
+        
+        this.connectedPlayers = uniquePeers.map(peerId => {
+          // If we already have player info for this peer, use it
+          return existingPlayerMap.get(peerId) || peerId;
+        });
+        
+        // Update lobby UI with connected peers
+        if (this.currentLobby) {
+          this.updateLobbyRoomUI(gameType, this.currentLobby);
+        }
+        
+        clearInterval(this.connectionStatusInterval);
+        this.connectionStatusInterval = null;
+        return;
+      }
+      
+      connectionAttempts++;
+      
+      // Log status every 2 attempts
+      if (connectionAttempts % 2 === 0) {
+        console.log(`⏳ [${myId}] Waiting for peer connection... (attempt ${connectionAttempts}/${maxAttempts}, ${(elapsed/1000).toFixed(1)}s)`);
+      }
+      
+      // Try manual connection request every 3 attempts
+      if (connectionAttempts % 3 === 0 && window.net.p2p) {
+        console.log(`🔄 [${myId}] Attempting manual connection...`);
+        
+        // Try to find the host in the lobby list and request direct P2P match
+        const lobby = this.availableLobbies[gameType]?.find(l => l.id === lobbyId);
+        const hostId = lobby?.hostId || lobby?.host; // Check both hostId and host properties
+        
+        if (lobby && hostId && window.net.p2p.requestMatch) {
+          console.log(`📞 [${myId}] Requesting direct P2P match with host: ${hostId}`);
+          window.net.p2p.requestMatch(hostId);
+        } else {
+          console.log(`⚠️ [${myId}] Cannot find lobby host for direct connection (lobby found: ${!!lobby}, hostId: ${hostId})`);
+        }
+      }
+    }, 1000);
+    
+    // Set overall timeout (15 seconds)
+    this.connectionTimeout = setTimeout(() => {
+      clearInterval(this.connectionStatusInterval);
+      this.connectionStatusInterval = null;
+      
+      const status = window.net.getStatus();
+      if (!status.peers || status.peers.length === 0) {
+        console.warn(`⚠️ [${myId}] Connection timeout after 15s - no peers connected`);
+        console.log(`💡 Tip: Try backing out and rejoining, or recreate the lobby`);
+        
+        // Update UI to show timeout
+        const lobbyElement = document.getElementById(`${gameType}_lobby`);
+        if (lobbyElement) {
+          const statusDiv = lobbyElement.querySelector('.lobby_connection_status');
+          if (statusDiv) {
+            statusDiv.innerHTML = `
+              <div style="color: #ff6b6b; padding: 10px; background: rgba(255,107,107,0.1); border-radius: 4px; margin: 10px 0;">
+                ⚠️ Connection timeout - no peer found. Try backing out and rejoining.
+              </div>
+            `;
+          }
+        }
+      }
+    }, 15000);
+    
+    console.log(`🚪 Joining lobby: ${lobby.name}`);
   },
   
   // Start discovering available lobbies
@@ -1047,14 +1209,49 @@ const Lobby = {
       this.lobbyDiscoveryInterval = null;
     }
     
-    // Clear state
-    this.currentGameType = null;
+    // Clear connection monitoring
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+    
+    if (this.connectionStatusInterval) {
+      clearInterval(this.connectionStatusInterval);
+      this.connectionStatusInterval = null;
+    }
+    
+    // Notify others if we were in a lobby
+    if (this.currentLobbyId && this.isHost && window.net && window.net.p2p) {
+      // Host leaving - notify others that lobby is closing
+      window.net.p2p.sendData({
+        type: 'lobby_closed',
+        lobbyId: this.currentLobbyId
+      });
+    }
+    
+    // Clear state (currentGameType is intentionally set to null for menu)
+    const previousLobbyId = this.currentLobbyId;
+    const previousGameType = this.currentGameType;
+    
+    this.currentLobbyId = null;
+    this.currentLobby = null;
+    this.currentGameType = null; // Clear gameType when returning to main menu
     this.connectedPlayers = [];
     this.isHost = false;
+    this.playerReadyStates = {};
+    this.playerConnectionStates = {};
     
-    // Disconnect from network
-    if (window.net && window.net.disconnect) {
-      window.net.disconnect();
+    // Announce we're back in menu (currentGameType will be null, which is correct for 'menu' status)
+    this.announceStatusToGlobal('menu');
+    
+    // Disconnect P2P connections (but keep broadcast channel for lobby browser)
+    if (window.net && window.net.p2p) {
+      const peers = window.net.p2p.getConnectedPeers();
+      peers.forEach(peerId => {
+        if (window.net.p2p.disconnectFromPeer) {
+          window.net.p2p.disconnectFromPeer(peerId);
+        }
+      });
     }
   },
   
@@ -1182,6 +1379,8 @@ const Lobby = {
         <button class="leave_lobby_btn" onclick="window.Lobby.leaveLobbyAndReturnToBrowser('${gameType}')">← Back</button>
       </div>
       
+      <div class="lobby_connection_status"></div>
+      
       <div class="lobby_room_settings">
         <div class="lobby_setting">
           <label>Field Size:</label>
@@ -1303,7 +1502,7 @@ const Lobby = {
     
     if (lobbyName) {
       const settings = {
-        fieldSize: 'medium',
+        fieldSize: config.defaultFieldSize,
         seed: Math.floor(Math.random() * 1000000),
         maxPlayers: config.maxPlayers
       };
@@ -1314,40 +1513,105 @@ const Lobby = {
   
   // Leave lobby and return to browser
   leaveLobbyAndReturnToBrowser: function(gameType) {
+    // console.log(`🚪 Leaving lobby and returning to ${gameType} browser`);
+    
     const wasHost = this.isHost;
     const lobbyId = this.currentLobbyId;
     
     // If we're the host, broadcast that the lobby is closed
     if (wasHost && lobbyId) {
-      const channelName = `${gameType}-lobby-browser`;
+      const config = this.gameTypes[gameType];
+      
+      // Broadcast to lobby browser channel (so it's removed from list)
+      const browserChannelName = `${gameType}-lobby-browser`;
       if (window.net && window.net.broadcast) {
         window.net.broadcast({
           type: 'lobby_closed',
           gameType: gameType,
           lobbyId: lobbyId
-        }, channelName);
-        console.log('📡 Broadcasting lobby closed');
+        }, browserChannelName);
+        console.log('📡 Broadcasting lobby closed to browser channel');
+      }
+      
+      // CRITICAL: Also broadcast to the specific lobby channel (for joiners waiting to connect)
+      const lobbyChannelName = `${config.lobbyKey}-${lobbyId}`;
+      if (window.net && window.net.broadcast) {
+        window.net.broadcast({
+          type: 'lobby_closed',
+          gameType: gameType,
+          lobbyId: lobbyId
+        }, lobbyChannelName);
+        console.log('📡 Broadcasting lobby closed to lobby channel');
       }
     }
     
+    // Disconnect P2P peers to allow clean rejoin
+    if (window.net && window.net.p2p) {
+      const peers = window.net.p2p.getConnectedPeers();
+      peers.forEach(peerId => {
+        if (window.net.p2p.disconnectFromPeer) {
+          window.net.p2p.disconnectFromPeer(peerId);
+        }
+      });
+    }
+    
+    // Stop lobby updates
+    if (this.lobbyUpdateInterval) {
+      clearInterval(this.lobbyUpdateInterval);
+      this.lobbyUpdateInterval = null;
+    }
+    
+    // Clear connection monitoring
+    if (this.connectionTimeout) {
+      clearTimeout(this.connectionTimeout);
+      this.connectionTimeout = null;
+    }
+    
+    if (this.connectionStatusInterval) {
+      clearInterval(this.connectionStatusInterval);
+      this.connectionStatusInterval = null;
+    }
+    
+    // Clear lobby-specific state but KEEP currentGameType for the browser
     this.currentLobbyId = null;
+    this.currentLobby = null;
     this.isHost = false;
     this.playerReadyStates = {};
+    this.playerConnectionStates = {};
+    this.connectedPlayers = [];
+    
+    // Ensure currentGameType is set for the browser
+    this.currentGameType = gameType;
     
     // Return to browser view
     const lobbyElement = document.getElementById(`${gameType}_lobby`);
     if (lobbyElement) {
+      // Remove the room container entirely to prevent conflicts
       const roomContainer = lobbyElement.querySelector('.lobby_room');
-      const browserContainer = lobbyElement.querySelector('.lobby_browser');
+      if (roomContainer) {
+        roomContainer.remove();
+      }
       
-      if (roomContainer) roomContainer.style.display = 'none';
-      if (browserContainer) browserContainer.style.display = 'block';
+      // Check if browser container exists
+      let browserContainer = lobbyElement.querySelector('.lobby_browser');
+      if (!browserContainer) {
+        // console.log('📦 Browser container missing, recreating via showLobbyBrowser');
+        // Browser container doesn't exist - recreate it by calling showLobbyBrowser
+        this.showLobbyBrowser(gameType);
+        return; // showLobbyBrowser handles everything else
+      }
+      
+      // Make sure browser is visible
+      browserContainer.style.display = 'block';
     }
     
     // Announce status change to global stats
     this.announceStatusToGlobal('browsing');
     
+    // Update the browser UI (refresh lobby list)
     this.updateLobbyBrowserUI(gameType);
+    
+    // console.log('✅ Returned to lobby browser');
   },
   
   // Announce status change to global stats channel
@@ -1364,13 +1628,13 @@ const Lobby = {
     // Only broadcast if we've marked channel as ready
     if (this.connectedChannels['aether-global-stats'] === true) {
       if (window.net && window.net.broadcast) {
-        // console.log(`📡 Broadcasting player status: ${status} for ${this.currentGameType || 'menu'}`);
+        // console.log(`📡 Broadcasting player status: ${status} for ${this.currentGameType || 'menu'}, lobbyId: ${this.currentLobbyId}`);
         window.net.broadcast(announcement, 'aether-global-stats');
       }
     } else {
       // Queue for later broadcast
       this.pendingBroadcasts.push({ data: announcement, channel: 'aether-global-stats' });
-      // console.log(`📡 Queued global status (channel ${this.connectedChannels['aether-global-stats'] || 'not ready'})`);
+      // console.log(`📡 Queued global status: ${status} (channel ${this.connectedChannels['aether-global-stats'] || 'not ready'})`);
     }
   },
   
@@ -1591,6 +1855,12 @@ const Lobby = {
       'koth': { lobbies: new Set(), players: 0 },
       'teams': { lobbies: new Set(), players: 0 }
     };
+    
+    // Debug: Log player statuses (disabled for performance)
+    // const statusCount = Object.keys(this.playerStatuses).length;
+    // if (statusCount > 0) {
+    //   console.log(`📊 Main menu stats - ${statusCount} players:`, this.playerStatuses);
+    // }
     
     // Tally up from player status announcements
     Object.values(this.playerStatuses).forEach(status => {
@@ -1974,7 +2244,22 @@ const Lobby = {
     // console.log(`🗺️ SIZE TRACE - settings.fieldSize: ${settings?.fieldSize}, config.default: ${config.defaultFieldSize}, final: ${fieldSize}`);
     // console.log(`📦 Full settings object:`, settings);
     
+    // Deduplicate connected players FIRST (before counting)
+    const uniquePeerIds = [...new Set(this.connectedPlayers.map(p => p.id || p))];
+    
+    // Keep player info (name/color) while deduplicating
+    const existingPlayerMap = new Map();
+    this.connectedPlayers.forEach(p => {
+      const id = p.id || p;
+      existingPlayerMap.set(id, p);
+    });
+    this.connectedPlayers = uniquePeerIds.map(id => existingPlayerMap.get(id) || id);
+    
     let totalPlayers = 1 + this.connectedPlayers.length;
+    
+    console.log(`🎯 Initial player count: ${totalPlayers} (1 local + ${this.connectedPlayers.length} peers)`);
+    console.log(`   Peers:`, this.connectedPlayers.map(p => p.id || p));
+    
     if (totalPlayers < 2) {
       if (gameType === 'adventure') {
         console.warn('⚠️ Not enough players for Adventure lobby. Launching local AI skirmish instead.');
@@ -1989,7 +2274,8 @@ const Lobby = {
     }
     
     if (totalPlayers > config.maxPlayers) {
-      console.error(`Too many players! Max is ${config.maxPlayers}`);
+      console.error(`❌ Too many players! Total: ${totalPlayers}, Max: ${config.maxPlayers}`);
+      console.error(`   This shouldn't happen after dedup - check P2P library`);
       return;
     }
     
@@ -1997,6 +2283,15 @@ const Lobby = {
       console.error('❌ Network system not initialized - cannot start multiplayer match');
       return;
     }
+    
+    // Helper function to normalize player IDs (extract last 6 chars)
+    const normalizeId = (id) => {
+      if (!id) return '';
+      // Extract suffix after last dash (e.g., "p2p-xyz123" -> "xyz123")
+      const suffix = id.includes('-') ? id.split('-').pop() : id;
+      // Return last 6 chars of suffix
+      return suffix.length > 6 ? suffix.slice(-6) : suffix;
+    };
     
     let netStatus = window.net.getStatus();
     let localPlayerId = netStatus?.localPlayerId;
@@ -2019,12 +2314,31 @@ const Lobby = {
     // Refresh network state after waiting for the ID
     netStatus = window.net.getStatus();
     localPlayerId = netStatus?.localPlayerId || localPlayerId;
+    
+    // CRITICAL: Normalize to last 6 chars immediately - no more ID flippyfloppy!
+    localPlayerId = normalizeId(localPlayerId);
     if (Array.isArray(netStatus?.peers)) {
-      this.connectedPlayers = netStatus.peers;
+      // Deduplicate peer IDs (sometimes P2P library returns duplicates)
+      const uniquePeers = [...new Set(netStatus.peers)];
+      
+      // Merge with existing player info (names/colors from player_joined messages)
+      const existingPlayerMap = new Map();
+      this.connectedPlayers.forEach(p => {
+        const id = p.id || p;
+        existingPlayerMap.set(id, p);
+      });
+      
+      this.connectedPlayers = uniquePeers.map(peerId => {
+        return existingPlayerMap.get(peerId) || peerId;
+      });
     }
     
     // Re-evaluate player counts with up-to-date peer information
     totalPlayers = 1 + this.connectedPlayers.length;
+    
+    console.log(`👥 Player count check: localPlayerId="${localPlayerId}", connectedPlayers:`, this.connectedPlayers.map(p => p.id || p));
+    console.log(`   Total: ${totalPlayers}, Max: ${config.maxPlayers}`);
+    
     if (totalPlayers < 2) {
       if (gameType === 'adventure') {
         console.warn('⚠️ Opponent disconnected while waiting. Switching to local Adventure skirmish.');
@@ -2039,8 +2353,29 @@ const Lobby = {
     }
     
     if (totalPlayers > config.maxPlayers) {
-      console.error(`Too many players! Max is ${config.maxPlayers}`);
-      return;
+      console.error(`❌ Too many players! Total: ${totalPlayers}, Max: ${config.maxPlayers}`);
+      console.error(`   Local: ${localPlayerId}`);
+      console.error(`   connectedPlayers (${this.connectedPlayers.length}):`, this.connectedPlayers);
+      console.error(`   Raw peer list:`, netStatus?.peers);
+      
+      // Try to fix: deduplicate again in case something went wrong
+      const uniquePeerIds = [...new Set(this.connectedPlayers.map(p => p.id || p))];
+      console.error(`   After dedup: ${uniquePeerIds.length} unique peers:`, uniquePeerIds);
+      
+      if (1 + uniquePeerIds.length <= config.maxPlayers) {
+        console.warn(`⚠️ False alarm - continuing after deduplication`);
+        totalPlayers = 1 + uniquePeerIds.length;
+        
+        // Fix the array
+        const existingPlayerMap = new Map();
+        this.connectedPlayers.forEach(p => {
+          const id = p.id || p;
+          existingPlayerMap.set(id, p);
+        });
+        this.connectedPlayers = uniquePeerIds.map(id => existingPlayerMap.get(id) || id);
+      } else {
+        return;
+      }
     }
     
     // Reset game state now that identifiers are stable
@@ -2062,19 +2397,25 @@ const Lobby = {
     const localPlayerColor = window.currentPlayerColor || '#ff0000';
     
     // Sort all player IDs deterministically for consistent spawn order
-    // CRITICAL: Normalize all IDs to just the suffix part for consistent sorting
-    const normalizeId = (id) => {
+    // NOTE: We already normalized localPlayerId to 6 chars earlier
+    // For sorting, we need the full suffix to ensure consistency
+    const getIdForSorting = (id) => {
       if (!id) return '';
-      // Extract suffix after last dash (e.g., "p2p-xyz123" -> "xyz123")
+      // If already normalized to 6 chars, return as-is
+      if (id.length === 6) return id;
+      // Otherwise extract suffix after last dash (e.g., "p2p-xyz123" -> "xyz123")
       return id.includes('-') ? id.split('-').pop() : id;
     };
     
     const allPlayerIds = [
-      normalizeId(localPlayerId),
-      ...this.connectedPlayers.map(p => normalizeId(p.id || p))
+      localPlayerId,  // Already normalized to 6 chars
+      ...this.connectedPlayers.map(p => {
+        const peerId = p.id || p;
+        return normalizeId(peerId);  // Normalize peer IDs to 6 chars too
+      })
     ].sort();
     
-    const normalizedLocalId = normalizeId(localPlayerId);
+    const normalizedLocalId = localPlayerId;  // Already normalized
     let localPlayerIndex = allPlayerIds.indexOf(normalizedLocalId);
     
     if (localPlayerIndex === -1) {
@@ -2098,8 +2439,9 @@ const Lobby = {
     }
     
     // Update player ID before spawning
+    // CRITICAL: Normalize player ID to last 6 chars for consistency with unit/building ownership
     if (window.player) {
-      window.player.id = localPlayerId;
+      window.player.id = normalizedLocalId;  // Use the normalized ID (last 6 chars)
       window.player.name = localPlayerName;
       window.player.color = localPlayerColor;
       window.player.agora = spawnPositions[localPlayerIndex];
@@ -2255,10 +2597,10 @@ const Lobby = {
         const playerMeta = this.connectedPlayers.find(p => normalizeId(p.id || p) === normalizedId);
         const playerName = playerMeta?.name || `Player ${index + 1}`;
         const playerColor = playerMeta?.color || this.getPlayerColor(index);
-        const fullOpponentId = playerMeta ? (playerMeta.id || playerMeta) : normalizedId;
         
+        // CRITICAL: Use normalized ID (6 chars) for consistency
         const opponent = new window.OpponentPlayer({
-          id: fullOpponentId,
+          id: normalizedId,  // Use normalized 6-char ID
           name: playerName,
           gameType: gameType,
           color: playerColor,
@@ -2272,9 +2614,7 @@ const Lobby = {
     });
     
     // Create Match instance to manage the multiplayer game
-    
-    // CRITICAL: Normalize localPlayerId to match unit ownership format (last 6 chars)
-    const normalizedLocalPlayerId = localPlayerId.length > 6 ? localPlayerId.slice(-6) : localPlayerId;
+    // NOTE: localPlayerId is already normalized to 6 chars at line 2272
     
     const matchOptions = {
       id: this.currentLobbyId,
@@ -2282,8 +2622,8 @@ const Lobby = {
       mapSeed: mapSeed,
       mapSize: fieldSize,
       players: players,
-      localPlayerId: normalizedLocalPlayerId,
-      hostId: this.isHost ? normalizedLocalPlayerId : null,
+      localPlayerId: localPlayerId,  // Already normalized
+      hostId: this.isHost ? localPlayerId : null,  // Already normalized
       victoryCondition: 'elimination',
       timeLimit: 0 // No time limit by default
     };

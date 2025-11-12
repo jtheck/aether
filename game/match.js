@@ -443,11 +443,17 @@
       }
       
       // Add metadata
+      // MULTIPLAYER TUNING: Command buffer delay
+      // Higher = smoother (commands arrive on time), but local input feels slightly delayed
+      // Lower = more responsive locally, but more catch-up needed for remote units
+      // Typical values: 2-5 ticks (40-100ms at 50Hz)
+      const COMMAND_BUFFER_DELAY = 3; // Competitive but smooth - slight imposed lag for better sync
+      
       const enrichedCommand = {
         ...command,
         matchId: this.id,
         playerId: command.playerId || this.localPlayerId,
-        tick: this.tick + 2, // Execute 2 ticks in future for network lag
+        tick: this.tick + COMMAND_BUFFER_DELAY,
         timestamp: Date.now(),
         commandId: this.generateCommandId()
       };
@@ -522,11 +528,15 @@
         case 'attack':
           return command.unitIds && command.targetId;
         case 'build':
-          return command.buildingType && command.position;
+          return command.buildingType && (command.gridX !== undefined) && (command.gridZ !== undefined);
         case 'train':
           return command.unitType && command.buildingId;
+        case 'convert':
+          return command.unitId && command.targetType;
         case 'gather':
           return command.unitIds && command.resourceId;
+        case 'ability':
+          return command.unitId && command.abilityType;
         default:
           return true; // Allow unknown command types
       }
@@ -578,6 +588,9 @@
           break;
         case 'train':
           this.executeTrainCommand(command);
+          break;
+        case 'convert':
+          this.executeConvertCommand(command);
           break;
         case 'gather':
           this.executeGatherCommand(command);
@@ -632,37 +645,44 @@
     }
     
     executeBuildCommand(cmd) {
-      if (!window.Building || !window.playerBuildings) return;
+      if (!window.placeBuilding) return;
       
-      const player = this.getPlayerById(cmd.playerId);
-      if (!player) return;
+      // Place building using the existing placeBuilding function
+      const building = window.placeBuilding(cmd.buildingType, cmd.gridX, cmd.gridZ, window.gfx.scene);
       
-      // Check resources
-      const cost = this.getBuildingCost(cmd.buildingType);
-      if (!this.canAfford(player, cost)) {
-        // console.log(`⚠️ ${player.name || cmd.playerId} cannot afford ${cmd.buildingType}`);
-        return;
+      if (building) {
+        // Normalize player ID for ownership
+        const rawPlayerId = cmd.playerId || '';
+        const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+        building.owner = normalizedPlayerId;
+        
+        // Apply rotation if specified
+        if (cmd.rotation !== undefined) {
+          building.targetRotation = cmd.rotation;
+          
+          // Mark building as needing mesh setup
+          // This will be handled deterministically in the game loop update
+          building.needsMeshSetup = true;
+          building.setupStartTick = this.tick;
+        }
+        
+        // Save detected resources if provided
+        if (cmd.resources && cmd.resources.length > 0) {
+          building.availableResources = [...cmd.resources];
+        }
       }
-      
-      // Deduct resources
-      this.deductResources(player, cost);
-      
-      // Create building
-      const building = new window.Building(cmd.buildingType, cmd.position, cmd.playerId);
-      player.buildings.push(building);
-      window.playerBuildings.push(building);
-      
-      // Update stats
-      this.stats.buildingsCreated[cmd.playerId]++;
-      
-      // console.log(`🏗️ ${player.name || cmd.playerId} built ${cmd.buildingType}`);
     }
     
     executeTrainCommand(cmd) {
       const building = this.getBuildingById(cmd.buildingId);
       const player = this.getPlayerById(cmd.playerId);
       
-      if (!building || !player || building.owner !== cmd.playerId) return;
+      // Normalize player ID for ownership check
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      const normalizedOwner = (building?.owner || '').length > 6 ? building.owner.slice(-6) : building?.owner;
+      
+      if (!building || !player || normalizedOwner !== normalizedPlayerId) return;
       
       // Check resources
       const cost = this.getUnitCost(cmd.unitType);
@@ -680,15 +700,116 @@
         z: building.gridZ * TILE_SIZE
       };
       
-      const unit = new window.Unit(cmd.unitType, spawnPos);
-      unit.owner = cmd.playerId;
+      // CRITICAL: Pass owner in constructor options to ensure it's set before physics body initialization
+      const unit = new window.Unit(cmd.unitType, spawnPos, { owner: normalizedPlayerId });
+      
+      // Debug: Verify owner was set correctly
+      if (unit.owner !== normalizedPlayerId) {
+        console.error(`❌ OWNER MISMATCH! Expected: ${normalizedPlayerId}, Got: ${unit.owner}, Type: ${cmd.unitType}`);
+        console.error(`  playerId: ${cmd.playerId}, normalized: ${normalizedPlayerId}`);
+        console.error(`  Unit ID: ${unit.id}, Position: (${spawnPos.x}, ${spawnPos.z})`);
+        // Force set it again
+        unit.owner = normalizedPlayerId;
+      }
+      
+      // Deterministic rotation based on building ID, unit count, and tick
+      const buildingIdHash = (building.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+      const unitCount = window.gameUnits?.length || 0;
+      const deterministicRotation = ((buildingIdHash + unitCount + this.tick) % 628) / 100; // 0 to ~6.28 (2π)
+      unit.rotation = deterministicRotation;
+      if (unit.pb && unit.pb.state && unit.pb.state.rot) {
+        unit.pb.state.rot.y = deterministicRotation;
+      }
+      
       player.units.push(unit);
       window.gameUnits.push(unit);
+      
+      // Spawn 3D model
+      if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
+        window.spawnUnitModels(window.gfx.scene);
+      }
       
       // Update stats
       this.stats.unitsCreated[cmd.playerId]++;
       
-      // console.log(`👤 ${player.name || cmd.playerId} trained ${cmd.unitType}`);
+      // console.log(`👤 ${player.name || normalizedPlayerId} trained ${cmd.unitType} at (${spawnPos.x}, ${spawnPos.z})`);
+    }
+    
+    executeConvertCommand(cmd) {
+      const unit = this.getUnitById(cmd.unitId);
+      const player = this.getPlayerById(cmd.playerId);
+      
+      // Normalize player ID for ownership check
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
+      if (!unit || !player || unit.owner !== normalizedPlayerId) {
+        return;
+      }
+      
+      // Only allow converting villagers for now
+      if (unit.type !== 'villager') {
+        console.warn(`⚠️ Cannot convert ${unit.type} to ${cmd.targetType}`);
+        return;
+      }
+      
+      // Store the old unit's position and state
+      const oldPosition = { ...unit.position };
+      const oldRotation = unit.rotation;
+      const oldMesh = unit.mesh; // Keep reference to old mesh
+      
+      // CRITICAL: Preserve the current behavior (e.g., if walking somewhere)
+      const currentBehavior = window.behaviorManager?.getBehavior(unit);
+      const behaviorType = currentBehavior?.constructor?.name;
+      const behaviorTarget = currentBehavior?.targetPoint;
+      
+      // Remove old unit from arrays
+      const unitIndex = window.gameUnits.indexOf(unit);
+      if (unitIndex > -1) {
+        window.gameUnits.splice(unitIndex, 1);
+      }
+      
+      const playerUnitIndex = player.units.indexOf(unit);
+      if (playerUnitIndex > -1) {
+        player.units.splice(playerUnitIndex, 1);
+      }
+      
+      // Dispose old mesh
+      if (oldMesh) {
+        if (oldMesh.dispose) {
+          oldMesh.dispose();
+        }
+      }
+      
+      // Create new unit of target type at same position
+      // CRITICAL: Pass owner in constructor options
+      const newUnit = new window.Unit(cmd.targetType, oldPosition, { owner: normalizedPlayerId });
+      newUnit.rotation = oldRotation;
+      if (newUnit.pb && newUnit.pb.state && newUnit.pb.state.rot) {
+        newUnit.pb.state.rot.y = oldRotation;
+      }
+      
+      // Add to arrays
+      player.units.push(newUnit);
+      window.gameUnits.push(newUnit);
+      
+      // Restore behavior (keep moving if they were moving)
+      if (behaviorType === 'WalkBehavior' && behaviorTarget && window.behaviorManager) {
+        window.behaviorManager.setBehavior(newUnit, 'walk', { targetPoint: behaviorTarget });
+      } else if (window.behaviorManager) {
+        // Default to linger behavior for player units
+        window.behaviorManager.setBehavior(newUnit, 'linger');
+      }
+      
+      // Spawn 3D model for new unit
+      if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
+        window.spawnUnitModels(window.gfx.scene);
+      }
+      
+      // Update stats
+      this.stats.unitsCreated[cmd.playerId]++;
+      
+      // console.log(`🔄 ${player.name || normalizedPlayerId} converted ${unit.type} to ${cmd.targetType}`);
     }
     
     executeGatherCommand(cmd) {
@@ -709,11 +830,16 @@
     
     executeAbilityCommand(cmd) {
       const unit = this.getUnitById(cmd.unitId);
-      if (!unit || unit.owner !== cmd.playerId) return;
       
-      // Trigger ability (implement ability system)
-      if (window.abilitySystem && window.abilitySystem.useAbility) {
-        window.abilitySystem.useAbility(unit, cmd.abilityId, cmd.target);
+      // CRITICAL: Normalize player ID for ownership check
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
+      if (!unit || unit.owner !== normalizedPlayerId) return;
+      
+      // Apply ability behavior using behavior manager
+      if (window.behaviorManager && cmd.abilityType) {
+        window.behaviorManager.setBehavior(unit, cmd.abilityType, cmd.params || {});
       }
     }
     
@@ -1030,30 +1156,30 @@
       
       // Log detailed state for first few syncs
       if (this.tick < 300 && this.tick % 100 === 0) {
-        // console.log(`🔍 Checksum at tick ${this.tick}:`, {
-        //   hash,
-        //   unitCount,
-        //   buildingCount,
-        //   firstUnitPos: sortedUnits[0]?.pb?.state?.loc ? 
-        //     `(${sortedUnits[0].pb.state.loc.x.toFixed(2)}, ${sortedUnits[0].pb.state.loc.z.toFixed(2)})` : 
-        //     'none'
-        // });
+        console.log(`🔍 Checksum at tick ${this.tick}:`, {
+          hash,
+          unitCount,
+          buildingCount,
+          firstUnitPos: sortedUnits[0]?.pb?.state?.loc ? 
+            `(${sortedUnits[0].pb.state.loc.x.toFixed(2)}, ${sortedUnits[0].pb.state.loc.z.toFixed(2)})` : 
+            'none'
+        });
         
         // DETAILED DESYNC DEBUGGING - Log all unit positions and owners
-        // console.log(`📊 Unit details at tick ${this.tick}:`);
-        // sortedUnits.slice(0, 5).forEach((unit, i) => {
-        //   if (unit.pb && unit.pb.state) {
-        //     console.log(`  Unit ${i}: ID=${unit.id?.slice(-6)}, owner=${unit.owner?.slice(-6)}, ` +
-        //                `pos=(${unit.pb.state.loc.x.toFixed(2)}, ${unit.pb.state.loc.z.toFixed(2)}), ` +
-        //                `type=${unit.type}, health=${unit.currentHealth || unit.health}`);
-        //   }
-        // });
+        console.log(`📊 Unit details at tick ${this.tick}:`);
+        sortedUnits.slice(0, 5).forEach((unit, i) => {
+          if (unit.pb && unit.pb.state) {
+            console.log(`  Unit ${i}: ID=${unit.id?.slice(-6)}, owner=${unit.owner?.slice(-6)}, ` +
+                       `pos=(${unit.pb.state.loc.x.toFixed(2)}, ${unit.pb.state.loc.z.toFixed(2)}), ` +
+                       `type=${unit.type}, health=${unit.currentHealth || unit.health}`);
+          }
+        });
         
-      // console.log(`🏛️ Building details at tick ${this.tick}:`);
-      // sortedBuildings.forEach((b, i) => {
-      //   console.log(`  Building ${i}: ID=${b.id?.slice(-6)}, owner=${b.owner?.slice(-6)}, ` +
-      //             `pos=(${b.gridX}, ${b.gridZ}), name=${b.name}, health=${b.health}`);
-      // });
+      console.log(`🏛️ Building details at tick ${this.tick}:`);
+      sortedBuildings.forEach((b, i) => {
+        console.log(`  Building ${i}: ID=${b.id?.slice(-6)}, owner=${b.owner?.slice(-6)}, ` +
+                  `pos=(${b.gridX}, ${b.gridZ}), type=${b.type}, name=${b.name}, health=${b.health}`);
+      });
       }
       
       return hash >>> 0; // Convert to unsigned 32-bit integer

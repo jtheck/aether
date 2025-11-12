@@ -2327,37 +2327,71 @@ function getRandomColor() {
     }
     const units = window.player.getSelectedUnits();
     // console.log('🎯 Selected units:', units.length);
-    units.forEach(unit => {
-      const type = unit.type || unit.name || '';
-      if (/engineer/i.test(type)) {
-        window.behaviorManager.setBehavior(unit, 'engineer_productivity_boost', {
-          radius: 6,
-          bonus: 1.5,
-          duration: 7000,
-          vfx: 'aura_blue'
-        });
-      } else if (/brigand/i.test(type)) {
-        window.behaviorManager.setBehavior(unit, 'brigand_sprint', {
-          speedMultiplier: 2.25,
-          duration: 6000, // Match behavior manager duration
-          targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
-          vfx: 'speed_trail'
-        });
-      } else if (/monk/i.test(type)) {
-        window.behaviorManager.setBehavior(unit, 'monk_stealth', {
-          invisibility: true,
-          duration: 4000, // Match behavior manager duration
-          vfx: 'smoke_puff'
-        });
-      } else if (/wizard/i.test(type)) {
-        window.behaviorManager.setBehavior(unit, 'wizard_cast', {
-          targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
-          spell: 'arc_blast',
-          power: 1.5,
-          vfx: 'spell_flash'
-        });
-      }
-    });
+    
+    // MULTIPLAYER: Submit ability commands through Match system
+    if (window.isMultiplayer && window.currentMatch && units.length > 0) {
+      units.forEach(unit => {
+        const type = unit.type || unit.name || '';
+        let abilityType = null;
+        let abilityParams = {};
+        
+        if (/engineer/i.test(type)) {
+          abilityType = 'engineer_productivity_boost';
+          abilityParams = { radius: 6, bonus: 1.5, duration: 7000, vfx: 'aura_blue' };
+        } else if (/brigand/i.test(type)) {
+          abilityType = 'brigand_sprint';
+          abilityParams = { speedMultiplier: 2.25, duration: 6000, targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null, vfx: 'speed_trail' };
+        } else if (/monk/i.test(type)) {
+          abilityType = 'monk_stealth';
+          abilityParams = { invisibility: true, duration: 4000, vfx: 'smoke_puff' };
+        } else if (/wizard/i.test(type)) {
+          abilityType = 'wizard_cast';
+          abilityParams = { targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null, spell: 'arc_blast', power: 1.5, vfx: 'spell_flash' };
+        }
+        
+        if (abilityType) {
+          window.currentMatch.submitCommand({
+            type: 'ability',
+            unitId: unit.id,
+            abilityType: abilityType,
+            params: abilityParams
+          });
+        }
+      });
+    } else {
+      // SINGLE PLAYER: Apply abilities directly
+      units.forEach(unit => {
+        const type = unit.type || unit.name || '';
+        if (/engineer/i.test(type)) {
+          window.behaviorManager.setBehavior(unit, 'engineer_productivity_boost', {
+            radius: 6,
+            bonus: 1.5,
+            duration: 7000,
+            vfx: 'aura_blue'
+          });
+        } else if (/brigand/i.test(type)) {
+          window.behaviorManager.setBehavior(unit, 'brigand_sprint', {
+            speedMultiplier: 2.25,
+            duration: 6000,
+            targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
+            vfx: 'speed_trail'
+          });
+        } else if (/monk/i.test(type)) {
+          window.behaviorManager.setBehavior(unit, 'monk_stealth', {
+            invisibility: true,
+            duration: 4000,
+            vfx: 'smoke_puff'
+          });
+        } else if (/wizard/i.test(type)) {
+          window.behaviorManager.setBehavior(unit, 'wizard_cast', {
+            targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
+            spell: 'arc_blast',
+            power: 1.5,
+            vfx: 'spell_flash'
+          });
+        }
+      });
+    }
   };
 
 }(window.ui = window.ui || {}));

@@ -121,33 +121,10 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
         // Get the unit type from the path
         const unitType = itemPath[itemPath.length - 1];
         
-        // Don't transform for wizard - create new unit at agora
-        if (unitType === 'wizard') {
-          // Get agora position
-          const agoraX = window.player.agora.x * TILE_SIZE;
-          const agoraZ = window.player.agora.y * TILE_SIZE;
-          
-          // Create wizard at agora
-          const unit = new window.Unit(unitType, { x: agoraX, y: 0, z: agoraZ });
-          unit.owner = 'player';
-          
-          // Random rotation
-          const randomRotation = Math.random() * Math.PI * 2;
-          unit.rotation = randomRotation;
-          if (unit.pb.state && unit.pb.state.rot) {
-            unit.pb.state.rot.y = randomRotation;
-          }
-          
-          // Add to player's units and global array
-          window.player.units.push(unit);
-          window.gameUnits.push(unit);
-          
-          // Spawn the model
-          if (window.gfx && window.gfx.scene) {
-            window.spawnUnitModels(window.gfx.scene);
-          }
-          
-          // console.log(`✨ Created ${unit.name} at agora`);
+        // Wizards are recruited directly, other units transform from villagers
+        if (unitType === 'wizard' || unitType === 'monk' || unitType === 'engineer') {
+          // Use unified recruit function (handles both single/multiplayer)
+          window.recruitUnit(unitType);
         } else {
           // For other unit types, find a nearby idle villager to transform
           const villagers = window.player.units.filter(unit => unit.type === 'villager');

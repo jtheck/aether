@@ -64,81 +64,62 @@
     },
     units: {
       monk: {
-        callback: () => {
-          if (window.Unit && window.player && window.player.agora) {
-            const agoraX = window.player.agora.x * TILE_SIZE;
-            const agoraZ = window.player.agora.y * TILE_SIZE;
-            const unit = new window.Unit('monk', { x: agoraX, y: 0, z: agoraZ });
-            unit.owner = 'player';
-            const randomRotation = Math.random() * Math.PI * 2;
-            unit.rotation = randomRotation;
-            if (unit.pb.state && unit.pb.state.rot) {
-              unit.pb.state.rot.y = randomRotation;
-            }
-            window.player.units.push(unit);
-            window.gameUnits.push(unit);
-            if (window.gfx && window.gfx.scene) {
-              window.spawnUnitModels(window.gfx.scene);
-            }
-          }
-        }
+        callback: () => window.recruitUnit('monk')
       },
       wizard: {
-        callback: () => {
-          if (window.Unit && window.player && window.player.agora) {
-            const agoraX = window.player.agora.x * TILE_SIZE;
-            const agoraZ = window.player.agora.y * TILE_SIZE;
-            const unit = new window.Unit('wizard', { x: agoraX, y: 0, z: agoraZ });
-            unit.owner = 'player';
-            const randomRotation = Math.random() * Math.PI * 2;
-            unit.rotation = randomRotation;
-            if (unit.pb.state && unit.pb.state.rot) {
-              unit.pb.state.rot.y = randomRotation;
-            }
-            window.player.units.push(unit);
-            window.gameUnits.push(unit);
-            if (window.gfx && window.gfx.scene) {
-              window.spawnUnitModels(window.gfx.scene);
-            }
-          }
-        }
+        callback: () => window.recruitUnit('wizard')
       },
       engineer: {
-        callback: () => {
-          if (window.Unit && window.player && window.player.agora) {
-            const agoraX = window.player.agora.x * TILE_SIZE;
-            const agoraZ = window.player.agora.y * TILE_SIZE;
-            const unit = new window.Unit('engineer', { x: agoraX, y: 0, z: agoraZ });
-            unit.owner = 'player';
-            const randomRotation = Math.random() * Math.PI * 2;
-            unit.rotation = randomRotation;
-            if (unit.pb.state && unit.pb.state.rot) {
-              unit.pb.state.rot.y = randomRotation;
-            }
-            window.player.units.push(unit);
-            window.gameUnits.push(unit);
-            if (window.gfx && window.gfx.scene) {
-              window.spawnUnitModels(window.gfx.scene);
-            }
-          }
-        }
+        callback: () => window.recruitUnit('engineer')
       },
       brigand: {
         callback: () => {
-          if (window.Unit && window.player && window.player.agora) {
-            const agoraX = window.player.agora.x * TILE_SIZE;
-            const agoraZ = window.player.agora.y * TILE_SIZE;
-            const unit = new window.Unit('brigand', { x: agoraX, y: 0, z: agoraZ });
-            unit.owner = 'player';
-            const randomRotation = Math.random() * Math.PI * 2;
-            unit.rotation = randomRotation;
-            if (unit.pb.state && unit.pb.state.rot) {
-              unit.pb.state.rot.y = randomRotation;
+          // Submit convert command to turn a villager into a brigand
+          if (window.currentMatch && window.player) {
+            // Find a villager to convert
+            // Priority: 1) Selected villagers, 2) Nearby unselected villagers
+            const normalizedPlayerId = window.player.id.slice(-6);
+            const myVillagers = window.player.units.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
+            
+            if (myVillagers.length === 0) {
+              console.log('❌ No villagers available to convert to brigand');
+              return;
             }
-            window.player.units.push(unit);
-            window.gameUnits.push(unit);
-            if (window.gfx && window.gfx.scene) {
-              window.spawnUnitModels(window.gfx.scene);
+            
+            // Check selected villagers first
+            const selectedVillagers = window.player.selectedUnits.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
+            let targetVillager = null;
+            
+            if (selectedVillagers.length > 0) {
+              // Convert the first selected villager
+              targetVillager = selectedVillagers[0];
+            } else {
+              // Find a random villager near the agora
+              const agoraBuilding = window.playerBuildings?.find(b => b.type === 'agora' && b.owner === normalizedPlayerId);
+              if (agoraBuilding) {
+                const agoraPos = { x: agoraBuilding.gridX * TILE_SIZE, z: agoraBuilding.gridZ * TILE_SIZE };
+                
+                // Sort by distance to agora
+                myVillagers.sort((a, b) => {
+                  const distA = Math.sqrt(Math.pow(a.position.x - agoraPos.x, 2) + Math.pow(a.position.z - agoraPos.z, 2));
+                  const distB = Math.sqrt(Math.pow(b.position.x - agoraPos.x, 2) + Math.pow(b.position.z - agoraPos.z, 2));
+                  return distA - distB;
+                });
+                
+                targetVillager = myVillagers[0]; // Closest villager
+              } else {
+                // No agora, just pick first villager
+                targetVillager = myVillagers[0];
+              }
+            }
+            
+            if (targetVillager) {
+              window.currentMatch.submitCommand({
+                type: 'convert',
+                playerId: window.player.id,
+                unitId: targetVillager.id,
+                targetType: 'brigand'
+              });
             }
           }
         }

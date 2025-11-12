@@ -177,6 +177,12 @@ function Building(buildingType, position, options = {}) {
       `building-${window.currentMatch.mapSeed}-${(window.playerBuildings?.length || 0)}` : 
       Math.random().toString(36).substr(2, 9));
   this.position = position || { x: 0, y: 0, z: 0 };
+  
+  // CRITICAL: Store grid coordinates for deterministic checksum calculation
+  // If gridX/gridZ are provided in options, use them; otherwise calculate from world position
+  this.gridX = options.gridX !== undefined ? options.gridX : Math.round(this.position.x / TILE_SIZE);
+  this.gridZ = options.gridZ !== undefined ? options.gridZ : Math.round(this.position.z / TILE_SIZE);
+  
   this.owner = options.owner || 'player';
   this.health = options.health || 100;
   this.maxHealth = 100;
@@ -203,7 +209,8 @@ function placeBuilding(buildingType, x, z, scene) {
   const worldPosition = new BABYLON.Vector3(x * TILE_SIZE, 0, z * TILE_SIZE);
   // // console.log(`🌍 World position: (${worldPosition.x}, ${worldPosition.y}, ${worldPosition.z})`);
   
-  const building = new Building(buildingType, { x: worldPosition.x, y: 0, z: worldPosition.z });
+  // CRITICAL: Pass grid coordinates explicitly for accurate checksum calculation
+  const building = new Building(buildingType, { x: worldPosition.x, y: 0, z: worldPosition.z }, { gridX: x, gridZ: z });
   // // console.log(`🏛️ Building created:`, building.name, 'Model path:', building.model);
   
   if (window.gfx) {
@@ -720,7 +727,7 @@ function autoInitBuildings() {
   if (window.gfx.cameraTarget) {
     const cameraPos = window.gfx.cameraTarget.position;
     window.liveField.updateVisibleChunks(cameraPos.x, cameraPos.z);
-    console.log(`🗺️ Menu scene: Loading terrain at (${cameraPos.x.toFixed(1)}, ${cameraPos.z.toFixed(1)})`);
+    // console.log(`🗺️ Menu scene: Loading terrain at (${cameraPos.x.toFixed(1)}, ${cameraPos.z.toFixed(1)})`);
   }
 }
 

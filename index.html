@@ -71,14 +71,6 @@
         </tr>
         <tr>
           <td>
-            <div class="game_menu_type_b" title="Free For All" onclick="ui.showMenu('ffa_lobby')">Free For All</div>
-          </td>
-          <td>-</td>
-          <td>-</td>
-          <td>-</td>
-        </tr>
-        <tr>
-          <td>
             <div class="game_menu_type_b" title="King of the Hill" onclick="ui.showMenu('koth_lobby')">King of the Hill</div>
           </td>
           <td>-</td>
@@ -189,7 +181,8 @@
 
     <div id="ingame_menu" class="menu_menu">
       <div class="menu_title">INGAME</div>
-      Pause
+      <br><br>
+      <div class="lobby_b" title="Pause/Resume Match" onclick="if (window.currentMatch) { window.currentMatch.togglePause(); ui.hideMenu(); }">⏸️ Pause / Resume ▶️</div>
     </div>
 
     <div id="adventure_lobby">
@@ -200,29 +193,7 @@
     <div id="onevsone_lobby">
       <div class="menu_title">1 vs 1</div>
       <br><br>
-      <!-- <div style="margin-bottom: 10px;">
-        <label for="fieldSize">Field Size:</label>
-        <select id="fieldSize" style="margin-left: 10px;">
-          <option value="tiny">Tiny (32x32)</option>
-          <option value="small">Small (64x64)</option>
-          <option value="medium" selected>Medium (128x128)</option>
-          <option value="large">Large (256x256)</option>
-          <option value="huge">Huge (512x512)</option>
-        </select>
-      </div>
-      <div style="margin-bottom: 10px;">
-        <label for="mapSeed">Map Seed:</label>
-        <input type="number" id="mapSeed" value="12345" min="1" max="999999" style="margin-left: 10px; width: 80px;" placeholder="12345">
-        <button onclick="document.getElementById('mapSeed').value = window.Lobby.generateRandomSeed();" style="margin-left: 5px;">Random</button>
-      </div>
-      <br>
-      <div class="lobby_b" title="Start 1v1 Match" onclick="">Game Start</div> -->
-
-    </div>
-    <div id="ffa_lobby">
-      <div class="menu_title">Free For All</div>
-      <br><br>
-      <div class="lobby_b" title="Start FFA" onclick="">Game Start</div>
+      <div class="lobby_b" title="Start 1v1 Match" onclick="">Game Start</div>
     </div>
     <div id="koth_lobby">
       <div class="menu_title">King of the Hill</div>

@@ -1,6 +1,6 @@
 // Multiplayer Networking Layer for Aether RTS
 // Handles P2P sync via GetFire, lockstep commands, prediction, and reconciliation
-// Initial focus: 1v1, extensible to FFA/teams
+// Supports: 1v1, Adventure, Teams, King of the Hill
 
 (function(net) {
   // Configuration
@@ -59,7 +59,6 @@
   const GAME_TYPES = {
     'adventure': 'aether-adventure-coop',
     'onevsone': 'aether-1v1-quick',
-    'ffa': 'aether-ffa',
     'koth': 'aether-koth',
     'teams': 'aether-teams-2v2'
   };
@@ -85,7 +84,7 @@
     const waitForUserId = setInterval(() => {
       if (p2p && p2p.getUserId && p2p.getUserId()) {
         localPlayerId = p2p.getUserId();
-        console.log(`🆔 Using P2P user ID: ${localPlayerId}`);
+        // console.log(`🆔 Using P2P user ID: ${localPlayerId}`);
         clearInterval(waitForUserId);
       }
     }, 100);
@@ -98,29 +97,29 @@
     
     // Wait for P2P to be ready, then join appropriate channels
     setTimeout(() => {
-      console.log(`🔍 Lobby browser mode: ${net.lobbyBrowserMode}`);
+      // console.log(`🔍 Lobby browser mode: ${net.lobbyBrowserMode}`);
       
       // Only join match lobby if not in lobby browser mode
       if (!net.lobbyBrowserMode) {
         if (p2p && p2p.joinMatchLobby) {
           p2p.joinMatchLobby(roomType);
           net.currentLobby = roomType;
-          console.log(`🌐 Joined match lobby: ${roomType}`);
+          // console.log(`🌐 Joined match lobby: ${roomType}`);
         }
       } else {
         // Join broadcast channel for lobby discovery
         if (options.broadcastChannel && p2p && p2p.joinBroadcast) {
           p2p.joinBroadcast(options.broadcastChannel);
-          console.log(`📡 Joined broadcast for lobby discovery: ${options.broadcastChannel}`);
+          // console.log(`📡 Joined broadcast for lobby discovery: ${options.broadcastChannel}`);
         }
-        console.log(`🌐 Network initialized for lobby browser mode`);
+        // console.log(`🌐 Network initialized for lobby browser mode`);
       }
     }, 500); // Give P2P more time to initialize
     
     // Start tick loop
     net.startTickLoop();
     
-    console.log(`🌐 Network initialized for ${options.gameType || '1v1'}`);
+    // console.log(`🌐 Network initialized for ${options.gameType || '1v1'}`);
   };
   
   // Start the deterministic tick loop
@@ -447,18 +446,51 @@
           if (window.currentMatch && actualMessage.command) {
             const cmd = actualMessage.command;
             
-            // Add to match command buffer
-            const tickKey = cmd.tick;
-            if (!window.currentMatch.commandBuffer.has(tickKey)) {
-              window.currentMatch.commandBuffer.set(tickKey, []);
+            
+            // Check if command is for a past tick (arrived too late)
+            if (cmd.tick < window.currentMatch.tick) {
+              const ticksLate = window.currentMatch.tick - cmd.tick;
+              // Fast-forward physics to catch up (normal network latency, not an error)
+              
+              // Execute the command to start the behavior
+              try {
+                window.currentMatch.executeCommand(cmd);
+                
+                // Fast-forward physics for the units to catch up
+                // Each tick is ~20ms at 50Hz, we need to simulate the missed ticks
+                if (cmd.unitIds && window.gameUnits) {
+                  const affectedUnits = window.gameUnits.filter(u => cmd.unitIds.includes(u.id));
+                  
+                  // Run extra physics steps to catch up
+                  affectedUnits.forEach(unit => {
+                    if (unit.pb && unit.pb.integrate && window.behaviorManager) {
+                      const behavior = window.behaviorManager.getBehavior(unit);
+                      if (behavior) {
+                        // Step behavior and physics for each missed tick
+                        const physicsTimestep = 1 / 60; // 60Hz physics
+                        for (let i = 0; i < ticksLate; i++) {
+                          behavior.step();
+                          unit.pb.integrate(physicsTimestep, false, false);
+                        }
+                      }
+                    }
+                  });
+                }
+              } catch (error) {
+                console.error(`❌ Error executing late command:`, error);
+              }
+            } else {
+              // Add to match command buffer for future execution
+              const tickKey = cmd.tick;
+              if (!window.currentMatch.commandBuffer.has(tickKey)) {
+                window.currentMatch.commandBuffer.set(tickKey, []);
+              }
+              window.currentMatch.commandBuffer.get(tickKey).push(cmd);
             }
-            window.currentMatch.commandBuffer.get(tickKey).push(cmd);
             
             // Add to command history
             window.currentMatch.commandHistory.push(cmd);
             window.currentMatch.replay.commands.push(cmd);
-            
-            // console.log(`📥 Received command: ${cmd.type} at tick ${cmd.tick}`);
           }
           break;
           
@@ -472,7 +504,7 @@
         case 'request_state_sync':
           // Another player detected desync and needs full state
           if (window.currentMatch && isHost) {
-            console.log('📤 Sending full state sync to peer...');
+            // console.log('📤 Sending full state sync to peer...');
             // TODO: Implement full state sync
           }
           break;
@@ -481,6 +513,41 @@
           // Another player finished loading and is ready to start
           if (window.currentMatch && actualMessage.playerId) {
             window.currentMatch.onPlayerLoaded(actualMessage.playerId);
+          }
+          break;
+          
+        case 'match_countdown':
+          // Host broadcasting countdown to clients
+          if (window.currentMatch && actualMessage.countdown) {
+            window.currentMatch.updateLoadingOverlay(`${actualMessage.countdown}`);
+          }
+          break;
+          
+        case 'match_start':
+          // Host signaling all clients to start playing
+          if (window.currentMatch && window.currentMatch.beginPlaying) {
+            window.currentMatch.beginPlaying();
+          }
+          break;
+          
+        case 'match_pause':
+          // Player broadcasting pause to all others
+          if (window.currentMatch) {
+            window.currentMatch.isPaused = true;
+            window.currentMatch.updateLoadingOverlay('⏸️ PAUSED');
+            // console.log('⏸️ Match paused by remote player');
+          }
+          break;
+          
+        case 'match_resume':
+          // Player broadcasting resume to all others
+          if (window.currentMatch) {
+            window.currentMatch.isPaused = false;
+            const overlay = document.getElementById('match_loading_overlay');
+            if (overlay) {
+              overlay.style.display = 'none';
+            }
+            // console.log('▶️ Match resumed by remote player');
           }
           break;
           
@@ -541,7 +608,7 @@
   
   // Handle peer connection - updated to sync isConnected
   function onPeerConnected(peerId) {
-    console.log(`✅ Connected to peer: ${peerId.slice(-8)}`);
+    // console.log(`✅ Connected to peer: ${peerId.slice(-8)}`);
     isConnected = p2p.getConnectedPeers().length > 0;
     reconnectAttempts = 0;
     
@@ -592,7 +659,7 @@
     const player = match.getPlayerById(peerId);
     const playerName = player?.name || `Player ${peerId.slice(-4)}`;
     
-    console.log(`✅ ${playerName} reconnected!`);
+    // console.log(`✅ ${playerName} reconnected!`);
     
     // Cancel forfeit timeout
     if (match._reconnectTimeout) {
@@ -625,7 +692,7 @@
   
   // Handle peer disconnection - updated to sync isConnected
   function onPeerDisconnected(peerId) {
-    console.log(`👋 Peer disconnected: ${peerId.slice(-8)}`);
+    // console.log(`👋 Peer disconnected: ${peerId.slice(-8)}`);
     isConnected = p2p.getConnectedPeers().length > 0;
     remoteCommands.delete(peerId);
     
@@ -666,7 +733,7 @@
     const player = match.getPlayerById(peerId);
     const playerName = player?.name || `Player ${peerId.slice(-4)}`;
     
-    console.log(`⚠️ ${playerName} disconnected during match`);
+    // console.log(`⚠️ ${playerName} disconnected during match`);
     
     // Pause the match  
     match.isPaused = true;
@@ -680,7 +747,7 @@
     const reconnectTimeout = setTimeout(() => {
       if (match.state === 'disconnected') {
         // Player didn't reconnect - they forfeit
-        console.log(`💀 ${playerName} failed to reconnect - automatic forfeit`);
+        // console.log(`💀 ${playerName} failed to reconnect - automatic forfeit`);
         match.eliminatePlayer(peerId);
         
         hideDisconnectOverlay();
@@ -769,7 +836,7 @@
   net.joinBroadcast = function(channelName) {
     if (p2p && p2p.joinBroadcast) {
       p2p.joinBroadcast(channelName);
-      console.log(`📡 Joined broadcast channel: ${channelName}`);
+      // console.log(`📡 Joined broadcast channel: ${channelName}`);
     } else {
       console.warn(`Cannot join broadcast ${channelName}: P2P not ready`);
     }
@@ -892,7 +959,7 @@
       }
     });
     
-    console.log(`🔄 Reconciled state at tick ${remoteTick}`);
+    // console.log(`🔄 Reconciled state at tick ${remoteTick}`);
   };
   
   // Rewind simulation to previous tick (for corrections)
@@ -905,7 +972,7 @@
     
     // Restore from backup or replay commands (placeholder)
     // In production: replay all commands up to targetTick deterministically
-    console.log(`⏪ Rewound simulation to tick ${targetTick}`);
+    // console.log(`⏪ Rewound simulation to tick ${targetTick}`);
   };
   
   // Capture current game state for backup/rewind
@@ -955,7 +1022,7 @@
     commandBuffer = [];
     remoteCommands.clear();
     tick = 0;
-    console.log('🌐 Network disconnected');
+    // console.log('🌐 Network disconnected');
   };
   
   // Switch to a different lobby
@@ -1026,10 +1093,10 @@
   // Debug: Log network stats
   net.logStats = function() {
     const status = net.getStatus();
-    console.log('🌐 Network Stats:', {
-      ...status,
-      remoteQueues: Array.from(remoteCommands.values()).map(q => q.length)
-    });
+    // console.log('🌐 Network Stats:', {
+    //   ...status,
+    //   remoteQueues: Array.from(remoteCommands.values()).map(q => q.length)
+    // });
   };
   
   // Export public API

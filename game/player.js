@@ -11,7 +11,7 @@ initPlayer = function(){
   // Menu scene is now purely visual - just create player, no Game object yet
   // Game and units will be spawned when a match actually starts
   window.player = new Player();
-  console.log('✅ Player initialized (menu scene - no game yet)');
+  // console.log('✅ Player initialized (menu scene - no game yet)');
 }
 
 
@@ -248,16 +248,18 @@ Player.prototype.selectUnit = function(unit) {
   }
   
   // Check if unit belongs to this player
-  const ownerMatches = (unit.owner === this.id) || (unit.owner === 'player');
-  console.log(`🔍 Selection check: unit.owner="${unit.owner}", player.id="${this.id}", matches=${ownerMatches}`);
+  // CRITICAL: Use last 6 chars of player ID for ownership comparison (matches unit.owner format)
+  const normalizedPlayerId = this.id.length > 6 ? this.id.slice(-6) : this.id;
+  const ownerMatches = (unit.owner === normalizedPlayerId) || (unit.owner === this.id) || (unit.owner === 'player');
+  // console.log(`🔍 Selection check: unit.owner="${unit.owner}", player.id="${normalizedPlayerId}", matches=${ownerMatches}`);
   
   if (!ownerMatches) {
-    console.log(`⚠️ Cannot select unit - belongs to ${unit.owner}, not ${this.id} (or 'player')`);
+    // console.log(`⚠️ Cannot select unit - belongs to ${unit.owner}, not ${normalizedPlayerId} (or 'player')`);
     return false;
   }
   
   this.selectedUnits.push(unit);
-  console.log(`✅ Selected unit: ${unit.name || unit.type} (owner: ${unit.owner})`);
+  // console.log(`✅ Selected unit: ${unit.name || unit.type} (owner: ${unit.owner})`);
   return true;
 };
 

@@ -90,15 +90,22 @@ function Field(ops = {}) {
   this.width = ops.width ? ops.width : 10;
   this.height = ops.height ? ops.height : 10;
   this.tiles = [];
-  this.seed = ops.seed || Math.random() * 1000000;
+  this.seed = ops.seed || Math.floor(Math.random() * 1000000);
   
   // Instance properties for chunk management
   this.chunks = new Map();
   this.chunkSize = 16;
   this._heightCache = new Map();
   
-  // Initialize random number generator with seed
-  // this.rng = this.seededRandom(this.seed);
+  // Initialize DETERMINISTIC random number generator with seed for multiplayer sync
+  this._rngState = this.seed;
+  this.rng = () => {
+    // Simple LCG (Linear Congruential Generator) - deterministic and fast
+    this._rngState = (this._rngState * 1664525 + 1013904223) % 4294967296;
+    return this._rngState / 4294967296; // Returns 0-1
+  };
+  
+  // console.log(`🎲 Field initialized with deterministic RNG, seed: ${this.seed}`);
   
   // Define only the tile types that actually exist in your constants
   // let validTypes = [0, 1, 2, 4, 5, 6, 8, 9, 10, 20, 21, 22, 24, 25, 26, 28, 29, 30];
@@ -172,9 +179,9 @@ Field.prototype.paintGrassPatches = function() {
   // First: paint some random organic patches - much bigger and more organic
   for(let i = 0; i < numPatches; i++) {
     // Pick random center point
-    const centerX = Math.floor(Math.random() * this.width);
-    const centerY = Math.floor(Math.random() * this.height);
-    const patchSize = 15 + Math.floor(Math.random() * 25); // 15-40 tiles radius for big blobs
+    const centerX = Math.floor(this.rng() * this.width);
+    const centerY = Math.floor(this.rng() * this.height);
+    const patchSize = 15 + Math.floor(this.rng() * 25); // 15-40 tiles radius for big blobs
     
     // Paint the patch with grass (like drawing with a brush)
     for(let x = Math.max(0, centerX - patchSize); x <= Math.min(this.width - 1, centerX + patchSize); x++) {
@@ -183,7 +190,7 @@ Field.prototype.paintGrassPatches = function() {
         if(distance <= patchSize) {
           // Paint this tile with grass - use highest numbers for completely solid areas
           const tile = this.tiles[y * this.width + x];
-          const grassVariant = 12 + Math.floor(Math.random() * 4); // 12-15 for most solid grass
+          const grassVariant = 12 + Math.floor(this.rng() * 4); // 12-15 for most solid grass
           tile.type = grassVariant;
           tile.updateAtlasCoordinates();
         }
@@ -194,16 +201,16 @@ Field.prototype.paintGrassPatches = function() {
   // Add some medium-sized organic patches for variety
   const numMediumPatches = Math.floor(this.width * this.height / 100);
   for(let i = 0; i < numMediumPatches; i++) {
-    const centerX = Math.floor(Math.random() * this.width);
-    const centerY = Math.floor(Math.random() * this.height);
-    const patchSize = 8 + Math.floor(Math.random() * 12); // 8-20 tiles radius
+    const centerX = Math.floor(this.rng() * this.width);
+    const centerY = Math.floor(this.rng() * this.height);
+    const patchSize = 8 + Math.floor(this.rng() * 12); // 8-20 tiles radius
     
     for(let x = Math.max(0, centerX - patchSize); x <= Math.min(this.width - 1, centerX + patchSize); x++) {
       for(let y = Math.max(0, centerY - patchSize); y <= Math.min(this.height - 1, centerY + patchSize); y++) {
         const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
         if(distance <= patchSize) {
           const tile = this.tiles[y * this.width + x];
-          const grassVariant = 12 + Math.floor(Math.random() * 4); // 12-15 for most solid grass
+          const grassVariant = 12 + Math.floor(this.rng() * 4); // 12-15 for most solid grass
           tile.type = grassVariant;
           tile.updateAtlasCoordinates();
         }
@@ -240,18 +247,18 @@ Field.prototype.expandPainting = function() {
   
   // Add some final brush strokes for organic feel
   for(let i = 0; i < this.width * this.height / 8; i++) {
-    const x = Math.floor(Math.random() * this.width);
-    const y = Math.floor(Math.random() * this.height);
+    const x = Math.floor(this.rng() * this.width);
+    const y = Math.floor(this.rng() * this.height);
     
     // Randomly paint a small grass patch
-    const patchSize = 1 + Math.floor(Math.random() * 2); // Small patches
+    const patchSize = 1 + Math.floor(this.rng() * 2); // Small patches
     
     for(let px = Math.max(0, x - patchSize); px <= Math.min(this.width - 1, x + patchSize); px++) {
       for(let py = Math.max(0, y - patchSize); py <= Math.min(this.height - 1, y + patchSize); py++) {
         const distance = Math.sqrt((px - x) ** 2 + (py - y) ** 2);
         if(distance <= patchSize) {
           const tile = this.tiles[py * this.width + px];
-          const grassVariant = Math.floor(Math.random() * 16); // 0-15
+          const grassVariant = Math.floor(this.rng() * 16); // 0-15
           tile.type = grassVariant;
           tile.updateAtlasCoordinates();
         }
@@ -571,7 +578,8 @@ let liveField = new Field({width: tilect, height: tilect, seed: 52});
 
 // Set random time of day for this field (0 = midnight, 0.5 = noon, 1 = midnight)
 // Bias toward daytime hours (0.2 to 0.8) for better visibility
-liveField.timeOfDay = 0.2 + (Math.random() * 0.6);
+// timeOfDay is now set by lighting system using field seed for determinism
+// liveField.timeOfDay = 0.2 + (Math.random() * 0.6);
 
 // Make liveField and Field constructor available globally
 window.liveField = liveField;

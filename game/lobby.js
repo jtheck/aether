@@ -31,12 +31,6 @@ const Lobby = {
       lobbyKey: 'aether-1v1-quick',
       defaultFieldSize: 'medium'
     },
-    'ffa': {
-      name: 'Free For All',
-      maxPlayers: 4,
-      lobbyKey: 'aether-ffa',
-      defaultFieldSize: 'large'
-    },
     'koth': {
       name: 'King of the Hill',
       maxPlayers: 4,
@@ -53,7 +47,7 @@ const Lobby = {
   
   // Reset the field and game state to defaults
   resetGameState: function() {
-    console.log('🧹 Starting complete scene cleanup...');
+    // console.log('🧹 Starting complete scene cleanup...');
     
     try {
       if (window.currentMatch && typeof window.currentMatch.stopLocalTickLoop === 'function') {
@@ -78,10 +72,10 @@ const Lobby = {
       
       // MINIMAL scene cleanup - only dispose units and buildings, keep EVERYTHING else
       // The field will be regenerated but we don't need to clean up old meshes
-      console.log('🧹 Cleaning up units and buildings only (keeping terrain/table)...');
+      // console.log('🧹 Cleaning up units and buildings only (keeping terrain/table)...');
     
     // Clear existing game units with proper cleanup
-    console.log('🗑️ Destroying game units...');
+    // console.log('🗑️ Destroying game units...');
     if (window.gameUnits) {
       window.gameUnits.forEach(unit => {
         if (window.destroyUnit) {
@@ -93,18 +87,18 @@ const Lobby = {
       // CRITICAL: Clear in-place to preserve reference (don't replace array)
       window.gameUnits.length = 0;
     }
-    console.log('✅ Game units destroyed');
+    // console.log('✅ Game units destroyed');
     
     // Clear player units (should already be empty if destroyUnit works correctly)
-    console.log('🗑️ Clearing player units array...');
+    // console.log('🗑️ Clearing player units array...');
     if (window.player && window.player.units) {
       // Don't destroy again - just clear the array (units already destroyed above)
       window.player.units = [];
     }
-    console.log('✅ Player units array cleared');
+    // console.log('✅ Player units array cleared');
     
     // Clear player buildings
-    console.log('🗑️ Destroying player buildings...');
+    // console.log('🗑️ Destroying player buildings...');
     if (window.player && window.player.buildings) {
       window.player.buildings.forEach(building => {
         if (building.mesh && building.mesh.dispose) {
@@ -113,14 +107,14 @@ const Lobby = {
       });
       window.player.buildings = [];
     }
-    console.log('✅ Player buildings destroyed');
+    // console.log('✅ Player buildings destroyed');
     
     // Clear player selection
-    console.log('🗑️ Clearing player selection...');
+    // console.log('🗑️ Clearing player selection...');
     if (window.player && window.player.clearSelection) {
       window.player.clearSelection();
     }
-    console.log('✅ Player selection cleared');
+    // console.log('✅ Player selection cleared');
     
     // Don't dispose player visual assets - just let them get updated with new position
     
@@ -138,7 +132,7 @@ const Lobby = {
     // after the agora position is determined based on spawn locations
     
     // Clear any existing buildings
-    console.log('🗑️ Clearing building system...');
+    // console.log('🗑️ Clearing building system...');
     if (window.buildingSystem && window.buildingSystem.buildings) {
       window.buildingSystem.buildings.forEach(building => {
         if (building.mesh && building.mesh.dispose) {
@@ -147,10 +141,10 @@ const Lobby = {
       });
       window.buildingSystem.buildings = [];
     }
-    console.log('✅ Building system cleared');
+    // console.log('✅ Building system cleared');
     
     // Clear global playerBuildings array
-    console.log('🗑️ Clearing playerBuildings array...');
+    // console.log('🗑️ Clearing playerBuildings array...');
     if (window.playerBuildings) {
       window.playerBuildings.forEach(building => {
         if (building.mesh && building.mesh.dispose) {
@@ -161,9 +155,9 @@ const Lobby = {
     } else {
       window.playerBuildings = [];
     }
-    console.log('✅ Player buildings array cleared');
+    // console.log('✅ Player buildings array cleared');
     
-    console.log('🗑️ Clearing gameBuildings array...');
+    // console.log('🗑️ Clearing gameBuildings array...');
     if (window.gameBuildings) {
       window.gameBuildings.forEach(building => {
         if (building.mesh && building.mesh.dispose) {
@@ -172,39 +166,39 @@ const Lobby = {
       });
       window.gameBuildings.length = 0;
     }
-    console.log('✅ Game buildings array cleared (agoras removed)');
+    // console.log('✅ Game buildings array cleared (agoras removed)');
     
-    console.log('🗑️ Clearing LOD models array...');
+    // console.log('🗑️ Clearing LOD models array...');
     if (window.gfx && window.gfx.clearLODModels) {
       window.gfx.clearLODModels();
     }
-    console.log('✅ LOD models cleared');
+    // console.log('✅ LOD models cleared');
     
     // Don't touch field chunks - new Field() will replace the old one completely
-    console.log('🗺️ Field will be replaced with new seeded field');
+    // console.log('🗺️ Field will be replaced with new seeded field');
     
     // Clear any existing fog of war
-    console.log('🗑️ Clearing fog of war...');
+    // console.log('🗑️ Clearing fog of war...');
     if (window.fogSystem && window.fogSystem.clear) {
       window.fogSystem.clear();
     }
-    console.log('✅ Fog of war cleared');
+    // console.log('✅ Fog of war cleared');
     
     // Clean up opponent
-    console.log('🗑️ Cleaning up opponent...');
+    // console.log('🗑️ Cleaning up opponent...');
     if (window.OpponentSystem) {
       window.OpponentSystem.cleanupOpponent();
     }
-    console.log('✅ Opponent cleaned up');
+    // console.log('✅ Opponent cleaned up');
     
       // Clear behavior manager
-      console.log('🗑️ Clearing behavior manager...');
+      // console.log('🗑️ Clearing behavior manager...');
       if (window.behaviorManager && window.behaviorManager.clear) {
         window.behaviorManager.clear();
       }
-      console.log('✅ Behavior manager cleared');
+      // console.log('✅ Behavior manager cleared');
       
-      console.log('✅ Game state reset complete - scene cleaned');
+      // console.log('✅ Game state reset complete - scene cleaned');
     } catch (error) {
       console.error('❌ Error during resetGameState:', error);
       console.error('Stack:', error.stack);
@@ -213,81 +207,286 @@ const Lobby = {
   },
   
   // Start a new match from the lobby
-  startMatch: function(matchType = '1v1', fieldSize = 'medium', mapSeed = null) {
-    console.log(`🎮 Starting ${matchType} match with ${fieldSize} field...`);
+  // Start a 1v1 match - follows adventure mode pattern for proper initialization
+  start1v1Match: function(fieldSize = 'medium', mapSeed = null) {
+    console.log('⚔️ Starting 1v1 match versus AI (local)...');
     
-    // Reset the game state first
+    const config = this.gameTypes['onevsone'];
+    const resolvedFieldSize = fieldSize || (config ? config.defaultFieldSize : 'medium');
+    const resolvedSeed = Number.isFinite(Number(mapSeed))
+      ? Math.floor(Number(mapSeed))
+      : Math.floor(Math.random() * 1000000);
+    
+    // Reset scene and ensure clean slate
     this.resetGameState();
     
-    // Initialize the player
+    window.isMultiplayer = false;
+    window.gameType = 'onevsone';
+    window.mapSeed = resolvedSeed;
+    
+    // Ensure player instance exists
     if (!window.player) {
-      initPlayer();
+      window.player = new Player();
+      console.log('🆕 Created new player for 1v1');
+    } else {
+      console.log(`♻️ Reusing existing player (id: ${window.player.id || 'not set'})`);
     }
     
-    // Start the game loop
+    // Ensure player has correct ID
+    if (!window.player.id || window.player.id === 'undefined') {
+      window.player.id = 'player';
+      console.log('✅ Set player.id to "player"');
+    }
+    
+    // Reset player state for new match
+    window.player.units = [];
+    window.player.buildings = [];
+    window.player.selectedUnits = [];
+    
+    console.log(`🎮 Player ready: id="${window.player.id}", agora will be set to corner spawn`);
+    
+    // Resolve field dimensions for 1v1 (typically smaller than adventure)
+    const dims = (typeof resolvedFieldSize === 'string')
+      ? (this.getFieldDimensions(resolvedFieldSize) || { width: 128, height: 128 })
+      : { width: resolvedFieldSize, height: resolvedFieldSize };
+    
+    // 1v1: Two players in opposite corners
+    const cornerMargin = Math.max(8, Math.floor(Math.min(dims.width, dims.height) * 0.1));
+    const spawnPositions = [
+      { x: cornerMargin, y: cornerMargin }, // Player
+      { x: dims.width - cornerMargin - 1, y: dims.height - cornerMargin - 1 } // AI opponent
+    ];
+    
+    const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
+    
+    // Configure local player identity and spawn
+    const localPlayerId = window.player.id || 'player';
+    window.player.id = localPlayerId;
+    window.player.name = window.currentPlayerName || 'Duelist';
+    window.player.color = window.currentPlayerColor || '#ff0000';
+    window.player.agora = spawnPositions[0];
+    window.player.basePosition = { x: spawnPositions[0].x, z: spawnPositions[0].y };
+    
+    if (window.player.pbody) {
+      const agoraX = window.player.agora.x * tileSize;
+      const agoraZ = window.player.agora.y * tileSize;
+      window.player.pbody.state.loc.set(agoraX, 0, agoraZ);
+      window.player.pbody.vel.set(0, 0, 0);
+      window.player.pbody.imp.set(0, 0, 0);
+    }
+    
+    // Create single AI opponent for 1v1
+    const spawn = spawnPositions[1];
+    const aiId = `ai-opponent-${resolvedSeed.toString(16)}`;
+    const aiOptions = {
+      id: aiId,
+      name: 'AI Opponent',
+      color: '#0066cc',
+      startingResources: { food: 120, wood: 80, stone: 40, magic: 20 },
+      agora: spawn,
+      basePosition: { x: spawn.x, z: spawn.y },
+      difficulty: 'normal',
+      isAI: true
+    };
+    
+    const aiPlayer = window.AIPlayer ? new window.AIPlayer(aiOptions) : new window.OpponentPlayer(aiOptions);
+    aiPlayer.isAI = true;
+    aiPlayer.agora = spawn;
+    aiPlayer.basePosition = { x: spawn.x, z: spawn.y };
+    
+    window.aiOpponents = [aiPlayer];
+    window.opponent = aiPlayer;
+    
+    // Regenerate field with desired seed
+    console.log(`🗺️ Regenerating field with seed ${resolvedSeed} for 1v1 match...`);
+    const oldField = window.liveField;
+    
+    // Dispose old field before creating new one
+    if (oldField && typeof oldField.dispose === 'function') {
+      oldField.dispose();
+    }
+    
+    // Create the new field
+    window.liveField = new window.Field({
+      width: dims.width,
+      height: dims.height,
+      seed: resolvedSeed
+    });
+    if (typeof liveField !== 'undefined') {
+      liveField = window.liveField;
+    }
+    
+    // CRITICAL: Apply current LOD settings to new field immediately!
+    if (window.hud && window.hud.getCurrentLODMultiplier) {
+      const currentMultiplier = window.hud.getCurrentLODMultiplier();
+      const savedLOD = localStorage.getItem('lodLevel');
+      const lodLevel = savedLOD ? parseInt(savedLOD) : 50;
+      
+      window.liveField.originalLoadDistance = 4;
+      const newLoadDistance = Math.round(4 * currentMultiplier);
+      window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
+      
+      console.log(`🗺️ New field initialized with LOD ${lodLevel}% → chunk distance: ${window.liveField.currentLoadDistance}`);
+    }
+    
+    if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
+      gfx.stretchTable(gfx.table);
+    }
+    window._cameraLimitsSet = false;
+    
+    // Position camera at local spawn FIRST
+    if (window.gfx && window.gfx.camera && window.gfx.cameraTarget) {
+      const agoraX = window.player.agora.x * tileSize;
+      const agoraZ = window.player.agora.y * tileSize;
+      window.gfx.cameraTarget.position.x = agoraX;
+      window.gfx.cameraTarget.position.y = 9;
+      window.gfx.cameraTarget.position.z = agoraZ;
+      
+      if (window.cameraAnchor) {
+        window.cameraAnchor.x = agoraX;
+        window.cameraAnchor.y = 9;
+        window.cameraAnchor.z = agoraZ;
+      }
+      
+      window.gfx.camera.alpha = -2.5;
+      window.gfx.camera.beta = 0.9;
+      window.gfx.camera.radius = 80;
+      if (window.gfx.camera.attachControl) {
+        window.gfx.camera.attachControl(window.gfx.canvas, false);
+        
+        // Re-disable built-in inputs after re-attaching
+        if (window.gfx.camera.inputs && window.gfx.camera.inputs.attached) {
+          if (window.gfx.camera.inputs.attached.pointers) {
+            try { window.gfx.camera.inputs.attached.pointers.detachControl(); } catch (e) {}
+          }
+          if (window.gfx.camera.inputs.attached.mousewheel) {
+            window.gfx.camera.inputs.attached.mousewheel.detachControl();
+          }
+          if (window.gfx.camera.inputs.attached.keyboard) {
+            try { window.gfx.camera.inputs.attached.keyboard.detachControl(); } catch (e) {}
+          }
+        }
+      }
+    }
+    
+    // Force-load chunks at spawn position
+    if (window.gfx && window.gfx.forceLoadChunks && window.gfx.cameraTarget) {
+      const targetPos = window.gfx.cameraTarget.position;
+      window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
+    }
+    
+    // Prepare player arrays
+    const players = [window.player, aiPlayer];
+    window.playerBuildings = window.playerBuildings || [];
+    window.gameUnits = window.gameUnits || [];
+    
+    // Create game instance (handles spawning units/buildings)
+    window.game = new window.Game({
+      type: 'onevsone',
+      map: 'default',
+      mapSeed: resolvedSeed,
+      players: players,
+      isMultiplayer: false,
+      tickRate: 60,
+      maxPlayers: 2
+    });
+    
+    console.log('✅ 1v1 game instance created with players:', players.map(p => p.id));
+    
+    // Ensure unit models are spawned for visual layer
+    console.log(`🎨 About to spawn unit models for ${window.gameUnits?.length || 0} units`);
+    
+    if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
+      window.spawnUnitModels(window.gfx.scene);
+      console.log(`✅ spawnUnitModels called - meshes will load asynchronously`);
+    }
+    
+    // Create match controller for deterministic command handling
+    window.currentMatch = new window.Match({
+      id: `onevsone-${Date.now()}`,
+      gameType: 'onevsone',
+      mapSeed: resolvedSeed,
+      mapSize: resolvedFieldSize,
+      players: players,
+      localPlayerId: window.player.id,
+      hostId: window.player.id,
+      victoryCondition: 'elimination',
+      timeLimit: 0
+    });
+    
+    // Enter playing state immediately for local match
+    window.currentMatch.beginPlaying();
+    if (window.currentMatch.startLocalTickLoop) {
+      window.currentMatch.startLocalTickLoop();
+    }
+    
+    // Clear any selections from menu scene
+    if (window.player && window.player.clearSelection) {
+      window.player.clearSelection();
+      console.log('🗑️ Cleared menu scene selections before match start');
+    }
+    
+    // Start physics/game loop
     if (window.gameLoop && window.gameLoop.start) {
       window.gameLoop.start();
     }
     
-    // Villagers are now spawned automatically in the Player constructor
-    console.log('✅ Player initialized with villagers');
+    // DIAGNOSTIC: Check unit state after everything is initialized
+    setTimeout(() => {
+      console.log('🔍 POST-INIT DIAGNOSTIC (2 seconds after match start):');
+      console.log(`  - gameUnits.length: ${window.gameUnits?.length || 0}`);
+      console.log(`  - player.units.length: ${window.player?.units?.length || 0}`);
+      console.log(`  - player.id: ${window.player?.id}`);
+      
+      if (window.gameUnits && window.gameUnits.length > 0) {
+        const withMesh = window.gameUnits.filter(u => u.mesh).length;
+        const withoutMesh = window.gameUnits.filter(u => !u.mesh).length;
+        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id || u.owner === 'player').length;
+        
+        console.log(`  - Units with meshes: ${withMesh}/${window.gameUnits.length}`);
+        console.log(`  - Units without meshes: ${withoutMesh}/${window.gameUnits.length}`);
+        console.log(`  - Player-owned units: ${playerOwned}`);
+      }
+      
+      if (window.gfx && window.gfx.cameraTarget) {
+        console.log(`  - Camera position: (${window.gfx.cameraTarget.position.x.toFixed(1)}, ${window.gfx.cameraTarget.position.z.toFixed(1)})`);
+        console.log(`  - Player agora: (${window.player.agora.x * TILE_SIZE}, ${window.player.agora.y * TILE_SIZE})`);
+      }
+    }, 2000);
     
-    // Hide the menu and show the game
+    // Hide lobby/menu UI and refresh HUD
     if (window.ui && window.ui.hideMenu) {
       window.ui.hideMenu();
     }
-    
-    // Update HUD with current resources
     if (window.hud && window.hud.updateResources) {
       window.hud.updateResources();
     }
     
-    // Set up opponent for 1v1 matches with a delay to ensure player system is ready
-    if (matchType === '1v1' && window.OpponentSystem) {
-      setTimeout(() => {
-        console.log('🤖 Spawning opponent after player system is ready...');
-        window.OpponentSystem.spawnOpponent();
-      }, 1000); // 1 second delay to ensure everything is initialized
+    delete window.pendingMapSeed;
+    
+    console.log('⚔️ 1v1 match ready!');
+  },
+  
+  // Legacy startMatch function - redirects to proper initialization
+  startMatch: function(matchType = '1v1', fieldSize = 'medium', mapSeed = null) {
+    console.log(`🔄 Redirecting legacy startMatch to proper initialization...`);
+    if (matchType === '1v1' || matchType === 'onevsone') {
+      return this.start1v1Match(fieldSize, mapSeed);
+    } else {
+      console.warn(`⚠️ Unknown match type: ${matchType}`);
     }
-    
-    console.log(`🎮 ${matchType} match started successfully!`);
-    
-    // Dispatch custom event for other systems to listen to
-    const event = new CustomEvent('matchStarted', { 
-      detail: { matchType: matchType } 
-    });
-    window.dispatchEvent(event);
   },
   
   // Initialize the lobby system
   init: function() {
     // console.log('🏛️ Lobby system initialized');
     
-    // Set up the Game Start button event listener
-    const gameStartButton = document.querySelector('#onevsone_lobby .lobby_b');
-    if (gameStartButton) {
-      gameStartButton.addEventListener('click', () => {
-        // console.log('🎮 Game Start button clicked');
-        
-        // Get selected field size from dropdown
-        const fieldSizeSelect = document.getElementById('fieldSize');
-        const selectedFieldSize = fieldSizeSelect ? fieldSizeSelect.value : 'medium';
-        
-        // Get map seed from input
-        const mapSeedInput = document.getElementById('mapSeed');
-        const selectedSeed = mapSeedInput ? parseInt(mapSeedInput.value) : null;
-        
-        // console.log(`🎮 Starting with field size: ${selectedFieldSize}, seed: ${selectedSeed}`);
-        
-        this.startMatch('1v1', selectedFieldSize, selectedSeed);
-      });
-    }
     
     // Add click handlers for other lobby types
     this.setupLobbyButtons();
     
-    // Join global stats channel for main menu
-    this.joinGlobalStatsChannel();
+    // Join global stats channel for main menu (wait for P2P to be ready)
+    this.waitForP2PAndJoinGlobalStats();
     
     // Start periodic main menu stats updates
     setInterval(() => {
@@ -308,7 +507,7 @@ const Lobby = {
                          window.location.hostname === '127.0.0.1';
       window.net = window.net || {};
       if (window.net.init) {
-        console.log('🌐 Initializing network for global stats (first time)');
+        // console.log('🌐 Initializing network for global stats (first time)');
         window.net.init({
           gameType: 'global',
           devMode: isLocalhost,
@@ -317,12 +516,12 @@ const Lobby = {
         });
       }
     } else {
-      console.log('🌐 Network already initialized, reusing existing connection');
+      // console.log('🌐 Network already initialized, reusing existing connection');
     }
     
     // Join global stats broadcast after P2P is ready
     this.waitForBroadcastChannel('aether-global-stats', 5000).then(() => {
-      console.log('🌍 Joined global stats channel');
+      // console.log('🌍 Joined global stats channel');
       
       // Listen for player status announcements
       this.startListeningForGlobalStats();
@@ -333,7 +532,20 @@ const Lobby = {
       console.error('Failed to join global stats channel:', err);
     });
   },
-  
+
+  // Wait for P2P to be ready, then join global stats
+  waitForP2PAndJoinGlobalStats: function() {
+    const checkP2P = () => {
+      if (window.net && window.net.p2p && window.net.p2p.joinBroadcast) {
+        this.joinGlobalStatsChannel();
+      } else {
+        // Retry in 500ms
+        setTimeout(checkP2P, 500);
+      }
+    };
+    checkP2P();
+  },
+
   // Wait for broadcast channel to connect (track ourselves)
   waitForBroadcastChannel: function(channelName, timeout = 2500) {
     return new Promise((resolve, reject) => {
@@ -347,7 +559,7 @@ const Lobby = {
         // Wait for ActionCable WebSocket connection
         setTimeout(() => {
           this.connectedChannels[channelName] = true;
-          console.log(`✅ Broadcast channel ready: ${channelName}`);
+          // console.log(`✅ Broadcast channel ready: ${channelName}`);
           resolve();
         }, 2000); // 2 seconds for WebSocket + ActionCable subscription
       } else {
@@ -358,7 +570,7 @@ const Lobby = {
   
   // Listen for global stats announcements
   startListeningForGlobalStats: function() {
-    console.log('👂 Listening for global stats broadcasts');
+    // console.log('👂 Listening for global stats broadcasts');
     
     // Store original onBroadcast handler
     const originalHandler = window.net.onBroadcast;
@@ -447,11 +659,11 @@ const Lobby = {
       });
     }
     
-    // FFA lobby
-    const ffaButton = document.querySelector('#ffa_lobby .lobby_b');
-    if (ffaButton) {
-      ffaButton.addEventListener('click', () => {
-        this.startMultiplayerMatch('ffa');
+    // 1v1 lobby
+    const ovoButton = document.querySelector('#onevsone_lobby .lobby_b');
+    if (ovoButton) {
+      ovoButton.addEventListener('click', () => {
+        this.startMultiplayerMatch('onevsone');
       });
     }
     
@@ -575,7 +787,7 @@ const Lobby = {
     
     // Join the actual P2P match lobby for this specific lobby
     const actualLobbyKey = `${config.lobbyKey}-${lobbyId}`;
-    console.log(`🔗 Host switching to match lobby: ${actualLobbyKey}`);
+    // console.log(`🔗 Host switching to match lobby: ${actualLobbyKey}`);
     if (window.net && window.net.switchLobby) {
       window.net.switchLobby(actualLobbyKey);
     } else {
@@ -586,7 +798,7 @@ const Lobby = {
     setTimeout(() => {
       if (window.net && window.net.getStatus) {
         const status = window.net.getStatus();
-        console.log(`👥 P2P Status: ${status.peers?.length || 0} peers connected`, status.peers);
+        // console.log(`👥 P2P Status: ${status.peers?.length || 0} peers connected`, status.peers);
       }
     }, 1000);
     
@@ -618,7 +830,7 @@ const Lobby = {
     // Join the actual P2P match lobby
     const actualLobbyKey = `${config.lobbyKey}-${lobbyId}`;
     const myId = window.net ? window.net.getStatus().localPlayerId : 'unknown';
-    console.log(`🔗 [${myId}] Switching to match lobby: ${actualLobbyKey}`);
+    // console.log(`🔗 [${myId}] Switching to match lobby: ${actualLobbyKey}`);
     if (window.net.switchLobby) {
       window.net.switchLobby(actualLobbyKey);
     } else {
@@ -629,7 +841,7 @@ const Lobby = {
     setTimeout(() => {
       if (window.net && window.net.getStatus) {
         const status = window.net.getStatus();
-        console.log(`👥 [${myId}] P2P Status: ${status.peers?.length || 0} peers connected`, status.peers);
+        // console.log(`👥 [${myId}] P2P Status: ${status.peers?.length || 0} peers connected`, status.peers);
       }
     }, 2000); // Wait longer for presence announcement
     
@@ -669,6 +881,13 @@ const Lobby = {
         // console.log(`✅ Found lobby: ${actualMessage.lobby.name}`);
         this.updateAvailableLobbies(gameType, actualMessage.lobby);
         this.updateLobbyBrowserUI(gameType);
+        
+        // If this is the lobby we're currently in, update our local copy and UI
+        if (actualMessage.lobby.id === this.currentLobbyId) {
+          // console.log(`🔄 Received updated lobby settings from host:`, actualMessage.lobby.settings);
+          this.currentLobby = actualMessage.lobby;
+          this.updateLobbyRoomUI(gameType, actualMessage.lobby);
+        }
       }
       
       // Handle lobby list requests - respond if we're hosting
@@ -1070,7 +1289,7 @@ const Lobby = {
       
       // Debug log for host
       if (canStart) {
-        console.log(`✅ All players ready! Host can start match.`);
+        // console.log(`✅ All players ready! Host can start match.`);
       }
     }
     
@@ -1191,17 +1410,27 @@ const Lobby = {
   
   // Update lobby setting (host only)
   updateLobbySetting: function(setting, value) {
-    if (!this.isHost) return;
+    if (!this.isHost) {
+      console.warn('⚠️ Only host can update settings');
+      return;
+    }
     
-    // Update local setting
-    const lobby = {
-      gameType: this.currentGameType,
-      settings: {}
-    };
-    lobby.settings[setting] = setting === 'seed' ? parseInt(value) : value;
+    if (!this.currentLobby) {
+      console.error('❌ No current lobby to update!');
+      return;
+    }
     
-    // Announce updated lobby
-    this.announceLobby(lobby);
+    // Update the current lobby's settings
+    this.currentLobby.settings[setting] = setting === 'seed' ? parseInt(value) : value;
+    this.currentLobby.timestamp = Date.now(); // Update timestamp to trigger UI refresh
+    
+    // console.log(`🔧 Host updated ${setting} to:`, this.currentLobby.settings[setting]);
+    
+    // Broadcast the FULL updated lobby to all players
+    this.announceLobby(this.currentLobby);
+    
+    // Also update local UI
+    this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
   },
   
   // Start match from lobby (host only)
@@ -1297,7 +1526,6 @@ const Lobby = {
     const descriptions = {
       'adventure': '🌍 Co-op adventure - explore and build together!',
       'onevsone': '⚔️ 1v1 competitive match',
-      'ffa': '💥 Free for all - everyone for themselves!',
       'koth': '👑 Control the hill to win',
       'teams': '🤝 Team-based strategy'
     };
@@ -1360,7 +1588,6 @@ const Lobby = {
     const stats = {
       'adventure': { lobbies: new Set(), players: 0 },
       'onevsone': { lobbies: new Set(), players: 0 },
-      'ffa': { lobbies: new Set(), players: 0 },
       'koth': { lobbies: new Set(), players: 0 },
       'teams': { lobbies: new Set(), players: 0 }
     };
@@ -1377,7 +1604,7 @@ const Lobby = {
     });
     
     // Update the table
-    const gameTypeOrder = ['adventure', 'onevsone', 'ffa', 'koth', 'teams'];
+    const gameTypeOrder = ['adventure', 'onevsone', 'koth', 'teams'];
     
     gameTypeOrder.forEach((gameType, index) => {
       const row = document.querySelector(`#game_menu tr:nth-child(${index + 2})`); // +2 for header row
@@ -1743,17 +1970,20 @@ const Lobby = {
     const mapSeed = Number.isFinite(parsedSeed) ? Math.floor(parsedSeed) : Math.floor(Math.random() * 1000000);
     
     // console.log(`🎮 Starting ${config.name} multiplayer match...`);
-    // console.log(`🌱 Using map seed: ${mapSeed}`);
-    // console.log(`🗺️ Using field size: ${fieldSize}`);
+    // console.log(`🌱 SEED TRACE - rawSeed: ${rawSeed}, parsedSeed: ${parsedSeed}, mapSeed: ${mapSeed}`);
+    // console.log(`🗺️ SIZE TRACE - settings.fieldSize: ${settings?.fieldSize}, config.default: ${config.defaultFieldSize}, final: ${fieldSize}`);
+    // console.log(`📦 Full settings object:`, settings);
     
     let totalPlayers = 1 + this.connectedPlayers.length;
     if (totalPlayers < 2) {
       if (gameType === 'adventure') {
         console.warn('⚠️ Not enough players for Adventure lobby. Launching local AI skirmish instead.');
         this.startAdventureSkirmish(fieldSize, mapSeed, settings?.aiOptions || {});
+      } else if (gameType === 'onevsone' || gameType === '1v1') {
+        console.warn('⚠️ Not enough players for 1v1 lobby. Launching with AI opponent...');
+        this.start1v1Match(fieldSize, mapSeed);
       } else {
-        console.warn('⚠️ Not enough players! Need at least 2 players. Starting with AI opponent...');
-        this.startMatch(gameType, fieldSize, mapSeed);
+        console.warn('⚠️ Not enough players! Unknown game type. Aborting...');
       }
       return;
     }
@@ -1799,6 +2029,9 @@ const Lobby = {
       if (gameType === 'adventure') {
         console.warn('⚠️ Opponent disconnected while waiting. Switching to local Adventure skirmish.');
         this.startAdventureSkirmish(fieldSize, mapSeed, settings?.aiOptions || {});
+      } else if (gameType === 'onevsone' || gameType === '1v1') {
+        console.warn('⚠️ Opponent disconnected while waiting. Launching 1v1 with AI opponent...');
+        this.start1v1Match(fieldSize, mapSeed);
       } else {
         console.warn('⚠️ Opponent disconnected while waiting for network readiness. Aborting multiplayer start.');
       }
@@ -1818,14 +2051,31 @@ const Lobby = {
     window.gameType = gameType;
     window.mapSeed = mapSeed; // Store for game initialization
     
+    // Disable neutral unit auto-spawning permanently
+    if (window.autoInitDisabled !== undefined) {
+      window.autoInitDisabled = true;
+    }
+    
     // Get spawn positions for all players (spread them out on the map)
     const spawnPositions = this.getSpawnPositions(totalPlayers, fieldSize);
     const localPlayerName = window.currentPlayerName || 'Player 1';
     const localPlayerColor = window.currentPlayerColor || '#ff0000';
     
     // Sort all player IDs deterministically for consistent spawn order
-    const allPlayerIds = [localPlayerId, ...this.connectedPlayers.map(p => p.id || p)].sort();
-    let localPlayerIndex = allPlayerIds.indexOf(localPlayerId);
+    // CRITICAL: Normalize all IDs to just the suffix part for consistent sorting
+    const normalizeId = (id) => {
+      if (!id) return '';
+      // Extract suffix after last dash (e.g., "p2p-xyz123" -> "xyz123")
+      return id.includes('-') ? id.split('-').pop() : id;
+    };
+    
+    const allPlayerIds = [
+      normalizeId(localPlayerId),
+      ...this.connectedPlayers.map(p => normalizeId(p.id || p))
+    ].sort();
+    
+    const normalizedLocalId = normalizeId(localPlayerId);
+    let localPlayerIndex = allPlayerIds.indexOf(normalizedLocalId);
     
     if (localPlayerIndex === -1) {
       console.warn('⚠️ Local player ID missing from sorted list. Forcing local index to 0.');
@@ -1841,9 +2091,6 @@ const Lobby = {
       console.warn('⚠️ Duplicate player IDs detected in lobby:', allPlayerIds);
     }
     
-    console.log(`🎲 Deterministic player order:`, allPlayerIds.map(id => id.slice(-8)));
-    console.log(`👤 Local player is index ${localPlayerIndex}`);
-    
     // Initialize player if it doesn't exist
     if (!window.player) {
       console.log('🎮 Creating player instance for multiplayer...');
@@ -1857,8 +2104,8 @@ const Lobby = {
       window.player.color = localPlayerColor;
       window.player.agora = spawnPositions[localPlayerIndex];
       
-      console.log(`👤 Local player: ${localPlayerName} (ID: ${localPlayerId.slice(-8)})`);
-      console.log(`🏛️ Local player spawn: (${spawnPositions[localPlayerIndex].x}, ${spawnPositions[localPlayerIndex].y})`);
+      // console.log(`👤 Local player: ${localPlayerName} (ID: ${localPlayerId.slice(-8)})`);
+      // console.log(`🏛️ Local player spawn: (${spawnPositions[localPlayerIndex].x}, ${spawnPositions[localPlayerIndex].y})`);
       
       // Position player physics body at spawn
       if (window.player.pbody) {
@@ -1867,16 +2114,18 @@ const Lobby = {
         window.player.pbody.state.loc.set(agoraX, 0, agoraZ);
         window.player.pbody.vel.set(0, 0, 0);
         window.player.pbody.imp.set(0, 0, 0);
-        console.log(`🐸 Player frog positioned at spawn: (${agoraX.toFixed(1)}, ${agoraZ.toFixed(1)})`);
+        // console.log(`🐸 Player frog positioned at spawn: (${agoraX.toFixed(1)}, ${agoraZ.toFixed(1)})`);
       }
     }
     
     // Regenerate field with multiplayer seed
-    console.log(`🗺️ Regenerating field with seed ${mapSeed}...`);
     // Resolve numeric field dimensions from preset string
     const dims = (typeof fieldSize === 'string')
       ? (this.getFieldDimensions(fieldSize) || { width: 128, height: 128 })
       : { width: fieldSize, height: fieldSize };
+    
+    // console.log(`🗺️ Regenerating field with seed ${mapSeed}, size: ${fieldSize} (${dims.width}x${dims.height})`);
+    // console.log(`🎲 Field creation params:`, { seed: mapSeed, fieldSize, rawSettings: settings });
     // Keep reference to old field so we can dispose its terrain meshes
     const oldField = window.liveField;
     
@@ -1890,6 +2139,7 @@ const Lobby = {
       height: dims.height,
       seed: mapSeed
     });
+    
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
     }
@@ -1897,14 +2147,10 @@ const Lobby = {
     // CRITICAL: Apply current LOD settings to new field immediately!
     if (window.hud && window.hud.getCurrentLODMultiplier) {
       const currentMultiplier = window.hud.getCurrentLODMultiplier();
-      const savedLOD = localStorage.getItem('lodLevel');
-      const lodLevel = savedLOD ? parseInt(savedLOD) : 50;
       
       window.liveField.originalLoadDistance = 4;
       const newLoadDistance = Math.round(4 * currentMultiplier);
       window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
-      
-      console.log(`🗺️ New multiplayer field initialized with LOD ${lodLevel}% → chunk distance: ${window.liveField.currentLoadDistance}`);
     }
     
     // Re-stretch the table to the new field dimensions (matches initial load order)
@@ -1913,7 +2159,6 @@ const Lobby = {
     }
     // Force camera limits to recalc for new field size
     window._cameraLimitsSet = false;
-    console.log(`✅ Field regenerated with seed ${mapSeed}`);
     
     // Position camera at spawn location
     if (window.gfx && window.gfx.camera && window.gfx.cameraTarget) {
@@ -1930,12 +2175,10 @@ const Lobby = {
         // Too far, snap immediately
         window.gfx.cameraTarget.position.x = agoraX;
         window.gfx.cameraTarget.position.z = agoraZ;
-        console.log(`📷 Camera snapped to spawn: (${agoraX.toFixed(1)}, ${agoraZ.toFixed(1)}) - distance was ${distance.toFixed(1)}`);
       } else {
         // Close enough, smooth transition via anchor
         window.gfx.cameraTarget.position.x = agoraX;
         window.gfx.cameraTarget.position.z = agoraZ;
-        console.log(`📷 Camera smoothly moved to spawn: (${agoraX.toFixed(1)}, ${agoraZ.toFixed(1)})`);
       }
       
       window.gfx.cameraTarget.position.y = 9;
@@ -1947,10 +2190,22 @@ const Lobby = {
         window.cameraAnchor.z = agoraZ;
       }
       
-      // Reset camera rotation to default viewing angle
-      window.gfx.camera.alpha = -2.5; // Horizontal rotation
-      window.gfx.camera.beta = 0.9;   // Vertical angle (looking slightly down)
-      window.gfx.camera.radius = 80;  // Zoom distance
+      // Reset camera rotation to look at map center
+      // Calculate map center
+      const mapCenterX = (window.liveField.width / 2) * TILE_SIZE;
+      const mapCenterZ = (window.liveField.height / 2) * TILE_SIZE;
+      
+      // Calculate angle from spawn to center
+      const dx = mapCenterX - agoraX;
+      const dz = mapCenterZ - agoraZ;
+      const angleToCenter = Math.atan2(dx, dz);
+      
+      // Set camera to face center with standard viewing angle
+      if (window.gfx.camera) {
+        window.gfx.camera.alpha = angleToCenter + Math.PI; // +PI because camera looks backward
+        window.gfx.camera.beta = 0.9;   // Vertical angle (looking slightly down)
+        window.gfx.camera.radius = 80;  // Zoom distance
+      }
       
       // Ensure camera controls are enabled
       if (window.gfx.camera.attachControl) {
@@ -1983,37 +2238,43 @@ const Lobby = {
       window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
     }
     
-    // Initialize players array with proper names and colors (MUST use same reference)
-    const players = [window.player];
+    // Initialize players array with proper names and colors
+    // CRITICAL: Build players array in SORTED ORDER so both clients have identical ordering
+    const players = [];
     
-    console.log(`🔍 Creating players array - window.player.id: ${window.player.id}`);
     
-    // Create opponent player objects for each connected peer (in sorted order)
-    this.connectedPlayers.forEach((player, index) => {
-      const playerId = player.id || player;
-      const playerName = player.name || `Player ${index + 2}`;
-      const playerColor = player.color || this.getPlayerColor(index + 1);
+    // Iterate through ALL player IDs in sorted order (including local player)
+    allPlayerIds.forEach((normalizedId, index) => {
+      const spawnPos = spawnPositions[index];
       
-      // Get the sorted index for this opponent
-      const opponentIndex = allPlayerIds.indexOf(playerId);
-      const spawnPos = spawnPositions[opponentIndex];
-      
-      const opponent = new window.OpponentPlayer({
-        id: playerId,
-        name: playerName,
-        gameType: gameType,
-        color: playerColor,
-        startingResources: { food: 100, wood: 50, stone: 25, magic: 10 },
-        agora: spawnPos,
-        basePosition: { x: spawnPos.x, z: spawnPos.y }, // For AI/opponent logic
-        isAI: false
-      });
-      players.push(opponent);
-      console.log(`👤 Added REMOTE opponent: ${playerName} at (${spawnPos.x}, ${spawnPos.y})`);
+      if (normalizedId === normalizedLocalId) {
+        // This is the local player
+        players.push(window.player);
+      } else {
+        // This is a remote opponent
+        const playerMeta = this.connectedPlayers.find(p => normalizeId(p.id || p) === normalizedId);
+        const playerName = playerMeta?.name || `Player ${index + 1}`;
+        const playerColor = playerMeta?.color || this.getPlayerColor(index);
+        const fullOpponentId = playerMeta ? (playerMeta.id || playerMeta) : normalizedId;
+        
+        const opponent = new window.OpponentPlayer({
+          id: fullOpponentId,
+          name: playerName,
+          gameType: gameType,
+          color: playerColor,
+          startingResources: { food: 100, wood: 50, stone: 25, magic: 10 },
+          agora: spawnPos,
+          basePosition: { x: spawnPos.x, z: spawnPos.y },
+          isAI: false
+        });
+        players.push(opponent);
+      }
     });
     
     // Create Match instance to manage the multiplayer game
-    console.log(`🎮 Creating match instance with ${players.length} players...`);
+    
+    // CRITICAL: Normalize localPlayerId to match unit ownership format (last 6 chars)
+    const normalizedLocalPlayerId = localPlayerId.length > 6 ? localPlayerId.slice(-6) : localPlayerId;
     
     const matchOptions = {
       id: this.currentLobbyId,
@@ -2021,8 +2282,8 @@ const Lobby = {
       mapSeed: mapSeed,
       mapSize: fieldSize,
       players: players,
-      localPlayerId: localPlayerId,
-      hostId: this.isHost ? localPlayerId : null,
+      localPlayerId: normalizedLocalPlayerId,
+      hostId: this.isHost ? normalizedLocalPlayerId : null,
       victoryCondition: 'elimination',
       timeLimit: 0 // No time limit by default
     };
@@ -2052,27 +2313,39 @@ const Lobby = {
       maxPlayers: config.maxPlayers
     });
     
-    console.log(`✅ Match and game instances created!`);
+    
+    // CRITICAL: Clear any neutral units that spawned in menu scene
+    if (window.gameUnits) {
+      const neutralUnitsToRemove = window.gameUnits.filter(u => u.owner === 'neutral');
+      neutralUnitsToRemove.forEach(unit => {
+        if (window.destroyUnit) {
+          window.destroyUnit(unit);
+        }
+      });
+      if (neutralUnitsToRemove.length > 0) {
+        console.log(`🗑️ Removed ${neutralUnitsToRemove.length} neutral units from menu scene`);
+      }
+    }
     
     // Initialize the game to spawn units and buildings
     if (window.game && window.game.init) {
-      console.log('🎮 Initializing game (spawning units)...');
-      console.log(`🔍 Player ID before spawning: ${window.player.id}`);
-      console.log(`🔍 game.players array:`, window.game.players.map(p => ({id: p.id, name: p.name, isPlayer: p === window.player})));
+      // console.log('🎮 Initializing game (spawning units)...');
+      // console.log(`🔍 Player ID before spawning: ${window.player.id}`);
+      // console.log(`🔍 game.players array:`, window.game.players.map(p => ({id: p.id, name: p.name, isPlayer: p === window.player})));
       
       // BEFORE game.init - check state
-      console.log(`🔍 BEFORE game.init():`);
-      console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
-      console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
-      console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
+      // console.log(`🔍 BEFORE game.init():`);
+      // console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
+      // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
+      // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
       window.game.init();
       
       // AFTER game.init - check state
-      console.log(`🔍 AFTER game.init():`);
-      console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
-      console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
-      console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
+      // console.log(`🔍 AFTER game.init():`);
+      // console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
+      // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
+      // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
       if (window.playerBuildings && window.playerBuildings.length > 0) {
         console.log(`  - Buildings:`, window.playerBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));
@@ -2086,9 +2359,9 @@ const Lobby = {
       // Verify units have correct owner and are in player.units
       if (window.player.units && window.player.units.length > 0) {
         const firstUnit = window.player.units[0];
-        console.log(`✅ Local player has ${window.player.units.length} units`);
-        console.log(`  - First unit: type=${firstUnit.type}, owner=${firstUnit.owner}, id=${firstUnit.id}`);
-        console.log(`  - Owner matches player ID: ${firstUnit.owner === window.player.id}`);
+        // console.log(`✅ Local player has ${window.player.units.length} units`);
+        // console.log(`  - First unit: type=${firstUnit.type}, owner=${firstUnit.owner}, id=${firstUnit.id}`);
+        // console.log(`  - Owner matches player ID: ${firstUnit.owner === window.player.id}`);
       } else {
         console.warn('❌ No units in window.player.units array!');
         console.log(`  - Checking window.gameUnits for any units...`);
@@ -2110,22 +2383,24 @@ const Lobby = {
     // Start the match (enters LOADING state)
     window.currentMatch.start();
     
-    // If testing alone, start immediately
+    // Signal that local player has finished loading (after all initialization is complete)
+    // This will trigger the countdown when all remote players are also loaded
+    setTimeout(() => {
+      if (window.currentMatch && window.currentMatch.onLocalPlayerLoaded) {
+        // console.log('✅ Local player finished all initialization - signaling loaded');
+        window.currentMatch.onLocalPlayerLoaded();
+      }
+    }, 500); // Small delay to ensure async model loading has started
+    
+    // If testing alone, fallback to starting immediately
     if (!window.isMultiplayer || this.connectedPlayers.length === 0) {
-      console.log('🎮 Single player testing - starting match immediately');
-      setTimeout(() => {
-        if (window.currentMatch && window.currentMatch.beginPlaying) {
-          window.currentMatch.beginPlaying();
-        }
-        
-        // LOD already updated by forceLoadChunks - no need to call again
-      }, 100); // Small delay to let everything initialize
+      console.log('🎮 Single player testing - will auto-start after countdown');
     }
     
     // Clear any selections from menu scene
     if (window.player && window.player.clearSelection) {
       window.player.clearSelection();
-      console.log('🗑️ Cleared menu scene selections before match start (multiplayer)');
+      // console.log('🗑️ Cleared menu scene selections before match start (multiplayer)');
     }
     
     // Clear pending seed
@@ -2157,7 +2432,7 @@ const Lobby = {
     // Signal that local player has finished loading
     setTimeout(() => {
       if (window.currentMatch && window.currentMatch.onLocalPlayerLoaded) {
-        console.log('📡 Signaling local player loaded');
+        // console.log('📡 Signaling local player loaded');
         window.currentMatch.onLocalPlayerLoaded();
       }
     }, 500); // 500ms delay to ensure all assets are loaded
@@ -2184,12 +2459,12 @@ const Lobby = {
       positions.push({ x: margin, y: margin }); // Bottom-left
       positions.push({ x: mapSize - margin, y: mapSize - margin }); // Top-right
     } else if (playerCount === 3) {
-      // FFA 3: Triangle formation
+      // 3 players: Triangle formation
       positions.push({ x: margin, y: Math.round(mapSize / 2) }); // Left
       positions.push({ x: mapSize - margin, y: margin }); // Bottom-right
       positions.push({ x: mapSize - margin, y: mapSize - margin }); // Top-right
     } else if (playerCount === 4) {
-      // FFA 4 or 2v2: Square corners
+      // 4 players: Square corners (KOTH, Teams, Adventure)
       positions.push({ x: margin, y: margin }); // Bottom-left
       positions.push({ x: mapSize - margin, y: margin }); // Bottom-right
       positions.push({ x: margin, y: mapSize - margin }); // Top-left

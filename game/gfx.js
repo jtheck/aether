@@ -611,7 +611,7 @@
   gfx.forceLoadChunks = function(x, z) {
     if (!liveField) return;
     
-    console.log(`🗺️ Force-loading chunks around (${x.toFixed(1)}, ${z.toFixed(1)})`);
+    // console.log(`🗺️ Force-loading chunks around (${x.toFixed(1)}, ${z.toFixed(1)})`);
     
     // Clear the chunk queue AND model queue to prioritize immediate loading
     chunkQueue.length = 0;
@@ -658,7 +658,7 @@
       }
     }
     
-    console.log(`✅ Force-loaded ${meshesLoaded} chunks, queued ${modelLoadQueue.length} models`);
+    // console.log(`✅ Force-loaded ${meshesLoaded} chunks, queued ${modelLoadQueue.length} models`);
     
     // Process all queued models immediately with promises
     const modelPromises = [];
@@ -704,12 +704,12 @@
     
     // Wait for all models to load, then update LOD
     Promise.all(modelPromises).then(() => {
-      console.log(`✅ Loaded ${modelPromises.length} models for force-loaded chunks`);
-      console.log(`📊 LOD system has ${lodModels.length} models total`);
+      // console.log(`✅ Loaded ${modelPromises.length} models for force-loaded chunks`);
+      // console.log(`📊 LOD system has ${lodModels.length} models total`);
       
       // CRITICAL: Force LOD update IMMEDIATELY after placing all models
       const camPos = {x, y: 9, z};
-      console.log(`🎯 Camera position for LOD update: (${x.toFixed(1)}, 9, ${z.toFixed(1)})`);
+      // console.log(`🎯 Camera position for LOD update: (${x.toFixed(1)}, 9, ${z.toFixed(1)})`);
       
       // Debug: Check first few models
       let closeCount = 0, mediumCount = 0, farCount = 0;
@@ -725,16 +725,16 @@
         else farCount++;
       });
       
-      console.log(`📐 Distance check: ${closeCount} close, ${mediumCount} medium, ${farCount} far (LOD dist: ${lodModels[0]?.lodDistance || 'unknown'})`);
+      // console.log(`📐 Distance check: ${closeCount} close, ${mediumCount} medium, ${farCount} far (LOD dist: ${lodModels[0]?.lodDistance || 'unknown'})`);
       
       updateLOD(camPos);
-      console.log('🎨 LOD state updated - close models should now be visible!');
+      // console.log('🎨 LOD state updated - close models should now be visible!');
     });
   };
   
   // Clear all LOD models (called when starting a new match)
   gfx.clearLODModels = function() {
-    console.log('🗑️ Clearing LOD system for new match...');
+    // console.log('🗑️ Clearing LOD system for new match...');
     
     // Dispose billboards before clearing
     lodModels.forEach(lod => {
@@ -757,7 +757,7 @@
     // Clear any pending model loads
     modelLoadQueue.length = 0;
     
-    console.log(`✅ LOD system reset complete - preserved menu LOD at ${loadingLODCurrent}%`);
+    // console.log(`✅ LOD system reset complete - preserved menu LOD at ${loadingLODCurrent}%`);
   };
 
   // Update LOD distances for graphics system
@@ -919,7 +919,7 @@ let pov2 = 240;
     loadingLODTarget = targetLOD;
     loadingLODActive = false; // No ramping needed - already at target
     
-    console.log(`🚀 Game starting! Maintaining menu LOD at ${targetLOD}% (no ramping - calibration scene)`);
+    // console.log(`🚀 Game starting! Maintaining menu LOD at ${targetLOD}% (no ramping - calibration scene)`);
   }
   
   // Expose function to start LOD ramp when game begins
@@ -1043,9 +1043,18 @@ let pov2 = 240;
         // Only place one model per tile - pick randomly from available models
         let selectedModel = null;
         
+        // CRITICAL: Use deterministic RNG from field for multiplayer sync
+        const fieldSeed = window.liveField?.seed || 12345;
+        const gridX = chunk.startX + localX;
+        const gridZ = chunk.startZ + localZ;
+        let hash = fieldSeed + gridX * 73856093 + gridZ * 19349663;
+        hash = ((hash << 13) ^ hash) >>> 0;
+        hash = (hash * (hash * hash * 15731 + 789221) + 1376312589) >>> 0;
+        const deterministicRandom = (hash % 10000) / 10000; // 0-1
+        
         // Go through models and test chance, but stop at first success
         for (const modelRule of rule.models) {
-          if (Math.random() < modelRule.chance) {
+          if (deterministicRandom < modelRule.chance) {
             selectedModel = modelRule;
             break; // Only place one model per tile
           }
@@ -1053,17 +1062,20 @@ let pov2 = 240;
         
         // If a model was selected, place it
         if (selectedModel) {
-          // Add some randomness to position within tile
-          const offsetX = (Math.random() - 0.5) * 0.6;
-          const offsetZ = (Math.random() - 0.5) * 0.6;
+          // Add some randomness to position within tile (deterministic)
+          hash = (hash * 1664525 + 1013904223) >>> 0;
+          const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
+          hash = (hash * 1664525 + 1013904223) >>> 0;
+          const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
           const position = new BABYLON.Vector3(
             worldX + offsetX, 
             0, 
             worldZ + offsetZ
           );
           
-          // Random rotation
-          const rotation = Math.random() * Math.PI * 2;
+          // Random rotation (deterministic)
+          hash = (hash * 1664525 + 1013904223) >>> 0;
+          const rotation = ((hash % 628) / 100); // 0 to 2π
           
           // Initialize billboard atlas if needed
           initBillboardAtlas(scene);
@@ -1292,7 +1304,7 @@ let pov2 = 240;
     // Set initial LOD to saved setting for consistent menu rendering
     if (window.hud && window.hud.updateLODDistances) {
       window.hud.updateLODDistances(menuLOD);
-      console.log(`🎚️ Menu LOD initialized to saved setting: ${menuLOD}%`);
+      // console.log(`🎚️ Menu LOD initialized to saved setting: ${menuLOD}%`);
     }
     
     // Load textures now that we have a scene
@@ -1307,7 +1319,7 @@ let pov2 = 240;
     // Start render loop immediately - don't wait for scene.whenReadyAsync()
     // This allows camera panning/interaction while assets load
     gfx.engine.runRenderLoop(mainRenderLoop);
-    console.log('🎬 Render loop started - camera interactive immediately');
+    // console.log('🎬 Render loop started - camera interactive immediately');
   
     gfx.scene.whenReadyAsync().then(function() {
       // Add world axis after scene is ready
@@ -1345,7 +1357,7 @@ let pov2 = 240;
         
         // Only initialize 3D HUD if USE_3D_HUD is true
         if (USE_3D_HUD) {
-          console.log("🎮 3D HUD initialized - main menu items will be created when first shown");
+          // console.log("🎮 3D HUD initialized - main menu items will be created when first shown");
         }
       }
 
@@ -1355,7 +1367,7 @@ let pov2 = 240;
         // console.log("🎯 Lasso selection system initialized");
       }
       
-      console.log('✅ Scene fully loaded and ready');
+      // console.log('✅ Scene fully loaded and ready');
 
     });
   }
@@ -1752,7 +1764,7 @@ let pov2 = 240;
     if (gfx.table && gfx.table.parts && gfx.table.parts.SW && gfx.stretchTable) {
       // Table will be stretched properly when field loads, this is just initial positioning
       // Using default 128x128 field size for initial frame
-      console.log('📐 Pre-positioning table for clean initial render');
+      // console.log('📐 Pre-positioning table for clean initial render');
     }
     
   // Store shadow state globally
@@ -2321,7 +2333,7 @@ let pov2 = 240;
     // Initialize camera anchor (desired target position)
     window.cameraAnchor = gfx.cameraTarget.position.clone();
     
-    console.log(`📷 Camera initialized at player agora: (${initialX}, ${initialZ})`);
+    // console.log(`📷 Camera initialized at player agora: (${initialX}, ${initialZ})`);
     // Attach camera controls but we will disable built-in pointer inputs to avoid conflicts with custom gestures
     camera.attachControl(gfx.canvas, false); // false = don't prevent default events
     

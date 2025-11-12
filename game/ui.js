@@ -127,7 +127,7 @@ function getRandomColor() {
         // Store the new color for persistence (optional)
         window.currentPlayerColor = newColor;
         
-        console.log('Player color updated to:', newColor);
+        // console.log('Player color updated to:', newColor);
       });
     }
 
@@ -779,9 +779,9 @@ function getRandomColor() {
       }
     };
     
-    // Setup other lobby types (FFA, KoTH, etc.) with similar structure
+    // Setup other lobby types (KoTH, Teams) with similar structure
     function setupOtherLobbies() {
-      const lobbyTypes = ['ffa_lobby', 'koth_lobby', 'teams_lobby'];
+      const lobbyTypes = ['koth_lobby', 'teams_lobby'];
       
       lobbyTypes.forEach(lobbyId => {
         const lobbyEl = document.getElementById(lobbyId);
@@ -873,7 +873,7 @@ function getRandomColor() {
     function getGameTypeName(type) {
       const names = {
         'onevsone': '1v1',
-        'ffa': 'Free For All',
+        'adventure': 'Adventure',
         'koth': 'King of the Hill',
         'teams': '2v2 Teams'
       };
@@ -883,7 +883,7 @@ function getRandomColor() {
     function getGameTypeDescription(type) {
       const descriptions = {
         'onevsone': 'One-on-one strategic battle',
-        'ffa': 'Everyone fights everyone!',
+        'adventure': 'Co-op exploration and building',
         'koth': 'Control the center to win',
         'teams': 'Team up with an ally against rivals'
       };
@@ -893,7 +893,7 @@ function getRandomColor() {
     function getMinPlayersForGameType(type) {
       const minPlayers = {
         'onevsone': 1, // 1 opponent
-        'ffa': 1,
+        'adventure': 1,
         'koth': 1,
         'teams': 1
       };
@@ -907,7 +907,7 @@ function getRandomColor() {
       // Hide all menus
       const allMenus = [
         'main_menu', 'settings_menu', 'player_menu', 'trophy_menu', 
-        'ingame_menu', 'adventure_lobby', 'onevsone_lobby', 'ffa_lobby', 
+        'ingame_menu', 'adventure_lobby', 'onevsone_lobby', 
         'koth_lobby', 'teams_lobby'
       ];
       allMenus.forEach(id => {
@@ -927,7 +927,6 @@ function getRandomColor() {
         const gameTypeMap = {
           'adventure_lobby': 'adventure',
           'onevsone_lobby': 'onevsone',
-          'ffa_lobby': 'ffa',
           'koth_lobby': 'koth',
           'teams_lobby': 'teams'
         };
@@ -964,7 +963,7 @@ function getRandomColor() {
       }
       players.push(window.opponent);
       
-      console.log(`🎮 Starting ${gameType} multiplayer game`);
+      // console.log(`🎮 Starting ${gameType} multiplayer game`);
       
       // Initialize game
       if (window.game) {
@@ -991,7 +990,7 @@ function getRandomColor() {
     function getOpponentColorForGameType(type) {
       const colors = {
         'onevsone': {primary: '#0066cc', secondary: '#004499'},
-        'ffa': {primary: '#ff4444', secondary: '#cc0000'},
+        'adventure': {primary: '#00cc66', secondary: '#009944'},
         'koth': {primary: '#ffaa00', secondary: '#cc8800'},
         'teams': {primary: '#00aa00', secondary: '#008800'}
       };
@@ -1001,7 +1000,7 @@ function getRandomColor() {
     function getMaxPlayersForGameType(type) {
       const maxPlayers = {
         'onevsone': 2,
-        'ffa': 4,
+        'adventure': 4,
         'koth': 4,
         'teams': 4
       };
@@ -1145,7 +1144,6 @@ function getRandomColor() {
     document.getElementById('ingame_menu').style.display = 'none';
     document.getElementById('adventure_lobby').style.display = 'none';
     document.getElementById('onevsone_lobby').style.display = 'none';
-    document.getElementById('ffa_lobby').style.display = 'none';
     document.getElementById('koth_lobby').style.display = 'none';
     document.getElementById('teams_lobby').style.display = 'none';
     
@@ -1154,7 +1152,6 @@ function getRandomColor() {
       const gameTypeMap = {
         'adventure_lobby': 'adventure',
         'onevsone_lobby': 'onevsone',
-        'ffa_lobby': 'ffa',
         'koth_lobby': 'koth',
         'teams_lobby': 'teams'
       };
@@ -1689,7 +1686,6 @@ function getRandomColor() {
                       target: { x: worldPos.x, y: 0, z: worldPos.z }
                     };
                     window.currentMatch.submitCommand(command);
-                    console.log(`📡 Submitted move command for ${unitIds.length} units to (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
                   } else {
                     // SINGLE PLAYER: Apply walk behavior directly to each unit
                     selectedUnits.forEach((unit, index) => {

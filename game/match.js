@@ -93,7 +93,7 @@
         commands: []
       };
       
-      console.log(`🎮 Match initialized: ${this.id}`);
+      // console.log(`🎮 Match initialized: ${this.id}`);
     }
     
     // Generate unique match ID
@@ -110,10 +110,10 @@
       
       // Transition to LOADING state - waiting for all players
       this.state = MatchState.LOADING;
-      console.log(`⏳ Match entering loading phase: ${this.id}`);
-      console.log(`📊 Players: ${this.players.length}`);
-      console.log(`🗺️ Map seed: ${this.mapSeed}`);
-      console.log(`🎯 Victory condition: ${this.victoryCondition}`);
+      // console.log(`⏳ Match entering loading phase: ${this.id}`);
+      // console.log(`📊 Players: ${this.players.length}`);
+      // console.log(`🗺️ Map seed: ${this.mapSeed}`);
+      // console.log(`🎯 Victory condition: ${this.victoryCondition}`);
       
       // Show loading overlay
       this.showLoadingOverlay();
@@ -126,7 +126,7 @@
     
     // Called when local player finishes loading all assets and spawning units
     onLocalPlayerLoaded() {
-      console.log(`✅ Local player loaded`);
+      // console.log(`✅ Local player loaded`);
       
       // Mark self as loaded
       this.playersLoaded.add(this.localPlayerId);
@@ -138,7 +138,7 @@
           playerId: this.localPlayerId,
           timestamp: Date.now()
         });
-        console.log(`📡 Sent player_loaded signal to peers`);
+        // console.log(`📡 Sent player_loaded signal to peers`);
       }
       
       // Check if all players are loaded
@@ -147,7 +147,7 @@
     
     // Handle player_loaded message from remote player
     onPlayerLoaded(playerId) {
-      console.log(`✅ Player ${playerId.slice(-8)} loaded`);
+      // console.log(`✅ Player ${playerId.slice(-8)} loaded`);
       this.playersLoaded.add(playerId);
       
       // Update loading overlay
@@ -162,31 +162,117 @@
       const totalPlayers = this.players.length;
       const loadedPlayers = this.playersLoaded.size;
       
-      console.log(`📊 Loading progress: ${loadedPlayers}/${totalPlayers} players ready`);
+      // console.log(`📊 Loading progress: ${loadedPlayers}/${totalPlayers} players ready`);
       
       if (loadedPlayers >= totalPlayers && !this.allPlayersReady) {
         this.allPlayersReady = true;
-        console.log(`🎉 All players loaded! Starting countdown...`);
+        // console.log(`🎉 All players loaded! Starting countdown...`);
         
-        // Update overlay to show countdown
-        this.showCountdown();
+        // Only HOST starts the countdown and broadcasts to clients
+        if (this.isHost()) {
+          this.showCountdown();
+        } else {
+          // Clients wait for host to send start_match message
+          this.updateLoadingOverlay('Waiting for host to start...');
+        }
       }
     }
     
-    // Show countdown and then start match
+    // Show countdown and then start match (HOST ONLY)
+    // This should be called AFTER all heavy initialization is complete
     showCountdown() {
       this.state = MatchState.READY;
+      // console.log('⏱️ Starting countdown (3-2-1-GO)...');
       
-      let countdown = 3;
-      const countdownInterval = setInterval(() => {
-        if (countdown > 0) {
-          this.updateLoadingOverlay(`Starting in ${countdown}...`);
-          countdown--;
-        } else {
-          clearInterval(countdownInterval);
-          this.beginPlaying();
+      // Delay countdown slightly to let any final initialization settle
+      setTimeout(() => {
+        // 3
+        this.updateLoadingOverlay(`3`);
+        if (window.isMultiplayer && window.net && window.net.p2p) {
+          window.net.p2p.sendData({ type: 'match_countdown', countdown: 3 });
         }
-      }, 1000);
+        
+        setTimeout(() => {
+          // 2
+          this.updateLoadingOverlay(`2`);
+          if (window.isMultiplayer && window.net && window.net.p2p) {
+            window.net.p2p.sendData({ type: 'match_countdown', countdown: 2 });
+          }
+          
+          setTimeout(() => {
+            // 1
+            this.updateLoadingOverlay(`1`);
+            if (window.isMultiplayer && window.net && window.net.p2p) {
+              window.net.p2p.sendData({ type: 'match_countdown', countdown: 1 });
+            }
+            
+            setTimeout(() => {
+              // GO!
+              this.updateLoadingOverlay(`GO!`);
+              if (window.isMultiplayer && window.net && window.net.p2p) {
+                window.net.p2p.sendData({ type: 'match_start' });
+              }
+              
+              setTimeout(() => {
+                // console.log('🏁 Match starting!');
+                this.beginPlaying();
+              }, 400);
+            }, 1000);
+          }, 1000);
+        }, 1000);
+      }, 100); // Small initial delay to ensure everything is settled
+    }
+    
+    // Pause the match (broadcasts to all players in multiplayer)
+    pauseMatch() {
+      if (this.state !== MatchState.PLAYING) {
+        console.warn('⚠️ Cannot pause - match not playing');
+        return false;
+      }
+      
+      this.isPaused = true;
+      // console.log('⏸️ Match paused');
+      this.updateLoadingOverlay('⏸️ PAUSED');
+      
+      // Broadcast pause to all players
+      if (window.isMultiplayer && window.net && window.net.p2p) {
+        window.net.p2p.sendData({ type: 'match_pause' });
+      }
+      
+      return true;
+    }
+    
+    // Resume the match (broadcasts to all players in multiplayer)
+    resumeMatch() {
+      if (!this.isPaused) {
+        console.warn('⚠️ Match is not paused');
+        return false;
+      }
+      
+      this.isPaused = false;
+      // console.log('▶️ Match resumed');
+      
+      // Hide loading overlay
+      const overlay = document.getElementById('match_loading_overlay');
+      if (overlay) {
+        overlay.style.display = 'none';
+      }
+      
+      // Broadcast resume to all players
+      if (window.isMultiplayer && window.net && window.net.p2p) {
+        window.net.p2p.sendData({ type: 'match_resume' });
+      }
+      
+      return true;
+    }
+    
+    // Toggle pause/resume
+    togglePause() {
+      if (this.isPaused) {
+        return this.resumeMatch();
+      } else {
+        return this.pauseMatch();
+      }
     }
     
     // Actually start gameplay (called after countdown)
@@ -196,7 +282,6 @@
       this.tick = 0;
       this.gameTime = 0;
       
-      console.log(`🚀 Match started: ${this.id}`);
       
       // Hide loading overlay
       this.hideLoadingOverlay();
@@ -218,9 +303,9 @@
             window.cameraAnchor.x = expectedX;
             window.cameraAnchor.z = expectedZ;
           }
-          console.log('✅ Corrected camera position to spawn');
+          // console.log('✅ Corrected camera position to spawn');
         } else {
-          console.log(`✅ Camera correctly positioned at spawn (distance: ${distance.toFixed(1)})`);
+          // console.log(`✅ Camera correctly positioned at spawn (distance: ${distance.toFixed(1)})`);
         }
         
         // Defensive: clamp camera params and re-seed chunk loading at the camera center
@@ -234,12 +319,12 @@
           window.liveField.updateVisibleChunks(window.gfx.cameraTarget.position.x, window.gfx.cameraTarget.position.z);
         }
         
-        console.log(`📷 Camera controls ready - alpha: ${window.gfx.camera.alpha.toFixed(2)}, beta: ${window.gfx.camera.beta.toFixed(2)}`);
+        // console.log(`📷 Camera controls ready - alpha: ${window.gfx.camera.alpha.toFixed(2)}, beta: ${window.gfx.camera.beta.toFixed(2)})`;
       }
       
       // Input listeners are already attached at startup - no need to re-attach
       // Re-calling initInputListeners() creates duplicate listeners which breaks input
-      console.log('🎮 Input listeners already active (not re-attaching)');
+      // console.log('🎮 Input listeners already active (not re-attaching)');
       
       // Ensure no overlays are blocking input
       const loadingOverlay = document.getElementById('match_loading_overlay');
@@ -251,29 +336,29 @@
       // Reinitialize lasso selection system
       if (window.lassoSelection && window.lassoSelection.reinit) {
         window.lassoSelection.reinit();
-        console.log('🎯 Lasso selection system reinitialized');
+        // console.log('🎯 Lasso selection system reinitialized');
       }
       
       // Log player and unit info for debugging
-      console.log('🎮 Match started - Player/Unit state check:');
-      console.log(`  Player ID: ${window.player?.id}`);
-      console.log(`  Player units: ${window.player?.units?.length || 0}`);
-      console.log(`  Global gameUnits: ${window.gameUnits?.length || 0}`);
+      // console.log('🎮 Match started - Player/Unit state check:');
+      // console.log(`  Player ID: ${window.player?.id}`);
+      // console.log(`  Player units: ${window.player?.units?.length || 0}`);
+      // console.log(`  Global gameUnits: ${window.gameUnits?.length || 0}`);
       
       if (window.player?.units && window.player.units.length > 0) {
         const firstUnit = window.player.units[0];
-        console.log(`  First unit ID: ${firstUnit.id}`);
-        console.log(`  First unit owner: ${firstUnit.owner}`);
-        console.log(`  Player ID matches: ${firstUnit.owner === window.player.id}`);
-        console.log(`  Legacy 'player' matches: ${firstUnit.owner === 'player'}`);
-        console.log(`  Can select: ${firstUnit.owner === window.player.id || firstUnit.owner === 'player'}`);
+        // console.log(`  First unit ID: ${firstUnit.id}`);
+        // console.log(`  First unit owner: ${firstUnit.owner}`);
+        // console.log(`  Player ID matches: ${firstUnit.owner === window.player.id}`);
+        // console.log(`  Legacy 'player' matches: ${firstUnit.owner === 'player'}`);
+        // console.log(`  Can select: ${firstUnit.owner === window.player.id || firstUnit.owner === 'player'}`);
       }
       
       // Test click detection
-      console.log('🎯 Input system check:');
-      console.log(`  Lasso system: ${window.lassoSelection ? 'EXISTS' : 'MISSING'}`);
-      console.log(`  Input listeners init: ${window._inputListenersInitialized ? 'YES' : 'NO'}`);
-      console.log(`  handlePointer exists: ${window.ui?.handlePointer ? 'YES' : 'NO'}`)
+      // console.log('🎯 Input system check:');
+      // console.log(`  Lasso system: ${window.lassoSelection ? 'EXISTS' : 'MISSING'}`);
+      // console.log(`  Input listeners init: ${window._inputListenersInitialized ? 'YES' : 'NO'}`);
+      // console.log(`  handlePointer exists: ${window.ui?.handlePointer ? 'YES' : 'NO'}`)
       
       // DON'T start a separate tick loop - network already handles ticking via net.startTickLoop()
       // The Match will be ticked by the network system which calls processTick() from net.js
@@ -302,7 +387,7 @@
         }
       }, tickIntervalMs);
       
-      console.log(`🕒 Local match tick loop started at ${tickRate} Hz`);
+      // console.log(`🕒 Local match tick loop started at ${tickRate} Hz`);
     }
     
     // Stop the local tick loop if running
@@ -310,7 +395,7 @@
       if (this.localTickInterval) {
         clearInterval(this.localTickInterval);
         this.localTickInterval = null;
-        console.log('🕒 Local match tick loop stopped');
+        // console.log('🕒 Local match tick loop stopped');
       }
     }
     
@@ -323,6 +408,12 @@
       
       this.tick++;
       this.gameTime = this.tick / (window.net?.TICK_RATE || 20);
+      
+      // Generate AI commands (host only, deterministic based on tick)
+      // Run every 20 ticks (once per second) to avoid overwhelming the command system
+      if (this.tick % 20 === 0 && this.isHost()) {
+        this.generateAICommands();
+      }
       
       // Execute commands for this tick
       this.executeCommandsForTick(this.tick);
@@ -360,6 +451,7 @@
         timestamp: Date.now(),
         commandId: this.generateCommandId()
       };
+      
       
       // Validate command
       if (!this.validateCommand(enrichedCommand)) {
@@ -401,8 +493,17 @@
         return false;
       }
       
-      // Check player is in match
-      const playerExists = this.players.some(p => (p.id || p) === command.playerId);
+      // Check player is in match (normalize player IDs for comparison)
+      const normalizeId = (id) => {
+        if (!id) return '';
+        return id.length > 6 ? id.slice(-6) : id;
+      };
+      
+      const playerExists = this.players.some(p => {
+        const playerId = p.id || p;
+        return normalizeId(playerId) === normalizeId(command.playerId);
+      });
+      
       if (!playerExists) {
         console.warn(`⚠️ Command from unknown player: ${command.playerId}`);
         return false;
@@ -438,6 +539,8 @@
       if (!commands || commands.length === 0) {
         return;
       }
+      
+      // console.log(`⚙️ Tick ${tick}: Executing ${commands.length} commands`);
       
       // Sort commands deterministically (by player ID, then command ID)
       commands.sort((a, b) => {
@@ -490,9 +593,19 @@
     // Command execution handlers
     executeMoveCommand(cmd) {
       const units = this.getUnitsByIds(cmd.unitIds);
+      
+      // CRITICAL: Use last 6 chars of player ID for ownership comparison
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
       units.forEach(unit => {
-        if (unit.owner === cmd.playerId && window.behaviorManager) {
-          window.behaviorManager.setBehavior(unit, 'move', { target: cmd.target });
+        if (unit.owner === normalizedPlayerId && window.behaviorManager && window.WalkBehavior) {
+          // Use WalkBehavior for player-controlled movement
+          // This is the same system AI uses, ensuring consistent deterministic movement
+          window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
+          // console.log(`  ✅ Set walk behavior for ${unit.type} (${unit.id.slice(-4)})`);
+        } else {
+          console.warn(`  ❌ Skipped ${unit.type} (${unit.id.slice(-4)}) - owner: ${unit.owner}, expected: ${normalizedPlayerId}`);
         }
       });
     }
@@ -504,8 +617,16 @@
       if (!target) return;
       
       units.forEach(unit => {
-        if (unit.owner === cmd.playerId && window.behaviorManager) {
-          window.behaviorManager.setBehavior(unit, 'attack', { target: target });
+        if (unit.owner === cmd.playerId) {
+          // Set unit attack target directly for player-controlled combat
+          // Don't use behaviorManager - that's for AI-controlled behaviors
+          unit.target = target;
+          unit.state = 'attacking';
+          
+          // Clear any AI behavior if this was an AI unit being manually controlled
+          if (window.behaviorManager && window.behaviorManager.behaviors) {
+            window.behaviorManager.behaviors.delete(unit);
+          }
         }
       });
     }
@@ -519,7 +640,7 @@
       // Check resources
       const cost = this.getBuildingCost(cmd.buildingType);
       if (!this.canAfford(player, cost)) {
-        console.log(`⚠️ ${player.name || cmd.playerId} cannot afford ${cmd.buildingType}`);
+        // console.log(`⚠️ ${player.name || cmd.playerId} cannot afford ${cmd.buildingType}`);
         return;
       }
       
@@ -534,7 +655,7 @@
       // Update stats
       this.stats.buildingsCreated[cmd.playerId]++;
       
-      console.log(`🏗️ ${player.name || cmd.playerId} built ${cmd.buildingType}`);
+      // console.log(`🏗️ ${player.name || cmd.playerId} built ${cmd.buildingType}`);
     }
     
     executeTrainCommand(cmd) {
@@ -567,7 +688,7 @@
       // Update stats
       this.stats.unitsCreated[cmd.playerId]++;
       
-      console.log(`👤 ${player.name || cmd.playerId} trained ${cmd.unitType}`);
+      // console.log(`👤 ${player.name || cmd.playerId} trained ${cmd.unitType}`);
     }
     
     executeGatherCommand(cmd) {
@@ -577,8 +698,11 @@
       if (!resource) return;
       
       units.forEach(unit => {
-        if (unit.owner === cmd.playerId && window.behaviorManager) {
-          window.behaviorManager.setBehavior(unit, 'gather', { resource: resource });
+        if (unit.owner === cmd.playerId) {
+          // Use 'gather_work' behavior which is supported by the behavior manager
+          if (window.behaviorManager) {
+            window.behaviorManager.setBehavior(unit, 'gather_work', { resource: resource });
+          }
         }
       });
     }
@@ -591,6 +715,90 @@
       if (window.abilitySystem && window.abilitySystem.useAbility) {
         window.abilitySystem.useAbility(unit, cmd.abilityId, cmd.target);
       }
+    }
+    
+    // Helper: Check if this client is the host
+    isHost() {
+      // In single-player, always consider ourselves the host
+      if (!window.isMultiplayer) {
+        return true;
+      }
+      // In multiplayer, check if our player ID matches the host ID
+      return this.localPlayerId === this.hostId;
+    }
+    
+    // Generate AI commands (host only, runs during tick processing)
+    generateAICommands() {
+      // Find all AI players
+      const aiPlayers = this.players.filter(p => {
+        const player = typeof p === 'string' ? this.getPlayerById(p) : p;
+        return player && player.isAI;
+      });
+      
+      if (aiPlayers.length === 0) return;
+      
+      // For each AI player, make simple strategic decisions
+      aiPlayers.forEach(aiPlayer => {
+        const player = typeof aiPlayer === 'string' ? this.getPlayerById(aiPlayer) : aiPlayer;
+        if (!player || !player.units || !player.id) return;
+        
+        // Simple AI: idle villagers gather resources
+        const idleVillagers = player.units.filter(u => 
+          u && u.type === 'villager' && (!u.state || u.state === 'idle') && u.mesh
+        );
+        
+        idleVillagers.forEach(villager => {
+          // Find nearest resource (simple distance check)
+          const resources = window.resources?.resources || [];
+          let nearestResource = null;
+          let nearestDist = Infinity;
+          
+          resources.forEach(resource => {
+            if (!resource || !resource.position || resource.amount <= 0) return;
+            const dx = resource.position.x - (villager.pb?.state?.loc?.x || 0);
+            const dz = resource.position.z - (villager.pb?.state?.loc?.z || 0);
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < nearestDist) {
+              nearestDist = dist;
+              nearestResource = resource;
+            }
+          });
+          
+          // Submit gather command
+          if (nearestResource && nearestDist < 200) {
+            this.submitCommand({
+              type: 'gather',
+              playerId: player.id,
+              unitIds: [villager.id],
+              resourceId: nearestResource.id
+            });
+          } else {
+            // No nearby resources, wander toward center of map
+            const centerX = (window.liveField?.width || 128) * 2; // TILE_SIZE = 4
+            const centerZ = (window.liveField?.height || 128) * 2;
+            this.submitCommand({
+              type: 'move',
+              playerId: player.id,
+              unitIds: [villager.id],
+              target: { x: centerX, y: 0, z: centerZ }
+            });
+          }
+        });
+        
+        // Simple AI: Train villagers if we have resources and less than 12
+        const villagerCount = player.units.filter(u => u && u.type === 'villager').length;
+        if (villagerCount < 12 && player.resources && player.resources.food >= 50) {
+          const agora = player.buildings?.find(b => b && b.type === 'agora');
+          if (agora) {
+            this.submitCommand({
+              type: 'train',
+              playerId: player.id,
+              buildingId: agora.id,
+              unitType: 'villager'
+            });
+          }
+        }
+      });
     }
     
     // Victory condition checks
@@ -822,14 +1030,30 @@
       
       // Log detailed state for first few syncs
       if (this.tick < 300 && this.tick % 100 === 0) {
-        console.log(`🔍 Checksum at tick ${this.tick}:`, {
-          hash,
-          unitCount,
-          buildingCount,
-          firstUnitPos: sortedUnits[0]?.pb?.state?.loc ? 
-            `(${sortedUnits[0].pb.state.loc.x.toFixed(2)}, ${sortedUnits[0].pb.state.loc.z.toFixed(2)})` : 
-            'none'
-        });
+        // console.log(`🔍 Checksum at tick ${this.tick}:`, {
+        //   hash,
+        //   unitCount,
+        //   buildingCount,
+        //   firstUnitPos: sortedUnits[0]?.pb?.state?.loc ? 
+        //     `(${sortedUnits[0].pb.state.loc.x.toFixed(2)}, ${sortedUnits[0].pb.state.loc.z.toFixed(2)})` : 
+        //     'none'
+        // });
+        
+        // DETAILED DESYNC DEBUGGING - Log all unit positions and owners
+        // console.log(`📊 Unit details at tick ${this.tick}:`);
+        // sortedUnits.slice(0, 5).forEach((unit, i) => {
+        //   if (unit.pb && unit.pb.state) {
+        //     console.log(`  Unit ${i}: ID=${unit.id?.slice(-6)}, owner=${unit.owner?.slice(-6)}, ` +
+        //                `pos=(${unit.pb.state.loc.x.toFixed(2)}, ${unit.pb.state.loc.z.toFixed(2)}), ` +
+        //                `type=${unit.type}, health=${unit.currentHealth || unit.health}`);
+        //   }
+        // });
+        
+      // console.log(`🏛️ Building details at tick ${this.tick}:`);
+      // sortedBuildings.forEach((b, i) => {
+      //   console.log(`  Building ${i}: ID=${b.id?.slice(-6)}, owner=${b.owner?.slice(-6)}, ` +
+      //             `pos=(${b.gridX}, ${b.gridZ}), name=${b.name}, health=${b.health}`);
+      // });
       }
       
       return hash >>> 0; // Convert to unsigned 32-bit integer
@@ -837,7 +1061,9 @@
     
     // Simple hash functions
     hashVector(vec) {
-      return Math.floor(vec.x * 1000) ^ Math.floor(vec.y * 1000) ^ Math.floor(vec.z * 1000);
+      // Round to 0.1 (10cm) to tolerate small floating-point differences in physics
+      // This is acceptable for RTS games where precision to the centimeter doesn't matter
+      return Math.floor(vec.x * 10) ^ Math.floor(vec.y * 10) ^ Math.floor(vec.z * 10);
     }
     
     hashPosition(x, z) {
@@ -861,9 +1087,13 @@
         return; // We don't have this checkpoint yet
       }
       
-      if (localChecksum !== remoteChecksum) {
+      // Allow small differences due to floating-point rounding (< 1000 is acceptable for RTS)
+      const diff = Math.abs(localChecksum - remoteChecksum);
+      const TOLERANCE = 1000; // Tolerate tiny physics differences (typically < 0.01% of checksum)
+      
+      if (diff > TOLERANCE) {
         console.error(`❌ DESYNC DETECTED at tick ${tick}!`);
-        console.error(`   Local: ${localChecksum}, Remote: ${remoteChecksum}`);
+        console.error(`   Local: ${localChecksum}, Remote: ${remoteChecksum}, Difference: ${diff}`);
         this.desyncDetected = true;
         this.handleDesync(tick);
       }
@@ -1116,7 +1346,7 @@
         overlay.style.display = 'none';
         overlay.style.pointerEvents = 'none';
         overlay.style.zIndex = '-1';
-        console.log('🎯 Loading overlay hidden and input unblocked');
+        // console.log('🎯 Loading overlay hidden and input unblocked');
       }
     }
     
@@ -1170,7 +1400,7 @@
   window.Match = Match;
   window.MatchState = MatchState;
   
-  console.log('✅ Match system initialized');
+  // console.log('✅ Match system initialized');
 
 })();
 

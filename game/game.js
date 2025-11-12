@@ -39,7 +39,7 @@ Game.prototype.init = function() {
 };
 
 Game.prototype.spawnInitialUnits = function() {
-  console.log('🏘️ Spawning initial game units for all players...');
+  // console.log('🏘️ Spawning initial game units for all players...');
   
   // Spawn villagers and buildings for ALL players (local + opponents)
   if (this.players && this.players.length > 0) {
@@ -50,7 +50,7 @@ Game.prototype.spawnInitialUnits = function() {
       }
       
       const isLocalPlayer = player === window.player;
-      console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y})`);
+      // console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y})`);
       
       // Spawn agora building for this player
       if (window.playerBuildings) {
@@ -59,21 +59,31 @@ Game.prototype.spawnInitialUnits = function() {
         if (placeFn && window.gfx && window.gfx.scene) {
           const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene);
           if (placed) {
-            placed.owner = player.id || 'player';
+            // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
+            const rawId = player.id || 'player';
+            placed.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
             player.buildings.push(placed);
             window.playerBuildings.push(placed);
-            console.log(`🏛️ Spawned agora for ${player.name || player.id}`);
+            // console.log(`🏛️ Spawned agora for ${player.name || player.id}`);
           }
         } else if (window.Building) {
           // Fallback: create logical building if visual system not available yet
+          // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
+          const rawId = player.id || 'player';
+          const normalizedOwner = rawId.length > 6 ? rawId.slice(-6) : rawId;
           const agoraBuilding = new window.Building('agora', {
-            x: player.agora.x,
-            y: player.agora.y
-          }, { owner: player.id || 'player' });
+            x: player.agora.x * TILE_SIZE,
+            y: 0,
+            z: player.agora.y * TILE_SIZE
+          }, { 
+            owner: normalizedOwner,
+            gridX: player.agora.x,
+            gridZ: player.agora.y
+          });
           
           player.buildings.push(agoraBuilding);
           window.playerBuildings.push(agoraBuilding);
-          console.log(`🏛️ Spawned agora (logic only) for ${player.name || player.id}`);
+          // console.log(`🏛️ Spawned agora (logic only) for ${player.name || player.id}`);
         }
       }
       
@@ -84,7 +94,7 @@ Game.prototype.spawnInitialUnits = function() {
     console.warn('❌ No players found in game.players!');
   }
   
-  console.log('✅ All player units and buildings spawned');
+  // console.log('✅ All player units and buildings spawned');
 };
 
 Game.prototype.spawnVillagersForPlayer = function(player) {
@@ -102,9 +112,18 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
   // This ensures all clients spawn units at the same positions
   let seed = 12345; // Default seed for single player
   if (window.currentMatch && window.currentMatch.mapSeed) {
-    // Combine map seed with player ID for unique but deterministic spawns per player
-    const playerIdHash = (player.id || 'player').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    // CRITICAL: Normalize player ID to use only the short suffix for consistent hashing
+    // (e.g., both "p2p-xyz123abc" and "xyz123abc" should hash to the same value)
+    const rawId = player.id || 'player';
+    const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
+    const playerIdHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     seed = window.currentMatch.mapSeed + playerIdHash;
+  } else if (window.mapSeed) {
+    // Fallback to global mapSeed if match not yet created
+    const rawId = player.id || 'player';
+    const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
+    const playerIdHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    seed = window.mapSeed + playerIdHash;
   }
   
   // Seeded random number generator (deterministic)
@@ -120,7 +139,10 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
   const agoraZ = player.agora.y * TILE_SIZE;
   const villagerCount = 8 + Math.floor(seededRandom() * 5);
   
-  console.log(`👥 Spawning ${villagerCount} villagers for ${player.name || player.id} at (${agoraX}, ${agoraZ}) [seed: ${seed}]`);
+  const rawId = player.id || 'player';
+  const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
+  const displayHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  // console.log(`👥 SPAWN SEED TRACE - Player: ${normalizedId}, mapSeed: ${window.currentMatch?.mapSeed || window.mapSeed}, playerHash: ${displayHash}, finalSeed: ${seed}, villagerCount: ${villagerCount}`);
   
   for (let i = 0; i < villagerCount; i++) {
     // Deterministic position around agora (within 3-6 tiles)
@@ -131,7 +153,9 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
     const z = agoraZ + Math.sin(angle) * distance * TILE_SIZE;
     
     const villager = new window.Unit('villager', { x, y: 0, z });
-    villager.owner = player.id || 'player';
+    // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
+    const rawId = player.id || 'player';
+    villager.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
     
     // Deterministic rotation
     const randomRotation = seededRandom() * Math.PI * 2;
@@ -143,12 +167,16 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
     // Add to player's units
     player.units.push(villager);
     window.gameUnits.push(villager); // Add to global array for rendering
+    
+    if (i === 0) {
+      // console.log(`  📍 First villager for ${player.id?.slice(-6)}: ID=${villager.id?.slice(-6)}, owner=${villager.owner?.slice(-6)}, pos=(${x.toFixed(2)}, ${z.toFixed(2)})`);
+    }
   }
   
-  console.log(`✅ Spawned ${villagerCount} villagers for ${player.name || player.id}`);
-  console.log(`   Player ID: ${player.id}`);
-  console.log(`   First villager owner: ${player.units[0]?.owner}`);
-  console.log(`   Owner matches player ID: ${player.units[0]?.owner === player.id}`);
+  // console.log(`✅ Spawned ${villagerCount} villagers for ${player.name || player.id}`);
+  // console.log(`   Player ID: ${player.id}`);
+  // console.log(`   First villager owner: ${player.units[0]?.owner}`);
+  // console.log(`   Owner matches player ID: ${player.units[0]?.owner === player.id}`);
 };
 
 Game.prototype.getGameTime = function() {
@@ -181,13 +209,13 @@ window.gameLoop = {
     this.lastTime = performance.now();
     this.frameCounter = 0;
     this.physicsTime = 0;
-    console.log('▶️ Game loop started');
+      // console.log('▶️ Game loop started');
     this.update();
   },
   
   stop: function() {
     if (!this.running) {
-      console.log('⚠️ Game loop already stopped');
+      // console.log('⚠️ Game loop already stopped');
       return;
     }
     this.running = false;

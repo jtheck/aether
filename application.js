@@ -66,7 +66,7 @@ window.aud = {};  // Audio
       
       // DON'T auto-start game here - user picks game mode from lobby menu
       // The lobby system (lobby.js) will handle game initialization and network setup
-      console.log('🎮 Ready! Open menu to select a game mode.');
+      // console.log('🎮 Ready! Open menu to select a game mode.');
     });
     
     let chat;
@@ -205,7 +205,7 @@ window.aud = {};  // Audio
       window.gameLoop.start();
     }
     
-    console.log('🎮 Starting single player game (network fallback)');
+    // console.log('🎮 Starting single player game (network fallback)');
   }
 
   // UPDATED: Enhanced startMultiplayerGame with safety check
@@ -231,7 +231,7 @@ window.aud = {};  // Audio
         window.isMultiplayer = true;
         window.gameType = 'onevsone';
         
-        console.log(`🎮 Starting 1v1 multiplayer game vs ${window.opponent.id}`);
+        // console.log(`🎮 Starting 1v1 multiplayer game vs ${window.opponent.id}`);
       } else {
         // Fallback to single-player even in multiplayer attempt
         console.warn('No peers connected, starting single-player');
@@ -299,7 +299,7 @@ window.aud = {};  // Audio
     // DON'T re-initialize networking on focus!
     // The lobby system handles network initialization
     // Re-initing creates a new P2P instance and breaks broadcast channels
-    console.log('🔄 Window focused');
+    // console.log('🔄 Window focused');
   });
   
   window.addEventListener('blur', () => {

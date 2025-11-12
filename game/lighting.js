@@ -59,10 +59,14 @@
   lighting.setDramaticSunAngle = function() {
     // Set sun to daytime hours only - avoid early morning/late evening darkness
     const daytimeTimes = [0.4, 0.45, 0.5, 0.55, 0.6]; // Solid daytime range
-    const randomTime = daytimeTimes[Math.floor(Math.random() * daytimeTimes.length)];
     
-    lighting.setSunTime(randomTime);
-    // console.log('🌅 Set daytime sun angle at time:', randomTime.toFixed(2));
+    // DETERMINISTIC: Use field seed instead of Math.random() for multiplayer sync
+    const seed = (window.liveField && window.liveField.seed) || (window.mapSeed) || 12345;
+    const seededIndex = Math.abs(seed) % daytimeTimes.length;
+    const selectedTime = daytimeTimes[seededIndex];
+    
+    lighting.setSunTime(selectedTime);
+    // console.log(`🌅 Set daytime sun angle at time: ${selectedTime.toFixed(2)} (seed: ${seed}, index: ${seededIndex})`);
   };
   
   // Update orbital positions based on time of day

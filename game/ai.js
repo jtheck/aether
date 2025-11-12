@@ -119,7 +119,12 @@ class LingerBehavior extends Behavior {
         }
         
         // Occasionally complete linger behavior to allow wandering
-        if (Math.random() < 0.001) { // 0.1% chance per tick (roughly every 10 seconds at 60Hz)
+        // CRITICAL: Use deterministic tick-based probability instead of Math.random() for multiplayer sync
+        const currentTick = window.currentMatch?.tick || 0;
+        const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const deterministicRandom = ((currentTick + unitIdHash) % 1000) / 1000; // 0-1 based on tick + unit ID
+        
+        if (deterministicRandom < 0.001) { // 0.1% chance per tick (roughly every 10 seconds at 60Hz)
             // console.log(`🌍 ${this.unit.name || this.unit.type} finished lingering, becoming idle`);
             return true; // Complete the behavior
         }
@@ -128,7 +133,11 @@ class LingerBehavior extends Behavior {
     }
     
     wander() {
-        const randomAngle = Math.random() * Math.PI * 2;
+        // CRITICAL: Use deterministic angle based on tick + unit ID for multiplayer sync
+        const currentTick = window.currentMatch?.tick || 0;
+        const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const randomAngle = ((currentTick + unitIdHash) % 628) / 100; // 0 to 2π (6.28)
+        
         const wanderPoint = {
             x: this.centerPoint.x + Math.cos(randomAngle) * this.params.wanderDistance,
             z: this.centerPoint.z + Math.sin(randomAngle) * this.params.wanderDistance
@@ -209,8 +218,12 @@ class WalkBehavior extends Behavior {
             this.unit.pb.imp = { x: 0, y: 0, z: 0 };
         }
 
-        // Track that this unit was moved by player
-        this.unit.lastMoveTime = Date.now();
+        // Track that this unit was moved (use tick-based time for multiplayer sync)
+        // CRITICAL: Don't use Date.now() here - it breaks multiplayer sync!
+        // Instead use match tick if available, or skip entirely
+        if (window.currentMatch && window.currentMatch.tick) {
+            this.unit.lastMoveTick = window.currentMatch.tick;
+        }
         
         // Apply movement with rotation and forward momentum boost
         this.applyMovementWithRotation(direction, (this.unit.speed || 20) * 0.15);
@@ -253,8 +266,10 @@ class RunBehavior extends Behavior {
         direction.x /= length;
         direction.z /= length;
         
-        // Track that this unit was moved by player
-        this.unit.lastMoveTime = Date.now();
+        // Track that this unit was moved (use tick-based time for multiplayer sync)
+        if (window.currentMatch && window.currentMatch.tick) {
+            this.unit.lastMoveTick = window.currentMatch.tick;
+        }
         
         // Apply movement with rotation and forward momentum boost
         this.applyMovementWithRotation(direction, this.params.runSpeed);
@@ -1442,9 +1457,9 @@ class TransformBehavior extends Behavior {
         this.unit = newUnit;
         this.hasTransformed = true;
         
-        // For brigands, initialize activity tracking
-        if (this.params.transformType === 'brigand') {
-            this.unit.lastMoveTime = Date.now();
+        // For brigands, initialize activity tracking (use tick-based time)
+        if (this.params.transformType === 'brigand' && window.currentMatch && window.currentMatch.tick) {
+            this.unit.lastMoveTick = window.currentMatch.tick;
         }
     }
     

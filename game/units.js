@@ -192,6 +192,10 @@ function Unit(unitType, position, options = {}) {
     this.distanceToCamera = 0;
     this.lastUpdateFrame = 0;
     
+    // Visual interpolation for smooth remote player movement
+    this.visualPosition = null; // Current visual position (for interpolation)
+    this.interpolationSpeed = 0.15; // How fast to catch up (0.15 = 15% per frame)
+    
     // Physics body
     this.pb = new PBody();
     
@@ -382,7 +386,7 @@ function sprinkleUnits() {
     // MULTIPLAYER: Skip neutral unit spawning to prevent desync
     // Neutral units use non-deterministic Math.random() which causes desync
     if (window.isMultiplayer) {
-        console.log('🚫 Skipping neutral unit spawning in multiplayer (prevents desync)');
+        // console.log('🚫 Skipping neutral unit spawning in multiplayer (prevents desync)');
         return;
     }
     
@@ -520,7 +524,7 @@ function spawnUnitModels(scene) {
     });
     
     if (unitsNeedingMeshes > 0) {
-        console.log(`✅ Spawning meshes for ${unitsNeedingMeshes}/${gameUnits.length} units`);
+        // console.log(`✅ Spawning meshes for ${unitsNeedingMeshes}/${gameUnits.length} units`);
     }
 }
 
@@ -683,8 +687,42 @@ function updateUnitMeshes() {
             
             // Visual follows physics - position
             if (unit.pb.state.loc) {
-                unit.mesh.position.x = unit.pb.state.loc.x;
-                unit.mesh.position.z = unit.pb.state.loc.z;
+                // MULTIPLAYER INTERPOLATION: For remote players, smoothly interpolate visual position
+                const isRemoteUnit = window.isMultiplayer && unit.owner !== 'neutral' && 
+                                     unit.owner !== window.player?.id?.slice(-6);
+                
+                if (isRemoteUnit) {
+                    // Initialize visual position on first frame
+                    if (!unit.visualPosition) {
+                        unit.visualPosition = {
+                            x: unit.pb.state.loc.x,
+                            z: unit.pb.state.loc.z
+                        };
+                    }
+                    
+                    // Smoothly interpolate towards physics position
+                    const dx = unit.pb.state.loc.x - unit.visualPosition.x;
+                    const dz = unit.pb.state.loc.z - unit.visualPosition.z;
+                    const distSq = dx * dx + dz * dz;
+                    
+                    // If very far away (> 10 units), snap immediately (probably teleported)
+                    if (distSq > 100) {
+                        unit.visualPosition.x = unit.pb.state.loc.x;
+                        unit.visualPosition.z = unit.pb.state.loc.z;
+                    } else {
+                        // Smooth interpolation
+                        unit.visualPosition.x += dx * unit.interpolationSpeed;
+                        unit.visualPosition.z += dz * unit.interpolationSpeed;
+                    }
+                    
+                    // Set mesh to interpolated position
+                    unit.mesh.position.x = unit.visualPosition.x;
+                    unit.mesh.position.z = unit.visualPosition.z;
+                } else {
+                    // Local player or neutral units: direct physics → visual
+                    unit.mesh.position.x = unit.pb.state.loc.x;
+                    unit.mesh.position.z = unit.pb.state.loc.z;
+                }
                 
                 // Skip animation system for units with active behaviors
                 if (hasActiveBehavior) {
@@ -908,7 +946,7 @@ function debugLODStats() {
 
 // Destroy a unit completely with particle cleanup
 function destroyUnit(unit) {
-    console.log(`💥 Destroying unit: ${unit.name || unit.type}`);
+    // console.log(`💥 Destroying unit: ${unit.name || unit.type}`);
     
     // Add destruction effects
     if (unit.mesh) {
@@ -957,7 +995,7 @@ function destroyUnit(unit) {
         }
     }
     
-    console.log(`🗑️ Unit ${unit.name || unit.type} completely destroyed`);
+    // console.log(`🗑️ Unit ${unit.name || unit.type} completely destroyed`);
 }
 
 // Clear and respawn all units
@@ -1024,10 +1062,12 @@ function spawnAgoraVillagers() {
 }
 
 // Auto-initialize units when the scene is ready (MENU SCENE ONLY)
+let autoInitDisabled = false; // Flag to permanently disable auto-init once a match starts
+
 function autoInitUnits() {
     // CRITICAL: Only auto-spawn neutral units in menu scene, NOT during actual matches
-    if (window.game || window.currentMatch) {
-        console.log('🚫 Skipping autoInitUnits - match is active');
+    if (autoInitDisabled || window.game || window.currentMatch || window.isMultiplayer) {
+        // console.log('🚫 Skipping autoInitUnits - match is active or disabled');
         return;
     }
     
@@ -1062,6 +1102,13 @@ if (typeof window !== 'undefined') {
     window.LOD_DISTANCES = LOD_DISTANCES;
     window.debugLODStats = debugLODStats;
     window.updateUnitDistances = updateUnitDistances;
+    
+    // Export auto-init control
+    Object.defineProperty(window, 'autoInitDisabled', {
+      get: () => autoInitDisabled,
+      set: (value) => { autoInitDisabled = value; },
+      configurable: true
+    });
     
     // Auto-start the initialization
     setTimeout(autoInitUnits, 2000); // Wait 2 seconds for scene to be ready

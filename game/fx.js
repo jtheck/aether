@@ -33,110 +33,107 @@
   const ParticlePresets = {
     fire: {
       texture: "assets/images/explosion.png",
-      emitRate: 49,
-      minSize: .2,
-      maxSize: .4,
-      minLifeTime: 1.5,
-      maxLifeTime: 3.0,
-      minEmitPower: 2,  // Reduced outward velocity
-      maxEmitPower: 8,   // Reduced outward velocity
-      minInitialRotation: -Math.PI,
-      maxInitialRotation: Math.PI,
-      blendMode: BABYLON.ParticleSystem.BLENDMODE_MULTIPLYADD,
-      // Add upward bias for fire direction
-      direction1: new BABYLON.Vector3(0, 1, 0),  // Primary upward direction
-      direction2: new BABYLON.Vector3(0, 1, 0),  // Secondary upward direction
-      minEmitBox: new BABYLON.Vector3(-0.1, 0, -0.1),  // Small horizontal spread
-      maxEmitBox: new BABYLON.Vector3(0.1, 0, 0.1),     // Small horizontal spread
-      colorGradients: [
-        { time: 0.0, color: new BABYLON.Color4(1, 1, 1, 0) },
-        { time: 0.1, color: new BABYLON.Color4(1, 1, 1, 1) },
-        { time: 0.9, color: new BABYLON.Color4(1, 1, 1, 1) },
-        { time: 1.0, color: new BABYLON.Color4(1, 1, 1, 0) }
-      ],
-      rampGradients: [
-        { time: 0.0, color: new BABYLON.Color3(1, 1, 1) },
-        { time: 0.2, color: new BABYLON.Color3(1, 0.8, 0.2) },
-        { time: 0.5, color: new BABYLON.Color3(1, 0.4, 0.1) },
-        { time: 0.8, color: new BABYLON.Color3(0.8, 0.2, 0.1) },
-        { time: 1.0, color: new BABYLON.Color3(0.3, 0.1, 0.1) }
-      ],
-      useRampGradients: true,
-      limitVelocityGradients: [
-        { time: 0, limit: 12 },    // Reduced max velocity
-        { time: 0.3, limit: 8 },   // Slower decay
-        { time: 0.7, limit: 3 },   // Gentle slowdown
-        { time: 1.0, limit: 1 }    // Very slow at end
-      ],
-      limitVelocityDamping: 0.95   // Less aggressive damping
-    },
-    smoke: {
-      texture: "assets/images/explosion.png",
-      emitRate: 50,
-      minSize: 3,
-      maxSize: .6,
-      minLifeTime: 2.0,
-      maxLifeTime: 4.0,
-      minEmitPower: 2,
-      maxEmitPower: 8,
-      minInitialRotation: -Math.PI,
-      maxInitialRotation: Math.PI,
-      blendMode: BABYLON.ParticleSystem.BLENDMODE_STANDARD,
-      colorGradients: [
-        { time: 0.0, color: new BABYLON.Color4(0.8, 0.8, 0.8, 0) },
-        { time: 0.1, color: new BABYLON.Color4(0.8, 0.8, 0.8, 0.8) },
-        { time: 0.9, color: new BABYLON.Color4(0.6, 0.6, 0.6, 0.4) },
-        { time: 1.0, color: new BABYLON.Color4(0.4, 0.4, 0.4, 0) }
-      ],
-      rampGradients: [
-        { time: 0.0, color: new BABYLON.Color3(0.9, 0.9, 0.9) },
-        { time: 0.5, color: new BABYLON.Color3(0.6, 0.6, 0.6) },
-        { time: 1.0, color: new BABYLON.Color3(0.3, 0.3, 0.3) }
-      ],
-      useRampGradients: true,
-      limitVelocityGradients: [
-        { time: 0, limit: 15 },
-        { time: 0.3, limit: 8 },
-        { time: 1.0, limit: 2 }
-      ],
-      limitVelocityDamping: 0.95
-    },
-    torch: {
-      texture: "assets/images/explosion.png",
-      emitRate: 30,
-      minSize: 0.1,
-      maxSize: 0.3,
-      minLifeTime: 1.0,
-      maxLifeTime: 2.0,
+      emitRate: 40,
+      minSize: 0.3,
+      maxSize: 0.6,
+      minLifeTime: 0.5,
+      maxLifeTime: 1.5,
       minEmitPower: 1,
       maxEmitPower: 4,
       minInitialRotation: -Math.PI,
       maxInitialRotation: Math.PI,
-      blendMode: BABYLON.ParticleSystem.BLENDMODE_MULTIPLYADD,
-      // Upward torch flame
-      direction1: new BABYLON.Vector3(0, 1, 0),
-      direction2: new BABYLON.Vector3(0, 1, 0),
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,  // Additive for bright fire glow
+      direction1: new BABYLON.Vector3(-0.3, -1, -0.3),  // Downward = upward in world (inverted Y)
+      direction2: new BABYLON.Vector3(0.3, -1.5, 0.3),  // More downward = more upward
+      minEmitBox: new BABYLON.Vector3(-0.1, 0, -0.1),
+      maxEmitBox: new BABYLON.Vector3(0.1, 0, 0.1),
+      // Direct color control - no ramp needed with additive blend
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(1, 1, 0, 0) },      // Yellow, transparent
+        { time: 0.2, color: new BABYLON.Color4(1, 0.8, 0, 1) },    // Bright orange-yellow
+        { time: 0.5, color: new BABYLON.Color4(1, 0.3, 0, 1) },    // Orange-red
+        { time: 0.8, color: new BABYLON.Color4(0.8, 0.1, 0, 0.8) }, // Deep red, fading
+        { time: 1.0, color: new BABYLON.Color4(0.2, 0, 0, 0) }     // Dark, gone
+      ],
+      gravity: new BABYLON.Vector3(0, 1, 0), // Gentle upward pull (inverted)
+      limitVelocityDamping: 0.8
+    },
+    smoke: {
+      texture: "assets/images/explosion.png",
+      emitRate: 20,
+      minSize: 0.4,
+      maxSize: 1.0,
+      minLifeTime: 2.0,
+      maxLifeTime: 4.0,
+      minEmitPower: 0.5,
+      maxEmitPower: 2,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_STANDARD,
+      direction1: new BABYLON.Vector3(-0.3, -2, -0.3),  // Strong downward = upward (inverted Y)
+      direction2: new BABYLON.Vector3(0.3, -3, 0.3),    // Even stronger downward = upward
+      minEmitBox: new BABYLON.Vector3(-0.1, 0, -0.1),
+      maxEmitBox: new BABYLON.Vector3(0.1, 0.2, 0.1),
+      gravity: new BABYLON.Vector3(0, 0.5, 0), // Light upward (inverted)
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(0.3, 0.3, 0.3, 0) },    // Dark, transparent
+        { time: 0.1, color: new BABYLON.Color4(0.5, 0.5, 0.5, 0.6) },  // Medium gray
+        { time: 0.5, color: new BABYLON.Color4(0.6, 0.6, 0.6, 0.5) },  // Light gray
+        { time: 0.9, color: new BABYLON.Color4(0.7, 0.7, 0.7, 0.2) },  // Lighter, fading
+        { time: 1.0, color: new BABYLON.Color4(0.8, 0.8, 0.8, 0) }     // Nearly white, gone
+      ],
+      limitVelocityDamping: 0.7
+    },
+    torch: {
+      texture: "assets/images/explosion.png",
+      emitRate: 25,
+      minSize: 0.2,
+      maxSize: 0.4,
+      minLifeTime: 0.4,
+      maxLifeTime: 1.0,
+      minEmitPower: 0.5,
+      maxEmitPower: 2,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,
+      direction1: new BABYLON.Vector3(-0.2, -1, -0.2),   // Inverted Y
+      direction2: new BABYLON.Vector3(0.2, -1.2, 0.2),   // Inverted Y
       minEmitBox: new BABYLON.Vector3(-0.05, 0, -0.05),
       maxEmitBox: new BABYLON.Vector3(0.05, 0, 0.05),
       colorGradients: [
-        { time: 0.0, color: new BABYLON.Color4(1, 1, 1, 0) },
-        { time: 0.1, color: new BABYLON.Color4(1, 1, 1, 1) },
-        { time: 0.9, color: new BABYLON.Color4(1, 1, 1, 1) },
-        { time: 1.0, color: new BABYLON.Color4(1, 1, 1, 0) }
+        { time: 0.0, color: new BABYLON.Color4(1, 1, 0.3, 0) },     // Warm yellow
+        { time: 0.2, color: new BABYLON.Color4(1, 0.7, 0, 1) },     // Orange-yellow
+        { time: 0.6, color: new BABYLON.Color4(1, 0.2, 0, 0.8) },   // Orange-red
+        { time: 1.0, color: new BABYLON.Color4(0.3, 0, 0, 0) }      // Dark, gone
       ],
-      rampGradients: [
-        { time: 0.0, color: new BABYLON.Color3(1, 0.9, 0.8) },
-        { time: 0.3, color: new BABYLON.Color3(1, 0.6, 0.2) },
-        { time: 0.7, color: new BABYLON.Color3(0.8, 0.3, 0.1) },
-        { time: 1.0, color: new BABYLON.Color3(0.4, 0.1, 0.05) }
+      gravity: new BABYLON.Vector3(0, 0.8, 0), // Inverted
+      limitVelocityDamping: 0.75
+    },
+    magefire: {
+      texture: "assets/images/explosion.png",
+      emitRate: 30,
+      minSize: 0.2,
+      maxSize: 0.5,
+      minLifeTime: 0.6,
+      maxLifeTime: 1.2,
+      minEmitPower: 1,
+      maxEmitPower: 3,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,
+      direction1: new BABYLON.Vector3(-0.2, -1, -0.2),   // Inverted Y for magefire
+      direction2: new BABYLON.Vector3(0.2, -1.5, 0.2),   // Inverted Y
+      minEmitBox: new BABYLON.Vector3(-0.1, 0, -0.1),
+      maxEmitBox: new BABYLON.Vector3(0.1, 0, 0.1),
+      // White/cyan magical fire
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(0.8, 0.9, 1, 0) },    // Pale blue
+        { time: 0.2, color: new BABYLON.Color4(1, 1, 1, 1) },        // Bright white
+        { time: 0.6, color: new BABYLON.Color4(0.7, 0.8, 1, 0.8) },  // Pale blue-white
+        { time: 1.0, color: new BABYLON.Color4(0.3, 0.4, 0.6, 0) }   // Dark blue, gone
       ],
-      useRampGradients: true,
-      limitVelocityGradients: [
-        { time: 0, limit: 8 },
-        { time: 0.5, limit: 4 },
-        { time: 1.0, limit: 1 }
-      ],
-      limitVelocityDamping: 0.9
+      gravity: new BABYLON.Vector3(0, 0.5, 0), // Inverted for magefire
+      limitVelocityDamping: 0.85
     },
     particle: {
       texture: "assets/images/explosion.png",
@@ -178,6 +175,55 @@
     
     // Enable particle testing with keyboard shortcuts
     fx.setupParticleTesting();
+  };
+  
+  // Get particle system stats for diagnostics
+  fx.getStats = function() {
+    if (!scene || !scene.particleSystems) return { total: 0, gpu: 0, cpu: 0, active: 0, stopped: 0 };
+    
+    let gpu = 0, cpu = 0, active = 0, stopped = 0;
+    scene.particleSystems.forEach(sys => {
+      if (sys.isGPU) gpu++;
+      else cpu++;
+      if (sys.isStarted()) active++;
+      else stopped++;
+    });
+    
+    return { total: scene.particleSystems.length, gpu, cpu, active, stopped };
+  };
+  
+  // Update particle LOD - stop/start particles based on camera distance
+  fx.updateParticleLOD = function(cameraPosition) {
+    if (!scene || !scene.particleSystems || !cameraPosition) return;
+    
+    // Distance thresholds (squared for performance)
+    const PARTICLE_DISTANCE_SQ = 300 * 300; // Stop particles beyond 300 units (was 150 - too aggressive)
+    
+    const camX = cameraPosition.x;
+    const camZ = cameraPosition.z;
+    
+    scene.particleSystems.forEach(system => {
+      // Skip if no building reference
+      if (!system._buildingRef || !system._buildingRef.position) return;
+      
+      const buildingPos = system._buildingRef.position;
+      const dx = camX - buildingPos.x;
+      const dz = camZ - buildingPos.z;
+      const distanceSquared = dx * dx + dz * dz;
+      
+      // Stop particles when far, start when close
+      if (distanceSquared > PARTICLE_DISTANCE_SQ) {
+        if (system.isStarted()) {
+          system.stop();
+          // console.log(`🔇 Stopped particle (distance: ${Math.sqrt(distanceSquared).toFixed(0)})`);
+        }
+      } else {
+        if (!system.isStarted()) {
+          system.start();
+          // console.log(`🔊 Started particle (distance: ${Math.sqrt(distanceSquared).toFixed(0)})`);
+        }
+      }
+    });
   };
   
   // Launch barrel explosion on T key
@@ -295,8 +341,17 @@
     const config = Object.assign({}, preset, options);
     const particleCount = config.particleCount || 100;
     
-    // Create particle system
-    const particleSystem = new BABYLON.ParticleSystem("particleSystem", particleCount, scene);
+    // Use GPU particles for much better performance!
+    // GPU particles are hardware accelerated and can handle thousands efficiently
+    let particleSystem;
+    if (BABYLON.GPUParticleSystem.IsSupported) {
+      particleSystem = new BABYLON.GPUParticleSystem("particleSystem", { capacity: particleCount }, scene);
+      particleSystem.isGPU = true; // Mark for debugging
+    } else {
+      // Fallback to CPU particles if GPU not supported
+      particleSystem = new BABYLON.ParticleSystem("particleSystem", particleCount, scene);
+      particleSystem.isGPU = false;
+    }
     
     // Set emitter - use point emitter for fire (more upward), hemispheric for others
     let emitter;
@@ -356,6 +411,11 @@
       particleSystem.limitVelocityDamping = config.limitVelocityDamping || 0.9;
     }
     
+    // CRITICAL: Apply gravity for realistic particle motion!
+    if (config.gravity) {
+      particleSystem.gravity = config.gravity;
+    }
+    
     // Rendering order
     particleSystem.renderingGroupId = config.renderingGroupId || 1;
     
@@ -391,13 +451,13 @@
   // Attach particle effect to a building using named anchor mesh
   fx.attachParticleEffect = function(building, effectType, anchorName = "particle_anchor", options = {}) {
     if (!building || !building.mesh) {
-      // console.warn('Building or building mesh not found');
+      console.warn('Building or building mesh not found');
       return null;
     }
     
     const preset = ParticlePresets[effectType];
     if (!preset) {
-      // console.warn(`Particle preset '${effectType}' not found`);
+      console.warn(`Particle preset '${effectType}' not found`);
       return null;
     }
     
@@ -406,16 +466,11 @@
     if (anchorName) {
       anchorMesh = findMeshByName(building.mesh, anchorName);
       if (!anchorMesh) {
-        // console.warn(`Anchor mesh '${anchorName}' not found in building ${building.name}`);
-        // console.log(`Available meshes in ${building.name}:`);
-        debugMeshNames(building.mesh);
-        
-        // Try alternative names
+        // Try alternative names silently
         const alternatives = ['fire_anchor', 'smoke_anchor', 'torch_anchor', 'particle_anchor', 'anchor', 'empty'];
         for (let altName of alternatives) {
           const altMesh = findMeshByName(building.mesh, altName);
           if (altMesh) {
-            // console.log(`Found alternative anchor: '${altName}', using that instead`);
             anchorMesh = altMesh;
             break;
           }
@@ -423,13 +478,20 @@
         
         // Final fallback - skip if no suitable anchor found
         if (!anchorMesh) {
-          // console.log(`No suitable anchor found for ${building.name}, skipping particle effect`);
+          console.warn(`❌ No particle anchor found for ${building.name || 'building'}`);
           return null;
         }
       }
     } else {
       anchorMesh = building.mesh;
     }
+    
+    // CRITICAL: Force recompute world matrices before getting position
+    // Without this, newly loaded meshes might return (0,0,0)!
+    if (building.mesh) {
+      building.mesh.computeWorldMatrix(true);
+    }
+    anchorMesh.computeWorldMatrix(true);
     
     // Get anchor position
     const anchorPosition = anchorMesh.getAbsolutePosition();
@@ -453,13 +515,18 @@
     building.particleEffects.push({
       system: particleSystem,
       type: effectType,
-      anchor: anchorName
+      anchor: anchorName,
+      building: building // Store building reference for LOD culling
     });
+    
+    // Store building reference on particle system for distance culling
+    particleSystem._buildingRef = building;
     
     // Start the particle system
     particleSystem.start();
     
-    // console.log(`🔥 Attached ${effectType} particle effect to ${building.name} at anchor '${anchorName}' (scale: ${options.scale || 1.0})`);
+    // console.log(`🎨 Particle '${effectType}' attached to ${building.name || 'building'} at anchor '${anchorName}' (GPU: ${particleSystem.isGPU || false})`);
+    
     return particleSystem;
   }
   
@@ -630,24 +697,168 @@
     // console.log(`🔥 Added particle preset: ${name}`);
   };
   
-  // Test particle effects (for debugging)
+  // Test particle effects (for debugging) - FIXED SCOPE VERSION
   fx.testParticleEffects = function(position = new BABYLON.Vector3(0, 0, 0)) {
     if (!scene) {
       console.warn('FX system not initialized');
       return;
     }
     
-    // console.log('🔥 Testing particle effects...');
+    console.log('🔥 Testing particle effects...');
     
-    // Test fire effect
-    setTimeout(() => {
-      fx.createParticleEffect('fire', position.clone().add(new BABYLON.Vector3(-5, 0, 0)));
-    }, 0);
-    
-    // Test smoke effect
-    setTimeout(() => {
-      fx.createParticleEffect('smoke', position.clone().add(new BABYLON.Vector3(5, 0, 0)));
-    }, 1000);
+    try {
+      // Helper function to create properly positioned emitter
+      function createEmitterAtPosition(system, targetPos, radius = 0.2) {
+        // Create a dummy invisible mesh at the target position
+        const dummyMesh = BABYLON.MeshBuilder.CreateBox("dummyEmitter", {size: 0.001}, scene);
+        dummyMesh.position = targetPos;
+        dummyMesh.isVisible = false;
+        dummyMesh.isPickable = false;
+        
+        // Create hemispheric emitter targeting the dummy mesh
+        const emitter = system.createHemisphericEmitter(radius, 0);
+        system.emitter = dummyMesh; // Target the mesh, not the emitter directly
+        
+        // Store reference on the system for cleanup
+        system._dummyEmitter = dummyMesh;
+        
+        return dummyMesh;
+      }
+      
+      // Test fire effect
+      setTimeout(() => {
+        const firePos = position.clone().add(new BABYLON.Vector3(-5, 0, 0));
+        const fireSystem = new BABYLON.ParticleSystem("fireTest", 100, scene);
+        
+        // Create properly positioned emitter
+        createEmitterAtPosition(fireSystem, firePos, 0.2);
+        
+        // Basic fire properties
+        fireSystem.emitRate = 50;
+        fireSystem.minSize = 0.2;
+        fireSystem.maxSize = 0.4;
+        fireSystem.minLifeTime = 1.5;
+        fireSystem.maxLifeTime = 3.0;
+        fireSystem.minEmitPower = 2;
+        fireSystem.maxEmitPower = 8;
+        fireSystem.minInitialRotation = -Math.PI;
+        fireSystem.maxInitialRotation = Math.PI;
+        fireSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_MULTIPLYADD;
+        
+        // Texture
+        fireSystem.particleTexture = new BABYLON.Texture("assets/images/explosion.png", scene);
+        
+        // Color gradients for fire
+        fireSystem.addColorGradient(0.0, new BABYLON.Color4(1, 1, 1, 0));
+        fireSystem.addColorGradient(0.1, new BABYLON.Color4(1, 1, 1, 1));
+        fireSystem.addColorGradient(0.9, new BABYLON.Color4(1, 1, 1, 1));
+        fireSystem.addColorGradient(1.0, new BABYLON.Color4(1, 1, 1, 0));
+        
+        // Ramp gradients for fire colors
+        fireSystem.addRampGradient(0.0, new BABYLON.Color3(1, 1, 1));
+        fireSystem.addRampGradient(0.2, new BABYLON.Color3(1, 0.8, 0.2));
+        fireSystem.addRampGradient(0.5, new BABYLON.Color3(1, 0.4, 0.1));
+        fireSystem.addRampGradient(0.8, new BABYLON.Color3(0.8, 0.2, 0.1));
+        fireSystem.addRampGradient(1.0, new BABYLON.Color3(0.3, 0.1, 0.1));
+        fireSystem.useRampGradients = true;
+        
+        // Velocity limits
+        fireSystem.addLimitVelocityGradient(0, 12);
+        fireSystem.addLimitVelocityGradient(0.3, 8);
+        fireSystem.addLimitVelocityGradient(0.7, 3);
+        fireSystem.addLimitVelocityGradient(1.0, 1);
+        fireSystem.limitVelocityDamping = 0.95;
+        
+        fireSystem.renderingGroupId = 1;
+        fireSystem.start();
+        
+        console.log('🔥 Fire test effect created');
+        
+        // Auto-stop after 5 seconds
+        setTimeout(() => {
+          if (fireSystem) {
+            fireSystem.stop();
+            if (fireSystem._dummyEmitter) {
+              fireSystem._dummyEmitter.dispose();
+              fireSystem._dummyEmitter = null;
+            }
+            setTimeout(() => {
+              if (fireSystem) {
+                fireSystem.dispose();
+              }
+            }, 1000);
+          }
+        }, 5000);
+        
+      }, 0);
+      
+      // Test smoke effect
+      setTimeout(() => {
+        const smokePos = position.clone().add(new BABYLON.Vector3(5, 0, 0));
+        const smokeSystem = new BABYLON.ParticleSystem("smokeTest", 100, scene);
+        
+        // Create properly positioned emitter
+        createEmitterAtPosition(smokeSystem, smokePos, 0.3);
+        
+        // Basic smoke properties
+        smokeSystem.emitRate = 30;
+        smokeSystem.minSize = 0.3;
+        smokeSystem.maxSize = 0.6;
+        smokeSystem.minLifeTime = 2.0;
+        smokeSystem.maxLifeTime = 4.0;
+        smokeSystem.minEmitPower = 1;
+        smokeSystem.maxEmitPower = 4;
+        smokeSystem.minInitialRotation = -Math.PI;
+        smokeSystem.maxInitialRotation = Math.PI;
+        smokeSystem.blendMode = BABYLON.ParticleSystem.BLENDMODE_STANDARD;
+        
+        // Texture
+        smokeSystem.particleTexture = new BABYLON.Texture("assets/images/explosion.png", scene);
+        
+        // Color gradients for smoke
+        smokeSystem.addColorGradient(0.0, new BABYLON.Color4(0.8, 0.8, 0.8, 0));
+        smokeSystem.addColorGradient(0.1, new BABYLON.Color4(0.8, 0.8, 0.8, 0.8));
+        smokeSystem.addColorGradient(0.9, new BABYLON.Color4(0.6, 0.6, 0.6, 0.4));
+        smokeSystem.addColorGradient(1.0, new BABYLON.Color4(0.4, 0.4, 0.4, 0));
+        
+        // Ramp gradients for smoke
+        smokeSystem.addRampGradient(0.0, new BABYLON.Color3(0.9, 0.9, 0.9));
+        smokeSystem.addRampGradient(0.5, new BABYLON.Color3(0.6, 0.6, 0.6));
+        smokeSystem.addRampGradient(1.0, new BABYLON.Color3(0.3, 0.3, 0.3));
+        smokeSystem.useRampGradients = true;
+        
+        // Velocity limits for smoke
+        smokeSystem.addLimitVelocityGradient(0, 8);
+        smokeSystem.addLimitVelocityGradient(0.5, 3);
+        smokeSystem.addLimitVelocityGradient(1.0, 1);
+        smokeSystem.limitVelocityDamping = 0.95;
+        
+        smokeSystem.renderingGroupId = 1;
+        smokeSystem.start();
+        
+        console.log('💨 Smoke test effect created');
+        
+        // Auto-stop after 6 seconds
+        setTimeout(() => {
+          if (smokeSystem) {
+            smokeSystem.stop();
+            if (smokeSystem._dummyEmitter) {
+              smokeSystem._dummyEmitter.dispose();
+              smokeSystem._dummyEmitter = null;
+            }
+            setTimeout(() => {
+              if (smokeSystem) {
+                smokeSystem.dispose();
+              }
+            }, 1000);
+          }
+        }, 6000);
+        
+      }, 1000);
+      
+    } catch (error) {
+      console.error('Error creating test particle effects:', error);
+    }
   };
   
   // Test building particle effects

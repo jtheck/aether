@@ -55,7 +55,7 @@
         </tr>
         <tr>
           <td>
-            <div class="game_menu_type_b disabled_b" title="Adventure" onclick="ui.showMenu('adventure_lobby')">Adventure</div>
+            <div class="game_menu_type_b" title="Adventure" onclick="ui.showMenu('adventure_lobby')">Adventure</div>
           </td>
           <td>-</td>
           <td>-</td>
@@ -200,7 +200,7 @@
     <div id="onevsone_lobby">
       <div class="menu_title">1 vs 1</div>
       <br><br>
-      <div style="margin-bottom: 10px;">
+      <!-- <div style="margin-bottom: 10px;">
         <label for="fieldSize">Field Size:</label>
         <select id="fieldSize" style="margin-left: 10px;">
           <option value="tiny">Tiny (32x32)</option>
@@ -216,7 +216,7 @@
         <button onclick="document.getElementById('mapSeed').value = window.Lobby.generateRandomSeed();" style="margin-left: 5px;">Random</button>
       </div>
       <br>
-      <div class="lobby_b" title="Start 1v1 Match" onclick="">Game Start</div>
+      <div class="lobby_b" title="Start 1v1 Match" onclick="">Game Start</div> -->
 
     </div>
     <div id="ffa_lobby">
@@ -257,6 +257,7 @@
 
 
   
+  <script src="vendor/getfire-p2p.js"></script>
   <script src="application.js"></script>
   <script src="game/utility.js"></script>
   <script src="game/constants.js"></script>
@@ -264,15 +265,17 @@
   <script src="game/lighting.js"></script>
   <script src="game/gfx.js"></script>
   <script src="game/field.js"></script>
+  <script src="game/units.js"></script>
+  <script src="game/buildings.js"></script>
   <script src="game/player.js"></script>
   <script src="game/game.js"></script>
   <script src="game/hud.js"></script>
   <script src="game/fx.js"></script>
-  <script src="game/units.js"></script>
-  <script src="game/buildings.js"></script>
   <script src="game/ai.js"></script>
   <script src="game/lasso.js"></script>
   <script src="game/menu.js"></script>
+  <script src="game/net.js"></script>
+  <script src="game/match.js"></script>
   <script src="game/lobby.js"></script>
   <script src="game/opponent.js"></script>
   <script src="game/touch.js"></script>

@@ -175,9 +175,12 @@ function Unit(unitType, position, options = {}) {
     
     // Unit instance properties
     this.type = unitType; // Store the original unit type
-    this.id = options.id || Math.random().toString(36).substr(2, 9);
+    // Generate deterministic IDs in multiplayer using match seed + unit count
+    this.id = options.id || (window.isMultiplayer && window.currentMatch ? 
+        `unit-${window.currentMatch.mapSeed}-${(window.gameUnits?.length || 0)}` : 
+        Math.random().toString(36).substr(2, 9));
     this.position = position || { x: 0, y: 0, z: 0 };
-    this.currentHealth = this.health;
+    this.currentHealth = options.currentHealth !== undefined ? options.currentHealth : this.health;
     this.level = options.level || 1;
     this.experience = options.experience || 0;
     this.owner = options.owner || 'player';
@@ -195,8 +198,14 @@ function Unit(unitType, position, options = {}) {
     // Sync physics body position with unit position
     if (this.pb.state && this.pb.state.loc) {
         this.pb.state.loc.x = this.position.x;
-        this.pb.state.loc.y = this.position.y;
+        this.pb.state.loc.y = Number.isFinite(this.position.y) ? this.position.y : 0;
         this.pb.state.loc.z = this.position.z;
+        
+        // Ensure position Y is valid
+        if (!Number.isFinite(this.position.y)) {
+            console.warn(`⚠️ Unit ${this.name} created with invalid Y position, fixing to 0`);
+            this.position.y = 0;
+        }
     }
     
     // Initialize rotation in physics body
@@ -244,7 +253,7 @@ function shouldUpdateUnit(unit, currentFrame) {
         }
     }
     
-    // Player units use normal LOD distances
+    // Player units use tiered update rates but ALWAYS update (never skip completely)
     const distances = (unit.abilities && unit.abilities.includes('fly')) ? FLYING_LOD_DISTANCES : LOD_DISTANCES;
     const distancesSquared = {
         NEAR: distances.NEAR * distances.NEAR,
@@ -253,13 +262,15 @@ function shouldUpdateUnit(unit, currentFrame) {
     };
     
     if (distanceSquared <= distancesSquared.NEAR) {
-        return true; // Update every frame
+        return true; // Update every frame (close up)
     } else if (distanceSquared <= distancesSquared.FAR) {
-        return (currentFrame - unit.lastUpdateFrame) >= 2; // Update every 3rd frame
+        return (currentFrame - unit.lastUpdateFrame) >= 1; // Update every 2nd frame (medium distance)
     } else if (distanceSquared <= distancesSquared.HIDDEN) {
-        return (currentFrame - unit.lastUpdateFrame) >= 5; // Update every 6th frame
+        return (currentFrame - unit.lastUpdateFrame) >= 2; // Update every 3rd frame (far away)
     } else {
-        return false; // Hidden - never update
+        // VERY FAR: Still update frequently enough to see smooth movement (every 3rd frame)
+        // This keeps distant armies visible and moving smoothly for strategic gameplay
+        return (currentFrame - unit.lastUpdateFrame) >= 2;
     }
 }
 
@@ -293,22 +304,18 @@ function updateUnitDistances() {
             
             // Hide/show units based on distance (using squared distances for comparison)
             if (unit.mesh) {
-                // Birds and flying units should always be visible (they're in the sky!)
-                if (unit.abilities && unit.abilities.includes('fly')) {
+                // GAMEPLAY UNITS (player/AI) - ALWAYS VISIBLE for strategic gameplay
+                // You need to see where your armies are at all zoom levels!
+                if (unit.owner !== 'neutral') {
                     unit.mesh.setEnabled(true);
-                } else if (unit.owner === 'neutral') {
-                    // Neutral units get much more aggressive culling
+                }
+                // DECORATIVE UNITS (neutral wildlife) - Aggressive culling for performance
+                else if (unit.owner === 'neutral') {
                     if (distanceSquared > NEUTRAL_HIDE_DISTANCE_SQ) {
                         unit.mesh.setEnabled(false);
                     } else {
                         unit.mesh.setEnabled(true);
                     }
-                } else if (distanceSquared > LOD_HIDDEN_DISTANCE_SQ) {
-                    // Hide player ground units completely when too far
-                    unit.mesh.setEnabled(false);
-                } else {
-                    // Show player ground units when in range
-                    unit.mesh.setEnabled(true);
                 }
             }
         }
@@ -332,12 +339,11 @@ function addUnitParticleEffects(unit) {
       break;
       
     case 'wizard':
-      // Add magical particle effects for wizard
-      window.fx.attachMultipleParticleEffects(unit, [
-        { type: 'particle', anchor: 'particle_anchor.001', options: { scale: 0.3 } },
-        { type: 'particle', anchor: 'particle_anchor.002', options: { scale: 0.3 } },
-        { type: 'smoke', anchor: 'smoke_anchor', options: { scale: 0.2 } }
-      ]);
+      // Add magical particle effect for wizard (uses single particle_anchor)
+      window.fx.attachParticleEffect(unit, 'magefire', 'particle_anchor', {
+        scale: 0.4,
+        emitRate: 25
+      });
       break;
       
     case 'monk':
@@ -373,6 +379,13 @@ const neutralUnits = []; // Wild/neutral units only
 
 // Sprinkle units across the terrain
 function sprinkleUnits() {
+    // MULTIPLAYER: Skip neutral unit spawning to prevent desync
+    // Neutral units use non-deterministic Math.random() which causes desync
+    if (window.isMultiplayer) {
+        console.log('🚫 Skipping neutral unit spawning in multiplayer (prevents desync)');
+        return;
+    }
+    
     // console.log("Sprinkling units across the terrain...");
     
     const unitTypes = ['frog_scout', 'mushroom_mage', 'bird_messenger']; // No villagers in neutral spawn
@@ -423,20 +436,23 @@ function sprinkleUnits() {
     // console.log(`Created ${gameUnits.length} units`);
 }
 
-// Spawn visual models for all units
+// Spawn visual models for all units (only for units without meshes)
 function spawnUnitModels(scene) {
-    // console.log("Spawning visual models for units...");
+    // console.log(`🎨 spawnUnitModels() called - ${gameUnits.length} units to process`);
     
+    let unitsNeedingMeshes = 0;
     gameUnits.forEach(unit => {
         if (!unit.mesh && window.gfx && window.gfx.getModel) {
+            unitsNeedingMeshes++;
             // Load the 3D model for this unit
-            // console.log(`🎮 Loading model ${unit.model} for ${unit.name} (scale: ${unit.scale})`);
+            // console.log(`🎮 Loading model ${unit.model} for ${unit.name} (owner: ${unit.owner}, scale: ${unit.scale})`);
             window.gfx.getModel(unit.model, scene).then(model => {
                 unit.mesh = model.root;
                 unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
                 
                 // Make unit meshes pickable for selection
                 unit.mesh.isPickable = true;
+                // console.log(`✅ Mesh loaded and set pickable for ${unit.name} (owner: ${unit.owner})`);
                 
                 // Set up shadows for unit mesh
                 if (window.gfx && window.gfx.setupMeshShadows) {
@@ -446,6 +462,7 @@ function spawnUnitModels(scene) {
                 // Handle child meshes - preserve their original rotations
                 unit.mesh.getChildMeshes().forEach(mesh => {
                     mesh.isPickable = true;
+                    // console.log(`  ↳ Child mesh also set pickable: ${mesh.name}`);
                     
                     // Store their original rotations if they have them
                     if (mesh.rotationQuaternion) {
@@ -462,8 +479,14 @@ function spawnUnitModels(scene) {
                 // Initial position from physics body
                 if (unit.pb && unit.pb.state && unit.pb.state.loc) {
                     unit.mesh.position.x = unit.pb.state.loc.x;
-                    unit.mesh.position.y = unit.pb.state.loc.y;
+                    unit.mesh.position.y = Number.isFinite(unit.pb.state.loc.y) ? unit.pb.state.loc.y : 0;
                     unit.mesh.position.z = unit.pb.state.loc.z;
+                    
+                    // Fix NaN in physics body if found
+                    if (!Number.isFinite(unit.pb.state.loc.y)) {
+                        console.warn(`⚠️ Fixed NaN Y position for ${unit.name}, setting to 0`);
+                        unit.pb.state.loc.y = 0;
+                    }
                     // console.log(`📍 ${unit.name} positioned at (${unit.mesh.position.x.toFixed(1)}, ${unit.mesh.position.y.toFixed(1)}, ${unit.mesh.position.z.toFixed(1)}) with scale ${unit.scale}`);
                 }
                 
@@ -495,6 +518,10 @@ function spawnUnitModels(scene) {
             });
         }
     });
+    
+    if (unitsNeedingMeshes > 0) {
+        console.log(`✅ Spawning meshes for ${unitsNeedingMeshes}/${gameUnits.length} units`);
+    }
 }
 
 // Create a selection indicator for a unit
@@ -645,9 +672,10 @@ function updateUnitMeshes() {
     
     gameUnits.forEach((unit, index) => {
         if (unit.mesh && unit.pb && unit.pb.state) {
-            // Check if this unit should update this frame based on LOD
-            if (!shouldUpdateUnit(unit, currentFrame)) {
-                return; // Skip this unit this frame
+            // GAMEPLAY UNITS (player/AI) - ALWAYS update mesh position every frame for smooth movement
+            // NEUTRAL UNITS - Use LOD to skip frames for performance
+            if (unit.owner === 'neutral' && !shouldUpdateUnit(unit, currentFrame)) {
+                return; // Skip neutral units based on LOD
             }
             
             // Check if unit has active behavior - if so, skip animation system
@@ -769,17 +797,18 @@ function updateUnitMeshes() {
                             // Reset scaling to base scale (no breathing like mushrooms)
                             unit.mesh.scaling.setAll(unit.scale);
                             
+                        } else if (unit.name.includes('Villager')) {
+                            // Villagers don't hop - they're working or idle standing
+                            unit.mesh.position.y = unit.pb.state.loc.y; // No hopping
+                            
                         } else {
-                            // Only frogs and villagers hop
+                            // Only frogs hop
                             let hopFrequency, hopAmplitude;
                             if (unit.name.includes('Frog')) {
                                 // Each frog gets a unique hop frequency stretch factor
                                 const stretchFactor = 0.7 + (unit.id.charCodeAt(2) % 100) / 100 * 0.6; // 0.7x to 1.3x speed
                                 hopFrequency = 0.0012 * stretchFactor; // Individual hop timing!
                                 hopAmplitude = 1.2;
-                            } else if (unit.name.includes('Villager')) {
-                                hopFrequency = 0.0003; // Occasional subtle hops
-                                hopAmplitude = 0.4;
                             } else {
                                 // Other units (if any) get rare tiny hops
                                 hopFrequency = 0.0002;
@@ -897,8 +926,8 @@ function destroyUnit(unit) {
     }
     
     // Remove from behavior manager
-    if (window.behaviorManager) {
-        window.behaviorManager.removeBehavior(unit);
+    if (window.behaviorManager && window.behaviorManager.behaviors) {
+        window.behaviorManager.behaviors.delete(unit);
     }
     
     // Remove from scene
@@ -994,10 +1023,16 @@ function spawnAgoraVillagers() {
     // console.log(`✅ Spawned ${villagerCount} villagers around the agora`);
 }
 
-// Auto-initialize units when the scene is ready
+// Auto-initialize units when the scene is ready (MENU SCENE ONLY)
 function autoInitUnits() {
+    // CRITICAL: Only auto-spawn neutral units in menu scene, NOT during actual matches
+    if (window.game || window.currentMatch) {
+        console.log('🚫 Skipping autoInitUnits - match is active');
+        return;
+    }
+    
     if (window.gfx && window.gfx.scene) {
-        // console.log("Auto-initializing units...");
+        console.log("🎨 Auto-initializing neutral units for menu scene...");
         sprinkleUnits(); // Neutral units spread across map
         spawnUnitModels(window.gfx.scene);
     } else {

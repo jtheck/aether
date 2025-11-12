@@ -92,6 +92,11 @@ function Field(ops = {}) {
   this.tiles = [];
   this.seed = ops.seed || Math.random() * 1000000;
   
+  // Instance properties for chunk management
+  this.chunks = new Map();
+  this.chunkSize = 16;
+  this._heightCache = new Map();
+  
   // Initialize random number generator with seed
   // this.rng = this.seededRandom(this.seed);
   
@@ -362,13 +367,7 @@ Field.prototype.getTile = function(x, y) {
 
   // Method to get height variation for terrain
   Field.prototype.getHeightVariation = function(x, y, amplitude = null) {
-    // Use LOD-controlled amplitude if available, otherwise use default
     const effectiveAmplitude = amplitude || this.currentHeightVariation || this.originalHeightVariation || 0.11;
-    
-    // Cache for height variations to avoid recalculating
-    if (!this._heightCache) {
-      this._heightCache = new Map();
-    }
     
     const cacheKey = `${Math.floor(x)},${Math.floor(y)}`;
     if (this._heightCache.has(cacheKey)) {
@@ -417,10 +416,7 @@ Field.prototype.getTile = function(x, y) {
 
 
 
-// Add chunk management to Field class
-Field.prototype.chunks = new Map(); // Store chunk data + meshes
-Field.prototype.chunkSize = 16; // 16x16 tiles per chunk for better performance
-
+// Chunk management methods
 Field.prototype.getChunk = function(chunkX, chunkZ) {
   const chunkKey = `${chunkX},${chunkZ}`;
   
@@ -520,7 +516,9 @@ Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = 
   
   // Debug info (only log when something changes)
   if (chunksLoaded > 0 || chunksUnloaded > 0) {
-    // Chunk loading/unloading activity
+    const totalChunks = this.chunks.size;
+    const lodModelCount = window.gfx?.lodModels?.length || 0;
+    // console.log(`🗺️ Chunks: ${totalChunks} loaded | +${chunksLoaded} added, -${chunksUnloaded} removed | LOD models: ${lodModelCount}`);
   }
 };
 
@@ -543,6 +541,25 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
   }
 };
 
+// Dispose field and clean up all resources
+Field.prototype.dispose = function() {
+  if (window.gfx && window.gfx.clearChunkQueue) {
+    window.gfx.clearChunkQueue();
+  }
+  
+  const chunkKeys = Array.from(this.chunks.keys());
+  chunkKeys.forEach(key => {
+    const [chunkX, chunkZ] = key.split(',').map(Number);
+    this.unloadChunk(chunkX, chunkZ);
+  });
+  
+  this.chunks.clear();
+  if (this._heightCache) {
+    this._heightCache.clear();
+  }
+  this.tiles = [];
+};
+
 
 
 
@@ -556,8 +573,9 @@ let liveField = new Field({width: tilect, height: tilect, seed: 52});
 // Bias toward daytime hours (0.2 to 0.8) for better visibility
 liveField.timeOfDay = 0.2 + (Math.random() * 0.6);
 
-// Make liveField available globally for other systems
+// Make liveField and Field constructor available globally
 window.liveField = liveField;
+window.Field = Field;
 
 
 

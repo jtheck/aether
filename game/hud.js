@@ -1625,14 +1625,30 @@
     }
   }
 
-  // Update minimap indicators by moving existing spheres
-  function updateMinimap() {
+  // Store active groups for position-only updates
+  let activeGroups = new Map();
+  
+  // Update minimap indicators - group by type and direction
+  function updateMinimap(fullUpdate = true) {
     if (!hud.camera || !window.player || !window.player.units) return;
     
-    let indicatorIndex = 0;
+    // FAST PATH: Smoothly interpolate existing indicators toward their targets (every frame)
+    if (!fullUpdate) {
+      minimapIndicators.forEach(indicator => {
+        if (indicator && indicator.targetPosition && indicator.isEnabled()) {
+          // Smooth lerp toward target position (0.3 = smooth but responsive)
+          indicator.position = BABYLON.Vector3.Lerp(indicator.position, indicator.targetPosition, 0.3);
+        }
+      });
+      return;
+    }
+    
+    // SLOW PATH: Recalculate groups and frustum checks (every 5 frames)
+    // Group off-screen units by type and direction (continuous spread from corners)
+    const groups = new Map(); // Key: "type_direction", Value: {type, direction, units[], position}
     
     // Process each player unit
-    window.player.units.forEach((unit, index) => {
+    window.player.units.forEach((unit) => {
       if (!unit.mesh || !unit.pb.state.loc) return;
       
       const unitWorldPos = new BABYLON.Vector3(
@@ -1643,15 +1659,103 @@
       
       // Check if unit is visible in camera frustum
       if (!isUnitInFrustum(unitWorldPos)) {
-        // Unit is outside view, update or create edge indicator
-        updateEdgeIndicator(unit, indicatorIndex, unitWorldPos);
-        indicatorIndex++;
+        // Determine which edge (for grouping) but keep precise position
+        const toUnit = unitWorldPos.subtract(window.gfx.cameraTarget?.position || hud.camera.position).normalize();
+        const cameraForward = hud.camera.getForwardRay().direction.normalize();
+        const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
+        const cameraUp = BABYLON.Vector3.Cross(cameraRight, cameraForward).normalize();
+        const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight);
+        const upDot = BABYLON.Vector3.Dot(toUnit, cameraUp);
+        
+        // Map to nearest corner (corners are primary positions)
+        // Find which corner this direction is closest to
+        let cornerX = rightDot > 0 ? 'r' : 'l'; // right or left
+        let cornerY = upDot > 0 ? 't' : 'b'; // top or bottom
+        let corner = `corner-${cornerY}${cornerX}`;
+        
+        // Determine which edge we're on based on which direction is MORE extreme
+        // Compare the raw absolute dot products - higher = more extreme in that direction
+        const absRight = Math.abs(rightDot);
+        const absUp = Math.abs(upDot);
+        const totalMag = absRight + absUp;
+        
+        // Normalize to 0-1 scale
+        const rightNorm = absRight / totalMag; // 0 = pure vertical, 1 = pure horizontal
+        const upNorm = absUp / totalMag;       // 0 = pure horizontal, 1 = pure vertical
+        
+        // At 45° corner: both are 0.5
+        // At cardinal edge: one is ~1, other is ~0
+        // Add deadzone around 0.5 to lock to corners
+        const cornerThreshold = 0.35; // Lock to corner if both are between 0.35-0.65
+        
+        let edgeSpread, spreadDir;
+        if (rightNorm > cornerThreshold && rightNorm < (1 - cornerThreshold) &&
+            upNorm > cornerThreshold && upNorm < (1 - cornerThreshold)) {
+          // Near 45° diagonal - lock to corner
+          // Pick a consistent spread direction (doesn't matter since spread=0)
+          spreadDir = rightNorm > upNorm ? 'v' : 'h';
+          edgeSpread = 0;
+          corner = `${corner}_${spreadDir}0`;
+        } else if (rightNorm > upNorm) {
+          // More horizontal = on LEFT/RIGHT edge, spread VERTICALLY along that edge
+          spreadDir = 'v';
+          // Remap: 0.65 -> 0, 1.0 -> 1
+          edgeSpread = Math.max(0, (rightNorm - (1 - cornerThreshold)) / cornerThreshold);
+          const bucket = Math.round(edgeSpread * 20);
+          corner = `${corner}_v${bucket}`;
+        } else {
+          // More vertical = on TOP/BOTTOM edge, spread HORIZONTALLY along that edge
+          spreadDir = 'h';
+          // Remap: 0.65 -> 0, 1.0 -> 1
+          edgeSpread = Math.max(0, (upNorm - (1 - cornerThreshold)) / cornerThreshold);
+          const bucket = Math.round(edgeSpread * 20);
+          corner = `${corner}_h${bucket}`;
+        }
+        
+        // Group by type AND corner spread position
+        const groupKey = `${unit.type}_${corner}`;
+        
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, {
+            type: unit.type,
+            position: corner,
+            cornerX: cornerX,
+            cornerY: cornerY,
+            edgeSpread: edgeSpread,
+            units: [],
+            avgPosition: unitWorldPos.clone()
+          });
+        }
+        
+        const group = groups.get(groupKey);
+        group.units.push(unit);
+        // Update average position and spread (proper averaging)
+        const count = group.units.length;
+        group.avgPosition = group.avgPosition.scale((count - 1) / count).add(unitWorldPos.scale(1 / count));
+        // Average the continuous spread value too for smooth positioning
+        group.edgeSpread = (group.edgeSpread * (count - 1) + edgeSpread) / count;
       }
     });
     
+    // Create/update indicators for each group
+    let indicatorIndex = 0;
+    for (const [groupKey, group] of groups) {
+      updateGroupIndicator(group, indicatorIndex);
+      indicatorIndex++;
+    }
+    
+    // Store groups for fast position-only updates
+    activeGroups = groups;
+    
     // Hide any extra indicators we're not using
     for (let i = indicatorIndex; i < minimapIndicators.length; i++) {
-      minimapIndicators[i].setEnabled(false);
+      if (minimapIndicators[i]) {
+        minimapIndicators[i].setEnabled(false);
+        // Hide count badge if it exists
+        if (minimapIndicators[i].countBadge) {
+          minimapIndicators[i].countBadge.setEnabled(false);
+        }
+      }
     }
   }
   
@@ -1672,15 +1776,34 @@
            screenPos.z >= 0 && screenPos.z <= 1;
   }
   
-  // Update or create a screen edge indicator for off-screen units
-  function updateEdgeIndicator(unit, index, unitWorldPos) {
+  // Get compass direction from camera to unit (N, NE, E, SE, S, SW, W, NW)
+  function getCompassDirection(unitWorldPos) {
+    const currentCameraPos = window.gfx && window.gfx.cameraTarget 
+      ? window.gfx.cameraTarget.position 
+      : hud.camera.position;
+    const toUnit = unitWorldPos.subtract(currentCameraPos).normalize();
+    const cameraForward = hud.camera.getForwardRay().direction.normalize();
+    const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
+    
+    const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight);
+    const upDot = BABYLON.Vector3.Dot(toUnit, BABYLON.Vector3.Cross(cameraRight, cameraForward).normalize());
+    
+    // 8-way compass directions
+    const angle = Math.atan2(rightDot, upDot);
+    const octant = Math.round(8 * angle / (2 * Math.PI) + 8) % 8;
+    const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    return directions[octant];
+  }
+  
+  // Update or create a group indicator using actual unit model
+  function updateGroupIndicator(group, index) {
     const rect = hud.canvas.getBoundingClientRect();
     
     // Use cameraTarget position if available for instant tracking, otherwise use camera position
     const currentCameraPos = window.gfx && window.gfx.cameraTarget 
       ? window.gfx.cameraTarget.position 
       : hud.camera.position;
-    const toUnit = unitWorldPos.subtract(currentCameraPos).normalize();
+    const toUnit = group.avgPosition.subtract(currentCameraPos).normalize();
     const cameraForward = hud.camera.getForwardRay().direction.normalize();
     const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
     const cameraUp = BABYLON.Vector3.Cross(cameraRight, cameraForward).normalize();
@@ -1689,153 +1812,275 @@
     const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight); // Flip to correct left/right
     const upDot = BABYLON.Vector3.Dot(toUnit, cameraUp);
     
-    // Fixed buffer distance from screen edges (like anchor system)
+    const unitCount = group.units.length;
+    const hasSelection = group.units.some(u => window.player && window.player.isUnitSelected(u));
+    
+    // Position based on corner with spread
     let edgePos;
     const buffer = 30; // Fixed pixel distance from screen edge
     
-    // Clamp the dot values to determine direction
-    const clampedRightDot = Math.max(-1, Math.min(1, rightDot));
-    const clampedUpDot = Math.max(-1, Math.min(1, upDot));
-    
-    if (Math.abs(clampedRightDot) > Math.abs(clampedUpDot)) {
-      // RAIL: Left or right edge with fixed buffer
-      if (clampedRightDot > 0) {
-        // RIGHT RAIL - fixed distance from right edge
-        edgePos = {
-          x: rect.width - buffer, // Fixed buffer from right edge
-          y: Math.max(buffer, Math.min(rect.height - buffer, 
-              rect.height * (0.5 + clampedUpDot * 0.4))) // Centered with movement range
-        };
-      } else {
-        // LEFT RAIL - fixed distance from left edge
-        edgePos = {
-          x: buffer, // Fixed buffer from left edge
-          y: Math.max(buffer, Math.min(rect.height - buffer, 
-              rect.height * (0.5 + clampedUpDot * 0.4))) // Centered with movement range
-        };
-      }
+    // Parse position to get corner and spread direction
+    const positionMatch = group.position.match(/corner-([tb])([lr])_([vh])(\d+)/);
+    if (!positionMatch) {
+      // Fallback to simple corner
+      const simpleMatch = group.position.match(/corner-([tb])([lr])/);
+      if (!simpleMatch) return;
+      const [, cornerY, cornerX] = simpleMatch;
+      const spreadDir = 'v';
     } else {
-      // RAIL: Top or bottom edge with fixed buffer
-      if (clampedUpDot > 0) {
-        // TOP RAIL - fixed distance from top edge
-        edgePos = {
-          x: Math.max(buffer, Math.min(rect.width - buffer, 
-              rect.width * (0.5 + clampedRightDot * 0.4))), // Centered with movement range
-          y: buffer // Fixed buffer from top edge
-        };
-      } else {
-        // BOTTOM RAIL - fixed distance from bottom edge
-        edgePos = {
-          x: Math.max(buffer, Math.min(rect.width - buffer, 
-              rect.width * (0.5 + clampedRightDot * 0.4))), // Centered with movement range
-          y: rect.height - buffer // Fixed buffer from bottom edge
-        };
-      }
+      var [, cornerY, cornerX, spreadDir] = positionMatch;
     }
     
-    // Use same screen-to-world positioning as radial menu for consistent results
+    // Use the continuous spread value from the group (0-1) for smooth positioning
+    const spreadFactor = group.edgeSpread; // Already 0-1 continuous value
+    
+    // Start at the corner
+    let baseX = cornerX === 'r' ? rect.width - buffer : buffer;
+    let baseY = cornerY === 't' ? buffer : rect.height - buffer;
+    if (spreadDir === 'h') {
+      // Spread horizontally from corner to middle of edge
+      const targetX = rect.width / 2; // Move toward center
+      baseX = baseX + (targetX - baseX) * spreadFactor; // Full spread to middle
+    } else {
+      // Spread vertically from corner to middle of edge
+      const targetY = rect.height / 2; // Move toward center
+      baseY = baseY + (targetY - baseY) * spreadFactor; // Full spread to middle
+    }
+    
+    edgePos = { x: baseX, y: baseY };
+    
+    // Calculate rotation values for tilt
+    const clampedRightDot = cornerX === 'r' ? 1 : -1;
+    const clampedUpDot = cornerY === 't' ? 1 : -1;
+    
+    // Calculate position in camera-local space (since indicators are parented to camera)
     const ray = hud.scene.createPickingRay(edgePos.x, edgePos.y, BABYLON.Matrix.Identity(), hud.camera);
     const worldPos = ray.origin.add(ray.direction.scale(menuConfig.distance)); // Same distance as radial menu
     
-    // Check if this unit is selected using player's selection system
-    const isSelected = window.player && window.player.isUnitSelected(unit);
+    // Convert world position to camera-local coordinates using inverse camera matrix
+    const cameraMatrix = hud.camera.getWorldMatrix();
+    const inverseCameraMatrix = BABYLON.Matrix.Invert(cameraMatrix);
+    const localPos = BABYLON.Vector3.TransformCoordinates(worldPos, inverseCameraMatrix);
     
     // Reuse existing indicator or create new one
     let indicator;
-    if (index < minimapIndicators.length) {
-      // Reuse existing sphere
+    if (index < minimapIndicators.length && minimapIndicators[index]) {
+      // Reuse existing indicator
       indicator = minimapIndicators[index];
       indicator.setEnabled(true);
       
-      // Update the linked unit reference for reused indicators
-      indicator.linkedUnit = unit;
+      // Update the linked group reference
+      indicator.linkedGroup = group;
     } else {
-      // Create new sphere
-      indicator = BABYLON.MeshBuilder.CreateSphere(`minimap_${index}`, {diameter: 0.15}, hud.scene);
+      // Create new indicator using actual unit model
+      const unitType = window.UnitTypes[group.type];
+      if (!unitType || !window.gfx) return;
       
-      // Create material that will be updated below
-      const material = new BABYLON.StandardMaterial(`minimap_mat_${index}`, hud.scene);
-      material.disableLighting = true; // Make them glow like the center sphere
-      indicator.material = material;
-      
-      // Make indicator clickable for unit selection
-      indicator.isPickable = true;
-      
-      minimapIndicators.push(indicator);
-    }
-    
-    // Update colors based on selection status
-    if (isSelected) {
-      // Selected units: bright yellow/gold
-      indicator.material.diffuseColor = new BABYLON.Color3(1, 1, 0);
-      indicator.material.emissiveColor = new BABYLON.Color3(1, 0.8, 0);
-      indicator.scaling = new BABYLON.Vector3(1.5, 1.5, 1.5); // Make selected units bigger
-    } else {
-      // Unselected units: normal green
-      indicator.material.diffuseColor = new BABYLON.Color3(0, 1, 0);
-      indicator.material.emissiveColor = new BABYLON.Color3(0, 0.8, 0);
-      indicator.scaling = new BABYLON.Vector3(1, 1, 1); // Normal size
-    }
-    
-    // Set position directly for instant response - no catchup lag
-    indicator.position.copyFrom(worldPos);
-    
-    // Store edge info for this unit
-    unit.hudCoord = { edgePos, rightDot, upDot };
-    
-          // Add click functionality to the indicator (only for newly created ones)
-      if (!indicator.actionManager) {
-        indicator.actionManager = new BABYLON.ActionManager(hud.scene);
+      // Load the unit model asynchronously
+      window.gfx.getModel(unitType.model, hud.scene).then(model => {
+        indicator = model.root;
+        indicator.name = `edgeIndicator_${index}`;
+        indicator.scaling = new BABYLON.Vector3(0.15, 0.15, 0.15); // Smaller for edge indicators
+        indicator.isPickable = true;
+        indicator.linkedGroup = group;
         
-        // Store direct reference to the unit this indicator represents
-        indicator.linkedUnit = unit;
+        // Parent to camera so they move automatically!
+        indicator.parent = hud.camera;
         
-        // Add double-click detection for "select all of type"
-        let lastClickTime = 0;
-        const DOUBLE_CLICK_DELAY = 300;
+        // Don't use billboard - we'll manually rotate them to face screen center
         
-        // Single click action - select the unit
-        indicator.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-          BABYLON.ActionManager.OnPickTrigger,
-          function() {
-            const currentTime = Date.now();
-            const linkedUnit = indicator.linkedUnit; // Get the unit from the indicator
-            
-            if (currentTime - lastClickTime < DOUBLE_CLICK_DELAY) {
-              // Double-click detected! Select all units of this type
-              // console.log(`🔄 Double-clicked minimap indicator for ${linkedUnit.name} (${linkedUnit.type}) - selecting all units of this type`);
-              
-              // Use player's selection system for double-click functionality
-              if (window.player && window.player.selectAllUnitsOfType) {
-                window.player.selectAllUnitsOfType(linkedUnit.type);
-              }
-              
-              lastClickTime = 0; // Reset for next double-click
-            } else {
-              // Single click - select just this unit
-              // console.log(`🗺️ Minimap indicator clicked for unit: ${linkedUnit.name}`);
-              
-              // Use player's selection system for single-click unit selection
-              if (window.player && window.player.selectUnit) {
-                // Clear current selection and select just this unit
-                window.player.clearSelection();
-                window.player.selectUnit(linkedUnit);
-              }
-              
-              lastClickTime = currentTime;
-              
-              // IMPORTANT: Return true to prevent the click from propagating to terrain
-              return true;
-            }
+        // Make it glow/stand out
+        indicator.getChildMeshes().forEach(mesh => {
+          if (mesh.material) {
+            mesh.material.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
           }
-        ));
+          // Ensure child meshes are pickable too
+          mesh.isPickable = true;
+        });
+        
+        // Add selection ring (like units have)
+        const ring = BABYLON.MeshBuilder.CreateTorus(`selectionRing_${index}`, {
+          diameter: 0.3,
+          thickness: 0.02,
+          tessellation: 16
+        }, hud.scene);
+        const ringMat = new BABYLON.StandardMaterial(`ringMat_${index}`, hud.scene);
+        ringMat.emissiveColor = new BABYLON.Color3(0, 1, 0);
+        ringMat.disableLighting = true;
+        ring.material = ringMat;
+        ring.rotation.x = Math.PI / 2; // Lay flat
+        ring.position.y = -0.05; // Just below unit
+        ring.parent = indicator;
+        ring.setEnabled(false); // Hidden by default
+        ring.isPickable = false; // Don't block clicks to parent
+        indicator.selectionRing = ring;
+        
+        minimapIndicators[index] = indicator;
+      }).catch(err => {
+        console.warn(`Failed to load edge indicator model for ${group.type}:`, err);
+      });
+      return; // Skip rest of update until model loads
+    }
+    
+    // Update visual based on selection status
+    if (hasSelection) {
+      // Has selected units: bright yellow glow + show ring
+      indicator.getChildMeshes().forEach(mesh => {
+        if (mesh.material && mesh.material.emissiveColor) {
+          mesh.material.emissiveColor = new BABYLON.Color3(1, 0.8, 0);
+        }
+      });
+      indicator.scaling = new BABYLON.Vector3(0.2, 0.2, 0.2); // Slightly bigger when selected
+      
+      // Show yellow selection ring
+      if (indicator.selectionRing) {
+        indicator.selectionRing.setEnabled(true);
+        indicator.selectionRing.material.emissiveColor = new BABYLON.Color3(1, 1, 0);
       }
+    } else {
+      // Normal green glow + hide ring
+      indicator.getChildMeshes().forEach(mesh => {
+        if (mesh.material && mesh.material.emissiveColor) {
+          mesh.material.emissiveColor = new BABYLON.Color3(0, 0.8, 0);
+        }
+      });
+      indicator.scaling = new BABYLON.Vector3(0.15, 0.15, 0.15); // Normal size
+      
+      // Hide selection ring
+      if (indicator.selectionRing) {
+        indicator.selectionRing.setEnabled(false);
+      }
+    }
+    
+    // Smoothly interpolate to new position (lerp for smooth movement)
+    if (!indicator.targetPosition) {
+      indicator.targetPosition = localPos.clone();
+      indicator.position.copyFrom(localPos);
+    } else {
+      indicator.targetPosition.copyFrom(localPos);
+    }
+    
+    // Simple rotation based on which edge they're on
+    // Reset rotation first
+    indicator.rotation = BABYLON.Vector3.Zero();
+    
+    // Face toward camera origin (they're parented to camera, so face "backward" toward 0,0,0)
+    indicator.rotation.y = Math.atan2(localPos.x, localPos.z) + Math.PI; // +PI to face inward
+    
+    // Tilt based on position along edge from corner
+    // Interpolate rotation between corner angle and edge angle
+    // (spreadFactor is continuous 0-1 value from group.edgeSpread)
+    
+    // Determine corner base angle (45° diagonals)
+    let cornerAngle;
+    if (cornerX === 'r' && cornerY === 't') cornerAngle = -Math.PI * 3/4; // TR
+    else if (cornerX === 'l' && cornerY === 't') cornerAngle = Math.PI * 3/4; // TL
+    else if (cornerX === 'r' && cornerY === 'b') cornerAngle = -Math.PI / 4; // BR
+    else cornerAngle = Math.PI / 4; // BL
+    
+    // Determine target edge angle (90° cardinals)
+    let edgeAngle;
+    if (spreadDir === 'h') {
+      // Spreading horizontally - target top or bottom edge
+      edgeAngle = cornerY === 't' ? Math.PI : 0; // Top or bottom
+    } else {
+      // Spreading vertically - target left or right edge
+      edgeAngle = cornerX === 'r' ? -Math.PI / 2 : Math.PI / 2; // Right or left
+    }
+    
+    // Interpolate between corner and edge angle
+    // Normalize the angle difference to take shortest path (fixes gimbal lock at top-right)
+    let angleDiff = edgeAngle - cornerAngle;
+    // Wrap to -π to π range
+    while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+    while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+    indicator.rotation.z = cornerAngle + angleDiff * spreadFactor;
+    
+    // Add/update count badge if group has multiple units
+    if (unitCount > 1) {
+      if (!indicator.countBadge) {
+        // Create count badge (text plane)
+        const plane = BABYLON.MeshBuilder.CreatePlane(`countBadge_${index}`, {size: 0.2}, hud.scene);
+        const badgeMat = new BABYLON.StandardMaterial(`badgeMat_${index}`, hud.scene);
+        badgeMat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+        badgeMat.emissiveColor = new BABYLON.Color3(1, 1, 0);
+        badgeMat.disableLighting = true;
+        
+        // Create dynamic texture for the number
+        const texture = new BABYLON.DynamicTexture(`badgeTexture_${index}`, 64, hud.scene);
+        badgeMat.diffuseTexture = texture;
+        badgeMat.opacityTexture = texture;
+        plane.material = badgeMat;
+        
+        plane.parent = indicator;
+        plane.position.y = 0.3; // Above unit model
+        plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL; // Always face camera
+        
+        indicator.countBadge = plane;
+        indicator.badgeTexture = texture;
+      }
+      
+      // Update badge text
+      const texture = indicator.badgeTexture;
+      texture.clear();
+      const ctx = texture.getContext();
+      ctx.font = "bold 48px Arial";
+      ctx.fillStyle = "white";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(unitCount.toString(), 32, 32);
+      texture.update();
+      indicator.countBadge.setEnabled(true);
+    } else if (indicator.countBadge) {
+      indicator.countBadge.setEnabled(false);
+    }
+    
+    // Add/update click functionality to select the group
+    if (!indicator.actionManager) {
+      indicator.actionManager = new BABYLON.ActionManager(hud.scene);
+    }
+    
+    // Clear old actions and re-register (in case linkedGroup changed)
+    indicator.actionManager.actions = [];
+    
+    // CLICK - Select all units in the group
+    indicator.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+      BABYLON.ActionManager.OnPickTrigger,
+      function(evt) {
+        const linkedGroup = indicator.linkedGroup;
+        if (!linkedGroup || !window.player) return;
+        
+        console.log(`🎯 Edge indicator clicked! Selecting ${linkedGroup.units.length} ${linkedGroup.type}(s)`);
+        
+        // Select all units in this group
+        window.player.clearSelection();
+        linkedGroup.units.forEach(unit => {
+          window.player.selectUnit(unit);
+        });
+        
+        // Prevent click from propagating to terrain/radial menu
+        evt.skipNextObservers = true;
+      }
+    ));
   }
   
   // Clear all minimap indicators
   function clearMinimapIndicators() {
     minimapIndicators.forEach(indicator => {
-      indicator.dispose();
+      if (indicator) {
+        // Dispose selection ring if it exists
+        if (indicator.selectionRing) {
+          indicator.selectionRing.dispose();
+        }
+        // Dispose count badge if it exists
+        if (indicator.countBadge) {
+          indicator.countBadge.dispose();
+        }
+        if (indicator.badgeTexture) {
+          indicator.badgeTexture.dispose();
+        }
+        indicator.dispose();
+      }
     });
     minimapIndicators = [];
   }
@@ -1898,7 +2143,7 @@
     }
   };
   
-  // Initialize LOD slider
+  // Initialize LOD slider (requires DOM elements to exist)
   hud.initLODSlider = function() {
     const slider = document.getElementById('lod_slider');
     const valueDisplay = document.getElementById('lod_value');
@@ -1906,8 +2151,7 @@
     // console.log('🎚️ Initializing LOD slider:', { slider: !!slider, valueDisplay: !!valueDisplay });
     
     if (!slider || !valueDisplay) {
-      console.warn('🎚️ LOD slider elements not found, retrying in 100ms...');
-      setTimeout(() => hud.initLODSlider(), 100);
+      // console.warn('🎚️ LOD slider elements not found, will sync when settings menu opens');
       return;
     }
     
@@ -1917,7 +2161,7 @@
     slider.value = initialValue;
     valueDisplay.textContent = initialValue + '%';
     
-    // Update LOD distances based on slider value
+    // Apply LOD setting (this also happens at startup via applySavedLODSetting)
     hud.updateLODDistances(initialValue);
     
     // Add event listener for slider changes
@@ -1956,12 +2200,12 @@
   };
 
   // Update LOD distances based on slider value (0-100)
-  hud.updateLODDistances = function(level) {
+  hud.updateLODDistances = function(value) {
     // Level 0 = minimum LOD (very close distances)
     // Level 50 = default LOD (current distances)
     // Level 100 = maximum LOD (very far distances)
     
-    const multiplier = 0.3 + (level / 100) * 1.4; // Range from 0.3x to 1.7x
+    const multiplier = 0.3 + (value / 100) * 1.4; // Range from 0.3x to 1.7x
     
     // Update unit LOD distances
     if (window.LOD_DISTANCES) {
@@ -1982,6 +2226,13 @@
       window.gfx.updateLODDistances(multiplier);
     }
     
+    // NEW: Reconfigure shadows based on new LOD level
+    if (window.gfx && window.gfx.onLODDistanceUpdate) {
+      window.gfx.onLODDistanceUpdate(value);
+    }
+    
+    // Log for debugging (can remove later)
+    // console.log(`🎚️ LOD updated to ${value}% (multiplier: ${multiplier.toFixed(2)})`);
   };
   
   // Update slider background color based on value

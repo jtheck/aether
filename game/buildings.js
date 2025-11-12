@@ -2,10 +2,10 @@
 
 // Add particle effects to buildings based on their type
 function addBuildingParticleEffects(building) {
-  // // console.log(`🔥 addBuildingParticleEffects called for ${building.name}`);
+  // console.log(`🔥 addBuildingParticleEffects called for ${building.name}`);
   
   if (!window.fx || !building.mesh) {
-    // // console.log(`❌ Missing dependencies - fx: ${!!window.fx}, mesh: ${!!building.mesh}`);
+    // console.log(`❌ Missing dependencies - fx: ${!!window.fx}, mesh: ${!!building.mesh}`);
     return;
   }
   
@@ -55,13 +55,7 @@ function addBuildingParticleEffects(building) {
       break;
       
     case 'agora':
-      // Add grand fire effect for agora
-      window.fx.attachParticleEffect(building, 'fire', 'fire_anchor', {
-        scale: 1.5, // Large ceremonial fire
-        emitRate: 80,
-        minSize: 1.5,
-        maxSize: 3.0
-      });
+      // Agora model has no particle anchors - skip particle effects
       break;
       
     case 'brigand':
@@ -94,7 +88,7 @@ const BuildingTypes = {
     name: "Agora",
     model: "assets/models/agora.glb",
     scale: 1.0, // Big and impressive as it should be!
-    rotation: Math.floor(Math.random() * 24) * (Math.PI / 12), // Random 15-degree intervals (0°, 15°, 30°, 45°, etc.)
+    rotation: 0, // Fixed rotation for multiplayer determinism (was random)
     size: { width: 4, height: 4 }, // Size in tiles
     cost: { stone: 100, wood: 50 },
     description: "Ancient marketplace and gathering place",
@@ -178,7 +172,10 @@ function Building(buildingType, position, options = {}) {
   Object.assign(this, def);
   
   // Building instance properties
-  this.id = options.id || Math.random().toString(36).substr(2, 9);
+  // MULTIPLAYER: Generate deterministic IDs based on match seed and building count
+  this.id = options.id || (window.isMultiplayer && window.currentMatch ? 
+      `building-${window.currentMatch.mapSeed}-${(window.playerBuildings?.length || 0)}` : 
+      Math.random().toString(36).substr(2, 9));
   this.position = position || { x: 0, y: 0, z: 0 };
   this.owner = options.owner || 'player';
   this.health = options.health || 100;
@@ -253,11 +250,15 @@ function placeBuilding(buildingType, x, z, scene) {
         window.gfx.setupMeshShadows(building.mesh);
       }
       
-      // Add particle effects after a short delay to ensure mesh is fully ready (for towers)
-      if (building.name.toLowerCase() === 'tower' && window.fx) {
+      // CRITICAL: Add particle effects after delay for ALL buildings
+      // This ensures mesh hierarchy and world matrices are fully computed
+      // Otherwise particles appear at (0,0,0) corner!
+      if (window.fx) {
         setTimeout(() => {
+          // Force recompute world matrices to ensure positions are correct
+          building.mesh.computeWorldMatrix(true);
           addBuildingParticleEffects(building);
-        }, 100); // Small delay to ensure mesh hierarchy is ready
+        }, 150); // Delay to ensure mesh hierarchy is ready
       }
       
       // Create the animations
@@ -650,6 +651,11 @@ function processWorkProduction(building) {
 
 // Update building logic (damage, construction progress, etc.)
 function updateBuildings(deltaTime) {
+  // Safe to run in menu scene - just guard against missing dependencies
+  if (!window.gameBuildings || window.gameBuildings.length === 0) {
+    return; // No buildings to update
+  }
+  
   gameBuildings.forEach(building => {
     // Update building-specific logic here
     // - Construction progress
@@ -657,16 +663,16 @@ function updateBuildings(deltaTime) {
     // - Production cycles
     // - Defensive actions
     
-    // Handle villager spawning for villages
-    if (building.spawnsVillagers && building.buildProgress >= 1.0) {
+    // Handle villager spawning for villages (only if game is running)
+    if (building.spawnsVillagers && building.buildProgress >= 1.0 && window.currentMatch && window.currentMatch.state === 'playing') {
       spawnVillagerFromVillage(building);
     }
     
-    // Handle work assignment for buildings that need workers
-    if (building.needsWorkers && building.buildProgress >= 1.0) {
+    // Handle work assignment for buildings that need workers (only if game is running)
+    if (building.needsWorkers && building.buildProgress >= 1.0 && window.currentMatch && window.currentMatch.state === 'playing') {
       // Clean up any workers that are no longer valid
       building.assignedWorkers = building.assignedWorkers.filter(worker => {
-        if (!worker || !gameUnits.includes(worker)) {
+        if (!worker || !window.gameUnits.includes(worker)) {
           return false; // Remove invalid workers
         }
         
@@ -698,62 +704,23 @@ function updateBuildings(deltaTime) {
   });
 }
 
-// Auto-initialize buildings when scene is ready
+// Auto-initialize menu scene terrain when scene is ready
 function autoInitBuildings() {
-  // // console.log("autoInitBuildings called - checking dependencies...");
-  // // console.log("gfx exists:", !!window.gfx);
-  // // console.log("scene exists:", !!window.gfx?.scene);
-  // // console.log("liveField exists:", !!window.liveField);
-  // // console.log("player exists:", !!window.player);
-  // // console.log("player.agora exists:", !!window.player?.agora);
+  // Menu scene: Load terrain around default camera position, but NO units/buildings
+  // Units and buildings only spawn when a match actually starts
   
-  if (window.gfx && window.gfx.scene && window.liveField && window.player && window.player.agora) {
-    // // console.log("✓ All dependencies ready - auto-initializing buildings...");
-    
-    // Get agora position from player
-    const agoraPosition = new BABYLON.Vector3(
-      window.player.agora.x * TILE_SIZE, 
-      0, 
-      window.player.agora.y * TILE_SIZE
-    );
-    
-    // // console.log("Agora will be placed at:", agoraPosition);
-    
-    // Move camera to agora position FIRST (before loading terrain)
-    if (window.gfx.cameraTarget) {
-      window.gfx.cameraTarget.position = agoraPosition;
-      // // console.log("✓ Camera moved to player's agora position:", agoraPosition);
-    }
-    
-    // Small delay to let camera settle, then load terrain around new position
-    setTimeout(() => {
-      // // console.log("✓ Loading terrain around agora...");
-      window.liveField.updateVisibleChunks(agoraPosition.x, agoraPosition.z);
-      
-      // Another small delay for terrain to load, then place buildings and spawn villagers
-      setTimeout(() => {
-        // // console.log("✓ Calling initBuildings...");
-        initBuildings(window.gfx.scene);
-        
-        // Spawn villagers at the agora after buildings are placed
-        if (window.spawnAgoraVillagers && window.spawnUnitModels) {
-          window.spawnAgoraVillagers();
-          // Load models for the new villagers
-          window.spawnUnitModels(window.gfx.scene);
-        }
-        
-        // Trigger LOD ramp-up after buildings are initialized
-        if (window.gfx && window.gfx.startLODRampUp) {
-          window.gfx.startLODRampUp();
-        }
-        
-        // // console.log("✓ Buildings and villagers initialized at player's agora");
-      }, 300);
-    }, 100);
-    
-  } else {
-    // // console.log("⏳ Dependencies not ready, retrying in 1 second...");
+  const sceneReady = window.gfx && window.gfx.scene && window.liveField;
+  
+  if (!sceneReady) {
     setTimeout(autoInitBuildings, 1000);
+    return;
+  }
+  
+  // Load terrain chunks around the camera's starting position
+  if (window.gfx.cameraTarget) {
+    const cameraPos = window.gfx.cameraTarget.position;
+    window.liveField.updateVisibleChunks(cameraPos.x, cameraPos.z);
+    console.log(`🗺️ Menu scene: Loading terrain at (${cameraPos.x.toFixed(1)}, ${cameraPos.z.toFixed(1)})`);
   }
 }
 
@@ -777,6 +744,12 @@ const buildingSystem = {
     if (!BuildingTypes[buildingType]) {
       // console.error(`Unknown building type: ${buildingType}`);
       return;
+    }
+    
+    // CRITICAL: Dispose old preview mesh before creating new one!
+    if (this.previewMesh) {
+      this.previewMesh.dispose();
+      this.previewMesh = null;
     }
     
     this.isPlacing = true;
@@ -810,6 +783,18 @@ const buildingSystem = {
     // Load the actual model
     window.gfx.getModel(buildingDef.model, window.gfx.scene).then(model => {
       this.previewMesh = model.root;
+      
+      // CRITICAL: Ensure preview mesh is visible!
+      this.previewMesh.setEnabled(true);
+      
+      // Mark as preview so it doesn't get culled by LOD system
+      this.previewMesh.metadata = this.previewMesh.metadata || {};
+      this.previewMesh.metadata.isPreview = true;
+      
+      // Also enable all child meshes (important!)
+      this.previewMesh.getChildMeshes().forEach(child => {
+        child.setEnabled(true);
+      });
       
       // Force Euler angles for rotation
       this.previewMesh.rotationQuaternion = null;
@@ -876,7 +861,6 @@ const buildingSystem = {
         this.createRadiusVisualization(this.previewMesh.position);
       }
       
-      // console.log('✅ Building preview created at position:', this.previewMesh.position);
     }).catch(err => {
       // console.error('Failed to create preview mesh:', err);
     });
@@ -1196,7 +1180,11 @@ const buildingSystem = {
   enablePlacementMode: function() {
     // Add mouse move handler for preview positioning
     this.mouseMoveHandler = (e) => {
-      if (!this.isPlacing || !this.previewMesh) return;
+      if (!this.isPlacing) return;
+      if (!this.previewMesh) {
+        // Preview mesh not loaded yet - this is normal during loading
+        return;
+      }
       
       try {
         // Get world position from mouse
@@ -1554,7 +1542,13 @@ const buildingSystem = {
       }
     }
     
-    // Default to a random rotation in 15-degree increments
+    // MULTIPLAYER: Use fixed rotation for determinism
+    // In single player, use random rotation
+    if (window.isMultiplayer) {
+      return 0; // Fixed rotation in multiplayer for determinism
+    }
+    
+    // Single player: random rotation in 15-degree increments
     return Math.floor(Math.random() * 24) * (Math.PI / 12); // 24 * 15 degrees = 360 degrees
   },
 

@@ -1,8 +1,3 @@
-
-
-
-
-
 const svgIcons = {
   close: '<svg width="100%" height="100%" viewBox="0 0 26 26"><path style="fill-opacity:1;stroke:none;stroke-width:.183891;stroke-dasharray:none;stroke-opacity:.998532" d="M19.14 6.972s-.032 1.038-.467 1.829c-.435.79-5.86 3.536-5.86 3.536S7.497 8.797 7.29 8.222c-.207-.575-.106-1.277-.106-1.277s-.568 1.39-.917 1.957c-.348.566-1.342 1.511-1.342 1.511s1.066-.416 1.468-.426c.402-.01 5.4 2.95 5.4 2.95s-4.99 2.675-5.568 2.8c-.577.124-1.54-.338-1.54-.338s.936 1.134 1.235 1.702c.3.567.732 1.954.732 1.954s-.038-1.009.229-1.72c.268-.713 5.917-3.78 5.917-3.78s5.356 3.46 5.699 3.822c.342.361.636 1.645.636 1.645s.338-1.235.62-1.853c.282-.618 1.464-1.498 1.464-1.498s-1.21.18-2.024.165c-.813-.015-5.34-2.873-5.34-2.873s4.908-2.19 5.552-2.163c.643.027 1.91.392 1.91.392s-1.206-.974-1.499-1.717c-.293-.743-.676-2.503-.676-2.503z"/></svg>',
   gear: '<svg width="100%" height="100%" viewBox="0 0 99 99"><path style="fill:none;stroke-width:5.7247;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1" d="M19.848 32.659c-1.806-1.905-4.302-3.979-3.715-6.864.587-2.886 3.377-4.255 5.047-6.328 2.445-2.1 4.659-5.56 7.23-6.445 2.572-.885 4.303.334 5.625 2.136 1.444 2.713 4.159.962 5.743-.022 1.584-.983.24-3.364.553-4.91.847-2.783 3.137-3.896 6.53-3.612 3.393.285 8.163-.171 12.152.131 2.662.855 3.88 3.565 3.551 6.178-.847 2.877 2.343 3.544 4.249 3.831 1.906.287 2.703-3.106 4.718-3.6 2.318-.704 4.694.416 6.074 2.332 2.76 2.844 5.757 5.526 8.373 8.47 1.432 2.208.843 5.306-1.37 6.84-2.75 1.304-.863 3.523-.202 5.424.56 1.77 3.223.504 4.69.965 2.867.574 4.58 3.565 4.027 6.362-.087 4.144.173 8.37-.129 12.463-.903 2.728-3.739 3.794-6.36 3.4-2.815-.855-3.66 2.272-3.701 4.4-.044 2.129 3.832 3.143 3.715 6.158-.116 3.015-3.148 4.714-4.856 6.902-2.183 2.054-4.186 4.389-6.481 6.268-2.39 1.178-5.253.166-6.771-1.984-1.428-2.729-3.793.123-5.917.4M19.98 80.1c-5.245 1.61-7.395.366-8.912-3.324-1.517-3.69-5.408-9.343-.99-11.256 4.418-1.913 1.252-5.106-2.313-5.849-3.565-.743-1.383-5.87-.649-8.652.595-3.907 3.17-8.828 7.766-7.428 4.596 1.401 2.93-3.363 1.658-6.44-1.272-3.076 3.584-4.967 6.12-6.444 2.633-1.203 6.81-5.717 8.635-2.048 1.825 3.669 6.523 4.471 7.034.12.512-4.351 5.305-2.722 7.898-1.583 2.61.841 5.56 1.053 7.88 2.547 2.932 2.642-.63 8.371 3.075 8.724 3.705.354 5.675-3.05 7.805-.139 1.775 3.475 4.201 6.704 5.57 10.36.73 4.216-6.377 5.791-3.895 8.755 2.481 2.963 6.003 1.783 5.552 5.261-1.079 3.69-1.956 7.472-3.179 11.132-2.418 3.981-8.885-.369-9.17 3.624-.287 3.992 3.078 6.539-.7 8.185-3.041 1.654-6.004 3.484-9.102 5.008-4.584 1.5-6.762-6.63-9.566-3.565-2.803 3.065-1.815 5.694-4.947 5.31-3.62-.996-7.274-1.972-11.295-3.579-4.021-1.606.97-10.329-4.275-8.72zm30.24-22.711c.178 1.042.34 2.142.14 3.18-.377 1.97-.998 3.998-2.263 5.56-.794.98-1.716 1.896-2.78 2.576-2.67 1.707-6.104 2.281-9.212 1.467h0c-1.337-.451-2.836-.829-3.865-1.813-1.038-.991-2.251-1.885-2.992-3.108-1.627-2.687-2.132-6.068-1.269-9.143 1.01-3.593 3.887-6.46 7.381-7.759 1.176-.437 2.344-.556 3.568-.529 1.275.03 2.572.092 3.785.513"/></svg>',
@@ -77,8 +72,15 @@ function getRandomColor() {
     let pName = getRandomName();
     let pColor = getRandomColor();
 
-    // Store the color globally so the player can access it
+    // Store name and color globally so the player can access it
+    window.currentPlayerName = pName;
     window.currentPlayerColor = pColor;
+    
+    // Also store on player object if it exists
+    if (window.player) {
+      window.player.name = pName;
+      window.player.color = pColor;
+    }
 
     const playerName = document.getElementById('player_b');
     playerName.innerHTML = pName;
@@ -129,6 +131,1005 @@ function getRandomColor() {
       });
     }
 
+    // Add lobby UI elements after existing menu setup
+    ui.init = function() {
+      // ... existing init code ...
+      
+      // NEW: Add 1v1 Quick Match functionality
+      setupMultiplayerUI();
+      
+      // ... rest of existing init ...
+    };
+    
+    // NEW: Multiplayer UI setup
+    function setupMultiplayerUI() {
+      // Create 1v1 lobby with dynamic lobby list
+      const onevsoneLobby = document.getElementById('onevsone_lobby');
+      if (onevsoneLobby) {
+        onevsoneLobby.innerHTML = `
+          <div class="lobby-header">
+            <h2>1v1 Battle Lobbies</h2>
+            <p>Choose a lobby or create your own!</p>
+            <div class="lobby-controls">
+              <button id="refresh-lobbies-btn" class="control-btn">🔄 Refresh Lobbies</button>
+              <button id="create-lobby-btn" class="control-btn primary">➕ Create New Lobby</button>
+            </div>
+          </div>
+          
+          <div class="lobby-content">
+            <div class="lobbies-list" id="lobbies-list">
+              <div class="no-lobbies-message">
+                <p>No lobbies available. Click Refresh to find games!</p>
+                <p>Or create your own lobby to challenge others.</p>
+              </div>
+            </div>
+            
+            <div class="lobby-chat-section" id="lobby-chat-section">
+              <h3>Lobby Chat</h3>
+              <div class="chat-messages" id="lobby-chat-messages"></div>
+              <input type="text" id="chat-input" placeholder="Chat with players..." maxlength="100">
+              <button id="send-chat-btn">Send</button>
+            </div>
+            
+            <div class="lobby-actions">
+              <button id="back-to-main" class="secondary-button">← Back to Main Menu</button>
+            </div>
+          </div>
+        `;
+        
+        // Lobby controls
+        const refreshBtn = document.getElementById('refresh-lobbies-btn');
+        if (refreshBtn) {
+          refreshBtn.addEventListener('click', refreshAvailableLobbies);
+          refreshBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            refreshAvailableLobbies();
+          });
+        }
+        
+        const createBtn = document.getElementById('create-lobby-btn');
+        if (createBtn) {
+          createBtn.addEventListener('click', createNewLobby);
+          createBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            createNewLobby();
+          });
+        }
+        
+        // Back button
+        const backBtn = document.getElementById('back-to-main');
+        if (backBtn) {
+          backBtn.addEventListener('click', () => {
+            ui.showMenu('main_menu');
+            if (window.net && window.net.disconnect) {
+              window.net.disconnect();
+            }
+          });
+        }
+        
+        // Setup chat (same as before)
+        setupLobbyChat();
+        
+        // Join global lobby list broadcast
+        if (window.net && window.net.p2p) {
+          window.net.p2p.joinBroadcast('aether-lobby-list');
+        }
+        
+        // Initial lobby refresh
+        refreshAvailableLobbies();
+        
+        // Listen for lobby updates
+        if (window.net) {
+          const originalOnBroadcast = window.net.onBroadcastMessage;
+          window.net.onBroadcastMessage = function(data) {
+            originalOnBroadcast.call(this, data);
+            
+            if (data.type === 'lobby_list') {
+              updateLobbyList(data.lobbies);
+            } else if (data.type === 'lobby_update') {
+              updateSingleLobby(data.lobby);
+            } else if (data.type === 'lobby_chat') {
+              addChatMessage(data.message, data.from, data.timestamp);
+            }
+          };
+        }
+      }
+      
+      // Setup other lobbies similarly...
+      setupOtherLobbies();
+    };
+    
+    // Refresh available lobbies
+    function refreshAvailableLobbies() {
+      const refreshBtn = document.getElementById('refresh-lobbies-btn');
+      const lobbiesList = document.getElementById('lobbies-list');
+      
+      if (refreshBtn) refreshBtn.disabled = true;
+      if (lobbiesList) lobbiesList.innerHTML = '<p class="loading">Loading lobbies...</p>';
+      
+      // Request lobby list from server
+      if (window.net && window.net.p2p) {
+        window.net.p2p.broadcast({
+          type: 'request_lobby_list',
+          gameType: 'onevsone',
+          from: window.net.getStatus().localPlayerId || 'anonymous'
+        }, 'aether-lobby-list');
+      }
+      
+      // Fallback: timeout after 3s
+      setTimeout(() => {
+        if (refreshBtn) refreshBtn.disabled = false;
+      }, 3000);
+    };
+    
+    // Update lobby list display
+    function updateLobbyList(lobbies) {
+      const lobbiesList = document.getElementById('lobbies-list');
+      const refreshBtn = document.getElementById('refresh-lobbies-btn');
+      
+      if (!lobbiesList) return;
+      
+      if (refreshBtn) refreshBtn.disabled = false;
+      
+      if (!lobbies || lobbies.length === 0) {
+        lobbiesList.innerHTML = `
+          <div class="no-lobbies-message">
+            <p>No lobbies available right now.</p>
+            <p>Click "Create New Lobby" to start your own game!</p>
+          </div>
+        `;
+        return;
+      }
+      
+      let lobbyHTML = '<div class="lobbies-grid">';
+      
+      lobbies.forEach(lobby => {
+        const playerCount = lobby.players ? lobby.players.length : 0;
+        const maxPlayers = lobby.maxPlayers || 2;
+        const isFull = playerCount >= maxPlayers;
+        const pingClass = getPingClass(lobby.ping || 0);
+        
+        lobbyHTML += `
+          <div class="lobby-card ${isFull ? 'full' : ''}" data-lobby="${lobby.id}">
+            <div class="lobby-header">
+              <h3>${lobby.name || `Lobby #${lobby.id.substring(0, 6)}`}</h3>
+              <span class="ping ${pingClass}">${lobby.ping || '?'}ms</span>
+            </div>
+            
+            <div class="lobby-info">
+              <p><strong>Map:</strong> ${lobby.map || 'Random'}</p>
+              <p><strong>Players:</strong> ${playerCount}/${maxPlayers}</p>
+              <p><strong>Host:</strong> ${lobby.hostName || lobby.hostId?.substring(0, 8) || 'Unknown'}</p>
+              ${lobby.password ? '<p><i>Password protected</i></p>' : ''}
+            </div>
+            
+            <div class="lobby-players">
+              ${lobby.players ? lobby.players.map(player => `
+                <span class="player-slot ${player.id === window.net?.getStatus()?.localPlayerId ? 'you' : ''}">
+                  ${player.id === window.net?.getStatus()?.localPlayerId ? 'You' : player.name?.substring(0, 8) || player.id?.substring(0, 8) || '?'}
+                </span>
+              `).join('') : '<span class="empty-slot">-</span>'}
+            </div>
+            
+            <div class="lobby-actions">
+              ${isFull ? 
+                '<span class="status full">Full</span>' : 
+                `<button class="join-btn" data-lobby="${lobby.id}">Join Lobby</button>`
+              }
+            </div>
+          </div>
+        `;
+      });
+      
+      lobbyHTML += '</div>';
+      lobbiesList.innerHTML = lobbyHTML;
+      
+      // Add event listeners to join buttons
+      document.querySelectorAll('.join-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const lobbyId = e.target.dataset.lobby;
+          joinLobby(lobbyId);
+        });
+        
+        btn.addEventListener('touchstart', (e) => {
+          e.preventDefault();
+          const lobbyId = e.target.dataset.lobby;
+          joinLobby(lobbyId);
+        });
+      });
+    };
+    
+    // Update single lobby info
+    function updateSingleLobby(lobby) {
+      const lobbyCard = document.querySelector(`[data-lobby="${lobby.id}"]`);
+      if (!lobbyCard) return;
+      
+      // Update player count and slots
+      const playerCountEl = lobbyCard.querySelector('.lobby-info p:nth-child(2)');
+      const playersEl = lobbyCard.querySelector('.lobby-players');
+      
+      if (playerCountEl) {
+        playerCountEl.innerHTML = `<strong>Players:</strong> ${lobby.players.length}/${lobby.maxPlayers}`;
+      }
+      
+      if (playersEl) {
+        playersEl.innerHTML = lobby.players.map(player => `
+          <span class="player-slot ${player.id === window.net?.getStatus()?.localPlayerId ? 'you' : ''}">
+            ${player.id === window.net?.getStatus()?.localPlayerId ? 'You' : player.name?.substring(0, 8) || player.id?.substring(0, 8) || '?'}
+          </span>
+        `).join('');
+      }
+      
+      // Update full status
+      const actionsEl = lobbyCard.querySelector('.lobby-actions');
+      const isFull = lobby.players.length >= (lobby.maxPlayers || 2);
+      
+      if (actionsEl) {
+        if (isFull) {
+          actionsEl.innerHTML = '<span class="status full">Full</span>';
+        } else {
+          actionsEl.innerHTML = `<button class="join-btn" data-lobby="${lobby.id}">Join Lobby</button>`;
+          
+          // Add event listener
+          actionsEl.querySelector('.join-btn').addEventListener('click', (e) => {
+            joinLobby(lobby.id);
+          });
+        }
+      }
+      
+      // Update card class
+      if (isFull) {
+        lobbyCard.classList.add('full');
+      } else {
+        lobbyCard.classList.remove('full');
+      }
+    };
+    
+    // Join a specific lobby
+    function joinLobby(lobbyId) {
+      const lobbyCard = document.querySelector(`[data-lobby="${lobbyId}"]`);
+      const joinBtn = lobbyCard ? lobbyCard.querySelector('.join-btn') : null;
+      
+      if (joinBtn) joinBtn.disabled = true;
+      
+      // Leave current lobby if joined
+      if (window.net && window.net.p2p && window.net.currentLobby) {
+        window.net.p2p.leaveLobby(window.net.currentLobby);
+      }
+      
+      // Join the selected lobby
+      if (window.net && window.net.p2p) {
+        window.net.p2p.joinMatchLobby(lobbyId);
+        window.net.currentLobby = lobbyId;
+        
+        // Update UI
+        const statusEl = document.getElementById('lobby-status');
+        if (statusEl) {
+          statusEl.textContent = `Joining lobby ${lobbyId.substring(0, 8)}...`;
+        }
+        
+        // Listen for connection status
+        const statusInterval = setInterval(() => {
+          const status = window.net.getStatus();
+          if (status.isConnected && status.peers.length > 0) {
+            // Successfully joined!
+            statusEl.textContent = `Joined ${lobbyId.substring(0, 8)}! Game starting...`;
+            
+            setTimeout(() => {
+              document.getElementById('menu').style.display = 'none';
+              startMultiplayerGame('onevsone');
+            }, 2000);
+            
+            clearInterval(statusInterval);
+          } else if (status.reconnectAttempts > 3) {
+            statusEl.textContent = 'Failed to join lobby. Try another!';
+            if (joinBtn) joinBtn.disabled = false;
+            clearInterval(statusInterval);
+          }
+        }, 500);
+        
+        // Timeout after 10s
+        setTimeout(() => {
+          if (joinBtn) joinBtn.disabled = false;
+          statusEl.textContent = 'Join timed out. Try again!';
+          clearInterval(statusInterval);
+        }, 10000);
+      }
+    };
+    
+    // Create new lobby
+    function createNewLobby() {
+      const lobbyName = prompt('Enter lobby name:', `My 1v1 Lobby - ${Date.now()}`);
+      if (!lobbyName) return;
+      
+      const mapName = prompt('Choose map:', 'Random');
+      const isPasswordProtected = confirm('Password protect this lobby?');
+      const password = isPasswordProtected ? prompt('Enter password:') : null;
+      
+      if (!lobbyName) return;
+      
+      // Create lobby via broadcast
+      if (window.net && window.net.p2p) {
+        const lobbyData = {
+          type: 'create_lobby',
+          gameType: 'onevsone',
+          id: generateLobbyId(),
+          name: lobbyName,
+          map: mapName,
+          hostId: window.net.getStatus().localPlayerId || 'host',
+          hostName: window.player?.name || 'Host',
+          maxPlayers: 2,
+          players: [window.net.getStatus().localPlayerId],
+          password: password ? true : false,
+          timestamp: Date.now()
+        };
+        
+        window.net.p2p.broadcast(lobbyData, 'aether-lobby-list');
+        
+        // Update UI
+        const statusEl = document.getElementById('lobby-status');
+        if (statusEl) {
+          statusEl.textContent = `Created lobby: ${lobbyName}`;
+        }
+        
+        // Join own lobby
+        joinLobby(lobbyData.id);
+      }
+    };
+    
+    // Generate unique lobby ID
+    function generateLobbyId() {
+      return 'lobby-' + Math.random().toString(36).substring(2, 10) + 
+             '-' + Date.now().toString(36).substring(2, 8);
+    };
+    
+    // Get ping class for display
+    function getPingClass(ping) {
+      if (ping < 50) return 'excellent';
+      if (ping < 100) return 'good';
+      if (ping < 150) return 'fair';
+      return 'poor';
+    };
+    
+    // Updated CSS for lobby cards
+    const lobbyCardStyles = `
+      .lobbies-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 15px;
+        margin: 20px 0;
+      }
+      
+      .lobby-card {
+        background: white;
+        border: 2px solid #e0e0e0;
+        border-radius: 12px;
+        padding: 15px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        transition: all 0.3s ease;
+      }
+      
+      .lobby-card:hover {
+        border-color: #4CAF50;
+        box-shadow: 0 4px 16px rgba(76,175,80,0.2);
+        transform: translateY(-2px);
+      }
+      
+      .lobby-card.full {
+        opacity: 0.6;
+        border-color: #f44336;
+      }
+      
+      .lobby-card.full:hover {
+        transform: none;
+        border-color: #f44336;
+      }
+      
+      .lobby-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+      }
+      
+      .lobby-header h3 {
+        margin: 0;
+        color: #333;
+        font-size: 16px;
+      }
+      
+      .ping {
+        font-size: 12px;
+        padding: 2px 6px;
+        border-radius: 10px;
+        font-weight: bold;
+      }
+      
+      .ping.excellent { background: #4CAF50; color: white; }
+      .ping.good { background: #8BC34A; color: white; }
+      .ping.fair { background: #FF9800; color: white; }
+      .ping.poor { background: #f44336; color: white; }
+      
+      .lobby-info p {
+        margin: 5px 0;
+        font-size: 14px;
+        color: #666;
+      }
+      
+      .lobby-players {
+        display: flex;
+        gap: 5px;
+        margin: 10px 0;
+        flex-wrap: wrap;
+      }
+      
+      .player-slot {
+        display: inline-block;
+        padding: 4px 8px;
+        background: #f0f0f0;
+        border-radius: 12px;
+        font-size: 12px;
+        border: 1px solid #ddd;
+      }
+      
+      .player-slot.you {
+        background: #4CAF50;
+        color: white;
+        border-color: #4CAF50;
+        font-weight: bold;
+      }
+      
+      .empty-slot {
+        color: #999;
+        font-style: italic;
+      }
+      
+      .lobby-actions {
+        text-align: center;
+        margin-top: 10px;
+      }
+      
+      .join-btn {
+        background: linear-gradient(45deg, #4CAF50, #45a049);
+        color: white;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 20px;
+        cursor: pointer;
+        font-size: 14px;
+        transition: all 0.2s ease;
+      }
+      
+      .join-btn:hover {
+        background: linear-gradient(45deg, #45a049, #4CAF50);
+        transform: scale(1.05);
+      }
+      
+      .join-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+      }
+      
+      .status.full {
+        background: #f44336;
+        color: white;
+        padding: 8px 16px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: bold;
+      }
+      
+      .no-lobbies-message {
+        text-align: center;
+        padding: 40px 20px;
+        color: #666;
+      }
+      
+      .no-lobbies-message p {
+        margin: 10px 0;
+        font-size: 16px;
+      }
+      
+      .loading {
+        text-align: center;
+        padding: 20px;
+        color: #666;
+        font-style: italic;
+      }
+      
+      .lobby-controls {
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        margin: 15px 0;
+      }
+      
+      .control-btn {
+        padding: 8px 16px;
+        border: 1px solid #ddd;
+        background: white;
+        border-radius: 20px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+      }
+      
+      .control-btn.primary {
+        background: linear-gradient(45deg, #4CAF50, #45a049);
+        color: white;
+        border-color: #4CAF50;
+      }
+      
+      .control-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      }
+      
+      /* Mobile responsiveness */
+      @media (max-width: 480px) {
+        .lobbies-grid {
+          grid-template-columns: 1fr;
+          gap: 10px;
+        }
+        
+        .lobby-card {
+          padding: 12px;
+        }
+        
+        .lobby-header h3 {
+          font-size: 14px;
+        }
+        
+        .lobby-info p {
+          font-size: 13px;
+        }
+        
+        .control-btn {
+          padding: 10px 12px;
+          font-size: 14px;
+        }
+      }
+    `;
+    
+    // Append updated styles
+    const existingStyles = document.getElementById('lobby-styles');
+    if (existingStyles) {
+      existingStyles.textContent += lobbyCardStyles;
+    } else {
+      const styleEl = document.createElement('style');
+      styleEl.id = 'lobby-styles';
+      styleEl.textContent = lobbyCardStyles;
+      document.head.appendChild(styleEl);
+    }
+    
+    // ... rest of the file unchanged ...
+    
+    // Keep existing chat functionality
+    function setupLobbyChat() {
+      const chatInput = document.getElementById('chat-input');
+      const sendBtn = document.getElementById('send-chat-btn');
+      const messagesEl = document.getElementById('lobby-chat-messages');
+      
+      if (!chatInput || !sendBtn || !messagesEl) return;
+      
+      // Join global lobby chat
+      if (window.net && window.net.p2p) {
+        window.net.p2p.joinBroadcast('aether-lobby-chat');
+      }
+      
+      // Send message
+      function sendChatMessage() {
+        const message = chatInput.value.trim();
+        if (!message || !window.net || !window.net.p2p) return;
+        
+        // Broadcast chat message
+        window.net.p2p.broadcast({
+          type: 'lobby_chat',
+          message: message,
+          from: window.net.getStatus().localPlayerId?.substring(0, 8) || 'You',
+          timestamp: Date.now()
+        }, 'aether-lobby-chat');
+        
+        chatInput.value = '';
+      }
+      
+      // Event listeners
+      sendBtn.addEventListener('click', sendChatMessage);
+      chatInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          sendChatMessage();
+        }
+      });
+      
+      // Touch support for mobile send
+      sendBtn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        sendChatMessage();
+      });
+      
+      // Handle incoming chat messages
+      if (window.net) {
+        const originalOnBroadcast = window.net.onBroadcastMessage;
+        window.net.onBroadcastMessage = function(data) {
+          originalOnBroadcast.call(this, data);
+          
+          if (data.type === 'lobby_chat') {
+            addChatMessage(data.message, data.from, data.timestamp);
+          }
+        };
+      }
+      
+      // Add chat message to UI
+      function addChatMessage(message, from, timestamp) {
+        const messageEl = document.createElement('div');
+        messageEl.className = 'chat-message';
+        messageEl.innerHTML = `<strong>${from}:</strong> ${escapeHtml(message)} <small>${new Date(timestamp).toLocaleTimeString()}</small>`;
+        messagesEl.appendChild(messageEl);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        
+        // Auto-focus input on new message (mobile-friendly)
+        setTimeout(() => chatInput.focus(), 100);
+      }
+      
+      // Escape HTML for security
+      function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+      }
+    };
+    
+    // Setup other lobby types (FFA, KoTH, etc.) with similar structure
+    function setupOtherLobbies() {
+      const lobbyTypes = ['ffa_lobby', 'koth_lobby', 'teams_lobby'];
+      
+      lobbyTypes.forEach(lobbyId => {
+        const lobbyEl = document.getElementById(lobbyId);
+        if (lobbyEl) {
+          // Add game type specific content
+          const gameType = lobbyId.replace('_lobby', '');
+          lobbyEl.innerHTML = `
+            <div class="lobby-header">
+              <h2>${getGameTypeName(gameType)}</h2>
+              <p>${getGameTypeDescription(gameType)}</p>
+            </div>
+            
+            <div class="lobby-content">
+              <button id="${gameType}-quick-match" class="primary-button">Quick ${getGameTypeName(gameType)}</button>
+              <p class="status-message" id="${gameType}-status">Ready to play ${gameType}!</p>
+              <div class="connection-indicators" id="${gameType}-indicators">
+                <span class="status-dot offline">●</span>
+                <span>Waiting for players</span>
+              </div>
+              
+              <div class="lobby-actions">
+                <button id="back-to-main-${gameType}" class="secondary-button">← Back to Main Menu</button>
+              </div>
+            </div>
+          `;
+          
+          // Quick match button for this game type
+          const quickBtn = document.getElementById(`${gameType}-quick-match`);
+          if (quickBtn) {
+            quickBtn.addEventListener('click', () => {
+              startGameTypeMatch(gameType);
+            });
+          }
+          
+          // Back button
+          const backBtn = document.getElementById(`back-to-main-${gameType}`);
+          if (backBtn) {
+            backBtn.addEventListener('click', () => {
+              ui.showMenu('main_menu');
+              if (window.net && window.net.disconnect) {
+                window.net.disconnect();
+              }
+            });
+          }
+        }
+      });
+    };
+    
+    // Start match for specific game type
+    function startGameTypeMatch(gameType) {
+      const btn = document.getElementById(`${gameType}-quick-match`);
+      const statusEl = document.getElementById(`${gameType}-status`);
+      const indicatorsEl = document.getElementById(`${gameType}-indicators`);
+      
+      if (btn) btn.disabled = true;
+      if (statusEl) statusEl.textContent = `Searching for ${gameType} match...`;
+      if (indicatorsEl) indicatorsEl.innerHTML = '<span class="status-dot searching">●</span><span>Searching...</span>';
+      
+      // Initialize networking for this game type
+      if (window.net && !window.net.initialized) {
+        window.net.init({
+          gameType: gameType,
+          devMode: window.location.hostname === 'localhost'
+        });
+        
+        // Status monitoring similar to 1v1...
+        const statusInterval = setInterval(() => {
+          if (window.net) {
+            const status = window.net.getStatus();
+            if (status.isConnected && status.peers.length >= getMinPlayersForGameType(gameType)) {
+              // Match ready!
+              if (statusEl) statusEl.textContent = `Match found! Starting ${gameType}...`;
+              if (indicatorsEl) indicatorsEl.innerHTML = '<span class="status-dot connected">●</span><span>Game starting...</span>';
+              
+              setTimeout(() => {
+                document.getElementById('menu').style.display = 'none';
+                // Start game with appropriate player count
+                startMultiplayerGame(gameType);
+              }, 1500);
+              
+              clearInterval(statusInterval);
+            }
+          }
+        }, 500);
+      }
+    };
+    
+    // Game type helpers
+    function getGameTypeName(type) {
+      const names = {
+        'onevsone': '1v1',
+        'ffa': 'Free For All',
+        'koth': 'King of the Hill',
+        'teams': '2v2 Teams'
+      };
+      return names[type] || type;
+    };
+    
+    function getGameTypeDescription(type) {
+      const descriptions = {
+        'onevsone': 'One-on-one strategic battle',
+        'ffa': 'Everyone fights everyone!',
+        'koth': 'Control the center to win',
+        'teams': 'Team up with an ally against rivals'
+      };
+      return descriptions[type] || 'Multiplayer battle';
+    };
+    
+    function getMinPlayersForGameType(type) {
+      const minPlayers = {
+        'onevsone': 1, // 1 opponent
+        'ffa': 1,
+        'koth': 1,
+        'teams': 1
+      };
+      return minPlayers[type] || 1;
+    };
+    
+    // Update showMenu to handle multiplayer states
+    ui.showMenu = function(menuId) {
+      prevMenu = menuId;
+      
+      // Hide all menus
+      const allMenus = [
+        'main_menu', 'settings_menu', 'player_menu', 'trophy_menu', 
+        'ingame_menu', 'adventure_lobby', 'onevsone_lobby', 'ffa_lobby', 
+        'koth_lobby', 'teams_lobby'
+      ];
+      allMenus.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+      
+      // Show the requested menu
+      const targetMenu = document.getElementById(menuId);
+      if (targetMenu) {
+        targetMenu.style.display = 'block';
+        document.getElementById('menu').style.display = 'block';
+      }
+      
+      // Special handling for multiplayer lobbies - show lobby browser
+      if (menuId.includes('_lobby') && window.Lobby) {
+        const gameTypeMap = {
+          'adventure_lobby': 'adventure',
+          'onevsone_lobby': 'onevsone',
+          'ffa_lobby': 'ffa',
+          'koth_lobby': 'koth',
+          'teams_lobby': 'teams'
+        };
+        
+        const gameType = gameTypeMap[menuId];
+        if (gameType) {
+          // Show lobby browser instead of auto-joining
+          window.Lobby.showLobbyBrowser(gameType);
+        }
+      }
+      
+      // Initialize LOD slider when settings menu is shown
+      if (menuId === 'settings_menu' && window.hud && window.hud.initLODSlider) {
+        window.hud.initLODSlider();
+      }
+    };
+    
+    // NEW: Start multiplayer game for specific type (called from lobby)
+    function startMultiplayerGame(gameType = 'onevsone') {
+      window.gameType = gameType;
+      window.isMultiplayer = true;
+      
+      // Create players array
+      const players = [window.player];
+      
+      // Create opponent based on game type
+      if (!window.opponent) {
+        window.opponent = new window.OpponentPlayer({
+          id: window.net.getStatus().peers[0] || 'ai-fallback',
+          gameType: gameType,
+          color: getOpponentColorForGameType(gameType),
+          startingResources: {food: 100, wood: 50, stone: 25, magic: 10}
+        });
+      }
+      players.push(window.opponent);
+      
+      console.log(`🎮 Starting ${gameType} multiplayer game`);
+      
+      // Initialize game
+      if (window.game) {
+        window.game.init({
+          type: gameType,
+          map: 'default',
+          players: players,
+          isMultiplayer: true,
+          tickRate: window.net ? window.net.TICK_RATE : 60,
+          maxPlayers: getMaxPlayersForGameType(gameType)
+        });
+      }
+      
+      // Start game loop
+      if (window.gameLoop && window.gameLoop.start) {
+        window.gameLoop.start();
+      }
+      
+      // Hook commands to network
+      hookUnitCommandsToNetwork(gameType);
+    };
+    
+    // Game type specific helpers
+    function getOpponentColorForGameType(type) {
+      const colors = {
+        'onevsone': {primary: '#0066cc', secondary: '#004499'},
+        'ffa': {primary: '#ff4444', secondary: '#cc0000'},
+        'koth': {primary: '#ffaa00', secondary: '#cc8800'},
+        'teams': {primary: '#00aa00', secondary: '#008800'}
+      };
+      return colors[type] || colors.onevsone;
+    };
+    
+    function getMaxPlayersForGameType(type) {
+      const maxPlayers = {
+        'onevsone': 2,
+        'ffa': 4,
+        'koth': 4,
+        'teams': 4
+      };
+      return maxPlayers[type] || 2;
+    };
+    
+    // Hook commands based on game type
+    function hookUnitCommandsToNetwork(gameType) {
+      // ... similar to application.js but game-type specific
+      // For example, teams mode might broadcast to team members only
+    };
+    
+    // CSS for lobby styling (add to your stylesheet or inline)
+    const lobbyStyles = `
+      .lobby-header { text-align: center; margin: 20px 0; }
+      .lobby-header h2 { color: #4CAF50; margin-bottom: 10px; }
+      .lobby-content { max-width: 400px; margin: 0 auto; }
+      
+      .quick-match-section { margin: 30px 0; text-align: center; }
+      .primary-button { 
+        background: linear-gradient(45deg, #4CAF50, #45a049);
+        color: white; 
+        border: none; 
+        padding: 15px 30px; 
+        font-size: 18px; 
+        border-radius: 25px; 
+        cursor: pointer; 
+        min-width: 200px;
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+      }
+      .primary-button:hover:not(:disabled) { background: linear-gradient(45deg, #45a049, #4CAF50); }
+      .primary-button:disabled { opacity: 0.6; cursor: not-allowed; }
+      
+      .status-message { 
+        margin: 15px 0; 
+        font-size: 16px; 
+        color: #666;
+        min-height: 20px;
+      }
+      
+      .connection-indicators { 
+        display: flex; 
+        align-items: center; 
+        justify-content: center; 
+        gap: 10px; 
+        margin: 10px 0;
+      }
+      .status-dot { 
+        width: 12px; height: 12px; 
+        border-radius: 50%; 
+        display: inline-block;
+      }
+      .status-dot.offline { background: #f44336; }
+      .status-dot.searching { background: #ff9800; animation: pulse 1.5s infinite; }
+      .status-dot.connected { background: #4CAF50; }
+      .status-dot.error { background: #f44336; }
+      
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      
+      .lobby-chat-section { 
+        margin: 20px 0; 
+        border: 1px solid #ddd; 
+        border-radius: 10px; 
+        padding: 15px;
+        background: #f9f9f9;
+      }
+      .chat-messages { 
+        height: 200px; 
+        overflow-y: auto; 
+        margin-bottom: 10px; 
+        padding: 10px;
+        background: white;
+        border-radius: 5px;
+      }
+      .chat-message { 
+        margin: 5px 0; 
+        padding: 5px; 
+        font-size: 14px;
+        border-bottom: 1px solid #eee;
+      }
+      .chat-message:last-child { border-bottom: none; }
+      .chat-message small { color: #999; font-size: 12px; }
+      
+      #chat-input { 
+        width: 70%; 
+        padding: 8px; 
+        border: 1px solid #ddd; 
+        border-radius: 5px; 
+        margin-right: 10px;
+      }
+      #send-chat-btn { 
+        padding: 8px 15px; 
+        background: #4CAF50; 
+        color: white; 
+        border: none; 
+        border-radius: 5px; 
+        cursor: pointer;
+      }
+      
+      .lobby-actions { text-align: center; margin-top: 20px; }
+      .secondary-button { 
+        background: #ddd; 
+        color: #333; 
+        border: none; 
+        padding: 10px 20px; 
+        border-radius: 20px; 
+        cursor: pointer;
+      }
+      
+      /* Mobile responsiveness */
+      @media (max-width: 480px) {
+        .lobby-content { padding: 0 10px; }
+        #chat-input { width: 60%; font-size: 16px; } /* Prevent zoom */
+        .primary-button { padding: 12px 20px; font-size: 16px; min-width: 150px; }
+      }
+    `;
+    
+    // Add styles to head
+    if (!document.getElementById('lobby-styles')) {
+      const styleEl = document.createElement('style');
+      styleEl.id = 'lobby-styles';
+      styleEl.textContent = lobbyStyles;
+      document.head.appendChild(styleEl);
+    }
+
   }
 
 
@@ -147,6 +1148,22 @@ function getRandomColor() {
     document.getElementById('ffa_lobby').style.display = 'none';
     document.getElementById('koth_lobby').style.display = 'none';
     document.getElementById('teams_lobby').style.display = 'none';
+    
+    // Hook into lobby system when showing a lobby menu
+    if (window.Lobby && menuId.includes('_lobby')) {
+      const gameTypeMap = {
+        'adventure_lobby': 'adventure',
+        'onevsone_lobby': 'onevsone',
+        'ffa_lobby': 'ffa',
+        'koth_lobby': 'koth',
+        'teams_lobby': 'teams'
+      };
+      
+      const gameType = gameTypeMap[menuId];
+      if (gameType) {
+        window.Lobby.showLobbyBrowser(gameType);
+      }
+    }
 
     
     // Show the requested menu
@@ -662,30 +1679,44 @@ function getRandomColor() {
                   }
                   
                   // Apply walk behavior to each selected unit
-                  selectedUnits.forEach(unit => {
-                    if (window.behaviorManager && unit) {
-                      // Create target point slightly offset from explosion center for natural spread
-                      const offsetX = worldPos.x + (Math.random() - 0.5) * 2; // Random spread ±1 unit
-                      const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
-                      const targetPoint = { x: offsetX, z: offsetZ };
-                      
-                      // console.log(`🚶 Setting walk behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
-                      
-                      window.behaviorManager.setBehavior(unit, 'walk', { 
-                        targetPoint: targetPoint,
-                        walkSpeed: 6.0 // Normal walking speed
-                      });
-                      
-                      // console.log(`🚶 Unit ${unit.name || unit.type} walking to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
-                    } else {
-                      // console.warn(`⚠️ Cannot set behavior for unit:`, { 
-                      //   hasBehaviorManager: !!window.behaviorManager, 
-                      //   unit: unit,
-                      //   unitPhysics: unit?.pb,
-                      //   unitState: unit?.pb?.state
-                      // });
-                    }
-                  });
+                  // MULTIPLAYER: Submit move commands through Match system for synchronization
+                  if (window.isMultiplayer && window.currentMatch) {
+                    // In multiplayer, submit a move command for all selected units
+                    const unitIds = selectedUnits.map(u => u.id);
+                    const command = {
+                      type: 'move',
+                      unitIds: unitIds,
+                      target: { x: worldPos.x, y: 0, z: worldPos.z }
+                    };
+                    window.currentMatch.submitCommand(command);
+                    console.log(`📡 Submitted move command for ${unitIds.length} units to (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+                  } else {
+                    // SINGLE PLAYER: Apply walk behavior directly to each unit
+                    selectedUnits.forEach((unit, index) => {
+                      if (window.behaviorManager && unit) {
+                        // Create target point slightly offset from explosion center for natural spread
+                        const offsetX = worldPos.x + (Math.random() - 0.5) * 2; // Random spread
+                        const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
+                        const targetPoint = { x: offsetX, z: offsetZ };
+                        
+                        // console.log(`🚶 Setting walk behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                        
+                        window.behaviorManager.setBehavior(unit, 'walk', { 
+                          targetPoint: targetPoint,
+                          walkSpeed: 6.0 // Normal walking speed
+                        });
+                        
+                        // console.log(`🚶 Unit ${unit.name || unit.type} walking to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
+                      } else {
+                        // console.warn(`⚠️ Cannot set behavior for unit:`, { 
+                        //   hasBehaviorManager: !!window.behaviorManager, 
+                        //   unit: unit,
+                        //   unitPhysics: unit?.pb,
+                        //   unitState: unit?.pb?.state
+                        // });
+                      }
+                    });
+                  }
                 } else {
                   // console.log('🚶 No units selected, skipping walk behavior');
                 }
@@ -829,6 +1860,15 @@ function getRandomColor() {
   let cameraRotationSpeed = 0.15; // How fast camera moves to target (reduced for smoother movement)
   // Only animate camera after explicit user input (wheel/gesture)
   let cameraHasBeenNudged = false;
+  
+  // Expose the flag so it can be set externally if needed (for fallback initialization)
+  ui.enableCameraControls = function() {
+    cameraHasBeenNudged = true;
+  };
+  
+  ui.getCameraControlsEnabled = function() {
+    return cameraHasBeenNudged;
+  };
   
   // Camera momentum system (beta handled directly, no momentum)
   let cameraVelocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
@@ -1066,7 +2106,11 @@ function getRandomColor() {
         gfx.camera.beta = defaultBeta;
       }
       
-      // console.log('Camera rotation targets synced:', cameraRotationTarget);
+      // Enable camera updates immediately when camera is initialized
+      // This allows camera controls to work without requiring initial scrollwheel input
+      cameraHasBeenNudged = true;
+      
+      // console.log('📷 Camera rotation targets synced - controls enabled immediately:', cameraRotationTarget);
     }
   };
   

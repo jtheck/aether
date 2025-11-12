@@ -1,9 +1,3 @@
-
-
-
-
-
-
 (function(gfx) {
   gfx.canvas; // HTML Canvas
   gfx.engine; // BABYLON Engine
@@ -16,7 +10,7 @@
 
   // Progressive chunk loading queue
   const chunkQueue = [];
-  const CHUNKS_PER_FRAME = 3; // Process 3 chunks per frame for faster loading
+  const CHUNKS_PER_FRAME = 20; // Process 20 chunks per frame for much faster loading
 
   // Load textures at the top so they're available everywhere
   let grassAtlasTexture, dirtAtlasTexture, rockAtlasTexture, sandAtlasTexture, waterAtlasTexture;
@@ -41,6 +35,9 @@
             
             // Stop any animations by default
             result.animationGroups.forEach(g => g.stop());
+            
+            // CRITICAL: Disable the model immediately to prevent flash before LOD kicks in
+            result.rootNodes.forEach(n => n.setEnabled(false));
 
             // Cleanup function for this clone
             const dispose = () => {
@@ -78,6 +75,11 @@
   // Store all models with billboards for manual LOD management
   const lodModels = [];
   
+  // Expose lodModels for debugging (keep reference, don't reassign)
+  Object.defineProperty(gfx, 'lodModels', {
+    get: function() { return lodModels; }
+  });
+  
   // Model instance pools for reuse
   const modelPools = new Map(); // path -> array of available instances
   const activeModels = new Map(); // chunkKey -> array of model instances in use
@@ -86,20 +88,33 @@
   function cleanupChunkModels(chunkKey) {
     const models = activeModels.get(chunkKey);
     if (models) {
+      // OPTIMIZATION: Build a Set of model roots to remove for O(1) lookup
+      const modelsToRemove = new Set(models.map(m => m.model.root));
+      
+      // Return models to pool
       models.forEach(modelInfo => {
-        // Return model to pool instead of disposing
         returnModelToPool(modelInfo.model, modelInfo.path);
-        
-        // Remove from LOD tracking and return billboard to pool
-        const lodIndex = lodModels.findIndex(lod => lod.model === modelInfo.model.root);
-        if (lodIndex !== -1) {
-          const lod = lodModels[lodIndex];
-          if (lod.billboard) {
-            returnBillboardInstance(lod.billboard);
-          }
-          lodModels.splice(lodIndex, 1);
-        }
       });
+      
+      // OPTIMIZATION: Remove models in one pass instead of repeated findIndex + splice
+      // Mark models for removal first, then filter
+      const billboardsToReturn = [];
+      let i = lodModels.length;
+      while (i--) {
+        if (modelsToRemove.has(lodModels[i].model)) {
+          const lod = lodModels[i];
+          if (lod.billboard) {
+            billboardsToReturn.push(lod.billboard);
+          }
+          // Remove by swapping with last element and popping (O(1) removal)
+          lodModels[i] = lodModels[lodModels.length - 1];
+          lodModels.pop();
+        }
+      }
+      
+      // Return billboards to pool after cleanup
+      billboardsToReturn.forEach(billboard => returnBillboardInstance(billboard));
+      
       activeModels.delete(chunkKey);
     }
   }
@@ -122,10 +137,7 @@
   // LOD distance tweaker - adjust this to change when models switch to billboards
   let LOD_DISTANCE = 225; // Units - models switch to billboards beyond this distance
   
-  // LOD update throttling
-  let lastLODUpdate = 0;
-  const LOD_UPDATE_INTERVAL = 100; // Update LOD every 100ms instead of every frame
-  let lodUpdateIndex = 0; // For batching LOD updates
+  // LOD update throttling - moved to updateLOD function (frame-based instead of time-based)
 
   // Initialize billboard atlas and material
   function initBillboardAtlas(scene) {
@@ -389,7 +401,10 @@
       model.root.scaling.x = scale;
       model.root.scaling.y = scale;
       model.root.scaling.z = scale;
-      model.root.setEnabled(true);
+      
+      // CRITICAL: Keep model disabled - LOD system will enable it based on distance
+      // This prevents the flash of full detail at far distances
+      model.root.setEnabled(false);
       
       // Set up shadows for the model
       if (window.gfx && window.gfx.setupMeshShadows) {
@@ -431,7 +446,7 @@
   }
 
   // Add LOD billboard for distant viewing
-  function addLODBillboard(model, scene, modelRule, cameraPosition) {
+  function addLODBillboard(model, scene, modelRule, cameraPosition, chunkKey = null) {
     let billboard = null;
     let lodType = 'billboard'; // default behavior
     const modelPath = modelRule.path;
@@ -441,7 +456,7 @@
     const scale = modelRule.billboardScale || 1;
     
     billboard = getBillboardInstance(modelPath, model.root.position, scale, scene);
-    billboard.setEnabled(false); // Start with billboard disabled - LOD system will manage visibility
+    billboard.setEnabled(false); // Start with billboard disabled
     
     // Store for manual LOD management
     lodModels.push({
@@ -452,10 +467,13 @@
       cullDistance: modelRule.cullDistance || customLodDistance * 2,
       // Store original values for LOD scaling
       originalLodDistance: customLodDistance,
-      originalCullDistance: modelRule.cullDistance || customLodDistance * 2
+      originalCullDistance: modelRule.cullDistance || customLodDistance * 2,
+      chunkKey: chunkKey, // For chunk-based LOD grouping
+      isStatic: !!chunkKey // Static scenery if it has a chunk
     });
     
     // Apply current LOD multiplier to new model if LOD system is active
+    const lastLod = lodModels[lodModels.length - 1];
     if (window.hud && window.hud.getCurrentLODMultiplier) {
       let currentMultiplier;
       
@@ -467,36 +485,97 @@
       }
       
       if (currentMultiplier !== 1.0) {
-        const lastLod = lodModels[lodModels.length - 1];
         lastLod.lodDistance = lastLod.originalLodDistance * currentMultiplier;
         lastLod.cullDistance = lastLod.originalCullDistance * currentMultiplier;
       }
     }
     
-    // console.log('Created LOD for:', modelPath, 'Type:', lodType, 'Distance:', customLodDistance, 'Initial state:', cameraPosition ? (BABYLON.Vector3.Distance(cameraPosition, model.root.position) > customLodDistance ? 'LOD' : '3D') : 'Unknown');
+    // CRITICAL: Immediately evaluate and set correct initial state
+    // This prevents any flash of full detail at far distances
+    if (cameraPosition) {
+      const modelPos = model.root.absolutePosition || model.root.position;
+      const dx = cameraPosition.x - modelPos.x;
+      const dy = cameraPosition.y - modelPos.y;
+      const dz = cameraPosition.z - modelPos.z;
+      const distanceSquared = dx * dx + dy * dy + dz * dz;
+      const lodDistanceSquared = lastLod.lodDistance * lastLod.lodDistance;
+      const cullDistanceSquared = lastLod.cullDistance * lastLod.cullDistance;
+      
+      if (distanceSquared > cullDistanceSquared) {
+        // Very far - cull everything
+        model.root.setEnabled(false);
+        billboard.setEnabled(false);
+      } else if (distanceSquared > lodDistanceSquared) {
+        // Medium distance - show billboard only
+        model.root.setEnabled(false);
+        billboard.setEnabled(true);
+      } else {
+        // Close - show full model
+        model.root.setEnabled(true);
+        billboard.setEnabled(false);
+      }
+    } else {
+      // No camera position provided - default to disabled until LOD system updates
+      model.root.setEnabled(false);
+      billboard.setEnabled(false);
+    }
   }
+
+  // Throttle LOD updates - only check every N frames for massive perf boost
+  let lodFrameCounter = 0;
+  const LOD_UPDATE_INTERVAL = 3; // Only update every 3rd frame (66% CPU savings!)
 
   // Manual LOD update function - called each frame
   function updateLOD(cameraPosition) {
     // Skip LOD updates during batch loading to prevent flickering
     if (skipLODUpdates) return;
     
+    // OPTIMIZATION: Only update LOD every 3 frames - still feels instant at 60fps
+    lodFrameCounter++;
+    if (lodFrameCounter < LOD_UPDATE_INTERVAL) return;
+    lodFrameCounter = 0;
+    
     // Quick distance calculation using squared distance (no sqrt)
     const camX = cameraPosition.x;
     const camY = cameraPosition.y; 
     const camZ = cameraPosition.z;
     
+    // OPTIMIZATION: Group static models by chunk, check distance to chunk center once
+    const chunkResults = new Map(); // Cache chunk distance results
+    
     // Process all models every frame for immediate response
     lodModels.forEach(lod => {
-      const modelPos = lod.model.position;
+      // SKIP building placement previews - they should always be visible!
+      if (lod.model && lod.model.metadata && lod.model.metadata.isPreview) {
+        return;
+      }
+      
+      let distanceSquared, lodDistanceSquared, cullDistanceSquared;
+      
+      // OPTIMIZATION: For static scenery (has chunkKey), check distance to chunk center once
+      if (lod.isStatic && lod.chunkKey) {
+        if (!chunkResults.has(lod.chunkKey)) {
+          // First model in this chunk - calculate chunk center distance
+          const [chunkX, chunkZ] = lod.chunkKey.split(',').map(Number);
+          const chunkCenterX = (chunkX * 16 + 8) * TILE_SIZE; // 16 tiles per chunk, centered
+          const chunkCenterZ = (chunkZ * 16 + 8) * TILE_SIZE;
+          const dx = camX - chunkCenterX;
+          const dy = camY - 0; // Ground level
+          const dz = camZ - chunkCenterZ;
+          chunkResults.set(lod.chunkKey, dx * dx + dy * dy + dz * dz);
+        }
+        distanceSquared = chunkResults.get(lod.chunkKey);
+      } else {
+        // Dynamic models (units, buildings) - check individual distance
+      const modelPos = lod.model.absolutePosition || lod.model.position;
       const dx = camX - modelPos.x;
       const dy = camY - modelPos.y;
       const dz = camZ - modelPos.z;
-      const distanceSquared = dx * dx + dy * dy + dz * dz;
-      const lodDistanceSquared = lod.lodDistance * lod.lodDistance;
-      const cullDistanceSquared = (lod.cullDistance || lod.lodDistance * 2) * (lod.cullDistance || lod.lodDistance * 2);
+        distanceSquared = dx * dx + dy * dy + dz * dz;
+      }
       
-      
+      lodDistanceSquared = lod.lodDistance * lod.lodDistance;
+      cullDistanceSquared = (lod.cullDistance || lod.lodDistance * 2) * (lod.cullDistance || lod.lodDistance * 2);
       
       if (distanceSquared > cullDistanceSquared) {
         // Very far away - completely cull everything for performance
@@ -522,6 +601,164 @@
       }
     });
   }
+  
+  // Expose updateLOD for immediate updates (e.g., when camera teleports)
+  gfx.forceUpdateLOD = function(cameraPosition) {
+    updateLOD(cameraPosition);
+  };
+  
+  // Force-load chunks immediately around a position (for match start)
+  gfx.forceLoadChunks = function(x, z) {
+    if (!liveField) return;
+    
+    console.log(`🗺️ Force-loading chunks around (${x.toFixed(1)}, ${z.toFixed(1)})`);
+    
+    // Clear the chunk queue AND model queue to prioritize immediate loading
+    chunkQueue.length = 0;
+    modelLoadQueue.length = 0;
+    
+    // Update visible chunks (marks them as needsMesh)
+    liveField.updateVisibleChunks(x, z);
+    
+    // Calculate player chunk position for distance sorting
+    const playerChunkX = Math.floor(x / (liveField.chunkSize * TILE_SIZE));
+    const playerChunkZ = Math.floor(z / (liveField.chunkSize * TILE_SIZE));
+    
+    // Sort chunks by distance from player (closest first)
+    const chunksToLoad = [];
+    for (const [key, chunk] of liveField.chunks) {
+      if (chunk.needsMesh || chunk.needsModels) {
+        const [chunkX, chunkZ] = key.split(',').map(Number);
+        const dx = chunkX - playerChunkX;
+        const dz = chunkZ - playerChunkZ;
+        const distanceSquared = dx * dx + dz * dz;
+        chunksToLoad.push({ key, chunk, chunkX, chunkZ, distanceSquared });
+      }
+    }
+    
+    // Sort by distance (closest first)
+    chunksToLoad.sort((a, b) => a.distanceSquared - b.distanceSquared);
+    
+    // Immediately create meshes for all chunks (closest first)
+    let meshesLoaded = 0;
+    
+    for (const item of chunksToLoad) {
+      // Create terrain mesh if needed
+      if (item.chunk.needsMesh) {
+        liveField.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
+        meshesLoaded++;
+        // Mark that models need to be placed now that mesh exists
+        item.chunk.needsModels = true;
+      }
+      
+      // Queue models (they'll be placed in queue)
+      if (item.chunk.needsModels && item.chunk.mesh) {
+        item.chunk.models = placeModelsOnChunk(item.chunk, gfx.scene);
+        item.chunk.needsModels = false;
+      }
+    }
+    
+    console.log(`✅ Force-loaded ${meshesLoaded} chunks, queued ${modelLoadQueue.length} models`);
+    
+    // Process all queued models immediately with promises
+    const modelPromises = [];
+    const queueCopy = [...modelLoadQueue];
+    modelLoadQueue.length = 0; // Clear queue
+    
+    for (const task of queueCopy) {
+      const promise = getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale)
+        .then(model => {
+          // Set up shadows
+          if (window.gfx && window.gfx.setupMeshShadows) {
+            window.gfx.setupMeshShadows(model.root);
+          }
+          
+          task.models.push(model);
+          model.root.parent = task.chunk.mesh;
+          model.root.setEnabled(false); // Start disabled, LOD will enable
+          
+          const chunkKey = `${task.chunk.chunkX},${task.chunk.chunkZ}`;
+          if (!activeModels.has(chunkKey)) {
+            activeModels.set(chunkKey, []);
+          }
+          activeModels.get(chunkKey).push({
+            model: model,
+            path: task.modelPath
+          });
+          
+          model.root.isPickable = false;
+          model.root.getChildMeshes().forEach(mesh => {
+            mesh.isPickable = false;
+            if (mesh.material && mesh.material.emissiveColor) {
+              mesh.material.emissiveColor = new BABYLON.Color3(0, 0, 0);
+            }
+          });
+          
+          // Add to LOD system with spawn camera position - it will set correct initial state
+          addLODBillboard(model, task.scene, task.modelRule, {x, y: 9, z});
+        })
+        .catch(err => console.warn('Model loading failed during force load:', err));
+      
+      modelPromises.push(promise);
+    }
+    
+    // Wait for all models to load, then update LOD
+    Promise.all(modelPromises).then(() => {
+      console.log(`✅ Loaded ${modelPromises.length} models for force-loaded chunks`);
+      console.log(`📊 LOD system has ${lodModels.length} models total`);
+      
+      // CRITICAL: Force LOD update IMMEDIATELY after placing all models
+      const camPos = {x, y: 9, z};
+      console.log(`🎯 Camera position for LOD update: (${x.toFixed(1)}, 9, ${z.toFixed(1)})`);
+      
+      // Debug: Check first few models
+      let closeCount = 0, mediumCount = 0, farCount = 0;
+      lodModels.forEach(lod => {
+        const modelPos = lod.model.absolutePosition || lod.model.position;
+        const dx = x - modelPos.x;
+        const dy = 9 - modelPos.y;
+        const dz = z - modelPos.z;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        
+        if (dist < lod.lodDistance) closeCount++;
+        else if (dist < (lod.cullDistance || lod.lodDistance * 2)) mediumCount++;
+        else farCount++;
+      });
+      
+      console.log(`📐 Distance check: ${closeCount} close, ${mediumCount} medium, ${farCount} far (LOD dist: ${lodModels[0]?.lodDistance || 'unknown'})`);
+      
+      updateLOD(camPos);
+      console.log('🎨 LOD state updated - close models should now be visible!');
+    });
+  };
+  
+  // Clear all LOD models (called when starting a new match)
+  gfx.clearLODModels = function() {
+    console.log('🗑️ Clearing LOD system for new match...');
+    
+    // Dispose billboards before clearing
+    lodModels.forEach(lod => {
+      if (lod.billboard && lod.billboard.dispose) {
+        lod.billboard.dispose();
+      }
+    });
+    
+    // Clear the array
+    lodModels.length = 0;
+    
+    // CRITICAL: Reset all LOD system flags to ensure clean state
+    // BUT preserve loadingLODCurrent - menu calibration should carry over!
+    skipLODUpdates = false;
+    loadingLODActive = false;
+    loadingComplete = false;
+    // loadingLODCurrent = 0; // DON'T RESET - preserve menu LOD setting!
+    isProcessingQueue = false;
+    
+    // Clear any pending model loads
+    modelLoadQueue.length = 0;
+    
+    console.log(`✅ LOD system reset complete - preserved menu LOD at ${loadingLODCurrent}%`);
+  };
 
   // Update LOD distances for graphics system
   gfx.updateLODDistances = function(multiplier) {
@@ -571,6 +808,7 @@
         if (window.lighting && window.lighting.lights && window.lighting.lights.sun) {
           gfx.shadowGenerator = new BABYLON.ShadowGenerator(newShadowMapSize, window.lighting.lights.sun);
           gfx.shadowGenerator.useBlurExponentialShadowMap = false;
+          gfx.shadowGenerator.usePoissonSampling = true; // Enable Poisson sampling for visible shadows
           gfx.shadowGenerator.darkness = 0.8;
           gfx.shadowGenerator.setTransparencyShadow(false);
           gfx.shadowGenerator.bias = 0.00001;
@@ -665,18 +903,27 @@ let pov2 = 240;
   let loadingComplete = false;
   
   // Function to start LOD ramp-up after loading is complete
+  // Since menu uses saved LOD, game inherits it - no ramping needed!
   function startLODRampUp() {
     if (loadingComplete) return; // Already started
     
     loadingComplete = true;
-    loadingLODActive = true;
     
     // Get user's saved LOD setting
     const savedLOD = localStorage.getItem('lodLevel');
-    loadingLODTarget = savedLOD ? parseInt(savedLOD) : 50;
+    const targetLOD = savedLOD ? parseInt(savedLOD) : 50;
     
-    console.log(`🚀 Loading complete! Starting LOD ramp-up from ${loadingLODCurrent} to ${loadingLODTarget}`);
+    // Menu scene already set this LOD - just maintain it for consistency
+    // "What you see in menu is what you get in-game!"
+    loadingLODCurrent = targetLOD;
+    loadingLODTarget = targetLOD;
+    loadingLODActive = false; // No ramping needed - already at target
+    
+    console.log(`🚀 Game starting! Maintaining menu LOD at ${targetLOD}% (no ramping - calibration scene)`);
   }
+  
+  // Expose function to start LOD ramp when game begins
+  gfx.startGameLOD = startLODRampUp;
   
   // Process model loading queue in batches to prevent blocking
   function processModelQueue() {
@@ -726,40 +973,8 @@ let pov2 = 240;
             }
           });
           
-          // Add LOD billboard first
-          addLODBillboard(model, task.scene, task.modelRule, gfx.camera ? gfx.camera.position : null);
-          
-          // Immediately set correct LOD state based on current camera position
-          if (gfx.camera) {
-            const modelPos = model.root.position;
-            const camPos = gfx.camera.position;
-            const dx = camPos.x - modelPos.x;
-            const dy = camPos.y - modelPos.y;
-            const dz = camPos.z - modelPos.z;
-            const distanceSquared = dx * dx + dy * dy + dz * dz;
-            const lodDistanceSquared = task.modelRule.lodDistance * task.modelRule.lodDistance;
-            
-            // Find the LOD entry we just created to enable the right part
-            const lodEntry = lodModels[lodModels.length - 1]; // Last added entry
-            
-            // Set initial state based on distance
-            if (distanceSquared > lodDistanceSquared) {
-              // Far away - start with billboard enabled, model disabled
-              model.root.setEnabled(false);
-              if (lodEntry && lodEntry.billboard) {
-                lodEntry.billboard.setEnabled(true);
-              }
-            } else {
-              // Close - start with 3D model enabled, billboard disabled
-              model.root.setEnabled(true);
-              if (lodEntry && lodEntry.billboard) {
-                lodEntry.billboard.setEnabled(false);
-              }
-            }
-          } else {
-            // No camera yet - start disabled
-            model.root.setEnabled(false);
-          }
+          // Add LOD billboard with chunk info for grouped checking
+          addLODBillboard(model, task.scene, task.modelRule, gfx.cameraTarget ? gfx.cameraTarget.position : null, chunkKey);
         })
         .catch(err => console.warn('Model loading failed:', err));
     }
@@ -1026,6 +1241,15 @@ let pov2 = 240;
         meshes[key].setVerticesData(BABYLON.VertexBuffer.NormalKind, normals);
         
         // Assign material (pre-created shared materials)
+        // Ensure material exists before assigning to prevent undefined material errors
+        if (!sharedMaterials[key]) {
+          // Fallback: create material on the fly if it doesn't exist
+          const texture = materials[key]?.texture || grassAtlasTexture;
+          sharedMaterials[key] = new BABYLON.StandardMaterial(`${key}Material`, scene);
+          sharedMaterials[key].diffuseTexture = texture;
+          sharedMaterials[key].specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+          sharedMaterials[key].specularPower = 32;
+        }
         meshes[key].material = sharedMaterials[key];
         
         // Set up shadows for this mesh (terrain receives shadows but doesn't cast them)
@@ -1056,14 +1280,19 @@ let pov2 = 240;
     gfx.engine = new BABYLON.Engine(gfx.canvas, false, engineOptions, false);
     gfx.scene = new BABYLON.Scene(gfx.engine);
     
-    // Initialize loading LOD system - start at minimum LOD
-    loadingLODActive = true;
-    loadingLODCurrent = 0;
+    // Initialize loading LOD system - use saved setting for menu
+    // Menu scene is your calibration scene - what you see is what you get in-game!
+    const savedLOD = localStorage.getItem('lodLevel');
+    const menuLOD = savedLOD ? parseInt(savedLOD) : 50;
+    
+    loadingLODActive = false; // Disabled during menu
+    loadingLODCurrent = menuLOD; // Use saved setting (or default 50)
     loadingComplete = false;
     
-    // Set initial LOD to minimum during loading
+    // Set initial LOD to saved setting for consistent menu rendering
     if (window.hud && window.hud.updateLODDistances) {
-      window.hud.updateLODDistances(0); // Start at minimum LOD
+      window.hud.updateLODDistances(menuLOD);
+      console.log(`🎚️ Menu LOD initialized to saved setting: ${menuLOD}%`);
     }
     
     // Load textures now that we have a scene
@@ -1075,6 +1304,10 @@ let pov2 = 240;
 
     gfx.makeScene(gfx.scene);
 
+    // Start render loop immediately - don't wait for scene.whenReadyAsync()
+    // This allows camera panning/interaction while assets load
+    gfx.engine.runRenderLoop(mainRenderLoop);
+    console.log('🎬 Render loop started - camera interactive immediately');
   
     gfx.scene.whenReadyAsync().then(function() {
       // Add world axis after scene is ready
@@ -1082,7 +1315,7 @@ let pov2 = 240;
         // gfx.showWorldAxes(1024, gfx.scene, new Vec3(0,0,0));
       }
       
-      // Load cursor frog indicator
+      // Load cursor frog indicator (deferred - not needed for menu)
       BABYLON.SceneLoader.LoadAssetContainerAsync("assets/models/frog.glb", undefined, gfx.scene)
         .then(container => {
           const result = container.instantiateModelsToScene();
@@ -1099,7 +1332,13 @@ let pov2 = 240;
       if (window.hud && gfx.camera && gfx.canvas) {
         hud.init(gfx.scene, gfx.camera, gfx.canvas);
         
-        // Initialize LOD slider
+        // DON'T apply saved LOD on startup - let the loading LOD system handle it!
+        // Menu uses LOD 50 by default, games ramp from low to saved setting.
+        // The saved setting is only applied when:
+        // 1. Game finishes loading (via startLODRampUp)
+        // 2. User opens settings menu (via initLODSlider)
+        
+        // Try to initialize LOD slider (will fail if settings menu not opened yet)
         if (hud.initLODSlider) {
           hud.initLODSlider();
         }
@@ -1109,14 +1348,14 @@ let pov2 = 240;
           console.log("🎮 3D HUD initialized - main menu items will be created when first shown");
         }
       }
-      
-      gfx.engine.runRenderLoop(mainRenderLoop);
 
       // Initialize lasso selection system
       if (window.lassoSelection && window.lassoSelection.init) {
         window.lassoSelection.init();
         // console.log("🎯 Lasso selection system initialized");
       }
+      
+      console.log('✅ Scene fully loaded and ready');
 
     });
   }
@@ -1143,7 +1382,131 @@ let pov2 = 240;
       if (!Number.isFinite(gfx.camera.position.z)) gfx.camera.position.z = 0;
     }
 
-    gfx.scene.render();
+    // SAFETY: Check scene and engine validity before rendering
+    if (!gfx.scene || !gfx.engine) {
+      console.warn('Scene or engine not available, skipping render');
+      return;
+    }
+
+    // SAFETY: Validate active camera
+    if (!gfx.scene.activeCamera) {
+      console.warn('No active camera, skipping render');
+      return;
+    }
+
+    // SAFETY: Check for corrupted meshes before rendering
+    try {
+      // Quick validation of all meshes
+      if (gfx.scene.meshes) {
+        let corruptedMeshes = 0;
+        gfx.scene.meshes.forEach((mesh, index) => {
+          try {
+            // Check if mesh has valid position
+            if (!Number.isFinite(mesh.position.x) || !Number.isFinite(mesh.position.y) || !Number.isFinite(mesh.position.z)) {
+              console.warn(`Mesh ${mesh.name || 'unnamed'} at index ${index} has invalid position:`, mesh.position);
+              mesh.position = new BABYLON.Vector3(0, 0, 0); // Reset position
+              corruptedMeshes++;
+            }
+            
+            // Check if mesh isPickable is valid
+            if (typeof mesh.isPickable !== 'boolean') {
+              console.warn(`Mesh ${mesh.name || 'unnamed'} has invalid isPickable:`, mesh.isPickable);
+              mesh.isPickable = false;
+              corruptedMeshes++;
+            }
+            
+            // Check material validity
+            if (mesh.material && typeof mesh.material !== 'object') {
+              console.warn(`Mesh ${mesh.name || 'unnamed'} has invalid material:`, mesh.material);
+              mesh.material = null;
+              corruptedMeshes++;
+            }
+            
+          } catch (meshError) {
+            console.warn(`Error validating mesh ${mesh.name || 'unnamed'}:`, meshError);
+            corruptedMeshes++;
+          }
+        });
+        
+        if (corruptedMeshes > 0) {
+          console.warn(`Found ${corruptedMeshes} corrupted meshes, fixed automatically`);
+        }
+      }
+      
+      // SAFETY: Validate particle systems - DISABLED - was too aggressive and killing healthy particles
+      // This validation was stopping particles during normal building placement animations
+      // Particles have their own error handling and cleanup in fx.js
+      //
+      // if (gfx.scene.particleSystems) {
+      //   let corruptedParticles = 0;
+      //   gfx.scene.particleSystems.forEach((system, index) => {
+      //     try {
+      //       if (!system.emitter || typeof system.emitter !== 'object') {
+      //         console.warn(`Particle system ${index} has invalid emitter:`, system.emitter);
+      //         system.emitter = new BABYLON.Vector3(0, 0, 0);
+      //         corruptedParticles++;
+      //       }
+      //     } catch (particleError) {
+      //       console.warn(`Particle system ${index} validation error:`, particleError);
+      //       corruptedParticles++;
+      //     }
+      //   });
+      // }
+      
+    } catch (validationError) {
+      console.error('Error during pre-render validation:', validationError);
+    }
+
+    // SAFETY: Wrap the actual render call
+    try {
+      gfx.scene.render();
+    } catch (renderError) {
+      console.error('CRITICAL: Scene render failed!', renderError);
+      console.error('Render error stack:', renderError.stack);
+      
+      // Emergency cleanup - try to identify and fix the problematic mesh
+      if (gfx.scene.meshes) {
+        console.log('Emergency mesh cleanup - checking all meshes...');
+        gfx.scene.meshes.forEach((mesh, index) => {
+          try {
+            // Temporarily disable mesh to isolate the problem
+            mesh.setEnabled(false);
+            console.log(`Disabled mesh ${index}: ${mesh.name || 'unnamed'}`);
+          } catch (disableError) {
+            console.warn(`Could not disable mesh ${index}:`, disableError);
+          }
+        });
+      }
+      
+      // Try rendering without problematic elements
+      try {
+        // Disable all particle systems temporarily
+        if (gfx.scene.particleSystems) {
+          gfx.scene.particleSystems.forEach(system => {
+            if (system.isStarted()) {
+              system.stop();
+            }
+          });
+        }
+        
+        // Try rendering again
+        gfx.scene.render();
+        console.log('Emergency render succeeded after cleanup');
+        
+      } catch (secondRenderError) {
+        console.error('Emergency render also failed:', secondRenderError);
+        // Last resort - restart the engine
+        if (gfx.engine && gfx.canvas) {
+          console.log('Restarting render loop as last resort...');
+          gfx.engine.stopRenderLoop();
+          setTimeout(() => {
+            if (gfx.engine && gfx.canvas) {
+              gfx.engine.runRenderLoop(mainRenderLoop);
+            }
+          }, 1000);
+        }
+      }
+    }
 
     // Initialize camera limits based on field scale (once liveField is ready)
     if (!window._cameraLimitsSet && window.liveField && gfx.camera) {
@@ -1192,9 +1555,15 @@ let pov2 = 240;
       updateBuildings(0.016); // ~60fps deltaTime
     }
     
-    // Update LOD system based on camera position
-    if (gfx.camera) {
-      updateLOD(gfx.camera.position);
+    // Update LOD system based on camera TARGET position (same as chunks)
+    // Use cameraTarget instead of camera.position so LOD and chunks are centered the same
+    if (gfx.cameraTarget) {
+      updateLOD(gfx.cameraTarget.position);
+      
+      // Update particle LOD - stop/start particles based on distance
+      if (window.fx && window.fx.updateParticleLOD) {
+        window.fx.updateParticleLOD(gfx.cameraTarget.position);
+      }
     }
     
     // Handle loading LOD ramp-up
@@ -1246,8 +1615,15 @@ let pov2 = 240;
     }
     
     // Update minimap AFTER camera position is finalized
+    // Always update positions (cheap) but throttle grouping logic (expensive)
     if (window.hud && window.hud.updateMinimap) {
-      window.hud.updateMinimap();
+      if (!this._minimapFrameCounter) this._minimapFrameCounter = 0;
+      this._minimapFrameCounter++;
+      const fullUpdate = this._minimapFrameCounter >= 5;
+      if (fullUpdate) {
+        this._minimapFrameCounter = 0;
+      }
+      window.hud.updateMinimap(fullUpdate); // Pass flag for full vs position-only update
     }
     
     // Update resource display
@@ -1292,6 +1668,19 @@ let pov2 = 240;
     if (DRAW_FPS && document.getElementById('fps_meter') && document.getElementById('settings_menu').style.display !== 'none') {
         document.getElementById('fps_meter').innerHTML = Math.round(gfx.engine.getFps()) + ' FPS';
     }
+    
+    // Periodic performance diagnostics (every 5 seconds)
+    if (!window._lastPerfLog) window._lastPerfLog = 0;
+    if (window.frameCounter && window.frameCounter % 300 === 0 && Date.now() - window._lastPerfLog > 5000) {
+      window._lastPerfLog = Date.now();
+      const fps = Math.round(gfx.engine.getFps());
+      const chunks = window.liveField ? window.liveField.chunks.size : 0;
+      const lodCount = lodModels.length;
+      const meshCount = gfx.scene.meshes.length;
+      if (fps < 30) {
+        console.log(`⚠️ Performance: ${fps} FPS | Chunks: ${chunks} | LOD models: ${lodCount} | Total meshes: ${meshCount}`);
+      }
+    }
   }
 
   gfx.makeScene = function(scene) {
@@ -1302,6 +1691,16 @@ let pov2 = 240;
     } else {
       gfx.camera = gfx.makeCamera(scene);
       // console.log('Using regular camera');
+    }
+    
+    // NOW sync camera rotation targets - gfx.camera is assigned and ready
+    if (window.ui && window.ui.syncCameraRotationTargets) {
+      window.ui.syncCameraRotationTargets();
+    } else {
+      // Fallback: enable camera controls immediately if ui isn't ready yet
+      if (window.ui && window.ui.enableCameraControls) {
+        window.ui.enableCameraControls();
+      }
     }
 
     // Initialize orbital lighting system (without auto-movement)
@@ -1348,6 +1747,14 @@ let pov2 = 240;
     // Create table first
     gfx.table = gfx.makeTable(scene);
     
+    // Pre-stretch table to default field size to prevent visual jump
+    // This happens before first render for clean initial display
+    if (gfx.table && gfx.table.parts && gfx.table.parts.SW && gfx.stretchTable) {
+      // Table will be stretched properly when field loads, this is just initial positioning
+      // Using default 128x128 field size for initial frame
+      console.log('📐 Pre-positioning table for clean initial render');
+    }
+    
   // Store shadow state globally
   window.SHADOWS_ENABLED = false;
   
@@ -1385,6 +1792,7 @@ let pov2 = 240;
         try {
           gfx.shadowGenerator = new BABYLON.ShadowGenerator(1024, sunLight);
           gfx.shadowGenerator.useBlurExponentialShadowMap = false; // Disable blur for sharper shadows
+          gfx.shadowGenerator.usePoissonSampling = true; // Enable Poisson sampling for visible shadows
           gfx.shadowGenerator.darkness = 0.8; // Make shadows darker and more visible
           gfx.shadowGenerator.setTransparencyShadow(false); // Disable transparency for better performance
           gfx.shadowGenerator.bias = 0.00001; // Reduce shadow acne
@@ -1539,9 +1947,151 @@ let pov2 = 240;
       scene.clearColor = ColorHex("#050731");
     }
 
-
-
-
+    // Add this after the initializeShadowGenerator function (around line 1424)
+    
+    // Dynamic shadow resolution based on LOD level
+    gfx.getShadowResolutionForLOD = function(lodLevel = 50) {
+      if (lodLevel <= 30) {
+        return 512;  // Low-end profile: minimal GPU usage
+      } else if (lodLevel <= 70) {
+        return 1024; // Medium: default balance
+      } else {
+        return 2048; // High-end: sharper shadows
+      }
+    };
+    
+    // Modified reconfigureShadowGenerator - now silent
+    gfx.reconfigureShadowGenerator = function(lodLevel) {
+      if (!window.SHADOWS_ENABLED || !gfx.shadowGenerator || !window.lighting?.lights?.sun) {
+        return; // Skip if disabled or not ready
+      }
+      
+      // Debounce: only reconfigure if LOD changed by more than 5%
+      const changeThreshold = 5;
+      if (Math.abs(lodLevel - gfx.lastLODLevel) < changeThreshold) {
+        return; // Small change, skip reconfiguration
+      }
+      
+      const newRes = gfx.getShadowResolutionForLOD(lodLevel);
+      const currentRes = gfx.shadowGenerator.getShadowMap().getSize().width;
+      
+      if (newRes === currentRes) {
+        gfx.lastLODLevel = lodLevel; // Still update tracking
+        return; // No change needed
+      }
+      
+      try {
+        // Dispose old generator
+        gfx.shadowGenerator.dispose();
+        
+        // Create new one with updated res
+        gfx.shadowGenerator = new BABYLON.ShadowGenerator(newRes, window.lighting.lights.sun);
+        gfx.shadowGenerator.useBlurExponentialShadowMap = false;
+        gfx.shadowGenerator.usePoissonSampling = true; // Enable Poisson sampling for visible shadows
+        gfx.shadowGenerator.darkness = 0.8;
+        gfx.shadowGenerator.setTransparencyShadow(false);
+        gfx.shadowGenerator.bias = 0.00001;
+        gfx.shadowGenerator.normalBias = 0.02;
+        gfx.shadowGenerator.depthScale = 50;
+        gfx.shadowGenerator.minDistance = 0.1;
+        gfx.shadowGenerator.maxDistance = 1500;
+        
+        // Re-add all current shadow casters with force
+        gfx.updateAllMeshShadows(true); // true = force re-add
+        
+        gfx.lastLODLevel = lodLevel;
+        
+        // Low-end profile tip tracking (silent)
+        if (lodLevel <= 30 && !gfx.lastLowEndTip) {
+          gfx.lastLowEndTip = true;
+        } else if (lodLevel > 30) {
+          gfx.lastLowEndTip = false; // Reset tip for next low-end activation
+        }
+        
+      } catch (error) {
+        // Fallback: try to reinitialize (silent)
+        gfx.initializeShadowGenerator();
+      }
+    };
+    
+    // Hook for HUD LOD changes - export this for hud.js to call
+    gfx.onLODDistanceUpdate = function(lodValue) {
+      gfx.reconfigureShadowGenerator(lodValue);
+    };
+    
+    // Modified updateAllMeshShadows - now silent
+    gfx.updateAllMeshShadows = function(forceReadd = false) {
+      if (!gfx.scene) return;
+      
+      let shadowCasterCount = 0;
+      
+      gfx.scene.meshes.forEach(mesh => {
+        // Skip UI elements - check if mesh is part of UI system
+        const isUIMesh = mesh.name.includes('table') || 
+                        mesh.name.includes('UI') ||
+                        mesh.name.includes('radial') ||
+                        mesh.name.includes('HUD') ||
+                        mesh.name.includes('hud') ||
+                        mesh.name.includes('minimap') ||
+                        // Single letter directional indicators (N, E, S, W)
+                        (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
+                        // Two letter directional indicators (SW, SE, NE, NW, etc.)
+                        (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
+                        // Check if mesh is a child of a UI parent
+                        (mesh.parent && mesh.parent.name && (
+                          mesh.parent.name.includes('table') ||
+                          mesh.parent.name.includes('radial') ||
+                          mesh.parent.name.includes('Radial') ||
+                          mesh.parent.name.includes('HUD') ||
+                          mesh.parent.name.includes('hud') ||
+                          mesh.parent.name.includes('minimap') ||
+                          mesh.parent.name.includes('Minimap')
+                        ));
+        if (isUIMesh) return;
+        
+        // All game meshes can receive shadows
+        mesh.receiveShadows = window.SHADOWS_ENABLED;
+        
+        // Only non-terrain meshes should cast shadows
+        const isTerrainMesh = mesh.name.includes('terrainMesh') || mesh.name.includes('Mesh');
+        
+        if (window.SHADOWS_ENABLED && !isTerrainMesh && gfx.shadowGenerator) {
+          if (forceReadd) {
+            // Force re-add: remove first, then add to ensure it's in the new generator
+            gfx.shadowGenerator.removeShadowCaster(mesh);
+            gfx.shadowGenerator.addShadowCaster(mesh);
+            shadowCasterCount++;
+          } else {
+            // Normal mode: only add if not already a caster
+            if (!gfx.shadowGenerator.getShadowMap().renderList.includes(mesh)) {
+              gfx.shadowGenerator.addShadowCaster(mesh);
+              shadowCasterCount++;
+            }
+          }
+        } else if (gfx.shadowGenerator) {
+          gfx.shadowGenerator.removeShadowCaster(mesh);
+        }
+        
+        // Handle child meshes
+        if (mesh.getChildMeshes) {
+          mesh.getChildMeshes().forEach(child => {
+            child.receiveShadows = window.SHADOWS_ENABLED;
+            if (window.SHADOWS_ENABLED && !isTerrainMesh && forceReadd && gfx.shadowGenerator) {
+              gfx.shadowGenerator.removeShadowCaster(child);
+              gfx.shadowGenerator.addShadowCaster(child);
+              shadowCasterCount++;
+            } else if (window.SHADOWS_ENABLED && !isTerrainMesh && !forceReadd && gfx.shadowGenerator) {
+              if (!gfx.shadowGenerator.getShadowMap().renderList.includes(child)) {
+                gfx.shadowGenerator.addShadowCaster(child);
+                shadowCasterCount++;
+              }
+            } else if (gfx.shadowGenerator) {
+              gfx.shadowGenerator.removeShadowCaster(child);
+            }
+          });
+        }
+      });
+    };
 
   };
   
@@ -1636,102 +2186,6 @@ let pov2 = 240;
     
     console.log('Refreshing all shadows...');
     gfx.updateAllMeshShadows();
-  };
-  
-  // Helper function to update all meshes when shadow state changes
-  gfx.updateAllMeshShadows = function() {
-    if (!gfx.scene || !gfx.shadowGenerator) {
-      console.log('Shadow generator not available - shadows disabled');
-      return;
-    }
-    
-    // Shadow caster tracking is now handled by the existing LOD system
-    
-    let shadowCasterCount = 0;
-    
-    gfx.scene.meshes.forEach(mesh => {
-      // Skip UI elements - check if mesh is part of UI system
-      const isUIMesh = mesh.name.includes('table') || 
-                      mesh.name.includes('UI') || 
-                      mesh.name.includes('menu') ||
-                      mesh.name.includes('Indicator') ||
-                      mesh.name.includes('indicator') ||
-                      mesh.name.includes('HUD') ||
-                      mesh.name.includes('hud') ||
-                      mesh.name.includes('minimap') ||
-                      mesh.name.includes('Minimap') ||
-                      mesh.name.includes('radial') ||
-                      mesh.name.includes('Radial') ||
-                      mesh.name.includes('selectionRing') ||
-                      mesh.name.includes('SelectionRing') ||
-                      mesh.name.includes('billboard') ||
-                      mesh.name.includes('Billboard') ||
-                      mesh.name.includes('center') ||
-                      mesh.name.includes('Center') ||
-                      mesh.name.includes('anchor') ||
-                      mesh.name.includes('Anchor') ||
-                      // Single letter directional indicators (N, E, S, W)
-                      (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
-                      // Two letter directional indicators (SW, SE, NE, NW, etc.)
-                      (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
-                      // Check if mesh is a child of a UI parent
-                      (mesh.parent && mesh.parent.name && (
-                        mesh.parent.name.includes('table') ||
-                        mesh.parent.name.includes('radial') ||
-                        mesh.parent.name.includes('Radial') ||
-                        mesh.parent.name.includes('HUD') ||
-                        mesh.parent.name.includes('hud') ||
-                        mesh.parent.name.includes('minimap') ||
-                        mesh.parent.name.includes('Minimap')
-                      ));
-      if (isUIMesh) return;
-      
-      // All game meshes can receive shadows
-      mesh.receiveShadows = window.SHADOWS_ENABLED;
-      
-      // Only non-terrain meshes should cast shadows
-      const isTerrainMesh = mesh.name.includes('terrainMesh') || mesh.name.includes('Mesh');
-      
-      if (window.SHADOWS_ENABLED && !isTerrainMesh) {
-        // Add to shadow generator immediately
-        gfx.shadowGenerator.addShadowCaster(mesh);
-        shadowCasterCount++;
-      } else {
-        gfx.shadowGenerator.removeShadowCaster(mesh);
-      }
-      
-      // Handle child meshes
-      if (mesh.getChildMeshes) {
-        mesh.getChildMeshes().forEach(childMesh => {
-          // Skip UI child meshes
-            const isUIChild = childMesh.name.includes('selectionRing') ||
-                             childMesh.name.includes('SelectionRing') ||
-                             childMesh.name.includes('Indicator') ||
-                             childMesh.name.includes('indicator') ||
-                             childMesh.name.includes('HUD') ||
-                             childMesh.name.includes('hud') ||
-                             childMesh.name.includes('minimap') ||
-                             childMesh.name.includes('Minimap') ||
-                             childMesh.name.includes('radial') ||
-                             childMesh.name.includes('Radial') ||
-                             childMesh.name.includes('center') ||
-                             childMesh.name.includes('Center') ||
-                             childMesh.name.includes('anchor') ||
-                             childMesh.name.includes('Anchor');
-          if (isUIChild) return;
-          
-          childMesh.receiveShadows = window.SHADOWS_ENABLED;
-          if (window.SHADOWS_ENABLED && !isTerrainMesh) {
-            gfx.shadowGenerator.addShadowCaster(childMesh);
-            shadowCasterCount++;
-          } else {
-            gfx.shadowGenerator.removeShadowCaster(childMesh);
-          }
-        });
-      }
-    });
-    
-    // console.log('Shadows', window.SHADOWS_ENABLED ? 'enabled' : 'disabled', '- Shadow casters:', shadowCasterCount);
   };
   
   // LoD-based shadow caster management - integrated with existing LOD system
@@ -1849,13 +2303,25 @@ let pov2 = 240;
   gfx.makeCamera = function(scene) {
     let radius = 80; // Start at a good middle distance within the zoom range
     // Set better default camera angle: alpha=-2.5 (horizontal), beta=0.9 (looking slightly down, not straight down)
-    let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 0.9, radius, new Vec3(0, 0, 0), scene);
+    
+    // CRITICAL: Position camera at the default player agora location
+    // Default player agora is at (15, 15) in tile coordinates (see player.js line 40)
+    // This is where the agora spawns in both menu scene and games
+    const defaultAgoraX = 15;
+    const defaultAgoraZ = 15;
+    const initialX = defaultAgoraX * TILE_SIZE;
+    const initialZ = defaultAgoraZ * TILE_SIZE;
+    const initialY = 9;
+    
+    let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 0.9, radius, new Vec3(initialX, initialY, initialZ), scene);
     gfx.cameraTarget = new BABYLON.TransformNode("zCameraFocus");
-    gfx.cameraTarget.position.y = 9;
+    gfx.cameraTarget.position.set(initialX, initialY, initialZ);
     // Lock camera to target; we will drive the target via an anchor with lerp
     camera.lockedTarget = gfx.cameraTarget;
     // Initialize camera anchor (desired target position)
     window.cameraAnchor = gfx.cameraTarget.position.clone();
+    
+    console.log(`📷 Camera initialized at player agora: (${initialX}, ${initialZ})`);
     // Attach camera controls but we will disable built-in pointer inputs to avoid conflicts with custom gestures
     camera.attachControl(gfx.canvas, false); // false = don't prevent default events
     
@@ -1867,6 +2333,11 @@ let pov2 = 240;
     // Disable built-in wheel input since we're handling both rotation and zoom manually
     if (camera.inputs && camera.inputs.attached.mousewheel) {
       camera.inputs.attached.mousewheel.detachControl();
+    }
+    
+    // Disable built-in keyboard input (ArcRotateCamera has WASD for target movement by default)
+    if (camera.inputs && camera.inputs.attached && camera.inputs.attached.keyboard) {
+      try { camera.inputs.attached.keyboard.detachControl(); } catch (e) {}
     }
 
     // Camera setup complete
@@ -1909,10 +2380,8 @@ let pov2 = 240;
     camera.angularSensibilityX *= .5;
     camera.angularSensibilityY *= .5;
 
-    // Sync camera rotation targets for smooth wheel control
-    if (window.ui && window.ui.syncCameraRotationTargets) {
-      window.ui.syncCameraRotationTargets();
-    }
+    // NOTE: Don't call syncCameraRotationTargets here - gfx.camera isn't assigned yet!
+    // It will be called after this function returns and gfx.camera is assigned
 
     return camera;
   };
@@ -1972,6 +2441,11 @@ let pov2 = 240;
   
   // Expose model cleanup function for chunk management
   gfx.cleanupChunkModels = cleanupChunkModels;
+  
+  // Clear chunk queue when switching fields
+  gfx.clearChunkQueue = function() {
+    chunkQueue.length = 0;
+  };
   
   // Add showWorldAxis function
   gfx.showWorldAxes = function(size, scene, pos) {

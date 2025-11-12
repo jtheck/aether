@@ -21,7 +21,7 @@ window.aud = {};  // Audio
     // initUXListeners();
   
     ui.init();
-
+    
     gfx.init();
     
     // Initialize HUD mode from saved preference or default
@@ -29,9 +29,12 @@ window.aud = {};  // Audio
       window.hud.initializeHUDMode();
     }
     
-    // Wait for the scene to be ready before initializing the player
+    // Wait for the scene to be ready before initializing player and networking
     gfx.scene.whenReadyAsync().then(function() {
       initPlayer();
+      
+      // DON'T initialize networking here - let the lobby system handle it when user picks a game type
+      // Network will be initialized when user clicks a game type in the menu
       
       // Initialize shadow generator after lighting system is ready
       // Add a small delay to ensure lighting system is fully initialized
@@ -52,17 +55,20 @@ window.aud = {};  // Audio
       } else {
         console.warn('Table not available for stretching - gfx.table:', gfx.table);
       }
-
+      
       // Disable auto-follow to prevent cameraTarget jumps during touch gestures
       window.cameraAutoFollowEnabled = false;
-
+      
       // Initialize touch manager on the canvas once gfx is ready
       if (window.touch && window.gfx && window.gfx.canvas) {
         window.touch.init(window.gfx.canvas);
       }
-
+      
+      // DON'T auto-start game here - user picks game mode from lobby menu
+      // The lobby system (lobby.js) will handle game initialization and network setup
+      console.log('🎮 Ready! Open menu to select a game mode.');
     });
-
+    
     let chat;
     // Init chat
     if (typeof GETFIRE !== "undefined"){
@@ -81,6 +87,7 @@ window.aud = {};  // Audio
     // net.init();
     // gfx.crank()
     app.initInputListeners();
+    window._inputListenersInitialized = true; // Mark as initialized
 
     log("©'25 Aether.Garden");
   }; // end app.init
@@ -167,4 +174,138 @@ window.aud = {};  // Audio
     // var objDiv = document.getElementById("console_log");
     // objDiv.scrollTop = 0;// objDiv.scrollHeight;
   };
+
+  // UPDATED: Separate single-player start function for fallback
+  function startSinglePlayerGame() {
+    window.isMultiplayer = false;
+    window.gameType = 'single';
+    
+    // Create AI opponent if needed
+    if (!window.opponent) {
+      window.opponent = new AIPlayer({
+        id: 'ai',
+        difficulty: 'normal',
+        color: getOpponentColor()
+      });
+    }
+    
+    const players = [window.player, window.opponent];
+    
+    // Initialize game
+    window.game = new Game({
+      type: window.gameType,
+      map: 'default',
+      players: players,
+      isMultiplayer: window.isMultiplayer,
+      tickRate: 60
+    });
+    
+    // Start game loop
+    if (window.gameLoop && window.gameLoop.start) {
+      window.gameLoop.start();
+    }
+    
+    console.log('🎮 Starting single player game (network fallback)');
+  }
+
+  // UPDATED: Enhanced startMultiplayerGame with safety check
+  function startMultiplayerGame() {
+    try {
+      const status = window.net.getStatus();
+      
+      // Create players based on connection status
+      const players = [window.player]; // Always include local player
+      
+      if (status.isConnected && status.peers.length > 0) {
+        // Multiplayer: create opponent proxy
+        if (!window.opponent) {
+          window.opponent = new OpponentPlayer({
+            id: status.peers[0], // First peer
+            color: getOpponentColor(), // Blue for opponent
+            startingResources: {food: 100, wood: 50, stone: 25, magic: 10}
+          });
+        }
+        players.push(window.opponent);
+        
+        // Set multiplayer flag
+        window.isMultiplayer = true;
+        window.gameType = 'onevsone';
+        
+        console.log(`🎮 Starting 1v1 multiplayer game vs ${window.opponent.id}`);
+      } else {
+        // Fallback to single-player even in multiplayer attempt
+        console.warn('No peers connected, starting single-player');
+        startSinglePlayerGame();
+        return;
+      }
+      
+      // Initialize game with players
+      window.game = new Game({
+        type: window.gameType,
+        map: 'default',
+        players: players,
+        isMultiplayer: window.isMultiplayer,
+        tickRate: window.net ? window.net.TICK_RATE : 60
+      });
+      
+      // Start game loop
+      if (window.gameLoop && window.gameLoop.start) {
+        window.gameLoop.start();
+      }
+      
+      // Hook unit commands to network layer
+      hookUnitCommandsToNetwork();
+    } catch (error) {
+      console.error('Failed to start multiplayer game:', error);
+      // Fallback to single-player
+      startSinglePlayerGame();
+    }
+  }
+
+  // Hook existing unit commands to send via network
+  function hookUnitCommandsToNetwork() {
+    // Override unit movement to use net.sendCommand
+    const originalMoveUnit = window.pathfinding?.moveUnit || window.Unit.prototype.move;
+    window.pathfinding = window.pathfinding || {};
+    window.pathfinding.moveUnit = function(unit, target) {
+      if (window.isMultiplayer && unit.owner === window.player.id) {
+        // Send move command over network
+        window.net.sendCommand({
+          type: 'move',
+          unitId: unit.id,
+          target: {x: target.x, z: target.z}
+        });
+      }
+      
+      // Execute locally (prediction)
+      return originalMoveUnit.call(this, unit, target);
+    };
+    
+    // Similarly hook attack, build, etc.
+    // ... additional hooks for other command types
+  };
+  
+  // Get opponent color (blue team)
+  function getOpponentColor() {
+    return {
+      primary: '#0066cc',
+      secondary: '#004499',
+      accent: '#99ccff'
+    };
+  };
+  
+  // UPDATED: Safe focus/blur event listeners
+  window.addEventListener('focus', () => {
+    // DON'T re-initialize networking on focus!
+    // The lobby system handles network initialization
+    // Re-initing creates a new P2P instance and breaks broadcast channels
+    console.log('🔄 Window focused');
+  });
+  
+  window.addEventListener('blur', () => {
+    if (window.net) {
+      // Pause sending commands while tabbed out (safe even if getStatus missing)
+      window.net.pauseCommands = true;
+    }
+  });
 }(window.app = window.app || {}));

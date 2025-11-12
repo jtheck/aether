@@ -8,19 +8,10 @@
 
 
 initPlayer = function(){
+  // Menu scene is now purely visual - just create player, no Game object yet
+  // Game and units will be spawned when a match actually starts
   window.player = new Player();
-  
-  // Initialize the game
-  window.game = new Game({
-    type: 'default',
-    map: 'default',
-    players: [window.player]
-  });
-  
-  // Start the game loop for physics updates
-  if (window.gameLoop && window.gameLoop.start) {
-    window.gameLoop.start();
-  }
+  console.log('✅ Player initialized (menu scene - no game yet)');
 }
 
 
@@ -28,12 +19,16 @@ initPlayer = function(){
 
 
 function Player(ops){
-
-  this.name;
-  this.color;
+  
+  ops = ops || {};
+  
+  // Player ID - defaults to 'player' for backward compatibility
+  this.id = ops.id || 'player';
+  this.name = ops.name || null;
+  this.color = ops.color || null;
 
   // Player's agora location (in tile coordinates)
-  this.agora = { x: 15, y: 15 };
+  this.agora = ops.agora || { x: 15, y: 15 };
 
   // Player's controlled units
   this.units = [];
@@ -42,12 +37,15 @@ function Player(ops){
   this.selectedUnits = [];
   
   // Player's resources
-  this.resources = {
+  this.resources = ops.resources || {
     food: 100,
     wood: 50,
     stone: 25,
     magic: 10
   };
+  
+  // Player's buildings
+  this.buildings = [];
 
   this.cursor = new PBody();
   
@@ -64,8 +62,8 @@ function Player(ops){
   // Add a flag to follow the player
   this.loadFlag();
   
-  // Spawn initial villagers around the agora
-  this.spawnInitialVillagers();
+  // DON'T spawn villagers here - let the Game handle it consistently for all players
+  // this.spawnInitialVillagers();
 
 }
 
@@ -249,8 +247,17 @@ Player.prototype.selectUnit = function(unit) {
     return false; // Already selected or invalid unit
   }
   
+  // Check if unit belongs to this player
+  const ownerMatches = (unit.owner === this.id) || (unit.owner === 'player');
+  console.log(`🔍 Selection check: unit.owner="${unit.owner}", player.id="${this.id}", matches=${ownerMatches}`);
+  
+  if (!ownerMatches) {
+    console.log(`⚠️ Cannot select unit - belongs to ${unit.owner}, not ${this.id} (or 'player')`);
+    return false;
+  }
+  
   this.selectedUnits.push(unit);
-  // console.log(`🎯 Selected unit: ${unit.name || unit.type}`);
+  console.log(`✅ Selected unit: ${unit.name || unit.type} (owner: ${unit.owner})`);
   return true;
 };
 

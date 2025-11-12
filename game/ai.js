@@ -1295,7 +1295,11 @@ class WizardCastBehavior {
         // Optional: spawn simple VFX at target or unit position if available
         if (window.fx && window.fx.createExplosion) {
             const p = params.targetPoint ? new BABYLON.Vector3(params.targetPoint.x, 0, params.targetPoint.z) : (unit.mesh ? unit.mesh.position.clone() : new BABYLON.Vector3(0,0,0));
-            try { window.fx.createExplosion(p, 0.2); } catch (e) {}
+            try { 
+                window.fx.createExplosion(p, 0.2);
+            } catch (e) {
+                console.error('Explosion creation failed:', e);
+            }
         }
     }
     step() {

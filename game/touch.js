@@ -4,22 +4,20 @@
   // Public API
   touch.init = function initTouchManager(canvas, options) {
     if (!canvas || touch._initialized) {
-      // console.log('📱 Touch init skipped - canvas:', !!canvas, 'initialized:', touch._initialized);
       return;
     }
-    // console.log('📱 Touch system initializing...');
 
     const config = Object.assign({
-      tapMaxTimeMs: 250,
-      tapMaxMovePx: 12,
-      doubleTapDelayMs: 500, // Increased from 300ms to 500ms for better mobile detection
+      tapMaxTimeMs: 400, // Even more time for each individual tap
+      tapMaxMovePx: 60, // Even bigger area - very forgiving finger drift
+      doubleTapDelayMs: 1500, // 1.5 full seconds - very relaxed timing
       twoFingerTapMaxTimeMs: 300,
       twoFingerTapMaxMovePx: 16,
       twoFingerDoubleTapCenterMaxMovePx: 80,
-      rotateSensitivity: 0.4,
-      pinchSensitivity: 0.85,
-      panSensitivity: 5,
-      dragStartThresholdPx: 14,
+      rotateSensitivity: 0.27, // Fine-tuned for optimal feel
+      pinchSensitivity: 1.06, // Increased 25% for faster zoom response
+      panSensitivity: 1.5, // Reduced from 5 to prevent runaway camera
+      dragStartThresholdPx: 10, // Reduced from 14 for quicker response
       suppressSingleTapAfterTwoFingerMs: 300,
       // Gesture unification
       dominantOnly: false,
@@ -30,16 +28,16 @@
       enablePan: true,
       // Minimum movement thresholds to treat 2-finger motion as gesture (prevents accidental zoom/rotate on 2-tap)
       pinchMinDeltaPx: 1.0,
-      rotateMinDeltaRad: 0.008,
+      rotateMinDeltaRad: 0.02, // Increased from 0.008 to reduce accidental rotation
       panMinDeltaPx: 0.4,
       panBias: 1.2,
       primaryOverrideFactor: 1.6,
       initialPinchMinSpanPx: 10,
       maxRadiusStepPerFrame: 1.5,
-      gestureEngageTimeMs: 20,
-      gestureForceCommitMs: 150,
+      gestureEngageTimeMs: 0, // Reduced from 20ms for instant response
+      gestureForceCommitMs: 100, // Reduced from 150ms for faster engagement
       // Building placement UX
-      buildPlaceMinHoldMs: 200
+      buildPlaceMinHoldMs: 150 // Reduced from 200ms for snappier placement
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -63,11 +61,26 @@
     const activePointers = new Map(); // pointerId -> PointerState
     const pointerOrder = []; // Track order of active pointers
 
-    const canvasRect = () => canvas.getBoundingClientRect();
+    // Cache canvas rect, update on resize
+    let cachedCanvasRect = canvas.getBoundingClientRect();
+    let rectDirty = false;
+    const updateCachedRect = () => {
+      cachedCanvasRect = canvas.getBoundingClientRect();
+      rectDirty = false;
+    };
+    const scheduleRectUpdate = () => { 
+      if (!rectDirty) {
+        rectDirty = true;
+        requestAnimationFrame(updateCachedRect);
+      }
+    };
+    window.addEventListener('resize', scheduleRectUpdate, { passive: true });
+    const canvasRect = () => cachedCanvasRect;
 
     // Single tap/double tap tracking
     let lastSingleTapTime = 0;
     let lastSingleTapPos = null; // Use null to indicate no previous tap
+    let doubleTapCooldownUntil = 0; // Prevent rapid triple-tap from registering as double-tap
 
     // Two-finger tap/double-tap tracking
     let lastTwoTapTime = 0;
@@ -90,7 +103,23 @@
     let placingLastTileX = null;
     let placingLastTileZ = null;
 
-    function now() { return performance.now(); }
+    // Performance optimization: cache time within frame
+    let cachedTime = performance.now();
+    let timeValid = true;
+    function now() { 
+      if (!timeValid) {
+        cachedTime = performance.now();
+        timeValid = true;
+      }
+      return cachedTime;
+    }
+    function invalidateTime() { timeValid = false; }
+    
+    // Pre-compute squared thresholds to avoid repeated multiplications
+    const tapMaxMovePxSq = config.tapMaxMovePx * config.tapMaxMovePx;
+    const twoFingerTapMaxMovePxSq = config.twoFingerTapMaxMovePx * config.twoFingerTapMaxMovePx;
+    const dragStartThresholdPxSq = config.dragStartThresholdPx * config.dragStartThresholdPx;
+    const twoFingerDoubleTapCenterMaxMovePxSq = config.twoFingerDoubleTapCenterMaxMovePx * config.twoFingerDoubleTapCenterMaxMovePx;
 
     function makePointerState(e) {
       return {
@@ -150,12 +179,9 @@
 
     function screenToWorld(screenX, screenY) {
       if (!window.ui || !window.ui.getWorldPositionFromScreen) {
-        console.log('📱 screenToWorld failed - ui:', !!window.ui, 'getWorldPositionFromScreen:', !!window.ui?.getWorldPositionFromScreen);
         return null;
       }
-      const worldPos = window.ui.getWorldPositionFromScreen(screenX, screenY);
-      console.log('📱 screenToWorld result:', worldPos, 'for screen coords:', screenX, screenY);
-      return worldPos;
+      return window.ui.getWorldPositionFromScreen(screenX, screenY);
     }
 
     function sendSyntheticPointer(type, clientX, clientY, button, options) {
@@ -206,7 +232,6 @@
           radius: window.gfx && window.gfx.camera ? window.gfx.camera.radius : 100,
           cameraAlpha: window.gfx && window.gfx.camera ? window.gfx.camera.alpha : 0,
           cameraBeta: window.gfx && window.gfx.camera ? window.gfx.camera.beta : 0,
-          worldAtCentroid: screenToWorld(c.x, c.y),
           startTime: now()
         };
         // Temporarily disable camera auto-follow while gesturing
@@ -257,9 +282,7 @@
       const bMoveSq = distanceSq(b.startX, b.startY, b.x, b.y);
       const aDt = now() - a.startTime;
       const bDt = now() - b.startTime;
-      const tapMoveSq = (window.touchConfig ? window.touchConfig.twoFingerTapMaxMovePx : 32) ** 2; // relaxed
-      const tapTimeMs = (window.touchConfig ? window.touchConfig.twoFingerTapMaxTimeMs : 350); // slightly relaxed
-      const bothTapLike = (aMoveSq <= tapMoveSq && bMoveSq <= tapMoveSq && aDt <= tapTimeMs && bDt <= tapTimeMs);
+      const bothTapLike = (aMoveSq <= twoFingerTapMaxMovePxSq && bMoveSq <= twoFingerTapMaxMovePxSq && aDt <= config.twoFingerTapMaxTimeMs && bDt <= config.twoFingerTapMaxTimeMs);
       if (bothTapLike) {
         // Do not allow commit or any camera nudge; wait for pointerup to evaluate 2-finger tap/double-tap
         return;
@@ -341,52 +364,61 @@
           // Normalize to [-PI, PI]
           const normalized = ((deltaAngle + Math.PI) % (2*Math.PI)) - Math.PI;
           const deltaAlpha = normalized * config.rotateSensitivity;
-          const maxAlphaStep = 1.25;
+          const maxAlphaStep = 0.5; // Reduced from 1.25 to prevent excessive spinning
           let step = Math.max(-maxAlphaStep, Math.min(maxAlphaStep, deltaAlpha));
           step *= (primary === 'rotate' ? 1 : config.dampSecondary);
           if (window.ui && window.ui.nudgeRotation) window.ui.nudgeRotation(step);
         }
       }
 
-      // Pan if meaningful change: keep world point under centroid stable
+      // Pan using screen-space delta (no raycasting, no circular feedback)
       if (allowPan) {
-        if (window.gfx && window.gfx.cameraTarget && gestureInitial.worldAtCentroid) {
-          const worldNow = screenToWorld(cNow.x, cNow.y);
-          if (worldNow) {
-            // Zoom-aware pan sensitivity for touch
-            const zoomFactor = window.gfx && window.gfx.camera ? Math.min(1.0, Math.pow(60 / (window.gfx.camera.radius || 60), 1.5)) : 1.0;
-            const adjustedPanSensitivity = config.panSensitivity * zoomFactor;
+        if (window.gfx && window.gfx.camera && window.gfx.canvas && window.gfx.cameraTarget) {
+          const cam = window.gfx.camera;
+          const rect = window.gfx.canvas.getBoundingClientRect();
+          
+          // Screen delta in pixels since last centroid
+          const screenDx = (cNow.x - gestureInitial.centroid.x);
+          const screenDy = (cNow.y - gestureInitial.centroid.y);
+          
+          // Convert pixels to world units
+          const pixelsToWorld = (2 * (cam.radius || 60) * Math.tan((cam.fov || 0.8)/2)) / Math.max(1, rect.height);
+          
+          // Build ground-aligned camera axes for proper field orientation
+          const toTarget = window.gfx.cameraTarget.position.subtract(cam.position).normalize();
+          const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
+          
+          let dx = 0, dz = 0;
+          if (groundForward.lengthSquared() > 1e-6) {
+            groundForward.normalize();
+            const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
             
-            let dx = (gestureInitial.worldAtCentroid.x - worldNow.x) * adjustedPanSensitivity;
-            let dz = (gestureInitial.worldAtCentroid.z - worldNow.z) * adjustedPanSensitivity;
-            if (!Number.isFinite(dx)) dx = 0;
-            if (!Number.isFinite(dz)) dz = 0;
-            // Fallback: if world delta is negligible, approximate from screen delta
-            if (Math.abs(dx) + Math.abs(dz) < 1e-6 && window.gfx && window.gfx.camera && window.gfx.canvas && window.gfx.cameraTarget) {
-              const cam = window.gfx.camera;
-              const rect = window.gfx.canvas.getBoundingClientRect();
-              const pixelsToWorld = (2 * (cam.radius || 60) * Math.tan((cam.fov || 0.8)/2)) / Math.max(1, rect.height);
-              const screenDx = (cNow.x - gestureInitial.centroid.x);
-              const screenDy = (cNow.y - gestureInitial.centroid.y);
-              // Build ground-aligned camera axes
-              const toTarget = window.gfx.cameraTarget.position.subtract(cam.position).normalize();
-              const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
-              if (groundForward.lengthSquared() > 1e-6) {
-                groundForward.normalize();
-                const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
-                // Map screen movement: right += x, forward += y
-                const wx = groundRight.x * screenDx * pixelsToWorld + groundForward.x * screenDy * pixelsToWorld;
-                const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
-                dx = wx * adjustedPanSensitivity;
-                dz = wz * adjustedPanSensitivity;
-              }
-            }
-            const k = (primary === 'pan' ? 1 : config.dampSecondary);
-            dx *= k; dz *= k;
-            // Apply pan velocity instead of updating anchor
-            if (window.ui && window.ui.nudgePan) {
-              window.ui.nudgePan(dx, dz);
-            }
+            // Map screen movement to world: screen right -> groundRight, screen down -> groundForward
+            const wx = (groundRight.x * screenDx + groundForward.x * screenDy) * pixelsToWorld * config.panSensitivity;
+            const wz = (groundRight.z * screenDx + groundForward.z * screenDy) * pixelsToWorld * config.panSensitivity;
+            dx = wx; // Pan in the direction of finger movement
+            dz = wz;
+          }
+          
+          if (!Number.isFinite(dx)) dx = 0;
+          if (!Number.isFinite(dz)) dz = 0;
+          
+          // Dampen secondary gestures
+          const k = (primary === 'pan' ? 1 : config.dampSecondary);
+          dx *= k; dz *= k;
+          
+          // Cap the pan amount per frame
+          const maxPanPerFrame = 8;
+          const panMag = Math.sqrt(dx*dx + dz*dz);
+          if (panMag > maxPanPerFrame) {
+            const scale = maxPanPerFrame / panMag;
+            dx *= scale;
+            dz *= scale;
+          }
+          
+          // Apply pan
+          if (window.ui && window.ui.nudgePan) {
+            window.ui.nudgePan(dx, dz);
           }
         }
       }
@@ -396,7 +428,6 @@
       gestureInitial.angle = da.ang;
       gestureInitial.centroid = cNow;
       gestureInitial.radius = window.gfx && window.gfx.camera ? window.gfx.camera.radius : gestureInitial.radius;
-      gestureInitial.worldAtCentroid = screenToWorld(cNow.x, cNow.y) || gestureInitial.worldAtCentroid;
 
       // Failsafe: ensure camera numbers are finite; otherwise revert
       if (window.gfx && window.gfx.camera && window._lastSafeCamera) {
@@ -432,30 +463,36 @@
       return e.pointerType && e.pointerType !== 'mouse';
     }
 
+    // Cache UI selectors for faster checks
+    const UI_SELECTORS = [
+      '.lod_slider', '.lod_slider_container', '#lod_slider', '#lod_value',
+      '.binary_switch', '.switch_handle', '#hud_switch', '#shadows_switch',
+      'input', 'select', 'button'
+    ];
+    
+    function isUIElement(e) {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el) return false;
+      // Quick check: if target is canvas, skip expensive queries
+      if (el === canvas) return false;
+      // Check if any parent matches UI selectors
+      for (let i = 0; i < UI_SELECTORS.length; i++) {
+        if (el.closest(UI_SELECTORS[i])) return true;
+      }
+      return false;
+    }
+    
+
     function onPointerDown(e) {
       if (!isTouchLike(e)) return; // leave mouse to existing system
       
       // Check if we're interacting with a UI element - if so, allow normal behavior
-      const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
-      if (clickedElement && (
-        clickedElement.closest('.lod_slider') ||
-        clickedElement.closest('.lod_slider_container') ||
-        clickedElement.closest('#lod_slider') ||
-        clickedElement.closest('#lod_value') ||
-        clickedElement.closest('.binary_switch') ||
-        clickedElement.closest('.switch_handle') ||
-        clickedElement.closest('#hud_switch') ||
-        clickedElement.closest('#shadows_switch') ||
-        clickedElement.closest('input') ||
-        clickedElement.closest('select') ||
-        clickedElement.closest('button')
-      )) {
-        // Allow normal UI behavior for form elements and controls
-        return;
-      }
+      if (isUIElement(e)) return;
       
       e.preventDefault();
       e.stopPropagation();
+      
+      invalidateTime();
 
       // Track pointer
       if (!activePointers.has(e.pointerId)) {
@@ -491,28 +528,13 @@
       if (!isTouchLike(e)) return;
       
       // Check if we're interacting with a UI element - if so, allow normal behavior
-      const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
-      if (clickedElement && (
-        clickedElement.closest('.lod_slider') ||
-        clickedElement.closest('.lod_slider_container') ||
-        clickedElement.closest('#lod_slider') ||
-        clickedElement.closest('#lod_value') ||
-        clickedElement.closest('.binary_switch') ||
-        clickedElement.closest('.switch_handle') ||
-        clickedElement.closest('#hud_switch') ||
-        clickedElement.closest('#shadows_switch') ||
-        clickedElement.closest('input') ||
-        clickedElement.closest('select') ||
-        clickedElement.closest('button')
-      )) {
-        // Allow normal UI behavior for form elements and controls
-        return;
-      }
+      if (isUIElement(e)) return;
       
       e.preventDefault();
       e.stopPropagation();
-
+      
       const ps = activePointers.get(e.pointerId);
+
       if (ps) updatePointerState(ps, e);
       lastTouchClientX = e.clientX;
       lastTouchClientY = e.clientY;
@@ -520,14 +542,14 @@
         moveRafScheduled = true;
         requestAnimationFrame(() => {
           moveRafScheduled = false;
+          invalidateTime();
           // Building placement preview tracking should run regardless of pointer tracking state
           if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
             let worldPos = screenToWorld(lastTouchClientX, lastTouchClientY);
             // Fallback to scene.pick with canvas-local coordinates if needed
-            if ((!worldPos || !Number.isFinite(worldPos.x) || !Number.isFinite(worldPos.z)) && window.gfx && window.gfx.scene && window.gfx.canvas) {
-              const rect2 = window.gfx.canvas.getBoundingClientRect();
-              const lx = lastTouchClientX - rect2.left;
-              const ly = lastTouchClientY - rect2.top;
+            if ((!worldPos || !Number.isFinite(worldPos.x) || !Number.isFinite(worldPos.z)) && window.gfx && window.gfx.scene) {
+              const lx = lastTouchClientX - cachedCanvasRect.left;
+              const ly = lastTouchClientY - cachedCanvasRect.top;
               const pr = window.gfx.scene.pick(lx, ly);
               if (pr && pr.hit && pr.pickedPoint) {
                 worldPos = pr.pickedPoint;
@@ -579,8 +601,7 @@
                     const dx = aps.x - aps.startX;
                     const dy = aps.y - aps.startY;
                     const movedSq = dx*dx + dy*dy;
-                    const thresh = config.dragStartThresholdPx;
-                    if (!aps.syntheticDownEmitted && movedSq >= thresh*thresh && now() >= suppressSingleTapUntil) {
+                    if (!aps.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq && now() >= suppressSingleTapUntil) {
                       sendSyntheticPointer('pointerdown', aps.startX, aps.startY, 0, { suppressTerrainClick: true });
                       aps.syntheticDownEmitted = true;
                     }
@@ -597,8 +618,7 @@
               const dx = only.x - only.startX;
               const dy = only.y - only.startY;
               const movedSq = dx*dx + dy*dy;
-              const thresh = config.dragStartThresholdPx;
-              if (!only.syntheticDownEmitted && movedSq >= thresh*thresh) {
+              if (!only.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
                 if (now() >= suppressSingleTapUntil) {
                   sendSyntheticPointer('pointerdown', only.startX, only.startY, 0, { suppressTerrainClick: true });
                   only.syntheticDownEmitted = true;
@@ -617,26 +637,12 @@
       if (!isTouchLike(e)) return;
       
       // Check if we're interacting with a UI element - if so, allow normal behavior
-      const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
-      if (clickedElement && (
-        clickedElement.closest('.lod_slider') ||
-        clickedElement.closest('.lod_slider_container') ||
-        clickedElement.closest('#lod_slider') ||
-        clickedElement.closest('#lod_value') ||
-        clickedElement.closest('.binary_switch') ||
-        clickedElement.closest('.switch_handle') ||
-        clickedElement.closest('#hud_switch') ||
-        clickedElement.closest('#shadows_switch') ||
-        clickedElement.closest('input') ||
-        clickedElement.closest('select') ||
-        clickedElement.closest('button')
-      )) {
-        // Allow normal UI behavior for form elements and controls
-        return;
-      }
+      if (isUIElement(e)) return;
       
       e.preventDefault();
       e.stopPropagation();
+      
+      invalidateTime();
 
       const ps = activePointers.get(e.pointerId);
       if (!ps) return;
@@ -684,11 +690,11 @@
           skipNextSingleTap = false;
           return;
         }
-        if (dt <= config.tapMaxTimeMs && moveSq <= (config.tapMaxMovePx * config.tapMaxMovePx)) {
+        if (dt <= config.tapMaxTimeMs && moveSq <= tapMaxMovePxSq) {
           // If building placement mode, tap places the building
           if (window.buildingSystem && window.buildingSystem.isPlacing) {
             // Require that the preview actually moved or the touch held long enough before allowing a tap place
-            const heldLongEnough = (now() - ps.startTime) >= (config.buildPlaceMinHoldMs || 200);
+            const heldLongEnough = (now() - ps.startTime) >= config.buildPlaceMinHoldMs;
             if (placingPreviewMoved || heldLongEnough) {
               const worldPos = screenToWorld(clientX, clientY);
               if (worldPos && window.buildingSystem.placeBuildingAt) {
@@ -710,30 +716,57 @@
             sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
             ps.syntheticDownEmitted = false;
           } else {
-            const timeSinceLast = now() - lastSingleTapTime;
+            const currentTime = now();
+            
+            // Check if we're in cooldown period after a recent double-tap
+            if (currentTime < doubleTapCooldownUntil) {
+              // In cooldown - treat as regular single tap
+              sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
+              sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
+              return;
+            }
+            
+            const timeSinceLast = currentTime - lastSingleTapTime;
             const distSinceLastSq = lastSingleTapPos ? distanceSq(clientX, clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
-            console.log('📱 Tap detection - current:', {x: clientX, y: clientY}, 'last:', lastSingleTapPos, 'timeSinceLast:', timeSinceLast, 'doubleTapDelayMs:', config.doubleTapDelayMs, 'distSinceLastSq:', distSinceLastSq, 'tapMaxMovePx^2:', config.tapMaxMovePx * config.tapMaxMovePx);
-            if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distSinceLastSq < (config.tapMaxMovePx * config.tapMaxMovePx)) {
+            
+            if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distSinceLastSq < tapMaxMovePxSq) {
               // Double tap: trigger special ability at world position
-              console.log('📱 Mobile double tap detected - triggering special abilities');
+              
+              // Visual feedback - green flash on success
+              if (canvas && canvas.style) {
+                canvas.style.outline = '5px solid rgba(0, 255, 0, 1)';
+                setTimeout(() => {
+                  canvas.style.outline = '';
+                }, 400);
+              }
+              
               const worldPos = screenToWorld(clientX, clientY);
               if (worldPos && window.ui && window.ui.triggerSpecialAbilityAt) {
-                console.log('📱 Calling triggerSpecialAbilityAt with worldPos:', worldPos);
                 window.ui.triggerSpecialAbilityAt(worldPos);
-              } else {
-                console.log('📱 Failed to trigger special ability - worldPos:', worldPos, 'ui:', !!window.ui, 'triggerSpecialAbilityAt:', !!window.ui?.triggerSpecialAbilityAt);
               }
-              // Reset double-tap tracking so a third tap doesn't chain
+              // Reset double-tap tracking and enter cooldown
               lastSingleTapTime = 0;
               lastSingleTapPos = null;
+              doubleTapCooldownUntil = currentTime + 1500; // Match double-tap window to prevent triple-tap
+              
+              // IMPORTANT: Return here to prevent any click/selection processing
+              return;
             } else {
               // Single tap: synthesize a click
               sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
               sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
               // Update last tap for double-tap detection
-              lastSingleTapTime = now();
+              lastSingleTapTime = currentTime;
               lastSingleTapPos = { x: clientX, y: clientY };
-              console.log('📱 Single tap recorded at:', lastSingleTapPos, 'time:', lastSingleTapTime);
+              
+              // Show visual feedback - flash canvas border to indicate you're in double-tap window
+              if (canvas && canvas.style) {
+                const originalOutline = canvas.style.outline;
+                canvas.style.outline = '3px solid rgba(255, 255, 0, 0.8)';
+                setTimeout(() => {
+                  canvas.style.outline = originalOutline;
+                }, 500); // Longer flash to match the wider timing window
+              }
             }
           }
         } else {
@@ -755,7 +788,7 @@
           skipNextSingleTap = false;
           return;
         }
-        if (dt <= config.tapMaxTimeMs && moveSq <= (config.tapMaxMovePx * config.tapMaxMovePx)) {
+        if (dt <= config.tapMaxTimeMs && moveSq <= tapMaxMovePxSq) {
           // Building placement tap during gesture
           if (window.buildingSystem && window.buildingSystem.isPlacing) {
             const worldPos = screenToWorld(clientX, clientY);
@@ -778,7 +811,7 @@
     // We keep a small rolling window of recent quick-up pointers
     const recentQuickUps = [];
     function recordQuickUp(x, y, dt, moveSq) {
-      if (dt <= config.twoFingerTapMaxTimeMs && moveSq <= (config.twoFingerTapMaxMovePx * config.twoFingerTapMaxMovePx)) {
+      if (dt <= config.twoFingerTapMaxTimeMs && moveSq <= twoFingerTapMaxMovePxSq) {
         recentQuickUps.push({ t: now(), x, y });
         // Prune
         const threshold = config.doubleTapDelayMs;
@@ -810,8 +843,7 @@
           const cy = (a.y + b.y) / 2;
           const timeSinceLastTwo = now() - lastTwoTapTime;
           const distTwoSq = distanceSq(cx, cy, lastTwoTapPos.x, lastTwoTapPos.y);
-          const centerThresh = (config.twoFingerDoubleTapCenterMaxMovePx || 80);
-          if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < (centerThresh * centerThresh)) {
+          if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < twoFingerDoubleTapCenterMaxMovePxSq) {
             // Double 2-tap: exit building placement mode if placing, otherwise clear selection
             if (window.buildingSystem && window.buildingSystem.isPlacing) {
               // Exit building placement mode but keep selection

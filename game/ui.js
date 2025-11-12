@@ -1370,6 +1370,7 @@ function getRandomColor() {
   let lastClickPosition = null; // Use null to indicate no previous click
   const DOUBLE_CLICK_DELAY = 300; // milliseconds
   const DOUBLE_CLICK_DISTANCE = 10; // pixels - how far apart clicks can be to count as double-click
+  let suppressNextPointerUp = false; // Flag to suppress pointerup after double-click
   // Separate tracking for right mouse button double-click
   let lastRightClickTime = 0;
   let lastRightClickPosition = { x: 0, y: 0 };
@@ -1511,6 +1512,12 @@ function getRandomColor() {
         }
       }
     } else if (e.type === 'pointerup' && e.button === 0) {
+      // Check if we need to suppress this pointerup (due to double-click)
+      if (suppressNextPointerUp) {
+        suppressNextPointerUp = false;
+        return; // Skip all pointerup processing
+      }
+      
       // Handle LMB up for selection (skip during building placement or when 3D menu is visible)
       if (!(window.buildingSystem && window.buildingSystem.isPlacing) && !(window.hud && window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible())) {
         if (window.lassoSelection && window.lassoSelection.handleLmbUp) {
@@ -1536,17 +1543,16 @@ function getRandomColor() {
       // Check if this is a double-click
       if (lastClickPosition && currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
         // Double-click detected! Trigger special abilities on selected units
-        // console.log('🖱️ Mouse double click detected - triggering special abilities');
         const pickResult = gfx.scene.pick(x, y);
         const worldPos = pickResult.hit ? pickResult.pickedPoint : null;
         if (window.ui && window.ui.triggerSpecialAbilityAt) {
-          // console.log('🖱️ Calling triggerSpecialAbilityAt with worldPos:', worldPos);
           window.ui.triggerSpecialAbilityAt(worldPos);
         }
         
-        // Reset double-click detection
+        // Reset double-click detection and suppress the upcoming pointerup event
         lastClickTime = 0;
         lastClickPosition = null;
+        suppressNextPointerUp = true; // Prevent the pointerup from issuing a move command
         return;
       }
       
@@ -1619,6 +1625,12 @@ function getRandomColor() {
     if (pickResult.hit) {
       // Handle different types of clicks
       if (e.type === 'pointerup' && e.button === 0) {
+        // Check if we should suppress this due to double-click
+        if (suppressNextPointerUp) {
+          suppressNextPointerUp = false;
+          return;
+        }
+        
         // Left click - could be for placing tiles, selecting objects, etc.
         
         // Check if we clicked on a building - if so, ignore the building and pick through to terrain
@@ -2303,10 +2315,12 @@ function getRandomColor() {
     
     // Pick against the ground plane (assuming Y=0)
     const groundPlane = new BABYLON.Plane(0, 1, 0, 0);
-    const intersection = ray.intersectsPlane(groundPlane);
+    const distance = ray.intersectsPlane(groundPlane);
     
-    if (intersection) {
-      return intersection;
+    if (distance !== null && distance !== false) {
+      // Calculate the actual world position from ray origin + direction * distance
+      const worldPos = ray.origin.add(ray.direction.scale(distance));
+      return worldPos;
     }
     
     // Fallback: try to pick against the scene using canvas-local x/y
@@ -2320,13 +2334,10 @@ function getRandomColor() {
 
   // Trigger unit special abilities at optional world position
   ui.triggerSpecialAbilityAt = function(worldPos) {
-    // console.log('🎯 triggerSpecialAbilityAt called with worldPos:', worldPos);
     if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) {
-      // console.log('🎯 Missing dependencies - player:', !!window.player, 'getSelectedUnits:', !!window.player?.getSelectedUnits, 'behaviorManager:', !!window.behaviorManager);
       return;
     }
     const units = window.player.getSelectedUnits();
-    // console.log('🎯 Selected units:', units.length);
     
     // MULTIPLAYER: Submit ability commands through Match system
     if (window.isMultiplayer && window.currentMatch && units.length > 0) {
@@ -2340,13 +2351,32 @@ function getRandomColor() {
           abilityParams = { radius: 6, bonus: 1.5, duration: 7000, vfx: 'aura_blue' };
         } else if (/brigand/i.test(type)) {
           abilityType = 'brigand_sprint';
-          abilityParams = { speedMultiplier: 2.25, duration: 6000, targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null, vfx: 'speed_trail' };
+          // Extract coordinates properly from Vector3 or plain object
+          let targetPoint = null;
+          if (worldPos) {
+            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
+            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
+            targetPoint = { x: xCoord, z: zCoord };
+          }
+          abilityParams = { speedMultiplier: 2.25, duration: 6000, targetPoint: targetPoint, vfx: 'speed_trail' };
         } else if (/monk/i.test(type)) {
           abilityType = 'monk_stealth';
           abilityParams = { invisibility: true, duration: 4000, vfx: 'smoke_puff' };
         } else if (/wizard/i.test(type)) {
+          // For wizards, submit a stop command first
+          window.currentMatch.submitCommand({
+            type: 'stop',
+            unitIds: [unit.id]
+          });
           abilityType = 'wizard_cast';
-          abilityParams = { targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null, spell: 'arc_blast', power: 1.5, vfx: 'spell_flash' };
+          // Extract coordinates properly from Vector3 or plain object
+          let targetPoint = null;
+          if (worldPos) {
+            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
+            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
+            targetPoint = { x: xCoord, z: zCoord };
+          }
+          abilityParams = { targetPoint: targetPoint, spell: 'arc_blast', power: 1.5, vfx: 'spell_flash' };
         }
         
         if (abilityType) {
@@ -2370,10 +2400,17 @@ function getRandomColor() {
             vfx: 'aura_blue'
           });
         } else if (/brigand/i.test(type)) {
+          // Extract coordinates properly from Vector3 or plain object
+          let targetPoint = null;
+          if (worldPos) {
+            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
+            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
+            targetPoint = { x: xCoord, z: zCoord };
+          }
           window.behaviorManager.setBehavior(unit, 'brigand_sprint', {
             speedMultiplier: 2.25,
             duration: 6000,
-            targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
+            targetPoint: targetPoint,
             vfx: 'speed_trail'
           });
         } else if (/monk/i.test(type)) {
@@ -2383,8 +2420,25 @@ function getRandomColor() {
             vfx: 'smoke_puff'
           });
         } else if (/wizard/i.test(type)) {
+          // Stop wizard movement completely before casting
+          window.behaviorManager.setBehavior(unit, 'linger', {
+            center: { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z },
+            radius: 0, // Don't wander at all
+            wanderInterval: 999999 // Never wander
+          });
+          
+          // Extract coordinates properly - worldPos might be a Vector3 or plain object
+          let targetPoint = null;
+          if (worldPos) {
+            // Handle both Vector3 (with _x, _z) and plain objects (with x, z)
+            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
+            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
+            targetPoint = { x: xCoord, z: zCoord };
+          }
+          
+          // Then apply the cast ability as a modifier
           window.behaviorManager.setBehavior(unit, 'wizard_cast', {
-            targetPoint: worldPos ? { x: worldPos.x, z: worldPos.z } : null,
+            targetPoint: targetPoint,
             spell: 'arc_blast',
             power: 1.5,
             vfx: 'spell_flash'

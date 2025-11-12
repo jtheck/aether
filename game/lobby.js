@@ -574,6 +574,13 @@ const Lobby = {
   // Wait for broadcast channel to connect (track ourselves)
   waitForBroadcastChannel: function(channelName, timeout = 2500) {
     return new Promise((resolve, reject) => {
+      // Check if we're in offline mode
+      if (window.net && window.net.offlineMode) {
+        // console.log(`🔌 Offline mode - skipping broadcast channel: ${channelName}`);
+        resolve(); // Resolve immediately in offline mode
+        return;
+      }
+      
       // console.log(`📡 Joining broadcast channel: ${channelName}`);
       // Try to join
       if (window.net && window.net.p2p && window.net.p2p.joinBroadcast) {
@@ -590,8 +597,9 @@ const Lobby = {
           resolve();
         }, 2000); // 2 seconds for WebSocket + ActionCable subscription
       } else {
-        console.error(`❌ P2P not ready for ${channelName}`);
-        reject(new Error('P2P not ready'));
+        // Silently resolve instead of rejecting - allows offline play
+        // console.log(`🔌 P2P not available for ${channelName} (offline mode)`);
+        resolve();
       }
     });
   },
@@ -739,6 +747,13 @@ const Lobby = {
         this.updateLobbyBrowserUI(gameType);
       }
     }, 3100); // Slightly after the 3s search window
+    
+    // For adventure mode, skip network initialization (supports offline play)
+    // Only initialize network if user explicitly wants multiplayer
+    if (gameType === 'adventure') {
+      console.log('🔌 Adventure mode - network initialization skipped (offline-first)');
+      return;
+    }
     
     // Announce status change to global stats (AFTER setting currentGameType)
     this.announceStatusToGlobal('browsing');
@@ -1473,8 +1488,14 @@ const Lobby = {
       const canStart = totalPlayers >= minPlayers && allConnected && allReady;
       
       let startBtnText = 'Start Match';
+      let startBtnOnClick = `window.Lobby.startMatchFromLobby('${gameType}')`;
+      
       if (gameType === 'adventure' && totalPlayers < 2) {
         startBtnText = 'Launch Adventure Skirmish';
+        // Use startAdventureSkirmish for solo offline play
+        const fieldSize = lobby.settings.fieldSize || 'medium';
+        const mapSeed = lobby.settings.seed || Math.floor(Math.random() * 1000000);
+        startBtnOnClick = `window.Lobby.startAdventureSkirmish('${fieldSize}', ${mapSeed})`;
       } else if (!allConnected) {
         startBtnText = 'Waiting for Connections...';
       } else if (!allReady) {
@@ -1484,7 +1505,7 @@ const Lobby = {
         startBtnText = '🚀 START MATCH!';
       }
       
-      html += `<button class="lobby_start_btn ${canStart ? 'ready' : 'disabled'}" onclick="window.Lobby.startMatchFromLobby('${gameType}')" ${!canStart ? 'disabled' : ''}>${startBtnText}</button>`;
+      html += `<button class="lobby_start_btn ${canStart ? 'ready' : 'disabled'}" onclick="${startBtnOnClick}" ${!canStart ? 'disabled' : ''}>${startBtnText}</button>`;
       
       // Debug log for host
       if (canStart) {
@@ -1616,6 +1637,11 @@ const Lobby = {
   
   // Announce status change to global stats channel
   announceStatusToGlobal: function(status) {
+    // Skip if in offline mode
+    if (window.net && window.net.offlineMode) {
+      return;
+    }
+    
     const announcement = {
       type: 'player_status',
       playerId: window.net ? window.net.getStatus().localPlayerId : 'unknown',

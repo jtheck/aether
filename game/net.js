@@ -67,16 +67,31 @@
   net.init = function(options = {}) {
     const roomType = GAME_TYPES[options.gameType] || GAME_TYPES.onevsone;
     
+    // Check if we should skip network initialization (offline mode)
+    if (options.offlineMode) {
+      console.log('🔌 Offline mode - skipping network initialization');
+      net.initialized = true; // Mark as initialized but don't connect
+      net.offlineMode = true;
+      return;
+    }
+    
     // Initialize GetFire P2P
-    p2p = GETFIREP2P({
-      roomType: 'aether-rts',
-      onGameLobbyMessage: handleGameLobbyMessage,  // CRITICAL: Needed for auto-negotiation!
-      onDataChannelMessage: handleDataMessage,
-      onPeerConnected: onPeerConnected,             // ✅ Correct callback name!
-      onPeerDisconnected: onPeerDisconnected,       // ✅ Correct callback name!
-      onBroadcastMessage: onBroadcastMessage,
-      devMode: options.devMode || false
-    });
+    try {
+      p2p = GETFIREP2P({
+        roomType: 'aether-rts',
+        onGameLobbyMessage: handleGameLobbyMessage,  // CRITICAL: Needed for auto-negotiation!
+        onDataChannelMessage: handleDataMessage,
+        onPeerConnected: onPeerConnected,             // ✅ Correct callback name!
+        onPeerDisconnected: onPeerDisconnected,       // ✅ Correct callback name!
+        onBroadcastMessage: onBroadcastMessage,
+        devMode: options.devMode || false
+      });
+    } catch (error) {
+      console.warn('⚠️ Network initialization failed (offline?):', error.message);
+      net.initialized = true;
+      net.offlineMode = true;
+      return;
+    }
     
     // Use GetFire's user ID (DON'T generate our own!)
     // This is critical for P2P auto-negotiation to work

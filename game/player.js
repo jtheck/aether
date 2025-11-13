@@ -75,7 +75,7 @@ function Player(ops){
 
 function PBody(ops){
   this.mass = ops?.mass ? 1/ops.mass : 100;
-  this.friction = -1;  // Strong friction - quick slowdown, snappy feel
+  this.friction = -0.3;  // Reduced friction for more responsive movement
   this.rotFriction = -1;  // Strong rotation friction
   
 

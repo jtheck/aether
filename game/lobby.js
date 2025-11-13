@@ -23,7 +23,7 @@ const Lobby = {
       name: 'Adventure',
       maxPlayers: 4,
       lobbyKey: 'aether-adventure-coop',
-      defaultFieldSize: 'large'
+      defaultFieldSize: 'tiny'
     },
     'onevsone': {
       name: '1 vs 1',
@@ -1463,13 +1463,42 @@ const Lobby = {
         </div>`;
     });
     
-    // Show empty slots
+    // Show empty slots (with AI options for compatible game types)
+    const supportsAI = ['adventure', 'onevsone', 'teams'].includes(gameType);
+    const aiSlots = lobby.settings.aiSlots || [];
+    
     for (let i = totalPlayers; i < lobby.maxPlayers; i++) {
-      html += `
-        <div class="lobby_player lobby_player_empty">
-          <span class="player_icon">⚫</span>
-          <span class="player_name">Waiting...</span>
-        </div>`;
+      const slotIndex = i;
+      const isAISlot = supportsAI && aiSlots[slotIndex];
+      
+      if (supportsAI && this.isHost) {
+        // Host can toggle AI slots
+        html += `
+          <div class="lobby_player lobby_player_empty ${isAISlot ? 'ai_enabled' : ''}">
+            <span class="player_icon">${isAISlot ? '🤖' : '⚫'}</span>
+            <span class="player_name">${isAISlot ? 'AI Opponent' : 'Empty'}</span>
+            <label class="ai_toggle">
+              <input type="checkbox" 
+                     ${isAISlot ? 'checked' : ''} 
+                     onchange="window.Lobby.toggleAISlot(${slotIndex}, this.checked)">
+              AI
+            </label>
+          </div>`;
+      } else if (isAISlot) {
+        // Non-host sees AI slots but can't change them
+        html += `
+          <div class="lobby_player lobby_player_ai">
+            <span class="player_icon">🤖</span>
+            <span class="player_name">AI Opponent</span>
+          </div>`;
+      } else {
+        // Regular empty slot
+        html += `
+          <div class="lobby_player lobby_player_empty">
+            <span class="player_icon">⚫</span>
+            <span class="player_name">Waiting...</span>
+          </div>`;
+      }
     }
     
     html += '</div>';
@@ -1485,17 +1514,24 @@ const Lobby = {
         return this.playerReadyStates[playerId];
       });
       const minPlayers = gameType === 'adventure' ? 1 : 2;
-      const canStart = totalPlayers >= minPlayers && allConnected && allReady;
+      
+      // Special case: solo Adventure/1v1 with AI doesn't need to wait for players
+      const isSoloWithAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone');
+      const canStart = isSoloWithAI || (totalPlayers >= minPlayers && allConnected && allReady);
       
       let startBtnText = 'Start Match';
       let startBtnOnClick = `window.Lobby.startMatchFromLobby('${gameType}')`;
       
       if (gameType === 'adventure' && totalPlayers < 2) {
-        startBtnText = 'Launch Adventure Skirmish';
+        // Count enabled AI slots
+        const aiSlots = lobby.settings.aiSlots || [];
+        const aiCount = aiSlots.filter(slot => slot).length;
+        startBtnText = aiCount > 0 ? `Launch with ${aiCount} AI` : 'Launch Solo';
+        
         // Use startAdventureSkirmish for solo offline play
         const fieldSize = lobby.settings.fieldSize || 'medium';
         const mapSeed = lobby.settings.seed || Math.floor(Math.random() * 1000000);
-        startBtnOnClick = `window.Lobby.startAdventureSkirmish('${fieldSize}', ${mapSeed})`;
+        startBtnOnClick = `window.Lobby.startAdventureSkirmish('${fieldSize}', ${mapSeed}, {aiCount: ${aiCount}})`;
       } else if (!allConnected) {
         startBtnText = 'Waiting for Connections...';
       } else if (!allReady) {
@@ -1516,6 +1552,32 @@ const Lobby = {
     roomContainer.innerHTML = html;
   },
   
+  // Toggle AI slot for a specific player slot
+  toggleAISlot: function(slotIndex, enabled) {
+    if (!this.isHost || !this.currentLobby) return;
+    
+    // Initialize aiSlots array if it doesn't exist
+    if (!this.currentLobby.settings.aiSlots) {
+      this.currentLobby.settings.aiSlots = [];
+    }
+    
+    // Set the AI slot state
+    this.currentLobby.settings.aiSlots[slotIndex] = enabled;
+    
+    // Broadcast the change to all players
+    if (window.net && window.net.p2p) {
+      window.net.p2p.sendData({
+        type: 'lobby_settings_update',
+        settings: this.currentLobby.settings
+      });
+    }
+    
+    // Update local UI
+    this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
+    
+    console.log(`${enabled ? '✅' : '❌'} AI slot ${slotIndex} ${enabled ? 'enabled' : 'disabled'}`);
+  },
+  
   // Show create lobby dialog
   showCreateLobbyDialog: function(gameType) {
     const config = this.gameTypes[gameType];
@@ -1525,7 +1587,9 @@ const Lobby = {
       const settings = {
         fieldSize: config.defaultFieldSize,
         seed: Math.floor(Math.random() * 1000000),
-        maxPlayers: config.maxPlayers
+        maxPlayers: config.maxPlayers,
+        // Default AI configuration per game type
+        aiSlots: gameType === 'adventure' ? [false, true, true, true] : [] // Adventure defaults to 3 AI
       };
       
       this.createLobby(gameType, lobbyName, settings);
@@ -2179,11 +2243,16 @@ const Lobby = {
       timeLimit: 0
     });
     
-    // Enter playing state immediately for local match
-    window.currentMatch.beginPlaying();
-    if (window.currentMatch.startLocalTickLoop) {
-      window.currentMatch.startLocalTickLoop();
-    }
+    // Start the match with countdown system (works for both solo and multiplayer)
+    window.currentMatch.start();
+    
+    // Signal that local player has finished loading (after initialization is complete)
+    // This will trigger countdown for solo play or wait for other players in multiplayer
+    setTimeout(() => {
+      if (window.currentMatch && window.currentMatch.onLocalPlayerLoaded) {
+        window.currentMatch.onLocalPlayerLoaded();
+      }
+    }, 500); // Small delay to ensure async model loading has started
     
     // Clear any selections from menu scene
     if (window.player && window.player.clearSelection) {
@@ -2191,7 +2260,7 @@ const Lobby = {
       console.log('🗑️ Cleared menu scene selections before match start');
     }
     
-    // Start physics/game loop
+    // Physics/game loop will start automatically after countdown
     if (window.gameLoop && window.gameLoop.start) {
       window.gameLoop.start();
     }
@@ -2638,6 +2707,47 @@ const Lobby = {
         players.push(opponent);
       }
     });
+    
+    // Add AI opponents if configured in lobby settings
+    if (settings && settings.aiSlots) {
+      const enabledAISlots = settings.aiSlots
+        .map((enabled, index) => enabled ? index : null)
+        .filter(index => index !== null && index >= players.length);
+      
+      enabledAISlots.forEach(slotIndex => {
+        if (slotIndex < spawnPositions.length) {
+          const aiId = `ai-${slotIndex}-${mapSeed.toString(16).slice(-5)}`;
+          const aiName = `AI ${slotIndex}`;
+          const aiColor = this.getPlayerColor(slotIndex);
+          const aiSpawn = spawnPositions[slotIndex];
+          
+          const aiPlayer = window.AIPlayer 
+            ? new window.AIPlayer({
+                id: aiId,
+                name: aiName,
+                color: aiColor,
+                startingResources: { food: 120, wood: 80, stone: 40, magic: 20 },
+                agora: aiSpawn,
+                basePosition: { x: aiSpawn.x, z: aiSpawn.y },
+                difficulty: 'normal',
+                isAI: true
+              })
+            : new window.OpponentPlayer({
+                id: aiId,
+                name: aiName,
+                color: aiColor,
+                startingResources: { food: 120, wood: 80, stone: 40, magic: 20 },
+                agora: aiSpawn,
+                basePosition: { x: aiSpawn.x, z: aiSpawn.y },
+                isAI: true
+              });
+          
+          aiPlayer.isAI = true;
+          players.push(aiPlayer);
+          console.log(`🤖 Added AI player ${aiName} at slot ${slotIndex}`);
+        }
+      });
+    }
     
     // Create Match instance to manage the multiplayer game
     // NOTE: localPlayerId is already normalized to 6 chars at line 2272

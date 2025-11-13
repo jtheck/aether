@@ -8,10 +8,22 @@
   let endPoint = { x: 0, y: 0 };
   let selectionBox = null;
   let selectedUnits = [];
+  let lassoLineMesh = null; // 3D line mesh for lasso mode
+  let lassoLineMaterial = null; // Reused material for the ribbon
+  let lassoUpdateCounter = 0; // Throttle 3D lasso updates
+  let lastLassoUpdatePointCount = 0; // Track last point count we rendered
+  
+  // Selection mode: 'rectangle' or 'lasso'
+  let selectionMode = 'rectangle';
+  let lassoPath = []; // Array of {x, y} screen points for freeform lasso (for 2D and selection)
+  let lassoWorldPath = []; // Array of world Vector3 points for 3D rendering
+  let lastLassoPoint = null; // Track last recorded point to avoid duplicates
   
   // Configuration
   const DRAG_THRESHOLD = 5; // pixels - minimum movement to start drag
   const CLICK_TIMEOUT = 200; // ms - time to wait before treating as click
+  const LASSO_POINT_MIN_DISTANCE = 3; // pixels - minimum distance between lasso points (lower = smoother)
+  const LASSO_SIMPLIFY_TOLERANCE = 0.5; // world units - path simplification tolerance
   // const !USE_3D_HUD = true; // Set to false to use 3D fence selection
   
   // State tracking
@@ -42,6 +54,12 @@
   // Reinitialize lasso when HUD mode changes
   lasso.reinit = function() {
     // console.log('Reinitializing lasso for HUD mode change...');
+    
+    // Clean up 3D lasso line mesh
+    if (lassoLineMesh) {
+      lassoLineMesh.dispose();
+      lassoLineMesh = null;
+    }
     
     // Clean up existing selection box
     if (selectionBox) {
@@ -183,6 +201,21 @@
     dragStartTime = Date.now();
     isDragActive = false;
     
+    // Initialize lasso path
+    lassoPath = [{ x, y }];
+    lassoWorldPath = []; // Clear world path
+    lastLassoPoint = { x, y };
+    lassoUpdateCounter = 0; // Reset throttle counter
+    lastLassoUpdatePointCount = 0; // Reset point count
+    
+    // For 3D mode, convert initial point to world coordinates
+    if (USE_3D_HUD) {
+      const worldPos = screenToWorld(x, y);
+      if (worldPos) {
+        lassoWorldPath.push(new BABYLON.Vector3(worldPos.x, 1.0, worldPos.z));
+      }
+    }
+    
     // Reset RMB tracking for new drag operation
     rmbDownDuringDrag = false;
     rmbPositionDuringDrag = { x: 0, y: 0 };
@@ -194,9 +227,12 @@
       if (USE_3D_HUD) {
         // 3D mode - selectionBox should be an array of planes
         if (Array.isArray(selectionBox)) {
-          selectionBox.forEach(plane => {
-            plane.isVisible = true;
-          });
+          // Only show planes for rectangle mode, not lasso mode
+          if (selectionMode === 'rectangle') {
+            selectionBox.forEach(plane => {
+              plane.isVisible = true;
+            });
+          }
         } else {
           // console.error('3D selection box is not an array:', selectionBox);
           return false;
@@ -232,9 +268,53 @@
       // console.log("🎯 Lasso: Drag started at distance", distance);
     }
     
+    // For lasso mode, record path points (record as soon as we start moving, not just after drag becomes "active")
+    if (isSelecting && selectionMode === 'lasso') {
+      // Only add point if it's far enough from the last point
+      if (lastLassoPoint) {
+        const dx = x - lastLassoPoint.x;
+        const dy = y - lastLassoPoint.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        
+        if (dist >= LASSO_POINT_MIN_DISTANCE) {
+          lassoPath.push({ x, y });
+          lastLassoPoint = { x, y };
+          
+          // For 3D mode, also convert to world coordinates NOW (not later)
+          if (USE_3D_HUD) {
+            const worldPos = screenToWorld(x, y);
+            if (worldPos) {
+              lassoWorldPath.push(new BABYLON.Vector3(worldPos.x, 1.0, worldPos.z));
+            }
+          }
+        }
+      } else {
+        lassoPath.push({ x, y });
+        lastLassoPoint = { x, y };
+        
+        // For 3D mode, also convert to world coordinates NOW
+        if (USE_3D_HUD) {
+          const worldPos = screenToWorld(x, y);
+          if (worldPos) {
+            lassoWorldPath.push(new BABYLON.Vector3(worldPos.x, 1.0, worldPos.z));
+          }
+        }
+      }
+    }
+    
     // Update visual selection box
-    if (isDragActive && selectionBox) {
-      updateSelectionBox();
+    if (isSelecting && selectionBox) {
+      // For 3D lasso mode, update very infrequently to show progress without accordion
+      if (USE_3D_HUD && selectionMode === 'lasso') {
+        const pointsSinceLastUpdate = lassoWorldPath.length - lastLassoUpdatePointCount;
+        if (pointsSinceLastUpdate >= 5) { // Update more often now that updates are cheaper
+          lastLassoUpdatePointCount = lassoWorldPath.length;
+          updateSelectionBox();
+        }
+      } else {
+        // 2D and rectangle modes update live
+        updateSelectionBox();
+      }
     }
   };
   
@@ -258,7 +338,13 @@
     
     if (distance > DRAG_THRESHOLD && isDragActive) {
       // This was a drag - perform area selection
-      // console.log("🎯 Lasso: Drag completed, selecting units in area");
+      
+      // Force final lasso update to show complete path
+      if (USE_3D_HUD && selectionMode === 'lasso' && selectionBox) {
+        lastLassoUpdatePointCount = lassoWorldPath.length; // Mark as updated
+        updateSelectionBox();
+      }
+      
       performAreaSelection();
       
       // Delay cleanup to allow RMB events to detect recent lasso activity
@@ -267,8 +353,6 @@
       }, 100); // 100ms delay
     } else {
       // This was a click - don't handle it here, let UI system handle it
-      // console.log("🎯 Lasso: Click detected, letting UI system handle it");
-      
       // Clean up immediately for clicks
       cleanupSelection();
     }
@@ -329,6 +413,59 @@
     return rmbPositionDuringDrag;
   };
   
+  // Update 3D lasso line mesh
+  function updateLassoLine3D() {
+    if (!window.gfx || !window.gfx.scene) return;
+    if (lassoWorldPath.length < 3) return;
+
+    const worldPoints = simplifyWorldPath(lassoWorldPath, LASSO_SIMPLIFY_TOLERANCE);
+    
+    // Need at least 2 points to draw
+    if (worldPoints.length < 2) return;
+    
+    // Create a VERTICAL FENCE/WALL following the simplified perimeter path
+    const FENCE_HEIGHT = 3; // Tall fence
+    
+    // Create bottom and top paths for the ribbon (vertical wall)
+    const bottomPath = worldPoints.map(p => new BABYLON.Vector3(p.x, 0, p.z)); // On ground
+    const topPath = worldPoints.map(p => new BABYLON.Vector3(p.x, FENCE_HEIGHT, p.z)); // At height
+    
+    const pathArray = [bottomPath, topPath];
+    const ribbonOptions = {
+      pathArray,
+      closePath: true,
+      closeArray: false,
+      sideOrientation: BABYLON.Mesh.DOUBLESIDE,
+      updatable: true
+    };
+    
+    const scene = window.gfx.scene;
+    
+    if (!lassoLineMesh || lassoLineMesh.isDisposed()) {
+      lassoLineMesh = BABYLON.MeshBuilder.CreateRibbon("lassoFence", ribbonOptions, scene);
+      lassoLineMesh.isPickable = false;
+      lassoLineMesh.renderingGroupId = 3; // Render on top of everything
+      
+      if (!lassoLineMaterial || lassoLineMaterial.isDisposed?.()) {
+        lassoLineMaterial = new BABYLON.StandardMaterial("lassoMat", scene);
+        lassoLineMaterial.emissiveColor = new BABYLON.Color3(0, 2, 2); // Maximum brightness cyan
+        lassoLineMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1);
+        lassoLineMaterial.alpha = 0.5; // Semi-transparent
+        lassoLineMaterial.disableLighting = true;
+        lassoLineMaterial.backFaceCulling = false; // Show both sides
+      }
+      
+      lassoLineMesh.material = lassoLineMaterial;
+      
+      if (window.gfx.glowLayer && !lassoLineMesh.__lassoGlowAdded) {
+        window.gfx.glowLayer.addIncludedOnlyMesh(lassoLineMesh);
+        lassoLineMesh.__lassoGlowAdded = true;
+      }
+    } else {
+      BABYLON.MeshBuilder.CreateRibbon(null, { ...ribbonOptions, instance: lassoLineMesh }, scene);
+    }
+  }
+  
   // Update the visual selection box
   function updateSelectionBox() {
     if (!selectionBox) {
@@ -345,24 +482,51 @@
         return;
       }
       
-      // Calculate rectangle dimensions
-      const left = Math.min(startPoint.x, endPoint.x);
-      const top = Math.min(startPoint.y, endPoint.y);
-      const width = Math.abs(endPoint.x - startPoint.x);
-      const height = Math.abs(endPoint.y - startPoint.y);
-      
-      // Batch style updates
-      const style = selectionBox.style;
-      style.display = 'block';
-      style.left = left + 'px';
-      style.top = top + 'px';
-      style.width = width + 'px';
-      style.height = height + 'px';
+      if (selectionMode === 'lasso' && lassoPath.length > 2) {
+        // Draw lasso path using clip-path
+        const pathString = lassoPath.map((p, i) => `${p.x}px ${p.y}px`).join(', ');
+        selectionBox.style.display = 'block';
+        selectionBox.style.left = '0px';
+        selectionBox.style.top = '0px';
+        selectionBox.style.width = '100%';
+        selectionBox.style.height = '100%';
+        selectionBox.style.clipPath = `polygon(${pathString})`;
+        selectionBox.style.webkitClipPath = `polygon(${pathString})`;
+      } else {
+        // Rectangle mode or not enough points yet
+        // Clear clip-path
+        selectionBox.style.clipPath = 'none';
+        selectionBox.style.webkitClipPath = 'none';
+        
+        // Calculate rectangle dimensions
+        const left = Math.min(startPoint.x, endPoint.x);
+        const top = Math.min(startPoint.y, endPoint.y);
+        const width = Math.abs(endPoint.x - startPoint.x);
+        const height = Math.abs(endPoint.y - startPoint.y);
+        
+        // Batch style updates
+        const style = selectionBox.style;
+        style.display = 'block';
+        style.left = left + 'px';
+        style.top = top + 'px';
+        style.width = width + 'px';
+        style.height = height + 'px';
+      }
       return;
     }
 
     // 3D Selection Box Code
-    if (!Array.isArray(selectionBox) || !window.gfx.camera) return;
+    if (!window.gfx.camera) return;
+    
+    // Check if we're in lasso mode with enough points
+    if (selectionMode === 'lasso' && lassoPath.length > 2) {
+      // Use line mesh for lasso in 3D
+      updateLassoLine3D();
+      return;
+    }
+    
+    // Rectangle mode - use planes
+    if (!Array.isArray(selectionBox)) return;
     
     // Get the four corners of our 2D selection box in screen space
     const corners = {
@@ -528,16 +692,25 @@
           )
         );
         
-        // Check if screen position is within selection box
-        if (screenPos.x >= minX && screenPos.x <= maxX && 
-            screenPos.y >= minY && screenPos.y <= maxY) {
+        // Check if screen position is within selection area
+        let isInside = false;
+        if (selectionMode === 'lasso' && lassoPath.length > 2) {
+          // Use polygon test for lasso mode
+          isInside = isPointInPolygon(screenPos, lassoPath);
+        } else {
+          // Use rectangle test for rectangle mode
+          isInside = (screenPos.x >= minX && screenPos.x <= maxX && 
+                      screenPos.y >= minY && screenPos.y <= maxY);
+        }
+        
+        if (isInside) {
           window.player.selectUnit(unit);
           selectedCount++;
         }
       }
     });
     
-    // console.log(`🎯 Lasso: Selected ${selectedCount} units in screen area`);
+    // console.log(`🎯 Selected ${selectedCount} units in ${selectionMode} mode`);
   }
   
   // Handle single click on unit
@@ -600,9 +773,27 @@
     isSelecting = false;
     isDragActive = false;
     
+    // Clear lasso path
+    lassoPath = [];
+    lassoWorldPath = [];
+    lastLassoPoint = null;
+    
+    // Dispose 3D lasso line mesh
+    if (lassoLineMesh) {
+      if (window.gfx?.glowLayer && lassoLineMesh.__lassoGlowAdded) {
+        window.gfx.glowLayer.removeIncludedOnlyMesh?.(lassoLineMesh);
+        lassoLineMesh.__lassoGlowAdded = false;
+      }
+      lassoLineMesh.dispose();
+      lassoLineMesh = null;
+    }
+    
     if (!USE_3D_HUD) {
       if (selectionBox) {
         selectionBox.style.display = 'none';
+        // Clear clip-path for lasso mode
+        selectionBox.style.clipPath = 'none';
+        selectionBox.style.webkitClipPath = 'none';
       }
     } else {
       // Hide all selection fence planes
@@ -616,8 +807,152 @@
     // console.log("🎯 Lasso: Selection cleanup complete");
   }
   
+  // Set selection mode
+  lasso.setMode = function(mode) {
+    if (mode === 'rectangle' || mode === 'lasso') {
+      selectionMode = mode;
+      // console.log(`🎯 Selection mode changed to: ${mode}`);
+    } else {
+      console.warn(`🎯 Invalid selection mode: ${mode}`);
+    }
+  };
+  
+  // Get current selection mode
+  lasso.getMode = function() {
+    return selectionMode;
+  };
+  
+  // Simplify the drawn world-space path while preserving vertex order
+  function simplifyWorldPath(points, tolerance = 0.5) {
+    if (!points || points.length === 0) return [];
+    
+    if (points.length <= 2) {
+      return points.map(p => p.clone());
+    }
+    
+    // Remove consecutive duplicates and clone to avoid mutating original points
+    const deduped = [];
+    const DUP_EPSILON_SQ = 0.00001;
+    for (const point of points) {
+      if (
+        deduped.length === 0 ||
+        BABYLON.Vector3.DistanceSquared(point, deduped[deduped.length - 1]) > DUP_EPSILON_SQ
+      ) {
+        deduped.push(point.clone());
+      }
+    }
+    
+    if (deduped.length <= 2) {
+      return deduped;
+    }
+    
+    // For closed paths, remove trailing duplicate of the first point
+    if (BABYLON.Vector3.DistanceSquared(deduped[0], deduped[deduped.length - 1]) < DUP_EPSILON_SQ) {
+      deduped.pop();
+    }
+    
+    if (deduped.length <= 2) {
+      return deduped;
+    }
+    
+    const simplified = simplifyPathRDP(deduped, tolerance);
+    return simplified.length >= 2 ? simplified : deduped;
+  }
+  
+  function simplifyPathRDP(points, tolerance) {
+    const tolSq = tolerance * tolerance;
+    const lastIndex = points.length - 1;
+    const stack = [[0, lastIndex]];
+    const keep = new Array(points.length).fill(false);
+    keep[0] = true;
+    keep[lastIndex] = true;
+    
+    while (stack.length > 0) {
+      const [startIdx, endIdx] = stack.pop();
+      let maxDistSq = 0;
+      let maxIndex = -1;
+      
+      for (let i = startIdx + 1; i < endIdx; i++) {
+        const distSq = pointSegmentDistanceSq(points[i], points[startIdx], points[endIdx]);
+        if (distSq > maxDistSq) {
+          maxDistSq = distSq;
+          maxIndex = i;
+        }
+      }
+      
+      if (maxIndex !== -1 && maxDistSq > tolSq) {
+        keep[maxIndex] = true;
+        stack.push([startIdx, maxIndex]);
+        stack.push([maxIndex, endIdx]);
+      }
+    }
+    
+    const simplified = [];
+    for (let i = 0; i < points.length; i++) {
+      if (keep[i]) {
+        simplified.push(points[i]);
+      }
+    }
+    
+    return simplified;
+  }
+  
+  function pointSegmentDistanceSq(point, start, end) {
+    const ax = start.x;
+    const az = start.z;
+    const bx = end.x;
+    const bz = end.z;
+    const px = point.x;
+    const pz = point.z;
+    
+    const abx = bx - ax;
+    const abz = bz - az;
+    const apx = px - ax;
+    const apz = pz - az;
+    const abLenSq = abx * abx + abz * abz;
+    
+    if (abLenSq === 0) {
+      return apx * apx + apz * apz;
+    }
+    
+    let t = (apx * abx + apz * abz) / abLenSq;
+    t = Math.max(0, Math.min(1, t));
+    
+    const closestX = ax + abx * t;
+    const closestZ = az + abz * t;
+    
+    const dx = px - closestX;
+    const dz = pz - closestZ;
+    
+    return dx * dx + dz * dz;
+  }
+  
+  // Point-in-polygon test using ray casting algorithm
+  function isPointInPolygon(point, polygon) {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const xi = polygon[i].x, yi = polygon[i].y;
+      const xj = polygon[j].x, yj = polygon[j].y;
+      
+      const intersect = ((yi > point.y) !== (yj > point.y))
+          && (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+  
   // Dispose of lasso resources
   lasso.dispose = function() {
+    // Dispose 3D lasso line mesh
+    if (lassoLineMesh) {
+      if (window.gfx?.glowLayer && lassoLineMesh.__lassoGlowAdded) {
+        window.gfx.glowLayer.removeIncludedOnlyMesh?.(lassoLineMesh);
+        lassoLineMesh.__lassoGlowAdded = false;
+      }
+      lassoLineMesh.dispose();
+      lassoLineMesh = null;
+    }
+    
     if (!USE_3D_HUD) {
       if (selectionBox) {
         selectionBox.style.display = 'none';

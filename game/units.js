@@ -444,17 +444,23 @@ function sprinkleUnits() {
 
 // Spawn visual models for all units (only for units without meshes)
 function spawnUnitModels(scene) {
-    // console.log(`🎨 spawnUnitModels() called - ${gameUnits.length} units to process`);
+    const units = window.gameUnits || gameUnits;
+    // console.log(`🎨 spawnUnitModels() called - ${units.length} units to process`);
+    // console.log(`🔍 window.gfx exists: ${!!window.gfx}, getModel exists: ${!!window.gfx?.getModel}`);
     
     let unitsNeedingMeshes = 0;
-    gameUnits.forEach(unit => {
+    units.forEach(unit => {
         if (!unit.mesh && window.gfx && window.gfx.getModel) {
             unitsNeedingMeshes++;
             // Load the 3D model for this unit
             // console.log(`🎮 Loading model ${unit.model} for ${unit.name} (owner: ${unit.owner}, scale: ${unit.scale})`);
             window.gfx.getModel(unit.model, scene).then(model => {
+                // console.log(`✅ Model loaded for ${unit.name}!`);
                 unit.mesh = model.root;
                 unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
+                
+                // Enable the mesh (getModel disables it by default to prevent flash)
+                unit.mesh.setEnabled(true);
                 
                 // Make unit meshes pickable for selection
                 unit.mesh.isPickable = true;
@@ -501,12 +507,13 @@ function spawnUnitModels(scene) {
                     unit.mesh.rotation.y = unit.rotation;
                 }
                 
-                // Initialize default linger behavior
-                if (window.behaviorManager) {
+                // Initialize default linger behavior ONLY if unit doesn't already have one
+                // This prevents overriding behaviors set during unit conversion
+                if (window.behaviorManager && !window.behaviorManager.getBehavior(unit)) {
                     window.behaviorManager.setBehavior(unit, 'linger');
                     // console.log(`🎯 ${unit.name || unit.type} initialized with linger behavior`);
-                } else {
-                    // console.warn(`⚠️ Behavior manager not available for ${unit.name || unit.type}`);
+                } else if (window.behaviorManager) {
+                    // console.log(`🎯 ${unit.name || unit.type} already has behavior, skipping init`);
                 }
                 
                 // Add particle effects to units
@@ -520,13 +527,15 @@ function spawnUnitModels(scene) {
                 
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
-                // console.warn(`Failed to load model for ${unit.name}:`, err);
+                console.warn(`❌ Failed to load model for ${unit.name}:`, err);
             });
         }
     });
     
     if (unitsNeedingMeshes > 0) {
-        // console.log(`✅ Spawning meshes for ${unitsNeedingMeshes}/${gameUnits.length} units`);
+        // console.log(`✅ Spawning meshes for ${unitsNeedingMeshes}/${units.length} units`);
+    } else {
+        // console.log(`⚠️ No units needed meshes! Total units: ${units.length}`);
     }
 }
 
@@ -676,7 +685,8 @@ function updateUnitMeshes() {
     const currentTime = window.cachedTime || Date.now(); // Use cached time for performance
     const currentFrame = window.frameCounter || 0;
     
-    gameUnits.forEach((unit, index) => {
+    const units = window.gameUnits || gameUnits;
+    units.forEach((unit, index) => {
         if (unit.mesh && unit.pb && unit.pb.state) {
             // GAMEPLAY UNITS (player/AI) - ALWAYS update mesh position every frame for smooth movement
             // NEUTRAL UNITS - Use LOD to skip frames for performance
@@ -1009,7 +1019,8 @@ function respawnUnits(scene) {
     
     gameUnits.length = 0; // Clear the array
     sprinkleUnits();
-    spawnUnitModels(scene);
+    // Don't spawn meshes for menu scene neutral units - they're decorative only
+    // spawnUnitModels(scene);
 }
 
 // Spawn villagers around the player's agora
@@ -1074,9 +1085,9 @@ function autoInitUnits() {
     }
     
     if (window.gfx && window.gfx.scene) {
-        console.log("🎨 Auto-initializing neutral units for menu scene...");
         sprinkleUnits(); // Neutral units spread across map
-        spawnUnitModels(window.gfx.scene);
+        // Don't spawn meshes for menu scene neutral units - they're decorative only
+        // spawnUnitModels(window.gfx.scene);
     } else {
         // Try again in 1 second if scene isn't ready
         setTimeout(autoInitUnits, 1000);

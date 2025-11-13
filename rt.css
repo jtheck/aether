@@ -120,11 +120,9 @@ html, body {
 #lasso-selection-box {
   position: absolute;
   border: 1px dashed aqua;
-  /* background-color: rgba(0, 255, 0, 0.1); */
+  background-color: rgba(0, 255, 255, 0.15);
   pointer-events: none;
   z-index: 1000;
-  /* border-radius: 2px; */
-  /* box-shadow: 0 0 10px rgba(0, 255, 0, 0.3); */
   display: none;
   top: 0;
   left: 0;
@@ -944,7 +942,7 @@ a:after{
 .menu_anchor{
   position: absolute;
   transform: translate(-50%, -50%);
-  border: 2px outset #ffffff3d;
+  border: 1px inset #eeeeee3d;
   border-radius: 7px;
   color: White;
   width: 33px;
@@ -1264,4 +1262,39 @@ a:after{
   min-width: 30px;
   text-align: center;
   font-weight: bold;
+}
+
+/* Game notifications */
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-20px);
+  }
+}
+
+.game-notification {
+  animation: slideDown 0.3s ease-out;
+}
+
+/* Match end reason styling */
+.match_end_reason {
+  font-size: 1.2em;
+  margin: 10px 0 20px;
+  color: #fff;
+  opacity: 0.9;
 }

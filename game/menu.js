@@ -126,45 +126,28 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
           // Use unified recruit function (handles both single/multiplayer)
           window.recruitUnit(unitType);
         } else {
-          // For other unit types, find a nearby idle villager to transform
-          const villagers = window.player.units.filter(unit => unit.type === 'villager');
-          if (villagers.length <= 2) {
-            // console.log('Need to keep at least 2 villagers - cannot transform!');
-            return;
-          }
-          
-          // Find the closest idle villager
-          let closestVillager = null;
-          let closestDistance = Infinity;
-          
-          villagers.forEach(villager => {
-            // Skip if villager is already transforming
-            const currentBehavior = window.behaviorManager.getBehavior(villager);
-            if (currentBehavior && currentBehavior.constructor.name === 'TransformBehavior') {
+          // Use convert command system (same as HUD for consistency)
+          if (window.currentMatch && window.player) {
+            const normalizedPlayerId = window.player.id.slice(-6);
+            const myVillagers = window.player.units.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
+            
+            if (myVillagers.length === 0) {
+              console.log('❌ No villagers available to convert to ' + unitType);
               return;
             }
             
-            // Calculate distance to agora
-            const agoraX = window.player.agora.x * TILE_SIZE;
-            const agoraZ = window.player.agora.y * TILE_SIZE;
-            const dx = villager.pb.state.loc.x - agoraX;
-            const dz = villager.pb.state.loc.z - agoraZ;
-            const distance = Math.sqrt(dx * dx + dz * dz);
+            // Prefer selected villagers, otherwise pick first available
+            const selectedVillagers = window.player.selectedUnits.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
+            const targetVillager = selectedVillagers.length > 0 ? selectedVillagers[0] : myVillagers[0];
             
-            if (distance < closestDistance) {
-              closestVillager = villager;
-              closestDistance = distance;
-            }
-          });
-          
-          if (closestVillager) {
-            // Start transform behavior on the villager
-            window.behaviorManager.setBehavior(closestVillager, 'transform', {
-              transformType: unitType
+            window.currentMatch.submitCommand({
+              type: 'convert',
+              playerId: window.player.id,
+              unitId: targetVillager.id,
+              targetType: unitType
             });
-            // console.log(`🔄 Transforming villager into ${unitType}`);
           } else {
-            // console.log('No available villagers found to transform!');
+            console.warn('❌ Cannot convert unit: No active match');
           }
         }
       } else {

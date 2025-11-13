@@ -1423,13 +1423,24 @@ function getRandomColor() {
       if (window.hud && window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible()) {
         // Check if click is on a 3D menu element
         const pickResult = gfx.scene.pick(x, y);
-        const isMenuClick = pickResult.hit && (
-          pickResult.pickedMesh && (
-            pickResult.pickedMesh.name.includes('menuItem_') ||
-            pickResult.pickedMesh.name.includes('radialCenter') ||
-            pickResult.pickedMesh.parent === window.hud.radialMenu
-          )
-        );
+        let isMenuClick = false;
+        
+        if (pickResult.hit && pickResult.pickedMesh) {
+          // Walk up parent hierarchy checking both names and radial menu reference
+          let currentMesh = pickResult.pickedMesh;
+          while (currentMesh && !isMenuClick) {
+            // Check if this mesh is the radial menu or has a menu item name or is a click sphere
+            if (currentMesh === window.hud.radialMenu ||
+                currentMesh.name.includes('menuItem_') || 
+                currentMesh.name.includes('radialCenter') ||
+                currentMesh.name.includes('clickSphere_') ||
+                currentMesh.name.includes('clickPlane_')) {
+              isMenuClick = true;
+              break;
+            }
+            currentMesh = currentMesh.parent;
+          }
+        }
         
         if (!isMenuClick) {
           // Click outside 3D menu - close it
@@ -1475,7 +1486,7 @@ function getRandomColor() {
           const wz = groundRight.z * screenDx * pixelsToWorld + groundForward.z * screenDy * pixelsToWorld;
           
           // Zoom-aware pan sensitivity - reduce sensitivity when zoomed out
-          const basePanSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 0.3;
+          const basePanSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 1.0; // 3x faster - matches touch sensitivity exactly
           const zoomFactor = Math.min(1.0, Math.pow(60 / (cam.radius || 60), 1.5)); // More aggressive reduction
           const panSens = basePanSens * zoomFactor;
           
@@ -1688,12 +1699,13 @@ function getRandomColor() {
                   }
                   
                   // Apply walk behavior to each selected unit
-                  // MULTIPLAYER: Submit move commands through Match system for synchronization
-                  if (window.isMultiplayer && window.currentMatch) {
-                    // In multiplayer, submit a move command for all selected units
+                  // MATCH SYSTEM: Submit move commands through Match system for synchronization
+                  if (window.currentMatch) {
+                    // Submit a move command for all selected units through Match system
                     const unitIds = selectedUnits.map(u => u.id);
                     const command = {
                       type: 'move',
+                      playerId: window.player?.id || 'player', // CRITICAL: Set player ID explicitly
                       unitIds: unitIds,
                       target: { x: worldPos.x, y: 0, z: worldPos.z }
                     };
@@ -1800,10 +1812,10 @@ function getRandomColor() {
           const dragDeltaY = e.clientY - playerDragStart.y;
           
           // Convert screen delta to world velocity (adjust sensitivity as needed)
-          const dragSensitivity = 0.015; // Reduced from 0.05 to 0.015 (70% reduction)
+          const dragSensitivity = 1.1; // Doubled from 0.4 for even stronger panning
           // Fix the coordinate mapping: screen right = world right, screen down = world forward
-          playerDragVelocity.x = dragDeltaX * dragSensitivity; // Remove the negative sign
-          playerDragVelocity.z = dragDeltaY * dragSensitivity; // Remove the negative sign
+          playerDragVelocity.x = dragDeltaX * dragSensitivity;
+          playerDragVelocity.z = dragDeltaY * dragSensitivity;
           
           // Apply velocity to player physics body CONTINUOUSLY during drag
           if (window.player.pbody.imp) {
@@ -1839,7 +1851,7 @@ function getRandomColor() {
                      // This was a drag - apply final momentum
                      if (window.player && window.player.pbody && window.player.pbody.imp) {
                        // Apply the accumulated drag velocity as final impulse with more boost
-                       const finalBoost = 5; // Increased from 2 to 5 for more noticeable movement
+                       const finalBoost = 8; // Increased from 5 to 8 for much stronger momentum on release
                        window.player.pbody.imp.x = playerDragVelocity.x * finalBoost;
                        window.player.pbody.imp.z = playerDragVelocity.z * finalBoost;
                       //  console.log('🎯 Right-click drag: Applied final momentum boost', { 
@@ -2339,8 +2351,8 @@ function getRandomColor() {
     }
     const units = window.player.getSelectedUnits();
     
-    // MULTIPLAYER: Submit ability commands through Match system
-    if (window.isMultiplayer && window.currentMatch && units.length > 0) {
+    // MATCH SYSTEM: Submit ability commands through Match system
+    if (window.currentMatch && units.length > 0) {
       units.forEach(unit => {
         const type = unit.type || unit.name || '';
         let abilityType = null;
@@ -2382,6 +2394,7 @@ function getRandomColor() {
         if (abilityType) {
           window.currentMatch.submitCommand({
             type: 'ability',
+            playerId: window.player?.id || 'player', // CRITICAL: Set player ID explicitly
             unitId: unit.id,
             abilityType: abilityType,
             params: abilityParams

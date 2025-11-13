@@ -46,6 +46,7 @@
       this.victoryCondition = options.victoryCondition || 'elimination'; // 'elimination', 'wonder', 'relic', 'time'
       this.timeLimit = options.timeLimit || 0; // 0 = no limit, otherwise seconds
       this.eliminatedPlayers = new Set();
+      this.victoryCheckingDisabled = false; // Set to true after player chooses to continue playing
       
       // Command queue and history
       this.pendingCommands = []; // Commands waiting to be executed
@@ -159,14 +160,16 @@
     
     // Check if all players have loaded
     checkAllPlayersLoaded() {
-      const totalPlayers = this.players.length;
+      // Only count human players (exclude AI)
+      const humanPlayers = this.players.filter(p => !p.isAI);
+      const totalHumanPlayers = humanPlayers.length;
       const loadedPlayers = this.playersLoaded.size;
       
-      // console.log(`📊 Loading progress: ${loadedPlayers}/${totalPlayers} players ready`);
+      // console.log(`📊 Loading progress: ${loadedPlayers}/${totalHumanPlayers} human players ready (${this.players.length - totalHumanPlayers} AI)`);
       
-      if (loadedPlayers >= totalPlayers && !this.allPlayersReady) {
+      if (loadedPlayers >= totalHumanPlayers && !this.allPlayersReady) {
         this.allPlayersReady = true;
-        // console.log(`🎉 All players loaded! Starting countdown...`);
+        // console.log(`🎉 All human players loaded! Starting countdown...`);
         
         // Only HOST starts the countdown and broadcasts to clients
         if (this.isHost()) {
@@ -360,8 +363,11 @@
       // console.log(`  Input listeners init: ${window._inputListenersInitialized ? 'YES' : 'NO'}`);
       // console.log(`  handlePointer exists: ${window.ui?.handlePointer ? 'YES' : 'NO'}`)
       
-      // DON'T start a separate tick loop - network already handles ticking via net.startTickLoop()
-      // The Match will be ticked by the network system which calls processTick() from net.js
+      // Start local tick loop for non-multiplayer matches (Adventure mode, etc.)
+      // In multiplayer, the network system handles ticking
+      if (!window.isMultiplayer) {
+        this.startLocalTickLoop();
+      }
       
       return true;
     }
@@ -598,6 +604,9 @@
         case 'ability':
           this.executeAbilityCommand(command);
           break;
+        case 'stop':
+          this.executeStopCommand(command);
+          break;
         default:
           console.warn(`⚠️ Unknown command type: ${command.type}`);
       }
@@ -616,9 +625,6 @@
           // Use WalkBehavior for player-controlled movement
           // This is the same system AI uses, ensuring consistent deterministic movement
           window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
-          // console.log(`  ✅ Set walk behavior for ${unit.type} (${unit.id.slice(-4)})`);
-        } else {
-          console.warn(`  ❌ Skipped ${unit.type} (${unit.id.slice(-4)}) - owner: ${unit.owner}, expected: ${normalizedPlayerId}`);
         }
       });
     }
@@ -629,8 +635,12 @@
       
       if (!target) return;
       
+      // CRITICAL: Normalize player ID for ownership check
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
       units.forEach(unit => {
-        if (unit.owner === cmd.playerId) {
+        if (unit.owner === normalizedPlayerId) {
           // Set unit attack target directly for player-controlled combat
           // Don't use behaviorManager - that's for AI-controlled behaviors
           unit.target = target;
@@ -753,15 +763,30 @@
         return;
       }
       
-      // Store the old unit's position and state
+      // Store the old unit's position, state, and ID
       const oldPosition = { ...unit.position };
       const oldRotation = unit.rotation;
       const oldMesh = unit.mesh; // Keep reference to old mesh
+      const oldId = unit.id; // CRITICAL: Preserve unit ID so commands still work!
       
       // CRITICAL: Preserve the current behavior (e.g., if walking somewhere)
       const currentBehavior = window.behaviorManager?.getBehavior(unit);
       const behaviorType = currentBehavior?.constructor?.name;
       const behaviorTarget = currentBehavior?.targetPoint;
+      
+      // CRITICAL: Check if this unit is currently selected by the player
+      const wasSelected = player.selectedUnits?.includes(unit);
+      
+      // CRITICAL: Remove old unit from behavior manager BEFORE creating new unit
+      // This prevents desync from duplicate behaviors
+      if (window.behaviorManager && window.behaviorManager.behaviors) {
+        window.behaviorManager.behaviors.delete(unit);
+      }
+      
+      // Remove from selection if selected (will add new unit back after creation)
+      if (wasSelected && player.deselectUnit) {
+        player.deselectUnit(unit);
+      }
       
       // Remove old unit from arrays
       const unitIndex = window.gameUnits.indexOf(unit);
@@ -782,18 +807,26 @@
       }
       
       // Create new unit of target type at same position
-      // CRITICAL: Pass owner in constructor options
-      const newUnit = new window.Unit(cmd.targetType, oldPosition, { owner: normalizedPlayerId });
+      // CRITICAL: Pass owner AND id in constructor options so commands still reference the same unit!
+      const newUnit = new window.Unit(cmd.targetType, oldPosition, { owner: normalizedPlayerId, id: oldId });
+      
+      // VERIFY: Double-check owner was set correctly
+      if (newUnit.owner !== normalizedPlayerId) {
+        // Force correct it
+        newUnit.owner = normalizedPlayerId;
+      }
+      
       newUnit.rotation = oldRotation;
       if (newUnit.pb && newUnit.pb.state && newUnit.pb.state.rot) {
         newUnit.pb.state.rot.y = oldRotation;
       }
       
-      // Add to arrays
+      // Add to arrays BEFORE spawning mesh (so spawnUnitModels can find it)
       player.units.push(newUnit);
       window.gameUnits.push(newUnit);
       
       // Restore behavior (keep moving if they were moving)
+      // CRITICAL: Set behavior BEFORE spawning model to ensure determinism
       if (behaviorType === 'WalkBehavior' && behaviorTarget && window.behaviorManager) {
         window.behaviorManager.setBehavior(newUnit, 'walk', { targetPoint: behaviorTarget });
       } else if (window.behaviorManager) {
@@ -801,15 +834,18 @@
         window.behaviorManager.setBehavior(newUnit, 'linger');
       }
       
-      // Spawn 3D model for new unit
+      // Restore selection if the old unit was selected
+      if (wasSelected && player.selectUnit) {
+        player.selectUnit(newUnit);
+      }
+      
+      // Spawn 3D model for new unit (visual only, doesn't affect game state)
       if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
         window.spawnUnitModels(window.gfx.scene);
       }
       
       // Update stats
       this.stats.unitsCreated[cmd.playerId]++;
-      
-      // console.log(`🔄 ${player.name || normalizedPlayerId} converted ${unit.type} to ${cmd.targetType}`);
     }
     
     executeGatherCommand(cmd) {
@@ -818,8 +854,12 @@
       
       if (!resource) return;
       
+      // CRITICAL: Normalize player ID for ownership check
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
       units.forEach(unit => {
-        if (unit.owner === cmd.playerId) {
+        if (unit.owner === normalizedPlayerId) {
           // Use 'gather_work' behavior which is supported by the behavior manager
           if (window.behaviorManager) {
             window.behaviorManager.setBehavior(unit, 'gather_work', { resource: resource });
@@ -841,6 +881,33 @@
       if (window.behaviorManager && cmd.abilityType) {
         window.behaviorManager.setBehavior(unit, cmd.abilityType, cmd.params || {});
       }
+    }
+    
+    executeStopCommand(cmd) {
+      const units = this.getUnitsByIds(cmd.unitIds);
+      
+      // CRITICAL: Normalize player ID for ownership check
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
+      units.forEach(unit => {
+        if (unit.owner === normalizedPlayerId) {
+          // Clear any active behavior and set to linger (idle) state
+          if (window.behaviorManager) {
+            window.behaviorManager.clearBehavior(unit);
+          }
+          
+          // Clear any attack target and reset state
+          unit.target = null;
+          unit.state = 'idle';
+          
+          // Stop any movement by zeroing impulse
+          if (unit.pb && unit.pb.imp) {
+            unit.pb.imp.x = 0;
+            unit.pb.imp.z = 0;
+          }
+        }
+      });
     }
     
     // Helper: Check if this client is the host
@@ -929,6 +996,11 @@
     
     // Victory condition checks
     checkVictoryConditions() {
+      // Skip victory checks if player chose to continue playing after match end
+      if (this.victoryCheckingDisabled) {
+        return;
+      }
+      
       switch (this.victoryCondition) {
         case 'elimination':
           this.checkEliminationVictory();
@@ -951,6 +1023,15 @@
           return; // Already eliminated
         }
         
+        // Loss condition: Player has no villagers left
+        const villagers = player.units?.filter(u => u && u.type === 'villager') || [];
+        if (villagers.length === 0) {
+          console.log(`💀 Player ${pid} has no villagers - eliminated!`);
+          this.eliminatePlayer(pid);
+          return;
+        }
+        
+        // Traditional elimination: no units AND no buildings
         const hasUnits = player.units && player.units.length > 0;
         const hasBuildings = player.buildings && player.buildings.length > 0;
         
@@ -958,6 +1039,9 @@
           this.eliminatePlayer(pid);
         }
       });
+      
+      // Win condition: Check if any player has occupied an opponent's Agora
+      this.checkAgoraOccupation();
       
       // Check if only one player remains
       const remainingPlayers = this.players.filter(p => 
@@ -969,6 +1053,106 @@
       } else if (remainingPlayers.length === 0) {
         this.endMatch(null, 'draw');
       }
+    }
+    
+    // Check if any player has occupied an opponent's Agora
+    checkAgoraOccupation() {
+      const OCCUPATION_RADIUS = 8; // Tiles
+      const OCCUPATION_TIME = 5; // Seconds to hold for victory
+      
+      // Initialize occupation timers if not exists
+      if (!this.agoraOccupationTimers) {
+        this.agoraOccupationTimers = new Map(); // buildingId -> { occupier, startTime }
+      }
+      
+      this.players.forEach(player => {
+        const pid = player.id || player;
+        const normalizedPid = pid.length > 6 ? pid.slice(-6) : pid;
+        
+        if (this.eliminatedPlayers.has(pid)) {
+          return; // Skip eliminated players
+        }
+        
+        // Find this player's Agora
+        const agora = player.buildings?.find(b => b && b.type === 'agora');
+        if (!agora) return;
+        
+        // Check if enemy units are near this Agora
+        const agoraTileX = agora.gridX;
+        const agoraTileZ = agora.gridZ;
+        
+        // Find all enemy units near this Agora
+        const enemyUnitsNearby = [];
+        this.players.forEach(otherPlayer => {
+          const otherPid = otherPlayer.id || otherPlayer;
+          const normalizedOtherPid = otherPid.length > 6 ? otherPid.slice(-6) : otherPid;
+          
+          if (normalizedOtherPid === normalizedPid) return; // Skip own units
+          if (this.eliminatedPlayers.has(otherPid)) return; // Skip eliminated players
+          
+          otherPlayer.units?.forEach(unit => {
+            if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) return;
+            
+            const TILE_SIZE = window.TILE_SIZE || 4;
+            const unitTileX = unit.pb.state.loc.x / TILE_SIZE;
+            const unitTileZ = unit.pb.state.loc.z / TILE_SIZE;
+            
+            const dx = unitTileX - agoraTileX;
+            const dz = unitTileZ - agoraTileZ;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            
+            if (distance <= OCCUPATION_RADIUS) {
+              enemyUnitsNearby.push({ unit, playerId: otherPid });
+            }
+          });
+        });
+        
+        const agoraKey = agora.id || `${normalizedPid}-agora`;
+        
+        if (enemyUnitsNearby.length > 0) {
+          // Enemy units are occupying this Agora
+          const occupier = enemyUnitsNearby[0].playerId; // First enemy player found
+          
+          if (!this.agoraOccupationTimers.has(agoraKey)) {
+            // Start occupation timer
+            this.agoraOccupationTimers.set(agoraKey, {
+              occupier: occupier,
+              startTime: this.gameTime,
+              defender: pid
+            });
+            console.log(`🚩 Player ${occupier} started occupying ${pid}'s Agora!`);
+            this.showNotification(`Agora under attack!`, 'warning');
+            
+            // Mark Agora as contested
+            agora.contested = true;
+            agora.contestedBy = occupier;
+          } else {
+            // Check if occupation time reached
+            const occupation = this.agoraOccupationTimers.get(agoraKey);
+            const occupationDuration = this.gameTime - occupation.startTime;
+            
+            if (occupationDuration >= OCCUPATION_TIME) {
+              // Victory by occupation!
+              console.log(`🏆 Player ${occupation.occupier} captured ${pid}'s Agora!`);
+              this.endMatch(occupation.occupier, 'agora_capture');
+            } else {
+              // Update UI with occupation progress
+              const progress = Math.floor((occupationDuration / OCCUPATION_TIME) * 100);
+              if (this.tick % 20 === 0) { // Update every second
+                console.log(`⏳ Agora occupation: ${progress}%`);
+              }
+            }
+          }
+        } else {
+          // No enemy units nearby - clear occupation
+          if (this.agoraOccupationTimers.has(agoraKey)) {
+            console.log(`✅ Player ${pid}'s Agora is no longer contested`);
+            this.agoraOccupationTimers.delete(agoraKey);
+            agora.contested = false;
+            agora.contestedBy = null;
+          }
+        }
+      });
     }
     
     checkWonderVictory() {
@@ -1127,6 +1311,8 @@
         if (unit.pb && unit.pb.state) {
           hash ^= this.hashVector(unit.pb.state.loc);
           hash ^= this.hashString(unit.owner || 'neutral');
+          hash ^= this.hashString(unit.type || 'unknown'); // CRITICAL: Include type to detect conversion desyncs!
+          hash ^= this.hashString(unit.state || 'idle'); // Include state to detect behavior desyncs
           hash ^= Math.floor((unit.currentHealth || unit.health || 100) * 100);
           unitCount++;
         }
@@ -1348,16 +1534,32 @@
       const isVictory = this.state === MatchState.VICTORY;
       const isDraw = this.state === MatchState.DRAW;
       
+      // Get victory reason text
+      let reasonText = '';
+      if (this.replay.reason === 'agora_capture') {
+        reasonText = isVictory ? '🚩 Enemy Agora Captured!' : '🚩 Your Agora Was Captured!';
+      } else if (this.replay.reason === 'elimination') {
+        reasonText = isVictory ? '⚔️ All Enemies Eliminated!' : '💀 All Your Villagers Died!';
+      } else if (this.replay.reason === 'time_limit') {
+        reasonText = '⏱️ Time Limit Reached';
+      } else if (this.replay.reason === 'wonder') {
+        reasonText = '🏛️ Wonder Victory';
+      } else if (this.replay.reason === 'relic') {
+        reasonText = '✨ Relic Victory';
+      }
+      
       endScreen.innerHTML = `
         <div class="match_end_overlay">
           <div class="match_end_panel">
             <h1 class="match_end_title ${isVictory ? 'victory' : (isDraw ? 'draw' : 'defeat')}">
               ${isVictory ? '🏆 VICTORY!' : (isDraw ? '🤝 DRAW' : '💀 DEFEAT')}
             </h1>
+            ${reasonText ? `<p class="match_end_reason">${reasonText}</p>` : ''}
             <div class="match_stats">
               <p>Duration: ${this.formatDuration(this.endedAt - this.startedAt)}</p>
               <p>Commands: ${this.stats.commands}</p>
             </div>
+            <button class="match_end_btn" onclick="window.currentMatch.continuePlayingAfterVictory()">Continue Playing</button>
             <button class="match_end_btn" onclick="window.currentMatch.returnToMenu()">Return to Menu</button>
             <button class="match_end_btn secondary" onclick="window.currentMatch.viewReplay()">View Replay</button>
           </div>
@@ -1391,7 +1593,8 @@
       overlay.style.pointerEvents = 'none';
       
       const loadedCount = this.playersLoaded.size;
-      const totalCount = this.players.length;
+      const humanPlayers = this.players.filter(p => !p.isAI);
+      const totalCount = humanPlayers.length; // Only count human players
       
       overlay.innerHTML = `
         <div style="text-align: center; color: white;">
@@ -1433,7 +1636,8 @@
       if (!overlay) return;
       
       const loadedCount = this.playersLoaded.size;
-      const totalCount = this.players.length;
+      const humanPlayers = this.players.filter(p => !p.isAI);
+      const totalCount = humanPlayers.length; // Only count human players
       
       if (message) {
         // Custom message (e.g., countdown)
@@ -1485,18 +1689,118 @@
     
     showNotification(message, type = 'info') {
       console.log(`📢 ${message}`);
-      // TODO: Implement in-game notification UI
+      
+      // Create notification element
+      const notification = document.createElement('div');
+      notification.className = `game-notification ${type}`;
+      notification.textContent = message;
+      notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 15px 30px;
+        border-radius: 8px;
+        font-family: Arial, sans-serif;
+        font-size: 18px;
+        font-weight: bold;
+        z-index: 9999;
+        pointer-events: none;
+        animation: slideDown 0.3s ease-out;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      `;
+      
+      // Set color based on type
+      switch(type) {
+        case 'warning':
+          notification.style.background = 'rgba(255, 150, 0, 0.95)';
+          notification.style.color = 'white';
+          break;
+        case 'error':
+          notification.style.background = 'rgba(220, 50, 50, 0.95)';
+          notification.style.color = 'white';
+          break;
+        case 'success':
+          notification.style.background = 'rgba(50, 200, 50, 0.95)';
+          notification.style.color = 'white';
+          break;
+        case 'defeat':
+          notification.style.background = 'rgba(150, 0, 0, 0.95)';
+          notification.style.color = 'white';
+          break;
+        default:
+          notification.style.background = 'rgba(50, 150, 255, 0.95)';
+          notification.style.color = 'white';
+      }
+      
+      document.body.appendChild(notification);
+      
+      // Remove after 3 seconds
+      setTimeout(() => {
+        notification.style.animation = 'slideUp 0.3s ease-out';
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.parentNode.removeChild(notification);
+          }
+        }, 300);
+      }, 3000);
     }
     
     // Save replay to local storage
     saveReplay() {
       try {
         const replayKey = `replay_${this.id}`;
-        localStorage.setItem(replayKey, JSON.stringify(this.replay));
-        console.log(`💾 Replay saved: ${replayKey}`);
+        const replayData = JSON.stringify(this.replay);
+        
+        try {
+          localStorage.setItem(replayKey, replayData);
+          console.log(`💾 Replay saved: ${replayKey} (${(replayData.length / 1024).toFixed(1)} KB)`);
+        } catch (quotaError) {
+          // Storage quota exceeded - clean up old replays and retry
+          console.warn('⚠️ Storage quota exceeded, cleaning up old replays...');
+          this.cleanupOldReplays();
+          
+          try {
+            localStorage.setItem(replayKey, replayData);
+            console.log(`💾 Replay saved after cleanup: ${replayKey}`);
+          } catch (retryError) {
+            // Still failed - the replay is probably too large
+            console.error('❌ Replay too large to save even after cleanup');
+            this.showNotification('⚠️ Replay too large to save to browser storage', 'warning');
+          }
+        }
       } catch (error) {
         console.error('❌ Failed to save replay:', error);
       }
+    }
+    
+    // Clean up old replays to free storage space
+    cleanupOldReplays() {
+      const replayKeys = [];
+      
+      // Find all replay keys
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('replay_')) {
+          replayKeys.push(key);
+        }
+      }
+      
+      // Sort by timestamp (newer first) and keep only the 5 most recent
+      replayKeys.sort((a, b) => {
+        const timeA = parseInt(a.split('-')[1]) || 0;
+        const timeB = parseInt(b.split('-')[1]) || 0;
+        return timeB - timeA;
+      });
+      
+      // Remove all but the 5 most recent
+      const toRemove = replayKeys.slice(5);
+      toRemove.forEach(key => {
+        localStorage.removeItem(key);
+        console.log(`🗑️ Removed old replay: ${key}`);
+      });
+      
+      console.log(`🧹 Cleaned up ${toRemove.length} old replays, kept ${Math.min(5, replayKeys.length)} recent ones`);
     }
     
     // Report match results (placeholder for server integration)
@@ -1508,6 +1812,29 @@
         duration: this.replay.duration,
         stats: this.stats
       });
+    }
+    
+    // Continue playing after victory/defeat
+    continuePlayingAfterVictory() {
+      console.log('🎮 Continuing to play after match end...');
+      
+      // Hide the end game screen
+      const endScreen = document.getElementById('match_end_screen');
+      if (endScreen) {
+        endScreen.style.display = 'none';
+      }
+      
+      // Disable future victory condition checks
+      this.victoryCheckingDisabled = true;
+      
+      // Reset state to playing (but keep the match results saved)
+      const previousState = this.state;
+      this.state = MatchState.PLAYING;
+      
+      // Show a notification
+      this.showNotification(`🎮 Continuing to play after ${previousState}`, 'info');
+      
+      console.log('✅ Victory checking disabled - you can now play freely!');
     }
     
     // Return to menu

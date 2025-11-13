@@ -1,3 +1,4 @@
+// Fix the IIFE structure - ensure the file starts with:
 (function(gfx) {
   gfx.canvas; // HTML Canvas
   gfx.engine; // BABYLON Engine
@@ -1317,7 +1318,6 @@ let pov2 = 240;
     gfx.makeScene(gfx.scene);
 
     // Start render loop immediately - don't wait for scene.whenReadyAsync()
-    // This allows camera panning/interaction while assets load
     gfx.engine.runRenderLoop(mainRenderLoop);
     // console.log('🎬 Render loop started - camera interactive immediately');
   
@@ -1369,6 +1369,18 @@ let pov2 = 240;
       
       // console.log('✅ Scene fully loaded and ready');
 
+      // CREATE MOUNTAINS HERE - after field.js is guaranteed loaded
+      // console.log('🌄 Creating simple mountains in scene.');
+      // console.log('whenReady - field ready: true');
+      // console.log('🏔️ Creating distant mountain vista far below');
+      // console.log(`🏔️ Mountain vista params: field=${fieldSize}x${fieldSize}, plane size=${planeSize}`);
+      // console.log(`🏔️ Modifying ${totalVertices} vertices for vista`);
+      // console.log('🏔️ Mountain material created - grey with progressive randomness');
+      // console.log('🏔️ Mountain vista ready - flat center with increasing randomness outward!');
+      // console.log('🌅 Creating horizon line for distant vista');
+      // console.log('🌅 Horizon line created - enhances sense of vast distance');
+      // console.log('🌄 Simple mountains created successfully');
+      // console.log(`🌄 Creating subtle low-relief mountains`);
     });
   }
 
@@ -2486,6 +2498,187 @@ let pov2 = 240;
   // Expose LOD ramp-up function
   gfx.startLODRampUp = startLODRampUp;
 
-}(window.gfx = window.gfx || {}));
+  // Add this function after the createTerrainMesh function (around line 1289) and before gfx.init
+
+  // Simple mountain background using Babylon's ground mesh with procedural height simulation
+  // Creates a distant mountain vista far below, like looking down at an endless landscape from high above
+  function createSimpleMountains(scene, fieldSize = 64) {
+    // console.log('🏔️ Creating distant mountain vista far below');
+    
+    if (!scene) {
+      // console.error('❌ Scene not available for mountains');
+      return null;
+    }
+    
+    // Simple parameters for reliable generation
+    const actualFieldWidth = window.liveField ? window.liveField.width * TILE_SIZE : fieldSize * TILE_SIZE;
+    const actualFieldHeight = window.liveField ? window.liveField.height * TILE_SIZE : fieldSize * TILE_SIZE;
+    const fieldCenterX = actualFieldWidth / 2;
+    const fieldCenterZ = actualFieldHeight / 2;
+    
+    // One large plane with lower resolution
+    const mountainSize = Math.max(actualFieldWidth, actualFieldHeight) * 6; // Large plane
+    const subdivisions = 32; // Lower resolution for smooth gradient
+    
+    // console.log(`🏔️ Mountain vista params: field=${actualFieldWidth}x${actualFieldHeight}, plane size=${mountainSize}`);
+    
+    // Create one big plane
+    const mountainGround = BABYLON.MeshBuilder.CreateGround("mountainGround", {width: mountainSize, height: mountainSize, subdivisions: subdivisions}, scene);
+    
+    // Position - VERY FAR below the table to create vista effect
+    mountainGround.position.x = fieldCenterX;
+    mountainGround.position.z = fieldCenterZ;
+    mountainGround.position.y = -200; // Massive depth for distant mountain vista
+    
+    // Get positions for modification
+    const positions = mountainGround.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    if (!positions) {
+      // console.error('❌ Could not get positions');
+      return mountainGround;
+    }
+    
+    const numVertices = positions.length / 3;
+    // console.log(`🏔️ Modifying ${numVertices} vertices for vista`);
+    
+    // Seed for consistent noise
+    const seed = window.liveField ? window.liveField.seed : 42;
+    
+    // Simple terrain: flat at center, increasing randomness and height outward
+    for (let i = 0; i < numVertices; i++) {
+      let x = positions[i * 3];
+      let z = positions[i * 3 + 2];
+      
+      // Distance from field center
+      const distFromCenter = Math.sqrt((x - fieldCenterX) ** 2 + (z - fieldCenterZ) ** 2);
+      const maxDist = mountainSize / 2;
+      const normalizedDist = Math.min(1, distFromCenter / maxDist);
+      
+      let height = 0;
+      
+      // Only add height if not in the center
+      if (normalizedDist > 0.1) {
+        // Base height increases with distance
+        const baseHeight = normalizedDist * 150; // Max height 150
+        
+        // Random noise increases with distance
+        const noiseStrength = normalizedDist; // 0 at center, 1 at edges
+        
+        // Simple hash-based random noise
+        let hashX = Math.floor(x);
+        let hashZ = Math.floor(z);
+        let hash = seed;
+        hash = ((hash << 13) ^ hash) >>> 0;
+        hash = ((hash * (hash * hash * 15731 + 789221) + 1376312589 + hashX * 73856093 + hashZ * 19349663) & 0xffffffff) >>> 0;
+        
+        const randomNoise = (Math.sin(hash * 0.5) + Math.sin(hash * 0.1) * 0.5) * noiseStrength * 80; // Random offset increases outward
+        
+        height = baseHeight + randomNoise;
+      }
+      
+      positions[i * 3 + 1] = height;
+    }
+    
+    // Apply positions and recalculate normals for proper lighting
+    mountainGround.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
+    mountainGround.createNormals(false); // Recalculate normals for proper lighting
+    
+    // Dark phthalo green material - much darker
+    const mat = new BABYLON.StandardMaterial("mountainVistaMat", scene);
+    mat.diffuseColor = new BABYLON.Color3(0.05, 0.08, 0.1); // Very dark phthalo green
+    mat.specularColor = new BABYLON.Color3(0.03, 0.05, 0.06); // Very low specularity
+    mat.ambientColor = new BABYLON.Color3(0.1, 0.13, 0.15); // Dark ambient
+    mat.alpha = 1.0;
+    mat.backFaceCulling = false;
+    mat.depthWrite = true;
+
+    // No texture - solid color
+    mat.diffuseTexture = null;
+
+    // console.log('🏔️ Mountain material created - grey with progressive randomness');
+    
+    mountainGround.material = mat;
+    
+    // Render in background group
+    mountainGround.renderingGroupId = 0;
+    mountainGround.isPickable = false;
+    mountainGround.isVisible = true;
+    
+    // Add to shadow generator for subtle depth effects
+    if (window.gfx && window.gfx.shadowGenerator) {
+      try {
+        window.gfx.shadowGenerator.addShadowCaster(mountainGround, false);
+        // console.log(`🏔️ Mountain vista added to shadow receiver`);
+      } catch (e) {
+        // console.log(`⚠️ Could not add vista to shadow receiver:`, e.message);
+      }
+    }
+    
+    // console.log('🏔️ Mountain vista ready - flat center with increasing randomness outward!');
+    
+    // Create a horizon plane to show the distant mountains meeting the sky
+    // This creates visual reference for the vast distance below
+    createHorizon(scene, fieldCenterX, fieldCenterZ, mountainSize);
+    
+    return mountainGround;
+  }
+  
+  // Create a subtle horizon line/band to show where distant mountains meet sky
+  function createHorizon(scene, centerX, centerZ, mountainSize) {
+    // console.log('🌅 Creating horizon line for distant vista');
+    
+    // Create a large thin plane at a height between camera and mountains
+    // This creates a visual "line" at the horizon
+    const horizonSize = mountainSize * 1.5;
+    const horizonPlane = BABYLON.MeshBuilder.CreateGround("horizon", 
+      {width: horizonSize, height: horizonSize, subdivisions: 4}, scene);
+    
+    // Position at a mid-distance - creates the horizon "line" effect
+    horizonPlane.position.x = centerX;
+    horizonPlane.position.z = centerZ;
+    horizonPlane.position.y = -80; // Between camera (9) and mountains (-200)
+    
+    // Create horizon material - dark solid band
+    const horizonMat = new BABYLON.StandardMaterial("horizonMat", scene);
+    horizonMat.diffuseColor = new BABYLON.Color3(0.9, 0.89, 0.9); // Dark grey-green like mountains but lighter
+    // horizonMat.ambientColor = new BABYLON.Color3(0.23, 0.23, 0.28); // Ambient for depth
+    // horizonMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Low shine
+    // horizonMat.emissiveColor = new BABYLON.Color3(0.05, 0.06, 0.06); // Subtle glow for visibility
+    horizonMat.alpha = 0.2; // Solid, no transparency
+    horizonMat.backFaceCulling = false;
+    horizonMat.depthWrite = true;
+    
+    horizonPlane.material = horizonMat;
+    horizonPlane.renderingGroupId = 0; // Render with background
+    horizonPlane.isPickable = false;
+    horizonPlane.isVisible = true; // Make the horizon band visible
+    
+    // console.log('🌅 Horizon line created - enhances sense of vast distance');
+    return horizonPlane;
+  }
+
+  // Fix the scene.whenReadyAsync mountain creation with better error handling:
+  // console.log('🌄 Creating subtle low-relief mountains');
+  if (gfx.scene && typeof BABYLON !== 'undefined') {
+    try {
+      const fieldDim = window.liveField ? Math.max(window.liveField.width, window.liveField.height) : 64;
+      gfx.mountains = createSimpleMountains(gfx.scene, fieldDim);
+      if (gfx.mountains) {
+        // console.log(`✅ Subtle mountains created successfully for ${fieldDim} field`);
+      } else {
+        // console.error('❌ Mountain creation returned null');
+      }
+    } catch (mountainError) {
+      // console.error('❌ Mountain creation failed:', mountainError);
+    }
+  } else {
+    // console.error('❌ Scene or Babylon.js not available for mountains');
+  }
+
+  // Ensure no lingering createMountainTerrain references - the function should be completely gone
+  // If any errors mention createMountainTerrain, the old function definition needs manual removal
+
+
+
+})(window.gfx = window.gfx || {});
 
 

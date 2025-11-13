@@ -33,6 +33,10 @@ window.aud = {};  // Audio
     gfx.scene.whenReadyAsync().then(function() {
       initPlayer();
       
+      // Initialize empty arrays for menu scene (buildings/units only spawn when match starts)
+      window.playerBuildings = [];
+      window.gameUnits = [];
+      
       // DON'T initialize networking here - let the lobby system handle it when user picks a game type
       // Network will be initialized when user clicks a game type in the menu
       
@@ -46,6 +50,11 @@ window.aud = {};  // Audio
         // Initialize shadows mode AFTER shadow generator is ready
         if (window.hud && window.hud.initializeShadowsMode) {
           window.hud.initializeShadowsMode();
+        }
+        
+        // Initialize selection mode
+        if (window.hud && window.hud.initializeSelectionMode) {
+          window.hud.initializeSelectionMode();
         }
       }, 100); // 100ms delay
       

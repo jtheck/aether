@@ -1311,8 +1311,8 @@ const buildingSystem = {
   placeBuildingAt: function(gridX, gridZ) {
     if (!this.selectedBuildingType || !this.isPlacing) return;
     
-    // Check if position is valid (not too close to agora)
-    if (window.player && window.player.agora) {
+    // Check if position is valid (not too close to agora) - only during actual matches
+    if (window.game && window.player && window.player.agora) {
       const agoraX = window.player.agora.x;
       const agoraZ = window.player.agora.y;
       const distance = Math.sqrt((gridX - agoraX) ** 2 + (gridZ - agoraZ) ** 2);
@@ -1605,8 +1605,8 @@ const buildingSystem = {
     
     let isValid = true;
     
-    // Check if position is valid (not too close to agora)
-    if (window.player && window.player.agora) {
+    // Check if position is valid (not too close to agora) - only during actual matches
+    if (window.game && window.player && window.player.agora) {
       const agoraX = window.player.agora.x;
       const agoraZ = window.player.agora.y;
       const distance = Math.sqrt((gridX - agoraX) ** 2 + (gridZ - agoraZ) ** 2);

@@ -16,7 +16,7 @@
       twoFingerDoubleTapCenterMaxMovePx: 80,
       rotateSensitivity: 0.27, // Fine-tuned for optimal feel
       pinchSensitivity: 1.06, // Increased 25% for faster zoom response
-      panSensitivity: 1.5, // Reduced from 5 to prevent runaway camera
+      panSensitivity: 4.5, // 3x faster (was 1.5)
       dragStartThresholdPx: 10, // Reduced from 14 for quicker response
       suppressSingleTapAfterTwoFingerMs: 300,
       // Gesture unification

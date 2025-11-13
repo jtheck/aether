@@ -1342,6 +1342,14 @@ class TransformBehavior extends Behavior {
             ...params
         });
         
+        // CRITICAL: TransformBehavior should NOT be used in multiplayer!
+        // In multiplayer, use the 'convert' command system instead
+        if (window.isMultiplayer) {
+            console.error('❌ TransformBehavior should not be used in multiplayer! Use convert command instead.');
+            this.disabled = true;
+            return;
+        }
+        
         // DETERMINISTIC: Use tick-based timing instead of Date.now()
         const currentTick = window.currentMatch?.tick || 0;
         this.startTick = currentTick;
@@ -1359,6 +1367,11 @@ class TransformBehavior extends Behavior {
     }
     
     step() {
+        // Skip if disabled (e.g., in multiplayer)
+        if (this.disabled) {
+            return true; // Complete immediately
+        }
+        
         // DETERMINISTIC: Use tick-based timing
         const currentTick = window.currentMatch?.tick || 0;
         const ticksElapsed = currentTick - this.startTick;

@@ -14,28 +14,20 @@
       twoFingerTapMaxTimeMs: 300,
       twoFingerTapMaxMovePx: 16,
       twoFingerDoubleTapCenterMaxMovePx: 80,
-      rotateSensitivity: 0.27, // Fine-tuned for optimal feel
-      pinchSensitivity: 1.06, // Increased 25% for faster zoom response
-      panSensitivity: 4.5, // 3x faster (was 1.5)
-      dragStartThresholdPx: 10, // Reduced from 14 for quicker response
+      rotateSensitivity: 1.8, // Smooth rotation without snapping
+      pinchSensitivity: 1.5, // Responsive zoom
+      panSensitivity: 6.5, // Responsive pan
+      firefoxPanSensitivity: 15.0, // Higher pan sensitivity for Firefox to compensate for glitchy tracking
+      pinchDeadzone: 50.0, // Ignore finger spacing changes smaller than this (prevents zoom during pan)
+      pinchCentroidStability: 80.0, // Max centroid movement for intentional pinch (px) - higher = more lenient
+      pinchCentroidRatioMax: 0.40, // Max ratio of centroid movement to finger spread (0.40 = centroid can move up to 40% of spread)
+      rotateDeadzone: 0.35, // Ignore rotation smaller than this (~20 degrees)
+      gestureStabilityFrames: 2, // Require N consecutive clean frames before allowing gesture engagement
+      debugGestures: false, // Set to true to see gesture engagement in console
+      gestureSmoothingFactor: 0.3, // Lerp factor for smooth gesture interpolation (0=no smoothing, 1=instant)
+      dragStartThresholdPx: 15,
       suppressSingleTapAfterTwoFingerMs: 300,
-      // Gesture unification
-      dominantOnly: false,
-      dampSecondary: 0.6,
-      // Enable/disable individual gesture types for testing
-      enablePinch: true,
-      enableRotate: true,
-      enablePan: true,
-      // Minimum movement thresholds to treat 2-finger motion as gesture (prevents accidental zoom/rotate on 2-tap)
-      pinchMinDeltaPx: 1.0,
-      rotateMinDeltaRad: 0.02, // Increased from 0.008 to reduce accidental rotation
-      panMinDeltaPx: 0.4,
-      panBias: 1.2,
-      primaryOverrideFactor: 1.6,
-      initialPinchMinSpanPx: 10,
-      maxRadiusStepPerFrame: 1.5,
-      gestureEngageTimeMs: 0, // Reduced from 20ms for instant response
-      gestureForceCommitMs: 100, // Reduced from 150ms for faster engagement
+      initialPinchMinSpanPx: 20, // Require fingers to be spread apart to start gesture
       // Building placement UX
       buildPlaceMinHoldMs: 150 // Reduced from 200ms for snappier placement
     }, options || {});
@@ -91,8 +83,16 @@
 
     // Gesture state when 2+ pointers
     let gestureActive = false;
-    let gestureCommitted = false; // Only apply camera changes after commit
-    let gestureInitial = null; // { centroid, distance, angle, radius, cameraAlpha, cameraBeta, startTime }
+    let gestureLast = null; // Store last frame's gesture state for incremental updates
+    let gestureInitial = null; // Store initial gesture state for deadzone checks
+    let gesturePrimaryFingerIds = null; // Lock the two finger IDs for the entire gesture
+    let gestureEngaged = { pinch: false, rotate: false }; // Track which gestures have engaged
+    let gestureStableFrames = 0; // Count consecutive clean frames before allowing engagement
+    
+    // Momentum/inertia state
+    let gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
+    let momentumActive = false;
+    let momentumDecay = 0.92; // How fast momentum decays per frame (0.92 = ~8% loss per frame)
     // Coalesce touch move handling to one frame
     let moveRafScheduled = false;
     let lastTouchClientX = 0, lastTouchClientY = 0;
@@ -158,6 +158,37 @@
     }
 
     function getTwoPrimaryPointers() {
+      // If gesture is active, use the locked finger IDs
+      if (gestureActive && gesturePrimaryFingerIds) {
+        const a = activePointers.get(gesturePrimaryFingerIds[0]);
+        const b = activePointers.get(gesturePrimaryFingerIds[1]);
+        if (!a || !b) return null; // One of the locked fingers was lifted
+        
+        // CRITICAL: Validate both pointers have recent updates
+        // Firefox bug: sometimes only 1 pointermove fires per frame, causing stale data
+        const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+        
+        // For non-Firefox: strict synchronization check
+        if (!isFirefox) {
+          const currentTime = now();
+          const maxStaleness = 50; // ms
+          const aAge = currentTime - a.lastTime;
+          const bAge = currentTime - b.lastTime;
+          
+          // Reject if either finger is stale or if there's a huge age difference
+          const extremelyStale = (aAge > maxStaleness) || (bAge > maxStaleness);
+          const hugeDifference = Math.abs(aAge - bAge) > 30; // One finger way behind the other
+          
+          if (extremelyStale || hugeDifference) {
+            return null;
+          }
+        }
+        // Firefox: Skip staleness check entirely - rely on anomaly detection instead
+        
+        return [a, b];
+      }
+      
+      // Otherwise, use the first two pointers for initializing a new gesture
       // Ensure pointerOrder entries are still active
       for (let i = pointerOrder.length - 1; i >= 0; i--) {
         if (!activePointers.has(pointerOrder[i])) pointerOrder.splice(i, 1);
@@ -175,6 +206,12 @@
       const dist = Math.hypot(dx, dy);
       const ang = Math.atan2(dy, dx);
       return { dist, ang };
+    }
+    
+    function computeRotationAngle(a, b, centroid) {
+      // Calculate angle of finger A relative to centroid
+      const angleA = Math.atan2(a.y - centroid.y, a.x - centroid.x);
+      return angleA; // Return one finger's angle - consistent reference point
     }
 
     function screenToWorld(screenX, screenY) {
@@ -201,7 +238,6 @@
     }
 
     // Removed direct moveSelectedUnitsToScreen flow; defer to ui.handlePointer via synthetic events
-
     // Removed: showMoveOptionsUIAt (single-finger double-tap now triggers special ability)
 
     function fireTwoFingerTap(x, y) {
@@ -215,51 +251,78 @@
         const pair = getTwoPrimaryPointers();
         if (!pair) return;
         const [a, b] = pair;
-        const c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
         const d = computeDistanceAndAngle(a, b);
         // Require a minimum initial span to avoid explosive scales
         if (d.dist < config.initialPinchMinSpanPx) {
-          return; // ignore until fingers are spread enough
+          return;
         }
         gestureActive = true;
-        gestureCommitted = false;
         window.gestureInProgress = true;
-        window._gesturePrimary = null; // lock the first detected dominant gesture
+        
+        // Stop any momentum when new gesture starts
+        momentumActive = false;
+        gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
+        
+        // LOCK these two specific finger IDs
+        gesturePrimaryFingerIds = [a.id, b.id];
+        
+        // Store initial and last frame state
+        const centroid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const rotAngle = computeRotationAngle(a, b, centroid);
+        
         gestureInitial = {
-          centroid: c,
-          distance: Math.max(1, d.dist),
-          angle: d.ang,
-          radius: window.gfx && window.gfx.camera ? window.gfx.camera.radius : 100,
-          cameraAlpha: window.gfx && window.gfx.camera ? window.gfx.camera.alpha : 0,
-          cameraBeta: window.gfx && window.gfx.camera ? window.gfx.camera.beta : 0,
-          startTime: now()
+          centroid: centroid,
+          distance: d.dist,
+          angle: rotAngle,
+          bestRatio: 1.0 // Track best (lowest) ratio seen
         };
-        // Temporarily disable camera auto-follow while gesturing
+        
+        gestureLast = {
+          centroid: centroid,
+          distance: d.dist,
+          angle: rotAngle
+        };
+        
+        gestureEngaged = { pinch: false, rotate: false };
+        gestureStableFrames = 0;
+        
+        // Temporarily disable camera auto-follow
         if (typeof window.cameraAutoFollowEnabled !== 'undefined') {
           window._prevCameraAutoFollow = window.cameraAutoFollowEnabled;
         }
         window.cameraAutoFollowEnabled = false;
-        // Save a safe camera snapshot
-        if (window.gfx && window.gfx.camera && window.gfx.cameraTarget) {
-          window._lastSafeCamera = {
-            alpha: window.gfx.camera.alpha,
-            beta: window.gfx.camera.beta,
-            radius: window.gfx.camera.radius,
-            tx: window.gfx.cameraTarget.position.x,
-            tz: window.gfx.cameraTarget.position.z
-          };
-        }
       }
     }
 
     function endGestureIfNeeded() {
-      if (activePointers.size < 2 && gestureActive) {
+      if (!gestureActive) return;
+      
+      // End gesture if we have fewer than 2 pointers, OR if one of the locked gesture fingers is gone
+      const shouldEnd = activePointers.size < 2 || 
+        (gesturePrimaryFingerIds && (!activePointers.has(gesturePrimaryFingerIds[0]) || !activePointers.has(gesturePrimaryFingerIds[1])));
+      
+      if (shouldEnd) {
+        // Mark remaining gesture fingers to prevent them from starting drag selections
+        if (gesturePrimaryFingerIds) {
+          for (const id of gesturePrimaryFingerIds) {
+            const ps = activePointers.get(id);
+            if (ps) {
+              ps.wasInGesture = true; // Flag to suppress drag behavior
+            }
+          }
+        }
+        
+        // Activate momentum with current velocity
+        momentumActive = true;
+        
         gestureActive = false;
-        gestureCommitted = false;
+        gestureLast = null;
         gestureInitial = null;
+        gesturePrimaryFingerIds = null;
+        gestureEngaged = { pinch: false, rotate: false };
+        gestureStableFrames = 0;
         window.gestureInProgress = false;
-        window._gesturePrimary = null;
-        // Restore camera auto-follow state after gesture ends
+        // Restore camera auto-follow
         if (typeof window._prevCameraAutoFollow !== 'undefined') {
           window.cameraAutoFollowEnabled = window._prevCameraAutoFollow;
           delete window._prevCameraAutoFollow;
@@ -268,194 +331,275 @@
     }
 
     function applyTwoFingerGesture() {
-      // During building placement, ignore two-finger gestures (single finger drags preview, tap places)
       if (window.buildingSystem && window.buildingSystem.isPlacing) return;
-      if (!gestureActive || activePointers.size < 2) return;
+      if (!gestureActive || activePointers.size < 2 || !gestureLast) return;
+      
+      // Detect Firefox once for the entire function
+      const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+      
       const pair = getTwoPrimaryPointers();
-      if (!pair) return;
+      if (!pair) {
+        endGestureIfNeeded();
+        return;
+      }
+      
       const [a, b] = pair;
       const cNow = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const da = computeDistanceAndAngle(a, b);
       
-      // If both fingers look like a quick tap (low move, short time), suppress gesture to avoid interfering with 2-tap or double 2-tap
+      // Check if this looks like a 2-finger tap (don't move camera)
       const aMoveSq = distanceSq(a.startX, a.startY, a.x, a.y);
       const bMoveSq = distanceSq(b.startX, b.startY, b.x, b.y);
       const aDt = now() - a.startTime;
       const bDt = now() - b.startTime;
       const bothTapLike = (aMoveSq <= twoFingerTapMaxMovePxSq && bMoveSq <= twoFingerTapMaxMovePxSq && aDt <= config.twoFingerTapMaxTimeMs && bDt <= config.twoFingerTapMaxTimeMs);
-      if (bothTapLike) {
-        // Do not allow commit or any camera nudge; wait for pointerup to evaluate 2-finger tap/double-tap
-        return;
+      if (bothTapLike) return;
+      
+      if (!window.gfx || !window.gfx.camera || !window.gfx.cameraTarget) return;
+      const cam = window.gfx.camera;
+      const target = window.gfx.cameraTarget.position;
+      
+      // INCREMENTAL DELTAS since last frame
+      const distDelta = da.dist - gestureLast.distance;
+      
+      // Calculate rotation using finger angle around centroid (not line angle between fingers)
+      const currentRotationAngle = computeRotationAngle(a, b, cNow);
+      let angleDelta = currentRotationAngle - gestureLast.angle;
+      // Normalize angle delta to handle wrapping (prevent jumps at ±π boundary)
+      if (angleDelta > Math.PI) angleDelta -= 2 * Math.PI;
+      if (angleDelta < -Math.PI) angleDelta += 2 * Math.PI;
+      
+      const centroidDx = cNow.x - gestureLast.centroid.x;
+      const centroidDy = cNow.y - gestureLast.centroid.y;
+      
+      // DETECT ANOMALIES: If finger positions jump too much in one frame, reset baseline
+      // Firefox needs tighter thresholds since we disabled staleness checks
+      // Relax centroid threshold since fast panning is legitimate
+      const maxReasonableCentroidMove = isFirefox ? 60 : 100;
+      const maxReasonableAngle = isFirefox ? 0.25 : 0.3;
+      const maxReasonableDistChange = isFirefox ? 40 : 50;
+      
+      const centroidMoveSq = centroidDx * centroidDx + centroidDy * centroidDy;
+      const isAnomalousFrame = (
+        centroidMoveSq > maxReasonableCentroidMove * maxReasonableCentroidMove ||
+        Math.abs(angleDelta) > maxReasonableAngle ||
+        Math.abs(distDelta) > maxReasonableDistChange
+      );
+      
+      if (isAnomalousFrame) {
+        // Finger positions jumped unreasonably - reset baseline to prevent false gesture engagement
+        if (config.debugGestures) {
+          console.warn(`[GESTURE] ANOMALY - resetting (dist: ${Math.abs(distDelta).toFixed(1)}px, centroid: ${Math.sqrt(centroidMoveSq).toFixed(1)}px, angle: ${Math.abs(angleDelta * 180 / Math.PI).toFixed(1)}°)`);
+        }
+        gestureInitial = {
+          centroid: cNow,
+          distance: da.dist,
+          angle: currentRotationAngle
+        };
+        gestureLast = {
+          centroid: cNow,
+          distance: da.dist,
+          angle: currentRotationAngle
+        };
+        gestureStableFrames = 0; // Reset stability counter
+        return; // Skip this frame
       }
       
-      // Movement thresholds
-      const pinchDelta = Math.abs(da.dist - gestureInitial.distance);
-      const rawAngleDelta = da.ang - gestureInitial.angle;
-      const angleDelta = Math.abs(((rawAngleDelta + Math.PI) % (2*Math.PI)) - Math.PI);
-      const panDeltaPx = Math.hypot(cNow.x - gestureInitial.centroid.x, cNow.y - gestureInitial.centroid.y);
-
-      // Guard: do not apply any camera change until gesture is committed
-      const heldMs = now() - (gestureInitial.startTime || now());
-      if (!gestureCommitted) {
-        const exceedThreshold = (config.enablePinch && pinchDelta >= config.pinchMinDeltaPx) || (config.enableRotate && angleDelta >= config.rotateMinDeltaRad) || (config.enablePan && panDeltaPx >= config.panMinDeltaPx);
-        if ((exceedThreshold && heldMs >= config.gestureEngageTimeMs) || (heldMs >= config.gestureForceCommitMs)) {
-          gestureCommitted = true;
-        } else {
-          return;
-        }
+      // Increment stability counter for clean frames
+      gestureStableFrames++;
+      
+      // SMOOTHING: Lerp deltas for natural inertia
+      const smoothFactor = config.gestureSmoothingFactor || 0.3;
+      
+      const clampedCentroidDx = centroidDx;
+      const clampedCentroidDy = centroidDy;
+      const clampedAngleDelta = angleDelta;
+      const clampedDistDelta = distDelta;
+      
+      // Check TOTAL delta from gesture start to determine if gesture should engage
+      // Firefox needs larger deadzones but ratio check makes it safe to lower them
+      const pinchDeadzone = isFirefox ? 60.0 : (config.pinchDeadzone || 50.0);
+      const rotateDeadzone = isFirefox ? 0.40 : (config.rotateDeadzone || 0.35); // ~23° for Firefox, ~20° for Chrome
+      const stabilityRequired = isFirefox ? 1 : (config.gestureStabilityFrames || 2);
+      
+      const totalDistDelta = Math.abs(da.dist - gestureInitial.distance);
+      
+      // Calculate total centroid movement from gesture start
+      const totalCentroidDx = cNow.x - gestureInitial.centroid.x;
+      const totalCentroidDy = cNow.y - gestureInitial.centroid.y;
+      const totalCentroidMove = Math.sqrt(totalCentroidDx * totalCentroidDx + totalCentroidDy * totalCentroidDy);
+      
+      // Handle angle wrapping for total rotation
+      let totalAngleDelta = currentRotationAngle - gestureInitial.angle;
+      if (totalAngleDelta > Math.PI) totalAngleDelta -= 2 * Math.PI;
+      if (totalAngleDelta < -Math.PI) totalAngleDelta += 2 * Math.PI;
+      totalAngleDelta = Math.abs(totalAngleDelta);
+      
+      // CRITICAL: Pinch requires BOTH finger spread AND centroid stability
+      // If fingers spread during panning, centroid moves proportionally - reject!
+      // If fingers intentionally pinch, centroid stays relatively stable - accept!
+      const centroidStabilityThreshold = isFirefox ? 100 : (config.pinchCentroidStability || 80);
+      
+      // Key insight: When panning with drift, centroid/distance ratio is ~0.5
+      // When intentionally pinching, ratio improves (gets lower) over time
+      const centroidToDistanceRatio = totalDistDelta > 0 ? (totalCentroidMove / totalDistDelta) : 0;
+      
+      // Update best (lowest) ratio seen during gesture
+      if (centroidToDistanceRatio < gestureInitial.bestRatio && totalDistDelta >= 20) {
+        gestureInitial.bestRatio = centroidToDistanceRatio;
       }
-
-      // Determine dominant gesture this frame to avoid fighting
-      const pinchRatio = config.enablePinch ? (pinchDelta / Math.max(1e-6, config.pinchMinDeltaPx)) : -1;
-      const rotateRatio = config.enableRotate ? (angleDelta / Math.max(1e-6, config.rotateMinDeltaRad)) : -1;
-      const panRatio = config.enablePan ? (panDeltaPx / Math.max(1e-6, config.panMinDeltaPx)) : -1;
-      // Bias pan so it becomes dominant more readily
-      const pinchEff = pinchRatio;
-      const rotateEff = rotateRatio;
-      const panEff = panRatio * (config.panBias || 1.0);
-      let primary = window._gesturePrimary || 'none';
-      if (!window._gesturePrimary) {
-        let maxVal = 1.0;
-        if (pinchEff > maxVal) { primary = 'pinch'; maxVal = pinchEff; }
-        if (rotateEff > maxVal) { primary = 'rotate'; maxVal = rotateEff; }
-        if (panEff > maxVal) { primary = 'pan'; maxVal = panEff; }
-        if (primary !== 'none') window._gesturePrimary = primary; // lock it until gesture ends
+      
+      // SMART DETECTION: If gesture STARTED with good ratio, accept even if it drifts later
+      // This handles touchscreen reality: hard to maintain perfect centroid stability
+      const maxStaticRatio = config.pinchCentroidRatioMax || 0.40; // Strict threshold for current ratio
+      const maxBestRatio = 0.45; // If best ratio ever seen was < 0.45, it's a pinch
+      const hadGoodRatio = gestureInitial.bestRatio < maxBestRatio; // Started as pinch
+      
+      const isPinchIntentional = 
+        totalDistDelta >= pinchDeadzone && 
+        totalCentroidMove < centroidStabilityThreshold &&
+        (centroidToDistanceRatio < maxStaticRatio || hadGoodRatio);
+      
+      // Require BOTH sufficient delta AND stable tracking before engaging
+      if (!gestureEngaged.pinch && isPinchIntentional && gestureStableFrames >= stabilityRequired) {
+        gestureEngaged.pinch = true;
+        if (config.debugGestures) console.log(`[GESTURE] ✓ PINCH ENGAGED (dist: ${totalDistDelta.toFixed(1)}px, centroid: ${totalCentroidMove.toFixed(1)}px, ratio: ${centroidToDistanceRatio.toFixed(2)}, best: ${gestureInitial.bestRatio.toFixed(2)})`);
+      }
+      if (!gestureEngaged.rotate && totalAngleDelta >= rotateDeadzone && gestureStableFrames >= stabilityRequired) {
+        gestureEngaged.rotate = true;
+        if (config.debugGestures) console.log(`[GESTURE] ✓ ROTATE ENGAGED (${(totalAngleDelta * 180 / Math.PI).toFixed(1)}° after ${gestureStableFrames} stable frames)`);
+      }
+      
+      if (config.debugGestures && !gestureEngaged.pinch && !gestureEngaged.rotate) {
+        const browserInfo = isFirefox ? ' [Firefox]' : '';
+        
+        // Show what's blocking pinch engagement
+        if (totalDistDelta >= pinchDeadzone) {
+          const reasons = [];
+          if (totalCentroidMove >= centroidStabilityThreshold) {
+            reasons.push(`centroid too far: ${totalCentroidMove.toFixed(1)}/${centroidStabilityThreshold}px`);
+          }
+          if (!hadGoodRatio && centroidToDistanceRatio >= maxStaticRatio) {
+            reasons.push(`ratio: ${centroidToDistanceRatio.toFixed(2)} (current), best: ${gestureInitial.bestRatio.toFixed(2)} (never reached < ${maxBestRatio.toFixed(2)})`);
+          }
+          if (reasons.length > 0) {
+            console.log(`[GESTURE] ❌ Pinch BLOCKED${browserInfo} - ${reasons.join(', ')}`);
+          }
+        }
+        
+        console.log(`[GESTURE] Pan (${gestureStableFrames}/${stabilityRequired} stable)${browserInfo} - dist: ${totalDistDelta.toFixed(1)}/${pinchDeadzone}px, centroid: ${totalCentroidMove.toFixed(1)}px (ratio: ${centroidToDistanceRatio.toFixed(2)}), rot: ${(totalAngleDelta * 180 / Math.PI).toFixed(1)}/${(rotateDeadzone * 180 / Math.PI).toFixed(1)}°`);
+      }
+      
+      const applyPinch = gestureEngaged.pinch;
+      const applyRotate = gestureEngaged.rotate;
+      
+      // Apply smoothed deltas (lerp for natural damping)
+      const smoothedDistDelta = applyPinch ? (clampedDistDelta * smoothFactor) : 0;
+      const smoothedAngleDelta = applyRotate ? (clampedAngleDelta * 0.5) : 0; // Less smoothing for rotation
+      const smoothedCentroidDx = clampedCentroidDx * smoothFactor;
+      const smoothedCentroidDy = clampedCentroidDy * smoothFactor;
+      
+      // 1. PINCH TO ZOOM - only if exceeds deadzone
+      if (applyPinch && Math.abs(smoothedDistDelta) > 0.1) {
+        const pinchVel = smoothedDistDelta * config.pinchSensitivity;
+        cam.radius -= pinchVel;
+        cam.radius = Math.max(10, Math.min(200, cam.radius)); // Clamp
+        gestureVelocity.pinch = -pinchVel; // Store velocity for momentum
       } else {
-        // Allow a strong override if another gesture is much stronger than current primary
-        const overrideK = (config.primaryOverrideFactor || 1.6);
-        if (window._gesturePrimary === 'pan' && (pinchEff > panEff * overrideK || rotateEff > panEff * overrideK)) {
-          window._gesturePrimary = pinchEff > rotateEff ? 'pinch' : 'rotate';
-          primary = window._gesturePrimary;
-        } else if (window._gesturePrimary === 'pinch' && (panEff > pinchEff * overrideK || rotateEff > pinchEff * overrideK)) {
-          window._gesturePrimary = panEff > rotateEff ? 'pan' : 'rotate';
-          primary = window._gesturePrimary;
-        } else if (window._gesturePrimary === 'rotate' && (panEff > rotateEff * overrideK || pinchEff > rotateEff * overrideK)) {
-          window._gesturePrimary = panEff > pinchEff ? 'pan' : 'pinch';
-          primary = window._gesturePrimary;
-        }
+        gestureVelocity.pinch = 0; // Clear velocity if not pinching
       }
-
-      // Integrated mode: allow all gestures that cross threshold; scale secondaries by dampSecondary
-      const allowPinch = config.enablePinch && (pinchDelta >= config.pinchMinDeltaPx);
-      const allowRotate = config.enableRotate && (angleDelta >= config.rotateMinDeltaRad);
-      const allowPan = config.enablePan && (panDeltaPx >= config.panMinDeltaPx);
-      const damp = (g) => (config.dominantOnly ? (primary === g ? 1 : 0) : (primary === g ? 1 : config.dampSecondary));
-
-      // Pinch (zoom) if meaningful change - match wheel momentum path via ui.nudgeZoom
-      if (allowPinch && pinchDelta >= config.pinchMinDeltaPx) {
-        const scale = Math.max(0.01, da.dist / gestureInitial.distance);
-        if (window.gfx && window.gfx.camera && Number.isFinite(window.gfx.camera.radius)) {
-          // Mix pure pinch zoom with a small pan component toward the pinch center
-          const desired = gestureInitial.radius / Math.pow(scale, config.pinchSensitivity);
-          const curr = window.gfx.camera.radius;
-          const delta = desired - curr;
-          const maxStep = config.maxRadiusStepPerFrame;
-          let step = Math.max(-maxStep, Math.min(maxStep, delta));
-          step *= (primary === 'pinch' ? 1 : config.dampSecondary);
-          if (window.ui && window.ui.nudgeZoom) window.ui.nudgeZoom(step);
-          // (Recenter removed due to pan drift)
-        }
+      
+      // 2. ROTATE - only if exceeds deadzone
+      if (applyRotate && Math.abs(smoothedAngleDelta) > 0.001) {
+        const rotateVel = smoothedAngleDelta * config.rotateSensitivity;
+        cam.alpha -= rotateVel;
+        gestureVelocity.rotate = -rotateVel; // Store velocity for momentum
+      } else {
+        gestureVelocity.rotate = 0; // Clear velocity if not rotating
       }
-
-      // Rotate (around vertical axis) if meaningful change - match scrollwheel rotation feel
-      if (allowRotate && angleDelta >= config.rotateMinDeltaRad) {
-        if (window.ui && window.gfx && window.gfx.camera) {
-          const deltaAngle = rawAngleDelta;
-          // Normalize to [-PI, PI]
-          const normalized = ((deltaAngle + Math.PI) % (2*Math.PI)) - Math.PI;
-          const deltaAlpha = normalized * config.rotateSensitivity;
-          const maxAlphaStep = 0.5; // Reduced from 1.25 to prevent excessive spinning
-          let step = Math.max(-maxAlphaStep, Math.min(maxAlphaStep, deltaAlpha));
-          step *= (primary === 'rotate' ? 1 : config.dampSecondary);
-          if (window.ui && window.ui.nudgeRotation) window.ui.nudgeRotation(step);
-        }
-      }
-
-      // Pan using screen-space delta (no raycasting, no circular feedback)
-      if (allowPan) {
-        if (window.gfx && window.gfx.camera && window.gfx.canvas && window.gfx.cameraTarget) {
-          const cam = window.gfx.camera;
+      
+      // 3. PAN - smoothed pan based on centroid movement
+      if (Math.abs(smoothedCentroidDx) > 0.1 || Math.abs(smoothedCentroidDy) > 0.1) {
+        if (window.gfx.canvas) {
           const rect = window.gfx.canvas.getBoundingClientRect();
+          const pixelsToWorld = (2 * cam.radius * Math.tan((cam.fov || 0.8)/2)) / Math.max(1, rect.height);
           
-          // Screen delta in pixels since last centroid
-          const screenDx = (cNow.x - gestureInitial.centroid.x);
-          const screenDy = (cNow.y - gestureInitial.centroid.y);
-          
-          // Convert pixels to world units
-          const pixelsToWorld = (2 * (cam.radius || 60) * Math.tan((cam.fov || 0.8)/2)) / Math.max(1, rect.height);
-          
-          // Build ground-aligned camera axes for proper field orientation
-          const toTarget = window.gfx.cameraTarget.position.subtract(cam.position).normalize();
+          // Get camera-aligned axes
+          const camPos = cam.position.clone();
+          const targetPos = target.clone ? target.clone() : new BABYLON.Vector3(target.x, target.y, target.z);
+          const toTarget = targetPos.subtract(camPos).normalize();
           const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
           
-          let dx = 0, dz = 0;
           if (groundForward.lengthSquared() > 1e-6) {
             groundForward.normalize();
             const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
             
-            // Map screen movement to world: screen right -> groundRight, screen down -> groundForward
-            const wx = (groundRight.x * screenDx + groundForward.x * screenDy) * pixelsToWorld * config.panSensitivity;
-            const wz = (groundRight.z * screenDx + groundForward.z * screenDy) * pixelsToWorld * config.panSensitivity;
-            dx = wx; // Pan in the direction of finger movement
-            dz = wz;
-          }
-          
-          if (!Number.isFinite(dx)) dx = 0;
-          if (!Number.isFinite(dz)) dz = 0;
-          
-          // Dampen secondary gestures
-          const k = (primary === 'pan' ? 1 : config.dampSecondary);
-          dx *= k; dz *= k;
-          
-          // Cap the pan amount per frame
-          const maxPanPerFrame = 8;
-          const panMag = Math.sqrt(dx*dx + dz*dz);
-          if (panMag > maxPanPerFrame) {
-            const scale = maxPanPerFrame / panMag;
-            dx *= scale;
-            dz *= scale;
-          }
-          
-          // Apply pan
-          if (window.ui && window.ui.nudgePan) {
-            window.ui.nudgePan(dx, dz);
+            // Apply smoothed incremental pan (positive = fingers drag map in same direction)
+            // Use Firefox-specific sensitivity to compensate for glitchy tracking
+            const panSens = isFirefox ? (config.firefoxPanSensitivity || 15.0) : config.panSensitivity;
+            const wx = (groundRight.x * smoothedCentroidDx + groundForward.x * smoothedCentroidDy) * pixelsToWorld * panSens;
+            const wz = (groundRight.z * smoothedCentroidDx + groundForward.z * smoothedCentroidDy) * pixelsToWorld * panSens;
+            
+            if (Number.isFinite(wx) && Number.isFinite(wz)) {
+              target.x += wx;
+              target.z += wz;
+              // Store velocity for momentum
+              gestureVelocity.pan.x = wx;
+              gestureVelocity.pan.z = wz;
+            }
           }
         }
+      } else {
+        // Clear pan velocity if not moving
+        gestureVelocity.pan.x = 0;
+        gestureVelocity.pan.z = 0;
       }
-
-      // Update reference points for incremental gesture processing
-      gestureInitial.distance = da.dist;
-      gestureInitial.angle = da.ang;
-      gestureInitial.centroid = cNow;
-      gestureInitial.radius = window.gfx && window.gfx.camera ? window.gfx.camera.radius : gestureInitial.radius;
-
-      // Failsafe: ensure camera numbers are finite; otherwise revert
-      if (window.gfx && window.gfx.camera && window._lastSafeCamera) {
-        const cam = window.gfx.camera;
-        const target = window.gfx.cameraTarget && window.gfx.cameraTarget.position;
-        const ok = Number.isFinite(cam.alpha) && Number.isFinite(cam.beta) && Number.isFinite(cam.radius) && (!target || (Number.isFinite(target.x) && Number.isFinite(target.z)));
-        if (!ok) {
-          cam.alpha = window._lastSafeCamera.alpha;
-          cam.beta = window._lastSafeCamera.beta;
-          cam.radius = window._lastSafeCamera.radius;
-          if (target) {
-            target.x = window._lastSafeCamera.tx;
-            target.z = window._lastSafeCamera.tz;
-          }
-          gestureActive = false;
-          gestureCommitted = false;
-          // Also reset gestureInitial to avoid reusing bad refs
-          gestureInitial = null;
-        } else {
-          // refresh safe snapshot
-          window._lastSafeCamera = {
-            alpha: cam.alpha,
-            beta: cam.beta,
-            radius: cam.radius,
-            tx: target ? target.x : 0,
-            tz: target ? target.z : 0
-          };
-        }
+      
+      // Update last frame state
+      gestureLast.centroid = cNow;
+      gestureLast.distance = da.dist;
+      gestureLast.angle = currentRotationAngle; // Store proper rotation angle
+    }
+    
+    function applyMomentum() {
+      if (!momentumActive) return;
+      if (!window.gfx || !window.gfx.camera || !window.gfx.cameraTarget) return;
+      
+      const cam = window.gfx.camera;
+      const target = window.gfx.cameraTarget.position;
+      
+      // Apply and decay velocities
+      const velocityThreshold = 0.001; // Stop when velocity is tiny
+      let anyVelocity = false;
+      
+      // Pan momentum
+      if (Math.abs(gestureVelocity.pan.x) > velocityThreshold || Math.abs(gestureVelocity.pan.z) > velocityThreshold) {
+        target.x += gestureVelocity.pan.x;
+        target.z += gestureVelocity.pan.z;
+        gestureVelocity.pan.x *= momentumDecay;
+        gestureVelocity.pan.z *= momentumDecay;
+        anyVelocity = true;
+      }
+      
+      // Rotate momentum
+      if (Math.abs(gestureVelocity.rotate) > velocityThreshold) {
+        cam.alpha += gestureVelocity.rotate;
+        gestureVelocity.rotate *= momentumDecay;
+        anyVelocity = true;
+      }
+      
+      // Pinch momentum
+      if (Math.abs(gestureVelocity.pinch) > velocityThreshold) {
+        cam.radius += gestureVelocity.pinch;
+        cam.radius = Math.max(10, Math.min(200, cam.radius));
+        gestureVelocity.pinch *= momentumDecay;
+        anyVelocity = true;
+      }
+      
+      // Stop momentum when all velocities have decayed
+      if (!anyVelocity) {
+        momentumActive = false;
+        gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
       }
     }
 
@@ -535,7 +679,21 @@
       
       const ps = activePointers.get(e.pointerId);
 
-      if (ps) updatePointerState(ps, e);
+      if (ps) {
+        // FIREFOX FIX: Use getCoalescedEvents() to get all intermediate events
+        // This helps when Firefox batches/skips pointermove events
+        if (e.getCoalescedEvents && typeof e.getCoalescedEvents === 'function') {
+          const coalescedEvents = e.getCoalescedEvents();
+          if (coalescedEvents.length > 0) {
+            // Update with the most recent coalesced event
+            updatePointerState(ps, coalescedEvents[coalescedEvents.length - 1]);
+          } else {
+            updatePointerState(ps, e);
+          }
+        } else {
+          updatePointerState(ps, e);
+        }
+      }
       lastTouchClientX = e.clientX;
       lastTouchClientY = e.clientY;
       if (!moveRafScheduled) {
@@ -591,30 +749,40 @@
           if (activePointers.size >= 2) {
             beginGestureIfNeeded();
             applyTwoFingerGesture();
-            // Auxiliary during gesture
-            const primary = getTwoPrimaryPointers();
-            if (primary) {
-              const primaryIds = new Set([primary[0].id, primary[1].id]);
-              for (const aps of activePointers.values()) {
-                if (!primaryIds.has(aps.id)) {
-                  if (!(window.buildingSystem && window.buildingSystem.isPlacing)) {
-                    const dx = aps.x - aps.startX;
-                    const dy = aps.y - aps.startY;
-                    const movedSq = dx*dx + dy*dy;
-                    if (!aps.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq && now() >= suppressSingleTapUntil) {
-                      sendSyntheticPointer('pointerdown', aps.startX, aps.startY, 0, { suppressTerrainClick: true });
-                      aps.syntheticDownEmitted = true;
-                    }
-                    if (aps.syntheticDownEmitted) {
-                      sendSyntheticPointer('pointermove', aps.x, aps.y, 0, { suppressTerrainClick: true });
-                    }
+            
+            // Support 3+ finger actions/selections WHILE 2-finger gesture is active
+            // This is ROBUST multitouch - you can gesture with 2 fingers and act with a 3rd!
+            if (activePointers.size >= 3) {
+              // Get the gesture primary fingers
+              const gesturePair = getTwoPrimaryPointers();
+              const gestureIds = gesturePair ? new Set([gesturePair[0].id, gesturePair[1].id]) : new Set();
+              
+              // For each additional finger (not part of the 2-finger gesture)
+              for (const ps of activePointers.values()) {
+                if (gestureIds.has(ps.id)) continue; // Skip gesture fingers
+                if (ps.wasInGesture) continue; // Skip if was previously in gesture
+                
+                const dx = ps.x - ps.startX;
+                const dy = ps.y - ps.startY;
+                const movedSq = dx*dx + dy*dy;
+                
+                if (!ps.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
+                  if (now() >= suppressSingleTapUntil) {
+                    sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
+                    ps.syntheticDownEmitted = true;
                   }
+                }
+                if (ps.syntheticDownEmitted) {
+                  sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
                 }
               }
             }
           } else if (activePointers.size === 1) {
             if (window.buildingSystem && window.buildingSystem.isPlacing) return;
             for (const only of activePointers.values()) {
+              // Skip drag selection if this finger was part of a gesture
+              if (only.wasInGesture) continue;
+              
               const dx = only.x - only.startX;
               const dy = only.y - only.startY;
               const movedSq = dx*dx + dy*dy;
@@ -649,6 +817,55 @@
       updatePointerState(ps, e);
       ps.isDown = false;
 
+      // Calculate timing and movement once for reuse
+      const dt = now() - ps.startTime;
+      const moveSq = distanceSq(ps.startX, ps.startY, ps.x, ps.y);
+      const clientX = ps.x;
+      const clientY = ps.y;
+      
+      // Track quick pointer releases for two-finger tap detection
+      recordQuickUp(clientX, clientY, dt, moveSq);
+
+      // Detect two-finger tap/double-tap BEFORE processing other gestures
+      if (recentQuickUps.length >= 2) {
+        const a = recentQuickUps[recentQuickUps.length - 1];
+        const b = recentQuickUps[recentQuickUps.length - 2];
+        const timeDiff = Math.abs(a.t - b.t);
+        if (timeDiff < config.twoFingerTapMaxTimeMs) {
+          const cx = (a.x + b.x) / 2;
+          const cy = (a.y + b.y) / 2;
+          const timeSinceLastTwo = now() - lastTwoTapTime;
+          const distTwoSq = distanceSq(cx, cy, lastTwoTapPos.x, lastTwoTapPos.y);
+          if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < twoFingerDoubleTapCenterMaxMovePxSq) {
+            // Double 2-tap: exit building placement mode if placing, otherwise clear selection
+            if (window.buildingSystem && window.buildingSystem.isPlacing) {
+              window.buildingSystem.cancelPlacement();
+            } else if (window.player && window.player.clearSelection) {
+              window.player.clearSelection();
+            }
+            skipNextSingleTap = true;
+            suppressSingleTapUntil = now() + (config.suppressSingleTapAfterTwoFingerMs || 300);
+            lastTwoTapTime = 0;
+            lastTwoTapPos = { x: 0, y: 0 };
+            recentQuickUps.length = 0;
+            
+            // Clean up pointers and return
+            activePointers.delete(e.pointerId);
+            const idx = pointerOrder.indexOf(e.pointerId);
+            if (idx !== -1) pointerOrder.splice(idx, 1);
+            endGestureIfNeeded();
+            return;
+          } else {
+            // Single 2-tap: record center and suppress single-tap briefly
+            lastTwoTapTime = now();
+            lastTwoTapPos = { x: cx, y: cy };
+            suppressSingleTapUntil = now() + Math.max(150, config.twoFingerTapMaxTimeMs || 300);
+            skipNextSingleTap = true;
+            recentQuickUps.length = 0;
+          }
+        }
+      }
+
       const wasGesture = gestureActive && activePointers.size >= 2;
       // Determine if this pointer was one of the two gesture primaries
       let isPrimaryGesturePointer = false;
@@ -667,13 +884,6 @@
       // End gesture if needed
       endGestureIfNeeded();
 
-      // Determine tap types
-      const dt = now() - ps.startTime;
-      const moveSq = distanceSq(ps.startX, ps.startY, ps.x, ps.y);
-      const rect = canvasRect();
-      const clientX = ps.x;
-      const clientY = ps.y;
-
       if (isPrimaryGesturePointer) {
         // Primary gesture finger lifted; don't treat as tap
         if (activePointers.size === 0) {
@@ -685,6 +895,12 @@
 
       if (activePointers.size === 0) {
         // Single finger scenario (no other pointers active)
+        
+        // If this finger was part of a gesture, don't treat it as a tap/click
+        if (ps.wasInGesture) {
+          return;
+        }
+        
         if (skipNextSingleTap || now() < suppressSingleTapUntil) {
           // Consume the skip and avoid triggering any single-tap actions
           skipNextSingleTap = false;
@@ -778,6 +994,12 @@
         }
       } else if (activePointers.size >= 1) {
         // Auxiliary pointer up while other gesture fingers remain
+        
+        // If this was a gesture finger, don't treat it as a tap/action
+        if (ps.wasInGesture) {
+          return;
+        }
+        
         if (ps.syntheticDownEmitted) {
           sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
           ps.syntheticDownEmitted = false;
@@ -807,13 +1029,12 @@
       }
     }
 
-    // To detect two-finger tap, we watch for two pointers that both lifted quickly with minimal move
-    // We keep a small rolling window of recent quick-up pointers
+    // Two-finger tap detection: track recent quick pointer releases
     const recentQuickUps = [];
     function recordQuickUp(x, y, dt, moveSq) {
       if (dt <= config.twoFingerTapMaxTimeMs && moveSq <= twoFingerTapMaxMovePxSq) {
         recentQuickUps.push({ t: now(), x, y });
-        // Prune
+        // Prune old entries
         const threshold = config.doubleTapDelayMs;
         const tnow = now();
         for (let i = recentQuickUps.length - 1; i >= 0; i--) {
@@ -821,56 +1042,6 @@
         }
       }
     }
-
-    // Patch pointerup to also track quick-ups for two-finger tap
-    const _onPointerUpOriginal = onPointerUp;
-    onPointerUp = function(e) {
-      if (!isTouchLike(e)) return;
-      const ps = activePointers.get(e.pointerId);
-      if (ps) {
-        const dt = now() - ps.startTime;
-        const moveSq = distanceSq(ps.startX, ps.startY, ps.x, ps.y);
-        recordQuickUp(ps.x, ps.y, dt, moveSq);
-      }
-
-      // Pre-emptively detect two-finger tap/double-tap BEFORE original handler (so we can suppress single-tap moves)
-      if (recentQuickUps.length >= 2) {
-        const a = recentQuickUps[recentQuickUps.length - 1];
-        const b = recentQuickUps[recentQuickUps.length - 2];
-        const timeDiff = Math.abs(a.t - b.t);
-        if (timeDiff < config.twoFingerTapMaxTimeMs) {
-          const cx = (a.x + b.x) / 2;
-          const cy = (a.y + b.y) / 2;
-          const timeSinceLastTwo = now() - lastTwoTapTime;
-          const distTwoSq = distanceSq(cx, cy, lastTwoTapPos.x, lastTwoTapPos.y);
-          if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < twoFingerDoubleTapCenterMaxMovePxSq) {
-            // Double 2-tap: exit building placement mode if placing, otherwise clear selection
-            if (window.buildingSystem && window.buildingSystem.isPlacing) {
-              // Exit building placement mode but keep selection
-              window.buildingSystem.cancelPlacement();
-            } else if (window.player && window.player.clearSelection) {
-              // Clear active selection if not in building placement mode
-              window.player.clearSelection();
-            }
-            // Suppress any ensuing single-tap/lasso start
-            skipNextSingleTap = true;
-            suppressSingleTapUntil = now() + (config.suppressSingleTapAfterTwoFingerMs || 300);
-            lastTwoTapTime = 0;
-            lastTwoTapPos = { x: 0, y: 0 };
-          } else {
-            // Single 2-tap: record center and suppress single-tap briefly so it remains a no-op
-            lastTwoTapTime = now();
-            lastTwoTapPos = { x: cx, y: cy };
-            suppressSingleTapUntil = now() + Math.max(150, config.twoFingerTapMaxTimeMs || 300);
-            skipNextSingleTap = true;
-          }
-          // Consume the quick-ups so we don't double-handle after original
-          recentQuickUps.length = 0;
-        }
-      }
-
-      _onPointerUpOriginal(e);
-    };
 
     function onPointerCancel(e) {
       if (!isTouchLike(e)) return;
@@ -890,6 +1061,13 @@
     canvas.addEventListener('pointerup', onPointerUp, { passive: false });
     canvas.addEventListener('pointercancel', onPointerCancel, { passive: false });
     // console.log('📱 Touch event listeners registered');
+
+    // Start momentum application loop
+    function momentumLoop() {
+      applyMomentum();
+      requestAnimationFrame(momentumLoop);
+    }
+    momentumLoop();
 
     touch._initialized = true;
   };

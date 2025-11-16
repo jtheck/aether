@@ -1196,11 +1196,13 @@ let pov2 = 240;
       // Pre-calculate UV coordinates to avoid repeated calculations
       const u1 = tileCol * 0.25 + 0.01;
       const u2 = (tileCol + 1) * 0.25 - 0.01;
-      const v1 = tileRow * 0.25 + 0.01;
-      const v2 = (tileRow + 1) * 0.25 - 0.01;
+      // Flip V coordinates (V=0 is at top in UV space)
+      const v1 = (3 - tileRow) * 0.25 + 0.01;
+      const v2 = (3 - tileRow + 1) * 0.25 - 0.01;
       
-      // Determine which material to use based on tile type (using lookup table)
-      const materialKey = materialLookup[tile.type];
+      // Determine which material to use based on tile's atlas name
+      // tile.atlasName can be 'atlas-grass' or 'atlas-water'
+      const materialKey = tile.atlasName === 'atlas-water' ? 'water' : 'grass';
       
       // Add to the appropriate mesh
       const data = vertexData[materialKey];
@@ -1381,6 +1383,11 @@ let pov2 = 240;
       // console.log('🌅 Horizon line created - enhances sense of vast distance');
       // console.log('🌄 Simple mountains created successfully');
       // console.log(`🌄 Creating subtle low-relief mountains`);
+
+      // In the scene.whenReady callback (around line 1373), re-enable the mountain creation:
+      if (gfx.scene && window.liveField) {
+        gfx.mountains = createSimpleMountains(gfx.scene, window.liveField.width);
+      }
     });
   }
 
@@ -1704,6 +1711,18 @@ let pov2 = 240;
       if (fps < 30) {
         console.log(`⚠️ Performance: ${fps} FPS | Chunks: ${chunks} | LOD models: ${lodCount} | Total meshes: ${meshCount}`);
       }
+    }
+
+    // NEW: Update camera from keyboard/mouse/touch velocity (ESDF, arrows, RMB pan)
+    if (typeof ui !== 'undefined' && ui.updateCameraFromVelocity) {
+      ui.updateCameraFromVelocity();
+    }
+
+    // SAFETY: Validate active camera
+    if (gfx.scene.activeCamera) {
+      gfx.scene.render();
+    } else {
+      console.warn('No active camera, skipping render');
     }
   }
 
@@ -2617,7 +2636,14 @@ let pov2 = 240;
     
     // Create a horizon plane to show the distant mountains meeting the sky
     // This creates visual reference for the vast distance below
-    createHorizon(scene, fieldCenterX, fieldCenterZ, mountainSize);
+    const horizon = createHorizon(scene, fieldCenterX, fieldCenterZ, mountainSize);
+    if (horizon) {
+      horizon.parent = mountainGround;
+      // Optional: Make horizon receive shadows if shadowGenerator exists
+      if (window.gfx && window.gfx.shadowGenerator) {
+        window.gfx.shadowGenerator.addShadowCaster(horizon, false);
+      }
+    }
     
     return mountainGround;
   }

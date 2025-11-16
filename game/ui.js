@@ -1182,183 +1182,283 @@ function getRandomColor() {
 
 
   ui.keyInput = function(evt) {
-    // let assignedFunction = activeKeyboardConfig[evt.code];
     let state = evt.type == 'keydown' ? true : false;
-  
-    // // cancel on input typing
-    // var activeElement = document.activeElement;
-    // var inputs = ['input', 'select', 'button', 'textarea'];
-    // if (activeElement && inputs.indexOf(activeElement.tagName.toLowerCase()) !== -1) {
-    //     return false;
-    // }
-  
-    // if (typeof assignedFunction !== 'undefined'){
-    //   ui.registerKeyboardInput(assignedFunction, state);
-    // } else {
-    //   // console.log(evt.code)
-    
-    // }
-  
-    switch(evt.code){  
-      case 'KeyS':
-        if (state == true){
-          // Move player physics body left
-          if (window.player && window.player.pbody) {
-            window.player.pbody.state.loc.x -= 1;
-          }
-        }
-      break;
-      case 'KeyF':
-        if (state == true){
-          // Move player physics body right
-          if (window.player && window.player.pbody) {
-            window.player.pbody.state.loc.x += 1;
-          }
-        }
-      break;
-      case 'KeyE':
-        if (state == true){
-          // Apply forward impulse
-          if (window.player && window.player.pbody && window.player.pbody.imp) {
-            window.player.pbody.imp.z += 1000; // MAXIMUM POWER!
-            // console.log("Applied forward impulse, new imp.z:", window.player.pbody.imp.z);
-          }
-        }
-      break;
-      case 'KeyD':
-        if (state == true){
-          // Apply backward impulse
-          if (window.player && window.player.pbody && window.player.pbody.imp) {
-            window.player.pbody.imp.z -= 1000; // MAXIMUM POWER!
-            // console.log("Applied backward impulse, new imp.z:", window.player.pbody.imp.z);
-          }
-        }
-      break;
-      case 'Escape':
-        if (state == true){
-          // Check if we're in building placement mode
-          if (window.buildingSystem && window.buildingSystem.isPlacing) {
-            window.buildingSystem.cancelPlacement();
-          } else if (document.getElementById('menu').style.display == 'none'){
-            ui.showMenu(prevMenu);
-          } else {
-            ui.hideMenu();
-          }
-        }
-      break;
-      case 'F9':
-        // scene explorer
-        if (state == true){
-          if (gfx.scene.debugLayer.isVisible())
-            gfx.scene.debugLayer.hide();
-          else
-            gfx.scene.debugLayer.show();
-        }       
-      break;
-      
-      // Camera rotation controls
-      case 'KeyQ':
-        if (state == true && gfx.camera) {
-          // Rotate camera left
-          cameraRotationTarget.alpha -= 0.2;
-        }
-      break;
-      case 'KeyE':
-        if (state == true && gfx.camera) {
-          // Rotate camera right
-          cameraRotationTarget.alpha += 0.2;
-        }
-      break;
-      case 'KeyR':
-        if (state == true && gfx.camera) {
-          // Rotate camera up
-          cameraRotationTarget.beta = Math.max(0.1, cameraRotationTarget.beta - 0.2);
-        }
-      break;
-      case 'KeyC':
-        if (state == true && gfx.camera) {
-          // Rotate camera down
-          cameraRotationTarget.beta = Math.min(1.5, cameraRotationTarget.beta + 0.2);
-        }
-      break;
-      case 'KeyV':
-        if (state == true && gfx.camera) {
-          // Reset camera to reasonable viewing angle
-          ui.resetCameraView();
-        }       
-      break;
-      case 'KeyB':
-        if (state == true){
-          // Open building menu - choose between 2D and 3D based on constants
-          if (USE_3D_HUD && window.hud && window.hud.showRadialMenu) {
-            // console.log('🏗️ B key pressed - opening 3D main menu');
-            
-            // Find the closest anchor to current mouse position
-            const anchors = {
-              n: document.getElementById('anchor_n'),
-              s: document.getElementById('anchor_s'),
-              e: document.getElementById('anchor_e'),
-              w: document.getElementById('anchor_w')
-            };
-            
-            // Get anchor positions
-            const anchorPositions = {};
-            for (const [direction, anchor] of Object.entries(anchors)) {
-              if (anchor) {
-                const rect = anchor.getBoundingClientRect();
-                const canvasRect = gfx.canvas.getBoundingClientRect();
-                anchorPositions[direction] = {
-                  x: rect.left + rect.width / 2 - canvasRect.left,
-                  y: rect.top + rect.height / 2 - canvasRect.top
-                };
-              }
-            }
-            
-            // Find closest anchor to current mouse position
-            let minDist = Infinity;
-            let closestAnchor = 's'; // Default to south if no anchors found
-            
-            for (const [direction, pos] of Object.entries(anchorPositions)) {
-              const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
-              if (dist < minDist) {
-                minDist = dist;
-                closestAnchor = direction;
-              }
-            }
-            
-            // Convert direction to anchor name for 3D menu
-            const anchorMap = { n: 'top', s: 'bottom', e: 'right', w: 'left' };
-            const anchorName = anchorMap[closestAnchor] || 'bottom';
-            
-            // Show 3D menu at closest anchor
-            if (anchorPositions[closestAnchor]) {
-              window.hud.showRadialMenu(anchorPositions[closestAnchor].x, anchorPositions[closestAnchor].y, anchorName);
-            }
-          } else if (!USE_3D_HUD) {
-            // Fallback to 2D menu system - trigger anchor click
-            const anchor = document.getElementById('anchor_s'); // Bottom anchor
-            if (anchor) {
-              anchor.click();
-            }
-          } else {
-            // console.warn('🏗️ No menu system available for building menu');
-          }
-        }
-      break;
+    const key = evt.key.toLowerCase();
+
+    // Cancel on input typing
+    const activeElement = document.activeElement;
+    const inputs = ['input', 'select', 'button', 'textarea'];
+    if (activeElement && inputs.indexOf(activeElement.tagName.toLowerCase()) !== -1) {
+      return;
     }
 
-    //   // update key state
-    //   // broadcast keystate change to network
-    //   // if (tr.prevKeyState[key] != tr.self.keyState[key]) {
-    //   //   // console.log(tr.self.keyState)
-    //   //   var payload = makeMessage({type:"action"});
-    //   //   // console.log(payload);
-    //   //   net.send('tr_'+tr.self.world, payload);
-    //   // }
-  
-    //   tr.prevKeyState[key] = tr.self.keyState[key];
-    //   return true;
+    // Initialize key states if not exist
+    if (!ui.keyStates) ui.keyStates = {};
+    if (!ui.prevKeyStates) ui.prevKeyStates = {};
+
+    // Update key state
+    ui.keyStates[key] = state;
+
+    // Camera rotation keys
+    // W and R for left/right rotation (primary)
+    // PageUp and PageDown also rotate left/right
+    if (key === 'w' || key === 'pageup') {
+      if (state == true && gfx.camera) {
+        // Rotate camera left
+        cameraRotationTarget.alpha -= 0.2;
+      }
+    } else if (key === 'r' || key === 'pagedown') {
+      if (state == true && gfx.camera) {
+        // Rotate camera right
+        cameraRotationTarget.alpha += 0.2;
+      }
+    // Q removed from rotation - now used for zoom out
+    // E removed from rotation - now only used for panning forward
+    } else if (key === 'q') {
+      if (state == true && gfx.camera) {
+        // Zoom out (increase radius)
+        const zoomSpeed = 2.0;
+        if (window.cameraVelocity) {
+          window.cameraVelocity.radius += zoomSpeed;
+        }
+      }
+    } else if (key === 't') {
+      if (state == true && gfx.camera) {
+        // Zoom in (decrease radius)
+        const zoomSpeed = -2.0;
+        if (window.cameraVelocity) {
+          window.cameraVelocity.radius += zoomSpeed;
+        }
+      }
+    } else if (key === 'a') {
+      if (state == true && gfx.camera) {
+        // Rotate camera up
+        cameraRotationTarget.beta = Math.max(0.1, cameraRotationTarget.beta - 0.2);
+      }
+    } else if (key === 'z') {
+      if (state == true && gfx.camera) {
+        // Rotate camera down
+        cameraRotationTarget.beta = Math.min(1.5, cameraRotationTarget.beta + 0.2);
+      }
+    } else if (key === 'b') {
+      // console.log('🏗️ B key pressed - opening 3D main menu');
+      // Handle B key logic here...
+    }
+
+    // NEW: ESDF and Arrow key panning (velocity-based, relative to camera angle)
+    if (gfx.camera && gfx.cameraTarget && !ui.isKeyChangingRotation(key)) {
+      // Only pan if not a rotation key (Q/E/A/Z/R)
+      const camera = gfx.camera;
+      const cameraTarget = gfx.cameraTarget;
+      const canvas = gfx.canvas;
+      
+      // Calculate panning direction vectors (same as RMB/touch panning)
+      const toTarget = cameraTarget.position.subtract(camera.position).normalize();
+      const camRight = BABYLON.Vector3.Cross(toTarget, BABYLON.Vector3.Up()).normalize();
+      const camForward = BABYLON.Vector3.Cross(camRight, toTarget).normalize();
+      const groundRight = new BABYLON.Vector3(camRight.x, 0, camRight.z).normalize();
+      const groundForward = new BABYLON.Vector3(camForward.x, 0, camForward.z).normalize();
+
+      // Base pan sensitivity (matches existing touch/RMB)
+      const basePanSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 1.2; // Slightly faster for keyboard
+      const zoomFactor = Math.max(0.3, Math.min(2.0, gfx.camera.radius / 80)); // Adjust sensitivity based on zoom
+      const panSens = basePanSens * zoomFactor;
+
+      // Initialize cameraVelocity if not exists
+      if (!window.cameraVelocity) {
+        window.cameraVelocity = { panX: 0, panZ: 0, radius: 0, alpha: 0 };
+      }
+
+      // ESDF keys (primary movement scheme) - W removed (now used for rotation)
+      if (key === 'e' || key === 's' || key === 'd' || key === 'a' || key === 'f') {
+        // Clear velocity when key is released
+        if (!state) {
+          // Apply friction when releasing movement keys
+          window.cameraVelocity.panX *= 0.8;
+          window.cameraVelocity.panZ *= 0.8;
+          return;
+        }
+
+        // On keydown, add velocity in camera-relative direction
+        let panX = 0, panZ = 0;
+
+        // Map ESDF to directions (E=up, S=left, D=down, F=right - like WASD shifted right)
+        if (key === 'e') { // Up/Forward
+          panZ += 1.0;
+        } else if (key === 's') { // Left (swapped with F)
+          panX += 1.0; // S should be left but currently reversed
+        } else if (key === 'd') { // Down/Back
+          panZ -= 1.0;
+        } else if (key === 'f') { // Right (swapped with S)
+          panX -= 1.0; // F should be right but currently reversed
+        } else if (key === 'a') { // Alternative left
+          panX -= 0.7;
+        }
+
+        // Apply direction vectors and sensitivity
+        const wx = (groundRight.x * panX + groundForward.x * panZ) * panSens;
+        const wz = (groundRight.z * panX + groundForward.z * panZ) * panSens;
+
+        // FIXED: Increased multiplier from 0.016 to 0.5 for much faster response
+        // This matches the direct pixel-to-world conversion speed of RMB/touch panning
+        window.cameraVelocity.panX += wx * 0.5;
+        window.cameraVelocity.panZ += wz * 0.5;
+        
+        // FIXED: Increased max velocity cap from 2.0 to 8.0 for more aggressive movement
+        const maxVel = panSens * 8.0;
+        window.cameraVelocity.panX = Math.max(-maxVel, Math.min(maxVel, window.cameraVelocity.panX));
+        window.cameraVelocity.panZ = Math.max(-maxVel, Math.min(maxVel, window.cameraVelocity.panZ));
+
+      // Arrow keys (secondary movement scheme - same as ESDF but different keys)
+      } else if (key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') {
+        // Clear velocity when key is released
+        if (!state) {
+          window.cameraVelocity.panX *= 0.8;
+          window.cameraVelocity.panZ *= 0.8;
+          return;
+        }
+
+        // On keydown, add velocity
+        let panX = 0, panZ = 0;
+
+        if (key === 'arrowup') {
+          panZ += 1.0;
+        } else if (key === 'arrowdown') {
+          panZ -= 1.0;
+        } else if (key === 'arrowleft') {
+          panX += 1.0; // Left arrow = pan right (swapped)
+        } else if (key === 'arrowright') {
+          panX -= 1.0; // Right arrow = pan left (swapped)
+        }
+
+        // Apply direction vectors and sensitivity (same as ESDF)
+        const wx = (groundRight.x * panX + groundForward.x * panZ) * panSens;
+        const wz = (groundRight.z * panX + groundForward.z * panZ) * panSens;
+
+        // FIXED: Same multiplier increase for arrow keys
+        window.cameraVelocity.panX += wx * 0.5;
+        window.cameraVelocity.panZ += wz * 0.5;
+
+        // FIXED: Same max velocity increase
+        const maxVel = panSens * 8.0;
+        window.cameraVelocity.panX = Math.max(-maxVel, Math.min(maxVel, window.cameraVelocity.panX));
+        window.cameraVelocity.panZ = Math.max(-maxVel, Math.min(maxVel, window.cameraVelocity.panZ));
+      }
+    }
+
+    // Update previous key states for change detection
+    ui.prevKeyStates[key] = state;
   }; // end keyInput
+
+  // NEW: Helper function to check if a key affects camera rotation (prevents pan conflicts)
+  // Note: E and A are excluded because they're used for both rotation AND ESDF panning
+  ui.isKeyChangingRotation = function(key) {
+    const rotationKeys = ['q', 'z', 'r', 'w'];
+    return rotationKeys.includes(key.toLowerCase());
+  };
+
+  // NEW: Update the camera update logic to apply keyboard panning velocity
+  // This should be added to the existing camera update code (likely in the render loop or camera update function)
+  // Find where cameraVelocity is applied (probably in gfx.js render loop or ui camera update)
+  // For now, add this as a standalone function that should be called every frame:
+
+  ui.updateCameraFromVelocity = function() {
+    if (!window.cameraVelocity || !gfx.camera || !gfx.cameraTarget) {
+      return;
+    }
+
+    const target = gfx.cameraTarget.position;
+    const momentumDecay = 0.92; // Friction - keeps movement smooth
+
+    // CONTINUOUS MOVEMENT: Check if movement keys are held and add velocity every frame
+    if (ui.keyStates && gfx.camera && gfx.cameraTarget) {
+      const camera = gfx.camera;
+      const cameraTarget = gfx.cameraTarget;
+      
+      // Calculate panning direction vectors (same as RMB/touch panning)
+      const toTarget = cameraTarget.position.subtract(camera.position).normalize();
+      const camRight = BABYLON.Vector3.Cross(toTarget, BABYLON.Vector3.Up()).normalize();
+      const camForward = BABYLON.Vector3.Cross(camRight, toTarget).normalize();
+      const groundRight = new BABYLON.Vector3(camRight.x, 0, camRight.z).normalize();
+      const groundForward = new BABYLON.Vector3(camForward.x, 0, camForward.z).normalize();
+
+      // Base pan sensitivity
+      const basePanSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 1.2;
+      const zoomFactor = Math.max(0.3, Math.min(2.0, gfx.camera.radius / 80));
+      const panSens = basePanSens * zoomFactor;
+
+      let panX = 0, panZ = 0;
+
+      // Check ESDF keys (W removed - now used for rotation)
+      // ESDF = E=up, S=left, D=down, F=right (like WASD shifted right)
+      if (ui.keyStates['e']) panZ += 1.0; // Up/Forward
+      if (ui.keyStates['s']) panX += 1.0; // Left (swapped with F - reversed)
+      if (ui.keyStates['d']) panZ -= 1.0; // Down/Back
+      if (ui.keyStates['f']) panX -= 1.0; // Right (swapped with S - reversed)
+      if (ui.keyStates['a']) panX -= 0.7; // Alternative left
+
+      // Check arrow keys
+      if (ui.keyStates['arrowup']) panZ += 1.0;
+      if (ui.keyStates['arrowdown']) panZ -= 1.0;
+      if (ui.keyStates['arrowleft']) panX += 1.0; // Left arrow = pan right (swapped)
+      if (ui.keyStates['arrowright']) panX -= 1.0; // Right arrow = pan left (swapped)
+
+      // Apply direction vectors and sensitivity if any keys are pressed
+      if (panX !== 0 || panZ !== 0) {
+        const wx = (groundRight.x * panX + groundForward.x * panZ) * panSens;
+        const wz = (groundRight.z * panX + groundForward.z * panZ) * panSens;
+        
+        window.cameraVelocity.panX += wx * 0.5;
+        window.cameraVelocity.panZ += wz * 0.5;
+        
+        const maxVel = panSens * 8.0;
+        window.cameraVelocity.panX = Math.max(-maxVel, Math.min(maxVel, window.cameraVelocity.panX));
+        window.cameraVelocity.panZ = Math.max(-maxVel, Math.min(maxVel, window.cameraVelocity.panZ));
+      }
+    }
+
+    // Apply velocity to camera target with bounds checking
+    if (Math.abs(window.cameraVelocity.panX) > 0.1 || Math.abs(window.cameraVelocity.panZ) > 0.1) {
+      const newX = target.x + window.cameraVelocity.panX;
+      const newZ = target.z + window.cameraVelocity.panZ;
+      
+      // Apply bounds clamping
+      const tileSize = (window.TILE_SIZE || 4);
+      const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+      const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+      const margin = 2 * tileSize;
+      const minX = margin, minZ = margin;
+      const maxX = Math.max(minX, w - margin);
+      const maxZ = Math.max(minZ, h - margin);
+      
+      // Only apply velocity if it doesn't go out of bounds
+      if (newX >= minX && newX <= maxX) {
+        target.x = newX;
+      } else {
+        window.cameraVelocity.panX = 0; // Stop velocity if hitting bounds
+      }
+      
+      if (newZ >= minZ && newZ <= maxZ) {
+        target.z = newZ;
+      } else {
+        window.cameraVelocity.panZ = 0; // Stop velocity if hitting bounds
+      }
+      
+      // Apply friction to velocity
+      window.cameraVelocity.panX *= momentumDecay;
+      window.cameraVelocity.panZ *= momentumDecay;
+      
+      // Stop when velocity is very low
+      if (Math.abs(window.cameraVelocity.panX) < 0.1) window.cameraVelocity.panX = 0;
+      if (Math.abs(window.cameraVelocity.panZ) < 0.1) window.cameraVelocity.panZ = 0;
+    }
+
+    // Optional: Apply camera rotation target (existing logic)
+    if (cameraRotationTarget && gfx.camera) {
+      gfx.camera.alpha = BABYLON.Scalar.LerpAngle(gfx.camera.alpha, cameraRotationTarget.alpha, 0.1);
+      gfx.camera.beta = BABYLON.Scalar.Lerp(gfx.camera.beta, cameraRotationTarget.beta, 0.1);
+    }
+  };
 
   ui.rightClick = function(e) {
     e.preventDefault();
@@ -2002,11 +2102,43 @@ function getRandomColor() {
       return;
     }
     
-    // Apply momentum-based camera movement for alpha only
-    // Keep alpha target synced to current to remove restoring force; only momentum drives alpha
-    cameraRotationTarget.alpha = gfx.camera.alpha;
-    const alphaDiff = cameraRotationTarget.alpha - gfx.camera.alpha; // zero
-    cameraVelocity.alpha += alphaDiff * cameraRotationSpeed;
+    // CONTINUOUS ROTATION: Check if W/R or PageUp/PageDown are held and rotate continuously
+    if (ui.keyStates) {
+      const rotationSpeed = 0.2; // Same as keydown rotation speed
+      if (ui.keyStates['w'] || ui.keyStates['pageup']) {
+        // Rotate left - directly update camera alpha for immediate response
+        gfx.camera.alpha -= rotationSpeed;
+        cameraRotationTarget.alpha = gfx.camera.alpha; // Sync target
+      } else if (ui.keyStates['r'] || ui.keyStates['pagedown']) {
+        // Rotate right - directly update camera alpha for immediate response
+        gfx.camera.alpha += rotationSpeed;
+        cameraRotationTarget.alpha = gfx.camera.alpha; // Sync target
+      }
+      
+      // CONTINUOUS ZOOM: Check if Q/T are held and zoom continuously
+      const zoomSpeed = 2.0;
+      if (ui.keyStates['q']) {
+        // Zoom out (increase radius)
+        cameraVelocity.radius += zoomSpeed;
+      }
+      if (ui.keyStates['t']) {
+        // Zoom in (decrease radius)
+        cameraVelocity.radius -= zoomSpeed;
+      }
+      
+      if (!ui.keyStates['r'] && !ui.keyStates['w']) {
+        // Apply momentum-based camera movement for alpha only when not rotating
+        // Keep alpha target synced to current to remove restoring force; only momentum drives alpha
+        cameraRotationTarget.alpha = gfx.camera.alpha;
+        const alphaDiff = cameraRotationTarget.alpha - gfx.camera.alpha; // zero
+        cameraVelocity.alpha += alphaDiff * cameraRotationSpeed;
+      }
+    } else {
+      // Apply momentum-based camera movement for alpha only
+      cameraRotationTarget.alpha = gfx.camera.alpha;
+      const alphaDiff = cameraRotationTarget.alpha - gfx.camera.alpha; // zero
+      cameraVelocity.alpha += alphaDiff * cameraRotationSpeed;
+    }
     
     // Handle zoom→beta coupling directly (no momentum conflict)
     const minRadius = gfx.camera.lowerRadiusLimit || 35;

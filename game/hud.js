@@ -2586,6 +2586,17 @@
         } else if (window.gfx.autoInitializeShadows) {
           window.gfx.autoInitializeShadows();
         }
+        
+        // Apply current LOD setting to shadow resolution
+        try {
+          const savedLOD = localStorage.getItem('lodLevel');
+          const lodLevel = savedLOD ? parseInt(savedLOD) : 50;
+          if (window.gfx.shadowGenerator && window.gfx.onLODDistanceUpdate) {
+            window.gfx.onLODDistanceUpdate(lodLevel);
+          }
+        } catch (e) {
+          // Ignore LOD application errors
+        }
       }
       
       // Update all meshes to receive shadows
@@ -2597,10 +2608,10 @@
     // Save preference
     localStorage.setItem('shadowsEnabled', 'true');
     
-    console.log('✅ Shadows enabled');
+    // console.log('✅ Shadows enabled');
     if (window.gfx && window.gfx.shadowGenerator) {
       const casterCount = window.gfx.shadowGenerator.getShadowMap().renderList.length;
-      console.log(`   Shadow generator active with ${casterCount} casters`);
+      // console.log(`   Shadow generator active with ${casterCount} casters`);
     }
   };
   
@@ -2615,7 +2626,7 @@
     }
     
     const isOn = switchElement.dataset.on === 'true';
-    console.log('🎭 Toggling shadows from', isOn ? 'ON' : 'OFF', 'to', isOn ? 'OFF' : 'ON');
+    // console.log('🎭 Toggling shadows from', isOn ? 'ON' : 'OFF', 'to', isOn ? 'OFF' : 'ON');
     
     if (isOn) {
       // Turn shadows off (left position)
@@ -2645,45 +2656,19 @@
         });
       }
       
-      // Save preference
-      localStorage.setItem('shadowsEnabled', 'false');
-      console.log('✅ Shadows disabled');
-    } else {
-      // Turn shadows on (right position)
-      switchElement.style.background = '#4CAF50';
-      handle.style.left = '27px';
-      switchElement.dataset.on = 'true';
-      
-      // Enable shadows
-      window.SHADOWS_ENABLED = true;
-      
-      // Initialize shadow generator if it doesn't exist
-      if (!window.gfx || !window.gfx.shadowGenerator) {
-        if (window.gfx && window.gfx.initializeShadowGenerator) {
-          window.gfx.initializeShadowGenerator();
-        }
+      // Also flush shadow casters from the generator so disabling has a real perf impact
+      if (window.gfx && window.gfx.shadowGenerator && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows(); // With SHADOWS_ENABLED = false, this removes casters
       }
       
-      // Update all meshes to add them to shadows (use non-force for speed)
-      setTimeout(() => {
-        if (window.gfx && window.gfx.shadowGenerator && window.gfx.updateAllMeshShadows) {
-          // Non-force: only adds meshes not already in the list (should be all of them)
-          window.gfx.updateAllMeshShadows(false);
-        }
-        
-        // Safety: ensure mountains are intact after shadow changes
-        if (window.gfx && window.gfx.mountains && window.gfx.mountains.position) {
-          const expectedY = -200; // Mountains should be way below
-          if (Math.abs(window.gfx.mountains.position.y - expectedY) > 10) {
-            console.warn('🏔️ Mountains position corrupted, recreating...');
-            window.gfx.recreateMountains();
-          }
-        }
-      }, 50);
-      
       // Save preference
-      localStorage.setItem('shadowsEnabled', 'true');
-      console.log('✅ Shadows enabled');
+      localStorage.setItem('shadowsEnabled', 'false');
+      // console.log('✅ Shadows disabled');
+    } else {
+      // Delegate to shared enableShadows helper for consistent behavior
+      if (hud.enableShadows) {
+        hud.enableShadows();
+      }
     }
   };
   
@@ -2910,7 +2895,7 @@
     const switchElement = document.getElementById('shadows_switch');
     const handle = document.getElementById('shadows_handle');
     
-    console.log('🎭 Initializing shadows mode. Saved preference:', savedShadows);
+    // console.log('🎭 Initializing shadows mode. Saved preference:', savedShadows);
     
     if (!switchElement || !handle) {
       console.warn('⚠️ Shadow switch elements not found during initialization');
@@ -2926,34 +2911,22 @@
       
       window.SHADOWS_ENABLED = false;
       
-      // Update all meshes to not receive shadows
-      if (window.gfx && window.gfx.updateAllMeshShadows) {
+      // Update all meshes to not receive shadows (only if a generator exists)
+      if (window.gfx && window.gfx.shadowGenerator && window.gfx.updateAllMeshShadows) {
         window.gfx.updateAllMeshShadows();
       }
       
-      console.log('✅ Initialized to shadows OFF');
+      // console.log('✅ Initialized to shadows OFF');
     } else {
       // Default to shadows ON (either saved as 'true' or not set)
-      switchElement.style.background = '#4CAF50';
-      switchElement.dataset.on = 'true';
-      handle.style.left = '27px';
-      
       window.SHADOWS_ENABLED = true;
       
-      // Initialize shadow generator if it doesn't exist
-      if (window.gfx && window.gfx.autoInitializeShadows) {
-        window.gfx.autoInitializeShadows();
+      // Use the shared helper so startup and toggles behave identically
+      if (hud.enableShadows) {
+        hud.enableShadows();
       }
       
-      // Update all meshes to receive shadows
-      if (window.gfx && window.gfx.updateAllMeshShadows) {
-        window.gfx.updateAllMeshShadows();
-      }
-      
-      // Save preference
-      localStorage.setItem('shadowsEnabled', 'true');
-      
-      console.log('✅ Initialized to shadows ON');
+      // console.log('✅ Initialized to shadows ON');
     }
   };
 

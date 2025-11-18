@@ -1065,7 +1065,7 @@ const Lobby = {
     // Join the actual P2P match lobby
     const actualLobbyKey = `${config.lobbyKey}-${lobbyId}`;
     const myId = window.net ? window.net.getStatus().localPlayerId : 'unknown';
-    console.log(`🔗 [${myId}] Switching to match lobby: ${actualLobbyKey}`);
+    // console.log(`🔗 [${myId}] Switching to match lobby: ${actualLobbyKey}`);
     if (window.net.switchLobby) {
       window.net.switchLobby(actualLobbyKey);
     } else {
@@ -1097,7 +1097,7 @@ const Lobby = {
       
       if (status.peers && status.peers.length > 0) {
         // Successfully connected!
-        console.log(`✅ [${myId}] Connected to ${status.peers.length} peer(s)`);
+        // console.log(`✅ [${myId}] Connected to ${status.peers.length} peer(s)`);
         
         // Deduplicate peer IDs (sometimes P2P library returns duplicates)
         const uniquePeers = [...new Set(status.peers)];
@@ -1177,7 +1177,7 @@ const Lobby = {
       }
     }, 15000);
     
-    console.log(`🚪 Joining lobby: ${lobby.name}`);
+    // console.log(`🚪 Joining lobby: ${lobby.name}`);
   },
   
   // Start discovering available lobbies
@@ -2517,8 +2517,8 @@ const Lobby = {
     
     let totalPlayers = 1 + this.connectedPlayers.length;
     
-    console.log(`🎯 Initial player count: ${totalPlayers} (1 local + ${this.connectedPlayers.length} peers)`);
-    console.log(`   Peers:`, this.connectedPlayers.map(p => p.id || p));
+    // console.log(`🎯 Initial player count: ${totalPlayers} (1 local + ${this.connectedPlayers.length} peers)`);
+    // console.log(`   Peers:`, this.connectedPlayers.map(p => p.id || p));
     
     if (totalPlayers < 2) {
       if (gameType === 'adventure') {
@@ -2596,8 +2596,8 @@ const Lobby = {
     // Re-evaluate player counts with up-to-date peer information
     totalPlayers = 1 + this.connectedPlayers.length;
     
-    console.log(`👥 Player count check: localPlayerId="${localPlayerId}", connectedPlayers:`, this.connectedPlayers.map(p => p.id || p));
-    console.log(`   Total: ${totalPlayers}, Max: ${config.maxPlayers}`);
+    // console.log(`👥 Player count check: localPlayerId="${localPlayerId}", connectedPlayers:`, this.connectedPlayers.map(p => p.id || p));
+    // console.log(`   Total: ${totalPlayers}, Max: ${config.maxPlayers}`);
     
     if (totalPlayers < 2) {
       if (gameType === 'adventure') {
@@ -2995,7 +2995,7 @@ const Lobby = {
       // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
       if (window.gameBuildings && window.gameBuildings.length > 0) {
-        console.log(`  - Buildings:`, window.gameBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));
+        // console.log(`  - Buildings:`, window.gameBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));
       }
       
       // Ensure visual meshes are created for all units that were just spawned
@@ -3023,7 +3023,7 @@ const Lobby = {
       // Check opponent units
       const opponents = window.game.players.filter(p => p !== window.player);
       opponents.forEach(opp => {
-        console.log(`👥 Opponent ${opp.name || opp.id} has ${opp.units?.length || 0} units`);
+        // console.log(`👥 Opponent ${opp.name || opp.id} has ${opp.units?.length || 0} units`);
       });
     }
     

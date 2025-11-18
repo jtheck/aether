@@ -39,9 +39,9 @@ Game.prototype.init = function() {
 };
 
 Game.prototype.spawnInitialUnits = function() {
-  console.log('🏘️ Spawning initial game units for all players...');
-  console.log('   window.player.id:', window.player?.id);
-  console.log('   this.players:', this.players.map(p => ({ id: p.id, name: p.name, isLocalPlayer: p === window.player })));
+  // console.log('🏘️ Spawning initial game units for all players...');
+  // console.log('   window.player.id:', window.player?.id);
+  // console.log('   this.players:', this.players.map(p => ({ id: p.id, name: p.name, isLocalPlayer: p === window.player })));
   
   // Spawn villagers and buildings for ALL players (local + opponents)
   if (this.players && this.players.length > 0) {
@@ -52,7 +52,7 @@ Game.prototype.spawnInitialUnits = function() {
       }
       
       const isLocalPlayer = player === window.player;
-      console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y}), ID: ${player.id}`);
+      // console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y}), ID: ${player.id}`);
       
       // Spawn agora building for this player
       if (window.gameBuildings) {

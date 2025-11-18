@@ -34,6 +34,16 @@
     lights.sun.diffuse = new BABYLON.Color3(1, 0.95, 0.8); // Warm sunlight
     lights.sun.specular = new BABYLON.Color3(0.6, 0.55, 0.5); // Moderate warm specular for subtle sun reflections
     
+    // Ensure sun can cast shadows
+    lights.sun.shadowEnabled = true;
+    // Provide a generous shadow range to cover the whole battlefield
+    if (typeof lights.sun.shadowMinZ === 'number') {
+      lights.sun.shadowMinZ = -500;
+    }
+    if (typeof lights.sun.shadowMaxZ === 'number') {
+      lights.sun.shadowMaxZ = 2000;
+    }
+    
     // Ensure light is enabled
     if (lights.sun.setEnabled) {
       lights.sun.setEnabled(true);
@@ -44,8 +54,8 @@
     // The scene ambient color provides sufficient base lighting
     lights.moon = null;
     
-    // Set ambient color for additional base lighting (increased to compensate for no moon)
-    scene.ambientColor = new BABYLON.Color3(0.25, 0.25, 0.3);
+    // Set ambient color for additional base lighting (slightly brighter so ground isn't too dark)
+    scene.ambientColor = new BABYLON.Color3(0.3, 0.3, 0.35);
     
     // Set initial positions
     updateOrbitalPositions();
@@ -61,22 +71,17 @@
     }
   };
 
-  // Set sun to a daytime angle for good shadows without being too dark
+  // Set sun to a strong, angled daytime position for clearly visible shadows
   lighting.setDramaticSunAngle = function() {
-    // Set sun to daytime hours only - avoid early morning/late evening darkness
-    const daytimeTimes = [0.4, 0.45, 0.5, 0.55, 0.6]; // Solid daytime range
-    
-    // DETERMINISTIC: Use field seed instead of Math.random() for multiplayer sync
-    const seed = (window.liveField && window.liveField.seed) || (window.mapSeed) || 12345;
-    const seededIndex = Math.abs(seed) % daytimeTimes.length;
-    const selectedTime = daytimeTimes[seededIndex];
-    
+    // Use a fixed, slightly off‑noon angle so shadows are clearly visible
+    // without the sun feeling extremely low on the horizon.
+    const selectedTime = 0.4; // Firm mid‑morning angle
     lighting.setSunTime(selectedTime);
-    // console.log(`🌅 Set daytime sun angle at time: ${selectedTime.toFixed(2)} (seed: ${seed}, index: ${seededIndex})`);
+    // console.log(`🌅 Set daytime sun angle at fixed time: ${selectedTime.toFixed(2)}`);
   };
   
   // Update orbital positions based on time of day
-  function updateOrbitalPositions() {
+  function updateOrbitalPositions(cameraPosition) {
     if (!lights.sun) return;
     
     // Ensure light is enabled
@@ -93,8 +98,16 @@
     const sunY = Math.sin(sunAngle) * config.orbitHeight;
     const sunZ = Math.sin(sunAngle) * config.orbitRadius * config.orbitTilt; // Use sin for Z to create proper orbital path
     
-    // Sun direction: from imaginary orbital position pointing toward center (0,0,0)
-    // Add slight offset to create more interesting shadow angles (northern hemisphere effect)
+    // CRITICAL: Set the light's position - center it over the camera view for shadows
+    // This makes shadows follow the player around the battlefield
+    const shadowCenter = cameraPosition || new BABYLON.Vector3(0, 0, 0);
+    lights.sun.position = new BABYLON.Vector3(
+      shadowCenter.x + sunX,
+      shadowCenter.y + sunY,
+      shadowCenter.z + sunZ
+    );
+    
+    // Sun direction: from imaginary orbital position pointing toward the shadow center
     const sunDirection = new BABYLON.Vector3(-sunX, -sunY, -sunZ).normalize();
     
     // Add a subtle bias to the sun direction for more interesting shadows
@@ -170,7 +183,7 @@
   }
   
   // Update the lighting system (call from main loop)
-  lighting.update = function(deltaTime) {
+  lighting.update = function(deltaTime, cameraPosition) {
     if (config.autoAdvance) {
       const currentTime = Date.now();
       
@@ -178,14 +191,17 @@
       if (currentTime - lastLightingUpdate >= config.updateInterval) {
         config.timeOfDay += config.cycleSpeed * deltaTime;
         if (config.timeOfDay > 1) config.timeOfDay -= 1; // Wrap around
-        updateOrbitalPositions(); // Only update when time is actually advancing
+        updateOrbitalPositions(cameraPosition); // Only update when time is actually advancing
         lastLightingUpdate = currentTime;
         
         // Debug: log when lighting updates
         console.log(`🌅 Lighting updated - Time of day: ${config.timeOfDay.toFixed(3)}`);
       }
     }
-    // Don't call updateOrbitalPositions() every frame when autoAdvance is false
+    // Update shadow camera position every frame if camera moved
+    if (cameraPosition && window.SHADOWS_ENABLED) {
+      updateOrbitalPositions(cameraPosition);
+    }
   };
   
   // Get current time info
@@ -260,7 +276,7 @@
     // Update positions to ensure everything is correct
     updateOrbitalPositions();
     
-    console.log('✅ Lighting restored - sun enabled:', lights.sun.enabled, 'intensity:', lights.sun.intensity, 'specular:', lights.sun.specular);
+    // console.log('✅ Lighting restored - sun enabled:', lights.sun.enabled, 'intensity:', lights.sun.intensity, 'specular:', lights.sun.specular);
     return true;
   };
   

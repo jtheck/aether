@@ -706,6 +706,25 @@
     executeBuildCommand(cmd) {
       if (!window.placeBuilding) return;
       
+      // Get player and check/deduct resources
+      const player = this.getPlayerById(cmd.playerId);
+      if (!player) {
+        console.warn(`⚠️ Build command from unknown player: ${cmd.playerId}`);
+        return;
+      }
+      
+      const cost = this.getBuildingCost(cmd.buildingType);
+      
+      // Check if player can afford it
+      if (!this.canAfford(player, cost)) {
+        console.log(`❌ ${player.name || player.id} cannot afford ${cmd.buildingType}`);
+        return;
+      }
+      
+      // Deduct resources BEFORE placing building
+      this.deductResources(player, cost);
+      console.log(`💰 ${player.name || player.id} built ${cmd.buildingType} (-${cost.wood || 0} wood, -${cost.stone || 0} stone)`);
+      
       // Place building using the existing placeBuilding function
       const building = window.placeBuilding(cmd.buildingType, cmd.gridX, cmd.gridZ, window.gfx.scene);
       
@@ -1065,7 +1084,8 @@
       return this.localPlayerId === this.hostId;
     }
     
-    // Update AI players (runs full AI logic including building)
+    // Update AI players (runs full AI logic including building decisions)
+    // NOTE: Works for both local AI opponents and true multiplayer with AI
     updateAIPlayers() {
       // Find all AI players
       const aiPlayers = this.players.filter(p => {
@@ -1689,7 +1709,21 @@
     }
     
     getPlayerById(id) {
-      return this.players.find(p => (p.id || p) === id);
+      if (!id) return null;
+      
+      // Normalize both IDs to last 6 chars for comparison
+      const normalizeId = (playerId) => {
+        if (!playerId) return '';
+        const idStr = typeof playerId === 'string' ? playerId : playerId.toString();
+        return idStr.length > 6 ? idStr.slice(-6) : idStr;
+      };
+      
+      const normalizedSearchId = normalizeId(id);
+      
+      return this.players.find(p => {
+        const playerId = p.id || p;
+        return normalizeId(playerId) === normalizedSearchId;
+      });
     }
     
     canAfford(player, cost) {
@@ -1707,27 +1741,21 @@
     }
     
     getBuildingCost(type) {
-      const costs = {
-        'agora': { wood: 100, stone: 50 },
-        'barracks': { wood: 150, stone: 75 },
-        'archery_range': { wood: 125, stone: 60 },
-        'stable': { wood: 175, stone: 100 },
-        'blacksmith': { wood: 125, stone: 125 },
-        'monastery': { wood: 175, stone: 175, magic: 50 },
-        'wonder': { wood: 1000, stone: 1000, magic: 500 }
-      };
-      return costs[type] || { wood: 50, stone: 25 };
+      // Single source of truth: read from BuildingTypes
+      if (window.BuildingTypes && window.BuildingTypes[type]) {
+        return window.BuildingTypes[type].cost || {};
+      }
+      // Fallback for unknown types
+      return { wood: 50, stone: 25 };
     }
     
     getUnitCost(type) {
-      const costs = {
-        'villager': { food: 50 },
-        'warrior': { food: 60, wood: 20 },
-        'archer': { food: 40, wood: 35 },
-        'cavalry': { food: 80, wood: 40 },
-        'mage': { food: 60, magic: 50 }
-      };
-      return costs[type] || { food: 50 };
+      // Single source of truth: read from UnitTypes
+      if (window.UnitTypes && window.UnitTypes[type]) {
+        return window.UnitTypes[type].cost || {};
+      }
+      // Fallback for unknown types
+      return { food: 50 };
     }
     
     // Hook into game systems

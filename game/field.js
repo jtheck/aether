@@ -883,10 +883,10 @@ Field.prototype.getTile = function(x, y) {
       
       const baseHeight = terrainHeights[terrain] || 0;
       
-      // Add rolling hills using multiple noise layers (gentler relief)
-      const hill1 = this.getNoiseVariation(x, y, 1.0) * 0.4;  // Large rolling hills
-      const hill2 = this.getNoiseVariation(x * 2, y * 2, 0.5) * 0.2; // Medium hills
-      const detail = this.getNoiseVariation(x * 4, y * 4, 0.25) * 0.1; // Fine detail
+      // Add rolling hills using multiple noise layers (smoother, gentler relief)
+      const hill1 = this.getNoiseVariation(x * 0.5, y * 0.5, 1.0) * 0.5;  // Large smooth rolling hills
+      const hill2 = this.getNoiseVariation(x, y, 0.5) * 0.15; // Medium hills
+      const detail = this.getNoiseVariation(x * 2, y * 2, 0.25) * 0.05; // Subtle detail (reduced)
       const totalHills = hill1 + hill2 + detail;
       
       // Dirt should be flatter (tamped down) but not completely flat
@@ -910,17 +910,17 @@ Field.prototype.getTile = function(x, y) {
     
     // Fast fractal noise using simple hash as base
     let total = 0;
-    let frequency = 1;
+    let frequency = 0.5; // Start with lower frequency for smoother features
     let amplitude_octave = 1;
     let maxValue = 0;
     
-    // 3 octaves for natural variation
-    for (let i = 0; i < 3; i++) {
+    // 2 octaves for smoother, more rolling variation (reduced from 3)
+    for (let i = 0; i < 2; i++) {
       let hash = this.seed + i * 1000;
       hash = ((hash << 13) ^ hash) >>> 0;
       hash = ((hash * (hash * hash * 15731 + 789221) + 1376312589) & 0xfffffff) >>> 0;
       
-      // Mix in coordinates with frequency - more variation on X axis, less on Z
+      // Mix in coordinates with frequency - smoother transitions
       hash = ((hash << 13) ^ (hash + Math.floor(x * frequency) * 19349663)) >>> 0;
       hash = ((hash << 13) ^ (hash + Math.floor(y * frequency) * 73856093)) >>> 0;
       
@@ -929,8 +929,8 @@ Field.prototype.getTile = function(x, y) {
       total += noiseValue * amplitude_octave;
       maxValue += amplitude_octave;
       
-      frequency *= 2;
-      amplitude_octave *= 0.5;
+      frequency *= 1.5; // Gentler frequency increase for smoother transitions
+      amplitude_octave *= 0.6; // Less aggressive amplitude reduction
     }
     
     const finalNoise = total / maxValue;

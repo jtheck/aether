@@ -627,10 +627,11 @@ class GatherWorkBehavior extends WorkBehavior {
     addGatheredResources() {
         if (!this.gatheredResourceType || this.gatheredResourceAmount <= 0) return;
         
-        // Add the specific resources this worker gathered
-        if (window.player && window.player.addResource) {
-            window.player.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
-            // console.log(`💰 ${this.unit.name || this.unit.type} delivered ${this.gatheredResourceAmount} ${this.gatheredResourceType} to player`);
+        // Add the specific resources this worker gathered to their owner (not always window.player!)
+        const owner = findPlayerByUnitOwner(this.unit.owner);
+        if (owner && owner.addResource) {
+            owner.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
+            // console.log(`💰 ${this.unit.name || this.unit.type} delivered ${this.gatheredResourceAmount} ${this.gatheredResourceType} to ${owner.name || owner.id}`);
         }
         
         // RESOURCE DEPLETION: Deduct from the resource tile's remaining amount
@@ -1067,6 +1068,33 @@ class WanderBehavior extends Behavior {
     }
 }
 
+
+// Helper to find player by unit owner ID (handles ID normalization)
+function findPlayerByUnitOwner(ownerId) {
+    if (!ownerId) return null;
+    
+    // Try exact match first
+    if (window.player && window.player.id === ownerId) return window.player;
+    
+    // Try normalized match (last 6 chars)
+    const normalizeId = (id) => id?.length > 6 ? id.slice(-6) : id;
+    const normalizedOwnerId = normalizeId(ownerId);
+    
+    if (window.player && normalizeId(window.player.id) === normalizedOwnerId) {
+        return window.player;
+    }
+    
+    // Check match players (includes AI opponents)
+    if (window.currentMatch && window.currentMatch.players) {
+        const owner = window.currentMatch.players.find(p => {
+            const playerId = p.id || p;
+            return normalizeId(playerId) === normalizedOwnerId;
+        });
+        return owner;
+    }
+    
+    return null;
+}
 
 // Behavior manager for units
 class UnitBehaviorManager {

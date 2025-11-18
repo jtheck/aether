@@ -14,7 +14,7 @@
     this.difficulty = options.difficulty || 'normal';
     this.isRemote = !this.isAI;
     
-    console.log(`🤖 AI ${this.name} initialized with resources:`, this.resources);
+    // console.log(`🤖 AI ${this.name} initialized with resources:`, this.resources);
     
     // Spawn position (agora/base location)
     this.agora = options.agora || { x: 85, y: 85 }; // Default to opposite corner from player
@@ -29,7 +29,7 @@
     this.aiStrategy = options.aiStrategy || 'balanced'; // Default to balanced (builds + attacks)
     this.aiTargets = [];
     
-    console.log(`👤 Created opponent ${this.name} (${this.isAI ? 'AI' : 'Remote'}) at (${this.agora.x}, ${this.agora.y}) - Strategy: ${this.aiStrategy}, Difficulty: ${this.difficulty}, Color: ${this.color.primary || this.color}`);
+    // console.log(`👤 Created opponent ${this.name} (${this.isAI ? 'AI' : 'Remote'}) at (${this.agora.x}, ${this.agora.y}) - Strategy: ${this.aiStrategy}, Difficulty: ${this.difficulty}, Color: ${this.color.primary || this.color}`);
   }
   
   // Get resources (mirror player interface)
@@ -122,9 +122,9 @@
     }
   };
   
-  // AI-specific update (single-player only)
+  // AI-specific update (works in both single-player and vs AI matches)
   Opponent.prototype.updateAI = function(deltaTime) {
-    if (!this.isAI || window.isMultiplayer) return;
+    if (!this.isAI) return; // Only skip if NOT an AI player (remote players)
     
     // Simple AI logic
     switch (this.difficulty) {
@@ -370,23 +370,28 @@
     const farmCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'farm').length : 0;
     const villageCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'village').length : 0;
     
+    // Get costs from BuildingTypes
+    const campCost = window.BuildingTypes?.camp?.cost || {wood: 30, stone: 10};
+    const villageCost = window.BuildingTypes?.village?.cost || {wood: 30, stone: 10};
+    const farmCost = window.BuildingTypes?.farm?.cost || {wood: 20, stone: 10};
+    
     // Priority 1: Build camps for resource gathering (need 2-3)
-    if (campCount < 2 && resources.wood >= 30 && resources.stone >= 10) {
+    if (campCount < 2 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
       return {type: 'build', buildingType: 'camp', priority: 'high'};
     }
     
     // Priority 2: Build villages to spawn more villagers (need 1-2)
-    if (villageCount < 1 && buildingCount >= 1 && resources.wood >= 30 && resources.stone >= 10) {
+    if (villageCount < 1 && buildingCount >= 1 && resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
       return {type: 'build', buildingType: 'village', priority: 'high'};
     }
     
     // Priority 3: Build farms for food production (need 2-3)
-    if (farmCount < 2 && buildingCount >= 2 && resources.wood >= 20 && resources.stone >= 10) {
+    if (farmCount < 2 && buildingCount >= 2 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
       return {type: 'build', buildingType: 'farm', priority: 'medium'};
     }
     
     // Priority 4: Build more camps if we have many workers
-    if (campCount < 3 && villagerCount > 8 && resources.wood >= 30 && resources.stone >= 10) {
+    if (campCount < 3 && villagerCount > 8 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
       return {type: 'build', buildingType: 'camp', priority: 'medium'};
     }
     
@@ -403,14 +408,17 @@
   function getMilitaryAction(aiPlayer, aiState, resources, buildingCount, unitCount) {
     const militaryCount = aiPlayer.units.filter(u => u.category === 'military').length;
     
+    // Get costs from BuildingTypes
+    const towerCost = window.BuildingTypes?.tower?.cost || {wood: 20, stone: 80};
+    
     // Build towers for defense
     const towerCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'tower').length : 0;
-    if (towerCount < 1 && buildingCount >= 3 && resources.wood >= 50 && resources.stone >= 40) {
+    if (towerCount < 1 && buildingCount >= 3 && resources.wood >= towerCost.wood && resources.stone >= towerCost.stone) {
       return {type: 'build', buildingType: 'tower', priority: 'high'};
     }
     
     // Build more towers if in defense mode
-    if (aiState.defenseMode && towerCount < 2 && resources.wood >= 50 && resources.stone >= 40) {
+    if (aiState.defenseMode && towerCount < 2 && resources.wood >= towerCost.wood && resources.stone >= towerCost.stone) {
       return {type: 'build', buildingType: 'tower', priority: 'high'};
     }
     
@@ -461,7 +469,7 @@
   // Defend base from attackers
   function defendBase(aiPlayer, militaryUnits) {
     const basePos = aiPlayer.basePosition;
-    if (!basePos) return;
+    if (!basePos || !window.currentMatch) return;
     
     militaryUnits.forEach(unit => {
       if (!unit.pb || !unit.pb.state) return;
@@ -469,10 +477,13 @@
       // Find nearest enemy
       const nearestEnemy = findNearestEnemy(unit, basePos, 40); // Within 40 units
       
-      if (nearestEnemy && window.behaviorManager) {
-        // Move to intercept
-        window.behaviorManager.setBehavior(unit, 'run', {
-          targetPoint: { x: nearestEnemy.pb.state.loc.x, z: nearestEnemy.pb.state.loc.z }
+      if (nearestEnemy) {
+        // Attack nearest enemy
+        window.currentMatch.submitCommand({
+          type: 'attack',
+          playerId: aiPlayer.id,
+          unitIds: [unit.id],
+          targetId: nearestEnemy.id
         });
       } else {
         // Return to base if no enemies nearby
@@ -481,8 +492,11 @@
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance > 20) {
-          window.behaviorManager.setBehavior(unit, 'walk', {
-            targetPoint: { x: basePos.x, z: basePos.z }
+          window.currentMatch.submitCommand({
+            type: 'move',
+            playerId: aiPlayer.id,
+            unitIds: [unit.id],
+            target: { x: basePos.x, y: 0, z: basePos.z }
           });
         }
       }
@@ -491,7 +505,7 @@
   
   // Launch coordinated attack
   function launchAttack(aiPlayer, aiState, militaryUnits) {
-    if (militaryUnits.length < 3) return; // Need minimum force
+    if (militaryUnits.length < 3 || !window.currentMatch) return; // Need minimum force
     
     // Find enemy base or nearest building
     const targetPos = findAttackTarget(aiPlayer);
@@ -501,19 +515,27 @@
     aiState.attackPlanned = true;
     aiState.attackTimer = (window.currentMatch?.tick || 0) + 600; // Attack for 30 seconds
     
-    // Send all military units to attack position
+    // Send all military units to attack position with formation
+    const spacing = 2.5;
+    const unitsPerRow = Math.ceil(Math.sqrt(militaryUnits.length));
+    
     militaryUnits.forEach((unit, index) => {
-      if (!unit.pb || !unit.pb.state || !window.behaviorManager) return;
+      if (!unit.pb || !unit.pb.state) return;
       
-      // Spread units out slightly for better formation
-      const angle = (index / militaryUnits.length) * Math.PI * 2;
-      const offsetX = Math.cos(angle) * 5;
-      const offsetZ = Math.sin(angle) * 5;
+      // Calculate formation offset
+      const row = Math.floor(index / unitsPerRow);
+      const col = index % unitsPerRow;
+      const rowOffset = (row - (Math.ceil(militaryUnits.length / unitsPerRow) - 1) / 2) * spacing;
+      const colOffset = (col - (unitsPerRow - 1) / 2) * spacing;
       
-      window.behaviorManager.setBehavior(unit, 'run', {
-        targetPoint: { 
-          x: targetPos.x + offsetX, 
-          z: targetPos.z + offsetZ 
+      window.currentMatch.submitCommand({
+        type: 'move',
+        playerId: aiPlayer.id,
+        unitIds: [unit.id],
+        target: { 
+          x: targetPos.x + colOffset, 
+          y: 0,
+          z: targetPos.z + rowOffset 
         }
       });
     });
@@ -555,23 +577,26 @@
   // Patrol territory when idle
   function patrolTerritory(aiPlayer, militaryUnits) {
     const basePos = aiPlayer.basePosition;
-    if (!basePos) return;
+    if (!basePos || !window.currentMatch) return;
     
     militaryUnits.forEach((unit, index) => {
-      if (!unit.pb || !unit.pb.state || !window.behaviorManager) return;
+      if (!unit.pb || !unit.pb.state) return;
       
-      // Check if unit already has a behavior
-      const currentBehavior = window.behaviorManager.getBehavior(unit);
+      // Check if unit is idle or already reached destination
+      const currentBehavior = window.behaviorManager?.getBehavior(unit);
       if (currentBehavior && !currentBehavior.isComplete()) return; // Already moving
       
       // Patrol in a circle around base
       const patrolRadius = 25;
-      const angle = ((window.currentMatch?.tick || 0) * 0.01 + index) % (Math.PI * 2);
+      const angle = ((window.currentMatch.tick) * 0.01 + index) % (Math.PI * 2);
       const patrolX = basePos.x + Math.cos(angle) * patrolRadius;
       const patrolZ = basePos.z + Math.sin(angle) * patrolRadius;
       
-      window.behaviorManager.setBehavior(unit, 'walk', {
-        targetPoint: { x: patrolX, z: patrolZ }
+      window.currentMatch.submitCommand({
+        type: 'move',
+        playerId: aiPlayer.id,
+        unitIds: [unit.id],
+        target: { x: patrolX, y: 0, z: patrolZ }
       });
     });
   }
@@ -601,7 +626,9 @@
   
   // Manage worker units (villagers)
   function manageWorkerUnits(aiPlayer, aiState, resources) {
-    const villagers = aiPlayer.units.filter(u => u.type === 'villager');
+    if (!window.currentMatch) return;
+    
+    const villagers = aiPlayer.units.filter(u => u && u.type === 'villager');
     
     villagers.forEach(villager => {
       if (!villager.pb || !villager.pb.state) return;
@@ -610,7 +637,7 @@
       if (villager.assignedBuilding) return;
       
       // Find nearest camp and assign worker
-      const camps = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'camp') : [];
+      const camps = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'camp') : [];
       if (camps.length > 0) {
         // Find camp with fewest workers
         let bestCamp = camps[0];
@@ -624,27 +651,26 @@
           }
         });
         
-        // Assign worker to camp
-        if (minWorkers < 3 && window.behaviorManager) { // Max 3 workers per camp
-          assignWorkerToBuilding(villager, bestCamp);
+        // Assign worker to camp (max 3 workers per camp)
+        if (minWorkers < 3) {
+          // Mark as assigned locally (prevents reassignment spam)
+          if (!bestCamp.assignedWorkers) bestCamp.assignedWorkers = [];
+          bestCamp.assignedWorkers.push(villager);
+          villager.assignedBuilding = bestCamp;
+          
+          // Submit work command through Match system
+          window.currentMatch.submitCommand({
+            type: 'work',
+            playerId: aiPlayer.id,
+            unitIds: [villager.id],
+            buildingId: bestCamp.id
+          });
         }
       }
     });
   }
   
-  // Assign worker to building
-  function assignWorkerToBuilding(worker, building) {
-    if (!building.assignedWorkers) building.assignedWorkers = [];
-    building.assignedWorkers.push(worker);
-    worker.assignedBuilding = building;
-    
-    // Set gather behavior
-    if (window.behaviorManager) {
-      window.behaviorManager.setBehavior(worker, 'gather_work', {
-        building: building
-      });
-    }
-  }
+  // REMOVED: assignWorkerToBuilding - now handled inline in manageWorkerUnits using command system
   
   // Get AI speed based on difficulty
   function getDifficultySpeed(aiPlayer) {
@@ -656,132 +682,86 @@
     }
   }
   
-  // Execute AI action
+  // Execute AI action by submitting commands (uses same system as human players)
   function executeAIAction(aiPlayer, action) {
+    // NEW ARCHITECTURE: Submit commands through Match system instead of direct manipulation
+    // This ensures AI actions go through the same validation and synchronization as human commands
+    
+    if (!window.currentMatch) {
+      console.warn('⚠️ Cannot execute AI action - no active match');
+      return;
+    }
+    
     switch (action.type) {
       case 'build':
         // Find suitable build location near base
         const buildPos = findBuildLocation(aiPlayer);
-        console.log(`🏗️ AI attempting to build ${action.buildingType} at (${buildPos.x}, ${buildPos.z})`);
-        
-        if (!window.placeBuilding) {
-          console.warn(`❌ window.placeBuilding not available!`);
-          break;
-        }
-        if (!window.gfx || !window.gfx.scene) {
-          console.warn(`❌ window.gfx.scene not available!`);
-          break;
-        }
+        console.log(`🏗️ AI submitting build command for ${action.buildingType} at (${buildPos.x}, ${buildPos.z})`);
         
         if (buildPos) {
-          // Actually spawn the building using the building system
-          const building = window.placeBuilding(action.buildingType, buildPos.x, buildPos.z, window.gfx.scene);
-          
-          if (building) {
-            // Set AI ownership
-            building.owner = aiPlayer.id;
-            
-            // Store team color so attached flag meshes can tint correctly
-            if (typeof window.getTeamColorForOwner === 'function') {
-              building.teamColor = window.getTeamColorForOwner(building.owner);
-            }
-            
-            // CRITICAL: Detect resources for camps!
-            if (action.buildingType === 'camp' && window.buildingSystem && window.buildingSystem.checkTileForResources) {
-              const workRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 2;
-              const radiusInTiles = Math.ceil(workRadius * (window.TILE_SIZE || 4));
-              
-              const detectedResources = [];
-              const gridRadius = Math.ceil(radiusInTiles / (window.TILE_SIZE || 4));
-              
-              for (let x = buildPos.x - gridRadius; x <= buildPos.x + gridRadius; x++) {
-                for (let z = buildPos.z - gridRadius; z <= buildPos.z + gridRadius; z++) {
-                  const worldX = x * (window.TILE_SIZE || 4);
-                  const worldZ = z * (window.TILE_SIZE || 4);
-                  const campWorldX = buildPos.x * (window.TILE_SIZE || 4);
-                  const campWorldZ = buildPos.z * (window.TILE_SIZE || 4);
-                  const distance = Math.sqrt(
-                    Math.pow(worldX - campWorldX, 2) + 
-                    Math.pow(worldZ - campWorldZ, 2)
-                  );
-                  
-                  if (distance <= radiusInTiles) {
-                    const resourceInfo = window.buildingSystem.checkTileForResources(x, z);
-                    if (resourceInfo) {
-                      detectedResources.push({
-                        gridX: x,
-                        gridZ: z,
-                        worldX: worldX,
-                        worldZ: worldZ,
-                        type: resourceInfo.type,
-                        amount: resourceInfo.amount
-                      });
-                    }
-                  }
-                }
-              }
-              
-              if (detectedResources.length > 0) {
-                // CRITICAL: Sort resources for deterministic order in P2P
-                detectedResources.sort((a, b) => {
-                  if (a.gridX !== b.gridX) return a.gridX - b.gridX;
-                  return a.gridZ - b.gridZ;
-                });
-                building.availableResources = detectedResources;
-                console.log(`🤖 AI camp detected ${detectedResources.length} resource tiles`);
-              } else {
-                console.warn(`⚠️ AI camp at (${buildPos.x}, ${buildPos.z}) found NO resources!`);
-              }
-            }
-            
-            // Add to AI's building list
-            if (!aiPlayer.buildings) aiPlayer.buildings = [];
-            aiPlayer.buildings.push(building);
-            
-            // Deduct resources
-            deductResources(aiPlayer, getBuildCost(action.buildingType));
-            
-            console.log(`✅ AI ${aiPlayer.name} built ${action.buildingType} at (${buildPos.x}, ${buildPos.z}), now has ${aiPlayer.buildings.length} buildings`);
-          } else {
-            console.warn(`❌ placeBuilding returned null for ${action.buildingType}`);
-          }
+          // Submit build command through Match system
+          window.currentMatch.submitCommand({
+            type: 'build',
+            playerId: aiPlayer.id,
+            buildingType: action.buildingType,
+            gridX: buildPos.x,
+            gridZ: buildPos.z,
+            rotation: 0
+          });
         }
         break;
       
       case 'train':
-        // Spawn unit at base
-        const spawnPos = aiPlayer.basePosition || {x: 0, y: 0, z: 0};
-        const unit = aiPlayer.addUnit(action.unitType, spawnPos);
-        if (unit) {
-          // Deduct resources
-          deductResources(aiPlayer, getUnitCost(action.unitType));
+        // Find agora or appropriate building to train from
+        const trainingBuilding = aiPlayer.buildings?.find(b => 
+          b && (b.type === 'agora' || b.type === 'village')
+        );
+        
+        if (trainingBuilding) {
+          console.log(`🤖 AI submitting train command for ${action.unitType} at ${trainingBuilding.type}`);
           
-          // Set unit to idle - let auto-work handle it
-          unit.state = 'idle';
+          // Submit train command through Match system
+          window.currentMatch.submitCommand({
+            type: 'train',
+            playerId: aiPlayer.id,
+            buildingId: trainingBuilding.id,
+            unitType: action.unitType
+          });
         }
         break;
       
       case 'gather':
-        // Send villager to nearest resource
+        // Find villager and nearest resource
+        const villager = aiPlayer.units.find(u => u && u.type === 'villager' && u.state === 'idle');
         const nearestResource = findNearestResource(aiPlayer);
-        if (nearestResource) {
-          const villager = aiPlayer.units.find(u => u.type === 'villager' && u.state === 'idle');
-          if (villager) {
-            window.resources.gather(villager, nearestResource);
-          }
+        
+        if (villager && nearestResource) {
+          // Submit gather command through Match system
+          window.currentMatch.submitCommand({
+            type: 'gather',
+            playerId: aiPlayer.id,
+            unitIds: [villager.id],
+            resourceId: nearestResource.id
+          });
         }
         break;
       
       case 'attack':
-        // Aggressive attack
+        // Find military units and target
+        const attackers = aiPlayer.units.filter(u => 
+          u && u.category === 'military' && u.state === 'idle'
+        );
         const attackTarget = findWeakestEnemyUnit();
-        aiPlayer.units
-          .filter(u => u.category === 'military' && u.state === 'idle')
-          .forEach(unit => {
-            if (attackTarget) {
-              window.combat.attack(unit, attackTarget);
-            }
+        
+        if (attackers.length > 0 && attackTarget) {
+          // Submit attack command through Match system
+          window.currentMatch.submitCommand({
+            type: 'attack',
+            playerId: aiPlayer.id,
+            unitIds: attackers.map(u => u.id),
+            targetId: attackTarget.id
           });
+        }
         break;
     }
   };
@@ -876,22 +856,8 @@
     });
   };
   
-  function getUnitCost(unitType) {
-    const def = window.UnitTypes[unitType];
-    return def ? def.cost : {food: 25};
-  };
-  
-  function getBuildCost(buildingType) {
-    // Define building costs (matches BuildingTypes in buildings.js)
-    const costs = {
-      camp: {wood: 30, stone: 10},
-      village: {wood: 30, stone: 10},
-      farm: {wood: 20, stone: 10},
-      tower: {wood: 50, stone: 40},
-      agora: {wood: 50, stone: 100}
-    };
-    return costs[buildingType] || {wood: 30, stone: 10};
-  };
+  // REMOVED: Duplicate cost functions - now read from BuildingTypes/UnitTypes as single source of truth
+  // Cost checking happens in match.js executeBuildCommand/executeTrainCommand
   
   // ==================== REMOTE PLAYER IMPLEMENTATION ====================
   

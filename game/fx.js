@@ -478,7 +478,7 @@
         
         // Final fallback - skip if no suitable anchor found
         if (!anchorMesh) {
-          console.warn(`❌ No particle anchor found for ${building.name || 'building'}`);
+          // console.warn(`❌ No particle anchor found for ${building.name || 'building'}`);
           return null;
         }
       }

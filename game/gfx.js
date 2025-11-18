@@ -1519,10 +1519,55 @@ let pov2 = 240;
         // Apply vertex data first
         vertexDataObj.applyToMesh(meshes[key]);
         
-        // Compute normals more efficiently
+        // Compute normals
         const normals = new Array(data.verts.length);
         BABYLON.VertexData.ComputeNormals(data.verts, data.indices, normals);
         meshes[key].setVerticesData(BABYLON.VertexBuffer.NormalKind, normals);
+        
+        // OPTIONAL: Smooth normal blending for softer lighting transitions at tile edges
+        // Uncomment the code below to blend flat and smooth normals
+        /*
+        // Compute flat normals first
+        const flatNormals = new Array(data.verts.length);
+        BABYLON.VertexData.ComputeNormals(data.verts, data.indices, flatNormals);
+        
+        // Compute smooth normals by sampling terrain gradient
+        const smoothNormals = [];
+        for (let i = 0; i < data.verts.length; i += 3) {
+          const x = data.verts[i];
+          const z = data.verts[i + 2];
+          
+          // Sample terrain height around this vertex to get smooth normal
+          const sampleDist = 0.5; // Distance to sample for gradient
+          const heightL = chunk.field ? chunk.field.getHeightVariation(x / tileSize - sampleDist, z / tileSize) : 0;
+          const heightR = chunk.field ? chunk.field.getHeightVariation(x / tileSize + sampleDist, z / tileSize) : 0;
+          const heightD = chunk.field ? chunk.field.getHeightVariation(x / tileSize, z / tileSize - sampleDist) : 0;
+          const heightU = chunk.field ? chunk.field.getHeightVariation(x / tileSize, z / tileSize + sampleDist) : 0;
+          
+          // Calculate normal from height gradient
+          const dx = heightL - heightR;
+          const dz = heightD - heightU;
+          const length = Math.sqrt(dx * dx + 1 + dz * dz);
+          
+          // Normalized smooth normal
+          smoothNormals.push(dx / length, 1 / length, dz / length);
+        }
+        
+        // Blend between flat and smooth normals (just a touch of smoothing at edges)
+        const blendFactor = 0.12; // Adjust this: 0=completely flat, 1=completely smooth
+        const blendedNormals = [];
+        for (let i = 0; i < flatNormals.length; i += 3) {
+          const nx = flatNormals[i] * (1 - blendFactor) + smoothNormals[i] * blendFactor;
+          const ny = flatNormals[i + 1] * (1 - blendFactor) + smoothNormals[i + 1] * blendFactor;
+          const nz = flatNormals[i + 2] * (1 - blendFactor) + smoothNormals[i + 2] * blendFactor;
+          
+          // Re-normalize the blended normal
+          const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+          blendedNormals.push(nx / length, ny / length, nz / length);
+        }
+        
+        meshes[key].setVerticesData(BABYLON.VertexBuffer.NormalKind, blendedNormals);
+        */
         
         // Assign material (pre-created shared materials)
         // Ensure material exists before assigning to prevent undefined material errors
@@ -1563,6 +1608,8 @@ let pov2 = 240;
     gfx.canvas = document.getElementById('canvas');
     gfx.engine = new BABYLON.Engine(gfx.canvas, false, engineOptions, false);
     gfx.scene = new BABYLON.Scene(gfx.engine);
+    // Ensure shadows are globally allowed on the scene
+    gfx.scene.shadowsEnabled = true;
     
     // Initialize loading LOD system - use saved setting for menu
     // Menu scene is your calibration scene - what you see is what you get in-game!
@@ -1966,9 +2013,10 @@ let pov2 = 240;
       gfx.shadowPerformanceMonitor.update();
     }
     
-    // Update lighting system (only when autoAdvance is enabled)
+    // Update lighting system - pass camera position for shadow frustum following
     if (window.lighting && window.lighting.update) {
-      window.lighting.update(0.016); // ~60fps deltaTime
+      const cameraPos = gfx.cameraTarget ? gfx.cameraTarget.position : null;
+      window.lighting.update(0.016, cameraPos); // ~60fps deltaTime + camera position
     } else {
       // Debug: check if lighting system is available
       if (!window.lighting) {
@@ -2046,9 +2094,10 @@ let pov2 = 240;
       const chunks = window.liveField ? window.liveField.chunks.size : 0;
       const lodCount = lodModels.length;
       const meshCount = gfx.scene.meshes.length;
-      if (fps < 30) {
-        console.log(`⚠️ Performance: ${fps} FPS | Chunks: ${chunks} | LOD models: ${lodCount} | Total meshes: ${meshCount}`);
-      }
+      // Performance warning removed - only show errors
+      // if (fps < 30) {
+      //   console.log(`⚠️ Performance: ${fps} FPS | Chunks: ${chunks} | LOD models: ${lodCount} | Total meshes: ${meshCount}`);
+      // }
     }
 
     // NEW: Update camera from keyboard/mouse/touch velocity (ESDF, arrows, RMB pan)
@@ -2088,12 +2137,12 @@ let pov2 = 240;
     if (window.lighting) {
       lighting.init(scene);
       
-      // Set up daytime lighting (good shadows but always bright)
+      // Set up daytime lighting (good shadows without over-darkening the ground)
       lighting.configure({
         autoAdvance: false,  // No automatic movement
-        orbitRadius: 200,
-        orbitHeight: 100,
-        orbitTilt: 0.25  // Lower tilt to keep sun higher in sky
+        orbitRadius: 220,
+        orbitHeight: 90,   // Moderate height - keeps shadows defined without being too low
+        orbitTilt: 0.3     // Balanced tilt for a clear lateral angle
       });
       // Generate random sun position in solid daytime range
       const minTime = 0.4;   // Mid-morning
@@ -2115,7 +2164,7 @@ let pov2 = 240;
         if (gfx.autoInitializeShadows) {
           gfx.autoInitializeShadows();
         }
-        // Ensure lighting is still enabled after shadow initialization
+      // Ensure lighting is still enabled after shadow initialization
         if (lighting.restoreLighting) {
           lighting.restoreLighting();
         }
@@ -2138,6 +2187,16 @@ let pov2 = 240;
       }
     }
 
+    // Respect saved shadow preference as early as possible
+    // Default to ON unless explicitly disabled by the user
+    try {
+      const savedShadows = localStorage.getItem('shadowsEnabled');
+      window.SHADOWS_ENABLED = savedShadows === 'false' ? false : true;
+    } catch (e) {
+      // Fallback if localStorage is unavailable
+      window.SHADOWS_ENABLED = true;
+    }
+
     // Create table first
     gfx.table = gfx.makeTable(scene);
     
@@ -2149,19 +2208,16 @@ let pov2 = 240;
       // console.log('📐 Pre-positioning table for clean initial render');
     }
     
-  // Store shadow state globally - enable shadows by default
-  window.SHADOWS_ENABLED = true;
-  
   // Scene stability tracking
   gfx.sceneStability = {
     isStable: false,
     stabilityCheckInterval: 1000, // Check every 1 second
     lastStabilityCheck: 0,
     consecutiveStableFrames: 0,
-    requiredStableFrames: 10, // Need 10 consecutive stable frames
+    requiredStableFrames: 3, // Need a few consecutive stable checks
     lastMeshCount: 0,
     lastFrameTime: 0,
-    stabilityThreshold: 16.67 // 60fps = 16.67ms per frame
+    stabilityThreshold: 16.67 // Kept for backwards compatibility (no longer used)
   };
   
   // Shadow LoD configuration - increased by 50% for better visibility
@@ -2184,19 +2240,26 @@ let pov2 = 240;
         // console.log('Initializing shadow generator with sun light:', sunLight.name);
         
         try {
-          gfx.shadowGenerator = new BABYLON.ShadowGenerator(1024, sunLight);
-          gfx.shadowGenerator.useBlurExponentialShadowMap = false; // Disable blur
-          gfx.shadowGenerator.usePoissonSampling = true; // Poisson sampling (most stable)
-          gfx.shadowGenerator.darkness = 0.6; // Lighter shadows, less harsh
-          gfx.shadowGenerator.setTransparencyShadow(false); // Disable transparency for better performance
-          gfx.shadowGenerator.bias = 0.0001; // Slightly higher to reduce artifacts
-          gfx.shadowGenerator.normalBias = 0.05; // Higher to reduce edge artifacts
-          gfx.shadowGenerator.depthScale = 25; // Lower for softer depth transitions
-          gfx.shadowGenerator.filter = BABYLON.ShadowGenerator.FILTER_POISSON; // Explicit filter mode
-          
-          // Set near and far planes for shadow rendering
-          gfx.shadowGenerator.minDistance = 0.1;
-          gfx.shadowGenerator.maxDistance = 1500; // Increased by 50% for better visibility
+          // Pick initial shadow resolution based on saved LOD (or default 50)
+          let initialLOD = 50;
+          try {
+            const savedLOD = localStorage.getItem('lodLevel');
+            if (savedLOD) {
+              const parsed = parseInt(savedLOD);
+              if (!Number.isNaN(parsed)) {
+                initialLOD = parsed;
+              }
+            }
+          } catch (e) {
+            // Ignore LOD lookup errors and fall back to default
+          }
+          const initialShadowRes = gfx.getShadowResolutionForLOD
+            ? gfx.getShadowResolutionForLOD(initialLOD)
+            : 1024;
+
+          gfx.shadowGenerator = new BABYLON.ShadowGenerator(initialShadowRes, sunLight);
+          // Apply centralized quality settings so visuals match reconfigureShadowGenerator
+          gfx.configureShadowGeneratorSettings(gfx.shadowGenerator);
           
           // Set up automatic shadow updates for new meshes
           gfx.scene.onNewMeshAddedObservable.add(gfx.autoUpdateShadows);
@@ -2218,8 +2281,12 @@ let pov2 = 240;
     // Check if scene is stable for shadow initialization
     gfx.checkSceneStability = function() {
       const currentTime = Date.now();
-      const currentFrameTime = currentTime - gfx.sceneStability.lastFrameTime;
-      gfx.sceneStability.lastFrameTime = currentTime;
+      
+      // If we've already marked the scene as stable (e.g. via forceInitializeShadows),
+      // trust that and return true immediately.
+      if (gfx.sceneStability.isStable) {
+        return true;
+      }
       
       // Check if enough time has passed since last check
       if (currentTime - gfx.sceneStability.lastStabilityCheck < gfx.sceneStability.stabilityCheckInterval) {
@@ -2245,13 +2312,15 @@ let pov2 = 240;
       const meshCountChanged = currentMeshCount !== gfx.sceneStability.lastMeshCount;
       gfx.sceneStability.lastMeshCount = currentMeshCount;
       
-      // Check if frame rate is stable (not dropping below threshold)
-      const frameRateStable = currentFrameTime <= gfx.sceneStability.stabilityThreshold;
-      
       // Check if lighting system is ready
       const lightingReady = window.lighting && window.lighting.lights && window.lighting.lights.sun;
       
-      if (meshCountChanged || !frameRateStable || !lightingReady) {
+      if (!lightingReady) {
+        gfx.sceneStability.consecutiveStableFrames = 0;
+        return false;
+      }
+      
+      if (meshCountChanged) {
         gfx.sceneStability.consecutiveStableFrames = 0;
         return false;
       }
@@ -2273,13 +2342,13 @@ let pov2 = 240;
     gfx.autoInitializeShadows = function() {
       // Check if shadows are enabled
       if (!window.SHADOWS_ENABLED) {
-        console.log('⚠️ Shadows disabled, skipping initialization');
+        // console.log('⚠️ Shadows disabled, skipping initialization');
         return;
       }
 
       // Check if shadow generator already exists
       if (gfx.shadowGenerator) {
-        console.log('✅ Shadow generator already exists');
+        // console.log('✅ Shadow generator already exists');
         // Still update meshes in case new ones were added
         if (gfx.updateAllMeshShadows) {
           gfx.updateAllMeshShadows();
@@ -2289,13 +2358,13 @@ let pov2 = 240;
 
       // Check if scene is stable (but don't wait too long)
       if (!gfx.checkSceneStability()) {
-        console.log('⏳ Scene not stable yet, retrying shadow init in 1 second...');
+        // console.log('⏳ Scene not stable yet, retrying shadow init in 1 second...');
         setTimeout(() => gfx.autoInitializeShadows(), 1000);
         return;
       }
 
       // Try to initialize shadows
-      console.log('🎭 Scene is stable! Initializing shadows (scene has', gfx.scene.meshes.length, 'meshes)...');
+      // console.log('🎭 Scene is stable! Initializing shadows (scene has', gfx.scene.meshes.length, 'meshes)...');
       const success = gfx.initializeShadowGenerator();
       
       if (success) {
@@ -2303,18 +2372,18 @@ let pov2 = 240;
         if (gfx.updateAllMeshShadows) {
           gfx.updateAllMeshShadows();
         }
-        console.log('✅ Shadows initialized and applied to', gfx.scene.meshes.length, 'meshes');
-        console.log('   Shadow casters:', gfx.shadowGenerator.getShadowMap().renderList.length);
+        // console.log('✅ Shadows initialized and applied to', gfx.scene.meshes.length, 'meshes');
+        // console.log('   Shadow casters:', gfx.shadowGenerator.getShadowMap().renderList.length);
       } else {
         // Retry after a longer delay
-        console.log('⏳ Shadow initialization failed, retrying in 2 seconds...');
+        // console.log('⏳ Shadow initialization failed, retrying in 2 seconds...');
         setTimeout(() => gfx.autoInitializeShadows(), 2000);
       }
     };
 
     // Force shadow initialization (bypass stability checks)
     gfx.forceInitializeShadows = function() {
-      console.log('🎭 Force initializing shadows...');
+      // console.log('🎭 Force initializing shadows...');
       gfx.sceneStability.isStable = true; // Mark as stable
       gfx.autoInitializeShadows();
     };
@@ -2361,6 +2430,58 @@ let pov2 = 240;
         return 2048; // High-end: sharper shadows
       }
     };
+
+    // Centralized shadow generator quality settings so init/reconfigure stay in sync
+    gfx.configureShadowGeneratorSettings = function(generator) {
+      if (!generator) return;
+      
+      // Core filtering/quality
+      generator.useBlurExponentialShadowMap = false; // No heavy blur
+      generator.usePoissonSampling = true;           // Stable, dithered soft edges
+      generator.usePercentageCloserFiltering = false;
+      generator.filter = BABYLON.ShadowGenerator.FILTER_POISSON;
+      
+      // Visual look:
+      // - Strong darkness so silhouettes are crisp and clearly separated from the ground
+      // - Very low normalBias to keep shadows "attached" at the base of tall objects
+      generator.darkness = 0.65;                    // More visible shadows (lower = darker shadows)
+      generator.bias = 0.00005;                     // Base bias to reduce acne
+      generator.normalBias = 0.002;                 // Very low so tree/rock shadows hug the ground
+      generator.depthScale = 50;                    // Smooth depth transitions
+      
+      // Coverage: wide enough for the whole playfield
+      generator.minDistance = 0.1;
+      generator.maxDistance = 1500;
+      
+      // CRITICAL: Enable automatic depth bounds calculation
+      // This ensures shadows render at the correct distance from the light
+      generator.autoCalcDepthBounds = true;
+      generator.autoCalcDepthBoundsRefreshRate = 1; // Recalculate every frame for dynamic scenes
+      
+      // Additional quality settings
+      generator.forceBackFacesOnly = true; // Render only back faces in shadow map (reduces artifacts)
+      
+      // CRITICAL: Set orthographic shadow camera size to cover the battlefield
+      // This defines the width/height of the area that can cast shadows
+      // Make it large enough to cover a good portion of the visible battlefield
+      // The shadow camera now follows the player, so this is the "shadow window" around them
+      const shadowCoverage = 200; // 400x400 unit area around the camera
+      generator.orthoLeft = -shadowCoverage;
+      generator.orthoRight = shadowCoverage;
+      generator.orthoTop = shadowCoverage;
+      generator.orthoBottom = -shadowCoverage;
+      
+      // Keep transparency casting off for performance
+      generator.setTransparencyShadow(false);
+    };
+    
+    // Handler called when LOD slider changes - reconfigures shadows to match
+    gfx.onLODDistanceUpdate = function(lodLevel) {
+      // Only reconfigure if shadows are enabled
+      if (window.SHADOWS_ENABLED && gfx.shadowGenerator) {
+        gfx.reconfigureShadowGenerator(lodLevel);
+      }
+    };
     
     // Modified reconfigureShadowGenerator - now silent
     gfx.reconfigureShadowGenerator = function(lodLevel) {
@@ -2386,23 +2507,16 @@ let pov2 = 240;
         // Dispose old generator
         gfx.shadowGenerator.dispose();
         
-        // Create new one with updated res and same settings as initializeShadowGenerator
+        // Create new one with updated res and consistent quality settings
         gfx.shadowGenerator = new BABYLON.ShadowGenerator(newRes, window.lighting.lights.sun);
-        gfx.shadowGenerator.useBlurExponentialShadowMap = false; // Disable blur
-        gfx.shadowGenerator.usePoissonSampling = true; // Poisson sampling (most stable)
-        gfx.shadowGenerator.darkness = 0.6; // Lighter shadows, less harsh
-        gfx.shadowGenerator.setTransparencyShadow(false); // Disable transparency for better performance
-        gfx.shadowGenerator.bias = 0.0001; // Slightly higher to reduce artifacts
-        gfx.shadowGenerator.normalBias = 0.05; // Higher to reduce edge artifacts
-        gfx.shadowGenerator.depthScale = 25; // Lower for softer depth transitions
-        gfx.shadowGenerator.filter = BABYLON.ShadowGenerator.FILTER_POISSON; // Explicit filter mode
-        gfx.shadowGenerator.minDistance = 0.1;
-        gfx.shadowGenerator.maxDistance = 1500;
+        gfx.configureShadowGeneratorSettings(gfx.shadowGenerator);
         
         // Re-add all current shadow casters with force
         gfx.updateAllMeshShadows(true); // true = force re-add
         
         gfx.lastLODLevel = lodLevel;
+        
+        console.log(`🎭 Shadows reconfigured for LOD ${lodLevel}: ${newRes}x${newRes} resolution`);
         
         // Low-end profile tip tracking (silent)
         if (lodLevel <= 30 && !gfx.lastLowEndTip) {
@@ -2412,7 +2526,7 @@ let pov2 = 240;
         }
         
       } catch (error) {
-        // Fallback: try to reinitialize (silent)
+        // Fallback: try to reinitialize (silent) with current lighting
         gfx.initializeShadowGenerator();
       }
     };
@@ -2522,10 +2636,10 @@ let pov2 = 240;
       // Log shadow stats for debugging
       if (window.SHADOWS_ENABLED && gfx.shadowGenerator) {
         const totalCasters = gfx.shadowGenerator.getShadowMap().renderList.length;
-        console.log(`🎭 Shadow update: ${shadowCasterCount} new casters, ${receiveShadowCount} receivers, ${totalCasters} total casters`);
+        // console.log(`🎭 Shadow update: ${shadowCasterCount} new casters, ${receiveShadowCount} receivers, ${totalCasters} total casters`);
       } else if (!window.SHADOWS_ENABLED && gfx.shadowGenerator) {
         const totalCasters = gfx.shadowGenerator.getShadowMap().renderList.length;
-        console.log(`🎭 Shadows disabled: removed ${removedCount} meshes, ${totalCasters} casters remaining`);
+        // console.log(`🎭 Shadows disabled: removed ${removedCount} meshes, ${totalCasters} casters remaining`);
       }
     };
 

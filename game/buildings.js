@@ -100,7 +100,7 @@ const BuildingTypes = {
     scale: .4,
     rotation: 0, // No rotation by default
     size: { width: 2, height: 2 },
-    cost: { wood: 30, stone: 10 },
+    cost: { wood: 15, stone: 0 },
     description: "Basic work camp",
     category: "residential",
     // Work assignment properties
@@ -118,7 +118,7 @@ const BuildingTypes = {
     scale: .2,
     rotation: 0, // No rotation by default
     size: { width: 2, height: 2 },
-    cost: { wood: 30, stone: 10 },
+    cost: { wood: 30, stone: 5 },
     description: "Basic housing for villagers",
     category: "residential",
     // Villager spawning properties
@@ -133,7 +133,7 @@ const BuildingTypes = {
     scale: .4,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 20, stone: 10 },
+    cost: { wood: 20, stone: 0 },
     description: "Food production",
     category: "production",
     // Work assignment properties
@@ -150,7 +150,7 @@ const BuildingTypes = {
     scale: .429,
     rotation: 0, // 30 degrees
     size: { width: 2, height: 2 },
-    cost: { stone: 80, wood: 20 },
+    cost: { stone: 40, wood: 20 },
     description: "Defensive structure with long sight range",
     category: "military"
   }
@@ -744,6 +744,33 @@ function assignVillagerToWork(villager, building) {
   return true;
 }
 
+// Helper to find player by owner ID (handles ID normalization)
+function findPlayerByOwnerId(ownerId) {
+  if (!ownerId) return null;
+  
+  // Try exact match first
+  if (window.player && window.player.id === ownerId) return window.player;
+  
+  // Try normalized match (last 6 chars)
+  const normalizeId = (id) => id?.length > 6 ? id.slice(-6) : id;
+  const normalizedOwnerId = normalizeId(ownerId);
+  
+  if (window.player && normalizeId(window.player.id) === normalizedOwnerId) {
+    return window.player;
+  }
+  
+  // Check AI opponents
+  if (window.currentMatch && window.currentMatch.players) {
+    const owner = window.currentMatch.players.find(p => {
+      const playerId = p.id || p;
+      return normalizeId(playerId) === normalizedOwnerId;
+    });
+    return owner;
+  }
+  
+  return null;
+}
+
 // Process work and generate resources
 function processWorkProduction(building) {
   if (!building || !building.needsWorkers || building.assignedWorkers.length === 0) return;
@@ -787,13 +814,14 @@ function processWorkProduction(building) {
       }
       
       if (actualAmount > 0) {
-        // Add resources to player
-        if (window.player && window.player.addResource) {
-          window.player.addResource(resourceType, actualAmount);
+        // Add resources to the building's owner (not always window.player!)
+        const owner = findPlayerByOwnerId(building.owner);
+        if (owner && owner.addResource) {
+          owner.addResource(resourceType, actualAmount);
           if (building.name === 'Farm') {
-            // // console.log(`🌾 Farm produced ${actualAmount} food (${workerCount} farmers, base:${baseAmount}, worker bonus:${(workerCount - 1) * 3})`);
+            // // console.log(`🌾 ${owner.name || owner.id}'s Farm produced ${actualAmount} food (${workerCount} farmers)`);
           } else {
-            // // console.log(`💰 ${building.name} produced ${actualAmount} ${resourceType} (${workerCount} workers)`);
+            // // console.log(`💰 ${owner.name || owner.id}'s ${building.name} produced ${actualAmount} ${resourceType}`);
           }
         }
       }
@@ -1448,9 +1476,9 @@ const buildingSystem = {
     }
     
     // DIAGNOSTIC: Log tile types and resource count (occasionally to avoid spam)
-    if (tilesChecked > 0 && Math.random() < 0.05) {
-      console.log(`🔍 Resource detection at (${gridX}, ${gridZ}): checked ${tilesChecked} tiles, found ${resourceCount} resources. Tile types:`, tileTypesSeen);
-    }
+    // if (tilesChecked > 0 && Math.random() < 0.05) {
+    //   console.log(`🔍 Resource detection at (${gridX}, ${gridZ}): checked ${tilesChecked} tiles, found ${resourceCount} resources. Tile types:`, tileTypesSeen);
+    // }
     
     // Update circle color based on resource density
     this.updateCircleColor(resourceCount);
@@ -1793,7 +1821,7 @@ const buildingSystem = {
       // CRITICAL: Set owner to player for single-player buildings!
       const rawPlayerId = window.player?.id;
       building.owner = rawPlayerId?.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
-      console.log(`🏗️ Single-player building placed, owner set to: "${building.owner}"`);
+      // console.log(`🏗️ Single-player building placed, owner set to: "${building.owner}"`);
       
       // Store team color so attached flag meshes can tint correctly
       if (typeof window.getTeamColorForOwner === 'function') {
@@ -1845,7 +1873,7 @@ const buildingSystem = {
             return a.gridZ - b.gridZ;
           });
           building.availableResources = detectedResources;
-          console.log(`🏗️ Single-player camp detected ${detectedResources.length} resources`);
+          // console.log(`🏗️ Single-player camp detected ${detectedResources.length} resources`);
         } else {
           console.warn(`⚠️ Single-player camp found NO resources!`);
         }

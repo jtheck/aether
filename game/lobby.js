@@ -294,19 +294,8 @@ const Lobby = {
     }
     // console.log('✅ Building system cleared');
     
-    // Clear global playerBuildings array
-    // console.log('🗑️ Clearing playerBuildings array...');
-    if (window.playerBuildings) {
-      window.playerBuildings.forEach(building => {
-        if (building.mesh && building.mesh.dispose) {
-          building.mesh.dispose();
-        }
-      });
-      window.playerBuildings.length = 0;
-    } else {
-      window.playerBuildings = [];
-    }
-    // console.log('✅ Player buildings array cleared');
+    // Note: playerBuildings array no longer exists - all buildings use gameBuildings
+    // (kept comment for historical context)
     
     // console.log('🗑️ Clearing gameBuildings array...');
     if (window.gameBuildings) {
@@ -371,7 +360,8 @@ const Lobby = {
     // Reset scene and ensure clean slate
     this.resetGameState();
     
-    window.isMultiplayer = false;
+    // CRITICAL: Always use multiplayer mode (even vs AI) because it uses the match/command system!
+    window.isMultiplayer = true;
     window.gameType = 'onevsone';
     window.mapSeed = resolvedSeed;
     
@@ -383,10 +373,12 @@ const Lobby = {
       console.log(`♻️ Reusing existing player (id: ${window.player.id || 'not set'})`);
     }
     
-    // Ensure player has correct ID
-    if (!window.player.id || window.player.id === 'undefined') {
-      window.player.id = 'player';
-      console.log('✅ Set player.id to "player"');
+    // CRITICAL: Generate unique player ID for each match (like AI opponents do)
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+      // Generate unique ID similar to AI opponents
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      window.player.id = `local-player-${randomSuffix}`;
+      console.log(`✅ Generated unique player ID: "${window.player.id}"`);
     }
     
     // Reset player state for new match
@@ -411,7 +403,7 @@ const Lobby = {
     const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
     
     // Configure local player identity and spawn
-    const localPlayerId = window.player.id || 'player';
+    const localPlayerId = window.player.id; // CRITICAL: No fallback - ID must be set!
     window.player.id = localPlayerId;
     window.player.name = window.currentPlayerName || 'Duelist';
     window.player.color = window.currentPlayerColor || '#ff0000';
@@ -527,9 +519,9 @@ const Lobby = {
       window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
     }
     
-    // Prepare player arrays
+    // Prepare player arrays (gameBuildings used for all buildings now)
     const players = [window.player, aiPlayer];
-    window.playerBuildings = window.playerBuildings || [];
+    window.gameBuildings = window.gameBuildings || [];
     window.gameUnits = window.gameUnits || [];
     
     // Create game instance (handles spawning units/buildings)
@@ -593,7 +585,7 @@ const Lobby = {
       if (window.gameUnits && window.gameUnits.length > 0) {
         const withMesh = window.gameUnits.filter(u => u.mesh).length;
         const withoutMesh = window.gameUnits.filter(u => !u.mesh).length;
-        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id || u.owner === 'player').length;
+        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id).length;
         
         console.log(`  - Units with meshes: ${withMesh}/${window.gameUnits.length}`);
         console.log(`  - Units without meshes: ${withoutMesh}/${window.gameUnits.length}`);
@@ -2186,7 +2178,8 @@ const Lobby = {
     // Reset scene and ensure clean slate
     this.resetGameState();
     
-    window.isMultiplayer = false;
+    // CRITICAL: Always use multiplayer mode because it uses the match/command system!
+    window.isMultiplayer = true;
     window.gameType = 'adventure';
     window.mapSeed = resolvedSeed;
     
@@ -2198,10 +2191,12 @@ const Lobby = {
       console.log(`♻️ Reusing existing player (id: ${window.player.id || 'not set'})`);
     }
     
-    // Ensure player has correct ID
-    if (!window.player.id || window.player.id === 'undefined') {
-      window.player.id = 'player';
-      console.log('✅ Set player.id to "player"');
+    // CRITICAL: Generate unique player ID for each match (like AI opponents do)
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+      // Generate unique ID similar to AI opponents
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      window.player.id = `local-player-${randomSuffix}`;
+      console.log(`✅ Generated unique player ID: "${window.player.id}"`);
     }
     
     // Reset player state for new match
@@ -2233,7 +2228,7 @@ const Lobby = {
     const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
     
     // Configure local player identity and spawn
-    const localPlayerId = window.player.id || 'player';
+    const localPlayerId = window.player.id; // CRITICAL: No fallback - ID must be set!
     window.player.id = localPlayerId;
     window.player.name = window.currentPlayerName || 'Adventurer';
     window.player.color = window.currentPlayerColor || '#ff0000';
@@ -2364,9 +2359,9 @@ const Lobby = {
       window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
     }
     
-    // Prepare player arrays
+    // Prepare player arrays (gameBuildings used for all buildings now)
     const players = [window.player, ...aiPlayers];
-    window.playerBuildings = window.playerBuildings || [];
+    window.gameBuildings = window.gameBuildings || [];
     window.gameUnits = window.gameUnits || [];
     
     // Create game instance (handles spawning units/buildings)
@@ -2447,7 +2442,7 @@ const Lobby = {
       if (window.gameUnits && window.gameUnits.length > 0) {
         const withMesh = window.gameUnits.filter(u => u.mesh).length;
         const withoutMesh = window.gameUnits.filter(u => !u.mesh).length;
-        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id || u.owner === 'player').length;
+        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id).length;
         
         console.log(`  - Units with meshes: ${withMesh}/${window.gameUnits.length}`);
         console.log(`  - Units without meshes: ${withoutMesh}/${window.gameUnits.length}`);
@@ -2458,7 +2453,7 @@ const Lobby = {
         }
         
         // Check first player unit
-        const firstPlayerUnit = window.gameUnits.find(u => u.owner === window.player?.id || u.owner === 'player');
+        const firstPlayerUnit = window.gameUnits.find(u => u.owner === window.player?.id);
         if (firstPlayerUnit) {
           console.log(`  - First player unit:`, {
             type: firstPlayerUnit.type,
@@ -2942,9 +2937,9 @@ const Lobby = {
     
     window.currentMatch = new window.Match(matchOptions);
     
-    // Ensure playerBuildings array exists and is empty BEFORE creating Game
-    if (!window.playerBuildings) {
-      window.playerBuildings = [];
+    // Ensure gameBuildings array exists and is empty BEFORE creating Game
+    if (!window.gameBuildings) {
+      window.gameBuildings = [];
     }
     // Ensure gameUnits array exists and is empty
     if (!window.gameUnits) {
@@ -2987,7 +2982,7 @@ const Lobby = {
       
       // BEFORE game.init - check state
       // console.log(`🔍 BEFORE game.init():`);
-      // console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
+      // console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
       // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
       // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
@@ -2995,12 +2990,12 @@ const Lobby = {
       
       // AFTER game.init - check state
       // console.log(`🔍 AFTER game.init():`);
-      // console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
+      // console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
       // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
       // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
-      if (window.playerBuildings && window.playerBuildings.length > 0) {
-        console.log(`  - Buildings:`, window.playerBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));
+      if (window.gameBuildings && window.gameBuildings.length > 0) {
+        console.log(`  - Buildings:`, window.gameBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));
       }
       
       // Ensure visual meshes are created for all units that were just spawned

@@ -22,8 +22,8 @@ function Player(ops){
   
   ops = ops || {};
   
-  // Player ID - defaults to 'player' for backward compatibility
-  this.id = ops.id || 'player';
+  // Player ID - must be provided (no default)
+  this.id = ops.id;
   this.name = ops.name || null;
   this.color = ops.color || null;
 
@@ -250,7 +250,7 @@ Player.prototype.selectUnit = function(unit) {
   // Check if unit belongs to this player
   // CRITICAL: Use last 6 chars of player ID for ownership comparison (matches unit.owner format)
   const normalizedPlayerId = this.id.length > 6 ? this.id.slice(-6) : this.id;
-  const ownerMatches = (unit.owner === normalizedPlayerId) || (unit.owner === this.id) || (unit.owner === 'player');
+  const ownerMatches = (unit.owner === normalizedPlayerId) || (unit.owner === this.id);
   // console.log(`🔍 Selection check: unit.owner="${unit.owner}", player.id="${normalizedPlayerId}", matches=${ownerMatches}`);
   
   if (!ownerMatches) {
@@ -373,7 +373,7 @@ Player.prototype.spawnInitialVillagers = function() {
       continue;
     }
     
-    const ownerId = this.id || window.player?.id || 'player';
+    const ownerId = this.id || window.player?.id;
     villager.owner = ownerId;
     
     // Random rotation

@@ -106,7 +106,7 @@ const BuildingTypes = {
     // Work assignment properties
     needsWorkers: true,
     maxWorkers: 10,
-    workRadius: 5, // How far to look for idle villagers
+    workRadius: 5, // Resource detection and worker search radius (tiles) - 5 tiles × 4px = 20 world units
     workType: "gather", // Type of work this building provides
     workInterval: 10000, // How often workers produce resources (10 seconds)
     workOutput: { wood: 0, stone: 0 }, // Will be calculated based on nearby resources
@@ -139,7 +139,7 @@ const BuildingTypes = {
     // Work assignment properties
     needsWorkers: true,
     maxWorkers: 4,
-    workRadius: 8, // How far to look for idle villagers
+    workRadius: 8, // How far to look for idle villagers (tiles) - 8 tiles × 4px = 32 world units
     workType: "farm", // Type of work this building provides
     workInterval: 10000, // How often workers produce resources (10 seconds)
     workOutput: { food: 4 } // Resources produced per work cycle
@@ -177,7 +177,7 @@ function Building(buildingType, position, options = {}) {
   
   // MULTIPLAYER: Generate deterministic IDs based on match seed and building count
   this.id = options.id || (window.isMultiplayer && window.currentMatch ? 
-      `building-${window.currentMatch.mapSeed}-${(window.playerBuildings?.length || 0)}` : 
+      `building-${window.currentMatch.mapSeed}-${(window.gameBuildings?.length || 0)}` : 
       Math.random().toString(36).substr(2, 9));
   this.position = position || { x: 0, y: 0, z: 0 };
   
@@ -186,7 +186,7 @@ function Building(buildingType, position, options = {}) {
   this.gridX = options.gridX !== undefined ? options.gridX : Math.round(this.position.x / TILE_SIZE);
   this.gridZ = options.gridZ !== undefined ? options.gridZ : Math.round(this.position.z / TILE_SIZE);
   
-  this.owner = options.owner || 'player';
+  this.owner = options.owner; // CRITICAL: No default owner - must be explicitly set!
   this.health = options.health || 100;
   this.maxHealth = 100;
   this.buildProgress = options.buildProgress || 1.0; // 0-1, 1 = complete
@@ -406,7 +406,9 @@ function spawnVillagerFromVillage(village) {
   
   // Create the villager
   const villager = new Unit('villager', spawnPosition);
-  villager.owner = village.owner;
+  // CRITICAL: Set owner correctly - use normalized ID if it's a long ID
+  const rawOwner = village.owner;
+  villager.owner = rawOwner?.length > 6 ? rawOwner.slice(-6) : rawOwner;
   
   // Deterministic rotation based on building ID and spawn count
   const buildingIdHash = (village.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
@@ -418,8 +420,32 @@ function spawnVillagerFromVillage(village) {
   }
   
   // Add to appropriate unit arrays
-  if (village.owner === 'player' && window.player) {
+  // CRITICAL: Normalize ALL IDs for comparison (handle both full and shortened IDs)
+  const normalizedVillageOwner = village.owner?.length > 6 ? village.owner.slice(-6) : village.owner;
+  const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
+  const normalizedOpponentId = window.opponent?.id?.length > 6 ? window.opponent.id.slice(-6) : window.opponent?.id;
+  
+  const isPlayerOwned = normalizedVillageOwner === normalizedPlayerId;
+  const isOpponentOwned = normalizedVillageOwner === normalizedOpponentId;
+  
+  if (isPlayerOwned && window.player) {
     window.player.units.push(villager);
+    console.log(`✅ Village spawned villager for LOCAL player`);
+    console.log(`   Village owner: "${village.owner}" (normalized: "${normalizedVillageOwner}")`);
+    console.log(`   Villager owner: "${villager.owner}"`);
+    console.log(`   Player ID: "${window.player.id}" (normalized: "${normalizedPlayerId}")`);
+    console.log(`   Total player villagers: ${window.player.units.filter(u => u.type === 'villager').length}`);
+  } else if (isOpponentOwned && window.opponent) {
+    // This is the opponent's village spawning their villagers - totally normal!
+    window.opponent.units.push(villager);
+    console.log(`👤 Opponent's village spawned villager (owner: ${normalizedVillageOwner}), total: ${window.opponent.units.filter(u => u.type === 'villager').length}`);
+  } else {
+    // This would be unexpected - log as warning
+    console.warn(`⚠️ Village spawned villager but owner unclear!`);
+    console.warn(`   Village owner: "${village.owner}" (normalized: "${normalizedVillageOwner}")`);
+    console.warn(`   Villager owner: "${villager.owner}"`);
+    console.warn(`   Player ID: "${window.player?.id}" (normalized: "${normalizedPlayerId}")`);
+    console.warn(`   Opponent ID: "${window.opponent?.id}" (normalized: "${normalizedOpponentId}")`);
   }
   gameUnits.push(villager);
   
@@ -475,6 +501,17 @@ function spawnVillagerFromVillage(village) {
     }).catch(error => {
       console.warn('Failed to load villager model:', error);
     });
+  }
+  
+  // CRITICAL: Give new villager a linger behavior so they can be auto-assigned to work
+  if (window.behaviorManager && villager.pb && villager.pb.state && villager.pb.state.loc) {
+    window.behaviorManager.setBehavior(villager, 'linger', {
+      center: { x: villager.pb.state.loc.x, z: villager.pb.state.loc.z },
+      radius: 3,  // Boundary radius
+      wanderDistance: 1.5,  // How far they walk (MUST be less than radius!)
+      wanderInterval: 8000  // Pick new target every 8 seconds
+    });
+    console.log(`🎯 Gave new village-spawned villager linger behavior (owner: ${villager.owner})`);
   }
   
   // console.log(`🏘️ Village spawned villager #${village.spawnedVillagers} at (${spawnPosition.x.toFixed(1)}, ${spawnPosition.z.toFixed(1)})`);
@@ -562,10 +599,14 @@ function findIdleVillagersNearBuilding(building) {
   const workRadius = building.workRadius || 20; // Increased radius to find workers across map
   
   // Look through all game units for idle villagers and engineers
-  for (const unit of gameUnits) {
+  for (const unit of window.gameUnits) {
     if (!unit.pb || !unit.pb.state || !unit.pb.state.loc) continue;
     if (unit.type !== 'villager' && unit.type !== 'engineer') continue;
-    if (unit.owner !== building.owner) continue; // Only assign workers to same owner
+    
+    // CRITICAL: Normalize both IDs for comparison (handle both full and shortened IDs)
+    const normalizedUnitOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+    const normalizedBuildingOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
+    if (normalizedUnitOwner !== normalizedBuildingOwner) continue; // Only assign workers to same owner
     
     // Check if villager is idle (no active behavior OR just has linger behavior)
     const currentBehavior = window.behaviorManager ? window.behaviorManager.getBehavior(unit) : null;
@@ -586,8 +627,15 @@ function findIdleVillagersNearBuilding(building) {
     }
   }
   
-  // Sort by distance - closest villagers first
-  idleVillagers.sort((a, b) => a.distance - b.distance);
+  // CRITICAL: Sort deterministically for P2P sync!
+  // Primary: distance (closest first)
+  // Secondary: unit ID (for deterministic tiebreaking)
+  idleVillagers.sort((a, b) => {
+    const distDiff = a.distance - b.distance;
+    if (Math.abs(distDiff) > 0.01) return distDiff; // Distance matters most
+    // Tiebreaker: alphabetical by unit ID
+    return (a.unit.id || '').localeCompare(b.unit.id || '');
+  });
   
   return idleVillagers.map(v => v.unit);
 }
@@ -622,7 +670,16 @@ function assignVillagerToWork(villager, building) {
   // Mark villager as assigned to this building
   villager.assignedBuilding = building;
   
-  console.log(`✅ AUTO-ASSIGNED ${villager.name || villager.type} to work at ${building.name || building.type} (${building.assignedWorkers.length}/${building.maxWorkers} workers)`);
+  // DIAGNOSTIC: Log resource availability for camps
+  if (building.workType === 'gather') {
+    const resourceCount = building.availableResources?.length || 0;
+    console.log(`✅ AUTO-ASSIGNED ${villager.name || villager.type} to work at ${building.name} (${building.assignedWorkers.length}/${building.maxWorkers} workers) - ${resourceCount} resource tiles available`);
+    if (resourceCount === 0) {
+      console.warn(`⚠️ Camp has NO resources detected! Workers will circle camp.`);
+    }
+  } else {
+    console.log(`✅ AUTO-ASSIGNED ${villager.name || villager.type} to work at ${building.name || building.type} (${building.assignedWorkers.length}/${building.maxWorkers} workers)`);
+  }
   return true;
 }
 
@@ -922,13 +979,20 @@ function updateBuildings(deltaTime) {
       updateCapturePointVisuals(building);
     }
     
-    // Handle villager spawning for villages (only if game is running)
-    if (building.spawnsVillagers && building.buildProgress >= 1.0 && window.currentMatch && window.currentMatch.state === 'playing') {
+    // Handle villager spawning for villages (only if game is running OR in menu scene for testing)
+    const isGameActive = (window.currentMatch && window.currentMatch.state === 'playing') || window.game;
+    if (building.spawnsVillagers && building.buildProgress >= 1.0 && isGameActive) {
       spawnVillagerFromVillage(building);
     }
     
-    // Handle work assignment for buildings that need workers (only if game is running)
-    if (building.needsWorkers && building.buildProgress >= 1.0 && window.currentMatch && window.currentMatch.state === 'playing') {
+    // Handle work assignment for buildings that need workers
+    // CRITICAL: Must be deterministic in P2P multiplayer!
+    // Only check every N ticks to ensure both clients check at same time
+    const currentTick = window.currentMatch?.tick || 0;
+    const shouldCheckThisTick = (currentTick % 60 === 0); // Check every 60 ticks (~3 seconds at 20 TPS)
+    
+    if (building.needsWorkers && building.buildProgress >= 1.0 && window.game && shouldCheckThisTick) {
+      
       // Clean up any workers that are no longer valid
       building.assignedWorkers = building.assignedWorkers.filter(worker => {
         if (!worker || !window.gameUnits.includes(worker)) {
@@ -948,6 +1012,7 @@ function updateBuildings(deltaTime) {
       // Try to assign more workers if needed
       if (building.assignedWorkers.length < building.maxWorkers) {
         const idleVillagers = findIdleVillagersNearBuilding(building);
+        
         
         for (const villager of idleVillagers) {
           if (building.assignedWorkers.length >= building.maxWorkers) break;
@@ -1258,7 +1323,10 @@ const buildingSystem = {
     this.detectedResources = [];
     
     // Get the field system to check for resources
-    if (!window.liveField) return;
+    if (!window.liveField) {
+      console.warn('⚠️ Cannot detect resources: window.liveField is not available!');
+      return;
+    }
     
     // Convert world position to grid coordinates
     const gridX = Math.floor(centerPosition.x / TILE_SIZE);
@@ -1267,10 +1335,18 @@ const buildingSystem = {
     
     // Count resources within the radius
     let resourceCount = 0;
+    let tilesChecked = 0;
+    let tileTypesSeen = {};
     
     // Check tiles within the radius
     for (let x = gridX - gridRadius; x <= gridX + gridRadius; x++) {
       for (let z = gridZ - gridRadius; z <= gridZ + gridRadius; z++) {
+        // BOUNDS CHECK: Skip tiles outside the map
+        if (!window.liveField || x < 0 || z < 0 || 
+            x >= window.liveField.width || z >= window.liveField.height) {
+          continue;
+        }
+        
         // Check if this tile is within the radius
         const worldX = x * TILE_SIZE;
         const worldZ = z * TILE_SIZE;
@@ -1280,6 +1356,14 @@ const buildingSystem = {
         );
         
         if (distance <= radius) {
+          tilesChecked++;
+          
+          // Track tile types for diagnostic purposes
+          const tile = window.liveField.getTile(x, z);
+          if (tile) {
+            tileTypesSeen[tile.type] = (tileTypesSeen[tile.type] || 0) + 1;
+          }
+          
           // Check if this tile has resources (trees or rocks)
           const resourceInfo = this.checkTileForResources(x, z);
           if (resourceInfo) {
@@ -1293,11 +1377,15 @@ const buildingSystem = {
               amount: resourceInfo.amount
             });
             
-            // console.log(`🌲 Resource detected at (${x}, ${z}): ${resourceInfo.type} x${resourceInfo.amount}`);
             resourceCount++;
           }
         }
       }
+    }
+    
+    // DIAGNOSTIC: Log tile types and resource count (occasionally to avoid spam)
+    if (tilesChecked > 0 && Math.random() < 0.05) {
+      console.log(`🔍 Resource detection at (${gridX}, ${gridZ}): checked ${tilesChecked} tiles, found ${resourceCount} resources. Tile types:`, tileTypesSeen);
     }
     
     // Update circle color based on resource density
@@ -1354,57 +1442,83 @@ const buildingSystem = {
     // console.log(`🎨 Circle color updated: ${resourceCount} resources, density: ${density.toFixed(2)}, alpha: ${alpha}`);
   },
   
+  // CRITICAL: Use EXACT same logic as gfx.js placeDecorationsOnChunk()
+  // This ensures we detect the same resources that actually exist in the scene
+  tileHash: function(x, y, seed) {
+    let hash = seed;
+    hash = hash ^ (x * 374761393);
+    hash = hash ^ (y * 668265263);
+    hash = (hash ^ (hash >>> 16)) * 0x85ebca6b;
+    hash = (hash ^ (hash >>> 13)) * 0xc2b2ae35;
+    hash = hash ^ (hash >>> 16);
+    return Math.abs(hash >>> 0) / 4294967296; // 0-1
+  },
+  
   // Check if a tile contains resources (trees or rocks)
+  // MUST match the exact logic in gfx.js placeDecorationsOnChunk()
   checkTileForResources: function(gridX, gridZ) {
     if (!window.liveField) return null;
     
-    // Get the tile type from the field system
-    const tile = window.liveField.getTile(gridX, gridZ);
-    if (!tile) return null;
+    const fieldSeed = window.liveField.seed;
+    const terrainIndex = gridZ * window.liveField.width + gridX;
+    const terrainType = window.liveField.terrainTypes[terrainIndex];
     
-    // Check if this tile type typically has trees or rocks
-    // Based on the model rules in gfx.js, grass tiles (type 5) have trees and rocks
-    if (tile.type === 5) {
-      // Use a better deterministic random number generation
-      const seed = window.liveField.seed + gridX * 1000 + gridZ;
-      
-      // Simple but effective hash function
-      let hash = seed;
-      hash = hash * 1664525 + 1013904223; // Linear congruential generator constants
-      hash = hash >>> 0; // Ensure unsigned 32-bit
-      
-      // Convert to 0-1 range
-      const random = hash / 0x100000000;
-      
-      // Debug: Check if we're getting a good distribution
-      // console.log(`🔍 Seed: ${window.liveField.seed}, Grid: (${gridX}, ${gridZ}), Hash: ${hash}, Random: ${random.toFixed(6)}`);
-      
-      // Use deterministic seed-based resource generation
-      // Create a balanced distribution: 50% wood, 40% stone, 10% nothing
-      // console.log(`🎲 Resource check at (${gridX}, ${gridZ}): random=${random.toFixed(3)}`);
-      
-      if (random < 0.5) {
-        // Wood resources - 50% chance
-        // console.log(`🌲 Found wood at (${gridX}, ${gridZ})`);
+    if (!terrainType && terrainType !== 0) return null;
+    
+    // Skip spawn zones (same as gfx.js)
+    if (window.liveField.isInSpawnZone && window.liveField.isInSpawnZone(gridX, gridZ)) {
+      return null;
+    }
+    
+    // CHECK 1: Rocks on dirt tiles (terrainType === 2) with ~3% chance
+    if (terrainType === 2) {
+      const rockRoll = this.tileHash(gridX, gridZ, fieldSeed + 1000);
+      if (rockRoll < 0.03) {
+        // Determine rock size (same logic as gfx.js)
+        const sizeRoll = this.tileHash(gridX, gridZ, fieldSeed + 2000);
+        
+        if (sizeRoll < 0.3) {
+          // Small rocks (30%) → gems/minerals
+          return {
+            type: 'minerals',
+            amount: 1,
+            remaining: 50, // Small rocks have less
+            gridX: gridX,
+            gridZ: gridZ
+          };
+        } else if (sizeRoll < 0.7) {
+          // Medium rocks (40%) → stone
+          return {
+            type: 'stone',
+            amount: 2,
+            remaining: 100,
+            gridX: gridX,
+            gridZ: gridZ
+          };
+        } else {
+          // Large rocks (30%) → more stone
+          return {
+            type: 'stone',
+            amount: 3,
+            remaining: 150, // Large rocks have more
+            gridX: gridX,
+            gridZ: gridZ
+          };
+        }
+      }
+    }
+    
+    // CHECK 2: Trees on grass tiles (terrainType === 3) with ~20% chance
+    if (terrainType === 3) {
+      const treeRoll = this.tileHash(gridX, gridZ, fieldSeed + 3000);
+      if (treeRoll < 0.20) {
         return {
           type: 'wood',
-          amount: Math.floor(random * 3) + 1, // 1-3 wood
+          amount: 3,
+          remaining: 150, // Initial wood amount
           gridX: gridX,
           gridZ: gridZ
         };
-      } else if (random < 0.9) {
-        // Stone resources - 40% chance (0.5 to 0.9)
-        // console.log(`🪨 Found stone at (${gridX}, ${gridZ})`);
-        return {
-          type: 'stone',
-          amount: Math.floor((random - 0.5) * 2) + 1, // 1-2 stone
-          gridX: gridX,
-          gridZ: gridZ
-        };
-      } else {
-        // No resources - 10% chance (0.9 to 1.0)
-        // console.log(`❌ No resource at (${gridX}, ${gridZ}) - random=${random.toFixed(3)}`);
-        return null;
       }
     }
     
@@ -1588,13 +1702,16 @@ const buildingSystem = {
     
     // MULTIPLAYER: Submit building command instead of placing directly
     if (window.isMultiplayer && window.currentMatch) {
+      // CRITICAL: Include playerId so building ownership is correct!
+      const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
       const command = {
         type: 'build',
+        playerId: normalizedPlayerId,  // CRITICAL: Must include for proper ownership!
         buildingType: this.selectedBuildingType,
         gridX: gridX,
         gridZ: gridZ,
-        rotation: this.placementRotation,
-        resources: this.detectedResources ? [...this.detectedResources] : []
+        rotation: this.placementRotation
+        // NOTE: Resources are detected DETERMINISTICALLY during command execution, not here
       };
       window.currentMatch.submitCommand(command);
       
@@ -1609,13 +1726,55 @@ const buildingSystem = {
     const building = placeBuilding(this.selectedBuildingType, gridX, gridZ, window.gfx.scene);
     
     if (building) {
+      // CRITICAL: Set owner to player for single-player buildings!
+      const rawPlayerId = window.player?.id;
+      building.owner = rawPlayerId?.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      console.log(`🏗️ Single-player building placed, owner set to: "${building.owner}"`);
+      
       // Store the target rotation for when the mesh loads
       building.targetRotation = this.placementRotation;
       
-      // Save detected resources to the building
-      if (this.detectedResources && this.detectedResources.length > 0) {
-        building.availableResources = [...this.detectedResources];
-        // console.log(`🌳 Camp will have access to ${this.detectedResources.length} resource tiles:`, this.detectedResources);
+      // DETERMINISTIC: Detect resources for camps (same logic as multiplayer)
+      if (this.selectedBuildingType === 'camp' && this.checkTileForResources) {
+        const workRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 2;
+        const radiusInTiles = workRadius * TILE_SIZE;
+        
+        const detectedResources = [];
+        const gridRadius = Math.ceil(radiusInTiles / TILE_SIZE);
+        
+        for (let x = gridX - gridRadius; x <= gridX + gridRadius; x++) {
+          for (let z = gridZ - gridRadius; z <= gridZ + gridRadius; z++) {
+            const worldX = x * TILE_SIZE;
+            const worldZ = z * TILE_SIZE;
+            const campWorldX = gridX * TILE_SIZE;
+            const campWorldZ = gridZ * TILE_SIZE;
+            const distance = Math.sqrt(
+              Math.pow(worldX - campWorldX, 2) + 
+              Math.pow(worldZ - campWorldZ, 2)
+            );
+            
+            if (distance <= radiusInTiles) {
+              const resourceInfo = this.checkTileForResources(x, z);
+              if (resourceInfo) {
+                detectedResources.push({
+                  gridX: x,
+                  gridZ: z,
+                  worldX: worldX,
+                  worldZ: worldZ,
+                  type: resourceInfo.type,
+                  amount: resourceInfo.amount
+                });
+              }
+            }
+          }
+        }
+        
+        if (detectedResources.length > 0) {
+          building.availableResources = detectedResources;
+          console.log(`🏗️ Single-player camp detected ${detectedResources.length} resources`);
+        } else {
+          console.warn(`⚠️ Single-player camp found NO resources!`);
+        }
       }
       
       // Set up a callback to apply rotation and team colors after mesh loads
@@ -2083,6 +2242,92 @@ if (typeof window !== 'undefined') {
     }
   };
   
+  // DIAGNOSTIC: Function to debug work assignment issues
+  window.debugWorkAssignment = function() {
+    console.log('=== WORK ASSIGNMENT DEBUG ===');
+    console.log(`Player ID: ${window.player?.id}`);
+    console.log(`Opponent ID: ${window.opponent?.id}`);
+    console.log(`Game exists: ${!!window.game}`);
+    console.log(`\n--- BUILDINGS ---`);
+    
+    gameBuildings.forEach((building, i) => {
+      if (building.needsWorkers) {
+        const normalizedOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
+        const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
+        const isPlayerBuilding = normalizedOwner === normalizedPlayerId;
+        
+        console.log(`\nBuilding ${i}: ${building.name} (${building.type})`);
+        console.log(`  Owner: ${building.owner} (normalized: ${normalizedOwner})`);
+        console.log(`  Is player's: ${isPlayerBuilding}`);
+        console.log(`  Workers: ${building.assignedWorkers.length}/${building.maxWorkers}`);
+        console.log(`  Work type: ${building.workType}`);
+        console.log(`  Resources: ${building.availableResources?.length || 0} tiles`);
+        console.log(`  Build progress: ${building.buildProgress}`);
+      }
+    });
+    
+    console.log(`\n--- VILLAGERS ---`);
+    const villagers = gameUnits.filter(u => u.type === 'villager');
+    console.log(`Total villagers: ${villagers.length}`);
+    console.log(`Player villagers: ${window.player?.units.filter(u => u.type === 'villager').length || 0}`);
+    console.log(`Opponent villagers: ${window.opponent?.units.filter(u => u.type === 'villager').length || 0}`);
+    
+    villagers.slice(0, 5).forEach((v, i) => {
+      const normalizedOwner = v.owner?.length > 6 ? v.owner.slice(-6) : v.owner;
+      const behavior = window.behaviorManager?.getBehavior(v);
+      const behaviorName = behavior ? behavior.constructor.name : 'none';
+      console.log(`\nVillager ${i}: owner=${v.owner} (normalized: ${normalizedOwner})`);
+      console.log(`  Behavior: ${behaviorName}`);
+      console.log(`  Assigned building: ${v.assignedBuilding?.name || 'none'}`);
+      console.log(`  In player.units: ${window.player?.units.includes(v) || false}`);
+      console.log(`  In opponent.units: ${window.opponent?.units.includes(v) || false}`);
+    });
+  };
+  
+  // DIAGNOSTIC: Function to debug why villagers aren't being assigned
+  window.debugVillagerAssignment = function() {
+    console.log('=== VILLAGER ASSIGNMENT DEBUG ===');
+    console.log(`Player ID: ${window.player?.id}`);
+    console.log(`Player units: ${window.player?.units.length}`);
+    console.log(`Game units: ${window.gameUnits?.length}`);
+    
+    // Find player's camp
+    const playerCamp = gameBuildings.find(b => b.type === 'camp' && b.owner === window.player?.id);
+    if (!playerCamp) {
+      console.log('❌ No player camp found!');
+      return;
+    }
+    
+    console.log(`\nPlayer Camp: ${playerCamp.name} at (${playerCamp.position.x.toFixed(1)}, ${playerCamp.position.z.toFixed(1)})`);
+    console.log(`  Workers: ${playerCamp.assignedWorkers.length}/${playerCamp.maxWorkers}`);
+    console.log(`  Resources: ${playerCamp.availableResources?.length || 0}`);
+    
+    // Check all player villagers
+    console.log(`\n--- PLAYER VILLAGERS ---`);
+    let idleCount = 0;
+    window.player.units.filter(u => u.type === 'villager').forEach((villager, i) => {
+      const dx = villager.pb?.state?.loc?.x - playerCamp.position.x;
+      const dz = villager.pb?.state?.loc?.z - playerCamp.position.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      const currentBehavior = window.behaviorManager?.getBehavior(villager);
+      const behaviorName = currentBehavior?.constructor?.name || 'none';
+      const isIdle = !currentBehavior || behaviorName === 'LingerBehavior';
+      
+      if (isIdle) idleCount++;
+      
+      console.log(`  ${i+1}. ${villager.name || 'Villager'}`);
+      console.log(`     Position: (${villager.pb?.state?.loc?.x.toFixed(1)}, ${villager.pb?.state?.loc?.z.toFixed(1)})`);
+      console.log(`     Distance to camp: ${distance.toFixed(1)} units`);
+      console.log(`     Behavior: ${behaviorName}`);
+      console.log(`     Is idle: ${isIdle}`);
+      console.log(`     Owner: ${villager.owner}`);
+      console.log(`     Assigned building: ${villager.assignedBuilding?.name || 'none'}`);
+    });
+    
+    console.log(`\nTotal idle villagers: ${idleCount}`);
+    console.log(`Search radius: ${(playerCamp.workRadius || 20) * TILE_SIZE} world units`);
+  };
+  
   // Function to test resource display
   window.testResourceDisplay = function() {
     // console.log('💰 Testing resource display...');
@@ -2127,7 +2372,7 @@ if (typeof window !== 'undefined') {
       const x = cameraPos.x + Math.cos(angle) * distance * TILE_SIZE;
       const z = cameraPos.z + Math.sin(angle) * distance * TILE_SIZE;
       
-      const ownerId = window.player?.id || 'player';
+      const ownerId = window.player?.id;
       const engineer = new Unit('engineer', { x, y: 0, z });
       engineer.owner = ownerId;
       

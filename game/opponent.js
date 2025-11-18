@@ -287,7 +287,7 @@
     // Scan for visible enemy units and buildings
     aiState.knownEnemyUnits = window.player.units.filter(u => u.pb && u.pb.state);
     aiState.knownEnemyBuildings = window.gameBuildings ? 
-      window.gameBuildings.filter(b => b.owner === 'player' && b.position) : [];
+      window.gameBuildings.filter(b => b.owner === window.player?.id && b.position) : [];
   }
   
   // Evaluate current threat level (0-1)
@@ -527,7 +527,7 @@
     
     // Target nearest enemy building
     if (window.gameBuildings) {
-      const enemyBuildings = window.gameBuildings.filter(b => b.owner === 'player' && b.position);
+      const enemyBuildings = window.gameBuildings.filter(b => b.owner === window.player?.id && b.position);
       if (enemyBuildings.length > 0) {
         // Find nearest building
         let nearest = enemyBuildings[0];
@@ -680,6 +680,49 @@
           if (building) {
             // Set AI ownership
             building.owner = aiPlayer.id;
+            
+            // CRITICAL: Detect resources for camps!
+            if (action.buildingType === 'camp' && window.buildingSystem && window.buildingSystem.checkTileForResources) {
+              const workRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 2;
+              const radiusInTiles = Math.ceil(workRadius * (window.TILE_SIZE || 4));
+              
+              const detectedResources = [];
+              const gridRadius = Math.ceil(radiusInTiles / (window.TILE_SIZE || 4));
+              
+              for (let x = buildPos.x - gridRadius; x <= buildPos.x + gridRadius; x++) {
+                for (let z = buildPos.z - gridRadius; z <= buildPos.z + gridRadius; z++) {
+                  const worldX = x * (window.TILE_SIZE || 4);
+                  const worldZ = z * (window.TILE_SIZE || 4);
+                  const campWorldX = buildPos.x * (window.TILE_SIZE || 4);
+                  const campWorldZ = buildPos.z * (window.TILE_SIZE || 4);
+                  const distance = Math.sqrt(
+                    Math.pow(worldX - campWorldX, 2) + 
+                    Math.pow(worldZ - campWorldZ, 2)
+                  );
+                  
+                  if (distance <= radiusInTiles) {
+                    const resourceInfo = window.buildingSystem.checkTileForResources(x, z);
+                    if (resourceInfo) {
+                      detectedResources.push({
+                        gridX: x,
+                        gridZ: z,
+                        worldX: worldX,
+                        worldZ: worldZ,
+                        type: resourceInfo.type,
+                        amount: resourceInfo.amount
+                      });
+                    }
+                  }
+                }
+              }
+              
+              if (detectedResources.length > 0) {
+                building.availableResources = detectedResources;
+                console.log(`🤖 AI camp detected ${detectedResources.length} resource tiles`);
+              } else {
+                console.warn(`⚠️ AI camp at (${buildPos.x}, ${buildPos.z}) found NO resources!`);
+              }
+            }
             
             // Add to AI's building list
             if (!aiPlayer.buildings) aiPlayer.buildings = [];

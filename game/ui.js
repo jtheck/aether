@@ -1843,7 +1843,7 @@ function getRandomColor() {
                     const unitIds = selectedUnits.map(u => u.id);
                     const command = {
                       type: 'move',
-                      playerId: window.player?.id || 'player', // CRITICAL: Set player ID explicitly
+                      playerId: window.player?.id, // CRITICAL: Set player ID explicitly
                       unitIds: unitIds,
                       target: { x: worldPos.x, y: 0, z: worldPos.z }
                     };
@@ -2564,7 +2564,7 @@ function getRandomColor() {
         if (abilityType) {
           window.currentMatch.submitCommand({
             type: 'ability',
-            playerId: window.player?.id || 'player', // CRITICAL: Set player ID explicitly
+            playerId: window.player?.id, // CRITICAL: Set player ID explicitly
             unitId: unit.id,
             abilityType: abilityType,
             params: abilityParams

@@ -944,6 +944,13 @@ let pov2 = 240;
             window.gfx.setupMeshShadows(model.root);
           }
           
+          // Register resource models for depletion system (trees and rocks only)
+          if ((task.modelPath.includes('trees.glb') || task.modelPath.includes('rocks.glb')) && 
+              task.gridX !== undefined && task.gridZ !== undefined) {
+            const key = `${task.gridX},${task.gridZ}`;
+            resourceModelRegistry.set(key, model.root);
+          }
+          
           // All the same model setup logic
           task.models.push(model);
           model.root.parent = task.chunk.mesh;
@@ -1026,6 +1033,20 @@ let pov2 = 240;
     });
   }
 
+  // Global registry of resource models by grid position for depletion system
+  const resourceModelRegistry = new Map(); // key: "gridX,gridZ", value: mesh
+  
+  // Function to remove a resource model when depleted
+  window.removeResourceModel = function(gridX, gridZ) {
+    const key = `${gridX},${gridZ}`;
+    const mesh = resourceModelRegistry.get(key);
+    if (mesh) {
+      mesh.dispose();
+      resourceModelRegistry.delete(key);
+      console.log(`🗑️ Removed resource model at (${gridX}, ${gridZ})`);
+    }
+  };
+  
   // NEW: Decoration pass system - places models using noise-based clustering
   function placeDecorationsOnChunk(chunk, scene) {
     // console.log(`🎯 placeDecorationsOnChunk called for chunk (${chunk.chunkX},${chunk.chunkZ})`);
@@ -1141,7 +1162,9 @@ let pov2 = 240;
           scale: scale,
           chunk: chunk,
           models: models,
-          modelRule: { path: modelPath, scale: scale, billboardScale: billboardScale, lodDistance: 200 }
+          modelRule: { path: modelPath, scale: scale, billboardScale: billboardScale, lodDistance: 200 },
+          gridX: gridX, // For resource depletion tracking
+          gridZ: gridZ
         });
         rockCount++;
       }
@@ -1203,7 +1226,9 @@ let pov2 = 240;
           scale: 0.9,
           chunk: chunk,
           models: models,
-          modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 3, lodDistance: 170 }
+          modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 3, lodDistance: 170 },
+          gridX: gridX, // For resource depletion tracking
+          gridZ: gridZ
         });
         treeCount++;
       }

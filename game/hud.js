@@ -96,7 +96,7 @@
               targetVillager = selectedVillagers.find(v => !v.isConverting);
             } else {
               // Find a villager near the agora that isn't already being converted
-              const agoraBuilding = window.playerBuildings?.find(b => b.type === 'agora' && b.owner === normalizedPlayerId);
+              const agoraBuilding = window.gameBuildings?.find(b => b.type === 'agora' && b.owner === normalizedPlayerId);
               if (agoraBuilding) {
                 const agoraPos = { x: agoraBuilding.gridX * TILE_SIZE, z: agoraBuilding.gridZ * TILE_SIZE };
                 

@@ -738,9 +738,48 @@
           building.setupStartTick = this.tick;
         }
         
-        // Save detected resources if provided
-        if (cmd.resources && cmd.resources.length > 0) {
-          building.availableResources = [...cmd.resources];
+        // CRITICAL: Detect resources DETERMINISTICALLY during command execution
+        // This ensures both clients detect the exact same resources
+        if (cmd.buildingType === 'camp' && window.buildingSystem && window.buildingSystem.checkTileForResources) {
+          const workRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 2;
+          const radiusInTiles = workRadius * (window.TILE_SIZE || 4);
+          
+          const detectedResources = [];
+          const gridRadius = Math.ceil(radiusInTiles / (window.TILE_SIZE || 4));
+          
+          for (let x = cmd.gridX - gridRadius; x <= cmd.gridX + gridRadius; x++) {
+            for (let z = cmd.gridZ - gridRadius; z <= cmd.gridZ + gridRadius; z++) {
+              const worldX = x * (window.TILE_SIZE || 4);
+              const worldZ = z * (window.TILE_SIZE || 4);
+              const campWorldX = cmd.gridX * (window.TILE_SIZE || 4);
+              const campWorldZ = cmd.gridZ * (window.TILE_SIZE || 4);
+              const distance = Math.sqrt(
+                Math.pow(worldX - campWorldX, 2) + 
+                Math.pow(worldZ - campWorldZ, 2)
+              );
+              
+              if (distance <= radiusInTiles) {
+                const resourceInfo = window.buildingSystem.checkTileForResources(x, z);
+                if (resourceInfo) {
+                  detectedResources.push({
+                    gridX: x,
+                    gridZ: z,
+                    worldX: worldX,
+                    worldZ: worldZ,
+                    type: resourceInfo.type,
+                    amount: resourceInfo.amount
+                  });
+                }
+              }
+            }
+          }
+          
+          if (detectedResources.length > 0) {
+            building.availableResources = detectedResources;
+            console.log(`🏗️ DETERMINISTIC: Camp at (${cmd.gridX}, ${cmd.gridZ}) detected ${detectedResources.length} resources during command execution`);
+          } else {
+            console.warn(`⚠️ DETERMINISTIC: Camp at (${cmd.gridX}, ${cmd.gridZ}) found NO resources during command execution`);
+          }
         }
       }
     }
@@ -1540,7 +1579,7 @@
       });
       
       // Hash all building states (in deterministic order)
-      const sortedBuildings = (window.playerBuildings || []).slice().sort((a, b) => 
+      const sortedBuildings = (window.gameBuildings || []).slice().sort((a, b) => 
         (a.id || '').localeCompare(b.id || '')
       );
       
@@ -1663,7 +1702,7 @@
     }
     
     getBuildingById(id) {
-      return window.playerBuildings?.find(b => b.id === id);
+      return window.gameBuildings?.find(b => b.id === id);
     }
     
     getResourceById(id) {

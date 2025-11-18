@@ -167,13 +167,20 @@ class LingerBehavior extends Behavior {
         };
         
         const distance = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-        if (distance > 0.1) {
-                    // Normalize and apply movement
-        direction.x /= distance;
-        direction.z /= distance;
         
+        // CRITICAL FIX: Lower "close enough" threshold to 0.05 so they keep moving until very close
+        // This prevents stop-go behavior where they stop too early
+        if (distance > 0.05) {
+            // Normalize and apply movement
+            direction.x /= distance;
+            direction.z /= distance;
+            
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, 15); // Gentle wander speed
+        this.applyMovementWithRotation(direction, 25); // Increased from 15 to 25 for faster idle movement
+        } else {
+            // Very close to target - pick a new target immediately instead of waiting
+            this.pickNewWanderTarget();
+            this.lastWanderTick = window.currentMatch?.tick || 0;
         }
     }
 }
@@ -445,6 +452,8 @@ class GatherWorkBehavior extends WorkBehavior {
             if (distance < TILE_SIZE * 0.5) {
                 this.gatherState = 'gathering';
                 this.gatherStartTime = currentTime;
+                // Store which resource we're gathering from for depletion tracking
+                this.lastGatheredResource = { x: this.gatherTarget.x, z: this.gatherTarget.z };
                 // console.log(`🔍 ${this.unit.name || this.unit.type} reached ${this.gatherTarget.type}, starting to gather`);
             } else {
                 // Keep moving toward resource every frame
@@ -453,7 +462,10 @@ class GatherWorkBehavior extends WorkBehavior {
             }
         } else {
             // No resources found, just wander around camp
-            // console.log(`⚠️ ${this.unit.name || this.unit.type} found no resources near ${this.building.name}`);
+            if (!this.noResourceWarningShown) {
+                console.warn(`⚠️ ${this.unit.name || this.unit.type} found NO resources at ${this.building.name}! Camp has ${this.building.availableResources?.length || 0} resource tiles. Worker will circle camp.`);
+                this.noResourceWarningShown = true;
+            }
             super.performWork();
         }
     }
@@ -521,6 +533,9 @@ class GatherWorkBehavior extends WorkBehavior {
                 // Actually add resources to player when worker returns
                 this.addGatheredResources();
                 
+                // Increment trip counter so worker picks a different resource next time
+                this.tripsMade = (this.tripsMade || 0) + 1;
+                
                 this.gatherState = 'seeking';
                 this.gatherTarget = null; // Clear old target
                 
@@ -538,13 +553,21 @@ class GatherWorkBehavior extends WorkBehavior {
         const availableResources = this.building.availableResources || [];
         if (availableResources.length === 0) return null;
         
-        // Pick any available resource (not necessarily the nearest)
-        // This spreads workers out across different resource tiles
-        // Use deterministic selection based on unit ID and tick
-        const currentTick = window.currentMatch?.tick || 0;
+        // CRITICAL: Use a stable resource selection that doesn't change every frame
+        // Pick resource based ONLY on unit ID hash (not tick) so workers stick with their assigned resource
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const randomIndex = (currentTick + unitIdHash) % availableResources.length;
-        const resource = availableResources[randomIndex];
+        
+        // Also factor in how many trips this worker has made to spread them out over time
+        const tripCount = this.tripsMade || 0;
+        const resourceIndex = (unitIdHash + tripCount * 7) % availableResources.length; // *7 to spread out more
+        
+        const resource = availableResources[resourceIndex];
+        
+        // Only log when changing resources (not every frame)
+        if (!this.lastResourceIndex || this.lastResourceIndex !== resourceIndex) {
+            console.log(`🌲 Worker ${this.unit.name || this.unit.type} assigned to resource tile ${resourceIndex} (trip ${tripCount})`);
+            this.lastResourceIndex = resourceIndex;
+        }
         
         return {
             x: resource.worldX,
@@ -602,29 +625,37 @@ class GatherWorkBehavior extends WorkBehavior {
             // console.log(`💰 ${this.unit.name || this.unit.type} delivered ${this.gatheredResourceAmount} ${this.gatheredResourceType} to player`);
         }
         
+        // RESOURCE DEPLETION: Deduct from the resource tile's remaining amount
+        if (this.building && this.building.availableResources && this.lastGatheredResource) {
+            // Find the resource tile this worker gathered from
+            const resourceTile = this.building.availableResources.find(r => 
+                r.worldX === this.lastGatheredResource.x && 
+                r.worldZ === this.lastGatheredResource.z
+            );
+            
+            if (resourceTile && resourceTile.remaining !== undefined) {
+                resourceTile.remaining -= this.gatheredResourceAmount;
+                
+                // If depleted, mark for removal
+                if (resourceTile.remaining <= 0) {
+                    console.log(`🪓 Resource depleted at (${resourceTile.gridX}, ${resourceTile.gridZ})!`);
+                    // Remove from available resources
+                    const index = this.building.availableResources.indexOf(resourceTile);
+                    if (index > -1) {
+                        this.building.availableResources.splice(index, 1);
+                    }
+                    // Remove 3D model
+                    if (window.removeResourceModel) {
+                        window.removeResourceModel(resourceTile.gridX, resourceTile.gridZ);
+                    }
+                }
+            }
+        }
+        
         // Reset gathered resources
         this.gatheredResourceType = null;
         this.gatheredResourceAmount = 0;
-    }
-    
-    findResourceNodes(resourceType, centerPos, radius) {
-        // For now, generate some mock resource nodes around the area
-        // In a real implementation, you'd query your terrain system for actual resources
-        const resources = [];
-        const numResources = 3 + Math.floor(Math.random() * 3); // 3-5 resources
-        
-        for (let i = 0; i < numResources; i++) {
-            const angle = (i / numResources) * Math.PI * 2 + Math.random() * 0.5;
-            const distance = (Math.random() * 0.7 + 0.3) * radius; // 30-100% of radius
-            
-            resources.push({
-                x: centerPos.x + Math.cos(angle) * distance,
-                z: centerPos.z + Math.sin(angle) * distance,
-                type: resourceType
-            });
-        }
-        
-        return resources;
+        this.lastGatheredResource = null;
     }
 }
 
@@ -638,6 +669,11 @@ class FarmWorkBehavior extends WorkBehavior {
             patrolSpeed: 0.5, // Slower patrol speed
             ...params
         });
+        
+        // CRITICAL: Initialize workStartTime for break timing (parent uses workStartTick)
+        const currentTick = window.currentMatch?.tick || 0;
+        this.workStartTime = currentTick * 50; // Convert to ms
+        this.breakStartTime = 0;
         
         this.patrolPoints = [];
         this.currentPatrolIndex = 0;
@@ -1476,7 +1512,7 @@ class TransformBehavior extends Behavior {
         newUnit.pb.state.rot.copyFrom(originalRot);
         
         // Add to appropriate unit arrays
-        if (owner === 'player' && window.player) {
+        if (owner === window.player?.id && window.player) {
             // Remove old unit from player's array
             const index = window.player.units.indexOf(this.unit);
             if (index > -1) {
@@ -1581,7 +1617,7 @@ class TransformBehavior extends Behavior {
         newVillager.pb.state.rot.copyFrom(originalRot);
         
         // Update unit arrays
-        if (owner === 'player' && window.player) {
+        if (owner === window.player?.id && window.player) {
             const index = window.player.units.indexOf(this.unit);
             if (index > -1) {
                 window.player.units.splice(index, 1);

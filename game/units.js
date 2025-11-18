@@ -185,7 +185,7 @@ function Unit(unitType, position, options = {}) {
     this.currentHealth = options.currentHealth !== undefined ? options.currentHealth : this.health;
     this.level = options.level || 1;
     this.experience = options.experience || 0;
-    this.owner = options.owner || 'player';
+    this.owner = options.owner; // CRITICAL: No default owner - must be explicitly set!
     this.state = 'idle'; // idle, moving, attacking, working, etc.
     this.target = null;
     this.inventory = options.inventory || {};
@@ -1145,7 +1145,7 @@ function spawnAgoraVillagers() {
         const z = agoraZ + Math.sin(angle) * distance * TILE_SIZE;
         
         const villager = new Unit('villager', { x, y: 0, z });
-        const ownerId = window.player?.id || 'player';
+        const ownerId = window.player?.id;
         villager.owner = ownerId;
         
         // Random rotation
@@ -1158,6 +1158,16 @@ function spawnAgoraVillagers() {
         // Add to player's units
         window.player.units.push(villager);
         gameUnits.push(villager); // Also add to global array for rendering (but NOT neutralUnits)
+        
+        // CRITICAL: Give initial villagers a linger behavior so they can be auto-assigned to work
+        if (window.behaviorManager) {
+          window.behaviorManager.setBehavior(villager, 'linger', {
+            center: { x: villager.pb.state.loc.x, z: villager.pb.state.loc.z },
+            radius: 3,  // Boundary radius
+            wanderDistance: 1.5,  // How far they walk (MUST be less than radius!)
+            wanderInterval: 8000  // Pick new target every 8 seconds
+          });
+        }
         
         // console.log(`🏘️ Spawned villager ${i+1} at agora, total villagers: ${window.player.units.length}`);
     }
@@ -1191,7 +1201,7 @@ function recruitUnit(unitType, options = {}) {
   if (window.isMultiplayer && window.currentMatch && window.player) {
     const normalizedPlayerId = window.player.id?.length > 6 ? window.player.id.slice(-6) : window.player.id;
     
-    const agoraBuilding = window.playerBuildings?.find(b => {
+    const agoraBuilding = window.gameBuildings?.find(b => {
       const normalizedOwner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
       return b.type === 'agora' && normalizedOwner === normalizedPlayerId;
     });
@@ -1216,7 +1226,7 @@ function recruitUnit(unitType, options = {}) {
     const agoraX = window.player.agora.x * TILE_SIZE;
     const agoraZ = window.player.agora.y * TILE_SIZE;
     
-    const ownerId = window.player?.id || 'player';
+    const ownerId = window.player?.id;
     const unit = new Unit(unitType, { x: agoraX, y: 0, z: agoraZ });
     unit.owner = ownerId;
     
@@ -1377,7 +1387,7 @@ function applyTeamColorsToAll() {
 function getTeamColorForOwner(owner) {
   // Check if this is the local player (by ID, not string 'player')
   const localPlayerId = window.player?.id || window.currentMatch?.localPlayerId;
-  if (owner === localPlayerId || owner === 'player') {
+  if (owner === localPlayerId) {
     return window.player?.color || window.currentPlayerColor || '#4A90E2'; // Blue for local player
   }
   

@@ -40,23 +40,22 @@ window.aud = {};  // Audio
       // DON'T initialize networking here - let the lobby system handle it when user picks a game type
       // Network will be initialized when user clicks a game type in the menu
       
-      // Initialize shadow generator after lighting system is ready
+      // Initialize shadows mode after lighting system is ready
+      // This will check the saved preference and only initialize shadows if enabled
       // Add a small delay to ensure lighting system is fully initialized
       setTimeout(() => {
-        if (gfx.initializeShadowGenerator) {
-          gfx.initializeShadowGenerator();
-        }
-        
-        // Initialize shadows mode AFTER shadow generator is ready
-        if (window.hud && window.hud.initializeShadowsMode) {
-          window.hud.initializeShadowsMode();
-        }
-        
-        // Initialize selection mode
-        if (window.hud && window.hud.initializeSelectionMode) {
-          window.hud.initializeSelectionMode();
-        }
-      }, 100); // 100ms delay
+        // Give extra time for meshes to be loaded
+        setTimeout(() => {
+          if (window.hud && window.hud.initializeShadowsMode) {
+            window.hud.initializeShadowsMode();
+          }
+          
+          // Initialize selection mode
+          if (window.hud && window.hud.initializeSelectionMode) {
+            window.hud.initializeSelectionMode();
+          }
+        }, 200); // Additional delay for mesh loading
+      }, 100); // Initial delay for lighting
       
       // Ensure table exists before stretching it
       if (gfx.table && gfx.table.parts && gfx.table.parts.SW) {

@@ -55,17 +55,23 @@ Game.prototype.spawnInitialUnits = function() {
       console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y}), ID: ${player.id}`);
       
       // Spawn agora building for this player
-      if (window.playerBuildings) {
+      if (window.gameBuildings) {
         // Prefer visual placement path so meshes are created for ALL players (not just local)
         const placeFn = (window.placeBuilding || (typeof placeBuilding === 'function' ? placeBuilding : null));
         if (placeFn && window.gfx && window.gfx.scene) {
           const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene);
           if (placed) {
             // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
-            const rawId = player.id || 'player';
+            const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
             placed.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+            
+            // Store team color so attached flag meshes can tint correctly
+            if (typeof window.getTeamColorForOwner === 'function') {
+              placed.teamColor = window.getTeamColorForOwner(placed.owner);
+            }
+            
             player.buildings.push(placed);
-            window.playerBuildings.push(placed);
+            window.gameBuildings.push(placed);
             
             // Rotate agora to face center of map
             if (window.liveField) {
@@ -97,7 +103,7 @@ Game.prototype.spawnInitialUnits = function() {
         } else if (window.Building) {
           // Fallback: create logical building if visual system not available yet
           // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
-          const rawId = player.id || 'player';
+          const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
           const normalizedOwner = rawId.length > 6 ? rawId.slice(-6) : rawId;
           const agoraBuilding = new window.Building('agora', {
             x: player.agora.x * TILE_SIZE,
@@ -110,7 +116,7 @@ Game.prototype.spawnInitialUnits = function() {
           });
           
           player.buildings.push(agoraBuilding);
-          window.playerBuildings.push(agoraBuilding);
+          window.gameBuildings.push(agoraBuilding);
           // console.log(`🏛️ Spawned agora (logic only) for ${player.name || player.id}`);
         }
       }
@@ -142,13 +148,13 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
   if (window.currentMatch && window.currentMatch.mapSeed) {
     // CRITICAL: Normalize player ID to use only the short suffix for consistent hashing
     // (e.g., both "p2p-xyz123abc" and "xyz123abc" should hash to the same value)
-    const rawId = player.id || 'player';
+    const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
     const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
     const playerIdHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     seed = window.currentMatch.mapSeed + playerIdHash;
   } else if (window.mapSeed) {
     // Fallback to global mapSeed if match not yet created
-    const rawId = player.id || 'player';
+    const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
     const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
     const playerIdHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     seed = window.mapSeed + playerIdHash;
@@ -167,7 +173,7 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
   const agoraZ = player.agora.y * TILE_SIZE;
   const villagerCount = 8 + Math.floor(seededRandom() * 5);
   
-  const rawId = player.id || 'player';
+  const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
   const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
   const displayHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   // console.log(`👥 SPAWN SEED TRACE - Player: ${normalizedId}, mapSeed: ${window.currentMatch?.mapSeed || window.mapSeed}, playerHash: ${displayHash}, finalSeed: ${seed}, villagerCount: ${villagerCount}`);
@@ -182,7 +188,7 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
     
     const villager = new window.Unit('villager', { x, y: 0, z });
     // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
-    const rawId = player.id || 'player';
+    const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
     villager.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
     
     // Deterministic rotation
@@ -195,6 +201,16 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
     // Add to player's units
     player.units.push(villager);
     window.gameUnits.push(villager); // Add to global array for rendering
+    
+    // CRITICAL: Give initial villagers a linger behavior so they can be auto-assigned to work
+    if (window.behaviorManager) {
+      window.behaviorManager.setBehavior(villager, 'linger', {
+        center: { x: villager.pb.state.loc.x, z: villager.pb.state.loc.z },
+        radius: 50,  // Large radius - villagers can roam freely
+        wanderDistance: 2.0,  // How far they walk each step
+        wanderInterval: 30000  // Pick new target every 30 seconds (very relaxed)
+      });
+    }
     
     if (i === 0) {
       // console.log(`  📍 First villager for ${player.id?.slice(-6)}: ID=${villager.id?.slice(-6)}, owner=${villager.owner?.slice(-6)}, pos=(${x.toFixed(2)}, ${z.toFixed(2)})`);
@@ -284,13 +300,13 @@ window.gameLoop = {
     let physicsSteps = 0;
     while (this.physicsTime >= this.physicsTimestep && canRunPhysics) {
       // Update units and their behaviors (this applies impulses)
-      if (window.units && window.units.update) {
-        window.units.update(this.physicsTimestep);
+      // NOTE: updateUnits handles behavior stepping with proper multiplayer filtering
+      if (window.updateUnits) {
+        window.updateUnits(this.physicsTimestep);
       }
-      
-  // THIS LINE IS CRITICAL - Step all unit behaviors!
-  if (window.behaviorManager) {
-    window.behaviorManager.stepBehaviors();
+  // CRITICAL: Update buildings (auto-assign workers, spawn villagers, process work)
+  if (window.updateBuildings) {
+    window.updateBuildings(this.physicsTimestep);
   }
   // Update idle units (give them wander behaviors)
   // DISABLED IN MULTIPLAYER: Non-deterministic random causes desync

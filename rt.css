@@ -955,19 +955,19 @@ a:after{
   border-color: aqua;
 }
 #anchor_n {
-  top: 58px;
+  top: 33px;
   left: 50%;
 }
 #anchor_s {
-  bottom: 25px;
+  bottom: 0px;
   left: 50%;
 }
 #anchor_e {
-  right: 25px;
+  right: 0px;
   top: 50%;
 }
 #anchor_w {
-  left: 58px;
+  left: 33px;
   top: 50%;
 }
 

@@ -32,8 +32,8 @@ class Behavior {
             this.unit.pb.state.vel = { x: 0, y: 0, z: 0 };
         }
         
-        // Use unit's speed property if available, otherwise use impulseStrength
-        const effectiveSpeed = this.unit.speed ? this.unit.speed * 0.1 : impulseStrength; // Scale down speed for physics
+        // TUNED: Balanced movement - responsive but smooth (not teleporting)
+        const effectiveSpeed = this.unit.speed ? this.unit.speed * 0.08 : impulseStrength * 0.8;
         
         // Apply impulse in movement direction
         this.unit.pb.imp.x += direction.x * effectiveSpeed;
@@ -88,10 +88,11 @@ class Behavior {
 
 class LingerBehavior extends Behavior {
     constructor(unit, params = {}) {
+        const radius = params.radius || 5;
         super(unit, {
-            radius: params.radius || 5,           // Stay within this radius
+            radius: radius,           // Stay within this radius
             wanderChance: 0.02,  // 2% chance to wander each tick
-            wanderDistance: 2,   // How far to wander
+            wanderDistance: params.wanderDistance || 4,   // How far to wander (nice big walks)
             ...params
         });
         
@@ -99,29 +100,47 @@ class LingerBehavior extends Behavior {
         this.centerPoint = params.center || { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
         
         // Use tick-based timing for multiplayer sync instead of Date.now()
-        this.lastWanderTick = window.currentMatch?.tick || 0;
-        this.wanderInterval = params.wanderInterval || 3000; // Wander every 3 seconds (converted to ticks later)
+        // Add deterministic offset based on unit ID so units don't all wander in sync
+        const unitIdHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const tickOffset = -(unitIdHash % 480); // Spread over 0-8 seconds (480 ticks at 60 tps)
+        this.lastWanderTick = (window.currentMatch?.tick || 0) + tickOffset;
+        this.wanderInterval = params.wanderInterval || 5000; // Pick new target every 5 seconds (longer walks)
+        
+        // Also add slight variation to wander interval (deterministic)
+        const intervalVariation = (unitIdHash % 3000) - 1500; // ±1.5 seconds
+        this.wanderInterval += intervalVariation;
+        
+        // Current wander target (persistent between steps)
+        this.currentTarget = null;
     }
     
     step() {
         // Use tick-based timing for multiplayer sync
         const currentTick = window.currentMatch?.tick || 0;
         const ticksSinceWander = currentTick - this.lastWanderTick;
-        const wanderIntervalTicks = Math.floor(this.wanderInterval / 1000 * 20); // Convert ms to ticks (20 ticks/sec)
+        const wanderIntervalTicks = Math.floor(this.wanderInterval / 1000 * 60); // Convert ms to ticks (60 ticks/sec)
         
-        // Occasionally wander around (deterministic timing)
-        if (ticksSinceWander > wanderIntervalTicks) {
-            this.wander();
-            this.lastWanderTick = currentTick;
-        }
-        
-        // Check if we've wandered too far from center
+        // Check if we've been moved far from center (player command)
         const dx = this.unit.pb.state.loc.x - this.centerPoint.x;
         const dz = this.unit.pb.state.loc.z - this.centerPoint.z;
         const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
-        if (distanceFromCenter > this.params.radius) {
-            // Move back toward center
-            this.moveToward(this.centerPoint);
+        
+        // If moved far away (more than 2x radius), update center point to current location
+        if (distanceFromCenter > this.params.radius * 2) {
+            this.centerPoint = { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z };
+            this.currentTarget = null; // Pick new target on next interval
+            this.lastWanderTick = currentTick; // Reset timer
+        }
+        
+        // Pick a new wander target every wanderInterval (only when timer expires)
+        if (ticksSinceWander > wanderIntervalTicks) {
+            this.pickNewWanderTarget();
+            this.lastWanderTick = currentTick;
+        }
+        
+        // Move toward current target if we have one
+        if (this.currentTarget) {
+            this.moveToward(this.currentTarget);
         }
         
         // Never auto-complete linger behavior for player/AI units (let commands override it)
@@ -129,18 +148,17 @@ class LingerBehavior extends Behavior {
         return false;
     }
     
-    wander() {
+    pickNewWanderTarget() {
         // CRITICAL: Use deterministic angle based on tick + unit ID for multiplayer sync
         const currentTick = window.currentMatch?.tick || 0;
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const randomAngle = ((currentTick + unitIdHash) % 628) / 100; // 0 to 2π (6.28)
+        // Multiply by a large prime to spread out sequential IDs, then add tick for time variation
+        const randomAngle = ((unitIdHash * 7919 + currentTick * 31) % 628) / 100; // 0 to 2π (6.28)
         
-        const wanderPoint = {
+        this.currentTarget = {
             x: this.centerPoint.x + Math.cos(randomAngle) * this.params.wanderDistance,
             z: this.centerPoint.z + Math.sin(randomAngle) * this.params.wanderDistance
         };
-        
-        this.moveToward(wanderPoint);
     }
     
     moveToward(target) {
@@ -157,13 +175,20 @@ class LingerBehavior extends Behavior {
         };
         
         const distance = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-        if (distance > 0.1) {
-                    // Normalize and apply movement
-        direction.x /= distance;
-        direction.z /= distance;
         
+        // CRITICAL FIX: Lower "close enough" threshold to 0.05 so they keep moving until very close
+        // This prevents stop-go behavior where they stop too early
+        if (distance > 0.05) {
+            // Normalize and apply movement
+            direction.x /= distance;
+            direction.z /= distance;
+            
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, (this.unit.speed || 20) * 0.1);
+        this.applyMovementWithRotation(direction, 2.4); // Super slow, very relaxed pace (20% speed)
+        } else {
+            // Very close to target - STOP and wait for next interval
+            // Clear the target so they stand still until wanderInterval elapses
+            this.currentTarget = null;
         }
     }
 }
@@ -172,7 +197,7 @@ class WalkBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
             arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
-            walkSpeed: 2,        // Movement speed
+            walkSpeed: 20,       // Normal walking speed
             ...params
         });
         
@@ -223,7 +248,7 @@ class WalkBehavior extends Behavior {
         }
         
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, (this.unit.speed || 20) * 0.15);
+        this.applyMovementWithRotation(direction, this.params.walkSpeed);
                 
         return false;
     }
@@ -233,7 +258,7 @@ class RunBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
             arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
-            runSpeed: (unit.speed || 20) * 1.5,  // 1.5x faster than unit's base speed
+            runSpeed: 35,  // Faster running speed
             ...params
         });
         
@@ -281,7 +306,7 @@ class WorkBehavior extends Behavior {
         super(unit, {
             workDuration: 30000, // Work for 30 seconds before taking a break
             breakDuration: 5000, // 5 second break
-            workSpeed: (unit.speed || 20) * 0.15, // 20% of unit's base speed for working
+            workSpeed: 18, // Gentle work speed for smooth movement
             ...params
         });
         
@@ -416,31 +441,39 @@ class GatherWorkBehavior extends WorkBehavior {
     seekResources(currentTime) {
         if (!this.building || !this.building.position) return;
         
-        // Find nearest resource within gather radius
-        const nearestResource = this.findNearestResource();
+        // Find nearest resource within gather radius (only search occasionally for performance)
+        const shouldSearch = !this.gatherTarget || (window.currentMatch?.tick || 0) % 40 === 0; // Search every 2 seconds
+        if (shouldSearch) {
+            const nearestResource = this.findNearestResource();
+            if (nearestResource) {
+                this.gatherTarget = nearestResource;
+            }
+        }
         
-        if (nearestResource) {
-            this.gatherTarget = nearestResource;
-            this.gatherState = 'gathering';
-            this.gatherStartTime = currentTime;
+        if (this.gatherTarget) {
+            // Continuously move toward resource target
+            const dx = this.gatherTarget.x - this.unit.pb.state.loc.x;
+            const dz = this.gatherTarget.z - this.unit.pb.state.loc.z;
+            const distance = Math.sqrt(dx * dx + dz * dz);
             
-            // console.log(`🔍 ${this.unit.name || this.unit.type} seeking ${nearestResource.type} at (${nearestResource.x.toFixed(1)}, ${nearestResource.z.toFixed(1)})`);
-            
-            // Move to resource
-            const direction = {
-                x: nearestResource.x - this.unit.pb.state.loc.x,
-                z: nearestResource.z - this.unit.pb.state.loc.z
-            };
-            
-            const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-            if (length > 0.1) {
-                direction.x /= length;
-                direction.z /= length;
+            // Once we reach the resource, switch to gathering state
+            if (distance < TILE_SIZE * 0.5) {
+                this.gatherState = 'gathering';
+                this.gatherStartTime = currentTime;
+                // Store which resource we're gathering from for depletion tracking
+                this.lastGatheredResource = { x: this.gatherTarget.x, z: this.gatherTarget.z };
+                // console.log(`🔍 ${this.unit.name || this.unit.type} reached ${this.gatherTarget.type}, starting to gather`);
+            } else {
+                // Keep moving toward resource every frame
+                const direction = { x: dx / distance, z: dz / distance };
                 this.applyMovementWithRotation(direction, this.params.workSpeed);
             }
         } else {
             // No resources found, just wander around camp
-            // console.log(`⚠️ ${this.unit.name || this.unit.type} found no resources near ${this.building.name}`);
+            if (!this.noResourceWarningShown) {
+                console.warn(`⚠️ ${this.unit.name || this.unit.type} found NO resources at ${this.building.name}! Camp has ${this.building.availableResources?.length || 0} resource tiles. Worker will circle camp.`);
+                this.noResourceWarningShown = true;
+            }
             super.performWork();
         }
     }
@@ -451,13 +484,13 @@ class GatherWorkBehavior extends WorkBehavior {
             return;
         }
         
-        // Check if we've reached the resource
+        // Continuously check position and move if needed
         const dx = this.gatherTarget.x - this.unit.pb.state.loc.x;
         const dz = this.gatherTarget.z - this.unit.pb.state.loc.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance < TILE_SIZE * 0.5) {
-            // We're at the resource, stay and gather
+            // We're at the resource, gathering in place
             const gatherProgress = (currentTime - this.gatherStartTime) / this.params.gatherDuration;
             if (gatherProgress < 1.0) {
                 // console.log(`⛏️ ${this.unit.name || this.unit.type} gathering ${this.gatherTarget.type} (${Math.floor(gatherProgress * 100)}%)`);
@@ -478,9 +511,9 @@ class GatherWorkBehavior extends WorkBehavior {
                 
                 this.gatherTarget = null;
             }
-            // Just stay put while gathering
+            // Stay put while gathering (no movement)
         } else {
-            // Move towards resource
+            // Keep moving towards resource every frame until we reach it
             const direction = { x: dx / distance, z: dz / distance };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
         }
@@ -489,31 +522,35 @@ class GatherWorkBehavior extends WorkBehavior {
     returnToCamp(currentTime) {
         if (!this.building || !this.building.position) return;
         
-        // Move back to camp
+        // Continuously move back to camp every frame
         const dx = this.building.position.x - this.unit.pb.state.loc.x;
         const dz = this.building.position.z - this.unit.pb.state.loc.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         // Get much closer to camp for drop-off (within 0.5 tiles)
         if (distance > TILE_SIZE * 0.5) {
-            // Move towards camp
+            // Keep moving towards camp every frame
             const direction = { x: dx / distance, z: dz / distance };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
             // console.log(`🏃 ${this.unit.name || this.unit.type} returning to camp (${distance.toFixed(1)}m away)`);
         } else {
-            // We're back at camp, stay briefly then seek more resources
+            // We're at camp - wait briefly then seek more resources
             if (currentTime - this.returnStartTime > this.params.returnDuration) {
                 // console.log(`✅ ${this.unit.name || this.unit.type} dropped off resources at camp`);
                 
                 // Actually add resources to player when worker returns
                 this.addGatheredResources();
                 
+                // Increment trip counter so worker picks a different resource next time
+                this.tripsMade = (this.tripsMade || 0) + 1;
+                
                 this.gatherState = 'seeking';
+                this.gatherTarget = null; // Clear old target
                 
                 // Remove visual indicator when dropping off resources
                 this.removeResourceIndicator();
             }
-            // Just stay put while at camp
+            // Just stay put at camp while waiting (no movement)
         }
     }
     
@@ -524,13 +561,21 @@ class GatherWorkBehavior extends WorkBehavior {
         const availableResources = this.building.availableResources || [];
         if (availableResources.length === 0) return null;
         
-        // Pick any available resource (not necessarily the nearest)
-        // This spreads workers out across different resource tiles
-        // Use deterministic selection based on unit ID and tick
-        const currentTick = window.currentMatch?.tick || 0;
+        // CRITICAL: Use a stable resource selection that doesn't change every frame
+        // Pick resource based ONLY on unit ID hash (not tick) so workers stick with their assigned resource
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const randomIndex = (currentTick + unitIdHash) % availableResources.length;
-        const resource = availableResources[randomIndex];
+        
+        // Also factor in how many trips this worker has made to spread them out over time
+        const tripCount = this.tripsMade || 0;
+        const resourceIndex = (unitIdHash + tripCount * 7) % availableResources.length; // *7 to spread out more
+        
+        const resource = availableResources[resourceIndex];
+        
+        // Only log when changing resources (not every frame)
+        if (!this.lastResourceIndex || this.lastResourceIndex !== resourceIndex) {
+            console.log(`🌲 Worker ${this.unit.name || this.unit.type} assigned to resource tile ${resourceIndex} (trip ${tripCount})`);
+            this.lastResourceIndex = resourceIndex;
+        }
         
         return {
             x: resource.worldX,
@@ -588,29 +633,37 @@ class GatherWorkBehavior extends WorkBehavior {
             // console.log(`💰 ${this.unit.name || this.unit.type} delivered ${this.gatheredResourceAmount} ${this.gatheredResourceType} to player`);
         }
         
+        // RESOURCE DEPLETION: Deduct from the resource tile's remaining amount
+        if (this.building && this.building.availableResources && this.lastGatheredResource) {
+            // Find the resource tile this worker gathered from
+            const resourceTile = this.building.availableResources.find(r => 
+                r.worldX === this.lastGatheredResource.x && 
+                r.worldZ === this.lastGatheredResource.z
+            );
+            
+            if (resourceTile && resourceTile.remaining !== undefined) {
+                resourceTile.remaining -= this.gatheredResourceAmount;
+                
+                // If depleted, mark for removal
+                if (resourceTile.remaining <= 0) {
+                    console.log(`🪓 Resource depleted at (${resourceTile.gridX}, ${resourceTile.gridZ})!`);
+                    // Remove from available resources
+                    const index = this.building.availableResources.indexOf(resourceTile);
+                    if (index > -1) {
+                        this.building.availableResources.splice(index, 1);
+                    }
+                    // Remove 3D model
+                    if (window.removeResourceModel) {
+                        window.removeResourceModel(resourceTile.gridX, resourceTile.gridZ);
+                    }
+                }
+            }
+        }
+        
         // Reset gathered resources
         this.gatheredResourceType = null;
         this.gatheredResourceAmount = 0;
-    }
-    
-    findResourceNodes(resourceType, centerPos, radius) {
-        // For now, generate some mock resource nodes around the area
-        // In a real implementation, you'd query your terrain system for actual resources
-        const resources = [];
-        const numResources = 3 + Math.floor(Math.random() * 3); // 3-5 resources
-        
-        for (let i = 0; i < numResources; i++) {
-            const angle = (i / numResources) * Math.PI * 2 + Math.random() * 0.5;
-            const distance = (Math.random() * 0.7 + 0.3) * radius; // 30-100% of radius
-            
-            resources.push({
-                x: centerPos.x + Math.cos(angle) * distance,
-                z: centerPos.z + Math.sin(angle) * distance,
-                type: resourceType
-            });
-        }
-        
-        return resources;
+        this.lastGatheredResource = null;
     }
 }
 
@@ -624,6 +677,11 @@ class FarmWorkBehavior extends WorkBehavior {
             patrolSpeed: 0.5, // Slower patrol speed
             ...params
         });
+        
+        // CRITICAL: Initialize workStartTime for break timing (parent uses workStartTick)
+        const currentTick = window.currentMatch?.tick || 0;
+        this.workStartTime = currentTick * 50; // Convert to ms
+        this.breakStartTime = 0;
         
         this.patrolPoints = [];
         this.currentPatrolIndex = 0;
@@ -879,7 +937,7 @@ class WanderBehavior extends Behavior {
             wanderArea: { x: 8, z: 8 }, // 8x8 unit area around spawn point
             wanderDuration: 8000 + Math.random() * 4000, // 8-12 seconds
             microMoveChance: 0.3, // 30% chance per second
-            wanderSpeed: (unit.speed || 20) * 0.3, // 30% of unit's base speed for wandering
+            wanderSpeed: (unit.speed || 20) * 1.5, // 150% of unit's base speed for wandering (increased from 30%)
             ...params
         });
         
@@ -1106,6 +1164,11 @@ class UnitBehaviorManager {
     
     // Step all unit behaviors (called every physics tick)
     stepBehaviors() {
+        this.stepBehaviorsFiltered(() => true); // Step all behaviors
+    }
+    
+    // Step behaviors with filter (for multiplayer - skip remote units)
+    stepBehaviorsFiltered(filterFn) {
         if (this.behaviors.size === 0) {
             // console.log('🔥🔥🔥 No behaviors to step');
             return;
@@ -1117,6 +1180,11 @@ class UnitBehaviorManager {
         // }
         
         this.behaviors.forEach((behavior, unit) => {
+            // Skip if filter returns false (e.g., remote player units in multiplayer)
+            if (!filterFn(unit)) {
+                return;
+            }
+            
             // Skip behavior updates for neutral units that are far away (use squared distance)
             if (unit.owner === 'neutral' && unit.distanceToCameraSquared > 90000) { // 300^2
                 return; // Skip behavior stepping for distant neutral units
@@ -1133,14 +1201,41 @@ class UnitBehaviorManager {
                     const wasMoving = behavior instanceof WalkBehavior || behavior instanceof RunBehavior;
                     
                     if (isPlayerUnit && wasMoving && unit.pb && unit.pb.state) {
-                        // Set a subtle linger behavior centered at arrival point with small radius
-                        // This makes units naturally spread out a bit instead of stacking
-                        const arrivalPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
-                        this.setBehavior(unit, 'linger', { 
-                            center: arrivalPoint, 
-                            radius: 1.5,  // Small wander radius
-                            wanderInterval: 8000  // Wander every 8 seconds
-                        });
+                        // Form up units after arrival instead of random wandering
+                        // This looks much cleaner and more military
+                        const formationPos = getFormationPosition(unit);
+                        
+                        if (formationPos) {
+                            // Check if we're already at formation position
+                            const dx = formationPos.x - unit.pb.state.loc.x;
+                            const dz = formationPos.z - unit.pb.state.loc.z;
+                            const distToFormation = Math.sqrt(dx * dx + dz * dz);
+                            
+                            if (distToFormation > 1.0) {
+                                // Move to formation position
+                                this.setBehavior(unit, 'walk', {
+                                    targetPoint: formationPos,
+                                    arrivalRadius: 0.8
+                                });
+                            } else {
+                                // Already at formation - just linger in place
+                                this.setBehavior(unit, 'linger', { 
+                                    center: { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z }, 
+                                    radius: 50,  // Can roam freely
+                                    wanderDistance: 2.0,
+                                    wanderInterval: 30000  // Match idle villager pace
+                                });
+                            }
+                        } else {
+                            // Solo unit - just linger in place
+                            const arrivalPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+                            this.setBehavior(unit, 'linger', { 
+                                center: arrivalPoint, 
+                                radius: 50,  // Can roam freely
+                                wanderDistance: 2.0,
+                                wanderInterval: 30000  // Match idle villager pace
+                            });
+                        }
                     }
                 }
             }
@@ -1425,7 +1520,7 @@ class TransformBehavior extends Behavior {
         newUnit.pb.state.rot.copyFrom(originalRot);
         
         // Add to appropriate unit arrays
-        if (owner === 'player' && window.player) {
+        if (owner === window.player?.id && window.player) {
             // Remove old unit from player's array
             const index = window.player.units.indexOf(this.unit);
             if (index > -1) {
@@ -1530,7 +1625,7 @@ class TransformBehavior extends Behavior {
         newVillager.pb.state.rot.copyFrom(originalRot);
         
         // Update unit arrays
-        if (owner === 'player' && window.player) {
+        if (owner === window.player?.id && window.player) {
             const index = window.player.units.indexOf(this.unit);
             if (index > -1) {
                 window.player.units.splice(index, 1);
@@ -2059,6 +2154,64 @@ if (typeof window !== 'undefined') {
         });
         
         // console.log(`🐦 Reset ${resetCount} bird spawn points`);
+    };
+}
+
+// Formation system - arrange units in neat formations after moving
+function getFormationPosition(unit) {
+    if (!unit || !unit.pb || !unit.pb.state) return null;
+    
+    // Find all units near this one that just finished moving (within 10 units)
+    const nearbyUnits = window.gameUnits.filter(other => {
+        if (!other.pb || !other.pb.state) return false;
+        if (other.owner !== unit.owner) return false; // Same owner only
+        if (other === unit) return false;
+        
+        const dx = other.pb.state.loc.x - unit.pb.state.loc.x;
+        const dz = other.pb.state.loc.z - unit.pb.state.loc.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        
+        return dist < 15; // Within 15 units
+    });
+    
+    // Calculate centroid (center point of the group)
+    let centerX = unit.pb.state.loc.x;
+    let centerZ = unit.pb.state.loc.z;
+    let count = 1;
+    
+    nearbyUnits.forEach(other => {
+        centerX += other.pb.state.loc.x;
+        centerZ += other.pb.state.loc.z;
+        count++;
+    });
+    
+    centerX /= count;
+    centerZ /= count;
+    
+    // If alone, just stay put and linger
+    if (count <= 1) return null;
+    
+    // Calculate formation position based on unit's index in the group
+    // Create a nice grid formation
+    const unitsPerRow = Math.ceil(Math.sqrt(count));
+    const spacing = 2.5; // Distance between units
+    
+    // Determine this unit's index in sorted order (for deterministic formation)
+    const sortedUnits = [unit, ...nearbyUnits].sort((a, b) => {
+        return a.id.localeCompare(b.id); // Sort by ID for consistency
+    });
+    
+    const unitIndex = sortedUnits.indexOf(unit);
+    const row = Math.floor(unitIndex / unitsPerRow);
+    const col = unitIndex % unitsPerRow;
+    
+    // Offset from center
+    const rowOffset = (row - (Math.ceil(count / unitsPerRow) - 1) / 2) * spacing;
+    const colOffset = (col - (unitsPerRow - 1) / 2) * spacing;
+    
+    return {
+        x: centerX + colOffset,
+        z: centerZ + rowOffset
     };
 }
 

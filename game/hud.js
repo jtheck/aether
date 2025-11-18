@@ -92,35 +92,44 @@
             let targetVillager = null;
             
             if (selectedVillagers.length > 0) {
-              // Convert the first selected villager
-              targetVillager = selectedVillagers[0];
+              // Convert the first selected villager that isn't already being converted
+              targetVillager = selectedVillagers.find(v => !v.isConverting);
             } else {
-              // Find a random villager near the agora
-              const agoraBuilding = window.playerBuildings?.find(b => b.type === 'agora' && b.owner === normalizedPlayerId);
+              // Find a villager near the agora that isn't already being converted
+              const agoraBuilding = window.gameBuildings?.find(b => b.type === 'agora' && b.owner === normalizedPlayerId);
               if (agoraBuilding) {
                 const agoraPos = { x: agoraBuilding.gridX * TILE_SIZE, z: agoraBuilding.gridZ * TILE_SIZE };
                 
-                // Sort by distance to agora
-                myVillagers.sort((a, b) => {
+                // Filter out units that are already being converted, then sort by distance
+                const availableVillagers = myVillagers.filter(v => !v.isConverting);
+                availableVillagers.sort((a, b) => {
                   const distA = Math.sqrt(Math.pow(a.position.x - agoraPos.x, 2) + Math.pow(a.position.z - agoraPos.z, 2));
                   const distB = Math.sqrt(Math.pow(b.position.x - agoraPos.x, 2) + Math.pow(b.position.z - agoraPos.z, 2));
                   return distA - distB;
                 });
                 
-                targetVillager = myVillagers[0]; // Closest villager
+                targetVillager = availableVillagers[0]; // Closest available villager
               } else {
-                // No agora, just pick first villager
-                targetVillager = myVillagers[0];
+                // No agora, just pick first available villager
+                targetVillager = myVillagers.find(v => !v.isConverting);
               }
             }
             
             if (targetVillager) {
+              // Mark as converting to prevent duplicate commands
+              targetVillager.isConverting = true;
+              
               window.currentMatch.submitCommand({
                 type: 'convert',
                 playerId: window.player.id,
                 unitId: targetVillager.id,
                 targetType: 'brigand'
               });
+              
+              // Clear the flag after a short delay (longer than typical command processing)
+              setTimeout(() => {
+                targetVillager.isConverting = false;
+              }, 500);
             }
           }
         }
@@ -307,11 +316,11 @@
     
     // Don't auto-close menu on left/right clicks anymore
     // Menu items handle their own clicks via 3D mesh picking
-    // Middle mouse and spacebar both open the menu at closest anchor
+    // Middle mouse, spacebar, and B key all open the menu at closest anchor
     
-    // Add spacebar support - opens menu at closest anchor based on HUD mode
+    // Add spacebar and B key support - opens menu at closest anchor based on HUD mode
     document.addEventListener('keydown', function(e) {
-      if (e.code === 'Space') {
+      if (e.code === 'Space' || e.code === 'KeyB') {
         e.preventDefault();
         
         if (USE_3D_HUD) {
@@ -2225,50 +2234,76 @@
     const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
     const cameraUp = BABYLON.Vector3.Cross(cameraRight, cameraForward).normalize();
     
-    // Project unit direction onto current camera plane
-    const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight); // Flip to correct left/right
-    const upDot = BABYLON.Vector3.Dot(toUnit, cameraUp);
+    // Project group average world position into screen space and then
+    // intersect the ray from screen center to that point with the
+    // screen rectangle. This keeps indicators on the edges without
+    // pinning them to corners or jumping across the middle.
+    const projected = BABYLON.Vector3.Project(
+      group.avgPosition,
+      BABYLON.Matrix.Identity(),
+      hud.scene.getTransformMatrix(),
+      hud.camera.viewport
+    );
     
     const unitCount = group.units.length;
     const hasSelection = group.units.some(u => window.player && window.player.isUnitSelected(u));
     
-    // Position based on corner with spread
-    let edgePos;
     const buffer = 30; // Fixed pixel distance from screen edge
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const halfW = centerX - buffer;
+    const halfH = centerY - buffer;
     
-    // Parse position to get corner and spread direction
-    const positionMatch = group.position.match(/corner-([tb])([lr])_([vh])(\d+)/);
-    if (!positionMatch) {
-      // Fallback to simple corner
-      const simpleMatch = group.position.match(/corner-([tb])([lr])/);
-      if (!simpleMatch) return;
-      const [, cornerY, cornerX] = simpleMatch;
-      const spreadDir = 'v';
-    } else {
-      var [, cornerY, cornerX, spreadDir] = positionMatch;
+    // Target position in pixels (may be off-screen)
+    const targetX = projected.x * rect.width;
+    const targetY = projected.y * rect.height;
+    
+    // Direction from screen center toward the unit
+    let dirX = targetX - centerX;
+    let dirY = targetY - centerY;
+    
+    // Avoid degenerate zero-length direction
+    if (dirX === 0 && dirY === 0) {
+      dirY = -1;
     }
     
-    // Use the continuous spread value from the group (0-1) for smooth positioning
-    const spreadFactor = group.edgeSpread; // Already 0-1 continuous value
+    const absDx = Math.abs(dirX);
+    const absDy = Math.abs(dirY);
     
-    // Start at the corner
-    let baseX = cornerX === 'r' ? rect.width - buffer : buffer;
-    let baseY = cornerY === 't' ? buffer : rect.height - buffer;
-    if (spreadDir === 'h') {
-      // Spread horizontally from corner to middle of edge
-      const targetX = rect.width / 2; // Move toward center
-      baseX = baseX + (targetX - baseX) * spreadFactor; // Full spread to middle
+    // Scale factor needed to hit each edge
+    const tX = absDx > 0 ? halfW / absDx : Number.POSITIVE_INFINITY;
+    const tY = absDy > 0 ? halfH / absDy : Number.POSITIVE_INFINITY;
+    const t = Math.min(tX, tY);
+    
+    // Final edge position in pixels
+    const edgePos = {
+      x: centerX + dirX * t,
+      y: centerY + dirY * t
+    };
+    
+    // Work out which edge we hit and a 0–1 spread along that edge so we can
+    // keep the existing tilt/rotation behavior.
+    let cornerX, cornerY, spreadDir, spreadFactor;
+    if (tX < tY) {
+      // Hit left/right edge
+      cornerX = dirX > 0 ? 'r' : 'l';
+      cornerY = dirY < 0 ? 't' : 'b';
+      spreadDir = 'v'; // spread vertically along edge
+      // Map from top (-halfH) .. bottom (+halfH) to 0..1
+      const relY = edgePos.y - (centerY - halfH);
+      spreadFactor = relY / (2 * halfH);
     } else {
-      // Spread vertically from corner to middle of edge
-      const targetY = rect.height / 2; // Move toward center
-      baseY = baseY + (targetY - baseY) * spreadFactor; // Full spread to middle
+      // Hit top/bottom edge
+      cornerY = dirY > 0 ? 'b' : 't';
+      cornerX = dirX < 0 ? 'l' : 'r';
+      spreadDir = 'h'; // spread horizontally along edge
+      // Map from left (-halfW) .. right (+halfW) to 0..1
+      const relX = edgePos.x - (centerX - halfW);
+      spreadFactor = relX / (2 * halfW);
     }
     
-    edgePos = { x: baseX, y: baseY };
-    
-    // Calculate rotation values for tilt
-    const clampedRightDot = cornerX === 'r' ? 1 : -1;
-    const clampedUpDot = cornerY === 't' ? 1 : -1;
+    // Clamp spread factor to [0,1] for safety
+    spreadFactor = Math.min(1, Math.max(0, spreadFactor));
     
     // Calculate position in camera-local space (since indicators are parented to camera)
     const ray = hud.scene.createPickingRay(edgePos.x, edgePos.y, BABYLON.Matrix.Identity(), hud.camera);
@@ -2525,11 +2560,62 @@
   
   // ===== HUD MODE SELECTION =====
   
+  // Enable shadows (helper function)
+  hud.enableShadows = function() {
+    const switchElement = document.getElementById('shadows_switch');
+    const handle = document.getElementById('shadows_handle');
+    
+    // Turn shadows on (right position)
+    if (switchElement) {
+      switchElement.style.background = '#4CAF50';
+      switchElement.dataset.on = 'true';
+    }
+    if (handle) {
+      handle.style.left = '27px';
+    }
+    
+    // Enable shadows
+    window.SHADOWS_ENABLED = true;
+    
+    // Force initialize shadow generator if it doesn't exist
+    if (window.gfx) {
+      if (!window.gfx.shadowGenerator) {
+        // Force initialize shadows (bypass stability checks)
+        if (window.gfx.forceInitializeShadows) {
+          window.gfx.forceInitializeShadows();
+        } else if (window.gfx.autoInitializeShadows) {
+          window.gfx.autoInitializeShadows();
+        }
+      }
+      
+      // Update all meshes to receive shadows
+      if (window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows(true); // Force re-add
+      }
+    }
+    
+    // Save preference
+    localStorage.setItem('shadowsEnabled', 'true');
+    
+    console.log('✅ Shadows enabled');
+    if (window.gfx && window.gfx.shadowGenerator) {
+      const casterCount = window.gfx.shadowGenerator.getShadowMap().renderList.length;
+      console.log(`   Shadow generator active with ${casterCount} casters`);
+    }
+  };
+  
   // Toggle shadows on/off
   hud.toggleShadowsMode = function() {
     const switchElement = document.getElementById('shadows_switch');
     const handle = document.getElementById('shadows_handle');
+    
+    if (!switchElement || !handle) {
+      console.warn('Shadow switch elements not found');
+      return;
+    }
+    
     const isOn = switchElement.dataset.on === 'true';
+    console.log('🎭 Toggling shadows from', isOn ? 'ON' : 'OFF', 'to', isOn ? 'OFF' : 'ON');
     
     if (isOn) {
       // Turn shadows off (left position)
@@ -2540,14 +2626,28 @@
       // Disable shadows
       window.SHADOWS_ENABLED = false;
       
-      // Update all meshes to not receive shadows
-      if (window.gfx && window.gfx.updateAllMeshShadows) {
-        window.gfx.updateAllMeshShadows();
+      // Immediately set receiveShadows = false on all meshes (fast, visual change)
+      if (window.gfx && window.gfx.scene) {
+        window.gfx.scene.meshes.forEach(mesh => {
+          // Skip terrain/background/UI meshes
+          const isBackgroundMesh = mesh.name.includes('mountain') ||
+                                   mesh.name.includes('terrain') ||
+                                   mesh.name.includes('table') ||
+                                   mesh.name.includes('Mesh') ||
+                                   mesh.name.includes('UI');
+          
+          if (!isBackgroundMesh) {
+            mesh.receiveShadows = false;
+            if (mesh.getChildMeshes) {
+              mesh.getChildMeshes().forEach(child => child.receiveShadows = false);
+            }
+          }
+        });
       }
       
       // Save preference
       localStorage.setItem('shadowsEnabled', 'false');
-      // console.log('Shadows disabled');
+      console.log('✅ Shadows disabled');
     } else {
       // Turn shadows on (right position)
       switchElement.style.background = '#4CAF50';
@@ -2558,17 +2658,50 @@
       window.SHADOWS_ENABLED = true;
       
       // Initialize shadow generator if it doesn't exist
-      if (window.gfx && window.gfx.autoInitializeShadows) {
-        window.gfx.autoInitializeShadows();
+      if (!window.gfx || !window.gfx.shadowGenerator) {
+        if (window.gfx && window.gfx.initializeShadowGenerator) {
+          window.gfx.initializeShadowGenerator();
+        }
       }
       
-      // Update all meshes to receive shadows
-      if (window.gfx && window.gfx.updateAllMeshShadows) {
-        window.gfx.updateAllMeshShadows();
-      }
+      // Update all meshes to add them to shadows (use non-force for speed)
+      setTimeout(() => {
+        if (window.gfx && window.gfx.shadowGenerator && window.gfx.updateAllMeshShadows) {
+          // Non-force: only adds meshes not already in the list (should be all of them)
+          window.gfx.updateAllMeshShadows(false);
+        }
+        
+        // Safety: ensure mountains are intact after shadow changes
+        if (window.gfx && window.gfx.mountains && window.gfx.mountains.position) {
+          const expectedY = -200; // Mountains should be way below
+          if (Math.abs(window.gfx.mountains.position.y - expectedY) > 10) {
+            console.warn('🏔️ Mountains position corrupted, recreating...');
+            window.gfx.recreateMountains();
+          }
+        }
+      }, 50);
       
       // Save preference
       localStorage.setItem('shadowsEnabled', 'true');
+      console.log('✅ Shadows enabled');
+    }
+  };
+  
+  // Fix mountains if they got corrupted
+  hud.fixMountains = function() {
+    if (window.gfx && window.gfx.mountains && window.gfx.mountains.dispose) {
+      console.log('🏔️ Recreating mountains...');
+      window.gfx.mountains.dispose();
+      window.gfx.mountains = null;
+    }
+    
+    // Recreate mountains
+    if (window.gfx && window.gfx.scene && window.liveField) {
+      const fieldDim = Math.max(window.liveField.width, window.liveField.height);
+      // Call the createSimpleMountains function - need to expose it first
+      if (window.gfx.recreateMountains) {
+        window.gfx.recreateMountains();
+      }
     }
   };
   
@@ -2777,11 +2910,33 @@
     const switchElement = document.getElementById('shadows_switch');
     const handle = document.getElementById('shadows_handle');
     
-    if (savedShadows === 'true') {
-      // Set to shadows on
+    console.log('🎭 Initializing shadows mode. Saved preference:', savedShadows);
+    
+    if (!switchElement || !handle) {
+      console.warn('⚠️ Shadow switch elements not found during initialization');
+      return;
+    }
+    
+    // Default to shadows ON if not explicitly disabled
+    if (savedShadows === 'false') {
+      // Set to shadows off (explicitly disabled)
+      switchElement.style.background = '#ccc';
+      switchElement.dataset.on = 'false';
+      handle.style.left = '2px';
+      
+      window.SHADOWS_ENABLED = false;
+      
+      // Update all meshes to not receive shadows
+      if (window.gfx && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows();
+      }
+      
+      console.log('✅ Initialized to shadows OFF');
+    } else {
+      // Default to shadows ON (either saved as 'true' or not set)
       switchElement.style.background = '#4CAF50';
-      handle.style.left = '27px';
       switchElement.dataset.on = 'true';
+      handle.style.left = '27px';
       
       window.SHADOWS_ENABLED = true;
       
@@ -2795,21 +2950,10 @@
         window.gfx.updateAllMeshShadows();
       }
       
-      // console.log('Initialized to shadows ON');
-    } else {
-      // Default to shadows off
-      switchElement.style.background = '#ccc';
-      handle.style.left = '2px';
-      switchElement.dataset.on = 'false';
+      // Save preference
+      localStorage.setItem('shadowsEnabled', 'true');
       
-      window.SHADOWS_ENABLED = false;
-      
-      // Update all meshes to not receive shadows
-      if (window.gfx && window.gfx.updateAllMeshShadows) {
-        window.gfx.updateAllMeshShadows();
-      }
-      
-      // console.log('Initialized to shadows OFF');
+      console.log('✅ Initialized to shadows ON');
     }
   };
 

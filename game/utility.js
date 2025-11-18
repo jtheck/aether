@@ -114,7 +114,7 @@ gfx.stretchTable = function(table) {
   parts.NE.mesh.scaling.set(s,sh,s);
   parts.NW.mesh.scaling.set(s,sh,s);
 
-  parts.FLOOR.mesh.position.set(halfWidth,-.5,halfHeight);
+  parts.FLOOR.mesh.position.set(halfWidth,-.777,halfHeight);
   parts.FLOOR.mesh.scaling.set(width,.40,height);
   
   // Apply materials to table parts

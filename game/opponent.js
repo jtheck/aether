@@ -9,10 +9,12 @@
     this.color = options.color || {primary: '#0066cc', secondary: '#004499'};
     this.resources = options.startingResources || {food: 100, wood: 50, stone: 25, magic: 10};
     this.units = [];
-    this.buildings = [];
+    this.buildings = []; // Always initialize buildings array
     this.isAI = options.isAI !== false; // Default to AI for single-player
     this.difficulty = options.difficulty || 'normal';
     this.isRemote = !this.isAI;
+    
+    console.log(`🤖 AI ${this.name} initialized with resources:`, this.resources);
     
     // Spawn position (agora/base location)
     this.agora = options.agora || { x: 85, y: 85 }; // Default to opposite corner from player
@@ -24,10 +26,10 @@
     this.stateSyncTick = 0;
     
     // AI-specific properties
-    this.aiStrategy = options.aiStrategy || 'aggressive';
+    this.aiStrategy = options.aiStrategy || 'balanced'; // Default to balanced (builds + attacks)
     this.aiTargets = [];
     
-    console.log(`👤 Created opponent ${this.name} (${this.isAI ? 'AI' : 'Remote'}) at (${this.agora.x}, ${this.agora.y}) - Difficulty: ${this.difficulty}`);
+    console.log(`👤 Created opponent ${this.name} (${this.isAI ? 'AI' : 'Remote'}) at (${this.agora.x}, ${this.agora.y}) - Strategy: ${this.aiStrategy}, Difficulty: ${this.difficulty}, Color: ${this.color.primary || this.color}`);
   }
   
   // Get resources (mirror player interface)
@@ -179,41 +181,480 @@
   
   // ==================== AI IMPLEMENTATION ====================
   
-  // Make AI decision (called periodically)
+  // AI State Machine & Strategic Planning
+  function getAIState(aiPlayer) {
+    if (!aiPlayer._aiState) {
+      aiPlayer._aiState = {
+        phase: 'early', // early, mid, late
+        strategy: aiPlayer.aiStrategy,
+        economyScore: 0,
+        militaryScore: 0,
+        territoryScore: 0,
+        lastScoutTime: 0,
+        buildQueue: [],
+        trainQueue: [],
+        knownEnemyUnits: [],
+        knownEnemyBuildings: [],
+        resourcePriority: 'food', // food, wood, stone, balanced
+        attackPlanned: false,
+        attackTimer: 0,
+        defenseMode: false
+      };
+    }
+    return aiPlayer._aiState;
+  }
+  
+  // Make AI decision (called periodically) - NOW WITH BIG BRAIN 🧠
   function makeAIDecision(aiPlayer) {
     const resources = aiPlayer.getResources();
     const unitCount = aiPlayer.units.length;
+    const buildingCount = aiPlayer.buildings ? aiPlayer.buildings.length : 0;
+    const aiState = getAIState(aiPlayer);
+    const currentTick = window.currentMatch?.tick || 0;
     
-    // Resource priorities based on strategy
-    let action;
-    switch (aiPlayer.aiStrategy) {
-      case 'defensive':
-        if (resources.food > 50 && unitCount < 5) {
-          action = {type: 'build', buildingType: 'farm'};
-        } else if (resources.wood > 100) {
-          action = {type: 'train', unitType: 'villager'};
-        }
-        break;
-      case 'balanced':
-        if (resources.food > 75) {
-          action = {type: 'train', unitType: Math.random() > 0.7 ? 'villager' : 'frog_scout'};
-        } else {
-          action = {type: 'gather', resourceType: 'food'};
-        }
-        break;
-      case 'aggressive':
-        if (resources.food > 100 && unitCount < 10) {
-          action = {type: 'train', unitType: 'brigand'};
-        } else {
-          action = {type: 'attack', targetPlayer: 'player'};
-        }
-        break;
+    // Update game phase based on time and economy
+    updateGamePhase(aiPlayer, aiState, currentTick);
+    
+    // Scout and gather intelligence
+    updateIntelligence(aiPlayer, aiState);
+    
+    // Evaluate threats and opportunities
+    const threat = evaluateThreat(aiPlayer, aiState);
+    const opportunity = evaluateOpportunity(aiPlayer, aiState);
+    
+    console.log(`🧠 AI ${aiPlayer.name} [${aiState.phase}] - Buildings: ${buildingCount}, Units: ${unitCount}, Eco: ${aiState.economyScore.toFixed(1)}, Mil: ${aiState.militaryScore.toFixed(1)}, Threat: ${threat.toFixed(1)}`);
+    
+    // High-level strategic decisions
+    if (threat > 0.7) {
+      aiState.defenseMode = true;
+      console.log(`🛡️ AI entering DEFENSE MODE!`);
+    } else if (threat < 0.3 && aiState.defenseMode) {
+      aiState.defenseMode = false;
+      console.log(`⚔️ AI exiting defense mode`);
     }
     
-    if (action) {
-      executeAIAction(aiPlayer, action);
+    // Execute multi-step build order based on phase and difficulty
+    const actions = [];
+    
+    // ECONOMIC DECISIONS
+    if (shouldExpandEconomy(aiPlayer, aiState, resources)) {
+      const ecoAction = getEconomicAction(aiPlayer, aiState, resources, buildingCount, unitCount);
+      if (ecoAction) actions.push(ecoAction);
     }
-  };
+    
+    // MILITARY DECISIONS
+    if (shouldBuildMilitary(aiPlayer, aiState, resources, threat)) {
+      const milAction = getMilitaryAction(aiPlayer, aiState, resources, buildingCount, unitCount);
+      if (milAction) actions.push(milAction);
+    }
+    
+    // TACTICAL DECISIONS - Manage existing units
+    manageMilitaryUnits(aiPlayer, aiState, threat, opportunity);
+    manageWorkerUnits(aiPlayer, aiState, resources);
+    
+    // Execute queued actions (respecting difficulty-based timing)
+    const maxActionsPerTick = getDifficultySpeed(aiPlayer);
+    for (let i = 0; i < Math.min(actions.length, maxActionsPerTick); i++) {
+      executeAIAction(aiPlayer, actions[i]);
+    }
+  }
+  
+  // Update game phase (early/mid/late game)
+  function updateGamePhase(aiPlayer, aiState, currentTick) {
+    const gameTime = (currentTick * 50) / 1000; // seconds
+    const buildingCount = aiPlayer.buildings ? aiPlayer.buildings.length : 0;
+    
+    if (gameTime > 600 || buildingCount > 10) {
+      aiState.phase = 'late';
+    } else if (gameTime > 180 || buildingCount > 4) {
+      aiState.phase = 'mid';
+    } else {
+      aiState.phase = 'early';
+    }
+    
+    // Calculate scores
+    const villagerCount = aiPlayer.units.filter(u => u.type === 'villager').length;
+    const militaryCount = aiPlayer.units.filter(u => u.category === 'military').length;
+    
+    aiState.economyScore = (villagerCount * 2) + (buildingCount * 3) + (aiPlayer.resources.food / 50);
+    aiState.militaryScore = militaryCount * 3 + (aiPlayer.resources.stone / 30);
+  }
+  
+  // Update intelligence about enemy
+  function updateIntelligence(aiPlayer, aiState) {
+    if (!window.player) return;
+    
+    // Scan for visible enemy units and buildings
+    aiState.knownEnemyUnits = window.player.units.filter(u => u.pb && u.pb.state);
+    aiState.knownEnemyBuildings = window.gameBuildings ? 
+      window.gameBuildings.filter(b => b.owner === window.player?.id && b.position) : [];
+  }
+  
+  // Evaluate current threat level (0-1)
+  function evaluateThreat(aiPlayer, aiState) {
+    let threatScore = 0;
+    
+    // Count enemy military units near our base
+    const basePos = aiPlayer.basePosition;
+    if (!basePos) return 0;
+    
+    aiState.knownEnemyUnits.forEach(enemy => {
+      if (!enemy.pb || !enemy.pb.state) return;
+      
+      const dx = enemy.pb.state.loc.x - basePos.x;
+      const dz = enemy.pb.state.loc.z - basePos.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      
+      // Closer enemies = higher threat
+      if (distance < 30) {
+        threatScore += enemy.category === 'military' ? 0.3 : 0.1;
+      } else if (distance < 60) {
+        threatScore += enemy.category === 'military' ? 0.1 : 0.02;
+      }
+    });
+    
+    return Math.min(1, threatScore);
+  }
+  
+  // Evaluate opportunities for attack (0-1)
+  function evaluateOpportunity(aiPlayer, aiState) {
+    if (!window.player) return 0;
+    
+    const ourMilitary = aiPlayer.units.filter(u => u.category === 'military').length;
+    const theirMilitary = window.player.units.filter(u => u.category === 'military').length;
+    
+    // We have military advantage?
+    if (ourMilitary > theirMilitary * 1.5) {
+      return 0.8;
+    } else if (ourMilitary > theirMilitary) {
+      return 0.5;
+    }
+    
+    return 0.2;
+  }
+  
+  // Should AI expand economy?
+  function shouldExpandEconomy(aiPlayer, aiState, resources) {
+    const villagerCount = aiPlayer.units.filter(u => u.type === 'villager').length;
+    
+    // Always need economy in early game
+    if (aiState.phase === 'early') return true;
+    
+    // Mid/late game - balance with military
+    const militaryCount = aiPlayer.units.filter(u => u.category === 'military').length;
+    const ratio = militaryCount > 0 ? villagerCount / militaryCount : villagerCount;
+    
+    // Want roughly 2:1 villagers to military
+    return ratio < 2 && resources.food > 30;
+  }
+  
+  // Should AI build military?
+  function shouldBuildMilitary(aiPlayer, aiState, resources, threat) {
+    // Always build military if threatened
+    if (threat > 0.5) return true;
+    
+    // In late game, always maintain military
+    if (aiState.phase === 'late') return true;
+    
+    // Mid game with good economy
+    if (aiState.phase === 'mid' && aiState.economyScore > 15) return true;
+    
+    // Early game - only if strategy is aggressive
+    return aiState.strategy === 'aggressive' && aiState.economyScore > 8;
+  }
+  
+  // Get economic action (building or training)
+  function getEconomicAction(aiPlayer, aiState, resources, buildingCount, unitCount) {
+    const villagerCount = aiPlayer.units.filter(u => u.type === 'villager').length;
+    const campCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'camp').length : 0;
+    const farmCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'farm').length : 0;
+    const villageCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'village').length : 0;
+    
+    // Priority 1: Build camps for resource gathering (need 2-3)
+    if (campCount < 2 && resources.wood >= 30 && resources.stone >= 10) {
+      return {type: 'build', buildingType: 'camp', priority: 'high'};
+    }
+    
+    // Priority 2: Build villages to spawn more villagers (need 1-2)
+    if (villageCount < 1 && buildingCount >= 1 && resources.wood >= 30 && resources.stone >= 10) {
+      return {type: 'build', buildingType: 'village', priority: 'high'};
+    }
+    
+    // Priority 3: Build farms for food production (need 2-3)
+    if (farmCount < 2 && buildingCount >= 2 && resources.wood >= 20 && resources.stone >= 10) {
+      return {type: 'build', buildingType: 'farm', priority: 'medium'};
+    }
+    
+    // Priority 4: Build more camps if we have many workers
+    if (campCount < 3 && villagerCount > 8 && resources.wood >= 30 && resources.stone >= 10) {
+      return {type: 'build', buildingType: 'camp', priority: 'medium'};
+    }
+    
+    // Priority 5: Train villagers (based on difficulty)
+    const maxVillagers = aiPlayer.difficulty === 'hard' ? 20 : (aiPlayer.difficulty === 'normal' ? 12 : 8);
+    if (villagerCount < maxVillagers && resources.food >= 50) {
+      return {type: 'train', unitType: 'villager', priority: 'medium'};
+    }
+    
+    return null;
+  }
+  
+  // Get military action
+  function getMilitaryAction(aiPlayer, aiState, resources, buildingCount, unitCount) {
+    const militaryCount = aiPlayer.units.filter(u => u.category === 'military').length;
+    
+    // Build towers for defense
+    const towerCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'tower').length : 0;
+    if (towerCount < 1 && buildingCount >= 3 && resources.wood >= 50 && resources.stone >= 40) {
+      return {type: 'build', buildingType: 'tower', priority: 'high'};
+    }
+    
+    // Build more towers if in defense mode
+    if (aiState.defenseMode && towerCount < 2 && resources.wood >= 50 && resources.stone >= 40) {
+      return {type: 'build', buildingType: 'tower', priority: 'high'};
+    }
+    
+    // Train military units directly (no barracks needed - agora trains them)
+    if (buildingCount >= 2 && resources.food >= 75) {
+      const unitType = chooseMilitaryUnit(aiPlayer, aiState);
+      return {type: 'train', unitType: unitType, priority: 'medium'};
+    }
+    
+    return null;
+  }
+  
+  // Choose which military unit to train
+  function chooseMilitaryUnit(aiPlayer, aiState) {
+    // Difficulty affects unit variety
+    if (aiPlayer.difficulty === 'hard') {
+      // Hard AI uses advanced units
+      if (Math.random() < 0.3) return 'wizard';
+      if (Math.random() < 0.5) return 'monk';
+      return 'brigand';
+    } else if (aiPlayer.difficulty === 'normal') {
+      // Normal AI uses mix
+      if (Math.random() < 0.3) return 'monk';
+      return 'brigand';
+    } else {
+      // Easy AI uses basic units
+      if (Math.random() < 0.3) return 'frog_scout';
+      return 'villager'; // Easy mode trains villagers as "military"
+    }
+  }
+  
+  // Manage military units tactically
+  function manageMilitaryUnits(aiPlayer, aiState, threat, opportunity) {
+    const militaryUnits = aiPlayer.units.filter(u => u.category === 'military');
+    
+    if (aiState.defenseMode || threat > 0.5) {
+      // DEFEND: Pull military back to base
+      defendBase(aiPlayer, militaryUnits);
+    } else if (opportunity > 0.6 && !aiState.attackPlanned) {
+      // ATTACK: Launch coordinated attack
+      launchAttack(aiPlayer, aiState, militaryUnits);
+    } else {
+      // PATROL: Maintain defensive positions
+      patrolTerritory(aiPlayer, militaryUnits);
+    }
+  }
+  
+  // Defend base from attackers
+  function defendBase(aiPlayer, militaryUnits) {
+    const basePos = aiPlayer.basePosition;
+    if (!basePos) return;
+    
+    militaryUnits.forEach(unit => {
+      if (!unit.pb || !unit.pb.state) return;
+      
+      // Find nearest enemy
+      const nearestEnemy = findNearestEnemy(unit, basePos, 40); // Within 40 units
+      
+      if (nearestEnemy && window.behaviorManager) {
+        // Move to intercept
+        window.behaviorManager.setBehavior(unit, 'run', {
+          targetPoint: { x: nearestEnemy.pb.state.loc.x, z: nearestEnemy.pb.state.loc.z }
+        });
+      } else {
+        // Return to base if no enemies nearby
+        const dx = unit.pb.state.loc.x - basePos.x;
+        const dz = unit.pb.state.loc.z - basePos.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        if (distance > 20) {
+          window.behaviorManager.setBehavior(unit, 'walk', {
+            targetPoint: { x: basePos.x, z: basePos.z }
+          });
+        }
+      }
+    });
+  }
+  
+  // Launch coordinated attack
+  function launchAttack(aiPlayer, aiState, militaryUnits) {
+    if (militaryUnits.length < 3) return; // Need minimum force
+    
+    // Find enemy base or nearest building
+    const targetPos = findAttackTarget(aiPlayer);
+    if (!targetPos) return;
+    
+    console.log(`⚔️ AI LAUNCHING ATTACK with ${militaryUnits.length} units!`);
+    aiState.attackPlanned = true;
+    aiState.attackTimer = (window.currentMatch?.tick || 0) + 600; // Attack for 30 seconds
+    
+    // Send all military units to attack position
+    militaryUnits.forEach((unit, index) => {
+      if (!unit.pb || !unit.pb.state || !window.behaviorManager) return;
+      
+      // Spread units out slightly for better formation
+      const angle = (index / militaryUnits.length) * Math.PI * 2;
+      const offsetX = Math.cos(angle) * 5;
+      const offsetZ = Math.sin(angle) * 5;
+      
+      window.behaviorManager.setBehavior(unit, 'run', {
+        targetPoint: { 
+          x: targetPos.x + offsetX, 
+          z: targetPos.z + offsetZ 
+        }
+      });
+    });
+  }
+  
+  // Find target for attack
+  function findAttackTarget(aiPlayer) {
+    if (!window.player) return null;
+    
+    const basePos = aiPlayer.basePosition;
+    
+    // Target nearest enemy building
+    if (window.gameBuildings) {
+      const enemyBuildings = window.gameBuildings.filter(b => b.owner === window.player?.id && b.position);
+      if (enemyBuildings.length > 0) {
+        // Find nearest building
+        let nearest = enemyBuildings[0];
+        let nearestDist = Infinity;
+        
+        enemyBuildings.forEach(building => {
+          const dx = building.position.x - basePos.x;
+          const dz = building.position.z - basePos.z;
+          const dist = Math.sqrt(dx * dx + dz * dz);
+          
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearest = building;
+          }
+        });
+        
+        return nearest.position;
+      }
+    }
+    
+    // Fallback: target player's base
+    return window.player.basePosition || {x: 0, z: 0};
+  }
+  
+  // Patrol territory when idle
+  function patrolTerritory(aiPlayer, militaryUnits) {
+    const basePos = aiPlayer.basePosition;
+    if (!basePos) return;
+    
+    militaryUnits.forEach((unit, index) => {
+      if (!unit.pb || !unit.pb.state || !window.behaviorManager) return;
+      
+      // Check if unit already has a behavior
+      const currentBehavior = window.behaviorManager.getBehavior(unit);
+      if (currentBehavior && !currentBehavior.isComplete()) return; // Already moving
+      
+      // Patrol in a circle around base
+      const patrolRadius = 25;
+      const angle = ((window.currentMatch?.tick || 0) * 0.01 + index) % (Math.PI * 2);
+      const patrolX = basePos.x + Math.cos(angle) * patrolRadius;
+      const patrolZ = basePos.z + Math.sin(angle) * patrolRadius;
+      
+      window.behaviorManager.setBehavior(unit, 'walk', {
+        targetPoint: { x: patrolX, z: patrolZ }
+      });
+    });
+  }
+  
+  // Find nearest enemy unit
+  function findNearestEnemy(unit, centerPos, maxDistance) {
+    if (!window.player || !window.player.units) return null;
+    
+    let nearest = null;
+    let nearestDist = maxDistance;
+    
+    window.player.units.forEach(enemy => {
+      if (!enemy.pb || !enemy.pb.state) return;
+      
+      const dx = enemy.pb.state.loc.x - centerPos.x;
+      const dz = enemy.pb.state.loc.z - centerPos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearest = enemy;
+      }
+    });
+    
+    return nearest;
+  }
+  
+  // Manage worker units (villagers)
+  function manageWorkerUnits(aiPlayer, aiState, resources) {
+    const villagers = aiPlayer.units.filter(u => u.type === 'villager');
+    
+    villagers.forEach(villager => {
+      if (!villager.pb || !villager.pb.state) return;
+      
+      // Check if already assigned to a building
+      if (villager.assignedBuilding) return;
+      
+      // Find nearest camp and assign worker
+      const camps = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'camp') : [];
+      if (camps.length > 0) {
+        // Find camp with fewest workers
+        let bestCamp = camps[0];
+        let minWorkers = bestCamp.assignedWorkers ? bestCamp.assignedWorkers.length : 0;
+        
+        camps.forEach(camp => {
+          const workerCount = camp.assignedWorkers ? camp.assignedWorkers.length : 0;
+          if (workerCount < minWorkers) {
+            minWorkers = workerCount;
+            bestCamp = camp;
+          }
+        });
+        
+        // Assign worker to camp
+        if (minWorkers < 3 && window.behaviorManager) { // Max 3 workers per camp
+          assignWorkerToBuilding(villager, bestCamp);
+        }
+      }
+    });
+  }
+  
+  // Assign worker to building
+  function assignWorkerToBuilding(worker, building) {
+    if (!building.assignedWorkers) building.assignedWorkers = [];
+    building.assignedWorkers.push(worker);
+    worker.assignedBuilding = building;
+    
+    // Set gather behavior
+    if (window.behaviorManager) {
+      window.behaviorManager.setBehavior(worker, 'gather_work', {
+        building: building
+      });
+    }
+  }
+  
+  // Get AI speed based on difficulty
+  function getDifficultySpeed(aiPlayer) {
+    switch (aiPlayer.difficulty) {
+      case 'easy': return 1; // 1 action per decision
+      case 'normal': return 2; // 2 actions per decision
+      case 'hard': return 3; // 3 actions per decision
+      default: return 1;
+    }
+  }
   
   // Execute AI action
   function executeAIAction(aiPlayer, action) {
@@ -221,15 +662,89 @@
       case 'build':
         // Find suitable build location near base
         const buildPos = findBuildLocation(aiPlayer);
+        console.log(`🏗️ AI attempting to build ${action.buildingType} at (${buildPos.x}, ${buildPos.z})`);
+        
+        if (!window.placeBuilding) {
+          console.warn(`❌ window.placeBuilding not available!`);
+          break;
+        }
+        if (!window.gfx || !window.gfx.scene) {
+          console.warn(`❌ window.gfx.scene not available!`);
+          break;
+        }
+        
         if (buildPos) {
-          aiPlayer.buildings.push({
-            type: action.buildingType,
-            position: buildPos,
-            health: 100,
-            owner: aiPlayer.id
-          });
-          // Deduct resources
-          deductResources(aiPlayer, getBuildCost(action.buildingType));
+          // Actually spawn the building using the building system
+          const building = window.placeBuilding(action.buildingType, buildPos.x, buildPos.z, window.gfx.scene);
+          
+          if (building) {
+            // Set AI ownership
+            building.owner = aiPlayer.id;
+            
+            // Store team color so attached flag meshes can tint correctly
+            if (typeof window.getTeamColorForOwner === 'function') {
+              building.teamColor = window.getTeamColorForOwner(building.owner);
+            }
+            
+            // CRITICAL: Detect resources for camps!
+            if (action.buildingType === 'camp' && window.buildingSystem && window.buildingSystem.checkTileForResources) {
+              const workRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 2;
+              const radiusInTiles = Math.ceil(workRadius * (window.TILE_SIZE || 4));
+              
+              const detectedResources = [];
+              const gridRadius = Math.ceil(radiusInTiles / (window.TILE_SIZE || 4));
+              
+              for (let x = buildPos.x - gridRadius; x <= buildPos.x + gridRadius; x++) {
+                for (let z = buildPos.z - gridRadius; z <= buildPos.z + gridRadius; z++) {
+                  const worldX = x * (window.TILE_SIZE || 4);
+                  const worldZ = z * (window.TILE_SIZE || 4);
+                  const campWorldX = buildPos.x * (window.TILE_SIZE || 4);
+                  const campWorldZ = buildPos.z * (window.TILE_SIZE || 4);
+                  const distance = Math.sqrt(
+                    Math.pow(worldX - campWorldX, 2) + 
+                    Math.pow(worldZ - campWorldZ, 2)
+                  );
+                  
+                  if (distance <= radiusInTiles) {
+                    const resourceInfo = window.buildingSystem.checkTileForResources(x, z);
+                    if (resourceInfo) {
+                      detectedResources.push({
+                        gridX: x,
+                        gridZ: z,
+                        worldX: worldX,
+                        worldZ: worldZ,
+                        type: resourceInfo.type,
+                        amount: resourceInfo.amount
+                      });
+                    }
+                  }
+                }
+              }
+              
+              if (detectedResources.length > 0) {
+                // CRITICAL: Sort resources for deterministic order in P2P
+                detectedResources.sort((a, b) => {
+                  if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+                  return a.gridZ - b.gridZ;
+                });
+                building.availableResources = detectedResources;
+                console.log(`🤖 AI camp detected ${detectedResources.length} resource tiles`);
+              } else {
+                console.warn(`⚠️ AI camp at (${buildPos.x}, ${buildPos.z}) found NO resources!`);
+              }
+            }
+            
+            // Add to AI's building list
+            if (!aiPlayer.buildings) aiPlayer.buildings = [];
+            aiPlayer.buildings.push(building);
+            
+            // Deduct resources
+            deductResources(aiPlayer, getBuildCost(action.buildingType));
+            
+            console.log(`✅ AI ${aiPlayer.name} built ${action.buildingType} at (${buildPos.x}, ${buildPos.z}), now has ${aiPlayer.buildings.length} buildings`);
+          } else {
+            console.warn(`❌ placeBuilding returned null for ${action.buildingType}`);
+          }
         }
         break;
       
@@ -241,8 +756,8 @@
           // Deduct resources
           deductResources(aiPlayer, getUnitCost(action.unitType));
           
-          // Give AI unit orders
-          setTimeout(() => giveAIUnitOrders(unit, aiPlayer.aiStrategy), 1000);
+          // Set unit to idle - let auto-work handle it
+          unit.state = 'idle';
         }
         break;
       
@@ -273,56 +788,46 @@
   
   // AI unit behavior
   function updateAIUnit(unit, deltaTime) {
-    if (unit.state !== 'idle') return;
-    
-    // Simple state machine
-    const aiPlayer = unit.owner === 'opponent' ? window.opponent : null;
-    if (!aiPlayer) return;
-    
-    // Wander or patrol based on strategy
-    switch (aiPlayer.aiStrategy) {
-      case 'defensive':
-        // Stay near base
-        patrolNearBase(unit);
-        break;
-      case 'aggressive':
-        // Scout/attack
-        scoutForEnemies(unit);
-        break;
-      default:
-        // Balanced - mix of both
-        if (Math.random() < 0.7) {
-          patrolNearBase(unit);
-        } else {
-          scoutForEnemies(unit);
-        }
-    }
+    // Let units stay idle - they'll auto-work (villagers gather, military defend)
+    // Don't force them to move around
+    return;
   };
   
   // Give AI unit initial orders
   function giveAIUnitOrders(unit, strategy) {
-    if (strategy === 'aggressive' && unit.category === 'military') {
-      // Attack move toward player base
-      const playerBase = window.player.basePosition || {x: 0, z: 0};
-      window.pathfinding.moveUnit(unit, playerBase);
-    } else if (unit.type === 'villager') {
-      // Find nearest resource
-      const nearestResource = findNearestResource(unit.owner === 'opponent' ? window.opponent : window.player);
-      if (nearestResource) {
-        window.resources.gather(unit, nearestResource);
-      }
+    // Villagers should gather resources near their base
+    if (unit.type === 'villager') {
+      // Don't move - they'll auto-gather when idle
+      unit.state = 'idle';
+    } else if (unit.category === 'military') {
+      // Military units patrol near base (don't rush center)
+      unit.state = 'idle';
     }
   };
   
   // Helper functions for AI
   function findBuildLocation(player) {
-    // Find empty tile near player base (simplified)
-    const baseX = player.basePosition?.x || 0;
-    const baseZ = player.basePosition?.z || 0;
-    return {
-      x: baseX + (Math.random() - 0.5) * 10,
-      z: baseZ + (Math.random() - 0.5) * 10
-    };
+    // Find empty tile near player base
+    // agora is in grid coordinates, basePosition might be in world coords
+    const baseGridX = player.agora ? player.agora.x : (player.basePosition ? Math.floor(player.basePosition.x / (window.TILE_SIZE || 4)) : 0);
+    const baseGridZ = player.agora ? player.agora.y : (player.basePosition ? Math.floor(player.basePosition.z / (window.TILE_SIZE || 4)) : 0);
+    
+    // Try to place building near base (within 8-15 tiles away)
+    const distance = 8 + Math.floor(Math.random() * 7); // 8-15 tiles away
+    const angle = Math.random() * Math.PI * 2; // Random direction
+    
+    const gridX = Math.floor(baseGridX + Math.cos(angle) * distance);
+    const gridZ = Math.floor(baseGridZ + Math.sin(angle) * distance);
+    
+    // Make sure it's within map bounds
+    const field = window.liveField;
+    if (field) {
+      const clampedX = Math.max(5, Math.min(field.width - 5, gridX));
+      const clampedZ = Math.max(5, Math.min(field.height - 5, gridZ));
+      return { x: clampedX, z: clampedZ };
+    }
+    
+    return { x: gridX, z: gridZ };
   };
   
   function findNearestResource(player) {
@@ -377,13 +882,15 @@
   };
   
   function getBuildCost(buildingType) {
-    // Define building costs
+    // Define building costs (matches BuildingTypes in buildings.js)
     const costs = {
-      farm: {food: 50, wood: 20},
-      barracks: {wood: 100, stone: 50},
-      // Add more building types
+      camp: {wood: 30, stone: 10},
+      village: {wood: 30, stone: 10},
+      farm: {wood: 20, stone: 10},
+      tower: {wood: 50, stone: 40},
+      agora: {wood: 50, stone: 100}
     };
-    return costs[buildingType] || {food: 100, wood: 50};
+    return costs[buildingType] || {wood: 30, stone: 10};
   };
   
   // ==================== REMOTE PLAYER IMPLEMENTATION ====================
@@ -520,14 +1027,10 @@
   // Initialize AI unit behavior
   function initializeAIUnit(unit) {
     // Set AI-specific properties
-    unit.aiBehavior = 'patrol';
+    unit.aiBehavior = 'idle';
     unit.aiTarget = null;
     unit.lastDecisionTick = 0;
-    
-    // Give initial orders
-    if (window.opponent) {
-      giveAIUnitOrders(unit, window.opponent.aiStrategy);
-    }
+    unit.state = 'idle'; // Start idle, let auto-work take over
   };
   
   // Export classes

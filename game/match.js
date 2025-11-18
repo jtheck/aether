@@ -415,6 +415,12 @@
       this.tick++;
       this.gameTime = this.tick / (window.net?.TICK_RATE || 20);
       
+      // Update AI players (full AI logic including building decisions)
+      // Run every 20 ticks (once per second)
+      if (this.tick % 20 === 0) {
+        this.updateAIPlayers();
+      }
+      
       // Generate AI commands (host only, deterministic based on tick)
       // Run every 20 ticks (once per second) to avoid overwhelming the command system
       if (this.tick % 20 === 0 && this.isHost()) {
@@ -424,9 +430,13 @@
       // Execute commands for this tick
       this.executeCommandsForTick(this.tick);
       
-      // Check victory conditions
-      if (this.tick % 20 === 0) { // Check every second
-        this.checkVictoryConditions();
+      // Check agora capture progress every tick (for smooth countdown)
+      this.checkAgoraOccupation();
+      
+      // Check other victory conditions every second
+      if (this.tick % 20 === 0) {
+        this.checkWonderVictory();
+        this.checkEliminationVictory();
       }
       
       // Synchronization checkpoint
@@ -601,6 +611,9 @@
         case 'gather':
           this.executeGatherCommand(command);
           break;
+        case 'work':
+          this.executeWorkCommand(command);
+          break;
         case 'ability':
           this.executeAbilityCommand(command);
           break;
@@ -620,13 +633,47 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
-      units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId && window.behaviorManager && window.WalkBehavior) {
-          // Use WalkBehavior for player-controlled movement
-          // This is the same system AI uses, ensuring consistent deterministic movement
+      // P2P DETERMINISTIC: Both clients execute ALL commands for deterministic simulation
+      // Filter to only owned units (security check)
+      const ownedUnits = units.filter(unit => {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        return unitOwnerId === normalizedPlayerId;
+      });
+      
+      // Single unit goes to exact point, multiple units spread out in formation
+      if (ownedUnits.length === 1) {
+        // Single unit - precise positioning
+        const unit = ownedUnits[0];
+        if (window.behaviorManager && window.WalkBehavior) {
           window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
         }
-      });
+      } else if (ownedUnits.length > 1) {
+        // Multiple units - spread them out in a formation around the target point
+        const spacing = 2.5; // Distance between units
+        const unitsPerRow = Math.ceil(Math.sqrt(ownedUnits.length));
+        
+        // Sort units deterministically by ID for consistent formation
+        const sortedUnits = [...ownedUnits].sort((a, b) => a.id.localeCompare(b.id));
+        
+        sortedUnits.forEach((unit, index) => {
+          if (window.behaviorManager && window.WalkBehavior) {
+            // Calculate offset from center based on grid position
+            const row = Math.floor(index / unitsPerRow);
+            const col = index % unitsPerRow;
+            
+            const rowOffset = (row - (Math.ceil(ownedUnits.length / unitsPerRow) - 1) / 2) * spacing;
+            const colOffset = (col - (unitsPerRow - 1) / 2) * spacing;
+            
+            const spreadTarget = {
+              x: cmd.target.x + colOffset,
+              y: cmd.target.y,
+              z: cmd.target.z + rowOffset
+            };
+            
+            window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: spreadTarget });
+          }
+        });
+      }
     }
     
     executeAttackCommand(cmd) {
@@ -639,8 +686,10 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
+      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId) {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
           // Set unit attack target directly for player-controlled combat
           // Don't use behaviorManager - that's for AI-controlled behaviors
           unit.target = target;
@@ -666,6 +715,11 @@
         const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
         building.owner = normalizedPlayerId;
         
+        // Store team color so attached flag meshes can tint correctly
+        if (typeof window.getTeamColorForOwner === 'function') {
+          building.teamColor = window.getTeamColorForOwner(building.owner);
+        }
+        
         // Apply rotation if specified
         if (cmd.rotation !== undefined) {
           building.targetRotation = cmd.rotation;
@@ -676,9 +730,53 @@
           building.setupStartTick = this.tick;
         }
         
-        // Save detected resources if provided
-        if (cmd.resources && cmd.resources.length > 0) {
-          building.availableResources = [...cmd.resources];
+        // CRITICAL: Detect resources DETERMINISTICALLY during command execution
+        // This ensures both clients detect the exact same resources
+        if (cmd.buildingType === 'camp' && window.buildingSystem && window.buildingSystem.checkTileForResources) {
+          const workRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 2;
+          const radiusInTiles = workRadius * (window.TILE_SIZE || 4);
+          
+          const detectedResources = [];
+          const gridRadius = Math.ceil(radiusInTiles / (window.TILE_SIZE || 4));
+          
+          for (let x = cmd.gridX - gridRadius; x <= cmd.gridX + gridRadius; x++) {
+            for (let z = cmd.gridZ - gridRadius; z <= cmd.gridZ + gridRadius; z++) {
+              const worldX = x * (window.TILE_SIZE || 4);
+              const worldZ = z * (window.TILE_SIZE || 4);
+              const campWorldX = cmd.gridX * (window.TILE_SIZE || 4);
+              const campWorldZ = cmd.gridZ * (window.TILE_SIZE || 4);
+              const distance = Math.sqrt(
+                Math.pow(worldX - campWorldX, 2) + 
+                Math.pow(worldZ - campWorldZ, 2)
+              );
+              
+              if (distance <= radiusInTiles) {
+                const resourceInfo = window.buildingSystem.checkTileForResources(x, z);
+                if (resourceInfo) {
+                  detectedResources.push({
+                    gridX: x,
+                    gridZ: z,
+                    worldX: worldX,
+                    worldZ: worldZ,
+                    type: resourceInfo.type,
+                    amount: resourceInfo.amount
+                  });
+                }
+              }
+            }
+          }
+          
+          if (detectedResources.length > 0) {
+            // CRITICAL: Sort resources for deterministic order on both clients
+            detectedResources.sort((a, b) => {
+              if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+              return a.gridZ - b.gridZ;
+            });
+            building.availableResources = detectedResources;
+            console.log(`🏗️ DETERMINISTIC: Camp at (${cmd.gridX}, ${cmd.gridZ}) detected ${detectedResources.length} resources during command execution`);
+          } else {
+            console.warn(`⚠️ DETERMINISTIC: Camp at (${cmd.gridX}, ${cmd.gridZ}) found NO resources during command execution`);
+          }
         }
       }
     }
@@ -754,17 +852,23 @@
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
       if (!unit || !player || unit.owner !== normalizedPlayerId) {
+        // Clear converting flag if unit exists (even on failed conversions)
+        if (unit) unit.isConverting = false;
         return;
       }
       
       // Only allow converting villagers for now
       if (unit.type !== 'villager') {
         console.warn(`⚠️ Cannot convert ${unit.type} to ${cmd.targetType}`);
+        // Clear converting flag to prevent unit from being locked
+        unit.isConverting = false;
         return;
       }
       
-      // Store the old unit's position, state, and ID
-      const oldPosition = { ...unit.position };
+      // Store the old unit's CURRENT position (from physics body, not spawn position), state, and ID
+      const oldPosition = unit.pb && unit.pb.state && unit.pb.state.loc 
+        ? { x: unit.pb.state.loc.x, y: unit.pb.state.loc.y, z: unit.pb.state.loc.z }
+        : { ...unit.position }; // Fallback to unit.position if physics body not available
       const oldRotation = unit.rotation;
       const oldMesh = unit.mesh; // Keep reference to old mesh
       const oldId = unit.id; // CRITICAL: Preserve unit ID so commands still work!
@@ -831,7 +935,10 @@
         window.behaviorManager.setBehavior(newUnit, 'walk', { targetPoint: behaviorTarget });
       } else if (window.behaviorManager) {
         // Default to linger behavior for player units
-        window.behaviorManager.setBehavior(newUnit, 'linger');
+        // BUGFIX: Explicitly set center to conversion location so brigand doesn't walk back to villager spawn
+        window.behaviorManager.setBehavior(newUnit, 'linger', {
+          center: { x: newUnit.pb.state.loc.x, z: newUnit.pb.state.loc.z }
+        });
       }
       
       // Restore selection if the old unit was selected
@@ -858,11 +965,39 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
+      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId) {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
           // Use 'gather_work' behavior which is supported by the behavior manager
           if (window.behaviorManager) {
             window.behaviorManager.setBehavior(unit, 'gather_work', { resource: resource });
+          }
+        }
+      });
+    }
+    
+    executeWorkCommand(cmd) {
+      const units = this.getUnitsByIds(cmd.unitIds);
+      const building = this.getBuildingById(cmd.buildingId);
+      
+      if (!building) return;
+      
+      // CRITICAL: Normalize player ID for ownership check
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
+      // P2P DETERMINISTIC: Execute all commands on both clients
+      units.forEach(unit => {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
+          // Use 'work' or 'gather_work' behavior based on building type
+          if (window.behaviorManager) {
+            if (building.type === 'camp' || building.type === 'farm') {
+              window.behaviorManager.setBehavior(unit, 'gather_work', { building: building });
+            } else {
+              window.behaviorManager.setBehavior(unit, 'work', { building: building });
+            }
           }
         }
       });
@@ -877,6 +1012,14 @@
       
       if (!unit || unit.owner !== normalizedPlayerId) return;
       
+      // MULTIPLAYER: Only create behaviors if this is OUR unit
+      if (window.isMultiplayer) {
+        const localPlayerId = window.player?.id?.slice(-6);
+        if (normalizedPlayerId !== localPlayerId) {
+          return; // Skip behavior creation for remote units
+        }
+      }
+      
       // Apply ability behavior using behavior manager
       if (window.behaviorManager && cmd.abilityType) {
         window.behaviorManager.setBehavior(unit, cmd.abilityType, cmd.params || {});
@@ -890,8 +1033,10 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
+      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId) {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
           // Clear any active behavior and set to linger (idle) state
           if (window.behaviorManager) {
             window.behaviorManager.clearBehavior(unit);
@@ -920,6 +1065,26 @@
       return this.localPlayerId === this.hostId;
     }
     
+    // Update AI players (runs full AI logic including building)
+    updateAIPlayers() {
+      // Find all AI players
+      const aiPlayers = this.players.filter(p => {
+        const player = typeof p === 'string' ? this.getPlayerById(p) : p;
+        return player && player.isAI;
+      });
+      
+      if (aiPlayers.length === 0) return;
+      
+      // Call updateAI for each AI player (triggers building decisions, etc.)
+      aiPlayers.forEach(aiPlayerRef => {
+        const aiPlayer = typeof aiPlayerRef === 'string' ? this.getPlayerById(aiPlayerRef) : aiPlayerRef;
+        if (aiPlayer && aiPlayer.updateAI) {
+          // deltaTime is 1 second (since we run this every 20 ticks at 20 ticks/sec)
+          aiPlayer.updateAI(1.0);
+        }
+      });
+    }
+    
     // Generate AI commands (host only, runs during tick processing)
     generateAICommands() {
       // Find all AI players
@@ -941,7 +1106,36 @@
         );
         
         idleVillagers.forEach(villager => {
-          // Find nearest resource (simple distance check)
+          // Priority 1: Find nearest player-owned building (camp, farm, etc.)
+          const playerBuildings = (player.buildings || []).filter(b => 
+            b && b.position && (b.type === 'camp' || b.type === 'farm')
+          );
+          
+          let nearestBuilding = null;
+          let nearestBuildingDist = Infinity;
+          
+          playerBuildings.forEach(building => {
+            const dx = building.position.x - (villager.pb?.state?.loc?.x || 0);
+            const dz = building.position.z - (villager.pb?.state?.loc?.z || 0);
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist < nearestBuildingDist) {
+              nearestBuildingDist = dist;
+              nearestBuilding = building;
+            }
+          });
+          
+          // If nearby building found, go work there
+          if (nearestBuilding && nearestBuildingDist < 150) {
+            this.submitCommand({
+              type: 'work',
+              playerId: player.id,
+              unitIds: [villager.id],
+              buildingId: nearestBuilding.id
+            });
+            return;
+          }
+          
+          // Priority 2: Find nearest natural resource (trees, rocks, berries)
           const resources = window.resources?.resources || [];
           let nearestResource = null;
           let nearestDist = Infinity;
@@ -957,7 +1151,7 @@
             }
           });
           
-          // Submit gather command
+          // Submit gather command only if resource nearby
           if (nearestResource && nearestDist < 200) {
             this.submitCommand({
               type: 'gather',
@@ -965,17 +1159,8 @@
               unitIds: [villager.id],
               resourceId: nearestResource.id
             });
-          } else {
-            // No nearby resources, wander toward center of map
-            const centerX = (window.liveField?.width || 128) * 2; // TILE_SIZE = 4
-            const centerZ = (window.liveField?.height || 128) * 2;
-            this.submitCommand({
-              type: 'move',
-              playerId: player.id,
-              unitIds: [villager.id],
-              target: { x: centerX, y: 0, z: centerZ }
-            });
           }
+          // Otherwise stay idle near base
         });
         
         // Simple AI: Train villagers if we have resources and less than 12
@@ -1026,7 +1211,7 @@
         // Loss condition: Player has no villagers left
         const villagers = player.units?.filter(u => u && u.type === 'villager') || [];
         if (villagers.length === 0) {
-          console.log(`💀 Player ${pid} has no villagers - eliminated!`);
+          // console.log(`💀 Player ${pid} has no villagers - eliminated!`);
           this.eliminatePlayer(pid);
           return;
         }
@@ -1040,9 +1225,6 @@
         }
       });
       
-      // Win condition: Check if any player has occupied an opponent's Agora
-      this.checkAgoraOccupation();
-      
       // Check if only one player remains
       const remainingPlayers = this.players.filter(p => 
         !this.eliminatedPlayers.has(p.id || p)
@@ -1055,14 +1237,15 @@
       }
     }
     
-    // Check if any player has occupied an opponent's Agora
+    // TF2-style capture point system for Agoras
     checkAgoraOccupation() {
-      const OCCUPATION_RADIUS = 8; // Tiles
-      const OCCUPATION_TIME = 5; // Seconds to hold for victory
+      const OCCUPATION_RADIUS = 5; // Tiles (tighter hitbox for agora)
+      const CAPTURE_TIME = 15; // Seconds for full capture
+      const CAPTURE_RATE = 100 / (CAPTURE_TIME * 20); // % per tick (at 20 ticks/sec)
       
-      // Initialize occupation timers if not exists
-      if (!this.agoraOccupationTimers) {
-        this.agoraOccupationTimers = new Map(); // buildingId -> { occupier, startTime }
+      // Initialize capture states if not exists
+      if (!this.agoraCaptureStates) {
+        this.agoraCaptureStates = new Map(); // buildingId -> { owner, progress, capturing, contested }
       }
       
       this.players.forEach(player => {
@@ -1077,19 +1260,31 @@
         const agora = player.buildings?.find(b => b && b.type === 'agora');
         if (!agora) return;
         
-        // Check if enemy units are near this Agora
+        const agoraKey = agora.id || `${normalizedPid}-agora`;
         const agoraTileX = agora.gridX;
         const agoraTileZ = agora.gridZ;
         
-        // Find all enemy units near this Agora
-        const enemyUnitsNearby = [];
+        // Initialize capture state for this agora
+        if (!this.agoraCaptureStates.has(agoraKey)) {
+          this.agoraCaptureStates.set(agoraKey, {
+            owner: pid,
+            progress: 0, // 0-100%, neutral when owner has it
+            capturer: null,
+            contested: false
+          });
+        }
+        
+        const captureState = this.agoraCaptureStates.get(agoraKey);
+        
+        // Find all units near this Agora grouped by player
+        const unitsNearby = new Map(); // playerId -> unit count
         this.players.forEach(otherPlayer => {
           const otherPid = otherPlayer.id || otherPlayer;
           const normalizedOtherPid = otherPid.length > 6 ? otherPid.slice(-6) : otherPid;
           
-          if (normalizedOtherPid === normalizedPid) return; // Skip own units
           if (this.eliminatedPlayers.has(otherPid)) return; // Skip eliminated players
           
+          let count = 0;
           otherPlayer.units?.forEach(unit => {
             if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) return;
             
@@ -1102,55 +1297,99 @@
             const distance = Math.sqrt(dx * dx + dz * dz);
             
             if (distance <= OCCUPATION_RADIUS) {
-              enemyUnitsNearby.push({ unit, playerId: otherPid });
+              count++;
             }
           });
+          
+          if (count > 0) {
+            unitsNearby.set(normalizedOtherPid, count);
+          }
         });
         
-        const agoraKey = agora.id || `${normalizedPid}-agora`;
+        // Determine capture state with defender advantage (need 2x attackers to capture)
+        const defenderCount = unitsNearby.get(normalizedPid) || 0;
+        const enemyTeams = Array.from(unitsNearby.keys()).filter(p => p !== normalizedPid);
         
-        if (enemyUnitsNearby.length > 0) {
-          // Enemy units are occupying this Agora
-          const occupier = enemyUnitsNearby[0].playerId; // First enemy player found
+        if (enemyTeams.length === 0) {
+          // No enemies - point is safe, decay progress back to 0
+          captureState.contested = false;
+          captureState.capturer = null;
+          captureState.notified = false; // Reset notification flag
+          captureState.contestedNotified = false; // Reset contested notification
           
-          if (!this.agoraOccupationTimers.has(agoraKey)) {
-            // Start occupation timer
-            this.agoraOccupationTimers.set(agoraKey, {
-              occupier: occupier,
-              startTime: this.gameTime,
-              defender: pid
-            });
-            console.log(`🚩 Player ${occupier} started occupying ${pid}'s Agora!`);
-            this.showNotification(`Agora under attack!`, 'warning');
+          if (captureState.progress > 0) {
+            captureState.progress = Math.max(0, captureState.progress - CAPTURE_RATE * 2); // Decay 2x faster
+          }
+          
+          // Update agora visual state
+          agora.contested = false;
+          agora.contestedBy = null;
+          agora.captureProgress = captureState.progress;
+          
+        } else if (enemyTeams.length === 1) {
+          // One enemy team - check if they have enough units to capture
+          const capturingTeam = enemyTeams[0];
+          const attackerCount = unitsNearby.get(capturingTeam) || 0;
+          
+          // Defender blocks capture if they have at least half as many units (attacker needs 2x)
+          if (defenderCount > 0 && attackerCount < defenderCount * 2) {
+            // Defenders are holding the point! Contested state
+            captureState.contested = true;
+            captureState.capturer = null;
             
-            // Mark Agora as contested
+            // Notify on contested start (only once)
+            if (!captureState.contestedNotified) {
+              // console.log(`🛡️ Defenders are holding ${pid}'s Agora! (${defenderCount} defenders vs ${attackerCount} attackers)`);
+              captureState.contestedNotified = true;
+            }
+            
+            // Update agora visual state
             agora.contested = true;
-            agora.contestedBy = occupier;
+            agora.contestedBy = 'defenders';
+            agora.captureProgress = captureState.progress;
           } else {
-            // Check if occupation time reached
-            const occupation = this.agoraOccupationTimers.get(agoraKey);
-            const occupationDuration = this.gameTime - occupation.startTime;
+            // Attackers have 2x advantage or no defenders - capturing!
+            captureState.contested = false;
+            captureState.capturer = capturingTeam;
+            captureState.contestedNotified = false; // Reset contested notification
             
-            if (occupationDuration >= OCCUPATION_TIME) {
-              // Victory by occupation!
-              console.log(`🏆 Player ${occupation.occupier} captured ${pid}'s Agora!`);
-              this.endMatch(occupation.occupier, 'agora_capture');
-            } else {
-              // Update UI with occupation progress
-              const progress = Math.floor((occupationDuration / OCCUPATION_TIME) * 100);
-              if (this.tick % 20 === 0) { // Update every second
-                console.log(`⏳ Agora occupation: ${progress}%`);
-              }
+            // Increase capture progress
+            captureState.progress = Math.min(100, captureState.progress + CAPTURE_RATE);
+            
+            // Update agora visual state
+            agora.contested = false;
+            agora.contestedBy = capturingTeam;
+            agora.captureProgress = captureState.progress;
+            
+            // Notify on capture start (only once when it starts)
+            if (captureState.progress <= CAPTURE_RATE && !captureState.notified) {
+              // console.log(`🚩 Player ${capturingTeam} is capturing ${pid}'s Agora! (${attackerCount} attackers vs ${defenderCount} defenders)`);
+              this.showNotification(`Your Agora is under attack!`, 'warning');
+              captureState.notified = true;
+            }
+            
+            // Check for full capture
+            if (captureState.progress >= 100) {
+              // console.log(`🏆 Player ${capturingTeam} captured ${pid}'s Agora!`);
+              this.endMatch(capturingTeam, 'agora_capture');
             }
           }
+          
         } else {
-          // No enemy units nearby - clear occupation
-          if (this.agoraOccupationTimers.has(agoraKey)) {
-            console.log(`✅ Player ${pid}'s Agora is no longer contested`);
-            this.agoraOccupationTimers.delete(agoraKey);
-            agora.contested = false;
-            agora.contestedBy = null;
+          // Multiple enemy teams - CONTESTED! (no progress)
+          captureState.contested = true;
+          captureState.capturer = null;
+          
+          // Notify on contested start (only once)
+          if (!captureState.contestedNotified) {
+            // console.log(`⚔️ Agora is CONTESTED by multiple teams!`);
+            captureState.contestedNotified = true;
           }
+          
+          // Update agora visual state
+          agora.contested = true;
+          agora.contestedBy = 'multiple';
+          agora.captureProgress = captureState.progress;
         }
       });
     }
@@ -1199,7 +1438,7 @@
     // Eliminate a player
     eliminatePlayer(playerId) {
       this.eliminatedPlayers.add(playerId);
-      console.log(`💀 Player ${playerId} eliminated`);
+      // console.log(`💀 Player ${playerId} eliminated`);
       
       // Show notification
       if (playerId === this.localPlayerId) {
@@ -1261,9 +1500,9 @@
       this.replay.stats = this.stats;
       this.replay.endTick = this.tick;
       
-      console.log(`🏁 Match ended: ${reason}`);
-      console.log(`⏱️ Duration: ${Math.floor(duration / 60)}:${Math.floor(duration % 60).toString().padStart(2, '0')}`);
-      console.log(`👑 Winner: ${winnerId || 'Draw'}`);
+      // console.log(`🏁 Match ended: ${reason}`);
+      // console.log(`⏱️ Duration: ${Math.floor(duration / 60)}:${Math.floor(duration % 60).toString().padStart(2, '0')}`);
+      // console.log(`👑 Winner: ${winnerId || 'Draw'}`);
       
       // Show victory/defeat screen
       this.showEndGameScreen();
@@ -1319,7 +1558,7 @@
       });
       
       // Hash all building states (in deterministic order)
-      const sortedBuildings = (window.playerBuildings || []).slice().sort((a, b) => 
+      const sortedBuildings = (window.gameBuildings || []).slice().sort((a, b) => 
         (a.id || '').localeCompare(b.id || '')
       );
       
@@ -1341,32 +1580,32 @@
       });
       
       // Log detailed state for first few syncs
-      if (this.tick < 300 && this.tick % 100 === 0) {
-        console.log(`🔍 Checksum at tick ${this.tick}:`, {
-          hash,
-          unitCount,
-          buildingCount,
-          firstUnitPos: sortedUnits[0]?.pb?.state?.loc ? 
-            `(${sortedUnits[0].pb.state.loc.x.toFixed(2)}, ${sortedUnits[0].pb.state.loc.z.toFixed(2)})` : 
-            'none'
-        });
-        
-        // DETAILED DESYNC DEBUGGING - Log all unit positions and owners
-        console.log(`📊 Unit details at tick ${this.tick}:`);
-        sortedUnits.slice(0, 5).forEach((unit, i) => {
-          if (unit.pb && unit.pb.state) {
-            console.log(`  Unit ${i}: ID=${unit.id?.slice(-6)}, owner=${unit.owner?.slice(-6)}, ` +
-                       `pos=(${unit.pb.state.loc.x.toFixed(2)}, ${unit.pb.state.loc.z.toFixed(2)}), ` +
-                       `type=${unit.type}, health=${unit.currentHealth || unit.health}`);
-          }
-        });
-        
-      console.log(`🏛️ Building details at tick ${this.tick}:`);
-      sortedBuildings.forEach((b, i) => {
-        console.log(`  Building ${i}: ID=${b.id?.slice(-6)}, owner=${b.owner?.slice(-6)}, ` +
-                  `pos=(${b.gridX}, ${b.gridZ}), type=${b.type}, name=${b.name}, health=${b.health}`);
-      });
-      }
+      // if (this.tick < 300 && this.tick % 100 === 0) {
+      //   console.log(`🔍 Checksum at tick ${this.tick}:`, {
+      //     hash,
+      //     unitCount,
+      //     buildingCount,
+      //     firstUnitPos: sortedUnits[0]?.pb?.state?.loc ? 
+      //       `(${sortedUnits[0].pb.state.loc.x.toFixed(2)}, ${sortedUnits[0].pb.state.loc.z.toFixed(2)})` : 
+      //       'none'
+      //   });
+      //   
+      //   // DETAILED DESYNC DEBUGGING - Log all unit positions and owners
+      //   console.log(`📊 Unit details at tick ${this.tick}:`);
+      //   sortedUnits.slice(0, 5).forEach((unit, i) => {
+      //     if (unit.pb && unit.pb.state) {
+      //       console.log(`  Unit ${i}: ID=${unit.id?.slice(-6)}, owner=${unit.owner?.slice(-6)}, ` +
+      //                  `pos=(${unit.pb.state.loc.x.toFixed(2)}, ${unit.pb.state.loc.z.toFixed(2)}), ` +
+      //                  `type=${unit.type}, health=${unit.currentHealth || unit.health}`);
+      //     }
+      //   });
+      //   
+      // console.log(`🏛️ Building details at tick ${this.tick}:`);
+      // sortedBuildings.forEach((b, i) => {
+      //   console.log(`  Building ${i}: ID=${b.id?.slice(-6)}, owner=${b.owner?.slice(-6)}, ` +
+      //             `pos=(${b.gridX}, ${b.gridZ}), type=${b.type}, name=${b.name}, health=${b.health}`);
+      // });
+      // }
       
       return hash >>> 0; // Convert to unsigned 32-bit integer
     }
@@ -1442,7 +1681,7 @@
     }
     
     getBuildingById(id) {
-      return window.playerBuildings?.find(b => b.id === id);
+      return window.gameBuildings?.find(b => b.id === id);
     }
     
     getResourceById(id) {
@@ -1688,7 +1927,7 @@
     }
     
     showNotification(message, type = 'info') {
-      console.log(`📢 ${message}`);
+      // console.log(`📢 ${message}`);
       
       // Create notification element
       const notification = document.createElement('div');
@@ -1754,7 +1993,7 @@
         
         try {
           localStorage.setItem(replayKey, replayData);
-          console.log(`💾 Replay saved: ${replayKey} (${(replayData.length / 1024).toFixed(1)} KB)`);
+          // console.log(`💾 Replay saved: ${replayKey} (${(replayData.length / 1024).toFixed(1)} KB)`);
         } catch (quotaError) {
           // Storage quota exceeded - clean up old replays and retry
           console.warn('⚠️ Storage quota exceeded, cleaning up old replays...');
@@ -1762,7 +2001,7 @@
           
           try {
             localStorage.setItem(replayKey, replayData);
-            console.log(`💾 Replay saved after cleanup: ${replayKey}`);
+            // console.log(`💾 Replay saved after cleanup: ${replayKey}`);
           } catch (retryError) {
             // Still failed - the replay is probably too large
             console.error('❌ Replay too large to save even after cleanup');
@@ -1797,26 +2036,26 @@
       const toRemove = replayKeys.slice(5);
       toRemove.forEach(key => {
         localStorage.removeItem(key);
-        console.log(`🗑️ Removed old replay: ${key}`);
+        // console.log(`🗑️ Removed old replay: ${key}`);
       });
       
-      console.log(`🧹 Cleaned up ${toRemove.length} old replays, kept ${Math.min(5, replayKeys.length)} recent ones`);
+      // console.log(`🧹 Cleaned up ${toRemove.length} old replays, kept ${Math.min(5, replayKeys.length)} recent ones`);
     }
     
     // Report match results (placeholder for server integration)
     reportMatchResults() {
       // TODO: Send to matchmaking/stats server
-      console.log('📊 Match results:', {
-        id: this.id,
-        winner: this.replay.winner,
-        duration: this.replay.duration,
-        stats: this.stats
-      });
+      // console.log('📊 Match results:', {
+      //   id: this.id,
+      //   winner: this.replay.winner,
+      //   duration: this.replay.duration,
+      //   stats: this.stats
+      // });
     }
     
     // Continue playing after victory/defeat
     continuePlayingAfterVictory() {
-      console.log('🎮 Continuing to play after match end...');
+      // console.log('🎮 Continuing to play after match end...');
       
       // Hide the end game screen
       const endScreen = document.getElementById('match_end_screen');
@@ -1827,14 +2066,22 @@
       // Disable future victory condition checks
       this.victoryCheckingDisabled = true;
       
+      // Clear eliminated players list so they can keep playing
+      this.eliminatedPlayers.clear();
+      
       // Reset state to playing (but keep the match results saved)
       const previousState = this.state;
       this.state = MatchState.PLAYING;
       
+      // Resume the tick loop if it was stopped
+      if (!this.localTickInterval && !window.isMultiplayer) {
+        this.startLocalTickLoop();
+      }
+      
       // Show a notification
       this.showNotification(`🎮 Continuing to play after ${previousState}`, 'info');
       
-      console.log('✅ Victory checking disabled - you can now play freely!');
+      // console.log('✅ Victory checking disabled - you can now play freely!');
     }
     
     // Return to menu
@@ -1844,7 +2091,7 @@
     
     // View replay
     viewReplay() {
-      console.log('🎬 Replay viewer not implemented yet');
+      // console.log('🎬 Replay viewer not implemented yet');
       // TODO: Implement replay viewer
     }
   }

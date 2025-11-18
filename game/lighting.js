@@ -30,9 +30,15 @@
     // Create sun (directional light)
     lights.sun = new BABYLON.DirectionalLight("sunLight", new BABYLON.Vector3(0, -1, 0), scene);
     lights.sun.intensity = 1.2; // Increased from 0.9 to compensate for no moon
-    lights.sun.specularScale = 1.0; // Increase for better reflections
+    lights.sun.specularScale = 0.8; // Moderate specular for subtle reflections
     lights.sun.diffuse = new BABYLON.Color3(1, 0.95, 0.8); // Warm sunlight
-    lights.sun.specular = new ColorHex("#222222"); // Match diffuse for proper reflections
+    lights.sun.specular = new BABYLON.Color3(0.6, 0.55, 0.5); // Moderate warm specular for subtle sun reflections
+    
+    // Ensure light is enabled
+    if (lights.sun.setEnabled) {
+      lights.sun.setEnabled(true);
+    }
+    lights.sun.enabled = true;
     
     // Moon light removed for better performance and simpler lighting
     // The scene ambient color provides sufficient base lighting
@@ -73,6 +79,12 @@
   function updateOrbitalPositions() {
     if (!lights.sun) return;
     
+    // Ensure light is enabled
+    if (lights.sun.setEnabled) {
+      lights.sun.setEnabled(true);
+    }
+    lights.sun.enabled = true;
+    
     // Calculate sun position independently
     const sunAngle = (config.sunTime - 0.25) * Math.PI * 2; // -0.25 offset so 0.5 = zenith
     
@@ -96,6 +108,7 @@
     const sunDayFactor = Math.max(0.5, sunHeightFactor); // Minimum 0.5 to ensure bright daytime
     
     // Sun intensity based on its position - ensure bright daytime
+    // Ensure minimum intensity of 1.2 for visible lighting
     lights.sun.intensity = Math.max(1.2, sunDayFactor * 1.4); // Minimum 1.2 intensity for bright daytime
     
     // Sky color changes based on dominant light (use sun for sky color)
@@ -220,6 +233,35 @@
       updateSkyColor(dayFactor, Math.max(0, -dayFactor));
       console.log(`Time ${time}: dayFactor ${dayFactor.toFixed(2)}`);
     });
+  };
+  
+  // Restore/enable lighting if it got disabled
+  lighting.restoreLighting = function() {
+    if (!lights.sun) {
+      console.warn('Sun light does not exist - cannot restore lighting');
+      return false;
+    }
+    
+    // Ensure light is enabled
+    if (lights.sun.setEnabled) {
+      lights.sun.setEnabled(true);
+    }
+    lights.sun.enabled = true;
+    
+    // Ensure minimum intensity
+    if (lights.sun.intensity < 1.0) {
+      lights.sun.intensity = 1.2;
+    }
+    
+    // Ensure specular is moderate for subtle reflections
+    lights.sun.specularScale = 0.8;
+    lights.sun.specular = new BABYLON.Color3(0.6, 0.55, 0.5);
+    
+    // Update positions to ensure everything is correct
+    updateOrbitalPositions();
+    
+    console.log('✅ Lighting restored - sun enabled:', lights.sun.enabled, 'intensity:', lights.sun.intensity, 'specular:', lights.sun.specular);
+    return true;
   };
   
   // Expose lights object for external access

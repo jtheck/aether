@@ -652,10 +652,14 @@
   // Setup particle effect testing with keyboard shortcuts
   fx.setupParticleTesting = function() {
     document.addEventListener('keydown', function(e) {
-      // Test particle effects with F key
-      if (e.key === 'f' || e.key === 'F') {
-        const position = new BABYLON.Vector3(0, 0, 0);
-        // console.log('🔥 Testing particle effects (F key)');
+      // Test particle effects with X key (moved from F to avoid ESDF conflict) - use camera target position
+      if (e.key === 'x' || e.key === 'X') {
+        let position = new BABYLON.Vector3(0, 0, 0);
+        // Use camera target position if available (where camera is looking)
+        if (window.gfx && window.gfx.cameraTarget && window.gfx.cameraTarget.position) {
+          position = window.gfx.cameraTarget.position.clone();
+        }
+        // console.log('🔥 Testing particle effects (X key)');
         fx.testParticleEffects(position);
       }
       
@@ -670,20 +674,27 @@
         fx.explodeAtMouse();
       }
       
-      // Test individual effects
-      if (e.key === '1') {
-        const position = new BABYLON.Vector3(0, 0, 0);
-        fx.createParticleEffect('fire', position);
-        // console.log('🔥 Created fire effect');
-      }
+      // Test individual effects - use camera target position
+      // DISABLED: Keys 1 and 2 were causing scene render crashes
+      // if (e.key === '1') {
+      //   let position = new BABYLON.Vector3(0, 0, 0);
+      //   if (window.gfx && window.gfx.cameraTarget && window.gfx.cameraTarget.position) {
+      //     position = window.gfx.cameraTarget.position.clone();
+      //   }
+      //   fx.createParticleEffect('fire', position);
+      //   // console.log('🔥 Created fire effect');
+      // }
       
-      if (e.key === '2') {
-        const position = new BABYLON.Vector3(0, 0, 0);
-        fx.createParticleEffect('smoke', position);
-        // console.log('💨 Created smoke effect');
-      }
+      // if (e.key === '2') {
+      //   let position = new BABYLON.Vector3(0, 0, 0);
+      //   if (window.gfx && window.gfx.cameraTarget && window.gfx.cameraTarget.position) {
+      //     position = window.gfx.cameraTarget.position.clone();
+      //   }
+      //   fx.createParticleEffect('smoke', position);
+      //   // console.log('💨 Created smoke effect');
+      // }
     });
-    // console.log('🔥 Particle testing enabled! Press F for all effects, B for building effects, P for explosion at mouse, 1 for fire, 2 for smoke');
+    // console.log('🔥 Particle testing enabled! Press X for all effects, B for building effects, P for explosion at mouse, 1 for fire, 2 for smoke');
   };
   
   // Get available particle effect types

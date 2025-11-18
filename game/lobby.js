@@ -16,6 +16,157 @@ const Lobby = {
   connectedChannels: {}, // Track which channels are connected
   pendingBroadcasts: [], // Queue broadcasts until channel is ready
   lobbySearchStartTime: {}, // Track when we started searching for lobbies per game type
+  hasAnnouncedPresence: false,
+  
+  normalizePeerId: function(id) {
+    if (!id) return '';
+    const suffix = id.includes('-') ? id.split('-').pop() : id;
+    return suffix.length > 6 ? suffix.slice(-6) : suffix;
+  },
+  
+  // Ensure connected player metadata stays in sync with the peer list
+  syncConnectedPlayersFromPeerIds: function(peerIds = []) {
+    const peers = Array.isArray(peerIds) ? peerIds.filter(Boolean) : [];
+    const uniquePeerIds = [...new Set(peers)];
+    const existingPlayerMap = new Map();
+    
+    (this.connectedPlayers || []).forEach(entry => {
+      const entryId = (entry && entry.id) ? entry.id : entry;
+      const normalizedId = this.normalizePeerId(entryId);
+      if (!entryId || !normalizedId || existingPlayerMap.has(normalizedId)) {
+        return;
+      }
+      if (typeof entry === 'object') {
+        existingPlayerMap.set(normalizedId, {
+          ...entry,
+          id: entryId,
+          shortId: entry.shortId || normalizedId
+        });
+      } else {
+        existingPlayerMap.set(normalizedId, { id: entryId, shortId: normalizedId });
+      }
+    });
+    
+    this.connectedPlayers = uniquePeerIds.map(peerId => {
+      const normalizedId = this.normalizePeerId(peerId);
+      const existing = normalizedId ? existingPlayerMap.get(normalizedId) : null;
+      if (existing) {
+        existing.id = peerId;
+        existing.shortId = normalizedId;
+        return existing;
+      }
+      return { id: peerId, shortId: normalizedId };
+    });
+    
+    return this.connectedPlayers;
+  },
+  
+  // Merge or insert metadata for a connected player without duplicating entries
+  upsertConnectedPlayerMeta: function(playerData = {}) {
+    const playerId = playerData.id;
+    if (!playerId) return;
+    
+    const normalizedTarget = this.normalizePeerId(playerId);
+    let found = false;
+    const seen = new Set();
+    const updatedList = [];
+    
+    (this.connectedPlayers || []).forEach(entry => {
+      const entryId = (entry && entry.id) ? entry.id : entry;
+      const normalizedEntryId = this.normalizePeerId(entryId);
+      if (!entryId || !normalizedEntryId || seen.has(normalizedEntryId)) {
+        return;
+      }
+      seen.add(normalizedEntryId);
+      
+      if (!found && normalizedEntryId === normalizedTarget) {
+        const enriched = typeof entry === 'object' ? entry : { id: entryId };
+        enriched.id = playerId || entryId;
+        enriched.shortId = normalizedTarget;
+        if (playerData.name !== undefined) enriched.name = playerData.name;
+        if (playerData.color !== undefined) enriched.color = playerData.color;
+        updatedList.push(enriched);
+        found = true;
+      } else if (typeof entry === 'object') {
+        entry.id = entry.id || entryId;
+        entry.shortId = entry.shortId || normalizedEntryId;
+        updatedList.push(entry);
+      } else {
+        updatedList.push({ id: entryId, shortId: normalizedEntryId });
+      }
+    });
+    
+    if (!found) {
+      updatedList.push({
+        id: playerId,
+        shortId: normalizedTarget,
+        name: playerData.name,
+        color: playerData.color
+      });
+    }
+    
+    this.connectedPlayers = updatedList;
+  },
+  
+  // Remove a connected player entry (object or raw ID) and collapse duplicates
+  removeConnectedPlayerById: function(playerId) {
+    if (!playerId) return;
+    const seen = new Set();
+    const normalizedTarget = this.normalizePeerId(playerId);
+    this.connectedPlayers = (this.connectedPlayers || []).filter(entry => {
+      const entryId = (entry && entry.id) ? entry.id : entry;
+      const normalizedEntryId = this.normalizePeerId(entryId);
+      if (!entryId || !normalizedEntryId || seen.has(normalizedEntryId)) {
+        return false;
+      }
+      seen.add(normalizedEntryId);
+      return normalizedEntryId !== normalizedTarget;
+    });
+  },
+  
+  sendPlayerPresence: function(targetPeerId = null) {
+    if (!window.net || !window.net.p2p || !this.currentLobbyId) {
+      return;
+    }
+    
+    const status = window.net.getStatus ? window.net.getStatus() : {};
+    const myId = status.localPlayerId;
+    if (!myId) return;
+    
+    const payload = {
+      type: 'player_joined',
+      playerId: myId,
+      playerName: window.currentPlayerName || window.player?.name || `Player ${this.normalizePeerId(myId)}`,
+      playerColor: window.currentPlayerColor || window.player?.color || '#ffffff'
+    };
+    
+    try {
+      if (targetPeerId) {
+        window.net.p2p.sendData(payload, targetPeerId);
+      } else {
+        window.net.p2p.sendData(payload);
+      }
+      this.hasAnnouncedPresence = true;
+    } catch (error) {
+      console.warn('⚠️ Failed to send player presence:', error);
+    }
+  },
+  
+  // Notify peers that this client has left the lobby (non-host)
+  notifyPeersPlayerLeft: function(playerId) {
+    if (!playerId || !window.net || !window.net.p2p || typeof window.net.p2p.sendData !== 'function') {
+      return;
+    }
+    
+    try {
+      window.net.p2p.sendData({
+        type: 'player_left',
+        playerId: playerId
+      });
+    } catch (error) {
+      console.warn('⚠️ Failed to notify peers about player leaving:', error);
+    }
+  },
   
   // Game type configurations
   gameTypes: {
@@ -143,19 +294,8 @@ const Lobby = {
     }
     // console.log('✅ Building system cleared');
     
-    // Clear global playerBuildings array
-    // console.log('🗑️ Clearing playerBuildings array...');
-    if (window.playerBuildings) {
-      window.playerBuildings.forEach(building => {
-        if (building.mesh && building.mesh.dispose) {
-          building.mesh.dispose();
-        }
-      });
-      window.playerBuildings.length = 0;
-    } else {
-      window.playerBuildings = [];
-    }
-    // console.log('✅ Player buildings array cleared');
+    // Note: playerBuildings array no longer exists - all buildings use gameBuildings
+    // (kept comment for historical context)
     
     // console.log('🗑️ Clearing gameBuildings array...');
     if (window.gameBuildings) {
@@ -220,7 +360,8 @@ const Lobby = {
     // Reset scene and ensure clean slate
     this.resetGameState();
     
-    window.isMultiplayer = false;
+    // CRITICAL: Always use multiplayer mode (even vs AI) because it uses the match/command system!
+    window.isMultiplayer = true;
     window.gameType = 'onevsone';
     window.mapSeed = resolvedSeed;
     
@@ -232,10 +373,12 @@ const Lobby = {
       console.log(`♻️ Reusing existing player (id: ${window.player.id || 'not set'})`);
     }
     
-    // Ensure player has correct ID
-    if (!window.player.id || window.player.id === 'undefined') {
-      window.player.id = 'player';
-      console.log('✅ Set player.id to "player"');
+    // CRITICAL: Generate unique player ID for each match (like AI opponents do)
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+      // Generate unique ID similar to AI opponents
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      window.player.id = `local-player-${randomSuffix}`;
+      console.log(`✅ Generated unique player ID: "${window.player.id}"`);
     }
     
     // Reset player state for new match
@@ -260,7 +403,7 @@ const Lobby = {
     const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
     
     // Configure local player identity and spawn
-    const localPlayerId = window.player.id || 'player';
+    const localPlayerId = window.player.id; // CRITICAL: No fallback - ID must be set!
     window.player.id = localPlayerId;
     window.player.name = window.currentPlayerName || 'Duelist';
     window.player.color = window.currentPlayerColor || '#ff0000';
@@ -310,7 +453,8 @@ const Lobby = {
     window.liveField = new window.Field({
       width: dims.width,
       height: dims.height,
-      seed: resolvedSeed
+      seed: resolvedSeed,
+      spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
@@ -375,9 +519,9 @@ const Lobby = {
       window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
     }
     
-    // Prepare player arrays
+    // Prepare player arrays (gameBuildings used for all buildings now)
     const players = [window.player, aiPlayer];
-    window.playerBuildings = window.playerBuildings || [];
+    window.gameBuildings = window.gameBuildings || [];
     window.gameUnits = window.gameUnits || [];
     
     // Create game instance (handles spawning units/buildings)
@@ -441,7 +585,7 @@ const Lobby = {
       if (window.gameUnits && window.gameUnits.length > 0) {
         const withMesh = window.gameUnits.filter(u => u.mesh).length;
         const withoutMesh = window.gameUnits.filter(u => !u.mesh).length;
-        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id || u.owner === 'player').length;
+        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id).length;
         
         console.log(`  - Units with meshes: ${withMesh}/${window.gameUnits.length}`);
         console.log(`  - Units without meshes: ${withoutMesh}/${window.gameUnits.length}`);
@@ -916,6 +1060,7 @@ const Lobby = {
     this.playerReadyStates = {};
     this.playerConnectionStates = {};
     this.playerReadyStates[window.net.getStatus().localPlayerId] = false;
+    this.hasAnnouncedPresence = false;
     
     // Join the actual P2P match lobby
     const actualLobbyKey = `${config.lobbyKey}-${lobbyId}`;
@@ -972,6 +1117,10 @@ const Lobby = {
         // Update lobby UI with connected peers
         if (this.currentLobby) {
           this.updateLobbyRoomUI(gameType, this.currentLobby);
+        }
+        
+        if (!this.hasAnnouncedPresence) {
+          this.sendPlayerPresence();
         }
         
         clearInterval(this.connectionStatusInterval);
@@ -1242,6 +1391,11 @@ const Lobby = {
         type: 'lobby_closed',
         lobbyId: this.currentLobbyId
       });
+    } else if (this.currentLobbyId) {
+      const myId = window.net && window.net.getStatus ? window.net.getStatus().localPlayerId : null;
+      if (myId) {
+        this.notifyPeersPlayerLeft(myId);
+      }
     }
     
     // Clear state (currentGameType is intentionally set to null for menu)
@@ -1255,6 +1409,7 @@ const Lobby = {
     this.isHost = false;
     this.playerReadyStates = {};
     this.playerConnectionStates = {};
+    this.hasAnnouncedPresence = false;
     
     // Announce we're back in menu (currentGameType will be null, which is correct for 'menu' status)
     this.announceStatusToGlobal('menu');
@@ -1293,7 +1448,7 @@ const Lobby = {
     }
     
     const netStatus = window.net.getStatus();
-    this.connectedPlayers = netStatus.peers || [];
+    this.syncConnectedPlayersFromPeerIds(netStatus.peers || []);
     this.isHost = netStatus.isHost || false;
     
     // Update the lobby UI with current player list
@@ -1628,6 +1783,11 @@ const Lobby = {
         }, lobbyChannelName);
         console.log('📡 Broadcasting lobby closed to lobby channel');
       }
+    } else if (lobbyId && !wasHost) {
+      const myId = window.net && window.net.getStatus ? window.net.getStatus().localPlayerId : null;
+      if (myId) {
+        this.notifyPeersPlayerLeft(myId);
+      }
     }
     
     // Disconnect P2P peers to allow clean rejoin
@@ -1664,6 +1824,7 @@ const Lobby = {
     this.playerReadyStates = {};
     this.playerConnectionStates = {};
     this.connectedPlayers = [];
+    this.hasAnnouncedPresence = false;
     
     // Ensure currentGameType is set for the browser
     this.currentGameType = gameType;
@@ -2017,7 +2178,8 @@ const Lobby = {
     // Reset scene and ensure clean slate
     this.resetGameState();
     
-    window.isMultiplayer = false;
+    // CRITICAL: Always use multiplayer mode because it uses the match/command system!
+    window.isMultiplayer = true;
     window.gameType = 'adventure';
     window.mapSeed = resolvedSeed;
     
@@ -2029,10 +2191,12 @@ const Lobby = {
       console.log(`♻️ Reusing existing player (id: ${window.player.id || 'not set'})`);
     }
     
-    // Ensure player has correct ID
-    if (!window.player.id || window.player.id === 'undefined') {
-      window.player.id = 'player';
-      console.log('✅ Set player.id to "player"');
+    // CRITICAL: Generate unique player ID for each match (like AI opponents do)
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+      // Generate unique ID similar to AI opponents
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      window.player.id = `local-player-${randomSuffix}`;
+      console.log(`✅ Generated unique player ID: "${window.player.id}"`);
     }
     
     // Reset player state for new match
@@ -2064,7 +2228,7 @@ const Lobby = {
     const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
     
     // Configure local player identity and spawn
-    const localPlayerId = window.player.id || 'player';
+    const localPlayerId = window.player.id; // CRITICAL: No fallback - ID must be set!
     window.player.id = localPlayerId;
     window.player.name = window.currentPlayerName || 'Adventurer';
     window.player.color = window.currentPlayerColor || '#ff0000';
@@ -2125,7 +2289,8 @@ const Lobby = {
     window.liveField = new window.Field({
       width: dims.width,
       height: dims.height,
-      seed: resolvedSeed
+      seed: resolvedSeed,
+      spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
@@ -2194,9 +2359,9 @@ const Lobby = {
       window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
     }
     
-    // Prepare player arrays
+    // Prepare player arrays (gameBuildings used for all buildings now)
     const players = [window.player, ...aiPlayers];
-    window.playerBuildings = window.playerBuildings || [];
+    window.gameBuildings = window.gameBuildings || [];
     window.gameUnits = window.gameUnits || [];
     
     // Create game instance (handles spawning units/buildings)
@@ -2277,7 +2442,7 @@ const Lobby = {
       if (window.gameUnits && window.gameUnits.length > 0) {
         const withMesh = window.gameUnits.filter(u => u.mesh).length;
         const withoutMesh = window.gameUnits.filter(u => !u.mesh).length;
-        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id || u.owner === 'player').length;
+        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id).length;
         
         console.log(`  - Units with meshes: ${withMesh}/${window.gameUnits.length}`);
         console.log(`  - Units without meshes: ${withoutMesh}/${window.gameUnits.length}`);
@@ -2288,7 +2453,7 @@ const Lobby = {
         }
         
         // Check first player unit
-        const firstPlayerUnit = window.gameUnits.find(u => u.owner === window.player?.id || u.owner === 'player');
+        const firstPlayerUnit = window.gameUnits.find(u => u.owner === window.player?.id);
         if (firstPlayerUnit) {
           console.log(`  - First player unit:`, {
             type: firstPlayerUnit.type,
@@ -2574,7 +2739,8 @@ const Lobby = {
     window.liveField = new window.Field({
       width: dims.width,
       height: dims.height,
-      seed: mapSeed
+      seed: mapSeed,
+      spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
     
     if (typeof liveField !== 'undefined') {
@@ -2705,6 +2871,11 @@ const Lobby = {
           isAI: false
         });
         players.push(opponent);
+        
+        // CRITICAL: Assign first opponent to window.opponent for state sync
+        if (!window.opponent) {
+          window.opponent = opponent;
+        }
       }
     });
     
@@ -2766,9 +2937,9 @@ const Lobby = {
     
     window.currentMatch = new window.Match(matchOptions);
     
-    // Ensure playerBuildings array exists and is empty BEFORE creating Game
-    if (!window.playerBuildings) {
-      window.playerBuildings = [];
+    // Ensure gameBuildings array exists and is empty BEFORE creating Game
+    if (!window.gameBuildings) {
+      window.gameBuildings = [];
     }
     // Ensure gameUnits array exists and is empty
     if (!window.gameUnits) {
@@ -2811,7 +2982,7 @@ const Lobby = {
       
       // BEFORE game.init - check state
       // console.log(`🔍 BEFORE game.init():`);
-      // console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
+      // console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
       // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
       // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
@@ -2819,12 +2990,12 @@ const Lobby = {
       
       // AFTER game.init - check state
       // console.log(`🔍 AFTER game.init():`);
-      // console.log(`  - window.playerBuildings.length: ${window.playerBuildings?.length || 0}`);
+      // console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
       // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
       // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
-      if (window.playerBuildings && window.playerBuildings.length > 0) {
-        console.log(`  - Buildings:`, window.playerBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));
+      if (window.gameBuildings && window.gameBuildings.length > 0) {
+        console.log(`  - Buildings:`, window.gameBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));
       }
       
       // Ensure visual meshes are created for all units that were just spawned

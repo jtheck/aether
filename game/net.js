@@ -6,13 +6,16 @@
   // Configuration
   net.TICK_RATE = 20; // 20Hz = 50ms ticks
   net.COMMAND_BUFFER_SIZE = 100; // Max buffered commands
-  net.STATE_SYNC_INTERVAL = 5000; // Full state every 5s
+  net.STATE_SYNC_INTERVAL = 200; // Full state every 200ms (5 times per second for smooth remote unit movement)
   net.RECONNECT_TIMEOUT = 3000; // Reconnect attempts every 3s
+  net.SNAP_THRESHOLD = 10; // Units >10 units away snap instead of lerp (reduced snapping)
+  net.LERP_SPEED = 0.3; // 30% correction per sync (slower, smoother lerp)
   
   // Internal state
   let p2p = null;
   let gameId = null;
   let localPlayerId = null;
+  let localPlayerShortId = null;
   let isHost = false;
   let tick = 0;
   let commandBuffer = []; // Local pending commands
@@ -31,10 +34,17 @@
     initialized: false
   };
 
+  const normalizePeerId = (id) => {
+    if (!id) return '';
+    const suffix = id.includes('-') ? id.split('-').pop() : id;
+    return suffix.length > 6 ? suffix.slice(-6) : suffix;
+  };
+
   // NEW: Get current network status
   net.getStatus = function() {
     return {
       localPlayerId: localPlayerId,
+      localPlayerShortId: localPlayerShortId || normalizePeerId(localPlayerId),
       isConnected: isConnected,
       peers: p2p ? p2p.getConnectedPeers() : [],
       currentLobby: net.currentLobby || null,
@@ -99,6 +109,7 @@
     const waitForUserId = setInterval(() => {
       if (p2p && p2p.getUserId && p2p.getUserId()) {
         localPlayerId = p2p.getUserId();
+        localPlayerShortId = normalizePeerId(localPlayerId);
         // console.log(`🆔 Using P2P user ID: ${localPlayerId}`);
         clearInterval(waitForUserId);
       }
@@ -156,8 +167,8 @@
       window.currentMatch.processTick();
     }
     
-    // Send state sync if needed
-    if (Date.now() - lastStateSync > net.STATE_SYNC_INTERVAL && isHost && isConnected) {
+    // Send state sync if needed (BOTH players send their own state)
+    if (Date.now() - lastStateSync > net.STATE_SYNC_INTERVAL && isConnected) {
       sendStateSync();
       lastStateSync = Date.now();
     }
@@ -172,7 +183,8 @@
     
     // Add tick prediction (execute immediately for local player)
     command.tick = tick + Math.ceil(50 / (1000 / net.TICK_RATE)); // ~1 tick delay for latency
-    command.playerId = localPlayerId;
+    const selfPlayerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
+    command.playerId = selfPlayerId;
     command.type = command.type || 'unknown';
     
     // Store locally for prediction
@@ -194,7 +206,7 @@
     p2p.sendData(message);
     
     // Predict execution for local player (optimistic)
-    if (command.playerId === localPlayerId) {
+    if (command.playerId === selfPlayerId) {
       executeCommand(command, tick);
     }
     
@@ -340,10 +352,9 @@
           break;
           
         case 'state_sync':
-          // Reconcile with authoritative state from host
-          if (actualMessage.isHost && Math.abs(actualMessage.tick - tick) < 20) {
-            reconcileState(actualMessage.content);
-          }
+          // P2P: Each player is authoritative for their own units
+          // Only reconcile if there's significant drift (safety net for desync)
+          reconcileState(actualMessage.content);
           break;
           
         case 'ping':
@@ -406,37 +417,60 @@
         case 'player_joined':
           // Add player to lobby
           if (window.Lobby && actualMessage.playerId && actualMessage.playerId !== localPlayerId) {
-            const playerExists = window.Lobby.connectedPlayers.some(p => p.id === actualMessage.playerId);
-            if (!playerExists) {
-              window.Lobby.connectedPlayers.push({
-                id: actualMessage.playerId,
+            const joinedPlayerId = actualMessage.playerId;
+            const normalize = window.Lobby.normalizePeerId ? window.Lobby.normalizePeerId.bind(window.Lobby) : (id => id);
+            const targetNormalizedId = normalize(joinedPlayerId);
+            const playerExists = window.Lobby.connectedPlayers.some(p => normalize(p.id || p) === targetNormalizedId);
+            const isAckMessage = !!actualMessage.handshakeAck;
+            
+            if (window.Lobby.upsertConnectedPlayerMeta) {
+              window.Lobby.upsertConnectedPlayerMeta({
+                id: joinedPlayerId,
                 name: actualMessage.playerName,
                 color: actualMessage.playerColor
               });
-              // console.log(`👤 Player joined lobby: ${actualMessage.playerName}`);
-              
-              // Update lobby UI
-              if (window.Lobby.currentGameType && window.Lobby.currentLobbyId) {
-                const lobby = window.Lobby.availableLobbies[window.Lobby.currentGameType]?.find(l => l.id === window.Lobby.currentLobbyId);
-                if (lobby) {
-                  window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, lobby);
-                  
-                  // If we're the host, announce updated lobby (player count changed)
-                  if (window.Lobby.isHost) {
-                    window.Lobby.announceLobby(lobby);
-                  }
+            } else if (!playerExists) {
+              window.Lobby.connectedPlayers.push({
+                id: joinedPlayerId,
+                name: actualMessage.playerName,
+                color: actualMessage.playerColor
+              });
+            }
+            
+            // Track connection state for UI regardless of whether the player is new
+            if (window.Lobby.playerConnectionStates) {
+              window.Lobby.playerConnectionStates[joinedPlayerId] = 'connected';
+            }
+            
+            const connectedEntry = window.Lobby.connectedPlayers.find(p => normalize(p.id || p) === targetNormalizedId);
+            const isMetadataComplete = !!connectedEntry?.name;
+            
+             // Ensure peer list stays aligned with actual connections
+            if (window.Lobby.syncConnectedPlayersFromPeerIds && p2p) {
+              window.Lobby.syncConnectedPlayersFromPeerIds(p2p.getConnectedPeers());
+            }
+            
+            // Always refresh the lobby UI so updated metadata is visible
+            if (window.Lobby.currentGameType && window.Lobby.currentLobbyId) {
+              const lobby = window.Lobby.availableLobbies[window.Lobby.currentGameType]?.find(l => l.id === window.Lobby.currentLobbyId);
+              if (lobby) {
+                window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, lobby);
+                
+                if (window.Lobby.isHost && (!playerExists || !isMetadataComplete)) {
+                  window.Lobby.announceLobby(lobby);
                 }
               }
-              
-              // Send our info back (if we're already in the lobby)
-              if (window.Lobby.currentLobbyId) {
-                p2p.sendData({
-                  type: 'player_joined',
-                  playerId: localPlayerId,
-                  playerName: window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`,
-                  playerColor: window.currentPlayerColor || window.player?.color || '#ffffff'
-                }, peerId);
-              }
+            }
+            
+            // Send our info back (if we're already in the lobby) only when this wasn't an acknowledgement
+            if (window.Lobby.currentLobbyId && !isAckMessage) {
+              p2p.sendData({
+                type: 'player_joined',
+                playerId: localPlayerId,
+                playerName: window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`,
+                playerColor: window.currentPlayerColor || window.player?.color || '#ffffff',
+                handshakeAck: true
+              }, peerId);
             }
           }
           break;
@@ -444,7 +478,17 @@
         case 'player_left':
           // Remove player from lobby
           if (window.Lobby && actualMessage.playerId) {
-            window.Lobby.connectedPlayers = window.Lobby.connectedPlayers.filter(p => p.id !== actualMessage.playerId);
+            if (window.Lobby.playerConnectionStates) {
+              window.Lobby.playerConnectionStates[actualMessage.playerId] = 'disconnected';
+            }
+            if (window.Lobby.playerReadyStates) {
+              delete window.Lobby.playerReadyStates[actualMessage.playerId];
+            }
+            if (window.Lobby.removeConnectedPlayerById) {
+              window.Lobby.removeConnectedPlayerById(actualMessage.playerId);
+            } else {
+              window.Lobby.connectedPlayers = window.Lobby.connectedPlayers.filter(p => (p.id || p) !== actualMessage.playerId);
+            }
             // console.log(`👤 Player left lobby: ${actualMessage.playerId}`);
             
             // Update lobby UI
@@ -452,6 +496,10 @@
               const lobby = window.Lobby.availableLobbies[window.Lobby.currentGameType]?.find(l => l.id === window.Lobby.currentLobbyId);
               if (lobby) {
                 window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, lobby);
+                
+                if (window.Lobby.isHost) {
+                  window.Lobby.announceLobby(lobby);
+                }
               }
             }
           }
@@ -650,23 +698,12 @@
     if (window.Lobby) {
       window.Lobby.playerConnectionStates[peerId] = 'connected';
       
-      // Update connected players list - merge with existing player info
-      const currentPeers = p2p.getConnectedPeers();
-      
-      // Deduplicate peer IDs (sometimes P2P library returns duplicates)
-      const uniquePeers = [...new Set(currentPeers)];
-      
-      // Keep existing player objects with info, add new peers as strings
-      const existingPlayerMap = new Map();
-      window.Lobby.connectedPlayers.forEach(p => {
-        const id = p.id || p;
-        existingPlayerMap.set(id, p);
-      });
-      
-      window.Lobby.connectedPlayers = uniquePeers.map(peerId => {
-        // If we already have player info for this peer, use it
-        return existingPlayerMap.get(peerId) || peerId;
-      });
+      const currentPeers = [...new Set(p2p.getConnectedPeers())];
+      if (window.Lobby.syncConnectedPlayersFromPeerIds) {
+        window.Lobby.syncConnectedPlayersFromPeerIds(currentPeers);
+      } else {
+        window.Lobby.connectedPlayers = currentPeers;
+      }
     }
     
     // Send ready signal with local player ID
@@ -675,12 +712,16 @@
     // Announce player presence to lobby
     if (window.Lobby && window.Lobby.currentLobbyId) {
       // console.log(`👤 Sending player_joined to peer ${peerId}`);
-      p2p.sendData({
-        type: 'player_joined',
-        playerId: localPlayerId,
-        playerName: window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`,
-        playerColor: window.currentPlayerColor || window.player?.color || '#ffffff'
-      });
+      if (window.Lobby.sendPlayerPresence) {
+        window.Lobby.sendPlayerPresence(peerId);
+      } else {
+        p2p.sendData({
+          type: 'player_joined',
+          playerId: localPlayerId,
+          playerName: window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`,
+          playerColor: window.currentPlayerColor || window.player?.color || '#ffffff'
+        });
+      }
       
       // Update lobby UI to show connection status
       if (window.Lobby.currentGameType && window.Lobby.currentLobby) {
@@ -740,10 +781,16 @@
     // Update lobby connection status
     if (window.Lobby) {
       window.Lobby.playerConnectionStates[peerId] = 'disconnected';
+      if (window.Lobby.removeConnectedPlayerById) {
+        window.Lobby.removeConnectedPlayerById(peerId);
+      }
       
-      // Update connected players list with current peer list
-      const currentPeers = p2p.getConnectedPeers();
-      window.Lobby.connectedPlayers = currentPeers;
+      const currentPeers = [...new Set(p2p.getConnectedPeers())];
+      if (window.Lobby.syncConnectedPlayersFromPeerIds) {
+        window.Lobby.syncConnectedPlayersFromPeerIds(currentPeers);
+      } else {
+        window.Lobby.connectedPlayers = currentPeers;
+      }
       
       // Update lobby UI
       if (window.Lobby.currentGameType && window.Lobby.currentLobby) {
@@ -926,45 +973,63 @@
     }
   };
   
-  // Send full state sync (host only)
+  // Send full state sync (BOTH players send their own unit positions)
   function sendStateSync() {
-    if (!isHost || !isConnected) return;
+    if (!isConnected) return; // Both host and client send state
+    
+    // PEER-TO-PEER: Each player only sends their OWN unit positions
+    const localOwnerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
+    
+    // Find only OUR units (don't try to sync opponent's units)
+    const allUnits = window.gameUnits || [];
+    const myUnits = allUnits.filter(u => u.owner === localOwnerId);
     
     const state = {
       tick: tick,
-      players: {
-        [localPlayerId]: {
-          resources: window.player?.resources || {},
-          units: window.player?.units?.map(u => ({
-            id: u.id,
-            pos: {x: u.pb.state.loc.x, z: u.pb.state.loc.z},
-            health: u.currentHealth,
-            state: u.state
-          })) || []
-        }
-        // Add opponent state if available
-      },
-      buildings: window.buildings?.map(b => ({id: b.id, type: b.type, pos: b.position})) || [],
+      playerId: localOwnerId, // Identify which player this state is from
+      resources: window.player?.resources || {},
+      units: myUnits.map(u => ({
+        id: u.id,
+        pos: {x: u.pb.state.loc.x, z: u.pb.state.loc.z},
+        health: u.currentHealth,
+        state: u.state
+      })),
+      buildings: window.gameBuildings?.filter(b => b.owner === localOwnerId).map(b => ({
+        id: b.id, 
+        type: b.type, 
+        pos: b.position
+      })) || [],
       timestamp: Date.now()
     };
     
     const message = {
       type: 'state_sync',
       isHost: true,
-      content: state
+      content: state,
+      tick: tick
     };
     
     p2p.sendData(message);
+    // Log occasionally (disabled - working!)
+    // if (tick % (net.TICK_RATE * 5) === 0) {
+    //   console.log(`📤 Sent state sync: ${myUnits.length} units from player ${localOwnerId} at tick ${tick}`);
+    // }
   };
   
-  // Reconcile with authoritative state
+  // Reconcile with authoritative state (PEER-TO-PEER version)
   function reconcileState(remoteState) {
     const remoteTick = remoteState.tick;
+    const remotePlayerId = remoteState.playerId;
+    const tickDiff = remoteTick - tick;
     
-    // Only reconcile if close to our tick (prevent massive rewinds)
-    if (Math.abs(remoteTick - tick) > 10) {
-      console.warn(`State reconciliation skipped: tick delta ${Math.abs(remoteTick - tick)}`);
-      return;
+    // Don't sync ticks - let them run independently and rely on command scheduling
+    // Commands are scheduled for specific ticks and will execute when both clients reach that tick
+    // Position sync every 200ms handles any drift in simulation results
+    
+    // Only reconcile positions if reasonably close (prevent massive rewinds)
+    if (Math.abs(tickDiff) > 10) {
+      // console.log(`⚠️ Tick desync: local=${tick}, remote=${remoteTick} (diff: ${tickDiff})`);
+      // Still reconcile positions even if ticks are desynced
     }
     
     // Rewind simulation if needed
@@ -973,44 +1038,92 @@
     }
     
     // Apply state corrections
-    Object.entries(remoteState.players).forEach(([playerId, playerState]) => {
-      if (playerId === localPlayerId) return; // Don't override local player
-      
-      // Update remote player resources
-      if (window.opponent && playerId === 'opponent') {
-        window.opponent.resources = {...playerState.resources};
+    const localOwnerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
+    
+    // Skip if this is our own state echoed back
+    if (remotePlayerId === localOwnerId) {
+      return;
+    }
+    
+    // Debug: Log state sync info occasionally (disabled - working!)
+    // if (tick % (net.TICK_RATE * 5) === 0) {
+    //   console.log(`📥 Received state from player ${remotePlayerId}: ${remoteState.units.length} units at tick ${remoteTick}`);
+    // }
+    
+    // Update remote player resources
+    if (window.opponent && remotePlayerId === window.opponent.id) {
+      window.opponent.resources = {...remoteState.resources};
+    }
+    
+    // Update remote units with smart correction
+    let unitsFound = 0;
+    let unitsUpdated = 0;
+    let ownerMismatches = 0;
+    
+    remoteState.units.forEach(remoteUnit => {
+      const localUnit = findUnitById(remoteUnit.id);
+      if (localUnit) {
+        unitsFound++;
+        
+        // Only accept position updates from the unit's owner
+        // Normalize IDs for comparison (last 6 chars)
+        const localUnitOwnerId = localUnit.owner?.slice ? localUnit.owner.slice(-6) : localUnit.owner;
+        const remoteOwnerId = remotePlayerId?.slice ? remotePlayerId.slice(-6) : remotePlayerId;
+        
+        // Skip if this unit doesn't belong to the remote player
+        if (localUnitOwnerId !== remoteOwnerId) {
+          ownerMismatches++;
+          return; // Not their unit to update
+        }
+        
+        unitsUpdated++;
+        
+        // DETERMINISTIC P2P: Both clients simulate identically using match.tick
+        // Only correct MAJOR desyncs (> 10 units = missed command or logic error)
+        const dx = remoteUnit.pos.x - localUnit.pb.state.loc.x;
+        const dz = remoteUnit.pos.z - localUnit.pb.state.loc.z;
+        const distanceSq = dx * dx + dz * dz;
+        
+        // Only snap if drift is HUGE (> 10 units - probably missed a command)
+        if (distanceSq > 100) {
+          localUnit.pb.state.loc.x = remoteUnit.pos.x;
+          localUnit.pb.state.loc.z = remoteUnit.pos.z;
+          console.warn(`⚠️ LARGE DESYNC: Snapped unit ${localUnit.id.slice(-4)} - drift: ${Math.sqrt(distanceSq).toFixed(2)} units`);
+        }
+        // Ignore small drift - deterministic simulation should keep units in sync
+        
+        // Always sync health and state immediately
+        localUnit.currentHealth = remoteUnit.health;
+        localUnit.state = remoteUnit.state;
+      }
+    });
+    
+    // Log summary occasionally (disabled - working!)
+    // if (tick % (net.TICK_RATE * 5) === 0) {
+    //   console.log(`     ├─ Found: ${unitsFound}/${remoteState.units.length}, Updated: ${unitsUpdated}, Owner mismatches: ${ownerMismatches}`);
+    // }
+    
+    // Update buildings (if provided)
+    if (remoteState.buildings && remoteState.buildings.length > 0) {
+      // Initialize buildings array if it doesn't exist
+      if (!window.buildings) {
+        window.buildings = [];
       }
       
-      // Update remote units
-      playerState.units.forEach(remoteUnit => {
-        const localUnit = findUnitById(remoteUnit.id);
-        if (localUnit && localUnit.owner !== localPlayerId) {
-          // Lerp position for smooth correction
-          const correctionAlpha = 0.3; // 30% correction per frame
-          localUnit.pb.state.loc.x += (remoteUnit.pos.x - localUnit.pb.state.loc.x) * correctionAlpha;
-          localUnit.pb.state.loc.z += (remoteUnit.pos.z - localUnit.pb.state.loc.z) * correctionAlpha;
-          localUnit.currentHealth = remoteUnit.health;
-          localUnit.state = remoteUnit.state;
+      remoteState.buildings.forEach(remoteBuilding => {
+        // Find or create local building representation
+        let localBuilding = window.buildings.find(b => b.id === remoteBuilding.id);
+        if (!localBuilding) {
+          // Create ghost building for opponent
+          localBuilding = createGhostBuilding(remoteBuilding);
+          window.buildings.push(localBuilding);
+        } else {
+          // Update position if moved (rare)
+          localBuilding.position.x = remoteBuilding.pos.x;
+          localBuilding.position.z = remoteBuilding.pos.z;
         }
       });
-    });
-    
-    // Update buildings
-    remoteState.buildings.forEach(remoteBuilding => {
-      // Find or create local building representation
-      let localBuilding = window.buildings?.find(b => b.id === remoteBuilding.id);
-      if (!localBuilding) {
-        // Create ghost building for opponent
-        localBuilding = createGhostBuilding(remoteBuilding);
-        window.buildings.push(localBuilding);
-      } else {
-        // Update position if moved (rare)
-        localBuilding.position.x = remoteBuilding.pos.x;
-        localBuilding.position.z = remoteBuilding.pos.z;
-      }
-    });
-    
-    // console.log(`🔄 Reconciled state at tick ${remoteTick}`);
+    }
   };
   
   // Rewind simulation to previous tick (for corrections)

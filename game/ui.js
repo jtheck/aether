@@ -954,8 +954,13 @@ function getRandomColor() {
       
       // Create opponent based on game type
       if (!window.opponent) {
+        // CRITICAL: Extract short player ID from P2P peer ID
+        // P2P IDs are like "p2p-75kz40ogfchvej676hyrt" where last 6 chars are the player ID
+        const peerP2PId = window.net.getStatus().peers[0] || 'ai-fallback';
+        const opponentId = peerP2PId.length > 6 ? peerP2PId.slice(-6) : peerP2PId;
+        
         window.opponent = new window.OpponentPlayer({
-          id: window.net.getStatus().peers[0] || 'ai-fallback',
+          id: opponentId,
           gameType: gameType,
           color: getOpponentColorForGameType(gameType),
           startingResources: {food: 100, wood: 50, stone: 25, magic: 10}
@@ -1177,6 +1182,22 @@ function getRandomColor() {
   ui.hideMenu = function(){
     document.getElementById('menu').style.display = 'none';
   }
+  
+  ui.toggleMenu = function() {
+    const menu = document.getElementById('menu');
+    if (menu.style.display === 'none' || !menu.style.display) {
+      // Show menu with last viewed submenu (or main menu)
+      menu.style.display = 'block';
+      if (prevMenu) {
+        ui.showMenu(prevMenu);
+      } else {
+        ui.showMenu('main_menu');
+      }
+    } else {
+      // Hide menu
+      ui.hideMenu();
+    }
+  }
 
 	
 
@@ -1230,19 +1251,29 @@ function getRandomColor() {
           window.cameraVelocity.radius += zoomSpeed;
         }
       }
-    } else if (key === 'a') {
-      if (state == true && gfx.camera) {
-        // Rotate camera up
-        cameraRotationTarget.beta = Math.max(0.1, cameraRotationTarget.beta - 0.2);
-      }
-    } else if (key === 'z') {
-      if (state == true && gfx.camera) {
-        // Rotate camera down
-        cameraRotationTarget.beta = Math.min(1.5, cameraRotationTarget.beta + 0.2);
-      }
+    } else if (key === 'z' && state && gfx && gfx.camera) {
+      // Z key - Zoom in
+      const zoomSpeed = 5;
+      gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit || 20, gfx.camera.radius - zoomSpeed);
+    } else if (key === 'x' && state && gfx && gfx.camera) {
+      // X key - Zoom out
+      const zoomSpeed = 5;
+      gfx.camera.radius = Math.min(gfx.camera.upperRadiusLimit || 300, gfx.camera.radius + zoomSpeed);
+    } else if (key === 'escape' && state) {
+      // Escape key - Toggle main page menu
+      ui.toggleMenu();
     } else if (key === 'b') {
       // console.log('🏗️ B key pressed - opening 3D main menu');
       // Handle B key logic here...
+    } else if (key === 'f9') {
+      // Toggle Babylon Inspector
+      if (state == true && gfx && gfx.scene) {
+        if (gfx.scene.debugLayer.isVisible()) {
+          gfx.scene.debugLayer.hide();
+        } else {
+          gfx.scene.debugLayer.show();
+        }
+      }
     }
 
     // NEW: ESDF and Arrow key panning (velocity-based, relative to camera angle)
@@ -1269,8 +1300,8 @@ function getRandomColor() {
         window.cameraVelocity = { panX: 0, panZ: 0, radius: 0, alpha: 0 };
       }
 
-      // ESDF keys (primary movement scheme) - W removed (now used for rotation)
-      if (key === 'e' || key === 's' || key === 'd' || key === 'a' || key === 'f') {
+      // ESDF keys (primary movement scheme)
+      if (key === 'e' || key === 's' || key === 'd' || key === 'f') {
         // Clear velocity when key is released
         if (!state) {
           // Apply friction when releasing movement keys
@@ -1291,8 +1322,6 @@ function getRandomColor() {
           panZ -= 1.0;
         } else if (key === 'f') { // Right (swapped with S)
           panX -= 1.0; // F should be right but currently reversed
-        } else if (key === 'a') { // Alternative left
-          panX -= 0.7;
         }
 
         // Apply direction vectors and sensitivity
@@ -1746,23 +1775,32 @@ function getRandomColor() {
         
         // Check if we clicked on a building - if so, ignore the building and pick through to terrain
         let actualPickResult = pickResult;
-        if (pickResult.pickedMesh && !pickResult.pickedMesh.name.includes('Mesh')) {
+        if (pickResult.pickedMesh && (pickResult.pickedMesh.isBuilding || !pickResult.pickedMesh.name.includes('Mesh'))) {
           // We clicked on a building or other non-terrain object, try to pick through to terrain
-          // Create a new pick ray that ignores the building mesh
-          const ray = gfx.scene.createPickingRay(x, y, BABYLON.Matrix.Identity(), gfx.camera);
           
-          // Temporarily make the building mesh non-pickable
-          const originalPickable = pickResult.pickedMesh.isPickable;
-          pickResult.pickedMesh.isPickable = false;
+          // Temporarily make ALL building meshes non-pickable
+          const meshesToRestore = [];
+          gameBuildings.forEach(building => {
+            if (building.mesh) {
+              meshesToRestore.push({mesh: building.mesh, pickable: building.mesh.isPickable});
+              building.mesh.isPickable = false;
+              building.mesh.getChildMeshes().forEach(child => {
+                meshesToRestore.push({mesh: child, pickable: child.isPickable});
+                child.isPickable = false;
+              });
+            }
+          });
           
           // Pick again to get terrain
           const terrainPickResult = gfx.scene.pick(x, y);
           
-          // Restore original pickable state
-          pickResult.pickedMesh.isPickable = originalPickable;
+          // Restore original pickable state for all meshes
+          meshesToRestore.forEach(item => {
+            item.mesh.isPickable = item.pickable;
+          });
           
           // If we found terrain, use that instead
-          if (terrainPickResult.hit && terrainPickResult.pickedMesh.name.includes('Mesh')) {
+          if (terrainPickResult.hit && terrainPickResult.pickedMesh && terrainPickResult.pickedMesh.name.includes('Mesh')) {
             actualPickResult = terrainPickResult;
           }
         }

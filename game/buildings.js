@@ -255,6 +255,19 @@ function placeBuilding(buildingType, x, z, scene) {
       // Make it visible
       building.mesh.setEnabled(true);
       
+      // Tag as building so terrain clicks can ignore it
+      building.mesh.isBuilding = true;
+      building.mesh.getChildMeshes().forEach(childMesh => {
+        childMesh.isBuilding = true;
+      });
+      
+      // AGORA ONLY: Store platform height for units to stand on
+      if (buildingType === 'agora') {
+        // Calculate the top height of the agora (for units to stand on)
+        building.platformHeight = 2.5; // Units stand 2.5 units above ground on agora
+        building.platformRadius = 8; // Platform area in world units
+      }
+      
       // Set up shadows for building mesh
       if (window.gfx && window.gfx.setupMeshShadows) {
         window.gfx.setupMeshShadows(building.mesh);
@@ -546,7 +559,7 @@ function findIdleVillagersNearBuilding(building) {
   if (!building || !building.needsWorkers || !building.position) return [];
   
   const idleVillagers = [];
-  const workRadius = building.workRadius || 5;
+  const workRadius = building.workRadius || 20; // Increased radius to find workers across map
   
   // Look through all game units for idle villagers and engineers
   for (const unit of gameUnits) {
@@ -554,21 +567,29 @@ function findIdleVillagersNearBuilding(building) {
     if (unit.type !== 'villager' && unit.type !== 'engineer') continue;
     if (unit.owner !== building.owner) continue; // Only assign workers to same owner
     
-    // Check if villager is idle (no active behavior)
-    const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
-    if (hasActiveBehavior) continue;
+    // Check if villager is idle (no active behavior OR just has linger behavior)
+    const currentBehavior = window.behaviorManager ? window.behaviorManager.getBehavior(unit) : null;
+    const isIdleOrLingering = !currentBehavior || 
+                              (currentBehavior && currentBehavior.constructor.name === 'LingerBehavior');
+    if (!isIdleOrLingering) continue;
     
-    // Check distance from building
+    // Check distance from building (in world units, not tiles)
     const dx = unit.pb.state.loc.x - building.position.x;
     const dz = unit.pb.state.loc.z - building.position.z;
     const distance = Math.sqrt(dx * dx + dz * dz);
     
-    if (distance <= workRadius * TILE_SIZE) {
-      idleVillagers.push(unit);
+    // Use world distance directly - workRadius is already in tiles, multiply by TILE_SIZE for world units
+    const maxDistance = workRadius * TILE_SIZE;
+    
+    if (distance <= maxDistance) {
+      idleVillagers.push({unit, distance});
     }
   }
   
-  return idleVillagers;
+  // Sort by distance - closest villagers first
+  idleVillagers.sort((a, b) => a.distance - b.distance);
+  
+  return idleVillagers.map(v => v.unit);
 }
 
 // Assign a villager to work at a building
@@ -601,7 +622,7 @@ function assignVillagerToWork(villager, building) {
   // Mark villager as assigned to this building
   villager.assignedBuilding = building;
   
-  // console.log(`🔨 Assigned ${villager.name || villager.type} to work at ${building.name}`);
+  console.log(`✅ AUTO-ASSIGNED ${villager.name || villager.type} to work at ${building.name || building.type} (${building.assignedWorkers.length}/${building.maxWorkers} workers)`);
   return true;
 }
 
@@ -661,6 +682,211 @@ function processWorkProduction(building) {
   building.lastWorkTime = currentTime;
 }
 
+// TF2-style capture point visual indicators
+function updateCapturePointVisuals(agora) {
+  if (!agora || !agora.mesh || !window.gfx || !window.gfx.scene) return;
+  
+  const captureProgress = agora.captureProgress || 0;
+  const isContested = agora.contested || false;
+  const capturerTeam = agora.contestedBy;
+  
+  // Create capture point visuals if they don't exist
+  if (!agora.captureVisuals) {
+    agora.captureVisuals = {};
+    
+    // Base capture disc (always shows owner color)
+    // Diameter = OCCUPATION_RADIUS * 2 * TILE_SIZE = 5 * 2 * 4 = 40 world units
+    const baseDisc = BABYLON.MeshBuilder.CreateCylinder('captureBase', {
+      height: 0.2,
+      diameter: 40,
+      tessellation: 32
+    }, window.gfx.scene);
+    baseDisc.position.y = 0.1;
+    baseDisc.parent = agora.mesh;
+    
+    const baseMat = new BABYLON.StandardMaterial('captureBaseMat', window.gfx.scene);
+    baseMat.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.3); // Gray by default
+    baseMat.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+    baseMat.alpha = 0.15; // Very subtle (was 0.6)
+    baseDisc.material = baseMat;
+    
+    agora.captureVisuals.baseDisc = baseDisc;
+    agora.captureVisuals.baseMat = baseMat;
+    
+    // Progress disc (shows capture progress)
+    const progressDisc = BABYLON.MeshBuilder.CreateCylinder('captureProgress', {
+      height: 0.3,
+      diameter: 40,
+      tessellation: 32
+    }, window.gfx.scene);
+    progressDisc.position.y = 0.25;
+    progressDisc.parent = agora.mesh;
+    progressDisc.scaling.x = 0;
+    progressDisc.scaling.z = 0;
+    
+    const progressMat = new BABYLON.StandardMaterial('captureProgressMat', window.gfx.scene);
+    progressMat.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red by default
+    progressMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
+    progressMat.alpha = 0.8;
+    progressDisc.material = progressMat;
+    
+    agora.captureVisuals.progressDisc = progressDisc;
+    agora.captureVisuals.progressMat = progressMat;
+    
+    // Warning ring (pulses when being captured)
+    const warningRing = BABYLON.MeshBuilder.CreateTorus('captureWarning', {
+      diameter: 42,
+      thickness: 0.5,
+      tessellation: 32
+    }, window.gfx.scene);
+    warningRing.position.y = 1.0;
+    warningRing.parent = agora.mesh;
+    warningRing.isVisible = false;
+    
+    const warningMat = new BABYLON.StandardMaterial('captureWarningMat', window.gfx.scene);
+    warningMat.diffuseColor = new BABYLON.Color3(1, 0.3, 0);
+    warningMat.emissiveColor = new BABYLON.Color3(1, 0.5, 0);
+    warningMat.alpha = 0.7;
+    warningRing.material = warningMat;
+    
+    agora.captureVisuals.warningRing = warningRing;
+    agora.captureVisuals.warningMat = warningMat;
+    
+    // Countdown timer text (shows seconds remaining)
+    const timerPlane = BABYLON.MeshBuilder.CreatePlane('captureTimer', {
+      width: 8,
+      height: 4
+    }, window.gfx.scene);
+    timerPlane.position.y = 8; // High above the agora
+    timerPlane.parent = agora.mesh;
+    timerPlane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL; // Always face camera
+    timerPlane.isVisible = false;
+    
+    // Create dynamic texture for timer text
+    const timerTexture = new BABYLON.DynamicTexture('captureTimerTexture', {width: 512, height: 256}, window.gfx.scene);
+    const timerMat = new BABYLON.StandardMaterial('captureTimerMat', window.gfx.scene);
+    timerMat.diffuseTexture = timerTexture;
+    timerMat.emissiveTexture = timerTexture;
+    timerMat.opacityTexture = timerTexture;
+    timerMat.backFaceCulling = false;
+    timerPlane.material = timerMat;
+    
+    agora.captureVisuals.timerPlane = timerPlane;
+    agora.captureVisuals.timerTexture = timerTexture;
+  }
+  
+  // Update visual state based on capture status
+  const visuals = agora.captureVisuals;
+  
+  // Update base disc color to match owner
+  if (window.getTeamColorForOwner) {
+    const ownerColor = window.getTeamColorForOwner(agora.owner);
+    if (ownerColor) {
+      visuals.baseMat.diffuseColor = new BABYLON.Color3(
+        ownerColor.r * 0.7,
+        ownerColor.g * 0.7,
+        ownerColor.b * 0.7
+      );
+      visuals.baseMat.emissiveColor = new BABYLON.Color3(
+        ownerColor.r * 0.3,
+        ownerColor.g * 0.3,
+        ownerColor.b * 0.3
+      );
+    }
+  }
+  
+  // Update progress disc
+  if (captureProgress > 0) {
+    const scale = Math.min(1.0, captureProgress / 100);
+    visuals.progressDisc.scaling.x = scale;
+    visuals.progressDisc.scaling.z = scale;
+    visuals.progressDisc.isVisible = true;
+    
+    // Set color based on capturing team
+    if (capturerTeam && window.getTeamColorForOwner) {
+      const capturerColor = window.getTeamColorForOwner(capturerTeam);
+      if (capturerColor) {
+        visuals.progressMat.diffuseColor = new BABYLON.Color3(
+          capturerColor.r,
+          capturerColor.g,
+          capturerColor.b
+        );
+        visuals.progressMat.emissiveColor = new BABYLON.Color3(
+          capturerColor.r * 0.5,
+          capturerColor.g * 0.5,
+          capturerColor.b * 0.5
+        );
+      }
+    }
+  } else {
+    visuals.progressDisc.isVisible = false;
+  }
+  
+  // Update warning ring (pulse animation when being captured or contested)
+  if (captureProgress > 0 || isContested) {
+    visuals.warningRing.isVisible = true;
+    
+    // Pulse animation
+    const time = Date.now() * 0.003; // Slower pulse
+    const pulseScale = 1.0 + Math.sin(time) * 0.1;
+    visuals.warningRing.scaling.setAll(pulseScale);
+    
+    // Change color if contested
+    if (isContested) {
+      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 1, 0); // Yellow for contested
+      visuals.warningMat.emissiveColor = new BABYLON.Color3(1, 1, 0);
+    } else {
+      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 0.3, 0); // Orange for capturing
+      visuals.warningMat.emissiveColor = new BABYLON.Color3(1, 0.5, 0);
+    }
+  } else {
+    visuals.warningRing.isVisible = false;
+  }
+  
+  // Update countdown timer
+  if (captureProgress > 0) {
+    visuals.timerPlane.isVisible = true;
+    
+    // Calculate seconds remaining (15 seconds total capture time)
+    const CAPTURE_TIME = 15;
+    const remainingProgress = 100 - captureProgress;
+    const secondsRemaining = Math.ceil((remainingProgress / 100) * CAPTURE_TIME);
+    
+    // Draw timer text
+    const ctx = visuals.timerTexture.getContext();
+    ctx.clearRect(0, 0, 512, 256);
+    
+    // Background
+    if (isContested) {
+      ctx.fillStyle = 'rgba(255, 255, 0, 0.8)'; // Yellow for contested
+    } else {
+      ctx.fillStyle = 'rgba(255, 100, 0, 0.8)'; // Orange for capturing
+    }
+    ctx.fillRect(0, 0, 512, 256);
+    
+    // Border
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
+    ctx.lineWidth = 8;
+    ctx.strokeRect(4, 4, 504, 248);
+    
+    // Timer text
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 120px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    if (isContested) {
+      ctx.fillText('CONTESTED', 256, 128);
+    } else {
+      ctx.fillText(`${secondsRemaining}s`, 256, 128);
+    }
+    
+    visuals.timerTexture.update();
+  } else {
+    visuals.timerPlane.isVisible = false;
+  }
+}
+
 // Update building logic (damage, construction progress, etc.)
 function updateBuildings(deltaTime) {
   // Safe to run in menu scene - just guard against missing dependencies
@@ -689,6 +915,11 @@ function updateBuildings(deltaTime) {
       
       // Mark as complete
       building.needsMeshSetup = false;
+    }
+    
+    // TF2-style capture point visual indicators for Agoras
+    if (building.type === 'agora' && building.mesh) {
+      updateCapturePointVisuals(building);
     }
     
     // Handle villager spawning for villages (only if game is running)
@@ -863,7 +1094,12 @@ const buildingSystem = {
       // Position it at the provided position or current mouse position
       if (initialPosition) {
         this.previewMesh.position = initialPosition.clone();
-        this.previewMesh.position.y = 0.25; // Slightly above ground
+        // Get terrain height
+        let terrainY = 0;
+        if (window.liveField && window.liveField.getHeightAt) {
+          terrainY = window.liveField.getHeightAt(initialPosition.x, initialPosition.z);
+        }
+        this.previewMesh.position.y = terrainY + 0.25; // Slightly above ground
       } else {
         // Try to get current mouse position
         const pickResult = window.gfx.scene.pick(
@@ -873,11 +1109,20 @@ const buildingSystem = {
         
         if (pickResult.hit && pickResult.pickedPoint) {
           this.previewMesh.position = pickResult.pickedPoint.clone();
-          this.previewMesh.position.y = 0.25;
+          // Get terrain height
+          let terrainY = 0;
+          if (window.liveField && window.liveField.getHeightAt) {
+            terrainY = window.liveField.getHeightAt(pickResult.pickedPoint.x, pickResult.pickedPoint.z);
+          }
+          this.previewMesh.position.y = terrainY + 0.25;
         } else if (window.gfx.cameraTarget) {
           // Fallback to camera target
           this.previewMesh.position = window.gfx.cameraTarget.position.clone();
-          this.previewMesh.position.y = 0.25;
+          let terrainY = 0;
+          if (window.liveField && window.liveField.getHeightAt) {
+            terrainY = window.liveField.getHeightAt(this.previewMesh.position.x, this.previewMesh.position.z);
+          }
+          this.previewMesh.position.y = terrainY + 0.25;
         } else {
           // Last resort fallback
           this.previewMesh.position = new BABYLON.Vector3(0, 0.25, 0);
@@ -1224,10 +1469,16 @@ const buildingSystem = {
           const gridX = Math.round(worldPos.x / TILE_SIZE) * TILE_SIZE;
           const gridZ = Math.round(worldPos.z / TILE_SIZE) * TILE_SIZE;
           
+          // Get terrain height at this position
+          let terrainY = 0;
+          if (window.liveField && window.liveField.getHeightAt) {
+            terrainY = window.liveField.getHeightAt(gridX, gridZ);
+          }
+          
           // Update preview position
           this.previewMesh.position.x = gridX;
           this.previewMesh.position.z = gridZ;
-          this.previewMesh.position.y = 0.25;
+          this.previewMesh.position.y = terrainY + 0.25; // Slightly above terrain
           
           // Apply rotation
           this.previewMesh.rotation.y = this.placementRotation;
@@ -1263,14 +1514,13 @@ const buildingSystem = {
       try {
         // Get world position from mouse
         const pickResult = window.gfx.scene.pick(e.clientX, e.clientY);
+        
         if (pickResult.hit && pickResult.pickedMesh && pickResult.pickedMesh.name && pickResult.pickedMesh.name.includes('Mesh')) {
           const worldPos = pickResult.pickedPoint;
           
           // Snap to grid
           const gridX = Math.round(worldPos.x / TILE_SIZE);
           const gridZ = Math.round(worldPos.z / TILE_SIZE);
-          
-          // console.log(`🏗️ Attempting to place building at grid coordinates: (${gridX}, ${gridZ})`);
           
           // Place the building
           this.placeBuildingAt(gridX, gridZ);
@@ -1280,7 +1530,7 @@ const buildingSystem = {
           e.stopPropagation();
         }
       } catch (error) {
-        // console.warn('Error in click handler:', error);
+        console.warn('Error in click handler:', error);
       }
     };
     
@@ -1877,8 +2127,9 @@ if (typeof window !== 'undefined') {
       const x = cameraPos.x + Math.cos(angle) * distance * TILE_SIZE;
       const z = cameraPos.z + Math.sin(angle) * distance * TILE_SIZE;
       
+      const ownerId = window.player?.id || 'player';
       const engineer = new Unit('engineer', { x, y: 0, z });
-      engineer.owner = 'player';
+      engineer.owner = ownerId;
       
       // Random rotation
       const randomRotation = Math.random() * Math.PI * 2;

@@ -373,7 +373,8 @@ Player.prototype.spawnInitialVillagers = function() {
       continue;
     }
     
-    villager.owner = 'player';
+    const ownerId = this.id || window.player?.id || 'player';
+    villager.owner = ownerId;
     
     // Random rotation
     const randomRotation = Math.random() * Math.PI * 2;

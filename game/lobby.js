@@ -16,6 +16,157 @@ const Lobby = {
   connectedChannels: {}, // Track which channels are connected
   pendingBroadcasts: [], // Queue broadcasts until channel is ready
   lobbySearchStartTime: {}, // Track when we started searching for lobbies per game type
+  hasAnnouncedPresence: false,
+  
+  normalizePeerId: function(id) {
+    if (!id) return '';
+    const suffix = id.includes('-') ? id.split('-').pop() : id;
+    return suffix.length > 6 ? suffix.slice(-6) : suffix;
+  },
+  
+  // Ensure connected player metadata stays in sync with the peer list
+  syncConnectedPlayersFromPeerIds: function(peerIds = []) {
+    const peers = Array.isArray(peerIds) ? peerIds.filter(Boolean) : [];
+    const uniquePeerIds = [...new Set(peers)];
+    const existingPlayerMap = new Map();
+    
+    (this.connectedPlayers || []).forEach(entry => {
+      const entryId = (entry && entry.id) ? entry.id : entry;
+      const normalizedId = this.normalizePeerId(entryId);
+      if (!entryId || !normalizedId || existingPlayerMap.has(normalizedId)) {
+        return;
+      }
+      if (typeof entry === 'object') {
+        existingPlayerMap.set(normalizedId, {
+          ...entry,
+          id: entryId,
+          shortId: entry.shortId || normalizedId
+        });
+      } else {
+        existingPlayerMap.set(normalizedId, { id: entryId, shortId: normalizedId });
+      }
+    });
+    
+    this.connectedPlayers = uniquePeerIds.map(peerId => {
+      const normalizedId = this.normalizePeerId(peerId);
+      const existing = normalizedId ? existingPlayerMap.get(normalizedId) : null;
+      if (existing) {
+        existing.id = peerId;
+        existing.shortId = normalizedId;
+        return existing;
+      }
+      return { id: peerId, shortId: normalizedId };
+    });
+    
+    return this.connectedPlayers;
+  },
+  
+  // Merge or insert metadata for a connected player without duplicating entries
+  upsertConnectedPlayerMeta: function(playerData = {}) {
+    const playerId = playerData.id;
+    if (!playerId) return;
+    
+    const normalizedTarget = this.normalizePeerId(playerId);
+    let found = false;
+    const seen = new Set();
+    const updatedList = [];
+    
+    (this.connectedPlayers || []).forEach(entry => {
+      const entryId = (entry && entry.id) ? entry.id : entry;
+      const normalizedEntryId = this.normalizePeerId(entryId);
+      if (!entryId || !normalizedEntryId || seen.has(normalizedEntryId)) {
+        return;
+      }
+      seen.add(normalizedEntryId);
+      
+      if (!found && normalizedEntryId === normalizedTarget) {
+        const enriched = typeof entry === 'object' ? entry : { id: entryId };
+        enriched.id = playerId || entryId;
+        enriched.shortId = normalizedTarget;
+        if (playerData.name !== undefined) enriched.name = playerData.name;
+        if (playerData.color !== undefined) enriched.color = playerData.color;
+        updatedList.push(enriched);
+        found = true;
+      } else if (typeof entry === 'object') {
+        entry.id = entry.id || entryId;
+        entry.shortId = entry.shortId || normalizedEntryId;
+        updatedList.push(entry);
+      } else {
+        updatedList.push({ id: entryId, shortId: normalizedEntryId });
+      }
+    });
+    
+    if (!found) {
+      updatedList.push({
+        id: playerId,
+        shortId: normalizedTarget,
+        name: playerData.name,
+        color: playerData.color
+      });
+    }
+    
+    this.connectedPlayers = updatedList;
+  },
+  
+  // Remove a connected player entry (object or raw ID) and collapse duplicates
+  removeConnectedPlayerById: function(playerId) {
+    if (!playerId) return;
+    const seen = new Set();
+    const normalizedTarget = this.normalizePeerId(playerId);
+    this.connectedPlayers = (this.connectedPlayers || []).filter(entry => {
+      const entryId = (entry && entry.id) ? entry.id : entry;
+      const normalizedEntryId = this.normalizePeerId(entryId);
+      if (!entryId || !normalizedEntryId || seen.has(normalizedEntryId)) {
+        return false;
+      }
+      seen.add(normalizedEntryId);
+      return normalizedEntryId !== normalizedTarget;
+    });
+  },
+  
+  sendPlayerPresence: function(targetPeerId = null) {
+    if (!window.net || !window.net.p2p || !this.currentLobbyId) {
+      return;
+    }
+    
+    const status = window.net.getStatus ? window.net.getStatus() : {};
+    const myId = status.localPlayerId;
+    if (!myId) return;
+    
+    const payload = {
+      type: 'player_joined',
+      playerId: myId,
+      playerName: window.currentPlayerName || window.player?.name || `Player ${this.normalizePeerId(myId)}`,
+      playerColor: window.currentPlayerColor || window.player?.color || '#ffffff'
+    };
+    
+    try {
+      if (targetPeerId) {
+        window.net.p2p.sendData(payload, targetPeerId);
+      } else {
+        window.net.p2p.sendData(payload);
+      }
+      this.hasAnnouncedPresence = true;
+    } catch (error) {
+      console.warn('⚠️ Failed to send player presence:', error);
+    }
+  },
+  
+  // Notify peers that this client has left the lobby (non-host)
+  notifyPeersPlayerLeft: function(playerId) {
+    if (!playerId || !window.net || !window.net.p2p || typeof window.net.p2p.sendData !== 'function') {
+      return;
+    }
+    
+    try {
+      window.net.p2p.sendData({
+        type: 'player_left',
+        playerId: playerId
+      });
+    } catch (error) {
+      console.warn('⚠️ Failed to notify peers about player leaving:', error);
+    }
+  },
   
   // Game type configurations
   gameTypes: {
@@ -310,7 +461,8 @@ const Lobby = {
     window.liveField = new window.Field({
       width: dims.width,
       height: dims.height,
-      seed: resolvedSeed
+      seed: resolvedSeed,
+      spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
@@ -916,6 +1068,7 @@ const Lobby = {
     this.playerReadyStates = {};
     this.playerConnectionStates = {};
     this.playerReadyStates[window.net.getStatus().localPlayerId] = false;
+    this.hasAnnouncedPresence = false;
     
     // Join the actual P2P match lobby
     const actualLobbyKey = `${config.lobbyKey}-${lobbyId}`;
@@ -972,6 +1125,10 @@ const Lobby = {
         // Update lobby UI with connected peers
         if (this.currentLobby) {
           this.updateLobbyRoomUI(gameType, this.currentLobby);
+        }
+        
+        if (!this.hasAnnouncedPresence) {
+          this.sendPlayerPresence();
         }
         
         clearInterval(this.connectionStatusInterval);
@@ -1242,6 +1399,11 @@ const Lobby = {
         type: 'lobby_closed',
         lobbyId: this.currentLobbyId
       });
+    } else if (this.currentLobbyId) {
+      const myId = window.net && window.net.getStatus ? window.net.getStatus().localPlayerId : null;
+      if (myId) {
+        this.notifyPeersPlayerLeft(myId);
+      }
     }
     
     // Clear state (currentGameType is intentionally set to null for menu)
@@ -1255,6 +1417,7 @@ const Lobby = {
     this.isHost = false;
     this.playerReadyStates = {};
     this.playerConnectionStates = {};
+    this.hasAnnouncedPresence = false;
     
     // Announce we're back in menu (currentGameType will be null, which is correct for 'menu' status)
     this.announceStatusToGlobal('menu');
@@ -1293,7 +1456,7 @@ const Lobby = {
     }
     
     const netStatus = window.net.getStatus();
-    this.connectedPlayers = netStatus.peers || [];
+    this.syncConnectedPlayersFromPeerIds(netStatus.peers || []);
     this.isHost = netStatus.isHost || false;
     
     // Update the lobby UI with current player list
@@ -1628,6 +1791,11 @@ const Lobby = {
         }, lobbyChannelName);
         console.log('📡 Broadcasting lobby closed to lobby channel');
       }
+    } else if (lobbyId && !wasHost) {
+      const myId = window.net && window.net.getStatus ? window.net.getStatus().localPlayerId : null;
+      if (myId) {
+        this.notifyPeersPlayerLeft(myId);
+      }
     }
     
     // Disconnect P2P peers to allow clean rejoin
@@ -1664,6 +1832,7 @@ const Lobby = {
     this.playerReadyStates = {};
     this.playerConnectionStates = {};
     this.connectedPlayers = [];
+    this.hasAnnouncedPresence = false;
     
     // Ensure currentGameType is set for the browser
     this.currentGameType = gameType;
@@ -2125,7 +2294,8 @@ const Lobby = {
     window.liveField = new window.Field({
       width: dims.width,
       height: dims.height,
-      seed: resolvedSeed
+      seed: resolvedSeed,
+      spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
@@ -2574,7 +2744,8 @@ const Lobby = {
     window.liveField = new window.Field({
       width: dims.width,
       height: dims.height,
-      seed: mapSeed
+      seed: mapSeed,
+      spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
     
     if (typeof liveField !== 'undefined') {
@@ -2705,6 +2876,11 @@ const Lobby = {
           isAI: false
         });
         players.push(opponent);
+        
+        // CRITICAL: Assign first opponent to window.opponent for state sync
+        if (!window.opponent) {
+          window.opponent = opponent;
+        }
       }
     });
     

@@ -59,10 +59,11 @@ function Tile(ops){
   // Default to grass atlas, but can be overridden by terrain system
   this.atlasName = ops.atlasName || 'atlas-grass';
   
-  // Calculate atlas coordinates (4x4 grid)
+  // Calculate atlas coordinates (4x4 grid for terrain atlases)
   // Row 0 should be at the bottom (0,0) - fix the UV mapping
-  this.atlasRow = Math.floor(this.type / 4); // Row 0 = bottom, Row 3 = top
-  this.atlasCol = this.type % 4;             // Col 0 = left, Col 3 = right
+  const atlasGridSize = 4; // 4x4 grid for terrain atlases
+  this.atlasRow = Math.floor(this.type / atlasGridSize); // Row 0 = bottom, Row 3 = top
+  this.atlasCol = this.type % atlasGridSize;             // Col 0 = left, Col 3 = right
 
   // this.mesh = BABYLON.MeshBuilder.CreateBox("tile", {size: tileSize}, gfx.scene);
   // this.mesh.position.x = this.loc.x * tileSize;
@@ -74,10 +75,11 @@ Tile.prototype.updateAtlasCoordinates = function() {
   // Don't overwrite atlasName - it's set by the terrain system
   // (could be 'atlas-grass' or 'atlas-water')
   
-  // Calculate atlas coordinates (4x4 grid)
+  // Calculate atlas coordinates (4x4 grid for terrain atlases)
   // Row 0 should be at the bottom (0,0) - fix the UV mapping
-  this.atlasRow = Math.floor(this.type / 4); // Row 0 = bottom, Row 3 = top
-  this.atlasCol = this.type % 4;             // Col 0 = left, Col 3 = right
+  const atlasGridSize = 4; // 4x4 grid for terrain atlases
+  this.atlasRow = Math.floor(this.type / atlasGridSize); // Row 0 = bottom, Row 3 = top
+  this.atlasCol = this.type % atlasGridSize;             // Col 0 = left, Col 3 = right
 };
 
 
@@ -95,6 +97,14 @@ function Field(ops = {}) {
   // Elevation-based terrain system
   this.heightMap = [];     // Continuous elevation values (0.0 to 1.0)
   this.terrainTypes = [];  // Terrain type per tile: 0=deep, 1=water, 2=grass, 3=dirt, 4=mountains
+  
+  // Spawn positions for flattening agora zones
+  this.spawnPositions = ops.spawnPositions || [];
+  this.spawnZoneRadius = 6; // Tiles to flatten around each spawn
+  
+  // if (this.spawnPositions.length > 0) {
+  //   console.log(`🏛️ Field initialized with ${this.spawnPositions.length} spawn zones (radius: ${this.spawnZoneRadius} tiles):`, this.spawnPositions);
+  // }
   
   // Instance properties for chunk management
   this.chunks = new Map();
@@ -120,7 +130,7 @@ function Field(ops = {}) {
     for(let y = 0; y < this.height; y++){
       this.tiles.push(new Tile({loc: {x, y}, type: 12})); // Placeholder
       this.heightMap.push(0); // Will be filled by height generation
-      this.terrainTypes.push(2); // Default to grass (type 2)
+      this.terrainTypes.push(3); // Default to dirt (type 3)
     }
   }
   
@@ -174,22 +184,176 @@ Field.prototype.proof = function(){
   
   // Step 3: Apply marching squares for seamless transitions between adjacent terrains
   this.applyTerrainTransitions();
+}
+
+// Test function: Display all 16 tile variants from atlas-grass-dirt in a grid
+// Directly assigns tile types without going through transition logic
+Field.prototype.testAllDirtWaterTiles = function() {
+  // console.log('🧪 Creating test grid with all 16 dirt-water tile variants...');
   
-  // Debug - show terrain distribution
-  const deepCount = this.terrainTypes.filter(t => t === 0).length;
-  const waterCount = this.terrainTypes.filter(t => t === 1).length;
-  const grassCount = this.terrainTypes.filter(t => t === 2).length;
-  const dirtCount = this.terrainTypes.filter(t => t === 3).length;
-  const mountainCount = this.terrainTypes.filter(t => t === 4).length;
-  console.log(`🌊 Deep: ${deepCount} (${(deepCount/this.tiles.length*100).toFixed(1)}%), 💧 Water: ${waterCount} (${(waterCount/this.tiles.length*100).toFixed(1)}%), 🌿 Grass: ${grassCount} (${(grassCount/this.tiles.length*100).toFixed(1)}%), 🟫 Dirt: ${dirtCount} (${(dirtCount/this.tiles.length*100).toFixed(1)}%), 🏔️ Mountains: ${mountainCount} (${(mountainCount/this.tiles.length*100).toFixed(1)}%)`);
+  // Clear existing terrain - make everything dirt
+  for(let i = 0; i < this.tiles.length; i++) {
+    this.heightMap[i] = 0.5;
+    this.terrainTypes[i] = 3; // All dirt
+  }
   
-  // DEBUG: Check water tile variants
-  const waterTiles = this.tiles.filter(t => t.atlasName === 'atlas-water');
-  const waterVariants = {};
-  waterTiles.forEach(t => {
-    waterVariants[t.type] = (waterVariants[t.type] || 0) + 1;
+  // Create a 4x4 grid showing all 16 tile variants (cases 0-15)
+  // Directly assign tile types to see the atlas tiles
+  const gridSize = 4;
+  const cellSize = 16; // 16x16 tiles per cell
+  
+  // Store what tile number should be in each cell for debugging
+  const cellTiles = [];
+  
+  for(let gridY = 0; gridY < gridSize; gridY++) {
+    for(let gridX = 0; gridX < gridSize; gridX++) {
+      const caseNum = gridY * gridSize + gridX; // 0-15
+      
+      // Calculate the area for this cell
+      const startX = gridX * cellSize;
+      const startY = gridY * cellSize;
+      const endX = Math.min(startX + cellSize, this.width);
+      const endY = Math.min(startY + cellSize, this.height);
+      
+      // No swaps needed - use the case number directly
+      const rawCase = caseNum;
+      
+      // Store for debugging
+      cellTiles.push({gridX, gridY, expected: caseNum, actual: rawCase});
+      
+      // Directly assign tile type and atlas for this cell
+      for(let y = startY; y < endY; y++) {
+        for(let x = startX; x < endX; x++) {
+          const index = y * this.width + x;
+          const tile = this.tiles[index];
+          
+          // Set terrain to dirt so it uses grass-dirt atlas
+          this.terrainTypes[index] = 3; // Dirt
+          
+          // Assign the raw tile type (no transformation for now)
+          tile.type = rawCase;
+          tile.atlasName = 'atlas-grass-dirt';
+          tile.updateAtlasCoordinates();
+        }
+      }
+    }
+  }
+  
+  // Log the mapping with visual grid
+  // console.log('   Tile mapping (Expected → Actual tile number):');
+  // console.log('   ┌─────┬─────┬─────┬─────┐');
+  // for(let gridY = 0; gridY < gridSize; gridY++) {
+  //   let rowStr = '   │';
+  //   for(let gridX = 0; gridX < gridSize; gridX++) {
+  //     const idx = gridY * gridSize + gridX;
+  //     const {expected, actual} = cellTiles[idx];
+  //     const match = expected === actual ? '✓' : '⚠️';
+  //     rowStr += ` ${expected}→${actual}${match} │`;
+  //   }
+  //   console.log(rowStr);
+  //   if(gridY < gridSize - 1) console.log('   ├─────┼─────┼─────┼─────┤');
+  // }
+  // console.log('   └─────┴─────┴─────┴─────┘');
+  // console.log('   Format: Expected→Actual (✓=match, ⚠️=mismatch)');
+  
+  // Also log detailed mapping
+  // for(let i = 0; i < cellTiles.length; i++) {
+  //   const {gridX, gridY, expected, actual} = cellTiles[i];
+  //   if(gridX === 0) console.log(`   Row ${gridY} details:`);
+  //   const match = expected === actual ? '✓' : '⚠️ MISMATCH';
+  //   console.log(`     Cell (${gridX},${gridY}): Should show tile ${expected}, actually showing tile ${actual} ${match}`);
+  // }
+  
+  // Force chunk regeneration
+  const chunkKeys = Array.from(this.chunks.keys());
+  chunkKeys.forEach(key => {
+    const [chunkX, chunkZ] = key.split(',').map(Number);
+    this.unloadChunk(chunkX, chunkZ);
   });
-  console.log('💧 Water tile variants:', waterVariants);
+  
+  // Trigger chunk reload if we're in-game
+  if(window.gfx && window.gfx.camera) {
+    const camPos = window.gfx.camera.position;
+    this.updateVisibleChunks(camPos.x, camPos.z);
+  }
+  
+  // console.log('✅ Test grid created! 4x4 grid showing all 16 dirt-water tile variants (cases 0-15)');
+  // console.log('   Grid layout:');
+  // console.log('   ┌─────┬─────┬─────┬─────┐');
+  // console.log('   │  0  │  1  │  2  │  3  │  Top row');
+  // console.log('   ├─────┼─────┼─────┼─────┤');
+  // console.log('   │  4  │  5  │  6  │  7  │  Second row');
+  // console.log('   ├─────┼─────┼─────┼─────┤');
+  // console.log('   │  8  │  9  │ 10  │ 11  │  Third row');
+  // console.log('   ├─────┼─────┼─────┼─────┤');
+  // console.log('   │ 12  │ 13  │ 14  │ 15  │  Bottom row');
+  // console.log('   └─────┴─────┴─────┴─────┘');
+  // console.log('   Each cell shows the tile variant number that should be displayed');
+  // console.log('   Check which tiles are actually showing in each cell position');
+}
+
+// Test function: Create alternating stripes to test wang tile transitions
+Field.prototype.testStripes = function() {
+  // console.log('🧪 Creating test stripes pattern (2-terrain: Dirt | Grass)...');
+  
+  // Clear existing terrain
+  for(let i = 0; i < this.tiles.length; i++) {
+    this.heightMap[i] = 0;
+    this.terrainTypes[i] = 3; // Start with dirt
+  }
+  
+  // Create horizontal stripes: Dirt | Grass | Dirt | Grass | ...
+  for(let y = 0; y < this.height; y++) {
+    const stripeIndex = Math.floor(y / 8); // 8 tiles per stripe
+    const terrainType = (stripeIndex % 2 === 0) ? 3 : 2; // Alternate between dirt and grass
+    
+    for(let x = 0; x < this.width; x++) {
+      const index = y * this.width + x;
+      
+      if(terrainType === 2) {
+        this.terrainTypes[index] = 2; // Grass
+        this.heightMap[index] = 0.8; // High elevation
+      } else {
+        this.terrainTypes[index] = 3; // Dirt
+        this.heightMap[index] = 0.2; // Low elevation
+      }
+    }
+  }
+  
+  // Apply transitions
+  this.applyTerrainTransitions();
+  
+  // Force chunk regeneration
+  const chunkKeys = Array.from(this.chunks.keys());
+  chunkKeys.forEach(key => {
+    const [chunkX, chunkZ] = key.split(',').map(Number);
+    this.unloadChunk(chunkX, chunkZ);
+  });
+  
+  // Trigger chunk reload if we're in-game
+  if(window.gfx && window.gfx.camera) {
+    const camPos = window.gfx.camera.position;
+    this.updateVisibleChunks(camPos.x, camPos.z);
+  }
+  
+  // console.log('✅ Test stripes created! Horizontal stripes: Dirt | Grass | Dirt | Grass...');
+  // console.log('   Check for seamless transitions at boundaries');
+  
+  // Debug - show terrain distribution (2-tier system)
+  // const grassCount = this.terrainTypes.filter(t => t === 2).length;
+  // const dirtCount = this.terrainTypes.filter(t => t === 3).length;
+  // console.log(`🌿 Grass: ${grassCount} (${(grassCount/this.tiles.length*100).toFixed(1)}%), 🟫 Dirt: ${dirtCount} (${(dirtCount/this.tiles.length*100).toFixed(1)}%)`);
+  
+  // Debug: Check tile types per terrain
+  // const dirtTileTypes = {};
+  // const grassTileTypes = {};
+  // this.tiles.forEach((tile, i) => {
+  //   const terrain = this.terrainTypes[i];
+  //   if(terrain === 3) dirtTileTypes[tile.type] = (dirtTileTypes[tile.type] || 0) + 1;
+  //   if(terrain === 2) grassTileTypes[tile.type] = (grassTileTypes[tile.type] || 0) + 1;
+  // });
+  // console.log('🟫 Dirt tile types:', dirtTileTypes);
+  // console.log('🌿 Grass tile types:', grassTileTypes);
 }
 
 // Generate height map with radial falloff (low at edges, high in center)
@@ -201,6 +365,11 @@ Field.prototype.generateHeightMap = function() {
   // Check if this is KOTH mode
   const isKOTH = window.currentMatch?.gameType === 'koth';
   
+  // Disabled circles - they create big blobs
+  // Using pure noise for intricate patterns
+  const numCircles = 0;
+  const circles = [];
+  
   let minHeight = Infinity;
   let maxHeight = -Infinity;
   
@@ -208,28 +377,27 @@ Field.prototype.generateHeightMap = function() {
     for(let x = 0; x < this.width; x++) {
       const index = y * this.width + x;
       
-      // Calculate distance from center (normalized 0-1)
-      const dx = x - centerX;
-      const dy = y - centerY;
-      const distFromCenter = Math.sqrt(dx * dx + dy * dy) / maxDistance;
+      // Simple sine-wave based noise - reliable and creates organic patterns
+      // Multiple frequencies combined for natural terrain
+      const seed1 = this.seed * 0.01;
+      const seed2 = this.seed * 0.02;
+      const seed3 = this.seed * 0.03;
       
-      // Radial falloff - higher in center, lower at edges
-      // Use smooth falloff curve
-      const radialHeight = 1.0 - Math.pow(distFromCenter, 1.5);
+      // Layer 1: Large features (~10 tile wavelength)
+      const wave1 = Math.sin(x * 0.1 + seed1) * Math.cos(y * 0.1 + seed1);
       
-      // Add noise for variation
-      const noiseValue = fractalNoise(x, y, this.seed, 4, 0.5, 0.05);
-      const noise = (noiseValue + 1) / 2; // 0-1 range
+      // Layer 2: Medium features (~4 tile wavelength)  
+      const wave2 = Math.sin(x * 0.25 + seed2) * Math.cos(y * 0.25 + seed2);
       
-      // Combine radial and noise (radial is dominant)
-      let finalHeight;
-      if(isKOTH) {
-        // KOTH: Strong central peak for the hill to fight over
-        finalHeight = radialHeight * 0.8 + noise * 0.2;
-      } else {
-        // Other modes: Gentler radial with more noise variation
-        finalHeight = radialHeight * 0.6 + noise * 0.4;
-      }
+      // Layer 3: Fine features (~2 tile wavelength)
+      const wave3 = Math.sin(x * 0.5 + seed3) * Math.cos(y * 0.5 + seed3);
+      
+      // Layer 4: Add diagonal patterns for more variety
+      const wave4 = Math.sin((x + y) * 0.3 + seed1) * 0.5;
+      
+      // Combine waves with different weights
+      const combined = wave1 * 0.35 + wave2 * 0.3 + wave3 * 0.25 + wave4 * 0.1;
+      const finalHeight = (combined + 1) / 2; // Normalize from [-1,1] to [0,1]
       
       this.heightMap[index] = finalHeight;
       minHeight = Math.min(minHeight, finalHeight);
@@ -237,33 +405,47 @@ Field.prototype.generateHeightMap = function() {
     }
   }
   
-  console.log(`📊 Height map range BEFORE normalization: ${minHeight.toFixed(3)} to ${maxHeight.toFixed(3)} ${isKOTH ? '(KOTH mode - central peak)' : ''}`);
+  // console.log(`📊 Height map range BEFORE normalization: ${minHeight.toFixed(3)} to ${maxHeight.toFixed(3)} ${isKOTH ? '(KOTH mode - central peak)' : ''}`);
   
   // CRITICAL: Renormalize to full 0-1 range so we get all terrain types
   for(let i = 0; i < this.heightMap.length; i++) {
     this.heightMap[i] = (this.heightMap[i] - minHeight) / (maxHeight - minHeight);
   }
   
-  console.log(`📊 Height map AFTER normalization: 0.000 to 1.000`);
+  // console.log(`📊 Height map AFTER normalization: 0.000 to 1.000`);
+  
+  // Debug: Sample some heightmap values to see distribution
+  // const samples = [];
+  // for(let i = 0; i < 10; i++) {
+  //   const idx = Math.floor((i / 10) * this.heightMap.length);
+  //   samples.push(this.heightMap[idx].toFixed(3));
+  // }
+  // console.log(`📊 Height map samples (10 points): ${samples.join(', ')}`);
 }
 
 // Assign terrain types based on elevation thresholds
+// 2-terrain system: Dirt (low) → Grass (high)
 Field.prototype.assignTerrainByElevation = function() {
+  let dirtCount = 0;
+  let grassCount = 0;
+  
   for(let i = 0; i < this.heightMap.length; i++) {
     const height = this.heightMap[i];
     
-    // TEMPORARY: 3-tier system until we have atlas-deep.png and atlas-rock.png
-    // Full 5-tier when atlases ready:
-    // if(height < 0.05) this.terrainTypes[i] = 0; // Deep ocean
-    if(height < 0.25) {
-      this.terrainTypes[i] = 1; // Shallow water (edges)
-    } else if(height < 0.65) {
-      this.terrainTypes[i] = 2; // Grass (middle)
+    // Grass-dominant system: ~80% grass, ~20% dirt
+    // Simple threshold after normalization
+    // SWAPPED: Type 2=dirt, Type 3=grass (to match visual/atlas)
+    if(height < 0.35) {
+      this.terrainTypes[i] = 2; // Dirt (low areas - 20%)
+      dirtCount++;
     } else {
-      this.terrainTypes[i] = 3; // Dirt (center peaks)
+      this.terrainTypes[i] = 3; // Grass (high areas - 80%)
+      grassCount++;
     }
-    // Mountains (type 4) disabled until atlas-rock.png ready
   }
+  
+  const total = this.heightMap.length;
+  // console.log(`🌿 Terrain distribution: ${grassCount} grass (${(grassCount/total*100).toFixed(1)}%), 🟫 ${dirtCount} dirt (${(dirtCount/total*100).toFixed(1)}%)`);
 }
 
 // OLD PATCH PAINTING - REPLACED BY ELEVATION
@@ -365,8 +547,10 @@ Field.prototype.paintGrassPatches = function() {
 
 // Apply marching squares transitions between adjacent terrain types
 Field.prototype.applyTerrainTransitions = function() {
-  // Create density maps for each terrain boundary
-  // Each pair of adjacent terrains needs its own Wang tile evaluation
+  // 2-terrain system: Just grass and dirt
+  // Type 3 = grass (80%, high areas), Type 2 = dirt (20%, low areas)
+  // Grass is "filled" (1), dirt is "empty" (0) in the density map
+  const grassDensity = this.terrainTypes.map(t => t === 3 ? 1 : 0);
   
   for(let x = 0; x < this.width; x++) {
     for(let y = 0; y < this.height; y++) {
@@ -374,35 +558,41 @@ Field.prototype.applyTerrainTransitions = function() {
       const index = y * this.width + x;
       const terrain = this.terrainTypes[index];
       
-      // Determine which transition this tile is part of and which atlas to use
-      if(terrain === 0) {
-        // Deep ocean - transition with shallow water (type 1)
-        const densityMap = this.terrainTypes.map(t => t >= 1 ? 1 : 0); // 1 = water/higher
-        const tileCase = this.calculateCompatibleVariant(x, y, densityMap);
+      // Check if this tile has a neighbor of different terrain type
+      let hasMixedNeighbors = false;
+      for(let dx = -1; dx <= 1; dx++) {
+        for(let dy = -1; dy <= 1; dy++) {
+          if(dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if(nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+            const neighborTerrain = this.terrainTypes[ny * this.width + nx];
+            if(neighborTerrain !== terrain) {
+              hasMixedNeighbors = true;
+              break;
+            }
+          }
+        }
+        if(hasMixedNeighbors) break;
+      }
+      
+      if(hasMixedNeighbors) {
+        // Transition tile - use marching squares
+        // In atlas-grass-dirt: grass is filled (1), dirt is empty (0)
+        const tileCase = this.calculateCompatibleVariant(x, y, grassDensity);
         tile.type = tileCase;
-        tile.atlasName = 'atlas-water'; // PLACEHOLDER: should be atlas-deep
-      } else if(terrain === 1) {
-        // Shallow water - transition with grass (type 2)
-        const densityMap = this.terrainTypes.map(t => t >= 2 ? 1 : 0); // 1 = grass/higher
-        const tileCase = this.calculateCompatibleVariant(x, y, densityMap);
-        tile.type = tileCase;
-        tile.atlasName = 'atlas-water'; // Correct!
-      } else if(terrain === 2) {
-        // Grass - transition with dirt (type 3)
-        const densityMap = this.terrainTypes.map(t => t >= 3 ? 1 : 0); // 1 = dirt/higher
-        const tileCase = this.calculateCompatibleVariant(x, y, densityMap);
-        tile.type = tileCase;
-        tile.atlasName = 'atlas-grass'; // Correct!
-      } else if(terrain === 3) {
-        // Dirt - transition with mountains (type 4)
-        const densityMap = this.terrainTypes.map(t => t >= 4 ? 1 : 0); // 1 = mountains
-        const tileCase = this.calculateCompatibleVariant(x, y, densityMap);
-        tile.type = tileCase;
-        tile.atlasName = 'atlas-grass'; // PLACEHOLDER: should be atlas-rock
+        tile.atlasName = 'atlas-grass-dirt';
       } else {
-        // Mountains (type 4) - pure mountains
-        tile.type = 6; // Full fill
-        tile.atlasName = 'atlas-grass'; // PLACEHOLDER: should be atlas-rock
+        // Pure tile - no transition
+        if(terrain === 3) {
+          // Pure grass (type 3)
+          tile.type = 6; // Case 15 (all filled) = pure grass
+          tile.atlasName = 'atlas-grass-dirt';
+        } else {
+          // Pure dirt (type 2)
+          tile.type = 12; // Case 0 (all empty) = pure dirt
+          tile.atlasName = 'atlas-grass-dirt';
+        }
       }
       
       tile.updateAtlasCoordinates();
@@ -417,11 +607,16 @@ Field.prototype.calculateCompatibleVariant = function(x, y, densityMap) {
   // Use the provided density map (waterMap or grassMap)
   const mapToUse = densityMap || this.grassMap;
   
-  // Evaluate the 4 corners
-  const x0y0 = this.getCornerValue(x, y, mapToUse);      // bottom-left
-  const x0y1 = this.getCornerValue(x, y + 1, mapToUse);  // top-left  
-  const x1y0 = this.getCornerValue(x + 1, y, mapToUse);  // bottom-right
-  const x1y1 = this.getCornerValue(x + 1, y + 1, mapToUse); // top-right
+  // Evaluate the 4 corners of tile (x,y)
+  // Corner positions are at tile intersections:
+  // - Bottom-left corner: intersection of tiles (x-1,y-1), (x,y-1), (x-1,y), (x,y)
+  // - Top-left corner: intersection of tiles (x-1,y), (x,y), (x-1,y+1), (x,y+1)
+  // - Bottom-right corner: intersection of tiles (x,y-1), (x+1,y-1), (x,y), (x+1,y)
+  // - Top-right corner: intersection of tiles (x,y), (x+1,y), (x,y+1), (x+1,y+1)
+  const x0y0 = this.getCornerValue(x, y, mapToUse);      // bottom-left corner of tile (x,y)
+  const x0y1 = this.getCornerValue(x, y + 1, mapToUse);  // top-left corner of tile (x,y)
+  const x1y0 = this.getCornerValue(x + 1, y, mapToUse);  // bottom-right corner of tile (x,y)
+  const x1y1 = this.getCornerValue(x + 1, y + 1, mapToUse); // top-right corner of tile (x,y)
   
   // Create the case number using binary counting (exactly like Python)
   // case = ((1 if x0y0 > 0 else 0) + (2 if x0y1 > 0 else 0) + (4 if x1y0 > 0 else 0) + (8 if x1y1 > 0 else 0))
@@ -447,14 +642,95 @@ Field.prototype.calculateCompatibleVariant = function(x, y, densityMap) {
   return selectedTile;
 }
 
+// Calculate compatible variant excluding the current tile from corner evaluation
+// This is needed for dirt-water transitions where the current tile being dirt causes all corners to be 1
+Field.prototype.calculateCompatibleVariantExcludingSelf = function(x, y, densityMap) {
+  const mapToUse = densityMap || this.grassMap;
+  
+  // Evaluate corners but exclude the current tile (x,y) from the evaluation
+  // This way corners on the water side will correctly evaluate to 0
+  const x0y0 = this.getCornerValueExcludingSelf(x, y, mapToUse, x, y);      // bottom-left
+  const x0y1 = this.getCornerValueExcludingSelf(x, y + 1, mapToUse, x, y);  // top-left  
+  const x1y0 = this.getCornerValueExcludingSelf(x + 1, y, mapToUse, x, y);  // bottom-right
+  const x1y1 = this.getCornerValueExcludingSelf(x + 1, y + 1, mapToUse, x, y); // top-right
+  
+  let case_num = 0;
+  if(x0y0 > 0) case_num += 1;   // bottom-left
+  if(x0y1 > 0) case_num += 2;   // top-left
+  if(x1y0 > 0) case_num += 4;   // bottom-right
+  if(x1y1 > 0) case_num += 8;   // top-right
+  
+  const selectedTile = this.mapMarchingCaseToTile(case_num);
+  return selectedTile;
+}
+
+// Get corner value excluding a specific tile from evaluation
+Field.prototype.getCornerValueExcludingSelf = function(cornerX, cornerY, densityMap, excludeX, excludeY) {
+  const mapToUse = densityMap || this.grassMap;
+  let maxDensity = 0;
+  let hasValidTile = false;
+  
+  // Sample all 4 tiles sharing this corner, but exclude (excludeX, excludeY)
+  const tiles = [
+    [cornerX, cornerY],
+    [cornerX-1, cornerY],
+    [cornerX, cornerY-1],
+    [cornerX-1, cornerY-1]
+  ];
+  
+  for(let [tx, ty] of tiles) {
+    // Skip the excluded tile
+    if(tx === excludeX && ty === excludeY) continue;
+    
+    if(tx >= 0 && tx < this.width && ty >= 0 && ty < this.height) {
+      const density = mapToUse[ty * this.width + tx];
+      maxDensity = Math.max(maxDensity, density);
+      hasValidTile = true;
+    }
+  }
+  
+  return hasValidTile ? maxDensity : 0;
+}
+
 // Get the corner value for a specific corner position from a density map
+// In marching squares, corners are at tile intersections
+// Corner (x, y) represents the bottom-left corner of tile (x, y)
+// We evaluate it from the tile that contains that corner
+// IMPORTANT: For dirt-water transitions, we need to evaluate corners based on what terrain
+// is actually at those corner positions, not just the density map
 Field.prototype.getCornerValue = function(x, y, densityMap) {
   const mapToUse = densityMap || this.grassMap;
-  if(x >= 0 && x < this.width && y >= 0 && y < this.height) {
-    const density = mapToUse[y * this.width + x];
-    return density; // 1 = filled, 0 = empty
+  // For corner at (x, y), this corner is shared by 4 tiles:
+  // - Tile (x-1, y-1) - bottom-left of corner
+  // - Tile (x, y-1) - bottom-right of corner  
+  // - Tile (x-1, y) - top-left of corner
+  // - Tile (x, y) - top-right of corner
+  // We sample from all 4 tiles and use the maximum (if ANY is filled, corner is filled)
+  // BUT: We need to be careful - if the corner is at the edge of the map, we only sample valid tiles
+  let maxDensity = 0;
+  let hasValidTile = false;
+  
+  // Sample all 4 tiles sharing this corner
+  // Note: Corner (x,y) is the bottom-left corner of tile (x,y)
+  // So it's shared by: (x-1,y-1), (x,y-1), (x-1,y), (x,y)
+  const tiles = [
+    [x, y],           // Primary tile (top-right of corner)
+    [x-1, y],        // Left neighbor (top-left of corner)
+    [x, y-1],        // Bottom neighbor (bottom-right of corner)
+    [x-1, y-1]       // Diagonal neighbor (bottom-left of corner)
+  ];
+  
+  for(let [tx, ty] of tiles) {
+    if(tx >= 0 && tx < this.width && ty >= 0 && ty < this.height) {
+      const density = mapToUse[ty * this.width + tx];
+      maxDensity = Math.max(maxDensity, density);
+      hasValidTile = true;
+    }
   }
-  return 0; // Outside bounds = empty
+  
+  // If no valid tiles (corner is outside map), return 0 (empty)
+  // Otherwise return the maximum density (1 = filled, 0 = empty)
+  return hasValidTile ? maxDensity : 0;
 }
 
 // Map marching cubes case to tile variant based on the atlas layout
@@ -507,7 +783,7 @@ Field.prototype.showTilemap = function(){
 
 // Debug method to show marching squares case distribution
 Field.prototype.showMarchingSquaresCases = function() {
-  console.log('🔍 Marching Squares Case Distribution:');
+  // console.log('🔍 Marching Squares Case Distribution:');
   
   const caseCounts = {};
   const caseToTile = {};
@@ -534,28 +810,28 @@ Field.prototype.showMarchingSquaresCases = function() {
   }
   
   // Show which cases map to which tiles
-  console.table({
-    'Case 0 (empty)': { tile: caseToTile[0], count: caseCounts[0] || 0, corners: '----' },
-    'Case 1 (BL)': { tile: caseToTile[1], count: caseCounts[1] || 0, corners: 'BL--' },
-    'Case 2 (TL)': { tile: caseToTile[2], count: caseCounts[2] || 0, corners: '-TL-' },
-    'Case 3 (BL+TL left)': { tile: caseToTile[3], count: caseCounts[3] || 0, corners: 'BL,TL' },
-    'Case 4 (BR)': { tile: caseToTile[4], count: caseCounts[4] || 0, corners: '--BR' },
-    'Case 5 (BL+BR bottom)': { tile: caseToTile[5], count: caseCounts[5] || 0, corners: 'BL,BR' },
-    'Case 6 (TL+BR diag)': { tile: caseToTile[6], count: caseCounts[6] || 0, corners: 'TL,BR' },
-    'Case 7 (3 corners)': { tile: caseToTile[7], count: caseCounts[7] || 0, corners: 'BL,TL,BR' },
-    'Case 8 (TR)': { tile: caseToTile[8], count: caseCounts[8] || 0, corners: '---TR' },
-    'Case 9 (BL+TR diag)': { tile: caseToTile[9], count: caseCounts[9] || 0, corners: 'BL,TR' },
-    'Case 10 (TL+TR top)': { tile: caseToTile[10], count: caseCounts[10] || 0, corners: 'TL,TR' },
-    'Case 11 (3 corners)': { tile: caseToTile[11], count: caseCounts[11] || 0, corners: 'BL,TL,TR' },
-    'Case 12 (BR+TR right)': { tile: caseToTile[12], count: caseCounts[12] || 0, corners: 'BR,TR' },
-    'Case 13 (3 corners)': { tile: caseToTile[13], count: caseCounts[13] || 0, corners: 'BL,BR,TR' },
-    'Case 14 (3 corners)': { tile: caseToTile[14], count: caseCounts[14] || 0, corners: 'TL,BR,TR' },
-    'Case 15 (all)': { tile: caseToTile[15], count: caseCounts[15] || 0, corners: 'ALL' }
-  });
+  // console.table({
+  //   'Case 0 (empty)': { tile: caseToTile[0], count: caseCounts[0] || 0, corners: '----' },
+  //   'Case 1 (BL)': { tile: caseToTile[1], count: caseCounts[1] || 0, corners: 'BL--' },
+  //   'Case 2 (TL)': { tile: caseToTile[2], count: caseCounts[2] || 0, corners: '-TL-' },
+  //   'Case 3 (BL+TL left)': { tile: caseToTile[3], count: caseCounts[3] || 0, corners: 'BL,TL' },
+  //   'Case 4 (BR)': { tile: caseToTile[4], count: caseCounts[4] || 0, corners: '--BR' },
+  //   'Case 5 (BL+BR bottom)': { tile: caseToTile[5], count: caseCounts[5] || 0, corners: 'BL,BR' },
+  //   'Case 6 (TL+BR diag)': { tile: caseToTile[6], count: caseCounts[6] || 0, corners: 'TL,BR' },
+  //   'Case 7 (3 corners)': { tile: caseToTile[7], count: caseCounts[7] || 0, corners: 'BL,TL,BR' },
+  //   'Case 8 (TR)': { tile: caseToTile[8], count: caseCounts[8] || 0, corners: '---TR' },
+  //   'Case 9 (BL+TR diag)': { tile: caseToTile[9], count: caseCounts[9] || 0, corners: 'BL,TR' },
+  //   'Case 10 (TL+TR top)': { tile: caseToTile[10], count: caseCounts[10] || 0, corners: 'TL,TR' },
+  //   'Case 11 (3 corners)': { tile: caseToTile[11], count: caseCounts[11] || 0, corners: 'BL,TL,TR' },
+  //   'Case 12 (BR+TR right)': { tile: caseToTile[12], count: caseCounts[12] || 0, corners: 'BR,TR' },
+  //   'Case 13 (3 corners)': { tile: caseToTile[13], count: caseCounts[13] || 0, corners: 'BL,BR,TR' },
+  //   'Case 14 (3 corners)': { tile: caseToTile[14], count: caseCounts[14] || 0, corners: 'TL,BR,TR' },
+  //   'Case 15 (all)': { tile: caseToTile[15], count: caseCounts[15] || 0, corners: 'ALL' }
+  // });
   
-  console.log('\n📊 Summary:');
-  console.log(`Total tiles: ${this.width * this.height}`);
-  console.log(`Unique cases found: ${Object.keys(caseCounts).length}`);
+  // console.log('\n📊 Summary:');
+  // console.log(`Total tiles: ${this.width * this.height}`);
+  // console.log(`Unique cases found: ${Object.keys(caseCounts).length}`);
 }
 
 // Method to get a tile at specific coordinates
@@ -566,6 +842,19 @@ Field.prototype.getTile = function(x, y) {
   return null;
 }
 
+  // Helper: Check if position is in a spawn zone
+  Field.prototype.isInSpawnZone = function(x, y) {
+    for (const spawn of this.spawnPositions) {
+      const dx = x - spawn.x;
+      const dy = y - spawn.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist <= this.spawnZoneRadius) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   // Method to get height variation for terrain (based on elevation/terrain type)
   Field.prototype.getHeightVariation = function(x, y, amplitude = null) {
     // Get terrain type at this position
@@ -573,21 +862,38 @@ Field.prototype.getTile = function(x, y) {
       const index = Math.floor(y) * this.width + Math.floor(x);
       const terrain = this.terrainTypes[index];
       
-      // Base Y-offset by terrain type (elevation continuum)
+      // Flatten spawn zones (agora placement areas)
+      if (this.isInSpawnZone(x, y)) {
+        return 0; // Completely flat at Y=0 for agora placement
+      }
+      
+      // Calculate edge falloff - fade height to 0 at map edges (keeps terrain pinned to table)
+      const edgeDistance = 3; // Tiles from edge to start fading
+      const distFromEdgeX = Math.min(x, this.width - 1 - x);
+      const distFromEdgeY = Math.min(y, this.height - 1 - y);
+      const distFromEdge = Math.min(distFromEdgeX, distFromEdgeY);
+      const edgeFalloff = Math.min(1.0, distFromEdge / edgeDistance); // 0 at edge, 1 at interior
+      
+      // Base Y-offset by terrain type (2-terrain system)
+      // Type 2=dirt (lower), Type 3=grass (higher)
       const terrainHeights = {
-        0: -1.2,  // Deep ocean (lowest - well below table)
-        1: -0.8,  // Shallow water (below table to prevent z-fighting)
-        2: 0.0,   // Grass (sea level)
-        3: 0.4,   // Dirt (elevated)
-        4: 0.9    // Mountains (highest)
+        2: 0.1,   // Dirt base (low areas - tamped down)
+        3: 0.4,   // Grass base (higher rolling hills)
       };
       
       const baseHeight = terrainHeights[terrain] || 0;
       
-      // Add small noise variation on top
-      const noiseVariation = this.getNoiseVariation(x, y) * 0.1;
+      // Add rolling hills using multiple noise layers (gentler relief)
+      const hill1 = this.getNoiseVariation(x, y, 1.0) * 0.4;  // Large rolling hills
+      const hill2 = this.getNoiseVariation(x * 2, y * 2, 0.5) * 0.2; // Medium hills
+      const detail = this.getNoiseVariation(x * 4, y * 4, 0.25) * 0.1; // Fine detail
+      const totalHills = hill1 + hill2 + detail;
       
-      return baseHeight + noiseVariation;
+      // Dirt should be flatter (tamped down) but not completely flat
+      const hillMultiplier = (terrain === 2) ? 0.5 : 1.0; // Dirt gets 50% of hills
+      
+      // Apply edge falloff to both base and hills - everything fades to 0 at edges
+      return (baseHeight + totalHills * hillMultiplier) * edgeFalloff;
     }
     
     return 0;
@@ -795,7 +1101,7 @@ let tilect = 33; // menu screen
 tilect = 64; // 1/4 zone
 // tilect = 128; // half zone
 // tilect = 256; // full zone
-let liveField = new Field({width: tilect, height: tilect, seed: 52});
+let liveField = new Field({width: tilect, height: tilect, seed: 0});
 
 // Set random time of day for this field (0 = midnight, 0.5 = noon, 1 = midnight)
 // Bias toward daytime hours (0.2 to 0.8) for better visibility

@@ -1,7 +1,7 @@
 
 
 // Multiplayer interpolation settings
-const REMOTE_UNIT_INTERPOLATION_SPEED = 0.2; // Competitive smoothing - quick catch-up without jarring snaps
+const REMOTE_UNIT_INTERPOLATION_SPEED = 0.5; // Smooth interpolation for remote units (increased from 0.15 for more responsiveness)
 
 // Unit type definitions - all unit attributes in one place
 const UnitTypes = {
@@ -114,7 +114,7 @@ const UnitTypes = {
     scale: 0.5,
     health: 40,
     speed: 50,
-    rotationSpeed: 10.0,
+    rotationSpeed: 4.0, // Reduced from 10.0 to prevent crazy spinning when stopping
     size: 1,
     cost: { food: 30, magic: 25 },
     abilities: ["fireball", "teleport", "shield"],
@@ -507,14 +507,10 @@ function spawnUnitModels(scene) {
                     unit.mesh.rotation.y = unit.rotation;
                 }
                 
-                // Initialize default linger behavior ONLY if unit doesn't already have one
-                // This prevents overriding behaviors set during unit conversion
-                if (window.behaviorManager && !window.behaviorManager.getBehavior(unit)) {
-                    window.behaviorManager.setBehavior(unit, 'linger');
-                    // console.log(`🎯 ${unit.name || unit.type} initialized with linger behavior`);
-                } else if (window.behaviorManager) {
-                    // console.log(`🎯 ${unit.name || unit.type} already has behavior, skipping init`);
-                }
+                // DON'T initialize linger behavior at spawn!
+                // Units should start IDLE so they can be auto-assigned to buildings
+                // Linger behavior will be set after player commands them
+                // console.log(`🎯 ${unit.name || unit.type} spawned without behavior (idle for auto-work)`);
                 
                 // Add particle effects to units
                 addUnitParticleEffects(unit);
@@ -605,21 +601,98 @@ function updateUnits(deltaTime) {
     // Update selection indicators once per frame (not per unit)
     updateSelectionIndicators();
     
-    // // Step all unit behaviors (this handles movement commands)
-    // if (window.behaviorManager) {
-    //     window.behaviorManager.stepBehaviors();
-    // }
+    // Step all unit behaviors (this handles movement commands)
+    // CRITICAL: In multiplayer, only step behaviors for units we control
+    // Remote player units should ONLY move via network position sync
+    if (window.behaviorManager) {
+        // Filter behaviors to only local player's units (and AI if we're host)
+        if (window.isMultiplayer) {
+            const localPlayerId = window.player?.id?.slice(-6);
+            const shouldStepBehavior = (unit) => {
+                // Skip remote player units - they move via network sync only
+                const unitOwnerId = unit.owner?.slice ? unit.owner.slice(-6) : unit.owner;
+                return unitOwnerId === localPlayerId || unit.owner === 'neutral';
+            };
+            
+            // Step behaviors only for our units
+            window.behaviorManager.stepBehaviorsFiltered(shouldStepBehavior);
+        } else {
+            // Single player - step all behaviors normally
+            window.behaviorManager.stepBehaviors();
+        }
+    }
     
     gameUnits.forEach(unit => {
         if (!unit.pb || !unit.pb.state) return;
         
-        // Check if this unit should update this frame based on LOD
-        if (!shouldUpdateUnit(unit, currentFrame)) {
-            return; // Skip this unit this frame
+        // MULTIPLAYER: Skip physics integration for remote units
+        // Remote units move ONLY via network position sync, not local physics
+        if (window.isMultiplayer) {
+            const localPlayerId = window.player?.id?.slice(-6);
+            const unitOwnerId = unit.owner?.slice ? unit.owner.slice(-6) : unit.owner;
+            const isRemoteUnit = unitOwnerId !== localPlayerId && unit.owner !== 'neutral';
+            
+            if (isRemoteUnit) {
+                return; // Skip all physics updates for remote player units
+            }
+        }
+        
+        // GAMEPLAY UNITS (player/AI) - ALWAYS update physics for smooth movement
+        // NEUTRAL UNITS - Use LOD to skip frames for performance
+        const isGameplayUnit = unit.owner && unit.owner !== 'neutral';
+        
+        if (!isGameplayUnit && !shouldUpdateUnit(unit, currentFrame)) {
+            return; // Skip neutral units based on LOD
         }
         
         // Mark this unit as updated
         unit.lastUpdateFrame = currentFrame;
+        
+        // PHYSICS INTEGRATION: Apply impulses and velocities to position
+        if (!unit.pb.imp) unit.pb.imp = { x: 0, y: 0, z: 0 };
+        if (!unit.pb.state.vel) unit.pb.state.vel = { x: 0, y: 0, z: 0 };
+        
+        // Apply impulse to velocity
+        unit.pb.state.vel.x += unit.pb.imp.x;
+        unit.pb.state.vel.z += unit.pb.imp.z;
+        
+        // Clear impulses (they're one-time forces)
+        unit.pb.imp.x = 0;
+        unit.pb.imp.z = 0;
+        
+        // Apply velocity to position
+        unit.pb.state.loc.x += unit.pb.state.vel.x * deltaTime;
+        unit.pb.state.loc.z += unit.pb.state.vel.z * deltaTime;
+        
+        // Check if unit is standing on an agora platform
+        let onPlatform = false;
+        if (window.gameBuildings) {
+            for (const building of window.gameBuildings) {
+                if (building.type === 'agora' && building.platformHeight && building.position) {
+                    const dx = unit.pb.state.loc.x - building.position.x;
+                    const dz = unit.pb.state.loc.z - building.position.z;
+                    const distSq = dx * dx + dz * dz;
+                    const radiusSq = building.platformRadius * building.platformRadius;
+                    
+                    if (distSq <= radiusSq) {
+                        // Unit is on the agora platform!
+                        unit.pb.state.loc.y = building.platformHeight;
+                        onPlatform = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // If not on platform, stay at ground level
+        if (!onPlatform && unit.pb.state.loc.y !== 0) {
+            unit.pb.state.loc.y = 0;
+        }
+        
+        // Apply damping to velocity (units slow down naturally)
+        const damping = 0.96; // 4% friction per frame (reduced for smoother movement)
+        unit.pb.state.vel.x *= damping;
+        unit.pb.state.vel.z *= damping;
         
         // Update unit behaviors based on type
         if (unit.name.includes('Tortle')) {
@@ -697,6 +770,17 @@ function updateUnitMeshes() {
             // Check if unit has active behavior - if so, skip animation system
             const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
             
+            // Helper function to get terrain height at unit's position
+            const getTerrainHeight = (unit) => {
+                if (window.liveField && window.liveField.getHeightVariation && unit.pb && unit.pb.state && unit.pb.state.loc) {
+                    const TILE_SIZE = window.TILE_SIZE || 4;
+                    const gridX = unit.pb.state.loc.x / TILE_SIZE;
+                    const gridZ = unit.pb.state.loc.z / TILE_SIZE;
+                    return window.liveField.getHeightVariation(gridX, gridZ);
+                }
+                return 0; // Default ground level
+            };
+            
             // Visual follows physics - position
             if (unit.pb.state.loc) {
                 // MULTIPLAYER INTERPOLATION: For remote players, smoothly interpolate visual position
@@ -738,14 +822,20 @@ function updateUnitMeshes() {
                 
                 // Skip animation system for units with active behaviors
                 if (hasActiveBehavior) {
-                    // Just set Y position and continue to rotation
-                    unit.mesh.position.y = unit.pb.state.loc.y;
+                    // Use physics Y position directly (already includes terrain + platforms)
+                    // Only add terrain height if unit is at ground level (Y=0)
+                    if (unit.pb.state.loc.y === 0) {
+                        unit.mesh.position.y = getTerrainHeight(unit);
+                    } else {
+                        // On platform (like agora) - use absolute Y
+                        unit.mesh.position.y = unit.pb.state.loc.y;
+                    }
                 } else {
                     // Flying units get altitude boost
                     if (unit.abilities && unit.abilities.includes('fly')) {
                         // Add some flying height with slight bobbing
                         const flyHeight = 8 + getCachedSin(currentTime * 0.002 + unit.id.charCodeAt(0)) * 1.5;
-                        unit.mesh.position.y = unit.pb.state.loc.y + flyHeight;
+                        unit.mesh.position.y = getTerrainHeight(unit) + flyHeight;
                         
                         // Birds fly in circles
                         if (unit.type === 'bird_messenger') {
@@ -838,18 +928,18 @@ function updateUnitMeshes() {
                             const scaleVariation = 1.0 + (breatheCycle * 0.08); // ±8% size variation
                             
                             unit.mesh.scaling.setAll(unit.scale * scaleVariation);
-                            unit.mesh.position.y = unit.pb.state.loc.y; // No hopping
+                            unit.mesh.position.y = getTerrainHeight(unit); // Stick to terrain
                             
                         } else if (unit.name.includes('Tortle')) {
                             // Tortles don't hop - they're slow and steady, just pivot occasionally
-                            unit.mesh.position.y = unit.pb.state.loc.y; // No hopping - stay on ground!
+                            unit.mesh.position.y = getTerrainHeight(unit); // Stick to terrain
                             
                             // Reset scaling to base scale (no breathing like mushrooms)
                             unit.mesh.scaling.setAll(unit.scale);
                             
                         } else if (unit.name.includes('Villager')) {
                             // Villagers don't hop - they're working or idle standing
-                            unit.mesh.position.y = unit.pb.state.loc.y; // No hopping
+                            unit.mesh.position.y = getTerrainHeight(unit); // Stick to terrain
                             
                         } else {
                             // Only frogs hop
@@ -876,7 +966,7 @@ function updateUnitMeshes() {
                                 hopHeight = Math.sin(hopPhase * Math.PI) * hopAmplitude;
                             }
                             
-                            unit.mesh.position.y = unit.pb.state.loc.y + hopHeight;
+                            unit.mesh.position.y = getTerrainHeight(unit) + hopHeight;
                         }
                     }
                 }
@@ -1055,7 +1145,8 @@ function spawnAgoraVillagers() {
         const z = agoraZ + Math.sin(angle) * distance * TILE_SIZE;
         
         const villager = new Unit('villager', { x, y: 0, z });
-        villager.owner = 'player';
+        const ownerId = window.player?.id || 'player';
+        villager.owner = ownerId;
         
         // Random rotation
         const randomRotation = Math.random() * Math.PI * 2;
@@ -1125,8 +1216,9 @@ function recruitUnit(unitType, options = {}) {
     const agoraX = window.player.agora.x * TILE_SIZE;
     const agoraZ = window.player.agora.y * TILE_SIZE;
     
+    const ownerId = window.player?.id || 'player';
     const unit = new Unit(unitType, { x: agoraX, y: 0, z: agoraZ });
-    unit.owner = 'player';
+    unit.owner = ownerId;
     
     const randomRotation = Math.random() * Math.PI * 2;
     unit.rotation = randomRotation;
@@ -1283,12 +1375,20 @@ function applyTeamColorsToAll() {
 
 // Get team color for an owner
 function getTeamColorForOwner(owner) {
-  if (owner === 'player') {
-    return window.player ? window.player.color : '#4A90E2';
+  // Check if this is the local player (by ID, not string 'player')
+  const localPlayerId = window.player?.id || window.currentMatch?.localPlayerId;
+  if (owner === localPlayerId || owner === 'player') {
+    return window.player?.color || window.currentPlayerColor || '#4A90E2'; // Blue for local player
   }
   
+  // Check if this is the opponent
+  const opponentId = window.opponent?.id;
+  if (owner === opponentId || owner === 'opponent') {
+    return window.opponent?.color || '#E24A4A'; // Red for opponent
+  }
+  
+  // Fallback for any other player IDs
   const teamColors = {
-    'opponent': '#E24A4A',  // Red
     'neutral': '#8A8A8A'    // Gray
   };
   
@@ -1296,9 +1396,31 @@ function getTeamColorForOwner(owner) {
 }
 
 
+// Refresh colors for all units (call this after match start to fix any wrong colors)
+function refreshAllUnitColors() {
+  console.log('🎨 Refreshing unit colors...');
+  let refreshed = 0;
+  
+  if (window.gameUnits) {
+    window.gameUnits.forEach(unit => {
+      if (unit.mesh && unit.owner) {
+        const teamColor = getTeamColorForOwner(unit.owner);
+        const changed = applyTeamColorsToMesh(unit.mesh, teamColor);
+        if (changed) {
+          refreshed++;
+        }
+      }
+    });
+  }
+  
+  console.log(`✅ Refreshed colors for ${refreshed} units`);
+  return refreshed;
+}
+
 // Export team color functions
 if (typeof window !== 'undefined') {
     window.applyTeamColorsToAll = applyTeamColorsToAll;
     window.applyTeamColorsToMesh = applyTeamColorsToMesh;
     window.getTeamColorForOwner = getTeamColorForOwner;
+    window.refreshAllUnitColors = refreshAllUnitColors;
 }

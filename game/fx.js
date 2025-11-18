@@ -675,23 +675,24 @@
       }
       
       // Test individual effects - use camera target position
-      if (e.key === '1') {
-        let position = new BABYLON.Vector3(0, 0, 0);
-        if (window.gfx && window.gfx.cameraTarget && window.gfx.cameraTarget.position) {
-          position = window.gfx.cameraTarget.position.clone();
-        }
-        fx.createParticleEffect('fire', position);
-        // console.log('🔥 Created fire effect');
-      }
+      // DISABLED: Keys 1 and 2 were causing scene render crashes
+      // if (e.key === '1') {
+      //   let position = new BABYLON.Vector3(0, 0, 0);
+      //   if (window.gfx && window.gfx.cameraTarget && window.gfx.cameraTarget.position) {
+      //     position = window.gfx.cameraTarget.position.clone();
+      //   }
+      //   fx.createParticleEffect('fire', position);
+      //   // console.log('🔥 Created fire effect');
+      // }
       
-      if (e.key === '2') {
-        let position = new BABYLON.Vector3(0, 0, 0);
-        if (window.gfx && window.gfx.cameraTarget && window.gfx.cameraTarget.position) {
-          position = window.gfx.cameraTarget.position.clone();
-        }
-        fx.createParticleEffect('smoke', position);
-        // console.log('💨 Created smoke effect');
-      }
+      // if (e.key === '2') {
+      //   let position = new BABYLON.Vector3(0, 0, 0);
+      //   if (window.gfx && window.gfx.cameraTarget && window.gfx.cameraTarget.position) {
+      //     position = window.gfx.cameraTarget.position.clone();
+      //   }
+      //   fx.createParticleEffect('smoke', position);
+      //   // console.log('💨 Created smoke effect');
+      // }
     });
     // console.log('🔥 Particle testing enabled! Press X for all effects, B for building effects, P for explosion at mouse, 1 for fire, 2 for smoke');
   };

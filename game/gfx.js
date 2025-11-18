@@ -15,6 +15,7 @@
 
   // Load textures at the top so they're available everywhere
   let grassAtlasTexture, dirtAtlasTexture, rockAtlasTexture, sandAtlasTexture, waterAtlasTexture;
+  let grassWaterAtlasTexture, grassDirtAtlasTexture, dirtWaterAtlasTexture; // Terrain transition atlases
   
   // Create shared materials once (reused across all chunks)
   let sharedMaterials = {};
@@ -160,7 +161,8 @@
       // Softer lighting for more rounded appearance
       billboardMaterial.ambientColor = new BABYLON.Color3(0.7, 0.7, 0.7); // More ambient light
       billboardMaterial.diffuseColor = new BABYLON.Color3(0.9, 0.9, 0.9); // Softer diffuse
-      billboardMaterial.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce harsh specular
+      billboardMaterial.specularColor = new BABYLON.Color3(0.2, 0.2, 0.18); // Subtle specular for natural look
+      billboardMaterial.specularPower = 64; // Moderate specular power
       billboardMaterial.emissiveColor = new BABYLON.Color3(.36, .35, .35); // More self-illumination for visibility
       
       billboardMaterial.backFaceCulling = false;
@@ -654,7 +656,7 @@
       
       // Queue models (they'll be placed in queue)
       if (item.chunk.needsModels && item.chunk.mesh) {
-        item.chunk.models = placeModelsOnChunk(item.chunk, gfx.scene);
+        item.chunk.models = placeDecorationsOnChunk(item.chunk, gfx.scene); // NEW: Use pass system
         item.chunk.needsModels = false;
       }
     }
@@ -860,12 +862,10 @@ let pov2 = 240;
 
       ]
     },
-    // Dirt tiles (20-35) - rocks, gates, etc.
+    // Dirt tiles (20-35) - NO DECORATIONS FOR NOW (system needs redesign)
     15: { // DIRT_IN
       models: [
-        { path: "assets/models/trees.glb", chance: 0.5, scale: 1.15, billboardScale: 2, lodDistance: 200 }, // 70% - THICK FORESTS!
-
-        { path: "assets/models/gate.glb", chance: 0.08, scale: .1, billboardScale: 1.2, lodDistance: 100 },
+        // Decorations disabled - terrain should be visible
       ]
     },
     // Rock tiles (40-55) - more rocks, windvanes
@@ -1026,7 +1026,203 @@ let pov2 = 240;
     });
   }
 
-  // Function to place models on a chunk (now uses batched loading)
+  // NEW: Decoration pass system - places models using noise-based clustering
+  function placeDecorationsOnChunk(chunk, scene) {
+    // console.log(`🎯 placeDecorationsOnChunk called for chunk (${chunk.chunkX},${chunk.chunkZ})`);
+    const models = [];
+    const field = window.liveField;
+    if (!field) {
+      // console.log('⚠️ No field for decorations');
+      return models;
+    }
+    
+    // console.log(`✅ Field found, seed: ${field.seed}, terrainTypes length: ${field.terrainTypes?.length}`);
+    const fieldSeed = field.seed || 12345;
+    let rockCount = 0;
+    let treeCount = 0;
+    const occupiedTiles = new Set(); // Track which tiles have features
+    const spawnZoneRadius = field.spawnZoneRadius || 6; // Radius to clear around spawns
+    
+    // Helper: Simple deterministic hash for tile placement
+    function tileHash(x, y, seed) {
+      let hash = seed;
+      hash = hash ^ (x * 374761393);
+      hash = hash ^ (y * 668265263);
+      hash = (hash ^ (hash >>> 16)) * 0x85ebca6b;
+      hash = (hash ^ (hash >>> 13)) * 0xc2b2ae35;
+      hash = hash ^ (hash >>> 16);
+      return Math.abs(hash >>> 0) / 4294967296; // 0-1
+    }
+    
+    // PASS 1: Mountains (rocks) - on dirt terrain (barren/rocky areas)
+    let dirtTileCount = 0;
+    let rockNoisePassCount = 0;
+    let sampleNoiseValues = [];
+    
+    chunk.tiles.forEach((tile, index) => {
+      const localX = index % (chunk.endX - chunk.startX);
+      const localZ = Math.floor(index / (chunk.endX - chunk.startX));
+      const gridX = chunk.startX + localX;
+      const gridZ = chunk.startZ + localZ;
+      const terrainIndex = gridZ * field.width + gridX;
+      const terrainType = field.terrainTypes[terrainIndex];
+      
+      // Skip spawn zones (keep them clear for agoras)
+      if (field.isInSpawnZone && field.isInSpawnZone(gridX, gridZ)) return;
+      
+      // Only place rocks on dirt (type 2) - rocky/mountainous terrain
+      if (terrainType !== 2) return;
+      dirtTileCount++;
+      
+      // Simple per-tile hash for rock placement (~3% of dirt tiles get rocks)
+      const rockRoll = tileHash(gridX, gridZ, fieldSeed + 1000);
+      
+      // Sample first 5 hash values for debugging
+      if (sampleNoiseValues.length < 5) {
+        sampleNoiseValues.push(rockRoll.toFixed(3));
+      }
+      
+      // Place rocks on ~3% of grass tiles
+      if (rockRoll < 0.03) {
+        rockNoisePassCount++;
+        
+        // Mark tile as occupied
+        const tileKey = `${gridX},${gridZ}`;
+        occupiedTiles.add(tileKey);
+        
+        // Pick rock size based on REGION not individual tile (creates cohesive clusters)
+        // Divide by 5 means 5x5 tile regions get same size category
+        const regionX = Math.floor(gridX / 5);
+        const regionZ = Math.floor(gridZ / 5);
+        const sizeRoll = tileHash(regionX, regionZ, fieldSeed + 2000);
+        
+        let modelPath, scale, billboardScale;
+        if (sizeRoll < 0.3) {
+          // Small rocks (30%)
+          modelPath = "assets/models/rocks_plain.glb";
+          scale = 3.0;
+          billboardScale = 3;
+        } else if (sizeRoll < 0.7) {
+          // Medium rocks (40%)
+          modelPath = "assets/models/rocks_moss.glb";
+          scale = 7.5;
+          billboardScale = 5.9;
+        } else {
+          // Large rocks (30%)
+          modelPath = "assets/models/rocks_snow.glb";
+          scale = 11.5;
+          billboardScale = 7.5;
+        }
+        
+        // Place the rock at proper height for this tile
+        const worldX = gridX * TILE_SIZE;
+        const worldZ = gridZ * TILE_SIZE;
+        
+        // Get height variation for this tile position (rolling hills)
+        const tileHeight = field.getHeightVariation ? field.getHeightVariation(gridX, gridZ) : 0;
+        
+        let hash = fieldSeed + gridX * 73856093 + gridZ * 19349663;
+        hash = (hash * 1664525 + 1013904223) >>> 0;
+        const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
+        hash = (hash * 1664525 + 1013904223) >>> 0;
+        const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
+        
+        const position = new BABYLON.Vector3(worldX + offsetX, tileHeight, worldZ + offsetZ);
+        hash = (hash * 1664525 + 1013904223) >>> 0;
+        const rotation = ((hash % 628) / 100);
+        
+        // Queue the rock model for loading
+        initBillboardAtlas(scene);
+        modelLoadQueue.push({
+          modelPath: modelPath,
+          scene: scene,
+          position: position,
+          rotation: rotation,
+          scale: scale,
+          chunk: chunk,
+          models: models,
+          modelRule: { path: modelPath, scale: scale, billboardScale: billboardScale, lodDistance: 200 }
+        });
+        rockCount++;
+      }
+    });
+    
+    // console.log(`  🏔️ PASS 1: ${dirtTileCount} dirt tiles, ${rockNoisePassCount} passed roll (~3%), ${rockCount} rocks placed`);
+    // console.log(`  📊 Sample rock hash values: [${sampleNoiseValues.join(', ')}]`);
+    
+    // PASS 2: Forests (trees) - only on unoccupied grass tiles
+    chunk.tiles.forEach((tile, index) => {
+      const localX = index % (chunk.endX - chunk.startX);
+      const localZ = Math.floor(index / (chunk.endX - chunk.startX));
+      const gridX = chunk.startX + localX;
+      const gridZ = chunk.startZ + localZ;
+      const terrainIndex = gridZ * field.width + gridX;
+      const terrainType = field.terrainTypes[terrainIndex];
+      
+      // Skip spawn zones (keep them clear for agoras)
+      if (field.isInSpawnZone && field.isInSpawnZone(gridX, gridZ)) return;
+      
+      // Only place trees on grass (type 3)
+      if (terrainType !== 3) return;
+      
+      // Check if tile is already occupied by a rock
+      const tileKey = `${gridX},${gridZ}`;
+      if (occupiedTiles.has(tileKey)) return; // Skip occupied tiles
+      
+      // Simple per-tile hash for tree placement (~20% of grass tiles get trees)
+      const treeRoll = tileHash(gridX, gridZ, fieldSeed + 3000);
+      
+      // Place trees on ~20% of grass tiles (but only on unoccupied tiles)
+      if (treeRoll < 0.20) {
+        // Mark tile as occupied
+        occupiedTiles.add(tileKey);
+        
+        const worldX = gridX * TILE_SIZE;
+        const worldZ = gridZ * TILE_SIZE;
+        
+        // Get height variation for this tile position (rolling hills)
+        const tileHeight = field.getHeightVariation ? field.getHeightVariation(gridX, gridZ) : 0;
+        
+        let hash = fieldSeed + gridX * 13579 + gridZ * 24680; // Different hash for trees
+        hash = (hash * 1664525 + 1013904223) >>> 0;
+        const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
+        hash = (hash * 1664525 + 1013904223) >>> 0;
+        const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
+        
+        const position = new BABYLON.Vector3(worldX + offsetX, tileHeight, worldZ + offsetZ);
+        hash = (hash * 1664525 + 1013904223) >>> 0;
+        const rotation = ((hash % 628) / 100);
+        
+        // Queue the tree model for loading
+        initBillboardAtlas(scene);
+        modelLoadQueue.push({
+          modelPath: "assets/models/trees.glb",
+          scene: scene,
+          position: position,
+          rotation: rotation,
+          scale: 0.9,
+          chunk: chunk,
+          models: models,
+          modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 3, lodDistance: 170 }
+        });
+        treeCount++;
+      }
+    });
+    
+    // console.log(`  🌲 PASS 2: ${treeCount} trees placed (~20% of unoccupied grass tiles)`);
+    
+    // Debug logging
+    // console.log(`  ✅ TOTAL: ${rockCount} rocks, ${treeCount} trees`);
+    
+    // Start processing the model queue if not already running
+    if (!isProcessingQueue && modelLoadQueue.length > 0) {
+      requestAnimationFrame(processModelQueue);
+    }
+    
+    return models;
+  }
+  
+  // OLD SYSTEM: Function to place models on a chunk (now uses batched loading)
   function placeModelsOnChunk(chunk, scene) {
     const models = [];
     
@@ -1038,16 +1234,26 @@ let pov2 = 240;
       const worldX = (chunk.startX + localX) * TILE_SIZE;
       const worldZ = (chunk.startZ + localZ) * TILE_SIZE;
       
-      // Check if this tile type has model rules
-      const rule = modelRules[tile.type];
+      // Check terrain type for model rules (not tile.type which is wang tile variant)
+      // Get actual terrain type from field's terrainTypes array
+      const gridX = chunk.startX + localX;
+      const gridZ = chunk.startZ + localZ;
+      const terrainIndex = gridZ * window.liveField.width + gridX;
+      const terrainType = window.liveField.terrainTypes[terrainIndex];
+      
+      // Map terrain type to old tile type IDs for model rules
+      // Type 3 = grass (80%) → tile type 5 (trees/mushrooms)
+      // Type 2 = dirt (20%) → tile type 15 (gates)
+      const modelTileType = terrainType === 3 ? 5 : terrainType === 2 ? 15 : null;
+      
+      const rule = modelRules[modelTileType];
       if (rule) {
         // Only place one model per tile - pick randomly from available models
         let selectedModel = null;
         
         // CRITICAL: Use deterministic RNG from field for multiplayer sync
         const fieldSeed = window.liveField?.seed || 12345;
-        const gridX = chunk.startX + localX;
-        const gridZ = chunk.startZ + localZ;
+        // gridX and gridZ already calculated above for terrain lookup
         let hash = fieldSeed + gridX * 73856093 + gridZ * 19349663;
         hash = ((hash << 13) ^ hash) >>> 0;
         hash = (hash * (hash * hash * 15731 + 789221) + 1376312589) >>> 0;
@@ -1113,39 +1319,60 @@ let pov2 = 240;
       dirt: { texture: dirtAtlasTexture, name: 'dirt' },
       rock: { texture: rockAtlasTexture, name: 'rock' },
       sand: { texture: sandAtlasTexture, name: 'sand' },
-      water: { texture: waterAtlasTexture, name: 'water' }
+      water: { texture: waterAtlasTexture, name: 'water' },
+      grassWater: { texture: grassWaterAtlasTexture, name: 'grassWater' },
+      grassDirt: { texture: grassDirtAtlasTexture, name: 'grassDirt' },
+      dirtWater: { texture: dirtWaterAtlasTexture || grassDirtAtlasTexture, name: 'dirtWater' } // Fallback if not available
     };
     
     // Use shared materials (create if they don't exist yet)
     if (!sharedMaterials.grass) {
       sharedMaterials.grass = new BABYLON.StandardMaterial("grassMaterial", scene);
       sharedMaterials.grass.diffuseTexture = grassAtlasTexture;
-      sharedMaterials.grass.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce reflectivity
-      sharedMaterials.grass.specularPower = 32; // Reduce specular power
+      sharedMaterials.grass.specularColor = new BABYLON.Color3(0.15, 0.15, 0.12); // Subtle specular for natural look
+      sharedMaterials.grass.specularPower = 48; // Moderate specular power
     }
     if (!sharedMaterials.dirt) {
       sharedMaterials.dirt = new BABYLON.StandardMaterial("dirtMaterial", scene);
       sharedMaterials.dirt.diffuseTexture = dirtAtlasTexture;
-      sharedMaterials.dirt.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce reflectivity
-      sharedMaterials.dirt.specularPower = 32; // Reduce specular power
+      sharedMaterials.dirt.specularColor = new BABYLON.Color3(0.12, 0.12, 0.1); // Subtle specular
+      sharedMaterials.dirt.specularPower = 40; // Moderate specular power
     }
     if (!sharedMaterials.rock) {
       sharedMaterials.rock = new BABYLON.StandardMaterial("rockMaterial", scene);
       sharedMaterials.rock.diffuseTexture = rockAtlasTexture;
-      sharedMaterials.rock.specularColor = new BABYLON.Color3(0.2, 0.2, 0.2); // Slightly more reflective for rocks
-      sharedMaterials.rock.specularPower = 64; // Higher specular power for rocks
+      sharedMaterials.rock.specularColor = new BABYLON.Color3(0.25, 0.25, 0.22); // Moderate reflectivity for rocks
+      sharedMaterials.rock.specularPower = 80; // Moderate specular power for rocks
     }
     if (!sharedMaterials.sand) {
       sharedMaterials.sand = new BABYLON.StandardMaterial("sandMaterial", scene);
       sharedMaterials.sand.diffuseTexture = sandAtlasTexture;
-      sharedMaterials.sand.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Reduce reflectivity
-      sharedMaterials.sand.specularPower = 32; // Reduce specular power
+      sharedMaterials.sand.specularColor = new BABYLON.Color3(0.18, 0.18, 0.15); // Subtle specular
+      sharedMaterials.sand.specularPower = 48; // Moderate specular power
     }
     if (!sharedMaterials.water) {
       sharedMaterials.water = new BABYLON.StandardMaterial("waterMaterial", scene);
       sharedMaterials.water.diffuseTexture = waterAtlasTexture;
-      sharedMaterials.water.specularColor = new BABYLON.Color3(0.8, 0.8, 0.9); // Water can be more reflective
-      sharedMaterials.water.specularPower = 128; // Higher specular power for water
+      sharedMaterials.water.specularColor = new BABYLON.Color3(0.5, 0.5, 0.6); // Moderate reflectivity for water
+      sharedMaterials.water.specularPower = 128; // Moderate specular power for water
+    }
+    if (!sharedMaterials.grassWater) {
+      sharedMaterials.grassWater = new BABYLON.StandardMaterial("grassWaterMaterial", scene);
+      sharedMaterials.grassWater.diffuseTexture = grassWaterAtlasTexture;
+      sharedMaterials.grassWater.specularColor = new BABYLON.Color3(0.25, 0.25, 0.3); // Moderate reflectivity for water edges
+      sharedMaterials.grassWater.specularPower = 80;
+    }
+    if (!sharedMaterials.grassDirt) {
+      sharedMaterials.grassDirt = new BABYLON.StandardMaterial("grassDirtMaterial", scene);
+      sharedMaterials.grassDirt.diffuseTexture = grassDirtAtlasTexture;
+      sharedMaterials.grassDirt.specularColor = new BABYLON.Color3(0.12, 0.12, 0.1); // Subtle specular
+      sharedMaterials.grassDirt.specularPower = 40;
+    }
+    if (!sharedMaterials.dirtWater && dirtWaterAtlasTexture) {
+      sharedMaterials.dirtWater = new BABYLON.StandardMaterial("dirtWaterMaterial", scene);
+      sharedMaterials.dirtWater.diffuseTexture = dirtWaterAtlasTexture;
+      sharedMaterials.dirtWater.specularColor = new BABYLON.Color3(0.22, 0.22, 0.28); // Moderate reflectivity for water edges
+      sharedMaterials.dirtWater.specularPower = 80;
     }
     
 
@@ -1193,16 +1420,33 @@ let pov2 = 240;
       const tileRow = tile.atlasRow;
       const tileCol = tile.atlasCol;
       
+      // Atlas grid size: 4x4 = 16 tiles (0.25 per tile) or 8x8 = 64 tiles (0.125 per tile)
+      // If tiles look "double scale", try changing this to 8 for 8x8 atlas
+      const atlasGridSize = 4; // 4x4 grid (change to 8 for 8x8 atlas)
+      const uvScale = 1.0 / atlasGridSize; // 0.25 for 4x4, 0.125 for 8x8
+      const maxRow = atlasGridSize - 1; // 3 for 4x4, 7 for 8x8
+      
       // Pre-calculate UV coordinates to avoid repeated calculations
-      const u1 = tileCol * 0.25 + 0.01;
-      const u2 = (tileCol + 1) * 0.25 - 0.01;
+      const u1 = tileCol * uvScale + 0.01;
+      const u2 = (tileCol + 1) * uvScale - 0.01;
       // Flip V coordinates (V=0 is at top in UV space)
-      const v1 = (3 - tileRow) * 0.25 + 0.01;
-      const v2 = (3 - tileRow + 1) * 0.25 - 0.01;
+      const v1 = (maxRow - tileRow) * uvScale + 0.01;
+      const v2 = (maxRow - tileRow + 1) * uvScale - 0.01;
       
       // Determine which material to use based on tile's atlas name
-      // tile.atlasName can be 'atlas-grass' or 'atlas-water'
-      const materialKey = tile.atlasName === 'atlas-water' ? 'water' : 'grass';
+      // Terrain transition atlases: atlas-grass-dirt (water atlases use grass-dirt as fallback)
+      let materialKey = 'grass'; // default fallback
+      if(tile.atlasName === 'atlas-grass-water') {
+        materialKey = 'grassWater';
+      } else if(tile.atlasName === 'atlas-grass-dirt') {
+        materialKey = 'grassDirt';
+      } else if(tile.atlasName === 'atlas-dirt-water') {
+        materialKey = 'dirtWater';
+      } else if(tile.atlasName === 'atlas-water') {
+        materialKey = 'water'; // legacy support
+      } else if(tile.atlasName === 'atlas-grass') {
+        materialKey = 'grass'; // legacy support
+      }
       
       // Add to the appropriate mesh
       const data = vertexData[materialKey];
@@ -1311,13 +1555,90 @@ let pov2 = 240;
     }
     
     // Load textures now that we have a scene
-    grassAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass.png", gfx.scene);
-    dirtAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass.png", gfx.scene); // Using grass as fallback
-    rockAtlasTexture = new BABYLON.Texture("assets/textures/atlas-hd.png", gfx.scene); // Using hd as fallback
-    sandAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass.png", gfx.scene); // Using grass as fallback
-    waterAtlasTexture = new BABYLON.Texture("assets/textures/atlas-water.png", gfx.scene);
+    // Terrain transition atlases
+    grassDirtAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass-dirt.png", gfx.scene);
+    
+    // Legacy/fallback textures (using new atlases as fallbacks)
+    grassAtlasTexture = grassDirtAtlasTexture; // Use grass-dirt as fallback
+    dirtAtlasTexture = grassDirtAtlasTexture;
+    rockAtlasTexture = new BABYLON.Texture("assets/textures/atlas-hd.png", gfx.scene);
+    sandAtlasTexture = grassDirtAtlasTexture;
+    // Water atlases use grass-dirt as fallback (water textures not used)
+    grassWaterAtlasTexture = grassDirtAtlasTexture;
+    dirtWaterAtlasTexture = grassDirtAtlasTexture;
+    waterAtlasTexture = grassDirtAtlasTexture;
 
     gfx.makeScene(gfx.scene);
+
+    // Debug function to show a single quad with atlas texture
+    gfx.testAtlasQuad = function(tileType = 6, atlasName = 'atlas-grass-dirt', position = new BABYLON.Vector3(10, 2, 0)) {
+      if (!gfx.scene) {
+        console.warn('Scene not initialized');
+        return;
+      }
+      
+      // Get the correct texture
+      let texture = grassDirtAtlasTexture;
+      // All atlases use grass-dirt texture (water atlases not used)
+      
+      // Create material
+      const material = new BABYLON.StandardMaterial('testAtlasMat', gfx.scene);
+      material.diffuseTexture = texture;
+      material.backFaceCulling = false;
+      
+      // Calculate UV coordinates (same logic as createTerrainMesh)
+      const atlasGridSize = 4; // 4x4 grid
+      const uvScale = 1.0 / atlasGridSize; // 0.25
+      const maxRow = atlasGridSize - 1; // 3
+      
+      // Calculate row/col from tile type
+      const tileRow = Math.floor(tileType / atlasGridSize);
+      const tileCol = tileType % atlasGridSize;
+      
+      // Exact 1:1 mapping - no padding to see pure tile
+      const u1 = tileCol * uvScale;
+      const u2 = (tileCol + 1) * uvScale;
+      const v1 = (maxRow - tileRow) * uvScale;
+      const v2 = (maxRow - tileRow + 1) * uvScale;
+      
+      console.log(`🔍 Testing tile type ${tileType} from ${atlasName} - 1:1 mapping`);
+      console.log(`   Row: ${tileRow}, Col: ${tileCol}`);
+      console.log(`   UV: (${u1.toFixed(6)}, ${v1.toFixed(6)}) to (${u2.toFixed(6)}, ${v2.toFixed(6)})`);
+      console.log(`   UV Scale: ${uvScale} (${atlasGridSize}x${atlasGridSize} grid)`);
+      
+      // Create a plane mesh - exactly 1 tile size
+      const plane = BABYLON.MeshBuilder.CreatePlane('testAtlasQuad', {
+        size: TILE_SIZE, // Exactly 1 tile size
+        width: TILE_SIZE,
+        height: TILE_SIZE
+      }, gfx.scene);
+      
+      plane.position = position;
+      plane.material = material;
+      
+      // Rotate plane flat to the ground (90 degrees around X axis)
+      plane.rotation.x = Math.PI / 2;
+      
+      // Set UV coordinates manually
+      const vertexData = BABYLON.VertexData.ExtractFromMesh(plane);
+      const uvs = vertexData.uvs;
+      
+      // Plane has 4 vertices, each with 2 UV coordinates
+      // Order: bottom-left, bottom-right, top-left, top-right
+      uvs[0] = u1; uvs[1] = v2; // bottom-left
+      uvs[2] = u2; uvs[3] = v2; // bottom-right
+      uvs[4] = u1; uvs[5] = v1; // top-left
+      uvs[6] = u2; uvs[7] = v1; // top-right
+      
+      vertexData.uvs = uvs;
+      vertexData.applyToMesh(plane);
+      
+      console.log(`✅ Created test quad at position (${position.x}, ${position.y}, ${position.z})`);
+      console.log(`   Use: gfx.testAtlasQuad(tileType, atlasName, position)`);
+      console.log(`   Example: gfx.testAtlasQuad(6, 'atlas-grass-dirt', new BABYLON.Vector3(10, 1, 0))`);
+      
+      return plane;
+    };
 
     // Start render loop immediately - don't wait for scene.whenReadyAsync()
     gfx.engine.runRenderLoop(mainRenderLoop);
@@ -1687,7 +2008,7 @@ let pov2 = 240;
         if (item.type === 'mesh') {
           liveField.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
         } else if (item.type === 'models') {
-          item.chunk.models = placeModelsOnChunk(item.chunk, gfx.scene);
+          item.chunk.models = placeDecorationsOnChunk(item.chunk, gfx.scene); // NEW: Use pass system
           item.chunk.needsModels = false;
         }
         
@@ -1764,6 +2085,11 @@ let pov2 = 240;
       // Use dramatic sun angle for better shadows
       lighting.setDramaticSunAngle();
       
+      // Ensure lighting is enabled (safety check)
+      if (lighting.restoreLighting) {
+        lighting.restoreLighting();
+      }
+      
       // console.log('Orbital lighting system ready - use lighting.setTimeOfDay(0-1) to adjust');
       
       // Auto-initialize shadows when scene is stable (no fixed delay)
@@ -1771,6 +2097,10 @@ let pov2 = 240;
       setTimeout(() => {
         if (gfx.autoInitializeShadows) {
           gfx.autoInitializeShadows();
+        }
+        // Ensure lighting is still enabled after shadow initialization
+        if (lighting.restoreLighting) {
+          lighting.restoreLighting();
         }
       }, 1000);
       
@@ -1781,6 +2111,10 @@ let pov2 = 240;
           setTimeout(() => {
             if (gfx.autoInitializeShadows) {
               gfx.autoInitializeShadows();
+            }
+            // Ensure lighting is still enabled after shadow initialization
+            if (lighting.restoreLighting) {
+              lighting.restoreLighting();
             }
           }, 1000);
         });
@@ -1798,8 +2132,8 @@ let pov2 = 240;
       // console.log('📐 Pre-positioning table for clean initial render');
     }
     
-  // Store shadow state globally
-  window.SHADOWS_ENABLED = false;
+  // Store shadow state globally - enable shadows by default
+  window.SHADOWS_ENABLED = true;
   
   // Scene stability tracking
   gfx.sceneStability = {
@@ -1816,10 +2150,10 @@ let pov2 = 240;
   // Shadow LoD configuration - increased by 50% for better visibility
   gfx.shadowLODConfig = {
     enabled: true,
-    maxShadowDistance: 123.75, // Maximum distance for shadow casting (82.5 * 1.5)
-    nearShadowDistance: 49.5, // Distance for high quality shadows (33 * 1.5)
-    farShadowDistance: 99, // Distance for low quality shadows (66 * 1.5)
-    cullingDistance: 148.5, // Distance beyond which no shadows are cast (99 * 1.5)
+    maxShadowDistance: 500, // Maximum distance for shadow casting (increased for better visibility)
+    nearShadowDistance: 200, // Distance for high quality shadows
+    farShadowDistance: 400, // Distance for low quality shadows
+    cullingDistance: 600, // Distance beyond which no shadows are cast
     updateInterval: 100 // Update shadow casters every 100ms
   };
   
@@ -1834,13 +2168,14 @@ let pov2 = 240;
         
         try {
           gfx.shadowGenerator = new BABYLON.ShadowGenerator(1024, sunLight);
-          gfx.shadowGenerator.useBlurExponentialShadowMap = false; // Disable blur for sharper shadows
-          gfx.shadowGenerator.usePoissonSampling = true; // Enable Poisson sampling for visible shadows
-          gfx.shadowGenerator.darkness = 0.8; // Make shadows darker and more visible
+          gfx.shadowGenerator.useBlurExponentialShadowMap = false; // Disable blur
+          gfx.shadowGenerator.usePoissonSampling = true; // Poisson sampling (most stable)
+          gfx.shadowGenerator.darkness = 0.6; // Lighter shadows, less harsh
           gfx.shadowGenerator.setTransparencyShadow(false); // Disable transparency for better performance
-          gfx.shadowGenerator.bias = 0.00001; // Reduce shadow acne
-          gfx.shadowGenerator.normalBias = 0.02; // Reduce shadow acne
-          gfx.shadowGenerator.depthScale = 50; // Better depth scaling
+          gfx.shadowGenerator.bias = 0.0001; // Slightly higher to reduce artifacts
+          gfx.shadowGenerator.normalBias = 0.05; // Higher to reduce edge artifacts
+          gfx.shadowGenerator.depthScale = 25; // Lower for softer depth transitions
+          gfx.shadowGenerator.filter = BABYLON.ShadowGenerator.FILTER_POISSON; // Explicit filter mode
           
           // Set near and far planes for shadow rendering
           gfx.shadowGenerator.minDistance = 0.1;
@@ -1921,15 +2256,21 @@ let pov2 = 240;
     gfx.autoInitializeShadows = function() {
       // Check if shadows are enabled
       if (!window.SHADOWS_ENABLED) {
+        console.log('⚠️ Shadows disabled, skipping initialization');
         return;
       }
 
       // Check if shadow generator already exists
       if (gfx.shadowGenerator) {
+        console.log('✅ Shadow generator already exists');
+        // Still update meshes in case new ones were added
+        if (gfx.updateAllMeshShadows) {
+          gfx.updateAllMeshShadows();
+        }
         return;
       }
 
-      // Check if scene is stable
+      // Check if scene is stable (but don't wait too long)
       if (!gfx.checkSceneStability()) {
         console.log('⏳ Scene not stable yet, retrying shadow init in 1 second...');
         setTimeout(() => gfx.autoInitializeShadows(), 1000);
@@ -1946,6 +2287,7 @@ let pov2 = 240;
           gfx.updateAllMeshShadows();
         }
         console.log('✅ Shadows initialized and applied to', gfx.scene.meshes.length, 'meshes');
+        console.log('   Shadow casters:', gfx.shadowGenerator.getShadowMap().renderList.length);
       } else {
         // Retry after a longer delay
         console.log('⏳ Shadow initialization failed, retrying in 2 seconds...');
@@ -2027,15 +2369,16 @@ let pov2 = 240;
         // Dispose old generator
         gfx.shadowGenerator.dispose();
         
-        // Create new one with updated res
+        // Create new one with updated res and same settings as initializeShadowGenerator
         gfx.shadowGenerator = new BABYLON.ShadowGenerator(newRes, window.lighting.lights.sun);
-        gfx.shadowGenerator.useBlurExponentialShadowMap = false;
-        gfx.shadowGenerator.usePoissonSampling = true; // Enable Poisson sampling for visible shadows
-        gfx.shadowGenerator.darkness = 0.8;
-        gfx.shadowGenerator.setTransparencyShadow(false);
-        gfx.shadowGenerator.bias = 0.00001;
-        gfx.shadowGenerator.normalBias = 0.02;
-        gfx.shadowGenerator.depthScale = 50;
+        gfx.shadowGenerator.useBlurExponentialShadowMap = false; // Disable blur
+        gfx.shadowGenerator.usePoissonSampling = true; // Poisson sampling (most stable)
+        gfx.shadowGenerator.darkness = 0.6; // Lighter shadows, less harsh
+        gfx.shadowGenerator.setTransparencyShadow(false); // Disable transparency for better performance
+        gfx.shadowGenerator.bias = 0.0001; // Slightly higher to reduce artifacts
+        gfx.shadowGenerator.normalBias = 0.05; // Higher to reduce edge artifacts
+        gfx.shadowGenerator.depthScale = 25; // Lower for softer depth transitions
+        gfx.shadowGenerator.filter = BABYLON.ShadowGenerator.FILTER_POISSON; // Explicit filter mode
         gfx.shadowGenerator.minDistance = 0.1;
         gfx.shadowGenerator.maxDistance = 1500;
         
@@ -2062,20 +2405,38 @@ let pov2 = 240;
       gfx.reconfigureShadowGenerator(lodValue);
     };
     
-    // Modified updateAllMeshShadows - now silent
+    // Modified updateAllMeshShadows - now with logging for debugging
     gfx.updateAllMeshShadows = function(forceReadd = false) {
-      if (!gfx.scene) return;
+      if (!gfx.scene) {
+        console.warn('⚠️ No scene available for shadow update');
+        return;
+      }
+      
+      // Don't skip if shadows are disabled - we need to remove them!
+      if (!window.SHADOWS_ENABLED && !gfx.shadowGenerator) {
+        // Only skip if shadows are off AND there's no shadow generator to clean up
+        console.log('⚠️ Shadows disabled and no generator to clean up');
+        return;
+      }
+      
+      if (window.SHADOWS_ENABLED && !gfx.shadowGenerator) {
+        console.warn('⚠️ No shadow generator, cannot enable shadows');
+        return;
+      }
       
       let shadowCasterCount = 0;
+      let receiveShadowCount = 0;
+      let removedCount = 0;
       
       gfx.scene.meshes.forEach(mesh => {
-        // Skip UI elements - check if mesh is part of UI system
+        // Skip UI elements and background meshes
         const isUIMesh = mesh.name.includes('table') || 
                         mesh.name.includes('UI') ||
                         mesh.name.includes('radial') ||
                         mesh.name.includes('HUD') ||
                         mesh.name.includes('hud') ||
                         mesh.name.includes('minimap') ||
+                        mesh.name.includes('mountain') || // Skip mountains!
                         // Single letter directional indicators (N, E, S, W)
                         (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
                         // Two letter directional indicators (SW, SE, NE, NW, etc.)
@@ -2088,12 +2449,14 @@ let pov2 = 240;
                           mesh.parent.name.includes('HUD') ||
                           mesh.parent.name.includes('hud') ||
                           mesh.parent.name.includes('minimap') ||
-                          mesh.parent.name.includes('Minimap')
+                          mesh.parent.name.includes('Minimap') ||
+                          mesh.parent.name.includes('mountain') // Skip mountain children
                         ));
         if (isUIMesh) return;
         
-        // All game meshes can receive shadows
+        // All game meshes can receive shadows (or not)
         mesh.receiveShadows = window.SHADOWS_ENABLED;
+        if (window.SHADOWS_ENABLED) receiveShadowCount++;
         
         // Only non-terrain meshes should cast shadows
         const isTerrainMesh = mesh.name.includes('terrainMesh') || mesh.name.includes('Mesh');
@@ -2111,8 +2474,10 @@ let pov2 = 240;
               shadowCasterCount++;
             }
           }
-        } else if (gfx.shadowGenerator) {
+        } else if (gfx.shadowGenerator && !window.SHADOWS_ENABLED) {
+          // Remove from shadow casters when disabled
           gfx.shadowGenerator.removeShadowCaster(mesh);
+          removedCount++;
         }
         
         // Handle child meshes
@@ -2128,12 +2493,23 @@ let pov2 = 240;
                 gfx.shadowGenerator.addShadowCaster(child);
                 shadowCasterCount++;
               }
-            } else if (gfx.shadowGenerator) {
+            } else if (gfx.shadowGenerator && !window.SHADOWS_ENABLED) {
+              // Remove child from shadow casters when disabled
               gfx.shadowGenerator.removeShadowCaster(child);
+              removedCount++;
             }
           });
         }
       });
+      
+      // Log shadow stats for debugging
+      if (window.SHADOWS_ENABLED && gfx.shadowGenerator) {
+        const totalCasters = gfx.shadowGenerator.getShadowMap().renderList.length;
+        console.log(`🎭 Shadow update: ${shadowCasterCount} new casters, ${receiveShadowCount} receivers, ${totalCasters} total casters`);
+      } else if (!window.SHADOWS_ENABLED && gfx.shadowGenerator) {
+        const totalCasters = gfx.shadowGenerator.getShadowMap().renderList.length;
+        console.log(`🎭 Shadows disabled: removed ${removedCount} meshes, ${totalCasters} casters remaining`);
+      }
     };
 
   };
@@ -2519,6 +2895,16 @@ let pov2 = 240;
 
   // Add this function after the createTerrainMesh function (around line 1289) and before gfx.init
 
+  // Expose mountain recreation function
+  gfx.recreateMountains = function() {
+    if (gfx.mountains && gfx.mountains.dispose) {
+      gfx.mountains.dispose();
+    }
+    const fieldDim = window.liveField ? Math.max(window.liveField.width, window.liveField.height) : 64;
+    gfx.mountains = createSimpleMountains(gfx.scene, fieldDim);
+    console.log('🏔️ Mountains recreated');
+  };
+  
   // Simple mountain background using Babylon's ground mesh with procedural height simulation
   // Creates a distant mountain vista far below, like looking down at an endless landscape from high above
   function createSimpleMountains(scene, fieldSize = 64) {

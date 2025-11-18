@@ -169,7 +169,8 @@
         const isMobileBrowser = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
         
         // Desktop touch (Windows tablets, etc.) works great with strict checks
-        if (!isMobileBrowser) {
+        // Allow bypass for testing/debugging
+        if (!isMobileBrowser && !touch._bypassStaleness) {
           const currentTime = now();
           const maxStaleness = 50; // ms
           const aAge = currentTime - a.lastTime;

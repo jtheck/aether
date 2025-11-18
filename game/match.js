@@ -633,19 +633,12 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
-      // MULTIPLAYER: Only create behaviors if these are OUR units
-      // Remote units move via network sync, not local behaviors
-      if (window.isMultiplayer) {
-        const localPlayerId = window.player?.id?.slice(-6);
-        if (normalizedPlayerId !== localPlayerId) {
-          // This command is for remote units - skip behavior creation
-          // They'll move via network position sync instead
-          return;
-        }
-      }
-      
-      // Filter to only owned units
-      const ownedUnits = units.filter(unit => unit.owner === normalizedPlayerId);
+      // P2P DETERMINISTIC: Both clients execute ALL commands for deterministic simulation
+      // Filter to only owned units (security check)
+      const ownedUnits = units.filter(unit => {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        return unitOwnerId === normalizedPlayerId;
+      });
       
       // Single unit goes to exact point, multiple units spread out in formation
       if (ownedUnits.length === 1) {
@@ -693,16 +686,10 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
-      // MULTIPLAYER: Only modify state if these are OUR units
-      if (window.isMultiplayer) {
-        const localPlayerId = window.player?.id?.slice(-6);
-        if (normalizedPlayerId !== localPlayerId) {
-          return; // Skip state modifications for remote units
-        }
-      }
-      
+      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId) {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
           // Set unit attack target directly for player-controlled combat
           // Don't use behaviorManager - that's for AI-controlled behaviors
           unit.target = target;
@@ -727,6 +714,11 @@
         const rawPlayerId = cmd.playerId || '';
         const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
         building.owner = normalizedPlayerId;
+        
+        // Store team color so attached flag meshes can tint correctly
+        if (typeof window.getTeamColorForOwner === 'function') {
+          building.teamColor = window.getTeamColorForOwner(building.owner);
+        }
         
         // Apply rotation if specified
         if (cmd.rotation !== undefined) {
@@ -775,6 +767,11 @@
           }
           
           if (detectedResources.length > 0) {
+            // CRITICAL: Sort resources for deterministic order on both clients
+            detectedResources.sort((a, b) => {
+              if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+              return a.gridZ - b.gridZ;
+            });
             building.availableResources = detectedResources;
             console.log(`🏗️ DETERMINISTIC: Camp at (${cmd.gridX}, ${cmd.gridZ}) detected ${detectedResources.length} resources during command execution`);
           } else {
@@ -968,16 +965,10 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
-      // MULTIPLAYER: Only create behaviors if these are OUR units
-      if (window.isMultiplayer) {
-        const localPlayerId = window.player?.id?.slice(-6);
-        if (normalizedPlayerId !== localPlayerId) {
-          return; // Skip behavior creation for remote units
-        }
-      }
-      
+      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId) {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
           // Use 'gather_work' behavior which is supported by the behavior manager
           if (window.behaviorManager) {
             window.behaviorManager.setBehavior(unit, 'gather_work', { resource: resource });
@@ -996,16 +987,10 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
-      // MULTIPLAYER: Only create behaviors if these are OUR units
-      if (window.isMultiplayer) {
-        const localPlayerId = window.player?.id?.slice(-6);
-        if (normalizedPlayerId !== localPlayerId) {
-          return; // Skip behavior creation for remote units
-        }
-      }
-      
+      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId) {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
           // Use 'work' or 'gather_work' behavior based on building type
           if (window.behaviorManager) {
             if (building.type === 'camp' || building.type === 'farm') {
@@ -1048,16 +1033,10 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
-      // MULTIPLAYER: Only modify behaviors/state if these are OUR units
-      if (window.isMultiplayer) {
-        const localPlayerId = window.player?.id?.slice(-6);
-        if (normalizedPlayerId !== localPlayerId) {
-          return; // Skip state modifications for remote units
-        }
-      }
-      
+      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
-        if (unit.owner === normalizedPlayerId) {
+        const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+        if (unitOwnerId === normalizedPlayerId) {
           // Clear any active behavior and set to linger (idle) state
           if (window.behaviorManager) {
             window.behaviorManager.clearBehavior(unit);

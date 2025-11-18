@@ -100,8 +100,15 @@ class LingerBehavior extends Behavior {
         this.centerPoint = params.center || { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
         
         // Use tick-based timing for multiplayer sync instead of Date.now()
-        this.lastWanderTick = window.currentMatch?.tick || 0;
+        // Add deterministic offset based on unit ID so units don't all wander in sync
+        const unitIdHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const tickOffset = -(unitIdHash % 480); // Spread over 0-8 seconds (480 ticks at 60 tps)
+        this.lastWanderTick = (window.currentMatch?.tick || 0) + tickOffset;
         this.wanderInterval = params.wanderInterval || 5000; // Pick new target every 5 seconds (longer walks)
+        
+        // Also add slight variation to wander interval (deterministic)
+        const intervalVariation = (unitIdHash % 3000) - 1500; // ±1.5 seconds
+        this.wanderInterval += intervalVariation;
         
         // Current wander target (persistent between steps)
         this.currentTarget = null;
@@ -111,7 +118,7 @@ class LingerBehavior extends Behavior {
         // Use tick-based timing for multiplayer sync
         const currentTick = window.currentMatch?.tick || 0;
         const ticksSinceWander = currentTick - this.lastWanderTick;
-        const wanderIntervalTicks = Math.floor(this.wanderInterval / 1000 * 20); // Convert ms to ticks (20 ticks/sec)
+        const wanderIntervalTicks = Math.floor(this.wanderInterval / 1000 * 60); // Convert ms to ticks (60 ticks/sec)
         
         // Check if we've been moved far from center (player command)
         const dx = this.unit.pb.state.loc.x - this.centerPoint.x;
@@ -125,13 +132,13 @@ class LingerBehavior extends Behavior {
             this.lastWanderTick = currentTick; // Reset timer
         }
         
-        // Pick a new wander target every wanderInterval
-        if (ticksSinceWander > wanderIntervalTicks || !this.currentTarget) {
+        // Pick a new wander target every wanderInterval (only when timer expires)
+        if (ticksSinceWander > wanderIntervalTicks) {
             this.pickNewWanderTarget();
             this.lastWanderTick = currentTick;
         }
         
-        // Continuously move toward current target (every frame!)
+        // Move toward current target if we have one
         if (this.currentTarget) {
             this.moveToward(this.currentTarget);
         }
@@ -145,7 +152,8 @@ class LingerBehavior extends Behavior {
         // CRITICAL: Use deterministic angle based on tick + unit ID for multiplayer sync
         const currentTick = window.currentMatch?.tick || 0;
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const randomAngle = ((currentTick + unitIdHash) % 628) / 100; // 0 to 2π (6.28)
+        // Multiply by a large prime to spread out sequential IDs, then add tick for time variation
+        const randomAngle = ((unitIdHash * 7919 + currentTick * 31) % 628) / 100; // 0 to 2π (6.28)
         
         this.currentTarget = {
             x: this.centerPoint.x + Math.cos(randomAngle) * this.params.wanderDistance,
@@ -176,11 +184,11 @@ class LingerBehavior extends Behavior {
             direction.z /= distance;
             
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, 25); // Increased from 15 to 25 for faster idle movement
+        this.applyMovementWithRotation(direction, 2.4); // Super slow, very relaxed pace (20% speed)
         } else {
-            // Very close to target - pick a new target immediately instead of waiting
-            this.pickNewWanderTarget();
-            this.lastWanderTick = window.currentMatch?.tick || 0;
+            // Very close to target - STOP and wait for next interval
+            // Clear the target so they stand still until wanderInterval elapses
+            this.currentTarget = null;
         }
     }
 }
@@ -1213,9 +1221,9 @@ class UnitBehaviorManager {
                                 // Already at formation - just linger in place
                                 this.setBehavior(unit, 'linger', { 
                                     center: { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z }, 
-                                    radius: 1.5,
-                                    wanderDistance: 0.8,
-                                    wanderInterval: 25000  // Super chill
+                                    radius: 50,  // Can roam freely
+                                    wanderDistance: 2.0,
+                                    wanderInterval: 30000  // Match idle villager pace
                                 });
                             }
                         } else {
@@ -1223,9 +1231,9 @@ class UnitBehaviorManager {
                             const arrivalPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
                             this.setBehavior(unit, 'linger', { 
                                 center: arrivalPoint, 
-                                radius: 1.5,
-                                wanderDistance: 0.8,
-                                wanderInterval: 25000  // Very chill
+                                radius: 50,  // Can roam freely
+                                wanderDistance: 2.0,
+                                wanderInterval: 30000  // Match idle villager pace
                             });
                         }
                     }

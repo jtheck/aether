@@ -1918,18 +1918,10 @@ let pov2 = 240;
       gfx.cursorFrog.position.z = window.cameraTargetDestination.z;
     }
     
-    // Update unit logic and behaviors
-    if (window.updateUnits) {
-      updateUnits(0.016); // ~60fps deltaTime
-    }
     // Update unit mesh positions and rotations
+    // NOTE: Unit logic/behaviors/buildings are updated in game.js physics loop
     if (window.updateUnitMeshes) {
       updateUnitMeshes();
-    }
-    
-    // Update building logic (villager spawning, etc.)
-    if (window.updateBuildings) {
-      updateBuildings(0.016); // ~60fps deltaTime
     }
     
     // Update LOD system based on camera TARGET position (same as chunks)

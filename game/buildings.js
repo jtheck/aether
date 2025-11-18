@@ -192,12 +192,12 @@ function Building(buildingType, position, options = {}) {
   this.buildProgress = options.buildProgress || 1.0; // 0-1, 1 = complete
   
   // Villager spawning properties (for buildings that spawn villagers)
-  this.lastSpawnTime = 0;
+  this.lastSpawnTick = 0; // Last tick a villager spawned (deterministic)
   this.spawnedVillagers = 0; // Count of villagers spawned by this building
   
   // Work assignment properties (for buildings that need workers)
   this.assignedWorkers = []; // Array of villager units assigned to this building
-  this.lastWorkTime = 0; // Last time workers produced resources
+  this.lastWorkTick = 0; // Last tick workers produced resources (deterministic)
   
   // 3D model reference
   this.mesh = null;
@@ -266,6 +266,64 @@ function placeBuilding(buildingType, x, z, scene) {
         // Calculate the top height of the agora (for units to stand on)
         building.platformHeight = 2.5; // Units stand 2.5 units above ground on agora
         building.platformRadius = 8; // Platform area in world units
+        
+        // Attach a team flag on top of the agora so each player has a visible banner.
+        // The flag is raised by half its height so it sits directly on the platform.
+        if (window.gfx && window.gfx.getModel) {
+          window.gfx.getModel('assets/models/flag.glb', scene).then(flagModel => {
+            const flagRoot = flagModel.root;
+            
+            // Stop any animations on the flag model (we want a static banner here)
+            if (flagModel.animationGroups) {
+              flagModel.animationGroups.forEach(g => g.stop());
+            }
+            
+            // Compute local height before scaling
+            const bbox = flagRoot.getBoundingInfo().boundingBox;
+            const localHeight = bbox.maximum.y - bbox.minimum.y;
+            
+            // Choose a reasonable scale for the flag on top of the agora
+            const flagScale = 0.6;
+            flagRoot.scaling = new BABYLON.Vector3(flagScale, flagScale, flagScale);
+            
+            // Parent to the agora mesh so it moves with the building
+            flagRoot.parent = building.mesh;
+            
+            // Raise by half its (scaled) height so the base sits on the agora platform
+            const platformY = building.platformHeight || 0;
+            const yOffset = platformY + (localHeight * flagScale) * 0.5;
+            flagRoot.position = new BABYLON.Vector3(0, yOffset, 0);
+            
+            // Apply team color to the flag, if available
+            let teamColorHex = building.teamColor;
+            if (!teamColorHex && typeof window.getTeamColorForOwner === 'function' && building.owner) {
+              teamColorHex = window.getTeamColorForOwner(building.owner);
+            }
+            
+            if (teamColorHex) {
+              const clean = teamColorHex.replace('#', '');
+              const r = parseInt(clean.substr(0, 2), 16) / 255;
+              const g = parseInt(clean.substr(2, 2), 16) / 255;
+              const b = parseInt(clean.substr(4, 2), 16) / 255;
+              const color = new BABYLON.Color3(r, g, b);
+              
+              flagRoot.getChildMeshes().forEach(mesh => {
+                if (!mesh.material) return;
+                const mat = mesh.material.clone(`flagMat_${teamColorHex}_${Date.now()}`);
+                mat.diffuseColor = color;
+                mat.emissiveColor = color.scale(0.6);
+                mat.specularColor = new BABYLON.Color3(0, 0, 0);
+                mat.disableLighting = true;
+                mesh.material = mat;
+              });
+            }
+            
+            // Keep reference for later updates/debugging
+            building.flagMesh = flagRoot;
+          }).catch(err => {
+            console.warn('⚠️ Failed to load agora flag model:', err);
+          });
+        }
       }
       
       // Set up shadows for building mesh
@@ -376,9 +434,14 @@ function spawnVillagerFromVillage(village) {
     return;
   }
   
-  // Check if enough time has passed since last spawn
-  const currentTime = Date.now();
-  if (currentTime - village.lastSpawnTime < village.spawnInterval) {
+  // Check if enough time has passed since last spawn (DETERMINISTIC with ticks)
+  const currentTick = window.currentMatch?.tick || 0;
+  
+  // First villager spawns very quickly (60 ticks = 1 second), rest use normal interval
+  // Convert milliseconds to ticks (60 ticks per second)
+  const spawnDelayTicks = village.spawnedVillagers === 0 ? 60 : Math.floor(village.spawnInterval / 1000 * 60);
+  
+  if (currentTick - village.lastSpawnTick < spawnDelayTicks) {
     return;
   }
   
@@ -389,7 +452,7 @@ function spawnVillagerFromVillage(village) {
       const resources = window.player.getResources();
       if (!resources.food || resources.food <= 0) {
         // No food - double the spawn interval to simulate hardship
-        village.lastSpawnTime = currentTime + village.spawnInterval;
+        village.lastSpawnTick = currentTick + spawnDelayTicks * 2;
         // console.log("😢 Village has no food - delaying next villager spawn");
         return;
       }
@@ -412,7 +475,6 @@ function spawnVillagerFromVillage(village) {
   
   // Deterministic rotation based on building ID and spawn count
   const buildingIdHash = (village.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const currentTick = window.currentMatch?.tick || 0;
   const deterministicRotation = ((buildingIdHash + village.spawnedVillagers + currentTick) % 628) / 100; // 0 to ~6.28 (2π)
   villager.rotation = deterministicRotation;
   if (villager.pb.state && villager.pb.state.rot) {
@@ -430,15 +492,9 @@ function spawnVillagerFromVillage(village) {
   
   if (isPlayerOwned && window.player) {
     window.player.units.push(villager);
-    console.log(`✅ Village spawned villager for LOCAL player`);
-    console.log(`   Village owner: "${village.owner}" (normalized: "${normalizedVillageOwner}")`);
-    console.log(`   Villager owner: "${villager.owner}"`);
-    console.log(`   Player ID: "${window.player.id}" (normalized: "${normalizedPlayerId}")`);
-    console.log(`   Total player villagers: ${window.player.units.filter(u => u.type === 'villager').length}`);
   } else if (isOpponentOwned && window.opponent) {
     // This is the opponent's village spawning their villagers - totally normal!
     window.opponent.units.push(villager);
-    console.log(`👤 Opponent's village spawned villager (owner: ${normalizedVillageOwner}), total: ${window.opponent.units.filter(u => u.type === 'villager').length}`);
   } else {
     // This would be unexpected - log as warning
     console.warn(`⚠️ Village spawned villager but owner unclear!`);
@@ -447,10 +503,11 @@ function spawnVillagerFromVillage(village) {
     console.warn(`   Player ID: "${window.player?.id}" (normalized: "${normalizedPlayerId}")`);
     console.warn(`   Opponent ID: "${window.opponent?.id}" (normalized: "${normalizedOpponentId}")`);
   }
-  gameUnits.push(villager);
+  // CRITICAL: Add to GLOBAL gameUnits array so villagers can be found/selected
+  window.gameUnits.push(villager);
   
   // Update village spawn tracking
-  village.lastSpawnTime = currentTime;
+  village.lastSpawnTick = currentTick;
   village.spawnedVillagers++;
   
   // Spawn the visual model immediately for this specific villager
@@ -459,8 +516,16 @@ function spawnVillagerFromVillage(village) {
       villager.mesh = model.root;
       villager.mesh.scaling = new BABYLON.Vector3(villager.scale, villager.scale, villager.scale);
       
+      // CRITICAL: Enable the mesh (getModel disables it by default to prevent flash)
+      villager.mesh.setEnabled(true);
+      
       // Make unit mesh pickable for selection
       villager.mesh.isPickable = true;
+      
+      // Set up shadows for unit mesh
+      if (window.gfx && window.gfx.setupMeshShadows) {
+        window.gfx.setupMeshShadows(villager.mesh);
+      }
       
       // Handle child meshes - preserve their original rotations
       villager.mesh.getChildMeshes().forEach(mesh => {
@@ -499,7 +564,7 @@ function spawnVillagerFromVillage(village) {
         window.applyTeamColorsToMesh(villager.mesh, teamColor);
       }
     }).catch(error => {
-      console.warn('Failed to load villager model:', error);
+      console.error('❌ Failed to load villager model:', error);
     });
   }
   
@@ -507,11 +572,10 @@ function spawnVillagerFromVillage(village) {
   if (window.behaviorManager && villager.pb && villager.pb.state && villager.pb.state.loc) {
     window.behaviorManager.setBehavior(villager, 'linger', {
       center: { x: villager.pb.state.loc.x, z: villager.pb.state.loc.z },
-      radius: 3,  // Boundary radius
-      wanderDistance: 1.5,  // How far they walk (MUST be less than radius!)
-      wanderInterval: 8000  // Pick new target every 8 seconds
+      radius: 50,  // Large radius - villagers can roam freely
+      wanderDistance: 2.0,  // How far they walk each step
+      wanderInterval: 30000  // Pick new target every 30 seconds (very relaxed)
     });
-    console.log(`🎯 Gave new village-spawned villager linger behavior (owner: ${villager.owner})`);
   }
   
   // console.log(`🏘️ Village spawned villager #${village.spawnedVillagers} at (${spawnPosition.x.toFixed(1)}, ${spawnPosition.z.toFixed(1)})`);
@@ -627,13 +691,10 @@ function findIdleVillagersNearBuilding(building) {
     }
   }
   
-  // CRITICAL: Sort deterministically for P2P sync!
-  // Primary: distance (closest first)
-  // Secondary: unit ID (for deterministic tiebreaking)
+  // CRITICAL: Sort ONLY by unit ID for 100% determinism in P2P!
+  // Distance-based sorting can vary due to minor position drift between clients
+  // Unit ID sorting ensures both clients select the same workers in the same order
   idleVillagers.sort((a, b) => {
-    const distDiff = a.distance - b.distance;
-    if (Math.abs(distDiff) > 0.01) return distDiff; // Distance matters most
-    // Tiebreaker: alphabetical by unit ID
     return (a.unit.id || '').localeCompare(b.unit.id || '');
   });
   
@@ -696,8 +757,10 @@ function processWorkProduction(building) {
   // For farms and other food buildings, use automatic resource generation
   // since farmers don't have the same gathering/delivery system
   
-  const currentTime = Date.now();
-  if (currentTime - building.lastWorkTime < building.workInterval) return;
+  // DETERMINISTIC: Use match ticks instead of Date.now()
+  const currentTick = window.currentMatch?.tick || 0;
+  const workIntervalTicks = Math.floor((building.workInterval || 5000) / 1000 * 60); // Convert ms to ticks
+  if (currentTick - (building.lastWorkTick || 0) < workIntervalTicks) return;
   
   // For other buildings, use the old automatic system
   const workerCount = building.assignedWorkers.length;
@@ -707,7 +770,8 @@ function processWorkProduction(building) {
   let outputMultiplier = 0.3 + (efficiency * 0.7); // 30-100% efficiency based on workers
   
   // Apply engineer's boost if active
-  if (building.engineerBoostUntil && Date.now() < building.engineerBoostUntil) {
+  const engineerBoostTicks = building.engineerBoostUntil || 0;
+  if (engineerBoostTicks > 0 && currentTick < engineerBoostTicks) {
     outputMultiplier *= building.engineerBoostAmount || 1.5; // 50% boost
   }
   
@@ -736,7 +800,7 @@ function processWorkProduction(building) {
     }
   }
   
-  building.lastWorkTime = currentTime;
+  building.lastWorkTick = currentTick;
 }
 
 // TF2-style capture point visual indicators
@@ -986,10 +1050,10 @@ function updateBuildings(deltaTime) {
     }
     
     // Handle work assignment for buildings that need workers
-    // CRITICAL: Must be deterministic in P2P multiplayer!
+    // CRITICAL: Must be FULLY deterministic in P2P multiplayer!
     // Only check every N ticks to ensure both clients check at same time
     const currentTick = window.currentMatch?.tick || 0;
-    const shouldCheckThisTick = (currentTick % 60 === 0); // Check every 60 ticks (~3 seconds at 20 TPS)
+    const shouldCheckThisTick = (currentTick % 60 === 0); // Check every 60 ticks (~1 second at 60 TPS)
     
     if (building.needsWorkers && building.buildProgress >= 1.0 && window.game && shouldCheckThisTick) {
       
@@ -1731,6 +1795,11 @@ const buildingSystem = {
       building.owner = rawPlayerId?.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       console.log(`🏗️ Single-player building placed, owner set to: "${building.owner}"`);
       
+      // Store team color so attached flag meshes can tint correctly
+      if (typeof window.getTeamColorForOwner === 'function') {
+        building.teamColor = window.getTeamColorForOwner(building.owner);
+      }
+      
       // Store the target rotation for when the mesh loads
       building.targetRotation = this.placementRotation;
       
@@ -1770,6 +1839,11 @@ const buildingSystem = {
         }
         
         if (detectedResources.length > 0) {
+          // CRITICAL: Sort resources for deterministic order
+          detectedResources.sort((a, b) => {
+            if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+            return a.gridZ - b.gridZ;
+          });
           building.availableResources = detectedResources;
           console.log(`🏗️ Single-player camp detected ${detectedResources.length} resources`);
         } else {
@@ -2145,7 +2219,7 @@ if (typeof window !== 'undefined') {
     if (village) {
       // Set the village as complete so it can start spawning
       village.buildProgress = 1.0;
-      village.lastSpawnTime = 0; // Allow immediate spawning
+      village.lastSpawnTick = 0; // Allow immediate spawning
       
       // console.log(`🏘️ Test village created at (${villageX}, ${villageZ}) - will spawn villagers every 60 seconds`);
       // console.log('🏘️ Village properties:', {

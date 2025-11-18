@@ -1,7 +1,7 @@
 
 
 // Multiplayer interpolation settings
-const REMOTE_UNIT_INTERPOLATION_SPEED = 0.5; // Smooth interpolation for remote units (increased from 0.15 for more responsiveness)
+const REMOTE_UNIT_INTERPOLATION_SPEED = 0.3; // Smooth interpolation for remote units (network-driven movement only)
 
 // Unit type definitions - all unit attributes in one place
 const UnitTypes = {
@@ -602,40 +602,14 @@ function updateUnits(deltaTime) {
     updateSelectionIndicators();
     
     // Step all unit behaviors (this handles movement commands)
-    // CRITICAL: In multiplayer, only step behaviors for units we control
-    // Remote player units should ONLY move via network position sync
+    // In P2P multiplayer, behaviors are deterministic (using match.tick), so we can
+    // safely simulate all units locally. Network sync provides drift correction.
     if (window.behaviorManager) {
-        // Filter behaviors to only local player's units (and AI if we're host)
-        if (window.isMultiplayer) {
-            const localPlayerId = window.player?.id?.slice(-6);
-            const shouldStepBehavior = (unit) => {
-                // Skip remote player units - they move via network sync only
-                const unitOwnerId = unit.owner?.slice ? unit.owner.slice(-6) : unit.owner;
-                return unitOwnerId === localPlayerId || unit.owner === 'neutral';
-            };
-            
-            // Step behaviors only for our units
-            window.behaviorManager.stepBehaviorsFiltered(shouldStepBehavior);
-        } else {
-            // Single player - step all behaviors normally
-            window.behaviorManager.stepBehaviors();
-        }
+        window.behaviorManager.stepBehaviors();
     }
     
     gameUnits.forEach(unit => {
         if (!unit.pb || !unit.pb.state) return;
-        
-        // MULTIPLAYER: Skip physics integration for remote units
-        // Remote units move ONLY via network position sync, not local physics
-        if (window.isMultiplayer) {
-            const localPlayerId = window.player?.id?.slice(-6);
-            const unitOwnerId = unit.owner?.slice ? unit.owner.slice(-6) : unit.owner;
-            const isRemoteUnit = unitOwnerId !== localPlayerId && unit.owner !== 'neutral';
-            
-            if (isRemoteUnit) {
-                return; // Skip all physics updates for remote player units
-            }
-        }
         
         // GAMEPLAY UNITS (player/AI) - ALWAYS update physics for smooth movement
         // NEUTRAL UNITS - Use LOD to skip frames for performance
@@ -782,43 +756,10 @@ function updateUnitMeshes() {
             };
             
             // Visual follows physics - position
+            // Since behaviors are deterministic in P2P, all units simulate identically on both clients
             if (unit.pb.state.loc) {
-                // MULTIPLAYER INTERPOLATION: For remote players, smoothly interpolate visual position
-                const isRemoteUnit = window.isMultiplayer && unit.owner !== 'neutral' && 
-                                     unit.owner !== window.player?.id?.slice(-6);
-                
-                if (isRemoteUnit) {
-                    // Initialize visual position on first frame
-                    if (!unit.visualPosition) {
-                        unit.visualPosition = {
-                            x: unit.pb.state.loc.x,
-                            z: unit.pb.state.loc.z
-                        };
-                    }
-                    
-                    // Smoothly interpolate towards physics position
-                    const dx = unit.pb.state.loc.x - unit.visualPosition.x;
-                    const dz = unit.pb.state.loc.z - unit.visualPosition.z;
-                    const distSq = dx * dx + dz * dz;
-                    
-                    // If very far away (> 10 units), snap immediately (probably teleported)
-                    if (distSq > 100) {
-                        unit.visualPosition.x = unit.pb.state.loc.x;
-                        unit.visualPosition.z = unit.pb.state.loc.z;
-                    } else {
-                        // Smooth interpolation
-                        unit.visualPosition.x += dx * unit.interpolationSpeed;
-                        unit.visualPosition.z += dz * unit.interpolationSpeed;
-                    }
-                    
-                    // Set mesh to interpolated position
-                    unit.mesh.position.x = unit.visualPosition.x;
-                    unit.mesh.position.z = unit.visualPosition.z;
-                } else {
-                    // Local player or neutral units: direct physics → visual
-                    unit.mesh.position.x = unit.pb.state.loc.x;
-                    unit.mesh.position.z = unit.pb.state.loc.z;
-                }
+                unit.mesh.position.x = unit.pb.state.loc.x;
+                unit.mesh.position.z = unit.pb.state.loc.z;
                 
                 // Skip animation system for units with active behaviors
                 if (hasActiveBehavior) {
@@ -1163,9 +1104,9 @@ function spawnAgoraVillagers() {
         if (window.behaviorManager) {
           window.behaviorManager.setBehavior(villager, 'linger', {
             center: { x: villager.pb.state.loc.x, z: villager.pb.state.loc.z },
-            radius: 3,  // Boundary radius
-            wanderDistance: 1.5,  // How far they walk (MUST be less than radius!)
-            wanderInterval: 8000  // Pick new target every 8 seconds
+            radius: 50,  // Large radius - villagers can roam freely
+            wanderDistance: 2.0,  // How far they walk each step
+            wanderInterval: 30000  // Pick new target every 30 seconds (very relaxed)
           });
         }
         

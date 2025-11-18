@@ -2234,50 +2234,76 @@
     const cameraRight = BABYLON.Vector3.Cross(cameraForward, hud.camera.upVector).normalize();
     const cameraUp = BABYLON.Vector3.Cross(cameraRight, cameraForward).normalize();
     
-    // Project unit direction onto current camera plane
-    const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight); // Flip to correct left/right
-    const upDot = BABYLON.Vector3.Dot(toUnit, cameraUp);
+    // Project group average world position into screen space and then
+    // intersect the ray from screen center to that point with the
+    // screen rectangle. This keeps indicators on the edges without
+    // pinning them to corners or jumping across the middle.
+    const projected = BABYLON.Vector3.Project(
+      group.avgPosition,
+      BABYLON.Matrix.Identity(),
+      hud.scene.getTransformMatrix(),
+      hud.camera.viewport
+    );
     
     const unitCount = group.units.length;
     const hasSelection = group.units.some(u => window.player && window.player.isUnitSelected(u));
     
-    // Position based on corner with spread
-    let edgePos;
     const buffer = 30; // Fixed pixel distance from screen edge
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const halfW = centerX - buffer;
+    const halfH = centerY - buffer;
     
-    // Parse position to get corner and spread direction
-    const positionMatch = group.position.match(/corner-([tb])([lr])_([vh])(\d+)/);
-    if (!positionMatch) {
-      // Fallback to simple corner
-      const simpleMatch = group.position.match(/corner-([tb])([lr])/);
-      if (!simpleMatch) return;
-      const [, cornerY, cornerX] = simpleMatch;
-      const spreadDir = 'v';
-    } else {
-      var [, cornerY, cornerX, spreadDir] = positionMatch;
+    // Target position in pixels (may be off-screen)
+    const targetX = projected.x * rect.width;
+    const targetY = projected.y * rect.height;
+    
+    // Direction from screen center toward the unit
+    let dirX = targetX - centerX;
+    let dirY = targetY - centerY;
+    
+    // Avoid degenerate zero-length direction
+    if (dirX === 0 && dirY === 0) {
+      dirY = -1;
     }
     
-    // Use the continuous spread value from the group (0-1) for smooth positioning
-    const spreadFactor = group.edgeSpread; // Already 0-1 continuous value
+    const absDx = Math.abs(dirX);
+    const absDy = Math.abs(dirY);
     
-    // Start at the corner
-    let baseX = cornerX === 'r' ? rect.width - buffer : buffer;
-    let baseY = cornerY === 't' ? buffer : rect.height - buffer;
-    if (spreadDir === 'h') {
-      // Spread horizontally from corner to middle of edge
-      const targetX = rect.width / 2; // Move toward center
-      baseX = baseX + (targetX - baseX) * spreadFactor; // Full spread to middle
+    // Scale factor needed to hit each edge
+    const tX = absDx > 0 ? halfW / absDx : Number.POSITIVE_INFINITY;
+    const tY = absDy > 0 ? halfH / absDy : Number.POSITIVE_INFINITY;
+    const t = Math.min(tX, tY);
+    
+    // Final edge position in pixels
+    const edgePos = {
+      x: centerX + dirX * t,
+      y: centerY + dirY * t
+    };
+    
+    // Work out which edge we hit and a 0–1 spread along that edge so we can
+    // keep the existing tilt/rotation behavior.
+    let cornerX, cornerY, spreadDir, spreadFactor;
+    if (tX < tY) {
+      // Hit left/right edge
+      cornerX = dirX > 0 ? 'r' : 'l';
+      cornerY = dirY < 0 ? 't' : 'b';
+      spreadDir = 'v'; // spread vertically along edge
+      // Map from top (-halfH) .. bottom (+halfH) to 0..1
+      const relY = edgePos.y - (centerY - halfH);
+      spreadFactor = relY / (2 * halfH);
     } else {
-      // Spread vertically from corner to middle of edge
-      const targetY = rect.height / 2; // Move toward center
-      baseY = baseY + (targetY - baseY) * spreadFactor; // Full spread to middle
+      // Hit top/bottom edge
+      cornerY = dirY > 0 ? 'b' : 't';
+      cornerX = dirX < 0 ? 'l' : 'r';
+      spreadDir = 'h'; // spread horizontally along edge
+      // Map from left (-halfW) .. right (+halfW) to 0..1
+      const relX = edgePos.x - (centerX - halfW);
+      spreadFactor = relX / (2 * halfW);
     }
     
-    edgePos = { x: baseX, y: baseY };
-    
-    // Calculate rotation values for tilt
-    const clampedRightDot = cornerX === 'r' ? 1 : -1;
-    const clampedUpDot = cornerY === 't' ? 1 : -1;
+    // Clamp spread factor to [0,1] for safety
+    spreadFactor = Math.min(1, Math.max(0, spreadFactor));
     
     // Calculate position in camera-local space (since indicators are parented to camera)
     const ray = hud.scene.createPickingRay(edgePos.x, edgePos.y, BABYLON.Matrix.Identity(), hud.camera);

@@ -352,11 +352,9 @@
           break;
           
         case 'state_sync':
-          // Reconcile with authoritative state from host
-          // Always process state sync to keep ticks in sync (even if positions drift too far)
-          if (actualMessage.isHost) {
-            reconcileState(actualMessage.content);
-          }
+          // P2P: Each player is authoritative for their own units
+          // Only reconcile if there's significant drift (safety net for desync)
+          reconcileState(actualMessage.content);
           break;
           
         case 'ping':
@@ -1067,28 +1065,32 @@
       if (localUnit) {
         unitsFound++;
         
-        // Debug: Check owner matching
-        if (localUnit.owner === localOwnerId) {
+        // Only accept position updates from the unit's owner
+        // Normalize IDs for comparison (last 6 chars)
+        const localUnitOwnerId = localUnit.owner?.slice ? localUnit.owner.slice(-6) : localUnit.owner;
+        const remoteOwnerId = remotePlayerId?.slice ? remotePlayerId.slice(-6) : remotePlayerId;
+        
+        // Skip if this unit doesn't belong to the remote player
+        if (localUnitOwnerId !== remoteOwnerId) {
           ownerMismatches++;
-          if (Math.random() < 0.1) { // 10% chance to log
-            console.warn(`⚠️ Unit ${remoteUnit.id.slice(-4)} owner mismatch: localUnit.owner="${localUnit.owner}" === localOwnerId="${localOwnerId}"`);
-          }
-          return; // Skip our own units
+          return; // Not their unit to update
         }
         
         unitsUpdated++;
         
-        // CRITICAL: Since remote units no longer run local behaviors/physics,
-        // we MUST snap them directly to network positions (no lerp/prediction)
-        // The visual interpolation in updateUnitMeshes will smooth the movement
+        // DETERMINISTIC P2P: Both clients simulate identically using match.tick
+        // Only correct MAJOR desyncs (> 10 units = missed command or logic error)
+        const dx = remoteUnit.pos.x - localUnit.pb.state.loc.x;
+        const dz = remoteUnit.pos.z - localUnit.pb.state.loc.z;
+        const distanceSq = dx * dx + dz * dz;
         
-        // Debug: Log position updates occasionally (disabled - working!)
-        // if (Math.random() < 0.05) { // 5% chance
-        //   console.log(`📍 Updating remote unit ${localUnit.id.slice(-4)} (owner: ${localUnit.owner}) from (${localUnit.pb.state.loc.x.toFixed(1)}, ${localUnit.pb.state.loc.z.toFixed(1)}) to (${remoteUnit.pos.x.toFixed(1)}, ${remoteUnit.pos.z.toFixed(1)})`);
-        // }
-        
-        localUnit.pb.state.loc.x = remoteUnit.pos.x;
-        localUnit.pb.state.loc.z = remoteUnit.pos.z;
+        // Only snap if drift is HUGE (> 10 units - probably missed a command)
+        if (distanceSq > 100) {
+          localUnit.pb.state.loc.x = remoteUnit.pos.x;
+          localUnit.pb.state.loc.z = remoteUnit.pos.z;
+          console.warn(`⚠️ LARGE DESYNC: Snapped unit ${localUnit.id.slice(-4)} - drift: ${Math.sqrt(distanceSq).toFixed(2)} units`);
+        }
+        // Ignore small drift - deterministic simulation should keep units in sync
         
         // Always sync health and state immediately
         localUnit.currentHealth = remoteUnit.health;

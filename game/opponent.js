@@ -681,6 +681,11 @@
             // Set AI ownership
             building.owner = aiPlayer.id;
             
+            // Store team color so attached flag meshes can tint correctly
+            if (typeof window.getTeamColorForOwner === 'function') {
+              building.teamColor = window.getTeamColorForOwner(building.owner);
+            }
+            
             // CRITICAL: Detect resources for camps!
             if (action.buildingType === 'camp' && window.buildingSystem && window.buildingSystem.checkTileForResources) {
               const workRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 2;
@@ -717,6 +722,11 @@
               }
               
               if (detectedResources.length > 0) {
+                // CRITICAL: Sort resources for deterministic order in P2P
+                detectedResources.sort((a, b) => {
+                  if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+                  return a.gridZ - b.gridZ;
+                });
                 building.availableResources = detectedResources;
                 console.log(`🤖 AI camp detected ${detectedResources.length} resource tiles`);
               } else {

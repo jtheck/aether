@@ -64,6 +64,12 @@ Game.prototype.spawnInitialUnits = function() {
             // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
             const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
             placed.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+            
+            // Store team color so attached flag meshes can tint correctly
+            if (typeof window.getTeamColorForOwner === 'function') {
+              placed.teamColor = window.getTeamColorForOwner(placed.owner);
+            }
+            
             player.buildings.push(placed);
             window.gameBuildings.push(placed);
             
@@ -200,9 +206,9 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
     if (window.behaviorManager) {
       window.behaviorManager.setBehavior(villager, 'linger', {
         center: { x: villager.pb.state.loc.x, z: villager.pb.state.loc.z },
-        radius: 3,  // Boundary radius
-        wanderDistance: 1.5,  // How far they walk (MUST be less than radius!)
-        wanderInterval: 8000  // Pick new target every 8 seconds
+        radius: 50,  // Large radius - villagers can roam freely
+        wanderDistance: 2.0,  // How far they walk each step
+        wanderInterval: 30000  // Pick new target every 30 seconds (very relaxed)
       });
     }
     
@@ -294,14 +300,10 @@ window.gameLoop = {
     let physicsSteps = 0;
     while (this.physicsTime >= this.physicsTimestep && canRunPhysics) {
       // Update units and their behaviors (this applies impulses)
-      if (window.units && window.units.update) {
-        window.units.update(this.physicsTimestep);
+      // NOTE: updateUnits handles behavior stepping with proper multiplayer filtering
+      if (window.updateUnits) {
+        window.updateUnits(this.physicsTimestep);
       }
-      
-  // THIS LINE IS CRITICAL - Step all unit behaviors!
-  if (window.behaviorManager) {
-    window.behaviorManager.stepBehaviors();
-  }
   // CRITICAL: Update buildings (auto-assign workers, spawn villagers, process work)
   if (window.updateBuildings) {
     window.updateBuildings(this.physicsTimestep);

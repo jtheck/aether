@@ -194,7 +194,7 @@ gfx.stretchTable = function(table) {
 }
 
 
-
+ 
 
 Function.prototype.debounce = function (threshold, execAsap) {
   let func = this, timeout;

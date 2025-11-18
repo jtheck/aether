@@ -165,11 +165,11 @@
         if (!a || !b) return null; // One of the locked fingers was lifted
         
         // CRITICAL: Validate both pointers have recent updates
-        // Firefox bug: sometimes only 1 pointermove fires per frame, causing stale data
-        const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+        // Mobile browsers (Android/iOS) batch touch events aggressively for battery savings
+        const isMobileBrowser = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
         
-        // For non-Firefox: strict synchronization check
-        if (!isFirefox) {
+        // Desktop touch (Windows tablets, etc.) works great with strict checks
+        if (!isMobileBrowser) {
           const currentTime = now();
           const maxStaleness = 50; // ms
           const aAge = currentTime - a.lastTime;
@@ -183,7 +183,7 @@
             return null;
           }
         }
-        // Firefox: Skip staleness check entirely - rely on anomaly detection instead
+        // Mobile browsers: skip staleness checks, rely on anomaly detection instead
         
         return [a, b];
       }
@@ -334,8 +334,8 @@
       if (window.buildingSystem && window.buildingSystem.isPlacing) return;
       if (!gestureActive || activePointers.size < 2 || !gestureLast) return;
       
-      // Detect Firefox once for the entire function
-      const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+      // Mobile browsers need more lenient gesture detection
+      const isMobileBrowser = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
       
       const pair = getTwoPrimaryPointers();
       if (!pair) {
@@ -373,11 +373,10 @@
       const centroidDy = cNow.y - gestureLast.centroid.y;
       
       // DETECT ANOMALIES: If finger positions jump too much in one frame, reset baseline
-      // Firefox needs tighter thresholds since we disabled staleness checks
-      // Relax centroid threshold since fast panning is legitimate
-      const maxReasonableCentroidMove = isFirefox ? 60 : 100;
-      const maxReasonableAngle = isFirefox ? 0.25 : 0.3;
-      const maxReasonableDistChange = isFirefox ? 40 : 50;
+      // Mobile browsers need tighter thresholds since we disabled staleness checks for them
+      const maxReasonableCentroidMove = isMobileBrowser ? 60 : 100;
+      const maxReasonableAngle = isMobileBrowser ? 0.25 : 0.3;
+      const maxReasonableDistChange = isMobileBrowser ? 40 : 50;
       
       const centroidMoveSq = centroidDx * centroidDx + centroidDy * centroidDy;
       const isAnomalousFrame = (
@@ -417,10 +416,10 @@
       const clampedDistDelta = distDelta;
       
       // Check TOTAL delta from gesture start to determine if gesture should engage
-      // Firefox needs larger deadzones but ratio check makes it safe to lower them
-      const pinchDeadzone = isFirefox ? 60.0 : (config.pinchDeadzone || 50.0);
-      const rotateDeadzone = isFirefox ? 0.40 : (config.rotateDeadzone || 0.35); // ~23° for Firefox, ~20° for Chrome
-      const stabilityRequired = isFirefox ? 1 : (config.gestureStabilityFrames || 2);
+      // Mobile browsers need slightly larger deadzones for reliable detection
+      const pinchDeadzone = isMobileBrowser ? 60.0 : (config.pinchDeadzone || 50.0);
+      const rotateDeadzone = isMobileBrowser ? 0.40 : (config.rotateDeadzone || 0.35); // ~23° for mobile, ~20° for desktop
+      const stabilityRequired = isMobileBrowser ? 1 : (config.gestureStabilityFrames || 2);
       
       const totalDistDelta = Math.abs(da.dist - gestureInitial.distance);
       
@@ -438,7 +437,7 @@
       // CRITICAL: Pinch requires BOTH finger spread AND centroid stability
       // If fingers spread during panning, centroid moves proportionally - reject!
       // If fingers intentionally pinch, centroid stays relatively stable - accept!
-      const centroidStabilityThreshold = isFirefox ? 100 : (config.pinchCentroidStability || 80);
+      const centroidStabilityThreshold = isMobileBrowser ? 100 : (config.pinchCentroidStability || 80);
       
       // Key insight: When panning with drift, centroid/distance ratio is ~0.5
       // When intentionally pinching, ratio improves (gets lower) over time
@@ -471,7 +470,7 @@
       }
       
       if (config.debugGestures && !gestureEngaged.pinch && !gestureEngaged.rotate) {
-        const browserInfo = isFirefox ? ' [Firefox]' : '';
+        const browserInfo = isMobileBrowser ? ' [Mobile]' : '';
         
         // Show what's blocking pinch engagement
         if (totalDistDelta >= pinchDeadzone) {
@@ -535,8 +534,8 @@
             const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
             
             // Apply smoothed incremental pan (positive = fingers drag map in same direction)
-            // Use Firefox-specific sensitivity to compensate for glitchy tracking
-            const panSens = isFirefox ? (config.firefoxPanSensitivity || 15.0) : config.panSensitivity;
+            // Use higher sensitivity on mobile to compensate for event batching
+            const panSens = isMobileBrowser ? (config.firefoxPanSensitivity || 15.0) : config.panSensitivity;
             const wx = (groundRight.x * smoothedCentroidDx + groundForward.x * smoothedCentroidDy) * pixelsToWorld * panSens;
             const wz = (groundRight.z * smoothedCentroidDx + groundForward.z * smoothedCentroidDy) * pixelsToWorld * panSens;
             

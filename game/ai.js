@@ -588,25 +588,50 @@ class GatherWorkBehavior extends WorkBehavior {
     createResourceIndicator(resourceType) {
         if (!this.unit.mesh || this.resourceIndicator) return;
         
-        // Create a simple floating icon above the unit
-        const indicator = BABYLON.MeshBuilder.CreateSphere("resourceIndicator", {
-            diameter: 0.3
-        }, window.gfx.scene);
-        
-        // Position above the unit
-        indicator.position = new BABYLON.Vector3(0, 2.5, 0);
-        indicator.parent = this.unit.mesh;
-        
-        // Color based on resource type
+        let indicator;
         const material = new BABYLON.StandardMaterial("resourceIndicatorMaterial", window.gfx.scene);
+        
         if (resourceType === 'wood') {
+            // Create a log (cylinder) for wood - 6x bigger!
+            indicator = BABYLON.MeshBuilder.CreateCylinder("resourceIndicator", {
+                height: 4.8,  // 0.8 * 6
+                diameter: 1.5  // 0.25 * 6
+            }, window.gfx.scene);
+            
+            // Rotate log to be horizontal (lying on head)
+            indicator.rotation.z = Math.PI / 2; // Rotate 90 degrees around Z axis
+            
             material.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1); // Brown for wood
             material.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.02);
         } else if (resourceType === 'stone') {
+            // Create a box (rock) for stone - 6x bigger and angular!
+            indicator = BABYLON.MeshBuilder.CreateBox("resourceIndicator", {
+                width: 3.0,   // 0.5 * 6
+                height: 2.4,  // 0.4 * 6
+                depth: 2.7    // 0.45 * 6
+            }, window.gfx.scene);
+            
+            // Add slight rotation to make it look more natural/irregular
+            indicator.rotation.x = Math.PI * 0.15;
+            indicator.rotation.z = Math.PI * 0.1;
+            
             material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5); // Gray for stone
             material.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+        } else {
+            // Fallback to sphere for other resource types
+            indicator = BABYLON.MeshBuilder.CreateSphere("resourceIndicator", {
+                diameter: 0.3
+            }, window.gfx.scene);
+            
+            material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+            material.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
         }
-        material.alpha = 0.8;
+        
+        // Position above the unit's head
+        indicator.position = new BABYLON.Vector3(0, 2.5, 0);
+        indicator.parent = this.unit.mesh;
+        
+        material.alpha = 0.9;
         indicator.material = material;
         
         // Add a subtle glow effect
@@ -1109,7 +1134,7 @@ class UnitBehaviorManager {
         unit._abilityCooldowns = unit._abilityCooldowns || {};
         
         // Special abilities are modifiers - they don't replace existing behaviors
-        const specialAbilities = ['brigand_sprint', 'monk_stealth', 'wizard_cast', 'engineer_productivity_boost'];
+        const specialAbilities = ['brigand_sprint', 'monk_stealth', 'monk_kick', 'wizard_cast', 'engineer_productivity_boost'];
         const isSpecialAbility = specialAbilities.includes(behaviorType);
         
         if (isSpecialAbility) {
@@ -1314,6 +1339,9 @@ class UnitBehaviorManager {
             case 'monk_stealth':
                 modifier = new MonkStealthBehavior(unit, params);
                 break;
+            case 'monk_kick':
+                modifier = new MonkKickBehavior(unit, params);
+                break;
             case 'wizard_cast':
                 modifier = new WizardCastBehavior(unit, params);
                 break;
@@ -1329,6 +1357,7 @@ class UnitBehaviorManager {
             const abilityCooldownTicks = {
                 'wizard_cast': 60,      // 3000ms / 50ms = 60 ticks
                 'monk_stealth': 160,    // 8000ms / 50ms = 160 ticks
+                'monk_kick': 100,       // 5000ms / 50ms = 100 ticks
                 'brigand_sprint': 120,  // 6000ms / 50ms = 120 ticks
                 'engineer_productivity_boost': 100  // 5000ms / 50ms = 100 ticks
             };
@@ -1404,6 +1433,65 @@ class MonkStealthBehavior {
         if (this.unit.mesh && this.unit._origAlpha !== undefined) {
             this.unit.mesh.visibility = this.unit._origAlpha;
         }
+    }
+}
+
+// Monk kick: radial knock-back around the monk using existing PBody physics.
+class MonkKickBehavior {
+    constructor(unit, params = {}) {
+        this.unit = unit;
+        this.params = params;
+        this.executed = false;
+    }
+    step() {
+        if (this.executed) {
+            return true;
+        }
+        this.executed = true;
+
+        const radius = this.params.radius || 4;
+        const basePower = this.params.power || 160;
+
+        if (!this.unit.pb || !this.unit.pb.state || !this.unit.pb.state.loc) {
+            return true;
+        }
+
+        const origin = this.unit.pb.state.loc.clone();
+
+        if (Array.isArray(window.gameUnits)) {
+            window.gameUnits.forEach(other => {
+                if (!other || other === this.unit) return;
+                if (!other.pb || !other.pb.state || !other.pb.state.loc || !other.pb.imp) return;
+                if (other.owner === this.unit.owner) return; // don't kick allies
+
+                const pos = other.pb.state.loc.clone();
+                const dx = pos.x - origin.x;
+                const dz = pos.z - origin.z;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+
+                if (dist <= 0 || dist > radius) return;
+
+                const dir = new BABYLON.Vector3(dx / dist, 0, dz / dist);
+                // Linear falloff so close targets get hit harder
+                const strength = basePower * (1 - dist / radius);
+                other.pb.imp.addInPlace(dir.scale(strength));
+            });
+        }
+
+        // Optional VFX at monk position
+        if (window.fx && window.fx.createExplosion) {
+            try {
+                const p = this.unit.mesh ? this.unit.mesh.position.clone() : origin.clone();
+                window.fx.createExplosion(p, 0.2);
+            } catch (e) {
+                // Visual only, ignore errors
+            }
+        }
+
+        return true; // one-shot ability
+    }
+    onReassignment() {
+        this.executed = true;
     }
 }
 
@@ -2269,15 +2357,19 @@ function updateIdleUnits() {
         if (!unit.lastMoveTime) unit.lastMoveTime = 0;
         if (!unit.lastEatTime) unit.lastEatTime = 0;
         
-        // Check if villager needs to eat (0.02% chance per second, at least 180 seconds since last meal)
-        if (unit.type === 'villager' && 
-            currentTime - unit.lastEatTime > 180000 && // At least 3 minutes between meals
-            Math.random() < 0.0002) { // 0.02% chance per second
+        // Check if villager needs to eat (every 60 seconds, with small random variation)
+        if (unit.type === 'villager') {
+            const timeSinceLastEat = currentTime - unit.lastEatTime;
+            const baseEatInterval = 60000; // Base 60 seconds between meals
+            const randomVariation = 10000; // ±10 seconds random variation
+            const eatInterval = baseEatInterval + (Math.random() * randomVariation * 2 - randomVariation);
             
-            // Set eating behavior
-            window.behaviorManager.setBehavior(unit, 'eat');
-            unit.lastEatTime = currentTime;
-            return; // Skip other behavior checks
+            if (timeSinceLastEat > eatInterval) {
+                // Set eating behavior
+                window.behaviorManager.setBehavior(unit, 'eat');
+                unit.lastEatTime = currentTime;
+                return; // Skip other behavior checks
+            }
         }
         
         // Only process units with no active behavior

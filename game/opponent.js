@@ -7,7 +7,7 @@
     this.id = options.id || 'opponent';
     this.name = options.name || 'Opponent';
     this.color = options.color || {primary: '#0066cc', secondary: '#004499'};
-    this.resources = options.startingResources || {food: 100, wood: 50, stone: 25, magic: 10};
+    this.resources = options.startingResources || {food: 100, wood: 100, stone: 25, magic: 5};
     this.units = [];
     this.buildings = []; // Always initialize buildings array
     this.isAI = options.isAI !== false; // Default to AI for single-player
@@ -370,32 +370,44 @@
     const farmCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'farm').length : 0;
     const villageCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'village').length : 0;
     
-    // Get costs from BuildingTypes
-    const campCost = window.BuildingTypes?.camp?.cost || {wood: 30, stone: 10};
-    const villageCost = window.BuildingTypes?.village?.cost || {wood: 30, stone: 10};
-    const farmCost = window.BuildingTypes?.farm?.cost || {wood: 20, stone: 10};
+    // Get costs from BuildingTypes (use actual costs)
+    const campCost = window.BuildingTypes?.camp?.cost || {wood: 5, stone: 0};
+    const villageCost = window.BuildingTypes?.village?.cost || {wood: 25, stone: 0};
+    const farmCost = window.BuildingTypes?.farm?.cost || {wood: 20, stone: 0};
     
-    // Priority 1: Build camps for resource gathering (need 2-3)
-    if (campCount < 2 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
+    // PHASE 1: Build one of each essential building first (camp -> village -> farm)
+    // Priority 1: Build first camp for resource gathering
+    if (campCount < 1 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
       return {type: 'build', buildingType: 'camp', priority: 'high'};
     }
     
-    // Priority 2: Build villages to spawn more villagers (need 1-2)
-    if (villageCount < 1 && buildingCount >= 1 && resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
+    // Priority 2: Build first village to spawn villagers (after camp)
+    if (campCount >= 1 && villageCount < 1 && resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
       return {type: 'build', buildingType: 'village', priority: 'high'};
     }
     
-    // Priority 3: Build farms for food production (need 2-3)
-    if (farmCount < 2 && buildingCount >= 2 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
+    // Priority 3: Build first farm for food production (after village)
+    if (villageCount >= 1 && farmCount < 1 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
+      return {type: 'build', buildingType: 'farm', priority: 'high'};
+    }
+    
+    // PHASE 2: After having one of each, build more flexibly
+    // Priority 4: Build more villages if we need more villagers
+    if (farmCount >= 1 && villageCount < 2 && villagerCount < 10 && resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
+      return {type: 'build', buildingType: 'village', priority: 'medium'};
+    }
+    
+    // Priority 5: Build more farms if we need food
+    if (farmCount >= 1 && farmCount < 2 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
       return {type: 'build', buildingType: 'farm', priority: 'medium'};
     }
     
-    // Priority 4: Build more camps if we have many workers
-    if (campCount < 3 && villagerCount > 8 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
+    // Priority 6: Build more camps if we have many workers and need more resource gathering
+    if (farmCount >= 1 && campCount < 2 && villagerCount > 6 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
       return {type: 'build', buildingType: 'camp', priority: 'medium'};
     }
     
-    // Priority 5: Train villagers (based on difficulty)
+    // Priority 7: Train villagers (based on difficulty)
     const maxVillagers = aiPlayer.difficulty === 'hard' ? 20 : (aiPlayer.difficulty === 'normal' ? 12 : 8);
     if (villagerCount < maxVillagers && resources.food >= 50) {
       return {type: 'train', unitType: 'villager', priority: 'medium'};
@@ -408,18 +420,25 @@
   function getMilitaryAction(aiPlayer, aiState, resources, buildingCount, unitCount) {
     const militaryCount = aiPlayer.units.filter(u => u.category === 'military').length;
     
-    // Get costs from BuildingTypes
-    const towerCost = window.BuildingTypes?.tower?.cost || {wood: 20, stone: 80};
+    // Get costs from BuildingTypes (use actual costs)
+    const towerCost = window.BuildingTypes?.tower?.cost || {wood: 20, stone: 20};
     
-    // Build towers for defense
+    // Build towers if we have enough stone (after basic economy is set up)
     const towerCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'tower').length : 0;
-    if (towerCount < 1 && buildingCount >= 3 && resources.wood >= towerCost.wood && resources.stone >= towerCost.stone) {
+    const campCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'camp').length : 0;
+    const farmCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'farm').length : 0;
+    const villageCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'village').length : 0;
+    
+    // Build first tower if we have camp, village, and farm, and enough stone
+    if (campCount >= 1 && villageCount >= 1 && farmCount >= 1 && towerCount < 1 && 
+        resources.wood >= towerCost.wood && resources.stone >= towerCost.stone) {
       return {type: 'build', buildingType: 'tower', priority: 'high'};
     }
     
-    // Build more towers if in defense mode
-    if (aiState.defenseMode && towerCount < 2 && resources.wood >= towerCost.wood && resources.stone >= towerCost.stone) {
-      return {type: 'build', buildingType: 'tower', priority: 'high'};
+    // Build more towers if in defense mode or have excess stone
+    if (towerCount < 2 && resources.wood >= towerCost.wood && resources.stone >= towerCost.stone && 
+        (aiState.defenseMode || resources.stone >= 40)) {
+      return {type: 'build', buildingType: 'tower', priority: 'medium'};
     }
     
     // Train military units directly (no barracks needed - agora trains them)

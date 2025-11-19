@@ -1234,8 +1234,23 @@ function applyTeamColorsToMesh(mesh, teamColor) {
   
   let changed = false;
   
+  // Ensure teamColor is a string (handle Color3 objects or other types)
+  let colorString = teamColor;
+  if (typeof teamColor !== 'string') {
+    // If it's a Color3 object, convert to hex string
+    if (teamColor.r !== undefined && teamColor.g !== undefined && teamColor.b !== undefined) {
+      const r = Math.round(teamColor.r * 255).toString(16).padStart(2, '0');
+      const g = Math.round(teamColor.g * 255).toString(16).padStart(2, '0');
+      const b = Math.round(teamColor.b * 255).toString(16).padStart(2, '0');
+      colorString = `#${r}${g}${b}`;
+    } else {
+      // Fallback to default color if we can't convert
+      colorString = '#4A90E2';
+    }
+  }
+  
   // Parse the team color
-  const cleanColor = teamColor.replace('#', '');
+  const cleanColor = colorString.replace('#', '');
   const r = parseInt(cleanColor.substr(0, 2), 16) / 255;
   const g = parseInt(cleanColor.substr(2, 2), 16) / 255;
   const b = parseInt(cleanColor.substr(4, 2), 16) / 255;
@@ -1326,16 +1341,31 @@ function applyTeamColorsToAll() {
 
 // Get team color for an owner
 function getTeamColorForOwner(owner) {
+  // Helper to ensure we always return a string
+  const ensureString = (color) => {
+    if (typeof color === 'string') return color;
+    // If it's a Color3 object, convert to hex string
+    if (color && color.r !== undefined && color.g !== undefined && color.b !== undefined) {
+      const r = Math.round(color.r * 255).toString(16).padStart(2, '0');
+      const g = Math.round(color.g * 255).toString(16).padStart(2, '0');
+      const b = Math.round(color.b * 255).toString(16).padStart(2, '0');
+      return `#${r}${g}${b}`;
+    }
+    return null;
+  };
+  
   // Check if this is the local player (by ID, not string 'player')
   const localPlayerId = window.player?.id || window.currentMatch?.localPlayerId;
   if (owner === localPlayerId) {
-    return window.player?.color || window.currentPlayerColor || '#4A90E2'; // Blue for local player
+    const color = window.player?.color || window.currentPlayerColor || '#4A90E2';
+    return ensureString(color) || '#4A90E2'; // Blue for local player
   }
   
   // Check if this is the opponent
   const opponentId = window.opponent?.id;
   if (owner === opponentId || owner === 'opponent') {
-    return window.opponent?.color || '#E24A4A'; // Red for opponent
+    const color = window.opponent?.color || '#E24A4A';
+    return ensureString(color) || '#E24A4A'; // Red for opponent
   }
   
   // Fallback for any other player IDs

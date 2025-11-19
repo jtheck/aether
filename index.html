@@ -183,7 +183,15 @@
 
     <div id="player_menu" class="menu_menu">
       <div id="player_menu_title" class="menu_title"></div>
-      <input type="color" id="colorPicker" value="#ff0000">
+      <br>
+      <div style="margin: 10px 0;">
+        <label for="nameInput" style="display: block; margin-bottom: 5px;">Name:</label>
+        <input type="text" id="nameInput" value="" style="width: 200px; padding: 5px; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.3); border-radius: 3px; color: white; font-size: 0.9em;">
+      </div>
+      <div style="margin: 10px 0;">
+        <label for="colorPicker" style="display: block; margin-bottom: 5px;">Color:</label>
+        <input type="color" id="colorPicker" value="#ff0000" style="width: 200px; height: 40px; cursor: pointer;">
+      </div>
     </div>
 
     <div id="ingame_menu" class="menu_menu">
@@ -192,22 +200,22 @@
       <div class="lobby_b" title="Pause/Resume Match" onclick="if (window.currentMatch) { window.currentMatch.togglePause(); ui.hideMenu(); }">⏸️ Pause / Resume ▶️</div>
     </div>
 
-    <div id="adventure_lobby">
+    <div id="adventure_lobby" class="menu_menu">
       <div class="menu_title">Adventure</div>
       <br><br>
       <div class="lobby_b" title="Start Adventure" onclick="">Game Start</div>
     </div>
-    <div id="onevsone_lobby">
+    <div id="onevsone_lobby" class="menu_menu">
       <div class="menu_title">1 vs 1</div>
       <br><br>
       <div class="lobby_b" title="Start 1v1 Match" onclick="">Game Start</div>
     </div>
-    <div id="koth_lobby">
+    <div id="koth_lobby" class="menu_menu">
       <div class="menu_title">King of the Hill</div>
       <br><br>
       <div class="lobby_b" title="Start KOTH" onclick="">Game Start</div>
     </div>
-    <div id="teams_lobby">
+    <div id="teams_lobby" class="menu_menu">
       <div class="menu_title">Teams</div>
       <br><br>
       <div class="lobby_b" title="Start Teams" onclick="">Game Start</div>
@@ -249,6 +257,7 @@
   <script src="game/game.js"></script>
   <script src="game/hud.js"></script>
   <script src="game/fx.js"></script>
+  <script src="game/projectiles.js"></script>
   <script src="game/ai.js"></script>
   <script src="game/lasso.js"></script>
   <script src="game/menu.js"></script>

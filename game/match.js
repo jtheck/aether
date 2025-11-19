@@ -778,7 +778,8 @@
                     worldX: worldX,
                     worldZ: worldZ,
                     type: resourceInfo.type,
-                    amount: resourceInfo.amount
+                    amount: resourceInfo.amount,
+                    remaining: resourceInfo.remaining // CRITICAL: Include remaining for depletion tracking
                   });
                 }
               }
@@ -1348,8 +1349,18 @@
           
         } else if (enemyTeams.length === 1) {
           // One enemy team - check if they have enough units to capture
-          const capturingTeam = enemyTeams[0];
-          const attackerCount = unitsNearby.get(capturingTeam) || 0;
+          const capturingTeamNormalized = enemyTeams[0];
+          const attackerCount = unitsNearby.get(capturingTeamNormalized) || 0;
+          
+          // Find the full player ID for the capturing team
+          let capturingTeamFullId = null;
+          this.players.forEach(p => {
+            const pId = p.id || p;
+            const pNormalized = pId.length > 6 ? pId.slice(-6) : pId;
+            if (pNormalized === capturingTeamNormalized) {
+              capturingTeamFullId = pId;
+            }
+          });
           
           // Defender blocks capture if they have at least half as many units (attacker needs 2x)
           if (defenderCount > 0 && attackerCount < defenderCount * 2) {
@@ -1370,7 +1381,7 @@
           } else {
             // Attackers have 2x advantage or no defenders - capturing!
             captureState.contested = false;
-            captureState.capturer = capturingTeam;
+            captureState.capturer = capturingTeamNormalized;
             captureState.contestedNotified = false; // Reset contested notification
             
             // Increase capture progress
@@ -1378,20 +1389,53 @@
             
             // Update agora visual state
             agora.contested = false;
-            agora.contestedBy = capturingTeam;
+            agora.contestedBy = capturingTeamNormalized;
             agora.captureProgress = captureState.progress;
             
             // Notify on capture start (only once when it starts)
             if (captureState.progress <= CAPTURE_RATE && !captureState.notified) {
-              // console.log(`🚩 Player ${capturingTeam} is capturing ${pid}'s Agora! (${attackerCount} attackers vs ${defenderCount} defenders)`);
-              this.showNotification(`Your Agora is under attack!`, 'warning');
+              // console.log(`🚩 Player ${capturingTeamNormalized} is capturing ${pid}'s Agora! (${attackerCount} attackers vs ${defenderCount} defenders)`);
+              
+              // Get local player ID (use window.player.id as primary source, fallback to this.localPlayerId)
+              const localPlayerId = window.player?.id || this.localPlayerId;
+              const localPlayerIdNormalized = localPlayerId ? 
+                (localPlayerId.length > 6 ? localPlayerId.slice(-6) : localPlayerId) : null;
+              
+              // Show notification only to relevant players
+              if (localPlayerIdNormalized === normalizedPid) {
+                // Defender sees warning
+                this.showNotification(`Your Agora is under attack!`, 'warning');
+              } else if (localPlayerIdNormalized === capturingTeamNormalized) {
+                // Attacker sees success message
+                this.showNotification(`Capturing enemy Agora!`, 'success');
+              }
+              
               captureState.notified = true;
             }
             
             // Check for full capture
             if (captureState.progress >= 100) {
-              // console.log(`🏆 Player ${capturingTeam} captured ${pid}'s Agora!`);
-              this.endMatch(capturingTeam, 'agora_capture');
+              // console.log(`🏆 Player ${capturingTeamNormalized} captured ${pid}'s Agora!`);
+              
+              // Mark this agora as captured
+              captureState.captured = true;
+              captureState.capturedBy = capturingTeamFullId || capturingTeamNormalized;
+              
+              // Check if all enemy agoras are captured (for multiplayer/team games)
+              if (this.checkAllEnemyAgorasCaptured(capturingTeamFullId || capturingTeamNormalized)) {
+                // All enemy agoras captured - victory!
+                this.endMatch(capturingTeamFullId || capturingTeamNormalized, 'agora_capture');
+              } else {
+                // Not all agoras captured yet - show progress notification
+                const localPlayerId = window.player?.id || this.localPlayerId;
+                const localPlayerIdNormalized = localPlayerId ? 
+                  (localPlayerId.length > 6 ? localPlayerId.slice(-6) : localPlayerId) : null;
+                
+                if (localPlayerIdNormalized === capturingTeamNormalized) {
+                  const remaining = this.getRemainingEnemyAgorasCount(capturingTeamFullId || capturingTeamNormalized);
+                  this.showNotification(`Agora captured! ${remaining} enemy agoras remaining`, 'success');
+                }
+              }
             }
           }
           
@@ -1412,6 +1456,127 @@
           agora.captureProgress = captureState.progress;
         }
       });
+    }
+    
+    // Helper: Get team members for a player (for team games)
+    getTeamMembers(playerId) {
+      if (this.gameType === 'teams') {
+        // For team games, split players into two teams
+        // First half = team 1, second half = team 2
+        const totalPlayers = this.players.length;
+        const teamSize = Math.ceil(totalPlayers / 2);
+        const playerIndex = this.players.findIndex(p => (p.id || p) === playerId);
+        
+        if (playerIndex < teamSize) {
+          // Team 1 (first half)
+          return this.players.slice(0, teamSize).map(p => p.id || p);
+        } else {
+          // Team 2 (second half)
+          return this.players.slice(teamSize).map(p => p.id || p);
+        }
+      }
+      // Free-for-all: each player is their own team
+      return [playerId];
+    }
+    
+    // Helper: Check if all enemy agoras are captured
+    checkAllEnemyAgorasCaptured(capturingPlayerId) {
+      const totalPlayers = this.players.length;
+      
+      // 1v1: capturing one agora ends the game
+      if (totalPlayers === 2) {
+        return true;
+      }
+      
+      // Get team members for the capturing player
+      const capturingTeam = this.getTeamMembers(capturingPlayerId);
+      const capturingTeamSet = new Set(capturingTeam);
+      
+      // Find all enemy agoras (agoras not owned by capturing team)
+      const enemyAgoras = [];
+      this.players.forEach(player => {
+        const pid = player.id || player;
+        if (!capturingTeamSet.has(pid) && !this.eliminatedPlayers.has(pid)) {
+          const agora = player.buildings?.find(b => b && b.type === 'agora');
+          if (agora) {
+            const normalizedPid = pid.length > 6 ? pid.slice(-6) : pid;
+            const agoraKey = agora.id || `${normalizedPid}-agora`;
+            enemyAgoras.push({ playerId: pid, agoraKey, agora });
+          }
+        }
+      });
+      
+      // Check if all enemy agoras are captured
+      if (enemyAgoras.length === 0) {
+        return true; // No enemies left
+      }
+      
+      // Check capture states for all enemy agoras
+      for (const { agoraKey } of enemyAgoras) {
+        const captureState = this.agoraCaptureStates?.get(agoraKey);
+        if (!captureState || !captureState.captured) {
+          return false; // At least one enemy agora not captured
+        }
+        
+        // Check if captured by someone on the capturing team
+        const capturerId = captureState.capturedBy;
+        const capturerNormalized = capturerId && capturerId.length > 6 ? capturerId.slice(-6) : capturerId;
+        const capturingTeamNormalized = capturingTeam.map(id => {
+          const normalized = id.length > 6 ? id.slice(-6) : id;
+          return normalized;
+        });
+        
+        if (!capturingTeamNormalized.includes(capturerNormalized)) {
+          return false; // Captured by someone not on the team
+        }
+      }
+      
+      return true; // All enemy agoras captured!
+    }
+    
+    // Helper: Get count of remaining enemy agoras
+    getRemainingEnemyAgorasCount(capturingPlayerId) {
+      const totalPlayers = this.players.length;
+      
+      // 1v1: no remaining agoras after capture
+      if (totalPlayers === 2) {
+        return 0;
+      }
+      
+      // Get team members for the capturing player
+      const capturingTeam = this.getTeamMembers(capturingPlayerId);
+      const capturingTeamSet = new Set(capturingTeam);
+      
+      // Count enemy agoras that aren't captured yet
+      let remaining = 0;
+      this.players.forEach(player => {
+        const pid = player.id || player;
+        if (!capturingTeamSet.has(pid) && !this.eliminatedPlayers.has(pid)) {
+          const agora = player.buildings?.find(b => b && b.type === 'agora');
+          if (agora) {
+            const normalizedPid = pid.length > 6 ? pid.slice(-6) : pid;
+            const agoraKey = agora.id || `${normalizedPid}-agora`;
+            const captureState = this.agoraCaptureStates?.get(agoraKey);
+            if (!captureState || !captureState.captured) {
+              remaining++;
+            } else {
+              // Check if captured by someone on the capturing team
+              const capturerId = captureState.capturedBy;
+              const capturerNormalized = capturerId && capturerId.length > 6 ? capturerId.slice(-6) : capturerId;
+              const capturingTeamNormalized = capturingTeam.map(id => {
+                const normalized = id.length > 6 ? id.slice(-6) : id;
+                return normalized;
+              });
+              
+              if (!capturingTeamNormalized.includes(capturerNormalized)) {
+                remaining++; // Captured by someone not on the team
+              }
+            }
+          }
+        }
+      });
+      
+      return remaining;
     }
     
     checkWonderVictory() {
@@ -1497,6 +1662,11 @@
     
     // End the match
     endMatch(winnerId, reason) {
+      // Don't end match if player chose to continue playing after previous end
+      if (this.victoryCheckingDisabled) {
+        return; // Player chose to continue playing, ignore victory conditions
+      }
+      
       if (this.state === MatchState.VICTORY || this.state === MatchState.DEFEAT || this.state === MatchState.DRAW) {
         return; // Already ended
       }
@@ -1505,9 +1675,15 @@
       const duration = (this.endedAt - this.startedAt) / 1000;
       
       // Determine local player result
+      // Normalize IDs for comparison (handle both full and normalized IDs)
+      const normalizeId = (id) => id && id.length > 6 ? id.slice(-6) : id;
+      const localPlayerId = window.player?.id || this.localPlayerId;
+      const localPlayerIdNormalized = normalizeId(localPlayerId);
+      const winnerIdNormalized = normalizeId(winnerId);
+      
       if (!winnerId) {
         this.state = MatchState.DRAW;
-      } else if (winnerId === this.localPlayerId) {
+      } else if (winnerIdNormalized === localPlayerIdNormalized || winnerId === localPlayerId) {
         this.state = MatchState.VICTORY;
       } else {
         this.state = MatchState.DEFEAT;

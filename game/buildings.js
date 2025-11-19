@@ -100,13 +100,13 @@ const BuildingTypes = {
     scale: .4,
     rotation: 0, // No rotation by default
     size: { width: 2, height: 2 },
-    cost: { wood: 15, stone: 0 },
+    cost: { wood: 5, stone: 0 },
     description: "Basic work camp",
     category: "residential",
     // Work assignment properties
     needsWorkers: true,
     maxWorkers: 10,
-    workRadius: 5, // Resource detection and worker search radius (tiles) - 5 tiles × 4px = 20 world units
+    workRadius: 7, // Resource detection and worker search radius (tiles) - 7 tiles × 4px = 28 world units
     workType: "gather", // Type of work this building provides
     workInterval: 10000, // How often workers produce resources (10 seconds)
     workOutput: { wood: 0, stone: 0 }, // Will be calculated based on nearby resources
@@ -118,12 +118,12 @@ const BuildingTypes = {
     scale: .2,
     rotation: 0, // No rotation by default
     size: { width: 2, height: 2 },
-    cost: { wood: 30, stone: 5 },
+    cost: { wood: 25, stone: 0 },
     description: "Basic housing for villagers",
     category: "residential",
     // Villager spawning properties
     spawnsVillagers: true,
-    spawnInterval: 60000, // 60 seconds in milliseconds
+    spawnInterval: 30000, // 30 seconds in milliseconds
     maxVillagers: 15, // Maximum villagers this village can support
     spawnRadius: 4 // Spawn villagers within 3 tiles of the village
   },
@@ -150,7 +150,7 @@ const BuildingTypes = {
     scale: .429,
     rotation: 0, // 30 degrees
     size: { width: 2, height: 2 },
-    cost: { stone: 40, wood: 20 },
+    cost: { stone: 20, wood: 20 },
     description: "Defensive structure with long sight range",
     category: "military"
   }
@@ -209,11 +209,22 @@ function Building(buildingType, position, options = {}) {
 function placeBuilding(buildingType, x, z, scene) {
   // // console.log(`🏗️ Placing building: ${buildingType} at tile (${x}, ${z})`);
   
-  const worldPosition = new BABYLON.Vector3(x * TILE_SIZE, 0, z * TILE_SIZE);
+  const worldX = x * TILE_SIZE;
+  const worldZ = z * TILE_SIZE;
+  
+  // Get terrain height at this position
+  let terrainY = 0;
+  if (window.liveField && window.liveField.getHeightAt) {
+    terrainY = window.liveField.getHeightAt(worldX, worldZ);
+  }
+  
+  // Add small offset so building sits on terrain surface
+  const buildingHeight = terrainY + 0.1;
+  const worldPosition = new BABYLON.Vector3(worldX, buildingHeight, worldZ);
   // // console.log(`🌍 World position: (${worldPosition.x}, ${worldPosition.y}, ${worldPosition.z})`);
   
   // CRITICAL: Pass grid coordinates explicitly for accurate checksum calculation
-  const building = new Building(buildingType, { x: worldPosition.x, y: 0, z: worldPosition.z }, { gridX: x, gridZ: z });
+  const building = new Building(buildingType, { x: worldPosition.x, y: buildingHeight, z: worldPosition.z }, { gridX: x, gridZ: z });
   // // console.log(`🏛️ Building created:`, building.name, 'Model path:', building.model);
   
   if (window.gfx) {
@@ -248,7 +259,7 @@ function placeBuilding(buildingType, x, z, scene) {
       
       // Set position and initial scale/height
       building.mesh.position = worldPosition.clone();
-      building.mesh.position.y = -2; // Start below ground
+      building.mesh.position.y = buildingHeight - 2; // Start below ground (relative to terrain)
       const targetScale = building.scale;
       building.mesh.scaling = new BABYLON.Vector3(targetScale, 0.1, targetScale); // Start squished
       
@@ -300,6 +311,20 @@ function placeBuilding(buildingType, x, z, scene) {
               teamColorHex = window.getTeamColorForOwner(building.owner);
             }
             
+            // Ensure teamColorHex is a string (handle Color3 objects or other types)
+            if (teamColorHex && typeof teamColorHex !== 'string') {
+              // If it's a Color3 object, convert to hex string
+              if (teamColorHex.r !== undefined && teamColorHex.g !== undefined && teamColorHex.b !== undefined) {
+                const r = Math.round(teamColorHex.r * 255).toString(16).padStart(2, '0');
+                const g = Math.round(teamColorHex.g * 255).toString(16).padStart(2, '0');
+                const b = Math.round(teamColorHex.b * 255).toString(16).padStart(2, '0');
+                teamColorHex = `#${r}${g}${b}`;
+              } else {
+                // Fallback to default if we can't convert
+                teamColorHex = null;
+              }
+            }
+            
             if (teamColorHex) {
               const clean = teamColorHex.replace('#', '');
               const r = parseInt(clean.substr(0, 2), 16) / 255;
@@ -342,6 +367,10 @@ function placeBuilding(buildingType, x, z, scene) {
         }, 150); // Delay to ensure mesh hierarchy is ready
       }
       
+      // Get terrain height for final position and add small offset so building sits on terrain
+      const baseTerrainY = building.position.y || (window.liveField && window.liveField.getHeightAt ? window.liveField.getHeightAt(building.mesh.position.x, building.mesh.position.z) : 0);
+      const finalTerrainY = baseTerrainY + 0.1; // Small offset so building sits on terrain surface
+      
       // Create the animations
       const riseAnimation = new BABYLON.Animation(
         "buildingRise",
@@ -359,10 +388,12 @@ function placeBuilding(buildingType, x, z, scene) {
         BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
       );
 
-      // Create animation keys
+      // Create animation keys - animate from below terrain to terrain height
+      // Use the mesh's current position (already set to buildingHeight - 2) as starting point
+      const startHeight = building.mesh.position.y;
       const keyFrames = [
-        { frame: 0, value: -2 },
-        { frame: 20, value: 0 }
+        { frame: 0, value: startHeight },
+        { frame: 20, value: finalTerrainY }
       ];
       
       const scaleFrames = [
@@ -386,7 +417,7 @@ function placeBuilding(buildingType, x, z, scene) {
       // Add and start new animations
       building.mesh.animations = [riseAnimation, scaleAnimation];
       scene.beginAnimation(building.mesh, 0, 20, false, 1.0, () => {
-        building.mesh.position.y = 0;
+        building.mesh.position.y = finalTerrainY; // Ensure final position is at terrain height
         building.mesh.scaling.y = targetScale;
         
         // Add particle effects immediately for all buildings (including towers)
@@ -858,6 +889,7 @@ function updateCapturePointVisuals(agora) {
     baseMat.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
     baseMat.alpha = 0.15; // Very subtle (was 0.6)
     baseDisc.material = baseMat;
+    baseDisc.isVisible = false; // Hidden for mobile performance (translucent meshes are expensive)
     
     agora.captureVisuals.baseDisc = baseDisc;
     agora.captureVisuals.baseMat = baseMat;
@@ -929,18 +961,26 @@ function updateCapturePointVisuals(agora) {
   
   // Update base disc color to match owner
   if (window.getTeamColorForOwner) {
-    const ownerColor = window.getTeamColorForOwner(agora.owner);
-    if (ownerColor) {
-      visuals.baseMat.diffuseColor = new BABYLON.Color3(
-        ownerColor.r * 0.7,
-        ownerColor.g * 0.7,
-        ownerColor.b * 0.7
-      );
-      visuals.baseMat.emissiveColor = new BABYLON.Color3(
-        ownerColor.r * 0.3,
-        ownerColor.g * 0.3,
-        ownerColor.b * 0.3
-      );
+    const ownerColorHex = window.getTeamColorForOwner(agora.owner);
+    if (ownerColorHex) {
+      // Convert hex string to Color3
+      const clean = typeof ownerColorHex === 'string' ? ownerColorHex.replace('#', '') : '';
+      if (clean.length === 6) {
+        const r = parseInt(clean.substr(0, 2), 16) / 255;
+        const g = parseInt(clean.substr(2, 2), 16) / 255;
+        const b = parseInt(clean.substr(4, 2), 16) / 255;
+        const ownerColor = new BABYLON.Color3(r, g, b);
+        visuals.baseMat.diffuseColor = new BABYLON.Color3(
+          ownerColor.r * 0.7,
+          ownerColor.g * 0.7,
+          ownerColor.b * 0.7
+        );
+        visuals.baseMat.emissiveColor = new BABYLON.Color3(
+          ownerColor.r * 0.3,
+          ownerColor.g * 0.3,
+          ownerColor.b * 0.3
+        );
+      }
     }
   }
   
@@ -953,18 +993,26 @@ function updateCapturePointVisuals(agora) {
     
     // Set color based on capturing team
     if (capturerTeam && window.getTeamColorForOwner) {
-      const capturerColor = window.getTeamColorForOwner(capturerTeam);
-      if (capturerColor) {
-        visuals.progressMat.diffuseColor = new BABYLON.Color3(
-          capturerColor.r,
-          capturerColor.g,
-          capturerColor.b
-        );
-        visuals.progressMat.emissiveColor = new BABYLON.Color3(
-          capturerColor.r * 0.5,
-          capturerColor.g * 0.5,
-          capturerColor.b * 0.5
-        );
+      const capturerColorHex = window.getTeamColorForOwner(capturerTeam);
+      if (capturerColorHex) {
+        // Convert hex string to Color3
+        const clean = typeof capturerColorHex === 'string' ? capturerColorHex.replace('#', '') : '';
+        if (clean.length === 6) {
+          const r = parseInt(clean.substr(0, 2), 16) / 255;
+          const g = parseInt(clean.substr(2, 2), 16) / 255;
+          const b = parseInt(clean.substr(4, 2), 16) / 255;
+          const capturerColor = new BABYLON.Color3(r, g, b);
+          visuals.progressMat.diffuseColor = new BABYLON.Color3(
+            capturerColor.r,
+            capturerColor.g,
+            capturerColor.b
+          );
+          visuals.progressMat.emissiveColor = new BABYLON.Color3(
+            capturerColor.r * 0.5,
+            capturerColor.g * 0.5,
+            capturerColor.b * 0.5
+          );
+        }
       }
     }
   } else {
@@ -1033,6 +1081,96 @@ function updateCapturePointVisuals(agora) {
     visuals.timerTexture.update();
   } else {
     visuals.timerPlane.isVisible = false;
+  }
+}
+
+// Update tower attack logic
+function updateTowerAttack(tower, deltaTime) {
+  if (!window.projectiles || !window.gameUnits) {
+    return;
+  }
+  
+  // Initialize tower attack properties
+  if (!tower.attackCooldown) {
+    tower.attackCooldown = 0;
+    tower.attackRange = 15; // Tower range in world units (tiles * TILE_SIZE)
+    tower.attackDamage = 15;
+    tower.attackInterval = 2.0; // Seconds between attacks
+    tower.currentTarget = null;
+  }
+  
+  // Update cooldown
+  if (tower.attackCooldown > 0) {
+    tower.attackCooldown -= deltaTime;
+    return;
+  }
+  
+  // Find enemy units in range
+  const towerPos = tower.mesh ? tower.mesh.getAbsolutePosition() : 
+                   new BABYLON.Vector3(tower.position.x, tower.position.y || 2, tower.position.z);
+  
+  let nearestEnemy = null;
+  let nearestDistance = tower.attackRange;
+  
+  window.gameUnits.forEach(unit => {
+    if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) {
+      return;
+    }
+    
+    // Skip friendly units (same owner)
+    if (unit.owner === tower.owner) {
+      return;
+    }
+    
+    // Skip units with no health
+    if (!unit.health || unit.health <= 0) {
+      return;
+    }
+    
+    const unitPos = new BABYLON.Vector3(
+      unit.pb.state.loc.x,
+      unit.pb.state.loc.y || 0,
+      unit.pb.state.loc.z
+    );
+    
+    const distance = BABYLON.Vector3.Distance(towerPos, unitPos);
+    
+    if (distance <= nearestDistance) {
+      nearestDistance = distance;
+      nearestEnemy = unit;
+    }
+  });
+  
+  // Fire at nearest enemy
+  if (nearestEnemy && window.projectiles && window.projectiles.fire) {
+    try {
+      const targetPos = new BABYLON.Vector3(
+        nearestEnemy.pb.state.loc.x,
+        nearestEnemy.pb.state.loc.y || 0.5,
+        nearestEnemy.pb.state.loc.z
+      );
+      
+      // Fire arrow
+      const projectile = window.projectiles.fire({
+        type: 'arrow',
+        from: towerPos.clone().add(new BABYLON.Vector3(0, 2, 0)), // Fire from top of tower
+        to: targetPos,
+        damage: tower.attackDamage,
+        owner: tower.owner
+      });
+      
+      // Only set cooldown if projectile was successfully created
+      if (projectile) {
+        tower.attackCooldown = tower.attackInterval;
+        tower.currentTarget = nearestEnemy;
+      }
+    } catch (e) {
+      console.warn('Error firing tower projectile:', e);
+      // Still set cooldown to prevent spam
+      tower.attackCooldown = tower.attackInterval;
+    }
+  } else {
+    tower.currentTarget = null;
   }
 }
 
@@ -1116,6 +1254,11 @@ function updateBuildings(deltaTime) {
       
       // Process work production
       processWorkProduction(building);
+    }
+    
+    // Handle tower attacks
+    if (building.type === 'tower' && building.buildProgress >= 1.0 && isGameActive) {
+      updateTowerAttack(building, deltaTime);
     }
   });
 }
@@ -1322,7 +1465,12 @@ const buildingSystem = {
     
     // Position the circle at the building location
     circle.position = centerPosition.clone();
-    circle.position.y = 0.05; // Very close to ground
+    // Get terrain height at this position
+    let terrainY = 0;
+    if (window.liveField && window.liveField.getHeightAt) {
+      terrainY = window.liveField.getHeightAt(centerPosition.x, centerPosition.z);
+    }
+    circle.position.y = terrainY + 0.05; // Very close to ground, following terrain
     
     // Rotate to be horizontal (disc is vertical by default)
     circle.rotation.x = Math.PI / 2; // 90 degrees to make it horizontal
@@ -1389,7 +1537,12 @@ const buildingSystem = {
   updateRadiusVisualization: function(newPosition) {
     if (this.radiusVisualization && this.selectedBuildingType === 'camp') {
       this.radiusVisualization.position = newPosition.clone();
-      this.radiusVisualization.position.y = 0.1;
+      // Get terrain height at this position
+      let terrainY = 0;
+      if (window.liveField && window.liveField.getHeightAt) {
+        terrainY = window.liveField.getHeightAt(newPosition.x, newPosition.z);
+      }
+      this.radiusVisualization.position.y = terrainY + 0.05; // Very close to ground, following terrain
       
       // Update resource highlights
       const buildingDef = BuildingTypes[this.selectedBuildingType];
@@ -1466,7 +1619,8 @@ const buildingSystem = {
               worldX: worldX,
               worldZ: worldZ,
               type: resourceInfo.type,
-              amount: resourceInfo.amount
+              amount: resourceInfo.amount,
+              remaining: resourceInfo.remaining // CRITICAL: Track remaining for depletion
             });
             
             resourceCount++;
@@ -1562,6 +1716,12 @@ const buildingSystem = {
       return null;
     }
     
+    // Skip if this tile has been depleted
+    const tileKey = `${gridX},${gridZ}`;
+    if (window.isResourceTileDepleted && window.isResourceTileDepleted(gridX, gridZ)) {
+      return null; // Don't detect depleted resources
+    }
+    
     // CHECK 1: Rocks on dirt tiles (terrainType === 2) with ~3% chance
     if (terrainType === 2) {
       const rockRoll = this.tileHash(gridX, gridZ, fieldSeed + 1000);
@@ -1574,7 +1734,7 @@ const buildingSystem = {
           return {
             type: 'minerals',
             amount: 1,
-            remaining: 50, // Small rocks have less
+            remaining: 2, // Reduced from 50 for faster depletion testing (~3%)
             gridX: gridX,
             gridZ: gridZ
           };
@@ -1583,7 +1743,7 @@ const buildingSystem = {
           return {
             type: 'stone',
             amount: 2,
-            remaining: 100,
+            remaining: 3, // Reduced from 100 for faster depletion testing (~3%)
             gridX: gridX,
             gridZ: gridZ
           };
@@ -1592,7 +1752,7 @@ const buildingSystem = {
           return {
             type: 'stone',
             amount: 3,
-            remaining: 150, // Large rocks have more
+            remaining: 5, // Reduced from 150 for faster depletion testing (~3%)
             gridX: gridX,
             gridZ: gridZ
           };
@@ -1607,7 +1767,7 @@ const buildingSystem = {
         return {
           type: 'wood',
           amount: 3,
-          remaining: 150, // Initial wood amount
+          remaining: 5, // Reduced from 150 for faster depletion testing (~3%)
           gridX: gridX,
           gridZ: gridZ
         };
@@ -1859,7 +2019,8 @@ const buildingSystem = {
                   worldX: worldX,
                   worldZ: worldZ,
                   type: resourceInfo.type,
-                  amount: resourceInfo.amount
+                  amount: resourceInfo.amount,
+                  remaining: resourceInfo.remaining // CRITICAL: Include remaining for depletion tracking
                 });
               }
             }

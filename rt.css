@@ -870,18 +870,22 @@ html, body {
 
 /* scrollbars */
 ::-webkit-scrollbar {
-  width: 9px;
+  width: 16px;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1c1c1c;
-  border: 1px solid #888;
-  -webkit-border-radius: 9px;
+  background: #2196F3;
+  border: 2px solid #1976D2;
+  -webkit-border-radius: 8px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #291C1C;
+  background: #42A5F5;
 }
 ::-webkit-scrollbar-thumb:active {
-  background: #37181B;
+  background: #1565C0;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 8px;
 }
 /* links */
 a {

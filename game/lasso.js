@@ -189,7 +189,9 @@
       clickedElement.closest('.binary_switch') ||
       clickedElement.closest('.switch_handle') ||
       clickedElement.closest('#hud_switch') ||
-      clickedElement.closest('#shadows_switch')
+      clickedElement.closest('#shadows_switch') ||
+      clickedElement.closest('#menu') ||
+      clickedElement.closest('.menu_menu')
     )) {
       // console.log("🎯 Lasso: Clicked on UI element, skipping selection");
       return false;

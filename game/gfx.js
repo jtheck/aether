@@ -85,6 +85,7 @@
   // Model instance pools for reuse
   const modelPools = new Map(); // path -> array of available instances
   const activeModels = new Map(); // chunkKey -> array of model instances in use
+  const pendingResourceTiles = new Set();  // Tiles currently waiting for a resource model to finish loading
   
   // Function to clean up models when chunk unloads
   function cleanupChunkModels(chunkKey) {
@@ -95,6 +96,7 @@
       
       // Return models to pool
       models.forEach(modelInfo => {
+        unlinkMeshFromResourceRegistry(modelInfo.model?.root);
         returnModelToPool(modelInfo.model, modelInfo.path);
       });
       
@@ -118,6 +120,16 @@
       billboardsToReturn.forEach(billboard => returnBillboardInstance(billboard));
       
       activeModels.delete(chunkKey);
+      
+      // Clear any pending resource placements for this chunk's tiles
+      const chunkData = window.liveField?.chunks?.get(chunkKey);
+      if (chunkData) {
+        for (let x = chunkData.startX; x < chunkData.endX; x++) {
+          for (let z = chunkData.startZ; z < chunkData.endZ; z++) {
+            pendingResourceTiles.delete(`${x},${z}`);
+          }
+        }
+      }
     }
   }
   
@@ -553,6 +565,11 @@
         return;
       }
       
+      // SKIP disposed meshes (they've been removed from the scene)
+      if (!lod.model || lod.model.isDisposed()) {
+        return;
+      }
+      
       let distanceSquared, lodDistanceSquared, cullDistanceSquared;
       
       // OPTIMIZATION: For static scenery (has chunkKey), check distance to chunk center once
@@ -936,6 +953,9 @@ let pov2 = 240;
     
     for (let i = 0; i < Math.min(BATCH_SIZE, modelLoadQueue.length); i++) {
       const task = modelLoadQueue.shift();
+      const isResourceTask = (task.modelPath.includes('trees.glb') || task.modelPath.includes('rocks_')) &&
+        task.gridX !== undefined && task.gridZ !== undefined;
+      const resourceKey = isResourceTask ? `${task.gridX},${task.gridZ}` : null;
       
       getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale)
         .then(model => {
@@ -945,10 +965,12 @@ let pov2 = 240;
           }
           
           // Register resource models for depletion system (trees and rocks only)
-          if ((task.modelPath.includes('trees.glb') || task.modelPath.includes('rocks.glb')) && 
-              task.gridX !== undefined && task.gridZ !== undefined) {
-            const key = `${task.gridX},${task.gridZ}`;
-            resourceModelRegistry.set(key, model.root);
+          if (resourceKey) {
+            resourceModelRegistry.set(resourceKey, model.root);
+            pendingResourceTiles.delete(resourceKey);
+            model.root.metadata = model.root.metadata || {};
+            model.root.metadata.resourceTileKey = resourceKey;
+            model.root.metadata.modelPath = task.modelPath; // Store model path for respawn detection
           }
           
           // All the same model setup logic
@@ -984,7 +1006,12 @@ let pov2 = 240;
           // Add LOD billboard with chunk info for grouped checking
           addLODBillboard(model, task.scene, task.modelRule, gfx.cameraTarget ? gfx.cameraTarget.position : null, chunkKey);
         })
-        .catch(err => console.warn('Model loading failed:', err));
+        .catch(err => {
+          console.warn('Model loading failed:', err);
+          if (resourceKey) {
+            pendingResourceTiles.delete(resourceKey);
+          }
+        });
     }
     
     isProcessingQueue = false;
@@ -1036,14 +1063,280 @@ let pov2 = 240;
   // Global registry of resource models by grid position for depletion system
   const resourceModelRegistry = new Map(); // key: "gridX,gridZ", value: mesh
   
+  // Global registry of depleted resource tiles (prevents chunks from recreating them)
+  // Map stores: "gridX,gridZ" -> { originalGridX, originalGridZ, felledTime, isTree }
+  const depletedResourceTiles = new Map(); // Map of "gridX,gridZ" strings to depletion info
+  
+  // Function to check if a tile has been depleted
+  window.isResourceTileDepleted = function(gridX, gridZ) {
+    const key = `${gridX},${gridZ}`;
+    return depletedResourceTiles.has(key);
+  };
+  
+  // Function to get respawn position for a depleted tree (further from camp)
+  function getRespawnPosition(originalGridX, originalGridZ) {
+    if (!window.gameBuildings) return null;
+    
+    const originalWorldX = originalGridX * TILE_SIZE;
+    const originalWorldZ = originalGridZ * TILE_SIZE;
+    
+    // Find nearest camp
+    let nearestCamp = null;
+    let nearestDistSq = Infinity;
+    for (const building of window.gameBuildings) {
+      if (building.type === 'camp' && building.position) {
+        const dx = originalWorldX - building.position.x;
+        const dz = originalWorldZ - building.position.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < nearestDistSq) {
+          nearestDistSq = distSq;
+          nearestCamp = building;
+        }
+      }
+    }
+    
+    if (!nearestCamp) return null; // No camp found, can't calculate offset
+    
+    // Calculate direction away from camp
+    const campDx = originalWorldX - nearestCamp.position.x;
+    const campDz = originalWorldZ - nearestCamp.position.z;
+    const campDist = Math.sqrt(campDx * campDx + campDz * campDz);
+    
+    if (campDist < 0.1) return null; // Too close to camp center
+    
+    // Normalize direction
+    const dirX = campDx / campDist;
+    const dirZ = campDz / campDist;
+    
+    // Move 2-3 tiles further from camp (deterministic based on position)
+    const field = window.liveField;
+    const fieldSeed = field ? field.seed : 12345;
+    let hash = fieldSeed + originalGridX * 13579 + originalGridZ * 24680;
+    hash = (hash * 1664525 + 1013904223) >>> 0;
+    const offsetFactor = 2 + ((hash % 1000) / 1000); // 2-3 tiles (deterministic)
+    const offsetDistance = offsetFactor * TILE_SIZE;
+    const newWorldX = originalWorldX + dirX * offsetDistance;
+    const newWorldZ = originalWorldZ + dirZ * offsetDistance;
+    
+    // Convert back to grid coordinates
+    const newGridX = Math.round(newWorldX / TILE_SIZE);
+    const newGridZ = Math.round(newWorldZ / TILE_SIZE);
+    
+    // Bounds check (field already declared above)
+    if (!field || newGridX < 0 || newGridX >= field.width || newGridZ < 0 || newGridZ >= field.height) {
+      return null;
+    }
+    
+    return { gridX: newGridX, gridZ: newGridZ, worldX: newWorldX, worldZ: newWorldZ };
+  }
+  
+  // DEBUG: Manual command to remove nearest tree to camera
+  window.debugRemoveNearestTree = function() {
+    if (!gfx.cameraTarget || !gfx.cameraTarget.position) {
+      console.log('❌ No camera found');
+      return;
+    }
+    
+    const camPos = gfx.cameraTarget.position;
+    let nearestTree = null;
+    let nearestDist = Infinity;
+    
+    // Find nearest tree in registry
+    for (const [key, mesh] of resourceModelRegistry.entries()) {
+      const pos = mesh.getAbsolutePosition();
+      const dx = pos.x - camPos.x;
+      const dz = pos.z - camPos.z;
+      const dist = Math.sqrt(dx * dx + dz * dz);
+      
+      if (dist < nearestDist) {
+        nearestDist = dist;
+        nearestTree = { key, mesh, pos };
+      }
+    }
+    
+    if (nearestTree) {
+      const [gridX, gridZ] = nearestTree.key.split(',').map(Number);
+      console.log(`🎯 Removing nearest tree at grid(${gridX},${gridZ}), world(${nearestTree.pos.x.toFixed(1)},${nearestTree.pos.z.toFixed(1)}), distance: ${nearestDist.toFixed(1)} units`);
+      window.removeResourceModel(gridX, gridZ);
+    } else {
+      console.log('❌ No trees found in registry');
+    }
+  };
+  
+  function removeModelFromLOD(modelRoot) {
+    if (!modelRoot) return;
+    for (let i = lodModels.length - 1; i >= 0; i--) {
+      const lod = lodModels[i];
+      if (lod.model === modelRoot) {
+        if (lod.billboard) {
+          lod.billboard.setEnabled(false);
+          returnBillboardInstance(lod.billboard);
+        }
+        lodModels[i] = lodModels[lodModels.length - 1];
+        lodModels.pop();
+        break;
+      }
+    }
+  }
+  
+  function unlinkMeshFromResourceRegistry(mesh) {
+    if (!mesh) return;
+    const metaKey = mesh.metadata?.resourceTileKey;
+    if (metaKey && resourceModelRegistry.get(metaKey) === mesh) {
+      resourceModelRegistry.delete(metaKey);
+      pendingResourceTiles.delete(metaKey);
+    } else {
+      for (const [key, value] of resourceModelRegistry.entries()) {
+        if (value === mesh) {
+          resourceModelRegistry.delete(key);
+          pendingResourceTiles.delete(key);
+          break;
+        }
+      }
+    }
+    if (mesh.metadata && mesh.metadata.resourceTileKey) {
+      delete mesh.metadata.resourceTileKey;
+    }
+  }
+  
+  function cleanupDuplicateResourceMeshes(gridX, gridZ, primaryMesh = null) {
+    let removedCount = 0;
+    for (const [chunkKey, models] of activeModels.entries()) {
+      for (let i = models.length - 1; i >= 0; i--) {
+        const modelInfo = models[i];
+        if (!modelInfo.model || !modelInfo.model.root) continue;
+        const root = modelInfo.model.root;
+        if (primaryMesh && root === primaryMesh) continue;
+        
+        const modelPos = root.getAbsolutePosition();
+        const modelGridX = Math.round(modelPos.x / TILE_SIZE);
+        const modelGridZ = Math.round(modelPos.z / TILE_SIZE);
+        
+        if (modelGridX === gridX && modelGridZ === gridZ) {
+          removeModelFromLOD(root);
+          unlinkMeshFromResourceRegistry(root);
+          returnModelToPool(modelInfo.model, modelInfo.path);
+          models.splice(i, 1);
+          removedCount++;
+        }
+      }
+      
+      if (models.length === 0) {
+        activeModels.delete(chunkKey);
+      }
+    }
+    
+    if (removedCount > 0) {
+      console.log(`🧹 Removed ${removedCount} stray resource models at (${gridX}, ${gridZ})`);
+    }
+  }
+  
   // Function to remove a resource model when depleted
   window.removeResourceModel = function(gridX, gridZ) {
     const key = `${gridX},${gridZ}`;
-    const mesh = resourceModelRegistry.get(key);
+    let mesh = resourceModelRegistry.get(key);
+    
+    // If not found in registry, search through activeModels to find it
+    if (!mesh) {
+      // Search through all chunks to find the model at this grid position
+      for (const [chunkKey, models] of activeModels.entries()) {
+        for (const modelInfo of models) {
+          if (modelInfo.model && modelInfo.model.root) {
+            // Check if it's a tree or rock model first
+            if (modelInfo.path && (modelInfo.path.includes('trees.glb') || modelInfo.path.includes('rocks_'))) {
+              // Use WORLD position, not local position (mesh is parented to chunk)
+              const modelPos = modelInfo.model.root.getAbsolutePosition();
+              const modelGridX = Math.round(modelPos.x / TILE_SIZE);
+              const modelGridZ = Math.round(modelPos.z / TILE_SIZE);
+              
+              // Check if this model is at the target grid position
+              if (modelGridX === gridX && modelGridZ === gridZ) {
+                mesh = modelInfo.model.root;
+                // Register it for future lookups
+                resourceModelRegistry.set(key, mesh);
+                break;
+              }
+            }
+          }
+        }
+        if (mesh) break;
+      }
+    }
+    
     if (mesh) {
-      mesh.dispose();
+      // Remove the billboard from LOD system if it exists
+      removeModelFromLOD(mesh);
+      
+      // Remove from activeModels tracking
+      for (const [chunkKey, models] of activeModels.entries()) {
+        for (let i = models.length - 1; i >= 0; i--) {
+          if (models[i].model && models[i].model.root === mesh) {
+            models.splice(i, 1);
+            break;
+          }
+        }
+        if (models.length === 0) {
+          activeModels.delete(chunkKey);
+        }
+      }
+      
+      // Smooth animation - sink the tree into the ground
+      const startY = mesh.position.y;
+      const targetY = startY - 8; // Sink 8 units down
+      const duration = 1000; // 1 second
+      const startTime = Date.now();
+      
+      const animateSink = () => {
+        const elapsed = Date.now() - startTime;
+        const progress = Math.min(elapsed / duration, 1);
+        
+        // Ease in - accelerate as it falls
+        const easeIn = progress * progress;
+        
+        // Update Y position only
+        mesh.position.y = startY + (targetY - startY) * easeIn;
+        
+        if (progress < 1) {
+          requestAnimationFrame(animateSink);
+           } else {
+             // Animation done - disable it completely
+             mesh.setEnabled(false);
+             // Also disable all child meshes to ensure no visual remnants
+             mesh.getChildren().forEach(child => {
+               if (child.setEnabled) {
+                 child.setEnabled(false);
+               }
+             });
+             console.log(`🪓 Tree sunk into ground at (${gridX}, ${gridZ})`);
+           }
+      };
+      
+      // Mark as depleted immediately - store original position for respawn
       resourceModelRegistry.delete(key);
-      console.log(`🗑️ Removed resource model at (${gridX}, ${gridZ})`);
+      pendingResourceTiles.delete(key);
+      if (mesh.metadata && mesh.metadata.resourceTileKey === key) {
+        delete mesh.metadata.resourceTileKey;
+      }
+      
+      // Check if this is a tree (for respawn logic)
+      const isTree = mesh.metadata && mesh.metadata.modelPath && mesh.metadata.modelPath.includes('trees.glb');
+      
+      // Store depletion info with original position and timestamp
+      depletedResourceTiles.set(key, {
+        originalGridX: gridX,
+        originalGridZ: gridZ,
+        felledTime: Date.now(),
+        isTree: isTree
+      });
+      
+      // Clean up any stray duplicates that may exist at this tile
+      cleanupDuplicateResourceMeshes(gridX, gridZ, mesh);
+      
+      // Start animation
+      animateSink();
+    } else {
+      // No registered mesh - still try to clean up any stray duplicates
+      cleanupDuplicateResourceMeshes(gridX, gridZ);
     }
   };
   
@@ -1085,6 +1378,12 @@ let pov2 = 240;
       const localZ = Math.floor(index / (chunk.endX - chunk.startX));
       const gridX = chunk.startX + localX;
       const gridZ = chunk.startZ + localZ;
+      
+      // Bounds check: ensure grid coordinates are within field boundaries
+      if (gridX < 0 || gridX >= field.width || gridZ < 0 || gridZ >= field.height) {
+        return; // Skip tiles outside field bounds
+      }
+      
       const terrainIndex = gridZ * field.width + gridX;
       const terrainType = field.terrainTypes[terrainIndex];
       
@@ -1105,10 +1404,25 @@ let pov2 = 240;
       
       // Place rocks on ~3% of grass tiles
       if (rockRoll < 0.03) {
+        // Skip if this tile has been depleted
+        const tileKey = `${gridX},${gridZ}`;
+        if (depletedResourceTiles.has(tileKey)) {
+          return; // Don't recreate depleted resources
+        }
+        
+        // Skip if a rock already exists at this grid position (prevents duplicates across chunks)
+        if (resourceModelRegistry.has(tileKey)) {
+          return; // Rock already placed here
+        }
+        
+        // Skip if a rock for this tile is already loading
+        if (pendingResourceTiles.has(tileKey)) {
+          return;
+        }
+        
         rockNoisePassCount++;
         
         // Mark tile as occupied
-        const tileKey = `${gridX},${gridZ}`;
         occupiedTiles.add(tileKey);
         
         // Pick rock size based on REGION not individual tile (creates cohesive clusters)
@@ -1166,6 +1480,7 @@ let pov2 = 240;
           gridX: gridX, // For resource depletion tracking
           gridZ: gridZ
         });
+        pendingResourceTiles.add(tileKey);
         rockCount++;
       }
     });
@@ -1179,6 +1494,12 @@ let pov2 = 240;
       const localZ = Math.floor(index / (chunk.endX - chunk.startX));
       const gridX = chunk.startX + localX;
       const gridZ = chunk.startZ + localZ;
+      
+      // Bounds check: ensure grid coordinates are within field boundaries
+      if (gridX < 0 || gridX >= field.width || gridZ < 0 || gridZ >= field.height) {
+        return; // Skip tiles outside field bounds
+      }
+      
       const terrainIndex = gridZ * field.width + gridX;
       const terrainType = field.terrainTypes[terrainIndex];
       
@@ -1192,16 +1513,112 @@ let pov2 = 240;
       const tileKey = `${gridX},${gridZ}`;
       if (occupiedTiles.has(tileKey)) return; // Skip occupied tiles
       
+      // Skip trees near camps - they should grow further out
+      const worldX = gridX * TILE_SIZE;
+      const worldZ = gridZ * TILE_SIZE;
+      if (window.gameBuildings) {
+        let tooCloseToCamp = false;
+        for (const building of window.gameBuildings) {
+          if (building.type === 'camp' && building.position) {
+            const campWorkRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 5;
+            const exclusionRadius = (campWorkRadius + 3) * TILE_SIZE; // Work radius + 3 extra tiles buffer
+            const dx = worldX - building.position.x;
+            const dz = worldZ - building.position.z;
+            const distanceSq = dx * dx + dz * dz;
+            if (distanceSq < exclusionRadius * exclusionRadius) {
+              tooCloseToCamp = true;
+              break;
+            }
+          }
+        }
+        if (tooCloseToCamp) return; // Skip placing trees near camps
+      }
+      
       // Simple per-tile hash for tree placement (~20% of grass tiles get trees)
       const treeRoll = tileHash(gridX, gridZ, fieldSeed + 3000);
       
       // Place trees on ~20% of grass tiles (but only on unoccupied tiles)
       if (treeRoll < 0.20) {
+        // Check if this tile was depleted - if so, try to respawn further from camp
+        const depletionInfo = depletedResourceTiles.get(tileKey);
+        if (depletionInfo && depletionInfo.isTree) {
+          // Tree was felled here - respawn it further from camp
+          const respawnPos = getRespawnPosition(depletionInfo.originalGridX, depletionInfo.originalGridZ);
+          if (respawnPos) {
+            // Use the respawn position instead
+            const respawnKey = `${respawnPos.gridX},${respawnPos.gridZ}`;
+            
+            // Skip if respawn position is already occupied or depleted
+            if (occupiedTiles.has(respawnKey) || depletedResourceTiles.has(respawnKey) || 
+                resourceModelRegistry.has(respawnKey) || pendingResourceTiles.has(respawnKey)) {
+              return; // Can't respawn here
+            }
+            
+            // Check terrain at respawn position
+            const respawnTerrainIndex = respawnPos.gridZ * field.width + respawnPos.gridX;
+            if (respawnTerrainIndex >= 0 && respawnTerrainIndex < field.terrainTypes.length) {
+              const respawnTerrainType = field.terrainTypes[respawnTerrainIndex];
+              if (respawnTerrainType === 3) { // Grass - good for trees
+                // Mark respawn position as occupied
+                occupiedTiles.add(respawnKey);
+                
+                // Get height variation for respawn position
+                const tileHeight = field.getHeightVariation ? field.getHeightVariation(respawnPos.gridX, respawnPos.gridZ) : 0;
+                
+                // Generate offset for respawn position
+                let hash = fieldSeed + respawnPos.gridX * 13579 + respawnPos.gridZ * 24680;
+                hash = (hash * 1664525 + 1013904223) >>> 0;
+                const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                hash = (hash * 1664525 + 1013904223) >>> 0;
+                const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                
+                const position = new BABYLON.Vector3(respawnPos.worldX + offsetX, tileHeight, respawnPos.worldZ + offsetZ);
+                hash = (hash * 1664525 + 1013904223) >>> 0;
+                const rotation = ((hash % 628) / 100);
+                
+                // Queue the respawned tree model
+                initBillboardAtlas(scene);
+                modelLoadQueue.push({
+                  modelPath: "assets/models/trees.glb",
+                  scene: scene,
+                  position: position,
+                  rotation: rotation,
+                  scale: 0.9,
+                  chunk: chunk,
+                  models: models,
+                  modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 3, lodDistance: 170 },
+                  gridX: respawnPos.gridX,
+                  gridZ: respawnPos.gridZ
+                });
+                pendingResourceTiles.add(respawnKey);
+                treeCount++;
+                
+                // Remove from depleted list since we've respawned it
+                depletedResourceTiles.delete(tileKey);
+                
+                return; // Done respawning
+              }
+            }
+          }
+          // If respawn failed, skip this tile (don't place tree at original location)
+          return;
+        } else if (depletedResourceTiles.has(tileKey)) {
+          // Other depleted resource (rock), don't recreate
+          return;
+        }
+        
+        // Skip if a tree already exists at this grid position (prevents duplicates across chunks)
+        if (resourceModelRegistry.has(tileKey)) {
+          return; // Tree already placed here
+        }
+        
+        // Skip if a tree for this tile is already loading
+        if (pendingResourceTiles.has(tileKey)) {
+          return;
+        }
+        
         // Mark tile as occupied
         occupiedTiles.add(tileKey);
-        
-        const worldX = gridX * TILE_SIZE;
-        const worldZ = gridZ * TILE_SIZE;
         
         // Get height variation for this tile position (rolling hills)
         const tileHeight = field.getHeightVariation ? field.getHeightVariation(gridX, gridZ) : 0;
@@ -1230,6 +1647,7 @@ let pov2 = 240;
           gridX: gridX, // For resource depletion tracking
           gridZ: gridZ
         });
+        pendingResourceTiles.add(tileKey);
         treeCount++;
       }
     });
@@ -1891,15 +2309,42 @@ let pov2 = 240;
       // Emergency cleanup - try to identify and fix the problematic mesh
       if (gfx.scene.meshes) {
         console.log('Emergency mesh cleanup - checking all meshes...');
+        // Filter out invalid meshes first
+        const validMeshes = [];
+        const invalidMeshes = [];
+        
         gfx.scene.meshes.forEach((mesh, index) => {
           try {
-            // Temporarily disable mesh to isolate the problem
-            mesh.setEnabled(false);
-            console.log(`Disabled mesh ${index}: ${mesh.name || 'unnamed'}`);
+            // Check if it's a valid mesh with isEnabled method
+            if (mesh && typeof mesh.setEnabled === 'function') {
+              validMeshes.push(mesh);
+              // Temporarily disable mesh to isolate the problem
+              mesh.setEnabled(false);
+              console.log(`Disabled mesh ${index}: ${mesh.name || 'unnamed'}`);
+            } else {
+              invalidMeshes.push({ index, mesh, name: mesh?.name || 'unnamed' });
+              console.warn(`Invalid mesh at index ${index}:`, mesh);
+            }
           } catch (disableError) {
             console.warn(`Could not disable mesh ${index}:`, disableError);
+            invalidMeshes.push({ index, mesh, error: disableError });
           }
         });
+        
+        // Remove invalid meshes from scene
+        invalidMeshes.forEach(({ mesh }) => {
+          try {
+            if (mesh && gfx.scene) {
+              gfx.scene.removeMesh(mesh, true);
+            }
+          } catch (e) {
+            console.warn('Error removing invalid mesh:', e);
+          }
+        });
+        
+        if (invalidMeshes.length > 0) {
+          console.warn(`Removed ${invalidMeshes.length} invalid meshes from scene`);
+        }
       }
       
       // Try rendering without problematic elements
@@ -2404,6 +2849,11 @@ let pov2 = 240;
       fx.init(scene);
       fx.setupBarrelLauncher();
       // console.log('FX system ready - press T for explosions!');
+      
+      // Initialize projectiles system
+      if (window.projectiles && window.projectiles.init) {
+        window.projectiles.init(scene);
+      }
     } else {
       // Fallback to basic lighting if lighting.js not loaded
       scene.ambientColor = new ColorHex('#696969');
@@ -2995,6 +3445,56 @@ let pov2 = 240;
   // Clear chunk queue when switching fields
   gfx.clearChunkQueue = function() {
     chunkQueue.length = 0;
+  };
+  
+  // Clear resource registries when starting a new match
+  gfx.clearResourceRegistries = function() {
+    // Dispose all registered resource meshes before clearing
+    let disposedCount = 0;
+    for (const [key, mesh] of resourceModelRegistry.entries()) {
+      if (mesh && mesh.setEnabled) {
+        mesh.setEnabled(false);
+        disposedCount++;
+      }
+    }
+    
+    resourceModelRegistry.clear();
+    pendingResourceTiles.clear();
+    depletedResourceTiles.clear();
+    console.log(`🗑️ Cleared resource registries (${disposedCount} trees disabled)`);
+  };
+  
+  // Debug helper to check tree state at a grid position
+  window.debugTreeAt = function(gridX, gridZ) {
+    const key = `${gridX},${gridZ}`;
+    console.log(`🔍 Tree at (${gridX}, ${gridZ}):`);
+    console.log('  Registry:', resourceModelRegistry.has(key) ? 'EXISTS' : 'MISSING');
+    console.log('  Depleted:', depletedResourceTiles.has(key) ? 'YES' : 'NO');
+    
+    if (resourceModelRegistry.has(key)) {
+      const mesh = resourceModelRegistry.get(key);
+      console.log('  Position:', mesh.getAbsolutePosition());
+      console.log('  Enabled:', mesh.isEnabled());
+      console.log('  Visible:', mesh.isVisible);
+      console.log('  Children:', mesh.getChildren().length);
+      mesh.getChildren().forEach((child, i) => {
+        console.log(`    Child ${i}:`, child.name, 'enabled:', child.isEnabled());
+      });
+    }
+    
+    // Check if there are nearby trees
+    console.log('  Nearby trees:');
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        const nearKey = `${gridX + dx},${gridZ + dz}`;
+        if (resourceModelRegistry.has(nearKey)) {
+          const nearMesh = resourceModelRegistry.get(nearKey);
+          const pos = nearMesh.getAbsolutePosition();
+          console.log(`    (${gridX + dx}, ${gridZ + dz}): enabled=${nearMesh.isEnabled()}, pos=(${pos.x.toFixed(1)}, ${pos.z.toFixed(1)})`);
+        }
+      }
+    }
   };
   
   // Add showWorldAxis function

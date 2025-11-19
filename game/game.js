@@ -349,6 +349,11 @@ window.gameLoop = {
       window.updateUnitMeshes();
     }
     
+    // Update projectiles system
+    if (window.projectiles && window.projectiles.update) {
+      window.projectiles.update(this.deltaTime);
+    }
+    
     // Update visual position
     if (window.player && window.player.updatePosition) {
       window.player.updatePosition();

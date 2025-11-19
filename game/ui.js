@@ -69,9 +69,21 @@ function getRandomColor() {
     loadIcon('trophy', 'trophy_b');
 
 
-    let pName = getRandomName();
-    let pColor = getRandomColor();
-
+    // Load saved player data from localStorage
+    let pName = localStorage.getItem('playerName') || getRandomName();
+    let pColor = localStorage.getItem('playerColor') || getRandomColor();
+    let savedPlayerId = localStorage.getItem('playerId');
+    
+    // Generate player ID if not saved
+    if (!savedPlayerId) {
+      // Generate a unique ID (8 random hex characters)
+      savedPlayerId = 'player-' + Math.random().toString(16).substring(2, 10);
+      localStorage.setItem('playerId', savedPlayerId);
+    }
+    
+    // Store player ID globally
+    window.currentPlayerId = savedPlayerId;
+    
     // Store name and color globally so the player can access it
     window.currentPlayerName = pName;
     window.currentPlayerColor = pColor;
@@ -80,6 +92,9 @@ function getRandomColor() {
     if (window.player) {
       window.player.name = pName;
       window.player.color = pColor;
+      if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+        window.player.id = savedPlayerId;
+      }
     }
 
     const playerName = document.getElementById('player_b');
@@ -89,6 +104,48 @@ function getRandomColor() {
     const playerTitle = document.getElementById('player_menu_title');
     playerTitle.innerHTML = pName;
     playerTitle.style.color = pColor;
+    
+    // Set up name input field
+    const nameInput = document.getElementById('nameInput');
+    if (nameInput) {
+      // Set initial name input value
+      nameInput.value = pName;
+      
+      // Listen for name changes
+      nameInput.addEventListener('input', function(e) {
+        const newName = e.target.value.trim() || pName; // Use original name if empty
+        
+        // Update both player name locations
+        if (playerName) {
+          playerName.innerHTML = newName;
+        }
+        if (playerTitle) {
+          playerTitle.innerHTML = newName;
+        }
+        
+        // Update the player's name property
+        if (window.player) {
+          window.player.name = newName;
+        }
+        
+        // Store the new name globally
+        window.currentPlayerName = newName;
+        
+        // Save to localStorage
+        try {
+          localStorage.setItem('playerName', newName);
+        } catch (e) {
+          console.warn('Failed to save player name to localStorage:', e);
+        }
+        
+        // Update lobby if we're in one
+        if (window.Lobby && window.Lobby.currentLobby) {
+          window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
+        }
+        
+        // console.log('Player name updated to:', newName);
+      });
+    }
     
     // Set up color picker event listener
     const colorPicker = document.getElementById('colorPicker');
@@ -124,8 +181,20 @@ function getRandomColor() {
           }
         }
         
-        // Store the new color for persistence (optional)
+        // Store the new color globally
         window.currentPlayerColor = newColor;
+        
+        // Save to localStorage
+        try {
+          localStorage.setItem('playerColor', newColor);
+        } catch (e) {
+          console.warn('Failed to save player color to localStorage:', e);
+        }
+        
+        // Update lobby if we're in one
+        if (window.Lobby && window.Lobby.currentLobby) {
+          window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
+        }
         
         // console.log('Player color updated to:', newColor);
       });
@@ -963,7 +1032,7 @@ function getRandomColor() {
           id: opponentId,
           gameType: gameType,
           color: getOpponentColorForGameType(gameType),
-          startingResources: {food: 100, wood: 50, stone: 25, magic: 10}
+          startingResources: {food: 100, wood: 100, stone: 25, magic: 5}
         });
       }
       players.push(window.opponent);
@@ -1291,7 +1360,7 @@ function getRandomColor() {
       const groundForward = new BABYLON.Vector3(camForward.x, 0, camForward.z).normalize();
 
       // Base pan sensitivity (matches existing touch/RMB)
-      const basePanSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 1.2; // Slightly faster for keyboard
+      const basePanSens = (window.touch && touch.getConfig ? (touch.getConfig().panSensitivity || 5) : 5) * 0.6; // Half speed for keyboard
       const zoomFactor = Math.max(0.3, Math.min(2.0, gfx.camera.radius / 80)); // Adjust sensitivity based on zoom
       const panSens = basePanSens * zoomFactor;
 
@@ -1328,10 +1397,10 @@ function getRandomColor() {
         const wx = (groundRight.x * panX + groundForward.x * panZ) * panSens;
         const wz = (groundRight.z * panX + groundForward.z * panZ) * panSens;
 
-        // FIXED: Increased multiplier from 0.016 to 0.5 for much faster response
+        // FIXED: Increased multiplier from 0.016 to 0.25 for half speed
         // This matches the direct pixel-to-world conversion speed of RMB/touch panning
-        window.cameraVelocity.panX += wx * 0.5;
-        window.cameraVelocity.panZ += wz * 0.5;
+        window.cameraVelocity.panX += wx * 0.25;
+        window.cameraVelocity.panZ += wz * 0.25;
         
         // FIXED: Increased max velocity cap from 2.0 to 8.0 for more aggressive movement
         const maxVel = panSens * 8.0;
@@ -1364,9 +1433,9 @@ function getRandomColor() {
         const wx = (groundRight.x * panX + groundForward.x * panZ) * panSens;
         const wz = (groundRight.z * panX + groundForward.z * panZ) * panSens;
 
-        // FIXED: Same multiplier increase for arrow keys
-        window.cameraVelocity.panX += wx * 0.5;
-        window.cameraVelocity.panZ += wz * 0.5;
+        // FIXED: Same multiplier for arrow keys (half speed)
+        window.cameraVelocity.panX += wx * 0.25;
+        window.cameraVelocity.panZ += wz * 0.25;
 
         // FIXED: Same max velocity increase
         const maxVel = panSens * 8.0;
@@ -1437,8 +1506,8 @@ function getRandomColor() {
         const wx = (groundRight.x * panX + groundForward.x * panZ) * panSens;
         const wz = (groundRight.z * panX + groundForward.z * panZ) * panSens;
         
-        window.cameraVelocity.panX += wx * 0.5;
-        window.cameraVelocity.panZ += wz * 0.5;
+        window.cameraVelocity.panX += wx * 0.25;
+        window.cameraVelocity.panZ += wz * 0.25;
         
         const maxVel = panSens * 8.0;
         window.cameraVelocity.panX = Math.max(-maxVel, Math.min(maxVel, window.cameraVelocity.panX));
@@ -2060,35 +2129,34 @@ function getRandomColor() {
   // - Right-click + scroll wheel: Zoom camera in/out
   // - Shift + scroll wheel: Zoom camera in/out (alternative method)
   ui.handleWheel = function(e) {
+    // Check if mouse is over any scrollable menu (settings or lobbies)
+    const mouseX = e.clientX;
+    const mouseY = e.clientY;
+    
+    // Get all menu_menu elements (settings and lobbies)
+    const scrollableMenus = document.querySelectorAll('.menu_menu');
+    for (let menu of scrollableMenus) {
+      // Check if menu is visible
+      if (menu.style.display !== 'none' && menu.offsetParent !== null) {
+        const menuRect = menu.getBoundingClientRect();
+        const isOverMenu = mouseX >= menuRect.left && 
+                          mouseX <= menuRect.right && 
+                          mouseY >= menuRect.top && 
+                          mouseY <= menuRect.bottom;
+        
+        if (isOverMenu) {
+          // Handle scrolling within the menu
+          e.preventDefault();
+          const delta = e.deltaY;
+          menu.scrollTop += delta * 0.5; // Adjust scroll speed as needed
+          return; // Don't process camera rotation
+        }
+      }
+    }
+    
     // Only handle wheel events when we have a camera
     if (!gfx.camera || !gfx.camera.alpha) {
       return;
-    }
-    
-    // Check if mouse is over the settings menu
-    const settingsMenu = document.getElementById('settings_menu');
-    const isSettingsMenuVisible = settingsMenu && settingsMenu.style.display !== 'none';
-    
-    if (isSettingsMenuVisible) {
-      // Get mouse position
-      const rect = gfx.canvas.getBoundingClientRect();
-      const mouseX = e.clientX;
-      const mouseY = e.clientY;
-      
-      // Check if mouse is over the settings menu
-      const menuRect = settingsMenu.getBoundingClientRect();
-      const isOverSettingsMenu = mouseX >= menuRect.left && 
-                                mouseX <= menuRect.right && 
-                                mouseY >= menuRect.top && 
-                                mouseY <= menuRect.bottom;
-      
-      if (isOverSettingsMenu) {
-        // Handle scrolling within the settings menu
-        e.preventDefault();
-        const delta = e.deltaY;
-        settingsMenu.scrollTop += delta * 0.5; // Adjust scroll speed as needed
-        return; // Don't process camera rotation
-      }
     }
     
     cameraHasBeenNudged = true;

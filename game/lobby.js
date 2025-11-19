@@ -192,7 +192,7 @@ const Lobby = {
       name: 'Teams',
       maxPlayers: 4,
       lobbyKey: 'aether-teams-2v2',
-      defaultFieldSize: 'large'
+      defaultFieldSize: 'medium'
     }
   },
   
@@ -273,9 +273,9 @@ const Lobby = {
     if (window.player && window.player.resources) {
       window.player.resources = {
         food: 100,
-        wood: 50,
+        wood: 100,
         stone: 25,
-        magic: 10
+        magic: 5
       };
     }
     
@@ -313,6 +313,11 @@ const Lobby = {
       window.gfx.clearLODModels();
     }
     // console.log('✅ LOD models cleared');
+    
+    // Clear resource registries (tree/rock placement tracking)
+    if (window.gfx && window.gfx.clearResourceRegistries) {
+      window.gfx.clearResourceRegistries();
+    }
     
     // Don't touch field chunks - new Field() will replace the old one completely
     // console.log('🗺️ Field will be replaced with new seeded field');
@@ -425,7 +430,7 @@ const Lobby = {
       id: aiId,
       name: 'AI Opponent',
       color: '#0066cc',
-      startingResources: { food: 120, wood: 80, stone: 40, magic: 20 },
+      startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
       agora: spawn,
       basePosition: { x: spawn.x, z: spawn.y },
       difficulty: 'normal',
@@ -1955,9 +1960,32 @@ const Lobby = {
       return;
     }
     
-    const lobby = this.availableLobbies[gameType]?.find(l => l.id === this.currentLobbyId);
+    // Use currentGameType if gameType not provided or doesn't match
+    const actualGameType = gameType || this.currentGameType;
+    
+    // Try to use currentLobby first (most reliable)
+    let lobby = this.currentLobby;
+    
+    // If currentLobby doesn't exist or doesn't match, try to find it in availableLobbies
+    if (!lobby || (this.currentLobbyId && lobby.id !== this.currentLobbyId)) {
+      lobby = this.availableLobbies[actualGameType]?.find(l => l.id === this.currentLobbyId);
+    }
+    
+    // If still not found, try any lobby in the gameType
+    if (!lobby && this.availableLobbies[actualGameType]?.length > 0) {
+      lobby = this.availableLobbies[actualGameType][0];
+      console.warn('⚠️ Using first available lobby for gameType:', actualGameType);
+    }
+    
     if (!lobby) {
-      console.error('❌ Lobby not found!');
+      console.error('❌ Lobby not found!', {
+        gameType: actualGameType,
+        currentGameType: this.currentGameType,
+        currentLobbyId: this.currentLobbyId,
+        hasCurrentLobby: !!this.currentLobby,
+        availableLobbies: Object.keys(this.availableLobbies || {}),
+        lobbiesForType: this.availableLobbies[actualGameType]?.length || 0
+      });
       return;
     }
     
@@ -1967,7 +1995,7 @@ const Lobby = {
     if (window.net && window.net.p2p && window.net.p2p.sendData) {
       const startMessage = {
         type: 'start_game',
-        gameType: gameType,
+        gameType: actualGameType,
         settings: lobby.settings,
         timestamp: Date.now()
       };
@@ -1977,7 +2005,7 @@ const Lobby = {
     }
     
     // Start the match for host
-    this.startMultiplayerMatchWithSettings(gameType, lobby.settings);
+    this.startMultiplayerMatchWithSettings(actualGameType, lobby.settings);
   },
   
   // Start multiplayer match with specific settings
@@ -2865,7 +2893,7 @@ const Lobby = {
           name: playerName,
           gameType: gameType,
           color: playerColor,
-          startingResources: { food: 100, wood: 50, stone: 25, magic: 10 },
+          startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
           agora: spawnPos,
           basePosition: { x: spawnPos.x, z: spawnPos.y },
           isAI: false
@@ -2897,7 +2925,7 @@ const Lobby = {
                 id: aiId,
                 name: aiName,
                 color: aiColor,
-                startingResources: { food: 120, wood: 80, stone: 40, magic: 20 },
+                startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
                 agora: aiSpawn,
                 basePosition: { x: aiSpawn.x, z: aiSpawn.y },
                 difficulty: 'normal',
@@ -2907,7 +2935,7 @@ const Lobby = {
                 id: aiId,
                 name: aiName,
                 color: aiColor,
-                startingResources: { food: 120, wood: 80, stone: 40, magic: 20 },
+                startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
                 agora: aiSpawn,
                 basePosition: { x: aiSpawn.x, z: aiSpawn.y },
                 isAI: true

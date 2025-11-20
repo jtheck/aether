@@ -1,7 +1,8 @@
 
 
 // Multiplayer interpolation settings
-const REMOTE_UNIT_INTERPOLATION_SPEED = 0.3; // Smooth interpolation for remote units (network-driven movement only)
+const REMOTE_UNIT_INTERPOLATION_SPEED = 0.15; // Smooth interpolation for remote units (15% per frame = smooth but responsive)
+const LOCAL_UNIT_INTERPOLATION_SPEED = 0.5; // Faster interpolation for local units (50% per frame = nearly instant)
 
 // Unit type definitions - all unit attributes in one place
 const UnitTypes = {
@@ -225,8 +226,10 @@ function Unit(unitType, position, options = {}) {
     this.lastUpdateFrame = 0;
     
     // Visual interpolation for smooth remote player movement
-    this.visualPosition = null; // Current visual position (for interpolation)
+    // Initialize visual position to match physics position
+    this.visualPosition = position ? { x: position.x, y: position.y || 0, z: position.z } : null;
     this.interpolationSpeed = REMOTE_UNIT_INTERPOLATION_SPEED;
+    this.isLocalUnit = false; // Will be set based on ownership
     
     // Physics body
     this.pb = new PBody();
@@ -369,8 +372,17 @@ function updateUnitDistances() {
             if (unit.mesh) {
                 // GAMEPLAY UNITS (player/AI) - ALWAYS VISIBLE for strategic gameplay
                 // You need to see where your armies are at all zoom levels!
+                // CRITICAL: Always enable mesh for player/AI units, even if stealthed (stealth just reduces visibility/alpha)
                 if (unit.owner !== 'neutral') {
                     unit.mesh.setEnabled(true);
+                    
+                    // CRITICAL: Ensure stealthed units are still visible (just semi-transparent)
+                    // If a unit has isStealthed flag but mesh visibility is too low, restore it
+                    // This fixes the issue where remote monks become invisible
+                    if (unit.isStealthed && unit.mesh.visibility !== undefined && unit.mesh.visibility < 0.3) {
+                        // Ensure stealth visibility is at least 0.4 (semi-transparent, not invisible)
+                        unit.mesh.visibility = Math.max(0.4, unit.mesh.visibility);
+                    }
                 }
                 // DECORATIVE UNITS (neutral wildlife) - Aggressive culling for performance
                 else if (unit.owner === 'neutral') {
@@ -440,6 +452,14 @@ function addUnitParticleEffects(unit) {
 const gameUnits = []; // All units combined (for rendering)
 const neutralUnits = []; // Wild/neutral units only
 
+// Counter for menu scene unit IDs (ensures unique fake IDs)
+let menuUnitCounter = 0;
+
+// Helper function to check if a unit is a menu scene unit (has fake ID)
+function isMenuSceneUnit(unit) {
+    return unit && unit.id && unit.id.startsWith('menu_unit_');
+}
+
 // Sprinkle units across the terrain
 function sprinkleUnits() {
     // MULTIPLAYER: Skip neutral unit spawning to prevent desync
@@ -448,6 +468,9 @@ function sprinkleUnits() {
         // console.log('🚫 Skipping neutral unit spawning in multiplayer (prevents desync)');
         return;
     }
+    
+    // Reset counter each time we sprinkle (fresh menu scene)
+    menuUnitCounter = 0;
     
     // console.log("Sprinkling units across the terrain...");
     
@@ -473,10 +496,15 @@ function sprinkleUnits() {
             const offsetX = (Math.random() - 0.5) * TILE_SIZE * 1.5;
             const offsetZ = (Math.random() - 0.5) * TILE_SIZE * 1.5;
             
+            // Generate explicit fake ID for menu scene unit (prevents conflicts with real units)
+            const fakeId = `menu_unit_${menuUnitCounter++}`;
+            
             const unit = new Unit(randomType, {
                 x: x + offsetX, 
                 y: 0, 
                 z: z + offsetZ
+            }, {
+                id: fakeId  // Explicit fake ID for menu scene units
             });
             
             // Skip if unit type doesn't exist (was commented out)
@@ -498,6 +526,17 @@ function sprinkleUnits() {
             // Add to neutral units AND gameUnits for rendering
             neutralUnits.push(unit);
             gameUnits.push(unit);
+            
+            // Assign wander behavior for menu scene units (they'll wander around)
+            if (window.behaviorManager && unit.pb && unit.pb.state && unit.pb.state.loc) {
+                // Use a larger wander area and longer duration for menu scene units
+                window.behaviorManager.setBehavior(unit, 'wander', {
+                    wanderArea: { x: 12, z: 12 }, // 12x12 unit area around spawn point
+                    wanderDuration: 15000 + Math.random() * 10000, // 15-25 seconds
+                    microMoveChance: 0.25, // 25% chance per second
+                    wanderSpeed: (unit.speed || 20) * 1.2 // 120% of unit's base speed
+                });
+            }
         }
     }
     
@@ -555,6 +594,15 @@ function spawnUnitModels(scene) {
                 
                 // Initial position from physics body
                 if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+                    // Initialize visual position to match physics position
+                    if (!unit.visualPosition) {
+                        unit.visualPosition = {
+                            x: unit.pb.state.loc.x,
+                            y: Number.isFinite(unit.pb.state.loc.y) ? unit.pb.state.loc.y : 0,
+                            z: unit.pb.state.loc.z
+                        };
+                    }
+                    
                     unit.mesh.position.x = unit.pb.state.loc.x;
                     unit.mesh.position.y = Number.isFinite(unit.pb.state.loc.y) ? unit.pb.state.loc.y : 0;
                     unit.mesh.position.z = unit.pb.state.loc.z;
@@ -563,6 +611,9 @@ function spawnUnitModels(scene) {
                     if (!Number.isFinite(unit.pb.state.loc.y)) {
                         console.warn(`⚠️ Fixed NaN Y position for ${unit.name}, setting to 0`);
                         unit.pb.state.loc.y = 0;
+                        if (unit.visualPosition) {
+                            unit.visualPosition.y = 0;
+                        }
                     }
                     // console.log(`📍 ${unit.name} positioned at (${unit.mesh.position.x.toFixed(1)}, ${unit.mesh.position.y.toFixed(1)}, ${unit.mesh.position.z.toFixed(1)}) with scale ${unit.scale}`);
                 }
@@ -815,22 +866,34 @@ function updateUnits(deltaTime) {
         // CRITICAL: Apply smooth position correction for P2P sync
         // If unit has a position correction target, lerp towards it gradually
         // This prevents jarring snaps when move commands include authoritative positions
+        // Position correction modifies physics body, visual interpolation will smooth it out
         if (unit._positionCorrection) {
           const correction = unit._positionCorrection;
           const currentX = unit.pb.state.loc.x;
           const currentZ = unit.pb.state.loc.z;
           
-          // Lerp towards authoritative position
-          unit.pb.state.loc.x += (correction.targetX - currentX) * correction.strength;
-          unit.pb.state.loc.z += (correction.targetZ - currentZ) * correction.strength;
+          // Lerp towards authoritative position (adaptive strength based on error)
+          const errorX = correction.targetX - currentX;
+          const errorZ = correction.targetZ - currentZ;
+          const errorDistance = Math.sqrt(errorX * errorX + errorZ * errorZ);
           
-          // Check if we're close enough to stop correcting (within 0.2 units)
-          const remainingErrorX = correction.targetX - unit.pb.state.loc.x;
-          const remainingErrorZ = correction.targetZ - unit.pb.state.loc.z;
-          const remainingError = Math.sqrt(remainingErrorX * remainingErrorX + remainingErrorZ * remainingErrorZ);
+          // Adaptive correction: faster for larger errors, slower for small errors
+          // This prevents overshooting and oscillation
+          const adaptiveStrength = Math.min(correction.strength * (1 + errorDistance * 0.1), 0.5);
           
-          if (remainingError < 0.2) {
-            // Close enough - remove correction
+          unit.pb.state.loc.x += errorX * adaptiveStrength;
+          unit.pb.state.loc.z += errorZ * adaptiveStrength;
+          
+          // Check if we're close enough to stop correcting (within 0.15 units)
+          const remainingError = Math.sqrt(
+            (correction.targetX - unit.pb.state.loc.x) * (correction.targetX - unit.pb.state.loc.x) +
+            (correction.targetZ - unit.pb.state.loc.z) * (correction.targetZ - unit.pb.state.loc.z)
+          );
+          
+          if (remainingError < 0.15) {
+            // Close enough - snap to exact position and remove correction
+            unit.pb.state.loc.x = correction.targetX;
+            unit.pb.state.loc.z = correction.targetZ;
             delete unit._positionCorrection;
           }
         }
@@ -839,8 +902,22 @@ function updateUnits(deltaTime) {
         unit.pb.state.rot.y += unit.pb.rotVel.y * deltaTime;
         
         // Apply rotation damping (units slow their turning)
-        // Higher damping = less springy/oscillation, more responsive turning
-        unit.pb.rotVel.y *= 0.85; // 15% damping per physics step (was 0.95 = 5%)
+        // CRITICAL: Only apply strong damping when unit is NOT actively turning
+        // If unit has an active movement behavior, let them turn freely while moving
+        // This allows units to turn while walking instead of pausing to turn first
+        const hasActiveBehaviorForRotation = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+        const behaviorTypeForRotation = hasActiveBehaviorForRotation ? hasActiveBehaviorForRotation.constructor?.name : null;
+        const isMovementBehavior = behaviorTypeForRotation === 'WalkBehavior' || behaviorTypeForRotation === 'RunBehavior';
+        const hasRotationImpulse = unit.pb.rotImp && Math.abs(unit.pb.rotImp.y) > 0.001;
+        
+        if (isMovementBehavior || hasRotationImpulse) {
+            // Unit is actively moving/turning - slightly more damping to reduce springiness
+            // Increased from 0.98 to 0.95 (5% damping) to reduce oscillation without making it sluggish
+            unit.pb.rotVel.y *= 0.95; // 5% damping - less springy but still smooth turning while moving
+        } else {
+            // Unit is idle - normal damping to prevent spinning
+            unit.pb.rotVel.y *= 0.9; // 10% damping per physics step - snappier stopping
+        }
         
         // Check if unit is standing on an agora platform
         // NOTE: Collision detection is handled by the agora model's hitbox mesh (more efficient)
@@ -925,9 +1002,19 @@ function updateUnits(deltaTime) {
         // CRITICAL: Damping is per physics step, not per frame
         // With physics steps capped to 1 per frame in multiplayer, this ensures deterministic damping
         // CRITICAL: Round velocity after damping to prevent floating-point drift accumulation
+        // CRITICAL: NEVER apply damping if unit has active movement behavior
+        // Active behaviors (walk, run, work) set velocity each frame - damping would fight them and cause pause
+        const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+        const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
+        const isIdleBehavior = !hasActiveBehavior || behaviorType === 'LingerBehavior';
         const damping = 0.96; // 4% friction per physics step (reduced for smoother movement)
-        unit.pb.state.vel.x = Math.round((unit.pb.state.vel.x * damping) * 1000) / 1000;
-        unit.pb.state.vel.z = Math.round((unit.pb.state.vel.z * damping) * 1000) / 1000;
+        
+        if (isIdleBehavior) {
+            // Only apply damping when unit is truly idle (no active movement behavior)
+            // This allows units to slow down naturally when not commanded
+            unit.pb.state.vel.x = Math.round((unit.pb.state.vel.x * damping) * 1000) / 1000;
+            unit.pb.state.vel.z = Math.round((unit.pb.state.vel.z * damping) * 1000) / 1000;
+        }
         // Keep Y velocity at 0 (terrain height is handled directly, not via velocity)
         unit.pb.state.vel.y = 0;
         
@@ -1188,22 +1275,73 @@ function updateUnitMeshes() {
             // Check if unit has active behavior - if so, skip animation system
             const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
             
-            // Visual follows physics - position
-            // Since behaviors are deterministic in P2P, all units simulate identically on both clients
+            // Visual follows physics - position with smooth interpolation for remote units
+            // Local units (owned by us) follow physics directly for instant responsiveness
+            // Remote units (owned by others) use visual interpolation to smooth network updates
             if (unit.pb.state.loc) {
-                unit.mesh.position.x = unit.pb.state.loc.x;
-                unit.mesh.position.z = unit.pb.state.loc.z;
+                // Determine if this is a local unit (owned by us) or remote unit (owned by other player)
+                const localPlayerId = window.currentMatch?.localPlayerId || window.player?.id;
+                const normalizedLocalId = localPlayerId?.slice ? localPlayerId.slice(-6) : localPlayerId;
+                const unitOwnerId = unit.owner?.slice ? unit.owner.slice(-6) : unit.owner;
+                const isLocalUnit = normalizedLocalId && unitOwnerId === normalizedLocalId;
+                
+                // Initialize visual position if needed
+                if (!unit.visualPosition) {
+                    unit.visualPosition = {
+                        x: unit.pb.state.loc.x,
+                        y: unit.pb.state.loc.y,
+                        z: unit.pb.state.loc.z
+                    };
+                }
+                
+                // Choose interpolation speed based on unit ownership
+                const interpolationSpeed = isLocalUnit ? LOCAL_UNIT_INTERPOLATION_SPEED : REMOTE_UNIT_INTERPOLATION_SPEED;
+                
+                // Smoothly interpolate visual position towards physics position
+                const targetX = unit.pb.state.loc.x;
+                const targetZ = unit.pb.state.loc.z;
+                const targetY = unit.pb.state.loc.y;
+                
+                // Calculate interpolation
+                const dx = targetX - unit.visualPosition.x;
+                const dz = targetZ - unit.visualPosition.z;
+                const dy = targetY - unit.visualPosition.y;
+                
+                // Apply interpolation
+                unit.visualPosition.x += dx * interpolationSpeed;
+                unit.visualPosition.z += dz * interpolationSpeed;
+                unit.visualPosition.y += dy * interpolationSpeed;
+                
+                // Update mesh position from visual position (smooth interpolation)
+                unit.mesh.position.x = unit.visualPosition.x;
+                unit.mesh.position.z = unit.visualPosition.z;
+                
+                // CRITICAL: Ensure mesh is enabled for all player/AI units (not just neutral)
+                // This fixes the issue where remote monks become invisible
+                if (unit.owner !== 'neutral' && unit.mesh && typeof unit.mesh.setEnabled === 'function') {
+                    unit.mesh.setEnabled(true);
+                }
+                
+                // CRITICAL: Ensure stealthed units are still visible (just semi-transparent)
+                // If a unit has isStealthed flag but mesh visibility is too low, restore it
+                // This fixes the issue where remote monks become invisible
+                if (unit.isStealthed && unit.mesh && unit.mesh.visibility !== undefined && unit.mesh.visibility < 0.3) {
+                    // Ensure stealth visibility is at least 0.4 (semi-transparent, not invisible)
+                    unit.mesh.visibility = Math.max(0.4, unit.mesh.visibility);
+                }
                 
                 // Skip animation system for units with active behaviors
                 if (hasActiveBehavior) {
-                    // ALWAYS use physics Y position directly - updateUnits() handles terrain height, platforms, and arc animations
-                    // Don't manually calculate or override - just follow the physics body
-                    unit.mesh.position.y = unit.pb.state.loc.y;
+                    // ALWAYS use visual Y position - updateUnits() handles terrain height, platforms, and arc animations
+                    // Visual position smoothly follows physics Y position
+                    unit.mesh.position.y = unit.visualPosition.y;
                 } else {
+                    // Units without behaviors: use terrain height (no bobbing/hopping)
+                    // Special cases: birds fly in circles, mushrooms breathe
+                    
                     // Flying units get altitude boost
                     if (unit.abilities && unit.abilities.includes('fly')) {
-                        // Add some flying height with slight bobbing
-                        const flyHeight = 8 + getCachedSin(currentTime * 0.002 + unit.id.charCodeAt(0)) * 1.5;
+                        const flyHeight = 8; // Fixed height, no bobbing
                         const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
                             window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
                         unit.mesh.position.y = terrainHeight + flyHeight;
@@ -1288,70 +1426,29 @@ function updateUnitMeshes() {
                             }
                         }
                     } else {
-                        // Ground units with occasional hopping
-                        let hopHeight = 0;
-                        
+                        // Ground units: use terrain height (no bobbing/hopping)
                         // Check if unit is in monk kick arc animation
                         if (unit._monkKickArc) {
                             // Use arc Y position directly (already calculated in updateUnits)
                             unit.mesh.position.y = unit.pb.state.loc.y;
                         } else {
-                            // Different behavior by unit type
+                            // Get terrain height
+                            const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
+                                window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
+                            
+                            // Special case: Mushrooms breathe (scale animation only, no position change)
                             if (unit.name.includes('Mushroom')) {
-                                // Mushrooms breathe (scale) instead of hop
                                 const breatheTimeOffset = unit.id.charCodeAt(0) * 50;
                                 const breatheCycle = Math.sin((Date.now() + breatheTimeOffset) * 0.001); // Slow breathing
                                 const scaleVariation = 1.0 + (breatheCycle * 0.08); // ±8% size variation
-                                
                                 unit.mesh.scaling.setAll(unit.scale * scaleVariation);
-                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
-                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
-                                unit.mesh.position.y = terrainHeight; // Stick to terrain
-                                
-                            } else if (unit.name.includes('Tortle')) {
-                                // Tortles don't hop - they're slow and steady, just pivot occasionally
-                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
-                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
-                                unit.mesh.position.y = terrainHeight; // Stick to terrain
-                                
-                                // Reset scaling to base scale (no breathing like mushrooms)
-                                unit.mesh.scaling.setAll(unit.scale);
-                                
-                            } else if (unit.name.includes('Villager')) {
-                                // Villagers don't hop - they're working or idle standing
-                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
-                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
-                                unit.mesh.position.y = terrainHeight; // Stick to terrain
-                                
                             } else {
-                                // Only frogs hop
-                                let hopFrequency, hopAmplitude;
-                                if (unit.name.includes('Frog')) {
-                                    // Each frog gets a unique hop frequency stretch factor
-                                    const stretchFactor = 0.7 + (unit.id.charCodeAt(2) % 100) / 100 * 0.6; // 0.7x to 1.3x speed
-                                    hopFrequency = 0.0012 * stretchFactor; // Individual hop timing!
-                                    hopAmplitude = 1.2;
-                                } else {
-                                    // Other units (if any) get rare tiny hops
-                                    hopFrequency = 0.0002;
-                                    hopAmplitude = 0.3;
-                                }
-                                
-                                // Create a pulsing hop pattern based on time and unit ID
-                                const timeOffset = unit.id.charCodeAt(0) * 100;
-                                const hopCycle = Math.sin((Date.now() + timeOffset) * hopFrequency);
-                                
-                                // Only hop when the sine wave is positive and above threshold
-                                if (hopCycle > 0.7) {
-                                    // Quick hop up and down
-                                    const hopPhase = (hopCycle - 0.7) / 0.3; // Normalize to 0-1
-                                    hopHeight = Math.sin(hopPhase * Math.PI) * hopAmplitude;
-                                }
-                                
-                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
-                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
-                                unit.mesh.position.y = terrainHeight + hopHeight;
+                                // Reset scaling to base scale for all other units
+                                unit.mesh.scaling.setAll(unit.scale);
                             }
+                            
+                            // All ground units stick to terrain (no hopping/bobbing)
+                            unit.mesh.position.y = terrainHeight;
                         }
                     }
                 }
@@ -1822,6 +1919,7 @@ if (typeof window !== 'undefined') {
     window.debugUnitRotations = debugUnitRotations;
     window.destroyUnit = destroyUnit;
     window.maybeAutoMonkKick = maybeAutoMonkKick; // Export monk kick function
+    window.isMenuSceneUnit = isMenuSceneUnit; // Export helper to identify menu scene units
     
     // LOD system exports
     window.LOD_DISTANCES = LOD_DISTANCES;

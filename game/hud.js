@@ -2093,15 +2093,26 @@
         const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight);
         const upDot = BABYLON.Vector3.Dot(toUnit, cameraUp);
         
+        // Check if unit is behind the camera (negative forward dot product)
+        // CRITICAL: Units behind camera must ALWAYS appear at bottom of minimap, regardless of distance
+        // When far behind, upDot can flip signs causing jumping - we prevent this by checking forwardDot first
+        const forwardDot = BABYLON.Vector3.Dot(toUnit, cameraForward);
+        const isBehind = forwardDot <= 0; // <= includes units directly to the side as "behind" for minimap purposes
+        
         // Map to nearest corner (corners are primary positions)
         // Find which corner this direction is closest to
         let cornerX = rightDot > 0 ? 'r' : 'l'; // right or left
-        let cornerY = upDot > 0 ? 't' : 'b'; // top or bottom
+        // CRITICAL: If unit is behind camera (forwardDot <= 0), ALWAYS force it to bottom.
+        // This prevents jumping between top/bottom when units are far behind.
+        // Only units clearly in front (forwardDot > 0) use upDot to determine top/bottom
+        let cornerY = isBehind ? 'b' : (upDot > 0 ? 't' : 'b'); // top or bottom
         let corner = `corner-${cornerY}${cornerX}`;
         
         // Determine which edge we're on based on which direction is MORE extreme
         // Compare the raw absolute dot products - higher = more extreme in that direction
+        // For units behind camera, use absolute value of upDot but ensure cornerY stays 'b'
         const absRight = Math.abs(rightDot);
+        // When behind, we still need absUp for edge spread calculations, but cornerY is already forced to 'b'
         const absUp = Math.abs(upDot);
         const totalMag = absRight + absUp;
         

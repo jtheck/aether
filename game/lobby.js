@@ -3,6 +3,9 @@ const Lobby = {
   
   // Track lobby state
   currentGameType: null,
+  
+  // Store last known lobby counts from main menu stats
+  lastKnownLobbyCounts: {},
   currentLobbyId: null,
   connectedPlayers: [],
   isHost: false,
@@ -354,7 +357,6 @@ const Lobby = {
   // Start a new match from the lobby
   // Start a 1v1 match - follows adventure mode pattern for proper initialization
   start1v1Match: function(fieldSize = 'medium', mapSeed = null) {
-    console.log('⚔️ Starting 1v1 match versus AI (local)...');
     
     const config = this.gameTypes['onevsone'];
     const resolvedFieldSize = fieldSize || (config ? config.defaultFieldSize : 'medium');
@@ -373,9 +375,6 @@ const Lobby = {
     // Ensure player instance exists
     if (!window.player) {
       window.player = new Player();
-      console.log('🆕 Created new player for 1v1');
-    } else {
-      console.log(`♻️ Reusing existing player (id: ${window.player.id || 'not set'})`);
     }
     
     // CRITICAL: Generate unique player ID for each match (like AI opponents do)
@@ -383,15 +382,12 @@ const Lobby = {
       // Generate unique ID similar to AI opponents
       const randomSuffix = Math.random().toString(36).substring(2, 8);
       window.player.id = `local-player-${randomSuffix}`;
-      console.log(`✅ Generated unique player ID: "${window.player.id}"`);
     }
     
     // Reset player state for new match
     window.player.units = [];
     window.player.buildings = [];
     window.player.selectedUnits = [];
-    
-    console.log(`🎮 Player ready: id="${window.player.id}", agora will be set to corner spawn`);
     
     // Resolve field dimensions for 1v1 (typically smaller than adventure)
     const dims = (typeof resolvedFieldSize === 'string')
@@ -446,7 +442,6 @@ const Lobby = {
     window.opponent = aiPlayer;
     
     // Regenerate field with desired seed
-    console.log(`🗺️ Regenerating field with seed ${resolvedSeed} for 1v1 match...`);
     const oldField = window.liveField;
     
     // Dispose old field before creating new one
@@ -474,8 +469,6 @@ const Lobby = {
       window.liveField.originalLoadDistance = 4;
       const newLoadDistance = Math.round(4 * currentMultiplier);
       window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
-      
-      console.log(`🗺️ New field initialized with LOD ${lodLevel}% → chunk distance: ${window.liveField.currentLoadDistance}`);
     }
     
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
@@ -498,7 +491,7 @@ const Lobby = {
       }
       
       window.gfx.camera.alpha = -2.5;
-      window.gfx.camera.beta = 0.9;
+      window.gfx.camera.beta = 1.1;
       window.gfx.camera.radius = 80;
       if (window.gfx.camera.attachControl) {
         window.gfx.camera.attachControl(window.gfx.canvas, false);
@@ -540,14 +533,9 @@ const Lobby = {
       maxPlayers: 2
     });
     
-    console.log('✅ 1v1 game instance created with players:', players.map(p => p.id));
-    
     // Ensure unit models are spawned for visual layer
-    console.log(`🎨 About to spawn unit models for ${window.gameUnits?.length || 0} units`);
-    
     if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
       window.spawnUnitModels(window.gfx.scene);
-      console.log(`✅ spawnUnitModels called - meshes will load asynchronously`);
     }
     
     // Create match controller for deterministic command handling
@@ -569,39 +557,18 @@ const Lobby = {
       window.currentMatch.startLocalTickLoop();
     }
     
+    // Announce 'in_game' status to global stats channel
+    this.announceStatusToGlobal('in_game');
+    
     // Clear any selections from menu scene
     if (window.player && window.player.clearSelection) {
       window.player.clearSelection();
-      console.log('🗑️ Cleared menu scene selections before match start');
     }
     
     // Start physics/game loop
     if (window.gameLoop && window.gameLoop.start) {
       window.gameLoop.start();
     }
-    
-    // DIAGNOSTIC: Check unit state after everything is initialized
-    setTimeout(() => {
-      console.log('🔍 POST-INIT DIAGNOSTIC (2 seconds after match start):');
-      console.log(`  - gameUnits.length: ${window.gameUnits?.length || 0}`);
-      console.log(`  - player.units.length: ${window.player?.units?.length || 0}`);
-      console.log(`  - player.id: ${window.player?.id}`);
-      
-      if (window.gameUnits && window.gameUnits.length > 0) {
-        const withMesh = window.gameUnits.filter(u => u.mesh).length;
-        const withoutMesh = window.gameUnits.filter(u => !u.mesh).length;
-        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id).length;
-        
-        console.log(`  - Units with meshes: ${withMesh}/${window.gameUnits.length}`);
-        console.log(`  - Units without meshes: ${withoutMesh}/${window.gameUnits.length}`);
-        console.log(`  - Player-owned units: ${playerOwned}`);
-      }
-      
-      if (window.gfx && window.gfx.cameraTarget) {
-        console.log(`  - Camera position: (${window.gfx.cameraTarget.position.x.toFixed(1)}, ${window.gfx.cameraTarget.position.z.toFixed(1)})`);
-        console.log(`  - Player agora: (${window.player.agora.x * TILE_SIZE}, ${window.player.agora.y * TILE_SIZE})`);
-      }
-    }, 2000);
     
     // Hide lobby/menu UI and refresh HUD
     if (window.ui && window.ui.hideMenu) {
@@ -612,8 +579,6 @@ const Lobby = {
     }
     
     delete window.pendingMapSeed;
-    
-    console.log('⚔️ 1v1 match ready!');
   },
   
   // Legacy startMatch function - redirects to proper initialization
@@ -796,10 +761,11 @@ const Lobby = {
       
       // Handle global stats requests
       if (actualMessage.type === 'global_stats_request') {
-        // Respond with our current status
-        this.announceStatusToGlobal(
-          this.currentLobbyId ? 'in_lobby' : (this.currentGameType ? 'browsing' : 'menu')
-        );
+        // Respond with our current status (including 'in_game' if match is active)
+        const currentStatus = window.currentMatch ? 'in_game' : 
+                             (this.currentLobbyId ? 'in_lobby' : 
+                             (this.currentGameType ? 'browsing' : 'menu'));
+        this.announceStatusToGlobal(currentStatus);
       }
       
       // Pass to original handler if it exists
@@ -954,17 +920,21 @@ const Lobby = {
     this.isHost = true;
     this.playerReadyStates = {};
     
+    const finalSettings = settings || {
+      fieldSize: config.defaultFieldSize,
+      seed: Math.floor(Math.random() * 1000000)
+    };
+    
     const lobby = {
       id: lobbyId,
       name: lobbyName || `${config.name} Lobby`,
       gameType: gameType,
       host: window.net.getStatus().localPlayerId,
+      hostName: window.currentPlayerName || window.player?.name || 'Host',
+      hostColor: window.currentPlayerColor || window.player?.color || '#ffffff',
       players: 1,
-      maxPlayers: settings.maxPlayers || config.maxPlayers,
-      settings: settings || {
-        fieldSize: config.defaultFieldSize,
-        seed: Math.floor(Math.random() * 1000000)
-      },
+      maxPlayers: finalSettings.maxPlayers || config.maxPlayers,
+      settings: finalSettings,
       timestamp: Date.now()
     };
     
@@ -1000,6 +970,19 @@ const Lobby = {
     
     // Announce status change to global stats
     this.announceStatusToGlobal('in_lobby');
+    
+    // Set up periodic lobby announcements (every 5 seconds) so other browsers can discover it
+    if (this.lobbyUpdateInterval) {
+      clearInterval(this.lobbyUpdateInterval);
+    }
+    this.lobbyUpdateInterval = setInterval(() => {
+      if (this.isHost && this.currentLobby) {
+        // Re-announce lobby to game-specific channel
+        this.announceLobby(this.currentLobby);
+        // Re-announce status to global stats channel
+        this.announceStatusToGlobal('in_lobby');
+      }
+    }, 5000);
     
     // console.log(`🏛️ Created lobby: ${lobbyName} (${lobbyId})`);
   },
@@ -1109,14 +1092,24 @@ const Lobby = {
         
         // Update connected players list - merge with existing player info
         const existingPlayerMap = new Map();
+        const normalizePeerIdFn = this.normalizePeerId.bind(this);
         this.connectedPlayers.forEach(p => {
           const id = p.id || p;
-          existingPlayerMap.set(id, p);
+          const normalizedId = normalizePeerIdFn(id);
+          if (normalizedId) {
+            existingPlayerMap.set(normalizedId, p);
+          }
         });
         
         this.connectedPlayers = uniquePeers.map(peerId => {
           // If we already have player info for this peer, use it
-          return existingPlayerMap.get(peerId) || peerId;
+          const normalizedId = normalizePeerIdFn(peerId);
+          const existing = normalizedId ? existingPlayerMap.get(normalizedId) : null;
+          if (existing) {
+            // Preserve existing metadata (name/color) but update ID
+            return { ...existing, id: peerId };
+          }
+          return peerId;
         });
         
         // Update lobby UI with connected peers
@@ -1236,15 +1229,12 @@ const Lobby = {
       
       // Handle lobby list requests - respond if we're hosting
       if (actualMessage.type === 'lobby_list_request' && actualMessage.gameType === gameType) {
-        if (this.isHost && this.currentLobbyId && this.currentGameType === gameType) {
+        if (this.isHost && this.currentLobbyId && this.currentGameType === gameType && this.currentLobby) {
           // console.log('📡 Responding to lobby list request');
-          const lobby = this.availableLobbies[gameType]?.find(l => l.id === this.currentLobbyId);
-          if (lobby) {
-            // Small delay to avoid flooding
-            setTimeout(() => {
-              this.announceLobby(lobby);
-            }, Math.random() * 500);
-          }
+          // Use currentLobby (our own lobby) not availableLobbies (other people's lobbies)
+          setTimeout(() => {
+            this.announceLobby(this.currentLobby);
+          }, Math.random() * 100);
         }
       }
       
@@ -1288,18 +1278,29 @@ const Lobby = {
       }
     };
     
-    // Request lobby list
-    if (window.net && window.net.broadcast) {
-      window.net.broadcast({
-        type: 'lobby_list_request',
-        gameType: gameType
-      }, `${gameType}-lobby-browser`);
-    }
+    // Request lobby list immediately
+    const requestLobbies = () => {
+      if (window.net && window.net.broadcast) {
+        window.net.broadcast({
+          type: 'lobby_list_request',
+          gameType: gameType
+        }, `${gameType}-lobby-browser`);
+      }
+    };
     
-    // Update UI periodically
+    // Send immediate request
+    requestLobbies();
+    
+    // Send follow-up requests quickly for faster discovery (at 200ms and 500ms)
+    setTimeout(requestLobbies, 200);
+    setTimeout(requestLobbies, 500);
+    
+    // Update UI periodically and request lobbies periodically
     this.lobbyDiscoveryInterval = setInterval(() => {
       this.cleanupStaleLobbies(gameType);
       this.updateLobbyBrowserUI(gameType);
+      // Periodically request lobbies so we catch any that were created before we joined
+      requestLobbies();
     }, 5000);
   },
   
@@ -1310,6 +1311,13 @@ const Lobby = {
     // Update player count
     lobby.players = 1 + this.connectedPlayers.length;
     lobby.timestamp = Date.now();
+    
+    // Extend timeout when players join - add 20 minutes per player (up to 2 hours max)
+    // This keeps active lobbies alive longer
+    const baseTimeout = 1200000; // 20 minutes base
+    const perPlayerBonus = 1200000; // 20 minutes per player
+    const maxTimeout = 7200000; // 2 hours max
+    lobby.timeoutDuration = Math.min(baseTimeout + (lobby.players * perPlayerBonus), maxTimeout);
     
     const announcement = {
       type: 'lobby_announcement',
@@ -1370,8 +1378,14 @@ const Lobby = {
       if (this.isHost && lobby.id === this.currentLobbyId) {
         return true;
       }
-      // Keep lobbies that have announced in the last 60 seconds
-      return (now - lobby.timestamp) < 60000;
+      // Never timeout if there are players in the lobby (players > 1 means host + at least one other)
+      if (lobby.players > 1) {
+        return true;
+      }
+      // Use dynamic timeout based on player count (extends when players join)
+      // Default to 20 minutes if timeoutDuration not set (for old lobbies)
+      const timeout = lobby.timeoutDuration || 1200000;
+      return (now - lobby.timestamp) < timeout;
     });
   },
   
@@ -1476,6 +1490,20 @@ const Lobby = {
     this.updateMainMenuStats();
   },
   
+  // Extract base lobby name (remove size/seed suffix if present)
+  extractBaseLobbyName: function(lobbyName) {
+    // Remove pattern like [M#1234] from the end
+    return lobbyName.replace(/\s*\[[A-Z]#\d+\]\s*$/, '').trim();
+  },
+  
+  // Format lobby name with size/seed info
+  formatLobbyNameWithInfo: function(baseName, fieldSize, seed) {
+    const sizeMap = { tiny: 'T', small: 'S', medium: 'M', large: 'L', huge: 'H' };
+    const sizeAcronym = sizeMap[fieldSize] || fieldSize.charAt(0).toUpperCase();
+    const seedShort = seed ? `#${seed.toString().slice(-4)}` : '';
+    return `${baseName} [${sizeAcronym}${seedShort}]`;
+  },
+  
   // Update lobby browser UI (shows list of lobbies)
   updateLobbyBrowserUI: function(gameType) {
     const lobbyId = `${gameType}_lobby`;
@@ -1511,23 +1539,31 @@ const Lobby = {
       const searchStartTime = this.lobbySearchStartTime[gameType];
       const isSearching = searchStartTime && (Date.now() - searchStartTime < 3000);
       
+      // Get last known lobby count from main menu stats
+      const lastKnownCount = this.lastKnownLobbyCounts[gameType] || 0;
+      const countDisplay = lastKnownCount > 0 ? ` (${lastKnownCount})` : '';
+      
       if (isSearching) {
-        html += `<div class="no_lobbies">🔍 Searching for lobbies...</div>`;
+        html += `<div class="no_lobbies">🔍 Searching for${countDisplay} lobbies...</div>`;
       } else {
         html += `<div class="no_lobbies">No lobbies available. Create one!</div>`;
       }
     } else {
       lobbies.forEach(lobby => {
         const isFull = lobby.players >= lobby.maxPlayers;
+        const hostName = lobby.hostName || 'Host';
+        const hostColor = lobby.hostColor || '#ffffff';
         html += `
           <div class="lobby_item ${isFull ? 'lobby_full' : ''}">
-            <div class="lobby_item_name">${lobby.name}</div>
-            <div class="lobby_item_info">
-              <span>👥 ${lobby.players}/${lobby.maxPlayers}</span>
-              <span>🗺️ ${lobby.settings.fieldSize}</span>
-              <span>🎲 #${lobby.settings.seed}</span>
+            <div class="lobby_item_name"><span style="color: ${hostColor};">${hostName}</span>: ${lobby.name}</div>
+            <div class="lobby_item_bottom">
+              <div class="lobby_item_info">
+                <span>👥 ${lobby.players}/${lobby.maxPlayers}</span>
+                <span>🗺️ ${lobby.settings.fieldSize}</span>
+                <span>🎲 #${lobby.settings.seed}</span>
+              </div>
+              ${!isFull ? `<button class="join_lobby_btn" onclick="window.Lobby.joinLobbyById('${gameType}', '${lobby.id}')">Join</button>` : '<span class="lobby_full_tag">Full</span>'}
             </div>
-            ${!isFull ? `<button class="join_lobby_btn" onclick="window.Lobby.joinLobbyById('${gameType}', '${lobby.id}')">Join</button>` : '<span class="lobby_full_tag">Full</span>'}
           </div>`;
       });
     }
@@ -1590,15 +1626,15 @@ const Lobby = {
       const aiSlots = lobby.settings.aiSlots || [];
       const aiCount = aiSlots.filter(slot => slot).length;
       
-      // Require at least one AI opponent when solo (totalPlayers < 2)
-      const requiresAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone');
+      // Require at least one AI opponent when solo (totalPlayers < 2) for adventure/1v1/teams
+      const requiresAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone' || gameType === 'teams');
       const hasRequiredAI = !requiresAI || aiCount > 0;
       
-      // Special case: solo Adventure/1v1 with AI doesn't need to wait for players
-      const isSoloWithAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone') && aiCount > 0;
+      // Special case: solo Adventure/1v1/Teams with AI doesn't need to wait for players
+      const isSoloWithAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone' || gameType === 'teams') && aiCount > 0;
       const canStart = (isSoloWithAI || (totalPlayers >= minPlayers && allConnected && allReady)) && hasRequiredAI;
       
-      let startBtnText = 'Start Match';
+      let startBtnText = 'Game Start';
       let startBtnOnClick = `window.Lobby.startMatchFromLobby('${gameType}')`;
       
       if (gameType === 'adventure' && totalPlayers < 2) {
@@ -1617,13 +1653,18 @@ const Lobby = {
         } else {
           startBtnText = 'Add AI Opponent to Start';
         }
+      } else if (gameType === 'teams' && totalPlayers < 2) {
+        if (aiCount > 0) {
+          startBtnText = `🚀 Start Teams with ${aiCount} AI`;
+        } else {
+          startBtnText = 'Add AI Opponent to Start';
+        }
       } else if (!allConnected) {
         startBtnText = 'Waiting for Connections...';
       } else if (!allReady) {
-        const readyCount = this.connectedPlayers.filter(p => this.playerReadyStates[p.id || p]).length;
-        startBtnText = `Waiting for Players... (${readyCount}/${this.connectedPlayers.length} ready)`;
+        startBtnText = `Waiting...`;
       } else if (canStart) {
-        startBtnText = '🚀 START MATCH!';
+        startBtnText = '🚀 Game Start';
       }
       
       html += `<button class="lobby_start_btn ${canStart ? 'ready' : 'disabled'}" onclick="${startBtnOnClick}" ${!canStart ? 'disabled' : ''}>${startBtnText}</button>`;
@@ -1772,8 +1813,6 @@ const Lobby = {
     
     // Update local UI
     this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
-    
-    console.log(`${enabled ? '✅' : '❌'} AI slot ${slotIndex} ${enabled ? 'enabled' : 'disabled'}`);
   },
   
   // Show notification to user
@@ -1923,6 +1962,12 @@ const Lobby = {
     this.playerConnectionStates = {};
     this.connectedPlayers = [];
     this.hasAnnouncedPresence = false;
+    
+    // Clear periodic lobby announcements
+    if (this.lobbyUpdateInterval) {
+      clearInterval(this.lobbyUpdateInterval);
+      this.lobbyUpdateInterval = null;
+    }
     
     // Ensure currentGameType is set for the browser
     this.currentGameType = gameType;
@@ -2249,6 +2294,11 @@ const Lobby = {
       }
     });
     
+    // Store lobby counts for use in lobby browser
+    Object.keys(stats).forEach(gameType => {
+      this.lastKnownLobbyCounts[gameType] = stats[gameType].lobbies.size;
+    });
+    
     // Update the table
     const gameTypeOrder = ['adventure', 'onevsone', 'koth', 'teams'];
     
@@ -2292,7 +2342,6 @@ const Lobby = {
 
   // Start a local Adventure match with an AI opponent for debugging/single-player
   startAdventureSkirmish: function(fieldSize = 'medium', mapSeed = null, options = {}) {
-    console.log('🧭 Starting Adventure skirmish versus AI (local)...');
     
     const config = this.gameTypes['adventure'];
     const resolvedFieldSize = fieldSize || (config ? config.defaultFieldSize : 'medium');
@@ -2311,9 +2360,6 @@ const Lobby = {
     // Ensure player instance exists
     if (!window.player) {
       window.player = new Player();
-      console.log('🆕 Created new player for adventure');
-    } else {
-      console.log(`♻️ Reusing existing player (id: ${window.player.id || 'not set'})`);
     }
     
     // CRITICAL: Generate unique player ID for each match (like AI opponents do)
@@ -2321,15 +2367,12 @@ const Lobby = {
       // Generate unique ID similar to AI opponents
       const randomSuffix = Math.random().toString(36).substring(2, 8);
       window.player.id = `local-player-${randomSuffix}`;
-      console.log(`✅ Generated unique player ID: "${window.player.id}"`);
     }
     
     // Reset player state for new match
     window.player.units = [];
     window.player.buildings = [];
     window.player.selectedUnits = [];
-    
-    console.log(`🎮 Player ready: id="${window.player.id}", agora will be set to corner spawn`);
     
     // Resolve field dimensions early so we can place spawns deliberately
     const dims = (typeof resolvedFieldSize === 'string')
@@ -2402,7 +2445,6 @@ const Lobby = {
     window.opponent = aiPlayers[0] || null;
     
     // Regenerate field with desired seed
-    console.log(`🗺️ Regenerating field with seed ${resolvedSeed} for Adventure skirmish...`);
     const oldField = window.liveField;
     
     // Dispose old field before creating new one
@@ -2433,8 +2475,6 @@ const Lobby = {
       // Then set currentLoadDistance based on LOD
       const newLoadDistance = Math.round(4 * currentMultiplier);
       window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
-      
-      console.log(`🗺️ New field initialized with LOD ${lodLevel}% → chunk distance: ${window.liveField.currentLoadDistance}`);
     }
     
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
@@ -2457,7 +2497,7 @@ const Lobby = {
       }
       
       window.gfx.camera.alpha = -2.5;
-      window.gfx.camera.beta = 0.9;
+      window.gfx.camera.beta = 1.1;
       window.gfx.camera.radius = 80;
       if (window.gfx.camera.attachControl) {
         window.gfx.camera.attachControl(window.gfx.canvas, false);
@@ -2500,10 +2540,7 @@ const Lobby = {
       maxPlayers: players.length
     });
     
-    console.log('✅ Adventure skirmish game instance created with players:', players.map(p => p.id));
-    
     // Ensure unit models are spawned for visual layer
-    console.log(`🎨 About to spawn unit models for ${window.gameUnits?.length || 0} units`);
     if (window.gameUnits) {
       console.log(`🔍 Sample units:`, window.gameUnits.slice(0, 3).map(u => ({
         type: u.type,
@@ -2515,7 +2552,6 @@ const Lobby = {
     
     if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
       window.spawnUnitModels(window.gfx.scene);
-      console.log(`✅ spawnUnitModels called - meshes will load asynchronously`);
     } else {
       console.error(`❌ Can't spawn models: spawnUnitModels=${!!window.spawnUnitModels}, gfx=${!!window.gfx}, scene=${!!window.gfx?.scene}`);
     }
@@ -2535,6 +2571,9 @@ const Lobby = {
     
     // Start the match with countdown system (works for both solo and multiplayer)
     window.currentMatch.start();
+    
+    // Announce 'in_game' status to global stats channel
+    this.announceStatusToGlobal('in_game');
     
     // Signal that local player has finished loading (after initialization is complete)
     // This will trigger countdown for solo play or wait for other players in multiplayer
@@ -2557,50 +2596,6 @@ const Lobby = {
     
     // LOD already updated by forceLoadChunks - no need to call again
     
-    // DIAGNOSTIC: Check unit state after everything is initialized
-    setTimeout(() => {
-      console.log('🔍 POST-INIT DIAGNOSTIC (2 seconds after match start):');
-      console.log(`  - gameUnits.length: ${window.gameUnits?.length || 0}`);
-      console.log(`  - player.units.length: ${window.player?.units?.length || 0}`);
-      console.log(`  - player.id: ${window.player?.id}`);
-      
-      if (window.gameUnits && window.gameUnits.length > 0) {
-        const withMesh = window.gameUnits.filter(u => u.mesh).length;
-        const withoutMesh = window.gameUnits.filter(u => !u.mesh).length;
-        const playerOwned = window.gameUnits.filter(u => u.owner === window.player?.id).length;
-        
-        console.log(`  - Units with meshes: ${withMesh}/${window.gameUnits.length}`);
-        console.log(`  - Units without meshes: ${withoutMesh}/${window.gameUnits.length}`);
-        console.log(`  - Player-owned units: ${playerOwned}`);
-        
-        if (withoutMesh > 0) {
-          console.warn(`⚠️ ${withoutMesh} units still don't have meshes! Models may still be loading...`);
-        }
-        
-        // Check first player unit
-        const firstPlayerUnit = window.gameUnits.find(u => u.owner === window.player?.id);
-        if (firstPlayerUnit) {
-          console.log(`  - First player unit:`, {
-            type: firstPlayerUnit.type,
-            owner: firstPlayerUnit.owner,
-            hasMesh: !!firstPlayerUnit.mesh,
-            position: firstPlayerUnit.pb?.state?.loc,
-            isPickable: firstPlayerUnit.mesh?.isPickable
-          });
-        } else {
-          console.error(`❌ No player-owned units found!`);
-        }
-      } else {
-        console.error(`❌ NO UNITS IN gameUnits ARRAY!`);
-      }
-      
-      // Check camera position
-      if (window.gfx && window.gfx.cameraTarget) {
-        console.log(`  - Camera position: (${window.gfx.cameraTarget.position.x.toFixed(1)}, ${window.gfx.cameraTarget.position.z.toFixed(1)})`);
-        console.log(`  - Player agora: (${window.player.agora.x * TILE_SIZE}, ${window.player.agora.y * TILE_SIZE})`);
-      }
-    }, 2000);
-    
     // Hide lobby/menu UI and refresh HUD
     if (window.ui && window.ui.hideMenu) {
       window.ui.hideMenu();
@@ -2610,8 +2605,6 @@ const Lobby = {
     }
     
     delete window.pendingMapSeed;
-    
-    console.log('🧭 Adventure skirmish ready! Use this scenario to diagnose match loading.');
   },
 
   // Start a multiplayer match
@@ -2634,11 +2627,23 @@ const Lobby = {
     
     // Keep player info (name/color) while deduplicating
     const existingPlayerMap = new Map();
+    const normalizePeerIdFn = this.normalizePeerId.bind(this);
     this.connectedPlayers.forEach(p => {
       const id = p.id || p;
-      existingPlayerMap.set(id, p);
+      const normalizedId = normalizePeerIdFn(id);
+      if (normalizedId) {
+        existingPlayerMap.set(normalizedId, p);
+      }
     });
-    this.connectedPlayers = uniquePeerIds.map(id => existingPlayerMap.get(id) || id);
+    this.connectedPlayers = uniquePeerIds.map(id => {
+      const normalizedId = normalizePeerIdFn(id);
+      const existing = normalizedId ? existingPlayerMap.get(normalizedId) : null;
+      if (existing) {
+        // Preserve existing metadata (name/color) but update ID
+        return { ...existing, id: id };
+      }
+      return id;
+    });
     
     let totalPlayers = 1 + this.connectedPlayers.length;
     
@@ -2659,13 +2664,18 @@ const Lobby = {
       if (gameType === 'adventure') {
         console.log('✅ Starting Adventure lobby with', aiCount, 'AI opponents');
         this.startAdventureSkirmish(fieldSize, mapSeed, { aiCount: aiCount });
+        return;
       } else if (gameType === 'onevsone' || gameType === '1v1') {
-        console.log('✅ Starting 1v1 match with AI opponent');
         this.start1v1Match(fieldSize, mapSeed);
+        return;
+      } else if (gameType === 'teams') {
+        console.log('✅ Starting Teams lobby with', aiCount, 'AI opponents');
+        // Teams with AI - continue with normal multiplayer flow (it will handle AI later)
+        // Don't return here - let the function continue to handle AI opponents
       } else {
         console.warn('⚠️ Not enough players! Unknown game type. Aborting...');
+        return;
       }
-      return;
     }
     
     if (totalPlayers > config.maxPlayers) {
@@ -2718,13 +2728,23 @@ const Lobby = {
       
       // Merge with existing player info (names/colors from player_joined messages)
       const existingPlayerMap = new Map();
+      const normalizePeerIdFn = this.normalizePeerId.bind(this);
       this.connectedPlayers.forEach(p => {
         const id = p.id || p;
-        existingPlayerMap.set(id, p);
+        const normalizedId = normalizePeerIdFn(id);
+        if (normalizedId) {
+          existingPlayerMap.set(normalizedId, p);
+        }
       });
       
       this.connectedPlayers = uniquePeers.map(peerId => {
-        return existingPlayerMap.get(peerId) || peerId;
+        const normalizedId = normalizePeerIdFn(peerId);
+        const existing = normalizedId ? existingPlayerMap.get(normalizedId) : null;
+        if (existing) {
+          // Preserve existing metadata (name/color) but update ID
+          return { ...existing, id: peerId };
+        }
+        return peerId;
       });
     }
     
@@ -2748,13 +2768,18 @@ const Lobby = {
       if (gameType === 'adventure') {
         console.log('✅ Opponent disconnected. Starting Adventure lobby with', aiCount, 'AI opponents');
         this.startAdventureSkirmish(fieldSize, mapSeed, { aiCount: aiCount });
+        return;
       } else if (gameType === 'onevsone' || gameType === '1v1') {
-        console.log('✅ Opponent disconnected. Starting 1v1 match with AI opponent');
         this.start1v1Match(fieldSize, mapSeed);
+        return;
+      } else if (gameType === 'teams') {
+        console.log('✅ Opponent disconnected. Continuing Teams lobby with', aiCount, 'AI opponents');
+        // Teams with AI - continue with normal multiplayer flow (it will handle AI later)
+        // Don't return here - let the function continue to handle AI opponents
       } else {
         console.warn('⚠️ Opponent disconnected while waiting for network readiness. Aborting multiplayer start.');
+        return;
       }
-      return;
     }
     
     if (totalPlayers > config.maxPlayers) {
@@ -2796,8 +2821,16 @@ const Lobby = {
       window.autoInitDisabled = true;
     }
     
+    // Calculate total players INCLUDING AI opponents for spawn positions
+    let totalPlayersWithAI = totalPlayers;
+    if (settings && settings.aiSlots) {
+      const aiCount = settings.aiSlots.filter(slot => slot).length;
+      totalPlayersWithAI += aiCount;
+    }
+    
     // Get spawn positions for all players (spread them out on the map)
-    const spawnPositions = this.getSpawnPositions(totalPlayers, fieldSize);
+    // CRITICAL: Include AI players in count so we have enough spawn positions
+    const spawnPositions = this.getSpawnPositions(totalPlayersWithAI, fieldSize);
     const localPlayerName = window.currentPlayerName || 'Player 1';
     const localPlayerColor = window.currentPlayerColor || '#ff0000';
     
@@ -2843,8 +2876,6 @@ const Lobby = {
       window.player = new Player(); // Create player directly without Game instance
     }
     
-    console.log(`💰 INITIAL RESOURCES - ${window.player.name || 'Player'}: food=${window.player.resources.food}, wood=${window.player.resources.wood}, stone=${window.player.resources.stone}`);
-    
     // Update player ID before spawning
     // CRITICAL: Normalize player ID to last 6 chars for consistency with unit/building ownership
     if (window.player) {
@@ -2852,8 +2883,6 @@ const Lobby = {
       window.player.name = localPlayerName;
       window.player.color = localPlayerColor;
       window.player.agora = spawnPositions[localPlayerIndex];
-      
-      console.log(`💰 UPDATED RESOURCES - ${window.player.name}: food=${window.player.resources.food}, wood=${window.player.resources.wood}, stone=${window.player.resources.stone}`);
       
       // console.log(`👤 Local player: ${localPlayerName} (ID: ${localPlayerId.slice(-8)})`);
       // console.log(`🏛️ Local player spawn: (${spawnPositions[localPlayerIndex].x}, ${spawnPositions[localPlayerIndex].y})`);
@@ -2955,7 +2984,7 @@ const Lobby = {
       // Set camera to face center with standard viewing angle
       if (window.gfx.camera) {
         window.gfx.camera.alpha = angleToCenter + Math.PI; // +PI because camera looks backward
-        window.gfx.camera.beta = 0.9;   // Vertical angle (looking slightly down)
+        window.gfx.camera.beta = 1.1;   // Vertical angle (looking down more)
         window.gfx.camera.radius = 80;  // Zoom distance
       }
       
@@ -3036,12 +3065,16 @@ const Lobby = {
         .map((enabled, index) => enabled ? index : null)
         .filter(index => index !== null && index >= players.length);
       
+      console.log(`🤖 Adding ${enabledAISlots.length} AI opponents. Current players: ${players.length}, Spawn positions: ${spawnPositions.length}`);
+      
       enabledAISlots.forEach(slotIndex => {
-        if (slotIndex < spawnPositions.length) {
+        // Use players.length as spawn position index (AI players are added after human players)
+        const spawnIndex = players.length;
+        if (spawnIndex < spawnPositions.length) {
           const aiId = `ai-${slotIndex}-${mapSeed.toString(16).slice(-5)}`;
           const aiName = `AI ${slotIndex}`;
           const aiColor = this.getPlayerColor(slotIndex);
-          const aiSpawn = spawnPositions[slotIndex];
+          const aiSpawn = spawnPositions[spawnIndex];
           
           const aiPlayer = window.AIPlayer 
             ? new window.AIPlayer({
@@ -3074,6 +3107,12 @@ const Lobby = {
     // Create Match instance to manage the multiplayer game
     // NOTE: localPlayerId is already normalized to 6 chars at line 2272
     
+    // Log AI players for debugging
+    const aiPlayersInMatch = players.filter(p => p && p.isAI);
+    if (aiPlayersInMatch.length > 0) {
+      console.log(`🤖 Match will include ${aiPlayersInMatch.length} AI player(s):`, aiPlayersInMatch.map(p => p.name || p.id));
+    }
+    
     const matchOptions = {
       id: this.currentLobbyId,
       gameType: gameType,
@@ -3091,7 +3130,6 @@ const Lobby = {
     // CRITICAL: Disable menu scene unit auto-spawning IMMEDIATELY
     window.autoInitDisabled = true;
     window.isMultiplayer = true; // Set this EARLY to prevent any menu scene logic
-    console.log(`🚫 Multiplayer flags set - menu scene unit spawning disabled`);
     
     // Ensure gameBuildings array exists and is empty BEFORE creating Game
     if (!window.gameBuildings) {
@@ -3127,11 +3165,9 @@ const Lobby = {
     
     // Store array reference to detect if it changes later
     window._initialGameUnitsRef = window.gameUnits;
-    console.log(`📍 Stored gameUnits array reference for monitoring`);
     
     // CRITICAL: Also clear neutralUnits array (separate array that holds menu scene units)
     if (window.neutralUnits && window.neutralUnits.length > 0) {
-      console.log(`🗑️ Clearing ${window.neutralUnits.length} neutral units`);
       window.neutralUnits.length = 0;
     }
     
@@ -3153,19 +3189,7 @@ const Lobby = {
       // console.log(`🔍 Player ID before spawning: ${window.player.id}`);
       // console.log(`🔍 game.players array:`, window.game.players.map(p => ({id: p.id, name: p.name, isPlayer: p === window.player})));
       
-      // BEFORE game.init - check state
-      console.log(`🔍 BEFORE game.init():`);
-      console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
-      console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
-      console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
-      
       window.game.init();
-      
-      // AFTER game.init - check state
-      console.log(`🔍 AFTER game.init():`);
-      console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
-      console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
-      console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
       // Check if any units don't have IDs
       if (window.gameUnits) {
@@ -3173,8 +3197,6 @@ const Lobby = {
         if (unitsWithoutIds.length > 0) {
           console.error(`❌ AFTER INIT: ${unitsWithoutIds.length} units WITHOUT IDs! This will cause desync!`);
           console.log('Sample unit without ID:', unitsWithoutIds[0]);
-        } else {
-          console.log(`✅ All ${window.gameUnits.length} units have IDs`);
         }
       }
       
@@ -3213,6 +3235,19 @@ const Lobby = {
     
     // Start the match (enters LOADING state)
     window.currentMatch.start();
+    
+    // Announce 'in_game' status to global stats channel (host stays connected to respond to pings)
+    this.announceStatusToGlobal('in_game');
+    
+    // Ensure global stats channel stays connected (for host to respond to stats requests)
+    if (this.isHost && !this.connectedChannels['aether-global-stats']) {
+      // Rejoin global stats channel if disconnected
+      this.waitForBroadcastChannel('aether-global-stats', 5000).then(() => {
+        this.announceStatusToGlobal('in_game');
+      }).catch(err => {
+        console.warn('⚠️ Could not reconnect to global stats channel:', err);
+      });
+    }
     
     // Signal that local player has finished loading (after all initialization is complete)
     // This will trigger the countdown when all remote players are also loaded

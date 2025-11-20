@@ -4,12 +4,16 @@
 
 (function(net) {
   // Configuration
-  net.TICK_RATE = 20; // 20Hz = 50ms ticks
+  net.TICK_RATE = 20; // 20Hz = 50ms ticks (base rate)
+  net.MIN_TICK_RATE = 15; // Slow down to 15Hz if peers lagging (adaptive lockstep)
   net.COMMAND_BUFFER_SIZE = 100; // Max buffered commands
-  net.STATE_SYNC_INTERVAL = 200; // Full state every 200ms (5 times per second for smooth remote unit movement)
+  net.STATE_SYNC_INTERVAL = 200; // Full state every 200ms (5 times per second) - base rate
+  net.STATE_SYNC_INTERVAL_IDLE = 500; // Slower sync when no active commands (LOD)
   net.RECONNECT_TIMEOUT = 3000; // Reconnect attempts every 3s
   net.SNAP_THRESHOLD = 10; // Units >10 units away snap instead of lerp (reduced snapping)
   net.LERP_SPEED = 0.3; // 30% correction per sync (slower, smoother lerp)
+  net.PEER_LAG_THRESHOLD = 3; // Slow down if peer is >3 ticks behind
+  net.COMMAND_ACK_TIMEOUT = 1000; // Wait 1s for command acknowledgment before resending
   
   // Internal state
   let p2p = null;
@@ -24,6 +28,10 @@
   let reconnectAttempts = 0;
   let isConnected = false;
   let tickIntervalId = null; // Store interval ID
+  let currentTickRate = net.TICK_RATE; // Adaptive tick rate (starts at base)
+  let peerLag = new Map(); // Track peer lag: peerId -> { lastTick: number, lastSeen: timestamp }
+  let pendingCommandAcks = new Map(); // Track pending command acknowledgments: commandId -> { command, sentAt, retries }
+  let lastPlayerCommandTime = 0; // Track when we last sent a player command (for LOD)
   
   // Internal state tracking
   net._state = {
@@ -149,29 +157,172 @@
     // console.log(`🌐 Network initialized for ${options.gameType || '1v1'}`);
   };
   
-  // Start the deterministic tick loop
+  // Start the deterministic tick loop with adaptive rate
   net.startTickLoop = function() {
-    // Clear any existing interval
+    // Clear any existing interval/timeout
     if (tickIntervalId !== null) {
-      clearInterval(tickIntervalId);
+      clearTimeout(tickIntervalId);
       tickIntervalId = null;
     }
     
-    const tickInterval = 1000 / net.TICK_RATE;
+    // Use adaptive tick rate function (recursive setTimeout for dynamic rate)
+    function scheduleNextTick() {
+      // Calculate adaptive tick rate based on peer lag
+      const maxPeerLag = getMaxPeerLag();
+      if (maxPeerLag > net.PEER_LAG_THRESHOLD) {
+        // Slow down if peers are lagging (adaptive lockstep)
+        currentTickRate = net.MIN_TICK_RATE;
+      } else {
+        // Normal speed when peers are caught up
+        currentTickRate = net.TICK_RATE;
+      }
+      
+      // Apply tick synchronization adjustment from match (to keep ticks aligned)
+      const tickSyncAdjustment = window.currentMatch?.tickSyncAdjustment || 0;
+      const tickInterval = (1000 / currentTickRate) + tickSyncAdjustment;
+      
+      tickIntervalId = setTimeout(() => {
+        tick++;
+        processTick();
+        scheduleNextTick(); // Schedule next tick with updated rate
+      }, tickInterval);
+    }
     
-    // CRITICAL: Don't pause tick loop - let it run throttled naturally
-    // When tab is hidden, browsers throttle setInterval the same way they throttle requestAnimationFrame
-    // Both clients will be throttled similarly, keeping them synchronized
-    // Pausing causes desync because one client pauses while the other continues
-    // Start the interval - it will be throttled by the browser when tab is hidden
-    tickIntervalId = setInterval(() => {
-      tick++;
-      processTick();
-    }, tickInterval);
+    scheduleNextTick();
   };
+  
+  // Get maximum peer lag (how many ticks behind the slowest peer is)
+  // Returns positive value if peers are ahead of us (we're behind)
+  // Returns negative value if peers are behind us (we're ahead)
+  function getMaxPeerLag() {
+    if (!window.currentMatch || !isConnected) return 0;
+    
+    let maxLag = 0;
+    const currentTick = window.currentMatch.tick || tick;
+    const now = Date.now();
+    const STALE_THRESHOLD = 2000; // 2 seconds - ignore peer lag data older than this (more aggressive)
+    const ticksPerSecond = net.TICK_RATE || 20;
+    
+    // Clean up stale entries first
+    peerLag.forEach((lagInfo, peerId) => {
+      const timeSinceLastSeen = now - (lagInfo.lastSeen || 0);
+      if (timeSinceLastSeen > STALE_THRESHOLD) {
+        peerLag.delete(peerId); // Remove stale entries
+      }
+    });
+    
+    // Check if we're early in the match (first 10 seconds) - allow larger lag differences
+    const matchAge = window.currentMatch?.gameTime || (currentTick / ticksPerSecond);
+    const isEarlyMatch = matchAge < 10; // First 10 seconds of match
+    
+    peerLag.forEach((lagInfo, peerId) => {
+      if (lagInfo.lastTick !== undefined) {
+        // Positive lag means peer is ahead (we're behind)
+        // Negative lag means peer is behind (we're ahead)
+        const lag = lagInfo.lastTick - currentTick;
+        const age = (now - (lagInfo.lastSeen || 0)) / 1000; // Age in seconds
+        
+        // Only reject if BOTH conditions are true:
+        // 1. Lag is impossibly large (> 60 seconds)
+        // 2. AND the data is stale (age > 2 seconds)
+        // For negative lag (peer behind), only ignore if stale - fresh negative lag is legitimate
+        const maxAllowedLag = ticksPerSecond * 60; // 60 seconds - increased threshold for legitimate lag
+        const isStale = age > 2.0; // Data older than 2 seconds is considered stale
+        
+        // Only ignore if lag is impossibly large AND stale
+        // Don't ignore negative lag if data is fresh (peer legitimately behind)
+        if (Math.abs(lag) > maxAllowedLag && isStale) {
+          // Log for debugging but don't use it
+          console.warn(`⚠️ Ignoring suspicious lag value: peer ${peerId.slice(-4)} reports ${lag} ticks difference (current: ${currentTick}, their tick: ${lagInfo.lastTick}, age: ${age.toFixed(1)}s, match age: ${matchAge.toFixed(1)}s)`);
+          return; // Skip suspiciously large AND stale lag values
+        }
+        
+        // Only count positive lag (peer ahead, we're behind)
+        // Even if it's large, if the data is fresh (< 2 seconds old), trust it
+        if (lag > 0) {
+          maxLag = Math.max(maxLag, lag);
+        }
+      }
+    });
+    
+    return maxLag;
+  }
+  
+  // Update peer lag tracking
+  function updatePeerLag(peerId, peerTick) {
+    if (!peerLag.has(peerId)) {
+      peerLag.set(peerId, { lastTick: peerTick, lastSeen: Date.now() });
+    } else {
+      const lagInfo = peerLag.get(peerId);
+      lagInfo.lastTick = peerTick;
+      lagInfo.lastSeen = Date.now();
+    }
+    
+    // Clean up stale entries periodically (older than 3 seconds)
+    const now = Date.now();
+    const STALE_AGE = 3000; // 3 seconds
+    peerLag.forEach((info, pid) => {
+      if (now - (info.lastSeen || 0) > STALE_AGE) {
+        peerLag.delete(pid);
+      }
+    });
+  }
   
   // Process a single tick (lockstep)
   function processTick() {
+    // CRITICAL: Check if we're significantly behind and need to catch up
+    // maxPeerLag > 0 means peers are ahead (we're behind)
+    // If we're more than 2 seconds behind (100 ticks at 50Hz), request full state sync
+    const maxPeerLag = getMaxPeerLag();
+    const CATCHUP_THRESHOLD = 100; // 2 seconds at 50Hz
+    
+    // Only request catch-up if we're actually behind (positive lag means peers are ahead)
+    // Rate limit catch-up requests to once per 10 seconds to avoid spam
+    const lastCatchupRequest = window.currentMatch?.lastCatchupRequest || 0;
+    const timeSinceLastRequest = Date.now() - lastCatchupRequest;
+    const canRequestCatchup = timeSinceLastRequest > 10000; // 10 seconds between requests
+    
+    // Only log warning once per catch-up cycle (not every tick)
+    const shouldLogWarning = !window.currentMatch?.lastCatchupWarningTime || 
+                             (Date.now() - window.currentMatch.lastCatchupWarningTime) > 10000;
+    
+    if (maxPeerLag > CATCHUP_THRESHOLD && isConnected && !window.currentMatch?.isCatchingUp && canRequestCatchup) {
+      if (shouldLogWarning) {
+        const ticksPerSecond = net.TICK_RATE || 20;
+        const secondsBehind = maxPeerLag / ticksPerSecond;
+        console.warn(`⚠️ Falling behind! Peers are ${maxPeerLag} ticks ahead (~${secondsBehind.toFixed(1)}s at ${ticksPerSecond}Hz). Requesting catch-up sync...`);
+        if (window.currentMatch) {
+          window.currentMatch.lastCatchupWarningTime = Date.now();
+        }
+      }
+      
+      // Mark that we're catching up
+      if (window.currentMatch) {
+        window.currentMatch.isCatchingUp = true;
+        window.currentMatch.lastCatchupRequest = Date.now();
+      }
+      
+      // Request full state sync from all peers
+      p2p.sendData({
+        type: 'request_catchup_sync',
+        myTick: tick,
+        myMatchTick: window.currentMatch?.tick || tick
+      });
+    }
+    
+    // Reset catch-up flag if we've been caught up for a while
+    if (window.currentMatch?.isCatchingUp && maxPeerLag <= 10) {
+      const timeSinceCatchup = Date.now() - (window.currentMatch.lastCatchupRequest || 0);
+      if (timeSinceCatchup > 2000) { // 2 seconds of being caught up
+        window.currentMatch.isCatchingUp = false;
+        // Only log success if we were significantly behind
+        if (window.currentMatch.lastCatchupWarningTime) {
+          console.log(`✅ Caught up! Lag: ${maxPeerLag} ticks`);
+          window.currentMatch.lastCatchupWarningTime = 0;
+        }
+      }
+    }
+    
     // Execute buffered commands for this tick
     executeCommandsForTick(tick);
     
@@ -180,12 +331,45 @@
       window.currentMatch.processTick();
     }
     
+    // Adaptive state sync frequency (LOD):
+    // - Fast sync (200ms) when player commands are active (last 2 seconds)
+    // - Slow sync (500ms) when idle (no recent player commands)
+    const timeSinceLastCommand = Date.now() - lastPlayerCommandTime;
+    const isActive = timeSinceLastCommand < 2000; // Active if command within last 2 seconds
+    const syncInterval = isActive ? net.STATE_SYNC_INTERVAL : net.STATE_SYNC_INTERVAL_IDLE;
+    
     // Send state sync if needed (BOTH players send their own state)
-    if (Date.now() - lastStateSync > net.STATE_SYNC_INTERVAL && isConnected) {
+    if (Date.now() - lastStateSync > syncInterval && isConnected) {
       sendStateSync();
       lastStateSync = Date.now();
     }
+    
+    // Check for unacknowledged commands (resend if needed)
+    checkPendingCommandAcks();
   };
+  
+  // Check and resend unacknowledged commands
+  function checkPendingCommandAcks() {
+    const now = Date.now();
+    pendingCommandAcks.forEach((ackInfo, commandId) => {
+      if (now - ackInfo.sentAt > net.COMMAND_ACK_TIMEOUT) {
+        // Command not acknowledged - resend
+        ackInfo.retries++;
+        if (ackInfo.retries < 3) { // Max 3 retries
+          p2p.sendData({
+            type: 'game_command',
+            command: ackInfo.command,
+            isRetry: true
+          });
+          ackInfo.sentAt = now;
+        } else {
+          // Give up after 3 retries
+          console.warn(`⚠️ Command ${commandId} failed after ${ackInfo.retries} retries`);
+          pendingCommandAcks.delete(commandId);
+        }
+      }
+    });
+  }
   
   // Queue a command for lockstep execution
   net.sendCommand = function(command) {
@@ -368,6 +552,10 @@
           // P2P: Each player is authoritative for their own units
           // Only reconcile if there's significant drift (safety net for desync)
           reconcileState(actualMessage.content);
+          // Update peer lag tracking
+          if (actualMessage.content && actualMessage.content.tick !== undefined) {
+            updatePeerLag(peerId, actualMessage.content.tick);
+          }
           break;
           
         case 'resource_state_sync':
@@ -402,7 +590,6 @@
                 });
               }
             });
-            console.log(`🔄 Applied authoritative resource states at tick ${actualMessage.tick}`);
           }
           break;
           
@@ -411,6 +598,86 @@
           // This prevents floating-point drift while maintaining P2P fairness
           if (window.currentMatch && actualMessage.positions && actualMessage.playerId) {
             window.currentMatch.applyUnitPositions(actualMessage.positions, actualMessage.playerId, actualMessage.tick);
+            // Update peer lag tracking
+            if (actualMessage.tick !== undefined) {
+              updatePeerLag(peerId, actualMessage.tick);
+            }
+          }
+          break;
+          
+        case 'request_catchup_sync':
+          // Peer is falling behind and requesting a catch-up sync
+          // Send them our current full state so they can fast-forward
+          if (window.currentMatch && actualMessage.myTick !== undefined) {
+            const theirTick = actualMessage.myMatchTick || actualMessage.myTick;
+            const ourTick = window.currentMatch.tick || tick;
+            const lag = ourTick - theirTick; // Positive = we're ahead, negative = they're ahead
+            
+            // Only help them catch up if we're actually ahead
+            if (lag > 0) {
+              
+              // Send full state sync immediately
+              sendStateSync();
+              
+              // Also send a catchup sync with our tick so they can fast-forward
+              p2p.sendData({
+                type: 'catchup_sync',
+                targetTick: ourTick,
+                matchTick: ourTick,
+                timestamp: Date.now()
+              }, peerId);
+            } else {
+              // They're actually ahead of us, ignore their catch-up request
+              // (Silently ignore - this is normal when peers have slight timing differences)
+            }
+          }
+          break;
+          
+        case 'catchup_sync':
+          // Received catch-up sync - fast-forward our tick to match theirs
+          if (window.currentMatch && actualMessage.targetTick !== undefined) {
+            const targetTick = actualMessage.targetTick;
+            const currentTick = window.currentMatch.tick || tick;
+            const ticksToCatchUp = targetTick - currentTick;
+            
+            if (ticksToCatchUp > 0 && ticksToCatchUp < 1000) { // Sanity check: don't fast-forward more than 20 seconds
+              // Fast-forward by processing ticks without waiting
+              // Process all ticks at once to catch up completely
+              for (let i = 0; i < ticksToCatchUp; i++) {
+                tick++;
+                if (window.currentMatch) {
+                  window.currentMatch.tick++;
+                  window.currentMatch.gameTime = window.currentMatch.tick / (net.TICK_RATE || 20);
+                  
+                  // Process tick normally (commands, AI, etc.)
+                  window.currentMatch.executeCommandsForTick(window.currentMatch.tick);
+                  
+                  // Update AI every 20 ticks
+                  if (window.currentMatch.tick % 20 === 0) {
+                    window.currentMatch.updateAIPlayers();
+                    if (window.currentMatch.isHost()) {
+                      window.currentMatch.generateAICommands();
+                    }
+                    window.currentMatch.checkAgoraOccupation();
+                    window.currentMatch.checkWonderVictory();
+                    window.currentMatch.checkEliminationVictory();
+                  }
+                }
+              }
+              
+              // Mark that we're done catching up
+              if (window.currentMatch) {
+                window.currentMatch.isCatchingUp = false;
+                window.currentMatch.lastCatchupRequest = 0; // Reset catch-up request timer
+              }
+            } else if (ticksToCatchUp <= 0) {
+              // Already caught up or ahead
+              if (window.currentMatch) {
+                window.currentMatch.isCatchingUp = false;
+              }
+            } else {
+              console.warn(`⚠️ Catch-up sync requested impossible fast-forward: ${ticksToCatchUp} ticks (current: ${currentTick}, target: ${targetTick})`);
+            }
           }
           break;
           
@@ -577,13 +844,37 @@
           if (window.currentMatch && actualMessage.command) {
             const cmd = actualMessage.command;
             
+            // CRITICAL: Normalize playerId to ensure consistent matching
+            // Commands use normalized playerId (last 6 chars), but we need to match it correctly
+            const normalizedPlayerId = cmd.playerId?.length > 6 ? cmd.playerId.slice(-6) : cmd.playerId;
+            cmd.playerId = normalizedPlayerId; // Ensure command has normalized ID
+            
+            // Update peer lag tracking (they sent us a command at tick cmd.tick)
+            // Use normalized playerId for lag tracking, not peerId
+            updatePeerLag(normalizedPlayerId, cmd.tick);
+            
+            // Send acknowledgment if requested
+            if (actualMessage.requestAck && cmd.commandId) {
+              // Find the peerId that corresponds to this playerId
+              const connectedPeers = p2p.getConnectedPeers();
+              const targetPeerId = connectedPeers.find(p => {
+                const normalizedPeer = normalizePeerId(p);
+                return normalizedPeer === normalizedPlayerId;
+              }) || peerId; // Fallback to original peerId if not found
+              
+              p2p.sendData({
+                type: 'command_ack',
+                commandId: cmd.commandId,
+                tick: window.currentMatch.tick || tick
+              }, targetPeerId);
+            }
             
             // Check if command is for a past tick (arrived too late)
             if (cmd.tick < window.currentMatch.tick) {
               const ticksLate = window.currentMatch.tick - cmd.tick;
               // Fast-forward physics to catch up (normal network latency, not an error)
               
-              // Execute the command to start the behavior
+              // Execute the command immediately since we're already past its scheduled tick
               try {
                 window.currentMatch.executeCommand(cmd);
                 
@@ -611,17 +902,68 @@
                 console.error(`❌ Error executing late command:`, error);
               }
             } else {
-              // Add to match command buffer for future execution
+              // CRITICAL: Deduplicate move commands - remove older commands for same units
+              // This prevents jerky movement from processing intermediate commands
+              if (cmd.type === 'move' && cmd.unitIds && cmd.unitIds.length > 0) {
+                const unitIdSet = new Set(cmd.unitIds);
+                
+                // Check all command buffers for older move commands for these units
+                window.currentMatch.commandBuffer.forEach((commands, tickKey) => {
+                  const filteredCommands = commands.filter(existingCmd => {
+                    // Keep non-move commands
+                    if (existingCmd.type !== 'move') return true;
+                    // Keep move commands for different units
+                    if (!existingCmd.unitIds || existingCmd.unitIds.length === 0) return true;
+                    // Remove if any unit IDs overlap (same units, newer command wins)
+                    const hasOverlap = existingCmd.unitIds.some(id => unitIdSet.has(id));
+                    return !hasOverlap;
+                  });
+                  
+                  // Update the buffer with filtered commands
+                  if (filteredCommands.length !== commands.length) {
+                    if (filteredCommands.length > 0) {
+                      window.currentMatch.commandBuffer.set(tickKey, filteredCommands);
+                    } else {
+                      window.currentMatch.commandBuffer.delete(tickKey);
+                    }
+                  }
+                });
+              }
+              
+              // CRITICAL: Add to match command buffer for future execution
+              // Ensure command has normalized playerId for consistent processing
               const tickKey = cmd.tick;
               if (!window.currentMatch.commandBuffer.has(tickKey)) {
                 window.currentMatch.commandBuffer.set(tickKey, []);
               }
+              
+              // Debug logging for 3+ player games to track command flow
+              const connectedPeers = p2p.getConnectedPeers();
+              if (connectedPeers.length >= 2 && cmd.type === 'move' && cmd.unitIds && cmd.unitIds.length > 0) {
+                // Log occasionally (every 50th command) to avoid spam
+                if (Math.random() < 0.02) {
+                  console.log(`📥 [3+ PLAYER DEBUG] Command from player ${normalizedPlayerId} (peer ${peerId.slice(-4)}), tick ${cmd.tick}, ${cmd.unitIds.length} units, total peers: ${connectedPeers.length}, buffer size: ${window.currentMatch.commandBuffer.get(tickKey)?.length || 0}`);
+                }
+              }
+              
               window.currentMatch.commandBuffer.get(tickKey).push(cmd);
             }
             
             // Add to command history
             window.currentMatch.commandHistory.push(cmd);
             window.currentMatch.replay.commands.push(cmd);
+          }
+          break;
+          
+        case 'command_ack':
+          // Command acknowledgment received
+          if (actualMessage.commandId && pendingCommandAcks.has(actualMessage.commandId)) {
+            // Remove from pending list
+            pendingCommandAcks.delete(actualMessage.commandId);
+            // Update peer lag tracking
+            if (actualMessage.tick !== undefined) {
+              updatePeerLag(peerId, actualMessage.tick);
+            }
           }
           break;
           
@@ -646,6 +988,20 @@
             const shortId = normalizePeerId(actualMessage.playerId);
             console.log(`📡 player_loaded received from ${shortId}`);
             window.currentMatch.onPlayerLoaded(actualMessage.playerId);
+          }
+          break;
+          
+        case 'player_conceded':
+          // Player conceded the match
+          if (window.currentMatch && actualMessage.playerId) {
+            const player = window.currentMatch.getPlayerById(actualMessage.playerId);
+            const playerName = player?.name || `Player ${normalizePeerId(actualMessage.playerId)}`;
+            console.log(`🏳️ ${playerName} conceded the match`);
+            
+            // Eliminate the conceding player
+            if (window.currentMatch.eliminatePlayer) {
+              window.currentMatch.eliminatePlayer(actualMessage.playerId);
+            }
           }
           break;
           
@@ -977,6 +1333,38 @@
       overlay.style.display = 'none';
     }
   }
+  
+  // Track command acknowledgment
+  net.trackCommandAck = function(commandId, command) {
+    pendingCommandAcks.set(commandId, {
+      command: command,
+      sentAt: Date.now(),
+      retries: 0
+    });
+  };
+  
+  // Update last player command time (for LOD sync frequency)
+  net.updateLastPlayerCommandTime = function() {
+    lastPlayerCommandTime = Date.now();
+  };
+  
+  // Get current adaptive tick rate
+  net.getCurrentTickRate = function() {
+    return currentTickRate;
+  };
+  
+  // Get peer lag info
+  net.getPeerLag = function() {
+    const lagInfo = {};
+    peerLag.forEach((info, peerId) => {
+      lagInfo[peerId] = {
+        lastTick: info.lastTick,
+        lastSeen: info.lastSeen,
+        lag: (window.currentMatch?.tick || tick) - info.lastTick
+      };
+    });
+    return lagInfo;
+  };
   
   // Expose p2p for direct access
   Object.defineProperty(net, 'p2p', {

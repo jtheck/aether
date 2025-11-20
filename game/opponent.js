@@ -198,7 +198,9 @@
         resourcePriority: 'food', // food, wood, stone, balanced
         attackPlanned: false,
         attackTimer: 0,
-        defenseMode: false
+        defenseMode: false,
+        lastBuildTick: 0, // Track when last building was started (for cooldown)
+        buildCooldownTicks: 400 // 20 seconds at 20Hz - make AI SUPER chill, build very slowly (10x slower)
       };
     }
     return aiPlayer._aiState;
@@ -222,8 +224,6 @@
     const threat = evaluateThreat(aiPlayer, aiState);
     const opportunity = evaluateOpportunity(aiPlayer, aiState);
     
-    console.log(`🧠 AI ${aiPlayer.name} [${aiState.phase}] - Buildings: ${buildingCount}, Units: ${unitCount}, Eco: ${aiState.economyScore.toFixed(1)}, Mil: ${aiState.militaryScore.toFixed(1)}, Threat: ${threat.toFixed(1)}`);
-    
     // High-level strategic decisions
     const wasInDefenseMode = aiState.defenseMode;
     if (threat > 0.7) {
@@ -237,6 +237,36 @@
           console.log(`🚩 AI rallying defenders to contested agora!`);
           window.rallyUnitsToAgora(30, aiPlayer);
         }
+        
+        // DEFENSE MODE: Build tower near agora if we can afford it and don't have one nearby
+        const towerCost = window.BuildingTypes?.tower?.cost || {wood: 20, stone: 20};
+        const towerCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'tower').length : 0;
+        
+        // Check if we have a tower near the agora (within 5 tiles)
+        let hasTowerNearAgora = false;
+        if (agoraBuilding && agoraBuilding.position) {
+          const agoraGridX = Math.floor(agoraBuilding.position.x / (window.TILE_SIZE || 4));
+          const agoraGridZ = Math.floor(agoraBuilding.position.z / (window.TILE_SIZE || 4));
+          
+          const towers = aiPlayer.buildings?.filter(b => b && b.type === 'tower') || [];
+          for (const tower of towers) {
+            if (tower.position) {
+              const towerGridX = Math.floor(tower.position.x / (window.TILE_SIZE || 4));
+              const towerGridZ = Math.floor(tower.position.z / (window.TILE_SIZE || 4));
+              const dist = Math.sqrt((towerGridX - agoraGridX) ** 2 + (towerGridZ - agoraGridZ) ** 2);
+              if (dist <= 5) {
+                hasTowerNearAgora = true;
+                break;
+              }
+            }
+          }
+        }
+        
+        // Build tower if we can afford it and don't have one near agora
+        // Store flag in aiState to add action after actions array is created
+        if (!hasTowerNearAgora && resources.wood >= towerCost.wood && resources.stone >= towerCost.stone) {
+          aiState.defenseTowerNeeded = true; // Flag to build defense tower
+        }
       }
     } else if (threat < 0.3 && aiState.defenseMode) {
       aiState.defenseMode = false;
@@ -245,6 +275,17 @@
     
     // Execute multi-step build order based on phase and difficulty
     const actions = [];
+    
+    // DEFENSE MODE: Add defense tower action if needed (high priority, before other actions)
+    if (aiState.defenseTowerNeeded) {
+      actions.push({
+        type: 'build',
+        buildingType: 'tower',
+        priority: 'high',
+        nearAgora: true // Flag to use special placement near agora
+      });
+      aiState.defenseTowerNeeded = false; // Clear flag after adding
+    }
     
     // ECONOMIC DECISIONS
     if (shouldExpandEconomy(aiPlayer, aiState, resources)) {
@@ -282,10 +323,43 @@
       return aPriority - bPriority;
     });
     
-    // Execute queued actions (respecting difficulty-based timing)
-    const maxActionsPerTick = getDifficultySpeed(aiPlayer);
-    for (let i = 0; i < Math.min(actions.length, maxActionsPerTick); i++) {
-      executeAIAction(aiPlayer, actions[i]);
+    // Execute queued actions (respecting difficulty-based timing and building cooldown)
+    // CRITICAL: Make AI chill - only execute 1 action per decision cycle, and respect cooldowns
+    const ticksSinceLastBuild = currentTick - (aiState.lastBuildTick || 0);
+    const canBuild = ticksSinceLastBuild >= aiState.buildCooldownTicks;
+    
+    // CHILL MODE: Only execute highest priority action, and only if cooldown allows
+    // This prevents the AI from spamming multiple buildings at once
+    if (actions.length > 0) {
+      const action = actions[0]; // Only take the highest priority action
+      
+      // Enforce building cooldown to prevent spam (but allow training/gathering)
+      if (action.type === 'build') {
+        if (!canBuild) {
+          // Skip building actions if we're on cooldown - AI needs to chill!
+          return; // Don't build anything this cycle
+        }
+        
+        // ADDITIONAL CHILL: Skip building more often to make AI feel natural
+        // Skip 50% of medium priority builds, 30% of low priority builds
+        const playerIdHash = (aiPlayer.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const chillSeed = (playerIdHash + currentTick) % 10;
+        
+        if (action.priority === 'medium' && chillSeed < 5) {
+          // Skip medium priority builds 50% of the time - AI is chilling!
+          return;
+        } else if (action.priority === 'low' && chillSeed < 3) {
+          // Skip low priority builds 30% of the time - AI is really chilling!
+          return;
+        }
+      }
+      
+      executeAIAction(aiPlayer, action);
+      
+      // Track when we build something
+      if (action.type === 'build') {
+        aiState.lastBuildTick = currentTick;
+      }
     }
   }
   
@@ -406,14 +480,14 @@
     const villageCost = window.BuildingTypes?.village?.cost || {wood: 25, stone: 0};
     const farmCost = window.BuildingTypes?.farm?.cost || {wood: 20, stone: 0};
     
-    // Debug logging
-    console.log(`🏗️ AI Building Decision: Camps=${campCount}, Villages=${villageCount}, Farms=${farmCount}, Wood=${resources.wood}, Stone=${resources.stone}`);
-    
     // PHASE 1: Build one of each essential building first (camp -> village -> farm)
     // Priority 1: Build first camp for resource gathering
     // CRITICAL: Only build ONE camp, then MUST build village before any more camps
-    if (campCount === 0 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
-      console.log(`✅ AI deciding to build FIRST camp`);
+    // Keep small reserve even for first camp (but less strict)
+    const firstCampReserve = 5; // Smaller reserve for first building
+    if (campCount === 0 && 
+        resources.wood >= campCost.wood + firstCampReserve && 
+        resources.stone >= campCost.stone) {
       return {type: 'build', buildingType: 'camp', priority: 'high'};
     }
     
@@ -421,11 +495,9 @@
     // CRITICAL: Don't build more camps until we have at least one village!
     if (campCount >= 1 && villageCount === 0) {
       if (resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
-        console.log(`✅ AI deciding to build FIRST village (has ${campCount} camp(s))`);
         return {type: 'build', buildingType: 'village', priority: 'high'};
       } else {
         // SAVE UP: Don't build anything else if we're saving for village!
-        console.log(`💰 AI SAVING UP for village - need ${villageCost.wood} wood (has ${resources.wood}), need ${villageCost.stone} stone (has ${resources.stone})`);
         return null; // Block all other building until we can afford village
       }
     }
@@ -434,37 +506,103 @@
     // CRITICAL: Don't build more camps until we have at least one farm!
     if (villageCount >= 1 && farmCount === 0) {
       if (resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
-        console.log(`✅ AI deciding to build FIRST farm (has ${villageCount} village(s))`);
         return {type: 'build', buildingType: 'farm', priority: 'high'};
       } else {
         // SAVE UP: Don't build anything else if we're saving for farm!
-        console.log(`💰 AI SAVING UP for farm - need ${farmCost.wood} wood (has ${resources.wood}), need ${farmCost.stone} stone (has ${resources.stone})`);
         return null; // Block all other building until we can afford farm
       }
     }
     
     // PHASE 2: After having one of each, build more flexibly
+    // CRITICAL: Keep resource reserves - don't spend everything!
+    // Keep at least 15 wood and 5 stone as emergency reserves
+    const woodReserve = 15;
+    const stoneReserve = 5;
+    
+    // OCCASIONAL VILLAGE/FARM: Sometimes build villages/farms even without huge reserves
+    // This ensures we occasionally get villages/farms instead of just camps
+    const playerIdHash = (aiPlayer.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const currentTick = window.currentMatch?.tick || 0;
+    const occasionalBuildChance = (playerIdHash + currentTick) % 20; // 5% chance (1 in 20)
+    const shouldOccasionallyBuild = occasionalBuildChance === 0;
+    
     // Priority 4: Build more villages if we need more villagers
-    if (farmCount >= 1 && villageCount < 2 && villagerCount < 10 && resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
-      console.log(`✅ AI deciding to build additional village`);
-      return {type: 'build', buildingType: 'village', priority: 'medium'};
+    // Two paths: normal (with reserves) OR occasional (just afford it)
+    if (farmCount >= 1 && villageCount < 3 && villagerCount < 12) {
+      const canAffordVillageNormal = resources.wood >= villageCost.wood + woodReserve && 
+                                      resources.stone >= villageCost.stone + stoneReserve;
+      const canAffordVillageOccasional = resources.wood >= villageCost.wood + 5 && // Smaller reserve for occasional builds
+                                         resources.stone >= villageCost.stone;
+      
+      if (canAffordVillageNormal || (shouldOccasionallyBuild && canAffordVillageOccasional)) {
+        return {type: 'build', buildingType: 'village', priority: 'medium'};
+      }
     }
     
     // Priority 5: Build more farms if we need food
-    if (farmCount >= 1 && farmCount < 3 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
-      console.log(`✅ AI deciding to build additional farm`);
-      return {type: 'build', buildingType: 'farm', priority: 'medium'};
+    // Two paths: normal (with reserves) OR occasional (just afford it)
+    if (farmCount >= 1 && farmCount < 4) {
+      const canAffordFarmNormal = resources.wood >= farmCost.wood + woodReserve && 
+                                   resources.stone >= farmCost.stone + stoneReserve;
+      const canAffordFarmOccasional = resources.wood >= farmCost.wood + 5 && // Smaller reserve for occasional builds
+                                      resources.stone >= farmCost.stone;
+      
+      if (canAffordFarmNormal || (shouldOccasionallyBuild && canAffordFarmOccasional)) {
+        return {type: 'build', buildingType: 'farm', priority: 'medium'};
+      }
     }
     
-    // Priority 6: Build more camps ONLY after we have at least one village AND one farm
-    // CRITICAL BLOCK: Don't build more camps until we have BOTH village AND farm!
+    // Priority 6: Build more camps ONLY when REALLY needed:
+    // - We have village AND farm (basic economy set up)
+    // - ALL existing camps are FULL of workers (maxWorkers reached)
+    // - We have SIGNIFICANT idle villagers (at least 4-5 idle)
+    // - We have resources AND reserves
+    // CRITICAL: Don't spam camps - they only help if existing ones are completely full!
     if (campCount >= 1 && (villageCount === 0 || farmCount === 0)) {
-      console.log(`⛔ AI BLOCKED from building more camps - need village=${villageCount === 0 ? 'NO' : 'YES'} and farm=${farmCount === 0 ? 'NO' : 'YES'}`);
       // Don't return null here - let it fall through to training villagers or return null at end
       // This ensures villages/farms can still be built even if we have camps
-    } else if (farmCount >= 1 && villageCount >= 1 && campCount < 3 && villagerCount >= 8 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
-      console.log(`✅ AI deciding to build additional camp (has village=${villageCount}, farm=${farmCount}, villagers=${villagerCount})`);
-      return {type: 'build', buildingType: 'camp', priority: 'low'};
+    } else if (farmCount >= 1 && villageCount >= 1 && villagerCount >= 10 && 
+               !shouldOccasionallyBuild && // Skip camps during occasional build cycles - prioritize villages/farms
+               resources.wood >= campCost.wood + woodReserve && 
+               resources.stone >= campCost.stone + stoneReserve) {
+      // Check if ALL existing camps are FULL
+      const camps = (aiPlayer.buildings || []).filter(b => b && b.type === 'camp');
+      if (camps.length === 0) {
+        // No camps yet - can build first one
+        return {type: 'build', buildingType: 'camp', priority: 'low'};
+      }
+      
+      // Check if ALL camps are full
+      const fullCamps = camps.filter(b => 
+        b.assignedWorkers && 
+        b.assignedWorkers.length >= (b.maxWorkers || 8)
+      ).length;
+      
+      // Only build if ALL camps are full AND we have idle villagers
+      const idleVillagerCount = aiPlayer.units.filter(u => 
+        u && u.type === 'villager' && 
+        (!u.assignedBuilding || !u.assignedBuilding.assignedWorkers || 
+         u.assignedBuilding.assignedWorkers.length < u.assignedBuilding.maxWorkers)
+      ).length;
+      
+      // Only build if:
+      // 1. ALL existing camps are FULL (100% utilization)
+      // 2. We have SIGNIFICANT idle villagers (at least 6-7 idle - much higher threshold)
+      // 3. We haven't hit the cap (max 2 camps total)
+      // 4. RARE BUILDING: Only build camps very rarely (1/4 chance even when conditions are met)
+      const maxCamps = 2; // Keep conservative
+      
+      // CRITICAL: Make camp building VERY rare - only 1/4 of the time even when conditions are perfect
+      // This means it will only build every 3rd or 4th camp it would normally consider
+      // Use +1 offset to avoid conflicting with occasional build chance
+      const campBuildChance = (playerIdHash + currentTick + 1) % 4; // 0-3, only build on 0 (25% chance = every 4th)
+      
+      if (campCount < maxCamps && fullCamps === campCount && fullCamps > 0 && 
+          idleVillagerCount >= 6 && campBuildChance === 0) {
+        // Only build 1/4 of the camps it would normally build - make it SUPER rare
+        // Combined with 20-second cooldown, this means camps are built very infrequently
+        return {type: 'build', buildingType: 'camp', priority: 'low'};
+      }
     }
     
     // Priority 7: Train villagers (based on difficulty)
@@ -793,8 +931,15 @@
     switch (action.type) {
       case 'build':
         // Find suitable build location near base
-        const buildPos = findBuildLocation(aiPlayer);
-        console.log(`🏗️ AI submitting build command for ${action.buildingType} at (${buildPos.x}, ${buildPos.z})`);
+        // Use special placement near agora for defense towers
+        let buildPos;
+        if (action.nearAgora) {
+          buildPos = findBuildLocationNearAgora(aiPlayer);
+        } else {
+          // Use building count as seed offset to ensure different locations even in same tick
+          const buildingCount = aiPlayer.buildings ? aiPlayer.buildings.length : 0;
+          buildPos = findBuildLocation(aiPlayer, buildingCount);
+        }
         
         if (buildPos) {
           // Calculate smart rotation like human players do
@@ -840,7 +985,6 @@
         );
         
         if (trainingBuilding) {
-          console.log(`🤖 AI submitting train command for ${action.unitType} at ${trainingBuilding.type}`);
           
           // Submit train command through Match system
           window.currentMatch.submitCommand({
@@ -908,36 +1052,203 @@
   };
   
   // Helper functions for AI
-  function findBuildLocation(player) {
-    // Find empty tile near player base
+  // Find build location near agora (for defense towers)
+  function findBuildLocationNearAgora(player) {
+    const agoraBuilding = player.buildings?.find(b => b && b.type === 'agora');
+    if (!agoraBuilding || !agoraBuilding.position) {
+      // Fallback to normal location if no agora found
+      return findBuildLocation(player, 0);
+    }
+    
+    const TILE_SIZE = window.TILE_SIZE || 4;
+    const MIN_BUILDING_SPACING = 3; // Closer spacing for defense towers
+    const agoraGridX = Math.floor(agoraBuilding.position.x / TILE_SIZE);
+    const agoraGridZ = Math.floor(agoraBuilding.position.z / TILE_SIZE);
+    
+    // Get all existing buildings to check spacing
+    const existingBuildings = (player.buildings || []).filter(b => b && b.position);
+    const allBuildings = window.gameBuildings || [];
+    
+    // Try positions in a circle around the agora (2-4 tiles away)
+    const playerId = player.id || 'ai';
+    const playerIdHash = playerId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const currentTick = window.currentMatch?.tick || 0;
+    
+    // Try 8 different angles around the agora
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const angle = (attempt * Math.PI * 2) / 8; // 8 evenly spaced angles
+      const distance = 2 + (attempt % 3); // 2, 3, or 4 tiles away
+      
+      const gridX = Math.floor(agoraGridX + Math.cos(angle) * distance);
+      const gridZ = Math.floor(agoraGridZ + Math.sin(angle) * distance);
+      
+      // Make sure it's within map bounds
+      const field = window.liveField;
+      let finalX = gridX;
+      let finalZ = gridZ;
+      if (field) {
+        finalX = Math.max(5, Math.min(field.width - 5, gridX));
+        finalZ = Math.max(5, Math.min(field.height - 5, gridZ));
+      }
+      
+      // Check spacing from all existing buildings
+      let tooClose = false;
+      const worldX = finalX * TILE_SIZE;
+      const worldZ = finalZ * TILE_SIZE;
+      
+      for (const building of existingBuildings) {
+        if (!building.position) continue;
+        const dx = building.position.x - worldX;
+        const dz = building.position.z - worldZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const distInTiles = dist / TILE_SIZE;
+        
+        if (distInTiles < MIN_BUILDING_SPACING) {
+          tooClose = true;
+          break;
+        }
+      }
+      
+      // Also check spacing from all buildings in game
+      for (const building of allBuildings) {
+        if (!building.position) continue;
+        const buildingOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
+        const playerOwner = player.id?.length > 6 ? player.id.slice(-6) : player.id;
+        if (buildingOwner === playerOwner) continue;
+        
+        const dx = building.position.x - worldX;
+        const dz = building.position.z - worldZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const distInTiles = dist / TILE_SIZE;
+        
+        if (distInTiles < MIN_BUILDING_SPACING * 0.7) {
+          tooClose = true;
+          break;
+        }
+      }
+      
+      // If this location has proper spacing, use it
+      if (!tooClose) {
+        return { x: finalX, z: finalZ };
+      }
+    }
+    
+    // Fallback: use normal location if we can't find a spot near agora
+    return findBuildLocation(player, 0);
+  }
+  
+  function findBuildLocation(player, seedOffset = 0) {
+    // Find empty tile near player base with proper spacing from other buildings
     // agora is in grid coordinates, basePosition might be in world coords
     const baseGridX = player.agora ? player.agora.x : (player.basePosition ? Math.floor(player.basePosition.x / (window.TILE_SIZE || 4)) : 0);
     const baseGridZ = player.agora ? player.agora.y : (player.basePosition ? Math.floor(player.basePosition.z / (window.TILE_SIZE || 4)) : 0);
     
-    // Try to place building near base (within 8-15 tiles away)
-    // CRITICAL: Use deterministic placement based on player ID and tick for multiplayer sync
+    const TILE_SIZE = window.TILE_SIZE || 4;
+    const MIN_BUILDING_SPACING = 4; // Minimum tiles between buildings (was causing stacking!)
+    
+    // Get all existing buildings to check spacing
+    const existingBuildings = (player.buildings || []).filter(b => b && b.position);
+    const allBuildings = window.gameBuildings || [];
+    
+    // Try multiple locations to find one with proper spacing
     const playerId = player.id || 'ai';
     const playerIdHash = playerId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     const currentTick = window.currentMatch?.tick || 0;
-    const seed = playerIdHash + currentTick;
-    const deterministicRandom1 = ((seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
-    const deterministicRandom2 = (((seed + 1) * 1664525 + 1013904223) % 4294967296) / 4294967296;
     
-    const distance = 8 + Math.floor(deterministicRandom1 * 7); // 8-15 tiles away (deterministic)
-    const angle = deterministicRandom2 * Math.PI * 2; // Deterministic direction
+    // CRITICAL: Use seedOffset (building count) to ensure different locations even in same tick
+    // This prevents multiple buildings from being placed at the same spot
+    const baseSeed = playerIdHash + currentTick + seedOffset * 73; // Use seedOffset to vary location
     
-    const gridX = Math.floor(baseGridX + Math.cos(angle) * distance);
-    const gridZ = Math.floor(baseGridZ + Math.sin(angle) * distance);
-    
-    // Make sure it's within map bounds
-    const field = window.liveField;
-    if (field) {
-      const clampedX = Math.max(5, Math.min(field.width - 5, gridX));
-      const clampedZ = Math.max(5, Math.min(field.height - 5, gridZ));
-      return { x: clampedX, z: clampedZ };
+    // Try up to 20 different locations to find one with proper spacing
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const seed = baseSeed + attempt * 37; // Different seed per attempt
+      const deterministicRandom1 = ((seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+      const deterministicRandom2 = (((seed + 1) * 1664525 + 1013904223) % 4294967296) / 4294967296;
+      
+      // Vary distance more - start closer and expand outward
+      const baseDistance = 6 + attempt * 0.5; // Start at 6 tiles, expand by 0.5 per attempt
+      const distance = baseDistance + Math.floor(deterministicRandom1 * 5); // 6-11 tiles initially, expanding
+      
+      // CRITICAL: Vary angle more to avoid line formation
+      // Use seedOffset to rotate the base angle, preventing all buildings from being in a line
+      const baseAngleOffset = (seedOffset * 0.618) % (Math.PI * 2); // Golden ratio rotation per building
+      const angle = (deterministicRandom2 * Math.PI * 2) + baseAngleOffset; // Rotate base angle to avoid lines
+      
+      const gridX = Math.floor(baseGridX + Math.cos(angle) * distance);
+      const gridZ = Math.floor(baseGridZ + Math.sin(angle) * distance);
+      
+      // Make sure it's within map bounds
+      const field = window.liveField;
+      let finalX = gridX;
+      let finalZ = gridZ;
+      if (field) {
+        finalX = Math.max(5, Math.min(field.width - 5, gridX));
+        finalZ = Math.max(5, Math.min(field.height - 5, gridZ));
+      }
+      
+      // Check spacing from all existing buildings
+      let tooClose = false;
+      const worldX = finalX * TILE_SIZE;
+      const worldZ = finalZ * TILE_SIZE;
+      
+      for (const building of existingBuildings) {
+        if (!building.position) continue;
+        const dx = building.position.x - worldX;
+        const dz = building.position.z - worldZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const distInTiles = dist / TILE_SIZE;
+        
+        if (distInTiles < MIN_BUILDING_SPACING) {
+          tooClose = true;
+          break;
+        }
+      }
+      
+      // Also check spacing from all buildings in game (including other players' buildings)
+      for (const building of allBuildings) {
+        if (!building.position) continue;
+        // Skip if it's our own building (already checked above)
+        const buildingOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
+        const playerOwner = player.id?.length > 6 ? player.id.slice(-6) : player.id;
+        if (buildingOwner === playerOwner) continue;
+        
+        const dx = building.position.x - worldX;
+        const dz = building.position.z - worldZ;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const distInTiles = dist / TILE_SIZE;
+        
+        // Allow closer to enemy buildings, but still maintain some spacing
+        if (distInTiles < MIN_BUILDING_SPACING * 0.7) {
+          tooClose = true;
+          break;
+        }
+      }
+      
+      // If this location has proper spacing, use it
+      if (!tooClose) {
+        return { x: finalX, z: finalZ };
+      }
     }
     
-    return { x: gridX, z: gridZ };
+    // Fallback: if we couldn't find a good spot after 20 attempts, use the last attempt
+    // This should rarely happen, but ensures we always return a location
+    const fallbackSeed = baseSeed + 19 * 37;
+    const fallbackRandom1 = ((fallbackSeed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    const fallbackRandom2 = (((fallbackSeed + 1) * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    const fallbackDistance = 10 + Math.floor(fallbackRandom1 * 5);
+    const fallbackAngle = fallbackRandom2 * Math.PI * 2;
+    const fallbackX = Math.floor(baseGridX + Math.cos(fallbackAngle) * fallbackDistance);
+    const fallbackZ = Math.floor(baseGridZ + Math.sin(fallbackAngle) * fallbackDistance);
+    
+    const field = window.liveField;
+    if (field) {
+      return {
+        x: Math.max(5, Math.min(field.width - 5, fallbackX)),
+        z: Math.max(5, Math.min(field.height - 5, fallbackZ))
+      };
+    }
+    
+    return { x: fallbackX, z: fallbackZ };
   };
   
   function findNearestResource(player) {
@@ -1175,7 +1486,6 @@
     // - Direct unit manipulation wasn't synced over network
     //
     // See: match.js generateAICommands() - called every 20 ticks (1 second)
-    console.log('🤖 AI player created - commands will be generated by match tick system');
   };
   
   AIPlayer.prototype.updateAI = function(deltaTime) {

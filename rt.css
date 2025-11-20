@@ -385,7 +385,7 @@ html, body {
 
 .lobby_browser_header {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
   margin-bottom: 15px;
 }
@@ -428,13 +428,18 @@ html, body {
   padding: 10px;
   margin-bottom: 8px;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .lobby_item_name {
   font-weight: bold;
-  flex: 1;
+}
+
+.lobby_item_bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .lobby_item_info {
@@ -442,7 +447,6 @@ html, body {
   gap: 10px;
   font-size: 0.85em;
   color: #ccc;
-  margin: 0 10px;
 }
 
 .join_lobby_btn {
@@ -540,8 +544,17 @@ html, body {
 .ready_checkbox {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   cursor: pointer;
+  font-size: 1.1em;
+  padding: 5px;
+}
+
+.ready_checkbox input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  margin: 0;
 }
 
 .ready_checkbox input[type="checkbox"]:disabled {
@@ -571,12 +584,11 @@ html, body {
 .lobby_start_btn {
   width: 100%;
   padding: 12px;
-  margin-top: 15px;
   background: #4CAF50;
   color: white;
   border: none;
   border-radius: 5px;
-  font-size: 1.1em;
+  font-size: 0.9em;
   font-weight: bold;
   cursor: pointer;
 }

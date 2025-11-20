@@ -157,7 +157,7 @@ const BuildingTypes = {
     workType: "build", // Type of work this building needs during construction
     // Production properties (after completion - set dynamically)
     productionWorkType: "farm", // Type of work this building provides after construction
-    productionMaxWorkers: 4,
+    productionMaxWorkers: 2,
     productionWorkRadius: 8, // How far to look for idle villagers (tiles) - 8 tiles × 4px = 32 world units
     workInterval: 10000, // How often workers produce resources (10 seconds)
     workOutput: { food: 4 } // Resources produced per work cycle
@@ -746,10 +746,38 @@ function findIdleVillagersNearBuilding(building) {
     if (normalizedUnitOwner !== normalizedBuildingOwner) continue; // Only assign workers to same owner
     
     // Check if villager is idle (no active behavior OR just has linger behavior)
+    // Also check if villager is stuck at an empty camp (GatherWorkBehavior with no resources)
     const currentBehavior = window.behaviorManager ? window.behaviorManager.getBehavior(unit) : null;
-    const isIdleOrLingering = !currentBehavior || 
+    let isIdleOrLingering = !currentBehavior || 
                               (currentBehavior && currentBehavior.constructor.name === 'LingerBehavior');
+    
+    // SPECIAL: Check if villager has GatherWorkBehavior but camp has no resources
+    if (!isIdleOrLingering && currentBehavior && currentBehavior.constructor.name === 'GatherWorkBehavior') {
+      const gatherBuilding = currentBehavior.building;
+      if (gatherBuilding && gatherBuilding.type === 'camp' && gatherBuilding.workType === 'gather') {
+        const availableResources = gatherBuilding.availableResources || [];
+        const hasAvailableResources = availableResources.some(r => 
+          !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
+          (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
+        );
+        if (!hasAvailableResources) {
+          // Treat as idle - camp has no resources
+          isIdleOrLingering = true;
+        }
+      }
+    }
+    
     if (!isIdleOrLingering) continue;
+    
+    // CRITICAL: Don't auto-assign units that just completed a player move command
+    // Give them at least 60 ticks (3 seconds) to stay where the player told them to go
+    if (unit.lastPlayerMoveTick !== undefined) {
+      const currentTick = window.currentMatch?.tick || 0;
+      const ticksSincePlayerMove = currentTick - unit.lastPlayerMoveTick;
+      if (ticksSincePlayerMove < 60) {
+        continue; // Skip this unit - player just moved them, let them stay put!
+      }
+    }
     
     // Calculate distance to building for proximity-based assignment
     const dx = unit.pb.state.loc.x - building.position.x;
@@ -827,12 +855,14 @@ function assignVillagerToWork(villager, building) {
       !r.depleted && r.remaining > 0 && r.depletionTick === undefined
     ).length || 0;
     const totalResourceCount = building.availableResources?.length || 0;
-    console.log(`✅ AUTO-ASSIGNED ${villager.name || villager.type} to work at ${building.name} (${building.assignedWorkers.length}/${building.maxWorkers} workers) - ${availableResourceCount}/${totalResourceCount} resource tiles available`);
-    if (availableResourceCount === 0) {
-      console.warn(`⚠️ Camp has NO available resources! Workers will circle camp.`);
+    // Note: Workers are automatically released when camp has no resources (see GatherWorkBehavior)
+    // Only log warning once per camp to avoid spam
+    if (availableResourceCount === 0 && !building._noResourcesWarned) {
+      building._noResourcesWarned = true;
+      // console.warn(`⚠️ Camp has NO available resources! Workers will be released.`);
+    } else if (availableResourceCount > 0) {
+      building._noResourcesWarned = false; // Reset if resources become available again
     }
-  } else {
-    console.log(`✅ AUTO-ASSIGNED ${villager.name || villager.type} to work at ${building.name || building.type} (${building.assignedWorkers.length}/${building.maxWorkers} workers)`);
   }
   return true;
 }
@@ -871,11 +901,6 @@ function processBuildingCompletion(building) {
   building.completionProcessed = true;
   building.buildProgress = 1.0; // Clamp to 1.0
   
-  // DIAGNOSTIC: Log completion timing
-  if (window.isMultiplayer && building.type === 'camp') {
-    const currentTick = window.currentMatch?.tick || 0;
-    console.log(`✅ BUILDING COMPLETE at tick ${currentTick}: ${building.type} ${building.id}`);
-  }
   
   // Ensure final position and scale
   if (building.mesh) {
@@ -1376,6 +1401,32 @@ function updateBuildings(deltaTime) {
       const currentTick = window.currentMatch?.tick || 0;
       const workerCount = building.assignedWorkers.length;
       
+      // Create/update construction indicator cube (purple cube for all buildings under construction)
+      if (!building.constructionIndicator && window.gfx && window.gfx.scene) {
+        building.constructionIndicator = BABYLON.MeshBuilder.CreateBox(`constructionIndicator_${building.id}`, {
+          size: 1.0  // Will be scaled to 0.5 (half size)
+        }, window.gfx.scene);
+        building.constructionIndicator.scaling = new BABYLON.Vector3(0.5, 0.5, 0.5); // Half size
+        building.constructionIndicator.isPickable = false;
+        
+        // Purple material
+        const material = new BABYLON.StandardMaterial(`constructionIndicatorMat_${building.id}`, window.gfx.scene);
+        material.diffuseColor = new BABYLON.Color3(0.67, 0, 1); // Purple (#aa00ff)
+        material.emissiveColor = new BABYLON.Color3(0.33, 0, 0.5);
+        material.alpha = 0.8;
+        building.constructionIndicator.material = material;
+      }
+      
+      // Update indicator position (above building)
+      if (building.constructionIndicator && building.position) {
+        const terrainY = window.getTerrainHeightAtPosition ? 
+          window.getTerrainHeightAtPosition(building.position.x, building.position.z) : building.position.y || 0;
+        building.constructionIndicator.position.x = building.position.x;
+        building.constructionIndicator.position.z = building.position.z;
+        building.constructionIndicator.position.y = terrainY + 3; // Above building
+        building.constructionIndicator.setEnabled(true);
+      }
+      
       // Progress construction based on worker count (1 worker = base speed, 3 workers = 3x speed)
       if (workerCount > 0) {
         // CRITICAL: Track construction start tick on first work tick
@@ -1392,12 +1443,7 @@ function updateBuildings(deltaTime) {
           const oldWorkTicks = building.constructionWorkTicks;
           building.constructionWorkTicks += workerCount;
           
-          // DIAGNOSTIC: Log construction progress for debugging desyncs
-          if (window.isMultiplayer && building.type === 'camp') {
-            const TOTAL_WORKER_TICKS_NEEDED = 300;
-            const progress = Math.min(1.0, building.constructionWorkTicks / TOTAL_WORKER_TICKS_NEEDED);
-            console.log(`🔨 Construction tick ${currentTick}: ${building.id} - workTicks: ${oldWorkTicks} → ${building.constructionWorkTicks} (+${workerCount}), progress: ${progress.toFixed(2)}, workers: ${workerCount}/${building.maxWorkers}`);
-          }
+          // Construction progress tracked silently for multiplayer sync
         }
         
         // Calculate progress deterministically from total work ticks
@@ -1427,6 +1473,13 @@ function updateBuildings(deltaTime) {
         if (building.buildProgress >= 1.0 && !building.completionProcessed && building.mesh) {
           building.buildProgress = 1.0; // Clamp to 1.0
           
+          // Hide construction indicator when done
+          if (building.constructionIndicator) {
+            building.constructionIndicator.setEnabled(false);
+            building.constructionIndicator.dispose();
+            building.constructionIndicator = null;
+          }
+          
           // CRITICAL: Send building_complete command to synchronize completion across all peers
           // Schedule completion for the next sync checkpoint to ensure all clients process at the same tick
           if (window.isMultiplayer && window.currentMatch && !building.completionCommandSent) {
@@ -1452,6 +1505,11 @@ function updateBuildings(deltaTime) {
           }
         }
       }
+    } else if (building.buildProgress >= 1.0 && building.constructionIndicator) {
+      // Building is complete - hide indicator
+      building.constructionIndicator.setEnabled(false);
+      building.constructionIndicator.dispose();
+      building.constructionIndicator = null;
     }
     
     // Handle work assignment for buildings that need workers (both construction and production)
@@ -1468,10 +1526,6 @@ function updateBuildings(deltaTime) {
     
     if (shouldAssignWorkers && (building.lastWorkerCheckTick ?? -1) !== currentTick) {
       building.lastWorkerCheckTick = currentTick;
-      // DIAGNOSTIC: Log when we attempt worker assignment
-      if (building.type === 'camp' && window.isMultiplayer) {
-        console.log(`🔍 WORKER CHECK tick ${currentTick}: Camp ${building.id} - progress: ${building.buildProgress.toFixed(2)}, workType: ${building.workType}, assigned: ${building.assignedWorkers.length}/${building.maxWorkers}`);
-      }
       
       // Clean up any workers that are no longer valid
       building.assignedWorkers = building.assignedWorkers.filter(worker => {
@@ -1486,6 +1540,22 @@ function updateBuildings(deltaTime) {
           return false; // Remove workers no longer working here
         }
         
+        // SPECIAL: For camps, check if there are no available resources
+        // If camp has no resources, release workers so they can be reassigned
+        if (building.type === 'camp' && building.workType === 'gather') {
+          const availableResources = building.availableResources || [];
+          const hasAvailableResources = availableResources.some(r => 
+            !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
+            (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
+          );
+          
+          if (!hasAvailableResources) {
+            // Camp has no resources - release this worker
+            worker.assignedBuilding = null;
+            return false;
+          }
+        }
+        
         return true; // Keep valid workers
       });
       
@@ -1493,14 +1563,34 @@ function updateBuildings(deltaTime) {
       if (building.assignedWorkers.length < building.maxWorkers) {
         const idleVillagers = findIdleVillagersNearBuilding(building);
         
-        // DIAGNOSTIC: Log idle villagers found
-        if (window.isMultiplayer && building.type === 'camp' && idleVillagers.length > 0) {
-          console.log(`🔍 Found ${idleVillagers.length} idle villagers near camp: ${idleVillagers.map(v => v.id).join(', ')}`);
-        }
         
         for (const villager of idleVillagers) {
           if (building.assignedWorkers.length >= building.maxWorkers) break;
-          if (villager.assignedBuilding) continue; // Already assigned elsewhere
+          
+          // Check if villager is assigned to a building that has no work
+          if (villager.assignedBuilding) {
+            const assignedBuilding = villager.assignedBuilding;
+            // If assigned to a camp with no resources, clear the assignment
+            if (assignedBuilding.type === 'camp' && assignedBuilding.workType === 'gather') {
+              const availableResources = assignedBuilding.availableResources || [];
+              const hasAvailableResources = availableResources.some(r => 
+                !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
+                (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
+              );
+              if (!hasAvailableResources) {
+                // Clear assignment to empty camp
+                villager.assignedBuilding = null;
+                if (assignedBuilding.assignedWorkers) {
+                  const idx = assignedBuilding.assignedWorkers.indexOf(villager);
+                  if (idx > -1) assignedBuilding.assignedWorkers.splice(idx, 1);
+                }
+              } else {
+                continue; // Still assigned to a camp with resources
+              }
+            } else {
+              continue; // Already assigned elsewhere
+            }
+          }
           
           // DIAGNOSTIC: Verify ownership matches before assigning
           const normalizedUnitOwner = villager.owner?.length > 6 ? villager.owner.slice(-6) : villager.owner;
@@ -1508,12 +1598,6 @@ function updateBuildings(deltaTime) {
           if (normalizedUnitOwner !== normalizedBuildingOwner) {
             console.warn(`⚠️ Ownership mismatch! Worker ${villager.id} (owner: ${normalizedUnitOwner}) cannot work on building ${building.id} (owner: ${normalizedBuildingOwner})`);
             continue;
-          }
-          
-          // DIAGNOSTIC: Log worker assignment for debugging desyncs
-          if (window.isMultiplayer && building.type === 'camp' && building.workType === 'build') {
-            const currentTick = window.currentMatch?.tick || 0;
-            console.log(`👷 Assigning worker ${villager.id?.slice(-6)} to building ${building.id} at tick ${currentTick} (now ${building.assignedWorkers.length + 1}/${building.maxWorkers} workers)`);
           }
           
           assignVillagerToWork(villager, building);
@@ -1722,9 +1806,14 @@ const buildingSystem = {
     this.clearRadiusVisualization();
     
     const buildingDef = BuildingTypes[this.selectedBuildingType];
-    if (!buildingDef || !buildingDef.workRadius) return;
+    if (!buildingDef) return;
     
-    const radius = buildingDef.workRadius * TILE_SIZE;
+    // For camps, use productionWorkRadius (resource detection radius), not workRadius (construction worker search radius)
+    const radius = (this.selectedBuildingType === 'camp' && buildingDef.productionWorkRadius)
+      ? buildingDef.productionWorkRadius * TILE_SIZE
+      : (buildingDef.workRadius ? buildingDef.workRadius * TILE_SIZE : 0);
+    
+    if (radius === 0) return;
     
     // Create a circle mesh to show the work radius (horizontal)
     const circle = BABYLON.MeshBuilder.CreateDisc("workRadius", {

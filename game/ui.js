@@ -991,6 +991,11 @@ function getRandomColor() {
         document.getElementById('menu').style.display = 'block';
       }
       
+      // Update ingame menu player list if showing ingame menu
+      if (menuId === 'ingame_menu' && window.currentMatch) {
+        ui.updateIngamePlayerList();
+      }
+      
       // Special handling for multiplayer lobbies - show lobby browser
       if (menuId.includes('_lobby') && window.Lobby) {
         const gameTypeMap = {
@@ -1266,6 +1271,38 @@ function getRandomColor() {
       // Hide menu
       ui.hideMenu();
     }
+  }
+  
+  // Update player list in ingame menu
+  ui.updateIngamePlayerList = function() {
+    const playersContent = document.getElementById('ingame_players_content');
+    if (!playersContent || !window.currentMatch) return;
+    
+    const match = window.currentMatch;
+    const players = match.players || [];
+    const eliminatedPlayers = match.eliminatedPlayers || new Set();
+    
+    let html = '';
+    players.forEach(player => {
+      const playerId = player.id || player;
+      const playerName = player.name || `Player ${playerId.slice(-4)}`;
+      const playerColor = player.color || '#ffffff';
+      const isLocal = playerId === match.localPlayerId;
+      const isEliminated = eliminatedPlayers.has(playerId);
+      
+      html += `<div style="padding: 5px; margin: 5px 0; background: rgba(0,0,0,0.2); border-radius: 3px; ${isLocal ? 'border-left: 3px solid ' + playerColor + ';' : ''}">
+        <span style="color: ${playerColor};">${isLocal ? '👤 ' : '👥 '}${playerName}${isLocal ? ' (You)' : ''}</span>
+        ${isEliminated ? '<span style="color: #ff6666; margin-left: 10px;">💀 Eliminated</span>' : '<span style="color: #66ff66; margin-left: 10px;">✓ Active</span>'}
+      </div>`;
+    });
+    
+    // Add observers placeholder (for future)
+    // html += `<div style="margin-top: 15px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.2);">
+    //   <div style="font-weight: bold; margin-bottom: 5px; opacity: 0.7;">Observers:</div>
+    //   <div style="opacity: 0.5;">Coming soon...</div>
+    // </div>`;
+    
+    playersContent.innerHTML = html || '<div style="opacity: 0.5;">No players found</div>';
   }
 
 	
@@ -2266,9 +2303,9 @@ function getRandomColor() {
     // Normalize radius between 0 and 1
     const normalizedRadius = (currentRadius - minRadius) / (maxRadius - minRadius);
     
-    // Beta range: 0.8 (looking less down when zoomed in) to 1.1 (looking toward ground when zoomed out)
-    const minBeta = 0.8;  // Looking less down (zoomed in)
-    const maxBeta = 1.1;  // Looking toward ground (zoomed out)
+    // Beta range: 1.0 (looking down when zoomed in) to 1.3 (looking more toward ground when zoomed out)
+    const minBeta = 1.0;  // Looking down (zoomed in)
+    const maxBeta = 1.3;  // Looking more toward ground (zoomed out)
     
     // Calculate target beta based on zoom and apply directly with smooth lerp
     const targetBeta = minBeta + (normalizedRadius * (maxBeta - minBeta));

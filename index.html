@@ -25,8 +25,10 @@
   <script src="vendor/babylon.inspector.bundle.js"></script>
   <!-- <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script> -->
 
-  <script src="vendor/getfire.js" type="text/javascript"></script>
-  <link rel="stylesheet" type="text/css" href="vendor/getfire.css">
+  <!-- <script src="vendor/getfire.js" type="text/javascript"></script>
+  <link rel="stylesheet" type="text/css" href="vendor/getfire.css"> -->
+  <script src="vendor/getfire-1.8.6.js"></script>
+
  
 
   <!-- <script src="vendor/ftxx_pointer.js"></script> -->
@@ -198,6 +200,11 @@
       <div class="menu_title">INGAME</div>
       <br><br>
       <div class="lobby_b" title="Pause/Resume Match" onclick="if (window.currentMatch) { window.currentMatch.togglePause(); ui.hideMenu(); }">⏸️ Pause / Resume ▶️</div>
+      <div class="lobby_b" title="Concede Match" onclick="if (window.currentMatch && window.currentMatch.concede) { if (confirm('Are you sure you want to concede?')) { window.currentMatch.concede(); ui.hideMenu(); } }" style="background: rgba(200, 0, 0, 0.3); margin-top: 10px;">🏳️ Concede</div>
+      <div id="ingame_players_list" style="margin-top: 20px; text-align: left; padding: 10px;">
+        <div style="font-weight: bold; margin-bottom: 10px;">Players:</div>
+        <div id="ingame_players_content"></div>
+      </div>
     </div>
 
     <div id="adventure_lobby" class="menu_menu">

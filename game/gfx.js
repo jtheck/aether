@@ -1327,7 +1327,6 @@ let pov2 = 240;
                  child.setEnabled(false);
                }
              });
-             console.log(`🪓 Tree sunk into ground at (${gridX}, ${gridZ})`);
            }
       };
       
@@ -2247,7 +2246,7 @@ let pov2 = 240;
   function mainRenderLoop(){
     // Log once to confirm code is running
     if (!window._renderLoopConfirmed) {
-      console.log('✅ mainRenderLoop code is running (new version)');
+      // console.log('✅ mainRenderLoop code is running (new version)');
       window._renderLoopConfirmed = true;
     }
     
@@ -2293,7 +2292,7 @@ let pov2 = 240;
     // Guard camera params before rendering to avoid NaNs breaking frustum
     if (gfx.camera) {
       if (!Number.isFinite(gfx.camera.alpha)) gfx.camera.alpha = 0;
-      if (!Number.isFinite(gfx.camera.beta)) gfx.camera.beta = 0.9;
+      if (!Number.isFinite(gfx.camera.beta)) gfx.camera.beta = 1.1;
       if (!Number.isFinite(gfx.camera.radius)) gfx.camera.radius = 80;
       gfx.camera.beta = Math.max(0.2, Math.min(1.5, gfx.camera.beta));
       if (typeof gfx.camera.lowerRadiusLimit === 'number' && typeof gfx.camera.upperRadiusLimit === 'number') {
@@ -2429,7 +2428,7 @@ let pov2 = 240;
 
     // SAFETY: Log mesh count before render
     if (window.frameCounter % 60 === 0) {
-      console.log(`Frame ${window.frameCounter}: ${gfx.scene.meshes.length} meshes in scene`);
+      // console.log(`Frame ${window.frameCounter}: ${gfx.scene.meshes.length} meshes in scene`);
     }
 
     // SAFETY: Wrap the actual render call
@@ -2551,6 +2550,56 @@ let pov2 = 240;
     
     // Update unit mesh positions and rotations
     // NOTE: Unit logic/behaviors/buildings are updated in game.js physics loop
+    // MENU SCENE: Use simple game loop with fixed timestep physics for menu scene units
+    if (!window.game && !window.currentMatch) {
+      // Initialize menu scene game loop state if needed
+      if (!gfx.menuGameLoop) {
+        gfx.menuGameLoop = {
+          lastTime: performance.now(),
+          physicsTime: 0,
+          physicsTimestep: 1/60, // Fixed 60Hz physics (16.67ms)
+          frameCounter: 0
+        };
+      }
+      
+      // Calculate delta time
+      const currentTime = performance.now();
+      const deltaTime = Math.min((currentTime - gfx.menuGameLoop.lastTime) / 1000, 0.1); // Cap at 100ms
+      gfx.menuGameLoop.lastTime = currentTime;
+      gfx.menuGameLoop.frameCounter++;
+      
+      // Make frame counter globally available
+      window.frameCounter = gfx.menuGameLoop.frameCounter;
+      
+      // Accumulate time for physics
+      gfx.menuGameLoop.physicsTime += deltaTime;
+      
+      // Run physics at fixed timestep (60Hz)
+      const maxPhysicsSteps = 10; // Cap steps per frame
+      let physicsSteps = 0;
+      while (gfx.menuGameLoop.physicsTime >= gfx.menuGameLoop.physicsTimestep && physicsSteps < maxPhysicsSteps) {
+        physicsSteps++;
+        
+        // Update units and their behaviors (this applies impulses)
+        if (window.updateUnits) {
+          window.updateUnits(gfx.menuGameLoop.physicsTimestep);
+        }
+        
+        // Update player physics (cosmetic frog movement)
+        if (window.player && window.player.pbody && window.player.pbody.integrate) {
+          window.player.pbody.integrate(gfx.menuGameLoop.physicsTimestep, true, true);
+        }
+        
+        // Step physics time forward
+        gfx.menuGameLoop.physicsTime -= gfx.menuGameLoop.physicsTimestep;
+      }
+    } else {
+      // Game/match is active - clear menu loop state
+      if (gfx.menuGameLoop) {
+        delete gfx.menuGameLoop;
+      }
+    }
+    
     if (window.updateUnitMeshes) {
       updateUnitMeshes();
     }
@@ -3441,7 +3490,7 @@ let pov2 = 240;
   
   gfx.makeCamera = function(scene) {
     let radius = 80; // Start at a good middle distance within the zoom range
-    // Set better default camera angle: alpha=-2.5 (horizontal), beta=0.9 (looking slightly down, not straight down)
+    // Set better default camera angle: alpha=-2.5 (horizontal), beta=1.1 (looking down more)
     
     // CRITICAL: Position camera at the default player agora location
     // Default player agora is at (15, 15) in tile coordinates (see player.js line 40)
@@ -3452,7 +3501,7 @@ let pov2 = 240;
     const initialZ = defaultAgoraZ * TILE_SIZE;
     const initialY = 9;
     
-    let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 0.9, radius, new Vec3(initialX, initialY, initialZ), scene);
+    let camera = new BABYLON.ArcRotateCamera("zCamera", -2.5, 1.1, radius, new Vec3(initialX, initialY, initialZ), scene);
     gfx.cameraTarget = new BABYLON.TransformNode("zCameraFocus");
     gfx.cameraTarget.position.set(initialX, initialY, initialZ);
     // Lock camera to target; we will drive the target via an anchor with lerp
@@ -3482,7 +3531,7 @@ let pov2 = 240;
     // Camera setup complete
 
     camera.upperRadiusLimit = 300; // Increased for better horizon view
-    camera.lowerRadiusLimit = 35;  // Increased minimum to keep camera further from ground
+    camera.lowerRadiusLimit = 21;  // Closer minimum zoom (39% closer than before)
     camera.upperBetaLimit = 2.0; // Limit how high you can look (prevent going too high)
     camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
     camera.maxZ = 50000; // extend far plane to avoid terrain popping on wide zoom
@@ -3494,7 +3543,7 @@ let pov2 = 240;
       if (!camera) return;
       // Ensure finite camera parameters to prevent scene disappearing
       if (!Number.isFinite(camera.alpha)) camera.alpha = 0;
-      if (!Number.isFinite(camera.beta)) camera.beta = 0.9;
+      if (!Number.isFinite(camera.beta)) camera.beta = 1.1;
       if (!Number.isFinite(camera.radius)) camera.radius = 80;
       // Keep beta reasonable
       camera.beta = Math.max(0.2, Math.min(1.5, camera.beta));
@@ -3600,7 +3649,6 @@ let pov2 = 240;
     resourceModelRegistry.clear();
     pendingResourceTiles.clear();
     depletedResourceTiles.clear();
-    console.log(`🗑️ Cleared resource registries (${disposedCount} trees disabled)`);
   };
   
   // Debug helper to check tree state at a grid position

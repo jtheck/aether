@@ -57,8 +57,12 @@
       // Synchronization
       this.checksums = new Map(); // Tick -> checksum for desync detection
       this.lastSyncTick = 0;
-      this.syncInterval = 100; // Check sync every 100 ticks (5 seconds at 20Hz)
+      this.syncInterval = 50; // Check sync every 50 ticks (2.5 seconds at 20Hz) - more frequent for smoother sync
       this.desyncDetected = false;
+      
+      // Tick synchronization tracking
+      this.peerTickHistory = new Map(); // peerId -> array of {tick, receivedAt, localTick}
+      this.tickSyncAdjustment = 0; // Adjustment to apply to tick rate (in ms)
       
       // CRITICAL: Queue for pending resource decrements to batch at sync checkpoints
       // This ensures both clients apply decrements at the same tick, preventing desyncs
@@ -230,7 +234,6 @@
               }
               
               setTimeout(() => {
-                console.log('🏁 Host entering PLAYING state');
                 this.beginPlaying();
               }, 400);
             }, 1000);
@@ -333,7 +336,7 @@
         
         // Defensive: clamp camera params and re-seed chunk loading at the camera center
         if (!Number.isFinite(window.gfx.camera.alpha)) window.gfx.camera.alpha = -2.5;
-        if (!Number.isFinite(window.gfx.camera.beta)) window.gfx.camera.beta = 0.9;
+        if (!Number.isFinite(window.gfx.camera.beta)) window.gfx.camera.beta = 1.1;
         if (!Number.isFinite(window.gfx.camera.radius)) window.gfx.camera.radius = 80;
         // Force camera limits to recalc for new field size
         window._cameraLimitsSet = false;
@@ -461,9 +464,10 @@
       this.gameTime = this.tick / (window.net?.TICK_RATE || 20);
       
       // Update AI players (full AI logic including building decisions)
-      // P2P: All clients run full simulation identically
+      // CRITICAL: Only host runs AI logic in multiplayer - AI decisions go through command system
+      // Clients receive and execute AI commands via network, ensuring deterministic behavior
       // Run every 20 ticks (once per second)
-      if (this.tick % 20 === 0) {
+      if (this.tick % 20 === 0 && (!window.isMultiplayer || this.isHost())) {
         this.updateAIPlayers();
       }
       
@@ -471,7 +475,10 @@
       // P2P: For human vs human, this doesn't run (no AI players)
       // Run every 20 ticks (once per second) to avoid overwhelming the command system
       if (this.tick % 20 === 0 && this.isHost()) {
-        this.generateAICommands();
+        const aiCommandCount = this.generateAICommands();
+        if (aiCommandCount > 0 && this.tick % 100 === 0) { // Log every 5 seconds
+          console.log(`🤖 Host generated ${aiCommandCount} AI command(s) at tick ${this.tick}`);
+        }
       }
       
       // Execute commands for this tick
@@ -490,8 +497,31 @@
         this.checkEliminationVictory();
       }
       
-      // Synchronization checkpoint
-      if (this.tick % this.syncInterval === 0) {
+      // Synchronization checkpoint with adaptive frequency
+      // During active construction or movement, sync more frequently to prevent drift
+      // CRITICAL: In 3+ player games, sync more aggressively to prevent large position errors
+      const connectedPeers = window.net?.p2p?.getConnectedPeers() || [];
+      const playerCount = 1 + connectedPeers.length; // Local player + connected peers
+      const isMultiPlayerGame = playerCount >= 3;
+      
+      const hasActiveConstruction = window.gameBuildings?.some(b => 
+        b.needsWorkers && b.workType === 'build' && b.buildProgress < 1.0 && b.assignedWorkers?.length > 0
+      );
+      
+      // Check if units are actively moving (have velocity or active behaviors)
+      const hasActiveMovement = window.gameUnits?.some(u => {
+        if (!u.pb || !u.pb.state) return false;
+        const hasVelocity = u.pb.state.vel && (Math.abs(u.pb.state.vel.x) > 0.1 || Math.abs(u.pb.state.vel.z) > 0.1);
+        const hasBehavior = window.behaviorManager && window.behaviorManager.getBehavior(u);
+        return hasVelocity || hasBehavior;
+      });
+      
+      // Use faster sync interval during active gameplay
+      // CRITICAL: In 3+ player games, use even more aggressive sync (15 ticks = 0.75s) to prevent drift
+      const activeSyncInterval = isMultiPlayerGame ? 15 : 25; // 0.75s for 3+, 1.25s for 1v1
+      const currentSyncInterval = (hasActiveConstruction || hasActiveMovement) ? activeSyncInterval : this.syncInterval;
+      
+      if (this.tick % currentSyncInterval === 0) {
         // CRITICAL: Process pending resource decrements at sync checkpoint
         // This ensures both clients apply decrements at the same tick, preventing desyncs
         this.processPendingResourceDecrements();
@@ -509,15 +539,43 @@
         // This prevents floating-point drift while keeping P2P fairness
         this.syncUnitPositionsAtCheckpoint();
         
-        // CRITICAL: Delay checksum calculation slightly to allow position sync messages to arrive
-        // Without this delay, we calculate checksum before receiving remote positions, causing desync
-        // 50ms is enough for local network messages but imperceptible to gameplay
+        // CRITICAL: Track this checkpoint and wait for position syncs to arrive before checksumming
+        // Initialize pending syncs tracker if needed
+        if (!this.pendingPositionSyncs) {
+          this.pendingPositionSyncs = new Set();
+        }
+        
+        // Mark that we're waiting for position syncs from all peers
+        const connectedPeers = window.net?.p2p?.getConnectedPeers() || [];
+        this.pendingPositionSyncs.clear();
+        connectedPeers.forEach(peerId => {
+          this.pendingPositionSyncs.add(peerId);
+        });
+        this.pendingPositionSyncTick = this.tick;
+        
+        // CRITICAL: Wait for position syncs with adaptive timeout based on network latency
+        // Use longer delay if we detected lag earlier (up to 200ms for high latency)
+        const baseDelay = 100; // Base 100ms delay
+        const maxPeerLag = window.net?.getPeerLag ? Object.values(window.net.getPeerLag()).reduce((max, lag) => Math.max(max, lag.lag || 0), 0) : 0;
+        const adaptiveDelay = baseDelay + (maxPeerLag * 10); // Add 10ms per tick of lag
+        const finalDelay = Math.min(adaptiveDelay, 300); // Cap at 300ms
+        
         const checkpointTick = this.tick;
         setTimeout(() => {
           if (this.tick === checkpointTick) { // Still at same checkpoint (haven't advanced past it)
-            this.createSyncCheckpoint();
+            // If we're still waiting for syncs, wait a bit more
+            if (this.pendingPositionSyncs && this.pendingPositionSyncs.size > 0) {
+              // Wait another 100ms for late syncs
+              setTimeout(() => {
+                if (this.tick === checkpointTick) {
+                  this.createSyncCheckpoint();
+                }
+              }, 100);
+            } else {
+              this.createSyncCheckpoint();
+            }
           }
-        }, 50);
+        }, finalDelay);
       }
       
       // Time limit check
@@ -535,19 +593,22 @@
       }
       
       // Add metadata
-      // MULTIPLAYER TUNING: Command buffer delay
-      // Higher = smoother (commands arrive on time), but local input feels slightly delayed
-      // Lower = more responsive locally, but more catch-up needed for remote units
-      // Typical values: 2-5 ticks (40-100ms at 50Hz)
-      const COMMAND_BUFFER_DELAY = 3; // Competitive but smooth - slight imposed lag for better sync
+      // MULTIPLAYER TUNING: Command buffer delay with priority system
+      // Player commands (move, attack) get minimal delay for real-time feel
+      // Background commands (gather, work) get longer delay for smoother sync
+      const isPlayerCommand = command.type === 'move' || command.type === 'attack' || command.type === 'ability';
+      const COMMAND_BUFFER_DELAY_PLAYER = 1; // Minimal delay for player commands (real-time feel)
+      const COMMAND_BUFFER_DELAY_BACKGROUND = 3; // Longer delay for background commands (smoother sync)
+      const commandDelay = isPlayerCommand ? COMMAND_BUFFER_DELAY_PLAYER : COMMAND_BUFFER_DELAY_BACKGROUND;
       
       const enrichedCommand = {
         ...command,
         matchId: this.id,
         playerId: command.playerId || this.localPlayerId,
-        tick: this.tick + COMMAND_BUFFER_DELAY, // CRITICAL: Commands execute based on tick, not timestamp
+        tick: this.tick + commandDelay, // CRITICAL: Commands execute based on tick, not timestamp
         timestamp: Date.now(), // Metadata only - NOT used for scheduling or execution timing
-        commandId: this.generateCommandId()
+        commandId: this.generateCommandId(),
+        priority: isPlayerCommand ? 'high' : 'normal' // Mark priority for network layer
       };
       
       // Log gather/work commands for debugging
@@ -566,6 +627,47 @@
         return false;
       }
       
+      // CRITICAL: Deduplicate move commands - if there are already pending move commands
+      // for the same units, remove the older ones and only keep the latest
+      // This prevents jerky movement from processing intermediate commands
+      if (command.type === 'move' && command.unitIds && command.unitIds.length > 0) {
+        // Find and remove older move commands for the same units
+        const unitIdSet = new Set(command.unitIds);
+        
+        // Check pending commands
+        this.pendingCommands = this.pendingCommands.filter(cmd => {
+          // Keep non-move commands
+          if (cmd.type !== 'move') return true;
+          // Keep move commands for different units
+          if (!cmd.unitIds || cmd.unitIds.length === 0) return true;
+          // Remove if any unit IDs overlap (same units, newer command wins)
+          const hasOverlap = cmd.unitIds.some(id => unitIdSet.has(id));
+          return !hasOverlap;
+        });
+        
+        // Check command buffer (commands scheduled for future ticks)
+        this.commandBuffer.forEach((commands, tickKey) => {
+          const filteredCommands = commands.filter(cmd => {
+            // Keep non-move commands
+            if (cmd.type !== 'move') return true;
+            // Keep move commands for different units
+            if (!cmd.unitIds || cmd.unitIds.length === 0) return true;
+            // Remove if any unit IDs overlap (same units, newer command wins)
+            const hasOverlap = cmd.unitIds.some(id => unitIdSet.has(id));
+            return !hasOverlap;
+          });
+          
+          // Update the buffer with filtered commands
+          if (filteredCommands.length !== commands.length) {
+            if (filteredCommands.length > 0) {
+              this.commandBuffer.set(tickKey, filteredCommands);
+            } else {
+              this.commandBuffer.delete(tickKey);
+            }
+          }
+        });
+      }
+      
       // Add to pending queue
       this.pendingCommands.push(enrichedCommand);
       
@@ -577,11 +679,27 @@
       this.commandBuffer.get(tickKey).push(enrichedCommand);
       
       // Send over network if multiplayer
+      // CRITICAL: Player commands sent immediately (high priority)
+      // Background commands can be batched/deferred
       if (window.isMultiplayer && window.net && window.net.p2p) {
-        window.net.p2p.sendData({
+        // Update last player command time for LOD sync frequency
+        if (isPlayerCommand && window.net.updateLastPlayerCommandTime) {
+          window.net.updateLastPlayerCommandTime();
+        }
+        
+        // Send immediately with acknowledgment request for player commands
+        const message = {
           type: 'game_command',
-          command: enrichedCommand
-        });
+          command: enrichedCommand,
+          requestAck: isPlayerCommand // Request acknowledgment for player commands
+        };
+        
+        window.net.p2p.sendData(message);
+        
+        // Track command for acknowledgment if requested
+        if (isPlayerCommand && window.net.trackCommandAck) {
+          window.net.trackCommandAck(enrichedCommand.commandId, enrichedCommand);
+        }
       }
       
       // Add to replay
@@ -687,18 +805,6 @@
         });
       }
       
-      // Log build commands for debugging
-      if (command.type === 'build' && window.isMultiplayer) {
-        console.log(`🏗️ executeBuildCommand at tick ${this.tick}:`, {
-          buildingType: command.buildingType,
-          gridX: command.gridX,
-          gridZ: command.gridZ,
-          playerId: command.playerId,
-          scheduledTick: command.tick,
-          buildingCounter: this.buildingCounter
-        });
-      }
-      
       switch (command.type) {
         case 'move':
           this.executeMoveCommand(command);
@@ -747,8 +853,26 @@
       // Filter to only owned units (security check)
       const ownedUnits = units.filter(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
-        return unitOwnerId === normalizedPlayerId;
+        const matches = unitOwnerId === normalizedPlayerId;
+        
+        // Debug logging for 3+ player games when units don't match
+        if (!matches && window.isMultiplayer && window.net && window.net.p2p) {
+          const connectedPeers = window.net.p2p.getConnectedPeers();
+          if (connectedPeers.length >= 2 && Math.random() < 0.1) { // Log 10% of mismatches
+            console.warn(`⚠️ [3+ PLAYER] Unit ${unit.id?.slice(-4)} owner mismatch: unit.owner="${unitOwnerId}" vs cmd.playerId="${normalizedPlayerId}" (raw: "${rawPlayerId}")`);
+          }
+        }
+        
+        return matches;
       });
+      
+      // Debug logging for 3+ player games
+      if (ownedUnits.length === 0 && units.length > 0 && window.isMultiplayer && window.net && window.net.p2p) {
+        const connectedPeers = window.net.p2p.getConnectedPeers();
+        if (connectedPeers.length >= 2 && Math.random() < 0.2) { // Log 20% of cases
+          console.warn(`⚠️ [3+ PLAYER] No owned units found for player ${normalizedPlayerId}! Requested ${units.length} units, found 0. Command: ${cmd.type}, tick: ${cmd.tick}`);
+        }
+      }
       
       // CRITICAL: Smooth position correction instead of instant snap
       // We store the authoritative start position as a "correction target"
@@ -763,22 +887,46 @@
             const errorZ = authoritativePos.z - unit.pb.state.loc.z;
             const errorDistance = Math.sqrt(errorX * errorX + errorZ * errorZ);
             
-            // Only correct if error is significant (> 0.5 units) but not catastrophic (< 20 units)
+            // CRITICAL: In 3+ player games, units can drift more due to network latency
+            // Use higher threshold for "catastrophic" errors (50 units instead of 20)
+            const connectedPeers = window.net?.p2p?.getConnectedPeers() || [];
+            const playerCount = 1 + connectedPeers.length;
+            const isMultiPlayerGame = playerCount >= 3;
+            const catastrophicThreshold = isMultiPlayerGame ? 50 : 20; // Higher threshold for 3+ players
+            
+            // Only correct if error is significant (> 0.3 units) but not catastrophic
             // Small errors ignore (noise), huge errors snap immediately (missed command)
-            if (errorDistance > 0.5 && errorDistance < 20) {
+            if (errorDistance > 0.3 && errorDistance < catastrophicThreshold) {
               // Store correction vector to be applied gradually during movement
+              // Use stronger correction for larger errors to catch up faster
+              // In 3+ player games, use more aggressive correction to compensate for network latency
+              const baseStrength = isMultiPlayerGame ? 0.3 : 0.2;
+              const correctionStrength = Math.min(baseStrength + (errorDistance * 0.01), isMultiPlayerGame ? 0.5 : 0.4);
               unit._positionCorrection = {
                 targetX: authoritativePos.x,
                 targetZ: authoritativePos.z,
-                strength: 0.15 // Lerp 15% per frame towards authoritative position
+                strength: correctionStrength // Adaptive strength based on error distance and player count
               };
-            } else if (errorDistance >= 20) {
-              // Catastrophic desync - snap immediately
+              
+              // Also update visual position immediately to prevent visual lag
+              if (unit.visualPosition) {
+                unit.visualPosition.x = authoritativePos.x;
+                unit.visualPosition.z = authoritativePos.z;
+              }
+            } else if (errorDistance >= catastrophicThreshold) {
+              // Catastrophic desync - snap immediately (both physics and visual)
               unit.pb.state.loc.x = authoritativePos.x;
               unit.pb.state.loc.z = authoritativePos.z;
-              console.warn(`⚠️ Large position error (${errorDistance.toFixed(1)} units) - snapped unit ${unit.id.slice(-4)}`);
+              if (unit.visualPosition) {
+                unit.visualPosition.x = authoritativePos.x;
+                unit.visualPosition.z = authoritativePos.z;
+              }
+              // Only warn for truly catastrophic errors (> 50 units in 3+ player games)
+              if (errorDistance > (isMultiPlayerGame ? 50 : 20)) {
+                console.warn(`⚠️ Large position error (${errorDistance.toFixed(1)} units) - snapped unit ${unit.id.slice(-4)}`);
+              }
             }
-            // Small errors (< 0.5 units) - ignore, checkpoint sync will handle it
+            // Small errors (< 0.3 units) - ignore, checkpoint sync will handle it
           }
         });
       }
@@ -799,11 +947,82 @@
         }
       });
       
+      // CRITICAL: Smart behavior transition - check if unit is already moving
+      // If moving in similar direction, don't reset rotation/velocity (smooth transition)
+      ownedUnits.forEach(unit => {
+        // Check if unit is already moving before clearing behavior
+        const currentBehavior = window.behaviorManager ? window.behaviorManager.getBehavior(unit) : null;
+        const wasMoving = currentBehavior && 
+          (currentBehavior.constructor.name === 'WalkBehavior' || currentBehavior.constructor.name === 'RunBehavior');
+        
+        let shouldResetRotation = true;
+        if (wasMoving && unit.pb && unit.pb.state && unit.pb.state.vel) {
+          // Unit is already moving - check if new target is similar direction
+          const currentVelX = unit.pb.state.vel.x || 0;
+          const currentVelZ = unit.pb.state.vel.z || 0;
+          const currentSpeed = Math.sqrt(currentVelX * currentVelX + currentVelZ * currentVelZ);
+          
+          if (currentSpeed > 0.1 && cmd.target) {
+            // Calculate direction to new target
+            const currentPos = unit.pb.state.loc;
+            const dx = cmd.target.x - currentPos.x;
+            const dz = cmd.target.z - currentPos.z;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            
+            if (distance > 0.1) {
+              // Normalize directions
+              const newDirX = dx / distance;
+              const newDirZ = dz / distance;
+              const currentDirX = currentVelX / currentSpeed;
+              const currentDirZ = currentVelZ / currentSpeed;
+              
+              // Check if directions are similar (dot product > 0.7, ~45 degrees)
+              const dotProduct = currentDirX * newDirX + currentDirZ * newDirZ;
+              if (dotProduct > 0.7) {
+                // Similar direction - don't reset rotation for smooth transition
+                shouldResetRotation = false;
+              }
+            }
+          }
+        }
+        
+        // Clear any existing behavior immediately
+        if (window.behaviorManager && window.behaviorManager.behaviors) {
+          window.behaviorManager.behaviors.delete(unit);
+        }
+        
+        // CRITICAL: Clear special ability modifiers (wizard_cast, monk_stealth, etc.) when moving
+        // These modifiers can interfere with movement if left active
+        // Special modifiers are stored on the unit, not in the behavior map
+        if (unit._specialModifiers) {
+          // Clear all active modifiers - movement commands should override ability usage
+          Object.keys(unit._specialModifiers).forEach(modifierType => {
+            const modifier = unit._specialModifiers[modifierType];
+            if (modifier && modifier.onReassignment) {
+              modifier.onReassignment();
+            }
+            delete unit._specialModifiers[modifierType];
+          });
+        }
+        
+        // Only reset rotation if direction changed significantly
+        if (shouldResetRotation) {
+          if (unit.pb && !unit.pb.rotVel) unit.pb.rotVel = { x: 0, y: 0, z: 0 };
+          if (unit.pb && unit.pb.rotVel) {
+            unit.pb.rotVel.y = 0;
+          }
+        }
+      });
+      
       // Single unit goes to exact point, multiple units spread out in formation
       if (ownedUnits.length === 1) {
         // Single unit - precise positioning
         const unit = ownedUnits[0];
         if (window.behaviorManager && window.WalkBehavior) {
+          // CRITICAL: Mark this as a player move command so auto-assignment doesn't immediately grab them
+          const currentTick = this.tick || 0;
+          unit.lastPlayerMoveTick = currentTick;
+          
           window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
           
           // If this is a monk, check for nearby units to kick when starting movement
@@ -823,19 +1042,29 @@
         
         sortedUnits.forEach((unit, index) => {
           if (window.behaviorManager && window.WalkBehavior) {
+            // CRITICAL: Mark this as a player move command so auto-assignment doesn't immediately grab them
+            const currentTick = this.tick || 0;
+            unit.lastPlayerMoveTick = currentTick;
+            
             // Calculate offset from center based on grid position
             const row = Math.floor(index / unitsPerRow);
             const col = index % unitsPerRow;
             
-            const rowOffset = (row - (Math.ceil(ownedUnits.length / unitsPerRow) - 1) / 2) * spacing;
-            const colOffset = (col - (unitsPerRow - 1) / 2) * spacing;
+            // CRITICAL: Round formation offsets to ensure deterministic results
+            // This prevents floating-point differences from causing units to converge
+            const rowOffset = Math.round(((row - (Math.ceil(ownedUnits.length / unitsPerRow) - 1) / 2) * spacing) * 100) / 100;
+            const colOffset = Math.round(((col - (unitsPerRow - 1) / 2) * spacing) * 100) / 100;
             
+            // CRITICAL: Round final target position to ensure determinism
+            // Each unit gets a unique target based on their deterministic index
             const spreadTarget = {
-              x: cmd.target.x + colOffset,
+              x: Math.round((cmd.target.x + colOffset) * 100) / 100,
               y: cmd.target.y,
-              z: cmd.target.z + rowOffset
+              z: Math.round((cmd.target.z + rowOffset) * 100) / 100
             };
             
+            // CRITICAL: Each unit gets their own unique target - no sharing!
+            // The personalityOffset in WalkBehavior will add further variation within the formation cell
             window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: spreadTarget });
             
             // If this is a monk, check for nearby units to kick when starting movement
@@ -893,10 +1122,6 @@
       const buildingIndex = this.buildingCounter++;
       const deterministicBuildingId = `building-${this.mapSeed}-${buildingIndex}`;
       
-      // DIAGNOSTIC: Log building counter state
-      if (window.isMultiplayer && cmd.buildingType === 'camp') {
-        console.log(`🏗️ Building counter: ${buildingIndex}, ID: ${deterministicBuildingId}, player: ${player.name || player.id}, resources: wood=${player.resources.wood}, stone=${player.resources.stone}`);
-      }
       
       // Check if player can afford it (AFTER counter increment!)
       if (!this.canAfford(player, cost)) {
@@ -908,7 +1133,6 @@
       
       // Deduct resources BEFORE placing building
       this.deductResources(player, cost);
-      console.log(`💰 ${player.name || player.id} built ${cmd.buildingType} (-${cost.wood || 0} wood, -${cost.stone || 0} stone) [Resources: wood=${player.resources.wood}, stone=${player.resources.stone}]`);
       
       // Place building using the existing placeBuilding function
       // Pass deterministic ID to ensure consistent building IDs across clients
@@ -923,11 +1147,6 @@
         const rawPlayerId = cmd.playerId || '';
         const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
         building.owner = normalizedPlayerId;
-        
-        // DIAGNOSTIC: Log building ownership for debugging
-        if (window.isMultiplayer && cmd.buildingType === 'camp') {
-          console.log(`🏗️ Building ${building.id} owned by ${normalizedPlayerId} (from command playerId: ${rawPlayerId})`);
-        }
         
         // Store team color so attached flag meshes can tint correctly
         if (typeof window.getTeamColorForOwner === 'function') {
@@ -1000,7 +1219,6 @@
             // CRITICAL: Store original resource count for deterministic selection
             // Workers select resources based on original count, not current count after depletion
             building.originalResourceCount = detectedResources.length;
-            console.log(`🏗️ DETERMINISTIC: Camp at (${cmd.gridX}, ${cmd.gridZ}) detected ${detectedResources.length} resources during command execution`);
           } else {
             building.originalResourceCount = 0;
             console.warn(`⚠️ DETERMINISTIC: Camp at (${cmd.gridX}, ${cmd.gridZ}) found NO resources during command execution`);
@@ -1366,7 +1584,9 @@
         return player && player.isAI;
       });
       
-      if (aiPlayers.length === 0) return;
+      if (aiPlayers.length === 0) return 0;
+      
+      let commandCount = 0;
       
       // For each AI player, make simple strategic decisions
       aiPlayers.forEach(aiPlayer => {
@@ -1400,12 +1620,14 @@
           
           // If nearby construction building found, go work there
           if (nearestConstruction && nearestConstructionDist < 200) {
-            this.submitCommand({
+            if (this.submitCommand({
               type: 'work',
               playerId: player.id,
               unitIds: [villager.id],
               buildingId: nearestConstruction.id
-            });
+            })) {
+              commandCount++;
+            }
             return;
           }
           
@@ -1429,12 +1651,14 @@
           
           // If nearby building found, go work there
           if (nearestBuilding && nearestBuildingDist < 150) {
-            this.submitCommand({
+            if (this.submitCommand({
               type: 'work',
               playerId: player.id,
               unitIds: [villager.id],
               buildingId: nearestBuilding.id
-            });
+            })) {
+              commandCount++;
+            }
             return;
           }
           
@@ -1456,12 +1680,14 @@
           
           // Submit gather command only if resource nearby
           if (nearestResource && nearestDist < 200) {
-            this.submitCommand({
+            if (this.submitCommand({
               type: 'gather',
               playerId: player.id,
               unitIds: [villager.id],
               resourceId: nearestResource.id
-            });
+            })) {
+              commandCount++;
+            }
           }
           // Otherwise stay idle near base
         });
@@ -1471,15 +1697,19 @@
         if (villagerCount < 12 && player.resources && player.resources.food >= 50) {
           const agora = player.buildings?.find(b => b && b.type === 'agora');
           if (agora) {
-            this.submitCommand({
+            if (this.submitCommand({
               type: 'train',
               playerId: player.id,
               buildingId: agora.id,
               unitType: 'villager'
-            });
+            })) {
+              commandCount++;
+            }
           }
         }
       });
+      
+      return commandCount;
     }
     
     // Victory condition checks
@@ -1919,6 +2149,34 @@
       }
     }
     
+    // Concede the match (local player quits)
+    concede() {
+      if (!this.localPlayerId) {
+        console.warn('⚠️ Cannot concede: no local player ID');
+        return;
+      }
+      
+      // Broadcast concede FIRST before eliminating (so other players know)
+      if (window.isMultiplayer && window.net && window.net.p2p && window.net.p2p.sendData) {
+        try {
+          window.net.p2p.sendData({
+            type: 'player_conceded',
+            playerId: this.localPlayerId,
+            matchId: this.id
+          });
+          console.log('📡 Sent concede message to other players');
+        } catch (error) {
+          console.warn('⚠️ Failed to send concede message:', error);
+        }
+      }
+      
+      // Small delay to ensure message is sent before eliminating
+      setTimeout(() => {
+        // Eliminate local player
+        this.eliminatePlayer(this.localPlayerId);
+      }, 100);
+    }
+    
     // End match by time limit
     endMatchByTimeLimit() {
       // Determine winner by score (units + buildings + resources)
@@ -2026,11 +2284,6 @@
       
       if (decrementsToProcess.length === 0) return;
       
-      // DIAGNOSTIC: Log what we're processing at this checkpoint
-      if (window.isMultiplayer) {
-        console.log(`📦 Processing ${decrementsToProcess.length} resource decrements at sync checkpoint tick ${currentSyncCheckpoint} (interval: ${previousSyncCheckpoint + 1}-${currentSyncCheckpoint})`);
-      }
-      
       // Sort decrements deterministically by building ID, then grid position
       const sortedDecrements = decrementsToProcess.slice().sort((a, b) => {
         if (a.buildingId !== b.buildingId) return (a.buildingId || '').localeCompare(b.buildingId || '');
@@ -2051,24 +2304,18 @@
           const oldRemaining = resource.remaining;
           resource.remaining = Math.max(0, resource.remaining - decrement.amount);
           
-          // DIAGNOSTIC: Log decrement application
-          if (window.isMultiplayer) {
-            console.log(`  ✓ Applied decrement: Resource (${resource.gridX}, ${resource.gridZ}) remaining: ${oldRemaining} → ${resource.remaining} (queued at tick ${decrement.queuedAtTick})`);
-          }
-          
           // If depleted, schedule depletion at next sync checkpoint
           if (resource.remaining <= 0 && !resource.depleted && resource.depletionTick === undefined) {
             const syncInterval = this.syncInterval || 100;
             const depletionTick = Math.ceil((this.tick + 1) / syncInterval) * syncInterval;
             resource.remaining = 0;
             resource.depletionTick = depletionTick;
-            console.log(`🪓 Resource scheduled for depletion at (${resource.gridX}, ${resource.gridZ}) at sync checkpoint tick ${this.tick} (will deplete at tick ${depletionTick})!`);
           }
         }
       });
       
-      // Clear the queue
-      this.pendingResourceDecrements = [];
+      // NOTE: Queue already filtered at line 2288-2291 to keep future decrements
+      // Don't clear here - that would remove decrements queued for future checkpoints!
     }
     
     // P2P Unit Position Sync - Each player broadcasts their own unit positions
@@ -2112,9 +2359,6 @@
           playerId: this.localPlayerId,
           positions: myUnitPositions
         });
-        
-        // Always log position sync for debugging
-        console.log(`📤 [CHECKPOINT ${this.tick}] Sent ${myUnitPositions.length} unit positions`);
       }
     }
     
@@ -2124,13 +2368,61 @@
       
       const tickDiff = this.tick - tick;
       const syncInterval = this.syncInterval || 100;
+      const ticksPerSecond = window.net?.TICK_RATE || 20;
       
-      // CRITICAL: Allow checkpoint syncs that arrive slightly late (within sync interval)
-      // This handles network latency - checkpoint syncs are critical for keeping units synchronized
-      // But reject very old syncs (> syncInterval ticks old) to prevent moving backwards in time
-      if (tickDiff > syncInterval) {
-        console.warn(`⚠️ Ignoring unit position sync from too old tick: ${tick} (current: ${this.tick}, diff: ${tickDiff})`);
+      // CRITICAL: Track tick synchronization to detect divergence
+      if (!this.peerTickHistory.has(fromPlayerId)) {
+        this.peerTickHistory.set(fromPlayerId, []);
+      }
+      const history = this.peerTickHistory.get(fromPlayerId);
+      history.push({ tick, receivedAt: Date.now(), localTick: this.tick });
+      // Keep only last 10 syncs for analysis
+      if (history.length > 10) {
+        history.shift();
+      }
+      
+      // Analyze tick divergence over recent syncs
+      if (history.length >= 3) {
+        const recentDiffs = history.slice(-5).map(h => h.localTick - h.tick);
+        const avgDiff = recentDiffs.reduce((a, b) => a + b, 0) / recentDiffs.length;
+        const consistentDivergence = recentDiffs.every(d => Math.abs(d - avgDiff) < 50);
+        
+        // If we consistently see the peer is behind, we're running too fast
+        // Adjust tick rate slightly to slow down and let them catch up
+        if (consistentDivergence && avgDiff > ticksPerSecond * 2) {
+          // Slow down by adding small delay (max 10ms per tick)
+          this.tickSyncAdjustment = Math.min(avgDiff / ticksPerSecond * 2, 10);
+          if (this.tickSyncAdjustment > 1) {
+            console.log(`🔄 Tick sync adjustment: slowing down by ${this.tickSyncAdjustment.toFixed(1)}ms (peer ${avgDiff.toFixed(0)} ticks behind)`);
+          }
+        } else if (consistentDivergence && avgDiff < -ticksPerSecond) {
+          // Peer is ahead, but we can't speed up - just note it
+          this.tickSyncAdjustment = 0;
+        } else {
+          // Divergence is inconsistent or small, reset adjustment
+          this.tickSyncAdjustment = Math.max(0, this.tickSyncAdjustment - 0.5);
+        }
+      }
+      
+      // CRITICAL: Mark that we received position sync from this peer
+      // This allows checksum to wait for all syncs before calculating
+      if (this.pendingPositionSyncs && this.pendingPositionSyncTick === tick) {
+        this.pendingPositionSyncs.delete(fromPlayerId);
+      }
+      
+      // CRITICAL: Handle late position syncs intelligently
+      // Peers may have diverging tick counts or network delays, so we need generous tolerance
+      // Only reject if it's impossibly old (> 60 seconds) - likely stale/duplicate from a disconnected peer
+      const maxAcceptableAge = ticksPerSecond * 60; // ~60 seconds tolerance for network delays and tick divergence
+      if (tickDiff > maxAcceptableAge) {
+        console.warn(`⚠️ Ignoring unit position sync from impossibly old tick: ${tick} (current: ${this.tick}, diff: ${tickDiff}, max: ${maxAcceptableAge}, ~${(tickDiff / ticksPerSecond).toFixed(1)}s late)`);
         return;
+      }
+      
+      // If sync is moderately old (> 5 seconds), log warning but still apply
+      // This handles peers that are temporarily behind due to network lag, slow processing, or tick divergence
+      if (tickDiff > ticksPerSecond * 5) {
+        console.warn(`⚠️ Applying late position sync from tick ${tick} (current: ${this.tick}, diff: ${tickDiff} ticks, ~${(tickDiff / ticksPerSecond).toFixed(1)}s late)`);
       }
       
       // If sync is from a past checkpoint (but within acceptable window), use catch-up
@@ -2155,26 +2447,60 @@
             
             // Use smooth catch-up for small-medium errors, snap for catastrophic errors
             // If sync is late, use faster catch-up to compensate for the delay
-            const catchUpStrength = isLateSync ? 0.35 : 0.25; // Faster catch-up if sync arrived late
+            // Very late syncs (> 5 seconds) need aggressive correction to catch up
+            const ticksPerSecond = window.net?.TICK_RATE || 20;
+            const isVeryLate = tickDiff > ticksPerSecond * 5; // More than 5 seconds late
+            const isExtremelyLate = tickDiff > ticksPerSecond * 15; // More than 15 seconds late - use very aggressive correction
+            const baseStrength = isExtremelyLate ? 0.8 : (isVeryLate ? 0.6 : (isLateSync ? 0.3 : 0.2));
+            const adaptiveStrength = Math.min(baseStrength + (errorDistance * 0.01), isExtremelyLate ? 0.95 : (isVeryLate ? 0.8 : 0.5));
             
-            if (errorDistance > 0.5 && errorDistance < 20) {
+            // CRITICAL: In 3+ player games, units can drift more due to network latency
+            // Use higher threshold for "catastrophic" errors (50 units instead of 20)
+            const connectedPeers = window.net?.p2p?.getConnectedPeers() || [];
+            const playerCount = 1 + connectedPeers.length;
+            const isMultiPlayerGame = playerCount >= 3;
+            const catastrophicThreshold = isMultiPlayerGame ? 50 : 20; // Higher threshold for 3+ players
+            
+            if (errorDistance > 0.3 && errorDistance < catastrophicThreshold) {
               // Smooth catch-up: make unit move faster towards correct position
               // The position correction system will lerp them there gradually
+              // In 3+ player games, use more aggressive correction to compensate for network latency
+              const baseStrength = isMultiPlayerGame ? 0.3 : 0.2;
+              const adjustedStrength = Math.min(baseStrength + (errorDistance * 0.01), isMultiPlayerGame ? 0.5 : 0.4);
               unit._positionCorrection = {
                 targetX: posData.x,
                 targetZ: posData.z,
-                strength: catchUpStrength // Faster catch-up if sync arrived late
+                strength: Math.max(adjustedStrength, adaptiveStrength) // Use the stronger of the two
               };
+              
+              // Update visual position immediately to prevent visual lag
+              if (unit.visualPosition) {
+                unit.visualPosition.x = posData.x;
+                unit.visualPosition.z = posData.z;
+                unit.visualPosition.y = posData.y;
+              }
+              
               correctedCount++;
-            } else if (errorDistance >= 20) {
-              // Catastrophic desync - snap immediately (probably missed a command)
+            } else if (errorDistance >= catastrophicThreshold) {
+              // Catastrophic desync - snap immediately (both physics and visual)
               unit.pb.state.loc.x = posData.x;
               unit.pb.state.loc.y = posData.y;
               unit.pb.state.loc.z = posData.z;
-              console.warn(`⚠️ Large position error (${errorDistance.toFixed(1)} units) - snapped unit ${unit.id.slice(-4)}`);
+              if (unit.visualPosition) {
+                unit.visualPosition.x = posData.x;
+                unit.visualPosition.y = posData.y;
+                unit.visualPosition.z = posData.z;
+              }
+              // Only warn for truly catastrophic errors (> 50 units in 3+ player games)
+              if (errorDistance > (isMultiPlayerGame ? 50 : 20)) {
+                console.warn(`⚠️ Large position error (${errorDistance.toFixed(1)} units) - snapped unit ${unit.id.slice(-4)}`);
+              }
             } else {
-              // Small error (< 0.5 units) - just update Y if needed, let normal movement handle it
+              // Small error (< 0.3 units) - just update Y if needed, let normal movement handle it
               unit.pb.state.loc.y = posData.y;
+              if (unit.visualPosition) {
+                unit.visualPosition.y = posData.y;
+              }
             }
             
             appliedCount++;
@@ -2184,18 +2510,9 @@
       
       if (appliedCount > 0) {
         const snapCount = appliedCount - correctedCount;
-        if (isLateSync) {
-          if (correctedCount > 0) {
-            console.log(`📥 [CHECKPOINT ${tick}] Applied ${appliedCount} unit positions from player ${remotePlayerId} (${correctedCount} catching up smoothly, ${tickDiff} ticks late)`);
-          } else {
-            console.log(`📥 [CHECKPOINT ${tick}] Applied ${appliedCount} unit positions from player ${remotePlayerId} (${tickDiff} ticks late)`);
-          }
-        } else {
-          if (correctedCount > 0) {
-            console.log(`📥 [CHECKPOINT ${tick}] Applied ${appliedCount} unit positions from player ${remotePlayerId} (${correctedCount} catching up smoothly)`);
-          } else {
-            console.log(`📥 [CHECKPOINT ${tick}] Applied ${appliedCount} unit positions from player ${remotePlayerId}`);
-          }
+        // Only log if there's a significant issue (late sync with corrections needed)
+        if (isLateSync && tickDiff > 5) {
+          console.warn(`⚠️ Late sync: Applied ${appliedCount} unit positions from player ${remotePlayerId} (${tickDiff} ticks late)`);
         }
       }
     }
@@ -2234,7 +2551,6 @@
           resourceStates: resourceStates
         };
         window.net.p2p.sendData(message);
-        console.log(`📤 Sent authoritative resource states at tick ${this.tick} (${Object.keys(resourceStates).length} buildings)`);
       }
     }
     
@@ -2249,7 +2565,6 @@
             // If resource is scheduled for depletion at this tick, mark it as depleted
             if (resource.depletionTick !== undefined && resource.depletionTick === this.tick && !resource.depleted) {
               resource.depleted = true;
-              console.log(`🪓 Resource depleted at (${resource.gridX}, ${resource.gridZ}) at sync checkpoint tick ${this.tick}!`);
               
               // Remove 3D model
               if (window.removeResourceModel) {
@@ -2263,6 +2578,17 @@
     
     // Create synchronization checkpoint
     createSyncCheckpoint() {
+      // CRITICAL: Clear pending syncs tracker after checksum calculation
+      // This ensures we don't wait forever if a peer never sends sync
+      if (this.pendingPositionSyncs) {
+        const stillWaiting = this.pendingPositionSyncs.size;
+        if (stillWaiting > 0) {
+          console.warn(`⚠️ Calculating checksum at tick ${this.tick} but still waiting for ${stillWaiting} position sync(s)`);
+        }
+        this.pendingPositionSyncs.clear();
+        this.pendingPositionSyncTick = null;
+      }
+      
       const checksum = this.calculateGameStateChecksum();
       this.checksums.set(this.tick, checksum);
       
@@ -2453,9 +2779,10 @@
     
     // Simple hash functions
     hashVector(vec) {
-      // Round to 0.1 (10cm) to tolerate small floating-point differences in physics
-      // This is acceptable for RTS games where precision to the centimeter doesn't matter
-      return Math.floor(vec.x * 10) ^ Math.floor(vec.y * 10) ^ Math.floor(vec.z * 10);
+      // Round to 0.01 (1cm) to match position sync precision
+      // This ensures checksums match exactly when positions are synced
+      // CRITICAL: Must match the rounding used in syncUnitPositionsAtCheckpoint()
+      return Math.floor(vec.x * 100) ^ Math.floor(vec.y * 100) ^ Math.floor(vec.z * 100);
     }
     
     hashPosition(x, z) {
@@ -2702,7 +3029,7 @@
       
       overlay.innerHTML = `
         <div style="text-align: center; color: white;">
-          <h1 style="font-size: 2em; margin-bottom: 20px;">🎮 Loading Match</h1>
+          <h1 style="font-size: 2em; margin-bottom: 20px;">🎮 Game Start</h1>
           <div style="font-size: 1.2em; margin-bottom: 15px;">
             <div class="loading-spinner" style="
               width: 50px; height: 50px;
@@ -2755,7 +3082,7 @@
         // Default loading progress
         overlay.innerHTML = `
           <div style="text-align: center; color: white;">
-            <h1 style="font-size: 2em; margin-bottom: 20px;">🎮 Loading Match</h1>
+            <h1 style="font-size: 2em; margin-bottom: 20px;">🎮 Game Start</h1>
             <div style="font-size: 1.2em; margin-bottom: 15px;">
               <div class="loading-spinner" style="
                 width: 50px; height: 50px;

@@ -247,6 +247,13 @@ Player.prototype.selectUnit = function(unit) {
     return false; // Already selected or invalid unit
   }
   
+  // MENU SCENE: If player has no ID (menu scene), allow selecting any unit including neutral ones
+  if (!this.id) {
+    this.selectedUnits.push(unit);
+    // console.log(`✅ Selected unit in menu scene: ${unit.name || unit.type} (owner: ${unit.owner})`);
+    return true;
+  }
+  
   // Check if unit belongs to this player
   // CRITICAL: Use last 6 chars of player ID for ownership comparison (matches unit.owner format)
   const normalizedPlayerId = this.id.length > 6 ? this.id.slice(-6) : this.id;

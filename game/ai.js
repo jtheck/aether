@@ -91,8 +91,9 @@ class Behavior {
             rotationDiff = rotationDiff > 0 ? rotationDiff - Math.PI * 2 : rotationDiff + Math.PI * 2;
         }
         
-        // Get unit rotation speed (default to 10.0 for snappy turning)
-        let rotationSpeed = this.unit.rotationSpeed || 2.0;
+        // Get unit rotation speed (default to higher value for snappy turning)
+        // Increased default for more responsive turning - units should face direction quickly
+        let rotationSpeed = this.unit.rotationSpeed || 3.0; // Increased from 2.0 for snappier turning
         
         // Flying units get reduced rotation speed to prevent spinning
         if (this.unit.abilities && this.unit.abilities.includes('fly')) {
@@ -116,18 +117,25 @@ class Behavior {
         // Setting velocity directly can conflict with physics integration and cause desyncs
         // The impulse system ensures deterministic accumulation across clients
         // Note: The velocity setting below is kept for backward compatibility but should be removed
-        // The impulse system (lines 43-44) is the primary movement mechanism
+        // The impulse system (lines 75-76) is the primary movement mechanism
+        
+        // CRITICAL: Always set velocity immediately when starting movement to prevent pause
+        // The impulse system handles ongoing movement, but we need immediate velocity for responsiveness
+        // Only skip if velocity is already very close AND unit is already moving (to prevent micro-adjustments)
         const targetVelX = direction.x * effectiveSpeed * momentumBoost;
         const targetVelZ = direction.z * effectiveSpeed * momentumBoost;
         
-        // Only set velocity if it's significantly different (prevents micro-adjustments that cause drift)
-        // This reduces floating-point precision issues
-        const velDiffX = Math.abs((this.unit.pb.state.vel.x || 0) - targetVelX);
-        const velDiffZ = Math.abs((this.unit.pb.state.vel.z || 0) - targetVelZ);
-        if (velDiffX > 0.01 || velDiffZ > 0.01) {
-            this.unit.pb.state.vel.x = Math.round(targetVelX * 1000) / 1000;
-            this.unit.pb.state.vel.z = Math.round(targetVelZ * 1000) / 1000;
-        }
+        const currentVelX = this.unit.pb.state.vel.x || 0;
+        const currentVelZ = this.unit.pb.state.vel.z || 0;
+        const currentSpeed = Math.sqrt(currentVelX * currentVelX + currentVelZ * currentVelZ);
+        
+        // CRITICAL: Always set velocity immediately for responsive movement
+        // Player commands should result in instant movement - no conditions, no delays
+        // The impulse system provides ongoing acceleration, but we need immediate velocity
+        // to prevent any pause when starting movement or changing direction
+        // ALWAYS update velocity when behavior is active - let behavior control movement completely
+        this.unit.pb.state.vel.x = Math.round(targetVelX * 1000) / 1000;
+        this.unit.pb.state.vel.z = Math.round(targetVelZ * 1000) / 1000;
         
         // Debug logging occasionally
         if (Math.random() < 0.01) { // 1% chance to log
@@ -260,11 +268,17 @@ class WalkBehavior extends Behavior {
         
         // CRITICAL: Apply unit's personality offset to target for visual variety
         // This prevents all units from converging to the exact same spot
-        // TEMPORARILY DISABLED: Investigating desync issue
-        const personalityOffset = { x: 0, z: 0 }; // this.unit.personalityOffset || { x: 0, z: 0 };
+        // RE-ENABLED: Personality offset is deterministic (based on unit ID) and properly rounded
+        // This ensures both clients calculate identical offsets, preventing desyncs
+        const personalityOffset = this.unit.personalityOffset || { x: 0, z: 0 };
+        // Round offset to ensure deterministic results (personalityOffset is already rounded, but double-check)
+        const roundedOffset = {
+            x: Math.round(personalityOffset.x * 1000) / 1000,
+            z: Math.round(personalityOffset.z * 1000) / 1000
+        };
         const adjustedTarget = {
-            x: this.targetPoint.x + personalityOffset.x,
-            z: this.targetPoint.z + personalityOffset.z
+            x: Math.round((this.targetPoint.x + roundedOffset.x) * 1000) / 1000,
+            z: Math.round((this.targetPoint.z + roundedOffset.z) * 1000) / 1000
         };
         
         const currentPos = this.unit.pb.state.loc;
@@ -423,8 +437,10 @@ class WorkBehavior extends Behavior {
         const angle = ((window.currentMatch?.tick || 0) * 0.05) % (Math.PI * 2); // Deterministic slow rotation
         const distance = workRadius * TILE_SIZE * 0.5; // Half radius for closer work
         
-        const workX = this.building.position.x + Math.cos(angle) * distance;
-        const workZ = this.building.position.z + Math.sin(angle) * distance;
+        // CRITICAL: Round work position to prevent floating-point drift accumulation
+        // Round to 0.01 precision (1cm) to keep positions synchronized
+        const workX = Math.round((this.building.position.x + Math.cos(angle) * distance) * 100) / 100;
+        const workZ = Math.round((this.building.position.z + Math.sin(angle) * distance) * 100) / 100;
         
         const direction = {
             x: workX - this.unit.pb.state.loc.x,
@@ -546,11 +562,16 @@ class GatherWorkBehavior extends WorkBehavior {
         if (this.gatherTarget) {
             // CRITICAL: Apply unit's personality offset to resource target for visual variety
             // This prevents all workers from standing in the exact same spot
-            // TEMPORARILY DISABLED: Investigating desync issue
-            const personalityOffset = { x: 0, z: 0 }; // this.unit.personalityOffset || { x: 0, z: 0 };
+            // RE-ENABLED: Personality offset is deterministic (based on unit ID) and properly rounded
+            // This ensures both clients calculate identical offsets, preventing desyncs
+            const personalityOffset = this.unit.personalityOffset || { x: 0, z: 0 };
+            const roundedOffset = {
+                x: Math.round(personalityOffset.x * 1000) / 1000,
+                z: Math.round(personalityOffset.z * 1000) / 1000
+            };
             const adjustedResourceTarget = {
-                x: this.gatherTarget.x + personalityOffset.x,
-                z: this.gatherTarget.z + personalityOffset.z
+                x: Math.round((this.gatherTarget.x + roundedOffset.x) * 1000) / 1000,
+                z: Math.round((this.gatherTarget.z + roundedOffset.z) * 1000) / 1000
             };
             
             // Continuously move toward resource target (with offset)
@@ -586,12 +607,50 @@ class GatherWorkBehavior extends WorkBehavior {
                 this.applyMovementWithRotation(direction, this.params.workSpeed);
             }
         } else {
-            // No resources found, just wander around camp
-            if (!this.noResourceWarningShown) {
-                console.warn(`⚠️ ${this.unit.name || this.unit.type} found NO resources at ${this.building.name}! Camp has ${this.building.availableResources?.length || 0} resource tiles. Worker will circle camp.`);
-                this.noResourceWarningShown = true;
+            // No resources found - check if camp truly has no available resources
+            const availableResources = this.building.availableResources || [];
+            const hasAvailableResources = availableResources.some(r => 
+                !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
+                (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
+            );
+            
+            if (!hasAvailableResources) {
+                // Camp has no resources - transition to idle so villager can be reassigned
+                if (!this.noResourceWarningShown) {
+                    console.log(`ℹ️ ${this.unit.name || this.unit.type} camp has no resources, transitioning to idle`);
+                    this.noResourceWarningShown = true;
+                }
+                
+                // Clear assignment to this building
+                if (this.building && this.building.assignedWorkers) {
+                    const idx = this.building.assignedWorkers.indexOf(this.unit);
+                    if (idx > -1) {
+                        this.building.assignedWorkers.splice(idx, 1);
+                    }
+                }
+                this.unit.assignedBuilding = null;
+                
+                // Drop off any resources being carried
+                if (this.gatheredResourceType && this.gatheredResourceAmount > 0) {
+                    this.addGatheredResources();
+                    this.removeResourceIndicator();
+                }
+                
+                // Transition to idle behavior (linger)
+                if (window.behaviorManager && this.unit.pb && this.unit.pb.state && this.unit.pb.state.loc) {
+                    window.behaviorManager.setBehavior(this.unit, 'linger', {
+                        center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
+                        radius: 50,
+                        wanderDistance: 2.0,
+                        wanderInterval: 30000
+                    });
+                }
+                return; // Exit - behavior has changed
+            } else {
+                // Resources exist but we couldn't find one (might be temporarily unavailable)
+                // Keep searching but don't spam warnings
+                super.performWork();
             }
-            super.performWork();
         }
     }
     
@@ -653,11 +712,16 @@ class GatherWorkBehavior extends WorkBehavior {
         
         // CRITICAL: Apply unit's personality offset to camp position for visual variety
         // This prevents all workers from converging to the exact same spot at camp
-        // TEMPORARILY DISABLED: Investigating desync issue
-        const personalityOffset = { x: 0, z: 0 }; // this.unit.personalityOffset || { x: 0, z: 0 };
+        // RE-ENABLED: Personality offset is deterministic (based on unit ID) and properly rounded
+        // This ensures both clients calculate identical offsets, preventing desyncs
+        const personalityOffset = this.unit.personalityOffset || { x: 0, z: 0 };
+        const roundedOffset = {
+            x: Math.round(personalityOffset.x * 1000) / 1000,
+            z: Math.round(personalityOffset.z * 1000) / 1000
+        };
         const adjustedCampPosition = {
-            x: this.building.position.x + personalityOffset.x,
-            z: this.building.position.z + personalityOffset.z
+            x: Math.round((this.building.position.x + roundedOffset.x) * 1000) / 1000,
+            z: Math.round((this.building.position.z + roundedOffset.z) * 1000) / 1000
         };
         
         // Continuously move back to camp every frame (with offset)
@@ -716,11 +780,18 @@ class GatherWorkBehavior extends WorkBehavior {
         let availableResources = this.building.availableResources || [];
         if (availableResources.length === 0) return null;
         
-        // CRITICAL: Ensure resources are sorted deterministically (by gridX, gridZ)
-        // Resources should already be sorted when detected, but ensure they stay sorted
-        // This prevents workers from selecting different resources if the array order changes
+        // CRITICAL: Ensure resources are sorted deterministically
+        // Prioritize stone over wood to balance resource gathering, then by gridX, gridZ
+        // This prevents workers from always depleting wood first
         const sortedResources = availableResources.length > 1 ? 
             availableResources.slice().sort((a, b) => {
+                // First priority: resource type (stone before wood)
+                if (a.type !== b.type) {
+                    if (a.type === 'stone') return -1;
+                    if (b.type === 'stone') return 1;
+                    // Both are wood or both are stone, continue to position sorting
+                }
+                // Second priority: grid position (deterministic)
                 if (a.gridX !== b.gridX) return a.gridX - b.gridX;
                 return a.gridZ - b.gridZ;
             }) : availableResources;
@@ -780,10 +851,9 @@ class GatherWorkBehavior extends WorkBehavior {
             return null;
         }
         
-        // Only log when changing resources (not every frame)
+        // Track resource assignment (silently)
         // CRITICAL: Use !== undefined to handle resourceIndex === 0 correctly
         if (this.lastResourceIndex === undefined || this.lastResourceIndex !== resourceIndex) {
-            console.log(`🌲 Worker ${this.unit.name || this.unit.type} assigned to resource tile ${resourceIndex}`);
             this.lastResourceIndex = resourceIndex;
         }
         
@@ -901,11 +971,6 @@ class GatherWorkBehavior extends WorkBehavior {
                     amount: this.gatheredResourceAmount,
                     queuedAtTick: currentTick // Track when this was queued
                 });
-                
-                // DIAGNOSTIC: Log queued decrement (will be applied at sync checkpoint)
-                if (window.isMultiplayer) {
-                    console.log(`📉 Resource (${resourceTile.gridX}, ${resourceTile.gridZ}) decrement queued: -${this.gatheredResourceAmount} at tick ${currentTick} (will apply at sync checkpoint) (worker: ${this.unit.id?.slice(-6)})`);
-                }
             }
         }
         
@@ -1045,11 +1110,14 @@ class BuildWorkBehavior extends WorkBehavior {
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
         const currentTick = window.currentMatch?.tick || 0;
         // Use deterministic angle based on unit ID and tick for multiplayer sync
+        // CRITICAL: Round angle calculation to prevent floating-point drift
         const angle = ((currentTick * 0.05) + (unitIdHash % 100) * 0.1) % (Math.PI * 2);
         const distance = workRadius * TILE_SIZE * 0.5; // Half radius for closer work
         
-        const workX = this.building.position.x + Math.cos(angle) * distance;
-        const workZ = this.building.position.z + Math.sin(angle) * distance;
+        // CRITICAL: Round work position to prevent floating-point drift accumulation
+        // Round to 0.01 precision (1cm) to keep positions synchronized
+        const workX = Math.round((this.building.position.x + Math.cos(angle) * distance) * 100) / 100;
+        const workZ = Math.round((this.building.position.z + Math.sin(angle) * distance) * 100) / 100;
         
         const direction = {
             x: workX - this.unit.pb.state.loc.x,
@@ -1137,6 +1205,23 @@ class AttackBuildingBehavior extends Behavior {
                 // Add damage effects
                 if (window.fx && window.fx.addBuildingDamageEffects) {
                     window.fx.addBuildingDamageEffects(this.building);
+                }
+                
+                // SPECIAL: Brigands set buildings on fire when attacking
+                if (this.unit.type === 'brigand' && window.fx && this.building.mesh) {
+                    // Check if building already has fire
+                    const hasFire = this.building.particleEffects && 
+                                   this.building.particleEffects.some(effect => effect.type === 'fire');
+                    if (!hasFire) {
+                        // Set building on fire!
+                        window.fx.attachParticleEffect(this.building, 'fire', 'fire_anchor', {
+                            scale: 0.6, // Moderate fire
+                            emitRate: 40,
+                            minSize: 0.8,
+                            maxSize: 1.5
+                        });
+                        console.log(`🔥 Brigand set ${this.building.name || this.building.type} on fire!`);
+                    }
                 }
                 
                 // Check if building should be destroyed
@@ -1448,6 +1533,152 @@ class EngineerWorkBehavior extends WorkBehavior {
                     }
                 }
                 
+                // SPECIAL: Handle villages - redirect idle villagers to far away camps/buildings
+                if (this.inspectionTarget.spawnsVillagers) {
+                    // 1. Find idle villagers near this village
+                    const idleVillagers = [];
+                    const villageRadius = 15 * TILE_SIZE; // Larger radius since villagers spawn around villages
+                    
+                    for (const unit of (window.gameUnits || [])) {
+                        if (!unit.pb || !unit.pb.state || !unit.pb.state.loc) continue;
+                        if (unit.type !== 'villager') continue;
+                        
+                        // Check ownership
+                        const unitOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+                        if (unitOwner !== engineerOwner) continue;
+                        
+                        // Check if idle (no behavior or just linger)
+                        const behavior = window.behaviorManager ? window.behaviorManager.getBehavior(unit) : null;
+                        const isIdle = !behavior || behavior.constructor.name === 'LingerBehavior';
+                        if (!isIdle) continue;
+                        
+                        // Don't redirect villagers that just got a player move command
+                        if (unit.lastPlayerMoveTick !== undefined) {
+                            const ticksSincePlayerMove = currentTick - unit.lastPlayerMoveTick;
+                            if (ticksSincePlayerMove < 60) {
+                                continue; // Skip - player just moved them
+                            }
+                        }
+                        
+                        // Check distance from village
+                        const unitDx = unit.pb.state.loc.x - this.inspectionTarget.position.x;
+                        const unitDz = unit.pb.state.loc.z - this.inspectionTarget.position.z;
+                        const unitDistance = Math.sqrt(unitDx * unitDx + unitDz * unitDz);
+                        
+                        if (unitDistance <= villageRadius) {
+                            idleVillagers.push(unit);
+                        }
+                    }
+                    
+                    // 2. Find camps/buildings that need workers (especially far away ones)
+                    const buildingsNeedingWorkers = [];
+                    const allBuildings = window.gameBuildings || [];
+                    
+                    for (const building of allBuildings) {
+                        if (!building.position || !building.needsWorkers) continue;
+                        if (building.id === this.inspectionTarget.id) continue; // Skip current village
+                        if (building.type === 'agora') continue; // Skip agora
+                        if (building.spawnsVillagers) continue; // Skip other villages
+                        
+                        // Check ownership
+                        const buildingOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
+                        if (buildingOwner !== engineerOwner) continue;
+                        
+                        // Only consider completed buildings
+                        if (building.buildProgress !== undefined && building.buildProgress < 1.0) continue;
+                        
+                        // Check if building needs more workers
+                        const workerCount = building.assignedWorkers?.length || 0;
+                        if (workerCount < building.maxWorkers) {
+                            // Calculate distance from village to prioritize far away buildings
+                            const buildingDx = building.position.x - this.inspectionTarget.position.x;
+                            const buildingDz = building.position.z - this.inspectionTarget.position.z;
+                            const buildingDistance = Math.sqrt(buildingDx * buildingDx + buildingDz * buildingDz);
+                            
+                            buildingsNeedingWorkers.push({
+                                building: building,
+                                distance: buildingDistance
+                            });
+                        }
+                    }
+                    
+                    // 3. Redirect idle villagers to far away camps/buildings
+                    if (idleVillagers.length > 0 && buildingsNeedingWorkers.length > 0) {
+                        // Sort buildings by distance (far away first) and priority (camps with resources > farms > empty camps)
+                        buildingsNeedingWorkers.sort((a, b) => {
+                            // First priority: distance (far away first, but only if reasonably far)
+                            const minDistance = 10 * TILE_SIZE; // Only prioritize if at least 10 tiles away
+                            const aIsFar = a.distance >= minDistance;
+                            const bIsFar = b.distance >= minDistance;
+                            if (aIsFar && !bIsFar) return -1;
+                            if (!aIsFar && bIsFar) return 1;
+                            
+                            // If both are far or both are close, prioritize by distance (farther = better)
+                            if (aIsFar && bIsFar && Math.abs(a.distance - b.distance) > 2 * TILE_SIZE) {
+                                return b.distance - a.distance; // Farther first
+                            }
+                            
+                            // Then by resource priority
+                            const aHasResources = (a.building.availableResources?.length || 0) > 0;
+                            const bHasResources = (b.building.availableResources?.length || 0) > 0;
+                            if (aHasResources && !bHasResources) return -1;
+                            if (!aHasResources && bHasResources) return 1;
+                            if (a.building.type === 'farm' && b.building.type !== 'farm') return -1;
+                            if (a.building.type !== 'farm' && b.building.type === 'farm') return 1;
+                            
+                            return 0;
+                        });
+                        
+                        let redirected = 0;
+                        let buildingIndex = 0;
+                        
+                        for (const villager of idleVillagers) {
+                            // Find next building that needs workers
+                            let targetBuilding = null;
+                            while (buildingIndex < buildingsNeedingWorkers.length) {
+                                const candidate = buildingsNeedingWorkers[buildingIndex].building;
+                                const workerCount = candidate.assignedWorkers?.length || 0;
+                                if (workerCount < candidate.maxWorkers) {
+                                    targetBuilding = candidate;
+                                    break;
+                                }
+                                buildingIndex++;
+                            }
+                            
+                            if (!targetBuilding) break; // No more buildings need workers
+                            
+                            // Redirect villager using command system
+                            if (window.currentMatch && window.assignVillagerToWork) {
+                                // Remove from old building's workers if assigned
+                                if (villager.assignedBuilding) {
+                                    const oldBuilding = villager.assignedBuilding;
+                                    if (oldBuilding.assignedWorkers) {
+                                        const idx = oldBuilding.assignedWorkers.indexOf(villager);
+                                        if (idx > -1) oldBuilding.assignedWorkers.splice(idx, 1);
+                                    }
+                                }
+                                
+                                // Assign to new building
+                                if (window.assignVillagerToWork(villager, targetBuilding)) {
+                                    redirected++;
+                                    const distance = buildingsNeedingWorkers[buildingIndex].distance;
+                                    console.log(`🔧 Engineer sent villager from village to ${targetBuilding.name || targetBuilding.type} (${Math.round(distance / TILE_SIZE)} tiles away)`);
+                                    
+                                    // Check if this building is now full, move to next
+                                    const newWorkerCount = targetBuilding.assignedWorkers?.length || 0;
+                                    if (newWorkerCount >= targetBuilding.maxWorkers) {
+                                        buildingIndex++;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (redirected > 0) {
+                            console.log(`🔧 Engineer sent ${redirected} idle villager(s) from village to camps/buildings`);
+                        }
+                    }
+                }
+                
                 // Apply engineer's effects for non-camps or camps that aren't empty:
                 // 1. Repair to full health
                 if (this.inspectionTarget.maxHealth !== undefined) {
@@ -1562,8 +1793,10 @@ class WanderBehavior extends Behavior {
         }
         
         this.startTick = window.currentMatch?.tick || 0;
+        this.startTime = window.currentMatch ? null : Date.now(); // Use time in menu scene
         this.currentDirection = this.getRandomDirection();
         this.wanderTimeTicks = 0;
+        this.lastDirectionChangeFrame = window.frameCounter || 0;
         this.spawnPoint = { 
             x: unit.pb.state.loc.x, 
             y: unit.pb.state.loc.y, 
@@ -1574,36 +1807,73 @@ class WanderBehavior extends Behavior {
     }
     
     step() {
-        const currentTick = window.currentMatch?.tick || 0;
-        const elapsedTicks = currentTick - this.startTick;
-        const elapsed = elapsedTicks * 50; // Convert to ms
+        const hasMatch = !!window.currentMatch;
+        let elapsed;
+        const currentTick = hasMatch ? window.currentMatch.tick : 0; // Define currentTick outside if block
+        
+        if (hasMatch) {
+            // Use tick-based timing in matches (deterministic)
+            const elapsedTicks = currentTick - this.startTick;
+            elapsed = elapsedTicks * 50; // Convert to ms
+        } else {
+            // Use time-based timing in menu scene
+            elapsed = Date.now() - this.startTime;
+        }
         
         // Complete after duration
         if (elapsed > this.params.wanderDuration) {
             // console.log(`🌍 ${this.unit.name || this.unit.type} finished wandering`);
             // Track when this unit finished wandering (use ticks in multiplayer)
-            this.unit.lastWanderTick = currentTick;
+            if (hasMatch) {
+                this.unit.lastWanderTick = currentTick;
+            }
             return true;
         }
         
-        // Change direction deterministically based on ticks
-        const ticksSinceDirectionChange = elapsedTicks - this.wanderTimeTicks;
+        // Change direction periodically
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const directionChangeInterval = 60 + ((currentTick + unitIdHash) % 40); // 60-100 ticks (3-5 seconds)
+        let shouldChangeDirection = false;
         
-        if (ticksSinceDirectionChange > directionChangeInterval) {
+        if (hasMatch) {
+            // Deterministic direction changes based on ticks
+            // currentTick already defined above
+            const ticksSinceDirectionChange = currentTick - this.wanderTimeTicks;
+            const directionChangeInterval = 60 + ((currentTick + unitIdHash) % 40); // 60-100 ticks (3-5 seconds)
+            shouldChangeDirection = ticksSinceDirectionChange > directionChangeInterval;
+            if (shouldChangeDirection) {
+                this.wanderTimeTicks = currentTick;
+            }
+        } else {
+            // Time-based direction changes in menu scene (every 3-5 seconds)
+            const framesSinceChange = (window.frameCounter || 0) - this.lastDirectionChangeFrame;
+            const directionChangeIntervalFrames = 180 + ((unitIdHash || Math.random() * 1000) % 120); // 180-300 frames (3-5 seconds at 60fps)
+            shouldChangeDirection = framesSinceChange > directionChangeIntervalFrames;
+            if (shouldChangeDirection) {
+                this.lastDirectionChangeFrame = window.frameCounter || 0;
+            }
+        }
+        
+        if (shouldChangeDirection) {
             this.currentDirection = this.getRandomDirection();
-            this.wanderTimeTicks = elapsedTicks;
             // console.log(`🌍 ${this.unit.name || this.unit.type} changed wander direction to (${this.currentDirection.x.toFixed(2)}, ${this.currentDirection.z.toFixed(2)})`);
         }
         
         // Apply movement in current direction
         this.applyWanderMovement();
         
-        // Occasional micro-movements (deterministic) - reuse unitIdHash
-        const microMoveThreshold = this.params.microMoveChance * 0.016 * 1000; // Scale to 0-1000
-        if (((currentTick + unitIdHash) % 1000) < microMoveThreshold) {
-            this.applyMicroMovement();
+        // Occasional micro-movements
+        if (hasMatch) {
+            // Deterministic micro-movements in matches
+            const currentTick = window.currentMatch.tick;
+            const microMoveThreshold = this.params.microMoveChance * 0.016 * 1000; // Scale to 0-1000
+            if (((currentTick + unitIdHash) % 1000) < microMoveThreshold) {
+                this.applyMicroMovement();
+            }
+        } else {
+            // Random micro-movements in menu scene
+            if (Math.random() < this.params.microMoveChance * 0.016) { // ~16ms per frame at 60fps
+                this.applyMicroMovement();
+            }
         }
         
         // Debug: log wander status occasionally
@@ -1615,10 +1885,20 @@ class WanderBehavior extends Behavior {
     }
     
     getRandomDirection() {
-        // Use deterministic angle based on tick and unit ID
-        const currentTick = window.currentMatch?.tick || 0;
+        // Use deterministic angle based on tick and unit ID (or random in menu scene)
+        const hasMatch = !!window.currentMatch;
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const angle = ((currentTick + unitIdHash) % 628) / 100; // 0 to 2π (6.28)
+        let angle;
+        
+        if (hasMatch) {
+            const currentTick = window.currentMatch.tick;
+            angle = ((currentTick + unitIdHash) % 628) / 100; // 0 to 2π (6.28)
+        } else {
+            // Use frame counter + unit hash for pseudo-random but changing direction in menu scene
+            const frame = window.frameCounter || 0;
+            angle = ((frame * 0.1 + unitIdHash) % 628) / 100; // Slowly changing angle
+        }
+        
         return {
             x: Math.cos(angle),
             z: Math.sin(angle)
@@ -1810,7 +2090,70 @@ class UnitBehaviorManager {
         }
         
         if (behavior) {
+            // CRITICAL: Smart transition - check if unit is already moving in similar direction
+            // If so, smoothly update target instead of resetting velocity (prevents jerky movement)
+            const wasMovingBehavior = currentBehavior && 
+                (currentBehavior instanceof WalkBehavior || currentBehavior instanceof RunBehavior);
+            const isNewMovingBehavior = behavior instanceof WalkBehavior || behavior instanceof RunBehavior;
+            
+            if (wasMovingBehavior && isNewMovingBehavior && unit.pb && unit.pb.state) {
+                // Unit is already moving - check if new target is similar direction
+                const currentVelX = unit.pb.state.vel.x || 0;
+                const currentVelZ = unit.pb.state.vel.z || 0;
+                const currentSpeed = Math.sqrt(currentVelX * currentVelX + currentVelZ * currentVelZ);
+                
+                if (currentSpeed > 0.1 && params.targetPoint) {
+                    // Unit is moving - calculate direction to new target
+                    const currentPos = unit.pb.state.loc;
+                    const dx = params.targetPoint.x - currentPos.x;
+                    const dz = params.targetPoint.z - currentPos.z;
+                    const distance = Math.sqrt(dx * dx + dz * dz);
+                    
+                    if (distance > 0.1) {
+                        // Normalize new direction
+                        const newDirX = dx / distance;
+                        const newDirZ = dz / distance;
+                        
+                        // Normalize current velocity direction
+                        const currentDirX = currentVelX / currentSpeed;
+                        const currentDirZ = currentVelZ / currentSpeed;
+                        
+                        // Calculate dot product to check if directions are similar
+                        const dotProduct = currentDirX * newDirX + currentDirZ * newDirZ;
+                        
+                        // If directions are similar (dot product > 0.7, ~45 degrees), smooth transition
+                        // Don't reset velocity - let the new behavior smoothly adjust direction
+                        if (dotProduct > 0.7) {
+                            // Similar direction - just update target, keep velocity for smooth transition
+                            this.behaviors.set(unit, behavior);
+                            return; // Skip velocity reset - smooth transition
+                        }
+                    }
+                }
+            }
+            
+            // CRITICAL: Immediately replace old behavior with new one
+            // This ensures player commands override any existing behavior instantly
             this.behaviors.set(unit, behavior);
+            
+            // CRITICAL: Only reset velocity if unit is stopped or changing direction significantly
+            // This prevents jerky movement when unit is already moving in similar direction
+            if ((behaviorType === 'walk' || behaviorType === 'run') && unit.pb && unit.pb.state) {
+                if (!unit.pb.state.vel) unit.pb.state.vel = { x: 0, y: 0, z: 0 };
+                const currentSpeed = Math.sqrt(
+                    (unit.pb.state.vel.x || 0) ** 2 + (unit.pb.state.vel.z || 0) ** 2
+                );
+                
+                // Only reset velocity if unit is stopped or very slow
+                // If unit is already moving, let the new behavior smoothly adjust direction
+                if (currentSpeed < 0.1) {
+                    // Unit is stopped - clear velocity so behavior can set it fresh
+                    unit.pb.state.vel.x = 0;
+                    unit.pb.state.vel.z = 0;
+                }
+                // Otherwise, keep current velocity and let behavior smoothly adjust direction
+            }
+            
             // console.log(`🎯 Set ${unit.name || unit.type} behavior to: ${behaviorType}, total behaviors: ${this.behaviors.size}`);
         } else {
             // console.warn(`⚠️ Failed to create behavior for ${unit.name || unit.type}, type: ${behaviorType}`);
@@ -2993,10 +3336,15 @@ function updateIdleUnits() {
     let unitsWithoutIds = 0;
     const gameUnits = window.gameUnits; // CRITICAL: Use window.gameUnits, not the module-level gameUnits from units.js!
     gameUnits.forEach(unit => {
-        // CRITICAL: Skip units without IDs (menu scene decorative units)
+        // CRITICAL: Skip units without IDs (shouldn't happen anymore, but safety check)
         if (!unit.id) {
             unitsWithoutIds++;
             return; // Can't use deterministic random without ID
+        }
+        
+        // Skip menu scene units - they already have wander behaviors assigned
+        if (unit.id && unit.id.startsWith('menu_unit_')) {
+            return;
         }
         
         // Skip idle updates for neutral units that are far away (use squared distance)
@@ -3026,13 +3374,21 @@ function updateIdleUnits() {
             }
         }
         
-        // Brigands: Attack nearby enemy buildings (check even if they have behaviors - prioritize attacking!)
+        // Brigands: Attack nearby enemy buildings (but respect player commands!)
         if (unit.type === 'brigand') {
             const currentBehavior = window.behaviorManager.getBehavior(unit);
-            // Only check if not already attacking a building
-            if (!currentBehavior || currentBehavior.constructor.name !== 'AttackBuildingBehavior') {
+            
+            // CRITICAL: Respect player commands - don't auto-attack if player just moved them
+            const ticksSincePlayerMove = unit.lastPlayerMoveTick !== undefined 
+                ? (currentTick - unit.lastPlayerMoveTick) 
+                : Infinity;
+            const shouldRespectPlayerCommand = ticksSincePlayerMove < 120; // 6 seconds at 20Hz
+            
+            // Only auto-attack if idle (no behavior) or if player hasn't given recent commands
+            // Don't interrupt player commands or existing attack behaviors
+            if ((!currentBehavior || currentBehavior.constructor.name === 'LingerBehavior') && !shouldRespectPlayerCommand) {
                 const TILE_SIZE = window.TILE_SIZE || 4;
-                const attackRange = 25 * TILE_SIZE; // 25 tiles in world units (increased range)
+                const attackRange = 8 * TILE_SIZE; // 8 tiles in world units (reduced from 25 - brigands should attack nearby buildings, not rush across map)
                 let nearestEnemyBuilding = null;
                 let nearestDistance = attackRange;
                 

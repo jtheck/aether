@@ -225,9 +225,19 @@
     console.log(`🧠 AI ${aiPlayer.name} [${aiState.phase}] - Buildings: ${buildingCount}, Units: ${unitCount}, Eco: ${aiState.economyScore.toFixed(1)}, Mil: ${aiState.militaryScore.toFixed(1)}, Threat: ${threat.toFixed(1)}`);
     
     // High-level strategic decisions
+    const wasInDefenseMode = aiState.defenseMode;
     if (threat > 0.7) {
       aiState.defenseMode = true;
-      console.log(`🛡️ AI entering DEFENSE MODE!`);
+      if (!wasInDefenseMode) {
+        console.log(`🛡️ AI entering DEFENSE MODE!`);
+        
+        // Check if agora is under attack and rally defenders
+        const agoraBuilding = aiPlayer.buildings?.find(b => b && b.type === 'agora');
+        if (agoraBuilding && agoraBuilding.contested && window.rallyUnitsToAgora) {
+          console.log(`🚩 AI rallying defenders to contested agora!`);
+          window.rallyUnitsToAgora(30, aiPlayer);
+        }
+      }
     } else if (threat < 0.3 && aiState.defenseMode) {
       aiState.defenseMode = false;
       console.log(`⚔️ AI exiting defense mode`);
@@ -251,6 +261,26 @@
     // TACTICAL DECISIONS - Manage existing units
     manageMilitaryUnits(aiPlayer, aiState, threat, opportunity);
     manageWorkerUnits(aiPlayer, aiState, resources);
+    
+    // DEFENSE MODE: Rally defenders if agora is under attack
+    if (aiState.defenseMode) {
+      const agoraBuilding = aiPlayer.buildings?.find(b => b && b.type === 'agora');
+      // Only rally periodically (every 5 seconds) to avoid spam
+      const shouldCheckRally = !aiState.lastRallyCheck || (currentTick - aiState.lastRallyCheck) > 100; // 100 ticks = 5 seconds at 20 TPS
+      if (agoraBuilding && agoraBuilding.contested && shouldCheckRally && window.rallyUnitsToAgora) {
+        console.log(`🚩 AI rallying defenders to contested agora!`);
+        window.rallyUnitsToAgora(30, aiPlayer);
+        aiState.lastRallyCheck = currentTick;
+      }
+    }
+    
+    // Sort actions by priority (high > medium > low) to ensure essential buildings are built first
+    const priorityOrder = { 'high': 0, 'medium': 1, 'low': 2 };
+    actions.sort((a, b) => {
+      const aPriority = priorityOrder[a.priority] ?? 1;
+      const bPriority = priorityOrder[b.priority] ?? 1;
+      return aPriority - bPriority;
+    });
     
     // Execute queued actions (respecting difficulty-based timing)
     const maxActionsPerTick = getDifficultySpeed(aiPlayer);
@@ -366,45 +396,75 @@
   // Get economic action (building or training)
   function getEconomicAction(aiPlayer, aiState, resources, buildingCount, unitCount) {
     const villagerCount = aiPlayer.units.filter(u => u.type === 'villager').length;
-    const campCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'camp').length : 0;
-    const farmCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'farm').length : 0;
-    const villageCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'village').length : 0;
+    // Filter out null/undefined buildings and ensure type matches exactly
+    const campCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'camp').length : 0;
+    const farmCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'farm').length : 0;
+    const villageCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'village').length : 0;
     
     // Get costs from BuildingTypes (use actual costs)
     const campCost = window.BuildingTypes?.camp?.cost || {wood: 5, stone: 0};
     const villageCost = window.BuildingTypes?.village?.cost || {wood: 25, stone: 0};
     const farmCost = window.BuildingTypes?.farm?.cost || {wood: 20, stone: 0};
     
+    // Debug logging
+    console.log(`🏗️ AI Building Decision: Camps=${campCount}, Villages=${villageCount}, Farms=${farmCount}, Wood=${resources.wood}, Stone=${resources.stone}`);
+    
     // PHASE 1: Build one of each essential building first (camp -> village -> farm)
     // Priority 1: Build first camp for resource gathering
-    if (campCount < 1 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
+    // CRITICAL: Only build ONE camp, then MUST build village before any more camps
+    if (campCount === 0 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
+      console.log(`✅ AI deciding to build FIRST camp`);
       return {type: 'build', buildingType: 'camp', priority: 'high'};
     }
     
     // Priority 2: Build first village to spawn villagers (after camp)
-    if (campCount >= 1 && villageCount < 1 && resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
-      return {type: 'build', buildingType: 'village', priority: 'high'};
+    // CRITICAL: Don't build more camps until we have at least one village!
+    if (campCount >= 1 && villageCount === 0) {
+      if (resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
+        console.log(`✅ AI deciding to build FIRST village (has ${campCount} camp(s))`);
+        return {type: 'build', buildingType: 'village', priority: 'high'};
+      } else {
+        // SAVE UP: Don't build anything else if we're saving for village!
+        console.log(`💰 AI SAVING UP for village - need ${villageCost.wood} wood (has ${resources.wood}), need ${villageCost.stone} stone (has ${resources.stone})`);
+        return null; // Block all other building until we can afford village
+      }
     }
     
     // Priority 3: Build first farm for food production (after village)
-    if (villageCount >= 1 && farmCount < 1 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
-      return {type: 'build', buildingType: 'farm', priority: 'high'};
+    // CRITICAL: Don't build more camps until we have at least one farm!
+    if (villageCount >= 1 && farmCount === 0) {
+      if (resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
+        console.log(`✅ AI deciding to build FIRST farm (has ${villageCount} village(s))`);
+        return {type: 'build', buildingType: 'farm', priority: 'high'};
+      } else {
+        // SAVE UP: Don't build anything else if we're saving for farm!
+        console.log(`💰 AI SAVING UP for farm - need ${farmCost.wood} wood (has ${resources.wood}), need ${farmCost.stone} stone (has ${resources.stone})`);
+        return null; // Block all other building until we can afford farm
+      }
     }
     
     // PHASE 2: After having one of each, build more flexibly
     // Priority 4: Build more villages if we need more villagers
     if (farmCount >= 1 && villageCount < 2 && villagerCount < 10 && resources.wood >= villageCost.wood && resources.stone >= villageCost.stone) {
+      console.log(`✅ AI deciding to build additional village`);
       return {type: 'build', buildingType: 'village', priority: 'medium'};
     }
     
     // Priority 5: Build more farms if we need food
-    if (farmCount >= 1 && farmCount < 2 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
+    if (farmCount >= 1 && farmCount < 3 && resources.wood >= farmCost.wood && resources.stone >= farmCost.stone) {
+      console.log(`✅ AI deciding to build additional farm`);
       return {type: 'build', buildingType: 'farm', priority: 'medium'};
     }
     
-    // Priority 6: Build more camps if we have many workers and need more resource gathering
-    if (farmCount >= 1 && campCount < 2 && villagerCount > 6 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
-      return {type: 'build', buildingType: 'camp', priority: 'medium'};
+    // Priority 6: Build more camps ONLY after we have at least one village AND one farm
+    // CRITICAL BLOCK: Don't build more camps until we have BOTH village AND farm!
+    if (campCount >= 1 && (villageCount === 0 || farmCount === 0)) {
+      console.log(`⛔ AI BLOCKED from building more camps - need village=${villageCount === 0 ? 'NO' : 'YES'} and farm=${farmCount === 0 ? 'NO' : 'YES'}`);
+      // Don't return null here - let it fall through to training villagers or return null at end
+      // This ensures villages/farms can still be built even if we have camps
+    } else if (farmCount >= 1 && villageCount >= 1 && campCount < 3 && villagerCount >= 8 && resources.wood >= campCost.wood && resources.stone >= campCost.stone) {
+      console.log(`✅ AI deciding to build additional camp (has village=${villageCount}, farm=${farmCount}, villagers=${villagerCount})`);
+      return {type: 'build', buildingType: 'camp', priority: 'low'};
     }
     
     // Priority 7: Train villagers (based on difficulty)
@@ -453,18 +513,22 @@
   // Choose which military unit to train
   function chooseMilitaryUnit(aiPlayer, aiState) {
     // Difficulty affects unit variety
+    // CRITICAL: Use deterministic selection based on current tick for multiplayer sync
+    const currentTick = window.currentMatch?.tick || 0;
+    const deterministicRandom = ((currentTick * 13 + 7) % 100) / 100; // 0-1 deterministic value
+    
     if (aiPlayer.difficulty === 'hard') {
       // Hard AI uses advanced units
-      if (Math.random() < 0.3) return 'wizard';
-      if (Math.random() < 0.5) return 'monk';
+      if (deterministicRandom < 0.3) return 'wizard';
+      if (deterministicRandom < 0.5) return 'monk';
       return 'brigand';
     } else if (aiPlayer.difficulty === 'normal') {
       // Normal AI uses mix
-      if (Math.random() < 0.3) return 'monk';
+      if (deterministicRandom < 0.3) return 'monk';
       return 'brigand';
     } else {
       // Easy AI uses basic units
-      if (Math.random() < 0.3) return 'frog_scout';
+      if (deterministicRandom < 0.3) return 'frog_scout';
       return 'villager'; // Easy mode trains villagers as "military"
     }
   }
@@ -511,10 +575,15 @@
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance > 20) {
+          const startPositions = {};
+          if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+            startPositions[unit.id] = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+          }
           window.currentMatch.submitCommand({
             type: 'move',
             playerId: aiPlayer.id,
             unitIds: [unit.id],
+            startPositions: startPositions,
             target: { x: basePos.x, y: 0, z: basePos.z }
           });
         }
@@ -547,10 +616,15 @@
       const rowOffset = (row - (Math.ceil(militaryUnits.length / unitsPerRow) - 1) / 2) * spacing;
       const colOffset = (col - (unitsPerRow - 1) / 2) * spacing;
       
+      const startPositions = {};
+      if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+        startPositions[unit.id] = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+      }
       window.currentMatch.submitCommand({
         type: 'move',
         playerId: aiPlayer.id,
         unitIds: [unit.id],
+        startPositions: startPositions,
         target: { 
           x: targetPos.x + colOffset, 
           y: 0,
@@ -611,10 +685,15 @@
       const patrolX = basePos.x + Math.cos(angle) * patrolRadius;
       const patrolZ = basePos.z + Math.sin(angle) * patrolRadius;
       
+      const startPositions = {};
+      if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+        startPositions[unit.id] = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
+      }
       window.currentMatch.submitCommand({
         type: 'move',
         playerId: aiPlayer.id,
         unitIds: [unit.id],
+        startPositions: startPositions,
         target: { x: patrolX, y: 0, z: patrolZ }
       });
     });
@@ -718,6 +797,30 @@
         console.log(`🏗️ AI submitting build command for ${action.buildingType} at (${buildPos.x}, ${buildPos.z})`);
         
         if (buildPos) {
+          // Calculate smart rotation like human players do
+          let rotation = 0;
+          if (window.buildingSystem && window.buildingSystem.findBestRotation) {
+            // Use the building system's smart rotation logic
+            rotation = window.buildingSystem.findBestRotation(buildPos.x, buildPos.z);
+            
+            // For multiplayer determinism, if it returned 0, use deterministic rotation based on position
+            if (window.isMultiplayer && rotation === 0) {
+              // Deterministic rotation based on grid position (snap to 90-degree increments)
+              // This ensures determinism while still varying by position
+              const rotationIndex = ((buildPos.x * 7 + buildPos.z * 11) % 4); // Deterministic but varies by position
+              rotation = rotationIndex * (Math.PI / 2); // 0, 90, 180, or 270 degrees
+            }
+          } else {
+            // Fallback: deterministic rotation based on position for multiplayer, random for single player
+            if (window.isMultiplayer) {
+              const rotationIndex = ((buildPos.x * 7 + buildPos.z * 11) % 4);
+              rotation = rotationIndex * (Math.PI / 2);
+            } else {
+              // Single player: random rotation in 90-degree increments (like human players can do)
+              rotation = Math.floor(Math.random() * 4) * (Math.PI / 2);
+            }
+          }
+          
           // Submit build command through Match system
           window.currentMatch.submitCommand({
             type: 'build',
@@ -725,7 +828,7 @@
             buildingType: action.buildingType,
             gridX: buildPos.x,
             gridZ: buildPos.z,
-            rotation: 0
+            rotation: rotation
           });
         }
         break;
@@ -812,8 +915,16 @@
     const baseGridZ = player.agora ? player.agora.y : (player.basePosition ? Math.floor(player.basePosition.z / (window.TILE_SIZE || 4)) : 0);
     
     // Try to place building near base (within 8-15 tiles away)
-    const distance = 8 + Math.floor(Math.random() * 7); // 8-15 tiles away
-    const angle = Math.random() * Math.PI * 2; // Random direction
+    // CRITICAL: Use deterministic placement based on player ID and tick for multiplayer sync
+    const playerId = player.id || 'ai';
+    const playerIdHash = playerId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const currentTick = window.currentMatch?.tick || 0;
+    const seed = playerIdHash + currentTick;
+    const deterministicRandom1 = ((seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    const deterministicRandom2 = (((seed + 1) * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    
+    const distance = 8 + Math.floor(deterministicRandom1 * 7); // 8-15 tiles away (deterministic)
+    const angle = deterministicRandom2 * Math.PI * 2; // Deterministic direction
     
     const gridX = Math.floor(baseGridX + Math.cos(angle) * distance);
     const gridZ = Math.floor(baseGridZ + Math.sin(angle) * distance);
@@ -854,15 +965,26 @@
       {x: baseX, z: baseZ - 5}
     ];
     
-    const nextPoint = patrolPoints[Math.floor(Math.random() * patrolPoints.length)];
+    // CRITICAL: Use deterministic patrol point selection based on unit ID and tick
+    const unitIdHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const currentTick = window.currentMatch?.tick || 0;
+    const deterministicIndex = (unitIdHash + currentTick) % patrolPoints.length;
+    const nextPoint = patrolPoints[deterministicIndex];
     window.pathfinding.moveUnit(unit, nextPoint);
   };
   
   function scoutForEnemies(unit) {
-    // Move toward random unexplored area or known enemies
+    // Move toward deterministic unexplored area based on unit ID and tick
+    // CRITICAL: Use deterministic random for multiplayer sync
+    const unitIdHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const currentTick = window.currentMatch?.tick || 0;
+    const seed = unitIdHash + currentTick;
+    const deterministicRandom1 = ((seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    const deterministicRandom2 = (((seed + 1) * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    
     const exploreArea = {
-      x: (Math.random() - 0.5) * 100,
-      z: (Math.random() - 0.5) * 100
+      x: (deterministicRandom1 - 0.5) * 100,
+      z: (deterministicRandom2 - 0.5) * 100
     };
     window.pathfinding.moveUnit(unit, exploreArea);
   };

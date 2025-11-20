@@ -16,81 +16,81 @@ const UnitTypes = {
     rotationSpeed: 3.0, // Snappy turning for responsive movement
     // modelOrientation: Math.PI * 1.5, // 270 degrees - flipped around to face forward
     size: 1,
-    cost: { food: 25 },
+    cost: { food: 15 },
     abilities: ["gather", "build"],
     description: "Basic civilian unit that can gather resources and construct buildings"
   },
   
-  frog_scout: {
-    name: "Frog Scout", 
-    category: "military",
-    model: "assets/models/frog.glb",
-    scale: 0.12,
-    health: 30,
-    speed: 4,
-    rotationSpeed: 5.0, // Very fast turning for agile scouts
-    size: 0.8,
-    cost: { food: 20, wood: 10 },
-    abilities: ["scout", "stealth"],
-    description: "Fast reconnaissance unit with stealth capabilities"
-  },
+//   frog_scout: {
+//     name: "Frog Scout", 
+//     category: "military",
+//     model: "assets/models/frog.glb",
+//     scale: 0.12,
+//     health: 30,
+//     speed: 4,
+//     rotationSpeed: 5.0, // Very fast turning for agile scouts
+//     size: 0.8,
+//     cost: { food: 20, wood: 10 },
+//     abilities: ["scout", "stealth"],
+//     description: "Fast reconnaissance unit with stealth capabilities"
+//   },
   
-  tree_guardian: {
-    name: "Tree Guardian",
-    category: "military", 
-    model: "assets/models/trees.glb",
-    scale: .8,
-    health: 150,
-    speed: 1,
-    rotationSpeed: 5.0, // Slow turning for massive units
-    size: 2,
-    cost: { wood: 50, stone: 25 },
-    abilities: ["defend", "root_slam"],
-    description: "Massive defensive unit with area attack abilities"
-  },
+//   tree_guardian: {
+//     name: "Tree Guardian",
+//     category: "military", 
+//     model: "assets/models/trees.glb",
+//     scale: .8,
+//     health: 150,
+//     speed: 1,
+//     rotationSpeed: 5.0, // Slow turning for massive units
+//     size: 2,
+//     cost: { wood: 50, stone: 25 },
+//     abilities: ["defend", "root_slam"],
+//     description: "Massive defensive unit with area attack abilities"
+//   },
   
-  mushroom_mage: {
-    name: "Mushroom Mage",
-    category: "caster",
-    model: "assets/models/mushroom.glb", 
-    scale: 0.15,
-    health: 40,
-    speed: 1.5,
-    rotationSpeed: 12.0, // Medium turning for casters
-    size: 1,
-    cost: { food: 30, magic: 20 },
-    abilities: ["heal", "poison_cloud", "grow"],
-    description: "Support unit that can heal allies and cast nature magic"
-  },
+//   mushroom_mage: {
+//     name: "Mushroom Mage",
+//     category: "caster",
+//     model: "assets/models/mushroom.glb", 
+//     scale: 0.15,
+//     health: 40,
+//     speed: 1.5,
+//     rotationSpeed: 12.0, // Medium turning for casters
+//     size: 1,
+//     cost: { food: 30, magic: 20 },
+//     abilities: ["heal", "poison_cloud", "grow"],
+//     description: "Support unit that can heal allies and cast nature magic"
+//   },
   
-  bird_messenger: {
-    name: "Bird Messenger",
-    category: "utility",
-    model: "assets/models/birdy.glb",
-    scale: 0.08,
-    health: 20,
-    speed: 8,
-    rotationSpeed: 30.0, // Very fast turning for agile birds
-    size: 0.5,
-    cost: { food: 15 },
-    abilities: ["fly", "message", "scout"],
-    description: "Flying unit for communication and aerial reconnaissance"
-  },
+//   bird_messenger: {
+//     name: "Bird Messenger",
+//     category: "utility",
+//     model: "assets/models/birdy.glb",
+//     scale: 0.08,
+//     health: 20,
+//     speed: 8,
+//     rotationSpeed: 30.0, // Very fast turning for agile birds
+//     size: 0.5,
+//     cost: { food: 15 },
+//     abilities: ["fly", "message", "scout"],
+//     description: "Flying unit for communication and aerial reconnaissance"
+//   },
   
-  // Workers
-  gnome_builder: {
-    name: "Gnome Builder",
-    category: "worker",
-    model: "assets/models/gnome.glb",
-    scale: 0.12,
-    health: 60,
-    speed: 2,
-    rotationSpeed: 18.0, // Fast turning for skilled workers
-    size: 1,
-    cost: { food: 30, stone: 15 },
-    abilities: ["build", "repair", "fortify"],
-    description: "Specialized construction unit with enhanced building abilities"
-  },
+//   // Workers
+//   gnome_builder: {
+//     name: "Gnome Builder",
+//     category: "worker",
+//     model: "assets/models/gnome.glb",
+//     scale: 0.12,
+//     health: 60,
+//     speed: 2,
+//     rotationSpeed: 18.0, // Fast turning for skilled workers
+//     size: 1,
+//     cost: { food: 30, stone: 15 },
+//     abilities: ["build", "repair", "fortify"],
+//     description: "Specialized construction unit with enhanced building abilities"
+//   },
 
   // Your original units
   monk: {
@@ -102,7 +102,7 @@ const UnitTypes = {
     speed: 25,
     rotationSpeed: 8.0,
     size: 1,
-    cost: { food: 25, magic: 15 },
+    cost: { food: 15, magic: 0 },
     abilities: ["heal", "bless", "convert"],
     description: "Holy unit with healing and conversion abilities"
   },
@@ -114,9 +114,9 @@ const UnitTypes = {
     scale: 0.5,
     health: 40,
     speed: 50,
-    rotationSpeed: 4.0, // Reduced from 10.0 to prevent crazy spinning when stopping
+    rotationSpeed: 8.0, // Increased from 4.0 - wizards are fast so they need faster turning
     size: 1,
-    cost: { food: 30, magic: 25 },
+    cost: { food: 30, magic: 2 },
     abilities: ["fireball", "teleport", "shield"],
     description: "Powerful magic user with offensive spells"
   },
@@ -144,7 +144,7 @@ const UnitTypes = {
     speed: 31.0,
     rotationSpeed: 4.0,
     size: 1,
-    cost: { food: 40, wood: 15 },
+    cost: { food: 5, wood: 2 },
     abilities: ["sneak", "ambush", "steal"],
     description: "Stealthy unit specializing in ambush tactics"
   }
@@ -177,10 +177,40 @@ function Unit(unitType, position, options = {}) {
     
     // Unit instance properties
     this.type = unitType; // Store the original unit type
-    // Generate deterministic IDs in multiplayer using match seed + unit count
-    this.id = options.id || (window.isMultiplayer && window.currentMatch ? 
-        `unit-${window.currentMatch.mapSeed}-${(window.gameUnits?.length || 0)}` : 
-        Math.random().toString(36).substr(2, 9));
+    // Generate deterministic IDs in multiplayer using match seed + unit counter
+    // CRITICAL: If id is provided in options (even if undefined), use it
+    // If id is NOT in options at all, then increment unitCounter
+    // This prevents double-incrementing when callers explicitly pass id: undefined
+    if ('id' in options) {
+        // ID was explicitly provided (even if undefined/null)
+        this.id = options.id || Math.random().toString(36).substr(2, 9);
+    } else if (window.isMultiplayer && window.currentMatch) {
+        // CRITICAL: Increment counter BEFORE using it to ensure deterministic IDs
+        // Only increment if id was NOT provided in options
+        const unitIndex = window.currentMatch.unitCounter++;
+        this.id = `unit-${window.currentMatch.mapSeed}-${unitIndex}`;
+    } else {
+        // Single-player: use random ID
+        this.id = Math.random().toString(36).substr(2, 9);
+    }
+    
+    // CRITICAL: Generate permanent deterministic offset for this unit based on ID
+    // This creates visual variety and prevents stacking while maintaining determinism
+    // Larger offset creates more chaotic, spread-out appearance
+    // CRITICAL: Ensure ID is set before calculating offset (should always be set by this point)
+    const unitIdForHash = this.id || '';
+    if (!unitIdForHash) {
+        console.warn(`⚠️ Unit created without ID! Type: ${unitType}, Options:`, options);
+    }
+    const unitIdHash = unitIdForHash.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const offsetAngle = (unitIdHash % 628) / 100; // 0 to ~6.28 (2π)
+    const offsetDistance = ((unitIdHash * 7) % 1000) / 1000 * 1.5; // 0 to 1.5 units (increased for more spread)
+    // CRITICAL: Round to fixed precision to ensure deterministic floating point results
+    this.personalityOffset = {
+        x: Math.round(Math.cos(offsetAngle) * offsetDistance * 1000) / 1000,
+        z: Math.round(Math.sin(offsetAngle) * offsetDistance * 1000) / 1000
+    };
+    
     this.position = position || { x: 0, y: 0, z: 0 };
     this.currentHealth = options.currentHealth !== undefined ? options.currentHealth : this.health;
     this.level = options.level || 1;
@@ -221,6 +251,30 @@ function Unit(unitType, position, options = {}) {
     
     // 3D model reference (will be set when spawned)
     this.mesh = null;
+    
+    // Check if unit is on agora platform immediately (for newly created units)
+    // This ensures units spawn at correct height without needing to move first
+    // Note: This check also happens in updateUnits() for units that move
+    if (window.gameBuildings && window.gameBuildings.length > 0 && this.pb && this.pb.state && this.pb.state.loc) {
+        for (const building of window.gameBuildings) {
+            if (building.type === 'agora' && building.platformHeight !== undefined && building.position) {
+                const dx = this.pb.state.loc.x - building.position.x;
+                const dz = this.pb.state.loc.z - building.position.z;
+                const distSq = dx * dx + dz * dz;
+                const platformRadius = building.platformRadius || 8;
+                const platformRadiusSq = platformRadius * platformRadius;
+                
+                if (distSq <= platformRadiusSq) {
+                    const agoraUnitOffset = 0.75;
+                    this.pb.state.loc.y = building.platformHeight + agoraUnitOffset;
+                    if (this.pb.state.vel) {
+                        this.pb.state.vel.y = 0;
+                    }
+                    break;
+                }
+            }
+        }
+    }
     
     // console.log(`Created ${this.name} at position`, this.position);
 }
@@ -298,7 +352,10 @@ function updateUnitDistances() {
     const FLYING_FAR_DISTANCE_SQ = FLYING_LOD_DISTANCES.FAR * FLYING_LOD_DISTANCES.FAR; // 810000
     const FLYING_HIDDEN_DISTANCE_SQ = FLYING_LOD_DISTANCES.HIDDEN * FLYING_LOD_DISTANCES.HIDDEN; // 1440000
     
-    gameUnits.forEach(unit => {
+    // Use window.gameUnits (the actual array being used) instead of local gameUnits
+    const unitsToUpdate = window.gameUnits || gameUnits;
+    
+    unitsToUpdate.forEach(unit => {
         if (unit.pb && unit.pb.state && unit.pb.state.loc) {
             const dx = unit.pb.state.loc.x - camX;
             const dz = unit.pb.state.loc.z - camZ;
@@ -422,13 +479,18 @@ function sprinkleUnits() {
                 z: z + offsetZ
             });
             
+            // Skip if unit type doesn't exist (was commented out)
+            if (!unit) {
+                continue;
+            }
+            
             // Set as neutral unit
             unit.owner = 'neutral';
             
             // Add random rotation to the unit and physics body
             const randomRotation = Math.random() * Math.PI * 2;
             unit.rotation = randomRotation;
-            if (unit.pb.state && unit.pb.state.rot) {
+            if (unit.pb && unit.pb.state && unit.pb.state.rot) {
                 unit.pb.state.rot.y = randomRotation;
                 // console.log(`Unit ${unit.name} rotation set to:`, randomRotation, 'rad =', (randomRotation * 180/Math.PI).toFixed(1), 'deg');
             }
@@ -460,7 +522,10 @@ function spawnUnitModels(scene) {
                 unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
                 
                 // Enable the mesh (getModel disables it by default to prevent flash)
-                unit.mesh.setEnabled(true);
+                // Only call setEnabled if the method exists (mesh vs transform node)
+                if (typeof unit.mesh.setEnabled === 'function') {
+                    unit.mesh.setEnabled(true);
+                }
                 
                 // Make unit meshes pickable for selection
                 unit.mesh.isPickable = true;
@@ -591,6 +656,99 @@ function updateSelectionIndicators() {
     });
 }
 
+// Helper function to get accurate terrain height using bilinear interpolation
+// Uses precomputed height grid for fast lookups (much faster than calling getHeightVariation 4x)
+// Exposed globally for use by building placement and other systems
+// PERFORMANCE OPTIMIZED: Caches field references, simplifies bounds checks, optimizes interpolation
+window.getTerrainHeightAtPosition = (function() {
+    // Cache constants and field reference to avoid repeated property lookups
+    const TILE_SIZE = window.TILE_SIZE || 4;
+    const TILE_SIZE_INV = 1 / TILE_SIZE; // Pre-calculate inverse for faster division
+    
+    // Per-frame cache for building preview (avoids redundant calculations)
+    let lastPreviewX = Infinity;
+    let lastPreviewZ = Infinity;
+    let lastPreviewHeight = 0;
+    
+    return function getTerrainHeightAtPosition(worldX, worldZ) {
+        if (!window.liveField) {
+            return 0;
+        }
+        
+        const field = window.liveField;
+        const heightGrid = field._heightGrid;
+        
+        // Ensure height grid is built (lazy initialization if needed)
+        if (!heightGrid) {
+            if (field._buildHeightGrid) {
+                field._buildHeightGrid();
+                // Retry after building
+                if (!field._heightGrid) return 0;
+            } else {
+                // Fallback if grid building method doesn't exist yet
+                if (field.getHeightVariation) {
+                    const gridX = worldX * TILE_SIZE_INV;
+                    const gridZ = worldZ * TILE_SIZE_INV;
+                    return field.getHeightVariation(gridX, gridZ);
+                }
+                return 0;
+            }
+        }
+        
+        // Fast cache check for building preview (same position = same height)
+        if (worldX === lastPreviewX && worldZ === lastPreviewZ) {
+            return lastPreviewHeight;
+        }
+        
+        // Convert world coordinates to tile grid coordinates (using cached inverse)
+        const gridX = worldX * TILE_SIZE_INV;
+        const gridZ = worldZ * TILE_SIZE_INV;
+        
+        // Get integer tile coordinates (tile indices for array lookup)
+        const tileX = gridX | 0; // Fast floor using bitwise OR (faster than Math.floor for positive numbers)
+        const tileZ = gridZ | 0;
+        
+        // Early bounds check - if out of bounds, return 0
+        const fieldWidth = field.width;
+        const fieldHeight = field.height;
+        if (tileX < 0 || tileX >= fieldWidth || tileZ < 0 || tileZ >= fieldHeight) {
+            return 0;
+        }
+        
+        // Get fractional position within tile (0-1) - optimized calculation
+        const fx = gridX - tileX;
+        const fz = gridZ - tileZ;
+        
+        // Clamp tile indices for bilinear interpolation (handle edge cases)
+        const tx0 = tileX;
+        const tz0 = tileZ;
+        const tx1 = tileX + 1 < fieldWidth ? tileX + 1 : tx0;
+        const tz1 = tileZ + 1 < fieldHeight ? tileZ + 1 : tz0;
+        
+        // Fast array lookups from precomputed height grid (with bounds safety)
+        const row0 = heightGrid[tx0];
+        const row1 = heightGrid[tx1];
+        const h00 = (row0 && row0[tz0] !== undefined) ? row0[tz0] : 0;
+        const h10 = (row1 && row1[tz0] !== undefined) ? row1[tz0] : h00;
+        const h01 = (row0 && row0[tz1] !== undefined) ? row0[tz1] : h00;
+        const h11 = (row1 && row1[tz1] !== undefined) ? row1[tz1] : h00;
+        
+        // Optimized bilinear interpolation (pre-calculate (1-f) values)
+        const fx1 = 1 - fx;
+        const fz1 = 1 - fz;
+        const h0 = h00 * fx1 + h10 * fx; // Interpolate bottom edge
+        const h1 = h01 * fx1 + h11 * fx; // Interpolate top edge
+        const result = h0 * fz1 + h1 * fz; // Interpolate between edges
+        
+        // Cache result for building preview (likely to be called again with same position)
+        lastPreviewX = worldX;
+        lastPreviewZ = worldZ;
+        lastPreviewHeight = result;
+        
+        return result;
+    };
+})();
+
 // Update unit logic, AI, and behaviors
 function updateUnits(deltaTime) {
     const currentFrame = window.frameCounter || 0;
@@ -608,7 +766,14 @@ function updateUnits(deltaTime) {
         window.behaviorManager.stepBehaviors();
     }
     
-    gameUnits.forEach(unit => {
+    // CRITICAL: Sort units by ID for deterministic iteration order in multiplayer
+    // This ensures both clients process units in the same order, preventing position drift
+    const unitsToUpdate = (window.gameUnits || gameUnits).slice();
+    if (window.isMultiplayer) {
+        unitsToUpdate.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+    }
+    
+    unitsToUpdate.forEach(unit => {
         if (!unit.pb || !unit.pb.state) return;
         
         // GAMEPLAY UNITS (player/AI) - ALWAYS update physics for smooth movement
@@ -622,23 +787,64 @@ function updateUnits(deltaTime) {
         // Mark this unit as updated
         unit.lastUpdateFrame = currentFrame;
         
-        // PHYSICS INTEGRATION: Apply impulses and velocities to position
+        // PHYSICS INTEGRATION: Apply impulses and velocities to position and rotation
+        // NOTE: We handle all physics here instead of pb.integrate() to avoid double integration
         if (!unit.pb.imp) unit.pb.imp = { x: 0, y: 0, z: 0 };
         if (!unit.pb.state.vel) unit.pb.state.vel = { x: 0, y: 0, z: 0 };
+        if (!unit.pb.rotImp) unit.pb.rotImp = { x: 0, y: 0, z: 0 };
+        if (!unit.pb.rotVel) unit.pb.rotVel = { x: 0, y: 0, z: 0 };
         
         // Apply impulse to velocity
         unit.pb.state.vel.x += unit.pb.imp.x;
         unit.pb.state.vel.z += unit.pb.imp.z;
         
+        // Apply rotation impulse to rotation velocity
+        unit.pb.rotVel.y += unit.pb.rotImp.y;
+        
         // Clear impulses (they're one-time forces)
         unit.pb.imp.x = 0;
         unit.pb.imp.z = 0;
+        unit.pb.rotImp.x = 0;
+        unit.pb.rotImp.y = 0;
+        unit.pb.rotImp.z = 0;
         
-        // Apply velocity to position
+        // Apply velocity to position (deltaTime is already fixed timestep from game.js)
         unit.pb.state.loc.x += unit.pb.state.vel.x * deltaTime;
         unit.pb.state.loc.z += unit.pb.state.vel.z * deltaTime;
         
+        // CRITICAL: Apply smooth position correction for P2P sync
+        // If unit has a position correction target, lerp towards it gradually
+        // This prevents jarring snaps when move commands include authoritative positions
+        if (unit._positionCorrection) {
+          const correction = unit._positionCorrection;
+          const currentX = unit.pb.state.loc.x;
+          const currentZ = unit.pb.state.loc.z;
+          
+          // Lerp towards authoritative position
+          unit.pb.state.loc.x += (correction.targetX - currentX) * correction.strength;
+          unit.pb.state.loc.z += (correction.targetZ - currentZ) * correction.strength;
+          
+          // Check if we're close enough to stop correcting (within 0.2 units)
+          const remainingErrorX = correction.targetX - unit.pb.state.loc.x;
+          const remainingErrorZ = correction.targetZ - unit.pb.state.loc.z;
+          const remainingError = Math.sqrt(remainingErrorX * remainingErrorX + remainingErrorZ * remainingErrorZ);
+          
+          if (remainingError < 0.2) {
+            // Close enough - remove correction
+            delete unit._positionCorrection;
+          }
+        }
+        
+        // Apply rotation velocity to rotation
+        unit.pb.state.rot.y += unit.pb.rotVel.y * deltaTime;
+        
+        // Apply rotation damping (units slow their turning)
+        // Higher damping = less springy/oscillation, more responsive turning
+        unit.pb.rotVel.y *= 0.85; // 15% damping per physics step (was 0.95 = 5%)
+        
         // Check if unit is standing on an agora platform
+        // NOTE: Collision detection is handled by the agora model's hitbox mesh (more efficient)
+        // This only handles platform height positioning
         let onPlatform = false;
         if (window.gameBuildings) {
             for (const building of window.gameBuildings) {
@@ -646,11 +852,15 @@ function updateUnits(deltaTime) {
                     const dx = unit.pb.state.loc.x - building.position.x;
                     const dz = unit.pb.state.loc.z - building.position.z;
                     const distSq = dx * dx + dz * dz;
-                    const radiusSq = building.platformRadius * building.platformRadius;
+                    const platformRadiusSq = building.platformRadius * building.platformRadius;
                     
-                    if (distSq <= radiusSq) {
+                    // Unit is on platform if within platform radius
+                    // The model's hitbox mesh handles collision, preventing units from getting too close
+                    if (distSq <= platformRadiusSq) {
                         // Unit is on the agora platform!
-                        unit.pb.state.loc.y = building.platformHeight;
+                        // Add offset so units stand higher on the platform (about half a villager height)
+                        const agoraUnitOffset = 0.75; // Units stand higher on agora platform
+                        unit.pb.state.loc.y = building.platformHeight + agoraUnitOffset;
                         onPlatform = true;
                         break;
                     }
@@ -658,15 +868,97 @@ function updateUnits(deltaTime) {
             }
         }
         
-        // If not on platform, stay at ground level
-        if (!onPlatform && unit.pb.state.loc.y !== 0) {
-            unit.pb.state.loc.y = 0;
+        // If not on platform, update Y position to match terrain height (with bilinear interpolation)
+        // Add offset so units stand ON the terrain surface, not embedded in it
+        // Note: Units typically have their origin at their base/feet, so we need enough offset
+        // PERFORMANCE: Use LOD to skip expensive terrain height calculations for distant units
+        if (!onPlatform) {
+            const loc = unit.pb.state.loc;
+            
+            // LOD: Skip expensive terrain height calculation for distant units
+            // Only update terrain height for units within reasonable distance
+            const distanceSq = unit.distanceToCameraSquared || Infinity;
+            const TERRAIN_HEIGHT_LOD_DISTANCE_SQ = 40000; // 200 units squared (skip beyond this)
+            
+            if (distanceSq > TERRAIN_HEIGHT_LOD_DISTANCE_SQ) {
+                // Unit is far away - keep last known height or use cached value
+                // Don't recalculate terrain height (expensive!)
+                if (unit._lastTerrainHeight !== undefined) {
+                    unit.pb.state.loc.y = unit._lastTerrainHeight + 0.2;
+                    unit.pb.state.vel.y = 0;
+                }
+                // If no cached height, leave Y as-is (will be set when unit gets closer)
+            } else {
+                // Unit is close enough - calculate terrain height
+                const lastTerrainHeight = unit._lastTerrainHeight;
+                const lastTerrainX = unit._lastTerrainX || 0;
+                const lastTerrainZ = unit._lastTerrainZ || 0;
+                
+                // Only recalculate if unit moved more than 0.1 units (significant movement)
+                const dx = Math.abs(loc.x - lastTerrainX);
+                const dz = Math.abs(loc.z - lastTerrainZ);
+                let terrainHeight;
+                
+                if (lastTerrainHeight !== undefined && dx < 0.1 && dz < 0.1) {
+                    // Unit hasn't moved much, reuse cached height
+                    terrainHeight = lastTerrainHeight;
+                } else {
+                    // Unit moved significantly, recalculate terrain height
+                    terrainHeight = getTerrainHeightAtPosition(loc.x, loc.z);
+                    unit._lastTerrainHeight = terrainHeight;
+                    unit._lastTerrainX = loc.x;
+                    unit._lastTerrainZ = loc.z;
+                }
+                
+                // Use a larger offset to ensure units are clearly above terrain surface
+                // This accounts for unit model origin points and prevents clipping
+                const newY = terrainHeight + 0.2;
+                
+                // CRITICAL: Set Y position AFTER velocity is applied, and ensure vel.y stays 0
+                // This prevents integrate() from overwriting our terrain height
+                unit.pb.state.vel.y = 0; // Ensure no Y velocity
+                unit.pb.state.loc.y = newY;
+            }
         }
         
         // Apply damping to velocity (units slow down naturally)
-        const damping = 0.96; // 4% friction per frame (reduced for smoother movement)
-        unit.pb.state.vel.x *= damping;
-        unit.pb.state.vel.z *= damping;
+        // CRITICAL: Damping is per physics step, not per frame
+        // With physics steps capped to 1 per frame in multiplayer, this ensures deterministic damping
+        // CRITICAL: Round velocity after damping to prevent floating-point drift accumulation
+        const damping = 0.96; // 4% friction per physics step (reduced for smoother movement)
+        unit.pb.state.vel.x = Math.round((unit.pb.state.vel.x * damping) * 1000) / 1000;
+        unit.pb.state.vel.z = Math.round((unit.pb.state.vel.z * damping) * 1000) / 1000;
+        // Keep Y velocity at 0 (terrain height is handled directly, not via velocity)
+        unit.pb.state.vel.y = 0;
+        
+        // Apply fake vertical arc animation for units kicked by monks
+        // Only apply arc if unit is not on a platform (platforms handle their own Y)
+        // CRITICAL: Use tick-based timing for deterministic animation
+        if (unit._monkKickArc && !onPlatform) {
+            const arc = unit._monkKickArc;
+            const currentTick = window.currentMatch?.tick || 0;
+            const elapsedTicks = currentTick - arc.startTick;
+            const progress = Math.min(elapsedTicks / arc.durationTicks, 1.0);
+            
+            if (progress >= 1.0) {
+                // Arc complete, remove it
+                delete unit._monkKickArc;
+                unit.pb.state.loc.y = arc.startY;
+            } else {
+                // Calculate arc height using parabolic curve (up then down)
+                // y = -4h * (t - 0.5)^2 + h, where h is peak height and t is 0-1
+                const arcHeight = -4 * arc.peakHeight * Math.pow(progress - 0.5, 2) + arc.peakHeight;
+                unit.pb.state.loc.y = arc.startY + arcHeight;
+            }
+        } else if (unit._monkKickArc && onPlatform) {
+            // If unit gets on platform during arc, cancel the arc
+            delete unit._monkKickArc;
+        }
+        
+        // Auto monk kick: bop away nearby enemies as often as cooldown allows
+        if (unit.type === 'monk') {
+            maybeAutoMonkKick(unit);
+        }
         
         // Update unit behaviors based on type
         if (unit.name.includes('Tortle')) {
@@ -689,6 +981,7 @@ function updateUnits(deltaTime) {
             
             // Apply angular velocity to rotation (with damping)
             if (unit.pb.state.angularVel) {
+                // deltaTime is already fixed timestep from game.js
                 unit.pb.state.rot.y += unit.pb.state.angularVel.y * deltaTime;
                 
                 // Angular damping (tortles slow down naturally)
@@ -703,6 +996,157 @@ function updateUnits(deltaTime) {
         // - Combat logic
         // etc.
     });
+}
+
+// Constants for monk auto-kick behavior
+// Radius for detecting nearby enemies to kick (monks' legs are only so long!)
+const MONK_KICK_AUTO_RADIUS = 2.5; // Reduced from 5 - realistic leg reach
+const MONK_KICK_AUTO_RADIUS_SQ = MONK_KICK_AUTO_RADIUS * MONK_KICK_AUTO_RADIUS;
+// Strong knock-back so enemies get clearly pushed away
+const MONK_KICK_AUTO_POWER = 250; // Increased from 180 to make kicks more visible
+
+// Automatically push units out of the way when monk gets a move command (but NOT while wandering)
+// This can be called when a move command is issued, or continuously during movement
+function maybeAutoMonkKick(unit, forceCheck = false) {
+    if (!window.gameUnits || !unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) {
+        return;
+    }
+    
+    const currentTick = window.currentMatch?.tick || 0;
+    const ticksPerSecond = window.net?.TICK_RATE || 20;
+    const KICK_INTERVAL_TICKS = Math.max(1, Math.floor((1500 / 1000) * ticksPerSecond)); // 1.5s in ticks
+    
+    // If forceCheck is true (called from move command), skip behavior checks and just kick nearby units
+    let isManualMovement = true; // Default to true when forceCheck is true
+    let hasVelocity = true; // Default to true when forceCheck is true
+    
+    if (!forceCheck) {
+        // Check what behavior the monk has - only kick on manual movement commands (walk/run)
+        const currentBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+        const behaviorName = currentBehavior?.constructor?.name;
+        
+        // Don't kick while wandering - only kick on manual movement commands
+        if (behaviorName === 'WanderBehavior') {
+            return;
+        }
+        
+        // Only kick if monk has WalkBehavior or RunBehavior (manual movement commands)
+        isManualMovement = behaviorName === 'WalkBehavior' || behaviorName === 'RunBehavior';
+        
+        // Also check if monk is actually moving (has velocity)
+        hasVelocity = unit.pb.state.vel && 
+                      (Math.abs(unit.pb.state.vel.x) > 0.05 || Math.abs(unit.pb.state.vel.z) > 0.05);
+        
+        // Only push units if monk is moving from a manual command (walk/run behavior)
+        if (!isManualMovement || !hasVelocity) {
+            return;
+        }
+        
+        // Periodic kicking while moving - check cooldown
+        const lastKickTick = unit._lastPeriodicKickTick ?? -Infinity;
+        if (currentTick - lastKickTick < KICK_INTERVAL_TICKS) {
+            return; // Still on cooldown
+        }
+        
+        // Update last kick tick deterministically
+        unit._lastPeriodicKickTick = currentTick;
+    }
+    
+    const origin = unit.pb.state.loc;
+    let kickedAny = false;
+    let nearbyUnits = 0;
+    
+    // Look for any unit within push radius (monks kick everyone except other monks!)
+    for (const other of window.gameUnits) {
+        if (!other || other === unit) continue;
+        if (!other.pb || !other.pb.state || !other.pb.state.loc) continue;
+        
+        // Monks can't kick other monks (they're immune to kicks)
+        if (other.type === 'monk') continue;
+        
+        // Monks kick everyone else - allies, enemies, and neutrals!
+        // (No owner check - monks are peaceful but pushy)
+        
+        const dx = other.pb.state.loc.x - origin.x;
+        const dz = other.pb.state.loc.z - origin.z;
+        const distSq = dx * dx + dz * dz;
+        
+        if (distSq <= MONK_KICK_AUTO_RADIUS_SQ) {
+            nearbyUnits++;
+            
+            if (distSq > 0.01 && other.pb && other.pb.imp) {
+                // Ensure impulse object exists and is valid
+                if (!other.pb.imp.x) other.pb.imp.x = 0;
+                if (!other.pb.imp.z) other.pb.imp.z = 0;
+                
+                // Calculate push direction (away from monk)
+                const dist = Math.sqrt(distSq);
+                const dirX = dx / dist;
+                const dirZ = dz / dist;
+                
+                // Apply push impulse directly (smooth continuous pushing)
+                // Use distance-based falloff so close enemies get pushed harder
+                const falloff = 1.0 - (dist / MONK_KICK_AUTO_RADIUS);
+                const pushStrength = MONK_KICK_AUTO_POWER * falloff;
+                
+                other.pb.imp.x += dirX * pushStrength;
+                other.pb.imp.z += dirZ * pushStrength;
+                
+                // Add fake vertical arc animation to kicked unit
+                // CRITICAL: Use tick-based timing for deterministic animation
+                if (!other._monkKickArc) {
+                    const tickRate = 20; // Match net.TICK_RATE
+                    other._monkKickArc = {
+                        startTick: currentTick,
+                        durationTicks: Math.floor(400 / 1000 * tickRate), // 400ms → ticks (8 ticks at 20Hz)
+                        peakHeight: 2.0, // Peak height of arc
+                        startY: other.pb.state.loc.y || 0
+                    };
+                }
+                
+                kickedAny = true;
+                
+                // Debug: log when kicking
+                if (!window.isMultiplayer && Math.random() < 0.1) { // 10% chance to log (single-player only)
+                    console.log(`👊 Monk ${unit.id} kicked ${other.type || other.name} at distance ${dist.toFixed(2)}, push=${pushStrength.toFixed(1)}`);
+                }
+            }
+        }
+    }
+    
+    // DISABLED: Particle effects cause mesh corruption (same issue as projectile impacts)
+    // Create cloud effect at monk position when kicking
+    // if (kickedAny && window.fx) {
+    //     // Only create effects if monk has a valid mesh (with extra safety checks)
+    //     if (unit.mesh && unit.pb && unit.pb.state && unit.pb.state.loc) {
+    //         try {
+    //             // Use physics position instead of mesh position (more reliable)
+    //             const monkPos = new BABYLON.Vector3(
+    //                 unit.pb.state.loc.x,
+    //                 unit.pb.state.loc.y,
+    //                 unit.pb.state.loc.z
+    //             );
+    //             
+    //             // Create cloudy/smoky effect instead of explosion
+    //             if (window.fx.createParticleEffect) {
+    //                 window.fx.createParticleEffect('smoke', monkPos, {
+    //                     scale: 0.4,
+    //                     emitRate: 30,
+    //                     minSize: 0.3,
+    //                     maxSize: 0.6
+    //                 });
+    //             }
+    //         } catch (e) {
+    //             // Visual only, ignore errors silently
+    //             // console.warn('Monk kick visual effect error:', e);
+    //         }
+    //     }
+    // }
+    
+    // Debug: log if monk is moving but no units nearby
+    if (!window.isMultiplayer && isManualMovement && hasVelocity && nearbyUnits === 0 && Math.random() < 0.01) {
+        // console.log(`👊 Monk ${unit.id} moving but no units in ${MONK_KICK_AUTO_RADIUS} unit radius`);
+    }
 }
 
 // Pre-calculate sin/cos lookup table for performance
@@ -744,17 +1188,6 @@ function updateUnitMeshes() {
             // Check if unit has active behavior - if so, skip animation system
             const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
             
-            // Helper function to get terrain height at unit's position
-            const getTerrainHeight = (unit) => {
-                if (window.liveField && window.liveField.getHeightVariation && unit.pb && unit.pb.state && unit.pb.state.loc) {
-                    const TILE_SIZE = window.TILE_SIZE || 4;
-                    const gridX = unit.pb.state.loc.x / TILE_SIZE;
-                    const gridZ = unit.pb.state.loc.z / TILE_SIZE;
-                    return window.liveField.getHeightVariation(gridX, gridZ);
-                }
-                return 0; // Default ground level
-            };
-            
             // Visual follows physics - position
             // Since behaviors are deterministic in P2P, all units simulate identically on both clients
             if (unit.pb.state.loc) {
@@ -763,20 +1196,17 @@ function updateUnitMeshes() {
                 
                 // Skip animation system for units with active behaviors
                 if (hasActiveBehavior) {
-                    // Use physics Y position directly (already includes terrain + platforms)
-                    // Only add terrain height if unit is at ground level (Y=0)
-                    if (unit.pb.state.loc.y === 0) {
-                        unit.mesh.position.y = getTerrainHeight(unit);
-                    } else {
-                        // On platform (like agora) - use absolute Y
-                        unit.mesh.position.y = unit.pb.state.loc.y;
-                    }
+                    // ALWAYS use physics Y position directly - updateUnits() handles terrain height, platforms, and arc animations
+                    // Don't manually calculate or override - just follow the physics body
+                    unit.mesh.position.y = unit.pb.state.loc.y;
                 } else {
                     // Flying units get altitude boost
                     if (unit.abilities && unit.abilities.includes('fly')) {
                         // Add some flying height with slight bobbing
                         const flyHeight = 8 + getCachedSin(currentTime * 0.002 + unit.id.charCodeAt(0)) * 1.5;
-                        unit.mesh.position.y = getTerrainHeight(unit) + flyHeight;
+                        const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
+                            window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
+                        unit.mesh.position.y = terrainHeight + flyHeight;
                         
                         // Birds fly in circles
                         if (unit.type === 'bird_messenger') {
@@ -861,53 +1291,67 @@ function updateUnitMeshes() {
                         // Ground units with occasional hopping
                         let hopHeight = 0;
                         
-                        // Different behavior by unit type
-                        if (unit.name.includes('Mushroom')) {
-                            // Mushrooms breathe (scale) instead of hop
-                            const breatheTimeOffset = unit.id.charCodeAt(0) * 50;
-                            const breatheCycle = Math.sin((Date.now() + breatheTimeOffset) * 0.001); // Slow breathing
-                            const scaleVariation = 1.0 + (breatheCycle * 0.08); // ±8% size variation
-                            
-                            unit.mesh.scaling.setAll(unit.scale * scaleVariation);
-                            unit.mesh.position.y = getTerrainHeight(unit); // Stick to terrain
-                            
-                        } else if (unit.name.includes('Tortle')) {
-                            // Tortles don't hop - they're slow and steady, just pivot occasionally
-                            unit.mesh.position.y = getTerrainHeight(unit); // Stick to terrain
-                            
-                            // Reset scaling to base scale (no breathing like mushrooms)
-                            unit.mesh.scaling.setAll(unit.scale);
-                            
-                        } else if (unit.name.includes('Villager')) {
-                            // Villagers don't hop - they're working or idle standing
-                            unit.mesh.position.y = getTerrainHeight(unit); // Stick to terrain
-                            
+                        // Check if unit is in monk kick arc animation
+                        if (unit._monkKickArc) {
+                            // Use arc Y position directly (already calculated in updateUnits)
+                            unit.mesh.position.y = unit.pb.state.loc.y;
                         } else {
-                            // Only frogs hop
-                            let hopFrequency, hopAmplitude;
-                            if (unit.name.includes('Frog')) {
-                                // Each frog gets a unique hop frequency stretch factor
-                                const stretchFactor = 0.7 + (unit.id.charCodeAt(2) % 100) / 100 * 0.6; // 0.7x to 1.3x speed
-                                hopFrequency = 0.0012 * stretchFactor; // Individual hop timing!
-                                hopAmplitude = 1.2;
+                            // Different behavior by unit type
+                            if (unit.name.includes('Mushroom')) {
+                                // Mushrooms breathe (scale) instead of hop
+                                const breatheTimeOffset = unit.id.charCodeAt(0) * 50;
+                                const breatheCycle = Math.sin((Date.now() + breatheTimeOffset) * 0.001); // Slow breathing
+                                const scaleVariation = 1.0 + (breatheCycle * 0.08); // ±8% size variation
+                                
+                                unit.mesh.scaling.setAll(unit.scale * scaleVariation);
+                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
+                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
+                                unit.mesh.position.y = terrainHeight; // Stick to terrain
+                                
+                            } else if (unit.name.includes('Tortle')) {
+                                // Tortles don't hop - they're slow and steady, just pivot occasionally
+                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
+                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
+                                unit.mesh.position.y = terrainHeight; // Stick to terrain
+                                
+                                // Reset scaling to base scale (no breathing like mushrooms)
+                                unit.mesh.scaling.setAll(unit.scale);
+                                
+                            } else if (unit.name.includes('Villager')) {
+                                // Villagers don't hop - they're working or idle standing
+                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
+                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
+                                unit.mesh.position.y = terrainHeight; // Stick to terrain
+                                
                             } else {
-                                // Other units (if any) get rare tiny hops
-                                hopFrequency = 0.0002;
-                                hopAmplitude = 0.3;
+                                // Only frogs hop
+                                let hopFrequency, hopAmplitude;
+                                if (unit.name.includes('Frog')) {
+                                    // Each frog gets a unique hop frequency stretch factor
+                                    const stretchFactor = 0.7 + (unit.id.charCodeAt(2) % 100) / 100 * 0.6; // 0.7x to 1.3x speed
+                                    hopFrequency = 0.0012 * stretchFactor; // Individual hop timing!
+                                    hopAmplitude = 1.2;
+                                } else {
+                                    // Other units (if any) get rare tiny hops
+                                    hopFrequency = 0.0002;
+                                    hopAmplitude = 0.3;
+                                }
+                                
+                                // Create a pulsing hop pattern based on time and unit ID
+                                const timeOffset = unit.id.charCodeAt(0) * 100;
+                                const hopCycle = Math.sin((Date.now() + timeOffset) * hopFrequency);
+                                
+                                // Only hop when the sine wave is positive and above threshold
+                                if (hopCycle > 0.7) {
+                                    // Quick hop up and down
+                                    const hopPhase = (hopCycle - 0.7) / 0.3; // Normalize to 0-1
+                                    hopHeight = Math.sin(hopPhase * Math.PI) * hopAmplitude;
+                                }
+                                
+                                const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
+                                    window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
+                                unit.mesh.position.y = terrainHeight + hopHeight;
                             }
-                            
-                            // Create a pulsing hop pattern based on time and unit ID
-                            const timeOffset = unit.id.charCodeAt(0) * 100;
-                            const hopCycle = Math.sin((Date.now() + timeOffset) * hopFrequency);
-                            
-                            // Only hop when the sine wave is positive and above threshold
-                            if (hopCycle > 0.7) {
-                                // Quick hop up and down
-                                const hopPhase = (hopCycle - 0.7) / 0.3; // Normalize to 0-1
-                                hopHeight = Math.sin(hopPhase * Math.PI) * hopAmplitude;
-                            }
-                            
-                            unit.mesh.position.y = getTerrainHeight(unit) + hopHeight;
                         }
                     }
                 }
@@ -1189,16 +1633,187 @@ function recruitUnit(unitType, options = {}) {
   return false;
 }
 
+// Rally nearby units to the agora (for any player, defaults to window.player)
+function rallyUnitsToAgora(radiusInTiles = 30, targetPlayer = null) {
+  // Use provided player or default to window.player
+  const player = targetPlayer || window.player;
+  
+  if (!player || !player.agora) {
+    console.warn('❌ Cannot rally: Player or agora not found');
+    return;
+  }
+  
+  const TILE_SIZE = window.TILE_SIZE || 4;
+  const normalizedPlayerId = player.id?.length > 6 ? player.id.slice(-6) : player.id;
+  const OCCUPATION_RADIUS = 5; // Tiles (matches match.js)
+  
+  // Get agora world position and building
+  let agoraWorldPos;
+  let agoraBuilding = null;
+  
+  // Try to get position from building first (more accurate)
+  agoraBuilding = window.gameBuildings?.find(b => {
+    if (!b || b.type !== 'agora') return false;
+    const normalizedOwner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
+    return normalizedOwner === normalizedPlayerId;
+  });
+  
+  if (agoraBuilding && agoraBuilding.position) {
+    agoraWorldPos = {
+      x: agoraBuilding.position.x,
+      y: 0,
+      z: agoraBuilding.position.z
+    };
+  } else {
+    // Fallback to player.agora tile coordinates
+    agoraWorldPos = {
+      x: player.agora.x * TILE_SIZE,
+      y: 0,
+      z: player.agora.y * TILE_SIZE
+    };
+  }
+  
+  // Check if agora is under attack (contested)
+  const isContested = agoraBuilding?.contested || false;
+  let targetVillagerCount = 2; // Default: rally 2 villagers
+  
+  if (isContested && agoraBuilding && window.currentMatch) {
+    // Count enemy attackers within occupation radius
+    const agoraTileX = agoraBuilding.gridX || Math.floor(agoraWorldPos.x / TILE_SIZE);
+    const agoraTileZ = agoraBuilding.gridZ || Math.floor(agoraWorldPos.z / TILE_SIZE);
+    
+    let attackerCount = 0;
+    
+    // Count enemy units within occupation radius
+    if (window.currentMatch.players) {
+      window.currentMatch.players.forEach(otherPlayer => {
+        const otherPid = otherPlayer.id || otherPlayer;
+        const normalizedOtherPid = otherPid.length > 6 ? otherPid.slice(-6) : otherPid;
+        
+        // Skip self and eliminated players
+        if (normalizedOtherPid === normalizedPlayerId) return;
+        if (window.currentMatch.eliminatedPlayers?.has(otherPid)) return;
+        
+        // Count units near agora
+        otherPlayer.units?.forEach(unit => {
+          if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) return;
+          
+          const unitTileX = unit.pb.state.loc.x / TILE_SIZE;
+          const unitTileZ = unit.pb.state.loc.z / TILE_SIZE;
+          
+          const dx = unitTileX - agoraTileX;
+          const dz = unitTileZ - agoraTileZ;
+          const distance = Math.sqrt(dx * dx + dz * dz);
+          
+          if (distance <= OCCUPATION_RADIUS) {
+            attackerCount++;
+          }
+        });
+      });
+    }
+    
+    // Calculate how many defenders needed: attackers need 2x defenders to capture
+    // So we need at least attackerCount / 2 defenders, plus 1 more to negate
+    const defendersNeeded = Math.ceil(attackerCount / 2) + 1;
+    targetVillagerCount = defendersNeeded;
+    
+    console.log(`🚩 Agora under attack! ${attackerCount} attackers detected, rallying ${targetVillagerCount} villagers`);
+  }
+  
+  // Find nearby VILLAGERS owned by the player, sorted by distance
+  const nearbyVillagers = [];
+  const radiusInWorldUnits = radiusInTiles * TILE_SIZE;
+  const radiusSquared = radiusInWorldUnits * radiusInWorldUnits;
+  
+  // Search through all game units
+  for (const unit of (window.gameUnits || [])) {
+    if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) continue;
+    
+    // Only select villagers
+    if (unit.type !== 'villager') continue;
+    
+    // Check ownership
+    const normalizedUnitOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+    if (normalizedUnitOwner !== normalizedPlayerId) continue;
+    
+    // Calculate distance squared (avoid sqrt for performance)
+    const dx = unit.pb.state.loc.x - agoraWorldPos.x;
+    const dz = unit.pb.state.loc.z - agoraWorldPos.z;
+    const distanceSquared = dx * dx + dz * dz;
+    
+    if (distanceSquared <= radiusSquared) {
+      // Calculate actual distance for sorting
+      const distance = Math.sqrt(distanceSquared);
+      nearbyVillagers.push({ unit, distance });
+    }
+  }
+  
+  // Sort by distance (closest first)
+  nearbyVillagers.sort((a, b) => a.distance - b.distance);
+  
+  // Take only the needed amount
+  const unitsToRally = nearbyVillagers.slice(0, targetVillagerCount).map(v => v.unit);
+  
+  if (unitsToRally.length === 0) {
+    console.log(`🚩 No villagers found within ${radiusInTiles} tiles of agora`);
+    return;
+  }
+  
+  // Move units to agora using match command system
+  if (window.currentMatch) {
+    const unitIds = unitsToRally.map(u => u.id);
+    // CRITICAL: Include starting positions to prevent teleporting on other client
+    const startPositions = {};
+    unitsToRally.forEach(u => {
+      if (u.pb && u.pb.state && u.pb.state.loc) {
+        startPositions[u.id] = { x: u.pb.state.loc.x, z: u.pb.state.loc.z };
+      }
+    });
+    window.currentMatch.submitCommand({
+      type: 'move',
+      playerId: player.id,
+      unitIds: unitIds,
+      startPositions: startPositions,
+      target: agoraWorldPos
+    });
+    const playerName = player.name || (player === window.player ? 'Player' : 'AI');
+    console.log(`🚩 Rallying ${unitsToRally.length} villagers to agora for ${playerName}`);
+  } else{
+    // Single player fallback - move units directly
+    if (window.behaviorManager && window.WalkBehavior) {
+      unitsToRally.forEach(unit => {
+        window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: agoraWorldPos });
+      });
+      const playerName = player.name || (player === window.player ? 'Player' : 'AI');
+      console.log(`🚩 Rallying ${unitsToRally.length} villagers to agora for ${playerName} (single player)`);
+    } else {
+      console.warn('❌ Cannot rally: Match system or behavior manager not available');
+    }
+  }
+}
+
 // Export for use in other files
 if (typeof window !== 'undefined') {
     window.UnitTypes = UnitTypes;
     window.Unit = Unit;
     window.recruitUnit = recruitUnit;
     window.spawnAgoraVillagers = spawnAgoraVillagers;
+    window.rallyUnitsToAgora = rallyUnitsToAgora;
     window.getUnitDef = getUnitDef;
     window.getUnitsByCategory = getUnitsByCategory;
-    window.gameUnits = gameUnits; // All units (for rendering)
-    window.neutralUnits = neutralUnits; // Just neutral units
+    
+    // CRITICAL: Never reassign these arrays if a multiplayer match is active!
+    // During match start, we clear the arrays and repopulate them.
+    // If this code runs again (hot reload), it would replace the cleared array with the old stale one.
+    if (!window.isMultiplayer || !window.currentMatch) {
+        window.gameUnits = gameUnits; // All units (for rendering)
+        window.neutralUnits = neutralUnits; // Just neutral units
+    } else {
+        // Match is active - just sync the internal arrays with window arrays
+        // This ensures updateUnits() uses the correct array reference
+        console.log(`⚠️ units.js export block ran during active match - syncing arrays instead of replacing`);
+    }
+    
     window.sprinkleUnits = sprinkleUnits;
     window.spawnUnitModels = spawnUnitModels;
     window.updateUnits = updateUnits;
@@ -1206,6 +1821,7 @@ if (typeof window !== 'undefined') {
     window.respawnUnits = respawnUnits;
     window.debugUnitRotations = debugUnitRotations;
     window.destroyUnit = destroyUnit;
+    window.maybeAutoMonkKick = maybeAutoMonkKick; // Export monk kick function
     
     // LOD system exports
     window.LOD_DISTANCES = LOD_DISTANCES;

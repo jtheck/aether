@@ -1170,7 +1170,20 @@ const Lobby = {
         // Update UI to show timeout
         const lobbyElement = document.getElementById(`${gameType}_lobby`);
         if (lobbyElement) {
-          const statusDiv = lobbyElement.querySelector('.lobby_connection_status');
+          let statusDiv = lobbyElement.querySelector('.lobby_connection_status');
+          if (!statusDiv) {
+            const roomContainer = lobbyElement.querySelector('.lobby_room');
+            if (roomContainer) {
+              statusDiv = document.createElement('div');
+              statusDiv.className = 'lobby_connection_status';
+              const header = roomContainer.querySelector('.lobby_room_header');
+              if (header && header.nextSibling) {
+                roomContainer.insertBefore(statusDiv, header.nextSibling);
+              } else {
+                roomContainer.insertBefore(statusDiv, roomContainer.firstChild);
+              }
+            }
+          }
           if (statusDiv) {
             statusDiv.innerHTML = `
               <div style="color: #ff6b6b; padding: 10px; background: rgba(255,107,107,0.1); border-radius: 4px; margin: 10px 0;">
@@ -1489,7 +1502,6 @@ const Lobby = {
     
     let html = `
       <div class="lobby_browser_header">
-        <h3>${config.name} Lobbies</h3>
         <button class="create_lobby_btn" onclick="window.Lobby.showCreateLobbyDialog('${gameType}')">+ Create Lobby</button>
       </div>
       <div class="lobby_list">`;
@@ -1541,44 +1553,88 @@ const Lobby = {
     if (!roomContainer) {
       roomContainer = document.createElement('div');
       roomContainer.className = 'lobby_room';
+      roomContainer.style.paddingTop = '0';
+      roomContainer.style.marginTop = '0';
       lobbyElement.appendChild(roomContainer);
+    } else {
+      roomContainer.style.paddingTop = '0';
+      roomContainer.style.marginTop = '0';
     }
     
     // Hide browser if it exists
     const browserContainer = lobbyElement.querySelector('.lobby_browser');
     if (browserContainer) browserContainer.style.display = 'none';
     
+    // Hide the old lobby_b button if it exists
+    const oldLobbyButton = lobbyElement.querySelector('.lobby_b');
+    if (oldLobbyButton) oldLobbyButton.style.display = 'none';
+    
     let html = `
       <div class="lobby_room_header">
         <h3>${lobby.name}</h3>
-        <button class="leave_lobby_btn" onclick="window.Lobby.leaveLobbyAndReturnToBrowser('${gameType}')">← Back</button>
-      </div>
+      </div>`;
+    
+    // Add start/ready buttons at the top (for host)
+    if (this.isHost) {
+      const allConnected = this.connectedPlayers.every(player => {
+        const playerId = player.id || player;
+        return this.playerConnectionStates[playerId] === 'connected';
+      });
+      const allReady = this.connectedPlayers.every(player => {
+        const playerId = player.id || player;
+        return this.playerReadyStates[playerId];
+      });
+      const minPlayers = gameType === 'adventure' ? 1 : 2;
       
-      <div class="lobby_connection_status"></div>
+      // Count enabled AI slots
+      const aiSlots = lobby.settings.aiSlots || [];
+      const aiCount = aiSlots.filter(slot => slot).length;
       
-      <div class="lobby_room_settings">
-        <div class="lobby_setting">
-          <label>Field Size:</label>
-          ${this.isHost ? 
-            `<select id="fieldSizeSelect" onchange="window.Lobby.updateLobbySetting('fieldSize', this.value)">
-              <option value="tiny" ${lobby.settings.fieldSize === 'tiny' ? 'selected' : ''}>Tiny</option>
-              <option value="small" ${lobby.settings.fieldSize === 'small' ? 'selected' : ''}>Small</option>
-              <option value="medium" ${lobby.settings.fieldSize === 'medium' ? 'selected' : ''}>Medium</option>
-              <option value="large" ${lobby.settings.fieldSize === 'large' ? 'selected' : ''}>Large</option>
-              <option value="huge" ${lobby.settings.fieldSize === 'huge' ? 'selected' : ''}>Huge</option>
-            </select>` :
-            `<span>${lobby.settings.fieldSize}</span>`
-          }
-        </div>
-        <div class="lobby_setting">
-          <label>Seed:</label>
-          ${this.isHost ?
-            `<input type="number" id="seedInput" value="${lobby.settings.seed}" onchange="window.Lobby.updateLobbySetting('seed', this.value)" style="width: 100px;">` :
-            `<span>#${lobby.settings.seed}</span>`
-          }
-        </div>
-      </div>
+      // Require at least one AI opponent when solo (totalPlayers < 2)
+      const requiresAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone');
+      const hasRequiredAI = !requiresAI || aiCount > 0;
       
+      // Special case: solo Adventure/1v1 with AI doesn't need to wait for players
+      const isSoloWithAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone') && aiCount > 0;
+      const canStart = (isSoloWithAI || (totalPlayers >= minPlayers && allConnected && allReady)) && hasRequiredAI;
+      
+      let startBtnText = 'Start Match';
+      let startBtnOnClick = `window.Lobby.startMatchFromLobby('${gameType}')`;
+      
+      if (gameType === 'adventure' && totalPlayers < 2) {
+        if (aiCount > 0) {
+          startBtnText = `Launch with ${aiCount} AI`;
+          // Use startAdventureSkirmish for solo offline play
+          const fieldSize = lobby.settings.fieldSize || 'medium';
+          const mapSeed = lobby.settings.seed || Math.floor(Math.random() * 1000000);
+          startBtnOnClick = `window.Lobby.startAdventureSkirmish('${fieldSize}', ${mapSeed}, {aiCount: ${aiCount}})`;
+        } else {
+          startBtnText = 'Add AI Opponent to Start';
+        }
+      } else if (gameType === 'onevsone' && totalPlayers < 2) {
+        if (aiCount > 0) {
+          startBtnText = '🚀 Start 1v1 vs AI';
+        } else {
+          startBtnText = 'Add AI Opponent to Start';
+        }
+      } else if (!allConnected) {
+        startBtnText = 'Waiting for Connections...';
+      } else if (!allReady) {
+        const readyCount = this.connectedPlayers.filter(p => this.playerReadyStates[p.id || p]).length;
+        startBtnText = `Waiting for Players... (${readyCount}/${this.connectedPlayers.length} ready)`;
+      } else if (canStart) {
+        startBtnText = '🚀 START MATCH!';
+      }
+      
+      html += `<button class="lobby_start_btn ${canStart ? 'ready' : 'disabled'}" onclick="${startBtnOnClick}" ${!canStart ? 'disabled' : ''}>${startBtnText}</button>`;
+      
+      // Debug log for host
+      if (canStart) {
+        // console.log(`✅ All players ready! Host can start match.`);
+      }
+    }
+    
+    html += `
       <div class="lobby_players_title">Players (${totalPlayers}/${lobby.maxPlayers})</div>
       <div class="lobby_players">`;
     
@@ -1663,51 +1719,33 @@ const Lobby = {
     
     html += '</div>';
     
-    // Add start/ready buttons
-    if (this.isHost) {
-      const allConnected = this.connectedPlayers.every(player => {
-        const playerId = player.id || player;
-        return this.playerConnectionStates[playerId] === 'connected';
-      });
-      const allReady = this.connectedPlayers.every(player => {
-        const playerId = player.id || player;
-        return this.playerReadyStates[playerId];
-      });
-      const minPlayers = gameType === 'adventure' ? 1 : 2;
-      
-      // Special case: solo Adventure/1v1 with AI doesn't need to wait for players
-      const isSoloWithAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone');
-      const canStart = isSoloWithAI || (totalPlayers >= minPlayers && allConnected && allReady);
-      
-      let startBtnText = 'Start Match';
-      let startBtnOnClick = `window.Lobby.startMatchFromLobby('${gameType}')`;
-      
-      if (gameType === 'adventure' && totalPlayers < 2) {
-        // Count enabled AI slots
-        const aiSlots = lobby.settings.aiSlots || [];
-        const aiCount = aiSlots.filter(slot => slot).length;
-        startBtnText = aiCount > 0 ? `Launch with ${aiCount} AI` : 'Launch Solo';
-        
-        // Use startAdventureSkirmish for solo offline play
-        const fieldSize = lobby.settings.fieldSize || 'medium';
-        const mapSeed = lobby.settings.seed || Math.floor(Math.random() * 1000000);
-        startBtnOnClick = `window.Lobby.startAdventureSkirmish('${fieldSize}', ${mapSeed}, {aiCount: ${aiCount}})`;
-      } else if (!allConnected) {
-        startBtnText = 'Waiting for Connections...';
-      } else if (!allReady) {
-        const readyCount = this.connectedPlayers.filter(p => this.playerReadyStates[p.id || p]).length;
-        startBtnText = `Waiting for Players... (${readyCount}/${this.connectedPlayers.length} ready)`;
-      } else if (canStart) {
-        startBtnText = '🚀 START MATCH!';
-      }
-      
-      html += `<button class="lobby_start_btn ${canStart ? 'ready' : 'disabled'}" onclick="${startBtnOnClick}" ${!canStart ? 'disabled' : ''}>${startBtnText}</button>`;
-      
-      // Debug log for host
-      if (canStart) {
-        // console.log(`✅ All players ready! Host can start match.`);
-      }
-    }
+    html += `
+      <div class="lobby_room_settings">
+        <div class="lobby_setting">
+          <label>Field Size:</label>
+          ${this.isHost ? 
+            `<select id="fieldSizeSelect" onchange="window.Lobby.updateLobbySetting('fieldSize', this.value)">
+              <option value="tiny" ${lobby.settings.fieldSize === 'tiny' ? 'selected' : ''}>Tiny</option>
+              <option value="small" ${lobby.settings.fieldSize === 'small' ? 'selected' : ''}>Small</option>
+              <option value="medium" ${lobby.settings.fieldSize === 'medium' ? 'selected' : ''}>Medium</option>
+              <option value="large" ${lobby.settings.fieldSize === 'large' ? 'selected' : ''}>Large</option>
+              <option value="huge" ${lobby.settings.fieldSize === 'huge' ? 'selected' : ''}>Huge</option>
+            </select>` :
+            `<span>${lobby.settings.fieldSize}</span>`
+          }
+        </div>
+        <div class="lobby_setting">
+          <label>Seed:</label>
+          ${this.isHost ?
+            `<input type="number" id="seedInput" value="${lobby.settings.seed}" onchange="window.Lobby.updateLobbySetting('seed', this.value)" style="width: 100px;">` :
+            `<span>#${lobby.settings.seed}</span>`
+          }
+        </div>
+      </div>
+    `;
+    
+    // Add back button at the bottom
+    html += `<button class="leave_lobby_btn" onclick="window.Lobby.leaveLobbyAndReturnToBrowser('${gameType}')">← Back</button>`;
     
     roomContainer.innerHTML = html;
   },
@@ -1738,10 +1776,65 @@ const Lobby = {
     console.log(`${enabled ? '✅' : '❌'} AI slot ${slotIndex} ${enabled ? 'enabled' : 'disabled'}`);
   },
   
+  // Show notification to user
+  showNotification: function(message, type = 'info') {
+    // Create notification element
+    const notification = document.createElement('div');
+    notification.className = `game-notification ${type}`;
+    notification.textContent = message;
+    notification.style.cssText = `
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 15px 30px;
+      border-radius: 8px;
+      font-family: Arial, sans-serif;
+      font-size: 18px;
+      font-weight: bold;
+      z-index: 9999;
+      pointer-events: none;
+      animation: slideDown 0.3s ease-out;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    `;
+    
+    // Set color based on type
+    switch(type) {
+      case 'warning':
+        notification.style.background = 'rgba(255, 150, 0, 0.95)';
+        notification.style.color = 'white';
+        break;
+      case 'error':
+        notification.style.background = 'rgba(220, 50, 50, 0.95)';
+        notification.style.color = 'white';
+        break;
+      case 'success':
+        notification.style.background = 'rgba(50, 200, 50, 0.95)';
+        notification.style.color = 'white';
+        break;
+      default:
+        notification.style.background = 'rgba(50, 150, 255, 0.95)';
+        notification.style.color = 'white';
+    }
+    
+    document.body.appendChild(notification);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+      notification.style.animation = 'slideUp 0.3s ease-out';
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.parentNode.removeChild(notification);
+        }
+      }, 300);
+    }, 3000);
+  },
+  
   // Show create lobby dialog
   showCreateLobbyDialog: function(gameType) {
     const config = this.gameTypes[gameType];
-    const lobbyName = prompt('Enter lobby name:', `${config.name} Game`);
+    const defaultName = `Lobby ${Math.floor(Math.random() * 1000)}`;
+    const lobbyName = prompt('Enter lobby name:', defaultName);
     
     if (lobbyName) {
       const settings = {
@@ -1842,6 +1935,10 @@ const Lobby = {
       if (roomContainer) {
         roomContainer.remove();
       }
+      
+      // Restore old lobby_b button visibility
+      const oldLobbyButton = lobbyElement.querySelector('.lobby_b');
+      if (oldLobbyButton) oldLobbyButton.style.display = '';
       
       // Check if browser container exists
       let browserContainer = lobbyElement.querySelector('.lobby_browser');
@@ -2549,11 +2646,21 @@ const Lobby = {
     // console.log(`   Peers:`, this.connectedPlayers.map(p => p.id || p));
     
     if (totalPlayers < 2) {
+      // Check if AI opponents are explicitly enabled
+      const aiSlots = settings?.aiSlots || [];
+      const aiCount = aiSlots.filter(slot => slot).length;
+      
+      if (aiCount === 0) {
+        console.error('❌ Cannot start match: At least one AI opponent must be added before starting!');
+        this.showNotification('Please add at least one AI opponent before starting the match.', 'error');
+        return;
+      }
+      
       if (gameType === 'adventure') {
-        console.warn('⚠️ Not enough players for Adventure lobby. Launching local AI skirmish instead.');
-        this.startAdventureSkirmish(fieldSize, mapSeed, settings?.aiOptions || {});
+        console.log('✅ Starting Adventure lobby with', aiCount, 'AI opponents');
+        this.startAdventureSkirmish(fieldSize, mapSeed, { aiCount: aiCount });
       } else if (gameType === 'onevsone' || gameType === '1v1') {
-        console.warn('⚠️ Not enough players for 1v1 lobby. Launching with AI opponent...');
+        console.log('✅ Starting 1v1 match with AI opponent');
         this.start1v1Match(fieldSize, mapSeed);
       } else {
         console.warn('⚠️ Not enough players! Unknown game type. Aborting...');
@@ -2628,11 +2735,21 @@ const Lobby = {
     // console.log(`   Total: ${totalPlayers}, Max: ${config.maxPlayers}`);
     
     if (totalPlayers < 2) {
+      // Check if AI opponents are explicitly enabled
+      const aiSlots = settings?.aiSlots || [];
+      const aiCount = aiSlots.filter(slot => slot).length;
+      
+      if (aiCount === 0) {
+        console.error('❌ Cannot start match: Opponent disconnected and no AI opponents configured. Please add AI opponents before starting.');
+        this.showNotification('Opponent disconnected. Please add at least one AI opponent before starting the match.', 'error');
+        return;
+      }
+      
       if (gameType === 'adventure') {
-        console.warn('⚠️ Opponent disconnected while waiting. Switching to local Adventure skirmish.');
-        this.startAdventureSkirmish(fieldSize, mapSeed, settings?.aiOptions || {});
+        console.log('✅ Opponent disconnected. Starting Adventure lobby with', aiCount, 'AI opponents');
+        this.startAdventureSkirmish(fieldSize, mapSeed, { aiCount: aiCount });
       } else if (gameType === 'onevsone' || gameType === '1v1') {
-        console.warn('⚠️ Opponent disconnected while waiting. Launching 1v1 with AI opponent...');
+        console.log('✅ Opponent disconnected. Starting 1v1 match with AI opponent');
         this.start1v1Match(fieldSize, mapSeed);
       } else {
         console.warn('⚠️ Opponent disconnected while waiting for network readiness. Aborting multiplayer start.');
@@ -2726,6 +2843,8 @@ const Lobby = {
       window.player = new Player(); // Create player directly without Game instance
     }
     
+    console.log(`💰 INITIAL RESOURCES - ${window.player.name || 'Player'}: food=${window.player.resources.food}, wood=${window.player.resources.wood}, stone=${window.player.resources.stone}`);
+    
     // Update player ID before spawning
     // CRITICAL: Normalize player ID to last 6 chars for consistency with unit/building ownership
     if (window.player) {
@@ -2733,6 +2852,8 @@ const Lobby = {
       window.player.name = localPlayerName;
       window.player.color = localPlayerColor;
       window.player.agora = spawnPositions[localPlayerIndex];
+      
+      console.log(`💰 UPDATED RESOURCES - ${window.player.name}: food=${window.player.resources.food}, wood=${window.player.resources.wood}, stone=${window.player.resources.stone}`);
       
       // console.log(`👤 Local player: ${localPlayerName} (ID: ${localPlayerId.slice(-8)})`);
       // console.log(`🏛️ Local player spawn: (${spawnPositions[localPlayerIndex].x}, ${spawnPositions[localPlayerIndex].y})`);
@@ -2873,6 +2994,8 @@ const Lobby = {
     // CRITICAL: Build players array in SORTED ORDER so both clients have identical ordering
     const players = [];
     
+    // console.log('🎯 Building players array in sorted order:', allPlayerIds);
+    // console.log('   Local player ID:', normalizedLocalId);
     
     // Iterate through ALL player IDs in sorted order (including local player)
     allPlayerIds.forEach((normalizedId, index) => {
@@ -2965,19 +3088,55 @@ const Lobby = {
     
     window.currentMatch = new window.Match(matchOptions);
     
+    // CRITICAL: Disable menu scene unit auto-spawning IMMEDIATELY
+    window.autoInitDisabled = true;
+    window.isMultiplayer = true; // Set this EARLY to prevent any menu scene logic
+    console.log(`🚫 Multiplayer flags set - menu scene unit spawning disabled`);
+    
     // Ensure gameBuildings array exists and is empty BEFORE creating Game
     if (!window.gameBuildings) {
       window.gameBuildings = [];
     }
-    // Ensure gameUnits array exists and is empty
-    if (!window.gameUnits) {
-      window.gameUnits = [];
-    } else {
-      // CRITICAL: Clear in-place to preserve reference (don't replace array)
+    // CRITICAL: NEVER do window.gameUnits = [] as it breaks the reference!
+    // Only clear it with .length = 0 to preserve the array reference
+    if (window.gameUnits && window.gameUnits.length > 0) {
+      console.warn(`⚠️ gameUnits still has ${window.gameUnits.length} units after cleanup!`);
       window.gameUnits.length = 0;
     }
     
+    // CRITICAL: Clear ALL units before match start (preserve array reference!)
+    if (window.gameUnits && window.gameUnits.length > 0) {
+      const unitsToRemove = window.gameUnits.length;
+      console.log(`🗑️ Clearing ${unitsToRemove} units before match start`);
+      
+      // Dispose meshes
+      window.gameUnits.forEach(unit => {
+        if (unit.mesh && unit.mesh.dispose) {
+          try {
+            unit.mesh.dispose();
+          } catch (e) {
+            // Ignore disposal errors
+          }
+        }
+      });
+      
+      // Clear array IN PLACE (preserve reference!)
+      window.gameUnits.length = 0;
+      console.log(`✅ gameUnits cleared: ${window.gameUnits.length} units remaining`);
+    }
+    
+    // Store array reference to detect if it changes later
+    window._initialGameUnitsRef = window.gameUnits;
+    console.log(`📍 Stored gameUnits array reference for monitoring`);
+    
+    // CRITICAL: Also clear neutralUnits array (separate array that holds menu scene units)
+    if (window.neutralUnits && window.neutralUnits.length > 0) {
+      console.log(`🗑️ Clearing ${window.neutralUnits.length} neutral units`);
+      window.neutralUnits.length = 0;
+    }
+    
     // Create Game instance (visual/physics layer)
+    // console.log('🎮 Creating Game with players:', players.map(p => ({ id: p.id, isLocal: p === window.player })));
     window.game = new window.Game({
       type: gameType,
       map: 'default',
@@ -2988,20 +3147,6 @@ const Lobby = {
       maxPlayers: config.maxPlayers
     });
     
-    
-    // CRITICAL: Clear any neutral units that spawned in menu scene
-    if (window.gameUnits) {
-      const neutralUnitsToRemove = window.gameUnits.filter(u => u.owner === 'neutral');
-      neutralUnitsToRemove.forEach(unit => {
-        if (window.destroyUnit) {
-          window.destroyUnit(unit);
-        }
-      });
-      if (neutralUnitsToRemove.length > 0) {
-        console.log(`🗑️ Removed ${neutralUnitsToRemove.length} neutral units from menu scene`);
-      }
-    }
-    
     // Initialize the game to spawn units and buildings
     if (window.game && window.game.init) {
       // console.log('🎮 Initializing game (spawning units)...');
@@ -3009,18 +3154,29 @@ const Lobby = {
       // console.log(`🔍 game.players array:`, window.game.players.map(p => ({id: p.id, name: p.name, isPlayer: p === window.player})));
       
       // BEFORE game.init - check state
-      // console.log(`🔍 BEFORE game.init():`);
-      // console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
-      // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
-      // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
+      console.log(`🔍 BEFORE game.init():`);
+      console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
+      console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
+      console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
       
       window.game.init();
       
       // AFTER game.init - check state
-      // console.log(`🔍 AFTER game.init():`);
-      // console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
-      // console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
-      // console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
+      console.log(`🔍 AFTER game.init():`);
+      console.log(`  - window.gameBuildings.length: ${window.gameBuildings?.length || 0}`);
+      console.log(`  - window.gameUnits.length: ${window.gameUnits?.length || 0}`);
+      console.log(`  - window.player.units.length: ${window.player.units?.length || 0}`);
+      
+      // Check if any units don't have IDs
+      if (window.gameUnits) {
+        const unitsWithoutIds = window.gameUnits.filter(u => !u.id);
+        if (unitsWithoutIds.length > 0) {
+          console.error(`❌ AFTER INIT: ${unitsWithoutIds.length} units WITHOUT IDs! This will cause desync!`);
+          console.log('Sample unit without ID:', unitsWithoutIds[0]);
+        } else {
+          console.log(`✅ All ${window.gameUnits.length} units have IDs`);
+        }
+      }
       
       if (window.gameBuildings && window.gameBuildings.length > 0) {
         // console.log(`  - Buildings:`, window.gameBuildings.map(b => ({type: b.type, owner: b.owner, pos: `(${b.gridX},${b.gridZ})`})));

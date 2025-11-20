@@ -148,7 +148,13 @@
     },
     rally: {
       home: {
-        callback: () => console.log("Rally: Home selected")
+        callback: () => {
+          if (window.rallyUnitsToAgora) {
+            window.rallyUnitsToAgora();
+          } else {
+            console.warn('❌ Rally function not available');
+          }
+        }
       }
     }
   };
@@ -1473,11 +1479,16 @@
         
         // Make main menu items visible now that they're properly positioned
         item.mesh.isVisible = true;
-        item.mesh.setEnabled(true);
+        if (typeof item.mesh.setEnabled === 'function') {
+          item.mesh.setEnabled(true);
+        }
         item.mesh.getChildMeshes().forEach(m => {
           m.isVisible = true;
           m.visibility = 1.0;
-          m.setEnabled(true);
+          // Only enable if it's a proper mesh with isEnabled
+          if (typeof m.setEnabled === 'function' && 'isEnabled' in m) {
+            m.setEnabled(true);
+          }
         });
         
         // Ensure main menu items are visible (don't change scale - it's normalized)
@@ -1813,11 +1824,16 @@
           
           // Make visible now that it's positioned
           mesh.isVisible = true;
-          mesh.setEnabled(true);
+          if (typeof mesh.setEnabled === 'function') {
+            mesh.setEnabled(true);
+          }
           mesh.getChildMeshes().forEach(m => {
             m.isVisible = true;
             m.visibility = 1.0;
-            m.setEnabled(true);
+            // Only enable if it's a proper mesh with isEnabled
+            if (typeof m.setEnabled === 'function' && 'isEnabled' in m) {
+              m.setEnabled(true);
+            }
           });
         } else if (!item.isSubItem) {
           console.log(`📦 ${item.text} loaded but waiting for real angle/radius (angle=${item.angle}, radius=${item.radius?.toFixed(2)})`);

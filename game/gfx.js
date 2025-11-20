@@ -39,7 +39,27 @@
             result.animationGroups.forEach(g => g.stop());
             
             // CRITICAL: Disable the model immediately to prevent flash before LOD kicks in
-            result.rootNodes.forEach(n => n.setEnabled(false));
+            // Only call setEnabled on nodes that have it (meshes, not transform nodes)
+            result.rootNodes.forEach(n => {
+              if (typeof n.setEnabled === 'function') {
+                n.setEnabled(false);
+              }
+            });
+            
+            // CRITICAL FIX: Walk all descendants and remove TransformNodes from scene.meshes
+            // instantiateModelsToScene adds ALL child nodes to scene.meshes, including TransformNodes
+            // which don't have isEnabled as a function and crash the renderer
+            result.rootNodes.forEach(root => {
+              const allDescendants = root.getDescendants(false);
+              allDescendants.forEach(node => {
+                // If this node is in scene.meshes but doesn't have isEnabled as a FUNCTION, remove it
+                if (typeof node.isEnabled !== 'function' && scene.meshes.includes(node)) {
+                  const idx = scene.meshes.indexOf(node);
+                  scene.meshes.splice(idx, 1);
+                  console.warn(`🔧 Removed TransformNode from scene.meshes: ${node.name}`);
+                }
+              });
+            });
 
             // Cleanup function for this clone
             const dispose = () => {
@@ -2202,7 +2222,68 @@ let pov2 = 240;
     });
   }
 
+  // CRITICAL: Intercept scene.addMesh to validate all meshes as they're added
+  if (gfx.scene && !gfx.scene._meshAddIntercepted) {
+    const originalAddMesh = gfx.scene.addMesh;
+    if (originalAddMesh) {
+      gfx.scene.addMesh = function(mesh) {
+        const hasIsEnabledFn = mesh && (typeof mesh.isEnabled === 'function');
+        if (!mesh || !hasIsEnabledFn) {
+          console.error('🚨🚨🚨 BLOCKED INVALID MESH FROM BEING ADDED:', {
+            name: mesh?.name,
+            type: mesh?.constructor?.name,
+            hasIsEnabledFn,
+            stack: new Error().stack
+          });
+          return; // Don't add it!
+        }
+        return originalAddMesh.call(this, mesh);
+      };
+      gfx.scene._meshAddIntercepted = true;
+      console.log('✅ Scene.addMesh intercepted for validation');
+    }
+  }
+
   function mainRenderLoop(){
+    // Log once to confirm code is running
+    if (!window._renderLoopConfirmed) {
+      console.log('✅ mainRenderLoop code is running (new version)');
+      window._renderLoopConfirmed = true;
+    }
+    
+    // AGGRESSIVE: Filter scene.meshes on EVERY frame to catch corruption
+    // Check for BOTH setEnabled AND isEnabled FUNCTION (the error is about isEnabled!)
+    if (gfx.scene && gfx.scene.meshes) {
+      const before = gfx.scene.meshes.length;
+      gfx.scene.meshes = gfx.scene.meshes.filter(m => {
+        if (!m) {
+          console.error(`🚨🚨🚨 REMOVING NULL/UNDEFINED MESH`);
+          return false;
+        }
+        
+        // Check for isEnabled as a FUNCTION (this is what Babylon calls internally!)
+        const hasIsEnabled = typeof m.isEnabled === 'function';
+        const hasSetEnabled = typeof m.setEnabled === 'function';
+        
+        if (!hasIsEnabled) {
+          console.error(`🚨🚨🚨 REMOVING MESH WITHOUT isEnabled FUNCTION:`, {
+            name: m.name || 'null',
+            type: m.constructor?.name || 'null',
+            hasIsEnabled,
+            hasSetEnabled: hasSetEnabled,
+            keys: Object.keys(m).slice(0, 10)
+          });
+          return false;
+        }
+        
+        return true;
+      });
+      const after = gfx.scene.meshes.length;
+      if (before !== after) {
+        console.error(`🚨 Cleaned ${before - after} invalid meshes from scene`);
+      }
+    }
+    
     // Increment frame counter for LOD system
     window.frameCounter = (window.frameCounter || 0) + 1;
     
@@ -2299,12 +2380,70 @@ let pov2 = 240;
       console.error('Error during pre-render validation:', validationError);
     }
 
+    // SAFETY: Validate scene.meshes before render
+    const invalidMeshesBeforeRender = [];
+    if (gfx.scene.meshes) {
+      gfx.scene.meshes.forEach((mesh, index) => {
+        if (!mesh || typeof mesh.setEnabled !== 'function') {
+          invalidMeshesBeforeRender.push({ 
+            index, 
+            name: mesh?.name || 'unnamed',
+            type: mesh?.constructor?.name || 'unknown',
+            hasSetEnabled: typeof mesh?.setEnabled
+          });
+        }
+      });
+    }
+    
+    if (invalidMeshesBeforeRender.length > 0) {
+      console.error(`🚨 FOUND ${invalidMeshesBeforeRender.length} INVALID MESHES BEFORE RENDER:`, invalidMeshesBeforeRender);
+      console.error('Invalid mesh details:', JSON.stringify(invalidMeshesBeforeRender, null, 2));
+      
+      // Remove them from the scene
+      const beforeCount = gfx.scene.meshes.length;
+      gfx.scene.meshes = gfx.scene.meshes.filter(m => m && typeof m.setEnabled === 'function');
+      const afterCount = gfx.scene.meshes.length;
+      console.log(`✅ Cleaned scene.meshes - removed ${beforeCount - afterCount} invalid meshes, now has ${afterCount} valid meshes`);
+    }
+
+    // NUCLEAR: Force Babylon to rebuild its internal active meshes cache every frame
+    // This prevents stale references to disposed/invalid meshes
+    try {
+      if (gfx.scene._activeMeshes && gfx.scene._activeMeshes.reset) {
+        gfx.scene._activeMeshes.reset();
+      }
+      if (gfx.scene._activeIndices && gfx.scene._activeIndices.reset) {
+        gfx.scene._activeIndices.reset();
+      }
+      if (gfx.scene._activeParticleSystems && gfx.scene._activeParticleSystems.reset) {
+        gfx.scene._activeParticleSystems.reset();
+      }
+      
+      // Alternative: Set dirty flag to force recomputation
+      if (gfx.scene._activeMeshesFrozen !== undefined) {
+        gfx.scene._activeMeshesFrozen = false;
+      }
+    } catch (cacheError) {
+      // Silently ignore cache reset errors
+    }
+
+    // SAFETY: Log mesh count before render
+    if (window.frameCounter % 60 === 0) {
+      console.log(`Frame ${window.frameCounter}: ${gfx.scene.meshes.length} meshes in scene`);
+    }
+
     // SAFETY: Wrap the actual render call
     try {
       gfx.scene.render();
     } catch (renderError) {
       console.error('CRITICAL: Scene render failed!', renderError);
       console.error('Render error stack:', renderError.stack);
+      console.error('Scene has', gfx.scene.meshes.length, 'meshes');
+      console.error('First 10 meshes:', gfx.scene.meshes.slice(0, 10).map(m => ({
+        name: m?.name,
+        type: m?.constructor?.name,
+        hasIsEnabled: 'isEnabled' in m
+      })));
       
       // Emergency cleanup - try to identify and fix the problematic mesh
       if (gfx.scene.meshes) {

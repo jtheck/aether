@@ -41,11 +41,17 @@ Game.prototype.init = function() {
 Game.prototype.spawnInitialUnits = function() {
   // console.log('🏘️ Spawning initial game units for all players...');
   // console.log('   window.player.id:', window.player?.id);
-  // console.log('   this.players:', this.players.map(p => ({ id: p.id, name: p.name, isLocalPlayer: p === window.player })));
+  // console.log('   this.players spawn order:', this.players.map(p => ({ id: p.id, name: p.name, isLocalPlayer: p === window.player })));
   
   // Spawn villagers and buildings for ALL players (local + opponents)
   if (this.players && this.players.length > 0) {
-    this.players.forEach((player, index) => {
+    // CRITICAL: Sort players deterministically by ID before spawning
+    // This ensures both clients spawn villagers in the same order with the same counts
+    const sortedPlayers = this.players.slice().sort((a, b) => 
+      (a.id || '').localeCompare(b.id || '')
+    );
+    
+    sortedPlayers.forEach((player, index) => {
       if (!player || !player.agora) {
         console.warn(`❌ Player ${index} has no agora!`);
         return;
@@ -59,7 +65,8 @@ Game.prototype.spawnInitialUnits = function() {
         // Prefer visual placement path so meshes are created for ALL players (not just local)
         const placeFn = (window.placeBuilding || (typeof placeBuilding === 'function' ? placeBuilding : null));
         if (placeFn && window.gfx && window.gfx.scene) {
-          const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene);
+          // Agora starts complete (it's the starting building)
+          const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene, { buildProgress: 1.0 });
           if (placed) {
             // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
             const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
@@ -122,7 +129,8 @@ Game.prototype.spawnInitialUnits = function() {
       }
       
       // Spawn villagers around this player's agora
-      this.spawnVillagersForPlayer(player);
+      // Pass player index for deterministic villager count
+      this.spawnVillagersForPlayer(player, index);
     });
   } else {
     console.warn('❌ No players found in game.players!');
@@ -131,7 +139,7 @@ Game.prototype.spawnInitialUnits = function() {
   // console.log('✅ All player units and buildings spawned');
 };
 
-Game.prototype.spawnVillagersForPlayer = function(player) {
+Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
   if (!player || !player.agora) {
     console.warn('❌ Player or agora not found for villager spawning');
     return;
@@ -171,7 +179,10 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
   
   const agoraX = player.agora.x * TILE_SIZE;
   const agoraZ = player.agora.y * TILE_SIZE;
-  const villagerCount = 8 + Math.floor(seededRandom() * 5);
+  
+  // CRITICAL: Fixed villager count for all players
+  // Everyone starts with the same number of villagers for fairness
+  const villagerCount = 8; // All players start with 8 villagers
   
   const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
   const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
@@ -186,7 +197,17 @@ Game.prototype.spawnVillagersForPlayer = function(player) {
     const x = agoraX + Math.cos(angle) * distance * TILE_SIZE;
     const z = agoraZ + Math.sin(angle) * distance * TILE_SIZE;
     
-    const villager = new window.Unit('villager', { x, y: 0, z });
+    // CRITICAL: Increment unitCounter and generate deterministic ID for initial villagers
+    // This ensures unitCounter stays in sync across clients
+    // CRITICAL: Always pass id option explicitly to prevent Unit constructor from incrementing counter again
+    let deterministicUnitId = null;
+    if (window.isMultiplayer && window.currentMatch) {
+      const unitIndex = window.currentMatch.unitCounter++;
+      deterministicUnitId = `unit-${window.currentMatch.mapSeed}-${unitIndex}`;
+    }
+    
+    // CRITICAL: Always pass id in options (even if null) to prevent double-incrementing
+    const villager = new window.Unit('villager', { x, y: 0, z }, { id: deterministicUnitId || undefined });
     // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
     const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
     villager.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
@@ -283,22 +304,41 @@ window.gameLoop = {
     // Make frame counter globally available
     window.frameCounter = this.frameCounter;
     
-    // Cap delta time to prevent huge jumps (e.g., when tab is inactive)
-    if (this.deltaTime > 0.1) {
-      this.deltaTime = 0.1; // Cap at 100ms
+    // CRITICAL: Don't cap delta time when tab becomes visible - let catch-up happen
+    // When tab is hidden, requestAnimationFrame throttles, causing large deltaTime when refocused
+    // We want to catch up by processing multiple physics steps, so don't cap here
+    // The maxPhysicsSteps limit will prevent spiral of death
+    // Only cap if tab is currently hidden (to prevent weird behavior during hidden period)
+    if (document.hidden && this.deltaTime > 0.1) {
+      this.deltaTime = 0.1; // Cap at 100ms only when tab is hidden
     }
     
     // Accumulate time for physics
     this.physicsTime += this.deltaTime;
     
-    // Only run physics if match is in PLAYING state (or no match exists for single player)
-    const canRunPhysics = !window.currentMatch || 
-                          window.currentMatch.state === 'playing' ||
-                          !window.isMultiplayer;
+    // Only pause physics when the match is explicitly paused.
+    // In multiplayer, continue running during READY/LOADING so late start signals
+    // (e.g. missing match_start) don't freeze the sim and cause divergence.
+    const matchState = window.currentMatch?.state;
+    const canRunPhysics = !window.isMultiplayer ||
+                          !window.currentMatch ||
+                          matchState === 'playing' ||
+                          matchState === 'ready' ||
+                          matchState === 'loading';
     
     // Run physics at fixed timestep (60Hz)
+    // CRITICAL: Allow catchup in multiplayer for slow devices - this is safe because:
+    // 1. Both clients accumulate physicsTime based on real-time (deltaTime)
+    // 2. Over the same real-time period, both clients accumulate the same total physicsTime
+    // 3. So they run the same number of physics steps overall, keeping damping deterministic
+    // 4. Velocity rounding prevents floating-point drift from accumulating
+    // When catching up after tab refocus, allow many more steps to catch up quickly
+    const backlogSeconds = this.physicsTime;
+    const isCatchingUp = backlogSeconds > 0.5; // More than 500ms backlog indicates catch-up needed
+    const maxPhysicsSteps = isCatchingUp ? 100 : (window.isMultiplayer ? 5 : 10); // Allow aggressive catch-up
     let physicsSteps = 0;
-    while (this.physicsTime >= this.physicsTimestep && canRunPhysics) {
+    while (this.physicsTime >= this.physicsTimestep && canRunPhysics && physicsSteps < maxPhysicsSteps) {
+      physicsSteps++;
       // Update units and their behaviors (this applies impulses)
       // NOTE: updateUnits handles behavior stepping with proper multiplayer filtering
       if (window.updateUnits) {
@@ -309,24 +349,14 @@ window.gameLoop = {
     window.updateBuildings(this.physicsTimestep);
   }
   // Update idle units (give them wander behaviors)
-  // DISABLED IN MULTIPLAYER: Non-deterministic random causes desync
-  if (window.updateIdleUnits && !window.isMultiplayer) {
+  // NOW DETERMINISTIC: Uses tick-based timing and deterministic random
+  if (window.updateIdleUnits) {
     window.updateIdleUnits();
   }
-  // Update physics for all units with LOD optimization
-  if (window.gameUnits) {
-    // log(window.gameUnits[0].pb.state.loc)
-    window.gameUnits.forEach(unit => {
-      if (unit.pb && unit.pb.integrate) {
-        // MULTIPLAYER: Disable LOD physics skipping to prevent desync
-        // In single player, skip physics updates for distant neutral units
-        if (!window.isMultiplayer && unit.owner === 'neutral' && unit.distanceToCameraSquared > 90000) { // 300^2
-          return; // Skip physics integration for distant neutral units
-        }
-        unit.pb.integrate(this.physicsTimestep, false, false);
-      }
-    });
-  }
+  // REMOVED: pb.integrate() for units - physics is now handled in updateUnits()
+  // updateUnits() manually applies impulses → velocity → position (lines 794-804 in units.js)
+  // Calling pb.integrate() here caused DOUBLE INTEGRATION and desync!
+  // The pb.integrate() call was redundant and caused units to move 2x speed with drift
       
       // Update player physics (cosmetic frog movement)
       // This doesn't affect game state, safe to keep
@@ -336,11 +366,14 @@ window.gameLoop = {
       
       // Step physics time forward
       this.physicsTime -= this.physicsTimestep;
-      physicsSteps++;
+      // Note: physicsSteps already incremented at top of loop
     }
     
     // Debug: log physics timestep info
     if (physicsSteps > 0) {
+      if (isCatchingUp && physicsSteps > 10) {
+        console.log(`⚡ Physics catch-up: ${physicsSteps} steps, remaining backlog: ${(this.physicsTime * 1000).toFixed(0)}ms`);
+      }
       // console.log(`⚡ Physics: ${physicsSteps} steps at ${(this.physicsTimestep * 1000).toFixed(1)}ms, remaining: ${(this.physicsTime * 1000).toFixed(1)}ms`);
     }
     

@@ -111,6 +111,9 @@ function Field(ops = {}) {
   this.chunkSize = 16;
   this._heightCache = new Map();
   
+  // Precomputed height grid for fast unit positioning (initialized after proof())
+  this._heightGrid = null;
+  
   // Initialize DETERMINISTIC random number generator with seed for multiplayer sync
   this._rngState = this.seed;
   this.rng = () => {
@@ -144,6 +147,9 @@ function Field(ops = {}) {
   // Show tilemap after proof
   // console.log("=== TILEMAP AFTER PROOF ===");
   this.showTilemap();
+  
+  // Precompute height grid for fast unit positioning
+  this._buildHeightGrid();
   
   // Debug: Uncomment to see marching squares case distribution
   // this.showMarchingSquaresCases();
@@ -855,6 +861,33 @@ Field.prototype.getTile = function(x, y) {
     return false;
   };
 
+  // Build precomputed height grid for fast lookups
+  // Uses the same calculation as terrain mesh generation for consistency
+  Field.prototype._buildHeightGrid = function() {
+    // Create 2D array: heightGrid[tileX][tileZ] = height at tile center
+    this._heightGrid = [];
+    
+    // Ensure heightMap and terrainTypes are populated (should be after proof())
+    if (!this.heightMap || this.heightMap.length === 0) {
+      console.warn('⚠️ _buildHeightGrid called before heightMap is populated!');
+      return;
+    }
+    
+    for (let x = 0; x < this.width; x++) {
+      this._heightGrid[x] = [];
+      for (let z = 0; z < this.height; z++) {
+        // Get height at tile center (x + 0.5, z + 0.5 for center of tile)
+        // This matches how terrain mesh vertices are calculated
+        this._heightGrid[x][z] = this.getHeightVariation(x + 0.5, z + 0.5);
+      }
+    }
+    
+    // Debug: verify grid was built
+    if (this._heightGrid.length > 0 && this._heightGrid[0].length > 0) {
+      // console.log(`✅ Height grid built: ${this.width}x${this.height} tiles`);
+    }
+  };
+  
   // Method to get height variation for terrain (based on elevation/terrain type)
   Field.prototype.getHeightVariation = function(x, y, amplitude = null) {
     // Get terrain type at this position

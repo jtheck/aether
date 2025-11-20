@@ -150,6 +150,13 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
             console.warn('❌ Cannot convert unit: No active match');
           }
         }
+      } else if (category === 'rally') {
+        // Rally nearby units to agora
+        if (window.rallyUnitsToAgora) {
+          window.rallyUnitsToAgora();
+        } else {
+          console.warn('❌ Rally function not available');
+        }
       } else {
         // console.log('Selected:', path);
         // TODO: Handle other selection actions

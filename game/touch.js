@@ -717,10 +717,19 @@
               const tile = (window.TILE_SIZE || 4);
               const gridXWorld = Math.round(worldPos.x / tile) * tile;
               const gridZWorld = Math.round(worldPos.z / tile) * tile;
-              window.buildingSystem.previewMesh.position.x = gridXWorld;
-              window.buildingSystem.previewMesh.position.z = gridZWorld;
-              window.buildingSystem.previewMesh.position.y = 0.25;
-              window.buildingSystem.previewMesh.rotation.y = window.buildingSystem.placementRotation || 0;
+              
+              // Only update if grid position changed (avoids redundant calculations)
+              const previewMesh = window.buildingSystem.previewMesh;
+              if (previewMesh && (previewMesh.position.x !== gridXWorld || previewMesh.position.z !== gridZWorld)) {
+                previewMesh.position.x = gridXWorld;
+                previewMesh.position.z = gridZWorld;
+                // Get terrain height using bilinear interpolation
+                const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(gridXWorld, gridZWorld) : 0;
+                previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
+              }
+              if (previewMesh) {
+                previewMesh.rotation.y = window.buildingSystem.placementRotation || 0;
+              }
               // Update placement moved flag based on tile changes
               if (placingTouchId !== null) {
                 const gx = Math.round(worldPos.x / tile);

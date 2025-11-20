@@ -1294,13 +1294,13 @@ function getRandomColor() {
     // PageUp and PageDown also rotate left/right
     if (key === 'w' || key === 'pageup') {
       if (state == true && gfx.camera) {
-        // Rotate camera left
-        cameraRotationTarget.alpha -= 0.2;
+        // Rotate camera right
+        cameraRotationTarget.alpha += 0.2;
       }
     } else if (key === 'r' || key === 'pagedown') {
       if (state == true && gfx.camera) {
-        // Rotate camera right
-        cameraRotationTarget.alpha += 0.2;
+        // Rotate camera left
+        cameraRotationTarget.alpha -= 0.2;
       }
     // Q removed from rotation - now used for zoom out
     // E removed from rotation - now only used for panning forward
@@ -1910,10 +1910,22 @@ function getRandomColor() {
                   if (window.currentMatch) {
                     // Submit a move command for all selected units through Match system
                     const unitIds = selectedUnits.map(u => u.id);
+                    // CRITICAL: Include starting positions so other clients can snap units before moving
+                    // This prevents teleporting when positions drift between checkpoints
+                    const startPositions = {};
+                    selectedUnits.forEach(u => {
+                      if (u.pb && u.pb.state && u.pb.state.loc) {
+                        startPositions[u.id] = {
+                          x: u.pb.state.loc.x,
+                          z: u.pb.state.loc.z
+                        };
+                      }
+                    });
                     const command = {
                       type: 'move',
                       playerId: window.player?.id, // CRITICAL: Set player ID explicitly
                       unitIds: unitIds,
+                      startPositions: startPositions, // Include where units are starting from
                       target: { x: worldPos.x, y: 0, z: worldPos.z }
                     };
                     window.currentMatch.submitCommand(command);
@@ -2212,12 +2224,12 @@ function getRandomColor() {
     if (ui.keyStates) {
       const rotationSpeed = 0.2; // Same as keydown rotation speed
       if (ui.keyStates['w'] || ui.keyStates['pageup']) {
-        // Rotate left - directly update camera alpha for immediate response
-        gfx.camera.alpha -= rotationSpeed;
-        cameraRotationTarget.alpha = gfx.camera.alpha; // Sync target
-      } else if (ui.keyStates['r'] || ui.keyStates['pagedown']) {
         // Rotate right - directly update camera alpha for immediate response
         gfx.camera.alpha += rotationSpeed;
+        cameraRotationTarget.alpha = gfx.camera.alpha; // Sync target
+      } else if (ui.keyStates['r'] || ui.keyStates['pagedown']) {
+        // Rotate left - directly update camera alpha for immediate response
+        gfx.camera.alpha -= rotationSpeed;
         cameraRotationTarget.alpha = gfx.camera.alpha; // Sync target
       }
       

@@ -23,6 +23,7 @@
   let lastStateSync = 0;
   let reconnectAttempts = 0;
   let isConnected = false;
+  let tickIntervalId = null; // Store interval ID
   
   // Internal state tracking
   net._state = {
@@ -150,8 +151,20 @@
   
   // Start the deterministic tick loop
   net.startTickLoop = function() {
+    // Clear any existing interval
+    if (tickIntervalId !== null) {
+      clearInterval(tickIntervalId);
+      tickIntervalId = null;
+    }
+    
     const tickInterval = 1000 / net.TICK_RATE;
-    setInterval(() => {
+    
+    // CRITICAL: Don't pause tick loop - let it run throttled naturally
+    // When tab is hidden, browsers throttle setInterval the same way they throttle requestAnimationFrame
+    // Both clients will be throttled similarly, keeping them synchronized
+    // Pausing causes desync because one client pauses while the other continues
+    // Start the interval - it will be throttled by the browser when tab is hidden
+    tickIntervalId = setInterval(() => {
       tick++;
       processTick();
     }, tickInterval);
@@ -355,6 +368,50 @@
           // P2P: Each player is authoritative for their own units
           // Only reconcile if there's significant drift (safety net for desync)
           reconcileState(actualMessage.content);
+          break;
+          
+        case 'resource_state_sync':
+          // CRITICAL: Apply authoritative resource states at sync checkpoint
+          // This ensures both clients have identical resource states for checksum calculation
+          if (actualMessage.resourceStates && window.gameBuildings) {
+            Object.keys(actualMessage.resourceStates).forEach(buildingId => {
+              const building = window.gameBuildings.find(b => b.id === buildingId);
+              if (building && building.availableResources) {
+                const remoteResources = actualMessage.resourceStates[buildingId];
+                
+                remoteResources.forEach(remoteResource => {
+                  const localResource = building.availableResources.find(r => 
+                    r.gridX === remoteResource.gridX && r.gridZ === remoteResource.gridZ
+                  );
+                  
+                  if (localResource) {
+                    const wasNotDepleted = !localResource.depleted;
+                    
+                    // Apply authoritative state
+                    localResource.remaining = remoteResource.remaining;
+                    localResource.depleted = remoteResource.depleted;
+                    localResource.depletionTick = remoteResource.depletionTick;
+                    
+                    // CRITICAL: If resource just became depleted, remove the visual model
+                    // This ensures both clients see trees sink when depleted
+                    if (wasNotDepleted && remoteResource.depleted && window.removeResourceModel) {
+                      window.removeResourceModel(remoteResource.gridX, remoteResource.gridZ);
+                      console.log(`🪓 Tree sunk at (${remoteResource.gridX}, ${remoteResource.gridZ}) from authoritative sync`);
+                    }
+                  }
+                });
+              }
+            });
+            console.log(`🔄 Applied authoritative resource states at tick ${actualMessage.tick}`);
+          }
+          break;
+          
+        case 'unit_position_sync':
+          // P2P: Apply unit positions from other players (they're authoritative for their own units)
+          // This prevents floating-point drift while maintaining P2P fairness
+          if (window.currentMatch && actualMessage.positions && actualMessage.playerId) {
+            window.currentMatch.applyUnitPositions(actualMessage.positions, actualMessage.playerId, actualMessage.tick);
+          }
           break;
           
         case 'ping':
@@ -571,7 +628,7 @@
         case 'sync_checkpoint':
           // Verify synchronization checkpoint
           if (window.currentMatch && actualMessage.tick && actualMessage.checksum) {
-            window.currentMatch.verifySyncCheckpoint(actualMessage.tick, actualMessage.checksum);
+            window.currentMatch.verifySyncCheckpoint(actualMessage.tick, actualMessage.checksum, actualMessage.components);
           }
           break;
           
@@ -586,6 +643,8 @@
         case 'player_loaded':
           // Another player finished loading and is ready to start
           if (window.currentMatch && actualMessage.playerId) {
+            const shortId = normalizePeerId(actualMessage.playerId);
+            console.log(`📡 player_loaded received from ${shortId}`);
             window.currentMatch.onPlayerLoaded(actualMessage.playerId);
           }
           break;
@@ -593,6 +652,7 @@
         case 'match_countdown':
           // Host broadcasting countdown to clients
           if (window.currentMatch && actualMessage.countdown) {
+            console.log(`⏳ Countdown update from host: ${actualMessage.countdown}`);
             window.currentMatch.updateLoadingOverlay(`${actualMessage.countdown}`);
           }
           break;
@@ -600,6 +660,7 @@
         case 'match_start':
           // Host signaling all clients to start playing
           if (window.currentMatch && window.currentMatch.beginPlaying) {
+            console.log('🚀 Received match_start from host – entering PLAYING state');
             window.currentMatch.beginPlaying();
           }
           break;
@@ -607,6 +668,7 @@
         case 'match_pause':
           // Player broadcasting pause to all others
           if (window.currentMatch) {
+            console.log('⏸️ Received match_pause from peer');
             window.currentMatch.isPaused = true;
             window.currentMatch.updateLoadingOverlay('⏸️ PAUSED');
             // console.log('⏸️ Match paused by remote player');
@@ -616,6 +678,7 @@
         case 'match_resume':
           // Player broadcasting resume to all others
           if (window.currentMatch) {
+            console.log('▶️ Received match_resume from peer');
             window.currentMatch.isPaused = false;
             const overlay = document.getElementById('match_loading_overlay');
             if (overlay) {
@@ -984,6 +1047,23 @@
     const allUnits = window.gameUnits || [];
     const myUnits = allUnits.filter(u => u.owner === localOwnerId);
     
+    // CRITICAL: Include resource tile states for camps at sync checkpoints
+    // This ensures resource states stay synchronized even if workers complete at different ticks
+    const resourceStates = {};
+    if (window.gameBuildings && tick % (window.currentMatch?.syncInterval || 100) === 0) {
+      window.gameBuildings.forEach(building => {
+        if (building.owner === localOwnerId && building.availableResources && building.availableResources.length > 0) {
+          resourceStates[building.id] = building.availableResources.map(r => ({
+            gridX: r.gridX,
+            gridZ: r.gridZ,
+            remaining: r.remaining || 0,
+            depleted: r.depleted || false,
+            depletionTick: r.depletionTick
+          }));
+        }
+      });
+    }
+    
     const state = {
       tick: tick,
       playerId: localOwnerId, // Identify which player this state is from
@@ -999,6 +1079,7 @@
         type: b.type, 
         pos: b.position
       })) || [],
+      resourceStates: Object.keys(resourceStates).length > 0 ? resourceStates : undefined, // Only include if we have resources
       timestamp: Date.now()
     };
     
@@ -1032,10 +1113,12 @@
       // Still reconcile positions even if ticks are desynced
     }
     
-    // Rewind simulation if needed
-    if (remoteTick < tick) {
-      rewindSimulation(remoteTick);
-    }
+    // CRITICAL: Never rewind simulation - we're using lockstep with checkpoint sync
+    // If remote tick is behind, it means they sent stale data - skip position updates
+    // The rewindSimulation function is a placeholder and should not be used in P2P lockstep
+    // if (remoteTick < tick) {
+    //   rewindSimulation(remoteTick); // DISABLED: Never rewind in lockstep mode
+    // }
     
     // Apply state corrections
     const localOwnerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
@@ -1055,10 +1138,43 @@
       window.opponent.resources = {...remoteState.resources};
     }
     
+    // CRITICAL: Sync resource tile states at sync checkpoints
+    // This ensures resource states stay synchronized even if workers complete at different ticks
+    if (remoteState.resourceStates && window.gameBuildings && tick % (window.currentMatch?.syncInterval || 100) === 0) {
+      Object.keys(remoteState.resourceStates).forEach(buildingId => {
+        const building = window.gameBuildings.find(b => b.id === buildingId);
+        if (building && building.availableResources) {
+          const remoteResources = remoteState.resourceStates[buildingId];
+          
+          // Update each resource tile state
+          remoteResources.forEach(remoteResource => {
+            const localResource = building.availableResources.find(r => 
+              r.gridX === remoteResource.gridX && r.gridZ === remoteResource.gridZ
+            );
+            
+            if (localResource) {
+              // Sync remaining amount and depletion state
+              localResource.remaining = remoteResource.remaining;
+              localResource.depleted = remoteResource.depleted;
+              localResource.depletionTick = remoteResource.depletionTick;
+            }
+          });
+          
+          console.log(`🔄 Synced resource states for building ${buildingId} at tick ${tick}`);
+        }
+      });
+    }
+    
     // Update remote units with smart correction
     let unitsFound = 0;
     let unitsUpdated = 0;
     let ownerMismatches = 0;
+    
+    // CRITICAL: Skip position reconciliation for stale state_sync messages
+    // Checkpoint sync (unit_position_sync) handles position sync, so state_sync should
+    // only be used for health/state updates. Old state_sync messages with stale positions
+    // cause false "catastrophic desync" warnings.
+    const isStaleMessage = Math.abs(tickDiff) > 50; // More than 50 ticks old = stale
     
     remoteState.units.forEach(remoteUnit => {
       const localUnit = findUnitById(remoteUnit.id);
@@ -1078,21 +1194,29 @@
         
         unitsUpdated++;
         
-        // DETERMINISTIC P2P: Both clients simulate identically using match.tick
-        // Only correct MAJOR desyncs (> 10 units = missed command or logic error)
-        const dx = remoteUnit.pos.x - localUnit.pb.state.loc.x;
-        const dz = remoteUnit.pos.z - localUnit.pb.state.loc.z;
-        const distanceSq = dx * dx + dz * dz;
-        
-        // Only snap if drift is HUGE (> 10 units - probably missed a command)
-        if (distanceSq > 100) {
-          localUnit.pb.state.loc.x = remoteUnit.pos.x;
-          localUnit.pb.state.loc.z = remoteUnit.pos.z;
-          console.warn(`⚠️ LARGE DESYNC: Snapped unit ${localUnit.id.slice(-4)} - drift: ${Math.sqrt(distanceSq).toFixed(2)} units`);
+        // P2P with checkpoint sync: We now sync positions at checkpoints (every 100 ticks)
+        // This old reconcile system is just a safety net for catastrophic desyncs
+        // Only snap on MASSIVE drift (>50 units = missed command or major logic error)
+        // CRITICAL: Never apply positions from past ticks - only forward or current tick
+        // Skip position reconciliation entirely for stale messages to prevent false desync warnings
+        if (!isStaleMessage && remoteTick >= tick) {
+          // Only reconcile if remote tick is current or future (never past)
+          const dx = remoteUnit.pos.x - localUnit.pb.state.loc.x;
+          const dz = remoteUnit.pos.z - localUnit.pb.state.loc.z;
+          const distanceSq = dx * dx + dz * dz;
+          
+          // Only snap if drift is CATASTROPHIC (> 50 units - probably missed a command)
+          // Normal ~10 unit drift is handled by checkpoint sync every 100 ticks
+          if (distanceSq > 2500) { // 50^2 = 2500
+            localUnit.pb.state.loc.x = remoteUnit.pos.x;
+            localUnit.pb.state.loc.z = remoteUnit.pos.z;
+            console.warn(`⚠️ CATASTROPHIC DESYNC: Snapped unit ${localUnit.id.slice(-4)} - drift: ${Math.sqrt(distanceSq).toFixed(2)} units`);
+          }
+          // Small drift (<50 units) is normal and will be corrected at next checkpoint sync
         }
-        // Ignore small drift - deterministic simulation should keep units in sync
+        // If message is stale or from past tick, skip position updates entirely - checkpoint sync handles positions
         
-        // Always sync health and state immediately
+        // Always sync health and state immediately (even for stale messages)
         localUnit.currentHealth = remoteUnit.health;
         localUnit.state = remoteUnit.state;
       }

@@ -5,7 +5,8 @@
   let scene = null;
   const activeProjectiles = [];
   const MAX_ACTIVE_PROJECTILES = 128;
-  const DEBUG_PROJECTILES = true; // set true to see console traces
+  const DEBUG_PROJECTILES = false; // set true to see console traces
+  const ENABLE_PROJECTILE_IMPACT_FX = false; // TEMP: disable impact FX to avoid Babylon crashes on hit
   let debugTick = 0;
 
   const ProjectileTypes = {
@@ -55,10 +56,26 @@
     spell: [],
   };
 
+  // Shared materials (created once, reused for all projectiles of that type)
+  const projectileMaterials = {};
+
   projectiles.init = function (gameScene) {
     scene = gameScene;
+    
+    // Create shared materials for each projectile type
+    if (scene) {
+      Object.keys(ProjectileTypes).forEach(type => {
+        const def = ProjectileTypes[type];
+        const mat = new BABYLON.StandardMaterial(`proj_${type}_mat_shared`, scene);
+        mat.emissiveColor = def.color;
+        mat.diffuseColor = def.color;
+        mat.freeze(); // Optimize - material won't change
+        projectileMaterials[type] = mat;
+      });
+    }
+    
     if (DEBUG_PROJECTILES) {
-      console.log("[PROJECTILES] init with scene", !!scene);
+      console.log("[PROJECTILES] init with scene", !!scene, "materials:", Object.keys(projectileMaterials).length);
     }
   };
 
@@ -68,6 +85,12 @@
         console.warn("[PROJECTILES] fire called without scene");
       }
       return null;
+    }
+    
+    // Make sure materials are initialized
+    if (Object.keys(projectileMaterials).length === 0) {
+      console.warn("[PROJECTILES] Materials not initialized, re-initializing");
+      projectiles.init(scene);
     }
 
     const {
@@ -114,13 +137,36 @@
       return null;
     }
 
-    mesh.position.copyFrom(from);
-    mesh.setEnabled(true);
-    mesh.isVisible = true;
+    // Validate mesh before using
+    if (typeof mesh.setEnabled !== 'function') {
+      console.error('[PROJECTILES] Mesh is missing setEnabled method!', mesh);
+      return null;
+    }
+
+    try {
+      mesh.position.copyFrom(from);
+      mesh.setEnabled(true);
+      mesh.isVisible = true;
+    } catch (e) {
+      console.error('[PROJECTILES] Error setting up mesh:', e);
+      return null;
+    }
+    
+    // Reset rotation from any previous use (important for pooled meshes)
+    mesh.rotationQuaternion = null;
+    mesh.rotation.set(0, 0, 0);
 
     // Aim arrow-like types toward the target so you can see them
     if (type === "arrow" || type === "flaming_arrow") {
-      mesh.lookAt(to);
+      // Use the already-calculated and normalized direction vector
+      // Calculate rotation to point the cylinder (which points along Y) toward target
+      const up = BABYLON.Vector3.Up();
+      const angle = Math.acos(BABYLON.Vector3.Dot(up, dir));
+      const axis = BABYLON.Vector3.Cross(up, dir);
+      if (axis.lengthSquared() > 0.0001) {
+        axis.normalize();
+        mesh.rotationQuaternion = BABYLON.Quaternion.RotationAxis(axis, angle);
+      }
     }
 
     const projectile = {
@@ -158,20 +204,60 @@
   };
 
   projectiles.update = function (deltaTime) {
-    if (!scene || !deltaTime || deltaTime <= 0 || activeProjectiles.length === 0) {
+    if (!scene) {
+      if (DEBUG_PROJECTILES) console.warn("[PROJECTILES] update: no scene");
       return;
+    }
+    if (!deltaTime || deltaTime <= 0) {
+      if (DEBUG_PROJECTILES) console.warn("[PROJECTILES] update: invalid deltaTime", deltaTime);
+      return;
+    }
+    if (activeProjectiles.length === 0) {
+      return;
+    }
+
+    // Debug: log every 60 frames
+    if (DEBUG_PROJECTILES && debugTick++ % 60 === 0) {
+      console.log(`[PROJECTILES] Updating ${activeProjectiles.length} projectiles, dt=${deltaTime.toFixed(4)}s`);
     }
 
     for (let i = activeProjectiles.length - 1; i >= 0; i--) {
       const p = activeProjectiles[i];
-      if (!p.active || !p.mesh || p.mesh.isDisposed) {
+      
+      // Debug: Check projectile state
+      if (DEBUG_PROJECTILES && debugTick % 60 === 1) {
+        console.log(`[PROJECTILES] Checking projectile ${i}:`, {
+          active: p.active,
+          hasMesh: !!p.mesh,
+          isDisposed: p.mesh ? (typeof p.mesh.isDisposed === 'function' ? p.mesh.isDisposed() : p.mesh.isDisposed) : 'no mesh',
+          elapsed: p.elapsed,
+          lifetime: p.lifetime
+        });
+      }
+      
+      // Quick validation without calling expensive methods
+      if (!p.active || !p.mesh) {
+        destroyProjectile(p);
+        activeProjectiles.splice(i, 1);
+        continue;
+      }
+      
+      // Only check isDisposed if mesh looks suspicious (rare case)
+      if (typeof p.mesh.setEnabled !== 'function') {
+        if (DEBUG_PROJECTILES) {
+          console.warn("[PROJECTILES] Destroying projectile with invalid mesh");
+        }
         destroyProjectile(p);
         activeProjectiles.splice(i, 1);
         continue;
       }
 
       p.elapsed += deltaTime;
+      
       if (p.elapsed > p.lifetime) {
+        if (DEBUG_PROJECTILES) {
+          console.log(`[PROJECTILES] Projectile expired (elapsed ${p.elapsed.toFixed(2)}s > lifetime ${p.lifetime.toFixed(2)}s)`);
+        }
         handleMiss(p);
         destroyProjectile(p);
         activeProjectiles.splice(i, 1);
@@ -181,21 +267,19 @@
       // Movement - simple linear interpolation from from -> to over lifetime.
       const t = Math.min(p.elapsed / p.lifetime, 1);
       const newPos = BABYLON.Vector3.Lerp(p.from, p.to, t);
-
+      
+      // Debug movement (only create clone if actually debugging)
       if (DEBUG_PROJECTILES && p.elapsed < 0.5) {
-        console.log("[PROJECTILES] move", {
-          t,
-          from: p.from,
-          to: p.to,
-          newPos,
-        });
+        const oldPos = p.mesh.position.clone();
+        p.mesh.position.copyFrom(newPos);
+        console.log(`[PROJECTILES] MOVE t=${t.toFixed(3)}, elapsed=${p.elapsed.toFixed(3)}/${p.lifetime.toFixed(3)}, pos: (${oldPos.x.toFixed(1)},${oldPos.y.toFixed(1)},${oldPos.z.toFixed(1)}) -> (${newPos.x.toFixed(1)},${newPos.y.toFixed(1)},${newPos.z.toFixed(1)})`);
+      } else {
+        p.mesh.position.copyFrom(newPos);
       }
 
-      p.mesh.position.copyFrom(newPos);
-
-      // Check for hit near the target or along the arc
-      const traveled = BABYLON.Vector3.Distance(p.from, p.mesh.position);
-      if (traveled >= p.distance * 0.95) {
+      // Check for hit when projectile is near the end (cheaper than distance calculation)
+      // Using t (interpolation factor) is more efficient than calculating distance
+      if (t >= 0.95) {
         const hitPos = p.mesh.position.clone();
         const hitUnit = checkUnitCollision(hitPos, p.owner);
         if (hitUnit) {
@@ -205,8 +289,12 @@
             applyDamage(hitUnit, p.damage, p.owner);
           }
           // Add a physics "bop" so impacts feel punchy
-          bopUnitFromProjectile(hitUnit, hitPos, 150);
-          createImpactEffect(p.type, hitPos);
+          // Make tower hits visibly shove units without instantly deleting them
+          bopUnitFromProjectile(hitUnit, hitPos, 240);
+          // TEMP: disable impact FX while we track down Babylon isEnabled crash on hit
+          if (ENABLE_PROJECTILE_IMPACT_FX) {
+            createImpactEffect(p.type, hitPos);
+          }
         } else if (p.onMiss) {
           p.onMiss(hitPos);
         }
@@ -218,9 +306,47 @@
   };
 
   projectiles.cleanup = function () {
-    activeProjectiles.forEach(destroyProjectile);
+    // Dispose all active projectiles and clear pools/materials
+    const count = activeProjectiles.length;
+    activeProjectiles.forEach(p => {
+      destroyProjectile(p);
+    });
     activeProjectiles.length = 0;
-    Object.keys(projectilePools).forEach((t) => (projectilePools[t].length = 0));
+
+    // Dispose any pooled meshes so we fully reset state
+    Object.keys(projectilePools).forEach(type => {
+      const pool = projectilePools[type];
+      if (!Array.isArray(pool)) return;
+
+      pool.forEach(mesh => {
+        if (!mesh) return;
+        try {
+          const isDisposed = typeof mesh.isDisposed === "function"
+            ? mesh.isDisposed()
+            : mesh.isDisposed === true;
+          if (!isDisposed && typeof mesh.dispose === "function") {
+            mesh.dispose();
+          }
+        } catch (e) {
+          console.warn('[PROJECTILES] Error disposing pooled mesh:', e);
+        }
+      });
+      pool.length = 0;
+    });
+    
+    // Dispose shared materials
+    Object.values(projectileMaterials).forEach(mat => {
+      if (mat && typeof mat.dispose === 'function') {
+        try {
+          mat.dispose();
+        } catch (e) {
+          console.warn('[PROJECTILES] Error disposing material:', e);
+        }
+      }
+    });
+    Object.keys(projectileMaterials).forEach(key => delete projectileMaterials[key]);
+    
+    console.log('[PROJECTILES] Cleanup complete - disposed', count, 'projectiles, pooled meshes, and materials');
   };
 
   projectiles.getStats = function () {
@@ -238,51 +364,179 @@
   // --- helpers ---
 
   function getOrCreateProjectileMesh(type, def) {
-    const pool = projectilePools[type] || (projectilePools[type] = []);
-    let mesh = pool.pop();
-    if (mesh && !mesh.isDisposed) {
-      return mesh;
+    let mesh = null;
+
+    // Try to reuse a pooled mesh first for this type
+    const pool = projectilePools[type];
+    if (pool && pool.length > 0) {
+      while (pool.length && !mesh) {
+        const candidate = pool.pop();
+        if (!candidate) continue;
+
+        // Skip meshes that have been disposed
+        const isDisposed = typeof candidate.isDisposed === "function"
+          ? candidate.isDisposed()
+          : candidate.isDisposed === true;
+        if (isDisposed) {
+          try {
+            if (typeof candidate.dispose === "function") {
+              candidate.dispose();
+            }
+          } catch (e) {
+            console.warn("[PROJECTILES] Error disposing stale pooled mesh:", e);
+          }
+          continue;
+        }
+
+        mesh = candidate;
+      }
     }
 
-    // Create a very visible debug geometry per projectile so we can be sure
-    // they are on-screen. We can shrink/tune later once we confirm behavior.
-    const diameter = type === "rock" ? 3 : 2; // big glowing blobs for now
-    mesh = BABYLON.MeshBuilder.CreateSphere(
-      `proj_${type}_${Date.now()}`,
-      {
-        diameter,
-        segments: 8,
-      },
-      scene
-    );
+    // If no pooled mesh, create an appropriately sized projectile mesh
+    if (!mesh) {
+      const diameter = def.size || 0.4;
+      
+      // For arrows, create a cylinder shape (points along Y-axis by default)
+      if (type === "arrow" || type === "flaming_arrow") {
+        mesh = BABYLON.MeshBuilder.CreateCylinder(
+          `proj_${type}_${Date.now()}`,
+          {
+            height: 1.5,
+            diameterTop: 0.05,
+            diameterBottom: 0.1,
+            tessellation: 6,
+          },
+          scene
+        );
+        // Rotation will be set when fired using rotationQuaternion
+      } else if (type === "rock") {
+        // Rocks use a slightly irregular sphere
+        mesh = BABYLON.MeshBuilder.CreateSphere(
+          `proj_${type}_${Date.now()}`,
+          {
+            diameter,
+            segments: 6,
+          },
+          scene
+        );
+      } else {
+        // Default sphere for other projectile types
+        mesh = BABYLON.MeshBuilder.CreateSphere(
+          `proj_${type}_${Date.now()}`,
+          {
+            diameter,
+            segments: 8,
+          },
+          scene
+        );
+      }
+    }
 
-    const mat = new BABYLON.StandardMaterial(`proj_${type}_mat`, scene);
-    mat.emissiveColor = def.color;
-    mat.diffuseColor = def.color;
-    mesh.material = mat;
+    // Use shared material instead of creating new one every time
+    const sharedMat = projectileMaterials[type];
+    if (sharedMat) {
+      mesh.material = sharedMat;
+    } else {
+      console.warn('[PROJECTILES] No shared material for type', type);
+    }
 
     mesh.isPickable = false;
     mesh.doNotSerialize = true;
     mesh.renderingGroupId = 2; // draw over most world meshes
-    mesh.alwaysSelectAsActiveMesh = true;
+    
+    // Validate the mesh is properly set up
+    if (typeof mesh.setEnabled !== 'function') {
+      console.error('[PROJECTILES] Created mesh is invalid - no setEnabled!', mesh);
+      if (mesh.dispose) mesh.dispose();
+      return null;
+    }
+    // CRITICAL: Check for isEnabled as a FUNCTION (Babylon calls this internally)
+    if (typeof mesh.isEnabled !== 'function') {
+      console.error('[PROJECTILES] Created mesh is missing isEnabled FUNCTION!', {
+        name: mesh.name,
+        type: mesh.constructor?.name,
+        hasSetEnabled: typeof mesh.setEnabled,
+        isEnabledType: typeof mesh.isEnabled,
+        keys: Object.keys(mesh).slice(0, 20)
+      });
+      if (mesh.dispose) mesh.dispose();
+      return null;
+    }
 
+    // Projectiles are fine - no need to log
     return mesh;
   }
 
   function destroyProjectile(p) {
+    if (!p) return;
+
     p.active = false;
-    if (p.mesh && !p.mesh.isDisposed) {
-      // Return to pool instead of disposing
-      const pool = projectilePools[p.type] || (projectilePools[p.type] = []);
-      p.mesh.setEnabled(false);
-      p.mesh.isVisible = false;
-      pool.push(p.mesh);
+
+    const mesh = p.mesh;
+    p.mesh = null;
+
+    if (!mesh) return;
+
+    try {
+      const isDisposed = typeof mesh.isDisposed === "function"
+        ? mesh.isDisposed()
+        : mesh.isDisposed === true;
+
+      // If already disposed, nothing we can do
+      if (isDisposed) {
+        return;
+      }
+
+      const pool = projectilePools[p.type];
+
+      if (pool) {
+        // Reset visual/transform state before pooling
+        if (mesh.rotationQuaternion) {
+          mesh.rotationQuaternion = null;
+        }
+        if (mesh.rotation) {
+          mesh.rotation.set(0, 0, 0);
+        }
+        if (mesh.position) {
+          // Park it far below the world so it never flashes
+          mesh.position.set(0, -9999, 0);
+        }
+
+        if (typeof mesh.setEnabled === "function") {
+          mesh.setEnabled(false);
+        }
+        mesh.isVisible = false;
+
+        // Keep pool size bounded so we don't leak memory
+        const MAX_POOL_SIZE = MAX_ACTIVE_PROJECTILES;
+        if (pool.length < MAX_POOL_SIZE) {
+          pool.push(mesh);
+        } else if (typeof mesh.dispose === "function") {
+          mesh.dispose();
+        }
+      } else if (typeof mesh.dispose === "function") {
+        // Fallback: just dispose if no pool is defined
+        mesh.dispose();
+      }
+    } catch (e) {
+      console.warn('[PROJECTILES] Error cleaning up projectile mesh:', e);
+      try {
+        if (typeof mesh.dispose === "function") {
+          mesh.dispose();
+        }
+      } catch (inner) {
+        console.warn('[PROJECTILES] Error disposing mesh after cleanup error:', inner);
+      }
     }
   }
 
   function handleMiss(p) {
-    if (p.onMiss) {
-      p.onMiss(p.mesh.position.clone());
+    if (p.onMiss && p.mesh && p.mesh.position) {
+      try {
+        p.onMiss(p.mesh.position.clone());
+      } catch (e) {
+        console.warn('[PROJECTILES] Error in onMiss callback:', e);
+      }
     }
   }
 
@@ -290,20 +544,22 @@
     if (!window.gameUnits || !window.gameUnits.length) return null;
 
     const COLLISION_RADIUS = 1.0;
+    const COLLISION_RADIUS_SQ = COLLISION_RADIUS * COLLISION_RADIUS; // Avoid sqrt
 
     for (const unit of window.gameUnits) {
       if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) continue;
       if (unit.owner === ownerId) continue;
       if (!unit.health || unit.health <= 0) continue;
 
-      const unitPos = new BABYLON.Vector3(
-        unit.pb.state.loc.x,
-        unit.pb.state.loc.y || 0,
-        unit.pb.state.loc.z
-      );
-
-      const d = BABYLON.Vector3.Distance(position, unitPos);
-      if (d <= COLLISION_RADIUS) return unit;
+      const loc = unit.pb.state.loc;
+      
+      // Fast squared distance check (no sqrt needed)
+      const dx = loc.x - position.x;
+      const dy = (loc.y || 0) - position.y;
+      const dz = loc.z - position.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      
+      if (distSq <= COLLISION_RADIUS_SQ) return unit;
     }
 
     return null;
@@ -385,6 +641,16 @@
 // ---------------------------------------------------------------------------
 
 if (typeof window !== "undefined") {
+  // Emergency cleanup if projectiles break the scene
+  window.cleanupProjectiles = window.cleanupProjectiles || function() {
+    if (window.projectiles && window.projectiles.cleanup) {
+      window.projectiles.cleanup();
+      console.log('✅ Projectiles cleaned up');
+    } else {
+      console.warn('Projectiles system not available');
+    }
+  };
+
   // Trigger a monk radial kick using the physics/behavior system
   window.testMonkKick = window.testMonkKick || function(options = {}) {
     const radius = options.radius || 4;
@@ -419,6 +685,35 @@ if (typeof window !== "undefined") {
     });
 
     console.log("Triggered monk kick for", monk.id || monk.name || monk.type, "radius", radius, "power", power);
+  };
+
+  // Test a simple projectile from point A to point B
+  window.testProjectile = window.testProjectile || function(fromX, fromZ, toX, toZ) {
+    fromX = fromX || 0;
+    fromZ = fromZ || 0;
+    toX = toX || 10;
+    toZ = toZ || 10;
+    
+    const BAB = window.BABYLON;
+    if (!BAB || !window.projectiles) {
+      console.warn("BABYLON or projectiles not ready");
+      return;
+    }
+    
+    const from = new BAB.Vector3(fromX, 2, fromZ);
+    const to = new BAB.Vector3(toX, 2, toZ);
+    
+    const proj = window.projectiles.fire({
+      type: 'arrow',
+      from: from,
+      to: to,
+      damage: 10,
+      owner: null
+    });
+    
+    console.log("Test projectile fired from", from, "to", to, "result:", !!proj);
+    console.log("Active projectiles:", window.projectiles.getStats());
+    return proj;
   };
 
   // Force a tower to fire an arrow at the nearest enemy unit

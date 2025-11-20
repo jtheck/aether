@@ -80,7 +80,7 @@ window.aud = {};  // Audio
     let chat;
     // Init chat
     if (typeof GETFIRE !== "undefined"){
-      chat = GETFIRE({topicNames: ["test"],
+      chat = GETFIRE({topicNames: ["AEG"],
         defaultName: "Strategist",
         startOpen: false,
         startPreview: false,

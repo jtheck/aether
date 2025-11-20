@@ -71,11 +71,12 @@ html, body {
   border-radius: 7px;
   color: White;
   padding: 5px;
-  width: 259px;
+  width: 280px;
   height: 259px;
   background-image: url('assets/menu-bg.jpg');
   display: block;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* #menu::before {
   content: '';
@@ -254,6 +255,14 @@ html, body {
 }
 .game_menu_type_b:active {
   border-color: darkmagenta;
+}
+
+/* Disable Adventure and KOTH category buttons */
+.game_menu_type_b[onclick="ui.showMenu('adventure_lobby')"],
+.game_menu_type_b[onclick="ui.showMenu('koth_lobby')"] {
+  pointer-events: none;
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .lobby_b{
@@ -460,18 +469,24 @@ html, body {
 
 /* Lobby Room Styles */
 .lobby_room {
-  padding: 10px;
+  padding: 0 10px 10px 10px;
 }
 
 .lobby_room_header {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
-  margin-bottom: 15px;
+  margin-bottom: 10px;
+  margin-top: 0;
+  padding-top: 0;
 }
 
 .lobby_room_header h3 {
   margin: 0;
+  font-size: 0.9em;
+  font-weight: normal;
+  opacity: 0.8;
+  text-align: center;
 }
 
 .leave_lobby_btn {
@@ -491,6 +506,7 @@ html, body {
   background: rgba(0, 0, 0, 0.3);
   padding: 10px;
   border-radius: 5px;
+  margin-top: 15px;
   margin-bottom: 15px;
 }
 

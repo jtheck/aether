@@ -1,7 +1,7 @@
 
 
 // Multiplayer interpolation settings
-const REMOTE_UNIT_INTERPOLATION_SPEED = 0.15; // Smooth interpolation for remote units (15% per frame = smooth but responsive)
+const REMOTE_UNIT_INTERPOLATION_SPEED = 0.5; // Fast interpolation for remote units (50% per frame = responsive, matches local units)
 const LOCAL_UNIT_INTERPOLATION_SPEED = 0.5; // Faster interpolation for local units (50% per frame = nearly instant)
 
 // Unit type definitions - all unit attributes in one place
@@ -864,36 +864,49 @@ function updateUnits(deltaTime) {
         unit.pb.state.loc.z += unit.pb.state.vel.z * deltaTime;
         
         // CRITICAL: Apply smooth position correction for P2P sync
-        // If unit has a position correction target, lerp towards it gradually
-        // This prevents jarring snaps when move commands include authoritative positions
+        // Only apply corrections when unit is NOT actively moving to prevent fighting with movement commands
         // Position correction modifies physics body, visual interpolation will smooth it out
         if (unit._positionCorrection) {
-          const correction = unit._positionCorrection;
-          const currentX = unit.pb.state.loc.x;
-          const currentZ = unit.pb.state.loc.z;
+          // Check if unit has an active movement behavior (walk/run)
+          const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+          const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
+          const isMovementBehavior = behaviorType === 'WalkBehavior' || behaviorType === 'RunBehavior';
           
-          // Lerp towards authoritative position (adaptive strength based on error)
-          const errorX = correction.targetX - currentX;
-          const errorZ = correction.targetZ - currentZ;
-          const errorDistance = Math.sqrt(errorX * errorX + errorZ * errorZ);
-          
-          // Adaptive correction: faster for larger errors, slower for small errors
-          // This prevents overshooting and oscillation
-          const adaptiveStrength = Math.min(correction.strength * (1 + errorDistance * 0.1), 0.5);
-          
-          unit.pb.state.loc.x += errorX * adaptiveStrength;
-          unit.pb.state.loc.z += errorZ * adaptiveStrength;
-          
-          // Check if we're close enough to stop correcting (within 0.15 units)
-          const remainingError = Math.sqrt(
-            (correction.targetX - unit.pb.state.loc.x) * (correction.targetX - unit.pb.state.loc.x) +
-            (correction.targetZ - unit.pb.state.loc.z) * (correction.targetZ - unit.pb.state.loc.z)
-          );
-          
-          if (remainingError < 0.15) {
-            // Close enough - snap to exact position and remove correction
-            unit.pb.state.loc.x = correction.targetX;
-            unit.pb.state.loc.z = correction.targetZ;
+          // CRITICAL: Only apply position corrections when unit is idle
+          // Active movement behaviors control velocity directly - corrections would fight with them
+          if (!isMovementBehavior) {
+            const correction = unit._positionCorrection;
+            const currentX = unit.pb.state.loc.x;
+            const currentZ = unit.pb.state.loc.z;
+            
+            // Lerp towards authoritative position (reduced strength to prevent speedups)
+            const errorX = correction.targetX - currentX;
+            const errorZ = correction.targetZ - currentZ;
+            const errorDistance = Math.sqrt(errorX * errorX + errorZ * errorZ);
+            
+            // Reduced correction strength: max 0.2 (was 0.5) to prevent units from moving faster than normal
+            // This ensures corrections don't cause speedups - units should move at their normal speed
+            const maxStrength = 0.2; // Cap at 20% per frame to prevent speedups
+            const adaptiveStrength = Math.min(correction.strength, maxStrength);
+            
+            unit.pb.state.loc.x += errorX * adaptiveStrength;
+            unit.pb.state.loc.z += errorZ * adaptiveStrength;
+            
+            // Check if we're close enough to stop correcting (within 0.15 units)
+            const remainingError = Math.sqrt(
+              (correction.targetX - unit.pb.state.loc.x) * (correction.targetX - unit.pb.state.loc.x) +
+              (correction.targetZ - unit.pb.state.loc.z) * (correction.targetZ - unit.pb.state.loc.z)
+            );
+            
+            if (remainingError < 0.15) {
+              // Close enough - snap to exact position and remove correction
+              unit.pb.state.loc.x = correction.targetX;
+              unit.pb.state.loc.z = correction.targetZ;
+              delete unit._positionCorrection;
+            }
+          } else {
+            // Unit is actively moving - cancel correction to let movement behavior control speed
+            // The checkpoint sync will re-apply corrections when unit stops moving
             delete unit._positionCorrection;
           }
         }

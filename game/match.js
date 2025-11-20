@@ -897,21 +897,30 @@
             // Only correct if error is significant (> 0.3 units) but not catastrophic
             // Small errors ignore (noise), huge errors snap immediately (missed command)
             if (errorDistance > 0.3 && errorDistance < catastrophicThreshold) {
-              // Store correction vector to be applied gradually during movement
-              // Use stronger correction for larger errors to catch up faster
-              // In 3+ player games, use more aggressive correction to compensate for network latency
-              const baseStrength = isMultiPlayerGame ? 0.3 : 0.2;
-              const correctionStrength = Math.min(baseStrength + (errorDistance * 0.01), isMultiPlayerGame ? 0.5 : 0.4);
-              unit._positionCorrection = {
-                targetX: authoritativePos.x,
-                targetZ: authoritativePos.z,
-                strength: correctionStrength // Adaptive strength based on error distance and player count
-              };
+              // CRITICAL: Don't apply startPositions corrections during active movement
+              // The movement command will handle positioning - corrections would fight with it
+              // Only apply corrections if unit is idle (no active movement behavior)
+              const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+              const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
+              const isMovementBehavior = behaviorType === 'WalkBehavior' || behaviorType === 'RunBehavior';
               
-              // Also update visual position immediately to prevent visual lag
-              if (unit.visualPosition) {
-                unit.visualPosition.x = authoritativePos.x;
-                unit.visualPosition.z = authoritativePos.z;
+              if (!isMovementBehavior) {
+                // Unit is idle - apply gentle correction (reduced strength to prevent speedups)
+                // Max strength is 0.2 (20% per frame) to ensure units don't speed up
+                const maxStrength = 0.2; // Cap at 20% per frame to prevent speedups
+                const baseStrength = 0.15; // Base strength (reduced from 0.2-0.3)
+                const correctionStrength = Math.min(baseStrength + (errorDistance * 0.005), maxStrength);
+                unit._positionCorrection = {
+                  targetX: authoritativePos.x,
+                  targetZ: authoritativePos.z,
+                  strength: correctionStrength // Reduced strength to prevent speedups
+                };
+                // DON'T update visual position immediately - let correction system handle it smoothly
+                // This prevents the "jump forward then jump back" issue
+              } else {
+                // Unit is actively moving - cancel any existing corrections
+                // The movement command will handle positioning correctly
+                delete unit._positionCorrection;
               }
             } else if (errorDistance >= catastrophicThreshold) {
               // Catastrophic desync - snap immediately (both physics and visual)
@@ -1019,6 +1028,10 @@
         // Single unit - precise positioning
         const unit = ownedUnits[0];
         if (window.behaviorManager && window.WalkBehavior) {
+          // CRITICAL: Clear any position corrections when starting movement
+          // Movement commands should override corrections - don't let them fight
+          delete unit._positionCorrection;
+          
           // CRITICAL: Mark this as a player move command so auto-assignment doesn't immediately grab them
           const currentTick = this.tick || 0;
           unit.lastPlayerMoveTick = currentTick;
@@ -1062,6 +1075,10 @@
               y: cmd.target.y,
               z: Math.round((cmd.target.z + rowOffset) * 100) / 100
             };
+            
+            // CRITICAL: Clear any position corrections when starting movement
+            // Movement commands should override corrections - don't let them fight
+            delete unit._positionCorrection;
             
             // CRITICAL: Each unit gets their own unique target - no sharing!
             // The personalityOffset in WalkBehavior will add further variation within the formation cell
@@ -2445,14 +2462,9 @@
             const errorZ = posData.z - unit.pb.state.loc.z;
             const errorDistance = Math.sqrt(errorX * errorX + errorZ * errorZ);
             
-            // Use smooth catch-up for small-medium errors, snap for catastrophic errors
-            // If sync is late, use faster catch-up to compensate for the delay
-            // Very late syncs (> 5 seconds) need aggressive correction to catch up
-            const ticksPerSecond = window.net?.TICK_RATE || 20;
-            const isVeryLate = tickDiff > ticksPerSecond * 5; // More than 5 seconds late
-            const isExtremelyLate = tickDiff > ticksPerSecond * 15; // More than 15 seconds late - use very aggressive correction
-            const baseStrength = isExtremelyLate ? 0.8 : (isVeryLate ? 0.6 : (isLateSync ? 0.3 : 0.2));
-            const adaptiveStrength = Math.min(baseStrength + (errorDistance * 0.01), isExtremelyLate ? 0.95 : (isVeryLate ? 0.8 : 0.5));
+            // CRITICAL: Reduced correction strength to prevent speedups
+            // Units should move at their normal speed, not faster due to corrections
+            // Only apply corrections when unit is idle (checked in units.js)
             
             // CRITICAL: In 3+ player games, units can drift more due to network latency
             // Use higher threshold for "catastrophic" errors (50 units instead of 20)
@@ -2462,15 +2474,16 @@
             const catastrophicThreshold = isMultiPlayerGame ? 50 : 20; // Higher threshold for 3+ players
             
             if (errorDistance > 0.3 && errorDistance < catastrophicThreshold) {
-              // Smooth catch-up: make unit move faster towards correct position
-              // The position correction system will lerp them there gradually
-              // In 3+ player games, use more aggressive correction to compensate for network latency
-              const baseStrength = isMultiPlayerGame ? 0.3 : 0.2;
-              const adjustedStrength = Math.min(baseStrength + (errorDistance * 0.01), isMultiPlayerGame ? 0.5 : 0.4);
+              // Smooth catch-up: reduced strength to prevent units from moving faster than normal
+              // Max strength is 0.2 (20% per frame) to ensure units don't speed up
+              // This matches the cap in units.js - corrections should be gentle
+              const maxStrength = 0.2; // Cap at 20% per frame to prevent speedups
+              const baseStrength = 0.15; // Base strength (was 0.2-0.3)
+              const adjustedStrength = Math.min(baseStrength + (errorDistance * 0.005), maxStrength); // Reduced from 0.01 to 0.005
               unit._positionCorrection = {
                 targetX: posData.x,
                 targetZ: posData.z,
-                strength: Math.max(adjustedStrength, adaptiveStrength) // Use the stronger of the two
+                strength: adjustedStrength // Reduced strength to prevent speedups
               };
               
               // Update visual position immediately to prevent visual lag

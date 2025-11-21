@@ -2873,8 +2873,8 @@ let pov2 = 240;
         // console.log('Initializing shadow generator with sun light:', sunLight.name);
         
         try {
-          // Pick initial shadow resolution based on saved LOD (or default 50)
-          let initialLOD = 50;
+          // Pick initial shadow resolution based on saved LOD (or default 100 for refined shadows)
+          let initialLOD = 100; // Default to high quality (2048 resolution) for refined shadows
           try {
             const savedLOD = localStorage.getItem('lodLevel');
             if (savedLOD) {
@@ -2888,11 +2888,14 @@ let pov2 = 240;
           }
           const initialShadowRes = gfx.getShadowResolutionForLOD
             ? gfx.getShadowResolutionForLOD(initialLOD)
-            : 1024;
+            : 2048; // Default to refined shadows (2048) if function not available
 
           gfx.shadowGenerator = new BABYLON.ShadowGenerator(initialShadowRes, sunLight);
           // Apply centralized quality settings so visuals match reconfigureShadowGenerator
           gfx.configureShadowGeneratorSettings(gfx.shadowGenerator);
+          
+          // Initialize lastLODLevel to prevent unnecessary reconfiguration when settings menu opens
+          gfx.lastLODLevel = initialLOD;
           
           // Set up automatic shadow updates for new meshes
           gfx.scene.onNewMeshAddedObservable.add(gfx.autoUpdateShadows);
@@ -3059,13 +3062,13 @@ let pov2 = 240;
     // Add this after the initializeShadowGenerator function (around line 1424)
     
     // Dynamic shadow resolution based on LOD level
-    gfx.getShadowResolutionForLOD = function(lodLevel = 50) {
+    gfx.getShadowResolutionForLOD = function(lodLevel = 100) {
       if (lodLevel <= 30) {
         return 512;  // Low-end profile: minimal GPU usage
       } else if (lodLevel <= 70) {
         return 1024; // Medium: default balance
       } else {
-        return 2048; // High-end: sharper shadows
+        return 2048; // High-end: sharper shadows (refined)
       }
     };
 
@@ -3127,18 +3130,29 @@ let pov2 = 240;
         return; // Skip if disabled or not ready
       }
       
-      // Debounce: only reconfigure if LOD changed by more than 5%
-      const changeThreshold = 5;
-      if (Math.abs(lodLevel - gfx.lastLODLevel) < changeThreshold) {
-        return; // Small change, skip reconfiguration
-      }
-      
       const newRes = gfx.getShadowResolutionForLOD(lodLevel);
       const currentRes = gfx.shadowGenerator.getShadowMap().getSize().width;
       
+      // If resolution matches and lastLODLevel is set, check if we need to reconfigure
       if (newRes === currentRes) {
-        gfx.lastLODLevel = lodLevel; // Still update tracking
+        // If lastLODLevel is undefined, just set it without reconfiguring
+        if (gfx.lastLODLevel === undefined) {
+          gfx.lastLODLevel = lodLevel;
+        } else {
+          // Debounce: only reconfigure if LOD changed by more than 5%
+          const changeThreshold = 5;
+          if (Math.abs(lodLevel - gfx.lastLODLevel) < changeThreshold) {
+            return; // Small change, skip reconfiguration
+          }
+        }
+        gfx.lastLODLevel = lodLevel; // Update tracking
         return; // No change needed
+      }
+      
+      // Debounce: only reconfigure if LOD changed by more than 5% (and resolution differs)
+      const changeThreshold = 5;
+      if (gfx.lastLODLevel !== undefined && Math.abs(lodLevel - gfx.lastLODLevel) < changeThreshold) {
+        return; // Small change, skip reconfiguration
       }
       
       try {

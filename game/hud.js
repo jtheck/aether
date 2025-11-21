@@ -2604,27 +2604,20 @@
     // Enable shadows
     window.SHADOWS_ENABLED = true;
     
-    // Force initialize shadow generator if it doesn't exist
-    if (window.gfx) {
-      if (!window.gfx.shadowGenerator) {
-        // Force initialize shadows (bypass stability checks)
-        if (window.gfx.forceInitializeShadows) {
-          window.gfx.forceInitializeShadows();
-        } else if (window.gfx.autoInitializeShadows) {
-          window.gfx.autoInitializeShadows();
-        }
-        
-        // Apply current LOD setting to shadow resolution
-        try {
-          const savedLOD = localStorage.getItem('lodLevel');
-          const lodLevel = savedLOD ? parseInt(savedLOD) : 50;
-          if (window.gfx.shadowGenerator && window.gfx.onLODDistanceUpdate) {
-            window.gfx.onLODDistanceUpdate(lodLevel);
+      // Force initialize shadow generator if it doesn't exist
+      if (window.gfx) {
+        if (!window.gfx.shadowGenerator) {
+          // Force initialize shadows (bypass stability checks)
+          // This will initialize with refined quality (2048) by default
+          if (window.gfx.forceInitializeShadows) {
+            window.gfx.forceInitializeShadows();
+          } else if (window.gfx.autoInitializeShadows) {
+            window.gfx.autoInitializeShadows();
           }
-        } catch (e) {
-          // Ignore LOD application errors
+          
+          // Don't apply saved LOD on initial shadow creation - shadows should always start refined
+          // The LOD setting will only apply when user explicitly changes the slider
         }
-      }
       
       // Update all meshes to receive shadows
       if (window.gfx.updateAllMeshShadows) {

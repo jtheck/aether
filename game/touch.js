@@ -541,11 +541,43 @@
             const wz = (groundRight.z * smoothedCentroidDx + groundForward.z * smoothedCentroidDy) * pixelsToWorld * panSens;
             
             if (Number.isFinite(wx) && Number.isFinite(wz)) {
-              target.x += wx;
-              target.z += wz;
-              // Store velocity for momentum
-              gestureVelocity.pan.x = wx;
-              gestureVelocity.pan.z = wz;
+              const newX = target.x + wx;
+              const newZ = target.z + wz;
+              
+              // Clamp to bounds before applying
+              const tileSize = (window.TILE_SIZE || 4);
+              const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+              const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+              const margin = 2 * tileSize;
+              const minX = margin;
+              const minZ = margin;
+              const maxX = Math.max(minX, w - margin);
+              const maxZ = Math.max(minZ, h - margin);
+              
+              // Only apply if within bounds, otherwise clamp and stop velocity
+              let xInBounds = (newX >= minX && newX <= maxX);
+              let zInBounds = (newZ >= minZ && newZ <= maxZ);
+              
+              if (xInBounds) {
+                target.x = newX;
+                gestureVelocity.pan.x = wx; // Store velocity for momentum
+              } else {
+                target.x = Math.max(minX, Math.min(maxX, newX));
+                gestureVelocity.pan.x = 0; // Stop velocity if hitting bounds
+              }
+              
+              if (zInBounds) {
+                target.z = newZ;
+                gestureVelocity.pan.z = wz; // Store velocity for momentum
+              } else {
+                target.z = Math.max(minZ, Math.min(maxZ, newZ));
+                gestureVelocity.pan.z = 0; // Stop velocity if hitting bounds
+              }
+              
+              // Force terrain chunk update to fix LOD when returning to bounds
+              if (window.liveField && typeof window.liveField.updateVisibleChunks === 'function') {
+                window.liveField.updateVisibleChunks(target.x, target.z);
+              }
             }
           }
         }
@@ -572,12 +604,43 @@
       const velocityThreshold = 0.001; // Stop when velocity is tiny
       let anyVelocity = false;
       
-      // Pan momentum
+      // Pan momentum with bounds checking
       if (Math.abs(gestureVelocity.pan.x) > velocityThreshold || Math.abs(gestureVelocity.pan.z) > velocityThreshold) {
-        target.x += gestureVelocity.pan.x;
-        target.z += gestureVelocity.pan.z;
-        gestureVelocity.pan.x *= momentumDecay;
-        gestureVelocity.pan.z *= momentumDecay;
+        const newX = target.x + gestureVelocity.pan.x;
+        const newZ = target.z + gestureVelocity.pan.z;
+        
+        // Clamp to bounds
+        const tileSize = (window.TILE_SIZE || 4);
+        const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+        const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+        const margin = 2 * tileSize;
+        const minX = margin;
+        const minZ = margin;
+        const maxX = Math.max(minX, w - margin);
+        const maxZ = Math.max(minZ, h - margin);
+        
+        // Only apply if within bounds, otherwise clamp and stop velocity
+        if (newX >= minX && newX <= maxX) {
+          target.x = newX;
+          gestureVelocity.pan.x *= momentumDecay;
+        } else {
+          target.x = Math.max(minX, Math.min(maxX, newX));
+          gestureVelocity.pan.x = 0; // Stop velocity if hitting bounds
+        }
+        
+        if (newZ >= minZ && newZ <= maxZ) {
+          target.z = newZ;
+          gestureVelocity.pan.z *= momentumDecay;
+        } else {
+          target.z = Math.max(minZ, Math.min(maxZ, newZ));
+          gestureVelocity.pan.z = 0; // Stop velocity if hitting bounds
+        }
+        
+        // Force terrain chunk update to fix LOD when returning to bounds
+        if (window.liveField && typeof window.liveField.updateVisibleChunks === 'function') {
+          window.liveField.updateVisibleChunks(target.x, target.z);
+        }
+        
         anyVelocity = true;
       }
       
@@ -696,7 +759,46 @@
       }
       lastTouchClientX = e.clientX;
       lastTouchClientY = e.clientY;
-      if (!moveRafScheduled) {
+      
+      // CRITICAL FIX: Process multi-touch gestures (2+ fingers) immediately to avoid
+      // responsiveness issues when shadows are enabled and requestAnimationFrame is throttled.
+      // Only defer building placement preview and single-finger drag selection.
+      if (activePointers.size >= 2) {
+        // Process gestures immediately for responsive camera control
+        invalidateTime();
+        beginGestureIfNeeded();
+        applyTwoFingerGesture();
+        
+        // Support 3+ finger actions/selections WHILE 2-finger gesture is active
+        // This is ROBUST multitouch - you can gesture with 2 fingers and act with a 3rd!
+        if (activePointers.size >= 3) {
+          // Get the gesture primary fingers
+          const gesturePair = getTwoPrimaryPointers();
+          const gestureIds = gesturePair ? new Set([gesturePair[0].id, gesturePair[1].id]) : new Set();
+          
+          // For each additional finger (not part of the 2-finger gesture)
+          for (const ps of activePointers.values()) {
+            if (gestureIds.has(ps.id)) continue; // Skip gesture fingers
+            if (ps.wasInGesture) continue; // Skip if was previously in gesture
+            
+            const dx = ps.x - ps.startX;
+            const dy = ps.y - ps.startY;
+            const movedSq = dx*dx + dy*dy;
+            
+            if (!ps.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
+              if (now() >= suppressSingleTapUntil) {
+                sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
+                ps.syntheticDownEmitted = true;
+              }
+            }
+            if (ps.syntheticDownEmitted) {
+              sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+            }
+          }
+        }
+      } else if (!moveRafScheduled) {
+        // Defer single-finger operations (building placement, drag selection) to RAF
+        // These are less critical and can tolerate slight delays
         moveRafScheduled = true;
         requestAnimationFrame(() => {
           moveRafScheduled = false;
@@ -755,38 +857,7 @@
             }
           }
 
-          if (activePointers.size >= 2) {
-            beginGestureIfNeeded();
-            applyTwoFingerGesture();
-            
-            // Support 3+ finger actions/selections WHILE 2-finger gesture is active
-            // This is ROBUST multitouch - you can gesture with 2 fingers and act with a 3rd!
-            if (activePointers.size >= 3) {
-              // Get the gesture primary fingers
-              const gesturePair = getTwoPrimaryPointers();
-              const gestureIds = gesturePair ? new Set([gesturePair[0].id, gesturePair[1].id]) : new Set();
-              
-              // For each additional finger (not part of the 2-finger gesture)
-              for (const ps of activePointers.values()) {
-                if (gestureIds.has(ps.id)) continue; // Skip gesture fingers
-                if (ps.wasInGesture) continue; // Skip if was previously in gesture
-                
-                const dx = ps.x - ps.startX;
-                const dy = ps.y - ps.startY;
-                const movedSq = dx*dx + dy*dy;
-                
-                if (!ps.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
-                  if (now() >= suppressSingleTapUntil) {
-                    sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
-                    ps.syntheticDownEmitted = true;
-                  }
-                }
-                if (ps.syntheticDownEmitted) {
-                  sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
-                }
-              }
-            }
-          } else if (activePointers.size === 1) {
+          if (activePointers.size === 1) {
             if (window.buildingSystem && window.buildingSystem.isPlacing) return;
             for (const only of activePointers.values()) {
               // Skip drag selection if this finger was part of a gesture

@@ -392,11 +392,32 @@ window.gameLoop = {
       window.player.updatePosition();
     }
     
+    // Update game timer display
+    updateGameTimer();
+    
     // Continue the loop (store ID for cancellation)
     this.animationFrameId = requestAnimationFrame(() => this.update());
   }
 
 };
+
+// Update game timer display
+function updateGameTimer() {
+  const timerElement = document.getElementById('game_timer');
+  if (!timerElement) return;
+  
+  // Get game time from current match if available
+  if (window.currentMatch && (window.currentMatch.state === 'playing' || window.currentMatch.state === 'paused')) {
+    const gameTime = window.currentMatch.gameTime || 0;
+    const minutes = Math.floor(gameTime / 60);
+    const seconds = Math.floor(gameTime % 60);
+    timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    timerElement.style.display = 'block';
+  } else {
+    // Hide timer when not in an active match
+    timerElement.style.display = 'none';
+  }
+}
 
 
 

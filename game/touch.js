@@ -21,7 +21,7 @@
       pinchDeadzone: 50.0, // Ignore finger spacing changes smaller than this (prevents zoom during pan)
       pinchCentroidStability: 80.0, // Max centroid movement for intentional pinch (px) - higher = more lenient
       pinchCentroidRatioMax: 0.40, // Max ratio of centroid movement to finger spread (0.40 = centroid can move up to 40% of spread)
-      rotateDeadzone: 0.35, // Ignore rotation smaller than this (~20 degrees)
+      rotateDeadzone: 0.15, // Ignore rotation smaller than this (~9 degrees) - lowered for easier triggering
       gestureStabilityFrames: 2, // Require N consecutive clean frames before allowing gesture engagement
       debugGestures: false, // Set to true to see gesture engagement in console
       gestureSmoothingFactor: 0.3, // Lerp factor for smooth gesture interpolation (0=no smoothing, 1=instant)
@@ -419,7 +419,7 @@
       // Check TOTAL delta from gesture start to determine if gesture should engage
       // Mobile browsers need slightly larger deadzones for reliable detection
       const pinchDeadzone = isMobileBrowser ? 60.0 : (config.pinchDeadzone || 50.0);
-      const rotateDeadzone = isMobileBrowser ? 0.40 : (config.rotateDeadzone || 0.35); // ~23° for mobile, ~20° for desktop
+      const rotateDeadzone = isMobileBrowser ? 0.20 : (config.rotateDeadzone || 0.15); // ~11° for mobile, ~9° for desktop - lowered for easier triggering
       const stabilityRequired = isMobileBrowser ? 1 : (config.gestureStabilityFrames || 2);
       
       const totalDistDelta = Math.abs(da.dist - gestureInitial.distance);
@@ -509,11 +509,11 @@
         gestureVelocity.pinch = 0; // Clear velocity if not pinching
       }
       
-      // 2. ROTATE - only if exceeds deadzone
+      // 2. ROTATE - only if exceeds deadzone (reversed direction)
       if (applyRotate && Math.abs(smoothedAngleDelta) > 0.001) {
         const rotateVel = smoothedAngleDelta * config.rotateSensitivity;
-        cam.alpha -= rotateVel;
-        gestureVelocity.rotate = -rotateVel; // Store velocity for momentum
+        cam.alpha += rotateVel; // Reversed: changed from -= to +=
+        gestureVelocity.rotate = rotateVel; // Store velocity for momentum (reversed sign)
       } else {
         gestureVelocity.rotate = 0; // Clear velocity if not rotating
       }
@@ -581,9 +581,9 @@
         anyVelocity = true;
       }
       
-      // Rotate momentum
+      // Rotate momentum (reversed direction)
       if (Math.abs(gestureVelocity.rotate) > velocityThreshold) {
-        cam.alpha += gestureVelocity.rotate;
+        cam.alpha += gestureVelocity.rotate; // Continue in same direction as gesture
         gestureVelocity.rotate *= momentumDecay;
         anyVelocity = true;
       }

@@ -1,5 +1,6 @@
-// Forge Map Editor - Painting and Map Creation Tools
-// Uses ENABLE_FORGE flag to isolate editor functionality
+// Forge Map Editor - Terrain Painting and Map Creation Tools
+// Uses ENABLE_FORGE flag to activate editor functionality
+// Works with the game's existing Field and gfx systems
 
 (function(forge) {
   'use strict';
@@ -10,183 +11,231 @@
     brushSize: 1,               // Brush radius in tiles
     isPainting: false,          // Whether currently painting
     lastPaintPos: null,         // Last painted position for continuous painting
-    selectedTile: 0,            // Currently selected tile variant (0 or 10 for solid terrain)
-    autoMarchingSquares: true  // Whether to auto-apply marching squares around mouse
+    mapWidth: 64,               // Default map dimensions
+    mapHeight: 64,
+    mapSeed: 12345,             // Current map seed
+    currentTool: 'terrain',     // 'table', 'terrain', or 'resource'
+    currentResource: 'trees',   // Current resource to place
+    // Layer visibility
+    layers: {
+      table: true,
+      terrain: true,
+      resources: true
+    },
+    // Current editing layer (affects what tool does)
+    editingLayer: 'terrain'     // 'table', 'terrain', or 'resources'
   };
   
-  // Available terrain types - using grass atlas for debugging
+  // Terrain types map to the 2-terrain system (grass/dirt)
   forge.terrainTypes = {
-    grass: { name: 'Grass', atlas: 'atlas-grass', variants: 16 },
-    dirt: { name: 'Dirt', atlas: 'atlas-grass', variants: 16 },
-    rock: { name: 'Rock', atlas: 'atlas-grass', variants: 16 },
-    sand: { name: 'Sand', atlas: 'atlas-grass', variants: 16 },
-    water: { name: 'Water', atlas: 'atlas-grass', variants: 16 }
+    grass: { name: 'Grass', terrainType: 3, solidTile: 6, atlas: 'atlas-grass-dirt' },   // Type 3 = grass
+    dirt:  { name: 'Dirt',  terrainType: 2, solidTile: 12, atlas: 'atlas-grass-dirt' },  // Type 2 = dirt
+    water: { name: 'Water', terrainType: 1, solidTile: 12, atlas: 'atlas-grass-water' }  // Type 1 = water
   };
+  
+  // Available resources for manual placement
+  forge.resourceTypes = {
+    trees:       { name: 'Trees',       path: 'assets/models/trees.glb',       scale: 0.9 },
+    rocks_plain: { name: 'Rocks',       path: 'assets/models/rocks_plain.glb', scale: 3.0 },
+    rocks_moss:  { name: 'Mossy Rocks', path: 'assets/models/rocks_moss.glb',  scale: 7.5 },
+    rocks_snow:  { name: 'Large Rocks', path: 'assets/models/rocks_snow.glb',  scale: 11.5 }
+  };
+  
   
   // Initialize forge editor
   forge.init = function() {
     if (!ENABLE_FORGE) return;
     
-    console.log('Forge Map Editor initialized');
-    this.setupPainting();
+    console.log('🔨 Forge Map Editor initializing...');
+    
     this.setupUI();
-    this.updateButtonStates();
+    this.setupPainting();
+    this.setupCameraForEditing();
     
-    // Initialize the field for forge mode
-    this.initializeField();
+    // Force initial chunk loading
+    this.loadAllChunks();
     
-    // Set initial camera position for forge and ensure controls are attached
-    if (gfx && gfx.camera) {
-      // Ensure camera is attached to canvas for controls
-      if (gfx.camera.attachControl && gfx.canvas) {
-        gfx.camera.attachControl(gfx.canvas, true);
-        console.log('Camera controls attached to canvas');
-      }
-      
-      this.resetCamera();
-    }
+    // Build dynamic table based on chunk mask
+    this.rebuildTable();
+    
+    // Ensure models are visible as they load (async loading)
+    // Check multiple times as models stream in
+    setTimeout(() => this.ensureModelsVisible(), 500);
+    setTimeout(() => this.ensureModelsVisible(), 1500);
+    setTimeout(() => this.ensureModelsVisible(), 3000);
+    
+    console.log('✅ Forge ready');
   };
   
-  // Initialize the field for forge mode - create initial chunks and meshes
-  forge.initializeField = function() {
-    if (!ENABLE_FORGE || !liveField || !gfx || !gfx.scene) return;
+  // Ensure all loaded models respect current visibility settings
+  forge.ensureModelsVisible = function() {
+    // Just delegate to applyLayerVisibility which handles everything
+    this.applyLayerVisibility();
     
-    console.log('Initializing field for forge mode...');
+    const isBillboardMode = gfx.isBillboardOnlyMode && gfx.isBillboardOnlyMode();
+    const count = gfx.lodModels ? gfx.lodModels.length : 0;
+    console.log(`👁️ Applied visibility to ${count} models (billboard: ${isBillboardMode})`);
+  };
+  
+  // Force load all chunks for the current field
+  forge.loadAllChunks = function(includeResources = true) {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene || !gfx.createTerrainMesh) {
+      console.log('❌ Cannot load chunks - missing dependencies');
+      return;
+    }
     
-    // Calculate how many chunks we need to cover the entire field
-    const chunksX = Math.ceil(liveField.width / liveField.chunkSize);
-    const chunksZ = Math.ceil(liveField.height / liveField.chunkSize);
+    // Clear resource registries to prevent stale entries blocking new resources
+    if (gfx.clearResourceRegistries) {
+      gfx.clearResourceRegistries();
+    }
     
-    console.log(`Field size: ${liveField.width}x${liveField.height}, Chunks: ${chunksX}x${chunksZ}`);
+    // Calculate how many chunks we need
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
     
-    // Create all chunks for the field
-    for (let chunkX = 0; chunkX < chunksX; chunkX++) {
-      for (let chunkZ = 0; chunkZ < chunksZ; chunkZ++) {
-        // Get or create the chunk
-        const chunk = liveField.getChunk(chunkX, chunkZ);
+    // Create all chunks
+    for (let x = 0; x < chunksX; x++) {
+      for (let z = 0; z < chunksZ; z++) {
+        const chunk = field.getChunk(x, z);
         if (chunk) {
-          // Mark chunk as needing mesh
           chunk.needsMesh = true;
-          console.log(`Created chunk ${chunkX},${chunkZ}`);
         }
       }
     }
     
-    // Force initial mesh creation for all chunks
-    this.forceAllMeshUpdates();
+    // Create meshes for all ENABLED chunks only
+    let meshCount = 0;
+    for (const [key, chunk] of field.chunks) {
+      if (chunk.needsMesh) {
+        // Skip disabled chunks entirely - don't create terrain or resources
+        if (field.chunkMask && field.chunkMask.get(key) === false) {
+          continue;
+        }
+        
+        const [chunkX, chunkZ] = key.split(',').map(Number);
+        field.createChunkMesh(chunkX, chunkZ, gfx.scene, gfx.createTerrainMesh);
+        meshCount++;
+        
+        // Place decorations/resources on this chunk (only on enabled chunks)
+        if (includeResources && gfx.placeDecorationsOnChunk) {
+          chunk.models = gfx.placeDecorationsOnChunk(chunk, gfx.scene);
+        }
+      }
+    }
     
-    console.log('Field initialization complete');
+    console.log(`🗺️ Loaded ${meshCount} terrain chunks` + (includeResources ? ' with resources' : ''));
+  };
+  
+  // Setup camera for top-down map editing
+  forge.setupCameraForEditing = function() {
+    if (!gfx || !gfx.camera) return;
+    
+    const field = window.liveField;
+    // Position camera for overview of the map
+    const fieldCenterX = field ? (field.width * TILE_SIZE) / 2 : 128;
+    const fieldCenterZ = field ? (field.height * TILE_SIZE) / 2 : 128;
+    
+    // Set camera to look down at map from above
+    gfx.camera.position = new Vec3(fieldCenterX, 150, fieldCenterZ - 50);
+    gfx.camera.setTarget(new Vec3(fieldCenterX, 0, fieldCenterZ));
+    
+    // Increase camera speed for editor
+    if (gfx.camera.speed !== undefined) {
+      gfx.camera.speed = 20;
+    }
+    
+    console.log('📷 Camera positioned for editing');
   };
   
   // Setup painting system
   forge.setupPainting = function() {
     if (!ENABLE_FORGE) return;
     
-    // Integrate with existing pointer system instead of adding new listeners
-    this.setupPointerIntegration();
-    
-    console.log('Painting system ready');
-  };
-  
-  // Setup integration with existing pointer system
-  forge.setupPointerIntegration = function() {
-    if (!ENABLE_FORGE) return;
-    
-    // Set up direct pointer event listeners for forge
     const canvas = document.getElementById('canvas');
-    if (canvas) {
-      canvas.addEventListener('pointerdown', this.handlePointer.bind(this));
-      canvas.addEventListener('pointermove', this.handlePointer.bind(this));
-      canvas.addEventListener('pointerup', this.handlePointer.bind(this));
-      canvas.addEventListener('pointerleave', this.handlePointer.bind(this));
-    }
+    if (!canvas) return;
     
-    // Set up keyboard shortcuts for camera controls
-    document.addEventListener('keydown', this.handleKeyboard.bind(this));
+    canvas.addEventListener('pointerdown', (e) => this.handlePointer(e));
+    canvas.addEventListener('pointermove', (e) => this.handlePointer(e));
+    canvas.addEventListener('pointerup', (e) => this.handlePointer(e));
     
-    // Ensure camera controls are properly attached
-    this.ensureCameraControls();
-    
-    console.log('Forge pointer integration set up');
+    console.log('🖌️ Painting system ready');
   };
   
-  // Handle pointer events for forge painting
+  // Handle pointer events
   forge.handlePointer = function(e) {
-    if (!ENABLE_FORGE || !liveField) return;
+    if (!ENABLE_FORGE || !window.liveField) return;
+    
+    // Only paint with left mouse button
+    if (e.button !== 0 && e.type !== 'pointermove') return;
+    
+    const field = window.liveField;
     
     switch (e.type) {
       case 'pointerdown':
-        // Only handle left mouse button for painting
         if (e.button === 0) {
-          this.startPainting(e);
+          // Table editing mode - toggle chunks
+          if (this.state.editingLayer === 'table') {
+            const pos = this.getTilePosition(e);
+            if (pos) {
+              const chunkX = Math.floor(pos.x / field.chunkSize);
+              const chunkZ = Math.floor(pos.y / field.chunkSize);
+              this.toggleChunk(chunkX, chunkZ);
+            }
+            return;
+          }
+          
+          this.state.isPainting = true;
+          // Disable camera controls while painting
+          if (gfx.camera) {
+            gfx.camera.detachControl();
+          }
+          const pos = this.getTilePosition(e);
+          if (pos) {
+            if (this.state.editingLayer === 'resources') {
+              this.placeResourceAt(pos);
+            } else {
+              this.paintAtPosition(pos);
+            }
+            this.state.lastPaintPos = pos;
+          }
         }
         break;
+        
       case 'pointermove':
-        // Continue painting if we're in painting mode
-        if (this.state.isPainting) {
-          this.continuePainting(e);
+        if (this.state.isPainting && this.state.editingLayer !== 'table') {
+          const pos = this.getTilePosition(e);
+          if (pos && this.state.lastPaintPos) {
+            if (pos.x !== this.state.lastPaintPos.x || pos.y !== this.state.lastPaintPos.y) {
+              if (this.state.editingLayer === 'resources') {
+                this.placeResourceAt(pos);
+              } else {
+                this.paintAtPosition(pos);
+              }
+              this.state.lastPaintPos = pos;
+            }
+          }
         }
         break;
+        
       case 'pointerup':
         if (e.button === 0) {
-          this.stopPainting();
+          this.state.isPainting = false;
+          this.state.lastPaintPos = null;
+          // Re-enable camera controls after painting
+          if (gfx.camera && gfx.canvas) {
+            gfx.camera.attachControl(gfx.canvas, true);
+          }
         }
         break;
     }
   };
   
-  // Start painting at position
-  forge.startPainting = function(e) {
-    if (!ENABLE_FORGE || !liveField) return;
-    
-    this.state.isPainting = true;
-    this.state.lastPaintPos = this.getTilePosition(e);
-    
-    // Don't detach camera controls - let user move camera while painting
-    // This allows for better workflow where you can paint and navigate simultaneously
-    
-    this.paintAtPosition(this.state.lastPaintPos);
-  };
-  
-  // Continue painting while dragging
-  forge.continuePainting = function(e) {
-    if (!ENABLE_FORGE || !this.state.isPainting || !liveField) return;
-    
-    const currentPos = this.getTilePosition(e);
-    
-    // Only paint if we've moved to a new tile
-    if (currentPos.x !== this.state.lastPaintPos.x || currentPos.y !== this.state.lastPaintPos.y) {
-      // FIRST: Paint the tile (set it to solid variant 6 or 12)
-      this.paintAtPosition(currentPos);
-      
-      // DISABLED: Marching squares for now - just paint solid colors
-      // if (this.state.autoMarchingSquares) {
-      //   this.applyMarchingSquaresToArea(currentPos.x, currentPos.y, 1, true);
-      // }
-      
-      this.state.lastPaintPos = currentPos;
-    }
-  };
-  
-  // Stop painting
-  forge.stopPainting = function() {
-    if (!ENABLE_FORGE) return;
-    
-    this.state.isPainting = false;
-    this.state.lastPaintPos = null;
-  };
-  
-  // Get tile position from mouse/touch event
+  // Get tile position from screen coordinates
   forge.getTilePosition = function(e) {
-    if (!ENABLE_FORGE || !gfx || !gfx.scene) return { x: 0, y: 0 };
+    if (!gfx || !gfx.scene) return null;
     
-    // Get canvas-relative coordinates
-    const rect = e.target.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    // Convert to world coordinates using Babylon.js picking
-    const pickResult = gfx.scene.pick(x, y);
+    const pickResult = gfx.scene.pick(e.clientX, e.clientY);
     
     if (pickResult.hit) {
       const worldPos = pickResult.pickedPoint;
@@ -196,1007 +245,1363 @@
       };
     }
     
-    return { x: 0, y: 0 };
+    return null;
   };
   
-  // Paint at specific tile position
+  // Paint terrain at position
   forge.paintAtPosition = function(pos) {
-    if (!ENABLE_FORGE || !liveField) return;
+    const field = window.liveField;
+    if (!field) return;
     
-    const { x, y } = pos;
-    
-    // Validate position
-    if (x < 0 || x >= liveField.width || y < 0 || y >= liveField.height) return;
-    
-    // Paint with current brush settings
-    this.paintTile(x, y, this.state.currentBrush, this.state.brushSize);
-  };
-  
-  // Paint a tile with specified terrain type and brush size
-  forge.paintTile = function(centerX, centerY, terrainType, brushSize) {
-    if (!ENABLE_FORGE || !liveField) return;
-    
-    const terrain = this.terrainTypes[terrainType];
+    const terrain = this.terrainTypes[this.state.currentBrush];
     if (!terrain) return;
     
-    console.log(`Painting at (${centerX}, ${centerY}) with solid tile variant ${this.state.selectedTile}`);
+    const affectedChunks = new Set();
+    const paintedTiles = []; // Track painted tiles for buffer pass
     
-    // Only log if we actually paint something
-    let paintedCount = 0;
-    for (let x = centerX - brushSize; x <= centerX + brushSize; x++) {
-      for (let y = centerY - brushSize; y <= centerY + brushSize; y++) {
+    // Helper to check if a tile is in an enabled chunk
+    const isChunkEnabled = (x, y) => {
+      if (!field.chunkMask) return true;
+      const chunkX = Math.floor(x / field.chunkSize);
+      const chunkZ = Math.floor(y / field.chunkSize);
+      return field.chunkMask.get(`${chunkX},${chunkZ}`) !== false;
+    };
+    
+    // Paint with brush
+    for (let dx = -this.state.brushSize; dx <= this.state.brushSize; dx++) {
+      for (let dy = -this.state.brushSize; dy <= this.state.brushSize; dy++) {
+        const x = pos.x + dx;
+        const y = pos.y + dy;
+        
         // Check bounds
-        if (x < 0 || x >= liveField.width || y < 0 || y >= liveField.height) continue;
+        if (x < 0 || x >= field.width || y < 0 || y >= field.height) continue;
         
-        // Calculate distance from center for circular brush
-        const distance = Math.sqrt((x - centerX) ** 2 + (y - centerY) ** 2);
-        if (distance <= brushSize) {
-          // Get the tile
-          const tile = liveField.tiles[y * liveField.width + x];
-          if (tile) {
-            // Update tile type and atlas
-            const oldType = tile.type;
+        // Skip disabled chunks
+        if (!isChunkEnabled(x, y)) continue;
+        
+        // Circular brush
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance > this.state.brushSize) continue;
+        
+        // Update terrain type in field data
+        const index = y * field.width + x;
+        field.terrainTypes[index] = terrain.terrainType;
+        paintedTiles.push({x, y});
+        
+        // Track which chunks need updating
+        const chunkX = Math.floor(x / field.chunkSize);
+        const chunkZ = Math.floor(y / field.chunkSize);
+        affectedChunks.add(`${chunkX},${chunkZ}`);
+      }
+    }
+    
+    // If painting water, add grass buffer around it (prevent water-dirt adjacency)
+    if (terrain.terrainType === 1) {
+      for (const tile of paintedTiles) {
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = tile.x + dx;
+            const ny = tile.y + dy;
+            if (nx < 0 || nx >= field.width || ny < 0 || ny >= field.height) continue;
             
-            // IMPORTANT: Always paint with the user's selected SOLID tile variant (6 or 12)
-            // This ensures the cursor always paints with pure, solid colors
-            tile.type = this.state.selectedTile;
-            
-            tile.atlasName = terrain.atlas;
-            
-            // Update atlas coordinates if the method exists
-            if (tile.updateAtlasCoordinates) {
-              tile.updateAtlasCoordinates();
-            }
-            
-            if (oldType !== tile.type) {
-              paintedCount++;
-              console.log(`Painted tile at (${x}, ${y}) with solid variant ${this.state.selectedTile}`);
+            const nIndex = ny * field.width + nx;
+            // Convert dirt neighbors to grass (create shoreline buffer)
+            if (field.terrainTypes[nIndex] === 2) {
+              field.terrainTypes[nIndex] = 3; // Dirt → Grass
+              
+              const chunkX = Math.floor(nx / field.chunkSize);
+              const chunkZ = Math.floor(ny / field.chunkSize);
+              affectedChunks.add(`${chunkX},${chunkZ}`);
             }
           }
         }
       }
     }
     
-          // Only log and process if we actually painted something
-      if (paintedCount > 0) {
-        console.log(`Painted ${paintedCount} tiles at (${centerX}, ${centerY}) with solid variant ${this.state.selectedTile}`);
-        
-        // DISABLED: Marching squares for now - just paint solid colors
-        // this.applyMarchingSquaresToArea(centerX, centerY, brushSize + 1, true);
-      }
+    // Re-apply marching squares transitions for affected area
+    this.applyTransitionsInArea(pos.x, pos.y, this.state.brushSize + 2);
+    
+    // Rebuild affected chunks
+    this.rebuildChunks(affectedChunks);
   };
   
-  // Apply marching squares bitmask to create smooth transitions around painted tiles
-  forge.applyMarchingSquaresToArea = function(centerX, centerY, radius = 1, protectPaintedTiles = false) {
-    if (!ENABLE_FORGE || !liveField) return;
+  // Apply marching squares transitions in an area
+  forge.applyTransitionsInArea = function(centerX, centerY, radius) {
+    const field = window.liveField;
+    if (!field || !field.tiles || !field.terrainTypes) return;
     
-    console.log(`Applying marching squares at (${centerX}, ${centerY})`);
+    // Create density maps for transitions
+    // Grass vs Dirt: grass=1, dirt=0
+    // Grass vs Water: land(grass+dirt)=1, water=0
+    const grassVsDirt = field.terrainTypes.map(t => t === 3 ? 1 : 0);
+    const grassVsWater = field.terrainTypes.map(t => (t === 3 || t === 2) ? 1 : 0);
     
-    // Track which tiles were just painted so we don't overwrite them
-    const paintedTiles = new Set();
-    if (protectPaintedTiles) {
-      // Mark the center tile and brush area as protected
-      for (let x = centerX - radius; x <= centerX + radius; x++) {
-        for (let y = centerY - radius; y <= centerY + radius; y++) {
-          if (x >= 0 && x < liveField.width && y >= 0 && y < liveField.height) {
-            paintedTiles.add(`${x},${y}`);
+    for (let x = centerX - radius; x <= centerX + radius; x++) {
+      for (let y = centerY - radius; y <= centerY + radius; y++) {
+        if (x < 0 || x >= field.width || y < 0 || y >= field.height) continue;
+        
+        const index = y * field.width + x;
+        const tile = field.tiles[index];
+        
+        // Skip if tile doesn't exist
+        if (!tile) continue;
+        
+        const terrain = field.terrainTypes[index];
+        
+        // Check what terrain types are adjacent
+        let hasWaterNeighbor = false;
+        let hasDirtNeighbor = false;
+        let hasGrassNeighbor = false;
+        
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx >= 0 && nx < field.width && ny >= 0 && ny < field.height) {
+              const neighborTerrain = field.terrainTypes[ny * field.width + nx];
+              if (neighborTerrain === 1) hasWaterNeighbor = true;
+              if (neighborTerrain === 2) hasDirtNeighbor = true;
+              if (neighborTerrain === 3) hasGrassNeighbor = true;
+            }
           }
         }
-      }
-    }
-    
-    // Simple and fast: just process the 3x3 area around the painted tile
-    // This gives marching squares enough context to create good transitions
-    for (let x = centerX - 1; x <= centerX + 1; x++) {
-      for (let y = centerY - 1; y <= centerY + 1; y++) {
-        if (x < 0 || x >= liveField.width || y < 0 || y >= liveField.height) continue;
         
-        // Skip tiles that were just painted - they should stay as solid variants 0 or 10
-        if (paintedTiles.has(`${x},${y}`)) {
-          console.log(`Skipping painted tile (${x}, ${y}) - protecting solid variant`);
-          continue;
+        // Determine atlas and tile case based on terrain and neighbors
+        if (terrain === 1) {
+          // Water tile
+          if (hasGrassNeighbor && field.calculateCompatibleVariant) {
+            tile.type = field.calculateCompatibleVariant(x, y, grassVsWater);
+          } else {
+            tile.type = 12; // Pure water
+          }
+          tile.atlasName = 'atlas-grass-water';
+        } else if (terrain === 3) {
+          // Grass tile
+          if (hasWaterNeighbor && field.calculateCompatibleVariant) {
+            tile.type = field.calculateCompatibleVariant(x, y, grassVsWater);
+            tile.atlasName = 'atlas-grass-water';
+          } else if (hasDirtNeighbor && field.calculateCompatibleVariant) {
+            tile.type = field.calculateCompatibleVariant(x, y, grassVsDirt);
+            tile.atlasName = 'atlas-grass-dirt';
+          } else {
+            tile.type = 6; // Pure grass
+            tile.atlasName = 'atlas-grass-dirt';
+          }
+        } else if (terrain === 2) {
+          // Dirt tile
+          if (hasGrassNeighbor && field.calculateCompatibleVariant) {
+            tile.type = field.calculateCompatibleVariant(x, y, grassVsDirt);
+          } else {
+            tile.type = 12; // Pure dirt
+          }
+          tile.atlasName = 'atlas-grass-dirt';
         }
         
-        // Apply marching squares to this tile
-        this.applyMarchingSquaresToTile(x, y);
+        if (tile.updateAtlasCoordinates) {
+          tile.updateAtlasCoordinates();
+        }
       }
     }
-    
-    // Update meshes for the processed area
-    this.forceMeshUpdates(centerX, centerY, 1);
-    
-    console.log(`Marching squares complete for (${centerX}, ${centerY})`);
   };
   
-  // Helper function to apply marching squares to a single tile
-  forge.applyMarchingSquaresToTile = function(x, y) {
-    if (!liveField.calculateCompatibleVariant) {
-      console.warn('liveField.calculateCompatibleVariant not available');
+  // Throttle for resource placement (prevent lag during drag)
+  forge._lastResourcePlace = 0;
+  forge._resourcePlaceDelay = 150; // ms between placements
+  forge._modelCache = new Map(); // Cache loaded containers
+  
+  // Place a resource manually at position
+  // Track placed resource meshes for removal
+  forge._placedResources = new Map(); // key -> mesh root
+  
+  forge.placeResourceAt = function(pos) {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    // Throttle placements to reduce lag
+    const now = Date.now();
+    if (now - this._lastResourcePlace < this._resourcePlaceDelay) return;
+    this._lastResourcePlace = now;
+    
+    const key = `${pos.x},${pos.y}`;
+    if (!this._placedKeys) this._placedKeys = new Set();
+    
+    // Handle eraser tool
+    if (this.state.currentResource === 'eraser') {
+      if (this._placedResources.has(key)) {
+        const mesh = this._placedResources.get(key);
+        if (mesh && mesh.dispose) mesh.dispose();
+        this._placedResources.delete(key);
+        this._placedKeys.delete(key);
+      }
       return;
     }
     
-    const tile = liveField.tiles[y * liveField.width + x];
-    if (!tile) return;
+    const resourceType = this.resourceTypes[this.state.currentResource];
+    if (!resourceType || !resourceType.path) return;
     
-    // DEBUG: Show what we're working with
-    console.log(`MS Debug: Tile at (${x}, ${y}) is currently type ${tile.type}`);
+    // Don't place on water
+    const index = pos.y * field.width + pos.x;
+    if (field.terrainTypes[index] === 1) return;
     
-    // Let the existing marching squares system calculate the correct variant
-    const tileVariant = liveField.calculateCompatibleVariant(x, y);
+    // Don't place in disabled chunks
+    const chunkX = Math.floor(pos.x / field.chunkSize);
+    const chunkZ = Math.floor(pos.y / field.chunkSize);
+    if (field.chunkMask && field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
     
-    console.log(`MS Debug: Marching squares calculated variant ${tileVariant} for tile at (${x}, ${y})`);
+    // Check if already occupied
+    if (this._placedKeys.has(key)) return;
+    this._placedKeys.add(key);
     
-    // Only update if the tile actually needs to change
-    if (tile.type !== tileVariant) {
-      console.log(`MS Debug: Updating tile (${x}, ${y}) from ${tile.type} to ${tileVariant}`);
-      tile.type = tileVariant;
-      tile.atlasName = 'atlas-grass';
+    // Calculate world position
+    const worldX = (pos.x + 0.5) * TILE_SIZE;
+    const worldZ = (pos.y + 0.5) * TILE_SIZE;
+    const worldY = field.getHeightVariation ? field.getHeightVariation(pos.x, pos.y) : 0;
+    
+    // Use cached container for better perf
+    const path = resourceType.path;
+    let containerPromise = this._modelCache.get(path);
+    
+    if (!containerPromise) {
+      containerPromise = BABYLON.SceneLoader.LoadAssetContainerAsync(path, undefined, gfx.scene);
+      this._modelCache.set(path, containerPromise);
+    }
+    
+    containerPromise.then(container => {
+      const instance = container.instantiateModelsToScene();
+      const root = instance.rootNodes[0];
       
-      // Update atlas coordinates if the method exists
-      if (tile.updateAtlasCoordinates) {
-        tile.updateAtlasCoordinates();
-      }
-    } else {
-      console.log(`MS Debug: Tile (${x}, ${y}) already correct variant ${tileVariant}`);
-    }
-  };
-  
-  // Fix adjacent tiles for smooth transitions
-  forge.fixAdjacentTilesInArea = function(centerX, centerY, brushSize) {
-    if (!ENABLE_FORGE || !liveField) return;
-    
-    // Expand the area to fix tiles around the painted area
-    // Use brush size + 2 to ensure we cover transition areas
-    const expandSize = Math.max(brushSize + 2, 3);
-    
-    for (let x = centerX - expandSize; x <= centerX + expandSize; x++) {
-      for (let y = centerY - expandSize; y <= centerY + expandSize; y++) {
-        if (x < 0 || x >= liveField.width || y < 0 || y >= liveField.height) continue;
-        
-                 // Calculate compatible tile variant using marching squares
-         if (liveField.calculateCompatibleVariant) {
-           const tileVariant = liveField.calculateCompatibleVariant(x, y);
-           const tile = liveField.tiles[y * liveField.width + x];
-           
-           if (tile && tile.type !== tileVariant) {
-             tile.type = tileVariant;
-             
-             // Ensure the tile uses the grass atlas
-             tile.atlasName = 'atlas-grass';
-             
-             // Update atlas coordinates if the method exists
-             if (tile.updateAtlasCoordinates) {
-               tile.updateAtlasCoordinates();
-             }
-           }
-         } else {
-           console.warn('liveField.calculateCompatibleVariant not available');
-         }
-      }
-    }
-    
-    // Force mesh updates for the affected chunks
-    this.forceMeshUpdates(centerX, centerY, expandSize);
-  };
-  
-  // Force mesh updates for ONLY the specific tiles that changed
-  forge.forceMeshUpdates = function(centerX, centerY, radius) {
-    if (!ENABLE_FORGE || !liveField || !gfx || !gfx.scene) return;
-    
-    console.log(`Updating meshes for only the 3x3 area around (${centerX}, ${centerY})`);
-    
-    // Only update the specific tiles in the 3x3 area that actually changed
-    for (let x = centerX - radius; x <= centerX + radius; x++) {
-      for (let y = centerY - radius; y <= centerY + radius; y++) {
-        if (x < 0 || x >= liveField.width || y < 0 || y >= liveField.height) continue;
-        
-        // Find the specific tile mesh for this position and update it
-        this.updateSingleTileMesh(x, y);
-      }
-    }
-  };
-  
-  // Force mesh creation for all chunks (used during initialization)
-  forge.forceAllMeshUpdates = function() {
-    if (!ENABLE_FORGE || !liveField || !gfx || !gfx.scene) return;
-    
-    console.log('Creating meshes for all chunks...');
-    
-    // Get all chunks and create meshes for them
-    for (const [key, chunk] of liveField.chunks) {
-      if (chunk && chunk.needsMesh) {
-        console.log(`Creating mesh for chunk ${chunk.chunkX},${chunk.chunkZ}`);
-        
-        // Create the mesh using our fallback function
-        const mesh = this.createTerrainMesh(gfx.scene, chunk, TILE_SIZE);
-        
-        if (mesh) {
-          // Store the mesh in the chunk
-          chunk.mesh = mesh;
-          chunk.needsMesh = false;
-          console.log(`Mesh created for chunk ${chunk.chunkX},${chunk.chunkZ}`);
-        } else {
-          console.log(`Failed to create mesh for chunk ${chunk.chunkX},${chunk.chunkZ}`);
-        }
-      }
-    }
-    
-    console.log('All chunk meshes created');
-    
-    // Debug: Count meshes in scene
-    const meshCount = gfx.scene.meshes.length;
-    console.log(`Total meshes in scene: ${meshCount}`);
-    
-    // Debug: List all meshes
-    gfx.scene.meshes.forEach((mesh, index) => {
-      console.log(`Mesh ${index}: ${mesh.name} at (${mesh.position.x}, ${mesh.position.y}, ${mesh.position.z})`);
-    });
-  };
-  
-  // Fallback terrain mesh creation function
-  forge.createTerrainMesh = function(scene, chunk, tileSize) {
-    if (!chunk) return null;
-    
-    console.log(`Creating terrain mesh for chunk ${chunk.chunkX},${chunk.chunkZ}`);
-    
-    // Create individual tile meshes for this chunk to show actual terrain
-    // Use larger tiles (4x4 tile groups) to reduce density
-    const tileGroupSize = 4; // Group 4x4 tiles together
-    const chunkMeshes = [];
-    
-    for (let x = chunk.startX; x < chunk.endX; x += tileGroupSize) {
-      for (let z = chunk.startZ; z < chunk.endZ; z += tileGroupSize) {
-        // Get the dominant tile type in this 4x4 area
-        let dominantType = 5; // Default to main grass
-        let tileCount = 0;
-        
-        for (let dx = 0; dx < tileGroupSize && x + dx < chunk.endX; dx++) {
-          for (let dz = 0; dz < tileGroupSize && z + dz < chunk.endZ; dz++) {
-            const tileIndex = (z + dz) * liveField.width + (x + dx);
-            const tile = liveField.tiles[tileIndex];
-            if (tile) {
-              dominantType = tile.type;
-              tileCount++;
-            }
-          }
-        }
-        
-                         if (tileCount > 0) {
-          console.log(`Creating tile mesh at (${x}, ${z}) with type ${dominantType}`);
-          
-          // Create a larger tile mesh representing the 4x4 area
-          const tileMesh = BABYLON.MeshBuilder.CreateBox(
-            `tile_${x}_${z}`, 
-            { width: tileSize * tileGroupSize, height: 0.1, depth: tileSize * tileGroupSize }, 
-            scene
-          );
-           
-           // Position the tile to cover the exact 4x4 area without gaps
-           tileMesh.position.x = x * tileSize;
-           tileMesh.position.z = z * tileSize;
-           tileMesh.position.y = 0.05; // Slightly above ground
-          
-          // Create material with actual atlas texture
-          const material = new BABYLON.StandardMaterial(`tile_mat_${x}_${z}`, scene);
-          
-          // Try to load the actual atlas texture
-          const atlasName = this.getAtlasNameForTileType(dominantType);
-          console.log(`Using atlas: ${atlasName} for tile type ${dominantType}`);
-          
-          if (atlasName) {
-            try {
-              const texture = new BABYLON.Texture(`assets/textures/${atlasName}.png`, scene);
-              material.diffuseTexture = texture;
-              console.log(`Texture loaded successfully for ${atlasName}`);
-            } catch (error) {
-              console.error(`Failed to load texture ${atlasName}:`, error);
-              // Fallback to colored material
-              material.diffuseColor = this.getColorForTileType(dominantType);
-            }
-            
-            // Set UV coordinates for the specific tile variant
-            const uvCoords = this.getUVCoordinatesForTileType(dominantType);
-            if (uvCoords) {
-              // Apply UV mapping for the specific tile variant
-              material.diffuseTexture.uScale = uvCoords.scale;
-              material.diffuseTexture.vScale = uvCoords.scale;
-              material.diffuseTexture.uOffset = uvCoords.uOffset;
-              material.diffuseTexture.vOffset = uvCoords.vOffset;
-            }
-          } else {
-            // Fallback to colored material if texture fails
-            material.diffuseColor = this.getColorForTileType(dominantType);
-          }
-          
-          // Add some height variation based on position
-          const heightVariation = Math.sin(x * 0.05) * Math.cos(z * 0.05) * 0.2;
-          tileMesh.position.y += heightVariation;
-          
-          tileMesh.material = material;
-          tileMesh.isVisible = true;
-          tileMesh.isPickable = true;
-          
-          chunkMeshes.push(tileMesh);
-        }
-      }
-    }
-    
-    // Create a parent mesh to hold all tiles
-    const parentMesh = new BABYLON.Mesh(`chunk_${chunk.chunkX}_${chunk.chunkZ}`, scene);
-    parentMesh.isVisible = false; // Parent is invisible, only tiles show
-    
-    // Parent all tile meshes to the chunk mesh
-    chunkMeshes.forEach(mesh => {
-      mesh.parent = parentMesh;
-    });
-    
-    // Store the tile meshes in the chunk for later updates
-    chunk.tileMeshes = chunkMeshes;
-    
-    console.log(`Created ${chunkMeshes.length} tile group meshes for chunk ${chunk.chunkX},${chunk.chunkZ}`);
-    
-    return parentMesh;
-  };
-  
-  // Get atlas name for tile type - using grass atlas for debugging
-  forge.getAtlasNameForTileType = function(tileType) {
-    // Using grass atlas for debugging
-    return 'atlas-grass';
-  };
-  
-  // Get UV coordinates for tile type - use the actual tile type for proper mapping
-  forge.getUVCoordinatesForTileType = function(tileType) {
-    // Use the actual tile type, not the selected variant
-    // This ensures marching squares variants (1-9, 11-15) map correctly
-    
-    // Calculate UV coordinates for the specific atlas tile
-    // Assuming tiles are positioned in a 4x4 grid
-    const row = Math.floor(tileType / 4);
-    const col = tileType % 4;
-    
-    console.log(`UV mapping: tile type ${tileType} -> row ${row}, col ${col}`);
-    
-    return {
-      scale: 0.25, // Each tile takes 1/4 of the texture
-      uOffset: col * 0.25,
-      vOffset: (3 - row) * 0.25 // Flip V coordinate (0 is at bottom)
-    };
-  };
-  
-  // Get fallback color for tile type
-  forge.getColorForTileType = function(tileType) {
-    switch (tileType) {
-      case 0: // Empty grass
-        return new BABYLON.Color3(0.2, 0.8, 0.2);
-      case 1: // Grass variant 1
-        return new BABYLON.Color3(0.3, 0.9, 0.3);
-      case 2: // Grass variant 2
-        return new BABYLON.Color3(0.1, 0.7, 0.1);
-      case 5: // Main grass type
-        return new BABYLON.Color3(0.4, 0.9, 0.4);
-      default:
-        return new BABYLON.Color3(0.5, 0.8, 0.5);
-    }
-  };
-  
-  // Update a single tile mesh at specific coordinates
-  forge.updateSingleTileMesh = function(x, y) {
-    if (!ENABLE_FORGE || !liveField || !gfx || !gfx.scene) return;
-    
-    // Find the tile mesh that covers this position
-    // Since we group tiles in 4x4 areas, find which group this tile belongs to
-    const tileGroupSize = 4;
-    const groupX = Math.floor(x / tileGroupSize) * tileGroupSize;
-    const groupZ = Math.floor(y / tileGroupSize) * tileGroupSize;
-    
-    // Look for the mesh that covers this 4x4 group
-    const meshName = `tile_${groupX}_${groupZ}`;
-    const tileMesh = gfx.scene.getMeshByName(meshName);
-    
-    if (tileMesh && tileMesh.material) {
-      // Get the current tile type at this position
-      const tile = liveField.tiles[y * liveField.width + x];
-      if (tile) {
-        console.log(`Updating mesh ${meshName} at (${x}, ${y}) to type ${tile.type}`);
-        
-        // Update the material to reflect the new tile type
-        if (tileMesh.material.diffuseTexture) {
-          // Update UV coordinates for the specific tile type
-          const uvCoords = this.getUVCoordinatesForTileType(tile.type);
-          if (uvCoords) {
-            tileMesh.material.diffuseTexture.uScale = uvCoords.scale;
-            tileMesh.material.diffuseTexture.vScale = uvCoords.scale;
-            tileMesh.material.diffuseTexture.uOffset = uvCoords.uOffset;
-            tileMesh.material.diffuseTexture.vOffset = uvCoords.vOffset;
-          }
-        } else {
-          // Fallback to colored material
-          tileMesh.material.diffuseColor = this.getColorForTileType(tile.type);
-        }
-      }
-    }
-  };
-  
-  // Update tile meshes in a chunk to reflect current terrain
-  forge.updateChunkTileMeshes = function(chunk) {
-    if (!chunk || !chunk.tileMeshes) return;
-    
-    chunk.tileMeshes.forEach(tileMesh => {
-      // Extract position from mesh name (tile_x_z)
-      const nameParts = tileMesh.name.split('_');
-      const x = parseInt(nameParts[1]);
-      const z = parseInt(nameParts[2]);
+      root.setEnabled(true);
+      root.getDescendants().forEach(n => {
+        if (n.setEnabled) n.setEnabled(true);
+      });
       
-      if (!isNaN(x) && !isNaN(z)) {
-        // Get the dominant tile type in the 4x4 area
-        const tileGroupSize = 4;
-        let dominantType = 5; // Default to main grass
-        
-        for (let dx = 0; dx < tileGroupSize; dx++) {
-          for (let dz = 0; dz < tileGroupSize; dz++) {
-            const tileIndex = (z + dz) * liveField.width + (x + dx);
-            const tile = liveField.tiles[tileIndex];
-            if (tile) {
-              dominantType = tile.type;
-            }
-          }
-        }
-        
-        if (tileMesh.material) {
-          // Update material with new atlas texture
-          const atlasName = this.getAtlasNameForTileType(dominantType);
-          if (atlasName && !tileMesh.material.diffuseTexture) {
-            // Create texture if it doesn't exist
-            const texture = new BABYLON.Texture(`assets/textures/${atlasName}.png`, gfx.scene);
-            tileMesh.material.diffuseTexture = texture;
-          }
-          
-          if (tileMesh.material.diffuseTexture) {
-            // Update UV coordinates for the new tile type
-            const uvCoords = this.getUVCoordinatesForTileType(dominantType);
-            if (uvCoords) {
-              tileMesh.material.diffuseTexture.uScale = uvCoords.scale;
-              tileMesh.material.diffuseTexture.vScale = uvCoords.scale;
-              tileMesh.material.diffuseTexture.uOffset = uvCoords.uOffset;
-              tileMesh.material.diffuseTexture.vOffset = uvCoords.vOffset;
-            }
-          } else {
-            // Fallback to colored material
-            tileMesh.material.diffuseColor = this.getColorForTileType(dominantType);
-          }
-        }
+      root.position = new Vec3(worldX, worldY, worldZ);
+      root.scaling = new Vec3(resourceType.scale, resourceType.scale, resourceType.scale);
+      root.rotation = new Vec3(0, Math.random() * Math.PI * 2, 0);
+      
+      // Track for eraser tool
+      this._placedResources.set(key, root);
+      
+      if (gfx.setupMeshShadows) {
+        gfx.setupMeshShadows(root);
       }
     });
   };
   
-  // Change brush size
-  forge.setBrushSize = function(size) {
-    if (!ENABLE_FORGE) return;
+  // Rebuild chunk meshes
+  forge.rebuildChunks = function(chunkKeys) {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene || !gfx.createTerrainMesh) return;
     
-    this.state.brushSize = Math.max(1, Math.min(10, size)); // Clamp between 1-10
-    console.log(`Brush size set to ${this.state.brushSize}`);
+    chunkKeys.forEach(key => {
+      const chunk = field.chunks.get(key);
+      if (chunk) {
+        // Dispose old mesh
+        if (chunk.mesh) {
+          chunk.mesh.dispose();
+          chunk.mesh = null;
+        }
+        
+        // Refresh chunk tiles from field (tiles are object refs so should be current, 
+        // but let's rebuild the tiles array to be safe)
+        const chunkTiles = [];
+        for (let z = chunk.startZ; z < chunk.endZ; z++) {
+          for (let x = chunk.startX; x < chunk.endX; x++) {
+            chunkTiles.push(field.tiles[z * field.width + x]);
+          }
+        }
+        chunk.tiles = chunkTiles;
+        
+        // Directly recreate the mesh
+        const [chunkX, chunkZ] = key.split(',').map(Number);
+        field.createChunkMesh(chunkX, chunkZ, gfx.scene, gfx.createTerrainMesh);
+      }
+    });
   };
   
-  // Change terrain type
-  forge.setTerrainType = function(type) {
-    if (!ENABLE_FORGE || !this.terrainTypes[type]) return;
-    
-    this.state.currentBrush = type;
-    console.log(`Terrain type set to ${this.terrainTypes[type].name}`);
-  };
-  
-  // Change selected tile variant
-  forge.setTileVariant = function(variant) {
-    if (!ENABLE_FORGE) return;
-    
-    const terrain = this.terrainTypes[this.state.currentBrush];
-    if (variant >= 0 && variant < terrain.variants) {
-      this.state.selectedTile = variant;
-      console.log(`Tile variant set to ${variant}`);
+  // Generate a new map
+  forge.generateNewMap = function(width, height, seed) {
+    if (!window.Field) {
+      console.error('Field class not available');
+      return;
     }
+    
+    this.state.mapWidth = width || this.state.mapWidth;
+    this.state.mapHeight = height || this.state.mapHeight;
+    this.state.mapSeed = seed || Math.floor(Math.random() * 1000000);
+    
+    console.log(`🗺️ Generating new map: ${this.state.mapWidth}x${this.state.mapHeight}, seed: ${this.state.mapSeed}`);
+    
+    // Check if this will be a large map and pre-enable billboard mode
+    const totalTiles = this.state.mapWidth * this.state.mapHeight;
+    if (totalTiles >= 16384 && gfx && gfx.setBillboardOnlyMode) {
+      gfx.setBillboardOnlyMode(true);
+      const btn = document.getElementById('billboard-toggle');
+      if (btn) {
+        btn.classList.add('active');
+        btn.textContent = '🖼️ Billboard ON';
+      }
+      console.log('⚡ Pre-enabled billboard mode for large map');
+    }
+    
+    // Clear placed resource tracking
+    this._placedKeys = new Set();
+    this._placedResources = new Map();
+    
+    // Dispose old field
+    if (window.liveField && window.liveField.dispose) {
+      window.liveField.dispose();
+    }
+    
+    // Create new field
+    window.liveField = new Field({
+      width: this.state.mapWidth,
+      height: this.state.mapHeight,
+      seed: this.state.mapSeed
+    });
+    
+    // Stretch table for new map size
+    if (gfx.table && gfx.stretchTable) {
+      gfx.stretchTable(gfx.table);
+    }
+    
+    // Load all chunks with resources (billboard mode already set above for large maps)
+    this.loadAllChunks(true);
+    
+    // Rebuild table to match new map
+    this.rebuildTable();
+    
+    // Apply current layer visibility and billboard settings after load
+    // Use timeout to catch async-loaded models
+    setTimeout(() => {
+      this.applyLayerVisibility();
+    }, 100);
+    setTimeout(() => {
+      this.applyLayerVisibility();
+    }, 500);
+    setTimeout(() => {
+      this.applyLayerVisibility();
+    }, 1500);
+    
+    // Update camera for new map size (after chunks so field dimensions are set)
+    // Don't reset camera - user may be inspecting a specific area
+    
+    console.log('✅ New map generated');
   };
   
-  // Fill entire field with terrain type
-  forge.fillField = function(terrainType, variant = 0) {
-    if (!ENABLE_FORGE || !liveField) return;
+  // Fill entire map with terrain type
+  forge.fillMap = function(terrainType) {
+    const field = window.liveField;
+    if (!field) return;
     
     const terrain = this.terrainTypes[terrainType];
     if (!terrain) return;
     
-    console.log(`Filling field with ${terrain.name}`);
+    console.log(`🎨 Filling map with ${terrain.name}...`);
     
-    for (let i = 0; i < liveField.tiles.length; i++) {
-      const tile = liveField.tiles[i];
-      tile.type = variant;
-      tile.atlasName = terrain.atlas;
-      tile.updateAtlasCoordinates();
+    // Update all tiles
+    for (let i = 0; i < field.tiles.length; i++) {
+      field.terrainTypes[i] = terrain.terrainType;
+      field.tiles[i].type = terrain.solidTile;
+      field.tiles[i].atlasName = terrain.atlas;
     }
     
-    // Fix all adjacent tiles for smooth transitions
-    liveField.fixAdjacentTiles();
+    // Rebuild all chunks
+    const allChunks = new Set(field.chunks.keys());
+    this.rebuildChunks(allChunks);
+    
+    console.log('✅ Fill complete');
   };
   
-  // Clear field (set all to empty)
-  forge.clearField = function() {
-    if (!ENABLE_FORGE || !liveField) return;
+  // Export map data as .aether format (compact binary-ish)
+  forge.exportMap = function() {
+    const field = window.liveField;
+    if (!field) return null;
     
-    console.log('Clearing field');
-    this.fillField('grass', 0); // Set all to empty grass
-  };
-  
-  // Reset camera to default position
-  forge.resetCamera = function() {
-    if (!ENABLE_FORGE || !gfx || !gfx.camera) return;
+    // Compress terrain types using RLE (Run-Length Encoding)
+    const terrainRLE = this.encodeRLE(field.terrainTypes);
     
-    console.log('Resetting camera');
-    
-    // Position camera high above for near-top-down view of the 200x200 field
-    gfx.camera.position = new Vec3(0, 200, 0);
-    
-    // Look at a point slightly in front to avoid gimbal lock
-    gfx.camera.setTarget(new Vec3(0, 0, -50));
-    
-    // Set standard up vector
-    gfx.camera.upVector = new Vec3(0, 1, 0);
-    
-    // Force the camera to recalculate its view matrix
-    gfx.camera.getViewMatrix();
-    
-    // Update camera status
-    this.updateCameraStatus('Near Top-Down View');
-  };
-  
-  // Set camera to top-down view for map editing
-  forge.setTopView = function() {
-    if (!ENABLE_FORGE || !gfx || !gfx.camera) return;
-    
-    console.log('Setting top view');
-    
-    // Position camera above the center of the field
-    const fieldCenterX = liveField ? (liveField.width * TILE_SIZE) / 2 : 0;
-    const fieldCenterZ = liveField ? (liveField.height * TILE_SIZE) / 2 : 0;
-    
-    // For UniversalCamera, we need to work WITH the camera system, not against it
-    // Position camera high above the field
-    gfx.camera.position = new Vec3(fieldCenterX, 200, fieldCenterZ);
-    
-    // Instead of trying to force it to look straight down, let's create a "near-top-down" view
-    // Look at a point slightly in front of the camera (in the negative Z direction)
-    // This gives us a view that's almost top-down but avoids the gimbal lock issue
-    gfx.camera.setTarget(new Vec3(fieldCenterX, 0, fieldCenterZ - 50));
-    
-    // Set the up vector to point in the positive Y direction (standard up)
-    gfx.camera.upVector = new Vec3(0, 1, 0);
-    
-    // Force the camera to recalculate its view matrix
-    gfx.camera.getViewMatrix();
-    
-    // Update camera status
-    this.updateCameraStatus('Near Top-Down View');
-  };
-  
-  // Set camera to isometric view for better map editing
-  forge.setIsometricView = function() {
-    if (!ENABLE_FORGE || !gfx || !gfx.camera) return;
-    
-    console.log('Setting isometric view');
-    
-    // Position camera at an isometric angle
-    const fieldCenterX = liveField ? (liveField.width * TILE_SIZE) / 2 : 0;
-    const fieldCenterZ = liveField ? (liveField.height * TILE_SIZE) / 2 : 0;
-    
-    // Set camera position for isometric view (45-degree angle)
-    const distance = 40;
-    gfx.camera.position = new Vec3(
-      fieldCenterX - distance,
-      30,
-      fieldCenterZ - distance
-    );
-    
-    // Look at the center of the field
-    gfx.camera.setTarget(new Vec3(fieldCenterX, 0, fieldCenterZ));
-    
-    // Update camera status
-    this.updateCameraStatus('Isometric View');
-  };
-  
-  // Update camera status display
-  forge.updateCameraStatus = function(mode) {
-    const statusElement = document.getElementById('camera-status');
-    if (statusElement) {
-      statusElement.textContent = `Mode: ${mode}`;
+    // Compress chunk mask as bitfield
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
+    const chunkBits = [];
+    for (let cz = 0; cz < chunksZ; cz++) {
+      for (let cx = 0; cx < chunksX; cx++) {
+        chunkBits.push(field.chunkMask.get(`${cx},${cz}`) !== false ? 1 : 0);
+      }
     }
-  };
-  
-  // Update button visual states
-  forge.updateButtonStates = function() {
-    // No special button states needed anymore
-  };
-  
-  // Handle keyboard shortcuts for camera controls
-  forge.handleKeyboard = function(e) {
-    if (!ENABLE_FORGE) return;
     
-    // Only handle shortcuts when not typing in input fields
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    
-    switch (e.key.toLowerCase()) {
-      case '1':
-        this.resetCamera();
-        break;
-      case '2':
-        this.setTopView();
-        break;
-      case '3':
-        this.setIsometricView();
-        break;
-      case 'f9':
-        // Toggle Babylon Inspector like in main game
-        if (gfx && gfx.scene) {
-          gfx.scene.debugLayer.show();
+    // Encode manually placed resources
+    const placedResources = [];
+    if (this._placedResources) {
+      for (const [key, mesh] of this._placedResources) {
+        if (mesh && !mesh.isDisposed()) {
+          // Find which resource type this is by checking mesh name or scale
+          let resType = 'trees';
+          for (const [type, info] of Object.entries(this.resourceTypes)) {
+            if (Math.abs(mesh.scaling.x - info.scale) < 0.1) {
+              resType = type;
+              break;
+            }
+          }
+          placedResources.push(`${key}:${resType}`);
         }
-        break;
-      case 'escape':
-        // Reset camera on escape
-        this.resetCamera();
-        break;
-      case 'r':
-        // Reattach camera controls
-        this.ensureCameraControls();
-        break;
-      case '0':
-        // Toggle camera controls on/off
-        this.toggleCameraControls();
-        break;
+      }
     }
+    
+    const mapData = {
+      v: 2,  // Version 2 = new format
+      w: field.width,
+      h: field.height,
+      s: field.seed,
+      cs: field.chunkSize,
+      t: terrainRLE,           // RLE-compressed terrain
+      cm: chunkBits.join(''),  // Chunk mask as binary string "11101110..."
+      ta: this.encodeTileAtlas(field.tiles),  // Tile atlas info
+      r: placedResources.length > 0 ? placedResources.join(';') : undefined  // Placed resources
+    };
+    
+    const json = JSON.stringify(mapData);
+    const compressed = this.compressString(json);
+    
+    console.log(`📦 Map exported: ${(json.length / 1024).toFixed(1)} KB → ${(compressed.length / 1024).toFixed(1)} KB`);
+    
+    // Trigger download with .aether extension
+    const blob = new Blob([compressed], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${field.seed}.aeg`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    return mapData;
   };
   
-  // Ensure camera controls are properly attached and working
-  forge.ensureCameraControls = function() {
-    if (!ENABLE_FORGE || !gfx || !gfx.camera || !gfx.canvas) return;
+  // RLE encode an array of values
+  forge.encodeRLE = function(arr) {
+    if (!arr || arr.length === 0) return '';
+    const runs = [];
+    let current = arr[0];
+    let count = 1;
     
-    // Check if camera is already attached
-    if (!gfx.camera.inputs || gfx.camera.inputs.length === 0) {
-      console.log('Reattaching camera controls...');
-      gfx.camera.attachControl(gfx.canvas, true);
+    for (let i = 1; i < arr.length; i++) {
+      if (arr[i] === current && count < 255) {
+        count++;
+      } else {
+        runs.push(`${current}:${count}`);
+        current = arr[i];
+        count = 1;
+      }
     }
-    
-    // Ensure camera movement settings are correct - LUDICROUS SPEED NOW!
-    if (gfx.camera.speed !== undefined) {
-      gfx.camera.speed = 25.0; // 3x faster movement (was 8.0) - NOW REALLY FAST!
-    }
-    if (gfx.camera.angularSpeed !== undefined) {
-      gfx.camera.angularSpeed = 15.0; // SUPER FAST rotation - turn the camera way more with each mouse movement!
-    }
-    if (gfx.camera.panningSensibility !== undefined) {
-      gfx.camera.panningSensibility = 80; // 4x faster panning (was 20) - ZOOM AROUND!
-    }
-    if (gfx.camera.wheelPrecision !== undefined) {
-      gfx.camera.wheelPrecision = 0.005; // 5x faster zoom (was 0.025) - INSTANT ZOOM!
-    }
-    
-    console.log('Camera controls verified and configured - LUDICROUS SPEED ACHIEVED! 🚀');
+    runs.push(`${current}:${count}`);
+    return runs.join(',');
   };
   
-  // Toggle camera controls on/off
-  forge.toggleCameraControls = function() {
-    if (!ENABLE_FORGE || !gfx || !gfx.camera || !gfx.canvas) return;
+  // Decode RLE back to array
+  forge.decodeRLE = function(str) {
+    if (!str) return [];
+    const arr = [];
+    const runs = str.split(',');
+    for (const run of runs) {
+      const [val, count] = run.split(':').map(Number);
+      for (let i = 0; i < count; i++) arr.push(val);
+    }
+    return arr;
+  };
+  
+  // Encode tile atlas names (most are same, so group them)
+  forge.encodeTileAtlas = function(tiles) {
+    // Map atlas names to short codes
+    const atlasMap = {
+      'atlas-grass-dirt': 'gd',
+      'atlas-grass-water': 'gw'
+    };
     
-    if (gfx.camera.inputs && gfx.camera.inputs.length > 0) {
-      console.log('Detaching camera controls...');
-      gfx.camera.detachControl(gfx.canvas);
+    const codes = tiles.map(t => {
+      const code = atlasMap[t.atlasName] || 'gd';
+      return `${code}${t.type}`;
+    });
+    
+    // RLE encode the codes
+    const runs = [];
+    let current = codes[0];
+    let count = 1;
+    
+    for (let i = 1; i < codes.length; i++) {
+      if (codes[i] === current && count < 255) {
+        count++;
+      } else {
+        runs.push(count > 1 ? `${current}*${count}` : current);
+        current = codes[i];
+        count = 1;
+      }
+    }
+    runs.push(count > 1 ? `${current}*${count}` : current);
+    return runs.join(',');
+  };
+  
+  // Decode tile atlas
+  forge.decodeTileAtlas = function(str) {
+    const atlasMap = { 'gd': 'atlas-grass-dirt', 'gw': 'atlas-grass-water' };
+    const tiles = [];
+    
+    if (!str) return tiles;
+    
+    const runs = str.split(',');
+    for (const run of runs) {
+      let code, count;
+      if (run.includes('*')) {
+        [code, count] = run.split('*');
+        count = parseInt(count);
+      } else {
+        code = run;
+        count = 1;
+      }
+      
+      const atlas = atlasMap[code.slice(0, 2)] || 'atlas-grass-dirt';
+      const type = parseInt(code.slice(2));
+      
+      for (let i = 0; i < count; i++) {
+        tiles.push({ atlasName: atlas, type: type });
+      }
+    }
+    return tiles;
+  };
+  
+  // Simple LZW-ish string compression
+  forge.compressString = function(str) {
+    // For now, just return as-is - can add LZ compression later
+    // Browser's native compression via CompressionStream is async
+    return str;
+  };
+  
+  // Decompress string
+  forge.decompressString = function(str) {
+    return str;
+  };
+  
+  // Import map data (supports v1 JSON and v2 .aether format)
+  forge.importMap = function(mapData) {
+    if (!window.Field) return;
+    
+    // Detect format version and normalize
+    let width, height, seed, terrainTypes, tiles, chunkMask;
+    
+    if (mapData.v === 2) {
+      // New compact format
+      width = mapData.w;
+      height = mapData.h;
+      seed = mapData.s;
+      terrainTypes = this.decodeRLE(mapData.t);
+      tiles = this.decodeTileAtlas(mapData.ta);
+      
+      // Decode chunk mask from binary string
+      const chunksX = Math.ceil(width / (mapData.cs || 16));
+      const chunksZ = Math.ceil(height / (mapData.cs || 16));
+      chunkMask = new Map();
+      if (mapData.cm) {
+        let i = 0;
+        for (let cz = 0; cz < chunksZ; cz++) {
+          for (let cx = 0; cx < chunksX; cx++) {
+            chunkMask.set(`${cx},${cz}`, mapData.cm[i] === '1');
+            i++;
+          }
+        }
+      }
+      console.log(`📥 Importing .aeg map: ${width}x${height}`);
     } else {
-      console.log('Attaching camera controls...');
-      gfx.camera.attachControl(gfx.canvas, true);
+      // Legacy v1 JSON format
+      width = mapData.width;
+      height = mapData.height;
+      seed = mapData.seed;
+      terrainTypes = mapData.terrainTypes;
+      tiles = mapData.tiles;
+      chunkMask = null; // v1 didn't have chunk mask
+      console.log(`📥 Importing legacy map: ${width}x${height}`);
     }
+    
+    // Pre-enable billboard mode for large maps
+    const totalTiles = width * height;
+    if (totalTiles >= 16384 && gfx && gfx.setBillboardOnlyMode) {
+      gfx.setBillboardOnlyMode(true);
+      const btn = document.getElementById('billboard-toggle');
+      if (btn) {
+        btn.classList.add('active');
+        btn.textContent = '🖼️ Billboard ON';
+      }
+    }
+    
+    // Dispose old field
+    if (window.liveField && window.liveField.dispose) {
+      window.liveField.dispose();
+    }
+    
+    // Create new field with imported dimensions
+    window.liveField = new Field({ width, height, seed });
+    const field = window.liveField;
+    
+    // Override terrain data
+    if (terrainTypes) {
+      for (let i = 0; i < terrainTypes.length; i++) {
+        field.terrainTypes[i] = terrainTypes[i];
+      }
+    }
+    
+    // Override tile data
+    if (tiles) {
+      for (let i = 0; i < tiles.length; i++) {
+        field.tiles[i].type = tiles[i].type;
+        field.tiles[i].atlasName = tiles[i].atlasName || 'atlas-grass-dirt';
+      }
+    }
+    
+    // Apply chunk mask if present
+    if (chunkMask) {
+      field.chunkMask = chunkMask;
+    }
+    
+    // Load chunks and rebuild table
+    this.loadAllChunks(true);
+    this.rebuildTable();
+    
+    // Restore manually placed resources (v2 format)
+    if (mapData.r) {
+      this._placedKeys = new Set();
+      this._placedResources = new Map();
+      
+      const resources = mapData.r.split(';');
+      for (const res of resources) {
+        const [key, type] = res.split(':');
+        const [x, y] = key.split(',').map(Number);
+        
+        // Temporarily set resource type and place it
+        const oldResource = this.state.currentResource;
+        this.state.currentResource = type;
+        this._lastResourcePlace = 0; // Reset throttle
+        this.placeResourceAt({ x, y });
+        this.state.currentResource = oldResource;
+      }
+      console.log(`🌲 Restored ${resources.length} placed resources`);
+    }
+    
+    // Apply visibility settings
+    setTimeout(() => this.applyLayerVisibility(), 100);
+    setTimeout(() => this.applyLayerVisibility(), 500);
+    
+    console.log('✅ Map imported');
   };
   
-  // Setup UI controls
+  // Setup UI
   forge.setupUI = function() {
     if (!ENABLE_FORGE) return;
     
-    // Create UI elements for forge controls
-    this.createForgeUI();
-  };
-  
-  // Create forge UI elements
-  forge.createForgeUI = function() {
-    if (!ENABLE_FORGE) return;
-    
-    // Check if UI already exists
-    if (document.getElementById('forge-ui')) {
-      // If UI exists, just show it
-      document.getElementById('forge-ui').style.display = 'block';
-      return;
-    }
-    
     const forgeUI = document.createElement('div');
     forgeUI.id = 'forge-ui';
-    forgeUI.style.cssText = `
-      position: fixed;
-      top: 10px;
-      left: 10px;
-      background: rgba(0, 0, 0, 0.8);
-      color: white;
-      padding: 15px;
-      border-radius: 8px;
-      font-family: Arial, sans-serif;
-      z-index: 1000;
-    `;
-    
-         forgeUI.innerHTML = `
-       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-         <h3 style="margin: 0;">Forge Editor</h3>
-         <button id="close-forge-btn" style="background: #ff6b6b; border: none; color: white; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">✕</button>
-       </div>
-      
-      <div style="margin-bottom: 10px;">
-        <label>Terrain: </label>
-        <select id="terrain-select">
-          <option value="grass">Grass</option>
-          <option value="dirt">Dirt</option>
-          <option value="rock">Rock</option>
-          <option value="sand">Sand</option>
-          <option value="water">Water</option>
-        </select>
-      </div>
-      
-      <div style="margin-bottom: 10px;">
-        <label>Brush Size: </label>
-        <input type="range" id="brush-size" min="1" max="10" value="1">
-        <span id="brush-size-value">1</span>
-      </div>
-      
-             <div style="margin-bottom: 10px;">
-         <label>Tile Variant: </label>
-         <select id="tile-variant">
-           <option value="0">Tile 0 (First Solid Color)</option>
-           <option value="10">Tile 10 (Second Solid Color)</option>
-         </select>
-       </div>
-      
-             <div style="margin-bottom: 10px;">
-         <button id="fill-btn">Fill Field</button>
-         <button id="clear-btn">Clear Field</button>
-         <button id="refresh-field-btn" style="margin-left: 5px;">Refresh Field</button>
-         <button id="debug-ms-btn" style="margin-left: 5px; background: #ff6b6b;">Debug MS</button>
-         <button id="toggle-ms-btn" style="margin-left: 5px; background: #4CAF50;">Auto MS: ON</button>
-       </div>
-      
-      <div style="margin-bottom: 10px;">
-        <h4 style="margin: 0 0 8px 0;">Camera Controls</h4>
-        <div style="font-size: 11px; margin-bottom: 5px;">
-          <strong>Mouse:</strong> Right-click + drag to pan, scroll to zoom
+    forgeUI.innerHTML = `
+      <div class="forge-panel">
+        <h2>🔨 Forge</h2>
+        
+        <div class="forge-section">
+          <h3>Layers</h3>
+          <div class="forge-buttons">
+            <button id="layer-table" class="forge-btn" onclick="forge.setEditingLayer('table')">🎱 Table</button>
+            <button id="layer-terrain" class="forge-btn active" onclick="forge.setEditingLayer('terrain')">🗺️ Terrain</button>
+            <button id="layer-resources" class="forge-btn" onclick="forge.setEditingLayer('resources')">🌲 Resources</button>
+          </div>
+          <div class="forge-buttons" style="margin-top:5px;">
+            <button id="vis-table" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('table')">👁️ Table</button>
+            <button id="vis-terrain" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('terrain')">👁️ Terrain</button>
+            <button id="vis-resources" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('resources')">👁️ Resources</button>
+          </div>
         </div>
-        <div style="font-size: 11px; margin-bottom: 5px;">
-          <strong>Keys:</strong> WASD to move, QE to rotate
+        
+        <div id="table-panel" class="forge-section" style="display:none;">
+          <h3>Table Shape</h3>
+          <p style="font-size:11px;opacity:0.7;">Click chunks to toggle. Builds the pool table boundary.</p>
+          <div class="forge-buttons">
+            <button class="forge-btn" onclick="forge.enableAllChunks()">Enable All</button>
+            <button class="forge-btn" onclick="forge.rebuildTable()">🔄 Rebuild Table</button>
+          </div>
         </div>
-                 <div style="font-size: 11px; margin-bottom: 5px;">
-           <strong>Shortcuts:</strong> 1=Reset, 2=Top, 3=Isometric, F9=Inspector, ESC=Reset
-         </div>
-        <div style="margin-top: 8px;">
-                     <button id="reset-camera-btn" style="margin-right: 5px;">Reset Camera</button>
-           <button id="top-view-btn">Top View</button>
-           <button id="isometric-btn" style="margin-left: 5px;">Isometric</button>
+        
+        <div id="terrain-panel" class="forge-section">
+          <h3>Terrain</h3>
+          <div class="forge-buttons">
+            <button id="brush-grass" class="forge-btn active" onclick="forge.setBrush('grass')">🌿 Grass</button>
+            <button id="brush-dirt" class="forge-btn" onclick="forge.setBrush('dirt')">🟫 Dirt</button>
+            <button id="brush-water" class="forge-btn" onclick="forge.setBrush('water')">🌊 Water</button>
+          </div>
+          <h3>Brush Size: <span id="brush-size-label">1</span></h3>
+          <input type="range" id="brush-size-slider" min="0" max="5" value="1" 
+                 oninput="forge.setBrushSize(this.value)">
         </div>
-                 <div style="margin-top: 5px;">
-           <button id="reattach-camera-btn" style="background: #2196F3; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;">Reattach Camera Controls</button>
-           <button id="test-tile-btn" style="background: #FF5722; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; margin-left: 5px;">Create Test Tile</button>
-         </div>
-                 <div id="camera-status" style="font-size: 10px; margin-top: 5px; opacity: 0.7;">
-           Mode: Top-Down View
-         </div>
+        
+        <div id="resource-panel" class="forge-section" style="display:none;">
+          <h3>Paint Resource</h3>
+          <div class="forge-buttons">
+            <button id="res-trees" class="forge-btn active" onclick="forge.setResource('trees')">🌲 Trees</button>
+            <button id="res-rocks_plain" class="forge-btn" onclick="forge.setResource('rocks_plain')">🪨 Rocks</button>
+            <button id="res-rocks_moss" class="forge-btn" onclick="forge.setResource('rocks_moss')">🪨 Mossy</button>
+            <button id="res-rocks_snow" class="forge-btn" onclick="forge.setResource('rocks_snow')">🏔️ Large</button>
+            <button id="res-eraser" class="forge-btn" onclick="forge.setResource('eraser')">🧹 Eraser</button>
+          </div>
+          <h3 style="margin-top:12px;">Quick Actions</h3>
+          <div class="forge-buttons">
+            <button class="forge-btn" onclick="forge.populateResources()">🌲 Auto-Fill</button>
+            <button class="forge-btn" onclick="forge.clearResources()">🗑️ Clear All</button>
+          </div>
+        </div>
+        
+        <div class="forge-section">
+          <h3>Map</h3>
+          <div class="forge-row">
+            <label>Size:</label>
+            <select id="map-size">
+              <option value="32">32x32 (Tiny)</option>
+              <option value="64" selected>64x64 (Small)</option>
+              <option value="128">128x128 (Medium)</option>
+              <option value="256">256x256 (Large)</option>
+            </select>
+          </div>
+          <div class="forge-row">
+            <label>Seed:</label>
+            <input type="number" id="map-seed" value="12345" style="width: 80px;">
+            <button class="forge-btn-sm" onclick="document.getElementById('map-seed').value = Math.floor(Math.random()*1000000)">🎲</button>
+          </div>
+          <button class="forge-btn" onclick="forge.generateNewMap(
+            parseInt(document.getElementById('map-size').value),
+            parseInt(document.getElementById('map-size').value),
+            parseInt(document.getElementById('map-seed').value)
+          )">🗺️ Generate</button>
+        </div>
+        
+        <div class="forge-section">
+          <h3>Fill</h3>
+          <div class="forge-buttons">
+            <button class="forge-btn" onclick="forge.fillMap('grass')">All Grass</button>
+            <button class="forge-btn" onclick="forge.fillMap('dirt')">All Dirt</button>
+            <button class="forge-btn" onclick="forge.fillMap('water')">All Water</button>
+          </div>
+        </div>
+        
+        <div class="forge-section">
+          <h3>File</h3>
+          <div class="forge-buttons">
+            <button class="forge-btn" onclick="forge.exportMap()">💾 Export</button>
+            <button class="forge-btn" onclick="document.getElementById('import-file').click()">📂 Import</button>
+            <input type="file" id="import-file" accept=".aeg,.json" style="display:none" 
+                   onchange="forge.handleImport(this.files[0])">
+          </div>
+        </div>
+        
+        <div class="forge-section">
+          <h3>Performance</h3>
+          <div class="forge-buttons">
+            <button id="billboard-toggle" class="forge-btn" onclick="forge.toggleBillboardMode()">🖼️ Billboard Only</button>
+          </div>
+        </div>
+        
+        <div class="forge-section forge-help">
+          <h3>Controls</h3>
+          <div>🖱️ Click+drag to paint</div>
+          <div>WASD - Move camera</div>
+          <div>Scroll - Zoom</div>
+          <div>F9 - Inspector</div>
+        </div>
       </div>
-      
-             <div style="font-size: 12px; opacity: 0.8;">
-         Click and drag to paint terrain<br>
-         <small style="opacity: 0.7;">Tiles grouped in 4x4 areas for better performance</small>
-       </div>
     `;
     
     document.body.appendChild(forgeUI);
-    
-    // Setup event handlers
-    this.setupUIEvents();
+    console.log('🎨 Forge UI created');
   };
   
-  // Setup UI event handlers
-  forge.setupUIEvents = function() {
-    if (!ENABLE_FORGE) return;
+  // Set current tool (terrain or resource)
+  // Set editing layer (table, terrain, resources)
+  forge.setEditingLayer = function(layer) {
+    this.state.editingLayer = layer;
+    this.state.currentTool = layer === 'resources' ? 'resource' : layer;
     
-    // Terrain type selector
-    const terrainSelect = document.getElementById('terrain-select');
-    if (terrainSelect) {
-      terrainSelect.addEventListener('change', (e) => {
-        this.setTerrainType(e.target.value);
-      });
+    // Update layer button states
+    document.getElementById('layer-table').classList.toggle('active', layer === 'table');
+    document.getElementById('layer-terrain').classList.toggle('active', layer === 'terrain');
+    document.getElementById('layer-resources').classList.toggle('active', layer === 'resources');
+    
+    // Show/hide panels
+    document.getElementById('table-panel').style.display = layer === 'table' ? 'block' : 'none';
+    document.getElementById('terrain-panel').style.display = layer === 'terrain' ? 'block' : 'none';
+    document.getElementById('resource-panel').style.display = layer === 'resources' ? 'block' : 'none';
+    
+    // Update chunk grid overlay visibility
+    this.updateChunkGridOverlay(layer === 'table');
+    
+    console.log(`📐 Editing layer: ${layer}`);
+  };
+  
+  // Toggle layer visibility
+  forge.toggleLayerVisibility = function(layer) {
+    this.state.layers[layer] = !this.state.layers[layer];
+    const visible = this.state.layers[layer];
+    
+    // Update button state
+    const btn = document.getElementById(`vis-${layer}`);
+    if (btn) {
+      btn.classList.toggle('active', visible);
+      btn.textContent = (visible ? '👁️ ' : '🚫 ') + layer.charAt(0).toUpperCase() + layer.slice(1);
     }
     
-    // Brush size slider
-    const brushSize = document.getElementById('brush-size');
-    const brushSizeValue = document.getElementById('brush-size-value');
-    if (brushSize && brushSizeValue) {
-      brushSize.addEventListener('input', (e) => {
-        const size = parseInt(e.target.value);
-        brushSizeValue.textContent = size;
-        this.setBrushSize(size);
+    // Apply visibility
+    this.applyLayerVisibility();
+    
+    console.log(`${visible ? '👁️' : '🚫'} Layer ${layer}: ${visible ? 'visible' : 'hidden'}`);
+  };
+  
+  // Apply layer visibility to scene
+  forge.applyLayerVisibility = function() {
+    const field = window.liveField;
+    if (!field || !gfx) return;
+    
+    // Table visibility (dynamic parts)
+    if (this._dynamicTableParts) {
+      this._dynamicTableParts.forEach(mesh => {
+        if (mesh && mesh.setEnabled) mesh.setEnabled(this.state.layers.table);
       });
     }
-    
-    // Tile variant input
-    const tileVariant = document.getElementById('tile-variant');
-    if (tileVariant) {
-      tileVariant.addEventListener('change', (e) => {
-        this.setTileVariant(parseInt(e.target.value));
-      });
+    // Also static table (if any parts are still visible)
+    if (gfx.table && gfx.table.parent) {
+      gfx.table.parent.setEnabled(this.state.layers.table);
     }
     
-    // Fill button
-    const fillBtn = document.getElementById('fill-btn');
-    if (fillBtn) {
-      fillBtn.addEventListener('click', () => {
-        const terrainType = terrainSelect ? terrainSelect.value : 'grass';
-        const variant = tileVariant ? parseInt(tileVariant.value) : 0;
-        this.fillField(terrainType, variant);
-      });
-    }
-    
-         // Clear button
-     const clearBtn = document.getElementById('clear-btn');
-     if (clearBtn) {
-       clearBtn.addEventListener('click', () => {
-         this.clearField();
-       });
-     }
-     
-     // Refresh field button
-     const refreshFieldBtn = document.getElementById('refresh-field-btn');
-     if (refreshFieldBtn) {
-       refreshFieldBtn.addEventListener('click', () => {
-         this.initializeField();
-       });
-     }
-    
-    // Reset camera button
-    const resetCameraBtn = document.getElementById('reset-camera-btn');
-    if (resetCameraBtn) {
-      resetCameraBtn.addEventListener('click', () => {
-        this.resetCamera();
-      });
-    }
-    
-    // Top view button
-    const topViewBtn = document.getElementById('top-view-btn');
-    if (topViewBtn) {
-      topViewBtn.addEventListener('click', () => {
-        this.setTopView();
-      });
-    }
-    
-    
-    
-         // Isometric view button
-     const isometricBtn = document.getElementById('isometric-btn');
-     if (isometricBtn) {
-       isometricBtn.addEventListener('click', () => {
-         this.setIsometricView();
-       });
-     }
-     
-     // Debug marching squares button
-     const debugMsBtn = document.getElementById('debug-ms-btn');
-     if (debugMsBtn) {
-       debugMsBtn.addEventListener('click', () => {
-         // Debug around the center of the field
-         const centerX = Math.floor(liveField.width / 2);
-         const centerZ = Math.floor(liveField.height / 2);
-         this.debugMarchingSquares(centerX, centerZ, 5);
-       });
-     }
-     
-     // Close button
-     const closeForgeBtn = document.getElementById('close-forge-btn');
-     if (closeForgeBtn) {
-       closeForgeBtn.addEventListener('click', () => {
-         this.hideForgeUI();
-       });
-     }
-     
-     // Toggle marching squares button
-     const toggleMsBtn = document.getElementById('toggle-ms-btn');
-     if (toggleMsBtn) {
-       toggleMsBtn.addEventListener('click', () => {
-         this.state.autoMarchingSquares = !this.state.autoMarchingSquares;
-         const isOn = this.state.autoMarchingSquares;
-         toggleMsBtn.textContent = `Auto MS: ${isOn ? 'ON' : 'OFF'}`;
-         toggleMsBtn.style.background = isOn ? '#4CAF50' : '#ff9800';
-         console.log(`Auto marching squares: ${isOn ? 'enabled' : 'disabled'}`);
-       });
-     }
-     
-           // Reattach camera controls button
-      const reattachCameraBtn = document.getElementById('reattach-camera-btn');
-      if (reattachCameraBtn) {
-        reattachCameraBtn.addEventListener('click', () => {
-          this.ensureCameraControls();
-          console.log('Camera controls manually reattached');
-        });
+    // Terrain visibility (chunk meshes) - also respect chunk mask
+    for (const [key, chunk] of field.chunks) {
+      if (chunk.mesh) {
+        const enabled = field.chunkMask ? field.chunkMask.get(key) !== false : true;
+        chunk.mesh.setEnabled(this.state.layers.terrain && enabled);
       }
-      
-      // Test tile button
-      const testTileBtn = document.getElementById('test-tile-btn');
-      if (testTileBtn) {
-        testTileBtn.addEventListener('click', () => {
-          this.createTestTile();
-        });
-      }
-  };
-  
-    // Hide the forge UI
-  forge.hideForgeUI = function() {
-    const forgeUI = document.getElementById('forge-ui');
-    if (forgeUI) {
-      forgeUI.style.display = 'none';
     }
-  };
-  
-  // Show the forge UI
-  forge.showForgeUI = function() {
-    this.createForgeUI();
-  };
-  
-  // Debug function to show marching squares in action
-  forge.debugMarchingSquares = function(x, y, radius = 3) {
-    if (!ENABLE_FORGE || !liveField) return;
     
-    console.log(`=== Debugging Marching Squares around (${x}, ${y}) ===`);
+    // Resources visibility - use LOD system which tracks all resource models
+    // Also check chunk mask to hide resources on disabled chunks
+    const showResources = this.state.layers.resources;
+    const isBillboardMode = gfx.isBillboardOnlyMode && gfx.isBillboardOnlyMode();
     
-    for (let dx = -radius; dx <= radius; dx++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        const checkX = x + dx;
-        const checkY = y + dy;
+    if (gfx.lodModels) {
+      gfx.lodModels.forEach(lod => {
+        if (!lod.model || lod.model.isDisposed()) return;
         
-        if (checkX < 0 || checkX >= liveField.width || checkY < 0 || checkY >= liveField.height) continue;
+        // Check if this model is in an enabled chunk (use stored chunkKey if available)
+        let inEnabledChunk = true;
+        if (field.chunkMask && lod.chunkKey) {
+          inEnabledChunk = field.chunkMask.get(lod.chunkKey) !== false;
+        }
         
-        const tile = liveField.tiles[checkY * liveField.width + checkX];
-        if (tile) {
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          const isInRadius = distance <= radius;
-          const marker = isInRadius ? '●' : '○';
-          
-          console.log(`${marker} (${checkX}, ${checkY}): Type ${tile.type}, Distance ${distance.toFixed(1)}`);
+        const shouldShow = showResources && inEnabledChunk;
+        
+        if (shouldShow) {
+          // Resources visible - respect billboard mode
+          if (isBillboardMode) {
+            lod.model.setEnabled(false);
+            if (lod.billboard) lod.billboard.setEnabled(true);
+          } else {
+            lod.model.setEnabled(true);
+            if (lod.billboard) lod.billboard.setEnabled(false);
+          }
+        } else {
+          // Resources hidden (either layer off or chunk disabled)
+          lod.model.setEnabled(false);
+          if (lod.billboard) lod.billboard.setEnabled(false);
+        }
+      });
+    }
+    
+    // Also manually placed resources - check chunk mask by tile key
+    const chunkSize = field.chunkSize;
+    if (this._placedResources) {
+      for (const [key, mesh] of this._placedResources) {
+        if (mesh && mesh.setEnabled) {
+          // Parse tile coords from key "x,y"
+          const [tx, ty] = key.split(',').map(Number);
+          const cx = Math.floor(tx / chunkSize);
+          const cz = Math.floor(ty / chunkSize);
+          const inEnabledChunk = !field.chunkMask || field.chunkMask.get(`${cx},${cz}`) !== false;
+          mesh.setEnabled(this.state.layers.resources && inEnabledChunk);
         }
       }
     }
-    
-    console.log('=== End Debug ===');
   };
   
-  // Test function to create a simple visible tile
-  forge.createTestTile = function() {
-    if (!ENABLE_FORGE || !gfx || !gfx.scene) return;
+  // Toggle a chunk's enabled state
+  forge._tableRebuildTimeout = null;
+  
+  forge.toggleChunk = function(chunkX, chunkZ) {
+    const field = window.liveField;
+    if (!field || !field.chunkMask) return;
     
-    console.log('Creating test tile...');
+    const key = `${chunkX},${chunkZ}`;
+    const current = field.chunkMask.get(key);
+    const newState = !current;
+    field.chunkMask.set(key, newState);
     
-    // Create a simple test tile
-    const testTile = BABYLON.MeshBuilder.CreateBox('test_tile', { width: 4, height: 0.2, depth: 4 }, gfx.scene);
-    testTile.position = new BABYLON.Vector3(0, 0.1, 0);
+    // Update chunk mesh visibility immediately
+    const chunk = field.chunks.get(key);
+    if (chunk && chunk.mesh) {
+      chunk.mesh.setEnabled(newState && this.state.layers.terrain);
+    }
     
-    // Create a bright red material so it's obvious
-    const testMaterial = new BABYLON.StandardMaterial('test_mat', gfx.scene);
-    testMaterial.diffuseColor = new BABYLON.Color3(1, 0, 0); // Bright red
-    testMaterial.emissiveColor = new BABYLON.Color3(0.2, 0, 0); // Slight glow
+    // Also hide/show resources in this chunk via LOD system (use stored chunkKey)
+    if (gfx.lodModels) {
+      const isBillboardMode = gfx.isBillboardOnlyMode && gfx.isBillboardOnlyMode();
+      
+      gfx.lodModels.forEach(lod => {
+        if (!lod.model || lod.model.isDisposed()) return;
+        if (lod.chunkKey !== key) return; // Only affect this chunk
+        
+        const showResource = newState && this.state.layers.resources;
+        
+        if (showResource) {
+          lod.model.setEnabled(!isBillboardMode);
+          if (lod.billboard) lod.billboard.setEnabled(isBillboardMode);
+        } else {
+          lod.model.setEnabled(false);
+          if (lod.billboard) lod.billboard.setEnabled(false);
+        }
+      });
+    }
     
-    testTile.material = testMaterial;
-    testTile.isVisible = true;
-    testTile.isPickable = true;
+    // Update just this cell in the grid overlay (fast)
+    this.updateChunkOverlayCell(chunkX, chunkZ, newState);
     
-    console.log('Test tile created at position (0, 0.1, 0) - should be visible as a red square');
+    // Debounce table rebuild - wait for user to stop clicking
+    clearTimeout(this._tableRebuildTimeout);
+    this._tableRebuildTimeout = setTimeout(() => {
+      this.rebuildTable();
+    }, 300);
     
-    return testTile;
+    console.log(`🧱 Chunk ${key}: ${newState ? 'enabled' : 'disabled'}`);
+  };
+  
+  // Update just one cell in the chunk overlay (faster than full rebuild)
+  forge.updateChunkOverlayCell = function(chunkX, chunkZ, enabled) {
+    if (!this._chunkGridOverlay) return;
+    
+    const overlay = this._chunkGridOverlay.find(m => 
+      m.metadata && m.metadata.chunkX === chunkX && m.metadata.chunkZ === chunkZ
+    );
+    
+    if (overlay && overlay.material) {
+      overlay.material.diffuseColor = enabled ? 
+        new BABYLON.Color3(0.2, 0.8, 0.2) : 
+        new BABYLON.Color3(0.8, 0.2, 0.2);
+    }
+  };
+  
+  // Enable all chunks
+  forge.enableAllChunks = function() {
+    const field = window.liveField;
+    if (!field || !field.chunkMask) return;
+    
+    for (const key of field.chunkMask.keys()) {
+      field.chunkMask.set(key, true);
+    }
+    
+    this.updateChunkGridOverlay(true);
+    this.applyLayerVisibility();
+    this.rebuildTable();
+    console.log('✅ All chunks enabled');
+  };
+  
+  // Create/update chunk grid overlay for table editing
+  forge.updateChunkGridOverlay = function(show) {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    // Remove existing overlay
+    if (this._chunkGridOverlay) {
+      this._chunkGridOverlay.forEach(m => m.dispose());
+      this._chunkGridOverlay = [];
+    }
+    
+    if (!show) return;
+    
+    this._chunkGridOverlay = [];
+    const chunkWorldSize = field.chunkSize * TILE_SIZE;
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
+    
+    for (let cz = 0; cz < chunksZ; cz++) {
+      for (let cx = 0; cx < chunksX; cx++) {
+        const key = `${cx},${cz}`;
+        const enabled = field.chunkMask.get(key) !== false;
+        
+        // Create a semi-transparent plane for each chunk
+        const plane = BABYLON.MeshBuilder.CreatePlane(`chunkOverlay_${key}`, {
+          width: chunkWorldSize * 0.95,
+          height: chunkWorldSize * 0.95
+        }, gfx.scene);
+        
+        plane.position.x = cx * chunkWorldSize + chunkWorldSize / 2;
+        plane.position.y = 2; // Float above terrain
+        plane.position.z = cz * chunkWorldSize + chunkWorldSize / 2;
+        plane.rotation.x = Math.PI / 2; // Lay flat
+        
+        // Material based on enabled state
+        const mat = new BABYLON.StandardMaterial(`chunkMat_${key}`, gfx.scene);
+        mat.diffuseColor = enabled ? 
+          new BABYLON.Color3(0.2, 0.8, 0.2) : // Green = enabled
+          new BABYLON.Color3(0.8, 0.2, 0.2);  // Red = disabled
+        mat.alpha = 0.3;
+        mat.backFaceCulling = false;
+        plane.material = mat;
+        
+        // Store chunk coords for click detection
+        plane.metadata = { chunkX: cx, chunkZ: cz };
+        
+        this._chunkGridOverlay.push(plane);
+      }
+    }
+  };
+  
+  // Rebuild the table to match chunk mask shape
+  forge.rebuildTable = function() {
+    const field = window.liveField;
+    if (!field || !field.chunkMask || !gfx || !gfx.scene) return;
+    
+    console.log('🔄 Rebuilding table from chunk mask...');
+    
+    // Dispose old dynamic table parts
+    if (this._dynamicTableParts) {
+      this._dynamicTableParts.forEach(m => m.dispose());
+    }
+    this._dynamicTableParts = [];
+    
+    // Hide the original static table parts (except floor which we'll recreate)
+    const table = gfx.table;
+    if (table && table.parts) {
+      Object.values(table.parts).forEach(part => {
+        if (part.mesh) part.mesh.isVisible = false;
+      });
+    }
+    
+    const chunkWorldSize = field.chunkSize * TILE_SIZE;
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
+    
+    // Find boundary edges by checking each chunk's neighbors
+    const edges = []; // {x, z, direction: 'N'|'E'|'S'|'W'}
+    const corners = []; // {x, z, type: 'convex'|'concave', corner: 'NE'|'SE'|'SW'|'NW'}
+    
+    for (let cz = 0; cz < chunksZ; cz++) {
+      for (let cx = 0; cx < chunksX; cx++) {
+        const key = `${cx},${cz}`;
+        if (field.chunkMask.get(key) === false) continue; // Skip disabled chunks
+        
+        // Check each neighbor - if neighbor is disabled or out of bounds, we have an edge
+        const neighbors = {
+          N: cz < chunksZ - 1 ? field.chunkMask.get(`${cx},${cz + 1}`) !== false : false,
+          S: cz > 0 ? field.chunkMask.get(`${cx},${cz - 1}`) !== false : false,
+          E: cx < chunksX - 1 ? field.chunkMask.get(`${cx + 1},${cz}`) !== false : false,
+          W: cx > 0 ? field.chunkMask.get(`${cx - 1},${cz}`) !== false : false
+        };
+        
+        if (!neighbors.N) edges.push({ cx, cz, dir: 'N' });
+        if (!neighbors.S) edges.push({ cx, cz, dir: 'S' });
+        if (!neighbors.E) edges.push({ cx, cz, dir: 'E' });
+        if (!neighbors.W) edges.push({ cx, cz, dir: 'W' });
+        
+        // Detect corners based on adjacent edges
+        // Convex corners (outer) - two adjacent edges meet
+        if (!neighbors.N && !neighbors.E) corners.push({ cx, cz, type: 'convex', corner: 'NE' });
+        if (!neighbors.N && !neighbors.W) corners.push({ cx, cz, type: 'convex', corner: 'NW' });
+        if (!neighbors.S && !neighbors.E) corners.push({ cx, cz, type: 'convex', corner: 'SE' });
+        if (!neighbors.S && !neighbors.W) corners.push({ cx, cz, type: 'convex', corner: 'SW' });
+        
+        // Concave corners (inner) - check diagonal neighbors
+        const diagNE = (cx < chunksX - 1 && cz < chunksZ - 1) ? field.chunkMask.get(`${cx + 1},${cz + 1}`) !== false : false;
+        const diagNW = (cx > 0 && cz < chunksZ - 1) ? field.chunkMask.get(`${cx - 1},${cz + 1}`) !== false : false;
+        const diagSE = (cx < chunksX - 1 && cz > 0) ? field.chunkMask.get(`${cx + 1},${cz - 1}`) !== false : false;
+        const diagSW = (cx > 0 && cz > 0) ? field.chunkMask.get(`${cx - 1},${cz - 1}`) !== false : false;
+        
+        if (neighbors.N && neighbors.E && !diagNE) corners.push({ cx, cz, type: 'concave', corner: 'NE' });
+        if (neighbors.N && neighbors.W && !diagNW) corners.push({ cx, cz, type: 'concave', corner: 'NW' });
+        if (neighbors.S && neighbors.E && !diagSE) corners.push({ cx, cz, type: 'concave', corner: 'SE' });
+        if (neighbors.S && neighbors.W && !diagSW) corners.push({ cx, cz, type: 'concave', corner: 'SW' });
+      }
+    }
+    
+    console.log(`   Found ${edges.length} edges, ${corners.length} corners`);
+    
+    // Create edge pieces
+    const edgeMat = table.parts.materials.side;
+    const edgeHeight = 1.2;  // Taller edges
+    const edgeThickness = 4.0;
+    const edgeY = 0.5;       // Raised up a bit
+    const edgeAngle = 0.11;
+    
+    edges.forEach(edge => {
+      const worldX = edge.cx * chunkWorldSize;
+      const worldZ = edge.cz * chunkWorldSize;
+      
+      const mesh = BABYLON.MeshBuilder.CreateBox(`edge_${edge.cx}_${edge.cz}_${edge.dir}`, { size: 1 }, gfx.scene);
+      mesh.material = edgeMat;
+      
+      switch (edge.dir) {
+        case 'N':
+          mesh.position.set(worldX + chunkWorldSize / 2, edgeY, worldZ + chunkWorldSize);
+          mesh.scaling.set(chunkWorldSize, edgeHeight, edgeThickness);
+          mesh.rotation.set(edgeAngle, 0, 0);
+          break;
+        case 'S':
+          mesh.position.set(worldX + chunkWorldSize / 2, edgeY, worldZ);
+          mesh.scaling.set(chunkWorldSize, edgeHeight, edgeThickness);
+          mesh.rotation.set(-edgeAngle, 0, 0);
+          break;
+        case 'E':
+          mesh.position.set(worldX + chunkWorldSize, edgeY, worldZ + chunkWorldSize / 2);
+          mesh.scaling.set(edgeThickness, edgeHeight, chunkWorldSize);
+          mesh.rotation.set(0, 0, -edgeAngle);
+          break;
+        case 'W':
+          mesh.position.set(worldX, edgeY, worldZ + chunkWorldSize / 2);
+          mesh.scaling.set(edgeThickness, edgeHeight, chunkWorldSize);
+          mesh.rotation.set(0, 0, edgeAngle);
+          break;
+      }
+      
+      this._dynamicTableParts.push(mesh);
+    });
+    
+    // Create corner markers
+    const cornerMat = table.parts.materials.corner;
+    const cornerSize = 7.0;
+    const cornerHeight = 3.0;  // Taller corners
+    const cornerY = 0.3;       // Raised up
+    
+    corners.forEach(corner => {
+      const worldX = corner.cx * chunkWorldSize;
+      const worldZ = corner.cz * chunkWorldSize;
+      
+      const mesh = BABYLON.MeshBuilder.CreateBox(`corner_${corner.cx}_${corner.cz}_${corner.corner}`, { size: 1 }, gfx.scene);
+      mesh.material = cornerMat;
+      mesh.scaling.set(cornerSize, cornerHeight, cornerSize);
+      
+      // Position at the actual corner of the chunk
+      let px = worldX, pz = worldZ;
+      if (corner.corner.includes('E')) px += chunkWorldSize;
+      if (corner.corner.includes('N')) pz += chunkWorldSize;
+      
+      mesh.position.set(px, cornerY, pz);
+      this._dynamicTableParts.push(mesh);
+    });
+    
+    // Create floor for enabled chunks
+    const floorMat = table.parts.materials.floor;
+    for (let cz = 0; cz < chunksZ; cz++) {
+      for (let cx = 0; cx < chunksX; cx++) {
+        const key = `${cx},${cz}`;
+        if (field.chunkMask.get(key) === false) continue;
+        
+        const worldX = cx * chunkWorldSize;
+        const worldZ = cz * chunkWorldSize;
+        
+        const floor = BABYLON.MeshBuilder.CreateBox(`floor_${cx}_${cz}`, { size: 1 }, gfx.scene);
+        floor.material = floorMat;
+        floor.position.set(worldX + chunkWorldSize / 2, -0.777, worldZ + chunkWorldSize / 2);
+        floor.scaling.set(chunkWorldSize, 0.4, chunkWorldSize);
+        
+        this._dynamicTableParts.push(floor);
+      }
+    }
+    
+    console.log(`✅ Table rebuilt with ${this._dynamicTableParts.length} pieces`);
+  };
+  
+  // Legacy setTool for backwards compatibility
+  forge.setTool = function(tool) {
+    if (tool === 'terrain') {
+      this.setEditingLayer('terrain');
+    } else if (tool === 'resource') {
+      this.setEditingLayer('resources');
+    }
+  };
+  
+  // Toggle billboard-only mode for performance on large maps
+  forge.toggleBillboardMode = function() {
+    if (!gfx || !gfx.setBillboardOnlyMode) return;
+    
+    const newState = !gfx.isBillboardOnlyMode();
+    gfx.setBillboardOnlyMode(newState);
+    
+    // Update button state
+    const btn = document.getElementById('billboard-toggle');
+    if (btn) {
+      btn.classList.toggle('active', newState);
+      btn.textContent = newState ? '🖼️ Billboard ON' : '🖼️ Billboard Only';
+    }
+  };
+  
+  // Auto-enable billboard mode for large maps
+  forge.checkAutoPerformanceMode = function() {
+    const field = window.liveField;
+    if (!field) return;
+    
+    const totalTiles = field.width * field.height;
+    const btn = document.getElementById('billboard-toggle');
+    
+    if (totalTiles >= 16384) { // 128x128 or larger
+      if (gfx && gfx.setBillboardOnlyMode && !gfx.isBillboardOnlyMode()) {
+        gfx.setBillboardOnlyMode(true);
+        if (btn) {
+          btn.classList.add('active');
+          btn.textContent = '🖼️ Billboard ON';
+        }
+        console.log('⚡ Auto-enabled billboard mode for large map');
+      }
+    } else {
+      // For smaller maps, respect the current toggle state (don't auto-disable)
+      // Just sync the button state with current mode
+      if (btn && gfx.isBillboardOnlyMode) {
+        const isOn = gfx.isBillboardOnlyMode();
+        btn.classList.toggle('active', isOn);
+        btn.textContent = isOn ? '🖼️ Billboard ON' : '🖼️ Billboard Only';
+      }
+    }
+  };
+  
+  // Set brush type
+  forge.setBrush = function(type) {
+    this.state.currentBrush = type;
+    
+    // Update button states
+    document.querySelectorAll('.forge-btn').forEach(btn => {
+      if (btn.id && btn.id.startsWith('brush-')) {
+        btn.classList.toggle('active', btn.id === `brush-${type}`);
+      }
+    });
+    
+    console.log(`🖌️ Brush: ${type}`);
+  };
+  
+  // Set resource type for manual painting
+  forge.setResource = function(type) {
+    this.state.currentResource = type;
+    
+    // Update button states
+    document.querySelectorAll('.forge-btn').forEach(btn => {
+      if (btn.id && btn.id.startsWith('res-')) {
+        btn.classList.toggle('active', btn.id === `res-${type}`);
+      }
+    });
+    
+    console.log(`🌲 Resource: ${type}`);
+  };
+  
+  // Populate resources on all chunks (like the game does)
+  forge.populateResources = function() {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene || !gfx.placeDecorationsOnChunk) {
+      console.log('❌ Cannot populate resources');
+      return;
+    }
+    
+    // First clear existing resources and registries
+    this.clearResources();
+    if (gfx.clearResourceRegistries) {
+      gfx.clearResourceRegistries();
+    }
+    
+    console.log('🌲 Auto-populating resources (trees on grass, rocks on dirt)...');
+    
+    // Count terrain types for feedback
+    let grassCount = 0, dirtCount = 0;
+    for (let i = 0; i < field.terrainTypes.length; i++) {
+      if (field.terrainTypes[i] === 3) grassCount++;
+      else if (field.terrainTypes[i] === 2) dirtCount++;
+    }
+    console.log(`   Terrain: ${grassCount} grass tiles, ${dirtCount} dirt tiles`);
+    
+    // Place decorations on enabled chunks only
+    for (const [key, chunk] of field.chunks) {
+      // Skip disabled chunks
+      if (field.chunkMask && field.chunkMask.get(key) === false) continue;
+      
+      if (chunk.tiles && chunk.tiles.length > 0) {
+        chunk.models = gfx.placeDecorationsOnChunk(chunk, gfx.scene);
+      }
+    }
+    
+    console.log('✅ Resources populating (async load)');
+  };
+  
+  // Clear all resources from the map
+  forge.clearResources = function() {
+    const field = window.liveField;
+    if (!field) return;
+    
+    console.log('🗑️ Clearing resources...');
+    
+    let cleared = 0;
+    
+    // Clear chunk-based resources (auto-generated)
+    for (const [key, chunk] of field.chunks) {
+      if (chunk.models) {
+        chunk.models.forEach(m => {
+          if (m.model && m.model.root) {
+            m.model.root.dispose();
+            cleared++;
+          }
+        });
+        chunk.models = [];
+      }
+    }
+    
+    // Clear manually placed resources
+    if (this._placedResources) {
+      for (const [key, mesh] of this._placedResources) {
+        if (mesh && mesh.dispose) {
+          mesh.dispose();
+          cleared++;
+        }
+      }
+      this._placedResources = new Map();
+    }
+    
+    // Reset tracking
+    this._placedKeys = new Set();
+    
+    console.log(`✅ Cleared ${cleared} resources`);
+  };
+  
+  // Set brush size
+  forge.setBrushSize = function(size) {
+    this.state.brushSize = parseInt(size);
+    document.getElementById('brush-size-label').textContent = size;
+  };
+  
+  // Handle file import (.aether or .json)
+  forge.handleImport = function(file) {
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        let content = e.target.result;
+        
+        // Decompress if needed
+        content = this.decompressString(content);
+        
+        const mapData = JSON.parse(content);
+        this.importMap(mapData);
+      } catch (err) {
+        console.error('Failed to import map:', err);
+        alert('Failed to import map file: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
   };
   
   // Export forge object
   window.forge = forge;
   
- })(window.forge || {});
+})(window.forge || {});

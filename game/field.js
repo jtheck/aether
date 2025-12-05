@@ -111,6 +111,17 @@ function Field(ops = {}) {
   this.chunkSize = 16;
   this._heightCache = new Map();
   
+  // Chunk mask for custom map shapes (true = enabled, false = void)
+  // Default: all chunks enabled
+  this.chunkMask = new Map();
+  const chunksX = Math.ceil(this.width / this.chunkSize);
+  const chunksZ = Math.ceil(this.height / this.chunkSize);
+  for (let cz = 0; cz < chunksZ; cz++) {
+    for (let cx = 0; cx < chunksX; cx++) {
+      this.chunkMask.set(`${cx},${cz}`, true);
+    }
+  }
+  
   // Precomputed height grid for fast unit positioning (initialized after proof())
   this._heightGrid = null;
   
@@ -129,14 +140,14 @@ function Field(ops = {}) {
   let validTypes = [5];//, 25, 45, 65, 85, 12, 32, 52, 72, 82];
 
   // First pass: initialize all tiles
-  for(let x = 0; x < this.width; x++){
-    for(let y = 0; y < this.height; y++){
+  // Must iterate y (rows) first, then x (cols) to match access pattern: tiles[y * width + x]
+  for(let y = 0; y < this.height; y++){
+    for(let x = 0; x < this.width; x++){
       this.tiles.push(new Tile({loc: {x, y}, type: 12})); // Placeholder
       this.heightMap.push(0); // Will be filled by height generation
-      this.terrainTypes.push(3); // Default to dirt (type 3)
+      this.terrainTypes.push(3); // Default to grass (type 3) - will be overwritten by proof()
     }
   }
-  
   // Show tilemap before proof
   // console.log("=== TILEMAP BEFORE PROOF ===");
   // this.showTilemap();
@@ -430,28 +441,62 @@ Field.prototype.generateHeightMap = function() {
 }
 
 // Assign terrain types based on elevation thresholds
-// 2-terrain system: Dirt (low) → Grass (high)
+// 3-terrain system: Water (lowest) → Grass (mid) → Dirt (high)
+// Type 1=water, Type 2=dirt, Type 3=grass
 Field.prototype.assignTerrainByElevation = function() {
+  let waterCount = 0;
   let dirtCount = 0;
   let grassCount = 0;
   
+  // First pass: assign terrain based on elevation
   for(let i = 0; i < this.heightMap.length; i++) {
     const height = this.heightMap[i];
     
-    // Grass-dominant system: ~80% grass, ~20% dirt
-    // Simple threshold after normalization
-    // SWAPPED: Type 2=dirt, Type 3=grass (to match visual/atlas)
-    if(height < 0.35) {
-      this.terrainTypes[i] = 2; // Dirt (low areas - 20%)
-      dirtCount++;
-    } else {
-      this.terrainTypes[i] = 3; // Grass (high areas - 80%)
+    // 3-tier elevation system:
+    // - Water at lowest elevations (< 0.15) ~15%
+    // - Grass at mid elevations (0.15 - 0.55) ~55%
+    // - Dirt at high elevations (>= 0.55) ~30%
+    if(height < 0.15) {
+      this.terrainTypes[i] = 1; // Water (lowest areas)
+      waterCount++;
+    } else if(height < 0.55) {
+      this.terrainTypes[i] = 3; // Grass (mid areas)
       grassCount++;
+    } else {
+      this.terrainTypes[i] = 2; // Dirt (high areas)
+      dirtCount++;
+    }
+  }
+  
+  // Second pass: ensure grass buffer around water (prevent water-dirt adjacency)
+  // We don't have a water-dirt atlas, so water must always touch grass
+  for(let y = 0; y < this.height; y++) {
+    for(let x = 0; x < this.width; x++) {
+      const index = y * this.width + x;
+      if(this.terrainTypes[index] === 1) { // Water tile
+        // Check all 8 neighbors
+        for(let dy = -1; dy <= 1; dy++) {
+          for(let dx = -1; dx <= 1; dx++) {
+            if(dx === 0 && dy === 0) continue;
+            const nx = x + dx;
+            const ny = y + dy;
+            if(nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
+              const nIndex = ny * this.width + nx;
+              // Convert dirt neighbors to grass (create shoreline buffer)
+              if(this.terrainTypes[nIndex] === 2) {
+                this.terrainTypes[nIndex] = 3;
+                dirtCount--;
+                grassCount++;
+              }
+            }
+          }
+        }
+      }
     }
   }
   
   const total = this.heightMap.length;
-  // console.log(`🌿 Terrain distribution: ${grassCount} grass (${(grassCount/total*100).toFixed(1)}%), 🟫 ${dirtCount} dirt (${(dirtCount/total*100).toFixed(1)}%)`);
+  console.log(`🌊 Water: ${waterCount} (${(waterCount/total*100).toFixed(1)}%), 🌿 Grass: ${grassCount} (${(grassCount/total*100).toFixed(1)}%), 🟫 Dirt: ${dirtCount} (${(dirtCount/total*100).toFixed(1)}%)`);
 }
 
 // OLD PATCH PAINTING - REPLACED BY ELEVATION
@@ -553,10 +598,12 @@ Field.prototype.paintGrassPatches = function() {
 
 // Apply marching squares transitions between adjacent terrain types
 Field.prototype.applyTerrainTransitions = function() {
-  // 2-terrain system: Just grass and dirt
-  // Type 3 = grass (80%, high areas), Type 2 = dirt (20%, low areas)
-  // Grass is "filled" (1), dirt is "empty" (0) in the density map
-  const grassDensity = this.terrainTypes.map(t => t === 3 ? 1 : 0);
+  // 3-terrain system: Water (1), Dirt (2), Grass (3)
+  // Create density maps for each transition type
+  // Grass-Dirt: grass=filled(1), dirt=empty(0)
+  // Grass-Water: grass=filled(1), water=empty(0)
+  const grassVsDirt = this.terrainTypes.map(t => t === 3 ? 1 : 0);
+  const grassVsWater = this.terrainTypes.map(t => (t === 3 || t === 2) ? 1 : 0); // Grass OR dirt = land (filled), water = empty
   
   for(let x = 0; x < this.width; x++) {
     for(let y = 0; y < this.height; y++) {
@@ -564,8 +611,11 @@ Field.prototype.applyTerrainTransitions = function() {
       const index = y * this.width + x;
       const terrain = this.terrainTypes[index];
       
-      // Check if this tile has a neighbor of different terrain type
-      let hasMixedNeighbors = false;
+      // Check what terrain types are adjacent
+      let hasWaterNeighbor = false;
+      let hasDirtNeighbor = false;
+      let hasGrassNeighbor = false;
+      
       for(let dx = -1; dx <= 1; dx++) {
         for(let dy = -1; dy <= 1; dy++) {
           if(dx === 0 && dy === 0) continue;
@@ -573,29 +623,52 @@ Field.prototype.applyTerrainTransitions = function() {
           const ny = y + dy;
           if(nx >= 0 && nx < this.width && ny >= 0 && ny < this.height) {
             const neighborTerrain = this.terrainTypes[ny * this.width + nx];
-            if(neighborTerrain !== terrain) {
-              hasMixedNeighbors = true;
-              break;
-            }
+            if(neighborTerrain === 1) hasWaterNeighbor = true;
+            if(neighborTerrain === 2) hasDirtNeighbor = true;
+            if(neighborTerrain === 3) hasGrassNeighbor = true;
           }
         }
-        if(hasMixedNeighbors) break;
       }
       
-      if(hasMixedNeighbors) {
-        // Transition tile - use marching squares
-        // In atlas-grass-dirt: grass is filled (1), dirt is empty (0)
-        const tileCase = this.calculateCompatibleVariant(x, y, grassDensity);
-        tile.type = tileCase;
-        tile.atlasName = 'atlas-grass-dirt';
-      } else {
-        // Pure tile - no transition
-        if(terrain === 3) {
-          // Pure grass (type 3)
-          tile.type = 6; // Case 15 (all filled) = pure grass
+      // Determine which atlas and tile case to use
+      if(terrain === 1) {
+        // Water tile - use grass-water atlas (water side)
+        if(hasGrassNeighbor) {
+          // Transition to grass - use marching squares
+          const tileCase = this.calculateCompatibleVariant(x, y, grassVsWater);
+          tile.type = tileCase;
+          tile.atlasName = 'atlas-grass-water';
+        } else {
+          // Pure water
+          tile.type = 12; // Case 0 (all empty) = pure water
+          tile.atlasName = 'atlas-grass-water';
+        }
+      } else if(terrain === 3) {
+        // Grass tile
+        if(hasWaterNeighbor) {
+          // Priority: water transition (shoreline)
+          const tileCase = this.calculateCompatibleVariant(x, y, grassVsWater);
+          tile.type = tileCase;
+          tile.atlasName = 'atlas-grass-water';
+        } else if(hasDirtNeighbor) {
+          // Transition to dirt
+          const tileCase = this.calculateCompatibleVariant(x, y, grassVsDirt);
+          tile.type = tileCase;
           tile.atlasName = 'atlas-grass-dirt';
         } else {
-          // Pure dirt (type 2)
+          // Pure grass
+          tile.type = 6; // Case 15 (all filled) = pure grass
+          tile.atlasName = 'atlas-grass-dirt';
+        }
+      } else if(terrain === 2) {
+        // Dirt tile
+        if(hasGrassNeighbor) {
+          // Transition to grass
+          const tileCase = this.calculateCompatibleVariant(x, y, grassVsDirt);
+          tile.type = tileCase;
+          tile.atlasName = 'atlas-grass-dirt';
+        } else {
+          // Pure dirt
           tile.type = 12; // Case 0 (all empty) = pure dirt
           tile.atlasName = 'atlas-grass-dirt';
         }
@@ -910,11 +983,17 @@ Field.prototype.getTile = function(x, y) {
       // Base Y-offset by terrain type (2-terrain system)
       // Type 2=dirt (lower), Type 3=grass (higher)
       const terrainHeights = {
+        1: -0.3,  // Water (sunken below land level)
         2: 0.1,   // Dirt base (low areas - tamped down)
         3: 0.4,   // Grass base (higher rolling hills)
       };
       
       const baseHeight = terrainHeights[terrain] || 0;
+      
+      // Water is flat, no hills
+      if (terrain === 1) {
+        return baseHeight * edgeFalloff;
+      }
       
       // Add rolling hills using multiple noise layers (smoother, gentler relief)
       const hill1 = this.getNoiseVariation(x * 0.5, y * 0.5, 1.0) * 0.5;  // Large smooth rolling hills
@@ -1056,6 +1135,13 @@ Field.prototype.updateVisibleChunks = function(playerX, playerZ, loadDistance = 
       
       if (distanceSquared <= effectiveLoadDistanceSquared && x >= 0 && z >= 0 && 
           x < Math.ceil(this.width / this.chunkSize) && z < Math.ceil(this.height / this.chunkSize)) {
+        
+        // Skip disabled chunks (for custom map shapes)
+        const chunkKey = `${x},${z}`;
+        if (this.chunkMask && this.chunkMask.get(chunkKey) === false) {
+          continue;
+        }
+        
         const chunk = this.getChunk(x, z);
         
         // Create mesh if it doesn't exist yet

@@ -8,7 +8,8 @@ window.USE_3D_HUD = false;   // false = 2D HUD, true = 3D HUD
 const
   DRAW_FPS = true,
   TILE_SIZE = 4,
-  ENABLE_FORGE = false,
+  // ENABLE_FORGE can be set by forge/index.html before this script loads
+  ENABLE_FORGE = window.ENABLE_FORGE || false,
 
 
 

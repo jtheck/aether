@@ -2750,5 +2750,211 @@ function getRandomColor() {
 
 }(window.ui = window.ui || {}));
 
+// Global function to view replays from menu
+window.viewReplaysFromMenu = function() {
+  console.log('🎬 Opening replay viewer from menu...');
+  
+  // Hide the menu
+  if (window.ui && window.ui.hideMenu) {
+    window.ui.hideMenu();
+  }
+  
+  // Get list of saved replays
+  const replays = window.Determinism ? window.Determinism.listReplays() : [];
+  
+  // Create replay viewer overlay
+  let viewer = document.getElementById('replay_viewer');
+  if (!viewer) {
+    viewer = document.createElement('div');
+    viewer.id = 'replay_viewer';
+    document.body.appendChild(viewer);
+  }
+  
+  viewer.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.95);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+    color: white;
+    font-family: sans-serif;
+  `;
+  
+  // Format date nicely
+  const formatDate = (timestamp) => {
+    if (!timestamp) return 'Unknown date';
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+    
+    // If today, show time
+    if (diff < 24 * 60 * 60 * 1000 && date.getDate() === now.getDate()) {
+      return 'Today ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    // If yesterday
+    if (diff < 48 * 60 * 60 * 1000) {
+      return 'Yesterday ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    // Otherwise show date
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + 
+           date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+  
+  // Build replay list HTML
+  let replayListHtml = '';
+  if (replays.length === 0) {
+    replayListHtml = '<p style="color: #888; font-size: 1.2em;">No replays saved yet.</p><p style="color: #666;">Complete a match to save a replay!</p>';
+  } else {
+    replayListHtml = replays.map((r, i) => {
+      const duration = r.duration ? `${Math.floor(r.duration / 60)}:${Math.floor(r.duration % 60).toString().padStart(2, '0')}` : '?:??';
+      const players = r.players ? r.players.map(p => p.name || 'Unknown').join(' vs ') : 'Unknown players';
+      const commands = r.commandCount || 0;
+      const dateStr = formatDate(r.savedAt);
+      const savedIcon = r.saved ? '⭐' : '☆';
+      const versionWarning = (!r.version || r.version < '1.1') ? ' ⚠️' : '';
+      
+      return `
+        <div class="replay_item" data-id="${r.id}" style="
+          background: ${r.saved ? 'rgba(80, 70, 40, 0.8)' : 'rgba(50, 50, 80, 0.8)'};
+          padding: 12px 15px;
+          margin: 6px 0;
+          border-radius: 8px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          width: 100%;
+          max-width: 550px;
+          border: ${r.saved ? '1px solid rgba(255, 200, 50, 0.3)' : '1px solid transparent'};
+        ">
+          <div style="flex: 1; cursor: pointer;" onclick="window.playReplayFromMenu('${r.id}')">
+            <div style="font-weight: bold; font-size: 1em;">${players}${versionWarning}</div>
+            <div style="color: #aaa; font-size: 0.85em;">${r.gameType || 'Match'} • ${commands} cmds • ${duration}</div>
+            <div style="color: #888; font-size: 0.75em;">${dateStr}</div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button onclick="window.toggleReplaySave('${r.id}')" title="${r.saved ? 'Unprotect from deletion' : 'Protect from auto-deletion'}"
+                    style="background: none; border: none; cursor: pointer; font-size: 1.3em; padding: 5px;">
+              ${savedIcon}
+            </button>
+            <button onclick="window.deleteReplayConfirm('${r.id}')" title="Delete replay"
+                    style="background: rgba(200, 50, 50, 0.5); border: none; cursor: pointer; 
+                           color: white; padding: 5px 10px; border-radius: 3px; font-size: 0.85em;">
+              🗑️
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+  
+  const savedCount = replays.filter(r => r.saved).length;
+  const totalCount = replays.length;
+  
+  viewer.innerHTML = `
+    <h2 style="margin-bottom: 10px;">🎬 Saved Replays</h2>
+    <p style="color: #888; margin-bottom: 15px; font-size: 0.9em;">
+      ${totalCount} replay${totalCount !== 1 ? 's' : ''} (${savedCount} protected ⭐)
+    </p>
+    <div style="max-height: 60vh; overflow-y: auto; width: 100%; max-width: 580px; padding: 10px;">
+      ${replayListHtml}
+    </div>
+    <button onclick="document.getElementById('replay_viewer').style.display='none'" 
+            style="margin-top: 20px; padding: 10px 30px; background: rgba(100, 100, 100, 0.8); 
+                   border: none; color: white; cursor: pointer; border-radius: 5px; font-size: 1em;">
+      Close
+    </button>
+  `;
+  
+  viewer.style.display = 'flex';
+};
 
+// Toggle replay save status
+window.toggleReplaySave = function(replayId) {
+  if (window.Determinism && window.Determinism.toggleReplaySaved) {
+    window.Determinism.toggleReplaySaved(replayId);
+    // Refresh the list
+    window.viewReplaysFromMenu();
+  }
+};
+
+// Delete replay with confirmation
+window.deleteReplayConfirm = function(replayId) {
+  if (confirm('Delete this replay? This cannot be undone.')) {
+    if (window.Determinism && window.Determinism.deleteReplay) {
+      window.Determinism.deleteReplay(replayId);
+      // Refresh the list
+      window.viewReplaysFromMenu();
+    }
+  }
+};
+
+// Global function to play a replay from the menu
+window.playReplayFromMenu = async function(replayId) {
+  console.log(`🎬 Playing replay: ${replayId}`);
+  
+  // Hide the viewer
+  const viewer = document.getElementById('replay_viewer');
+  if (viewer) viewer.style.display = 'none';
+  
+  // Load replay data
+  const replayData = window.Determinism ? window.Determinism.loadReplay(replayId) : null;
+  if (!replayData) {
+    console.error('❌ Failed to load replay');
+    alert('Failed to load replay. The file may be corrupted.');
+    return;
+  }
+  
+  // Check replay version/compatibility
+  const version = replayData.version || '0.9';
+  if (version < '1.0') {
+    const proceed = confirm(
+      '⚠️ This replay was saved with an older version and may not play correctly.\n\n' +
+      'Old replays might have compatibility issues with the current game.\n\n' +
+      'Do you want to try playing it anyway?'
+    );
+    if (!proceed) return;
+  }
+  
+  // Validate required replay data
+  if (!replayData.mapSeed) {
+    alert('❌ This replay is missing map seed data and cannot be played.');
+    return;
+  }
+  
+  if (!replayData.commands || replayData.commands.length === 0) {
+    const proceed = confirm(
+      '⚠️ This replay has no recorded commands.\n\n' +
+      'It might be from a very short match or incomplete.\n\n' +
+      'Do you want to try loading the map anyway?'
+    );
+    if (!proceed) return;
+  }
+  
+  console.log(`📊 Replay loaded: ${replayData.commands?.length || 0} commands, seed: ${replayData.mapSeed}, version: ${version}`);
+  
+  try {
+    // Create a temporary match object for replay if none exists
+    if (!window.currentMatch) {
+      window.currentMatch = new window.Match({
+        id: 'replay-' + Date.now(),
+        gameType: replayData.gameType || '1v1',
+        mapSeed: replayData.mapSeed,
+        players: replayData.players || [],
+        localPlayerId: replayData.players?.[0]?.id || 'replay-viewer'
+      });
+    }
+    
+    // Use the match's replay loading function
+    await window.currentMatch.loadAndPlayReplay(replayId);
+  } catch (error) {
+    console.error('❌ Error playing replay:', error);
+    alert('Failed to play replay: ' + error.message);
+  }
+};
 

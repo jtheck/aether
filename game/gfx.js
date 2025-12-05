@@ -171,6 +171,52 @@
   // LOD distance tweaker - adjust this to change when models switch to billboards
   let LOD_DISTANCE = 225; // Units - models switch to billboards beyond this distance
   
+  // Billboard-only mode - for low-end devices or large maps in editor
+  // When true, never show 3D models, only billboards
+  let BILLBOARD_ONLY_MODE = false;
+  
+  // Expose billboard mode for settings/forge
+  gfx.setBillboardOnlyMode = function(enabled) {
+    BILLBOARD_ONLY_MODE = enabled;
+    console.log(`🖼️ Billboard-only mode: ${enabled ? 'ON' : 'OFF'}`);
+    
+    // Immediately update all existing models - no frame delay
+    lodModels.forEach(lod => {
+      // Skip disposed meshes
+      if (!lod.model || lod.model.isDisposed()) return;
+      
+      if (enabled) {
+        // Billboard mode: ALWAYS hide model, show billboard
+        lod.model.setEnabled(false);
+        if (lod.billboard) lod.billboard.setEnabled(true);
+      } else {
+        // Normal mode: temporarily enable model, LOD will correct on next update
+        // Don't enable both - just let LOD system handle the transition
+        if (lod.billboard) lod.billboard.setEnabled(false);
+        lod.model.setEnabled(true);
+      }
+    });
+    
+    // Force immediate LOD update on next frame (reset counter to trigger update)
+    lodFrameCounter = LOD_UPDATE_INTERVAL;
+    
+    // For non-billboard mode, force an immediate LOD check to set proper states
+    if (!enabled && gfx.camera) {
+      const camPos = gfx.cameraTarget ? gfx.cameraTarget.position : gfx.camera.position;
+      if (camPos) {
+        // Bypass throttle for immediate update
+        const savedCounter = lodFrameCounter;
+        lodFrameCounter = LOD_UPDATE_INTERVAL;
+        updateLOD(camPos);
+        lodFrameCounter = savedCounter;
+      }
+    }
+  };
+  
+  gfx.isBillboardOnlyMode = function() {
+    return BILLBOARD_ONLY_MODE;
+  };
+  
   // LOD update throttling - moved to updateLOD function (frame-based instead of time-based)
 
   // Initialize billboard atlas and material
@@ -527,6 +573,15 @@
     
     // CRITICAL: Immediately evaluate and set correct initial state
     // This prevents any flash of full detail at far distances
+    
+    // PRIORITY 1: Billboard-only mode - ALWAYS show billboard, NEVER show model
+    if (BILLBOARD_ONLY_MODE) {
+      model.root.setEnabled(false);
+      billboard.setEnabled(true);
+      return; // Skip all distance calculations
+    }
+    
+    // PRIORITY 2: Distance-based LOD (only when NOT in billboard-only mode)
     if (cameraPosition) {
       const modelPos = model.root.absolutePosition || model.root.position;
       const dx = cameraPosition.x - modelPos.x;
@@ -622,6 +677,13 @@
         lod.model.setEnabled(false);
         if (lod.billboard) {
           lod.billboard.setEnabled(false);
+        }
+        
+      } else if (BILLBOARD_ONLY_MODE) {
+        // Billboard-only mode - never show 3D models, always billboards
+        lod.model.setEnabled(false);
+        if (lod.billboard) {
+          lod.billboard.setEnabled(true);
         }
         
       } else if (distanceSquared > lodDistanceSquared) {
@@ -998,7 +1060,14 @@ let pov2 = 240;
           model.root.parent = task.chunk.mesh;
           
           // Start model hidden - LOD will determine visibility
-          model.root.setEnabled(false);
+          // But in forge mode, show immediately (unless billboard-only mode)
+          if (ENABLE_FORGE) {
+            const showModel = !BILLBOARD_ONLY_MODE;
+            model.root.setEnabled(showModel);
+            model.root.getChildMeshes().forEach(m => m.setEnabled(showModel));
+          } else {
+            model.root.setEnabled(false);
+          }
           
           const chunkKey = `${task.chunk.chunkX},${task.chunk.chunkZ}`;
           if (!activeModels.has(chunkKey)) {
@@ -1024,7 +1093,16 @@ let pov2 = 240;
           });
           
           // Add LOD billboard with chunk info for grouped checking
+          // In forge mode, still create billboard (needed for billboard-only mode)
           addLODBillboard(model, task.scene, task.modelRule, gfx.cameraTarget ? gfx.cameraTarget.position : null, chunkKey);
+          
+          // In forge mode with billboard-only, show billboard immediately
+          if (ENABLE_FORGE && BILLBOARD_ONLY_MODE) {
+            const lodEntry = lodModels.find(l => l.model === model.root);
+            if (lodEntry && lodEntry.billboard) {
+              lodEntry.billboard.setEnabled(true);
+            }
+          }
         })
         .catch(err => {
           console.warn('Model loading failed:', err);
@@ -1869,6 +1947,10 @@ let pov2 = 240;
     // Generate vertices and UVs for each tile in the chunk
     for (let i = 0; i < chunk.tiles.length; i++) {
       const tile = chunk.tiles[i];
+      
+      // Skip undefined tiles (shouldn't happen but be defensive)
+      if (!tile) continue;
+      
       const localX = i % (chunk.endX - chunk.startX);
       const localZ = Math.floor(i / (chunk.endX - chunk.startX));
       
@@ -1921,12 +2003,59 @@ let pov2 = 240;
         const worldZ1 = chunk.startZ + localZ;
         const worldX2 = chunk.startX + localX + 1;
         const worldZ2 = chunk.startZ + localZ + 1;
+        const waterLevel = -0.3;
         
-        // Calculate height for each corner vertex
-        height1 = chunk.field.getHeightVariation(worldX1, worldZ1); // bottom-left
-        height2 = chunk.field.getHeightVariation(worldX2, worldZ1); // bottom-right  
-        height3 = chunk.field.getHeightVariation(worldX2, worldZ2); // top-right
-        height4 = chunk.field.getHeightVariation(worldX1, worldZ2); // top-left
+        // Check if this tile is water (terrain type 1)
+        const tileIndex = worldZ1 * chunk.field.width + worldX1;
+        const isWater = chunk.field.terrainTypes && chunk.field.terrainTypes[tileIndex] === 1;
+        
+        if (isWater) {
+          // Water is perfectly flat at a constant level
+          height1 = height2 = height3 = height4 = waterLevel;
+        } else {
+          // Calculate height for each corner vertex
+          height1 = chunk.field.getHeightVariation(worldX1, worldZ1); // bottom-left
+          height2 = chunk.field.getHeightVariation(worldX2, worldZ1); // bottom-right  
+          height3 = chunk.field.getHeightVariation(worldX2, worldZ2); // top-right
+          height4 = chunk.field.getHeightVariation(worldX1, worldZ2); // top-left
+          
+          // Check each corner - if it touches a water tile, snap to water level
+          // This creates smooth shorelines without seams
+          const field = chunk.field;
+          const w = field.width;
+          const h = field.height;
+          const terrainTypes = field.terrainTypes;
+          
+          // Helper to check if a position has water
+          const hasWater = (x, z) => {
+            if (x < 0 || x >= w || z < 0 || z >= h) return false;
+            return terrainTypes[z * w + x] === 1;
+          };
+          
+          // Corner 1 (bottom-left at worldX1, worldZ1) - shared with tiles to left and below
+          if (hasWater(worldX1, worldZ1) || hasWater(worldX1 - 1, worldZ1) || 
+              hasWater(worldX1, worldZ1 - 1) || hasWater(worldX1 - 1, worldZ1 - 1)) {
+            height1 = waterLevel;
+          }
+          
+          // Corner 2 (bottom-right at worldX2, worldZ1) - shared with tiles to right and below
+          if (hasWater(worldX2, worldZ1) || hasWater(worldX2 - 1, worldZ1) ||
+              hasWater(worldX2, worldZ1 - 1) || hasWater(worldX2 - 1, worldZ1 - 1)) {
+            height2 = waterLevel;
+          }
+          
+          // Corner 3 (top-right at worldX2, worldZ2) - shared with tiles to right and above
+          if (hasWater(worldX2, worldZ2) || hasWater(worldX2 - 1, worldZ2) ||
+              hasWater(worldX2, worldZ2 - 1) || hasWater(worldX2 - 1, worldZ2 - 1)) {
+            height3 = waterLevel;
+          }
+          
+          // Corner 4 (top-left at worldX1, worldZ2) - shared with tiles to left and above
+          if (hasWater(worldX1, worldZ2) || hasWater(worldX1 - 1, worldZ2) ||
+              hasWater(worldX1, worldZ2 - 1) || hasWater(worldX1 - 1, worldZ2 - 1)) {
+            height4 = waterLevel;
+          }
+        }
       }
       
       // Vertex positions (x, y, z) with individual height variation for each corner
@@ -2072,10 +2201,10 @@ let pov2 = 240;
     dirtAtlasTexture = grassDirtAtlasTexture;
     rockAtlasTexture = new BABYLON.Texture("assets/textures/atlas-hd.png", gfx.scene);
     sandAtlasTexture = grassDirtAtlasTexture;
-    // Water atlases use grass-dirt as fallback (water textures not used)
-    grassWaterAtlasTexture = grassDirtAtlasTexture;
-    dirtWaterAtlasTexture = grassDirtAtlasTexture;
-    waterAtlasTexture = grassDirtAtlasTexture;
+    // Water transition atlases
+    grassWaterAtlasTexture = new BABYLON.Texture("assets/textures/atlas-grass-water.png", gfx.scene);
+    dirtWaterAtlasTexture = grassDirtAtlasTexture; // Fallback - we avoid dirt-water adjacency
+    waterAtlasTexture = grassWaterAtlasTexture; // Pure water uses grass-water atlas
 
     gfx.makeScene(gfx.scene);
 
@@ -3640,6 +3769,12 @@ let pov2 = 240;
 
   // Expose getModel function publicly
   gfx.getModel = getModel;
+  
+  // Expose createTerrainMesh for forge
+  gfx.createTerrainMesh = createTerrainMesh;
+  
+  // Expose placeDecorationsOnChunk for forge
+  gfx.placeDecorationsOnChunk = placeDecorationsOnChunk;
   
   // Expose model cleanup function for chunk management
   gfx.cleanupChunkModels = cleanupChunkModels;

@@ -89,8 +89,8 @@ gfx.makeTable = function(scene){
 
 
 gfx.stretchTable = function(table) {
-  let fieldWidth = liveField.width;
-  let fieldHeight = liveField.height;
+  let fieldWidth = window.liveField.width;
+  let fieldHeight = window.liveField.height;
 
   const width = fieldWidth * TILE_SIZE;
   const height = fieldHeight * TILE_SIZE;
@@ -135,7 +135,7 @@ gfx.stretchTable = function(table) {
   
   parts.FLOOR.mesh.material = parts.materials.floor;
 
-  if (liveField.width >= 128){
+  if (window.liveField.width >= 128){
     parts.NT.mesh.scaling.set(s,sh,s);
     parts.ST.mesh.scaling.set(s,sh,s);
     parts.NT.mesh.position.set(halfWidth, cy, height);
@@ -147,7 +147,7 @@ gfx.stretchTable = function(table) {
     parts.NT.mesh.isVisible = false;
     parts.ST.mesh.isVisible = false;
   }
-  if (liveField.height >= 128){
+  if (window.liveField.height >= 128){
     parts.ET.mesh.scaling.set(s,sh,s);
     parts.WT.mesh.scaling.set(s,sh,s);
     parts.ET.mesh.position.set(height, cy, halfHeight);

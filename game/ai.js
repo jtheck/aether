@@ -137,10 +137,9 @@ class Behavior {
         this.unit.pb.state.vel.x = Math.round(targetVelX * 1000) / 1000;
         this.unit.pb.state.vel.z = Math.round(targetVelZ * 1000) / 1000;
         
-        // Debug logging occasionally
-        if (Math.random() < 0.01) { // 1% chance to log
-            // console.log(`🎯 ${this.unit.name || this.unit.type} movement: dir(${direction.x.toFixed(2)}, ${direction.z.toFixed(2)}), rot(${rotationDiff.toFixed(2)}), rotSpeed(${rotationSpeed.toFixed(1)}), boost(${momentumBoost.toFixed(2)})`);
-        }
+        // Debug logging (disabled for performance)
+        // console.log(`🎯 ${this.unit.name || this.unit.type} movement: dir(${direction.x.toFixed(2)}, ${direction.z.toFixed(2)}), rot(${rotationDiff.toFixed(2)}), rotSpeed(${rotationSpeed.toFixed(1)}), boost(${momentumBoost.toFixed(2)})`);
+
     }
 }
 
@@ -1846,7 +1845,8 @@ class WanderBehavior extends Behavior {
         } else {
             // Time-based direction changes in menu scene (every 3-5 seconds)
             const framesSinceChange = (window.frameCounter || 0) - this.lastDirectionChangeFrame;
-            const directionChangeIntervalFrames = 180 + ((unitIdHash || Math.random() * 1000) % 120); // 180-300 frames (3-5 seconds at 60fps)
+            // Use unit ID hash for variety (add 1 to avoid 0 which would give same interval for all)
+            const directionChangeIntervalFrames = 180 + ((unitIdHash + 1) % 120); // 180-300 frames (3-5 seconds at 60fps)
             shouldChangeDirection = framesSinceChange > directionChangeIntervalFrames;
             if (shouldChangeDirection) {
                 this.lastDirectionChangeFrame = window.frameCounter || 0;
@@ -1870,16 +1870,16 @@ class WanderBehavior extends Behavior {
                 this.applyMicroMovement();
             }
         } else {
-            // Random micro-movements in menu scene
-            if (Math.random() < this.params.microMoveChance * 0.016) { // ~16ms per frame at 60fps
+            // Deterministic micro-movements in menu scene (use frame counter + unit hash)
+            const frame = window.frameCounter || 0;
+            const microMoveThreshold = this.params.microMoveChance * 16; // Scale to 0-1000 range
+            if (((frame + unitIdHash) % 1000) < microMoveThreshold) {
                 this.applyMicroMovement();
             }
         }
         
-        // Debug: log wander status occasionally
-        if (Math.random() < 0.005) { // 0.5% chance to log
-            // console.log(`🌍 ${this.unit.name || this.unit.type} wandering: elapsed=${(elapsed/1000).toFixed(1)}s, direction=(${this.currentDirection.x.toFixed(2)}, ${this.currentDirection.z.toFixed(2)})`);
-        }
+        // Debug: log wander status (disabled for performance)
+        // console.log(`🌍 ${this.unit.name || this.unit.type} wandering: elapsed=${(elapsed/1000).toFixed(1)}s, direction=(${this.currentDirection.x.toFixed(2)}, ${this.currentDirection.z.toFixed(2)})`);
         
         return false;
     }
@@ -1943,10 +1943,8 @@ class WanderBehavior extends Behavior {
         const effectiveSpeed = this.params.wanderSpeed || (this.unit.speed || 20) * 0.5;
         this.applyMovementWithRotation(this.currentDirection, effectiveSpeed);
         
-        // Debug logging for wander movement
-        if (Math.random() < 0.01) { // 1% chance to log
-            // console.log(`🌍 ${this.unit.name || this.unit.type} wandering: dir(${this.currentDirection.x.toFixed(2)}, ${this.currentDirection.z.toFixed(2)}), pos(${this.unit.pb.state.loc.x.toFixed(1)}, ${this.unit.pb.state.loc.z.toFixed(1)}), speed=${effectiveSpeed.toFixed(1)})`);
-        }
+        // Debug logging for wander movement (disabled for performance)
+        // console.log(`🌍 ${this.unit.name || this.unit.type} wandering: dir(${this.currentDirection.x.toFixed(2)}, ${this.currentDirection.z.toFixed(2)}), pos(${this.unit.pb.state.loc.x.toFixed(1)}, ${this.unit.pb.state.loc.z.toFixed(1)}), speed=${effectiveSpeed.toFixed(1)}`);
     }
     
     applyMicroMovement() {
@@ -2270,10 +2268,8 @@ class UnitBehaviorManager {
     // Get a unit's current behavior
     getBehavior(unit) {
         const behavior = this.behaviors.get(unit);
-        // Debug: log behavior queries occasionally
-        if (Math.random() < 0.001) { // 0.1% chance to log
-            // console.log(`🎯 ${unit.name || unit.type} behavior query: ${behavior ? behavior.constructor.name : 'none'}`);
-        }
+        // Debug: log behavior queries (disabled for performance)
+        // console.log(`🎯 ${unit.name || unit.type} behavior query: ${behavior ? behavior.constructor.name : 'none'}`);
         return behavior;
     }
     

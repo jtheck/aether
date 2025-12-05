@@ -2768,9 +2768,24 @@
 
   // Update LOD distances based on slider value (0-100)
   hud.updateLODDistances = function(value) {
-    // Level 0 = minimum LOD (very close distances)
+    // Level 0 = BILLBOARD ONLY MODE (for low-end mobile devices)
+    // Level 1-50 = lower LOD (closer distances)
     // Level 50 = default LOD (current distances)
     // Level 100 = maximum LOD (very far distances)
+    
+    // Billboard-only mode at 0%
+    if (value === 0) {
+      if (window.gfx && window.gfx.setBillboardOnlyMode) {
+        window.gfx.setBillboardOnlyMode(true);
+      }
+      console.log('🖼️ LOD 0%: Billboard-only mode enabled for low-end devices');
+      return;
+    } else {
+      // Disable billboard-only mode when slider moves above 0
+      if (window.gfx && window.gfx.setBillboardOnlyMode && window.gfx.isBillboardOnlyMode && window.gfx.isBillboardOnlyMode()) {
+        window.gfx.setBillboardOnlyMode(false);
+      }
+    }
     
     const multiplier = 0.3 + (value / 100) * 1.4; // Range from 0.3x to 1.7x
     

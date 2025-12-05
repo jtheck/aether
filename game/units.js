@@ -686,6 +686,9 @@ function createSelectionIndicator(unit) {
 function updateSelectionIndicators() {
     if (!window.player || !window.player.units) return;
     
+    // Defensive check for replay mode where player might not have all methods
+    if (typeof window.player.getSelectedUnits !== 'function') return;
+    
     const selectedUnits = window.player.getSelectedUnits();
     
     // Update all units' selection indicators

@@ -195,6 +195,8 @@
         <label for="colorPicker" style="display: block; margin-bottom: 5px;">Color:</label>
         <input type="color" id="colorPicker" value="#ff0000" style="width: 200px; height: 40px; cursor: pointer;">
       </div>
+      <hr style="border-color: rgba(255,255,255,0.2); margin: 15px 0;">
+      <div class="lobby_b" title="View saved replays" onclick="window.viewReplaysFromMenu()" style="background: rgba(100, 100, 200, 0.3);">🎬 View Replays</div>
     </div>
 
     <div id="ingame_menu" class="menu_menu">
@@ -251,6 +253,7 @@
   <script src="application.js"></script>
   <script src="game/utility.js"></script>
   <script src="game/constants.js"></script>
+  <script src="game/determinism.js"></script>
   <script src="game/ui.js"></script>
   <script src="game/lighting.js"></script>
   <script src="game/gfx.js"></script>

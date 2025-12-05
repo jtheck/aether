@@ -33,6 +33,16 @@
   let pendingCommandAcks = new Map(); // Track pending command acknowledgments: commandId -> { command, sentAt, retries }
   let lastPlayerCommandTime = 0; // Track when we last sent a player command (for LOD)
   
+  // TRUE LOCKSTEP: Tick confirmation system
+  // Each peer confirms they're ready for tick N by sending commands or a heartbeat
+  // We only advance to tick N when ALL peers have confirmed tick N
+  let peerTickConfirmations = new Map(); // peerId -> highest confirmed tick
+  let localConfirmedTick = 0; // Highest tick we've confirmed to peers
+  let lockstepEnabled = true; // Enable/disable lockstep (for debugging)
+  let lastHeartbeatTick = 0; // Last tick we sent a heartbeat for
+  let waitingForPeers = false; // Are we currently waiting for peers?
+  let lastWaitLog = 0; // Rate limit "waiting for peers" log
+  
   // Internal state tracking
   net._state = {
     localPlayerId: null,
@@ -157,7 +167,9 @@
     // console.log(`🌐 Network initialized for ${options.gameType || '1v1'}`);
   };
   
-  // Start the deterministic tick loop with adaptive rate
+  // TRUE LOCKSTEP TICK LOOP
+  // Tick N only advances when ALL peers have confirmed tick N
+  // This guarantees identical simulation on all clients
   net.startTickLoop = function() {
     // Clear any existing interval/timeout
     if (tickIntervalId !== null) {
@@ -165,81 +177,127 @@
       tickIntervalId = null;
     }
     
-    // Use adaptive tick rate function (recursive setTimeout for dynamic rate)
-    function scheduleNextTick() {
-      // Calculate adaptive tick rate based on peer lag
-      const maxPeerLag = getMaxPeerLag();
-      if (maxPeerLag > net.PEER_LAG_THRESHOLD) {
-        // Slow down if peers are lagging (adaptive lockstep)
-        currentTickRate = net.MIN_TICK_RATE;
-      } else {
-        // Normal speed when peers are caught up
-        currentTickRate = net.TICK_RATE;
+    // Check if we can advance to the next tick
+    function canAdvanceToTick(targetTick) {
+      if (!lockstepEnabled || !isConnected || !window.currentMatch) {
+        return true; // No lockstep in single player or before match
       }
       
-      // Apply tick synchronization adjustment from match (to keep ticks aligned)
-      const tickSyncAdjustment = window.currentMatch?.tickSyncAdjustment || 0;
-      const tickInterval = (1000 / currentTickRate) + tickSyncAdjustment;
+      const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+      if (connectedPeers.length === 0) {
+        return true; // No peers to wait for
+      }
       
-      tickIntervalId = setTimeout(() => {
-        tick++;
-        processTick();
-        scheduleNextTick(); // Schedule next tick with updated rate
-      }, tickInterval);
+      // Check if all peers have confirmed the target tick
+      for (const peerId of connectedPeers) {
+        const confirmedTick = peerTickConfirmations.get(peerId) || 0;
+        if (confirmedTick < targetTick) {
+          return false; // This peer hasn't confirmed yet
+        }
+      }
+      
+      return true; // All peers confirmed
     }
     
-    scheduleNextTick();
+    // Send heartbeat/confirmation for a tick
+    function sendTickConfirmation(forTick) {
+      if (!p2p || !isConnected || forTick <= lastHeartbeatTick) return;
+      
+      lastHeartbeatTick = forTick;
+      localConfirmedTick = forTick;
+      
+      p2p.sendData({
+        type: 'tick_confirm',
+        tick: forTick,
+        playerId: localPlayerShortId || localPlayerId
+      });
+    }
+    
+    // The lockstep tick loop
+    function lockstepTick() {
+      const targetTick = tick + 1;
+      const inputDelay = window.currentMatch?.inputDelayTicks || 3;
+      
+      if (canAdvanceToTick(targetTick)) {
+        // We can advance!
+        tick = targetTick;
+        waitingForPeers = false;
+        
+        // Process the tick
+        processTick();
+        
+        // Confirm we're ready for future ticks (current + input delay)
+        sendTickConfirmation(tick + inputDelay);
+        
+        // Schedule next check at normal tick rate
+        tickIntervalId = setTimeout(lockstepTick, 1000 / net.TICK_RATE);
+      } else {
+        // Waiting for peers - check again soon
+        if (!waitingForPeers) {
+          waitingForPeers = true;
+        }
+        
+        // Log waiting status (rate limited)
+        const now = Date.now();
+        if (now - lastWaitLog > 2000) {
+          const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+          const waiting = connectedPeers.filter(peerId => {
+            const confirmed = peerTickConfirmations.get(peerId) || 0;
+            return confirmed < targetTick;
+          });
+          if (waiting.length > 0) {
+            console.log(`⏳ Lockstep: waiting for ${waiting.length} peer(s) to confirm tick ${targetTick}`);
+          }
+          lastWaitLog = now;
+        }
+        
+        // Check again quickly (5ms) to minimize latency when peer confirms
+        tickIntervalId = setTimeout(lockstepTick, 5);
+      }
+    }
+    
+    // Start the loop
+    lockstepTick();
   };
   
   // Get maximum peer lag (how many ticks behind the slowest peer is)
   // Returns positive value if peers are ahead of us (we're behind)
-  // Returns negative value if peers are behind us (we're ahead)
+  // Returns 0 if peers are in sync or behind us
   function getMaxPeerLag() {
     if (!window.currentMatch || !isConnected) return 0;
     
     let maxLag = 0;
-    const currentTick = window.currentMatch.tick || tick;
+    // CRITICAL: Use match tick only - network tick is just for internal loop
+    const currentTick = window.currentMatch.tick;
     const now = Date.now();
-    const STALE_THRESHOLD = 2000; // 2 seconds - ignore peer lag data older than this (more aggressive)
+    const STALE_THRESHOLD = 1000; // 1 second - ignore stale data aggressively
     const ticksPerSecond = net.TICK_RATE || 20;
     
-    // Clean up stale entries first
+    // Clean up stale entries
     peerLag.forEach((lagInfo, peerId) => {
       const timeSinceLastSeen = now - (lagInfo.lastSeen || 0);
       if (timeSinceLastSeen > STALE_THRESHOLD) {
-        peerLag.delete(peerId); // Remove stale entries
+        peerLag.delete(peerId);
       }
     });
     
-    // Check if we're early in the match (first 10 seconds) - allow larger lag differences
-    const matchAge = window.currentMatch?.gameTime || (currentTick / ticksPerSecond);
-    const isEarlyMatch = matchAge < 10; // First 10 seconds of match
+    // Skip lag checking in first 5 seconds of match (synchronization period)
+    const matchAge = window.currentMatch.gameTime || 0;
+    if (matchAge < 5) {
+      return 0; // Don't report lag during initial sync
+    }
     
     peerLag.forEach((lagInfo, peerId) => {
       if (lagInfo.lastTick !== undefined) {
-        // Positive lag means peer is ahead (we're behind)
-        // Negative lag means peer is behind (we're ahead)
         const lag = lagInfo.lastTick - currentTick;
-        const age = (now - (lagInfo.lastSeen || 0)) / 1000; // Age in seconds
+        const age = (now - (lagInfo.lastSeen || 0)) / 1000;
         
-        // Only reject if BOTH conditions are true:
-        // 1. Lag is impossibly large (> 60 seconds)
-        // 2. AND the data is stale (age > 2 seconds)
-        // For negative lag (peer behind), only ignore if stale - fresh negative lag is legitimate
-        const maxAllowedLag = ticksPerSecond * 60; // 60 seconds - increased threshold for legitimate lag
-        const isStale = age > 2.0; // Data older than 2 seconds is considered stale
+        // Ignore stale data (>1 second old)
+        if (age > 1.0) return;
         
-        // Only ignore if lag is impossibly large AND stale
-        // Don't ignore negative lag if data is fresh (peer legitimately behind)
-        if (Math.abs(lag) > maxAllowedLag && isStale) {
-          // Log for debugging but don't use it
-          console.warn(`⚠️ Ignoring suspicious lag value: peer ${peerId.slice(-4)} reports ${lag} ticks difference (current: ${currentTick}, their tick: ${lagInfo.lastTick}, age: ${age.toFixed(1)}s, match age: ${matchAge.toFixed(1)}s)`);
-          return; // Skip suspiciously large AND stale lag values
-        }
-        
-        // Only count positive lag (peer ahead, we're behind)
-        // Even if it's large, if the data is fresh (< 2 seconds old), trust it
-        if (lag > 0) {
+        // Only count positive lag (peer ahead) within reasonable bounds
+        // Ignore impossibly large values (likely from before match reset)
+        if (lag > 0 && lag < ticksPerSecond * 30) { // Max 30 seconds
           maxLag = Math.max(maxLag, lag);
         }
       }
@@ -272,55 +330,18 @@
   function processTick() {
     // CRITICAL: Check if we're significantly behind and need to catch up
     // maxPeerLag > 0 means peers are ahead (we're behind)
-    // If we're more than 2 seconds behind (100 ticks at 50Hz), request full state sync
+    // LOCKSTEP MODE: Don't request catch-up. Both players should stay in sync via
+    // deterministic simulation. If there's drift, the gentle position corrections handle it.
+    // Requesting catch-up was causing more problems than it solved.
+    //
+    // Monitor peer lag for debugging only (no action taken)
     const maxPeerLag = getMaxPeerLag();
-    const CATCHUP_THRESHOLD = 100; // 2 seconds at 50Hz
-    
-    // Only request catch-up if we're actually behind (positive lag means peers are ahead)
-    // Rate limit catch-up requests to once per 10 seconds to avoid spam
-    const lastCatchupRequest = window.currentMatch?.lastCatchupRequest || 0;
-    const timeSinceLastRequest = Date.now() - lastCatchupRequest;
-    const canRequestCatchup = timeSinceLastRequest > 10000; // 10 seconds between requests
-    
-    // Only log warning once per catch-up cycle (not every tick)
-    const shouldLogWarning = !window.currentMatch?.lastCatchupWarningTime || 
-                             (Date.now() - window.currentMatch.lastCatchupWarningTime) > 10000;
-    
-    if (maxPeerLag > CATCHUP_THRESHOLD && isConnected && !window.currentMatch?.isCatchingUp && canRequestCatchup) {
-      if (shouldLogWarning) {
-        const ticksPerSecond = net.TICK_RATE || 20;
-        const secondsBehind = maxPeerLag / ticksPerSecond;
-        console.warn(`⚠️ Falling behind! Peers are ${maxPeerLag} ticks ahead (~${secondsBehind.toFixed(1)}s at ${ticksPerSecond}Hz). Requesting catch-up sync...`);
-        if (window.currentMatch) {
-          window.currentMatch.lastCatchupWarningTime = Date.now();
-        }
-      }
-      
-      // Mark that we're catching up
-      if (window.currentMatch) {
-        window.currentMatch.isCatchingUp = true;
-        window.currentMatch.lastCatchupRequest = Date.now();
-      }
-      
-      // Request full state sync from all peers
-      p2p.sendData({
-        type: 'request_catchup_sync',
-        myTick: tick,
-        myMatchTick: window.currentMatch?.tick || tick
-      });
-    }
-    
-    // Reset catch-up flag if we've been caught up for a while
-    if (window.currentMatch?.isCatchingUp && maxPeerLag <= 10) {
-      const timeSinceCatchup = Date.now() - (window.currentMatch.lastCatchupRequest || 0);
-      if (timeSinceCatchup > 2000) { // 2 seconds of being caught up
-        window.currentMatch.isCatchingUp = false;
-        // Only log success if we were significantly behind
-        if (window.currentMatch.lastCatchupWarningTime) {
-          console.log(`✅ Caught up! Lag: ${maxPeerLag} ticks`);
-          window.currentMatch.lastCatchupWarningTime = 0;
-        }
-      }
+    if (maxPeerLag > 200 && window.currentMatch && !window.currentMatch._lastLagWarning) {
+      // Only warn once for extreme lag (>10 seconds)
+      const ticksPerSecond = net.TICK_RATE || 20;
+      const secondsBehind = maxPeerLag / ticksPerSecond;
+      console.warn(`⚠️ [DEBUG] Peer lag detected: ${maxPeerLag} ticks (~${secondsBehind.toFixed(1)}s). This should resolve with tick reset.`);
+      window.currentMatch._lastLagWarning = Date.now();
     }
     
     // Execute buffered commands for this tick
@@ -350,6 +371,16 @@
   
   // Check and resend unacknowledged commands
   function checkPendingCommandAcks() {
+    // Skip if no connected peers (e.g., AI-only game)
+    const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+    if (connectedPeers.length === 0) {
+      // Clear any pending acks - no one to acknowledge them
+      if (pendingCommandAcks.size > 0) {
+        pendingCommandAcks.clear();
+      }
+      return;
+    }
+    
     const now = Date.now();
     pendingCommandAcks.forEach((ackInfo, commandId) => {
       if (now - ackInfo.sentAt > net.COMMAND_ACK_TIMEOUT) {
@@ -548,6 +579,20 @@
           remoteCommands.set(peerId, remoteCommands.get(peerId).filter(c => c.tick > tick - 10));
           break;
           
+        case 'tick_confirm':
+          // TRUE LOCKSTEP: Peer confirms they're ready for tick N
+          // This includes any commands they have for that tick
+          if (actualMessage.tick !== undefined) {
+            const confirmedTick = actualMessage.tick;
+            const currentConfirmed = peerTickConfirmations.get(peerId) || 0;
+            
+            // Only update if this is a newer confirmation
+            if (confirmedTick > currentConfirmed) {
+              peerTickConfirmations.set(peerId, confirmedTick);
+            }
+          }
+          break;
+          
         case 'state_sync':
           // P2P: Each player is authoritative for their own units
           // Only reconcile if there's significant drift (safety net for desync)
@@ -598,8 +643,15 @@
           // This prevents floating-point drift while maintaining P2P fairness
           if (window.currentMatch && actualMessage.positions && actualMessage.playerId) {
             window.currentMatch.applyUnitPositions(actualMessage.positions, actualMessage.playerId, actualMessage.tick);
-            // Update peer lag tracking
+            
+            // TRUE LOCKSTEP: Position sync also serves as tick confirmation
             if (actualMessage.tick !== undefined) {
+              const currentConfirmed = peerTickConfirmations.get(peerId) || 0;
+              // Position syncs confirm up to the synced tick + inputDelay
+              const confirmTick = actualMessage.tick + (window.currentMatch?.inputDelayTicks || 3);
+              if (confirmTick > currentConfirmed) {
+                peerTickConfirmations.set(peerId, confirmTick);
+              }
               updatePeerLag(peerId, actualMessage.tick);
             }
           }
@@ -848,6 +900,15 @@
             // Commands use normalized playerId (last 6 chars), but we need to match it correctly
             const normalizedPlayerId = cmd.playerId?.length > 6 ? cmd.playerId.slice(-6) : cmd.playerId;
             cmd.playerId = normalizedPlayerId; // Ensure command has normalized ID
+            
+            // TRUE LOCKSTEP: Command for tick N confirms peer is ready for tick N
+            // Update tick confirmation (commands serve as implicit heartbeats)
+            if (cmd.tick !== undefined) {
+              const currentConfirmed = peerTickConfirmations.get(peerId) || 0;
+              if (cmd.tick > currentConfirmed) {
+                peerTickConfirmations.set(peerId, cmd.tick);
+              }
+            }
             
             // Update peer lag tracking (they sent us a command at tick cmd.tick)
             // Use normalized playerId for lag tracking, not peerId
@@ -1334,8 +1395,14 @@
     }
   }
   
-  // Track command acknowledgment
+  // Track command acknowledgment (only when there are real peers)
   net.trackCommandAck = function(commandId, command) {
+    // Skip tracking if no connected peers (e.g., AI-only game)
+    const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+    if (connectedPeers.length === 0) {
+      return; // No peers to wait for acknowledgment
+    }
+    
     pendingCommandAcks.set(commandId, {
       command: command,
       sentAt: Date.now(),
@@ -1689,6 +1756,50 @@
   
   // OLD auto-start code removed - lobby system handles game start now via START button
   
+  // CRITICAL: Reset network state for new match start
+  // This ensures both players start with synchronized tick counters
+  net.resetForMatchStart = function() {
+    console.log('🔄 Resetting network state for match start (lockstep enabled)');
+    tick = 0;
+    commandBuffer = [];
+    remoteCommands.clear();
+    peerLag.clear();
+    lastStateSync = 0;
+    
+    // Reset lockstep state
+    peerTickConfirmations.clear();
+    localConfirmedTick = 0;
+    lastHeartbeatTick = 0;
+    waitingForPeers = false;
+    lastWaitLog = 0;
+    
+    // Pre-confirm initial ticks so game can start
+    // Each player confirms they're ready for ticks 0 through inputDelay
+    const inputDelay = window.currentMatch?.inputDelayTicks || 3;
+    const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+    connectedPeers.forEach(peerId => {
+      peerTickConfirmations.set(peerId, inputDelay);
+    });
+    localConfirmedTick = inputDelay;
+    lastHeartbeatTick = inputDelay;
+    
+    // Send initial confirmation to peers
+    if (p2p && isConnected) {
+      p2p.sendData({
+        type: 'tick_confirm',
+        tick: inputDelay,
+        playerId: localPlayerShortId || localPlayerId
+      });
+    }
+    
+    // Clear catch-up state
+    if (window.currentMatch) {
+      window.currentMatch.isCatchingUp = false;
+      window.currentMatch.lastCatchupRequest = 0;
+      window.currentMatch.lastCatchupWarningTime = 0;
+    }
+  };
+  
   // Cleanup on disconnect
   net.disconnect = function() {
     if (p2p) {
@@ -1780,12 +1891,10 @@
   
 })(window.net = window.net || {});
 
-// Make deterministic RNG available globally for lockstep
-// (Replace Math.random() calls with this for reproducible sim)
-window.deterministicRandom = function(seed) {
-  let x = Math.sin(seed) * 10000;
-  return x - Math.floor(x);
-};
+// DEPRECATED: Old Math.sin()-based RNG - replaced by Determinism module
+// The new deterministicRandom is set up in game/determinism.js using mulberry32
+// which is truly deterministic across all platforms.
+// window.deterministicRandom is now defined in determinism.js
 
 // DON'T auto-initialize networking here!
 // The lobby system will initialize it when user picks a game type

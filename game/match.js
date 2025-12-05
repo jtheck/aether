@@ -48,6 +48,18 @@
       this.eliminatedPlayers = new Set();
       this.victoryCheckingDisabled = false; // Set to true after player chooses to continue playing
       
+      // DETERMINISM MODE: When true, uses very gentle corrections and relies primarily on
+      // deterministic command execution. Position sync is still sent for desync DETECTION
+      // with soft corrections (2% per frame) to prevent accumulation.
+      this.strictDeterminism = options.strictDeterminism !== undefined ? options.strictDeterminism : true;
+      
+      // INPUT DELAY: Number of ticks to delay command execution (lockstep sync)
+      // This ensures all peers receive commands before they execute.
+      // Higher = more sync safety, but more input lag
+      // 3 ticks = 150ms at 20Hz (good for ~100ms RTT)
+      // 4 ticks = 200ms at 20Hz (safe for ~150ms RTT)
+      this.inputDelayTicks = options.inputDelayTicks !== undefined ? options.inputDelayTicks : 3;
+      
       // Command queue and history
       this.pendingCommands = []; // Commands waiting to be executed
       this.commandHistory = []; // All commands for replay
@@ -102,11 +114,16 @@
       
       // Replay data
       this.replay = {
-        version: '1.0',
+        version: '1.1',
         matchId: this.id,
         gameType: this.gameType,
         mapSeed: this.mapSeed,
-        players: this.players.map(p => ({ id: p.id || p, name: p.name || 'Unknown' })),
+        fieldSize: window.liveField?.width || 64, // Store field size for replay
+        players: this.players.map(p => ({ 
+          id: p.id || p, 
+          name: p.name || 'Unknown',
+          color: p.color || null
+        })),
         commands: []
       };
       
@@ -301,6 +318,19 @@
       this.tick = 0;
       this.gameTime = 0;
       
+      // CRITICAL: Reset network tick counter so both players start at tick 0
+      // This is essential for lockstep synchronization
+      if (window.net && window.net.resetForMatchStart) {
+        window.net.resetForMatchStart();
+      }
+      
+      // CRITICAL: Initialize deterministic RNG with map seed for this match
+      // All random operations during the match MUST use this RNG
+      if (window.Determinism && window.Determinism.initMatchRng) {
+        window.Determinism.initMatchRng(this.mapSeed);
+        console.log(`🎲 Match RNG initialized with seed: ${this.mapSeed}`);
+      }
+      
       // CRITICAL: Reset physics time accumulator to prevent catch-up at match start
       // Physics catch-up during loading causes units to be in different positions
       // when the match begins, leading to immediate desync
@@ -365,9 +395,10 @@
         // console.log('🎯 Lasso selection system reinitialized');
       }
       
-      // CRITICAL: Handle tab visibility changes to track catch-up time
-      // When tab loses focus, browsers throttle requestAnimationFrame but setInterval continues
-      // We track the time lost and catch up when tab becomes visible again
+      // CRITICAL: Handle tab visibility changes
+      // When tab loses focus, browsers throttle requestAnimationFrame
+      // Do NOT catch up when tab regains focus - this causes desync!
+      // Visual interpolation will smooth out any visual jitter.
       if (!this._visibilityHandlerAdded) {
         this._visibilityHandlerAdded = true;
         this._tabHiddenTime = null;
@@ -376,14 +407,17 @@
             // Tab hidden - record the time
             this._tabHiddenTime = performance.now();
           } else {
-            // Tab visible - calculate missed time and add to physics catch-up
+            // Tab visible again - do NOT catch up (causes desync)
             if (this._tabHiddenTime !== null && window.gameLoop) {
-              const missedTime = (performance.now() - this._tabHiddenTime) / 1000; // Convert to seconds
-              if (missedTime > 0.1) { // Only catch up if we missed significant time (>100ms)
-                // Add missed time to physics accumulator for catch-up
-                window.gameLoop.physicsTime += missedTime;
-                console.log(`🔄 Tab refocused - catching up ${missedTime.toFixed(2)}s of physics`);
+              const missedTime = (performance.now() - this._tabHiddenTime) / 1000;
+              
+              if (missedTime > 0.5) {
+                console.log(`🔄 Tab refocused after ${missedTime.toFixed(2)}s - NOT catching up (determinism)`);
               }
+              // Reset physics time to prevent any accumulated backlog
+              // Visual interpolation will smooth the transition
+              window.gameLoop.physicsTime = 0;
+              window.gameLoop.lastTime = performance.now();
               this._tabHiddenTime = null;
             }
           }
@@ -593,13 +627,19 @@
       }
       
       // Add metadata
-      // MULTIPLAYER TUNING: Command buffer delay with priority system
-      // Player commands (move, attack) get minimal delay for real-time feel
-      // Background commands (gather, work) get longer delay for smoother sync
+      // MULTIPLAYER LOCKSTEP: Input delay ensures commands arrive at all peers before execution
+      // This is the classic RTS solution (StarCraft, Age of Empires) for deterministic sync.
+      // 
+      // At 20Hz network tick rate (50ms per tick):
+      // - 3 ticks = 150ms delay (good for ~100ms RTT)
+      // - 4 ticks = 200ms delay (safe for ~150ms RTT)
+      //
+      // The delay feels responsive because:
+      // 1. Visual feedback (selection, path preview) is instant
+      // 2. Only the actual unit movement is delayed
+      // 3. 150ms is within human perception threshold for "immediate"
       const isPlayerCommand = command.type === 'move' || command.type === 'attack' || command.type === 'ability';
-      const COMMAND_BUFFER_DELAY_PLAYER = 1; // Minimal delay for player commands (real-time feel)
-      const COMMAND_BUFFER_DELAY_BACKGROUND = 3; // Longer delay for background commands (smoother sync)
-      const commandDelay = isPlayerCommand ? COMMAND_BUFFER_DELAY_PLAYER : COMMAND_BUFFER_DELAY_BACKGROUND;
+      const commandDelay = isPlayerCommand ? this.inputDelayTicks : (this.inputDelayTicks + 1);
       
       const enrichedCommand = {
         ...command,
@@ -611,15 +651,15 @@
         priority: isPlayerCommand ? 'high' : 'normal' // Mark priority for network layer
       };
       
-      // Log gather/work commands for debugging
-      if (command.type === 'gather' || command.type === 'work') {
-        console.log(`📝 submitCommand`, {
-          type: command.type,
-          unitIds: command.unitIds,
-          scheduledTick: enrichedCommand.tick,
-          currentTick: this.tick
-        });
-      }
+      // Debug: log gather/work commands (disabled for cleaner console)
+      // if (command.type === 'gather' || command.type === 'work') {
+      //   console.log(`📝 submitCommand`, {
+      //     type: command.type,
+      //     unitIds: command.unitIds,
+      //     scheduledTick: enrichedCommand.tick,
+      //     currentTick: this.tick
+      //   });
+      // }
       
       // Validate command
       if (!this.validateCommand(enrichedCommand)) {
@@ -2404,21 +2444,12 @@
         const avgDiff = recentDiffs.reduce((a, b) => a + b, 0) / recentDiffs.length;
         const consistentDivergence = recentDiffs.every(d => Math.abs(d - avgDiff) < 50);
         
-        // If we consistently see the peer is behind, we're running too fast
-        // Adjust tick rate slightly to slow down and let them catch up
-        if (consistentDivergence && avgDiff > ticksPerSecond * 2) {
-          // Slow down by adding small delay (max 10ms per tick)
-          this.tickSyncAdjustment = Math.min(avgDiff / ticksPerSecond * 2, 10);
-          if (this.tickSyncAdjustment > 1) {
-            console.log(`🔄 Tick sync adjustment: slowing down by ${this.tickSyncAdjustment.toFixed(1)}ms (peer ${avgDiff.toFixed(0)} ticks behind)`);
-          }
-        } else if (consistentDivergence && avgDiff < -ticksPerSecond) {
-          // Peer is ahead, but we can't speed up - just note it
-          this.tickSyncAdjustment = 0;
-        } else {
-          // Divergence is inconsistent or small, reset adjustment
-          this.tickSyncAdjustment = Math.max(0, this.tickSyncAdjustment - 0.5);
-        }
+        // DISABLED: Tick sync adjustment was causing more problems than it solved.
+        // Instead of adjusting tick rate, we rely on:
+        // 1. Input delay (commands scheduled for future ticks)
+        // 2. Gentle position corrections for any remaining drift
+        // Adjusting tick rate caused one player to fall further behind indefinitely.
+        this.tickSyncAdjustment = 0;
       }
       
       // CRITICAL: Mark that we received position sync from this peer
@@ -2427,23 +2458,18 @@
         this.pendingPositionSyncs.delete(fromPlayerId);
       }
       
-      // CRITICAL: Handle late position syncs intelligently
-      // Peers may have diverging tick counts or network delays, so we need generous tolerance
-      // Only reject if it's impossibly old (> 60 seconds) - likely stale/duplicate from a disconnected peer
-      const maxAcceptableAge = ticksPerSecond * 60; // ~60 seconds tolerance for network delays and tick divergence
+      // POSITION SYNC: Apply regardless of tick difference
+      // Tick counters will drift slightly between clients (setTimeout variance).
+      // Rather than rejecting "stale" syncs, we apply them all with lerp correction.
+      // The 15% lerp ensures smooth convergence without snapping.
+      //
+      // Only reject truly ancient syncs (> 5 minutes old) which are likely from
+      // a disconnected/reconnected peer with completely wrong state.
+      const maxAcceptableAge = ticksPerSecond * 300; // 5 minutes
       if (tickDiff > maxAcceptableAge) {
-        console.warn(`⚠️ Ignoring unit position sync from impossibly old tick: ${tick} (current: ${this.tick}, diff: ${tickDiff}, max: ${maxAcceptableAge}, ~${(tickDiff / ticksPerSecond).toFixed(1)}s late)`);
+        console.warn(`⚠️ Ignoring ancient position sync: ${tickDiff} ticks old`);
         return;
       }
-      
-      // If sync is moderately old (> 5 seconds), log warning but still apply
-      // This handles peers that are temporarily behind due to network lag, slow processing, or tick divergence
-      if (tickDiff > ticksPerSecond * 5) {
-        console.warn(`⚠️ Applying late position sync from tick ${tick} (current: ${this.tick}, diff: ${tickDiff} ticks, ~${(tickDiff / ticksPerSecond).toFixed(1)}s late)`);
-      }
-      
-      // If sync is from a past checkpoint (but within acceptable window), use catch-up
-      const isLateSync = tickDiff > 0;
       
       // Normalize IDs for comparison
       const remotePlayerId = fromPlayerId?.slice ? fromPlayerId.slice(-6) : fromPlayerId;
@@ -2473,47 +2499,45 @@
             const isMultiPlayerGame = playerCount >= 3;
             const catastrophicThreshold = isMultiPlayerGame ? 50 : 20; // Higher threshold for 3+ players
             
-            if (errorDistance > 0.3 && errorDistance < catastrophicThreshold) {
-              // Smooth catch-up: reduced strength to prevent units from moving faster than normal
-              // Max strength is 0.2 (20% per frame) to ensure units don't speed up
-              // This matches the cap in units.js - corrections should be gentle
-              const maxStrength = 0.2; // Cap at 20% per frame to prevent speedups
-              const baseStrength = 0.15; // Base strength (was 0.2-0.3)
-              const adjustedStrength = Math.min(baseStrength + (errorDistance * 0.005), maxStrength); // Reduced from 0.01 to 0.005
-              unit._positionCorrection = {
-                targetX: posData.x,
-                targetZ: posData.z,
-                strength: adjustedStrength // Reduced strength to prevent speedups
-              };
+            // DETERMINISM MODE: Apply very gentle corrections to prevent drift accumulation
+            // Without corrections, late commands cause drift that accumulates forever.
+            // With gentle corrections (2% per frame), units slowly converge without speedup.
+            if (this.strictDeterminism) {
+              // OPPONENT UNITS: The other player is AUTHORITATIVE for their own units.
+              // We should trust their position sync and update physics directly.
+              // The visual interpolation system will smooth the transition.
+              //
+              // This fixes the "snap vs smooth" asymmetry:
+              // - Before: We only updated visualPosition, which was overridden by pb.state.loc lerp
+              // - After: We update pb.state.loc, and visualPosition follows smoothly
               
-              // Update visual position immediately to prevent visual lag
-              if (unit.visualPosition) {
-                unit.visualPosition.x = posData.x;
-                unit.visualPosition.z = posData.z;
-                unit.visualPosition.y = posData.y;
+              if (errorDistance > 0.5) {
+                // Log significant drift (but rate-limit to avoid spam)
+                if (errorDistance > 10.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {
+                  console.warn(`🔍 Position drift: unit ${unit.id.slice(-4)} is ${errorDistance.toFixed(2)} units off`);
+                  this._lastDriftLog = Date.now();
+                }
+                
+                // Update physics position directly (authoritative from owner)
+                // Use lerp for smooth transition, not instant snap
+                const syncStrength = 0.15; // 15% per sync = smooth but responsive
+                unit.pb.state.loc.x += (posData.x - unit.pb.state.loc.x) * syncStrength;
+                unit.pb.state.loc.z += (posData.z - unit.pb.state.loc.z) * syncStrength;
+                unit.pb.state.loc.y = posData.y;
+                
+                correctedCount++;
               }
+            } else if (errorDistance > 0.3) {
+              // Non-strict mode: Also update physics directly, but use stronger correction
+              const syncStrength = Math.min(0.2, 0.1 + errorDistance * 0.01);
+              unit.pb.state.loc.x += (posData.x - unit.pb.state.loc.x) * syncStrength;
+              unit.pb.state.loc.z += (posData.z - unit.pb.state.loc.z) * syncStrength;
+              unit.pb.state.loc.y = posData.y;
               
               correctedCount++;
-            } else if (errorDistance >= catastrophicThreshold) {
-              // Catastrophic desync - snap immediately (both physics and visual)
-              unit.pb.state.loc.x = posData.x;
-              unit.pb.state.loc.y = posData.y;
-              unit.pb.state.loc.z = posData.z;
-              if (unit.visualPosition) {
-                unit.visualPosition.x = posData.x;
-                unit.visualPosition.y = posData.y;
-                unit.visualPosition.z = posData.z;
-              }
-              // Only warn for truly catastrophic errors (> 50 units in 3+ player games)
-              if (errorDistance > (isMultiPlayerGame ? 50 : 20)) {
-                console.warn(`⚠️ Large position error (${errorDistance.toFixed(1)} units) - snapped unit ${unit.id.slice(-4)}`);
-              }
             } else {
-              // Small error (< 0.3 units) - just update Y if needed, let normal movement handle it
+              // Small error (< 0.3 units) - just update Y, let normal movement handle X/Z
               unit.pb.state.loc.y = posData.y;
-              if (unit.visualPosition) {
-                unit.visualPosition.y = posData.y;
-              }
             }
             
             appliedCount++;
@@ -2521,13 +2545,8 @@
         }
       });
       
-      if (appliedCount > 0) {
-        const snapCount = appliedCount - correctedCount;
-        // Only log if there's a significant issue (late sync with corrections needed)
-        if (isLateSync && tickDiff > 5) {
-          console.warn(`⚠️ Late sync: Applied ${appliedCount} unit positions from player ${remotePlayerId} (${tickDiff} ticks late)`);
-        }
-      }
+      // Position sync applied successfully - no logging needed for normal operation
+      // (stale syncs are already rejected above)
     }
     
     // Sync resource states at sync checkpoint (authoritative sync)
@@ -3193,58 +3212,41 @@
     // Save replay to local storage
     saveReplay() {
       try {
+        // Add timestamp and version info
+        this.replay.savedAt = Date.now();
+        this.replay.version = '1.1'; // Current replay format version
+        this.replay.saved = false; // Not protected by default
+        
         const replayKey = `replay_${this.id}`;
         const replayData = JSON.stringify(this.replay);
         
         try {
           localStorage.setItem(replayKey, replayData);
-          // console.log(`💾 Replay saved: ${replayKey} (${(replayData.length / 1024).toFixed(1)} KB)`);
+          console.log(`💾 Replay saved: ${replayKey} (${(replayData.length / 1024).toFixed(1)} KB)`);
         } catch (quotaError) {
           // Storage quota exceeded - clean up old replays and retry
           console.warn('⚠️ Storage quota exceeded, cleaning up old replays...');
-          this.cleanupOldReplays();
+          if (window.Determinism && window.Determinism.cleanupOldReplays) {
+            window.Determinism.cleanupOldReplays(10); // Keep only 10 when quota exceeded
+          }
           
           try {
             localStorage.setItem(replayKey, replayData);
-            // console.log(`💾 Replay saved after cleanup: ${replayKey}`);
+            console.log(`💾 Replay saved after cleanup: ${replayKey}`);
           } catch (retryError) {
             // Still failed - the replay is probably too large
             console.error('❌ Replay too large to save even after cleanup');
             this.showNotification('⚠️ Replay too large to save to browser storage', 'warning');
           }
         }
+        
+        // Proactively clean up if we have too many replays (keep 15)
+        if (window.Determinism && window.Determinism.cleanupOldReplays) {
+          window.Determinism.cleanupOldReplays(15);
+        }
       } catch (error) {
         console.error('❌ Failed to save replay:', error);
       }
-    }
-    
-    // Clean up old replays to free storage space
-    cleanupOldReplays() {
-      const replayKeys = [];
-      
-      // Find all replay keys
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('replay_')) {
-          replayKeys.push(key);
-        }
-      }
-      
-      // Sort by timestamp (newer first) and keep only the 5 most recent
-      replayKeys.sort((a, b) => {
-        const timeA = parseInt(a.split('-')[1]) || 0;
-        const timeB = parseInt(b.split('-')[1]) || 0;
-        return timeB - timeA;
-      });
-      
-      // Remove all but the 5 most recent
-      const toRemove = replayKeys.slice(5);
-      toRemove.forEach(key => {
-        localStorage.removeItem(key);
-        // console.log(`🗑️ Removed old replay: ${key}`);
-      });
-      
-      // console.log(`🧹 Cleaned up ${toRemove.length} old replays, kept ${Math.min(5, replayKeys.length)} recent ones`);
     }
     
     // Report match results (placeholder for server integration)
@@ -3296,8 +3298,518 @@
     
     // View replay
     viewReplay() {
-      // console.log('🎬 Replay viewer not implemented yet');
-      // TODO: Implement replay viewer
+      console.log('🎬 Opening replay viewer...');
+      this.showReplayViewer();
+    }
+    
+    // Show replay viewer UI
+    showReplayViewer() {
+      // Get list of saved replays
+      const replays = window.Determinism ? window.Determinism.listReplays() : [];
+      
+      // Create replay viewer overlay
+      let viewer = document.getElementById('replay_viewer');
+      if (!viewer) {
+        viewer = document.createElement('div');
+        viewer.id = 'replay_viewer';
+        viewer.style.cssText = `
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.9);
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          z-index: 10000;
+          color: white;
+          font-family: sans-serif;
+        `;
+        document.body.appendChild(viewer);
+      }
+      
+      // Build replay list HTML
+      let replayListHtml = '';
+      if (replays.length === 0) {
+        replayListHtml = '<p style="color: #888;">No replays saved yet.</p>';
+      } else {
+        replayListHtml = replays.map((r, i) => `
+          <div class="replay_item" style="
+            background: rgba(50, 50, 80, 0.8);
+            padding: 15px;
+            margin: 5px 0;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+          " onmouseover="this.style.background='rgba(70, 70, 120, 0.9)'" 
+             onmouseout="this.style.background='rgba(50, 50, 80, 0.8)'"
+             onclick="window.currentMatch.loadAndPlayReplay('${r.id}')">
+            <div>
+              <div style="font-weight: bold;">${r.gameType || 'Match'} - ${r.players?.length || '?'} players</div>
+              <div style="font-size: 0.8em; color: #aaa;">
+                ${r.commandCount || 0} commands • ${this.formatDuration((r.duration || 0) * 1000)}
+              </div>
+            </div>
+            <div style="text-align: right;">
+              <div style="color: ${r.winner ? '#4CAF50' : '#888'};">${r.winner ? '🏆 Winner' : ''}</div>
+              <div style="font-size: 0.7em; color: #666;">Seed: ${r.mapSeed || '?'}</div>
+            </div>
+          </div>
+        `).join('');
+      }
+      
+      viewer.innerHTML = `
+        <div style="max-width: 600px; width: 90%;">
+          <h2 style="margin-bottom: 20px;">🎬 Replay Viewer</h2>
+          <div style="max-height: 400px; overflow-y: auto;">
+            ${replayListHtml}
+          </div>
+          <div style="margin-top: 20px; display: flex; gap: 10px; justify-content: center;">
+            <button onclick="document.getElementById('replay_viewer').style.display='none'" 
+                    style="padding: 10px 20px; background: #444; border: none; color: white; border-radius: 5px; cursor: pointer;">
+              Close
+            </button>
+          </div>
+          <div style="margin-top: 20px; font-size: 0.8em; color: #666; text-align: center;">
+            Click a replay to watch it. Replays verify determinism by re-executing all commands.
+          </div>
+        </div>
+      `;
+      
+      viewer.style.display = 'flex';
+    }
+    
+    // Load and play a replay
+    async loadAndPlayReplay(replayId) {
+      console.log(`🎬 Loading replay: ${replayId}`);
+      
+      // Hide viewer and end game screen
+      const viewer = document.getElementById('replay_viewer');
+      if (viewer) viewer.style.display = 'none';
+      
+      const endScreen = document.getElementById('match_end_screen');
+      if (endScreen) endScreen.style.display = 'none';
+      
+      // Load replay data
+      const replayData = window.Determinism ? window.Determinism.loadReplay(replayId) : null;
+      if (!replayData) {
+        console.error('❌ Failed to load replay');
+        this.showNotification('Failed to load replay', 'error');
+        return;
+      }
+      
+      console.log(`📊 Replay loaded: ${replayData.commands?.length || 0} commands, seed: ${replayData.mapSeed}`);
+      
+      // CRITICAL: Set up the game world for replay
+      // We need to create the map, spawn units, etc. using the replay's seed
+      try {
+        await this.initializeReplayWorld(replayData);
+      } catch (error) {
+        console.error('❌ Failed to initialize replay world:', error);
+        this.showNotification('Failed to load replay world', 'error');
+        return;
+      }
+      
+      // Create replay player
+      const replayPlayer = new window.Determinism.ReplayPlayer(replayData);
+      await replayPlayer.initialize();
+      
+      // Show replay playback UI
+      this.showReplayPlaybackUI(replayPlayer, replayData);
+      
+      // Start playback
+      this.startReplayPlayback(replayPlayer);
+    }
+    
+    // Initialize the game world from replay data
+    async initializeReplayWorld(replayData) {
+      console.log(`🌍 Initializing replay world with seed: ${replayData.mapSeed}`);
+      
+      const TILE_SIZE = window.TILE_SIZE || 4;
+      
+      // Stop any existing game/match
+      if (window.gameLoop && window.gameLoop.stop) {
+        window.gameLoop.stop();
+      }
+      
+      // Clear existing game state using Lobby's reset if available
+      if (window.Lobby && window.Lobby.resetGameState) {
+        window.Lobby.resetGameState();
+      } else {
+        // Fallback: manual cleanup
+        window.gameUnits = [];
+        window.gameBuildings = [];
+        if (window.behaviorManager && window.behaviorManager.clear) {
+          window.behaviorManager.clear();
+        }
+      }
+      
+      // Set the map seed for deterministic generation
+      window.mapSeed = replayData.mapSeed;
+      window.isMultiplayer = false; // Replay mode
+      window.isReplayMode = true;
+      
+      // Initialize deterministic RNG
+      if (window.Determinism && window.Determinism.initMatchRng) {
+        window.Determinism.initMatchRng(replayData.mapSeed);
+      }
+      
+      // Get field dimensions from replay or use default
+      const fieldSize = replayData.fieldSize || 64;
+      const dims = window.Lobby?.getFieldDimensions?.(fieldSize) || { width: fieldSize, height: fieldSize };
+      
+      // Get spawn positions BEFORE creating field (needed for flattening)
+      const playerCount = replayData.players?.length || 2;
+      let spawnPositions = [];
+      
+      if (window.Lobby && window.Lobby.getSpawnPositions) {
+        spawnPositions = window.Lobby.getSpawnPositions(playerCount, fieldSize);
+      } else {
+        // Fallback: simple corner spawns
+        const margin = Math.floor(dims.width * 0.15);
+        spawnPositions = [
+          { x: margin, y: margin },
+          { x: dims.width - margin, y: dims.height - margin }
+        ];
+      }
+      
+      // Dispose old field before creating new one
+      const oldField = window.liveField;
+      if (oldField && typeof oldField.dispose === 'function') {
+        oldField.dispose();
+      }
+      
+      // Create the field/map with the replay's seed AND spawn positions (for flattening)
+      if (window.Field) {
+        window.liveField = new window.Field({
+          width: dims.width,
+          height: dims.height,
+          seed: replayData.mapSeed,
+          spawnPositions: spawnPositions // Critical: pass spawn positions for flattening
+        });
+        
+        // Update global liveField reference
+        if (typeof liveField !== 'undefined') {
+          liveField = window.liveField;
+        }
+        
+        // Apply LOD settings
+        if (window.hud && window.hud.getCurrentLODMultiplier) {
+          const currentMultiplier = window.hud.getCurrentLODMultiplier();
+          window.liveField.originalLoadDistance = 4;
+          const newLoadDistance = Math.round(4 * currentMultiplier);
+          window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
+        }
+      }
+      
+      // Re-stretch the table to the new field dimensions
+      if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
+        gfx.stretchTable(window.gfx.table);
+      }
+      
+      // Force camera limits to recalc for new field size
+      window._cameraLimitsSet = false;
+      
+      // Create proper Player objects for replay
+      const players = [];
+      
+      for (let i = 0; i < playerCount; i++) {
+        const pData = replayData.players?.[i] || { id: `replay-player-${i}`, name: `Player ${i + 1}` };
+        const spawn = spawnPositions[i] || spawnPositions[0];
+        
+        if (i === 0) {
+          // Local player for replay viewing
+          if (!window.player || !window.player.getSelectedUnits) {
+            if (typeof Player !== 'undefined') {
+              window.player = new Player({
+                id: pData.id,
+                name: pData.name || 'Replay Player 1',
+                color: pData.color || '#ff0000',
+                agora: spawn
+              });
+            } else {
+              throw new Error('Player class not available for replay');
+            }
+          } else {
+            window.player.id = pData.id;
+            window.player.name = pData.name || 'Replay Player 1';
+            window.player.agora = spawn;
+            window.player.units = [];
+            window.player.buildings = [];
+            window.player.selectedUnits = [];
+          }
+          
+          // Position player frog at spawn
+          if (window.player.pbody) {
+            window.player.pbody.state.loc.set(spawn.x * TILE_SIZE, 0, spawn.y * TILE_SIZE);
+          }
+          
+          players.push(window.player);
+        } else {
+          // Opponent player
+          let opponent;
+          if (typeof Player !== 'undefined') {
+            opponent = new Player({
+              id: pData.id,
+              name: pData.name || `Replay Player ${i + 1}`,
+              color: pData.color || (i === 1 ? '#0000ff' : '#00ff00'),
+              agora: spawn
+            });
+          } else {
+            opponent = {
+              id: pData.id,
+              name: pData.name || `Replay Player ${i + 1}`,
+              color: pData.color || '#0000ff',
+              agora: spawn,
+              units: [],
+              buildings: [],
+              selectedUnits: [],
+              getSelectedUnits: function() { return []; }
+            };
+          }
+          players.push(opponent);
+        }
+      }
+      
+      // Store opponents
+      window.opponents = players.slice(1);
+      
+      // Position camera at first player's spawn
+      if (window.gfx && window.gfx.camera && window.gfx.cameraTarget && spawnPositions[0]) {
+        const agoraX = spawnPositions[0].x * TILE_SIZE;
+        const agoraZ = spawnPositions[0].y * TILE_SIZE;
+        
+        // Position camera target
+        window.gfx.cameraTarget.position.x = agoraX;
+        window.gfx.cameraTarget.position.y = 9;
+        window.gfx.cameraTarget.position.z = agoraZ;
+        
+        if (window.cameraAnchor) {
+          window.cameraAnchor.x = agoraX;
+          window.cameraAnchor.y = 9;
+          window.cameraAnchor.z = agoraZ;
+        }
+        
+        // Calculate angle to map center for camera orientation
+        const mapCenterX = (dims.width / 2) * TILE_SIZE;
+        const mapCenterZ = (dims.height / 2) * TILE_SIZE;
+        const dx = mapCenterX - agoraX;
+        const dz = mapCenterZ - agoraZ;
+        const angleToCenter = Math.atan2(dx, dz);
+        
+        window.gfx.camera.alpha = angleToCenter + Math.PI;
+        window.gfx.camera.beta = 1.1;
+        window.gfx.camera.radius = 80;
+      }
+      
+      // Force-load chunks at spawn position (CRITICAL for terrain to appear!)
+      if (window.gfx && window.gfx.forceLoadChunks && window.gfx.cameraTarget) {
+        const targetPos = window.gfx.cameraTarget.position;
+        window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
+      }
+      
+      // Start LOD ramping for resources
+      if (window.gfx && window.gfx.startGameLOD) {
+        window.gfx.startGameLOD();
+      }
+      
+      // Create the game with proper player objects
+      // NOTE: Game constructor calls init() which spawns villagers
+      // For replay, this is what we want - the initial state needs to be set up
+      // Commands in the replay are player commands, not unit spawn commands
+      if (window.Game) {
+        window.game = new window.Game({
+          type: replayData.gameType || 'replay',
+          map: 'replay',
+          players: players
+        });
+        // Game.init() runs automatically and spawns initial units
+        window.game.gameState = 'running';
+      }
+      
+      // Spawn visual meshes for all units that were just created
+      if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
+        window.spawnUnitModels(window.gfx.scene);
+      }
+      
+      // Start the game loop (for rendering)
+      if (window.gameLoop && window.gameLoop.start) {
+        window.gameLoop.start();
+      }
+      
+      console.log(`✅ Replay world initialized with ${players.length} players, field ${dims.width}x${dims.height}`);
+    }
+    
+    // Show replay playback UI
+    showReplayPlaybackUI(replayPlayer, replayData) {
+      let controls = document.getElementById('replay_controls');
+      if (!controls) {
+        controls = document.createElement('div');
+        controls.id = 'replay_controls';
+        controls.style.cssText = `
+          position: fixed;
+          bottom: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: rgba(0, 0, 0, 0.8);
+          padding: 15px 25px;
+          border-radius: 10px;
+          display: flex;
+          align-items: center;
+          gap: 15px;
+          z-index: 10001;
+          color: white;
+          font-family: sans-serif;
+        `;
+        document.body.appendChild(controls);
+      }
+      
+      controls.innerHTML = `
+        <span style="font-weight: bold;">🎬 REPLAY</span>
+        <button id="replay_pause" onclick="window.currentMatch && window.currentMatch.toggleReplayPause()" style="padding: 5px 15px; cursor: pointer;">⏸️</button>
+        <input type="range" id="replay_progress" min="0" max="${replayPlayer.totalTicks}" value="0" 
+               style="width: 200px;" onchange="window.currentMatch && window.currentMatch.seekReplay(this.value)">
+        <span id="replay_tick">0 / ${replayPlayer.totalTicks}</span>
+        <select id="replay_speed" onchange="window.currentMatch && window.currentMatch.setReplaySpeed(this.value)" style="padding: 5px;">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="2">2x</option>
+          <option value="4">4x</option>
+        </select>
+        <button onclick="window.currentMatch && window.currentMatch.stopReplay()" style="padding: 5px 15px; background: #c44; border: none; color: white; cursor: pointer; border-radius: 3px;">Stop</button>
+      `;
+      
+      controls.style.display = 'flex';
+      
+      // Store replay player reference
+      this.activeReplayPlayer = replayPlayer;
+    }
+    
+    // Start replay playback
+    startReplayPlayback(replayPlayer) {
+      this.isReplayMode = true;
+      this.replayPaused = false;
+      this.replayTick = 0;
+      
+      const tickInterval = 1000 / (window.net?.TICK_RATE || 20); // 50ms per tick at 20Hz
+      
+      const playbackLoop = () => {
+        if (!this.isReplayMode) return;
+        
+        if (!this.replayPaused) {
+          // Get commands for this tick and execute them
+          const commands = replayPlayer.getCommandsForTick(this.replayTick);
+          commands.forEach(cmd => {
+            try {
+              this.executeCommand(cmd);
+            } catch (e) {
+              console.warn(`⚠️ Failed to execute replay command:`, cmd, e);
+            }
+          });
+          
+          // Step the physics/simulation forward (with error handling for replay mode)
+          try {
+            if (window.updateUnits) {
+              window.updateUnits(1 / 20); // One tick at 20Hz
+            }
+          } catch (e) {
+            // Units update may fail in replay mode - that's OK
+            if (!this._unitUpdateWarned) {
+              console.warn('⚠️ Unit update error in replay (suppressing further):', e.message);
+              this._unitUpdateWarned = true;
+            }
+          }
+          
+          try {
+            if (window.updateBuildings) {
+              window.updateBuildings(1 / 20);
+            }
+          } catch (e) {
+            // Buildings update may fail in replay mode - that's OK
+          }
+          
+          this.replayTick++;
+          
+          // Step the replay player
+          const hasMore = replayPlayer.step();
+          
+          // Update progress UI
+          const progress = replayPlayer.getProgress();
+          const progressBar = document.getElementById('replay_progress');
+          const tickDisplay = document.getElementById('replay_tick');
+          if (progressBar) progressBar.value = progress.currentTick;
+          if (tickDisplay) tickDisplay.textContent = `${progress.currentTick} / ${progress.totalTicks}`;
+          
+          if (!hasMore || this.replayTick >= replayPlayer.totalTicks) {
+            console.log('🎬 Replay complete!');
+            this.showNotification('Replay complete', 'success');
+            this.stopReplay();
+            return;
+          }
+        }
+        
+        // Schedule next tick (adjusted by playback speed)
+        const speed = parseFloat(document.getElementById('replay_speed')?.value || 1);
+        setTimeout(playbackLoop, tickInterval / speed);
+      };
+      
+      // Set up command execution callback
+      replayPlayer.onTick = (tick, commands) => {
+        // Execute each command for this tick
+        commands.forEach(cmd => {
+          try {
+            this.executeCommand(cmd);
+          } catch (error) {
+            console.error(`❌ Error executing replay command at tick ${tick}:`, error);
+          }
+        });
+        
+        // Update game time
+        this.tick = tick;
+        this.gameTime = tick / (window.net?.TICK_RATE || 20);
+      };
+      
+      // Start playback
+      playbackLoop();
+    }
+    
+    // Toggle replay pause
+    toggleReplayPause() {
+      this.replayPaused = !this.replayPaused;
+      const btn = document.getElementById('replay_pause');
+      if (btn) btn.textContent = this.replayPaused ? '▶️' : '⏸️';
+    }
+    
+    // Seek to specific tick in replay
+    seekReplay(tick) {
+      if (this.activeReplayPlayer) {
+        console.log(`🎬 Seeking to tick ${tick}`);
+        // TODO: Implement proper seeking (requires state reset and replay)
+        this.showNotification('Seek not yet implemented - restart replay to go to beginning', 'warning');
+      }
+    }
+    
+    // Set replay playback speed
+    setReplaySpeed(speed) {
+      console.log(`🎬 Replay speed: ${speed}x`);
+    }
+    
+    // Stop replay
+    stopReplay() {
+      this.isReplayMode = false;
+      this.activeReplayPlayer = null;
+      
+      // Remove controls
+      const controls = document.getElementById('replay_controls');
+      if (controls) controls.style.display = 'none';
+      
+      // Return to menu
+      this.showNotification('Replay stopped', 'info');
     }
   }
 

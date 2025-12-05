@@ -168,14 +168,10 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
     seed = window.mapSeed + playerIdHash;
   }
   
-  // Seeded random number generator (deterministic)
-  const seededRandom = (function() {
-    let s = seed;
-    return function() {
-      s = Math.sin(s) * 10000;
-      return s - Math.floor(s);
-    };
-  })();
+  // Seeded random number generator (deterministic using mulberry32)
+  // Uses the Determinism module for cross-platform consistency
+  const playerRng = window.Determinism ? new window.Determinism.SeededRandom(seed) : null;
+  const seededRandom = playerRng ? () => playerRng.next() : () => Math.random();
   
   const agoraX = player.agora.x * TILE_SIZE;
   const agoraZ = player.agora.y * TILE_SIZE;
@@ -327,16 +323,30 @@ window.gameLoop = {
                           matchState === 'loading';
     
     // Run physics at fixed timestep (60Hz)
-    // CRITICAL: Allow catchup in multiplayer for slow devices - this is safe because:
-    // 1. Both clients accumulate physicsTime based on real-time (deltaTime)
-    // 2. Over the same real-time period, both clients accumulate the same total physicsTime
-    // 3. So they run the same number of physics steps overall, keeping damping deterministic
-    // 4. Velocity rounding prevents floating-point drift from accumulating
-    // When catching up after tab refocus, allow many more steps to catch up quickly
-    const backlogSeconds = this.physicsTime;
-    const isCatchingUp = backlogSeconds > 0.5; // More than 500ms backlog indicates catch-up needed
-    const maxPhysicsSteps = isCatchingUp ? 100 : (window.isMultiplayer ? 5 : 10); // Allow aggressive catch-up
+    // DETERMINISM: Physics is driven by fixed timestep, not wall-clock time.
+    // This ensures all clients run exactly the same number of physics steps.
+    // - Network runs at 20Hz (50ms per tick)
+    // - Physics runs at 60Hz (16.67ms per step)  
+    // - So we run exactly 3 physics steps per network tick
+    // NO CATCH-UP - if we fall behind, we stay behind (sync handles this)
+    // Visual interpolation (in updateUnitMeshes) smooths out any visual jitter.
+    
+    let maxPhysicsSteps = 3; // Strict: exactly 3 physics steps per frame
     let physicsSteps = 0;
+    
+    // Cap accumulated time to prevent catch-up
+    // This means if we miss frames, we just run slower (which is fine - sync handles it)
+    // Visual interpolation ensures units don't teleport
+    if (this.physicsTime > this.physicsTimestep * 4) {
+      // Too much backlog - discard it to prevent catch-up desync
+      const discarded = this.physicsTime - (this.physicsTimestep * 3);
+      this.physicsTime = this.physicsTimestep * 3;
+      // Only log if significant time discarded
+      if (discarded > 0.1) {
+        console.warn(`⚠️ Physics backlog discarded: ${(discarded * 1000).toFixed(0)}ms (preventing desync)`);
+      }
+    }
+    
     while (this.physicsTime >= this.physicsTimestep && canRunPhysics && physicsSteps < maxPhysicsSteps) {
       physicsSteps++;
       // Update units and their behaviors (this applies impulses)
@@ -369,13 +379,11 @@ window.gameLoop = {
       // Note: physicsSteps already incremented at top of loop
     }
     
-    // Debug: log physics timestep info
-    if (physicsSteps > 0) {
-      if (isCatchingUp && physicsSteps > 10) {
-        console.log(`⚡ Physics catch-up: ${physicsSteps} steps, remaining backlog: ${(this.physicsTime * 1000).toFixed(0)}ms`);
-      }
-      // console.log(`⚡ Physics: ${physicsSteps} steps at ${(this.physicsTimestep * 1000).toFixed(1)}ms, remaining: ${(this.physicsTime * 1000).toFixed(1)}ms`);
-    }
+    // Debug: log physics timestep info (only if unusual)
+    // Normal is 3 steps per frame at 60Hz display / 20Hz network tick
+    // if (physicsSteps > 0 && physicsSteps !== 3) {
+    //   console.log(`⚡ Physics: ${physicsSteps} steps, backlog: ${(this.physicsTime * 1000).toFixed(0)}ms`);
+    // }
     
     // Update unit meshes (visual positions) every frame for smooth rendering
     if (window.updateUnitMeshes) {

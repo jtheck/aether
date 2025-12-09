@@ -297,9 +297,6 @@
     let lastMouseX = 0;
     let lastMouseY = 0;
     
-    // Camera pan sensitivity - consistent regardless of zoom
-    const PAN_SENSITIVITY = 0.8;
-    
     // Right-click drag to pan (more natural for editors)
     canvas.addEventListener('mousedown', (e) => {
       if (e.button === 2 || e.button === 1) { // Right or middle click
@@ -326,7 +323,9 @@
       const groundRight = new BABYLON.Vector3(right.x, 0, right.z).normalize();
       const groundForward = new BABYLON.Vector3(forward.x, 0, forward.z).normalize();
       
-      // Move camera target (consistent speed regardless of zoom)
+      // FIXED sensitivity - same feel at all zoom levels
+      const PAN_SENSITIVITY = 0.6;
+      
       const moveX = (-deltaX * groundRight.x - deltaY * groundForward.x) * PAN_SENSITIVITY;
       const moveZ = (-deltaX * groundRight.z - deltaY * groundForward.z) * PAN_SENSITIVITY;
       
@@ -369,7 +368,7 @@
     
     // ESDF keyboard controls (matches game)
     const keyState = { e: false, s: false, d: false, f: false, w: false, r: false };
-    const MOVE_SPEED = 2.0;
+    const MOVE_SPEED = 5.0; // Fast keyboard movement for large maps
     
     document.addEventListener('keydown', (e) => {
       const key = e.key.toLowerCase();

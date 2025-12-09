@@ -882,15 +882,38 @@ function updateUnits(deltaTime) {
                 unit.pb.state.vel.z = 0;
             }
             
-            // Check if off the table (chunk mask)
+            // Check if off the table (chunk mask) - only if we have custom shapes
             if (field.chunkMask && field.chunkSize) {
                 const chunkX = Math.floor(tileX / field.chunkSize);
                 const chunkZ = Math.floor(tileZ / field.chunkSize);
                 const chunkKey = `${chunkX},${chunkZ}`;
+                
+                // Only enforce if this chunk is explicitly disabled
+                // Don't block units at chunk boundaries within enabled area
                 if (field.chunkMask.get(chunkKey) === false) {
-                    // Off the table! Revert position
-                    unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
-                    unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
+                    // Try to push unit back into valid area instead of hard stop
+                    const chunkWorldX = chunkX * field.chunkSize * TILE_SIZE;
+                    const chunkWorldZ = chunkZ * field.chunkSize * TILE_SIZE;
+                    const chunkWorldSize = field.chunkSize * TILE_SIZE;
+                    
+                    // Find nearest valid chunk and nudge toward it
+                    let nudgeX = 0, nudgeZ = 0;
+                    const margin = TILE_SIZE * 0.5;
+                    
+                    // Check adjacent chunks for valid ones
+                    if (field.chunkMask.get(`${chunkX - 1},${chunkZ}`) !== false) nudgeX = -margin;
+                    else if (field.chunkMask.get(`${chunkX + 1},${chunkZ}`) !== false) nudgeX = margin;
+                    if (field.chunkMask.get(`${chunkX},${chunkZ - 1}`) !== false) nudgeZ = -margin;
+                    else if (field.chunkMask.get(`${chunkX},${chunkZ + 1}`) !== false) nudgeZ = margin;
+                    
+                    if (nudgeX !== 0 || nudgeZ !== 0) {
+                        unit.pb.state.loc.x += nudgeX;
+                        unit.pb.state.loc.z += nudgeZ;
+                    } else {
+                        // No adjacent valid chunk, just revert
+                        unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
+                        unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
+                    }
                     unit.pb.state.vel.x = 0;
                     unit.pb.state.vel.z = 0;
                 }

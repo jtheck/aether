@@ -260,6 +260,9 @@ class WalkBehavior extends Behavior {
         });
         
         this.targetPoint = targetPoint;
+        this.path = null;        // A* path waypoints
+        this.pathIndex = 0;      // Current waypoint index
+        this.pathCalculated = false;
     }
     
     step() {
@@ -267,43 +270,81 @@ class WalkBehavior extends Behavior {
         
         const field = window.liveField;
         const TILE_SIZE = window.TILE_SIZE || 4;
+        const currentPos = this.unit.pb.state.loc;
         
         // CRITICAL: Apply unit's personality offset to target for visual variety
-        // This prevents all units from converging to the exact same spot
-        // RE-ENABLED: Personality offset is deterministic (based on unit ID) and properly rounded
-        // This ensures both clients calculate identical offsets, preventing desyncs
         const personalityOffset = this.unit.personalityOffset || { x: 0, z: 0 };
-        // Round offset to ensure deterministic results (personalityOffset is already rounded, but double-check)
         const roundedOffset = {
             x: Math.round(personalityOffset.x * 1000) / 1000,
             z: Math.round(personalityOffset.z * 1000) / 1000
         };
-        const adjustedTarget = {
+        const finalTarget = {
             x: Math.round((this.targetPoint.x + roundedOffset.x) * 1000) / 1000,
             z: Math.round((this.targetPoint.z + roundedOffset.z) * 1000) / 1000
         };
         
-        const currentPos = this.unit.pb.state.loc;
-        const dx = adjustedTarget.x - currentPos.x;
-        const dz = adjustedTarget.z - currentPos.z;
+        // Calculate path if we haven't yet
+        if (!this.pathCalculated && field && field.findPath) {
+            this.pathCalculated = true;
+            
+            // Check if direct path is clear first (optimization)
+            const directClear = this.isDirectPathClear(currentPos, finalTarget, field, TILE_SIZE);
+            
+            if (!directClear) {
+                // Need pathfinding
+                this.path = field.findPath(currentPos.x, currentPos.z, finalTarget.x, finalTarget.z);
+                this.pathIndex = 0;
+                
+                if (!this.path) {
+                    // No path found - stop
+                    this.completed = true;
+                    return true;
+                }
+            }
+        }
+        
+        // Determine current target (waypoint or final destination)
+        let currentTarget;
+        if (this.path && this.pathIndex < this.path.length) {
+            currentTarget = this.path[this.pathIndex];
+            
+            // Check if we've reached this waypoint
+            const wpDx = currentTarget.x - currentPos.x;
+            const wpDz = currentTarget.z - currentPos.z;
+            const wpDist = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
+            
+            if (wpDist < TILE_SIZE * 0.5) {
+                // Reached waypoint, move to next
+                this.pathIndex++;
+                if (this.pathIndex >= this.path.length) {
+                    currentTarget = finalTarget;
+                } else {
+                    currentTarget = this.path[this.pathIndex];
+                }
+            }
+        } else {
+            currentTarget = finalTarget;
+        }
+        
+        // Check if arrived at final destination
+        const dx = finalTarget.x - currentPos.x;
+        const dz = finalTarget.z - currentPos.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance <= this.params.arrivalRadius) {
-            // Arrived at destination
             this.completed = true;
             return true;
         }
         
-        // Move toward target (with personality offset applied)
+        // Move toward current target
         const direction = {
-            x: adjustedTarget.x - currentPos.x,
-            z: adjustedTarget.z - currentPos.z
+            x: currentTarget.x - currentPos.x,
+            z: currentTarget.z - currentPos.z
         };
         
         // Normalize direction
-        // CRITICAL: Round to fixed precision to prevent floating-point differences
         const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-        if (length > 0.001) { // Avoid division by zero
+        if (length > 0.001) {
             direction.x = Math.round((direction.x / length) * 10000) / 10000;
             direction.z = Math.round((direction.z / length) * 10000) / 10000;
         } else {
@@ -311,42 +352,12 @@ class WalkBehavior extends Behavior {
             direction.z = 0;
         }
         
-        // TERRAIN CHECKS: Blocked tiles, slow tiles, table boundaries
+        // Check current tile for slow effect (trees)
         let speedMultiplier = 1.0;
-        
-        if (field) {
-            // Calculate next step position (look ahead ~1 tile)
-            const lookAheadDist = TILE_SIZE * 0.5;
-            const nextX = currentPos.x + direction.x * lookAheadDist;
-            const nextZ = currentPos.z + direction.z * lookAheadDist;
-            const nextTileX = Math.floor(nextX / TILE_SIZE);
-            const nextTileZ = Math.floor(nextZ / TILE_SIZE);
-            
-            // Check if next tile is blocked (rocks, deep water)
-            if (field.isPassable && !field.isPassable(nextTileX, nextTileZ)) {
-                // Blocked! Stop movement and complete behavior
-                this.completed = true;
-                return true;
-            }
-            
-            // Check if next tile is off the table (chunk mask)
-            if (field.chunkMask && field.chunkSize) {
-                const chunkX = Math.floor(nextTileX / field.chunkSize);
-                const chunkZ = Math.floor(nextTileZ / field.chunkSize);
-                const chunkKey = `${chunkX},${chunkZ}`;
-                if (field.chunkMask.get(chunkKey) === false) {
-                    // Off the table! Stop movement
-                    this.completed = true;
-                    return true;
-                }
-            }
-            
-            // Check current tile for slow effect (trees)
+        if (field && field.getSpeedMultiplier) {
             const currentTileX = Math.floor(currentPos.x / TILE_SIZE);
             const currentTileZ = Math.floor(currentPos.z / TILE_SIZE);
-            if (field.getSpeedMultiplier) {
-                speedMultiplier = field.getSpeedMultiplier(currentTileX, currentTileZ);
-            }
+            speedMultiplier = field.getSpeedMultiplier(currentTileX, currentTileZ);
         }
         
         // Initialize velocity if it doesn't exist
@@ -359,19 +370,46 @@ class WalkBehavior extends Behavior {
             this.unit.pb.imp = { x: 0, y: 0, z: 0 };
         }
 
-        // Track that this unit was moved (use tick-based time for multiplayer sync)
-        // CRITICAL: Don't use Date.now() here - it breaks multiplayer sync!
-        // Instead use match tick if available, or skip entirely
+        // Track that this unit was moved
         if (window.currentMatch && window.currentMatch.tick) {
             this.unit.lastMoveTick = window.currentMatch.tick;
         }
         
-        // Apply movement with rotation and forward momentum boost
-        // Apply speed multiplier for slow tiles (trees = 50% speed)
+        // Apply movement with speed multiplier for slow tiles
         const effectiveSpeed = this.params.walkSpeed * speedMultiplier;
         this.applyMovementWithRotation(direction, effectiveSpeed);
                 
         return false;
+    }
+    
+    // Check if direct line to target is clear of obstacles
+    isDirectPathClear(start, end, field, tileSize) {
+        const dx = end.x - start.x;
+        const dz = end.z - start.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const steps = Math.ceil(dist / tileSize);
+        
+        for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const x = start.x + dx * t;
+            const z = start.z + dz * t;
+            const tileX = Math.floor(x / tileSize);
+            const tileZ = Math.floor(z / tileSize);
+            
+            if (!field.isPassable(tileX, tileZ)) {
+                return false;
+            }
+            
+            // Check chunk mask
+            if (field.chunkMask && field.chunkSize) {
+                const chunkX = Math.floor(tileX / field.chunkSize);
+                const chunkZ = Math.floor(tileZ / field.chunkSize);
+                if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 }
 
@@ -384,6 +422,9 @@ class RunBehavior extends Behavior {
         });
         
         this.targetPoint = targetPoint;
+        this.path = null;
+        this.pathIndex = 0;
+        this.pathCalculated = false;
     }
     
     step() {
@@ -391,8 +432,41 @@ class RunBehavior extends Behavior {
         
         const field = window.liveField;
         const TILE_SIZE = window.TILE_SIZE || 4;
-        
         const currentPos = this.unit.pb.state.loc;
+        
+        // Calculate path if we haven't yet
+        if (!this.pathCalculated && field && field.findPath) {
+            this.pathCalculated = true;
+            
+            // Check if direct path is clear first
+            if (!this.isDirectPathClear(currentPos, this.targetPoint, field, TILE_SIZE)) {
+                this.path = field.findPath(currentPos.x, currentPos.z, this.targetPoint.x, this.targetPoint.z);
+                this.pathIndex = 0;
+                
+                if (!this.path) {
+                    this.completed = true;
+                    return true;
+                }
+            }
+        }
+        
+        // Determine current target (waypoint or final)
+        let currentTarget;
+        if (this.path && this.pathIndex < this.path.length) {
+            currentTarget = this.path[this.pathIndex];
+            
+            const wpDx = currentTarget.x - currentPos.x;
+            const wpDz = currentTarget.z - currentPos.z;
+            const wpDist = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
+            
+            if (wpDist < TILE_SIZE * 0.5) {
+                this.pathIndex++;
+                currentTarget = this.pathIndex < this.path.length ? this.path[this.pathIndex] : this.targetPoint;
+            }
+        } else {
+            currentTarget = this.targetPoint;
+        }
+        
         const dx = this.targetPoint.x - currentPos.x;
         const dz = this.targetPoint.z - currentPos.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
@@ -402,65 +476,59 @@ class RunBehavior extends Behavior {
             return true;
         }
         
-        // Move toward target at run speed
+        // Move toward current target
         const direction = {
-            x: this.targetPoint.x - currentPos.x,
-            z: this.targetPoint.z - currentPos.z
+            x: currentTarget.x - currentPos.x,
+            z: currentTarget.z - currentPos.z
         };
         
         const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-        direction.x /= length;
-        direction.z /= length;
-        
-        // TERRAIN CHECKS: Blocked tiles, slow tiles, table boundaries
-        let speedMultiplier = 1.0;
-        
-        if (field) {
-            // Calculate next step position (look ahead ~1 tile)
-            const lookAheadDist = TILE_SIZE * 0.5;
-            const nextX = currentPos.x + direction.x * lookAheadDist;
-            const nextZ = currentPos.z + direction.z * lookAheadDist;
-            const nextTileX = Math.floor(nextX / TILE_SIZE);
-            const nextTileZ = Math.floor(nextZ / TILE_SIZE);
-            
-            // Check if next tile is blocked (rocks, deep water)
-            if (field.isPassable && !field.isPassable(nextTileX, nextTileZ)) {
-                // Blocked! Stop movement and complete behavior
-                this.completed = true;
-                return true;
-            }
-            
-            // Check if next tile is off the table (chunk mask)
-            if (field.chunkMask && field.chunkSize) {
-                const chunkX = Math.floor(nextTileX / field.chunkSize);
-                const chunkZ = Math.floor(nextTileZ / field.chunkSize);
-                const chunkKey = `${chunkX},${chunkZ}`;
-                if (field.chunkMask.get(chunkKey) === false) {
-                    // Off the table! Stop movement
-                    this.completed = true;
-                    return true;
-                }
-            }
-            
-            // Check current tile for slow effect (trees)
-            const currentTileX = Math.floor(currentPos.x / TILE_SIZE);
-            const currentTileZ = Math.floor(currentPos.z / TILE_SIZE);
-            if (field.getSpeedMultiplier) {
-                speedMultiplier = field.getSpeedMultiplier(currentTileX, currentTileZ);
-            }
+        if (length > 0.001) {
+            direction.x /= length;
+            direction.z /= length;
         }
         
-        // Track that this unit was moved (use tick-based time for multiplayer sync)
+        // Check current tile for slow effect
+        let speedMultiplier = 1.0;
+        if (field && field.getSpeedMultiplier) {
+            const currentTileX = Math.floor(currentPos.x / TILE_SIZE);
+            const currentTileZ = Math.floor(currentPos.z / TILE_SIZE);
+            speedMultiplier = field.getSpeedMultiplier(currentTileX, currentTileZ);
+        }
+        
+        // Track movement
         if (window.currentMatch && window.currentMatch.tick) {
             this.unit.lastMoveTick = window.currentMatch.tick;
         }
         
-        // Apply movement with rotation and forward momentum boost
-        // Apply speed multiplier for slow tiles (trees = 50% speed)
         const effectiveSpeed = this.params.runSpeed * speedMultiplier;
         this.applyMovementWithRotation(direction, effectiveSpeed);
         
         return false;
+    }
+    
+    isDirectPathClear(start, end, field, tileSize) {
+        const dx = end.x - start.x;
+        const dz = end.z - start.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const steps = Math.ceil(dist / tileSize);
+        
+        for (let i = 1; i <= steps; i++) {
+            const t = i / steps;
+            const x = start.x + dx * t;
+            const z = start.z + dz * t;
+            const tileX = Math.floor(x / tileSize);
+            const tileZ = Math.floor(z / tileSize);
+            
+            if (!field.isPassable(tileX, tileZ)) return false;
+            
+            if (field.chunkMask && field.chunkSize) {
+                const chunkX = Math.floor(tileX / field.chunkSize);
+                const chunkZ = Math.floor(tileZ / field.chunkSize);
+                if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return false;
+            }
+        }
+        return true;
     }
 }
 

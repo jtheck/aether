@@ -72,16 +72,9 @@
         cam.keysUpward = [69]; // E (move up)
         cam.keysDownward = [81]; // Q (move down)
         
-        // Movement speed - nice and fast for editing
-        cam.speed = 80;
-        
-        // Mouse look - consistent sensitivity, no inertia
-        cam.angularSensibility = 800; // Lower = faster, still controlled
-        cam.inertia = 0; // Disable inertia for crisp stops
-        
-        // Disable mouse acceleration issues
-        cam.inputs.attached.mouse.angularSensibility = 800;
-        cam.inputs.attached.mouse.touchAngularSensibility = 800;
+        // Movement speed
+        cam.speed = 20;
+        cam.angularSensibility = 500; // Lower = faster mouse look
         
         // Position camera for top-down editing view
         const fieldCenterX = liveField ? (liveField.width * TILE_SIZE) / 2 : 128;

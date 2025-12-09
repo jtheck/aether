@@ -16,14 +16,23 @@
     mapSeed: 12345,             // Current map seed
     currentTool: 'terrain',     // 'table', 'terrain', or 'resource'
     currentResource: 'trees',   // Current resource to place
+    currentBuilding: 'camp',    // Current building to place
     // Layer visibility
     layers: {
       table: true,
       terrain: true,
-      resources: true
+      resources: true,
+      buildings: true,
+      spawns: true
     },
     // Current editing layer (affects what tool does)
-    editingLayer: 'terrain'     // 'table', 'terrain', or 'resources'
+    editingLayer: 'terrain',    // 'table', 'terrain', 'resources', 'buildings', 'spawns'
+    // Spawn points for player starts
+    spawnPoints: [],
+    // Buildings placed on map
+    buildings: [],
+    // Symmetry mode for mirrored placement
+    symmetryMode: 'none'        // 'none', '2way', '4way', 'radial'
   };
   
   // Terrain types map to the 2-terrain system (grass/dirt)
@@ -159,12 +168,35 @@
     canvas.addEventListener('pointermove', (e) => this.handlePointer(e));
     canvas.addEventListener('pointerup', (e) => this.handlePointer(e));
     
+    // Prevent context menu when editing spawns/buildings (right-click removes)
+    canvas.addEventListener('contextmenu', (e) => {
+      if (this.state.editingLayer === 'spawns' || this.state.editingLayer === 'buildings') {
+        e.preventDefault();
+      }
+    });
+    
     console.log('🖌️ Painting system ready');
   };
   
   // Handle pointer events
   forge.handlePointer = function(e) {
     if (!ENABLE_FORGE || !window.liveField) return;
+    
+    // Handle right-click for spawn/building removal
+    if (e.button === 2) {
+      if (this.state.editingLayer === 'spawns') {
+        e.preventDefault();
+        const pos = this.getTilePosition(e);
+        if (pos) this.removeSpawn(pos);
+        return;
+      }
+      if (this.state.editingLayer === 'buildings') {
+        e.preventDefault();
+        const pos = this.getTilePosition(e);
+        if (pos) this._removeBuildingAt(pos);
+        return;
+      }
+    }
     
     // Only paint with left mouse button
     if (e.button !== 0 && e.type !== 'pointermove') return;
@@ -182,6 +214,20 @@
               const chunkZ = Math.floor(pos.y / field.chunkSize);
               this.toggleChunk(chunkX, chunkZ);
             }
+            return;
+          }
+          
+          // Spawn editing mode - place spawn
+          if (this.state.editingLayer === 'spawns') {
+            const pos = this.getTilePosition(e);
+            if (pos) this.placeSpawn(pos);
+            return;
+          }
+          
+          // Building editing mode - place building
+          if (this.state.editingLayer === 'buildings') {
+            const pos = this.getTilePosition(e);
+            if (pos) this.placeBuilding(pos);
             return;
           }
           
@@ -651,6 +697,12 @@
       }
     }
     
+    // Encode spawn points
+    const spawnData = this.state.spawnPoints.map(s => `${s.x},${s.y}`).join(';');
+    
+    // Encode buildings
+    const buildingData = this.state.buildings.map(b => `${b.x},${b.y},${b.type}`).join(';');
+    
     const mapData = {
       v: 2,  // Version 2 = new format
       w: field.width,
@@ -660,7 +712,9 @@
       t: terrainRLE,           // RLE-compressed terrain
       cm: chunkBits.join(''),  // Chunk mask as binary string "11101110..."
       ta: this.encodeTileAtlas(field.tiles),  // Tile atlas info
-      r: placedResources.length > 0 ? placedResources.join(';') : undefined  // Placed resources
+      r: placedResources.length > 0 ? placedResources.join(';') : undefined,  // Placed resources
+      sp: spawnData || undefined,  // Spawn points
+      bl: buildingData || undefined  // Buildings
     };
     
     const json = JSON.stringify(mapData);
@@ -668,12 +722,12 @@
     
     console.log(`📦 Map exported: ${(json.length / 1024).toFixed(1)} KB → ${(compressed.length / 1024).toFixed(1)} KB`);
     
-    // Trigger download with .aether extension
+    // Trigger download with .garden extension
     const blob = new Blob([compressed], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${field.seed}.aeg`;
+    a.download = `${field.seed}.garden`;
     a.click();
     URL.revokeObjectURL(url);
     
@@ -910,6 +964,8 @@
             <button id="layer-table" class="forge-btn" onclick="forge.setEditingLayer('table')">🎱 Table</button>
             <button id="layer-terrain" class="forge-btn active" onclick="forge.setEditingLayer('terrain')">🗺️ Terrain</button>
             <button id="layer-resources" class="forge-btn" onclick="forge.setEditingLayer('resources')">🌲 Resources</button>
+            <button id="layer-spawns" class="forge-btn" onclick="forge.setEditingLayer('spawns')">🚩 Spawns</button>
+            <button id="layer-buildings" class="forge-btn" onclick="forge.setEditingLayer('buildings')">🏛️ Buildings</button>
           </div>
           <div class="forge-buttons" style="margin-top:5px;">
             <button id="vis-table" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('table')">👁️ Table</button>
@@ -955,6 +1011,32 @@
           </div>
         </div>
         
+        <div id="spawns-panel" class="forge-section" style="display:none;">
+          <h3>Spawn Points</h3>
+          <p style="font-size:11px;opacity:0.7;">Click to place spawn points. Right-click to remove.</p>
+          <div class="forge-row">
+            <label>Symmetry:</label>
+            <select id="spawn-symmetry" onchange="forge.setSymmetry(this.value)">
+              <option value="none">None</option>
+              <option value="2way">2-Way Mirror</option>
+              <option value="4way">4-Way Mirror</option>
+              <option value="radial">Radial</option>
+            </select>
+          </div>
+          <div id="spawn-list" style="max-height:100px;overflow-y:auto;font-size:11px;margin-top:8px;"></div>
+          <button class="forge-btn" onclick="forge.clearSpawns()" style="margin-top:8px;">🗑️ Clear All</button>
+        </div>
+        
+        <div id="buildings-panel" class="forge-section" style="display:none;">
+          <h3>Buildings</h3>
+          <div class="forge-buttons">
+            <button id="bld-camp" class="forge-btn active" onclick="forge.setBuilding('camp')">⛺ Camp</button>
+            <button id="bld-tower" class="forge-btn" onclick="forge.setBuilding('tower')">🗼 Tower</button>
+            <button id="bld-eraser" class="forge-btn" onclick="forge.setBuilding('eraser')">🧹 Eraser</button>
+          </div>
+          <div id="building-list" style="max-height:100px;overflow-y:auto;font-size:11px;margin-top:8px;"></div>
+        </div>
+        
         <div class="forge-section">
           <h3>Map</h3>
           <div class="forge-row">
@@ -992,7 +1074,7 @@
           <div class="forge-buttons">
             <button class="forge-btn" onclick="forge.exportMap()">💾 Export</button>
             <button class="forge-btn" onclick="document.getElementById('import-file').click()">📂 Import</button>
-            <input type="file" id="import-file" accept=".aeg,.json" style="display:none" 
+            <input type="file" id="import-file" accept=".garden,.json" style="display:none" 
                    onchange="forge.handleImport(this.files[0])">
           </div>
         </div>
@@ -1019,7 +1101,7 @@
   };
   
   // Set current tool (terrain or resource)
-  // Set editing layer (table, terrain, resources)
+  // Set editing layer (table, terrain, resources, spawns, buildings)
   forge.setEditingLayer = function(layer) {
     this.state.editingLayer = layer;
     this.state.currentTool = layer === 'resources' ? 'resource' : layer;
@@ -1028,14 +1110,21 @@
     document.getElementById('layer-table').classList.toggle('active', layer === 'table');
     document.getElementById('layer-terrain').classList.toggle('active', layer === 'terrain');
     document.getElementById('layer-resources').classList.toggle('active', layer === 'resources');
+    document.getElementById('layer-spawns').classList.toggle('active', layer === 'spawns');
+    document.getElementById('layer-buildings').classList.toggle('active', layer === 'buildings');
     
     // Show/hide panels
     document.getElementById('table-panel').style.display = layer === 'table' ? 'block' : 'none';
     document.getElementById('terrain-panel').style.display = layer === 'terrain' ? 'block' : 'none';
     document.getElementById('resource-panel').style.display = layer === 'resources' ? 'block' : 'none';
+    document.getElementById('spawns-panel').style.display = layer === 'spawns' ? 'block' : 'none';
+    document.getElementById('buildings-panel').style.display = layer === 'buildings' ? 'block' : 'none';
     
     // Update chunk grid overlay visibility
     this.updateChunkGridOverlay(layer === 'table');
+    
+    // Show spawn markers when editing spawns
+    this.updateSpawnMarkers();
     
     console.log(`📐 Editing layer: ${layer}`);
   };
@@ -1579,7 +1668,7 @@
     document.getElementById('brush-size-label').textContent = size;
   };
   
-  // Handle file import (.aether or .json)
+  // Handle file import (.garden or .json)
   forge.handleImport = function(file) {
     if (!file) return;
     
@@ -1599,6 +1688,332 @@
       }
     };
     reader.readAsText(file);
+  };
+  
+  // ============================================
+  // SYMMETRY SYSTEM
+  // ============================================
+  
+  forge.setSymmetry = function(mode) {
+    this.state.symmetryMode = mode;
+    console.log(`🔄 Symmetry mode: ${mode}`);
+  };
+  
+  // Get symmetric positions based on current symmetry mode
+  forge.getSymmetricPositions = function(pos) {
+    const field = window.liveField;
+    if (!field) return [pos];
+    
+    const centerX = field.width / 2;
+    const centerZ = field.height / 2;
+    const positions = [pos];
+    
+    switch (this.state.symmetryMode) {
+      case '2way':
+        // Mirror across center
+        positions.push({
+          x: Math.floor(2 * centerX - pos.x - 1),
+          y: Math.floor(2 * centerZ - pos.y - 1)
+        });
+        break;
+        
+      case '4way':
+        // Mirror in 4 corners
+        const mirrorX = Math.floor(2 * centerX - pos.x - 1);
+        const mirrorZ = Math.floor(2 * centerZ - pos.y - 1);
+        positions.push({ x: mirrorX, y: pos.y });
+        positions.push({ x: pos.x, y: mirrorZ });
+        positions.push({ x: mirrorX, y: mirrorZ });
+        break;
+        
+      case 'radial':
+        // Radial symmetry (4 rotations)
+        const dx = pos.x - centerX;
+        const dz = pos.y - centerZ;
+        positions.push({ x: Math.floor(centerX - dz), y: Math.floor(centerZ + dx) });
+        positions.push({ x: Math.floor(centerX - dx), y: Math.floor(centerZ - dz) });
+        positions.push({ x: Math.floor(centerX + dz), y: Math.floor(centerZ - dx) });
+        break;
+    }
+    
+    // Filter out duplicates and out of bounds
+    return positions.filter((p, i, arr) => {
+      if (p.x < 0 || p.x >= field.width || p.y < 0 || p.y >= field.height) return false;
+      return arr.findIndex(q => q.x === p.x && q.y === p.y) === i;
+    });
+  };
+  
+  // ============================================
+  // SPAWN POINT SYSTEM
+  // ============================================
+  
+  forge._spawnMarkers = [];
+  
+  // Place a spawn point at position
+  forge.placeSpawn = function(pos) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Check if position is on enabled chunk
+    const chunkX = Math.floor(pos.x / field.chunkSize);
+    const chunkZ = Math.floor(pos.y / field.chunkSize);
+    if (field.chunkMask && field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+      console.log('🚫 Cannot place spawn on disabled chunk');
+      return;
+    }
+    
+    // Get symmetric positions
+    const positions = this.getSymmetricPositions(pos);
+    
+    positions.forEach((p, i) => {
+      // Check if symmetric position is also on enabled chunk
+      const symChunkX = Math.floor(p.x / field.chunkSize);
+      const symChunkZ = Math.floor(p.y / field.chunkSize);
+      if (field.chunkMask && field.chunkMask.get(`${symChunkX},${symChunkZ}`) === false) {
+        return; // Skip this symmetric position
+      }
+      
+      // Check if there's already a spawn at this position
+      const existing = this.state.spawnPoints.findIndex(s => 
+        Math.abs(s.x - p.x) <= 2 && Math.abs(s.y - p.y) <= 2
+      );
+      
+      if (existing >= 0) {
+        // Move existing spawn to new position
+        this.state.spawnPoints[existing].x = p.x;
+        this.state.spawnPoints[existing].y = p.y;
+      } else {
+        // Add new spawn point (order determines player assignment)
+        this.state.spawnPoints.push({ x: p.x, y: p.y });
+      }
+    });
+    
+    this.updateSpawnMarkers();
+    this.updateSpawnList();
+    console.log(`🚩 Spawn placed at (${pos.x}, ${pos.y})` + (positions.length > 1 ? ` (+${positions.length - 1} mirrors)` : ''));
+  };
+  
+  // Remove spawn near position
+  forge.removeSpawn = function(pos) {
+    const idx = this.state.spawnPoints.findIndex(s => 
+      Math.abs(s.x - pos.x) <= 3 && Math.abs(s.y - pos.y) <= 3
+    );
+    
+    if (idx >= 0) {
+      this.state.spawnPoints.splice(idx, 1);
+      this.updateSpawnMarkers();
+      this.updateSpawnList();
+      console.log(`🗑️ Spawn removed`);
+    }
+  };
+  
+  // Clear all spawn points
+  forge.clearSpawns = function() {
+    this.state.spawnPoints = [];
+    this.updateSpawnMarkers();
+    this.updateSpawnList();
+    console.log('🗑️ All spawns cleared');
+  };
+  
+  // Update spawn list in UI
+  forge.updateSpawnList = function() {
+    const list = document.getElementById('spawn-list');
+    if (!list) return;
+    
+    if (this.state.spawnPoints.length === 0) {
+      list.innerHTML = '<div style="opacity:0.5;">No spawn points</div>';
+    } else {
+      list.innerHTML = this.state.spawnPoints.map((s, i) => 
+        `<div>Spawn #${i + 1}: (${s.x}, ${s.y})</div>`
+      ).join('');
+    }
+  };
+  
+  // Update spawn markers in 3D view
+  forge.updateSpawnMarkers = function() {
+    // Dispose old markers
+    if (this._spawnMarkers) {
+      this._spawnMarkers.forEach(m => m.dispose());
+    }
+    this._spawnMarkers = [];
+    
+    if (!gfx || !gfx.scene) return;
+    
+    const field = window.liveField;
+    if (!field) return;
+    
+    const TILE = window.TILE_SIZE || 4;
+    
+    this.state.spawnPoints.forEach((spawn, i) => {
+      const worldX = (spawn.x + 0.5) * TILE;
+      const worldZ = (spawn.y + 0.5) * TILE;
+      const worldY = field.getHeightVariation ? field.getHeightVariation(spawn.x, spawn.y) : 0;
+      
+      // Create a simple marker (cylinder + sphere)
+      const cylinder = BABYLON.MeshBuilder.CreateCylinder(`spawn_${i}`, {
+        height: 8,
+        diameterTop: 0.5,
+        diameterBottom: 1.5
+      }, gfx.scene);
+      cylinder.position = new BABYLON.Vector3(worldX, worldY + 4, worldZ);
+      
+      const mat = new BABYLON.StandardMaterial(`spawnMat_${i}`, gfx.scene);
+      mat.diffuseColor = new BABYLON.Color3(0.2, 0.8, 0.2);
+      mat.emissiveColor = new BABYLON.Color3(0.1, 0.4, 0.1);
+      cylinder.material = mat;
+      
+      this._spawnMarkers.push(cylinder);
+      
+      // Add spawn zone indicator
+      const zone = BABYLON.MeshBuilder.CreateCylinder(`spawnZone_${i}`, {
+        height: 0.3,
+        diameter: 16 * TILE  // Approximate spawn zone radius
+      }, gfx.scene);
+      zone.position = new BABYLON.Vector3(worldX, 0.15, worldZ);
+      const zoneMat = new BABYLON.StandardMaterial(`spawnZoneMat_${i}`, gfx.scene);
+      zoneMat.diffuseColor = new BABYLON.Color3(0, 1, 0);
+      zoneMat.alpha = 0.15;
+      zone.material = zoneMat;
+      
+      this._spawnMarkers.push(zone);
+    });
+  };
+  
+  // ============================================
+  // BUILDING PLACEMENT SYSTEM
+  // ============================================
+  
+  forge._buildingMeshes = new Map();
+  
+  forge.setBuilding = function(type) {
+    this.state.currentBuilding = type;
+    
+    // Update button states
+    ['camp', 'tower', 'eraser'].forEach(t => {
+      const btn = document.getElementById(`bld-${t}`);
+      if (btn) btn.classList.toggle('active', t === type);
+    });
+    
+    console.log(`🏛️ Building tool: ${type}`);
+  };
+  
+  forge.placeBuilding = function(pos) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Get symmetric positions
+    const positions = this.getSymmetricPositions(pos);
+    
+    // Handle eraser
+    if (this.state.currentBuilding === 'eraser') {
+      positions.forEach(p => this._removeBuildingAt(p));
+      return;
+    }
+    
+    // Place at all symmetric positions
+    positions.forEach((p, i) => this._placeBuildingAtSingle(p, i));
+  };
+  
+  forge._placeBuildingAtSingle = function(pos, rotationOffset = 0) {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    const key = `${pos.x},${pos.y}`;
+    const buildingType = this.state.currentBuilding;
+    const buildingDef = window.BuildingTypes?.[buildingType];
+    
+    if (!buildingDef) {
+      console.warn(`Unknown building type: ${buildingType}`);
+      return;
+    }
+    
+    // Check if position is valid (on enabled chunk)
+    const chunkX = Math.floor(pos.x / field.chunkSize);
+    const chunkZ = Math.floor(pos.y / field.chunkSize);
+    if (field.chunkMask && field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
+    
+    // Check for water
+    const index = pos.y * field.width + pos.x;
+    if (field.terrainTypes[index] === 1) return;
+    
+    // Remove existing building at this position
+    if (this._buildingMeshes.has(key)) {
+      this._buildingMeshes.get(key).dispose();
+      this._buildingMeshes.delete(key);
+    }
+    
+    // Remove from state array
+    const existingIdx = this.state.buildings.findIndex(b => b.x === pos.x && b.y === pos.y);
+    if (existingIdx >= 0) {
+      this.state.buildings.splice(existingIdx, 1);
+    }
+    
+    // Add to state
+    const rotation = (rotationOffset * Math.PI / 2);
+    this.state.buildings.push({ x: pos.x, y: pos.y, type: buildingType, rotation });
+    
+    // Load and place model
+    const TILE = window.TILE_SIZE || 4;
+    const worldX = (pos.x + 0.5) * TILE;
+    const worldZ = (pos.y + 0.5) * TILE;
+    const terrainY = field.getHeightVariation ? field.getHeightVariation(pos.x, pos.y) : 0;
+    
+    gfx.getModel(buildingDef.model, gfx.scene).then(model => {
+      const root = model.root;
+      root.position = new BABYLON.Vector3(worldX, terrainY, worldZ);
+      root.scaling = new BABYLON.Vector3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+      root.rotation.y = rotation;
+      root.setEnabled(true);
+      
+      this._buildingMeshes.set(key, root);
+    });
+    
+    this.updateBuildingList();
+    console.log(`🏛️ Placed ${buildingType} at (${pos.x}, ${pos.y})`);
+  };
+  
+  forge._removeBuildingAt = function(pos) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Find nearest building
+    let closestIdx = -1;
+    let closestDist = Infinity;
+    
+    this.state.buildings.forEach((b, i) => {
+      const dist = Math.abs(b.x - pos.x) + Math.abs(b.y - pos.y);
+      if (dist < closestDist && dist <= 3) {
+        closestDist = dist;
+        closestIdx = i;
+      }
+    });
+    
+    if (closestIdx >= 0) {
+      const b = this.state.buildings[closestIdx];
+      const key = `${b.x},${b.y}`;
+      
+      if (this._buildingMeshes.has(key)) {
+        this._buildingMeshes.get(key).dispose();
+        this._buildingMeshes.delete(key);
+      }
+      
+      this.state.buildings.splice(closestIdx, 1);
+      this.updateBuildingList();
+      console.log(`🗑️ Removed building at (${b.x}, ${b.y})`);
+    }
+  };
+  
+  forge.updateBuildingList = function() {
+    const list = document.getElementById('building-list');
+    if (!list) return;
+    
+    if (this.state.buildings.length === 0) {
+      list.innerHTML = '<div style="opacity:0.5;">No buildings</div>';
+    } else {
+      list.innerHTML = this.state.buildings.map((b, i) => 
+        `<div>${b.type} at (${b.x}, ${b.y})</div>`
+      ).join('');
+    }
   };
   
   // Export forge object

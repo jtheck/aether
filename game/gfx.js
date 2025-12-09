@@ -1465,6 +1465,36 @@ let pov2 = 240;
       return Math.abs(hash >>> 0) / 4294967296; // 0-1
     }
     
+    // Helper: Get footprint radius based on scale
+    function getFootprintRadius(scale) {
+      if (scale >= 10) return 2;  // Large rocks (scale 11.5)
+      if (scale >= 6) return 1;   // Mossy rocks (scale 7.5)
+      return 0;                    // Plain rocks, trees
+    }
+    
+    // Helper: Check if any tile in a footprint is occupied
+    function isFootprintOccupied(gridX, gridZ, radius) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+          if (Math.sqrt(dx*dx + dz*dz) <= radius + 0.5) {
+            if (occupiedTiles.has(`${gridX + dx},${gridZ + dz}`)) return true;
+          }
+        }
+      }
+      return false;
+    }
+    
+    // Helper: Mark all tiles in a footprint as occupied
+    function markFootprintOccupied(gridX, gridZ, radius) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+          if (Math.sqrt(dx*dx + dz*dz) <= radius + 0.5) {
+            occupiedTiles.add(`${gridX + dx},${gridZ + dz}`);
+          }
+        }
+      }
+    }
+    
     // PASS 1: Mountains (rocks) - on dirt terrain (barren/rocky areas)
     let dirtTileCount = 0;
     let rockNoisePassCount = 0;
@@ -1517,11 +1547,6 @@ let pov2 = 240;
           return;
         }
         
-        rockNoisePassCount++;
-        
-        // Mark tile as occupied
-        occupiedTiles.add(tileKey);
-        
         // Pick rock size based on REGION not individual tile (creates cohesive clusters)
         // Divide by 5 means 5x5 tile regions get same size category
         const regionX = Math.floor(gridX / 5);
@@ -1545,6 +1570,17 @@ let pov2 = 240;
           scale = 11.5;
           billboardScale = 7.5;
         }
+        
+        // Check footprint overlap before placing
+        const footprintRadius = getFootprintRadius(scale);
+        if (isFootprintOccupied(gridX, gridZ, footprintRadius)) {
+          return; // Skip - would overlap with existing resource
+        }
+        
+        rockNoisePassCount++;
+        
+        // Mark all tiles in footprint as occupied
+        markFootprintOccupied(gridX, gridZ, footprintRadius);
         
         // Place the rock at proper height for this tile
         const worldX = gridX * TILE_SIZE;
@@ -1578,6 +1614,12 @@ let pov2 = 240;
           gridZ: gridZ
         });
         pendingResourceTiles.add(tileKey);
+        
+        // Block pathfinding for rock footprint
+        if (field.blockFootprint) {
+          field.blockFootprint(gridX, gridZ, footprintRadius);
+        }
+        
         rockCount++;
       }
     });
@@ -1603,12 +1645,15 @@ let pov2 = 240;
       // Skip spawn zones (keep them clear for agoras)
       if (field.isInSpawnZone && field.isInSpawnZone(gridX, gridZ)) return;
       
-      // Only place trees on grass (type 3)
-      if (terrainType !== 3) return;
+      // Place trees on grass (type 3) and dirt (type 2), skip water
+      if (terrainType !== 3 && terrainType !== 2) return;
       
       // Check if tile is already occupied by a rock
       const tileKey = `${gridX},${gridZ}`;
       if (occupiedTiles.has(tileKey)) return; // Skip occupied tiles
+      
+      // Different spawn rates: 20% on grass, 5% on dirt
+      const treeSpawnRate = terrainType === 3 ? 0.20 : 0.05;
       
       // Skip trees near camps - they should grow further out
       const worldX = gridX * TILE_SIZE;
@@ -1631,11 +1676,11 @@ let pov2 = 240;
         if (tooCloseToCamp) return; // Skip placing trees near camps
       }
       
-      // Simple per-tile hash for tree placement (~20% of grass tiles get trees)
+      // Simple per-tile hash for tree placement
       const treeRoll = tileHash(gridX, gridZ, fieldSeed + 3000);
       
-      // Place trees on ~20% of grass tiles (but only on unoccupied tiles)
-      if (treeRoll < 0.20) {
+      // Place trees based on terrain-specific spawn rate
+      if (treeRoll < treeSpawnRate) {
         // Check if this tile was depleted - if so, try to respawn further from camp
         const depletionInfo = depletedResourceTiles.get(tileKey);
         if (depletionInfo && depletionInfo.isTree) {
@@ -1745,6 +1790,12 @@ let pov2 = 240;
           gridZ: gridZ
         });
         pendingResourceTiles.add(tileKey);
+        
+        // Mark tile as slow for pathfinding (trees slow movement)
+        if (field.slowTile) {
+          field.slowTile(gridX, gridZ);
+        }
+        
         treeCount++;
       }
     });
@@ -3798,6 +3849,175 @@ let pov2 = 240;
     resourceModelRegistry.clear();
     pendingResourceTiles.clear();
     depletedResourceTiles.clear();
+  };
+  
+  // Dynamic table parts storage (for custom map shapes)
+  gfx._dynamicTableParts = [];
+  
+  // Rebuild table to match chunk mask shape (for custom maps)
+  gfx.rebuildTableFromChunkMask = function() {
+    const field = window.liveField;
+    if (!field || !field.chunkMask || !gfx.scene) return;
+    
+    console.log('🔄 Rebuilding table from chunk mask...');
+    
+    // Dispose old dynamic table parts
+    if (gfx._dynamicTableParts) {
+      gfx._dynamicTableParts.forEach(m => {
+        if (m && m.dispose) m.dispose();
+      });
+    }
+    gfx._dynamicTableParts = [];
+    
+    // Hide the original static table parts
+    const table = gfx.table;
+    if (table && table.parts) {
+      Object.values(table.parts).forEach(part => {
+        if (part && part.mesh) part.mesh.isVisible = false;
+      });
+    }
+    
+    const chunkWorldSize = field.chunkSize * TILE_SIZE;
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
+    
+    // Find boundary edges by checking each chunk's neighbors
+    const edges = [];
+    const corners = [];
+    
+    for (let cz = 0; cz < chunksZ; cz++) {
+      for (let cx = 0; cx < chunksX; cx++) {
+        const key = `${cx},${cz}`;
+        if (field.chunkMask.get(key) === false) continue;
+        
+        const neighbors = {
+          N: cz < chunksZ - 1 ? field.chunkMask.get(`${cx},${cz + 1}`) !== false : false,
+          S: cz > 0 ? field.chunkMask.get(`${cx},${cz - 1}`) !== false : false,
+          E: cx < chunksX - 1 ? field.chunkMask.get(`${cx + 1},${cz}`) !== false : false,
+          W: cx > 0 ? field.chunkMask.get(`${cx - 1},${cz}`) !== false : false
+        };
+        
+        if (!neighbors.N) edges.push({ cx, cz, dir: 'N' });
+        if (!neighbors.S) edges.push({ cx, cz, dir: 'S' });
+        if (!neighbors.E) edges.push({ cx, cz, dir: 'E' });
+        if (!neighbors.W) edges.push({ cx, cz, dir: 'W' });
+        
+        // Convex corners
+        if (!neighbors.N && !neighbors.E) corners.push({ cx, cz, type: 'convex', corner: 'NE' });
+        if (!neighbors.N && !neighbors.W) corners.push({ cx, cz, type: 'convex', corner: 'NW' });
+        if (!neighbors.S && !neighbors.E) corners.push({ cx, cz, type: 'convex', corner: 'SE' });
+        if (!neighbors.S && !neighbors.W) corners.push({ cx, cz, type: 'convex', corner: 'SW' });
+        
+        // Concave corners
+        const diagNE = (cx < chunksX - 1 && cz < chunksZ - 1) ? field.chunkMask.get(`${cx + 1},${cz + 1}`) !== false : false;
+        const diagNW = (cx > 0 && cz < chunksZ - 1) ? field.chunkMask.get(`${cx - 1},${cz + 1}`) !== false : false;
+        const diagSE = (cx < chunksX - 1 && cz > 0) ? field.chunkMask.get(`${cx + 1},${cz - 1}`) !== false : false;
+        const diagSW = (cx > 0 && cz > 0) ? field.chunkMask.get(`${cx - 1},${cz - 1}`) !== false : false;
+        
+        if (neighbors.N && neighbors.E && !diagNE) corners.push({ cx, cz, type: 'concave', corner: 'NE' });
+        if (neighbors.N && neighbors.W && !diagNW) corners.push({ cx, cz, type: 'concave', corner: 'NW' });
+        if (neighbors.S && neighbors.E && !diagSE) corners.push({ cx, cz, type: 'concave', corner: 'SE' });
+        if (neighbors.S && neighbors.W && !diagSW) corners.push({ cx, cz, type: 'concave', corner: 'SW' });
+      }
+    }
+    
+    console.log(`   Found ${edges.length} edges, ${corners.length} corners`);
+    
+    // Get materials from original table
+    const edgeMat = table?.parts?.materials?.side;
+    const cornerMat = table?.parts?.materials?.corner;
+    const floorMat = table?.parts?.materials?.floor;
+    
+    const edgeHeight = 1.2;
+    const edgeThickness = 4.0;
+    const edgeY = 0.5;
+    const edgeAngle = 0.11;
+    
+    // Create edge pieces
+    edges.forEach(edge => {
+      const worldX = edge.cx * chunkWorldSize;
+      const worldZ = edge.cz * chunkWorldSize;
+      
+      const mesh = BABYLON.MeshBuilder.CreateBox(`edge_${edge.cx}_${edge.cz}_${edge.dir}`, { size: 1 }, gfx.scene);
+      if (edgeMat) mesh.material = edgeMat;
+      
+      switch (edge.dir) {
+        case 'N':
+          mesh.position.set(worldX + chunkWorldSize / 2, edgeY, worldZ + chunkWorldSize);
+          mesh.scaling.set(chunkWorldSize, edgeHeight, edgeThickness);
+          mesh.rotation.set(edgeAngle, 0, 0);
+          break;
+        case 'S':
+          mesh.position.set(worldX + chunkWorldSize / 2, edgeY, worldZ);
+          mesh.scaling.set(chunkWorldSize, edgeHeight, edgeThickness);
+          mesh.rotation.set(-edgeAngle, 0, 0);
+          break;
+        case 'E':
+          mesh.position.set(worldX + chunkWorldSize, edgeY, worldZ + chunkWorldSize / 2);
+          mesh.scaling.set(edgeThickness, edgeHeight, chunkWorldSize);
+          mesh.rotation.set(0, 0, -edgeAngle);
+          break;
+        case 'W':
+          mesh.position.set(worldX, edgeY, worldZ + chunkWorldSize / 2);
+          mesh.scaling.set(edgeThickness, edgeHeight, chunkWorldSize);
+          mesh.rotation.set(0, 0, edgeAngle);
+          break;
+      }
+      
+      gfx._dynamicTableParts.push(mesh);
+    });
+    
+    // Create corner pieces
+    const cornerSize = 7.0;
+    const cornerHeight = 3.0;
+    const cornerY = 0.3;
+    
+    corners.forEach(corner => {
+      const worldX = corner.cx * chunkWorldSize;
+      const worldZ = corner.cz * chunkWorldSize;
+      
+      const mesh = BABYLON.MeshBuilder.CreateBox(`corner_${corner.cx}_${corner.cz}_${corner.corner}`, { size: 1 }, gfx.scene);
+      if (cornerMat) mesh.material = cornerMat;
+      mesh.scaling.set(cornerSize, cornerHeight, cornerSize);
+      
+      let px = worldX, pz = worldZ;
+      if (corner.corner.includes('E')) px += chunkWorldSize;
+      if (corner.corner.includes('N')) pz += chunkWorldSize;
+      
+      mesh.position.set(px, cornerY, pz);
+      gfx._dynamicTableParts.push(mesh);
+    });
+    
+    // Create floor for enabled chunks
+    for (let cz = 0; cz < chunksZ; cz++) {
+      for (let cx = 0; cx < chunksX; cx++) {
+        const key = `${cx},${cz}`;
+        if (field.chunkMask.get(key) === false) continue;
+        
+        const worldX = cx * chunkWorldSize;
+        const worldZ = cz * chunkWorldSize;
+        
+        const floor = BABYLON.MeshBuilder.CreateBox(`floor_${cx}_${cz}`, { size: 1 }, gfx.scene);
+        if (floorMat) floor.material = floorMat;
+        floor.position.set(worldX + chunkWorldSize / 2, -0.777, worldZ + chunkWorldSize / 2);
+        floor.scaling.set(chunkWorldSize, 0.4, chunkWorldSize);
+        
+        gfx._dynamicTableParts.push(floor);
+      }
+    }
+    
+    console.log(`✅ Table rebuilt with ${gfx._dynamicTableParts.length} pieces`);
+  };
+  
+  // Check if chunk mask has any disabled chunks (non-rectangular map)
+  gfx.hasCustomTableShape = function() {
+    const field = window.liveField;
+    if (!field || !field.chunkMask) return false;
+    
+    for (const [key, enabled] of field.chunkMask) {
+      if (enabled === false) return true;
+    }
+    return false;
   };
   
   // Debug helper to check tree state at a grid position

@@ -310,17 +310,26 @@ window.gameLoop = {
     }
     
     // Accumulate time for physics
-    this.physicsTime += this.deltaTime;
+    // BUT: If we're waiting for lockstep peers, don't accumulate - this prevents
+    // a huge catch-up burst when the peer finally confirms
+    if (!window.lockstepWaitingForPeers) {
+      this.physicsTime += this.deltaTime;
+    }
     
     // Only pause physics when the match is explicitly paused.
     // In multiplayer, continue running during READY/LOADING so late start signals
     // (e.g. missing match_start) don't freeze the sim and cause divergence.
+    // CRITICAL: Also pause when lockstep is waiting for peers - this ensures
+    // both clients run identical physics. Without this, the fast client would
+    // keep running physics while waiting, causing desync.
     const matchState = window.currentMatch?.state;
-    const canRunPhysics = !window.isMultiplayer ||
+    const lockstepWaiting = window.isMultiplayer && window.lockstepWaitingForPeers;
+    const canRunPhysics = !lockstepWaiting && (
+                          !window.isMultiplayer ||
                           !window.currentMatch ||
                           matchState === 'playing' ||
                           matchState === 'ready' ||
-                          matchState === 'loading';
+                          matchState === 'loading');
     
     // Run physics at fixed timestep (60Hz)
     // DETERMINISM: Physics is driven by fixed timestep, not wall-clock time.

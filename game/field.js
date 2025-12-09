@@ -122,6 +122,13 @@ function Field(ops = {}) {
     }
   }
   
+  // Blocked tiles for pathfinding (deep water, rocks)
+  this.blockedTiles = new Set();
+  
+  // Slow tiles for pathfinding (trees - units move slower here)
+  this.slowTiles = new Set();
+  this.slowMultiplier = 0.5; // Units move at 50% speed through trees
+
   // Precomputed height grid for fast unit positioning (initialized after proof())
   this._heightGrid = null;
   
@@ -201,6 +208,9 @@ Field.prototype.proof = function(){
   
   // Step 3: Apply marching squares for seamless transitions between adjacent terrains
   this.applyTerrainTransitions();
+  
+  // Step 4: Mark blocked tiles for pathfinding (water, etc.)
+  this.updateBlockedTiles();
 }
 
 // Test function: Display all 16 tile variants from atlas-grass-dirt in a grid
@@ -919,7 +929,112 @@ Field.prototype.getTile = function(x, y) {
     return this.tiles[y * this.width + x];
   }
   return null;
-}
+};
+
+// Check if a tile is passable for pathfinding
+Field.prototype.isPassable = function(x, y) {
+  // Out of bounds = not passable
+  if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
+    return false;
+  }
+  
+  // Check if tile is on a disabled chunk (off the table)
+  if (this.chunkMask) {
+    const chunkX = Math.floor(x / this.chunkSize);
+    const chunkZ = Math.floor(y / this.chunkSize);
+    if (this.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+      return false;
+    }
+  }
+  
+  // Check blocked tiles set (pure water, rocks, etc.)
+  const key = `${x},${y}`;
+  if (this.blockedTiles.has(key)) {
+    return false;
+  }
+  
+  return true;
+};
+
+// Check if a tile slows movement (trees)
+Field.prototype.isSlow = function(x, y) {
+  const key = `${x},${y}`;
+  return this.slowTiles.has(key);
+};
+
+// Block a tile (for resources, buildings, etc.)
+Field.prototype.blockTile = function(x, y) {
+  this.blockedTiles.add(`${x},${y}`);
+};
+
+// Unblock a tile
+Field.prototype.unblockTile = function(x, y) {
+  this.blockedTiles.delete(`${x},${y}`);
+};
+
+// Block multiple tiles (footprint)
+Field.prototype.blockFootprint = function(centerX, centerY, radius) {
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      if (Math.sqrt(dx*dx + dy*dy) <= radius + 0.5) {
+        this.blockTile(centerX + dx, centerY + dy);
+      }
+    }
+  }
+};
+
+// Unblock multiple tiles (footprint)
+Field.prototype.unblockFootprint = function(centerX, centerY, radius) {
+  for (let dx = -radius; dx <= radius; dx++) {
+    for (let dy = -radius; dy <= radius; dy++) {
+      if (Math.sqrt(dx*dx + dy*dy) <= radius + 0.5) {
+        this.unblockTile(centerX + dx, centerY + dy);
+      }
+    }
+  }
+};
+
+// Mark pure water tiles as blocked (shorelines are passable)
+Field.prototype.updateBlockedTiles = function() {
+  let pureWaterCount = 0;
+  
+  for (let y = 0; y < this.height; y++) {
+    for (let x = 0; x < this.width; x++) {
+      const index = y * this.width + x;
+      
+      // Only block pure water (terrain type 1 AND tile type 12 = solid water)
+      if (this.terrainTypes[index] === 1) {
+        const tile = this.tiles[index];
+        // Tile type 12 is the "pure/solid" tile in marching squares
+        // Other water tiles (0-11, 13-15) are transitions/shorelines
+        if (tile && tile.type === 12) {
+          this.blockTile(x, y);
+          pureWaterCount++;
+        }
+      }
+    }
+  }
+  console.log(`🚫 Marked ${pureWaterCount} pure water tiles as blocked (shorelines passable)`);
+};
+
+// Get movement speed multiplier for a tile (1.0 = normal, 0.5 = slow)
+Field.prototype.getSpeedMultiplier = function(x, y) {
+  const key = `${x},${y}`;
+  if (this.slowTiles.has(key)) {
+    return this.slowMultiplier;
+  }
+  return 1.0;
+};
+
+// Mark a tile as slow (for trees)
+Field.prototype.slowTile = function(x, y) {
+  this.slowTiles.add(`${x},${y}`);
+};
+
+// Unmark a slow tile
+Field.prototype.unslowTile = function(x, y) {
+  this.slowTiles.delete(`${x},${y}`);
+};
 
   // Helper: Check if position is in a spawn zone
   Field.prototype.isInSpawnZone = function(x, y) {

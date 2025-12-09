@@ -356,7 +356,7 @@ const Lobby = {
   
   // Start a new match from the lobby
   // Start a 1v1 match - follows adventure mode pattern for proper initialization
-  start1v1Match: function(fieldSize = 'medium', mapSeed = null) {
+  start1v1Match: function(fieldSize = 'medium', mapSeed = null, customMapData = null) {
     
     const config = this.gameTypes['onevsone'];
     const resolvedFieldSize = fieldSize || (config ? config.defaultFieldSize : 'medium');
@@ -390,16 +390,52 @@ const Lobby = {
     window.player.selectedUnits = [];
     
     // Resolve field dimensions for 1v1 (typically smaller than adventure)
-    const dims = (typeof resolvedFieldSize === 'string')
-      ? (this.getFieldDimensions(resolvedFieldSize) || { width: 128, height: 128 })
-      : { width: resolvedFieldSize, height: resolvedFieldSize };
+    // If using custom map, use its dimensions
+    let dims;
+    if (customMapData) {
+      const mapWidth = customMapData.w || customMapData.width || 64;
+      const mapHeight = customMapData.h || customMapData.height || 64;
+      dims = { width: mapWidth, height: mapHeight };
+    } else {
+      dims = (typeof resolvedFieldSize === 'string')
+        ? (this.getFieldDimensions(resolvedFieldSize) || { width: 128, height: 128 })
+        : { width: resolvedFieldSize, height: resolvedFieldSize };
+    }
     
-    // 1v1: Two players in opposite corners
-    const cornerMargin = Math.max(8, Math.floor(Math.min(dims.width, dims.height) * 0.1));
-    const spawnPositions = [
-      { x: cornerMargin, y: cornerMargin }, // Player
-      { x: dims.width - cornerMargin - 1, y: dims.height - cornerMargin - 1 } // AI opponent
-    ];
+    // Parse spawn points from custom map if available
+    let spawnPositions;
+    if (customMapData && customMapData.sp) {
+      // Parse spawn points from map format: "x,y,team;x,y,team;..."
+      const parsedSpawns = customMapData.sp.split(';').map(s => {
+        const [x, y, team] = s.split(',').map(Number);
+        return { x, y, team };
+      });
+      // Sort by spawn index to maintain placement order
+      parsedSpawns.sort((a, b) => a.team - b.team);
+      // Use first two spawns (or fallback to corners)
+      if (parsedSpawns.length >= 2) {
+        spawnPositions = [parsedSpawns[0], parsedSpawns[1]];
+        console.log('🏛️ Using custom map Agora spawns:', spawnPositions);
+      } else if (parsedSpawns.length === 1) {
+        // Only one spawn defined - place AI opposite
+        const cornerMargin = Math.max(8, Math.floor(Math.min(dims.width, dims.height) * 0.1));
+        spawnPositions = [
+          parsedSpawns[0],
+          { x: dims.width - cornerMargin - 1, y: dims.height - cornerMargin - 1 }
+        ];
+      } else {
+        spawnPositions = null; // Fall through to default
+      }
+    }
+    
+    // Default: Two players in opposite corners
+    if (!spawnPositions) {
+      const cornerMargin = Math.max(8, Math.floor(Math.min(dims.width, dims.height) * 0.1));
+      spawnPositions = [
+        { x: cornerMargin, y: cornerMargin }, // Player
+        { x: dims.width - cornerMargin - 1, y: dims.height - cornerMargin - 1 } // AI opponent
+      ];
+    }
     
     const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
     
@@ -458,6 +494,12 @@ const Lobby = {
     });
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
+    }
+    
+    // Apply custom map data if provided (overrides procedural terrain)
+    if (customMapData) {
+      console.log('🗺️ Applying custom map to 1v1 match...');
+      this.applyCustomMapToField(customMapData);
     }
     
     // CRITICAL: Apply current LOD settings to new field immediately!
@@ -582,10 +624,10 @@ const Lobby = {
   },
   
   // Legacy startMatch function - redirects to proper initialization
-  startMatch: function(matchType = '1v1', fieldSize = 'medium', mapSeed = null) {
+  startMatch: function(matchType = '1v1', fieldSize = 'medium', mapSeed = null, customMapData = null) {
     console.log(`🔄 Redirecting legacy startMatch to proper initialization...`);
     if (matchType === '1v1' || matchType === 'onevsone') {
-      return this.start1v1Match(fieldSize, mapSeed);
+      return this.start1v1Match(fieldSize, mapSeed, customMapData);
     } else {
       console.warn(`⚠️ Unknown match type: ${matchType}`);
     }
@@ -1782,6 +1824,23 @@ const Lobby = {
             `<span>#${lobby.settings.seed}</span>`
           }
         </div>
+        <div class="lobby_setting" style="margin-top: 8px;">
+          <label>Custom Map:</label>
+          ${this.isHost ? `
+            ${lobby.settings.customMapData ? `
+              <span style="color: #8f8; margin-right: 8px;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>
+              <button onclick="window.Lobby.clearCustomMap()" style="font-size: 11px; padding: 2px 8px;">✕ Clear</button>
+            ` : `
+              <input type="file" id="customMapInput" accept=".garden,.json" style="display:none" onchange="window.Lobby.handleCustomMapUpload(this.files[0])">
+              <button onclick="document.getElementById('customMapInput').click()" style="font-size: 12px; padding: 4px 10px;">📂 Load .garden</button>
+            `}
+          ` : `
+            ${lobby.settings.customMapData ? 
+              `<span style="color: #8f8;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>` : 
+              `<span style="opacity: 0.6;">None</span>`
+            }
+          `}
+        </div>
       </div>
     `;
     
@@ -2093,6 +2152,169 @@ const Lobby = {
     
     // Also update local UI
     this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
+  },
+  
+  // Handle custom map file upload
+  handleCustomMapUpload: function(file) {
+    if (!file || !this.isHost) return;
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        let content = e.target.result;
+        const mapData = JSON.parse(content);
+        
+        // Validate it looks like a valid map
+        if (!mapData.w && !mapData.width) {
+          throw new Error('Invalid map format - missing dimensions');
+        }
+        
+        // Extract map name from filename
+        const mapName = file.name.replace(/\.(aeg|json)$/i, '');
+        
+        // Store in lobby settings
+        this.currentLobby.settings.customMapData = mapData;
+        this.currentLobby.settings.customMapName = mapName;
+        
+        // Override field size based on map dimensions
+        const mapWidth = mapData.w || mapData.width;
+        if (mapWidth <= 32) this.currentLobby.settings.fieldSize = 'tiny';
+        else if (mapWidth <= 64) this.currentLobby.settings.fieldSize = 'small';
+        else if (mapWidth <= 128) this.currentLobby.settings.fieldSize = 'medium';
+        else if (mapWidth <= 256) this.currentLobby.settings.fieldSize = 'large';
+        else this.currentLobby.settings.fieldSize = 'huge';
+        
+        // Use map seed if available
+        if (mapData.s || mapData.seed) {
+          this.currentLobby.settings.seed = mapData.s || mapData.seed;
+        }
+        
+        console.log(`🗺️ Loaded custom map: ${mapName} (${mapWidth}x${mapData.h || mapData.height})`);
+        
+        // Broadcast to other players
+        this.announceLobby(this.currentLobby);
+        this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
+        
+        this.showNotification(`Map loaded: ${mapName}`, 'success');
+      } catch (err) {
+        console.error('❌ Failed to load custom map:', err);
+        this.showNotification('Failed to load map file', 'error');
+      }
+    };
+    reader.readAsText(file);
+  },
+  
+  // Clear the custom map and return to procedural generation
+  clearCustomMap: function() {
+    if (!this.isHost || !this.currentLobby) return;
+    
+    delete this.currentLobby.settings.customMapData;
+    delete this.currentLobby.settings.customMapName;
+    
+    console.log('🗺️ Custom map cleared - returning to procedural generation');
+    
+    // Broadcast to other players
+    this.announceLobby(this.currentLobby);
+    this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
+  },
+  
+  // Apply custom map data to the current field
+  applyCustomMapToField: function(mapData) {
+    const field = window.liveField;
+    if (!field || !mapData) return false;
+    
+    console.log('🗺️ Applying custom map to field...');
+    
+    // Detect format version and normalize
+    const isV2 = mapData.v === 2;
+    const width = isV2 ? mapData.w : mapData.width;
+    const height = isV2 ? mapData.h : mapData.height;
+    
+    // Decode terrain types
+    let terrainTypes;
+    if (isV2 && mapData.t) {
+      // RLE decode
+      terrainTypes = [];
+      const runs = mapData.t.split(',');
+      for (const run of runs) {
+        const [val, count] = run.split(':').map(Number);
+        for (let i = 0; i < count; i++) terrainTypes.push(val);
+      }
+    } else if (mapData.terrainTypes) {
+      terrainTypes = mapData.terrainTypes;
+    }
+    
+    // Decode tile atlas info
+    let tiles = null;
+    if (isV2 && mapData.ta) {
+      const atlasMap = { 'gd': 'atlas-grass-dirt', 'gw': 'atlas-grass-water' };
+      tiles = [];
+      const runs = mapData.ta.split(',');
+      for (const run of runs) {
+        let code, count;
+        if (run.includes('*')) {
+          [code, count] = run.split('*');
+          count = parseInt(count);
+        } else {
+          code = run;
+          count = 1;
+        }
+        const atlas = atlasMap[code.slice(0, 2)] || 'atlas-grass-dirt';
+        const type = parseInt(code.slice(2));
+        for (let i = 0; i < count; i++) {
+          tiles.push({ atlasName: atlas, type: type });
+        }
+      }
+    } else if (mapData.tiles) {
+      tiles = mapData.tiles;
+    }
+    
+    // Apply terrain types
+    if (terrainTypes && terrainTypes.length === field.terrainTypes.length) {
+      for (let i = 0; i < terrainTypes.length; i++) {
+        field.terrainTypes[i] = terrainTypes[i];
+      }
+    }
+    
+    // Apply tile data
+    if (tiles && tiles.length === field.tiles.length) {
+      for (let i = 0; i < tiles.length; i++) {
+        field.tiles[i].type = tiles[i].type;
+        field.tiles[i].atlasName = tiles[i].atlasName || 'atlas-grass-dirt';
+        field.tiles[i].updateAtlasCoordinates();
+      }
+    }
+    
+    // Apply chunk mask if present
+    let hasCustomShape = false;
+    if (isV2 && mapData.cm) {
+      const chunksX = Math.ceil(width / (mapData.cs || 16));
+      const chunksZ = Math.ceil(height / (mapData.cs || 16));
+      let i = 0;
+      for (let cz = 0; cz < chunksZ; cz++) {
+        for (let cx = 0; cx < chunksX; cx++) {
+          const enabled = mapData.cm[i] === '1';
+          field.chunkMask.set(`${cx},${cz}`, enabled);
+          if (!enabled) hasCustomShape = true;
+          i++;
+        }
+      }
+    }
+    
+    // Rebuild table if map has custom shape (non-rectangular)
+    if (hasCustomShape && window.gfx && window.gfx.rebuildTableFromChunkMask) {
+      window.gfx.rebuildTableFromChunkMask();
+    }
+    
+    // Update blocked tiles
+    if (field.updateBlockedTiles) {
+      field.blockedTiles.clear();
+      field.slowTiles.clear();
+      field.updateBlockedTiles();
+    }
+    
+    console.log(`✅ Custom map applied (${width}x${height})${hasCustomShape ? ' with custom table shape' : ''}`);
+    return true;
   },
   
   // Start match from lobby (host only)
@@ -2666,7 +2888,7 @@ const Lobby = {
         this.startAdventureSkirmish(fieldSize, mapSeed, { aiCount: aiCount });
         return;
       } else if (gameType === 'onevsone' || gameType === '1v1') {
-        this.start1v1Match(fieldSize, mapSeed);
+        this.start1v1Match(fieldSize, mapSeed, settings?.customMapData);
         return;
       } else if (gameType === 'teams') {
         console.log('✅ Starting Teams lobby with', aiCount, 'AI opponents');
@@ -2770,7 +2992,7 @@ const Lobby = {
         this.startAdventureSkirmish(fieldSize, mapSeed, { aiCount: aiCount });
         return;
       } else if (gameType === 'onevsone' || gameType === '1v1') {
-        this.start1v1Match(fieldSize, mapSeed);
+        this.start1v1Match(fieldSize, mapSeed, settings?.customMapData);
         return;
       } else if (gameType === 'teams') {
         console.log('✅ Opponent disconnected. Continuing Teams lobby with', aiCount, 'AI opponents');

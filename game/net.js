@@ -222,6 +222,7 @@
         // We can advance!
         tick = targetTick;
         waitingForPeers = false;
+        window.lockstepWaitingForPeers = false; // Expose to game loop
         
         // Process the tick
         processTick();
@@ -236,6 +237,7 @@
         if (!waitingForPeers) {
           waitingForPeers = true;
         }
+        window.lockstepWaitingForPeers = true; // Expose to game loop - pause physics!
         
         // Log waiting status (rate limited)
         const now = Date.now();
@@ -1772,6 +1774,7 @@
     lastHeartbeatTick = 0;
     waitingForPeers = false;
     lastWaitLog = 0;
+    window.lockstepWaitingForPeers = false; // Clear global flag for game loop
     
     // Pre-confirm initial ticks so game can start
     // Each player confirms they're ready for ticks 0 through inputDelay

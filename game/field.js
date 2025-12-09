@@ -938,15 +938,6 @@ Field.prototype.isPassable = function(x, y) {
     return false;
   }
   
-  // Check if tile is on a disabled chunk (off the table)
-  if (this.chunkMask) {
-    const chunkX = Math.floor(x / this.chunkSize);
-    const chunkZ = Math.floor(y / this.chunkSize);
-    if (this.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
-      return false;
-    }
-  }
-  
   // Check blocked tiles set (pure water, rocks, etc.)
   const key = `${x},${y}`;
   if (this.blockedTiles.has(key)) {

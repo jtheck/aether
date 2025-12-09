@@ -863,57 +863,44 @@ function updateUnits(deltaTime) {
         unit.pb.rotImp.z = 0;
         
         // Apply velocity to position (deltaTime is already fixed timestep from game.js)
-        // COLLISION CHECK: Prevent units from moving into blocked tiles or off the table
+        unit.pb.state.loc.x += unit.pb.state.vel.x * deltaTime;
+        unit.pb.state.loc.z += unit.pb.state.vel.z * deltaTime;
+        
+        // BOUNDARY ENFORCEMENT: Prevent units from walking off table or into blocked tiles
         const field = window.liveField;
-        if (field && field.isPassable) {
-          const currentX = unit.pb.state.loc.x;
-          const currentZ = unit.pb.state.loc.z;
-          const newX = currentX + unit.pb.state.vel.x * deltaTime;
-          const newZ = currentZ + unit.pb.state.vel.z * deltaTime;
-          
-          // Convert world position to tile coordinates
-          const TILE = window.TILE_SIZE || 4;
-          const newTileX = Math.floor(newX / TILE);
-          const newTileZ = Math.floor(newZ / TILE);
-          const curTileX = Math.floor(currentX / TILE);
-          const curTileZ = Math.floor(currentZ / TILE);
-          
-          // Check if target tile is passable
-          const canMoveX = field.isPassable(Math.floor((currentX + unit.pb.state.vel.x * deltaTime) / TILE), curTileZ);
-          const canMoveZ = field.isPassable(curTileX, Math.floor((currentZ + unit.pb.state.vel.z * deltaTime) / TILE));
-          const canMoveBoth = field.isPassable(newTileX, newTileZ);
-          
-          // Apply movement with sliding collision
-          if (canMoveBoth) {
-            // Both directions OK - normal movement
-            unit.pb.state.loc.x = newX;
-            unit.pb.state.loc.z = newZ;
-          } else if (canMoveX && !canMoveZ) {
-            // Can only move in X - slide along Z wall
-            unit.pb.state.loc.x = newX;
-            unit.pb.state.vel.z = 0;
-          } else if (!canMoveX && canMoveZ) {
-            // Can only move in Z - slide along X wall
-            unit.pb.state.loc.z = newZ;
-            unit.pb.state.vel.x = 0;
-          } else {
-            // Blocked in both directions - stop
-            unit.pb.state.vel.x = 0;
-            unit.pb.state.vel.z = 0;
-          }
-          
-          // Apply slow tile speed modifier (trees slow movement)
-          if (field.isSlow && field.getSpeedMultiplier) {
-            const speedMult = field.getSpeedMultiplier(curTileX, curTileZ);
-            if (speedMult < 1.0) {
-              unit.pb.state.vel.x *= speedMult;
-              unit.pb.state.vel.z *= speedMult;
+        if (field) {
+            const TILE_SIZE = window.TILE_SIZE || 4;
+            const tileX = Math.floor(unit.pb.state.loc.x / TILE_SIZE);
+            const tileZ = Math.floor(unit.pb.state.loc.z / TILE_SIZE);
+            
+            // Check if tile is blocked (rocks, deep water)
+            if (field.isPassable && !field.isPassable(tileX, tileZ)) {
+                // Revert position - unit can't be here
+                unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
+                unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
+                unit.pb.state.vel.x = 0;
+                unit.pb.state.vel.z = 0;
             }
-          }
-        } else {
-          // No field - just apply movement directly
-          unit.pb.state.loc.x += unit.pb.state.vel.x * deltaTime;
-          unit.pb.state.loc.z += unit.pb.state.vel.z * deltaTime;
+            
+            // Check if off the table (chunk mask)
+            if (field.chunkMask && field.chunkSize) {
+                const chunkX = Math.floor(tileX / field.chunkSize);
+                const chunkZ = Math.floor(tileZ / field.chunkSize);
+                const chunkKey = `${chunkX},${chunkZ}`;
+                if (field.chunkMask.get(chunkKey) === false) {
+                    // Off the table! Revert position
+                    unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
+                    unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
+                    unit.pb.state.vel.x = 0;
+                    unit.pb.state.vel.z = 0;
+                }
+            }
+            
+            // Clamp to field bounds as final safety net
+            const maxX = (field.width - 0.5) * TILE_SIZE;
+            const maxZ = (field.height - 0.5) * TILE_SIZE;
+            unit.pb.state.loc.x = Math.max(TILE_SIZE * 0.5, Math.min(maxX, unit.pb.state.loc.x));
+            unit.pb.state.loc.z = Math.max(TILE_SIZE * 0.5, Math.min(maxZ, unit.pb.state.loc.z));
         }
         
         // CRITICAL: Apply smooth position correction for P2P sync

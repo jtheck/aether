@@ -265,6 +265,9 @@ class WalkBehavior extends Behavior {
     step() {
         if (!this.unit.pb || !this.unit.pb.state) return true;
         
+        const field = window.liveField;
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        
         // CRITICAL: Apply unit's personality offset to target for visual variety
         // This prevents all units from converging to the exact same spot
         // RE-ENABLED: Personality offset is deterministic (based on unit ID) and properly rounded
@@ -288,7 +291,6 @@ class WalkBehavior extends Behavior {
         if (distance <= this.params.arrivalRadius) {
             // Arrived at destination
             this.completed = true;
-            // console.log(`🎯 Unit ${this.unit.name || this.unit.type} arrived at destination (${this.targetPoint.x.toFixed(1)}, ${this.targetPoint.z.toFixed(1)})`);
             return true;
         }
         
@@ -309,6 +311,44 @@ class WalkBehavior extends Behavior {
             direction.z = 0;
         }
         
+        // TERRAIN CHECKS: Blocked tiles, slow tiles, table boundaries
+        let speedMultiplier = 1.0;
+        
+        if (field) {
+            // Calculate next step position (look ahead ~1 tile)
+            const lookAheadDist = TILE_SIZE * 0.5;
+            const nextX = currentPos.x + direction.x * lookAheadDist;
+            const nextZ = currentPos.z + direction.z * lookAheadDist;
+            const nextTileX = Math.floor(nextX / TILE_SIZE);
+            const nextTileZ = Math.floor(nextZ / TILE_SIZE);
+            
+            // Check if next tile is blocked (rocks, deep water)
+            if (field.isPassable && !field.isPassable(nextTileX, nextTileZ)) {
+                // Blocked! Stop movement and complete behavior
+                this.completed = true;
+                return true;
+            }
+            
+            // Check if next tile is off the table (chunk mask)
+            if (field.chunkMask && field.chunkSize) {
+                const chunkX = Math.floor(nextTileX / field.chunkSize);
+                const chunkZ = Math.floor(nextTileZ / field.chunkSize);
+                const chunkKey = `${chunkX},${chunkZ}`;
+                if (field.chunkMask.get(chunkKey) === false) {
+                    // Off the table! Stop movement
+                    this.completed = true;
+                    return true;
+                }
+            }
+            
+            // Check current tile for slow effect (trees)
+            const currentTileX = Math.floor(currentPos.x / TILE_SIZE);
+            const currentTileZ = Math.floor(currentPos.z / TILE_SIZE);
+            if (field.getSpeedMultiplier) {
+                speedMultiplier = field.getSpeedMultiplier(currentTileX, currentTileZ);
+            }
+        }
+        
         // Initialize velocity if it doesn't exist
         if (!this.unit.pb.state.vel) {
             this.unit.pb.state.vel = { x: 0, y: 0, z: 0 };
@@ -327,7 +367,9 @@ class WalkBehavior extends Behavior {
         }
         
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, this.params.walkSpeed);
+        // Apply speed multiplier for slow tiles (trees = 50% speed)
+        const effectiveSpeed = this.params.walkSpeed * speedMultiplier;
+        this.applyMovementWithRotation(direction, effectiveSpeed);
                 
         return false;
     }
@@ -346,6 +388,9 @@ class RunBehavior extends Behavior {
     
     step() {
         if (!this.unit.pb || !this.unit.pb.state) return true;
+        
+        const field = window.liveField;
+        const TILE_SIZE = window.TILE_SIZE || 4;
         
         const currentPos = this.unit.pb.state.loc;
         const dx = this.targetPoint.x - currentPos.x;
@@ -367,13 +412,53 @@ class RunBehavior extends Behavior {
         direction.x /= length;
         direction.z /= length;
         
+        // TERRAIN CHECKS: Blocked tiles, slow tiles, table boundaries
+        let speedMultiplier = 1.0;
+        
+        if (field) {
+            // Calculate next step position (look ahead ~1 tile)
+            const lookAheadDist = TILE_SIZE * 0.5;
+            const nextX = currentPos.x + direction.x * lookAheadDist;
+            const nextZ = currentPos.z + direction.z * lookAheadDist;
+            const nextTileX = Math.floor(nextX / TILE_SIZE);
+            const nextTileZ = Math.floor(nextZ / TILE_SIZE);
+            
+            // Check if next tile is blocked (rocks, deep water)
+            if (field.isPassable && !field.isPassable(nextTileX, nextTileZ)) {
+                // Blocked! Stop movement and complete behavior
+                this.completed = true;
+                return true;
+            }
+            
+            // Check if next tile is off the table (chunk mask)
+            if (field.chunkMask && field.chunkSize) {
+                const chunkX = Math.floor(nextTileX / field.chunkSize);
+                const chunkZ = Math.floor(nextTileZ / field.chunkSize);
+                const chunkKey = `${chunkX},${chunkZ}`;
+                if (field.chunkMask.get(chunkKey) === false) {
+                    // Off the table! Stop movement
+                    this.completed = true;
+                    return true;
+                }
+            }
+            
+            // Check current tile for slow effect (trees)
+            const currentTileX = Math.floor(currentPos.x / TILE_SIZE);
+            const currentTileZ = Math.floor(currentPos.z / TILE_SIZE);
+            if (field.getSpeedMultiplier) {
+                speedMultiplier = field.getSpeedMultiplier(currentTileX, currentTileZ);
+            }
+        }
+        
         // Track that this unit was moved (use tick-based time for multiplayer sync)
         if (window.currentMatch && window.currentMatch.tick) {
             this.unit.lastMoveTick = window.currentMatch.tick;
         }
         
         // Apply movement with rotation and forward momentum boost
-        this.applyMovementWithRotation(direction, this.params.runSpeed);
+        // Apply speed multiplier for slow tiles (trees = 50% speed)
+        const effectiveSpeed = this.params.runSpeed * speedMultiplier;
+        this.applyMovementWithRotation(direction, effectiveSpeed);
         
         return false;
     }

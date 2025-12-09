@@ -2304,6 +2304,15 @@ const Lobby = {
     // Rebuild table if map has custom shape (non-rectangular)
     if (hasCustomShape && window.gfx && window.gfx.rebuildTableFromChunkMask) {
       window.gfx.rebuildTableFromChunkMask();
+      
+      // Also hide terrain meshes for disabled chunks
+      for (const [key, chunk] of field.chunks) {
+        if (chunk && chunk.mesh) {
+          const enabled = field.chunkMask.get(key) !== false;
+          chunk.mesh.setEnabled(enabled);
+          chunk.mesh.isVisible = enabled;
+        }
+      }
     }
     
     // Update blocked tiles

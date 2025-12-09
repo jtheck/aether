@@ -57,32 +57,21 @@
         gfx.init();
       }
       
-      // Set up camera controls for forge editing
+      // Position camera for top-down editing view (controls are set up in forge.js)
       if (gfx.camera && gfx.canvas) {
         const cam = gfx.camera;
-        
-        // Attach camera controls
-        cam.attachControl(gfx.canvas, true);
-        
-        // Configure UniversalCamera for WASD movement
-        cam.keysUp = [87];     // W
-        cam.keysDown = [83];   // S
-        cam.keysLeft = [65];   // A
-        cam.keysRight = [68];  // D
-        cam.keysUpward = [69]; // E (move up)
-        cam.keysDownward = [81]; // Q (move down)
-        
-        // Movement speed
-        cam.speed = 20;
-        cam.angularSensibility = 500; // Lower = faster mouse look
         
         // Position camera for top-down editing view
         const fieldCenterX = liveField ? (liveField.width * TILE_SIZE) / 2 : 128;
         const fieldCenterZ = liveField ? (liveField.height * TILE_SIZE) / 2 : 128;
         cam.position = new Vec3(fieldCenterX, 100, fieldCenterZ - 80);
-        cam.setTarget(new Vec3(fieldCenterX, 0, fieldCenterZ));
+        if (gfx.cameraTarget) {
+          gfx.cameraTarget.position = new Vec3(fieldCenterX, 0, fieldCenterZ);
+        } else if (cam.setTarget) {
+          cam.setTarget(new Vec3(fieldCenterX, 0, fieldCenterZ));
+        }
         
-        console.log('📷 Camera controls enabled for forge');
+        console.log('📷 Camera positioned for forge');
       }
       
       // Stretch the table to match field size

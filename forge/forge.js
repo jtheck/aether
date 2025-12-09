@@ -16,25 +16,58 @@
     mapSeed: 12345,             // Current map seed
     currentTool: 'terrain',     // 'table', 'terrain', or 'resource'
     currentResource: 'trees',   // Current resource to place
-    currentBuilding: 'camp',    // Current building to place
     // Layer visibility
     layers: {
       table: true,
       terrain: true,
-      resources: true,
-      buildings: true,
-      spawns: true
+      resources: true
     },
     // Current editing layer (affects what tool does)
-    editingLayer: 'terrain',    // 'table', 'terrain', 'resources', 'buildings', 'spawns'
-    // Spawn points for player starts
+    editingLayer: 'terrain',    // 'table', 'terrain', 'resources', or 'spawns'
+    
+    // Map metadata
+    mapName: '',
+    mapAuthor: '',
+    
+    // Game type compatibility
+    gameTypes: {
+      'adventure': false,
+      '1v1': true,
+      'koth': false,
+      'teams': false
+    },
+    
+    // Spawn points (array of {x, y, team} objects)
     spawnPoints: [],
-    // Buildings placed on map
+    
+    // Buildings (array of {x, y, type, rotation} objects)
     buildings: [],
-    // Symmetry mode for mirrored placement
-    symmetryMode: 'none'        // 'none', '2way', '4way', 'radial'
+    currentBuilding: 'agora'
   };
   
+  // Spawn point radius (same as game's spawnZoneRadius for terrain flattening)
+  forge.spawnZoneRadius = 6;
+  
+  // Placeable buildings for map editor
+  forge.buildingTypes = {
+    agora:    { name: 'Agora',    icon: '🏛️' },
+    camp:     { name: 'Camp',     icon: '⛺' },
+    tower:    { name: 'Tower',    icon: '🗼' },
+    gate:     { name: 'Gate',     icon: '🚪' },
+    farm:     { name: 'Farm',     icon: '🌾' },
+    windmill: { name: 'Windmill', icon: '🌀' }
+  };
+  
+  // Symmetry modes
+  forge.symmetryModes = {
+    none: { name: 'None', icon: '⬜' },
+    mirrorX: { name: 'Mirror ↔', icon: '↔️' },
+    mirrorY: { name: 'Mirror ↕', icon: '↕️' },
+    rotate180: { name: 'Rotate 180°', icon: '🔄' },
+    rotate90: { name: 'Rotate 90°', icon: '↻' },
+    quad: { name: 'Quad Mirror', icon: '✚' }
+  };
+
   // Terrain types map to the 2-terrain system (grass/dirt)
   forge.terrainTypes = {
     grass: { name: 'Grass', terrainType: 3, solidTile: 6, atlas: 'atlas-grass-dirt' },   // Type 3 = grass
@@ -43,11 +76,69 @@
   };
   
   // Available resources for manual placement
+  // footprint = radius in tiles that this resource occupies (0 = just center tile)
   forge.resourceTypes = {
-    trees:       { name: 'Trees',       path: 'assets/models/trees.glb',       scale: 0.9 },
-    rocks_plain: { name: 'Rocks',       path: 'assets/models/rocks_plain.glb', scale: 3.0 },
-    rocks_moss:  { name: 'Mossy Rocks', path: 'assets/models/rocks_moss.glb',  scale: 7.5 },
-    rocks_snow:  { name: 'Large Rocks', path: 'assets/models/rocks_snow.glb',  scale: 11.5 }
+    trees:       { name: 'Trees',       path: 'assets/models/trees.glb',       scale: 0.9,  footprint: 0 },
+    rocks_plain: { name: 'Rocks',       path: 'assets/models/rocks_plain.glb', scale: 3.0,  footprint: 0 },
+    rocks_moss:  { name: 'Mossy Rocks', path: 'assets/models/rocks_moss.glb',  scale: 7.5,  footprint: 1 },
+    rocks_snow:  { name: 'Large Rocks', path: 'assets/models/rocks_snow.glb',  scale: 11.5, footprint: 2 }
+  };
+  
+  // Get all tiles occupied by a resource at position
+  forge.getResourceFootprint = function(pos, resourceType) {
+    const footprint = resourceType.footprint || 0;
+    const tiles = [];
+    
+    for (let dx = -footprint; dx <= footprint; dx++) {
+      for (let dy = -footprint; dy <= footprint; dy++) {
+        // Circular footprint
+        if (Math.sqrt(dx*dx + dy*dy) <= footprint + 0.5) {
+          tiles.push({ x: pos.x + dx, y: pos.y + dy });
+        }
+      }
+    }
+    return tiles;
+  };
+  
+  // Get all occupied tiles (manual + auto-generated with footprints)
+  forge.getOccupiedTiles = function() {
+    const occupied = new Set();
+    
+    // Manual placements
+    if (this._placedKeys) {
+      this._placedKeys.forEach(k => occupied.add(k));
+    }
+    
+    // Auto-generated from LOD models (skip disposed/erased)
+    if (gfx && gfx.lodModels) {
+      gfx.lodModels.forEach(lod => {
+        if (!lod.model || lod.model.isDisposed()) return;
+        const pos = lod.model.position;
+        const tx = Math.floor(pos.x / TILE_SIZE);
+        const tz = Math.floor(pos.z / TILE_SIZE);
+        
+        // Skip if this was erased
+        if (this._erasedAutoResources && this._erasedAutoResources.has(`${tx},${tz}`)) return;
+        
+        // Determine footprint based on scale (matches resourceTypes)
+        const scale = lod.model.scaling ? lod.model.scaling.x : 1;
+        let footprint = 0;
+        if (scale >= 10) footprint = 2;       // Large rocks (scale 11.5)
+        else if (scale >= 6) footprint = 1;   // Mossy rocks (scale 7.5)
+        // Trees (0.9) and plain rocks (3.0) = footprint 0
+        
+        // Add all tiles in footprint
+        for (let dx = -footprint; dx <= footprint; dx++) {
+          for (let dz = -footprint; dz <= footprint; dz++) {
+            if (Math.sqrt(dx*dx + dz*dz) <= footprint + 0.5) {
+              occupied.add(`${tx + dx},${tz + dz}`);
+            }
+          }
+        }
+      });
+    }
+    
+    return occupied;
   };
   
   
@@ -175,7 +266,162 @@
       }
     });
     
+    // Setup Forge-specific camera controls
+    this.setupCameraControls(canvas);
+
     console.log('🖌️ Painting system ready');
+  };
+  
+  // Forge camera controls - smooth, consistent movement
+  forge.setupCameraControls = function(canvas) {
+    if (!canvas || !gfx || !gfx.camera) return;
+    
+    const cam = gfx.camera;
+    
+    // CRITICAL: Disable ALL built-in camera controls first
+    // The index.html re-enables them, so we must disable again
+    if (cam.inputs) {
+      if (cam.inputs.attached.pointers) {
+        try { cam.inputs.attached.pointers.detachControl(); } catch(e) {}
+      }
+      if (cam.inputs.attached.mousewheel) {
+        try { cam.inputs.attached.mousewheel.detachControl(); } catch(e) {}
+      }
+      if (cam.inputs.attached.keyboard) {
+        try { cam.inputs.attached.keyboard.detachControl(); } catch(e) {}
+      }
+    }
+    cam.detachControl();
+    
+    let isPanning = false;
+    let lastMouseX = 0;
+    let lastMouseY = 0;
+    
+    // Camera pan sensitivity - consistent regardless of zoom
+    const PAN_SENSITIVITY = 0.8;
+    
+    // Right-click drag to pan (more natural for editors)
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 2 || e.button === 1) { // Right or middle click
+        isPanning = true;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+        e.preventDefault();
+      }
+    });
+    
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isPanning) return;
+      
+      const deltaX = e.clientX - lastMouseX;
+      const deltaY = e.clientY - lastMouseY;
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+      
+      // Calculate camera-relative movement directions
+      const forward = cam.getForwardRay().direction;
+      const right = BABYLON.Vector3.Cross(forward, BABYLON.Vector3.Up()).normalize();
+      
+      // Project to ground plane
+      const groundRight = new BABYLON.Vector3(right.x, 0, right.z).normalize();
+      const groundForward = new BABYLON.Vector3(forward.x, 0, forward.z).normalize();
+      
+      // Move camera target (consistent speed regardless of zoom)
+      const moveX = (-deltaX * groundRight.x - deltaY * groundForward.x) * PAN_SENSITIVITY;
+      const moveZ = (-deltaX * groundRight.z - deltaY * groundForward.z) * PAN_SENSITIVITY;
+      
+      if (gfx.cameraTarget) {
+        gfx.cameraTarget.position.x += moveX;
+        gfx.cameraTarget.position.z += moveZ;
+      } else {
+        // Fallback: move camera position directly
+        cam.position.x += moveX;
+        cam.position.z += moveZ;
+        if (cam.target) {
+          cam.target.x += moveX;
+          cam.target.z += moveZ;
+        }
+      }
+    });
+    
+    canvas.addEventListener('mouseup', (e) => {
+      if (e.button === 2 || e.button === 1 || e.button === 0) {
+        isPanning = false;
+      }
+    });
+    
+    canvas.addEventListener('mouseleave', () => {
+      isPanning = false;
+    });
+    
+    // Wheel to zoom
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomSpeed = 0.1;
+      const delta = e.deltaY * zoomSpeed;
+      
+      if (cam.radius !== undefined) {
+        cam.radius = Math.max(20, Math.min(300, cam.radius + delta));
+      } else if (cam.position) {
+        cam.position.y = Math.max(20, Math.min(300, cam.position.y + delta));
+      }
+    }, { passive: false });
+    
+    // ESDF keyboard controls (matches game)
+    const keyState = { e: false, s: false, d: false, f: false, w: false, r: false };
+    const MOVE_SPEED = 2.0;
+    
+    document.addEventListener('keydown', (e) => {
+      const key = e.key.toLowerCase();
+      if (key in keyState) keyState[key] = true;
+    });
+    
+    document.addEventListener('keyup', (e) => {
+      const key = e.key.toLowerCase();
+      if (key in keyState) keyState[key] = false;
+    });
+    
+    // Animation loop for smooth keyboard movement
+    const updateCamera = () => {
+      if (!gfx.camera) return;
+      
+      const cam = gfx.camera;
+      const forward = cam.getForwardRay().direction;
+      const right = BABYLON.Vector3.Cross(forward, BABYLON.Vector3.Up()).normalize();
+      
+      const groundRight = new BABYLON.Vector3(right.x, 0, right.z).normalize();
+      const groundForward = new BABYLON.Vector3(forward.x, 0, forward.z).normalize();
+      
+      let moveX = 0, moveZ = 0, moveY = 0;
+      
+      if (keyState.e) { moveX += groundForward.x * MOVE_SPEED; moveZ += groundForward.z * MOVE_SPEED; }  // Forward
+      if (keyState.d) { moveX -= groundForward.x * MOVE_SPEED; moveZ -= groundForward.z * MOVE_SPEED; }  // Back
+      if (keyState.f) { moveX -= groundRight.x * MOVE_SPEED; moveZ -= groundRight.z * MOVE_SPEED; }      // Left
+      if (keyState.s) { moveX += groundRight.x * MOVE_SPEED; moveZ += groundRight.z * MOVE_SPEED; }      // Right
+      if (keyState.w) { moveY -= MOVE_SPEED * 0.5; }
+      if (keyState.r) { moveY += MOVE_SPEED * 0.5; }
+      
+      if (moveX !== 0 || moveZ !== 0 || moveY !== 0) {
+        if (gfx.cameraTarget) {
+          gfx.cameraTarget.position.x += moveX;
+          gfx.cameraTarget.position.z += moveZ;
+          gfx.cameraTarget.position.y += moveY;
+        } else {
+          cam.position.x += moveX;
+          cam.position.z += moveZ;
+          cam.position.y += moveY;
+          if (cam.target) {
+            cam.target.x += moveX;
+            cam.target.z += moveZ;
+          }
+        }
+      }
+      
+      requestAnimationFrame(updateCamera);
+    };
+    updateCamera();
+    
+    console.log('📷 Forge camera controls: Right-click drag to pan, Scroll to zoom, ESDF to move, W/R up/down');
   };
   
   // Handle pointer events
@@ -197,12 +443,12 @@
         return;
       }
     }
-    
+
     // Only paint with left mouse button
     if (e.button !== 0 && e.type !== 'pointermove') return;
-    
+
     const field = window.liveField;
-    
+
     switch (e.type) {
       case 'pointerdown':
         if (e.button === 0) {
@@ -220,17 +466,21 @@
           // Spawn editing mode - place spawn
           if (this.state.editingLayer === 'spawns') {
             const pos = this.getTilePosition(e);
-            if (pos) this.placeSpawn(pos);
+            if (pos) {
+              this.placeSpawn(pos);
+            }
             return;
           }
           
           // Building editing mode - place building
           if (this.state.editingLayer === 'buildings') {
             const pos = this.getTilePosition(e);
-            if (pos) this.placeBuilding(pos);
+            if (pos) {
+              this.placeBuilding(pos);
+            }
             return;
           }
-          
+
           this.state.isPainting = true;
           // Disable camera controls while painting
           if (gfx.camera) {
@@ -298,13 +548,16 @@
   forge.paintAtPosition = function(pos) {
     const field = window.liveField;
     if (!field) return;
-    
+
     const terrain = this.terrainTypes[this.state.currentBrush];
     if (!terrain) return;
     
+    // Get all symmetric positions to paint
+    const positions = this.getSymmetricPositions(pos);
+
     const affectedChunks = new Set();
     const paintedTiles = []; // Track painted tiles for buffer pass
-    
+
     // Helper to check if a tile is in an enabled chunk
     const isChunkEnabled = (x, y) => {
       if (!field.chunkMask) return true;
@@ -313,31 +566,33 @@
       return field.chunkMask.get(`${chunkX},${chunkZ}`) !== false;
     };
     
-    // Paint with brush
-    for (let dx = -this.state.brushSize; dx <= this.state.brushSize; dx++) {
-      for (let dy = -this.state.brushSize; dy <= this.state.brushSize; dy++) {
-        const x = pos.x + dx;
-        const y = pos.y + dy;
-        
-        // Check bounds
-        if (x < 0 || x >= field.width || y < 0 || y >= field.height) continue;
-        
-        // Skip disabled chunks
-        if (!isChunkEnabled(x, y)) continue;
-        
-        // Circular brush
-        const distance = Math.sqrt(dx * dx + dy * dy);
-        if (distance > this.state.brushSize) continue;
-        
-        // Update terrain type in field data
-        const index = y * field.width + x;
-        field.terrainTypes[index] = terrain.terrainType;
-        paintedTiles.push({x, y});
-        
-        // Track which chunks need updating
-        const chunkX = Math.floor(x / field.chunkSize);
-        const chunkZ = Math.floor(y / field.chunkSize);
-        affectedChunks.add(`${chunkX},${chunkZ}`);
+    // Paint with brush at all symmetric positions
+    for (const basePos of positions) {
+      for (let dx = -this.state.brushSize; dx <= this.state.brushSize; dx++) {
+        for (let dy = -this.state.brushSize; dy <= this.state.brushSize; dy++) {
+          const x = basePos.x + dx;
+          const y = basePos.y + dy;
+
+          // Check bounds
+          if (x < 0 || x >= field.width || y < 0 || y >= field.height) continue;
+
+          // Skip disabled chunks
+          if (!isChunkEnabled(x, y)) continue;
+
+          // Circular brush
+          const distance = Math.sqrt(dx * dx + dy * dy);
+          if (distance > this.state.brushSize) continue;
+
+          // Update terrain type in field data
+          const index = y * field.width + x;
+          field.terrainTypes[index] = terrain.terrainType;
+          paintedTiles.push({x, y});
+
+          // Track which chunks need updating
+          const chunkX = Math.floor(x / field.chunkSize);
+          const chunkZ = Math.floor(y / field.chunkSize);
+          affectedChunks.add(`${chunkX},${chunkZ}`);
+        }
       }
     }
     
@@ -464,41 +719,145 @@
   forge.placeResourceAt = function(pos) {
     const field = window.liveField;
     if (!field || !gfx || !gfx.scene) return;
-    
+
     // Throttle placements to reduce lag
     const now = Date.now();
     if (now - this._lastResourcePlace < this._resourcePlaceDelay) return;
     this._lastResourcePlace = now;
     
-    const key = `${pos.x},${pos.y}`;
+    // Get all symmetric positions
+    const positions = this.getSymmetricPositions(pos);
+
     if (!this._placedKeys) this._placedKeys = new Set();
-    
-    // Handle eraser tool
+    if (!this._resourceFootprints) this._resourceFootprints = new Map();
+
+    // Handle eraser tool - erase at all symmetric positions
     if (this.state.currentResource === 'eraser') {
-      if (this._placedResources.has(key)) {
-        const mesh = this._placedResources.get(key);
-        if (mesh && mesh.dispose) mesh.dispose();
-        this._placedResources.delete(key);
-        this._placedKeys.delete(key);
-      }
+      positions.forEach(p => this._eraseResourceAt(p));
       return;
     }
     
+    // Place resource at all symmetric positions
+    positions.forEach(p => this._placeResourceAtSingle(p));
+  };
+  
+  // Internal: Erase resource at single position
+  forge._eraseResourceAt = function(pos) {
+    const field = window.liveField;
+    const key = `${pos.x},${pos.y}`;
+    
+    // Handle eraser tool - erase any resource whose footprint includes this tile
+    {
+      let erased = false;
+      
+      // 1. Check manually placed resources first
+      if (this._resourceFootprints) {
+        for (const [rKey, footprintKeys] of this._resourceFootprints) {
+          if (footprintKeys.includes(key)) {
+            if (this._placedResources.has(rKey)) {
+              const mesh = this._placedResources.get(rKey);
+              if (mesh && mesh.dispose) mesh.dispose();
+              this._placedResources.delete(rKey);
+            }
+            // Clear all footprint tiles
+            footprintKeys.forEach(k => this._placedKeys.delete(k));
+            this._resourceFootprints.delete(rKey);
+            erased = true;
+            break;
+          }
+        }
+      }
+      
+      // 2. Check auto-generated LOD models
+      if (!erased && gfx && gfx.lodModels) {
+        for (let i = gfx.lodModels.length - 1; i >= 0; i--) {
+          const lod = gfx.lodModels[i];
+          if (!lod.model || lod.model.isDisposed()) continue;
+          
+          const modelPos = lod.model.position;
+          const tx = Math.floor(modelPos.x / TILE_SIZE);
+          const tz = Math.floor(modelPos.z / TILE_SIZE);
+          
+          // Calculate footprint for this model (matches resourceTypes)
+          const scale = lod.model.scaling ? lod.model.scaling.x : 1;
+          let footprint = 0;
+          if (scale >= 10) footprint = 2;       // Large rocks
+          else if (scale >= 6) footprint = 1;   // Mossy rocks
+          
+          // Check if clicked tile is in this model's footprint
+          const [clickX, clickY] = key.split(',').map(Number);
+          const dx = clickX - tx;
+          const dy = clickY - tz;
+          if (Math.sqrt(dx*dx + dy*dy) <= footprint + 0.5) {
+            // Found it! Dispose the model and billboard
+            if (lod.model) lod.model.dispose();
+            if (lod.billboard) lod.billboard.dispose();
+            
+            // Remove from lodModels array
+            gfx.lodModels.splice(i, 1);
+            
+            // Track erased position so it doesn't come back
+            if (!this._erasedAutoResources) this._erasedAutoResources = new Set();
+            this._erasedAutoResources.add(`${tx},${tz}`);
+            
+            erased = true;
+            break;
+          }
+        }
+      }
+
+      // Refresh grid if something was erased
+      if (erased && this._resourceGridVisible) {
+        this.showResourceGrid();
+      }
+    }
+  };
+  
+  // Internal: Place single resource at position
+  forge._placeResourceAtSingle = function(pos) {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    // Ensure tracking maps exist
+    if (!this._placedResources) this._placedResources = new Map();
+    if (!this._placedKeys) this._placedKeys = new Set();
+    if (!this._resourceFootprints) this._resourceFootprints = new Map();
+    if (!this._modelCache) this._modelCache = new Map();
+    
+    const key = `${pos.x},${pos.y}`;
+
     const resourceType = this.resourceTypes[this.state.currentResource];
     if (!resourceType || !resourceType.path) return;
+
+    // Get footprint tiles
+    const footprint = this.getResourceFootprint(pos, resourceType);
     
-    // Don't place on water
-    const index = pos.y * field.width + pos.x;
-    if (field.terrainTypes[index] === 1) return;
+    // Get all occupied tiles (including auto-generated resources)
+    const occupiedTiles = this.getOccupiedTiles();
+
+    // Check ALL footprint tiles
+    for (const tile of footprint) {
+      // Bounds check
+      if (tile.x < 0 || tile.x >= field.width || tile.y < 0 || tile.y >= field.height) return;
+
+      // Don't place on water
+      const index = tile.y * field.width + tile.x;
+      if (field.terrainTypes[index] === 1) return;
+
+      // Don't place in disabled chunks
+      const chunkX = Math.floor(tile.x / field.chunkSize);
+      const chunkZ = Math.floor(tile.y / field.chunkSize);
+      if (field.chunkMask && field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
+
+      // Check if already occupied (manual or auto-generated)
+      const tileKey = `${tile.x},${tile.y}`;
+      if (occupiedTiles.has(tileKey)) return;
+    }
     
-    // Don't place in disabled chunks
-    const chunkX = Math.floor(pos.x / field.chunkSize);
-    const chunkZ = Math.floor(pos.y / field.chunkSize);
-    if (field.chunkMask && field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
-    
-    // Check if already occupied
-    if (this._placedKeys.has(key)) return;
-    this._placedKeys.add(key);
+    // Mark all footprint tiles as occupied
+    const footprintKeys = footprint.map(t => `${t.x},${t.y}`);
+    footprintKeys.forEach(k => this._placedKeys.add(k));
+    this._resourceFootprints.set(key, footprintKeys);
     
     // Calculate world position
     const worldX = (pos.x + 0.5) * TILE_SIZE;
@@ -529,9 +888,14 @@
       
       // Track for eraser tool
       this._placedResources.set(key, root);
-      
+
       if (gfx.setupMeshShadows) {
         gfx.setupMeshShadows(root);
+      }
+      
+      // Refresh grid if visible
+      if (this._resourceGridVisible) {
+        this.showResourceGrid();
       }
     });
   };
@@ -580,6 +944,9 @@
     
     console.log(`🗺️ Generating new map: ${this.state.mapWidth}x${this.state.mapHeight}, seed: ${this.state.mapSeed}`);
     
+    // CRITICAL: Clear all existing resources FIRST (before creating new field)
+    this.clearResources();
+    
     // Check if this will be a large map and pre-enable billboard mode
     const totalTiles = this.state.mapWidth * this.state.mapHeight;
     if (totalTiles >= 16384 && gfx && gfx.setBillboardOnlyMode) {
@@ -592,10 +959,27 @@
       console.log('⚡ Pre-enabled billboard mode for large map');
     }
     
-    // Clear placed resource tracking
-    this._placedKeys = new Set();
-    this._placedResources = new Map();
+    // Hide overlays (they'll be stale after regeneration)
+    this.hideResourceGrid();
+    this.hideBlockedGrid();
+    this._resourceGridVisible = false;
+    this._blockedGridVisible = false;
+    const gridBtn = document.getElementById('vis-grid');
+    const blockedBtn = document.getElementById('vis-blocked');
+    if (gridBtn) gridBtn.classList.remove('active');
+    if (blockedBtn) blockedBtn.classList.remove('active');
     
+    // Clear spawn points
+    this.state.spawnPoints = [];
+    this.updateSpawnMarkers();
+    this.updateSpawnList();
+    
+    // Clear buildings
+    this.state.buildings = [];
+    this._buildingMeshes?.forEach(m => m.dispose());
+    this._buildingMeshes?.clear();
+    this.updateBuildingList();
+
     // Dispose old field
     if (window.liveField && window.liveField.dispose) {
       window.liveField.dispose();
@@ -697,12 +1081,6 @@
       }
     }
     
-    // Encode spawn points
-    const spawnData = this.state.spawnPoints.map(s => `${s.x},${s.y}`).join(';');
-    
-    // Encode buildings
-    const buildingData = this.state.buildings.map(b => `${b.x},${b.y},${b.type}`).join(';');
-    
     const mapData = {
       v: 2,  // Version 2 = new format
       w: field.width,
@@ -713,8 +1091,15 @@
       cm: chunkBits.join(''),  // Chunk mask as binary string "11101110..."
       ta: this.encodeTileAtlas(field.tiles),  // Tile atlas info
       r: placedResources.length > 0 ? placedResources.join(';') : undefined,  // Placed resources
-      sp: spawnData || undefined,  // Spawn points
-      bl: buildingData || undefined  // Buildings
+      er: this._erasedAutoResources && this._erasedAutoResources.size > 0
+          ? Array.from(this._erasedAutoResources).join(';') : undefined,  // Erased auto-resources
+      // Map metadata
+      sp: this.state.spawnPoints.length > 0
+          ? this.state.spawnPoints.map(s => `${s.x},${s.y},${s.team}`).join(';') : undefined,  // Spawn points
+      bld: this.state.buildings.length > 0
+          ? this.state.buildings.map(b => `${b.x},${b.y},${b.type},${(b.rotation || 0).toFixed(2)}`).join(';') : undefined,  // Buildings
+      gt: Object.entries(this.state.gameTypes)
+          .filter(([k, v]) => v).map(([k]) => k).join(',') || '1v1'  // Game types
     };
     
     const json = JSON.stringify(mapData);
@@ -722,7 +1107,7 @@
     
     console.log(`📦 Map exported: ${(json.length / 1024).toFixed(1)} KB → ${(compressed.length / 1024).toFixed(1)} KB`);
     
-    // Trigger download with .garden extension
+    // Trigger download with .aether extension
     const blob = new Blob([compressed], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -865,7 +1250,7 @@
           }
         }
       }
-      console.log(`📥 Importing .aeg map: ${width}x${height}`);
+      console.log(`📥 Importing .garden map: ${width}x${height}`);
     } else {
       // Legacy v1 JSON format
       width = mapData.width;
@@ -925,7 +1310,9 @@
     if (mapData.r) {
       this._placedKeys = new Set();
       this._placedResources = new Map();
-      
+      this._resourceFootprints = new Map();
+      this._erasedAutoResources = new Set();
+
       const resources = mapData.r.split(';');
       for (const res of resources) {
         const [key, type] = res.split(':');
@@ -941,10 +1328,84 @@
       console.log(`🌲 Restored ${resources.length} placed resources`);
     }
     
+    // Restore erased auto-resources (v2 format)
+    if (mapData.er) {
+      this._erasedAutoResources = new Set(mapData.er.split(';'));
+      
+      // Actually erase them from LOD models
+      if (gfx && gfx.lodModels) {
+        for (let i = gfx.lodModels.length - 1; i >= 0; i--) {
+          const lod = gfx.lodModels[i];
+          if (!lod.model || lod.model.isDisposed()) continue;
+          
+          const pos = lod.model.position;
+          const tx = Math.floor(pos.x / TILE_SIZE);
+          const tz = Math.floor(pos.z / TILE_SIZE);
+          
+          if (this._erasedAutoResources.has(`${tx},${tz}`)) {
+            if (lod.model) lod.model.dispose();
+            if (lod.billboard) lod.billboard.dispose();
+            gfx.lodModels.splice(i, 1);
+          }
+        }
+      }
+      console.log(`🗑️ Restored ${this._erasedAutoResources.size} erased resources`);
+    }
+    
+    // Restore spawn points (v2 format)
+    if (mapData.sp) {
+      this.state.spawnPoints = mapData.sp.split(';').map(s => {
+        const [x, y, team] = s.split(',').map(Number);
+        return { x, y, team };
+      });
+      this.updateSpawnMarkers();
+      this.updateSpawnList();
+      console.log(`🚩 Restored ${this.state.spawnPoints.length} spawn points`);
+    } else {
+      this.state.spawnPoints = [];
+    }
+    
+    // Restore buildings (v2 format)
+    if (mapData.bld) {
+      this.state.buildings = mapData.bld.split(';').map(b => {
+        const parts = b.split(',');
+        return {
+          x: Number(parts[0]),
+          y: Number(parts[1]),
+          type: parts[2],
+          rotation: Number(parts[3]) || 0
+        };
+      });
+      this.updateBuildingMarkers();
+      console.log(`🏗️ Restored ${this.state.buildings.length} buildings`);
+    } else {
+      this.state.buildings = [];
+      this._buildingMeshes?.forEach(m => m.dispose());
+      this._buildingMeshes?.clear();
+    }
+
+    // Restore game types (v2 format)
+    if (mapData.gt) {
+      // Reset all to false first
+      Object.keys(this.state.gameTypes).forEach(k => this.state.gameTypes[k] = false);
+      // Enable saved types
+      mapData.gt.split(',').forEach(type => {
+        if (this.state.gameTypes.hasOwnProperty(type)) {
+          this.state.gameTypes[type] = true;
+        }
+      });
+      // Update checkboxes
+      Object.entries(this.state.gameTypes).forEach(([type, enabled]) => {
+        const cb = document.getElementById(`gt-${type}`);
+        if (cb) cb.checked = enabled;
+      });
+      console.log(`🎮 Restored game types: ${mapData.gt}`);
+    }
+
     // Apply visibility settings
     setTimeout(() => this.applyLayerVisibility(), 100);
     setTimeout(() => this.applyLayerVisibility(), 500);
-    
+
     console.log('✅ Map imported');
   };
   
@@ -964,13 +1425,15 @@
             <button id="layer-table" class="forge-btn" onclick="forge.setEditingLayer('table')">🎱 Table</button>
             <button id="layer-terrain" class="forge-btn active" onclick="forge.setEditingLayer('terrain')">🗺️ Terrain</button>
             <button id="layer-resources" class="forge-btn" onclick="forge.setEditingLayer('resources')">🌲 Resources</button>
+            <button id="layer-buildings" class="forge-btn" onclick="forge.setEditingLayer('buildings')">🏗️ Buildings</button>
             <button id="layer-spawns" class="forge-btn" onclick="forge.setEditingLayer('spawns')">🚩 Spawns</button>
-            <button id="layer-buildings" class="forge-btn" onclick="forge.setEditingLayer('buildings')">🏛️ Buildings</button>
           </div>
           <div class="forge-buttons" style="margin-top:5px;">
             <button id="vis-table" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('table')">👁️ Table</button>
             <button id="vis-terrain" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('terrain')">👁️ Terrain</button>
             <button id="vis-resources" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('resources')">👁️ Resources</button>
+            <button id="vis-grid" class="forge-btn forge-vis" onclick="forge.toggleResourceGrid()">📍 Grid</button>
+            <button id="vis-blocked" class="forge-btn forge-vis" onclick="forge.toggleBlockedGrid()">🚫 Blocked</button>
           </div>
         </div>
         
@@ -1012,31 +1475,59 @@
         </div>
         
         <div id="spawns-panel" class="forge-section" style="display:none;">
-          <h3>Spawn Points</h3>
-          <p style="font-size:11px;opacity:0.7;">Click to place spawn points. Right-click to remove.</p>
-          <div class="forge-row">
-            <label>Symmetry:</label>
-            <select id="spawn-symmetry" onchange="forge.setSymmetry(this.value)">
-              <option value="none">None</option>
-              <option value="2way">2-Way Mirror</option>
-              <option value="4way">4-Way Mirror</option>
-              <option value="radial">Radial</option>
-            </select>
+          <h3>🏛️ Agora Spawns</h3>
+          <p style="font-size:11px;opacity:0.7;">Click to place spawn (Agora location). Right-click to remove.<br>Terrain is flattened around spawns. Order = player assignment.</p>
+          <div id="spawn-list" style="margin-top:8px;font-size:12px;"></div>
+          <div class="forge-buttons" style="margin-top:8px;">
+            <button class="forge-btn" onclick="forge.clearSpawns()">🗑️ Clear All</button>
           </div>
-          <div id="spawn-list" style="max-height:100px;overflow-y:auto;font-size:11px;margin-top:8px;"></div>
-          <button class="forge-btn" onclick="forge.clearSpawns()" style="margin-top:8px;">🗑️ Clear All</button>
+          
+          <h3 style="margin-top:12px;">Game Types</h3>
+          <div style="font-size:12px;">
+            <label><input type="checkbox" id="gt-adventure" onchange="forge.toggleGameType('adventure')"> 🗺️ Adventure</label><br>
+            <label><input type="checkbox" id="gt-1v1" checked onchange="forge.toggleGameType('1v1')"> ⚔️ 1v1</label><br>
+            <label><input type="checkbox" id="gt-koth" onchange="forge.toggleGameType('koth')"> 👑 King of the Hill</label><br>
+            <label><input type="checkbox" id="gt-teams" onchange="forge.toggleGameType('teams')"> 🤝 Teams</label>
+          </div>
         </div>
         
         <div id="buildings-panel" class="forge-section" style="display:none;">
-          <h3>Buildings</h3>
+          <h3>🏗️ Buildings</h3>
+          <p style="font-size:11px;opacity:0.7;">Click to place. Right-click to remove.</p>
           <div class="forge-buttons">
-            <button id="bld-camp" class="forge-btn active" onclick="forge.setBuilding('camp')">⛺ Camp</button>
-            <button id="bld-tower" class="forge-btn" onclick="forge.setBuilding('tower')">🗼 Tower</button>
-            <button id="bld-eraser" class="forge-btn" onclick="forge.setBuilding('eraser')">🧹 Eraser</button>
+            <button id="bldg-agora" class="forge-btn active" onclick="forge.setBuilding('agora')">🏛️ Agora</button>
+            <button id="bldg-camp" class="forge-btn" onclick="forge.setBuilding('camp')">⛺ Camp</button>
+            <button id="bldg-tower" class="forge-btn" onclick="forge.setBuilding('tower')">🗼 Tower</button>
           </div>
-          <div id="building-list" style="max-height:100px;overflow-y:auto;font-size:11px;margin-top:8px;"></div>
+          <div class="forge-buttons" style="margin-top:5px;">
+            <button id="bldg-gate" class="forge-btn" onclick="forge.setBuilding('gate')">🚪 Gate</button>
+            <button id="bldg-farm" class="forge-btn" onclick="forge.setBuilding('farm')">🌾 Farm</button>
+            <button id="bldg-windmill" class="forge-btn" onclick="forge.setBuilding('windmill')">🌀 Windmill</button>
+          </div>
+          <div class="forge-buttons" style="margin-top:5px;">
+            <button id="bldg-eraser" class="forge-btn" onclick="forge.setBuilding('eraser')">🧽 Eraser</button>
+          </div>
+          <div id="building-list" style="margin-top:8px;font-size:11px;max-height:100px;overflow-y:auto;"></div>
+          <div class="forge-buttons" style="margin-top:8px;">
+            <button class="forge-btn" onclick="forge.clearBuildings()">🗑️ Clear All</button>
+          </div>
         </div>
-        
+
+        <div class="forge-section">
+          <h3>⚖️ Symmetry</h3>
+          <p style="font-size:11px;opacity:0.7;">Paint with symmetry for balanced maps</p>
+          <div class="forge-buttons">
+            <button id="sym-none" class="forge-btn active" onclick="forge.setSymmetry('none')">⬜ Off</button>
+            <button id="sym-mirrorX" class="forge-btn" onclick="forge.setSymmetry('mirrorX')">↔️</button>
+            <button id="sym-mirrorY" class="forge-btn" onclick="forge.setSymmetry('mirrorY')">↕️</button>
+            <button id="sym-rotate180" class="forge-btn" onclick="forge.setSymmetry('rotate180')">🔄</button>
+          </div>
+          <div class="forge-buttons" style="margin-top:5px;">
+            <button id="sym-quad" class="forge-btn" onclick="forge.setSymmetry('quad')">✚ Quad</button>
+            <button class="forge-btn" onclick="forge.applySymmetryToAll()">📋 Apply to All</button>
+          </div>
+        </div>
+
         <div class="forge-section">
           <h3>Map</h3>
           <div class="forge-row">
@@ -1088,8 +1579,9 @@
         
         <div class="forge-section forge-help">
           <h3>Controls</h3>
-          <div>🖱️ Click+drag to paint</div>
-          <div>WASD - Move camera</div>
+          <div>🖱️ Left-click - Paint</div>
+          <div>🖱️ Right-drag - Pan</div>
+          <div>ESDF - Move camera</div>
           <div>Scroll - Zoom</div>
           <div>F9 - Inspector</div>
         </div>
@@ -1101,31 +1593,31 @@
   };
   
   // Set current tool (terrain or resource)
-  // Set editing layer (table, terrain, resources, spawns, buildings)
+  // Set editing layer (table, terrain, resources)
   forge.setEditingLayer = function(layer) {
     this.state.editingLayer = layer;
     this.state.currentTool = layer === 'resources' ? 'resource' : layer;
-    
+
     // Update layer button states
     document.getElementById('layer-table').classList.toggle('active', layer === 'table');
     document.getElementById('layer-terrain').classList.toggle('active', layer === 'terrain');
     document.getElementById('layer-resources').classList.toggle('active', layer === 'resources');
-    document.getElementById('layer-spawns').classList.toggle('active', layer === 'spawns');
     document.getElementById('layer-buildings').classList.toggle('active', layer === 'buildings');
-    
+    document.getElementById('layer-spawns').classList.toggle('active', layer === 'spawns');
+
     // Show/hide panels
     document.getElementById('table-panel').style.display = layer === 'table' ? 'block' : 'none';
     document.getElementById('terrain-panel').style.display = layer === 'terrain' ? 'block' : 'none';
     document.getElementById('resource-panel').style.display = layer === 'resources' ? 'block' : 'none';
-    document.getElementById('spawns-panel').style.display = layer === 'spawns' ? 'block' : 'none';
     document.getElementById('buildings-panel').style.display = layer === 'buildings' ? 'block' : 'none';
-    
+    document.getElementById('spawns-panel').style.display = layer === 'spawns' ? 'block' : 'none';
+
     // Update chunk grid overlay visibility
     this.updateChunkGridOverlay(layer === 'table');
-    
+
     // Show spawn markers when editing spawns
     this.updateSpawnMarkers();
-    
+
     console.log(`📐 Editing layer: ${layer}`);
   };
   
@@ -1230,13 +1722,26 @@
     
     const key = `${chunkX},${chunkZ}`;
     const current = field.chunkMask.get(key);
-    const newState = !current;
+    const newState = current === false ? true : false; // More explicit toggle
     field.chunkMask.set(key, newState);
     
     // Update chunk mesh visibility immediately
     const chunk = field.chunks.get(key);
-    if (chunk && chunk.mesh) {
-      chunk.mesh.setEnabled(newState && this.state.layers.terrain);
+    if (chunk) {
+      // Hide/show terrain mesh
+      if (chunk.mesh) {
+        chunk.mesh.setEnabled(newState && this.state.layers.terrain);
+        chunk.mesh.isVisible = newState && this.state.layers.terrain;
+      }
+      
+      // Also dispose/recreate resources in the chunk
+      if (chunk.models) {
+        chunk.models.forEach(model => {
+          if (model && model.setEnabled) {
+            model.setEnabled(newState && this.state.layers.resources);
+          }
+        });
+      }
     }
     
     // Also hide/show resources in this chunk via LOD system (use stored chunkKey)
@@ -1274,18 +1779,776 @@
   // Update just one cell in the chunk overlay (faster than full rebuild)
   forge.updateChunkOverlayCell = function(chunkX, chunkZ, enabled) {
     if (!this._chunkGridOverlay) return;
-    
-    const overlay = this._chunkGridOverlay.find(m => 
+
+    const overlay = this._chunkGridOverlay.find(m =>
       m.metadata && m.metadata.chunkX === chunkX && m.metadata.chunkZ === chunkZ
     );
-    
+
     if (overlay && overlay.material) {
-      overlay.material.diffuseColor = enabled ? 
-        new BABYLON.Color3(0.2, 0.8, 0.2) : 
+      overlay.material.diffuseColor = enabled ?
+        new BABYLON.Color3(0.2, 0.8, 0.2) :
         new BABYLON.Color3(0.8, 0.2, 0.2);
     }
   };
   
+  // Toggle resource tile grid overlay
+  forge._resourceGridVisible = false;
+  forge._resourceGridOverlay = [];
+  
+  forge.toggleResourceGrid = function() {
+    this._resourceGridVisible = !this._resourceGridVisible;
+    
+    const btn = document.getElementById('vis-grid');
+    if (btn) {
+      btn.classList.toggle('active', this._resourceGridVisible);
+    }
+    
+    if (this._resourceGridVisible) {
+      this.showResourceGrid();
+    } else {
+      this.hideResourceGrid();
+    }
+  };
+  
+  // Show grid overlay highlighting tiles with resources
+  forge.showResourceGrid = function() {
+    this.hideResourceGrid(); // Clear existing
+    
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    // Get all occupied tiles (manual + auto-generated with footprints)
+    const occupiedTiles = this.getOccupiedTiles();
+    
+    console.log(`📍 Showing ${occupiedTiles.size} resource tiles`);
+    
+    // Create small markers for each occupied tile
+    const markerMat = new BABYLON.StandardMaterial('resourceMarkerMat', gfx.scene);
+    markerMat.diffuseColor = new BABYLON.Color3(1, 0.5, 0);  // Orange
+    markerMat.emissiveColor = new BABYLON.Color3(0.5, 0.25, 0);
+    markerMat.alpha = 0.6;
+    markerMat.backFaceCulling = false;
+    
+    for (const key of occupiedTiles) {
+      const [tx, tz] = key.split(',').map(Number);
+      
+      // Check bounds
+      if (tx < 0 || tx >= field.width || tz < 0 || tz >= field.height) continue;
+      
+      const marker = BABYLON.MeshBuilder.CreatePlane(`resGrid_${key}`, {
+        width: TILE_SIZE * 0.8,
+        height: TILE_SIZE * 0.8
+      }, gfx.scene);
+      
+      marker.position.x = (tx + 0.5) * TILE_SIZE;
+      marker.position.y = 1.5;  // Float above terrain
+      marker.position.z = (tz + 0.5) * TILE_SIZE;
+      marker.rotation.x = Math.PI / 2;  // Lay flat
+      marker.material = markerMat;
+      
+      this._resourceGridOverlay.push(marker);
+    }
+    
+    // Store material for cleanup
+    this._resourceGridMat = markerMat;
+  };
+  
+  // Hide resource grid overlay
+  forge.hideResourceGrid = function() {
+    if (this._resourceGridOverlay) {
+      this._resourceGridOverlay.forEach(m => m.dispose());
+      this._resourceGridOverlay = [];
+    }
+    if (this._resourceGridMat) {
+      this._resourceGridMat.dispose();
+      this._resourceGridMat = null;
+    }
+  };
+  
+  // Toggle blocked tiles grid overlay
+  forge._blockedGridVisible = false;
+  forge._blockedGridOverlay = [];
+  
+  forge.toggleBlockedGrid = function() {
+    this._blockedGridVisible = !this._blockedGridVisible;
+    
+    const btn = document.getElementById('vis-blocked');
+    if (btn) {
+      btn.classList.toggle('active', this._blockedGridVisible);
+    }
+    
+    if (this._blockedGridVisible) {
+      this.showBlockedGrid();
+    } else {
+      this.hideBlockedGrid();
+    }
+  };
+  
+  // Show grid overlay highlighting blocked/impassable and slow tiles
+  forge.showBlockedGrid = function() {
+    this.hideBlockedGrid(); // Clear existing
+    
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    // Get blocked tiles (from field)
+    const blockedTiles = field.blockedTiles || new Set();
+    const slowTiles = field.slowTiles || new Set();
+    
+    console.log(`🚫 Showing ${blockedTiles.size} blocked tiles, 🐢 ${slowTiles.size} slow tiles`);
+    
+    // Red material for blocked tiles
+    const blockedMat = new BABYLON.StandardMaterial('blockedMarkerMat', gfx.scene);
+    blockedMat.diffuseColor = new BABYLON.Color3(1, 0, 0);  // Red
+    blockedMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
+    blockedMat.alpha = 0.5;
+    blockedMat.backFaceCulling = false;
+    
+    // Yellow material for slow tiles
+    const slowMat = new BABYLON.StandardMaterial('slowMarkerMat', gfx.scene);
+    slowMat.diffuseColor = new BABYLON.Color3(1, 1, 0);  // Yellow
+    slowMat.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0);
+    slowMat.alpha = 0.4;
+    slowMat.backFaceCulling = false;
+    
+    // Create markers for blocked tiles
+    for (const key of blockedTiles) {
+      const [tx, tz] = key.split(',').map(Number);
+      if (tx < 0 || tx >= field.width || tz < 0 || tz >= field.height) continue;
+      
+      const marker = BABYLON.MeshBuilder.CreatePlane(`blockedGrid_${key}`, {
+        width: TILE_SIZE * 0.9,
+        height: TILE_SIZE * 0.9
+      }, gfx.scene);
+      
+      marker.position.x = (tx + 0.5) * TILE_SIZE;
+      marker.position.y = 1.0;
+      marker.position.z = (tz + 0.5) * TILE_SIZE;
+      marker.rotation.x = Math.PI / 2;
+      marker.material = blockedMat;
+      
+      this._blockedGridOverlay.push(marker);
+    }
+    
+    // Create markers for slow tiles (that aren't also blocked)
+    for (const key of slowTiles) {
+      if (blockedTiles.has(key)) continue; // Skip if already blocked
+      
+      const [tx, tz] = key.split(',').map(Number);
+      if (tx < 0 || tx >= field.width || tz < 0 || tz >= field.height) continue;
+      
+      const marker = BABYLON.MeshBuilder.CreatePlane(`slowGrid_${key}`, {
+        width: TILE_SIZE * 0.9,
+        height: TILE_SIZE * 0.9
+      }, gfx.scene);
+      
+      marker.position.x = (tx + 0.5) * TILE_SIZE;
+      marker.position.y = 1.0;
+      marker.position.z = (tz + 0.5) * TILE_SIZE;
+      marker.rotation.x = Math.PI / 2;
+      marker.material = slowMat;
+      
+      this._blockedGridOverlay.push(marker);
+    }
+    
+    // Store materials for cleanup
+    this._blockedGridMat = blockedMat;
+    this._slowGridMat = slowMat;
+  };
+  
+  // Hide blocked grid overlay
+  forge.hideBlockedGrid = function() {
+    if (this._blockedGridOverlay) {
+      this._blockedGridOverlay.forEach(m => m.dispose());
+      this._blockedGridOverlay = [];
+    }
+    if (this._blockedGridMat) {
+      this._blockedGridMat.dispose();
+      this._blockedGridMat = null;
+    }
+    if (this._slowGridMat) {
+      this._slowGridMat.dispose();
+      this._slowGridMat = null;
+    }
+  };
+  
+  // ========== SPAWN POINT MANAGEMENT ==========
+  // Spawns are simple positions where Agoras will be placed at match start
+  // The order of spawns determines player assignment (spawn 0 = player 1, etc.)
+  
+  forge._spawnMarkers = [];
+  
+  // Place a spawn point at position
+  forge.placeSpawn = function(pos) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Get symmetric positions
+    const positions = this.getSymmetricPositions(pos);
+    
+    positions.forEach((p, i) => {
+      // Check if there's already a spawn at this position
+      const existing = this.state.spawnPoints.findIndex(s => 
+        Math.abs(s.x - p.x) <= 2 && Math.abs(s.y - p.y) <= 2
+      );
+      
+      if (existing >= 0) {
+        // Move existing spawn to new position
+        this.state.spawnPoints[existing].x = p.x;
+        this.state.spawnPoints[existing].y = p.y;
+      } else {
+        // Add new spawn point (order determines player assignment)
+        const spawnIndex = this.state.spawnPoints.length;
+        this.state.spawnPoints.push({
+          x: p.x,
+          y: p.y,
+          team: spawnIndex  // Keep team for export compatibility, but it's just the index
+        });
+      }
+      
+      // Flatten terrain around spawn for Agora placement
+      this.flattenTerrainAtSpawn(p.x, p.y);
+    });
+
+    this.updateSpawnMarkers();
+    this.updateSpawnList();
+    console.log(`🏛️ Agora spawn placed at (${pos.x}, ${pos.y})` + 
+                (positions.length > 1 ? ` (+${positions.length - 1} mirrors)` : ''));
+  };
+  
+  // Flatten terrain around a spawn point (like the game does for Agora placement)
+  forge.flattenTerrainAtSpawn = function(centerX, centerY) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    const radius = this.spawnZoneRadius;
+    const affectedChunks = new Set();
+    
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > radius) continue;
+        
+        const x = centerX + dx;
+        const y = centerY + dy;
+        
+        if (x < 0 || x >= field.width || y < 0 || y >= field.height) continue;
+        
+        const index = y * field.width + x;
+        
+        // Convert water to grass at spawn locations
+        if (field.terrainTypes[index] === 1) {
+          field.terrainTypes[index] = 3; // Water → Grass
+        }
+        
+        // Track chunk for rebuild
+        const chunkX = Math.floor(x / field.chunkSize);
+        const chunkZ = Math.floor(y / field.chunkSize);
+        affectedChunks.add(`${chunkX},${chunkZ}`);
+      }
+    }
+    
+    // Rebuild affected chunks
+    if (affectedChunks.size > 0) {
+      // Reapply transitions for smoother terrain edges
+      this.applyTransitionsInArea(centerX, centerY, radius + 2);
+      this.rebuildChunks(affectedChunks);
+    }
+  };
+  
+  // Remove spawn point at position
+  forge.removeSpawn = function(pos) {
+    // Get symmetric positions
+    const positions = this.getSymmetricPositions(pos);
+    let removed = 0;
+    
+    positions.forEach(p => {
+      const index = this.state.spawnPoints.findIndex(s =>
+        Math.abs(s.x - p.x) <= 1 && Math.abs(s.y - p.y) <= 1
+      );
+      if (index >= 0) {
+        this.state.spawnPoints.splice(index, 1);
+        removed++;
+      }
+    });
+    
+    if (removed > 0) {
+      this.updateSpawnMarkers();
+      this.updateSpawnList();
+      console.log(`🚩 Removed ${removed} spawn(s)`);
+    }
+  };
+  
+  // Clear all spawn points
+  forge.clearSpawns = function() {
+    this.state.spawnPoints = [];
+    this.updateSpawnMarkers();
+    this.updateSpawnList();
+    console.log('🚩 All spawns cleared');
+  };
+  
+  // ========== BUILDING PLACEMENT ==========
+  
+  forge._buildingMeshes = new Map(); // key -> mesh
+  
+  forge.setBuilding = function(buildingType) {
+    this.state.currentBuilding = buildingType;
+    
+    // Update button states
+    Object.keys(this.buildingTypes).forEach(t => {
+      const btn = document.getElementById(`bldg-${t}`);
+      if (btn) btn.classList.toggle('active', t === buildingType);
+    });
+    document.getElementById('bldg-eraser')?.classList.toggle('active', buildingType === 'eraser');
+    
+    console.log(`🏗️ Building: ${buildingType}`);
+  };
+  
+  forge.placeBuilding = function(pos) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Get symmetric positions
+    const positions = this.getSymmetricPositions(pos);
+    
+    // Handle eraser
+    if (this.state.currentBuilding === 'eraser') {
+      positions.forEach(p => this._removeBuildingAt(p));
+      return;
+    }
+    
+    // Place at all symmetric positions
+    positions.forEach((p, i) => this._placeBuildingAtSingle(p, i));
+  };
+  
+  forge._placeBuildingAtSingle = function(pos, rotationOffset = 0) {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    const key = `${pos.x},${pos.y}`;
+    const buildingType = this.state.currentBuilding;
+    const buildingDef = window.BuildingTypes?.[buildingType];
+    
+    if (!buildingDef) {
+      console.warn(`Unknown building type: ${buildingType}`);
+      return;
+    }
+    
+    // Check if position is valid
+    const chunkX = Math.floor(pos.x / field.chunkSize);
+    const chunkZ = Math.floor(pos.y / field.chunkSize);
+    if (!field.chunkMask.get(`${chunkX},${chunkZ}`)) return;
+    
+    // Check for water
+    const index = pos.y * field.width + pos.x;
+    if (field.terrainTypes[index] === 1) return;
+    
+    // Remove existing building at this position
+    if (this._buildingMeshes.has(key)) {
+      this._buildingMeshes.get(key).dispose();
+      this._buildingMeshes.delete(key);
+    }
+    
+    // Remove from state array
+    const existingIdx = this.state.buildings.findIndex(b => b.x === pos.x && b.y === pos.y);
+    if (existingIdx >= 0) {
+      this.state.buildings.splice(existingIdx, 1);
+    }
+    
+    // Add to state
+    const rotation = (rotationOffset * Math.PI / 2); // Rotate mirrors by 90 degrees each
+    this.state.buildings.push({ x: pos.x, y: pos.y, type: buildingType, rotation });
+    
+    // Load and place model
+    const TILE_SIZE = window.TILE_SIZE || 1;
+    const worldX = pos.x * TILE_SIZE;
+    const worldZ = pos.y * TILE_SIZE;
+    const terrainY = window.getTerrainHeightAtPosition?.(worldX, worldZ) || 0;
+    
+    gfx.getModel(buildingDef.model, gfx.scene).then(model => {
+      const root = model.root;
+      root.position = new BABYLON.Vector3(worldX, terrainY, worldZ);
+      root.scaling = new BABYLON.Vector3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+      root.rotation.y = rotation;
+      root.setEnabled(true);
+      
+      // Mark as editor building
+      root.metadata = root.metadata || {};
+      root.metadata.isEditorBuilding = true;
+      root.metadata.buildingKey = key;
+      
+      this._buildingMeshes.set(key, root);
+      this.updateBuildingList();
+    });
+    
+    console.log(`🏗️ Placed ${buildingType} at (${pos.x}, ${pos.y})`);
+  };
+  
+  forge._removeBuildingAt = function(pos) {
+    const key = `${pos.x},${pos.y}`;
+    
+    // Check nearby positions too (buildings can be multi-tile)
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dy = -2; dy <= 2; dy++) {
+        const checkKey = `${pos.x + dx},${pos.y + dy}`;
+        if (this._buildingMeshes.has(checkKey)) {
+          this._buildingMeshes.get(checkKey).dispose();
+          this._buildingMeshes.delete(checkKey);
+          
+          // Remove from state
+          const idx = this.state.buildings.findIndex(b => `${b.x},${b.y}` === checkKey);
+          if (idx >= 0) this.state.buildings.splice(idx, 1);
+        }
+      }
+    }
+    
+    this.updateBuildingList();
+  };
+  
+  forge.clearBuildings = function() {
+    // Dispose all meshes
+    this._buildingMeshes.forEach(mesh => mesh.dispose());
+    this._buildingMeshes.clear();
+    this.state.buildings = [];
+    this.updateBuildingList();
+    console.log('🏗️ All buildings cleared');
+  };
+  
+  forge.updateBuildingList = function() {
+    const list = document.getElementById('building-list');
+    if (!list) return;
+    
+    if (this.state.buildings.length === 0) {
+      list.innerHTML = '<span style="opacity:0.5;">No buildings placed</span>';
+      return;
+    }
+    
+    // Group by type
+    const byType = {};
+    this.state.buildings.forEach(b => {
+      byType[b.type] = (byType[b.type] || 0) + 1;
+    });
+    
+    list.innerHTML = Object.entries(byType)
+      .map(([type, count]) => {
+        const def = this.buildingTypes[type] || { icon: '🏠', name: type };
+        return `${def.icon} ${def.name}: ${count}`;
+      }).join('<br>');
+  };
+  
+  forge.updateBuildingMarkers = function() {
+    // Rebuild all building meshes from state
+    // Clear existing
+    this._buildingMeshes.forEach(mesh => mesh.dispose());
+    this._buildingMeshes.clear();
+    
+    // Rebuild
+    this.state.buildings.forEach(b => {
+      const buildingDef = window.BuildingTypes?.[b.type];
+      if (!buildingDef) return;
+      
+      const TILE_SIZE = window.TILE_SIZE || 1;
+      const worldX = b.x * TILE_SIZE;
+      const worldZ = b.y * TILE_SIZE;
+      const terrainY = window.getTerrainHeightAtPosition?.(worldX, worldZ) || 0;
+      const key = `${b.x},${b.y}`;
+      
+      gfx.getModel(buildingDef.model, gfx.scene).then(model => {
+        const root = model.root;
+        root.position = new BABYLON.Vector3(worldX, terrainY, worldZ);
+        root.scaling = new BABYLON.Vector3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+        root.rotation.y = b.rotation || 0;
+        root.setEnabled(true);
+        
+        root.metadata = root.metadata || {};
+        root.metadata.isEditorBuilding = true;
+        root.metadata.buildingKey = key;
+        
+        this._buildingMeshes.set(key, root);
+      });
+    });
+    
+    this.updateBuildingList();
+  };
+
+  // Update spawn list UI
+  forge.updateSpawnList = function() {
+    const list = document.getElementById('spawn-list');
+    if (!list) return;
+    
+    if (this.state.spawnPoints.length === 0) {
+      list.innerHTML = '<span style="opacity:0.5;">Click map to place Agora spawn points</span>';
+      return;
+    }
+    
+    let html = '';
+    this.state.spawnPoints.forEach((spawn, i) => {
+      html += `<div>🏛️ Spawn ${i + 1}: (${spawn.x}, ${spawn.y})</div>`;
+    });
+    
+    // Show game mode hints
+    const count = this.state.spawnPoints.length;
+    if (count === 1) {
+      html += '<div style="opacity:0.6;margin-top:4px;font-size:10px;">⚠️ Need at least 2 spawns for 1v1</div>';
+    } else if (count === 2) {
+      html += '<div style="opacity:0.6;margin-top:4px;font-size:10px;">✓ Ready for 1v1</div>';
+    } else if (count >= 4) {
+      html += '<div style="opacity:0.6;margin-top:4px;font-size:10px;">✓ Ready for Teams (${count} players)</div>';
+    }
+    
+    list.innerHTML = html;
+  };
+  
+  // Update 3D spawn markers (show Agora at spawn location)
+  forge.updateSpawnMarkers = function() {
+    // Dispose old markers
+    if (this._spawnMarkers) {
+      this._spawnMarkers.forEach(m => {
+        if (m.dispose) m.dispose();
+      });
+    }
+    this._spawnMarkers = [];
+    
+    if (!gfx || !gfx.scene) return;
+    
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Create markers for each spawn
+    this.state.spawnPoints.forEach((spawn, i) => {
+      const worldX = spawn.x * TILE_SIZE;
+      const worldZ = spawn.y * TILE_SIZE;
+      
+      // Create a circular platform to show flattened spawn zone
+      const platform = BABYLON.MeshBuilder.CreateDisc(`spawnPlatform_${i}`, {
+        radius: this.spawnZoneRadius * TILE_SIZE,
+        tessellation: 32
+      }, gfx.scene);
+      platform.rotation.x = Math.PI / 2; // Lay flat
+      platform.position = new BABYLON.Vector3(worldX, 0.15, worldZ);
+      
+      const platformMat = new BABYLON.StandardMaterial(`spawnPlatMat_${i}`, gfx.scene);
+      platformMat.diffuseColor = new BABYLON.Color3(0.8, 0.7, 0.5); // Neutral tan
+      platformMat.emissiveColor = new BABYLON.Color3(0.2, 0.15, 0.1);
+      platformMat.alpha = 0.25;
+      platformMat.backFaceCulling = false;
+      platform.material = platformMat;
+      
+      this._spawnMarkers.push(platform);
+      
+      // Load Agora model as marker
+      const buildingDef = window.BuildingTypes?.['agora'];
+      if (buildingDef && gfx.getModel) {
+        gfx.getModel(buildingDef.model, gfx.scene).then(model => {
+          const root = model.root;
+          root.position = new BABYLON.Vector3(worldX, 0, worldZ);
+          root.scaling = new BABYLON.Vector3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+          root.setEnabled(true);
+          
+          // Mark as spawn marker for cleanup
+          root.metadata = root.metadata || {};
+          root.metadata.isSpawnMarker = true;
+          root.metadata.spawnIndex = i;
+          
+          this._spawnMarkers.push(root);
+        });
+      }
+      
+      // Add spawn number indicator floating above
+      const label = BABYLON.MeshBuilder.CreatePlane(`spawnLabel_${i}`, { size: 5 }, gfx.scene);
+      label.position = new BABYLON.Vector3(worldX, 14, worldZ);
+      label.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+      
+      // Create dynamic texture for number
+      const labelTex = new BABYLON.DynamicTexture(`spawnLabelTex_${i}`, 64, gfx.scene);
+      labelTex.hasAlpha = true;
+      const ctx = labelTex.getContext();
+      ctx.clearRect(0, 0, 64, 64);
+      ctx.font = 'bold 48px Arial';
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 4;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.strokeText(`${i + 1}`, 32, 32);
+      ctx.fillText(`${i + 1}`, 32, 32);
+      labelTex.update();
+      
+      const labelMat = new BABYLON.StandardMaterial(`spawnLabelMat_${i}`, gfx.scene);
+      labelMat.diffuseTexture = labelTex;
+      labelMat.emissiveTexture = labelTex;
+      labelMat.useAlphaFromDiffuseTexture = true;
+      labelMat.backFaceCulling = false;
+      label.material = labelMat;
+      
+      this._spawnMarkers.push(label);
+    });
+  };
+  
+  // Toggle game type compatibility
+  forge.toggleGameType = function(type) {
+    this.state.gameTypes[type] = !this.state.gameTypes[type];
+    console.log(`🎮 Game type ${type}: ${this.state.gameTypes[type] ? 'enabled' : 'disabled'}`);
+  };
+  
+  // ========== SYMMETRY TOOLS ==========
+  
+  forge._currentSymmetry = 'none';
+  
+  // Set symmetry mode
+  forge.setSymmetry = function(mode) {
+    this._currentSymmetry = mode;
+    
+    // Update button states
+    Object.keys(this.symmetryModes).forEach(m => {
+      const btn = document.getElementById(`sym-${m}`);
+      if (btn) btn.classList.toggle('active', m === mode);
+    });
+    
+    console.log(`⚖️ Symmetry: ${this.symmetryModes[mode].name}`);
+  };
+  
+  // Get mirrored/rotated positions based on symmetry mode
+  forge.getSymmetricPositions = function(pos) {
+    const field = window.liveField;
+    if (!field) return [pos];
+    
+    const centerX = field.width / 2;
+    const centerY = field.height / 2;
+    const positions = [pos];
+    
+    switch (this._currentSymmetry) {
+      case 'mirrorX':
+        // Mirror across vertical center line
+        positions.push({ x: Math.floor(field.width - 1 - pos.x), y: pos.y });
+        break;
+        
+      case 'mirrorY':
+        // Mirror across horizontal center line
+        positions.push({ x: pos.x, y: Math.floor(field.height - 1 - pos.y) });
+        break;
+        
+      case 'rotate180':
+        // Rotate 180 degrees around center
+        positions.push({
+          x: Math.floor(field.width - 1 - pos.x),
+          y: Math.floor(field.height - 1 - pos.y)
+        });
+        break;
+        
+      case 'rotate90':
+        // 90 degree rotations (4-way)
+        const dx = pos.x - centerX;
+        const dy = pos.y - centerY;
+        positions.push({ x: Math.floor(centerX - dy), y: Math.floor(centerY + dx) }); // 90
+        positions.push({ x: Math.floor(centerX - dx), y: Math.floor(centerY - dy) }); // 180
+        positions.push({ x: Math.floor(centerX + dy), y: Math.floor(centerY - dx) }); // 270
+        break;
+        
+      case 'quad':
+        // Mirror both X and Y (4 corners)
+        positions.push({ x: Math.floor(field.width - 1 - pos.x), y: pos.y }); // Mirror X
+        positions.push({ x: pos.x, y: Math.floor(field.height - 1 - pos.y) }); // Mirror Y
+        positions.push({ x: Math.floor(field.width - 1 - pos.x), y: Math.floor(field.height - 1 - pos.y) }); // Both
+        break;
+    }
+    
+    // Filter out-of-bounds and duplicates
+    const seen = new Set();
+    return positions.filter(p => {
+      const key = `${p.x},${p.y}`;
+      if (seen.has(key)) return false;
+      if (p.x < 0 || p.x >= field.width || p.y < 0 || p.y >= field.height) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  
+  // Apply current terrain/resources symmetrically to whole map
+  forge.applySymmetryToAll = function() {
+    const field = window.liveField;
+    if (!field || this._currentSymmetry === 'none') {
+      console.log('⚖️ No symmetry mode selected');
+      return;
+    }
+    
+    console.log(`⚖️ Applying ${this.symmetryModes[this._currentSymmetry].name} symmetry to entire map...`);
+    
+    const halfW = Math.floor(field.width / 2);
+    const halfH = Math.floor(field.height / 2);
+    const affectedChunks = new Set();
+    
+    // Determine source region based on symmetry mode
+    let sourceRegion;
+    switch (this._currentSymmetry) {
+      case 'mirrorX':
+        sourceRegion = { x1: 0, y1: 0, x2: halfW, y2: field.height };
+        break;
+      case 'mirrorY':
+        sourceRegion = { x1: 0, y1: 0, x2: field.width, y2: halfH };
+        break;
+      case 'rotate180':
+      case 'quad':
+        sourceRegion = { x1: 0, y1: 0, x2: halfW, y2: halfH };
+        break;
+      default:
+        return;
+    }
+    
+    // Copy terrain from source to mirrored positions
+    for (let y = sourceRegion.y1; y < sourceRegion.y2; y++) {
+      for (let x = sourceRegion.x1; x < sourceRegion.x2; x++) {
+        const srcIndex = y * field.width + x;
+        const srcTerrain = field.terrainTypes[srcIndex];
+        const srcTile = field.tiles[srcIndex];
+        
+        const mirrors = this.getSymmetricPositions({ x, y });
+        mirrors.forEach(mp => {
+          if (mp.x === x && mp.y === y) return; // Skip source
+          
+          const dstIndex = mp.y * field.width + mp.x;
+          field.terrainTypes[dstIndex] = srcTerrain;
+          field.tiles[dstIndex].type = srcTile.type;
+          field.tiles[dstIndex].atlasName = srcTile.atlasName;
+          
+          const chunkX = Math.floor(mp.x / field.chunkSize);
+          const chunkZ = Math.floor(mp.y / field.chunkSize);
+          affectedChunks.add(`${chunkX},${chunkZ}`);
+        });
+      }
+    }
+    
+    // Mirror spawn points
+    const originalSpawns = [...this.state.spawnPoints];
+    originalSpawns.forEach(spawn => {
+      const mirrors = this.getSymmetricPositions({ x: spawn.x, y: spawn.y });
+      mirrors.forEach((mp, i) => {
+        if (i === 0) return; // Skip original
+        // Find existing spawn at mirror pos or create new
+        const existing = this.state.spawnPoints.find(s => s.x === mp.x && s.y === mp.y);
+        if (!existing) {
+          // Assign different team for mirrored spawns
+          const newTeam = (spawn.team + i) % 8;
+          this.state.spawnPoints.push({ x: mp.x, y: mp.y, team: newTeam });
+        }
+      });
+    });
+    
+    // Rebuild affected chunks
+    this.rebuildChunks(affectedChunks);
+    this.updateSpawnMarkers();
+    this.updateSpawnList();
+    
+    // Update blocked tiles
+    if (field.updateBlockedTiles) {
+      field.blockedTiles.clear();
+      field.slowTiles.clear();
+      field.updateBlockedTiles();
+    }
+    
+    console.log(`✅ Symmetry applied to ${affectedChunks.size} chunks`);
+  };
+
   // Enable all chunks
   forge.enableAllChunks = function() {
     const field = window.liveField;
@@ -1590,15 +2853,12 @@
   forge.populateResources = function() {
     const field = window.liveField;
     if (!field || !gfx || !gfx.scene || !gfx.placeDecorationsOnChunk) {
-      console.log('❌ Cannot populate resources');
+      console.log('❌ Cannot populate resources - missing dependencies');
       return;
     }
     
-    // First clear existing resources and registries
+    // First clear existing resources
     this.clearResources();
-    if (gfx.clearResourceRegistries) {
-      gfx.clearResourceRegistries();
-    }
     
     console.log('🌲 Auto-populating resources (trees on grass, rocks on dirt)...');
     
@@ -1610,19 +2870,39 @@
     }
     console.log(`   Terrain: ${grassCount} grass tiles, ${dirtCount} dirt tiles`);
     
-    // Place decorations on enabled chunks only
-    for (const [key, chunk] of field.chunks) {
-      // Skip disabled chunks
-      if (field.chunkMask && field.chunkMask.get(key) === false) continue;
-      
-      if (chunk.tiles && chunk.tiles.length > 0) {
-        chunk.models = gfx.placeDecorationsOnChunk(chunk, gfx.scene);
+    // Ensure all chunks exist first
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
+    
+    for (let cx = 0; cx < chunksX; cx++) {
+      for (let cz = 0; cz < chunksZ; cz++) {
+        const key = `${cx},${cz}`;
+        
+        // Skip disabled chunks
+        if (field.chunkMask && field.chunkMask.get(key) === false) continue;
+        
+        // Get or create chunk
+        let chunk = field.chunks.get(key);
+        if (!chunk) {
+          chunk = field.getChunk(cx, cz);
+        }
+        
+        if (chunk && chunk.tiles && chunk.tiles.length > 0) {
+          chunk.models = gfx.placeDecorationsOnChunk(chunk, gfx.scene);
+        }
       }
     }
     
-    console.log('✅ Resources populating (async load)');
+    const resourceCount = gfx.lodModels ? gfx.lodModels.length : 0;
+    console.log(`✅ Resources placed: ${resourceCount} models`);
+    
+    // Refresh grid after async load completes
+    if (this._resourceGridVisible) {
+      setTimeout(() => this.showResourceGrid(), 500);
+      setTimeout(() => this.showResourceGrid(), 1500);
+    }
   };
-  
+
   // Clear all resources from the map
   forge.clearResources = function() {
     const field = window.liveField;
@@ -1632,23 +2912,37 @@
     
     let cleared = 0;
     
-    // Clear chunk-based resources (auto-generated)
+    // Clear LOD models (the actual 3D meshes) - this is where resources live
+    if (gfx && gfx.lodModels) {
+      for (let i = gfx.lodModels.length - 1; i >= 0; i--) {
+        const lod = gfx.lodModels[i];
+        if (lod.model && !lod.model.isDisposed()) {
+          lod.model.dispose();
+          cleared++;
+        }
+        if (lod.billboard && !lod.billboard.isDisposed()) {
+          lod.billboard.dispose();
+        }
+      }
+      gfx.lodModels.length = 0; // Clear the array
+    }
+    
+    // Clear chunk model references
     for (const [key, chunk] of field.chunks) {
       if (chunk.models) {
-        chunk.models.forEach(m => {
-          if (m.model && m.model.root) {
-            m.model.root.dispose();
-            cleared++;
-          }
-        });
         chunk.models = [];
       }
+    }
+    
+    // Clear resource registries in gfx
+    if (gfx.clearResourceRegistries) {
+      gfx.clearResourceRegistries();
     }
     
     // Clear manually placed resources
     if (this._placedResources) {
       for (const [key, mesh] of this._placedResources) {
-        if (mesh && mesh.dispose) {
+        if (mesh && mesh.dispose && !mesh.isDisposed()) {
           mesh.dispose();
           cleared++;
         }
@@ -1658,7 +2952,15 @@
     
     // Reset tracking
     this._placedKeys = new Set();
-    
+    this._resourceFootprints = new Map();
+    this._erasedAutoResources = new Set();
+    this._modelCache?.clear();
+
+    // Refresh grid if visible
+    if (this._resourceGridVisible) {
+      this.showResourceGrid();
+    }
+
     console.log(`✅ Cleared ${cleared} resources`);
   };
   
@@ -1668,7 +2970,7 @@
     document.getElementById('brush-size-label').textContent = size;
   };
   
-  // Handle file import (.garden or .json)
+  // Handle file import (.aether or .json)
   forge.handleImport = function(file) {
     if (!file) return;
     
@@ -1690,333 +2992,8 @@
     reader.readAsText(file);
   };
   
-  // ============================================
-  // SYMMETRY SYSTEM
-  // ============================================
-  
-  forge.setSymmetry = function(mode) {
-    this.state.symmetryMode = mode;
-    console.log(`🔄 Symmetry mode: ${mode}`);
-  };
-  
-  // Get symmetric positions based on current symmetry mode
-  forge.getSymmetricPositions = function(pos) {
-    const field = window.liveField;
-    if (!field) return [pos];
-    
-    const centerX = field.width / 2;
-    const centerZ = field.height / 2;
-    const positions = [pos];
-    
-    switch (this.state.symmetryMode) {
-      case '2way':
-        // Mirror across center
-        positions.push({
-          x: Math.floor(2 * centerX - pos.x - 1),
-          y: Math.floor(2 * centerZ - pos.y - 1)
-        });
-        break;
-        
-      case '4way':
-        // Mirror in 4 corners
-        const mirrorX = Math.floor(2 * centerX - pos.x - 1);
-        const mirrorZ = Math.floor(2 * centerZ - pos.y - 1);
-        positions.push({ x: mirrorX, y: pos.y });
-        positions.push({ x: pos.x, y: mirrorZ });
-        positions.push({ x: mirrorX, y: mirrorZ });
-        break;
-        
-      case 'radial':
-        // Radial symmetry (4 rotations)
-        const dx = pos.x - centerX;
-        const dz = pos.y - centerZ;
-        positions.push({ x: Math.floor(centerX - dz), y: Math.floor(centerZ + dx) });
-        positions.push({ x: Math.floor(centerX - dx), y: Math.floor(centerZ - dz) });
-        positions.push({ x: Math.floor(centerX + dz), y: Math.floor(centerZ - dx) });
-        break;
-    }
-    
-    // Filter out duplicates and out of bounds
-    return positions.filter((p, i, arr) => {
-      if (p.x < 0 || p.x >= field.width || p.y < 0 || p.y >= field.height) return false;
-      return arr.findIndex(q => q.x === p.x && q.y === p.y) === i;
-    });
-  };
-  
-  // ============================================
-  // SPAWN POINT SYSTEM
-  // ============================================
-  
-  forge._spawnMarkers = [];
-  
-  // Place a spawn point at position
-  forge.placeSpawn = function(pos) {
-    const field = window.liveField;
-    if (!field) return;
-    
-    // Check if position is on enabled chunk
-    const chunkX = Math.floor(pos.x / field.chunkSize);
-    const chunkZ = Math.floor(pos.y / field.chunkSize);
-    if (field.chunkMask && field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
-      console.log('🚫 Cannot place spawn on disabled chunk');
-      return;
-    }
-    
-    // Get symmetric positions
-    const positions = this.getSymmetricPositions(pos);
-    
-    positions.forEach((p, i) => {
-      // Check if symmetric position is also on enabled chunk
-      const symChunkX = Math.floor(p.x / field.chunkSize);
-      const symChunkZ = Math.floor(p.y / field.chunkSize);
-      if (field.chunkMask && field.chunkMask.get(`${symChunkX},${symChunkZ}`) === false) {
-        return; // Skip this symmetric position
-      }
-      
-      // Check if there's already a spawn at this position
-      const existing = this.state.spawnPoints.findIndex(s => 
-        Math.abs(s.x - p.x) <= 2 && Math.abs(s.y - p.y) <= 2
-      );
-      
-      if (existing >= 0) {
-        // Move existing spawn to new position
-        this.state.spawnPoints[existing].x = p.x;
-        this.state.spawnPoints[existing].y = p.y;
-      } else {
-        // Add new spawn point (order determines player assignment)
-        this.state.spawnPoints.push({ x: p.x, y: p.y });
-      }
-    });
-    
-    this.updateSpawnMarkers();
-    this.updateSpawnList();
-    console.log(`🚩 Spawn placed at (${pos.x}, ${pos.y})` + (positions.length > 1 ? ` (+${positions.length - 1} mirrors)` : ''));
-  };
-  
-  // Remove spawn near position
-  forge.removeSpawn = function(pos) {
-    const idx = this.state.spawnPoints.findIndex(s => 
-      Math.abs(s.x - pos.x) <= 3 && Math.abs(s.y - pos.y) <= 3
-    );
-    
-    if (idx >= 0) {
-      this.state.spawnPoints.splice(idx, 1);
-      this.updateSpawnMarkers();
-      this.updateSpawnList();
-      console.log(`🗑️ Spawn removed`);
-    }
-  };
-  
-  // Clear all spawn points
-  forge.clearSpawns = function() {
-    this.state.spawnPoints = [];
-    this.updateSpawnMarkers();
-    this.updateSpawnList();
-    console.log('🗑️ All spawns cleared');
-  };
-  
-  // Update spawn list in UI
-  forge.updateSpawnList = function() {
-    const list = document.getElementById('spawn-list');
-    if (!list) return;
-    
-    if (this.state.spawnPoints.length === 0) {
-      list.innerHTML = '<div style="opacity:0.5;">No spawn points</div>';
-    } else {
-      list.innerHTML = this.state.spawnPoints.map((s, i) => 
-        `<div>Spawn #${i + 1}: (${s.x}, ${s.y})</div>`
-      ).join('');
-    }
-  };
-  
-  // Update spawn markers in 3D view
-  forge.updateSpawnMarkers = function() {
-    // Dispose old markers
-    if (this._spawnMarkers) {
-      this._spawnMarkers.forEach(m => m.dispose());
-    }
-    this._spawnMarkers = [];
-    
-    if (!gfx || !gfx.scene) return;
-    
-    const field = window.liveField;
-    if (!field) return;
-    
-    const TILE = window.TILE_SIZE || 4;
-    
-    this.state.spawnPoints.forEach((spawn, i) => {
-      const worldX = (spawn.x + 0.5) * TILE;
-      const worldZ = (spawn.y + 0.5) * TILE;
-      const worldY = field.getHeightVariation ? field.getHeightVariation(spawn.x, spawn.y) : 0;
-      
-      // Create a simple marker (cylinder + sphere)
-      const cylinder = BABYLON.MeshBuilder.CreateCylinder(`spawn_${i}`, {
-        height: 8,
-        diameterTop: 0.5,
-        diameterBottom: 1.5
-      }, gfx.scene);
-      cylinder.position = new BABYLON.Vector3(worldX, worldY + 4, worldZ);
-      
-      const mat = new BABYLON.StandardMaterial(`spawnMat_${i}`, gfx.scene);
-      mat.diffuseColor = new BABYLON.Color3(0.2, 0.8, 0.2);
-      mat.emissiveColor = new BABYLON.Color3(0.1, 0.4, 0.1);
-      cylinder.material = mat;
-      
-      this._spawnMarkers.push(cylinder);
-      
-      // Add spawn zone indicator
-      const zone = BABYLON.MeshBuilder.CreateCylinder(`spawnZone_${i}`, {
-        height: 0.3,
-        diameter: 16 * TILE  // Approximate spawn zone radius
-      }, gfx.scene);
-      zone.position = new BABYLON.Vector3(worldX, 0.15, worldZ);
-      const zoneMat = new BABYLON.StandardMaterial(`spawnZoneMat_${i}`, gfx.scene);
-      zoneMat.diffuseColor = new BABYLON.Color3(0, 1, 0);
-      zoneMat.alpha = 0.15;
-      zone.material = zoneMat;
-      
-      this._spawnMarkers.push(zone);
-    });
-  };
-  
-  // ============================================
-  // BUILDING PLACEMENT SYSTEM
-  // ============================================
-  
-  forge._buildingMeshes = new Map();
-  
-  forge.setBuilding = function(type) {
-    this.state.currentBuilding = type;
-    
-    // Update button states
-    ['camp', 'tower', 'eraser'].forEach(t => {
-      const btn = document.getElementById(`bld-${t}`);
-      if (btn) btn.classList.toggle('active', t === type);
-    });
-    
-    console.log(`🏛️ Building tool: ${type}`);
-  };
-  
-  forge.placeBuilding = function(pos) {
-    const field = window.liveField;
-    if (!field) return;
-    
-    // Get symmetric positions
-    const positions = this.getSymmetricPositions(pos);
-    
-    // Handle eraser
-    if (this.state.currentBuilding === 'eraser') {
-      positions.forEach(p => this._removeBuildingAt(p));
-      return;
-    }
-    
-    // Place at all symmetric positions
-    positions.forEach((p, i) => this._placeBuildingAtSingle(p, i));
-  };
-  
-  forge._placeBuildingAtSingle = function(pos, rotationOffset = 0) {
-    const field = window.liveField;
-    if (!field || !gfx || !gfx.scene) return;
-    
-    const key = `${pos.x},${pos.y}`;
-    const buildingType = this.state.currentBuilding;
-    const buildingDef = window.BuildingTypes?.[buildingType];
-    
-    if (!buildingDef) {
-      console.warn(`Unknown building type: ${buildingType}`);
-      return;
-    }
-    
-    // Check if position is valid (on enabled chunk)
-    const chunkX = Math.floor(pos.x / field.chunkSize);
-    const chunkZ = Math.floor(pos.y / field.chunkSize);
-    if (field.chunkMask && field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
-    
-    // Check for water
-    const index = pos.y * field.width + pos.x;
-    if (field.terrainTypes[index] === 1) return;
-    
-    // Remove existing building at this position
-    if (this._buildingMeshes.has(key)) {
-      this._buildingMeshes.get(key).dispose();
-      this._buildingMeshes.delete(key);
-    }
-    
-    // Remove from state array
-    const existingIdx = this.state.buildings.findIndex(b => b.x === pos.x && b.y === pos.y);
-    if (existingIdx >= 0) {
-      this.state.buildings.splice(existingIdx, 1);
-    }
-    
-    // Add to state
-    const rotation = (rotationOffset * Math.PI / 2);
-    this.state.buildings.push({ x: pos.x, y: pos.y, type: buildingType, rotation });
-    
-    // Load and place model
-    const TILE = window.TILE_SIZE || 4;
-    const worldX = (pos.x + 0.5) * TILE;
-    const worldZ = (pos.y + 0.5) * TILE;
-    const terrainY = field.getHeightVariation ? field.getHeightVariation(pos.x, pos.y) : 0;
-    
-    gfx.getModel(buildingDef.model, gfx.scene).then(model => {
-      const root = model.root;
-      root.position = new BABYLON.Vector3(worldX, terrainY, worldZ);
-      root.scaling = new BABYLON.Vector3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
-      root.rotation.y = rotation;
-      root.setEnabled(true);
-      
-      this._buildingMeshes.set(key, root);
-    });
-    
-    this.updateBuildingList();
-    console.log(`🏛️ Placed ${buildingType} at (${pos.x}, ${pos.y})`);
-  };
-  
-  forge._removeBuildingAt = function(pos) {
-    const field = window.liveField;
-    if (!field) return;
-    
-    // Find nearest building
-    let closestIdx = -1;
-    let closestDist = Infinity;
-    
-    this.state.buildings.forEach((b, i) => {
-      const dist = Math.abs(b.x - pos.x) + Math.abs(b.y - pos.y);
-      if (dist < closestDist && dist <= 3) {
-        closestDist = dist;
-        closestIdx = i;
-      }
-    });
-    
-    if (closestIdx >= 0) {
-      const b = this.state.buildings[closestIdx];
-      const key = `${b.x},${b.y}`;
-      
-      if (this._buildingMeshes.has(key)) {
-        this._buildingMeshes.get(key).dispose();
-        this._buildingMeshes.delete(key);
-      }
-      
-      this.state.buildings.splice(closestIdx, 1);
-      this.updateBuildingList();
-      console.log(`🗑️ Removed building at (${b.x}, ${b.y})`);
-    }
-  };
-  
-  forge.updateBuildingList = function() {
-    const list = document.getElementById('building-list');
-    if (!list) return;
-    
-    if (this.state.buildings.length === 0) {
-      list.innerHTML = '<div style="opacity:0.5;">No buildings</div>';
-    } else {
-      list.innerHTML = this.state.buildings.map((b, i) => 
-        `<div>${b.type} at (${b.x}, ${b.y})</div>`
-      ).join('');
-    }
-  };
-  
   // Export forge object
   window.forge = forge;
   
 })(window.forge || {});
+

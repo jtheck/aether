@@ -28,6 +28,9 @@
     // Map metadata
     mapName: '',
     mapAuthor: '',
+    mapDescription: '',
+    mapLore: '',
+    timeOfDay: 0.4,  // Slider value (0-1); actual sun time is mapped
     
     // Game type compatibility
     gameTypes: {
@@ -157,6 +160,9 @@
     
     // Build dynamic table based on chunk mask
     this.rebuildTable();
+    
+    // Apply initial time of day
+    this.setTimeOfDay(this.state.timeOfDay);
     
     // Ensure models are visible as they load (async loading)
     // Check multiple times as models stream in
@@ -1080,8 +1086,16 @@
       }
     }
     
+    // Generate thumbnail (64x64 preview)
+    const thumbnail = this.generateThumbnail(field, 64);
+    
     const mapData = {
       v: 2,  // Version 2 = new format
+      n: this.state.mapName || `Map ${field.seed}`,  // Map name
+      au: this.state.mapAuthor || undefined,         // Author
+      desc: this.state.mapDescription || undefined,  // Description
+      lore: this.state.mapLore || undefined,         // Lore/backstory
+      tod: this.state.timeOfDay !== undefined ? Math.round(this.state.timeOfDay * 100) / 100 : undefined,  // Time of day (0-1)
       w: field.width,
       h: field.height,
       s: field.seed,
@@ -1089,12 +1103,13 @@
       t: terrainRLE,           // RLE-compressed terrain
       cm: chunkBits.join(''),  // Chunk mask as binary string "11101110..."
       ta: this.encodeTileAtlas(field.tiles),  // Tile atlas info
+      th: thumbnail,           // Base64 thumbnail
       r: placedResources.length > 0 ? placedResources.join(';') : undefined,  // Placed resources
       er: this._erasedAutoResources && this._erasedAutoResources.size > 0
           ? Array.from(this._erasedAutoResources).join(';') : undefined,  // Erased auto-resources
       // Map metadata
       sp: this.state.spawnPoints.length > 0
-          ? this.state.spawnPoints.map(s => `${s.x},${s.y},${s.team}`).join(';') : undefined,  // Spawn points
+          ? this.state.spawnPoints.map(s => `${s.x},${s.y}`).join(';') : undefined,  // Spawn points
       bld: this.state.buildings.length > 0
           ? this.state.buildings.map(b => `${b.x},${b.y},${b.type},${(b.rotation || 0).toFixed(2)}`).join(';') : undefined,  // Buildings
       gt: Object.entries(this.state.gameTypes)
@@ -1116,6 +1131,98 @@
     URL.revokeObjectURL(url);
     
     return mapData;
+  };
+  
+  // Generate a small thumbnail preview of the map
+  forge.generateThumbnail = function(field, size = 64) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    
+    // Background
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, size, size);
+    
+    const scaleX = size / field.width;
+    const scaleZ = size / field.height;
+    
+    // Terrain colors
+    const terrainColors = {
+      0: '#4a7c59', // Grass
+      1: '#2d4a6f', // Water
+      2: '#8b7355', // Dirt
+      3: '#6b6b6b'  // Rock
+    };
+    
+    // Draw terrain
+    for (let z = 0; z < field.height; z++) {
+      for (let x = 0; x < field.width; x++) {
+        const index = z * field.width + x;
+        const terrainType = field.terrainTypes[index];
+        
+        // Check if this tile is in an enabled chunk
+        if (field.chunkMask && field.chunkSize) {
+          const chunkX = Math.floor(x / field.chunkSize);
+          const chunkZ = Math.floor(z / field.chunkSize);
+          if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+            continue; // Skip disabled chunks
+          }
+        }
+        
+        ctx.fillStyle = terrainColors[terrainType] || terrainColors[0];
+        ctx.fillRect(
+          Math.floor(x * scaleX),
+          Math.floor(z * scaleZ),
+          Math.ceil(scaleX) + 1,
+          Math.ceil(scaleZ) + 1
+        );
+      }
+    }
+    
+    // Draw spawn points as bright dots
+    if (this.state.spawnPoints) {
+      ctx.fillStyle = '#ffcc00';
+      this.state.spawnPoints.forEach(sp => {
+        const px = Math.floor(sp.x * scaleX);
+        const pz = Math.floor(sp.y * scaleZ);
+        ctx.beginPath();
+        ctx.arc(px, pz, Math.max(2, size / 20), 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+    
+    // Return as base64 (strip data URL prefix to save space)
+    return canvas.toDataURL('image/png').replace('data:image/png;base64,', '');
+  };
+  
+  // Set time of day (0-1)
+  forge.setTimeOfDay = function(sliderValue) {
+    // Map slider 0-1 to sun time 0.25-0.75 so right side is noon, left is dawn
+    const sunTime = 0.25 + Math.max(0, Math.min(1, sliderValue)) * 0.5;
+    this.state.timeOfDay = sunTime;
+    
+    // Update lighting
+    if (window.lighting && window.lighting.setSunTime) {
+      window.lighting.setSunTime(sunTime);
+    }
+    
+    // Update label based on actual sun time
+    const label = document.getElementById('time-label');
+    if (label) {
+      const t = sunTime;
+      const phases = [
+        { max: 0.30, name: '🌅 Dawn' },
+        { max: 0.40, name: '🌄 Early Morning' },
+        { max: 0.50, name: '🌞 Noon' },
+        { max: 0.60, name: '☀️ Afternoon' },
+        { max: 0.70, name: '🌇 Late Afternoon' },
+        { max: 0.80, name: '🌆 Sunset' },
+        { max: 1.01, name: '🌙 Night' }
+      ];
+      const phase = phases.find(p => t <= p.max) || phases[phases.length - 1];
+      label.textContent = phase.name;
+    }
   };
   
   // RLE encode an array of values
@@ -1250,6 +1357,28 @@
         }
       }
       console.log(`📥 Importing .garden map: ${width}x${height}`);
+      
+      // Restore map metadata to UI
+      this.state.mapName = mapData.n || '';
+      this.state.mapAuthor = mapData.au || '';
+      this.state.mapDescription = mapData.desc || '';
+      this.state.mapLore = mapData.lore || '';
+      
+      const nameInput = document.getElementById('map-name');
+      const authorInput = document.getElementById('map-author');
+      const descInput = document.getElementById('map-desc');
+      const loreInput = document.getElementById('map-lore');
+      if (nameInput) nameInput.value = this.state.mapName;
+      if (authorInput) authorInput.value = this.state.mapAuthor;
+      if (descInput) descInput.value = this.state.mapDescription;
+      if (loreInput) loreInput.value = this.state.mapLore;
+      
+      // Restore time of day
+      if (mapData.tod !== undefined) {
+        this.setTimeOfDay(mapData.tod);
+        const timeSlider = document.getElementById('time-slider');
+        if (timeSlider) timeSlider.value = mapData.tod * 100;
+      }
     } else {
       // Legacy v1 JSON format
       width = mapData.width;
@@ -1560,13 +1689,44 @@
         </div>
         
         <div class="forge-section">
-          <h3>File</h3>
+          <h3>Map Info</h3>
+          <div style="margin-bottom:6px;">
+            <input type="text" id="map-name" placeholder="Map Name" 
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;"
+                   onchange="forge.state.mapName = this.value">
+          </div>
+          <div style="margin-bottom:6px;">
+            <input type="text" id="map-author" placeholder="Author" 
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;font-size:11px;"
+                   onchange="forge.state.mapAuthor = this.value">
+          </div>
+          <div style="margin-bottom:6px;">
+            <textarea id="map-desc" placeholder="Description (shown in map browser)" rows="2"
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;font-size:11px;resize:vertical;"
+                   onchange="forge.state.mapDescription = this.value"></textarea>
+          </div>
+          <div style="margin-bottom:8px;">
+            <textarea id="map-lore" placeholder="Lore / Backstory (optional)" rows="3"
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#888;border-radius:4px;font-size:10px;font-style:italic;resize:vertical;"
+                   onchange="forge.state.mapLore = this.value"></textarea>
+          </div>
           <div class="forge-buttons">
             <button class="forge-btn" onclick="forge.exportMap()">💾 Export</button>
             <button class="forge-btn" onclick="document.getElementById('import-file').click()">📂 Import</button>
             <input type="file" id="import-file" accept=".garden,.json" style="display:none" 
                    onchange="forge.handleImport(this.files[0])">
           </div>
+        </div>
+        
+        <div class="forge-section">
+          <h3>🌅 Time of Day</h3>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">🌙</span>
+            <input type="range" id="time-slider" min="0" max="100" value="40" 
+                   style="flex: 1;" oninput="forge.setTimeOfDay(this.value / 100)">
+            <span style="font-size: 16px;">☀️</span>
+          </div>
+          <div id="time-label" style="text-align: center; font-size: 11px; color: #888; margin-top: 4px;">Mid-Morning</div>
         </div>
         
         <div class="forge-section">

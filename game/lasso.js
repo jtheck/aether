@@ -4,6 +4,7 @@
 
 (function(lasso) {
   let isSelecting = false;
+  let isPotentialDrag = false; // Track if mousedown happened but drag hasn't started yet
   let startPoint = { x: 0, y: 0 };
   let endPoint = { x: 0, y: 0 };
   let selectionBox = null;
@@ -31,6 +32,7 @@
   let isDragActive = false;
   let lastClickTime = 0;
   let lastClickPoint = { x: 0, y: 0 };
+  let lastLassoDownTime = 0; // Track when lasso mousedown happened
   
   // RMB tracking during drag operations
   let rmbDownDuringDrag = false;
@@ -112,7 +114,7 @@
     
     const lineMaterial = new BABYLON.StandardMaterial("selectionLineMat", window.gfx.scene);
     lineMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1); // Cyan
-    lineMaterial.alpha = 0.3; // Semi-transparent
+    lineMaterial.alpha = 1.0; // Opaque
     lineMaterial.emissiveColor = new BABYLON.Color3(0, 0.5, 0.5);
     
     // Create 4 vertical planes for the edges
@@ -197,20 +199,34 @@
       return false;
     }
     
-    isSelecting = true; // Start selection mode
+    // Check if this might be a double-click (very recent mousedown)
+    // If we had a mousedown very recently (< 300ms), don't start lasso to avoid double-click issues
+    const currentTime = Date.now();
+    const timeSinceLastDown = currentTime - lastLassoDownTime;
+    if (timeSinceLastDown < 300 && lastLassoDownTime > 0) {
+      // This might be a double-click - don't start lasso
+      // console.log("🎯 Lasso: Potential double-click detected, skipping lasso");
+      return false;
+    }
+    lastLassoDownTime = currentTime;
+    
+    // Don't start selection mode yet - wait until we detect actual dragging
+    // Just store the starting point for potential drag detection
+    isSelecting = false; // Don't activate until drag is detected
+    isPotentialDrag = true; // Track that we have a mousedown that might become a drag
     startPoint = { x, y };
     endPoint = { x, y };
     dragStartTime = Date.now();
     isDragActive = false;
     
-    // Initialize lasso path
+    // Initialize lasso path (but don't show anything yet)
     lassoPath = [{ x, y }];
     lassoWorldPath = []; // Clear world path
     lastLassoPoint = { x, y };
     lassoUpdateCounter = 0; // Reset throttle counter
     lastLassoUpdatePointCount = 0; // Reset point count
     
-    // For 3D mode, convert initial point to world coordinates
+    // For 3D mode, convert initial point to world coordinates (but don't show yet)
     if (USE_3D_HUD) {
       const worldPos = screenToWorld(x, y);
       if (worldPos) {
@@ -224,30 +240,8 @@
     
     // console.log("🎯 Lasso: Mouse down at", { x, y, event: e });
     
-    // Show selection box at start point
-    if (selectionBox) {
-      if (USE_3D_HUD) {
-        // 3D mode - selectionBox should be an array of planes
-        if (Array.isArray(selectionBox)) {
-          // Only show planes for rectangle mode, not lasso mode
-          if (selectionMode === 'rectangle') {
-            selectionBox.forEach(plane => {
-              plane.isVisible = true;
-            });
-          }
-        } else {
-          // console.error('3D selection box is not an array:', selectionBox);
-          return false;
-        }
-      } else {
-        // 2D mode - selectionBox is a single element
-        selectionBox.isVisible = true;
-      }
-      updateSelectionBox();
-    } else {
-      // console.warn('Selection box not initialized');
-      return false;
-    }
+    // DON'T show selection box yet - wait for actual drag
+    // Selection box will be shown in handleLmbMove when drag is detected
     
     // Don't claim we're handling the event yet - wait to see if it becomes a drag
     // Return false so the UI system can handle clicks normally
@@ -256,11 +250,46 @@
   
   // Handle left mouse button move
   lasso.handleLmbMove = function(x, y) {
-    if (!isSelecting) return;
+    // If we haven't started selecting yet, check if we should start (drag detected)
+    if (!isSelecting && isPotentialDrag) {
+      // Check if we've moved enough to start dragging
+      const dx = x - startPoint.x;
+      const dy = y - startPoint.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance > DRAG_THRESHOLD) {
+        // Now we've detected a drag - start the selection
+        isSelecting = true;
+        isDragActive = true;
+        
+        // Show selection box now that we're actually dragging
+        if (selectionBox) {
+          if (USE_3D_HUD) {
+            // 3D mode - selectionBox should be an array of planes
+            if (Array.isArray(selectionBox)) {
+              // Only show planes for rectangle mode, not lasso mode
+              if (selectionMode === 'rectangle') {
+                selectionBox.forEach(plane => {
+                  plane.isVisible = true;
+                });
+              }
+            }
+          } else {
+            // 2D mode - selectionBox is a single element
+            selectionBox.isVisible = true;
+          }
+        }
+        
+        // console.log("🎯 Lasso: Drag started at distance", distance);
+      } else {
+        // Not enough movement yet - don't start selection
+        return;
+      }
+    }
     
     endPoint = { x, y };
     
-    // Check if we've moved enough to start dragging
+    // Check if we've moved enough to start dragging (for already-active selections)
     const dx = endPoint.x - startPoint.x;
     const dy = endPoint.y - startPoint.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
@@ -322,7 +351,27 @@
   
   // Handle left mouse button up
   lasso.handleLmbUp = function(x, y) {
-    if (!isSelecting) return;
+    // Always clean up isPotentialDrag on mouseup, even if selection never started
+    const hadPotentialDrag = isPotentialDrag;
+    
+    // If selection never started (no drag detected), just clean up silently
+    if (!isSelecting && !isPotentialDrag) {
+      // Nothing to clean up
+      return false;
+    }
+    
+    if (!isSelecting) {
+      // We had a mousedown but never started dragging - clean up completely
+      isPotentialDrag = false;
+      startPoint = { x: 0, y: 0 };
+      endPoint = { x: 0, y: 0 };
+      isDragActive = false;
+      lassoPath = [];
+      lassoWorldPath = [];
+      lastLassoPoint = null;
+      lastLassoDownTime = 0; // Reset timing
+      return false;
+    }
     
     endPoint = { x, y };
     
@@ -331,14 +380,17 @@
     const dy = endPoint.y - startPoint.y;
     const distance = Math.sqrt(dx * dx + dy * dy);
     
+    // Store whether this was a drag selection BEFORE cleanup (which resets isDragActive)
+    const wasDragSelection = distance > DRAG_THRESHOLD && isDragActive;
+    
     // console.log("🎯 Lasso: Mouse up analysis:", { 
     //   distance, 
     //   threshold: DRAG_THRESHOLD, 
     //   isDragActive, 
-    //   wasDrag: distance > DRAG_THRESHOLD && isDragActive 
+    //   wasDrag: wasDragSelection 
     // });
     
-    if (distance > DRAG_THRESHOLD && isDragActive) {
+    if (wasDragSelection) {
       // This was a drag - perform area selection
       
       // Force final lasso update to show complete path
@@ -349,14 +401,18 @@
       
       performAreaSelection();
       
-      // Delay cleanup to allow RMB events to detect recent lasso activity
-      setTimeout(() => {
-        cleanupSelection();
-      }, 100); // 100ms delay
+      // Clean up immediately so the rectangle/hud stops following the cursor
+      cleanupSelection();
+      
+      // Return true to indicate a drag selection was performed
+      return true;
     } else {
       // This was a click - don't handle it here, let UI system handle it
       // Clean up immediately for clicks
       cleanupSelection();
+      
+      // Return false to indicate this was just a click, not a drag selection
+      return false;
     }
   };
   
@@ -452,7 +508,7 @@
         lassoLineMaterial = new BABYLON.StandardMaterial("lassoMat", scene);
         lassoLineMaterial.emissiveColor = new BABYLON.Color3(0, 2, 2); // Maximum brightness cyan
         lassoLineMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1);
-        lassoLineMaterial.alpha = 0.5; // Semi-transparent
+        lassoLineMaterial.alpha = 1.0; // Opaque
         lassoLineMaterial.disableLighting = true;
         lassoLineMaterial.backFaceCulling = false; // Show both sides
       }
@@ -773,7 +829,9 @@
   // Clean up selection state
   function cleanupSelection() {
     isSelecting = false;
+    isPotentialDrag = false;
     isDragActive = false;
+    lastLassoDownTime = 0; // Reset timing
     
     // Clear lasso path
     lassoPath = [];
@@ -805,6 +863,10 @@
         });
       }
     }
+
+    // Reset RMB drag tracking to avoid sticky right-click state after lasso
+    rmbDownDuringDrag = false;
+    rmbPositionDuringDrag = { x: 0, y: 0 };
     
     // console.log("🎯 Lasso: Selection cleanup complete");
   }
@@ -822,6 +884,11 @@
   // Get current selection mode
   lasso.getMode = function() {
     return selectionMode;
+  };
+  
+  // Cancel/cleanup current selection (public method)
+  lasso.cleanupSelection = function() {
+    cleanupSelection();
   };
   
   // Simplify the drawn world-space path while preserving vertex order

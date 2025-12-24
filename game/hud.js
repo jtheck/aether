@@ -1727,7 +1727,7 @@
         // Make sphere visible with item color for debugging
         const sphereMat = new BABYLON.StandardMaterial(`sphereMat_${item.text}`, hud.scene);
         sphereMat.emissiveColor = item.color;
-        sphereMat.alpha = 0.5;
+        sphereMat.alpha = 1.0;
         clickSphere.material = sphereMat;
         
         // Position sphere at model's visual center (bounding box center)
@@ -1896,7 +1896,7 @@
     // Make sphere visible with item color for debugging
     const sphereMat = new BABYLON.StandardMaterial(`sphereMat_${item.text}`, hud.scene);
     sphereMat.emissiveColor = item.color;
-    sphereMat.alpha = 0.5;
+    sphereMat.alpha = 1.0;
     clickSphere.material = sphereMat;
     
     // Position sphere at cube center (cubes are centered at origin)
@@ -2778,12 +2778,20 @@
       if (window.gfx && window.gfx.setBillboardOnlyMode) {
         window.gfx.setBillboardOnlyMode(true);
       }
+      // Remove mountains/horizon entirely at LOD 0
+      if (window.gfx && window.gfx.removeMountains) {
+        window.gfx.removeMountains();
+      }
       console.log('🖼️ LOD 0%: Billboard-only mode enabled for low-end devices');
       return;
     } else {
       // Disable billboard-only mode when slider moves above 0
       if (window.gfx && window.gfx.setBillboardOnlyMode && window.gfx.isBillboardOnlyMode && window.gfx.isBillboardOnlyMode()) {
         window.gfx.setBillboardOnlyMode(false);
+      }
+      // If mountains were removed at LOD 0, recreate when moving above 0
+      if (window.gfx && window.gfx.recreateMountains && !window.gfx.mountains) {
+        window.gfx.recreateMountains();
       }
     }
     

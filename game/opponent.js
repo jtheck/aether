@@ -1397,7 +1397,7 @@
   function createGhostMaterial(unit) {
     const material = new BABYLON.StandardMaterial(`ghostMat_${unit.id}`, window.gfx.scene);
     material.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.8); // Blue tint
-    material.alpha = 0.8; // Slightly transparent
+    material.alpha = 1.0; // Opaque
     material.disableLighting = true; // Always visible
     return material;
   };

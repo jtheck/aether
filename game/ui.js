@@ -32,15 +32,22 @@ const defaultNames = [
 ];
 
 const playerColors = [
-  "#FF5252", "#FF793F", "#FFB142", "#FFDA79", "#FFFA65",
-  "#C4E538", "#A3CB38", "#78E08F", "#00C853", "#00B894",
-  "#00CEC9", "#05CDFF", "#0984E3", "#0652DD", "#1B1464",
-  "#4834D4", "#6C5CE7", "#B56FE1", "#D980FA", "#FD79A8",
-  "#FF3E6C", "#E84393", "#FDA7DF", "#FEAFA8", "#D63031",
-  "#B33939", "#82589F", "#5D2E8E", "#3C40C6", "#3742FA",
-  "#2E86DE", "#00A8FF", "#0097E6", "#44BBDC", "#00D8D6",
-  "#00BcC1", "#05C1A4", "#019D73", "#26DE81", "#A3DE83",
-  "#C5E3BF", "#FFFFFF"
+  "#FFFFFF", // White
+  "#FF0000", // Red
+  "#0000FF", // Blue
+  "#00FFFF", // Teal
+  "#800080", // Purple
+  "#FFFF00", // Yellow
+  "#FFA500", // Orange
+  "#008000", // Green
+  "#FFB6C1", // Light Pink
+  "#8A2BE2", // Violet
+  "#D3D3D3", // Light Grey
+  "#006400", // Dark Green
+  "#A52A2A", // Brown
+  "#00FF00", // Light Green
+  "#696969", // Dark Grey
+  "#FFC0CB"  // Pink
 ];
 
 function getRandomName() {
@@ -1700,6 +1707,12 @@ function getRandomColor() {
       }
       lastRightClickTime = currentTime;
       lastRightClickPosition = { x, y };
+      
+      // Cancel lasso selection if active when RMB pan starts (always cancel, even if just potential drag)
+      if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
+        window.lassoSelection.cleanupSelection();
+      }
+      
       rmbPanActive = true;
       rmbLastScreen.x = e.clientX;
       rmbLastScreen.y = e.clientY;
@@ -1758,17 +1771,22 @@ function getRandomColor() {
         }
       }
     } else if (e.type === 'pointerup' && e.button === 0) {
-      // Check if we need to suppress this pointerup (due to double-click)
-      if (suppressNextPointerUp) {
-        suppressNextPointerUp = false;
-        return; // Skip all pointerup processing
-      }
-      
-      // Handle LMB up for selection (skip during building placement or when 3D menu is visible)
+      // Handle LMB up for selection FIRST (even if double-click suppressed, we need to clean up lasso state)
       if (!(window.buildingSystem && window.buildingSystem.isPlacing) && !(window.hud && window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible())) {
         if (window.lassoSelection && window.lassoSelection.handleLmbUp) {
-          window.lassoSelection.handleLmbUp(x, y);
+          const wasDragSelection = window.lassoSelection.handleLmbUp(x, y);
+          // If a drag selection was just performed, suppress the terrain click to prevent move command
+          if (wasDragSelection) {
+            return; // Exit early to prevent move command from being issued
+          }
         }
+      }
+      
+      // Check if we need to suppress this pointerup (due to double-click)
+      // Do this AFTER lasso cleanup so state is properly reset
+      if (suppressNextPointerUp) {
+        suppressNextPointerUp = false;
+        return; // Skip remaining pointerup processing
       }
     }
     
@@ -1793,6 +1811,11 @@ function getRandomColor() {
         const worldPos = pickResult.hit ? pickResult.pickedPoint : null;
         if (window.ui && window.ui.triggerSpecialAbilityAt) {
           window.ui.triggerSpecialAbilityAt(worldPos);
+        }
+        
+        // Cancel any potential lasso drag from the first click
+        if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
+          window.lassoSelection.cleanupSelection();
         }
         
         // Reset double-click detection and suppress the upcoming pointerup event
@@ -2174,9 +2197,9 @@ function getRandomColor() {
   
     // Handle wheel events for camera rotation and zoom
   // Controls:
-  // - Normal scroll wheel: Rotate camera horizontally (left/right)
-  // - Right-click + scroll wheel: Zoom camera in/out
-  // - Shift + scroll wheel: Zoom camera in/out (alternative method)
+  // - Normal scroll wheel: Zoom camera in/out
+  // - Right-click + scroll wheel: Rotate camera horizontally (left/right)
+  // - Shift + scroll wheel: Rotate camera horizontally (left/right) (alternative method)
   ui.handleWheel = function(e) {
     // Check if mouse is over any scrollable menu (settings or lobbies)
     const mouseX = e.clientX;
@@ -2217,23 +2240,7 @@ function getRandomColor() {
     
     // Check if right mouse button OR shift key is held down
     if ((e.buttons && (e.buttons & 2) !== 0) || e.shiftKey) {
-      // Right-click + scroll wheel OR Shift + scroll wheel = Camera zoom
-      // Don't prevent default - let both zoom AND rotation happen!
-      
-      // Handle zoom manually
-      const zoomSpeed = 0.025; // Reduced from 0.085 to 0.025 (70% reduction)
-      const zoomAmount = INVERSEZOOM*delta * zoomSpeed;
-      
-      // Add zoom velocity instead of directly changing radius (momentum-based zoom)
-      if (gfx.camera.radius !== undefined) {
-        cameraVelocity.radius += zoomAmount;
-      }
-      
-      // Log for debugging (remove this in production)
-      const zoomMethod = e.shiftKey ? "Shift + Wheel" : "Right-click + Wheel";
-      // console.log(`${zoomMethod}: delta=${delta}, zoom amount=${zoomAmount.toFixed(4)}, radius=${gfx.camera.radius?.toFixed(4)}`);
-    } else {
-      // Normal scroll wheel = Camera rotation via momentum (no spring-back)
+      // Right-click + scroll wheel OR Shift + scroll wheel = Camera rotation via momentum (no spring-back)
       e.preventDefault();
       const rotationAmount = 0.0003; // Reduced from 0.001 to 0.0003 (70% reduction)
       const impulse = INVERSEROT * delta * rotationAmount;
@@ -2241,6 +2248,25 @@ function getRandomColor() {
       cameraVelocity.alpha += Math.max(-maxImpulse, Math.min(maxImpulse, impulse));
       // Keep beta fixed during wheel rotation
       cameraRotationTarget.beta = gfx.camera.beta;
+
+      // Log for debugging (remove this in production)
+      const rotateMethod = e.shiftKey ? "Shift + Wheel" : "Right-click + Wheel";
+      // console.log(`${rotateMethod}: delta=${delta}, rotation impulse=${impulse.toFixed(4)}, alpha=${gfx.camera.alpha?.toFixed(4)}`);
+    } else {
+      // Normal scroll wheel = Camera zoom
+      // Don't prevent default - let both zoom AND rotation happen!
+
+      // Handle zoom manually
+      const zoomSpeed = 0.025; // Reduced from 0.085 to 0.025 (70% reduction)
+      const zoomAmount = INVERSEZOOM*delta * zoomSpeed;
+
+      // Add zoom velocity instead of directly changing radius (momentum-based zoom)
+      if (gfx.camera.radius !== undefined) {
+        cameraVelocity.radius += zoomAmount;
+      }
+
+      // Log for debugging (remove this in production)
+      // console.log(`Normal Wheel: delta=${delta}, zoom amount=${zoomAmount.toFixed(4)}, radius=${gfx.camera.radius?.toFixed(4)}`);
     }
   };
   
@@ -2303,13 +2329,13 @@ function getRandomColor() {
     // Normalize radius between 0 and 1
     const normalizedRadius = (currentRadius - minRadius) / (maxRadius - minRadius);
     
-    // Beta range: 1.0 (looking down when zoomed in) to 1.3 (looking more toward ground when zoomed out)
-    const minBeta = 1.0;  // Looking down (zoomed in)
-    const maxBeta = 1.3;  // Looking more toward ground (zoomed out)
+    // Beta range: 1.2 (looking toward horizon when zoomed in) to 0.7 (looking down when zoomed out)
+    const minBeta = 1.2;  // Looking toward horizon (zoomed in)
+    const maxBeta = 0.7;  // Looking down (zoomed out)
     
     // Calculate target beta based on zoom and apply directly with smooth lerp
     const targetBeta = minBeta + (normalizedRadius * (maxBeta - minBeta));
-    gfx.camera.beta = BABYLON.Scalar.Lerp(gfx.camera.beta, targetBeta, 0.08);
+    gfx.camera.beta = BABYLON.Scalar.Lerp(gfx.camera.beta, targetBeta, 0.15);
     
     // Apply momentum (keep some of the previous velocity) - alpha and radius only
     cameraVelocity.alpha *= cameraMomentum;
@@ -2380,8 +2406,12 @@ function getRandomColor() {
       gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit, Math.min(gfx.camera.upperRadiusLimit, gfx.camera.radius));
     }
     
-    // Clamp beta to prevent camera flipping (beta is now handled directly above)
-    gfx.camera.beta = Math.max(0.1, Math.min(1.5, gfx.camera.beta));
+    // Clamp beta to camera limits to prevent flipping
+    if (typeof gfx.camera.lowerBetaLimit === 'number' && typeof gfx.camera.upperBetaLimit === 'number') {
+      gfx.camera.beta = Math.max(gfx.camera.lowerBetaLimit, Math.min(gfx.camera.upperBetaLimit, gfx.camera.beta));
+    } else {
+      gfx.camera.beta = Math.max(0.1, Math.min(1.5, gfx.camera.beta));
+    }
     
     // Camera movement target system removed - now using velocity-based panning
     
@@ -2552,30 +2582,18 @@ function getRandomColor() {
     const markerMaterial = new BABYLON.StandardMaterial("targetMarkerMat", window.gfx.scene);
     markerMaterial.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red color
     markerMaterial.emissiveColor = new BABYLON.Color3(0.5, 0, 0); // Glowing red
-    markerMaterial.alpha = 0.8; // Semi-transparent
+    markerMaterial.alpha = 1.0; // Opaque
     
     targetRing.material = markerMaterial;
     targetRing.isPickable = false; // Don't interfere with clicking
     
     // Animate the marker (pulse and fade)
-    let alpha = 0.8;
+    let alpha = 1.0;
     let growing = false;
     
     const animateMarker = () => {
-      if (growing) {
-        alpha += 0.02;
-        if (alpha >= 0.8) {
-          alpha = 0.8;
-          growing = false;
-        }
-      } else {
-        alpha -= 0.02;
-        if (alpha <= 0.2) {
-          alpha = 0.2;
-          growing = true;
-        }
-      }
-      
+      // Keep fully opaque for performance (no alpha pulsing)
+      alpha = 1.0;
       markerMaterial.alpha = alpha;
       
       // Continue animation

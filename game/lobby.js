@@ -637,6 +637,8 @@ const Lobby = {
   init: function() {
     // console.log('🏛️ Lobby system initialized');
     
+    // Load house maps
+    this.loadHouseMaps();
     
     // Add click handlers for other lobby types
     this.setupLobbyButtons();
@@ -1825,19 +1827,20 @@ const Lobby = {
           }
         </div>
         <div class="lobby_setting" style="margin-top: 8px;">
-          <label>Custom Map:</label>
+          <label>Map:</label>
           ${this.isHost ? `
             ${lobby.settings.customMapData ? `
               <span style="color: #8f8; margin-right: 8px;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>
               <button onclick="window.Lobby.clearCustomMap()" style="font-size: 11px; padding: 2px 8px;">✕ Clear</button>
             ` : `
+              <button onclick="window.Lobby.showMapBrowser()" style="font-size: 12px; padding: 4px 10px;">🗺️ Browse Maps</button>
               <input type="file" id="customMapInput" accept=".garden,.json" style="display:none" onchange="window.Lobby.handleCustomMapUpload(this.files[0])">
-              <button onclick="document.getElementById('customMapInput').click()" style="font-size: 12px; padding: 4px 10px;">📂 Load .garden</button>
+              <button onclick="document.getElementById('customMapInput').click()" style="font-size: 12px; padding: 4px 10px; margin-left: 4px;">📂 Load File</button>
             `}
           ` : `
             ${lobby.settings.customMapData ? 
               `<span style="color: #8f8;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>` : 
-              `<span style="opacity: 0.6;">None</span>`
+              `<span style="opacity: 0.6;">Random</span>`
             }
           `}
         </div>
@@ -2154,6 +2157,156 @@ const Lobby = {
     this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
   },
   
+  // House maps list (loaded from maps/index.json)
+  houseMaps: [],
+  
+  // Load house maps from server
+  loadHouseMaps: async function() {
+    try {
+      const response = await fetch('maps/index.json');
+      const data = await response.json();
+      this.houseMaps = data.maps || [];
+      console.log(`🗺️ Loaded ${this.houseMaps.length} house maps`);
+    } catch (e) {
+      console.log('📁 No house maps found (maps/index.json)');
+      this.houseMaps = [];
+    }
+  },
+  
+  // Show map browser modal
+  showMapBrowser: function() {
+    // Remove existing browser if any
+    const existing = document.getElementById('mapBrowserModal');
+    if (existing) existing.remove();
+    
+    const modal = document.createElement('div');
+    modal.id = 'mapBrowserModal';
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.85); z-index: 10000;
+      display: flex; align-items: center; justify-content: center;
+    `;
+    
+    let mapsHtml = '';
+    
+    // Random map option
+    mapsHtml += `
+      <div class="map-card" onclick="window.Lobby.selectMap(null)" style="
+        width: 120px; padding: 10px; margin: 8px; background: #2a2a3e; border-radius: 8px;
+        cursor: pointer; text-align: center; border: 2px solid #444;
+      ">
+        <div style="width: 100px; height: 100px; margin: 0 auto 8px; background: linear-gradient(135deg, #4a7c59, #2d4a6f, #8b7355);
+          border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 32px;">
+          🎲
+        </div>
+        <div style="color: #fff; font-size: 12px;">Random</div>
+      </div>
+    `;
+    
+    // House maps
+    this.houseMaps.forEach((map, i) => {
+      const thumb = map.thumbnail ? `data:image/bmp;base64,${map.thumbnail}` : '';
+      mapsHtml += `
+        <div class="map-card" onclick="window.Lobby.selectHouseMap(${i})" style="
+          width: 140px; padding: 10px; margin: 8px; background: #2a2a3e; border-radius: 8px;
+          cursor: pointer; text-align: center; border: 2px solid #444; transition: border-color 0.2s;
+        " onmouseover="this.style.borderColor='#6a6'" onmouseout="this.style.borderColor='#444'">
+          <div style="width: 100px; height: 100px; margin: 0 auto 8px; background: #1a1a2e;
+            border-radius: 4px; overflow: hidden;">
+            ${thumb ? `<img src="${thumb}" style="width: 100%; height: 100%; object-fit: cover; image-rendering: pixelated;">` : 
+              `<div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #666;">🗺️</div>`}
+          </div>
+          <div style="color: #fff; font-size: 12px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+            ${map.name || `Map ${i + 1}`}
+          </div>
+          ${map.author ? `<div style="color: #8af; font-size: 9px;">by ${map.author}</div>` : ''}
+          <div style="color: #888; font-size: 10px;">${map.width || '?'}x${map.height || '?'} · ${map.players || '?'} players</div>
+          ${map.description ? `<div style="color: #aaa; font-size: 9px; margin-top: 4px; line-height: 1.2; max-height: 28px; overflow: hidden;">${map.description}</div>` : ''}
+        </div>
+      `;
+    });
+    
+    if (this.houseMaps.length === 0) {
+      mapsHtml += `
+        <div style="color: #888; padding: 20px; text-align: center; width: 100%;">
+          No house maps yet.<br>
+          Create maps in Forge and save them to the maps/ folder!
+        </div>
+      `;
+    }
+    
+    modal.innerHTML = `
+      <div style="background: #1a1a2e; padding: 24px; border-radius: 12px; max-width: 600px; max-height: 80vh; overflow-y: auto;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+          <h2 style="margin: 0; color: #fff;">🗺️ Select Map</h2>
+          <button onclick="document.getElementById('mapBrowserModal').remove()" 
+            style="background: none; border: none; color: #888; font-size: 24px; cursor: pointer;">✕</button>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; justify-content: center;">
+          ${mapsHtml}
+        </div>
+        <div style="text-align: center; margin-top: 16px; padding-top: 16px; border-top: 1px solid #333;">
+          <button onclick="document.getElementById('customMapInput').click(); document.getElementById('mapBrowserModal').remove();"
+            style="padding: 8px 16px; font-size: 14px; cursor: pointer;">
+            📂 Load from File...
+          </button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(modal);
+  },
+  
+  // Select random map (clear custom)
+  selectMap: function(mapData) {
+    document.getElementById('mapBrowserModal')?.remove();
+    
+    if (!mapData) {
+      this.clearCustomMap();
+      return;
+    }
+  },
+  
+  // Select a house map by index
+  selectHouseMap: async function(index) {
+    document.getElementById('mapBrowserModal')?.remove();
+    
+    const mapInfo = this.houseMaps[index];
+    if (!mapInfo || !mapInfo.file) {
+      console.error('Invalid map selection');
+      return;
+    }
+    
+    try {
+      const response = await fetch(`maps/${mapInfo.file}`);
+      const content = await response.text();
+      const mapData = JSON.parse(content);
+      
+      // Apply to lobby
+      this.currentLobby.settings.customMapData = mapData;
+      this.currentLobby.settings.customMapName = mapInfo.name || mapInfo.file;
+      
+      // Override field size
+      const mapWidth = mapData.w || mapData.width;
+      if (mapWidth <= 32) this.currentLobby.settings.fieldSize = 'tiny';
+      else if (mapWidth <= 64) this.currentLobby.settings.fieldSize = 'small';
+      else if (mapWidth <= 128) this.currentLobby.settings.fieldSize = 'medium';
+      else if (mapWidth <= 256) this.currentLobby.settings.fieldSize = 'large';
+      else this.currentLobby.settings.fieldSize = 'huge';
+      
+      if (mapData.s || mapData.seed) {
+        this.currentLobby.settings.seed = mapData.s || mapData.seed;
+      }
+      
+      this.announceLobby(this.currentLobby);
+      this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
+      
+      console.log(`🗺️ Selected house map: ${mapInfo.name}`);
+    } catch (e) {
+      console.error('Failed to load house map:', e);
+    }
+  },
+  
   // Handle custom map file upload
   handleCustomMapUpload: function(file) {
     if (!file || !this.isHost) return;
@@ -2320,6 +2473,12 @@ const Lobby = {
       field.blockedTiles.clear();
       field.slowTiles.clear();
       field.updateBlockedTiles();
+    }
+    
+    // Apply time of day if specified
+    if (mapData.tod !== undefined && window.lighting && window.lighting.setSunTime) {
+      window.lighting.setSunTime(mapData.tod);
+      console.log(`🌅 Applied map time of day: ${mapData.tod}`);
     }
     
     console.log(`✅ Custom map applied (${width}x${height})${hasCustomShape ? ' with custom table shape' : ''}`);

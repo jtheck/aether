@@ -1058,7 +1058,7 @@ function updateCapturePointVisuals(agora) {
     const baseMat = new BABYLON.StandardMaterial('captureBaseMat', window.gfx.scene);
     baseMat.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.3); // Gray by default
     baseMat.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
-    baseMat.alpha = 0.15; // Very subtle (was 0.6)
+    baseMat.alpha = 1.0; // Opaque
     baseDisc.material = baseMat;
     baseDisc.isVisible = false; // Hidden for mobile performance (translucent meshes are expensive)
     
@@ -1079,7 +1079,7 @@ function updateCapturePointVisuals(agora) {
     const progressMat = new BABYLON.StandardMaterial('captureProgressMat', window.gfx.scene);
     progressMat.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red by default
     progressMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
-    progressMat.alpha = 0.8;
+    progressMat.alpha = 1.0;
     progressDisc.material = progressMat;
     
     agora.captureVisuals.progressDisc = progressDisc;
@@ -1413,7 +1413,7 @@ function updateBuildings(deltaTime) {
         const material = new BABYLON.StandardMaterial(`constructionIndicatorMat_${building.id}`, window.gfx.scene);
         material.diffuseColor = new BABYLON.Color3(0.67, 0, 1); // Purple (#aa00ff)
         material.emissiveColor = new BABYLON.Color3(0.33, 0, 0.5);
-        material.alpha = 0.8;
+        material.alpha = 1.0;
         building.constructionIndicator.material = material;
       }
       
@@ -1730,7 +1730,7 @@ const buildingSystem = {
       const previewMaterial = new BABYLON.StandardMaterial('previewMaterial', window.gfx.scene);
       previewMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0);
       previewMaterial.emissiveColor = new BABYLON.Color3(0, 0.3, 0);
-      previewMaterial.alpha = 0.6;
+      previewMaterial.alpha = 1.0;
       
       // Keep child meshes' original rotations but update materials
       this.previewMesh.getChildMeshes().forEach(mesh => {
@@ -1834,7 +1834,7 @@ const buildingSystem = {
     const radiusMaterial = new BABYLON.StandardMaterial("radiusMaterial", window.gfx.scene);
     radiusMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.8, 0.2); // Green
     radiusMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.3, 0.1);
-    radiusMaterial.alpha = 0.2; // More transparent
+    radiusMaterial.alpha = 1.0; // Opaque
     radiusMaterial.backFaceCulling = false; // Show from both sides
     
     circle.material = radiusMaterial;
@@ -2009,31 +2009,27 @@ const buildingSystem = {
     let color, emissiveColor, alpha;
     
     if (resourceCount === 0) {
-      // No resources - red and weak
+      // No resources - red
       color = new BABYLON.Color3(0.8, 0.2, 0.2); // Red
       emissiveColor = new BABYLON.Color3(0.2, 0.05, 0.05);
-      alpha = 0.1; // Very weak
     } else if (resourceCount < 4) {
-      // Good resources - light green and strong
+      // Good resources - light green
       color = new BABYLON.Color3(0.2, 0.6, 0.2); // Light green
       emissiveColor = new BABYLON.Color3(0.05, 0.15, 0.05);
-      alpha = 0.3; // Strong
     } else if (resourceCount < 7) {
-      // Many resources - bright green and very strong
+      // Many resources - bright green
       color = new BABYLON.Color3(0.2, 0.6, 0.2); // Light green
       emissiveColor = new BABYLON.Color3(0.05, 0.3, 0.05);
-      alpha = 0.4; // Very strong
     } else if (resourceCount < 10) {
-      // Many resources - bright green and very strong
+      // Many resources - bright green
       color = new BABYLON.Color3(0.1, 0.8, 0.1); // Bright green
       emissiveColor = new BABYLON.Color3(0.05, 0.3, 0.05);
-      alpha = 0.5; // Very strong
     } else {
-      // Many resources - bright green and very strong
+      // Many resources - bright green
       color = new BABYLON.Color3(0.1, 0.8, 0.1); // Bright green
       emissiveColor = new BABYLON.Color3(0.05, 0.3, 0.05);
-      alpha = 0.6; // Very strong
     }
+    alpha = 1.0; // Opaque for performance
     
     // Update the circle material
     if (this.radiusVisualization.material) {
@@ -2063,6 +2059,22 @@ const buildingSystem = {
   // This ensures deterministic resource detection for new camps regardless of depletion state
   checkTileForResources: function(gridX, gridZ, ignoreDepletion = false) {
     if (!window.liveField) return null;
+    
+    // CRITICAL: Validate bounds first - resources can only exist on valid tiles
+    // This prevents resources from being detected outside the map boundaries
+    if (gridX < 0 || gridX >= window.liveField.width || 
+        gridZ < 0 || gridZ >= window.liveField.height) {
+      return null;
+    }
+    
+    // CRITICAL: Also check chunk mask if available (for custom map shapes)
+    if (window.liveField.chunkMask && window.liveField.chunkSize) {
+      const chunkX = Math.floor(gridX / window.liveField.chunkSize);
+      const chunkZ = Math.floor(gridZ / window.liveField.chunkSize);
+      if (window.liveField.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+        return null; // Tile is in a disabled chunk (off the table)
+      }
+    }
     
     const fieldSeed = window.liveField.seed;
     const terrainIndex = gridZ * window.liveField.width + gridX;
@@ -2363,8 +2375,27 @@ const buildingSystem = {
         const detectedResources = [];
         const gridRadius = Math.ceil(radiusInTiles / TILE_SIZE);
         
+        // Get field boundaries for validation
+        const field = window.liveField;
+        const fieldWidth = field?.width || 0;
+        const fieldHeight = field?.height || 0;
+        
         for (let x = gridX - gridRadius; x <= gridX + gridRadius; x++) {
           for (let z = gridZ - gridRadius; z <= gridZ + gridRadius; z++) {
+            // CRITICAL: Skip coordinates outside map boundaries - resources can only exist on valid tiles
+            if (x < 0 || x >= fieldWidth || z < 0 || z >= fieldHeight) {
+              continue;
+            }
+            
+            // CRITICAL: Also check chunk mask if available (for custom map shapes)
+            if (field && field.chunkMask && field.chunkSize) {
+              const chunkX = Math.floor(x / field.chunkSize);
+              const chunkZ = Math.floor(z / field.chunkSize);
+              if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+                continue; // Skip tiles in disabled chunks (off the table)
+              }
+            }
+            
             const worldX = x * TILE_SIZE;
             const worldZ = z * TILE_SIZE;
             const campWorldX = gridX * TILE_SIZE;

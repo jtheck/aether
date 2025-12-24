@@ -887,45 +887,12 @@
       window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance)); // Clamp between 2-8
     }
     
-    // Update shadow quality based on LOD level
-    if (gfx.shadowGenerator) {
-      // Store original shadow map size if not already stored
-      if (!gfx.originalShadowMapSize) {
-        gfx.originalShadowMapSize = 1024; // Default shadow map size
-      }
-      
-      // Calculate new shadow map size based on LOD level
-      let newShadowMapSize;
-      if (multiplier < 0.5) {
-        newShadowMapSize = 512; // Low LOD = lower quality shadows
-      } else if (multiplier < 0.8) {
-        newShadowMapSize = 1024; // Medium LOD = medium quality shadows
-      } else {
-        newShadowMapSize = 2048; // High LOD = high quality shadows
-      }
-      
-      // Only update if shadow map size changed
-      if (gfx.shadowGenerator.getShadowMap().getSize().width !== newShadowMapSize) {
-        gfx.shadowGenerator.dispose();
-        if (window.lighting && window.lighting.lights && window.lighting.lights.sun) {
-          gfx.shadowGenerator = new BABYLON.ShadowGenerator(newShadowMapSize, window.lighting.lights.sun);
-          gfx.shadowGenerator.useBlurExponentialShadowMap = false;
-          gfx.shadowGenerator.usePoissonSampling = true; // Enable Poisson sampling for visible shadows
-          gfx.shadowGenerator.darkness = 0.8;
-          gfx.shadowGenerator.setTransparencyShadow(false);
-          gfx.shadowGenerator.bias = 0.00001;
-          gfx.shadowGenerator.normalBias = 0.02;
-          gfx.shadowGenerator.depthScale = 50;
-          gfx.shadowGenerator.minDistance = 0.1;
-          gfx.shadowGenerator.maxDistance = 1500 * multiplier; // Scale shadow distance (increased by 50%)
-          
-          // Re-add all meshes to shadow generator
-          if (gfx.updateAllMeshShadows) {
-            gfx.updateAllMeshShadows();
-          }
-          
-          // console.log(`🎚️ Shadow quality updated: ${newShadowMapSize}x${newShadowMapSize} map, max distance: ${1000 * multiplier}`);
-        }
+    // Update shadow quality based on LOD level - use centralized reconfigure
+    // Convert multiplier to LOD percentage (0-100) for the centralized function
+    if (gfx.shadowGenerator && window.SHADOWS_ENABLED) {
+      const lodLevel = Math.round(multiplier * 100);
+      if (gfx.reconfigureShadowGenerator) {
+        gfx.reconfigureShadowGenerator(lodLevel);
       }
     }
     
@@ -1225,6 +1192,15 @@ let pov2 = 240;
       return null;
     }
     
+    // CRITICAL: Check chunk mask for custom map shapes - don't respawn trees in disabled chunks (off the table)
+    if (field.chunkMask && field.chunkSize) {
+      const chunkX = Math.floor(newGridX / field.chunkSize);
+      const chunkZ = Math.floor(newGridZ / field.chunkSize);
+      if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+        return null; // Respawn position is in a disabled chunk (off the table)
+      }
+    }
+    
     return { gridX: newGridX, gridZ: newGridZ, worldX: newWorldX, worldZ: newWorldZ };
   }
   
@@ -1511,6 +1487,15 @@ let pov2 = 240;
         return; // Skip tiles outside field bounds
       }
       
+      // CRITICAL: Check chunk mask for custom map shapes - don't place resources in disabled chunks (off the table)
+      if (field.chunkMask && field.chunkSize) {
+        const chunkX = Math.floor(gridX / field.chunkSize);
+        const chunkZ = Math.floor(gridZ / field.chunkSize);
+        if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+          return; // Skip tiles in disabled chunks (off the table)
+        }
+      }
+      
       const terrainIndex = gridZ * field.width + gridX;
       const terrainType = field.terrainTypes[terrainIndex];
       
@@ -1637,6 +1622,15 @@ let pov2 = 240;
       // Bounds check: ensure grid coordinates are within field boundaries
       if (gridX < 0 || gridX >= field.width || gridZ < 0 || gridZ >= field.height) {
         return; // Skip tiles outside field bounds
+      }
+      
+      // CRITICAL: Check chunk mask for custom map shapes - don't place resources in disabled chunks (off the table)
+      if (field.chunkMask && field.chunkSize) {
+        const chunkX = Math.floor(gridX / field.chunkSize);
+        const chunkZ = Math.floor(gridZ / field.chunkSize);
+        if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+          return; // Skip tiles in disabled chunks (off the table)
+        }
       }
       
       const terrainIndex = gridZ * field.width + gridX;
@@ -2474,7 +2468,11 @@ let pov2 = 240;
       if (!Number.isFinite(gfx.camera.alpha)) gfx.camera.alpha = 0;
       if (!Number.isFinite(gfx.camera.beta)) gfx.camera.beta = 1.1;
       if (!Number.isFinite(gfx.camera.radius)) gfx.camera.radius = 80;
-      gfx.camera.beta = Math.max(0.2, Math.min(1.5, gfx.camera.beta));
+      if (typeof gfx.camera.lowerBetaLimit === 'number' && typeof gfx.camera.upperBetaLimit === 'number') {
+        gfx.camera.beta = Math.max(gfx.camera.lowerBetaLimit, Math.min(gfx.camera.upperBetaLimit, gfx.camera.beta));
+      } else {
+        gfx.camera.beta = Math.max(0.2, Math.min(1.5, gfx.camera.beta));
+      }
       if (typeof gfx.camera.lowerRadiusLimit === 'number' && typeof gfx.camera.upperRadiusLimit === 'number') {
         gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit, Math.min(gfx.camera.upperRadiusLimit, gfx.camera.radius));
       }
@@ -2704,7 +2702,7 @@ let pov2 = 240;
 
       // Set dynamic zoom limits relative to field size
       gfx.camera.lowerRadiusLimit = Math.max(35, minDim * 0.25);  // Increased minimum to keep camera further from ground
-      gfx.camera.upperRadiusLimit = Math.max(300, maxDim * 3.0); // Increased maximum for better horizon view
+      gfx.camera.upperRadiusLimit = Math.max(150, maxDim * 1.5); // Reduced maximum to keep camera closer to ground
 
       // Clamp current radius into new limits
       if (typeof gfx.camera.radius === 'number') {
@@ -2957,12 +2955,20 @@ let pov2 = 240;
         orbitHeight: 90,   // Moderate height - keeps shadows defined without being too low
         orbitTilt: 0.3     // Balanced tilt for a clear lateral angle
       });
-      // Generate random sun position in solid daytime range
-      const minTime = 0.4;   // Mid-morning
-      const maxTime = 0.6;   // Mid-afternoon
-      
-      // Use dramatic sun angle for better shadows
-      lighting.setDramaticSunAngle();
+      // Pick an initial sun time:
+      // 1) use saved preference if present
+      // 2) otherwise pick a deterministic daytime value from the field seed
+      const savedSunTime = localStorage.getItem('sunTime');
+      let initialSunTime;
+      if (savedSunTime !== null && !isNaN(parseFloat(savedSunTime))) {
+        initialSunTime = Math.max(0, Math.min(1, parseFloat(savedSunTime)));
+      } else {
+        const seed = (window.liveField && window.liveField.seed) ? window.liveField.seed : Math.random() * 1000;
+        // Map seed to a stable daytime window [0.42, 0.62]
+        initialSunTime = 0.42 + ((seed * 0.137) % 0.20);
+      }
+      // Apply chosen sun time (avoids the repeated peach dawn/dusk look)
+      lighting.setSunTime(initialSunTime);
       
       // Ensure lighting is enabled (safety check)
       if (lighting.restoreLighting) {
@@ -3033,14 +3039,15 @@ let pov2 = 240;
     stabilityThreshold: 16.67 // Kept for backwards compatibility (no longer used)
   };
   
-  // Shadow LoD configuration - increased by 50% for better visibility
+  // Shadow LoD configuration - creates buffer zone between shadows and billboards
+  // Zone layout: [0-100] 3D+shadows → [100-170] 3D no shadows → [170+] billboards
   gfx.shadowLODConfig = {
     enabled: true,
-    maxShadowDistance: 500, // Maximum distance for shadow casting (increased for better visibility)
-    nearShadowDistance: 200, // Distance for high quality shadows
-    farShadowDistance: 400, // Distance for low quality shadows
-    cullingDistance: 600, // Distance beyond which no shadows are cast
-    updateInterval: 100 // Update shadow casters every 100ms
+    maxShadowDistance: 100, // Shadows stop well before billboard transition (~170)
+    nearShadowDistance: 50, // Close range for full quality shadows
+    farShadowDistance: 80, // Medium range shadows
+    cullingDistance: 120, // Stop shadow calculations here
+    updateInterval: 250 // Update shadow casters every 250ms
   };
   
   // Shadow LoD tracking
@@ -3072,7 +3079,7 @@ let pov2 = 240;
 
           gfx.shadowGenerator = new BABYLON.ShadowGenerator(initialShadowRes, sunLight);
           // Apply centralized quality settings so visuals match reconfigureShadowGenerator
-          gfx.configureShadowGeneratorSettings(gfx.shadowGenerator);
+          gfx.configureShadowGeneratorSettings(gfx.shadowGenerator, initialLOD);
           
           // Initialize lastLODLevel to prevent unnecessary reconfiguration when settings menu opens
           gfx.lastLODLevel = initialLOD;
@@ -3242,57 +3249,72 @@ let pov2 = 240;
     // Add this after the initializeShadowGenerator function (around line 1424)
     
     // Dynamic shadow resolution based on LOD level
+    // Minimum 1024 to avoid PCF striping artifacts
     gfx.getShadowResolutionForLOD = function(lodLevel = 100) {
       if (lodLevel <= 30) {
-        return 512;  // Low-end profile: minimal GPU usage
+        return 1024;  // Low-end: minimum usable with PCF
       } else if (lodLevel <= 70) {
-        return 1024; // Medium: default balance
+        return 1024; // Medium: balanced
       } else {
-        return 2048; // High-end: sharper shadows (refined)
+        return 2048; // High-end: sharper shadows
       }
     };
 
     // Centralized shadow generator quality settings so init/reconfigure stay in sync
-    gfx.configureShadowGeneratorSettings = function(generator) {
+    gfx.configureShadowGeneratorSettings = function(generator, lodLevel = 100) {
       if (!generator) return;
       
-      // Core filtering/quality
-      generator.useBlurExponentialShadowMap = false; // No heavy blur
-      generator.usePoissonSampling = true;           // Stable, dithered soft edges
-      generator.usePercentageCloserFiltering = false;
-      generator.filter = BABYLON.ShadowGenerator.FILTER_POISSON;
+      // Use basic PCF for reliable, visible shadows
+      generator.usePercentageCloserFiltering = true;
+      generator.filteringQuality = BABYLON.ShadowGenerator.QUALITY_HIGH;
       
-      // Visual look:
-      // - Strong darkness so silhouettes are crisp and clearly separated from the ground
-      // - Very low normalBias to keep shadows "attached" at the base of tall objects
-      generator.darkness = 0.65;                    // More visible shadows (lower = darker shadows)
-      generator.bias = 0.00005;                     // Base bias to reduce acne
-      generator.normalBias = 0.002;                 // Very low so tree/rock shadows hug the ground
-      generator.depthScale = 50;                    // Smooth depth transitions
+      // Disable other shadow modes
+      generator.useExponentialShadowMap = false;
+      generator.useBlurExponentialShadowMap = false;
+      generator.useCloseExponentialShadowMap = false;
+      generator.usePoissonSampling = false;
       
-      // Coverage: wide enough for the whole playfield
-      generator.minDistance = 0.1;
-      generator.maxDistance = 1500;
+      // darkness: 0 = black shadows, 1 = invisible shadows  
+      generator.darkness = 0;                       // Full black shadows for maximum visibility
+      generator.bias = 0.005;                       // Moderate bias to prevent acne
+      generator.normalBias = 0.02;                  // Normal bias for angled surfaces
       
-      // CRITICAL: Enable automatic depth bounds calculation
-      // This ensures shadows render at the correct distance from the light
-      generator.autoCalcDepthBounds = true;
-      generator.autoCalcDepthBoundsRefreshRate = 1; // Recalculate every frame for dynamic scenes
+      // CRITICAL: Set up the shadow camera frustum for directional light
+      const light = generator.getLight();
+      if (light && light.getClassName() === "DirectionalLight") {
+        // Disable auto-extend - use fixed frustum instead
+        light.autoUpdateExtends = false;
+        light.autoCalcShadowZBounds = false;
+        
+        // Scale frustum size with LOD to maintain shadow quality
+        // Shadows are culled at ~100-120 distance, so frustum doesn't need to be huge
+        // Smaller frustum = higher shadow resolution in the covered area
+        let frustumSize;
+        if (lodLevel <= 30) {
+          frustumSize = 60;  // 120x120 area at low LOD
+        } else if (lodLevel <= 70) {
+          frustumSize = 80;  // 160x160 area at medium LOD
+        } else {
+          frustumSize = 110; // 220x220 area at high LOD (covers shadow culling distance)
+        }
+        
+        light.orthoLeft = -frustumSize;
+        light.orthoRight = frustumSize;
+        light.orthoTop = frustumSize;
+        light.orthoBottom = -frustumSize;
+        
+        // Set Z bounds for shadow depth
+        light.shadowMinZ = 0;
+        light.shadowMaxZ = 400;
+      }
       
-      // Additional quality settings
-      generator.forceBackFacesOnly = true; // Render only back faces in shadow map (reduces artifacts)
+      // Don't render back faces only - some models need front face shadows
+      generator.forceBackFacesOnly = false;
       
-      // CRITICAL: Set orthographic shadow camera size to cover the battlefield
-      // This defines the width/height of the area that can cast shadows
-      // Make it large enough to cover a good portion of the visible battlefield
-      // The shadow camera now follows the player, so this is the "shadow window" around them
-      const shadowCoverage = 200; // 400x400 unit area around the camera
-      generator.orthoLeft = -shadowCoverage;
-      generator.orthoRight = shadowCoverage;
-      generator.orthoTop = shadowCoverage;
-      generator.orthoBottom = -shadowCoverage;
+      // Fade shadows at the edge of the frustum to prevent hard cutoffs/streaks
+      generator.frustumEdgeFalloff = 1.0;
       
-      // Keep transparency casting off for performance
+      // No transparency shadows for performance
       generator.setTransparencyShadow(false);
     };
     
@@ -3341,14 +3363,16 @@ let pov2 = 240;
         
         // Create new one with updated res and consistent quality settings
         gfx.shadowGenerator = new BABYLON.ShadowGenerator(newRes, window.lighting.lights.sun);
-        gfx.configureShadowGeneratorSettings(gfx.shadowGenerator);
+        gfx.configureShadowGeneratorSettings(gfx.shadowGenerator, lodLevel);
         
         // Re-add all current shadow casters with force
         gfx.updateAllMeshShadows(true); // true = force re-add
         
         gfx.lastLODLevel = lodLevel;
         
-        console.log(`🎭 Shadows reconfigured for LOD ${lodLevel}: ${newRes}x${newRes} resolution`);
+        // Calculate frustum size for logging
+        const frustumSize = lodLevel <= 30 ? 60 : (lodLevel <= 70 ? 80 : 110);
+        console.log(`🎭 Shadows reconfigured for LOD ${lodLevel}: ${newRes}x${newRes} resolution, ${frustumSize*2}x${frustumSize*2} coverage`);
         
         // Low-end profile tip tracking (silent)
         if (lodLevel <= 30 && !gfx.lastLowEndTip) {
@@ -3393,27 +3417,35 @@ let pov2 = 240;
       
       gfx.scene.meshes.forEach(mesh => {
         // Skip UI elements and background meshes
-        const isUIMesh = mesh.name.includes('table') || 
+        // For table: skip floor/underside parts, but allow edges/sides/corners to receive shadows
+        const isTableFloor = mesh.name === 'FLOOR' || mesh.name.includes('floor_') || mesh.name.includes('tableFloor');
+        // Table sides (N,E,S,W), corners (SW,SE,NE,NW), and tops (NT,ET,ST,WT) should receive shadows
+        const isTableSideOrCorner = 
+          (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
+          (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
+          mesh.name.includes('edge_') || mesh.name.includes('corner_');
+        const isUIMesh = isTableFloor ||
+                        (mesh.name.includes('table') && !isTableSideOrCorner) ||
                         mesh.name.includes('UI') ||
                         mesh.name.includes('radial') ||
                         mesh.name.includes('HUD') ||
                         mesh.name.includes('hud') ||
                         mesh.name.includes('minimap') ||
                         mesh.name.includes('mountain') || // Skip mountains!
-                        // Single letter directional indicators (N, E, S, W)
-                        (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
-                        // Two letter directional indicators (SW, SE, NE, NW, etc.)
-                        (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
+                        mesh.name.includes('Mountain') || // Skip mountains!
+                        mesh.name.includes('horizon') || // Skip horizon!
+                        mesh.name.includes('vista') || // Skip vista elements!
                         // Check if mesh is a child of a UI parent
+                        // Skip children of background/UI elements (but not table children since sides should receive shadows)
                         (mesh.parent && mesh.parent.name && (
-                          mesh.parent.name.includes('table') ||
                           mesh.parent.name.includes('radial') ||
                           mesh.parent.name.includes('Radial') ||
                           mesh.parent.name.includes('HUD') ||
                           mesh.parent.name.includes('hud') ||
                           mesh.parent.name.includes('minimap') ||
                           mesh.parent.name.includes('Minimap') ||
-                          mesh.parent.name.includes('mountain') // Skip mountain children
+                          mesh.parent.name.includes('mountain') || // Skip mountain children
+                          mesh.parent.name.includes('horizon') // Skip horizon children
                         ));
         if (isUIMesh) return;
         
@@ -3422,9 +3454,11 @@ let pov2 = 240;
         if (window.SHADOWS_ENABLED) receiveShadowCount++;
         
         // Only non-terrain meshes should cast shadows
+        // Also skip __root__ nodes which are empty containers from glTF imports
         const isTerrainMesh = mesh.name.includes('terrainMesh') || mesh.name.includes('Mesh');
+        const isRootNode = mesh.name.includes('__root__');
         
-        if (window.SHADOWS_ENABLED && !isTerrainMesh && gfx.shadowGenerator) {
+        if (window.SHADOWS_ENABLED && !isTerrainMesh && !isRootNode && gfx.shadowGenerator) {
           if (forceReadd) {
             // Force re-add: remove first, then add to ensure it's in the new generator
             gfx.shadowGenerator.removeShadowCaster(mesh);
@@ -3447,11 +3481,12 @@ let pov2 = 240;
         if (mesh.getChildMeshes) {
           mesh.getChildMeshes().forEach(child => {
             child.receiveShadows = window.SHADOWS_ENABLED;
-            if (window.SHADOWS_ENABLED && !isTerrainMesh && forceReadd && gfx.shadowGenerator) {
+            const isChildRoot = child.name.includes('__root__');
+            if (window.SHADOWS_ENABLED && !isTerrainMesh && !isRootNode && !isChildRoot && forceReadd && gfx.shadowGenerator) {
               gfx.shadowGenerator.removeShadowCaster(child);
               gfx.shadowGenerator.addShadowCaster(child);
               shadowCasterCount++;
-            } else if (window.SHADOWS_ENABLED && !isTerrainMesh && !forceReadd && gfx.shadowGenerator) {
+            } else if (window.SHADOWS_ENABLED && !isTerrainMesh && !isRootNode && !isChildRoot && !forceReadd && gfx.shadowGenerator) {
               if (!gfx.shadowGenerator.getShadowMap().renderList.includes(child)) {
                 gfx.shadowGenerator.addShadowCaster(child);
                 shadowCasterCount++;
@@ -3479,10 +3514,21 @@ let pov2 = 240;
   
   // Helper function to set up shadows for a mesh with LoD support
   gfx.setupMeshShadows = function(mesh, shouldCastShadows = true) {
-    if (!mesh || !gfx.shadowGenerator) return;
+    if (!mesh) return;
     
-    // Skip UI elements and indicators
-      const isUIMesh = mesh.name.includes('table') || 
+    // ALWAYS set receiveShadows even if generator doesn't exist yet
+    // (the generator may be created later and updateAllMeshShadows will handle casters)
+    
+    // Skip UI elements, indicators, and background elements
+    // For table: skip floor/underside, but allow sides/corners to receive shadows
+      const isTableFloor = mesh.name === 'FLOOR' || mesh.name.includes('floor_') || mesh.name.includes('tableFloor');
+      // Table sides (N,E,S,W), corners (SW,SE,NE,NW), and tops (NT,ET,ST,WT) should receive shadows
+      const isTableSideOrCorner = 
+        (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
+        (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
+        mesh.name.includes('edge_') || mesh.name.includes('corner_');
+      const isUIMesh = isTableFloor ||
+                      (mesh.name.includes('table') && !isTableSideOrCorner) ||
                       mesh.name.includes('UI') || 
                       mesh.name.includes('menu') ||
                       mesh.name.includes('Indicator') ||
@@ -3501,16 +3547,20 @@ let pov2 = 240;
                       mesh.name.includes('Center') ||
                       mesh.name.includes('anchor') ||
                       mesh.name.includes('Anchor') ||
-                      (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
-                      (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
+                      mesh.name.includes('mountain') || // Skip mountains!
+                      mesh.name.includes('Mountain') ||
+                      mesh.name.includes('horizon') || // Skip horizon!
+                      mesh.name.includes('vista') || // Skip vista!
+                      // Skip children of background/UI elements
                       (mesh.parent && mesh.parent.name && (
-                        mesh.parent.name.includes('table') ||
                         mesh.parent.name.includes('radial') ||
                         mesh.parent.name.includes('Radial') ||
                         mesh.parent.name.includes('HUD') ||
                         mesh.parent.name.includes('hud') ||
                         mesh.parent.name.includes('minimap') ||
-                        mesh.parent.name.includes('Minimap')
+                        mesh.parent.name.includes('Minimap') ||
+                        mesh.parent.name.includes('mountain') ||
+                        mesh.parent.name.includes('horizon')
                       ));
     if (isUIMesh) return;
     
@@ -3519,8 +3569,8 @@ let pov2 = 240;
     
     // Mesh will be tracked by the existing LOD system
     
-    // Only add to shadow generator if shadows are enabled and it should cast shadows
-    if (window.SHADOWS_ENABLED && shouldCastShadows) {
+    // Only add to shadow generator if shadows are enabled, should cast, AND generator exists
+    if (window.SHADOWS_ENABLED && shouldCastShadows && gfx.shadowGenerator) {
       gfx.shadowGenerator.addShadowCaster(mesh);
     }
     
@@ -3545,7 +3595,7 @@ let pov2 = 240;
         if (isUIChild) return;
         
         childMesh.receiveShadows = window.SHADOWS_ENABLED;
-        if (window.SHADOWS_ENABLED && shouldCastShadows) {
+        if (window.SHADOWS_ENABLED && shouldCastShadows && gfx.shadowGenerator) {
           gfx.shadowGenerator.addShadowCaster(childMesh);
         }
       });
@@ -3570,6 +3620,124 @@ let pov2 = 240;
     gfx.updateAllMeshShadows();
   };
   
+  // DEBUG: Camera pivot/target diagnostics
+  gfx.debugCamera = function() {
+    console.log('=== CAMERA DIAGNOSTICS ===');
+    
+    if (!gfx.camera) {
+      console.log('❌ No camera');
+      return;
+    }
+    
+    const cam = gfx.camera;
+    const target = gfx.cameraTarget;
+    
+    console.log('Camera position:', cam.position);
+    console.log('Camera alpha (horizontal rotation):', cam.alpha?.toFixed(2));
+    console.log('Camera beta (vertical angle):', cam.beta?.toFixed(2));
+    console.log('Camera radius (zoom distance):', cam.radius?.toFixed(2));
+    
+    if (target) {
+      console.log('Camera target (pivot point):', target.position);
+      console.log('  X:', target.position.x?.toFixed(2));
+      console.log('  Y:', target.position.y?.toFixed(2), '(fixed height)');
+      console.log('  Z:', target.position.z?.toFixed(2));
+    }
+    
+    if (window.cameraAnchor) {
+      console.log('Camera anchor (desired target):', window.cameraAnchor);
+    }
+    
+    // Field info
+    if (window.liveField) {
+      const TILE_SIZE = window.TILE_SIZE || 4;
+      const fieldCenterX = (window.liveField.width * TILE_SIZE) / 2;
+      const fieldCenterZ = (window.liveField.height * TILE_SIZE) / 2;
+      console.log('Field size:', window.liveField.width, 'x', window.liveField.height, 'tiles');
+      console.log('Field center (world):', fieldCenterX.toFixed(2), fieldCenterZ.toFixed(2));
+      
+      if (target) {
+        const offsetX = target.position.x - fieldCenterX;
+        const offsetZ = target.position.z - fieldCenterZ;
+        console.log('Camera offset from field center:', offsetX.toFixed(2), offsetZ.toFixed(2));
+      }
+    }
+    
+    console.log('=== END CAMERA DIAGNOSTICS ===');
+  };
+  
+  // DEBUG: Comprehensive shadow diagnostics
+  gfx.debugShadows = function() {
+    console.log('=== SHADOW DIAGNOSTICS ===');
+    console.log('SHADOWS_ENABLED:', window.SHADOWS_ENABLED);
+    console.log('scene.shadowsEnabled:', gfx.scene?.shadowsEnabled);
+    console.log('shadowGenerator exists:', !!gfx.shadowGenerator);
+    
+    if (gfx.shadowGenerator) {
+      const sg = gfx.shadowGenerator;
+      const shadowMap = sg.getShadowMap();
+      console.log('Shadow map size:', shadowMap?.getSize());
+      console.log('Shadow casters count:', shadowMap?.renderList?.length);
+      console.log('First 5 casters:', shadowMap?.renderList?.slice(0, 5).map(m => m.name));
+      console.log('darkness:', sg.darkness);
+      console.log('bias:', sg.bias);
+      console.log('normalBias:', sg.normalBias);
+      console.log('usePercentageCloserFiltering:', sg.usePercentageCloserFiltering);
+      console.log('useExponentialShadowMap:', sg.useExponentialShadowMap);
+      console.log('useBlurExponentialShadowMap:', sg.useBlurExponentialShadowMap);
+      console.log('usePoissonSampling:', sg.usePoissonSampling);
+      console.log('forceBackFacesOnly:', sg.forceBackFacesOnly);
+      
+      // Check the light
+      const light = sg.getLight();
+      console.log('Light:', light?.name);
+      console.log('Light enabled:', light?.isEnabled());
+      console.log('Light shadowEnabled:', light?.shadowEnabled);
+      console.log('Light direction:', light?.direction);
+      console.log('Light position:', light?.position);
+      console.log('Light shadowMinZ:', light?.shadowMinZ);
+      console.log('Light shadowMaxZ:', light?.shadowMaxZ);
+      console.log('Light shadowOrthoScale:', light?.shadowOrthoScale);
+      console.log('Light autoUpdateExtends:', light?.autoUpdateExtends);
+      console.log('Light autoCalcShadowZBounds:', light?.autoCalcShadowZBounds);
+      
+      // Check shadow camera
+      const shadowCamera = sg.getShadowMap()?.getScene()?.activeCamera;
+      console.log('Shadow map active:', shadowMap?.isReady());
+    }
+    
+    // Check terrain meshes
+    const terrainMeshes = gfx.scene?.meshes.filter(m => m.name.includes('terrain') || m.name.includes('grass') || m.name.includes('Mesh'));
+    console.log('Terrain-like meshes:', terrainMeshes?.length);
+    if (terrainMeshes?.length > 0) {
+      const sample = terrainMeshes[0];
+      console.log('Sample terrain mesh:', sample.name);
+      console.log('  receiveShadows:', sample.receiveShadows);
+      console.log('  isVisible:', sample.isVisible);
+      console.log('  material:', sample.material?.name);
+    }
+    
+    // Check model meshes (potential casters)
+    const modelMeshes = gfx.scene?.meshes.filter(m => 
+      !m.name.includes('terrain') && 
+      !m.name.includes('Mesh') && 
+      !m.name.includes('table') &&
+      !m.name.includes('ground') &&
+      m.isVisible
+    );
+    console.log('Potential shadow caster meshes:', modelMeshes?.length);
+    if (modelMeshes?.length > 0) {
+      console.log('First 5 model meshes:', modelMeshes.slice(0, 5).map(m => ({
+        name: m.name,
+        receiveShadows: m.receiveShadows,
+        isVisible: m.isVisible,
+        isEnabled: m.isEnabled()
+      })));
+    }
+    
+    console.log('=== END DIAGNOSTICS ===');
+  };
+  
   // LoD-based shadow caster management - integrated with existing LOD system
   gfx.updateShadowLOD = function() {
     if (!gfx.shadowGenerator || !window.SHADOWS_ENABLED || !gfx.shadowLODConfig.enabled) return;
@@ -3579,11 +3747,11 @@ let pov2 = 240;
     
     gfx.lastShadowUpdate = currentTime;
     
-    // Use the same camera position as the existing LOD system
-    const camera = gfx.camera;
-    if (!camera) return;
+    // Use camera TARGET position (ground level) not camera position (high up when zoomed out)
+    // This prevents shadows from disappearing just because you zoomed out
+    const targetPos = gfx.cameraTarget ? gfx.cameraTarget.position : gfx.camera?.position;
+    if (!targetPos) return;
     
-    const cameraPos = camera.position;
     let activeShadowCasters = 0;
     let culledShadowCasters = 0;
     
@@ -3591,8 +3759,10 @@ let pov2 = 240;
     lodModels.forEach(lod => {
       if (!lod.model || !lod.model.position) return;
       
-      // Calculate full 3D distance (same as existing LOD system)
-      const distance = BABYLON.Vector3.Distance(cameraPos, lod.model.position);
+      // Calculate 2D distance (XZ plane) - shadows are about ground coverage, not camera height
+      const dx = targetPos.x - lod.model.position.x;
+      const dz = targetPos.z - lod.model.position.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
       
       // Check if mesh is currently a shadow caster
       const isCurrentlyCasting = gfx.shadowGenerator.getShadowMap().renderList.includes(lod.model);
@@ -3724,10 +3894,10 @@ let pov2 = 240;
 
     // Camera setup complete
 
-    camera.upperRadiusLimit = 300; // Increased for better horizon view
+    camera.upperRadiusLimit = 150; // Reduced for closer zoom out
     camera.lowerRadiusLimit = 21;  // Closer minimum zoom (39% closer than before)
-    camera.upperBetaLimit = 2.0; // Limit how high you can look (prevent going too high)
-    camera.lowerBetaLimit = 0.4; // Limit how low you can look (prevent looking straight down)
+    camera.upperBetaLimit = 1.2; // Reduced to prevent looking too high when zoomed out
+    camera.lowerBetaLimit = 0.7; // Allow full down-angle range when zoomed out
     camera.maxZ = 50000; // extend far plane to avoid terrain popping on wide zoom
     camera.minZ = 0.1; // allow closer near plane for low zoom
     camera.fov = .8; // default .8
@@ -3740,7 +3910,11 @@ let pov2 = 240;
       if (!Number.isFinite(camera.beta)) camera.beta = 1.1;
       if (!Number.isFinite(camera.radius)) camera.radius = 80;
       // Keep beta reasonable
-      camera.beta = Math.max(0.2, Math.min(1.5, camera.beta));
+      if (typeof camera.lowerBetaLimit === 'number' && typeof camera.upperBetaLimit === 'number') {
+        camera.beta = Math.max(camera.lowerBetaLimit, Math.min(camera.upperBetaLimit, camera.beta));
+      } else {
+        camera.beta = Math.max(0.2, Math.min(1.5, camera.beta));
+      }
       // Keep radius within limits
       if (typeof camera.lowerRadiusLimit === 'number' && typeof camera.upperRadiusLimit === 'number') {
         camera.radius = Math.max(camera.lowerRadiusLimit, Math.min(camera.upperRadiusLimit, camera.radius));
@@ -4095,6 +4269,11 @@ let pov2 = 240;
   // Simple mountain background using Babylon's ground mesh with procedural height simulation
   // Creates a distant mountain vista far below, like looking down at an endless landscape from high above
   function createSimpleMountains(scene, fieldSize = 64) {
+    // Skip creation entirely if LOD is set to 0 (billboard-only mode)
+    const savedLOD = localStorage.getItem('lodLevel');
+    if (savedLOD && parseInt(savedLOD) === 0) {
+      return null;
+    }
     // console.log('🏔️ Creating distant mountain vista far below');
     
     if (!scene) {
@@ -4110,7 +4289,7 @@ let pov2 = 240;
     
     // One large plane with lower resolution
     const mountainSize = Math.max(actualFieldWidth, actualFieldHeight) * 6; // Large plane
-    const subdivisions = 32; // Lower resolution for smooth gradient
+    const subdivisions = 32; // Keep poly count modest
     
     // console.log(`🏔️ Mountain vista params: field=${actualFieldWidth}x${actualFieldHeight}, plane size=${mountainSize}`);
     
@@ -4120,7 +4299,7 @@ let pov2 = 240;
     // Position - VERY FAR below the table to create vista effect
     mountainGround.position.x = fieldCenterX;
     mountainGround.position.z = fieldCenterZ;
-    mountainGround.position.y = -200; // Massive depth for distant mountain vista
+    mountainGround.position.y = -170; // Lower to avoid intersecting table
     
     // Get positions for modification
     const positions = mountainGround.getVerticesData(BABYLON.VertexBuffer.PositionKind);
@@ -4144,28 +4323,36 @@ let pov2 = 240;
       const distFromCenter = Math.sqrt((x - fieldCenterX) ** 2 + (z - fieldCenterZ) ** 2);
       const maxDist = mountainSize / 2;
       const normalizedDist = Math.min(1, distFromCenter / maxDist);
+      const distanceCurve = Math.pow(normalizedDist, 0.85); // Slightly stronger central presence
       
       let height = 0;
       
       // Only add height if not in the center
-      if (normalizedDist > 0.1) {
-        // Base height increases with distance
-        const baseHeight = normalizedDist * 150; // Max height 150
-        
-        // Random noise increases with distance
-        const noiseStrength = normalizedDist; // 0 at center, 1 at edges
-        
-        // Simple hash-based random noise
-        let hashX = Math.floor(x);
-        let hashZ = Math.floor(z);
-        let hash = seed;
-        hash = ((hash << 13) ^ hash) >>> 0;
-        hash = ((hash * (hash * hash * 15731 + 789221) + 1376312589 + hashX * 73856093 + hashZ * 19349663) & 0xffffffff) >>> 0;
-        
-        const randomNoise = (Math.sin(hash * 0.5) + Math.sin(hash * 0.1) * 0.5) * noiseStrength * 80; // Random offset increases outward
-        
-        height = baseHeight + randomNoise;
-      }
+      // Base height keeps some relief near center, grows outward
+      const baseHeight = (0.25 + distanceCurve * 0.75) * 140; // Lower amplitude to keep below table
+      
+      // Random noise - always present, stronger outward
+      const noiseStrength = 0.6 + distanceCurve * 1.0; // Some variation even in center
+      let hashX = Math.floor(x);
+      let hashZ = Math.floor(z);
+      let hash = seed;
+      hash = ((hash << 13) ^ hash) >>> 0;
+      hash = ((hash * (hash * hash * 15731 + 789221) + 1376312589 + hashX * 73856093 + hashZ * 19349663) & 0xffffffff) >>> 0;
+      const randomNoise = (Math.sin(hash * 0.5) + Math.sin(hash * 0.1) * 0.5) * noiseStrength * 60;
+      
+      // High-frequency jagged component for sharper peaks
+      const jagged = (Math.abs(Math.sin(x * 0.08 + z * 0.06 + seed * 0.2)) - 0.5) * noiseStrength * 40;
+      
+      // Cross-axis ridges for more isotropic relief (avoid one-direction waves)
+      const ridge = (Math.sin(x * 0.014 + seed * 0.1) + Math.sin(z * 0.014 + seed * 0.13)) * distanceCurve * 32;
+      
+      // Add small high-frequency jitter that is not distance-weighted to break flat rims
+      const jitter = (Math.sin(x * 0.21 + seed * 0.7) + Math.sin(z * 0.23 + seed * 0.9)) * 12;
+      
+      height = baseHeight + randomNoise + jagged + ridge + jitter;
+      
+      // Cap to avoid intersecting the table plane (looser cap to preserve edge relief)
+      height = Math.min(height, 170);
       
       positions[i * 3 + 1] = height;
     }
@@ -4195,15 +4382,8 @@ let pov2 = 240;
     mountainGround.isPickable = false;
     mountainGround.isVisible = true;
     
-    // Add to shadow generator for subtle depth effects
-    if (window.gfx && window.gfx.shadowGenerator) {
-      try {
-        window.gfx.shadowGenerator.addShadowCaster(mountainGround, false);
-        // console.log(`🏔️ Mountain vista added to shadow receiver`);
-      } catch (e) {
-        // console.log(`⚠️ Could not add vista to shadow receiver:`, e.message);
-      }
-    }
+    // Mountains are background elements - don't involve in shadows at all
+    mountainGround.receiveShadows = false;
     
     // console.log('🏔️ Mountain vista ready - flat center with increasing randomness outward!');
     
@@ -4211,15 +4391,26 @@ let pov2 = 240;
     // This creates visual reference for the vast distance below
     const horizon = createHorizon(scene, fieldCenterX, fieldCenterZ, mountainSize);
     if (horizon) {
-      horizon.parent = mountainGround;
-      // Optional: Make horizon receive shadows if shadowGenerator exists
-      if (window.gfx && window.gfx.shadowGenerator) {
-        window.gfx.shadowGenerator.addShadowCaster(horizon, false);
-      }
+      horizon.position.y = -69; // Explicit world height for visible mist
+      window.gfx.horizon = horizon; // Track for later removal
+      // Horizon is a background element - don't involve it in shadows at all
+      horizon.receiveShadows = false;
     }
     
     return mountainGround;
   }
+
+  // Remove mountains and horizon if present
+  gfx.removeMountains = function() {
+    if (gfx.mountains && gfx.mountains.dispose) {
+      try { gfx.mountains.dispose(); } catch (e) {}
+    }
+    gfx.mountains = null;
+    if (gfx.horizon && gfx.horizon.dispose) {
+      try { gfx.horizon.dispose(); } catch (e) {}
+    }
+    gfx.horizon = null;
+  };
   
   // Create a subtle horizon line/band to show where distant mountains meet sky
   function createHorizon(scene, centerX, centerZ, mountainSize) {
@@ -4234,17 +4425,16 @@ let pov2 = 240;
     // Position at a mid-distance - creates the horizon "line" effect
     horizonPlane.position.x = centerX;
     horizonPlane.position.z = centerZ;
-    horizonPlane.position.y = -80; // Between camera (9) and mountains (-200)
+    horizonPlane.position.y = 100; // World height for mist band
     
     // Create horizon material - dark solid band
     const horizonMat = new BABYLON.StandardMaterial("horizonMat", scene);
-    horizonMat.diffuseColor = new BABYLON.Color3(0.9, 0.89, 0.9); // Dark grey-green like mountains but lighter
-    // horizonMat.ambientColor = new BABYLON.Color3(0.23, 0.23, 0.28); // Ambient for depth
-    // horizonMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1); // Low shine
-    // horizonMat.emissiveColor = new BABYLON.Color3(0.05, 0.06, 0.06); // Subtle glow for visibility
-    horizonMat.alpha = 0.2; // Solid, no transparency
+    horizonMat.diffuseColor = new BABYLON.Color3(0.75, 0.82, 0.9); // Cool mist tint
+    horizonMat.emissiveColor = new BABYLON.Color3(0.35, 0.45, 0.55); // Glow to read as haze
+    horizonMat.alpha = 1.0; // Opaque band (no transparency)
     horizonMat.backFaceCulling = false;
-    horizonMat.depthWrite = true;
+    horizonMat.disableLighting = true; // Keep color consistent as a fog bank
+    horizonMat.depthWrite = true; // Opaque draw, relies on color/lighting instead of alpha
     
     horizonPlane.material = horizonMat;
     horizonPlane.renderingGroupId = 0; // Render with background

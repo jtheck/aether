@@ -1230,8 +1230,27 @@
           const detectedResources = [];
           const gridRadius = Math.ceil(radiusInTiles / (window.TILE_SIZE || 4));
           
+          // Get field boundaries for validation
+          const field = window.liveField;
+          const fieldWidth = field?.width || 0;
+          const fieldHeight = field?.height || 0;
+          
           for (let x = cmd.gridX - gridRadius; x <= cmd.gridX + gridRadius; x++) {
             for (let z = cmd.gridZ - gridRadius; z <= cmd.gridZ + gridRadius; z++) {
+              // CRITICAL: Skip coordinates outside map boundaries to prevent villagers from trying to walk off the table
+              if (x < 0 || x >= fieldWidth || z < 0 || z >= fieldHeight) {
+                continue;
+              }
+              
+              // CRITICAL: Also check chunk mask if available (for custom map shapes)
+              if (field && field.chunkMask && field.chunkSize) {
+                const chunkX = Math.floor(x / field.chunkSize);
+                const chunkZ = Math.floor(z / field.chunkSize);
+                if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+                  continue; // Skip tiles in disabled chunks (off the table)
+                }
+              }
+              
               const worldX = x * (window.TILE_SIZE || 4);
               const worldZ = z * (window.TILE_SIZE || 4);
               const campWorldX = cmd.gridX * (window.TILE_SIZE || 4);
@@ -3029,7 +3048,16 @@
         </div>
       `;
       
+      // Set display first, but keep opacity at 0 to allow layout calculation
       endScreen.style.display = 'block';
+      endScreen.style.opacity = '0';
+      
+      // Use requestAnimationFrame to ensure layout is calculated before showing
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          endScreen.style.opacity = '1';
+        });
+      });
     }
     
     // Show loading overlay

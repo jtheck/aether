@@ -666,7 +666,7 @@ function createSelectionIndicator(unit) {
     const ringMaterial = new BABYLON.StandardMaterial("selectionRingMat", window.gfx.scene);
     ringMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1); // Cyan to match selection box
     ringMaterial.emissiveColor = new BABYLON.Color3(0, 0.5, 0.5);
-    ringMaterial.alpha = 0.8;
+    ringMaterial.alpha = 1.0;
     
     ring.material = ringMaterial;
     ring.isVisible = false; // Hidden by default
@@ -702,9 +702,8 @@ function updateSelectionIndicators() {
                 // Rotate the ring slowly
                 unit.selectionIndicator.rotation.y += 0.02;
                 
-                // Pulse the alpha slightly
-                const pulse = Math.sin(Date.now() * 0.005) * 0.2 + 0.8;
-                unit.selectionIndicator.material.alpha = pulse;
+                // Keep fully opaque for performance (no alpha pulsing)
+                unit.selectionIndicator.material.alpha = 1.0;
             }
         }
     });

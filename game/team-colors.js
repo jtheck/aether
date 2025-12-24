@@ -231,7 +231,7 @@ function createTeamSelectionIndicator(unit, teamId) {
   const ringMaterial = new BABYLON.StandardMaterial("teamSelectionRingMat", scene);
   ringMaterial.diffuseColor = BABYLON.Color3.FromHexString(teamColor.primary.replace('#', ''));
   ringMaterial.emissiveColor = BABYLON.Color3.FromHexString(teamColor.primary.replace('#', '')).scale(0.5);
-  ringMaterial.alpha = 0.8;
+  ringMaterial.alpha = 1.0;
   
   ring.material = ringMaterial;
   ring.isVisible = false; // Hidden by default

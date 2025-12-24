@@ -979,11 +979,34 @@ class GatherWorkBehavior extends WorkBehavior {
         
         // Try to find an available resource starting from calculated index
         // Wrap around deterministically using originalResourceCount
+        // Get field boundaries for validation
+        const field = window.liveField;
+        const fieldWidth = field?.width || 0;
+        const fieldHeight = field?.height || 0;
+        
         while (attempts < maxAttempts && (!resource || resource.depleted || resource.remaining <= 0 || resource.depletionTick !== undefined)) {
             const wrappedIndex = (resourceIndex + attempts) % resourceListLength;
             // CRITICAL: Use wrappedIndex directly - sortedResources should match originalResourceCount length
             if (wrappedIndex < sortedResources.length) {
                 const candidate = sortedResources[wrappedIndex];
+                
+                // CRITICAL: Skip resources outside map boundaries to prevent villagers from trying to walk off the table
+                if (candidate && (candidate.gridX < 0 || candidate.gridX >= fieldWidth || 
+                    candidate.gridZ < 0 || candidate.gridZ >= fieldHeight)) {
+                    attempts++;
+                    continue;
+                }
+                
+                // CRITICAL: Also check chunk mask if available (for custom map shapes)
+                if (candidate && field && field.chunkMask && field.chunkSize) {
+                    const chunkX = Math.floor(candidate.gridX / field.chunkSize);
+                    const chunkZ = Math.floor(candidate.gridZ / field.chunkSize);
+                    if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+                        attempts++;
+                        continue; // Skip resources in disabled chunks (off the table)
+                    }
+                }
+                
                 // CRITICAL: Don't select resources scheduled for depletion (even if not yet marked as depleted)
                 // Also check global depletion state - resources can be depleted by other camps
                 // This ensures both clients select the same available resources
@@ -1063,7 +1086,7 @@ class GatherWorkBehavior extends WorkBehavior {
         indicator.position = new BABYLON.Vector3(0, 2.5, 0);
         indicator.parent = this.unit.mesh;
         
-        material.alpha = 0.9;
+        material.alpha = 1.0;
         indicator.material = material;
         
         // Add a subtle glow effect
@@ -2977,7 +3000,7 @@ class TransformBehavior extends Behavior {
                 material.diffuseColor = new BABYLON.Color3(1, 1, 1);
                 material.emissiveColor = new BABYLON.Color3(0.5, 0.5, 0.5);
         }
-        material.alpha = 0.9;
+        material.alpha = 1.0;
         indicator.material = material;
         
         // Add a subtle glow effect
@@ -3116,7 +3139,7 @@ class EatBehavior extends Behavior {
         const material = new BABYLON.StandardMaterial("foodIndicatorMaterial", window.gfx.scene);
         material.diffuseColor = new BABYLON.Color3(0.8, 0.2, 0.1);
         material.emissiveColor = new BABYLON.Color3(0.2, 0.05, 0.02);
-        material.alpha = 0.9;
+        material.alpha = 1.0;
         indicator.material = material;
         
         // Add a subtle glow effect

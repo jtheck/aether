@@ -101,14 +101,14 @@ gfx.stretchTable = function(table) {
   // Access table parts through the new structure
   const parts = table.parts;
   
-  // Corners
-  let cy=.1;
+  // Corners - extended down to cover gap to floor (floor is at Y=-0.777)
+  let cy = -0.3;   // Lower center point
   parts.SW.mesh.position.set(0, cy, 0);
   parts.SE.mesh.position.set(width, cy, 0);
   parts.NE.mesh.position.set(width, cy, height);
   parts.NW.mesh.position.set(0, cy, height);
   let s = 6.9;
-  let sh = 2.1;
+  let sh = 3.0;    // Taller to extend below floor
   parts.SW.mesh.scaling.set(s,sh,s);
   parts.SE.mesh.scaling.set(s,sh,s);
   parts.NE.mesh.scaling.set(s,sh,s);
@@ -165,9 +165,12 @@ gfx.stretchTable = function(table) {
 
 
 
-  let yy= .3;
-  let rr=.11;
-  let ss=.6;
+  // Edge dimensions - extended down to cover gap to floor (floor is at Y=-0.777)
+  // Original: yy=0.3, ss=0.6 → bottom at 0.0, top at 0.6
+  // New: keep top at ~0.6, extend bottom to -0.9 (below floor)
+  let yy = -0.15;  // Lower center point
+  let rr = 0.11;
+  let ss = 1.5;    // Taller to extend down
   // Side stretches
   parts.S.mesh.position.set(halfWidth, yy, height);
   parts.S.mesh.scaling.set(width, ss, borderThickness);

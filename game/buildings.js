@@ -425,7 +425,13 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
     // console.error(`❌ Graphics system not available!`);
   }
   
-  gameBuildings.push(building);
+  // CRITICAL: Push to window.gameBuildings (not local gameBuildings) 
+  // to ensure we're using the array after any resets
+  window.gameBuildings.push(building);
+  
+  // Debug: Log when building is placed
+  console.log(`🏗️ PLACED ${building.type} for ${building.owner}: progress=${(building.buildProgress*100).toFixed(0)}%, needsWorkers=${building.needsWorkers}, workType=${building.workType}`);
+  
   return building;
 }
 
@@ -909,6 +915,20 @@ function processBuildingCompletion(building) {
     building.mesh.scaling.x = baseScale;
     building.mesh.scaling.y = baseScale;
     building.mesh.scaling.z = baseScale;
+    
+    // PERFORMANCE: Freeze building mesh once construction is complete
+    // Buildings don't move/rotate/scale after construction, so freezing gives huge perf boost
+    if (building.mesh.freezeWorldMatrix) {
+      building.mesh.freezeWorldMatrix();
+      building.mesh.metadata = building.mesh.metadata || {};
+      building.mesh.metadata.isFrozen = true;
+    }
+    // Also freeze child meshes
+    building.mesh.getChildMeshes && building.mesh.getChildMeshes().forEach(childMesh => {
+      if (childMesh.freezeWorldMatrix) {
+        childMesh.freezeWorldMatrix();
+      }
+    });
   }
   
   // CRITICAL: Initialize timing ticks when construction completes for deterministic behavior
@@ -1353,6 +1373,17 @@ function updateBuildings(deltaTime) {
     return; // No buildings to update
   }
   
+  // Debug: Log every 2 seconds with detailed state
+  const currentTick = window.currentMatch?.tick || 0;
+  if (currentTick % 40 === 0 && currentTick > 0) {
+    const buildingCount = window.gameBuildings.length;
+    const underConstruction = window.gameBuildings.filter(b => b.buildProgress < 1.0);
+    console.log(`🏗️ UPDATE BUILDINGS: ${buildingCount} total, ${underConstruction.length} under construction`);
+    underConstruction.forEach(b => {
+      console.log(`   - ${b.type} (${b.owner}): progress=${(b.buildProgress*100).toFixed(0)}%, workers=${b.assignedWorkers?.length || 0}, needsWorkers=${b.needsWorkers}, workType=${b.workType}`);
+    });
+  }
+  
   // CRITICAL: Sort buildings by ID for deterministic iteration order
   // This ensures both clients process buildings in the same order,
   // which is essential for deterministic worker assignment
@@ -1397,9 +1428,14 @@ function updateBuildings(deltaTime) {
     }
     
     // Handle construction progress for buildings being built
-    if (building.needsWorkers && building.workType === 'build' && building.buildProgress < 1.0 && window.game) {
+    if (building.needsWorkers && building.workType === 'build' && building.buildProgress < 1.0 && (window.game || window.currentMatch)) {
       const currentTick = window.currentMatch?.tick || 0;
       const workerCount = building.assignedWorkers.length;
+      
+      // Debug: Log construction state periodically
+      if (currentTick % 100 === 0 && currentTick > 0) {
+        console.log(`🔨 Building ${building.type} (${building.id?.slice(-6)}): progress=${(building.buildProgress * 100).toFixed(1)}%, workers=${workerCount}, workTicks=${building.constructionWorkTicks}`);
+      }
       
       // Create/update construction indicator cube (purple cube for all buildings under construction)
       if (!building.constructionIndicator && window.gfx && window.gfx.scene) {
@@ -1520,7 +1556,7 @@ function updateBuildings(deltaTime) {
     const shouldCheckThisTick = (currentTick % tickRate === 0); // Check every 20 ticks (1 second at 20Hz)
     
     // For construction buildings, check even if not complete; for production buildings, only when complete
-    const shouldAssignWorkers = building.needsWorkers && window.game && shouldCheckThisTick && 
+    const shouldAssignWorkers = building.needsWorkers && (window.game || window.currentMatch) && shouldCheckThisTick && 
       ((building.workType === 'build' && building.buildProgress < 1.0) || 
        (building.workType !== 'build' && building.buildProgress >= 1.0));
     
@@ -1562,6 +1598,11 @@ function updateBuildings(deltaTime) {
       // Try to assign more workers if needed
       if (building.assignedWorkers.length < building.maxWorkers) {
         const idleVillagers = findIdleVillagersNearBuilding(building);
+        
+        // Debug: Log when looking for workers
+        if (building.workType === 'build' && building.buildProgress < 1.0 && currentTick % 100 === 0) {
+          console.log(`👷 Looking for workers for ${building.type}: found ${idleVillagers.length} idle, assigned=${building.assignedWorkers.length}/${building.maxWorkers}`);
+        }
         
         
         for (const villager of idleVillagers) {
@@ -1608,7 +1649,7 @@ function updateBuildings(deltaTime) {
     // CRITICAL: Process work production every frame for production buildings
     // This must be separate from worker assignment to ensure deterministic timing
     // Worker assignment only happens every 60 ticks, but production should check every frame
-    if (building.buildProgress >= 1.0 && building.needsWorkers && building.assignedWorkers.length > 0 && window.game) {
+    if (building.buildProgress >= 1.0 && building.needsWorkers && building.assignedWorkers.length > 0 && (window.game || window.currentMatch)) {
       processWorkProduction(building);
     }
     

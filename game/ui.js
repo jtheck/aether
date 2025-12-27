@@ -75,6 +75,24 @@ function getRandomColor() {
     loadIcon('gear', 'settings_b');
     loadIcon('trophy', 'trophy_b');
 
+    // Set up menu button to show appropriate menu based on game state
+    const menuButton = document.getElementById('menu_b');
+    if (menuButton) {
+      menuButton.onclick = function() {
+        // Consider demo mode as menu scene (demo match is just a stub)
+        const isMenuScene = !window.game && (!window.currentMatch || window.currentMatch.isDemo);
+        console.log(`🎮 Menu button clicked - game: ${!!window.game}, currentMatch: ${!!window.currentMatch}, isDemo: ${window.currentMatch?.isDemo}, isMenuScene: ${isMenuScene}`);
+        console.log('🎮 Current state:', { game: window.game, currentMatch: window.currentMatch });
+        if (isMenuScene) {
+          console.log('📋 Showing main_menu');
+          ui.showMenu('main_menu');
+        } else {
+          console.log('📋 Showing ingame_menu');
+          ui.showMenu('ingame_menu');
+        }
+      };
+    }
+
 
     // Load saved player data from localStorage
     let pName = localStorage.getItem('playerName') || getRandomName();
@@ -1269,10 +1287,15 @@ function getRandomColor() {
     if (menu.style.display === 'none' || !menu.style.display) {
       // Show menu with last viewed submenu (or main menu)
       menu.style.display = 'block';
-      if (prevMenu) {
-        ui.showMenu(prevMenu);
-      } else {
+
+      // In menu scene (no active match/game), always show main menu instead of previous menu
+      const isMenuScene = !window.game && !window.currentMatch;
+      if (isMenuScene) {
         ui.showMenu('main_menu');
+      } else if (!prevMenu) {
+        ui.showMenu('main_menu');
+      } else {
+        ui.showMenu(prevMenu);
       }
     } else {
       // Hide menu
@@ -2232,7 +2255,7 @@ function getRandomColor() {
     }
     
     cameraHasBeenNudged = true;
-    let INVERSEROT = 1;
+    let INVERSEROT = -1;
     let INVERSEZOOM = 1;
     
     // Get wheel delta (positive = scroll up, negative = scroll down)
@@ -2329,13 +2352,21 @@ function getRandomColor() {
     // Normalize radius between 0 and 1
     const normalizedRadius = (currentRadius - minRadius) / (maxRadius - minRadius);
     
-    // Beta range: 1.2 (looking toward horizon when zoomed in) to 0.7 (looking down when zoomed out)
+    // Beta range: 1.2 (looking toward horizon when zoomed in) to 0.62 (looking down when zoomed out)
     const minBeta = 1.2;  // Looking toward horizon (zoomed in)
-    const maxBeta = 0.7;  // Looking down (zoomed out)
+    const maxBeta = 0.61; // Looking down when zoomed out (split between 0.7 and 0.55)
     
     // Calculate target beta based on zoom and apply directly with smooth lerp
     const targetBeta = minBeta + (normalizedRadius * (maxBeta - minBeta));
-    gfx.camera.beta = BABYLON.Scalar.Lerp(gfx.camera.beta, targetBeta, 0.15);
+    const betaDiff = Math.abs(gfx.camera.beta - targetBeta);
+    
+    // Use faster lerp (0.35) so angle adjusts fully during zoom, not after
+    // Also snap when very close to prevent lingering drift
+    if (betaDiff < 0.01) {
+      gfx.camera.beta = targetBeta; // Snap to target when close
+    } else {
+      gfx.camera.beta = BABYLON.Scalar.Lerp(gfx.camera.beta, targetBeta, 0.35);
+    }
     
     // Apply momentum (keep some of the previous velocity) - alpha and radius only
     cameraVelocity.alpha *= cameraMomentum;

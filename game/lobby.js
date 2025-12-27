@@ -204,6 +204,11 @@ const Lobby = {
     // console.log('🧹 Starting complete scene cleanup...');
     
     try {
+      // Stop demo mode if running (before clearing currentMatch)
+      if (window.demo && window.demo.stop) {
+        window.demo.stop();
+      }
+      
       if (window.currentMatch && typeof window.currentMatch.stopLocalTickLoop === 'function') {
         window.currentMatch.stopLocalTickLoop();
       }
@@ -480,7 +485,14 @@ const Lobby = {
     // Regenerate field with desired seed
     const oldField = window.liveField;
     
-    // Dispose old field before creating new one
+    // CRITICAL: Set to null BEFORE disposing to prevent render loop from processing old field
+    // The render loop checks window.liveField and skips processing if null
+    window.liveField = null;
+    if (typeof liveField !== 'undefined') {
+      liveField = null;
+    }
+    
+    // Dispose old field after nulling the reference
     if (oldField && typeof oldField.dispose === 'function') {
       oldField.dispose();
     }
@@ -508,9 +520,9 @@ const Lobby = {
       const savedLOD = localStorage.getItem('lodLevel');
       const lodLevel = savedLOD ? parseInt(savedLOD) : 50;
       
-      window.liveField.originalLoadDistance = 4;
-      const newLoadDistance = Math.round(4 * currentMultiplier);
-      window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
+      window.liveField.originalLoadDistance = 6;
+      const newLoadDistance = Math.round(6 * currentMultiplier);
+      window.liveField.currentLoadDistance = Math.max(3, Math.min(12, newLoadDistance));
     }
     
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
@@ -2166,7 +2178,7 @@ const Lobby = {
       const response = await fetch('maps/index.json');
       const data = await response.json();
       this.houseMaps = data.maps || [];
-      console.log(`🗺️ Loaded ${this.houseMaps.length} house maps`);
+      // console.log(`🗺️ Loaded ${this.houseMaps.length} house maps`);
     } catch (e) {
       console.log('📁 No house maps found (maps/index.json)');
       this.houseMaps = [];
@@ -2837,7 +2849,14 @@ const Lobby = {
     // Regenerate field with desired seed
     const oldField = window.liveField;
     
-    // Dispose old field before creating new one
+    // CRITICAL: Set to null BEFORE disposing to prevent render loop from processing old field
+    // The render loop checks window.liveField and skips processing if null
+    window.liveField = null;
+    if (typeof liveField !== 'undefined') {
+      liveField = null;
+    }
+    
+    // Dispose old field after nulling the reference
     if (oldField && typeof oldField.dispose === 'function') {
       oldField.dispose();
     }
@@ -2861,10 +2880,10 @@ const Lobby = {
       const lodLevel = savedLOD ? parseInt(savedLOD) : 50;
       
       // Set originalLoadDistance first (what we scale from)
-      window.liveField.originalLoadDistance = 4;
+      window.liveField.originalLoadDistance = 6;
       // Then set currentLoadDistance based on LOD
-      const newLoadDistance = Math.round(4 * currentMultiplier);
-      window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
+      const newLoadDistance = Math.round(6 * currentMultiplier);
+      window.liveField.currentLoadDistance = Math.max(3, Math.min(12, newLoadDistance));
     }
     
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
@@ -3211,6 +3230,11 @@ const Lobby = {
       window.autoInitDisabled = true;
     }
     
+    // Stop demo mode if running
+    if (window.demo && window.demo.stop) {
+      window.demo.stop();
+    }
+    
     // Calculate total players INCLUDING AI opponents for spawn positions
     let totalPlayersWithAI = totalPlayers;
     if (settings && settings.aiSlots) {
@@ -3299,7 +3323,14 @@ const Lobby = {
     // Keep reference to old field so we can dispose its terrain meshes
     const oldField = window.liveField;
     
-    // Dispose old field before creating new one
+    // CRITICAL: Set to null BEFORE disposing to prevent render loop from processing old field
+    // The render loop checks window.liveField and skips processing if null
+    window.liveField = null;
+    if (typeof liveField !== 'undefined') {
+      liveField = null;
+    }
+    
+    // Dispose old field after nulling the reference
     if (oldField && typeof oldField.dispose === 'function') {
       oldField.dispose();
     }
@@ -3319,9 +3350,9 @@ const Lobby = {
     if (window.hud && window.hud.getCurrentLODMultiplier) {
       const currentMultiplier = window.hud.getCurrentLODMultiplier();
       
-      window.liveField.originalLoadDistance = 4;
-      const newLoadDistance = Math.round(4 * currentMultiplier);
-      window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
+      window.liveField.originalLoadDistance = 6;
+      const newLoadDistance = Math.round(6 * currentMultiplier);
+      window.liveField.currentLoadDistance = Math.max(3, Math.min(12, newLoadDistance));
     }
     
     // Re-stretch the table to the new field dimensions (matches initial load order)
@@ -3520,6 +3551,11 @@ const Lobby = {
     // CRITICAL: Disable menu scene unit auto-spawning IMMEDIATELY
     window.autoInitDisabled = true;
     window.isMultiplayer = true; // Set this EARLY to prevent any menu scene logic
+    
+    // Stop demo mode if running
+    if (window.demo && window.demo.stop) {
+      window.demo.stop();
+    }
     
     // Ensure gameBuildings array exists and is empty BEFORE creating Game
     if (!window.gameBuildings) {

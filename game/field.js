@@ -506,7 +506,7 @@ Field.prototype.assignTerrainByElevation = function() {
   }
   
   const total = this.heightMap.length;
-  console.log(`🌊 Water: ${waterCount} (${(waterCount/total*100).toFixed(1)}%), 🌿 Grass: ${grassCount} (${(grassCount/total*100).toFixed(1)}%), 🟫 Dirt: ${dirtCount} (${(dirtCount/total*100).toFixed(1)}%)`);
+  // console.log(`🌊 Water: ${waterCount} (${(waterCount/total*100).toFixed(1)}%), 🌿 Grass: ${grassCount} (${(grassCount/total*100).toFixed(1)}%), 🟫 Dirt: ${dirtCount} (${(dirtCount/total*100).toFixed(1)}%)`);
 }
 
 // OLD PATCH PAINTING - REPLACED BY ELEVATION
@@ -1005,7 +1005,7 @@ Field.prototype.updateBlockedTiles = function() {
       }
     }
   }
-  console.log(`🚫 Marked ${pureWaterCount} pure water tiles as blocked (shorelines passable)`);
+  // console.log(`🚫 Marked ${pureWaterCount} pure water tiles as blocked (shorelines passable)`);
 };
 
 // Get movement speed multiplier for a tile (1.0 = normal, 0.5 = slow)
@@ -1473,14 +1473,8 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
     chunk.mesh = createTerrainMeshFunc(scene, chunk, 4);
     chunk.needsMesh = false;
     
-    // Lazy load models - don't block chunk creation
-    setTimeout(() => {
-      if (chunk && chunk.mesh) {
-        // We need to call placeModelsOnChunk from gfx.js
-        // For now, just mark that models need to be loaded
-        chunk.needsModels = true;
-      }
-    }, 0);
+    // Immediately mark for model loading (no delay - prevents terrain-only gaps when panning)
+    chunk.needsModels = true;
   }
 };
 

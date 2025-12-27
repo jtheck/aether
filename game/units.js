@@ -2008,8 +2008,8 @@ if (typeof window !== 'undefined') {
       configurable: true
     });
     
-    // Auto-start the initialization
-    setTimeout(autoInitUnits, 2000); // Wait 2 seconds for scene to be ready
+    // Auto-start the initialization - DISABLED: No longer spawning decorative menu scene units
+    // setTimeout(autoInitUnits, 2000); // Wait 2 seconds for scene to be ready
 }
 
 

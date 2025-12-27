@@ -990,7 +990,7 @@ a:after{
 .menu_anchor{
   position: absolute;
   transform: translate(-50%, -50%);
-  border: 1px inset #eeeeee3d;
+  border: 1px inset #eeeeee7d;
   border-radius: 7px;
   color: White;
   width: 33px;

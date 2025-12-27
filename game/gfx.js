@@ -178,8 +178,8 @@
   // Expose billboard mode for settings/forge
   gfx.setBillboardOnlyMode = function(enabled) {
     BILLBOARD_ONLY_MODE = enabled;
-    console.log(`🖼️ Billboard-only mode: ${enabled ? 'ON' : 'OFF'}`);
-    
+    // console.log(`🖼️ Billboard-only mode: ${enabled ? 'ON' : 'OFF'}`);
+
     // Immediately update all existing models - no frame delay
     lodModels.forEach(lod => {
       // Skip disposed meshes
@@ -556,6 +556,9 @@
     // Apply current LOD multiplier to new model if LOD system is active
     const lastLod = lodModels[lodModels.length - 1];
     if (window.hud && window.hud.getCurrentLODMultiplier) {
+      const TILE_SIZE = window.TILE_SIZE || 4;
+      const CHUNK_WORLD_SIZE = 16 * TILE_SIZE; // 64 world units per chunk
+      
       let currentMultiplier;
       
       // During loading, use minimum LOD (0.3x multiplier)
@@ -565,10 +568,18 @@
         currentMultiplier = window.hud.getCurrentLODMultiplier();
       }
       
-      if (currentMultiplier !== 1.0) {
-        lastLod.lodDistance = lastLod.originalLodDistance * currentMultiplier;
-        lastLod.cullDistance = lastLod.originalCullDistance * currentMultiplier;
-      }
+      // Calculate terrain distance cap
+      const loadDistance = window.liveField?.currentLoadDistance || 6;
+      const terrainWorldDistance = loadDistance * CHUNK_WORLD_SIZE;
+      const resourceCullCap = terrainWorldDistance * 0.7; // Match updateLODDistances
+      const resourceLodCap = resourceCullCap * 0.5;
+      
+      // Scale distances by multiplier, then cap to terrain bounds
+      const scaledLodDistance = lastLod.originalLodDistance * currentMultiplier;
+      const scaledCullDistance = lastLod.originalCullDistance * currentMultiplier;
+      
+      lastLod.lodDistance = Math.min(scaledLodDistance, resourceLodCap);
+      lastLod.cullDistance = Math.min(scaledCullDistance, resourceCullCap);
     }
     
     // CRITICAL: Immediately evaluate and set correct initial state
@@ -613,7 +624,7 @@
 
   // Throttle LOD updates - only check every N frames for massive perf boost
   let lodFrameCounter = 0;
-  const LOD_UPDATE_INTERVAL = 3; // Only update every 3rd frame (66% CPU savings!)
+  const LOD_UPDATE_INTERVAL = 5; // Only update every 5th frame (~80% CPU savings!) - Still feels instant at 60fps
 
   // Manual LOD update function - called each frame
   function updateLOD(cameraPosition) {
@@ -711,7 +722,10 @@
   
   // Force-load chunks immediately around a position (for match start)
   gfx.forceLoadChunks = function(x, z) {
-    if (!liveField) return;
+    // CRITICAL: Always use window.liveField to get the current field reference
+    // (the global liveField variable may not be updated when a new match starts)
+    const field = window.liveField;
+    if (!field) return;
     
     // console.log(`🗺️ Force-loading chunks around (${x.toFixed(1)}, ${z.toFixed(1)})`);
     
@@ -720,15 +734,15 @@
     modelLoadQueue.length = 0;
     
     // Update visible chunks (marks them as needsMesh)
-    liveField.updateVisibleChunks(x, z);
+    field.updateVisibleChunks(x, z);
     
     // Calculate player chunk position for distance sorting
-    const playerChunkX = Math.floor(x / (liveField.chunkSize * TILE_SIZE));
-    const playerChunkZ = Math.floor(z / (liveField.chunkSize * TILE_SIZE));
+    const playerChunkX = Math.floor(x / (field.chunkSize * TILE_SIZE));
+    const playerChunkZ = Math.floor(z / (field.chunkSize * TILE_SIZE));
     
     // Sort chunks by distance from player (closest first)
     const chunksToLoad = [];
-    for (const [key, chunk] of liveField.chunks) {
+    for (const [key, chunk] of field.chunks) {
       if (chunk.needsMesh || chunk.needsModels) {
         const [chunkX, chunkZ] = key.split(',').map(Number);
         const dx = chunkX - playerChunkX;
@@ -747,7 +761,7 @@
     for (const item of chunksToLoad) {
       // Create terrain mesh if needed
       if (item.chunk.needsMesh) {
-        liveField.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
+        field.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
         meshesLoaded++;
         // Mark that models need to be placed now that mesh exists
         item.chunk.needsModels = true;
@@ -838,15 +852,51 @@
   gfx.clearLODModels = function() {
     // console.log('🗑️ Clearing LOD system for new match...');
     
-    // Dispose billboards before clearing
+    // CRITICAL: Dispose BOTH billboards AND models completely
+    // Just disabling them isn't enough - they remain in the scene and can be re-enabled
     lodModels.forEach(lod => {
+      // Dispose billboard
       if (lod.billboard && lod.billboard.dispose) {
         lod.billboard.dispose();
       }
+      // Dispose the actual model mesh
+      if (lod.model && lod.model.dispose) {
+        lod.model.dispose();
+      }
     });
     
-    // Clear the array
+    // Clear the LOD tracking array
     lodModels.length = 0;
+    
+    // CRITICAL: Clear activeModels - these track which models belong to which chunks
+    // Without clearing this, old chunk references persist and cause ghost models
+    activeModels.forEach((models, chunkKey) => {
+      models.forEach(modelInfo => {
+        if (modelInfo.model && modelInfo.model.root && modelInfo.model.root.dispose) {
+          modelInfo.model.root.dispose();
+        }
+      });
+    });
+    activeModels.clear();
+    
+    // Clear all model pools - we need a fresh start, not recycled menu models
+    modelPools.forEach((pool, path) => {
+      pool.forEach(model => {
+        if (model && model.root && model.root.dispose) {
+          model.root.dispose();
+        }
+      });
+    });
+    modelPools.clear();
+    
+    // Clear billboard instances
+    billboardInstances.forEach(instance => {
+      if (instance && instance.dispose) {
+        instance.dispose();
+      }
+    });
+    billboardInstances.length = 0;
+    billboardInstancedMeshes.clear();
     
     // CRITICAL: Reset all LOD system flags to ensure clean state
     // BUT preserve loadingLODCurrent - menu calibration should carry over!
@@ -856,41 +906,59 @@
     // loadingLODCurrent = 0; // DON'T RESET - preserve menu LOD setting!
     isProcessingQueue = false;
     
-    // Clear any pending model loads
+    // Clear any pending model loads and chunk queue
     modelLoadQueue.length = 0;
+    chunkQueue.length = 0;
     
-    // console.log(`✅ LOD system reset complete - preserved menu LOD at ${loadingLODCurrent}%`);
+    // console.log(`✅ LOD system fully reset - all models disposed`);
   };
 
   // Update LOD distances for graphics system
   gfx.updateLODDistances = function(multiplier) {
-    // Update model LOD distances
-    if (lodModels) {
-      lodModels.forEach(lod => {
-        // Scale LOD distances based on multiplier
-        lod.lodDistance = (lod.originalLodDistance || lod.lodDistance) * multiplier;
-        lod.cullDistance = (lod.originalCullDistance || lod.cullDistance || lod.lodDistance * 2) * multiplier;
-      });
-      
-      // console.log(`🎚️ Updated LOD distances for ${lodModels.length} models with multiplier ${multiplier.toFixed(2)}`);
-    }
+    const TILE_SIZE = window.TILE_SIZE || 4;
+    const CHUNK_SIZE = 16; // tiles per chunk
+    const CHUNK_WORLD_SIZE = CHUNK_SIZE * TILE_SIZE; // 64 world units per chunk
     
-    // Update terrain chunk loading distance
+    // Update terrain chunk loading distance FIRST so we know the terrain bounds
+    let terrainWorldDistance = 6 * CHUNK_WORLD_SIZE; // Default 384 units (increased for bigger ground-only zone)
     if (window.liveField && window.liveField.updateVisibleChunks) {
       // Store the original load distance if not already stored
       if (!window.liveField.originalLoadDistance) {
-        window.liveField.originalLoadDistance = 4; // Default load distance
+        window.liveField.originalLoadDistance = 6; // Base load distance (increased from 4)
       }
       
       // Update load distance based on LOD level
       const newLoadDistance = Math.round(window.liveField.originalLoadDistance * multiplier);
-      window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance)); // Clamp between 2-8
+      window.liveField.currentLoadDistance = Math.max(3, Math.min(12, newLoadDistance)); // Clamp between 3-12 (increased range)
+      terrainWorldDistance = window.liveField.currentLoadDistance * CHUNK_WORLD_SIZE;
+    }
+    
+    // Resource cull should end BEFORE terrain to create a "ground only" zone at edges
+    // This gives a nice fade-out effect where you see ground extending beyond resources
+    const resourceCullCap = terrainWorldDistance * 0.7; // Resources fade out at 70% of terrain distance
+    const resourceLodCap = resourceCullCap * 0.5; // Switch to billboards at 50% of cull distance
+    
+    // Update model LOD distances
+    if (lodModels) {
+      lodModels.forEach(lod => {
+        // Scale LOD distances based on multiplier
+        const scaledLodDistance = (lod.originalLodDistance || lod.lodDistance) * multiplier;
+        const scaledCullDistance = (lod.originalCullDistance || lod.cullDistance || lod.lodDistance * 2) * multiplier;
+        
+        // Cap to terrain bounds to ensure resources never extend beyond ground
+        lod.lodDistance = Math.min(scaledLodDistance, resourceLodCap);
+        lod.cullDistance = Math.min(scaledCullDistance, resourceCullCap);
+      });
+      
+      // console.log(`🎚️ Updated LOD distances for ${lodModels.length} models (terrain=${terrainWorldDistance}, resourceCap=${resourceCullCap.toFixed(0)})`);
     }
     
     // Update shadow quality based on LOD level - use centralized reconfigure
-    // Convert multiplier to LOD percentage (0-100) for the centralized function
+    // Convert multiplier (0.3-1.7) back to LOD percentage (0-100)
+    // Formula was: multiplier = 0.3 + (level / 100) * 1.4
+    // Inverse: level = (multiplier - 0.3) / 1.4 * 100
     if (gfx.shadowGenerator && window.SHADOWS_ENABLED) {
-      const lodLevel = Math.round(multiplier * 100);
+      const lodLevel = Math.round(((multiplier - 0.3) / 1.4) * 100);
       if (gfx.reconfigureShadowGenerator) {
         gfx.reconfigureShadowGenerator(lodLevel);
       }
@@ -1020,6 +1088,19 @@ let pov2 = 240;
             model.root.metadata = model.root.metadata || {};
             model.root.metadata.resourceTileKey = resourceKey;
             model.root.metadata.modelPath = task.modelPath; // Store model path for respawn detection
+            
+            // PERFORMANCE: Freeze resource meshes since they're static until depleted
+            // This is a huge win - resources never move/rotate/scale until harvested
+            if (model.root.freezeWorldMatrix) {
+              model.root.freezeWorldMatrix();
+              model.root.metadata.isFrozen = true;
+            }
+            // Also freeze child meshes
+            model.root.getChildMeshes && model.root.getChildMeshes().forEach(childMesh => {
+              if (childMesh.freezeWorldMatrix) {
+                childMesh.freezeWorldMatrix();
+              }
+            });
           }
           
           // All the same model setup logic
@@ -1338,6 +1419,19 @@ let pov2 = 240;
     }
     
     if (mesh) {
+      // PERFORMANCE: Unfreeze mesh before animating it
+      // Frozen meshes can't be animated, so we need to unfreeze before the sink animation
+      if (mesh.metadata && mesh.metadata.isFrozen && mesh.unfreezeWorldMatrix) {
+        mesh.unfreezeWorldMatrix();
+        mesh.metadata.isFrozen = false;
+        // Also unfreeze child meshes
+        mesh.getChildMeshes && mesh.getChildMeshes().forEach(childMesh => {
+          if (childMesh.unfreezeWorldMatrix) {
+            childMesh.unfreezeWorldMatrix();
+          }
+        });
+      }
+      
       // Remove the billboard from LOD system if it exists
       removeModelFromLOD(mesh);
       
@@ -2194,6 +2288,12 @@ let pov2 = 240;
         
         // Set up shadows for this mesh (terrain receives shadows but doesn't cast them)
         gfx.setupMeshShadows(meshes[key], false);
+        
+        // PERFORMANCE: Freeze static terrain mesh to skip transform updates
+        // Terrain never moves, so this is a huge optimization
+        if (meshes[key].freezeWorldMatrix) {
+          meshes[key].freezeWorldMatrix();
+        }
       }
     });
 
@@ -2207,6 +2307,11 @@ let pov2 = 240;
     
     // Set up shadows for the parent terrain mesh (terrain receives shadows but doesn't cast them)
     gfx.setupMeshShadows(terrainMesh, false);
+    
+    // PERFORMANCE: Freeze parent terrain mesh too
+    if (terrainMesh.freezeWorldMatrix) {
+      terrainMesh.freezeWorldMatrix();
+    }
 
     // Debug mesh properties
     const totalTiles = Object.values(vertexData).reduce((sum, data) => sum + data.index, 0);
@@ -2217,8 +2322,60 @@ let pov2 = 240;
 
   gfx.init = function() {
     gfx.canvas = document.getElementById('canvas');
+    
+    // ========================================
+    // ENGINE PERFORMANCE OPTIMIZATIONS
+    // ========================================
     gfx.engine = new BABYLON.Engine(gfx.canvas, false, engineOptions, false);
+    
+    // Disable offline support to reduce overhead
+    gfx.engine.enableOfflineSupport = false;
+    
+    // Prevent context lost handling (reduces checks)
+    gfx.engine.doNotHandleContextLost = true;
+    
+    // Optimize depth testing
+    gfx.engine.depthCullingState.depthTest = true;
+    gfx.engine.depthCullingState.depthMask = true;
+    
+    // ========================================
     gfx.scene = new BABYLON.Scene(gfx.engine);
+    
+    // ========================================
+    // PERFORMANCE OPTIMIZATIONS
+    // ========================================
+    
+    // Disable expensive picking on pointer move - we only need click picking
+    gfx.scene.skipPointerMovePicking = true;
+    
+    // Disable frustum clipping for better performance (BJS will still cull based on camera)
+    gfx.scene.skipFrustumClipping = false; // Keep this for proper culling
+    
+    // Reduce the number of times materials are checked for changes
+    gfx.scene.blockMaterialDirtyMechanism = false; // Keep false to allow updates when needed
+    
+    // Disable automatic scene clearing if we're rendering a skybox (we don't use skybox)
+    // Keep autoclear enabled for proper rendering
+    gfx.scene.autoClear = true;
+    gfx.scene.autoClearDepthAndStencil = true;
+    
+    // Use constant deterministic mode to reduce overhead
+    gfx.scene.constantlyUpdateMeshUnderPointer = false;
+    
+    // Optimize render targets
+    gfx.scene.renderTargetsEnabled = true; // Keep enabled for shadows
+    
+    // Optimize particle systems
+    gfx.scene.particlesEnabled = true;
+    
+    // Optimize sprite rendering
+    gfx.scene.spritesEnabled = false; // We use billboards, not sprites
+    
+    // Optimize texture loading
+    gfx.scene.useDelayedTextureLoading = false; // Immediate loading is better for our use case
+    
+    // ========================================
+    
     // Ensure shadows are globally allowed on the scene
     gfx.scene.shadowsEnabled = true;
     
@@ -2787,9 +2944,13 @@ let pov2 = 240;
     if (gfx.cameraTarget) {
       updateLOD(gfx.cameraTarget.position);
       
-      // Update particle LOD - stop/start particles based on distance
-      if (window.fx && window.fx.updateParticleLOD) {
+      // PERFORMANCE: Throttle particle LOD updates - only update every 30 frames
+      // Particles don't need frequent LOD checks, this saves CPU
+      if (!this._particleLODCounter) this._particleLODCounter = 0;
+      this._particleLODCounter++;
+      if (this._particleLODCounter >= 30 && window.fx && window.fx.updateParticleLOD) {
         window.fx.updateParticleLOD(gfx.cameraTarget.position);
+        this._particleLODCounter = 0;
       }
     }
     
@@ -2843,11 +3004,12 @@ let pov2 = 240;
     }
     
     // Update minimap AFTER camera position is finalized
-    // Always update positions (cheap) but throttle grouping logic (expensive)
+    // PERFORMANCE: Throttle minimap updates - only update every 10 frames for better FPS
+    // Minimap doesn't need 60fps updates, 6fps is plenty smooth for a strategic view
     if (window.hud && window.hud.updateMinimap) {
       if (!this._minimapFrameCounter) this._minimapFrameCounter = 0;
       this._minimapFrameCounter++;
-      const fullUpdate = this._minimapFrameCounter >= 5;
+      const fullUpdate = this._minimapFrameCounter >= 10; // Increased from 5 to 10
       if (fullUpdate) {
         this._minimapFrameCounter = 0;
       }
@@ -2860,21 +3022,38 @@ let pov2 = 240;
     }
     
     // Update visible chunks around camera target
-    if (liveField && gfx.cameraTarget) {
+    // CRITICAL: Always use window.liveField to get the current field reference
+    // (ensures we use the new field after match starts, not the stale menu field)
+    const currentField = window.liveField;
+    if (currentField && gfx.cameraTarget) {
       const targetPos = gfx.cameraTarget.position || gfx.cameraTarget;
-      liveField.updateVisibleChunks(targetPos.x, targetPos.z); // Use field's default radius
+      currentField.updateVisibleChunks(targetPos.x, targetPos.z); // Use field's default radius
       
       // Add chunks that need processing to the queue (don't process them all at once)
-      for (const [key, chunk] of liveField.chunks) {
+      const TILE_SIZE = window.TILE_SIZE || 4;
+      const playerChunkX = Math.floor(targetPos.x / (currentField.chunkSize * TILE_SIZE));
+      const playerChunkZ = Math.floor(targetPos.z / (currentField.chunkSize * TILE_SIZE));
+      
+      for (const [key, chunk] of currentField.chunks) {
         if (chunk.needsMesh && !chunkQueue.some(item => item.key === key && item.type === 'mesh')) {
           const [chunkX, chunkZ] = key.split(',').map(Number);
-          chunkQueue.push({ key, chunk, chunkX, chunkZ, type: 'mesh' });
+          const dx = chunkX - playerChunkX;
+          const dz = chunkZ - playerChunkZ;
+          const distSq = dx * dx + dz * dz;
+          chunkQueue.push({ key, chunk, chunkX, chunkZ, type: 'mesh', distSq });
         }
         
         if (chunk.needsModels && chunk.mesh && !chunkQueue.some(item => item.key === key && item.type === 'models')) {
-          chunkQueue.push({ key, chunk, type: 'models' });
+          const [chunkX, chunkZ] = key.split(',').map(Number);
+          const dx = chunkX - playerChunkX;
+          const dz = chunkZ - playerChunkZ;
+          const distSq = dx * dx + dz * dz;
+          chunkQueue.push({ key, chunk, chunkX, chunkZ, type: 'models', distSq });
         }
       }
+      
+      // Sort queue by distance (closest first) so visible chunks load before distant ones
+      chunkQueue.sort((a, b) => a.distSq - b.distSq);
       
       // Process only a limited number of chunks per frame
       let processed = 0;
@@ -2882,7 +3061,7 @@ let pov2 = 240;
         const item = chunkQueue.shift();
         
         if (item.type === 'mesh') {
-          liveField.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
+          currentField.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
         } else if (item.type === 'models') {
           item.chunk.models = placeDecorationsOnChunk(item.chunk, gfx.scene); // NEW: Use pass system
           item.chunk.needsModels = false;
@@ -3040,14 +3219,50 @@ let pov2 = 240;
   };
   
   // Shadow LoD configuration - creates buffer zone between shadows and billboards
-  // Zone layout: [0-100] 3D+shadows → [100-170] 3D no shadows → [170+] billboards
+  // Zone layout: [0-maxShadowDistance] 3D+shadows → [maxShadowDistance-170] 3D no shadows → [170+] billboards
+  // CRITICAL: maxShadowDistance should be LARGER than frustum so frustumEdgeFalloff can fade naturally
+  // We cull shadow casters beyond the frustum for performance, but the fade happens at frustum edge
   gfx.shadowLODConfig = {
     enabled: true,
-    maxShadowDistance: 100, // Shadows stop well before billboard transition (~170)
+    // These are DEFAULT values - they get updated by updateShadowDistancesForLOD()
+    maxShadowDistance: 130, // Cull shadow casters beyond frustum edge (for perf)
     nearShadowDistance: 50, // Close range for full quality shadows
-    farShadowDistance: 80, // Medium range shadows
-    cullingDistance: 120, // Stop shadow calculations here
+    farShadowDistance: 90, // Medium range shadows
+    cullingDistance: 150, // Stop shadow calculations entirely here
     updateInterval: 250 // Update shadow casters every 250ms
+  };
+  
+  // Update shadow distances based on current LOD level
+  // CRITICAL: frustumEdgeFalloff fades at the FRUSTUM boundary
+  // So: frustum < maxShadowDistance (casters extend past frustum for fade to work)
+  // And: maxShadowDistance < billboardStart (no shadows on billboards)
+  gfx.updateShadowDistancesForLOD = function(lodLevel) {
+    if (!gfx.shadowLODConfig) return;
+    
+    // Calculate the same terrain-based caps used by resource LOD
+    const TILE_SIZE = window.TILE_SIZE || 4;
+    const CHUNK_WORLD_SIZE = 16 * TILE_SIZE;
+    const multiplier = 0.3 + (lodLevel / 100) * 1.4; // Same formula as hud.getCurrentLODMultiplier
+    
+    const loadDistance = Math.max(3, Math.min(12, Math.round(6 * multiplier)));
+    const terrainWorldDistance = loadDistance * CHUNK_WORLD_SIZE;
+    const resourceCullCap = terrainWorldDistance * 0.7; // Where billboards cull (match above)
+    const resourceLodCap = resourceCullCap * 0.5; // Where billboards START (3D ends)
+    
+    // Shadow frustum should be ~60% of billboard start distance
+    // maxShadowDistance should be ~80% (casters extend past frustum for fade)
+    // This leaves 20% of 3D zone with no shadows as buffer before billboards
+    const shadowFrustum = resourceLodCap * 0.6; // Frustum edge where fade happens
+    const shadowCull = resourceLodCap * 0.8; // Cull casters here (past frustum, so fade works)
+    
+    // Store the frustum size so configureShadowGeneratorSettings can use it
+    gfx.shadowLODConfig.frustumSize = shadowFrustum;
+    gfx.shadowLODConfig.maxShadowDistance = shadowCull;
+    gfx.shadowLODConfig.nearShadowDistance = shadowFrustum * 0.5;
+    gfx.shadowLODConfig.farShadowDistance = shadowFrustum * 0.8;
+    gfx.shadowLODConfig.cullingDistance = shadowCull * 1.1;
+    
+    // console.log(`🌑 Shadow LOD: frustum=${shadowFrustum.toFixed(0)}, cull=${shadowCull.toFixed(0)}, billboards@${resourceLodCap.toFixed(0)}`);
   };
   
   // Shadow LoD tracking
@@ -3264,9 +3479,10 @@ let pov2 = 240;
     gfx.configureShadowGeneratorSettings = function(generator, lodLevel = 100) {
       if (!generator) return;
       
-      // Use basic PCF for reliable, visible shadows
+      // PERFORMANCE: Use PCF with MEDIUM quality for better FPS
+      // QUALITY_HIGH is expensive, MEDIUM gives 95% of the visual quality with better perf
       generator.usePercentageCloserFiltering = true;
-      generator.filteringQuality = BABYLON.ShadowGenerator.QUALITY_HIGH;
+      generator.filteringQuality = BABYLON.ShadowGenerator.QUALITY_MEDIUM;
       
       // Disable other shadow modes
       generator.useExponentialShadowMap = false;
@@ -3274,10 +3490,21 @@ let pov2 = 240;
       generator.useCloseExponentialShadowMap = false;
       generator.usePoissonSampling = false;
       
+      // PERFORMANCE: Enable contact hardening shadows for better quality at lower res
+      generator.useContactHardeningShadow = false; // Disable for now, can be expensive
+      
+      // PERFORMANCE: Optimize shadow map refresh
+      generator.forceBackFacesOnly = false; // Keep default for better quality
+      
       // darkness: 0 = black shadows, 1 = invisible shadows  
       generator.darkness = 0;                       // Full black shadows for maximum visibility
       generator.bias = 0.005;                       // Moderate bias to prevent acne
       generator.normalBias = 0.02;                  // Normal bias for angled surfaces
+      
+      // CRITICAL: Calculate shadow distances FIRST so we know the frustum size
+      if (gfx.updateShadowDistancesForLOD) {
+        gfx.updateShadowDistancesForLOD(lodLevel);
+      }
       
       // CRITICAL: Set up the shadow camera frustum for directional light
       const light = generator.getLight();
@@ -3286,17 +3513,9 @@ let pov2 = 240;
         light.autoUpdateExtends = false;
         light.autoCalcShadowZBounds = false;
         
-        // Scale frustum size with LOD to maintain shadow quality
-        // Shadows are culled at ~100-120 distance, so frustum doesn't need to be huge
-        // Smaller frustum = higher shadow resolution in the covered area
-        let frustumSize;
-        if (lodLevel <= 30) {
-          frustumSize = 60;  // 120x120 area at low LOD
-        } else if (lodLevel <= 70) {
-          frustumSize = 80;  // 160x160 area at medium LOD
-        } else {
-          frustumSize = 110; // 220x220 area at high LOD (covers shadow culling distance)
-        }
+        // Use dynamically calculated frustum size based on LOD and terrain
+        // Frustum is SMALLER than shadow cull distance so frustumEdgeFalloff fades at edge
+        const frustumSize = gfx.shadowLODConfig?.frustumSize || 80;
         
         light.orthoLeft = -frustumSize;
         light.orthoRight = frustumSize;
@@ -3372,8 +3591,8 @@ let pov2 = 240;
         
         // Calculate frustum size for logging
         const frustumSize = lodLevel <= 30 ? 60 : (lodLevel <= 70 ? 80 : 110);
-        console.log(`🎭 Shadows reconfigured for LOD ${lodLevel}: ${newRes}x${newRes} resolution, ${frustumSize*2}x${frustumSize*2} coverage`);
-        
+        // console.log(`🎭 Shadows reconfigured for LOD ${lodLevel}: ${newRes}x${newRes} resolution, ${frustumSize*2}x${frustumSize*2} coverage`);
+
         // Low-end profile tip tracking (silent)
         if (lodLevel <= 30 && !gfx.lastLowEndTip) {
           gfx.lastLowEndTip = true;
@@ -3897,7 +4116,7 @@ let pov2 = 240;
     camera.upperRadiusLimit = 150; // Reduced for closer zoom out
     camera.lowerRadiusLimit = 21;  // Closer minimum zoom (39% closer than before)
     camera.upperBetaLimit = 1.2; // Reduced to prevent looking too high when zoomed out
-    camera.lowerBetaLimit = 0.7; // Allow full down-angle range when zoomed out
+    camera.lowerBetaLimit = 0.5; // Allow looking more down when zoomed out
     camera.maxZ = 50000; // extend far plane to avoid terrain popping on wide zoom
     camera.minZ = 0.1; // allow closer near plane for low zoom
     camera.fov = .8; // default .8
@@ -4011,11 +4230,12 @@ let pov2 = 240;
   
   // Clear resource registries when starting a new match
   gfx.clearResourceRegistries = function() {
-    // Dispose all registered resource meshes before clearing
+    // CRITICAL: Actually DISPOSE all registered resource meshes, not just disable them
+    // Disabling leaves them in the scene and they can reappear when LOD updates
     let disposedCount = 0;
     for (const [key, mesh] of resourceModelRegistry.entries()) {
-      if (mesh && mesh.setEnabled) {
-        mesh.setEnabled(false);
+      if (mesh && mesh.dispose) {
+        mesh.dispose();
         disposedCount++;
       }
     }
@@ -4023,6 +4243,8 @@ let pov2 = 240;
     resourceModelRegistry.clear();
     pendingResourceTiles.clear();
     depletedResourceTiles.clear();
+    
+    // console.log(`✅ Resource registries cleared - disposed ${disposedCount} resource meshes`);
   };
   
   // Dynamic table parts storage (for custom map shapes)
@@ -4102,9 +4324,12 @@ let pov2 = 240;
     const cornerMat = table?.parts?.materials?.corner;
     const floorMat = table?.parts?.materials?.floor;
     
-    const edgeHeight = 1.2;
+    // Edge dimensions - extended down to cover gap to floor (floor is at Y=-0.777)
+    // Original: height=1.2, Y=0.5 → bottom at -0.1, top at 1.1
+    // New: keep top at 1.1, extend bottom to -0.9 (below floor)
+    const edgeHeight = 2.0;    // Taller to reach below floor
     const edgeThickness = 4.0;
-    const edgeY = 0.5;
+    const edgeY = 0.1;         // Lower center point to extend bottom down
     const edgeAngle = 0.11;
     
     // Create edge pieces
@@ -4141,10 +4366,10 @@ let pov2 = 240;
       gfx._dynamicTableParts.push(mesh);
     });
     
-    // Create corner pieces
+    // Create corner pieces - extended down to match edges
     const cornerSize = 7.0;
-    const cornerHeight = 3.0;
-    const cornerY = 0.3;
+    const cornerHeight = 4.0;  // Taller to extend below floor
+    const cornerY = -0.1;      // Lower center point
     
     corners.forEach(corner => {
       const worldX = corner.cx * chunkWorldSize;
@@ -4263,7 +4488,7 @@ let pov2 = 240;
     }
     const fieldDim = window.liveField ? Math.max(window.liveField.width, window.liveField.height) : 64;
     gfx.mountains = createSimpleMountains(gfx.scene, fieldDim);
-    console.log('🏔️ Mountains recreated');
+    // console.log('🏔️ Mountains recreated');
   };
   
   // Simple mountain background using Babylon's ground mesh with procedural height simulation
@@ -4466,7 +4691,151 @@ let pov2 = 240;
   // Ensure no lingering createMountainTerrain references - the function should be completely gone
   // If any errors mention createMountainTerrain, the old function definition needs manual removal
 
-
+  // Animate a model sinking into the ground (used for clearing)
+  function animateModelSink(mesh, delay = 0) {
+    if (!mesh) return;
+    
+    // Unfreeze if frozen (frozen meshes can't be animated)
+    if (mesh.metadata && mesh.metadata.isFrozen && mesh.unfreezeWorldMatrix) {
+      mesh.unfreezeWorldMatrix();
+      mesh.metadata.isFrozen = false;
+      mesh.getChildMeshes && mesh.getChildMeshes().forEach(childMesh => {
+        if (childMesh.unfreezeWorldMatrix) {
+          childMesh.unfreezeWorldMatrix();
+        }
+      });
+    }
+    
+    const startY = mesh.position.y;
+    const targetY = startY - 8; // Sink 8 units down
+    const duration = 800; // 0.8 seconds
+    let startTime = null;
+    
+    const animateSink = () => {
+      if (startTime === null) {
+        startTime = Date.now();
+      }
+      
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Ease in - accelerate as it falls
+      const easeIn = progress * progress;
+      
+      // Update Y position
+      mesh.position.y = startY + (targetY - startY) * easeIn;
+      
+      if (progress < 1) {
+        requestAnimationFrame(animateSink);
+      } else {
+        // Animation done - disable completely
+        mesh.setEnabled(false);
+        mesh.getChildren && mesh.getChildren().forEach(child => {
+          if (child.setEnabled) {
+            child.setEnabled(false);
+          }
+        });
+      }
+    };
+    
+    // Start after delay (staggered effect)
+    if (delay > 0) {
+      setTimeout(animateSink, delay);
+    } else {
+      animateSink();
+    }
+  }
+  
+  // Clear resource models (rocks, trees) from a circular area with animation
+  // Used by demo mode to create a clear spawn zone
+  gfx.clearModelsInArea = function(centerX, centerZ, radius) {
+    const TILE_SIZE = window.TILE_SIZE || 4;
+    const radiusWorld = radius * TILE_SIZE;
+    const radiusSq = radiusWorld * radiusWorld;
+    
+    let removedCount = 0;
+    const modelsToAnimate = [];
+    
+    // Iterate through all active models and collect those in the area
+    activeModels.forEach((models, chunkKey) => {
+      const modelsToKeep = [];
+      
+      models.forEach(modelInfo => {
+        if (!modelInfo.model || !modelInfo.model.root) {
+          modelsToKeep.push(modelInfo);
+          return;
+        }
+        
+        const pos = modelInfo.model.root.position;
+        const dx = pos.x - centerX * TILE_SIZE;
+        const dz = pos.z - centerZ * TILE_SIZE;
+        const distSq = dx * dx + dz * dz;
+        
+        if (distSq <= radiusSq) {
+          // Collect for animated removal
+          const dist = Math.sqrt(distSq);
+          modelsToAnimate.push({ modelInfo, dist, chunkKey });
+          removedCount++;
+        } else {
+          modelsToKeep.push(modelInfo);
+        }
+      });
+      
+      // Update the active models for this chunk (remove the ones we're animating)
+      if (modelsToKeep.length > 0) {
+        activeModels.set(chunkKey, modelsToKeep);
+      } else {
+        activeModels.delete(chunkKey);
+      }
+    });
+    
+    // Sort by distance from center - center models sink first (ripple effect)
+    modelsToAnimate.sort((a, b) => a.dist - b.dist);
+    
+    // Animate each model with staggered delay
+    modelsToAnimate.forEach((item, index) => {
+      const mesh = item.modelInfo.model.root;
+      const delay = index * 50; // 50ms stagger between each model
+      
+      // Remove from LOD tracking immediately
+      const lodIndex = lodModels.findIndex(lod => lod.model === mesh);
+      if (lodIndex > -1) {
+        const lod = lodModels[lodIndex];
+        if (lod.billboard) {
+          returnBillboardInstance(lod.billboard);
+        }
+        lodModels.splice(lodIndex, 1);
+      }
+      
+      // Start the sink animation
+      animateModelSink(mesh, delay);
+    });
+    
+    // Also animate billboard instances in the area
+    let billboardsRemoved = 0;
+    for (let i = billboardInstances.length - 1; i >= 0; i--) {
+      const instance = billboardInstances[i];
+      if (!instance || !instance.position) continue;
+      
+      const dx = instance.position.x - centerX * TILE_SIZE;
+      const dz = instance.position.z - centerZ * TILE_SIZE;
+      const distSq = dx * dx + dz * dz;
+      
+      if (distSq <= radiusSq) {
+        // Disable/hide the billboard (no animation for these, they're 2D)
+        if (instance.setEnabled) {
+          instance.setEnabled(false);
+        }
+        billboardsRemoved++;
+      }
+    }
+    
+    if (removedCount > 0 || billboardsRemoved > 0) {
+      console.log(`🧹 Animating ${removedCount} models sinking from area at (${centerX}, ${centerZ}) radius ${radius}`);
+    }
+    
+    return removedCount + billboardsRemoved;
+  };
 
 })(window.gfx = window.gfx || {});
 

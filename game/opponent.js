@@ -199,8 +199,8 @@
         attackPlanned: false,
         attackTimer: 0,
         defenseMode: false,
-        lastBuildTick: 0, // Track when last building was started (for cooldown)
-        buildCooldownTicks: 400 // 20 seconds at 20Hz - make AI SUPER chill, build very slowly (10x slower)
+        lastBuildTick: -200, // Start ready to build immediately
+        buildCooldownTicks: 200 // 10 seconds at 20Hz - matches demo AI timing
       };
     }
     return aiPlayer._aiState;
@@ -225,8 +225,9 @@
     const opportunity = evaluateOpportunity(aiPlayer, aiState);
     
     // High-level strategic decisions
+    // Only enter defense mode if there's ACTUAL threat (enemy units near base), not just perceived
     const wasInDefenseMode = aiState.defenseMode;
-    if (threat > 0.7) {
+    if (threat > 0.9) { // Much higher threshold - only real emergencies
       aiState.defenseMode = true;
       if (!wasInDefenseMode) {
         console.log(`🛡️ AI entering DEFENSE MODE!`);
@@ -330,6 +331,15 @@
     
     // CHILL MODE: Only execute highest priority action, and only if cooldown allows
     // This prevents the AI from spamming multiple buildings at once
+    
+    // Debug: Log AI decision state every 5 seconds
+    if (currentTick % 100 === 0) {
+      console.log(`🤖 AI ${aiPlayer.id?.slice(-6)}: phase=${aiState.phase}, actions=${actions.length}, canBuild=${canBuild}, defense=${aiState.defenseMode}`);
+      if (actions.length > 0) {
+        console.log(`   Actions:`, actions.map(a => `${a.type}:${a.buildingType || a.unitType}`).join(', '));
+      }
+    }
+    
     if (actions.length > 0) {
       const action = actions[0]; // Only take the highest priority action
       
@@ -337,21 +347,11 @@
       if (action.type === 'build') {
         if (!canBuild) {
           // Skip building actions if we're on cooldown - AI needs to chill!
+          if (currentTick % 100 === 0) console.log(`   ⏳ Build on cooldown, skipping`);
           return; // Don't build anything this cycle
         }
         
-        // ADDITIONAL CHILL: Skip building more often to make AI feel natural
-        // Skip 50% of medium priority builds, 30% of low priority builds
-        const playerIdHash = (aiPlayer.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const chillSeed = (playerIdHash + currentTick) % 10;
-        
-        if (action.priority === 'medium' && chillSeed < 5) {
-          // Skip medium priority builds 50% of the time - AI is chilling!
-          return;
-        } else if (action.priority === 'low' && chillSeed < 3) {
-          // Skip low priority builds 30% of the time - AI is really chilling!
-          return;
-        }
+        // Build cooldown already handles pacing - no additional skipping needed
       }
       
       executeAIAction(aiPlayer, action);

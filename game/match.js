@@ -1191,18 +1191,21 @@
       // Deduct resources BEFORE placing building
       this.deductResources(player, cost);
       
+      // Normalize player ID for ownership BEFORE placing
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
       // Place building using the existing placeBuilding function
-      // Pass deterministic ID to ensure consistent building IDs across clients
+      // Pass deterministic ID and owner to ensure consistent building IDs across clients
       const building = window.placeBuilding(cmd.buildingType, cmd.gridX, cmd.gridZ, window.gfx.scene, {
         id: deterministicBuildingId,
         gridX: cmd.gridX,
-        gridZ: cmd.gridZ
+        gridZ: cmd.gridZ,
+        owner: normalizedPlayerId
       });
       
       if (building) {
-        // Normalize player ID for ownership
-        const rawPlayerId = cmd.playerId || '';
-        const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+        // Ensure owner is set (may have been set in constructor via options)
         building.owner = normalizedPlayerId;
         
         // Store team color so attached flag meshes can tint correctly
@@ -1809,6 +1812,23 @@
     }
     
     checkEliminationVictory() {
+      // Grace period: Don't check elimination for first 5 seconds (100 ticks)
+      // This allows time for all units to spawn after match start
+      if (this.tick < 100) {
+        return;
+      }
+      
+      // Debug: Log first elimination check
+      if (this.tick === 100) {
+        console.log(`🔍 First elimination check at tick ${this.tick}`);
+        this.players.forEach(p => {
+          const pid = p.id || p;
+          const unitCount = p.units?.length || 0;
+          const villagerCount = p.units?.filter(u => u && u.type === 'villager').length || 0;
+          console.log(`   Player ${pid}: ${unitCount} units, ${villagerCount} villagers`);
+        });
+      }
+      
       // Check each player's units and buildings
       this.players.forEach(player => {
         const pid = player.id || player;
@@ -1820,7 +1840,8 @@
         // Loss condition: Player has no villagers left
         const villagers = player.units?.filter(u => u && u.type === 'villager') || [];
         if (villagers.length === 0) {
-          // console.log(`💀 Player ${pid} has no villagers - eliminated!`);
+          console.log(`💀 Player ${pid} has no villagers - eliminated!`);
+          console.log(`   player.units: ${player.units?.length || 0}`, player.units);
           this.eliminatePlayer(pid);
           return;
         }
@@ -3506,8 +3527,17 @@
         ];
       }
       
-      // Dispose old field before creating new one
+      // Keep reference to old field so we can dispose it
       const oldField = window.liveField;
+      
+      // CRITICAL: Set to null BEFORE disposing to prevent render loop from processing old field
+      // The render loop checks window.liveField and skips processing if null
+      window.liveField = null;
+      if (typeof liveField !== 'undefined') {
+        liveField = null;
+      }
+      
+      // Dispose old field after nulling the reference
       if (oldField && typeof oldField.dispose === 'function') {
         oldField.dispose();
       }
@@ -3529,9 +3559,9 @@
         // Apply LOD settings
         if (window.hud && window.hud.getCurrentLODMultiplier) {
           const currentMultiplier = window.hud.getCurrentLODMultiplier();
-          window.liveField.originalLoadDistance = 4;
-          const newLoadDistance = Math.round(4 * currentMultiplier);
-          window.liveField.currentLoadDistance = Math.max(2, Math.min(8, newLoadDistance));
+          window.liveField.originalLoadDistance = 6;
+          const newLoadDistance = Math.round(6 * currentMultiplier);
+          window.liveField.currentLoadDistance = Math.max(3, Math.min(12, newLoadDistance));
         }
       }
       

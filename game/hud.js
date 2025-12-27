@@ -2281,13 +2281,41 @@
     const halfW = centerX - buffer;
     const halfH = centerY - buffer;
     
-    // Target position in pixels (may be off-screen)
-    const targetX = projected.x * rect.width;
-    const targetY = projected.y * rect.height;
+    // Check if unit is behind camera - projection becomes unstable/inverted
+    // projected.z < 0 or > 1 means unit is outside the view frustum depth
+    // For behind-camera units, we use camera-space vectors instead of screen projection
+    const isBehindCamera = projected.z < 0 || projected.z > 1;
     
-    // Direction from screen center toward the unit
-    let dirX = targetX - centerX;
-    let dirY = targetY - centerY;
+    let dirX, dirY;
+    if (isBehindCamera) {
+      // Unit is behind camera - use camera-space vectors for stable direction
+      // This prevents jumping when camera angle changes
+      const rightDot = -BABYLON.Vector3.Dot(toUnit, cameraRight);
+      const upDot = BABYLON.Vector3.Dot(toUnit, cameraUp);
+      const forwardDot = BABYLON.Vector3.Dot(toUnit, cameraForward);
+      
+      // For behind-camera units, we need to flip the direction
+      // (they project to opposite side in screen space)
+      // rightDot: positive = unit is to our right
+      // upDot: positive = unit is above us (in camera space)
+      // forwardDot: negative = behind camera
+      
+      // Map to screen direction (invert because behind camera)
+      // Also force behind-camera units toward bottom of screen for intuitive navigation
+      dirX = rightDot * halfW;
+      // For units behind camera, bias strongly toward bottom edge
+      // Use a blend: mostly bottom, but still respect left/right positioning
+      const behindBias = Math.min(1, Math.abs(forwardDot) * 2); // How "behind" (0-1)
+      dirY = halfH * (0.5 + behindBias * 0.5); // Push toward bottom
+    } else {
+      // Target position in pixels (may be off-screen but in front of camera)
+      const targetX = projected.x * rect.width;
+      const targetY = projected.y * rect.height;
+      
+      // Direction from screen center toward the unit
+      dirX = targetX - centerX;
+      dirY = targetY - centerY;
+    }
     
     // Avoid degenerate zero-length direction
     if (dirX === 0 && dirY === 0) {
@@ -2374,9 +2402,13 @@
         // Don't use billboard - we'll manually rotate them to face screen center
         
         // Make it glow/stand out and set up click handlers
+        // CRITICAL: Clone materials so we don't modify the shared materials used by game units
         indicator.getChildMeshes().forEach(mesh => {
           if (mesh.material) {
-            mesh.material.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+            // Clone the material to avoid modifying the original shared material
+            const clonedMat = mesh.material.clone(mesh.material.name + '_minimap');
+            mesh.material = clonedMat;
+            clonedMat.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
           }
           // Ensure child meshes are pickable
           mesh.isPickable = true;
@@ -2782,7 +2814,7 @@
       if (window.gfx && window.gfx.removeMountains) {
         window.gfx.removeMountains();
       }
-      console.log('🖼️ LOD 0%: Billboard-only mode enabled for low-end devices');
+      // console.log('🖼️ LOD 0%: Billboard-only mode enabled for low-end devices');
       return;
     } else {
       // Disable billboard-only mode when slider moves above 0

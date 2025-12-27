@@ -646,7 +646,7 @@
   global.deterministicRandom = random; // Replace old Math.sin() based version
   global.initMatchRng = initMatchRng;
   global.getMatchRng = getMatchRng;
-  
-  console.log('✅ Determinism module loaded');
-  
+
+  // console.log('✅ Determinism module loaded');
+
 })(typeof window !== 'undefined' ? window : this);

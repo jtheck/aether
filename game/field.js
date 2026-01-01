@@ -1227,7 +1227,9 @@ Field.prototype.findPath = function(startX, startZ, endX, endZ, maxIterations = 
   // Build precomputed height grid for fast lookups
   // Uses the same calculation as terrain mesh generation for consistency
   Field.prototype._buildHeightGrid = function() {
-    // Create 2D array: heightGrid[tileX][tileZ] = height at tile center
+    // Create 2D array: heightGrid[x][z] = height at tile corner (x, z)
+    // This matches how terrain mesh vertices are calculated (corners, not centers)
+    // CRITICAL: Must replicate the exact same water snapping logic as gfx.js terrain mesh!
     this._heightGrid = [];
     
     // Ensure heightMap and terrainTypes are populated (should be after proof())
@@ -1236,12 +1238,33 @@ Field.prototype.findPath = function(startX, startZ, endX, endZ, maxIterations = 
       return;
     }
     
-    for (let x = 0; x < this.width; x++) {
+    const waterLevel = -0.3; // Must match gfx.js waterLevel
+    const w = this.width;
+    const h = this.height;
+    const terrainTypes = this.terrainTypes;
+    
+    // Helper to check if a tile position has water (matches gfx.js hasWater)
+    const hasWater = (tx, tz) => {
+      if (tx < 0 || tx >= w || tz < 0 || tz >= h) return false;
+      return terrainTypes[tz * w + tx] === 1;
+    };
+    
+    // Include one extra row/column for the far corners (width+1 x height+1)
+    for (let x = 0; x <= this.width; x++) {
       this._heightGrid[x] = [];
-      for (let z = 0; z < this.height; z++) {
-        // Get height at tile center (x + 0.5, z + 0.5 for center of tile)
-        // This matches how terrain mesh vertices are calculated
-        this._heightGrid[x][z] = this.getHeightVariation(x + 0.5, z + 0.5);
+      for (let z = 0; z <= this.height; z++) {
+        // Check if any of the 4 tiles sharing this corner is water
+        // A corner at (x, z) is shared by tiles: (x-1,z-1), (x,z-1), (x-1,z), (x,z)
+        const cornerTouchesWater = hasWater(x, z) || hasWater(x - 1, z) || 
+                                   hasWater(x, z - 1) || hasWater(x - 1, z - 1);
+        
+        if (cornerTouchesWater) {
+          // Snap to water level - matches terrain mesh water handling
+          this._heightGrid[x][z] = waterLevel;
+        } else {
+          // Get height at tile corner (x, z) - matches terrain mesh vertices
+          this._heightGrid[x][z] = this.getHeightVariation(x, z);
+        }
       }
     }
     

@@ -63,6 +63,11 @@
       lassoLineMesh = null;
     }
     
+    // Clean up lasso fence panels
+    if (typeof disposeLassoFencePanels === 'function') {
+      disposeLassoFencePanels();
+    }
+    
     // Clean up existing selection box
     if (selectionBox) {
       if (Array.isArray(selectionBox)) {
@@ -335,10 +340,10 @@
     
     // Update visual selection box
     if (isSelecting && selectionBox) {
-      // For 3D lasso mode, update very infrequently to show progress without accordion
+      // For 3D lasso mode, update frequently for smooth feedback
       if (USE_3D_HUD && selectionMode === 'lasso') {
         const pointsSinceLastUpdate = lassoWorldPath.length - lastLassoUpdatePointCount;
-        if (pointsSinceLastUpdate >= 5) { // Update more often now that updates are cheaper
+        if (pointsSinceLastUpdate >= 1) { // Update every point for responsive feel
           lastLassoUpdatePointCount = lassoWorldPath.length;
           updateSelectionBox();
         }
@@ -471,57 +476,104 @@
     return rmbPositionDuringDrag;
   };
   
-  // Update 3D lasso line mesh
+  // Lasso fence panels - array of planes for each segment
+  let lassoFencePanels = [];
+  
+  // Update 3D lasso - creates individual fence panels between consecutive points
   function updateLassoLine3D() {
     if (!window.gfx || !window.gfx.scene) return;
-    if (lassoWorldPath.length < 3) return;
+    if (lassoWorldPath.length < 2) return;
 
-    const worldPoints = simplifyWorldPath(lassoWorldPath, LASSO_SIMPLIFY_TOLERANCE);
+    // Use raw path directly (no RDP simplification)
+    const worldPoints = lassoWorldPath;
     
-    // Need at least 2 points to draw
+    // Need at least 2 points
     if (worldPoints.length < 2) return;
     
-    // Create a VERTICAL FENCE/WALL following the simplified perimeter path
-    const FENCE_HEIGHT = 3; // Tall fence
-    
-    // Create bottom and top paths for the ribbon (vertical wall)
-    const bottomPath = worldPoints.map(p => new BABYLON.Vector3(p.x, 0, p.z)); // On ground
-    const topPath = worldPoints.map(p => new BABYLON.Vector3(p.x, FENCE_HEIGHT, p.z)); // At height
-    
-    const pathArray = [bottomPath, topPath];
-    const ribbonOptions = {
-      pathArray,
-      closePath: true,
-      closeArray: false,
-      sideOrientation: BABYLON.Mesh.DOUBLESIDE,
-      updatable: true
-    };
-    
+    const FENCE_HEIGHT = 1.25;
     const scene = window.gfx.scene;
     
-    if (!lassoLineMesh || lassoLineMesh.isDisposed()) {
-      lassoLineMesh = BABYLON.MeshBuilder.CreateRibbon("lassoFence", ribbonOptions, scene);
-      lassoLineMesh.isPickable = false;
-      lassoLineMesh.renderingGroupId = 3; // Render on top of everything
-      
-      if (!lassoLineMaterial || lassoLineMaterial.isDisposed?.()) {
-        lassoLineMaterial = new BABYLON.StandardMaterial("lassoMat", scene);
-        lassoLineMaterial.emissiveColor = new BABYLON.Color3(0, 2, 2); // Maximum brightness cyan
-        lassoLineMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1);
-        lassoLineMaterial.alpha = 1.0; // Opaque
-        lassoLineMaterial.disableLighting = true;
-        lassoLineMaterial.backFaceCulling = false; // Show both sides
-      }
-      
-      lassoLineMesh.material = lassoLineMaterial;
-      
-      if (window.gfx.glowLayer && !lassoLineMesh.__lassoGlowAdded) {
-        window.gfx.glowLayer.addIncludedOnlyMesh(lassoLineMesh);
-        lassoLineMesh.__lassoGlowAdded = true;
-      }
-    } else {
-      BABYLON.MeshBuilder.CreateRibbon(null, { ...ribbonOptions, instance: lassoLineMesh }, scene);
+    // Create material if needed
+    if (!lassoLineMaterial || lassoLineMaterial.isDisposed?.()) {
+      lassoLineMaterial = new BABYLON.StandardMaterial("lassoMat", scene);
+      lassoLineMaterial.emissiveColor = new BABYLON.Color3(0, 1, 1);
+      lassoLineMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1);
+      lassoLineMaterial.alpha = 0.8;
+      lassoLineMaterial.disableLighting = true;
+      lassoLineMaterial.backFaceCulling = false;
     }
+    
+    // Create/update fence panels between consecutive points
+    const numSegments = worldPoints.length; // Include closing segment
+    
+    // Dispose extra panels if we have too many
+    while (lassoFencePanels.length > numSegments) {
+      const panel = lassoFencePanels.pop();
+      if (panel && !panel.isDisposed()) panel.dispose();
+    }
+    
+    // Create or update each panel
+    for (let i = 0; i < numSegments; i++) {
+      const p1 = worldPoints[i];
+      const p2 = worldPoints[(i + 1) % worldPoints.length]; // Wrap to close loop
+      
+      // Calculate panel properties
+      const dx = p2.x - p1.x;
+      const dz = p2.z - p1.z;
+      const length = Math.sqrt(dx * dx + dz * dz);
+      
+      if (length < 0.01) continue; // Skip tiny segments
+      
+      const centerX = (p1.x + p2.x) / 2;
+      const centerZ = (p1.z + p2.z) / 2;
+      const angle = Math.atan2(dx, dz) + Math.PI / 2; // Rotate to align with segment
+      
+      let panel = lassoFencePanels[i];
+      
+      if (!panel || panel.isDisposed()) {
+        // Create new panel
+        panel = BABYLON.MeshBuilder.CreatePlane(`lassoPanel_${i}`, {
+          width: 1,
+          height: 1
+        }, scene);
+        panel.material = lassoLineMaterial;
+        panel.isPickable = false;
+        panel.renderingGroupId = 3;
+        lassoFencePanels[i] = panel;
+        
+        if (window.gfx.glowLayer) {
+          window.gfx.glowLayer.addIncludedOnlyMesh(panel);
+        }
+      }
+      
+      // Position and scale the panel
+      panel.position.x = centerX;
+      panel.position.y = FENCE_HEIGHT / 2;
+      panel.position.z = centerZ;
+      panel.scaling.x = length;
+      panel.scaling.y = FENCE_HEIGHT;
+      panel.rotation.x = 0;
+      panel.rotation.y = angle;
+      panel.isVisible = true;
+    }
+    
+    // Hide any extra panels
+    for (let i = numSegments; i < lassoFencePanels.length; i++) {
+      if (lassoFencePanels[i]) lassoFencePanels[i].isVisible = false;
+    }
+  }
+  
+  // Clean up lasso fence panels
+  function disposeLassoFencePanels() {
+    lassoFencePanels.forEach(panel => {
+      if (panel && !panel.isDisposed()) {
+        if (window.gfx?.glowLayer) {
+          window.gfx.glowLayer.removeIncludedOnlyMesh?.(panel);
+        }
+        panel.dispose();
+      }
+    });
+    lassoFencePanels = [];
   }
   
   // Update the visual selection box
@@ -633,53 +685,62 @@
       new BABYLON.Vector3(worldCorners.bottomLeft.x, 0, worldCorners.bottomLeft.z)
     );
     
-    const FENCE_HEIGHT = 2; // Height of the selection fence
+    const FENCE_HEIGHT = 1.25; // Height of the selection fence
 
-    // Right edge - lay flat on ground
-    rightPlane.position.x = (worldCorners.topRight.x + worldCorners.bottomRight.x) / 2;
-    rightPlane.position.z = (worldCorners.topRight.z + worldCorners.bottomRight.z) / 2;
-    rightPlane.position.y = FENCE_HEIGHT / 2; // Raise up
-    rightPlane.scaling.x = Math.max(rightLength, 0.1);
-    rightPlane.rotation.x = -Math.PI/2; // Lay flat
-    rightPlane.rotation.y = Math.atan2(
-      worldCorners.bottomRight.x - worldCorners.topRight.x,
-      worldCorners.bottomRight.z - worldCorners.topRight.z
-    ) + Math.PI / 2;
-    rightPlane.isVisible = true;
+    // All planes are VERTICAL fences
+    // scaling.x = length along ground, scaling.y = fence height
+    // rotation.y = atan2 of edge direction + PI/2 to align plane WIDTH with edge
     
-    // Left edge - lay flat on ground
-    leftPlane.position.x = (worldCorners.topLeft.x + worldCorners.bottomLeft.x) / 2;
-    leftPlane.position.z = (worldCorners.topLeft.z + worldCorners.bottomLeft.z) / 2;
-    leftPlane.position.y = FENCE_HEIGHT / 2; // Raise up
-    leftPlane.scaling.x = Math.max(leftLength, 0.1);
-    leftPlane.rotation.x = -Math.PI/2; // Lay flat
-    leftPlane.rotation.y = Math.atan2(
-      worldCorners.bottomLeft.x - worldCorners.topLeft.x,
-      worldCorners.bottomLeft.z - worldCorners.topLeft.z
-    ) - Math.PI / 2;
-    leftPlane.isVisible = true;
-
-    // Top edge - vertical plane connecting left and right at top
+    // Top edge - vertical fence along top of selection
     topPlane.position.x = (worldCorners.topLeft.x + worldCorners.topRight.x) / 2;
     topPlane.position.z = (worldCorners.topLeft.z + worldCorners.topRight.z) / 2;
-    topPlane.position.y = FENCE_HEIGHT / 2; // Center at same height as sides
+    topPlane.position.y = FENCE_HEIGHT / 2;
     topPlane.scaling.x = Math.max(topLength, 0.1);
+    topPlane.scaling.y = FENCE_HEIGHT;
+    topPlane.rotation.x = 0;
     topPlane.rotation.y = Math.atan2(
       worldCorners.topRight.x - worldCorners.topLeft.x,
       worldCorners.topRight.z - worldCorners.topLeft.z
-    ) + Math.PI/2; // Add 90 degrees to align plane with edge
+    ) + Math.PI / 2; // +90° to align width with edge
     topPlane.isVisible = true;
     
-    // Bottom edge - vertical plane connecting left and right at bottom
+    // Bottom edge - vertical fence along bottom of selection
     bottomPlane.position.x = (worldCorners.bottomLeft.x + worldCorners.bottomRight.x) / 2;
     bottomPlane.position.z = (worldCorners.bottomLeft.z + worldCorners.bottomRight.z) / 2;
-    bottomPlane.position.y = FENCE_HEIGHT / 2; // Center at same height as sides
+    bottomPlane.position.y = FENCE_HEIGHT / 2;
     bottomPlane.scaling.x = Math.max(bottomLength, 0.1);
+    bottomPlane.scaling.y = FENCE_HEIGHT;
+    bottomPlane.rotation.x = 0;
     bottomPlane.rotation.y = Math.atan2(
       worldCorners.bottomRight.x - worldCorners.bottomLeft.x,
       worldCorners.bottomRight.z - worldCorners.bottomLeft.z
-    ) + Math.PI + Math.PI/2; // Add 90 degrees to align plane with edge
+    ) + Math.PI / 2; // +90° to align width with edge
     bottomPlane.isVisible = true;
+
+    // Right edge - vertical fence along right of selection
+    rightPlane.position.x = (worldCorners.topRight.x + worldCorners.bottomRight.x) / 2;
+    rightPlane.position.z = (worldCorners.topRight.z + worldCorners.bottomRight.z) / 2;
+    rightPlane.position.y = FENCE_HEIGHT / 2;
+    rightPlane.scaling.x = Math.max(rightLength, 0.1);
+    rightPlane.scaling.y = FENCE_HEIGHT;
+    rightPlane.rotation.x = 0;
+    rightPlane.rotation.y = Math.atan2(
+      worldCorners.bottomRight.x - worldCorners.topRight.x,
+      worldCorners.bottomRight.z - worldCorners.topRight.z
+    ) + Math.PI / 2; // +90° to align width with edge
+    rightPlane.isVisible = true;
+    
+    // Left edge - vertical fence along left of selection
+    leftPlane.position.x = (worldCorners.topLeft.x + worldCorners.bottomLeft.x) / 2;
+    leftPlane.position.z = (worldCorners.topLeft.z + worldCorners.bottomLeft.z) / 2;
+    leftPlane.position.y = FENCE_HEIGHT / 2;
+    leftPlane.scaling.x = Math.max(leftLength, 0.1);
+    leftPlane.scaling.y = FENCE_HEIGHT;
+    leftPlane.rotation.x = 0;
+    leftPlane.rotation.y = Math.atan2(
+      worldCorners.bottomLeft.x - worldCorners.topLeft.x,
+      worldCorners.bottomLeft.z - worldCorners.topLeft.z
+    ) + Math.PI / 2; // +90° to align width with edge
     leftPlane.isVisible = true;
     
     // console.log("🎯 3D fence selection updated");
@@ -838,7 +899,10 @@
     lassoWorldPath = [];
     lastLassoPoint = null;
     
-    // Dispose 3D lasso line mesh
+    // Dispose 3D lasso fence panels
+    disposeLassoFencePanels();
+    
+    // Dispose old ribbon mesh if exists
     if (lassoLineMesh) {
       if (window.gfx?.glowLayer && lassoLineMesh.__lassoGlowAdded) {
         window.gfx.glowLayer.removeIncludedOnlyMesh?.(lassoLineMesh);
@@ -1012,7 +1076,10 @@
   
   // Dispose of lasso resources
   lasso.dispose = function() {
-    // Dispose 3D lasso line mesh
+    // Dispose 3D lasso fence panels
+    disposeLassoFencePanels();
+    
+    // Dispose old ribbon mesh if exists
     if (lassoLineMesh) {
       if (window.gfx?.glowLayer && lassoLineMesh.__lassoGlowAdded) {
         window.gfx.glowLayer.removeIncludedOnlyMesh?.(lassoLineMesh);

@@ -6,94 +6,79 @@ const LOCAL_UNIT_INTERPOLATION_SPEED = 0.5; // Faster interpolation for local un
 
 // Unit type definitions - all unit attributes in one place
 const UnitTypes = {
-  // NPCs and Creatures
+  
+  // ═══════════════════════════════════════════════════════════════
+  // CIVILIAN & WORKER UNITS
+  // ═══════════════════════════════════════════════════════════════
+  
   villager: {
     name: "Villager",
-    category: "npc",
+    category: "civilian",
     model: "assets/models/villager.glb",
-    scale: 0.5, // Made bigger so they're visible
+    scale: 0.5,
     health: 50,
     speed: 20,
-    rotationSpeed: 3.0, // Snappy turning for responsive movement
-    // modelOrientation: Math.PI * 1.5, // 270 degrees - flipped around to face forward
+    rotationSpeed: 3.0,
     size: 1,
     cost: { food: 15 },
     abilities: ["gather", "build"],
-    description: "Basic civilian unit that can gather resources and construct buildings"
+    upgradeTo: "brigand",
+    description: "Basic civilian unit that can gather resources and construct buildings",
+    notes: "DEFEAT: Runs home crying, needs time to recover at village before working again"
   },
-  
-//   frog_scout: {
-//     name: "Frog Scout", 
-//     category: "military",
-//     model: "assets/models/frog.glb",
-//     scale: 0.12,
-//     health: 30,
-//     speed: 4,
-//     rotationSpeed: 5.0, // Very fast turning for agile scouts
-//     size: 0.8,
-//     cost: { food: 20, wood: 10 },
-//     abilities: ["scout", "stealth"],
-//     description: "Fast reconnaissance unit with stealth capabilities"
-//   },
-  
-//   tree_guardian: {
-//     name: "Tree Guardian",
-//     category: "military", 
-//     model: "assets/models/trees.glb",
-//     scale: .8,
-//     health: 150,
-//     speed: 1,
-//     rotationSpeed: 5.0, // Slow turning for massive units
-//     size: 2,
-//     cost: { wood: 50, stone: 25 },
-//     abilities: ["defend", "root_slam"],
-//     description: "Massive defensive unit with area attack abilities"
-//   },
-  
-//   mushroom_mage: {
-//     name: "Mushroom Mage",
-//     category: "caster",
-//     model: "assets/models/mushroom.glb", 
-//     scale: 0.15,
-//     health: 40,
-//     speed: 1.5,
-//     rotationSpeed: 12.0, // Medium turning for casters
-//     size: 1,
-//     cost: { food: 30, magic: 20 },
-//     abilities: ["heal", "poison_cloud", "grow"],
-//     description: "Support unit that can heal allies and cast nature magic"
-//   },
-  
-//   bird_messenger: {
-//     name: "Bird Messenger",
-//     category: "utility",
-//     model: "assets/models/birdy.glb",
-//     scale: 0.08,
-//     health: 20,
-//     speed: 8,
-//     rotationSpeed: 30.0, // Very fast turning for agile birds
-//     size: 0.5,
-//     cost: { food: 15 },
-//     abilities: ["fly", "message", "scout"],
-//     description: "Flying unit for communication and aerial reconnaissance"
-//   },
-  
-//   // Workers
-//   gnome_builder: {
-//     name: "Gnome Builder",
-//     category: "worker",
-//     model: "assets/models/gnome.glb",
-//     scale: 0.12,
-//     health: 60,
-//     speed: 2,
-//     rotationSpeed: 18.0, // Fast turning for skilled workers
-//     size: 1,
-//     cost: { food: 30, stone: 15 },
-//     abilities: ["build", "repair", "fortify"],
-//     description: "Specialized construction unit with enhanced building abilities"
-//   },
 
-  // Your original units
+  brigand: {
+    name: "Brigand",
+    category: "civilian",
+    model: "assets/models/brigand.glb",
+    scale: 0.5,
+    health: 65,
+    speed: 31,
+    rotationSpeed: 4.0,
+    size: 1,
+    cost: { food: 20, wood: 10 },
+    abilities: ["gather", "build", "sneak"],
+    upgradeFrom: "villager",
+    description: "Upgraded villager with stealth capabilities and faster movement",
+    notes: "DEFEAT: Flees into the woods, might return later as a nuisance to both sides"
+  },
+
+  engineer: {
+    name: "Engineer",
+    category: "worker",
+    model: "assets/models/engineer.glb",
+    scale: 0.5,
+    health: 50,
+    speed: 21,
+    rotationSpeed: 4.0,
+    size: 1,
+    cost: { food: 35, stone: 20 },
+    abilities: ["build", "repair"],
+    upgradeTo: "architect",
+    description: "Skilled builder who can construct advanced structures",
+    notes: "DEFEAT: Drops tools and surrenders, can be 'hired' by the victor"
+  },
+
+  architect: {
+    name: "Architect",
+    category: "worker",
+    model: "assets/models/engineer.glb", // TODO: unique model
+    scale: 0.5,
+    health: 60,
+    speed: 21,
+    rotationSpeed: 4.0,
+    size: 1,
+    cost: { food: 50, stone: 40 },
+    abilities: ["build", "repair", "fortify"],
+    upgradeFrom: "engineer",
+    description: "Master builder who can fortify and upgrade buildings",
+    notes: "DEFEAT: Dramatically faints onto blueprints, revives at workshop"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // SUPPORT UNITS
+  // ═══════════════════════════════════════════════════════════════
+
   monk: {
     name: "Monk",
     category: "support",
@@ -103,10 +88,32 @@ const UnitTypes = {
     speed: 25,
     rotationSpeed: 8.0,
     size: 1,
-    cost: { food: 15, magic: 0 },
-    abilities: ["heal", "bless", "convert"],
-    description: "Holy unit with healing and conversion abilities"
+    cost: { food: 20, minerals: 5 },
+    abilities: ["heal", "kick"],
+    upgradeTo: "paladin",
+    description: "Holy warrior with healing abilities and powerful kicks",
+    notes: "DEFEAT: Sits down to meditate, becomes invulnerable but useless until meditation ends"
   },
+
+  paladin: {
+    name: "Paladin",
+    category: "support",
+    model: "assets/models/monk.glb", // TODO: unique model
+    scale: 0.55,
+    health: 80,
+    speed: 28,
+    rotationSpeed: 6.0,
+    size: 1,
+    cost: { food: 40, minerals: 15 },
+    abilities: ["heal", "kick", "bless", "shield"],
+    upgradeFrom: "monk",
+    description: "Elite holy warrior with enhanced healing and protective auras",
+    notes: "DEFEAT: Kneels in prayer, glows briefly, then teleports back to church"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // CASTER UNITS
+  // ═══════════════════════════════════════════════════════════════
 
   wizard: {
     name: "Wizard",
@@ -114,40 +121,372 @@ const UnitTypes = {
     model: "assets/models/wizard.glb",
     scale: 0.5,
     health: 40,
-    speed: 50,
-    rotationSpeed: 8.0, // Increased from 4.0 - wizards are fast so they need faster turning
+    speed: 30,
+    rotationSpeed: 8.0,
     size: 1,
-    cost: { food: 30, magic: 2 },
-    abilities: ["fireball", "teleport", "shield"],
-    description: "Powerful magic user with offensive spells"
+    cost: { food: 30, minerals: 10 },
+    abilities: ["fireball", "teleport"],
+    upgradeTo: "elemental",
+    description: "Powerful magic user with offensive spells",
+    notes: "DEFEAT: POOF! Teleports away in a puff of smoke, reappears at lab"
   },
 
-  engineer: {
-    name: "Engineer",
-    category: "worker",
-    model: "assets/models/engineer.glb",
+  elemental: {
+    name: "Elemental",
+    category: "caster",
+    model: "assets/models/wizard.glb", // TODO: unique model
+    scale: 0.6,
+    health: 70,
+    speed: 35,
+    rotationSpeed: 8.0,
+    size: 1,
+    cost: { food: 50, minerals: 25 },
+    abilities: ["fireball", "teleport", "storm", "summon"],
+    upgradeFrom: "wizard",
+    description: "Ascended wizard wielding raw elemental forces",
+    notes: "DEFEAT: Dissolves into swirling elemental particles, reforms at moon well"
+  },
+
+  warlock: {
+    name: "Warlock",
+    category: "caster",
+    model: "assets/models/wizard.glb", // TODO: unique model
+    scale: 0.5,
+    health: 45,
+    speed: 25,
+    rotationSpeed: 6.0,
+    size: 1,
+    cost: { food: 35, minerals: 15 },
+    abilities: ["curse", "drain", "hex"],
+    spawner: "tavern",
+    upgradeTo: "geomancer",
+    description: "Dark caster specializing in curses and life drain",
+    notes: "DEFEAT: Sinks into shadow portal, sulks at tavern for a while"
+  },
+
+  geomancer: {
+    name: "Geomancer",
+    category: "caster",
+    model: "assets/models/wizard.glb", // TODO: unique model
+    scale: 0.55,
+    health: 65,
+    speed: 25,
+    rotationSpeed: 6.0,
+    size: 1,
+    cost: { food: 55, minerals: 30 },
+    abilities: ["curse", "drain", "earthquake", "terraform"],
+    spawner: "tavern",
+    upgradeFrom: "warlock",
+    description: "Master of earth magic who can reshape the battlefield",
+    notes: "DEFEAT: Turns to stone briefly, crumbles, reforms from nearby rocks"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // MILITARY UNITS (Barracks)
+  // ═══════════════════════════════════════════════════════════════
+
+  warrior: {
+    name: "Warrior",
+    category: "military",
+    model: "assets/models/brigand.glb", // TODO: unique model
+    scale: 0.5,
+    health: 80,
+    speed: 22,
+    rotationSpeed: 5.0,
+    size: 1,
+    cost: { food: 25, wood: 15 },
+    abilities: ["melee", "charge"],
+    spawner: "barracks",
+    upgradeTo: "champion",
+    description: "Frontline melee fighter with heavy armor",
+    notes: "DEFEAT: Drops weapon, raises hands in surrender, walks to nearest barracks"
+  },
+
+  champion: {
+    name: "Champion",
+    category: "military",
+    model: "assets/models/brigand.glb", // TODO: unique model
+    scale: 0.55,
+    health: 120,
+    speed: 24,
+    rotationSpeed: 5.0,
+    size: 1,
+    cost: { food: 45, wood: 30, minerals: 10 },
+    abilities: ["melee", "charge", "rally", "cleave"],
+    spawner: "barracks",
+    upgradeFrom: "warrior",
+    description: "Elite warrior who inspires nearby allies",
+    notes: "DEFEAT: Salutes opponent respectfully, limps off dramatically to recover honor"
+  },
+
+  archer: {
+    name: "Archer",
+    category: "military",
+    model: "assets/models/brigand.glb", // TODO: unique model
+    scale: 0.5,
+    health: 45,
+    speed: 26,
+    rotationSpeed: 6.0,
+    size: 1,
+    cost: { food: 20, wood: 25 },
+    abilities: ["ranged", "volley"],
+    spawner: "barracks",
+    upgradeTo: "ballister",
+    description: "Ranged unit effective against light units",
+    notes: "DEFEAT: Bow snaps comically, runs away embarrassed"
+  },
+
+  ballister: {
+    name: "Ballister",
+    category: "military",
+    model: "assets/models/brigand.glb", // TODO: unique model
+    scale: 0.5,
+    health: 55,
+    speed: 24,
+    rotationSpeed: 5.0,
+    size: 1,
+    cost: { food: 35, wood: 45, stone: 10 },
+    abilities: ["ranged", "volley", "siege"],
+    spawner: "barracks",
+    upgradeFrom: "archer",
+    description: "Heavy crossbow specialist effective against buildings",
+    notes: "DEFEAT: Crossbow jams and explodes harmlessly, retreats to workshop for repairs"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // VEHICLE UNITS
+  // ═══════════════════════════════════════════════════════════════
+
+  wagon: {
+    name: "Wagon",
+    category: "vehicle",
+    model: "assets/models/camp.glb", // TODO: unique model
+    scale: 0.4,
+    health: 60,
+    speed: 18,
+    rotationSpeed: 2.0,
+    size: 2,
+    cost: { wood: 40, stone: 10 },
+    abilities: ["transport", "deploy"],
+    upgradeTo: "war_wagon",
+    description: "Transport vehicle that can carry units and resources",
+    notes: "DEFEAT: Wheels fall off cartoonishly, driver runs away, can be repaired"
+  },
+
+  war_wagon: {
+    name: "War Wagon",
+    category: "vehicle",
+    model: "assets/models/camp.glb", // TODO: unique model
+    scale: 0.45,
+    health: 100,
+    speed: 16,
+    rotationSpeed: 2.0,
+    size: 2,
+    cost: { wood: 60, stone: 25, minerals: 10 },
+    abilities: ["transport", "deploy", "ranged"],
+    upgradeFrom: "wagon",
+    description: "Armored wagon with mounted weapons",
+    notes: "DEFEAT: Crew bails out with parachutes(?!), wagon rolls away empty"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // ELEMENTAL UNITS - AIR (Perch) 🌀
+  // ═══════════════════════════════════════════════════════════════
+
+  dirigible: {
+    name: "Dirigible",
+    category: "air",
+    element: "air",
+    model: "assets/models/camp.glb", // TODO: unique model
+    scale: 0.5,
+    health: 70,
+    speed: 35,
+    rotationSpeed: 3.0,
+    size: 2,
+    cost: { wood: 50, minerals: 20 },
+    abilities: ["fly", "scout", "transport"],
+    spawner: "perch",
+    upgradeTo: "war_balloon",
+    description: "Floating airship for scouting and transport",
+    notes: "DEFEAT: 🌀 Deflates slowly with sad whistle sound, drifts back to perch"
+  },
+
+  war_balloon: {
+    name: "War Balloon",
+    category: "air",
+    element: "air",
+    model: "assets/models/camp.glb", // TODO: unique model
+    scale: 0.55,
+    health: 100,
+    speed: 30,
+    rotationSpeed: 2.5,
+    size: 2,
+    cost: { wood: 80, stone: 20, minerals: 35 },
+    abilities: ["fly", "bomb", "transport"],
+    spawner: "perch",
+    upgradeFrom: "dirigible",
+    description: "Armed airship that rains destruction from above",
+    notes: "DEFEAT: 🌀 Pops dramatically, crew floats down on tiny parachutes"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // ELEMENTAL UNITS - FIRE (Factory) 🔥
+  // ═══════════════════════════════════════════════════════════════
+
+  apc: {
+    name: "APC",
+    category: "vehicle",
+    element: "fire",
+    model: "assets/models/camp.glb", // TODO: unique model
+    scale: 0.5,
+    health: 90,
+    speed: 28,
+    rotationSpeed: 3.0,
+    size: 2,
+    cost: { stone: 40, minerals: 25 },
+    abilities: ["transport", "armor"],
+    spawner: "factory",
+    upgradeTo: "tank",
+    description: "Armored personnel carrier for rapid deployment",
+    notes: "DEFEAT: 🔥 Engine sputters out with smoke, crew exits coughing, towed back to factory"
+  },
+
+  tank: {
+    name: "Tank",
+    category: "vehicle",
+    element: "fire",
+    model: "assets/models/camp.glb", // TODO: unique model
+    scale: 0.6,
+    health: 150,
+    speed: 20,
+    rotationSpeed: 2.0,
+    size: 2,
+    cost: { stone: 70, minerals: 50 },
+    abilities: ["siege", "armor", "cannon"],
+    spawner: "factory",
+    upgradeFrom: "apc",
+    description: "Heavy armored unit with devastating firepower",
+    notes: "DEFEAT: 🔥 Overheats spectacularly, steam everywhere, crew evacuates safely"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // ELEMENTAL UNITS - SPIRIT (Church) ✨
+  // ═══════════════════════════════════════════════════════════════
+
+  priest: {
+    name: "Priest",
+    category: "support",
+    element: "spirit",
+    model: "assets/models/monk.glb", // TODO: unique model
+    scale: 0.5,
+    health: 40,
+    speed: 22,
+    rotationSpeed: 6.0,
+    size: 1,
+    cost: { food: 25, minerals: 20 },
+    abilities: ["heal", "bless", "resurrect"],
+    spawner: "church",
+    upgradeTo: "valkyrie",
+    description: "Divine healer who can bring back fallen allies",
+    notes: "DEFEAT: ✨ Soul visibly exits body, floats up, body walks zombie-like back to church"
+  },
+
+  valkyrie: {
+    name: "Valkyrie",
+    category: "support",
+    element: "spirit",
+    model: "assets/models/monk.glb", // TODO: unique model
+    scale: 0.55,
+    health: 75,
+    speed: 30,
+    rotationSpeed: 7.0,
+    size: 1,
+    cost: { food: 45, minerals: 40 },
+    abilities: ["heal", "fly", "smite", "resurrect"],
+    spawner: "church",
+    upgradeFrom: "priest",
+    description: "Angelic warrior who soars into battle",
+    notes: "DEFEAT: ✨ Wings fold gracefully, ascends in beam of light back to the heavens (church)"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // ELEMENTAL UNITS - WATER (Well) 💧
+  // ═══════════════════════════════════════════════════════════════
+
+  mycologist: {
+    name: "Mycologist",
+    category: "caster",
+    element: "water",
+    model: "assets/models/wizard.glb", // TODO: unique model
     scale: 0.5,
     health: 50,
-    speed: 21.0,
-    rotationSpeed: 4.0,
+    speed: 20,
+    rotationSpeed: 5.0,
     size: 1,
-    cost: { food: 35, stone: 20 },
-    abilities: ["build", "repair", "upgrade"],
-    description: "Advanced builder with special upgrade abilities"
+    cost: { food: 30, minerals: 15 },
+    abilities: ["poison", "spore", "grow"],
+    spawner: "well",
+    upgradeTo: "alchemist",
+    description: "Fungus expert who weaponizes spores and toxins",
+    notes: "DEFEAT: 💧 Dissolves into a puddle of spores, regrows at well over time"
   },
 
-  brigand: {
-    name: "Brigand",
-    category: "military",
-    model: "assets/models/brigand.glb",
+  alchemist: {
+    name: "Alchemist",
+    category: "caster",
+    element: "water",
+    model: "assets/models/wizard.glb", // TODO: unique model
     scale: 0.5,
-    health: 65,
-    speed: 31.0,
-    rotationSpeed: 4.0,
+    health: 60,
+    speed: 22,
+    rotationSpeed: 5.0,
     size: 1,
-    cost: { food: 5, wood: 2 },
-    abilities: ["sneak", "ambush", "steal"],
-    description: "Stealthy unit specializing in ambush tactics"
+    cost: { food: 50, minerals: 35 },
+    abilities: ["poison", "transmute", "potion", "explosion"],
+    spawner: "well",
+    upgradeFrom: "mycologist",
+    description: "Master of potions and chemical warfare",
+    notes: "DEFEAT: 💧 Drinks emergency potion, turns into frog temporarily, hops back to well"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // ELEMENTAL UNITS - EARTH (Grove) 🌿
+  // ═══════════════════════════════════════════════════════════════
+
+  shaman: {
+    name: "Shaman",
+    category: "caster",
+    element: "earth",
+    model: "assets/models/wizard.glb", // TODO: unique model
+    scale: 0.5,
+    health: 55,
+    speed: 22,
+    rotationSpeed: 5.0,
+    size: 1,
+    cost: { food: 25, wood: 20, minerals: 10 },
+    abilities: ["nature", "root", "summon_beast"],
+    spawner: "grove",
+    upgradeTo: "druid",
+    description: "Nature mystic who commands plants and beasts",
+    notes: "DEFEAT: 🌿 Transforms into small woodland creature, scurries back to grove"
+  },
+
+  druid: {
+    name: "Druid",
+    category: "caster",
+    element: "earth",
+    model: "assets/models/wizard.glb", // TODO: unique model
+    scale: 0.55,
+    health: 75,
+    speed: 24,
+    rotationSpeed: 5.0,
+    size: 1,
+    cost: { food: 45, wood: 35, minerals: 25 },
+    abilities: ["nature", "entangle", "shapeshift", "regrowth"],
+    spawner: "grove",
+    upgradeFrom: "shaman",
+    description: "Master of nature who can transform and heal the land",
+    notes: "DEFEAT: 🌿 Becomes a tree temporarily, roots grow toward grove, uproots and walks home"
   }
 };
 
@@ -164,6 +503,11 @@ const FLYING_LOD_DISTANCES = {
   FAR: 900,    // Update every 3rd frame (increased from 600)
   HIDDEN: 1200 // Hide completely beyond this distance (increased from 800)
 };
+
+// Ground offset for unit positioning - adjust if units float or clip through terrain
+// Negative values sink units down, positive values lift them up
+// With correct triangular interpolation, this should be 0 or very small
+const UNIT_GROUND_OFFSET = 0;
 
 // Unit constructor that uses the definitions
 function Unit(unitType, position, options = {}) {
@@ -560,6 +904,26 @@ function spawnUnitModels(scene) {
                 unit.mesh = model.root;
                 unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
                 
+                // Store animation groups for walk/idle animation switching
+                if (model.animationGroups && model.animationGroups.length > 0) {
+                    unit.animationGroups = {};
+                    model.animationGroups.forEach(group => {
+                        // Babylon prefixes cloned animations with "Clone of " - strip it
+                        let name = group.name.toLowerCase();
+                        if (name.startsWith('clone of ')) {
+                            name = name.substring(9);
+                        }
+                        unit.animationGroups[name] = group;
+                    });
+                    unit.currentAnimation = null;
+                    
+                    // Start idle animation immediately to avoid T-pose
+                    if (unit.animationGroups['idle']) {
+                        unit.animationGroups['idle'].start(true);
+                        unit.currentAnimation = 'idle';
+                    }
+                }
+                
                 // Enable the mesh (getModel disables it by default to prevent flash)
                 // Only call setEnabled if the method exists (mesh vs transform node)
                 if (typeof unit.mesh.setEnabled === 'function') {
@@ -573,6 +937,15 @@ function spawnUnitModels(scene) {
                 // Set up shadows for unit mesh
                 if (window.gfx && window.gfx.setupMeshShadows) {
                     window.gfx.setupMeshShadows(unit.mesh);
+                }
+                
+                // Create blob shadow for this unit (will be visible only in blob mode)
+                if (window.gfx && window.gfx.createBlobShadow) {
+                    window.gfx.createBlobShadow(unit);
+                    // Set initial position
+                    if (window.gfx.updateBlobShadow) {
+                        window.gfx.updateBlobShadow(unit);
+                    }
                 }
                 
                 // Handle child meshes - preserve their original rotations
@@ -773,25 +1146,32 @@ window.getTerrainHeightAtPosition = (function() {
         const fz = gridZ - tileZ;
         
         // Clamp tile indices for bilinear interpolation (handle edge cases)
+        // Height grid now includes far corners: [0..width] x [0..height]
         const tx0 = tileX;
         const tz0 = tileZ;
-        const tx1 = tileX + 1 < fieldWidth ? tileX + 1 : tx0;
-        const tz1 = tileZ + 1 < fieldHeight ? tileZ + 1 : tz0;
+        const tx1 = tileX + 1 <= fieldWidth ? tileX + 1 : tx0;
+        const tz1 = tileZ + 1 <= fieldHeight ? tileZ + 1 : tz0;
         
         // Fast array lookups from precomputed height grid (with bounds safety)
         const row0 = heightGrid[tx0];
         const row1 = heightGrid[tx1];
-        const h00 = (row0 && row0[tz0] !== undefined) ? row0[tz0] : 0;
-        const h10 = (row1 && row1[tz0] !== undefined) ? row1[tz0] : h00;
-        const h01 = (row0 && row0[tz1] !== undefined) ? row0[tz1] : h00;
-        const h11 = (row1 && row1[tz1] !== undefined) ? row1[tz1] : h00;
+        const h00 = (row0 && row0[tz0] !== undefined) ? row0[tz0] : 0; // bottom-left
+        const h10 = (row1 && row1[tz0] !== undefined) ? row1[tz0] : h00; // bottom-right
+        const h01 = (row0 && row0[tz1] !== undefined) ? row0[tz1] : h00; // top-left
+        const h11 = (row1 && row1[tz1] !== undefined) ? row1[tz1] : h00; // top-right
         
-        // Optimized bilinear interpolation (pre-calculate (1-f) values)
-        const fx1 = 1 - fx;
-        const fz1 = 1 - fz;
-        const h0 = h00 * fx1 + h10 * fx; // Interpolate bottom edge
-        const h1 = h01 * fx1 + h11 * fx; // Interpolate top edge
-        const result = h0 * fz1 + h1 * fz; // Interpolate between edges
+        // TRIANGULAR interpolation to match GPU terrain rendering
+        // The terrain mesh splits each quad into 2 triangles with diagonal from (0,0) to (1,1)
+        // Triangle 1: bottom-left, bottom-right, top-right (when fx >= fz)
+        // Triangle 2: bottom-left, top-right, top-left (when fx < fz)
+        let result;
+        if (fx >= fz) {
+            // Triangle 1: barycentric interpolation between h00, h10, h11
+            result = (1 - fx) * h00 + (fx - fz) * h10 + fz * h11;
+        } else {
+            // Triangle 2: barycentric interpolation between h00, h11, h01
+            result = (1 - fz) * h00 + fx * h11 + (fz - fx) * h01;
+        }
         
         // Cache result for building preview (likely to be called again with same position)
         lastPreviewX = worldX;
@@ -973,25 +1353,24 @@ function updateUnits(deltaTime) {
           }
         }
         
-        // Apply rotation velocity to rotation
-        unit.pb.state.rot.y += unit.pb.rotVel.y * deltaTime;
+        // Check if unit has active movement behavior - if so, behavior controls rotation directly
+        const activeBehaviorForRot = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+        const behaviorTypeForRot = activeBehaviorForRot ? activeBehaviorForRot.constructor?.name : null;
         
-        // Apply rotation damping (units slow their turning)
-        // CRITICAL: Only apply strong damping when unit is NOT actively turning
-        // If unit has an active movement behavior, let them turn freely while moving
-        // This allows units to turn while walking instead of pausing to turn first
-        const hasActiveBehaviorForRotation = window.behaviorManager && window.behaviorManager.getBehavior(unit);
-        const behaviorTypeForRotation = hasActiveBehaviorForRotation ? hasActiveBehaviorForRotation.constructor?.name : null;
-        const isMovementBehavior = behaviorTypeForRotation === 'WalkBehavior' || behaviorTypeForRotation === 'RunBehavior';
-        const hasRotationImpulse = unit.pb.rotImp && Math.abs(unit.pb.rotImp.y) > 0.001;
+        // These behaviors use applyMovementWithRotation() which sets rotation directly
+        const movementBehaviors = [
+            'WalkBehavior', 'RunBehavior', 'LingerBehavior', 'WorkBehavior', 
+            'WanderBehavior', 'AttackBuildingBehavior', 'EatBehavior'
+        ];
+        const isMovementBehavior = movementBehaviors.includes(behaviorTypeForRot);
         
-        if (isMovementBehavior || hasRotationImpulse) {
-            // Unit is actively moving/turning - slightly more damping to reduce springiness
-            // Increased from 0.98 to 0.95 (5% damping) to reduce oscillation without making it sluggish
-            unit.pb.rotVel.y *= 0.95; // 5% damping - less springy but still smooth turning while moving
+        if (!isMovementBehavior) {
+            // Only apply rotation velocity for non-movement behaviors
+            unit.pb.state.rot.y += unit.pb.rotVel.y * deltaTime;
+            unit.pb.rotVel.y *= 0.9; // 10% damping per physics step
         } else {
-            // Unit is idle - normal damping to prevent spinning
-            unit.pb.rotVel.y *= 0.9; // 10% damping per physics step - snappier stopping
+            // Movement behavior controls rotation - clear any residual rotation velocity
+            unit.pb.rotVel.y = 0;
         }
         
         // Check if unit is standing on an agora platform
@@ -1036,7 +1415,7 @@ function updateUnits(deltaTime) {
                 // Unit is far away - keep last known height or use cached value
                 // Don't recalculate terrain height (expensive!)
                 if (unit._lastTerrainHeight !== undefined) {
-                    unit.pb.state.loc.y = unit._lastTerrainHeight + 0.2;
+                    unit.pb.state.loc.y = unit._lastTerrainHeight;
                     unit.pb.state.vel.y = 0;
                 }
                 // If no cached height, leave Y as-is (will be set when unit gets closer)
@@ -1062,9 +1441,8 @@ function updateUnits(deltaTime) {
                     unit._lastTerrainZ = loc.z;
                 }
                 
-                // Use a larger offset to ensure units are clearly above terrain surface
-                // This accounts for unit model origin points and prevents clipping
-                const newY = terrainHeight + 0.2;
+                // Apply ground offset to ensure units sit ON the terrain
+                const newY = terrainHeight + UNIT_GROUND_OFFSET;
                 
                 // CRITICAL: Set Y position AFTER velocity is applied, and ensure vel.y stays 0
                 // This prevents integrate() from overwriting our terrain height
@@ -1391,6 +1769,28 @@ function updateUnitMeshes() {
                 unit.mesh.position.x = unit.visualPosition.x;
                 unit.mesh.position.z = unit.visualPosition.z;
                 
+                // Handle walk/idle animation switching based on movement
+                if (unit.animationGroups && unit.pb.state.vel) {
+                    const vel = unit.pb.state.vel;
+                    const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+                    const isMoving = speed > 0.5; // Threshold to avoid jitter
+                    
+                    const targetAnim = isMoving ? 'walk_cycle' : 'idle';
+                    
+                    if (unit.currentAnimation !== targetAnim) {
+                        // Stop current animation
+                        if (unit.currentAnimation && unit.animationGroups[unit.currentAnimation]) {
+                            unit.animationGroups[unit.currentAnimation].stop();
+                        }
+                        
+                        // Start new animation if available
+                        if (unit.animationGroups[targetAnim]) {
+                            unit.animationGroups[targetAnim].start(true); // true = loop
+                            unit.currentAnimation = targetAnim;
+                        }
+                    }
+                }
+                
                 // CRITICAL: Ensure mesh is enabled for all player/AI units (not just neutral)
                 // This fixes the issue where remote monks become invisible
                 if (unit.owner !== 'neutral' && unit.mesh && typeof unit.mesh.setEnabled === 'function') {
@@ -1523,7 +1923,7 @@ function updateUnitMeshes() {
                             }
                             
                             // All ground units stick to terrain (no hopping/bobbing)
-                            unit.mesh.position.y = terrainHeight;
+                            unit.mesh.position.y = terrainHeight + UNIT_GROUND_OFFSET;
                         }
                     }
                 }

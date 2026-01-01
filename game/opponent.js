@@ -7,7 +7,7 @@
     this.id = options.id || 'opponent';
     this.name = options.name || 'Opponent';
     this.color = options.color || {primary: '#0066cc', secondary: '#004499'};
-    this.resources = options.startingResources || {food: 100, wood: 100, stone: 25, magic: 5};
+    this.resources = options.startingResources || { ...STARTING_RESOURCES };
     this.units = [];
     this.buildings = []; // Always initialize buildings array
     this.isAI = options.isAI !== false; // Default to AI for single-player

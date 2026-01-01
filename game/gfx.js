@@ -8,6 +8,10 @@
   gfx.cameraTarget;
   gfx.cursorFrog; // Frog model to show cursor position
   gfx.table;
+  
+  // Antialiasing state
+  let fxaaPostProcess = null;
+  let currentAALevel = 0; // 0=Off, 1=FXAA, 2=MSAA2x, 3=MSAA4x
 
   // Progressive chunk loading queue
   const chunkQueue = [];
@@ -107,6 +111,12 @@
   const activeModels = new Map(); // chunkKey -> array of model instances in use
   const pendingResourceTiles = new Set();  // Tiles currently waiting for a resource model to finish loading
   
+  // GPU Instancing for static resources (trees, rocks)
+  // Uses Babylon's createInstance() for shared geometry/material = fewer draw calls
+  const instanceMasters = new Map(); // path -> { root, meshes: [mesh, mesh, ...] }
+  const instancedModels = new Map(); // instance -> { path, instances: [InstancedMesh, ...] }
+  const INSTANCED_MODELS = ['trees.glb', 'rocks_plain.glb', 'rocks_moss.glb', 'rocks_snow.glb'];
+  
   // Function to clean up models when chunk unloads
   function cleanupChunkModels(chunkKey) {
     const models = activeModels.get(chunkKey);
@@ -129,6 +139,10 @@
           const lod = lodModels[i];
           if (lod.billboard) {
             billboardsToReturn.push(lod.billboard);
+          }
+          // Unregister from thin instance system
+          if (gfx.unregisterThinInstance) {
+            gfx.unregisterThinInstance(lod);
           }
           // Remove by swapping with last element and popping (O(1) removal)
           lodModels[i] = lodModels[lodModels.length - 1];
@@ -460,6 +474,29 @@
 
   // Get or create a model instance from the pool
   function getPooledModel(modelPath, scene, position, rotation, scale) {
+    // Check if we should use GPU instancing for this model type
+    const useInstance = shouldUseInstancing(modelPath);
+    
+    if (useInstance) {
+      return getOrCreateInstanceMaster(modelPath, scene).then(master => {
+        const instancedModel = createInstancedModel(master, position, rotation, scale);
+        
+        // CRITICAL: Keep model disabled - LOD system will enable it based on distance
+        instancedModel.root.setEnabled(false);
+        
+        // Mark as instanced for proper cleanup
+        instancedModel.isInstanced = true;
+        instancedModel.masterPath = modelPath;
+        
+        // Track instance counts per model type
+        if (!window._instanceCounts) window._instanceCounts = {};
+        window._instanceCounts[modelPath] = (window._instanceCounts[modelPath] || 0) + 1;
+        
+        return instancedModel;
+      });
+    }
+    
+    // Original pooling logic for non-instanced models
     const chunkKey = 'temp'; // We'll fix this when we integrate with chunks
     
     // Get pool for this model type
@@ -516,6 +553,13 @@
 
   // Return a model instance to the pool for reuse
   function returnModelToPool(model, modelPath) {
+    // Handle instanced models - just dispose them (they're cheap to recreate)
+    if (model.isInstanced) {
+      disposeInstancedModel(model);
+      return;
+    }
+    
+    // Original pooling logic for non-instanced models
     model.root.setEnabled(false);
     model.root.parent = null; // Unparent it
     
@@ -524,6 +568,287 @@
     }
     
     modelPools.get(modelPath).push(model);
+  }
+  
+  // Check if a model path should use GPU instancing
+  function shouldUseInstancing(modelPath) {
+    // Only use instancing when NOT using full shadows (shadow mapping doesn't work well with instances)
+    if (window.SHADOW_MODE === 3) return false;
+    const shouldInstance = INSTANCED_MODELS.some(name => modelPath.includes(name));
+    return shouldInstance;
+  }
+  
+  // Pending master creation Promises (to prevent race conditions)
+  const pendingMasters = new Map();
+  
+  // Get or create a master mesh for instancing
+  function getOrCreateInstanceMaster(modelPath, scene) {
+    // Already have a master? Return it immediately
+    if (instanceMasters.has(modelPath)) {
+      return Promise.resolve(instanceMasters.get(modelPath));
+    }
+    
+    // Already loading a master? Wait for that same Promise (prevents race conditions)
+    if (pendingMasters.has(modelPath)) {
+      return pendingMasters.get(modelPath);
+    }
+    
+    // We're the first to request this model - create the master
+    console.log('[Instancing] Creating master for:', modelPath);
+    
+    const loadPromise = getModel(modelPath, scene).then(model => {
+      // Find all meshes with geometry in the hierarchy
+      const meshes = [];
+      if (model.root.getChildMeshes) {
+        model.root.getChildMeshes().forEach(mesh => {
+          if (mesh.getTotalVertices && mesh.getTotalVertices() > 0) {
+            meshes.push(mesh);
+          }
+        });
+      }
+      
+      // Position master far away (instances will have their own positions)
+      model.root.position.set(0, -1000, 0);
+      model.root.setEnabled(true); // Master must be enabled for instances to render
+      
+      const master = {
+        root: model.root,
+        meshes: meshes,
+        model: model
+      };
+      
+      instanceMasters.set(modelPath, master);
+      pendingMasters.delete(modelPath);
+      console.log('[Instancing] Master ready:', modelPath, 'with', meshes.length, 'meshes');
+      
+      return master;
+    });
+    
+    // Store IMMEDIATELY - before returning, so parallel synchronous calls will see it
+    pendingMasters.set(modelPath, loadPromise);
+    
+    return loadPromise;
+  }
+  
+  // Create an instanced copy of a master mesh
+  function createInstancedModel(master, position, rotation, scale) {
+    const instances = [];
+    
+    // Create a container TransformNode to hold all instances
+    const container = new BABYLON.TransformNode(`instContainer_${Date.now()}`, gfx.scene);
+    
+    // Get the master root's world matrix inverse to compute relative transforms
+    // This accounts for the master being positioned at (0, -1000, 0)
+    const masterRoot = master.root;
+    masterRoot.computeWorldMatrix(true);
+    const masterWorldMatrixInverse = masterRoot.getWorldMatrix().clone().invert();
+    
+    // Create instance for each mesh in the master
+    // CRITICAL: Compute FULL transform relative to master root (accounts for hierarchy)
+    master.meshes.forEach((mesh, index) => {
+      const instance = mesh.createInstance(`inst_${mesh.name}_${Date.now()}_${index}`);
+      instance.isPickable = false;
+      
+      // Compute mesh's world matrix relative to the master root
+      // This captures ALL parent transforms in the hierarchy
+      mesh.computeWorldMatrix(true);
+      const meshWorldMatrix = mesh.getWorldMatrix();
+      const relativeMatrix = meshWorldMatrix.multiply(masterWorldMatrixInverse);
+      
+      // Decompose to get position, rotation, scale relative to master root
+      const relativePos = new BABYLON.Vector3();
+      const relativeRot = new BABYLON.Quaternion();
+      const relativeScale = new BABYLON.Vector3();
+      relativeMatrix.decompose(relativeScale, relativeRot, relativePos);
+      
+      // Apply the relative transform to the instance
+      instance.position.copyFrom(relativePos);
+      instance.rotationQuaternion = relativeRot;
+      instance.scaling.copyFrom(relativeScale);
+      
+      instance.parent = container;
+      instances.push(instance);
+    });
+    
+    // Set container transform - this applies to all child instances
+    container.position.copyFrom(position);
+    container.rotationQuaternion = null;
+    container.rotation.y = rotation;
+    container.scaling.set(scale, scale, scale);
+    
+    return {
+      root: container,
+      instances: instances,
+      masterPath: master.root.name
+    };
+  }
+  
+  // Debug: log instancing stats
+  window.logInstanceStats = function() {
+    console.log('[Instancing] Mode:', window.SHADOW_MODE < 3 ? 'INSTANCED' : 'CLONED');
+    console.log('[Instancing] Masters:', instanceMasters.size);
+    instanceMasters.forEach((master, path) => {
+      const instanceCount = window._instanceCounts?.[path] || 0;
+      // Check actual Babylon instance count on the master meshes
+      let actualInstances = 0;
+      master.meshes.forEach(mesh => {
+        if (mesh.instances) {
+          actualInstances += mesh.instances.length;
+        }
+      });
+      console.log(`  ${path}: tracked=${instanceCount}, actual=${actualInstances}`);
+    });
+    console.log('[Instancing] Total tracked:', Object.values(window._instanceCounts || {}).reduce((a,b) => a+b, 0));
+    
+    // Count all instanced meshes in scene (use isAnInstance property)
+    let totalInstancedMeshes = 0;
+    let masterMeshesWithInstances = 0;
+    gfx.scene.meshes.forEach(mesh => {
+      if (mesh.isAnInstance) {
+        totalInstancedMeshes++;
+      }
+      if (mesh.instances && mesh.instances.length > 0) {
+        masterMeshesWithInstances++;
+      }
+    });
+    console.log('[Instancing] Instanced meshes (isAnInstance):', totalInstancedMeshes);
+    console.log('[Instancing] Master meshes with instances:', masterMeshesWithInstances);
+    
+    // Draw call estimate - instances share draw calls with their master
+    const regularMeshes = gfx.scene.meshes.filter(m => m.isEnabled() && m.isVisible && m.getTotalVertices && m.getTotalVertices() > 0 && !m.isAnInstance).length;
+    console.log('[Instancing] Non-instanced enabled meshes:', regularMeshes);
+    console.log('[Instancing] Estimated draw calls:', regularMeshes + masterMeshesWithInstances, '(masters batch their instances)');
+  };
+  
+  // Reload all resource models (used when switching between instanced and shadow modes)
+  gfx.reloadResourceModels = function() {
+    console.log('[Instancing] Reloading all resource models...');
+    
+    // Clear instance tracking
+    window._instanceCounts = {};
+    
+    // FIRST: Dispose ALL InstancedMesh objects in the scene (they reference the masters)
+    const instancesToDispose = gfx.scene.meshes.filter(m => m.isAnInstance);
+    console.log('[Instancing] Disposing', instancesToDispose.length, 'instanced meshes...');
+    instancesToDispose.forEach(inst => {
+      if (!inst.isDisposed()) {
+        inst.dispose();
+      }
+    });
+    
+    // Dispose all instance masters (after their instances are gone)
+    instanceMasters.forEach((master, path) => {
+      // Dispose each mesh in the master (source meshes for instances)
+      if (master.meshes) {
+        master.meshes.forEach(mesh => {
+          if (mesh && !mesh.isDisposed()) {
+            mesh.dispose();
+          }
+        });
+      }
+      // Dispose the root
+      if (master.root && !master.root.isDisposed()) {
+        master.root.dispose();
+      }
+    });
+    instanceMasters.clear();
+    pendingMasters.clear();
+    
+    // Clear model pools for resource types
+    INSTANCED_MODELS.forEach(modelName => {
+      modelPools.forEach((pool, path) => {
+        if (path.includes(modelName)) {
+          pool.forEach(model => {
+            if (model.dispose) model.dispose();
+            else if (model.root && model.root.dispose) model.root.dispose();
+          });
+          modelPools.delete(path);
+        }
+      });
+    });
+    
+    // Dispose all resource models from active chunks and LOD system
+    const resourcesToReload = [];
+    
+    // Collect info about models to reload from LOD system
+    lodModels.forEach(lod => {
+      if (lod.modelPath && INSTANCED_MODELS.some(name => lod.modelPath.includes(name))) {
+        resourcesToReload.push({
+          position: lod.model.getAbsolutePosition().clone(),
+          rotation: lod.originalRotation || 0,
+          scale: lod.originalScale || 1,
+          modelPath: lod.modelPath,
+          modelRule: lod.modelRule,
+          chunkKey: lod.chunkKey
+        });
+        
+        // Dispose container and its children (including any instances)
+        if (lod.model) {
+          lod.model.getChildMeshes().forEach(child => {
+            if (!child.isDisposed()) child.dispose();
+          });
+          if (!lod.model.isDisposed()) lod.model.dispose();
+        }
+        if (lod.billboard && !lod.billboard.isDisposed()) {
+          lod.billboard.dispose();
+        }
+      }
+    });
+    
+    // Remove disposed models from LOD system
+    for (let i = lodModels.length - 1; i >= 0; i--) {
+      if (lodModels[i].modelPath && INSTANCED_MODELS.some(name => lodModels[i].modelPath.includes(name))) {
+        lodModels.splice(i, 1);
+      }
+    }
+    
+    // Clear from activeModels
+    activeModels.forEach((models, chunkKey) => {
+      for (let i = models.length - 1; i >= 0; i--) {
+        if (models[i].path && INSTANCED_MODELS.some(name => models[i].path.includes(name))) {
+          models.splice(i, 1);
+        }
+      }
+    });
+    
+    console.log(`[Instancing] Cleared ${resourcesToReload.length} resource models, reloading...`);
+    
+    // Reload all resources with new mode
+    resourcesToReload.forEach(info => {
+      getPooledModel(info.modelPath, gfx.scene, info.position, info.rotation, info.scale)
+        .then(model => {
+          model.root.setEnabled(false); // Start disabled for LOD
+          
+          // Re-add to LOD system
+          addLODBillboard(model, gfx.scene, info.modelRule || { path: info.modelPath }, gfx.camera.position, info.chunkKey);
+          
+          // Set up shadows if in full mode
+          if (window.SHADOW_MODE === 3 && window.gfx.setupMeshShadows) {
+            window.gfx.setupMeshShadows(model.root);
+          }
+        })
+        .catch(err => console.warn('Failed to reload resource:', err));
+    });
+    
+    // Force LOD update
+    setTimeout(() => {
+      updateLOD(gfx.camera.position);
+      console.log('[Instancing] Resource reload complete');
+    }, 500);
+  };
+  
+  // Dispose an instanced model
+  function disposeInstancedModel(instancedModel) {
+    if (instancedModel.instances) {
+      instancedModel.instances.forEach(inst => {
+        if (inst && !inst.isDisposed()) {
+          inst.dispose();
+        }
+      });
+    }
+    if (instancedModel.root && !instancedModel.root.isDisposed()) {
+      instancedModel.root.dispose();
+    }
   }
 
   // Add LOD billboard for distant viewing
@@ -540,18 +865,54 @@
     billboard.setEnabled(false); // Start with billboard disabled
     
     // Store for manual LOD management
-    lodModels.push({
+    // Determine decoration type from model path
+    let decorType = 'decoration';
+    if (modelPath.includes('tree')) decorType = 'tree';
+    else if (modelPath.includes('rock')) decorType = 'rock';
+    
+    // Read rotation from model - it should already be set by getPooledModel
+    const storedRotation = model.root.rotation ? model.root.rotation.y : 0;
+    const storedScale = model.root.scaling ? Math.abs(model.root.scaling.x) : 1;
+    
+    const lodEntry = {
       model: model.root,
       billboard: billboard,
       lodType: lodType,
+      decorType: decorType, // 'tree', 'rock', or 'decoration'
+      modelPath: modelPath,
+      modelRule: modelRule, // Store for reload
       lodDistance: customLodDistance,
       cullDistance: modelRule.cullDistance || customLodDistance * 2,
       // Store original values for LOD scaling
       originalLodDistance: customLodDistance,
       originalCullDistance: modelRule.cullDistance || customLodDistance * 2,
       chunkKey: chunkKey, // For chunk-based LOD grouping
-      isStatic: !!chunkKey // Static scenery if it has a chunk
-    });
+      isStatic: !!chunkKey, // Static scenery if it has a chunk
+      // Store rotation for deterministic reload
+      originalRotation: storedRotation,
+      originalScale: storedScale
+    };
+    lodModels.push(lodEntry);
+    
+    // Create blob shadow for decoration models (trees, rocks, etc)
+    // Check current shadow mode - modes 1 and 2 use blob shadows
+    const shouldHaveBlobShadow = chunkKey && (window.SHADOW_MODE === 1 || window.SHADOW_MODE === 2);
+    if (shouldHaveBlobShadow) {
+      const decorObj = {
+        type: decorType,
+        name: decorType,
+        mesh: model.root,
+        modelPath: modelPath
+      };
+      gfx.createBlobShadow(decorObj);
+      gfx.updateBlobShadow(decorObj); // Set initial position
+      lodEntry.blobShadowObj = decorObj; // Track for cleanup
+    }
+    
+    // Register for thin instancing if in non-shadow mode
+    if (chunkKey && gfx.registerThinInstance) {
+      gfx.registerThinInstance(lodEntry, model.root, modelPath);
+    }
     
     // Apply current LOD multiplier to new model if LOD system is active
     const lastLod = lodModels[lodModels.length - 1];
@@ -682,6 +1043,15 @@
       
       lodDistanceSquared = lod.lodDistance * lod.lodDistance;
       cullDistanceSquared = (lod.cullDistance || lod.lodDistance * 2) * (lod.cullDistance || lod.lodDistance * 2);
+      
+      // Skip thin-instance-managed models - they're rendered via thin instances
+      if (lod._thinInstanceManaged) {
+        lod.model.setEnabled(false);
+        if (lod.billboard) {
+          lod.billboard.setEnabled(false);
+        }
+        return; // Skip normal LOD processing
+      }
       
       if (distanceSquared > cullDistanceSquared) {
         // Very far away - completely cull everything for performance
@@ -863,6 +1233,10 @@
       if (lod.model && lod.model.dispose) {
         lod.model.dispose();
       }
+      // Clean up blob shadow if exists
+      if (lod.blobShadowObj) {
+        gfx.removeBlobShadow(lod.blobShadowObj);
+      }
     });
     
     // Clear the LOD tracking array
@@ -889,6 +1263,16 @@
     });
     modelPools.clear();
     
+    // CRITICAL: Clear instance masters for fresh instancing in new match
+    instanceMasters.forEach((master, path) => {
+      if (master.root && !master.root.isDisposed()) {
+        master.root.dispose();
+      }
+    });
+    instanceMasters.clear();
+    pendingMasters.clear();
+    window._instanceCounts = {};
+    
     // Clear billboard instances
     billboardInstances.forEach(instance => {
       if (instance && instance.dispose) {
@@ -897,6 +1281,25 @@
     });
     billboardInstances.length = 0;
     billboardInstancedMeshes.clear();
+    
+    // CRITICAL: Clear shadow generator render list for fresh start
+    if (gfx.shadowGenerator) {
+      const renderList = gfx.shadowGenerator.getShadowMap().renderList;
+      renderList.length = 0; // Clear all shadow casters
+      
+      // Force shadow map to refresh (clears any cached shadow data)
+      gfx.shadowGenerator.getShadowMap().refreshRate = BABYLON.RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+      setTimeout(() => {
+        if (gfx.shadowGenerator && gfx.shadowGenerator.getShadowMap()) {
+          gfx.shadowGenerator.getShadowMap().refreshRate = BABYLON.RenderTargetTexture.REFRESHRATE_RENDER_ONEVERYFRAME;
+        }
+      }, 100);
+    }
+    
+    // CRITICAL: Clear blob shadow tracking for fresh start
+    if (gfx.clearAllBlobShadows) {
+      gfx.clearAllBlobShadows();
+    }
     
     // CRITICAL: Reset all LOD system flags to ensure clean state
     // BUT preserve loadingLODCurrent - menu calibration should carry over!
@@ -911,6 +1314,14 @@
     chunkQueue.length = 0;
     
     // console.log(`✅ LOD system fully reset - all models disposed`);
+    
+    // Re-apply shadow mode from saved preference after a delay
+    // This ensures new models get the correct shadow treatment
+    setTimeout(() => {
+      if (window.hud && window.hud.updateShadowMode && window.SHADOW_MODE !== undefined) {
+        window.hud.updateShadowMode(window.SHADOW_MODE);
+      }
+    }, 500);
   };
 
   // Update LOD distances for graphics system
@@ -1326,6 +1737,10 @@ let pov2 = 240;
         if (lod.billboard) {
           lod.billboard.setEnabled(false);
           returnBillboardInstance(lod.billboard);
+        }
+        // Clean up blob shadow if it exists
+        if (lod.blobShadowObj) {
+          gfx.removeBlobShadow(lod.blobShadowObj);
         }
         lodModels[i] = lodModels[lodModels.length - 1];
         lodModels.pop();
@@ -2324,9 +2739,25 @@ let pov2 = 240;
     gfx.canvas = document.getElementById('canvas');
     
     // ========================================
+    // ANTIALIASING SETUP (before engine creation)
+    // ========================================
+    // Load saved AA setting - MSAA must be set at engine creation time
+    const savedAA = localStorage.getItem('aaLevel');
+    currentAALevel = savedAA ? parseInt(savedAA) : 0;
+    
+    // Configure MSAA if selected (requires engine recreation to change)
+    if (currentAALevel >= 2) {
+      engineOptions.antialias = true;
+      engineOptions.antialiasing = true;
+      // MSAA 2x = 2 samples, MSAA 4x = 4 samples
+      const samples = currentAALevel === 2 ? 2 : 4;
+      engineOptions.samples = samples;
+    }
+    
+    // ========================================
     // ENGINE PERFORMANCE OPTIMIZATIONS
     // ========================================
-    gfx.engine = new BABYLON.Engine(gfx.canvas, false, engineOptions, false);
+    gfx.engine = new BABYLON.Engine(gfx.canvas, currentAALevel >= 2, engineOptions, false);
     
     // Disable offline support to reduce overhead
     gfx.engine.enableOfflineSupport = false;
@@ -2766,6 +3197,16 @@ let pov2 = 240;
       // console.log(`Frame ${window.frameCounter}: ${gfx.scene.meshes.length} meshes in scene`);
     }
 
+    // Update blob shadows if in blob mode (Low=1 or Med=2)
+    if ((window.SHADOW_MODE === 1 || window.SHADOW_MODE === 2) && gfx.updateAllBlobShadows) {
+      gfx.updateAllBlobShadows();
+    }
+    
+    // Update thin instance scenery if in non-shadow mode
+    if (window.SHADOW_MODE !== 3 && gfx.updateThinInstances) {
+      gfx.updateThinInstances();
+    }
+    
     // SAFETY: Wrap the actual render call
     try {
       gfx.scene.render();
@@ -3122,6 +3563,11 @@ let pov2 = 240;
         window.ui.enableCameraControls();
       }
     }
+    
+    // Initialize FXAA post-process if selected
+    if (currentAALevel === 1) {
+      fxaaPostProcess = new BABYLON.FxaaPostProcess("fxaa", 1.0, gfx.camera);
+    }
 
     // Initialize orbital lighting system (without auto-movement)
     if (window.lighting) {
@@ -3186,14 +3632,35 @@ let pov2 = 240;
     }
 
     // Respect saved shadow preference as early as possible
-    // Default to ON unless explicitly disabled by the user
+    // Initialize shadow mode from saved setting
+    // 0 = Off, 1 = Low (solid blobs), 2 = Med (gradient blobs), 3 = Full (default)
     try {
-      const savedShadows = localStorage.getItem('shadowsEnabled');
-      window.SHADOWS_ENABLED = savedShadows === 'false' ? false : true;
+      const savedShadowMode = localStorage.getItem('shadowMode');
+      if (savedShadowMode !== null) {
+        window.SHADOW_MODE = parseInt(savedShadowMode);
+      } else {
+        // Migrate from old shadowsEnabled setting
+        const oldShadowSetting = localStorage.getItem('shadowsEnabled');
+        if (oldShadowSetting === 'false') {
+          window.SHADOW_MODE = 0; // Off
+        } else {
+          window.SHADOW_MODE = 3; // Full (default)
+        }
+      }
+      window.SHADOWS_ENABLED = window.SHADOW_MODE === 3;
     } catch (e) {
       // Fallback if localStorage is unavailable
+      window.SHADOW_MODE = 3;
       window.SHADOWS_ENABLED = true;
     }
+    
+    // Set initial blob shadow visibility and style based on shadow mode
+    blobShadowsVisible = (window.SHADOW_MODE === 1 || window.SHADOW_MODE === 2);
+    blobShadowStyle = (window.SHADOW_MODE === 1) ? 'solid' : 'gradient';
+    
+    // DON'T set thinInstanceMode here - let updateShadowMode() handle it
+    // after the shadow slider is properly initialized
+    // thinInstanceMode will be set by hud.updateShadowMode() when settings load
 
     // Create table first
     gfx.table = gfx.makeTable(scene);
@@ -3209,10 +3676,10 @@ let pov2 = 240;
   // Scene stability tracking
   gfx.sceneStability = {
     isStable: false,
-    stabilityCheckInterval: 1000, // Check every 1 second
+    stabilityCheckInterval: 100, // Check every 100ms (was 1000)
     lastStabilityCheck: 0,
     consecutiveStableFrames: 0,
-    requiredStableFrames: 3, // Need a few consecutive stable checks
+    requiredStableFrames: 2, // Need 2 consecutive stable checks (was 3)
     lastMeshCount: 0,
     lastFrameTime: 0,
     stabilityThreshold: 16.67 // Kept for backwards compatibility (no longer used)
@@ -3396,8 +3863,8 @@ let pov2 = 240;
 
       // Check if scene is stable (but don't wait too long)
       if (!gfx.checkSceneStability()) {
-        // console.log('⏳ Scene not stable yet, retrying shadow init in 1 second...');
-        setTimeout(() => gfx.autoInitializeShadows(), 1000);
+        // console.log('⏳ Scene not stable yet, retrying shadow init...');
+        setTimeout(() => gfx.autoInitializeShadows(), 150);
         return;
       }
 
@@ -3413,9 +3880,9 @@ let pov2 = 240;
         // console.log('✅ Shadows initialized and applied to', gfx.scene.meshes.length, 'meshes');
         // console.log('   Shadow casters:', gfx.shadowGenerator.getShadowMap().renderList.length);
       } else {
-        // Retry after a longer delay
-        // console.log('⏳ Shadow initialization failed, retrying in 2 seconds...');
-        setTimeout(() => gfx.autoInitializeShadows(), 2000);
+        // Retry after a short delay
+        // console.log('⏳ Shadow initialization failed, retrying...');
+        setTimeout(() => gfx.autoInitializeShadows(), 300);
       }
     };
 
@@ -3498,8 +3965,8 @@ let pov2 = 240;
       
       // darkness: 0 = black shadows, 1 = invisible shadows  
       generator.darkness = 0;                       // Full black shadows for maximum visibility
-      generator.bias = 0.005;                       // Moderate bias to prevent acne
-      generator.normalBias = 0.02;                  // Normal bias for angled surfaces
+      generator.bias = 0.001;                       // Lower bias - less "peter panning" (shadow detachment)
+      generator.normalBias = 0.005;                 // Lower normal bias for tighter shadows
       
       // CRITICAL: Calculate shadow distances FIRST so we know the frustum size
       if (gfx.updateShadowDistancesForLOD) {
@@ -3668,8 +4135,10 @@ let pov2 = 240;
                         ));
         if (isUIMesh) return;
         
-        // All game meshes can receive shadows (or not)
-        mesh.receiveShadows = window.SHADOWS_ENABLED;
+        // All game meshes can receive shadows (or not) - skip instanced meshes
+        if (!mesh.isAnInstance) {
+          mesh.receiveShadows = window.SHADOWS_ENABLED;
+        }
         if (window.SHADOWS_ENABLED) receiveShadowCount++;
         
         // Only non-terrain meshes should cast shadows
@@ -3699,6 +4168,8 @@ let pov2 = 240;
         // Handle child meshes
         if (mesh.getChildMeshes) {
           mesh.getChildMeshes().forEach(child => {
+            // Skip instanced meshes - they can't receive shadows
+            if (child.isAnInstance) return;
             child.receiveShadows = window.SHADOWS_ENABLED;
             const isChildRoot = child.name.includes('__root__');
             if (window.SHADOWS_ENABLED && !isTerrainMesh && !isRootNode && !isChildRoot && forceReadd && gfx.shadowGenerator) {
@@ -3783,8 +4254,10 @@ let pov2 = 240;
                       ));
     if (isUIMesh) return;
     
-    // Always set receiveShadows based on current state
-    mesh.receiveShadows = window.SHADOWS_ENABLED;
+    // Always set receiveShadows based on current state (skip instanced meshes)
+    if (!mesh.isAnInstance) {
+      mesh.receiveShadows = window.SHADOWS_ENABLED;
+    }
     
     // Mesh will be tracked by the existing LOD system
     
@@ -3812,6 +4285,7 @@ let pov2 = 240;
                          childMesh.name.includes('anchor') ||
                          childMesh.name.includes('Anchor');
         if (isUIChild) return;
+        if (childMesh.isAnInstance) return; // Skip instanced meshes
         
         childMesh.receiveShadows = window.SHADOWS_ENABLED;
         if (window.SHADOWS_ENABLED && shouldCastShadows && gfx.shadowGenerator) {
@@ -4797,15 +5271,8 @@ let pov2 = 240;
       const mesh = item.modelInfo.model.root;
       const delay = index * 50; // 50ms stagger between each model
       
-      // Remove from LOD tracking immediately
-      const lodIndex = lodModels.findIndex(lod => lod.model === mesh);
-      if (lodIndex > -1) {
-        const lod = lodModels[lodIndex];
-        if (lod.billboard) {
-          returnBillboardInstance(lod.billboard);
-        }
-        lodModels.splice(lodIndex, 1);
-      }
+      // Remove from LOD tracking immediately (use function that also cleans up blob shadows)
+      removeModelFromLOD(mesh);
       
       // Start the sink animation
       animateModelSink(mesh, delay);
@@ -4835,6 +5302,843 @@ let pov2 = 240;
     }
     
     return removedCount + billboardsRemoved;
+  };
+
+  // ========================================
+  // BLOB SHADOW SYSTEM
+  // ========================================
+  // Cheap circular shadows under units (alternative to shadow mapping)
+  // Uses thin instances for efficient rendering of many shadows
+  
+  let blobShadowMaterialGradient = null;
+  let blobShadowMaterialSolid = null;
+  let blobShadowTexture = null;
+  let blobShadowsVisible = false;
+  let blobShadowStyle = 'gradient'; // 'solid' or 'gradient'
+  
+  // Thin instance data
+  let blobShadowSourceMesh = null; // Single source mesh for all instances
+  const blobShadowUnits = []; // Array of units with blob shadows
+  const blobShadowRadii = new Map(); // unit -> radius
+  let blobShadowsDirty = false; // Need to rebuild instance buffer
+  
+  // Create a gradient shadow texture (dark center, fading edges)
+  function getBlobShadowTexture() {
+    if (!blobShadowTexture && gfx.scene) {
+      const size = 64;
+      blobShadowTexture = new BABYLON.DynamicTexture("blobShadowTex", size, gfx.scene, false);
+      const ctx = blobShadowTexture.getContext();
+      
+      // Create radial gradient - dark center fading to transparent
+      const centerX = size / 2;
+      const centerY = size / 2;
+      const radius = size / 2;
+      
+      const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+      gradient.addColorStop(0, 'rgba(0, 0, 0, 0.85)');   // Darker center
+      gradient.addColorStop(0.3, 'rgba(0, 0, 0, 0.65)'); // Darker mid
+      gradient.addColorStop(0.6, 'rgba(0, 0, 0, 0.35)'); // Darker fade
+      gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');      // Transparent edge
+      
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+      
+      blobShadowTexture.update();
+      blobShadowTexture.hasAlpha = true;
+    }
+    return blobShadowTexture;
+  }
+  
+  // Create the gradient blob shadow material (with alpha/transparency)
+  function getBlobShadowMaterialGradient() {
+    if (!blobShadowMaterialGradient && gfx.scene) {
+      blobShadowMaterialGradient = new BABYLON.StandardMaterial("blobShadowMatGradient", gfx.scene);
+      blobShadowMaterialGradient.diffuseTexture = getBlobShadowTexture();
+      blobShadowMaterialGradient.diffuseTexture.hasAlpha = true;
+      blobShadowMaterialGradient.useAlphaFromDiffuseTexture = true;
+      blobShadowMaterialGradient.emissiveColor = new BABYLON.Color3(0, 0, 0);
+      blobShadowMaterialGradient.specularColor = new BABYLON.Color3(0, 0, 0);
+      blobShadowMaterialGradient.backFaceCulling = false;
+      blobShadowMaterialGradient.disableLighting = true;
+      blobShadowMaterialGradient.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    }
+    return blobShadowMaterialGradient;
+  }
+  
+  // Create the solid blob shadow material (no transparency - cheapest)
+  function getBlobShadowMaterialSolid() {
+    if (!blobShadowMaterialSolid && gfx.scene) {
+      blobShadowMaterialSolid = new BABYLON.StandardMaterial("blobShadowMatSolid", gfx.scene);
+      // Dark gray-green to blend with grass (not pure black)
+      blobShadowMaterialSolid.diffuseColor = new BABYLON.Color3(0.15, 0.18, 0.12);
+      blobShadowMaterialSolid.emissiveColor = new BABYLON.Color3(0.08, 0.1, 0.06);
+      blobShadowMaterialSolid.specularColor = new BABYLON.Color3(0, 0, 0);
+      blobShadowMaterialSolid.backFaceCulling = false;
+      blobShadowMaterialSolid.disableLighting = true;
+    }
+    return blobShadowMaterialSolid;
+  }
+  
+  // Get the appropriate material based on current style
+  function getBlobShadowMaterial() {
+    return blobShadowStyle === 'solid' ? getBlobShadowMaterialSolid() : getBlobShadowMaterialGradient();
+  }
+  
+  // Get or create the source mesh for thin instances
+  function getOrCreateSourceMesh() {
+    if (blobShadowSourceMesh && !blobShadowSourceMesh.isDisposed()) {
+      // Update material if style changed
+      blobShadowSourceMesh.material = getBlobShadowMaterial();
+      return blobShadowSourceMesh;
+    }
+    
+    // Use a ground plane - it's already flat, no rotation needed
+    // This avoids matrix rotation complexity with thin instances
+    blobShadowSourceMesh = BABYLON.MeshBuilder.CreateGround("blobShadowSource", {
+      width: 1,
+      height: 1
+    }, gfx.scene);
+    
+    blobShadowSourceMesh.material = getBlobShadowMaterial();
+    blobShadowSourceMesh.isPickable = false;
+    blobShadowSourceMesh.receiveShadows = false;
+    blobShadowSourceMesh.renderingGroupId = 0;
+    // Disable frustum culling - instances can be anywhere
+    blobShadowSourceMesh.alwaysSelectAsActiveMesh = true;
+    
+    return blobShadowSourceMesh;
+  }
+  
+  // Calculate shadow radius for a unit
+  function getShadowRadius(unit) {
+    let shadowRadius = 0.6;
+    const unitType = unit.type || unit.name || '';
+    
+    if (unitType === 'building' || unitType.includes('building')) {
+      shadowRadius = 1.8;
+    } else if (unit.isFlying) {
+      shadowRadius = 0.45;
+    } else if (unitType === 'frog' || unitType === 'villager' || unitType === 'gnome') {
+      shadowRadius = 0.38;
+    } else if (unitType === 'monk' || unitType === 'wizard' || unitType === 'engineer') {
+      shadowRadius = 0.52;
+    } else if (unitType === 'tree' || unitType.includes('tree')) {
+      shadowRadius = 2;
+    } else if (unitType === 'rock' || unitType.includes('rock')) {
+      // Different rock types have different sizes
+      const modelPath = unit.modelPath || '';
+      if (modelPath.includes('snow')) {
+        shadowRadius = 8.0;   // Snowy rocks are huge
+      } else if (modelPath.includes('moss')) {
+        shadowRadius = 4.5;   // Mossy rocks are medium
+      } else {
+        shadowRadius = 2.5;   // Plain rocks are small
+      }
+    }
+    
+    // Gradient mode shadows are bigger (75% larger than solid)
+    if (blobShadowStyle === 'gradient') {
+      shadowRadius *= 1.75;
+    }
+    
+    return shadowRadius;
+  }
+  
+  // Set blob shadow style
+  gfx.setBlobShadowStyle = function(style) {
+    if (blobShadowStyle === style) return;
+    blobShadowStyle = style;
+    
+    // Force texture regeneration for new settings
+    if (blobShadowTexture) {
+      blobShadowTexture.dispose();
+      blobShadowTexture = null;
+    }
+    if (blobShadowMaterialGradient) {
+      blobShadowMaterialGradient.dispose();
+      blobShadowMaterialGradient = null;
+    }
+    
+    // Update source mesh material
+    if (blobShadowSourceMesh && !blobShadowSourceMesh.isDisposed()) {
+      blobShadowSourceMesh.material = getBlobShadowMaterial();
+    }
+    
+    // Recalculate all radii for new style
+    blobShadowUnits.forEach(unit => {
+      blobShadowRadii.set(unit, getShadowRadius(unit));
+    });
+    
+    blobShadowsDirty = true;
+  };
+  
+  // Register a unit for blob shadow
+  gfx.createBlobShadow = function(unit) {
+    if (!unit || !gfx.scene) return;
+    
+    // Don't create duplicates
+    if (blobShadowRadii.has(unit)) return;
+    
+    const radius = getShadowRadius(unit);
+    blobShadowRadii.set(unit, radius);
+    blobShadowUnits.push(unit);
+    unit.blobShadow = true;
+    
+    blobShadowsDirty = true;
+  };
+  
+  // Debug: log blob shadow stats
+  window.logBlobShadowStats = function() {
+    console.log('[BlobShadows] Total registered:', blobShadowUnits.length);
+    console.log('[BlobShadows] Visible:', blobShadowsVisible);
+    console.log('[BlobShadows] Style:', blobShadowStyle);
+    
+    const typeCounts = {};
+    blobShadowUnits.forEach(unit => {
+      const t = unit.type || unit.name || 'unknown';
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    });
+    console.log('[BlobShadows] By type:', typeCounts);
+  };
+  
+  // Remove blob shadow for a unit
+  gfx.removeBlobShadow = function(unit) {
+    if (!unit) return;
+    
+    const idx = blobShadowUnits.indexOf(unit);
+    if (idx > -1) {
+      blobShadowUnits.splice(idx, 1);
+    }
+    blobShadowRadii.delete(unit);
+    unit.blobShadow = null;
+    
+    blobShadowsDirty = true;
+  };
+  
+  // Update blob shadow (no-op for thin instances - done in batch)
+  gfx.updateBlobShadow = function(unit) {
+    // Thin instances are updated all at once in updateAllBlobShadows
+  };
+  
+  // Set visibility of all blob shadows
+  gfx.setBlobShadowsVisible = function(visible) {
+    blobShadowsVisible = visible;
+    if (blobShadowSourceMesh && !blobShadowSourceMesh.isDisposed()) {
+      blobShadowSourceMesh.setEnabled(visible && blobShadowUnits.length > 0);
+    }
+  };
+  
+  // Clear all blob shadows (called when starting a new match)
+  gfx.clearAllBlobShadows = function() {
+    blobShadowUnits.length = 0;
+    blobShadowRadii.clear();
+    blobShadowsDirty = true;
+    
+    // Hide the source mesh
+    if (blobShadowSourceMesh && !blobShadowSourceMesh.isDisposed()) {
+      blobShadowSourceMesh.thinInstanceCount = 0;
+      blobShadowSourceMesh.setEnabled(false);
+    }
+  };
+  
+  // Create blob shadows for all existing units and decorations
+  gfx.createBlobShadowsForAllUnits = function() {
+    // FIRST: Clean up any stale blob shadow entries (disposed meshes, etc)
+    // This prevents stacking when called multiple times
+    for (let i = blobShadowUnits.length - 1; i >= 0; i--) {
+      const unit = blobShadowUnits[i];
+      const mesh = unit.mesh;
+      // Remove if mesh is disposed or missing
+      if (!mesh || (mesh.isDisposed && mesh.isDisposed())) {
+        blobShadowUnits.splice(i, 1);
+        blobShadowRadii.delete(unit);
+      }
+    }
+    
+    // Create for game units
+    const units = window.gameUnits || [];
+    units.forEach(unit => {
+      if (unit.mesh && !blobShadowRadii.has(unit)) {
+        gfx.createBlobShadow(unit);
+      }
+    });
+    
+    // Create for decoration models (trees, rocks, etc)
+    lodModels.forEach(lod => {
+      // Check if existing blobShadowObj still has valid mesh
+      if (lod.blobShadowObj && lod.blobShadowObj.mesh) {
+        const mesh = lod.blobShadowObj.mesh;
+        if (mesh.isDisposed && mesh.isDisposed()) {
+          // Mesh was disposed, clear the reference
+          blobShadowRadii.delete(lod.blobShadowObj);
+          lod.blobShadowObj = null;
+        }
+      }
+      
+      if (lod.isStatic && lod.model && !lod.blobShadowObj) {
+        const decorObj = {
+          type: lod.decorType || 'decoration',
+          name: lod.decorType || 'decoration',
+          mesh: lod.model,
+          modelPath: lod.modelPath || ''
+        };
+        gfx.createBlobShadow(decorObj);
+        lod.blobShadowObj = decorObj;
+      }
+    });
+  };
+  
+  // Update all blob shadow positions using thin instances
+  gfx.updateAllBlobShadows = function() {
+    if (!blobShadowsVisible || blobShadowUnits.length === 0) {
+      // Hide source mesh if no shadows
+      if (blobShadowSourceMesh && !blobShadowSourceMesh.isDisposed()) {
+        blobShadowSourceMesh.setEnabled(false);
+      }
+      return;
+    }
+    
+    const source = getOrCreateSourceMesh();
+    
+    // Get camera TARGET for LOD culling (not position - camera is up in the air!)
+    // Use the point the camera is looking at on the ground
+    let camX = 0, camZ = 0;
+    if (gfx.cameraTarget && gfx.cameraTarget.position) {
+      // Use camera target (ground level)
+      camX = gfx.cameraTarget.position.x;
+      camZ = gfx.cameraTarget.position.z;
+    } else if (gfx.camera && gfx.camera.target) {
+      // Fallback to camera.target if available
+      camX = gfx.camera.target.x;
+      camZ = gfx.camera.target.z;
+    } else if (gfx.camera && gfx.camera.position) {
+      // Last resort - use camera position (will be offset)
+      camX = gfx.camera.position.x;
+      camZ = gfx.camera.position.z;
+    }
+    
+    // Shadow cull distance - match LOD system
+    // Use current LOD multiplier if available
+    const baseCullDist = 80;
+    const lodMultiplier = (window.hud && window.hud.getCurrentLODMultiplier) 
+      ? window.hud.getCurrentLODMultiplier() 
+      : 1.0;
+    const cullDistSq = Math.pow(baseCullDist * lodMultiplier, 2);
+    
+    // Calculate sun direction and rotation once for all shadows
+    let sunDirX = 0.7, sunDirZ = 0.7; // Default direction
+    let sunAngle = Math.PI / 4; // Default 45 degree angle
+    const shadowStretch = 2.0; // Stretch factor in sun direction (more elongated)
+    
+    if (window.lighting && window.lighting.lights && window.lighting.lights.sun) {
+      const sunDir = window.lighting.lights.sun.direction;
+      const len = Math.sqrt(sunDir.x * sunDir.x + sunDir.z * sunDir.z);
+      if (len > 0.01) {
+        sunDirX = sunDir.x / len;
+        sunDirZ = sunDir.z / len;
+        sunAngle = Math.atan2(sunDir.x, sunDir.z);
+      }
+    }
+    
+    // Offset distances based on object height (taller = further shadow)
+    const OFFSET_UNIT = 0.3;     // Short units - close to feet
+    const OFFSET_ROCK = 1.2;     // Medium height rocks
+    const OFFSET_TREE = 2.5;     // Tall trees - shadow far from trunk
+    
+    // Pre-compute rotation quaternion for sun direction
+    const sunRotation = BABYLON.Quaternion.FromEulerAngles(0, sunAngle, 0);
+    
+    // Build instance matrices
+    const matrices = new Float32Array(blobShadowUnits.length * 16);
+    const tempMatrix = BABYLON.Matrix.Identity();
+    const scaling = BABYLON.Vector3.Zero();
+    const position = BABYLON.Vector3.Zero();
+    let visibleCount = 0;
+    
+    for (let i = 0; i < blobShadowUnits.length; i++) {
+      const unit = blobShadowUnits[i];
+      const radius = blobShadowRadii.get(unit) || 0.6;
+      
+      // Get unit position
+      let x = 0, z = 0;
+      if (unit.mesh && unit.mesh.position) {
+        x = unit.mesh.position.x;
+        z = unit.mesh.position.z;
+      } else if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+        x = unit.pb.state.loc.x;
+        z = unit.pb.state.loc.z;
+      }
+      
+      // Check distance for LOD culling
+      const dx = x - camX;
+      const dz = z - camZ;
+      const distSq = dx * dx + dz * dz;
+      
+      if (distSq > cullDistSq) {
+        // Too far - skip this shadow entirely
+        continue;
+      }
+      
+      // Choose offset based on object type (taller objects = further shadow)
+      const unitType = unit.type || unit.name || '';
+      let offsetDist = OFFSET_UNIT;
+      if (unitType === 'tree' || unitType.includes('tree')) {
+        offsetDist = OFFSET_TREE;
+      } else if (unitType === 'rock' || unitType.includes('rock')) {
+        offsetDist = OFFSET_ROCK;
+      }
+      
+      const shadowX = x + sunDirX * offsetDist;
+      const shadowZ = z + sunDirZ * offsetDist;
+      
+      // Get terrain height
+      let terrainY = 0;
+      if (window.getTerrainHeightAtPosition) {
+        terrainY = window.getTerrainHeightAtPosition(shadowX, shadowZ);
+      }
+      
+      // Scale by radius * 2 (ground mesh is 1x1, we want diameter)
+      // Stretch in sun direction for more realistic look
+      const size = radius * 2;
+      const stretchedWidth = size;                    // Width perpendicular to sun
+      const stretchedLength = size * shadowStretch;   // Length in sun direction
+      scaling.set(stretchedWidth, 1, stretchedLength);
+      position.set(shadowX, terrainY + 0.15, shadowZ);
+      
+      // Compose matrix with sun-aligned rotation for stretched shadows
+      BABYLON.Matrix.ComposeToRef(scaling, sunRotation, position, tempMatrix);
+      tempMatrix.copyToArray(matrices, visibleCount * 16);
+      visibleCount++;
+    }
+    
+    // Update thin instances with only visible shadows
+    if (visibleCount > 0) {
+      source.setEnabled(true);
+      // Create a trimmed array if not all shadows are visible
+      const finalMatrices = visibleCount === blobShadowUnits.length 
+        ? matrices 
+        : matrices.slice(0, visibleCount * 16);
+      source.thinInstanceSetBuffer("matrix", finalMatrices, 16, false);
+    } else {
+      source.setEnabled(false);
+    }
+  };
+
+  // ========================================
+  // THIN INSTANCE SCENERY SYSTEM
+  // ========================================
+  // Uses thin instances for static scenery (trees, rocks) when not using full shadows
+  // This dramatically reduces draw calls for dense forests/rock fields
+  
+  let thinInstanceMode = false; // Enabled when shadow mode is Off/Low/Med
+  const thinInstanceSources = new Map(); // modelPath -> { mesh, material, instances: [] }
+  const thinInstanceData = new Map(); // lodEntry -> { path, position, rotation, scale }
+  let thinInstancesDirty = false;
+  
+  // Model paths that support thin instancing
+  const THIN_INSTANCE_MODELS = [
+    'assets/models/trees.glb',
+    'assets/models/rocks_plain.glb',
+    'assets/models/rocks_moss.glb',
+    'assets/models/rocks_snow.glb'
+  ];
+  
+  // Check if a model path supports thin instancing
+  function supportsThinInstancing(path) {
+    return THIN_INSTANCE_MODELS.some(p => path.includes(p.replace('assets/models/', '')));
+  }
+  
+  // Enable/disable thin instance mode based on shadow setting
+  // NOTE: Thin instancing is DISABLED for now - needs more debugging
+  // The issue is that source meshes aren't rendering despite being enabled
+  gfx.setThinInstanceMode = function(enabled) {
+    // DISABLED: Just return immediately, don't enable thin instances
+    // This allows normal model rendering to continue working
+    if (true) return;
+    
+    if (thinInstanceMode === enabled) return;
+    console.log('[ThinInstance] setThinInstanceMode:', enabled);
+    thinInstanceMode = enabled;
+    
+    if (enabled) {
+      // FIRST PASS: Create source meshes from visible models BEFORE hiding them
+      lodModels.forEach(lod => {
+        if (lod.isStatic && lod.modelPath && supportsThinInstancing(lod.modelPath)) {
+          const model = lod.model;
+          if (model && (!model.isDisposed || !model.isDisposed())) {
+            // Create source mesh if we don't have one for this model type
+            if (!thinInstanceSources.has(lod.modelPath)) {
+              getOrCreateThinInstanceSource(lod.modelPath, model);
+            }
+          }
+        }
+      });
+      
+      // SECOND PASS: Store instance data and hide individual models
+      lodModels.forEach(lod => {
+        if (lod.isStatic && lod.modelPath && supportsThinInstancing(lod.modelPath)) {
+          const model = lod.model;
+          if (model && (!model.isDisposed || !model.isDisposed())) {
+            // Get world position
+            let pos;
+            if (model.getAbsolutePosition) {
+              pos = model.getAbsolutePosition();
+            } else if (model.position) {
+              pos = model.position;
+            } else {
+              pos = { x: 0, y: 0, z: 0 };
+            }
+            
+            // Get rotation
+            let rot = 0;
+            if (model.rotation && model.rotation.y !== undefined) {
+              rot = model.rotation.y;
+            } else if (model.rotationQuaternion) {
+              rot = model.rotationQuaternion.toEulerAngles().y;
+            }
+            
+            // Get scale
+            let scale = 1;
+            if (model.scaling && model.scaling.x !== undefined) {
+              scale = model.scaling.x;
+            }
+            
+            thinInstanceData.set(lod, {
+              path: lod.modelPath,
+              x: pos.x,
+              y: pos.y,
+              z: pos.z,
+              rotation: rot,
+              scale: scale
+            });
+            
+            // Hide the individual model
+            if (model.setEnabled) {
+              model.setEnabled(false);
+            }
+            lod._thinInstanceManaged = true;
+          }
+        }
+      });
+      
+      console.log('[ThinInstance] Enabled with', thinInstanceData.size, 'instances and', thinInstanceSources.size, 'sources');
+      thinInstancesDirty = true;
+    } else {
+      // Switch back to individual models
+      console.log('[ThinInstance] Disabling - restoring', lodModels.filter(l => l._thinInstanceManaged).length, 'models');
+      lodModels.forEach(lod => {
+        if (lod._thinInstanceManaged) {
+          lod._thinInstanceManaged = false;
+          // Model visibility will be restored by normal LOD update
+        }
+      });
+      thinInstanceData.clear();
+      
+      // Dispose all thin instance sources completely
+      thinInstanceSources.forEach((source, path) => {
+        if (source.mesh && !source.mesh.isDisposed()) {
+          source.mesh.dispose();
+        }
+      });
+      thinInstanceSources.clear();
+    }
+  };
+  
+  // Register a static model for thin instancing (called when model loads)
+  gfx.registerThinInstance = function(lod, model, modelPath) {
+    if (!thinInstanceMode || !supportsThinInstancing(modelPath)) return false;
+    if (!model || (model.isDisposed && model.isDisposed())) return false;
+    
+    // Get world position - works for both Mesh and TransformNode
+    let pos;
+    if (model.getAbsolutePosition) {
+      pos = model.getAbsolutePosition();
+    } else if (model.position) {
+      pos = model.position;
+    } else {
+      pos = { x: 0, y: 0, z: 0 };
+    }
+    
+    // Get rotation - check multiple possible locations
+    let rot = 0;
+    if (model.rotation && model.rotation.y !== undefined) {
+      rot = model.rotation.y;
+    } else if (model.rotationQuaternion) {
+      rot = model.rotationQuaternion.toEulerAngles().y;
+    }
+    
+    // Get scale
+    let scale = 1;
+    if (model.scaling && model.scaling.x !== undefined) {
+      scale = model.scaling.x;
+    }
+    
+    thinInstanceData.set(lod, {
+      path: modelPath,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      rotation: rot,
+      scale: scale
+    });
+    
+    lod._thinInstanceManaged = true;
+    if (model.setEnabled) {
+      model.setEnabled(false);
+    }
+    thinInstancesDirty = true;
+    
+    return true;
+  };
+  
+  // Unregister a model from thin instancing (called when chunk unloads)
+  gfx.unregisterThinInstance = function(lod) {
+    if (thinInstanceData.has(lod)) {
+      thinInstanceData.delete(lod);
+      thinInstancesDirty = true;
+    }
+  };
+  
+  // Get or create source mesh for a model type
+  // For GLB models, we find the first child with geometry and use that
+  function getOrCreateThinInstanceSource(modelPath, referenceMesh) {
+    if (thinInstanceSources.has(modelPath)) {
+      const existing = thinInstanceSources.get(modelPath);
+      if (existing.mesh && !existing.mesh.isDisposed()) {
+        return existing;
+      }
+    }
+    
+    if (!referenceMesh) return null;
+    
+    // Find all meshes with geometry in the hierarchy
+    let meshes = [];
+    if (referenceMesh.getChildMeshes) {
+      meshes = referenceMesh.getChildMeshes().filter(m => 
+        m.getTotalVertices && m.getTotalVertices() > 0
+      );
+    }
+    if (meshes.length === 0 && referenceMesh.getTotalVertices && referenceMesh.getTotalVertices() > 0) {
+      meshes = [referenceMesh];
+    }
+    
+    if (meshes.length === 0) return null;
+    
+    // Clone the first mesh with geometry as the source
+    const originalMesh = meshes[0];
+    const sourceMesh = originalMesh.clone(`thinSource_${modelPath.replace(/[\/\.]/g, '_')}`, null);
+    
+    if (!sourceMesh) return null;
+    
+    // Make geometry unique so thin instances work properly
+    sourceMesh.makeGeometryUnique();
+    
+    // Reset transform - thin instances provide their own world transforms via matrices
+    // Position source mesh at origin with unit scale
+    sourceMesh.position.set(0, 0, 0);
+    sourceMesh.rotation.set(0, 0, 0);
+    sourceMesh.scaling.set(1, 1, 1);
+    
+    // Configure for thin instances
+    sourceMesh.isPickable = false;
+    sourceMesh.receiveShadows = false;
+    sourceMesh.alwaysSelectAsActiveMesh = true; // Required for thin instances to render
+    sourceMesh.setEnabled(true);
+    
+    // Note: The source mesh will render at origin, but it's small and at ground level
+    // Thin instances render at their specified positions from the matrix buffer
+    
+    // Use absolute values for scale to avoid flipped meshes
+    let origScale = new BABYLON.Vector3(1, 1, 1);
+    if (originalMesh.scaling) {
+      origScale.x = Math.abs(originalMesh.scaling.x);
+      origScale.y = Math.abs(originalMesh.scaling.y);
+      origScale.z = Math.abs(originalMesh.scaling.z);
+    }
+    
+    const source = {
+      mesh: sourceMesh,
+      originalScale: origScale
+    };
+    
+    thinInstanceSources.set(modelPath, source);
+    console.log('[ThinInstance] Created source for:', modelPath, 'origScale:', origScale.x.toFixed(2), origScale.y.toFixed(2), origScale.z.toFixed(2));
+    return source;
+  }
+  
+  // Debug: log thin instance stats occasionally
+  let thinInstanceDebugCounter = 0;
+  
+  // Update all thin instances (called in render loop)
+  gfx.updateThinInstances = function() {
+    if (!thinInstanceMode || thinInstanceData.size === 0) {
+      // Hide all sources when not in thin instance mode
+      thinInstanceSources.forEach(source => {
+        if (source.mesh && !source.mesh.isDisposed()) {
+          source.mesh.setEnabled(false);
+        }
+      });
+      return;
+    }
+    
+    // Debug logging every 5 seconds
+    thinInstanceDebugCounter++;
+    if (thinInstanceDebugCounter % 300 === 1) {
+      console.log('[ThinInstance] Mode:', thinInstanceMode, 'Data:', thinInstanceData.size, 'Sources:', thinInstanceSources.size);
+    }
+    
+    // Get camera for LOD culling
+    let camX = 0, camZ = 0;
+    if (gfx.camera && gfx.camera.position) {
+      camX = gfx.camera.position.x;
+      camZ = gfx.camera.position.z;
+    }
+    
+    // Cull distance - use LOD distance for trees/rocks
+    const baseCullDist = 100;
+    const lodMultiplier = (window.hud && window.hud.getCurrentLODMultiplier) 
+      ? window.hud.getCurrentLODMultiplier() 
+      : 1.0;
+    const cullDistSq = Math.pow(baseCullDist * lodMultiplier, 2);
+    
+    // Group instances by model path and find reference meshes
+    const instancesByPath = new Map();
+    const refMeshesByPath = new Map();
+    
+    thinInstanceData.forEach((data, lod) => {
+      // Distance culling
+      const dx = data.x - camX;
+      const dz = data.z - camZ;
+      const distSq = dx * dx + dz * dz;
+      
+      if (distSq > cullDistSq) return; // Skip distant instances
+      
+      if (!instancesByPath.has(data.path)) {
+        instancesByPath.set(data.path, []);
+      }
+      instancesByPath.get(data.path).push(data);
+      
+      // Store reference mesh if we don't have a source yet
+      if (!thinInstanceSources.has(data.path) && lod.model && !lod.model.isDisposed()) {
+        refMeshesByPath.set(data.path, lod.model);
+      }
+    });
+    
+    // Create sources from reference meshes if needed
+    refMeshesByPath.forEach((refMesh, path) => {
+      if (!thinInstanceSources.has(path)) {
+        getOrCreateThinInstanceSource(path, refMesh);
+      }
+    });
+    
+    // Hide sources that have no visible instances
+    thinInstanceSources.forEach((source, path) => {
+      if (!instancesByPath.has(path) || instancesByPath.get(path).length === 0) {
+        if (source.mesh && !source.mesh.isDisposed()) {
+          source.mesh.setEnabled(false);
+        }
+      }
+    });
+    
+    // Update each source mesh's thin instances
+    instancesByPath.forEach((instances, path) => {
+      const source = thinInstanceSources.get(path);
+      if (!source || !source.mesh || source.mesh.isDisposed()) return;
+      
+      if (instances.length === 0) {
+        source.mesh.setEnabled(false);
+        return;
+      }
+      
+      // Build matrix buffer
+      const matrices = new Float32Array(instances.length * 16);
+      const tempMatrix = BABYLON.Matrix.Identity();
+      const scaling = BABYLON.Vector3.Zero();
+      const position = BABYLON.Vector3.Zero();
+      const rotationQuat = BABYLON.Quaternion.Identity();
+      
+      // Account for original mesh scale
+      const origScale = source.originalScale || new BABYLON.Vector3(1, 1, 1);
+      
+      for (let i = 0; i < instances.length; i++) {
+        const inst = instances[i];
+        
+        position.set(inst.x, inst.y, inst.z);
+        // Combine instance scale with original mesh scale
+        scaling.set(
+          inst.scale * origScale.x,
+          inst.scale * origScale.y,
+          inst.scale * origScale.z
+        );
+        BABYLON.Quaternion.RotationYawPitchRollToRef(inst.rotation, 0, 0, rotationQuat);
+        
+        BABYLON.Matrix.ComposeToRef(scaling, rotationQuat, position, tempMatrix);
+        tempMatrix.copyToArray(matrices, i * 16);
+      }
+      
+      // Force enable the source mesh - use _isEnabled directly to bypass any parent checks
+      source.mesh._isEnabled = true;
+      source.mesh.isVisible = true;
+      
+      source.mesh.thinInstanceSetBuffer("matrix", matrices, 16, false);
+      
+      const isEnabledAfter = source.mesh.isEnabled();
+      
+      // Debug: log instance details and verify buffer
+      if (thinInstanceDebugCounter % 300 === 1 && instances.length > 0) {
+        console.log('[ThinInstance] Rendering', instances.length, 'of', path, 
+          'first at:', instances[0].x.toFixed(1), instances[0].y.toFixed(1), instances[0].z.toFixed(1),
+          'scale:', instances[0].scale.toFixed(2),
+          'thinInstanceCount:', source.mesh.thinInstanceCount,
+          'enabled after setEnabled:', wasEnabled, '-> after buffer:', isEnabledAfter,
+          'material:', source.mesh.material ? source.mesh.material.name : 'NONE',
+          'vertices:', source.mesh.getTotalVertices ? source.mesh.getTotalVertices() : 'N/A',
+          'parent:', source.mesh.parent ? source.mesh.parent.name : 'NONE');
+      }
+    });
+    
+    thinInstancesDirty = false;
+  };
+  
+  // Check if thin instance mode is active
+  gfx.isThinInstanceMode = function() {
+    return thinInstanceMode;
+  };
+
+  // ========================================
+  // ANTIALIASING CONTROLS
+  // ========================================
+  // Set antialiasing level: 0=Off, 1=FXAA, 2=MSAA 2x, 3=MSAA 4x
+  gfx.setAntialiasing = function(level) {
+    const prevLevel = currentAALevel;
+    currentAALevel = level;
+    
+    // Handle FXAA (post-process, can toggle at runtime)
+    if (level === 1) {
+      // Enable FXAA
+      if (!fxaaPostProcess && gfx.camera) {
+        fxaaPostProcess = new BABYLON.FxaaPostProcess("fxaa", 1.0, gfx.camera);
+      }
+    } else {
+      // Disable FXAA
+      if (fxaaPostProcess) {
+        fxaaPostProcess.dispose();
+        fxaaPostProcess = null;
+      }
+    }
+    
+    // MSAA changes require engine recreation - just save the setting
+    // The change will take effect on next page load
+    if ((level >= 2 && prevLevel < 2) || (level < 2 && prevLevel >= 2) || 
+        (level >= 2 && prevLevel >= 2 && level !== prevLevel)) {
+      // MSAA setting changed - notify user if needed
+      // console.log(`⚙️ MSAA setting changed to ${level >= 2 ? (level === 2 ? '2x' : '4x') : 'Off'}. Reload page to apply.`);
+    }
+  };
+  
+  // Get current AA level
+  gfx.getAALevel = function() {
+    return currentAALevel;
   };
 
 })(window.gfx = window.gfx || {});

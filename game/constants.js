@@ -10,6 +10,9 @@ const
   TILE_SIZE = 4,
   // ENABLE_FORGE can be set by forge/index.html before this script loads
   ENABLE_FORGE = window.ENABLE_FORGE || false,
+  
+  // Starting resources - THE single source of truth
+  STARTING_RESOURCES = { food: 100, wood: 90, stone: 30, minerals: 5 },
 
 
 

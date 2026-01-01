@@ -107,7 +107,7 @@
         this.stats.unitsLost[pid] = 0;
         this.stats.buildingsCreated[pid] = 0;
         this.stats.buildingsDestroyed[pid] = 0;
-        this.stats.resourcesGathered[pid] = { food: 0, wood: 0, stone: 0, magic: 0 };
+        this.stats.resourcesGathered[pid] = { food: 0, wood: 0, stone: 0, minerals: 0 };
         this.stats.damageDealt[pid] = 0;
         this.stats.damageReceived[pid] = 0;
       });
@@ -2795,12 +2795,12 @@
           playerResourceHash ^= Math.floor(player.resources.food || 0);
           playerResourceHash ^= Math.floor(player.resources.wood || 0);
           playerResourceHash ^= Math.floor(player.resources.stone || 0);
-          playerResourceHash ^= Math.floor(player.resources.magic || 0);
+          playerResourceHash ^= Math.floor(player.resources.minerals || 0);
           
           hash ^= Math.floor(player.resources.food || 0);
           hash ^= Math.floor(player.resources.wood || 0);
           hash ^= Math.floor(player.resources.stone || 0);
-          hash ^= Math.floor(player.resources.magic || 0);
+          hash ^= Math.floor(player.resources.minerals || 0);
         }
       });
       
@@ -2813,7 +2813,7 @@
         console.log(`💰 LOCAL player resource checksum at tick ${this.tick}: ${playerResourceHash >>> 0}`);
         this.players.forEach(player => {
           if (player.resources) {
-            console.log(`  Player ${player.id?.slice(-6)}: food=${player.resources.food}, wood=${player.resources.wood}, stone=${player.resources.stone}, magic=${player.resources.magic}`);
+            console.log(`  Player ${player.id?.slice(-6)}: food=${player.resources.food}, wood=${player.resources.wood}, stone=${player.resources.stone}, minerals=${player.resources.minerals}`);
           }
         });
       }
@@ -2966,14 +2966,14 @@
       return (player.resources.food || 0) >= (cost.food || 0) &&
              (player.resources.wood || 0) >= (cost.wood || 0) &&
              (player.resources.stone || 0) >= (cost.stone || 0) &&
-             (player.resources.magic || 0) >= (cost.magic || 0);
+             (player.resources.minerals || 0) >= (cost.minerals || 0);
     }
     
     deductResources(player, cost) {
       player.resources.food -= (cost.food || 0);
       player.resources.wood -= (cost.wood || 0);
       player.resources.stone -= (cost.stone || 0);
-      player.resources.magic -= (cost.magic || 0);
+      player.resources.minerals -= (cost.minerals || 0);
     }
     
     getBuildingCost(type) {

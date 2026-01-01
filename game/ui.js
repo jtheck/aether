@@ -1041,6 +1041,16 @@ function getRandomColor() {
       if (menuId === 'settings_menu' && window.hud && window.hud.initLODSlider) {
         window.hud.initLODSlider();
       }
+      
+      // Initialize AA slider when settings menu is shown
+      if (menuId === 'settings_menu' && window.hud && window.hud.initAASlider) {
+        window.hud.initAASlider();
+      }
+      
+      // Initialize Shadow slider when settings menu is shown
+      if (menuId === 'settings_menu' && window.hud && window.hud.initShadowSlider) {
+        window.hud.initShadowSlider();
+      }
     };
     
     // NEW: Start multiplayer game for specific type (called from lobby)
@@ -1062,7 +1072,7 @@ function getRandomColor() {
           id: opponentId,
           gameType: gameType,
           color: getOpponentColorForGameType(gameType),
-          startingResources: {food: 100, wood: 100, stone: 25, magic: 5}
+          startingResources: { ...STARTING_RESOURCES }
         });
       }
       players.push(window.opponent);
@@ -1275,6 +1285,16 @@ function getRandomColor() {
     if (menuId === 'settings_menu' && window.hud && window.hud.initLODSlider) {
       // console.log('🎚️ Settings menu shown, initializing LOD slider...');
       window.hud.initLODSlider();
+    }
+    
+    // Initialize AA slider when settings menu is shown
+    if (menuId === 'settings_menu' && window.hud && window.hud.initAASlider) {
+      window.hud.initAASlider();
+    }
+    
+    // Initialize Shadow slider when settings menu is shown
+    if (menuId === 'settings_menu' && window.hud && window.hud.initShadowSlider) {
+      window.hud.initShadowSlider();
     }
   }
 

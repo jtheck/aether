@@ -279,12 +279,7 @@ const Lobby = {
     
     // Reset player resources to starting values
     if (window.player && window.player.resources) {
-      window.player.resources = {
-        food: 100,
-        wood: 100,
-        stone: 25,
-        magic: 5
-      };
+      window.player.resources = { ...STARTING_RESOURCES };
     }
     
     // DON'T reset player position here - it will be set correctly in startMultiplayerMatch
@@ -467,7 +462,7 @@ const Lobby = {
       id: aiId,
       name: 'AI Opponent',
       color: '#0066cc',
-      startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
+      startingResources: { ...STARTING_RESOURCES },
       agora: spawn,
       basePosition: { x: spawn.x, z: spawn.y },
       difficulty: 'normal',
@@ -2820,7 +2815,7 @@ const Lobby = {
       const aiId = options.aiIds?.[i] || `ai-${i + 1}-${resolvedSeed.toString(16)}`;
       const aiName = options.aiNames?.[i] || `AI ${i + 1}`;
       const aiColor = (options.aiColors && options.aiColors[i]) || (this.getPlayerColor ? this.getPlayerColor(i + 1) : '#0066cc');
-      const aiResources = (options.aiResources && options.aiResources[i]) || { food: 120, wood: 80, stone: 40, magic: 20 };
+      const aiResources = (options.aiResources && options.aiResources[i]) || { ...STARTING_RESOURCES };
       const difficulty = Array.isArray(options.difficulty)
         ? (options.difficulty[i] || 'normal')
         : (options.difficulty || 'normal');
@@ -3466,7 +3461,7 @@ const Lobby = {
           name: playerName,
           gameType: gameType,
           color: playerColor,
-          startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
+          startingResources: { ...STARTING_RESOURCES },
           agora: spawnPos,
           basePosition: { x: spawnPos.x, z: spawnPos.y },
           isAI: false
@@ -3502,7 +3497,7 @@ const Lobby = {
                 id: aiId,
                 name: aiName,
                 color: aiColor,
-                startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
+                startingResources: { ...STARTING_RESOURCES },
                 agora: aiSpawn,
                 basePosition: { x: aiSpawn.x, z: aiSpawn.y },
                 difficulty: 'normal',
@@ -3512,7 +3507,7 @@ const Lobby = {
                 id: aiId,
                 name: aiName,
                 color: aiColor,
-                startingResources: { food: 100, wood: 100, stone: 25, magic: 5 },
+                startingResources: { ...STARTING_RESOURCES },
                 agora: aiSpawn,
                 basePosition: { x: aiSpawn.x, z: aiSpawn.y },
                 isAI: true

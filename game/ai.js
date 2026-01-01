@@ -76,13 +76,8 @@ class Behavior {
         this.unit.pb.imp.z += direction.z * effectiveSpeed;
         
         // Calculate target rotation to face movement direction
-        let targetRotation = Math.atan2(direction.x, direction.z);
-        
-        // Apply model orientation offset if specified
-        if (this.unit.modelOrientation) {
-            targetRotation += this.unit.modelOrientation;
-        }
-        
+        // Note: modelOrientation offset is applied in updateUnitMeshes(), not here
+        const targetRotation = Math.atan2(direction.x, direction.z);
         const currentRotation = this.unit.pb.state.rot.y || 0;
         
         // Calculate shortest rotation direction
@@ -91,22 +86,27 @@ class Behavior {
             rotationDiff = rotationDiff > 0 ? rotationDiff - Math.PI * 2 : rotationDiff + Math.PI * 2;
         }
         
-        // Get unit rotation speed (default to higher value for snappy turning)
-        // Increased default for more responsive turning - units should face direction quickly
-        let rotationSpeed = this.unit.rotationSpeed || 3.0; // Increased from 2.0 for snappier turning
+        // Snap rotation directly to target - no lerping, no spring, instant facing
+        // Flying units and birds get slower turning
+        let rotationSpeed = 1.0; // Full snap by default
         
-        // Flying units get reduced rotation speed to prevent spinning
         if (this.unit.abilities && this.unit.abilities.includes('fly')) {
-            rotationSpeed *= 0.05; // 5% of normal rotation speed for flying units (super gentle)
+            rotationSpeed = 0.15; // Slow for flying units
         }
-        
-        // Birds doing circular flight should use their own rotation system
         if (this.unit.type === 'bird_messenger') {
-            rotationSpeed *= 0.01; // 1% of normal rotation speed for birds (barely any rotation from movement system)
+            rotationSpeed = 0.05; // Very slow for birds
         }
         
-        // Apply rotation impulse for snappy turning
-        this.unit.pb.rotImp.y += rotationDiff * rotationSpeed;
+        // Apply rotation directly
+        this.unit.pb.state.rot.y = currentRotation + rotationDiff * rotationSpeed;
+        
+        // CRITICAL: Clear rotation velocity AND impulse to prevent physics system from fighting us
+        if (this.unit.pb.rotVel) {
+            this.unit.pb.rotVel.y = 0;
+        }
+        if (this.unit.pb.rotImp) {
+            this.unit.pb.rotImp.y = 0;
+        }
         
         // Forward momentum boost - units move faster when going forward
         // CRITICAL: Round to fixed precision for deterministic results
@@ -1109,7 +1109,7 @@ class GatherWorkBehavior extends WorkBehavior {
         
         // Map resource types to player resource names
         const resourceTypeMap = {
-            'minerals': 'magic', // Small rocks give 'minerals' but player resources use 'magic'
+            'minerals': 'minerals',
             'wood': 'wood',
             'stone': 'stone',
             'food': 'food'
@@ -1409,11 +1409,15 @@ class AttackBuildingBehavior extends Behavior {
             // Spin animation when attacking!
             if (isAttacking) {
                 // Fast spinning during attack animation
-                const spinSpeed = 0.5; // Fast spin
-                this.unit.pb.rotImp.y += spinSpeed;
+                this.unit.pb.state.rot.y += 0.3; // Direct rotation for spin
             } else {
-                // Face building when not actively attacking
-                this.unit.pb.rotImp.y += rotationDiff * 5.0; // Fast rotation to face target
+                // Face building when not actively attacking - direct lerp, no spring
+                this.unit.pb.state.rot.y = currentRotation + rotationDiff * 0.3;
+            }
+            
+            // Clear rotation velocity to prevent residual spinning
+            if (this.unit.pb.rotVel) {
+                this.unit.pb.rotVel.y = 0;
             }
             
             // Stay in place while attacking (small circular movement to look natural)
@@ -2843,6 +2847,14 @@ class TransformBehavior extends Behavior {
                     window.createSelectionIndicator(newUnit);
                 }
                 
+                // Create blob shadow for this unit
+                if (window.gfx && window.gfx.createBlobShadow) {
+                    window.gfx.createBlobShadow(newUnit);
+                    if (window.gfx.updateBlobShadow) {
+                        window.gfx.updateBlobShadow(newUnit);
+                    }
+                }
+                
                 // Set position and rotation
                 if (newUnit.pb && newUnit.pb.state && newUnit.pb.state.loc) {
                     newUnit.mesh.position.x = newUnit.pb.state.loc.x;
@@ -2926,6 +2938,26 @@ class TransformBehavior extends Behavior {
                 newVillager.mesh = model.root;
                 newVillager.mesh.scaling = new BABYLON.Vector3(newVillager.scale, newVillager.scale, newVillager.scale);
                 
+                // Store animation groups for walk/idle animation switching
+                if (model.animationGroups && model.animationGroups.length > 0) {
+                    newVillager.animationGroups = {};
+                    model.animationGroups.forEach(group => {
+                        // Babylon prefixes cloned animations with "Clone of " - strip it
+                        let name = group.name.toLowerCase();
+                        if (name.startsWith('clone of ')) {
+                            name = name.substring(9);
+                        }
+                        newVillager.animationGroups[name] = group;
+                    });
+                    newVillager.currentAnimation = null;
+                    
+                    // Start idle animation immediately to avoid T-pose
+                    if (newVillager.animationGroups['idle']) {
+                        newVillager.animationGroups['idle'].start(true);
+                        newVillager.currentAnimation = 'idle';
+                    }
+                }
+                
                 // Make unit mesh pickable for selection
                 newVillager.mesh.isPickable = true;
                 
@@ -2944,6 +2976,14 @@ class TransformBehavior extends Behavior {
                 // Create selection indicator
                 if (window.createSelectionIndicator) {
                     window.createSelectionIndicator(newVillager);
+                }
+                
+                // Create blob shadow for this unit
+                if (window.gfx && window.gfx.createBlobShadow) {
+                    window.gfx.createBlobShadow(newVillager);
+                    if (window.gfx.updateBlobShadow) {
+                        window.gfx.updateBlobShadow(newVillager);
+                    }
                 }
                 
                 // Set position and rotation

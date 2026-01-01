@@ -9,21 +9,20 @@ const menu = {
     camp: {},
     village: {},
     farm: {},
-    tower: {}
+    tower: {},
+    silo: {},
+    mine: {},
+    tavern: {},
+    barracks: {}
   },
   units: {
-    // Original units
+    villager: {},
     monk: {},
     wizard: {},
     engineer: {},
-    brigand: {},
-    // Nature units
-    // villager: {},
-    // frog_scout: {},
-    // tree_guardian: {},
-    // mushroom_mage: {},
-    // bird_messenger: {},
-    // gnome_builder: {}
+    warrior: {},
+    warlock: {},
+    brigand: {}
   },
   research: {
     scribes: {},

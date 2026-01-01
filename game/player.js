@@ -37,12 +37,7 @@ function Player(ops){
   this.selectedUnits = [];
   
   // Player's resources
-  this.resources = ops.resources || {
-    food: 100,
-    wood: 100,
-    stone: 25,
-    magic: 5
-  };
+  this.resources = ops.resources || { ...STARTING_RESOURCES };
   
   // Player's buildings
   this.buildings = [];

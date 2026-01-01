@@ -1,4 +1,4 @@
-// HUD System - Radial Menu and UI Elements
+     // HUD System - Radial Menu and UI Elements
 // 
 // Key Features:
 // - 3D radial menu with sub-categories
@@ -61,9 +61,44 @@
             window.buildingSystem.selectBuilding('tower');
           }
         }
+      },
+      silo: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('silo');
+          }
+        }
+      },
+      mine: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('mine');
+          }
+        }
+      },
+      tavern: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('tavern');
+          }
+        }
+      },
+      barracks: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('barracks');
+          }
+        }
       }
     },
     units: {
+      villager: {
+        callback: () => window.recruitUnit('villager')
+      },
       monk: {
         callback: () => window.recruitUnit('monk')
       },
@@ -72,6 +107,12 @@
       },
       engineer: {
         callback: () => window.recruitUnit('engineer')
+      },
+      warrior: {
+        callback: () => window.recruitUnit('warrior')
+      },
+      warlock: {
+        callback: () => window.recruitUnit('warlock')
       },
       brigand: {
         callback: () => {
@@ -159,16 +200,23 @@
     }
   };
   
-  // Radial menu configuration
+  // Radial menu configuration - TWEAK THESE VALUES
   let menuConfig = {
     distance: 3,        // Distance from camera (world units)
-    scale: 0.6,         // Overall scale multiplier - smaller menu
+    scale: 0.5,         // Overall scale multiplier - smaller menu
     screenOffsetX: 0,   // Screen offset (-1 to 1, where 0 = center)
     screenOffsetY: -0.6, // Screen offset (-1 to 1, where 0 = center) - negative = bottom
     itemRadius: 1.5,    // How far items spread from center
     centerSize: 0.3,    // Size of center sphere
-    itemSize: 0.25      // Size of menu item cubes - made smaller
-  };
+    itemSize: 0.25,     // Size of menu item cubes - made smaller
+    
+    // === ARC & POSITIONING ===
+    anchorOffset: -0.11,   // How far anchor is OFF screen (negative = past edge, 0 = edge)
+    arcAngle: 140,         // Main menu arc spread in degrees (smaller = tighter curve)
+    buttonRadius: 0.9,     // Main menu distance from anchor (first concentric circle)
+    submenuArcAngle: 140,  // Submenu arc spread in degrees
+    submenuRadius: 1.3     // Submenu distance from anchor (second concentric circle)
+  }; 
   
   // Initialize HUD system
   hud.init = function(scene, camera, canvas) {
@@ -207,9 +255,9 @@
       
       // Update menu item sizes
       radialMenuItems.forEach(item => {
-        if (item.mesh) {
+        if (item.container) {
           const newSize = menuConfig.itemSize / 0.4; // Original was 0.4
-          item.mesh.scaling.setAll(newSize);
+          item.container.scaling.setAll(newSize);
         }
       });
     }
@@ -473,12 +521,14 @@
     
     const rect = hud.canvas.getBoundingClientRect();
     
-    // Define the 4 anchor points closer to screen edges
+    // Define the 4 anchor points - anchorOffset controls how far off screen
+    // Negative = past edge (off screen), 0 = at edge, positive = inside screen
+    const off = menuConfig.anchorOffset;
     const anchors = {
-      top: { x: rect.width / 2, y: rect.height * 0.1 },
-      bottom: { x: rect.width / 2, y: rect.height * 0.9 },
-      left: { x: rect.width * 0.1, y: rect.height / 2 },   // left menu at left position (10%)
-      right: { x: rect.width * 0.9, y: rect.height / 2 }   // right menu at right position (90%)
+      top: { x: rect.width / 2, y: rect.height * off },
+      bottom: { x: rect.width / 2, y: rect.height * (1 - off) },
+      left: { x: rect.width * off, y: rect.height / 2 },
+      right: { x: rect.width * (1 - off), y: rect.height / 2 }
     };
     
     // Determine which anchor to use
@@ -530,15 +580,17 @@
     radialMenu.setEnabled(true);
     radialMenuVisible = true;
     
-    // console.log('🎯 Radial menu shown - currentMenuLevel:', currentMenuLevel, 'anchor:', currentAnchor);
+    console.log(`🎯 showRadialMenu - BEFORE init: items=${radialMenuItems.length}, anchor=${currentAnchor}`);
     
     // Initialize main menu layout (only creates items if they don't exist)
     initializeMainMenuLayout();
     
-    // Re-enable main menu item meshes
+    console.log(`🎯 showRadialMenu - AFTER init: items=${radialMenuItems.length}`);
+    
+    // Re-enable main menu item containers
     radialMenuItems.forEach(item => {
-      if (item.mesh) {
-        item.mesh.setEnabled(true);
+      if (item.container) {
+        item.container.setEnabled(true);
       }
     });
     
@@ -570,28 +622,28 @@
     // Unparent from camera
     radialMenu.parent = null;
 
-    // Hide meshes but DON'T dispose them (we'll reuse them next time)
+    // Hide containers but DON'T dispose them (we'll reuse them next time)
     radialMenuItems.forEach(item => {
-      if (item.mesh) {
-        item.mesh.setEnabled(false);
+      if (item.container) {
+        item.container.setEnabled(false);
       }
     });
     
     // Clear only submenu items, keep main menu items cached
     const submenuItems = radialMenuItems.filter(item => item.isSubItem);
     submenuItems.forEach(item => {
-      if (item.mesh) {
-        // Dispose recursively to clean up all children
+      // Dispose container (disposes all children including mesh)
+      if (item.container) {
+        item.container.dispose();
+      }
+      // Also clean up individual refs if container didn't exist
+      if (item.mesh && !item.mesh.isDisposed()) {
         item.mesh.getChildMeshes().forEach(child => {
           if (child.material) child.material.dispose();
           child.dispose();
         });
         if (item.mesh.material) item.mesh.material.dispose();
         item.mesh.dispose();
-      }
-      // Dispose click sphere if it exists
-      if (item.clickSphere) {
-        item.clickSphere.dispose();
       }
     });
     radialMenuItems = radialMenuItems.filter(item => !item.isSubItem);
@@ -607,95 +659,102 @@
     return radialMenuVisible;
   };
   
-  // Animate menu items spreading out from center
+  // Animate menu items spreading out from anchor toward screen center
+  // Mirrors the 2D menu logic from menu.js exactly
   function animateMenuItems(screenX, screenY) {
-    const rect = hud.canvas.getBoundingClientRect();
+    // Arc emanates from edge toward center - use config values
+    const ARC_ANGLE = menuConfig.arcAngle;
+    const BUTTON_RADIUS = menuConfig.buttonRadius;
     
-    // Use the anchor that was already determined to set spread direction
-    let anchorAngle = null;
-    
-    // Convert current anchor to spread direction (items spread AWAY from edges)
-    if (currentAnchor === 'top') {
-      anchorAngle = 3*Math.PI/2; // 270° = down (away from top)
-    } else if (currentAnchor === 'bottom') {
-      anchorAngle = Math.PI/2; // 90° = up (away from bottom)
-    } else if (currentAnchor === 'left') {
-      anchorAngle = Math.PI; // 180° = left (categories spread correctly)
-    } else if (currentAnchor === 'right') {
-      anchorAngle = 0; // 0° = right (categories spread correctly)
-    } else {
-      // Fallback to bottom behavior if somehow no anchor is set
-      anchorAngle = Math.PI/2; // 90° = up
+    // Get direction from anchor (matching 2D menu's n/s/e/w system)
+    let direction;
+    switch (currentAnchor) {
+      case 'top': direction = 'n'; break;
+      case 'bottom': direction = 's'; break;
+      case 'left': direction = 'w'; break;
+      case 'right': direction = 'e'; break;
+      default: direction = 's'; break; // Default to bottom
     }
     
-    // If anchored, use a smaller arc centered on the anchor direction
-    let availableStart = 0;
-    let availableEnd = 2 * Math.PI;
-    let availableArc = 2 * Math.PI;
-    
-    if (anchorAngle !== null) {
-      const halfSpread = Math.PI/2.2; // ~82° each side = ~164° total arc (bigger spread)
-      availableStart = anchorAngle - halfSpread;
-      availableEnd = anchorAngle + halfSpread;
-      availableArc = halfSpread * 2; // ~164° total arc
+    // Calculate start angle based on direction
+    // Arc points TOWARD screen center from the edge
+    // NOTE: 3D has Y-up, and we need to account for the radialMenu's 180° Y rotation
+    let startAngle;
+    switch (direction) {
+      case 'n': // Top anchor - arc points downward toward center
+        startAngle = 270 - (ARC_ANGLE / 2);
+        break;
+      case 's': // Bottom anchor - arc points upward toward center
+        startAngle = 90 - (ARC_ANGLE / 2);
+        break;
+      case 'e': // Right anchor - arc points leftward toward center (flip for Y rotation)
+        startAngle = 0 - (ARC_ANGLE / 2);
+        break;
+      case 'w': // Left anchor - arc points rightward toward center (flip for Y rotation)
+      default:
+        startAngle = 180 - (ARC_ANGLE / 2);
+        break;
     }
     
-    radialMenuItems.forEach((item, index) => {
-      if (!item.mesh) return;
+    // Get main menu items only
+    const mainMenuItems = radialMenuItems.filter(item => !item.isSubItem);
+    const numButtons = mainMenuItems.length;
+    
+    // Calculate angle step (matching 2D menu: divide arc by numButtons-1, or 0 if single item)
+    const angleStep = numButtons > 1 ? ARC_ANGLE / (numButtons - 1) : 0;
+    
+    console.log(`🎯 animateMenuItems: anchor=${currentAnchor}, direction=${direction}, startAngle=${startAngle}°, items=${numButtons}`);
+    
+    mainMenuItems.forEach((item, index) => {
+      if (!item.container) return;
       
-      // Distribute items only within the available arc
-      // Use smaller radius when in center, larger when near edges for better visibility
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-      const distanceFromCenter = Math.sqrt((screenX - centerX)**2 + (screenY - centerY)**2);
-      const maxDistance = Math.sqrt((rect.width/2)**2 + (rect.height/2)**2);
-      const distanceFactor = distanceFromCenter / maxDistance; // 0 = center, 1 = corner
+      // Calculate angle for this button (same as 2D menu)
+      const angleDeg = startAngle + (index * angleStep);
+      const angleRad = angleDeg * (Math.PI / 180);
       
-      const radius = item.radius || (0.8 + (distanceFactor * 0.6)); // Use item's radius, fallback to calculated radius
-      const angleStep = availableArc / radialMenuItems.length;
-      const angle = availableStart + (index * angleStep) + (angleStep / 2); // Center items in their segments
+      // Calculate position (same math as 2D menu, but in 3D space)
+      const targetX = Math.cos(angleRad) * BUTTON_RADIUS;
+      const targetY = Math.sin(angleRad) * BUTTON_RADIUS;
+      const targetZ = -menuConfig.distance * 0.5; // In front of camera
       
-      // Standard circle math: 0° = right, 90° = up, etc.
-      const targetX = Math.cos(angle) * radius;
-      const targetY = Math.sin(angle) * radius; 
-      const targetZ = 0; // Keep items in the menu's local plane
+      console.log(`  📍 ${item.text}: angle=${angleDeg.toFixed(1)}°, pos=(${targetX.toFixed(2)}, ${targetY.toFixed(2)}), normalizedScale=${item.normalizedScale}`);
       
-      // Start at final position but tiny scale
-      item.mesh.position.set(targetX, targetY, targetZ);
+      // RESET container state before positioning
+      item.container.scaling.setAll(1.0);
+      item.container.position.set(0, 0, 0);
       
-      // Get the normalized scale (stored when model loaded) or use 1.0 as fallback
-      const finalScale = item.normalizedScale || 1.0;
-      const startScale = finalScale * 0.01; // Start very small relative to final scale
+      // Position container at target
+      item.container.position.set(targetX, targetY, targetZ);
       
-      item.mesh.scaling.setAll(startScale);
+      // Container always animates from 0.01 to 1.0
+      // (model inside container has its own scale via mesh.scaling)
+      const startScale = 0.01;
+      const finalScale = 1.0;
       
-      // Animate scale growing out with bounce
+      item.container.scaling.setAll(startScale);
+      
       const scaleAnimation = new BABYLON.Animation(
         `menuGrow${index}`,
         "scaling",
-        60, // 60 fps
+        60,
         BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
         BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
       );
       
-      // Create scale keyframes with staggered timing
-      const startFrame = index * 2; // Stagger each item by 2 frames
-      const endFrame = startFrame + 12; // Grow over 12 frames
+      const startFrame = index * 2;
+      const endFrame = startFrame + 12;
       
-      const scaleKeys = [
+      scaleAnimation.setKeys([
         { frame: startFrame, value: new BABYLON.Vector3(startScale, startScale, startScale) },
         { frame: endFrame, value: new BABYLON.Vector3(finalScale, finalScale, finalScale) }
-      ];
-      scaleAnimation.setKeys(scaleKeys);
+      ]);
       
-      // Add satisfying bounce-out easing
       const easingFunction = new BABYLON.BounceEase();
       easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
       scaleAnimation.setEasingFunction(easingFunction);
       
-      // Apply animation to mesh and start it
-      item.mesh.animations = [scaleAnimation];
-      hud.scene.beginAnimation(item.mesh, 0, endFrame + 2, false);
+      item.container.animations = [scaleAnimation];
+      hud.scene.beginAnimation(item.container, 0, endFrame + 2, false);
     });
   }
   
@@ -759,8 +818,8 @@
     
     // No back button needed
     
-    // Positions are calculated correctly in addRadialMenuItem, no need to reposition
-    // positionSubmenuItemsInArc(validScreenX, validScreenY);
+    // Position submenu items in an arc
+    positionSubmenuItemsInArc(validScreenX, validScreenY);
     
     // console.log('✅ Sub-menu loaded:', menuLevel);
   };
@@ -891,18 +950,9 @@
     // Find and remove only submenu items
     const submenuItems = radialMenuItems.filter(item => item.isSubItem);
     submenuItems.forEach(item => {
-      if (item.mesh) {
-        // Dispose recursively to clean up all children
-        item.mesh.getChildMeshes().forEach(child => {
-          if (child.material) child.material.dispose();
-          child.dispose();
-        });
-        if (item.mesh.material) item.mesh.material.dispose();
-        item.mesh.dispose();
-      }
-      // Dispose click sphere if it exists
-      if (item.clickSphere) {
-        item.clickSphere.dispose();
+      // Dispose container (this disposes all children including mesh)
+      if (item.container && !item.container.isDisposed()) {
+        item.container.dispose();
       }
     });
     
@@ -924,198 +974,103 @@
     // Calculate the correct direction based on the current anchor
     // Submenus should spread AWAY from the screen edge where the anchor is
     let buttonAngle;
+    // Convert anchor to angle (matching main menu's Y-up flipped coordinates)
     switch (currentAnchor) {
       case 'top':
-        // Top anchor: submenus should spread DOWN (away from top edge)
         buttonAngle = 3 * Math.PI / 2; // 270° = down
         break;
       case 'bottom':
-        // Bottom anchor: submenus should spread UP (away from bottom edge)
         buttonAngle = Math.PI / 2; // 90° = up
         break;
       case 'left':
-        // Left anchor: FLIP angle for submenu options to spread right
-        buttonAngle = 0; // 0° = flip to make options spread right
+        // Flipped for radialMenu's Y rotation
+        buttonAngle = Math.PI; // 180° = spread right (toward center)
         break;
       case 'right':
-        // Right anchor: FLIP angle for submenu options to spread left
-        buttonAngle = Math.PI; // 180° = flip to make options spread left
+        // Flipped for radialMenu's Y rotation
+        buttonAngle = 0; // 0° = spread left (toward center)
         break;
       default:
-        // Fallback to bottom behavior
-        buttonAngle = Math.PI / 2; // 90° = up
+        buttonAngle = Math.PI / 2;
         break;
     }
     
-    // Spread submenu items in an arc around the button-to-center direction
-    const arcSpread = Math.PI / 3; // 60 degrees total spread
+    // Spread submenu items in a gentle arc - use config values
+    const arcSpread = menuConfig.submenuArcAngle * (Math.PI / 180);
     let startAngle = buttonAngle - arcSpread / 2;
     let endAngle = buttonAngle + arcSpread / 2;
     
-    // Only position submenu items, keep main menu items in their original positions
     const submenuItems = radialMenuItems.filter(item => item.isSubItem);
     
+    // Submenu radius - SECOND concentric circle, FURTHER from edge than main menu
+    const SUBMENU_RADIUS = menuConfig.submenuRadius;
+    
     submenuItems.forEach((item, index) => {
-      if (!item.mesh) return;
+      if (!item.container) return;
       
-      // Calculate angle for this item
+      // Calculate angle for this item (in radians)
       let angle;
       if (submenuItems.length === 1) {
-        // Single item - place it directly in the center of the arc
         angle = (startAngle + endAngle) / 2;
       } else {
-        // Multiple items - spread them across the arc
         const angleStep = (endAngle - startAngle) / (submenuItems.length - 1);
         angle = startAngle + (index * angleStep);
       }
       
-      // console.log(`🔍 Submenu item ${index}: angle=${angle} (${submenuItems.length} items)`);
-      
-      // Validate angle
       if (isNaN(angle)) {
         console.warn(`⚠️ Invalid angle for submenu item ${index}: ${angle}`);
         return;
       }
       
-      // Calculate position in 3D world space relative to the clicked button
-      const radius = item.radius || 1.5; // Use item's radius, fallback to 1.5
-      const itemX = Math.cos(angle) * radius;
-      const itemY = Math.sin(angle) * radius;
-      const itemZ = 0; // Keep items in the same plane
+      // Calculate position directly using the angle we just computed
+      const targetX = Math.cos(angle) * SUBMENU_RADIUS;
+      const targetY = Math.sin(angle) * SUBMENU_RADIUS;
+      const targetZ = -menuConfig.distance * 0.5;
       
-      // console.log(`🔍 Submenu item ${index}: calculated position (${itemX}, ${itemY}, ${itemZ})`);
+      console.log(`  📍 Submenu ${item.text}: angle=${(angle * 180 / Math.PI).toFixed(1)}°, pos=(${targetX.toFixed(2)}, ${targetY.toFixed(2)})`);
       
-      // Position the item in 3D space relative to the radial menu position
-      item.mesh.position.set(itemX, itemY, itemZ);
+      // Reset and position container
+      item.container.scaling.setAll(1.0);
+      item.container.position.set(targetX, targetY, targetZ);
       
-      // Get the normalized scale (stored when model loaded) or use 1.0 as fallback
-      const finalScale = item.normalizedScale || 1.0;
-      const startScale = finalScale * 0.01; // Start very small relative to final scale
-      const bounceScale = finalScale * 1.2; // Bounce 20% larger
+      // Container animates from 0.01 to 1.0 (not using normalizedScale which is for the mesh)
+      const startScale = 0.01;
+      const finalScale = 1.0;
+      const bounceScale = 1.2;
       
-      item.mesh.scaling.setAll(startScale);
+      item.container.scaling.setAll(startScale);
       
       // Animate scale growing out with bounce
       const scaleAnimation = new BABYLON.Animation(
         `submenuGrow${index}`,
         "scaling",
-        60, // 60 fps
+        60,
         BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
         BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
       );
       
       const keyFrames = [];
       keyFrames.push({ frame: 0, value: new BABYLON.Vector3(startScale, startScale, startScale) });
-      keyFrames.push({ frame: 30, value: new BABYLON.Vector3(bounceScale, bounceScale, bounceScale) }); // Bounce
-      keyFrames.push({ frame: 60, value: new BABYLON.Vector3(finalScale, finalScale, finalScale) }); // Settle to normalized scale
+      keyFrames.push({ frame: 30, value: new BABYLON.Vector3(bounceScale, bounceScale, bounceScale) });
+      keyFrames.push({ frame: 60, value: new BABYLON.Vector3(finalScale, finalScale, finalScale) });
       
       scaleAnimation.setKeys(keyFrames);
       
-      // Add easing for smooth bounce
       const easingFunction = new BABYLON.CubicEase();
       easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
       scaleAnimation.setEasingFunction(easingFunction);
       
-      item.mesh.animations = [scaleAnimation];
-      hud.scene.beginAnimation(item.mesh, 0, 60, false);
-      
-      // console.log(`📍 Submenu item "${item.text}" positioned at 3D world (${itemX.toFixed(2)}, ${itemY.toFixed(2)}, ${itemZ.toFixed(2)}) relative to clicked button`);
+      item.container.animations = [scaleAnimation];
+      hud.scene.beginAnimation(item.container, 0, 60, false);
     });
   }
   
-  // Position items in an arc (like the main menu)
-  function positionItemsInArc(screenX, screenY) {
-    const rect = hud.canvas.getBoundingClientRect();
-    
-    // Use the anchor that was already determined to set spread direction
-    let anchorAngle = null;
-    
-    // Convert current anchor to spread direction (items spread AWAY from edges)
-    if (currentAnchor === 'top') {
-      anchorAngle = 3*Math.PI/2; // 270° = down (away from top)
-    } else if (currentAnchor === 'bottom') {
-      anchorAngle = Math.PI/2; // 90° = up (away from bottom)
-    } else if (currentAnchor === 'left') {
-      anchorAngle = Math.PI; // 180° = left (categories spread correctly)
-    } else if (currentAnchor === 'right') {
-      anchorAngle = 0; // 0° = right (categories spread correctly)
-    } else {
-      // Fallback to bottom behavior if somehow no anchor is set
-      anchorAngle = Math.PI/2; // 90° = up
-    }
-    
-    // If anchored, use a smaller arc centered on the anchor direction
-    let availableStart = 0;
-    let availableEnd = 2 * Math.PI;
-    let availableArc = 2 * Math.PI;
-    
-    if (anchorAngle !== null) {
-      const halfSpread = Math.PI/2.2; // ~82° each side = ~164° total arc (bigger spread)
-      availableStart = anchorAngle - halfSpread;
-      availableEnd = anchorAngle + halfSpread;
-      availableArc = halfSpread * 2; // ~164° total arc
-    }
-    
-    radialMenuItems.forEach((item, index) => {
-      if (!item.mesh) return;
-      
-      // Distribute items only within the available arc
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-      const distanceFromCenter = Math.sqrt((screenX - centerX)**2 + (screenY - centerY)**2);
-      const maxDistance = Math.sqrt((rect.width/2)**2 + (rect.height/2)**2);
-      const distanceFactor = distanceFromCenter / maxDistance; // 0 = center, 1 = corner
-      
-      const radius = 0.8 + (distanceFactor * 0.6); // 0.8 in center, 1.4 near edges (smaller overall)
-      const angleStep = availableArc / radialMenuItems.length;
-      const angle = availableStart + (index * angleStep) + (angleStep / 2); // Center items in their segments
-      
-      // Standard circle math: 0° = right, 90° = up, etc.
-      const targetX = Math.cos(angle) * radius;
-      const targetY = Math.sin(angle) * radius; 
-      const targetZ = 0; // Keep items in the menu's local plane
-      
-      // Start at final position but tiny scale
-      item.mesh.position.set(targetX, targetY, targetZ);
-      
-      // Get the normalized scale (stored when model loaded) or use 1.0 as fallback
-      const finalScale = item.normalizedScale || 1.0;
-      const startScale = finalScale * 0.01; // Start very small relative to final scale
-      const bounceScale = finalScale * 1.2; // Bounce 20% larger
-      
-      item.mesh.scaling.setAll(startScale);
-      
-      // Animate scale growing out with bounce
-      const scaleAnimation = new BABYLON.Animation(
-        `menuGrow${index}`,
-        "scaling",
-        60, // 60 fps
-        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-      );
-      
-      const keyFrames = [];
-      keyFrames.push({ frame: 0, value: new BABYLON.Vector3(startScale, startScale, startScale) });
-      keyFrames.push({ frame: 30, value: new BABYLON.Vector3(bounceScale, bounceScale, bounceScale) }); // Bounce
-      keyFrames.push({ frame: 60, value: new BABYLON.Vector3(finalScale, finalScale, finalScale) }); // Settle to normalized scale
-      
-      scaleAnimation.setKeys(keyFrames);
-      
-      // Add easing for smooth bounce
-      const easingFunction = new BABYLON.CubicEase();
-      easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-      scaleAnimation.setEasingFunction(easingFunction);
-      
-      item.mesh.animations = [scaleAnimation];
-      hud.scene.beginAnimation(item.mesh, 0, 60, false);
-    });
-  }
   
   // Retract a button (animate it away)
   function retractButton(item) {
-    if (!item.mesh) return;
+    if (!item.container) return;
     
-    // Animate button scaling down and fading out
+    // Animate container scaling down
     const retractAnimation = new BABYLON.Animation(
       "retractButton",
       "scaling",
@@ -1130,30 +1085,27 @@
     
     retractAnimation.setKeys(keyFrames);
     
-    // Add easing for smooth retraction
     const easingFunction = new BABYLON.QuadraticEase();
     easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEIN);
     retractAnimation.setEasingFunction(easingFunction);
     
-    item.mesh.animations = [retractAnimation];
-    hud.scene.beginAnimation(item.mesh, 0, 15, false);
+    item.container.animations = [retractAnimation];
+    hud.scene.beginAnimation(item.container, 0, 15, false);
     
-    // Dispose of the mesh after animation
+    // Dispose of the container after animation
     setTimeout(() => {
-      if (item.mesh) {
-        item.mesh.dispose();
+      if (item.container) {
+        item.container.dispose();
       }
     }, 150);
   }
   
   // Position all items at the same anchor with same spread
   function positionItemsAtAnchor(screenX, screenY) {
-    // Use the unified positioning function for all items
     radialMenuItems.forEach((item, index) => {
-      if (item.mesh) {
-        // Use the same positioning logic as main menu items
+      if (item.container) {
         const position = calculateMenuItemPosition(item);
-        item.mesh.position.copyFrom(position);
+        item.container.position.copyFrom(position);
       }
     });
   }
@@ -1161,16 +1113,13 @@
   // Animate expanded menu items
   function animateExpandedMenu(screenX, screenY) {
     radialMenuItems.forEach((item, index) => {
-      if (!item.mesh) return;
+      if (!item.container) return;
       
       if (item.isSubItem) {
-        // Sub-items animate from center outward
         const targetPos = calculateExpandedItemPosition(item, screenX, screenY);
         
-        // Start from center
-        item.mesh.position.set(0, 0, 0);
+        item.container.position.set(0, 0, 0);
         
-        // Animate to expanded position
         const animation = new BABYLON.Animation(
           "expandItem",
           "position",
@@ -1185,13 +1134,12 @@
         
         animation.setKeys(keyFrames);
         
-        // Add easing for smooth expansion
         const easingFunction = new BABYLON.QuadraticEase();
         easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
         animation.setEasingFunction(easingFunction);
         
-        item.mesh.animations = [animation];
-        hud.scene.beginAnimation(item.mesh, 0, 30, false);
+        item.container.animations = [animation];
+        hud.scene.beginAnimation(item.container, 0, 30, false);
       }
     });
   }
@@ -1277,14 +1225,12 @@
   
   // Animate menu collapse back to main level - DREAM SYSTEM
   function animateMenuCollapse(screenX, screenY) {
-    // First, restore main menu items to full size
     restoreMainMenuItems();
     
     radialMenuItems.forEach((item, index) => {
-      if (!item.mesh) return;
+      if (!item.container) return;
       
-      // Animate from current position back to main menu positions
-      const targetPos = calculateMainItemPosition(item, screenX, screenY);
+      const targetPos = calculateMenuItemPosition(item);
       
       const animation = new BABYLON.Animation(
         "collapseItem",
@@ -1295,26 +1241,24 @@
       );
       
       const keyFrames = [];
-      keyFrames.push({ frame: 0, value: item.mesh.position.clone() });
+      keyFrames.push({ frame: 0, value: item.container.position.clone() });
       keyFrames.push({ frame: 20, value: targetPos });
       
       animation.setKeys(keyFrames);
       
-      // Add easing for smooth collapse
       const easingFunction = new BABYLON.QuadraticEase();
       easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEIN);
       animation.setEasingFunction(easingFunction);
       
-      item.mesh.animations = [animation];
-      hud.scene.beginAnimation(item.mesh, 0, 20, false);
+      item.container.animations = [animation];
+      hud.scene.beginAnimation(item.container, 0, 20, false);
     });
   }
   
   // Restore main menu items to full size when returning from submenu
   function restoreMainMenuItems() {
     radialMenuItems.forEach(item => {
-      if (!item.isSubItem && item.mesh) {
-        // Animate restoring to full size
+      if (!item.isSubItem && item.container) {
         const restoreAnimation = new BABYLON.Animation(
           "restoreMainItem",
           "scaling",
@@ -1329,13 +1273,12 @@
         
         restoreAnimation.setKeys(keyFrames);
         
-        // Add easing for smooth restoration
         const easingFunction = new BABYLON.QuadraticEase();
         easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
         restoreAnimation.setEasingFunction(easingFunction);
         
-        item.mesh.animations = [restoreAnimation];
-        hud.scene.beginAnimation(item.mesh, 0, 20, false);
+        item.container.animations = [restoreAnimation];
+        hud.scene.beginAnimation(item.container, 0, 20, false);
       }
     });
   }
@@ -1359,11 +1302,11 @@
     return position;
   }
   
-  // Clear all menu item meshes
+  // Clear all menu item containers
   function clearMenuItems() {
     radialMenuItems.forEach(item => {
-      if (item.mesh) {
-        item.mesh.dispose();
+      if (item.container) {
+        item.container.dispose();
       }
     });
     radialMenuItems = [];
@@ -1437,66 +1380,16 @@
       }, new BABYLON.Color3(1, 0, 0), null, 'assets/models/flag.glb'); // Red with flag model
     }
     
-    // Recalculate and position main menu items based on current anchor
-    const anchorDirection = getAnchorDirection();
-    const baseAngle = calculateBaseAngleForAnchor(anchorDirection);
-    const angleSpread = 240; // Wider arc (was 180)
-    const angleStep = angleSpread / 3; // 4 items, 3 gaps
-    
-    console.log(`🔵 Repositioning main menu - anchor: ${anchorDirection}, baseAngle: ${baseAngle}`);
-    
-    // First pass: Update all angles/radius
+    // Ensure containers are enabled (positioning is handled by animateMenuItems)
     radialMenuItems.forEach((item, index) => {
-      if (!item.isSubItem) {
-        // Recalculate angle based on current anchor (like submenus do)
-        let orderIndex = 0;
-        if (item.text === "Rally") orderIndex = 0;
-        else if (item.text === "Buildings") orderIndex = 1;
-        else if (item.text === "Units") orderIndex = 2;
-        else if (item.text === "Research") orderIndex = 3;
+      if (!item.isSubItem && item.container) {
+        item.container.setEnabled(true);
         
-        // ALWAYS update angle/radius, even if mesh doesn't exist yet
-        item.angle = baseAngle + (orderIndex * angleStep) - (angleSpread / 2);
-        item.radius = menuConfig.itemRadius * 0.25; // Closer to edge (was 0.3)
-      }
-    });
-    
-    // Second pass: Position and show any meshes that exist (including ones that just loaded)
-    radialMenuItems.forEach((item, index) => {
-      if (!item.isSubItem && item.mesh) {
-        const pos = calculateMainItemPosition(item, 0, 0);
-        console.log(`  ${item.text}: angle=${item.angle.toFixed(1)}°, pos=(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}), scaling=${item.mesh.scaling.x.toFixed(2)}, hasSphere=${!!item.clickSphere}`);
-        item.mesh.position.copyFrom(pos);
-        
-        // Update clickSphere scale if it exists
-        if (item.clickSphere) {
-          const parentScale = item.mesh.scaling.x;
-          item.clickSphere.scaling.setAll(1.0 / parentScale);
-          // Make clickSphere visible now that it's properly positioned
-          item.clickSphere.isVisible = true;
-          item.clickSphere.setEnabled(true);
-        }
-        
-        // Make main menu items visible now that they're properly positioned
-        item.mesh.isVisible = true;
-        if (typeof item.mesh.setEnabled === 'function') {
+        // If mesh loaded, ensure it's visible too
+        if (item.mesh) {
+          item.mesh.isVisible = true;
           item.mesh.setEnabled(true);
         }
-        item.mesh.getChildMeshes().forEach(m => {
-          m.isVisible = true;
-          m.visibility = 1.0;
-          // Only enable if it's a proper mesh with isEnabled
-          if (typeof m.setEnabled === 'function' && 'isEnabled' in m) {
-            m.setEnabled(true);
-          }
-        });
-        
-        // Ensure main menu items are visible (don't change scale - it's normalized)
-        if (item.mesh.material) {
-          item.mesh.material.alpha = 1.0;
-        }
-      } else if (!item.isSubItem && !item.mesh) {
-        console.log(`  ${item.text}: angle=${item.angle.toFixed(1)}° set, mesh not loaded yet`);
       }
     });
     
@@ -1596,54 +1489,88 @@
   }
   
   // Create 3D mesh for a menu item
+  // Key principle: Create container IMMEDIATELY (synchronously)
+  // Model loads async and parents to container - position is already correct
+  // Models themselves are pickable (no separate hit spheres needed)
   function createMenuItemMesh(item) {
     if (!hud.scene || !radialMenu) return;
     
-    // If mesh already exists, just re-enable it and ensure action manager is set up
-    if (item.mesh && !item.mesh.isDisposed()) {
-      item.mesh.setEnabled(true);
-      
-      // Ensure action manager is set up (might have been cleared)
-      if (!item.mesh.actionManager) {
-        setupMeshClickHandler(item.mesh, item);
-      }
+    // If container already exists, just re-enable it
+    if (item.container && !item.container.isDisposed()) {
+      item.container.setEnabled(true);
+      if (item.mesh) item.mesh.setEnabled(true);
       return;
     }
     
-    // Try to load actual 3D model for units and buildings
+    // === STEP 1: Create container IMMEDIATELY (synchronous) ===
+    const container = new BABYLON.TransformNode(`menuContainer_${item.text}`, hud.scene);
+    container.parent = radialMenu;
+    item.container = container;
+    item.normalizedScale = 1.0; // Default, updated when model loads
+    
+    // === STEP 2: Helper to make any mesh clickable for this item ===
+    function setupMeshActions(mesh) {
+      mesh.isPickable = true;
+      mesh.actionManager = new BABYLON.ActionManager(hud.scene);
+      
+      mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+        BABYLON.ActionManager.OnPointerOverTrigger,
+        () => {
+          hud.scene.hoverCursor = 'pointer';
+          container.scaling.scaleInPlace(1.1);
+        }
+      ));
+      
+      mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+        BABYLON.ActionManager.OnPointerOutTrigger,
+        () => {
+          hud.scene.hoverCursor = 'default';
+          container.scaling.scaleInPlace(1 / 1.1);
+        }
+      ));
+      
+      mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+        BABYLON.ActionManager.OnPickDownTrigger,
+        (evt) => {
+          if (evt && evt.sourceEvent) {
+            evt.sourceEvent.stopPropagation();
+            evt.sourceEvent.preventDefault();
+          }
+          if (item.callback) item.callback();
+          if (item.text === "Back") hud.hideRadialMenu();
+        }
+      ));
+    }
+    
+    // Store the setup function on item for use when mesh loads
+    item.setupMeshActions = setupMeshActions;
+    
+    // === STEP 4: Determine model path (synchronous) ===
     const itemKey = item.text.toLowerCase();
     let modelPath = null;
-    let menuScale = 0.005; // Tiny default
+    let menuScale = 0.005;
     
-    // Priority 1: Custom model path for category buttons
     if (item.customModelPath) {
       modelPath = item.customModelPath;
-      menuScale = 0.01; // Good size for category models
-    }
-    // Priority 2: Special case: Buildings category button uses agora model
-    else if (item.text === "Buildings" && !item.isSubItem) {
+      menuScale = 0.01;
+    } else if (item.text === "Buildings" && !item.isSubItem) {
       modelPath = "assets/models/agora.glb";
       menuScale = 0.005;
-    }
-    // Priority 3: Check if this is a unit or building and get its model path
-    // Use item.menuCategory which is stored at creation time
-    else if (item.menuCategory === 'units' && window.UnitTypes && window.UnitTypes[itemKey]) {
+    } else if (item.menuCategory === 'units' && window.UnitTypes && window.UnitTypes[itemKey]) {
       modelPath = window.UnitTypes[itemKey].model;
-      menuScale = 0.08; // Small units for menu
+      menuScale = 0.08;
     } else if (item.menuCategory === 'buildings' && window.BuildingTypes && window.BuildingTypes[itemKey]) {
       modelPath = window.BuildingTypes[itemKey].model;
-      menuScale = 0.005; // MUCH smaller buildings for menu (10x smaller)
+      menuScale = 0.005;
     }
     
-    // Load the 3D model
+    // === STEP 5: Load 3D model ASYNC and parent to container ===
     if (modelPath && window.gfx && window.gfx.getModel) {
       const loadId = `${item.text}_${Date.now()}`;
       pendingModelLoads.add(loadId);
       
       window.gfx.getModel(modelPath, hud.scene).then(model => {
-        // Check if this load is still valid (menu might have closed)
         if (!pendingModelLoads.has(loadId)) {
-          // Menu closed or changed - dispose the loaded model
           model.root.dispose();
           return;
         }
@@ -1652,334 +1579,118 @@
         const mesh = model.root;
         mesh.name = `menuItem_${item.text}`;
         
-        // Auto-normalize size based on bounding box
+        // Auto-normalize size
         const boundingInfo = mesh.getHierarchyBoundingVectors(true);
         const size = boundingInfo.max.subtract(boundingInfo.min);
         const maxDimension = Math.max(size.x, size.y, size.z);
         
-        // Target size for menu items (in world units)
-        // Treat Buildings category button as a building for scale normalization
         const isBuilding = item.menuCategory === 'buildings' || (item.text === "Buildings" && !item.isSubItem);
         const isCustomCategory = item.customModelPath && !item.isSubItem;
-        const targetSize = isCustomCategory ? 0.35 : (item.menuCategory === 'units' ? 0.4 : 0.3); // Custom categories slightly bigger than buildings
+        const targetSize = isCustomCategory ? 0.35 : (item.menuCategory === 'units' ? 0.4 : 0.3);
         const normalizedScale = maxDimension > 0 ? targetSize / maxDimension : menuScale;
         
-        // Store normalized scale so animations can use it instead of hardcoded 1.0
         item.normalizedScale = normalizedScale;
+        mesh.scaling.setAll(normalizedScale);
         
-        mesh.scaling = new BABYLON.Vector3(normalizedScale, normalizedScale, normalizedScale);
-        
-        // IMPORTANT: Clear rotationQuaternion so we can use Euler angles
+        // Clear rotationQuaternion for Euler angles
         mesh.rotationQuaternion = null;
         
-        // Different rotation for buildings vs units vs custom category models
-        if (item.menuCategory === 'buildings' || (item.text === "Buildings" && !item.isSubItem)) {
-          // Buildings: face camera and tilt for top-down view
+        // Set rotation based on type
+        if (isBuilding) {
           mesh.rotation.y = Math.PI;
-          mesh.rotation.x = -Math.PI / 4; // 45 degree tilt forward
-        } else if (item.customModelPath && !item.isSubItem) {
-          // Custom category models: face camera
+          mesh.rotation.x = -Math.PI / 4;
+        } else if (isCustomCategory) {
           mesh.rotation.y = Math.PI;
           mesh.rotation.x = 0;
         } else {
-          // Units: try no Y rotation (units might be modeled facing forward already)
           mesh.rotation.y = 0;
           mesh.rotation.x = 0;
         }
         
-        // Make model visible but not pickable
-        // For main menu items, start invisible until repositioned in showRadialMenu
-        mesh.isVisible = item.isSubItem ? true : false;
-        mesh.setEnabled(item.isSubItem ? true : false);
-        mesh.isPickable = false;
+        // Parent model to container (container already has correct position!)
+        mesh.parent = container;
+        mesh.position.set(0, 0, 0); // Model at container origin
         mesh.renderingGroupId = 2;
+        mesh.isVisible = true;
+        mesh.setEnabled(true);
+        
+        // Make model meshes NOT pickable - we'll use a hitbox instead
+        mesh.isPickable = false;
         
         mesh.getChildMeshes().forEach(m => {
-          // For main menu items, start invisible until repositioned in showRadialMenu
-          m.isVisible = item.isSubItem ? true : false;
-          m.visibility = item.isSubItem ? 1.0 : 0;
-          m.setEnabled(item.isSubItem ? true : false);
+          m.isVisible = true;
+          m.visibility = 1.0;
+          m.setEnabled(true);
           m.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
-          m.isPickable = false; // Children not pickable - sphere handles it
           m.renderingGroupId = 2;
-          
-          // Make it glow so it's visible in the HUD scene
-          if (m.material) {
-            m.material.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
-          }
+          m.isPickable = false;
+          if (m.material) m.material.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
         });
         
-        // Create visible sphere for easier clicking (simplest geometry)
-        // Make submenu items slightly larger to compensate for being further from center
-        const sphereDiameter = item.isSubItem ? 0.35 : 0.27;
-        const clickSphere = BABYLON.MeshBuilder.CreateSphere(`clickSphere_${item.text}`, {
-          diameter: sphereDiameter
+        item.mesh = mesh;
+        
+        // Create fixed-size hitbox (models are scaled tiny, so use fixed size)
+        const HITBOX_SIZE = 0.4; // Fixed size that's easy to click
+        
+        const hitbox = BABYLON.MeshBuilder.CreateBox(`hitbox_${item.text}`, {
+          width: HITBOX_SIZE,
+          height: HITBOX_SIZE,
+          depth: HITBOX_SIZE
         }, hud.scene);
         
-        clickSphere.parent = mesh; // Parent to mesh so it follows the model
-        clickSphere.isPickable = true;
-        clickSphere.renderingGroupId = 3;
+        hitbox.parent = container;
+        hitbox.position.set(0, 0, 0); // Center on container
+        hitbox.isVisible = true;
+        hitbox.isPickable = true;
+        hitbox.renderingGroupId = 3;
         
-        // For main menu items, start invisible until repositioned
-        clickSphere.isVisible = item.isSubItem ? true : false;
-        clickSphere.setEnabled(item.isSubItem ? true : false);
+        // Make hitbox invisible but pickable
+        const hitboxMat = new BABYLON.StandardMaterial(`hitboxMat_${item.text}`, hud.scene);
+        hitboxMat.alpha = 0.01; // Nearly invisible
+        hitboxMat.disableLighting = true;
+        hitbox.material = hitboxMat;
         
-        // Make sphere visible with item color for debugging
-        const sphereMat = new BABYLON.StandardMaterial(`sphereMat_${item.text}`, hud.scene);
-        sphereMat.emissiveColor = item.color;
-        sphereMat.alpha = 1.0;
-        clickSphere.material = sphereMat;
+        item.setupMeshActions(hitbox);
+        item.hitbox = hitbox;
         
-        // Position sphere at model's visual center (bounding box center)
-        const sphereBounds = mesh.getHierarchyBoundingVectors(true);
-        const center = sphereBounds.max.add(sphereBounds.min).scale(0.5);
-        clickSphere.position.copyFrom(center);
-        
-        // Make sphere scale independent of parent mesh scale
-        const parentScale = mesh.scaling.x; // All axes should be uniform
-        const targetSphereWorldSize = 5.0; // Desired world size
-        clickSphere.scaling.setAll(1.0 / parentScale); // Compensate for parent scale
-        
-        // Set up click handlers on sphere
-        clickSphere.actionManager = new BABYLON.ActionManager(hud.scene);
-        
-        clickSphere.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-          BABYLON.ActionManager.OnPointerOverTrigger,
-          () => {
-            hud.scene.hoverCursor = 'pointer';
-            // Small scale up and rotation on hover
-            mesh.scaling.scaleInPlace(1.1); // Subtle 10% increase
-            if (!mesh._originalRotation) {
-              mesh._originalRotation = mesh.rotation.clone();
-            }
-            mesh.rotation.y += 0.2; // Turn/rotate instead of tilt
-          }
-        ));
-        
-        clickSphere.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-          BABYLON.ActionManager.OnPointerOutTrigger,
-          () => {
-            hud.scene.hoverCursor = 'default';
-            // Scale back down and restore rotation
-            mesh.scaling.scaleInPlace(1 / 1.1);
-            if (mesh._originalRotation) {
-              mesh.rotation.copyFrom(mesh._originalRotation);
-            }
-          }
-        ));
-        
-        clickSphere.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-          BABYLON.ActionManager.OnPickDownTrigger,
-          (evt) => {
-            // Prevent click from propagating to terrain
-            if (evt && evt.sourceEvent) {
-              evt.sourceEvent.stopPropagation();
-              evt.sourceEvent.preventDefault();
-            }
-            
-            if (item.callback) {
-              item.callback();
-            }
-            if (item.text === "Back") {
-              hud.hideRadialMenu();
-            }
-          }
-        ));
-        
-        // Store references for cleanup
-        item.mesh = mesh;
-        item.clickSphere = clickSphere;
-        
-        // Parent to radial menu - this makes it move with the camera
-        mesh.parent = radialMenu;
-        
-        // Position using stored angle/radius
-        // For submenu items, position immediately
-        // For main menu items, DON'T auto-position - let showRadialMenu handle it
-        if (item.isSubItem && item.angle !== undefined && item.radius !== undefined) {
-          const position = calculateMenuItemPosition(item);
-          mesh.position.copyFrom(position);
-          console.log(`📦 Submenu model loaded for ${item.text}, positioned at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
-        } else if (!item.isSubItem) {
-          // Main menu item - leave at origin until showRadialMenu positions it
-          mesh.position.set(0, 0, 0);
-          console.log(`📦 Main menu model loaded for ${item.text}, waiting for showRadialMenu to position`);
-        }
-        
-        // If this is a main menu item and menu is currently visible, position and show it now
-        // BUT only if angle/radius have been set to real values (not placeholders)
-        if (!item.isSubItem && radialMenuVisible && item.angle !== 0 && item.radius > 0.1) {
-          // Position using stored angle/radius (set by showRadialMenu)
-          const position = calculateMenuItemPosition(item);
-          mesh.position.copyFrom(position);
-          console.log(`📦 Late-loaded ${item.text} positioned at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
-          
-          // Update clickSphere scale
-          if (item.clickSphere) {
-            const parentScale = mesh.scaling.x;
-            item.clickSphere.scaling.setAll(1.0 / parentScale);
-            item.clickSphere.isVisible = true;
-            item.clickSphere.setEnabled(true);
-          }
-          
-          // Make visible now that it's positioned
-          mesh.isVisible = true;
-          if (typeof mesh.setEnabled === 'function') {
-            mesh.setEnabled(true);
-          }
-          mesh.getChildMeshes().forEach(m => {
-            m.isVisible = true;
-            m.visibility = 1.0;
-            // Only enable if it's a proper mesh with isEnabled
-            if (typeof m.setEnabled === 'function' && 'isEnabled' in m) {
-              m.setEnabled(true);
-            }
-          });
-        } else if (!item.isSubItem) {
-          console.log(`📦 ${item.text} loaded but waiting for real angle/radius (angle=${item.angle}, radius=${item.radius?.toFixed(2)})`);
-        }
       }).catch(err => {
         console.warn(`Failed to load model for ${item.text}, using fallback cube`, err);
-        createFallbackCube(item);
+        createFallbackMeshInContainer(item, container);
       });
     } else {
-      // Fall back to cube for research, rally, and other items
-      createFallbackCube(item);
+      // No model path - create fallback cube in container
+      createFallbackMeshInContainer(item, container);
     }
   }
   
-  // Create fallback cube mesh for menu items
-  function createFallbackCube(item) {
-    if (!hud.scene || !radialMenu) return;
-    
+  // Create fallback cube inside an existing container
+  function createFallbackMeshInContainer(item, container) {
     const baseSize = 0.4;
     const finalSize = item.scale ? baseSize * item.scale : baseSize;
     const mesh = BABYLON.MeshBuilder.CreateBox(`menuItem_${item.text}`, {size: finalSize}, hud.scene);
     
-    // Store normalized scale for fallback cubes
-    // Cubes are created at the correct size (finalSize), so mesh.scaling should be 1.0
-    // The item.scale is already baked into the geometry size, not the mesh scale
-    item.normalizedScale = 1.0;
-    
-    // Create material with the item's color
     const material = new BABYLON.StandardMaterial(`menuMat_${item.text}`, hud.scene);
     material.emissiveColor = item.color;
     material.disableLighting = true;
     mesh.material = material;
     
-    // Parent to radial menu
-    mesh.parent = radialMenu;
-    
-    // Render on top of terrain
+    mesh.parent = container;
+    mesh.position.set(0, 0, 0);
     mesh.renderingGroupId = 1;
+    mesh.isVisible = true;
+    mesh.setEnabled(true);
+    mesh.isPickable = true;
     
-    // For main menu items, start invisible until repositioned
-    mesh.isVisible = item.isSubItem ? true : false;
-    mesh.setEnabled(item.isSubItem ? true : false);
-    
-    // Make cube not pickable - sphere will handle it
-    mesh.isPickable = false;
-    
-    // Create visible sphere for easier clicking (same as model items)
-    const clickSphere = BABYLON.MeshBuilder.CreateSphere(`clickSphere_${item.text}`, {
-      diameter: 0.27  // Smaller click target
-    }, hud.scene);
-    
-    clickSphere.parent = mesh; // Parent to mesh so it follows the cube
-    clickSphere.isPickable = true;
-    clickSphere.renderingGroupId = 3;
-    
-    // For main menu items, start invisible until repositioned
-    clickSphere.isVisible = item.isSubItem ? true : false;
-    clickSphere.setEnabled(item.isSubItem ? true : false);
-    
-    // Make sphere visible with item color for debugging
-    const sphereMat = new BABYLON.StandardMaterial(`sphereMat_${item.text}`, hud.scene);
-    sphereMat.emissiveColor = item.color;
-    sphereMat.alpha = 1.0;
-    clickSphere.material = sphereMat;
-    
-    // Position sphere at cube center (cubes are centered at origin)
-    clickSphere.position.set(0, 0, 0);
-    
-    // Cubes don't have varying scale, so sphere scale is already consistent
-    // (Keep at 1.0 since cube mesh scale is always uniform)
-    
-    // Set up click handlers on sphere
-    clickSphere.actionManager = new BABYLON.ActionManager(hud.scene);
-    
-    // Add hover effect with rotation
-    clickSphere.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-      BABYLON.ActionManager.OnPointerOverTrigger,
-      () => {
-        hud.scene.hoverCursor = 'pointer';
-        // Small scale up and rotation on hover
-        mesh.scaling.scaleInPlace(1.1); // Subtle 10% increase
-        if (!mesh._originalRotation) {
-          mesh._originalRotation = mesh.rotation.clone();
-        }
-        mesh.rotation.y += 0.2; // Turn/rotate instead of tilt
-      }
-    ));
-    
-    clickSphere.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-      BABYLON.ActionManager.OnPointerOutTrigger,
-      () => {
-        hud.scene.hoverCursor = 'default';
-        // Scale back down and restore rotation
-        mesh.scaling.scaleInPlace(1 / 1.1);
-        if (mesh._originalRotation) {
-          mesh.rotation.copyFrom(mesh._originalRotation);
-        }
-      }
-    ));
-    
-    clickSphere.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-      BABYLON.ActionManager.OnPickDownTrigger,
-      (evt) => {
-        // Prevent click from propagating to terrain
-        if (evt && evt.sourceEvent) {
-          evt.sourceEvent.stopPropagation();
-          evt.sourceEvent.preventDefault();
-        }
-        
-        // Visual feedback - briefly scale up the clicked item
-        const originalScale = mesh.scaling.clone();
-        mesh.scaling.scaleInPlace(1.3);
-        setTimeout(() => {
-          mesh.scaling.copyFrom(originalScale);
-        }, 150);
-        
-        if (item.callback) {
-          // Exit building placement mode if currently placing (for non-building items)
-          if (window.buildingSystem && window.buildingSystem.isPlacing && !item.text.toLowerCase().includes('building')) {
-            window.buildingSystem.cancelPlacement();
-          }
-          item.callback();
-        }
-        
-        // Only hide menu for "Back" button, keep it open for other actions
-        if (item.text === "Back") {
-          hud.hideRadialMenu();
-        }
-      }
-    ));
-    
-    // Store mesh and sphere references
-    item.mesh = mesh;
-    item.clickSphere = clickSphere;
-    
-    // Position cube in XY plane (facing camera when parented to camera)
-    // Angles are already calculated to point toward screen center
-    if (item.angle !== undefined && item.radius !== undefined) {
-      const angleRad = item.angle * (Math.PI / 180);
-      const x = Math.cos(angleRad) * item.radius;
-      const y = Math.sin(angleRad) * item.radius;
-      let z = -menuConfig.distance * 0.5; // Negative Z to face camera after Y rotation
-      
-      mesh.position.set(x, y, z);
+    // Fallback cube IS the hitbox (it's already a simple box)
+    if (item.setupMeshActions) {
+      item.setupMeshActions(mesh);
     }
+    item.hitbox = mesh;
+    
+    item.mesh = mesh;
+    item.normalizedScale = 1.0;
   }
+  
   
   // Check if point is inside radial menu
   hud.isPointInRadialMenu = function(screenX, screenY) {
@@ -2040,7 +1751,7 @@
     // Update minerals display (using magic as minerals for now)
     const mineralsElement = document.getElementById('stat_minerals');
     if (mineralsElement) {
-      mineralsElement.textContent = `💎 ${resources.magic || 0}`;
+      mineralsElement.textContent = `💎 ${resources.minerals || 0}`;
     }
     
     // Update population display (count of player units)
@@ -2619,109 +2330,179 @@
   
   // ===== HUD MODE SELECTION =====
   
-  // Enable shadows (helper function)
-  hud.enableShadows = function() {
-    const switchElement = document.getElementById('shadows_switch');
-    const handle = document.getElementById('shadows_handle');
+  // Shadow mode labels: 0=Off, 1=Low (solid blobs), 2=Med (gradient blobs), 3=Full
+  const SHADOW_LABELS = ['Off', 'Low', 'Med', 'Full'];
+  
+  // Initialize Shadow slider
+  hud.initShadowSlider = function() {
+    const slider = document.getElementById('shadow_slider');
+    const valueDisplay = document.getElementById('shadow_value');
     
-    // Turn shadows on (right position)
-    if (switchElement) {
-      switchElement.style.background = '#4CAF50';
-      switchElement.dataset.on = 'true';
-    }
-    if (handle) {
-      handle.style.left = '27px';
+    if (!slider || !valueDisplay) {
+      return;
     }
     
-    // Enable shadows
-    window.SHADOWS_ENABLED = true;
+    // Load saved shadow setting or use default (3 = Full)
+    const savedShadow = localStorage.getItem('shadowMode');
+    const initialValue = savedShadow ? parseInt(savedShadow) : 3;
+    slider.value = initialValue;
+    valueDisplay.textContent = SHADOW_LABELS[initialValue];
     
-      // Force initialize shadow generator if it doesn't exist
+    // Apply shadow setting
+    hud.updateShadowMode(initialValue);
+    
+    // Track current mode for boundary detection
+    let lastAppliedMode = initialValue;
+    
+    // Add event listener for slider changes
+    slider.addEventListener('input', function() {
+      const value = parseInt(this.value);
+      valueDisplay.textContent = SHADOW_LABELS[value];
+      
+      // Check if we're crossing the instance/shadow boundary
+      // Instanced modes: 0, 1, 2 (Off, Low, Med) - Full mode: 3
+      const wasInstanced = lastAppliedMode < 3;
+      const willBeInstanced = value < 3;
+      const crossingBoundary = wasInstanced !== willBeInstanced;
+      
+      // Save setting
+      localStorage.setItem('shadowMode', value.toString());
+      
+      // Apply shadow mode
+      hud.updateShadowMode(value);
+      
+      // If crossing boundary, reload resource models dynamically
+      if (crossingBoundary && window.gfx && window.gfx.reloadResourceModels) {
+        console.log('[Shadows] Crossing instance/shadow boundary, reloading resources...');
+        window.gfx.reloadResourceModels();
+      }
+      
+      lastAppliedMode = value;
+    });
+  };
+  
+  // Update shadow mode: 0=Off, 1=Low (solid blobs), 2=Med (gradient blobs), 3=Full
+  hud.updateShadowMode = function(mode) {
+    window.SHADOW_MODE = mode; // 0=Off, 1=Low, 2=Med, 3=Full
+    
+    if (mode === 0) {
+      // Off - disable all shadows
+      window.SHADOWS_ENABLED = false;
+      
+      // Disable full shadows
+      if (window.gfx && window.gfx.scene) {
+        window.gfx.scene.meshes.forEach(mesh => {
+          mesh.receiveShadows = false;
+          if (mesh.getChildMeshes) {
+            mesh.getChildMeshes().forEach(child => child.receiveShadows = false);
+          }
+        });
+      }
+      
+      // Flush shadow casters
+      if (window.gfx && window.gfx.shadowGenerator && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows();
+      }
+      
+      // Hide all blob shadows
+      if (window.gfx && window.gfx.setBlobShadowsVisible) {
+        window.gfx.setBlobShadowsVisible(false);
+      }
+      
+      // Enable thin instance mode for static scenery (perf boost!)
+      if (window.gfx && window.gfx.setThinInstanceMode) {
+        window.gfx.setThinInstanceMode(true);
+      }
+      
+    } else if (mode === 1 || mode === 2) {
+      // Low/Med - blob shadows (solid or gradient)
+      window.SHADOWS_ENABLED = false;
+      
+      // Disable full shadows
+      if (window.gfx && window.gfx.scene) {
+        window.gfx.scene.meshes.forEach(mesh => {
+          mesh.receiveShadows = false;
+          if (mesh.getChildMeshes) {
+            mesh.getChildMeshes().forEach(child => child.receiveShadows = false);
+          }
+        });
+      }
+      
+      // Flush shadow casters
+      if (window.gfx && window.gfx.shadowGenerator && window.gfx.updateAllMeshShadows) {
+        window.gfx.updateAllMeshShadows();
+      }
+      
+      // Set blob shadow style (1=solid, 2=gradient)
+      if (window.gfx && window.gfx.setBlobShadowStyle) {
+        window.gfx.setBlobShadowStyle(mode === 1 ? 'solid' : 'gradient');
+      }
+      
+      // Show blob shadows
+      if (window.gfx && window.gfx.setBlobShadowsVisible) {
+        window.gfx.setBlobShadowsVisible(true);
+      }
+      
+      // Create blob shadows for existing units
+      if (window.gfx && window.gfx.createBlobShadowsForAllUnits) {
+        window.gfx.createBlobShadowsForAllUnits();
+      }
+      
+      // Enable thin instance mode for static scenery (perf boost!)
+      if (window.gfx && window.gfx.setThinInstanceMode) {
+        window.gfx.setThinInstanceMode(true);
+      }
+      
+    } else if (mode === 3) {
+      // Full - proper shadow mapping
+      window.SHADOWS_ENABLED = true;
+      
+      // Disable thin instance mode (need individual meshes for shadow mapping)
+      if (window.gfx && window.gfx.setThinInstanceMode) {
+        window.gfx.setThinInstanceMode(false);
+      }
+      
+      // Hide blob shadows
+      if (window.gfx && window.gfx.setBlobShadowsVisible) {
+        window.gfx.setBlobShadowsVisible(false);
+      }
+      
+      // Initialize shadow generator if needed
       if (window.gfx) {
         if (!window.gfx.shadowGenerator) {
-          // Force initialize shadows (bypass stability checks)
-          // This will initialize with refined quality (2048) by default
           if (window.gfx.forceInitializeShadows) {
             window.gfx.forceInitializeShadows();
           } else if (window.gfx.autoInitializeShadows) {
             window.gfx.autoInitializeShadows();
           }
-          
-          // Don't apply saved LOD on initial shadow creation - shadows should always start refined
-          // The LOD setting will only apply when user explicitly changes the slider
         }
-      
-      // Update all meshes to receive shadows
-      if (window.gfx.updateAllMeshShadows) {
-        window.gfx.updateAllMeshShadows(true); // Force re-add
+        
+        // Update all meshes to receive shadows
+        if (window.gfx.updateAllMeshShadows) {
+          window.gfx.updateAllMeshShadows(true);
+        }
       }
-    }
-    
-    // Save preference
-    localStorage.setItem('shadowsEnabled', 'true');
-    
-    // console.log('✅ Shadows enabled');
-    if (window.gfx && window.gfx.shadowGenerator) {
-      const casterCount = window.gfx.shadowGenerator.getShadowMap().renderList.length;
-      // console.log(`   Shadow generator active with ${casterCount} casters`);
     }
   };
   
-  // Toggle shadows on/off
+  // Legacy function for compatibility
+  hud.enableShadows = function() {
+    hud.updateShadowMode(3); // Full shadows
+    localStorage.setItem('shadowMode', '3');
+  };
+  
+  // Legacy toggle function (now uses slider internally)
   hud.toggleShadowsMode = function() {
-    const switchElement = document.getElementById('shadows_switch');
-    const handle = document.getElementById('shadows_handle');
+    const currentMode = window.SHADOW_MODE || 3;
+    const newMode = currentMode === 0 ? 3 : 0;
+    hud.updateShadowMode(newMode);
+    localStorage.setItem('shadowMode', newMode.toString());
     
-    if (!switchElement || !handle) {
-      console.warn('Shadow switch elements not found');
-      return;
-    }
-    
-    const isOn = switchElement.dataset.on === 'true';
-    // console.log('🎭 Toggling shadows from', isOn ? 'ON' : 'OFF', 'to', isOn ? 'OFF' : 'ON');
-    
-    if (isOn) {
-      // Turn shadows off (left position)
-      switchElement.style.background = '#ccc';
-      handle.style.left = '2px';
-      switchElement.dataset.on = 'false';
-      
-      // Disable shadows
-      window.SHADOWS_ENABLED = false;
-      
-      // Immediately set receiveShadows = false on all meshes (fast, visual change)
-      if (window.gfx && window.gfx.scene) {
-        window.gfx.scene.meshes.forEach(mesh => {
-          // Skip terrain/background/UI meshes
-          const isBackgroundMesh = mesh.name.includes('mountain') ||
-                                   mesh.name.includes('terrain') ||
-                                   mesh.name.includes('table') ||
-                                   mesh.name.includes('Mesh') ||
-                                   mesh.name.includes('UI');
-          
-          if (!isBackgroundMesh) {
-            mesh.receiveShadows = false;
-            if (mesh.getChildMeshes) {
-              mesh.getChildMeshes().forEach(child => child.receiveShadows = false);
-            }
-          }
-        });
-      }
-      
-      // Also flush shadow casters from the generator so disabling has a real perf impact
-      if (window.gfx && window.gfx.shadowGenerator && window.gfx.updateAllMeshShadows) {
-        window.gfx.updateAllMeshShadows(); // With SHADOWS_ENABLED = false, this removes casters
-      }
-      
-      // Save preference
-      localStorage.setItem('shadowsEnabled', 'false');
-      // console.log('✅ Shadows disabled');
-    } else {
-      // Delegate to shared enableShadows helper for consistent behavior
-      if (hud.enableShadows) {
-        hud.enableShadows();
-      }
-    }
+    // Update slider if it exists
+    const slider = document.getElementById('shadow_slider');
+    const valueDisplay = document.getElementById('shadow_value');
+    if (slider) slider.value = newMode;
+    if (valueDisplay) valueDisplay.textContent = SHADOW_LABELS[newMode];
   };
   
   // Fix mountains if they got corrupted
@@ -2876,6 +2657,83 @@
     }
   };
 
+  // Anti-aliasing slider labels
+  const AA_LABELS = ['Off', 'FXAA', 'MSAA 2x', 'MSAA 4x'];
+  
+  // Track the MSAA level that was applied when engine was created
+  let engineMSAALevel = null;
+  
+  // Initialize Anti-Aliasing slider
+  hud.initAASlider = function() {
+    const slider = document.getElementById('aa_slider');
+    const valueDisplay = document.getElementById('aa_value');
+    
+    if (!slider || !valueDisplay) {
+      return;
+    }
+    
+    // Load saved AA setting or use default (0 = off)
+    const savedAA = localStorage.getItem('aaLevel');
+    const initialValue = savedAA ? parseInt(savedAA) : 0;
+    slider.value = initialValue;
+    valueDisplay.textContent = AA_LABELS[initialValue];
+    
+    // Remember the MSAA level the engine was created with
+    if (engineMSAALevel === null) {
+      engineMSAALevel = window.gfx && window.gfx.getAALevel ? window.gfx.getAALevel() : 0;
+    }
+    
+    // Check if reload notice should be shown initially
+    hud.updateAAReloadNotice(initialValue);
+    
+    // Add event listener for slider changes
+    slider.addEventListener('input', function() {
+      const value = parseInt(this.value);
+      valueDisplay.textContent = AA_LABELS[value];
+      
+      // Apply antialiasing setting
+      hud.updateAntialiasing(value);
+      
+      // Save setting
+      localStorage.setItem('aaLevel', value.toString());
+      
+      // Update reload notice
+      hud.updateAAReloadNotice(value);
+    });
+  };
+  
+  // Check if reload is needed for MSAA setting and update notice
+  hud.updateAAReloadNotice = function(newValue) {
+    const notice = document.getElementById('aa_reload_notice');
+    if (!notice) return;
+    
+    // Get the MSAA level the engine was created with
+    const currentEngineMSAA = engineMSAALevel !== null ? engineMSAALevel : 
+      (window.gfx && window.gfx.getAALevel ? window.gfx.getAALevel() : 0);
+    
+    // Compare MSAA states: both are MSAA (>=2), or neither is MSAA (<2)
+    const newIsMSAA = newValue >= 2;
+    const currentIsMSAA = currentEngineMSAA >= 2;
+    const sameLevel = newValue === currentEngineMSAA;
+    
+    const needsReload = newIsMSAA !== currentIsMSAA || (newIsMSAA && !sameLevel);
+    notice.style.display = needsReload ? 'block' : 'none';
+  };
+  
+  // Update antialiasing based on slider value (0-3)
+  // 0 = Off, 1 = FXAA, 2 = MSAA 2x, 3 = MSAA 4x
+  hud.updateAntialiasing = function(value) {
+    if (window.gfx && window.gfx.setAntialiasing) {
+      window.gfx.setAntialiasing(value);
+    }
+  };
+  
+  // Get saved AA level for engine initialization
+  hud.getSavedAALevel = function() {
+    const savedAA = localStorage.getItem('aaLevel');
+    return savedAA ? parseInt(savedAA) : 0;
+  };
+
   // Toggle between 2D and 3D HUD modes
   hud.toggleHUDMode = function() {
     const switchElement = document.getElementById('hud_switch');
@@ -2965,15 +2823,33 @@
   };
   
   // Initialize shadows mode from saved preference or default
+  // NOTE: This is now handled by initShadowSlider() when settings menu opens
+  // Keeping this function for backwards compatibility but it just applies saved settings
   hud.initializeShadowsMode = function() {
+    // Shadow mode is now initialized via the slider in settings menu
+    // Just ensure SHADOW_MODE is set from localStorage if available
+    try {
+      const savedMode = localStorage.getItem('shadowMode');
+      if (savedMode !== null) {
+        window.SHADOW_MODE = parseInt(savedMode);
+      } else {
+        // Check legacy setting
+        const legacyShadows = localStorage.getItem('shadowsEnabled');
+        window.SHADOW_MODE = (legacyShadows === 'false') ? 0 : 3;
+      }
+      window.SHADOWS_ENABLED = (window.SHADOW_MODE === 3);
+    } catch (e) {
+      window.SHADOW_MODE = 3;
+      window.SHADOWS_ENABLED = true;
+    }
+    return; // Early return - full initialization happens in initShadowSlider
+    
+    // Legacy code below (kept for reference)
     const savedShadows = localStorage.getItem('shadowsEnabled');
     const switchElement = document.getElementById('shadows_switch');
     const handle = document.getElementById('shadows_handle');
     
-    // console.log('🎭 Initializing shadows mode. Saved preference:', savedShadows);
-    
     if (!switchElement || !handle) {
-      console.warn('⚠️ Shadow switch elements not found during initialization');
       return;
     }
     
@@ -3183,13 +3059,11 @@
   // Animate camp options expanding outward
   function animateCampOptions() {
     radialMenuItems.forEach(item => {
-      if (item.isCampOption && item.mesh) {
+      if (item.isCampOption && item.container) {
         const targetPos = calculateExpandedItemPosition(item, 0, 0);
         
-        // Start from center
-        item.mesh.position.set(0, 0, 0);
+        item.container.position.set(0, 0, 0);
         
-        // Animate to expanded position
         const animation = new BABYLON.Animation(
           "expandCampOption",
           "position",
@@ -3204,13 +3078,12 @@
         
         animation.setKeys(keyFrames);
         
-        // Add easing for smooth expansion
         const easingFunction = new BABYLON.QuadraticEase();
         easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
         animation.setEasingFunction(easingFunction);
         
-        item.mesh.animations = [animation];
-        hud.scene.beginAnimation(item.mesh, 0, 30, false);
+        item.container.animations = [animation];
+        hud.scene.beginAnimation(item.container, 0, 30, false);
       }
     });
   }
@@ -3218,24 +3091,24 @@
   // Hide buildings menu when camp is selected
   function hideBuildingsMenu() {
     radialMenuItems.forEach(item => {
-      if (item.isSubItem && !item.isCampOption && item.mesh) {
-        // Fade out buildings menu items
-        const fadeAnimation = new BABYLON.Animation(
+      if (item.isSubItem && !item.isCampOption && item.container) {
+        // Fade out by scaling down instead of material alpha (container has no material)
+        const scaleAnimation = new BABYLON.Animation(
           "fadeBuildings",
-          "material.alpha",
+          "scaling",
           15,
-          BABYLON.Animation.ANIMATIONTYPE_FLOAT,
+          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
           BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
         );
         
         const keyFrames = [];
-        keyFrames.push({ frame: 0, value: 1.0 });
-        keyFrames.push({ frame: 15, value: 0.3 });
+        keyFrames.push({ frame: 0, value: item.container.scaling.clone() });
+        keyFrames.push({ frame: 15, value: new BABYLON.Vector3(0.3, 0.3, 0.3) });
         
-        fadeAnimation.setKeys(keyFrames);
+        scaleAnimation.setKeys(keyFrames);
         
-        item.mesh.animations = [fadeAnimation];
-        hud.scene.beginAnimation(item.mesh, 0, 15, false);
+        item.container.animations = [scaleAnimation];
+        hud.scene.beginAnimation(item.container, 0, 15, false);
       }
     });
   }

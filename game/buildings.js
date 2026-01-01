@@ -1,5 +1,10 @@
 // Building system for structures like agora, houses, towers, etc.
 
+// Ground offset for building positioning - adjust if buildings float or clip through terrain
+// Negative values sink buildings down, positive values lift them up
+// With correct triangular interpolation, this should be 0 or very small
+const BUILDING_GROUND_OFFSET = 0;
+
 // Add particle effects to buildings based on their type
 function addBuildingParticleEffects(building) {
   // console.log(`🔥 addBuildingParticleEffects called for ${building.name}`);
@@ -84,98 +89,389 @@ function addBuildingParticleEffects(building) {
 
 // Building type definitions
 const BuildingTypes = {
+  
+  // ═══════════════════════════════════════════════════════════════
+  // CORE BUILDINGS
+  // ═══════════════════════════════════════════════════════════════
+
   agora: {
     name: "Agora",
     model: "assets/models/agora.glb",
-    scale: 1.0, // Big and impressive as it should be!
-    rotation: 0, // Fixed rotation for multiplayer determinism (was random)
-    size: { width: 4, height: 4 }, // Size in tiles
+    scale: 1.0,
+    rotation: 0,
+    size: { width: 4, height: 4 },
     cost: { stone: 100, wood: 50 },
-    description: "Ancient marketplace and gathering place",
     category: "civic",
-    // Construction properties
     needsWorkers: true,
     maxWorkers: 3,
-    workRadius: 15, // How far to look for idle villagers (tiles)
-    workType: "build" // Type of work this building needs
+    workRadius: 15,
+    workType: "build",
+    description: "Central marketplace and gathering place - the heart of your settlement"
   },
+
+  // ═══════════════════════════════════════════════════════════════
+  // BASIC BUILDINGS
+  // ═══════════════════════════════════════════════════════════════
+
   camp: {
     name: "Camp",
     model: "assets/models/camp.glb",
-    scale: .4,
-    rotation: 0, // No rotation by default
+    scale: 0.4,
+    rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 5, stone: 0 },
-    description: "Basic work camp",
-    category: "residential",
-    // Construction properties (before completion)
+    cost: { wood: 5 },
+    category: "production",
     needsWorkers: true,
     maxWorkers: 3,
-    workRadius: 15, // How far to look for idle villagers (tiles)
-    workType: "build", // Type of work this building needs during construction
-    // Production properties (after completion - set dynamically)
-    productionWorkType: "gather", // Type of work this building provides after construction
+    workRadius: 15,
+    workType: "build",
+    productionWorkType: "gather",
     productionMaxWorkers: 8,
-    productionWorkRadius: 7, // Resource detection and worker search radius (tiles) - 7 tiles × 4px = 28 world units
-    workInterval: 10000, // How often workers produce resources (10 seconds)
-    workOutput: { wood: 0, stone: 0 }, // Will be calculated based on nearby resources
-    availableResources: [] // Will store detected resource tiles
-  }, 
+    productionWorkRadius: 7,
+    workInterval: 10000,
+    workOutput: { wood: 0, stone: 0 },
+    availableResources: [],
+    description: "Basic work camp for gathering nearby resources"
+  },
+
   village: {
     name: "Village",
     model: "assets/models/village.glb",
-    scale: .2,
-    rotation: 0, // No rotation by default
+    scale: 0.2,
+    rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 25, stone: 0 },
-    description: "Basic housing for villagers",
+    cost: { wood: 25 },
     category: "residential",
-    // Construction properties
     needsWorkers: true,
     maxWorkers: 3,
-    workRadius: 15, // How far to look for idle villagers (tiles)
-    workType: "build", // Type of work this building needs
-    // Villager spawning properties (only after construction complete)
+    workRadius: 15,
+    workType: "build",
     spawnsVillagers: true,
-    spawnInterval: 30000, // 30 seconds in milliseconds
-    maxVillagers: 15, // Maximum villagers this village can support
-    spawnRadius: 4 // Spawn villagers within 3 tiles of the village
+    spawnInterval: 30000,
+    maxVillagers: 15,
+    spawnRadius: 4,
+    description: "Housing for villagers - increases population capacity"
   },
+
   farm: {
     name: "Farm",
     model: "assets/models/farm.glb",
-    scale: .4,
+    scale: 0.4,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 20, stone: 0 },
-    description: "Food production",
+    cost: { wood: 20 },
     category: "production",
-    // Construction properties (before completion)
     needsWorkers: true,
     maxWorkers: 3,
-    workRadius: 15, // How far to look for idle villagers (tiles)
-    workType: "build", // Type of work this building needs during construction
-    // Production properties (after completion - set dynamically)
-    productionWorkType: "farm", // Type of work this building provides after construction
+    workRadius: 15,
+    workType: "build",
+    productionWorkType: "farm",
     productionMaxWorkers: 2,
-    productionWorkRadius: 8, // How far to look for idle villagers (tiles) - 8 tiles × 4px = 32 world units
-    workInterval: 10000, // How often workers produce resources (10 seconds)
-    workOutput: { food: 4 } // Resources produced per work cycle
+    productionWorkRadius: 8,
+    workInterval: 10000,
+    workOutput: { food: 4 },
+    description: "Produces food to sustain your population"
   },
+
+  silo: {
+    name: "Silo",
+    model: "assets/models/tower.glb", // TODO: unique model
+    scale: 0.35,
+    rotation: 0,
+    size: { width: 2, height: 2 },
+    cost: { wood: 30, stone: 10 },
+    category: "storage",
+    needsWorkers: true,
+    maxWorkers: 2,
+    workRadius: 15,
+    workType: "build",
+    storageBonus: { food: 100, wood: 50 },
+    description: "Increases resource storage capacity"
+  },
+
   tower: {
     name: "Watchtower",
-    model: "assets/models/tower.glb", 
-    scale: .429,
-    rotation: 0, // 30 degrees
+    model: "assets/models/tower.glb",
+    scale: 0.429,
+    rotation: 0,
     size: { width: 2, height: 2 },
     cost: { stone: 20, wood: 20 },
-    description: "Defensive structure with long sight range",
     category: "military",
-    // Construction properties
     needsWorkers: true,
     maxWorkers: 3,
-    workRadius: 15, // How far to look for idle villagers (tiles)
-    workType: "build" // Type of work this building needs
+    workRadius: 15,
+    workType: "build",
+    visionRange: 20,
+    garrisonCapacity: 4,
+    description: "Defensive structure with extended sight range"
+  },
+
+  mine: {
+    name: "Mine",
+    model: "assets/models/camp.glb", // TODO: unique model
+    scale: 0.4,
+    rotation: 0,
+    size: { width: 2, height: 2 },
+    cost: { wood: 35, stone: 15 },
+    category: "production",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    productionWorkType: "mine",
+    productionMaxWorkers: 4,
+    productionWorkRadius: 5,
+    workInterval: 12000,
+    workOutput: { stone: 3, minerals: 1 },
+    description: "Extracts stone and minerals from the earth"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // ADVANCED BUILDINGS
+  // ═══════════════════════════════════════════════════════════════
+
+  tavern: {
+    name: "Tavern",
+    model: "assets/models/village.glb", // TODO: unique model
+    scale: 0.25,
+    rotation: 0,
+    size: { width: 3, height: 3 },
+    cost: { wood: 40, stone: 20 },
+    category: "civic",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    spawnsUnits: ["warlock"],
+    enablesUpgrades: ["scribes", "patronage"],
+    description: "Social hub that spawns Warlocks and enables upgrades"
+  },
+
+  moon_well: {
+    name: "Moon Well",
+    model: "assets/models/windmill.glb", // TODO: unique model
+    scale: 0.3,
+    rotation: 0,
+    size: { width: 2, height: 2 },
+    cost: { stone: 30, minerals: 15 },
+    category: "support",
+    needsWorkers: true,
+    maxWorkers: 2,
+    workRadius: 15,
+    workType: "build",
+    healRadius: 8,
+    healAmount: 2,
+    healInterval: 3000,
+    description: "Magical well that heals nearby friendly units"
+  },
+
+  barracks: {
+    name: "Barracks",
+    model: "assets/models/village.glb", // TODO: unique model
+    scale: 0.3,
+    rotation: 0,
+    size: { width: 3, height: 3 },
+    cost: { wood: 45, stone: 25 },
+    category: "military",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    spawnsUnits: ["warrior", "archer"],
+    trainingSpeed: 1.0,
+    description: "Trains Warriors and Archers for combat"
+  },
+
+  lab: {
+    name: "Laboratory",
+    model: "assets/models/factory.glb", // TODO: unique model
+    scale: 0.35,
+    rotation: 0,
+    size: { width: 3, height: 3 },
+    cost: { stone: 50, minerals: 25 },
+    category: "research",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    enablesUpgrades: ["prospecting", "armor", "artillery"],
+    description: "Research facility that unlocks advanced upgrades"
+  },
+
+  workshop: {
+    name: "Workshop",
+    model: "assets/models/factory.glb", // TODO: unique model
+    scale: 0.35,
+    rotation: 0,
+    size: { width: 3, height: 3 },
+    cost: { wood: 45, stone: 30 },
+    category: "production",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    enablesUpgrades: ["stewardship", "drayage"],
+    buildsVehicles: true,
+    description: "Crafting center for vehicles and mechanical upgrades"
+  },
+
+  // ═══════════════════════════════════════════════════════════════
+  // ELEMENTAL BUILDINGS
+  // ═══════════════════════════════════════════════════════════════
+
+  factory: {
+    name: "Factory",
+    model: "assets/models/factory.glb",
+    scale: 0.4,
+    rotation: 0,
+    size: { width: 3, height: 3 },
+    cost: { stone: 60, minerals: 30 },
+    category: "elemental",
+    element: "fire",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    spawnsUnits: ["apc"],
+    description: "🔥 Fire elemental building - produces APCs and Tanks"
+  },
+
+  church: {
+    name: "Church",
+    model: "assets/models/tower.glb", // TODO: unique model
+    scale: 0.5,
+    rotation: 0,
+    size: { width: 3, height: 3 },
+    cost: { stone: 55, minerals: 25 },
+    category: "elemental",
+    element: "spirit",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    spawnsUnits: ["priest"],
+    description: "✨ Spirit elemental building - trains Priests and Valkyries"
+  },
+
+  well: {
+    name: "Well",
+    model: "assets/models/windmill.glb", // TODO: unique model
+    scale: 0.25,
+    rotation: 0,
+    size: { width: 2, height: 2 },
+    cost: { stone: 40, minerals: 20 },
+    category: "elemental",
+    element: "water",
+    needsWorkers: true,
+    maxWorkers: 2,
+    workRadius: 15,
+    workType: "build",
+    spawnsUnits: ["mycologist"],
+    description: "💧 Water elemental building - trains Mycologists and Alchemists"
+  },
+
+  perch: {
+    name: "Perch",
+    model: "assets/models/tower.glb", // TODO: unique model
+    scale: 0.45,
+    rotation: 0,
+    size: { width: 2, height: 3 },
+    cost: { wood: 50, minerals: 25 },
+    category: "elemental",
+    element: "air",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    spawnsUnits: ["dirigible"],
+    description: "🌀 Air elemental building - launches Dirigibles and War Balloons"
+  },
+
+  grove: {
+    name: "Grove",
+    model: "assets/models/tree.glb", // TODO: unique model
+    scale: 0.5,
+    rotation: 0,
+    size: { width: 3, height: 3 },
+    cost: { wood: 40, minerals: 20 },
+    category: "elemental",
+    element: "earth",
+    needsWorkers: true,
+    maxWorkers: 3,
+    workRadius: 15,
+    workType: "build",
+    spawnsUnits: ["shaman"],
+    description: "🌿 Earth elemental building - trains Shamans and Druids"
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
+// UPGRADE DEFINITIONS
+// ═══════════════════════════════════════════════════════════════
+
+const UpgradeTypes = {
+  
+  scribes: {
+    name: "Scribes",
+    cost: { food: 30, minerals: 15 },
+    researchTime: 30000,
+    requires: ["tavern"],
+    effects: { resourceGatherRate: 1.15 },
+    description: "Educated scribes improve resource management (+15% gather rate)"
+  },
+
+  prospecting: {
+    name: "Prospecting",
+    cost: { food: 25, stone: 20 },
+    researchTime: 25000,
+    requires: ["lab"],
+    effects: { mineOutput: 1.25 },
+    description: "Advanced mining techniques reveal hidden deposits (+25% mine output)"
+  },
+
+  armor: {
+    name: "Armor",
+    cost: { stone: 40, minerals: 20 },
+    researchTime: 35000,
+    requires: ["lab"],
+    effects: { unitHealth: 1.2 },
+    description: "Reinforced armor plating for all military units (+20% health)"
+  },
+
+  stewardship: {
+    name: "Stewardship",
+    cost: { food: 35, wood: 25 },
+    researchTime: 30000,
+    requires: ["workshop"],
+    effects: { buildingHealth: 1.25, repairSpeed: 1.5 },
+    description: "Better building maintenance (+25% building health, +50% repair speed)"
+  },
+
+  drayage: {
+    name: "Drayage",
+    cost: { wood: 40, stone: 20 },
+    researchTime: 28000,
+    requires: ["workshop"],
+    effects: { unitSpeed: 1.15, carryCapacity: 1.3 },
+    description: "Improved logistics (+15% unit speed, +30% carry capacity)"
+  },
+
+  patronage: {
+    name: "Patronage",
+    cost: { food: 50, minerals: 25 },
+    researchTime: 40000,
+    requires: ["tavern"],
+    effects: { unitTrainingSpeed: 1.25, unitCost: 0.9 },
+    description: "Noble sponsorship speeds training (+25% train speed, -10% unit cost)"
+  },
+
+  artillery: {
+    name: "Artillery",
+    cost: { stone: 60, minerals: 40 },
+    researchTime: 45000,
+    requires: ["lab"],
+    effects: { siegeDamage: 1.5, rangedDamage: 1.2 },
+    description: "Heavy weapons research (+50% siege damage, +20% ranged damage)"
   }
 };
 
@@ -244,11 +540,11 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
   const worldX = x * TILE_SIZE;
   const worldZ = z * TILE_SIZE;
   
-  // Get terrain height at this position using bilinear interpolation
+  // Get terrain height at this position (uses triangular interpolation to match GPU rendering)
   const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(worldX, worldZ) : 0;
   
-  // Add small offset so building sits on terrain surface
-  const buildingHeight = terrainY + 0.1;
+  // Apply ground offset to ensure buildings sit ON the terrain
+  const buildingHeight = terrainY + BUILDING_GROUND_OFFSET;
   const worldPosition = new BABYLON.Vector3(worldX, buildingHeight, worldZ);
   // // console.log(`🌍 World position: (${worldPosition.x}, ${worldPosition.y}, ${worldPosition.z})`);
   
@@ -407,6 +703,8 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
       // Otherwise particles appear at (0,0,0) corner!
       if (window.fx) {
         setTimeout(() => {
+          // Guard against disposed mesh
+          if (!building.mesh) return;
           // Force recompute world matrices to ensure positions are correct
           building.mesh.computeWorldMatrix(true);
           addBuildingParticleEffects(building);
@@ -564,6 +862,26 @@ function spawnVillagerFromVillage(village) {
       villager.mesh = model.root;
       villager.mesh.scaling = new BABYLON.Vector3(villager.scale, villager.scale, villager.scale);
       
+      // Store animation groups for walk/idle animation switching
+      if (model.animationGroups && model.animationGroups.length > 0) {
+        villager.animationGroups = {};
+        model.animationGroups.forEach(group => {
+          // Babylon prefixes cloned animations with "Clone of " - strip it
+          let name = group.name.toLowerCase();
+          if (name.startsWith('clone of ')) {
+            name = name.substring(9);
+          }
+          villager.animationGroups[name] = group;
+        });
+        villager.currentAnimation = null;
+        
+        // Start idle animation immediately to avoid T-pose
+        if (villager.animationGroups['idle']) {
+          villager.animationGroups['idle'].start(true);
+          villager.currentAnimation = 'idle';
+        }
+      }
+      
       // CRITICAL: Enable the mesh (getModel disables it by default to prevent flash)
       if (typeof villager.mesh.setEnabled === 'function') {
         villager.mesh.setEnabled(true);
@@ -575,6 +893,14 @@ function spawnVillagerFromVillage(village) {
       // Set up shadows for unit mesh
       if (window.gfx && window.gfx.setupMeshShadows) {
         window.gfx.setupMeshShadows(villager.mesh);
+      }
+      
+      // Create blob shadow for this unit (will be visible only in blob mode)
+      if (window.gfx && window.gfx.createBlobShadow) {
+        window.gfx.createBlobShadow(villager);
+        if (window.gfx.updateBlobShadow) {
+          window.gfx.updateBlobShadow(villager);
+        }
       }
       
       // Handle child meshes - preserve their original rotations
@@ -1796,7 +2122,7 @@ const buildingSystem = {
       // Position it at the provided position or current mouse position
       if (initialPosition) {
         this.previewMesh.position = initialPosition.clone();
-        // Get terrain height using bilinear interpolation
+        // Get terrain height (triangular interpolation matches GPU rendering)
         const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(initialPosition.x, initialPosition.z) : 0;
         this.previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
       } else {
@@ -1808,13 +2134,13 @@ const buildingSystem = {
         
         if (pickResult.hit && pickResult.pickedPoint) {
           this.previewMesh.position = pickResult.pickedPoint.clone();
-          // Get terrain height using bilinear interpolation
+          // Get terrain height (triangular interpolation matches GPU rendering)
           const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(pickResult.pickedPoint.x, pickResult.pickedPoint.z) : 0;
           this.previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
         } else if (window.gfx.cameraTarget) {
           // Fallback to camera target
           this.previewMesh.position = window.gfx.cameraTarget.position.clone();
-          // Get terrain height using bilinear interpolation
+          // Get terrain height (triangular interpolation matches GPU rendering)
           const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(this.previewMesh.position.x, this.previewMesh.position.z) : 0;
           this.previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
         } else {
@@ -3047,7 +3373,7 @@ if (typeof window !== 'undefined') {
     window.player.addResource('food', 50);
     window.player.addResource('wood', 25);
     window.player.addResource('stone', 15);
-    window.player.addResource('magic', 10);
+    window.player.addResource('minerals', 10);
     
     // Force update the display
     if (window.hud && window.hud.updateResourceDisplay) {

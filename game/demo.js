@@ -95,7 +95,6 @@
       statW.style.display = 'flex';
       statW.style.flexDirection = 'column';
       statW.style.gap = '4px';
-      statW.style.background = 'rgba(0, 0, 0, 0.6)';
       statW.style.padding = '8px 12px';
       statW.style.borderRadius = '6px';
       statW.style.fontFamily = 'monospace';
@@ -241,12 +240,7 @@
       color: '#4A90E2',
       // No agora - demo starts without base building
       agora: { x: centerX, y: centerZ },
-      resources: {
-        food: 150,
-        wood: 150,
-        stone: 50,
-        magic: 10
-      }
+      resources: { ...STARTING_RESOURCES }
     });
     
     // Override window.player so UI controls work

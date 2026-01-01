@@ -102,8 +102,9 @@
       </div>
       <div class="settings_option">
         <span>Shadows</span>
-        <div id="shadows_switch" class="binary_switch" onclick="window.hud.toggleShadowsMode()" data-on="true" style="background: #4CAF50;">
-          <div id="shadows_handle" class="switch_handle" style="left: 27px;"></div>
+        <div class="lod_slider_container">
+          <input type="range" id="shadow_slider" class="lod_slider" min="0" max="3" value="3" step="1">
+          <div class="lod_value" id="shadow_value">Full</div>
         </div>
       </div>
       <div class="settings_option">
@@ -112,6 +113,14 @@
           <input type="range" id="lod_slider" class="lod_slider" min="0" max="100" value="50">
           <div class="lod_value" id="lod_value">50%</div>
         </div>
+      </div>
+      <div class="settings_option" style="position: relative;">
+        <span>AA</span>
+        <div class="lod_slider_container">
+          <input type="range" id="aa_slider" class="lod_slider" min="0" max="3" value="0" step="1">
+          <div class="lod_value" id="aa_value">Off</div>
+        </div>
+        <div id="aa_reload_notice" style="position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); font-size: 0.7em; color: #f90; white-space: nowrap; display: none;">⚠ Reload to apply</div>
       </div>
       <div class="settings_option">
         <span>Lasso</span>

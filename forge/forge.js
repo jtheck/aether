@@ -23,7 +23,7 @@
       resources: true
     },
     // Current editing layer (affects what tool does)
-    editingLayer: 'terrain',    // 'table', 'terrain', 'resources', or 'spawns'
+    editingLayer: 'terrain',    // 'table', 'terrain', 'resources', 'spawns', 'buildings', or 'objectives'
     
     // Map metadata
     mapName: '',
@@ -45,7 +45,13 @@
     
     // Buildings (array of {x, y, type, rotation} objects)
     buildings: [],
-    currentBuilding: 'agora'
+    currentBuilding: 'agora',
+    
+    // Objectives/Win zones (array of {x, y, radius, type, team} objects)
+    // type: 'reach' = any unit enters, 'capture' = hold for time, 'escape' = all units must reach
+    objectives: [],
+    currentObjectiveType: 'reach',
+    currentObjectiveRadius: 4
   };
   
   // Spawn point radius (same as game's spawnZoneRadius for terrain flattening)
@@ -148,6 +154,9 @@
   // Initialize forge editor
   forge.init = function() {
     if (!ENABLE_FORGE) return;
+    
+    // Set global flag to disable game's automatic model placement
+    window.isForgeMode = true;
     
     console.log('🔨 Forge Map Editor initializing...');
     
@@ -265,9 +274,9 @@
     canvas.addEventListener('pointermove', (e) => this.handlePointer(e));
     canvas.addEventListener('pointerup', (e) => this.handlePointer(e));
     
-    // Prevent context menu when editing spawns/buildings (right-click removes)
+    // Prevent context menu when editing spawns/buildings/objectives (right-click removes)
     canvas.addEventListener('contextmenu', (e) => {
-      if (this.state.editingLayer === 'spawns' || this.state.editingLayer === 'buildings') {
+      if (this.state.editingLayer === 'spawns' || this.state.editingLayer === 'buildings' || this.state.editingLayer === 'objectives') {
         e.preventDefault();
       }
     });
@@ -278,162 +287,114 @@
     console.log('🖌️ Painting system ready');
   };
   
-  // Forge camera controls - smooth, consistent movement
+  // Forge camera state - global so pointer handler can access it
+  forge._camState = { rightDown: false, middleDown: false, lastX: 0, lastY: 0 };
+  forge._camKeys = {};
+  
+  // Forge camera - for UniversalCamera (not ArcRotateCamera!)
   forge.setupCameraControls = function(canvas) {
-    if (!canvas || !gfx || !gfx.camera) return;
+    if (!canvas || !gfx || !gfx.camera) {
+      console.error('❌ Forge camera: missing canvas or camera');
+      return;
+    }
     
     const cam = gfx.camera;
     
-    // CRITICAL: Disable ALL built-in camera controls first
-    // The index.html re-enables them, so we must disable again
-    if (cam.inputs) {
-      if (cam.inputs.attached.pointers) {
-        try { cam.inputs.attached.pointers.detachControl(); } catch(e) {}
-      }
-      if (cam.inputs.attached.mousewheel) {
-        try { cam.inputs.attached.mousewheel.detachControl(); } catch(e) {}
-      }
-      if (cam.inputs.attached.keyboard) {
-        try { cam.inputs.attached.keyboard.detachControl(); } catch(e) {}
-      }
-    }
+    // Kill ALL Babylon camera controls
     cam.detachControl();
+    if (cam.inputs) cam.inputs.clear();
     
-    let isPanning = false;
-    let lastMouseX = 0;
-    let lastMouseY = 0;
+    // Use pointerdown/move/up instead of mouse events (pointer events fire first)
+    canvas.addEventListener('pointerdown', (e) => {
+      forge._camState.lastX = e.clientX;
+      forge._camState.lastY = e.clientY;
+      if (e.button === 2) { forge._camState.rightDown = true; }
+      if (e.button === 1) { forge._camState.middleDown = true; }
+    }, true); // Capture phase!
     
-    // Right-click drag to pan (more natural for editors)
-    canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 2 || e.button === 1) { // Right or middle click
-        isPanning = true;
-        lastMouseX = e.clientX;
-        lastMouseY = e.clientY;
-        e.preventDefault();
+    canvas.addEventListener('pointermove', (e) => {
+      const state = forge._camState;
+      const dx = e.clientX - state.lastX;
+      const dy = e.clientY - state.lastY;
+      state.lastX = e.clientX;
+      state.lastY = e.clientY;
+      
+      // Right drag = look around (yaw + pitch)
+      if (state.rightDown && cam.rotation) {
+        cam.rotation.y += dx * 0.005;  // Yaw (left/right) - flipped
+        cam.rotation.x += dy * 0.005;  // Pitch (up/down)
+        // Clamp pitch to avoid flipping
+        cam.rotation.x = Math.max(0.1, Math.min(Math.PI / 2 - 0.1, cam.rotation.x));
       }
-    });
-    
-    canvas.addEventListener('mousemove', (e) => {
-      if (!isPanning) return;
       
-      const deltaX = e.clientX - lastMouseX;
-      const deltaY = e.clientY - lastMouseY;
-      lastMouseX = e.clientX;
-      lastMouseY = e.clientY;
-      
-      // Calculate camera-relative movement directions
-      const forward = cam.getForwardRay().direction;
-      const right = BABYLON.Vector3.Cross(forward, BABYLON.Vector3.Up()).normalize();
-      
-      // Project to ground plane
-      const groundRight = new BABYLON.Vector3(right.x, 0, right.z).normalize();
-      const groundForward = new BABYLON.Vector3(forward.x, 0, forward.z).normalize();
-      
-      // FIXED sensitivity - same feel at all zoom levels
-      const PAN_SENSITIVITY = 0.6;
-      
-      const moveX = (-deltaX * groundRight.x - deltaY * groundForward.x) * PAN_SENSITIVITY;
-      const moveZ = (-deltaX * groundRight.z - deltaY * groundForward.z) * PAN_SENSITIVITY;
-      
-      if (gfx.cameraTarget) {
-        gfx.cameraTarget.position.x += moveX;
-        gfx.cameraTarget.position.z += moveZ;
-      } else {
-        // Fallback: move camera position directly
-        cam.position.x += moveX;
-        cam.position.z += moveZ;
-        if (cam.target) {
-          cam.target.x += moveX;
-          cam.target.z += moveZ;
-        }
+      // Middle drag = pan (move camera position)
+      if (state.middleDown && cam.position) {
+        const speed = cam.position.y * 0.003;
+        const yaw = cam.rotation ? cam.rotation.y : 0;
+        const cos = Math.cos(yaw);
+        const sin = Math.sin(yaw);
+        cam.position.x += (dx * cos - dy * sin) * speed;  // Flipped dx
+        cam.position.z += (dx * sin + dy * cos) * speed;  // Flipped dx
       }
-    });
+    }, true); // Capture phase!
     
-    canvas.addEventListener('mouseup', (e) => {
-      if (e.button === 2 || e.button === 1 || e.button === 0) {
-        isPanning = false;
-      }
-    });
+    const pointerUp = (e) => {
+      if (e.button === 2) forge._camState.rightDown = false;
+      if (e.button === 1) forge._camState.middleDown = false;
+    };
+    canvas.addEventListener('pointerup', pointerUp, true);
+    window.addEventListener('pointerup', pointerUp);
     
-    canvas.addEventListener('mouseleave', () => {
-      isPanning = false;
-    });
-    
-    // Wheel to zoom
+    // Scroll = zoom (move camera up/down)
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
-      const zoomSpeed = 0.1;
-      const delta = e.deltaY * zoomSpeed;
-      
-      if (cam.radius !== undefined) {
-        cam.radius = Math.max(20, Math.min(300, cam.radius + delta));
-      } else if (cam.position) {
-        cam.position.y = Math.max(20, Math.min(300, cam.position.y + delta));
-      }
+      const delta = Math.sign(e.deltaY) * 10;
+      cam.position.y = Math.max(20, Math.min(500, cam.position.y + delta));
     }, { passive: false });
     
-    // ESDF keyboard controls (matches game)
-    const keyState = { e: false, s: false, d: false, f: false, w: false, r: false };
-    const MOVE_SPEED = 5.0; // Fast keyboard movement for large maps
-    
+    // Keyboard
     document.addEventListener('keydown', (e) => {
-      const key = e.key.toLowerCase();
-      if (key in keyState) keyState[key] = true;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      forge._camKeys[e.key.toLowerCase()] = true;
     });
+    document.addEventListener('keyup', (e) => forge._camKeys[e.key.toLowerCase()] = false);
     
-    document.addEventListener('keyup', (e) => {
-      const key = e.key.toLowerCase();
-      if (key in keyState) keyState[key] = false;
-    });
-    
-    // Animation loop for smooth keyboard movement
-    const updateCamera = () => {
-      if (!gfx.camera) return;
+    // Keyboard loop
+    const tick = () => {
+      if (!gfx.camera) { requestAnimationFrame(tick); return; }
       
-      const cam = gfx.camera;
-      const forward = cam.getForwardRay().direction;
-      const right = BABYLON.Vector3.Cross(forward, BABYLON.Vector3.Up()).normalize();
+      const keys = forge._camKeys;
+      const speed = cam.position.y * 0.02;
+      const yaw = cam.rotation ? cam.rotation.y : 0;
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
       
-      const groundRight = new BABYLON.Vector3(right.x, 0, right.z).normalize();
-      const groundForward = new BABYLON.Vector3(forward.x, 0, forward.z).normalize();
+      // WASD to move
+      if (keys['w']) { cam.position.x -= sin * speed; cam.position.z -= cos * speed; }
+      if (keys['s']) { cam.position.x += sin * speed; cam.position.z += cos * speed; }
+      if (keys['a']) { cam.position.x -= cos * speed; cam.position.z += sin * speed; }
+      if (keys['d']) { cam.position.x += cos * speed; cam.position.z -= sin * speed; }
       
-      let moveX = 0, moveZ = 0, moveY = 0;
+      // Q/E to rotate
+      if (keys['q']) cam.rotation.y += 0.03;
+      if (keys['e']) cam.rotation.y -= 0.03;
       
-      if (keyState.e) { moveX += groundForward.x * MOVE_SPEED; moveZ += groundForward.z * MOVE_SPEED; }  // Forward
-      if (keyState.d) { moveX -= groundForward.x * MOVE_SPEED; moveZ -= groundForward.z * MOVE_SPEED; }  // Back
-      if (keyState.f) { moveX -= groundRight.x * MOVE_SPEED; moveZ -= groundRight.z * MOVE_SPEED; }      // Left
-      if (keyState.s) { moveX += groundRight.x * MOVE_SPEED; moveZ += groundRight.z * MOVE_SPEED; }      // Right
-      if (keyState.w) { moveY -= MOVE_SPEED * 0.5; }
-      if (keyState.r) { moveY += MOVE_SPEED * 0.5; }
+      // R/F to zoom (height)
+      if (keys['r']) cam.position.y = Math.max(20, cam.position.y - speed * 0.3);
+      if (keys['f']) cam.position.y = Math.min(500, cam.position.y + speed * 0.3);
       
-      if (moveX !== 0 || moveZ !== 0 || moveY !== 0) {
-        if (gfx.cameraTarget) {
-          gfx.cameraTarget.position.x += moveX;
-          gfx.cameraTarget.position.z += moveZ;
-          gfx.cameraTarget.position.y += moveY;
-        } else {
-          cam.position.x += moveX;
-          cam.position.z += moveZ;
-          cam.position.y += moveY;
-          if (cam.target) {
-            cam.target.x += moveX;
-            cam.target.z += moveZ;
-          }
-        }
-      }
-      
-      requestAnimationFrame(updateCamera);
+      requestAnimationFrame(tick);
     };
-    updateCamera();
+    tick();
     
-    console.log('📷 Forge camera controls: Right-click drag to pan, Scroll to zoom, ESDF to move, W/R up/down');
+    console.log('✅ Forge camera: Right-drag=rotate, Middle-drag=pan, Scroll=zoom, WASD=move, Q/E=rotate, R/F=zoom');
   };
   
   // Handle pointer events
   forge.handlePointer = function(e) {
     if (!ENABLE_FORGE || !window.liveField) return;
     
-    // Handle right-click for spawn/building removal
+    // Handle right-click for spawn/building/objective removal
     if (e.button === 2) {
       if (this.state.editingLayer === 'spawns') {
         e.preventDefault();
@@ -445,6 +406,12 @@
         e.preventDefault();
         const pos = this.getTilePosition(e);
         if (pos) this._removeBuildingAt(pos);
+        return;
+      }
+      if (this.state.editingLayer === 'objectives') {
+        e.preventDefault();
+        const pos = this.getTilePosition(e);
+        if (pos) this.removeObjective(pos);
         return;
       }
     }
@@ -482,6 +449,15 @@
             const pos = this.getTilePosition(e);
             if (pos) {
               this.placeBuilding(pos);
+            }
+            return;
+          }
+          
+          // Objective editing mode - place objective zone
+          if (this.state.editingLayer === 'objectives') {
+            const pos = this.getTilePosition(e);
+            if (pos) {
+              this.placeObjective(pos);
             }
             return;
           }
@@ -905,7 +881,7 @@
     });
   };
   
-  // Rebuild chunk meshes
+  // Rebuild chunk meshes (terrain only - preserves existing resources)
   forge.rebuildChunks = function(chunkKeys) {
     const field = window.liveField;
     if (!field || !gfx || !gfx.scene || !gfx.createTerrainMesh) return;
@@ -913,14 +889,25 @@
     chunkKeys.forEach(key => {
       const chunk = field.chunks.get(key);
       if (chunk) {
-        // Dispose old mesh
+        // CRITICAL: Save resource models before disposing mesh (they are children of mesh)
+        const savedModels = [];
+        if (chunk.models && chunk.models.length > 0) {
+          chunk.models.forEach(model => {
+            if (model && model.root) {
+              // Detach from old mesh parent
+              model.root.parent = null;
+              savedModels.push(model);
+            }
+          });
+        }
+        
+        // Now safe to dispose old terrain mesh
         if (chunk.mesh) {
           chunk.mesh.dispose();
           chunk.mesh = null;
         }
         
-        // Refresh chunk tiles from field (tiles are object refs so should be current, 
-        // but let's rebuild the tiles array to be safe)
+        // Refresh chunk tiles from field
         const chunkTiles = [];
         for (let z = chunk.startZ; z < chunk.endZ; z++) {
           for (let x = chunk.startX; x < chunk.endX; x++) {
@@ -929,9 +916,19 @@
         }
         chunk.tiles = chunkTiles;
         
-        // Directly recreate the mesh
-        const [chunkX, chunkZ] = key.split(',').map(Number);
-        field.createChunkMesh(chunkX, chunkZ, gfx.scene, gfx.createTerrainMesh);
+        // Recreate terrain mesh
+        chunk.mesh = gfx.createTerrainMesh(gfx.scene, chunk, 4);
+        chunk.needsMesh = false;
+        
+        // Re-parent saved models to new mesh
+        if (savedModels.length > 0) {
+          savedModels.forEach(model => {
+            if (model && model.root) {
+              model.root.parent = chunk.mesh;
+            }
+          });
+          chunk.models = savedModels;
+        }
       }
     });
   };
@@ -1109,9 +1106,11 @@
           ? Array.from(this._erasedAutoResources).join(';') : undefined,  // Erased auto-resources
       // Map metadata
       sp: this.state.spawnPoints.length > 0
-          ? this.state.spawnPoints.map(s => `${s.x},${s.y}`).join(';') : undefined,  // Spawn points
+          ? this.state.spawnPoints.map((s, i) => `${s.x},${s.y},${s.team !== undefined ? s.team : i}`).join(';') : undefined,  // Spawn points with team index
       bld: this.state.buildings.length > 0
           ? this.state.buildings.map(b => `${b.x},${b.y},${b.type},${(b.rotation || 0).toFixed(2)}`).join(';') : undefined,  // Buildings
+      obj: this.state.objectives.length > 0
+          ? this.state.objectives.map(o => `${o.x},${o.y},${o.radius},${o.type}`).join(';') : undefined,  // Objectives
       gt: Object.entries(this.state.gameTypes)
           .filter(([k, v]) => v).map(([k]) => k).join(',') || '1v1'  // Game types
     };
@@ -1511,6 +1510,27 @@
       this._buildingMeshes?.forEach(m => m.dispose());
       this._buildingMeshes?.clear();
     }
+    
+    // Restore objectives (v2 format)
+    if (mapData.obj) {
+      this.state.objectives = mapData.obj.split(';').map((o, i) => {
+        const parts = o.split(',');
+        return {
+          x: Number(parts[0]),
+          y: Number(parts[1]),
+          radius: Number(parts[2]) || 4,
+          type: parts[3] || 'reach',
+          id: i
+        };
+      });
+      this.updateObjectiveMarkers();
+      this.updateObjectiveList();
+      console.log(`🎯 Restored ${this.state.objectives.length} objectives`);
+    } else {
+      this.state.objectives = [];
+      this._objectiveMarkers?.forEach(m => m.dispose());
+      this._objectiveMarkers = [];
+    }
 
     // Restore game types (v2 format)
     if (mapData.gt) {
@@ -1555,6 +1575,7 @@
             <button id="layer-resources" class="forge-btn" onclick="forge.setEditingLayer('resources')">🌲 Resources</button>
             <button id="layer-buildings" class="forge-btn" onclick="forge.setEditingLayer('buildings')">🏗️ Buildings</button>
             <button id="layer-spawns" class="forge-btn" onclick="forge.setEditingLayer('spawns')">🚩 Spawns</button>
+            <button id="layer-objectives" class="forge-btn" onclick="forge.setEditingLayer('objectives')">🎯 Objectives</button>
           </div>
           <div class="forge-buttons" style="margin-top:5px;">
             <button id="vis-table" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('table')">👁️ Table</button>
@@ -1638,6 +1659,28 @@
           <div id="building-list" style="margin-top:8px;font-size:11px;max-height:100px;overflow-y:auto;"></div>
           <div class="forge-buttons" style="margin-top:8px;">
             <button class="forge-btn" onclick="forge.clearBuildings()">🗑️ Clear All</button>
+          </div>
+        </div>
+        
+        <div id="objectives-panel" class="forge-section" style="display:none;">
+          <h3>🎯 Objectives</h3>
+          <p style="font-size:11px;opacity:0.7;">Click to place objective zone. Right-click to remove.<br>Players must reach these to win in Adventure mode.</p>
+          
+          <h4 style="margin-top:8px;font-size:12px;">Zone Type</h4>
+          <div class="forge-buttons">
+            <button id="obj-reach" class="forge-btn active" onclick="forge.setObjectiveType('reach')">🏁 Reach</button>
+            <button id="obj-escape" class="forge-btn" onclick="forge.setObjectiveType('escape')">🚪 Escape</button>
+          </div>
+          
+          <h4 style="margin-top:8px;font-size:12px;">Zone Size</h4>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+            <input type="range" id="obj-radius" min="2" max="10" value="4" onchange="forge.setObjectiveRadius(this.value)" style="flex:1;">
+            <span id="obj-radius-display" style="font-size:11px;min-width:30px;">4</span>
+          </div>
+          
+          <div id="objective-list" style="margin-top:8px;font-size:12px;"></div>
+          <div class="forge-buttons" style="margin-top:8px;">
+            <button class="forge-btn" onclick="forge.clearObjectives()">🗑️ Clear All</button>
           </div>
         </div>
 
@@ -1751,8 +1794,7 @@
     console.log('🎨 Forge UI created');
   };
   
-  // Set current tool (terrain or resource)
-  // Set editing layer (table, terrain, resources)
+  // Set editing layer (table, terrain, resources, spawns, buildings, objectives)
   forge.setEditingLayer = function(layer) {
     this.state.editingLayer = layer;
     this.state.currentTool = layer === 'resources' ? 'resource' : layer;
@@ -1763,6 +1805,7 @@
     document.getElementById('layer-resources').classList.toggle('active', layer === 'resources');
     document.getElementById('layer-buildings').classList.toggle('active', layer === 'buildings');
     document.getElementById('layer-spawns').classList.toggle('active', layer === 'spawns');
+    document.getElementById('layer-objectives').classList.toggle('active', layer === 'objectives');
 
     // Show/hide panels
     document.getElementById('table-panel').style.display = layer === 'table' ? 'block' : 'none';
@@ -1770,12 +1813,16 @@
     document.getElementById('resource-panel').style.display = layer === 'resources' ? 'block' : 'none';
     document.getElementById('buildings-panel').style.display = layer === 'buildings' ? 'block' : 'none';
     document.getElementById('spawns-panel').style.display = layer === 'spawns' ? 'block' : 'none';
+    document.getElementById('objectives-panel').style.display = layer === 'objectives' ? 'block' : 'none';
 
     // Update chunk grid overlay visibility
     this.updateChunkGridOverlay(layer === 'table');
 
     // Show spawn markers when editing spawns
     this.updateSpawnMarkers();
+    
+    // Show objective markers when editing objectives
+    this.updateObjectiveMarkers();
 
     console.log(`📐 Editing layer: ${layer}`);
   };
@@ -2244,6 +2291,173 @@
     this.updateSpawnMarkers();
     this.updateSpawnList();
     console.log('🚩 All spawns cleared');
+  };
+  
+  // ========== OBJECTIVE ZONE MANAGEMENT ==========
+  // Objectives are zones that players must reach to win in Adventure mode
+  
+  forge._objectiveMarkers = [];
+  
+  // Set objective type
+  forge.setObjectiveType = function(type) {
+    this.state.currentObjectiveType = type;
+    
+    // Update button states
+    document.getElementById('obj-reach')?.classList.toggle('active', type === 'reach');
+    document.getElementById('obj-escape')?.classList.toggle('active', type === 'escape');
+    
+    console.log(`🎯 Objective type: ${type}`);
+  };
+  
+  // Set objective radius
+  forge.setObjectiveRadius = function(radius) {
+    this.state.currentObjectiveRadius = parseInt(radius, 10);
+    document.getElementById('obj-radius-display').textContent = radius;
+    console.log(`🎯 Objective radius: ${radius}`);
+  };
+  
+  // Place an objective zone at position
+  forge.placeObjective = function(pos) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Check if there's already an objective at this position
+    const existing = this.state.objectives.findIndex(o => 
+      Math.abs(o.x - pos.x) <= this.state.currentObjectiveRadius && 
+      Math.abs(o.y - pos.y) <= this.state.currentObjectiveRadius
+    );
+    
+    if (existing >= 0) {
+      console.log('🎯 Objective already exists at this location');
+      return;
+    }
+    
+    // Create new objective
+    const objective = {
+      x: pos.x,
+      y: pos.y,
+      radius: this.state.currentObjectiveRadius,
+      type: this.state.currentObjectiveType,
+      id: this.state.objectives.length
+    };
+    
+    this.state.objectives.push(objective);
+    this.updateObjectiveMarkers();
+    this.updateObjectiveList();
+    
+    console.log(`🎯 Placed ${objective.type} objective at (${pos.x}, ${pos.y}) radius ${objective.radius}`);
+  };
+  
+  // Remove objective at position
+  forge.removeObjective = function(pos) {
+    const index = this.state.objectives.findIndex(o =>
+      Math.abs(o.x - pos.x) <= o.radius + 2 && 
+      Math.abs(o.y - pos.y) <= o.radius + 2
+    );
+    
+    if (index >= 0) {
+      this.state.objectives.splice(index, 1);
+      // Reassign IDs
+      this.state.objectives.forEach((o, i) => o.id = i);
+      this.updateObjectiveMarkers();
+      this.updateObjectiveList();
+      console.log('🎯 Removed objective');
+    }
+  };
+  
+  // Clear all objectives
+  forge.clearObjectives = function() {
+    this.state.objectives = [];
+    this.updateObjectiveMarkers();
+    this.updateObjectiveList();
+    console.log('🎯 All objectives cleared');
+  };
+  
+  // Update objective markers visualization
+  forge.updateObjectiveMarkers = function() {
+    const scene = forge.scene;
+    if (!scene) return;
+    
+    // Remove old markers
+    this._objectiveMarkers.forEach(m => m.dispose());
+    this._objectiveMarkers = [];
+    
+    const TILE_SIZE = window.TILE_SIZE || 1;
+    
+    // Create markers for each objective
+    this.state.objectives.forEach((obj, i) => {
+      // Create a cylinder to represent the zone
+      const cylinder = BABYLON.MeshBuilder.CreateCylinder(
+        `objective_${i}`,
+        { 
+          diameter: obj.radius * 2 * TILE_SIZE, 
+          height: 0.5, 
+          tessellation: 32 
+        },
+        scene
+      );
+      
+      // Position at world coordinates
+      const worldX = obj.x * TILE_SIZE + 0.5 * TILE_SIZE;
+      const worldZ = obj.y * TILE_SIZE + 0.5 * TILE_SIZE;
+      cylinder.position = new BABYLON.Vector3(worldX, 1, worldZ);
+      
+      // Material - green for reach, blue for escape
+      const mat = new BABYLON.StandardMaterial(`objective_mat_${i}`, scene);
+      if (obj.type === 'escape') {
+        mat.diffuseColor = new BABYLON.Color3(0.2, 0.4, 1);
+        mat.emissiveColor = new BABYLON.Color3(0.1, 0.2, 0.5);
+      } else {
+        mat.diffuseColor = new BABYLON.Color3(0.2, 1, 0.4);
+        mat.emissiveColor = new BABYLON.Color3(0.1, 0.5, 0.2);
+      }
+      mat.alpha = 0.5;
+      cylinder.material = mat;
+      
+      // Add a flag/pole in the center
+      const pole = BABYLON.MeshBuilder.CreateCylinder(
+        `objective_pole_${i}`,
+        { diameter: 0.2, height: 3, tessellation: 8 },
+        scene
+      );
+      pole.position = new BABYLON.Vector3(worldX, 1.5, worldZ);
+      const poleMat = new BABYLON.StandardMaterial(`pole_mat_${i}`, scene);
+      poleMat.diffuseColor = new BABYLON.Color3(0.4, 0.3, 0.2);
+      pole.material = poleMat;
+      
+      // Add a flag
+      const flag = BABYLON.MeshBuilder.CreatePlane(
+        `objective_flag_${i}`,
+        { width: 1.5, height: 1 },
+        scene
+      );
+      flag.position = new BABYLON.Vector3(worldX + 0.75, 2.5, worldZ);
+      const flagMat = new BABYLON.StandardMaterial(`flag_mat_${i}`, scene);
+      flagMat.diffuseColor = obj.type === 'escape' 
+        ? new BABYLON.Color3(0.3, 0.5, 1) 
+        : new BABYLON.Color3(0.3, 1, 0.5);
+      flagMat.emissiveColor = flagMat.diffuseColor.scale(0.5);
+      flagMat.backFaceCulling = false;
+      flag.material = flagMat;
+      
+      this._objectiveMarkers.push(cylinder, pole, flag);
+    });
+  };
+  
+  // Update objective list in UI
+  forge.updateObjectiveList = function() {
+    const list = document.getElementById('objective-list');
+    if (!list) return;
+    
+    if (this.state.objectives.length === 0) {
+      list.innerHTML = '<span style="opacity:0.5;">No objectives</span>';
+      return;
+    }
+    
+    list.innerHTML = this.state.objectives.map((obj, i) => {
+      const icon = obj.type === 'escape' ? '🚪' : '🏁';
+      return `<div>${icon} ${i + 1}: (${obj.x}, ${obj.y}) r=${obj.radius}</div>`;
+    }).join('');
   };
   
   // ========== BUILDING PLACEMENT ==========

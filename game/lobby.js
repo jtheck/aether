@@ -405,9 +405,12 @@ const Lobby = {
     // Parse spawn points from custom map if available
     let spawnPositions;
     if (customMapData && customMapData.sp) {
-      // Parse spawn points from map format: "x,y,team;x,y,team;..."
-      const parsedSpawns = customMapData.sp.split(';').map(s => {
-        const [x, y, team] = s.split(',').map(Number);
+      // Parse spawn points from map format: "x,y,team;x,y,team;..." or "x,y;x,y;..." (legacy)
+      const parsedSpawns = customMapData.sp.split(';').map((s, index) => {
+        const parts = s.split(',').map(Number);
+        const x = parts[0];
+        const y = parts[1];
+        const team = parts.length > 2 && !isNaN(parts[2]) ? parts[2] : index;  // Fallback to index for legacy format
         return { x, y, team };
       });
       // Sort by spawn index to maintain placement order
@@ -914,10 +917,37 @@ const Lobby = {
       }
     }, 3100); // Slightly after the 3s search window
     
-    // For adventure mode, skip network initialization (supports offline play)
-    // Only initialize network if user explicitly wants multiplayer
+    // For adventure mode, use the standard lobby discovery but with custom UI
     if (gameType === 'adventure') {
-      console.log('🔌 Adventure mode - network initialization skipped (offline-first)');
+      console.log('🔌 Adventure mode - initializing chapter select and lobby search');
+      // Set up chapter select handler
+      this.initAdventureChapterSelect();
+      
+      // Use standard lobby discovery (same as 1v1, teams, etc.)
+      // Initialize network if needed
+      if (!window.net || !window.net.initialized) {
+        const isLocalhost = window.location.hostname === 'localhost' || 
+                           window.location.hostname === '127.0.0.1';
+        window.net = window.net || {};
+        if (window.net.init) {
+          window.net.init({ 
+            gameType: 'adventure',
+            devMode: isLocalhost,
+            lobbyBrowserMode: true,
+            broadcastChannel: 'adventure-lobby-browser'
+          });
+        }
+      }
+      
+      // Wait for channel then start discovery
+      this.waitForBroadcastChannel('adventure-lobby-browser', 5000).then(() => {
+        console.log('📡 Connected to adventure-lobby-browser channel');
+        this.startLobbyDiscovery('adventure');
+        this.flushPendingBroadcasts();
+      }).catch(err => {
+        console.error('Failed to join adventure lobby browser:', err);
+      });
+      
       return;
     }
     
@@ -1269,6 +1299,10 @@ const Lobby = {
         // console.log(`✅ Found lobby: ${actualMessage.lobby.name}`);
         this.updateAvailableLobbies(gameType, actualMessage.lobby);
         this.updateLobbyBrowserUI(gameType);
+        // Also update adventure inline list if applicable
+        if (gameType === 'adventure') {
+          this.updateAdventureLobbyList();
+        }
         
         // If this is the lobby we're currently in, update our local copy and UI
         if (actualMessage.lobby.id === this.currentLobbyId) {
@@ -1557,6 +1591,9 @@ const Lobby = {
   
   // Update lobby browser UI (shows list of lobbies)
   updateLobbyBrowserUI: function(gameType) {
+    // Adventure mode has its own custom UI - don't overwrite it
+    if (gameType === 'adventure') return;
+    
     const lobbyId = `${gameType}_lobby`;
     const lobbyElement = document.getElementById(lobbyId);
     
@@ -1656,6 +1693,14 @@ const Lobby = {
     const oldLobbyButton = lobbyElement.querySelector('.lobby_b');
     if (oldLobbyButton) oldLobbyButton.style.display = 'none';
     
+    // For adventure mode: hide chapter view and hosting view, show room instead
+    if (gameType === 'adventure') {
+      const chapterView = document.getElementById('adventure_chapter_view');
+      const hostingView = document.getElementById('adventure_hosting_view');
+      if (chapterView) chapterView.style.display = 'none';
+      if (hostingView) hostingView.style.display = 'none';
+    }
+    
     let html = `
       <div class="lobby_room_header">
         <h3>${lobby.name}</h3>
@@ -1673,30 +1718,35 @@ const Lobby = {
       });
       const minPlayers = gameType === 'adventure' ? 1 : 2;
       
-      // Count enabled AI slots
+      // Count enabled AI slots (adventure is co-op vs environment, no AI opponents needed)
       const aiSlots = lobby.settings.aiSlots || [];
       const aiCount = aiSlots.filter(slot => slot).length;
       
-      // Require at least one AI opponent when solo (totalPlayers < 2) for adventure/1v1/teams
-      const requiresAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone' || gameType === 'teams');
+      // Require at least one AI opponent when solo (totalPlayers < 2) for 1v1/teams, but NOT adventure
+      const requiresAI = totalPlayers < 2 && (gameType === 'onevsone' || gameType === 'teams');
       const hasRequiredAI = !requiresAI || aiCount > 0;
       
-      // Special case: solo Adventure/1v1/Teams with AI doesn't need to wait for players
-      const isSoloWithAI = totalPlayers < 2 && (gameType === 'adventure' || gameType === 'onevsone' || gameType === 'teams') && aiCount > 0;
-      const canStart = (isSoloWithAI || (totalPlayers >= minPlayers && allConnected && allReady)) && hasRequiredAI;
+      // Special case: solo 1v1/Teams with AI doesn't need to wait for players
+      // Adventure can always start solo (it's co-op vs environment)
+      const isSoloWithAI = totalPlayers < 2 && (gameType === 'onevsone' || gameType === 'teams') && aiCount > 0;
+      const isAdventureSolo = gameType === 'adventure' && totalPlayers >= 1;
+      // Adventure can start with any number of players (solo = 1, co-op = 2+)
+      // Other game types need either AI or enough players who are ready
+      const canStart = isAdventureSolo || isSoloWithAI || ((totalPlayers >= minPlayers && allConnected && allReady) && hasRequiredAI);
       
       let startBtnText = 'Game Start';
       let startBtnOnClick = `window.Lobby.startMatchFromLobby('${gameType}')`;
       
-      if (gameType === 'adventure' && totalPlayers < 2) {
-        if (aiCount > 0) {
-          startBtnText = `Launch with ${aiCount} AI`;
-          // Use startAdventureSkirmish for solo offline play
-          const fieldSize = lobby.settings.fieldSize || 'medium';
-          const mapSeed = lobby.settings.seed || Math.floor(Math.random() * 1000000);
-          startBtnOnClick = `window.Lobby.startAdventureSkirmish('${fieldSize}', ${mapSeed}, {aiCount: ${aiCount}})`;
+      // Adventure mode - always use startMatchFromLobby which will load the chapter
+      if (gameType === 'adventure') {
+        if (totalPlayers === 1) {
+          startBtnText = '🎮 Start Solo';
+        } else if (!allConnected) {
+          startBtnText = 'Waiting for Connections...';
+        } else if (!allReady) {
+          startBtnText = 'Waiting for Ready...';
         } else {
-          startBtnText = 'Add AI Opponent to Start';
+          startBtnText = `🚀 Start Co-op (${totalPlayers} players)`;
         }
       } else if (gameType === 'onevsone' && totalPlayers < 2) {
         if (aiCount > 0) {
@@ -1730,49 +1780,96 @@ const Lobby = {
       <div class="lobby_players_title">Players (${totalPlayers}/${lobby.maxPlayers})</div>
       <div class="lobby_players">`;
     
-    // Show local player
+    // Get local player info
     const myName = window.currentPlayerName || window.player?.name || 'You';
     const myColor = window.currentPlayerColor || window.player?.color || '#ffffff';
     const myId = window.net ? window.net.getStatus().localPlayerId : null;
     const myReadyState = myId ? this.playerReadyStates[myId] : false;
     
+    // Get host info from lobby
+    const hostId = lobby.host || lobby.hostId;
+    const hostName = lobby.hostName || 'Host';
+    const hostColor = lobby.hostColor || '#ffffff';
+    
     // Check if we're connected to host (for non-hosts)
     const isConnectedToHost = !this.isHost && this.connectedPlayers.length > 0 && 
                                this.connectedPlayers.some(p => this.playerConnectionStates[p.id || p] === 'connected');
     
-    html += `
-      <div class="lobby_player lobby_player_local">
-        <span class="player_icon" style="color: ${myColor};">👤</span>
-        <span class="player_name" style="color: ${myColor};">${myName}${this.isHost ? ' (Host)' : ''}</span>
-        ${!this.isHost 
-          ? `<label class="ready_checkbox" ${!isConnectedToHost ? 'title="Connecting to host..."' : ''}>
-               <input type="checkbox" 
-                      ${myReadyState ? 'checked' : ''} 
-                      ${!isConnectedToHost ? 'disabled' : ''} 
-                      onchange="window.Lobby.toggleReady(this.checked)"> 
-               ${isConnectedToHost ? 'Ready' : 'Connecting...'}
-             </label>` 
-          : '<span class="host_badge">HOST</span>'}
-      </div>`;
-    
-    // Show connected players
-    this.connectedPlayers.forEach((player, index) => {
-      const playerId = player.id || player; // Support both {id, name} objects and plain peer IDs
-      const playerName = player.name || `Player ${playerId.slice(-4)}`;
-      const playerColor = player.color || '#ffffff';
-      const isReady = this.playerReadyStates[playerId];
-      const connectionState = this.playerConnectionStates[playerId] || 'connecting';
-      const connectionIcon = connectionState === 'connected' ? '🟢' : (connectionState === 'connecting' ? '🟡' : '🔴');
+    if (this.isHost) {
+      // HOST VIEW: Show self first with HOST badge
+      html += `
+        <div class="lobby_player lobby_player_local">
+          <span class="player_icon" style="color: ${myColor};">👑</span>
+          <span class="player_name" style="color: ${myColor};">${myName} (Host)</span>
+          <span class="host_badge">HOST</span>
+        </div>`;
+      
+      // Then show connected players with ready status
+      this.connectedPlayers.forEach((player, index) => {
+        const playerId = player.id || player;
+        const playerName = player.name || `Player ${playerId.slice(-4)}`;
+        const playerColor = player.color || '#ffffff';
+        const isReady = this.playerReadyStates[playerId];
+        const connectionState = this.playerConnectionStates[playerId] || 'connecting';
+        const connectionIcon = connectionState === 'connected' ? '🟢' : (connectionState === 'connecting' ? '🟡' : '🔴');
+        html += `
+          <div class="lobby_player">
+            <span class="player_icon" style="color: ${playerColor};">${connectionIcon} 👤</span>
+            <span class="player_name" style="color: ${playerColor};">${playerName}</span>
+            <span class="ready_status ${isReady ? 'ready' : 'not-ready'}">${isReady ? '✓ Ready' : (connectionState === 'connected' ? 'Not Ready' : 'Connecting...')}</span>
+          </div>`;
+      });
+    } else {
+      // JOINER VIEW: Show host first, then self, then others
+      
+      // 1. Show the host at the top
+      const hostConnectionState = this.playerConnectionStates[hostId] || 'connecting';
+      const hostConnectionIcon = hostConnectionState === 'connected' ? '🟢' : (hostConnectionState === 'connecting' ? '🟡' : '🔴');
       html += `
         <div class="lobby_player">
-          <span class="player_icon" style="color: ${playerColor};">${connectionIcon} 👤</span>
-          <span class="player_name" style="color: ${playerColor};">${playerName}</span>
-          <span class="ready_status ${isReady ? 'ready' : 'not-ready'}">${isReady ? '✓ Ready' : (connectionState === 'connected' ? 'Not Ready' : 'Connecting...')}</span>
+          <span class="player_icon" style="color: ${hostColor};">${hostConnectionIcon} 👑</span>
+          <span class="player_name" style="color: ${hostColor};">${hostName} (Host)</span>
+          <span class="host_badge">HOST</span>
         </div>`;
-    });
+      
+      // 2. Show self with ready checkbox
+      html += `
+        <div class="lobby_player lobby_player_local">
+          <span class="player_icon" style="color: ${myColor};">👤</span>
+          <span class="player_name" style="color: ${myColor};">${myName}</span>
+          <label class="ready_checkbox" ${!isConnectedToHost ? 'title="Connecting to host..."' : ''}>
+            <input type="checkbox" 
+                   ${myReadyState ? 'checked' : ''} 
+                   ${!isConnectedToHost ? 'disabled' : ''} 
+                   onchange="window.Lobby.toggleReady(this.checked)"> 
+            ${isConnectedToHost ? 'Ready' : 'Connecting...'}
+          </label>
+        </div>`;
+      
+      // 3. Show other connected players (excluding host - already shown)
+      this.connectedPlayers.forEach((player, index) => {
+        const playerId = player.id || player;
+        // Skip the host - already shown
+        if (playerId === hostId || this.normalizePeerId(playerId) === this.normalizePeerId(hostId)) {
+          return;
+        }
+        const playerName = player.name || `Player ${playerId.slice(-4)}`;
+        const playerColor = player.color || '#ffffff';
+        const isReady = this.playerReadyStates[playerId];
+        const connectionState = this.playerConnectionStates[playerId] || 'connecting';
+        const connectionIcon = connectionState === 'connected' ? '🟢' : (connectionState === 'connecting' ? '🟡' : '🔴');
+        html += `
+          <div class="lobby_player">
+            <span class="player_icon" style="color: ${playerColor};">${connectionIcon} 👤</span>
+            <span class="player_name" style="color: ${playerColor};">${playerName}</span>
+            <span class="ready_status ${isReady ? 'ready' : 'not-ready'}">${isReady ? '✓ Ready' : (connectionState === 'connected' ? 'Not Ready' : 'Connecting...')}</span>
+          </div>`;
+      });
+    }
     
     // Show empty slots (with AI options for compatible game types)
-    const supportsAI = ['adventure', 'onevsone', 'teams'].includes(gameType);
+    // Adventure is co-op vs environment - no AI opponents needed
+    const supportsAI = ['onevsone', 'teams'].includes(gameType);
     const aiSlots = lobby.settings.aiSlots || [];
     
     for (let i = totalPlayers; i < lobby.maxPlayers; i++) {
@@ -1811,53 +1908,72 @@ const Lobby = {
     
     html += '</div>';
     
-    html += `
-      <div class="lobby_room_settings">
-        <div class="lobby_setting">
-          <label>Field Size:</label>
-          ${this.isHost ? 
-            `<select id="fieldSizeSelect" onchange="window.Lobby.updateLobbySetting('fieldSize', this.value)">
-              <option value="tiny" ${lobby.settings.fieldSize === 'tiny' ? 'selected' : ''}>Tiny</option>
-              <option value="small" ${lobby.settings.fieldSize === 'small' ? 'selected' : ''}>Small</option>
-              <option value="medium" ${lobby.settings.fieldSize === 'medium' ? 'selected' : ''}>Medium</option>
-              <option value="large" ${lobby.settings.fieldSize === 'large' ? 'selected' : ''}>Large</option>
-              <option value="huge" ${lobby.settings.fieldSize === 'huge' ? 'selected' : ''}>Huge</option>
-            </select>` :
-            `<span>${lobby.settings.fieldSize}</span>`
-          }
+    // Settings section - Adventure just shows chapter name, other modes show full settings
+    if (gameType === 'adventure') {
+      // Adventure mode - just show the chapter name
+      html += `
+        <div class="lobby_room_settings">
+          <div class="lobby_setting">
+            <label>📜 Chapter:</label>
+            <span style="color: #8f8;">${lobby.settings.chapterName || 'Unknown Chapter'}</span>
+          </div>
         </div>
-        <div class="lobby_setting">
-          <label>Seed:</label>
-          ${this.isHost ?
-            `<input type="number" id="seedInput" value="${lobby.settings.seed}" onchange="window.Lobby.updateLobbySetting('seed', this.value)" style="width: 100px;">` :
-            `<span>#${lobby.settings.seed}</span>`
-          }
-        </div>
-        <div class="lobby_setting" style="margin-top: 8px;">
-          <label>Map:</label>
-          ${this.isHost ? `
-            ${lobby.settings.customMapData ? `
-              <span style="color: #8f8; margin-right: 8px;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>
-              <button onclick="window.Lobby.clearCustomMap()" style="font-size: 11px; padding: 2px 8px;">✕ Clear</button>
-            ` : `
-              <button onclick="window.Lobby.showMapBrowser()" style="font-size: 12px; padding: 4px 10px;">🗺️ Browse Maps</button>
-              <input type="file" id="customMapInput" accept=".garden,.json" style="display:none" onchange="window.Lobby.handleCustomMapUpload(this.files[0])">
-              <button onclick="document.getElementById('customMapInput').click()" style="font-size: 12px; padding: 4px 10px; margin-left: 4px;">📂 Load File</button>
-            `}
-          ` : `
-            ${lobby.settings.customMapData ? 
-              `<span style="color: #8f8;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>` : 
-              `<span style="opacity: 0.6;">Random</span>`
+      `;
+    } else {
+      // Other game types - full settings
+      html += `
+        <div class="lobby_room_settings">
+          <div class="lobby_setting">
+            <label>Field Size:</label>
+            ${this.isHost ? 
+              `<select id="fieldSizeSelect" onchange="window.Lobby.updateLobbySetting('fieldSize', this.value)">
+                <option value="tiny" ${lobby.settings.fieldSize === 'tiny' ? 'selected' : ''}>Tiny</option>
+                <option value="small" ${lobby.settings.fieldSize === 'small' ? 'selected' : ''}>Small</option>
+                <option value="medium" ${lobby.settings.fieldSize === 'medium' ? 'selected' : ''}>Medium</option>
+                <option value="large" ${lobby.settings.fieldSize === 'large' ? 'selected' : ''}>Large</option>
+                <option value="huge" ${lobby.settings.fieldSize === 'huge' ? 'selected' : ''}>Huge</option>
+              </select>` :
+              `<span>${lobby.settings.fieldSize}</span>`
             }
-          `}
+          </div>
+          <div class="lobby_setting">
+            <label>Seed:</label>
+            ${this.isHost ?
+              `<input type="number" id="seedInput" value="${lobby.settings.seed}" onchange="window.Lobby.updateLobbySetting('seed', this.value)" style="width: 100px;">` :
+              `<span>#${lobby.settings.seed}</span>`
+            }
+          </div>
+          <div class="lobby_setting" style="margin-top: 8px;">
+            <label>Map:</label>
+            ${this.isHost ? `
+              ${lobby.settings.customMapData ? `
+                <span style="color: #8f8; margin-right: 8px;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>
+                <button onclick="window.Lobby.clearCustomMap()" style="font-size: 11px; padding: 2px 8px;">✕ Clear</button>
+              ` : `
+                <button onclick="window.Lobby.showMapBrowser()" style="font-size: 12px; padding: 4px 10px;">🗺️ Browse Maps</button>
+                <input type="file" id="customMapInput" accept=".garden,.json" style="display:none" onchange="window.Lobby.handleCustomMapUpload(this.files[0])">
+                <button onclick="document.getElementById('customMapInput').click()" style="font-size: 12px; padding: 4px 10px; margin-left: 4px;">📂 Load File</button>
+              `}
+            ` : `
+              ${lobby.settings.customMapData ? 
+                `<span style="color: #8f8;">🗺️ ${lobby.settings.customMapName || 'Custom'}</span>` : 
+                `<span style="opacity: 0.6;">Random</span>`
+              }
+            `}
+          </div>
         </div>
-      </div>
-    `;
+      `;
+    }
     
     // Add back button at the bottom
     html += `<button class="leave_lobby_btn" onclick="window.Lobby.leaveLobbyAndReturnToBrowser('${gameType}')">← Back</button>`;
     
     roomContainer.innerHTML = html;
+    
+    // Scroll lobby element to top so players see the room properly
+    if (lobbyElement) {
+      lobbyElement.scrollTop = 0;
+    }
   },
   
   // Toggle AI slot for a specific player slot
@@ -2053,6 +2169,15 @@ const Lobby = {
       // Restore old lobby_b button visibility
       const oldLobbyButton = lobbyElement.querySelector('.lobby_b');
       if (oldLobbyButton) oldLobbyButton.style.display = '';
+      
+      // For adventure mode, restore the chapter view
+      if (gameType === 'adventure') {
+        const chapterView = document.getElementById('adventure_chapter_view');
+        const hostingView = document.getElementById('adventure_hosting_view');
+        if (chapterView) chapterView.style.display = 'block';
+        if (hostingView) hostingView.style.display = 'none';
+        return; // Adventure uses chapter view, not browser
+      }
       
       // Check if browser container exists
       let browserContainer = lobbyElement.querySelector('.lobby_browser');
@@ -2488,12 +2613,84 @@ const Lobby = {
       console.log(`🌅 Applied map time of day: ${mapData.tod}`);
     }
     
+    // Mark erased auto-resources as depleted (so they won't be auto-generated)
+    if (isV2 && mapData.er && window.markResourceTileDepleted) {
+      const erasedKeys = mapData.er.split(';');
+      for (const key of erasedKeys) {
+        const [x, z] = key.split(',').map(Number);
+        if (!isNaN(x) && !isNaN(z)) {
+          window.markResourceTileDepleted(x, z);
+        }
+      }
+      console.log(`🗑️ Marked ${erasedKeys.length} erased resource tiles`);
+    }
+    
+    // Place manually added resources from forge
+    if (isV2 && mapData.r && window.placeManualResource) {
+      const resources = mapData.r.split(';');
+      for (const res of resources) {
+        const [key, type] = res.split(':');
+        const [x, z] = key.split(',').map(Number);
+        if (!isNaN(x) && !isNaN(z) && type) {
+          window.placeManualResource(x, z, type);
+        }
+      }
+      console.log(`🌲 Placed ${resources.length} manual resources`);
+    }
+    
+    // Place pre-placed buildings from forge (excluding agoras which are handled by spawn system)
+    if (isV2 && mapData.bld && window.placeBuilding && window.gfx && window.gfx.scene) {
+      const buildings = mapData.bld.split(';');
+      let placedCount = 0;
+      for (const bld of buildings) {
+        const parts = bld.split(',');
+        const x = Number(parts[0]);
+        const z = Number(parts[1]);
+        const type = parts[2];
+        const rotation = Number(parts[3]) || 0;
+        
+        // Skip agoras - they're placed by the spawn system
+        if (type === 'agora') continue;
+        
+        if (!isNaN(x) && !isNaN(z) && type) {
+          const building = window.placeBuilding(type, x, z, window.gfx.scene, {
+            rotation: rotation,
+            buildProgress: 1.0,  // Pre-placed buildings start complete
+            isNeutral: true      // Mark as neutral (not owned by player)
+          });
+          if (building) placedCount++;
+        }
+      }
+      if (placedCount > 0) {
+        console.log(`🏗️ Placed ${placedCount} pre-placed buildings`);
+      }
+    }
+    
+    // Store objectives for adventure mode victory checking
+    if (isV2 && mapData.obj) {
+      const objectives = mapData.obj.split(';').map((o, i) => {
+        const parts = o.split(',');
+        return {
+          x: Number(parts[0]),
+          y: Number(parts[1]),
+          radius: Number(parts[2]) || 4,
+          type: parts[3] || 'reach',
+          id: i,
+          completed: false
+        };
+      });
+      window.adventureObjectives = objectives;
+      console.log(`🎯 Loaded ${objectives.length} objectives for adventure mode`);
+    } else {
+      window.adventureObjectives = [];
+    }
+    
     console.log(`✅ Custom map applied (${width}x${height})${hasCustomShape ? ' with custom table shape' : ''}`);
     return true;
   },
   
   // Start match from lobby (host only)
-  startMatchFromLobby: function(gameType) {
+  startMatchFromLobby: async function(gameType) {
     if (!this.isHost) {
       console.warn('⚠️ Only host can start the match!');
       return;
@@ -2528,6 +2725,25 @@ const Lobby = {
       return;
     }
     
+    // Adventure mode: load chapter map before starting
+    if (actualGameType === 'adventure' && lobby.settings.chapterFile) {
+      console.log(`📜 Loading adventure chapter: ${lobby.settings.chapterName}`);
+      try {
+        const response = await fetch(lobby.settings.chapterFile);
+        if (!response.ok) throw new Error(`Failed to load chapter: ${response.status}`);
+        const mapData = await response.json();
+        
+        // Store the loaded map data in settings for the match
+        lobby.settings.customMapData = mapData;
+        lobby.settings.customMapName = lobby.settings.chapterName;
+        console.log(`✅ Chapter loaded: ${mapData.n || lobby.settings.chapterName}`);
+      } catch (error) {
+        console.error('❌ Failed to load chapter:', error);
+        this.showNotification('Failed to load chapter map!', 'error');
+        return;
+      }
+    }
+    
     // console.log('🚀 Host initiating match start...');
     
     // Send start game message to all peers via WebRTC
@@ -2548,13 +2764,29 @@ const Lobby = {
   },
   
   // Start multiplayer match with specific settings
-  startMultiplayerMatchWithSettings: function(gameType, settings) {
+  startMultiplayerMatchWithSettings: async function(gameType, settings) {
     const config = this.gameTypes[gameType];
     const fieldSize = settings.fieldSize || config.defaultFieldSize;
     
     // console.log(`🎮 Starting ${config.name} match with settings:`, settings);
     // console.log(`🌱 Map seed: ${settings.seed}`);
     // console.log(`🗺️ Field size: ${fieldSize}`);
+    
+    // For adventure mode, joiners need to load the chapter file if not already loaded
+    if (gameType === 'adventure' && settings.chapterFile && !settings.customMapData) {
+      console.log(`📜 Joiner loading adventure chapter: ${settings.chapterName}`);
+      try {
+        const response = await fetch(settings.chapterFile);
+        if (!response.ok) throw new Error(`Failed to load chapter: ${response.status}`);
+        settings.customMapData = await response.json();
+        settings.customMapName = settings.chapterName;
+        console.log(`✅ Chapter loaded by joiner: ${settings.customMapData.n || settings.chapterName}`);
+      } catch (error) {
+        console.error('❌ Joiner failed to load chapter:', error);
+        this.showNotification('Failed to load chapter map!', 'error');
+        return;
+      }
+    }
     
     // Set seed before initializing game for deterministic map generation
     if (settings.seed) {
@@ -2737,6 +2969,634 @@ const Lobby = {
     }
   },
 
+  // Adventure chapter metadata
+  adventureChapters: {
+    chapter1: { file: 'maps/adventure/chapter1.garden', name: 'Chapter 1 - The Beginning' },
+    chapter2: { file: 'maps/adventure/chapter2.garden', name: 'Chapter 2 - Into the Wild' }
+  },
+  
+  // Chapter info cache
+  _chapterInfoCache: {},
+  
+  // Initialize chapter select UI
+  initAdventureChapterSelect: function() {
+    const select = document.getElementById('adventure_chapter_select');
+    if (!select) return;
+    
+    // Load chapter info on change
+    select.addEventListener('change', () => {
+      this.loadChapterInfo(select.value);
+    });
+    
+    // Load initial chapter info
+    this.loadChapterInfo(select.value);
+  },
+  
+  // Load and display chapter info
+  loadChapterInfo: async function(chapterId) {
+    const infoDiv = document.getElementById('adventure_chapter_info');
+    if (!infoDiv) return;
+    
+    const chapterMeta = this.adventureChapters[chapterId];
+    if (!chapterMeta) {
+      infoDiv.innerHTML = '<div style="opacity: 0.7;">Unknown chapter</div>';
+      return;
+    }
+    
+    // Check cache first
+    if (this._chapterInfoCache[chapterId]) {
+      this.displayChapterInfo(this._chapterInfoCache[chapterId]);
+      return;
+    }
+    
+    infoDiv.innerHTML = '<div style="opacity: 0.7;">Loading...</div>';
+    
+    try {
+      const response = await fetch(chapterMeta.file);
+      if (!response.ok) throw new Error('Failed to load');
+      
+      const mapData = JSON.parse(await response.text());
+      this._chapterInfoCache[chapterId] = mapData;
+      this.displayChapterInfo(mapData);
+    } catch (e) {
+      infoDiv.innerHTML = '<div style="opacity: 0.7; color: #f88;">Failed to load chapter info</div>';
+    }
+  },
+  
+  // Display chapter info in UI
+  displayChapterInfo: function(mapData) {
+    const infoDiv = document.getElementById('adventure_chapter_info');
+    if (!infoDiv) return;
+    
+    const name = mapData.n || mapData.name || 'Unknown';
+    const desc = mapData.desc || mapData.description || '';
+    const lore = mapData.lore || '';
+    const size = `${mapData.w || mapData.width}x${mapData.h || mapData.height}`;
+    
+    infoDiv.innerHTML = `
+      <div style="font-weight: bold; margin-bottom: 5px;">${name}</div>
+      <div style="font-size: 12px; opacity: 0.8; margin-bottom: 5px;">${desc}</div>
+      ${lore ? `<div style="font-size: 11px; font-style: italic; opacity: 0.6;">"${lore}"</div>` : ''}
+      <div style="font-size: 11px; margin-top: 5px; opacity: 0.5;">Map: ${size}</div>
+    `;
+  },
+  
+  // Start adventure from chapter selection
+  startAdventureChapter: async function() {
+    const select = document.getElementById('adventure_chapter_select');
+    const chapterId = select ? select.value : 'chapter1';
+    const chapterInfo = this.adventureChapters[chapterId];
+    
+    if (!chapterInfo) {
+      console.error('Unknown chapter:', chapterId);
+      return;
+    }
+    
+    console.log(`🗺️ Loading adventure chapter: ${chapterInfo.name}`);
+    
+    try {
+      // Fetch the chapter map file
+      const response = await fetch(chapterInfo.file);
+      if (!response.ok) throw new Error(`Failed to load ${chapterInfo.file}`);
+      
+      const mapData = JSON.parse(await response.text());
+      console.log('📦 Chapter map loaded:', mapData.n || chapterId);
+      
+      // Start adventure with the custom map
+      this.startAdventureWithMap(mapData);
+      
+    } catch (e) {
+      console.error('Failed to load chapter:', e);
+      alert('Failed to load chapter. Please try again.');
+    }
+  },
+  
+  // ==========================================
+  // ADVENTURE MULTIPLAYER FUNCTIONS
+  // ==========================================
+  
+  // Stop adventure lobby search (called when leaving adventure menu)
+  stopAdventureSearch: function() {
+    if (this._adventureSearchInterval) {
+      clearInterval(this._adventureSearchInterval);
+      this._adventureSearchInterval = null;
+    }
+  },
+  
+  // Search for adventure lobbies
+  searchAdventureLobbies: async function() {
+    const listDiv = document.getElementById('adventure_lobby_list');
+    if (!listDiv) return;
+    
+    listDiv.innerHTML = '<div style="opacity: 0.6; text-align: center; padding: 20px;">🔍 Searching for lobbies...</div>';
+    
+    // Initialize network if needed
+    if (!window.net || !window.net.initialized) {
+      if (window.net && window.net.init) {
+        window.net.init({ 
+          gameType: 'adventure',
+          lobbyBrowserMode: true,
+          broadcastChannel: 'adventure-lobby-browser'
+        });
+        // Wait for network to initialize
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    // Join the broadcast channel (critical for receiving announcements!)
+    const channelName = 'adventure-lobby-browser';
+    await this.waitForBroadcastChannel(channelName);
+    
+    // Request lobby list
+    this.currentGameType = 'adventure';
+    this.availableLobbies['adventure'] = this.availableLobbies['adventure'] || [];
+    
+    // Set up broadcast listener for adventure lobbies
+    const self = this;
+    const originalHandler = window.net?.onBroadcast;
+    
+    window.net.onBroadcast = (data) => {
+      // Unwrap GetFire P2P's broadcast envelope (same as startLobbyDiscovery)
+      let actualMessage = data;
+      if (data.type === 'broadcast' && data.content) {
+        actualMessage = data.content;
+      }
+      
+      // Handle lobby announcements
+      if (actualMessage.type === 'lobby_announcement' && actualMessage.gameType === 'adventure') {
+        console.log('📡 Received adventure lobby announcement:', actualMessage.lobby?.name);
+        const existingIndex = self.availableLobbies['adventure'].findIndex(l => l.id === actualMessage.lobby.id);
+        if (existingIndex >= 0) {
+          self.availableLobbies['adventure'][existingIndex] = actualMessage.lobby;
+        } else {
+          self.availableLobbies['adventure'].push(actualMessage.lobby);
+        }
+        self.updateAdventureLobbyList();
+      }
+      
+      // Handle lobby list requests - respond if we're hosting
+      if (actualMessage.type === 'lobby_list_request' && actualMessage.gameType === 'adventure') {
+        if (self.isHost && self.currentLobbyId && self.currentGameType === 'adventure' && self.currentLobby) {
+          console.log('📡 Responding to adventure lobby request');
+          setTimeout(() => {
+            self.announceLobby(self.currentLobby);
+          }, Math.random() * 200);
+        }
+      }
+      
+      // Chain to original handler
+      if (originalHandler) {
+        originalHandler(data);
+      }
+    };
+    
+    // Send lobby discovery request
+    const requestLobbies = () => {
+      if (window.net && window.net.broadcast) {
+        console.log('📡 Requesting adventure lobbies...');
+        window.net.broadcast({
+          type: 'lobby_list_request',
+          gameType: 'adventure'
+        }, channelName);
+      }
+    };
+    
+    // Send requests with staggered timing for better discovery
+    setTimeout(requestLobbies, 100);
+    setTimeout(requestLobbies, 500);
+    setTimeout(requestLobbies, 1000);
+    
+    // Update UI after initial search period
+    setTimeout(() => {
+      this.updateAdventureLobbyList();
+    }, 1500);
+    
+    // Keep searching periodically while browser is open
+    if (this._adventureSearchInterval) {
+      clearInterval(this._adventureSearchInterval);
+    }
+    this._adventureSearchInterval = setInterval(() => {
+      requestLobbies();
+      this.updateAdventureLobbyList();
+    }, 5000);
+  },
+  
+  // Update adventure lobby list UI (inline in chapter view)
+  updateAdventureLobbyList: function() {
+    const listDiv = document.getElementById('adventure_lobby_list');
+    if (!listDiv) return;
+    
+    const lobbies = this.availableLobbies['adventure'] || [];
+    
+    // Filter out stale lobbies (older than 30 seconds)
+    const now = Date.now();
+    const activeLobbies = lobbies.filter(l => (now - l.timestamp) < 30000);
+    
+    if (activeLobbies.length === 0) {
+      // Show subtle message when no lobbies
+      listDiv.innerHTML = `<div style="opacity: 0.4; font-size: 11px; text-align: center; padding: 5px;">No co-op lobbies available</div>`;
+      return;
+    }
+    
+    let html = `<div style="font-size: 11px; opacity: 0.6; margin-bottom: 5px;">👥 Join a Co-op Lobby:</div>`;
+    activeLobbies.forEach(lobby => {
+      const isFull = lobby.players >= lobby.maxPlayers;
+      const chapterName = lobby.settings?.chapterName || 'Adventure';
+      const hostName = lobby.hostName || 'Host';
+      html += `
+        <div style="background: rgba(60,60,100,0.4); padding: 6px 8px; margin: 4px 0; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${hostName}'s ${chapterName}</div>
+            <div style="font-size: 10px; opacity: 0.6;">👥 ${lobby.players}/${lobby.maxPlayers}</div>
+          </div>
+          ${!isFull 
+            ? `<button onclick="window.Lobby.joinAdventureLobby('${lobby.id}')" style="background: rgba(80,120,80,0.7); border: none; color: #fff; padding: 4px 10px; cursor: pointer; border-radius: 3px; font-size: 12px; margin-left: 8px;">Join</button>`
+            : '<span style="opacity: 0.5; font-size: 11px; margin-left: 8px;">Full</span>'}
+        </div>`;
+    });
+    
+    listDiv.innerHTML = html;
+  },
+  
+  // Host a new adventure lobby
+  hostAdventureLobby: async function() {
+    const select = document.getElementById('adventure_chapter_select');
+    const chapterId = select ? select.value : 'chapter1';
+    const chapterInfo = this.adventureChapters[chapterId];
+    
+    if (!chapterInfo) {
+      console.error('Unknown chapter:', chapterId);
+      return;
+    }
+    
+    // Initialize network if needed
+    if (!window.net || !window.net.initialized) {
+      if (window.net && window.net.init) {
+        window.net.init({ 
+          gameType: 'adventure',
+          lobbyBrowserMode: false,
+          broadcastChannel: 'adventure-lobby-browser'
+        });
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    // Join the broadcast channel and wait for it to be ready
+    const channelName = 'adventure-lobby-browser';
+    await this.waitForBroadcastChannel(channelName);
+    this.flushPendingBroadcasts();
+    
+    // Create the lobby - this calls updateLobbyRoomUI which shows the standard lobby room
+    const lobbyName = `${window.currentPlayerName || 'Player'}'s ${chapterInfo.name}`;
+    this.createLobby('adventure', lobbyName, {
+      fieldSize: 'custom',
+      seed: Math.floor(Math.random() * 1000000),
+      maxPlayers: 4,
+      chapterId: chapterId,
+      chapterName: chapterInfo.name,
+      chapterFile: chapterInfo.file
+    });
+    
+    console.log(`🎮 Hosting adventure lobby: ${chapterInfo.name}`);
+  },
+  
+  // Update player list in hosting/joining view
+  updateAdventurePlayerList: function() {
+    const listDiv = document.getElementById('adventure_player_list');
+    if (!listDiv) return;
+    
+    let html = '';
+    
+    if (this.isHost) {
+      // Host view - show self as host
+      const playerName = window.currentPlayerName || 'You';
+      const playerColor = window.currentPlayerColor || '#ffffff';
+      html += `<div style="color: ${playerColor};">👑 ${playerName} (Host)</div>`;
+      
+      // Add connected players - name/color stored directly on player object
+      if (this.connectedPlayers && this.connectedPlayers.length > 0) {
+        this.connectedPlayers.forEach((player, index) => {
+          // Player can be an object with {id, name, color} or just an id string
+          const name = player?.name || `Player ${index + 2}`;
+          const color = player?.color || '#aaaaaa';
+          html += `<div style="color: ${color}; margin-top: 5px;">👤 ${name}</div>`;
+        });
+      } else {
+        html += `<div style="opacity: 0.5; margin-top: 8px; font-size: 12px;">Waiting for players to join...</div>`;
+      }
+    } else if (this._isJoiningAdventure) {
+      // Joiner view - show host and self
+      const lobby = this._adventureLobbyToJoin || this.currentLobby;
+      const hostName = lobby?.hostName || 'Host';
+      const hostColor = lobby?.hostColor || '#ffffff';
+      
+      html += `<div style="color: ${hostColor};">👑 ${hostName} (Host)</div>`;
+      
+      // Check if we're connected
+      const status = window.net?.getStatus?.() || {};
+      const isConnected = status.peers && status.peers.length > 0;
+      
+      const myName = window.currentPlayerName || 'You';
+      const myColor = window.currentPlayerColor || '#ffffff';
+      html += `<div style="color: ${myColor}; margin-top: 5px;">👤 ${myName} ${isConnected ? '(connected)' : '(connecting...)'}</div>`;
+    }
+    
+    listDiv.innerHTML = html;
+  },
+  
+  // Cancel/Leave adventure lobby - uses standard lobby flow
+  cancelAdventureLobby: function() {
+    this.leaveLobbyAndReturnToBrowser('adventure');
+  },
+  
+  leaveAdventureLobby: function() {
+    this.leaveLobbyAndReturnToBrowser('adventure');
+  },
+  
+  // Start hosted adventure game
+  startHostedAdventure: async function() {
+    if (!this._hostingChapterInfo) {
+      console.error('No chapter info for hosted game');
+      return;
+    }
+    
+    try {
+      // Load the chapter map
+      const response = await fetch(this._hostingChapterInfo.file);
+      if (!response.ok) throw new Error(`Failed to load ${this._hostingChapterInfo.file}`);
+      
+      const mapData = JSON.parse(await response.text());
+      console.log('📦 Starting hosted adventure:', mapData.n || this._hostingChapterId);
+      
+      // Store map data for adventure start
+      this._adventureMapData = mapData;
+      
+      // Stop hosting interval
+      if (this._adventureHostInterval) {
+        clearInterval(this._adventureHostInterval);
+        this._adventureHostInterval = null;
+      }
+      
+      // Start countdown (synced with peers)
+      await this.runAdventureCountdown(mapData);
+      
+    } catch (e) {
+      console.error('Failed to start hosted adventure:', e);
+      alert('Failed to start game. Please try again.');
+    }
+  },
+  
+  // Run synced countdown before adventure starts
+  runAdventureCountdown: async function(mapData) {
+    const hostInfo = document.getElementById('adventure_host_info');
+    const playerList = document.getElementById('adventure_player_list');
+    const startBtn = document.querySelector('#adventure_hosting_view .lobby_b[title="Start Game"]');
+    const cancelBtn = document.querySelector('#adventure_hosting_view .lobby_b[title="Cancel"]');
+    
+    // Hide buttons during countdown
+    if (startBtn) startBtn.style.display = 'none';
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    
+    // Countdown from 3
+    for (let i = 3; i > 0; i--) {
+      // Update local UI
+      if (hostInfo) {
+        hostInfo.innerHTML = `
+          <div style="text-align: center; font-size: 24px; font-weight: bold;">Starting in ${i}...</div>
+        `;
+      }
+      
+      // Send countdown to peers
+      if (window.net && window.net.p2p && window.net.p2p.sendData) {
+        window.net.p2p.sendData({
+          type: 'adventure_countdown',
+          count: i
+        });
+      }
+      
+      // Wait 1 second
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    // Show "GO!" briefly
+    if (hostInfo) {
+      hostInfo.innerHTML = `
+        <div style="text-align: center; font-size: 24px; font-weight: bold; color: #4f4;">GO!</div>
+      `;
+    }
+    
+    // Send game start to peers
+    if (window.net && window.net.p2p && window.net.p2p.sendData) {
+      console.log('📡 Sending adventure_start to peers...');
+      window.net.p2p.sendData({
+        type: 'adventure_start',
+        lobbyId: this.currentLobbyId,
+        chapterId: this._hostingChapterId,
+        chapterFile: this._hostingChapterInfo.file,
+        mapData: mapData
+      });
+    }
+    
+    // Brief delay before starting
+    await new Promise(resolve => setTimeout(resolve, 300));
+    
+    // Start the adventure locally
+    this.startAdventureWithMap(mapData);
+  },
+  
+  // Join an adventure lobby
+  // Join an adventure lobby - uses standard joinLobbyById which shows lobby room UI with ready checkboxes
+  joinAdventureLobby: function(lobbyId) {
+    console.log('🎮 Joining adventure lobby:', lobbyId);
+    this.joinLobbyById('adventure', lobbyId);
+  },
+  
+  // Start adventure mode with a custom map (co-op, no AI)
+  // players: optional array of {id, name, color} for multiplayer
+  startAdventureWithMap: function(mapData, players) {
+    // Hide menu
+    const menuEl = document.getElementById('menu');
+    if (menuEl) menuEl.style.display = 'none';
+    
+    // Reset scene and ensure clean slate
+    this.resetGameState();
+    
+    window.isMultiplayer = true;  // Use match/command system
+    window.gameType = 'adventure';
+    
+    // Extract map info
+    const isV2 = mapData.v === 2;
+    const width = isV2 ? mapData.w : mapData.width || 64;
+    const height = isV2 ? mapData.h : mapData.height || 64;
+    const seed = isV2 ? mapData.s : mapData.seed || Math.floor(Math.random() * 1000000);
+    
+    window.mapSeed = seed;
+    
+    // Ensure player instance exists
+    if (!window.player) {
+      window.player = new Player();
+    }
+    
+    // Generate unique player ID
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      window.player.id = `adventurer-${randomSuffix}`;
+    }
+    
+    // Reset player state
+    window.player.units = [];
+    window.player.buildings = [];
+    window.player.selectedUnits = [];
+    
+    // Parse spawn points from map
+    let spawnPositions = [];
+    if (mapData.sp) {
+      const parsedSpawns = mapData.sp.split(';').map((s, index) => {
+        const parts = s.split(',').map(Number);
+        return { x: parts[0], y: parts[1], team: parts[2] !== undefined ? parts[2] : index };
+      });
+      parsedSpawns.sort((a, b) => a.team - b.team);
+      spawnPositions = parsedSpawns;
+    }
+    
+    // Fallback spawn if none defined
+    if (spawnPositions.length === 0) {
+      const margin = Math.max(8, Math.floor(Math.min(width, height) * 0.1));
+      spawnPositions = [{ x: margin, y: margin }];
+    }
+    
+    const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
+    
+    // Configure player spawn
+    window.player.name = window.currentPlayerName || 'Adventurer';
+    window.player.color = window.currentPlayerColor || '#ff0000';
+    window.player.agora = spawnPositions[0];
+    window.player.basePosition = { x: spawnPositions[0].x, z: spawnPositions[0].y };
+    
+    if (window.player.pbody) {
+      const agoraX = window.player.agora.x * tileSize;
+      const agoraZ = window.player.agora.y * tileSize;
+      window.player.pbody.state.loc.set(agoraX, 0, agoraZ);
+      window.player.pbody.vel.set(0, 0, 0);
+      window.player.pbody.imp.set(0, 0, 0);
+    }
+    
+    // No AI opponents in adventure co-op mode
+    window.aiOpponents = [];
+    window.opponent = null;
+    
+    // Dispose old field
+    const oldField = window.liveField;
+    window.liveField = null;
+    if (typeof liveField !== 'undefined') liveField = null;
+    if (oldField && typeof oldField.dispose === 'function') oldField.dispose();
+    
+    // Create new field with map dimensions
+    window.liveField = new window.Field({
+      width: width,
+      height: height,
+      seed: seed,
+      spawnPositions: spawnPositions
+    });
+    if (typeof liveField !== 'undefined') liveField = window.liveField;
+    
+    // Apply custom map data (terrain, resources, buildings)
+    this.applyCustomMapToField(mapData);
+    
+    // Stretch table and setup camera
+    if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
+      gfx.stretchTable(gfx.table);
+    }
+    window._cameraLimitsSet = false;
+    
+    // Position camera at spawn
+    if (window.gfx && window.gfx.camera && window.gfx.cameraTarget) {
+      const agoraX = window.player.agora.x * tileSize;
+      const agoraZ = window.player.agora.y * tileSize;
+      window.gfx.cameraTarget.position.x = agoraX;
+      window.gfx.cameraTarget.position.y = 9;
+      window.gfx.cameraTarget.position.z = agoraZ;
+      
+      if (window.cameraAnchor) {
+        window.cameraAnchor.x = agoraX;
+        window.cameraAnchor.y = 9;
+        window.cameraAnchor.z = agoraZ;
+      }
+      
+      window.gfx.camera.alpha = -2.5;
+      window.gfx.camera.beta = 1.1;
+      window.gfx.camera.radius = 80;
+    }
+    
+    // Force load chunks at spawn
+    if (window.gfx && window.gfx.forceLoadChunks && window.gfx.cameraTarget) {
+      const targetPos = window.gfx.cameraTarget.position;
+      window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
+    }
+    
+    // Use provided players array or default to just local player
+    const matchPlayers = players && players.length > 0 ? players : [window.player];
+    window.gameBuildings = window.gameBuildings || [];
+    window.gameUnits = window.gameUnits || [];
+    
+    // Create game instance
+    window.game = new window.Game({
+      type: 'adventure',
+      map: 'custom',
+      mapSeed: seed,
+      players: matchPlayers,
+      isMultiplayer: true,
+      tickRate: 60,
+      maxPlayers: 4
+    });
+    
+    // Spawn unit models
+    if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
+      window.spawnUnitModels(window.gfx.scene);
+    }
+    
+    // Determine host - first player is host, or check if we're the host from lobby
+    const hostId = this.isHost ? window.player.id : (matchPlayers[0]?.id || window.player.id);
+    
+    // Create match controller
+    window.currentMatch = new window.Match({
+      id: `adventure-${Date.now()}`,
+      gameType: 'adventure',
+      mapSeed: seed,
+      mapSize: { width, height },
+      players: matchPlayers,
+      localPlayerId: window.player.id,
+      hostId: hostId,
+      victoryCondition: 'objectives',  // Adventure uses objectives, not elimination
+      timeLimit: 0
+    });
+    
+    // Check if this is multiplayer (multiple players)
+    const isMultiplayerAdventure = matchPlayers.length > 1 && window.isMultiplayer;
+    
+    if (isMultiplayerAdventure) {
+      // Multiplayer: Use the loading/countdown flow
+      // Start the match (enters LOADING state, shows loading overlay)
+      window.currentMatch.start();
+      
+      // Signal that local player has finished loading - this triggers countdown when all ready
+      setTimeout(() => {
+        if (window.currentMatch && window.currentMatch.onLocalPlayerLoaded) {
+          console.log('📡 Adventure: Signaling local player loaded');
+          window.currentMatch.onLocalPlayerLoaded();
+        }
+      }, 500);
+    } else {
+      // Solo: Start immediately (no countdown needed)
+      window.currentMatch.beginPlaying();
+      if (window.currentMatch.startLocalTickLoop) {
+        window.currentMatch.startLocalTickLoop();
+      }
+    }
+    
+    console.log(`✅ Adventure started: ${mapData.n || 'Custom Map'}`);
+  },
+  
   // Start a local Adventure match with an AI opponent for debugging/single-player
   startAdventureSkirmish: function(fieldSize = 'medium', mapSeed = null, options = {}) {
     
@@ -3054,19 +3914,40 @@ const Lobby = {
     // console.log(`🎯 Initial player count: ${totalPlayers} (1 local + ${this.connectedPlayers.length} peers)`);
     // console.log(`   Peers:`, this.connectedPlayers.map(p => p.id || p));
     
+    // Adventure mode with chapter map can start solo or co-op (no AI needed)
+    if (gameType === 'adventure' && settings?.customMapData) {
+      console.log('✅ Starting Adventure with chapter map');
+      // Build player list for adventure
+      const players = [{ 
+        id: window.net?.getStatus()?.localPlayerId || 'local',
+        name: window.currentPlayerName || window.player?.name || 'Player 1',
+        color: window.currentPlayerColor || window.player?.color || '#ff0000'
+      }];
+      this.connectedPlayers.forEach((p, i) => {
+        players.push({
+          id: p.id || p,
+          name: p.name || `Player ${i + 2}`,
+          color: p.color || '#00ff00'
+        });
+      });
+      this.startAdventureWithMap(settings.customMapData, players);
+      return;
+    }
+    
     if (totalPlayers < 2) {
       // Check if AI opponents are explicitly enabled
       const aiSlots = settings?.aiSlots || [];
       const aiCount = aiSlots.filter(slot => slot).length;
       
-      if (aiCount === 0) {
+      if (aiCount === 0 && gameType !== 'adventure') {
         console.error('❌ Cannot start match: At least one AI opponent must be added before starting!');
         this.showNotification('Please add at least one AI opponent before starting the match.', 'error');
         return;
       }
       
       if (gameType === 'adventure') {
-        console.log('✅ Starting Adventure lobby with', aiCount, 'AI opponents');
+        // Adventure without a chapter map - use skirmish mode
+        console.log('✅ Starting Adventure skirmish with', aiCount, 'AI opponents');
         this.startAdventureSkirmish(fieldSize, mapSeed, { aiCount: aiCount });
         return;
       } else if (gameType === 'onevsone' || gameType === '1v1') {

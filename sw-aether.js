@@ -2,7 +2,7 @@
 
 // This is the "Offline page" service worker
 
-const CACHE = "aether-4";
+const CACHE = "aether-5";
 
 // TODO: replace the following with the correct offline fallback page i.e.: const offlineFallbackPage = "offline.html";
 const offlineFallbackPage = "/offline.html";

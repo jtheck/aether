@@ -363,7 +363,12 @@
       };
       
       dataChannel.onerror = (error) => {
-        console.error('Data channel error with peer:', peerId, error);
+        // Check if this is a user-initiated close (not a real error)
+        const isUserAbort = error?.error?.message?.includes('User-Initiated Abort') ||
+                           error?.error?.reason?.includes('Close called');
+        if (!isUserAbort) {
+          console.error('Data channel error with peer:', peerId, error);
+        }
         // Force cleanup on data channel error to allow reconnection
         setTimeout(() => {
           cleanupPeer(peerId);

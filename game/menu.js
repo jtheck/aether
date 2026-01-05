@@ -176,21 +176,15 @@ function getSubmenuFromPath(path) {
   return current;
 }
 
-// Show buttons in an arc animation
+// Show buttons in an arc
 function showButtonsInArc(buttons, anchorX, anchorY, depth = 0, direction = 'w') {
   const positions = calculateArcPositions(anchorX, anchorY, buttons.length, depth, direction);
   
   buttons.forEach((button, index) => {
-    // Position button
-    button.style.left = `${anchorX}px`;
-    button.style.top = `${anchorY}px`;
-    
-    // Trigger animation after a delay
-    setTimeout(() => {
-      button.style.left = `${positions[index].x}px`;
-      button.style.top = `${positions[index].y}px`;
-      button.classList.add('visible');
-    }, index * ANIMATION_DELAY);
+    // Position button immediately
+    button.style.left = `${positions[index].x}px`;
+    button.style.top = `${positions[index].y}px`;
+    button.classList.add('visible');
     
     activeButtons.push(button);
   });
@@ -198,9 +192,14 @@ function showButtonsInArc(buttons, anchorX, anchorY, depth = 0, direction = 'w')
 
 // Show submenu for a button
 function showSubmenu(parentButton, submenuItems) {
-  const rect = parentButton.getBoundingClientRect();
-  const x = rect.left + rect.width / 2;
-  const y = rect.top + rect.height / 2;
+  // Use the root anchor position instead of parent button position
+  if (!currentAnchor) {
+    console.warn('No anchor available for submenu');
+    return;
+  }
+  
+  const x = currentAnchor.x;
+  const y = currentAnchor.y;
   const depth = parseInt(parentButton.dataset.depth) + 1;
   
   // Hide any buttons at the same or deeper depth
@@ -225,17 +224,15 @@ function showSubmenu(parentButton, submenuItems) {
     );
   });
   
-  // Show new buttons in arc
+  // Show new buttons in arc using root anchor position
   showButtonsInArc(buttons, x, y, depth, currentAnchor.direction);
 }
 
-// Hide buttons with animation
+// Hide buttons
 function hideButtons(buttons) {
-  buttons.forEach((button, index) => {
-    setTimeout(() => {
-      button.classList.remove('visible');
-      setTimeout(() => button.remove(), 200); // Remove after transition
-    }, index * ANIMATION_DELAY);
+  buttons.forEach((button) => {
+    button.classList.remove('visible');
+    button.remove();
   });
 }
 

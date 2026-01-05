@@ -43,6 +43,12 @@ Game.prototype.spawnInitialUnits = function() {
   // console.log('   window.player.id:', window.player?.id);
   // console.log('   this.players spawn order:', this.players.map(p => ({ id: p.id, name: p.name, isLocalPlayer: p === window.player })));
   
+  // Adventure mode (co-op) doesn't spawn initial units - players will spawn manually or via scripted events
+  if (this.type === 'adventure') {
+    console.log('🎮 Adventure mode: skipping initial unit spawn (no agoras)');
+    return;
+  }
+  
   // Spawn villagers and buildings for ALL players (local + opponents)
   if (this.players && this.players.length > 0) {
     // CRITICAL: Sort players deterministically by ID before spawning

@@ -1133,12 +1133,14 @@
       if (item.chunk.needsMesh) {
         field.createChunkMesh(item.chunkX, item.chunkZ, gfx.scene, createTerrainMesh);
         meshesLoaded++;
-        // Mark that models need to be placed now that mesh exists
-        item.chunk.needsModels = true;
+        // Mark that models need to be placed now that mesh exists (skip in forge mode)
+        if (!window.isForgeMode) {
+          item.chunk.needsModels = true;
+        }
       }
       
-      // Queue models (they'll be placed in queue)
-      if (item.chunk.needsModels && item.chunk.mesh) {
+      // Queue models (they'll be placed in queue) - skip in forge mode
+      if (!window.isForgeMode && item.chunk.needsModels && item.chunk.mesh) {
         item.chunk.models = placeDecorationsOnChunk(item.chunk, gfx.scene); // NEW: Use pass system
         item.chunk.needsModels = false;
       }
@@ -1598,9 +1600,9 @@ let pov2 = 240;
       const localX = index % (chunk.endX - chunk.startX);
       const localZ = Math.floor(index / (chunk.endX - chunk.startX));
       
-      // Calculate world position for this tile
-      const worldX = (chunk.startX + localX) * TILE_SIZE;
-      const worldZ = (chunk.startZ + localZ) * TILE_SIZE;
+      // Calculate world position for this tile (centered on tile)
+      const worldX = (chunk.startX + localX + 0.5) * TILE_SIZE;
+      const worldZ = (chunk.startZ + localZ + 0.5) * TILE_SIZE;
       
       // Check if this tile type has model rules
       const rules = modelRules[tile.type];
@@ -1628,6 +1630,58 @@ let pov2 = 240;
   window.isResourceTileDepleted = function(gridX, gridZ) {
     const key = `${gridX},${gridZ}`;
     return depletedResourceTiles.has(key);
+  };
+  
+  // Function to mark a tile as depleted (for loading custom maps with erased resources)
+  window.markResourceTileDepleted = function(gridX, gridZ) {
+    const key = `${gridX},${gridZ}`;
+    depletedResourceTiles.set(key, {
+      originalGridX: gridX,
+      originalGridZ: gridZ,
+      felledTime: Date.now(),
+      isTree: true  // Assume tree for map-erased resources
+    });
+  };
+  
+  // Function to place a manual resource at a position (for loading custom maps)
+  // resourceType: 'trees', 'rocks_plain', 'rocks_moss', 'rocks_snow'
+  window.placeManualResource = function(gridX, gridZ, resourceType) {
+    const field = window.liveField;
+    if (!field || !gfx.scene) return;
+    
+    const resourcePaths = {
+      trees: { path: 'assets/models/trees.glb', scale: 0.9 },
+      rocks_plain: { path: 'assets/models/rocks_plain.glb', scale: 3.0 },
+      rocks_moss: { path: 'assets/models/rocks_moss.glb', scale: 7.5 },
+      rocks_snow: { path: 'assets/models/rocks_snow.glb', scale: 11.5 }
+    };
+    
+    const resInfo = resourcePaths[resourceType];
+    if (!resInfo) return;
+    
+    const worldX = (gridX + 0.5) * TILE_SIZE;
+    const worldZ = (gridZ + 0.5) * TILE_SIZE;
+    const worldY = field.getHeightVariation ? field.getHeightVariation(gridX, gridZ) : 0;
+    
+    // Queue the model for loading
+    initBillboardAtlas(gfx.scene);
+    modelLoadQueue.push({
+      modelPath: resInfo.path,
+      scene: gfx.scene,
+      position: new Vec3(worldX, worldY, worldZ),
+      rotation: Math.random() * Math.PI * 2,
+      scale: resInfo.scale,
+      chunk: null,  // Not associated with a chunk
+      models: [],
+      modelRule: resInfo,
+      gridX: gridX,
+      gridZ: gridZ
+    });
+    
+    // Start processing queue if not running
+    if (!isProcessingQueue && modelLoadQueue.length > 0) {
+      requestAnimationFrame(processModelQueue);
+    }
   };
   
   // Function to get respawn position for a depleted tree (further from camp)
@@ -1693,7 +1747,8 @@ let pov2 = 240;
       }
     }
     
-    return { gridX: newGridX, gridZ: newGridZ, worldX: newWorldX, worldZ: newWorldZ };
+    // Return centered world positions for consistency with other resource placement
+    return { gridX: newGridX, gridZ: newGridZ, worldX: (newGridX + 0.5) * TILE_SIZE, worldZ: (newGridZ + 0.5) * TILE_SIZE };
   }
   
   // DEBUG: Manual command to remove nearest tree to camera
@@ -2076,9 +2131,9 @@ let pov2 = 240;
         // Mark all tiles in footprint as occupied
         markFootprintOccupied(gridX, gridZ, footprintRadius);
         
-        // Place the rock at proper height for this tile
-        const worldX = gridX * TILE_SIZE;
-        const worldZ = gridZ * TILE_SIZE;
+        // Place the rock at proper height for this tile (centered on tile)
+        const worldX = (gridX + 0.5) * TILE_SIZE;
+        const worldZ = (gridZ + 0.5) * TILE_SIZE;
         
         // Get height variation for this tile position (rolling hills)
         const tileHeight = field.getHeightVariation ? field.getHeightVariation(gridX, gridZ) : 0;
@@ -2159,8 +2214,8 @@ let pov2 = 240;
       const treeSpawnRate = terrainType === 3 ? 0.20 : 0.05;
       
       // Skip trees near camps - they should grow further out
-      const worldX = gridX * TILE_SIZE;
-      const worldZ = gridZ * TILE_SIZE;
+      const worldX = (gridX + 0.5) * TILE_SIZE;
+      const worldZ = (gridZ + 0.5) * TILE_SIZE;
       if (window.gameBuildings) {
         let tooCloseToCamp = false;
         for (const building of window.gameBuildings) {
@@ -2324,9 +2379,9 @@ let pov2 = 240;
       const localX = index % (chunk.endX - chunk.startX);
       const localZ = Math.floor(index / (chunk.endX - chunk.startX));
       
-      // Calculate world position for this tile
-      const worldX = (chunk.startX + localX) * TILE_SIZE;
-      const worldZ = (chunk.startZ + localZ) * TILE_SIZE;
+      // Calculate world position for this tile (centered on tile)
+      const worldX = (chunk.startX + localX + 0.5) * TILE_SIZE;
+      const worldZ = (chunk.startZ + localZ + 0.5) * TILE_SIZE;
       
       // Check terrain type for model rules (not tile.type which is wang tile variant)
       // Get actual terrain type from field's terrainTypes array
@@ -3484,7 +3539,8 @@ let pov2 = 240;
           chunkQueue.push({ key, chunk, chunkX, chunkZ, type: 'mesh', distSq });
         }
         
-        if (chunk.needsModels && chunk.mesh && !chunkQueue.some(item => item.key === key && item.type === 'models')) {
+        // Skip automatic model placement in forge mode - forge handles resources manually
+        if (!window.isForgeMode && chunk.needsModels && chunk.mesh && !chunkQueue.some(item => item.key === key && item.type === 'models')) {
           const [chunkX, chunkZ] = key.split(',').map(Number);
           const dx = chunkX - playerChunkX;
           const dz = chunkZ - playerChunkZ;
@@ -3633,7 +3689,7 @@ let pov2 = 240;
 
     // Respect saved shadow preference as early as possible
     // Initialize shadow mode from saved setting
-    // 0 = Off, 1 = Low (solid blobs), 2 = Med (gradient blobs), 3 = Full (default)
+    // 0 = Off, 1 = Low (solid blobs), 2 = Med (gradient blobs), 3 = Full
     try {
       const savedShadowMode = localStorage.getItem('shadowMode');
       if (savedShadowMode !== null) {
@@ -3644,14 +3700,14 @@ let pov2 = 240;
         if (oldShadowSetting === 'false') {
           window.SHADOW_MODE = 0; // Off
         } else {
-          window.SHADOW_MODE = 3; // Full (default)
+          window.SHADOW_MODE = 2; // Med (default)
         }
       }
       window.SHADOWS_ENABLED = window.SHADOW_MODE === 3;
     } catch (e) {
       // Fallback if localStorage is unavailable
-      window.SHADOW_MODE = 3;
-      window.SHADOWS_ENABLED = true;
+      window.SHADOW_MODE = 2;
+      window.SHADOWS_ENABLED = false;
     }
     
     // Set initial blob shadow visibility and style based on shadow mode
@@ -4637,50 +4693,24 @@ let pov2 = 240;
   
   // Create a forge-specific universal camera for map editing
   gfx.makeForgeCamera = function(scene) {
-    // Create a universal camera for forge editing - start high above for top-down view
-    let camera = new BABYLON.UniversalCamera("forgeCamera", new Vec3(0, 200, 0), scene);
+    // Position above the map center looking down
+    const field = window.liveField;
+    const centerX = field ? (field.width * TILE_SIZE) / 2 : 128;
+    const centerZ = field ? (field.height * TILE_SIZE) / 2 : 128;
     
-    // // Set up camera properties for forge editing
-    // camera.fov = 0.8;
-    // camera.minZ = 1;
-    // camera.maxZ = 2001;
+    let camera = new BABYLON.UniversalCamera("forgeCamera", new Vec3(centerX, 150, centerZ), scene);
     
-    // // Camera controls
-    // camera.keysUp.push(87);    // W key
-    // camera.keysDown.push(83);  // S key
-    // camera.keysLeft.push(65);  // A key
-    // camera.keysRight.push(68); // D key
-    // camera.keysUpward.push(81);   // Q key (rotate up)
-    // camera.keysDownward.push(69); // E key (rotate down)
+    // Look down at the terrain (pitch down ~60 degrees)
+    camera.rotation.x = Math.PI / 3; // 60 degrees down
+    camera.rotation.y = 0;
     
-    // // Make keyboard movement MUCH faster
-    // camera.speed = 2.0;        // Base movement speed
-    // camera.angularSpeed = 0.5; // Rotation speed
+    // Camera settings
+    camera.fov = 0.8;
+    camera.minZ = 1;
+    camera.maxZ = 2000;
     
-    // // Mouse controls
-    // camera.attachControl(gfx.canvas, true);
-    
-    // // Adjust sensitivity for precise editing - MUCH faster now!
-    // camera.angularSensibilityX = 5; // 10x faster mouse look
-    // camera.angularSensibilityY = 5; // 10x faster mouse look
-    
-    // // Pan and zoom settings - MUCH faster now!
-    // camera.panningSensibility = 5; // 10x faster panning
-    // camera.wheelPrecision = 0.1; // 5x faster zoom (lower = faster)
-    
-    // // Disable inertia for precise control
-    // camera.inertia = 0;
-    
-    // // Enable right-click panning
-    // camera.panningInertia = 0;
-    
-    // // Set up camera constraints for forge editing
-    // camera.lowerRadiusLimit = 2;   // Minimum zoom distance
-    // camera.upperRadiusLimit = 200; // Maximum zoom distance for larger field
-    // camera.upperBetaLimit = 1.29;
-    // camera.beta = 1;
-    // // Set initial position and target
-    // camera.setTarget(new Vec3(0, 0, 0));
+    // Disable all built-in controls - forge.js will handle input
+    camera.inputs.clear();
     
     return camera;
   };

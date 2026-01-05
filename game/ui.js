@@ -1245,58 +1245,7 @@ function getRandomColor() {
 
   }
 
-
-  let prevMenu = 'main_menu';
-  ui.showMenu = function(menuId){
-    prevMenu = menuId;
-
-    // Hide all menus
-    document.getElementById('main_menu').style.display = 'none';
-    document.getElementById('settings_menu').style.display = 'none';
-    document.getElementById('player_menu').style.display = 'none';
-    document.getElementById('trophy_menu').style.display = 'none';
-    document.getElementById('ingame_menu').style.display = 'none';
-    document.getElementById('adventure_lobby').style.display = 'none';
-    document.getElementById('onevsone_lobby').style.display = 'none';
-    document.getElementById('koth_lobby').style.display = 'none';
-    document.getElementById('teams_lobby').style.display = 'none';
-    
-    // Hook into lobby system when showing a lobby menu
-    if (window.Lobby && menuId.includes('_lobby')) {
-      const gameTypeMap = {
-        'adventure_lobby': 'adventure',
-        'onevsone_lobby': 'onevsone',
-        'koth_lobby': 'koth',
-        'teams_lobby': 'teams'
-      };
-      
-      const gameType = gameTypeMap[menuId];
-      if (gameType) {
-        window.Lobby.showLobbyBrowser(gameType);
-      }
-    }
-
-    
-    // Show the requested menu
-    document.getElementById(menuId).style.display = 'block';
-    document.getElementById('menu').style.display = 'block';
-    
-    // Initialize LOD slider when settings menu is shown
-    if (menuId === 'settings_menu' && window.hud && window.hud.initLODSlider) {
-      // console.log('🎚️ Settings menu shown, initializing LOD slider...');
-      window.hud.initLODSlider();
-    }
-    
-    // Initialize AA slider when settings menu is shown
-    if (menuId === 'settings_menu' && window.hud && window.hud.initAASlider) {
-      window.hud.initAASlider();
-    }
-    
-    // Initialize Shadow slider when settings menu is shown
-    if (menuId === 'settings_menu' && window.hud && window.hud.initShadowSlider) {
-      window.hud.initShadowSlider();
-    }
-  }
+  // prevMenu is used by the first showMenu definition above
 
   ui.hideMenu = function(){
     document.getElementById('menu').style.display = 'none';
@@ -1305,17 +1254,16 @@ function getRandomColor() {
   ui.toggleMenu = function() {
     const menu = document.getElementById('menu');
     if (menu.style.display === 'none' || !menu.style.display) {
-      // Show menu with last viewed submenu (or main menu)
+      // Show menu with appropriate submenu based on game state
       menu.style.display = 'block';
 
-      // In menu scene (no active match/game), always show main menu instead of previous menu
-      const isMenuScene = !window.game && !window.currentMatch;
+      // Check if we're in an active game (not menu scene, not demo)
+      const isMenuScene = !window.game && (!window.currentMatch || window.currentMatch.isDemo);
       if (isMenuScene) {
         ui.showMenu('main_menu');
-      } else if (!prevMenu) {
-        ui.showMenu('main_menu');
       } else {
-        ui.showMenu(prevMenu);
+        // We're in an active game - always show ingame menu
+        ui.showMenu('ingame_menu');
       }
     } else {
       // Hide menu
@@ -1735,8 +1683,8 @@ function getRandomColor() {
       }
     }
     
-    // RMB pan (hold RMB to pan like touch)
-    if (e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 2) {
+    // RMB pan (hold RMB to pan like touch) - SKIP in Forge mode
+    if (!window.isForgeMode && e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 2) {
       // Detect double right-click to clear selection (and block RMB pan)
       const currentTime = Date.now();
       const distance = Math.sqrt((x - lastRightClickPosition.x) ** 2 + (y - lastRightClickPosition.y) ** 2);
@@ -1759,7 +1707,7 @@ function getRandomColor() {
       rmbPanActive = true;
       rmbLastScreen.x = e.clientX;
       rmbLastScreen.y = e.clientY;
-    } else if (e.pointerType === 'mouse' && e.type === 'pointermove' && rmbPanActive) {
+    } else if (!window.isForgeMode && e.pointerType === 'mouse' && e.type === 'pointermove' && rmbPanActive) {
       if (camera && canvas && cameraTarget) {
         const cam = camera;
         const rectC = canvas.getBoundingClientRect();
@@ -1786,7 +1734,7 @@ function getRandomColor() {
           cameraVelocity.panZ += wz * panSens;
         }
       }
-    } else if (e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
+    } else if (!window.isForgeMode && e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
       rmbPanActive = false;
     }
 
@@ -2244,6 +2192,9 @@ function getRandomColor() {
   // - Right-click + scroll wheel: Rotate camera horizontally (left/right)
   // - Shift + scroll wheel: Rotate camera horizontally (left/right) (alternative method)
   ui.handleWheel = function(e) {
+    // Skip in Forge mode - Forge has its own camera wheel handling
+    if (window.isForgeMode) return;
+    
     // Check if mouse is over any scrollable menu (settings or lobbies)
     const mouseX = e.clientX;
     const mouseY = e.clientY;
@@ -2315,6 +2266,9 @@ function getRandomColor() {
   
   // Update camera rotation smoothly towards target (call this every frame)
   ui.updateCameraRotation = function() {
+    // Skip in Forge mode - Forge has its own camera system
+    if (window.isForgeMode) return;
+    
     if (!gfx.camera || !gfx.camera.alpha) {
       return;
     }
@@ -2615,53 +2569,114 @@ function getRandomColor() {
   
   // Create a visual target marker at the specified world position
   function createTargetMarker(worldPos) {
-    if (!window.gfx || !window.gfx.scene) return;
+    if (!window.gfx || !window.gfx.scene || !window.gfx.getModel) return;
     
-    // Create a simple target marker (ring) at the explosion location
-    const targetRing = BABYLON.MeshBuilder.CreateTorus("targetMarker", {
-      diameter: 1.0,
-      thickness: 0.1,
-      tessellation: 16
-    }, window.gfx.scene);
+    const scene = window.gfx.scene;
     
-    // Position the marker at the explosion location
-    targetRing.position.x = worldPos.x;
-    targetRing.position.y = 0.1; // Slightly above ground
-    targetRing.position.z = worldPos.z;
-    
-    // Create material for the target marker
-    const markerMaterial = new BABYLON.StandardMaterial("targetMarkerMat", window.gfx.scene);
-    markerMaterial.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red color
-    markerMaterial.emissiveColor = new BABYLON.Color3(0.5, 0, 0); // Glowing red
-    markerMaterial.alpha = 1.0; // Opaque
-    
-    targetRing.material = markerMaterial;
-    targetRing.isPickable = false; // Don't interfere with clicking
-    
-    // Animate the marker (pulse and fade)
-    let alpha = 1.0;
-    let growing = false;
-    
-    const animateMarker = () => {
-      // Keep fully opaque for performance (no alpha pulsing)
-      alpha = 1.0;
-      markerMaterial.alpha = alpha;
+    // Load the target model
+    window.gfx.getModel("assets/models/target.glb", scene).then(model => {
+      if (!model || !model.root) return;
       
-      // Continue animation
-      requestAnimationFrame(animateMarker);
-    };
-    
-    // Start the animation
-    animateMarker();
-    
-    // Remove the marker after 3 seconds
-    setTimeout(() => {
-      if (targetRing && !targetRing.isDisposed()) {
-        targetRing.dispose();
+      const targetMesh = model.root;
+      
+      // Position at target location
+      targetMesh.position.x = worldPos.x;
+      targetMesh.position.y = worldPos.y || 0;
+      targetMesh.position.z = worldPos.z;
+      
+      // Enable the mesh (getModel disables it by default)
+      targetMesh.setEnabled(true);
+      targetMesh.isVisible = true;
+      targetMesh.isPickable = false;
+      
+      // Clear rotation quaternion so we can use Euler angles for rotation
+      targetMesh.rotationQuaternion = null;
+      targetMesh.rotation.y = 0;
+      
+      // Add glow effect if available
+      if (window.gfx.glowLayer) {
+        const allMeshes = targetMesh.getChildMeshes(true);
+        allMeshes.forEach(mesh => {
+          window.gfx.glowLayer.addIncludedOnlyMesh(mesh);
+        });
       }
-    }, 3000);
-    
-    // console.log(`🎯 Created target marker at (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+      
+      // Store initial Y position and scale for animations
+      const initialY = targetMesh.position.y;
+      const initialScale = targetMesh.scaling.clone();
+      
+      // Simple fade-out and floaty animation
+      let fadeTime = 0;
+      let floatTime = 0;
+      const fadeDuration = 3000; // 3 seconds
+      
+      // Get all materials from the model for fading
+      const materials = [];
+      const allMeshes = targetMesh.getChildMeshes(true);
+      allMeshes.forEach(mesh => {
+        if (mesh.material && !materials.includes(mesh.material)) {
+          materials.push(mesh.material);
+        }
+      });
+      
+      const animateMarker = () => {
+        fadeTime += 16; // ~60fps
+        floatTime += 0.02;
+        const fade = Math.max(0, 1 - (fadeTime / fadeDuration));
+        
+        if (fade <= 0 || targetMesh.isDisposed()) {
+          // Clean up
+          if (targetMesh && !targetMesh.isDisposed()) {
+            const meshesToClean = targetMesh.getChildMeshes(true);
+            meshesToClean.forEach(mesh => {
+              if (mesh && !mesh.isDisposed()) {
+                if (window.gfx.glowLayer) {
+                  window.gfx.glowLayer.removeIncludedOnlyMesh(mesh);
+                }
+              }
+            });
+            targetMesh.dispose();
+          }
+          return;
+        }
+        
+        // Floaty animation - more pronounced vertical bobbing
+        const floatAmount = Math.sin(floatTime) * 0.5;
+        targetMesh.position.y = initialY + floatAmount;
+        
+        // Rotate around Y axis (make sure rotationQuaternion is null)
+        if (targetMesh.rotationQuaternion) {
+          targetMesh.rotationQuaternion = null;
+        }
+        targetMesh.rotation.y += 0.02; // Faster rotation
+        
+        // Shrink animation - scale down as it fades
+        targetMesh.scaling.x = initialScale.x * fade;
+        targetMesh.scaling.y = initialScale.y * fade;
+        targetMesh.scaling.z = initialScale.z * fade;
+        
+        // Fade out all materials (check if material exists and has alpha property)
+        materials.forEach(mat => {
+          if (mat && typeof mat.alpha !== 'undefined') {
+            try {
+              mat.alpha = fade;
+            } catch (e) {
+              // Material might be disposed or read-only, ignore
+            }
+          }
+        });
+        
+        // Continue animation
+        requestAnimationFrame(animateMarker);
+      };
+      
+      // Start the animation
+      animateMarker();
+      
+      // console.log(`🎯 Created target marker at (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+    }).catch(err => {
+      console.warn('⚠️ Failed to load target.glb model:', err);
+    });
   }
 
   // Helper function to get world position from screen coordinates

@@ -1497,7 +1497,10 @@ Field.prototype.createChunkMesh = function(chunkX, chunkZ, scene, createTerrainM
     chunk.needsMesh = false;
     
     // Immediately mark for model loading (no delay - prevents terrain-only gaps when panning)
-    chunk.needsModels = true;
+    // Skip in forge mode - forge handles resources manually
+    if (!window.isForgeMode) {
+      chunk.needsModels = true;
+    }
   }
 };
 

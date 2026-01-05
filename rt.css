@@ -272,8 +272,7 @@ html, body {
   border-color: darkmagenta;
 }
 
-/* Disable Adventure and KOTH category buttons */
-.game_menu_type_b[onclick="ui.showMenu('adventure_lobby')"],
+/* Disable KOTH category button (not yet implemented) */
 .game_menu_type_b[onclick="ui.showMenu('koth_lobby')"] {
   pointer-events: none;
   cursor: not-allowed;

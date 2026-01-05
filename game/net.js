@@ -337,13 +337,17 @@
     // Requesting catch-up was causing more problems than it solved.
     //
     // Monitor peer lag for debugging only (no action taken)
-    const maxPeerLag = getMaxPeerLag();
-    if (maxPeerLag > 200 && window.currentMatch && !window.currentMatch._lastLagWarning) {
-      // Only warn once for extreme lag (>10 seconds)
-      const ticksPerSecond = net.TICK_RATE || 20;
-      const secondsBehind = maxPeerLag / ticksPerSecond;
-      console.warn(`⚠️ [DEBUG] Peer lag detected: ${maxPeerLag} ticks (~${secondsBehind.toFixed(1)}s). This should resolve with tick reset.`);
-      window.currentMatch._lastLagWarning = Date.now();
+    // Skip lag warning if no peers are connected (e.g., during disconnect)
+    const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+    if (connectedPeers.length > 0) {
+      const maxPeerLag = getMaxPeerLag();
+      if (maxPeerLag > 200 && window.currentMatch && !window.currentMatch._lastLagWarning) {
+        // Only warn once for extreme lag (>10 seconds)
+        const ticksPerSecond = net.TICK_RATE || 20;
+        const secondsBehind = maxPeerLag / ticksPerSecond;
+        console.warn(`⚠️ [DEBUG] Peer lag detected: ${maxPeerLag} ticks (~${secondsBehind.toFixed(1)}s). This should resolve with tick reset.`);
+        window.currentMatch._lastLagWarning = Date.now();
+      }
     }
     
     // Execute buffered commands for this tick
@@ -838,6 +842,11 @@
                   window.Lobby.announceLobby(lobby);
                 }
               }
+              
+              // Also update adventure-specific UI if in adventure mode
+              if (window.Lobby.currentGameType === 'adventure' && window.Lobby.updateAdventurePlayerList) {
+                window.Lobby.updateAdventurePlayerList();
+              }
             }
             
             // Send our info back (if we're already in the lobby) only when this wasn't an acknowledgement
@@ -890,6 +899,50 @@
             window.Lobby.startMultiplayerMatchWithSettings(actualMessage.gameType, actualMessage.settings);
           } else {
             console.error('❌ Received invalid start_game message:', actualMessage);
+          }
+          break;
+          
+        case 'adventure_countdown':
+          // Host is counting down to start
+          console.log('⏱️ Adventure countdown:', actualMessage.count);
+          if (window.Lobby) {
+            const hostInfo = document.getElementById('adventure_host_info');
+            if (hostInfo) {
+              hostInfo.innerHTML = `
+                <div style="text-align: center; font-size: 24px; font-weight: bold;">Starting in ${actualMessage.count}...</div>
+              `;
+            }
+            // Hide leave button during countdown
+            const cancelBtn = document.querySelector('#adventure_hosting_view .lobby_b');
+            if (cancelBtn) cancelBtn.style.display = 'none';
+          }
+          break;
+          
+        case 'adventure_start':
+          // Host has started adventure mode!
+          console.log('🚀 Received adventure_start from host!');
+          if (window.Lobby && actualMessage.mapData) {
+            // Show GO! message
+            const hostInfo = document.getElementById('adventure_host_info');
+            if (hostInfo) {
+              hostInfo.innerHTML = `
+                <div style="text-align: center; font-size: 24px; font-weight: bold; color: #4f4;">GO!</div>
+              `;
+            }
+            
+            // Stop join interval
+            if (window.Lobby._adventureJoinInterval) {
+              clearInterval(window.Lobby._adventureJoinInterval);
+              window.Lobby._adventureJoinInterval = null;
+            }
+            window.Lobby._isJoiningAdventure = false;
+            
+            // Brief delay to show GO! then start
+            setTimeout(() => {
+              window.Lobby.startAdventureWithMap(actualMessage.mapData);
+            }, 300);
+          } else {
+            console.error('❌ Received invalid adventure_start message:', actualMessage);
           }
           break;
           
@@ -1256,9 +1309,13 @@
   
   // Handle peer disconnection - updated to sync isConnected
   function onPeerDisconnected(peerId) {
-    // console.log(`👋 Peer disconnected: ${peerId.slice(-8)}`);
+    console.log(`👋 Peer disconnected: ${peerId.slice(-8)}`);
     isConnected = p2p.getConnectedPeers().length > 0;
     remoteCommands.delete(peerId);
+    
+    // CRITICAL: Clear tick confirmation for disconnected peer
+    // This allows lockstep to continue without waiting for them
+    peerTickConfirmations.delete(peerId);
     
     // Update lobby connection status
     if (window.Lobby) {

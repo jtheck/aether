@@ -445,6 +445,20 @@
       // console.log(`  Input listeners init: ${window._inputListenersInitialized ? 'YES' : 'NO'}`);
       // console.log(`  handlePointer exists: ${window.ui?.handlePointer ? 'YES' : 'NO'}`)
       
+      // Initialize blob shadows for Low/Med shadow modes
+      // This ensures blob shadows are created for all units when match starts,
+      // even if the player never opened the settings menu
+      if ((window.SHADOW_MODE === 1 || window.SHADOW_MODE === 2) && window.gfx) {
+        // Set blob shadow visibility
+        if (window.gfx.setBlobShadowsVisible) {
+          window.gfx.setBlobShadowsVisible(true);
+        }
+        // Create blob shadows for all existing units
+        if (window.gfx.createBlobShadowsForAllUnits) {
+          window.gfx.createBlobShadowsForAllUnits();
+        }
+      }
+      
       // Start local tick loop for non-multiplayer matches (Adventure mode, etc.)
       // In multiplayer, the network system handles ticking
       if (!window.isMultiplayer) {
@@ -525,10 +539,9 @@
         this.checkAgoraOccupation();
       }
       
-      // Check other victory conditions every second
+      // Check victory conditions every second (respects victoryCondition setting)
       if (this.tick % 20 === 0) {
-        this.checkWonderVictory();
-        this.checkEliminationVictory();
+        this.checkVictoryConditions();
       }
       
       // Synchronization checkpoint with adaptive frequency
@@ -1808,6 +1821,10 @@
         case 'relic':
           this.checkRelicVictory();
           break;
+        case 'objectives':
+          // Adventure mode - check if any player's units have reached objective zones
+          this.checkObjectiveVictory();
+          break;
       }
     }
     
@@ -1864,6 +1881,97 @@
         this.endMatch(remainingPlayers[0].id || remainingPlayers[0], 'elimination');
       } else if (remainingPlayers.length === 0) {
         this.endMatch(null, 'draw');
+      }
+    }
+    
+    // Check if any player's units have reached objective zones (adventure mode)
+    checkObjectiveVictory() {
+      const objectives = window.adventureObjectives;
+      if (!objectives || objectives.length === 0) return;
+      
+      const TILE_SIZE = window.TILE_SIZE || 1;
+      
+      // Get all player units
+      let allUnits = [];
+      this.players.forEach(player => {
+        if (player.units) {
+          allUnits = allUnits.concat(player.units.filter(u => u && !u.dead));
+        }
+      });
+      
+      // Also include window.gameUnits for compatibility
+      if (window.gameUnits) {
+        for (const unit of window.gameUnits) {
+          if (unit && !unit.dead && !allUnits.includes(unit)) {
+            allUnits.push(unit);
+          }
+        }
+      }
+      
+      let objectivesCompleted = 0;
+      
+      for (const obj of objectives) {
+        if (obj.completed) {
+          objectivesCompleted++;
+          continue;
+        }
+        
+        // Get objective world position (center of tile)
+        const objWorldX = obj.x * TILE_SIZE + 0.5 * TILE_SIZE;
+        const objWorldZ = obj.y * TILE_SIZE + 0.5 * TILE_SIZE;
+        const objRadius = obj.radius * TILE_SIZE;
+        
+        if (obj.type === 'reach') {
+          // 'reach' - any unit enters the zone
+          for (const unit of allUnits) {
+            const unitX = unit.x !== undefined ? unit.x : (unit.position?.x || 0);
+            const unitZ = unit.z !== undefined ? unit.z : (unit.position?.z || 0);
+            
+            const dx = unitX - objWorldX;
+            const dz = unitZ - objWorldZ;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            if (dist <= objRadius) {
+              obj.completed = true;
+              objectivesCompleted++;
+              console.log(`🎯 Objective ${obj.id + 1} completed! Unit reached zone at (${obj.x}, ${obj.y})`);
+              
+              // Show notification
+              if (window.ui && window.ui.showNotification) {
+                window.ui.showNotification(`🎯 Objective Complete!`, 'success');
+              }
+              break;
+            }
+          }
+        } else if (obj.type === 'escape') {
+          // 'escape' - ALL units must be in the zone
+          const unitsInZone = allUnits.filter(unit => {
+            const unitX = unit.x !== undefined ? unit.x : (unit.position?.x || 0);
+            const unitZ = unit.z !== undefined ? unit.z : (unit.position?.z || 0);
+            
+            const dx = unitX - objWorldX;
+            const dz = unitZ - objWorldZ;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            
+            return dist <= objRadius;
+          });
+          
+          if (allUnits.length > 0 && unitsInZone.length === allUnits.length) {
+            obj.completed = true;
+            objectivesCompleted++;
+            console.log(`🎯 Escape objective ${obj.id + 1} completed! All units in zone at (${obj.x}, ${obj.y})`);
+            
+            if (window.ui && window.ui.showNotification) {
+              window.ui.showNotification(`🚪 All units escaped!`, 'success');
+            }
+          }
+        }
+      }
+      
+      // Check if all objectives are completed
+      if (objectivesCompleted === objectives.length && objectives.length > 0) {
+        console.log('🏆 All objectives completed! Adventure victory!');
+        this.endMatch(this.localPlayerId, 'objectives');
       }
     }
     
@@ -2267,10 +2375,18 @@
         }
       }
       
-      // Small delay to ensure message is sent before eliminating
+      // Small delay to ensure message is sent before ending
       setTimeout(() => {
-        // Eliminate local player
-        this.eliminatePlayer(this.localPlayerId);
+        // For objectives/adventure mode or solo play, just end the match as defeat
+        // For elimination mode, eliminate the player (other players may continue)
+        if (this.victoryCondition === 'objectives' || this.players.length <= 2) {
+          // End match - local player loses
+          this.state = MatchState.DEFEAT;
+          this.showEndGameScreen();
+        } else {
+          // Multiplayer with 3+ players - just eliminate self, others continue
+          this.eliminatePlayer(this.localPlayerId);
+        }
       }, 100);
     }
     
@@ -3049,6 +3165,10 @@
         reasonText = '🏛️ Wonder Victory';
       } else if (this.replay.reason === 'relic') {
         reasonText = '✨ Relic Victory';
+      } else if (this.replay.reason === 'objectives') {
+        reasonText = isVictory ? '🎯 All Objectives Complete!' : '❌ Mission Failed';
+      } else if (this.replay.reason === 'defeat') {
+        reasonText = '🏳️ You Surrendered';
       }
       
       endScreen.innerHTML = `

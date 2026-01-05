@@ -598,12 +598,10 @@
     animateMenuItems(screenX, screenY);
     
     // COMPLETELY DISABLE center mesh until we fix clicking
-    setTimeout(() => {
-      if (hud.centerMesh) {
-        hud.centerMesh.isPickable = false;
-        hud.centerMesh.setEnabled(false);
-      }
-    }, 200);
+    if (hud.centerMesh) {
+      hud.centerMesh.isPickable = false;
+      hud.centerMesh.setEnabled(false);
+    }
     
     // Radial menu positioned and shown
   };
@@ -726,35 +724,8 @@
       // Position container at target
       item.container.position.set(targetX, targetY, targetZ);
       
-      // Container always animates from 0.01 to 1.0
-      // (model inside container has its own scale via mesh.scaling)
-      const startScale = 0.01;
-      const finalScale = 1.0;
-      
-      item.container.scaling.setAll(startScale);
-      
-      const scaleAnimation = new BABYLON.Animation(
-        `menuGrow${index}`,
-        "scaling",
-        60,
-        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-      );
-      
-      const startFrame = index * 2;
-      const endFrame = startFrame + 12;
-      
-      scaleAnimation.setKeys([
-        { frame: startFrame, value: new BABYLON.Vector3(startScale, startScale, startScale) },
-        { frame: endFrame, value: new BABYLON.Vector3(finalScale, finalScale, finalScale) }
-      ]);
-      
-      const easingFunction = new BABYLON.BounceEase();
-      easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-      scaleAnimation.setEasingFunction(easingFunction);
-      
-      item.container.animations = [scaleAnimation];
-      hud.scene.beginAnimation(item.container, 0, endFrame + 2, false);
+      // Set scale directly without animation
+      item.container.scaling.setAll(1.0);
     });
   }
   
@@ -1033,71 +1004,18 @@
       item.container.scaling.setAll(1.0);
       item.container.position.set(targetX, targetY, targetZ);
       
-      // Container animates from 0.01 to 1.0 (not using normalizedScale which is for the mesh)
-      const startScale = 0.01;
-      const finalScale = 1.0;
-      const bounceScale = 1.2;
-      
-      item.container.scaling.setAll(startScale);
-      
-      // Animate scale growing out with bounce
-      const scaleAnimation = new BABYLON.Animation(
-        `submenuGrow${index}`,
-        "scaling",
-        60,
-        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-      );
-      
-      const keyFrames = [];
-      keyFrames.push({ frame: 0, value: new BABYLON.Vector3(startScale, startScale, startScale) });
-      keyFrames.push({ frame: 30, value: new BABYLON.Vector3(bounceScale, bounceScale, bounceScale) });
-      keyFrames.push({ frame: 60, value: new BABYLON.Vector3(finalScale, finalScale, finalScale) });
-      
-      scaleAnimation.setKeys(keyFrames);
-      
-      const easingFunction = new BABYLON.CubicEase();
-      easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-      scaleAnimation.setEasingFunction(easingFunction);
-      
-      item.container.animations = [scaleAnimation];
-      hud.scene.beginAnimation(item.container, 0, 60, false);
+      // Set scale directly without animation
+      item.container.scaling.setAll(1.0);
     });
   }
   
   
-  // Retract a button (animate it away)
+  // Retract a button (remove it immediately)
   function retractButton(item) {
     if (!item.container) return;
     
-    // Animate container scaling down
-    const retractAnimation = new BABYLON.Animation(
-      "retractButton",
-      "scaling",
-      15,
-      BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-      BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-    );
-    
-    const keyFrames = [];
-    keyFrames.push({ frame: 0, value: new BABYLON.Vector3(1, 1, 1) });
-    keyFrames.push({ frame: 15, value: new BABYLON.Vector3(0, 0, 0) });
-    
-    retractAnimation.setKeys(keyFrames);
-    
-    const easingFunction = new BABYLON.QuadraticEase();
-    easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEIN);
-    retractAnimation.setEasingFunction(easingFunction);
-    
-    item.container.animations = [retractAnimation];
-    hud.scene.beginAnimation(item.container, 0, 15, false);
-    
-    // Dispose of the container after animation
-    setTimeout(() => {
-      if (item.container) {
-        item.container.dispose();
-      }
-    }, 150);
+    // Dispose immediately without animation
+    item.container.dispose();
   }
   
   // Position all items at the same anchor with same spread
@@ -1110,7 +1028,7 @@
     });
   }
   
-  // Animate expanded menu items
+  // Position expanded menu items immediately
   function animateExpandedMenu(screenX, screenY) {
     radialMenuItems.forEach((item, index) => {
       if (!item.container) return;
@@ -1118,28 +1036,8 @@
       if (item.isSubItem) {
         const targetPos = calculateExpandedItemPosition(item, screenX, screenY);
         
-        item.container.position.set(0, 0, 0);
-        
-        const animation = new BABYLON.Animation(
-          "expandItem",
-          "position",
-          30,
-          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-        );
-        
-        const keyFrames = [];
-        keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0, 0, 0) });
-        keyFrames.push({ frame: 30, value: targetPos });
-        
-        animation.setKeys(keyFrames);
-        
-        const easingFunction = new BABYLON.QuadraticEase();
-        easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-        animation.setEasingFunction(easingFunction);
-        
-        item.container.animations = [animation];
-        hud.scene.beginAnimation(item.container, 0, 30, false);
+        // Set position directly without animation
+        item.container.position.copyFrom(targetPos);
       }
     });
   }
@@ -1223,7 +1121,7 @@
     // console.log('✅ Main menu restored with 4 main categories');
   }
   
-  // Animate menu collapse back to main level - DREAM SYSTEM
+  // Position menu items back to main level immediately
   function animateMenuCollapse(screenX, screenY) {
     restoreMainMenuItems();
     
@@ -1232,53 +1130,17 @@
       
       const targetPos = calculateMenuItemPosition(item);
       
-      const animation = new BABYLON.Animation(
-        "collapseItem",
-        "position",
-        20,
-        BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-        BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-      );
-      
-      const keyFrames = [];
-      keyFrames.push({ frame: 0, value: item.container.position.clone() });
-      keyFrames.push({ frame: 20, value: targetPos });
-      
-      animation.setKeys(keyFrames);
-      
-      const easingFunction = new BABYLON.QuadraticEase();
-      easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEIN);
-      animation.setEasingFunction(easingFunction);
-      
-      item.container.animations = [animation];
-      hud.scene.beginAnimation(item.container, 0, 20, false);
+      // Set position directly without animation
+      item.container.position.copyFrom(targetPos);
     });
   }
   
-  // Restore main menu items to full size when returning from submenu
+  // Restore main menu items to full size immediately
   function restoreMainMenuItems() {
     radialMenuItems.forEach(item => {
       if (!item.isSubItem && item.container) {
-        const restoreAnimation = new BABYLON.Animation(
-          "restoreMainItem",
-          "scaling",
-          20,
-          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-        );
-        
-        const keyFrames = [];
-        keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0.5, 0.5, 0.5) });
-        keyFrames.push({ frame: 20, value: new BABYLON.Vector3(1, 1, 1) });
-        
-        restoreAnimation.setKeys(keyFrames);
-        
-        const easingFunction = new BABYLON.QuadraticEase();
-        easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-        restoreAnimation.setEasingFunction(easingFunction);
-        
-        item.container.animations = [restoreAnimation];
-        hud.scene.beginAnimation(item.container, 0, 20, false);
+        // Set scale directly without animation
+        item.container.scaling.setAll(1.0);
       }
     });
   }
@@ -1455,11 +1317,7 @@
     mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
       BABYLON.ActionManager.OnPickTrigger,
       () => {
-        const originalScale = mesh.scaling.clone();
-        mesh.scaling.scaleInPlace(1.3);
-        setTimeout(() => {
-          mesh.scaling.copyFrom(originalScale);
-        }, 150);
+        // No animation on click
         
         if (item.callback) {
           item.callback();
@@ -1624,7 +1482,12 @@
           m.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
           m.renderingGroupId = 2;
           m.isPickable = false;
-          if (m.material) m.material.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+          // Clone material so we don't modify the shared materials used by game units
+          if (m.material) {
+            const clonedMat = m.material.clone(m.material.name + '_menu');
+            clonedMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+            m.material = clonedMat;
+          }
         });
         
         item.mesh = mesh;
@@ -2342,9 +2205,9 @@
       return;
     }
     
-    // Load saved shadow setting or use default (3 = Full)
+    // Load saved shadow setting or use default (2 = Med)
     const savedShadow = localStorage.getItem('shadowMode');
-    const initialValue = savedShadow ? parseInt(savedShadow) : 3;
+    const initialValue = savedShadow ? parseInt(savedShadow) : 2;
     slider.value = initialValue;
     valueDisplay.textContent = SHADOW_LABELS[initialValue];
     
@@ -2493,7 +2356,7 @@
   
   // Legacy toggle function (now uses slider internally)
   hud.toggleShadowsMode = function() {
-    const currentMode = window.SHADOW_MODE || 3;
+    const currentMode = window.SHADOW_MODE || 2;
     const newMode = currentMode === 0 ? 3 : 0;
     hud.updateShadowMode(newMode);
     localStorage.setItem('shadowMode', newMode.toString());
@@ -2835,12 +2698,12 @@
       } else {
         // Check legacy setting
         const legacyShadows = localStorage.getItem('shadowsEnabled');
-        window.SHADOW_MODE = (legacyShadows === 'false') ? 0 : 3;
+        window.SHADOW_MODE = (legacyShadows === 'false') ? 0 : 2;
       }
       window.SHADOWS_ENABLED = (window.SHADOW_MODE === 3);
     } catch (e) {
-      window.SHADOW_MODE = 3;
-      window.SHADOWS_ENABLED = true;
+      window.SHADOW_MODE = 2;
+      window.SHADOWS_ENABLED = false;
     }
     return; // Early return - full initialization happens in initShadowSlider
     
@@ -3056,34 +2919,14 @@
     }
   }
   
-  // Animate camp options expanding outward
+  // Position camp options immediately
   function animateCampOptions() {
     radialMenuItems.forEach(item => {
       if (item.isCampOption && item.container) {
         const targetPos = calculateExpandedItemPosition(item, 0, 0);
         
-        item.container.position.set(0, 0, 0);
-        
-        const animation = new BABYLON.Animation(
-          "expandCampOption",
-          "position",
-          30,
-          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-        );
-        
-        const keyFrames = [];
-        keyFrames.push({ frame: 0, value: new BABYLON.Vector3(0, 0, 0) });
-        keyFrames.push({ frame: 30, value: targetPos });
-        
-        animation.setKeys(keyFrames);
-        
-        const easingFunction = new BABYLON.QuadraticEase();
-        easingFunction.setEasingMode(BABYLON.EasingFunction.EASINGMODE_EASEOUT);
-        animation.setEasingFunction(easingFunction);
-        
-        item.container.animations = [animation];
-        hud.scene.beginAnimation(item.container, 0, 30, false);
+        // Set position directly without animation
+        item.container.position.copyFrom(targetPos);
       }
     });
   }
@@ -3092,23 +2935,8 @@
   function hideBuildingsMenu() {
     radialMenuItems.forEach(item => {
       if (item.isSubItem && !item.isCampOption && item.container) {
-        // Fade out by scaling down instead of material alpha (container has no material)
-        const scaleAnimation = new BABYLON.Animation(
-          "fadeBuildings",
-          "scaling",
-          15,
-          BABYLON.Animation.ANIMATIONTYPE_VECTOR3,
-          BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT
-        );
-        
-        const keyFrames = [];
-        keyFrames.push({ frame: 0, value: item.container.scaling.clone() });
-        keyFrames.push({ frame: 15, value: new BABYLON.Vector3(0.3, 0.3, 0.3) });
-        
-        scaleAnimation.setKeys(keyFrames);
-        
-        item.container.animations = [scaleAnimation];
-        hud.scene.beginAnimation(item.container, 0, 15, false);
+        // Scale down immediately without animation
+        item.container.scaling.setAll(0.3);
       }
     });
   }

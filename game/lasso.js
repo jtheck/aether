@@ -21,7 +21,7 @@
   let lastLassoPoint = null; // Track last recorded point to avoid duplicates
   
   // Configuration
-  const DRAG_THRESHOLD = 5; // pixels - minimum movement to start drag
+  const DRAG_THRESHOLD = 19; // pixels - minimum movement to start drag
   const CLICK_TIMEOUT = 200; // ms - time to wait before treating as click
   const LASSO_POINT_MIN_DISTANCE = 3; // pixels - minimum distance between lasso points (lower = smoother)
   const LASSO_SIMPLIFY_TOLERANCE = 0.5; // world units - path simplification tolerance

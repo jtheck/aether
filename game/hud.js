@@ -30,13 +30,15 @@
   // Menu definitions with sub-categories - mirrors the 2D menu structure
   let menuDefinitions = {
     buildings: {
+      // Arc 1: Basic structures
       camp: {
         callback: () => {
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('camp');
           }
-        }
+        },
+        arc: 1
       },
       village: {
         callback: () => {
@@ -44,15 +46,8 @@
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('village');
           }
-        }
-      },
-      farm: {
-        callback: () => {
-          if (window.buildingSystem) {
-            window.buildingSystem.cancelPlacement();
-            window.buildingSystem.selectBuilding('farm');
-          }
-        }
+        },
+        arc: 1
       },
       tower: {
         callback: () => {
@@ -60,7 +55,8 @@
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('tower');
           }
-        }
+        },
+        arc: 1
       },
       silo: {
         callback: () => {
@@ -68,7 +64,17 @@
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('silo');
           }
-        }
+        },
+        arc: 1
+      },
+      farm: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('farm');
+          }
+        },
+        arc: 1
       },
       mine: {
         callback: () => {
@@ -76,7 +82,18 @@
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('mine');
           }
-        }
+        },
+        arc: 1
+      },
+      // Arc 2: Intermediate structures
+      lab: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('lab');
+          }
+        },
+        arc: 2
       },
       tavern: {
         callback: () => {
@@ -84,7 +101,17 @@
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('tavern');
           }
-        }
+        },
+        arc: 2
+      },
+      moonwell: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('moonwell');
+          }
+        },
+        arc: 2
       },
       barracks: {
         callback: () => {
@@ -92,99 +119,152 @@
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('barracks');
           }
-        }
+        },
+        arc: 2
+      },
+      workshop: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('workshop');
+          }
+        },
+        arc: 2
+      },
+      // Arc 3: Advanced structures
+      factory: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('factory');
+          }
+        },
+        arc: 3
+      },
+      church: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('church');
+          }
+        },
+        arc: 3
+      },
+      well: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('well');
+          }
+        },
+        arc: 3
+      },
+      perch: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('perch');
+          }
+        },
+        arc: 3
+      },
+      grove: {
+        callback: () => {
+          if (window.buildingSystem) {
+            window.buildingSystem.cancelPlacement();
+            window.buildingSystem.selectBuilding('grove');
+          }
+        },
+        arc: 3
       }
     },
     units: {
+      // Arc 1: Basic/Support units
       villager: {
-        callback: () => window.recruitUnit('villager')
+        callback: () => window.recruitUnit('villager'),
+        arc: 1
       },
       monk: {
-        callback: () => window.recruitUnit('monk')
-      },
-      wizard: {
-        callback: () => window.recruitUnit('wizard')
+        callback: () => window.recruitUnit('monk'),
+        arc: 1
       },
       engineer: {
-        callback: () => window.recruitUnit('engineer')
+        callback: () => window.recruitUnit('engineer'),
+        arc: 1
       },
+      wizard: {
+        callback: () => window.recruitUnit('wizard'),
+        arc: 1
+      },
+      // Arc 2: Combat units
       warrior: {
-        callback: () => window.recruitUnit('warrior')
+        callback: () => window.recruitUnit('warrior'),
+        arc: 2
+      },
+      archer: {
+        callback: () => window.recruitUnit('archer'),
+        arc: 2
       },
       warlock: {
-        callback: () => window.recruitUnit('warlock')
+        callback: () => window.recruitUnit('warlock'),
+        arc: 2
       },
-      brigand: {
-        callback: () => {
-          // Submit convert command to turn a villager into a brigand
-          if (window.currentMatch && window.player) {
-            // Find a villager to convert
-            // Priority: 1) Selected villagers, 2) Nearby unselected villagers
-            const normalizedPlayerId = window.player.id.slice(-6);
-            const myVillagers = window.player.units.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
-            
-            if (myVillagers.length === 0) {
-              console.log('❌ No villagers available to convert to brigand');
-              return;
-            }
-            
-            // Check selected villagers first
-            const selectedVillagers = window.player.selectedUnits.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
-            let targetVillager = null;
-            
-            if (selectedVillagers.length > 0) {
-              // Convert the first selected villager that isn't already being converted
-              targetVillager = selectedVillagers.find(v => !v.isConverting);
-            } else {
-              // Find a villager near the agora that isn't already being converted
-              const agoraBuilding = window.gameBuildings?.find(b => b.type === 'agora' && b.owner === normalizedPlayerId);
-              if (agoraBuilding) {
-                const agoraPos = { x: agoraBuilding.gridX * TILE_SIZE, z: agoraBuilding.gridZ * TILE_SIZE };
-                
-                // Filter out units that are already being converted, then sort by distance
-                const availableVillagers = myVillagers.filter(v => !v.isConverting);
-                availableVillagers.sort((a, b) => {
-                  const distA = Math.sqrt(Math.pow(a.position.x - agoraPos.x, 2) + Math.pow(a.position.z - agoraPos.z, 2));
-                  const distB = Math.sqrt(Math.pow(b.position.x - agoraPos.x, 2) + Math.pow(b.position.z - agoraPos.z, 2));
-                  return distA - distB;
-                });
-                
-                targetVillager = availableVillagers[0]; // Closest available villager
-              } else {
-                // No agora, just pick first available villager
-                targetVillager = myVillagers.find(v => !v.isConverting);
-              }
-            }
-            
-            if (targetVillager) {
-              // Mark as converting to prevent duplicate commands
-              targetVillager.isConverting = true;
-              
-              window.currentMatch.submitCommand({
-                type: 'convert',
-                playerId: window.player.id,
-                unitId: targetVillager.id,
-                targetType: 'brigand'
-              });
-              
-              // Clear the flag after a short delay (longer than typical command processing)
-              setTimeout(() => {
-                targetVillager.isConverting = false;
-              }, 500);
-            }
-          }
-        }
+      wagon: {
+        callback: () => window.recruitUnit('wagon'),
+        arc: 2
+      },
+      // Arc 3: Advanced units
+      apc: {
+        callback: () => window.recruitUnit('apc'),
+        arc: 3
+      },
+      priest: {
+        callback: () => window.recruitUnit('priest'),
+        arc: 3
+      },
+      mycologist: {
+        callback: () => window.recruitUnit('mycologist'),
+        arc: 3
+      },
+      dirigible: {
+        callback: () => window.recruitUnit('dirigible'),
+        arc: 3
+      },
+      shaman: {
+        callback: () => window.recruitUnit('shaman'),
+        arc: 3
       }
     },
     research: {
+      // Arc 1: Economy/Infrastructure upgrades
       scribes: {
-        callback: () => console.log("Research: Scribes selected")
-      },
-      drayage: {
-        callback: () => console.log("Research: Drayage selected")
+        callback: () => console.log("Research: Scribes selected"),
+        arc: 1
       },
       prospecting: {
-        callback: () => console.log("Research: Prospecting selected")
+        callback: () => console.log("Research: Prospecting selected"),
+        arc: 1
+      },
+      patronage: {
+        callback: () => console.log("Research: Patronage selected"),
+        arc: 1
+      },
+      stewardship: {
+        callback: () => console.log("Research: Stewardship selected"),
+        arc: 1
+      },
+      // Arc 2: Military upgrades
+      drayage: {
+        callback: () => console.log("Research: Drayage selected"),
+        arc: 2
+      },
+      artillery: {
+        callback: () => console.log("Research: Artillery selected"),
+        arc: 2
+      },
+      armor: {
+        callback: () => console.log("Research: Armor selected"),
+        arc: 2
       }
     },
     rally: {
@@ -783,8 +863,8 @@
       const color = getColorForCategory(menuLevel);
       
       // Add as submenu item (isSubItem will be true because currentMenuLevel !== 'main')
-      // Pass total count so angle calculation is consistent
-      hud.addRadialMenuItem(itemName, icon, value.callback, color, totalSubmenuItems);
+      // Pass total count and arc number for multi-arc layouts
+      hud.addRadialMenuItem(itemName, icon, value.callback, color, totalSubmenuItems, null, value.arc);
     });
     
     // No back button needed
@@ -862,22 +942,52 @@
   // Get icon for menu item (mirrors 2D menu icons)
   function getIconForItem(key) {
     const icons = {
-      // Buildings
+      // Buildings - Arc 1 (Basic)
       camp: '⛺',
       village: '🏘️',
-      farm: '🚜',
       tower: '🗼',
+      silo: '🏛️',
+      farm: '🚜',
+      mine: '⛏️',
+      // Buildings - Arc 2 (Intermediate)
+      lab: '🔬',
+      tavern: '🍺',
+      moonwell: '🌙',
+      barracks: '🏰',
+      workshop: '🔨',
+      // Buildings - Arc 3 (Advanced)
+      factory: '🏭',
+      church: '⛪',
+      well: '💧',
+      perch: '🪺',
+      grove: '🌳',
       
-      // Units
+      // Units - Arc 1 (Basic/Support)
+      villager: '👤',
       monk: '🧘',
-      wizard: '🧙',
       engineer: '🔧',
-      brigand: '⚔️',
+      wizard: '🧙',
+      // Units - Arc 2 (Combat)
+      warrior: '⚔️',
+      archer: '🏹',
+      warlock: '🔮',
+      wagon: '🛒',
+      // Units - Arc 3 (Advanced)
+      apc: '🚐',
+      priest: '⛪',
+      mycologist: '🍄',
+      dirigible: '🎈',
+      shaman: '🪶',
       
-      // Research
+      // Research - Arc 1 (Economy/Infrastructure)
       scribes: '📝',
-      drayage: '🚛',
       prospecting: '⛏️',
+      patronage: '👑',
+      stewardship: '🏛️',
+      // Research - Arc 2 (Military)
+      drayage: '🚛',
+      artillery: '💣',
+      armor: '🛡️',
       
       // Rally
       home: '🏠',
@@ -932,15 +1042,13 @@
   }
   
   // Position submenu items in an arc relative to the CLICKED CATEGORY BUTTON
+  // Supports multiple arcs via item.arc property (1 = inner, 2 = outer, etc.)
   function positionSubmenuItemsInArc(screenX, screenY) {
     const rect = hud.canvas.getBoundingClientRect();
     
     // Use the clicked category button position (screenX, screenY) as the anchor
     const buttonX = screenX;
     const buttonY = screenY;
-    
-    // console.log(`🎯 Submenu positioning using CLICKED CATEGORY BUTTON at (${buttonX}, ${buttonY})`);
-    // console.log(`🔍 DEBUG: currentAnchor = "${currentAnchor}", screenX = ${screenX}, screenY = ${screenY}`);
     
     // Calculate the correct direction based on the current anchor
     // Submenus should spread AWAY from the screen edge where the anchor is
@@ -968,44 +1076,67 @@
     
     // Spread submenu items in a gentle arc - use config values
     const arcSpread = menuConfig.submenuArcAngle * (Math.PI / 180);
-    let startAngle = buttonAngle - arcSpread / 2;
-    let endAngle = buttonAngle + arcSpread / 2;
     
     const submenuItems = radialMenuItems.filter(item => item.isSubItem);
     
-    // Submenu radius - SECOND concentric circle, FURTHER from edge than main menu
-    const SUBMENU_RADIUS = menuConfig.submenuRadius;
+    // Group items by arc number (default to arc 1 if not specified)
+    const arcGroups = new Map();
+    submenuItems.forEach(item => {
+      const arcNum = item.arc || 1;
+      if (!arcGroups.has(arcNum)) {
+        arcGroups.set(arcNum, []);
+      }
+      arcGroups.get(arcNum).push(item);
+    });
     
-    submenuItems.forEach((item, index) => {
-      if (!item.container) return;
+    // Base radius and spacing between arcs
+    const BASE_RADIUS = menuConfig.submenuRadius;
+    const ARC_SPACING = 0.4; // Distance between successive arcs
+    
+    // Position each arc group
+    arcGroups.forEach((items, arcNum) => {
+      // Calculate radius for this arc (arc 1 = base, arc 2 = base + spacing, etc.)
+      const arcRadius = BASE_RADIUS + (arcNum - 1) * ARC_SPACING;
       
-      // Calculate angle for this item (in radians)
-      let angle;
-      if (submenuItems.length === 1) {
-        angle = (startAngle + endAngle) / 2;
-      } else {
-        const angleStep = (endAngle - startAngle) / (submenuItems.length - 1);
-        angle = startAngle + (index * angleStep);
-      }
+      // Fixed spacing between items, but cap total spread
+      const ITEM_SPACING = 28 * (Math.PI / 180); // 28 degrees between each button
+      const idealSpread = (items.length - 1) * ITEM_SPACING;
       
-      if (isNaN(angle)) {
-        console.warn(`⚠️ Invalid angle for submenu item ${index}: ${angle}`);
-        return;
-      }
+      // Cap at max arc spread, and shrink spacing proportionally if needed
+      const itemSpread = Math.min(arcSpread, idealSpread);
+      const actualSpacing = items.length > 1 ? itemSpread / (items.length - 1) : 0;
       
-      // Calculate position directly using the angle we just computed
-      const targetX = Math.cos(angle) * SUBMENU_RADIUS;
-      const targetY = Math.sin(angle) * SUBMENU_RADIUS;
-      const targetZ = -menuConfig.distance * 0.5;
+      const startAngle = buttonAngle - itemSpread / 2;
+      const endAngle = buttonAngle + itemSpread / 2;
       
-      console.log(`  📍 Submenu ${item.text}: angle=${(angle * 180 / Math.PI).toFixed(1)}°, pos=(${targetX.toFixed(2)}, ${targetY.toFixed(2)})`);
-      
-      // Reset and position container
-      item.container.scaling.setAll(1.0);
-      item.container.position.set(targetX, targetY, targetZ);
-      
-      // Set scale directly without animation
-      item.container.scaling.setAll(1.0);
+      items.forEach((item, index) => {
+        if (!item.container) return;
+        
+        // Calculate angle for this item within its arc
+        let angle;
+        if (items.length === 1) {
+          angle = (startAngle + endAngle) / 2;
+        } else {
+          const angleStep = (endAngle - startAngle) / (items.length - 1);
+          angle = startAngle + (index * angleStep);
+        }
+        
+        if (isNaN(angle)) {
+          console.warn(`⚠️ Invalid angle for submenu item ${index}: ${angle}`);
+          return;
+        }
+        
+        // Calculate position using the arc-specific radius
+        const targetX = Math.cos(angle) * arcRadius;
+        const targetY = Math.sin(angle) * arcRadius;
+        const targetZ = -menuConfig.distance * 0.5;
+        
+        console.log(`  📍 Submenu ${item.text} (arc ${arcNum}): angle=${(angle * 180 / Math.PI).toFixed(1)}°, radius=${arcRadius.toFixed(2)}, pos=(${targetX.toFixed(2)}, ${targetY.toFixed(2)})`);
+        
+        // Reset and position container
+        item.container.scaling.setAll(1.0);
+        item.container.position.set(targetX, targetY, targetZ);
+      });
     });
   }
   
@@ -1259,7 +1390,7 @@
   }
   
   // Add item to radial menu - DIRECTIONAL SYSTEM
-  hud.addRadialMenuItem = function(text, icon, callback, color, totalCount, modelPath) {
+  hud.addRadialMenuItem = function(text, icon, callback, color, totalCount, modelPath, arcNumber) {
     const isSubmenu = currentMenuLevel !== 'main';
     const currentIndex = radialMenuItems.filter(item => item.isSubItem === isSubmenu).length;
     // Use provided totalCount (for submenus) or calculate it (for main menu)
@@ -1299,6 +1430,7 @@
       isSubItem: isSubmenu, // Mark as submenu item if not in main menu
       menuCategory: currentMenuLevel, // Store which menu this belongs to (units, buildings, etc.)
       customModelPath: modelPath, // Optional custom model for category buttons
+      arc: arcNumber || 1, // Which arc to place this item in (1 = inner, 2 = outer, etc.)
       mesh: null
     };
     

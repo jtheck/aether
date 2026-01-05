@@ -6,28 +6,54 @@ const ARC_SPACING = 60; // Distance between successive arcs
 
 const menu = {
   buildings: {
-    camp: {},
-    village: {},
-    farm: {},
-    tower: {},
-    silo: {},
-    mine: {},
-    tavern: {},
-    barracks: {}
+    // Arc 1: Basic structures
+    camp: { arc: 1 },
+    village: { arc: 1 },
+    tower: { arc: 1 },
+    silo: { arc: 1 },
+    farm: { arc: 1 },
+    mine: { arc: 1 },
+    // Arc 2: Intermediate structures
+    lab: { arc: 2 },
+    tavern: { arc: 2 },
+    moonwell: { arc: 2 },
+    barracks: { arc: 2 },
+    workshop: { arc: 2 },
+    // Arc 3: Advanced structures
+    factory: { arc: 3 },
+    church: { arc: 3 },
+    well: { arc: 3 },
+    perch: { arc: 3 },
+    grove: { arc: 3 }
   },
   units: {
-    villager: {},
-    monk: {},
-    wizard: {},
-    engineer: {},
-    warrior: {},
-    warlock: {},
-    brigand: {}
+    // Arc 1: Basic/Support units
+    villager: { arc: 1 },
+    monk: { arc: 1 },
+    engineer: { arc: 1 },
+    wizard: { arc: 1 },
+    // Arc 2: Combat units
+    warrior: { arc: 2 },
+    archer: { arc: 2 },
+    warlock: { arc: 2 },
+    wagon: { arc: 2 },
+    // Arc 3: Advanced units
+    apc: { arc: 3 },
+    priest: { arc: 3 },
+    mycologist: { arc: 3 },
+    dirigible: { arc: 3 },
+    shaman: { arc: 3 }
   },
   research: {
-    scribes: {},
-    drayage: {},
-    prospecting: {}
+    // Arc 1: Economy/Infrastructure
+    scribes: { arc: 1 },
+    prospecting: { arc: 1 },
+    patronage: { arc: 1 },
+    stewardship: { arc: 1 },
+    // Arc 2: Military
+    drayage: { arc: 2 },
+    artillery: { arc: 2 },
+    armor: { arc: 2 }
   },
   rally: {
     home: {}
@@ -42,23 +68,38 @@ let menuDepth = 0;
 // Calculate button positions along an arc
 function calculateArcPositions(anchorX, anchorY, numButtons, depth = 0, direction = 'w') {
   const positions = [];
-  const angleStep = ARC_ANGLE / (numButtons - 1);
+  
+  let dynamicArcAngle, angleStep;
+  
+  if (depth === 0) {
+    // Main menu: use full arc spread
+    dynamicArcAngle = ARC_ANGLE;
+    angleStep = numButtons > 1 ? ARC_ANGLE / (numButtons - 1) : 0;
+  } else {
+    // Submenus: fixed spacing between items, but cap total spread
+    const ITEM_SPACING = 28; // degrees between each button
+    const idealSpread = (numButtons - 1) * ITEM_SPACING;
+    dynamicArcAngle = Math.min(ARC_ANGLE, idealSpread);
+    // If we hit the cap, shrink spacing proportionally to fit
+    angleStep = numButtons > 1 ? dynamicArcAngle / (numButtons - 1) : 0;
+  }
+  
   let startAngle;
   
   // Adjust the arc's orientation based on anchor direction
   switch(direction) {
     case 'n': // Point downward
-      startAngle = 90 - (ARC_ANGLE / 2);
+      startAngle = 90 - (dynamicArcAngle / 2);
       break;
     case 's': // Point upward
-      startAngle = 270 - (ARC_ANGLE / 2);
+      startAngle = 270 - (dynamicArcAngle / 2);
       break;
     case 'e': // Point leftward
-      startAngle = 180 - (ARC_ANGLE / 2);
+      startAngle = 180 - (dynamicArcAngle / 2);
       break;
     case 'w': // Point rightward
     default:
-      startAngle = -ARC_ANGLE / 2;
+      startAngle = -dynamicArcAngle / 2;
       break;
   }
   
@@ -200,32 +241,47 @@ function showSubmenu(parentButton, submenuItems) {
   
   const x = currentAnchor.x;
   const y = currentAnchor.y;
-  const depth = parseInt(parentButton.dataset.depth) + 1;
+  const baseDepth = parseInt(parentButton.dataset.depth) + 1;
   
   // Hide any buttons at the same or deeper depth
   const buttonsToHide = activeButtons.filter(button => 
-    parseInt(button.dataset.depth) >= depth
+    parseInt(button.dataset.depth) >= baseDepth
   );
   hideButtons(buttonsToHide);
   activeButtons = activeButtons.filter(button => 
-    parseInt(button.dataset.depth) < depth
+    parseInt(button.dataset.depth) < baseDepth
   );
   
-  // Create submenu buttons
-  const buttons = Object.entries(submenuItems).map(([key, value]) => {
-    const path = JSON.parse(parentButton.dataset.menuPath);
-    path.push(key);
-    return createMenuButton(
-      `menu-${path.join('-')}`,
-      getIconForItem(key),
-      key,
-      path,
-      depth
-    );
+  // Group submenu items by arc number
+  const arcGroups = new Map();
+  Object.entries(submenuItems).forEach(([key, value]) => {
+    const arcNum = (value && value.arc) || 1;
+    if (!arcGroups.has(arcNum)) {
+      arcGroups.set(arcNum, []);
+    }
+    arcGroups.get(arcNum).push({ key, value });
   });
   
-  // Show new buttons in arc using root anchor position
-  showButtonsInArc(buttons, x, y, depth, currentAnchor.direction);
+  // Create and position buttons for each arc
+  arcGroups.forEach((items, arcNum) => {
+    // Each arc gets a different depth (arc 1 = baseDepth, arc 2 = baseDepth+1, etc.)
+    const arcDepth = baseDepth + (arcNum - 1);
+    
+    const buttons = items.map(({ key, value }) => {
+      const path = JSON.parse(parentButton.dataset.menuPath);
+      path.push(key);
+      return createMenuButton(
+        `menu-${path.join('-')}`,
+        getIconForItem(key),
+        key,
+        path,
+        arcDepth
+      );
+    });
+    
+    // Show this arc's buttons
+    showButtonsInArc(buttons, x, y, arcDepth, currentAnchor.direction);
+  });
 }
 
 // Hide buttons
@@ -239,28 +295,52 @@ function hideButtons(buttons) {
 // Get icon for menu item
 function getIconForItem(key) {
   const icons = {
-    // Original units
-    monk: '🙏',
-    wizard: '🧙',
-    engineer: '🔧',
-    brigand: '🗡️',
-    // Nature units
+    // Units - Arc 1 (Basic/Support)
     villager: '👤',
-    frog_scout: '🐸',
-    tree_guardian: '🌳',
-    mushroom_mage: '🍄',
-    bird_messenger: '🐦',
-    gnome_builder: '👷',
+    monk: '🧘',
+    engineer: '🔧',
+    wizard: '🧙',
+    // Units - Arc 2 (Combat)
+    warrior: '⚔️',
+    archer: '🏹',
+    warlock: '🔮',
+    wagon: '🛒',
+    // Units - Arc 3 (Advanced)
+    apc: '🚐',
+    priest: '⛪',
+    mycologist: '🍄',
+    dirigible: '🎈',
+    shaman: '🪶',
     
-    // Buildings
+    // Buildings - Arc 1 (Basic)
     camp: '⛺',
-    tower: '🗼',
     village: '🏘️',
+    tower: '🗼',
+    silo: '🏛️',
     farm: '🌾',
+    mine: '⛏️',
+    // Buildings - Arc 2 (Intermediate)
+    lab: '🔬',
+    tavern: '🍺',
+    moonwell: '🌙',
+    barracks: '🏰',
+    workshop: '🔨',
+    // Buildings - Arc 3 (Advanced)
+    factory: '🏭',
+    church: '⛪',
+    well: '💧',
+    perch: '🪺',
+    grove: '🌳',
     
-    // Research
-    scribes: '📚',
-    drayage: '🔬',
+    // Research - Arc 1 (Economy/Infrastructure)
+    scribes: '📝',
+    prospecting: '⛏️',
+    patronage: '👑',
+    stewardship: '🏛️',
+    // Research - Arc 2 (Military)
+    drayage: '🚛',
+    artillery: '💣',
+    armor: '🛡️',
     
     // Default icons for categories
     units: '👥',

@@ -17,7 +17,7 @@ window.aud = {};  // Audio
 
   app.init = function(){
     
-    // initProgressiveWebApp();
+    initProgressiveWebApp();
     // initUXListeners();
   
     ui.init();
@@ -111,7 +111,7 @@ window.aud = {};  // Audio
       } else {
         // Register the service worker
         navigator.serviceWorker
-          .register("/sw-treha.js", {
+          .register("/sw-aether.js", {
             scope: "./"
           })
           .then(function (reg) {

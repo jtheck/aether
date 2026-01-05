@@ -374,10 +374,10 @@
       const centroidDy = cNow.y - gestureLast.centroid.y;
       
       // DETECT ANOMALIES: If finger positions jump too much in one frame, reset baseline
-      // Mobile browsers need tighter thresholds since we disabled staleness checks for them
-      const maxReasonableCentroidMove = isMobileBrowser ? 60 : 100;
-      const maxReasonableAngle = isMobileBrowser ? 0.25 : 0.3;
-      const maxReasonableDistChange = isMobileBrowser ? 40 : 50;
+      // Mobile browsers batch events aggressively - use LOOSER thresholds to tolerate chunkier deltas
+      const maxReasonableCentroidMove = isMobileBrowser ? 150 : 100;
+      const maxReasonableAngle = isMobileBrowser ? 0.4 : 0.3;
+      const maxReasonableDistChange = isMobileBrowser ? 80 : 50;
       
       const centroidMoveSq = centroidDx * centroidDx + centroidDy * centroidDy;
       const isAnomalousFrame = (
@@ -417,9 +417,9 @@
       const clampedDistDelta = distDelta;
       
       // Check TOTAL delta from gesture start to determine if gesture should engage
-      // Mobile browsers need slightly larger deadzones for reliable detection
-      const pinchDeadzone = isMobileBrowser ? 60.0 : (config.pinchDeadzone || 50.0);
-      const rotateDeadzone = isMobileBrowser ? 0.20 : (config.rotateDeadzone || 0.15); // ~11° for mobile, ~9° for desktop - lowered for easier triggering
+      // Mobile browsers: SMALLER deadzones - batched events already have bigger deltas
+      const pinchDeadzone = isMobileBrowser ? 30.0 : (config.pinchDeadzone || 50.0);
+      const rotateDeadzone = isMobileBrowser ? 0.10 : (config.rotateDeadzone || 0.15); // ~6° for mobile, ~9° for desktop
       const stabilityRequired = isMobileBrowser ? 1 : (config.gestureStabilityFrames || 2);
       
       const totalDistDelta = Math.abs(da.dist - gestureInitial.distance);
@@ -438,7 +438,8 @@
       // CRITICAL: Pinch requires BOTH finger spread AND centroid stability
       // If fingers spread during panning, centroid moves proportionally - reject!
       // If fingers intentionally pinch, centroid stays relatively stable - accept!
-      const centroidStabilityThreshold = isMobileBrowser ? 100 : (config.pinchCentroidStability || 80);
+      // Mobile: more lenient since batched events cause larger centroid jumps
+      const centroidStabilityThreshold = isMobileBrowser ? 150 : (config.pinchCentroidStability || 80);
       
       // Key insight: When panning with drift, centroid/distance ratio is ~0.5
       // When intentionally pinching, ratio improves (gets lower) over time

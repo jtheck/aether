@@ -296,8 +296,9 @@
       groundForward.normalize();
       const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
       
-      // === PAN (always active, reduced when in edge zones) ===
-      const panStrength = 1.0 - (edge.zoomFactor * 0.5 + edge.rotateFactor * 0.5); // Reduce pan in edge zones
+      // === PAN (reduced heavily or disabled when in edge zones for zoom/rotate) ===
+      const edgeActivity = Math.max(edge.zoomFactor, edge.rotateFactor);
+      const panStrength = edgeActivity > 0.1 ? 0.2 : 1.0; // Almost no pan when zooming/rotating
       const panSens = config.zonePanSensitivity * panStrength;
       const wx = (groundRight.x * dx + groundForward.x * dy) * pixelsToWorld * panSens;
       const wz = (groundRight.z * dx + groundForward.z * dy) * pixelsToWorld * panSens;
@@ -319,7 +320,7 @@
       
       // === ZOOM (when near left/right edges, Y movement = zoom) ===
       if (edge.zoomFactor > 0.1) {
-        const zoomAmount = dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius; // Flipped: drag down = zoom out
+        const zoomAmount = -dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius; // Drag up = zoom in
         cam.radius = Math.max(10, Math.min(200, cam.radius + zoomAmount));
       }
       
@@ -333,7 +334,7 @@
       gestureVelocity.pan.x = wx || 0;
       gestureVelocity.pan.z = wz || 0;
       gestureVelocity.rotate = edge.rotateFactor > 0.1 ? -dx * edge.rotateFactor * config.zoneRotateSensitivity : 0;
-      gestureVelocity.pinch = edge.zoomFactor > 0.1 ? dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius : 0;
+      gestureVelocity.pinch = edge.zoomFactor > 0.1 ? -dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius : 0;
       
       return true;
     }

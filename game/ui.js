@@ -1662,12 +1662,14 @@ function getRandomColor() {
           // Walk up parent hierarchy checking both names and radial menu reference
           let currentMesh = pickResult.pickedMesh;
           while (currentMesh && !isMenuClick) {
-            // Check if this mesh is the radial menu or has a menu item name or is a click sphere
+            // Check if this mesh is the radial menu or has a menu item name or is a click sphere/hitbox
             if (currentMesh === window.hud.radialMenu ||
                 currentMesh.name.includes('menuItem_') || 
                 currentMesh.name.includes('radialCenter') ||
                 currentMesh.name.includes('clickSphere_') ||
-                currentMesh.name.includes('clickPlane_')) {
+                currentMesh.name.includes('clickPlane_') ||
+                currentMesh.name.includes('hitbox_') ||
+                currentMesh.name.includes('menuContainer_')) {
               isMenuClick = true;
               break;
             }

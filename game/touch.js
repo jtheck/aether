@@ -29,7 +29,13 @@
       suppressSingleTapAfterTwoFingerMs: 300,
       initialPinchMinSpanPx: 20, // Require fingers to be spread apart to start gesture
       // Building placement UX
-      buildPlaceMinHoldMs: 150 // Reduced from 200ms for snappier placement
+      buildPlaceMinHoldMs: 150, // Reduced from 200ms for snappier placement
+      // NEW: Zone-based single-finger camera control
+      edgeZoneThreshold: 0.15, // 15% of screen width/height is "edge zone"
+      zoneZoomSensitivity: 0.015, // Zoom speed when in left/right edge zones
+      zoneRotateSensitivity: 0.018, // Rotate speed when in top/bottom edge zones
+      zonePanSensitivity: 8.0, // Pan sensitivity for single-finger camera
+      cameraFingerDragThreshold: 8 // Pixels before single-finger starts camera movement
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -220,6 +226,116 @@
         return null;
       }
       return window.ui.getWorldPositionFromScreen(screenX, screenY);
+    }
+
+    // NEW: Calculate edge proximity factors (0 = center, 1 = at edge)
+    function getEdgeProximity(clientX, clientY) {
+      const rect = canvasRect();
+      // Normalize position to 0-1
+      const normX = (clientX - rect.left) / rect.width;
+      const normY = (clientY - rect.top) / rect.height;
+      
+      const threshold = config.edgeZoneThreshold;
+      
+      // Calculate proximity to each edge (0 = not in zone, 1 = at edge)
+      const leftProx = Math.max(0, (threshold - normX) / threshold);
+      const rightProx = Math.max(0, (normX - (1 - threshold)) / threshold);
+      const topProx = Math.max(0, (threshold - normY) / threshold);
+      const bottomProx = Math.max(0, (normY - (1 - threshold)) / threshold);
+      
+      return {
+        left: leftProx,
+        right: rightProx,
+        top: topProx,
+        bottom: bottomProx,
+        // Combined factors for zoom (left/right) and rotate (top/bottom)
+        zoomFactor: Math.max(leftProx, rightProx),
+        rotateFactor: Math.max(topProx, bottomProx)
+      };
+    }
+
+    // NEW: Single-finger camera control with zone blending
+    // Returns true if camera was moved (to prevent tap detection)
+    let cameraFingerActive = false;
+    let cameraFingerLastX = 0;
+    let cameraFingerLastY = 0;
+    
+    function applySingleFingerCamera(ps) {
+      if (!window.gfx || !window.gfx.camera || !window.gfx.cameraTarget) return false;
+      if (window.buildingSystem && window.buildingSystem.isPlacing) return false;
+      
+      const cam = window.gfx.camera;
+      const target = window.gfx.cameraTarget.position;
+      
+      // Calculate delta from last position
+      const dx = ps.x - ps.lastX;
+      const dy = ps.y - ps.lastY;
+      
+      // CRITICAL: Consume the delta by updating lastX/lastY
+      // This prevents the same delta from being applied multiple times
+      ps.lastX = ps.x;
+      ps.lastY = ps.y;
+      
+      // Skip if no movement
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
+      
+      // Get edge proximity for zone blending
+      const edge = getEdgeProximity(ps.x, ps.y);
+      
+      // Calculate world-space pan
+      const rect = canvasRect();
+      const pixelsToWorld = (2 * cam.radius * Math.tan((cam.fov || 0.8) / 2)) / Math.max(1, rect.height);
+      
+      // Get camera-aligned axes for panning
+      const camPos = cam.position.clone();
+      const targetPos = target.clone ? target.clone() : new BABYLON.Vector3(target.x, target.y, target.z);
+      const toTarget = targetPos.subtract(camPos).normalize();
+      const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
+      
+      if (groundForward.lengthSquared() < 1e-6) return false;
+      groundForward.normalize();
+      const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
+      
+      // === PAN (always active, reduced when in edge zones) ===
+      const panStrength = 1.0 - (edge.zoomFactor * 0.5 + edge.rotateFactor * 0.5); // Reduce pan in edge zones
+      const panSens = config.zonePanSensitivity * panStrength;
+      const wx = (groundRight.x * dx + groundForward.x * dy) * pixelsToWorld * panSens;
+      const wz = (groundRight.z * dx + groundForward.z * dy) * pixelsToWorld * panSens;
+      
+      if (Number.isFinite(wx) && Number.isFinite(wz)) {
+        const tileSize = (window.TILE_SIZE || 4);
+        const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+        const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+        const margin = 2 * tileSize;
+        
+        target.x = Math.max(margin, Math.min(w - margin, target.x + wx));
+        target.z = Math.max(margin, Math.min(h - margin, target.z + wz));
+        
+        // Update terrain chunks
+        if (window.liveField && typeof window.liveField.updateVisibleChunks === 'function') {
+          window.liveField.updateVisibleChunks(target.x, target.z);
+        }
+      }
+      
+      // === ZOOM (when near left/right edges, Y movement = zoom) ===
+      if (edge.zoomFactor > 0.1) {
+        const zoomAmount = dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius; // Flipped: drag down = zoom out
+        cam.radius = Math.max(10, Math.min(200, cam.radius + zoomAmount));
+      }
+      
+      // === ROTATE (when near top/bottom edges, X movement = rotate) ===
+      if (edge.rotateFactor > 0.1) {
+        const rotateAmount = -dx * edge.rotateFactor * config.zoneRotateSensitivity; // Flipped direction
+        cam.alpha += rotateAmount;
+      }
+      
+      // Store velocity for momentum
+      gestureVelocity.pan.x = wx || 0;
+      gestureVelocity.pan.z = wz || 0;
+      gestureVelocity.rotate = edge.rotateFactor > 0.1 ? -dx * edge.rotateFactor * config.zoneRotateSensitivity : 0;
+      gestureVelocity.pinch = edge.zoomFactor > 0.1 ? dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius : 0;
+      
+      return true;
     }
 
     function sendSyntheticPointer(type, clientX, clientY, button, options) {
@@ -720,7 +836,9 @@
         }
       }
 
-      beginGestureIfNeeded();
+      // OLD: beginGestureIfNeeded() - disabled for new touch scheme
+      // The old two-finger gesture system is no longer used
+      // beginGestureIfNeeded();
 
       // If only one finger, defer synthetic left button down until drag threshold is crossed
       // Also initialize building placement session tracking
@@ -761,124 +879,136 @@
       lastTouchClientX = e.clientX;
       lastTouchClientY = e.clientY;
       
-      // CRITICAL FIX: Process multi-touch gestures (2+ fingers) immediately to avoid
-      // responsiveness issues when shadows are enabled and requestAnimationFrame is throttled.
-      // Only defer building placement preview and single-finger drag selection.
-      if (activePointers.size >= 2) {
-        // Process gestures immediately for responsive camera control
+      // === NEW TOUCH CONTROL SCHEME ===
+      // 1 finger = camera pan + zone-blended zoom/rotate
+      // 2 fingers = first finger camera, second finger selection/lasso/commands
+      
+      if (activePointers.size === 1) {
+        // SINGLE FINGER: Camera control with zone blending
         invalidateTime();
-        beginGestureIfNeeded();
-        applyTwoFingerGesture();
         
-        // Support 3+ finger actions/selections WHILE 2-finger gesture is active
-        // This is ROBUST multitouch - you can gesture with 2 fingers and act with a 3rd!
-        if (activePointers.size >= 3) {
-          // Get the gesture primary fingers
-          const gesturePair = getTwoPrimaryPointers();
-          const gestureIds = gesturePair ? new Set([gesturePair[0].id, gesturePair[1].id]) : new Set();
+        // Building placement mode uses single finger for preview positioning
+        if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
+          handleBuildingPlacementPreview();
+          return;
+        }
+        
+        // Get the single pointer
+        const ps = activePointers.values().next().value;
+        if (!ps) return;
+        
+        // Check if we've moved enough to start camera movement
+        const dx = ps.x - ps.startX;
+        const dy = ps.y - ps.startY;
+        const movedSq = dx * dx + dy * dy;
+        const cameraThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
+        
+        if (movedSq >= cameraThresholdSq) {
+          // Mark as camera finger to prevent tap
+          ps.isCameraFinger = true;
           
-          // For each additional finger (not part of the 2-finger gesture)
-          for (const ps of activePointers.values()) {
-            if (gestureIds.has(ps.id)) continue; // Skip gesture fingers
-            if (ps.wasInGesture) continue; // Skip if was previously in gesture
-            
-            const dx = ps.x - ps.startX;
-            const dy = ps.y - ps.startY;
-            const movedSq = dx*dx + dy*dy;
-            
-            if (!ps.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
-              if (now() >= suppressSingleTapUntil) {
-                sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
-                ps.syntheticDownEmitted = true;
-              }
-            }
-            if (ps.syntheticDownEmitted) {
-              sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
-            }
+          // Apply camera movement with zone blending
+          applySingleFingerCamera(ps);
+          
+          // Activate momentum tracking
+          momentumActive = false; // Will activate on pointer up
+        }
+        
+      } else if (activePointers.size >= 2) {
+        // TWO+ FINGERS: First finger = camera, additional fingers = selection/lasso
+        invalidateTime();
+        
+        // CRITICAL: Only the pointer in this event should be processed
+        const movedPointerId = e.pointerId;
+        const cameraFingerId = pointerOrder[0];
+        
+        // Only apply camera control if the CAMERA FINGER is the one that moved
+        // Double-check by verifying this event's pointer ID matches the camera finger
+        if (movedPointerId === cameraFingerId) {
+          const cameraPs = activePointers.get(cameraFingerId);
+          // Verify this pointer was actually just updated (same ID as event)
+          if (cameraPs && cameraPs.id === e.pointerId) {
+            cameraPs.isCameraFinger = true;
+            applySingleFingerCamera(cameraPs);
           }
         }
-      } else if (!moveRafScheduled) {
-        // Defer single-finger operations (building placement, drag selection) to RAF
-        // These are less critical and can tolerate slight delays
-        moveRafScheduled = true;
-        requestAnimationFrame(() => {
-          moveRafScheduled = false;
-          invalidateTime();
-          // Building placement preview tracking should run regardless of pointer tracking state
-          if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
-            let worldPos = screenToWorld(lastTouchClientX, lastTouchClientY);
-            // Fallback to scene.pick with canvas-local coordinates if needed
-            if ((!worldPos || !Number.isFinite(worldPos.x) || !Number.isFinite(worldPos.z)) && window.gfx && window.gfx.scene) {
-              const lx = lastTouchClientX - cachedCanvasRect.left;
-              const ly = lastTouchClientY - cachedCanvasRect.top;
-              const pr = window.gfx.scene.pick(lx, ly);
-              if (pr && pr.hit && pr.pickedPoint) {
-                worldPos = pr.pickedPoint;
-              }
-            }
-            if (worldPos && Number.isFinite(worldPos.x) && Number.isFinite(worldPos.z)) {
-              const tile = (window.TILE_SIZE || 4);
-              const gridXWorld = Math.round(worldPos.x / tile) * tile;
-              const gridZWorld = Math.round(worldPos.z / tile) * tile;
-              
-              // Only update if grid position changed (avoids redundant calculations)
-              const previewMesh = window.buildingSystem.previewMesh;
-              if (previewMesh && (previewMesh.position.x !== gridXWorld || previewMesh.position.z !== gridZWorld)) {
-                previewMesh.position.x = gridXWorld;
-                previewMesh.position.z = gridZWorld;
-                // Get terrain height using bilinear interpolation
-                const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(gridXWorld, gridZWorld) : 0;
-                previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
-              }
-              if (previewMesh) {
-                previewMesh.rotation.y = window.buildingSystem.placementRotation || 0;
-              }
-              // Update placement moved flag based on tile changes
-              if (placingTouchId !== null) {
-                const gx = Math.round(worldPos.x / tile);
-                const gz = Math.round(worldPos.z / tile);
-                if (placingLastTileX === null || placingLastTileZ === null) {
-                  placingLastTileX = gx; placingLastTileZ = gz;
-                } else if (gx !== placingLastTileX || gz !== placingLastTileZ) {
-                  placingPreviewMoved = true;
-                  placingLastTileX = gx; placingLastTileZ = gz;
-                }
-              }
-              if (window.buildingSystem.selectedBuildingType === 'camp' && window.buildingSystem.updateRadiusVisualization) {
-                window.buildingSystem.updateRadiusVisualization(window.buildingSystem.previewMesh.position);
-              }
-              if (window.buildingSystem.updatePreviewValidity) {
-                const gx = Math.round(worldPos.x / tile);
-                const gz = Math.round(worldPos.z / tile);
-                window.buildingSystem.updatePreviewValidity(gx, gz);
-                if (window.buildingSystem.detectResourcesForCamp && window.buildingSystem.selectedBuildingType === 'camp') {
-                  window.buildingSystem.detectResourcesForCamp(gx, gz);
-                }
-              }
+        
+        // If an ACTION FINGER moved, handle selection/lasso/commands
+        for (let i = 1; i < pointerOrder.length; i++) {
+          if (pointerOrder[i] !== movedPointerId) continue; // Only process the finger that moved
+          
+          const actionPs = activePointers.get(pointerOrder[i]);
+          if (!actionPs) continue;
+          if (actionPs.wasInGesture) continue;
+          
+          const dx = actionPs.x - actionPs.startX;
+          const dy = actionPs.y - actionPs.startY;
+          const movedSq = dx * dx + dy * dy;
+          
+          // Start drag/lasso if moved enough
+          if (!actionPs.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
+            if (now() >= suppressSingleTapUntil) {
+              sendSyntheticPointer('pointerdown', actionPs.startX, actionPs.startY, 0, { suppressTerrainClick: true });
+              actionPs.syntheticDownEmitted = true;
             }
           }
-
-          if (activePointers.size === 1) {
-            if (window.buildingSystem && window.buildingSystem.isPlacing) return;
-            for (const only of activePointers.values()) {
-              // Skip drag selection if this finger was part of a gesture
-              if (only.wasInGesture) continue;
-              
-              const dx = only.x - only.startX;
-              const dy = only.y - only.startY;
-              const movedSq = dx*dx + dy*dy;
-              if (!only.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
-                if (now() >= suppressSingleTapUntil) {
-                  sendSyntheticPointer('pointerdown', only.startX, only.startY, 0, { suppressTerrainClick: true });
-                  only.syntheticDownEmitted = true;
-                }
-              }
-              if (only.syntheticDownEmitted) {
-                sendSyntheticPointer('pointermove', only.x, only.y, 0, { suppressTerrainClick: true });
-              }
-            }
+          
+          // Continue drag/lasso
+          if (actionPs.syntheticDownEmitted) {
+            sendSyntheticPointer('pointermove', actionPs.x, actionPs.y, 0, { suppressTerrainClick: true });
           }
-        });
+        }
+      }
+    }
+    
+    // Helper function for building placement preview
+    function handleBuildingPlacementPreview() {
+      let worldPos = screenToWorld(lastTouchClientX, lastTouchClientY);
+      // Fallback to scene.pick with canvas-local coordinates if needed
+      if ((!worldPos || !Number.isFinite(worldPos.x) || !Number.isFinite(worldPos.z)) && window.gfx && window.gfx.scene) {
+        const lx = lastTouchClientX - cachedCanvasRect.left;
+        const ly = lastTouchClientY - cachedCanvasRect.top;
+        const pr = window.gfx.scene.pick(lx, ly);
+        if (pr && pr.hit && pr.pickedPoint) {
+          worldPos = pr.pickedPoint;
+        }
+      }
+      if (worldPos && Number.isFinite(worldPos.x) && Number.isFinite(worldPos.z)) {
+        const tile = (window.TILE_SIZE || 4);
+        const gridXWorld = Math.round(worldPos.x / tile) * tile;
+        const gridZWorld = Math.round(worldPos.z / tile) * tile;
+        
+        const previewMesh = window.buildingSystem.previewMesh;
+        if (previewMesh && (previewMesh.position.x !== gridXWorld || previewMesh.position.z !== gridZWorld)) {
+          previewMesh.position.x = gridXWorld;
+          previewMesh.position.z = gridZWorld;
+          const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(gridXWorld, gridZWorld) : 0;
+          previewMesh.position.y = terrainY + 0.75;
+        }
+        if (previewMesh) {
+          previewMesh.rotation.y = window.buildingSystem.placementRotation || 0;
+        }
+        if (placingTouchId !== null) {
+          const gx = Math.round(worldPos.x / tile);
+          const gz = Math.round(worldPos.z / tile);
+          if (placingLastTileX === null || placingLastTileZ === null) {
+            placingLastTileX = gx; placingLastTileZ = gz;
+          } else if (gx !== placingLastTileX || gz !== placingLastTileZ) {
+            placingPreviewMoved = true;
+            placingLastTileX = gx; placingLastTileZ = gz;
+          }
+        }
+        if (window.buildingSystem.selectedBuildingType === 'camp' && window.buildingSystem.updateRadiusVisualization) {
+          window.buildingSystem.updateRadiusVisualization(window.buildingSystem.previewMesh.position);
+        }
+        if (window.buildingSystem.updatePreviewValidity) {
+          const gx = Math.round(worldPos.x / tile);
+          const gz = Math.round(worldPos.z / tile);
+          window.buildingSystem.updatePreviewValidity(gx, gz);
+          if (window.buildingSystem.detectResourcesForCamp && window.buildingSystem.selectedBuildingType === 'camp') {
+            window.buildingSystem.detectResourcesForCamp(gx, gz);
+          }
+        }
       }
     }
 
@@ -975,10 +1105,21 @@
       }
 
       if (activePointers.size === 0) {
-        // Single finger scenario (no other pointers active)
+        // No other pointers active - ALWAYS clean up any pending lasso/drag first
+        if (ps.syntheticDownEmitted) {
+          sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
+          ps.syntheticDownEmitted = false;
+        }
+        
+        // If this was a camera finger, activate momentum and don't treat as tap
+        if (ps.isCameraFinger) {
+          momentumActive = true;
+          return;
+        }
         
         // If this finger was part of a gesture, don't treat it as a tap/click
         if (ps.wasInGesture) {
+          momentumActive = true;
           return;
         }
         
@@ -1074,17 +1215,24 @@
           }
         }
       } else if (activePointers.size >= 1) {
-        // Auxiliary pointer up while other gesture fingers remain
+        // Pointer up while other fingers remain
+        
+        // If this was a camera finger, activate momentum and skip tap logic
+        if (ps.isCameraFinger) {
+          momentumActive = true;
+          return;
+        }
         
         // If this was a gesture finger, don't treat it as a tap/action
         if (ps.wasInGesture) {
           return;
         }
         
+        // Close any lasso/drag that was started by this finger
         if (ps.syntheticDownEmitted) {
           sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
           ps.syntheticDownEmitted = false;
-          return;
+          return; // Was dragging, not a tap
         }
         // Tap behavior for auxiliary pointer
         if (skipNextSingleTap || now() < suppressSingleTapUntil) {
@@ -1128,12 +1276,26 @@
       if (!isTouchLike(e)) return;
       e.preventDefault();
       e.stopPropagation();
+      
+      const ps = activePointers.get(e.pointerId);
+      
+      // Clean up any pending lasso/drag for this pointer
+      if (ps && ps.syntheticDownEmitted) {
+        sendSyntheticPointer('pointerup', ps.x, ps.y, 0, { suppressTerrainClick: true });
+        ps.syntheticDownEmitted = false;
+      }
+      
       if (activePointers.has(e.pointerId)) {
         activePointers.delete(e.pointerId);
         const idx = pointerOrder.indexOf(e.pointerId);
         if (idx !== -1) pointerOrder.splice(idx, 1);
       }
       endGestureIfNeeded();
+      
+      // Activate momentum if all fingers gone
+      if (activePointers.size === 0) {
+        momentumActive = true;
+      }
     }
 
     // Attach listeners (non-passive to allow preventDefault)

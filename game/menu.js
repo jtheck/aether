@@ -135,9 +135,15 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
     const path = JSON.parse(button.dataset.menuPath);
     const submenu = getSubmenuFromPath(path);
     
+    // Check if this has actual submenu items (ignore metadata like 'arc', 'callback')
+    const submenuKeys = submenu ? Object.keys(submenu).filter(k => k !== 'arc' && k !== 'callback') : [];
+    
     // If has submenu items, show them
-    if (submenu && Object.keys(submenu).length > 0) {
-      showSubmenu(button, submenu);
+    if (submenuKeys.length > 0) {
+      // Filter out metadata before showing submenu
+      const filteredSubmenu = {};
+      submenuKeys.forEach(k => filteredSubmenu[k] = submenu[k]);
+      showSubmenu(button, filteredSubmenu);
     } else {
       // Handle leaf node selection
       const [category, ...itemPath] = path;

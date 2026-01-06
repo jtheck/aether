@@ -255,7 +255,7 @@ class WalkBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
             arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
-            walkSpeed: 20,       // Normal walking speed
+            walkSpeed: unit.speed || 20,  // Use unit's defined speed, fallback to 20
             ...params
         });
         
@@ -417,7 +417,7 @@ class RunBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
             arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
-            runSpeed: 35,  // Faster running speed
+            runSpeed: (unit.speed || 20) * 1.5,  // 150% of unit's speed for running
             ...params
         });
         

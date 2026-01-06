@@ -17,7 +17,7 @@ const UnitTypes = {
     model: "assets/models/villager.glb",
     scale: 0.5,
     health: 50,
-    speed: 20,
+    speed: 80,
     rotationSpeed: 3.0,
     size: 1,
     cost: { food: 15 },

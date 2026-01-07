@@ -36,10 +36,7 @@
       zoneZoomSensitivity: 0.015, // Zoom speed in edge zones (up/down drag)
       zoneRotateSensitivity: 0.018, // Rotate speed in edge zones (left/right drag)
       zonePanSensitivity: 8.0, // Pan sensitivity for center zone drags
-      cameraFingerDragThreshold: 8, // Pixels before drag starts camera/action movement
-      // Action mode toggle
-      longPressDelayMs: 400, // How long to hold before triggering action mode toggle
-      longPressMaxMovePx: 15 // Max movement allowed during long press
+      cameraFingerDragThreshold: 8 // Pixels before drag starts camera/action movement
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -83,6 +80,9 @@
     let lastSingleTapTime = 0;
     let lastSingleTapPos = null; // Use null to indicate no previous tap
     let doubleTapCooldownUntil = 0; // Prevent rapid triple-tap from registering as double-tap
+    // Track tap DOWN time for fast double-tap detection (finger 2 down before finger 1 up)
+    let lastTapDownTime = 0;
+    let lastTapDownPos = null;
 
     // Two-finger tap/double-tap tracking
     let lastTwoTapTime = 0;
@@ -110,8 +110,6 @@
     let actionModeActive = false;
     let actionLockElement = null; // The UI element for the action lock
     let actionLockPosition = { x: 0, y: 0 }; // Screen position of the lock
-    let longPressTimer = null; // Timer for detecting long press
-    let longPressPointerId = null; // Which pointer is being tracked for long press
     // Coalesce touch move handling to one frame
     let moveRafScheduled = false;
     let lastTouchClientX = 0, lastTouchClientY = 0;
@@ -539,31 +537,6 @@
       } else {
         enterActionMode(clientX, clientY);
       }
-    }
-    
-    function cancelLongPress() {
-      if (longPressTimer) {
-        clearTimeout(longPressTimer);
-        longPressTimer = null;
-      }
-      longPressPointerId = null;
-    }
-    
-    function startLongPressTimer(pointerId, clientX, clientY) {
-      cancelLongPress();
-      longPressPointerId = pointerId;
-      longPressTimer = setTimeout(() => {
-        // Long press triggered - enter action mode (or move lock if already active)
-        enterActionMode(clientX, clientY);
-        longPressTimer = null;
-        longPressPointerId = null;
-        
-        // Mark the pointer so it doesn't trigger tap on release
-        const ps = activePointers.get(pointerId);
-        if (ps) {
-          ps.longPressTriggered = true;
-        }
-      }, config.longPressDelayMs);
     }
     
     // Check if a point is inside the action lock (for tap detection)
@@ -1141,23 +1114,33 @@
         activePointers.set(e.pointerId, ps);
         pointerOrder.push(e.pointerId);
         
-        // For ANY touch (edge or center), check for double-tap/long-press to trigger action mode
+        // For ANY touch (edge or center), check for double-tap to trigger action mode
         // This allows entering action mode from anywhere on screen
         const currentTime = now();
-        const timeSinceLast = currentTime - lastSingleTapTime;
-        const distFromLastSq = lastSingleTapPos ? distanceSq(e.clientX, e.clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
         
-        // Check if within double-tap window and position (tight distance threshold)
-        if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distFromLastSq < doubleTapMaxDistPxSq) {
+        // Check both tap-up time (normal) AND tap-down time (fast overlapping taps)
+        const timeSinceUp = currentTime - lastSingleTapTime;
+        const timeSinceDown = currentTime - lastTapDownTime;
+        const distFromUpSq = lastSingleTapPos ? distanceSq(e.clientX, e.clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
+        const distFromDownSq = lastTapDownPos ? distanceSq(e.clientX, e.clientY, lastTapDownPos.x, lastTapDownPos.y) : Infinity;
+        
+        // Double-tap: check against tap-up (normal case) OR tap-down (fast overlapping case)
+        const isDoubleTapFromUp = lastSingleTapPos && timeSinceUp < config.doubleTapDelayMs && distFromUpSq < doubleTapMaxDistPxSq;
+        const isDoubleTapFromDown = lastTapDownPos && timeSinceDown < config.doubleTapDelayMs && distFromDownSq < doubleTapMaxDistPxSq;
+        
+        if (isDoubleTapFromUp || isDoubleTapFromDown) {
           // Double-tap detected - enter action mode (or move lock if already active)
           ps.isDoubleTapStart = true;
           enterActionMode(e.clientX, e.clientY);
           // Reset tap tracking
           lastSingleTapTime = 0;
           lastSingleTapPos = null;
+          lastTapDownTime = 0;
+          lastTapDownPos = null;
         } else {
-          // Start long-press timer for action mode (or move lock)
-          startLongPressTimer(e.pointerId, e.clientX, e.clientY);
+          // Record this tap-down for potential fast double-tap detection
+          lastTapDownTime = currentTime;
+          lastTapDownPos = { x: e.clientX, y: e.clientY };
         }
       }
 
@@ -1215,7 +1198,6 @@
         
         // Building placement mode uses single finger for preview positioning
         if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
-          cancelLongPress();
           handleBuildingPlacementPreview();
           return;
         }
@@ -1224,25 +1206,14 @@
         const ps = activePointers.values().next().value;
         if (!ps) return;
         
-        // Check movement for drag threshold and long-press cancellation
+        // Check movement for drag threshold
         const dx = ps.x - ps.startX;
         const dy = ps.y - ps.startY;
         const movedSq = dx * dx + dy * dy;
         const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
-        const longPressMaxMoveSq = config.longPressMaxMovePx * config.longPressMaxMovePx;
-        
-        // Cancel long press if moved too much
-        if (movedSq > longPressMaxMoveSq && longPressPointerId === ps.id) {
-          cancelLongPress();
-        }
         
         // Skip if double-tap just toggled action mode (don't start dragging immediately)
         if (ps.isDoubleTapStart && !ps.isEdgeFinger && !ps.isCenterFinger) {
-          return;
-        }
-        
-        // Skip if long press just triggered
-        if (ps.longPressTriggered && !ps.isEdgeFinger && !ps.isCenterFinger) {
           return;
         }
         
@@ -1250,7 +1221,6 @@
           // === TOUCH STARTED IN EDGE ZONE: Rot/Zoom ===
           if (ps.startedInEdge) {
             ps.isEdgeFinger = true;
-            cancelLongPress();
             applyEdgeZoneCamera(ps);
             momentumActive = false; // Will activate on pointer up
           }
@@ -1259,7 +1229,6 @@
             // ACTION MODE: Center = lasso/select/commands
             ps.isCenterFinger = true;
             ps.isActioning = true;
-            cancelLongPress();
             
             if (!ps.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
               sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
@@ -1273,7 +1242,6 @@
             // CAMERA MODE: Center = pan (or continue panning if already started)
             ps.isCenterFinger = true;
             ps.isPanning = true;
-            cancelLongPress();
             applyCenterPan(ps);
             momentumActive = false; // Will activate on pointer up
           }
@@ -1481,11 +1449,6 @@
         return;
       }
 
-      // Cancel any pending long press
-      if (longPressPointerId === e.pointerId) {
-        cancelLongPress();
-      }
-
       if (activePointers.size === 0) {
         // No other pointers active - ALWAYS clean up any pending lasso/drag first
         if (ps.syntheticDownEmitted) {
@@ -1502,11 +1465,6 @@
         // If this finger was part of a gesture, don't treat it as a tap/click
         if (ps.wasInGesture) {
           momentumActive = true;
-          return;
-        }
-        
-        // If long press triggered action mode, don't treat as tap
-        if (ps.longPressTriggered) {
           return;
         }
         

@@ -10,7 +10,8 @@
     const config = Object.assign({
       tapMaxTimeMs: 400, // Even more time for each individual tap
       tapMaxMovePx: 60, // Even bigger area - very forgiving finger drift
-      doubleTapDelayMs: 1500, // 1.5 full seconds - very relaxed timing
+      doubleTapDelayMs: 400, // Time window between taps for double-tap (was 1500, way too long)
+      doubleTapMaxDistPx: 40, // Max distance between taps for double-tap (tighter than single tap threshold)
       twoFingerTapMaxTimeMs: 300,
       twoFingerTapMaxMovePx: 16,
       twoFingerDoubleTapCenterMaxMovePx: 80,
@@ -138,6 +139,7 @@
     const twoFingerTapMaxMovePxSq = config.twoFingerTapMaxMovePx * config.twoFingerTapMaxMovePx;
     const dragStartThresholdPxSq = config.dragStartThresholdPx * config.dragStartThresholdPx;
     const twoFingerDoubleTapCenterMaxMovePxSq = config.twoFingerDoubleTapCenterMaxMovePx * config.twoFingerDoubleTapCenterMaxMovePx;
+    const doubleTapMaxDistPxSq = config.doubleTapMaxDistPx * config.doubleTapMaxDistPx;
 
     function makePointerState(e) {
       // Determine if touch started in edge zone (for rot/zoom) or center (for pan/action)
@@ -578,6 +580,9 @@
     function applyEdgeZoneCamera(ps) {
       if (!window.gfx || !window.gfx.camera) return false;
       
+      // Cancel any existing momentum when gesture starts
+      momentumActive = false;
+      
       const cam = window.gfx.camera;
       const dx = ps.x - ps.lastX;
       const dy = ps.y - ps.lastY;
@@ -588,17 +593,16 @@
       
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
       
-      // Left/right = rotate
+      // Left/right = rotate (inverted)
       const rotateAmount = dx * config.zoneRotateSensitivity;
-      cam.alpha -= rotateAmount;
+      cam.alpha += rotateAmount;
       
-      // Up/down = zoom
-      const zoomAmount = -dy * config.zoneZoomSensitivity * cam.radius;
+      // Up/down = zoom (inverted: drag up = zoom out, drag down = zoom in)
+      const zoomAmount = dy * config.zoneZoomSensitivity * cam.radius;
       cam.radius = Math.max(10, Math.min(200, cam.radius + zoomAmount));
       
-      // Store velocity for momentum
-      gestureVelocity.rotate = -rotateAmount;
-      gestureVelocity.pinch = zoomAmount;
+      // Store velocity for NEW momentum (replaces old)
+      gestureVelocity = { pan: { x: 0, z: 0 }, rotate: rotateAmount, pinch: zoomAmount };
       
       return true;
     }
@@ -607,6 +611,9 @@
     function applyCenterPan(ps) {
       if (!window.gfx || !window.gfx.camera || !window.gfx.cameraTarget) return false;
       if (window.buildingSystem && window.buildingSystem.isPlacing) return false;
+      
+      // Cancel any existing momentum when gesture starts
+      momentumActive = false;
       
       const cam = window.gfx.camera;
       const target = window.gfx.cameraTarget.position;
@@ -623,6 +630,9 @@
       const rect = canvasRect();
       const pixelsToWorld = (2 * cam.radius * Math.tan((cam.fov || 0.8) / 2)) / Math.max(1, rect.height);
       
+      // Reduce sensitivity when zoomed out (radius > 50) to prevent too-fast panning
+      const zoomDamping = Math.min(1.0, 50 / cam.radius);
+      
       const camPos = cam.position.clone();
       const targetPos = target.clone ? target.clone() : new BABYLON.Vector3(target.x, target.y, target.z);
       const toTarget = targetPos.subtract(camPos).normalize();
@@ -632,7 +642,7 @@
       groundForward.normalize();
       const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
       
-      const panSens = config.zonePanSensitivity;
+      const panSens = config.zonePanSensitivity * zoomDamping;
       const wx = (groundRight.x * dx + groundForward.x * dy) * pixelsToWorld * panSens;
       const wz = (groundRight.z * dx + groundForward.z * dy) * pixelsToWorld * panSens;
       
@@ -650,8 +660,8 @@
         }
       }
       
-      gestureVelocity.pan.x = wx || 0;
-      gestureVelocity.pan.z = wz || 0;
+      // Store velocity for NEW momentum (replaces old, cancels rot/zoom momentum)
+      gestureVelocity = { pan: { x: wx || 0, z: wz || 0 }, rotate: 0, pinch: 0 };
       
       return true;
     }
@@ -1131,25 +1141,23 @@
         activePointers.set(e.pointerId, ps);
         pointerOrder.push(e.pointerId);
         
-        // For ANY center-zone touch (even with other fingers down), check for double-tap/long-press
-        // This allows entering action mode while panning, or moving the lock while in action mode
-        if (!ps.startedInEdge) {
-          const currentTime = now();
-          const timeSinceLast = currentTime - lastSingleTapTime;
-          const distFromLastSq = lastSingleTapPos ? distanceSq(e.clientX, e.clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
-          
-          // Check if within double-tap window and position
-          if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distFromLastSq < tapMaxMovePxSq) {
-            // Double-tap detected - enter action mode (or move lock if already active)
-            ps.isDoubleTapStart = true;
-            enterActionMode(e.clientX, e.clientY);
-            // Reset tap tracking
-            lastSingleTapTime = 0;
-            lastSingleTapPos = null;
-          } else {
-            // Start long-press timer for action mode (or move lock)
-            startLongPressTimer(e.pointerId, e.clientX, e.clientY);
-          }
+        // For ANY touch (edge or center), check for double-tap/long-press to trigger action mode
+        // This allows entering action mode from anywhere on screen
+        const currentTime = now();
+        const timeSinceLast = currentTime - lastSingleTapTime;
+        const distFromLastSq = lastSingleTapPos ? distanceSq(e.clientX, e.clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
+        
+        // Check if within double-tap window and position (tight distance threshold)
+        if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distFromLastSq < doubleTapMaxDistPxSq) {
+          // Double-tap detected - enter action mode (or move lock if already active)
+          ps.isDoubleTapStart = true;
+          enterActionMode(e.clientX, e.clientY);
+          // Reset tap tracking
+          lastSingleTapTime = 0;
+          lastSingleTapPos = null;
+        } else {
+          // Start long-press timer for action mode (or move lock)
+          startLongPressTimer(e.pointerId, e.clientX, e.clientY);
         }
       }
 

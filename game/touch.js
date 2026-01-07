@@ -8,35 +8,33 @@
     }
 
     const config = Object.assign({
-      tapMaxTimeMs: 400, // Even more time for each individual tap
-      tapMaxMovePx: 60, // Even bigger area - very forgiving finger drift
-      doubleTapDelayMs: 400, // Time window between taps for double-tap (was 1500, way too long)
-      doubleTapMaxDistPx: 40, // Max distance between taps for double-tap (tighter than single tap threshold)
+      tapMaxTimeMs: 400,
+      tapMaxMovePx: 60,
+      doubleTapDelayMs: 400,
+      doubleTapMaxDistPx: 40,
       twoFingerTapMaxTimeMs: 300,
       twoFingerTapMaxMovePx: 16,
       twoFingerDoubleTapCenterMaxMovePx: 80,
-      rotateSensitivity: 1.8, // Smooth rotation without snapping
-      pinchSensitivity: 1.5, // Responsive zoom
-      panSensitivity: 6.5, // Responsive pan
-      firefoxPanSensitivity: 15.0, // Higher pan sensitivity for Firefox to compensate for glitchy tracking
-      pinchDeadzone: 50.0, // Ignore finger spacing changes smaller than this (prevents zoom during pan)
-      pinchCentroidStability: 80.0, // Max centroid movement for intentional pinch (px) - higher = more lenient
-      pinchCentroidRatioMax: 0.40, // Max ratio of centroid movement to finger spread (0.40 = centroid can move up to 40% of spread)
-      rotateDeadzone: 0.15, // Ignore rotation smaller than this (~9 degrees) - lowered for easier triggering
-      gestureStabilityFrames: 2, // Require N consecutive clean frames before allowing gesture engagement
-      debugGestures: false, // Set to true to see gesture engagement in console
-      gestureSmoothingFactor: 0.3, // Lerp factor for smooth gesture interpolation (0=no smoothing, 1=instant)
+      rotateSensitivity: 1.8,
+      pinchSensitivity: 1.5,
+      panSensitivity: 6.5,
+      firefoxPanSensitivity: 15.0,
+      pinchDeadzone: 50.0,
+      pinchCentroidStability: 80.0,
+      pinchCentroidRatioMax: 0.40,
+      rotateDeadzone: 0.15,
+      gestureStabilityFrames: 2,
+      gestureSmoothingFactor: 0.3,
       dragStartThresholdPx: 15,
       suppressSingleTapAfterTwoFingerMs: 300,
-      initialPinchMinSpanPx: 20, // Require fingers to be spread apart to start gesture
-      // Building placement UX
-      buildPlaceMinHoldMs: 150, // Reduced from 200ms for snappier placement
-      // NEW: Zone-based camera control (edge = rot/zoom, center = pan)
-      edgeZoneWidthPx: 60, // Fixed pixel width for edge zone (consistent across screen sizes)
-      zoneZoomSensitivity: 0.015, // Zoom speed in edge zones (up/down drag)
-      zoneRotateSensitivity: 0.018, // Rotate speed in edge zones (left/right drag)
-      zonePanSensitivity: 8.0, // Pan sensitivity for center zone drags
-      cameraFingerDragThreshold: 8 // Pixels before drag starts camera/action movement
+      initialPinchMinSpanPx: 20,
+      buildPlaceMinHoldMs: 150,
+      // Zone-based camera control
+      edgeZoneWidthPx: 60,
+      zoneZoomSensitivity: 0.015,
+      zoneRotateSensitivity: 0.018,
+      zonePanSensitivity: 8.0,
+      cameraFingerDragThreshold: 8
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -78,10 +76,8 @@
 
     // Single tap/double tap tracking
     let lastSingleTapTime = 0;
-    let lastSingleTapPos = null; // Use null to indicate no previous tap
-    let doubleTapCooldownUntil = 0; // Prevent rapid triple-tap from registering as double-tap
-    // Track tap DOWN time for fast double-tap detection (finger 2 down before finger 1 up)
-    let lastTapDownTime = 0;
+    let lastSingleTapPos = null;
+    let lastTapDownTime = 0; // Track tap DOWN for fast double-tap detection
     let lastTapDownPos = null;
 
     // Two-finger tap/double-tap tracking
@@ -926,10 +922,7 @@
       );
       
       if (isAnomalousFrame) {
-        // Finger positions jumped unreasonably - reset baseline to prevent false gesture engagement
-        if (config.debugGestures) {
-          console.warn(`[GESTURE] ANOMALY - resetting (dist: ${Math.abs(distDelta).toFixed(1)}px, centroid: ${Math.sqrt(centroidMoveSq).toFixed(1)}px, angle: ${Math.abs(angleDelta * 180 / Math.PI).toFixed(1)}°)`);
-        }
+        // Finger positions jumped unreasonably - reset baseline
         gestureInitial = {
           centroid: cNow,
           distance: da.dist,
@@ -1003,31 +996,9 @@
       // Require BOTH sufficient delta AND stable tracking before engaging
       if (!gestureEngaged.pinch && isPinchIntentional && gestureStableFrames >= stabilityRequired) {
         gestureEngaged.pinch = true;
-        if (config.debugGestures) console.log(`[GESTURE] ✓ PINCH ENGAGED (dist: ${totalDistDelta.toFixed(1)}px, centroid: ${totalCentroidMove.toFixed(1)}px, ratio: ${centroidToDistanceRatio.toFixed(2)}, best: ${gestureInitial.bestRatio.toFixed(2)})`);
       }
       if (!gestureEngaged.rotate && totalAngleDelta >= rotateDeadzone && gestureStableFrames >= stabilityRequired) {
         gestureEngaged.rotate = true;
-        if (config.debugGestures) console.log(`[GESTURE] ✓ ROTATE ENGAGED (${(totalAngleDelta * 180 / Math.PI).toFixed(1)}° after ${gestureStableFrames} stable frames)`);
-      }
-      
-      if (config.debugGestures && !gestureEngaged.pinch && !gestureEngaged.rotate) {
-        const browserInfo = isMobileBrowser ? ' [Mobile]' : '';
-        
-        // Show what's blocking pinch engagement
-        if (totalDistDelta >= pinchDeadzone) {
-          const reasons = [];
-          if (totalCentroidMove >= centroidStabilityThreshold) {
-            reasons.push(`centroid too far: ${totalCentroidMove.toFixed(1)}/${centroidStabilityThreshold}px`);
-          }
-          if (!hadGoodRatio && centroidToDistanceRatio >= maxStaticRatio) {
-            reasons.push(`ratio: ${centroidToDistanceRatio.toFixed(2)} (current), best: ${gestureInitial.bestRatio.toFixed(2)} (never reached < ${maxBestRatio.toFixed(2)})`);
-          }
-          if (reasons.length > 0) {
-            console.log(`[GESTURE] ❌ Pinch BLOCKED${browserInfo} - ${reasons.join(', ')}`);
-          }
-        }
-        
-        console.log(`[GESTURE] Pan (${gestureStableFrames}/${stabilityRequired} stable)${browserInfo} - dist: ${totalDistDelta.toFixed(1)}/${pinchDeadzone}px, centroid: ${totalCentroidMove.toFixed(1)}px (ratio: ${centroidToDistanceRatio.toFixed(2)}), rot: ${(totalAngleDelta * 180 / Math.PI).toFixed(1)}/${(rotateDeadzone * 180 / Math.PI).toFixed(1)}°`);
       }
       
       const applyPinch = gestureEngaged.pinch;
@@ -1208,16 +1179,8 @@
 
     function isTouchLike(e) {
       // Accept touch and pen, reject mouse
-      // Also accept events with no pointerType (some browsers) if they look like touch
-      const isMouse = e.pointerType === 'mouse';
       const isTouch = e.pointerType === 'touch' || e.pointerType === 'pen';
-      
-      // Debug: log rejections if enabled
-      if (window.debugTapTap && isMouse) {
-        console.log('isTouchLike rejected mouse event:', e.pointerType);
-      }
-      
-      return isTouch || (!e.pointerType && e.isPrimary === false); // Fallback for weird edge cases
+      return isTouch || (!e.pointerType && e.isPrimary === false);
     }
 
     // Cache UI selectors for faster checks
@@ -1314,17 +1277,6 @@
         const isDoubleTapFromUp = lastSingleTapPos && timeSinceUp < config.doubleTapDelayMs && distFromUpSq < doubleTapMaxDistPxSq;
         const isDoubleTapFromDown = lastTapDownPos && timeSinceDown < config.doubleTapDelayMs && distFromDownSq < doubleTapMaxDistPxSq;
         
-        // Debug: log tap detection (enable with window.debugTapTap = true)
-        if (window.debugTapTap) {
-          console.log('TapTap check:', {
-            timeSinceUp, timeSinceDown,
-            lastSingleTapPos, lastTapDownPos,
-            isDoubleTapFromUp, isDoubleTapFromDown,
-            hasPanFinger,
-            doubleTapDelayMs: config.doubleTapDelayMs
-          });
-        }
-        
         if ((isDoubleTapFromUp || isDoubleTapFromDown) && !hasPanFinger) {
           // Double-tap detected - this finger will pan on drag
           ps.isDoubleTapStart = true;
@@ -1344,10 +1296,6 @@
           }
         }
       }
-
-      // OLD: beginGestureIfNeeded() - disabled for new touch scheme
-      // The old two-finger gesture system is no longer used
-      // beginGestureIfNeeded();
 
       // If only one finger, defer synthetic left button down until drag threshold is crossed
       // Also initialize building placement session tracking
@@ -1758,25 +1706,11 @@
             sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: true });
             ps.syntheticDownEmitted = false;
           } else {
-            const currentTime = now();
-            
-            // Check if we're in cooldown period after a recent double-tap action popup
-            if (currentTime < doubleTapCooldownUntil) {
-              // In cooldown - don't register tap
-              return;
-            }
-            
-            // Single tap: synthesize a click and record for potential double-tap action popup
+            // Single tap: synthesize a click and record for potential double-tap
             sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
             sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
-            // Update last tap for double-tap detection
-            lastSingleTapTime = currentTime;
+            lastSingleTapTime = now();
             lastSingleTapPos = { x: clientX, y: clientY };
-            
-            // Debug: log tap recorded
-            if (window.debugTapTap) {
-              console.log('Tap recorded:', { lastSingleTapTime, lastSingleTapPos });
-            }
           }
         } else {
           // End of drag if one was started
@@ -1895,7 +1829,6 @@
     canvas.addEventListener('pointermove', onPointerMove, { passive: false });
     canvas.addEventListener('pointerup', onPointerUp, { passive: false });
     canvas.addEventListener('pointercancel', onPointerCancel, { passive: false });
-    // console.log('📱 Touch event listeners registered');
 
     // Start momentum application loop
     function momentumLoop() {

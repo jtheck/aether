@@ -30,12 +30,15 @@
       initialPinchMinSpanPx: 20, // Require fingers to be spread apart to start gesture
       // Building placement UX
       buildPlaceMinHoldMs: 150, // Reduced from 200ms for snappier placement
-      // NEW: Zone-based single-finger camera control
-      edgeZoneThreshold: 0.15, // 15% of screen width/height is "edge zone"
-      zoneZoomSensitivity: 0.015, // Zoom speed when in left/right edge zones
-      zoneRotateSensitivity: 0.018, // Rotate speed when in top/bottom edge zones
-      zonePanSensitivity: 8.0, // Pan sensitivity for single-finger camera
-      cameraFingerDragThreshold: 8 // Pixels before single-finger starts camera movement
+      // NEW: Zone-based camera control (edge = rot/zoom, center = pan)
+      edgeZoneWidthPx: 80, // Fixed pixel width for edge zone (consistent across screen sizes)
+      zoneZoomSensitivity: 0.015, // Zoom speed in edge zones (up/down drag)
+      zoneRotateSensitivity: 0.018, // Rotate speed in edge zones (left/right drag)
+      zonePanSensitivity: 8.0, // Pan sensitivity for center zone drags
+      cameraFingerDragThreshold: 8, // Pixels before drag starts camera/action movement
+      // Action mode toggle
+      longPressDelayMs: 400, // How long to hold before triggering action mode toggle
+      longPressMaxMovePx: 15 // Max movement allowed during long press
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -99,6 +102,15 @@
     let gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
     let momentumActive = false;
     let momentumDecay = 0.92; // How fast momentum decays per frame (0.92 = ~8% loss per frame)
+    
+    // ACTION MODE: Toggle between camera mode and action mode
+    // Camera mode (default): edge = rot/zoom, center = pan
+    // Action mode: edge = rot/zoom, center = lasso/select/commands
+    let actionModeActive = false;
+    let actionLockElement = null; // The UI element for the action lock
+    let actionLockPosition = { x: 0, y: 0 }; // Screen position of the lock
+    let longPressTimer = null; // Timer for detecting long press
+    let longPressPointerId = null; // Which pointer is being tracked for long press
     // Coalesce touch move handling to one frame
     let moveRafScheduled = false;
     let lastTouchClientX = 0, lastTouchClientY = 0;
@@ -128,6 +140,14 @@
     const twoFingerDoubleTapCenterMaxMovePxSq = config.twoFingerDoubleTapCenterMaxMovePx * config.twoFingerDoubleTapCenterMaxMovePx;
 
     function makePointerState(e) {
+      // Determine if touch started in edge zone (for rot/zoom) or center (for pan/action)
+      const rect = canvasRect();
+      const localX = e.clientX - rect.left;
+      const localY = e.clientY - rect.top;
+      const edgeWidth = config.edgeZoneWidthPx;
+      const startedInEdge = localX < edgeWidth || localX > (rect.width - edgeWidth) || 
+                            localY < edgeWidth || localY > (rect.height - edgeWidth);
+      
       return {
         id: e.pointerId,
         type: e.pointerType,
@@ -140,7 +160,13 @@
         startTime: now(),
         lastTime: now(),
         isDown: true,
-        syntheticDownEmitted: false
+        syntheticDownEmitted: false,
+        isDoubleTapStart: false, // True if this finger started as second tap of double-tap
+        startedInEdge: startedInEdge, // True if touch started in edge zone (rot/zoom)
+        isEdgeFinger: false, // Set to true once edge gesture starts
+        isCenterFinger: false, // Set to true once center gesture (pan or action) starts
+        isPanning: false, // Set to true if this finger committed to panning (sticks even if action mode activates)
+        isActioning: false // Set to true if this finger committed to action/lasso
       };
     }
 
@@ -231,17 +257,17 @@
     // NEW: Calculate edge proximity factors (0 = center, 1 = at edge)
     function getEdgeProximity(clientX, clientY) {
       const rect = canvasRect();
-      // Normalize position to 0-1
-      const normX = (clientX - rect.left) / rect.width;
-      const normY = (clientY - rect.top) / rect.height;
+      const localX = clientX - rect.left;
+      const localY = clientY - rect.top;
       
-      const threshold = config.edgeZoneThreshold;
+      const edgeWidth = config.edgeZoneWidthPx;
       
       // Calculate proximity to each edge (0 = not in zone, 1 = at edge)
-      const leftProx = Math.max(0, (threshold - normX) / threshold);
-      const rightProx = Math.max(0, (normX - (1 - threshold)) / threshold);
-      const topProx = Math.max(0, (threshold - normY) / threshold);
-      const bottomProx = Math.max(0, (normY - (1 - threshold)) / threshold);
+      // Using fixed pixel width for consistent feel across screen sizes
+      const leftProx = Math.max(0, (edgeWidth - localX) / edgeWidth);
+      const rightProx = Math.max(0, (localX - (rect.width - edgeWidth)) / edgeWidth);
+      const topProx = Math.max(0, (edgeWidth - localY) / edgeWidth);
+      const bottomProx = Math.max(0, (localY - (rect.height - edgeWidth)) / edgeWidth);
       
       return {
         left: leftProx,
@@ -357,6 +383,278 @@
 
     // Removed direct moveSelectedUnitsToScreen flow; defer to ui.handlePointer via synthetic events
     // Removed: showMoveOptionsUIAt (single-finger double-tap now triggers special ability)
+
+    // === ACTION MODE UI ===
+    function createActionLock(clientX, clientY) {
+      if (actionLockElement) return; // Already exists
+      
+      // Offset the lock towards center of screen by one radius so it's not hidden under finger
+      const rect = canvasRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const offsetRadius = 40; // One radius offset
+      
+      // Calculate direction to center
+      const dx = centerX - clientX;
+      const dy = centerY - clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      let finalX = clientX;
+      let finalY = clientY;
+      if (dist > 1) {
+        // Offset towards center
+        finalX = clientX + (dx / dist) * offsetRadius;
+        finalY = clientY + (dy / dist) * offsetRadius;
+      }
+      
+      actionLockPosition = { x: finalX, y: finalY };
+      
+      // Create the action lock element
+      actionLockElement = document.createElement('div');
+      actionLockElement.id = 'touch-action-lock';
+      actionLockElement.innerHTML = '⚔'; // Action/command icon
+      actionLockElement.style.cssText = `
+        position: fixed;
+        left: ${clientX}px;
+        top: ${clientY}px;
+        transform: translate(-50%, -50%);
+        width: 56px;
+        height: 56px;
+        background: radial-gradient(circle, rgba(255,200,50,0.95) 0%, rgba(200,120,20,0.9) 100%);
+        border: 3px solid rgba(255,255,255,0.8);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        color: #fff;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        box-shadow: 0 4px 20px rgba(255,180,50,0.6), 0 0 30px rgba(255,200,100,0.4);
+        z-index: 10000;
+        pointer-events: auto;
+        cursor: pointer;
+        animation: actionLockPulse 1.5s ease-in-out infinite;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
+      `;
+      
+      // Add pulse animation if not exists
+      if (!document.getElementById('action-lock-style')) {
+        const style = document.createElement('style');
+        style.id = 'action-lock-style';
+        style.textContent = `
+          @keyframes actionLockPulse {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 4px 20px rgba(255,180,50,0.6), 0 0 30px rgba(255,200,100,0.4); }
+            50% { transform: translate(-50%, -50%) scale(1.1); box-shadow: 0 4px 30px rgba(255,180,50,0.8), 0 0 50px rgba(255,200,100,0.6); }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      
+      // Click/tap on lock exits action mode
+      actionLockElement.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleActionMode();
+      }, { passive: false });
+      
+      document.body.appendChild(actionLockElement);
+    }
+    
+    function destroyActionLock() {
+      if (actionLockElement) {
+        actionLockElement.remove();
+        actionLockElement = null;
+      }
+    }
+    
+    function moveActionLock(clientX, clientY) {
+      // Move the action lock to a new position without toggling mode
+      if (!actionLockElement) return;
+      
+      // Offset towards center (same as createActionLock)
+      const rect = canvasRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const offsetRadius = 40;
+      
+      const dx = centerX - clientX;
+      const dy = centerY - clientY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      let finalX = clientX;
+      let finalY = clientY;
+      if (dist > 1) {
+        finalX = clientX + (dx / dist) * offsetRadius;
+        finalY = clientY + (dy / dist) * offsetRadius;
+      }
+      
+      actionLockPosition = { x: finalX, y: finalY };
+      actionLockElement.style.left = `${finalX}px`;
+      actionLockElement.style.top = `${finalY}px`;
+      // Brief scale animation to show it moved
+      actionLockElement.style.animation = 'none';
+      actionLockElement.offsetHeight; // Trigger reflow
+      actionLockElement.style.animation = 'actionLockPulse 1.5s ease-in-out infinite';
+    }
+    
+    function enterActionMode(clientX, clientY) {
+      // Enter action mode (or move lock if already active)
+      if (actionModeActive) {
+        // Already in action mode - just move the lock
+        if (clientX !== undefined && clientY !== undefined) {
+          moveActionLock(clientX, clientY);
+        }
+      } else {
+        // Enter action mode - show lock at position
+        actionModeActive = true;
+        if (clientX !== undefined && clientY !== undefined) {
+          createActionLock(clientX, clientY);
+        }
+        // Visual feedback
+        if (canvas && canvas.style) {
+          canvas.style.outline = '4px solid rgba(255, 180, 50, 0.8)';
+          setTimeout(() => { canvas.style.outline = ''; }, 300);
+        }
+      }
+    }
+    
+    function exitActionMode() {
+      if (!actionModeActive) return;
+      actionModeActive = false;
+      destroyActionLock();
+      // Visual feedback
+      if (canvas && canvas.style) {
+        canvas.style.outline = '4px solid rgba(100, 200, 255, 0.8)';
+        setTimeout(() => { canvas.style.outline = ''; }, 300);
+      }
+    }
+    
+    function toggleActionMode(clientX, clientY) {
+      if (actionModeActive) {
+        exitActionMode();
+      } else {
+        enterActionMode(clientX, clientY);
+      }
+    }
+    
+    function cancelLongPress() {
+      if (longPressTimer) {
+        clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+      longPressPointerId = null;
+    }
+    
+    function startLongPressTimer(pointerId, clientX, clientY) {
+      cancelLongPress();
+      longPressPointerId = pointerId;
+      longPressTimer = setTimeout(() => {
+        // Long press triggered - enter action mode (or move lock if already active)
+        enterActionMode(clientX, clientY);
+        longPressTimer = null;
+        longPressPointerId = null;
+        
+        // Mark the pointer so it doesn't trigger tap on release
+        const ps = activePointers.get(pointerId);
+        if (ps) {
+          ps.longPressTriggered = true;
+        }
+      }, config.longPressDelayMs);
+    }
+    
+    // Check if a point is inside the action lock (for tap detection)
+    function isInsideActionLock(clientX, clientY) {
+      if (!actionLockElement || !actionModeActive) return false;
+      const lockRadius = 35; // Slightly larger than visual for easier tapping
+      const dx = clientX - actionLockPosition.x;
+      const dy = clientY - actionLockPosition.y;
+      return (dx * dx + dy * dy) <= (lockRadius * lockRadius);
+    }
+
+    // === EDGE ZONE CAMERA CONTROL ===
+    // For touches that start in edge zone: left/right = rotate, up/down = zoom
+    function applyEdgeZoneCamera(ps) {
+      if (!window.gfx || !window.gfx.camera) return false;
+      
+      const cam = window.gfx.camera;
+      const dx = ps.x - ps.lastX;
+      const dy = ps.y - ps.lastY;
+      
+      // Consume the delta
+      ps.lastX = ps.x;
+      ps.lastY = ps.y;
+      
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
+      
+      // Left/right = rotate
+      const rotateAmount = dx * config.zoneRotateSensitivity;
+      cam.alpha -= rotateAmount;
+      
+      // Up/down = zoom
+      const zoomAmount = -dy * config.zoneZoomSensitivity * cam.radius;
+      cam.radius = Math.max(10, Math.min(200, cam.radius + zoomAmount));
+      
+      // Store velocity for momentum
+      gestureVelocity.rotate = -rotateAmount;
+      gestureVelocity.pinch = zoomAmount;
+      
+      return true;
+    }
+    
+    // === CENTER ZONE CAMERA CONTROL (PAN) ===
+    function applyCenterPan(ps) {
+      if (!window.gfx || !window.gfx.camera || !window.gfx.cameraTarget) return false;
+      if (window.buildingSystem && window.buildingSystem.isPlacing) return false;
+      
+      const cam = window.gfx.camera;
+      const target = window.gfx.cameraTarget.position;
+      
+      const dx = ps.x - ps.lastX;
+      const dy = ps.y - ps.lastY;
+      
+      // Consume the delta
+      ps.lastX = ps.x;
+      ps.lastY = ps.y;
+      
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
+      
+      const rect = canvasRect();
+      const pixelsToWorld = (2 * cam.radius * Math.tan((cam.fov || 0.8) / 2)) / Math.max(1, rect.height);
+      
+      const camPos = cam.position.clone();
+      const targetPos = target.clone ? target.clone() : new BABYLON.Vector3(target.x, target.y, target.z);
+      const toTarget = targetPos.subtract(camPos).normalize();
+      const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
+      
+      if (groundForward.lengthSquared() < 1e-6) return false;
+      groundForward.normalize();
+      const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
+      
+      const panSens = config.zonePanSensitivity;
+      const wx = (groundRight.x * dx + groundForward.x * dy) * pixelsToWorld * panSens;
+      const wz = (groundRight.z * dx + groundForward.z * dy) * pixelsToWorld * panSens;
+      
+      if (Number.isFinite(wx) && Number.isFinite(wz)) {
+        const tileSize = (window.TILE_SIZE || 4);
+        const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
+        const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
+        const margin = 2 * tileSize;
+        
+        target.x = Math.max(margin, Math.min(w - margin, target.x + wx));
+        target.z = Math.max(margin, Math.min(h - margin, target.z + wz));
+        
+        if (window.liveField && typeof window.liveField.updateVisibleChunks === 'function') {
+          window.liveField.updateVisibleChunks(target.x, target.z);
+        }
+      }
+      
+      gestureVelocity.pan.x = wx || 0;
+      gestureVelocity.pan.z = wz || 0;
+      
+      return true;
+    }
 
     function fireTwoFingerTap(x, y) {
       // Simulate a right-click tap (down + up)
@@ -814,6 +1112,14 @@
       // Check if we're interacting with a UI element - if so, allow normal behavior
       if (isUIElement(e)) return;
       
+      // Check if tapping on the action lock to exit action mode
+      if (isInsideActionLock(e.clientX, e.clientY)) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleActionMode();
+        return;
+      }
+      
       e.preventDefault();
       e.stopPropagation();
       
@@ -824,15 +1130,25 @@
         const ps = makePointerState(e);
         activePointers.set(e.pointerId, ps);
         pointerOrder.push(e.pointerId);
-      }
-
-      // If we were doing a single-finger drag and a second finger comes down, end the drag ONLY if we had emitted synthetic down
-      if (activePointers.size === 2) {
-        if (pointerOrder.length > 0) {
-          const primary = activePointers.get(pointerOrder[0]);
-          if (primary && primary.syntheticDownEmitted) {
-            sendSyntheticPointer('pointerup', primary.x, primary.y, 0, { suppressTerrainClick: true });
-            primary.syntheticDownEmitted = false;
+        
+        // For ANY center-zone touch (even with other fingers down), check for double-tap/long-press
+        // This allows entering action mode while panning, or moving the lock while in action mode
+        if (!ps.startedInEdge) {
+          const currentTime = now();
+          const timeSinceLast = currentTime - lastSingleTapTime;
+          const distFromLastSq = lastSingleTapPos ? distanceSq(e.clientX, e.clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
+          
+          // Check if within double-tap window and position
+          if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distFromLastSq < tapMaxMovePxSq) {
+            // Double-tap detected - enter action mode (or move lock if already active)
+            ps.isDoubleTapStart = true;
+            enterActionMode(e.clientX, e.clientY);
+            // Reset tap tracking
+            lastSingleTapTime = 0;
+            lastSingleTapPos = null;
+          } else {
+            // Start long-press timer for action mode (or move lock)
+            startLongPressTimer(e.pointerId, e.clientX, e.clientY);
           }
         }
       }
@@ -881,15 +1197,17 @@
       lastTouchClientY = e.clientY;
       
       // === NEW TOUCH CONTROL SCHEME ===
-      // 1 finger = camera pan + zone-blended zoom/rotate
-      // 2 fingers = first finger camera, second finger selection/lasso/commands
+      // Edge zone: rot/zoom (left/right = rotate, up/down = zoom)
+      // Center zone: depends on action mode
+      //   - Camera mode (default): pan
+      //   - Action mode: lasso/select/commands
       
       if (activePointers.size === 1) {
-        // SINGLE FINGER: Camera control with zone blending
         invalidateTime();
         
         // Building placement mode uses single finger for preview positioning
         if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
+          cancelLongPress();
           handleBuildingPlacementPreview();
           return;
         }
@@ -898,65 +1216,115 @@
         const ps = activePointers.values().next().value;
         if (!ps) return;
         
-        // Check if we've moved enough to start camera movement
+        // Check movement for drag threshold and long-press cancellation
         const dx = ps.x - ps.startX;
         const dy = ps.y - ps.startY;
         const movedSq = dx * dx + dy * dy;
-        const cameraThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
+        const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
+        const longPressMaxMoveSq = config.longPressMaxMovePx * config.longPressMaxMovePx;
         
-        if (movedSq >= cameraThresholdSq) {
-          // Mark as camera finger to prevent tap
-          ps.isCameraFinger = true;
-          
-          // Apply camera movement with zone blending
-          applySingleFingerCamera(ps);
-          
-          // Activate momentum tracking
-          momentumActive = false; // Will activate on pointer up
+        // Cancel long press if moved too much
+        if (movedSq > longPressMaxMoveSq && longPressPointerId === ps.id) {
+          cancelLongPress();
+        }
+        
+        // Skip if double-tap just toggled action mode (don't start dragging immediately)
+        if (ps.isDoubleTapStart && !ps.isEdgeFinger && !ps.isCenterFinger) {
+          return;
+        }
+        
+        // Skip if long press just triggered
+        if (ps.longPressTriggered && !ps.isEdgeFinger && !ps.isCenterFinger) {
+          return;
+        }
+        
+        if (movedSq >= dragThresholdSq) {
+          // === TOUCH STARTED IN EDGE ZONE: Rot/Zoom ===
+          if (ps.startedInEdge) {
+            ps.isEdgeFinger = true;
+            cancelLongPress();
+            applyEdgeZoneCamera(ps);
+            momentumActive = false; // Will activate on pointer up
+          }
+          // === TOUCH STARTED IN CENTER: Pan or Action depending on mode ===
+          else if (actionModeActive && !ps.isPanning) {
+            // ACTION MODE: Center = lasso/select/commands
+            ps.isCenterFinger = true;
+            ps.isActioning = true;
+            cancelLongPress();
+            
+            if (!ps.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
+              sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
+              ps.syntheticDownEmitted = true;
+            }
+            
+            if (ps.syntheticDownEmitted) {
+              sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+            }
+          } else {
+            // CAMERA MODE: Center = pan (or continue panning if already started)
+            ps.isCenterFinger = true;
+            ps.isPanning = true;
+            cancelLongPress();
+            applyCenterPan(ps);
+            momentumActive = false; // Will activate on pointer up
+          }
         }
         
       } else if (activePointers.size >= 2) {
-        // TWO+ FINGERS: First finger = camera, additional fingers = selection/lasso
+        // TWO+ FINGERS: Each finger handles its zone independently
+        // Edge fingers = rot/zoom, center fingers = pan (camera mode) or lasso (action mode)
         invalidateTime();
         
-        // CRITICAL: Only the pointer in this event should be processed
         const movedPointerId = e.pointerId;
-        const cameraFingerId = pointerOrder[0];
+        const movedPs = activePointers.get(movedPointerId);
+        if (!movedPs || movedPs.wasInGesture) return;
         
-        // Only apply camera control if the CAMERA FINGER is the one that moved
-        // Double-check by verifying this event's pointer ID matches the camera finger
-        if (movedPointerId === cameraFingerId) {
-          const cameraPs = activePointers.get(cameraFingerId);
-          // Verify this pointer was actually just updated (same ID as event)
-          if (cameraPs && cameraPs.id === e.pointerId) {
-            cameraPs.isCameraFinger = true;
-            applySingleFingerCamera(cameraPs);
+        const dx = movedPs.x - movedPs.startX;
+        const dy = movedPs.y - movedPs.startY;
+        const movedSq = dx * dx + dy * dy;
+        const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
+        
+        if (movedSq >= dragThresholdSq) {
+          // Edge finger: rot/zoom
+          if (movedPs.startedInEdge || movedPs.isEdgeFinger) {
+            movedPs.isEdgeFinger = true;
+            applyEdgeZoneCamera(movedPs);
           }
-        }
-        
-        // If an ACTION FINGER moved, handle selection/lasso/commands
-        for (let i = 1; i < pointerOrder.length; i++) {
-          if (pointerOrder[i] !== movedPointerId) continue; // Only process the finger that moved
-          
-          const actionPs = activePointers.get(pointerOrder[i]);
-          if (!actionPs) continue;
-          if (actionPs.wasInGesture) continue;
-          
-          const dx = actionPs.x - actionPs.startX;
-          const dy = actionPs.y - actionPs.startY;
-          const movedSq = dx * dx + dy * dy;
-          
-          // Start drag/lasso if moved enough
-          if (!actionPs.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
-            if (now() >= suppressSingleTapUntil) {
-              sendSyntheticPointer('pointerdown', actionPs.startX, actionPs.startY, 0, { suppressTerrainClick: true });
-              actionPs.syntheticDownEmitted = true;
+          // Finger already committed to panning: keep panning (even if action mode activated)
+          else if (movedPs.isPanning) {
+            movedPs.isCenterFinger = true;
+            applyCenterPan(movedPs);
+          }
+          // Finger already committed to action: keep actioning
+          else if (movedPs.isActioning) {
+            movedPs.isCenterFinger = true;
+            if (movedPs.syntheticDownEmitted) {
+              sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
             }
           }
-          
-          // Continue drag/lasso
-          if (actionPs.syntheticDownEmitted) {
-            sendSyntheticPointer('pointermove', actionPs.x, actionPs.y, 0, { suppressTerrainClick: true });
+          // New center finger: depends on action mode
+          else if (actionModeActive) {
+            // ACTION MODE: Center = lasso/select/commands
+            movedPs.isCenterFinger = true;
+            movedPs.isActioning = true;
+            
+            if (!movedPs.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
+              if (now() >= suppressSingleTapUntil) {
+                sendSyntheticPointer('pointerdown', movedPs.startX, movedPs.startY, 0, { suppressTerrainClick: true });
+                movedPs.syntheticDownEmitted = true;
+              }
+            }
+            
+            if (movedPs.syntheticDownEmitted) {
+              sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
+            }
+          }
+          else {
+            // CAMERA MODE: Center = pan
+            movedPs.isCenterFinger = true;
+            movedPs.isPanning = true;
+            applyCenterPan(movedPs);
           }
         }
       }
@@ -1105,6 +1473,11 @@
         return;
       }
 
+      // Cancel any pending long press
+      if (longPressPointerId === e.pointerId) {
+        cancelLongPress();
+      }
+
       if (activePointers.size === 0) {
         // No other pointers active - ALWAYS clean up any pending lasso/drag first
         if (ps.syntheticDownEmitted) {
@@ -1112,8 +1485,8 @@
           ps.syntheticDownEmitted = false;
         }
         
-        // If this was a camera finger, activate momentum and don't treat as tap
-        if (ps.isCameraFinger) {
+        // If this was an edge finger (rot/zoom) or center pan finger, activate momentum
+        if (ps.isEdgeFinger || (ps.isCenterFinger && !actionModeActive)) {
           momentumActive = true;
           return;
         }
@@ -1121,6 +1494,16 @@
         // If this finger was part of a gesture, don't treat it as a tap/click
         if (ps.wasInGesture) {
           momentumActive = true;
+          return;
+        }
+        
+        // If long press triggered action mode, don't treat as tap
+        if (ps.longPressTriggered) {
+          return;
+        }
+        
+        // If this was a double-tap that triggered action mode, don't treat as tap
+        if (ps.isDoubleTapStart) {
           return;
         }
         
@@ -1157,56 +1540,18 @@
           } else {
             const currentTime = now();
             
-            // Check if we're in cooldown period after a recent double-tap
+            // Check if we're in cooldown period after a recent double-tap action mode toggle
             if (currentTime < doubleTapCooldownUntil) {
-              // In cooldown - treat as regular single tap
-              sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
-              sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
+              // In cooldown - don't register tap
               return;
             }
             
-            const timeSinceLast = currentTime - lastSingleTapTime;
-            const distSinceLastSq = lastSingleTapPos ? distanceSq(clientX, clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
-            
-            if (lastSingleTapPos && timeSinceLast < config.doubleTapDelayMs && distSinceLastSq < tapMaxMovePxSq) {
-              // Double tap: trigger special ability at world position
-              
-              // Visual feedback - green flash on success
-              if (canvas && canvas.style) {
-                canvas.style.outline = '5px solid rgba(0, 255, 0, 1)';
-                setTimeout(() => {
-                  canvas.style.outline = '';
-                }, 400);
-              }
-              
-              const worldPos = screenToWorld(clientX, clientY);
-              if (worldPos && window.ui && window.ui.triggerSpecialAbilityAt) {
-                window.ui.triggerSpecialAbilityAt(worldPos);
-              }
-              // Reset double-tap tracking and enter cooldown
-              lastSingleTapTime = 0;
-              lastSingleTapPos = null;
-              doubleTapCooldownUntil = currentTime + 1500; // Match double-tap window to prevent triple-tap
-              
-              // IMPORTANT: Return here to prevent any click/selection processing
-              return;
-            } else {
-              // Single tap: synthesize a click
-              sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
-              sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
-              // Update last tap for double-tap detection
-              lastSingleTapTime = currentTime;
-              lastSingleTapPos = { x: clientX, y: clientY };
-              
-              // Show visual feedback - flash canvas border to indicate you're in double-tap window
-              if (canvas && canvas.style) {
-                const originalOutline = canvas.style.outline;
-                canvas.style.outline = '3px solid rgba(255, 255, 0, 0.8)';
-                setTimeout(() => {
-                  canvas.style.outline = originalOutline;
-                }, 500); // Longer flash to match the wider timing window
-              }
-            }
+            // Single tap: synthesize a click and record for potential double-tap action mode toggle
+            sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
+            sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
+            // Update last tap for double-tap detection (action mode toggle)
+            lastSingleTapTime = currentTime;
+            lastSingleTapPos = { x: clientX, y: clientY };
           }
         } else {
           // End of drag if one was started
@@ -1218,8 +1563,8 @@
       } else if (activePointers.size >= 1) {
         // Pointer up while other fingers remain
         
-        // If this was a camera finger, activate momentum and skip tap logic
-        if (ps.isCameraFinger) {
+        // If this was an edge finger or center pan finger, activate momentum
+        if (ps.isEdgeFinger || (ps.isCenterFinger && !actionModeActive)) {
           momentumActive = true;
           return;
         }
@@ -1255,6 +1600,13 @@
           // Otherwise synthesize a click to issue action
           sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
           sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
+          
+          // Track this tap for double-tap detection (even while other fingers are down)
+          // This allows double-tap to enter action mode while panning
+          if (!ps.startedInEdge) {
+            lastSingleTapTime = now();
+            lastSingleTapPos = { x: clientX, y: clientY };
+          }
         }
       }
     }

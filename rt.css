@@ -21,8 +21,8 @@ html, body {
   zoom: 1;
   -webkit-transform: scale(1);
   transform: scale(1);
-  /* Prevent browser gestures */
-  touch-action: none;
+  /* Allow touch on body - canvas handles its own touch-action */
+  touch-action: manipulation;
   /* Remove focus outlines globally */
   outline: none;
   -webkit-tap-highlight-color: transparent;
@@ -34,6 +34,8 @@ html, body {
   height: 100vh;
   display: block;
   touch-action: none;
+  position: relative;
+  z-index: 0;
   /* Ensure canvas is properly sized */
   max-width: 100vw;
   max-height: 100vh;
@@ -77,6 +79,13 @@ html, body {
   display: block;
   overflow-x: hidden;
   overflow-y: auto;
+  touch-action: manipulation;
+  z-index: 1000;
+}
+
+/* Ensure all menu clickables work during active game touches */
+#menu *, .menu_anchor, .radial-menu-button {
+  touch-action: manipulation;
 }
 /* #menu::before {
   content: '';
@@ -997,6 +1006,8 @@ a:after{
   cursor: pointer;
   /* background-image: url('assets/menu-bg.jpg'); */
   display: block;
+  touch-action: manipulation;
+  z-index: 100;
 }
 .menu_anchor:hover {
   border-color: aqua;
@@ -1036,6 +1047,7 @@ a:after{
   transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
   z-index: 1000;
+  touch-action: manipulation;
 }
 
 .radial-menu-button.visible {

@@ -1207,14 +1207,36 @@
     }
 
     function isTouchLike(e) {
-      return e.pointerType && e.pointerType !== 'mouse';
+      // Accept touch and pen, reject mouse
+      // Also accept events with no pointerType (some browsers) if they look like touch
+      const isMouse = e.pointerType === 'mouse';
+      const isTouch = e.pointerType === 'touch' || e.pointerType === 'pen';
+      
+      // Debug: log rejections if enabled
+      if (window.debugTapTap && isMouse) {
+        console.log('isTouchLike rejected mouse event:', e.pointerType);
+      }
+      
+      return isTouch || (!e.pointerType && e.isPrimary === false); // Fallback for weird edge cases
     }
 
     // Cache UI selectors for faster checks
     const UI_SELECTORS = [
+      // Main menu and sub-menus
+      '#menu', '.menu_menu', '.menu_anchor', '.menu_title',
+      '#menu_b', '#title_b', '#player_b', '#trophy_b', '#close_b', '#settings_b',
+      '.game_menu_type_b', '.lobby_b',
+      // Anchor points for radial menus
+      '#anchor_n', '#anchor_s', '#anchor_e', '#anchor_w',
+      // Radial menu buttons
+      '.radial-menu-button', '.radial-menu-label',
+      // Sliders and switches
       '.lod_slider', '.lod_slider_container', '#lod_slider', '#lod_value',
       '.binary_switch', '.switch_handle', '#hud_switch', '#shadows_switch',
-      'input', 'select', 'button'
+      // Standard form elements
+      'input', 'select', 'button',
+      // Stats and info panels
+      '#stat_w', '#stat_e'
     ];
     
     function isUIElement(e) {
@@ -1258,17 +1280,28 @@
           gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
         }
         
-        // Check if there's already a pan finger OR edge finger active
+        // Check if there's already a pan finger active
         // If so, don't create another pan from double-tap (let it be action/lasso)
-        let hasPanOrEdgeFinger = false;
+        // Note: We allow double-tap pan even while rot/zooming (edge finger)
+        let hasPanFinger = false;
         for (const [id, p] of activePointers) {
-          if (id !== e.pointerId && (p.isPanning || p.isEdgeFinger || p.startedInEdge)) {
-            hasPanOrEdgeFinger = true;
+          if (id !== e.pointerId && p.isPanning) {
+            hasPanFinger = true;
             break;
           }
         }
         
         const currentTime = now();
+        
+        // Reset stale tap tracking (more than 2 seconds old) to prevent issues after mouse usage
+        if (lastSingleTapTime > 0 && currentTime - lastSingleTapTime > 2000) {
+          lastSingleTapTime = 0;
+          lastSingleTapPos = null;
+        }
+        if (lastTapDownTime > 0 && currentTime - lastTapDownTime > 2000) {
+          lastTapDownTime = 0;
+          lastTapDownPos = null;
+        }
         
         // Check both tap-up time (normal) AND tap-down time (fast overlapping taps)
         const timeSinceUp = currentTime - lastSingleTapTime;
@@ -1281,7 +1314,18 @@
         const isDoubleTapFromUp = lastSingleTapPos && timeSinceUp < config.doubleTapDelayMs && distFromUpSq < doubleTapMaxDistPxSq;
         const isDoubleTapFromDown = lastTapDownPos && timeSinceDown < config.doubleTapDelayMs && distFromDownSq < doubleTapMaxDistPxSq;
         
-        if ((isDoubleTapFromUp || isDoubleTapFromDown) && !hasPanOrEdgeFinger) {
+        // Debug: log tap detection (enable with window.debugTapTap = true)
+        if (window.debugTapTap) {
+          console.log('TapTap check:', {
+            timeSinceUp, timeSinceDown,
+            lastSingleTapPos, lastTapDownPos,
+            isDoubleTapFromUp, isDoubleTapFromDown,
+            hasPanFinger,
+            doubleTapDelayMs: config.doubleTapDelayMs
+          });
+        }
+        
+        if ((isDoubleTapFromUp || isDoubleTapFromDown) && !hasPanFinger) {
           // Double-tap detected - this finger will pan on drag
           ps.isDoubleTapStart = true;
           // Reset tap tracking
@@ -1380,17 +1424,17 @@
             cancelHoldTimer();
           }
           
-          // === TOUCH STARTED IN EDGE ZONE: Rot/Zoom ===
-          if (ps.startedInEdge || ps.isEdgeFinger) {
-            ps.isEdgeFinger = true;
-            applyEdgeZoneCamera(ps);
-            momentumActive = false;
-          }
-          // === DOUBLE-TAP START: Pan mode ===
-          else if (ps.isDoubleTapStart) {
+          // === DOUBLE-TAP START: Pan mode (even on edge!) ===
+          if (ps.isDoubleTapStart) {
             ps.isCenterFinger = true;
             ps.isPanning = true;
             applyCenterPan(ps);
+            momentumActive = false;
+          }
+          // === TOUCH STARTED IN EDGE ZONE: Rot/Zoom ===
+          else if (ps.startedInEdge || ps.isEdgeFinger) {
+            ps.isEdgeFinger = true;
+            applyEdgeZoneCamera(ps);
             momentumActive = false;
           }
           // === HOLD TRIGGERED: Don't start lasso, menu is showing ===
@@ -1432,9 +1476,8 @@
         const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
         
         if (movedSq >= dragThresholdSq) {
-          // Edge finger: rot/zoom
-          if (movedPs.startedInEdge || movedPs.isEdgeFinger) {
-            movedPs.isEdgeFinger = true;
+          // Already committed edge finger: keep rot/zoom
+          if (movedPs.isEdgeFinger) {
             applyEdgeZoneCamera(movedPs);
           }
           // Finger already committed to panning: keep panning
@@ -1449,11 +1492,16 @@
               sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
             }
           }
-          // Double-tap start: pan mode
+          // Double-tap start: pan mode (even on edge!)
           else if (movedPs.isDoubleTapStart) {
             movedPs.isCenterFinger = true;
             movedPs.isPanning = true;
             applyCenterPan(movedPs);
+          }
+          // Touch started in edge zone: rot/zoom
+          else if (movedPs.startedInEdge) {
+            movedPs.isEdgeFinger = true;
+            applyEdgeZoneCamera(movedPs);
           }
           // Hold triggered: menu is showing, don't start lasso
           else if (movedPs.holdTriggered) {
@@ -1724,6 +1772,11 @@
             // Update last tap for double-tap detection
             lastSingleTapTime = currentTime;
             lastSingleTapPos = { x: clientX, y: clientY };
+            
+            // Debug: log tap recorded
+            if (window.debugTapTap) {
+              console.log('Tap recorded:', { lastSingleTapTime, lastSingleTapPos });
+            }
           }
         } else {
           // End of drag if one was started

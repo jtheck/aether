@@ -64,6 +64,7 @@ const menu = {
 let currentAnchor = null;
 let activeButtons = [];
 let menuDepth = 0;
+let menuOpenedAt = 0; // Track when menu was last opened to prevent immediate close
 
 // Calculate button positions along an arc
 function calculateArcPositions(anchorX, anchorY, numButtons, depth = 0, direction = 'w') {
@@ -129,9 +130,14 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
   tooltip.textContent = label;
   button.appendChild(tooltip);
   
-  // Add click handler for nested menus
-  button.addEventListener('click', (e) => {
+  // Add pointerdown handler for nested menus (works better with touch)
+  button.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
     e.stopPropagation();
+    
+    // Mark menu interaction to prevent immediate close
+    menuOpenedAt = Date.now();
+    
     const path = JSON.parse(button.dataset.menuPath);
     const submenu = getSubmenuFromPath(path);
     
@@ -374,8 +380,12 @@ function initMenu() {
   };
   
   Object.entries(anchors).forEach(([direction, anchor]) => {
-    anchor.addEventListener('click', (e) => {
+    anchor.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
       e.stopPropagation();
+      
+      // Mark menu as just opened
+      menuOpenedAt = Date.now();
       
       // Exit building placement mode if currently placing
       if (window.buildingSystem && window.buildingSystem.isPlacing) {
@@ -425,10 +435,20 @@ function initMenu() {
     });
   });
   
-  // Click outside to close
+  // Click outside to close (but not immediately after opening)
   document.addEventListener('click', (e) => {
     // Don't close menu if we're in building placement mode
     if (window.buildingSystem && window.buildingSystem.isPlacing) {
+      return;
+    }
+    
+    // Don't close if menu was just opened (prevents pointerdown open -> click close)
+    if (Date.now() - menuOpenedAt < 300) {
+      return;
+    }
+    
+    // Don't close if clicking on a menu button
+    if (e.target.closest('.radial-menu-button') || e.target.closest('.menu_anchor')) {
       return;
     }
     

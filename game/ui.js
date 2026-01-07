@@ -78,7 +78,9 @@ function getRandomColor() {
     // Set up menu button to show appropriate menu based on game state
     const menuButton = document.getElementById('menu_b');
     if (menuButton) {
-      menuButton.onclick = function() {
+      menuButton.addEventListener('pointerdown', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
         // Consider demo mode as menu scene (demo match is just a stub)
         const isMenuScene = !window.game && (!window.currentMatch || window.currentMatch.isDemo);
         console.log(`🎮 Menu button clicked - game: ${!!window.game}, currentMatch: ${!!window.currentMatch}, isDemo: ${window.currentMatch?.isDemo}, isMenuScene: ${isMenuScene}`);
@@ -90,8 +92,23 @@ function getRandomColor() {
           console.log('📋 Showing ingame_menu');
           ui.showMenu('ingame_menu');
         }
-      };
+      });
     }
+    
+    // Convert all menu onclick handlers to pointerdown for better touch support
+    const menuButtons = ['title_b', 'player_b', 'trophy_b', 'close_b', 'settings_b'];
+    menuButtons.forEach(id => {
+      const el = document.getElementById(id);
+      if (el && el.onclick) {
+        const originalHandler = el.onclick;
+        el.onclick = null;
+        el.addEventListener('pointerdown', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          originalHandler.call(this, e);
+        });
+      }
+    });
 
 
     // Load saved player data from localStorage

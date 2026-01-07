@@ -274,17 +274,17 @@ function showSubmenu(parentButton, submenuItems) {
     const arcDepth = baseDepth + (arcNum - 1);
     
     const buttons = items.map(({ key, value }) => {
-      const path = JSON.parse(parentButton.dataset.menuPath);
-      path.push(key);
-      return createMenuButton(
-        `menu-${path.join('-')}`,
-        getIconForItem(key),
-        key,
-        path,
+    const path = JSON.parse(parentButton.dataset.menuPath);
+    path.push(key);
+    return createMenuButton(
+      `menu-${path.join('-')}`,
+      getIconForItem(key),
+      key,
+      path,
         arcDepth
-      );
-    });
-    
+    );
+  });
+  
     // Show this arc's buttons
     showButtonsInArc(buttons, x, y, arcDepth, currentAnchor.direction);
   });

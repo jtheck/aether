@@ -36,7 +36,7 @@
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('camp');
-          }
+        }
         },
         arc: 1
       },
@@ -46,7 +46,7 @@
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('village');
           }
-        },
+      },
         arc: 1
       },
       tower: {
@@ -54,7 +54,7 @@
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('tower');
-          }
+        }
         },
         arc: 1
       },
@@ -1110,32 +1110,32 @@
       const endAngle = buttonAngle + itemSpread / 2;
       
       items.forEach((item, index) => {
-        if (!item.container) return;
-        
+      if (!item.container) return;
+      
         // Calculate angle for this item within its arc
-        let angle;
+      let angle;
         if (items.length === 1) {
-          angle = (startAngle + endAngle) / 2;
-        } else {
+        angle = (startAngle + endAngle) / 2;
+      } else {
           const angleStep = (endAngle - startAngle) / (items.length - 1);
-          angle = startAngle + (index * angleStep);
-        }
-        
-        if (isNaN(angle)) {
-          console.warn(`⚠️ Invalid angle for submenu item ${index}: ${angle}`);
-          return;
-        }
-        
+        angle = startAngle + (index * angleStep);
+      }
+      
+      if (isNaN(angle)) {
+        console.warn(`⚠️ Invalid angle for submenu item ${index}: ${angle}`);
+        return;
+      }
+      
         // Calculate position using the arc-specific radius
         const targetX = Math.cos(angle) * arcRadius;
         const targetY = Math.sin(angle) * arcRadius;
-        const targetZ = -menuConfig.distance * 0.5;
-        
+      const targetZ = -menuConfig.distance * 0.5;
+      
         console.log(`  📍 Submenu ${item.text} (arc ${arcNum}): angle=${(angle * 180 / Math.PI).toFixed(1)}°, radius=${arcRadius.toFixed(2)}, pos=(${targetX.toFixed(2)}, ${targetY.toFixed(2)})`);
-        
-        // Reset and position container
-        item.container.scaling.setAll(1.0);
-        item.container.position.set(targetX, targetY, targetZ);
+      
+      // Reset and position container
+      item.container.scaling.setAll(1.0);
+      item.container.position.set(targetX, targetY, targetZ);
       });
     });
   }

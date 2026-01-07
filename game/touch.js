@@ -32,7 +32,7 @@
       // Building placement UX
       buildPlaceMinHoldMs: 150, // Reduced from 200ms for snappier placement
       // NEW: Zone-based camera control (edge = rot/zoom, center = pan)
-      edgeZoneWidthPx: 80, // Fixed pixel width for edge zone (consistent across screen sizes)
+      edgeZoneWidthPx: 60, // Fixed pixel width for edge zone (consistent across screen sizes)
       zoneZoomSensitivity: 0.015, // Zoom speed in edge zones (up/down drag)
       zoneRotateSensitivity: 0.018, // Rotate speed in edge zones (left/right drag)
       zonePanSensitivity: 8.0, // Pan sensitivity for center zone drags
@@ -104,12 +104,18 @@
     let momentumActive = false;
     let momentumDecay = 0.92; // How fast momentum decays per frame (0.92 = ~8% loss per frame)
     
-    // ACTION MODE: Toggle between camera mode and action mode
-    // Camera mode (default): edge = rot/zoom, center = pan
-    // Action mode: edge = rot/zoom, center = lasso/select/commands
-    let actionModeActive = false;
-    let actionLockElement = null; // The UI element for the action lock
-    let actionLockPosition = { x: 0, y: 0 }; // Screen position of the lock
+    // ACTION POPUP: Shows on tap-hold or two-finger tap, shows abilities/rally options
+    let actionPopupElement = null;
+    let actionPopupPosition = { x: 0, y: 0 };
+    let actionPopupTimeout = null;
+    const ACTION_POPUP_DURATION = 4000; // Auto-dismiss after 4 seconds
+    
+    // Tap-hold detection for action menu
+    let holdTimer = null;
+    let holdPointerId = null;
+    let holdPosition = { x: 0, y: 0 };
+    const HOLD_DELAY_MS = 350; // How long to hold before menu appears
+    const HOLD_MAX_MOVE_PX = 12; // Max movement allowed during hold
     // Coalesce touch move handling to one frame
     let moveRafScheduled = false;
     let lastTouchClientX = 0, lastTouchClientY = 0;
@@ -384,17 +390,18 @@
     // Removed direct moveSelectedUnitsToScreen flow; defer to ui.handlePointer via synthetic events
     // Removed: showMoveOptionsUIAt (single-finger double-tap now triggers special ability)
 
-    // === ACTION MODE UI ===
-    function createActionLock(clientX, clientY) {
-      if (actionLockElement) return; // Already exists
+    // === ACTION POPUP UI ===
+    // Shows on double-tap with special ability button, auto-dismisses
+    function showActionPopup(clientX, clientY) {
+      // Dismiss existing popup if any
+      hideActionPopup();
       
-      // Offset the lock towards center of screen by one radius so it's not hidden under finger
+      // Offset towards center of screen so it's not hidden under finger
       const rect = canvasRect();
       const centerX = rect.left + rect.width / 2;
       const centerY = rect.top + rect.height / 2;
-      const offsetRadius = 40; // One radius offset
+      const offsetRadius = 60;
       
-      // Calculate direction to center
       const dx = centerX - clientX;
       const dy = centerY - clientY;
       const dist = Math.sqrt(dx * dx + dy * dy);
@@ -402,152 +409,286 @@
       let finalX = clientX;
       let finalY = clientY;
       if (dist > 1) {
-        // Offset towards center
         finalX = clientX + (dx / dist) * offsetRadius;
         finalY = clientY + (dy / dist) * offsetRadius;
       }
       
-      actionLockPosition = { x: finalX, y: finalY };
+      actionPopupPosition = { x: finalX, y: finalY };
       
-      // Create the action lock element
-      actionLockElement = document.createElement('div');
-      actionLockElement.id = 'touch-action-lock';
-      actionLockElement.innerHTML = '⚔'; // Action/command icon
-      actionLockElement.style.cssText = `
+      // Create popup container
+      actionPopupElement = document.createElement('div');
+      actionPopupElement.id = 'touch-action-popup';
+      actionPopupElement.style.cssText = `
         position: fixed;
-        left: ${clientX}px;
-        top: ${clientY}px;
+        left: ${finalX}px;
+        top: ${finalY}px;
         transform: translate(-50%, -50%);
-        width: 56px;
-        height: 56px;
-        background: radial-gradient(circle, rgba(255,200,50,0.95) 0%, rgba(200,120,20,0.9) 100%);
-        border: 3px solid rgba(255,255,255,0.8);
-        border-radius: 50%;
         display: flex;
-        align-items: center;
+        flex-wrap: wrap;
         justify-content: center;
-        font-size: 28px;
-        color: #fff;
-        text-shadow: 0 2px 4px rgba(0,0,0,0.5);
-        box-shadow: 0 4px 20px rgba(255,180,50,0.6), 0 0 30px rgba(255,200,100,0.4);
+        gap: 8px;
+        max-width: 200px;
         z-index: 10000;
         pointer-events: auto;
-        cursor: pointer;
-        animation: actionLockPulse 1.5s ease-in-out infinite;
-        user-select: none;
-        -webkit-user-select: none;
-        touch-action: none;
+        animation: actionPopupAppear 0.2s ease-out;
       `;
       
-      // Add pulse animation if not exists
-      if (!document.getElementById('action-lock-style')) {
+      // Add animations if not exists
+      if (!document.getElementById('action-popup-style')) {
         const style = document.createElement('style');
-        style.id = 'action-lock-style';
+        style.id = 'action-popup-style';
         style.textContent = `
-          @keyframes actionLockPulse {
-            0%, 100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 4px 20px rgba(255,180,50,0.6), 0 0 30px rgba(255,200,100,0.4); }
-            50% { transform: translate(-50%, -50%) scale(1.1); box-shadow: 0 4px 30px rgba(255,180,50,0.8), 0 0 50px rgba(255,200,100,0.6); }
+          @keyframes actionPopupAppear {
+            0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+          }
+          @keyframes actionPopupFade {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(0.8); opacity: 0; }
+          }
+          .action-popup-btn {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            border: 3px solid rgba(255,255,255,0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            color: #fff;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+            transition: transform 0.1s ease;
+          }
+          .action-popup-btn:active {
+            transform: scale(0.9);
           }
         `;
         document.head.appendChild(style);
       }
       
-      // Click/tap on lock exits action mode
-      actionLockElement.addEventListener('pointerdown', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleActionMode();
-      }, { passive: false });
+      // Collect available actions based on selection
+      const actions = [];
+      const hasSelection = window.player && window.player.selectedUnits && window.player.selectedUnits.length > 0;
       
-      document.body.appendChild(actionLockElement);
-    }
-    
-    function destroyActionLock() {
-      if (actionLockElement) {
-        actionLockElement.remove();
-        actionLockElement = null;
-      }
-    }
-    
-    function moveActionLock(clientX, clientY) {
-      // Move the action lock to a new position without toggling mode
-      if (!actionLockElement) return;
-      
-      // Offset towards center (same as createActionLock)
-      const rect = canvasRect();
-      const centerX = rect.left + rect.width / 2;
-      const centerY = rect.top + rect.height / 2;
-      const offsetRadius = 40;
-      
-      const dx = centerX - clientX;
-      const dy = centerY - clientY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      
-      let finalX = clientX;
-      let finalY = clientY;
-      if (dist > 1) {
-        finalX = clientX + (dx / dist) * offsetRadius;
-        finalY = clientY + (dy / dist) * offsetRadius;
-      }
-      
-      actionLockPosition = { x: finalX, y: finalY };
-      actionLockElement.style.left = `${finalX}px`;
-      actionLockElement.style.top = `${finalY}px`;
-      // Brief scale animation to show it moved
-      actionLockElement.style.animation = 'none';
-      actionLockElement.offsetHeight; // Trigger reflow
-      actionLockElement.style.animation = 'actionLockPulse 1.5s ease-in-out infinite';
-    }
-    
-    function enterActionMode(clientX, clientY) {
-      // Enter action mode (or move lock if already active)
-      if (actionModeActive) {
-        // Already in action mode - just move the lock
-        if (clientX !== undefined && clientY !== undefined) {
-          moveActionLock(clientX, clientY);
+      if (hasSelection) {
+        // Always add Move and Attack Move for selected units
+        actions.push({
+          icon: '🚶',
+          label: 'Move',
+          color: 'rgba(80,180,80,0.95)',
+          shadow: 'rgba(80,180,80,0.6)',
+          action: () => executeCommand('move', clientX, clientY)
+        });
+        actions.push({
+          icon: '⚔️',
+          label: 'Attack Move',
+          color: 'rgba(220,80,80,0.95)',
+          shadow: 'rgba(220,80,80,0.6)',
+          action: () => executeCommand('attackMove', clientX, clientY)
+        });
+        
+        // Collect unique abilities from selected units
+        const seenAbilities = new Set();
+        for (const unit of window.player.selectedUnits) {
+          if (unit.abilities) {
+            for (const ability of unit.abilities) {
+              if (!seenAbilities.has(ability.name)) {
+                seenAbilities.add(ability.name);
+                actions.push({
+                  icon: ability.icon || '⚡',
+                  label: ability.name,
+                  color: ability.color || 'rgba(150,100,255,0.95)',
+                  shadow: ability.shadowColor || 'rgba(150,100,255,0.6)',
+                  action: () => executeAbility(ability.name, clientX, clientY)
+                });
+              }
+            }
+          }
+          // Fallback: check for special ability function
+          if (!seenAbilities.has('special') && (unit.specialAbility || unit.doSpecialAction)) {
+            seenAbilities.add('special');
+            actions.push({
+              icon: '⚡',
+              label: 'Special',
+              color: 'rgba(150,100,255,0.95)',
+              shadow: 'rgba(150,100,255,0.6)',
+              action: () => triggerSpecialAbility(clientX, clientY)
+            });
+          }
         }
       } else {
-        // Enter action mode - show lock at position
-        actionModeActive = true;
-        if (clientX !== undefined && clientY !== undefined) {
-          createActionLock(clientX, clientY);
+        // No units selected - show rally/global options
+        actions.push({
+          icon: '🚩',
+          label: 'Rally Point',
+          color: 'rgba(255,180,50,0.95)',
+          shadow: 'rgba(255,180,50,0.6)',
+          action: () => setRallyPoint(clientX, clientY)
+        });
+        actions.push({
+          icon: '📍',
+          label: 'Ping',
+          color: 'rgba(100,180,255,0.95)',
+          shadow: 'rgba(100,180,255,0.6)',
+          action: () => pingLocation(clientX, clientY)
+        });
+      }
+      
+      // Create buttons for each action
+      for (const act of actions) {
+        const btn = document.createElement('div');
+        btn.className = 'action-popup-btn';
+        btn.innerHTML = act.icon;
+        btn.style.background = `radial-gradient(circle, ${act.color} 0%, ${act.color.replace('0.95', '0.7')} 100%)`;
+        btn.style.boxShadow = `0 4px 15px ${act.shadow}, 0 0 20px ${act.shadow.replace('0.6', '0.3')}`;
+        btn.title = act.label;
+        btn.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          act.action();
+          hideActionPopup();
+        }, { passive: false });
+        actionPopupElement.appendChild(btn);
+      }
+      
+      document.body.appendChild(actionPopupElement);
+      
+      // Auto-dismiss after delay
+      actionPopupTimeout = setTimeout(() => {
+        hideActionPopup();
+      }, ACTION_POPUP_DURATION);
+    }
+    
+    function executeCommand(command, clientX, clientY) {
+      const worldPos = screenToWorld(clientX, clientY);
+      if (!worldPos || !window.player || !window.player.selectedUnits) return;
+      
+      for (const unit of window.player.selectedUnits) {
+        if (command === 'move' && unit.moveTo) {
+          unit.moveTo(worldPos.x, worldPos.z);
+        } else if (command === 'attackMove' && unit.attackMoveTo) {
+          unit.attackMoveTo(worldPos.x, worldPos.z);
+        } else if (command === 'attackMove' && unit.moveTo) {
+          // Fallback: just move if no attackMove
+          unit.moveTo(worldPos.x, worldPos.z);
         }
-        // Visual feedback
-        if (canvas && canvas.style) {
-          canvas.style.outline = '4px solid rgba(255, 180, 50, 0.8)';
-          setTimeout(() => { canvas.style.outline = ''; }, 300);
+      }
+    }
+    
+    function executeAbility(abilityName, clientX, clientY) {
+      const worldPos = screenToWorld(clientX, clientY);
+      if (!worldPos || !window.player || !window.player.selectedUnits) return;
+      
+      for (const unit of window.player.selectedUnits) {
+        if (unit.abilities) {
+          const ability = unit.abilities.find(a => a.name === abilityName);
+          if (ability && ability.execute) {
+            ability.execute(worldPos);
+          }
         }
       }
     }
     
-    function exitActionMode() {
-      if (!actionModeActive) return;
-      actionModeActive = false;
-      destroyActionLock();
-      // Visual feedback
-      if (canvas && canvas.style) {
-        canvas.style.outline = '4px solid rgba(100, 200, 255, 0.8)';
-        setTimeout(() => { canvas.style.outline = ''; }, 300);
+    function setRallyPoint(clientX, clientY) {
+      const worldPos = screenToWorld(clientX, clientY);
+      if (!worldPos) return;
+      // Set rally point for player's buildings/spawn
+      if (window.player && window.player.setRallyPoint) {
+        window.player.setRallyPoint(worldPos.x, worldPos.z);
+      }
+      console.log('Rally point set at', worldPos.x, worldPos.z);
+    }
+    
+    function pingLocation(clientX, clientY) {
+      const worldPos = screenToWorld(clientX, clientY);
+      if (!worldPos) return;
+      // Create a visual ping at location
+      if (window.ui && window.ui.showPing) {
+        window.ui.showPing(worldPos.x, worldPos.z);
+      }
+      console.log('Ping at', worldPos.x, worldPos.z);
+    }
+    
+    // === TAP-HOLD DETECTION ===
+    function startHoldTimer(pointerId, clientX, clientY) {
+      cancelHoldTimer();
+      holdPointerId = pointerId;
+      holdPosition = { x: clientX, y: clientY };
+      holdTimer = setTimeout(() => {
+        // Hold triggered - show action menu
+        showActionPopup(clientX, clientY);
+        holdTimer = null;
+        
+        // Mark the pointer so it doesn't trigger other actions
+        const ps = activePointers.get(pointerId);
+        if (ps) {
+          ps.holdTriggered = true;
+        }
+      }, HOLD_DELAY_MS);
+    }
+    
+    function cancelHoldTimer() {
+      if (holdTimer) {
+        clearTimeout(holdTimer);
+        holdTimer = null;
+      }
+      holdPointerId = null;
+    }
+    
+    function checkHoldMovement(clientX, clientY) {
+      if (!holdPointerId) return;
+      const dx = clientX - holdPosition.x;
+      const dy = clientY - holdPosition.y;
+      if (dx * dx + dy * dy > HOLD_MAX_MOVE_PX * HOLD_MAX_MOVE_PX) {
+        cancelHoldTimer();
       }
     }
     
-    function toggleActionMode(clientX, clientY) {
-      if (actionModeActive) {
-        exitActionMode();
-      } else {
-        enterActionMode(clientX, clientY);
+    function hideActionPopup() {
+      if (actionPopupTimeout) {
+        clearTimeout(actionPopupTimeout);
+        actionPopupTimeout = null;
+      }
+      if (actionPopupElement) {
+        actionPopupElement.style.animation = 'actionPopupFade 0.15s ease-out forwards';
+        const el = actionPopupElement;
+        setTimeout(() => {
+          if (el.parentNode) el.remove();
+        }, 150);
+        actionPopupElement = null;
       }
     }
     
-    // Check if a point is inside the action lock (for tap detection)
-    function isInsideActionLock(clientX, clientY) {
-      if (!actionLockElement || !actionModeActive) return false;
-      const lockRadius = 35; // Slightly larger than visual for easier tapping
-      const dx = clientX - actionLockPosition.x;
-      const dy = clientY - actionLockPosition.y;
-      return (dx * dx + dy * dy) <= (lockRadius * lockRadius);
+    function triggerSpecialAbility(clientX, clientY) {
+      // Trigger selected units' special ability at the tap location
+      if (window.player && window.player.selectedUnits && window.player.selectedUnits.length > 0) {
+        const worldPos = screenToWorld(clientX, clientY);
+        if (worldPos) {
+          // Trigger special ability for each selected unit
+          for (const unit of window.player.selectedUnits) {
+            if (unit.specialAbility && typeof unit.specialAbility === 'function') {
+              unit.specialAbility(worldPos);
+            } else if (unit.doSpecialAction && typeof unit.doSpecialAction === 'function') {
+              unit.doSpecialAction(worldPos);
+            }
+          }
+        }
+      }
     }
-
+    
+    // Check if a point is inside the action popup (for tap detection)
+    function isInsideActionPopup(clientX, clientY) {
+      if (!actionPopupElement) return false;
+      const popupRadius = 40;
+      const dx = clientX - actionPopupPosition.x;
+      const dy = clientY - actionPopupPosition.y;
+      return (dx * dx + dy * dy) <= (popupRadius * popupRadius);
+    }
+    
     // === EDGE ZONE CAMERA CONTROL ===
     // For touches that start in edge zone: left/right = rotate, up/down = zoom
     function applyEdgeZoneCamera(ps) {
@@ -1095,12 +1236,9 @@
       // Check if we're interacting with a UI element - if so, allow normal behavior
       if (isUIElement(e)) return;
       
-      // Check if tapping on the action lock to exit action mode
-      if (isInsideActionLock(e.clientX, e.clientY)) {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleActionMode();
-        return;
+      // Check if tapping on the action popup - let it handle its own events
+      if (isInsideActionPopup(e.clientX, e.clientY)) {
+        return; // Let popup buttons handle the event
       }
       
       e.preventDefault();
@@ -1114,8 +1252,22 @@
         activePointers.set(e.pointerId, ps);
         pointerOrder.push(e.pointerId);
         
-        // For ANY touch (edge or center), check for double-tap to trigger action mode
-        // This allows entering action mode from anywhere on screen
+        // Stop any active momentum when finger goes down
+        if (momentumActive) {
+          momentumActive = false;
+          gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
+        }
+        
+        // Check if there's already a pan finger OR edge finger active
+        // If so, don't create another pan from double-tap (let it be action/lasso)
+        let hasPanOrEdgeFinger = false;
+        for (const [id, p] of activePointers) {
+          if (id !== e.pointerId && (p.isPanning || p.isEdgeFinger || p.startedInEdge)) {
+            hasPanOrEdgeFinger = true;
+            break;
+          }
+        }
+        
         const currentTime = now();
         
         // Check both tap-up time (normal) AND tap-down time (fast overlapping taps)
@@ -1125,13 +1277,13 @@
         const distFromDownSq = lastTapDownPos ? distanceSq(e.clientX, e.clientY, lastTapDownPos.x, lastTapDownPos.y) : Infinity;
         
         // Double-tap: check against tap-up (normal case) OR tap-down (fast overlapping case)
+        // BUT don't create a pan finger if one is already active
         const isDoubleTapFromUp = lastSingleTapPos && timeSinceUp < config.doubleTapDelayMs && distFromUpSq < doubleTapMaxDistPxSq;
         const isDoubleTapFromDown = lastTapDownPos && timeSinceDown < config.doubleTapDelayMs && distFromDownSq < doubleTapMaxDistPxSq;
         
-        if (isDoubleTapFromUp || isDoubleTapFromDown) {
-          // Double-tap detected - enter action mode (or move lock if already active)
+        if ((isDoubleTapFromUp || isDoubleTapFromDown) && !hasPanOrEdgeFinger) {
+          // Double-tap detected - this finger will pan on drag
           ps.isDoubleTapStart = true;
-          enterActionMode(e.clientX, e.clientY);
           // Reset tap tracking
           lastSingleTapTime = 0;
           lastSingleTapPos = null;
@@ -1141,6 +1293,11 @@
           // Record this tap-down for potential fast double-tap detection
           lastTapDownTime = currentTime;
           lastTapDownPos = { x: e.clientX, y: e.clientY };
+          
+          // Start hold timer for tap-hold action menu (only for center touches)
+          if (!ps.startedInEdge) {
+            startHoldTimer(e.pointerId, e.clientX, e.clientY);
+          }
         }
       }
 
@@ -1212,44 +1369,57 @@
         const movedSq = dx * dx + dy * dy;
         const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
         
-        // Skip if double-tap just toggled action mode (don't start dragging immediately)
-        if (ps.isDoubleTapStart && !ps.isEdgeFinger && !ps.isCenterFinger) {
-          return;
+        // Check hold movement (cancel if moved too much)
+        if (holdPointerId === ps.id) {
+          checkHoldMovement(ps.x, ps.y);
         }
         
         if (movedSq >= dragThresholdSq) {
+          // Cancel hold timer when drag starts
+          if (holdPointerId === ps.id) {
+            cancelHoldTimer();
+          }
+          
           // === TOUCH STARTED IN EDGE ZONE: Rot/Zoom ===
-          if (ps.startedInEdge) {
+          if (ps.startedInEdge || ps.isEdgeFinger) {
             ps.isEdgeFinger = true;
             applyEdgeZoneCamera(ps);
-            momentumActive = false; // Will activate on pointer up
+            momentumActive = false;
           }
-          // === TOUCH STARTED IN CENTER: Pan or Action depending on mode ===
-          else if (actionModeActive && !ps.isPanning) {
-            // ACTION MODE: Center = lasso/select/commands
+          // === DOUBLE-TAP START: Pan mode ===
+          else if (ps.isDoubleTapStart) {
+            ps.isCenterFinger = true;
+            ps.isPanning = true;
+            applyCenterPan(ps);
+            momentumActive = false;
+          }
+          // === HOLD TRIGGERED: Don't start lasso, menu is showing ===
+          else if (ps.holdTriggered) {
+            // Do nothing - let the action menu handle it
+          }
+          // === DEFAULT CENTER: Action/lasso ===
+          else {
             ps.isCenterFinger = true;
             ps.isActioning = true;
             
             if (!ps.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
               sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
               ps.syntheticDownEmitted = true;
+              // Clear tap tracking when lasso starts - prevents next tap from being double-tap
+              lastSingleTapTime = 0;
+              lastSingleTapPos = null;
+              lastTapDownTime = 0;
+              lastTapDownPos = null;
             }
             
             if (ps.syntheticDownEmitted) {
               sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
             }
-          } else {
-            // CAMERA MODE: Center = pan (or continue panning if already started)
-            ps.isCenterFinger = true;
-            ps.isPanning = true;
-            applyCenterPan(ps);
-            momentumActive = false; // Will activate on pointer up
           }
         }
         
       } else if (activePointers.size >= 2) {
-        // TWO+ FINGERS: Each finger handles its zone independently
-        // Edge fingers = rot/zoom, center fingers = pan (camera mode) or lasso (action mode)
+        // TWO+ FINGERS - each finger follows same rules as single finger
         invalidateTime();
         
         const movedPointerId = e.pointerId;
@@ -1267,7 +1437,7 @@
             movedPs.isEdgeFinger = true;
             applyEdgeZoneCamera(movedPs);
           }
-          // Finger already committed to panning: keep panning (even if action mode activated)
+          // Finger already committed to panning: keep panning
           else if (movedPs.isPanning) {
             movedPs.isCenterFinger = true;
             applyCenterPan(movedPs);
@@ -1279,9 +1449,18 @@
               sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
             }
           }
-          // New center finger: depends on action mode
-          else if (actionModeActive) {
-            // ACTION MODE: Center = lasso/select/commands
+          // Double-tap start: pan mode
+          else if (movedPs.isDoubleTapStart) {
+            movedPs.isCenterFinger = true;
+            movedPs.isPanning = true;
+            applyCenterPan(movedPs);
+          }
+          // Hold triggered: menu is showing, don't start lasso
+          else if (movedPs.holdTriggered) {
+            // Do nothing
+          }
+          // Default center: action/lasso
+          else {
             movedPs.isCenterFinger = true;
             movedPs.isActioning = true;
             
@@ -1289,18 +1468,17 @@
               if (now() >= suppressSingleTapUntil) {
                 sendSyntheticPointer('pointerdown', movedPs.startX, movedPs.startY, 0, { suppressTerrainClick: true });
                 movedPs.syntheticDownEmitted = true;
+                // Clear tap tracking when lasso starts - prevents next tap from being double-tap
+                lastSingleTapTime = 0;
+                lastSingleTapPos = null;
+                lastTapDownTime = 0;
+                lastTapDownPos = null;
               }
             }
             
             if (movedPs.syntheticDownEmitted) {
               sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
             }
-          }
-          else {
-            // CAMERA MODE: Center = pan
-            movedPs.isCenterFinger = true;
-            movedPs.isPanning = true;
-            applyCenterPan(movedPs);
           }
         }
       }
@@ -1372,6 +1550,11 @@
       if (!ps) return;
       updatePointerState(ps, e);
       ps.isDown = false;
+      
+      // Cancel hold timer if this pointer was being tracked
+      if (holdPointerId === e.pointerId) {
+        cancelHoldTimer();
+      }
 
       // Calculate timing and movement once for reuse
       const dt = now() - ps.startTime;
@@ -1412,12 +1595,15 @@
             endGestureIfNeeded();
             return;
           } else {
-            // Single 2-tap: record center and suppress single-tap briefly
+            // Single 2-tap: show action menu (same as tap-hold)
             lastTwoTapTime = now();
             lastTwoTapPos = { x: cx, y: cy };
             suppressSingleTapUntil = now() + Math.max(150, config.twoFingerTapMaxTimeMs || 300);
             skipNextSingleTap = true;
             recentQuickUps.length = 0;
+            
+            // Show action menu at the tap center
+            showActionPopup(cx, cy);
           }
         }
       }
@@ -1456,20 +1642,40 @@
           ps.syntheticDownEmitted = false;
         }
         
-        // If this was an edge finger (rot/zoom) or center pan finger, activate momentum
-        if (ps.isEdgeFinger || (ps.isCenterFinger && !actionModeActive)) {
-          momentumActive = true;
+        // If this was an edge finger (rot/zoom) or pan finger, activate momentum
+        // BUT only if there's actual velocity (prevents drift on clean lift)
+        if (ps.isEdgeFinger || ps.isPanning) {
+          const minVelocity = 0.5; // Minimum velocity to activate momentum
+          const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
+                              Math.abs(gestureVelocity.pan.z) > minVelocity ||
+                              Math.abs(gestureVelocity.rotate) > 0.005 ||
+                              Math.abs(gestureVelocity.pinch) > 0.1;
+          if (hasVelocity) {
+            momentumActive = true;
+          }
           return;
         }
         
         // If this finger was part of a gesture, don't treat it as a tap/click
         if (ps.wasInGesture) {
-          momentumActive = true;
+          const minVelocity = 0.5;
+          const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
+                              Math.abs(gestureVelocity.pan.z) > minVelocity ||
+                              Math.abs(gestureVelocity.rotate) > 0.005 ||
+                              Math.abs(gestureVelocity.pinch) > 0.1;
+          if (hasVelocity) {
+            momentumActive = true;
+          }
           return;
         }
         
-        // If this was a double-tap that triggered action mode, don't treat as tap
+        // If this was a double-tap that triggered pan mode, don't treat as tap
         if (ps.isDoubleTapStart) {
+          return;
+        }
+        
+        // If hold triggered action menu, don't treat as tap
+        if (ps.holdTriggered) {
           return;
         }
         
@@ -1506,16 +1712,16 @@
           } else {
             const currentTime = now();
             
-            // Check if we're in cooldown period after a recent double-tap action mode toggle
+            // Check if we're in cooldown period after a recent double-tap action popup
             if (currentTime < doubleTapCooldownUntil) {
               // In cooldown - don't register tap
               return;
             }
             
-            // Single tap: synthesize a click and record for potential double-tap action mode toggle
+            // Single tap: synthesize a click and record for potential double-tap action popup
             sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
             sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
-            // Update last tap for double-tap detection (action mode toggle)
+            // Update last tap for double-tap detection
             lastSingleTapTime = currentTime;
             lastSingleTapPos = { x: clientX, y: clientY };
           }
@@ -1529,9 +1735,16 @@
       } else if (activePointers.size >= 1) {
         // Pointer up while other fingers remain
         
-        // If this was an edge finger or center pan finger, activate momentum
-        if (ps.isEdgeFinger || (ps.isCenterFinger && !actionModeActive)) {
-          momentumActive = true;
+        // If this was an edge finger or pan finger, activate momentum (if velocity)
+        if (ps.isEdgeFinger || ps.isPanning) {
+          const minVelocity = 0.5;
+          const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
+                              Math.abs(gestureVelocity.pan.z) > minVelocity ||
+                              Math.abs(gestureVelocity.rotate) > 0.005 ||
+                              Math.abs(gestureVelocity.pinch) > 0.1;
+          if (hasVelocity) {
+            momentumActive = true;
+          }
           return;
         }
         
@@ -1611,9 +1824,16 @@
       }
       endGestureIfNeeded();
       
-      // Activate momentum if all fingers gone
+      // Activate momentum if all fingers gone (and has velocity)
       if (activePointers.size === 0) {
-        momentumActive = true;
+        const minVelocity = 0.5;
+        const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
+                            Math.abs(gestureVelocity.pan.z) > minVelocity ||
+                            Math.abs(gestureVelocity.rotate) > 0.005 ||
+                            Math.abs(gestureVelocity.pinch) > 0.1;
+        if (hasVelocity) {
+          momentumActive = true;
+        }
       }
     }
 

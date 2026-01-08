@@ -266,17 +266,6 @@
         callback: () => console.log("Research: Armor selected"),
         arc: 2
       }
-    },
-    rally: {
-      home: {
-        callback: () => {
-          if (window.rallyUnitsToAgora) {
-            window.rallyUnitsToAgora();
-          } else {
-            console.warn('❌ Rally function not available');
-          }
-        }
-      }
     }
   };
   
@@ -292,9 +281,9 @@
     
     // === ARC & POSITIONING ===
     anchorOffset: -0.11,   // How far anchor is OFF screen (negative = past edge, 0 = edge)
-    arcAngle: 140,         // Main menu arc spread in degrees (smaller = tighter curve)
+    arcAngle: 90,         // Main menu arc spread in degrees (smaller = tighter curve)
     buttonRadius: 0.9,     // Main menu distance from anchor (first concentric circle)
-    submenuArcAngle: 140,  // Submenu arc spread in degrees
+    submenuArcAngle: 90,  // Submenu arc spread in degrees
     submenuRadius: 1.3     // Submenu distance from anchor (second concentric circle)
   }; 
   
@@ -307,10 +296,19 @@
     
     // Create radial menu container
     createRadialMenu();
-    
+
+    // Create 3D anchor indicators (if in 3D mode)
+    console.log(`🎮 HUD init - USE_3D_HUD: ${window.USE_3D_HUD}`);
+    if (window.USE_3D_HUD) {
+      console.log('🎮 Calling createAnchorIndicators during HUD init');
+      hud.createAnchorIndicators();
+    } else {
+      console.log('🎮 Skipping anchor indicators during HUD init (2D mode)');
+    }
+
     // Initialize minimap system
     initMinimap();
-    
+
     // Set up middle mouse button handling
     setupMiddleMouseControl();
     
@@ -361,52 +359,34 @@
         e.preventDefault();
         
         if (USE_3D_HUD) {
-          // 3D HUD mode - show 3D radial menu
-          const anchors = {
-            n: document.getElementById('anchor_n'),
-            s: document.getElementById('anchor_s'),
-            e: document.getElementById('anchor_e'),
-            w: document.getElementById('anchor_w')
+          // 3D HUD mode - find closest screen edge to mouse position
+          const canvasRect = hud.canvas.getBoundingClientRect();
+          const mouseX = currentMousePosition.x;
+          const mouseY = currentMousePosition.y;
+
+          // Define screen edge positions (same as 3D anchor creation)
+          const screenEdges = {
+            top: { x: canvasRect.width / 2, y: 35, name: 'top' },
+            bottom: { x: canvasRect.width / 2, y: canvasRect.height - 35, name: 'bottom' },
+            left: { x: 35, y: canvasRect.height / 2, name: 'left' },
+            right: { x: canvasRect.width - 35, y: canvasRect.height / 2, name: 'right' }
           };
-          
-          // Get anchor positions
-          const anchorPositions = {};
-          for (const [direction, anchor] of Object.entries(anchors)) {
-            if (anchor) {
-              const rect = anchor.getBoundingClientRect();
-              const canvasRect = hud.canvas.getBoundingClientRect();
-              anchorPositions[direction] = {
-                x: rect.left + rect.width / 2 - canvasRect.left,
-                y: rect.top + rect.height / 2 - canvasRect.top
-              };
-            }
-          }
-          
-          // Find closest anchor to current mouse position
+
+          // Find closest screen edge to mouse position
           let minDist = Infinity;
-          let closestAnchor = 's'; // Default to south if no anchors found
-          
-          for (const [direction, pos] of Object.entries(anchorPositions)) {
-            const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+          let closestEdge = screenEdges.bottom; // Default to bottom
+
+          for (const edge of Object.values(screenEdges)) {
+            const dist = Math.sqrt((mouseX - edge.x)**2 + (mouseY - edge.y)**2);
             if (dist < minDist) {
               minDist = dist;
-              closestAnchor = direction;
+              closestEdge = edge;
             }
           }
-          
-          // Convert direction to anchor name for 3D menu
-          const anchorMap3D = { 
-            n: 'top', 
-            s: 'bottom', 
-            w: 'left',   // west anchor (left side) → left menu position
-            e: 'right'   // east anchor (right side) → right menu position
-          };
-          const anchorName = anchorMap3D[closestAnchor] || 'bottom';
-          
-          // Show 3D menu at closest anchor
-          if (anchorPositions[closestAnchor]) {
-            hud.showRadialMenu(anchorPositions[closestAnchor].x, anchorPositions[closestAnchor].y, anchorName);
-          }
+
+          // Show 3D menu at closest screen edge
+          console.log(`🖱️ Middle mouse: opening 3D menu at ${closestEdge.name} edge (mouse at ${mouseX}, ${mouseY})`);
+          hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
         } else {
           // 2D HUD mode - find closest anchor and trigger 2D menu
           const anchors = {
@@ -440,9 +420,21 @@
             }
           }
           
-          // Click the closest anchor
+          // Simulate pointerdown on the closest anchor (anchors listen for pointerdown, not click)
           if (anchors[closestAnchor]) {
-            anchors[closestAnchor].click();
+            console.log(`🖱️ Middle mouse 2D: triggering pointerdown on ${closestAnchor} anchor`);
+            // Create and dispatch a pointerdown event
+            const pointerEvent = new PointerEvent('pointerdown', {
+              bubbles: true,
+              cancelable: true,
+              pointerId: 1,
+              pointerType: 'mouse',
+              clientX: currentMousePosition.x,
+              clientY: currentMousePosition.y
+            });
+            anchors[closestAnchor].dispatchEvent(pointerEvent);
+          } else {
+            console.log('❌ Middle mouse 2D: No anchor found');
           }
         }
       }
@@ -456,54 +448,36 @@
     document.addEventListener('keydown', function(e) {
       if (e.code === 'Space' || e.code === 'KeyB') {
         e.preventDefault();
-        
+
         if (USE_3D_HUD) {
-          // 3D HUD mode - show 3D radial menu
-          const anchors = {
-            n: document.getElementById('anchor_n'),
-            s: document.getElementById('anchor_s'),
-            e: document.getElementById('anchor_e'),
-            w: document.getElementById('anchor_w')
+          // 3D HUD mode - find closest screen edge to mouse position
+          const canvasRect = hud.canvas.getBoundingClientRect();
+          const mouseX = currentMousePosition.x;
+          const mouseY = currentMousePosition.y;
+
+          // Define screen edge positions (same as 3D anchor creation)
+          const screenEdges = {
+            top: { x: canvasRect.width / 2, y: 35, name: 'top' },
+            bottom: { x: canvasRect.width / 2, y: canvasRect.height - 35, name: 'bottom' },
+            left: { x: 35, y: canvasRect.height / 2, name: 'left' },
+            right: { x: canvasRect.width - 35, y: canvasRect.height / 2, name: 'right' }
           };
-          
-          // Get anchor positions
-          const anchorPositions = {};
-          for (const [direction, anchor] of Object.entries(anchors)) {
-            if (anchor) {
-              const rect = anchor.getBoundingClientRect();
-              const canvasRect = hud.canvas.getBoundingClientRect();
-              anchorPositions[direction] = {
-                x: rect.left + rect.width / 2 - canvasRect.left,
-                y: rect.top + rect.height / 2 - canvasRect.top
-              };
-            }
-          }
-          
-          // Find closest anchor to current mouse position
+
+          // Find closest screen edge to mouse position
           let minDist = Infinity;
-          let closestAnchor = 's'; // Default to south if no anchors found
-          
-          for (const [direction, pos] of Object.entries(anchorPositions)) {
-            const dist = Math.sqrt((currentMousePosition.x - pos.x)**2 + (currentMousePosition.y - pos.y)**2);
+          let closestEdge = screenEdges.bottom; // Default to bottom
+
+          for (const edge of Object.values(screenEdges)) {
+            const dist = Math.sqrt((mouseX - edge.x)**2 + (mouseY - edge.y)**2);
             if (dist < minDist) {
               minDist = dist;
-              closestAnchor = direction;
+              closestEdge = edge;
             }
           }
-          
-          // Convert direction to anchor name for 3D menu
-          const anchorMap3D = { 
-            n: 'top', 
-            s: 'bottom', 
-            w: 'left',   // west anchor (left side) → left menu position
-            e: 'right'   // east anchor (right side) → right menu position
-          };
-          const anchorName = anchorMap3D[closestAnchor] || 'bottom';
-          
-          // Show 3D menu at closest anchor
-          if (anchorPositions[closestAnchor]) {
-            hud.showRadialMenu(anchorPositions[closestAnchor].x, anchorPositions[closestAnchor].y, anchorName);
-          }
+
+          // Show 3D menu at closest screen edge
+          console.log(`🎯 Spacebar: opening 3D menu at ${closestEdge.name} edge (mouse at ${mouseX}, ${mouseY})`);
+          hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
         } else {
           // 2D HUD mode - find closest anchor and trigger 2D menu
           const anchors = {
@@ -537,14 +511,47 @@
             }
           }
           
-          // Click the closest anchor
-          if (anchors[closestAnchor]) {
-            anchors[closestAnchor].click();
+          // Show 2D menu directly at the closest anchor position
+          if (anchorPositions[closestAnchor]) {
+            const pos = anchorPositions[closestAnchor];
+
+            // Mark menu as just opened
+            if (window.menuOpenedAt !== undefined) window.menuOpenedAt = Date.now();
+
+            // Exit building placement mode if currently placing
+            if (window.buildingSystem && window.buildingSystem.isPlacing) {
+              window.buildingSystem.cancelPlacement();
+            }
+
+            // Hide any visible buttons first
+            if (window.hideButtons && window.activeButtons) {
+              window.hideButtons(window.activeButtons);
+              if (window.activeButtons) window.activeButtons.length = 0;
+              if (window.menuDepth !== undefined) window.menuDepth = 0;
+            }
+
+            // Create and show top-level buttons
+            if (window.menu && window.createMenuButton && window.showButtonsInArc) {
+              const buttons = Object.entries(window.menu).map(([key, value]) => {
+                return window.createMenuButton(
+                  `menu-${key}`,
+                  window.getIconForItem ? window.getIconForItem(key) : key,
+                  key,
+                  [key],
+                  0
+                );
+              });
+
+              if (window.setCurrentAnchor) {
+                window.setCurrentAnchor({ x: pos.x, y: pos.y, direction: closestAnchor });
+              }
+              window.showButtonsInArc(buttons, pos.x, pos.y, 0, closestAnchor);
+            }
           }
         }
       }
     });
-    
+
     // console.log('Middle mouse button and spacebar control set up for radial menu');
   }
   
@@ -591,10 +598,106 @@
     centerMesh.isPickable = false;
     
     // console.log('🎯 Center mesh created at position (0,0,0) with diameter 0.15');
-    
+
+
+    // console.log('🎯 3D anchor indicators created for all 4 screen edges');
+
     // console.log('3D Radial menu created with billboard mode');
   }
-  
+
+  // Create 3D anchor indicators (fixed markers at screen edges, always visible in 3D mode)
+  hud.createAnchorIndicators = function() {
+    // Only create if camera exists
+    if (!hud.camera) {
+      console.log('⏳ Camera not ready yet, skipping anchor indicators');
+      return;
+    }
+
+    if (hud.anchorIndicators) {
+      // Clean up existing indicators
+      Object.values(hud.anchorIndicators).forEach(indicator => {
+        if (indicator) indicator.dispose();
+      });
+    }
+
+      console.log('🎯 Creating 3D anchor indicators...');
+      if (hud.camera) {
+        console.log(`📷 Camera position: (${hud.camera.position.x.toFixed(2)}, ${hud.camera.position.y.toFixed(2)}, ${hud.camera.position.z.toFixed(2)})`);
+      }
+
+    hud.anchorIndicators = {};
+    const anchorMaterial = new BABYLON.StandardMaterial("anchorMat", hud.scene);
+    // anchorMaterial.diffuseColor = new BABYLON.Color3(1,1,1); // Light gray
+    anchorMaterial.emissiveColor = new BABYLON.Color3(1,1,1); // Subtle gray glow
+    // anchorMaterial.specularColor = new BABYLON.Color3(0.4, 0.4, 0.4); // Low specular
+    anchorMaterial.alpha = 0.1; // More transparent
+    anchorMaterial.disableLighting = true; // Don't be affected by scene lighting
+
+    // Position indicators at moderate distance from screen edges
+    const screenEdges = {
+      top: { x: hud.canvas.width / 2, y: 35 }, // Top edge, moderate inset
+      bottom: { x: hud.canvas.width / 2, y: hud.canvas.height - 35 }, // Bottom edge, moderate inset
+      left: { x: 35, y: hud.canvas.height / 2 }, // Left edge, moderate inset
+      right: { x: hud.canvas.width - 35, y: hud.canvas.height / 2 } // Right edge, moderate inset
+    };
+
+    for (const [name, screenPos] of Object.entries(screenEdges)) {
+      const indicator = BABYLON.MeshBuilder.CreateSphere(`anchor_${name}`, {diameter: 0.10, segments: 4}, hud.scene);
+      indicator.material = anchorMaterial.clone(`anchorMat_${name}`);
+      indicator.isPickable = true; // Make clickable
+      indicator.renderingGroupId = 0;
+
+      // Parent to camera for automatic following
+      indicator.parent = hud.camera;
+
+      // Calculate local position relative to camera using screen coordinates
+      const updateLocalPosition = function() {
+        if (hud.camera && hud.canvas) {
+          // Convert screen position to camera-relative coordinates
+          const rect = hud.canvas.getBoundingClientRect();
+          const normalizedX = (screenPos.x / rect.width) * 2 - 1; // -1 to 1
+          const normalizedY = 1 - (screenPos.y / rect.height) * 2; // 1 to -1 (flip Y)
+
+          // Use camera's field of view and aspect ratio to calculate position
+          const fov = hud.camera.fov;
+          const aspect = rect.width / rect.height;
+
+          const distance = menuConfig.distance;
+          const localX = normalizedX * distance * Math.tan(fov/2) * aspect;
+          const localY = normalizedY * distance * Math.tan(fov/2);
+          const localZ = distance;
+
+          indicator.position.set(localX, localY, localZ);
+        }
+      };
+
+      // Update position initially
+      updateLocalPosition();
+
+      // Add click handler to open radial menu
+      indicator.actionManager = new BABYLON.ActionManager(hud.scene);
+      indicator.actionManager.registerAction(
+        new BABYLON.ExecuteCodeAction(BABYLON.ActionManager.OnPickTrigger, () => {
+          console.log(`🎯 Anchor ${name} clicked - opening radial menu`);
+          // Close any existing menu first
+          if (radialMenuVisible) {
+            hud.hideRadialMenu();
+          }
+          // Open radial menu at this anchor's screen position
+          hud.showRadialMenu(screenPos.x, screenPos.y, name);
+        })
+      );
+
+      // Always visible when in 3D HUD mode
+      indicator.setEnabled(window.USE_3D_HUD || false);
+
+      hud.anchorIndicators[name] = indicator;
+      console.log(`✅ Created clickable anchor indicator ${name} at screen pos (${screenPos.x}, ${screenPos.y}), local pos (${indicator.position.x.toFixed(2)}, ${indicator.position.y.toFixed(2)}, ${indicator.position.z.toFixed(2)}), enabled: ${indicator.isEnabled()}`);
+    }
+
+    console.log(`🎯 Created ${Object.keys(hud.anchorIndicators).length} anchor indicators, USE_3D_HUD: ${window.USE_3D_HUD}`);
+  };
+
   // Show radial menu at specific anchor point
   hud.showRadialMenu = function(screenX, screenY, forceAnchor = null) {
     if (!radialMenu || !hud.camera) return;
@@ -932,9 +1035,8 @@
   function getCategoryName(menuLevel) {
     const names = {
       'units': 'Units',
-      'buildings': 'Buildings', 
-      'research': 'Research',
-      'rally': 'Rally'
+      'buildings': 'Buildings',
+      'research': 'Research'
     };
     return names[menuLevel] || menuLevel;
   }
@@ -995,8 +1097,7 @@
       // Default icons for categories
       units: '👥',
       buildings: '🏗️',
-      research: '📚',
-      rally: '🚩'
+      research: '📚'
     };
     
     return icons[key] || '❓';
@@ -1007,8 +1108,7 @@
     const colors = {
       'buildings': new BABYLON.Color3(0, 1, 0), // Green
       'units': new BABYLON.Color3(0.2, 0.6, 1), // Blue
-      'research': new BABYLON.Color3(1, 1, 0), // Yellow
-      'rally': new BABYLON.Color3(1, 0, 0) // Red
+      'research': new BABYLON.Color3(1, 1, 0) // Yellow
     };
     return colors[category] || new BABYLON.Color3(0.5, 0.5, 0.5); // Default gray
   }
@@ -1345,9 +1445,9 @@
     if (radialMenuItems.length === 0) {
       // console.log('🎮 Creating main menu items...');
       
-      // Create main menu items in same order as 2D menu: buildings, units, research, rally
+      // Create main menu items in same order as 2D menu: buildings, units, research
       hud.addRadialMenuItem("Buildings", "🏗️", () => hud.showSubMenu("buildings"), new BABYLON.Color3(0, 1, 0)); // Green
-      
+
       hud.addRadialMenuItem("Units", "👥", () => {
         // Exit building placement mode if currently placing
         if (window.buildingSystem && window.buildingSystem.isPlacing) {
@@ -1355,7 +1455,7 @@
         }
         hud.showSubMenu("units");
       }, new BABYLON.Color3(0.2, 0.6, 1), null, 'assets/models/gnome.glb'); // Blue with gnome model
-      
+
       hud.addRadialMenuItem("Research", "🔬", () => {
         // Exit building placement mode if currently placing
         if (window.buildingSystem && window.buildingSystem.isPlacing) {
@@ -1363,14 +1463,6 @@
         }
         hud.showSubMenu("research");
       }, new BABYLON.Color3(1, 1, 0), null, 'assets/models/mushroom.glb'); // Yellow with mushroom model
-      
-      hud.addRadialMenuItem("Rally", "🚩", () => {
-        // Exit building placement mode if currently placing
-        if (window.buildingSystem && window.buildingSystem.isPlacing) {
-          window.buildingSystem.cancelPlacement();
-        }
-        hud.showSubMenu("rally");
-      }, new BABYLON.Color3(1, 0, 0), null, 'assets/models/flag.glb'); // Red with flag model
     }
     
     // Ensure containers are enabled (positioning is handled by animateMenuItems)
@@ -2743,10 +2835,33 @@
       
       // Update HUD constants
       window.USE_3D_HUD = false;
-      
+
+      // Hide 3D anchor indicators and show 2D anchors when switching to 2D mode
+      console.log('🔄 Switching to 2D mode - hiding 3D anchors, showing 2D anchors');
+      if (hud.anchorIndicators) {
+        Object.values(hud.anchorIndicators).forEach(indicator => {
+          if (indicator) indicator.setEnabled(false);
+        });
+        console.log('✅ Hid 3D anchor indicators');
+      } else {
+        console.log('ℹ️ No 3D anchor indicators to hide');
+      }
+
+      // Show 2D anchors
+      ['anchor_n', 'anchor_s', 'anchor_e', 'anchor_w'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.style.display = 'block';
+      });
+      console.log('✅ Showed 2D anchor elements');
+
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {
         window.lassoSelection.reinit();
+      }
+
+      // Reinitialize 2D menu system since we switched to 2D mode
+      if (window.initMenu) {
+        window.initMenu();
       }
       
       // Save preference
@@ -2762,7 +2877,22 @@
       
       // Update HUD constants
       window.USE_3D_HUD = true;
-      
+
+      // Create/show 3D anchor indicators and hide 2D anchors when switching to 3D mode
+      console.log('🔄 Switching to 3D mode - creating 3D anchors, hiding 2D anchors');
+      if (hud.createAnchorIndicators) {
+        hud.createAnchorIndicators();
+      } else {
+        console.log('❌ createAnchorIndicators function not found');
+      }
+
+      // Hide 2D anchors
+      ['anchor_n', 'anchor_s', 'anchor_e', 'anchor_w'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.style.display = 'none';
+      });
+      console.log('✅ Hid 2D anchor elements');
+
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {
         window.lassoSelection.reinit();
@@ -2789,7 +2919,22 @@
       switchElement.dataset.on = 'true';
       
       window.USE_3D_HUD = true;
-      
+
+      // Create/show 3D anchor indicators and hide 2D anchors when initializing to 3D mode
+      console.log('🎮 Initializing to 3D mode - creating 3D anchors, hiding 2D anchors');
+      if (hud.createAnchorIndicators) {
+        hud.createAnchorIndicators();
+      } else {
+        console.log('❌ createAnchorIndicators function not found during init');
+      }
+
+      // Hide 2D anchors
+      ['anchor_n', 'anchor_s', 'anchor_e', 'anchor_w'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.style.display = 'none';
+      });
+      console.log('✅ Hid 2D anchor elements during init');
+
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {
         window.lassoSelection.reinit();
@@ -2805,7 +2950,25 @@
       switchElement.dataset.on = 'false';
       
       window.USE_3D_HUD = false;
-      
+
+      // Hide 3D anchor indicators and show 2D anchors when initializing to 2D mode
+      console.log('🎮 Initializing to 2D mode - hiding 3D anchors, showing 2D anchors');
+      if (hud.anchorIndicators) {
+        Object.values(hud.anchorIndicators).forEach(indicator => {
+          if (indicator) indicator.setEnabled(false);
+        });
+        console.log('✅ Hid 3D anchor indicators during init');
+      } else {
+        console.log('ℹ️ No 3D anchor indicators to hide during init');
+      }
+
+      // Show 2D anchors
+      ['anchor_n', 'anchor_s', 'anchor_e', 'anchor_w'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.style.display = 'block';
+      });
+      console.log('✅ Showed 2D anchor elements during init');
+
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {
         window.lassoSelection.reinit();

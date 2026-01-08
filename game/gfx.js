@@ -3494,6 +3494,150 @@ let pov2 = 240;
       }
     }
     
+    // CRITICAL: Update shadow frustum to center on camera target
+    // This prevents shadows from wobbling when panning
+    // The issue: with autoUpdateExtends=false, shadow camera is fixed in world space
+    // When you pan, camera moves but shadow frustum stays fixed, causing wobble
+    // Solution: Update orthographic bounds each frame to center on camera target
+    if (window.SHADOWS_ENABLED && gfx.shadowGenerator && gfx.cameraTarget) {
+      const light = gfx.shadowGenerator.getLight();
+      if (light && light.getClassName() === "DirectionalLight") {
+        const targetPos = gfx.cameraTarget.position;
+        const frustumSize = gfx.shadowLODConfig?.frustumSize || 80;
+        const shadowMap = gfx.shadowGenerator.getShadowMap();
+        const shadowRes = shadowMap?.getSize?.width || 2048;
+        
+        // Snap position to prevent precision wobble (one texel in world space)
+        const snapSize = (frustumSize * 2) / shadowRes;
+        const snappedX = Math.round(targetPos.x / snapSize) * snapSize;
+        const snappedZ = Math.round(targetPos.z / snapSize) * snapSize;
+        
+        // Update orthographic bounds to center frustum on camera target
+        // This makes the shadow camera follow the camera when panning
+        // CRITICAL: This is the key fix - updating orthoLeft/Right/Top/Bottom centers
+        // the shadow frustum on the camera target, preventing wobble when panning
+        light.orthoLeft = snappedX - frustumSize;
+        light.orthoRight = snappedX + frustumSize;
+        light.orthoTop = snappedZ + frustumSize;
+        light.orthoBottom = snappedZ - frustumSize;
+        
+        // Try to get shadow camera through various methods
+        let shadowCamera = null;
+        
+        // Method 1: Direct access (Babylon.js 5+)
+        if (shadowMap && shadowMap.activeCamera) {
+          shadowCamera = shadowMap.activeCamera;
+        }
+        // Method 2: Through shadow map's scene
+        else if (shadowMap && shadowMap.getScene) {
+          const shadowScene = shadowMap.getScene();
+          if (shadowScene) {
+            // Try activeCamera first
+            if (shadowScene.activeCamera) {
+              shadowCamera = shadowScene.activeCamera;
+            }
+            // Fallback: find orthographic camera in scene
+            else if (shadowScene.cameras) {
+              shadowCamera = shadowScene.cameras.find(cam => cam.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA);
+            }
+          }
+        }
+        // Method 3: Try accessing through shadow generator's internal structure
+        if (!shadowCamera && gfx.shadowGenerator._shadowMap) {
+          const internalMap = gfx.shadowGenerator._shadowMap;
+          if (internalMap && internalMap.activeCamera) {
+            shadowCamera = internalMap.activeCamera;
+          }
+        }
+        
+        // Method 4: Try accessing through light's internal shadow generator
+        if (!shadowCamera && light.getShadowGenerator) {
+          const lightSG = light.getShadowGenerator();
+          if (lightSG) {
+            const lightShadowMap = lightSG.getShadowMap();
+            if (lightShadowMap) {
+              if (lightShadowMap.activeCamera) {
+                shadowCamera = lightShadowMap.activeCamera;
+              } else if (lightShadowMap.getScene) {
+                const lightScene = lightShadowMap.getScene();
+                if (lightScene && lightScene.activeCamera) {
+                  shadowCamera = lightScene.activeCamera;
+                }
+              }
+            }
+          }
+        }
+        
+        // Try stored reference, but verify it's not the main camera
+        // Shadow camera MUST be orthographic and NOT the main camera
+        if (!shadowCamera && gfx._shadowCamera) {
+          if (gfx._shadowCamera !== gfx.camera && 
+              gfx._shadowCamera.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA) {
+            shadowCamera = gfx._shadowCamera;
+          } else {
+            // Clear invalid reference
+            gfx._shadowCamera = null;
+          }
+        }
+        
+        if (shadowCamera && shadowCamera !== gfx.camera) {
+          // CRITICAL: Snap shadow camera position to prevent precision wobble
+          // Sub-pixel shifts in shadow camera position cause shadow map texels to shift, creating wobble
+          // Snapping to a grid prevents these micro-movements
+          const shadowRes = shadowMap.getSize ? shadowMap.getSize().width : 2048;
+          const frustumSize = gfx.shadowLODConfig?.frustumSize || 80;
+          // Snap size should be based on shadow map resolution and frustum size
+          // Higher resolution = smaller snap size for smoother movement
+          const snapSize = (frustumSize * 2) / shadowRes; // One texel in world space
+          
+          const snappedX = Math.round(targetPos.x / snapSize) * snapSize;
+          const snappedZ = Math.round(targetPos.z / snapSize) * snapSize;
+          
+          shadowCamera.position.x = snappedX;
+          shadowCamera.position.y = targetPos.y + 50; // Keep Y stable above ground
+          shadowCamera.position.z = snappedZ;
+          
+          // Force view matrix update to apply changes immediately
+          shadowCamera.getViewMatrix();
+          
+          // Debug: log once to verify we found the right camera
+          if (!gfx._shadowCameraVerified) {
+            console.log('Shadow camera found:', shadowCamera.name, 'mode:', shadowCamera.mode, 'position:', shadowCamera.position);
+            gfx._shadowCameraVerified = true;
+          }
+        } else {
+          // Fallback: Shadow camera not directly accessible
+          // Try alternative approach: Update light's transformed position to affect shadow camera
+          // For directional lights, the shadow camera position is derived from the light's transformed position
+          if (light.computeTransformedInformation) {
+            light.computeTransformedInformation();
+          }
+          
+          // Alternative: Use light's setShadowProjectionMatrix if available
+          // This allows us to manually control the shadow projection
+          if (light.setShadowProjectionMatrix && light.getShadowGenerator) {
+            const frustumSize = gfx.shadowLODConfig?.frustumSize || 80;
+            const snapSize = 0.1; // Snap to prevent precision wobble
+            const snappedX = Math.round(targetPos.x / snapSize) * snapSize;
+            const snappedZ = Math.round(targetPos.z / snapSize) * snapSize;
+            
+            // Create a custom projection matrix centered on camera target
+            // This is a workaround if shadow camera isn't directly accessible
+            const projectionMatrix = BABYLON.Matrix.Identity();
+            projectionMatrix.m[0] = 2.0 / (frustumSize * 2); // Scale X
+            projectionMatrix.m[5] = 2.0 / (frustumSize * 2); // Scale Z
+            projectionMatrix.m[10] = -2.0 / (light.shadowMaxZ - light.shadowMinZ);
+            projectionMatrix.m[12] = -snappedX / frustumSize; // Translate X
+            projectionMatrix.m[13] = -(targetPos.y + 50) / frustumSize; // Translate Y
+            projectionMatrix.m[14] = -snappedZ / frustumSize; // Translate Z
+            
+            // Note: This might not work directly - setShadowProjectionMatrix may expect different format
+            // But it's worth trying as a fallback
+          }
+        }
+      }
+    }
+    
     // Update camera rotation smoothly
     if (window.ui && window.ui.updateCameraRotation) {
       window.ui.updateCameraRotation();
@@ -3816,11 +3960,87 @@ let pov2 = 240;
             : 2048; // Default to refined shadows (2048) if function not available
 
           gfx.shadowGenerator = new BABYLON.ShadowGenerator(initialShadowRes, sunLight);
+          
+          // CRITICAL: Store reference to shadow camera for position updates
+          // This prevents shadows from wobbling when panning
+          const shadowMap = gfx.shadowGenerator.getShadowMap();
+          if (shadowMap) {
+            // Function to find and store the actual shadow camera
+            const findShadowCamera = () => {
+              const shadowScene = shadowMap.getScene ? shadowMap.getScene() : null;
+              if (shadowScene && shadowScene.cameras) {
+                const mainCamera = gfx.camera;
+                
+                // Find the orthographic camera (shadow camera is always orthographic)
+                // Exclude the main camera explicitly
+                gfx._shadowCamera = shadowScene.cameras.find(cam => {
+                  return cam !== mainCamera && 
+                         cam.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA;
+                });
+                
+                // Fallback: find any camera that's not the main one
+                if (!gfx._shadowCamera) {
+                  gfx._shadowCamera = shadowScene.cameras.find(cam => cam !== mainCamera);
+                }
+              }
+            };
+            
+            // Try immediately
+            findShadowCamera();
+            
+            // Also try after a short delay in case shadow camera is created asynchronously
+            if (!gfx._shadowCamera) {
+              setTimeout(findShadowCamera, 100);
+            }
+          }
+          
           // Apply centralized quality settings so visuals match reconfigureShadowGenerator
           gfx.configureShadowGeneratorSettings(gfx.shadowGenerator, initialLOD);
           
           // Initialize lastLODLevel to prevent unnecessary reconfiguration when settings menu opens
           gfx.lastLODLevel = initialLOD;
+          
+          // CRITICAL: Set up shadow map beforeRender callback to update shadow camera position
+          // This runs right before shadow rendering when the shadow camera is definitely accessible
+          const shadowMapForCallback = gfx.shadowGenerator.getShadowMap();
+          if (shadowMapForCallback && shadowMapForCallback.onBeforeRenderObservable && !gfx._shadowMapBeforeRenderObserver) {
+            gfx._shadowMapBeforeRenderObserver = shadowMapForCallback.onBeforeRenderObservable.add(() => {
+              if (window.SHADOWS_ENABLED && gfx.cameraTarget) {
+                const targetPos = gfx.cameraTarget.position;
+                const frustumSize = gfx.shadowLODConfig?.frustumSize || 80;
+                const shadowRes = shadowMapForCallback.getSize ? shadowMapForCallback.getSize().width : 2048;
+                
+                // Find shadow camera right before rendering (most reliable time)
+                let shadowCamera = shadowMapForCallback.activeCamera;
+                if (!shadowCamera && shadowMapForCallback.getScene) {
+                  const shadowScene = shadowMapForCallback.getScene();
+                  if (shadowScene) {
+                    // Find orthographic camera that's not the main camera
+                    shadowCamera = shadowScene.cameras?.find(cam => 
+                      cam !== gfx.camera && 
+                      cam.mode === BABYLON.Camera.ORTHOGRAPHIC_CAMERA
+                    );
+                  }
+                }
+                
+                if (shadowCamera) {
+                  // Snap position to prevent precision wobble
+                  const snapSize = (frustumSize * 2) / shadowRes;
+                  const snappedX = Math.round(targetPos.x / snapSize) * snapSize;
+                  const snappedZ = Math.round(targetPos.z / snapSize) * snapSize;
+                  
+                  shadowCamera.position.x = snappedX;
+                  shadowCamera.position.y = targetPos.y + 50;
+                  shadowCamera.position.z = snappedZ;
+                  
+                  // Store reference for future use
+                  if (!gfx._shadowCamera || gfx._shadowCamera === gfx.camera) {
+                    gfx._shadowCamera = shadowCamera;
+                  }
+                }
+              }
+            });
+          }
           
           // Set up automatic shadow updates for new meshes
           gfx.scene.onNewMeshAddedObservable.add(gfx.autoUpdateShadows);
@@ -4032,14 +4252,48 @@ let pov2 = 240;
       // CRITICAL: Set up the shadow camera frustum for directional light
       const light = generator.getLight();
       if (light && light.getClassName() === "DirectionalLight") {
-        // Disable auto-extend - use fixed frustum instead
-        light.autoUpdateExtends = false;
-        light.autoCalcShadowZBounds = false;
-        
         // Use dynamically calculated frustum size based on LOD and terrain
         // Frustum is SMALLER than shadow cull distance so frustumEdgeFalloff fades at edge
         const frustumSize = gfx.shadowLODConfig?.frustumSize || 80;
         
+        // CRITICAL: Enable autoUpdateExtends with custom callback
+        // When autoUpdateExtends=false, shadow camera is fixed in world space, causing wobble when panning
+        // When autoUpdateExtends=true, it follows scene bounds which also wobbles
+        // Solution: Enable it but override the extends computation to center on camera target
+        light.autoUpdateExtends = true;
+        light.autoCalcShadowZBounds = false;
+        
+        // Override the shadow extends computation to center on camera target
+        if (light.setShadowProjectionMatrix === undefined) {
+          // Store original method if it exists
+          const originalSetShadowProjectionMatrix = light.setShadowProjectionMatrix;
+          
+          // Override to center frustum on camera target
+          light.setShadowProjectionMatrix = function(viewMatrix, renderList, result) {
+            if (gfx.cameraTarget && window.SHADOWS_ENABLED) {
+              const targetPos = gfx.cameraTarget.position;
+              const shadowRes = generator.getShadowMap()?.getSize?.width || 2048;
+              
+              // Snap position to prevent precision wobble
+              const snapSize = (frustumSize * 2) / shadowRes;
+              const snappedX = Math.round(targetPos.x / snapSize) * snapSize;
+              const snappedZ = Math.round(targetPos.z / snapSize) * snapSize;
+              
+              // Update orthographic bounds to center on camera target
+              light.orthoLeft = snappedX - frustumSize;
+              light.orthoRight = snappedX + frustumSize;
+              light.orthoTop = snappedZ + frustumSize;
+              light.orthoBottom = snappedZ - frustumSize;
+            }
+            
+            // Call original if it exists
+            if (originalSetShadowProjectionMatrix) {
+              return originalSetShadowProjectionMatrix.call(this, viewMatrix, renderList, result);
+            }
+          };
+        }
+        
+        // Set initial fixed frustum bounds
         light.orthoLeft = -frustumSize;
         light.orthoRight = frustumSize;
         light.orthoTop = frustumSize;

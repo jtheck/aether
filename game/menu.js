@@ -54,9 +54,6 @@ const menu = {
     drayage: { arc: 2 },
     artillery: { arc: 2 },
     armor: { arc: 2 }
-  },
-  rally: {
-    home: {}
   }
 };
 
@@ -65,6 +62,18 @@ let currentAnchor = null;
 let activeButtons = [];
 let menuDepth = 0;
 let menuOpenedAt = 0; // Track when menu was last opened to prevent immediate close
+
+// Expose state variables globally
+window.currentAnchor = currentAnchor;
+window.activeButtons = activeButtons;
+window.menuDepth = menuDepth;
+window.menuOpenedAt = menuOpenedAt;
+
+// Global function to set currentAnchor (for spacebar handler)
+window.setCurrentAnchor = function(anchor) {
+  currentAnchor = anchor;
+  window.currentAnchor = currentAnchor;
+};
 
 // Calculate button positions along an arc
 function calculateArcPositions(anchorX, anchorY, numButtons, depth = 0, direction = 'w') {
@@ -137,6 +146,7 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
     
     // Mark menu interaction to prevent immediate close
     menuOpenedAt = Date.now();
+    window.menuOpenedAt = menuOpenedAt;
     
     const path = JSON.parse(button.dataset.menuPath);
     const submenu = getSubmenuFromPath(path);
@@ -202,13 +212,6 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
             console.warn('❌ Cannot convert unit: No active match');
           }
         }
-      } else if (category === 'rally') {
-        // Rally nearby units to agora
-        if (window.rallyUnitsToAgora) {
-          window.rallyUnitsToAgora();
-        } else {
-          console.warn('❌ Rally function not available');
-        }
       } else {
         // console.log('Selected:', path);
         // TODO: Handle other selection actions
@@ -246,13 +249,14 @@ function showButtonsInArc(buttons, anchorX, anchorY, depth = 0, direction = 'w')
 // Show submenu for a button
 function showSubmenu(parentButton, submenuItems) {
   // Use the root anchor position instead of parent button position
-  if (!currentAnchor) {
+  const anchor = currentAnchor || window.currentAnchor;
+  if (!anchor) {
     console.warn('No anchor available for submenu');
     return;
   }
   
-  const x = currentAnchor.x;
-  const y = currentAnchor.y;
+  const x = anchor.x;
+  const y = anchor.y;
   const baseDepth = parseInt(parentButton.dataset.depth) + 1;
   
   // Hide any buttons at the same or deeper depth
@@ -260,9 +264,10 @@ function showSubmenu(parentButton, submenuItems) {
     parseInt(button.dataset.depth) >= baseDepth
   );
   hideButtons(buttonsToHide);
-  activeButtons = activeButtons.filter(button => 
+  activeButtons = activeButtons.filter(button =>
     parseInt(button.dataset.depth) < baseDepth
   );
+  window.activeButtons = activeButtons;
   
   // Group submenu items by arc number
   const arcGroups = new Map();
@@ -292,7 +297,7 @@ function showSubmenu(parentButton, submenuItems) {
   });
   
     // Show this arc's buttons
-    showButtonsInArc(buttons, x, y, arcDepth, currentAnchor.direction);
+    showButtonsInArc(buttons, x, y, arcDepth, anchor.direction);
   });
 }
 
@@ -357,8 +362,7 @@ function getIconForItem(key) {
     // Default icons for categories
     units: '👥',
     buildings: '🏗️',
-    research: '📚',
-    rally: '🚩'
+    research: '📚'
   };
   
   return icons[key] || '❓';
@@ -386,6 +390,7 @@ function initMenu() {
       
       // Mark menu as just opened
       menuOpenedAt = Date.now();
+      window.menuOpenedAt = menuOpenedAt;
       
       // Exit building placement mode if currently placing
       if (window.buildingSystem && window.buildingSystem.isPlacing) {
@@ -417,6 +422,8 @@ function initMenu() {
         hideButtons(activeButtons);
         activeButtons = [];
         menuDepth = 0;
+        window.activeButtons = activeButtons;
+        window.menuDepth = menuDepth;
         
         // Create and show top-level buttons
         const buttons = Object.entries(menu).map(([key, value]) => {
@@ -430,6 +437,7 @@ function initMenu() {
         });
         
         currentAnchor = { x, y, direction };
+        window.currentAnchor = currentAnchor;
         showButtonsInArc(buttons, x, y, 0, direction);
       }
     });
@@ -456,8 +464,22 @@ function initMenu() {
     activeButtons = [];
     menuDepth = 0;
     currentAnchor = null;
+    window.activeButtons = activeButtons;
+    window.menuDepth = menuDepth;
+    window.currentAnchor = currentAnchor;
   });
 }
 
 // Initialize when the document is ready
 document.addEventListener('DOMContentLoaded', initMenu);
+
+// Expose globally for HUD mode switching and spacebar handler
+window.initMenu = initMenu;
+window.menu = menu;
+window.activeButtons = activeButtons;
+window.menuDepth = menuDepth;
+window.menuOpenedAt = menuOpenedAt;
+window.createMenuButton = createMenuButton;
+window.showButtonsInArc = showButtonsInArc;
+window.hideButtons = hideButtons;
+window.getIconForItem = getIconForItem;

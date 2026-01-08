@@ -98,7 +98,8 @@
     // Momentum/inertia state
     let gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
     let momentumActive = false;
-    let momentumDecay = 0.92; // How fast momentum decays per frame (0.92 = ~8% loss per frame)
+    let momentumDecay = 0.85; // Faster decay to stop sooner
+    const MIN_VELOCITY_FOR_MOMENTUM = 3.0; // Higher threshold to prevent accidental momentum
     
     // ACTION POPUP: Shows on tap-hold or two-finger tap, shows abilities/rally options
     let actionPopupElement = null;
@@ -703,15 +704,19 @@
       
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
       
+      // Ramp-up: start slow, reach full speed over 400ms
+      const gestureDuration = now() - ps.startTime;
+      const rampFactor = Math.min(1.0, 0.2 + 0.8 * (gestureDuration / 400));
+      
       // Left/right = rotate (inverted)
-      const rotateAmount = dx * config.zoneRotateSensitivity;
+      const rotateAmount = dx * config.zoneRotateSensitivity * rampFactor;
       cam.alpha += rotateAmount;
       
       // Up/down = zoom (inverted: drag up = zoom out, drag down = zoom in)
-      const zoomAmount = dy * config.zoneZoomSensitivity * cam.radius;
+      const zoomAmount = dy * config.zoneZoomSensitivity * cam.radius * rampFactor;
       cam.radius = Math.max(10, Math.min(200, cam.radius + zoomAmount));
       
-      // Store velocity for NEW momentum (replaces old)
+      // Store velocity for momentum (scaled by ramp)
       gestureVelocity = { pan: { x: 0, z: 0 }, rotate: rotateAmount, pinch: zoomAmount };
       
       return true;
@@ -737,11 +742,15 @@
       
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
       
+      // Ramp-up: start slow, reach full speed over 400ms
+      const gestureDuration = now() - ps.startTime;
+      const rampFactor = Math.min(1.0, 0.2 + 0.8 * (gestureDuration / 400));
+      
       const rect = canvasRect();
       const pixelsToWorld = (2 * cam.radius * Math.tan((cam.fov || 0.8) / 2)) / Math.max(1, rect.height);
       
       // Reduce sensitivity when zoomed out (radius > 50) to prevent too-fast panning
-      const zoomDamping = Math.min(1.0, 50 / cam.radius);
+      const zoomDamping = Math.min(1.0, 50 / cam.radius) * rampFactor;
       
       const camPos = cam.position.clone();
       const targetPos = target.clone ? target.clone() : new BABYLON.Vector3(target.x, target.y, target.z);
@@ -1641,11 +1650,10 @@
         // If this was an edge finger (rot/zoom) or pan finger, activate momentum
         // BUT only if there's actual velocity (prevents drift on clean lift)
         if (ps.isEdgeFinger || ps.isPanning) {
-          const minVelocity = 0.5; // Minimum velocity to activate momentum
-          const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
-                              Math.abs(gestureVelocity.pan.z) > minVelocity ||
-                              Math.abs(gestureVelocity.rotate) > 0.005 ||
-                              Math.abs(gestureVelocity.pinch) > 0.1;
+          const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
+                              Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
+                              Math.abs(gestureVelocity.rotate) > 0.02 ||
+                              Math.abs(gestureVelocity.pinch) > 0.5;
           if (hasVelocity) {
             momentumActive = true;
           }
@@ -1654,11 +1662,10 @@
         
         // If this finger was part of a gesture, don't treat it as a tap/click
         if (ps.wasInGesture) {
-          const minVelocity = 0.5;
-          const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
-                              Math.abs(gestureVelocity.pan.z) > minVelocity ||
-                              Math.abs(gestureVelocity.rotate) > 0.005 ||
-                              Math.abs(gestureVelocity.pinch) > 0.1;
+          const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
+                              Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
+                              Math.abs(gestureVelocity.rotate) > 0.02 ||
+                              Math.abs(gestureVelocity.pinch) > 0.5;
           if (hasVelocity) {
             momentumActive = true;
           }
@@ -1724,11 +1731,10 @@
         
         // If this was an edge finger or pan finger, activate momentum (if velocity)
         if (ps.isEdgeFinger || ps.isPanning) {
-          const minVelocity = 0.5;
-          const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
-                              Math.abs(gestureVelocity.pan.z) > minVelocity ||
-                              Math.abs(gestureVelocity.rotate) > 0.005 ||
-                              Math.abs(gestureVelocity.pinch) > 0.1;
+          const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
+                              Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
+                              Math.abs(gestureVelocity.rotate) > 0.02 ||
+                              Math.abs(gestureVelocity.pinch) > 0.5;
           if (hasVelocity) {
             momentumActive = true;
           }
@@ -1813,11 +1819,10 @@
       
       // Activate momentum if all fingers gone (and has velocity)
       if (activePointers.size === 0) {
-        const minVelocity = 0.5;
-        const hasVelocity = Math.abs(gestureVelocity.pan.x) > minVelocity || 
-                            Math.abs(gestureVelocity.pan.z) > minVelocity ||
-                            Math.abs(gestureVelocity.rotate) > 0.005 ||
-                            Math.abs(gestureVelocity.pinch) > 0.1;
+        const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
+                            Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
+                            Math.abs(gestureVelocity.rotate) > 0.02 ||
+                            Math.abs(gestureVelocity.pinch) > 0.5;
         if (hasVelocity) {
           momentumActive = true;
         }

@@ -1,0 +1,73 @@
+Classic with a Twist
+"Kill the thing… but it runs"
+Target tries to flee to a safe zone → turns into an escort intercept mission.
+Trigger trick: On unit health < 30%, change owner to neutral, give it insane speed, and enable new trigger for "if it reaches escape region".
+
+"Go to the spot… but it's a trap"
+Player reaches area → spawns ambush, new objective: survive or escape to new point.
+Trigger trick: "Unit enters region" → spawn enemy wave, change objective text, start timer.
+
+🔄 Dynamic & Reactive
+"Steal the intel, but now they're hunting you"
+Gather objective → triggers "hunted" mode where enemy patrols actively search for your hero.
+Trigger trick: Set boolean Hunted = true, run periodic trigger that spawns search parties near player's hero if Hunted == true.
+
+"Your choices change the battlefield"
+Destroy bridge? Enemy takes longer route. Spare village? They send reinforcements later.
+Trigger trick: Use integer variables like Village_Alive = 1. Later trigger checks: if Village_Alive == 1, spawn ally units at 15:00.
+
+⏳ Time Pressure Layers
+"Gather resources while the doom clock ticks"
+Main objective: build superweapon in 20 minutes.
+Secret speed-run bonus: if done in 10, enemy's final wave is half strength.
+Trigger trick: Two victory conditions checking same objective but with different timers.
+
+🎭 The Bait-and-Switch
+"Defend this position… just kidding, fall back!"
+After holding for 2 minutes, command comes: "Retreat now!" New objective: get your core units to extraction.
+Trigger trick: Timer expires → display new objective, change music, create retreat waypoint.
+
+💡 Trigger Pro-Tips for Your Engine
+If you're rolling your own in something like Unity/C#, think in modular conditions:
+
+csharp
+// Simple objective tracker structure
+public class Objective {
+    public string description;
+    public bool isCompleted;
+    public System.Action onComplete;
+    
+    // Check conditions each frame
+    public void Check() {
+        if (/* condition met */) {
+            isCompleted = true;
+            onComplete?.Invoke();
+        }
+    }
+}
+
+// Chain them
+Objective destroyEnemyBase = new Objective(...);
+destroyEnemyBase.onComplete += () => {
+    // Spawn next objective
+    StartCoroutine(EscapeSequence());
+};
+🎯 Player Psychology Hacks
+The "Almost Lost" – Let player's base get to 10% health, then trigger reinforcements.
+
+The "False Victory" – Player completes objective, celebration starts… then bigger threat emerges.
+
+The "Meaningful Choice" – Save villagers OR secure tech, each giving different late-game bonuses.
+
+🚀 One Killer Combo to Steal
+"Silent Takeover"
+
+Infiltrate command center (stealth)
+
+Upload virus (survive for 90 seconds)
+
+Escort hijacked tank unit to extraction
+
+BUT virus causes base self-destruct (race against timer to escape map)
+
+Four objectives, one seamless flow, constant genre-shifting.

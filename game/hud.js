@@ -1485,9 +1485,7 @@
     if (radialMenuItems.length === 0) {
       // console.log('🎮 Creating main menu items...');
       
-      // Create main menu items in same order as 2D menu: buildings, units, research
-      hud.addRadialMenuItem("Buildings", "🏗️", () => hud.showSubMenu("buildings"), new BABYLON.Color3(0, 1, 0)); // Green
-
+      // Create main menu items: units, buildings (middle), research
       hud.addRadialMenuItem("Units", "👥", () => {
         // Exit building placement mode if currently placing
         if (window.buildingSystem && window.buildingSystem.isPlacing) {
@@ -1495,6 +1493,8 @@
         }
         hud.showSubMenu("units");
       }, new BABYLON.Color3(0.2, 0.6, 1), null, 'assets/models/gnome.glb'); // Blue with gnome model
+
+      hud.addRadialMenuItem("Buildings", "🏗️", () => hud.showSubMenu("buildings"), new BABYLON.Color3(0, 1, 0)); // Green - in the middle
 
       hud.addRadialMenuItem("Research", "🔬", () => {
         // Exit building placement mode if currently placing
@@ -1667,6 +1667,31 @@
     // Store the setup function on item for use when mesh loads
     item.setupMeshActions = setupMeshActions;
     
+    // === STEP 3: Create hitbox IMMEDIATELY (synchronous) so it's clickable right away ===
+    // Don't wait for model to load - create a clickable hitbox now
+    const HITBOX_SIZE = 0.4;
+    const hitbox = BABYLON.MeshBuilder.CreateBox(`hitbox_${item.text}`, {
+      width: HITBOX_SIZE,
+      height: HITBOX_SIZE,
+      depth: HITBOX_SIZE
+    }, hud.scene);
+    
+    hitbox.parent = container;
+    hitbox.position.set(0, 0, 0);
+    hitbox.isVisible = true;
+    hitbox.isPickable = true;
+    hitbox.renderingGroupId = 3;
+    
+    // Make hitbox nearly invisible but pickable
+    const hitboxMat = new BABYLON.StandardMaterial(`hitboxMat_${item.text}`, hud.scene);
+    hitboxMat.alpha = 0.01;
+    hitboxMat.disableLighting = true;
+    hitbox.material = hitboxMat;
+    
+    // Make hitbox clickable immediately
+    setupMeshActions(hitbox);
+    item.hitbox = hitbox;
+    
     // === STEP 4: Determine model path (synchronous) ===
     const itemKey = item.text.toLowerCase();
     let modelPath = null;
@@ -1788,29 +1813,7 @@
         
         item.mesh = mesh;
         
-        // Create fixed-size hitbox (models are scaled tiny, so use fixed size)
-        const HITBOX_SIZE = 0.4; // Fixed size that's easy to click
-        
-        const hitbox = BABYLON.MeshBuilder.CreateBox(`hitbox_${item.text}`, {
-          width: HITBOX_SIZE,
-          height: HITBOX_SIZE,
-          depth: HITBOX_SIZE
-        }, hud.scene);
-        
-        hitbox.parent = container;
-        hitbox.position.set(0, 0, 0); // Center on container
-        hitbox.isVisible = true;
-        hitbox.isPickable = true;
-        hitbox.renderingGroupId = 3;
-        
-        // Make hitbox invisible but pickable
-        const hitboxMat = new BABYLON.StandardMaterial(`hitboxMat_${item.text}`, hud.scene);
-        hitboxMat.alpha = 0.01; // Nearly invisible
-        hitboxMat.disableLighting = true;
-        hitbox.material = hitboxMat;
-        
-        item.setupMeshActions(hitbox);
-        item.hitbox = hitbox;
+        // Hitbox was already created synchronously in STEP 3, no need to create again
         
       }).catch(err => {
         console.warn(`Failed to load model for ${item.text}, using fallback cube`, err);
@@ -1838,14 +1841,9 @@
     mesh.renderingGroupId = 1;
     mesh.isVisible = true;
     mesh.setEnabled(true);
-    mesh.isPickable = true;
+    mesh.isPickable = false; // Don't make pickable - hitbox already exists
     
-    // Fallback cube IS the hitbox (it's already a simple box)
-    if (item.setupMeshActions) {
-      item.setupMeshActions(mesh);
-    }
-    item.hitbox = mesh;
-    
+    // Hitbox was already created synchronously, just store the visual mesh
     item.mesh = mesh;
     item.normalizedScale = 1.0;
   }

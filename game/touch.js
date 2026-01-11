@@ -385,6 +385,112 @@
       window.ui.handlePointer(synthetic);
     }
 
+    // Check if a screen position hits a 3D anchor or menu item and trigger its action
+    // Returns true if handled (caller should skip further tap processing)
+    function tryTrigger3DMenuElement(clientX, clientY) {
+      if (!window.gfx || !window.gfx.scene || !window.hud) return false;
+      
+      // Only handle 3D menu in 3D HUD mode
+      if (!window.USE_3D_HUD) return false;
+      
+      const rect = canvasRect();
+      const x = clientX - rect.left;
+      const y = clientY - rect.top;
+      
+      // Define anchor zones at screen edges (same positions as anchor indicators)
+      const ANCHOR_TAP_RADIUS = 50; // pixels - tap zone radius around anchor position
+      const screenEdges = {
+        top: { x: rect.width / 2, y: 35 },
+        bottom: { x: rect.width / 2, y: rect.height - 35 },
+        left: { x: 35, y: rect.height / 2 },
+        right: { x: rect.width - 35, y: rect.height / 2 }
+      };
+      
+      // Check if tap is near any anchor position (fallback for when anchors aren't pickable)
+      for (const [anchorName, screenPos] of Object.entries(screenEdges)) {
+        const dx = x - screenPos.x;
+        const dy = y - screenPos.y;
+        const distSq = dx * dx + dy * dy;
+        
+        if (distSq <= ANCHOR_TAP_RADIUS * ANCHOR_TAP_RADIUS) {
+          console.log(`👆 Touch tap near 3D anchor zone: ${anchorName}`);
+          
+          // Don't open if panning or selecting
+          if (window.rmbJustPanned || (window.lassoSelection && window.lassoSelection.isSelectionActive && window.lassoSelection.isSelectionActive())) {
+            return true; // Consume tap but don't open menu
+          }
+          
+          // If menu is already visible (Babylon's action manager already opened it), just consume the tap
+          // Don't re-open as that can cause double-initialization issues
+          if (window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible()) {
+            console.log(`👆 Menu already visible, skipping re-open`);
+            return true;
+          }
+          
+          if (window.hud.showRadialMenu) {
+            window.hud.showRadialMenu(screenPos.x, screenPos.y, anchorName);
+            return true;
+          }
+          return true;
+        }
+      }
+      
+      // Try scene picking for menu items (hitboxes, etc.)
+      const pickResult = window.gfx.scene.pick(x, y);
+      if (!pickResult.hit || !pickResult.pickedMesh) return false;
+      
+      const mesh = pickResult.pickedMesh;
+      const meshName = mesh.name || '';
+      
+      // Check if it's a 3D anchor indicator (scene pick fallback)
+      if (meshName.startsWith('anchor_')) {
+        const anchorName = meshName.replace('anchor_', '');
+        console.log(`👆 Touch tap on 3D anchor (picked): ${anchorName}`);
+        
+        // Don't open if panning or selecting
+        if (window.rmbJustPanned || (window.lassoSelection && window.lassoSelection.isSelectionActive && window.lassoSelection.isSelectionActive())) {
+          return true; // Consume tap but don't open menu
+        }
+        
+        const screenPos = screenEdges[anchorName];
+        if (screenPos && window.hud.showRadialMenu) {
+          // Close any existing menu first
+          if (window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible()) {
+            window.hud.hideRadialMenu();
+          }
+          window.hud.showRadialMenu(screenPos.x, screenPos.y, anchorName);
+          return true;
+        }
+        return true;
+      }
+      
+      // Check if it's a 3D menu item (hitbox or menu container)
+      if (meshName.includes('hitbox_') || meshName.includes('menuItem_') || meshName.includes('menuContainer_')) {
+        console.log(`👆 Touch tap on 3D menu element: ${meshName}`);
+        
+        // Set flag to suppress building placement for this tap
+        // (prevents the tap from placing a building behind the menu button)
+        window.menuJustTriggeredAt = performance.now();
+        
+        // Babylon's action manager should handle this via the pick, but we can also
+        // manually trigger by finding the mesh's action and executing it
+        if (mesh.actionManager) {
+          // Create a minimal action event
+          const actionEvent = {
+            source: mesh,
+            pointerX: x,
+            pointerY: y,
+            meshUnderPointer: mesh
+          };
+          // Trigger OnPickDownTrigger actions
+          mesh.actionManager.processTrigger(BABYLON.ActionManager.OnPickDownTrigger, actionEvent);
+        }
+        return true;
+      }
+      
+      return false;
+    }
+
     // Removed direct moveSelectedUnitsToScreen flow; defer to ui.handlePointer via synthetic events
     // Removed: showMoveOptionsUIAt (single-finger double-tap now triggers special ability)
 
@@ -1743,8 +1849,20 @@
           return;
         }
         if (dt <= config.tapMaxTimeMs && moveSq <= tapMaxMovePxSq) {
+          // Check for 3D anchor/menu element tap FIRST (before building placement)
+          // This prevents the menu selection tap from also placing a building
+          if (tryTrigger3DMenuElement(clientX, clientY)) {
+            // 3D menu handled the tap, don't process further
+            return;
+          }
+          
           // If building placement mode, tap places the building
           if (window.buildingSystem && window.buildingSystem.isPlacing) {
+            // Don't place if menu was just triggered (prevents tap-through)
+            if (window.menuJustTriggeredAt && (now() - window.menuJustTriggeredAt) < 300) {
+              console.log('🏗️ Skipping building placement - menu just triggered');
+              return;
+            }
             // Require that the preview actually moved or the touch held long enough before allowing a tap place
             const heldLongEnough = (now() - ps.startTime) >= config.buildPlaceMinHoldMs;
             if (placingPreviewMoved || heldLongEnough) {
@@ -1821,8 +1939,16 @@
           return;
         }
         if (dt <= config.tapMaxTimeMs && moveSq <= tapMaxMovePxSq) {
+          // Check for 3D anchor/menu element tap first
+          if (tryTrigger3DMenuElement(clientX, clientY)) {
+            return;
+          }
           // Building placement tap during gesture
           if (window.buildingSystem && window.buildingSystem.isPlacing) {
+            // Don't place if menu was just triggered (prevents tap-through)
+            if (window.menuJustTriggeredAt && (now() - window.menuJustTriggeredAt) < 300) {
+              return;
+            }
             const worldPos = screenToWorld(clientX, clientY);
             if (worldPos && window.buildingSystem.placeBuildingAt) {
               const tile = (window.TILE_SIZE || 4);

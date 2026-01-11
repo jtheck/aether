@@ -5,6 +5,23 @@ const ANIMATION_DELAY = 24; // Delay between each button animation in ms
 const ARC_SPACING = 60; // Distance between successive arcs
 
 const menu = {
+  units: {
+    // Arc 1: Basic/Support units
+    monk: { arc: 1 },
+    engineer: { arc: 1 },
+    wizard: { arc: 1 },
+    // Arc 2: Combat units
+    warrior: { arc: 2 },
+    archer: { arc: 2 },
+    warlock: { arc: 2 },
+    wagon: { arc: 2 },
+    // Arc 3: Advanced units
+    apc: { arc: 3 },
+    priest: { arc: 3 },
+    mycorrhizae: { arc: 3 },
+    dirigible: { arc: 3 },
+    shaman: { arc: 3 }
+  },
   buildings: {
     // Arc 1: Basic structures
     camp: { arc: 1 },
@@ -25,23 +42,6 @@ const menu = {
     well: { arc: 3 },
     perch: { arc: 3 },
     grove: { arc: 3 }
-  },
-  units: {
-    // Arc 1: Basic/Support units
-    monk: { arc: 1 },
-    engineer: { arc: 1 },
-    wizard: { arc: 1 },
-    // Arc 2: Combat units
-    warrior: { arc: 2 },
-    archer: { arc: 2 },
-    warlock: { arc: 2 },
-    wagon: { arc: 2 },
-    // Arc 3: Advanced units
-    apc: { arc: 3 },
-    priest: { arc: 3 },
-    mycorrhizae: { arc: 3 },
-    dirigible: { arc: 3 },
-    shaman: { arc: 3 }
   },
   research: {
     // Arc 1: Economy/Infrastructure

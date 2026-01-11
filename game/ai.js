@@ -14,7 +14,9 @@ function createDeterministicRNG(seed) {
 
 // Get deterministic random value for a unit based on its ID and optional context
 // This ensures the same unit will always get the same "random" value for a given context
-function getUnitDeterministicRandom(unit, context = '') {
+// CRITICAL: includeTick should be FALSE for probability checks (wander chance, etc.)
+// and TRUE only for time-varying selections (pick new target, etc.)
+function getUnitDeterministicRandom(unit, context = '', includeTick = false) {
     if (!unit || !unit.id) {
         console.warn('⚠️ getUnitDeterministicRandom called without unit or unit.id, using fallback');
         return 0.5; // Fallback to middle value
@@ -24,8 +26,9 @@ function getUnitDeterministicRandom(unit, context = '') {
     const combined = unit.id + context;
     const hash = combined.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     
-    // Use match tick as additional entropy if available (for time-based randomness)
-    const tickComponent = window.currentMatch?.tick || 0;
+    // CRITICAL: Only include tick if explicitly requested (for time-varying randomness)
+    // For probability checks (wander chance, etc.), DO NOT include tick!
+    const tickComponent = includeTick ? (window.currentMatch?.tick || 0) : 0;
     const finalSeed = hash + tickComponent;
     
     // Generate single random value from seed
@@ -160,7 +163,17 @@ class LingerBehavior extends Behavior {
         // Add deterministic offset based on unit ID so units don't all wander in sync
         const unitIdHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
         const tickOffset = -(unitIdHash % 480); // Spread over 0-8 seconds (480 ticks at 60 tps)
-        this.lastWanderTick = (window.currentMatch?.tick || 0) + tickOffset;
+        
+        // CRITICAL: If params.startImmediately is false, set lastWanderTick to current tick
+        // This prevents immediate wandering when created after movement completion
+        // Otherwise, use fixed reference point for units spawned at game start
+        if (params.startImmediately === false) {
+            this.lastWanderTick = (window.currentMatch?.tick || 0);
+        } else {
+            // Use fixed reference point (-1000) for initial spawns to ensure determinism
+            this.lastWanderTick = -1000 + tickOffset;
+        }
+        
         this.wanderInterval = params.wanderInterval || 5000; // Pick new target every 5 seconds (longer walks)
         
         // Also add slight variation to wander interval (deterministic)
@@ -207,11 +220,16 @@ class LingerBehavior extends Behavior {
     }
     
     pickNewWanderTarget() {
-        // CRITICAL: Use deterministic angle based on tick + unit ID for multiplayer sync
-        const currentTick = window.currentMatch?.tick || 0;
+        // CRITICAL: Use deterministic angle based on unit ID + wander count for multiplayer sync
+        // DO NOT use currentTick directly as it may differ between clients by 1-2 ticks
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        // Multiply by a large prime to spread out sequential IDs, then add tick for time variation
-        const randomAngle = ((unitIdHash * 7919 + currentTick * 31) % 628) / 100; // 0 to 2π (6.28)
+        
+        // Track how many times this behavior has wandered for time variation
+        if (!this._wanderCount) this._wanderCount = 0;
+        this._wanderCount++;
+        
+        // Multiply by large primes to spread out sequential IDs and wander counts
+        const randomAngle = ((unitIdHash * 7919 + this._wanderCount * 31) % 628) / 100; // 0 to 2π (6.28)
         
         this.currentTarget = {
             x: this.centerPoint.x + Math.cos(randomAngle) * this.params.wanderDistance,
@@ -2365,7 +2383,9 @@ class WanderBehavior extends Behavior {
             return;
         }
         
-        this.startTick = window.currentMatch?.tick || 0;
+        // CRITICAL: Use fixed reference tick (0) to ensure determinism across clients
+        // If we use current tick, behaviors created at different times will diverge
+        this.startTick = 0;
         this.startTime = window.currentMatch ? null : Date.now(); // Use time in menu scene
         this.currentDirection = this.getRandomDirection();
         this.wanderTimeTicks = 0;
@@ -2811,7 +2831,8 @@ class UnitBehaviorManager {
                                     center: { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z }, 
                                     radius: 50,  // Can roam freely
                                     wanderDistance: 2.0,
-                                    wanderInterval: 30000  // Match idle villager pace
+                                    wanderInterval: 30000,  // Match idle villager pace
+                                    startImmediately: false  // Don't wander immediately after arrival
                                 });
                             }
                         } else {
@@ -2821,7 +2842,8 @@ class UnitBehaviorManager {
                                 center: arrivalPoint, 
                                 radius: 50,  // Can roam freely
                                 wanderDistance: 2.0,
-                                wanderInterval: 30000  // Match idle villager pace
+                                wanderInterval: 30000,  // Match idle villager pace
+                                startImmediately: false  // Don't wander immediately after arrival
                             });
                         }
                     }

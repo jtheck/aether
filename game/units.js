@@ -1449,10 +1449,13 @@ function updateUnits(deltaTime) {
         // Only apply corrections when unit is NOT actively moving to prevent fighting with movement commands
         // Position correction modifies physics body, visual interpolation will smooth it out
         if (unit._positionCorrection) {
-          // Check if unit has an active movement behavior (walk/run)
+          // Check if unit has an active movement behavior (walk/run/linger/wander)
           const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
           const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
-          const isMovementBehavior = behaviorType === 'WalkBehavior' || behaviorType === 'RunBehavior';
+          const isMovementBehavior = behaviorType === 'WalkBehavior' || 
+                                    behaviorType === 'RunBehavior' ||
+                                    behaviorType === 'LingerBehavior' ||
+                                    behaviorType === 'WanderBehavior';
           
           // CRITICAL: Only apply position corrections when unit is idle
           // Active movement behaviors control velocity directly - corrections would fight with them

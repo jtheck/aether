@@ -2747,7 +2747,10 @@
                 // Applying corrections during movement causes rubber-banding
                 const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
                 const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
-                const isMovementBehavior = behaviorType === 'WalkBehavior' || behaviorType === 'RunBehavior';
+                const isMovementBehavior = behaviorType === 'WalkBehavior' || 
+                                          behaviorType === 'RunBehavior' || 
+                                          behaviorType === 'LingerBehavior' ||
+                                          behaviorType === 'WanderBehavior';
                 
                 // Log significant drift (but rate-limit to avoid spam, and skip during movement)
                 if (!isMovementBehavior && errorDistance > 5.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {

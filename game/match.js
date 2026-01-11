@@ -841,9 +841,9 @@
       // Sort commands deterministically (by player ID, then command ID)
       commands.sort((a, b) => {
         if (a.playerId !== b.playerId) {
-          return a.playerId.localeCompare(b.playerId);
+          return window.deterministicStringCompare(a.playerId, b.playerId);
         }
-        return a.commandId.localeCompare(b.commandId);
+        return window.deterministicStringCompare(a.commandId, b.commandId);
       });
       
       // Execute each command
@@ -1120,7 +1120,7 @@
         const unitsPerRow = Math.ceil(Math.sqrt(ownedUnits.length));
         
         // Sort units deterministically by ID for consistent formation
-        const sortedUnits = [...ownedUnits].sort((a, b) => a.id.localeCompare(b.id));
+        const sortedUnits = [...ownedUnits].sort((a, b) => window.deterministicStringCompare(a.id, b.id));
         
         sortedUnits.forEach((unit, index) => {
           if (window.behaviorManager && window.WalkBehavior) {
@@ -2574,7 +2574,7 @@
       
       // Sort decrements deterministically by building ID, then grid position
       const sortedDecrements = decrementsToProcess.slice().sort((a, b) => {
-        if (a.buildingId !== b.buildingId) return (a.buildingId || '').localeCompare(b.buildingId || '');
+        if (a.buildingId !== b.buildingId) return window.deterministicStringCompare(a.buildingId || '', b.buildingId || '');
         if (a.gridX !== b.gridX) return a.gridX - b.gridX;
         return a.gridZ - b.gridZ;
       });
@@ -2743,31 +2743,40 @@
               // - After: We update pb.state.loc, and visualPosition follows smoothly
               
               if (errorDistance > 0.5) {
-                // Log significant drift (but rate-limit to avoid spam)
-                if (errorDistance > 5.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {
-                  console.warn(`🔍 Position drift: unit ${unit.id.slice(-4)} is ${errorDistance.toFixed(2)} units off`);
+                // CRITICAL: Skip corrections for units that are actively moving
+                // Applying corrections during movement causes rubber-banding
+                const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+                const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
+                const isMovementBehavior = behaviorType === 'WalkBehavior' || behaviorType === 'RunBehavior';
+                
+                // Log significant drift (but rate-limit to avoid spam, and skip during movement)
+                if (!isMovementBehavior && errorDistance > 5.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {
+                  console.warn(`🔍 Position drift: unit ${unit.id.slice(-4)} is ${errorDistance.toFixed(2)} units off (idle)`);
                   this._lastDriftLog = Date.now();
                 }
                 
-                // Update physics position directly (authoritative from owner)
-                // Use aggressive sync for large errors, gentle for small
-                let syncStrength;
-                if (errorDistance > 8.0) {
-                  // Large error: snap immediately to prevent visible desync
-                  syncStrength = 1.0;
-                } else if (errorDistance > 3.0) {
-                  // Medium error: aggressive correction (50-80%)
-                  syncStrength = 0.5 + (errorDistance - 3.0) * 0.06;
-                } else {
-                  // Small error: gentle lerp (15-50%)
-                  syncStrength = 0.15 + (errorDistance - 0.5) * 0.14;
+                // Only apply corrections when idle, or for catastrophic desyncs
+                if (!isMovementBehavior || errorDistance > 20.0) {
+                  // Update physics position directly (authoritative from owner)
+                  // Use aggressive sync for large errors, gentle for small
+                  let syncStrength;
+                  if (errorDistance > 8.0) {
+                    // Large error: snap immediately to prevent visible desync
+                    syncStrength = 1.0;
+                  } else if (errorDistance > 3.0) {
+                    // Medium error: aggressive correction (50-80%)
+                    syncStrength = 0.5 + (errorDistance - 3.0) * 0.06;
+                  } else {
+                    // Small error: gentle lerp (15-50%)
+                    syncStrength = 0.15 + (errorDistance - 0.5) * 0.14;
+                  }
+                  
+                  unit.pb.state.loc.x += (posData.x - unit.pb.state.loc.x) * syncStrength;
+                  unit.pb.state.loc.z += (posData.z - unit.pb.state.loc.z) * syncStrength;
+                  unit.pb.state.loc.y = posData.y;
+                  
+                  correctedCount++;
                 }
-                
-                unit.pb.state.loc.x += (posData.x - unit.pb.state.loc.x) * syncStrength;
-                unit.pb.state.loc.z += (posData.z - unit.pb.state.loc.z) * syncStrength;
-                unit.pb.state.loc.y = posData.y;
-                
-                correctedCount++;
               }
             } else if (errorDistance > 0.3) {
               // Non-strict mode: Use same aggressive correction as strict mode
@@ -2898,7 +2907,7 @@
       
       // Hash all unit positions and states (in deterministic order by ID)
       const sortedUnits = (window.gameUnits || []).slice().sort((a, b) => 
-        (a.id || '').localeCompare(b.id || '')
+        window.deterministicStringCompare(a.id || '', b.id || '')
       );
       
       let unitPosHash = 0;
@@ -2951,7 +2960,7 @@
       
       // Hash all building states (in deterministic order)
       const sortedBuildings = (window.gameBuildings || []).slice().sort((a, b) => 
-        (a.id || '').localeCompare(b.id || '')
+        window.deterministicStringCompare(a.id || '', b.id || '')
       );
       
       let buildingPosHash = 0;

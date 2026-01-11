@@ -1336,7 +1336,7 @@ function updateUnits(deltaTime) {
     // This ensures both clients process units in the same order, preventing position drift
     const unitsToUpdate = (window.gameUnits || gameUnits).slice();
     if (window.isMultiplayer) {
-        unitsToUpdate.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+        unitsToUpdate.sort((a, b) => window.deterministicStringCompare(a.id || '', b.id || ''));
     }
     
     unitsToUpdate.forEach(unit => {

@@ -12,6 +12,24 @@
   // Unlike Math.sin()-based PRNGs, it doesn't rely on transcendental functions
   // that can vary between CPU/browser implementations.
   
+  // ============================================================================
+  // DETERMINISTIC STRING COMPARISON
+  // ============================================================================
+  // localeCompare() is NON-DETERMINISTIC across browsers/locales!
+  // This function provides a deterministic alternative for sorting.
+  
+  /**
+   * Deterministic string comparison (locale-independent)
+   * @param {string} a - First string
+   * @param {string} b - Second string
+   * @returns {number} -1, 0, or 1
+   */
+  function deterministicStringCompare(a, b) {
+    if (a === b) return 0;
+    if (a < b) return -1;
+    return 1;
+  }
+
   /**
    * Create a mulberry32 PRNG instance
    * @param {number} seed - Initial seed value (32-bit integer)
@@ -281,7 +299,7 @@
           hp: u.currentHealth || 0,
           owner: u.owner || 'none'
         }))
-        .sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+        .sort((a, b) => deterministicStringCompare(a.id || '', b.id || ''));
       
       components.push(`units:${JSON.stringify(unitStates)}`);
     }
@@ -298,7 +316,7 @@
           owner: b.owner || 'none',
           progress: b.buildProgress !== undefined ? roundToFixed(b.buildProgress) : 1
         }))
-        .sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+        .sort((a, b) => deterministicStringCompare(a.id || '', b.id || ''));
       
       components.push(`buildings:${JSON.stringify(buildingStates)}`);
     }
@@ -310,7 +328,7 @@
           id: p.id || p,
           resources: p.resources || {}
         }))
-        .sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+        .sort((a, b) => deterministicStringCompare(a.id || '', b.id || ''));
       
       components.push(`resources:${JSON.stringify(playerResources)}`);
     }
@@ -646,6 +664,7 @@
   global.deterministicRandom = random; // Replace old Math.sin() based version
   global.initMatchRng = initMatchRng;
   global.getMatchRng = getMatchRng;
+  global.deterministicStringCompare = deterministicStringCompare; // Replace localeCompare()
   
   console.log('✅ Determinism module loaded');
   

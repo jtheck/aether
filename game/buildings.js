@@ -1031,7 +1031,7 @@ function isPositionValidForSpawn(x, z) {
   // CRITICAL: Sort units by ID for deterministic iteration order
   // This ensures both clients check the same units in the same order
   const sortedUnits = (window.gameUnits || gameUnits).slice().sort((a, b) => 
-    (a.id || '').localeCompare(b.id || '')
+    window.deterministicStringCompare(a.id || '', b.id || '')
   );
   
   // Check distance from other units
@@ -1049,7 +1049,7 @@ function isPositionValidForSpawn(x, z) {
   
   // CRITICAL: Sort buildings by ID for deterministic iteration order
   const sortedBuildings = (window.gameBuildings || gameBuildings).slice().sort((a, b) => 
-    (a.id || '').localeCompare(b.id || '')
+    window.deterministicStringCompare(a.id || '', b.id || '')
   );
   
   // Check distance from other buildings
@@ -1081,7 +1081,7 @@ function findIdleVillagersNearBuilding(building) {
   // CRITICAL: Sort units by ID before iterating for deterministic order
   // This ensures both clients check the same units in the same order
   const sortedUnits = (window.gameUnits || []).slice().sort((a, b) =>
-    (a.id || '').localeCompare(b.id || '')
+    window.deterministicStringCompare(a.id || '', b.id || '')
   );
   
   // Look through all game units for idle villagers and engineers
@@ -1171,7 +1171,7 @@ function findIdleVillagersNearBuilding(building) {
       return a.distance - b.distance;
     }
     // If distances are equal (or both 0), sort by ID for determinism
-    return (a.unit.id || '').localeCompare(b.unit.id || '');
+    return window.deterministicStringCompare(a.unit.id || '', b.unit.id || '');
   });
   
   return idleVillagers.map(v => v.unit);
@@ -1747,7 +1747,7 @@ function updateBuildings(deltaTime) {
   // This ensures both clients process buildings in the same order,
   // which is essential for deterministic worker assignment
   const sortedBuildings = (window.gameBuildings || gameBuildings).slice().sort((a, b) =>
-    (a.id || '').localeCompare(b.id || '')
+    window.deterministicStringCompare(a.id || '', b.id || '')
   );
   
   sortedBuildings.forEach(building => {

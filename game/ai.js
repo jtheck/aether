@@ -2763,7 +2763,7 @@ class UnitBehaviorManager {
                 const unitB = b[1]?.unit || b[0];
                 const idA = unitA?.id || '';
                 const idB = unitB?.id || '';
-                return idA.localeCompare(idB);
+                return window.deterministicStringCompare(idA, idB);
             });
         }
         
@@ -3912,7 +3912,7 @@ function getFormationPosition(unit) {
     
     // Determine this unit's index in sorted order (for deterministic formation)
     const sortedUnits = [unit, ...nearbyUnits].sort((a, b) => {
-        return a.id.localeCompare(b.id); // Sort by ID for consistency
+        return window.deterministicStringCompare(a.id, b.id); // Sort by ID for consistency
     });
     
     const unitIndex = sortedUnits.indexOf(unit);

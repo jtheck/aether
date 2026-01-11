@@ -57,7 +57,7 @@ Game.prototype.spawnInitialUnits = function() {
     // CRITICAL: Sort players deterministically by ID before spawning
     // This ensures both clients spawn villagers in the same order with the same counts
     const sortedPlayers = this.players.slice().sort((a, b) => 
-      (a.id || '').localeCompare(b.id || '')
+      window.deterministicStringCompare(a.id || '', b.id || '')
     );
     
     console.log(`📋 Sorted player order:`, sortedPlayers.map(p => `${p.name}(${p.id})`));

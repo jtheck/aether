@@ -477,7 +477,7 @@
     });
     
     // Sort by playerId for deterministic order
-    commandsThisTick.sort((a, b) => (a.playerId || 'local').localeCompare(b.playerId || 'local'));
+    commandsThisTick.sort((a, b) => window.deterministicStringCompare(a.playerId || 'local', b.playerId || 'local'));
     
     // Execute in deterministic order
     commandsThisTick.forEach(cmd => executeCommand(cmd, currentTick));

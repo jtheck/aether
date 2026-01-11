@@ -85,10 +85,10 @@ const UnitTypes = {
     model: "assets/models/monk.glb",
     scale: 0.5,
     health: 45,
-    speed: 25,
+    speed: 35,
     rotationSpeed: 8.0,
     size: 1,
-    cost: { food: 20, minerals: 5 },
+    cost: { food: 20, wood: 10 },
     abilities: ["heal", "kick"],
     upgradeTo: "paladin",
     description: "Holy warrior with healing abilities and powerful kicks",
@@ -98,13 +98,13 @@ const UnitTypes = {
   paladin: {
     name: "Paladin",
     category: "support",
-    model: "assets/models/monk.glb", // TODO: unique model
+    model: "assets/models/paladin.glb",
     scale: 0.55,
     health: 80,
     speed: 28,
     rotationSpeed: 6.0,
     size: 1,
-    cost: { food: 40, minerals: 15 },
+    cost: { food: 40, wood: 30 },
     abilities: ["heal", "kick", "bless", "shield"],
     upgradeFrom: "monk",
     description: "Elite holy warrior with enhanced healing and protective auras",
@@ -124,7 +124,7 @@ const UnitTypes = {
     speed: 30,
     rotationSpeed: 8.0,
     size: 1,
-    cost: { food: 30, minerals: 10 },
+    cost: { food: 30, wood: 20 },
     abilities: ["fireball", "teleport"],
     upgradeTo: "elemental",
     description: "Powerful magic user with offensive spells",
@@ -134,13 +134,13 @@ const UnitTypes = {
   elemental: {
     name: "Elemental",
     category: "caster",
-    model: "assets/models/wizard.glb", // TODO: unique model
+    model: "assets/models/elemental.glb",
     scale: 0.6,
     health: 70,
     speed: 35,
     rotationSpeed: 8.0,
     size: 1,
-    cost: { food: 50, minerals: 25 },
+    cost: { food: 50, wood: 50 },
     abilities: ["fireball", "teleport", "storm", "summon"],
     upgradeFrom: "wizard",
     description: "Ascended wizard wielding raw elemental forces",
@@ -150,13 +150,13 @@ const UnitTypes = {
   warlock: {
     name: "Warlock",
     category: "caster",
-    model: "assets/models/wizard.glb", // TODO: unique model
+    model: "assets/models/warlock.glb",
     scale: 0.5,
     health: 45,
     speed: 25,
     rotationSpeed: 6.0,
     size: 1,
-    cost: { food: 35, minerals: 15 },
+    cost: { food: 35, wood: 30 },
     abilities: ["curse", "drain", "hex"],
     spawner: "tavern",
     upgradeTo: "geomancer",
@@ -173,7 +173,7 @@ const UnitTypes = {
     speed: 25,
     rotationSpeed: 6.0,
     size: 1,
-    cost: { food: 55, minerals: 30 },
+    cost: { food: 55, wood: 60 },
     abilities: ["curse", "drain", "earthquake", "terraform"],
     spawner: "tavern",
     upgradeFrom: "warlock",
@@ -188,7 +188,7 @@ const UnitTypes = {
   warrior: {
     name: "Warrior",
     category: "military",
-    model: "assets/models/brigand.glb", // TODO: unique model
+    model: "assets/models/warrior.glb",
     scale: 0.5,
     health: 80,
     speed: 22,
@@ -197,6 +197,9 @@ const UnitTypes = {
     cost: { food: 25, wood: 15 },
     abilities: ["melee", "charge"],
     spawner: "barracks",
+    prerequisites: {
+      buildings: ["barracks"]
+    },
     upgradeTo: "champion",
     description: "Frontline melee fighter with heavy armor",
     notes: "DEFEAT: Drops weapon, raises hands in surrender, walks to nearest barracks"
@@ -211,7 +214,7 @@ const UnitTypes = {
     speed: 24,
     rotationSpeed: 5.0,
     size: 1,
-    cost: { food: 45, wood: 30, minerals: 10 },
+    cost: { food: 45, wood: 40 },
     abilities: ["melee", "charge", "rally", "cleave"],
     spawner: "barracks",
     upgradeFrom: "warrior",
@@ -222,7 +225,7 @@ const UnitTypes = {
   archer: {
     name: "Archer",
     category: "military",
-    model: "assets/models/brigand.glb", // TODO: unique model
+    model: "assets/models/archer.glb",
     scale: 0.5,
     health: 45,
     speed: 26,
@@ -231,6 +234,9 @@ const UnitTypes = {
     cost: { food: 20, wood: 25 },
     abilities: ["ranged", "volley"],
     spawner: "barracks",
+    prerequisites: {
+      buildings: ["barracks"]
+    },
     upgradeTo: "ballister",
     description: "Ranged unit effective against light units",
     notes: "DEFEAT: Bow snaps comically, runs away embarrassed"
@@ -260,7 +266,7 @@ const UnitTypes = {
   wagon: {
     name: "Wagon",
     category: "vehicle",
-    model: "assets/models/camp.glb", // TODO: unique model
+    model: "assets/models/wagon.glb",
     scale: 0.4,
     health: 60,
     speed: 18,
@@ -282,7 +288,7 @@ const UnitTypes = {
     speed: 16,
     rotationSpeed: 2.0,
     size: 2,
-    cost: { wood: 60, stone: 25, minerals: 10 },
+    cost: { wood: 70, stone: 25 },
     abilities: ["transport", "deploy", "ranged"],
     upgradeFrom: "wagon",
     description: "Armored wagon with mounted weapons",
@@ -297,13 +303,13 @@ const UnitTypes = {
     name: "Dirigible",
     category: "air",
     element: "air",
-    model: "assets/models/camp.glb", // TODO: unique model
+    model: "assets/models/dirigible.glb",
     scale: 0.5,
     health: 70,
     speed: 35,
     rotationSpeed: 3.0,
     size: 2,
-    cost: { wood: 50, minerals: 20 },
+    cost: { wood: 70 },
     abilities: ["fly", "scout", "transport"],
     spawner: "perch",
     upgradeTo: "war_balloon",
@@ -321,7 +327,7 @@ const UnitTypes = {
     speed: 30,
     rotationSpeed: 2.5,
     size: 2,
-    cost: { wood: 80, stone: 20, minerals: 35 },
+    cost: { wood: 120, stone: 20 },
     abilities: ["fly", "bomb", "transport"],
     spawner: "perch",
     upgradeFrom: "dirigible",
@@ -337,15 +343,18 @@ const UnitTypes = {
     name: "APC",
     category: "vehicle",
     element: "fire",
-    model: "assets/models/camp.glb", // TODO: unique model
+    model: "assets/models/apc.glb",
     scale: 0.5,
     health: 90,
     speed: 28,
     rotationSpeed: 3.0,
     size: 2,
-    cost: { stone: 40, minerals: 25 },
+    cost: { wood: 30, stone: 40 },
     abilities: ["transport", "armor"],
     spawner: "factory",
+    prerequisites: {
+      buildings: ["factory"]
+    },
     upgradeTo: "tank",
     description: "Armored personnel carrier for rapid deployment",
     notes: "DEFEAT: 🔥 Engine sputters out with smoke, crew exits coughing, towed back to factory"
@@ -361,7 +370,7 @@ const UnitTypes = {
     speed: 20,
     rotationSpeed: 2.0,
     size: 2,
-    cost: { stone: 70, minerals: 50 },
+    cost: { wood: 50, stone: 70 },
     abilities: ["siege", "armor", "cannon"],
     spawner: "factory",
     upgradeFrom: "apc",
@@ -377,13 +386,13 @@ const UnitTypes = {
     name: "Priest",
     category: "support",
     element: "spirit",
-    model: "assets/models/monk.glb", // TODO: unique model
+    model: "assets/models/priest.glb",
     scale: 0.5,
     health: 40,
     speed: 22,
     rotationSpeed: 6.0,
     size: 1,
-    cost: { food: 25, minerals: 20 },
+    cost: { food: 25, wood: 40 },
     abilities: ["heal", "bless", "resurrect"],
     spawner: "church",
     upgradeTo: "valkyrie",
@@ -401,7 +410,7 @@ const UnitTypes = {
     speed: 30,
     rotationSpeed: 7.0,
     size: 1,
-    cost: { food: 45, minerals: 40 },
+    cost: { food: 45, wood: 80 },
     abilities: ["heal", "fly", "smite", "resurrect"],
     spawner: "church",
     upgradeFrom: "priest",
@@ -413,17 +422,17 @@ const UnitTypes = {
   // ELEMENTAL UNITS - WATER (Well) 💧
   // ═══════════════════════════════════════════════════════════════
 
-  mycologist: {
-    name: "Mycologist",
+  mycorrhizae: {
+    name: "Myco",
     category: "caster",
     element: "water",
-    model: "assets/models/wizard.glb", // TODO: unique model
+    model: "assets/models/myco.glb",
     scale: 0.5,
     health: 50,
     speed: 20,
     rotationSpeed: 5.0,
     size: 1,
-    cost: { food: 30, minerals: 15 },
+    cost: { food: 30, wood: 30 },
     abilities: ["poison", "spore", "grow"],
     spawner: "well",
     upgradeTo: "alchemist",
@@ -441,10 +450,10 @@ const UnitTypes = {
     speed: 22,
     rotationSpeed: 5.0,
     size: 1,
-    cost: { food: 50, minerals: 35 },
+    cost: { food: 50, wood: 70 },
     abilities: ["poison", "transmute", "potion", "explosion"],
     spawner: "well",
-    upgradeFrom: "mycologist",
+    upgradeFrom: "mycorrhizae",
     description: "Master of potions and chemical warfare",
     notes: "DEFEAT: 💧 Drinks emergency potion, turns into frog temporarily, hops back to well"
   },
@@ -457,13 +466,13 @@ const UnitTypes = {
     name: "Shaman",
     category: "caster",
     element: "earth",
-    model: "assets/models/wizard.glb", // TODO: unique model
+    model: "assets/models/shaman.glb",
     scale: 0.5,
     health: 55,
     speed: 22,
     rotationSpeed: 5.0,
     size: 1,
-    cost: { food: 25, wood: 20, minerals: 10 },
+    cost: { food: 25, wood: 30 },
     abilities: ["nature", "root", "summon_beast"],
     spawner: "grove",
     upgradeTo: "druid",
@@ -481,7 +490,7 @@ const UnitTypes = {
     speed: 24,
     rotationSpeed: 5.0,
     size: 1,
-    cost: { food: 45, wood: 35, minerals: 25 },
+    cost: { food: 45, wood: 65 },
     abilities: ["nature", "entangle", "shapeshift", "regrowth"],
     spawner: "grove",
     upgradeFrom: "shaman",
@@ -489,6 +498,112 @@ const UnitTypes = {
     notes: "DEFEAT: 🌿 Becomes a tree temporarily, roots grow toward grove, uproots and walks home"
   }
 };
+
+// Initialize upgrade abilities for units
+function initializeUpgradeAbilities() {
+  // Add upgrade abilities dynamically based on upgradeTo property
+  for (const [unitType, unitDef] of Object.entries(UnitTypes)) {
+    if (unitDef.upgradeTo) {
+      const upgradeDef = UnitTypes[unitDef.upgradeTo];
+      if (!upgradeDef) continue;
+      
+      // Create abilities array if it doesn't exist or if it's just strings
+      if (!Array.isArray(unitDef.actionAbilities)) {
+        unitDef.actionAbilities = [];
+      }
+      
+      // Add the upgrade ability
+      unitDef.actionAbilities.push({
+        name: `Become ${upgradeDef.name}`,
+        icon: unitType === 'villager' ? '🗡️' : unitType === 'engineer' ? '📐' : unitType === 'monk' ? '⚔️' : '⬆️',
+        color: 'rgba(200,150,50,0.95)',
+        shadowColor: 'rgba(200,150,50,0.6)',
+        cost: upgradeDef.cost || {},
+        execute: function() {
+          // This will be called when the ability is activated
+          if (!window.player || !window.player.selectedUnits) return;
+          
+          const unitsToUpgrade = window.player.selectedUnits.filter(u => u.type === unitType);
+          
+          for (const unit of unitsToUpgrade) {
+            // Check if player has resources
+            const cost = upgradeDef.cost || {};
+            let canAfford = true;
+            const costText = [];
+            
+            if (window.player.resources) {
+              for (const [resource, amount] of Object.entries(cost)) {
+                if ((window.player.resources[resource] || 0) < amount) {
+                  canAfford = false;
+                }
+                costText.push(`${amount} ${resource}`);
+              }
+            }
+            
+            if (!canAfford) {
+              console.log(`Cannot afford to upgrade ${unit.name} to ${upgradeDef.name}. Cost: ${costText.join(', ')}`);
+              continue;
+            }
+            
+            // Deduct resources
+            if (window.player.resources) {
+              for (const [resource, amount] of Object.entries(cost)) {
+                window.player.resources[resource] -= amount;
+              }
+            }
+            
+            // Perform the upgrade
+            console.log(`🔄 Upgrading ${unit.name || unitType} to ${upgradeDef.name}!`);
+            
+            // Store position and other properties
+            const pos = unit.mesh ? unit.mesh.position.clone() : { x: unit.x, y: unit.y || 0, z: unit.z };
+            const owner = unit.owner;
+            const rotation = unit.rotation || 0;
+            
+            // Remove old unit from arrays
+            if (window.player && window.player.units) {
+              const idx = window.player.units.indexOf(unit);
+              if (idx > -1) window.player.units.splice(idx, 1);
+            }
+            if (window.gameUnits) {
+              const idx = window.gameUnits.indexOf(unit);
+              if (idx > -1) window.gameUnits.splice(idx, 1);
+            }
+            
+            // Dispose old mesh
+            if (unit.mesh) {
+              unit.mesh.dispose();
+              unit.mesh = null;
+            }
+            
+            // Create new upgraded unit
+            const newUnit = new Unit(unitDef.upgradeTo, pos);
+            newUnit.owner = owner;
+            newUnit.rotation = rotation;
+            
+            // Add to player's units
+            if (window.player && window.player.units) {
+              window.player.units.push(newUnit);
+            }
+            if (window.gameUnits) {
+              window.gameUnits.push(newUnit);
+            }
+            
+            // Spawn the 3D model
+            if (window.gfx && window.gfx.scene && window.spawnUnitModels) {
+              window.spawnUnitModels(window.gfx.scene);
+            }
+            
+            console.log(`✅ Upgraded to ${upgradeDef.name}!`);
+          }
+        }
+      });
+    }
+  }
+}
+
+// Call initialization
+initializeUpgradeAbilities();
 
 // Simple LOD system - just update frequency based on distance
 const LOD_DISTANCES = {
@@ -1030,8 +1145,8 @@ function createSelectionIndicator(unit) {
     
     // Create a ring around the unit for selection indicator
     const ring = BABYLON.MeshBuilder.CreateTorus("selectionRing", {
-        diameter: 2.5,
-        thickness: 0.06,
+        diameter: 3.5,
+        thickness: 0.15,
         tessellation: 16
     }, window.gfx.scene);
     
@@ -1052,22 +1167,30 @@ function createSelectionIndicator(unit) {
     // Store reference to the selection indicator
     unit.selectionIndicator = ring;
     
+    // Create health dots for the unit
+    if (window.createHealthDots) {
+        window.createHealthDots(unit);
+    }
+    
     // console.log(`🎯 Created selection indicator for ${unit.name}`);
 }
 
 // Update selection indicators for all units
 function updateSelectionIndicators() {
-    if (!window.player || !window.player.units) return;
+    if (!window.player) return;
     
     // Defensive check for replay mode where player might not have all methods
     if (typeof window.player.getSelectedUnits !== 'function') return;
     
     const selectedUnits = window.player.getSelectedUnits();
     
-    // Update all units' selection indicators
-    window.player.units.forEach(unit => {
+    // Update all units in the game (including opponents), not just player's units
+    const allUnits = window.gameUnits || (window.player.units || []);
+    
+    allUnits.forEach(unit => {
+        const isSelected = selectedUnits.includes(unit);
+        
         if (unit.selectionIndicator) {
-            const isSelected = selectedUnits.includes(unit);
             unit.selectionIndicator.isVisible = isSelected;
             
             // Add some animation for selected units
@@ -1077,6 +1200,16 @@ function updateSelectionIndicators() {
                 
                 // Keep fully opaque for performance (no alpha pulsing)
                 unit.selectionIndicator.material.alpha = 1.0;
+            }
+        }
+        
+        // Show health dots for selected units, hide for others
+        if (window.showHealthDots && window.hideHealthDots) {
+            if (isSelected) {
+                window.showHealthDots(unit);
+                window.updateHealthDots(unit);
+            } else {
+                window.hideHealthDots(unit);
             }
         }
     });
@@ -1249,22 +1382,29 @@ function updateUnits(deltaTime) {
         const field = window.liveField;
         if (field) {
             const TILE_SIZE = window.TILE_SIZE || 4;
-            const tileX = Math.floor(unit.pb.state.loc.x / TILE_SIZE);
-            const tileZ = Math.floor(unit.pb.state.loc.z / TILE_SIZE);
+            const oldTileX = Math.floor((unit.pb.state.loc.x - unit.pb.state.vel.x * deltaTime) / TILE_SIZE);
+            const oldTileZ = Math.floor((unit.pb.state.loc.z - unit.pb.state.vel.z * deltaTime) / TILE_SIZE);
+            const newTileX = Math.floor(unit.pb.state.loc.x / TILE_SIZE);
+            const newTileZ = Math.floor(unit.pb.state.loc.z / TILE_SIZE);
             
             // Check if tile is blocked (rocks, deep water)
-            if (field.isPassable && !field.isPassable(tileX, tileZ)) {
-                // Revert position - unit can't be here
+            // CRITICAL: Only block if moving FROM passable TO impassable (can escape water, can't enter it)
+            const wasPassable = !field.isPassable || field.isPassable(oldTileX, oldTileZ);
+            const isPassable = !field.isPassable || field.isPassable(newTileX, newTileZ);
+            
+            if (wasPassable && !isPassable) {
+                // Unit is trying to move from passable to impassable - block it
                 unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
                 unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
                 unit.pb.state.vel.x = 0;
                 unit.pb.state.vel.z = 0;
             }
+            // If already in impassable tile (wasPassable=false), allow movement to escape
             
             // Check if off the table (chunk mask) - only if we have custom shapes
             if (field.chunkMask && field.chunkSize) {
-                const chunkX = Math.floor(tileX / field.chunkSize);
-                const chunkZ = Math.floor(tileZ / field.chunkSize);
+                const chunkX = Math.floor(newTileX / field.chunkSize);
+                const chunkZ = Math.floor(newTileZ / field.chunkSize);
                 const chunkKey = `${chunkX},${chunkZ}`;
                 
                 // Only enforce if this chunk is explicitly disabled
@@ -1373,37 +1513,11 @@ function updateUnits(deltaTime) {
             unit.pb.rotVel.y = 0;
         }
         
-        // Check if unit is standing on an agora platform
-        // NOTE: Collision detection is handled by the agora model's hitbox mesh (more efficient)
-        // This only handles platform height positioning
-        let onPlatform = false;
-        if (window.gameBuildings) {
-            for (const building of window.gameBuildings) {
-                if (building.type === 'agora' && building.platformHeight && building.position) {
-                    const dx = unit.pb.state.loc.x - building.position.x;
-                    const dz = unit.pb.state.loc.z - building.position.z;
-                    const distSq = dx * dx + dz * dz;
-                    const platformRadiusSq = building.platformRadius * building.platformRadius;
-                    
-                    // Unit is on platform if within platform radius
-                    // The model's hitbox mesh handles collision, preventing units from getting too close
-                    if (distSq <= platformRadiusSq) {
-                        // Unit is on the agora platform!
-                        // Add offset so units stand higher on the platform (about half a villager height)
-                        const agoraUnitOffset = 0.75; // Units stand higher on agora platform
-                        unit.pb.state.loc.y = building.platformHeight + agoraUnitOffset;
-                        onPlatform = true;
-                        break;
-                    }
-                }
-            }
-        }
-        
-        // If not on platform, update Y position to match terrain height (with bilinear interpolation)
+        // Update Y position to match terrain height (with bilinear interpolation)
         // Add offset so units stand ON the terrain surface, not embedded in it
         // Note: Units typically have their origin at their base/feet, so we need enough offset
         // PERFORMANCE: Use LOD to skip expensive terrain height calculations for distant units
-        if (!onPlatform) {
+        if (true) {
             const loc = unit.pb.state.loc;
             
             // LOD: Skip expensive terrain height calculation for distant units
@@ -1474,6 +1588,25 @@ function updateUnits(deltaTime) {
         // Apply fake vertical arc animation for units kicked by monks
         // Only apply arc if unit is not on a platform (platforms handle their own Y)
         // CRITICAL: Use tick-based timing for deterministic animation
+        // Check if unit is on a platform (agora)
+        let onPlatform = false;
+        if (window.gameBuildings && window.gameBuildings.length > 0 && unit.pb && unit.pb.state && unit.pb.state.loc) {
+            for (const building of window.gameBuildings) {
+                if (building.type === 'agora' && building.platformHeight !== undefined && building.position) {
+                    const dx = unit.pb.state.loc.x - building.position.x;
+                    const dz = unit.pb.state.loc.z - building.position.z;
+                    const distSq = dx * dx + dz * dz;
+                    const platformRadius = building.platformRadius || 8;
+                    const platformRadiusSq = platformRadius * platformRadius;
+                    
+                    if (distSq <= platformRadiusSq) {
+                        onPlatform = true;
+                        break;
+                    }
+                }
+            }
+        }
+        
         if (unit._monkKickArc && !onPlatform) {
             const arc = unit._monkKickArc;
             const currentTick = window.currentMatch?.tick || 0;
@@ -2555,6 +2688,33 @@ function getTeamColorForOwner(owner) {
   if (owner === opponentId || owner === 'opponent') {
     const color = window.opponent?.color || '#E24A4A';
     return ensureString(color) || '#E24A4A'; // Red for opponent
+  }
+  
+  // Check if this is an AI player or any player in the match
+  if (window.currentMatch?.players) {
+    // Try exact match first
+    let matchPlayer = window.currentMatch.players.find(p => p.id === owner);
+    
+    // If no exact match, try matching by suffix (last 6 chars)
+    if (!matchPlayer && owner && owner.length >= 6) {
+      matchPlayer = window.currentMatch.players.find(p => {
+        if (!p.id) return false;
+        // Check if player ID ends with the owner ID (e.g., "local-player-cxhvhb" ends with "cxhvhb")
+        return p.id.endsWith(owner) || p.id.endsWith(`-${owner}`);
+      });
+    }
+    
+    // If still no match, try if owner is full ID and player ID is shortened
+    if (!matchPlayer && owner) {
+      matchPlayer = window.currentMatch.players.find(p => {
+        if (!p.id) return false;
+        return owner.endsWith(p.id) || owner.endsWith(`-${p.id}`);
+      });
+    }
+    
+    if (matchPlayer && matchPlayer.color) {
+      return ensureString(matchPlayer.color) || '#8A8A8A';
+    }
   }
   
   // Fallback for any other player IDs

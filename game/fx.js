@@ -165,6 +165,32 @@
         { time: 1.0, limit: 1 }
       ],
       limitVelocityDamping: 0.95
+    },
+    sparkle: {
+      texture: "assets/images/explosion.png",
+      emitRate: 60,  // Quick burst
+      minSize: 0.3,
+      maxSize: 0.6,
+      minLifeTime: 0.3,
+      maxLifeTime: 0.6,
+      minEmitPower: 2,
+      maxEmitPower: 5,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,  // Additive for bright sparkle
+      direction1: new BABYLON.Vector3(-1, -2, -1),  // Burst outward and up (inverted Y)
+      direction2: new BABYLON.Vector3(1, -3, 1),
+      minEmitBox: new BABYLON.Vector3(-0.2, 0, -0.2),
+      maxEmitBox: new BABYLON.Vector3(0.2, 0.2, 0.2),
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(1, 1, 0.7, 0) },      // Bright yellow-white
+        { time: 0.1, color: new BABYLON.Color4(1, 1, 1, 1) },        // Pure white flash
+        { time: 0.4, color: new BABYLON.Color4(1, 1, 0.8, 0.8) },    // Warm white
+        { time: 0.8, color: new BABYLON.Color4(1, 0.9, 0.6, 0.3) },  // Golden fade
+        { time: 1.0, color: new BABYLON.Color4(0.8, 0.7, 0.3, 0) }   // Gone
+      ],
+      gravity: new BABYLON.Vector3(0, 1, 0), // Light upward (inverted)
+      limitVelocityDamping: 0.9
     }
   };
   

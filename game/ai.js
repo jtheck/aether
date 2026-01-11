@@ -625,9 +625,13 @@ class WorkBehavior extends Behavior {
 
 class GatherWorkBehavior extends WorkBehavior {
     constructor(unit, building, params = {}) {
+        // CRITICAL: Use building's productionWorkRadius if available, otherwise default to 9
+        const buildingDef = building.type ? window.BuildingTypes[building.type] : null;
+        const defaultGatherRadius = buildingDef?.productionWorkRadius || buildingDef?.workRadius || 9;
+        
         super(unit, building, {
             workType: "gather",
-            gatherRadius: 9, // How far to look for resources
+            gatherRadius: defaultGatherRadius, // How far to look for resources (from building definition)
             gatherDuration: 15000, // How long to gather (15 seconds)
             returnDuration: 3000, // How long to stay at camp (3 seconds)
             ...params
@@ -759,50 +763,9 @@ class GatherWorkBehavior extends WorkBehavior {
                 this.applyMovementWithRotation(direction, this.params.workSpeed);
             }
         } else {
-            // No resources found - check if camp truly has no available resources
-            const availableResources = this.building.availableResources || [];
-            const hasAvailableResources = availableResources.some(r => 
-                !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
-                (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
-            );
-            
-            if (!hasAvailableResources) {
-                // Camp has no resources - transition to idle so villager can be reassigned
-                if (!this.noResourceWarningShown) {
-                    console.log(`ℹ️ ${this.unit.name || this.unit.type} camp has no resources, transitioning to idle`);
-                    this.noResourceWarningShown = true;
-                }
-                
-                // Clear assignment to this building
-                if (this.building && this.building.assignedWorkers) {
-                    const idx = this.building.assignedWorkers.indexOf(this.unit);
-                    if (idx > -1) {
-                        this.building.assignedWorkers.splice(idx, 1);
-                    }
-                }
-                this.unit.assignedBuilding = null;
-                
-                // Drop off any resources being carried
-                if (this.gatheredResourceType && this.gatheredResourceAmount > 0) {
-                    this.addGatheredResources();
-                    this.removeResourceIndicator();
-                }
-                
-                // Transition to idle behavior (linger)
-                if (window.behaviorManager && this.unit.pb && this.unit.pb.state && this.unit.pb.state.loc) {
-                    window.behaviorManager.setBehavior(this.unit, 'linger', {
-                        center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
-                        radius: 50,
-                        wanderDistance: 2.0,
-                        wanderInterval: 30000
-                    });
-                }
-                return; // Exit - behavior has changed
-            } else {
-                // Resources exist but we couldn't find one (might be temporarily unavailable)
-                // Keep searching but don't spam warnings
-                super.performWork();
-            }
+            // No resources found currently - keep searching by circling around camp
+            // Resources might become available (respawn, other workers finish)
+            super.performWork();
         }
     }
     
@@ -841,6 +804,10 @@ class GatherWorkBehavior extends WorkBehavior {
                 this.gatherState = 'returning';
                 this.returnStartTime = currentTime;
                 this.returnStartTick = currentTick; // Store tick for deterministic return timing
+                
+                // Clear any old path data so we calculate a fresh path
+                this.returnPath = null;
+                this.returnWaypointIndex = 0;
                 
                 // Store what was gathered
                 this.gatheredResourceType = this.gatherTarget.type;
@@ -883,10 +850,46 @@ class GatherWorkBehavior extends WorkBehavior {
         
         // Get much closer to camp for drop-off (within 0.5 tiles)
         if (distance > TILE_SIZE * 0.5) {
-            // Keep moving towards camp every frame (with offset)
-            const direction = { x: dx / distance, z: dz / distance };
-            this.applyMovementWithRotation(direction, this.params.workSpeed);
-            // console.log(`🏃 ${this.unit.name || this.unit.type} returning to camp (${distance.toFixed(1)}m away)`);
+            // Calculate path if we don't have one yet (using pathfinding to avoid mountains)
+            if (!this.returnPath || this.returnPath.length === 0) {
+                if (window.liveField && window.liveField.findPath) {
+                    const unitX = this.unit.pb.state.loc.x;
+                    const unitZ = this.unit.pb.state.loc.z;
+                    this.returnPath = window.liveField.findPath(unitX, unitZ, adjustedCampPosition.x, adjustedCampPosition.z);
+                    
+                    if (this.returnPath && this.returnPath.length > 0) {
+                        this.returnWaypointIndex = 0;
+                    } else {
+                        // No path found, try direct movement as fallback
+                        this.returnPath = [adjustedCampPosition];
+                        this.returnWaypointIndex = 0;
+                    }
+                } else {
+                    // No pathfinding available, use direct movement
+                    this.returnPath = [adjustedCampPosition];
+                    this.returnWaypointIndex = 0;
+                }
+            }
+            
+            // Follow the path
+            if (this.returnPath && this.returnWaypointIndex < this.returnPath.length) {
+                const waypoint = this.returnPath[this.returnWaypointIndex];
+                const wpDx = waypoint.x - this.unit.pb.state.loc.x;
+                const wpDz = waypoint.z - this.unit.pb.state.loc.z;
+                const wpDistance = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
+                
+                // Check if we reached current waypoint
+                if (wpDistance < TILE_SIZE * 0.5) {
+                    this.returnWaypointIndex++;
+                } else {
+                    // Move toward current waypoint
+                    const direction = {
+                        x: wpDx / wpDistance,
+                        z: wpDz / wpDistance
+                    };
+                    this.applyMovementWithRotation(direction, this.params.workSpeed);
+                }
+            }
         } else {
             // We're at camp - wait briefly then seek more resources
             // CRITICAL: Use tick-based timing for deterministic drop-off
@@ -918,6 +921,10 @@ class GatherWorkBehavior extends WorkBehavior {
                 this.gatherTarget = null; // Clear old target
                 this.seekStartTick = null; // Reset seek start tick for stagger delay
                 
+                // Clear path data for next trip
+                this.returnPath = null;
+                this.returnWaypointIndex = 0;
+                
                 // Remove visual indicator when dropping off resources
                 this.removeResourceIndicator();
             }
@@ -925,23 +932,109 @@ class GatherWorkBehavior extends WorkBehavior {
         }
     }
     
+    scanNearbyResources() {
+        if (!this.building || !this.building.position) return [];
+        
+        const field = window.liveField;
+        if (!field) return [];
+        
+        const resources = [];
+        const campGridX = Math.floor(this.building.position.x / TILE_SIZE);
+        const campGridZ = Math.floor(this.building.position.z / TILE_SIZE);
+        
+        // Use gatherRadius from params (defaults to building's productionWorkRadius)
+        const searchRadius = this.params.gatherRadius || 9;
+        
+        // Debug logging disabled for cleaner console
+        // const shouldDebug = !this._lastScanLog || (Date.now() - this._lastScanLog) > 3000;
+        const shouldDebug = false;
+        
+        for (let x = campGridX - searchRadius; x <= campGridX + searchRadius; x++) {
+            for (let z = campGridZ - searchRadius; z <= campGridZ + searchRadius; z++) {
+                // Skip out of bounds
+                if (x < 0 || z < 0 || x >= field.width || z >= field.height) continue;
+                
+                // Use checkTileForResources from buildingSystem (deterministic hash-based detection)
+                // This matches the exact same logic as gfx.js uses to place resources
+                const resourceInfo = window.buildingSystem?.checkTileForResources(x, z, false);
+                
+                if (resourceInfo) {
+                    const worldX = (x + 0.5) * TILE_SIZE; // Center of tile
+                    const worldZ = (z + 0.5) * TILE_SIZE;
+                    
+                    // Calculate model offset to match gfx.js placement
+                    // Trees (wood) and rocks (stone/minerals) use different hash seeds
+                    const fieldSeed = field.seed || 0;
+                    let hashSeed;
+                    if (resourceInfo.type === 'wood') {
+                        // Trees use this hash seed (must match gfx.js)
+                        hashSeed = fieldSeed + x * 13579 + z * 24680;
+                    } else {
+                        // Rocks use this hash seed (must match gfx.js)
+                        hashSeed = fieldSeed + x * 73856093 + z * 19349663;
+                    }
+                    
+                    // Same LCG hash as gfx.js
+                    let hash = hashSeed;
+                    hash = (hash * 1664525 + 1013904223) >>> 0;
+                    const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                    hash = (hash * 1664525 + 1013904223) >>> 0;
+                    const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                    
+                    // Apply model offset to world position
+                    const modelWorldX = worldX + offsetX;
+                    const modelWorldZ = worldZ + offsetZ;
+                    
+                    // Check distance (use tile center for radius check)
+                    const dx = worldX - this.building.position.x;
+                    const dz = worldZ - this.building.position.z;
+                    const distance = Math.sqrt(dx * dx + dz * dz);
+                    
+                    if (distance <= searchRadius * TILE_SIZE) {
+                        resources.push({
+                            gridX: x,
+                            gridZ: z,
+                            worldX: modelWorldX,  // Use model position for pathing
+                            worldZ: modelWorldZ,
+                            x: modelWorldX,
+                            z: modelWorldZ,
+                            type: resourceInfo.type,
+                            amount: resourceInfo.amount,
+                            remaining: resourceInfo.remaining
+                        });
+                    }
+                }
+            }
+        }
+        
+        if (shouldDebug) {
+            console.log(`   Found ${resources.length} resources`);
+            if (resources.length > 0) {
+                console.log(`   First 3:`, resources.slice(0, 3).map(r => `${r.type} at (${r.gridX},${r.gridZ})`));
+            }
+        }
+        
+        return resources;
+    }
+    
     findNearestResource() {
         if (!this.building || !this.building.position) return null;
         
-        // Use the building's detected available resources
-        let availableResources = this.building.availableResources || [];
+        // Dynamically scan for resources instead of using pre-scanned list
+        // This allows working with respawning resources
+        const availableResources = this.scanNearbyResources();
         if (availableResources.length === 0) return null;
         
         // CRITICAL: Ensure resources are sorted deterministically
-        // Prioritize stone over wood to balance resource gathering, then by gridX, gridZ
+        // Prioritize stone/minerals over wood to balance resource gathering, then by gridX, gridZ
         // This prevents workers from always depleting wood first
         const sortedResources = availableResources.length > 1 ? 
             availableResources.slice().sort((a, b) => {
-                // First priority: resource type (stone before wood)
+                // First priority: resource type (stone/minerals before wood)
                 if (a.type !== b.type) {
-                    if (a.type === 'stone') return -1;
-                    if (b.type === 'stone') return 1;
-                    // Both are wood or both are stone, continue to position sorting
+                    if (a.type === 'stone' || a.type === 'minerals') return -1;
+                    if (b.type === 'stone' || b.type === 'minerals') return 1;
+                    // Both are wood or both are stone/minerals, continue to position sorting
                 }
                 // Second priority: grid position (deterministic)
                 if (a.gridX !== b.gridX) return a.gridX - b.gridX;
@@ -950,73 +1043,23 @@ class GatherWorkBehavior extends WorkBehavior {
         
         // CRITICAL: Use a stable, deterministic resource selection for multiplayer sync
         // Pick resource based ONLY on unit ID hash so workers stick with their assigned resource
-        // Use originalResourceCount if available to ensure consistent selection even after depletion
-        // This ensures both clients select the same resource for the same worker
-        
-        // Initialize originalResourceCount if missing (for camps built before the fix)
-        if (!this.building.originalResourceCount && sortedResources.length > 0) {
-            this.building.originalResourceCount = sortedResources.length;
-        }
-        
         const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const resourceListLength = this.building.originalResourceCount || sortedResources.length;
-        const resourceIndex = unitIdHash % resourceListLength;
-        
-        // Get resource from sorted list using original count for index calculation
-        // Skip depleted resources by wrapping around deterministically
-        // CRITICAL: Use originalResourceCount for index calculation to ensure consistency
-        // CRITICAL: sortedResources should always have the same length as originalResourceCount
-        // (resources are marked as depleted, not removed from array)
-        let resource = null;
-        let attempts = 0;
-        const maxAttempts = resourceListLength; // Use original count, not current array length
-        
-        // CRITICAL: Ensure sortedResources array matches expected length
-        // If it doesn't, something went wrong (resources shouldn't be removed, only marked depleted)
-        if (sortedResources.length !== resourceListLength) {
-            console.warn(`⚠️ availableResources length (${sortedResources.length}) doesn't match originalResourceCount (${resourceListLength})! This can cause desyncs.`);
-        }
+        const resourceListLength = sortedResources.length;
+        const resourceIndex = unitIdHash % Math.max(resourceListLength, 1);
         
         // Try to find an available resource starting from calculated index
-        // Wrap around deterministically using originalResourceCount
-        // Get field boundaries for validation
-        const field = window.liveField;
-        const fieldWidth = field?.width || 0;
-        const fieldHeight = field?.height || 0;
+        // Wrap around deterministically
+        let resource = null;
+        let attempts = 0;
+        const maxAttempts = resourceListLength;
         
-        while (attempts < maxAttempts && (!resource || resource.depleted || resource.remaining <= 0 || resource.depletionTick !== undefined)) {
-            const wrappedIndex = (resourceIndex + attempts) % resourceListLength;
-            // CRITICAL: Use wrappedIndex directly - sortedResources should match originalResourceCount length
+        while (attempts < maxAttempts && !resource) {
+            const wrappedIndex = (resourceIndex + attempts) % Math.max(resourceListLength, 1);
             if (wrappedIndex < sortedResources.length) {
                 const candidate = sortedResources[wrappedIndex];
-                
-                // CRITICAL: Skip resources outside map boundaries to prevent villagers from trying to walk off the table
-                if (candidate && (candidate.gridX < 0 || candidate.gridX >= fieldWidth || 
-                    candidate.gridZ < 0 || candidate.gridZ >= fieldHeight)) {
-                    attempts++;
-                    continue;
-                }
-                
-                // CRITICAL: Also check chunk mask if available (for custom map shapes)
-                if (candidate && field && field.chunkMask && field.chunkSize) {
-                    const chunkX = Math.floor(candidate.gridX / field.chunkSize);
-                    const chunkZ = Math.floor(candidate.gridZ / field.chunkSize);
-                    if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
-                        attempts++;
-                        continue; // Skip resources in disabled chunks (off the table)
-                    }
-                }
-                
-                // CRITICAL: Don't select resources scheduled for depletion (even if not yet marked as depleted)
-                // Also check global depletion state - resources can be depleted by other camps
-                // This ensures both clients select the same available resources
-                const isGloballyDepleted = window.isResourceTileDepleted && 
-                    window.isResourceTileDepleted(candidate.gridX, candidate.gridZ);
-                if (candidate && !candidate.depleted && candidate.remaining > 0 && 
-                    candidate.depletionTick === undefined && !isGloballyDepleted) {
-                    resource = candidate;
-                    break;
-                }
+                // Resources from scanNearbyResources are already validated (not depleted, in bounds)
+                resource = candidate;
+                break;
             }
             attempts++;
         }
@@ -1058,8 +1101,8 @@ class GatherWorkBehavior extends WorkBehavior {
             
             material.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1); // Brown for wood
             material.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.02);
-        } else if (resourceType === 'stone') {
-            // Create a box (rock) for stone - 6x bigger and angular!
+        } else if (resourceType === 'stone' || resourceType === 'minerals') {
+            // Create a box (rock) for stone/minerals - 6x bigger and angular!
             indicator = BABYLON.MeshBuilder.CreateBox("resourceIndicator", {
                 width: 3.0,   // 0.5 * 6
                 height: 2.4,  // 0.4 * 6
@@ -1070,8 +1113,13 @@ class GatherWorkBehavior extends WorkBehavior {
             indicator.rotation.x = Math.PI * 0.15;
             indicator.rotation.z = Math.PI * 0.1;
             
-            material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5); // Gray for stone
-            material.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+            if (resourceType === 'minerals') {
+                material.diffuseColor = new BABYLON.Color3(0.7, 0.6, 0.8); // Purple-ish for minerals/gems
+                material.emissiveColor = new BABYLON.Color3(0.2, 0.15, 0.2);
+            } else {
+                material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5); // Gray for stone
+                material.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+            }
         } else {
             // Fallback to sphere for other resource types
             indicator = BABYLON.MeshBuilder.CreateSphere("resourceIndicator", {
@@ -1153,6 +1201,352 @@ class GatherWorkBehavior extends WorkBehavior {
         this.gatheredResourceType = null;
         this.gatheredResourceAmount = 0;
         this.lastGatheredResource = null;
+    }
+}
+
+// Manual Gather Behavior - for when player clicks a specific resource
+class ManualGatherBehavior extends Behavior {
+    constructor(unit, targetResource, params = {}) {
+        super(unit, {
+            gatherDuration: 15000, // How long to gather (15 seconds)
+            workSpeed: 0.5,
+            ...params
+        });
+        
+        this.gatherState = 'seeking'; // seeking, gathering, returning
+        this.gatherTarget = {
+            x: targetResource.x,
+            z: targetResource.z,
+            gridX: targetResource.gridX,
+            gridZ: targetResource.gridZ,
+            type: targetResource.type,
+            amount: targetResource.amount
+        };
+        this.gatherStartTime = 0;
+        this.gatherStartTick = 0;
+        this.resourceIndicator = null;
+        this.gatheredResourceType = targetResource.type || 'wood'; // Use passed type
+        this.gatheredResourceAmount = targetResource.amount || 1;  // Use passed amount
+        
+        console.log(`🪓 ${unit.type} manually gathering ${this.gatheredResourceAmount} ${this.gatheredResourceType} from (${targetResource.gridX}, ${targetResource.gridZ}) at world pos (${this.gatherTarget.x.toFixed(1)}, ${this.gatherTarget.z.toFixed(1)})`);
+        console.log(`   Unit current position: (${unit.pb?.state?.loc?.x.toFixed(1) || '?'}, ${unit.pb?.state?.loc?.z.toFixed(1) || '?'})`);
+    }
+    
+    step() {
+        const currentTick = window.currentMatch?.tick || 0;
+        const currentTime = currentTick * 50; // Convert to ms
+        
+        // Check if resource is depleted
+        const isDepleted = window.isResourceTileDepleted && 
+            window.isResourceTileDepleted(this.gatherTarget.gridX, this.gatherTarget.gridZ);
+        
+        if (isDepleted) {
+            console.log(`🪓 Resource depleted, going idle`);
+            
+            // Remove resource indicator
+            this.removeResourceIndicator();
+            
+            if (window.behaviorManager) {
+                window.behaviorManager.setBehavior(this.unit, 'linger', {
+                    center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
+                    radius: 5,
+                    wanderDistance: 2.0,
+                    wanderInterval: 30000
+                });
+            }
+            return true; // Complete
+        }
+        
+        // Handle gathering states
+        switch (this.gatherState) {
+            case 'seeking':
+                this.seekResource(currentTime, currentTick);
+                break;
+            case 'gathering':
+                this.gatherResource(currentTime, currentTick);
+                break;
+            case 'returning':
+                return this.returnResource(currentTime, currentTick);
+        }
+        
+        return false; // Keep working
+    }
+    
+    seekResource(currentTime, currentTick) {
+        if (!this.gatherTarget) return;
+        
+        // Move toward resource
+        const dx = this.gatherTarget.x - this.unit.pb.state.loc.x;
+        const dz = this.gatherTarget.z - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const arrivalThreshold = TILE_SIZE * 2.5; // Increased to 2.5 for large rock models (10 units)
+        
+        // Log seeking progress every 60 frames (~1 second)
+        if (!this._seekLogTimer || Date.now() - this._seekLogTimer > 1000) {
+            this._seekLogTimer = Date.now();
+            console.log(`🪓 ${this.unit.type} seeking: distance=${distance.toFixed(1)}, threshold=${arrivalThreshold.toFixed(1)}, target=(${this.gatherTarget.gridX},${this.gatherTarget.gridZ})`);
+        }
+        
+        if (distance < arrivalThreshold) {
+            // Arrived! Start gathering
+            this.gatherState = 'gathering';
+            this.gatherStartTime = currentTime;
+            this.gatherStartTick = currentTick;
+            
+            // Stop moving
+            if (this.unit.pb && this.unit.pb.imp) {
+                this.unit.pb.imp.x = 0;
+                this.unit.pb.imp.z = 0;
+            }
+            
+            // Create resource indicator visual
+            this.resourceIndicator = this.createResourceIndicator(this.gatheredResourceType);
+            
+            // Resource type and amount already set in constructor from targetResource
+            console.log(`✅ ${this.unit.type} ARRIVED! Starting to gather ${this.gatheredResourceAmount} ${this.gatheredResourceType} for ${this.params.gatherDuration}ms`);
+        } else {
+            // Keep moving toward resource
+            const direction = {
+                x: dx / distance,
+                z: dz / distance
+            };
+            // Use higher speed to overcome potential collision issues with large models
+            const moveSpeed = this.params.workSpeed || 1.0;
+            this.applyMovementWithRotation(direction, moveSpeed * 1.5); // 50% faster movement
+        }
+    }
+    
+    gatherResource(currentTime, currentTick) {
+        const tickRate = 20; // Match net.TICK_RATE
+        const gatherDurationTicks = Math.floor(this.params.gatherDuration / 1000 * tickRate);
+        const ticksGathering = currentTick - this.gatherStartTick;
+        
+        // Log progress every second
+        if (!this._gatherLogTimer || Date.now() - this._gatherLogTimer > 1000) {
+            this._gatherLogTimer = Date.now();
+            const progress = Math.min(100, (ticksGathering / gatherDurationTicks * 100));
+            console.log(`⛏️ ${this.unit.type} gathering ${this.gatheredResourceType}: ${progress.toFixed(0)}% (${ticksGathering}/${gatherDurationTicks} ticks)`);
+        }
+        
+        if (ticksGathering >= gatherDurationTicks) {
+            // Gathering complete! Start returning
+            console.log(`🪓 ${this.unit.type} finished gathering ${this.gatheredResourceAmount} ${this.gatheredResourceType}, returning to base`);
+            
+            // Mark resource as depleted
+            if (window.depleteResourceTile) {
+                window.depleteResourceTile(this.gatherTarget.gridX, this.gatherTarget.gridZ, currentTick);
+            }
+            
+            // Transition to returning state
+            this.gatherState = 'returning';
+            this.returnStartTick = currentTick;
+            
+            // Clear any old path data so we calculate a fresh path
+            this.returnPath = null;
+            this.returnWaypointIndex = 0;
+            
+            // Keep resource indicator visible while returning
+        }
+        
+        // Stay at resource location while gathering
+        return false;
+    }
+    
+    returnResource(currentTime, currentTick) {
+        // Find player's agora or closest building to deposit at
+        const owner = findPlayerByUnitOwner(this.unit.owner);
+        if (!owner || !owner.agora) {
+            // No base found, just deposit immediately
+            console.log(`💰 ${this.unit.type} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} (no agora)`);
+            if (owner && owner.addResource) {
+                owner.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
+            }
+            this.removeResourceIndicator();
+            
+            // Check if original resource is depleted
+            const isDepleted = window.isResourceTileDepleted && 
+                window.isResourceTileDepleted(this.gatherTarget.gridX, this.gatherTarget.gridZ);
+            
+            if (isDepleted) {
+                // Resource is gone, go idle
+                if (window.behaviorManager) {
+                    window.behaviorManager.setBehavior(this.unit, 'linger', {
+                        center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
+                        radius: 5,
+                        wanderDistance: 2.0,
+                        wanderInterval: 30000
+                    });
+                }
+                return true;
+            }
+            
+            // Resource still available - go back for more!
+            console.log(`🔄 ${this.unit.type} going back to gather more ${this.gatheredResourceType}`);
+            this.gatherState = 'seeking';
+            return false;
+        }
+        
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const agoraX = owner.agora.x * TILE_SIZE;
+        const agoraZ = owner.agora.y * TILE_SIZE;
+        
+        const dx = agoraX - this.unit.pb.state.loc.x;
+        const dz = agoraZ - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        
+        const depositRange = TILE_SIZE * 3; // Within 3 tiles of agora
+        
+        if (distance < depositRange) {
+            // Arrived! Deposit resources
+            console.log(`💰 ${this.unit.type} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} at agora`);
+            if (owner && owner.addResource) {
+                owner.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
+            }
+            this.removeResourceIndicator();
+            
+            // Check if original resource is depleted
+            const isDepleted = window.isResourceTileDepleted && 
+                window.isResourceTileDepleted(this.gatherTarget.gridX, this.gatherTarget.gridZ);
+            
+            if (isDepleted) {
+                // Resource is gone, go idle
+                console.log(`🪓 ${this.unit.type} resource depleted, going idle`);
+                if (window.behaviorManager) {
+                    window.behaviorManager.setBehavior(this.unit, 'linger', {
+                        center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
+                        radius: 5,
+                        wanderDistance: 2.0,
+                        wanderInterval: 30000
+                    });
+                }
+                return true;
+            }
+            
+            // Resource still available - go back for more!
+            console.log(`🔄 ${this.unit.type} going back to gather more ${this.gatheredResourceType}`);
+            this.gatherState = 'seeking';
+            this.returnPath = null;
+            this.returnWaypointIndex = 0;
+            return false; // Keep working
+        }
+        
+        // Calculate path if we don't have one yet
+        if (!this.returnPath || this.returnPath.length === 0) {
+            if (window.liveField && window.liveField.findPath) {
+                const unitX = this.unit.pb.state.loc.x;
+                const unitZ = this.unit.pb.state.loc.z;
+                this.returnPath = window.liveField.findPath(unitX, unitZ, agoraX, agoraZ);
+                
+                if (this.returnPath && this.returnPath.length > 0) {
+                    this.returnWaypointIndex = 0;
+                    console.log(`🗺️ ${this.unit.type} calculated return path with ${this.returnPath.length} waypoints`);
+                } else {
+                    // No path found, try direct movement
+                    console.warn(`⚠️ ${this.unit.type} couldn't find path to agora, trying direct movement`);
+                    this.returnPath = [{ x: agoraX, z: agoraZ }];
+                    this.returnWaypointIndex = 0;
+                }
+            } else {
+                // No pathfinding available, use direct movement
+                this.returnPath = [{ x: agoraX, z: agoraZ }];
+                this.returnWaypointIndex = 0;
+            }
+        }
+        
+        // Follow the path
+        if (this.returnPath && this.returnWaypointIndex < this.returnPath.length) {
+            const waypoint = this.returnPath[this.returnWaypointIndex];
+            const wpDx = waypoint.x - this.unit.pb.state.loc.x;
+            const wpDz = waypoint.z - this.unit.pb.state.loc.z;
+            const wpDistance = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
+            
+            // Check if we reached current waypoint
+            if (wpDistance < TILE_SIZE * 0.5) {
+                this.returnWaypointIndex++;
+                if (this.returnWaypointIndex < this.returnPath.length) {
+                    console.log(`🚶 ${this.unit.type} reached waypoint ${this.returnWaypointIndex}/${this.returnPath.length}`);
+                }
+            } else {
+                // Move toward current waypoint
+                const direction = {
+                    x: wpDx / wpDistance,
+                    z: wpDz / wpDistance
+                };
+                this.applyMovementWithRotation(direction, 1.0);
+            }
+        }
+        
+        return false;
+    }
+    
+    createResourceIndicator(resourceType) {
+        if (!this.unit.mesh || this.resourceIndicator) return null;
+        
+        let indicator;
+        const material = new BABYLON.StandardMaterial("resourceIndicatorMaterial", window.gfx.scene);
+        
+        if (resourceType === 'wood') {
+            // Create a log (cylinder) for wood
+            indicator = BABYLON.MeshBuilder.CreateCylinder("resourceIndicator", {
+                height: 4.8,
+                diameter: 1.5
+            }, window.gfx.scene);
+            
+            // Rotate log to be horizontal
+            indicator.rotation.z = Math.PI / 2;
+            
+            material.diffuseColor = new BABYLON.Color3(0.4, 0.2, 0.1); // Brown for wood
+            material.emissiveColor = new BABYLON.Color3(0.1, 0.05, 0.02);
+        } else if (resourceType === 'stone' || resourceType === 'minerals') {
+            // Create a box (rock) for stone/minerals
+            indicator = BABYLON.MeshBuilder.CreateBox("resourceIndicator", {
+                width: 3.0,
+                height: 2.4,
+                depth: 2.7
+            }, window.gfx.scene);
+            
+            // Add slight rotation
+            indicator.rotation.x = Math.PI * 0.15;
+            indicator.rotation.z = Math.PI * 0.1;
+            
+            if (resourceType === 'minerals') {
+                material.diffuseColor = new BABYLON.Color3(0.7, 0.6, 0.8); // Purple-ish for minerals/gems
+                material.emissiveColor = new BABYLON.Color3(0.2, 0.15, 0.2);
+            } else {
+                material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5); // Gray for stone
+                material.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+            }
+        } else {
+            // Fallback to sphere
+            indicator = BABYLON.MeshBuilder.CreateSphere("resourceIndicator", {
+                diameter: 0.3
+            }, window.gfx.scene);
+            
+            material.diffuseColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+            material.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+        }
+        
+        // Position above the unit's head
+        indicator.position = new BABYLON.Vector3(0, 2.5, 0);
+        indicator.parent = this.unit.mesh;
+        
+        material.alpha = 1.0;
+        indicator.material = material;
+        indicator.renderingGroupId = 1;
+        
+        return indicator;
+    }
+    
+    removeResourceIndicator() {
+        if (this.resourceIndicator) {
+            this.resourceIndicator.dispose();
+            if (this.resourceIndicator.material) {
+                this.resourceIndicator.material.dispose();
+            }
+            this.resourceIndicator = null;
+        }
     }
 }
 
@@ -2236,6 +2630,11 @@ class UnitBehaviorManager {
                     behavior = new GatherWorkBehavior(unit, params.building, params);
                 }
                 break;
+            case 'manual_gather':
+                if (params.targetResource) {
+                    behavior = new ManualGatherBehavior(unit, params.targetResource, params);
+                }
+                break;
             case 'farm_work':
                 if (params.building) {
                     behavior = new FarmWorkBehavior(unit, params.building, params);
@@ -3204,6 +3603,7 @@ if (typeof window !== 'undefined') {
     window.WalkBehavior = WalkBehavior;
     window.RunBehavior = RunBehavior;
     window.WanderBehavior = WanderBehavior;
+    window.findPlayerByUnitOwner = findPlayerByUnitOwner;
     window.WorkBehavior = WorkBehavior;
     window.GatherWorkBehavior = GatherWorkBehavior;
     window.FarmWorkBehavior = FarmWorkBehavior;
@@ -3643,8 +4043,22 @@ function updateIdleUnits() {
             }
         }
         
-        // Only process units with no active behavior
-        if (!window.behaviorManager.getBehavior(unit)) {
+        // Only process units with no active behavior (or safe-to-replace behaviors like linger/wander)
+        const currentBehavior = window.behaviorManager.getBehavior(unit);
+        
+        // CRITICAL: Don't interrupt direct player commands with auto-wander!
+        if (currentBehavior) {
+            const behaviorName = currentBehavior.constructor.name;
+            // Protect: manual gather, move commands, attack commands
+            if (behaviorName === 'ManualGatherBehavior' || 
+                behaviorName === 'WalkBehavior' || 
+                behaviorName === 'RunBehavior' ||
+                behaviorName === 'AttackBuildingBehavior') {
+                return; // Skip units with direct player commands
+            }
+        }
+        
+        if (!currentBehavior) {
             idleCount++;
             
             // CRITICAL: Use tick-based timing for deterministic wander behavior

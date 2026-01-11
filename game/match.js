@@ -193,6 +193,13 @@
     
     // Check if all players have loaded
     checkAllPlayersLoaded() {
+      // CRITICAL: Don't trigger countdown if match is already PLAYING
+      // This can happen when a delayed onLocalPlayerLoaded() callback fires
+      // after the match was already started via a different code path
+      if (this.state === MatchState.PLAYING) {
+        return;
+      }
+      
       // Only count human players (exclude AI)
       const humanPlayers = this.players.filter(p => !p.isAI);
       const totalHumanPlayers = humanPlayers.length;
@@ -217,6 +224,13 @@
     // Show countdown and then start match (HOST ONLY)
     // This should be called AFTER all heavy initialization is complete
     showCountdown() {
+      // CRITICAL: Don't reset to READY if already PLAYING
+      // This prevents race conditions with delayed callbacks
+      if (this.state === MatchState.PLAYING) {
+        console.log('⏱️ Countdown skipped - match already playing');
+        return;
+      }
+      
       this.state = MatchState.READY;
       console.log('⏱️ Host starting countdown (3-2-1-GO)…');
       
@@ -469,8 +483,9 @@
     }
     
     // Start a local tick loop for offline matches
-    startLocalTickLoop() {
-      if (window.isMultiplayer) {
+    // force=true allows starting even when isMultiplayer is set (for solo adventure mode)
+    startLocalTickLoop(force = false) {
+      if (window.isMultiplayer && !force) {
         return; // Network tick loop will drive the match
       }
       
@@ -489,7 +504,7 @@
         }
       }, tickIntervalMs);
       
-      // console.log(`🕒 Local match tick loop started at ${tickRate} Hz`);
+      console.log(`🕒 Local match tick loop started at ${tickRate} Hz (force=${force})`);
     }
     
     // Stop the local tick loop if running
@@ -635,9 +650,10 @@
     submitCommand(command) {
       // Allow commands in READY state (pre-match positioning) and PLAYING state
       if (this.state !== MatchState.PLAYING && this.state !== MatchState.READY) {
-        console.warn(`⚠️ Cannot submit command - match in ${this.state} state`);
+        console.warn(`⚠️ Cannot submit command - match in ${this.state} state (type=${command.type})`);
         return false;
       }
+      
       
       // Add metadata
       // MULTIPLAYER LOCKSTEP: Input delay ensures commands arrive at all peers before execution
@@ -822,8 +838,6 @@
         return;
       }
       
-      // console.log(`⚙️ Tick ${tick}: Executing ${commands.length} commands`);
-      
       // Sort commands deterministically (by player ID, then command ID)
       commands.sort((a, b) => {
         if (a.playerId !== b.playerId) {
@@ -901,6 +915,7 @@
       // CRITICAL: Use last 6 chars of player ID for ownership comparison
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      
       
       // P2P DETERMINISTIC: Both clients execute ALL commands for deterministic simulation
       // Filter to only owned units (security check)
@@ -1089,6 +1104,7 @@
           const currentTick = this.tick || 0;
           unit.lastPlayerMoveTick = currentTick;
           
+          console.log(`🚶 Setting walk behavior for unit ${unit.id?.slice(-6)} to (${cmd.target.x.toFixed(1)}, ${cmd.target.z.toFixed(1)})`);
           window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
           
           // If this is a monk, check for nearby units to kick when starting movement
@@ -1889,24 +1905,13 @@
       const objectives = window.adventureObjectives;
       if (!objectives || objectives.length === 0) return;
       
-      const TILE_SIZE = window.TILE_SIZE || 1;
+      // TILE_SIZE is a global constant from constants.js (value = 4)
+      const tileSize = (typeof TILE_SIZE !== 'undefined') ? TILE_SIZE : 4;
       
-      // Get all player units
-      let allUnits = [];
-      this.players.forEach(player => {
-        if (player.units) {
-          allUnits = allUnits.concat(player.units.filter(u => u && !u.dead));
-        }
-      });
+      // Get all player units (only from window.gameUnits as source of truth)
+      const allUnits = (window.gameUnits || []).filter(u => u && !u.dead);
       
-      // Also include window.gameUnits for compatibility
-      if (window.gameUnits) {
-        for (const unit of window.gameUnits) {
-          if (unit && !unit.dead && !allUnits.includes(unit)) {
-            allUnits.push(unit);
-          }
-        }
-      }
+      if (allUnits.length === 0) return;
       
       let objectivesCompleted = 0;
       
@@ -1917,43 +1922,61 @@
         }
         
         // Get objective world position (center of tile)
-        const objWorldX = obj.x * TILE_SIZE + 0.5 * TILE_SIZE;
-        const objWorldZ = obj.y * TILE_SIZE + 0.5 * TILE_SIZE;
-        const objRadius = obj.radius * TILE_SIZE;
+        const objWorldX = obj.x * tileSize + 0.5 * tileSize;
+        const objWorldZ = obj.y * tileSize + 0.5 * tileSize;
+        const objRadius = obj.radius * tileSize;
         
-        if (obj.type === 'reach') {
-          // 'reach' - any unit enters the zone
+        if (obj.type === 'reach' || obj.type === 'escape') {
+          // Check each unit's position against the objective zone
           for (const unit of allUnits) {
-            const unitX = unit.x !== undefined ? unit.x : (unit.position?.x || 0);
-            const unitZ = unit.z !== undefined ? unit.z : (unit.position?.z || 0);
+            // Get unit position from physics body (primary) or mesh (fallback)
+            let unitX = 0, unitZ = 0;
+            if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+              unitX = unit.pb.state.loc.x;
+              unitZ = unit.pb.state.loc.z;
+            } else if (unit.mesh && unit.mesh.position) {
+              unitX = unit.mesh.position.x;
+              unitZ = unit.mesh.position.z;
+            }
             
             const dx = unitX - objWorldX;
             const dz = unitZ - objWorldZ;
             const dist = Math.sqrt(dx * dx + dz * dz);
             
             if (dist <= objRadius) {
-              obj.completed = true;
-              objectivesCompleted++;
-              console.log(`🎯 Objective ${obj.id + 1} completed! Unit reached zone at (${obj.x}, ${obj.y})`);
-              
-              // Show notification
-              if (window.ui && window.ui.showNotification) {
-                window.ui.showNotification(`🎯 Objective Complete!`, 'success');
+              if (obj.type === 'reach') {
+                // Reach objective - any unit triggers it
+                obj.completed = true;
+                objectivesCompleted++;
+                console.log(`🎯 Objective ${obj.id + 1} completed! Unit reached zone at (${obj.x}, ${obj.y}), message="${obj.message || '(none)'}"`);
+                
+                // Show speech bubble on the unit if message exists
+                if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech) {
+                  console.log(`💬 Showing speech: "${obj.message}" on unit ${unit.id}`);
+                  window.UnitSpeech.showSpeech(unit, obj.message, 4000);
+                } else if (window.ui && window.ui.showNotification) {
+                  window.ui.showNotification(`🎯 Objective Complete!`, 'success');
+                }
+                break;
               }
-              break;
             }
           }
-        } else if (obj.type === 'escape') {
-          // 'escape' - ALL units must be in the zone
+        }
+        
+        // For escape objectives, check if ALL units are in the zone
+        if (obj.type === 'escape' && !obj.completed) {
           const unitsInZone = allUnits.filter(unit => {
-            const unitX = unit.x !== undefined ? unit.x : (unit.position?.x || 0);
-            const unitZ = unit.z !== undefined ? unit.z : (unit.position?.z || 0);
-            
-            const dx = unitX - objWorldX;
-            const dz = unitZ - objWorldZ;
-            const dist = Math.sqrt(dx * dx + dz * dz);
-            
-            return dist <= objRadius;
+            let ux = 0, uz = 0;
+            if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+              ux = unit.pb.state.loc.x;
+              uz = unit.pb.state.loc.z;
+            } else if (unit.mesh && unit.mesh.position) {
+              ux = unit.mesh.position.x;
+              uz = unit.mesh.position.z;
+            }
+            const dx = ux - objWorldX;
+            const dz = uz - objWorldZ;
+            return Math.sqrt(dx * dx + dz * dz) <= objRadius;
           });
           
           if (allUnits.length > 0 && unitsInZone.length === allUnits.length) {
@@ -1961,7 +1984,11 @@
             objectivesCompleted++;
             console.log(`🎯 Escape objective ${obj.id + 1} completed! All units in zone at (${obj.x}, ${obj.y})`);
             
-            if (window.ui && window.ui.showNotification) {
+            // Show speech bubble on first unit if message exists
+            if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech && unitsInZone.length > 0) {
+              console.log(`💬 Showing escape speech: "${obj.message}" on unit ${unitsInZone[0].id}`);
+              window.UnitSpeech.showSpeech(unitsInZone[0], obj.message, 4000);
+            } else if (window.ui && window.ui.showNotification) {
               window.ui.showNotification(`🚪 All units escaped!`, 'success');
             }
           }
@@ -1971,8 +1998,53 @@
       // Check if all objectives are completed
       if (objectivesCompleted === objectives.length && objectives.length > 0) {
         console.log('🏆 All objectives completed! Adventure victory!');
-        this.endMatch(this.localPlayerId, 'objectives');
+        
+        // Show victory dialogue and transition to next chapter
+        this.handleAdventureVictory();
       }
+    }
+    
+    // Handle adventure victory - show dialogue and transition to next chapter
+    handleAdventureVictory() {
+      // Get current chapter info
+      const currentChapterId = window.currentChapterId || 'chapter1';
+      const nextChapterId = this.getNextChapterId(currentChapterId);
+      
+      if (nextChapterId) {
+        // Show victory message with "Continue" option
+        if (window.showStoryDialogue) {
+          window.showStoryDialogue('🏆 Chapter Complete! Ready for the next adventure?', 'victory', () => {
+            // Load next chapter
+            if (window.Lobby && window.Lobby.loadAdventureChapter) {
+              window.Lobby.loadAdventureChapter(nextChapterId);
+            } else {
+              // Fallback to ending the match normally
+              this.endMatch(this.localPlayerId, 'objectives');
+            }
+          });
+        } else {
+          this.endMatch(this.localPlayerId, 'objectives');
+        }
+      } else {
+        // No more chapters - final victory!
+        if (window.showStoryDialogue) {
+          window.showStoryDialogue('🎉 Congratulations! You have completed all chapters!', 'victory', () => {
+            this.endMatch(this.localPlayerId, 'objectives');
+          });
+        } else {
+          this.endMatch(this.localPlayerId, 'objectives');
+        }
+      }
+    }
+    
+    // Get the next chapter ID in sequence
+    getNextChapterId(currentChapterId) {
+      const chapterOrder = ['chapter1', 'chapter2', 'chapter3', 'chapter4', 'chapter5'];
+      const currentIndex = chapterOrder.indexOf(currentChapterId);
+      if (currentIndex >= 0 && currentIndex < chapterOrder.length - 1) {
+        return chapterOrder[currentIndex + 1];
+      }
+      return null; // No more chapters
     }
     
     // TF2-style capture point system for Agoras
@@ -2026,6 +2098,9 @@
           let count = 0;
           otherPlayer.units?.forEach(unit => {
             if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) return;
+            
+            // Monks don't count towards agora occupation
+            if (unit.type === 'monk') return;
             
             const TILE_SIZE = window.TILE_SIZE || 4;
             // CRITICAL: Round unit positions to prevent desyncs from floating-point drift
@@ -2669,14 +2744,25 @@
               
               if (errorDistance > 0.5) {
                 // Log significant drift (but rate-limit to avoid spam)
-                if (errorDistance > 10.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {
+                if (errorDistance > 5.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {
                   console.warn(`🔍 Position drift: unit ${unit.id.slice(-4)} is ${errorDistance.toFixed(2)} units off`);
                   this._lastDriftLog = Date.now();
                 }
                 
                 // Update physics position directly (authoritative from owner)
-                // Use lerp for smooth transition, not instant snap
-                const syncStrength = 0.15; // 15% per sync = smooth but responsive
+                // Use aggressive sync for large errors, gentle for small
+                let syncStrength;
+                if (errorDistance > 8.0) {
+                  // Large error: snap immediately to prevent visible desync
+                  syncStrength = 1.0;
+                } else if (errorDistance > 3.0) {
+                  // Medium error: aggressive correction (50-80%)
+                  syncStrength = 0.5 + (errorDistance - 3.0) * 0.06;
+                } else {
+                  // Small error: gentle lerp (15-50%)
+                  syncStrength = 0.15 + (errorDistance - 0.5) * 0.14;
+                }
+                
                 unit.pb.state.loc.x += (posData.x - unit.pb.state.loc.x) * syncStrength;
                 unit.pb.state.loc.z += (posData.z - unit.pb.state.loc.z) * syncStrength;
                 unit.pb.state.loc.y = posData.y;
@@ -2684,8 +2770,16 @@
                 correctedCount++;
               }
             } else if (errorDistance > 0.3) {
-              // Non-strict mode: Also update physics directly, but use stronger correction
-              const syncStrength = Math.min(0.2, 0.1 + errorDistance * 0.01);
+              // Non-strict mode: Use same aggressive correction as strict mode
+              let syncStrength;
+              if (errorDistance > 8.0) {
+                syncStrength = 1.0;
+              } else if (errorDistance > 3.0) {
+                syncStrength = 0.5 + (errorDistance - 3.0) * 0.06;
+              } else {
+                syncStrength = 0.15 + (errorDistance - 0.3) * 0.13;
+              }
+              
               unit.pb.state.loc.x += (posData.x - unit.pb.state.loc.x) * syncStrength;
               unit.pb.state.loc.z += (posData.z - unit.pb.state.loc.z) * syncStrength;
               unit.pb.state.loc.y = posData.y;

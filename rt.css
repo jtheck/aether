@@ -122,7 +122,8 @@ html, body {
 #game_timer {
   position: absolute;
   top: 0px;
-  left: 42px;
+  left: 50%;
+  transform: translateX(-50%);
   padding: 6px;
   font-family: monospace;
   font-size: 14px;
@@ -1072,6 +1073,28 @@ a:after{
   background: rgba(0, 255, 255, 0.3);
   border-color: aqua;
   transform: translate(-50%, -50%) scale(1.1);
+}
+
+.radial-menu-button.cannot-afford {
+  border-color: rgba(255, 0, 0, 0.6);
+  background: rgba(255, 0, 0, 0.2);
+}
+
+.radial-menu-button.cannot-afford:hover {
+  background: rgba(255, 0, 0, 0.3);
+  border-color: rgba(255, 0, 0, 0.8);
+}
+
+.radial-menu-button.prerequisites-not-met {
+  border-color: rgba(128, 128, 128, 0.6);
+  background: rgba(64, 64, 64, 0.3);
+  opacity: 0.6;
+}
+
+.radial-menu-button.prerequisites-not-met:hover {
+  background: rgba(64, 64, 64, 0.4);
+  border-color: rgba(128, 128, 128, 0.8);
+  opacity: 0.7;
 }
 
 /* Container for tooltip/label */

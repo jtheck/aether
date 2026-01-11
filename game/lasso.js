@@ -267,6 +267,11 @@
         isSelecting = true;
         isDragActive = true;
         
+        // Hide radial menu when drag starts
+        if (window.hud && window.hud.hideRadialMenu) {
+          window.hud.hideRadialMenu();
+        }
+        
         // Show selection box now that we're actually dragging
         if (selectionBox) {
           if (USE_3D_HUD) {
@@ -301,6 +306,12 @@
     
     if (distance > DRAG_THRESHOLD && !isDragActive) {
       isDragActive = true;
+      
+      // Hide radial menu when drag starts
+      if (window.hud && window.hud.hideRadialMenu) {
+        window.hud.hideRadialMenu();
+      }
+      
       // console.log("🎯 Lasso: Drag started at distance", distance);
     }
     
@@ -356,17 +367,45 @@
   
   // Handle left mouse button up
   lasso.handleLmbUp = function(x, y) {
+    console.log(`🎯 handleLmbUp called at (${x}, ${y}), isSelecting=${isSelecting}, isPotentialDrag=${isPotentialDrag}`);
+    
     // Always clean up isPotentialDrag on mouseup, even if selection never started
     const hadPotentialDrag = isPotentialDrag;
     
     // If selection never started (no drag detected), just clean up silently
     if (!isSelecting && !isPotentialDrag) {
       // Nothing to clean up
+      console.log(`🎯 handleLmbUp: No selection or potential drag, returning false`);
       return false;
     }
     
     if (!isSelecting) {
-      // We had a mousedown but never started dragging - clean up completely
+      console.log(`🎯 handleLmbUp: Not selecting, treating as click`);
+      
+      // We had a mousedown but never started dragging - this is a click!
+      // Handle single click selection for units/buildings
+      const clickDuration = Date.now() - dragStartTime;
+      const isDoubleClick = (Date.now() - lastClickTime < 400) && 
+                           (Math.abs(x - lastClickPoint.x) < 40) && 
+                           (Math.abs(y - lastClickPoint.y) < 40);
+      
+      console.log(`🎯 Click analysis: duration=${clickDuration}ms, timeout=${CLICK_TIMEOUT}ms, isDouble=${isDoubleClick}`);
+      
+      let handledEntityClick = false;
+      
+      if (clickDuration < CLICK_TIMEOUT) {
+        // Try to find entity at click position
+        console.log(`🎯 Looking for entity at (${x}, ${y})`);
+        handledEntityClick = handleSingleClick(x, y);
+      } else {
+        console.log(`🎯 Click too slow (${clickDuration}ms > ${CLICK_TIMEOUT}ms), not handling`);
+      }
+      
+      // Update last click tracking
+      lastClickTime = Date.now();
+      lastClickPoint = { x, y };
+      
+      // Clean up lasso state
       isPotentialDrag = false;
       startPoint = { x: 0, y: 0 };
       endPoint = { x: 0, y: 0 };
@@ -375,7 +414,12 @@
       lassoWorldPath = [];
       lastLassoPoint = null;
       lastLassoDownTime = 0; // Reset timing
-      return false;
+      
+      console.log(`🎯 Lasso handleLmbUp (click): returning ${handledEntityClick}`);
+      
+      // Return true if we selected an entity (suppress move command)
+      // Return false if empty click (allow move command)
+      return handledEntityClick;
     }
     
     endPoint = { x, y };
@@ -412,11 +456,9 @@
       // Return true to indicate a drag selection was performed
       return true;
     } else {
-      // This was a click - don't handle it here, let UI system handle it
-      // Clean up immediately for clicks
+      // This was a click with drag movement, but below the drag threshold
+      // Already handled above in the !isSelecting block
       cleanupSelection();
-      
-      // Return false to indicate this was just a click, not a drag selection
       return false;
     }
   };
@@ -832,19 +874,57 @@
     // console.log(`🎯 Selected ${selectedCount} units in ${selectionMode} mode`);
   }
   
-  // Handle single click on unit
+  // Handle single click on unit or building
   function handleSingleClick(x, y) {
-    if (!window.player) return;
+    console.log(`🎯 handleSingleClick called at (${x}, ${y})`);
     
-    // Clear current selection
-    window.player.clearSelection();
+    if (!window.player) {
+      console.log(`🎯 handleSingleClick: no window.player`);
+      return false;
+    }
     
-    // Find unit at click position
+    const hasSelectedUnits = window.player.selectedUnits && window.player.selectedUnits.length > 0;
+    
+    // Check for unit first (units are smaller and should take priority)
     const unit = findUnitAtPosition(x, y);
     if (unit) {
+      window.player.clearSelection();
       window.player.selectUnit(unit);
-      // console.log(`🎯 Lasso: Selected unit ${unit.name || unit.type}`);
+      console.log(`🎯 Lasso: Clicked unit ${unit.name || unit.type}, selected`);
+      
+      // Show speech bubble when unit is selected
+      const ownerMatches = unit.owner === window.player.id || 
+                          window.player.id?.endsWith(unit.owner) ||
+                          unit.owner?.endsWith(window.player.id);
+      if (window.UnitSpeech && ownerMatches) {
+        window.UnitSpeech.showRandomSpeech(unit, 'select', 2000);
+      }
+      
+      return true; // Suppress move command - we clicked on a unit
     }
+    
+    // Check for building if no unit was clicked
+    const building = findBuildingAtPosition(x, y);
+    if (building) {
+      // If we have units selected, treat building as a move target (don't select it)
+      if (hasSelectedUnits) {
+        console.log(`🏗️ Lasso: Clicked building ${building.type} with units selected, allowing move command`);
+        return false; // Allow move command to building
+      } else {
+        // No units selected - select the building
+        window.player.clearSelection();
+        if (window.player.selectBuilding) {
+          window.player.selectBuilding(building);
+          console.log(`🏗️ Lasso: Clicked building ${building.type}, selected`);
+          return true; // Suppress move command - we're selecting the building
+        }
+        return false;
+      }
+    }
+    
+    // Clicked on empty terrain - DON'T clear selection, allow move command
+    console.log(`🎯 Lasso: Clicked empty terrain, allowing move command`);
+    return false; // Allow move command to terrain
   }
   
   // Handle double click - select all units of same type
@@ -855,36 +935,126 @@
     const unit = findUnitAtPosition(x, y);
     if (unit) {
       window.player.selectAllUnitsOfType(unit.type);
+      
+      // Show speech for one of the selected units
+      const ownerMatches = unit.owner === window.player.id || 
+                          window.player.id?.endsWith(unit.owner) ||
+                          unit.owner?.endsWith(window.player.id);
+      if (window.UnitSpeech && ownerMatches) {
+        window.UnitSpeech.showRandomSpeech(unit, 'select', 2000);
+      }
     }
   }
   
   // Find unit at screen position
   function findUnitAtPosition(screenX, screenY) {
-    if (!window.gfx || !window.gfx.scene || !window.player || !window.player.units) return null;
+    if (!window.gfx || !window.gfx.scene) {
+      return null;
+    }
     
-    // Create picking ray
-    const ray = window.gfx.scene.createPickingRay(
-      screenX, 
-      screenY, 
-      BABYLON.Matrix.Identity(), 
-      window.gfx.camera
-    );
+    // Get all units in the game (player + opponents)
+    const allUnits = window.gameUnits || (window.player?.units || []);
     
-    // Check each unit for intersection
-    let closestUnit = null;
-    let closestDistance = Infinity;
+    if (allUnits.length === 0) {
+      return null;
+    }
     
-    window.player.units.forEach(unit => {
-      if (unit.mesh && unit.mesh.isPickable) {
-        const pickResult = ray.intersectsMesh(unit.mesh);
-        if (pickResult.hit && pickResult.distance < closestDistance) {
-          closestUnit = unit;
-          closestDistance = pickResult.distance;
-        }
+    // Pick with a predicate that ignores terrain/buildings
+    const pickResult = window.gfx.scene.pick(screenX, screenY, (mesh) => {
+      // Ignore terrain meshes
+      if (mesh.name && (mesh.name.includes('terrain') || mesh.name.includes('Mesh') || mesh.name.includes('ground'))) {
+        return false;
       }
+      // Ignore building meshes
+      if (mesh.isBuilding) {
+        return false;
+      }
+      // Only pick pickable meshes
+      return mesh.isPickable;
     });
     
-    return closestUnit;
+    if (!pickResult.hit || !pickResult.pickedMesh) {
+      return null;
+    }
+    
+    // Check if the picked mesh belongs to ANY unit (including enemies)
+    let pickedUnit = null;
+    
+    // Walk up the mesh hierarchy to find the root
+    let currentMesh = pickResult.pickedMesh;
+    while (currentMesh) {
+      // Check if this mesh is a unit's root mesh
+      for (const unit of allUnits) {
+        if (unit.mesh === currentMesh) {
+          pickedUnit = unit;
+          break;
+        }
+      }
+      if (pickedUnit) break;
+      currentMesh = currentMesh.parent;
+    }
+    
+    console.log(`🎯 Unit pick: mesh="${pickResult.pickedMesh.name}", found: ${pickedUnit?.type || 'none'}, owner: ${pickedUnit?.owner || 'none'}`);
+    
+    return pickedUnit;
+  }
+  
+  // Find building at screen position
+  function findBuildingAtPosition(screenX, screenY) {
+    if (!window.gfx || !window.gfx.scene) {
+      console.log('🎯 findBuildingAtPosition: missing gfx/scene');
+      return null;
+    }
+    
+    // Get buildings from either forge mode or game mode
+    const buildings = window.buildingSystem?.buildings || window.gameBuildings;
+    
+    if (!buildings || buildings.length === 0) {
+      console.log('🎯 findBuildingAtPosition: no buildings found');
+      return null;
+    }
+    
+    console.log(`🎯 findBuildingAtPosition: checking ${buildings.length} buildings`);
+    
+    // Pick with a predicate that ignores terrain
+    const pickResult = window.gfx.scene.pick(screenX, screenY, (mesh) => {
+      // Ignore terrain meshes
+      if (mesh.name && (mesh.name.includes('terrain') || mesh.name.includes('Mesh') || mesh.name.includes('ground'))) {
+        return false;
+      }
+      // Pick building meshes (they're marked with isBuilding = true)
+      if (mesh.isBuilding) {
+        console.log(`🎯 Found building mesh: ${mesh.name}, pickable: ${mesh.isPickable}`);
+        return mesh.isPickable;
+      }
+      return false;
+    });
+    
+    console.log(`🎯 Building pick result: hit=${pickResult.hit}, mesh=${pickResult.pickedMesh?.name}`);
+    
+    if (!pickResult.hit || !pickResult.pickedMesh) {
+      return null;
+    }
+    
+    // Find which building this mesh belongs to
+    let pickedBuilding = null;
+    let currentMesh = pickResult.pickedMesh;
+    
+    while (currentMesh) {
+      for (const building of buildings) {
+        if (building.mesh === currentMesh) {
+          pickedBuilding = building;
+          console.log(`🎯 Matched to building: ${building.type}`);
+          break;
+        }
+      }
+      if (pickedBuilding) break;
+      currentMesh = currentMesh.parent;
+    }
+    
+    console.log(`🎯 Building pick final: ${pickedBuilding?.type || 'none'}`);
+    
+    return pickedBuilding;
   }
   
   // Clean up selection state
@@ -893,6 +1063,11 @@
     isPotentialDrag = false;
     isDragActive = false;
     lastLassoDownTime = 0; // Reset timing
+    
+    // Hide radial menu when drag ends
+    if (window.hud && window.hud.hideRadialMenu) {
+      window.hud.hideRadialMenu();
+    }
     
     // Clear lasso path
     lassoPath = [];

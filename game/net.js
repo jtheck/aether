@@ -201,10 +201,21 @@
     
     // Send heartbeat/confirmation for a tick
     function sendTickConfirmation(forTick) {
-      if (!p2p || !isConnected || forTick <= lastHeartbeatTick) return;
+      if (!p2p || !isConnected || forTick <= lastHeartbeatTick) {
+        // Log first few skips to diagnose connection issues
+        if (forTick < 10) {
+          console.log(`⏭️ Skipping tick_confirm for tick ${forTick}: p2p=${!!p2p}, isConnected=${isConnected}, lastHeartbeat=${lastHeartbeatTick}`);
+        }
+        return;
+      }
       
       lastHeartbeatTick = forTick;
       localConfirmedTick = forTick;
+      
+      // Log first few confirmations
+      if (forTick < 10 || forTick % 100 === 0) {
+        console.log(`📤 Sending tick_confirm for tick ${forTick}`);
+      }
       
       p2p.sendData({
         type: 'tick_confirm',
@@ -217,6 +228,11 @@
     function lockstepTick() {
       const targetTick = tick + 1;
       const inputDelay = window.currentMatch?.inputDelayTicks || 3;
+      
+      // Log first few ticks for diagnostics
+      if (targetTick <= 5) {
+        console.log(`🔄 lockstepTick: targetTick=${targetTick}, hasMatch=${!!window.currentMatch}, isConnected=${isConnected}`);
+      }
       
       if (canAdvanceToTick(targetTick)) {
         // We can advance!
@@ -595,6 +611,10 @@
             // Only update if this is a newer confirmation
             if (confirmedTick > currentConfirmed) {
               peerTickConfirmations.set(peerId, confirmedTick);
+              // Log first few confirmations and then periodically
+              if (confirmedTick < 10 || confirmedTick % 100 === 0) {
+                console.log(`📥 tick_confirm from ${peerId.slice(-6)}: tick ${confirmedTick}`);
+              }
             }
           }
           break;
@@ -795,6 +815,34 @@
             }
           }
           break;
+
+        case 'lobby_name_update':
+          // Host updated lobby name
+          if (window.Lobby && actualMessage.name) {
+            // Update local lobby copy
+            if (window.Lobby.currentLobby) {
+              window.Lobby.currentLobby.name = actualMessage.name;
+              window.Lobby.currentLobby.timestamp = Date.now();
+
+              // Update UI
+              window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
+            }
+          }
+          break;
+
+        case 'lobby_settings_update':
+          // Host updated lobby settings
+          if (window.Lobby && actualMessage.settings) {
+            // Update local lobby copy
+            if (window.Lobby.currentLobby) {
+              window.Lobby.currentLobby.settings = actualMessage.settings;
+              window.Lobby.currentLobby.timestamp = Date.now();
+
+              // Update UI
+              window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
+            }
+          }
+          break;
           
         case 'player_joined':
           // Add player to lobby
@@ -895,7 +943,14 @@
         case 'start_game':
           // Host has initiated match start!
           if (window.Lobby && actualMessage.gameType && actualMessage.settings) {
-            // console.log(`🚀 Received start_game from host! Starting match...`);
+            // Store host's player ID and full player list for player ordering
+            if (actualMessage.hostPlayerId) {
+              window.Lobby._hostPlayerId = actualMessage.hostPlayerId;
+            }
+            if (actualMessage.playerIds) {
+              window.Lobby._playerIds = actualMessage.playerIds;
+              console.log(`📡 Received start_game with playerIds:`, actualMessage.playerIds.map(id => id.slice(-6)));
+            }
             window.Lobby.startMultiplayerMatchWithSettings(actualMessage.gameType, actualMessage.settings);
           } else {
             console.error('❌ Received invalid start_game message:', actualMessage);
@@ -937,9 +992,39 @@
             }
             window.Lobby._isJoiningAdventure = false;
             
+            // Build correct player order: host is P1, we are P2
+            // Ensure local player exists
+            if (!window.player) {
+              window.player = new Player();
+            }
+            if (!window.player.id || window.player.id === 'demo' || window.player.id === 'undefined') {
+              const randomSuffix = Math.random().toString(36).substring(2, 8);
+              window.player.id = `adventurer-${randomSuffix}`;
+            }
+            window.player.units = [];
+            window.player.buildings = [];
+            window.player.selectedUnits = [];
+            
+            const players = [];
+            // P1 = Host
+            if (actualMessage.hostId) {
+              players.push({
+                id: actualMessage.hostId,
+                name: 'Host',
+                color: '#ff0000',
+                units: [],
+                buildings: [],
+                selectedUnits: []
+              });
+            }
+            // P2 = Us (the peer)
+            players.push(window.player);
+            
+            console.log('🎮 Peer player order:', players.map((p, i) => `P${i+1}=${(p.id || 'unknown').slice(-6)}`).join(', '));
+            
             // Brief delay to show GO! then start
             setTimeout(() => {
-              window.Lobby.startAdventureWithMap(actualMessage.mapData);
+              window.Lobby.startAdventureWithMap(actualMessage.mapData, players);
             }, 300);
           } else {
             console.error('❌ Received invalid adventure_start message:', actualMessage);
@@ -1818,7 +1903,9 @@
   // CRITICAL: Reset network state for new match start
   // This ensures both players start with synchronized tick counters
   net.resetForMatchStart = function() {
+    const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
     console.log('🔄 Resetting network state for match start (lockstep enabled)');
+    console.log(`   isConnected: ${isConnected}, peers: ${connectedPeers.length}, p2p: ${!!p2p}`);
     tick = 0;
     commandBuffer = [];
     remoteCommands.clear();
@@ -1836,7 +1923,6 @@
     // Pre-confirm initial ticks so game can start
     // Each player confirms they're ready for ticks 0 through inputDelay
     const inputDelay = window.currentMatch?.inputDelayTicks || 3;
-    const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
     connectedPeers.forEach(peerId => {
       peerTickConfirmations.set(peerId, inputDelay);
     });
@@ -1845,11 +1931,14 @@
     
     // Send initial confirmation to peers
     if (p2p && isConnected) {
+      console.log(`   📤 Sending initial tick_confirm for tick ${inputDelay}`);
       p2p.sendData({
         type: 'tick_confirm',
         tick: inputDelay,
         playerId: localPlayerShortId || localPlayerId
       });
+    } else {
+      console.warn(`   ⚠️ Cannot send initial tick_confirm: p2p=${!!p2p}, isConnected=${isConnected}`);
     }
     
     // Clear catch-up state

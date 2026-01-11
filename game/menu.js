@@ -28,7 +28,6 @@ const menu = {
   },
   units: {
     // Arc 1: Basic/Support units
-    villager: { arc: 1 },
     monk: { arc: 1 },
     engineer: { arc: 1 },
     wizard: { arc: 1 },
@@ -40,7 +39,7 @@ const menu = {
     // Arc 3: Advanced units
     apc: { arc: 3 },
     priest: { arc: 3 },
-    mycologist: { arc: 3 },
+    mycorrhizae: { arc: 3 },
     dirigible: { arc: 3 },
     shaman: { arc: 3 }
   },
@@ -133,10 +132,43 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
   button.innerHTML = icon;
   button.dataset.menuPath = JSON.stringify(menuPath);
   button.dataset.depth = depth;
-  
+
+  // Check if this is a building or unit button and add cost information + prerequisite/affordability styling
+  let displayLabel = label;
+  if (menuPath.length >= 2) {
+    const category = menuPath[0];
+    const itemType = menuPath[menuPath.length - 1];
+
+    if (category === 'buildings') {
+      const costInfo = formatBuildingCost(itemType);
+      if (costInfo) {
+        displayLabel = `${label}\n${costInfo}`;
+      }
+
+      // Check prerequisites first (grey), then affordability (red)
+      if (!hasPrerequisitesBuilding(itemType)) {
+        button.classList.add('prerequisites-not-met');
+      } else if (!canAffordBuilding(itemType)) {
+        button.classList.add('cannot-afford');
+      }
+    } else if (category === 'units') {
+      const costInfo = formatUnitCost(itemType);
+      if (costInfo) {
+        displayLabel = `${label}\n${costInfo}`;
+      }
+
+      // Check prerequisites first (grey), then affordability (red)
+      if (!hasPrerequisitesUnit(itemType)) {
+        button.classList.add('prerequisites-not-met');
+      } else if (!canAffordUnit(itemType)) {
+        button.classList.add('cannot-afford');
+      }
+    }
+  }
+
   const tooltip = document.createElement('div');
   tooltip.className = 'radial-menu-label';
-  tooltip.textContent = label;
+  tooltip.textContent = displayLabel;
   button.appendChild(tooltip);
   
   // Add pointerdown handler for nested menus (works better with touch)
@@ -167,6 +199,10 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
       if (category === 'buildings' && window.buildingSystem) {
         // Get the actual building type from the path
         const buildingType = itemPath[itemPath.length - 1];
+        
+        // Hide the 2D menu so it doesn't block building placement
+        hideButtons(activeButtons);
+        activeButtons = [];
         
         // Clean up any existing preview before starting new placement
         window.buildingSystem.cancelPlacement();
@@ -309,11 +345,222 @@ function hideButtons(buttons) {
   });
 }
 
+// Format building cost for display
+function formatBuildingCost(buildingType) {
+  if (!window.BuildingTypes || !window.BuildingTypes[buildingType]) {
+    return '';
+  }
+
+  const building = window.BuildingTypes[buildingType];
+  if (!building.cost) {
+    return '';
+  }
+
+  const costEntries = Object.entries(building.cost);
+  if (costEntries.length === 0) {
+    return '';
+  }
+
+  const resourceIcons = {
+    wood: '🌳',
+    stone: '🪨',
+    minerals: '💎',
+    food: '🍖'
+  };
+
+  const costStrings = costEntries.map(([resource, amount]) => {
+    const icon = resourceIcons[resource] || resource;
+    return `${icon}${amount}`;
+  });
+
+  return costStrings.join(' ');
+}
+
+// Check if player can afford a building
+function canAffordBuilding(buildingType) {
+  if (!window.BuildingTypes || !window.BuildingTypes[buildingType]) {
+    return true; // Assume affordable if building type not found
+  }
+
+  if (!window.player || !window.player.resources) {
+    return true; // Assume affordable if no player data
+  }
+
+  const building = window.BuildingTypes[buildingType];
+  if (!building.cost) {
+    return true; // No cost means always affordable
+  }
+
+  const playerResources = window.player.resources;
+
+  // Check each required resource
+  for (const [resource, amount] of Object.entries(building.cost)) {
+    const playerAmount = playerResources[resource] || 0;
+    if (playerAmount < amount) {
+      return false; // Can't afford
+    }
+  }
+
+  return true; // Can afford
+}
+
+// Format unit cost for display
+function formatUnitCost(unitType) {
+  if (!window.UnitTypes || !window.UnitTypes[unitType]) {
+    return '';
+  }
+
+  const unit = window.UnitTypes[unitType];
+  if (!unit.cost) {
+    return '';
+  }
+
+  const costEntries = Object.entries(unit.cost);
+  if (costEntries.length === 0) {
+    return '';
+  }
+
+  const resourceIcons = {
+    wood: '🌳',
+    stone: '🪨',
+    minerals: '💎',
+    food: '🍖'
+  };
+
+  const costStrings = costEntries.map(([resource, amount]) => {
+    const icon = resourceIcons[resource] || resource;
+    return `${icon}${amount}`;
+  });
+
+  return costStrings.join(' ');
+}
+
+// Check if player can afford a unit
+function canAffordUnit(unitType) {
+  if (!window.UnitTypes || !window.UnitTypes[unitType]) {
+    return true; // Assume affordable if unit type not found
+  }
+
+  if (!window.player || !window.player.resources) {
+    return true; // Assume affordable if no player data
+  }
+
+  const unit = window.UnitTypes[unitType];
+  if (!unit.cost) {
+    return true; // No cost means always affordable
+  }
+
+  const playerResources = window.player.resources;
+
+  // Check each required resource
+  for (const [resource, amount] of Object.entries(unit.cost)) {
+    const playerAmount = playerResources[resource] || 0;
+    if (playerAmount < amount) {
+      return false; // Can't afford
+    }
+  }
+
+  return true; // Can afford
+}
+
+// Check if player meets prerequisites for a building
+function hasPrerequisitesBuilding(buildingType) {
+  if (!window.BuildingTypes || !window.BuildingTypes[buildingType]) {
+    return true; // Assume available if building type not found
+  }
+
+  if (!window.player) {
+    return true; // Assume available if no player data
+  }
+
+  const building = window.BuildingTypes[buildingType];
+  if (!building.prerequisites) {
+    return true; // No prerequisites means always available
+  }
+
+  const prereqs = building.prerequisites;
+
+  // Check required buildings
+  if (prereqs.buildings) {
+    for (const requiredBuilding of prereqs.buildings) {
+      const hasBuilding = window.player.buildings.some(b => b.type === requiredBuilding);
+      if (!hasBuilding) {
+        return false;
+      }
+    }
+  }
+
+  // Check required research/tech
+  if (prereqs.research) {
+    // TODO: Implement when research system is available
+    // For now, assume no research prerequisites are met
+    return false;
+  }
+
+  // Check required professions/units
+  if (prereqs.units) {
+    for (const requiredUnit of prereqs.units) {
+      const hasUnit = window.player.units.some(u => u.type === requiredUnit);
+      if (!hasUnit) {
+        return false;
+      }
+    }
+  }
+
+  return true; // All prerequisites met
+}
+
+// Check if player meets prerequisites for a unit
+function hasPrerequisitesUnit(unitType) {
+  if (!window.UnitTypes || !window.UnitTypes[unitType]) {
+    return true; // Assume available if unit type not found
+  }
+
+  if (!window.player) {
+    return true; // Assume available if no player data
+  }
+
+  const unit = window.UnitTypes[unitType];
+  if (!unit.prerequisites) {
+    return true; // No prerequisites means always available
+  }
+
+  const prereqs = unit.prerequisites;
+
+  // Check required buildings
+  if (prereqs.buildings) {
+    for (const requiredBuilding of prereqs.buildings) {
+      const hasBuilding = window.player.buildings.some(b => b.type === requiredBuilding);
+      if (!hasBuilding) {
+        return false;
+      }
+    }
+  }
+
+  // Check required research/tech
+  if (prereqs.research) {
+    // TODO: Implement when research system is available
+    // For now, assume no research prerequisites are met
+    return false;
+  }
+
+  // Check required professions/units
+  if (prereqs.units) {
+    for (const requiredUnit of prereqs.units) {
+      const hasUnit = window.player.units.some(u => u.type === requiredUnit);
+      if (!hasUnit) {
+        return false;
+      }
+    }
+  }
+
+  return true; // All prerequisites met
+}
+
 // Get icon for menu item
 function getIconForItem(key) {
   const icons = {
     // Units - Arc 1 (Basic/Support)
-    villager: '👤',
     monk: '🧘',
     engineer: '🔧',
     wizard: '🧙',
@@ -325,10 +572,10 @@ function getIconForItem(key) {
     // Units - Arc 3 (Advanced)
     apc: '🚐',
     priest: '⛪',
-    mycologist: '🍄',
+    mycorrhizae: '🍄',
     dirigible: '🎈',
     shaman: '🪶',
-    
+
     // Buildings - Arc 1 (Basic)
     camp: '⛺',
     village: '🏘️',
@@ -348,7 +595,7 @@ function getIconForItem(key) {
     well: '💧',
     perch: '🪺',
     grove: '🌳',
-    
+
     // Research - Arc 1 (Economy/Infrastructure)
     scribes: '📝',
     prospecting: '⛏️',
@@ -358,13 +605,13 @@ function getIconForItem(key) {
     drayage: '🚛',
     artillery: '💣',
     armor: '🛡️',
-    
+
     // Default icons for categories
     units: '👥',
     buildings: '🏗️',
     research: '📚'
   };
-  
+
   return icons[key] || '❓';
 }
 
@@ -477,9 +724,15 @@ document.addEventListener('DOMContentLoaded', initMenu);
 window.initMenu = initMenu;
 window.menu = menu;
 window.activeButtons = activeButtons;
+window.showSubmenu = showSubmenu;
 window.menuDepth = menuDepth;
 window.menuOpenedAt = menuOpenedAt;
 window.createMenuButton = createMenuButton;
 window.showButtonsInArc = showButtonsInArc;
 window.hideButtons = hideButtons;
 window.getIconForItem = getIconForItem;
+window.canAffordBuilding = canAffordBuilding;
+window.formatUnitCost = formatUnitCost;
+window.canAffordUnit = canAffordUnit;
+window.hasPrerequisitesBuilding = hasPrerequisitesBuilding;
+window.hasPrerequisitesUnit = hasPrerequisitesUnit;

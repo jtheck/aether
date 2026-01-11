@@ -105,12 +105,13 @@
     let actionPopupElement = null;
     let actionPopupPosition = { x: 0, y: 0 };
     let actionPopupTimeout = null;
-    const ACTION_POPUP_DURATION = 4000; // Auto-dismiss after 4 seconds
+    const ACTION_POPUP_DURATION = 2000; // Auto-dismiss after 2 seconds (was 4s)
     
     // Tap-hold detection for action menu
     let holdTimer = null;
     let holdPointerId = null;
     let holdPosition = { x: 0, y: 0 };
+    let holdSelectionSnapshot = null; // Store selection state when hold starts
     const HOLD_DELAY_MS = 350; // How long to hold before menu appears
     const HOLD_MAX_MOVE_PX = 12; // Max movement allowed during hold
     // Coalesce touch move handling to one frame
@@ -389,7 +390,7 @@
 
     // === ACTION POPUP UI ===
     // Shows on double-tap with special ability button, auto-dismisses
-    function showActionPopup(clientX, clientY) {
+    function showActionPopup(clientX, clientY, selectionSnapshot = null) {
       // Dismiss existing popup if any
       hideActionPopup();
       
@@ -468,8 +469,10 @@
       }
       
       // Collect available actions based on selection
+      // Use snapshot if provided (from tap-hold), otherwise use current selection
       const actions = [];
-      const hasSelection = window.player && window.player.selectedUnits && window.player.selectedUnits.length > 0;
+      const unitsToUse = selectionSnapshot || (window.player && window.player.selectedUnits ? window.player.selectedUnits : []);
+      const hasSelection = unitsToUse && unitsToUse.length > 0;
       
       if (hasSelection) {
         // Always add Move and Attack Move for selected units
@@ -478,21 +481,23 @@
           label: 'Move',
           color: 'rgba(80,180,80,0.95)',
           shadow: 'rgba(80,180,80,0.6)',
-          action: () => executeCommand('move', clientX, clientY)
+          action: () => executeCommand('move', clientX, clientY, unitsToUse)
         });
         actions.push({
           icon: '⚔️',
           label: 'Attack Move',
           color: 'rgba(220,80,80,0.95)',
           shadow: 'rgba(220,80,80,0.6)',
-          action: () => executeCommand('attackMove', clientX, clientY)
+          action: () => executeCommand('attackMove', clientX, clientY, unitsToUse)
         });
         
-        // Collect unique abilities from selected units
+        // Collect unique abilities from selected units (use snapshot if available)
         const seenAbilities = new Set();
-        for (const unit of window.player.selectedUnits) {
-          if (unit.abilities) {
-            for (const ability of unit.abilities) {
+        for (const unit of unitsToUse) {
+          // Check unit definition for action abilities
+          const unitDef = window.UnitTypes ? window.UnitTypes[unit.type] : null;
+          if (unitDef && unitDef.actionAbilities) {
+            for (const ability of unitDef.actionAbilities) {
               if (!seenAbilities.has(ability.name)) {
                 seenAbilities.add(ability.name);
                 actions.push({
@@ -500,7 +505,28 @@
                   label: ability.name,
                   color: ability.color || 'rgba(150,100,255,0.95)',
                   shadow: ability.shadowColor || 'rgba(150,100,255,0.6)',
-                  action: () => executeAbility(ability.name, clientX, clientY)
+                  action: () => {
+                    if (ability.execute) {
+                      ability.execute(clientX, clientY);
+                    } else {
+                      executeAbility(ability.name, clientX, clientY, unitsToUse);
+                    }
+                  }
+                });
+              }
+            }
+          }
+          // Also check instance abilities (for runtime abilities)
+          if (unit.abilities && Array.isArray(unit.abilities)) {
+            for (const ability of unit.abilities) {
+              if (typeof ability === 'object' && ability.name && !seenAbilities.has(ability.name)) {
+                seenAbilities.add(ability.name);
+                actions.push({
+                  icon: ability.icon || '⚡',
+                  label: ability.name,
+                  color: ability.color || 'rgba(150,100,255,0.95)',
+                  shadow: ability.shadowColor || 'rgba(150,100,255,0.6)',
+                  action: () => executeAbility(ability.name, clientX, clientY, unitsToUse)
                 });
               }
             }
@@ -513,7 +539,7 @@
               label: 'Special',
               color: 'rgba(150,100,255,0.95)',
               shadow: 'rgba(150,100,255,0.6)',
-              action: () => triggerSpecialAbility(clientX, clientY)
+              action: () => triggerSpecialAbility(clientX, clientY, unitsToUse)
             });
           }
         }
@@ -560,11 +586,15 @@
       }, ACTION_POPUP_DURATION);
     }
     
-    function executeCommand(command, clientX, clientY) {
+    function executeCommand(command, clientX, clientY, unitsToUse = null) {
       const worldPos = screenToWorld(clientX, clientY);
-      if (!worldPos || !window.player || !window.player.selectedUnits) return;
+      if (!worldPos || !window.player) return;
       
-      for (const unit of window.player.selectedUnits) {
+      // Use provided units or fall back to current selection
+      const units = unitsToUse || (window.player.selectedUnits || []);
+      if (units.length === 0) return;
+      
+      for (const unit of units) {
         if (command === 'move' && unit.moveTo) {
           unit.moveTo(worldPos.x, worldPos.z);
         } else if (command === 'attackMove' && unit.attackMoveTo) {
@@ -576,11 +606,15 @@
       }
     }
     
-    function executeAbility(abilityName, clientX, clientY) {
+    function executeAbility(abilityName, clientX, clientY, unitsToUse = null) {
       const worldPos = screenToWorld(clientX, clientY);
-      if (!worldPos || !window.player || !window.player.selectedUnits) return;
+      if (!worldPos || !window.player) return;
       
-      for (const unit of window.player.selectedUnits) {
+      // Use provided units or fall back to current selection
+      const units = unitsToUse || (window.player.selectedUnits || []);
+      if (units.length === 0) return;
+      
+      for (const unit of units) {
         if (unit.abilities) {
           const ability = unit.abilities.find(a => a.name === abilityName);
           if (ability && ability.execute) {
@@ -615,10 +649,14 @@
       cancelHoldTimer();
       holdPointerId = pointerId;
       holdPosition = { x: clientX, y: clientY };
+      // Capture selection state at hold start (before double-tap might clear it)
+      holdSelectionSnapshot = window.player && window.player.selectedUnits ? 
+        [...window.player.selectedUnits] : [];
       holdTimer = setTimeout(() => {
-        // Hold triggered - show action menu
-        showActionPopup(clientX, clientY);
+        // Hold triggered - show action menu with captured selection
+        showActionPopup(clientX, clientY, holdSelectionSnapshot);
         holdTimer = null;
+        holdSelectionSnapshot = null;
         
         // Mark the pointer so it doesn't trigger other actions
         const ps = activePointers.get(pointerId);
@@ -634,6 +672,7 @@
         holdTimer = null;
       }
       holdPointerId = null;
+      holdSelectionSnapshot = null;
     }
     
     function checkHoldMovement(clientX, clientY) {
@@ -651,22 +690,23 @@
         actionPopupTimeout = null;
       }
       if (actionPopupElement) {
-        actionPopupElement.style.animation = 'actionPopupFade 0.15s ease-out forwards';
+        actionPopupElement.style.animation = 'actionPopupFade 0.1s ease-out forwards';
         const el = actionPopupElement;
         setTimeout(() => {
           if (el.parentNode) el.remove();
-        }, 150);
+        }, 100); // Faster fade out (was 150ms)
         actionPopupElement = null;
       }
     }
     
-    function triggerSpecialAbility(clientX, clientY) {
+    function triggerSpecialAbility(clientX, clientY, unitsToUse = null) {
       // Trigger selected units' special ability at the tap location
-      if (window.player && window.player.selectedUnits && window.player.selectedUnits.length > 0) {
+      const units = unitsToUse || (window.player && window.player.selectedUnits ? window.player.selectedUnits : []);
+      if (units && units.length > 0) {
         const worldPos = screenToWorld(clientX, clientY);
         if (worldPos) {
           // Trigger special ability for each selected unit
-          for (const unit of window.player.selectedUnits) {
+          for (const unit of units) {
             if (unit.specialAbility && typeof unit.specialAbility === 'function') {
               unit.specialAbility(worldPos);
             } else if (unit.doSpecialAction && typeof unit.doSpecialAction === 'function') {
@@ -1514,7 +1554,22 @@
           previewMesh.position.y = terrainY + 0.75;
         }
         if (previewMesh) {
-          previewMesh.rotation.y = window.buildingSystem.placementRotation || 0;
+          // Calculate deterministic rotation based on grid position (8 cardinal directions)
+          const gx = Math.round(worldPos.x / tile);
+          const gz = Math.round(worldPos.z / tile);
+          const mapSeed = (window.liveField?.seed) || (window.currentMatch?.mapSeed) || 12345;
+          let rotHash = mapSeed + gx * 73856093 + gz * 19349663;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          const rotationIndex = rotHash % 8; // 8 directions: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°
+          const rotation = rotationIndex * Math.PI / 4;
+          
+          console.log(`👻 Preview (touch): pos=(${gx},${gz}), idx=${rotationIndex}, rotation=${(rotation*180/Math.PI).toFixed(0)}°`);
+          
+          // CRITICAL: Clear rotationQuaternion so rotation.y works
+          previewMesh.rotationQuaternion = null;
+          previewMesh.rotation.y = rotation;
         }
         if (placingTouchId !== null) {
           const gx = Math.round(worldPos.x / tile);
@@ -1698,12 +1753,20 @@
                 const tile = (window.TILE_SIZE || 4);
                 const gx = Math.round(worldPos.x / tile);
                 const gz = Math.round(worldPos.z / tile);
-                window.buildingSystem.placeBuildingAt(gx, gz);
+                const placed = window.buildingSystem.placeBuildingAt(gx, gz);
+                
                 // Reset placement session state
                 placingTouchId = null;
                 placingPreviewMoved = false;
                 placingLastTileX = null;
                 placingLastTileZ = null;
+                
+                // Exit placement mode after placing (touch users don't have shift modifier)
+                if (placed) {
+                  console.log('🏗️ Building placed (touch), exiting placement mode');
+                  window.buildingSystem.cancelPlacement();
+                }
+                
                 return;
               }
             }
@@ -1841,6 +1904,42 @@
       requestAnimationFrame(momentumLoop);
     }
     momentumLoop();
+    
+    // Expose showActionPopup for right-click support
+    window.showActionMenu = showActionPopup;
+    
+    // Add right-click support for PC users
+    canvas.addEventListener('contextmenu', (e) => {
+      // Don't show if in building placement mode
+      if (window.buildingSystem && window.buildingSystem.isPlacing) return;
+      
+      // Don't show if we're actively dragging a selection
+      if (window.lassoSelection && window.lassoSelection.isSelectionActive && window.lassoSelection.isSelectionActive()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      
+      // Don't show if we're actively panning (check both flag and active state)
+      if (window.rmbJustPanned || window.rmbPanActive) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      
+      // Don't show if we just double-clicked to deselect
+      if (window.rmbJustDoubleClicked) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Show action menu at mouse position
+      showActionPopup(e.clientX, e.clientY);
+    }, { passive: false });
 
     touch._initialized = true;
   };

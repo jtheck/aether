@@ -35,6 +35,7 @@ function Player(ops){
   
   // Player's selected units
   this.selectedUnits = [];
+  this.selectedBuilding = null; // Track selected building
   
   // Player's resources
   this.resources = ops.resources || { ...STARTING_RESOURCES };
@@ -255,12 +256,19 @@ Player.prototype.selectUnit = function(unit) {
   const ownerMatches = (unit.owner === normalizedPlayerId) || (unit.owner === this.id);
   // console.log(`🔍 Selection check: unit.owner="${unit.owner}", player.id="${normalizedPlayerId}", matches=${ownerMatches}`);
   
-  if (!ownerMatches) {
-    // console.log(`⚠️ Cannot select unit - belongs to ${unit.owner}, not ${normalizedPlayerId} (or 'player')`);
-    return false;
+  // Allow selecting any unit (including enemies) to see their health
+  // Commands will only work on own units (handled in command processing)
+  this.selectedUnits.push(unit);
+  
+  // Show health dots for the selected unit
+  if (unit.mesh && window.createHealthDots) {
+    if (!unit.healthDotsContainer) {
+      window.createHealthDots(unit);
+    }
+    window.showHealthDots(unit);
+    window.updateHealthDots(unit);
   }
   
-  this.selectedUnits.push(unit);
   // console.log(`✅ Selected unit: ${unit.name || unit.type} (owner: ${unit.owner})`);
   return true;
 };
@@ -277,11 +285,61 @@ Player.prototype.deselectUnit = function(unit) {
 
 Player.prototype.clearSelection = function() {
   const count = this.selectedUnits.length;
+  
+  // Hide selection indicators for units
+  this.selectedUnits.forEach(unit => {
+    if (unit.selectionIndicator) {
+      unit.selectionIndicator.isVisible = false;
+    }
+    if (unit.healthDotsContainer && window.hideHealthDots) {
+      window.hideHealthDots(unit);
+    }
+  });
+  
+  // Hide building radius and health if a building was selected
+  if (this.selectedBuilding) {
+    if (window.hideBuildingRadius) {
+      window.hideBuildingRadius();
+    }
+    if (this.selectedBuilding.healthDotsContainer && window.hideHealthDots) {
+      window.hideHealthDots(this.selectedBuilding);
+    }
+  }
+  
   this.selectedUnits = [];
+  this.selectedBuilding = null;
   if (count > 0) {
     // console.log(`🗑️ Cleared selection of ${count} units`);
   }
   return count;
+};
+
+Player.prototype.selectBuilding = function(building) {
+  if (!building) return false;
+  
+  // Allow selecting any building (including enemies) to see their health/radius
+  // Commands will only work on own buildings (handled in command processing)
+  
+  this.clearSelection(); // Clear unit selection
+  this.selectedBuilding = building;
+  
+  // Show radius visualization for the selected building
+  if (window.showBuildingRadius) {
+    window.showBuildingRadius(building);
+  }
+  
+  // Show health dots for the selected building
+  if (building.mesh && window.createHealthDots) {
+    if (!building.healthDotsContainer) {
+      window.createHealthDots(building);
+    }
+    window.showHealthDots(building);
+    window.updateHealthDots(building);
+  }
+  
+  console.log(`🏗️ Selected building: ${building.type} (owner: ${building.owner})`);
+  
+  return true;
 };
 
 Player.prototype.isUnitSelected = function(unit) {

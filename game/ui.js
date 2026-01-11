@@ -1627,7 +1627,9 @@ function getRandomColor() {
   
   // RMB pan state (anchor-based, matches touch pan)
   let rmbPanActive = false;
+  window.rmbPanActive = false; // Expose for contextmenu handler
   let rmbLastScreen = { x: 0, y: 0 };
+  let rmbDidPan = false; // Track if we actually moved during RMB drag
 
   // Track current mouse position for menu positioning
   let currentMousePosition = { x: 0, y: 0 };
@@ -1711,6 +1713,9 @@ function getRandomColor() {
         if (window.player && window.player.clearSelection) window.player.clearSelection();
         lastRightClickTime = 0;
         lastRightClickPosition = { x: 0, y: 0 };
+        // Set flag to prevent context menu from opening
+        window.rmbJustDoubleClicked = true;
+        setTimeout(() => { window.rmbJustDoubleClicked = false; }, 100);
         // Prevent RMB pan from starting on this double-click
         e.preventDefault();
         return;
@@ -1724,6 +1729,10 @@ function getRandomColor() {
       }
       
       rmbPanActive = true;
+      window.rmbPanActive = true; // Expose for contextmenu handler
+      rmbDidPan = false; // Reset pan tracking
+      // Set flag immediately to prevent contextmenu from showing on RMB press
+      window.rmbJustPanned = true;
       rmbLastScreen.x = e.clientX;
       rmbLastScreen.y = e.clientY;
     } else if (!window.isForgeMode && e.pointerType === 'mouse' && e.type === 'pointermove' && rmbPanActive) {
@@ -1733,6 +1742,20 @@ function getRandomColor() {
         const pixelsToWorld = (2 * (cam.radius || 60) * Math.tan((cam.fov || 0.8)/2)) / Math.max(1, rectC.height);
         const screenDx = (e.clientX - rmbLastScreen.x);
         const screenDy = (e.clientY - rmbLastScreen.y);
+        
+        // Track if we actually panned (moved more than a few pixels)
+        const panDistance = Math.sqrt(screenDx * screenDx + screenDy * screenDy);
+        if (panDistance > 5) {
+          rmbDidPan = true;
+          // Set flag immediately so contextmenu event (which fires before pointerup) can see it
+          window.rmbJustPanned = true;
+          
+          // Hide radial menu immediately when panning starts
+          if (window.hud && window.hud.hideRadialMenu) {
+            window.hud.hideRadialMenu();
+          }
+        }
+        
         rmbLastScreen.x = e.clientX;
         rmbLastScreen.y = e.clientY;
         const toTarget = cameraTarget.position.subtract(cam.position).normalize();
@@ -1755,6 +1778,14 @@ function getRandomColor() {
       }
     } else if (!window.isForgeMode && e.pointerType === 'mouse' && e.type === 'pointerup' && e.button === 2) {
       rmbPanActive = false;
+      window.rmbPanActive = false; // Clear exposed flag
+      // Clear flag after a longer delay to prevent radial menu from showing after pan
+      if (rmbDidPan) {
+        setTimeout(() => { window.rmbJustPanned = false; }, 500); // Increased from 200ms to 500ms
+      } else {
+        // If no panning occurred, clear immediately (user just clicked, didn't drag)
+        setTimeout(() => { window.rmbJustPanned = false; }, 50);
+      }
     }
 
     // Track RMB state for field position checking (mouse-only and gated)
@@ -1912,10 +1943,20 @@ function getRandomColor() {
         
         // Left click - could be for placing tiles, selecting objects, etc.
         
-        // Check if we clicked on a building - if so, ignore the building and pick through to terrain
+        // Check what we clicked on
+        const clickedOnBuilding = pickResult.pickedMesh && pickResult.pickedMesh.isBuilding;
+        const clickedOnResource = pickResult.pickedMesh && 
+          (pickResult.pickedMesh.name.includes('rock') || 
+           pickResult.pickedMesh.name.includes('Rock') ||
+           pickResult.pickedMesh.name.includes('tree') ||
+           pickResult.pickedMesh.name.includes('Tree'));
+        
         let actualPickResult = pickResult;
-        if (pickResult.pickedMesh && (pickResult.pickedMesh.isBuilding || !pickResult.pickedMesh.name.includes('Mesh'))) {
-          // We clicked on a building or other non-terrain object, try to pick through to terrain
+        
+        // If we clicked on a building or resource, use its position directly
+        // If we clicked on something else (not building, not resource, not terrain), try to pick through to terrain
+        if (!clickedOnBuilding && !clickedOnResource && pickResult.pickedMesh && !pickResult.pickedMesh.name.includes('Mesh')) {
+          // We clicked on a non-building, non-terrain object, try to pick through to terrain
           
           // Temporarily make ALL building meshes non-pickable
           const meshesToRestore = [];
@@ -1944,10 +1985,52 @@ function getRandomColor() {
           }
         }
         
-        // If clicking on terrain (or we successfully picked through to terrain), get precise tile coordinates
-        if (actualPickResult.pickedMesh.name.includes('Mesh')) {
+        // If clicking on terrain, buildings, resources, or other valid surfaces, get precise tile coordinates
+        if (actualPickResult.pickedMesh && (actualPickResult.pickedMesh.name.includes('Mesh') || clickedOnBuilding || clickedOnResource)) {
           // Get the world position where we clicked
-          const worldPos = actualPickResult.pickedPoint;
+          let worldPos = actualPickResult.pickedPoint;
+          
+          // CRITICAL: For resource meshes, scan nearby tiles to find which one has the resource
+          // Large rocks can span multiple tiles, so we need to check the area around the click
+          if (clickedOnResource) {
+            const TILE_SIZE = window.TILE_SIZE || 4;
+            const clickedTileX = Math.floor(worldPos.x / TILE_SIZE);
+            const clickedTileZ = Math.floor(worldPos.z / TILE_SIZE);
+            
+            console.log(`🪨 Clicked on resource mesh at world (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)}), tile (${clickedTileX}, ${clickedTileZ})`);
+            
+            // Check the clicked tile and surrounding tiles (3x3 grid) for resources
+            let foundResource = null;
+            let foundTile = null;
+            
+            for (let dx = -1; dx <= 1; dx++) {
+              for (let dz = -1; dz <= 1; dz++) {
+                const checkX = clickedTileX + dx;
+                const checkZ = clickedTileZ + dz;
+                const resourceCheck = window.buildingSystem?.checkTileForResources(checkX, checkZ, false);
+                
+                if (resourceCheck && !window.isResourceTileDepleted?.(checkX, checkZ)) {
+                  foundResource = resourceCheck;
+                  foundTile = { x: checkX, z: checkZ };
+                  console.log(`  ✅ Found ${resourceCheck.type} at tile (${checkX}, ${checkZ})`);
+                  break;
+                }
+              }
+              if (foundResource) break;
+            }
+            
+            // If we found a resource in nearby tiles, use that tile's center
+            if (foundResource && foundTile) {
+              worldPos = new BABYLON.Vector3(
+                (foundTile.x + 0.5) * TILE_SIZE,
+                worldPos.y,
+                (foundTile.z + 0.5) * TILE_SIZE
+              );
+              console.log(`  -> Using resource tile center: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
+            } else {
+              console.log(`  ❌ No resource found in nearby tiles!`);
+            }
+          }
           
           // Convert world position to tile coordinates
           const tileX = Math.floor(worldPos.x);
@@ -1957,7 +2040,6 @@ function getRandomColor() {
           
           // Handle field actions based on click type
           if (e.button === 0) { // Left click
-            // console.log('🎯 Left click on terrain, attempting explosion...');
             // Single click - create explosion at clicked position
             if (window.fx && window.fx.createExplosion) {
               // Small explosion for clicks - scale 0.3 for tiny effect
@@ -1969,6 +2051,297 @@ function getRandomColor() {
                 const selectedUnits = window.player.getSelectedUnits();
                 if (selectedUnits.length > 0) {
                   // console.log(`🚶 Making ${selectedUnits.length} selected units walk to explosion location`);
+                  
+                  // Check if we clicked on a building
+                  if (clickedOnBuilding && pickResult.pickedMesh) {
+                    // Find the building by traversing mesh hierarchy
+                    let buildingMesh = pickResult.pickedMesh;
+                    while (buildingMesh && !buildingMesh.isBuilding) {
+                      buildingMesh = buildingMesh.parent;
+                    }
+                    
+                    if (buildingMesh && buildingMesh.isBuilding) {
+                      // Find the building object from gameBuildings
+                      const building = gameBuildings.find(b => b.mesh === buildingMesh);
+                      
+                      if (building) {
+                        // Check building ownership
+                        const normalizeId = (id) => id?.length > 6 ? id.slice(-6) : id;
+                        const buildingOwner = normalizeId(building.owner);
+                        const playerOwner = normalizeId(window.player?.id);
+                        const isOwnBuilding = buildingOwner === playerOwner;
+                        
+                        if (isOwnBuilding && building.buildProgress < 1.0 && building.workType === 'build') {
+                          // Our building under construction - assign villagers to build it
+                          const villagers = selectedUnits.filter(u => u.type === 'villager');
+                          
+                          if (villagers.length > 0) {
+                            console.log(`🔨 ${villagers.length} villagers manually assigned to build ${building.type}`);
+                            
+                            // Assign each villager to build this building
+                            villagers.forEach(villager => {
+                              // Clear any existing assignment
+                              if (villager.assignedBuilding) {
+                                const oldBuilding = villager.assignedBuilding;
+                                if (oldBuilding.assignedWorkers) {
+                                  const idx = oldBuilding.assignedWorkers.indexOf(villager);
+                                  if (idx > -1) oldBuilding.assignedWorkers.splice(idx, 1);
+                                }
+                              }
+                              
+                              // Assign to new building
+                              if (window.assignVillagerToWork) {
+                                window.assignVillagerToWork(villager, building);
+                              }
+                            });
+                            
+                            // Create a visual target marker at the building
+                            if (window.gfx && window.gfx.scene) {
+                              createTargetMarker(worldPos);
+                            }
+                            
+                            // Don't issue move command, we're building
+                            return;
+                          }
+                        } else if (!isOwnBuilding) {
+                          // Enemy building or captured Agora!
+                          if (building.type === 'agora') {
+                            // Special: Agoras are always occupied/captured, never attacked
+                            console.log(`⛳ ${selectedUnits.length} units moving to occupy agora`);
+                            
+                            // Create a visual target marker
+                            if (window.gfx && window.gfx.scene) {
+                              createTargetMarker(worldPos);
+                            }
+                            
+                            // Issue move command to the agora (occupation logic handled elsewhere)
+                            // Fall through to normal move command below
+                          } else {
+                            // Attack the enemy building!
+                            console.log(`⚔️ ${selectedUnits.length} units attacking enemy ${building.type}`);
+                            
+                            // Show speech bubble for one of the attackers
+                            const unit = selectedUnits[0];
+                            const ownerMatches = unit && (unit.owner === window.player?.id || 
+                                                window.player?.id?.endsWith(unit.owner) ||
+                                                unit.owner?.endsWith(window.player?.id));
+                            if (window.UnitSpeech && ownerMatches) {
+                              window.UnitSpeech.showRandomSpeech(unit, 'attack', 2000);
+                            }
+                            
+                            selectedUnits.forEach(unit => {
+                              if (window.behaviorManager) {
+                                // Clear any existing assignment
+                                if (unit.assignedBuilding) {
+                                  const oldBuilding = unit.assignedBuilding;
+                                  if (oldBuilding.assignedWorkers) {
+                                    const idx = oldBuilding.assignedWorkers.indexOf(unit);
+                                    if (idx > -1) oldBuilding.assignedWorkers.splice(idx, 1);
+                                  }
+                                  unit.assignedBuilding = null;
+                                }
+                                
+                                // Set attack behavior
+                                window.behaviorManager.setBehavior(unit, 'attack_building', {
+                                  building: building
+                                });
+                              }
+                            });
+                            
+                            // Create a visual target marker
+                            if (window.gfx && window.gfx.scene) {
+                              createTargetMarker(worldPos);
+                            }
+                            
+                            // Don't issue move command, we're attacking
+                            return;
+                          }
+                        } else if (isOwnBuilding && building.type === 'agora') {
+                          // Our own Agora - but might be contested/under attack
+                          // Send units to defend/reinforce it
+                          console.log(`🛡️ ${selectedUnits.length} units moving to defend our agora`);
+                          
+                          // Create a visual target marker
+                          if (window.gfx && window.gfx.scene) {
+                            createTargetMarker(worldPos);
+                          }
+                          
+                          // Fall through to normal move command (they'll defend when they arrive)
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Check if we clicked on or near a resource tile
+                  // Use 3x3 scan because trees are thin-instanced and not pickable
+                  const TILE_SIZE = window.TILE_SIZE || 4;
+                  const clickedTileX = Math.floor(worldPos.x / TILE_SIZE);
+                  const clickedTileZ = Math.floor(worldPos.z / TILE_SIZE);
+                  
+                  // Scan 3x3 area around click to find resources (trees might be offset from click)
+                  let resourceInfo = null;
+                  let resourceGridX = clickedTileX;
+                  let resourceGridZ = clickedTileZ;
+                  
+                  // Check clicked tile first
+                  resourceInfo = window.buildingSystem?.checkTileForResources(clickedTileX, clickedTileZ, false);
+                  
+                  // If no resource at exact tile, scan nearby tiles
+                  if (!resourceInfo || (window.isResourceTileDepleted && window.isResourceTileDepleted(clickedTileX, clickedTileZ))) {
+                    for (let dx = -1; dx <= 1 && !resourceInfo; dx++) {
+                      for (let dz = -1; dz <= 1 && !resourceInfo; dz++) {
+                        if (dx === 0 && dz === 0) continue; // Already checked center
+                        const checkX = clickedTileX + dx;
+                        const checkZ = clickedTileZ + dz;
+                        const checkResource = window.buildingSystem?.checkTileForResources(checkX, checkZ, false);
+                        if (checkResource && !(window.isResourceTileDepleted && window.isResourceTileDepleted(checkX, checkZ))) {
+                          resourceInfo = checkResource;
+                          resourceGridX = checkX;
+                          resourceGridZ = checkZ;
+                        }
+                      }
+                    }
+                  }
+                  
+                  const isDepleted = window.isResourceTileDepleted && window.isResourceTileDepleted(resourceGridX, resourceGridZ);
+                  
+                  console.log(`🪓 Resource check: tile=(${resourceGridX},${resourceGridZ}), resource=${resourceInfo?.type || 'none'}, depleted=${isDepleted}`);
+                  
+                  // If clicked on a resource with villagers selected, start gathering
+                  if (resourceInfo && !isDepleted) {
+                    const villagers = selectedUnits.filter(u => u.type === 'villager');
+                    if (villagers.length > 0) {
+                      console.log(`🪓 ${villagers.length} villagers gathering from resource at (${resourceGridX}, ${resourceGridZ})`);
+                      
+                      // Create a quick sparkly visual feedback at the resource
+                      if (window.gfx && window.gfx.scene) {
+                        const resourceWorldPos = new BABYLON.Vector3(
+                          (resourceGridX + 0.5) * TILE_SIZE,
+                          worldPos.y + 3.0, // Well above the model
+                          (resourceGridZ + 0.5) * TILE_SIZE
+                        );
+                        
+                        // Create multiple sparkle sprites for a burst effect
+                        for (let i = 0; i < 10; i++) {
+                          const sparkle = BABYLON.MeshBuilder.CreatePlane("sparkle", { size: 2.5 }, window.gfx.scene);
+                          sparkle.position = resourceWorldPos.clone();
+                          sparkle.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+                          
+                          // Create bright sparkle material
+                          const mat = new BABYLON.StandardMaterial("sparkleMat", window.gfx.scene);
+                          mat.diffuseColor = new BABYLON.Color3(1, 1, 0.8);
+                          mat.emissiveColor = new BABYLON.Color3(1, 1, 0.5);
+                          mat.alpha = 1.0;
+                          mat.disableLighting = true;
+                          sparkle.material = mat;
+                          
+                          // Random velocity for burst
+                          const angle = (i / 10) * Math.PI * 2;
+                          const velocity = {
+                            x: Math.cos(angle) * 3,
+                            y: 3 + Math.random() * 3,
+                            z: Math.sin(angle) * 3
+                          };
+                          
+                          // Animate sparkle
+                          let life = 0;
+                          const maxLife = 0.7; // 700ms (longer duration)
+                          const animateSparkle = () => {
+                            life += 0.016; // ~60fps
+                            if (life >= maxLife) {
+                              sparkle.dispose();
+                              mat.dispose();
+                              return;
+                            }
+                            
+                            // Move with velocity
+                            sparkle.position.x += velocity.x * 0.016;
+                            sparkle.position.y += velocity.y * 0.016;
+                            sparkle.position.z += velocity.z * 0.016;
+                            
+                            // Fade out
+                            const progress = life / maxLife;
+                            mat.alpha = 1.0 - progress;
+                            sparkle.scaling.setAll(1.0 - progress * 0.5);
+                            
+                            // Gravity
+                            velocity.y -= 5 * 0.016;
+                            
+                            requestAnimationFrame(animateSparkle);
+                          };
+                          
+                          requestAnimationFrame(animateSparkle);
+                        }
+                      }
+                      
+                      // Show speech bubble for one of the villagers
+                      const villager = villagers[0];
+                      const ownerMatches = villager && (villager.owner === window.player?.id || 
+                                              window.player?.id?.endsWith(villager.owner) ||
+                                              villager.owner?.endsWith(window.player?.id));
+                      if (window.UnitSpeech && ownerMatches) {
+                        window.UnitSpeech.showRandomSpeech(villager, 'gather', 2000);
+                      }
+                      
+                      // Assign each villager to gather from this resource
+                      villagers.forEach(villager => {
+                        if (window.behaviorManager) {
+                          // Clear any existing building assignment
+                          if (villager.assignedBuilding) {
+                            const building = villager.assignedBuilding;
+                            if (building.assignedWorkers) {
+                              const idx = building.assignedWorkers.indexOf(villager);
+                              if (idx > -1) building.assignedWorkers.splice(idx, 1);
+                            }
+                            villager.assignedBuilding = null;
+                          }
+                          
+                          // Create a temporary "manual gather" behavior
+                          // Calculate model offset to match gfx.js placement
+                          const baseTileX = (resourceGridX + 0.5) * TILE_SIZE;
+                          const baseTileZ = (resourceGridZ + 0.5) * TILE_SIZE;
+                          
+                          // Trees (wood) and rocks (stone/minerals) use different hash seeds
+                          const fieldSeed = window.liveField?.seed || 0;
+                          let hashSeed;
+                          if (resourceInfo.type === 'wood') {
+                            hashSeed = fieldSeed + resourceGridX * 13579 + resourceGridZ * 24680;
+                          } else {
+                            hashSeed = fieldSeed + resourceGridX * 73856093 + resourceGridZ * 19349663;
+                          }
+                          
+                          // Same LCG hash as gfx.js
+                          let hash = hashSeed;
+                          hash = (hash * 1664525 + 1013904223) >>> 0;
+                          const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                          hash = (hash * 1664525 + 1013904223) >>> 0;
+                          const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                          
+                          const resourceWorldX = baseTileX + offsetX;
+                          const resourceWorldZ = baseTileZ + offsetZ;
+                          
+                          window.behaviorManager.setBehavior(villager, 'manual_gather', {
+                            targetResource: {
+                              gridX: resourceGridX,
+                              gridZ: resourceGridZ,
+                              x: resourceWorldX,
+                              z: resourceWorldZ,
+                              type: resourceInfo.type,        // Pass resource type!
+                              amount: resourceInfo.amount     // Pass resource amount!
+                            }
+                          });
+                        }
+                      });
+                      
+                      // Create a visual target marker at the resource location
+                      if (window.gfx && window.gfx.scene) {
+                        createTargetMarker(worldPos);
+                      }
+                      
+                      // Don't issue move command, we're gathering
+                      return;
+                    }
+                  }
                   
                   // Create a visual target marker at the explosion location
                   if (window.gfx && window.gfx.scene) {
@@ -2000,6 +2373,15 @@ function getRandomColor() {
                     };
                     window.currentMatch.submitCommand(command);
                   } else {
+                    // Show speech bubble for one of the moving units
+                    const unit = selectedUnits[0];
+                    const ownerMatches = unit && (unit.owner === window.player?.id || 
+                                        window.player?.id?.endsWith(unit.owner) ||
+                                        unit.owner?.endsWith(window.player?.id));
+                    if (window.UnitSpeech && ownerMatches) {
+                      window.UnitSpeech.showRandomSpeech(unit, 'move', 2000);
+                    }
+                    
                     // SINGLE PLAYER: Apply walk behavior directly to each unit
                     selectedUnits.forEach((unit, index) => {
                       if (window.behaviorManager && unit) {
@@ -2091,6 +2473,11 @@ function getRandomColor() {
         // Check if building system is active - if so, let it handle the event
         if (window.buildingSystem && window.buildingSystem.isPlacing) {
           return; // Let building system handle this
+        }
+        
+        // Hide radial menu when RMB drag movement starts
+        if (window.hud && window.hud.hideRadialMenu) {
+          window.hud.hideRadialMenu();
         }
         
         // Handle drag movement for momentum-based player movement
@@ -3061,3 +3448,127 @@ window.playReplayFromMenu = async function(replayId) {
   }
 };
 
+// ========== STORY DIALOGUE SYSTEM ==========
+// Show a story dialogue box with text - used for adventure mode objectives
+
+window.showStoryDialogue = function(message, type, onContinue) {
+  // Remove any existing dialogue
+  const existing = document.getElementById('story_dialogue');
+  if (existing) existing.remove();
+  
+  // Pause the game while dialogue is shown
+  const wasPaused = window.currentMatch?.isPaused;
+  if (window.currentMatch && window.currentMatch.pauseMatch) {
+    window.currentMatch.pauseMatch();
+  }
+  
+  // Create dialogue container
+  const dialogue = document.createElement('div');
+  dialogue.id = 'story_dialogue';
+  dialogue.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    z-index: 10000;
+    pointer-events: auto;
+    background: rgba(0, 0, 0, 0.3);
+  `;
+  
+  // Icon based on type
+  let icon = '📜';
+  if (type === 'escape' || type === 'exit') icon = '🚪';
+  else if (type === 'victory') icon = '🏆';
+  else if (type === 'reach') icon = '🎯';
+  
+  // Create dialogue box
+  const box = document.createElement('div');
+  box.style.cssText = `
+    background: linear-gradient(135deg, rgba(30, 40, 60, 0.95), rgba(20, 30, 50, 0.98));
+    border: 2px solid rgba(100, 150, 200, 0.5);
+    border-radius: 12px;
+    padding: 24px 32px;
+    max-width: 600px;
+    margin: 0 20px 80px 20px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    animation: dialogueSlideIn 0.3s ease-out;
+  `;
+  
+  // Add animation keyframes if not already added
+  if (!document.getElementById('dialogue_styles')) {
+    const style = document.createElement('style');
+    style.id = 'dialogue_styles';
+    style.textContent = `
+      @keyframes dialogueSlideIn {
+        from { transform: translateY(50px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+  
+  box.innerHTML = `
+    <div style="display: flex; align-items: flex-start; gap: 16px;">
+      <div style="font-size: 36px; flex-shrink: 0;">${icon}</div>
+      <div style="flex: 1;">
+        <div style="color: #e8e8f0; font-size: 16px; line-height: 1.5; margin-bottom: 16px; font-family: Georgia, serif;">
+          ${message.replace(/\n/g, '<br>')}
+        </div>
+        <button id="dialogue_continue" style="
+          background: linear-gradient(135deg, #4a6b8a, #3a5a7a);
+          border: 1px solid rgba(100, 150, 200, 0.5);
+          color: #fff;
+          padding: 10px 28px;
+          font-size: 14px;
+          cursor: pointer;
+          border-radius: 6px;
+          transition: all 0.2s;
+        " onmouseover="this.style.background='linear-gradient(135deg, #5a7b9a, #4a6a8a)'" 
+           onmouseout="this.style.background='linear-gradient(135deg, #4a6b8a, #3a5a7a)'">
+          Continue
+        </button>
+      </div>
+    </div>
+  `;
+  
+  dialogue.appendChild(box);
+  document.body.appendChild(dialogue);
+  
+  // Handle continue button
+  const continueBtn = document.getElementById('dialogue_continue');
+  continueBtn.onclick = () => {
+    dialogue.remove();
+    
+    // Resume game if it wasn't paused before
+    if (!wasPaused && window.currentMatch && window.currentMatch.resumeMatch) {
+      window.currentMatch.resumeMatch();
+    }
+    
+    // Call callback if provided
+    if (onContinue) {
+      onContinue();
+    }
+  };
+  
+  // Also allow clicking outside or pressing Enter/Space to continue
+  dialogue.onclick = (e) => {
+    if (e.target === dialogue) {
+      continueBtn.click();
+    }
+  };
+  
+  const handleKey = (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') {
+      e.preventDefault();
+      continueBtn.click();
+      document.removeEventListener('keydown', handleKey);
+    }
+  };
+  document.addEventListener('keydown', handleKey);
+  
+  console.log(`📜 Showing story dialogue: "${message.substring(0, 50)}..."`);
+};

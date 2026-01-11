@@ -378,7 +378,8 @@ const Lobby = {
     }
     
     // CRITICAL: Generate unique player ID for each match (like AI opponents do)
-    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+    // Also reset if still using demo ID from menu mode
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player' || window.player.id === 'demo') {
       // Generate unique ID similar to AI opponents
       const randomSuffix = Math.random().toString(36).substring(2, 8);
       window.player.id = `local-player-${randomSuffix}`;
@@ -446,9 +447,11 @@ const Lobby = {
     const localPlayerId = window.player.id; // CRITICAL: No fallback - ID must be set!
     window.player.id = localPlayerId;
     window.player.name = window.currentPlayerName || 'Duelist';
-    window.player.color = window.currentPlayerColor || '#ff0000';
+    window.player.color = window.currentPlayerColor || this.getPlayerColor(0).primary;
     window.player.agora = spawnPositions[0];
     window.player.basePosition = { x: spawnPositions[0].x, z: spawnPositions[0].y };
+    
+    console.log(`🎮 Player initialized: id="${window.player.id}", name="${window.player.name}", color="${window.player.color}"`);
     
     if (window.player.pbody) {
       const agoraX = window.player.agora.x * tileSize;
@@ -464,7 +467,7 @@ const Lobby = {
     const aiOptions = {
       id: aiId,
       name: 'AI Opponent',
-      color: '#0066cc',
+      color: this.getPlayerColor(1).primary,
       startingResources: { ...STARTING_RESOURCES },
       agora: spawn,
       basePosition: { x: spawn.x, z: spawn.y },
@@ -479,6 +482,8 @@ const Lobby = {
     
     window.aiOpponents = [aiPlayer];
     window.opponent = aiPlayer;
+    
+    console.log(`🤖 AI initialized: id="${aiPlayer.id}", name="${aiPlayer.name}", color="${aiPlayer.color}"`);
     
     // Regenerate field with desired seed
     const oldField = window.liveField;
@@ -571,8 +576,19 @@ const Lobby = {
     
     // Prepare player arrays (gameBuildings used for all buildings now)
     const players = [window.player, aiPlayer];
+    
+    // CRITICAL: Clear player units arrays BEFORE spawning
+    window.player.units = [];
+    window.player.buildings = [];
+    aiPlayer.units = [];
+    aiPlayer.buildings = [];
+    
+    console.log(`🎮 Players prepared: ${players.length} players`, players.map(p => `${p.name}:${p.units?.length || 0}units`));
+    
     window.gameBuildings = window.gameBuildings || [];
     window.gameUnits = window.gameUnits || [];
+    
+    console.log(`📊 Before spawn: gameUnits=${window.gameUnits.length}, gameBuildings=${window.gameBuildings.length}`);
     
     // Create game instance (handles spawning units/buildings)
     window.game = new window.Game({
@@ -856,13 +872,9 @@ const Lobby = {
   
   // Set up lobby buttons for different game types
   setupLobbyButtons: function() {
-    // Adventure lobby (co-op)
-    const adventureButton = document.querySelector('#adventure_lobby .lobby_b');
-    if (adventureButton) {
-      adventureButton.addEventListener('click', () => {
-        this.startMultiplayerMatch('adventure');
-      });
-    }
+    // Adventure lobby buttons are handled via onclick in HTML
+    // (startAdventureChapter for solo, hostAdventureLobby for co-op)
+    // Don't add duplicate event listeners here
     
     // 1v1 lobby
     const ovoButton = document.querySelector('#onevsone_lobby .lobby_b');
@@ -1047,7 +1059,7 @@ const Lobby = {
     }, 1000);
     
     // Update UI to show lobby room (not browser)
-    this.updateLobbyRoomUI(gameType, lobby);
+    this.updateLobbyRoomUI(gameType, lobby, true);
     
     // Announce status change to global stats
     this.announceStatusToGlobal('in_lobby');
@@ -1058,7 +1070,7 @@ const Lobby = {
     }
     this.lobbyUpdateInterval = setInterval(() => {
       if (this.isHost && this.currentLobby) {
-        // Re-announce lobby to game-specific channel
+        // Re-announce lobby to game-specific channel for discovery
         this.announceLobby(this.currentLobby);
         // Re-announce status to global stats channel
         this.announceStatusToGlobal('in_lobby');
@@ -1143,7 +1155,7 @@ const Lobby = {
     }
     
     // Update UI to show lobby room immediately
-    this.updateLobbyRoomUI(gameType, this.currentLobby);
+    this.updateLobbyRoomUI(gameType, this.currentLobby, true);
     
     // Announce status change to global stats
     this.announceStatusToGlobal('in_lobby');
@@ -1662,11 +1674,12 @@ const Lobby = {
   },
   
   // Update lobby room UI (inside a specific lobby)
-  updateLobbyRoomUI: function(gameType, lobby) {
+  updateLobbyRoomUI: function(gameType, lobby, scrollToTop = false) {
     const lobbyId = `${gameType}_lobby`;
     const lobbyElement = document.getElementById(lobbyId);
-    
+
     if (!lobbyElement) return;
+
     
     const config = this.gameTypes[gameType];
     const netStatus = window.net ? window.net.getStatus() : {};
@@ -1703,7 +1716,10 @@ const Lobby = {
     
     let html = `
       <div class="lobby_room_header">
-        <h3>${lobby.name}</h3>
+        ${this.isHost ?
+          `<input type="text" class="lobby_name_input" value="${lobby.name}" onchange="window.Lobby.updateLobbyName(this.value)" placeholder="Lobby name">` :
+          `<h3>${lobby.name}</h3>`
+        }
       </div>`;
     
     // Add start/ready buttons at the top (for host)
@@ -1969,25 +1985,56 @@ const Lobby = {
     html += `<button class="leave_lobby_btn" onclick="window.Lobby.leaveLobbyAndReturnToBrowser('${gameType}')">← Back</button>`;
     
     roomContainer.innerHTML = html;
-    
-    // Scroll lobby element to top so players see the room properly
-    if (lobbyElement) {
+
+    // Scroll to top when first joining/creating lobby, but not on settings updates
+    if (scrollToTop && lobbyElement) {
       lobbyElement.scrollTop = 0;
     }
   },
   
+
+  // Update lobby name (host only)
+  updateLobbyName: function(newName) {
+    if (!this.isHost || !this.currentLobby) return;
+
+    // Trim whitespace and ensure not empty
+    newName = newName.trim();
+    if (!newName) {
+      // Reset to a default name if empty
+      newName = `Lobby ${Math.floor(Math.random() * 1000)}`;
+    }
+
+    // Update local lobby
+    this.currentLobby.name = newName;
+    this.currentLobby.timestamp = Date.now();
+
+    // Broadcast the change to all players
+    if (window.net && window.net.p2p) {
+      window.net.p2p.sendData({
+        type: 'lobby_name_update',
+        name: newName
+      });
+    }
+
+    // Announce updated lobby to lobby browser
+    this.announceLobby(this.currentLobby);
+
+    // Update local UI
+    this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
+  },
+
   // Toggle AI slot for a specific player slot
   toggleAISlot: function(slotIndex, enabled) {
     if (!this.isHost || !this.currentLobby) return;
-    
+
     // Initialize aiSlots array if it doesn't exist
     if (!this.currentLobby.settings.aiSlots) {
       this.currentLobby.settings.aiSlots = [];
     }
-    
+
     // Set the AI slot state
     this.currentLobby.settings.aiSlots[slotIndex] = enabled;
-    
+
     // Broadcast the change to all players
     if (window.net && window.net.p2p) {
       window.net.p2p.sendData({
@@ -1995,11 +2042,11 @@ const Lobby = {
         settings: this.currentLobby.settings
       });
     }
-    
-    // Update local UI
+
+    // Update both player list and room UI (start button depends on AI count)
     this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
   },
-  
+
   // Show notification to user
   showNotification: function(message, type = 'info') {
     // Create notification element
@@ -2054,23 +2101,20 @@ const Lobby = {
     }, 3000);
   },
   
-  // Show create lobby dialog
+  // Create lobby directly with auto-generated name (no annoying popup)
   showCreateLobbyDialog: function(gameType) {
     const config = this.gameTypes[gameType];
-    const defaultName = `Lobby ${Math.floor(Math.random() * 1000)}`;
-    const lobbyName = prompt('Enter lobby name:', defaultName);
-    
-    if (lobbyName) {
-      const settings = {
-        fieldSize: config.defaultFieldSize,
-        seed: Math.floor(Math.random() * 1000000),
-        maxPlayers: config.maxPlayers,
-        // Default AI configuration per game type
-        aiSlots: gameType === 'adventure' ? [false, true, true, true] : [] // Adventure defaults to 3 AI
-      };
-      
-      this.createLobby(gameType, lobbyName, settings);
-    }
+    const lobbyName = `Lobby ${Math.floor(Math.random() * 1000)}`;
+
+    const settings = {
+      fieldSize: config.defaultFieldSize,
+      seed: Math.floor(Math.random() * 1000000),
+      maxPlayers: config.maxPlayers,
+      // Default AI configuration per game type
+      aiSlots: gameType === 'adventure' ? [false, true, true, true] : [] // Adventure defaults to 3 AI
+    };
+
+    this.createLobby(gameType, lobbyName, settings);
   },
   
   // Leave lobby and return to browser
@@ -2285,7 +2329,7 @@ const Lobby = {
     // Broadcast the FULL updated lobby to all players
     this.announceLobby(this.currentLobby);
     
-    // Also update local UI
+    // Update local UI
     this.updateLobbyRoomUI(this.currentGameType, this.currentLobby);
   },
   
@@ -2670,11 +2714,21 @@ const Lobby = {
     if (isV2 && mapData.obj) {
       const objectives = mapData.obj.split(';').map((o, i) => {
         const parts = o.split(',');
+        // Decode message from base64 if present
+        let message = '';
+        if (parts[4]) {
+          try {
+            message = decodeURIComponent(atob(parts[4]));
+          } catch (e) {
+            console.warn('Failed to decode objective message:', e);
+          }
+        }
         return {
           x: Number(parts[0]),
           y: Number(parts[1]),
           radius: Number(parts[2]) || 4,
           type: parts[3] || 'reach',
+          message: message, // Story/dialogue text to show when triggered
           id: i,
           completed: false
         };
@@ -2683,6 +2737,23 @@ const Lobby = {
       console.log(`🎯 Loaded ${objectives.length} objectives for adventure mode`);
     } else {
       window.adventureObjectives = [];
+    }
+    
+    // Store starting units for adventure mode (units placed in forge)
+    if (isV2 && mapData.units) {
+      const units = mapData.units.split(';').map(u => {
+        const parts = u.split(',');
+        return {
+          x: Number(parts[0]),
+          y: Number(parts[1]),
+          type: parts[2] || 'villager',
+          player: Number(parts[3]) || 0
+        };
+      });
+      window.adventureStartingUnits = units;
+      console.log(`⚔️ Loaded ${units.length} starting units for adventure mode`);
+    } else {
+      window.adventureStartingUnits = [];
     }
     
     console.log(`✅ Custom map applied (${width}x${height})${hasCustomShape ? ' with custom table shape' : ''}`);
@@ -2746,17 +2817,39 @@ const Lobby = {
     
     // console.log('🚀 Host initiating match start...');
     
+    // CRITICAL: Generate host's player ID NOW so we can include it in the message
+    // This ensures the peer uses the same ID for ownership matching
+    if (!window.player) {
+      window.player = new Player();
+    }
+    if (!window.player.id || window.player.id === 'demo' || window.player.id === 'undefined') {
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      window.player.id = `adventurer-${randomSuffix}`;
+      console.log(`🎮 Generated host player ID for start_game: ${window.player.id}`);
+    }
+    
     // Send start game message to all peers via WebRTC
+    // Include ALL player IDs so everyone uses consistent IDs
+    // Build the player ID list: host first, then peers in order
+    const playerIds = [window.player.id];
+    this.connectedPlayers.forEach(p => {
+      // Use the P2P ID for peers (normalized to 6 chars for ownership)
+      const peerId = p.id || p;
+      playerIds.push(peerId);
+    });
+    
     if (window.net && window.net.p2p && window.net.p2p.sendData) {
       const startMessage = {
         type: 'start_game',
         gameType: actualGameType,
         settings: lobby.settings,
+        hostPlayerId: window.player.id,  // Host's actual player ID
+        playerIds: playerIds,  // CRITICAL: All player IDs in order
         timestamp: Date.now()
       };
       
       window.net.p2p.sendData(startMessage); // Broadcast to all peers
-      // console.log(`📡 Sent start_game to ${window.net.p2p.getConnectedPeers().length} peers`);
+      console.log(`📡 Sent start_game with playerIds:`, playerIds.map(id => id.slice(-6)));
     }
     
     // Start the match for host
@@ -3062,12 +3155,50 @@ const Lobby = {
       const mapData = JSON.parse(await response.text());
       console.log('📦 Chapter map loaded:', mapData.n || chapterId);
       
+      // Track current chapter for progression
+      window.currentChapterId = chapterId;
+      
       // Start adventure with the custom map
       this.startAdventureWithMap(mapData);
       
     } catch (e) {
       console.error('Failed to load chapter:', e);
       alert('Failed to load chapter. Please try again.');
+    }
+  },
+  
+  // Load a specific adventure chapter by ID (used for chapter progression)
+  loadAdventureChapter: async function(chapterId) {
+    const chapterInfo = this.adventureChapters[chapterId];
+    
+    if (!chapterInfo) {
+      console.error('Unknown chapter:', chapterId);
+      return;
+    }
+    
+    console.log(`🗺️ Loading next chapter: ${chapterInfo.name}`);
+    
+    // Reset game state first
+    this.resetGameState();
+    
+    try {
+      const response = await fetch(chapterInfo.file);
+      if (!response.ok) throw new Error(`Failed to load ${chapterInfo.file}`);
+      
+      const mapData = JSON.parse(await response.text());
+      console.log('📦 Chapter loaded:', mapData.n || chapterId);
+      
+      // Track current chapter
+      window.currentChapterId = chapterId;
+      
+      // Start adventure with the custom map
+      this.startAdventureWithMap(mapData);
+      
+    } catch (e) {
+      console.error('Failed to load chapter:', e);
+      if (window.ui && window.ui.showNotification) {
+        window.ui.showNotification('Failed to load next chapter', 'error');
+      }
     }
   },
   
@@ -3385,7 +3516,31 @@ const Lobby = {
       `;
     }
     
-    // Send game start to peers
+    // Build players array - host is always P1
+    if (!window.player) {
+      window.player = new Player();
+    }
+    if (!window.player.id || window.player.id === 'demo' || window.player.id === 'undefined') {
+      const randomSuffix = Math.random().toString(36).substring(2, 8);
+      window.player.id = `adventurer-${randomSuffix}`;
+    }
+    window.player.units = [];
+    window.player.buildings = [];
+    window.player.selectedUnits = [];
+    
+    const players = [window.player];
+    this.connectedPlayers.forEach((p, i) => {
+      players.push({
+        id: p.id || p,
+        name: p.name || `Player ${i + 2}`,
+        color: p.color || '#00ff00',
+        units: [],
+        buildings: [],
+        selectedUnits: []
+      });
+    });
+    
+    // Send game start to peers (include host ID so they know player order)
     if (window.net && window.net.p2p && window.net.p2p.sendData) {
       console.log('📡 Sending adventure_start to peers...');
       window.net.p2p.sendData({
@@ -3393,15 +3548,17 @@ const Lobby = {
         lobbyId: this.currentLobbyId,
         chapterId: this._hostingChapterId,
         chapterFile: this._hostingChapterInfo.file,
-        mapData: mapData
+        mapData: mapData,
+        hostId: window.player.id  // Include host ID for player ordering
       });
     }
     
     // Brief delay before starting
     await new Promise(resolve => setTimeout(resolve, 300));
     
-    // Start the adventure locally
-    this.startAdventureWithMap(mapData);
+    // Start the adventure locally with correct player order
+    console.log('👥 Host player order:', players.map((p, i) => `P${i+1}=${(p.id || 'unknown').slice(-6)}`).join(', '));
+    this.startAdventureWithMap(mapData, players);
   },
   
   // Join an adventure lobby
@@ -3437,10 +3594,11 @@ const Lobby = {
       window.player = new Player();
     }
     
-    // Generate unique player ID
-    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+    // Generate unique player ID (also reset if still using demo ID from menu)
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player' || window.player.id === 'demo') {
       const randomSuffix = Math.random().toString(36).substring(2, 8);
       window.player.id = `adventurer-${randomSuffix}`;
+      console.log(`🎮 Generated new player ID: ${window.player.id}`);
     }
     
     // Reset player state
@@ -3470,13 +3628,33 @@ const Lobby = {
     // Configure player spawn
     window.player.name = window.currentPlayerName || 'Adventurer';
     window.player.color = window.currentPlayerColor || '#ff0000';
-    window.player.agora = spawnPositions[0];
-    window.player.basePosition = { x: spawnPositions[0].x, z: spawnPositions[0].y };
+    
+    // Adventure mode: check if we have starting units instead of Agora spawns
+    // If starting units are defined, don't set player.agora (no Agora in adventure)
+    const hasStartingUnits = mapData.units && mapData.units.length > 0;
+    
+    // Parse starting units to find camera start position
+    let cameraStartPos = spawnPositions[0];
+    if (hasStartingUnits) {
+      // Find first unit for player 0 to center camera there
+      const firstUnit = mapData.units.split(';')[0];
+      if (firstUnit) {
+        const parts = firstUnit.split(',');
+        cameraStartPos = { x: Number(parts[0]), y: Number(parts[1]) };
+      }
+      // Don't set agora for adventure mode with starting units
+      window.player.agora = null;
+    } else {
+      // Legacy mode: use spawn points as agora positions
+      window.player.agora = spawnPositions[0];
+    }
+    
+    window.player.basePosition = { x: cameraStartPos.x, z: cameraStartPos.y };
     
     if (window.player.pbody) {
-      const agoraX = window.player.agora.x * tileSize;
-      const agoraZ = window.player.agora.y * tileSize;
-      window.player.pbody.state.loc.set(agoraX, 0, agoraZ);
+      const startX = cameraStartPos.x * tileSize;
+      const startZ = cameraStartPos.y * tileSize;
+      window.player.pbody.state.loc.set(startX, 0, startZ);
       window.player.pbody.vel.set(0, 0, 0);
       window.player.pbody.imp.set(0, 0, 0);
     }
@@ -3509,18 +3687,18 @@ const Lobby = {
     }
     window._cameraLimitsSet = false;
     
-    // Position camera at spawn
+    // Position camera at start position (first unit or spawn)
     if (window.gfx && window.gfx.camera && window.gfx.cameraTarget) {
-      const agoraX = window.player.agora.x * tileSize;
-      const agoraZ = window.player.agora.y * tileSize;
-      window.gfx.cameraTarget.position.x = agoraX;
+      const startX = cameraStartPos.x * tileSize;
+      const startZ = cameraStartPos.y * tileSize;
+      window.gfx.cameraTarget.position.x = startX;
       window.gfx.cameraTarget.position.y = 9;
-      window.gfx.cameraTarget.position.z = agoraZ;
+      window.gfx.cameraTarget.position.z = startZ;
       
       if (window.cameraAnchor) {
-        window.cameraAnchor.x = agoraX;
+        window.cameraAnchor.x = startX;
         window.cameraAnchor.y = 9;
-        window.cameraAnchor.z = agoraZ;
+        window.cameraAnchor.z = startZ;
       }
       
       window.gfx.camera.alpha = -2.5;
@@ -3539,7 +3717,25 @@ const Lobby = {
     window.gameBuildings = window.gameBuildings || [];
     window.gameUnits = window.gameUnits || [];
     
-    // Create game instance
+    // Determine host - first player is host, or check if we're the host from lobby
+    const hostId = this.isHost ? window.player.id : (matchPlayers[0]?.id || window.player.id);
+    
+    // CRITICAL: Create Match BEFORE Game so unit IDs are deterministic!
+    // The Game constructor spawns adventure units, and they need window.currentMatch
+    // to exist for deterministic ID generation via currentMatch.unitIdCounter
+    window.currentMatch = new window.Match({
+      id: `adventure-${Date.now()}`,
+      gameType: 'adventure',
+      mapSeed: seed,
+      mapSize: { width, height },
+      players: matchPlayers,
+      localPlayerId: window.player.id,
+      hostId: hostId,
+      victoryCondition: 'objectives',  // Adventure uses objectives, not elimination
+      timeLimit: 0
+    });
+    
+    // Create game instance (this spawns adventure units)
     window.game = new window.Game({
       type: 'adventure',
       map: 'custom',
@@ -3554,22 +3750,6 @@ const Lobby = {
     if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
       window.spawnUnitModels(window.gfx.scene);
     }
-    
-    // Determine host - first player is host, or check if we're the host from lobby
-    const hostId = this.isHost ? window.player.id : (matchPlayers[0]?.id || window.player.id);
-    
-    // Create match controller
-    window.currentMatch = new window.Match({
-      id: `adventure-${Date.now()}`,
-      gameType: 'adventure',
-      mapSeed: seed,
-      mapSize: { width, height },
-      players: matchPlayers,
-      localPlayerId: window.player.id,
-      hostId: hostId,
-      victoryCondition: 'objectives',  // Adventure uses objectives, not elimination
-      timeLimit: 0
-    });
     
     // Check if this is multiplayer (multiple players)
     const isMultiplayerAdventure = matchPlayers.length > 1 && window.isMultiplayer;
@@ -3590,8 +3770,15 @@ const Lobby = {
       // Solo: Start immediately (no countdown needed)
       window.currentMatch.beginPlaying();
       if (window.currentMatch.startLocalTickLoop) {
-        window.currentMatch.startLocalTickLoop();
+        // Force=true because isMultiplayer is set for command system but we're playing solo
+        window.currentMatch.startLocalTickLoop(true);
       }
+    }
+    
+    // CRITICAL: Start the game loop for physics/behavior updates
+    // The match tick loop handles commands but the game loop handles unit movement
+    if (window.gameLoop && window.gameLoop.start) {
+      window.gameLoop.start();
     }
     
     console.log(`✅ Adventure started: ${mapData.n || 'Custom Map'}`);
@@ -3620,7 +3807,8 @@ const Lobby = {
     }
     
     // CRITICAL: Generate unique player ID for each match (like AI opponents do)
-    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player') {
+    // Also reset if still using demo ID from menu mode
+    if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player' || window.player.id === 'demo') {
       // Generate unique ID similar to AI opponents
       const randomSuffix = Math.random().toString(36).substring(2, 8);
       window.player.id = `local-player-${randomSuffix}`;
@@ -3917,19 +4105,95 @@ const Lobby = {
     // Adventure mode with chapter map can start solo or co-op (no AI needed)
     if (gameType === 'adventure' && settings?.customMapData) {
       console.log('✅ Starting Adventure with chapter map');
+      
+      // Ensure local player exists
+      if (!window.player) {
+        window.player = new Player();
+      }
+      // Reset demo ID if present (from menu mode)
+      if (!window.player.id || window.player.id === 'demo' || window.player.id === 'undefined') {
+        const randomSuffix = Math.random().toString(36).substring(2, 8);
+        window.player.id = `adventurer-${randomSuffix}`;
+        console.log(`🎮 Generated new co-op player ID: ${window.player.id}`);
+      }
+      window.player.name = window.currentPlayerName || window.player.name || 'Player 1';
+      window.player.color = window.currentPlayerColor || window.player.color || '#ff0000';
+      window.player.units = [];
+      window.player.buildings = [];
+      window.player.selectedUnits = [];
+      
       // Build player list for adventure
-      const players = [{ 
-        id: window.net?.getStatus()?.localPlayerId || 'local',
-        name: window.currentPlayerName || window.player?.name || 'Player 1',
-        color: window.currentPlayerColor || window.player?.color || '#ff0000'
-      }];
-      this.connectedPlayers.forEach((p, i) => {
-        players.push({
-          id: p.id || p,
-          name: p.name || `Player ${i + 2}`,
-          color: p.color || '#00ff00'
+      // CRITICAL: Host must always be P1 (players[0]) for consistent unit ownership
+      // Both host and peer need to agree on player order!
+      const players = [];
+      
+      if (this.isHost) {
+        // HOST: We are P1, peers are P2+
+        console.log('👑 Host building player list: we are P1');
+        players.push(window.player);
+        this.connectedPlayers.forEach((p, i) => {
+          players.push({
+            id: p.id || p,
+            name: p.name || `Player ${i + 2}`,
+            color: p.color || '#00ff00',
+            units: [],
+            buildings: [],
+            selectedUnits: []
+          });
         });
-      });
+      } else {
+        // PEER: Use the player IDs sent by the host for consistency
+        // This ensures unit ownership matches between host and peer
+        console.log('🎮 Peer building player list from host-provided IDs');
+        
+        if (this._playerIds && this._playerIds.length > 0) {
+          // Find our own P2P ID to identify which slot we're in
+          const myP2pId = window.net?.getStatus()?.localPlayerId || '';
+          const myP2pSuffix = myP2pId.slice(-6);
+          
+          this._playerIds.forEach((playerId, index) => {
+            const idSuffix = playerId.slice(-6);
+            const isMe = idSuffix === myP2pSuffix || playerId.includes(myP2pSuffix);
+            
+            if (isMe) {
+              // This is our slot - use window.player but with the ID the host expects
+              window.player.id = playerId;  // CRITICAL: Use the ID host assigned us
+              players.push(window.player);
+              console.log(`   P${index + 1}: ME (using assigned ID: ${playerId.slice(-6)})`);
+            } else {
+              // This is another player (host or other peer)
+              players.push({
+                id: playerId,
+                name: index === 0 ? 'Host' : `Player ${index + 1}`,
+                color: index === 0 ? '#ff0000' : '#00ff00',
+                units: [],
+                buildings: [],
+                selectedUnits: []
+              });
+              console.log(`   P${index + 1}: ${index === 0 ? 'Host' : 'Peer'} (${playerId.slice(-6)})`);
+            }
+          });
+        } else {
+          // Fallback to old behavior if no playerIds received
+          console.log('   ⚠️ No playerIds received, using fallback');
+          const hostId = this._hostPlayerId || (this.connectedPlayers[0]?.id || this.connectedPlayers[0]);
+          players.push({
+            id: hostId,
+            name: 'Host',
+            color: '#ff0000',
+            units: [],
+            buildings: [],
+            selectedUnits: []
+          });
+          players.push(window.player);
+        }
+        
+        // Clear the stored IDs after use
+        this._hostPlayerId = null;
+        this._playerIds = null;
+      }
+      
+      console.log('👥 Player order:', players.map((p, i) => `P${i+1}=${(p.id || 'unknown').slice(-6)}`).join(', '));
       this.startAdventureWithMap(settings.customMapData, players);
       return;
     }
@@ -3938,7 +4202,8 @@ const Lobby = {
       // Check if AI opponents are explicitly enabled
       const aiSlots = settings?.aiSlots || [];
       const aiCount = aiSlots.filter(slot => slot).length;
-      
+
+
       if (aiCount === 0 && gameType !== 'adventure') {
         console.error('❌ Cannot start match: At least one AI opponent must be added before starting!');
         this.showNotification('Please add at least one AI opponent before starting the match.', 'error');
@@ -4370,7 +4635,7 @@ const Lobby = {
         if (spawnIndex < spawnPositions.length) {
           const aiId = `ai-${slotIndex}-${mapSeed.toString(16).slice(-5)}`;
           const aiName = `AI ${slotIndex}`;
-          const aiColor = this.getPlayerColor(slotIndex);
+          const aiColor = this.getPlayerColor(slotIndex).primary;
           const aiSpawn = spawnPositions[spawnIndex];
           
           const aiPlayer = window.AIPlayer 

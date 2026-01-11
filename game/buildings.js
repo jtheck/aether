@@ -100,7 +100,7 @@ const BuildingTypes = {
     scale: 1.0,
     rotation: 0,
     size: { width: 4, height: 4 },
-    cost: { stone: 100, wood: 50 },
+    cost: { stone: 5, wood: 5 },
     category: "civic",
     needsWorkers: true,
     maxWorkers: 3,
@@ -119,11 +119,11 @@ const BuildingTypes = {
     scale: 0.4,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 5 },
+    cost: { wood: 2 },
     category: "production",
     needsWorkers: true,
     maxWorkers: 3,
-    workRadius: 15,
+    workRadius: 7.5,
     workType: "build",
     productionWorkType: "gather",
     productionMaxWorkers: 8,
@@ -140,7 +140,7 @@ const BuildingTypes = {
     scale: 0.2,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 25 },
+    cost: { wood: 5 },
     category: "residential",
     needsWorkers: true,
     maxWorkers: 3,
@@ -159,7 +159,7 @@ const BuildingTypes = {
     scale: 0.4,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 20 },
+    cost: { wood: 3 },
     category: "production",
     needsWorkers: true,
     maxWorkers: 3,
@@ -175,11 +175,11 @@ const BuildingTypes = {
 
   silo: {
     name: "Silo",
-    model: "assets/models/tower.glb", // TODO: unique model
+    model: "assets/models/silo.glb",
     scale: 0.35,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 30, stone: 10 },
+    cost: { wood: 5, stone: 3 },
     category: "storage",
     needsWorkers: true,
     maxWorkers: 2,
@@ -195,7 +195,7 @@ const BuildingTypes = {
     scale: 0.429,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { stone: 20, wood: 20 },
+    cost: { stone: 5, wood: 3 },
     category: "military",
     needsWorkers: true,
     maxWorkers: 3,
@@ -208,11 +208,11 @@ const BuildingTypes = {
 
   mine: {
     name: "Mine",
-    model: "assets/models/camp.glb", // TODO: unique model
+    model: "assets/models/mine.glb",
     scale: 0.4,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { wood: 35, stone: 15 },
+    cost: { wood: 5, stone: 3, minerals: 1 },
     category: "production",
     needsWorkers: true,
     maxWorkers: 3,
@@ -232,11 +232,11 @@ const BuildingTypes = {
 
   tavern: {
     name: "Tavern",
-    model: "assets/models/village.glb", // TODO: unique model
+    model: "assets/models/tavern.glb",
     scale: 0.25,
     rotation: 0,
     size: { width: 3, height: 3 },
-    cost: { wood: 40, stone: 20 },
+    cost: { wood: 5, stone: 3 },
     category: "civic",
     needsWorkers: true,
     maxWorkers: 3,
@@ -247,13 +247,13 @@ const BuildingTypes = {
     description: "Social hub that spawns Warlocks and enables upgrades"
   },
 
-  moon_well: {
+  moonwell: {
     name: "Moon Well",
-    model: "assets/models/windmill.glb", // TODO: unique model
+    model: "assets/models/moonwell.glb",
     scale: 0.3,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { stone: 30, minerals: 15 },
+    cost: { stone: 5, minerals: 1 },
     category: "support",
     needsWorkers: true,
     maxWorkers: 2,
@@ -267,11 +267,11 @@ const BuildingTypes = {
 
   barracks: {
     name: "Barracks",
-    model: "assets/models/village.glb", // TODO: unique model
+    model: "assets/models/barracks.glb",
     scale: 0.3,
     rotation: 0,
     size: { width: 3, height: 3 },
-    cost: { wood: 45, stone: 25 },
+    cost: { wood: 5, stone: 3 },
     category: "military",
     needsWorkers: true,
     maxWorkers: 3,
@@ -284,11 +284,11 @@ const BuildingTypes = {
 
   lab: {
     name: "Laboratory",
-    model: "assets/models/factory.glb", // TODO: unique model
+    model: "assets/models/lab.glb",
     scale: 0.35,
     rotation: 0,
     size: { width: 3, height: 3 },
-    cost: { stone: 50, minerals: 25 },
+    cost: { stone: 5, minerals: 1 },
     category: "research",
     needsWorkers: true,
     maxWorkers: 3,
@@ -300,11 +300,11 @@ const BuildingTypes = {
 
   workshop: {
     name: "Workshop",
-    model: "assets/models/factory.glb", // TODO: unique model
+    model: "assets/models/workshop.glb",
     scale: 0.35,
     rotation: 0,
     size: { width: 3, height: 3 },
-    cost: { wood: 45, stone: 30 },
+    cost: { wood: 5, stone: 3 },
     category: "production",
     needsWorkers: true,
     maxWorkers: 3,
@@ -325,7 +325,7 @@ const BuildingTypes = {
     scale: 0.4,
     rotation: 0,
     size: { width: 3, height: 3 },
-    cost: { stone: 60, minerals: 30 },
+    cost: { stone: 5, minerals: 1 },
     category: "elemental",
     element: "fire",
     needsWorkers: true,
@@ -338,11 +338,11 @@ const BuildingTypes = {
 
   church: {
     name: "Church",
-    model: "assets/models/tower.glb", // TODO: unique model
+    model: "assets/models/church.glb",
     scale: 0.5,
     rotation: 0,
     size: { width: 3, height: 3 },
-    cost: { stone: 55, minerals: 25 },
+    cost: { stone: 5, minerals: 1 },
     category: "elemental",
     element: "spirit",
     needsWorkers: true,
@@ -355,28 +355,28 @@ const BuildingTypes = {
 
   well: {
     name: "Well",
-    model: "assets/models/windmill.glb", // TODO: unique model
+    model: "assets/models/well.glb",
     scale: 0.25,
     rotation: 0,
     size: { width: 2, height: 2 },
-    cost: { stone: 40, minerals: 20 },
+    cost: { stone: 5, minerals: 1 },
     category: "elemental",
     element: "water",
     needsWorkers: true,
     maxWorkers: 2,
     workRadius: 15,
     workType: "build",
-    spawnsUnits: ["mycologist"],
-    description: "💧 Water elemental building - trains Mycologists and Alchemists"
+    spawnsUnits: ["mycorrhizae"],
+    description: "💧 Water elemental building - trains Myco and Alchemists"
   },
 
   perch: {
     name: "Perch",
-    model: "assets/models/tower.glb", // TODO: unique model
+    model: "assets/models/perch.glb",
     scale: 0.45,
     rotation: 0,
     size: { width: 2, height: 3 },
-    cost: { wood: 50, minerals: 25 },
+    cost: { wood: 5, minerals: 1 },
     category: "elemental",
     element: "air",
     needsWorkers: true,
@@ -389,11 +389,11 @@ const BuildingTypes = {
 
   grove: {
     name: "Grove",
-    model: "assets/models/tree.glb", // TODO: unique model
+    model: "assets/models/trees.glb",
     scale: 0.5,
     rotation: 0,
     size: { width: 3, height: 3 },
-    cost: { wood: 40, minerals: 20 },
+    cost: { wood: 5, minerals: 1 },
     category: "elemental",
     element: "earth",
     needsWorkers: true,
@@ -506,6 +506,16 @@ function Building(buildingType, position, options = {}) {
   this.gridX = options.gridX !== undefined ? options.gridX : Math.round(this.position.x / TILE_SIZE);
   this.gridZ = options.gridZ !== undefined ? options.gridZ : Math.round(this.position.z / TILE_SIZE);
   
+  // Calculate deterministic rotation based on grid position (like resources)
+  // This gives visual variety while keeping multiplayer in sync
+  const mapSeed = (window.liveField?.seed) || (window.currentMatch?.mapSeed) || 12345;
+  let rotHash = mapSeed + this.gridX * 73856093 + this.gridZ * 19349663;
+  rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+  rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+  rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+  const rotationIndex = rotHash % 8; // 8 directions: 0°, 45°, 90°, 135°, 180°, 225°, 270°, 315°
+  this.targetRotation = options.rotation !== undefined ? options.rotation : (rotationIndex * Math.PI / 4);
+  
   this.owner = options.owner; // CRITICAL: No default owner - must be explicitly set!
   this.health = options.health || 100;
   this.maxHealth = 100;
@@ -571,9 +581,13 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
     modelPromise.then(model => {
       building.mesh = model.root;
       
-      // Set initial state
+      // Make building mesh pickable for selection
+      building.mesh.isPickable = true;
+      
+      // Set initial state - CRITICAL: clear quaternion so Euler rotation works
       building.mesh.rotationQuaternion = null;
       building.mesh.rotation.y = building.targetRotation || 0;
+      console.log(`🔄 Building ${building.type} at (${x},${z}) rotation: ${building.targetRotation.toFixed(2)} (${(building.targetRotation*180/Math.PI).toFixed(0)}°)`);
       
       // Keep child meshes' original rotations
       building.mesh.getChildMeshes().forEach(mesh => {
@@ -1059,7 +1073,10 @@ function findIdleVillagersNearBuilding(building) {
   if (!building || !building.needsWorkers || !building.position) return [];
   
   const idleVillagers = [];
-  const workRadius = building.workRadius || 20; // Increased radius to find workers across map
+  // CRITICAL: Use productionWorkRadius for completed buildings with production work
+  const workRadius = (building.buildProgress >= 1.0 && building.productionWorkRadius) 
+    ? building.productionWorkRadius 
+    : (building.workRadius || 20); // Increased radius to find workers across map
   
   // CRITICAL: Sort units by ID before iterating for deterministic order
   // This ensures both clients check the same units in the same order
@@ -1082,6 +1099,18 @@ function findIdleVillagersNearBuilding(building) {
     const currentBehavior = window.behaviorManager ? window.behaviorManager.getBehavior(unit) : null;
     let isIdleOrLingering = !currentBehavior || 
                               (currentBehavior && currentBehavior.constructor.name === 'LingerBehavior');
+    
+    // CRITICAL: Don't auto-assign units with player-commanded behaviors - respect all direct commands!
+    if (currentBehavior) {
+      const behaviorName = currentBehavior.constructor.name;
+      // Protect: manual gather, move commands, attack commands
+      if (behaviorName === 'ManualGatherBehavior' || 
+          behaviorName === 'WalkBehavior' || 
+          behaviorName === 'RunBehavior' ||
+          behaviorName === 'AttackBuildingBehavior') {
+        continue; // Skip units with direct player commands
+      }
+    }
     
     // SPECIAL: Check if villager has GatherWorkBehavior but camp has no resources
     if (!isIdleOrLingering && currentBehavior && currentBehavior.constructor.name === 'GatherWorkBehavior') {
@@ -1152,20 +1181,38 @@ function findIdleVillagersNearBuilding(building) {
 function assignVillagerToWork(villager, building) {
   if (!villager || !building || !window.behaviorManager) return false;
   
+  // CRITICAL: Don't override ANY direct player commands!
+  const currentBehavior = window.behaviorManager.getBehavior(villager);
+  if (currentBehavior) {
+    const behaviorName = currentBehavior.constructor.name;
+    // Protect: manual gather, move commands, attack commands
+    if (behaviorName === 'ManualGatherBehavior' || 
+        behaviorName === 'WalkBehavior' || 
+        behaviorName === 'RunBehavior' ||
+        behaviorName === 'AttackBuildingBehavior') {
+      return false; // Don't interrupt direct player commands
+    }
+  }
+  
   // Check if building needs more workers
   if (building.assignedWorkers.length >= building.maxWorkers) {
     return false;
   }
   
   // Determine work behavior type based on building and unit type
+  // CRITICAL: For completed buildings with productionWorkType, use that instead of workType
+  const effectiveWorkType = (building.buildProgress >= 1.0 && building.productionWorkType) 
+    ? building.productionWorkType 
+    : building.workType;
+  
   let workBehaviorType = 'work';
   if (villager.type === 'engineer') {
     workBehaviorType = 'engineer_work';
-  } else if (building.workType === 'build') {
+  } else if (effectiveWorkType === 'build') {
     workBehaviorType = 'build_work';
-  } else if (building.workType === 'gather') {
+  } else if (effectiveWorkType === 'gather') {
     workBehaviorType = 'gather_work';
-  } else if (building.workType === 'farm') {
+  } else if (effectiveWorkType === 'farm') {
     workBehaviorType = 'farm_work';
   }
   
@@ -1183,10 +1230,9 @@ function assignVillagerToWork(villager, building) {
   // DIAGNOSTIC: Log resource availability for camps
   if (building.workType === 'gather') {
     // Count only non-depleted, available resources (not scheduled for depletion)
-    const availableResourceCount = building.availableResources?.filter(r => 
-      !r.depleted && r.remaining > 0 && r.depletionTick === undefined
-    ).length || 0;
-    const totalResourceCount = building.availableResources?.length || 0;
+    // NOTE: No longer tracking availableResources - villagers find resources dynamically
+    const availableResourceCount = 0;
+    const totalResourceCount = 0;
     // Note: Workers are automatically released when camp has no resources (see GatherWorkBehavior)
     // Only log warning once per camp to avoid spam
     if (availableResourceCount === 0 && !building._noResourcesWarned) {
@@ -1449,32 +1495,28 @@ function updateCapturePointVisuals(agora) {
     
     agora.captureVisuals.warningRing = warningRing;
     agora.captureVisuals.warningMat = warningMat;
-    
-    // Countdown timer text (shows seconds remaining)
-    const timerPlane = BABYLON.MeshBuilder.CreatePlane('captureTimer', {
-      width: 8,
-      height: 4
-    }, window.gfx.scene);
-    timerPlane.position.y = 8; // High above the agora
-    timerPlane.parent = agora.mesh;
-    timerPlane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL; // Always face camera
-    timerPlane.isVisible = false;
-    
-    // Create dynamic texture for timer text
-    const timerTexture = new BABYLON.DynamicTexture('captureTimerTexture', {width: 512, height: 256}, window.gfx.scene);
-    const timerMat = new BABYLON.StandardMaterial('captureTimerMat', window.gfx.scene);
-    timerMat.diffuseTexture = timerTexture;
-    timerMat.emissiveTexture = timerTexture;
-    timerMat.opacityTexture = timerTexture;
-    timerMat.backFaceCulling = false;
-    timerPlane.material = timerMat;
-    
-    agora.captureVisuals.timerPlane = timerPlane;
-    agora.captureVisuals.timerTexture = timerTexture;
   }
   
   // Update visual state based on capture status
   const visuals = agora.captureVisuals;
+  
+  // CRITICAL: Show health dots when contested, hide when not contested
+  if (isContested) {
+    // Agora is being contested - show health dots
+    if (!agora.healthDotsContainer && window.createHealthDots) {
+      window.createHealthDots(agora);
+    }
+    if (agora.healthDotsContainer && window.showHealthDots) {
+      window.showHealthDots(agora);
+      window.updateHealthDots(agora);
+    }
+  } else {
+    // Not contested - hide health dots (unless it's selected by player)
+    const isSelected = window.player && window.player.selectedBuilding === agora;
+    if (!isSelected && agora.healthDotsContainer && window.hideHealthDots) {
+      window.hideHealthDots(agora);
+    }
+  }
   
   // Update base disc color to match owner
   if (window.getTeamColorForOwner) {
@@ -1540,64 +1582,54 @@ function updateCapturePointVisuals(agora) {
   if (captureProgress > 0 || isContested) {
     visuals.warningRing.isVisible = true;
     
-    // Pulse animation
-    const time = Date.now() * 0.003; // Slower pulse
-    const pulseScale = 1.0 + Math.sin(time) * 0.1;
+    // Subtle pulse animation
+    const time = Date.now() * 0.002; // Slower, calmer pulse
+    const pulseScale = 1.0 + Math.sin(time) * 0.08; // Gentler pulse (8%)
     visuals.warningRing.scaling.setAll(pulseScale);
     
-    // Change color if contested
+    // Slow rotation for subtle visual interest
+    visuals.warningRing.rotation.y = time * 0.15;
+    
+    // Change color based on state
     if (isContested) {
-      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 1, 0); // Yellow for contested
-      visuals.warningMat.emissiveColor = new BABYLON.Color3(1, 1, 0);
+      // Contested: yellow with subtle fade
+      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 1, 0);
+      visuals.warningMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0);
+      visuals.warningMat.alpha = 0.65 + Math.sin(time * 1.5) * 0.1; // Gentle fade
     } else {
-      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 0.3, 0); // Orange for capturing
-      visuals.warningMat.emissiveColor = new BABYLON.Color3(1, 0.5, 0);
+      // Being captured: orange
+      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 0.4, 0);
+      visuals.warningMat.emissiveColor = new BABYLON.Color3(0.8, 0.3, 0);
+      visuals.warningMat.alpha = 0.7;
     }
   } else {
     visuals.warningRing.isVisible = false;
   }
   
-  // Update countdown timer
+  // Make the progress disc more prominent and easier to read
+  // The disc itself IS the timer - its size shows the capture progress
   if (captureProgress > 0) {
-    visuals.timerPlane.isVisible = true;
+    // Subtle glow effect on progress disc
+    const time = Date.now() * 0.002;
     
-    // Calculate seconds remaining (15 seconds total capture time)
-    const CAPTURE_TIME = 15;
-    const remainingProgress = 100 - captureProgress;
-    const secondsRemaining = Math.ceil((remainingProgress / 100) * CAPTURE_TIME);
-    
-    // Draw timer text
-    const ctx = visuals.timerTexture.getContext();
-    ctx.clearRect(0, 0, 512, 256);
-    
-    // Background
-    if (isContested) {
-      ctx.fillStyle = 'rgba(255, 255, 0, 0.8)'; // Yellow for contested
-    } else {
-      ctx.fillStyle = 'rgba(255, 100, 0, 0.8)'; // Orange for capturing
+    // Add glow effect by gently pulsing emissive color
+    if (capturerTeam && window.getTeamColorForOwner) {
+      const capturerColorHex = window.getTeamColorForOwner(capturerTeam);
+      if (capturerColorHex) {
+        const clean = typeof capturerColorHex === 'string' ? capturerColorHex.replace('#', '') : '';
+        if (clean.length === 6) {
+          const r = parseInt(clean.substr(0, 2), 16) / 255;
+          const g = parseInt(clean.substr(2, 2), 16) / 255;
+          const b = parseInt(clean.substr(4, 2), 16) / 255;
+          const glowIntensity = 0.4 + Math.sin(time * 2) * 0.15; // Gentle pulse between 0.25 and 0.55
+          visuals.progressMat.emissiveColor = new BABYLON.Color3(
+            r * glowIntensity,
+            g * glowIntensity,
+            b * glowIntensity
+          );
+        }
+      }
     }
-    ctx.fillRect(0, 0, 512, 256);
-    
-    // Border
-    ctx.strokeStyle = 'rgba(0, 0, 0, 0.8)';
-    ctx.lineWidth = 8;
-    ctx.strokeRect(4, 4, 504, 248);
-    
-    // Timer text
-    ctx.fillStyle = 'white';
-    ctx.font = 'bold 120px Arial';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    
-    if (isContested) {
-      ctx.fillText('CONTESTED', 256, 128);
-    } else {
-      ctx.fillText(`${secondsRemaining}s`, 256, 128);
-    }
-    
-    visuals.timerTexture.update();
-  } else {
-    visuals.timerPlane.isVisible = false;
   }
 }
 
@@ -1699,15 +1731,16 @@ function updateBuildings(deltaTime) {
     return; // No buildings to update
   }
   
-  // Debug: Log every 2 seconds with detailed state
+  // Debug: Log every 2 seconds, but only when buildings are under construction
   const currentTick = window.currentMatch?.tick || 0;
   if (currentTick % 40 === 0 && currentTick > 0) {
-    const buildingCount = window.gameBuildings.length;
     const underConstruction = window.gameBuildings.filter(b => b.buildProgress < 1.0);
-    console.log(`🏗️ UPDATE BUILDINGS: ${buildingCount} total, ${underConstruction.length} under construction`);
-    underConstruction.forEach(b => {
-      console.log(`   - ${b.type} (${b.owner}): progress=${(b.buildProgress*100).toFixed(0)}%, workers=${b.assignedWorkers?.length || 0}, needsWorkers=${b.needsWorkers}, workType=${b.workType}`);
-    });
+    if (underConstruction.length > 0) {
+      console.log(`🏗️ UPDATE BUILDINGS: ${window.gameBuildings.length} total, ${underConstruction.length} under construction`);
+      underConstruction.forEach(b => {
+        console.log(`   - ${b.type} (${b.owner}): progress=${(b.buildProgress*100).toFixed(0)}%, workers=${b.assignedWorkers?.length || 0}, needsWorkers=${b.needsWorkers}, workType=${b.workType}`);
+      });
+    }
   }
   
   // CRITICAL: Sort buildings by ID for deterministic iteration order
@@ -1882,9 +1915,12 @@ function updateBuildings(deltaTime) {
     const shouldCheckThisTick = (currentTick % tickRate === 0); // Check every 20 ticks (1 second at 20Hz)
     
     // For construction buildings, check even if not complete; for production buildings, only when complete
+    // CRITICAL: Check productionWorkType for buildings that have production after construction
+    const hasProductionWork = building.buildProgress >= 1.0 && building.productionWorkType;
     const shouldAssignWorkers = building.needsWorkers && (window.game || window.currentMatch) && shouldCheckThisTick && 
       ((building.workType === 'build' && building.buildProgress < 1.0) || 
-       (building.workType !== 'build' && building.buildProgress >= 1.0));
+       (building.workType !== 'build' && building.buildProgress >= 1.0) ||
+       hasProductionWork);
     
     if (shouldAssignWorkers && (building.lastWorkerCheckTick ?? -1) !== currentTick) {
       building.lastWorkerCheckTick = currentTick;
@@ -1902,27 +1938,19 @@ function updateBuildings(deltaTime) {
           return false; // Remove workers no longer working here
         }
         
-        // SPECIAL: For camps, check if there are no available resources
-        // If camp has no resources, release workers so they can be reassigned
-        if (building.type === 'camp' && building.workType === 'gather') {
-          const availableResources = building.availableResources || [];
-          const hasAvailableResources = availableResources.some(r => 
-            !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
-            (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
-          );
-          
-          if (!hasAvailableResources) {
-            // Camp has no resources - release this worker
-            worker.assignedBuilding = null;
-            return false;
-          }
-        }
+        // NOTE: Resource checking moved to GatherWorkBehavior - workers dynamically find resources
+        // No longer using building.availableResources pre-scanned list
         
         return true; // Keep valid workers
       });
       
       // Try to assign more workers if needed
-      if (building.assignedWorkers.length < building.maxWorkers) {
+      // CRITICAL: Use productionMaxWorkers for completed buildings with production work
+      const maxWorkersForThisState = (building.buildProgress >= 1.0 && building.productionMaxWorkers) 
+        ? building.productionMaxWorkers 
+        : building.maxWorkers;
+      
+      if (building.assignedWorkers.length < maxWorkersForThisState) {
         const idleVillagers = findIdleVillagersNearBuilding(building);
         
         // Debug: Log when looking for workers
@@ -1932,31 +1960,11 @@ function updateBuildings(deltaTime) {
         
         
         for (const villager of idleVillagers) {
-          if (building.assignedWorkers.length >= building.maxWorkers) break;
+          if (building.assignedWorkers.length >= maxWorkersForThisState) break;
           
-          // Check if villager is assigned to a building that has no work
+          // Check if villager is already assigned to a building
           if (villager.assignedBuilding) {
-            const assignedBuilding = villager.assignedBuilding;
-            // If assigned to a camp with no resources, clear the assignment
-            if (assignedBuilding.type === 'camp' && assignedBuilding.workType === 'gather') {
-              const availableResources = assignedBuilding.availableResources || [];
-              const hasAvailableResources = availableResources.some(r => 
-                !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
-                (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
-              );
-              if (!hasAvailableResources) {
-                // Clear assignment to empty camp
-                villager.assignedBuilding = null;
-                if (assignedBuilding.assignedWorkers) {
-                  const idx = assignedBuilding.assignedWorkers.indexOf(villager);
-                  if (idx > -1) assignedBuilding.assignedWorkers.splice(idx, 1);
-                }
-              } else {
-                continue; // Still assigned to a camp with resources
-              }
-            } else {
-              continue; // Already assigned elsewhere
-            }
+            continue; // Already assigned elsewhere
           }
           
           // DIAGNOSTIC: Verify ownership matches before assigning
@@ -2026,6 +2034,12 @@ const buildingSystem = {
     if (!BuildingTypes[buildingType]) {
       // console.error(`Unknown building type: ${buildingType}`);
       return;
+    }
+    
+    // Close the radial menu when starting placement
+    if (window.hud && typeof window.hud.hideRadialMenu === 'function') {
+      window.hud.hideRadialMenu();
+      console.log('🏗️ Closed radial menu when starting building placement');
     }
     
     // CRITICAL: Dispose old preview mesh before creating new one!
@@ -2115,9 +2129,9 @@ const buildingSystem = {
       this.previewMesh.rotationQuaternion = null;
       this.previewMesh.isPickable = false;
       
-      // Set initial rotation
-      this.placementRotation = buildingDef.rotation || 0;
-      this.previewMesh.rotation.y = this.placementRotation;
+      // Set initial rotation (will be updated with deterministic rotation based on position)
+      this.placementRotation = 0;
+      this.previewMesh.rotation.y = 0;
       
       // Position it at the provided position or current mouse position
       if (initialPosition) {
@@ -2125,6 +2139,19 @@ const buildingSystem = {
         // Get terrain height (triangular interpolation matches GPU rendering)
         const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(initialPosition.x, initialPosition.z) : 0;
         this.previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
+        
+        // Calculate deterministic rotation based on grid position (8 cardinal directions)
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const gx = Math.round(initialPosition.x / TILE_SIZE);
+        const gz = Math.round(initialPosition.z / TILE_SIZE);
+        const mapSeed = (window.liveField?.seed) || (window.currentMatch?.mapSeed) || 12345;
+        let rotHash = mapSeed + gx * 73856093 + gz * 19349663;
+        rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+        rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+        rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+        const rotationIndex = rotHash % 8; // 8 directions
+        const rotation = rotationIndex * Math.PI / 4;
+        this.previewMesh.rotation.y = rotation;
       } else {
         // Try to get current mouse position
         const pickResult = window.gfx.scene.pick(
@@ -2137,15 +2164,42 @@ const buildingSystem = {
           // Get terrain height (triangular interpolation matches GPU rendering)
           const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(pickResult.pickedPoint.x, pickResult.pickedPoint.z) : 0;
           this.previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
+          
+          // Calculate deterministic rotation based on grid position (8 cardinal directions)
+          const TILE_SIZE = window.TILE_SIZE || 4;
+          const gx = Math.round(pickResult.pickedPoint.x / TILE_SIZE);
+          const gz = Math.round(pickResult.pickedPoint.z / TILE_SIZE);
+          const mapSeed = (window.liveField?.seed) || (window.currentMatch?.mapSeed) || 12345;
+          let rotHash = mapSeed + gx * 73856093 + gz * 19349663;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          const rotationIndex = rotHash % 8; // 8 directions
+          const rotation = rotationIndex * Math.PI / 4;
+          this.previewMesh.rotation.y = rotation;
         } else if (window.gfx.cameraTarget) {
           // Fallback to camera target
           this.previewMesh.position = window.gfx.cameraTarget.position.clone();
           // Get terrain height (triangular interpolation matches GPU rendering)
           const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(this.previewMesh.position.x, this.previewMesh.position.z) : 0;
           this.previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
+          
+          // Calculate deterministic rotation (8 cardinal directions)
+          const TILE_SIZE = window.TILE_SIZE || 4;
+          const gx = Math.round(this.previewMesh.position.x / TILE_SIZE);
+          const gz = Math.round(this.previewMesh.position.z / TILE_SIZE);
+          const mapSeed = (window.liveField?.seed) || (window.currentMatch?.mapSeed) || 12345;
+          let rotHash = mapSeed + gx * 73856093 + gz * 19349663;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+          const rotationIndex = rotHash % 8; // 8 directions
+          const rotation = rotationIndex * Math.PI / 4;
+          this.previewMesh.rotation.y = rotation;
         } else {
           // Last resort fallback
           this.previewMesh.position = new BABYLON.Vector3(0, 0.25, 0);
+          this.previewMesh.rotation.y = 0;
         }
       }
       
@@ -2175,10 +2229,8 @@ const buildingSystem = {
     const buildingDef = BuildingTypes[this.selectedBuildingType];
     if (!buildingDef) return;
     
-    // For camps, use productionWorkRadius (resource detection radius), not workRadius (construction worker search radius)
-    const radius = (this.selectedBuildingType === 'camp' && buildingDef.productionWorkRadius)
-      ? buildingDef.productionWorkRadius * TILE_SIZE
-      : (buildingDef.workRadius ? buildingDef.workRadius * TILE_SIZE : 0);
+    // Show workRadius (worker recruitment radius) for all buildings
+    const radius = buildingDef.workRadius ? buildingDef.workRadius * TILE_SIZE : 0;
     
     if (radius === 0) return;
     
@@ -2197,11 +2249,11 @@ const buildingSystem = {
     // Rotate to be horizontal (disc is vertical by default)
     circle.rotation.x = Math.PI / 2; // 90 degrees to make it horizontal
     
-    // Create material for the radius circle
+    // Create material for the radius circle (worker recruitment radius)
     const radiusMaterial = new BABYLON.StandardMaterial("radiusMaterial", window.gfx.scene);
-    radiusMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.8, 0.2); // Green
-    radiusMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.3, 0.1);
-    radiusMaterial.alpha = 1.0; // Opaque
+    radiusMaterial.diffuseColor = new BABYLON.Color3(0.3, 0.6, 0.9); // Blue (worker recruitment, not resources)
+    radiusMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.2, 0.3);
+    radiusMaterial.alpha = 0.3; // Semi-transparent
     radiusMaterial.backFaceCulling = false; // Show from both sides
     
     circle.material = radiusMaterial;
@@ -2209,8 +2261,7 @@ const buildingSystem = {
     
     this.radiusVisualization = circle;
     
-    // Find and highlight resources within the radius (with performance optimization)
-    this.highlightResourcesInRadius(centerPosition, radius);
+    // NOTE: No longer scanning/highlighting resources - villagers find them dynamically
   },
   
   // Clear radius visualization
@@ -2263,15 +2314,7 @@ const buildingSystem = {
       const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(newPosition.x, newPosition.z) : 0;
       this.radiusVisualization.position.y = terrainY + 0.05; // Very close to ground, following terrain
       
-      // Update resource highlights
-      const buildingDef = BuildingTypes[this.selectedBuildingType];
-      if (buildingDef) {
-        // For camps, use productionWorkRadius for resource visualization, not workRadius
-        const radius = (this.selectedBuildingType === 'camp' && buildingDef.productionWorkRadius) 
-          ? buildingDef.productionWorkRadius 
-          : (buildingDef.workRadius || 2);
-        this.highlightResourcesInRadius(newPosition, radius * TILE_SIZE);
-      }
+      // NOTE: No longer updating resource highlights - villagers find resources dynamically
     }
   },
   
@@ -2514,6 +2557,45 @@ const buildingSystem = {
           gridZ: gridZ
         };
       }
+      
+      // CHECK 2b: Rocks on grass tiles (terrainType === 3) with ~3% chance
+      // Same logic as rocks on dirt, just different terrain type
+      const rockRoll = this.tileHash(gridX, gridZ, fieldSeed + 1000);
+      if (rockRoll < 0.03) {
+        // Determine rock size (same logic as gfx.js - use region-based size)
+        const regionX = Math.floor(gridX / 5);
+        const regionZ = Math.floor(gridZ / 5);
+        const sizeRoll = this.tileHash(regionX, regionZ, fieldSeed + 2000);
+        
+        if (sizeRoll < 0.3) {
+          // Small rocks (30%) → minerals
+          return {
+            type: 'minerals',
+            amount: 1,
+            remaining: 12,
+            gridX: gridX,
+            gridZ: gridZ
+          };
+        } else if (sizeRoll < 0.7) {
+          // Medium rocks (40%) → stone (moss rocks)
+          return {
+            type: 'stone',
+            amount: 4,
+            remaining: 56,
+            gridX: gridX,
+            gridZ: gridZ
+          };
+        } else {
+          // Large rocks (30%) → more stone (snow rocks)
+          return {
+            type: 'stone',
+            amount: 6,
+            remaining: 84,
+            gridX: gridX,
+            gridZ: gridZ
+          };
+        }
+      }
     }
     
     return null;
@@ -2559,6 +2641,9 @@ const buildingSystem = {
   
   // Enable placement mode with mouse tracking
   enablePlacementMode: function() {
+    // Track when placement mode was activated to prevent immediate placement from button click
+    this.placementModeActivatedAt = Date.now();
+    
     // Add mouse move handler for preview positioning
     this.mouseMoveHandler = (e) => {
       if (!this.isPlacing) return;
@@ -2586,10 +2671,24 @@ const buildingSystem = {
             this.previewMesh.position.x = gridX;
             this.previewMesh.position.z = gridZ;
             this.previewMesh.position.y = terrainY + 0.75; // Higher up for better visibility
+            
+            // Calculate deterministic rotation based on grid position (8 cardinal directions)
+            const gx = Math.round(worldPos.x / TILE_SIZE);
+            const gz = Math.round(worldPos.z / TILE_SIZE);
+            const mapSeed = (window.liveField?.seed) || (window.currentMatch?.mapSeed) || 12345;
+            let rotHash = mapSeed + gx * 73856093 + gz * 19349663;
+            rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+            rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+            rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+            const rotationIndex = rotHash % 8;
+            const rotation = rotationIndex * Math.PI / 4;
+            
+            console.log(`👻 Preview (mouse): pos=(${gx},${gz}), idx=${rotationIndex}, rotation=${(rotation*180/Math.PI).toFixed(0)}°`);
+            
+            // CRITICAL: Clear rotationQuaternion so rotation.y works
+            this.previewMesh.rotationQuaternion = null;
+            this.previewMesh.rotation.y = rotation;
           }
-          
-          // Apply rotation
-          this.previewMesh.rotation.y = this.placementRotation;
           
           // Update radius visualization for camp
           if (this.selectedBuildingType === 'camp') {
@@ -2607,6 +2706,13 @@ const buildingSystem = {
     // Add click handlers for placement and cancel
     this.clickHandler = (e) => {
       if (!this.isPlacing || !this.previewMesh) return;
+      
+      // Ignore clicks within 100ms of activating placement mode (prevents button click from placing)
+      const timeSinceActivation = Date.now() - (this.placementModeActivatedAt || 0);
+      if (timeSinceActivation < 100) {
+        console.log('🏗️ Ignoring click - too soon after activating placement mode');
+        return;
+      }
       
       // Right click to cancel
       if (e.button === 2) {
@@ -2631,7 +2737,21 @@ const buildingSystem = {
           const gridZ = Math.round(worldPos.z / TILE_SIZE);
           
           // Place the building
-          this.placeBuildingAt(gridX, gridZ);
+          const placed = this.placeBuildingAt(gridX, gridZ);
+          
+          // Exit placement mode UNLESS shift is held (for rapid building)
+          if (placed && !e.shiftKey) {
+            console.log('🏗️ Building placed, exiting placement mode (hold Shift for continuous placement)');
+            this.cancelPlacement();
+          } else if (placed && e.shiftKey) {
+            console.log('🏗️ Building placed, staying in placement mode (Shift held)');
+            // Recreate preview for next placement
+            if (this.previewMesh) {
+              this.previewMesh.dispose();
+              this.previewMesh = null;
+            }
+            this.createPreviewMesh();
+          }
           
           // Prevent event from bubbling up and closing menus
           e.preventDefault();
@@ -2667,7 +2787,7 @@ const buildingSystem = {
   
   // Place building at grid coordinates
   placeBuildingAt: function(gridX, gridZ) {
-    if (!this.selectedBuildingType || !this.isPlacing) return;
+    if (!this.selectedBuildingType || !this.isPlacing) return false;
     
     // Check if position is valid (not too close to agora) - only during actual matches
     if (window.game && window.player && window.player.agora) {
@@ -2678,7 +2798,7 @@ const buildingSystem = {
       if (distance < 3) {
         // console.log('❌ Building too close to agora');
         this.showPlacementError('Building too close to agora');
-        return;
+        return false;
       }
     }
     
@@ -2690,7 +2810,7 @@ const buildingSystem = {
       if (building.position.x === worldX && building.position.z === worldZ) {
         // console.log('❌ Position already occupied');
         this.showPlacementError('Position already occupied');
-        return;
+        return false;
       }
     }
     
@@ -2703,17 +2823,15 @@ const buildingSystem = {
         playerId: normalizedPlayerId,  // CRITICAL: Must include for proper ownership!
         buildingType: this.selectedBuildingType,
         gridX: gridX,
-        gridZ: gridZ,
-        rotation: this.placementRotation
+        gridZ: gridZ
+        // NOTE: rotation is calculated deterministically in Building constructor based on position
         // NOTE: Resources are detected DETERMINISTICALLY during command execution, not here
       };
       window.currentMatch.submitCommand(command);
       
-      // Preview cleanup - stay in placement mode
-      this.previewMesh.dispose();
-      this.previewMesh = null;
-      this.createPreviewMesh();
-      return;
+      // Don't recreate preview here - let the click handler decide whether to exit or continue
+      // (If continuing with shift-click, it will create new preview; if exiting, cancelPlacement will clean up)
+      return true; // Successfully submitted command
     }
     
     // SINGLE PLAYER: Place building directly
@@ -2730,81 +2848,12 @@ const buildingSystem = {
         building.teamColor = window.getTeamColorForOwner(building.owner);
       }
       
-      // Store the target rotation for when the mesh loads
-      building.targetRotation = this.placementRotation;
+      // NOTE: targetRotation is calculated deterministically in Building constructor based on position
+      // Don't override it here!
       
       // DETERMINISTIC: Detect resources for camps (same logic as multiplayer)
-      if (this.selectedBuildingType === 'camp' && this.checkTileForResources) {
-        // Use productionWorkRadius (7) for resource detection, not workRadius (15) which is for construction
-        const productionWorkRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.productionWorkRadius) || 7;
-        const radiusInTiles = productionWorkRadius * TILE_SIZE;
-        
-        const detectedResources = [];
-        const gridRadius = Math.ceil(radiusInTiles / TILE_SIZE);
-        
-        // Get field boundaries for validation
-        const field = window.liveField;
-        const fieldWidth = field?.width || 0;
-        const fieldHeight = field?.height || 0;
-        
-        for (let x = gridX - gridRadius; x <= gridX + gridRadius; x++) {
-          for (let z = gridZ - gridRadius; z <= gridZ + gridRadius; z++) {
-            // CRITICAL: Skip coordinates outside map boundaries - resources can only exist on valid tiles
-            if (x < 0 || x >= fieldWidth || z < 0 || z >= fieldHeight) {
-              continue;
-            }
-            
-            // CRITICAL: Also check chunk mask if available (for custom map shapes)
-            if (field && field.chunkMask && field.chunkSize) {
-              const chunkX = Math.floor(x / field.chunkSize);
-              const chunkZ = Math.floor(z / field.chunkSize);
-              if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
-                continue; // Skip tiles in disabled chunks (off the table)
-              }
-            }
-            
-            const worldX = x * TILE_SIZE;
-            const worldZ = z * TILE_SIZE;
-            const campWorldX = gridX * TILE_SIZE;
-            const campWorldZ = gridZ * TILE_SIZE;
-            const distance = Math.sqrt(
-              Math.pow(worldX - campWorldX, 2) + 
-              Math.pow(worldZ - campWorldZ, 2)
-            );
-            
-            if (distance <= radiusInTiles) {
-              // CRITICAL: In multiplayer, ignore depletion state when detecting resources for new camps
-              // Depletion timing can differ between clients due to position drift, but terrain/seed is deterministic
-              // This ensures both clients detect the exact same resources for the same camp location
-              const ignoreDepletion = window.isMultiplayer || false;
-              const resourceInfo = this.checkTileForResources(x, z, ignoreDepletion);
-              if (resourceInfo) {
-                detectedResources.push({
-                  gridX: x,
-                  gridZ: z,
-                  worldX: worldX,
-                  worldZ: worldZ,
-                  type: resourceInfo.type,
-                  amount: resourceInfo.amount,
-                  remaining: resourceInfo.remaining // CRITICAL: Include remaining for depletion tracking
-                });
-              }
-            }
-          }
-        }
-        
-        if (detectedResources.length > 0) {
-          // CRITICAL: Sort resources for deterministic order
-          detectedResources.sort((a, b) => {
-            if (a.gridX !== b.gridX) return a.gridX - b.gridX;
-            return a.gridZ - b.gridZ;
-          });
-          building.availableResources = detectedResources;
-          // console.log(`🏗️ Single-player camp detected ${detectedResources.length} resources`);
-        } else {
-          console.warn(`⚠️ Single-player camp found NO resources!`);
-        }
-      }
+      // NOTE: No longer pre-scanning resources - villagers find them dynamically
+      // This allows camps to work with respawning resources and keeps the system flexible
       
       // Set up a callback to apply rotation and team colors after mesh loads
       const checkInterval = setInterval(() => {
@@ -2829,27 +2878,12 @@ const buildingSystem = {
       
       // console.log(`✅ ${building.name} placed at (${gridX}, ${gridZ})`);
       
-      // Show success message with resource count
-      const resourceCount = this.detectedResources ? this.detectedResources.length : 0;
-      // this.showPlacementSuccess(`${building.name} placed successfully! Found ${resourceCount} resource tiles.`);
-      // this.showPlacementSuccess(`${building.name} placed successfully!`);
-
-      // Get current mouse position for new preview
-      const pickResult = window.gfx.scene.pick(
-        window.gfx.scene.pointerX,
-        window.gfx.scene.pointerY
-      );
+      // Don't recreate preview here - let the click handler decide whether to exit or continue
+      // (If continuing with shift-click, it will create new preview; if exiting, cancelPlacement will clean up)
       
-      // Reset preview mesh and state but stay in placement mode
-      this.previewMesh.dispose();
-      this.previewMesh = null;
-      
-      // Create new preview at current mouse position
-      if (pickResult.hit && pickResult.pickedPoint) {
-        this.createPreviewMesh(pickResult.pickedPoint);
-      } else {
-        this.createPreviewMesh();
-      }
+      return true; // Successfully placed building
+    } else {
+      return false; // Failed to place building
     }
   },
   
@@ -3146,6 +3180,7 @@ if (typeof window !== 'undefined') {
   window.initBuildings = initBuildings;
   window.updateBuildings = updateBuildings;
   window.buildingSystem = buildingSystem;
+  window.assignVillagerToWork = assignVillagerToWork;
   window.processBuildingCompletion = processBuildingCompletion;
   
   // Debug logging
@@ -3432,3 +3467,52 @@ if (typeof window !== 'undefined') {
   
   
 }
+
+// Global functions for showing/hiding building selection radius
+let selectedBuildingRadiusCircle = null;
+
+window.showBuildingRadius = function(building) {
+  if (!building || !building.mesh || !window.gfx || !window.gfx.scene) return;
+  
+  // Clean up existing visualization
+  window.hideBuildingRadius();
+  
+  const buildingDef = window.BuildingTypes[building.type];
+  if (!buildingDef || !buildingDef.workRadius) return;
+  
+  // Create a circle mesh to show the work radius
+  const TILE_SIZE = window.TILE_SIZE || 4;
+  const radius = buildingDef.workRadius * TILE_SIZE;
+  const circle = BABYLON.MeshBuilder.CreateDisc("selectedBuildingRadius", {
+    radius: radius,
+    tessellation: 32
+  }, window.gfx.scene);
+  
+  // Position the circle at the building location
+  circle.position = building.mesh.position.clone();
+  const terrainY = window.getTerrainHeightAtPosition ? 
+    window.getTerrainHeightAtPosition(building.mesh.position.x, building.mesh.position.z) : 0;
+  circle.position.y = terrainY + 0.05;
+  
+  // Rotate to be horizontal
+  circle.rotation.x = Math.PI / 2;
+  
+  // Create material (blue for recruitment radius)
+  const material = new BABYLON.StandardMaterial("selectedBuildingRadiusMaterial", window.gfx.scene);
+  material.diffuseColor = new BABYLON.Color3(0.3, 0.6, 0.9);
+  material.emissiveColor = new BABYLON.Color3(0.1, 0.2, 0.3);
+  material.alpha = 0.3;
+  material.backFaceCulling = false;
+  
+  circle.material = material;
+  circle.isPickable = false;
+  
+  selectedBuildingRadiusCircle = circle;
+};
+
+window.hideBuildingRadius = function() {
+  if (selectedBuildingRadiusCircle) {
+    selectedBuildingRadiusCircle.dispose();
+    selectedBuildingRadiusCircle = null;
+  }
+};

@@ -51,20 +51,55 @@
     // type: 'reach' = any unit enters, 'capture' = hold for time, 'escape' = all units must reach
     objectives: [],
     currentObjectiveType: 'reach',
-    currentObjectiveRadius: 4
+    currentObjectiveRadius: 4,
+    
+    // Starting units (array of {x, y, type, player} objects)
+    // For adventure mode: players start with units instead of Agoras
+    startingUnits: [],
+    currentUnitType: 'villager',
+    currentUnitPlayer: 0  // Player index (0 = player 1, 1 = player 2, etc.)
   };
   
   // Spawn point radius (same as game's spawnZoneRadius for terrain flattening)
   forge.spawnZoneRadius = 6;
   
-  // Placeable buildings for map editor
-  forge.buildingTypes = {
-    agora:    { name: 'Agora',    icon: '🏛️' },
-    camp:     { name: 'Camp',     icon: '⛺' },
-    tower:    { name: 'Tower',    icon: '🗼' },
-    gate:     { name: 'Gate',     icon: '🚪' },
-    farm:     { name: 'Farm',     icon: '🌾' },
-    windmill: { name: 'Windmill', icon: '🌀' }
+  // Building icon mapping (fallback to category icons if not specified)
+  forge.buildingIcons = {
+    agora: '🏛️',
+    camp: '⛺',
+    village: '🏘️',
+    farm: '🌾',
+    silo: '🏭',
+    tower: '🗼',
+    mine: '⛏️',
+    tavern: '🍺',
+    moon_well: '🌙',
+    barracks: '⚔️',
+    lab: '🔬',
+    workshop: '🔧',
+    factory: '🏭',
+    church: '⛪',
+    well: '💧',
+    perch: '🦅',
+    grove: '🌳',
+    windmill: '🌀',
+    gate: '🚪',
+    // Category fallbacks
+    civic: '🏛️',
+    production: '⚙️',
+    residential: '🏘️',
+    storage: '📦',
+    military: '⚔️',
+    support: '💚',
+    research: '🔬',
+    elemental: '🔥'
+  };
+  
+  // Get icon for building (from mapping or category)
+  forge.getBuildingIcon = function(buildingKey, buildingDef) {
+    return this.buildingIcons[buildingKey] || 
+           this.buildingIcons[buildingDef.category] || 
+           '🏠';
   };
   
   // Symmetry modes
@@ -113,9 +148,28 @@
   forge.getOccupiedTiles = function() {
     const occupied = new Set();
     
-    // Manual placements
+    // Manual resource placements
     if (this._placedKeys) {
       this._placedKeys.forEach(k => occupied.add(k));
+    }
+    
+    // Building placements
+    if (this.state.buildings) {
+      this.state.buildings.forEach(building => {
+        const buildingDef = window.BuildingTypes?.[building.type];
+        if (!buildingDef || !buildingDef.size) return;
+        
+        const width = buildingDef.size.width || 1;
+        const height = buildingDef.size.height || 1;
+        
+        // Buildings occupy a rectangular footprint centered on their tile
+        // For a 2x2 building at (10, 10), it occupies tiles (10,10), (11,10), (10,11), (11,11)
+        for (let dx = 0; dx < width; dx++) {
+          for (let dz = 0; dz < height; dz++) {
+            occupied.add(`${building.x + dx},${building.y + dz}`);
+          }
+        }
+      });
     }
     
     // Auto-generated from LOD models (skip disposed/erased)
@@ -159,6 +213,16 @@
     window.isForgeMode = true;
     
     console.log('🔨 Forge Map Editor initializing...');
+    
+    // CRITICAL: Create default field if it doesn't exist
+    if (!window.liveField && window.Field) {
+      console.log('Creating default field for forge...');
+      window.liveField = new Field({
+        width: this.state.mapWidth,
+        height: this.state.mapHeight,
+        seed: this.state.mapSeed
+      });
+    }
     
     this.setupUI();
     this.setupPainting();
@@ -274,9 +338,9 @@
     canvas.addEventListener('pointermove', (e) => this.handlePointer(e));
     canvas.addEventListener('pointerup', (e) => this.handlePointer(e));
     
-    // Prevent context menu when editing spawns/buildings/objectives (right-click removes)
+    // Prevent context menu when editing spawns/buildings/units/objectives (right-click removes)
     canvas.addEventListener('contextmenu', (e) => {
-      if (this.state.editingLayer === 'spawns' || this.state.editingLayer === 'buildings' || this.state.editingLayer === 'objectives') {
+      if (this.state.editingLayer === 'spawns' || this.state.editingLayer === 'buildings' || this.state.editingLayer === 'units' || this.state.editingLayer === 'objectives') {
         e.preventDefault();
       }
     });
@@ -414,6 +478,12 @@
         if (pos) this.removeObjective(pos);
         return;
       }
+      if (this.state.editingLayer === 'units') {
+        e.preventDefault();
+        const pos = this.getTilePosition(e);
+        if (pos) this.removeStartingUnit(pos);
+        return;
+      }
     }
 
     // Only paint with left mouse button
@@ -461,6 +531,15 @@
             }
             return;
           }
+          
+          // Units editing mode - place starting unit
+          if (this.state.editingLayer === 'units') {
+            const pos = this.getTilePosition(e);
+            if (pos) {
+              this.placeStartingUnit(pos);
+            }
+            return;
+          }
 
           this.state.isPainting = true;
           // Disable camera controls while painting
@@ -480,6 +559,11 @@
         break;
         
       case 'pointermove':
+        // Update building preview on mouse move (in building mode)
+        if (this.state.editingLayer === 'buildings' && this.state.currentBuilding !== 'eraser') {
+          this.updateBuildingPreview(e);
+        }
+        
         if (this.state.isPainting && this.state.editingLayer !== 'table') {
           const pos = this.getTilePosition(e);
           if (pos && this.state.lastPaintPos) {
@@ -976,11 +1060,22 @@
     this.updateSpawnMarkers();
     this.updateSpawnList();
     
+    // Clear starting units
+    this.state.startingUnits = [];
+    this._unitMarkers?.forEach(m => m.dispose());
+    this._unitMarkers = [];
+    this.updateStartingUnitsList();
+    
     // Clear buildings
     this.state.buildings = [];
     this._buildingMeshes?.forEach(m => m.dispose());
     this._buildingMeshes?.clear();
     this.updateBuildingList();
+    
+    // Clear objectives
+    this.state.objectives = [];
+    this._objectiveMarkers?.forEach(m => m.dispose());
+    this._objectiveMarkers = [];
 
     // Dispose old field
     if (window.liveField && window.liveField.dispose) {
@@ -1110,7 +1205,13 @@
       bld: this.state.buildings.length > 0
           ? this.state.buildings.map(b => `${b.x},${b.y},${b.type},${(b.rotation || 0).toFixed(2)}`).join(';') : undefined,  // Buildings
       obj: this.state.objectives.length > 0
-          ? this.state.objectives.map(o => `${o.x},${o.y},${o.radius},${o.type}`).join(';') : undefined,  // Objectives
+          ? this.state.objectives.map(o => {
+              // Base64 encode message to avoid issues with special characters
+              const encodedMsg = o.message ? btoa(encodeURIComponent(o.message)) : '';
+              return `${o.x},${o.y},${o.radius},${o.type},${encodedMsg}`;
+            }).join(';') : undefined,  // Objectives with messages
+      units: this.state.startingUnits.length > 0
+          ? this.state.startingUnits.map(u => `${u.x},${u.y},${u.type},${u.player}`).join(';') : undefined,  // Starting units
       gt: Object.entries(this.state.gameTypes)
           .filter(([k, v]) => v).map(([k]) => k).join(',') || '1v1'  // Game types
     };
@@ -1515,11 +1616,21 @@
     if (mapData.obj) {
       this.state.objectives = mapData.obj.split(';').map((o, i) => {
         const parts = o.split(',');
+        // Decode message from base64 if present
+        let message = '';
+        if (parts[4]) {
+          try {
+            message = decodeURIComponent(atob(parts[4]));
+          } catch (e) {
+            console.warn('Failed to decode objective message:', e);
+          }
+        }
         return {
           x: Number(parts[0]),
           y: Number(parts[1]),
           radius: Number(parts[2]) || 4,
           type: parts[3] || 'reach',
+          message: message,
           id: i
         };
       });
@@ -1530,6 +1641,26 @@
       this.state.objectives = [];
       this._objectiveMarkers?.forEach(m => m.dispose());
       this._objectiveMarkers = [];
+    }
+    
+    // Restore starting units (v2 format)
+    if (mapData.units) {
+      this.state.startingUnits = mapData.units.split(';').map(u => {
+        const parts = u.split(',');
+        return {
+          x: Number(parts[0]),
+          y: Number(parts[1]),
+          type: parts[2] || 'villager',
+          player: Number(parts[3]) || 0
+        };
+      });
+      this.updateUnitMarkers();
+      this.updateStartingUnitsList();
+      console.log(`⚔️ Restored ${this.state.startingUnits.length} starting units`);
+    } else {
+      this.state.startingUnits = [];
+      this._unitMarkers?.forEach(m => m.dispose());
+      this._unitMarkers = [];
     }
 
     // Restore game types (v2 format)
@@ -1558,6 +1689,48 @@
   };
   
   // Setup UI
+  // Generate building buttons dynamically from BuildingTypes
+  forge.generateBuildingButtons = function() {
+    if (!window.BuildingTypes) {
+      console.warn('BuildingTypes not loaded yet');
+      return;
+    }
+    
+    const container = document.getElementById('buildings-buttons-container');
+    if (!container) return;
+    
+    let html = '';
+    let currentRow = [];
+    const buttonsPerRow = 3;
+    
+    // Group buildings and create buttons
+    Object.keys(window.BuildingTypes).forEach((key, index) => {
+      const building = window.BuildingTypes[key];
+      const icon = this.getBuildingIcon(key, building);
+      const name = building.name || key;
+      
+      currentRow.push(`<button id="bldg-${key}" class="forge-btn${index === 0 ? ' active' : ''}" onclick="forge.setBuilding('${key}')">${icon} ${name}</button>`);
+      
+      if (currentRow.length === buttonsPerRow) {
+        html += `<div class="forge-buttons" style="margin-top:5px;">${currentRow.join('')}</div>`;
+        currentRow = [];
+      }
+    });
+    
+    // Add remaining buttons
+    if (currentRow.length > 0) {
+      html += `<div class="forge-buttons" style="margin-top:5px;">${currentRow.join('')}</div>`;
+    }
+    
+    container.innerHTML = html;
+    
+    // Set first building as default
+    const firstBuilding = Object.keys(window.BuildingTypes)[0];
+    if (firstBuilding) {
+      this.state.currentBuilding = firstBuilding;
+    }
+  };
+  
   forge.setupUI = function() {
     if (!ENABLE_FORGE) return;
     
@@ -1575,6 +1748,7 @@
             <button id="layer-resources" class="forge-btn" onclick="forge.setEditingLayer('resources')">🌲 Resources</button>
             <button id="layer-buildings" class="forge-btn" onclick="forge.setEditingLayer('buildings')">🏗️ Buildings</button>
             <button id="layer-spawns" class="forge-btn" onclick="forge.setEditingLayer('spawns')">🚩 Spawns</button>
+            <button id="layer-units" class="forge-btn" onclick="forge.setEditingLayer('units')">⚔️ Units</button>
             <button id="layer-objectives" class="forge-btn" onclick="forge.setEditingLayer('objectives')">🎯 Objectives</button>
           </div>
           <div class="forge-buttons" style="margin-top:5px;">
@@ -1643,15 +1817,8 @@
         <div id="buildings-panel" class="forge-section" style="display:none;">
           <h3>🏗️ Buildings</h3>
           <p style="font-size:11px;opacity:0.7;">Click to place. Right-click to remove.</p>
-          <div class="forge-buttons">
-            <button id="bldg-agora" class="forge-btn active" onclick="forge.setBuilding('agora')">🏛️ Agora</button>
-            <button id="bldg-camp" class="forge-btn" onclick="forge.setBuilding('camp')">⛺ Camp</button>
-            <button id="bldg-tower" class="forge-btn" onclick="forge.setBuilding('tower')">🗼 Tower</button>
-          </div>
-          <div class="forge-buttons" style="margin-top:5px;">
-            <button id="bldg-gate" class="forge-btn" onclick="forge.setBuilding('gate')">🚪 Gate</button>
-            <button id="bldg-farm" class="forge-btn" onclick="forge.setBuilding('farm')">🌾 Farm</button>
-            <button id="bldg-windmill" class="forge-btn" onclick="forge.setBuilding('windmill')">🌀 Windmill</button>
+          <div id="buildings-buttons-container" style="max-height:300px;overflow-y:auto;">
+            <!-- Buttons will be dynamically generated from BuildingTypes -->
           </div>
           <div class="forge-buttons" style="margin-top:5px;">
             <button id="bldg-eraser" class="forge-btn" onclick="forge.setBuilding('eraser')">🧽 Eraser</button>
@@ -1662,6 +1829,29 @@
           </div>
         </div>
         
+        <div id="units-panel" class="forge-section" style="display:none;">
+          <h3>⚔️ Starting Units</h3>
+          <p style="font-size:11px;opacity:0.7;">Click to place starting unit. Right-click to remove.<br>For Adventure mode: players start with units instead of Agoras.</p>
+          
+          <h4 style="margin-top:8px;font-size:12px;">Player</h4>
+          <div class="forge-buttons">
+            <button id="unit-player-0" class="forge-btn active" onclick="forge.setUnitPlayer(0)">🔵 P1</button>
+            <button id="unit-player-1" class="forge-btn" onclick="forge.setUnitPlayer(1)">🔴 P2</button>
+            <button id="unit-player-2" class="forge-btn" onclick="forge.setUnitPlayer(2)">🟢 P3</button>
+            <button id="unit-player-3" class="forge-btn" onclick="forge.setUnitPlayer(3)">🟡 P4</button>
+          </div>
+          
+          <h4 style="margin-top:8px;font-size:12px;">Unit Type</h4>
+          <div id="unit-type-buttons" class="forge-buttons" style="max-height:200px;overflow-y:auto;">
+            <!-- Dynamically generated -->
+          </div>
+          
+          <div id="starting-units-list" style="margin-top:8px;font-size:11px;max-height:100px;overflow-y:auto;"></div>
+          <div class="forge-buttons" style="margin-top:8px;">
+            <button class="forge-btn" onclick="forge.clearStartingUnits()">🗑️ Clear All</button>
+          </div>
+        </div>
+        
         <div id="objectives-panel" class="forge-section" style="display:none;">
           <h3>🎯 Objectives</h3>
           <p style="font-size:11px;opacity:0.7;">Click to place objective zone. Right-click to remove.<br>Players must reach these to win in Adventure mode.</p>
@@ -1669,7 +1859,7 @@
           <h4 style="margin-top:8px;font-size:12px;">Zone Type</h4>
           <div class="forge-buttons">
             <button id="obj-reach" class="forge-btn active" onclick="forge.setObjectiveType('reach')">🏁 Reach</button>
-            <button id="obj-escape" class="forge-btn" onclick="forge.setObjectiveType('escape')">🚪 Escape</button>
+            <button id="obj-escape" class="forge-btn" onclick="forge.setObjectiveType('escape')">🚪 Exit</button>
           </div>
           
           <h4 style="margin-top:8px;font-size:12px;">Zone Size</h4>
@@ -1678,7 +1868,10 @@
             <span id="obj-radius-display" style="font-size:11px;min-width:30px;">4</span>
           </div>
           
-          <div id="objective-list" style="margin-top:8px;font-size:12px;"></div>
+          <h4 style="margin-top:8px;font-size:12px;">💬 Message (shown when reached)</h4>
+          <textarea id="obj-message" rows="2" style="width:100%;font-size:11px;resize:vertical;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.2);color:#fff;padding:4px;" placeholder="Enter dialogue text..."></textarea>
+          
+          <div id="objective-list" style="margin-top:8px;font-size:12px;max-height:150px;overflow-y:auto;"></div>
           <div class="forge-buttons" style="margin-top:8px;">
             <button class="forge-btn" onclick="forge.clearObjectives()">🗑️ Clear All</button>
           </div>
@@ -1791,6 +1984,13 @@
     `;
     
     document.body.appendChild(forgeUI);
+    
+    // Generate building buttons after UI is in DOM
+    this.generateBuildingButtons();
+    
+    // Generate unit type buttons
+    this.generateUnitTypeButtons();
+    
     console.log('🎨 Forge UI created');
   };
   
@@ -1805,6 +2005,7 @@
     document.getElementById('layer-resources').classList.toggle('active', layer === 'resources');
     document.getElementById('layer-buildings').classList.toggle('active', layer === 'buildings');
     document.getElementById('layer-spawns').classList.toggle('active', layer === 'spawns');
+    document.getElementById('layer-units').classList.toggle('active', layer === 'units');
     document.getElementById('layer-objectives').classList.toggle('active', layer === 'objectives');
 
     // Show/hide panels
@@ -1813,6 +2014,7 @@
     document.getElementById('resource-panel').style.display = layer === 'resources' ? 'block' : 'none';
     document.getElementById('buildings-panel').style.display = layer === 'buildings' ? 'block' : 'none';
     document.getElementById('spawns-panel').style.display = layer === 'spawns' ? 'block' : 'none';
+    document.getElementById('units-panel').style.display = layer === 'units' ? 'block' : 'none';
     document.getElementById('objectives-panel').style.display = layer === 'objectives' ? 'block' : 'none';
 
     // Update chunk grid overlay visibility
@@ -1821,8 +2023,21 @@
     // Show spawn markers when editing spawns
     this.updateSpawnMarkers();
     
+    // Show unit markers when editing units
+    this.updateUnitMarkers();
+    
     // Show objective markers when editing objectives
     this.updateObjectiveMarkers();
+    
+    // Refresh grid if it's currently visible (to show appropriate overlay for new layer)
+    if (this._resourceGridVisible) {
+      this.showResourceGrid();
+    }
+    
+    // Clear building preview when leaving building mode
+    if (layer !== 'buildings') {
+      this.clearBuildingPreview();
+    }
 
     console.log(`📐 Editing layer: ${layer}`);
   };
@@ -2016,14 +2231,20 @@
     }
   };
   
-  // Show grid overlay highlighting tiles with resources
+  // Show grid overlay - context-aware based on editing mode
   forge.showResourceGrid = function() {
     this.hideResourceGrid(); // Clear existing
     
     const field = window.liveField;
     if (!field || !gfx || !gfx.scene) return;
     
-    // Get all occupied tiles (manual + auto-generated with footprints)
+    // In building mode, show buildability grid
+    if (this.state.editingLayer === 'buildings') {
+      this.showBuildabilityGrid();
+      return;
+    }
+    
+    // Otherwise, show resource tiles (original behavior)
     const occupiedTiles = this.getOccupiedTiles();
     
     console.log(`📍 Showing ${occupiedTiles.size} resource tiles`);
@@ -2057,6 +2278,48 @@
     
     // Store material for cleanup
     this._resourceGridMat = markerMat;
+  };
+  
+  // Show buildability grid (only occupied tiles, same style as resource grid)
+  forge.showBuildabilityGrid = function() {
+    const field = window.liveField;
+    if (!field || !gfx || !gfx.scene) return;
+    
+    // Get occupied tiles (buildings + resources)
+    const occupiedTiles = this.getOccupiedTiles();
+    
+    console.log(`📍 Showing ${occupiedTiles.size} occupied tiles (buildings + resources)`);
+    
+    // Create material for occupied tiles
+    const occupiedMat = new BABYLON.StandardMaterial('buildableOccupiedMat', gfx.scene);
+    occupiedMat.diffuseColor = new BABYLON.Color3(1, 0.8, 0.2);  // Yellow/Orange
+    occupiedMat.emissiveColor = new BABYLON.Color3(0.5, 0.4, 0.1);
+    occupiedMat.alpha = 0.6;
+    occupiedMat.backFaceCulling = false;
+    
+    // Only show markers for occupied tiles
+    for (const key of occupiedTiles) {
+      const [tx, tz] = key.split(',').map(Number);
+      
+      // Check bounds
+      if (tx < 0 || tx >= field.width || tz < 0 || tz >= field.height) continue;
+      
+      const marker = BABYLON.MeshBuilder.CreatePlane(`buildGrid_${key}`, {
+        width: TILE_SIZE * 0.8,
+        height: TILE_SIZE * 0.8
+      }, gfx.scene);
+      
+      marker.position.x = (tx + 0.5) * TILE_SIZE;
+      marker.position.y = 1.5;  // Float above terrain
+      marker.position.z = (tz + 0.5) * TILE_SIZE;
+      marker.rotation.x = Math.PI / 2;  // Lay flat
+      marker.material = occupiedMat;
+      
+      this._resourceGridOverlay.push(marker);
+    }
+    
+    // Store material for cleanup
+    this._resourceGridMat = occupiedMat;
   };
   
   // Hide resource grid overlay
@@ -2332,12 +2595,17 @@
       return;
     }
     
+    // Get the message from the textarea
+    const messageInput = document.getElementById('obj-message');
+    const message = messageInput ? messageInput.value.trim() : '';
+    
     // Create new objective
     const objective = {
       x: pos.x,
       y: pos.y,
       radius: this.state.currentObjectiveRadius,
       type: this.state.currentObjectiveType,
+      message: message, // Story/dialogue text to show when triggered
       id: this.state.objectives.length
     };
     
@@ -2345,7 +2613,10 @@
     this.updateObjectiveMarkers();
     this.updateObjectiveList();
     
-    console.log(`🎯 Placed ${objective.type} objective at (${pos.x}, ${pos.y}) radius ${objective.radius}`);
+    // Clear the message input after placing
+    if (messageInput) messageInput.value = '';
+    
+    console.log(`🎯 Placed ${objective.type} objective at (${pos.x}, ${pos.y}) radius ${objective.radius}${message ? ` with message` : ''}`);
   };
   
   // Remove objective at position
@@ -2375,14 +2646,16 @@
   
   // Update objective markers visualization
   forge.updateObjectiveMarkers = function() {
-    const scene = forge.scene;
+    const scene = gfx?.scene;
     if (!scene) return;
     
     // Remove old markers
-    this._objectiveMarkers.forEach(m => m.dispose());
+    if (this._objectiveMarkers) {
+      this._objectiveMarkers.forEach(m => m.dispose());
+    }
     this._objectiveMarkers = [];
     
-    const TILE_SIZE = window.TILE_SIZE || 1;
+    // TILE_SIZE is defined in constants.js (loaded before forge.js)
     
     // Create markers for each objective
     this.state.objectives.forEach((obj, i) => {
@@ -2456,25 +2729,326 @@
     
     list.innerHTML = this.state.objectives.map((obj, i) => {
       const icon = obj.type === 'escape' ? '🚪' : '🏁';
-      return `<div>${icon} ${i + 1}: (${obj.x}, ${obj.y}) r=${obj.radius}</div>`;
+      const msgPreview = obj.message ? ` 💬 "${obj.message.substring(0, 20)}${obj.message.length > 20 ? '...' : ''}"` : '';
+      return `<div style="margin-bottom:4px;padding:4px;background:rgba(0,0,0,0.2);border-radius:3px;">
+        <div>${icon} <b>${i + 1}</b>: (${obj.x}, ${obj.y}) r=${obj.radius}</div>
+        ${msgPreview ? `<div style="font-size:10px;opacity:0.7;margin-top:2px;">${msgPreview}</div>` : ''}
+      </div>`;
     }).join('');
+  };
+  
+  // ========== STARTING UNITS MANAGEMENT ==========
+  // For adventure mode: place starting units instead of Agora spawns
+  
+  forge._unitMarkers = [];
+  
+  // Player colors for unit markers
+  forge.playerColors = [
+    new BABYLON.Color3(0.3, 0.5, 1.0),   // P1: Blue
+    new BABYLON.Color3(1.0, 0.3, 0.3),   // P2: Red
+    new BABYLON.Color3(0.3, 1.0, 0.4),   // P3: Green
+    new BABYLON.Color3(1.0, 0.9, 0.2)    // P4: Yellow
+  ];
+  
+  forge.playerEmoji = ['🔵', '🔴', '🟢', '🟡'];
+  
+  // Set current unit player
+  forge.setUnitPlayer = function(player) {
+    this.state.currentUnitPlayer = player;
+    
+    // Update button states
+    for (let i = 0; i < 4; i++) {
+      const btn = document.getElementById(`unit-player-${i}`);
+      if (btn) btn.classList.toggle('active', i === player);
+    }
+    
+    console.log(`👤 Unit player: P${player + 1}`);
+  };
+  
+  // Set current unit type
+  forge.setUnitType = function(unitType) {
+    this.state.currentUnitType = unitType;
+    
+    // Update button states
+    if (window.UnitTypes) {
+      Object.keys(window.UnitTypes).forEach(t => {
+        const btn = document.getElementById(`unit-type-${t}`);
+        if (btn) btn.classList.toggle('active', t === unitType);
+      });
+    }
+    
+    const unitDef = window.UnitTypes?.[unitType];
+    console.log(`⚔️ Unit type: ${unitDef?.name || unitType}`);
+  };
+  
+  // Generate unit type buttons
+  forge.generateUnitTypeButtons = function() {
+    const container = document.getElementById('unit-type-buttons');
+    if (!container || !window.UnitTypes) return;
+    
+    // Group units by category for easier selection
+    const unitsByCategory = {};
+    
+    Object.entries(window.UnitTypes).forEach(([key, unit]) => {
+      const category = unit.category || 'other';
+      if (!unitsByCategory[category]) {
+        unitsByCategory[category] = [];
+      }
+      unitsByCategory[category].push({ key, unit });
+    });
+    
+    // Only show placeable units (exclude upgrades and special units)
+    const placeableCategories = ['civilian', 'worker', 'support', 'caster', 'scout', 'infantry', 'ranged', 'cavalry'];
+    
+    let html = '';
+    placeableCategories.forEach(category => {
+      if (!unitsByCategory[category]) return;
+      
+      unitsByCategory[category].forEach(({ key, unit }) => {
+        // Skip upgrade-only units
+        if (unit.upgradeFrom) return;
+        
+        const isActive = key === this.state.currentUnitType ? 'active' : '';
+        const icon = this.getUnitIcon(key);
+        html += `<button id="unit-type-${key}" class="forge-btn ${isActive}" onclick="forge.setUnitType('${key}')" style="min-width:80px;">${icon} ${unit.name}</button>`;
+      });
+    });
+    
+    container.innerHTML = html;
+  };
+  
+  // Get icon for unit type
+  forge.getUnitIcon = function(unitType) {
+    const icons = {
+      villager: '👨‍🌾',
+      brigand: '🗡️',
+      engineer: '🔧',
+      architect: '📐',
+      monk: '🙏',
+      paladin: '⚔️',
+      wizard: '🧙',
+      elemental: '🌪️',
+      warlock: '🔮',
+      frog: '🐸',
+      tortle: '🐢',
+      gnome: '🧝',
+      birdy: '🦅',
+      scout: '🏃',
+      rider: '🐎',
+      archer: '🏹',
+      crossbowman: '🎯',
+      infantry: '🛡️',
+      knight: '♞',
+      catapult: '🪨',
+      ballista: '🏹'
+    };
+    return icons[unitType] || '👤';
+  };
+  
+  // Place a starting unit at position
+  forge.placeStartingUnit = function(pos) {
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Check if there's already a unit at this exact position
+    const existing = this.state.startingUnits.findIndex(u => 
+      u.x === pos.x && u.y === pos.y
+    );
+    
+    if (existing >= 0) {
+      // Update existing unit's type/player
+      this.state.startingUnits[existing].type = this.state.currentUnitType;
+      this.state.startingUnits[existing].player = this.state.currentUnitPlayer;
+      console.log(`⚔️ Updated unit at (${pos.x}, ${pos.y})`);
+    } else {
+      // Add new unit
+      this.state.startingUnits.push({
+        x: pos.x,
+        y: pos.y,
+        type: this.state.currentUnitType,
+        player: this.state.currentUnitPlayer
+      });
+      console.log(`⚔️ Placed ${this.state.currentUnitType} for P${this.state.currentUnitPlayer + 1} at (${pos.x}, ${pos.y})`);
+    }
+    
+    this.updateUnitMarkers();
+    this.updateStartingUnitsList();
+  };
+  
+  // Remove starting unit at position
+  forge.removeStartingUnit = function(pos) {
+    const index = this.state.startingUnits.findIndex(u =>
+      Math.abs(u.x - pos.x) <= 1 && Math.abs(u.y - pos.y) <= 1
+    );
+    
+    if (index >= 0) {
+      const removed = this.state.startingUnits.splice(index, 1)[0];
+      this.updateUnitMarkers();
+      this.updateStartingUnitsList();
+      console.log(`⚔️ Removed ${removed.type} at (${removed.x}, ${removed.y})`);
+    }
+  };
+  
+  // Clear all starting units
+  forge.clearStartingUnits = function() {
+    this.state.startingUnits = [];
+    this.updateUnitMarkers();
+    this.updateStartingUnitsList();
+    console.log('⚔️ All starting units cleared');
+  };
+  
+  // Update unit markers visualization
+  forge.updateUnitMarkers = function() {
+    // Dispose old markers
+    if (this._unitMarkers) {
+      this._unitMarkers.forEach(m => {
+        if (m.dispose) m.dispose();
+      });
+    }
+    this._unitMarkers = [];
+    
+    if (!gfx || !gfx.scene) return;
+    
+    const field = window.liveField;
+    if (!field) return;
+    
+    // Create markers for each starting unit
+    this.state.startingUnits.forEach((unit, i) => {
+      const worldX = (unit.x + 0.5) * TILE_SIZE;
+      const worldZ = (unit.y + 0.5) * TILE_SIZE;
+      const playerColor = this.playerColors[unit.player] || this.playerColors[0];
+      
+      // Create a small platform to show unit location
+      const platform = BABYLON.MeshBuilder.CreateDisc(`unitPlatform_${i}`, {
+        radius: TILE_SIZE * 0.4,
+        tessellation: 16
+      }, gfx.scene);
+      platform.rotation.x = Math.PI / 2;
+      platform.position = new BABYLON.Vector3(worldX, 0.2, worldZ);
+      
+      const platformMat = new BABYLON.StandardMaterial(`unitPlatMat_${i}`, gfx.scene);
+      platformMat.diffuseColor = playerColor;
+      platformMat.emissiveColor = playerColor.scale(0.5);
+      platformMat.alpha = 0.6;
+      platformMat.backFaceCulling = false;
+      platform.material = platformMat;
+      
+      this._unitMarkers.push(platform);
+      
+      // Load unit model
+      const unitDef = window.UnitTypes?.[unit.type];
+      if (unitDef && gfx.getModel) {
+        gfx.getModel(unitDef.model, gfx.scene).then(model => {
+          if (!model || !model.root) return;
+          
+          const root = model.root;
+          root.position = new BABYLON.Vector3(worldX, 0, worldZ);
+          root.scaling = new BABYLON.Vector3(unitDef.scale, unitDef.scale, unitDef.scale);
+          root.setEnabled(true);
+          
+          // Mark as unit marker for cleanup
+          root.metadata = root.metadata || {};
+          root.metadata.isUnitMarker = true;
+          root.metadata.unitIndex = i;
+          
+          this._unitMarkers.push(root);
+        }).catch(err => {
+          console.warn(`Failed to load unit model for ${unit.type}:`, err);
+        });
+      }
+      
+      // Add player indicator floating above
+      const label = BABYLON.MeshBuilder.CreatePlane(`unitLabel_${i}`, { size: 2 }, gfx.scene);
+      label.position = new BABYLON.Vector3(worldX, 5, worldZ);
+      label.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+      
+      const labelTex = new BABYLON.DynamicTexture(`unitLabelTex_${i}`, 64, gfx.scene);
+      labelTex.hasAlpha = true;
+      const ctx = labelTex.getContext();
+      ctx.clearRect(0, 0, 64, 64);
+      ctx.font = 'bold 32px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = 3;
+      ctx.strokeText(`P${unit.player + 1}`, 32, 32);
+      ctx.fillText(`P${unit.player + 1}`, 32, 32);
+      labelTex.update();
+      
+      const labelMat = new BABYLON.StandardMaterial(`unitLabelMat_${i}`, gfx.scene);
+      labelMat.diffuseTexture = labelTex;
+      labelMat.emissiveTexture = labelTex;
+      labelMat.useAlphaFromDiffuseTexture = true;
+      labelMat.backFaceCulling = false;
+      label.material = labelMat;
+      
+      this._unitMarkers.push(label);
+    });
+  };
+  
+  // Update starting units list in UI
+  forge.updateStartingUnitsList = function() {
+    const list = document.getElementById('starting-units-list');
+    if (!list) return;
+    
+    if (this.state.startingUnits.length === 0) {
+      list.innerHTML = '<span style="opacity:0.5;">No starting units</span>';
+      return;
+    }
+    
+    // Group by player
+    const byPlayer = {};
+    this.state.startingUnits.forEach(u => {
+      if (!byPlayer[u.player]) byPlayer[u.player] = [];
+      byPlayer[u.player].push(u);
+    });
+    
+    let html = '';
+    Object.entries(byPlayer).forEach(([player, units]) => {
+      const emoji = this.playerEmoji[player] || '⚪';
+      const counts = {};
+      units.forEach(u => {
+        counts[u.type] = (counts[u.type] || 0) + 1;
+      });
+      const summary = Object.entries(counts).map(([type, count]) => {
+        const unitDef = window.UnitTypes?.[type];
+        return `${count}x ${unitDef?.name || type}`;
+      }).join(', ');
+      html += `<div>${emoji} P${Number(player) + 1}: ${summary}</div>`;
+    });
+    
+    list.innerHTML = html;
   };
   
   // ========== BUILDING PLACEMENT ==========
   
   forge._buildingMeshes = new Map(); // key -> mesh
+  forge._buildingPreview = null; // Preview mesh that follows cursor
+  forge._previewMaterial = null; // Shared material for preview
   
   forge.setBuilding = function(buildingType) {
     this.state.currentBuilding = buildingType;
     
-    // Update button states
-    Object.keys(this.buildingTypes).forEach(t => {
-      const btn = document.getElementById(`bldg-${t}`);
-      if (btn) btn.classList.toggle('active', t === buildingType);
-    });
+    // Update button states (all building buttons)
+    if (window.BuildingTypes) {
+      Object.keys(window.BuildingTypes).forEach(t => {
+        const btn = document.getElementById(`bldg-${t}`);
+        if (btn) btn.classList.toggle('active', t === buildingType);
+      });
+    }
     document.getElementById('bldg-eraser')?.classList.toggle('active', buildingType === 'eraser');
     
-    console.log(`🏗️ Building: ${buildingType}`);
+    // Create or update preview mesh
+    if (buildingType !== 'eraser') {
+      this.createBuildingPreview(buildingType);
+    } else {
+      this.clearBuildingPreview();
+    }
+    
+    const buildingDef = window.BuildingTypes?.[buildingType];
+    const buildingName = buildingDef?.name || buildingType;
+    console.log(`🏗️ Building: ${buildingName}`);
   };
   
   forge.placeBuilding = function(pos) {
@@ -2484,19 +3058,38 @@
     // Get symmetric positions
     const positions = this.getSymmetricPositions(pos);
     
+    // Debug: log symmetric positions
+    if (positions.length > 1) {
+      console.log(`🔄 Symmetry mode: ${this._currentSymmetry || 'none'}, placing at ${positions.length} positions:`, positions.map(p => `(${p.x},${p.y})`).join(', '));
+    }
+    
     // Handle eraser
     if (this.state.currentBuilding === 'eraser') {
       positions.forEach(p => this._removeBuildingAt(p));
       return;
     }
     
-    // Place at all symmetric positions
-    positions.forEach((p, i) => this._placeBuildingAtSingle(p, i));
+    // Place at all symmetric positions (will log if placement fails)
+    let successCount = 0;
+    positions.forEach((p, i) => {
+      if (this._placeBuildingAtSingle(p, i)) {
+        successCount++;
+      }
+    });
+    
+    if (successCount === 0) {
+      console.log(`❌ Could not place ${this.state.currentBuilding} - check for overlaps or invalid terrain`);
+    } else if (successCount > 0) {
+      // Refresh grid if visible to show newly occupied tiles
+      if (this._resourceGridVisible) {
+        this.showResourceGrid();
+      }
+    }
   };
   
   forge._placeBuildingAtSingle = function(pos, rotationOffset = 0) {
     const field = window.liveField;
-    if (!field || !gfx || !gfx.scene) return;
+    if (!field || !gfx || !gfx.scene) return false;
     
     const key = `${pos.x},${pos.y}`;
     const buildingType = this.state.currentBuilding;
@@ -2504,46 +3097,153 @@
     
     if (!buildingDef) {
       console.warn(`Unknown building type: ${buildingType}`);
-      return;
+      return false;
     }
     
-    // Check if position is valid
-    const chunkX = Math.floor(pos.x / field.chunkSize);
-    const chunkZ = Math.floor(pos.y / field.chunkSize);
-    if (!field.chunkMask.get(`${chunkX},${chunkZ}`)) return;
+    // CRITICAL: Check if we already have a building at this exact position
+    // This prevents duplicate placements from symmetry/rapid clicking
+    const existingAtPos = this.state.buildings.find(b => b.x === pos.x && b.y === pos.y);
+    if (existingAtPos && existingAtPos.type === buildingType) {
+      // Already placing/placed this exact building type here - skip duplicate
+      console.log(`⚠️ Skipping duplicate placement of ${buildingType} at (${pos.x}, ${pos.y})`);
+      return false;
+    }
     
-    // Check for water
-    const index = pos.y * field.width + pos.x;
-    if (field.terrainTypes[index] === 1) return;
+    // Get building size
+    const width = buildingDef.size?.width || 1;
+    const height = buildingDef.size?.height || 1;
     
-    // Remove existing building at this position
+    // Check all tiles in building footprint
+    for (let dx = 0; dx < width; dx++) {
+      for (let dz = 0; dz < height; dz++) {
+        const checkX = pos.x + dx;
+        const checkZ = pos.y + dz;
+        
+        // Bounds check
+        if (checkX < 0 || checkX >= field.width || checkZ < 0 || checkZ >= field.height) {
+          console.log(`❌ Building extends outside map bounds`);
+          return false;
+        }
+        
+        // Check chunk enabled
+        const chunkX = Math.floor(checkX / field.chunkSize);
+        const chunkZ = Math.floor(checkZ / field.chunkSize);
+        if (!field.chunkMask.get(`${chunkX},${chunkZ}`)) {
+          console.log(`❌ Building extends into disabled chunk`);
+          return false;
+        }
+        
+        // Check for water
+        const index = checkZ * field.width + checkX;
+        if (field.terrainTypes[index] === 1) {
+          console.log(`❌ Building footprint includes water tile`);
+          return false;
+        }
+      }
+    }
+    
+    // Check for overlap with other buildings/resources (excluding the building we're replacing)
+    const occupiedTiles = this.getOccupiedTiles();
+    const existingBuildingIdx = this.state.buildings.findIndex(b => b.x === pos.x && b.y === pos.y);
+    
+    // If replacing existing building, temporarily remove it to check for overlaps
+    let existingBuilding = null;
+    if (existingBuildingIdx >= 0) {
+      existingBuilding = this.state.buildings[existingBuildingIdx];
+      this.state.buildings.splice(existingBuildingIdx, 1);
+      // Recalculate occupied tiles without this building
+      const newOccupied = this.getOccupiedTiles();
+      occupiedTiles.clear();
+      newOccupied.forEach(k => occupiedTiles.add(k));
+    }
+    
+    for (let dx = 0; dx < width; dx++) {
+      for (let dz = 0; dz < height; dz++) {
+        const checkKey = `${pos.x + dx},${pos.y + dz}`;
+        if (occupiedTiles.has(checkKey)) {
+          console.log(`❌ Building overlaps with existing building/resource at tile ${checkKey}`);
+          // Restore existing building if we removed it
+          if (existingBuilding) {
+            this.state.buildings.splice(existingBuildingIdx, 0, existingBuilding);
+          }
+          return false;
+        }
+      }
+    }
+    
+    // Remove existing building mesh at this position (state already handled above)
     if (this._buildingMeshes.has(key)) {
       this._buildingMeshes.get(key).dispose();
       this._buildingMeshes.delete(key);
     }
     
-    // Remove from state array
-    const existingIdx = this.state.buildings.findIndex(b => b.x === pos.x && b.y === pos.y);
-    if (existingIdx >= 0) {
-      this.state.buildings.splice(existingIdx, 1);
-    }
-    
-    // Add to state
-    const rotation = (rotationOffset * Math.PI / 2); // Rotate mirrors by 90 degrees each
+    // Add to state (we already removed old one if it existed)
+    // Calculate deterministic rotation based on grid position (for variety)
+    const mapSeed = field.seed || 12345;
+    let rotHash = mapSeed + pos.x * 73856093 + pos.y * 19349663;
+    rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+    rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+    rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+    const baseRotation = (rotHash % 628) / 100; // 0 to ~6.28 radians
+    const rotation = baseRotation + (rotationOffset * Math.PI / 2); // Add symmetry rotation offset
+    console.log(`🔄 Building rotation: base=${baseRotation.toFixed(2)} (${(baseRotation*180/Math.PI).toFixed(0)}°), final=${rotation.toFixed(2)} (${(rotation*180/Math.PI).toFixed(0)}°)`);
     this.state.buildings.push({ x: pos.x, y: pos.y, type: buildingType, rotation });
     
+    // Update field's blocked tiles for pathfinding
+    if (field.blockedTiles) {
+      for (let dx = 0; dx < width; dx++) {
+        for (let dz = 0; dz < height; dz++) {
+          field.blockedTiles.add(`${pos.x + dx},${pos.y + dz}`);
+        }
+      }
+    }
+    
     // Load and place model
-    const TILE_SIZE = window.TILE_SIZE || 1;
-    const worldX = pos.x * TILE_SIZE;
-    const worldZ = pos.y * TILE_SIZE;
+    // TILE_SIZE is defined in constants.js (which is loaded before forge.js)
+    // Center building on tile (like resources do)
+    const worldX = (pos.x + 0.5) * TILE_SIZE;
+    const worldZ = (pos.y + 0.5) * TILE_SIZE;
     const terrainY = window.getTerrainHeightAtPosition?.(worldX, worldZ) || 0;
+    
+    if (!gfx.getModel) {
+      console.error('❌ gfx.getModel is not available');
+      return false;
+    }
+    
+    if (typeof Vec3 === 'undefined') {
+      console.error('❌ Vec3 is not defined - check if BABYLON is loaded');
+      return false;
+    }
     
     gfx.getModel(buildingDef.model, gfx.scene).then(model => {
       const root = model.root;
-      root.position = new BABYLON.Vector3(worldX, terrainY, worldZ);
-      root.scaling = new BABYLON.Vector3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+      root.position = new Vec3(worldX, terrainY, worldZ);
+      root.scaling = new Vec3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+      
+      // CRITICAL: Clear rotationQuaternion so rotation.y works
+      root.rotationQuaternion = null;
       root.rotation.y = rotation;
+      console.log(`🔄 Applied rotation ${rotation.toFixed(2)} (${(rotation*180/Math.PI).toFixed(0)}°) to mesh`);
+      
+      // Enable root node
       root.setEnabled(true);
+      
+      // Enable all child meshes and descendants
+      const allDescendants = root.getDescendants();
+      allDescendants.forEach(node => {
+        if (node.setEnabled) {
+          node.setEnabled(true);
+        }
+      });
+      
+      // Make sure all meshes are visible
+      root.getChildMeshes().forEach(mesh => {
+        if (mesh.setEnabled) {
+          mesh.setEnabled(true);
+        }
+        mesh.isVisible = true;
+        mesh.visibility = 1.0;
+      });
       
       // Mark as editor building
       root.metadata = root.metadata || {};
@@ -2552,12 +3252,201 @@
       
       this._buildingMeshes.set(key, root);
       this.updateBuildingList();
+      
+      console.log(`✅ Model loaded for ${buildingType} at (${pos.x}, ${pos.y})`);
+      console.log(`   Root: ${root.name}, Enabled: ${root.isEnabled()}, Children: ${allDescendants.length}`);
+      console.log(`   Position: (${worldX.toFixed(1)}, ${terrainY.toFixed(1)}, ${worldZ.toFixed(1)})`);
+    }).catch(error => {
+      console.error(`❌ Failed to load building model ${buildingDef.model}:`, error);
     });
     
     console.log(`🏗️ Placed ${buildingType} at (${pos.x}, ${pos.y})`);
+    return true; // Successfully placed
+  };
+  
+  // Create building preview mesh (ghost that follows cursor)
+  forge.createBuildingPreview = function(buildingType) {
+    // Clear existing preview
+    this.clearBuildingPreview();
+    
+    const buildingDef = window.BuildingTypes?.[buildingType];
+    if (!buildingDef || !gfx || !gfx.scene) return;
+    
+    // Load the model
+    gfx.getModel(buildingDef.model, gfx.scene).then(model => {
+      this._buildingPreview = model.root;
+      
+      // Enable preview
+      this._buildingPreview.setEnabled(true);
+      this._buildingPreview.getDescendants().forEach(n => {
+        if (n.setEnabled) n.setEnabled(true);
+      });
+      
+      // Mark as preview so it doesn't get culled by LOD
+      this._buildingPreview.metadata = this._buildingPreview.metadata || {};
+      this._buildingPreview.metadata.isPreview = true;
+      this._buildingPreview.metadata.isForgeBuildingPreview = true;
+      
+      // Apply scale
+      this._buildingPreview.scaling = new Vec3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+      
+      // Create green semi-transparent material
+      if (!this._previewMaterial) {
+        this._previewMaterial = new BABYLON.StandardMaterial('forgePreviewMat', gfx.scene);
+        this._previewMaterial.backFaceCulling = false;
+      }
+      this._previewMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0); // Green
+      this._previewMaterial.emissiveColor = new BABYLON.Color3(0, 0.3, 0);
+      this._previewMaterial.alpha = 0.5;
+      
+      // Apply material to all child meshes
+      this._buildingPreview.getChildMeshes().forEach(mesh => {
+        mesh.material = this._previewMaterial;
+        mesh.isPickable = false;
+      });
+      this._buildingPreview.isPickable = false;
+      
+      // Position at origin initially
+      this._buildingPreview.position = new Vec3(0, -100, 0); // Start off-screen
+      
+      console.log(`👻 Building preview created for ${buildingType}`);
+    }).catch(error => {
+      console.error(`❌ Failed to create building preview:`, error);
+    });
+  };
+  
+  // Update building preview position and validity
+  forge.updateBuildingPreview = function(e) {
+    if (!this._buildingPreview || !gfx || !gfx.scene) return;
+    
+    const pos = this.getTilePosition(e);
+    if (!pos) {
+      // Hide preview if not over terrain
+      this._buildingPreview.position.y = -100;
+      return;
+    }
+    
+    // Snap to grid center
+    const worldX = (pos.x + 0.5) * TILE_SIZE;
+    const worldZ = (pos.y + 0.5) * TILE_SIZE;
+    const terrainY = window.getTerrainHeightAtPosition?.(worldX, worldZ) || 0;
+    
+    this._buildingPreview.position.x = worldX;
+    this._buildingPreview.position.y = terrainY + 0.5; // Slightly above terrain
+    this._buildingPreview.position.z = worldZ;
+    
+    // Calculate deterministic rotation for this position (same as placement logic)
+    const field = window.liveField;
+    const mapSeed = field?.seed || 12345;
+    let rotHash = mapSeed + pos.x * 73856093 + pos.y * 19349663;
+    rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+    rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+    rotHash = (rotHash * 1664525 + 1013904223) >>> 0;
+    const rotation = (rotHash % 628) / 100; // 0 to ~6.28 radians
+    
+    // CRITICAL: Clear rotationQuaternion so rotation.y works
+    this._buildingPreview.rotationQuaternion = null;
+    this._buildingPreview.rotation.y = rotation;
+    // Only log occasionally to avoid spam
+    if (Math.random() < 0.05) {
+      console.log(`👻 Preview rotation at (${pos.x},${pos.y}): ${rotation.toFixed(2)} (${(rotation*180/Math.PI).toFixed(0)}°)`);
+    }
+    
+    // Check validity
+    const isValid = this.isValidBuildingPosition(pos);
+    
+    // Update color based on validity
+    if (this._previewMaterial) {
+      if (isValid) {
+        this._previewMaterial.diffuseColor = new BABYLON.Color3(0, 1, 0); // Green
+        this._previewMaterial.emissiveColor = new BABYLON.Color3(0, 0.3, 0);
+      } else {
+        this._previewMaterial.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red
+        this._previewMaterial.emissiveColor = new BABYLON.Color3(0.3, 0, 0);
+      }
+    }
+  };
+  
+  // Check if position is valid for building placement
+  forge.isValidBuildingPosition = function(pos) {
+    const field = window.liveField;
+    if (!field) return false;
+    
+    const buildingDef = window.BuildingTypes?.[this.state.currentBuilding];
+    if (!buildingDef) return false;
+    
+    const width = buildingDef.size?.width || 1;
+    const height = buildingDef.size?.height || 1;
+    
+    // Check all tiles in footprint
+    for (let dx = 0; dx < width; dx++) {
+      for (let dz = 0; dz < height; dz++) {
+        const checkX = pos.x + dx;
+        const checkZ = pos.y + dz;
+        
+        // Bounds check
+        if (checkX < 0 || checkX >= field.width || checkZ < 0 || checkZ >= field.height) {
+          return false;
+        }
+        
+        // Check chunk enabled
+        const chunkX = Math.floor(checkX / field.chunkSize);
+        const chunkZ = Math.floor(checkZ / field.chunkSize);
+        if (!field.chunkMask.get(`${chunkX},${chunkZ}`)) {
+          return false;
+        }
+        
+        // Check for water
+        const index = checkZ * field.width + checkX;
+        if (field.terrainTypes[index] === 1) {
+          return false;
+        }
+      }
+    }
+    
+    // Check for overlaps with existing buildings/resources
+    // Get occupied tiles WITHOUT modifying state
+    const occupiedTiles = this.getOccupiedTiles();
+    
+    for (let dx = 0; dx < width; dx++) {
+      for (let dz = 0; dz < height; dz++) {
+        const checkKey = `${pos.x + dx},${pos.y + dz}`;
+        if (occupiedTiles.has(checkKey)) {
+          // It's occupied - but check if it's the SAME building at the EXACT same position
+          const existingBuilding = this.state.buildings.find(b => b.x === pos.x && b.y === pos.y);
+          if (!existingBuilding) {
+            // Occupied by something else
+            return false;
+          }
+          // If there IS a building here already, only valid if ALL our footprint tiles
+          // belong to that same building
+          const existingDef = window.BuildingTypes?.[existingBuilding.type];
+          if (existingDef) {
+            const exWidth = existingDef.size?.width || 1;
+            const exHeight = existingDef.size?.height || 1;
+            const exKey = `${existingBuilding.x + dx},${existingBuilding.y + dz}`;
+            if (exKey !== checkKey) {
+              // This occupied tile doesn't belong to the building we're replacing
+              return false;
+            }
+          }
+        }
+      }
+    }
+    
+    return true;
+  };
+  
+  // Clear building preview
+  forge.clearBuildingPreview = function() {
+    if (this._buildingPreview) {
+      this._buildingPreview.dispose();
+      this._buildingPreview = null;
+    }
   };
   
   forge._removeBuildingAt = function(pos) {
+    const field = window.liveField;
     const key = `${pos.x},${pos.y}`;
     
     // Check nearby positions too (buildings can be multi-tile)
@@ -2570,7 +3459,23 @@
           
           // Remove from state
           const idx = this.state.buildings.findIndex(b => `${b.x},${b.y}` === checkKey);
-          if (idx >= 0) this.state.buildings.splice(idx, 1);
+          if (idx >= 0) {
+            const building = this.state.buildings[idx];
+            const buildingDef = window.BuildingTypes?.[building.type];
+            
+            // Remove from blocked tiles
+            if (field && field.blockedTiles && buildingDef) {
+              const w = buildingDef.size?.width || 1;
+              const h = buildingDef.size?.height || 1;
+              for (let bx = 0; bx < w; bx++) {
+                for (let bz = 0; bz < h; bz++) {
+                  field.blockedTiles.delete(`${building.x + bx},${building.y + bz}`);
+                }
+              }
+            }
+            
+            this.state.buildings.splice(idx, 1);
+          }
         }
       }
     }
@@ -2579,6 +3484,24 @@
   };
   
   forge.clearBuildings = function() {
+    const field = window.liveField;
+    
+    // Remove blocked tiles for all buildings
+    if (field && field.blockedTiles) {
+      this.state.buildings.forEach(building => {
+        const buildingDef = window.BuildingTypes?.[building.type];
+        if (buildingDef) {
+          const w = buildingDef.size?.width || 1;
+          const h = buildingDef.size?.height || 1;
+          for (let dx = 0; dx < w; dx++) {
+            for (let dz = 0; dz < h; dz++) {
+              field.blockedTiles.delete(`${building.x + dx},${building.y + dz}`);
+            }
+          }
+        }
+      });
+    }
+    
     // Dispose all meshes
     this._buildingMeshes.forEach(mesh => mesh.dispose());
     this._buildingMeshes.clear();
@@ -2604,8 +3527,10 @@
     
     list.innerHTML = Object.entries(byType)
       .map(([type, count]) => {
-        const def = this.buildingTypes[type] || { icon: '🏠', name: type };
-        return `${def.icon} ${def.name}: ${count}`;
+        const buildingDef = window.BuildingTypes?.[type];
+        const icon = this.getBuildingIcon(type, buildingDef || {});
+        const name = buildingDef?.name || type;
+        return `${icon} ${name}: ${count}`;
       }).join('<br>');
   };
   
@@ -2620,9 +3545,10 @@
       const buildingDef = window.BuildingTypes?.[b.type];
       if (!buildingDef) return;
       
-      const TILE_SIZE = window.TILE_SIZE || 1;
-      const worldX = b.x * TILE_SIZE;
-      const worldZ = b.y * TILE_SIZE;
+      // TILE_SIZE is defined in constants.js (loaded before forge.js)
+      // Center building on tile (like resources do)
+      const worldX = (b.x + 0.5) * TILE_SIZE;
+      const worldZ = (b.y + 0.5) * TILE_SIZE;
       const terrainY = window.getTerrainHeightAtPosition?.(worldX, worldZ) || 0;
       const key = `${b.x},${b.y}`;
       
@@ -2630,6 +3556,9 @@
         const root = model.root;
         root.position = new BABYLON.Vector3(worldX, terrainY, worldZ);
         root.scaling = new BABYLON.Vector3(buildingDef.scale, buildingDef.scale, buildingDef.scale);
+        
+        // CRITICAL: Clear rotationQuaternion so rotation.y works
+        root.rotationQuaternion = null;
         root.rotation.y = b.rotation || 0;
         root.setEnabled(true);
         
@@ -2689,8 +3618,9 @@
     
     // Create markers for each spawn
     this.state.spawnPoints.forEach((spawn, i) => {
-      const worldX = spawn.x * TILE_SIZE;
-      const worldZ = spawn.y * TILE_SIZE;
+      // Center spawn marker on tile (like resources and buildings)
+      const worldX = (spawn.x + 0.5) * TILE_SIZE;
+      const worldZ = (spawn.y + 0.5) * TILE_SIZE;
       
       // Create a circular platform to show flattened spawn zone
       const platform = BABYLON.MeshBuilder.CreateDisc(`spawnPlatform_${i}`, {

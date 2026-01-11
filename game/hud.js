@@ -180,10 +180,6 @@
     },
     units: {
       // Arc 1: Basic/Support units
-      villager: {
-        callback: () => window.recruitUnit('villager'),
-        arc: 1
-      },
       monk: {
         callback: () => window.recruitUnit('monk'),
         arc: 1
@@ -222,8 +218,8 @@
         callback: () => window.recruitUnit('priest'),
         arc: 3
       },
-      mycologist: {
-        callback: () => window.recruitUnit('mycologist'),
+      mycorrhizae: {
+        callback: () => window.recruitUnit('mycorrhizae'),
         arc: 3
       },
       dirigible: {
@@ -243,7 +239,10 @@
       },
       prospecting: {
         callback: () => console.log("Research: Prospecting selected"),
-        arc: 1
+        arc: 1,
+        prerequisites: {
+          units: ["engineer"]
+        }
       },
       patronage: {
         callback: () => console.log("Research: Patronage selected"),
@@ -476,8 +475,19 @@
           }
 
           // Show 3D menu at closest screen edge
-          console.log(`🎯 Spacebar: opening 3D menu at ${closestEdge.name} edge (mouse at ${mouseX}, ${mouseY})`);
-          hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
+          if (e.code === 'KeyB') {
+            // 'B' key - open buildings submenu directly
+            console.log(`🏗️ B key: opening buildings submenu at ${closestEdge.name} edge`);
+            hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
+            // Wait for main menu to initialize, then show buildings submenu
+            setTimeout(() => {
+              hud.showSubMenu('buildings', mouseX, mouseY);
+            }, 50);
+          } else {
+            // Spacebar - open main menu
+            console.log(`🎯 Spacebar: opening 3D menu at ${closestEdge.name} edge (mouse at ${mouseX}, ${mouseY})`);
+            hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
+          }
         } else {
           // 2D HUD mode - find closest anchor and trigger 2D menu
           const anchors = {
@@ -530,22 +540,40 @@
               if (window.menuDepth !== undefined) window.menuDepth = 0;
             }
 
-            // Create and show top-level buttons
-            if (window.menu && window.createMenuButton && window.showButtonsInArc) {
-              const buttons = Object.entries(window.menu).map(([key, value]) => {
-                return window.createMenuButton(
-                  `menu-${key}`,
-                  window.getIconForItem ? window.getIconForItem(key) : key,
-                  key,
-                  [key],
-                  0
-                );
-              });
-
+            // If 'B' key pressed, show buildings submenu directly
+            if (e.code === 'KeyB' && window.menu && window.menu.buildings) {
+              console.log('🏗️ B key: opening buildings submenu (2D mode)');
               if (window.setCurrentAnchor) {
                 window.setCurrentAnchor({ x: pos.x, y: pos.y, direction: closestAnchor });
               }
-              window.showButtonsInArc(buttons, pos.x, pos.y, 0, closestAnchor);
+              
+              // Create a temporary parent button to pass to showSubmenu
+              const tempParentButton = document.createElement('div');
+              tempParentButton.dataset.depth = '0';
+              tempParentButton.dataset.menuPath = JSON.stringify(['buildings']);
+              
+              // Call showSubmenu to display buildings with proper multi-arc layout
+              if (window.showSubmenu) {
+                window.showSubmenu(tempParentButton, window.menu.buildings);
+              }
+            } else {
+              // Spacebar - create and show top-level buttons
+              if (window.menu && window.createMenuButton && window.showButtonsInArc) {
+                const buttons = Object.entries(window.menu).map(([key, value]) => {
+                  return window.createMenuButton(
+                    `menu-${key}`,
+                    window.getIconForItem ? window.getIconForItem(key) : key,
+                    key,
+                    [key],
+                    0
+                  );
+                });
+
+                if (window.setCurrentAnchor) {
+                  window.setCurrentAnchor({ x: pos.x, y: pos.y, direction: closestAnchor });
+                }
+                window.showButtonsInArc(buttons, pos.x, pos.y, 0, closestAnchor);
+              }
             }
           }
         }
@@ -678,6 +706,12 @@
       indicator.actionManager = new BABYLON.ActionManager(hud.scene);
       indicator.actionManager.registerAction(
         new BABYLON.ExecuteCodeAction(BABYLON.ActionManager.OnPickTrigger, () => {
+          // Don't show menu if we just panned or are currently panning
+          if (window.rmbJustPanned || window.lassoSelection?.isSelectionActive?.()) {
+            console.log(`🎯 Anchor ${name} click suppressed (panning or selecting)`);
+            return;
+          }
+          
           console.log(`🎯 Anchor ${name} clicked - opening radial menu`);
           // Close any existing menu first
           if (radialMenuVisible) {
@@ -701,6 +735,12 @@
   // Show radial menu at specific anchor point
   hud.showRadialMenu = function(screenX, screenY, forceAnchor = null) {
     if (!radialMenu || !hud.camera) return;
+    
+    // Don't show if we just panned - this is a safeguard
+    if (window.rmbJustPanned) {
+      console.log(`🎯 showRadialMenu suppressed (just panned)`);
+      return;
+    }
     
     const rect = hud.canvas.getBoundingClientRect();
     
@@ -1077,7 +1117,7 @@
       // Units - Arc 3 (Advanced)
       apc: '🚐',
       priest: '⛪',
-      mycologist: '🍄',
+      mycorrhizae: '🍄',
       dirigible: '🎈',
       shaman: '🪶',
       
@@ -1231,7 +1271,7 @@
         const targetY = Math.sin(angle) * arcRadius;
       const targetZ = -menuConfig.distance * 0.5;
       
-        console.log(`  📍 Submenu ${item.text} (arc ${arcNum}): angle=${(angle * 180 / Math.PI).toFixed(1)}°, radius=${arcRadius.toFixed(2)}, pos=(${targetX.toFixed(2)}, ${targetY.toFixed(2)})`);
+        // console.log(`  📍 Submenu ${item.text} (arc ${arcNum}): angle=${(angle * 180 / Math.PI).toFixed(1)}°, radius=${arcRadius.toFixed(2)}, pos=(${targetX.toFixed(2)}, ${targetY.toFixed(2)})`);
       
       // Reset and position container
       item.container.scaling.setAll(1.0);
@@ -1709,7 +1749,39 @@
           // Clone material so we don't modify the shared materials used by game units
           if (m.material) {
             const clonedMat = m.material.clone(m.material.name + '_menu');
-            clonedMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0.8);
+
+            // Preserve original diffuse texture and color
+            if (m.material.diffuseTexture) {
+              clonedMat.diffuseTexture = m.material.diffuseTexture;
+            }
+            if (m.material.diffuseColor) {
+              clonedMat.diffuseColor = m.material.diffuseColor.clone();
+            }
+
+            // Preserve other material properties that affect appearance
+            if (m.material.specularColor) {
+              clonedMat.specularColor = m.material.specularColor.clone();
+            }
+            if (m.material.emissiveColor) {
+              clonedMat.emissiveColor = m.material.emissiveColor.clone();
+            } else {
+              // Add slight emissive boost for better visibility in menu
+              clonedMat.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
+            }
+            if (m.material.ambientColor) {
+              clonedMat.ambientColor = m.material.ambientColor.clone();
+            }
+
+            // Preserve metallic/roughness if it's a PBR material
+            if (clonedMat instanceof BABYLON.PBRMaterial) {
+              if (m.material.metallic) {
+                clonedMat.metallic = m.material.metallic;
+              }
+              if (m.material.roughness) {
+                clonedMat.roughness = m.material.roughness;
+              }
+            }
+
             m.material = clonedMat;
           }
         });
@@ -3129,6 +3201,15 @@
     // console.log(`🏗️ Starting building placement for: ${buildingType}`);
     buildingMode = true;
     currentBuildingType = buildingType;
+    
+    // Hide both 3D radial menu and 2D menu so they don't block building placement
+    hud.hideRadialMenu();
+    
+    // Hide 2D menu buttons if they exist
+    if (window.activeButtons && window.hideButtons) {
+      window.hideButtons(window.activeButtons);
+      window.activeButtons = [];
+    }
     
     if (buildingType === 'camp') {
       // console.log('⛺ Camp placement mode activated! Click to place your camp.');

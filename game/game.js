@@ -43,19 +43,24 @@ Game.prototype.spawnInitialUnits = function() {
   // console.log('   window.player.id:', window.player?.id);
   // console.log('   this.players spawn order:', this.players.map(p => ({ id: p.id, name: p.name, isLocalPlayer: p === window.player })));
   
-  // Adventure mode (co-op) doesn't spawn initial units - players will spawn manually or via scripted events
+  // Adventure mode (co-op) spawns starting units from the map data instead of agoras
   if (this.type === 'adventure') {
-    console.log('🎮 Adventure mode: skipping initial unit spawn (no agoras)');
+    console.log('🎮 Adventure mode: spawning starting units from map data');
+    this.spawnAdventureUnits();
     return;
   }
   
   // Spawn villagers and buildings for ALL players (local + opponents)
   if (this.players && this.players.length > 0) {
+    console.log(`🎮 Spawning for ${this.players.length} players:`, this.players.map(p => `${p.name}(${p.id})`));
+    
     // CRITICAL: Sort players deterministically by ID before spawning
     // This ensures both clients spawn villagers in the same order with the same counts
     const sortedPlayers = this.players.slice().sort((a, b) => 
       (a.id || '').localeCompare(b.id || '')
     );
+    
+    console.log(`📋 Sorted player order:`, sortedPlayers.map(p => `${p.name}(${p.id})`));
     
     sortedPlayers.forEach((player, index) => {
       if (!player || !player.agora) {
@@ -73,10 +78,14 @@ Game.prototype.spawnInitialUnits = function() {
         if (placeFn && window.gfx && window.gfx.scene) {
           // Agora starts complete (it's the starting building)
           const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene, { buildProgress: 1.0 });
-          if (placed) {
-            // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
-            const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
-            placed.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+            if (placed) {
+              // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
+              const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
+              // If ID has hyphens, take the part after the last hyphen, else take last 6 chars
+              const parts = rawId.split('-');
+              placed.owner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
+              
+              console.log(`🏛️ Set agora owner: ${placed.owner} (from ${rawId}), gameBuildings.length=${window.gameBuildings.length}`);
             
             // Store team color so attached flag meshes can tint correctly
             if (typeof window.getTeamColorForOwner === 'function') {
@@ -84,7 +93,7 @@ Game.prototype.spawnInitialUnits = function() {
             }
             
             player.buildings.push(placed);
-            window.gameBuildings.push(placed);
+            // NOTE: placeBuilding() already added to window.gameBuildings, don't add twice!
             
             // Rotate agora to face center of map
             if (window.liveField) {
@@ -117,7 +126,9 @@ Game.prototype.spawnInitialUnits = function() {
           // Fallback: create logical building if visual system not available yet
           // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
           const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
-          const normalizedOwner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+          // If ID has hyphens, take the part after the last hyphen, else take last 6 chars
+          const parts = rawId.split('-');
+          const normalizedOwner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
           const agoraBuilding = new window.Building('agora', {
             x: player.agora.x * TILE_SIZE,
             y: 0,
@@ -129,13 +140,14 @@ Game.prototype.spawnInitialUnits = function() {
           });
           
           player.buildings.push(agoraBuilding);
-          window.gameBuildings.push(agoraBuilding);
+          // NOTE: agoraBuilding was already added to window.gameBuildings in Building constructor
           // console.log(`🏛️ Spawned agora (logic only) for ${player.name || player.id}`);
         }
       }
       
       // Spawn villagers around this player's agora
       // Pass player index for deterministic villager count
+      console.log(`👥 Spawning ${8} villagers for player ${index}: ${player.name}`);
       this.spawnVillagersForPlayer(player, index);
     });
   } else {
@@ -212,7 +224,9 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
     const villager = new window.Unit('villager', { x, y: 0, z }, { id: deterministicUnitId || undefined });
     // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
     const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
-    villager.owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+    // If ID has hyphens, take the part after the last hyphen, else take last 6 chars
+    const parts = rawId.split('-');
+    villager.owner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
     
     // Deterministic rotation
     const randomRotation = seededRandom() * Math.PI * 2;
@@ -224,6 +238,10 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
     // Add to player's units
     player.units.push(villager);
     window.gameUnits.push(villager); // Add to global array for rendering
+    
+    if (i === 0) {
+      console.log(`  📍 First villager for ${player.name}: owner=${villager.owner}, gameUnits.length=${window.gameUnits.length}`);
+    }
     
     // CRITICAL: Give initial villagers a linger behavior so they can be auto-assigned to work
     if (window.behaviorManager) {
@@ -244,6 +262,111 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
   // console.log(`   Player ID: ${player.id}`);
   // console.log(`   First villager owner: ${player.units[0]?.owner}`);
   // console.log(`   Owner matches player ID: ${player.units[0]?.owner === player.id}`);
+};
+
+// Spawn starting units for adventure mode from map data
+Game.prototype.spawnAdventureUnits = function() {
+  const startingUnits = window.adventureStartingUnits;
+  
+  if (!startingUnits || startingUnits.length === 0) {
+    console.log('⚔️ No starting units defined for this adventure map');
+    return;
+  }
+  
+  console.log(`⚔️ Spawning ${startingUnits.length} starting units for adventure mode`);
+  console.log(`  📋 this.players:`, this.players?.map(p => p?.id || 'null'));
+  console.log(`  📋 window.player.id:`, window.player?.id);
+  
+  // Group units by player index
+  const unitsByPlayer = {};
+  startingUnits.forEach(u => {
+    if (!unitsByPlayer[u.player]) unitsByPlayer[u.player] = [];
+    unitsByPlayer[u.player].push(u);
+  });
+  
+  // Map player indices to actual players
+  // For solo adventure: player 0 = local player, all other indices also map to local player
+  // For co-op: each index maps to a different player
+  const players = this.players || [];
+  
+  Object.entries(unitsByPlayer).forEach(([playerIndex, units]) => {
+    const pIndex = parseInt(playerIndex);
+    let targetPlayer = null;
+    
+    // For solo play, ONLY spawn player 0's units (skip other player indices)
+    // This prevents spawning enemy/AI units that the player can't control
+    if (players.length === 1) {
+      if (pIndex !== 0) {
+        console.log(`  ⏭️ P${pIndex + 1}: Skipping ${units.length} units (solo mode, only P1 units spawn)`);
+        return; // Skip this player group
+      }
+      targetPlayer = players[0] || window.player;
+    } else if (pIndex < players.length) {
+      targetPlayer = players[pIndex];
+    } else {
+      // If more unit groups than players, skip them (no player to own them)
+      console.log(`  ⏭️ P${pIndex + 1}: Skipping ${units.length} units (no player at index ${pIndex})`);
+      return;
+    }
+    
+    if (!targetPlayer) {
+      console.warn(`⚠️ No player found for unit group ${playerIndex}, skipping`);
+      return;
+    }
+    
+    // Ensure player has units array
+    if (!targetPlayer.units) {
+      targetPlayer.units = [];
+    }
+    
+    console.log(`  👤 P${pIndex + 1}: Spawning ${units.length} units for ${targetPlayer.name || targetPlayer.id}`);
+    
+    units.forEach((unitData, i) => {
+      const worldX = (unitData.x + 0.5) * TILE_SIZE;
+      const worldZ = (unitData.y + 0.5) * TILE_SIZE;
+      
+      // Generate deterministic unit ID
+      let deterministicUnitId = null;
+      if (window.isMultiplayer && window.currentMatch) {
+        const unitIndex = window.currentMatch.unitCounter++;
+        deterministicUnitId = `unit-${window.currentMatch.mapSeed}-${unitIndex}`;
+      }
+      
+      // Create the unit
+      const unit = new window.Unit(unitData.type, { x: worldX, y: 0, z: worldZ }, { id: deterministicUnitId || undefined });
+      
+      // Set ownership - CRITICAL: Use same normalization as player.js
+      // Player ID format: "adventurer-xxxxxx" or "p2p-xxxxxx"
+      // We need to match what player.js uses: this.id.slice(-6)
+      const rawId = targetPlayer.id || '';
+      const normalizedOwner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+      unit.owner = normalizedOwner;
+      
+      // Add to player's units
+      targetPlayer.units.push(unit);
+      window.gameUnits.push(unit);
+      
+      // Give initial units linger behavior
+      if (window.behaviorManager) {
+        window.behaviorManager.setBehavior(unit, 'linger', {
+          center: { x: worldX, z: worldZ },
+          radius: 50,
+          wanderDistance: 2.0,
+          wanderInterval: 30000
+        });
+      }
+      
+      if (i === 0) {
+        console.log(`    📍 First ${unitData.type}: owner="${unit.owner}" (from "${rawId}"), at (${unitData.x}, ${unitData.y})`);
+      }
+    });
+  });
+  
+  console.log(`✅ Adventure units spawned, gameUnits.length=${window.gameUnits.length}`);
+  console.log(`  📋 window.player.units.length:`, window.player?.units?.length);
+  if (window.player?.units?.[0]) {
+    console.log(`  📋 First unit owner: "${window.player.units[0].owner}", player.id.slice(-6): "${window.player.id?.slice(-6)}"`);
+  }
 };
 
 Game.prototype.getGameTime = function() {
@@ -408,6 +531,11 @@ window.gameLoop = {
     // Update projectiles system
     if (window.projectiles && window.projectiles.update) {
       window.projectiles.update(this.deltaTime);
+    }
+    
+    // Update speech bubbles (visual only, non-deterministic)
+    if (window.UnitSpeech && window.UnitSpeech.update) {
+      window.UnitSpeech.update();
     }
     
     // Update visual position

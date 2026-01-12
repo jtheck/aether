@@ -3190,10 +3190,81 @@ const Lobby = {
       window.currentChapterId = chapterId;
       
       // Start adventure with the custom map
-      this.startAdventureWithMap(mapData);
+      //
+      // IMPORTANT: In co-op, we must preserve the full player list; otherwise each peer will
+      // accidentally start a solo match (players=[window.player]) and everyone "loads" out of sync.
+      const coopPlayers = window.currentMatch?.players;
+      const isCoop = window.isMultiplayer && Array.isArray(coopPlayers) && coopPlayers.length > 1;
+      this.startAdventureWithMap(mapData, isCoop ? coopPlayers : undefined);
       
     } catch (e) {
       console.error('Failed to load chapter:', e);
+      if (window.ui && window.ui.showNotification) {
+        window.ui.showNotification('Failed to load next chapter', 'error');
+      }
+    }
+  },
+
+  // Host-only: load next chapter and broadcast to co-op peers so everyone loads together.
+  loadAdventureChapterCoopHost: async function(chapterId) {
+    if (!window.currentMatch || !window.currentMatch.isHost || !window.currentMatch.isHost()) {
+      console.warn('⚠️ Only host can initiate co-op chapter transition');
+      return;
+    }
+    const chapterInfo = this.adventureChapters[chapterId];
+    if (!chapterInfo) {
+      console.error('Unknown chapter:', chapterId);
+      return;
+    }
+    
+    console.log(`🗺️ [CO-OP] Loading next chapter for party: ${chapterInfo.name}`);
+    
+    try {
+      const response = await fetch(chapterInfo.file);
+      if (!response.ok) throw new Error(`Failed to load ${chapterInfo.file}`);
+      const mapData = await response.json();
+      
+      const players = Array.isArray(window.currentMatch?.players) ? window.currentMatch.players : [window.player];
+      const playerIds = players.map(p => (p && p.id) ? p.id : p).filter(Boolean);
+      const fallbackPalette = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
+      const playersMeta = playerIds.map((id, idx) => {
+        const p = players.find(pp => (pp && pp.id) ? pp.id === id : pp === id);
+        const name = (p && p.name) ? p.name : (idx === 0 ? 'Host' : `Player ${idx + 1}`);
+        const color = (p && p.color) ? p.color : (fallbackPalette[idx % fallbackPalette.length] || '#ffffff');
+        return { id, name, color };
+      });
+      
+      // Broadcast map + player list so all peers start the same chapter together.
+      if (window.net && window.net.p2p && window.net.p2p.sendData) {
+        window.net.p2p.sendData({
+          type: 'adventure_chapter_start',
+          chapterId,
+          mapData,
+          playerIds: playerIds,
+          playersMeta: playersMeta
+        });
+      }
+      
+      // Start locally using the exact same payload.
+      window.currentChapterId = chapterId;
+      // Build player array in the same shape as the normal co-op start:
+      // ensure our local `window.player` object is included so input/selection works.
+      const localNorm = this.normalizePeerId ? this.normalizePeerId(window.player?.id) : (window.player?.id?.slice ? window.player.id.slice(-6) : window.player?.id);
+      const builtPlayers = playerIds.map((id, idx) => {
+        const idNorm = this.normalizePeerId ? this.normalizePeerId(id) : (id?.slice ? id.slice(-6) : id);
+        if (localNorm && idNorm === localNorm) return window.player;
+        return {
+          id,
+          name: playersMeta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
+          color: playersMeta[idx]?.color || (fallbackPalette[idx % fallbackPalette.length] || '#ffffff'),
+          units: [],
+          buildings: [],
+          selectedUnits: []
+        };
+      });
+      this.startAdventureWithMap(mapData, builtPlayers);
+    } catch (e) {
+      console.error('❌ Failed to load co-op next chapter:', e);
       if (window.ui && window.ui.showNotification) {
         window.ui.showNotification('Failed to load next chapter', 'error');
       }
@@ -3624,8 +3695,24 @@ const Lobby = {
     const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
     
     // Configure player spawn
-    window.player.name = window.currentPlayerName || 'Adventurer';
-    window.player.color = window.currentPlayerColor || '#ff0000';
+    window.player.name = window.currentPlayerName || window.player.name || 'Adventurer';
+    // In co-op, prefer the host-assigned slot color (from matchPlayers) over per-device defaults.
+    // This keeps team colors consistent across peers and across chapter transitions.
+    const providedLocalColor = (() => {
+      if (!players || !Array.isArray(players)) return null;
+      const normalize = (id) => {
+        if (!id) return '';
+        const suffix = id.includes('-') ? id.split('-').pop() : id;
+        return suffix.length > 6 ? suffix.slice(-6) : suffix;
+      };
+      const localNorm = normalize(window.player.id);
+      const entry = players.find(p => {
+        const pid = (p && p.id) ? p.id : p;
+        return normalize(pid) === localNorm;
+      });
+      return entry && entry.color ? entry.color : null;
+    })();
+    window.player.color = providedLocalColor || window.currentPlayerColor || window.player.color || '#ff0000';
     
     // Adventure mode: check if we have starting units instead of Agora spawns
     // If starting units are defined, don't set player.agora (no Agora in adventure)
@@ -3747,6 +3834,11 @@ const Lobby = {
     // Spawn unit models
     if (window.spawnUnitModels && window.gfx && window.gfx.scene) {
       window.spawnUnitModels(window.gfx.scene);
+    }
+    
+    // Refresh team colors after spawning models (important after chapter transitions).
+    if (typeof window.refreshAllUnitColors === 'function') {
+      setTimeout(() => window.refreshAllUnitColors(), 50);
     }
     
     // Check if this is multiplayer (multiple players)

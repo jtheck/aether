@@ -1904,6 +1904,16 @@
       const objectives = window.adventureObjectives;
       if (!objectives || objectives.length === 0) return;
       
+      // If we've already handled adventure victory, don't re-trigger the flow.
+      if (this._adventureVictoryHandled) return;
+      
+      // In multiplayer co-op, make objective completion HOST-authoritative.
+      // Unit positions can diverge slightly between peers; letting both sides decide can
+      // cause one peer to "win" early and the other to never transition.
+      if (window.isMultiplayer && !this.isHost()) {
+        return;
+      }
+      
       // TILE_SIZE is a global constant from constants.js (value = 4)
       const tileSize = (typeof TILE_SIZE !== 'undefined') ? TILE_SIZE : 4;
       
@@ -1953,6 +1963,17 @@
                 if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech) {
                   console.log(`💬 Showing speech: "${obj.message}" on unit ${unit.id}`);
                   window.UnitSpeech.showSpeech(unit, obj.message, 4000);
+                  
+                  // Broadcast objective completion to peers (host authoritative)
+                  if (window.isMultiplayer && window.net && window.net.p2p) {
+                    window.net.p2p.sendData({
+                      type: 'adventure_objective_complete',
+                      objectiveId: obj.id,
+                      unitId: unit.id,
+                      message: obj.message,
+                      objectiveType: obj.type
+                    });
+                  }
                 } else if (window.ui && window.ui.showNotification) {
                   window.ui.showNotification(`🎯 Objective Complete!`, 'success');
                 }
@@ -1987,6 +2008,17 @@
             if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech && unitsInZone.length > 0) {
               console.log(`💬 Showing escape speech: "${obj.message}" on unit ${unitsInZone[0].id}`);
               window.UnitSpeech.showSpeech(unitsInZone[0], obj.message, 4000);
+              
+              // Broadcast objective completion to peers (host authoritative)
+              if (window.isMultiplayer && window.net && window.net.p2p) {
+                window.net.p2p.sendData({
+                  type: 'adventure_objective_complete',
+                  objectiveId: obj.id,
+                  unitId: unitsInZone[0].id,
+                  message: obj.message,
+                  objectiveType: obj.type
+                });
+              }
             } else if (window.ui && window.ui.showNotification) {
               window.ui.showNotification(`🚪 All units escaped!`, 'success');
             }
@@ -1999,12 +2031,28 @@
         console.log('🏆 All objectives completed! Adventure victory!');
         
         // Show victory dialogue and transition to next chapter
+        this._adventureVictoryHandled = true;
+        // Stop simulation while the victory/transition UI is up to avoid repeated triggers.
+        this.isPaused = true;
+        this.state = MatchState.VICTORY;
+        
+        // Broadcast adventure victory so all peers show the prompt even if their local
+        // floating-point positions differ slightly.
+        if (window.isMultiplayer && window.net && window.net.p2p) {
+          window.net.p2p.sendData({ type: 'adventure_victory' });
+        }
         this.handleAdventureVictory();
       }
     }
     
     // Handle adventure victory - show dialogue and transition to next chapter
     handleAdventureVictory() {
+      // Guard: this can be called multiple times if multiple systems detect victory.
+      if (this._adventureVictoryPromptShown) {
+        return;
+      }
+      this._adventureVictoryPromptShown = true;
+      
       // Get current chapter info
       const currentChapterId = window.currentChapterId || 'chapter1';
       const nextChapterId = this.getNextChapterId(currentChapterId);
@@ -2013,11 +2061,47 @@
         // Show victory message with "Continue" option
         if (window.showStoryDialogue) {
           window.showStoryDialogue('🏆 Chapter Complete! Ready for the next adventure?', 'victory', () => {
-            // Load next chapter
+            // CO-OP: coordinate party transition instead of each peer loading independently.
+            const isCoop = window.isMultiplayer && Array.isArray(this.players) && this.players.filter(p => !p.isAI).length > 1;
+            if (isCoop && window.net && window.net.p2p) {
+              // Initialize transition state (host tracks ready players).
+              if (!this._chapterTransition) {
+                this._chapterTransition = { nextChapterId: null, ready: new Set(), started: false };
+              }
+              
+              // IMPORTANT: Don't wipe readiness if another player already clicked Continue.
+              // This fixes the "peer clicks first, host clicks second → stuck forever" case.
+              if (this._chapterTransition.nextChapterId !== nextChapterId) {
+                this._chapterTransition.nextChapterId = nextChapterId;
+                this._chapterTransition.ready.clear();
+                this._chapterTransition.started = false;
+              } else {
+                // Same transition already in progress; keep existing ready set.
+                this._chapterTransition.started = !!this._chapterTransition.started;
+              }
+              
+              // Mark self ready immediately on Continue.
+              this._chapterTransition.ready.add(this.localPlayerId);
+              window.net.p2p.sendData({
+                type: 'adventure_chapter_ready',
+                nextChapterId,
+                playerId: this.localPlayerId
+              });
+              
+              // Host may already have all players (e.g., 2-player game and peer clicked earlier)
+              if (this.isHost()) {
+                this._checkChapterTransitionReady();
+              } else {
+                // Clients wait for host to broadcast adventure_chapter_start
+                this.updateLoadingOverlay('Waiting for party...');
+              }
+              return;
+            }
+            
+            // Solo (or fallback): Load next chapter locally
             if (window.Lobby && window.Lobby.loadAdventureChapter) {
               window.Lobby.loadAdventureChapter(nextChapterId);
             } else {
-              // Fallback to ending the match normally
               this.endMatch(this.localPlayerId, 'objectives');
             }
           });
@@ -2030,6 +2114,34 @@
           window.showStoryDialogue('🎉 Congratulations! You have completed all chapters!', 'victory', () => {
             this.endMatch(this.localPlayerId, 'objectives');
           });
+        } else {
+          this.endMatch(this.localPlayerId, 'objectives');
+        }
+      }
+    }
+
+    // Host-only: called when chapter-ready messages arrive.
+    _checkChapterTransitionReady() {
+      if (!this._chapterTransition || !this._chapterTransition.nextChapterId || this._chapterTransition.started) return;
+      if (!this.isHost()) return;
+      
+      const humanPlayers = (this.players || []).filter(p => !p.isAI);
+      const total = humanPlayers.length;
+      const readyCount = this._chapterTransition.ready.size;
+      
+      // Show party ready status using existing overlay
+      this.showLoadingOverlay();
+      this.updateLoadingOverlay(`Party ready: ${readyCount} / ${total}`);
+      
+      if (readyCount >= total) {
+        this._chapterTransition.started = true;
+        
+        // Host loads and broadcasts next chapter so everyone transitions together.
+        if (window.Lobby && window.Lobby.loadAdventureChapterCoopHost) {
+          window.Lobby.loadAdventureChapterCoopHost(this._chapterTransition.nextChapterId);
+        } else if (window.Lobby && window.Lobby.loadAdventureChapter) {
+          // Fallback: at least preserve player list (Lobby.loadAdventureChapter now does)
+          window.Lobby.loadAdventureChapter(this._chapterTransition.nextChapterId);
         } else {
           this.endMatch(this.localPlayerId, 'objectives');
         }

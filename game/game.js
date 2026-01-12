@@ -447,7 +447,7 @@ window.gameLoop = {
     // both clients run identical physics. Without this, the fast client would
     // keep running physics while waiting, causing desync.
     const matchState = window.currentMatch?.state;
-    const lockstepWaiting = window.isMultiplayer && window.lockstepWaitingForPeers;
+    const lockstepWaiting = window.isMultiplayer && (window.lockstepWaitingForPeers || window.fastForwardingTicks);
     const canRunPhysics = !lockstepWaiting && (
                           !window.isMultiplayer ||
                           !window.currentMatch ||

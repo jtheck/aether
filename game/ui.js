@@ -3457,8 +3457,13 @@ window.showStoryDialogue = function(message, type, onContinue) {
   
   // Pause the game while dialogue is shown
   const wasPaused = window.currentMatch?.isPaused;
-  if (window.currentMatch && window.currentMatch.pauseMatch) {
-    window.currentMatch.pauseMatch();
+  if (window.currentMatch) {
+    // Only call pauseMatch when actually playing; otherwise avoid spammy warnings.
+    if (window.currentMatch.state === 'playing' && window.currentMatch.pauseMatch) {
+      window.currentMatch.pauseMatch();
+    } else {
+      window.currentMatch.isPaused = true;
+    }
   }
   
   // Create dialogue container
@@ -3543,7 +3548,7 @@ window.showStoryDialogue = function(message, type, onContinue) {
     dialogue.remove();
     
     // Resume game if it wasn't paused before
-    if (!wasPaused && window.currentMatch && window.currentMatch.resumeMatch) {
+    if (!wasPaused && window.currentMatch && window.currentMatch.resumeMatch && window.currentMatch.state === 'playing') {
       window.currentMatch.resumeMatch();
     }
     

@@ -15,6 +15,25 @@
   net.PEER_LAG_THRESHOLD = 3; // Slow down if peer is >3 ticks behind
   net.COMMAND_ACK_TIMEOUT = 1000; // Wait 1s for command acknowledgment before resending
   
+  // Lockstep resilience (co-op friendly)
+  // True lockstep means the slowest device can freeze everyone. For adventure co-op,
+  // it's usually better UX to "soft drop" a chronically late peer (stop waiting for them)
+  // so the remaining peers stay smooth.
+  //
+  // NOTE: This preserves determinism for the remaining peers, but the soft-dropped peer
+  // may not be able to rejoin deterministically.
+  net.LOCKSTEP_SOFT_DROP_ENABLED = true;
+  net.LOCKSTEP_SOFT_DROP_TIMEOUT_MS = 2500; // ms to wait before host soft-drops a peer (adventure only)
+  net.LOCKSTEP_REJOIN_MIN_STABLE_MS = 1500; // must be near-caught-up for this long before auto rejoin request (adventure only)
+  net.CATCHUP_MAX_TICKS_PER_SLICE = 12; // safety cap to avoid long UI stalls while fast-forwarding
+  
+  // Prefer keeping slow peers in lockstep by increasing slack before soft-dropping.
+  // This increases input latency but avoids freezing everyone.
+  net.AUTO_INPUT_DELAY_ENABLED = true;
+  net.AUTO_INPUT_DELAY_AFTER_MS = 900; // if we're waiting this long, bump input delay (host, adventure only)
+  net.AUTO_INPUT_DELAY_COOLDOWN_MS = 4000;
+  net.MAX_INPUT_DELAY_TICKS = 8;
+  
   // Internal state
   let p2p = null;
   let gameId = null;
@@ -40,8 +59,21 @@
   let localConfirmedTick = 0; // Highest tick we've confirmed to peers
   let lockstepEnabled = true; // Enable/disable lockstep (for debugging)
   let lastHeartbeatTick = 0; // Last tick we sent a heartbeat for
+  let lastHeartbeatSentAt = 0; // Timestamp of last tick_confirm send (for resend while waiting)
   let waitingForPeers = false; // Are we currently waiting for peers?
   let lastWaitLog = 0; // Rate limit "waiting for peers" log
+  let softDisconnectedPeers = new Set(); // Peers we stop waiting for (soft drop)
+  let peerWaitStartedAt = new Map(); // peerId -> timestamp when they started blocking lockstep
+  let selfSoftDropped = false; // whether WE were soft-dropped by host (we should go idle + catch up)
+  let lastNearCaughtUpAt = 0; // timestamp for rejoin gating
+  let lastInputDelayAdjustAt = 0;
+  let lastPeerMessageAt = new Map(); // normalizedPeerId -> timestamp of last received message (any type)
+  let lastLockstepNudgeAt = new Map(); // normalizedPeerId -> timestamp of last "please confirm" nudge
+  
+  // If we are still receiving messages from a peer, we should NOT treat them as disconnected.
+  // Only consider soft-drop if they've been fully silent for this long.
+  net.LOCKSTEP_PEER_SILENT_MS = 3000;
+  net.LOCKSTEP_NUDGE_INTERVAL_MS = 500; // how often host nudges a blocking peer for confirm/state
   
   // Internal state tracking
   net._state = {
@@ -58,6 +90,75 @@
     const suffix = id.includes('-') ? id.split('-').pop() : id;
     return suffix.length > 6 ? suffix.slice(-6) : suffix;
   };
+  
+  function isAdventureCoopMatch() {
+    const match = window.currentMatch;
+    return !!match && match.gameType === 'adventure';
+  }
+  
+  function getLocalPeerIdForComparison() {
+    return localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
+  }
+  
+  function idsMatch(a, b) {
+    if (!a || !b) return false;
+    const na = normalizePeerId(a);
+    const nb = normalizePeerId(b);
+    return na && nb && na === nb;
+  }
+  
+  function getCatchupTargetTick() {
+    // Catch up to where the slowest non-soft-dropped peer has confirmed, minus input delay.
+    // This keeps us close enough to rejoin without immediately blocking others again.
+    const inputDelay = window.currentMatch?.inputDelayTicks || 3;
+    const peers = (p2p ? p2p.getConnectedPeers() : []).filter(pid => !softDisconnectedPeers.has(pid));
+    if (peers.length === 0) return tick;
+    
+    let minConfirmed = Infinity;
+    for (const pid of peers) {
+      const confirmed = peerTickConfirmations.get(normalizePeerId(pid));
+      if (typeof confirmed === 'number') {
+        minConfirmed = Math.min(minConfirmed, confirmed);
+      }
+    }
+    if (!isFinite(minConfirmed)) return tick;
+    return Math.max(0, Math.floor(minConfirmed - inputDelay));
+  }
+  
+  function runDeterministicPhysicsStepsForOneNetTick() {
+    // In this codebase: 60Hz physics, 20Hz net → ~3 physics steps per net tick.
+    const dt = 1 / 60;
+    const steps = 3;
+    
+    // During fast-forward we pause the regular rAF physics loop to avoid double-sim.
+    // We only advance simulation-relevant systems here; visuals are updated by the normal render loop later.
+    for (let i = 0; i < steps; i++) {
+      if (window.updateUnits) window.updateUnits(dt);
+      if (window.updateBuildings) window.updateBuildings(dt);
+      if (window.updateIdleUnits) window.updateIdleUnits();
+      if (window.player && window.player.pbody && window.player.pbody.integrate) {
+        window.player.pbody.integrate(dt, true, true);
+      }
+    }
+  }
+  
+  function softDropPeer(peerId, reason = 'lockstep_timeout') {
+    if (!peerId) return;
+    if (softDisconnectedPeers.has(peerId)) return;
+    
+    softDisconnectedPeers.add(peerId);
+    peerTickConfirmations.delete(peerId);
+    peerTickConfirmations.delete(normalizePeerId(peerId));
+    peerWaitStartedAt.delete(peerId);
+    remoteCommands.delete(peerId);
+    
+    // Update lobby state if present (best-effort)
+    if (window.Lobby && window.Lobby.playerConnectionStates) {
+      window.Lobby.playerConnectionStates[peerId] = 'timed_out';
+    }
+    
+    console.warn(`⏳➡️ Soft-dropped peer from lockstep: ${peerId.slice(-8)} (reason=${reason})`);
+  }
 
   // NEW: Get current network status
   net.getStatus = function() {
@@ -179,18 +280,26 @@
     
     // Check if we can advance to the next tick
     function canAdvanceToTick(targetTick) {
-      if (!lockstepEnabled || !isConnected || !window.currentMatch) {
-        return true; // No lockstep in single player or before match
+      if (!lockstepEnabled || !window.currentMatch) {
+        return true; // No lockstep before match object exists
       }
       
-      const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+      // If this match expects peers (co-op), never allow "free running" when the peer list
+      // temporarily appears empty. That can cause clocks/ticks to diverge permanently.
+      const humanPlayers = (window.currentMatch.players || []).filter(p => !p?.isAI);
+      const expectsPeers = window.isMultiplayer && humanPlayers.length > 1;
+      
+      const connectedPeers = (p2p ? p2p.getConnectedPeers() : []).filter(peerId => !softDisconnectedPeers.has(peerId));
+      // Keep isConnected in sync with reality.
+      isConnected = connectedPeers.length > 0;
+      
       if (connectedPeers.length === 0) {
-        return true; // No peers to wait for
+        return !expectsPeers; // Solo/testing can run; co-op must wait
       }
       
       // Check if all peers have confirmed the target tick
       for (const peerId of connectedPeers) {
-        const confirmedTick = peerTickConfirmations.get(peerId) || 0;
+        const confirmedTick = peerTickConfirmations.get(normalizePeerId(peerId)) || 0;
         if (confirmedTick < targetTick) {
           return false; // This peer hasn't confirmed yet
         }
@@ -201,28 +310,112 @@
     
     // Send heartbeat/confirmation for a tick
     function sendTickConfirmation(forTick) {
-      if (!p2p || !isConnected || forTick <= lastHeartbeatTick) {
+      // IMPORTANT: Don't gate tick_confirm on `isConnected`.
+      // GetFire can briefly report 0 connected peers during transitions even though
+      // the data channel is still up; if we stop sending confirmations, the other side
+      // will think we're dead and may soft-drop us.
+      if (!p2p || !p2p.sendData) return;
+      
+      // Allow resending the same tick_confirm periodically while waiting (prevents deadlocks
+      // if the initial match-start confirm was lost or a peer missed it).
+      const now = Date.now();
+      const isResend = (forTick === lastHeartbeatTick);
+      if (forTick < lastHeartbeatTick) {
+        return;
+      }
+      if (isResend && (now - lastHeartbeatSentAt) < 500) {
         return;
       }
       
       lastHeartbeatTick = forTick;
       localConfirmedTick = forTick;
+      lastHeartbeatSentAt = now;
       
       // Log first few confirmations
       if (forTick < 10 || forTick % 100 === 0) {
       }
       
-      p2p.sendData({
+      const msg = {
         type: 'tick_confirm',
         tick: forTick,
         playerId: localPlayerShortId || localPlayerId
-      });
+      };
+      
+      // Always broadcast (most reliable), and also try direct sends when possible.
+      p2p.sendData(msg);
+      const peers = p2p.getConnectedPeers ? p2p.getConnectedPeers() : [];
+      if (peers && peers.length > 0) {
+        peers.forEach(pid => p2p.sendData(msg, pid));
+      }
     }
     
     // The lockstep tick loop
     function lockstepTick() {
       const targetTick = tick + 1;
       const inputDelay = window.currentMatch?.inputDelayTicks || 3;
+      
+      // IMPORTANT: Do not run lockstep gating (or soft-drop) before the match actually starts.
+      // During LOADING/READY/countdown, peers often aren't sending tick confirmations yet, which
+      // can cause false timeouts and accidental soft-drops on fast clients.
+      if (lockstepEnabled && window.currentMatch && window.currentMatch.state !== 'playing') {
+        waitingForPeers = false;
+        window.lockstepWaitingForPeers = false;
+        tickIntervalId = setTimeout(lockstepTick, 1000 / net.TICK_RATE);
+        return;
+      }
+      
+      // If WE were soft-dropped (slow device), go idle and fast-forward to catch up.
+      // We must not gate on peer confirmations while catching up, otherwise we'll never
+      // reduce the gap. This does NOT affect other peers because they already stopped
+      // waiting for us.
+      if (selfSoftDropped && isAdventureCoopMatch() && window.currentMatch) {
+        const catchupTarget = getCatchupTargetTick();
+        
+        // Pause the regular rAF physics loop during fast-forward to avoid double-sim.
+        window.fastForwardingTicks = true;
+        
+        let advanced = 0;
+        while (tick < catchupTarget && advanced < net.CATCHUP_MAX_TICKS_PER_SLICE) {
+          tick++;
+          processTick();
+          runDeterministicPhysicsStepsForOneNetTick();
+          advanced++;
+        }
+        
+        // Confirm we're ready for future ticks (helps eventual rejoin)
+        sendTickConfirmation(tick + inputDelay);
+        
+        // If we're caught up (or very close), stop fast-forwarding and go back to normal cadence.
+        if (tick >= catchupTarget) {
+          window.fastForwardingTicks = false;
+          
+          // If we remain near-caught-up for a short window, request lockstep rejoin.
+          const now = Date.now();
+          const near = Math.abs(catchupTarget - tick) <= 1;
+          if (near) {
+            if (!lastNearCaughtUpAt) lastNearCaughtUpAt = now;
+            const stableMs = now - lastNearCaughtUpAt;
+            if (stableMs >= net.LOCKSTEP_REJOIN_MIN_STABLE_MS && p2p && isConnected) {
+              p2p.sendData({
+                type: 'lockstep_rejoin_request',
+                playerId: localPlayerId,
+                shortId: getLocalPeerIdForComparison(),
+                tick
+              });
+              // Rate-limit rejoin attempts
+              lastNearCaughtUpAt = now + 10_000;
+            }
+          } else {
+            lastNearCaughtUpAt = 0;
+          }
+          
+          tickIntervalId = setTimeout(lockstepTick, 1000 / net.TICK_RATE);
+        } else {
+          // Continue catching up as fast as the device can manage (yield back immediately)
+          tickIntervalId = setTimeout(lockstepTick, 0);
+        }
+        return;
+      }
       
       
       if (canAdvanceToTick(targetTick)) {
@@ -246,17 +439,106 @@
         }
         window.lockstepWaitingForPeers = true; // Expose to game loop - pause physics!
         
+        // While waiting, periodically resend our latest confirmation as a heartbeat.
+        // This helps peers recover if they missed our last tick_confirm.
+        sendTickConfirmation(tick + inputDelay);
+        
         // Log waiting status (rate limited)
         const now = Date.now();
         if (now - lastWaitLog > 2000) {
-          const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+          const connectedPeers = (p2p ? p2p.getConnectedPeers() : []).filter(peerId => !softDisconnectedPeers.has(peerId));
           const waiting = connectedPeers.filter(peerId => {
-            const confirmed = peerTickConfirmations.get(peerId) || 0;
+            const confirmed = peerTickConfirmations.get(normalizePeerId(peerId)) || 0;
             return confirmed < targetTick;
           });
           if (waiting.length > 0) {
           }
           lastWaitLog = now;
+        }
+        
+        // Adventure co-op: host can soft-drop peers that block lockstep too long.
+        // This prevents one slow device from freezing everyone indefinitely.
+        if (net.LOCKSTEP_SOFT_DROP_ENABLED && isAdventureCoopMatch() && window.currentMatch?.isHost?.() && window.currentMatch?.state === 'playing') {
+          const connectedPeers = (p2p ? p2p.getConnectedPeers() : []).filter(peerId => !softDisconnectedPeers.has(peerId));
+          const blockingPeers = connectedPeers.filter(peerId => {
+            const confirmed = peerTickConfirmations.get(normalizePeerId(peerId)) || 0;
+            return confirmed < targetTick;
+          });
+          
+          // Track per-peer waiting start time
+          blockingPeers.forEach(peerId => {
+            if (!peerWaitStartedAt.has(peerId)) {
+              peerWaitStartedAt.set(peerId, now);
+            }
+          });
+          connectedPeers.forEach(peerId => {
+            if (!blockingPeers.includes(peerId)) {
+              peerWaitStartedAt.delete(peerId);
+            }
+          });
+          
+          blockingPeers.forEach(peerId => {
+            const startedAt = peerWaitStartedAt.get(peerId) || now;
+            const waitedMs = now - startedAt;
+            const nKey = normalizePeerId(peerId);
+            const lastSeen = lastPeerMessageAt.get(nKey) || 0;
+            const silentForMs = now - lastSeen;
+            
+            // Step 0: nudge the peer for an immediate confirmation + state (cheap, avoids false timeouts).
+            const lastNudge = lastLockstepNudgeAt.get(nKey) || 0;
+            if (now - lastNudge >= net.LOCKSTEP_NUDGE_INTERVAL_MS) {
+              lastLockstepNudgeAt.set(nKey, now);
+              // Ask that specific peer to re-emit tick_confirm + state_sync right now.
+              if (p2p && p2p.sendData) {
+                p2p.sendData({ type: 'request_tick_confirm' }, peerId);
+                p2p.sendData({ type: 'force_state_sync' }, peerId);
+              }
+            }
+            
+            // Step 1 (prefer): increase slack by bumping input delay (host-coordinated).
+            if (net.AUTO_INPUT_DELAY_ENABLED &&
+                waitedMs >= net.AUTO_INPUT_DELAY_AFTER_MS &&
+                now - lastInputDelayAdjustAt >= net.AUTO_INPUT_DELAY_COOLDOWN_MS &&
+                window.currentMatch &&
+                typeof window.currentMatch.inputDelayTicks === 'number' &&
+                window.currentMatch.inputDelayTicks < net.MAX_INPUT_DELAY_TICKS) {
+              
+              const nextDelay = Math.min(net.MAX_INPUT_DELAY_TICKS, window.currentMatch.inputDelayTicks + 1);
+              lastInputDelayAdjustAt = now;
+              
+              // Broadcast so everyone applies the same deterministic scheduling.
+              if (p2p && isConnected) {
+                p2p.sendData({
+                  type: 'set_input_delay',
+                  inputDelayTicks: nextDelay
+                });
+              }
+              
+              // Apply locally as well.
+              window.currentMatch.inputDelayTicks = nextDelay;
+              console.warn(`🕒 Host bumped inputDelayTicks to ${nextDelay} (trying to keep slow peer in lockstep)`);
+              
+              // Give the peer more time before considering soft-drop.
+              peerWaitStartedAt.set(peerId, now);
+              return;
+            }
+            
+            // Step 2 (last resort): soft-drop if they're still blocking for too long.
+            // Only soft-drop if they've been fully silent (no messages at all) for a while.
+            if (waitedMs >= net.LOCKSTEP_SOFT_DROP_TIMEOUT_MS && silentForMs >= net.LOCKSTEP_PEER_SILENT_MS) {
+              // Broadcast decision so all remaining peers stop waiting consistently
+              if (p2p && isConnected) {
+                p2p.sendData({
+                  type: 'lockstep_soft_drop',
+                  peerId,
+                  atTick: tick,
+                  targetTick,
+                  reason: 'lockstep_timeout'
+                });
+              }
+              softDropPeer(peerId, 'lockstep_timeout');
+            }
+          });
         }
         
         // Check again quickly (5ms) to minimize latency when peer confirms
@@ -421,6 +703,14 @@
       return false;
     }
     
+    // If we were soft-dropped (slow device), we must go idle (no gameplay-affecting inputs)
+    // until we catch up and rejoin lockstep. This prevents "missed window" commands that
+    // would desync our local state vs the remaining peers.
+    if (selfSoftDropped && isAdventureCoopMatch()) {
+      console.warn('🧊 Command blocked: you are in catch-up (idle) mode.');
+      return false;
+    }
+    
     // Add tick prediction (execute immediately for local player)
     command.tick = tick + Math.ceil(50 / (1000 / net.TICK_RATE)); // ~1 tick delay for latency
     const selfPlayerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
@@ -580,6 +870,14 @@
       }
       
       switch (actualMessage.type) {
+        default:
+          // Record that this peer is alive (any message counts)
+          lastPeerMessageAt.set(normalizePeerId(peerId), Date.now());
+          break;
+      }
+      
+      // Re-enter the switch now that we've recorded last-seen.
+      switch (actualMessage.type) {
         case 'command':
           // Queue remote command for lockstep
           if (!remoteCommands.has(peerId)) {
@@ -589,6 +887,17 @@
           
           // Prune old remote commands
           remoteCommands.set(peerId, remoteCommands.get(peerId).filter(c => c.tick > tick - 10));
+          
+          // TRUE LOCKSTEP: Any received command implies the peer is alive and has advanced to (at least) that tick.
+          // Some older code paths use {type:'command'} instead of {type:'game_command'}; without this, the host can
+          // falsely think the peer is "not confirming" and soft-drop them.
+          if (actualMessage.content && actualMessage.content.tick !== undefined) {
+            const key = normalizePeerId(actualMessage.content.playerId || peerId);
+            const currentConfirmed = peerTickConfirmations.get(key) || 0;
+            if (actualMessage.content.tick > currentConfirmed) {
+              peerTickConfirmations.set(key, actualMessage.content.tick);
+            }
+          }
           break;
           
         case 'tick_confirm':
@@ -596,15 +905,31 @@
           // This includes any commands they have for that tick
           if (actualMessage.tick !== undefined) {
             const confirmedTick = actualMessage.tick;
-            const currentConfirmed = peerTickConfirmations.get(peerId) || 0;
+            const keyFromPeer = normalizePeerId(peerId);
+            const keyFromPlayer = normalizePeerId(actualMessage.playerId);
+            const currentConfirmed = peerTickConfirmations.get(keyFromPeer) || 0;
             
             // Only update if this is a newer confirmation
             if (confirmedTick > currentConfirmed) {
-              peerTickConfirmations.set(peerId, confirmedTick);
+              peerTickConfirmations.set(keyFromPeer, confirmedTick);
+              if (keyFromPlayer) {
+                peerTickConfirmations.set(keyFromPlayer, Math.max(peerTickConfirmations.get(keyFromPlayer) || 0, confirmedTick));
+              }
               // Log first few confirmations and then periodically
               if (confirmedTick < 10 || confirmedTick % 100 === 0) {
               }
             }
+          }
+          break;
+        
+        case 'request_tick_confirm':
+          // Host is nudging us to re-emit confirmations (helps recover from transient packet loss).
+          if (window.currentMatch) {
+            const inputDelay = window.currentMatch.inputDelayTicks || 3;
+            // Use our current local tick variable in net.js, not match tick (lockstep driver).
+            sendTickConfirmation(tick + inputDelay);
+            // Also send state sync to prove liveness / advance implicit confirmations.
+            sendStateSync();
           }
           break;
           
@@ -615,6 +940,16 @@
           // Update peer lag tracking
           if (actualMessage.content && actualMessage.content.tick !== undefined) {
             updatePeerLag(peerId, actualMessage.content.tick);
+            
+            // TRUE LOCKSTEP FALLBACK: Treat state_sync as an implicit tick confirmation.
+            // This prevents stalls if tick_confirm packets are delayed/dropped while other
+            // traffic (state_sync) is still flowing.
+            const key = normalizePeerId(peerId);
+            const currentConfirmed = peerTickConfirmations.get(key) || 0;
+            const confirmTick = actualMessage.content.tick + (window.currentMatch?.inputDelayTicks || 3);
+            if (confirmTick > currentConfirmed) {
+              peerTickConfirmations.set(key, confirmTick);
+            }
           }
           break;
           
@@ -661,14 +996,97 @@
             
             // TRUE LOCKSTEP: Position sync also serves as tick confirmation
             if (actualMessage.tick !== undefined) {
-              const currentConfirmed = peerTickConfirmations.get(peerId) || 0;
+              const keyFromPeer = normalizePeerId(peerId);
+              const keyFromPlayer = normalizePeerId(actualMessage.playerId);
+              const currentConfirmed = peerTickConfirmations.get(keyFromPeer) || 0;
               // Position syncs confirm up to the synced tick + inputDelay
               const confirmTick = actualMessage.tick + (window.currentMatch?.inputDelayTicks || 3);
               if (confirmTick > currentConfirmed) {
-                peerTickConfirmations.set(peerId, confirmTick);
+                peerTickConfirmations.set(keyFromPeer, confirmTick);
+                if (keyFromPlayer) {
+                  peerTickConfirmations.set(keyFromPlayer, Math.max(peerTickConfirmations.get(keyFromPlayer) || 0, confirmTick));
+                }
               }
               updatePeerLag(peerId, actualMessage.tick);
             }
+          }
+          break;
+        
+        case 'lockstep_soft_drop':
+          // Host has decided this peer is blocking lockstep too long; stop waiting for them.
+          if (actualMessage.peerId) {
+            softDropPeer(actualMessage.peerId, actualMessage.reason || 'lockstep_soft_drop');
+            
+            // If the host soft-dropped US, we should go idle and start catch-up mode.
+            const localId = getLocalPeerIdForComparison();
+            if (idsMatch(actualMessage.peerId, localId) || idsMatch(actualMessage.peerId, localPlayerId)) {
+              selfSoftDropped = true;
+              window.fastForwardingTicks = false;
+              lastNearCaughtUpAt = 0;
+              console.warn(`🧊 You were soft-dropped (slow device). Entering catch-up mode (idle).`);
+            }
+          }
+          break;
+        
+        case 'lockstep_rejoin_accept':
+          // Host allowed a previously soft-dropped peer to rejoin lockstep quorum.
+          if (actualMessage.peerId) {
+            softDisconnectedPeers.delete(actualMessage.peerId);
+            peerWaitStartedAt.delete(actualMessage.peerId);
+            
+            // Prime confirmations so we don't immediately block on first tick after rejoin.
+            if (typeof actualMessage.baselineTick === 'number') {
+              const inputDelay = window.currentMatch?.inputDelayTicks || 3;
+              peerTickConfirmations.set(normalizePeerId(actualMessage.peerId), actualMessage.baselineTick + inputDelay);
+            }
+            
+            // If it was us, exit soft-drop mode and allow inputs again.
+            const localId = getLocalPeerIdForComparison();
+            if (idsMatch(actualMessage.peerId, localId) || idsMatch(actualMessage.peerId, localPlayerId)) {
+              selfSoftDropped = false;
+              window.fastForwardingTicks = false;
+              lastNearCaughtUpAt = 0;
+              console.warn(`✅ Rejoined lockstep.`);
+            }
+          }
+          break;
+        
+        case 'force_state_sync':
+          // Best-effort: peers can ask everyone to send an immediate state_sync to help a rejoin/catch-up.
+          // This is safe because each player only includes their OWN units/buildings/resources.
+          if (!actualMessage.targetPeerId || (peerId && actualMessage.targetPeerId === peerId) || actualMessage.targetPeerId === (localPlayerShortId || localPlayerId)) {
+            sendStateSync();
+          } else {
+            // If target is specified and isn't us, ignore.
+            // (force_state_sync is usually broadcast; target filtering prevents extra traffic)
+          }
+          break;
+        
+        case 'set_input_delay':
+          // Host-coordinated input delay change (must be applied uniformly for determinism).
+          if (window.currentMatch && typeof actualMessage.inputDelayTicks === 'number') {
+            const newDelay = Math.max(1, Math.min(net.MAX_INPUT_DELAY_TICKS, Math.floor(actualMessage.inputDelayTicks)));
+            const oldDelay = window.currentMatch.inputDelayTicks;
+            window.currentMatch.inputDelayTicks = newDelay;
+            console.warn(`🕒 Input delay adjusted: ${oldDelay} → ${newDelay} ticks`);
+          }
+          break;
+        
+        case 'lockstep_rejoin_request':
+          // Only the host decides; when accepted we broadcast so everyone re-enables waiting for that peer.
+          if (net.LOCKSTEP_SOFT_DROP_ENABLED && isAdventureCoopMatch() && window.currentMatch?.isHost?.() && actualMessage.playerId) {
+            // Accept if they're connected; prime confirmations near our current tick.
+            const baselineTick = tick;
+            p2p.sendData({
+              type: 'lockstep_rejoin_accept',
+              peerId: actualMessage.playerId,
+              baselineTick
+            });
+            
+            // Ask all peers to send a fresh state sync to smooth out any visual/state divergence.
+            p2p.sendData({
+              type: 'force_state_sync'
+            });
           }
           break;
           
@@ -1057,9 +1475,9 @@
             // TRUE LOCKSTEP: Command for tick N confirms peer is ready for tick N
             // Update tick confirmation (commands serve as implicit heartbeats)
             if (cmd.tick !== undefined) {
-              const currentConfirmed = peerTickConfirmations.get(peerId) || 0;
+              const currentConfirmed = peerTickConfirmations.get(normalizePeerId(peerId)) || 0;
               if (cmd.tick > currentConfirmed) {
-                peerTickConfirmations.set(peerId, cmd.tick);
+                peerTickConfirmations.set(normalizePeerId(peerId), cmd.tick);
               }
             }
             
@@ -1179,6 +1597,16 @@
           if (window.currentMatch && actualMessage.tick && actualMessage.checksum) {
             window.currentMatch.verifySyncCheckpoint(actualMessage.tick, actualMessage.checksum, actualMessage.components);
           }
+          
+          // Also use checkpoints as implicit confirmation (they only arrive if peer is alive).
+          if (actualMessage.tick !== undefined) {
+            const key = normalizePeerId(peerId);
+            const currentConfirmed = peerTickConfirmations.get(key) || 0;
+            const confirmTick = actualMessage.tick + (window.currentMatch?.inputDelayTicks || 3);
+            if (confirmTick > currentConfirmed) {
+              peerTickConfirmations.set(key, confirmTick);
+            }
+          }
           break;
           
         case 'request_state_sync':
@@ -1224,6 +1652,101 @@
           if (window.currentMatch && window.currentMatch.beginPlaying) {
             console.log('🚀 Received match_start from host – entering PLAYING state');
             window.currentMatch.beginPlaying();
+          }
+          break;
+        
+        case 'adventure_objective_complete':
+          // Host authoritative objective completion for co-op adventure.
+          if (window.currentMatch && Array.isArray(window.adventureObjectives) && actualMessage.objectiveId !== undefined) {
+            const obj = window.adventureObjectives.find(o => o && o.id === actualMessage.objectiveId);
+            if (obj && !obj.completed) {
+              obj.completed = true;
+            }
+            
+            // Show speech/notification on clients to match host.
+            if (actualMessage.message && window.UnitSpeech && window.UnitSpeech.showSpeech && window.gameUnits && actualMessage.unitId) {
+              const unit = window.gameUnits.find(u => u && u.id === actualMessage.unitId);
+              if (unit) {
+                window.UnitSpeech.showSpeech(unit, actualMessage.message, 4000);
+              }
+            }
+          }
+          break;
+        
+        case 'adventure_victory':
+          // Host authoritative victory trigger for co-op adventure.
+          if (window.currentMatch && !window.currentMatch._adventureVictoryHandled) {
+            window.currentMatch._adventureVictoryHandled = true;
+            window.currentMatch._adventureVictoryPromptShown = false; // allow prompt once via handler
+            window.currentMatch.isPaused = true;
+            window.currentMatch.state = 'victory';
+            if (typeof window.currentMatch.handleAdventureVictory === 'function') {
+              window.currentMatch.handleAdventureVictory();
+            }
+          }
+          break;
+        
+        case 'adventure_chapter_ready':
+          // Host tracks which players have confirmed they want to continue.
+          if (window.currentMatch && window.currentMatch.isHost && window.currentMatch.isHost() && actualMessage.playerId && actualMessage.nextChapterId) {
+            if (!window.currentMatch._chapterTransition) {
+              window.currentMatch._chapterTransition = { nextChapterId: null, ready: new Set(), started: false };
+            }
+            // Ignore if this is for a different chapter transition
+            if (!window.currentMatch._chapterTransition.nextChapterId) {
+              window.currentMatch._chapterTransition.nextChapterId = actualMessage.nextChapterId;
+            }
+            if (window.currentMatch._chapterTransition.nextChapterId !== actualMessage.nextChapterId) {
+              break;
+            }
+            window.currentMatch._chapterTransition.ready.add(actualMessage.playerId);
+            if (typeof window.currentMatch._checkChapterTransitionReady === 'function') {
+              window.currentMatch._checkChapterTransitionReady();
+            }
+          }
+          break;
+        
+        case 'adventure_chapter_start':
+          // Host provides next chapter map + players so everyone loads together.
+          if (window.Lobby && actualMessage.mapData && actualMessage.chapterId) {
+            window.currentChapterId = actualMessage.chapterId;
+            
+            // Rebuild the player list so `window.player` is included for the local slot.
+            const playerIds = Array.isArray(actualMessage.playerIds) ? actualMessage.playerIds : null;
+            if (playerIds && playerIds.length > 0) {
+              if (!window.player) {
+                window.player = new Player();
+              }
+              const normalize = (id) => {
+                if (!id) return '';
+                const suffix = id.includes('-') ? id.split('-').pop() : id;
+                return suffix.length > 6 ? suffix.slice(-6) : suffix;
+              };
+              const localNorm = normalize(window.player.id);
+              const meta = Array.isArray(actualMessage.playersMeta) ? actualMessage.playersMeta : [];
+              const players = playerIds.map((id, idx) => {
+                const idNorm = normalize(id);
+                if (localNorm && idNorm === localNorm) {
+                  // Preserve local player object for input/selection, but adopt host-assigned name/color for consistency.
+                  if (meta[idx] && meta[idx].color) window.player.color = meta[idx].color;
+                  if (meta[idx] && meta[idx].name) window.player.name = meta[idx].name;
+                  return window.player;
+                }
+                return {
+                  id,
+                  name: meta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
+                  color: meta[idx]?.color || (idx === 0 ? '#ff0000' : '#00ff00'),
+                  units: [],
+                  buildings: [],
+                  selectedUnits: []
+                };
+              });
+              window.Lobby.startAdventureWithMap(actualMessage.mapData, players);
+            } else {
+              // Fallback: preserve existing players if available
+              const coopPlayers = window.currentMatch?.players;
+              window.Lobby.startAdventureWithMap(actualMessage.mapData, Array.isArray(coopPlayers) ? coopPlayers : undefined);
+            }
           }
           break;
           
@@ -1406,6 +1929,7 @@
     // CRITICAL: Clear tick confirmation for disconnected peer
     // This allows lockstep to continue without waiting for them
     peerTickConfirmations.delete(peerId);
+    peerTickConfirmations.delete(normalizePeerId(peerId));
     
     // Update lobby connection status
     if (window.Lobby) {
@@ -1642,7 +2166,10 @@
   
   // Send full state sync (BOTH players send their own unit positions)
   function sendStateSync() {
-    if (!isConnected) return; // Both host and client send state
+    // IMPORTANT: Don't gate state sync on `isConnected`.
+    // GetFire can briefly report 0 peers during transitions; if we stop emitting state_sync,
+    // lockstep may falsely think a peer is stalled and soft-drop them.
+    if (!p2p || !p2p.sendData) return;
     
     // PEER-TO-PEER: Each player only sends their OWN unit positions
     const localOwnerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
@@ -1694,7 +2221,12 @@
       tick: tick
     };
     
+    // Always broadcast (most reliable), and also try direct sends when possible.
     p2p.sendData(message);
+    const peers = p2p.getConnectedPeers ? p2p.getConnectedPeers() : [];
+    if (peers && peers.length > 0) {
+      peers.forEach(pid => p2p.sendData(message, pid));
+    }
     // Log occasionally (disabled - working!)
     // if (tick % (net.TICK_RATE * 5) === 0) {
     //   console.log(`📤 Sent state sync: ${myUnits.length} units from player ${localOwnerId} at tick ${tick}`);
@@ -1909,6 +2441,9 @@
   // This ensures both players start with synchronized tick counters
   net.resetForMatchStart = function() {
     const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
+    // IMPORTANT: During chapter transitions, `isConnected` can be briefly stale even though
+    // the data channels are up. Recompute from the real peer list.
+    isConnected = connectedPeers.length > 0;
     tick = 0;
     commandBuffer = [];
     remoteCommands.clear();
@@ -1919,28 +2454,36 @@
     peerTickConfirmations.clear();
     localConfirmedTick = 0;
     lastHeartbeatTick = 0;
+    lastHeartbeatSentAt = 0;
     waitingForPeers = false;
     lastWaitLog = 0;
     window.lockstepWaitingForPeers = false; // Clear global flag for game loop
+    softDisconnectedPeers.clear();
+    peerWaitStartedAt.clear();
+    selfSoftDropped = false;
+    lastNearCaughtUpAt = 0;
+    window.fastForwardingTicks = false;
     
     // Pre-confirm initial ticks so game can start
     // Each player confirms they're ready for ticks 0 through inputDelay
     const inputDelay = window.currentMatch?.inputDelayTicks || 3;
     connectedPeers.forEach(peerId => {
-      peerTickConfirmations.set(peerId, inputDelay);
+      peerTickConfirmations.set(normalizePeerId(peerId), inputDelay);
     });
     localConfirmedTick = inputDelay;
     lastHeartbeatTick = inputDelay;
     
-    // Send initial confirmation to peers
-    if (p2p && isConnected) {
+    // Send initial confirmation to peers (best-effort; safe even if peer list is briefly empty)
+    if (p2p && p2p.sendData) {
       p2p.sendData({
         type: 'tick_confirm',
         tick: inputDelay,
         playerId: localPlayerShortId || localPlayerId
       });
     } else {
-      console.warn(`   ⚠️ Cannot send initial tick_confirm: p2p=${!!p2p}, isConnected=${isConnected}`);
+      // If there are truly no peers, this is fine (solo/testing). In co-op, the main loop will
+      // wait for peers and retry heartbeats once peers appear.
+      // console.warn(`   ⚠️ Cannot send initial tick_confirm: p2p=${!!p2p}, peers=${connectedPeers.length}`);
     }
     
     // Clear catch-up state

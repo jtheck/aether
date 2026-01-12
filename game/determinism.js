@@ -181,7 +181,6 @@
    */
   function initMatchRng(seed) {
     matchRng = new SeededRandom(seed);
-    console.log(`🎲 Match RNG initialized with seed: ${seed}`);
   }
   
   /**
@@ -666,6 +665,5 @@
   global.getMatchRng = getMatchRng;
   global.deterministicStringCompare = deterministicStringCompare; // Replace localeCompare()
   
-  console.log('✅ Determinism module loaded');
   
 })(typeof window !== 'undefined' ? window : this);

@@ -297,9 +297,7 @@
     createRadialMenu();
 
     // Create 3D anchor indicators (if in 3D mode)
-    console.log(`🎮 HUD init - USE_3D_HUD: ${window.USE_3D_HUD}`);
     if (window.USE_3D_HUD) {
-      console.log('🎮 Calling createAnchorIndicators during HUD init');
       hud.createAnchorIndicators();
     } else {
       console.log('🎮 Skipping anchor indicators during HUD init (2D mode)');
@@ -637,7 +635,6 @@
   hud.createAnchorIndicators = function() {
     // Only create if camera exists
     if (!hud.camera) {
-      console.log('⏳ Camera not ready yet, skipping anchor indicators');
       return;
     }
 
@@ -648,9 +645,7 @@
       });
     }
 
-      console.log('🎯 Creating 3D anchor indicators...');
       if (hud.camera) {
-        console.log(`📷 Camera position: (${hud.camera.position.x.toFixed(2)}, ${hud.camera.position.y.toFixed(2)}, ${hud.camera.position.z.toFixed(2)})`);
       }
 
     hud.anchorIndicators = {};
@@ -726,10 +721,8 @@
       indicator.setEnabled(window.USE_3D_HUD || false);
 
       hud.anchorIndicators[name] = indicator;
-      console.log(`✅ Created clickable anchor indicator ${name} at screen pos (${screenPos.x}, ${screenPos.y}), local pos (${indicator.position.x.toFixed(2)}, ${indicator.position.y.toFixed(2)}, ${indicator.position.z.toFixed(2)}), enabled: ${indicator.isEnabled()}`);
     }
 
-    console.log(`🎯 Created ${Object.keys(hud.anchorIndicators).length} anchor indicators, USE_3D_HUD: ${window.USE_3D_HUD}`);
   };
 
   // Show radial menu at specific anchor point
@@ -2961,7 +2954,6 @@
         const element = document.getElementById(id);
         if (element) element.style.display = 'none';
       });
-      console.log('✅ Hid 2D anchor elements');
 
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {
@@ -2991,7 +2983,6 @@
       window.USE_3D_HUD = true;
 
       // Create/show 3D anchor indicators and hide 2D anchors when initializing to 3D mode
-      console.log('🎮 Initializing to 3D mode - creating 3D anchors, hiding 2D anchors');
       if (hud.createAnchorIndicators) {
         hud.createAnchorIndicators();
       } else {
@@ -3003,7 +2994,6 @@
         const element = document.getElementById(id);
         if (element) element.style.display = 'none';
       });
-      console.log('✅ Hid 2D anchor elements during init');
 
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {

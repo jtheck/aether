@@ -27,7 +27,6 @@ const MSDFText = {
       // Create MSDF shader material
       this.createMSDFShader();
       
-      console.log('✨ MSDF text system initialized with Roboto font');
     } catch (error) {
       console.error('Failed to load MSDF font:', error);
     }

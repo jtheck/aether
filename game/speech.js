@@ -65,7 +65,6 @@ const UnitSpeech = {
     }
     
     window.MSDFText.init(scene);
-    console.log('✨ Unit speech system initialized');
   },
 
   // Show speech bubble above a unit

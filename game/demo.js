@@ -48,7 +48,6 @@
       return;
     }
     
-    console.log('🎬 Starting demo mode...');
     
     // Wait for required systems
     if (!window.gfx || !window.gfx.scene || !window.liveField || !window.Unit) {
@@ -103,16 +102,12 @@
       statW.style.textShadow = '1px 1px 2px black';
     }
     
-    console.log('✅ Demo mode started');
-    console.log(`   Villagers: ${demoPlayer.units.length}`);
-    console.log(`   Resources: food=${demoPlayer.resources.food}, wood=${demoPlayer.resources.wood}`);
   };
   
   // Stop demo mode (called when match starts)
   demo.stop = function() {
     if (!demoActive) return;
     
-    console.log('🛑 Stopping demo mode...');
     
     demoActive = false;
     
@@ -206,7 +201,6 @@
       window.currentMatch = null;
     }
     
-    console.log('✅ Demo mode stopped');
   };
   
   // Check if demo is active
@@ -327,7 +321,6 @@
       }
     }
     
-    console.log(`👥 Spawned ${villagerCount} demo villagers at center`);
   }
   
   // Clear the spawn area of rocks and make it passable grass
@@ -387,7 +380,6 @@
     // Disposing chunk meshes would break models parented to those meshes (entire chunks, not just spawn area).
     // The model clearing (Step 2) handles the visual change.
     
-    console.log(`🧹 Cleared ${radius}-tile radius spawn area at (${centerX}, ${centerZ})`);
   }
   
   // Check if a world position is passable
@@ -617,7 +609,6 @@
       return;
     }
     
-    console.log(`🏗️ Demo AI: Building ${buildingType} at (${buildPos.x}, ${buildPos.z})`);
     
     // Use building system to place (same as player would)
     if (window.placeBuilding && window.gfx && window.gfx.scene) {
@@ -641,7 +632,6 @@
           }
         });
         
-        console.log(`✅ Demo: Placed ${buildingType}, resources: wood=${demoPlayer.resources.wood}`);
       }
     }
   }

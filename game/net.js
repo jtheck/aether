@@ -202,10 +202,6 @@
     // Send heartbeat/confirmation for a tick
     function sendTickConfirmation(forTick) {
       if (!p2p || !isConnected || forTick <= lastHeartbeatTick) {
-        // Log first few skips to diagnose connection issues
-        if (forTick < 10) {
-          console.log(`⏭️ Skipping tick_confirm for tick ${forTick}: p2p=${!!p2p}, isConnected=${isConnected}, lastHeartbeat=${lastHeartbeatTick}`);
-        }
         return;
       }
       
@@ -214,7 +210,6 @@
       
       // Log first few confirmations
       if (forTick < 10 || forTick % 100 === 0) {
-        console.log(`📤 Sending tick_confirm for tick ${forTick}`);
       }
       
       p2p.sendData({
@@ -229,10 +224,6 @@
       const targetTick = tick + 1;
       const inputDelay = window.currentMatch?.inputDelayTicks || 3;
       
-      // Log first few ticks for diagnostics
-      if (targetTick <= 5) {
-        console.log(`🔄 lockstepTick: targetTick=${targetTick}, hasMatch=${!!window.currentMatch}, isConnected=${isConnected}`);
-      }
       
       if (canAdvanceToTick(targetTick)) {
         // We can advance!
@@ -264,7 +255,6 @@
             return confirmed < targetTick;
           });
           if (waiting.length > 0) {
-            console.log(`⏳ Lockstep: waiting for ${waiting.length} peer(s) to confirm tick ${targetTick}`);
           }
           lastWaitLog = now;
         }
@@ -613,7 +603,6 @@
               peerTickConfirmations.set(peerId, confirmedTick);
               // Log first few confirmations and then periodically
               if (confirmedTick < 10 || confirmedTick % 100 === 0) {
-                console.log(`📥 tick_confirm from ${peerId.slice(-6)}: tick ${confirmedTick}`);
               }
             }
           }
@@ -711,6 +700,26 @@
           }
           break;
           
+        case 'request_catchup':
+          // Peer is behind and requesting current tick to catch up
+          if (window.currentMatch && actualMessage.fromTick !== undefined) {
+            const currentTick = window.currentMatch.tick || tick;
+            const ticksBehind = currentTick - actualMessage.fromTick;
+            
+            if (ticksBehind > 0) {
+              console.log(`📡 Peer is ${ticksBehind} ticks behind, sending catch-up target: ${currentTick}`);
+              
+              // Send our current tick so they can fast-forward
+              if (window.net && window.net.p2p) {
+                window.net.p2p.sendData({
+                  type: 'catchup_sync',
+                  targetTick: currentTick
+                });
+              }
+            }
+          }
+          break;
+          
         case 'catchup_sync':
           // Received catch-up sync - fast-forward our tick to match theirs
           if (window.currentMatch && actualMessage.targetTick !== undefined) {
@@ -719,6 +728,8 @@
             const ticksToCatchUp = targetTick - currentTick;
             
             if (ticksToCatchUp > 0 && ticksToCatchUp < 1000) { // Sanity check: don't fast-forward more than 20 seconds
+              console.log(`⏩ Fast-forwarding ${ticksToCatchUp} ticks (${(ticksToCatchUp / 20).toFixed(1)}s) to catch up...`);
+              
               // Fast-forward by processing ticks without waiting
               // Process all ticks at once to catch up completely
               for (let i = 0; i < ticksToCatchUp; i++) {
@@ -748,6 +759,8 @@
                 window.currentMatch.isCatchingUp = false;
                 window.currentMatch.lastCatchupRequest = 0; // Reset catch-up request timer
               }
+              
+              console.log(`✅ Caught up! Now at tick ${window.currentMatch?.tick || tick}`);
             } else if (ticksToCatchUp <= 0) {
               // Already caught up or ahead
               if (window.currentMatch) {
@@ -1138,14 +1151,7 @@
                 window.currentMatch.commandBuffer.set(tickKey, []);
               }
               
-              // Debug logging for 3+ player games to track command flow
-              const connectedPeers = p2p.getConnectedPeers();
-              if (connectedPeers.length >= 2 && cmd.type === 'move' && cmd.unitIds && cmd.unitIds.length > 0) {
-                // Log occasionally (every 50th command) to avoid spam
-                if (Math.random() < 0.02) {
-                  console.log(`📥 [3+ PLAYER DEBUG] Command from player ${normalizedPlayerId} (peer ${peerId.slice(-4)}), tick ${cmd.tick}, ${cmd.unitIds.length} units, total peers: ${connectedPeers.length}, buffer size: ${window.currentMatch.commandBuffer.get(tickKey)?.length || 0}`);
-                }
-              }
+              // console.log(`📥 [T${window.currentMatch.tick}] Received command from peer: ${cmd.type} for tick ${tickKey}, commandId=${cmd.commandId?.slice(-6)}, from player ${normalizedPlayerId}`);
               
               window.currentMatch.commandBuffer.get(tickKey).push(cmd);
             }
@@ -1187,7 +1193,6 @@
           // Another player finished loading and is ready to start
           if (window.currentMatch && actualMessage.playerId) {
             const shortId = normalizePeerId(actualMessage.playerId);
-            console.log(`📡 player_loaded received from ${shortId}`);
             window.currentMatch.onPlayerLoaded(actualMessage.playerId);
           }
           break;
@@ -1904,8 +1909,6 @@
   // This ensures both players start with synchronized tick counters
   net.resetForMatchStart = function() {
     const connectedPeers = p2p ? p2p.getConnectedPeers() : [];
-    console.log('🔄 Resetting network state for match start (lockstep enabled)');
-    console.log(`   isConnected: ${isConnected}, peers: ${connectedPeers.length}, p2p: ${!!p2p}`);
     tick = 0;
     commandBuffer = [];
     remoteCommands.clear();
@@ -1931,7 +1934,6 @@
     
     // Send initial confirmation to peers
     if (p2p && isConnected) {
-      console.log(`   📤 Sending initial tick_confirm for tick ${inputDelay}`);
       p2p.sendData({
         type: 'tick_confirm',
         tick: inputDelay,

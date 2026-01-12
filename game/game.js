@@ -52,7 +52,6 @@ Game.prototype.spawnInitialUnits = function() {
   
   // Spawn villagers and buildings for ALL players (local + opponents)
   if (this.players && this.players.length > 0) {
-    console.log(`🎮 Spawning for ${this.players.length} players:`, this.players.map(p => `${p.name}(${p.id})`));
     
     // CRITICAL: Sort players deterministically by ID before spawning
     // This ensures both clients spawn villagers in the same order with the same counts
@@ -60,7 +59,6 @@ Game.prototype.spawnInitialUnits = function() {
       window.deterministicStringCompare(a.id || '', b.id || '')
     );
     
-    console.log(`📋 Sorted player order:`, sortedPlayers.map(p => `${p.name}(${p.id})`));
     
     sortedPlayers.forEach((player, index) => {
       if (!player || !player.agora) {
@@ -85,7 +83,6 @@ Game.prototype.spawnInitialUnits = function() {
               const parts = rawId.split('-');
               placed.owner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
               
-              console.log(`🏛️ Set agora owner: ${placed.owner} (from ${rawId}), gameBuildings.length=${window.gameBuildings.length}`);
             
             // Store team color so attached flag meshes can tint correctly
             if (typeof window.getTeamColorForOwner === 'function') {
@@ -147,7 +144,6 @@ Game.prototype.spawnInitialUnits = function() {
       
       // Spawn villagers around this player's agora
       // Pass player index for deterministic villager count
-      console.log(`👥 Spawning ${8} villagers for player ${index}: ${player.name}`);
       this.spawnVillagersForPlayer(player, index);
     });
   } else {
@@ -240,7 +236,6 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
     window.gameUnits.push(villager); // Add to global array for rendering
     
     if (i === 0) {
-      console.log(`  📍 First villager for ${player.name}: owner=${villager.owner}, gameUnits.length=${window.gameUnits.length}`);
     }
     
     // CRITICAL: Give initial villagers a linger behavior so they can be auto-assigned to work

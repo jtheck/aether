@@ -2825,7 +2825,6 @@ const Lobby = {
     if (!window.player.id || window.player.id === 'demo' || window.player.id === 'undefined') {
       const randomSuffix = Math.random().toString(36).substring(2, 8);
       window.player.id = `adventurer-${randomSuffix}`;
-      console.log(`🎮 Generated host player ID for start_game: ${window.player.id}`);
     }
     
     // Send start game message to all peers via WebRTC
@@ -2849,7 +2848,6 @@ const Lobby = {
       };
       
       window.net.p2p.sendData(startMessage); // Broadcast to all peers
-      console.log(`📡 Sent start_game with playerIds:`, playerIds.map(id => id.slice(-6)));
     }
     
     // Start the match for host
@@ -4131,11 +4129,14 @@ const Lobby = {
         // HOST: We are P1, peers are P2+
         console.log('👑 Host building player list: we are P1');
         players.push(window.player);
+        // Assign unique colors for each peer slot
+        const playerColors = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
         this.connectedPlayers.forEach((p, i) => {
+          const playerIndex = i + 1; // P1 is host (0), peers start at P2 (1)
           players.push({
             id: p.id || p,
             name: p.name || `Player ${i + 2}`,
-            color: p.color || '#00ff00',
+            color: p.color || playerColors[playerIndex % playerColors.length] || '#ffffff',
             units: [],
             buildings: [],
             selectedUnits: []
@@ -4160,18 +4161,20 @@ const Lobby = {
               window.player.id = playerId;  // CRITICAL: Use the ID host assigned us
               players.push(window.player);
               console.log(`   P${index + 1}: ME (using assigned ID: ${playerId.slice(-6)})`);
-            } else {
-              // This is another player (host or other peer)
-              players.push({
-                id: playerId,
-                name: index === 0 ? 'Host' : `Player ${index + 1}`,
-                color: index === 0 ? '#ff0000' : '#00ff00',
-                units: [],
-                buildings: [],
-                selectedUnits: []
-              });
-              console.log(`   P${index + 1}: ${index === 0 ? 'Host' : 'Peer'} (${playerId.slice(-6)})`);
-            }
+          } else {
+            // This is another player (host or other peer)
+            // Assign unique colors for each player slot
+            const playerColors = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
+            players.push({
+              id: playerId,
+              name: index === 0 ? 'Host' : `Player ${index + 1}`,
+              color: playerColors[index % playerColors.length] || '#ffffff',
+              units: [],
+              buildings: [],
+              selectedUnits: []
+            });
+            console.log(`   P${index + 1}: ${index === 0 ? 'Host' : 'Peer'} (${playerId.slice(-6)})`);
+          }
           });
         } else {
           // Fallback to old behavior if no playerIds received
@@ -4627,7 +4630,6 @@ const Lobby = {
         .map((enabled, index) => enabled ? index : null)
         .filter(index => index !== null && index >= players.length);
       
-      console.log(`🤖 Adding ${enabledAISlots.length} AI opponents. Current players: ${players.length}, Spawn positions: ${spawnPositions.length}`);
       
       enabledAISlots.forEach(slotIndex => {
         // Use players.length as spawn position index (AI players are added after human players)

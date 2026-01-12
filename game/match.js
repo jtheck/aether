@@ -227,12 +227,10 @@
       // CRITICAL: Don't reset to READY if already PLAYING
       // This prevents race conditions with delayed callbacks
       if (this.state === MatchState.PLAYING) {
-        console.log('⏱️ Countdown skipped - match already playing');
         return;
       }
       
       this.state = MatchState.READY;
-      console.log('⏱️ Host starting countdown (3-2-1-GO)…');
       
       // Delay countdown slightly to let any final initialization settle
       setTimeout(() => {
@@ -260,7 +258,6 @@
               // GO!
               this.updateLoadingOverlay(`GO!`);
               if (window.isMultiplayer && window.net && window.net.p2p) {
-                console.log('🚀 Host broadcasting match_start to all peers');
                 window.net.p2p.sendData({ type: 'match_start' });
               }
               
@@ -342,7 +339,6 @@
       // All random operations during the match MUST use this RNG
       if (window.Determinism && window.Determinism.initMatchRng) {
         window.Determinism.initMatchRng(this.mapSeed);
-        console.log(`🎲 Match RNG initialized with seed: ${this.mapSeed}`);
       }
       
       // CRITICAL: Reset physics time accumulator to prevent catch-up at match start
@@ -421,15 +417,23 @@
             // Tab hidden - record the time
             this._tabHiddenTime = performance.now();
           } else {
-            // Tab visible again - do NOT catch up (causes desync)
+            // Tab visible again - check if we need to catch up
             if (this._tabHiddenTime !== null && window.gameLoop) {
               const missedTime = (performance.now() - this._tabHiddenTime) / 1000;
               
               if (missedTime > 0.5) {
-                console.log(`🔄 Tab refocused after ${missedTime.toFixed(2)}s - NOT catching up (determinism)`);
+                
+                // Request current tick from peers so we can fast-forward
+                if (window.net && window.net.p2p && window.isMultiplayer) {
+                  window.net.p2p.sendData({
+                    type: 'request_catchup',
+                    fromTick: this.tick || 0
+                  });
+                }
               }
-              // Reset physics time to prevent any accumulated backlog
-              // Visual interpolation will smooth the transition
+              
+              // Reset physics time to prevent accumulated backlog from tab throttling
+              // The catch-up will happen when we receive the peer's current tick
               window.gameLoop.physicsTime = 0;
               window.gameLoop.lastTime = performance.now();
               this._tabHiddenTime = null;
@@ -745,6 +749,8 @@
       if (!this.commandBuffer.has(tickKey)) {
         this.commandBuffer.set(tickKey, []);
       }
+      
+      // console.log(`📝 [T${this.tick}] Adding command to buffer: ${enrichedCommand.type} for tick ${tickKey}, commandId=${enrichedCommand.commandId?.slice(-6)}`);
       this.commandBuffer.get(tickKey).push(enrichedCommand);
       
       // Send over network if multiplayer
@@ -862,15 +868,6 @@
     
     // Execute a single command
     executeCommand(command) {
-      // Log gather/work commands for debugging
-      if (command.type === 'gather' || command.type === 'work') {
-        console.log(`✅ executeCommand`, {
-          type: command.type,
-          unitIds: command.unitIds,
-          scheduledTick: command.tick,
-          executingTick: this.tick
-        });
-      }
       
       switch (command.type) {
         case 'move':
@@ -970,7 +967,11 @@
               // Only apply corrections if unit is idle (no active movement behavior)
               const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
               const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
-              const isMovementBehavior = behaviorType === 'WalkBehavior' || behaviorType === 'RunBehavior';
+              // Include LingerBehavior and WanderBehavior so corrections don't fight with idle wandering
+              const isMovementBehavior = behaviorType === 'WalkBehavior' || 
+                                        behaviorType === 'RunBehavior' || 
+                                        behaviorType === 'LingerBehavior' || 
+                                        behaviorType === 'WanderBehavior';
               
               if (!isMovementBehavior) {
                 // Unit is idle - apply gentle correction (reduced strength to prevent speedups)
@@ -1104,7 +1105,7 @@
           const currentTick = this.tick || 0;
           unit.lastPlayerMoveTick = currentTick;
           
-          console.log(`🚶 Setting walk behavior for unit ${unit.id?.slice(-6)} to (${cmd.target.x.toFixed(1)}, ${cmd.target.z.toFixed(1)})`);
+          // console.log(`🚶 [T${currentTick}] Setting walk behavior for unit ${unit.id?.slice(-6)} from (${unit.pb.state.loc.x.toFixed(1)}, ${unit.pb.state.loc.z.toFixed(1)}) to (${cmd.target.x.toFixed(1)}, ${cmd.target.z.toFixed(1)})`);
           window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
           
           // If this is a monk, check for nearby units to kick when starting movement
@@ -1853,12 +1854,10 @@
       
       // Debug: Log first elimination check
       if (this.tick === 100) {
-        console.log(`🔍 First elimination check at tick ${this.tick}`);
         this.players.forEach(p => {
           const pid = p.id || p;
           const unitCount = p.units?.length || 0;
           const villagerCount = p.units?.filter(u => u && u.type === 'villager').length || 0;
-          console.log(`   Player ${pid}: ${unitCount} units, ${villagerCount} villagers`);
         });
       }
       

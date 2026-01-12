@@ -2205,13 +2205,12 @@ function getRandomColor() {
                   
                   const isDepleted = window.isResourceTileDepleted && window.isResourceTileDepleted(resourceGridX, resourceGridZ);
                   
-                  console.log(`🪓 Resource check: tile=(${resourceGridX},${resourceGridZ}), resource=${resourceInfo?.type || 'none'}, depleted=${isDepleted}`);
+                  // console.log(`🪓 Resource check: tile=(${resourceGridX},${resourceGridZ}), resource=${resourceInfo?.type || 'none'}, depleted=${isDepleted}`);
                   
                   // If clicked on a resource with villagers selected, start gathering
                   if (resourceInfo && !isDepleted) {
                     const villagers = selectedUnits.filter(u => u.type === 'villager');
                     if (villagers.length > 0) {
-                      console.log(`🪓 ${villagers.length} villagers gathering from resource at (${resourceGridX}, ${resourceGridZ})`);
                       
                       // Create a quick sparkly visual feedback at the resource
                       if (window.gfx && window.gfx.scene) {

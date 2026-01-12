@@ -587,7 +587,7 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
       // Set initial state - CRITICAL: clear quaternion so Euler rotation works
       building.mesh.rotationQuaternion = null;
       building.mesh.rotation.y = building.targetRotation || 0;
-      console.log(`🔄 Building ${building.type} at (${x},${z}) rotation: ${building.targetRotation.toFixed(2)} (${(building.targetRotation*180/Math.PI).toFixed(0)}°)`);
+      // console.log(`🔄 Building ${building.type} at (${x},${z}) rotation: ${building.targetRotation.toFixed(2)} (${(building.targetRotation*180/Math.PI).toFixed(0)}°)`);
       
       // Keep child meshes' original rotations
       building.mesh.getChildMeshes().forEach(mesh => {
@@ -742,7 +742,7 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
   window.gameBuildings.push(building);
   
   // Debug: Log when building is placed
-  console.log(`🏗️ PLACED ${building.type} for ${building.owner}: progress=${(building.buildProgress*100).toFixed(0)}%, needsWorkers=${building.needsWorkers}, workType=${building.workType}`);
+  // console.log(`🏗️ PLACED ${building.type} for ${building.owner}: progress=${(building.buildProgress*100).toFixed(0)}%, needsWorkers=${building.needsWorkers}, workType=${building.workType}`);
   
   return building;
 }
@@ -1736,10 +1736,7 @@ function updateBuildings(deltaTime) {
   if (currentTick % 40 === 0 && currentTick > 0) {
     const underConstruction = window.gameBuildings.filter(b => b.buildProgress < 1.0);
     if (underConstruction.length > 0) {
-      console.log(`🏗️ UPDATE BUILDINGS: ${window.gameBuildings.length} total, ${underConstruction.length} under construction`);
-      underConstruction.forEach(b => {
-        console.log(`   - ${b.type} (${b.owner}): progress=${(b.buildProgress*100).toFixed(0)}%, workers=${b.assignedWorkers?.length || 0}, needsWorkers=${b.needsWorkers}, workType=${b.workType}`);
-      });
+      // console.log(`🏗️ UPDATE BUILDINGS: ${window.gameBuildings.length} total, ${underConstruction.length} under construction`);
     }
   }
   
@@ -1793,7 +1790,7 @@ function updateBuildings(deltaTime) {
       
       // Debug: Log construction state periodically
       if (currentTick % 100 === 0 && currentTick > 0) {
-        console.log(`🔨 Building ${building.type} (${building.id?.slice(-6)}): progress=${(building.buildProgress * 100).toFixed(1)}%, workers=${workerCount}, workTicks=${building.constructionWorkTicks}`);
+        // console.log(`🔨 Building ${building.type} (${building.id?.slice(-6)}): progress=${(building.buildProgress * 100).toFixed(1)}%, workers=${workerCount}, workTicks=${building.constructionWorkTicks}`);
       }
       
       // Create/update construction indicator cube (purple cube for all buildings under construction)
@@ -1955,7 +1952,7 @@ function updateBuildings(deltaTime) {
         
         // Debug: Log when looking for workers
         if (building.workType === 'build' && building.buildProgress < 1.0 && currentTick % 100 === 0) {
-          console.log(`👷 Looking for workers for ${building.type}: found ${idleVillagers.length} idle, assigned=${building.assignedWorkers.length}/${building.maxWorkers}`);
+          // console.log(`👷 Looking for workers for ${building.type}: found ${idleVillagers.length} idle, assigned=${building.assignedWorkers.length}/${building.maxWorkers}`);
         }
         
         

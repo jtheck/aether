@@ -594,7 +594,6 @@
     }
     
     // We're the first to request this model - create the master
-    console.log('[Instancing] Creating master for:', modelPath);
     
     const loadPromise = getModel(modelPath, scene).then(model => {
       // Find all meshes with geometry in the hierarchy
@@ -619,7 +618,6 @@
       
       instanceMasters.set(modelPath, master);
       pendingMasters.delete(modelPath);
-      console.log('[Instancing] Master ready:', modelPath, 'with', meshes.length, 'meshes');
       
       return master;
     });
@@ -5343,7 +5341,6 @@ let pov2 = 240;
     }
     
     if (removedCount > 0 || billboardsRemoved > 0) {
-      console.log(`🧹 Animating ${removedCount} models sinking from area at (${centerX}, ${centerZ}) radius ${radius}`);
     }
     
     return removedCount + billboardsRemoved;

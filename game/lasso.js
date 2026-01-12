@@ -367,7 +367,7 @@
   
   // Handle left mouse button up
   lasso.handleLmbUp = function(x, y) {
-    console.log(`🎯 handleLmbUp called at (${x}, ${y}), isSelecting=${isSelecting}, isPotentialDrag=${isPotentialDrag}`);
+    // console.log(`🎯 handleLmbUp called at (${x}, ${y}), isSelecting=${isSelecting}, isPotentialDrag=${isPotentialDrag}`);
     
     // Always clean up isPotentialDrag on mouseup, even if selection never started
     const hadPotentialDrag = isPotentialDrag;
@@ -375,12 +375,12 @@
     // If selection never started (no drag detected), just clean up silently
     if (!isSelecting && !isPotentialDrag) {
       // Nothing to clean up
-      console.log(`🎯 handleLmbUp: No selection or potential drag, returning false`);
+      // console.log(`🎯 handleLmbUp: No selection or potential drag, returning false`);
       return false;
     }
     
     if (!isSelecting) {
-      console.log(`🎯 handleLmbUp: Not selecting, treating as click`);
+      // console.log(`🎯 handleLmbUp: Not selecting, treating as click`);
       
       // We had a mousedown but never started dragging - this is a click!
       // Handle single click selection for units/buildings
@@ -389,16 +389,16 @@
                            (Math.abs(x - lastClickPoint.x) < 40) && 
                            (Math.abs(y - lastClickPoint.y) < 40);
       
-      console.log(`🎯 Click analysis: duration=${clickDuration}ms, timeout=${CLICK_TIMEOUT}ms, isDouble=${isDoubleClick}`);
+      // console.log(`🎯 Click analysis: duration=${clickDuration}ms, timeout=${CLICK_TIMEOUT}ms, isDouble=${isDoubleClick}`);
       
       let handledEntityClick = false;
       
       if (clickDuration < CLICK_TIMEOUT) {
         // Try to find entity at click position
-        console.log(`🎯 Looking for entity at (${x}, ${y})`);
+        // console.log(`🎯 Looking for entity at (${x}, ${y})`);
         handledEntityClick = handleSingleClick(x, y);
       } else {
-        console.log(`🎯 Click too slow (${clickDuration}ms > ${CLICK_TIMEOUT}ms), not handling`);
+        // console.log(`🎯 Click too slow (${clickDuration}ms > ${CLICK_TIMEOUT}ms), not handling`);
       }
       
       // Update last click tracking
@@ -415,7 +415,7 @@
       lastLassoPoint = null;
       lastLassoDownTime = 0; // Reset timing
       
-      console.log(`🎯 Lasso handleLmbUp (click): returning ${handledEntityClick}`);
+      // console.log(`🎯 Lasso handleLmbUp (click): returning ${handledEntityClick}`);
       
       // Return true if we selected an entity (suppress move command)
       // Return false if empty click (allow move command)
@@ -876,7 +876,7 @@
   
   // Handle single click on unit or building
   function handleSingleClick(x, y) {
-    console.log(`🎯 handleSingleClick called at (${x}, ${y})`);
+    // console.log(`🎯 handleSingleClick called at (${x}, ${y})`);
     
     if (!window.player) {
       console.log(`🎯 handleSingleClick: no window.player`);
@@ -923,7 +923,7 @@
     }
     
     // Clicked on empty terrain - DON'T clear selection, allow move command
-    console.log(`🎯 Lasso: Clicked empty terrain, allowing move command`);
+    // console.log(`🎯 Lasso: Clicked empty terrain, allowing move command`);
     return false; // Allow move command to terrain
   }
   
@@ -994,7 +994,7 @@
       currentMesh = currentMesh.parent;
     }
     
-    console.log(`🎯 Unit pick: mesh="${pickResult.pickedMesh.name}", found: ${pickedUnit?.type || 'none'}, owner: ${pickedUnit?.owner || 'none'}`);
+    // console.log(`🎯 Unit pick: mesh="${pickResult.pickedMesh.name}", found: ${pickedUnit?.type || 'none'}, owner: ${pickedUnit?.owner || 'none'}`);
     
     return pickedUnit;
   }
@@ -1014,7 +1014,7 @@
       return null;
     }
     
-    console.log(`🎯 findBuildingAtPosition: checking ${buildings.length} buildings`);
+    // console.log(`🎯 findBuildingAtPosition: checking ${buildings.length} buildings`);
     
     // Pick with a predicate that ignores terrain
     const pickResult = window.gfx.scene.pick(screenX, screenY, (mesh) => {
@@ -1024,13 +1024,13 @@
       }
       // Pick building meshes (they're marked with isBuilding = true)
       if (mesh.isBuilding) {
-        console.log(`🎯 Found building mesh: ${mesh.name}, pickable: ${mesh.isPickable}`);
+        // console.log(`🎯 Found building mesh: ${mesh.name}, pickable: ${mesh.isPickable}`);
         return mesh.isPickable;
       }
       return false;
     });
     
-    console.log(`🎯 Building pick result: hit=${pickResult.hit}, mesh=${pickResult.pickedMesh?.name}`);
+    // console.log(`🎯 Building pick result: hit=${pickResult.hit}, mesh=${pickResult.pickedMesh?.name}`);
     
     if (!pickResult.hit || !pickResult.pickedMesh) {
       return null;

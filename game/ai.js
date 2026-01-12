@@ -252,9 +252,9 @@ class LingerBehavior extends Behavior {
         
         const distance = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
         
-        // CRITICAL FIX: Lower "close enough" threshold to 0.05 so they keep moving until very close
-        // This prevents stop-go behavior where they stop too early
-        if (distance > 0.05) {
+        // Only walk if target is reasonably far (> 2 units)
+        // This prevents jittering from tiny wander movements
+        if (distance > 2.0) {
             // Normalize and apply movement
             direction.x /= distance;
             direction.z /= distance;
@@ -262,9 +262,14 @@ class LingerBehavior extends Behavior {
         // Apply movement with rotation and forward momentum boost
         this.applyMovementWithRotation(direction, 2.4); // Super slow, very relaxed pace (20% speed)
         } else {
-            // Very close to target - STOP and wait for next interval
-            // Clear the target so they stand still until wanderInterval elapses
+            // Target too close - just stop and wait
             this.currentTarget = null;
+            
+            // Clear velocity to ensure unit stops completely
+            if (this.unit.pb && this.unit.pb.imp) {
+                this.unit.pb.imp.x = 0;
+                this.unit.pb.imp.z = 0;
+            }
         }
     }
 }
@@ -272,7 +277,7 @@ class LingerBehavior extends Behavior {
 class WalkBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
-            arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
+            arrivalRadius: 1.5,  // Stop within 1.5 units of target (prevents overshooting)
             walkSpeed: unit.speed || 20,  // Use unit's defined speed, fallback to 20
             ...params
         });
@@ -350,6 +355,15 @@ class WalkBehavior extends Behavior {
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance <= this.params.arrivalRadius) {
+            // Arrived! Stop all momentum to prevent overshooting
+            if (this.unit.pb.imp) {
+                this.unit.pb.imp.x = 0;
+                this.unit.pb.imp.z = 0;
+            }
+            if (this.unit.pb.state.vel) {
+                this.unit.pb.state.vel.x = 0;
+                this.unit.pb.state.vel.z = 0;
+            }
             this.completed = true;
             return true;
         }
@@ -1246,8 +1260,8 @@ class ManualGatherBehavior extends Behavior {
         this.gatheredResourceType = targetResource.type || 'wood'; // Use passed type
         this.gatheredResourceAmount = targetResource.amount || 1;  // Use passed amount
         
-        console.log(`🪓 ${unit.type} manually gathering ${this.gatheredResourceAmount} ${this.gatheredResourceType} from (${targetResource.gridX}, ${targetResource.gridZ}) at world pos (${this.gatherTarget.x.toFixed(1)}, ${this.gatherTarget.z.toFixed(1)})`);
-        console.log(`   Unit current position: (${unit.pb?.state?.loc?.x.toFixed(1) || '?'}, ${unit.pb?.state?.loc?.z.toFixed(1) || '?'})`);
+        // console.log(`🪓 ${unit.type} manually gathering ${this.gatheredResourceAmount} ${this.gatheredResourceType} from (${targetResource.gridX}, ${targetResource.gridZ}) at world pos (${this.gatherTarget.x.toFixed(1)}, ${this.gatherTarget.z.toFixed(1)})`);
+        // console.log(`   Unit current position: (${unit.pb?.state?.loc?.x.toFixed(1) || '?'}, ${unit.pb?.state?.loc?.z.toFixed(1) || '?'})`);
     }
     
     step() {
@@ -1259,7 +1273,7 @@ class ManualGatherBehavior extends Behavior {
             window.isResourceTileDepleted(this.gatherTarget.gridX, this.gatherTarget.gridZ);
         
         if (isDepleted) {
-            console.log(`🪓 Resource depleted, going idle`);
+            // console.log(`🪓 Resource depleted, going idle`);
             
             // Remove resource indicator
             this.removeResourceIndicator();
@@ -1290,6 +1304,21 @@ class ManualGatherBehavior extends Behavior {
         return false; // Keep working
     }
     
+    // CRITICAL: Handle interruption - keep resources for later return
+    onReassignment() {
+        const currentTick = window.currentMatch?.tick || 0;
+        if (this.gatheredResourceType && this.gatheredResourceAmount > 0) {
+            console.log(`🔄 [T${currentTick}] ${this.unit.id?.slice(-6)} interrupted while carrying ${this.gatheredResourceAmount} ${this.gatheredResourceType}, will return later`);
+            
+            // Store the carried resources on the unit itself so they persist
+            this.unit.carriedResourceType = this.gatheredResourceType;
+            this.unit.carriedResourceAmount = this.gatheredResourceAmount;
+            
+            // Keep the visual indicator - it will be cleaned up when resources are eventually deposited
+            // Don't clear: this.removeResourceIndicator();
+        }
+    }
+    
     seekResource(currentTime, currentTick) {
         if (!this.gatherTarget) return;
         
@@ -1304,7 +1333,7 @@ class ManualGatherBehavior extends Behavior {
         // Log seeking progress every 60 frames (~1 second)
         if (!this._seekLogTimer || Date.now() - this._seekLogTimer > 1000) {
             this._seekLogTimer = Date.now();
-            console.log(`🪓 ${this.unit.type} seeking: distance=${distance.toFixed(1)}, threshold=${arrivalThreshold.toFixed(1)}, target=(${this.gatherTarget.gridX},${this.gatherTarget.gridZ})`);
+            // console.log(`🪓 ${this.unit.type} seeking: distance=${distance.toFixed(1)}, threshold=${arrivalThreshold.toFixed(1)}, target=(${this.gatherTarget.gridX},${this.gatherTarget.gridZ})`);
         }
         
         if (distance < arrivalThreshold) {
@@ -1313,17 +1342,20 @@ class ManualGatherBehavior extends Behavior {
             this.gatherStartTime = currentTime;
             this.gatherStartTick = currentTick;
             
-            // Stop moving
-            if (this.unit.pb && this.unit.pb.imp) {
-                this.unit.pb.imp.x = 0;
-                this.unit.pb.imp.z = 0;
+            // CRITICAL: Stop ALL movement - clear both impulse AND velocity
+            if (this.unit.pb) {
+                if (this.unit.pb.imp) {
+                    this.unit.pb.imp.x = 0;
+                    this.unit.pb.imp.z = 0;
+                }
+                if (this.unit.pb.state && this.unit.pb.state.vel) {
+                    this.unit.pb.state.vel.x = 0;
+                    this.unit.pb.state.vel.z = 0;
+                }
             }
             
-            // Create resource indicator visual
-            this.resourceIndicator = this.createResourceIndicator(this.gatheredResourceType);
-            
+            // DON'T create resource indicator yet - wait until gathering completes
             // Resource type and amount already set in constructor from targetResource
-            console.log(`✅ ${this.unit.type} ARRIVED! Starting to gather ${this.gatheredResourceAmount} ${this.gatheredResourceType} for ${this.params.gatherDuration}ms`);
         } else {
             // Keep moving toward resource
             const direction = {
@@ -1345,17 +1377,19 @@ class ManualGatherBehavior extends Behavior {
         if (!this._gatherLogTimer || Date.now() - this._gatherLogTimer > 1000) {
             this._gatherLogTimer = Date.now();
             const progress = Math.min(100, (ticksGathering / gatherDurationTicks * 100));
-            console.log(`⛏️ ${this.unit.type} gathering ${this.gatheredResourceType}: ${progress.toFixed(0)}% (${ticksGathering}/${gatherDurationTicks} ticks)`);
         }
         
         if (ticksGathering >= gatherDurationTicks) {
             // Gathering complete! Start returning
-            console.log(`🪓 ${this.unit.type} finished gathering ${this.gatheredResourceAmount} ${this.gatheredResourceType}, returning to base`);
+            // console.log(`🪓 ${this.unit.type} finished gathering ${this.gatheredResourceAmount} ${this.gatheredResourceType}, returning to base`);
             
             // Mark resource as depleted
             if (window.depleteResourceTile) {
                 window.depleteResourceTile(this.gatherTarget.gridX, this.gatherTarget.gridZ, currentTick);
             }
+            
+            // NOW create the resource indicator visual (after gathering, not before)
+            this.resourceIndicator = this.createResourceIndicator(this.gatheredResourceType);
             
             // Transition to returning state
             this.gatherState = 'returning';
@@ -1373,11 +1407,13 @@ class ManualGatherBehavior extends Behavior {
     }
     
     returnResource(currentTime, currentTick) {
+        const loc = this.unit.pb?.state?.loc;
+        
         // Find player's agora or closest building to deposit at
         const owner = findPlayerByUnitOwner(this.unit.owner);
         if (!owner || !owner.agora) {
             // No base found, just deposit immediately
-            console.log(`💰 ${this.unit.type} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} (no agora)`);
+            // console.log(`💰 [T${currentTick}] ${this.unit.id?.slice(-6)} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} (no agora) at (${loc?.x.toFixed(1)}, ${loc?.z.toFixed(1)})`);
             if (owner && owner.addResource) {
                 owner.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
             }
@@ -1389,19 +1425,21 @@ class ManualGatherBehavior extends Behavior {
             
             if (isDepleted) {
                 // Resource is gone, go idle
+                console.log(`🛑 [T${currentTick}] ${this.unit.id?.slice(-6)} resource depleted, going idle`);
                 if (window.behaviorManager) {
                     window.behaviorManager.setBehavior(this.unit, 'linger', {
                         center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
                         radius: 5,
                         wanderDistance: 2.0,
-                        wanderInterval: 30000
+                        wanderInterval: 30000,
+                        startImmediately: false
                     });
                 }
                 return true;
             }
             
             // Resource still available - go back for more!
-            console.log(`🔄 ${this.unit.type} going back to gather more ${this.gatheredResourceType}`);
+            // console.log(`🔄 [T${currentTick}] ${this.unit.id?.slice(-6)} going back to gather more ${this.gatheredResourceType}`);
             this.gatherState = 'seeking';
             return false;
         }
@@ -1418,7 +1456,7 @@ class ManualGatherBehavior extends Behavior {
         
         if (distance < depositRange) {
             // Arrived! Deposit resources
-            console.log(`💰 ${this.unit.type} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} at agora`);
+            // console.log(`💰 [T${currentTick}] ${this.unit.id?.slice(-6)} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} at agora, dist=${distance.toFixed(1)}`);
             if (owner && owner.addResource) {
                 owner.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
             }
@@ -1430,20 +1468,21 @@ class ManualGatherBehavior extends Behavior {
             
             if (isDepleted) {
                 // Resource is gone, go idle
-                console.log(`🪓 ${this.unit.type} resource depleted, going idle`);
+                console.log(`🛑 [T${currentTick}] ${this.unit.id?.slice(-6)} resource depleted, going idle`);
                 if (window.behaviorManager) {
                     window.behaviorManager.setBehavior(this.unit, 'linger', {
                         center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
                         radius: 5,
                         wanderDistance: 2.0,
-                        wanderInterval: 30000
+                        wanderInterval: 30000,
+                        startImmediately: false
                     });
                 }
                 return true;
             }
             
             // Resource still available - go back for more!
-            console.log(`🔄 ${this.unit.type} going back to gather more ${this.gatheredResourceType}`);
+            // console.log(`🔄 [T${currentTick}] ${this.unit.id?.slice(-6)} going back to gather more ${this.gatheredResourceType} from (${this.gatherTarget.gridX}, ${this.gatherTarget.gridZ})`);
             this.gatherState = 'seeking';
             this.returnPath = null;
             this.returnWaypointIndex = 0;
@@ -2809,43 +2848,18 @@ class UnitBehaviorManager {
                     const wasMoving = behavior instanceof WalkBehavior || behavior instanceof RunBehavior;
                     
                     if (isPlayerUnit && wasMoving && unit.pb && unit.pb.state) {
-                        // Form up units after arrival instead of random wandering
-                        // This looks much cleaner and more military
-                        const formationPos = getFormationPosition(unit);
+                        const currentTick = window.currentMatch?.tick || 0;
+                        const loc = unit.pb.state.loc;
                         
-                        if (formationPos) {
-                            // Check if we're already at formation position
-                            const dx = formationPos.x - unit.pb.state.loc.x;
-                            const dz = formationPos.z - unit.pb.state.loc.z;
-                            const distToFormation = Math.sqrt(dx * dx + dz * dz);
-                            
-                            if (distToFormation > 1.0) {
-                                // Move to formation position
-                                this.setBehavior(unit, 'walk', {
-                                    targetPoint: formationPos,
-                                    arrivalRadius: 0.8
-                                });
-                            } else {
-                                // Already at formation - just linger in place
-                                this.setBehavior(unit, 'linger', { 
-                                    center: { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z }, 
-                                    radius: 50,  // Can roam freely
-                                    wanderDistance: 2.0,
-                                    wanderInterval: 30000,  // Match idle villager pace
-                                    startImmediately: false  // Don't wander immediately after arrival
-                                });
-                            }
-                        } else {
-                            // Solo unit - just linger in place
-                            const arrivalPoint = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
-                            this.setBehavior(unit, 'linger', { 
-                                center: arrivalPoint, 
-                                radius: 50,  // Can roam freely
-                                wanderDistance: 2.0,
-                                wanderInterval: 30000,  // Match idle villager pace
-                                startImmediately: false  // Don't wander immediately after arrival
-                            });
-                        }
+                        // Just linger where they arrive
+                        // TODO: Add proper resource return behavior when idle
+                        this.setBehavior(unit, 'linger', { 
+                            center: { x: loc.x, z: loc.z }, 
+                            radius: 50,  // Can roam freely
+                            wanderDistance: 2.0,
+                            wanderInterval: 30000,  // Match idle villager pace
+                            startImmediately: false  // Don't wander immediately after arrival
+                        });
                     }
                 }
             }

@@ -1002,7 +1002,8 @@
   // Find building at screen position
   function findBuildingAtPosition(screenX, screenY) {
     if (!window.gfx || !window.gfx.scene) {
-      console.log('🎯 findBuildingAtPosition: missing gfx/scene');
+      // Debug only
+      console.debug('🎯 findBuildingAtPosition: missing gfx/scene');
       return null;
     }
     
@@ -1010,7 +1011,12 @@
     const buildings = window.buildingSystem?.buildings || window.gameBuildings;
     
     if (!buildings || buildings.length === 0) {
-      console.log('🎯 findBuildingAtPosition: no buildings found');
+      // This can be normal during early load / transitions; rate-limit to avoid log spam.
+      const now = Date.now();
+      if (!findBuildingAtPosition._lastNoBuildingsLogAt || (now - findBuildingAtPosition._lastNoBuildingsLogAt) > 2000) {
+        findBuildingAtPosition._lastNoBuildingsLogAt = now;
+        console.debug('🎯 findBuildingAtPosition: no buildings found');
+      }
       return null;
     }
     
@@ -1044,7 +1050,8 @@
       for (const building of buildings) {
         if (building.mesh === currentMesh) {
           pickedBuilding = building;
-          console.log(`🎯 Matched to building: ${building.type}`);
+          // Debug only
+          console.debug(`🎯 Matched to building: ${building.type}`);
           break;
         }
       }
@@ -1052,7 +1059,8 @@
       currentMesh = currentMesh.parent;
     }
     
-    console.log(`🎯 Building pick final: ${pickedBuilding?.type || 'none'}`);
+    // Debug only
+    console.debug(`🎯 Building pick final: ${pickedBuilding?.type || 'none'}`);
     
     return pickedBuilding;
   }

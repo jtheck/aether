@@ -436,24 +436,25 @@ window.gameLoop = {
     // Accumulate time for physics
     // BUT: If we're waiting for lockstep peers, don't accumulate - this prevents
     // a huge catch-up burst when the peer finally confirms
-    if (!window.lockstepWaitingForPeers) {
+    const matchState = window.currentMatch?.state;
+    const lockstepWaiting = window.isMultiplayer && (window.lockstepWaitingForPeers || window.fastForwardingTicks);
+    
+    // Multiplayer determinism rule:
+    // - Only advance simulation physics while the match is PLAYING (lockstep-driven).
+    // - During LOADING/READY/countdown/chapter transitions, running physics can diverge
+    //   between peers (different frame timing) and produce visible "resting in different
+    //   places" desyncs right as the next chapter begins.
+    const preStartMultiplayer = window.isMultiplayer && window.currentMatch && matchState !== 'playing';
+    
+    if (!window.lockstepWaitingForPeers && !preStartMultiplayer) {
       this.physicsTime += this.deltaTime;
     }
     
-    // Only pause physics when the match is explicitly paused.
-    // In multiplayer, continue running during READY/LOADING so late start signals
-    // (e.g. missing match_start) don't freeze the sim and cause divergence.
-    // CRITICAL: Also pause when lockstep is waiting for peers - this ensures
-    // both clients run identical physics. Without this, the fast client would
-    // keep running physics while waiting, causing desync.
-    const matchState = window.currentMatch?.state;
-    const lockstepWaiting = window.isMultiplayer && (window.lockstepWaitingForPeers || window.fastForwardingTicks);
-    const canRunPhysics = !lockstepWaiting && (
+    // Pause simulation physics when lockstep is waiting OR when we're not yet playing in multiplayer.
+    const canRunPhysics = !lockstepWaiting && !preStartMultiplayer && (
                           !window.isMultiplayer ||
                           !window.currentMatch ||
-                          matchState === 'playing' ||
-                          matchState === 'ready' ||
-                          matchState === 'loading');
+                          matchState === 'playing');
     
     // Run physics at fixed timestep (60Hz)
     // DETERMINISM: Physics is driven by fixed timestep, not wall-clock time.
@@ -476,7 +477,12 @@ window.gameLoop = {
       this.physicsTime = this.physicsTimestep * 3;
       // Only log if significant time discarded
       if (discarded > 0.1) {
-        console.warn(`⚠️ Physics backlog discarded: ${(discarded * 1000).toFixed(0)}ms (preventing desync)`);
+        // Rate-limit to avoid spam (this can happen during loads / tab focus / GC pauses).
+        const now = Date.now();
+        if (!this._lastPhysicsBacklogLogAt || (now - this._lastPhysicsBacklogLogAt) > 2000) {
+          this._lastPhysicsBacklogLogAt = now;
+          console.debug(`⚠️ Physics backlog discarded: ${(discarded * 1000).toFixed(0)}ms (preventing desync)`);
+        }
       }
     }
     

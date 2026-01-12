@@ -1130,13 +1130,19 @@ function findIdleVillagersNearBuilding(building) {
     
     if (!isIdleOrLingering) continue;
     
-    // CRITICAL: Don't auto-assign units that just completed a player move command
-    // Give them at least 60 ticks (3 seconds) to stay where the player told them to go
-    if (unit.lastPlayerMoveTick !== undefined) {
-      const currentTick = window.currentMatch?.tick || 0;
-      const ticksSincePlayerMove = currentTick - unit.lastPlayerMoveTick;
-      if (ticksSincePlayerMove < 60) {
-        continue; // Skip this unit - player just moved them, let them stay put!
+    // CRITICAL: Don't auto-assign units that recently received a player command.
+    // This avoids rapid "behavior snapping" right after commands and reduces the chance of
+    // divergence if two peers momentarily disagree about eligibility.
+    const currentTick = window.currentMatch?.tick || 0;
+    const recentTick = (unit.lastPlayerCommandTick !== undefined)
+      ? unit.lastPlayerCommandTick
+      : unit.lastPlayerMoveTick;
+    if (recentTick !== undefined) {
+      const ticksSince = currentTick - recentTick;
+      // Adventure co-op: be more conservative (villager systems are busier; avoid flapping).
+      const graceTicks = (window.isMultiplayer && window.gameType === 'adventure') ? 120 : 60;
+      if (ticksSince < graceTicks) {
+        continue; // Let the commanded behavior "settle" before any auto-assignment.
       }
     }
     

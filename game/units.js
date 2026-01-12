@@ -2679,16 +2679,25 @@ function getTeamColorForOwner(owner) {
     return null;
   };
   
+  const normalizeId = (id) => {
+    if (!id) return '';
+    const suffix = id.includes('-') ? id.split('-').pop() : id;
+    return suffix.length > 6 ? suffix.slice(-6) : suffix;
+  };
+  const ownerNorm = normalizeId(owner);
+  
   // Check if this is the local player (by ID, not string 'player')
   const localPlayerId = window.player?.id || window.currentMatch?.localPlayerId;
-  if (owner === localPlayerId) {
+  const localNorm = normalizeId(localPlayerId);
+  if (owner && (owner === localPlayerId || ownerNorm === localNorm)) {
     const color = window.player?.color || window.currentPlayerColor || '#4A90E2';
     return ensureString(color) || '#4A90E2'; // Blue for local player
   }
   
   // Check if this is the opponent
   const opponentId = window.opponent?.id;
-  if (owner === opponentId || owner === 'opponent') {
+  const opponentNorm = normalizeId(opponentId);
+  if (owner === 'opponent' || (owner && (owner === opponentId || ownerNorm === opponentNorm))) {
     const color = window.opponent?.color || '#E24A4A';
     return ensureString(color) || '#E24A4A'; // Red for opponent
   }

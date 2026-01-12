@@ -582,9 +582,20 @@
         return hasVelocity || hasBehavior;
       });
       
-      // Use faster sync interval during active gameplay
-      // CRITICAL: In 3+ player games, use even more aggressive sync (15 ticks = 0.75s) to prevent drift
-      const activeSyncInterval = isMultiPlayerGame ? 15 : 25; // 0.75s for 3+, 1.25s for 1v1
+      // Use faster sync interval during active gameplay.
+      //
+      // In co-op adventure, peers are authoritative for their own units and we rely on
+      // unit_position_sync checkpoints to keep the remote view smooth under real-world
+      // network jitter / lockstep pressure (especially on larger maps / more units).
+      //
+      // - Default PvP-ish: 25 ticks (~1.25s) for 2p, 15 ticks (~0.75s) for 3+
+      // - Co-op adventure: 10 ticks (~0.5s)
+      // - Co-op adventure under stress (high inputDelay): 5 ticks (~0.25s)
+      const isAdventureCoop = window.isMultiplayer && this.gameType === 'adventure';
+      const underStress = isAdventureCoop && (this.inputDelayTicks || 0) >= 6;
+      const activeSyncInterval = isAdventureCoop
+        ? (underStress ? 5 : 10)
+        : (isMultiPlayerGame ? 15 : 25);
       const currentSyncInterval = (hasActiveConstruction || hasActiveMovement) ? activeSyncInterval : this.syncInterval;
       
       if (this.tick % currentSyncInterval === 0) {
@@ -1104,6 +1115,8 @@
           // CRITICAL: Mark this as a player move command so auto-assignment doesn't immediately grab them
           const currentTick = this.tick || 0;
           unit.lastPlayerMoveTick = currentTick;
+          // Broader protection: treat this as a recent player command for all autonomous systems.
+          unit.lastPlayerCommandTick = currentTick;
           
           // console.log(`🚶 [T${currentTick}] Setting walk behavior for unit ${unit.id?.slice(-6)} from (${unit.pb.state.loc.x.toFixed(1)}, ${unit.pb.state.loc.z.toFixed(1)}) to (${cmd.target.x.toFixed(1)}, ${cmd.target.z.toFixed(1)})`);
           window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
@@ -1128,6 +1141,7 @@
             // CRITICAL: Mark this as a player move command so auto-assignment doesn't immediately grab them
             const currentTick = this.tick || 0;
             unit.lastPlayerMoveTick = currentTick;
+            unit.lastPlayerCommandTick = currentTick;
             
             // Calculate offset from center based on grid position
             const row = Math.floor(index / unitsPerRow);
@@ -1550,6 +1564,7 @@
       units.forEach(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
         if (unitOwnerId === normalizedPlayerId) {
+          unit.lastPlayerCommandTick = this.tick || 0;
           // Use 'gather_work' behavior which is supported by the behavior manager
           if (window.behaviorManager) {
             window.behaviorManager.setBehavior(unit, 'gather_work', { resource: resource });
@@ -1572,6 +1587,7 @@
       units.forEach(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
         if (unitOwnerId === normalizedPlayerId) {
+          unit.lastPlayerCommandTick = this.tick || 0;
           // Use 'work' or 'gather_work' behavior based on building type
           if (window.behaviorManager) {
             if (building.type === 'camp' || building.type === 'farm') {

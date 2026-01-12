@@ -300,7 +300,13 @@
       if (isInitiator) {
         const dataChannel = peerConnection.createDataChannel('ftxxCanvas', { 
           ordered: true,
-          maxRetransmits: 3
+          // IMPORTANT: Keep this channel reliable.
+          // With maxRetransmits set, the channel becomes partially unreliable and can silently
+          // drop game-critical packets (tick_confirm / commands / position sync), causing
+          // "stuck then teleport" behavior on peers under packet loss.
+          //
+          // If we ever want best-effort delivery for high-rate telemetry, create a *second*
+          // channel for that traffic instead of making the primary channel unreliable.
         });
         setupDataChannel(dataChannel, peerId);
         peerData.dataChannel = dataChannel;

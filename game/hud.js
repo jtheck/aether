@@ -997,7 +997,7 @@
       const itemName = key.charAt(0).toUpperCase() + key.slice(1); // Capitalize first letter
       const icon = getIconForItem(key);
       const color = getColorForCategory(menuLevel);
-      
+
       // Add as submenu item (isSubItem will be true because currentMenuLevel !== 'main')
       // Pass total count and arc number for multi-arc layouts
       hud.addRadialMenuItem(itemName, icon, value.callback, color, totalSubmenuItems, null, value.arc);

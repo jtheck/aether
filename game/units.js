@@ -54,6 +54,10 @@ const UnitTypes = {
     size: 1,
     cost: { food: 35, stone: 20 },
     abilities: ["build", "repair"],
+    spawner: "village",
+    prerequisites: {
+      buildings: ["village"]
+    },
     upgradeTo: "architect",
     description: "Skilled builder who can construct advanced structures",
     notes: "DEFEAT: Drops tools and surrenders, can be 'hired' by the victor"
@@ -90,6 +94,10 @@ const UnitTypes = {
     size: 1,
     cost: { food: 20, wood: 10 },
     abilities: ["heal", "kick"],
+    spawner: "village",
+    prerequisites: {
+      buildings: ["village"]
+    },
     upgradeTo: "paladin",
     description: "Holy warrior with healing abilities and powerful kicks",
     notes: "DEFEAT: Sits down to meditate, becomes invulnerable but useless until meditation ends"
@@ -126,6 +134,10 @@ const UnitTypes = {
     size: 1,
     cost: { food: 30, wood: 20 },
     abilities: ["fireball", "teleport"],
+    spawner: "tower",
+    prerequisites: {
+      buildings: ["tower"]
+    },
     upgradeTo: "elemental",
     description: "Powerful magic user with offensive spells",
     notes: "DEFEAT: POOF! Teleports away in a puff of smoke, reappears at lab"
@@ -159,6 +171,9 @@ const UnitTypes = {
     cost: { food: 35, wood: 30 },
     abilities: ["curse", "drain", "hex"],
     spawner: "tavern",
+    prerequisites: {
+      buildings: ["tavern"]
+    },
     upgradeTo: "geomancer",
     description: "Dark caster specializing in curses and life drain",
     notes: "DEFEAT: Sinks into shadow portal, sulks at tavern for a while"
@@ -274,6 +289,10 @@ const UnitTypes = {
     size: 2,
     cost: { wood: 40, stone: 10 },
     abilities: ["transport", "deploy"],
+    spawner: "workshop",
+    prerequisites: {
+      buildings: ["workshop"]
+    },
     upgradeTo: "war_wagon",
     description: "Transport vehicle that can carry units and resources",
     notes: "DEFEAT: Wheels fall off cartoonishly, driver runs away, can be repaired"
@@ -312,6 +331,9 @@ const UnitTypes = {
     cost: { wood: 70 },
     abilities: ["fly", "scout", "transport"],
     spawner: "perch",
+    prerequisites: {
+      buildings: ["perch"]
+    },
     upgradeTo: "war_balloon",
     description: "Floating airship for scouting and transport",
     notes: "DEFEAT: 🌀 Deflates slowly with sad whistle sound, drifts back to perch"
@@ -395,6 +417,9 @@ const UnitTypes = {
     cost: { food: 25, wood: 40 },
     abilities: ["heal", "bless", "resurrect"],
     spawner: "church",
+    prerequisites: {
+      buildings: ["church"]
+    },
     upgradeTo: "valkyrie",
     description: "Divine healer who can bring back fallen allies",
     notes: "DEFEAT: ✨ Soul visibly exits body, floats up, body walks zombie-like back to church"
@@ -435,6 +460,9 @@ const UnitTypes = {
     cost: { food: 30, wood: 30 },
     abilities: ["poison", "spore", "grow"],
     spawner: "well",
+    prerequisites: {
+      buildings: ["camp"]
+    },
     upgradeTo: "alchemist",
     description: "Fungus expert who weaponizes spores and toxins",
     notes: "DEFEAT: 💧 Dissolves into a puddle of spores, regrows at well over time"
@@ -475,6 +503,9 @@ const UnitTypes = {
     cost: { food: 25, wood: 30 },
     abilities: ["nature", "root", "summon_beast"],
     spawner: "grove",
+    prerequisites: {
+      buildings: ["grove"]
+    },
     upgradeTo: "druid",
     description: "Nature mystic who commands plants and beasts",
     notes: "DEFEAT: 🌿 Transforms into small woodland creature, scurries back to grove"

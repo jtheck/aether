@@ -163,6 +163,18 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
       } else if (!canAffordUnit(itemType)) {
         button.classList.add('cannot-afford');
       }
+    } else if (category === 'research') {
+      const costInfo = formatResearchCost(itemType);
+      if (costInfo) {
+        displayLabel = `${label}\n${costInfo}`;
+      }
+
+      // Check prerequisites first (grey), then affordability (red)
+      if (!hasPrerequisitesResearch(itemType)) {
+        button.classList.add('prerequisites-not-met');
+      } else if (!canAffordResearch(itemType)) {
+        button.classList.add('cannot-afford');
+      }
     }
   }
 
@@ -376,6 +388,65 @@ function formatBuildingCost(buildingType) {
   return costStrings.join(' ');
 }
 
+// Format research cost for display
+function formatResearchCost(researchType) {
+  if (!window.UpgradeTypes || !window.UpgradeTypes[researchType]) {
+    return '';
+  }
+
+  const research = window.UpgradeTypes[researchType];
+  if (!research.cost) {
+    return '';
+  }
+
+  const costEntries = Object.entries(research.cost);
+  if (costEntries.length === 0) {
+    return '';
+  }
+
+  const resourceIcons = {
+    wood: '🌳',
+    stone: '🪨',
+    minerals: '💎',
+    food: '🍖'
+  };
+
+  const costStrings = costEntries.map(([resource, amount]) => {
+    const icon = resourceIcons[resource] || resource;
+    return `${icon}${amount}`;
+  });
+
+  return costStrings.join(' ');
+}
+
+// Check if player can afford research
+function canAffordResearch(researchType) {
+  if (!window.UpgradeTypes || !window.UpgradeTypes[researchType]) {
+    return true; // Assume affordable if research type not found
+  }
+
+  if (!window.player || !window.player.resources) {
+    return true; // Assume affordable if no player data
+  }
+
+  const research = window.UpgradeTypes[researchType];
+  if (!research.cost) {
+    return true; // No cost means always affordable
+  }
+
+  const playerResources = window.player.resources;
+
+  // Check each required resource
+  for (const [resource, amount] of Object.entries(research.cost)) {
+    const playerAmount = playerResources[resource] || 0;
+    if (playerAmount < amount) {
+      return false;
+    }
+  }
+
+  return true; // All resources available
+}
+
 // Check if player can afford a building
 function canAffordBuilding(buildingType) {
   if (!window.BuildingTypes || !window.BuildingTypes[buildingType]) {
@@ -474,6 +545,18 @@ function hasPrerequisitesBuilding(buildingType) {
   }
 
   const building = window.BuildingTypes[buildingType];
+
+  // Check for building prerequisites (direct requires array)
+  if (building.requires && building.requires.length > 0) {
+    for (const requiredBuilding of building.requires) {
+      const hasBuilding = window.player.buildings.some(b => b.type === requiredBuilding);
+      if (!hasBuilding) {
+        return false;
+      }
+    }
+  }
+
+  // Check for structured prerequisites object
   if (!building.prerequisites) {
     return true; // No prerequisites means always available
   }
@@ -492,9 +575,12 @@ function hasPrerequisitesBuilding(buildingType) {
 
   // Check required research/tech
   if (prereqs.research) {
-    // TODO: Implement when research system is available
-    // For now, assume no research prerequisites are met
-    return false;
+    for (const requiredResearch of prereqs.research) {
+      const hasResearch = window.player.research && window.player.research.includes(requiredResearch);
+      if (!hasResearch) {
+        return false;
+      }
+    }
   }
 
   // Check required professions/units
@@ -508,6 +594,72 @@ function hasPrerequisitesBuilding(buildingType) {
   }
 
   return true; // All prerequisites met
+}
+
+// Check if player meets prerequisites for research
+function hasPrerequisitesResearch(researchType) {
+  if (!window.UpgradeTypes || !window.UpgradeTypes[researchType]) {
+    return true; // Assume available if research type not found
+  }
+
+  if (!window.player) {
+    return true; // Assume available if no player data
+  }
+
+  const research = window.UpgradeTypes[researchType];
+  if (!research.requires || research.requires.length === 0) {
+    return true; // No building requirements means always available
+  }
+
+  // Check required buildings
+  for (const requiredBuilding of research.requires) {
+    const hasBuilding = window.player.buildings.some(b => b.type === requiredBuilding);
+    if (!hasBuilding) {
+      return false;
+    }
+  }
+
+  return true; // All building prerequisites met
+}
+
+// Update menu button states when buildings/research change
+function updateMenuButtonStates() {
+  // Get all menu buttons
+  const menuButtons = document.querySelectorAll('.radial-menu-button');
+
+  menuButtons.forEach(button => {
+    if (!button.dataset.menuPath) return;
+
+    const menuPath = JSON.parse(button.dataset.menuPath);
+    if (menuPath.length < 2) return;
+
+    const category = menuPath[0];
+    const itemType = menuPath[menuPath.length - 1];
+
+    // Remove existing state classes
+    button.classList.remove('prerequisites-not-met', 'cannot-afford');
+
+    // Check new state
+    if (category === 'buildings') {
+      if (!hasPrerequisitesBuilding(itemType)) {
+        button.classList.add('prerequisites-not-met');
+      } else if (!canAffordBuilding(itemType)) {
+        button.classList.add('cannot-afford');
+      }
+    } else if (category === 'units') {
+      if (!hasPrerequisitesUnit(itemType)) {
+        button.classList.add('prerequisites-not-met');
+      } else if (!canAffordUnit(itemType)) {
+        button.classList.add('cannot-afford');
+      }
+    } else if (category === 'research') {
+      if (!hasPrerequisitesResearch(itemType)) {
+        button.classList.add('prerequisites-not-met');
+      } else if (!canAffordResearch(itemType)) {
+        button.classList.add('cannot-afford');
+      }
+    }
+  });
 }
 
 // Check if player meets prerequisites for a unit
@@ -539,9 +691,12 @@ function hasPrerequisitesUnit(unitType) {
 
   // Check required research/tech
   if (prereqs.research) {
-    // TODO: Implement when research system is available
-    // For now, assume no research prerequisites are met
-    return false;
+    for (const requiredResearch of prereqs.research) {
+      const hasResearch = window.player.research && window.player.research.includes(requiredResearch);
+      if (!hasResearch) {
+        return false;
+      }
+    }
   }
 
   // Check required professions/units
@@ -734,5 +889,75 @@ window.getIconForItem = getIconForItem;
 window.canAffordBuilding = canAffordBuilding;
 window.formatUnitCost = formatUnitCost;
 window.canAffordUnit = canAffordUnit;
+window.canAffordResearch = canAffordResearch;
 window.hasPrerequisitesBuilding = hasPrerequisitesBuilding;
 window.hasPrerequisitesUnit = hasPrerequisitesUnit;
+window.hasPrerequisitesResearch = hasPrerequisitesResearch;
+window.updateMenuButtonStates = updateMenuButtonStates;
+
+// Debug function to show player's current state
+window.debugPlayerState = function() {
+  console.log('🎮 PLAYER STATE DEBUG:');
+  console.log('🏗️ Buildings:', window.player?.buildings?.map(b => b.type) || 'None');
+  console.log('🔬 Research:', window.player?.research || 'None');
+  console.log('👥 Units:', window.player?.units?.length || 0, 'units');
+
+  console.log('\n📋 MENU AVAILABILITY:');
+
+  // Check some key examples
+  const examples = [
+    { type: 'engineer', category: 'units', prereq: 'village' },
+    { type: 'warrior', category: 'units', prereq: 'barracks' },
+    { type: 'wagon', category: 'units', prereq: 'workshop' },
+    { type: 'scribes', category: 'research', prereq: 'workshop' },
+    { type: 'tavern', category: 'buildings', prereq: 'village' },
+    { type: 'barracks', category: 'buildings', prereq: 'farm' }
+  ];
+
+  // Show ALL research and their requirements
+  console.log('\n🔬 ALL RESEARCH REQUIREMENTS:');
+  const researchKeys = ['scribes', 'prospecting', 'patronage', 'stewardship', 'drayage', 'artillery', 'armor'];
+  researchKeys.forEach(researchKey => {
+    const hasPrereqs = window.hasPrerequisitesResearch(researchKey);
+    const canAfford = window.canAffordResearch(researchKey);
+    const research = window.UpgradeTypes[researchKey];
+    const requirements = research?.requires?.join(', ') || 'none';
+
+    const status = hasPrereqs ? (canAfford ? '✅ AVAILABLE' : '💰 CAN\'T AFFORD') : '🚫 MISSING PREREQ';
+    console.log(`${researchKey}: ${status} (needs buildings: ${requirements})`);
+  });
+
+  console.log('\n🏗️ KEY UNIT REQUIREMENTS:');
+  const unitExamples = [
+    { type: 'warlock', prereq: 'tavern' },
+    { type: 'wizard', prereq: 'tower' },
+    { type: 'priest', prereq: 'church' },
+    { type: 'wagon', prereq: 'workshop' }
+  ];
+
+  unitExamples.forEach(example => {
+    const hasPrereqs = window.hasPrerequisitesUnit(example.type);
+    const canAfford = window.canAffordUnit(example.type);
+    const status = hasPrereqs ? (canAfford ? '✅ AVAILABLE' : '💰 CAN\'T AFFORD') : '🚫 MISSING PREREQ';
+    console.log(`${example.type}: ${status} (needs: ${example.prereq})`);
+  });
+
+  examples.forEach(example => {
+    let hasPrereqs = false;
+    let canAfford = false;
+
+    if (example.category === 'units') {
+      hasPrereqs = window.hasPrerequisitesUnit(example.type);
+      canAfford = window.canAffordUnit(example.type);
+    } else if (example.category === 'buildings') {
+      hasPrereqs = window.hasPrerequisitesBuilding(example.type);
+      canAfford = window.canAffordBuilding(example.type);
+    } else if (example.category === 'research') {
+      hasPrereqs = window.hasPrerequisitesResearch(example.type);
+      canAfford = window.canAffordResearch(example.type);
+    }
+
+    const status = hasPrereqs ? (canAfford ? '✅ AVAILABLE' : '💰 CAN\'T AFFORD') : '🚫 MISSING PREREQ';
+    console.log(`${example.type} (${example.category}): ${status} (needs: ${example.prereq})`);
+  });
+};

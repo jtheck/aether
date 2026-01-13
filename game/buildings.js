@@ -244,6 +244,7 @@ const BuildingTypes = {
     workType: "build",
     spawnsUnits: ["warlock"],
     enablesUpgrades: ["scribes", "patronage"],
+    requires: ["village"],
     description: "Social hub that spawns Warlocks and enables upgrades"
   },
 
@@ -279,6 +280,7 @@ const BuildingTypes = {
     workType: "build",
     spawnsUnits: ["warrior", "archer"],
     trainingSpeed: 1.0,
+    requires: ["farm"],
     description: "Trains Warriors and Archers for combat"
   },
 
@@ -312,6 +314,7 @@ const BuildingTypes = {
     workType: "build",
     enablesUpgrades: ["stewardship", "drayage"],
     buildsVehicles: true,
+    requires: ["mine"],
     description: "Crafting center for vehicles and mechanical upgrades"
   },
 
@@ -333,6 +336,7 @@ const BuildingTypes = {
     workRadius: 15,
     workType: "build",
     spawnsUnits: ["apc"],
+    requires: ["workshop"],
     description: "🔥 Fire elemental building - produces APCs and Tanks"
   },
 
@@ -367,6 +371,7 @@ const BuildingTypes = {
     workRadius: 15,
     workType: "build",
     spawnsUnits: ["mycorrhizae"],
+    prerequisites: { research: ["prospecting"] },
     description: "💧 Water elemental building - trains Myco and Alchemists"
   },
 
@@ -384,6 +389,7 @@ const BuildingTypes = {
     workRadius: 15,
     workType: "build",
     spawnsUnits: ["dirigible"],
+    prerequisites: { research: ["drayage"] },
     description: "🌀 Air elemental building - launches Dirigibles and War Balloons"
   },
 
@@ -415,7 +421,7 @@ const UpgradeTypes = {
     name: "Scribes",
     cost: { food: 30, minerals: 15 },
     researchTime: 30000,
-    requires: ["tavern"],
+    requires: ["workshop"],
     effects: { resourceGatherRate: 1.15 },
     description: "Educated scribes improve resource management (+15% gather rate)"
   },
@@ -424,7 +430,7 @@ const UpgradeTypes = {
     name: "Prospecting",
     cost: { food: 25, stone: 20 },
     researchTime: 25000,
-    requires: ["lab"],
+    requires: ["moonwell"],
     effects: { mineOutput: 1.25 },
     description: "Advanced mining techniques reveal hidden deposits (+25% mine output)"
   },
@@ -433,7 +439,7 @@ const UpgradeTypes = {
     name: "Armor",
     cost: { stone: 40, minerals: 20 },
     researchTime: 35000,
-    requires: ["lab"],
+    requires: ["workshop"],
     effects: { unitHealth: 1.2 },
     description: "Reinforced armor plating for all military units (+20% health)"
   },
@@ -442,7 +448,7 @@ const UpgradeTypes = {
     name: "Stewardship",
     cost: { food: 35, wood: 25 },
     researchTime: 30000,
-    requires: ["workshop"],
+    requires: ["moonwell"],
     effects: { buildingHealth: 1.25, repairSpeed: 1.5 },
     description: "Better building maintenance (+25% building health, +50% repair speed)"
   },
@@ -451,7 +457,7 @@ const UpgradeTypes = {
     name: "Drayage",
     cost: { wood: 40, stone: 20 },
     researchTime: 28000,
-    requires: ["workshop"],
+    requires: ["barracks"],
     effects: { unitSpeed: 1.15, carryCapacity: 1.3 },
     description: "Improved logistics (+15% unit speed, +30% carry capacity)"
   },
@@ -474,6 +480,9 @@ const UpgradeTypes = {
     description: "Heavy weapons research (+50% siege damage, +20% ranged damage)"
   }
 };
+
+// Make UpgradeTypes globally available
+window.UpgradeTypes = UpgradeTypes;
 
 // Global buildings array and model pools
 const gameBuildings = [];
@@ -1367,6 +1376,11 @@ function processBuildingCompletion(building) {
         addBuildingParticleEffects(building);
       }
     }, 100);
+  }
+
+  // Update menu button states when building completes
+  if (window.updateMenuButtonStates) {
+    window.updateMenuButtonStates();
   }
 }
 
@@ -2839,11 +2853,16 @@ const buildingSystem = {
     
     // SINGLE PLAYER: Place building directly
     const building = placeBuilding(this.selectedBuildingType, gridX, gridZ, window.gfx.scene);
-    
+
     if (building) {
       // CRITICAL: Set owner to player for single-player buildings!
       const rawPlayerId = window.player?.id;
       building.owner = rawPlayerId?.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+
+      // CRITICAL: Add building to player's buildings array!
+      if (window.player) {
+        window.player.buildings.push(building);
+      }
       // console.log(`🏗️ Single-player building placed, owner set to: "${building.owner}"`);
       
       // Store team color so attached flag meshes can tint correctly

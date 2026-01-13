@@ -43,6 +43,9 @@ function Player(ops){
   // Player's buildings
   this.buildings = [];
 
+  // Player's completed research/upgrades
+  this.research = [];
+
   this.cursor = new PBody();
   
   this.scene = gfx.scene;

@@ -17,8 +17,34 @@
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
   min-width: 200px;
+  max-width: 454px;
+  /* max-width: 50vw; */
   max-height: 90vh;
   overflow-y: auto;
+  transition: max-width 0.3s ease;
+}
+
+.forge-panel.minimized {
+  max-width: 200px;
+}
+
+.forge-panel.minimized .forge-section:not(:nth-child(2)) {
+  display: none;
+}
+
+.forge-panel.minimized .forge-section:nth-child(2) h3 {
+  display: none;
+}
+
+.forge-panel.minimized .forge-buttons {
+  justify-content: center;
+}
+
+.forge-panel.minimized .forge-btn {
+  padding: 6px 8px;
+  font-size: 11px;
+  min-width: auto;
+  flex: none;
 }
 
 .forge-panel h2 {

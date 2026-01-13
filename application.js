@@ -96,7 +96,8 @@ window.aud = {};  // Audio
     // gfx.crank()
     app.initInputListeners();
     window._inputListenersInitialized = true; // Mark as initialized
-
+    
+    log("©'25 Aether.Garden");
   }; // end app.init
 
 

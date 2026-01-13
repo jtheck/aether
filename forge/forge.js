@@ -23,14 +23,26 @@
       resources: true
     },
     // Current editing layer (affects what tool does)
-    editingLayer: 'terrain',    // 'table', 'terrain', 'resources', 'spawns', 'buildings', or 'objectives'
+    editingLayer: 'file',    // 'file', 'table', 'terrain', 'resources', 'spawns', 'buildings', or 'objectives'
     
     // Map metadata
     mapName: '',
     mapAuthor: '',
     mapDescription: '',
     mapLore: '',
+    importedFilename: '',  // Preserve filename for export recommendations
     timeOfDay: 0.4,  // Slider value (0-1); actual sun time is mapped
+
+    // Objective editing state
+    selectedObjectiveIndex: -1,  // -1 means no objective selected
+
+    // Move mode states
+    moveMode: {
+      objectives: false,
+      units: false,
+      buildings: false
+    },
+    selectedItemForMove: null,  // {type: 'objective|unit|building', index: number}
     
     // Game type compatibility
     gameTypes: {
@@ -514,30 +526,68 @@
             return;
           }
           
-          // Building editing mode - place building
+          // Building editing mode - place building or move existing
           if (this.state.editingLayer === 'buildings') {
             const pos = this.getTilePosition(e);
             if (pos) {
-              this.placeBuilding(pos);
+              if (window.forge.state.moveMode.buildings) {
+                if (window.forge.state.selectedItemForMove) {
+                  // Move selected building to new position
+                  this.moveBuilding(window.forge.state.selectedItemForMove.index, pos);
+                  window.forge.state.selectedItemForMove = null;
+                } else {
+                  // Select building for moving
+                  this.selectBuildingForMove(pos);
+                }
+              } else {
+                this.placeBuilding(pos);
+              }
             }
             return;
           }
           
-          // Objective editing mode - place objective zone
+          // Objective editing mode - place objective zone or move existing
           if (this.state.editingLayer === 'objectives') {
             const pos = this.getTilePosition(e);
             if (pos) {
-              this.placeObjective(pos);
+              if (window.forge.state.moveMode.objectives) {
+                if (window.forge.state.selectedItemForMove) {
+                  // Move selected objective to new position
+                  this.moveObjective(window.forge.state.selectedItemForMove.index, pos);
+                  window.forge.state.selectedItemForMove = null;
+                } else {
+                  // Select objective for moving
+                  this.selectObjectiveForMove(pos);
+                }
+              } else {
+                this.placeObjective(pos);
+              }
             }
             return;
           }
           
-          // Units editing mode - place starting unit
+          // Units editing mode - place starting unit or move existing
           if (this.state.editingLayer === 'units') {
             const pos = this.getTilePosition(e);
             if (pos) {
-              this.placeStartingUnit(pos);
+              if (window.forge.state.moveMode.units) {
+                if (window.forge.state.selectedItemForMove) {
+                  // Move selected unit to new position
+                  this.moveStartingUnit(window.forge.state.selectedItemForMove.index, pos);
+                  window.forge.state.selectedItemForMove = null;
+                } else {
+                  // Select unit for moving
+                  this.selectStartingUnitForMove(pos);
+                }
+              } else {
+                this.placeStartingUnit(pos);
+              }
             }
+            return;
+          }
+
+          // Only allow painting if we have an active tool
+          if (this.state.currentTool === null) {
             return;
           }
 
@@ -563,9 +613,19 @@
         if (this.state.editingLayer === 'buildings' && this.state.currentBuilding !== 'eraser') {
           this.updateBuildingPreview(e);
         }
-        
-        if (this.state.isPainting && this.state.editingLayer !== 'table') {
-          const pos = this.getTilePosition(e);
+
+        // Update brush and objective previews
+        const pos = this.getTilePosition(e);
+        if (pos) {
+          if (this.state.editingLayer === 'terrain' && this._brushPreviewVisible) {
+            this.updateBrushPreview(pos);
+          }
+          if (this.state.editingLayer === 'objectives' && this._objectivePreviewVisible) {
+            this.updateObjectivePreview(pos);
+          }
+        }
+
+        if (this.state.isPainting && this.state.editingLayer !== 'table' && this.state.currentTool !== null) {
           if (pos && this.state.lastPaintPos) {
             if (pos.x !== this.state.lastPaintPos.x || pos.y !== this.state.lastPaintPos.y) {
               if (this.state.editingLayer === 'resources') {
@@ -1019,6 +1079,10 @@
   
   // Generate a new map
   forge.generateNewMap = function(width, height, seed) {
+    if (!confirm('Are you sure you want to generate a NEW map? This will completely replace your current work and cannot be undone.')) {
+      return;
+    }
+
     if (!window.Field) {
       console.error('Field class not available');
       return;
@@ -1221,12 +1285,22 @@
     
     console.log(`📦 Map exported: ${(json.length / 1024).toFixed(1)} KB → ${(compressed.length / 1024).toFixed(1)} KB`);
     
-    // Trigger download with .aether extension
+    // Trigger download with .garden extension
     const blob = new Blob([compressed], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${field.seed}.garden`;
+
+    // Use imported filename as base, or map name, or fallback to seed
+    let filename = field.seed.toString();
+    if (this.state.importedFilename) {
+      // Remove extension and add 'n' suffix as requested
+      filename = this.state.importedFilename.replace(/\.[^/.]+$/, '') + 'n';
+    } else if (this.state.mapName) {
+      filename = this.state.mapName.replace(/[^a-zA-Z0-9-_]/g, '_');
+    }
+
+    a.download = `${filename}.garden`;
     a.click();
     URL.revokeObjectURL(url);
     
@@ -1737,14 +1811,18 @@
     const forgeUI = document.createElement('div');
     forgeUI.id = 'forge-ui';
     forgeUI.innerHTML = `
-      <div class="forge-panel">
-        <h2>🔨 Forge</h2>
+      <div class="forge-panel" style="max-width: 454px; transition: max-width 0.3s ease;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
+          <h2 style="margin:0;">🔨 Forge</h2>
+          <button id="forge-minimize" class="forge-btn-sm" onclick="forge.toggleMinimize()" title="Minimize to layers only">⬆️</button>
+        </div>
         
         <div class="forge-section">
           <h3>Layers</h3>
           <div class="forge-buttons">
+            <button id="layer-file" class="forge-btn active" onclick="forge.setEditingLayer('file')">📄 File</button>
             <button id="layer-table" class="forge-btn" onclick="forge.setEditingLayer('table')">🎱 Table</button>
-            <button id="layer-terrain" class="forge-btn active" onclick="forge.setEditingLayer('terrain')">🗺️ Terrain</button>
+            <button id="layer-terrain" class="forge-btn" onclick="forge.setEditingLayer('terrain')">🗺️ Terrain</button>
             <button id="layer-resources" class="forge-btn" onclick="forge.setEditingLayer('resources')">🌲 Resources</button>
             <button id="layer-buildings" class="forge-btn" onclick="forge.setEditingLayer('buildings')">🏗️ Buildings</button>
             <button id="layer-spawns" class="forge-btn" onclick="forge.setEditingLayer('spawns')">🚩 Spawns</button>
@@ -1757,9 +1835,81 @@
             <button id="vis-resources" class="forge-btn active forge-vis" onclick="forge.toggleLayerVisibility('resources')">👁️ Resources</button>
             <button id="vis-grid" class="forge-btn forge-vis" onclick="forge.toggleResourceGrid()">📍 Grid</button>
             <button id="vis-blocked" class="forge-btn forge-vis" onclick="forge.toggleBlockedGrid()">🚫 Blocked</button>
+            <button id="vis-objectives" class="forge-btn forge-vis" onclick="forge.toggleObjectiveView()">🎯 Objectives</button>
           </div>
         </div>
-        
+
+        <div id="file-panel" class="forge-section" style="display:none;">
+          <h3>📄 Map File & Info</h3>
+          <div style="margin-bottom:6px;">
+            <input type="text" id="map-name" placeholder="Map Name"
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;"
+                   onchange="forge.state.mapName = this.value">
+          </div>
+          <div style="margin-bottom:6px;">
+            <input type="text" id="map-author" placeholder="Author"
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;font-size:11px;"
+                   onchange="forge.state.mapAuthor = this.value">
+          </div>
+          <div style="margin-bottom:6px;">
+            <textarea id="map-desc" placeholder="Description (shown in map browser)" rows="2"
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;font-size:11px;resize:vertical;"
+                   onchange="forge.state.mapDescription = this.value"></textarea>
+          </div>
+          <div style="margin-bottom:8px;">
+            <textarea id="map-lore" placeholder="Lore / Backstory (optional)" rows="3"
+                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#888;border-radius:4px;font-size:10px;font-style:italic;resize:vertical;"
+                   onchange="forge.state.mapLore = this.value"></textarea>
+          </div>
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:#888;margin-bottom:4px;">Technical Info:</div>
+            <div id="technical-info" style="font-size:10px;color:#666;background:#1a1a1a;padding:6px;border-radius:4px;border:1px solid #333;">
+              <!-- Technical info will be populated by updateTechnicalInfo() -->
+            </div>
+          </div>
+          <div class="forge-buttons">
+            <button class="forge-btn" onclick="forge.exportMap()">💾 Export</button>
+            <button class="forge-btn" onclick="document.getElementById('import-file').click()">📂 Import</button>
+            <input type="file" id="import-file" accept=".garden,.json" style="display:none"
+                   onchange="forge.handleImport(this.files[0])">
+          </div>
+
+          <h3>Map Generation</h3>
+          <div class="forge-row">
+            <label>Size:</label>
+            <select id="map-size">
+              <option value="32">32x32 (Tiny)</option>
+              <option value="64" selected>64x64 (Small)</option>
+              <option value="128">128x128 (Medium)</option>
+              <option value="256">256x256 (Large)</option>
+            </select>
+          </div>
+          <div class="forge-row">
+            <label>Seed:</label>
+            <input type="number" id="map-seed" value="12345" style="width: 80px;">
+            <button class="forge-btn-sm" onclick="document.getElementById('map-seed').value = Math.floor(Math.random()*1000000)">🎲</button>
+          </div>
+          <button class="forge-btn" onclick="forge.generateNewMap(
+            parseInt(document.getElementById('map-size').value),
+            parseInt(document.getElementById('map-size').value),
+            parseInt(document.getElementById('map-seed').value)
+          )">🗺️ Generate</button>
+
+          <h3>🌅 Time of Day</h3>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">🌙</span>
+            <input type="range" id="time-slider" min="0" max="100" value="40"
+                   style="flex: 1;" oninput="forge.setTimeOfDay(this.value / 100)">
+            <span style="font-size: 16px;">☀️</span>
+          </div>
+          <div id="time-label" style="text-align: center; font-size: 11px; color: #888; margin-top: 4px;">Mid-Morning</div>
+
+          <h3>Performance</h3>
+          <div class="forge-buttons">
+            <button id="billboard-toggle" class="forge-btn" onclick="forge.toggleBillboardMode()">🖼️ Billboard Only</button>
+          </div>
+        </div>
+
         <div id="table-panel" class="forge-section" style="display:none;">
           <h3>Table Shape</h3>
           <p style="font-size:11px;opacity:0.7;">Click chunks to toggle. Builds the pool table boundary.</p>
@@ -1777,8 +1927,14 @@
             <button id="brush-water" class="forge-btn" onclick="forge.setBrush('water')">🌊 Water</button>
           </div>
           <h3>Brush Size: <span id="brush-size-label">1</span></h3>
-          <input type="range" id="brush-size-slider" min="0" max="5" value="1" 
+          <input type="range" id="brush-size-slider" min="0" max="5" value="1"
                  oninput="forge.setBrushSize(this.value)">
+          <h3>Fill</h3>
+          <div class="forge-buttons">
+            <button class="forge-btn" onclick="forge.fillMap('grass')">All Grass</button>
+            <button class="forge-btn" onclick="forge.fillMap('dirt')">All Dirt</button>
+            <button class="forge-btn" onclick="forge.fillMap('water')">All Water</button>
+          </div>
         </div>
         
         <div id="resource-panel" class="forge-section" style="display:none;">
@@ -1817,6 +1973,13 @@
         <div id="buildings-panel" class="forge-section" style="display:none;">
           <h3>🏗️ Buildings</h3>
           <p style="font-size:11px;opacity:0.7;">Click to place. Right-click to remove.</p>
+
+          <div class="forge-buttons" style="margin-bottom:8px;">
+            <button id="bld-place-mode" class="forge-btn active" onclick="forge.setBuildingMode('place')">➕ Place</button>
+            <button id="bld-move-mode" class="forge-btn" onclick="forge.setBuildingMode('move')">↔️ Move</button>
+            <button class="forge-btn" onclick="forge.clearBuildings()">🗑️ Clear All</button>
+          </div>
+
           <div id="buildings-buttons-container" style="max-height:300px;overflow-y:auto;">
             <!-- Buttons will be dynamically generated from BuildingTypes -->
           </div>
@@ -1824,15 +1987,18 @@
             <button id="bldg-eraser" class="forge-btn" onclick="forge.setBuilding('eraser')">🧽 Eraser</button>
           </div>
           <div id="building-list" style="margin-top:8px;font-size:11px;max-height:100px;overflow-y:auto;"></div>
-          <div class="forge-buttons" style="margin-top:8px;">
-            <button class="forge-btn" onclick="forge.clearBuildings()">🗑️ Clear All</button>
-          </div>
         </div>
         
         <div id="units-panel" class="forge-section" style="display:none;">
           <h3>⚔️ Starting Units</h3>
           <p style="font-size:11px;opacity:0.7;">Click to place starting unit. Right-click to remove.<br>For Adventure mode: players start with units instead of Agoras.</p>
-          
+
+          <div class="forge-buttons" style="margin-bottom:8px;">
+            <button id="unit-place-mode" class="forge-btn active" onclick="forge.setUnitMode('place')">➕ Place</button>
+            <button id="unit-move-mode" class="forge-btn" onclick="forge.setUnitMode('move')">↔️ Move</button>
+            <button class="forge-btn" onclick="forge.clearStartingUnits()">🗑️ Clear All</button>
+          </div>
+
           <h4 style="margin-top:8px;font-size:12px;">Player</h4>
           <div class="forge-buttons">
             <button id="unit-player-0" class="forge-btn active" onclick="forge.setUnitPlayer(0)">🔵 P1</button>
@@ -1847,15 +2013,18 @@
           </div>
           
           <div id="starting-units-list" style="margin-top:8px;font-size:11px;max-height:100px;overflow-y:auto;"></div>
-          <div class="forge-buttons" style="margin-top:8px;">
-            <button class="forge-btn" onclick="forge.clearStartingUnits()">🗑️ Clear All</button>
-          </div>
         </div>
         
         <div id="objectives-panel" class="forge-section" style="display:none;">
           <h3>🎯 Objectives</h3>
           <p style="font-size:11px;opacity:0.7;">Click to place objective zone. Right-click to remove.<br>Players must reach these to win in Adventure mode.</p>
-          
+
+          <div class="forge-buttons" style="margin-bottom:8px;">
+            <button id="obj-place-mode" class="forge-btn active" onclick="forge.setObjectiveMode('place')">➕ Place</button>
+            <button id="obj-move-mode" class="forge-btn" onclick="forge.setObjectiveMode('move')">↔️ Move</button>
+            <button class="forge-btn" onclick="forge.clearObjectives()">🗑️ Clear All</button>
+          </div>
+
           <h4 style="margin-top:8px;font-size:12px;">Zone Type</h4>
           <div class="forge-buttons">
             <button id="obj-reach" class="forge-btn active" onclick="forge.setObjectiveType('reach')">🏁 Reach</button>
@@ -1864,7 +2033,7 @@
           
           <h4 style="margin-top:8px;font-size:12px;">Zone Size</h4>
           <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-            <input type="range" id="obj-radius" min="2" max="10" value="4" onchange="forge.setObjectiveRadius(this.value)" style="flex:1;">
+            <input type="range" id="obj-radius" min="2" max="10" value="4" oninput="forge.setObjectiveRadius(this.value)" style="flex:1;">
             <span id="obj-radius-display" style="font-size:11px;min-width:30px;">4</span>
           </div>
           
@@ -1872,8 +2041,13 @@
           <textarea id="obj-message" rows="2" style="width:100%;font-size:11px;resize:vertical;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.2);color:#fff;padding:4px;" placeholder="Enter dialogue text..."></textarea>
           
           <div id="objective-list" style="margin-top:8px;font-size:12px;max-height:150px;overflow-y:auto;"></div>
-          <div class="forge-buttons" style="margin-top:8px;">
-            <button class="forge-btn" onclick="forge.clearObjectives()">🗑️ Clear All</button>
+
+          <div id="objective-edit-controls" style="margin-top:8px;display:none;">
+            <h4 style="margin:8px 0 4px 0;font-size:12px;">✏️ Edit Selected Objective</h4>
+            <div class="forge-buttons">
+              <button class="forge-btn" onclick="forge.saveObjectiveChanges()">💾 Save Changes</button>
+              <button class="forge-btn" onclick="forge.cancelObjectiveEdit()">❌ Cancel</button>
+            </div>
           </div>
         </div>
 
@@ -1892,86 +2066,6 @@
           </div>
         </div>
 
-        <div class="forge-section">
-          <h3>Map</h3>
-          <div class="forge-row">
-            <label>Size:</label>
-            <select id="map-size">
-              <option value="32">32x32 (Tiny)</option>
-              <option value="64" selected>64x64 (Small)</option>
-              <option value="128">128x128 (Medium)</option>
-              <option value="256">256x256 (Large)</option>
-            </select>
-          </div>
-          <div class="forge-row">
-            <label>Seed:</label>
-            <input type="number" id="map-seed" value="12345" style="width: 80px;">
-            <button class="forge-btn-sm" onclick="document.getElementById('map-seed').value = Math.floor(Math.random()*1000000)">🎲</button>
-          </div>
-          <button class="forge-btn" onclick="forge.generateNewMap(
-            parseInt(document.getElementById('map-size').value),
-            parseInt(document.getElementById('map-size').value),
-            parseInt(document.getElementById('map-seed').value)
-          )">🗺️ Generate</button>
-        </div>
-        
-        <div class="forge-section">
-          <h3>Fill</h3>
-          <div class="forge-buttons">
-            <button class="forge-btn" onclick="forge.fillMap('grass')">All Grass</button>
-            <button class="forge-btn" onclick="forge.fillMap('dirt')">All Dirt</button>
-            <button class="forge-btn" onclick="forge.fillMap('water')">All Water</button>
-          </div>
-        </div>
-        
-        <div class="forge-section">
-          <h3>Map Info</h3>
-          <div style="margin-bottom:6px;">
-            <input type="text" id="map-name" placeholder="Map Name" 
-                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;"
-                   onchange="forge.state.mapName = this.value">
-          </div>
-          <div style="margin-bottom:6px;">
-            <input type="text" id="map-author" placeholder="Author" 
-                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;font-size:11px;"
-                   onchange="forge.state.mapAuthor = this.value">
-          </div>
-          <div style="margin-bottom:6px;">
-            <textarea id="map-desc" placeholder="Description (shown in map browser)" rows="2"
-                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:4px;font-size:11px;resize:vertical;"
-                   onchange="forge.state.mapDescription = this.value"></textarea>
-          </div>
-          <div style="margin-bottom:8px;">
-            <textarea id="map-lore" placeholder="Lore / Backstory (optional)" rows="3"
-                   style="width:100%;padding:6px;background:#2a2a3e;border:1px solid #444;color:#888;border-radius:4px;font-size:10px;font-style:italic;resize:vertical;"
-                   onchange="forge.state.mapLore = this.value"></textarea>
-          </div>
-          <div class="forge-buttons">
-            <button class="forge-btn" onclick="forge.exportMap()">💾 Export</button>
-            <button class="forge-btn" onclick="document.getElementById('import-file').click()">📂 Import</button>
-            <input type="file" id="import-file" accept=".garden,.json" style="display:none" 
-                   onchange="forge.handleImport(this.files[0])">
-          </div>
-        </div>
-        
-        <div class="forge-section">
-          <h3>🌅 Time of Day</h3>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 16px;">🌙</span>
-            <input type="range" id="time-slider" min="0" max="100" value="40" 
-                   style="flex: 1;" oninput="forge.setTimeOfDay(this.value / 100)">
-            <span style="font-size: 16px;">☀️</span>
-          </div>
-          <div id="time-label" style="text-align: center; font-size: 11px; color: #888; margin-top: 4px;">Mid-Morning</div>
-        </div>
-        
-        <div class="forge-section">
-          <h3>Performance</h3>
-          <div class="forge-buttons">
-            <button id="billboard-toggle" class="forge-btn" onclick="forge.toggleBillboardMode()">🖼️ Billboard Only</button>
-          </div>
-        </div>
-        
         <div class="forge-section forge-help">
           <h3>Controls</h3>
           <div>🖱️ Left-click - Paint</div>
@@ -1987,19 +2081,57 @@
     
     // Generate building buttons after UI is in DOM
     this.generateBuildingButtons();
-    
+
     // Generate unit type buttons
     this.generateUnitTypeButtons();
-    
+
+    // Set the default editing layer after UI is ready
+    setTimeout(() => {
+      this.setEditingLayer(this.state.editingLayer);
+    }, 10);
+
     console.log('🎨 Forge UI created');
   };
   
-  // Set editing layer (table, terrain, resources, spawns, buildings, objectives)
+  // Set editing layer (file, table, terrain, resources, spawns, buildings, objectives)
+  // Mode switching functions
+  forge.setObjectiveMode = function(mode) {
+    window.forge.state.moveMode.objectives = mode === 'move';
+    window.forge.state.selectedItemForMove = null; // Clear selection when switching modes
+    document.getElementById('obj-place-mode').classList.toggle('active', mode === 'place');
+    document.getElementById('obj-move-mode').classList.toggle('active', mode === 'move');
+    this.updateObjectiveMarkers();
+  };
+
+  forge.setBuildingMode = function(mode) {
+    window.forge.state.moveMode.buildings = mode === 'move';
+    window.forge.state.selectedItemForMove = null; // Clear selection when switching modes
+    document.getElementById('bld-place-mode').classList.toggle('active', mode === 'place');
+    document.getElementById('bld-move-mode').classList.toggle('active', mode === 'move');
+    this.updateBuildingMarkers();
+  };
+
+  forge.setUnitMode = function(mode) {
+    window.forge.state.moveMode.units = mode === 'move';
+    window.forge.state.selectedItemForMove = null; // Clear selection when switching modes
+    document.getElementById('unit-place-mode').classList.toggle('active', mode === 'place');
+    document.getElementById('unit-move-mode').classList.toggle('active', mode === 'move');
+    this.updateUnitMarkers();
+  };
+
   forge.setEditingLayer = function(layer) {
-    this.state.editingLayer = layer;
-    this.state.currentTool = layer === 'resources' ? 'resource' : layer;
+    // Reset move modes when switching layers
+    window.forge.state.moveMode.objectives = false;
+    window.forge.state.moveMode.units = false;
+    window.forge.state.moveMode.buildings = false;
+    window.forge.state.selectedItemForMove = null;
+
+    window.forge.state.editingLayer = layer;
+    // Deactivate tools when in file mode
+    window.forge.state.currentTool = layer === 'file' ? null : (layer === 'resources' ? 'resource' : layer);
 
     // Update layer button states
+    document.getElementById('layer-file').classList.toggle('active', layer === 'file');
     document.getElementById('layer-table').classList.toggle('active', layer === 'table');
     document.getElementById('layer-terrain').classList.toggle('active', layer === 'terrain');
     document.getElementById('layer-resources').classList.toggle('active', layer === 'resources');
@@ -2009,6 +2141,7 @@
     document.getElementById('layer-objectives').classList.toggle('active', layer === 'objectives');
 
     // Show/hide panels
+    document.getElementById('file-panel').style.display = layer === 'file' ? 'block' : 'none';
     document.getElementById('table-panel').style.display = layer === 'table' ? 'block' : 'none';
     document.getElementById('terrain-panel').style.display = layer === 'terrain' ? 'block' : 'none';
     document.getElementById('resource-panel').style.display = layer === 'resources' ? 'block' : 'none';
@@ -2017,31 +2150,105 @@
     document.getElementById('units-panel').style.display = layer === 'units' ? 'block' : 'none';
     document.getElementById('objectives-panel').style.display = layer === 'objectives' ? 'block' : 'none';
 
+    // Set default modes for each layer
+    if (layer === 'buildings') {
+      window.forge.setBuildingMode('place');
+      // Ensure the current building button is active
+      if (window.forge.state.currentBuilding) {
+        window.forge.setBuilding(window.forge.state.currentBuilding);
+      }
+    } else if (layer === 'units') {
+      window.forge.setUnitMode('place');
+    } else if (layer === 'objectives') {
+      window.forge.setObjectiveMode('place');
+    }
+
     // Update chunk grid overlay visibility
-    this.updateChunkGridOverlay(layer === 'table');
+    window.forge.updateChunkGridOverlay(layer === 'table');
 
     // Show spawn markers when editing spawns
-    this.updateSpawnMarkers();
-    
+    window.forge.updateSpawnMarkers();
+
     // Show unit markers when editing units
-    this.updateUnitMarkers();
-    
+    window.forge.updateUnitMarkers();
+
     // Show objective markers when editing objectives
-    this.updateObjectiveMarkers();
-    
+    window.forge.updateObjectiveMarkers();
+
+    // Enable objective view by default when entering objectives layer
+    if (layer === 'objectives') {
+      window.forge._objectiveViewVisible = true;
+      const objViewBtn = document.getElementById('vis-objectives');
+      if (objViewBtn) objViewBtn.classList.add('active');
+      window.forge.showObjectivePreview();
+    } else {
+      window.forge.hideObjectivePreview();
+    }
+
+    // Show brush preview when entering terrain layer
+    if (layer === 'terrain') {
+      window.forge.showBrushPreview();
+    } else {
+      window.forge.hideBrushPreview();
+    }
+
+    // Clear objective selection when leaving objectives layer
+    if (layer !== 'objectives') {
+      window.forge.state.selectedObjectiveIndex = -1;
+      window.forge.clearObjectiveForm();
+    }
+
     // Refresh grid if it's currently visible (to show appropriate overlay for new layer)
-    if (this._resourceGridVisible) {
-      this.showResourceGrid();
+    if (window.forge._resourceGridVisible) {
+      window.forge.showResourceGrid();
     }
     
     // Clear building preview when leaving building mode
     if (layer !== 'buildings') {
-      this.clearBuildingPreview();
+      window.forge.clearBuildingPreview();
+    }
+
+    // Update technical info when file panel is shown
+    if (layer === 'file') {
+      window.forge.updateTechnicalInfo();
     }
 
     console.log(`📐 Editing layer: ${layer}`);
   };
-  
+
+  // Update technical information display
+  forge.updateTechnicalInfo = function() {
+    const field = window.liveField;
+    if (!field) return;
+
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
+    const totalChunks = chunksX * chunksZ;
+    const enabledChunks = Array.from(field.chunkMask.values()).filter(Boolean).length;
+
+    const terrainTiles = field.width * field.height;
+    const placedResources = this._placedResources ? this._placedResources.size : 0;
+    const spawns = this.state.spawns ? this.state.spawns.length : 0;
+    const buildings = this.state.buildings ? this.state.buildings.length : 0;
+    const startingUnits = this.state.startingUnits ? this.state.startingUnits.length : 0;
+    const objectives = this.state.objectives ? this.state.objectives.length : 0;
+
+    const info = document.getElementById('technical-info');
+    if (info) {
+      info.innerHTML = `
+        <div>Size: ${field.width} × ${field.height} (${terrainTiles} tiles)</div>
+        <div>Seed: ${field.seed}</div>
+        <div>Chunks: ${enabledChunks}/${totalChunks} enabled</div>
+        <div>Resources: ${placedResources} placed</div>
+        <div>Spawns: ${spawns}</div>
+        <div>Buildings: ${buildings}</div>
+        <div>Starting Units: ${startingUnits}</div>
+        <div>Objectives: ${objectives}</div>
+        ${this.state.importedFilename ? `<div>Imported: ${this.state.importedFilename}</div>` : ''}
+      `;
+    }
+  };
+
   // Toggle layer visibility
   forge.toggleLayerVisibility = function(layer) {
     this.state.layers[layer] = !this.state.layers[layer];
@@ -2337,6 +2544,17 @@
   // Toggle blocked tiles grid overlay
   forge._blockedGridVisible = false;
   forge._blockedGridOverlay = [];
+
+  // Brush size preview overlay
+  forge._brushPreviewVisible = false;
+  forge._brushPreviewOverlay = null;
+
+  // Objective radius preview overlay
+  forge._objectivePreviewVisible = false;
+  forge._objectivePreviewOverlay = null;
+
+  // Toggle objective view overlay
+  forge._objectiveViewVisible = false;
   
   forge.toggleBlockedGrid = function() {
     this._blockedGridVisible = !this._blockedGridVisible;
@@ -2352,7 +2570,196 @@
       this.hideBlockedGrid();
     }
   };
-  
+
+  forge.toggleObjectiveView = function() {
+    this._objectiveViewVisible = !this._objectiveViewVisible;
+
+    const btn = document.getElementById('vis-objectives');
+    if (btn) {
+      btn.classList.toggle('active', this._objectiveViewVisible);
+    }
+
+    if (this._objectiveViewVisible) {
+      this.updateObjectiveMarkers();
+    } else {
+      // Hide objective markers
+      if (this._objectiveMarkers) {
+        this._objectiveMarkers.forEach(m => m.dispose());
+      }
+      this._objectiveMarkers = [];
+    }
+  };
+
+
+  // Move functions for objectives
+  forge.selectObjectiveForMove = function(pos) {
+    const index = this.state.objectives.findIndex(o =>
+      Math.abs(o.x - pos.x) <= o.radius + 2 &&
+      Math.abs(o.y - pos.y) <= o.radius + 2
+    );
+    if (index !== -1) {
+      window.forge.state.selectedItemForMove = { type: 'objective', index: index };
+      this.updateObjectiveMarkers(); // Highlight selected objective
+    }
+  };
+
+  forge.moveObjective = function(index, newPos) {
+    if (index >= 0 && index < this.state.objectives.length) {
+      this.state.objectives[index].x = newPos.x;
+      this.state.objectives[index].y = newPos.y;
+      this.updateObjectiveMarkers();
+      this.updateObjectiveList();
+    }
+  };
+
+  // Move functions for buildings
+  forge.selectBuildingForMove = function(pos) {
+    const index = this.state.buildings.findIndex(b =>
+      Math.abs(b.x - pos.x) <= 2 && Math.abs(b.y - pos.y) <= 2
+    );
+    if (index !== -1) {
+      window.forge.state.selectedItemForMove = { type: 'building', index: index };
+      this.updateBuildingMarkers(); // Highlight selected building
+    }
+  };
+
+  forge.moveBuilding = function(index, newPos) {
+    if (index >= 0 && index < this.state.buildings.length) {
+      this.state.buildings[index].x = newPos.x;
+      this.state.buildings[index].y = newPos.y;
+      this.updateBuildingMarkers();
+      this.updateBuildingList();
+    }
+  };
+
+  // Move functions for units
+  forge.selectStartingUnitForMove = function(pos) {
+    const index = this.state.startingUnits.findIndex(u =>
+      Math.abs(u.x - pos.x) <= 1 && Math.abs(u.y - pos.y) <= 1
+    );
+    if (index !== -1) {
+      window.forge.state.selectedItemForMove = { type: 'unit', index: index };
+      this.updateUnitMarkers(); // Highlight selected unit
+    }
+  };
+
+  forge.moveStartingUnit = function(index, newPos) {
+    if (index >= 0 && index < this.state.startingUnits.length) {
+      this.state.startingUnits[index].x = newPos.x;
+      this.state.startingUnits[index].y = newPos.y;
+      this.updateUnitMarkers();
+      this.updateUnitList();
+    }
+  };
+
+  // Show brush size preview overlay
+  forge.showBrushPreview = function() {
+    const scene = gfx?.scene;
+    if (!scene) return;
+
+    this.hideBrushPreview(); // Remove old overlay
+
+    const brushSize = this.state.brushSize;
+    if (brushSize <= 0) return;
+
+    // Create a semi-transparent circle to show brush size
+    const circle = BABYLON.MeshBuilder.CreateCylinder(
+      'brush-preview',
+      {
+        diameter: brushSize * 2 * TILE_SIZE,
+        height: 0.1,
+        tessellation: 32
+      },
+      scene
+    );
+
+    // Position at ground level
+    circle.position.y = 0.05;
+
+    // Make it follow the mouse
+    this._brushPreviewOverlay = circle;
+
+    // Material - blue semi-transparent
+    const mat = new BABYLON.StandardMaterial('brush-preview-mat', scene);
+    mat.diffuseColor = new BABYLON.Color3(0.2, 0.6, 1);
+    mat.emissiveColor = new BABYLON.Color3(0.1, 0.3, 0.5);
+    mat.alpha = 0.3;
+    circle.material = mat;
+
+    this._brushPreviewVisible = true;
+  };
+
+  forge.hideBrushPreview = function() {
+    if (this._brushPreviewOverlay) {
+      this._brushPreviewOverlay.dispose();
+      this._brushPreviewOverlay = null;
+    }
+    this._brushPreviewVisible = false;
+  };
+
+  forge.updateBrushPreview = function(mousePos) {
+    if (this._brushPreviewOverlay && mousePos) {
+      const worldX = mousePos.x * TILE_SIZE + 0.5 * TILE_SIZE;
+      const worldZ = mousePos.y * TILE_SIZE + 0.5 * TILE_SIZE;
+      this._brushPreviewOverlay.position.x = worldX;
+      this._brushPreviewOverlay.position.z = worldZ;
+    }
+  };
+
+  // Show objective radius preview overlay
+  forge.showObjectivePreview = function() {
+    const scene = gfx?.scene;
+    if (!scene) return;
+
+    this.hideObjectivePreview(); // Remove old overlay
+
+    const radius = this.state.currentObjectiveRadius;
+    if (radius <= 0) return;
+
+    // Create a semi-transparent circle to show objective radius
+    const circle = BABYLON.MeshBuilder.CreateCylinder(
+      'objective-preview',
+      {
+        diameter: radius * 2 * TILE_SIZE,
+        height: 0.1,
+        tessellation: 32
+      },
+      scene
+    );
+
+    // Position at ground level
+    circle.position.y = 0.05;
+
+    // Make it follow the mouse
+    this._objectivePreviewOverlay = circle;
+
+    // Material - green semi-transparent
+    const mat = new BABYLON.StandardMaterial('objective-preview-mat', scene);
+    mat.diffuseColor = new BABYLON.Color3(0.2, 1, 0.4);
+    mat.emissiveColor = new BABYLON.Color3(0.1, 0.5, 0.2);
+    mat.alpha = 0.3;
+    circle.material = mat;
+
+    this._objectivePreviewVisible = true;
+  };
+
+  forge.hideObjectivePreview = function() {
+    if (this._objectivePreviewOverlay) {
+      this._objectivePreviewOverlay.dispose();
+      this._objectivePreviewOverlay = null;
+    }
+    this._objectivePreviewVisible = false;
+  };
+
+  forge.updateObjectivePreview = function(mousePos) {
+    if (this._objectivePreviewOverlay && mousePos) {
+      const worldX = mousePos.x * TILE_SIZE + 0.5 * TILE_SIZE;
+      const worldZ = mousePos.y * TILE_SIZE + 0.5 * TILE_SIZE;
+      this._objectivePreviewOverlay.position.x = worldX;
+      this._objectivePreviewOverlay.position.z = worldZ;
+    }
+  };
+
   // Show grid overlay highlighting blocked/impassable and slow tiles
   forge.showBlockedGrid = function() {
     this.hideBlockedGrid(); // Clear existing
@@ -2550,6 +2957,10 @@
   
   // Clear all spawn points
   forge.clearSpawns = function() {
+    if (!confirm('Are you sure you want to clear ALL spawn points? This cannot be undone.')) {
+      return;
+    }
+
     this.state.spawnPoints = [];
     this.updateSpawnMarkers();
     this.updateSpawnList();
@@ -2576,6 +2987,12 @@
   forge.setObjectiveRadius = function(radius) {
     this.state.currentObjectiveRadius = parseInt(radius, 10);
     document.getElementById('obj-radius-display').textContent = radius;
+
+    // Update objective preview if visible
+    if (this._objectivePreviewVisible) {
+      this.showObjectivePreview();
+    }
+
     console.log(`🎯 Objective radius: ${radius}`);
   };
   
@@ -2638,17 +3055,85 @@
   
   // Clear all objectives
   forge.clearObjectives = function() {
+    if (!confirm('Are you sure you want to clear ALL objectives? This cannot be undone.')) {
+      return;
+    }
+
     this.state.objectives = [];
+    this.state.selectedObjectiveIndex = -1;
     this.updateObjectiveMarkers();
     this.updateObjectiveList();
+    this.clearObjectiveForm();
     console.log('🎯 All objectives cleared');
+  };
+
+  // Select objective for editing
+  forge.selectObjective = function(index) {
+    if (index < 0 || index >= this.state.objectives.length) return;
+
+    this.state.selectedObjectiveIndex = index;
+    const obj = this.state.objectives[index];
+
+    // Populate form with objective data
+    document.getElementById('obj-reach').classList.toggle('active', obj.type === 'reach');
+    document.getElementById('obj-escape').classList.toggle('active', obj.type === 'escape');
+    document.getElementById('obj-radius').value = obj.radius;
+    document.getElementById('obj-radius-display').textContent = obj.radius;
+    document.getElementById('obj-message').value = obj.message || '';
+
+    this.updateObjectiveList();
+    console.log(`🎯 Selected objective ${index + 1} for editing`);
+  };
+
+  // Save changes to selected objective
+  forge.saveObjectiveChanges = function() {
+    if (this.state.selectedObjectiveIndex === -1) return;
+
+    const obj = this.state.objectives[this.state.selectedObjectiveIndex];
+    const typeRadios = document.querySelectorAll('input[name="obj-type"]:checked');
+    const newType = typeRadios.length > 0 ? typeRadios[0].value : obj.type;
+
+    obj.type = document.getElementById('obj-reach').classList.contains('active') ? 'reach' : 'escape';
+    obj.radius = parseInt(document.getElementById('obj-radius').value);
+    obj.message = document.getElementById('obj-message').value.trim();
+
+    this.updateObjectiveMarkers();
+    this.updateObjectiveList();
+    console.log(`🎯 Updated objective ${this.state.selectedObjectiveIndex + 1}`);
+  };
+
+  // Cancel objective editing
+  forge.cancelObjectiveEdit = function() {
+    this.state.selectedObjectiveIndex = -1;
+    this.updateObjectiveList();
+    this.clearObjectiveForm();
+    console.log('🎯 Cancelled objective editing');
+  };
+
+  // Clear objective form
+  forge.clearObjectiveForm = function() {
+    document.getElementById('obj-reach').classList.add('active');
+    document.getElementById('obj-escape').classList.remove('active');
+    document.getElementById('obj-radius').value = '4';
+    document.getElementById('obj-radius-display').textContent = '4';
+    document.getElementById('obj-message').value = '';
   };
   
   // Update objective markers visualization
   forge.updateObjectiveMarkers = function() {
     const scene = gfx?.scene;
     if (!scene) return;
-    
+
+    // Only show markers if objective view is enabled
+    if (!this._objectiveViewVisible) {
+      // Remove old markers if they exist
+      if (this._objectiveMarkers) {
+        this._objectiveMarkers.forEach(m => m.dispose());
+      }
+      this._objectiveMarkers = [];
+      return;
+    }
+
     // Remove old markers
     if (this._objectiveMarkers) {
       this._objectiveMarkers.forEach(m => m.dispose());
@@ -2677,14 +3162,24 @@
       
       // Material - green for reach, blue for escape
       const mat = new BABYLON.StandardMaterial(`objective_mat_${i}`, scene);
+      const isSelected = window.forge.state.selectedItemForMove?.type === 'objective' && window.forge.state.selectedItemForMove?.index === i && window.forge.state.moveMode.objectives;
+
       if (obj.type === 'escape') {
-        mat.diffuseColor = new BABYLON.Color3(0.2, 0.4, 1);
-        mat.emissiveColor = new BABYLON.Color3(0.1, 0.2, 0.5);
+        mat.diffuseColor = isSelected
+          ? new BABYLON.Color3(1, 0.8, 0.2)  // Orange for selected escape
+          : new BABYLON.Color3(0.2, 0.4, 1); // Blue for normal escape
+        mat.emissiveColor = isSelected
+          ? new BABYLON.Color3(0.5, 0.4, 0.1)
+          : new BABYLON.Color3(0.1, 0.2, 0.5);
       } else {
-        mat.diffuseColor = new BABYLON.Color3(0.2, 1, 0.4);
-        mat.emissiveColor = new BABYLON.Color3(0.1, 0.5, 0.2);
+        mat.diffuseColor = isSelected
+          ? new BABYLON.Color3(1, 0.8, 0.2)  // Orange for selected reach
+          : new BABYLON.Color3(0.2, 1, 0.4); // Green for normal reach
+        mat.emissiveColor = isSelected
+          ? new BABYLON.Color3(0.5, 0.4, 0.1)
+          : new BABYLON.Color3(0.1, 0.5, 0.2);
       }
-      mat.alpha = 0.5;
+      mat.alpha = isSelected ? 0.8 : 0.5;
       cylinder.material = mat;
       
       // Add a flag/pole in the center
@@ -2720,17 +3215,27 @@
   // Update objective list in UI
   forge.updateObjectiveList = function() {
     const list = document.getElementById('objective-list');
+    const editControls = document.getElementById('objective-edit-controls');
     if (!list) return;
-    
+
+    // Show/hide edit controls
+    if (editControls) {
+      editControls.style.display = this.state.selectedObjectiveIndex >= 0 ? 'block' : 'none';
+    }
+
     if (this.state.objectives.length === 0) {
       list.innerHTML = '<span style="opacity:0.5;">No objectives</span>';
       return;
     }
-    
+
     list.innerHTML = this.state.objectives.map((obj, i) => {
       const icon = obj.type === 'escape' ? '🚪' : '🏁';
       const msgPreview = obj.message ? ` 💬 "${obj.message.substring(0, 20)}${obj.message.length > 20 ? '...' : ''}"` : '';
-      return `<div style="margin-bottom:4px;padding:4px;background:rgba(0,0,0,0.2);border-radius:3px;">
+      const isSelected = this.state.selectedObjectiveIndex === i;
+      const bgColor = isSelected ? 'rgba(76, 175, 80, 0.3)' : 'rgba(0,0,0,0.2)';
+      const borderStyle = isSelected ? 'border: 2px solid #4CAF50;' : '';
+
+      return `<div style="margin-bottom:4px;padding:4px;${borderStyle}background:${bgColor};border-radius:3px;cursor:pointer;" onclick="forge.selectObjective(${i})">
         <div>${icon} <b>${i + 1}</b>: (${obj.x}, ${obj.y}) r=${obj.radius}</div>
         ${msgPreview ? `<div style="font-size:10px;opacity:0.7;margin-top:2px;">${msgPreview}</div>` : ''}
       </div>`;
@@ -2798,7 +3303,7 @@
     });
     
     // Only show placeable units (exclude upgrades and special units)
-    const placeableCategories = ['civilian', 'worker', 'support', 'caster', 'scout', 'infantry', 'ranged', 'cavalry'];
+    const placeableCategories = ['civilian', 'worker', 'support', 'caster', 'military', 'vehicle', 'air'];
     
     let html = '';
     placeableCategories.forEach(category => {
@@ -2826,16 +3331,33 @@
       architect: '📐',
       monk: '🙏',
       paladin: '⚔️',
+      priest: '⛪',
+      valkyrie: '👼',
       wizard: '🧙',
       elemental: '🌪️',
       warlock: '🔮',
+      geomancer: '🪄',
+      mycorrhizae: '🍄',
+      myco: '🍄',
+      alchemist: '⚗️',
+      shaman: '🌿',
+      druid: '🌳',
+      warrior: '⚔️',
+      champion: '👑',
+      archer: '🏹',
+      ballister: '🎯',
+      wagon: '🚛',
+      war_wagon: '🚀',
+      apc: '🚗',
+      tank: '🚜',
+      dirigible: '🛩️',
+      war_balloon: '💣',
       frog: '🐸',
       tortle: '🐢',
       gnome: '🧝',
       birdy: '🦅',
       scout: '🏃',
       rider: '🐎',
-      archer: '🏹',
       crossbowman: '🎯',
       infantry: '🛡️',
       knight: '♞',
@@ -2891,6 +3413,10 @@
   
   // Clear all starting units
   forge.clearStartingUnits = function() {
+    if (!confirm('Are you sure you want to clear ALL starting units? This cannot be undone.')) {
+      return;
+    }
+
     this.state.startingUnits = [];
     this.updateUnitMarkers();
     this.updateStartingUnitsList();
@@ -2927,9 +3453,11 @@
       platform.position = new BABYLON.Vector3(worldX, 0.2, worldZ);
       
       const platformMat = new BABYLON.StandardMaterial(`unitPlatMat_${i}`, gfx.scene);
-      platformMat.diffuseColor = playerColor;
-      platformMat.emissiveColor = playerColor.scale(0.5);
-      platformMat.alpha = 0.6;
+      const isSelected = window.forge.state.selectedItemForMove?.type === 'unit' && window.forge.state.selectedItemForMove?.index === i && window.forge.state.moveMode.units;
+
+      platformMat.diffuseColor = isSelected ? new BABYLON.Color3(1, 0.8, 0.2) : playerColor; // Orange for selected
+      platformMat.emissiveColor = isSelected ? new BABYLON.Color3(0.5, 0.4, 0.1) : playerColor.scale(0.5);
+      platformMat.alpha = isSelected ? 0.8 : 0.6;
       platformMat.backFaceCulling = false;
       platform.material = platformMat;
       
@@ -3484,8 +4012,12 @@
   };
   
   forge.clearBuildings = function() {
+    if (!confirm('Are you sure you want to clear ALL buildings? This cannot be undone.')) {
+      return;
+    }
+
     const field = window.liveField;
-    
+
     // Remove blocked tiles for all buildings
     if (field && field.blockedTiles) {
       this.state.buildings.forEach(building => {
@@ -3501,7 +4033,7 @@
         }
       });
     }
-    
+
     // Dispose all meshes
     this._buildingMeshes.forEach(mesh => mesh.dispose());
     this._buildingMeshes.clear();
@@ -3565,7 +4097,18 @@
         root.metadata = root.metadata || {};
         root.metadata.isEditorBuilding = true;
         root.metadata.buildingKey = key;
-        
+
+        // Highlight selected building
+        const isSelected = window.forge.state.selectedItemForMove?.type === 'building' && window.forge.state.selectedItemForMove?.index === i && window.forge.state.moveMode.buildings;
+        if (isSelected) {
+          root.getChildMeshes().forEach(mesh => {
+            if (mesh.material) {
+              const originalEmissive = mesh.material.emissiveColor || new BABYLON.Color3(0, 0, 0);
+              mesh.material.emissiveColor = new BABYLON.Color3(0.5, 0.4, 0.1); // Orange glow
+            }
+          });
+        }
+
         this._buildingMeshes.set(key, root);
       });
     });
@@ -4095,7 +4638,49 @@
       btn.textContent = newState ? '🖼️ Billboard ON' : '🖼️ Billboard Only';
     }
   };
-  
+
+  // Toggle minimize/expand control board
+  forge.toggleMinimize = function() {
+    const panel = document.querySelector('.forge-panel');
+    const btn = document.getElementById('forge-minimize');
+
+    if (!panel || !btn) return;
+
+    const isMinimized = panel.classList.contains('minimized');
+    panel.classList.toggle('minimized');
+
+    // Apply inline styles for minimize functionality
+    if (panel.classList.contains('minimized')) {
+      panel.style.maxWidth = '200px';
+      btn.textContent = '⬇️';
+      btn.title = 'Expand control board';
+
+      // Hide all sections except the first (layers)
+      const sections = panel.querySelectorAll('.forge-section');
+      sections.forEach((section, index) => {
+        if (index === 0) { // Layers section
+          section.style.display = 'block';
+          const h3 = section.querySelector('h3');
+          if (h3) h3.style.display = 'none';
+        } else {
+          section.style.display = 'none';
+        }
+      });
+    } else {
+      panel.style.maxWidth = '50vw';
+      btn.textContent = '⬆️';
+      btn.title = 'Minimize to layers only';
+
+      // Show all sections
+      const sections = panel.querySelectorAll('.forge-section');
+      sections.forEach(section => {
+        section.style.display = 'block';
+        const h3 = section.querySelector('h3');
+        if (h3) h3.style.display = 'block';
+      });
+    }
+  };
+
   // Auto-enable billboard mode for large maps
   forge.checkAutoPerformanceMode = function() {
     const field = window.liveField;
@@ -4208,9 +4793,13 @@
 
   // Clear all resources from the map
   forge.clearResources = function() {
+    if (!confirm('Are you sure you want to clear ALL resources? This cannot be undone.')) {
+      return;
+    }
+
     const field = window.liveField;
     if (!field) return;
-    
+
     console.log('🗑️ Clearing resources...');
     
     let cleared = 0;
@@ -4252,6 +4841,10 @@
       }
       this._placedResources = new Map();
     }
+
+    // Hide previews
+    this.hideBrushPreview();
+    this.hideObjectivePreview();
     
     // Reset tracking
     this._placedKeys = new Set();
@@ -4271,20 +4864,28 @@
   forge.setBrushSize = function(size) {
     this.state.brushSize = parseInt(size);
     document.getElementById('brush-size-label').textContent = size;
+
+    // Update brush preview if visible
+    if (this._brushPreviewVisible) {
+      this.showBrushPreview();
+    }
   };
   
   // Handle file import (.aether or .json)
   forge.handleImport = function(file) {
     if (!file) return;
-    
+
+    // Store filename for export recommendations
+    this.state.importedFilename = file.name;
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         let content = e.target.result;
-        
+
         // Decompress if needed
         content = this.decompressString(content);
-        
+
         const mapData = JSON.parse(content);
         this.importMap(mapData);
       } catch (err) {

@@ -918,8 +918,9 @@
     
     // Command execution handlers
     executeMoveCommand(cmd) {
+
       const units = this.getUnitsByIds(cmd.unitIds);
-      
+
       // CRITICAL: Use last 6 chars of player ID for ownership comparison
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
@@ -1020,6 +1021,16 @@
         });
       }
       
+      // Check if any villagers are being commanded to move
+      const hasVillagers = ownedUnits.some(unit => unit.type === 'villager');
+
+      // Play villager movement sound if villagers are being commanded to move
+      if (hasVillagers && window.aud && window.aud.playVillagerMove) {
+        // Pass the first owned unit for spatial positioning
+        const firstUnit = ownedUnits[0];
+        window.aud.playVillagerMove(firstUnit);
+      }
+
       // CRITICAL: When manually moving units, remove them from any building's worker list
       // This prevents them from being stuck in gather/build behaviors
       ownedUnits.forEach(unit => {
@@ -1111,16 +1122,16 @@
           // CRITICAL: Clear any position corrections when starting movement
           // Movement commands should override corrections - don't let them fight
           delete unit._positionCorrection;
-          
+
           // CRITICAL: Mark this as a player move command so auto-assignment doesn't immediately grab them
           const currentTick = this.tick || 0;
           unit.lastPlayerMoveTick = currentTick;
           // Broader protection: treat this as a recent player command for all autonomous systems.
           unit.lastPlayerCommandTick = currentTick;
-          
+
           // console.log(`🚶 [T${currentTick}] Setting walk behavior for unit ${unit.id?.slice(-6)} from (${unit.pb.state.loc.x.toFixed(1)}, ${unit.pb.state.loc.z.toFixed(1)}) to (${cmd.target.x.toFixed(1)}, ${cmd.target.z.toFixed(1)})`);
           window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: cmd.target });
-          
+
           // If this is a monk, check for nearby units to kick when starting movement
           if (unit.type === 'monk' && window.maybeAutoMonkKick) {
             // Reset periodic kick timer so periodic kicks start fresh

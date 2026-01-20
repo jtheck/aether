@@ -416,6 +416,12 @@
       case 'move':
         // Move selected units to target
         if (command.unitIds && command.target && window.behaviorManager) {
+          // Check if any villagers are being commanded to move
+          const hasVillagers = command.unitIds.some(unitId => {
+            const unit = window.gameUnits?.find(u => u.id === unitId);
+            return unit && unit.type === 'villager';
+          });
+
           command.unitIds.forEach((unitId, index) => {
             const unit = window.gameUnits?.find(u => u.id === unitId);
             if (unit) {
@@ -423,15 +429,26 @@
               const spread = command.unitIds.length > 1 ? 2 : 0;
               const offsetX = command.target.x + (index % 3 - 1) * spread;
               const offsetZ = command.target.z + (Math.floor(index / 3) - 1) * spread;
-              
+
               // Mark as player-commanded (prevents AI reassignment)
               unit.lastPlayerMoveTick = demoTick;
-              
+
               window.behaviorManager.setBehavior(unit, 'walk', {
                 targetPoint: { x: offsetX, z: offsetZ }
               });
             }
           });
+
+          // Play villager movement sound if villagers are being commanded to move
+          if (hasVillagers && window.aud && window.aud.playVillagerMove) {
+            // Find first villager unit for spatial positioning
+            const firstVillagerId = command.unitIds.find(unitId => {
+              const unit = window.gameUnits?.find(u => u.id === unitId);
+              return unit && unit.type === 'villager';
+            });
+            const firstUnit = firstVillagerId ? window.gameUnits?.find(u => u.id === firstVillagerId) : null;
+            window.aud.playVillagerMove(firstUnit);
+          }
         }
         break;
         

@@ -3012,9 +3012,12 @@ let pov2 = 240;
         // 1. Game finishes loading (via startLODRampUp)
         // 2. User opens settings menu (via initLODSlider)
         
-        // Try to initialize LOD slider (will fail if settings menu not opened yet)
+        // Try to initialize sliders (will fail if settings menu not opened yet)
         if (hud.initLODSlider) {
           hud.initLODSlider();
+        }
+        if (hud.initVolumeSlider) {
+          hud.initVolumeSlider();
         }
         
         // Only initialize 3D HUD if USE_3D_HUD is true

@@ -131,6 +131,20 @@
         <div id="aa_reload_notice" style="position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); font-size: 0.7em; color: #f90; white-space: nowrap; display: none;">⚠ Reload to apply</div>
       </div>
       <div class="settings_option">
+        <span>Volume</span>
+        <div class="lod_slider_container">
+          <input type="range" id="volume_slider" class="lod_slider" min="0" max="100" value="25">
+          <div class="lod_value" id="volume_value">50%</div>
+        </div>
+      </div>
+      <div class="settings_option">
+        <span>Spatial Audio</span>
+        <div id="spatial_switch" class="binary_switch" onclick="window.hud.toggleSpatialAudio()" data-on="false">
+          <div id="spatial_handle" class="switch_handle"></div>
+        </div>
+        <span style="font-size: 0.8em; color: #888; margin-left: 10px;" id="spatial_mode_label">Off</span>
+      </div>
+      <div class="settings_option">
         <span>Lasso</span>
         <div id="selection_switch" class="binary_switch" onclick="window.hud.toggleSelectionMode()" data-on="false">
           <div id="selection_handle" class="switch_handle"></div>
@@ -314,6 +328,7 @@
   <script src="vendor/getfire-p2p.js"></script>
   <script src="application.js"></script>
   <script src="game/utility.js"></script>
+  <script src="game/audio.js"></script>
   <script src="game/constants.js"></script>
   <script src="game/determinism.js"></script>
   <script src="game/ui.js"></script>

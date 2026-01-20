@@ -497,6 +497,7 @@
     // === ACTION POPUP UI ===
     // Shows on double-tap with special ability button, auto-dismisses
     function showActionPopup(clientX, clientY, selectionSnapshot = null) {
+
       // Dismiss existing popup if any
       hideActionPopup();
       
@@ -579,6 +580,7 @@
       const actions = [];
       const unitsToUse = selectionSnapshot || (window.player && window.player.selectedUnits ? window.player.selectedUnits : []);
       const hasSelection = unitsToUse && unitsToUse.length > 0;
+
       
       if (hasSelection) {
         // Always add Move and Attack Move for selected units
@@ -695,11 +697,14 @@
     function executeCommand(command, clientX, clientY, unitsToUse = null) {
       const worldPos = screenToWorld(clientX, clientY);
       if (!worldPos || !window.player) return;
-      
+
       // Use provided units or fall back to current selection
       const units = unitsToUse || (window.player.selectedUnits || []);
       if (units.length === 0) return;
-      
+
+      // Check if any villagers are being commanded to move
+      const hasVillagers = units.some(unit => unit.type === 'villager');
+
       for (const unit of units) {
         if (command === 'move' && unit.moveTo) {
           unit.moveTo(worldPos.x, worldPos.z);
@@ -709,6 +714,11 @@
           // Fallback: just move if no attackMove
           unit.moveTo(worldPos.x, worldPos.z);
         }
+      }
+
+      // Play villager movement sound if villagers are being commanded to move
+      if (command === 'move' && hasVillagers && window.aud && window.aud.playVillagerMove) {
+        window.aud.playVillagerMove();
       }
     }
     

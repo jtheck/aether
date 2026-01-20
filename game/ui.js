@@ -1068,6 +1068,16 @@ function getRandomColor() {
       if (menuId === 'settings_menu' && window.hud && window.hud.initShadowSlider) {
         window.hud.initShadowSlider();
       }
+
+      // Initialize Volume slider when settings menu is shown
+      if (menuId === 'settings_menu' && window.hud && window.hud.initVolumeSlider) {
+        window.hud.initVolumeSlider();
+      }
+
+      // Initialize Spatial Audio toggle when settings menu is shown
+      if (menuId === 'settings_menu' && window.hud && window.hud.initializeSpatialAudio) {
+        window.hud.initializeSpatialAudio();
+      }
     };
     
     // NEW: Start multiplayer game for specific type (called from lobby)
@@ -1935,22 +1945,27 @@ function getRandomColor() {
     if (pickResult.hit) {
       // Handle different types of clicks
       if (e.type === 'pointerup' && e.button === 0) {
+
         // Check if we should suppress this due to double-click
         if (suppressNextPointerUp) {
           suppressNextPointerUp = false;
+          console.log('🎯 Terrain click suppressed due to double-click');
           return;
         }
-        
+
         // Left click - could be for placing tiles, selecting objects, etc.
-        
+
+        // Get selected units for movement commands
+        const selectedUnits = (window.player && window.player.getSelectedUnits) ? window.player.getSelectedUnits() : [];
+
         // Check what we clicked on
         const clickedOnBuilding = pickResult.pickedMesh && pickResult.pickedMesh.isBuilding;
-        const clickedOnResource = pickResult.pickedMesh && 
-          (pickResult.pickedMesh.name.includes('rock') || 
+        const clickedOnResource = pickResult.pickedMesh &&
+          (pickResult.pickedMesh.name.includes('rock') ||
            pickResult.pickedMesh.name.includes('Rock') ||
            pickResult.pickedMesh.name.includes('tree') ||
            pickResult.pickedMesh.name.includes('Tree'));
-        
+
         let actualPickResult = pickResult;
         
         // If we clicked on a building or resource, use its position directly
@@ -2047,9 +2062,7 @@ function getRandomColor() {
               // console.log(`💥 Field action: Small explosion at (${tileX}, ${tileZ})`);
               
               // Make selected units walk to the explosion location
-              if (window.player && window.player.getSelectedUnits) {
-                const selectedUnits = window.player.getSelectedUnits();
-                if (selectedUnits.length > 0) {
+              if (selectedUnits.length > 0) {
                   // console.log(`🚶 Making ${selectedUnits.length} selected units walk to explosion location`);
                   
                   // Check if we clicked on a building
@@ -2346,9 +2359,13 @@ function getRandomColor() {
                   if (window.gfx && window.gfx.scene) {
                     createTargetMarker(worldPos);
                   }
-                  
-                  // Apply walk behavior to each selected unit
-                  // MATCH SYSTEM: Submit move commands through Match system for synchronization
+
+                  // Only issue movement commands if units are selected
+                  if (selectedUnits.length > 0) {
+
+                    // Check if any villagers are being commanded to move (for sound effects)
+                    // Apply walk behavior to each selected unit
+                    // MATCH SYSTEM: Submit move commands through Match system for synchronization
                   if (window.currentMatch) {
                     // Submit a move command for all selected units through Match system
                     const unitIds = selectedUnits.map(u => u.id);
@@ -2371,45 +2388,17 @@ function getRandomColor() {
                       target: { x: worldPos.x, y: 0, z: worldPos.z }
                     };
                     window.currentMatch.submitCommand(command);
-                  } else {
+
                     // Show speech bubble for one of the moving units
                     const unit = selectedUnits[0];
-                    const ownerMatches = unit && (unit.owner === window.player?.id || 
+                    const ownerMatches = unit && (unit.owner === window.player?.id ||
                                         window.player?.id?.endsWith(unit.owner) ||
                                         unit.owner?.endsWith(window.player?.id));
                     if (window.UnitSpeech && ownerMatches) {
                       window.UnitSpeech.showRandomSpeech(unit, 'move', 2000);
                     }
-                    
-                    // SINGLE PLAYER: Apply walk behavior directly to each unit
-                    selectedUnits.forEach((unit, index) => {
-                      if (window.behaviorManager && unit) {
-                        // Create target point slightly offset from explosion center for natural spread
-                        const offsetX = worldPos.x + (Math.random() - 0.5) * 2; // Random spread
-                        const offsetZ = worldPos.z + (Math.random() - 0.5) * 2;
-                        const targetPoint = { x: offsetX, z: offsetZ };
-                        
-                        // console.log(`🚶 Setting walk behavior for unit ${unit.name || unit.type} to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
-                        
-                        window.behaviorManager.setBehavior(unit, 'walk', { 
-                          targetPoint: targetPoint,
-                          walkSpeed: 6.0 // Normal walking speed
-                        });
-                        
-                        // console.log(`🚶 Unit ${unit.name || unit.type} walking to (${targetPoint.x.toFixed(1)}, ${targetPoint.z.toFixed(1)})`);
-                      } else {
-                        // console.warn(`⚠️ Cannot set behavior for unit:`, { 
-                        //   hasBehaviorManager: !!window.behaviorManager, 
-                        //   unit: unit,
-                        //   unitPhysics: unit?.pb,
-                        //   unitState: unit?.pb?.state
-                        // });
-                      }
-                    });
                   }
-                } else {
-                  // console.log('🚶 No units selected, skipping walk behavior');
-                }
+                  }
               }
             } else {
               // console.warn('💥 FX system not available for explosion');

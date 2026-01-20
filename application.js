@@ -8,7 +8,7 @@ window.ui = {};   // Interface
 window.gfx = {};  // Graphics
 window.tr = {};   // Game
 window.net = {};  // Network
-window.aud = {};  // Audio
+window.aud = {};  // Audio (loaded from game/audio.js)
 
 
 (function(app) {
@@ -23,7 +23,10 @@ window.aud = {};  // Audio
     ui.init();
     
     gfx.init();
-    
+
+    // Initialize AudioEngineV2
+    aud.init();
+
     // Initialize HUD mode from saved preference or default
     if (window.hud && window.hud.initializeHUDMode) {
       window.hud.initializeHUDMode();

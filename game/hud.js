@@ -2721,7 +2721,70 @@
     // Set initial color
     hud.updateSliderColor(slider, initialValue);
   };
-  
+
+  // Initialize Volume slider (requires DOM elements to exist)
+  hud.initVolumeSlider = function() {
+    const slider = document.getElementById('volume_slider');
+    const valueDisplay = document.getElementById('volume_value');
+
+    if (!slider || !valueDisplay) {
+      // console.warn('🔊 Volume slider elements not found, will sync when settings menu opens');
+      return;
+    }
+
+    // Load saved volume setting or use default (25%)
+    const savedVolume = localStorage.getItem('volumeLevel');
+    const initialValue = savedVolume ? parseInt(savedVolume) : 25;
+    slider.value = initialValue;
+    valueDisplay.textContent = initialValue + '%';
+
+    // Apply volume setting
+    hud.updateVolumeLevel(initialValue);
+
+    // Add event listener for slider changes
+    slider.addEventListener('input', function() {
+      const value = parseInt(this.value);
+      valueDisplay.textContent = value + '%';
+
+      // Update volume level
+      hud.updateVolumeLevel(value);
+
+      // Save setting
+      localStorage.setItem('volumeLevel', value.toString());
+
+      // Update slider background color
+      hud.updateSliderColor(slider, value);
+    });
+
+    // Add change event listener for when user releases mouse
+    slider.addEventListener('change', function() {
+      const value = parseInt(this.value);
+      // Ensure the final value is properly saved
+      localStorage.setItem('volumeLevel', value.toString());
+    });
+
+    // Set initial color
+    hud.updateSliderColor(slider, initialValue);
+  };
+
+  // Update volume level (0 = muted, 100 = full volume)
+  hud.updateVolumeLevel = function(level) {
+    // Store the volume level for audio system to use
+    window.currentVolumeLevel = level;
+
+    // If audio system exists, update it
+    if (window.aud && window.aud.setVolume) {
+      window.aud.setVolume(level);
+    }
+  };
+
+  // Get current volume level for new audio
+  hud.getCurrentVolumeLevel = function() {
+    const savedVolume = localStorage.getItem('volumeLevel');
+    const level = savedVolume ? parseInt(savedVolume) : 50;
+    return level;
+  };
+
   // Get current LOD multiplier for new models
   hud.getCurrentLODMultiplier = function() {
     const savedLOD = localStorage.getItem('lodLevel');
@@ -3099,6 +3162,44 @@
     }
   };
 
+  // Toggle spatial audio on/off
+  hud.toggleSpatialAudio = function() {
+    const switchElement = document.getElementById('spatial_switch');
+    const handle = document.getElementById('spatial_handle');
+    const label = document.getElementById('spatial_mode_label');
+    const isOn = switchElement.dataset.on === 'true';
+
+    if (isOn) {
+      // Switch to Off (left position)
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+      label.textContent = 'Off';
+
+      // Update spatial audio mode
+      if (window.aud) {
+        window.aud.setSpatialMode(false);
+      }
+
+      // Save preference
+      localStorage.setItem('spatialAudio', 'false');
+    } else {
+      // Switch to On (right position)
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+      label.textContent = 'On';
+
+      // Update spatial audio mode
+      if (window.aud) {
+        window.aud.setSpatialMode(true);
+      }
+
+      // Save preference
+      localStorage.setItem('spatialAudio', 'true');
+    }
+  };
+
   hud.toggleSelectionMode = function() {
     const switchElement = document.getElementById('selection_switch');
     const handle = document.getElementById('selection_handle');
@@ -3169,6 +3270,35 @@
       if (window.lassoSelection) {
         window.lassoSelection.setMode('rectangle');
       }
+    }
+  };
+
+  hud.initializeSpatialAudio = function() {
+    const savedSpatial = localStorage.getItem('spatialAudio');
+    const switchElement = document.getElementById('spatial_switch');
+    const handle = document.getElementById('spatial_handle');
+    const label = document.getElementById('spatial_mode_label');
+
+    // Default to off for performance
+    const isEnabled = savedSpatial === 'true';
+
+    if (isEnabled) {
+      // Set to On
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+      label.textContent = 'On';
+    } else {
+      // Set to Off (default)
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+      label.textContent = 'Off';
+    }
+
+    // Apply the setting
+    if (window.aud) {
+      window.aud.setSpatialMode(isEnabled);
     }
   };
   

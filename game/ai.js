@@ -410,7 +410,7 @@ class WalkBehavior extends Behavior {
         // Apply movement with speed multiplier for slow tiles
         const effectiveSpeed = this.params.walkSpeed * speedMultiplier;
         this.applyMovementWithRotation(direction, effectiveSpeed);
-                
+
         return false;
     }
     

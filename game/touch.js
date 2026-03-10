@@ -705,15 +705,21 @@
       // Check if any villagers are being commanded to move
       const hasVillagers = units.some(unit => unit.type === 'villager');
 
-      for (const unit of units) {
-        if (command === 'move' && unit.moveTo) {
-          unit.moveTo(worldPos.x, worldPos.z);
-        } else if (command === 'attackMove' && unit.attackMoveTo) {
-          unit.attackMoveTo(worldPos.x, worldPos.z);
-        } else if (command === 'attackMove' && unit.moveTo) {
-          // Fallback: just move if no attackMove
-          unit.moveTo(worldPos.x, worldPos.z);
-        }
+      if (command === 'move' && window.currentMatch) {
+        const unitIds = units.map(u => u.id);
+        const startPositions = {};
+        units.forEach(u => {
+          if (u.pb && u.pb.state && u.pb.state.loc) {
+            startPositions[u.id] = { x: u.pb.state.loc.x, z: u.pb.state.loc.z };
+          }
+        });
+        window.currentMatch.submitCommand({
+          type: 'move',
+          playerId: window.player?.id,
+          unitIds: unitIds,
+          startPositions: startPositions,
+          target: { x: worldPos.x, y: 0, z: worldPos.z }
+        });
       }
 
       // Play villager movement sound if villagers are being commanded to move

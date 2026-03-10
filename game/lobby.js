@@ -367,8 +367,7 @@ const Lobby = {
     // Reset scene and ensure clean slate
     this.resetGameState();
     
-    // CRITICAL: Always use multiplayer mode (even vs AI) because it uses the match/command system!
-    window.isMultiplayer = true;
+    window.isMultiplayer = false;
     window.gameType = 'onevsone';
     window.mapSeed = resolvedSeed;
     
@@ -463,7 +462,7 @@ const Lobby = {
     
     // Create single AI opponent for 1v1
     const spawn = spawnPositions[1];
-    const aiId = `ai-opponent-${resolvedSeed.toString(16)}`;
+    const aiId = `ai-opponent-${resolvedSeed.toString(16).padStart(6, '0')}`;
     const aiOptions = {
       id: aiId,
       name: 'AI Opponent',
@@ -530,6 +529,9 @@ const Lobby = {
     
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
       gfx.stretchTable(gfx.table);
+    }
+    if (window.gfx && typeof gfx.recreateMountains === 'function') {
+      gfx.recreateMountains();
     }
     window._cameraLimitsSet = false;
     
@@ -2619,10 +2621,15 @@ const Lobby = {
     if (isV2 && mapData.cm) {
       const chunksX = Math.ceil(width / (mapData.cs || 16));
       const chunksZ = Math.ceil(height / (mapData.cs || 16));
+      const expectedLen = chunksX * chunksZ;
+      // Pad truncated masks with '0' (disable missing chunks rather than leaving them undefined)
+      const cm = mapData.cm.length < expectedLen
+        ? mapData.cm.padEnd(expectedLen, '0')
+        : mapData.cm;
       let i = 0;
       for (let cz = 0; cz < chunksZ; cz++) {
         for (let cx = 0; cx < chunksX; cx++) {
-          const enabled = mapData.cm[i] === '1';
+          const enabled = cm[i] === '1';
           field.chunkMask.set(`${cx},${cz}`, enabled);
           if (!enabled) hasCustomShape = true;
           i++;
@@ -2655,6 +2662,12 @@ const Lobby = {
     if (mapData.tod !== undefined && window.lighting && window.lighting.setSunTime) {
       window.lighting.setSunTime(mapData.tod);
       console.log(`🌅 Applied map time of day: ${mapData.tod}`);
+    }
+    
+    // Handle "no auto resources" flag - skip all deterministic resource sprinkling
+    if (isV2 && mapData.nar) {
+      field.noAutoResources = true;
+      console.log('🚫 Map has no-auto-resources flag set, skipping resource generation');
     }
     
     // Mark erased auto-resources as depleted (so they won't be auto-generated)
@@ -2739,15 +2752,33 @@ const Lobby = {
       window.adventureObjectives = [];
     }
     
+    // Store scenes for cinematic playback
+    if (isV2 && mapData.sc) {
+      try {
+        window.adventureScenes = JSON.parse(decodeURIComponent(atob(mapData.sc)));
+        console.log(`🎬 Loaded ${window.adventureScenes.length} scenes`);
+      } catch (e) {
+        console.warn('Failed to decode scenes:', e);
+        window.adventureScenes = [];
+      }
+    } else {
+      window.adventureScenes = [];
+    }
+
     // Store starting units for adventure mode (units placed in forge)
     if (isV2 && mapData.units) {
       const units = mapData.units.split(';').map(u => {
         const parts = u.split(',');
+        let name = '';
+        if (parts[4]) {
+          try { name = decodeURIComponent(atob(parts[4])); } catch (e) { /* ignore */ }
+        }
         return {
           x: Number(parts[0]),
           y: Number(parts[1]),
           type: parts[2] || 'villager',
-          player: Number(parts[3]) || 0
+          player: Number(parts[3]) || 0,
+          name: name || ''
         };
       });
       window.adventureStartingUnits = units;
@@ -3165,6 +3196,30 @@ const Lobby = {
     }
   },
   
+  // Load a .garden map file directly into adventure mode
+  loadAdventureMapFile: function(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const mapData = JSON.parse(e.target.result);
+        if (!mapData.w && !mapData.width) {
+          throw new Error('Invalid map format - missing dimensions');
+        }
+        const mapName = file.name.replace(/\.(garden|json)$/i, '');
+        console.log(`🗺️ Loading adventure map: ${mapName}`);
+        window.currentChapterId = null;
+        this.startAdventureWithMap(mapData);
+      } catch (err) {
+        console.error('Failed to load map file:', err);
+        alert('Failed to load map file: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+    // Reset the input so the same file can be re-selected
+    document.getElementById('adventureMapInput').value = '';
+  },
+
   // Load a specific adventure chapter by ID (used for chapter progression)
   loadAdventureChapter: async function(chapterId) {
     const chapterInfo = this.adventureChapters[chapterId];
@@ -3176,8 +3231,8 @@ const Lobby = {
     
     console.log(`🗺️ Loading next chapter: ${chapterInfo.name}`);
     
-    // Reset game state first
-    this.resetGameState();
+    // NOTE: Don't resetGameState() here - startAdventureWithMap() already does it.
+    // Double-reset causes the shadow generator to be rebuilt twice wastefully.
     
     try {
       const response = await fetch(chapterInfo.file);
@@ -3770,6 +3825,9 @@ const Lobby = {
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
       gfx.stretchTable(gfx.table);
     }
+    if (window.gfx && typeof gfx.recreateMountains === 'function') {
+      gfx.recreateMountains();
+    }
     window._cameraLimitsSet = false;
     
     // Position camera at start position (first unit or spawn)
@@ -3950,7 +4008,7 @@ const Lobby = {
     const aiPlayers = [];
     for (let i = 0; i < aiCount; i++) {
       const spawn = spawnPositions[i + 1] || spawnPositions[spawnPositions.length - 1];
-      const aiId = options.aiIds?.[i] || `ai-${i + 1}-${resolvedSeed.toString(16)}`;
+      const aiId = options.aiIds?.[i] || `ai-${i + 1}-${resolvedSeed.toString(16).padStart(6, '0')}`;
       const aiName = options.aiNames?.[i] || `AI ${i + 1}`;
       const aiColor = (options.aiColors && options.aiColors[i]) || (this.getPlayerColor ? this.getPlayerColor(i + 1) : '#0066cc');
       const aiResources = (options.aiResources && options.aiResources[i]) || { ...STARTING_RESOURCES };
@@ -4021,6 +4079,9 @@ const Lobby = {
     
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
       gfx.stretchTable(gfx.table);
+    }
+    if (window.gfx && typeof gfx.recreateMountains === 'function') {
+      gfx.recreateMountains();
     }
     window._cameraLimitsSet = false;
     
@@ -4595,6 +4656,9 @@ const Lobby = {
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
       gfx.stretchTable(gfx.table);
     }
+    if (window.gfx && typeof gfx.recreateMountains === 'function') {
+      gfx.recreateMountains();
+    }
     // Force camera limits to recalc for new field size
     window._cameraLimitsSet = false;
     
@@ -4727,7 +4791,7 @@ const Lobby = {
         // Use players.length as spawn position index (AI players are added after human players)
         const spawnIndex = players.length;
         if (spawnIndex < spawnPositions.length) {
-          const aiId = `ai-${slotIndex}-${mapSeed.toString(16).slice(-5)}`;
+          const aiId = `ai-${slotIndex}-${mapSeed.toString(16).padStart(6, '0')}`;
           const aiName = `AI ${slotIndex}`;
           const aiColor = this.getPlayerColor(slotIndex).primary;
           const aiSpawn = spawnPositions[spawnIndex];
@@ -5032,6 +5096,28 @@ const Lobby = {
 
 // Make Lobby available globally
 window.Lobby = Lobby;
+
+// Ensure loadAdventureMapFile exists (defensive - in case of load order or cache issues)
+if (!window.Lobby.loadAdventureMapFile) {
+  window.Lobby.loadAdventureMapFile = function(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const mapData = JSON.parse(e.target.result);
+        if (!mapData.w && !mapData.width) throw new Error('Invalid map format - missing dimensions');
+        window.currentChapterId = null;
+        window.Lobby.startAdventureWithMap(mapData);
+      } catch (err) {
+        console.error('Failed to load map file:', err);
+        alert('Failed to load map file: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+    const inp = document.getElementById('adventureMapInput');
+    if (inp) inp.value = '';
+  };
+}
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {

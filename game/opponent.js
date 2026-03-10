@@ -214,6 +214,7 @@
     const aiState = getAIState(aiPlayer);
     const currentTick = window.currentMatch?.tick || 0;
     
+    
     // Update game phase based on time and economy
     updateGamePhase(aiPlayer, aiState, currentTick);
     
@@ -240,7 +241,7 @@
         }
         
         // DEFENSE MODE: Build tower near agora if we can afford it and don't have one nearby
-        const towerCost = window.BuildingTypes?.tower?.cost || {wood: 20, stone: 20};
+        const towerCost = normCost(window.BuildingTypes?.tower?.cost);
         const towerCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'tower').length : 0;
         
         // Check if we have a tower near the agora (within 5 tiles)
@@ -340,26 +341,17 @@
       }
     }
     
-    if (actions.length > 0) {
-      const action = actions[0]; // Only take the highest priority action
-      
-      // Enforce building cooldown to prevent spam (but allow training/gathering)
-      if (action.type === 'build') {
-        if (!canBuild) {
-          // Skip building actions if we're on cooldown - AI needs to chill!
-          if (currentTick % 100 === 0) console.log(`   ⏳ Build on cooldown, skipping`);
-          return; // Don't build anything this cycle
-        }
-        
-        // Build cooldown already handles pacing - no additional skipping needed
+    for (const action of actions) {
+      if (action.type === 'build' && !canBuild) {
+        continue;
       }
       
       executeAIAction(aiPlayer, action);
       
-      // Track when we build something
       if (action.type === 'build') {
         aiState.lastBuildTick = currentTick;
       }
+      break;
     }
   }
   
@@ -467,18 +459,17 @@
     return aiState.strategy === 'aggressive' && aiState.economyScore > 8;
   }
   
-  // Get economic action (building or training)
+  function normCost(c) { return { wood: c?.wood || 0, stone: c?.stone || 0, food: c?.food || 0 }; }
+
   function getEconomicAction(aiPlayer, aiState, resources, buildingCount, unitCount) {
     const villagerCount = aiPlayer.units.filter(u => u.type === 'villager').length;
-    // Filter out null/undefined buildings and ensure type matches exactly
     const campCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'camp').length : 0;
     const farmCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'farm').length : 0;
     const villageCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'village').length : 0;
     
-    // Get costs from BuildingTypes (use actual costs)
-    const campCost = window.BuildingTypes?.camp?.cost || {wood: 5, stone: 0};
-    const villageCost = window.BuildingTypes?.village?.cost || {wood: 25, stone: 0};
-    const farmCost = window.BuildingTypes?.farm?.cost || {wood: 20, stone: 0};
+    const campCost = normCost(window.BuildingTypes?.camp?.cost);
+    const villageCost = normCost(window.BuildingTypes?.village?.cost);
+    const farmCost = normCost(window.BuildingTypes?.farm?.cost);
     
     // PHASE 1: Build one of each essential building first (camp -> village -> farm)
     // Priority 1: Build first camp for resource gathering
@@ -618,8 +609,7 @@
   function getMilitaryAction(aiPlayer, aiState, resources, buildingCount, unitCount) {
     const militaryCount = aiPlayer.units.filter(u => u.category === 'military').length;
     
-    // Get costs from BuildingTypes (use actual costs)
-    const towerCost = window.BuildingTypes?.tower?.cost || {wood: 20, stone: 20};
+    const towerCost = normCost(window.BuildingTypes?.tower?.cost);
     
     // Build towers if we have enough stone (after basic economy is set up)
     const towerCount = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b.type === 'tower').length : 0;
@@ -860,7 +850,11 @@
     return nearest;
   }
   
-  // Manage worker units (villagers)
+  // Manage worker units (villagers) - submits work commands for idle villagers
+  // The building system (updateBuildings → findIdleVillagersNearBuilding → assignVillagerToWork)
+  // handles the actual worker tracking (assignedWorkers/assignedBuilding). This function
+  // supplements it by submitting explicit work commands for villagers the auto-assign might miss
+  // (e.g. villagers far from buildings, or freshly spawned villagers).
   function manageWorkerUnits(aiPlayer, aiState, resources) {
     if (!window.currentMatch) return;
     
@@ -869,39 +863,57 @@
     villagers.forEach(villager => {
       if (!villager.pb || !villager.pb.state) return;
       
-      // Check if already assigned to a building
       if (villager.assignedBuilding) return;
       
-      // Find nearest camp and assign worker
-      const camps = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.type === 'camp') : [];
-      if (camps.length > 0) {
-        // Find camp with fewest workers
-        let bestCamp = camps[0];
-        let minWorkers = bestCamp.assignedWorkers ? bestCamp.assignedWorkers.length : 0;
+      const currentBehavior = window.behaviorManager?.getBehavior(villager);
+      const behaviorName = currentBehavior?.constructor?.name;
+      if (behaviorName && (behaviorName.includes('Work') || behaviorName.includes('Gather') ||
+                           behaviorName === 'WalkBehavior' || behaviorName === 'RunBehavior')) return;
+      
+      const buildings = aiPlayer.buildings ? aiPlayer.buildings.filter(b => b && b.position) : [];
+      if (buildings.length === 0) return;
+      
+      let bestBuilding = null;
+      let bestScore = -Infinity;
+      
+      for (const building of buildings) {
+        if (!building.position) continue;
         
-        camps.forEach(camp => {
-          const workerCount = camp.assignedWorkers ? camp.assignedWorkers.length : 0;
-          if (workerCount < minWorkers) {
-            minWorkers = workerCount;
-            bestCamp = camp;
-          }
-        });
+        // Only target buildings that actually benefit from workers:
+        // 1. Under construction (any type)
+        // 2. Completed production buildings (camps, farms)
+        const isUnderConstruction = building.buildProgress !== undefined && building.buildProgress < 1.0;
+        const isProductionBuilding = building.buildProgress >= 1.0 &&
+          (building.type === 'camp' || building.type === 'farm');
         
-        // Assign worker to camp (max 3 workers per camp)
-        if (minWorkers < 3) {
-          // Mark as assigned locally (prevents reassignment spam)
-          if (!bestCamp.assignedWorkers) bestCamp.assignedWorkers = [];
-          bestCamp.assignedWorkers.push(villager);
-          villager.assignedBuilding = bestCamp;
-          
-          // Submit work command through Match system
-          window.currentMatch.submitCommand({
-            type: 'work',
-            playerId: aiPlayer.id,
-            unitIds: [villager.id],
-            buildingId: bestCamp.id
-          });
+        if (!isUnderConstruction && !isProductionBuilding) continue;
+        
+        const maxWorkers = isUnderConstruction ? (building.maxWorkers || 3) :
+          (building.productionMaxWorkers || building.maxWorkers || 3);
+        const currentWorkers = building.assignedWorkers?.length || 0;
+        if (currentWorkers >= maxWorkers) continue;
+        
+        const dx = building.position.x - villager.pb.state.loc.x;
+        const dz = building.position.z - villager.pb.state.loc.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        
+        // Prioritize construction over production, closer over farther
+        const priorityBonus = isUnderConstruction ? 1000 : 0;
+        const score = priorityBonus - dist;
+        
+        if (score > bestScore) {
+          bestScore = score;
+          bestBuilding = building;
         }
+      }
+      
+      if (bestBuilding) {
+        window.currentMatch.submitCommand({
+          type: 'work',
+          playerId: aiPlayer.id,
+          unitIds: [villager.id],
+          buildingId: bestBuilding.id
+        });
       }
     });
   }
@@ -918,15 +930,12 @@
     }
   }
   
-  // Execute AI action by submitting commands (uses same system as human players)
   function executeAIAction(aiPlayer, action) {
-    // NEW ARCHITECTURE: Submit commands through Match system instead of direct manipulation
-    // This ensures AI actions go through the same validation and synchronization as human commands
-    
     if (!window.currentMatch) {
       console.warn('⚠️ Cannot execute AI action - no active match');
       return;
     }
+    
     
     switch (action.type) {
       case 'build':
@@ -942,7 +951,6 @@
         }
         
         if (buildPos) {
-          // Calculate smart rotation like human players do
           let rotation = 0;
           if (window.buildingSystem && window.buildingSystem.findBestRotation) {
             // Use the building system's smart rotation logic

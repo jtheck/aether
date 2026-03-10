@@ -1,3 +1,6 @@
+// Initialize detailed tooltips from saved preference (default true)
+window.DETAILED_TOOLTIPS = localStorage.getItem('detailedTooltips') !== 'false';
+
 // Menu configuration and state
 const BUTTON_SPACING = 60; // Distance between buttons in pixels
 const ARC_ANGLE = 120; // Total angle of the arc in degrees
@@ -182,6 +185,37 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
   tooltip.className = 'radial-menu-label';
   tooltip.textContent = displayLabel;
   button.appendChild(tooltip);
+
+  // Add detailed info panel for leaf items when detailed tooltips are enabled
+  if (window.DETAILED_TOOLTIPS && menuPath.length >= 2) {
+    const category = menuPath[0];
+    const itemType = menuPath[menuPath.length - 1];
+    let detailHTML = null;
+
+    if (category === 'units' && window.UnitTypes && window.UnitTypes[itemType]) {
+      const u = window.UnitTypes[itemType];
+      const abilitiesStr = u.abilities ? u.abilities.join(', ') : '';
+      detailHTML =
+        (u.description ? `<div style="color:#ccc;margin-bottom:6px">${u.description}</div>` : '') +
+        `<div style="color:#aaa">❤️ ${u.health} &nbsp; 🏃 ${u.speed}${abilitiesStr ? `<br>${abilitiesStr}` : ''}</div>`;
+    } else if (category === 'buildings' && window.BuildingTypes && window.BuildingTypes[itemType]) {
+      const b = window.BuildingTypes[itemType];
+      if (b.description) detailHTML = `<div style="color:#ccc">${b.description}</div>`;
+    } else if (category === 'research' && window.UpgradeTypes && window.UpgradeTypes[itemType]) {
+      const r = window.UpgradeTypes[itemType];
+      const timeSec = r.researchTime ? `⏱️ ${Math.round(r.researchTime / 1000)}s` : '';
+      detailHTML =
+        (r.description ? `<div style="color:#ccc;margin-bottom:6px">${r.description}</div>` : '') +
+        (timeSec ? `<div style="color:#aaa">${timeSec}</div>` : '');
+    }
+
+    if (detailHTML) {
+      const detail = document.createElement('div');
+      detail.className = 'radial-menu-detail';
+      detail.innerHTML = detailHTML;
+      button.appendChild(detail);
+    }
+  }
   
   // Add pointerdown handler for nested menus (works better with touch)
   button.addEventListener('pointerdown', (e) => {
@@ -712,62 +746,43 @@ function hasPrerequisitesUnit(unitType) {
   return true; // All prerequisites met
 }
 
-// Get icon for menu item
+// Atlas cell positions matching gfx.js
+const MENU_ATLAS_CELLS = {
+  trees: [0,0], rocks_plain: [1,0], rocks_moss: [2,0], rocks_snow: [3,0],
+  mushroom: [4,0], tortle: [5,0], birdy: [6,0], frog: [7,0],
+  windvane: [0,1], flag: [1,1], agora: [2,1], camp: [3,1],
+  village: [4,1], farm: [5,1], silo: [6,1], tower: [7,1],
+  mine: [0,2], tavern: [1,2], moonwell: [2,2], barracks: [3,2],
+  lab: [4,2], workshop: [5,2], factory: [6,2], church: [7,2],
+  well: [0,3], perch: [1,3], villager: [2,3], brigand: [3,3],
+  engineer: [4,3], monk: [5,3], wizard: [6,3], warlock: [7,3],
+  warrior: [0,4], archer: [1,4], priest: [2,4], shaman: [3,4],
+  myco: [4,4], wagon: [5,4], dirigible: [6,4], apc: [7,4],
+};
+
+const MENU_TYPE_ALIASES = {
+  mycorrhizae: 'myco', grove: 'trees',
+  buildings: 'agora', units: 'warrior', research: 'wizard',
+};
+
+function getSpriteIconHTML(key) {
+  const atlasKey = MENU_TYPE_ALIASES[key] || key;
+  const cell = MENU_ATLAS_CELLS[atlasKey];
+  if (!cell) return null;
+  const bgX = cell[0] * 100 / 7;
+  const bgY = cell[1] * 100 / 7;
+  return `<div class="sprite-icon" style="background-position:${bgX.toFixed(2)}% ${bgY.toFixed(2)}%"></div>`;
+}
+
+// Emoji fallbacks for items without atlas entries
+const EMOJI_ICONS = {
+  scribes: '📝', prospecting: '⛏️', patronage: '👑', stewardship: '🏛️',
+  drayage: '🚛', artillery: '💣', armor: '🛡️',
+  home: '🏠',
+};
+
 function getIconForItem(key) {
-  const icons = {
-    // Units - Arc 1 (Basic/Support)
-    monk: '🧘',
-    engineer: '🔧',
-    wizard: '🧙',
-    // Units - Arc 2 (Combat)
-    warrior: '⚔️',
-    archer: '🏹',
-    warlock: '🔮',
-    wagon: '🛒',
-    // Units - Arc 3 (Advanced)
-    apc: '🚐',
-    priest: '⛪',
-    mycorrhizae: '🍄',
-    dirigible: '🎈',
-    shaman: '🪶',
-
-    // Buildings - Arc 1 (Basic)
-    camp: '⛺',
-    village: '🏘️',
-    tower: '🗼',
-    silo: '🏛️',
-    farm: '🌾',
-    mine: '⛏️',
-    // Buildings - Arc 2 (Intermediate)
-    lab: '🔬',
-    tavern: '🍺',
-    moonwell: '🌙',
-    barracks: '🏰',
-    workshop: '🔨',
-    // Buildings - Arc 3 (Advanced)
-    factory: '🏭',
-    church: '⛪',
-    well: '💧',
-    perch: '🪺',
-    grove: '🌳',
-
-    // Research - Arc 1 (Economy/Infrastructure)
-    scribes: '📝',
-    prospecting: '⛏️',
-    patronage: '👑',
-    stewardship: '🏛️',
-    // Research - Arc 2 (Military)
-    drayage: '🚛',
-    artillery: '💣',
-    armor: '🛡️',
-
-    // Default icons for categories
-    units: '👥',
-    buildings: '🏗️',
-    research: '📚'
-  };
-
-  return icons[key] || '❓';
+  return getSpriteIconHTML(key) || EMOJI_ICONS[key] || '❓';
 }
 
 // Initialize the menu system
@@ -888,6 +903,8 @@ window.hideButtons = hideButtons;
 window.getIconForItem = getIconForItem;
 window.canAffordBuilding = canAffordBuilding;
 window.formatUnitCost = formatUnitCost;
+window.formatBuildingCost = formatBuildingCost;
+window.formatResearchCost = formatResearchCost;
 window.canAffordUnit = canAffordUnit;
 window.canAffordResearch = canAffordResearch;
 window.hasPrerequisitesBuilding = hasPrerequisitesBuilding;

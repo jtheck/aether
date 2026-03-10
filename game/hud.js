@@ -305,6 +305,7 @@
 
     // Initialize minimap system
     initMinimap();
+    initMenuHoverDetection();
 
     // Set up middle mouse button handling
     setupMiddleMouseControl();
@@ -803,12 +804,13 @@
     
     console.log(`🎯 showRadialMenu - AFTER init: items=${radialMenuItems.length}`);
     
-    // Re-enable main menu item containers
+    // Re-enable main menu item containers and refresh availability
     radialMenuItems.forEach(item => {
       if (item.container) {
         item.container.setEnabled(true);
       }
     });
+    update3DMenuStates();
     
     // Animate menu items based on original click position for spreading logic
     animateMenuItems(screenX, screenY);
@@ -981,6 +983,7 @@
     
     // Switch to new menu level
     currentMenuLevel = menuLevel;
+    hideTooltip();
     
     // Clear only submenu items, keep main menu items
     clearSubmenuItems();
@@ -1074,66 +1077,13 @@
     return names[menuLevel] || menuLevel;
   }
   
-  // Get icon for menu item (mirrors 2D menu icons)
+  // Get icon for menu item - only used for text fallback, sprites are primary
   function getIconForItem(key) {
-    const icons = {
-      // Buildings - Arc 1 (Basic)
-      camp: '⛺',
-      village: '🏘️',
-      tower: '🗼',
-      silo: '🏛️',
-      farm: '🚜',
-      mine: '⛏️',
-      // Buildings - Arc 2 (Intermediate)
-      lab: '🔬',
-      tavern: '🍺',
-      moonwell: '🌙',
-      barracks: '🏰',
-      workshop: '🔨',
-      // Buildings - Arc 3 (Advanced)
-      factory: '🏭',
-      church: '⛪',
-      well: '💧',
-      perch: '🪺',
-      grove: '🌳',
-      
-      // Units - Arc 1 (Basic/Support)
-      villager: '👤',
-      monk: '🧘',
-      engineer: '🔧',
-      wizard: '🧙',
-      // Units - Arc 2 (Combat)
-      warrior: '⚔️',
-      archer: '🏹',
-      warlock: '🔮',
-      wagon: '🛒',
-      // Units - Arc 3 (Advanced)
-      apc: '🚐',
-      priest: '⛪',
-      mycorrhizae: '🍄',
-      dirigible: '🎈',
-      shaman: '🪶',
-      
-      // Research - Arc 1 (Economy/Infrastructure)
-      scribes: '📝',
-      prospecting: '⛏️',
-      patronage: '👑',
-      stewardship: '🏛️',
-      // Research - Arc 2 (Military)
-      drayage: '🚛',
-      artillery: '💣',
-      armor: '🛡️',
-      
-      // Rally
-      home: '🏠',
-      
-      // Default icons for categories
-      units: '👥',
-      buildings: '🏗️',
-      research: '📚'
+    const fallbacks = {
+      scribes: '📝', prospecting: '⛏️', patronage: '👑', stewardship: '🏛️',
+      drayage: '🚛', artillery: '💣', armor: '🛡️', home: '🏠',
     };
-    
-    return icons[key] || '❓';
+    return fallbacks[key] || '❓';
   }
   
   // Get color for category (mirrors 2D menu colors)
@@ -1629,22 +1579,6 @@
       mesh.actionManager = new BABYLON.ActionManager(hud.scene);
       
       mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-        BABYLON.ActionManager.OnPointerOverTrigger,
-        () => {
-          hud.scene.hoverCursor = 'pointer';
-          container.scaling.scaleInPlace(1.1);
-        }
-      ));
-      
-      mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-        BABYLON.ActionManager.OnPointerOutTrigger,
-        () => {
-          hud.scene.hoverCursor = 'default';
-          container.scaling.scaleInPlace(1 / 1.1);
-        }
-      ));
-      
-      mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
         BABYLON.ActionManager.OnPickDownTrigger,
         (evt) => {
           if (evt && evt.sourceEvent) {
@@ -1685,137 +1619,42 @@
     setupMeshActions(hitbox);
     item.hitbox = hitbox;
     
-    // === STEP 4: Determine model path (synchronous) ===
+    // === STEP 4: Create atlas sprite for menu item (synchronous, no model loading) ===
     const itemKey = item.text.toLowerCase();
-    let modelPath = null;
-    let menuScale = 0.005;
-    
+    let spriteType = null;
+
     if (item.customModelPath) {
-      modelPath = item.customModelPath;
-      menuScale = 0.01;
+      spriteType = window.gfx.ATLAS_TYPE_ALIASES[itemKey] || itemKey;
     } else if (item.text === "Buildings" && !item.isSubItem) {
-      modelPath = "assets/models/agora.glb";
-      menuScale = 0.005;
-    } else if (item.menuCategory === 'units' && window.UnitTypes && window.UnitTypes[itemKey]) {
-      modelPath = window.UnitTypes[itemKey].model;
-      menuScale = 0.08;
-    } else if (item.menuCategory === 'buildings' && window.BuildingTypes && window.BuildingTypes[itemKey]) {
-      modelPath = window.BuildingTypes[itemKey].model;
-      menuScale = 0.005;
-    }
-    
-    // === STEP 5: Load 3D model ASYNC and parent to container ===
-    if (modelPath && window.gfx && window.gfx.getModel) {
-      const loadId = `${item.text}_${Date.now()}`;
-      pendingModelLoads.add(loadId);
-      
-      window.gfx.getModel(modelPath, hud.scene).then(model => {
-        if (!pendingModelLoads.has(loadId)) {
-          model.root.dispose();
-          return;
-        }
-        pendingModelLoads.delete(loadId);
-        
-        const mesh = model.root;
-        mesh.name = `menuItem_${item.text}`;
-        
-        // Auto-normalize size
-        const boundingInfo = mesh.getHierarchyBoundingVectors(true);
-        const size = boundingInfo.max.subtract(boundingInfo.min);
-        const maxDimension = Math.max(size.x, size.y, size.z);
-        
-        const isBuilding = item.menuCategory === 'buildings' || (item.text === "Buildings" && !item.isSubItem);
-        const isCustomCategory = item.customModelPath && !item.isSubItem;
-        const targetSize = isCustomCategory ? 0.35 : (item.menuCategory === 'units' ? 0.4 : 0.3);
-        const normalizedScale = maxDimension > 0 ? targetSize / maxDimension : menuScale;
-        
-        item.normalizedScale = normalizedScale;
-        mesh.scaling.setAll(normalizedScale);
-        
-        // Clear rotationQuaternion for Euler angles
-        mesh.rotationQuaternion = null;
-        
-        // Set rotation based on type
-        if (isBuilding) {
-          mesh.rotation.y = Math.PI;
-          mesh.rotation.x = -Math.PI / 4;
-        } else if (isCustomCategory) {
-          mesh.rotation.y = Math.PI;
-          mesh.rotation.x = 0;
-        } else {
-          mesh.rotation.y = 0;
-          mesh.rotation.x = 0;
-        }
-        
-        // Parent model to container (container already has correct position!)
-        mesh.parent = container;
-        mesh.position.set(0, 0, 0); // Model at container origin
-        mesh.renderingGroupId = 2;
-        mesh.isVisible = true;
-        mesh.setEnabled(true);
-        
-        // Make model meshes NOT pickable - we'll use a hitbox instead
-        mesh.isPickable = false;
-        
-        mesh.getChildMeshes().forEach(m => {
-          m.isVisible = true;
-          m.visibility = 1.0;
-          m.setEnabled(true);
-          m.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
-          m.renderingGroupId = 2;
-          m.isPickable = false;
-          // Clone material so we don't modify the shared materials used by game units
-          if (m.material) {
-            const clonedMat = m.material.clone(m.material.name + '_menu');
-
-            // Preserve original diffuse texture and color
-            if (m.material.diffuseTexture) {
-              clonedMat.diffuseTexture = m.material.diffuseTexture;
-            }
-            if (m.material.diffuseColor) {
-              clonedMat.diffuseColor = m.material.diffuseColor.clone();
-            }
-
-            // Preserve other material properties that affect appearance
-            if (m.material.specularColor) {
-              clonedMat.specularColor = m.material.specularColor.clone();
-            }
-            if (m.material.emissiveColor) {
-              clonedMat.emissiveColor = m.material.emissiveColor.clone();
-            } else {
-              // Add slight emissive boost for better visibility in menu
-              clonedMat.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-            }
-            if (m.material.ambientColor) {
-              clonedMat.ambientColor = m.material.ambientColor.clone();
-            }
-
-            // Preserve metallic/roughness if it's a PBR material
-            if (clonedMat instanceof BABYLON.PBRMaterial) {
-              if (m.material.metallic) {
-                clonedMat.metallic = m.material.metallic;
-              }
-              if (m.material.roughness) {
-                clonedMat.roughness = m.material.roughness;
-              }
-            }
-
-            m.material = clonedMat;
-          }
-        });
-        
-        item.mesh = mesh;
-        
-        // Hitbox was already created synchronously in STEP 3, no need to create again
-        
-      }).catch(err => {
-        console.warn(`Failed to load model for ${item.text}, using fallback cube`, err);
-        createFallbackMeshInContainer(item, container);
-      });
+      spriteType = 'buildings';
+    } else if (item.menuCategory === 'units') {
+      spriteType = itemKey;
+    } else if (item.menuCategory === 'buildings') {
+      spriteType = itemKey;
     } else {
-      // No model path - create fallback cube in container
+      spriteType = itemKey;
+    }
+
+    const sprite = window.gfx && window.gfx.createAtlasSprite
+      ? window.gfx.createAtlasSprite(spriteType, hud.scene, 0.4)
+      : null;
+
+    if (sprite) {
+      sprite.name = `menuItem_${item.text}`;
+      sprite.parent = container;
+      sprite.position.set(0, 0, 0);
+      sprite.renderingGroupId = 2;
+      sprite.isVisible = true;
+      sprite.setEnabled(true);
+      sprite.isPickable = false;
+      item.mesh = sprite;
+      item.normalizedScale = 1.0;
+    } else {
       createFallbackMeshInContainer(item, container);
     }
+
+    // Apply availability styling
+    applyMenuItemAvailability(item);
   }
   
   // Create fallback cube inside an existing container
@@ -1834,12 +1673,207 @@
     mesh.renderingGroupId = 1;
     mesh.isVisible = true;
     mesh.setEnabled(true);
-    mesh.isPickable = false; // Don't make pickable - hitbox already exists
+    mesh.isPickable = false;
     
-    // Hitbox was already created synchronously, just store the visual mesh
     item.mesh = mesh;
     item.normalizedScale = 1.0;
   }
+
+  // === 3D Menu Tooltip (in-scene) ===
+  let tooltipPlane = null;
+  let tooltipTexture = null;
+  let tooltipCurrentItem = null;
+  let hoveredItem = null;
+  let hoveredContainer = null;
+
+  function getTooltipPlane() {
+    if (tooltipPlane && !tooltipPlane.isDisposed()) return tooltipPlane;
+    tooltipPlane = BABYLON.MeshBuilder.CreatePlane('menuTooltip3D', { width: 0.7, height: 0.22 }, hud.scene);
+    const mat = new BABYLON.StandardMaterial('menuTooltipMat', hud.scene);
+    mat.disableLighting = true;
+    mat.backFaceCulling = false;
+    tooltipTexture = new BABYLON.DynamicTexture('menuTooltipTex', { width: 512, height: 160 }, hud.scene);
+    mat.diffuseTexture = tooltipTexture;
+    mat.opacityTexture = tooltipTexture;
+    mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+    tooltipPlane.material = mat;
+    tooltipPlane.parent = hud.camera;
+    tooltipPlane.renderingGroupId = 3;
+    tooltipPlane.isPickable = false;
+    tooltipPlane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
+    tooltipPlane.setEnabled(false);
+    return tooltipPlane;
+  }
+
+  function showTooltipForItem(item) {
+    if (tooltipCurrentItem === item) return;
+    tooltipCurrentItem = item;
+
+    const plane = getTooltipPlane();
+    const tex = tooltipTexture;
+    const ctx = tex.getContext();
+    tex.clear();
+
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
+    ctx.beginPath();
+    ctx.roundRect(0, 0, 512, 160, 14);
+    ctx.fill();
+
+    const itemKey = item.text.toLowerCase();
+    let label = item.text;
+    let costStr = '';
+    let statusStr = '';
+
+    if (item.menuCategory === 'buildings') {
+      if (window.formatBuildingCost) costStr = window.formatBuildingCost(itemKey);
+      if (item.availabilityState === 'locked') statusStr = 'Requires prerequisite';
+    } else if (item.menuCategory === 'units') {
+      if (window.formatUnitCost) costStr = window.formatUnitCost(itemKey);
+      if (item.availabilityState === 'locked') statusStr = 'Requires prerequisite';
+    } else if (item.menuCategory === 'research') {
+      if (window.formatResearchCost) costStr = window.formatResearchCost(itemKey);
+      if (item.availabilityState === 'locked') statusStr = 'Requires prerequisite';
+    }
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.font = 'bold 36px Arial';
+    ctx.fillStyle = 'white';
+    let yPos = costStr || statusStr ? 45 : 80;
+    ctx.fillText(label, 256, yPos);
+
+    if (costStr) {
+      ctx.font = '28px Arial';
+      ctx.fillStyle = '#ddd';
+      ctx.fillText(costStr, 256, 95);
+    }
+
+    if (statusStr) {
+      ctx.font = '24px Arial';
+      ctx.fillStyle = item.availabilityState === 'locked' ? '#999' : '#f88';
+      ctx.fillText(statusStr, 256, costStr ? 135 : 115);
+    }
+
+    tex.update();
+
+    // Position above the hovered item's container in camera-local space
+    if (item.container && !item.container.isDisposed()) {
+      const itemWorldPos = item.container.absolutePosition;
+      const cameraMatrix = BABYLON.Matrix.Invert(hud.camera.getWorldMatrix());
+      const localPos = BABYLON.Vector3.TransformCoordinates(itemWorldPos, cameraMatrix);
+      plane.position.set(localPos.x, localPos.y + 0.32, localPos.z);
+    }
+
+    plane.setEnabled(true);
+  }
+
+  function hideTooltip() {
+    if (tooltipPlane && !tooltipPlane.isDisposed()) tooltipPlane.setEnabled(false);
+    tooltipCurrentItem = null;
+    if (hoveredContainer) {
+      hoveredContainer.scaling.setAll(1.0);
+      hoveredContainer = null;
+    }
+    hoveredItem = null;
+    if (hud.scene) hud.scene.hoverCursor = 'default';
+  }
+
+  // Find which menu item owns a given mesh (hitbox lookup)
+  function findMenuItemByMesh(mesh) {
+    if (!mesh) return null;
+    for (const item of radialMenuItems) {
+      if (item.hitbox === mesh) return item;
+    }
+    return null;
+  }
+
+  // Scene pointer observable for hover detection - only active when menu is visible
+  function initMenuHoverDetection() {
+    if (!hud.scene) return;
+    hud.scene.onPointerObservable.add((pointerInfo) => {
+      if (!radialMenuVisible) return;
+      if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERMOVE) return;
+
+      const pick = hud.scene.pick(
+        pointerInfo.event.offsetX,
+        pointerInfo.event.offsetY,
+        (m) => m.isPickable && m.name.startsWith('hitbox_')
+      );
+
+      const hitMesh = pick && pick.hit ? pick.pickedMesh : null;
+      const item = findMenuItemByMesh(hitMesh);
+
+      if (item && item !== hoveredItem) {
+        // Unhover previous
+        if (hoveredContainer) hoveredContainer.scaling.setAll(1.0);
+
+        hoveredItem = item;
+        hoveredContainer = item.container;
+        if (hoveredContainer) hoveredContainer.scaling.setAll(1.15);
+        if (hud.scene) hud.scene.hoverCursor = 'pointer';
+        showTooltipForItem(item);
+      } else if (!item && hoveredItem) {
+        hideTooltip();
+      }
+    });
+  }
+
+  // Hide tooltip when menu closes
+  const origHideRadialMenu = hud.hideRadialMenu;
+  hud.hideRadialMenu = function() {
+    hideTooltip();
+    if (origHideRadialMenu) origHideRadialMenu.apply(this, arguments);
+  };
+
+  // Check availability and apply visual treatment to a 3D menu item
+  function applyMenuItemAvailability(item) {
+    if (!item.mesh || !item.menuCategory) return;
+    const itemKey = item.text.toLowerCase();
+    
+    let hasPrereqs = true;
+    let canAfford = true;
+
+    if (item.menuCategory === 'buildings') {
+      if (window.hasPrerequisitesBuilding) hasPrereqs = window.hasPrerequisitesBuilding(itemKey);
+      if (window.canAffordBuilding) canAfford = window.canAffordBuilding(itemKey);
+    } else if (item.menuCategory === 'units') {
+      if (window.hasPrerequisitesUnit) hasPrereqs = window.hasPrerequisitesUnit(itemKey);
+      if (window.canAffordUnit) canAfford = window.canAffordUnit(itemKey);
+    } else if (item.menuCategory === 'research') {
+      if (window.hasPrerequisitesResearch) hasPrereqs = window.hasPrerequisitesResearch(itemKey);
+      if (window.canAffordResearch) canAfford = window.canAffordResearch(itemKey);
+    } else {
+      return;
+    }
+
+    const mat = item.mesh.material;
+    if (!mat) return;
+
+    if (!hasPrereqs) {
+      // Greyed out - dark desaturated tint
+      mat.emissiveColor = new BABYLON.Color3(0.25, 0.25, 0.25);
+      if (mat.diffuseTexture) mat.diffuseTexture.level = 0.3;
+      item.availabilityState = 'locked';
+    } else if (!canAfford) {
+      // Red tint - can see what it is but clearly marked
+      mat.emissiveColor = new BABYLON.Color3(0.8, 0.25, 0.25);
+      if (mat.diffuseTexture) mat.diffuseTexture.level = 1.0;
+      item.availabilityState = 'expensive';
+    } else {
+      // Available - full brightness
+      mat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+      if (mat.diffuseTexture) mat.diffuseTexture.level = 1.0;
+      item.availabilityState = 'available';
+    }
+  }
+
+  // Refresh availability on all current 3D menu items
+  function update3DMenuStates() {
+    radialMenuItems.forEach(item => applyMenuItemAvailability(item));
+  }
+
+  hud.update3DMenuStates = update3DMenuStates;
   
   
   // Check if point is inside radial menu
@@ -1911,6 +1945,223 @@
       popElement.textContent = `👥 ${population}`;
     }
   }
+
+  // Atlas cell positions for selection panel sprites
+  const SEL_ATLAS_CELLS = {
+    trees: [0,0], rocks_plain: [1,0], rocks_moss: [2,0], rocks_snow: [3,0],
+    mushroom: [4,0], tortle: [5,0], birdy: [6,0], frog: [7,0],
+    windvane: [0,1], flag: [1,1], agora: [2,1], camp: [3,1],
+    village: [4,1], farm: [5,1], silo: [6,1], tower: [7,1],
+    mine: [0,2], tavern: [1,2], moonwell: [2,2], barracks: [3,2],
+    lab: [4,2], workshop: [5,2], factory: [6,2], church: [7,2],
+    well: [0,3], perch: [1,3], villager: [2,3], brigand: [3,3],
+    engineer: [4,3], monk: [5,3], wizard: [6,3], warlock: [7,3],
+    warrior: [0,4], archer: [1,4], priest: [2,4], shaman: [3,4],
+    myco: [4,4], wagon: [5,4], dirigible: [6,4], apc: [7,4],
+  };
+
+  const SEL_TYPE_ALIASES = {
+    mycorrhizae: 'myco', grove: 'trees',
+    architect: 'engineer', geomancer: 'wizard', druid: 'wizard', alchemist: 'wizard',
+    champion: 'brigand', ballister: 'brigand', paladin: 'warrior',
+    valkyrie: 'monk', elemental: 'wizard',
+    war_wagon: 'wagon', war_balloon: 'dirigible', tank: 'apc',
+    frog_scout: 'frog', bird_messenger: 'birdy', mushroom_mage: 'myco',
+    scout: 'villager', rider: 'brigand', infantry: 'warrior',
+    crossbowman: 'archer', knight: 'warrior', catapult: 'wagon',
+    ballista: 'archer', gnome: 'villager',
+  };
+
+  function getSelSpriteHTML(unitType) {
+    const key = SEL_TYPE_ALIASES[unitType] || unitType;
+    const cell = SEL_ATLAS_CELLS[key];
+    if (!cell) return null;
+    const bgX = cell[0] * 100 / 7;
+    const bgY = cell[1] * 100 / 7;
+    return `<div class="sprite-icon sprite-icon-sm" style="background-position:${bgX.toFixed(2)}% ${bgY.toFixed(2)}%"></div>`;
+  }
+
+  function getUnitIconForSelection(unitType) {
+    return getSelSpriteHTML(unitType) || '👤';
+  }
+
+  // Update 2D selection panel: one icon per unit type + count
+  function updateSelectionPanel() {
+    if (window.USE_3D_HUD) return; // Only in 2D HUD mode
+    const panel = document.getElementById('selection_panel');
+    if (!panel) return;
+    if (!window.player || typeof window.player.getSelectedUnits !== 'function') {
+      panel.innerHTML = '';
+      return;
+    }
+    const selected = window.player.getSelectedUnits();
+    if (selected.length === 0) {
+      panel.innerHTML = '';
+      return;
+    }
+    // Group by type only
+    const byType = new Map();
+    selected.forEach(unit => {
+      const t = unit.type || 'unknown';
+      if (!byType.has(t)) byType.set(t, []);
+      byType.get(t).push(unit);
+    });
+    const items = [];
+    for (const [type, units] of byType) {
+      const icon = getUnitIconForSelection(type);
+      const count = units.length;
+      const typeName = (window.UnitTypes && window.UnitTypes[type]) ? window.UnitTypes[type].name : type;
+      const label = (count === 1 && units[0].getDisplayName) ? units[0].getDisplayName() : typeName;
+      items.push(`<span class="selection_panel_item" title="${typeName}">${icon} ${count}<br><span class="selection_panel_label">${label}</span></span>`);
+    }
+    panel.innerHTML = items.join('');
+  }
+
+  hud.updateSelectionPanel = updateSelectionPanel;
+
+  // ===== 3D SELECTION PANEL (mirrors 2D selection panel, for 3D HUD mode) =====
+  let selectionPanel3DItems = [];
+
+  function _isDisposed(obj) {
+    if (!obj) return true;
+    return typeof obj.isDisposed === 'function' ? obj.isDisposed() : (obj.isDisposed === true);
+  }
+
+  // Convert screen pixels to camera-local position (same formula as anchors - they work)
+  function screenToCameraLocal(screenX, screenY) {
+    if (!hud.camera || !hud.canvas) return new BABYLON.Vector3(0, 0, menuConfig.distance);
+    const rect = hud.canvas.getBoundingClientRect();
+    const normalizedX = (screenX / rect.width) * 2 - 1;   // -1 to 1
+    const normalizedY = 1 - (screenY / rect.height) * 2; // 1 to -1 (flip Y)
+    const fov = hud.camera.fov;
+    const aspect = rect.width / rect.height;
+    const distance = menuConfig.distance;
+    return new BABYLON.Vector3(
+      normalizedX * distance * Math.tan(fov / 2) * aspect,
+      normalizedY * distance * Math.tan(fov / 2),
+      distance
+    );
+  }
+
+  function dispose3DSelectionPanel() {
+    selectionPanel3DItems.forEach(item => {
+      if (item.container && !_isDisposed(item.container)) item.container.dispose();
+      if (item.plane && !_isDisposed(item.plane)) item.plane.dispose();
+      if (item.texture && !_isDisposed(item.texture)) item.texture.dispose();
+    });
+    selectionPanel3DItems = [];
+  }
+
+  function update3DSelectionPanel() {
+    if (!window.USE_3D_HUD) return;
+    if (!window.player || typeof window.player.getSelectedUnits !== 'function') {
+      dispose3DSelectionPanel();
+      return;
+    }
+    const selected = window.player.getSelectedUnits();
+    if (selected.length === 0) {
+      dispose3DSelectionPanel();
+      return;
+    }
+    const byType = new Map();
+    selected.forEach(unit => {
+      const t = unit.type || 'unknown';
+      if (!byType.has(t)) byType.set(t, []);
+      byType.get(t).push(unit);
+    });
+    const entries = Array.from(byType.entries()).map(([type, units]) => [type, units.length, units]);
+    if (!hud.scene || !hud.camera) return;
+
+    const ITEM_WIDTH = 0.14;
+    const ITEM_HEIGHT = 0.14;
+    const ITEM_PX_WIDTH = 80;
+    const BASE_X = 85;
+    const BASE_Y = 35;
+
+    for (let i = 0; i < entries.length; i++) {
+      const [type, count, units] = entries[i];
+      const icon = getUnitIconForSelection(type);
+      const typeName = (window.UnitTypes && window.UnitTypes[type]) ? window.UnitTypes[type].name : type;
+      const label = (count === 1 && units[0].getDisplayName) ? units[0].getDisplayName() : typeName;
+
+      const screenX = BASE_X + i * ITEM_PX_WIDTH;
+      const screenY = BASE_Y;
+      const localPos = screenToCameraLocal(screenX, screenY);
+
+      let item = selectionPanel3DItems[i];
+      if (!item || item.type !== type || item.count !== count) {
+        if (item) {
+          if (item.container && !_isDisposed(item.container)) item.container.dispose();
+          if (item.plane && !_isDisposed(item.plane)) item.plane.dispose();
+          if (item.texture && !_isDisposed(item.texture)) item.texture.dispose();
+        }
+        // Each item gets its own container at its own position - avoids rotation, works with camera
+        const container = new BABYLON.TransformNode(`SelectionPanel3D_${i}`, hud.scene);
+        container.parent = hud.camera;
+        container.position.copyFrom(localPos);
+
+        const plane = BABYLON.MeshBuilder.CreatePlane(`SelectionPanel3D_item_${i}`, {
+          width: ITEM_WIDTH,
+          height: ITEM_HEIGHT
+        }, hud.scene);
+        const mat = new BABYLON.StandardMaterial(`SelectionPanel3D_mat_${i}`, hud.scene);
+        mat.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+        mat.emissiveColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+        mat.disableLighting = true;
+        mat.backFaceCulling = false;
+        mat.depthWrite = false;
+        const texture = new BABYLON.DynamicTexture(`SelectionPanel3D_tex_${i}`, 128, hud.scene);
+        mat.diffuseTexture = texture;
+        mat.opacityTexture = texture;
+        plane.material = mat;
+        plane.parent = container;
+        plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+        plane.isPickable = false;
+        plane.renderingGroupId = 2;
+        item = { container, plane, texture, type, count };
+        selectionPanel3DItems[i] = item;
+      }
+
+      if (item.container) item.container.position.copyFrom(localPos);
+
+      const ctx = item.texture.getContext();
+      item.texture.clear();
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(0, 0, 128, 128);
+
+      // Draw atlas sprite onto canvas if available
+      const atlasImg = window.gfx && window.gfx.getAtlasImage ? window.gfx.getAtlasImage() : null;
+      const selKey = SEL_TYPE_ALIASES[type] || type;
+      const selCell = SEL_ATLAS_CELLS[selKey];
+      if (atlasImg && selCell) {
+        const cellPx = atlasImg.width / 8;
+        const sx = selCell[0] * cellPx, sy = selCell[1] * cellPx;
+        ctx.drawImage(atlasImg, sx, sy, cellPx, cellPx, 14, 2, 56, 56);
+      }
+
+      ctx.fillStyle = "white";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "bold 22px Arial";
+      ctx.fillText(`x${count}`, 64, 80);
+      ctx.font = "14px Arial";
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      ctx.fillText(label, 64, 105);
+      item.texture.update();
+      item.plane.setEnabled(true);
+    }
+
+    for (let i = entries.length; i < selectionPanel3DItems.length; i++) {
+      const it = selectionPanel3DItems[i];
+      if (it.container && !_isDisposed(it.container)) it.container.dispose();
+      if (it.plane && !_isDisposed(it.plane)) it.plane.dispose();
+      if (it.texture && !_isDisposed(it.texture)) it.texture.dispose();
+    }
+    selectionPanel3DItems.length = entries.length;
+  }
+
+  hud.update3DSelectionPanel = update3DSelectionPanel;
+  hud.dispose3DSelectionPanel = dispose3DSelectionPanel;
 
   // Store active groups for position-only updates
   let activeGroups = new Map();
@@ -2245,121 +2496,55 @@
       // Update the linked group reference
       indicator.linkedGroup = group;
     } else {
-      // Create new indicator using actual unit model
-      const unitType = window.UnitTypes[group.type];
-      if (!unitType || !window.gfx) return;
-      
-      // Load the unit model asynchronously
-      window.gfx.getModel(unitType.model, hud.scene).then(model => {
-        indicator = model.root;
-        indicator.name = `edgeIndicator_${index}`;
-        indicator.scaling = new BABYLON.Vector3(0.05, 0.05, 0.05); // 1/3 size for edge indicators
-        indicator.isPickable = true;
-        indicator.linkedGroup = group;
-        
-        // Parent to camera so they move automatically!
-        indicator.parent = hud.camera;
-        
-        // Don't use billboard - we'll manually rotate them to face screen center
-        
-        // Make it glow/stand out and set up click handlers
-        // CRITICAL: Clone materials so we don't modify the shared materials used by game units
-        indicator.getChildMeshes().forEach(mesh => {
-          if (mesh.material) {
-            // Clone the material to avoid modifying the original shared material
-            const clonedMat = mesh.material.clone(mesh.material.name + '_minimap');
-            mesh.material = clonedMat;
-            clonedMat.emissiveColor = new BABYLON.Color3(0.3, 0.3, 0.3);
-          }
-          // Ensure child meshes are pickable
-          mesh.isPickable = true;
-          
-          // Set up action manager on each child (root has no geometry)
-          mesh.actionManager = new BABYLON.ActionManager(hud.scene);
-          mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-            BABYLON.ActionManager.OnPickDownTrigger,
-            (evt) => {
-              const linkedGroup = indicator.linkedGroup;
-              if (!linkedGroup || !window.player) return;
-              
-              // Select all units in this group
-              window.player.clearSelection();
-              linkedGroup.units.forEach(unit => {
-                window.player.selectUnit(unit);
-              });
-              
-              evt.skipNextObservers = true;
-            }
-          ));
-          
-          // Add hover cursor
-          mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-            BABYLON.ActionManager.OnPointerOverTrigger,
-            () => {
-              hud.scene.hoverCursor = 'pointer';
-            }
-          ));
-          
-          mesh.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
-            BABYLON.ActionManager.OnPointerOutTrigger,
-            () => {
-              hud.scene.hoverCursor = 'default';
-            }
-          ));
-        });
-        
-        // Add selection ring (like units have)
-        const ring = BABYLON.MeshBuilder.CreateTorus(`selectionRing_${index}`, {
-          diameter: 0.3,
-          thickness: 0.02,
-          tessellation: 16
-        }, hud.scene);
-        const ringMat = new BABYLON.StandardMaterial(`ringMat_${index}`, hud.scene);
-        ringMat.emissiveColor = new BABYLON.Color3(0, 1, 0);
-        ringMat.disableLighting = true;
-        ring.material = ringMat;
-        ring.rotation.x = Math.PI / 2; // Lay flat
-        ring.position.y = -0.05; // Just below unit
-        ring.parent = indicator;
-        ring.setEnabled(false); // Hidden by default
-        ring.isPickable = false; // Don't block clicks to parent
-        indicator.selectionRing = ring;
-        
-        minimapIndicators[index] = indicator;
-      }).catch(err => {
-        console.warn(`Failed to load edge indicator model for ${group.type}:`, err);
-      });
-      return; // Skip rest of update until model loads
+      // Create new indicator using atlas sprite (lightweight billboard)
+      if (!window.gfx) return;
+
+      const spriteType = group.type;
+      indicator = window.gfx.createAtlasSprite(spriteType, hud.scene, 0.25, { billboard: false });
+      if (!indicator) return;
+
+      indicator.name = `edgeIndicator_${index}`;
+      indicator.isPickable = true;
+      indicator.linkedGroup = group;
+      indicator.parent = hud.camera;
+      indicator.renderingGroupId = 2;
+
+      indicator.actionManager = new BABYLON.ActionManager(hud.scene);
+      indicator.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+        BABYLON.ActionManager.OnPickDownTrigger,
+        (evt) => {
+          const linkedGroup = indicator.linkedGroup;
+          if (!linkedGroup || !window.player) return;
+          window.player.clearSelection();
+          linkedGroup.units.forEach(unit => {
+            window.player.selectUnit(unit);
+          });
+          evt.skipNextObservers = true;
+        }
+      ));
+      indicator.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+        BABYLON.ActionManager.OnPointerOverTrigger,
+        () => { hud.scene.hoverCursor = 'pointer'; }
+      ));
+      indicator.actionManager.registerAction(new BABYLON.ExecuteCodeAction(
+        BABYLON.ActionManager.OnPointerOutTrigger,
+        () => { hud.scene.hoverCursor = 'default'; }
+      ));
+
+      minimapIndicators[index] = indicator;
     }
     
-    // Update visual based on selection status
+    // Update visual based on selection status (sprite has material directly, no child meshes)
     if (hasSelection) {
-      // Has selected units: bright yellow glow + show ring
-      indicator.getChildMeshes().forEach(mesh => {
-        if (mesh.material && mesh.material.emissiveColor) {
-          mesh.material.emissiveColor = new BABYLON.Color3(1, 0.8, 0);
-        }
-      });
-      indicator.scaling = new BABYLON.Vector3(0.07, 0.07, 0.07); // Slightly bigger when selected (was 0.05)
-      
-      // Show yellow selection ring
-      if (indicator.selectionRing) {
-        indicator.selectionRing.setEnabled(true);
-        indicator.selectionRing.material.emissiveColor = new BABYLON.Color3(1, 1, 0);
+      if (indicator.material) {
+        indicator.material.emissiveColor = new BABYLON.Color3(1, 0.9, 0.5);
       }
+      indicator.scaling.setAll(1.25);
     } else {
-      // Normal green glow + hide ring
-      indicator.getChildMeshes().forEach(mesh => {
-        if (mesh.material && mesh.material.emissiveColor) {
-          mesh.material.emissiveColor = new BABYLON.Color3(0, 0.8, 0);
-        }
-      });
-      indicator.scaling = new BABYLON.Vector3(0.05, 0.05, 0.05); // 1/3 size
-      
-      // Hide selection ring
-      if (indicator.selectionRing) {
-        indicator.selectionRing.setEnabled(false);
+      if (indicator.material) {
+        indicator.material.emissiveColor = new BABYLON.Color3(1, 1, 1);
       }
+      indicator.scaling.setAll(1.0);
     }
     
     // Smoothly interpolate to new position (lerp for smooth movement)
@@ -2370,41 +2555,12 @@
       indicator.targetPosition.copyFrom(localPos);
     }
     
-    // Simple rotation based on which edge they're on
-    // Reset rotation first
-    indicator.rotation = BABYLON.Vector3.Zero();
-    
-    // Face toward camera origin (they're parented to camera, so face "backward" toward 0,0,0)
-    indicator.rotation.y = Math.atan2(localPos.x, localPos.z) + Math.PI; // +PI to face inward
-    
-    // Tilt based on position along edge from corner
-    // Interpolate rotation between corner angle and edge angle
-    // (spreadFactor is continuous 0-1 value from group.edgeSpread)
-    
-    // Determine corner base angle (45° diagonals)
-    let cornerAngle;
-    if (cornerX === 'r' && cornerY === 't') cornerAngle = -Math.PI * 3/4; // TR
-    else if (cornerX === 'l' && cornerY === 't') cornerAngle = Math.PI * 3/4; // TL
-    else if (cornerX === 'r' && cornerY === 'b') cornerAngle = -Math.PI / 4; // BR
-    else cornerAngle = Math.PI / 4; // BL
-    
-    // Determine target edge angle (90° cardinals)
-    let edgeAngle;
-    if (spreadDir === 'h') {
-      // Spreading horizontally - target top or bottom edge
-      edgeAngle = cornerY === 't' ? Math.PI : 0; // Top or bottom
-    } else {
-      // Spreading vertically - target left or right edge
-      edgeAngle = cornerX === 'r' ? -Math.PI / 2 : Math.PI / 2; // Right or left
-    }
-    
-    // Interpolate between corner and edge angle
-    // Normalize the angle difference to take shortest path (fixes gimbal lock at top-right)
-    let angleDiff = edgeAngle - cornerAngle;
-    // Wrap to -π to π range
-    while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
-    while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
-    indicator.rotation.z = cornerAngle + angleDiff * spreadFactor;
+    // Manually face the sprite toward the camera (at local origin since parented to camera)
+    // Billboard mode can't be used here - it conflicts with camera parenting
+    indicator.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
+    indicator.rotation.y = Math.atan2(localPos.x, localPos.z) + Math.PI;
+    indicator.rotation.x = 0;
+    indicator.rotation.z = 0;
     
     // Add/update count badge if group has multiple units
     if (unitCount > 1) {
@@ -2423,8 +2579,8 @@
         plane.material = badgeMat;
         
         plane.parent = indicator;
-        plane.position.y = 0.3; // Above unit model
-        plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL; // Always face camera
+        plane.position.y = 0.18; // Above sprite
+        plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
         
         indicator.countBadge = plane;
         indicator.badgeTexture = texture;
@@ -2445,7 +2601,7 @@
       indicator.countBadge.setEnabled(false);
     }
     
-    // Click handlers are set up on child meshes during creation (root has no geometry)
+    // Click handlers are set up on the sprite plane during creation
   }
   
   // Clear all minimap indicators
@@ -2837,6 +2993,11 @@
       window.FLYING_LOD_DISTANCES.HIDDEN = Math.round(1200 * multiplier);
     }
     
+    // Update unit billboard swap distance
+    if (window.updateUnitBillboardDistance) {
+      window.updateUnitBillboardDistance(multiplier);
+    }
+    
     // Update graphics LOD distances if they exist
     if (window.gfx && window.gfx.updateLODDistances) {
       window.gfx.updateLODDistances(multiplier);
@@ -2962,7 +3123,7 @@
       // Update HUD constants
       window.USE_3D_HUD = false;
 
-      // Hide 3D anchor indicators and show 2D anchors when switching to 2D mode
+      // Hide 3D anchor indicators and dispose 3D selection panel when switching to 2D mode
       console.log('🔄 Switching to 2D mode - hiding 3D anchors, showing 2D anchors');
       if (hud.anchorIndicators) {
         Object.values(hud.anchorIndicators).forEach(indicator => {
@@ -2972,6 +3133,7 @@
       } else {
         console.log('ℹ️ No 3D anchor indicators to hide');
       }
+      if (hud.dispose3DSelectionPanel) hud.dispose3DSelectionPanel();
 
       // Show 2D anchors
       ['anchor_n', 'anchor_s', 'anchor_e', 'anchor_w'].forEach(id => {
@@ -3012,11 +3174,13 @@
         console.log('❌ createAnchorIndicators function not found');
       }
 
-      // Hide 2D anchors
+      // Hide 2D anchors and clear selection panel (3D mode has its own indicators)
       ['anchor_n', 'anchor_s', 'anchor_e', 'anchor_w'].forEach(id => {
         const element = document.getElementById(id);
         if (element) element.style.display = 'none';
       });
+      const panel = document.getElementById('selection_panel');
+      if (panel) panel.innerHTML = '';
 
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {
@@ -3052,11 +3216,13 @@
         console.log('❌ createAnchorIndicators function not found during init');
       }
 
-      // Hide 2D anchors
+      // Hide 2D anchors and clear selection panel
       ['anchor_n', 'anchor_s', 'anchor_e', 'anchor_w'].forEach(id => {
         const element = document.getElementById(id);
         if (element) element.style.display = 'none';
       });
+      const panel = document.getElementById('selection_panel');
+      if (panel) panel.innerHTML = '';
 
       // Reinitialize lasso for new mode
       if (window.lassoSelection && window.lassoSelection.reinit) {
@@ -3104,26 +3270,32 @@
   };
   
   // Initialize shadows mode from saved preference or default
-  // NOTE: This is now handled by initShadowSlider() when settings menu opens
-  // Keeping this function for backwards compatibility but it just applies saved settings
+  // NOTE: This must NOT depend on opening the settings menu.
+  // It is safe to call before the slider DOM exists.
   hud.initializeShadowsMode = function() {
-    // Shadow mode is now initialized via the slider in settings menu
-    // Just ensure SHADOW_MODE is set from localStorage if available
+    // Determine shadow mode from localStorage (0=Off, 1=Low, 2=Med, 3=Full)
+    // and apply it immediately so gameplay visuals don't depend on settings UI.
+    let initialMode = 2;
     try {
       const savedMode = localStorage.getItem('shadowMode');
       if (savedMode !== null) {
-        window.SHADOW_MODE = parseInt(savedMode);
+        initialMode = parseInt(savedMode);
       } else {
         // Check legacy setting
         const legacyShadows = localStorage.getItem('shadowsEnabled');
-        window.SHADOW_MODE = (legacyShadows === 'false') ? 0 : 2;
+        initialMode = (legacyShadows === 'false') ? 0 : 2;
       }
-      window.SHADOWS_ENABLED = (window.SHADOW_MODE === 3);
     } catch (e) {
-      window.SHADOW_MODE = 2;
-      window.SHADOWS_ENABLED = false;
+      initialMode = 2;
     }
-    return; // Early return - full initialization happens in initShadowSlider
+
+    // Apply immediately (this also sets window.SHADOW_MODE / window.SHADOWS_ENABLED)
+    if (hud.updateShadowMode) {
+      hud.updateShadowMode(initialMode);
+    } else {
+      window.SHADOW_MODE = initialMode;
+      window.SHADOWS_ENABLED = (initialMode === 3);
+    }
     
     // Legacy code below (kept for reference)
     const savedShadows = localStorage.getItem('shadowsEnabled');
@@ -3301,7 +3473,48 @@
       window.aud.setSpatialMode(isEnabled);
     }
   };
-  
+
+  hud.toggleTooltips = function() {
+    const switchElement = document.getElementById('tooltip_switch');
+    const handle = document.getElementById('tooltip_handle');
+    const isOn = switchElement.dataset.on === 'true';
+
+    if (isOn) {
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+      window.DETAILED_TOOLTIPS = false;
+      localStorage.setItem('detailedTooltips', 'false');
+    } else {
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+      window.DETAILED_TOOLTIPS = true;
+      localStorage.setItem('detailedTooltips', 'true');
+    }
+  };
+
+  hud.initializeTooltips = function() {
+    const saved = localStorage.getItem('detailedTooltips');
+    const isEnabled = saved !== 'false'; // default true
+    const switchElement = document.getElementById('tooltip_switch');
+    const handle = document.getElementById('tooltip_handle');
+
+    if (!switchElement || !handle) return;
+
+    if (isEnabled) {
+      switchElement.style.background = '#4CAF50';
+      handle.style.left = '27px';
+      switchElement.dataset.on = 'true';
+    } else {
+      switchElement.style.background = '#ccc';
+      handle.style.left = '2px';
+      switchElement.dataset.on = 'false';
+    }
+
+    window.DETAILED_TOOLTIPS = isEnabled;
+  };
+
   // ===== BUILDING SYSTEM =====
   
   // Building system state

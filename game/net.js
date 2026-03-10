@@ -455,8 +455,10 @@
           currentTickRate = net.TICK_RATE;
         }
         
-        // Process the tick
+        // Process the tick (commands + match logic)
         processTick();
+        // Run exactly 3 physics steps for this tick (deterministic across all clients)
+        runDeterministicPhysicsStepsForOneNetTick();
         
         // Confirm we're ready for future ticks (current + input delay)
         sendTickConfirmation(tick + inputDelay);
@@ -1050,37 +1052,23 @@
           break;
           
         case 'resource_state_sync':
-          // CRITICAL: Apply authoritative resource states at sync checkpoint
-          // This ensures both clients have identical resource states for checksum calculation
-          if (actualMessage.resourceStates && window.gameBuildings) {
-            Object.keys(actualMessage.resourceStates).forEach(buildingId => {
-              const building = window.gameBuildings.find(b => b.id === buildingId);
-              if (building && building.availableResources) {
-                const remoteResources = actualMessage.resourceStates[buildingId];
-                
-                remoteResources.forEach(remoteResource => {
-                  const localResource = building.availableResources.find(r => 
-                    r.gridX === remoteResource.gridX && r.gridZ === remoteResource.gridZ
-                  );
-                  
-                  if (localResource) {
-                    const wasNotDepleted = !localResource.depleted;
-                    
-                    // Apply authoritative state
-                    localResource.remaining = remoteResource.remaining;
-                    localResource.depleted = remoteResource.depleted;
-                    localResource.depletionTick = remoteResource.depletionTick;
-                    
-                    // CRITICAL: If resource just became depleted, remove the visual model
-                    // This ensures both clients see trees sink when depleted
-                    if (wasNotDepleted && remoteResource.depleted && window.removeResourceModel) {
-                      window.removeResourceModel(remoteResource.gridX, remoteResource.gridZ);
-                      console.log(`🪓 Tree sunk at (${remoteResource.gridX}, ${remoteResource.gridZ}) from authoritative sync`);
-                    }
-                  }
-                });
-              }
-            });
+          if (window.currentMatch) {
+            const match = window.currentMatch;
+            if (actualMessage.resourceEntries) {
+              actualMessage.resourceEntries.forEach(entry => {
+                const key = `${entry.gridX},${entry.gridZ}`;
+                match.resourceRemaining.set(key, entry.remaining);
+              });
+            }
+            if (actualMessage.scheduledDepletions) {
+              if (!match._scheduledDepletions) match._scheduledDepletions = new Map();
+              actualMessage.scheduledDepletions.forEach(info => {
+                const key = `${info.gridX},${info.gridZ}`;
+                if (!match._scheduledDepletions.has(key)) {
+                  match._scheduledDepletions.set(key, info);
+                }
+              });
+            }
           }
           break;
           
@@ -1246,18 +1234,19 @@
             if (ticksToCatchUp > 0 && ticksToCatchUp < 1000) { // Sanity check: don't fast-forward more than 20 seconds
               console.log(`⏩ Fast-forwarding ${ticksToCatchUp} ticks (${(ticksToCatchUp / 20).toFixed(1)}s) to catch up...`);
               
-              // Fast-forward by processing ticks without waiting
-              // Process all ticks at once to catch up completely
+              // Pause the regular rAF physics loop during fast-forward to avoid double-sim
+              window.fastForwardingTicks = true;
+              
+              // Fast-forward by processing ticks AND running physics (like selfSoftDropped path)
+              // Without physics, behaviors get set but units never actually move during catch-up
               for (let i = 0; i < ticksToCatchUp; i++) {
                 tick++;
                 if (window.currentMatch) {
                   window.currentMatch.tick++;
                   window.currentMatch.gameTime = window.currentMatch.tick / (net.TICK_RATE || 20);
                   
-                  // Process tick normally (commands, AI, etc.)
                   window.currentMatch.executeCommandsForTick(window.currentMatch.tick);
                   
-                  // Update AI every 20 ticks
                   if (window.currentMatch.tick % 20 === 0) {
                     window.currentMatch.updateAIPlayers();
                     if (window.currentMatch.isHost()) {
@@ -1268,7 +1257,10 @@
                     window.currentMatch.checkEliminationVictory();
                   }
                 }
+                runDeterministicPhysicsStepsForOneNetTick();
               }
+              
+              window.fastForwardingTicks = false;
               
               // Mark that we're done catching up
               if (window.currentMatch) {
@@ -1601,33 +1593,13 @@
             
             // Check if command is for a past tick (arrived too late)
             if (cmd.tick < window.currentMatch.tick) {
-              const ticksLate = window.currentMatch.tick - cmd.tick;
-              // Fast-forward physics to catch up (normal network latency, not an error)
-              
-              // Execute the command immediately since we're already past its scheduled tick
+              // Execute the command immediately since we're already past its scheduled tick.
+              // Don't fast-forward physics: running extra steps for individual units
+              // desynchronizes them from the simulation, and running updateUnits for ALL
+              // units causes unrelated behaviors to complete early (triggering wandering).
+              // Position sync corrections will handle any remaining drift.
               try {
                 window.currentMatch.executeCommand(cmd);
-                
-                // Fast-forward physics for the units to catch up
-                // Each tick is ~20ms at 50Hz, we need to simulate the missed ticks
-                if (cmd.unitIds && window.gameUnits) {
-                  const affectedUnits = window.gameUnits.filter(u => cmd.unitIds.includes(u.id));
-                  
-                  // Run extra physics steps to catch up
-                  affectedUnits.forEach(unit => {
-                    if (unit.pb && unit.pb.integrate && window.behaviorManager) {
-                      const behavior = window.behaviorManager.getBehavior(unit);
-                      if (behavior) {
-                        // Step behavior and physics for each missed tick
-                        const physicsTimestep = 1 / 60; // 60Hz physics
-                        for (let i = 0; i < ticksLate; i++) {
-                          behavior.step();
-                          unit.pb.integrate(physicsTimestep, false, false);
-                        }
-                      }
-                    }
-                  });
-                }
               } catch (error) {
                 console.error(`❌ Error executing late command:`, error);
               }

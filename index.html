@@ -145,11 +145,17 @@
         <span style="font-size: 0.8em; color: #888; margin-left: 10px;" id="spatial_mode_label">Off</span>
       </div>
       <div class="settings_option">
-        <span>Lasso</span>
+        <span>Selection</span>
         <div id="selection_switch" class="binary_switch" onclick="window.hud.toggleSelectionMode()" data-on="false">
           <div id="selection_handle" class="switch_handle"></div>
         </div>
         <span style="font-size: 0.8em; color: #888; margin-left: 10px;" id="selection_mode_label">Box</span>
+      </div>
+      <div class="settings_option">
+        <span>Tooltips</span>
+        <div id="tooltip_switch" class="binary_switch" onclick="window.hud.toggleTooltips()" data-on="true" style="background: #4CAF50;">
+          <div id="tooltip_handle" class="switch_handle" style="left: 27px;"></div>
+        </div>
       </div>
 
 
@@ -262,6 +268,10 @@
       <div class="menu_title">Adventure</div>
       <!-- Chapter Selection View (default) -->
       <div id="adventure_chapter_view" style="padding: 10px; text-align: left;">
+        <!-- Available lobbies at top -->
+        <div id="adventure_lobby_list" style="margin-bottom: 15px; max-height: 150px; overflow-y: auto;">
+          <div style="opacity: 0.5; font-size: 12px; text-align: center;">🔍 Searching for co-op lobbies...</div>
+        </div>
         <label style="display: block; margin-bottom: 8px;">Select Chapter:</label>
         <select id="adventure_chapter_select" style="width: 100%; padding: 8px; font-size: 14px; margin-bottom: 15px;">
           <option value="chapter1">Chapter 1 - The Beginning</option>
@@ -272,10 +282,8 @@
         </div>
         <div class="lobby_b" title="Play Solo" onclick="window.Lobby.startAdventureChapter()" style="background: rgba(80, 120, 80, 0.4);">🎮 Play Solo</div>
         <div class="lobby_b" title="Host Co-op Lobby" onclick="window.Lobby.hostAdventureLobby()" style="margin-top: 8px; background: rgba(80, 80, 140, 0.4);">👥 Host Co-op Lobby</div>
-        <!-- Available lobbies shown inline -->
-        <div id="adventure_lobby_list" style="margin-top: 15px; max-height: 150px; overflow-y: auto;">
-          <div style="opacity: 0.5; font-size: 12px; text-align: center;">🔍 Searching for co-op lobbies...</div>
-        </div>
+        <input type="file" id="adventureMapInput" accept=".garden,.json" style="display:none" onchange="window.Lobby.loadAdventureMapFile(this.files[0])">
+        <div class="lobby_b" title="Load Map File" onclick="document.getElementById('adventureMapInput').click()" style="margin-top: 8px; background: rgba(120, 100, 60, 0.4);">📂 Load Map</div>
       </div>
       <!-- Hosting View (hidden by default) -->
       <div id="adventure_hosting_view" style="display: none; padding: 10px;">
@@ -307,6 +315,8 @@
 
 
   <div id="2d_hud">
+    <div id="selection_panel"></div>
+    
     <div id="lasso-selection-box"></div>
     <div id="2d_b_die" class="2d_b"></div>
     <div id="anchor_n" class="menu_anchor"></div>
@@ -349,6 +359,7 @@
   <script src="game/lasso.js"></script>
   <script src="game/menu.js"></script>
   <script src="game/net.js"></script>
+  <script src="game/scenes.js"></script>
   <script src="game/match.js"></script>
   <script src="game/lobby.js"></script>
   <script src="game/opponent.js"></script>

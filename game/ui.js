@@ -1078,6 +1078,11 @@ function getRandomColor() {
       if (menuId === 'settings_menu' && window.hud && window.hud.initializeSpatialAudio) {
         window.hud.initializeSpatialAudio();
       }
+
+      // Initialize Tooltips toggle when settings menu is shown
+      if (menuId === 'settings_menu' && window.hud && window.hud.initializeTooltips) {
+        window.hud.initializeTooltips();
+      }
     };
     
     // NEW: Start multiplayer game for specific type (called from lobby)
@@ -1396,6 +1401,8 @@ function getRandomColor() {
     } else if (key === 'b') {
       // console.log('🏗️ B key pressed - opening 3D main menu');
       // Handle B key logic here...
+    } else if (key === 'g' && state) {
+      ui.togglePathDebug();
     } else if (key === 'f9') {
       // Toggle Babylon Inspector
       if (state == true && gfx && gfx.scene) {
@@ -1509,6 +1516,122 @@ function getRandomColor() {
     // Update previous key states for change detection
     ui.prevKeyStates[key] = state;
   }; // end keyInput
+
+  // Pathfinding debug overlay
+  ui._pathDebugActive = false;
+  ui._pathDebugCanvas = null;
+  ui._pathDebugRAF = null;
+
+  ui.togglePathDebug = function() {
+    ui._pathDebugActive = !ui._pathDebugActive;
+    if (ui._pathDebugActive) {
+      if (!ui._pathDebugCanvas) {
+        const c = document.createElement('canvas');
+        c.id = 'pathDebugOverlay';
+        c.style.cssText = 'position:fixed;bottom:8px;left:8px;z-index:9999;background:rgba(0,0,0,0.75);border:1px solid #555;pointer-events:none;image-rendering:pixelated;';
+        document.body.appendChild(c);
+        ui._pathDebugCanvas = c;
+      }
+      ui._pathDebugCanvas.style.display = 'block';
+      console.log('[PathDebug] ON  —  press G to toggle');
+      const field = window.liveField;
+      if (field) console.log(`[PathDebug] blockedTiles: ${field.blockedTiles.size}, slowTiles: ${field.slowTiles.size}`);
+      ui._drawPathDebug();
+    } else {
+      if (ui._pathDebugCanvas) ui._pathDebugCanvas.style.display = 'none';
+      if (ui._pathDebugRAF) cancelAnimationFrame(ui._pathDebugRAF);
+      ui._pathDebugRAF = null;
+      console.log('[PathDebug] OFF');
+    }
+  };
+
+  ui._drawPathDebug = function() {
+    if (!ui._pathDebugActive) return;
+    const field = window.liveField;
+    if (!field) return;
+    const c = ui._pathDebugCanvas;
+    const SCALE = 3;
+    const fw = field.width, fh = field.height;
+    c.width = fw * SCALE;
+    c.height = fh * SCALE;
+    c.style.width = (fw * SCALE) + 'px';
+    c.style.height = (fh * SCALE) + 'px';
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+
+    const TILE_SIZE = window.TILE_SIZE || 4;
+
+    // Draw blocked tiles (red) and slow tiles (yellow)
+    for (const key of field.blockedTiles) {
+      const parts = key.split(',');
+      const x = parseInt(parts[0]), y = parseInt(parts[1]);
+      ctx.fillStyle = 'rgba(255,40,40,0.8)';
+      ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+    }
+    for (const key of field.slowTiles) {
+      const parts = key.split(',');
+      const x = parseInt(parts[0]), y = parseInt(parts[1]);
+      ctx.fillStyle = 'rgba(255,200,0,0.5)';
+      ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+    }
+
+    // Draw disabled chunks (dark)
+    if (field.chunkMask && field.chunkSize) {
+      for (const [key, enabled] of field.chunkMask) {
+        if (enabled === false) {
+          const parts = key.split(',');
+          const cx = parseInt(parts[0]), cz = parseInt(parts[1]);
+          ctx.fillStyle = 'rgba(0,0,0,0.6)';
+          ctx.fillRect(cx * field.chunkSize * SCALE, cz * field.chunkSize * SCALE,
+                       field.chunkSize * SCALE, field.chunkSize * SCALE);
+        }
+      }
+    }
+
+    // Draw units (cyan dots) and their paths (green lines)
+    const units = window.gameUnits || [];
+    for (const unit of units) {
+      if (!unit.pb || !unit.pb.state || !unit.pb.state.loc) continue;
+      const ux = unit.pb.state.loc.x / TILE_SIZE;
+      const uz = unit.pb.state.loc.z / TILE_SIZE;
+      ctx.fillStyle = unit.owner === 'opponent' ? 'rgba(255,100,100,1)' : 'rgba(80,200,255,1)';
+      ctx.fillRect(ux * SCALE - 1, uz * SCALE - 1, 3, 3);
+
+      // Draw current path
+      const bm = window.behaviorManager;
+      if (bm) {
+        const beh = bm.getBehavior ? bm.getBehavior(unit) : (bm.behaviors && bm.behaviors.get(unit));
+        if (beh && beh.path && beh.pathIndex !== undefined) {
+          ctx.strokeStyle = 'rgba(0,255,80,0.8)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(ux * SCALE, uz * SCALE);
+          for (let i = beh.pathIndex; i < beh.path.length; i++) {
+            const wx = beh.path[i].x / TILE_SIZE;
+            const wz = beh.path[i].z / TILE_SIZE;
+            ctx.lineTo(wx * SCALE, wz * SCALE);
+          }
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Camera position (white cross)
+    if (gfx.cameraTarget) {
+      const camX = gfx.cameraTarget.x / TILE_SIZE;
+      const camZ = gfx.cameraTarget.z / TILE_SIZE;
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(camX * SCALE - 4, camZ * SCALE);
+      ctx.lineTo(camX * SCALE + 4, camZ * SCALE);
+      ctx.moveTo(camX * SCALE, camZ * SCALE - 4);
+      ctx.lineTo(camX * SCALE, camZ * SCALE + 4);
+      ctx.stroke();
+    }
+
+    ui._pathDebugRAF = requestAnimationFrame(ui._drawPathDebug);
+  };
 
   // NEW: Helper function to check if a key affects camera rotation (prevents pan conflicts)
   // Note: E and A are excluded because they're used for both rotation AND ESDF panning
@@ -1960,11 +2083,13 @@ function getRandomColor() {
 
         // Check what we clicked on
         const clickedOnBuilding = pickResult.pickedMesh && pickResult.pickedMesh.isBuilding;
-        const clickedOnResource = pickResult.pickedMesh &&
-          (pickResult.pickedMesh.name.includes('rock') ||
-           pickResult.pickedMesh.name.includes('Rock') ||
-           pickResult.pickedMesh.name.includes('tree') ||
-           pickResult.pickedMesh.name.includes('Tree'));
+        const clickedOnResource = pickResult.pickedMesh && (
+          pickResult.pickedMesh.metadata?.isResource ||
+          pickResult.pickedMesh.name?.includes('rock') ||
+          pickResult.pickedMesh.name?.includes('Rock') ||
+          pickResult.pickedMesh.name?.includes('tree') ||
+          pickResult.pickedMesh.name?.includes('Tree')
+        );
 
         let actualPickResult = pickResult;
         
@@ -2005,45 +2130,104 @@ function getRandomColor() {
           // Get the world position where we clicked
           let worldPos = actualPickResult.pickedPoint;
           
-          // CRITICAL: For resource meshes, scan nearby tiles to find which one has the resource
-          // Large rocks can span multiple tiles, so we need to check the area around the click
+          // CRITICAL: For resource meshes, resolve the actual resource tile.
+          // Use mesh metadata (grid coords set during model placement) for reliable lookup.
+          // Falls back to scanning nearby tiles for large models that span multiple tiles.
+          let resolvedResourceTile = null;
           if (clickedOnResource) {
             const TILE_SIZE = window.TILE_SIZE || 4;
-            const clickedTileX = Math.floor(worldPos.x / TILE_SIZE);
-            const clickedTileZ = Math.floor(worldPos.z / TILE_SIZE);
-            
-            console.log(`🪨 Clicked on resource mesh at world (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)}), tile (${clickedTileX}, ${clickedTileZ})`);
-            
-            // Check the clicked tile and surrounding tiles (3x3 grid) for resources
-            let foundResource = null;
             let foundTile = null;
+            const clickedWorldX = worldPos.x;
+            const clickedWorldZ = worldPos.z;
+            const maxMetadataSnapDistanceSq = Math.pow(TILE_SIZE * 4, 2);
+            const isValidResourceTileCandidate = (gx, gz) => {
+              if (!Number.isFinite(gx) || !Number.isFinite(gz)) return false;
+              if (window.liveField) {
+                if (gx < 0 || gz < 0 || gx >= window.liveField.width || gz >= window.liveField.height) {
+                  return false;
+                }
+              }
+              if (window.isResourceTileDepleted?.(gx, gz)) return false;
+              
+              // Guard against stale/shared metadata: ignore tiles far from the actual click.
+              const tileWorldX = (gx + 0.5) * TILE_SIZE;
+              const tileWorldZ = (gz + 0.5) * TILE_SIZE;
+              const dx = tileWorldX - clickedWorldX;
+              const dz = tileWorldZ - clickedWorldZ;
+              return (dx * dx + dz * dz) <= maxMetadataSnapDistanceSq;
+            };
             
-            for (let dx = -1; dx <= 1; dx++) {
-              for (let dz = -1; dz <= 1; dz++) {
-                const checkX = clickedTileX + dx;
-                const checkZ = clickedTileZ + dz;
-                const resourceCheck = window.buildingSystem?.checkTileForResources(checkX, checkZ, false);
-                
-                if (resourceCheck && !window.isResourceTileDepleted?.(checkX, checkZ)) {
-                  foundResource = resourceCheck;
-                  foundTile = { x: checkX, z: checkZ };
-                  console.log(`  ✅ Found ${resourceCheck.type} at tile (${checkX}, ${checkZ})`);
+            // Strategy 1: Get grid position directly from mesh/parent metadata
+            let searchMesh = pickResult.pickedMesh;
+            while (searchMesh && !foundTile) {
+              if (searchMesh.metadata) {
+                if (searchMesh.metadata.resourceGridX !== undefined) {
+                  const gx = searchMesh.metadata.resourceGridX;
+                  const gz = searchMesh.metadata.resourceGridZ;
+                  if (isValidResourceTileCandidate(gx, gz)) {
+                    foundTile = { x: gx, z: gz };
+                  }
+                  break;
+                }
+                if (searchMesh.metadata.resourceTileKey) {
+                  const parts = searchMesh.metadata.resourceTileKey.split(',');
+                  const gx = parseInt(parts[0]);
+                  const gz = parseInt(parts[1]);
+                  if (isValidResourceTileCandidate(gx, gz)) {
+                    foundTile = { x: gx, z: gz };
+                  }
                   break;
                 }
               }
-              if (foundResource) break;
+              searchMesh = searchMesh.parent;
             }
             
-            // If we found a resource in nearby tiles, use that tile's center
-            if (foundResource && foundTile) {
+            // Strategy 2: Fallback scan - check center tile first, then surrounding tiles
+            if (!foundTile) {
+              const clickedTileX = Math.floor(worldPos.x / TILE_SIZE);
+              const clickedTileZ = Math.floor(worldPos.z / TILE_SIZE);
+              const clickedWorldX = worldPos.x;
+              const clickedWorldZ = worldPos.z;
+              
+              const scanOffsets = [
+                [0, 0], [-1, 0], [1, 0], [0, -1], [0, 1],
+                [-1, -1], [-1, 1], [1, -1], [1, 1],
+                [-2, 0], [2, 0], [0, -2], [0, 2],
+                [-2, -1], [-2, 1], [2, -1], [2, 1],
+                [-1, -2], [-1, 2], [1, -2], [1, 2],
+                [-2, -2], [-2, 2], [2, -2], [2, 2]
+              ];
+              let nearestTile = null;
+              let nearestDistSq = Infinity;
+              
+              for (const [dx, dz] of scanOffsets) {
+                const checkX = clickedTileX + dx;
+                const checkZ = clickedTileZ + dz;
+                const resourceCheck = window.buildingSystem?.checkTileForResources(checkX, checkZ, false);
+                if (resourceCheck && !window.isResourceTileDepleted?.(checkX, checkZ)) {
+                  const tileWorldX = (checkX + 0.5) * TILE_SIZE;
+                  const tileWorldZ = (checkZ + 0.5) * TILE_SIZE;
+                  const ddx = tileWorldX - clickedWorldX;
+                  const ddz = tileWorldZ - clickedWorldZ;
+                  const distSq = ddx * ddx + ddz * ddz;
+                  if (distSq < nearestDistSq) {
+                    nearestDistSq = distSq;
+                    nearestTile = { x: checkX, z: checkZ };
+                  }
+                }
+              }
+              if (nearestTile) {
+                foundTile = nearestTile;
+              }
+            }
+            
+            if (foundTile) {
+              resolvedResourceTile = foundTile;
               worldPos = new BABYLON.Vector3(
                 (foundTile.x + 0.5) * TILE_SIZE,
                 worldPos.y,
                 (foundTile.z + 0.5) * TILE_SIZE
               );
-              console.log(`  -> Using resource tile center: (${worldPos.x.toFixed(1)}, ${worldPos.z.toFixed(1)})`);
-            } else {
-              console.log(`  ❌ No resource found in nearby tiles!`);
             }
           }
           
@@ -2185,36 +2369,25 @@ function getRandomColor() {
                     }
                   }
                   
-                  // Check if we clicked on or near a resource tile
-                  // Use 3x3 scan because trees are thin-instanced and not pickable
+                  // Check if we clicked on a resource tile
                   const TILE_SIZE = window.TILE_SIZE || 4;
                   const clickedTileX = Math.floor(worldPos.x / TILE_SIZE);
                   const clickedTileZ = Math.floor(worldPos.z / TILE_SIZE);
                   
-                  // Scan 3x3 area around click to find resources (trees might be offset from click)
                   let resourceInfo = null;
                   let resourceGridX = clickedTileX;
                   let resourceGridZ = clickedTileZ;
                   
-                  // Check clicked tile first
-                  resourceInfo = window.buildingSystem?.checkTileForResources(clickedTileX, clickedTileZ, false);
-                  
-                  // If no resource at exact tile, scan nearby tiles
-                  if (!resourceInfo || (window.isResourceTileDepleted && window.isResourceTileDepleted(clickedTileX, clickedTileZ))) {
-                    for (let dx = -1; dx <= 1 && !resourceInfo; dx++) {
-                      for (let dz = -1; dz <= 1 && !resourceInfo; dz++) {
-                        if (dx === 0 && dz === 0) continue; // Already checked center
-                        const checkX = clickedTileX + dx;
-                        const checkZ = clickedTileZ + dz;
-                        const checkResource = window.buildingSystem?.checkTileForResources(checkX, checkZ, false);
-                        if (checkResource && !(window.isResourceTileDepleted && window.isResourceTileDepleted(checkX, checkZ))) {
-                          resourceInfo = checkResource;
-                          resourceGridX = checkX;
-                          resourceGridZ = checkZ;
-                        }
-                      }
-                    }
+                  if (clickedOnResource && resolvedResourceTile) {
+                    resourceGridX = resolvedResourceTile.x;
+                    resourceGridZ = resolvedResourceTile.z;
                   }
+                  
+                  // Only check the exact clicked tile for resources.
+                  // 3x3 scan was causing clicks near resources to trigger gather instead of move.
+                  // Exception: if the user clicked directly on a resource mesh, allow
+                  // the earlier resource-mesh handler (clickedOnResource) to use the 3x3 scan.
+                  resourceInfo = window.buildingSystem?.checkTileForResources(resourceGridX, resourceGridZ, false);
                   
                   const isDepleted = window.isResourceTileDepleted && window.isResourceTileDepleted(resourceGridX, resourceGridZ);
                   
@@ -2227,9 +2400,12 @@ function getRandomColor() {
                       
                       // Create a quick sparkly visual feedback at the resource
                       if (window.gfx && window.gfx.scene) {
+                        const tileHeight = window.liveField?.getHeightVariation
+                          ? window.liveField.getHeightVariation(resourceGridX, resourceGridZ)
+                          : 0;
                         const resourceWorldPos = new BABYLON.Vector3(
                           (resourceGridX + 0.5) * TILE_SIZE,
-                          worldPos.y + 3.0, // Well above the model
+                          tileHeight + 3.0, // Well above the resource tile
                           (resourceGridZ + 0.5) * TILE_SIZE
                         );
                         
@@ -2345,12 +2521,35 @@ function getRandomColor() {
                         }
                       });
                       
+                      const resourceMarkerPos = new BABYLON.Vector3(
+                        (resourceGridX + 0.5) * TILE_SIZE,
+                        0,
+                        (resourceGridZ + 0.5) * TILE_SIZE
+                      );
+                      
                       // Create a visual target marker at the resource location
                       if (window.gfx && window.gfx.scene) {
-                        createTargetMarker(worldPos);
+                        createTargetMarker(resourceMarkerPos);
                       }
                       
-                      // Don't issue move command, we're gathering
+                      // Non-villager units in the selection should still move to the location
+                      const nonVillagers = selectedUnits.filter(u => u.type !== 'villager');
+                      if (nonVillagers.length > 0 && window.currentMatch) {
+                        const unitIds = nonVillagers.map(u => u.id);
+                        const startPositions = {};
+                        nonVillagers.forEach(u => {
+                          if (u.pb && u.pb.state && u.pb.state.loc) {
+                            startPositions[u.id] = { x: u.pb.state.loc.x, z: u.pb.state.loc.z };
+                          }
+                        });
+                        window.currentMatch.submitCommand({
+                          type: 'move',
+                          playerId: window.player?.id,
+                          unitIds: unitIds,
+                          startPositions: startPositions,
+                          target: { x: resourceMarkerPos.x, y: 0, z: resourceMarkerPos.z }
+                        });
+                      }
                       return;
                     }
                   }

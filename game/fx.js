@@ -1128,7 +1128,12 @@
         });
       }
 
-      // 3. Move the building and all its parts far away
+      // 3. Remove from LOD system before hiding
+      if (building.mesh && window.gfx && window.gfx.removeModelFromLOD) {
+        window.gfx.removeModelFromLOD(building.mesh);
+      }
+
+      // 4. Move the building and all its parts far away
       if (building.mesh) {
         const allMeshes = [building.mesh, ...building.mesh.getChildMeshes()];
         allMeshes.forEach(mesh => {

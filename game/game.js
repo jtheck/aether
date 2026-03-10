@@ -69,21 +69,24 @@ Game.prototype.spawnInitialUnits = function() {
       const isLocalPlayer = player === window.player;
       // console.log(`👤 Spawning for ${isLocalPlayer ? 'LOCAL' : 'OPPONENT'} player at (${player.agora.x}, ${player.agora.y}), ID: ${player.id}`);
       
+      // CRITICAL: Compute owner before placeBuilding so async flag callback has it
+      const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
+      const parts = rawId.split('-');
+      const normalizedOwner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
+      
       // Spawn agora building for this player
       if (window.gameBuildings) {
         // Prefer visual placement path so meshes are created for ALL players (not just local)
         const placeFn = (window.placeBuilding || (typeof placeBuilding === 'function' ? placeBuilding : null));
         if (placeFn && window.gfx && window.gfx.scene) {
-          // Agora starts complete (it's the starting building)
-          const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene, { buildProgress: 1.0 });
+          // Agora starts complete (it's the starting building). Pass owner so flag gets team color.
+          const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene, {
+            buildProgress: 1.0,
+            owner: normalizedOwner
+          });
             if (placed) {
-              // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
-              const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
-              // If ID has hyphens, take the part after the last hyphen, else take last 6 chars
-              const parts = rawId.split('-');
-              placed.owner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
+              placed.owner = normalizedOwner;
               
-            
             // Store team color so attached flag meshes can tint correctly
             if (typeof window.getTeamColorForOwner === 'function') {
               placed.teamColor = window.getTeamColorForOwner(placed.owner);
@@ -280,41 +283,23 @@ Game.prototype.spawnAdventureUnits = function() {
   });
   
   // Map player indices to actual players
-  // For solo adventure: player 0 = local player, all other indices also map to local player
-  // For co-op: each index maps to a different player
+  // For solo adventure: all units go to the single player
+  // For co-op: units for missing player slots are distributed to existing players (round-robin)
   const players = this.players || [];
+  if (players.length === 0) return;
   
   Object.entries(unitsByPlayer).forEach(([playerIndex, units]) => {
     const pIndex = parseInt(playerIndex);
-    let targetPlayer = null;
-    
-    // For solo play, ONLY spawn player 0's units (skip other player indices)
-    // This prevents spawning enemy/AI units that the player can't control
-    if (players.length === 1) {
-      if (pIndex !== 0) {
-        console.log(`  ⏭️ P${pIndex + 1}: Skipping ${units.length} units (solo mode, only P1 units spawn)`);
-        return; // Skip this player group
-      }
-      targetPlayer = players[0] || window.player;
-    } else if (pIndex < players.length) {
-      targetPlayer = players[pIndex];
-    } else {
-      // If more unit groups than players, skip them (no player to own them)
-      console.log(`  ⏭️ P${pIndex + 1}: Skipping ${units.length} units (no player at index ${pIndex})`);
-      return;
-    }
-    
-    if (!targetPlayer) {
-      console.warn(`⚠️ No player found for unit group ${playerIndex}, skipping`);
-      return;
-    }
+    // Assign to player at (pIndex % players.length) so "missing" slots go to existing players
+    const targetPlayer = players[pIndex % players.length] || window.player;
     
     // Ensure player has units array
     if (!targetPlayer.units) {
       targetPlayer.units = [];
     }
     
-    console.log(`  👤 P${pIndex + 1}: Spawning ${units.length} units for ${targetPlayer.name || targetPlayer.id}`);
+    const assignedTo = pIndex < players.length ? `P${pIndex + 1}` : `P${(pIndex % players.length) + 1} (was P${pIndex + 1})`;
+    console.log(`  👤 ${assignedTo}: Spawning ${units.length} units for ${targetPlayer.name || targetPlayer.id}`);
     
     units.forEach((unitData, i) => {
       const worldX = (unitData.x + 0.5) * TILE_SIZE;
@@ -327,8 +312,17 @@ Game.prototype.spawnAdventureUnits = function() {
         deterministicUnitId = `unit-${window.currentMatch.mapSeed}-${unitIndex}`;
       }
       
-      // Create the unit
-      const unit = new window.Unit(unitData.type, { x: worldX, y: 0, z: worldZ }, { id: deterministicUnitId || undefined });
+      // Validate unit type exists before creating
+      if (!window.UnitTypes || !window.UnitTypes[unitData.type]) {
+        console.warn(`⚠️ Skipping unknown unit type: "${unitData.type}" at (${unitData.x},${unitData.y})`);
+        return;
+      }
+
+      // Create the unit (pass custom name for adventure story characters)
+      const unit = new window.Unit(unitData.type, { x: worldX, y: 0, z: worldZ }, {
+        id: deterministicUnitId || undefined,
+        displayName: (unitData.name && String(unitData.name).trim()) || undefined
+      });
       
       // Set ownership - CRITICAL: Use same normalization as player.js
       // Player ID format: "adventurer-xxxxxx" or "p2p-xxxxxx"
@@ -434,10 +428,7 @@ window.gameLoop = {
     }
     
     // Accumulate time for physics
-    // BUT: If we're waiting for lockstep peers, don't accumulate - this prevents
-    // a huge catch-up burst when the peer finally confirms
     const matchState = window.currentMatch?.state;
-    const lockstepWaiting = window.isMultiplayer && (window.lockstepWaitingForPeers || window.fastForwardingTicks);
     
     // Multiplayer determinism rule:
     // - Only advance simulation physics while the match is PLAYING (lockstep-driven).
@@ -446,15 +437,19 @@ window.gameLoop = {
     //   places" desyncs right as the next chapter begins.
     const preStartMultiplayer = window.isMultiplayer && window.currentMatch && matchState !== 'playing';
     
-    if (!window.lockstepWaitingForPeers && !preStartMultiplayer) {
+    // In multiplayer PLAYING state, physics is driven by the network tick system
+    // (runDeterministicPhysicsStepsForOneNetTick: exactly 3 steps per tick).
+    // This ensures ALL clients run the EXACT same number of physics steps,
+    // preventing position drift from frame-rate differences or lockstep wait timing.
+    // The rAF loop only handles visuals (updateUnitMeshes does velocity extrapolation
+    // during lockstep waits for smooth movement).
+    const multiplayerDrivenPhysics = window.isMultiplayer && matchState === 'playing';
+
+    if (!preStartMultiplayer && !window.fastForwardingTicks && !multiplayerDrivenPhysics) {
       this.physicsTime += this.deltaTime;
     }
     
-    // Pause simulation physics when lockstep is waiting OR when we're not yet playing in multiplayer.
-    const canRunPhysics = !lockstepWaiting && !preStartMultiplayer && (
-                          !window.isMultiplayer ||
-                          !window.currentMatch ||
-                          matchState === 'playing');
+    const canRunPhysics = !window.fastForwardingTicks && !preStartMultiplayer && !multiplayerDrivenPhysics;
     
     // Run physics at fixed timestep (60Hz)
     // DETERMINISM: Physics is driven by fixed timestep, not wall-clock time.
@@ -465,16 +460,13 @@ window.gameLoop = {
     // NO CATCH-UP - if we fall behind, we stay behind (sync handles this)
     // Visual interpolation (in updateUnitMeshes) smooths out any visual jitter.
     
-    let maxPhysicsSteps = 3; // Strict: exactly 3 physics steps per frame
+    let maxPhysicsSteps = 4;
     let physicsSteps = 0;
     
-    // Cap accumulated time to prevent catch-up
-    // This means if we miss frames, we just run slower (which is fine - sync handles it)
-    // Visual interpolation ensures units don't teleport
-    if (this.physicsTime > this.physicsTimestep * 4) {
-      // Too much backlog - discard it to prevent catch-up desync
-      const discarded = this.physicsTime - (this.physicsTimestep * 3);
-      this.physicsTime = this.physicsTimestep * 3;
+    // Cap accumulated time to prevent catch-up bursts (tab refocus, GC pauses).
+    if (this.physicsTime > this.physicsTimestep * 5) {
+      const discarded = this.physicsTime - (this.physicsTimestep * 4);
+      this.physicsTime = this.physicsTimestep * 4;
       // Only log if significant time discarded
       if (discarded > 0.1) {
         // Rate-limit to avoid spam (this can happen during loads / tab focus / GC pauses).
@@ -553,7 +545,8 @@ window.gameLoop = {
 
 };
 
-// Update game timer display
+// Update game timer display (throttled: only updates DOM when value changes)
+let _lastGameTimerDisplay = null;
 function updateGameTimer() {
   const timerElement = document.getElementById('game_timer');
   if (!timerElement) return;
@@ -563,10 +556,14 @@ function updateGameTimer() {
     const gameTime = window.currentMatch.gameTime || 0;
     const minutes = Math.floor(gameTime / 60);
     const seconds = Math.floor(gameTime % 60);
-    timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    const display = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    if (_lastGameTimerDisplay !== display) {
+      _lastGameTimerDisplay = display;
+      timerElement.textContent = display;
+    }
     timerElement.style.display = 'block';
   } else {
-    // Hide timer when not in an active match
+    _lastGameTimerDisplay = null;
     timerElement.style.display = 'none';
   }
 }

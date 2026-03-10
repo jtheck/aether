@@ -1027,57 +1027,108 @@ Field.prototype.unslowTile = function(x, y) {
   this.slowTiles.delete(`${x},${y}`);
 };
 
+// Binary min-heap keyed on f-score for A* open set
+function PathHeap() {
+  this.data = [];
+  this.map = new Map();
+}
+PathHeap.prototype.push = function(key, node) {
+  node._key = key;
+  this.data.push(node);
+  this.map.set(key, node);
+  this._bubbleUp(this.data.length - 1);
+};
+PathHeap.prototype.pop = function() {
+  const top = this.data[0];
+  const last = this.data.pop();
+  this.map.delete(top._key);
+  if (this.data.length > 0) {
+    this.data[0] = last;
+    this._sinkDown(0);
+  }
+  return top;
+};
+PathHeap.prototype.has = function(key) { return this.map.has(key); };
+PathHeap.prototype.get = function(key) { return this.map.get(key); };
+PathHeap.prototype.size = function() { return this.data.length; };
+PathHeap.prototype.decreaseKey = function(key, node) {
+  node._key = key;
+  const idx = this.data.indexOf(this.map.get(key));
+  this.map.set(key, node);
+  this.data[idx] = node;
+  this._bubbleUp(idx);
+};
+PathHeap.prototype._bubbleUp = function(i) {
+  while (i > 0) {
+    const pi = (i - 1) >> 1;
+    if (this.data[i].f < this.data[pi].f) {
+      const tmp = this.data[i]; this.data[i] = this.data[pi]; this.data[pi] = tmp;
+      i = pi;
+    } else break;
+  }
+};
+PathHeap.prototype._sinkDown = function(i) {
+  const n = this.data.length;
+  while (true) {
+    let smallest = i;
+    const l = 2 * i + 1, r = 2 * i + 2;
+    if (l < n && this.data[l].f < this.data[smallest].f) smallest = l;
+    if (r < n && this.data[r].f < this.data[smallest].f) smallest = r;
+    if (smallest === i) break;
+    const tmp = this.data[i]; this.data[i] = this.data[smallest]; this.data[smallest] = tmp;
+    i = smallest;
+  }
+};
+
 // A* Pathfinding - find path around obstacles
-Field.prototype.findPath = function(startX, startZ, endX, endZ, maxIterations = 500) {
+Field.prototype.findPath = function(startX, startZ, endX, endZ, maxIterations = 2000) {
   const TILE_SIZE = window.TILE_SIZE || 4;
+  const W = this.width;
   
-  // Convert world coords to tile coords
   const startTileX = Math.floor(startX / TILE_SIZE);
   const startTileZ = Math.floor(startZ / TILE_SIZE);
   const endTileX = Math.floor(endX / TILE_SIZE);
   const endTileZ = Math.floor(endZ / TILE_SIZE);
   
-  // If start or end is blocked, return null
   if (!this.isPassable(endTileX, endTileZ)) {
     return null;
   }
   
-  // Check chunk mask for end tile
   if (this.chunkMask && this.chunkSize) {
     const endChunkX = Math.floor(endTileX / this.chunkSize);
     const endChunkZ = Math.floor(endTileZ / this.chunkSize);
     if (this.chunkMask.get(`${endChunkX},${endChunkZ}`) === false) {
-      return null; // End is off the table
+      return null;
     }
   }
   
-  // If already at destination (within 1 tile), return direct path
   if (startTileX === endTileX && startTileZ === endTileZ) {
     return [{ x: endX, z: endZ }];
   }
   
-  // A* implementation
-  const openSet = new Map(); // key -> {x, z, g, h, f, parent}
+  const toKey = (x, z) => z * W + x;
+  
+  const openSet = new PathHeap();
   const closedSet = new Set();
   
+  // Octile distance -- admissible heuristic for 8-directional movement
+  const DIAG_EXTRA = 0.4142; // sqrt(2) - 1
   const heuristic = (x, z) => {
-    // Manhattan distance with diagonal movement
     const dx = Math.abs(x - endTileX);
     const dz = Math.abs(z - endTileZ);
-    return dx + dz;
+    return Math.max(dx, dz) + DIAG_EXTRA * Math.min(dx, dz);
   };
   
-  const startKey = `${startTileX},${startTileZ}`;
-  openSet.set(startKey, {
+  const startH = heuristic(startTileX, startTileZ);
+  openSet.push(toKey(startTileX, startTileZ), {
     x: startTileX,
     z: startTileZ,
     g: 0,
-    h: heuristic(startTileX, startTileZ),
-    f: heuristic(startTileX, startTileZ),
+    h: startH,
+    f: startH,
     parent: null
   });
   
-  // 8-directional movement (including diagonals)
   const neighbors = [
     { dx: 0, dz: -1, cost: 1 },   // N
     { dx: 1, dz: 0, cost: 1 },    // E
@@ -1090,86 +1141,52 @@ Field.prototype.findPath = function(startX, startZ, endX, endZ, maxIterations = 
   ];
   
   let iterations = 0;
+  let bestNode = null;
+  let bestDist = Infinity;
   
-  while (openSet.size > 0 && iterations < maxIterations) {
+  while (openSet.size() > 0 && iterations < maxIterations) {
     iterations++;
     
-    // Find node with lowest f score
-    let current = null;
-    let currentKey = null;
-    let lowestF = Infinity;
+    const current = openSet.pop();
     
-    for (const [key, node] of openSet) {
-      if (node.f < lowestF) {
-        lowestF = node.f;
-        current = node;
-        currentKey = key;
-      }
+    // Track closest node to goal for partial-path fallback
+    if (current.h < bestDist) {
+      bestDist = current.h;
+      bestNode = current;
     }
     
-    if (!current) break;
-    
-    // Check if we reached the goal
     if (current.x === endTileX && current.z === endTileZ) {
-      // Reconstruct path
-      const path = [];
-      let node = current;
-      while (node) {
-        // Convert back to world coords (center of tile)
-        path.unshift({
-          x: (node.x + 0.5) * TILE_SIZE,
-          z: (node.z + 0.5) * TILE_SIZE
-        });
-        node = node.parent;
-      }
-      // Remove starting position, add exact end position
-      path.shift();
-      if (path.length > 0) {
-        path[path.length - 1] = { x: endX, z: endZ };
-      } else {
-        path.push({ x: endX, z: endZ });
-      }
-      return path;
+      return this._reconstructPath(current, TILE_SIZE, endX, endZ);
     }
     
-    // Move current from open to closed
-    openSet.delete(currentKey);
-    closedSet.add(currentKey);
+    closedSet.add(toKey(current.x, current.z));
     
-    // Check neighbors
     for (const n of neighbors) {
       const nx = current.x + n.dx;
       const nz = current.z + n.dz;
-      const nKey = `${nx},${nz}`;
+      const nKey = toKey(nx, nz);
       
-      // Skip if already evaluated
       if (closedSet.has(nKey)) continue;
-      
-      // Skip if not passable
       if (!this.isPassable(nx, nz)) continue;
       
-      // Check chunk mask
       if (this.chunkMask && this.chunkSize) {
         const chunkX = Math.floor(nx / this.chunkSize);
         const chunkZ = Math.floor(nz / this.chunkSize);
         if (this.chunkMask.get(`${chunkX},${chunkZ}`) === false) continue;
       }
       
-      // For diagonal movement, check that both adjacent tiles are passable
       if (n.dx !== 0 && n.dz !== 0) {
         if (!this.isPassable(current.x + n.dx, current.z) || 
             !this.isPassable(current.x, current.z + n.dz)) {
-          continue; // Can't cut corners
+          continue;
         }
       }
       
-      // Calculate cost (slow tiles cost more)
       let moveCost = n.cost;
       if (this.isSlow(nx, nz)) {
-        moveCost *= 2; // Prefer paths that avoid slow tiles
+        moveCost *= 2;
       }
       
-      // Add edge penalty for tiles near disabled chunks (avoid corners)
       if (this.chunkMask && this.chunkSize) {
         const chunkX = Math.floor(nx / this.chunkSize);
         const chunkZ = Math.floor(nz / this.chunkSize);
@@ -1186,29 +1203,52 @@ Field.prototype.findPath = function(startX, startZ, endX, endZ, maxIterations = 
         if (atTopEdge && this.chunkMask.get(`${chunkX},${chunkZ + 1}`) === false) edgePenalty += 2;
         if (atBottomEdge && this.chunkMask.get(`${chunkX},${chunkZ - 1}`) === false) edgePenalty += 2;
         
-        if (edgePenalty >= 4) edgePenalty = 5; // Strong corner avoidance
+        if (edgePenalty >= 4) edgePenalty = 5;
         moveCost += edgePenalty;
       }
       
       const tentativeG = current.g + moveCost;
       
       const existing = openSet.get(nKey);
-      if (!existing || tentativeG < existing.g) {
+      if (existing) {
+        if (tentativeG < existing.g) {
+          const h = heuristic(nx, nz);
+          openSet.decreaseKey(nKey, {
+            x: nx, z: nz, g: tentativeG, h: h, f: tentativeG + h, parent: current
+          });
+        }
+      } else {
         const h = heuristic(nx, nz);
-        openSet.set(nKey, {
-          x: nx,
-          z: nz,
-          g: tentativeG,
-          h: h,
-          f: tentativeG + h,
-          parent: current
+        openSet.push(nKey, {
+          x: nx, z: nz, g: tentativeG, h: h, f: tentativeG + h, parent: current
         });
       }
     }
   }
   
-  // No path found
+  // No full path found -- return partial path to closest reachable node
+  if (bestNode && bestNode.h < heuristic(startTileX, startTileZ)) {
+    return this._reconstructPath(bestNode, TILE_SIZE,
+      (bestNode.x + 0.5) * TILE_SIZE, (bestNode.z + 0.5) * TILE_SIZE);
+  }
+  
   return null;
+};
+
+Field.prototype._reconstructPath = function(node, TILE_SIZE, finalX, finalZ) {
+  const path = [];
+  let cur = node;
+  while (cur) {
+    path.unshift({ x: (cur.x + 0.5) * TILE_SIZE, z: (cur.z + 0.5) * TILE_SIZE });
+    cur = cur.parent;
+  }
+  path.shift(); // remove start position
+  if (path.length > 0) {
+    path[path.length - 1] = { x: finalX, z: finalZ };
+  } else {
+    path.push({ x: finalX, z: finalZ });
+  }
+  return path;
 };
 
   // Helper: Check if position is in a spawn zone

@@ -3,59 +3,6 @@
 
 const UnitSpeech = {
   activeSpeechBubbles: [],
-  
-  // Speech library - random phrases units can say
-  speechLibrary: {
-    select: [
-      'Ready!',
-      'Yes?',
-      'Orders?',
-      'Awaiting command',
-      'At your service'
-    ],
-    move: [
-      'Moving out',
-      'On my way',
-      'Yes sir',
-      'Right away',
-      'Understood'
-    ],
-    attack: [
-      'Attacking!',
-      'For glory!',
-      'Charge!',
-      'To battle!',
-      'Engaging enemy'
-    ],
-    gather: [
-      'Gathering',
-      'On it',
-      'Will do',
-      'Collecting resources',
-      'Working'
-    ],
-    build: [
-      'Building',
-      'Constructing',
-      'Right away',
-      'On the job',
-      'Will build'
-    ],
-    complete: [
-      'Done!',
-      'Complete',
-      'Finished',
-      'Task complete',
-      'Ready for orders'
-    ],
-    damage: [
-      'Under attack!',
-      'Help!',
-      'Taking damage!',
-      'We\'re hit!',
-      'Need backup!'
-    ]
-  },
 
   // Initialize the speech system
   init: function(scene) {
@@ -136,69 +83,73 @@ const UnitSpeech = {
     return speechData;
   },
 
-  // Show a random speech from a category
+  // Show a random speech from a category (phrases from UnitTypes when available)
   showRandomSpeech: async function(unit, category, duration = 2000) {
-    if (!this.speechLibrary[category]) {
+    const unitDef = window.UnitTypes && unit && unit.type ? window.UnitTypes[unit.type] : null;
+    const defaultSpeech = window.UnitTypes?.defaultSpeech;
+    const phrases = unitDef?.speech?.[category] || defaultSpeech?.[category];
+    if (!phrases || !phrases.length) {
       console.warn(`Unknown speech category: ${category}`);
       return;
     }
-    
-    const phrases = this.speechLibrary[category];
     const text = phrases[Math.floor(Math.random() * phrases.length)];
     return await this.showSpeech(unit, text, duration);
   },
 
-  // Clear speech bubble for a unit
-  clearSpeech: function(unit) {
-    if (!unit || !unit.speechBubble) return;
-    
-    const index = this.activeSpeechBubbles.indexOf(unit.speechBubble);
+  // Clear speech bubble for a unit (or pass speechData directly for disposed units)
+  clearSpeech: function(unitOrSpeechData) {
+    const speechData = unitOrSpeechData && typeof unitOrSpeechData.speechBubble !== 'undefined'
+      ? unitOrSpeechData.speechBubble
+      : unitOrSpeechData;
+    if (!speechData) return;
+
+    const index = this.activeSpeechBubbles.indexOf(speechData);
     if (index !== -1) {
       this.activeSpeechBubbles.splice(index, 1);
     }
-    
-    if (unit.speechBubble.textMesh) {
-      window.MSDFText.disposeText(unit.speechBubble.textMesh);
+
+    if (speechData.textMesh) {
+      window.MSDFText.disposeText(speechData.textMesh);
     }
-    if (unit.speechBubble.bubble) {
-      if (unit.speechBubble.bubble.material) {
-        unit.speechBubble.bubble.material.dispose();
+    if (speechData.bubble) {
+      if (speechData.bubble.material) {
+        speechData.bubble.material.dispose();
       }
-      unit.speechBubble.bubble.dispose();
+      speechData.bubble.dispose();
     }
-    
-    unit.speechBubble = null;
+
+    if (speechData.unit) {
+      speechData.unit.speechBubble = null;
+    }
   },
 
   // Update all speech bubbles (call this in game loop)
   update: function() {
     const now = Date.now();
-    const toRemove = [];
-    
+    const toClear = []; // Collect speech data to clear - don't modify array during iteration
+
     // Get camera matrices for text rendering
     const camera = window.gfx?.camera;
     if (!camera) return;
-    
+
     const viewMatrix = camera.getViewMatrix();
     const projectionMatrix = camera.getProjectionMatrix();
-    
+
     for (let i = 0; i < this.activeSpeechBubbles.length; i++) {
       const speech = this.activeSpeechBubbles[i];
       const elapsed = now - speech.startTime;
-      
+
       // Update position to follow unit smoothly (no parenting = no jitter)
       // Position directly above unit in world space - billboard handles screen facing
       if (speech.textMesh && speech.textMesh._followUnit) {
         const unit = speech.textMesh._followUnit;
-        
+
         // Check if unit still exists (not destroyed/removed)
         if (!unit || unit._disposed) {
-          // Unit was destroyed, remove this speech bubble
-          this.clearSpeech(unit);
-          toRemove.push(i);
+          toClear.push(speech);
           continue;
         }
-        
+
         // CRITICAL: Use physics body position during wander behavior (syncs before mesh)
         // This prevents text from getting stuck when units wander
         if (unit.pb && unit.pb.state && unit.pb.state.loc) {
@@ -213,12 +164,12 @@ const UnitSpeech = {
           console.warn('💬 Speech bubble has no valid position source:', unit.type, unit.name);
         }
       }
-      
+
       // Render text if it's a TextRenderer
       if (speech.textMesh && speech.textMesh.render) {
         speech.textMesh.render(viewMatrix, projectionMatrix);
       }
-      
+
       // Fade in
       if (speech.fadeIn && elapsed < speech.fadeInDuration) {
         const alpha = elapsed / speech.fadeInDuration;
@@ -235,24 +186,21 @@ const UnitSpeech = {
         if (speech.bubbleMat) {
           speech.bubbleMat.alpha = alpha * 0.75;
         }
-        
+
         // Also float up slightly during fade
         if (speech.textMesh && speech.textMesh._yOffset !== undefined) {
           speech.textMesh._yOffset += 0.015;
         }
       }
-      
-      // Remove expired bubbles
+
+      // Mark expired bubbles for removal
       if (elapsed > speech.duration) {
-        this.clearSpeech(speech.unit);
-        toRemove.push(i);
+        toClear.push(speech);
       }
     }
-    
-    // Clean up removed bubbles
-    for (let i = toRemove.length - 1; i >= 0; i--) {
-      this.activeSpeechBubbles.splice(toRemove[i], 1);
-    }
+
+    // Clear collected bubbles after iteration (avoids modifying array during loop)
+    toClear.forEach(speech => this.clearSpeech(speech));
   },
 
   // Show damage number above unit

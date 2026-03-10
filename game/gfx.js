@@ -140,6 +140,9 @@
           if (lod.billboard) {
             billboardsToReturn.push(lod.billboard);
           }
+          if (lod.blobShadowObj) {
+            gfx.removeBlobShadow(lod.blobShadowObj);
+          }
           // Unregister from thin instance system
           if (gfx.unregisterThinInstance) {
             gfx.unregisterThinInstance(lod);
@@ -169,10 +172,12 @@
   
   // Billboard texture atlas (single texture with all billboard sprites)
   // Atlas layout: 8 columns x 8 rows = 64 total slots
-  // Row 0: tree, gate, windvane, tortle, birdy, mushroom, frog, flag
-  // Row 1: rocks_plain, rocks_moss, rocks_snow, windmill, factory, gnome, villager, ae
-  // Row 2: trees, agora, [unused slots 2-7]
-  // Rows 3-7: [unused] - reserved for future models
+  // Row 0: trees, rocks_plain, rocks_moss, rocks_snow, mushroom, tortle, birdy, frog
+  // Row 1: windvane, flag, agora, camp, village, farm, silo, tower
+  // Row 2: mine, tavern, moonwell, barracks, lab, workshop, factory, church
+  // Row 3: well, perch, villager, brigand, engineer, monk, wizard, warlock
+  // Row 4: warrior, archer, priest, shaman, myco, wagon, dirigible, apc
+  // Rows 5-7: [unused] - reserved for future models
   let billboardAtlas = null;
   let billboardMaterial = null;
   
@@ -244,47 +249,43 @@
       // Each slot should be 128x128 pixels for optimal quality
       // Current usage: ~20 slots, plenty of room for expansion
       billboardMaterial.diffuseTexture = new BABYLON.Texture('assets/textures/atlas-hd.png', scene);
-      
-      // Enable transparency for PNG alpha channel
       billboardMaterial.diffuseTexture.hasAlpha = true;
       billboardMaterial.useAlphaFromDiffuseTexture = true;
-      billboardMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+      billboardMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHATEST;
+      billboardMaterial.alphaTest = 0.4;
       
-      // Softer lighting for more rounded appearance
-      billboardMaterial.ambientColor = new BABYLON.Color3(0.7, 0.7, 0.7); // More ambient light
-      billboardMaterial.diffuseColor = new BABYLON.Color3(0.9, 0.9, 0.9); // Softer diffuse
-      billboardMaterial.specularColor = new BABYLON.Color3(0.2, 0.2, 0.18); // Subtle specular for natural look
-      billboardMaterial.specularPower = 64; // Moderate specular power
-      billboardMaterial.emissiveColor = new BABYLON.Color3(.36, .35, .35); // More self-illumination for visibility
+      billboardMaterial.ambientColor = new BABYLON.Color3(0.38, 0.38, 0.38);
+      billboardMaterial.diffuseColor = new BABYLON.Color3(0.46, 0.46, 0.46);
+      billboardMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
+      billboardMaterial.specularPower = 0;
+      billboardMaterial.emissiveColor = new BABYLON.Color3(0, 0, 0);
       
       billboardMaterial.backFaceCulling = false;
-      
-      // console.log('Billboard atlas material initialized with atlas-hd.png, transparency, and soft lighting');
     }
   }
   
+  // Extract model type from path for billboard atlas lookup
+  // Order matters: more specific matches (e.g. rocks_plain) before general ones
+  const BILLBOARD_TYPES = [
+    'rocks_plain', 'rocks_moss', 'rocks_snow',
+    'trees', 'mushroom', 'tortle', 'birdy', 'frog', 'windvane', 'flag',
+    'villager', 'brigand', 'engineer', 'monk', 'wizard', 'warlock',
+    'agora', 'camp', 'village', 'farm', 'silo', 'tower',
+    'mine', 'tavern', 'moonwell', 'barracks', 'lab', 'workshop', 'factory', 'church',
+    'well', 'perch',
+    'warrior', 'archer', 'priest', 'shaman', 'myco', 'wagon', 'dirigible', 'apc',
+  ];
+
+  function modelPathToType(modelPath) {
+    for (const t of BILLBOARD_TYPES) {
+      if (modelPath.includes(t)) return t;
+    }
+    return 'other';
+  }
+
   // Get or create instanced mesh for a specific model type
   function getBillboardMasterMesh(modelPath, scene) {
-    // Determine model type from path - expanded to handle more model types
-    let modelType = 'other';
-    if (modelPath.includes('tree')) modelType = 'tree';
-    else if (modelPath.includes('gate')) modelType = 'gate';
-    else if (modelPath.includes('windvane')) modelType = 'windvane';
-    else if (modelPath.includes('tortle')) modelType = 'tortle';
-    else if (modelPath.includes('birdy')) modelType = 'birdy';
-    else if (modelPath.includes('mushroom')) modelType = 'mushroom';
-    else if (modelPath.includes('frog')) modelType = 'frog';
-    else if (modelPath.includes('flag')) modelType = 'flag';
-    else if (modelPath.includes('rocks_plain')) modelType = 'rocks_plain';
-    else if (modelPath.includes('rocks_moss')) modelType = 'rocks_moss';
-    else if (modelPath.includes('rocks_snow')) modelType = 'rocks_snow';
-    else if (modelPath.includes('windmill')) modelType = 'windmill';
-    else if (modelPath.includes('factory')) modelType = 'factory';
-    else if (modelPath.includes('gnome')) modelType = 'gnome';
-    else if (modelPath.includes('villager')) modelType = 'villager';
-    else if (modelPath.includes('ae')) modelType = 'ae';
-    else if (modelPath.includes('trees')) modelType = 'trees';
-    else if (modelPath.includes('agora')) modelType = 'agora';
+    let modelType = modelPathToType(modelPath);
     
     // Create master mesh for this type if it doesn't exist
     if (!billboardInstancedMeshes.has(modelType)) {
@@ -305,105 +306,68 @@
     return billboardInstancedMeshes.get(modelType);
   }
   
-  // Get UV coordinates for model type (cached for performance)
+  // Atlas cell positions - matches spritesheet-gen.html layout
+  const ATLAS_CELLS = {
+    // Row 0: Nature
+    trees: [0,0], rocks_plain: [1,0], rocks_moss: [2,0], rocks_snow: [3,0],
+    mushroom: [4,0], tortle: [5,0], birdy: [6,0], frog: [7,0],
+    // Row 1: Structures
+    windvane: [0,1], flag: [1,1], agora: [2,1], camp: [3,1],
+    village: [4,1], farm: [5,1], silo: [6,1], tower: [7,1],
+    // Row 2: Buildings
+    mine: [0,2], tavern: [1,2], moonwell: [2,2], barracks: [3,2],
+    lab: [4,2], workshop: [5,2], factory: [6,2], church: [7,2],
+    // Row 3: Buildings + units
+    well: [0,3], perch: [1,3], villager: [2,3], brigand: [3,3],
+    engineer: [4,3], monk: [5,3], wizard: [6,3], warlock: [7,3],
+    // Row 4: Units
+    warrior: [0,4], archer: [1,4], priest: [2,4], shaman: [3,4],
+    myco: [4,4], wagon: [5,4], dirigible: [6,4], apc: [7,4],
+  };
+
   const modelUVCache = new Map();
   function getModelUV(modelPath) {
-    if (modelUVCache.has(modelPath)) {
-      return modelUVCache.get(modelPath);
-    }
-    
-    // 1024x1024 atlas: 8 columns x 8 rows = 64 total slots
-    const cellSizeX = 1/8;  // 8 columns
-    const cellSizeY = 1/8;  // 8 rows
-    let cellX = 0, cellY = 0;
-    
-    // Row 0: Basic models
-    if (modelPath.includes('tree')) {
-      cellX = 0; cellY = 0; // Trees - first cell
-    } else if (modelPath.includes('gate')) {
-      cellX = 1; cellY = 0; // Gates - second cell
-    } else if (modelPath.includes('windvane')) {
-      cellX = 2; cellY = 0; // Windvanes - third cell
-    } else if (modelPath.includes('tortle')) {
-      cellX = 3; cellY = 0; // Tortles - fourth cell
-    } else if (modelPath.includes('birdy')) {
-      cellX = 4; cellY = 0; // Birds - fifth cell
-    } else if (modelPath.includes('mushroom')) {
-      cellX = 5; cellY = 0; // Mushrooms - sixth cell
-    } else if (modelPath.includes('frog')) {
-      cellX = 6; cellY = 0; // Frogs - seventh cell
-    } else if (modelPath.includes('flag')) {
-      cellX = 7; cellY = 0; // Flags - eighth cell
-    }
-    // Row 1: Rock variants and structures
-    else if (modelPath.includes('rocks_plain')) {
-      cellX = 0; cellY = 1; // Plain rocks
-    } else if (modelPath.includes('rocks_moss')) {
-      cellX = 1; cellY = 1; // Mossy rocks
-    } else if (modelPath.includes('rocks_snow')) {
-      cellX = 2; cellY = 1; // Snowy rocks
-    } else if (modelPath.includes('windmill')) {
-      cellX = 3; cellY = 1; // Windmill
-    } else if (modelPath.includes('factory')) {
-      cellX = 4; cellY = 1; // Factory
-    } else if (modelPath.includes('gnome')) {
-      cellX = 5; cellY = 1; // Gnome
-    } else if (modelPath.includes('villager')) {
-      cellX = 6; cellY = 1; // Villager
-    } else if (modelPath.includes('ae')) {
-      cellX = 7; cellY = 1; // AE model
-    }
-    // Row 2: Additional models and variants
-    else if (modelPath.includes('trees')) {
-      cellX = 0; cellY = 2; // Trees (plural)
-    } else if (modelPath.includes('agora')) {
-      cellX = 1; cellY = 2; // Agora
-    } else {
-      // Default to first slot of row 3 for any other models
-      cellX = 0; cellY = 3;
-    }
-    
-    // UV coordinates for a quad - flipped V to fix upside-down
+    if (modelUVCache.has(modelPath)) return modelUVCache.get(modelPath);
+
+    const cellSizeX = 1/8;
+    const cellSizeY = 1/8;
+
+    const modelType = modelPathToType(modelPath);
+    const cell = ATLAS_CELLS[modelType] || [0, 5];
+    const cellX = cell[0];
+    const cellY = cell[1];
+
     const u1 = cellX * cellSizeX;
     const u2 = (cellX + 1) * cellSizeX;
-    const v1 = 1.0 - (cellY * cellSizeY);      // top of texture (flipped)
-    const v2 = 1.0 - ((cellY + 1) * cellSizeY); // bottom of texture (flipped)
-    
-    const uvs = [
-      u1, v2,  // bottom-left
-      u2, v2,  // bottom-right  
-      u2, v1,  // top-right
-      u1, v1   // top-left
-    ];
-    
-    // console.log(`Model ${modelPath} -> Cell (${cellX},${cellY}) -> UVs: ${u1.toFixed(3)}-${u2.toFixed(3)}, ${v1.toFixed(3)}-${v2.toFixed(3)}`);
-    
+    const v1 = 1.0 - (cellY * cellSizeY);
+    const v2 = 1.0 - ((cellY + 1) * cellSizeY);
+
+    const uvs = [u1, v2, u2, v2, u2, v1, u1, v1];
     modelUVCache.set(modelPath, uvs);
     return uvs;
   }
 
+  // Per-type Y offsets so each billboard sits at the right height
+  // Positive = lift up, negative = push down. Scaled by billboard scale.
+  const BILLBOARD_Y_OFFSETS = {
+    // Nature: rocks/mushrooms are squat, sprite is centered in cell
+    rocks_plain: -0.8, rocks_moss: -0.8, rocks_snow: -0.8,
+    mushroom: -0.5, tortle: -0.3, frog: -0.5,
+    // Trees/tall things: origin at base, sprite fills cell top-to-bottom
+    trees: 0, birdy: 0,
+    // Structures: origin at base
+    windvane: 0, flag: 0, agora: 0, camp: 0, village: 0, farm: 0,
+    silo: 0, tower: 0, mine: 0, tavern: 0, moonwell: 0, barracks: 0,
+    lab: 0, workshop: 0, factory: 0, church: 0, well: 0, perch: 0,
+    // Units: origin at feet
+    villager: 0, brigand: 0, engineer: 0, monk: 0, wizard: 0, warlock: 0,
+    warrior: 0, archer: 0, priest: 0, shaman: 0, myco: 0,
+    wagon: 0, dirigible: 0, apc: 0,
+  };
+
   // Get a billboard instance from the pool (optimized)
   function getBillboardInstance(modelPath, position, scale, scene) {
-    // Determine model type - expanded to handle more model types
-    let modelType = 'other';
-    if (modelPath.includes('tree')) modelType = 'tree';
-    else if (modelPath.includes('gate')) modelType = 'gate';
-    else if (modelPath.includes('windvane')) modelType = 'windvane';
-    else if (modelPath.includes('tortle')) modelType = 'tortle';
-    else if (modelPath.includes('birdy')) modelType = 'birdy';
-    else if (modelPath.includes('mushroom')) modelType = 'mushroom';
-    else if (modelPath.includes('frog')) modelType = 'frog';
-    else if (modelPath.includes('flag')) modelType = 'flag';
-    else if (modelPath.includes('rocks_plain')) modelType = 'rocks_plain';
-    else if (modelPath.includes('rocks_moss')) modelType = 'rocks_moss';
-    else if (modelPath.includes('rocks_snow')) modelType = 'rocks_snow';
-    else if (modelPath.includes('windmill')) modelType = 'windmill';
-    else if (modelPath.includes('factory')) modelType = 'factory';
-    else if (modelPath.includes('gnome')) modelType = 'gnome';
-    else if (modelPath.includes('villager')) modelType = 'villager';
-    else if (modelPath.includes('ae')) modelType = 'ae';
-    else if (modelPath.includes('trees')) modelType = 'trees';
-    else if (modelPath.includes('agora')) modelType = 'agora';
+    let modelType = modelPathToType(modelPath);
     
     // Get the master mesh for this type
     const masterMesh = getBillboardMasterMesh(modelPath, scene);
@@ -424,11 +388,12 @@
     // Configure the instance (reuse existing objects to avoid GC)
     instance.position.copyFrom(position);
     
-    // Set pivot to bottom of billboard so scaling keeps it grounded
-    instance.setPivotPoint(new BABYLON.Vector3(0, -0.5, 0)); // Bottom of unit plane
+    // Apply per-type Y offset so squat things (rocks) don't float
+    const yOffset = BILLBOARD_Y_OFFSETS[modelType] || 0;
+    instance.position.y += yOffset * scale;
     
-    // Random rotation variation - just 180° flip for horizontal variety
-    // const shouldRotate = Math.random() < 0.5; // 50% chance to rotate 180°
+    // Set pivot to bottom of billboard so scaling keeps it grounded
+    instance.setPivotPoint(new BABYLON.Vector3(0, -1.5, 0)); // Bottom of 3-unit-tall plane
     
     instance.scaling.x = scale;
     instance.scaling.y = scale;
@@ -446,40 +411,26 @@
   }
   
   // Return a billboard instance to the pool (optimized)
+  // Extracts model type from instance name format: "billboard_{type}_{index}"
   function returnBillboardInstance(instance) {
     instance.setEnabled(false);
-    
-    // Determine which pool to return to based on instance name
-    const instanceName = instance.name;
-    if (instanceName.includes('_tree_')) billboardInstancePools.get('tree').push(instance);
-    else if (instanceName.includes('_gate_')) billboardInstancePools.get('gate').push(instance);
-    else if (instanceName.includes('_windvane_')) billboardInstancePools.get('windvane').push(instance);
-    else if (instanceName.includes('_tortle_')) billboardInstancePools.get('tortle').push(instance);
-    else if (instanceName.includes('_birdy_')) billboardInstancePools.get('birdy').push(instance);
-    else if (instanceName.includes('_mushroom_')) billboardInstancePools.get('mushroom').push(instance);
-    else if (instanceName.includes('_frog_')) billboardInstancePools.get('frog').push(instance);
-    else if (instanceName.includes('_flag_')) billboardInstancePools.get('flag').push(instance);
-    else if (instanceName.includes('_rocks_plain_')) billboardInstancePools.get('rocks_plain').push(instance);
-    else if (instanceName.includes('_rocks_moss_')) billboardInstancePools.get('rocks_moss').push(instance);
-    else if (instanceName.includes('_rocks_snow_')) billboardInstancePools.get('rocks_snow').push(instance);
-    else if (instanceName.includes('_windmill_')) billboardInstancePools.get('windmill').push(instance);
-    else if (instanceName.includes('_factory_')) billboardInstancePools.get('factory').push(instance);
-    else if (instanceName.includes('_gnome_')) billboardInstancePools.get('gnome').push(instance);
-    else if (instanceName.includes('_villager_')) billboardInstancePools.get('villager').push(instance);
-    else if (instanceName.includes('_ae_')) billboardInstancePools.get('ae').push(instance);
-    else if (instanceName.includes('_trees_')) billboardInstancePools.get('trees').push(instance);
-    else if (instanceName.includes('_agora_')) billboardInstancePools.get('agora').push(instance);
-    else billboardInstancePools.get('other').push(instance);
+    const parts = instance.name.split('_');
+    // Multi-part types like "rocks_plain" sit between "billboard" and the final numeric index
+    const modelType = parts.slice(1, -1).join('_');
+    const pool = billboardInstancePools.get(modelType);
+    if (pool) {
+      pool.push(instance);
+    }
   }
 
   // Get or create a model instance from the pool
-  function getPooledModel(modelPath, scene, position, rotation, scale) {
+  function getPooledModel(modelPath, scene, position, rotation, scale, resourceGridX, resourceGridZ) {
     // Check if we should use GPU instancing for this model type
     const useInstance = shouldUseInstancing(modelPath);
     
     if (useInstance) {
       return getOrCreateInstanceMaster(modelPath, scene).then(master => {
-        const instancedModel = createInstancedModel(master, position, rotation, scale);
+        const instancedModel = createInstancedModel(master, position, rotation, scale, modelPath, resourceGridX, resourceGridZ);
         
         // CRITICAL: Keep model disabled - LOD system will enable it based on distance
         instancedModel.root.setEnabled(false);
@@ -610,6 +561,12 @@
       model.root.position.set(0, -1000, 0);
       model.root.setEnabled(true); // Master must be enabled for instances to render
       
+      // Master meshes must NOT be pickable — only instances should be.
+      // Without this, clicks can hit the master at (0,-1000,0) and resolve
+      // to grid tile (0,0), sending villagers to the map corner.
+      model.root.isPickable = false;
+      meshes.forEach(m => { m.isPickable = false; });
+      
       const master = {
         root: model.root,
         meshes: meshes,
@@ -629,8 +586,9 @@
   }
   
   // Create an instanced copy of a master mesh
-  function createInstancedModel(master, position, rotation, scale) {
+  function createInstancedModel(master, position, rotation, scale, modelPath, resourceGridX, resourceGridZ) {
     const instances = [];
+    const isResourceModel = modelPath && (modelPath.includes('rock') || modelPath.includes('tree'));
     
     // Create a container TransformNode to hold all instances
     const container = new BABYLON.TransformNode(`instContainer_${Date.now()}`, gfx.scene);
@@ -645,7 +603,16 @@
     // CRITICAL: Compute FULL transform relative to master root (accounts for hierarchy)
     master.meshes.forEach((mesh, index) => {
       const instance = mesh.createInstance(`inst_${mesh.name}_${Date.now()}_${index}`);
-      instance.isPickable = false;
+      instance.isPickable = isResourceModel;
+      if (isResourceModel) {
+        instance.metadata = instance.metadata || {};
+        instance.metadata.isResource = true;
+        if (resourceGridX !== undefined && resourceGridZ !== undefined) {
+          instance.metadata.resourceGridX = resourceGridX;
+          instance.metadata.resourceGridZ = resourceGridZ;
+          instance.metadata.resourceTileKey = `${resourceGridX},${resourceGridZ}`;
+        }
+      }
       
       // Compute mesh's world matrix relative to the master root
       // This captures ALL parent transforms in the hierarchy
@@ -673,6 +640,13 @@
     container.rotationQuaternion = null;
     container.rotation.y = rotation;
     container.scaling.set(scale, scale, scale);
+    if (isResourceModel && resourceGridX !== undefined && resourceGridZ !== undefined) {
+      container.metadata = container.metadata || {};
+      container.metadata.isResource = true;
+      container.metadata.resourceGridX = resourceGridX;
+      container.metadata.resourceGridZ = resourceGridZ;
+      container.metadata.resourceTileKey = `${resourceGridX},${resourceGridZ}`;
+    }
     
     return {
       root: container,
@@ -813,7 +787,7 @@
     
     // Reload all resources with new mode
     resourcesToReload.forEach(info => {
-      getPooledModel(info.modelPath, gfx.scene, info.position, info.rotation, info.scale)
+      getPooledModel(info.modelPath, gfx.scene, info.position, info.rotation, info.scale, info.gridX, info.gridZ)
         .then(model => {
           model.root.setEnabled(false); // Start disabled for LOD
           
@@ -1087,6 +1061,21 @@
   gfx.forceUpdateLOD = function(cameraPosition) {
     updateLOD(cameraPosition);
   };
+
+  // Expose LOD functions for buildings and units to register/unregister
+  gfx.addLODBillboard = function(model, scene, modelRule, cameraPosition, chunkKey) {
+    return addLODBillboard(model, scene, modelRule, cameraPosition, chunkKey);
+  };
+  gfx.removeModelFromLOD = function(modelRoot) {
+    removeModelFromLOD(modelRoot);
+  };
+  gfx.getBillboardInstance = function(modelPath, position, scale, scene) {
+    initBillboardAtlas(scene);
+    return getBillboardInstance(modelPath, position, scale, scene);
+  };
+  gfx.returnBillboardInstance = function(instance) {
+    returnBillboardInstance(instance);
+  };
   
   // Force-load chunks immediately around a position (for match start)
   gfx.forceLoadChunks = function(x, z) {
@@ -1098,6 +1087,8 @@
     // console.log(`🗺️ Force-loading chunks around (${x.toFixed(1)}, ${z.toFixed(1)})`);
     
     // Clear the chunk queue AND model queue to prioritize immediate loading
+    // Preserve manual resource tasks (chunk === null) queued by placeManualResource
+    const manualResourceTasks = modelLoadQueue.filter(t => t.chunk === null);
     chunkQueue.length = 0;
     modelLoadQueue.length = 0;
     
@@ -1152,7 +1143,7 @@
     modelLoadQueue.length = 0; // Clear queue
     
     for (const task of queueCopy) {
-      const promise = getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale)
+      const promise = getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale, task.gridX, task.gridZ)
         .then(model => {
           // Set up shadows
           if (window.gfx && window.gfx.setupMeshShadows) {
@@ -1175,19 +1166,43 @@
           // Make resource models (rocks and trees) pickable for click commands
           const isResourceModel = task.modelPath.includes('rock') || task.modelPath.includes('tree');
           model.root.isPickable = isResourceModel;
+          if (isResourceModel) {
+            model.root.metadata = model.root.metadata || {};
+            model.root.metadata.isResource = true;
+            if (task.gridX !== undefined) {
+              model.root.metadata.resourceGridX = task.gridX;
+              model.root.metadata.resourceGridZ = task.gridZ;
+            }
+          }
           model.root.getChildMeshes().forEach(mesh => {
             mesh.isPickable = isResourceModel;
+            if (isResourceModel) {
+              mesh.metadata = mesh.metadata || {};
+              mesh.metadata.isResource = true;
+              if (task.gridX !== undefined) {
+                mesh.metadata.resourceGridX = task.gridX;
+                mesh.metadata.resourceGridZ = task.gridZ;
+              }
+            }
             if (mesh.material && mesh.material.emissiveColor) {
               mesh.material.emissiveColor = new BABYLON.Color3(0, 0, 0);
             }
           });
           
           // Add to LOD system with spawn camera position - it will set correct initial state
-          addLODBillboard(model, task.scene, task.modelRule, {x, y: 9, z});
+          addLODBillboard(model, task.scene, task.modelRule, {x, y: 9, z}, chunkKey);
         })
         .catch(err => console.warn('Model loading failed during force load:', err));
       
       modelPromises.push(promise);
+    }
+    
+    // Re-queue manual resource tasks that were preserved earlier
+    if (manualResourceTasks.length > 0) {
+      modelLoadQueue.push(...manualResourceTasks);
+      if (!isProcessingQueue) {
+        requestAnimationFrame(processModelQueue);
+      }
     }
     
     // Wait for all models to load, then update LOD
@@ -1317,11 +1332,30 @@
     
     // console.log(`✅ LOD system fully reset - all models disposed`);
     
-    // Re-apply shadow mode from saved preference after a delay
+    // Re-apply shadow mode and reconfigure shadow generator after a delay
     // This ensures new models get the correct shadow treatment
     setTimeout(() => {
       if (window.hud && window.hud.updateShadowMode && window.SHADOW_MODE !== undefined) {
         window.hud.updateShadowMode(window.SHADOW_MODE);
+      }
+      // Force full shadow generator rebuild so frustum/resolution match the new scene
+      if (window.SHADOWS_ENABLED && gfx.shadowGenerator && window.lighting?.lights?.sun) {
+        const savedLOD = localStorage.getItem('lodLevel');
+        const lodLevel = savedLOD ? parseInt(savedLOD) : 50;
+        try {
+          gfx.shadowGenerator.dispose();
+          const res = gfx.getShadowResolutionForLOD
+            ? gfx.getShadowResolutionForLOD(lodLevel)
+            : 1024;
+          gfx.shadowGenerator = new BABYLON.ShadowGenerator(res, window.lighting.lights.sun);
+          gfx.configureShadowGeneratorSettings(gfx.shadowGenerator, lodLevel);
+          gfx.lastLODLevel = lodLevel;
+          if (gfx.updateAllMeshShadows) {
+            gfx.updateAllMeshShadows(true);
+          }
+        } catch (e) {
+          console.warn('Shadow generator rebuild failed:', e);
+        }
       }
     }, 500);
   };
@@ -1402,7 +1436,7 @@ let pov2 = 240;
         { path: "assets/models/mushroom.glb", chance: 0.2, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 20% - rare finds
         { path: "assets/models/rocks_plain.glb", chance: 0.3, scale: 3.0, billboardScale: 3, lodDistance: pov1 }, // 30% - plain rocks
         { path: "assets/models/rocks_moss.glb", chance: 0.4, scale: 7.5, billboardScale: 5.9, lodDistance: pov2 }, // 40% - moss rocks
-        { path: "assets/models/trees.glb", chance: 0.75, scale: .9, billboardScale: 3, lodDistance: pov1 }, // 70% - THICK FORESTS!
+        { path: "assets/models/trees.glb", chance: 0.75, scale: .9, billboardScale: 2.4, lodDistance: pov1 }, // 70% - THICK FORESTS!
         { path: "assets/models/tortle.glb", chance: 0.5, scale: 0.1, billboardScale: 11, lodDistance: pov1 }, // 50% - more tortles
         { path: "assets/models/frog.glb", chance: 0.6, scale: 0.1, billboardScale: 0.5, lodDistance: pov1 }, // 60% - more frogs
         { path: "assets/models/rocks_snow.glb", chance: 0.95, scale: 11.5, billboardScale: 7.5, lodDistance: pov2 } // 95% - snow everywhere!
@@ -1487,7 +1521,7 @@ let pov2 = 240;
         task.gridX !== undefined && task.gridZ !== undefined;
       const resourceKey = isResourceTask ? `${task.gridX},${task.gridZ}` : null;
       
-      getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale)
+      getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale, task.gridX, task.gridZ)
         .then(model => {
           // Set up shadows for the model
           if (window.gfx && window.gfx.setupMeshShadows) {
@@ -1516,34 +1550,55 @@ let pov2 = 240;
             });
           }
           
-          // All the same model setup logic
           task.models.push(model);
-          model.root.parent = task.chunk.mesh;
           
-          // Start model hidden - LOD will determine visibility
-          // But in forge mode, show immediately (unless billboard-only mode)
-          if (ENABLE_FORGE) {
-            const showModel = !BILLBOARD_ONLY_MODE;
-            model.root.setEnabled(showModel);
-            model.root.getChildMeshes().forEach(m => m.setEnabled(showModel));
+          if (task.chunk) {
+            model.root.parent = task.chunk.mesh;
+            
+            // Start model hidden - LOD will determine visibility
+            if (ENABLE_FORGE) {
+              const showModel = !BILLBOARD_ONLY_MODE;
+              model.root.setEnabled(showModel);
+              model.root.getChildMeshes().forEach(m => m.setEnabled(showModel));
+            } else {
+              model.root.setEnabled(false);
+            }
+            
+            const chunkKey = `${task.chunk.chunkX},${task.chunk.chunkZ}`;
+            if (!activeModels.has(chunkKey)) {
+              activeModels.set(chunkKey, []);
+            }
+            activeModels.get(chunkKey).push({
+              model: model,
+              path: task.modelPath
+            });
           } else {
-            model.root.setEnabled(false);
+            // Manual resource (no chunk) - visible immediately
+            model.root.setEnabled(true);
+            model.root.getChildMeshes().forEach(m => m.setEnabled(true));
           }
-          
-          const chunkKey = `${task.chunk.chunkX},${task.chunk.chunkZ}`;
-          if (!activeModels.has(chunkKey)) {
-            activeModels.set(chunkKey, []);
-          }
-          activeModels.get(chunkKey).push({
-            model: model,
-            path: task.modelPath
-          });
           
           // Make resource models (rocks and trees) pickable for click commands
           const isResourceModel = task.modelPath.includes('rock') || task.modelPath.includes('tree');
           model.root.isPickable = isResourceModel;
+          if (isResourceModel) {
+            model.root.metadata = model.root.metadata || {};
+            model.root.metadata.isResource = true;
+            if (task.gridX !== undefined) {
+              model.root.metadata.resourceGridX = task.gridX;
+              model.root.metadata.resourceGridZ = task.gridZ;
+            }
+          }
           model.root.getChildMeshes().forEach(mesh => {
             mesh.isPickable = isResourceModel;
+            if (isResourceModel) {
+              mesh.metadata = mesh.metadata || {};
+              mesh.metadata.isResource = true;
+              if (task.gridX !== undefined) {
+                mesh.metadata.resourceGridX = task.gridX;
+                mesh.metadata.resourceGridZ = task.gridZ;
+              }
+            }
             
             // Ensure models receive proper lighting
             if (mesh.material) {
@@ -1557,7 +1612,8 @@ let pov2 = 240;
           
           // Add LOD billboard with chunk info for grouped checking
           // In forge mode, still create billboard (needed for billboard-only mode)
-          addLODBillboard(model, task.scene, task.modelRule, gfx.cameraTarget ? gfx.cameraTarget.position : null, chunkKey);
+          const lodChunkKey = task.chunk ? `${task.chunk.chunkX},${task.chunk.chunkZ}` : 'manual';
+          addLODBillboard(model, task.scene, task.modelRule, gfx.cameraTarget ? gfx.cameraTarget.position : null, lodChunkKey);
           
           // In forge mode with billboard-only, show billboard immediately
           if (ENABLE_FORGE && BILLBOARD_ONLY_MODE) {
@@ -1650,7 +1706,14 @@ let pov2 = 240;
   window.placeManualResource = function(gridX, gridZ, resourceType) {
     const field = window.liveField;
     if (!field || !gfx.scene) return;
-    
+
+    // Skip resources in disabled chunks (void areas)
+    if (field.chunkMask && field.chunkSize) {
+      const chunkX = Math.floor(gridX / field.chunkSize);
+      const chunkZ = Math.floor(gridZ / field.chunkSize);
+      if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
+    }
+
     const resourcePaths = {
       trees: { path: 'assets/models/trees.glb', scale: 0.9 },
       rocks_plain: { path: 'assets/models/rocks_plain.glb', scale: 3.0 },
@@ -1679,7 +1742,17 @@ let pov2 = 240;
       gridX: gridX,
       gridZ: gridZ
     });
-    
+
+    // Mark pathfinding tiles for manual resources (rocks = blocked, trees = slow)
+    if (resourceType.includes('rock')) {
+      let radius = 0;
+      if (resInfo.scale >= 10) radius = 2;
+      else if (resInfo.scale >= 6) radius = 1;
+      if (field.blockFootprint) field.blockFootprint(gridX, gridZ, radius);
+    } else if (resourceType.includes('tree')) {
+      if (field.slowTile) field.slowTile(gridX, gridZ);
+    }
+
     // Start processing queue if not running
     if (!isProcessingQueue && modelLoadQueue.length > 0) {
       requestAnimationFrame(processModelQueue);
@@ -1836,8 +1909,8 @@ let pov2 = 240;
         if (primaryMesh && root === primaryMesh) continue;
         
         const modelPos = root.getAbsolutePosition();
-        const modelGridX = Math.round(modelPos.x / TILE_SIZE);
-        const modelGridZ = Math.round(modelPos.z / TILE_SIZE);
+        const modelGridX = Math.floor(modelPos.x / TILE_SIZE);
+        const modelGridZ = Math.floor(modelPos.z / TILE_SIZE);
         
         if (modelGridX === gridX && modelGridZ === gridZ) {
           removeModelFromLOD(root);
@@ -1873,8 +1946,8 @@ let pov2 = 240;
             if (modelInfo.path && (modelInfo.path.includes('trees.glb') || modelInfo.path.includes('rocks_'))) {
               // Use WORLD position, not local position (mesh is parented to chunk)
               const modelPos = modelInfo.model.root.getAbsolutePosition();
-              const modelGridX = Math.round(modelPos.x / TILE_SIZE);
-              const modelGridZ = Math.round(modelPos.z / TILE_SIZE);
+              const modelGridX = Math.floor(modelPos.x / TILE_SIZE);
+              const modelGridZ = Math.floor(modelPos.z / TILE_SIZE);
               
               // Check if this model is at the target grid position
               if (modelGridX === gridX && modelGridZ === gridZ) {
@@ -1986,6 +2059,10 @@ let pov2 = 240;
     const field = window.liveField;
     if (!field) {
       // console.log('⚠️ No field for decorations');
+      return models;
+    }
+    
+    if (field.noAutoResources) {
       return models;
     }
     
@@ -2215,26 +2292,8 @@ let pov2 = 240;
       // Different spawn rates: 20% on grass, 5% on dirt
       const treeSpawnRate = terrainType === 3 ? 0.20 : 0.05;
       
-      // Skip trees near camps - they should grow further out
       const worldX = (gridX + 0.5) * TILE_SIZE;
       const worldZ = (gridZ + 0.5) * TILE_SIZE;
-      if (window.gameBuildings) {
-        let tooCloseToCamp = false;
-        for (const building of window.gameBuildings) {
-          if (building.type === 'camp' && building.position) {
-            const campWorkRadius = (window.BuildingTypes && window.BuildingTypes.camp && window.BuildingTypes.camp.workRadius) || 5;
-            const exclusionRadius = (campWorkRadius + 3) * TILE_SIZE; // Work radius + 3 extra tiles buffer
-            const dx = worldX - building.position.x;
-            const dz = worldZ - building.position.z;
-            const distanceSq = dx * dx + dz * dz;
-            if (distanceSq < exclusionRadius * exclusionRadius) {
-              tooCloseToCamp = true;
-              break;
-            }
-          }
-        }
-        if (tooCloseToCamp) return; // Skip placing trees near camps
-      }
       
       // Simple per-tile hash for tree placement
       const treeRoll = tileHash(gridX, gridZ, fieldSeed + 3000);
@@ -2288,7 +2347,7 @@ let pov2 = 240;
                   scale: 0.9,
                   chunk: chunk,
                   models: models,
-                  modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 3, lodDistance: 170 },
+                  modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 2.4, lodDistance: 170 },
                   gridX: respawnPos.gridX,
                   gridZ: respawnPos.gridZ
                 });
@@ -2345,7 +2404,7 @@ let pov2 = 240;
           scale: 0.9,
           chunk: chunk,
           models: models,
-          modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 3, lodDistance: 170 },
+          modelRule: { path: "assets/models/trees.glb", scale: 0.9, billboardScale: 2.4, lodDistance: 170 },
           gridX: gridX, // For resource depletion tracking
           gridZ: gridZ
         });
@@ -3019,6 +3078,11 @@ let pov2 = 240;
         if (hud.initVolumeSlider) {
           hud.initVolumeSlider();
         }
+
+        // Apply saved shadow mode immediately (do not wait for settings menu open).
+        if (hud.initializeShadowsMode) {
+          hud.initializeShadowsMode();
+        }
         
         // Only initialize 3D HUD if USE_3D_HUD is true
         if (USE_3D_HUD) {
@@ -3047,9 +3111,8 @@ let pov2 = 240;
       // console.log('🌄 Simple mountains created successfully');
       // console.log(`🌄 Creating subtle low-relief mountains`);
 
-      // In the scene.whenReady callback (around line 1373), re-enable the mountain creation:
-      if (gfx.scene && window.liveField) {
-        gfx.mountains = createSimpleMountains(gfx.scene, window.liveField.width);
+      if (gfx.scene && window.liveField && typeof gfx.recreateMountains === 'function') {
+        gfx.recreateMountains();
       }
     });
   }
@@ -3814,8 +3877,9 @@ let pov2 = 240;
         // console.log('Initializing shadow generator with sun light:', sunLight.name);
         
         try {
-          // Pick initial shadow resolution based on saved LOD (or default 100 for refined shadows)
-          let initialLOD = 100; // Default to high quality (2048 resolution) for refined shadows
+          // Pick initial shadow resolution based on saved LOD
+          // MUST match the LOD slider default (50) to avoid oversized frustum before settings is opened
+          let initialLOD = 50;
           try {
             const savedLOD = localStorage.getItem('lodLevel');
             if (savedLOD) {
@@ -3829,7 +3893,7 @@ let pov2 = 240;
           }
           const initialShadowRes = gfx.getShadowResolutionForLOD
             ? gfx.getShadowResolutionForLOD(initialLOD)
-            : 2048; // Default to refined shadows (2048) if function not available
+            : 1024; // Fallback matches LOD 50 default
 
           gfx.shadowGenerator = new BABYLON.ShadowGenerator(initialShadowRes, sunLight);
           // Apply centralized quality settings so visuals match reconfigureShadowGenerator
@@ -4182,7 +4246,9 @@ let pov2 = 240;
           (mesh.name.length === 1 && ['N', 'E', 'S', 'W'].includes(mesh.name)) ||
           (mesh.name.length === 2 && ['SW', 'SE', 'NE', 'NW', 'NT', 'ET', 'ST', 'WT'].includes(mesh.name)) ||
           mesh.name.includes('edge_') || mesh.name.includes('corner_');
+        const isLassoSelectionPlane = ['topPlane', 'rightPlane', 'bottomPlane', 'leftPlane'].includes(mesh.name);
         const isUIMesh = isTableFloor ||
+                        isLassoSelectionPlane || // 3D selection rectangle planes
                         (mesh.name.includes('table') && !isTableSideOrCorner) ||
                         mesh.name.includes('UI') ||
                         mesh.name.includes('radial') ||
@@ -4205,7 +4271,12 @@ let pov2 = 240;
                           mesh.parent.name.includes('mountain') || // Skip mountain children
                           mesh.parent.name.includes('horizon') // Skip horizon children
                         ));
-        if (isUIMesh) return;
+        if (isUIMesh) {
+          if (isLassoSelectionPlane && gfx.shadowGenerator) {
+            gfx.shadowGenerator.removeShadowCaster(mesh);
+          }
+          return;
+        }
         
         // All game meshes can receive shadows (or not) - skip instanced meshes
         if (!mesh.isAnInstance) {
@@ -4293,8 +4364,8 @@ let pov2 = 240;
                       (mesh.name.includes('table') && !isTableSideOrCorner) ||
                       mesh.name.includes('UI') || 
                       mesh.name.includes('menu') ||
-                      mesh.name.includes('Indicator') ||
-                      mesh.name.includes('indicator') ||
+                      (mesh.name.includes('Indicator') && !mesh.name.includes('resource')) ||
+                      (mesh.name.includes('indicator') && !mesh.name.includes('resource')) ||
                       mesh.name.includes('HUD') ||
                       mesh.name.includes('hud') ||
                       mesh.name.includes('minimap') ||
@@ -4344,8 +4415,8 @@ let pov2 = 240;
         // Skip UI child meshes too
         const isUIChild = childMesh.name.includes('selectionRing') ||
                          childMesh.name.includes('SelectionRing') ||
-                         childMesh.name.includes('Indicator') ||
-                         childMesh.name.includes('indicator') ||
+                         (childMesh.name.includes('Indicator') && !childMesh.name.includes('resource')) ||
+                         (childMesh.name.includes('indicator') && !childMesh.name.includes('resource')) ||
                          childMesh.name.includes('HUD') ||
                          childMesh.name.includes('hud') ||
                          childMesh.name.includes('minimap') ||
@@ -4733,6 +4804,78 @@ let pov2 = 240;
 
   // Expose getModel function publicly
   gfx.getModel = getModel;
+
+  // === Atlas sprite utilities (for HUD, menus, minimap indicators) ===
+
+  const ATLAS_TYPE_ALIASES = {
+    mycorrhizae: 'myco',
+    grove: 'trees',
+    buildings: 'agora',
+    units: 'warrior',
+    research: 'wizard',
+  };
+
+  gfx.ATLAS_CELLS = ATLAS_CELLS;
+
+  gfx.getAtlasCell = function(typeName) {
+    const key = ATLAS_TYPE_ALIASES[typeName] || typeName;
+    return ATLAS_CELLS[key] || null;
+  };
+
+  // Shared unlit material for HUD/menu atlas sprites
+  let hudAtlasMaterial = null;
+
+  function getHudAtlasMaterial(scene) {
+    if (hudAtlasMaterial) return hudAtlasMaterial;
+    hudAtlasMaterial = new BABYLON.StandardMaterial('hudAtlasMat', scene);
+    hudAtlasMaterial.diffuseTexture = new BABYLON.Texture('assets/textures/atlas-hd.png', scene);
+    hudAtlasMaterial.diffuseTexture.hasAlpha = true;
+    hudAtlasMaterial.useAlphaFromDiffuseTexture = true;
+    hudAtlasMaterial.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
+    hudAtlasMaterial.disableLighting = true;
+    hudAtlasMaterial.emissiveColor = new BABYLON.Color3(1, 1, 1);
+    hudAtlasMaterial.backFaceCulling = false;
+    return hudAtlasMaterial;
+  }
+
+  gfx.createAtlasSprite = function(typeName, scene, size, options = {}) {
+    const cell = gfx.getAtlasCell(typeName);
+    if (!cell) return null;
+
+    const plane = BABYLON.MeshBuilder.CreatePlane(`atlasSprite_${typeName}`, {
+      width: size || 0.4,
+      height: size || 0.4
+    }, scene);
+
+    const mat = getHudAtlasMaterial(scene).clone(`hudAtlas_${typeName}_${Date.now()}`);
+    if (options.tint) {
+      mat.emissiveColor = options.tint;
+    }
+    plane.material = mat;
+
+    const cellSizeX = 1/8, cellSizeY = 1/8;
+    const u1 = cell[0] * cellSizeX;
+    const u2 = (cell[0] + 1) * cellSizeX;
+    const v1 = 1.0 - (cell[1] * cellSizeY);
+    const v2 = 1.0 - ((cell[1] + 1) * cellSizeY);
+    plane.setVerticesData(BABYLON.VertexBuffer.UVKind, [u1, v2, u2, v2, u2, v1, u1, v1]);
+
+    if (options.billboard !== false) {
+      plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    }
+
+    return plane;
+  };
+
+  // Pre-load the atlas image for 2D canvas drawing
+  let atlasImage = null;
+  let atlasImageReady = false;
+  const atlasImg = new Image();
+  atlasImg.onload = function() { atlasImage = atlasImg; atlasImageReady = true; };
+  atlasImg.src = 'assets/textures/atlas-hd.png';
+
+  gfx.getAtlasImage = function() { return atlasImageReady ? atlasImage : null; };
+  gfx.ATLAS_TYPE_ALIASES = ATLAS_TYPE_ALIASES;
   
   // Expose createTerrainMesh for forge
   gfx.createTerrainMesh = createTerrainMesh;
@@ -5003,12 +5146,18 @@ let pov2 = 240;
 
   // Expose mountain recreation function
   gfx.recreateMountains = function() {
-    if (gfx.mountains && gfx.mountains.dispose) {
+    if (gfx.mountains) {
+      if (gfx.mountains.material) gfx.mountains.material.dispose();
       gfx.mountains.dispose();
+      gfx.mountains = null;
+    }
+    if (gfx.horizon) {
+      if (gfx.horizon.material) gfx.horizon.material.dispose();
+      gfx.horizon.dispose();
+      gfx.horizon = null;
     }
     const fieldDim = window.liveField ? Math.max(window.liveField.width, window.liveField.height) : 64;
     gfx.mountains = createSimpleMountains(gfx.scene, fieldDim);
-    // console.log('🏔️ Mountains recreated');
   };
   
   // Simple mountain background using Babylon's ground mesh with procedural height simulation
@@ -5147,11 +5296,13 @@ let pov2 = 240;
 
   // Remove mountains and horizon if present
   gfx.removeMountains = function() {
-    if (gfx.mountains && gfx.mountains.dispose) {
+    if (gfx.mountains) {
+      try { if (gfx.mountains.material) gfx.mountains.material.dispose(); } catch (e) {}
       try { gfx.mountains.dispose(); } catch (e) {}
     }
     gfx.mountains = null;
-    if (gfx.horizon && gfx.horizon.dispose) {
+    if (gfx.horizon) {
+      try { if (gfx.horizon.material) gfx.horizon.material.dispose(); } catch (e) {}
       try { gfx.horizon.dispose(); } catch (e) {}
     }
     gfx.horizon = null;
@@ -5188,24 +5339,6 @@ let pov2 = 240;
     
     // console.log('🌅 Horizon line created - enhances sense of vast distance');
     return horizonPlane;
-  }
-
-  // Fix the scene.whenReadyAsync mountain creation with better error handling:
-  // console.log('🌄 Creating subtle low-relief mountains');
-  if (gfx.scene && typeof BABYLON !== 'undefined') {
-    try {
-      const fieldDim = window.liveField ? Math.max(window.liveField.width, window.liveField.height) : 64;
-      gfx.mountains = createSimpleMountains(gfx.scene, fieldDim);
-      if (gfx.mountains) {
-        // console.log(`✅ Subtle mountains created successfully for ${fieldDim} field`);
-      } else {
-        // console.error('❌ Mountain creation returned null');
-      }
-    } catch (mountainError) {
-      // console.error('❌ Mountain creation failed:', mountainError);
-    }
-  } else {
-    // console.error('❌ Scene or Babylon.js not available for mountains');
   }
 
   // Ensure no lingering createMountainTerrain references - the function should be completely gone
@@ -5286,7 +5419,9 @@ let pov2 = 240;
           return;
         }
         
-        const pos = modelInfo.model.root.position;
+        // Use getAbsolutePosition for world-space distance check
+        // Models are parented to chunks, so .position is local to the chunk
+        const pos = modelInfo.model.root.getAbsolutePosition();
         const dx = pos.x - centerX * TILE_SIZE;
         const dz = pos.z - centerZ * TILE_SIZE;
         const distSq = dx * dx + dz * dz;
@@ -5319,6 +5454,23 @@ let pov2 = 240;
       
       // Remove from LOD tracking immediately (use function that also cleans up blob shadows)
       removeModelFromLOD(mesh);
+      
+      // Clean up resource registry entries so cleared resources don't linger as ghost nodes
+      unlinkMeshFromResourceRegistry(mesh);
+      
+      // Determine grid position and mark as depleted to prevent re-creation on chunk refresh
+      const absPos = mesh.getAbsolutePosition();
+      const gridX = Math.floor(absPos.x / TILE_SIZE);
+      const gridZ = Math.floor(absPos.z / TILE_SIZE);
+      const tileKey = `${gridX},${gridZ}`;
+      const isTree = item.modelInfo.path && item.modelInfo.path.includes('trees.glb');
+      
+      depletedResourceTiles.set(tileKey, {
+        originalGridX: gridX,
+        originalGridZ: gridZ,
+        felledTime: Date.now(),
+        isTree: isTree
+      });
       
       // Start the sink animation
       animateModelSink(mesh, delay);
@@ -5563,6 +5715,13 @@ let pov2 = 240;
   // Update blob shadow (no-op for thin instances - done in batch)
   gfx.updateBlobShadow = function(unit) {
     // Thin instances are updated all at once in updateAllBlobShadows
+  };
+  
+  // Set blob shadow radius (e.g. when carrying resources). Pass null to restore default.
+  gfx.setBlobShadowRadius = function(unit, radius) {
+    if (!unit || !blobShadowRadii.has(unit)) return;
+    blobShadowRadii.set(unit, radius != null ? radius : getShadowRadius(unit));
+    blobShadowsDirty = true;
   };
   
   // Set visibility of all blob shadows

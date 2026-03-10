@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Unit Spritesheet Generator</title>
+  <base href="../">
+  <script src="vendor/babylon8.js"></script>
+  <script src="vendor/babylonjs.loaders.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; }
+    #toolbar {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+      background: #16213e; padding: 8px 16px;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border-bottom: 1px solid #334;
+    }
+    #toolbar button {
+      background: #0f3460; color: #e0e0e0; border: 1px solid #445; padding: 5px 12px;
+      cursor: pointer; border-radius: 4px; font-size: 13px;
+    }
+    #toolbar button:hover { background: #1a5276; }
+    #toolbar button.primary { background: #28a745; border-color: #34d058; }
+    #toolbar button.primary:hover { background: #22863a; }
+    #toolbar label { font-size: 13px; }
+    #toolbar select { background: #0d1b2a; color: #e0e0e0; border: 1px solid #445; padding: 3px 6px; border-radius: 3px; }
+    #status { font-size: 12px; color: #8899aa; margin-left: auto; }
+    #content { margin-top: 52px; padding: 12px; }
+    #previews { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
+    .cell-preview {
+      display: inline-flex; flex-direction: column; align-items: center; gap: 2px;
+      background: #16213e; padding: 3px; border-radius: 4px; border: 1px solid #334;
+    }
+    .cell-preview canvas { border: 1px solid #333; }
+    .cell-preview .label { font-size: 9px; color: #99aacc; text-align: center; }
+    .row-break { width: 100%; height: 0; flex-basis: 100%; }
+    .row-label { width: 100%; font-size: 11px; color: #667; margin: 6px 0 2px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+    #atlas-output { padding: 12px; background: #16213e; border-radius: 8px; border: 1px solid #334; }
+    #atlas-output canvas { border: 2px solid #556; }
+    #atlas-output h3 { margin-bottom: 8px; color: #aaccee; font-size: 14px; }
+    #uv-output { margin-top: 10px; background: #0d1b2a; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 11px; white-space: pre-wrap; max-height: 250px; overflow-y: auto; }
+    .grid-overlay { position: relative; display: inline-block; }
+    .grid-overlay .grid-label {
+      position: absolute; font-size: 8px; color: #ff0; pointer-events: none;
+      text-shadow: 0 0 2px #000, 0 0 2px #000;
+    }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <strong style="color:#aaccee">Atlas Spritesheet</strong>
+  <label>Cell:
+    <select id="cellSize">
+      <option value="128">128px (1024)</option>
+      <option value="256" selected>256px (2048)</option>
+      <option value="512">512px (4096)</option>
+    </select>
+  </label>
+  <button onclick="renderAll()">Render All</button>
+  <button onclick="mergeWithExisting()" class="primary">Merge into Atlas</button>
+  <button onclick="downloadAtlas()">Download PNG</button>
+  <button onclick="copyUVCode()">Copy UV Code</button>
+  <span id="status">Ready</span>
+</div>
+
+<div id="content">
+  <div id="previews"></div>
+  <div id="atlas-output" style="display:none">
+    <h3>Atlas Preview (8x8)</h3>
+    <div class="grid-overlay" id="atlas-container"></div>
+    <div id="uv-output"></div>
+  </div>
+</div>
+
+<canvas id="renderCanvas" style="display:none" width="512" height="512"></canvas>
+
+<script>
+
+const UNIT_TYPES = new Set([
+  'villager','brigand','engineer','monk','wizard','warlock',
+  'warrior','archer','priest','shaman','myco','wagon','dirigible','apc'
+]);
+
+// zoom: how much to fill the cell (higher = tighter crop). Default 1.0
+const ATLAS = [
+  // Row 0: Nature
+  { type: 'trees',       model: 'assets/models/trees.glb',       row: 0, col: 0, zoom: 1.6 },
+  { type: 'rocks_plain', model: 'assets/models/rocks_plain.glb', row: 0, col: 1, zoom: 1.4 },
+  { type: 'rocks_moss',  model: 'assets/models/rocks_moss.glb',  row: 0, col: 2, zoom: 1.4 },
+  { type: 'rocks_snow',  model: 'assets/models/rocks_snow.glb',  row: 0, col: 3, zoom: 1.4 },
+  { type: 'mushroom',    model: 'assets/models/mushroom.glb',    row: 0, col: 4, zoom: 1.3 },
+  { type: 'tortle',      model: 'assets/models/tortle.glb',      row: 0, col: 5, zoom: 1.3 },
+  { type: 'birdy',       model: 'assets/models/birdy.glb',       row: 0, col: 6, zoom: 1.3 },
+  { type: 'frog',        model: 'assets/models/frog.glb',        row: 0, col: 7, zoom: 1.3 },
+  // Row 1: Structures
+  { type: 'windvane',    model: 'assets/models/windvane.glb',    row: 1, col: 0, zoom: 1.2 },
+  { type: 'flag',        model: 'assets/models/flag.glb',        row: 1, col: 1, zoom: 1.2 },
+  { type: 'agora',       model: 'assets/models/agora.glb',       row: 1, col: 2, zoom: 1.6 },
+  { type: 'camp',        model: 'assets/models/camp.glb',        row: 1, col: 3, zoom: 1.5 },
+  { type: 'village',     model: 'assets/models/village.glb',     row: 1, col: 4, zoom: 1.6 },
+  { type: 'farm',        model: 'assets/models/farm.glb',        row: 1, col: 5, zoom: 1.6 },
+  { type: 'silo',        model: 'assets/models/silo.glb',        row: 1, col: 6, zoom: 1.4 },
+  { type: 'tower',       model: 'assets/models/tower.glb',       row: 1, col: 7, zoom: 1.4 },
+  // Row 2: Buildings
+  { type: 'mine',        model: 'assets/models/mine.glb',        row: 2, col: 0, zoom: 1.5 },
+  { type: 'tavern',      model: 'assets/models/tavern.glb',      row: 2, col: 1, zoom: 1.5 },
+  { type: 'moonwell',    model: 'assets/models/moonwell.glb',    row: 2, col: 2, zoom: 1.4 },
+  { type: 'barracks',    model: 'assets/models/barracks.glb',    row: 2, col: 3, zoom: 1.6 },
+  { type: 'lab',         model: 'assets/models/lab.glb',         row: 2, col: 4, zoom: 1.6 },
+  { type: 'workshop',    model: 'assets/models/workshop.glb',    row: 2, col: 5, zoom: 1.5 },
+  { type: 'factory',     model: 'assets/models/factory.glb',     row: 2, col: 6, zoom: 1.6 },
+  { type: 'church',      model: 'assets/models/church.glb',      row: 2, col: 7, zoom: 1.4 },
+  // Row 3: Buildings + units
+  { type: 'well',        model: 'assets/models/well.glb',        row: 3, col: 0, zoom: 1.4 },
+  { type: 'perch',       model: 'assets/models/perch.glb',       row: 3, col: 1, zoom: 1.4 },
+  { type: 'villager',    model: 'assets/models/villager.glb',    row: 3, col: 2 },
+  { type: 'brigand',     model: 'assets/models/brigand.glb',     row: 3, col: 3 },
+  { type: 'engineer',    model: 'assets/models/engineer.glb',    row: 3, col: 4 },
+  { type: 'monk',        model: 'assets/models/monk.glb',        row: 3, col: 5 },
+  { type: 'wizard',      model: 'assets/models/wizard.glb',      row: 3, col: 6 },
+  { type: 'warlock',     model: 'assets/models/warlock.glb',     row: 3, col: 7 },
+  // Row 4: Units
+  { type: 'warrior',     model: 'assets/models/warrior.glb',     row: 4, col: 0 },
+  { type: 'archer',      model: 'assets/models/archer.glb',      row: 4, col: 1 },
+  { type: 'priest',      model: 'assets/models/priest.glb',      row: 4, col: 2 },
+  { type: 'shaman',      model: 'assets/models/shaman.glb',      row: 4, col: 3 },
+  { type: 'myco',        model: 'assets/models/myco.glb',        row: 4, col: 4 },
+  { type: 'wagon',       model: 'assets/models/wagon.glb',       row: 4, col: 5, zoom: 1.3 },
+  { type: 'dirigible',   model: 'assets/models/dirigible.glb',   row: 4, col: 6, zoom: 1.3 },
+  { type: 'apc',         model: 'assets/models/apc.glb',         row: 4, col: 7, zoom: 1.3 },
+];
+
+const GRID = 8;
+const rendered = new Map();
+let atlasCanvas = null;
+
+const canvas = document.getElementById('renderCanvas');
+let engine, scene, camera, light, hemiLight;
+
+function initEngine() {
+  engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, alpha: true });
+  scene = new BABYLON.Scene(engine);
+  scene.clearColor = new BABYLON.Color4(0, 0, 0, 0);
+
+  camera = new BABYLON.ArcRotateCamera('cam', -Math.PI * 0.75, Math.PI / 3, 20, BABYLON.Vector3.Zero(), scene);
+  camera.mode = BABYLON.Camera.ORTHOGRAPHIC_CAMERA;
+  camera.minZ = 0.01;
+  camera.maxZ = 100;
+
+  light = new BABYLON.DirectionalLight('dir', new BABYLON.Vector3(-0.5, -1.5, 0.8).normalize(), scene);
+  light.intensity = 2.0;
+
+  hemiLight = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
+  hemiLight.intensity = 0.7;
+  hemiLight.groundColor = new BABYLON.Color3(0.35, 0.3, 0.25);
+}
+
+function bleedEdgeColors(ctx, w, h) {
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const rgb = new Uint8Array(d.length);
+  rgb.set(d);
+
+  for (let pass = 0; pass < 8; pass++) {
+    const src = new Uint8Array(rgb);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4;
+        if (src[i + 3] > 2) continue;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+            const ni = (ny * w + nx) * 4;
+            if (src[ni + 3] > 2) {
+              r += src[ni]; g += src[ni + 1]; b += src[ni + 2]; n++;
+            }
+          }
+        }
+        if (n > 0) {
+          rgb[i] = r / n; rgb[i + 1] = g / n; rgb[i + 2] = b / n; rgb[i + 3] = 0;
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < d.length; i += 4) {
+    if (d[i + 3] <= 2) {
+      d[i] = rgb[i]; d[i + 1] = rgb[i + 1]; d[i + 2] = rgb[i + 2];
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+async function renderModel(entry) {
+  for (const m of scene.meshes.slice()) m.dispose();
+
+  const cellPx = parseInt(document.getElementById('cellSize').value);
+  const renderPx = cellPx * 2; // 2x supersample for cleaner edges
+  canvas.width = renderPx;
+  canvas.height = renderPx;
+  engine.resize();
+
+  const isUnit = UNIT_TYPES.has(entry.type);
+
+  try {
+    const result = await BABYLON.SceneLoader.ImportMeshAsync('', '', entry.model, scene);
+    const root = result.meshes[0];
+
+    if (isUnit) {
+      root.rotationQuaternion = null;
+    }
+
+    // Force all materials to be visible: double-sided, opaque enough, no missing textures
+    for (const mesh of result.meshes) {
+      if (mesh.material) {
+        mesh.material.backFaceCulling = false;
+        mesh.material.forceDepthWrite = true;
+        if (mesh.material.alpha !== undefined) mesh.material.alpha = 1;
+        if (mesh.material.albedoColor && mesh.material.albedoColor.r === 0 &&
+            mesh.material.albedoColor.g === 0 && mesh.material.albedoColor.b === 0) {
+          mesh.material.albedoColor = new BABYLON.Color3(0.5, 0.5, 0.5);
+        }
+      }
+    }
+
+    // Recompute all world matrices
+    root.computeWorldMatrix(true);
+    for (const mesh of result.meshes) mesh.computeWorldMatrix(true);
+
+    // Use Babylon's built-in hierarchy bounds
+    const bounds = root.getHierarchyBoundingVectors(true);
+    const size = bounds.max.subtract(bounds.min);
+    const center = bounds.min.add(size.scale(0.5));
+
+    console.log(`${entry.type}: bounds ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)}, meshes: ${result.meshes.length}`);
+
+    if (!isFinite(size.x) || size.length() === 0) throw new Error('Zero-size model');
+
+    // Center model at origin
+    root.position.subtractInPlace(center);
+
+    // Recompute after centering
+    root.computeWorldMatrix(true);
+    for (const mesh of result.meshes) mesh.computeWorldMatrix(true);
+
+    // Frame with orthographic camera
+    camera.alpha = -Math.PI * 0.75;
+    camera.beta = Math.PI / 3;
+    camera.radius = 20;
+    camera.target = BABYLON.Vector3.Zero();
+
+    const maxExtent = Math.max(size.x, size.y, size.z);
+    const zoom = entry.zoom || 1.0;
+    const half = (maxExtent * 0.6) / zoom;
+    camera.orthoLeft = -half;
+    camera.orthoRight = half;
+    camera.orthoTop = half;
+    camera.orthoBottom = -half;
+
+    // Wait for scene to be fully ready (textures loaded, materials compiled)
+    await new Promise(resolve => {
+      if (scene.isReady()) resolve();
+      else scene.executeWhenReady(resolve);
+    });
+
+    scene.render();
+    await BABYLON.Tools.DelayAsync(100);
+    scene.render();
+
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = cellPx;
+    tempCanvas.height = cellPx;
+    const tctx = tempCanvas.getContext('2d');
+    tctx.imageSmoothingEnabled = true;
+    tctx.imageSmoothingQuality = 'high';
+    tctx.drawImage(canvas, 0, 0, renderPx, renderPx, 0, 0, cellPx, cellPx);
+
+    bleedEdgeColors(tctx, cellPx, cellPx);
+
+    rendered.set(entry.type, { canvas: tempCanvas, entry });
+    result.meshes.forEach(m => m.dispose());
+    return tempCanvas;
+
+  } catch (e) {
+    console.warn(`Failed: ${entry.model}:`, e.message);
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = cellPx;
+    tempCanvas.height = cellPx;
+    const ctx = tempCanvas.getContext('2d');
+    ctx.fillStyle = '#221111';
+    ctx.fillRect(0, 0, cellPx, cellPx);
+    ctx.fillStyle = '#ff6666';
+    ctx.font = `${Math.round(cellPx * 0.09)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText(entry.type, cellPx / 2, cellPx / 2 - 4);
+    ctx.fillText('(missing)', cellPx / 2, cellPx / 2 + 12);
+    rendered.set(entry.type, { canvas: tempCanvas, entry, missing: true });
+    return tempCanvas;
+  }
+}
+
+async function renderAll() {
+  const status = document.getElementById('status');
+  const previews = document.getElementById('previews');
+  previews.innerHTML = '';
+
+  if (!engine) initEngine();
+
+  const cellPx = parseInt(document.getElementById('cellSize').value);
+  const displaySize = Math.min(128, cellPx);
+  let lastRow = -1;
+
+  for (let i = 0; i < ATLAS.length; i++) {
+    const entry = ATLAS[i];
+    status.textContent = `Rendering ${entry.type} (${i + 1}/${ATLAS.length})...`;
+
+    if (entry.row !== lastRow) {
+      if (lastRow >= 0) {
+        const br = document.createElement('div');
+        br.className = 'row-break';
+        previews.appendChild(br);
+      }
+      const label = document.createElement('div');
+      label.className = 'row-label';
+      const rowNames = ['Row 0: Nature', 'Row 1: Structures', 'Row 2: Buildings', 'Row 3: Buildings + Units', 'Row 4: Units'];
+      label.textContent = rowNames[entry.row] || `Row ${entry.row}`;
+      previews.appendChild(label);
+      lastRow = entry.row;
+    }
+
+    const cellCanvas = await renderModel(entry);
+
+    const div = document.createElement('div');
+    div.className = 'cell-preview';
+    const preview = document.createElement('canvas');
+    preview.width = cellPx;
+    preview.height = cellPx;
+    preview.style.width = displaySize + 'px';
+    preview.style.height = displaySize + 'px';
+    preview.getContext('2d').drawImage(cellCanvas, 0, 0);
+    div.appendChild(preview);
+
+    const lbl = document.createElement('div');
+    lbl.className = 'label';
+    lbl.textContent = entry.type;
+    div.appendChild(lbl);
+    previews.appendChild(div);
+  }
+
+  status.textContent = `Rendered ${ATLAS.length} models. Click "Merge into Atlas" to build spritesheet.`;
+}
+
+function buildAtlas() {
+  const cellPx = parseInt(document.getElementById('cellSize').value);
+  const atlasPx = cellPx * GRID;
+
+  atlasCanvas = document.createElement('canvas');
+  atlasCanvas.width = atlasPx;
+  atlasCanvas.height = atlasPx;
+  const ctx = atlasCanvas.getContext('2d');
+
+  for (const entry of ATLAS) {
+    const data = rendered.get(entry.type);
+    if (data && data.canvas) {
+      ctx.drawImage(data.canvas, entry.col * cellPx, entry.row * cellPx, cellPx, cellPx);
+    }
+  }
+  return atlasCanvas;
+}
+
+async function mergeWithExisting() {
+  const status = document.getElementById('status');
+  if (rendered.size === 0) { status.textContent = 'Render models first!'; return; }
+
+  status.textContent = 'Building atlas...';
+  buildAtlas();
+
+  const cellPx = parseInt(document.getElementById('cellSize').value);
+
+  try {
+    const existing = new Image();
+    existing.crossOrigin = 'anonymous';
+    await new Promise((resolve, reject) => {
+      existing.onload = resolve;
+      existing.onerror = reject;
+      existing.src = 'assets/textures/atlas-hd.png';
+    });
+
+    const merged = document.createElement('canvas');
+    merged.width = atlasCanvas.width;
+    merged.height = atlasCanvas.height;
+    const mctx = merged.getContext('2d');
+    mctx.drawImage(existing, 0, 0, merged.width, merged.height);
+
+    for (const entry of ATLAS) {
+      const data = rendered.get(entry.type);
+      if (data && data.canvas && !data.missing) {
+        mctx.clearRect(entry.col * cellPx, entry.row * cellPx, cellPx, cellPx);
+        mctx.drawImage(data.canvas, entry.col * cellPx, entry.row * cellPx, cellPx, cellPx);
+      }
+    }
+
+    atlasCanvas = merged;
+    status.textContent = 'Merged with existing atlas-hd.png!';
+  } catch (e) {
+    status.textContent = 'No existing atlas found, using fresh render.';
+  }
+
+  showAtlas();
+  generateUVCode();
+}
+
+function showAtlas() {
+  const output = document.getElementById('atlas-output');
+  output.style.display = 'block';
+  const container = document.getElementById('atlas-container');
+  container.innerHTML = '';
+
+  const display = document.createElement('canvas');
+  display.width = atlasCanvas.width;
+  display.height = atlasCanvas.height;
+  display.style.width = '640px';
+  display.style.height = '640px';
+  display.style.imageRendering = 'pixelated';
+  display.getContext('2d').drawImage(atlasCanvas, 0, 0);
+  container.appendChild(display);
+
+  const cellPx = parseInt(document.getElementById('cellSize').value);
+  const scale = 640 / atlasCanvas.width;
+
+  for (const a of ATLAS) {
+    const lbl = document.createElement('div');
+    lbl.className = 'grid-label';
+    lbl.style.left = (a.col * cellPx * scale + 2) + 'px';
+    lbl.style.top = (a.row * cellPx * scale + 2) + 'px';
+    lbl.textContent = a.type;
+    container.appendChild(lbl);
+  }
+}
+
+function generateUVCode() {
+  let code = '// Atlas layout (auto-generated) - 8x8 grid\n\n';
+  code += '// --- BILLBOARD_TYPES ---\n';
+  code += 'const BILLBOARD_TYPES = [\n';
+  const types = ATLAS.map(a => `'${a.type}'`);
+  for (let i = 0; i < types.length; i += 8) {
+    code += '  ' + types.slice(i, i + 8).join(', ') + ',\n';
+  }
+  code += '];\n\n';
+
+  code += '// --- ATLAS_CELLS ---\n';
+  code += 'const ATLAS_CELLS = {\n';
+  for (const a of ATLAS) {
+    code += `  ${a.type}: [${a.col},${a.row}],\n`;
+  }
+  code += '};\n';
+
+  document.getElementById('uv-output').textContent = code;
+}
+
+function downloadAtlas() {
+  if (!atlasCanvas) { document.getElementById('status').textContent = 'Build atlas first!'; return; }
+  const link = document.createElement('a');
+  link.download = 'atlas-hd.png';
+  link.href = atlasCanvas.toDataURL('image/png');
+  link.click();
+  document.getElementById('status').textContent = 'Downloaded atlas-hd.png';
+}
+
+function copyUVCode() {
+  const code = document.getElementById('uv-output').textContent;
+  if (!code) { document.getElementById('status').textContent = 'Generate atlas first!'; return; }
+  navigator.clipboard.writeText(code).then(() => {
+    document.getElementById('status').textContent = 'UV code copied!';
+  });
+}
+
+</script>
+</body>
+</html>

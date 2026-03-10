@@ -67,16 +67,16 @@ class Behavior {
             this.unit.pb.state.vel = { x: 0, y: 0, z: 0 };
         }
         
-        // TUNED: Balanced movement - responsive but smooth (not teleporting)
-        // If impulseStrength is a number >= 10, treat it as an absolute speed value (for wander behaviors)
-        // Otherwise, use the normal calculation
-        const effectiveSpeed = (impulseStrength >= 10) 
-            ? impulseStrength * 0.08  // Direct speed value (e.g., 10 speed = 0.8 effective)
-            : (this.unit.speed ? this.unit.speed * 0.08 : impulseStrength * 0.8);
+        // Use a continuous speed mapping for all behaviors.
+        // The previous branch at impulseStrength<10 created discontinuous speed jumps
+        // (some calls ignored the provided value entirely), which produced visible
+        // fast/slow pulses during behavior transitions.
+        const speedInput = Number.isFinite(impulseStrength) ? impulseStrength : (this.unit.speed || 20);
+        const effectiveSpeed = Math.max(0, speedInput) * 0.08;
         
-        // Apply impulse in movement direction
-        this.unit.pb.imp.x += direction.x * effectiveSpeed;
-        this.unit.pb.imp.z += direction.z * effectiveSpeed;
+        // Movement is driven entirely by setting velocity below.
+        // Do NOT also add an impulse — the physics loop does vel += imp,
+        // which would double the speed and cause overshooting.
         
         // Calculate target rotation to face movement direction
         // Note: modelOrientation offset is applied in updateUnitMeshes(), not here
@@ -143,6 +143,90 @@ class Behavior {
         // Debug logging (disabled for performance)
         // console.log(`🎯 ${this.unit.name || this.unit.type} movement: dir(${direction.x.toFixed(2)}, ${direction.z.toFixed(2)}), rot(${rotationDiff.toFixed(2)}), rotSpeed(${rotationSpeed.toFixed(1)}), boost(${momentumBoost.toFixed(2)})`);
 
+    }
+
+    // Shared pathfinding navigation for any behavior.
+    // Call once per step with the target position. Returns true when arrived.
+    navigateTo(target, speed) {
+        if (!this.unit.pb || !this.unit.pb.state) return true;
+        const field = window.liveField;
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const pos = this.unit.pb.state.loc;
+
+        const dx = target.x - pos.x;
+        const dz = target.z - pos.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist < TILE_SIZE * 0.75) return true; // arrived
+
+        // Lazy path calculation
+        if (!this._navPath && !this._navChecked && field && field.findPath) {
+            this._navChecked = true;
+            this._navDirectClear = this._isDirectClear(pos, target, field, TILE_SIZE);
+            if (!this._navDirectClear) {
+                this._navPath = field.findPath(pos.x, pos.z, target.x, target.z);
+                this._navIdx = 0;
+            }
+        }
+
+        // If pathfinding failed and no clear line of sight, don't blindly walk
+        // toward the target (which causes units to pile up at boundaries).
+        if (!this._navPath && !this._navDirectClear && this._navChecked) {
+            return false;
+        }
+
+        let cur = target;
+        if (this._navPath && this._navIdx < this._navPath.length) {
+            cur = this._navPath[this._navIdx];
+            const wdx = cur.x - pos.x;
+            const wdz = cur.z - pos.z;
+            if (wdx * wdx + wdz * wdz < TILE_SIZE * TILE_SIZE * 0.25) {
+                this._navIdx++;
+                cur = this._navIdx < this._navPath.length ? this._navPath[this._navIdx] : target;
+            }
+        }
+
+        const tdx = cur.x - pos.x;
+        const tdz = cur.z - pos.z;
+        const tlen = Math.sqrt(tdx * tdx + tdz * tdz);
+        if (tlen > 0.001) {
+            this.applyMovementWithRotation({ x: tdx / tlen, z: tdz / tlen }, speed);
+        }
+        return false;
+    }
+
+    // Clear cached navigation when target changes
+    resetNav() {
+        this._navPath = null;
+        this._navIdx = 0;
+        this._navChecked = false;
+        this._navDirectClear = false;
+    }
+
+    _isDirectClear(start, end, field, tileSize) {
+        const x0 = start.x / tileSize, z0 = start.z / tileSize;
+        const x1 = end.x / tileSize, z1 = end.z / tileSize;
+        let tx = Math.floor(x0), tz = Math.floor(z0);
+        const ex = Math.floor(x1), ez = Math.floor(z1);
+        const ddx = x1 - x0, ddz = z1 - z0;
+        const sx = ddx > 0 ? 1 : (ddx < 0 ? -1 : 0);
+        const sz = ddz > 0 ? 1 : (ddz < 0 ? -1 : 0);
+        const tdx = ddx !== 0 ? Math.abs(1 / ddx) : Infinity;
+        const tdz = ddz !== 0 ? Math.abs(1 / ddz) : Infinity;
+        let tmx = ddx !== 0 ? (ddx > 0 ? (tx + 1 - x0) : (x0 - tx)) * tdx : Infinity;
+        let tmz = ddz !== 0 ? (ddz > 0 ? (tz + 1 - z0) : (z0 - tz)) * tdz : Infinity;
+        const maxS = Math.abs(ex - tx) + Math.abs(ez - tz) + 4;
+        for (let i = 0; i < maxS; i++) {
+            if (!field.isPassable(tx, tz)) return false;
+            if (tx === ex && tz === ez) break;
+            if (tmx < tmz) { tmx += tdx; tx += sx; }
+            else if (tmz < tmx) { tmz += tdz; tz += sz; }
+            else {
+                if (!field.isPassable(tx + sx, tz)) return false;
+                if (!field.isPassable(tx, tz + sz)) return false;
+                tmx += tdx; tmz += tdz; tx += sx; tz += sz;
+            }
+        }
+        return true;
     }
 }
 
@@ -277,15 +361,18 @@ class LingerBehavior extends Behavior {
 class WalkBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
-            arrivalRadius: 1.5,  // Stop within 1.5 units of target (prevents overshooting)
-            walkSpeed: unit.speed || 20,  // Use unit's defined speed, fallback to 20
+            arrivalRadius: 0.5,
+            walkSpeed: unit.speed || 20,
             ...params
         });
         
         this.targetPoint = targetPoint;
-        this.path = null;        // A* path waypoints
-        this.pathIndex = 0;      // Current waypoint index
+        this.path = null;
+        this.pathIndex = 0;
         this.pathCalculated = false;
+        this._stuckTicks = 0;
+        this._lastPos = null;
+        this._repathCount = 0;
     }
     
     step() {
@@ -295,7 +382,6 @@ class WalkBehavior extends Behavior {
         const TILE_SIZE = window.TILE_SIZE || 4;
         const currentPos = this.unit.pb.state.loc;
         
-        // CRITICAL: Apply unit's personality offset to target for visual variety
         const personalityOffset = this.unit.personalityOffset || { x: 0, z: 0 };
         const roundedOffset = {
             x: Math.round(personalityOffset.x * 1000) / 1000,
@@ -306,23 +392,42 @@ class WalkBehavior extends Behavior {
             z: Math.round((this.targetPoint.z + roundedOffset.z) * 1000) / 1000
         };
         
-        // Calculate path if we haven't yet
+        // Stuck detection: if barely moved in 30 ticks, force A* re-path
+        if (this._lastPos && this._repathCount < 5) {
+            const movedDx = currentPos.x - this._lastPos.x;
+            const movedDz = currentPos.z - this._lastPos.z;
+            if (movedDx * movedDx + movedDz * movedDz < 0.01) {
+                this._stuckTicks++;
+            } else {
+                this._stuckTicks = 0;
+            }
+            if (this._stuckTicks > 30) {
+                this._stuckTicks = 0;
+                this._repathCount++;
+                this.pathCalculated = false;
+                this._forcePathfind = true;
+            }
+        }
+        this._lastPos = { x: currentPos.x, z: currentPos.z };
+        
         if (!this.pathCalculated && field && field.findPath) {
             this.pathCalculated = true;
             
-            // Check if direct path is clear first (optimization)
-            const directClear = this.isDirectPathClear(currentPos, finalTarget, field, TILE_SIZE);
+            // After getting stuck, always use A* regardless of line-of-sight
+            const directClear = this._forcePathfind ? false
+                : this.isDirectPathClear(currentPos, finalTarget, field, TILE_SIZE);
+            this._forcePathfind = false;
             
             if (!directClear) {
-                // Need pathfinding
                 this.path = field.findPath(currentPos.x, currentPos.z, finalTarget.x, finalTarget.z);
                 this.pathIndex = 0;
                 
                 if (!this.path) {
-                    // No path found - stop
                     this.completed = true;
                     return true;
                 }
+            } else {
+                this.path = null;
             }
         }
         
@@ -337,9 +442,18 @@ class WalkBehavior extends Behavior {
             const wpDist = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
             
             if (wpDist < TILE_SIZE * 0.5) {
-                // Reached waypoint, move to next
                 this.pathIndex++;
                 if (this.pathIndex >= this.path.length) {
+                    // Waypoints exhausted -- check if we're actually near the destination
+                    const remDx = finalTarget.x - currentPos.x;
+                    const remDz = finalTarget.z - currentPos.z;
+                    const remaining = Math.sqrt(remDx * remDx + remDz * remDz);
+                    if (remaining > TILE_SIZE * 2 && this._repathCount < 5) {
+                        // Still far from target (partial path ended) -- recalculate
+                        this._repathCount++;
+                        this.pathCalculated = false;
+                        this._forcePathfind = true;
+                    }
                     currentTarget = finalTarget;
                 } else {
                     currentTarget = this.path[this.pathIndex];
@@ -355,7 +469,6 @@ class WalkBehavior extends Behavior {
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance <= this.params.arrivalRadius) {
-            // Arrived! Stop all momentum to prevent overshooting
             if (this.unit.pb.imp) {
                 this.unit.pb.imp.x = 0;
                 this.unit.pb.imp.z = 0;
@@ -364,6 +477,8 @@ class WalkBehavior extends Behavior {
                 this.unit.pb.state.vel.x = 0;
                 this.unit.pb.state.vel.z = 0;
             }
+            this.unit.pb.state.loc.x = finalTarget.x;
+            this.unit.pb.state.loc.z = finalTarget.z;
             this.completed = true;
             return true;
         }
@@ -407,38 +522,68 @@ class WalkBehavior extends Behavior {
             this.unit.lastMoveTick = window.currentMatch.tick;
         }
         
-        // Apply movement with speed multiplier for slow tiles
         const effectiveSpeed = this.params.walkSpeed * speedMultiplier;
         this.applyMovementWithRotation(direction, effectiveSpeed);
 
         return false;
     }
     
-    // Check if direct line to target is clear of obstacles
+    // Grid-exact line of sight using Amanatides-Woo traversal.
+    // Checks every tile the line passes through -- no sampling gaps.
     isDirectPathClear(start, end, field, tileSize) {
-        const dx = end.x - start.x;
-        const dz = end.z - start.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        const steps = Math.ceil(dist / tileSize);
-        
-        for (let i = 1; i <= steps; i++) {
-            const t = i / steps;
-            const x = start.x + dx * t;
-            const z = start.z + dz * t;
-            const tileX = Math.floor(x / tileSize);
-            const tileZ = Math.floor(z / tileSize);
-            
-            if (!field.isPassable(tileX, tileZ)) {
-                return false;
-            }
-            
-            // Check chunk mask
+        const x0 = start.x / tileSize;
+        const z0 = start.z / tileSize;
+        const x1 = end.x / tileSize;
+        const z1 = end.z / tileSize;
+
+        let tileX = Math.floor(x0);
+        let tileZ = Math.floor(z0);
+        const endTileX = Math.floor(x1);
+        const endTileZ = Math.floor(z1);
+
+        const dx = x1 - x0;
+        const dz = z1 - z0;
+
+        const stepX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+        const stepZ = dz > 0 ? 1 : (dz < 0 ? -1 : 0);
+
+        const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+        const tDeltaZ = dz !== 0 ? Math.abs(1 / dz) : Infinity;
+
+        let tMaxX = dx !== 0
+            ? (dx > 0 ? (tileX + 1 - x0) : (x0 - tileX)) * tDeltaX
+            : Infinity;
+        let tMaxZ = dz !== 0
+            ? (dz > 0 ? (tileZ + 1 - z0) : (z0 - tileZ)) * tDeltaZ
+            : Infinity;
+
+        const maxSteps = Math.abs(endTileX - tileX) + Math.abs(endTileZ - tileZ) + 4;
+
+        for (let i = 0; i < maxSteps; i++) {
+            if (!field.isPassable(tileX, tileZ)) return false;
+
             if (field.chunkMask && field.chunkSize) {
-                const chunkX = Math.floor(tileX / field.chunkSize);
-                const chunkZ = Math.floor(tileZ / field.chunkSize);
-                if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
-                    return false;
-                }
+                const cx = Math.floor(tileX / field.chunkSize);
+                const cz = Math.floor(tileZ / field.chunkSize);
+                if (field.chunkMask.get(`${cx},${cz}`) === false) return false;
+            }
+
+            if (tileX === endTileX && tileZ === endTileZ) break;
+
+            if (tMaxX < tMaxZ) {
+                tMaxX += tDeltaX;
+                tileX += stepX;
+            } else if (tMaxZ < tMaxX) {
+                tMaxZ += tDeltaZ;
+                tileZ += stepZ;
+            } else {
+                // Ray crosses a tile corner -- check both adjacent tiles too
+                if (!field.isPassable(tileX + stepX, tileZ)) return false;
+                if (!field.isPassable(tileX, tileZ + stepZ)) return false;
+                tMaxX += tDeltaX;
+                tMaxZ += tDeltaZ;
+                tileX += stepX;
+                tileZ += stepZ;
             }
         }
         return true;
@@ -448,8 +593,8 @@ class WalkBehavior extends Behavior {
 class RunBehavior extends Behavior {
     constructor(unit, targetPoint, params = {}) {
         super(unit, {
-            arrivalRadius: 0.3,  // Stop very close to target point (reduced from 1.5)
-            runSpeed: (unit.speed || 20) * 1.5,  // 150% of unit's speed for running
+            arrivalRadius: 0.3,
+            runSpeed: (unit.speed || 20) * 1.5,
             ...params
         });
         
@@ -457,6 +602,9 @@ class RunBehavior extends Behavior {
         this.path = null;
         this.pathIndex = 0;
         this.pathCalculated = false;
+        this._stuckTicks = 0;
+        this._lastPos = null;
+        this._repathCount = 0;
     }
     
     step() {
@@ -466,12 +614,32 @@ class RunBehavior extends Behavior {
         const TILE_SIZE = window.TILE_SIZE || 4;
         const currentPos = this.unit.pb.state.loc;
         
-        // Calculate path if we haven't yet
+        // Stuck detection: if barely moved in 30 ticks, force A* re-path
+        if (this._lastPos && this._repathCount < 5) {
+            const movedDx = currentPos.x - this._lastPos.x;
+            const movedDz = currentPos.z - this._lastPos.z;
+            if (movedDx * movedDx + movedDz * movedDz < 0.01) {
+                this._stuckTicks++;
+            } else {
+                this._stuckTicks = 0;
+            }
+            if (this._stuckTicks > 30) {
+                this._stuckTicks = 0;
+                this._repathCount++;
+                this.pathCalculated = false;
+                this._forcePathfind = true;
+            }
+        }
+        this._lastPos = { x: currentPos.x, z: currentPos.z };
+        
         if (!this.pathCalculated && field && field.findPath) {
             this.pathCalculated = true;
             
-            // Check if direct path is clear first
-            if (!this.isDirectPathClear(currentPos, this.targetPoint, field, TILE_SIZE)) {
+            const directClear = this._forcePathfind ? false
+                : this.isDirectPathClear(currentPos, this.targetPoint, field, TILE_SIZE);
+            this._forcePathfind = false;
+            
+            if (!directClear) {
                 this.path = field.findPath(currentPos.x, currentPos.z, this.targetPoint.x, this.targetPoint.z);
                 this.pathIndex = 0;
                 
@@ -479,6 +647,8 @@ class RunBehavior extends Behavior {
                     this.completed = true;
                     return true;
                 }
+            } else {
+                this.path = null;
             }
         }
         
@@ -493,7 +663,19 @@ class RunBehavior extends Behavior {
             
             if (wpDist < TILE_SIZE * 0.5) {
                 this.pathIndex++;
-                currentTarget = this.pathIndex < this.path.length ? this.path[this.pathIndex] : this.targetPoint;
+                if (this.pathIndex >= this.path.length) {
+                    const remDx = this.targetPoint.x - currentPos.x;
+                    const remDz = this.targetPoint.z - currentPos.z;
+                    const remaining = Math.sqrt(remDx * remDx + remDz * remDz);
+                    if (remaining > TILE_SIZE * 2 && this._repathCount < 5) {
+                        this._repathCount++;
+                        this.pathCalculated = false;
+                        this._forcePathfind = true;
+                    }
+                    currentTarget = this.targetPoint;
+                } else {
+                    currentTarget = this.path[this.pathIndex];
+                }
             }
         } else {
             currentTarget = this.targetPoint;
@@ -504,6 +686,16 @@ class RunBehavior extends Behavior {
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance <= this.params.arrivalRadius) {
+            if (this.unit.pb.imp) {
+                this.unit.pb.imp.x = 0;
+                this.unit.pb.imp.z = 0;
+            }
+            if (this.unit.pb.state.vel) {
+                this.unit.pb.state.vel.x = 0;
+                this.unit.pb.state.vel.z = 0;
+            }
+            this.unit.pb.state.loc.x = this.targetPoint.x;
+            this.unit.pb.state.loc.z = this.targetPoint.z;
             this.completed = true;
             return true;
         }
@@ -540,24 +732,58 @@ class RunBehavior extends Behavior {
     }
     
     isDirectPathClear(start, end, field, tileSize) {
-        const dx = end.x - start.x;
-        const dz = end.z - start.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        const steps = Math.ceil(dist / tileSize);
-        
-        for (let i = 1; i <= steps; i++) {
-            const t = i / steps;
-            const x = start.x + dx * t;
-            const z = start.z + dz * t;
-            const tileX = Math.floor(x / tileSize);
-            const tileZ = Math.floor(z / tileSize);
-            
+        const x0 = start.x / tileSize;
+        const z0 = start.z / tileSize;
+        const x1 = end.x / tileSize;
+        const z1 = end.z / tileSize;
+
+        let tileX = Math.floor(x0);
+        let tileZ = Math.floor(z0);
+        const endTileX = Math.floor(x1);
+        const endTileZ = Math.floor(z1);
+
+        const dx = x1 - x0;
+        const dz = z1 - z0;
+
+        const stepX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+        const stepZ = dz > 0 ? 1 : (dz < 0 ? -1 : 0);
+
+        const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity;
+        const tDeltaZ = dz !== 0 ? Math.abs(1 / dz) : Infinity;
+
+        let tMaxX = dx !== 0
+            ? (dx > 0 ? (tileX + 1 - x0) : (x0 - tileX)) * tDeltaX
+            : Infinity;
+        let tMaxZ = dz !== 0
+            ? (dz > 0 ? (tileZ + 1 - z0) : (z0 - tileZ)) * tDeltaZ
+            : Infinity;
+
+        const maxSteps = Math.abs(endTileX - tileX) + Math.abs(endTileZ - tileZ) + 4;
+
+        for (let i = 0; i < maxSteps; i++) {
             if (!field.isPassable(tileX, tileZ)) return false;
-            
+
             if (field.chunkMask && field.chunkSize) {
-                const chunkX = Math.floor(tileX / field.chunkSize);
-                const chunkZ = Math.floor(tileZ / field.chunkSize);
-                if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return false;
+                const cx = Math.floor(tileX / field.chunkSize);
+                const cz = Math.floor(tileZ / field.chunkSize);
+                if (field.chunkMask.get(`${cx},${cz}`) === false) return false;
+            }
+
+            if (tileX === endTileX && tileZ === endTileZ) break;
+
+            if (tMaxX < tMaxZ) {
+                tMaxX += tDeltaX;
+                tileX += stepX;
+            } else if (tMaxZ < tMaxX) {
+                tMaxZ += tDeltaZ;
+                tileZ += stepZ;
+            } else {
+                if (!field.isPassable(tileX + stepX, tileZ)) return false;
+                if (!field.isPassable(tileX, tileZ + stepZ)) return false;
+                tMaxX += tDeltaX;
+                tMaxZ += tDeltaZ;
+                tileX += stepX;
+                tileZ += stepZ;
             }
         }
         return true;
@@ -683,6 +909,7 @@ class GatherWorkBehavior extends WorkBehavior {
         this.resourceIndicator = null; // Visual indicator when carrying resources
         this.gatheredResourceType = null; // What resource this worker is carrying
         this.gatheredResourceAmount = 0; // How much of that resource
+        this.resourceTypes = params.resourceTypes || null; // Optional filter: only gather these types
     }
     
     step() {
@@ -783,7 +1010,7 @@ class GatherWorkBehavior extends WorkBehavior {
                     this.gatherStartTick = currentTick; // Store tick for deterministic completion check
                 }
                 // Store which resource we're gathering from for depletion tracking
-                this.lastGatheredResource = { x: this.gatherTarget.x, z: this.gatherTarget.z };
+                this.lastGatheredResource = { x: this.gatherTarget.x, z: this.gatherTarget.z, gridX: this.gatherTarget.gridX, gridZ: this.gatherTarget.gridZ };
                 // console.log(`🔍 ${this.unit.name || this.unit.type} reached ${this.gatherTarget.type}, starting to gather`);
             } else {
                 // Keep moving toward resource every frame (with offset applied)
@@ -991,6 +1218,7 @@ class GatherWorkBehavior extends WorkBehavior {
                 const resourceInfo = window.buildingSystem?.checkTileForResources(x, z, false);
                 
                 if (resourceInfo) {
+                    if (this.resourceTypes && !this.resourceTypes.includes(resourceInfo.type)) continue;
                     const worldX = (x + 0.5) * TILE_SIZE; // Center of tile
                     const worldZ = (z + 0.5) * TILE_SIZE;
                     
@@ -1110,6 +1338,8 @@ class GatherWorkBehavior extends WorkBehavior {
         return {
             x: resource.worldX,
             z: resource.worldZ,
+            gridX: resource.gridX,
+            gridZ: resource.gridZ,
             type: resource.type,
             amount: resource.amount
         };
@@ -1173,6 +1403,11 @@ class GatherWorkBehavior extends WorkBehavior {
         indicator.renderingGroupId = 1; // Render after main scene
         
         this.resourceIndicator = indicator;
+        // Expand blob shadow to include the big resource on head
+        const carryRadius = (resourceType === 'wood' || resourceType === 'stone' || resourceType === 'minerals') ? 1.25 : 0.7;
+        if (window.gfx && window.gfx.setBlobShadowRadius) {
+            window.gfx.setBlobShadowRadius(this.unit, carryRadius);
+        }
         // console.log(`💎 Created ${resourceType} indicator for ${this.unit.name || this.unit.type}`);
     }
     
@@ -1180,6 +1415,9 @@ class GatherWorkBehavior extends WorkBehavior {
         if (this.resourceIndicator) {
             this.resourceIndicator.dispose();
             this.resourceIndicator = null;
+            if (window.gfx && window.gfx.setBlobShadowRadius) {
+                window.gfx.setBlobShadowRadius(this.unit, null);
+            }
             // console.log(`🗑️ Removed resource indicator from ${this.unit.name || this.unit.type}`);
         }
     }
@@ -1205,28 +1443,18 @@ class GatherWorkBehavior extends WorkBehavior {
         }
         
         // RESOURCE DEPLETION: Queue decrement to be applied at sync checkpoint
-        // CRITICAL: Don't apply immediately - queue for sync checkpoint to ensure both clients apply at same tick
-        if (this.building && this.building.availableResources && this.lastGatheredResource) {
-            // Find the resource tile this worker gathered from
-            const resourceTile = this.building.availableResources.find(r => 
-                r.worldX === this.lastGatheredResource.x && 
-                r.worldZ === this.lastGatheredResource.z
-            );
-            
-            if (resourceTile && resourceTile.remaining !== undefined && window.currentMatch) {
-                const currentTick = window.currentMatch.tick;
-                
-                // Queue the decrement to be processed at the next sync checkpoint
-                // CRITICAL: Include the tick when queued so we only process decrements from previous interval
-                // This ensures both clients apply decrements at the same tick, preventing desyncs
-                window.currentMatch.pendingResourceDecrements.push({
-                    buildingId: this.building.id,
-                    gridX: resourceTile.gridX,
-                    gridZ: resourceTile.gridZ,
-                    amount: this.gatheredResourceAmount,
-                    queuedAtTick: currentTick // Track when this was queued
-                });
+        const match = window.currentMatch;
+        if (this.lastGatheredResource && match) {
+            if (!Array.isArray(match.pendingResourceDecrements)) {
+                match.pendingResourceDecrements = [];
             }
+            const currentTick = match.tick || 0;
+            match.pendingResourceDecrements.push({
+                gridX: this.lastGatheredResource.gridX,
+                gridZ: this.lastGatheredResource.gridZ,
+                amount: this.gatheredResourceAmount,
+                queuedAtTick: currentTick
+            });
         }
         
         // Reset gathered resources
@@ -1322,27 +1550,19 @@ class ManualGatherBehavior extends Behavior {
     seekResource(currentTime, currentTick) {
         if (!this.gatherTarget) return;
         
-        // Move toward resource
         const dx = this.gatherTarget.x - this.unit.pb.state.loc.x;
         const dz = this.gatherTarget.z - this.unit.pb.state.loc.z;
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         const TILE_SIZE = window.TILE_SIZE || 4;
-        const arrivalThreshold = TILE_SIZE * 2.5; // Increased to 2.5 for large rock models (10 units)
-        
-        // Log seeking progress every 60 frames (~1 second)
-        if (!this._seekLogTimer || Date.now() - this._seekLogTimer > 1000) {
-            this._seekLogTimer = Date.now();
-            // console.log(`🪓 ${this.unit.type} seeking: distance=${distance.toFixed(1)}, threshold=${arrivalThreshold.toFixed(1)}, target=(${this.gatherTarget.gridX},${this.gatherTarget.gridZ})`);
-        }
+        const arrivalThreshold = TILE_SIZE * 2.5;
         
         if (distance < arrivalThreshold) {
-            // Arrived! Start gathering
             this.gatherState = 'gathering';
             this.gatherStartTime = currentTime;
             this.gatherStartTick = currentTick;
+            this._seekStuckTicks = 0;
             
-            // CRITICAL: Stop ALL movement - clear both impulse AND velocity
             if (this.unit.pb) {
                 if (this.unit.pb.imp) {
                     this.unit.pb.imp.x = 0;
@@ -1353,18 +1573,43 @@ class ManualGatherBehavior extends Behavior {
                     this.unit.pb.state.vel.z = 0;
                 }
             }
-            
-            // DON'T create resource indicator yet - wait until gathering completes
-            // Resource type and amount already set in constructor from targetResource
         } else {
-            // Keep moving toward resource
-            const direction = {
-                x: dx / distance,
-                z: dz / distance
-            };
-            // Use higher speed to overcome potential collision issues with large models
-            const moveSpeed = this.params.workSpeed || 1.0;
-            this.applyMovementWithRotation(direction, moveSpeed * 1.5); // 50% faster movement
+            // Stuck detection: if unit barely moved, try re-pathing or give up
+            if (!this._seekStuckTicks) this._seekStuckTicks = 0;
+            if (!this._seekRepathCount) this._seekRepathCount = 0;
+            
+            if (this._seekLastPos) {
+                const movedDx = this.unit.pb.state.loc.x - this._seekLastPos.x;
+                const movedDz = this.unit.pb.state.loc.z - this._seekLastPos.z;
+                if (movedDx * movedDx + movedDz * movedDz < 0.01) {
+                    this._seekStuckTicks++;
+                } else {
+                    this._seekStuckTicks = 0;
+                }
+                
+                if (this._seekStuckTicks > 40) {
+                    this._seekStuckTicks = 0;
+                    this._seekRepathCount++;
+                    this.resetNav();
+                    
+                    if (this._seekRepathCount >= 3) {
+                        // Can't reach this resource — go idle instead of hugging the edge
+                        if (window.behaviorManager) {
+                            window.behaviorManager.setBehavior(this.unit, 'linger', {
+                                center: { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z },
+                                radius: 5,
+                                wanderDistance: 2.0,
+                                wanderInterval: 30000
+                            });
+                        }
+                        return;
+                    }
+                }
+            }
+            this._seekLastPos = { x: this.unit.pb.state.loc.x, z: this.unit.pb.state.loc.z };
+            
+            const moveSpeed = this.unit.speed || 20;
+            this.navigateTo(this.gatherTarget, moveSpeed);
         }
     }
     
@@ -1383,9 +1628,18 @@ class ManualGatherBehavior extends Behavior {
             // Gathering complete! Start returning
             // console.log(`🪓 ${this.unit.type} finished gathering ${this.gatheredResourceAmount} ${this.gatheredResourceType}, returning to base`);
             
-            // Mark resource as depleted
-            if (window.depleteResourceTile) {
-                window.depleteResourceTile(this.gatherTarget.gridX, this.gatherTarget.gridZ, currentTick);
+            // Queue resource decrement at sync checkpoint
+            const match = window.currentMatch;
+            if (match) {
+                if (!Array.isArray(match.pendingResourceDecrements)) {
+                    match.pendingResourceDecrements = [];
+                }
+                match.pendingResourceDecrements.push({
+                    gridX: this.gatherTarget.gridX,
+                    gridZ: this.gatherTarget.gridZ,
+                    amount: this.gatheredResourceAmount,
+                    queuedAtTick: currentTick
+                });
             }
             
             // NOW create the resource indicator visual (after gathering, not before)
@@ -1438,9 +1692,8 @@ class ManualGatherBehavior extends Behavior {
                 return true;
             }
             
-            // Resource still available - go back for more!
-            // console.log(`🔄 [T${currentTick}] ${this.unit.id?.slice(-6)} going back to gather more ${this.gatheredResourceType}`);
             this.gatherState = 'seeking';
+            this.resetNav();
             return false;
         }
         
@@ -1481,12 +1734,11 @@ class ManualGatherBehavior extends Behavior {
                 return true;
             }
             
-            // Resource still available - go back for more!
-            // console.log(`🔄 [T${currentTick}] ${this.unit.id?.slice(-6)} going back to gather more ${this.gatheredResourceType} from (${this.gatherTarget.gridX}, ${this.gatherTarget.gridZ})`);
             this.gatherState = 'seeking';
             this.returnPath = null;
             this.returnWaypointIndex = 0;
-            return false; // Keep working
+            this.resetNav();
+            return false;
         }
         
         // Calculate path if we don't have one yet
@@ -1531,7 +1783,7 @@ class ManualGatherBehavior extends Behavior {
                     x: wpDx / wpDistance,
                     z: wpDz / wpDistance
                 };
-                this.applyMovementWithRotation(direction, 1.0);
+                this.applyMovementWithRotation(direction, this.unit.speed || 20);
             }
         }
         
@@ -1593,6 +1845,12 @@ class ManualGatherBehavior extends Behavior {
         indicator.material = material;
         indicator.renderingGroupId = 1;
         
+        // Expand blob shadow to include the big resource on head
+        const carryRadius = (resourceType === 'wood' || resourceType === 'stone' || resourceType === 'minerals') ? 1.25 : 0.7;
+        if (window.gfx && window.gfx.setBlobShadowRadius) {
+            window.gfx.setBlobShadowRadius(this.unit, carryRadius);
+        }
+        
         return indicator;
     }
     
@@ -1603,6 +1861,9 @@ class ManualGatherBehavior extends Behavior {
                 this.resourceIndicator.material.dispose();
             }
             this.resourceIndicator = null;
+            if (window.gfx && window.gfx.setBlobShadowRadius) {
+                window.gfx.setBlobShadowRadius(this.unit, null);
+            }
         }
     }
 }
@@ -1717,9 +1978,16 @@ class BuildWorkBehavior extends WorkBehavior {
     constructor(unit, building, params = {}) {
         super(unit, building, {
             workType: "build",
-            workSpeed: 18, // Same as regular work speed
+            workSpeed: 12, // Slower so they actually reach and stay at the site
             ...params
         });
+        // Fixed work position per unit - no orbiting; villagers walk there and stay
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const unitIdHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const angle = ((unitIdHash % 8) / 8) * Math.PI * 2; // 8 positions around the building
+        const dist = TILE_SIZE * 1.2; // ~1.2 tiles from building center
+        this.workX = Math.round((building.position.x + Math.cos(angle) * dist) * 100) / 100;
+        this.workZ = Math.round((building.position.z + Math.sin(angle) * dist) * 100) / 100;
     }
     
     step() {
@@ -1727,35 +1995,21 @@ class BuildWorkBehavior extends WorkBehavior {
         
         // Check if building is complete
         if (this.building.buildProgress >= 1.0) {
-            // Building is complete, this behavior should end
             return true;
         }
         
-        // Move around the building construction site
-        const workRadius = 2; // Work within 2 tiles of building
-        const unitIdHash = (this.unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-        const currentTick = window.currentMatch?.tick || 0;
-        // Use deterministic angle based on unit ID and tick for multiplayer sync
-        // CRITICAL: Round angle calculation to prevent floating-point drift
-        const angle = ((currentTick * 0.05) + (unitIdHash % 100) * 0.1) % (Math.PI * 2);
-        const distance = workRadius * TILE_SIZE * 0.5; // Half radius for closer work
+        // Walk to fixed work spot and stay there (no orbiting)
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const dx = this.workX - this.unit.pb.state.loc.x;
+        const dz = this.workZ - this.unit.pb.state.loc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        const arriveThreshold = TILE_SIZE * 0.4; // Consider "at work" when within 0.4 tiles
         
-        // CRITICAL: Round work position to prevent floating-point drift accumulation
-        // Round to 0.01 precision (1cm) to keep positions synchronized
-        const workX = Math.round((this.building.position.x + Math.cos(angle) * distance) * 100) / 100;
-        const workZ = Math.round((this.building.position.z + Math.sin(angle) * distance) * 100) / 100;
-        
-        const direction = {
-            x: workX - this.unit.pb.state.loc.x,
-            z: workZ - this.unit.pb.state.loc.z
-        };
-        
-        const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-        if (length > 0.1) {
-            direction.x /= length;
-            direction.z /= length;
+        if (distance > arriveThreshold) {
+            const direction = { x: dx / distance, z: dz / distance };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
         }
+        // Else: already at work spot, stay put - construction progress comes from assignedWorkers count
         
         return false; // Keep building
     }
@@ -2840,7 +3094,11 @@ class UnitBehaviorManager {
             if (behavior) {
                 const completed = behavior.step();
                 if (completed) {
-                    this.behaviors.delete(unit);
+                    // Only delete if the behavior hasn't been replaced during step()
+                    // (e.g. EatBehavior restores a previous behavior before completing)
+                    if (this.behaviors.get(unit) === behavior) {
+                        this.behaviors.delete(unit);
+                    }
                     
                     // After movement completes, give units a subtle idle/linger behavior to spread out
                     // Only apply to player/AI units that just finished moving (not working/gathering)
@@ -4006,19 +4264,32 @@ function updateIdleUnits() {
         if (!unit.lastEatTick) unit.lastEatTick = 0;
         
         // Check if villager needs to eat (every 60 seconds, with small random variation)
+        // Don't interrupt work behaviors (building, gathering, farming, etc.)
         if (unit.type === 'villager') {
-            const ticksSinceLastEat = currentTick - unit.lastEatTick;
-            const baseEatIntervalTicks = 60 * 60; // 60 seconds * 60 ticks/sec = 3600 ticks
-            const randomVariationTicks = 10 * 60; // 10 seconds * 60 ticks/sec = 600 ticks
-            // CRITICAL: Use deterministic random for eating interval in multiplayer
-            const deterministicRandom = getUnitDeterministicRandom(unit, 'eat_interval');
-            const eatIntervalTicks = baseEatIntervalTicks + (deterministicRandom * randomVariationTicks * 2 - randomVariationTicks);
-            
-            if (ticksSinceLastEat > eatIntervalTicks) {
-                // Set eating behavior
-                window.behaviorManager.setBehavior(unit, 'eat');
-                unit.lastEatTick = currentTick;
-                return; // Skip other behavior checks
+            const currentBehForEat = window.behaviorManager.getBehavior(unit);
+            const isWorking = currentBehForEat && (
+                currentBehForEat.constructor.name === 'BuildWorkBehavior' ||
+                currentBehForEat.constructor.name === 'GatherWorkBehavior' ||
+                currentBehForEat.constructor.name === 'FarmWorkBehavior' ||
+                currentBehForEat.constructor.name === 'WorkBehavior' ||
+                currentBehForEat.constructor.name === 'ManualGatherBehavior' ||
+                currentBehForEat.constructor.name === 'WalkBehavior' ||
+                currentBehForEat.constructor.name === 'RunBehavior' ||
+                currentBehForEat.constructor.name === 'AttackBuildingBehavior'
+            );
+            if (!isWorking) {
+                const ticksSinceLastEat = currentTick - unit.lastEatTick;
+                const baseEatIntervalTicks = 60 * 60; // 60 seconds * 60 ticks/sec = 3600 ticks
+                const randomVariationTicks = 10 * 60; // 10 seconds * 60 ticks/sec = 600 ticks
+                // CRITICAL: Use deterministic random for eating interval in multiplayer
+                const deterministicRandom = getUnitDeterministicRandom(unit, 'eat_interval');
+                const eatIntervalTicks = baseEatIntervalTicks + (deterministicRandom * randomVariationTicks * 2 - randomVariationTicks);
+                
+                if (ticksSinceLastEat > eatIntervalTicks) {
+                    window.behaviorManager.setBehavior(unit, 'eat');
+                    unit.lastEatTick = currentTick;
+                    return;
+                }
             }
         }
         

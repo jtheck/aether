@@ -166,7 +166,7 @@ const BuildingTypes = {
     workRadius: 15,
     workType: "build",
     productionWorkType: "farm",
-    productionMaxWorkers: 2,
+    productionMaxWorkers: 1,
     productionWorkRadius: 8,
     workInterval: 10000,
     workOutput: { food: 4 },
@@ -646,60 +646,68 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
         // Attach a team flag on top of the agora so each player has a visible banner.
         // The flag is raised by half its height so it sits directly on the platform.
         if (window.gfx && window.gfx.getModel) {
+          // Remove old flag if reusing from pool (agora mesh may have previous owner's flag)
+          if (building.flagMesh) {
+            building.flagMesh.dispose();
+            building.flagMesh = null;
+          }
+          
           window.gfx.getModel('assets/models/flag.glb', scene).then(flagModel => {
+            // Use ALL root nodes from the GLB so nothing is left floating in the scene
+            const flagNodes = flagModel.nodes && flagModel.nodes.length ? flagModel.nodes : [flagModel.root];
             const flagRoot = flagModel.root;
             
-            // Stop any animations on the flag model (we want a static banner here)
             if (flagModel.animationGroups) {
               flagModel.animationGroups.forEach(g => g.stop());
             }
             
-            // Compute local height before scaling
-            const bbox = flagRoot.getBoundingInfo().boundingBox;
-            const localHeight = bbox.maximum.y - bbox.minimum.y;
-            
-            // Choose a reasonable scale for the flag on top of the agora
             const flagScale = 0.6;
-            flagRoot.scaling = new BABYLON.Vector3(flagScale, flagScale, flagScale);
             
-            // Parent to the agora mesh so it moves with the building
-            flagRoot.parent = building.mesh;
+            flagNodes.forEach(node => {
+              node.parent = building.mesh;
+              node.scaling = new BABYLON.Vector3(flagScale, flagScale, flagScale);
+              node.position = new BABYLON.Vector3(0, 0.5, 0);
+              node.rotationQuaternion = null;
+              node.rotation.y = 0;
+              // No rotation - use model's default orientation
+              // CRITICAL: getModel disables models by default - re-enable
+              if (typeof node.setEnabled === 'function') node.setEnabled(true);
+            });
             
-            // Raise by half its (scaled) height so the base sits on the agora platform
-            const platformY = building.platformHeight || 0;
-            const yOffset = platformY + (localHeight * flagScale) * 0.5;
-            flagRoot.position = new BABYLON.Vector3(0, yOffset, 0);
-            
-            // Apply team color to the flag, if available
+            // Resolve team color
             let teamColorHex = building.teamColor;
             if (!teamColorHex && typeof window.getTeamColorForOwner === 'function' && building.owner) {
               teamColorHex = window.getTeamColorForOwner(building.owner);
             }
-            
-            // Ensure teamColorHex is a string (handle Color3 objects or other types)
             if (teamColorHex && typeof teamColorHex !== 'string') {
-              // If it's a Color3 object, convert to hex string
-              if (teamColorHex.r !== undefined && teamColorHex.g !== undefined && teamColorHex.b !== undefined) {
+              if (teamColorHex.r !== undefined) {
                 const r = Math.round(teamColorHex.r * 255).toString(16).padStart(2, '0');
                 const g = Math.round(teamColorHex.g * 255).toString(16).padStart(2, '0');
                 const b = Math.round(teamColorHex.b * 255).toString(16).padStart(2, '0');
                 teamColorHex = `#${r}${g}${b}`;
               } else {
-                // Fallback to default if we can't convert
                 teamColorHex = null;
               }
             }
             
             if (teamColorHex) {
+              // Collect every mesh in the flag hierarchy across ALL root nodes
+              const allFlagMeshes = [];
+              flagNodes.forEach(node => {
+                if (typeof node.getTotalVertices === 'function') allFlagMeshes.push(node);
+                (node.getChildMeshes?.() || []).forEach(m => allFlagMeshes.push(m));
+              });
+              
               const clean = teamColorHex.replace('#', '');
               const r = parseInt(clean.substr(0, 2), 16) / 255;
               const g = parseInt(clean.substr(2, 2), 16) / 255;
               const b = parseInt(clean.substr(4, 2), 16) / 255;
               const color = new BABYLON.Color3(r, g, b);
               
-              flagRoot.getChildMeshes().forEach(mesh => {
-                if (!mesh.material) return;
-                const mat = mesh.material.clone(`flagMat_${teamColorHex}_${Date.now()}`);
+              allFlagMeshes.forEach(mesh => {
+                const mat = mesh.material
+                  ? mesh.material.clone(`flagMat_${teamColorHex}_${Date.now()}`)
+                  : new BABYLON.StandardMaterial(`flagMat_${teamColorHex}_${Date.now()}`, scene);
                 mat.diffuseColor = color;
                 mat.emissiveColor = color.scale(0.6);
                 mat.specularColor = new BABYLON.Color3(0, 0, 0);
@@ -708,7 +716,7 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
               });
             }
             
-            // Keep reference for later updates/debugging
+            // Keep reference for later cleanup
             building.flagMesh = flagRoot;
           }).catch(err => {
             console.warn('⚠️ Failed to load agora flag model:', err);
@@ -736,8 +744,19 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
       
       // Only add particle effects if building is complete (construction will add them when done)
       if (building.buildProgress >= 1.0) {
-        // Add particle effects immediately for completed buildings
         addBuildingParticleEffects(building);
+
+        // Pre-completed buildings bypass processBuildingCompletion, so register LOD here
+        if (!building.completionProcessed && window.gfx && window.gfx.addLODBillboard) {
+          const billboardScale = Math.max(1.2, (building.scale || 1.0) * 3.0);
+          const camPos = window.gfx.cameraTarget ? window.gfx.cameraTarget.position : window.gfx.camera?.position;
+          window.gfx.addLODBillboard(
+            { root: building.mesh },
+            window.gfx.scene,
+            { path: building.model, lodDistance: 175, cullDistance: 500, billboardScale: billboardScale },
+            camPos
+          );
+        }
       }
     }).catch(err => {
       // console.error(`❌ Failed to load ${building.name} model:`, err);
@@ -760,12 +779,17 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
 function placeAgora(scene, options = {}) {
   // Agora starts complete (it's the starting building)
   const agoraOptions = { ...options, buildProgress: 1.0 };
-  if (window.player && window.player.agora) {
-    return placeBuilding('agora', window.player.agora.x, window.player.agora.y, scene, agoraOptions);
-  } else {
+  if (window.player) {
+    if (window.player.agora) {
+      const rawId = window.player.id || '';
+      const parts = rawId.split('-');
+      const owner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
+      agoraOptions.owner = owner || undefined;
+      return placeBuilding('agora', window.player.agora.x, window.player.agora.y, scene, agoraOptions);
+    }
     // console.warn("Player agora location not found, using default (15, 15)");
-    return placeBuilding('agora', 15, 15, scene, agoraOptions);
   }
+  return placeBuilding('agora', 15, 15, scene, agoraOptions);
 }
 
 // Initialize buildings when scene is ready
@@ -962,6 +986,13 @@ function spawnVillagerFromVillage(village) {
         const teamColor = window.getTeamColorForOwner ? window.getTeamColorForOwner(villager.owner) : '#4A90E2';
         window.applyTeamColorsToMesh(villager.mesh, teamColor);
       }
+
+      // Create LOD billboard for distant rendering
+      if (window.gfx && window.gfx.getBillboardInstance) {
+        const billboardScale = Math.max(0.6, (villager.scale || 0.5) * 1.5);
+        villager.billboard = window.gfx.getBillboardInstance(villager.model, villager.mesh.position, billboardScale, window.gfx.scene);
+        villager.billboard.setEnabled(false);
+      }
     }).catch(error => {
       console.error('❌ Failed to load villager model:', error);
     });
@@ -1093,65 +1124,63 @@ function findIdleVillagersNearBuilding(building) {
     window.deterministicStringCompare(a.id || '', b.id || '')
   );
   
+  const currentTick_search = window.currentMatch?.tick || 0;
+  const shouldLogSearch = building.buildProgress < 1.0 && building.workType === 'build' && currentTick_search % 200 === 0;
+  let _skipReasons = shouldLogSearch ? { noPhysics: 0, notVillager: 0, ownerMismatch: 0, notIdle: 0, protected: 0, recentCmd: 0, tooFar: 0, assigned: 0 } : null;
+  
   // Look through all game units for idle villagers and engineers
   for (const unit of sortedUnits) {
-    if (!unit.pb || !unit.pb.state || !unit.pb.state.loc) continue;
-    if (unit.type !== 'villager' && unit.type !== 'engineer') continue;
+    if (!unit.pb || !unit.pb.state || !unit.pb.state.loc) { if (_skipReasons) _skipReasons.noPhysics++; continue; }
+    if (unit.type !== 'villager' && unit.type !== 'engineer') { if (_skipReasons) _skipReasons.notVillager++; continue; }
     
     // CRITICAL: Normalize both IDs for comparison (handle both full and shortened IDs)
     const normalizedUnitOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
     const normalizedBuildingOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
-    if (normalizedUnitOwner !== normalizedBuildingOwner) continue; // Only assign workers to same owner
+    if (normalizedUnitOwner !== normalizedBuildingOwner) { if (_skipReasons) _skipReasons.ownerMismatch++; continue; }
     
-    // Check if villager is idle (no active behavior OR just has linger behavior)
+    // Check if villager is idle (no active behavior OR just has linger/wander behavior)
     // Also check if villager is stuck at an empty camp (GatherWorkBehavior with no resources)
     const currentBehavior = window.behaviorManager ? window.behaviorManager.getBehavior(unit) : null;
     let isIdleOrLingering = !currentBehavior || 
-                              (currentBehavior && currentBehavior.constructor.name === 'LingerBehavior');
+                              (currentBehavior && (currentBehavior.constructor.name === 'LingerBehavior' ||
+                                                   currentBehavior.constructor.name === 'WanderBehavior' ||
+                                                   currentBehavior.constructor.name === 'EatBehavior'));
     
     // CRITICAL: Don't auto-assign units with player-commanded behaviors - respect all direct commands!
     if (currentBehavior) {
       const behaviorName = currentBehavior.constructor.name;
-      // Protect: manual gather, move commands, attack commands
       if (behaviorName === 'ManualGatherBehavior' || 
           behaviorName === 'WalkBehavior' || 
           behaviorName === 'RunBehavior' ||
           behaviorName === 'AttackBuildingBehavior') {
-        continue; // Skip units with direct player commands
+        if (_skipReasons) _skipReasons.protected++;
+        continue;
       }
     }
     
     // SPECIAL: Check if villager has GatherWorkBehavior but camp has no resources
     if (!isIdleOrLingering && currentBehavior && currentBehavior.constructor.name === 'GatherWorkBehavior') {
-      const gatherBuilding = currentBehavior.building;
-      if (gatherBuilding && gatherBuilding.type === 'camp' && gatherBuilding.workType === 'gather') {
-        const availableResources = gatherBuilding.availableResources || [];
-        const hasAvailableResources = availableResources.some(r => 
-          !r.depleted && r.remaining > 0 && r.depletionTick === undefined &&
-          (!window.isResourceTileDepleted || !window.isResourceTileDepleted(r.gridX, r.gridZ))
-        );
-        if (!hasAvailableResources) {
-          // Treat as idle - camp has no resources
-          isIdleOrLingering = true;
-        }
+      if (currentBehavior.findNearestResource && !currentBehavior.findNearestResource()) {
+        isIdleOrLingering = true;
       }
     }
     
-    if (!isIdleOrLingering) continue;
+    if (!isIdleOrLingering) {
+      if (_skipReasons) { _skipReasons.notIdle++; if (shouldLogSearch && currentBehavior) console.log(`   ↳ ${unit.id?.slice(-6)} busy: ${currentBehavior.constructor.name}`); }
+      continue;
+    }
     
     // CRITICAL: Don't auto-assign units that recently received a player command.
-    // This avoids rapid "behavior snapping" right after commands and reduces the chance of
-    // divergence if two peers momentarily disagree about eligibility.
     const currentTick = window.currentMatch?.tick || 0;
     const recentTick = (unit.lastPlayerCommandTick !== undefined)
       ? unit.lastPlayerCommandTick
       : unit.lastPlayerMoveTick;
     if (recentTick !== undefined) {
       const ticksSince = currentTick - recentTick;
-      // Adventure co-op: be more conservative (villager systems are busier; avoid flapping).
       const graceTicks = (window.isMultiplayer && window.gameType === 'adventure') ? 120 : 60;
       if (ticksSince < graceTicks) {
-        continue; // Let the commanded behavior "settle" before any auto-assignment.
+        if (_skipReasons) _skipReasons.recentCmd++;
+        continue;
       }
     }
     
@@ -1164,18 +1193,20 @@ function findIdleVillagersNearBuilding(building) {
     // In multiplayer, use rounded distance to prevent desyncs from position drift
     // Rounding to nearest tile ensures deterministic distance comparisons
     if (window.isMultiplayer) {
-      // Round distance to nearest tile for deterministic comparison
       const roundedDistance = Math.round(Math.sqrt(distanceSquared) / TILE_SIZE) * TILE_SIZE;
       if (roundedDistance <= maxDistance) {
         idleVillagers.push({unit, distance: roundedDistance});
-      }
+      } else if (_skipReasons) { _skipReasons.tooFar++; }
     } else {
-      // Single-player: Use exact distance for better assignment logic
       const distance = Math.sqrt(distanceSquared);
       if (distance <= maxDistance) {
         idleVillagers.push({unit, distance});
-      }
+      } else if (_skipReasons) { _skipReasons.tooFar++; }
     }
+  }
+  
+  if (shouldLogSearch && idleVillagers.length === 0 && _skipReasons) {
+    console.warn(`🔍 No idle villagers for ${building.type} (${building.id?.slice(-6)}, owner=${building.owner}): total=${sortedUnits.length}, skipped: notVillager=${_skipReasons.notVillager}, owner=${_skipReasons.ownerMismatch}, notIdle=${_skipReasons.notIdle}, protected=${_skipReasons.protected}, recentCmd=${_skipReasons.recentCmd}, tooFar=${_skipReasons.tooFar}, workRadius=${workRadius}`);
   }
   
   // Sort by distance first (closer workers get priority), then by ID for determinism
@@ -1229,12 +1260,17 @@ function assignVillagerToWork(villager, building) {
     workBehaviorType = 'gather_work';
   } else if (effectiveWorkType === 'farm') {
     workBehaviorType = 'farm_work';
+  } else if (effectiveWorkType === 'mine') {
+    workBehaviorType = 'gather_work';
   }
   
   // Assign the work behavior
-  window.behaviorManager.setBehavior(villager, workBehaviorType, {
-    building: building
-  });
+  const behaviorParams = { building: building };
+  if (effectiveWorkType === 'mine') {
+    behaviorParams.gatherDuration = 7500; // 2x faster than camps
+    behaviorParams.resourceTypes = ['stone', 'minerals'];
+  }
+  window.behaviorManager.setBehavior(villager, workBehaviorType, behaviorParams);
   
   // Add to building's assigned workers
   building.assignedWorkers.push(villager);
@@ -1367,6 +1403,18 @@ function processBuildingCompletion(building) {
     building.assignedWorkers = [];
   }
   
+  // Register building with LOD system for billboard swapping at distance
+  if (window.gfx && window.gfx.addLODBillboard && building.mesh) {
+    const billboardScale = Math.max(1.2, (building.scale || 1.0) * 3.0);
+    const camPos = window.gfx.cameraTarget ? window.gfx.cameraTarget.position : window.gfx.camera?.position;
+    window.gfx.addLODBillboard(
+      { root: building.mesh },
+      window.gfx.scene,
+      { path: building.model, lodDistance: 175, cullDistance: 500, billboardScale: billboardScale },
+      camPos
+    );
+  }
+
   // Add particle effects when construction completes
   if (window.fx && !building.constructionCompleteEffectsAdded) {
     building.constructionCompleteEffectsAdded = true;
@@ -1381,6 +1429,9 @@ function processBuildingCompletion(building) {
   // Update menu button states when building completes
   if (window.updateMenuButtonStates) {
     window.updateMenuButtonStates();
+  }
+  if (window.hud && window.hud.update3DMenuStates) {
+    window.hud.update3DMenuStates();
   }
 }
 
@@ -1839,8 +1890,18 @@ function updateBuildings(deltaTime) {
         building.constructionIndicator.setEnabled(true);
       }
       
-      // Progress construction based on worker count (1 worker = base speed, 3 workers = 3x speed)
-      if (workerCount > 0) {
+      // Progress construction based on workers who are actually AT the building
+      // CRITICAL: Only count workers within work range - prevents progress when they're still walking there
+      const TILE_SIZE = window.TILE_SIZE || 4;
+      const workRange = TILE_SIZE * 2; // 2 tiles - must be at the site to contribute
+      const workersAtSite = building.position ? building.assignedWorkers.filter(w => {
+        if (!w.pb?.state?.loc) return false;
+        const dx = building.position.x - w.pb.state.loc.x;
+        const dz = building.position.z - w.pb.state.loc.z;
+        return Math.sqrt(dx * dx + dz * dz) <= workRange;
+      }).length : 0;
+      
+      if (workersAtSite > 0) {
         // CRITICAL: Track construction start tick on first work tick
         if (building.constructionStartTick === 0) {
           building.constructionStartTick = currentTick;
@@ -1851,9 +1912,9 @@ function updateBuildings(deltaTime) {
         // Check if we've already processed this tick
         if (building.lastConstructionTick !== currentTick) {
           building.lastConstructionTick = currentTick;
-          // Accumulate work ticks (each worker contributes 1 tick per game tick)
+          // Accumulate work ticks (each worker AT SITE contributes 1 tick per game tick)
           const oldWorkTicks = building.constructionWorkTicks;
-          building.constructionWorkTicks += workerCount;
+          building.constructionWorkTicks += workersAtSite;
           
           // Construction progress tracked silently for multiplayer sync
         }
@@ -1970,9 +2031,8 @@ function updateBuildings(deltaTime) {
       if (building.assignedWorkers.length < maxWorkersForThisState) {
         const idleVillagers = findIdleVillagersNearBuilding(building);
         
-        // Debug: Log when looking for workers
         if (building.workType === 'build' && building.buildProgress < 1.0 && currentTick % 100 === 0) {
-          // console.log(`👷 Looking for workers for ${building.type}: found ${idleVillagers.length} idle, assigned=${building.assignedWorkers.length}/${building.maxWorkers}`);
+          console.log(`👷 Construction ${building.type} (${building.id?.slice(-6)}): ${idleVillagers.length} idle nearby, assigned=${building.assignedWorkers.length}/${maxWorkersForThisState}, progress=${(building.buildProgress*100).toFixed(0)}%, owner=${building.owner}`);
         }
         
         
@@ -2525,97 +2585,80 @@ const buildingSystem = {
     }
     
     // CHECK 1: Rocks on dirt tiles (terrainType === 2) with ~3% chance
+    // gfx.js PASS 1 only places rocks on dirt - no rocks are placed on grass visually
     if (terrainType === 2) {
       const rockRoll = this.tileHash(gridX, gridZ, fieldSeed + 1000);
       if (rockRoll < 0.03) {
-        // Determine rock size (same logic as gfx.js)
-        const sizeRoll = this.tileHash(gridX, gridZ, fieldSeed + 2000);
-        
-        if (sizeRoll < 0.3) {
-          // Small rocks (30%) → gems/minerals
-          return {
-            type: 'minerals',
-            amount: 1,
-            remaining: 12, // ~12 trips
-            gridX: gridX,
-            gridZ: gridZ
-          };
-        } else if (sizeRoll < 0.7) {
-          // Medium rocks (40%) → stone
-          return {
-            type: 'stone',
-            amount: 4,
-            remaining: 56, // ~14 trips (4 stone × 14 = 56)
-            gridX: gridX,
-            gridZ: gridZ
-          };
-        } else {
-          // Large rocks (30%) → more stone
-          return {
-            type: 'stone',
-            amount: 6,
-            remaining: 84, // ~14 trips (6 stone × 14 = 84)
-            gridX: gridX,
-            gridZ: gridZ
-          };
-        }
-      }
-    }
-    
-    // CHECK 2: Trees on grass tiles (terrainType === 3) with ~20% chance
-    if (terrainType === 3) {
-      const treeRoll = this.tileHash(gridX, gridZ, fieldSeed + 3000);
-      if (treeRoll < 0.20) {
-        return {
-          type: 'wood',
-          amount: 7,
-          remaining: 28, // ~4 trips (7 wood × 4 = 28)
-          gridX: gridX,
-          gridZ: gridZ
-        };
-      }
-      
-      // CHECK 2b: Rocks on grass tiles (terrainType === 3) with ~3% chance
-      // Same logic as rocks on dirt, just different terrain type
-      const rockRoll = this.tileHash(gridX, gridZ, fieldSeed + 1000);
-      if (rockRoll < 0.03) {
-        // Determine rock size (same logic as gfx.js - use region-based size)
+        // Determine rock size - must use REGION coordinates to match gfx.js
+        // gfx.js uses 5x5 tile regions for cohesive rock size clusters
         const regionX = Math.floor(gridX / 5);
         const regionZ = Math.floor(gridZ / 5);
         const sizeRoll = this.tileHash(regionX, regionZ, fieldSeed + 2000);
         
         if (sizeRoll < 0.3) {
-          // Small rocks (30%) → minerals
-          return {
+          // Small rocks (30%) → gems/minerals
+          return this._applyRemainingOverride({
             type: 'minerals',
             amount: 1,
             remaining: 12,
             gridX: gridX,
             gridZ: gridZ
-          };
+          }, ignoreDepletion);
         } else if (sizeRoll < 0.7) {
-          // Medium rocks (40%) → stone (moss rocks)
-          return {
+          // Medium rocks (40%) → stone
+          return this._applyRemainingOverride({
             type: 'stone',
             amount: 4,
             remaining: 56,
             gridX: gridX,
             gridZ: gridZ
-          };
+          }, ignoreDepletion);
         } else {
-          // Large rocks (30%) → more stone (snow rocks)
-          return {
+          // Large rocks (30%) → more stone
+          return this._applyRemainingOverride({
             type: 'stone',
             amount: 6,
             remaining: 84,
             gridX: gridX,
             gridZ: gridZ
-          };
+          }, ignoreDepletion);
         }
       }
     }
     
+    // CHECK 2: Trees on grass (type 3) and dirt (type 2) - must match gfx.js PASS 2
+    // gfx.js places trees on both grass (20%) and dirt (5%), skip water (type 1)
+    if (terrainType === 3 || terrainType === 2) {
+      // On dirt, rocks are checked first (CHECK 1 above) and would have returned already
+      // so any dirt tile reaching here has no rock - same as gfx.js which skips occupied tiles
+      const treeSpawnRate = terrainType === 3 ? 0.20 : 0.05;
+      const treeRoll = this.tileHash(gridX, gridZ, fieldSeed + 3000);
+      if (treeRoll < treeSpawnRate) {
+        const result = {
+          type: 'wood',
+          amount: 7,
+          remaining: 28,
+          gridX: gridX,
+          gridZ: gridZ
+        };
+        return this._applyRemainingOverride(result, ignoreDepletion);
+      }
+    }
+    
     return null;
+  },
+
+  _applyRemainingOverride: function(result, ignoreDepletion) {
+    if (ignoreDepletion) return result;
+    const tracker = window.currentMatch?.resourceRemaining;
+    if (tracker) {
+      const key = `${result.gridX},${result.gridZ}`;
+      if (tracker.has(key)) {
+        result.remaining = tracker.get(key);
+        if (result.remaining <= 0) return null;
+      }
+    }
+    return result;
   },
   
   // Create a visual indicator for a resource tile
@@ -2930,20 +2973,25 @@ const buildingSystem = {
   // Return a building's model to the pool
   returnBuildingToPool: function(building) {
     if (building.mesh && building.model) {
+      // Remove from LOD system before pooling
+      if (window.gfx && window.gfx.removeModelFromLOD) {
+        window.gfx.removeModelFromLOD(building.mesh);
+      }
+
       // Hide the mesh (only if setEnabled method exists)
       if (typeof building.mesh.setEnabled === 'function') {
         building.mesh.setEnabled(false);
       }
-      
+
       // Get or create pool for this model
       if (!buildingModelPools.has(building.model)) {
         buildingModelPools.set(building.model, []);
       }
-      
+
       // Add mesh to pool
       const pool = buildingModelPools.get(building.model);
       pool.push({ root: building.mesh });
-      
+
       // Clear building's reference
       building.mesh = null;
     }

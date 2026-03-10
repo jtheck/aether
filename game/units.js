@@ -4,6 +4,17 @@
 const REMOTE_UNIT_INTERPOLATION_SPEED = 0.5; // Fast interpolation for remote units (50% per frame = responsive, matches local units)
 const LOCAL_UNIT_INTERPOLATION_SPEED = 0.5; // Faster interpolation for local units (50% per frame = nearly instant)
 
+// Default speech phrases (used when unit type has no custom speech for a category)
+const DEFAULT_SPEECH = {
+  select: ['Ready!', 'Yes?', 'Orders?', 'Awaiting command', 'At your service'],
+  move: ['Moving out', 'On my way', 'Yes sir', 'Right away', 'Understood'],
+  attack: ['Attacking!', 'For glory!', 'Charge!', 'To battle!', 'Engaging enemy'],
+  gather: ['Gathering', 'On it', 'Will do', 'Collecting resources', 'Working'],
+  build: ['Building', 'Constructing', 'Right away', 'On the job', 'Will build'],
+  complete: ['Done!', 'Complete', 'Finished', 'Task complete', 'Ready for orders'],
+  damage: ['Under attack!', 'Help!', 'Taking damage!', "We're hit!", 'Need backup!']
+};
+
 // Unit type definitions - all unit attributes in one place
 const UnitTypes = {
   
@@ -530,6 +541,8 @@ const UnitTypes = {
   }
 };
 
+UnitTypes.defaultSpeech = DEFAULT_SPEECH;
+
 // Initialize upgrade abilities for units
 function initializeUpgradeAbilities() {
   // Add upgrade abilities dynamically based on upgradeTo property
@@ -601,6 +614,16 @@ function initializeUpgradeAbilities() {
               if (idx > -1) window.gameUnits.splice(idx, 1);
             }
             
+            // Clean up old billboard
+            if (unit.billboard) {
+              if (window.gfx && window.gfx.returnBillboardInstance) {
+                window.gfx.returnBillboardInstance(unit.billboard);
+              } else if (unit.billboard.dispose) {
+                unit.billboard.dispose();
+              }
+              unit.billboard = null;
+            }
+
             // Dispose old mesh
             if (unit.mesh) {
               unit.mesh.dispose();
@@ -650,6 +673,10 @@ const FLYING_LOD_DISTANCES = {
   HIDDEN: 1200 // Hide completely beyond this distance (increased from 800)
 };
 
+// Visual LOD: distance at which 3D models swap to billboard sprites
+let UNIT_BILLBOARD_DISTANCE = 225;
+let UNIT_BILLBOARD_DISTANCE_SQ = UNIT_BILLBOARD_DISTANCE * UNIT_BILLBOARD_DISTANCE;
+
 // Ground offset for unit positioning - adjust if units float or clip through terrain
 // Negative values sink units down, positive values lift them up
 // With correct triangular interpolation, this should be 0 or very small
@@ -668,6 +695,7 @@ function Unit(unitType, position, options = {}) {
     
     // Unit instance properties
     this.type = unitType; // Store the original unit type
+    this.displayName = options.displayName || options.name || ''; // Custom name for adventure maps
     // Generate deterministic IDs in multiplayer using match seed + unit counter
     // CRITICAL: If id is provided in options (even if undefined), use it
     // If id is NOT in options at all, then increment unitCounter
@@ -772,6 +800,11 @@ function Unit(unitType, position, options = {}) {
     // console.log(`Created ${this.name} at position`, this.position);
 }
 
+// For adventure maps: show custom name if set, else type name
+Unit.prototype.getDisplayName = function() {
+  return (this.displayName && String(this.displayName).trim()) ? this.displayName : (this.name || this.type || '');
+};
+
 // Helper function to get unit definition by type
 function getUnitDef(unitType) {
     return UnitTypes[unitType];
@@ -858,28 +891,46 @@ function updateUnitDistances() {
             unit.distanceToCameraSquared = distanceSquared;
             unit.distanceToCamera = Math.sqrt(distanceSquared); // Only calculate sqrt when actually needed
             
-            // Hide/show units based on distance (using squared distances for comparison)
+            // Hide/show units and swap model/billboard based on distance
+            const billboardOnly = window.gfx && window.gfx.isBillboardOnlyMode && window.gfx.isBillboardOnlyMode();
             if (unit.mesh) {
-                // GAMEPLAY UNITS (player/AI) - ALWAYS VISIBLE for strategic gameplay
-                // You need to see where your armies are at all zoom levels!
-                // CRITICAL: Always enable mesh for player/AI units, even if stealthed (stealth just reduces visibility/alpha)
                 if (unit.owner !== 'neutral') {
-                    unit.mesh.setEnabled(true);
-                    
-                    // CRITICAL: Ensure stealthed units are still visible (just semi-transparent)
-                    // If a unit has isStealthed flag but mesh visibility is too low, restore it
-                    // This fixes the issue where remote monks become invisible
+                    // GAMEPLAY UNITS - always visible, swap model/billboard by distance
+                    if (unit.billboard) {
+                        if (billboardOnly || distanceSquared > UNIT_BILLBOARD_DISTANCE_SQ) {
+                            unit.mesh.setEnabled(false);
+                            unit.billboard.setEnabled(true);
+                        } else {
+                            unit.mesh.setEnabled(true);
+                            unit.billboard.setEnabled(false);
+                        }
+                    } else if (!billboardOnly) {
+                        unit.mesh.setEnabled(true);
+                    }
+
                     if (unit.isStealthed && unit.mesh.visibility !== undefined && unit.mesh.visibility < 0.3) {
-                        // Ensure stealth visibility is at least 0.4 (semi-transparent, not invisible)
                         unit.mesh.visibility = Math.max(0.4, unit.mesh.visibility);
                     }
                 }
-                // DECORATIVE UNITS (neutral wildlife) - Aggressive culling for performance
+                // DECORATIVE UNITS (neutral wildlife)
                 else if (unit.owner === 'neutral') {
-                    if (distanceSquared > NEUTRAL_HIDE_DISTANCE_SQ) {
-                        unit.mesh.setEnabled(false);
+                    if (unit.billboard) {
+                        if (distanceSquared > NEUTRAL_HIDE_DISTANCE_SQ) {
+                            unit.mesh.setEnabled(false);
+                            unit.billboard.setEnabled(false);
+                        } else if (billboardOnly || distanceSquared > UNIT_BILLBOARD_DISTANCE_SQ) {
+                            unit.mesh.setEnabled(false);
+                            unit.billboard.setEnabled(true);
+                        } else {
+                            unit.mesh.setEnabled(true);
+                            unit.billboard.setEnabled(false);
+                        }
                     } else {
-                        unit.mesh.setEnabled(true);
+                        if (distanceSquared > NEUTRAL_HIDE_DISTANCE_SQ) {
+                            unit.mesh.setEnabled(false);
+                        } else if (!billboardOnly) {
+                            unit.mesh.setEnabled(true);
+                        }
                     }
                 }
             }
@@ -1155,7 +1206,14 @@ function spawnUnitModels(scene) {
                     const teamColor = window.getTeamColorForOwner ? window.getTeamColorForOwner(unit.owner) : '#4A90E2';
                     window.applyTeamColorsToMesh(unit.mesh, teamColor);
                 }
-                
+
+                // Create LOD billboard for distant rendering
+                if (window.gfx && window.gfx.getBillboardInstance) {
+                    const billboardScale = Math.max(0.6, (unit.scale || 0.5) * 1.5);
+                    unit.billboard = window.gfx.getBillboardInstance(unit.model, unit.mesh.position, billboardScale, scene);
+                    unit.billboard.setEnabled(false);
+                }
+
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
                 console.warn(`❌ Failed to load model for ${unit.name}:`, err);
@@ -1355,6 +1413,12 @@ function updateUnits(deltaTime) {
     
     // Update selection indicators once per frame (not per unit)
     updateSelectionIndicators();
+    // Update selection panel: 2D DOM or 3D HUD depending on mode
+    if (window.hud && window.USE_3D_HUD && window.hud.update3DSelectionPanel) {
+      window.hud.update3DSelectionPanel();
+    } else if (window.hud && window.hud.updateSelectionPanel && !window.USE_3D_HUD) {
+      window.hud.updateSelectionPanel();
+    }
     
     // Step all unit behaviors (this handles movement commands)
     // In P2P multiplayer, behaviors are deterministic (using match.tick), so we can
@@ -1421,14 +1485,44 @@ function updateUnits(deltaTime) {
             // Check if tile is blocked (rocks, deep water)
             // CRITICAL: Only block if moving FROM passable TO impassable (can escape water, can't enter it)
             const wasPassable = !field.isPassable || field.isPassable(oldTileX, oldTileZ);
-            const isPassable = !field.isPassable || field.isPassable(newTileX, newTileZ);
+            const isNewPassable = !field.isPassable || field.isPassable(newTileX, newTileZ);
             
-            if (wasPassable && !isPassable) {
-                // Unit is trying to move from passable to impassable - block it
-                unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
-                unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
-                unit.pb.state.vel.x = 0;
-                unit.pb.state.vel.z = 0;
+            // Gathering workers heading to a resource walk through blocked tiles freely
+            const behavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
+            const isGatherSeeking = behavior && behavior.gatherState === 'seeking' && behavior.gatherTarget;
+            
+            if (wasPassable && !isNewPassable && !isGatherSeeking) {
+                // Axis-by-axis wall sliding: only block the axis that enters a blocked tile
+                const xOnlyTileX = Math.floor(unit.pb.state.loc.x / TILE_SIZE);
+                const xOnlyPassable = !field.isPassable || field.isPassable(xOnlyTileX, oldTileZ);
+                const zOnlyTileZ = Math.floor(unit.pb.state.loc.z / TILE_SIZE);
+                const zOnlyPassable = !field.isPassable || field.isPassable(oldTileX, zOnlyTileZ);
+
+                if (!xOnlyPassable && !zOnlyPassable) {
+                    // Both axes blocked -- full revert
+                    unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
+                    unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
+                    unit.pb.state.vel.x = 0;
+                    unit.pb.state.vel.z = 0;
+                } else if (!xOnlyPassable) {
+                    // X axis enters blocked tile -- slide along Z
+                    unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
+                    unit.pb.state.vel.x = 0;
+                } else if (!zOnlyPassable) {
+                    // Z axis enters blocked tile -- slide along X
+                    unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
+                    unit.pb.state.vel.z = 0;
+                } else {
+                    // Each axis alone is fine but combined tile is blocked (diagonal corner)
+                    // Revert the axis with more movement to hug the wall
+                    if (Math.abs(unit.pb.state.vel.x) > Math.abs(unit.pb.state.vel.z)) {
+                        unit.pb.state.loc.x -= unit.pb.state.vel.x * deltaTime;
+                        unit.pb.state.vel.x = 0;
+                    } else {
+                        unit.pb.state.loc.z -= unit.pb.state.vel.z * deltaTime;
+                        unit.pb.state.vel.z = 0;
+                    }
+                }
             }
             // If already in impassable tile (wasPassable=false), allow movement to escape
             
@@ -1483,46 +1577,60 @@ function updateUnits(deltaTime) {
           // Check if unit has an active movement behavior (walk/run/linger/wander)
           const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
           const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
-          const isMovementBehavior = behaviorType === 'WalkBehavior' || 
-                                    behaviorType === 'RunBehavior' ||
-                                    behaviorType === 'LingerBehavior' ||
-                                    behaviorType === 'WanderBehavior';
-          
-          // CRITICAL: Only apply position corrections when unit is idle
-          // Active movement behaviors control velocity directly - corrections would fight with them
-          if (!isMovementBehavior) {
-            const correction = unit._positionCorrection;
+          const isActiveMovement = behaviorType === 'WalkBehavior' || 
+                                    behaviorType === 'RunBehavior';
+
+          const correction = unit._positionCorrection;
+          const correctionMode = correction.mode || 'idle';
+          const allowDuringMovement = correctionMode === 'moving';
+          const treatAsMovingCorrection = allowDuringMovement && isActiveMovement;
+
+          if (!isActiveMovement || allowDuringMovement) {
             const currentX = unit.pb.state.loc.x;
             const currentZ = unit.pb.state.loc.z;
             
-            // Lerp towards authoritative position (reduced strength to prevent speedups)
             const errorX = correction.targetX - currentX;
             const errorZ = correction.targetZ - currentZ;
             const errorDistance = Math.sqrt(errorX * errorX + errorZ * errorZ);
             
-            // Reduced correction strength: max 0.2 (was 0.5) to prevent units from moving faster than normal
-            // This ensures corrections don't cause speedups - units should move at their normal speed
-            const maxStrength = 0.2; // Cap at 20% per frame to prevent speedups
+            const maxStrength = treatAsMovingCorrection ? 0.03 : 0.2;
             const adaptiveStrength = Math.min(correction.strength, maxStrength);
+            let stepX = errorX * adaptiveStrength;
+            let stepZ = errorZ * adaptiveStrength;
             
-            unit.pb.state.loc.x += errorX * adaptiveStrength;
-            unit.pb.state.loc.z += errorZ * adaptiveStrength;
+            // While actively moving, clamp correction displacement per physics step
+            // to avoid visible speed bursts or "rubber-band stop" artifacts.
+            if (treatAsMovingCorrection) {
+              const maxStep = 0.02;
+              const stepDistance = Math.sqrt(stepX * stepX + stepZ * stepZ);
+              if (stepDistance > maxStep && stepDistance > 0.0001) {
+                const scale = maxStep / stepDistance;
+                stepX *= scale;
+                stepZ *= scale;
+              }
+            }
             
-            // Check if we're close enough to stop correcting (within 0.15 units)
+            unit.pb.state.loc.x += stepX;
+            unit.pb.state.loc.z += stepZ;
+            
+            const snapThreshold = treatAsMovingCorrection ? 0.25 : 0.1;
             const remainingError = Math.sqrt(
               (correction.targetX - unit.pb.state.loc.x) * (correction.targetX - unit.pb.state.loc.x) +
               (correction.targetZ - unit.pb.state.loc.z) * (correction.targetZ - unit.pb.state.loc.z)
             );
             
-            if (remainingError < 0.15) {
-              // Close enough - snap to exact position and remove correction
-              unit.pb.state.loc.x = correction.targetX;
-              unit.pb.state.loc.z = correction.targetZ;
-              delete unit._positionCorrection;
+            if (remainingError < snapThreshold) {
+              if (treatAsMovingCorrection) {
+                // End of active movement: don't hard-snap, just stop micro-correcting.
+                // This avoids visible "arrival pop" near destinations.
+                delete unit._positionCorrection;
+              } else {
+                unit.pb.state.loc.x = correction.targetX;
+                unit.pb.state.loc.z = correction.targetZ;
+                delete unit._positionCorrection;
+              }
             }
           } else {
-            // Unit is actively moving - cancel correction to let movement behavior control speed
-            // The checkpoint sync will re-apply corrections when unit stops moving
             delete unit._positionCorrection;
           }
         }
@@ -1615,6 +1723,9 @@ function updateUnits(deltaTime) {
             // This allows units to slow down naturally when not commanded
             unit.pb.state.vel.x = Math.round((unit.pb.state.vel.x * damping) * 1000) / 1000;
             unit.pb.state.vel.z = Math.round((unit.pb.state.vel.z * damping) * 1000) / 1000;
+            // Kill tiny residual drift to prevent stop-state micro rubber-banding.
+            if (Math.abs(unit.pb.state.vel.x) < 0.03) unit.pb.state.vel.x = 0;
+            if (Math.abs(unit.pb.state.vel.z) < 0.03) unit.pb.state.vel.z = 0;
         }
         // Keep Y velocity at 0 (terrain height is handled directly, not via velocity)
         unit.pb.state.vel.y = 0;
@@ -1914,23 +2025,47 @@ function updateUnitMeshes() {
                     };
                 }
                 
-                // Choose interpolation speed based on unit ownership
-                const interpolationSpeed = isLocalUnit ? LOCAL_UNIT_INTERPOLATION_SPEED : REMOTE_UNIT_INTERPOLATION_SPEED;
-                
-                // Smoothly interpolate visual position towards physics position
                 const targetX = unit.pb.state.loc.x;
                 const targetZ = unit.pb.state.loc.z;
                 const targetY = unit.pb.state.loc.y;
                 
-                // Calculate interpolation
-                const dx = targetX - unit.visualPosition.x;
-                const dz = targetZ - unit.visualPosition.z;
-                const dy = targetY - unit.visualPosition.y;
-                
-                // Apply interpolation
-                unit.visualPosition.x += dx * interpolationSpeed;
-                unit.visualPosition.z += dz * interpolationSpeed;
-                unit.visualPosition.y += dy * interpolationSpeed;
+                // In multiplayer, physics is tick-driven (frozen between ticks).
+                // Extrapolate visuals from velocity for smooth motion between net ticks.
+                // But when an authoritative position correction is active, do not
+                // extrapolate (it will fight correction and cause jitter).
+                const isMultiplayerPlaying = window.isMultiplayer && window.currentMatch?.state === 'playing';
+                if (isMultiplayerPlaying) {
+                    const hasActiveCorrection = !!unit._positionCorrection;
+                    const correctionMode = unit._positionCorrection?.mode || 'idle';
+                    const canExtrapolateWithCorrection = !hasActiveCorrection || correctionMode === 'moving';
+                    if (canExtrapolateWithCorrection && unit.pb.state.vel) {
+                        const vel = unit.pb.state.vel;
+                        const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
+                        const frameDt = window.gameLoop?.deltaTime || (1 / 60);
+                        if (speed > 0.12) {
+                            unit.visualPosition.x += vel.x * frameDt;
+                            unit.visualPosition.z += vel.z * frameDt;
+                            const correctionRate = 3.0 * frameDt;
+                            const dx = targetX - unit.visualPosition.x;
+                            const dz = targetZ - unit.visualPosition.z;
+                            unit.visualPosition.x += dx * correctionRate;
+                            unit.visualPosition.z += dz * correctionRate;
+                        } else {
+                            unit.visualPosition.x = targetX;
+                            unit.visualPosition.z = targetZ;
+                        }
+                    } else {
+                        unit.visualPosition.x = targetX;
+                        unit.visualPosition.z = targetZ;
+                    }
+                } else {
+                    const interpolationSpeed = isLocalUnit ? LOCAL_UNIT_INTERPOLATION_SPEED : REMOTE_UNIT_INTERPOLATION_SPEED;
+                    const dx = targetX - unit.visualPosition.x;
+                    const dz = targetZ - unit.visualPosition.z;
+                    unit.visualPosition.x += dx * interpolationSpeed;
+                    unit.visualPosition.z += dz * interpolationSpeed;
+                }
+                unit.visualPosition.y += (targetY - unit.visualPosition.y) * 0.5;
                 
                 // Update mesh position from visual position (smooth interpolation)
                 unit.mesh.position.x = unit.visualPosition.x;
@@ -1958,10 +2093,12 @@ function updateUnitMeshes() {
                     }
                 }
                 
-                // CRITICAL: Ensure mesh is enabled for all player/AI units (not just neutral)
-                // This fixes the issue where remote monks become invisible
+                // Ensure mesh is enabled for player/AI units when billboard isn't active
                 if (unit.owner !== 'neutral' && unit.mesh && typeof unit.mesh.setEnabled === 'function') {
-                    unit.mesh.setEnabled(true);
+                    const billboardOnly = window.gfx && window.gfx.isBillboardOnlyMode && window.gfx.isBillboardOnlyMode();
+                    if (!billboardOnly && (!unit.billboard || !unit.billboard.isEnabled())) {
+                        unit.mesh.setEnabled(true);
+                    }
                 }
                 
                 // CRITICAL: Ensure stealthed units are still visible (just semi-transparent)
@@ -1974,9 +2111,17 @@ function updateUnitMeshes() {
                 
                 // Skip animation system for units with active behaviors
                 if (hasActiveBehavior) {
-                    // ALWAYS use visual Y position - updateUnits() handles terrain height, platforms, and arc animations
-                    // Visual position smoothly follows physics Y position
-                    unit.mesh.position.y = unit.visualPosition.y;
+                    // Check if this is a flying unit or has a monk kick arc
+                    const isFlying = unit.abilities && unit.abilities.includes('fly');
+                    if (isFlying || unit._monkKickArc) {
+                        unit.mesh.position.y = unit.visualPosition.y;
+                    } else {
+                        // Ground units: always use terrain height directly (no interpolation lag)
+                        // Laggy Y interpolation causes "floaty" appearance for remote units
+                        const groundTerrainH = unit.pb && unit.pb.state && unit.pb.state.loc ? 
+                            window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
+                        unit.mesh.position.y = groundTerrainH + UNIT_GROUND_OFFSET;
+                    }
                 } else {
                     // Units without behaviors: use terrain height (no bobbing/hopping)
                     // Special cases: birds fly in circles, mushrooms breathe
@@ -2124,6 +2269,11 @@ function updateUnitMeshes() {
                 }
             });
             }
+
+            // Sync billboard position to mesh position for LOD
+            if (unit.billboard && unit.billboard.isEnabled()) {
+                unit.billboard.position.copyFrom(unit.mesh.position);
+            }
         }
     });
 }
@@ -2194,6 +2344,16 @@ function destroyUnit(unit) {
         window.behaviorManager.behaviors.delete(unit);
     }
     
+    // Clean up LOD billboard
+    if (unit.billboard) {
+        if (window.gfx && window.gfx.returnBillboardInstance) {
+            window.gfx.returnBillboardInstance(unit.billboard);
+        } else if (unit.billboard.dispose) {
+            unit.billboard.dispose();
+        }
+        unit.billboard = null;
+    }
+
     // Remove from scene
     if (unit.mesh) {
         unit.mesh.dispose();
@@ -2565,8 +2725,13 @@ if (typeof window !== 'undefined') {
     
     // LOD system exports
     window.LOD_DISTANCES = LOD_DISTANCES;
+    window.FLYING_LOD_DISTANCES = FLYING_LOD_DISTANCES;
     window.debugLODStats = debugLODStats;
     window.updateUnitDistances = updateUnitDistances;
+    window.updateUnitBillboardDistance = function(multiplier) {
+      UNIT_BILLBOARD_DISTANCE = Math.round(225 * multiplier);
+      UNIT_BILLBOARD_DISTANCE_SQ = UNIT_BILLBOARD_DISTANCE * UNIT_BILLBOARD_DISTANCE;
+    };
     
     // Export auto-init control
     Object.defineProperty(window, 'autoInitDisabled', {

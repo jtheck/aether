@@ -172,10 +172,11 @@
     // Store all planes in the selectionBox variable
     selectionBox = planes;
     
-    // Make all planes invisible initially
+    // Make all planes invisible initially; no shadow receive/cast for selection UI
     planes.forEach(plane => {
       plane.isVisible = false;
       plane.isPickable = false;
+      plane.receiveShadows = false;
     });
     
     // console.log("3D fence selection box created successfully with", planes.length, "planes");

@@ -58,9 +58,6 @@ function Player(ops){
   // Load the frog mesh
   this.loadFrogMesh();
   
-  // Add a flag to follow the player
-  this.loadFlag();
-  
   // DON'T spawn villagers here - let the Game handle it consistently for all players
   // this.spawnInitialVillagers();
 
@@ -196,33 +193,6 @@ Player.prototype.loadFrogMesh = function() {
   });
 };
 
-// Method to load the flag
-Player.prototype.loadFlag = function() {
-  const self = this;
-  BABYLON.SceneLoader.LoadAssetContainerAsync("assets/models/flag.glb", undefined, this.scene)
-    .then(container => {
-      const result = container.instantiateModelsToScene();
-      const flag = result.rootNodes[0];
-      
-      // Parent the flag to the player's transform node
-      flag.parent = self.transformNode;
-      
-      // Position the flag relative to the player
-      flag.position = new BABYLON.Vector3(0, 0.5, 0); // Slightly above the player
-      
-      // Scale the flag to be visible
-      flag.scaling = new BABYLON.Vector3(0.5, 0.5, 0.5);
-      
-      // Stop any animations
-      result.animationGroups.forEach(g => g.stop());
-      
-      // console.log("🚩 Flag attached to player!");
-    })
-    .catch(error => {
-      // console.warn("⚠️ Could not load flag.glb:", error);
-    });
-};
-
 // Method to update the player's visual position based on physics body
 Player.prototype.updatePosition = function() {
   if (this.pbody && this.pbody.state && this.pbody.state.loc) {
@@ -288,7 +258,12 @@ Player.prototype.deselectUnit = function(unit) {
 
 Player.prototype.clearSelection = function() {
   const count = this.selectedUnits.length;
-  
+
+  // Clear speech bubbles for deselected units (prevents text sticking when selecting different units)
+  if (window.UnitSpeech) {
+    this.selectedUnits.forEach(unit => window.UnitSpeech.clearSpeech(unit));
+  }
+
   // Hide selection indicators for units
   this.selectedUnits.forEach(unit => {
     if (unit.selectionIndicator) {

@@ -5,6 +5,7 @@
   top: 10px;
   left: 10px;
   z-index: 1000;
+  max-width: 528px;
   pointer-events: auto;
 }
 
@@ -76,6 +77,8 @@
   display: flex;
   gap: 5px;
   flex-wrap: wrap;
+  padding-top: 5px;
+  border-top: 2px solid #c17620;
 }
 
 .forge-btn {

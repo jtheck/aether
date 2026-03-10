@@ -78,7 +78,12 @@
       
       // CRITICAL: Queue for pending resource decrements to batch at sync checkpoints
       // This ensures both clients apply decrements at the same tick, preventing desyncs
-      this.pendingResourceDecrements = []; // Array of {buildingId, gridX, gridZ, amount}
+      this.pendingResourceDecrements = []; // Array of {gridX, gridZ, amount, queuedAtTick}
+
+      // Persistent tracking of partially-depleted resource tiles.
+      // checkTileForResources() is stateless (seed-based), so we store overrides here.
+      // Key: "gridX,gridZ"  Value: remaining amount
+      this.resourceRemaining = new Map();
       
       // Statistics tracking
       this.stats = {
@@ -466,6 +471,9 @@
       // Initialize blob shadows for Low/Med shadow modes
       // This ensures blob shadows are created for all units when match starts,
       // even if the player never opened the settings menu
+      if (window.SHADOW_MODE === undefined && window.hud && window.hud.initializeShadowsMode) {
+        window.hud.initializeShadowsMode();
+      }
       if ((window.SHADOW_MODE === 1 || window.SHADOW_MODE === 2) && window.gfx) {
         // Set blob shadow visibility
         if (window.gfx.setBlobShadowsVisible) {
@@ -477,6 +485,12 @@
         }
       }
       
+      // Initialize scene player for cinematic sequences
+      if (window.ScenePlayer && window.adventureScenes && window.adventureScenes.length > 0) {
+        this.scenePlayer = new ScenePlayer(window.adventureScenes, this);
+        console.log(`🎬 Scene player ready with ${window.adventureScenes.length} scene(s)`);
+      }
+
       // Start local tick loop for non-multiplayer matches (Adventure mode, etc.)
       // In multiplayer, the network system handles ticking
       if (!window.isMultiplayer) {
@@ -522,7 +536,6 @@
     
     // Process a single tick (called by network tick loop, not by our own timer)
     processTick() {
-      // Only process ticks when actually playing (not during loading/ready states)
       if (this.state !== MatchState.PLAYING || this.isPaused) {
         return;
       }
@@ -538,15 +551,8 @@
         this.updateAIPlayers();
       }
       
-      // Generate AI commands (host only for AI opponents, but deterministic)
-      // P2P: For human vs human, this doesn't run (no AI players)
-      // Run every 20 ticks (once per second) to avoid overwhelming the command system
-      if (this.tick % 20 === 0 && this.isHost()) {
-        const aiCommandCount = this.generateAICommands();
-        if (aiCommandCount > 0 && this.tick % 100 === 0) { // Log every 5 seconds
-          console.log(`🤖 Host generated ${aiCommandCount} AI command(s) at tick ${this.tick}`);
-        }
-      }
+      // AI worker/building management is handled by opponent.js (manageWorkerUnits)
+      // via updateAIPlayers() above. No duplicate command generation needed here.
       
       // Execute commands for this tick
       this.executeCommandsForTick(this.tick);
@@ -561,6 +567,11 @@
       // Check victory conditions every second (respects victoryCondition setting)
       if (this.tick % 20 === 0) {
         this.checkVictoryConditions();
+      }
+
+      // Check scene triggers every second
+      if (this.tick % 20 === 0 && this.scenePlayer) {
+        this.scenePlayer.checkTriggers();
       }
       
       // Synchronization checkpoint with adaptive frequency
@@ -601,7 +612,8 @@
       if (this.tick % currentSyncInterval === 0) {
         // CRITICAL: Process pending resource decrements at sync checkpoint
         // This ensures both clients apply decrements at the same tick, preventing desyncs
-        this.processPendingResourceDecrements();
+        // Pass currentSyncInterval so filter window matches when we actually run
+        this.processPendingResourceDecrements(currentSyncInterval);
         // CRITICAL: Process pending resource depletions at sync checkpoint
         // This ensures both clients mark depletion at the same tick
         this.processPendingResourceDepletions();
@@ -979,28 +991,21 @@
               // Only apply corrections if unit is idle (no active movement behavior)
               const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
               const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
-              // Include LingerBehavior and WanderBehavior so corrections don't fight with idle wandering
-              const isMovementBehavior = behaviorType === 'WalkBehavior' || 
-                                        behaviorType === 'RunBehavior' || 
-                                        behaviorType === 'LingerBehavior' || 
-                                        behaviorType === 'WanderBehavior';
+              const isActiveMovement = behaviorType === 'WalkBehavior' || 
+                                        behaviorType === 'RunBehavior';
               
-              if (!isMovementBehavior) {
-                // Unit is idle - apply gentle correction (reduced strength to prevent speedups)
-                // Max strength is 0.2 (20% per frame) to ensure units don't speed up
-                const maxStrength = 0.2; // Cap at 20% per frame to prevent speedups
-                const baseStrength = 0.15; // Base strength (reduced from 0.2-0.3)
+              if (!isActiveMovement) {
+                // Unit is idle/lingering/wandering - apply gentle correction
+                const maxStrength = 0.2;
+                const baseStrength = 0.15;
                 const correctionStrength = Math.min(baseStrength + (errorDistance * 0.005), maxStrength);
                 unit._positionCorrection = {
                   targetX: authoritativePos.x,
                   targetZ: authoritativePos.z,
-                  strength: correctionStrength // Reduced strength to prevent speedups
+                  strength: correctionStrength
                 };
-                // DON'T update visual position immediately - let correction system handle it smoothly
-                // This prevents the "jump forward then jump back" issue
               } else {
-                // Unit is actively moving - cancel any existing corrections
-                // The movement command will handle positioning correctly
+                // Unit is actively walking/running - cancel corrections, movement handles it
                 delete unit._positionCorrection;
               }
             } else if (errorDistance >= catastrophicThreshold) {
@@ -1262,6 +1267,13 @@
       if (building) {
         // Ensure owner is set (may have been set in constructor via options)
         building.owner = normalizedPlayerId;
+        
+        // CRITICAL: Add building to the player's buildings array!
+        // Without this, AI players (and multiplayer players) can't track their own buildings.
+        // This was missing, causing AI villagers to never find buildings to work at.
+        if (player && player.buildings) {
+          player.buildings.push(building);
+        }
         
         // Store team color so attached flag meshes can tint correctly
         if (typeof window.getTeamColorForOwner === 'function') {
@@ -1590,24 +1602,46 @@
       
       if (!building) return;
       
-      // CRITICAL: Normalize player ID for ownership check
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       
-      // P2P DETERMINISTIC: Execute all commands on both clients
       units.forEach(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
-        if (unitOwnerId === normalizedPlayerId) {
-          unit.lastPlayerCommandTick = this.tick || 0;
-          // Use 'work' or 'gather_work' behavior based on building type
-          if (window.behaviorManager) {
-            if (building.type === 'camp' || building.type === 'farm') {
-              window.behaviorManager.setBehavior(unit, 'gather_work', { building: building });
-            } else {
-              window.behaviorManager.setBehavior(unit, 'work', { building: building });
-            }
+        if (unitOwnerId !== normalizedPlayerId) return;
+        
+        unit.lastPlayerCommandTick = this.tick || 0;
+        
+        // Remove from previous building assignment
+        if (unit.assignedBuilding && unit.assignedBuilding !== building) {
+          const prev = unit.assignedBuilding;
+          if (prev.assignedWorkers) {
+            prev.assignedWorkers = prev.assignedWorkers.filter(w => w !== unit);
           }
         }
+        
+        // Skip if already assigned to this building
+        if (unit.assignedBuilding === building) return;
+        
+        // Check capacity
+        if (building.assignedWorkers && building.assignedWorkers.length >= (building.maxWorkers || 3)) return;
+        
+        // Set behavior based on building state
+        if (window.behaviorManager) {
+          if (building.buildProgress !== undefined && building.buildProgress < 1) {
+            window.behaviorManager.setBehavior(unit, 'build_work', { building: building });
+          } else if (building.type === 'camp') {
+            window.behaviorManager.setBehavior(unit, 'gather_work', { building: building });
+          } else if (building.type === 'farm') {
+            window.behaviorManager.setBehavior(unit, 'farm_work', { building: building });
+          } else {
+            window.behaviorManager.setBehavior(unit, 'work', { building: building });
+          }
+        }
+        
+        // Track worker assignment
+        if (!building.assignedWorkers) building.assignedWorkers = [];
+        building.assignedWorkers.push(unit);
+        unit.assignedBuilding = building;
       });
     }
     
@@ -1712,141 +1746,7 @@
       });
     }
     
-    // Generate AI commands (host only, runs during tick processing)
-    generateAICommands() {
-      // Find all AI players
-      const aiPlayers = this.players.filter(p => {
-        const player = typeof p === 'string' ? this.getPlayerById(p) : p;
-        return player && player.isAI;
-      });
-      
-      if (aiPlayers.length === 0) return 0;
-      
-      let commandCount = 0;
-      
-      // For each AI player, make simple strategic decisions
-      aiPlayers.forEach(aiPlayer => {
-        const player = typeof aiPlayer === 'string' ? this.getPlayerById(aiPlayer) : aiPlayer;
-        if (!player || !player.units || !player.id) return;
-        
-        // Simple AI: idle villagers gather resources
-        const idleVillagers = player.units.filter(u => 
-          u && u.type === 'villager' && (!u.state || u.state === 'idle') && u.mesh
-        );
-        
-        idleVillagers.forEach(villager => {
-          // Priority 1: Find nearest building under construction (highest priority!)
-          const constructionBuildings = (player.buildings || []).filter(b => 
-            b && b.position && b.buildProgress !== undefined && b.buildProgress < 1.0 &&
-            b.assignedWorkers && b.assignedWorkers.length < (b.maxWorkers || 3)
-          );
-          
-          let nearestConstruction = null;
-          let nearestConstructionDist = Infinity;
-          
-          constructionBuildings.forEach(building => {
-            const dx = building.position.x - (villager.pb?.state?.loc?.x || 0);
-            const dz = building.position.z - (villager.pb?.state?.loc?.z || 0);
-            const dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist < nearestConstructionDist) {
-              nearestConstructionDist = dist;
-              nearestConstruction = building;
-            }
-          });
-          
-          // If nearby construction building found, go work there
-          if (nearestConstruction && nearestConstructionDist < 200) {
-            if (this.submitCommand({
-              type: 'work',
-              playerId: player.id,
-              unitIds: [villager.id],
-              buildingId: nearestConstruction.id
-            })) {
-              commandCount++;
-            }
-            return;
-          }
-          
-          // Priority 2: Find nearest player-owned production building (camp, farm, etc.)
-          const playerBuildings = (player.buildings || []).filter(b => 
-            b && b.position && b.buildProgress >= 1.0 && (b.type === 'camp' || b.type === 'farm')
-          );
-          
-          let nearestBuilding = null;
-          let nearestBuildingDist = Infinity;
-          
-          playerBuildings.forEach(building => {
-            const dx = building.position.x - (villager.pb?.state?.loc?.x || 0);
-            const dz = building.position.z - (villager.pb?.state?.loc?.z || 0);
-            const dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist < nearestBuildingDist) {
-              nearestBuildingDist = dist;
-              nearestBuilding = building;
-            }
-          });
-          
-          // If nearby building found, go work there
-          if (nearestBuilding && nearestBuildingDist < 150) {
-            if (this.submitCommand({
-              type: 'work',
-              playerId: player.id,
-              unitIds: [villager.id],
-              buildingId: nearestBuilding.id
-            })) {
-              commandCount++;
-            }
-            return;
-          }
-          
-          // Priority 2: Find nearest natural resource (trees, rocks, berries)
-          const resources = window.resources?.resources || [];
-          let nearestResource = null;
-          let nearestDist = Infinity;
-          
-          resources.forEach(resource => {
-            if (!resource || !resource.position || resource.amount <= 0) return;
-            const dx = resource.position.x - (villager.pb?.state?.loc?.x || 0);
-            const dz = resource.position.z - (villager.pb?.state?.loc?.z || 0);
-            const dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist < nearestDist) {
-              nearestDist = dist;
-              nearestResource = resource;
-            }
-          });
-          
-          // Submit gather command only if resource nearby
-          if (nearestResource && nearestDist < 200) {
-            if (this.submitCommand({
-              type: 'gather',
-              playerId: player.id,
-              unitIds: [villager.id],
-              resourceId: nearestResource.id
-            })) {
-              commandCount++;
-            }
-          }
-          // Otherwise stay idle near base
-        });
-        
-        // Simple AI: Train villagers if we have resources and less than 12
-        const villagerCount = player.units.filter(u => u && u.type === 'villager').length;
-        if (villagerCount < 12 && player.resources && player.resources.food >= 50) {
-          const agora = player.buildings?.find(b => b && b.type === 'agora');
-          if (agora) {
-            if (this.submitCommand({
-              type: 'train',
-              playerId: player.id,
-              buildingId: agora.id,
-              unitType: 'villager'
-            })) {
-              commandCount++;
-            }
-          }
-        }
-      });
-      
-      return commandCount;
-    }
+    // generateAICommands removed - all AI logic handled by opponent.js updateAI/manageWorkerUnits
     
     // Victory condition checks
     checkVictoryConditions() {
@@ -2685,24 +2585,18 @@
     
     // Process pending resource decrements at sync checkpoint
     // CRITICAL: This ensures both clients apply decrements at the same tick, preventing desyncs
-    processPendingResourceDecrements() {
-      if (!window.gameBuildings || this.pendingResourceDecrements.length === 0) return;
+    processPendingResourceDecrements(activeSyncInterval) {
+      if (this.pendingResourceDecrements.length === 0) return;
       
-      // CRITICAL: Only process decrements queued in the interval since the last checkpoint
-      // At tick 1000, process decrements queued at ticks (900, 1000]
-      // Decrements queued after tick 1000 will be processed at tick 1100
-      // This ensures both clients process the same decrements at each checkpoint
-      const syncInterval = this.syncInterval || 100;
+      const syncInterval = activeSyncInterval ?? this.syncInterval ?? 50;
       const currentSyncCheckpoint = this.tick;
-      const previousSyncCheckpoint = currentSyncCheckpoint - syncInterval;
+      const previousSyncCheckpoint = Math.max(0, currentSyncCheckpoint - syncInterval);
       
-      // Filter to only process decrements from the interval (previousCheckpoint, currentCheckpoint]
       const decrementsToProcess = this.pendingResourceDecrements.filter(decrement => {
         const queuedAtTick = decrement.queuedAtTick || 0;
         return queuedAtTick > previousSyncCheckpoint && queuedAtTick <= currentSyncCheckpoint;
       });
       
-      // Keep decrements queued after current checkpoint for next checkpoint
       this.pendingResourceDecrements = this.pendingResourceDecrements.filter(decrement => {
         const queuedAtTick = decrement.queuedAtTick || 0;
         return queuedAtTick > currentSyncCheckpoint;
@@ -2710,38 +2604,35 @@
       
       if (decrementsToProcess.length === 0) return;
       
-      // Sort decrements deterministically by building ID, then grid position
       const sortedDecrements = decrementsToProcess.slice().sort((a, b) => {
-        if (a.buildingId !== b.buildingId) return window.deterministicStringCompare(a.buildingId || '', b.buildingId || '');
         if (a.gridX !== b.gridX) return a.gridX - b.gridX;
         return a.gridZ - b.gridZ;
       });
       
-      // Apply all decrements deterministically
       sortedDecrements.forEach(decrement => {
-        const building = this.getBuildingById(decrement.buildingId);
-        if (!building || !building.availableResources) return;
+        const key = `${decrement.gridX},${decrement.gridZ}`;
+
+        // Look up the base remaining from the tile definition if not tracked yet
+        if (!this.resourceRemaining.has(key)) {
+          const info = window.buildingSystem?.checkTileForResources(decrement.gridX, decrement.gridZ, true);
+          if (!info) return;
+          this.resourceRemaining.set(key, info.remaining);
+        }
         
-        const resource = building.availableResources.find(r => 
-          r.gridX === decrement.gridX && r.gridZ === decrement.gridZ
-        );
+        const oldRemaining = this.resourceRemaining.get(key);
+        const newRemaining = Math.max(0, oldRemaining - decrement.amount);
+        this.resourceRemaining.set(key, newRemaining);
         
-        if (resource && resource.remaining !== undefined) {
-          const oldRemaining = resource.remaining;
-          resource.remaining = Math.max(0, resource.remaining - decrement.amount);
-          
-          // If depleted, schedule depletion at next sync checkpoint
-          if (resource.remaining <= 0 && !resource.depleted && resource.depletionTick === undefined) {
-            const syncInterval = this.syncInterval || 100;
-            const depletionTick = Math.ceil((this.tick + 1) / syncInterval) * syncInterval;
-            resource.remaining = 0;
-            resource.depletionTick = depletionTick;
-          }
+        if (newRemaining <= 0 && !this._scheduledDepletions?.has(key)) {
+          if (!this._scheduledDepletions) this._scheduledDepletions = new Map();
+          const depletionTick = Math.ceil((this.tick + 1) / syncInterval) * syncInterval;
+          this._scheduledDepletions.set(key, {
+            gridX: decrement.gridX,
+            gridZ: decrement.gridZ,
+            depletionTick
+          });
         }
       });
-      
-      // NOTE: Queue already filtered at line 2288-2291 to keep future decrements
-      // Don't clear here - that would remove decrements queued for future checkpoints!
     }
     
     // P2P Unit Position Sync - Each player broadcasts their own unit positions
@@ -2827,16 +2718,17 @@
         this.pendingPositionSyncs.delete(fromPlayerId);
       }
       
-      // POSITION SYNC: Apply regardless of tick difference
-      // Tick counters will drift slightly between clients (setTimeout variance).
-      // Rather than rejecting "stale" syncs, we apply them all with lerp correction.
-      // The 15% lerp ensures smooth convergence without snapping.
-      //
-      // Only reject truly ancient syncs (> 5 minutes old) which are likely from
-      // a disconnected/reconnected peer with completely wrong state.
-      const maxAcceptableAge = ticksPerSecond * 300; // 5 minutes
-      if (tickDiff > maxAcceptableAge) {
-        console.warn(`⚠️ Ignoring ancient position sync: ${tickDiff} ticks old`);
+      // Reject stale/out-of-order sync packets so delayed network delivery
+      // doesn't pull units backward after newer data has already been applied.
+      if (!this.lastAcceptedPositionSyncTick) {
+        this.lastAcceptedPositionSyncTick = new Map();
+      }
+      const lastAcceptedTick = this.lastAcceptedPositionSyncTick.get(fromPlayerId) ?? -Infinity;
+      if (tick < (lastAcceptedTick - 2)) {
+        return;
+      }
+      const maxAcceptableSkew = Math.max(15, syncInterval * 3);
+      if (Math.abs(tickDiff) > maxAcceptableSkew) {
         return;
       }
       
@@ -2885,39 +2777,31 @@
                 // Applying corrections during movement causes rubber-banding
                 const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
                 const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
-                const isMovementBehavior = behaviorType === 'WalkBehavior' || 
-                                          behaviorType === 'RunBehavior' || 
-                                          behaviorType === 'LingerBehavior' ||
-                                          behaviorType === 'WanderBehavior';
+                const isActiveMovement = behaviorType === 'WalkBehavior' || 
+                                          behaviorType === 'RunBehavior';
                 
                 // Log significant drift (but rate-limit to avoid spam, and skip during movement)
-                if (!isMovementBehavior && errorDistance > 5.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {
+                if (!isActiveMovement && errorDistance > 5.0 && (!this._lastDriftLog || Date.now() - this._lastDriftLog > 2000)) {
                   console.warn(`🔍 Position drift: unit ${unit.id.slice(-4)} is ${errorDistance.toFixed(2)} units off (idle)`);
                   this._lastDriftLog = Date.now();
                 }
                 
-                // Only apply corrections when idle, or for catastrophic desyncs
-                if (!isMovementBehavior || errorDistance > 20.0) {
-                  // Update physics position directly (authoritative from owner)
-                  // Use aggressive sync for large errors, gentle for small
-                  let syncStrength;
-                  if (errorDistance > 8.0) {
-                    // Large error: snap immediately to prevent visible desync
-                    syncStrength = 1.0;
-                  } else if (errorDistance > 3.0) {
-                    // Medium error: aggressive correction (50-80%)
-                    syncStrength = 0.5 + (errorDistance - 3.0) * 0.06;
-                  } else {
-                    // Small error: gentle lerp (15-50%)
-                    syncStrength = 0.15 + (errorDistance - 0.5) * 0.14;
-                  }
-                  
-                  unit.pb.state.loc.x += (posData.x - unit.pb.state.loc.x) * syncStrength;
-                  unit.pb.state.loc.z += (posData.z - unit.pb.state.loc.z) * syncStrength;
-                  unit.pb.state.loc.y = posData.y;
-                  
-                  correctedCount++;
-                }
+                // Apply gentle correction in all states:
+                // - idle/linger/wander: stronger convergence
+                // - walk/run: tiny micro-correction to prevent drift accumulation
+                //   that otherwise appears as rubber-band stops at behavior transitions.
+                const maxStrength = isActiveMovement ? 0.03 : 0.2;
+                const baseStrength = isActiveMovement ? 0.01 : 0.1;
+                const correctionStrength = Math.min(baseStrength + (errorDistance * 0.003), maxStrength);
+                unit._positionCorrection = {
+                  targetX: posData.x,
+                  targetZ: posData.z,
+                  strength: correctionStrength,
+                  mode: isActiveMovement ? 'moving' : 'idle'
+                };
+                unit.pb.state.loc.y = posData.y;
+                
+                correctedCount++;
               }
             } else if (errorDistance > 0.3) {
               // Non-strict mode: Use same aggressive correction as strict mode
@@ -2947,65 +2831,59 @@
       
       // Position sync applied successfully - no logging needed for normal operation
       // (stale syncs are already rejected above)
+      if (appliedCount > 0) {
+        this.lastAcceptedPositionSyncTick.set(fromPlayerId, tick);
+      }
     }
     
     // Sync resource states at sync checkpoint (authoritative sync)
     // CRITICAL: Make host (or lower player ID) authoritative to prevent desyncs
     syncResourceStatesAtCheckpoint() {
-      if (!window.isMultiplayer || !window.gameBuildings) return;
+      if (!window.isMultiplayer) return;
       
-      // Determine if we're the authoritative peer (host or lower player ID)
       const isAuthoritative = this.isHost() || 
         (this.localPlayerId && this.hostId && this.localPlayerId < this.hostId);
       
-      // Only authoritative peer sends resource states
       if (!isAuthoritative) return;
       
-      // Collect all resource states from all buildings
-      const resourceStates = {};
-      window.gameBuildings.forEach(building => {
-        if (building.availableResources && building.availableResources.length > 0) {
-          resourceStates[building.id] = building.availableResources.map(r => ({
-            gridX: r.gridX,
-            gridZ: r.gridZ,
-            remaining: r.remaining || 0,
-            depleted: r.depleted || false,
-            depletionTick: r.depletionTick
-          }));
-        }
+      if (this.resourceRemaining.size === 0) return;
+
+      const entries = [];
+      this.resourceRemaining.forEach((remaining, key) => {
+        const [gx, gz] = key.split(',').map(Number);
+        entries.push({ gridX: gx, gridZ: gz, remaining });
       });
+
+      const depletions = [];
+      if (this._scheduledDepletions) {
+        this._scheduledDepletions.forEach((info) => {
+          depletions.push(info);
+        });
+      }
       
-      // Send resource states to other players
-      if (window.net && window.net.p2p && Object.keys(resourceStates).length > 0) {
-        const message = {
+      if (window.net && window.net.p2p) {
+        window.net.p2p.sendData({
           type: 'resource_state_sync',
           tick: this.tick,
-          resourceStates: resourceStates
-        };
-        window.net.p2p.sendData(message);
+          resourceEntries: entries,
+          scheduledDepletions: depletions
+        });
       }
     }
     
-    // Process pending resource depletions at sync checkpoint
     processPendingResourceDepletions() {
-      if (!window.gameBuildings) return;
+      if (!this._scheduledDepletions || this._scheduledDepletions.size === 0) return;
       
-      // Check all buildings for resources scheduled for depletion
-      window.gameBuildings.forEach(building => {
-        if (building.availableResources && Array.isArray(building.availableResources)) {
-          building.availableResources.forEach(resource => {
-            // If resource is scheduled for depletion at this tick, mark it as depleted
-            if (resource.depletionTick !== undefined && resource.depletionTick === this.tick && !resource.depleted) {
-              resource.depleted = true;
-              
-              // Remove 3D model
-              if (window.removeResourceModel) {
-                window.removeResourceModel(resource.gridX, resource.gridZ);
-              }
-            }
-          });
+      const toRemove = [];
+      this._scheduledDepletions.forEach((info, key) => {
+        if (info.depletionTick === this.tick) {
+          if (window.removeResourceModel) {
+            window.removeResourceModel(info.gridX, info.gridZ);
+          }
+          toRemove.push(key);
         }
       });
+      toRemove.forEach(key => this._scheduledDepletions.delete(key));
     }
     
     // Create synchronization checkpoint
@@ -3932,6 +3810,9 @@
       // Re-stretch the table to the new field dimensions
       if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
         gfx.stretchTable(window.gfx.table);
+      }
+      if (window.gfx && typeof gfx.recreateMountains === 'function') {
+        gfx.recreateMountains();
       }
       
       // Force camera limits to recalc for new field size

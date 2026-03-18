@@ -1,6 +1,6 @@
 {
-    "name": "_garden",
-    "short_name": "_garden",
+    "name": "Æther.Garden",
+    "short_name": "ÆG",
     "icons": [
         {
             "src": "icons/android-chrome-192x192.png",
@@ -16,5 +16,6 @@
     "theme_color": "#ffffff",
     "background_color": "#ffffff",
     "display": "fullscreen",
-    "start_url": "/?utm_source=homescreen"
+    "start_url": "/?utm_source=homescreen",
+    "scope": "/"
 }

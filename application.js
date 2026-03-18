@@ -38,7 +38,9 @@ window.aud = {};  // Audio (loaded from game/audio.js)
       
       // Initialize empty arrays for menu scene (buildings/units only spawn when match starts)
       window.playerBuildings = [];
-      window.gameUnits = [];
+      // NOTE: Do NOT reset window.gameUnits here — units.js already exports the authoritative
+      // reference (window.gameUnits = gameUnits), and demo.init() may have already pushed
+      // villagers into it before this async callback fires on slow devices.
       
       // DON'T initialize networking here - let the lobby system handle it when user picks a game type
       // Network will be initialized when user clicks a game type in the menu

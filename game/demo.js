@@ -50,7 +50,7 @@
     
     
     // Wait for required systems
-    if (!window.gfx || !window.gfx.scene || !window.liveField || !window.Unit) {
+    if (!window.gfx || !window.gfx.scene || !window.liveField || !window.Unit || !window.behaviorManager) {
       console.log('⏳ Demo waiting for systems...');
       setTimeout(() => demo.init(), 500);
       return;
@@ -315,8 +315,8 @@
         window.behaviorManager.setBehavior(villager, 'linger', {
           center: { x, z },
           radius: 30,
-          wanderDistance: 2.0,
-          wanderInterval: 5000 // Wander every 5 seconds
+          wanderDistance: 16, // 4 tiles — must be well above the moveToward stop threshold of 2.0
+          wanderInterval: 4000 // Pick a new wander target every 4 seconds
         });
       }
     }
@@ -502,28 +502,32 @@
     }
   }
   
-  // Step physics for demo mode when game loop isn't running
+  // Step physics for demo mode when game loop isn't running.
+  // Runs 3 physics steps per call at dt=1/60 each, matching the real game's 60Hz physics
+  // within a 20Hz demo tick — so movement speeds look identical to a real match.
   function stepDemoPhysics() {
-    const dt = 1 / 60; // Fixed 60Hz timestep
+    const dt = 1 / 60; // Fixed 60Hz timestep per step
     
-    // Step behaviors
-    if (window.behaviorManager) {
-      window.behaviorManager.stepBehaviors();
-    }
-    
-    // Update units
+    // 3 physics steps per 50ms tick = 60Hz physics (same as real game loop)
+    // updateUnits handles stepBehaviors internally, so no separate call needed
     if (window.updateUnits) {
+      window.updateUnits(dt);
+      window.updateUnits(dt);
       window.updateUnits(dt);
     }
     
-    // Update buildings
+    // Building/idle/mesh updates run once per tick (they use tick-based guards anyway)
     if (window.updateBuildings) {
       window.updateBuildings(dt);
     }
     
-    // Update unit meshes
     if (window.updateUnitMeshes) {
       window.updateUnitMeshes();
+    }
+    
+    // Safety net: assign wander behavior to any villager that slipped through without one
+    if (window.updateIdleUnits) {
+      window.updateIdleUnits();
     }
   }
   

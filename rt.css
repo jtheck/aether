@@ -17,10 +17,8 @@ html, body {
   -webkit-text-size-adjust: 100%;
   -ms-text-size-adjust: 100%;
   text-size-adjust: 100%;
-  /* Ensure proper scaling */
+  /* Ensure proper scaling - NOTE: transform:scale(1) breaks position:fixed for embedded widgets */
   zoom: 1;
-  -webkit-transform: scale(1);
-  transform: scale(1);
   /* Allow touch on body - canvas handles its own touch-action */
   touch-action: manipulation;
   /* Remove focus outlines globally */

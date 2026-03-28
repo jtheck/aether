@@ -1073,11 +1073,6 @@
     isDragActive = false;
     lastLassoDownTime = 0; // Reset timing
     
-    // Hide radial menu when drag ends
-    if (window.hud && window.hud.hideRadialMenu) {
-      window.hud.hideRadialMenu();
-    }
-    
     // Clear lasso path
     lassoPath = [];
     lassoWorldPath = [];

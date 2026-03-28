@@ -98,8 +98,12 @@ gfx.stretchTable = function(table) {
   const halfWidth = width / 2;
   const halfHeight = height / 2;
   const borderThickness = 3.8;
-  // Access table parts through the new structure
   const parts = table.parts;
+
+  // Ensure all core parts are visible (rebuildTableFromChunkMask hides them)
+  ['SW','SE','NE','NW','N','E','S','W','FLOOR'].forEach(k => {
+    if (parts[k] && parts[k].mesh) parts[k].mesh.isVisible = true;
+  });
   
   // Corners - extended down to cover gap to floor (floor is at Y=-0.777)
   let cy = -0.3;   // Lower center point

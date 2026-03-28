@@ -261,39 +261,11 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
         }
       }
       
-      if (category === 'units' && window.Unit && window.player && window.player.agora) {
-        // Get the unit type from the path
+      // Adventure and other modes can recruit from non-agora spawners (for example perch -> dirigible),
+      // so do not require a local agora before forwarding the recruit action.
+      if (category === 'units' && typeof window.recruitUnit === 'function' && window.player) {
         const unitType = itemPath[itemPath.length - 1];
-        
-        // Wizards are recruited directly, other units transform from villagers
-        if (unitType === 'wizard' || unitType === 'monk' || unitType === 'engineer') {
-          // Use unified recruit function (handles both single/multiplayer)
-          window.recruitUnit(unitType);
-        } else {
-          // Use convert command system (same as HUD for consistency)
-          if (window.currentMatch && window.player) {
-            const normalizedPlayerId = window.player.id.slice(-6);
-            const myVillagers = window.player.units.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
-            
-            if (myVillagers.length === 0) {
-              console.log('❌ No villagers available to convert to ' + unitType);
-              return;
-            }
-            
-            // Prefer selected villagers, otherwise pick first available
-            const selectedVillagers = window.player.selectedUnits.filter(u => u.type === 'villager' && u.owner === normalizedPlayerId);
-            const targetVillager = selectedVillagers.length > 0 ? selectedVillagers[0] : myVillagers[0];
-            
-            window.currentMatch.submitCommand({
-              type: 'convert',
-              playerId: window.player.id,
-              unitId: targetVillager.id,
-              targetType: unitType
-            });
-          } else {
-            console.warn('❌ Cannot convert unit: No active match');
-          }
-        }
+        window.recruitUnit(unitType);
       } else {
         // console.log('Selected:', path);
         // TODO: Handle other selection actions
@@ -911,6 +883,59 @@ window.hasPrerequisitesBuilding = hasPrerequisitesBuilding;
 window.hasPrerequisitesUnit = hasPrerequisitesUnit;
 window.hasPrerequisitesResearch = hasPrerequisitesResearch;
 window.updateMenuButtonStates = updateMenuButtonStates;
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+function getMissingPrerequisites(category, itemKey) {
+  const missing = [];
+  const player = window.player;
+  if (!player) return '';
+
+  let prereqs = null;
+  let requires = null;
+
+  if (category === 'buildings') {
+    const b = window.BuildingTypes && window.BuildingTypes[itemKey];
+    if (!b) return '';
+    prereqs = b.prerequisites;
+    requires = b.requires;
+  } else if (category === 'units') {
+    const u = window.UnitTypes && window.UnitTypes[itemKey];
+    if (!u) return '';
+    prereqs = u.prerequisites;
+  } else if (category === 'research') {
+    const r = window.UpgradeTypes && window.UpgradeTypes[itemKey];
+    if (!r) return '';
+    requires = r.requires;
+  }
+
+  if (requires) {
+    for (const req of requires) {
+      if (!player.buildings.some(b => b.type === req)) missing.push(capitalize(req));
+    }
+  }
+
+  if (prereqs) {
+    if (prereqs.buildings) {
+      for (const req of prereqs.buildings) {
+        if (!player.buildings.some(b => b.type === req)) missing.push(capitalize(req));
+      }
+    }
+    if (prereqs.research) {
+      for (const req of prereqs.research) {
+        if (!(player.research && player.research.includes(req))) missing.push(capitalize(req));
+      }
+    }
+    if (prereqs.units) {
+      for (const req of prereqs.units) {
+        if (!player.units.some(u => u.type === req)) missing.push(capitalize(req));
+      }
+    }
+  }
+
+  return missing.length > 0 ? 'Requires: ' + missing.join(', ') : 'Requires prerequisite';
+}
+window.getMissingPrerequisites = getMissingPrerequisites;
 
 // Debug function to show player's current state
 window.debugPlayerState = function() {

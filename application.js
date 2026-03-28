@@ -12,6 +12,187 @@ window.aud = {};  // Audio (loaded from game/audio.js)
 
 
 (function(app) {
+  const hiddenTabController = {
+    MENU_SUSPEND_MS: 10000,
+    LOCAL_PAUSE_MS: 10000,
+    LIVE_PAUSE_MS: 30000,
+    LIVE_CONCEDE_MS: 60000,
+    hiddenAt: null,
+    menuSuspended: false,
+    _timers: {
+      menuSuspend: null,
+      localPause: null,
+      livePause: null,
+      liveConcede: null
+    },
+
+    init() {
+      if (this._initialized) return;
+      this._initialized = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          this.handleHidden();
+        } else {
+          this.handleVisible();
+        }
+      });
+    },
+
+    clearTimers() {
+      Object.keys(this._timers).forEach(key => {
+        if (this._timers[key]) {
+          clearTimeout(this._timers[key]);
+          this._timers[key] = null;
+        }
+      });
+    },
+
+    getCurrentContext() {
+      const match = window.currentMatch;
+      if (!match || match.isDemo) {
+        return 'menu';
+      }
+      if (typeof match.isLiveMultiplayerMatch === 'function' && match.isLiveMultiplayerMatch()) {
+        return 'live';
+      }
+      return 'local';
+    },
+
+    resetTiming() {
+      if (window.gameLoop) {
+        window.gameLoop.physicsTime = 0;
+        window.gameLoop.lastTime = performance.now();
+      }
+      if (window.gfx && window.gfx.menuGameLoop) {
+        window.gfx.menuGameLoop.physicsTime = 0;
+        window.gfx.menuGameLoop.lastTime = performance.now();
+      }
+      if (window.demo && window.demo.resetTiming) {
+        window.demo.resetTiming();
+      }
+    },
+
+    setCommandPause(paused) {
+      if (window.net) {
+        window.net.pauseCommands = paused;
+      }
+    },
+
+    isMenuSuspended() {
+      return !!this.menuSuspended;
+    },
+
+    handleHidden() {
+      this.init();
+      this.hiddenAt = performance.now();
+      this.menuSuspended = false;
+      this.clearTimers();
+      this.setCommandPause(true);
+
+      const context = this.getCurrentContext();
+      const match = window.currentMatch;
+
+      if (context === 'menu') {
+        this._timers.menuSuspend = setTimeout(() => {
+          if (!document.hidden || this.getCurrentContext() !== 'menu') return;
+          this.menuSuspended = true;
+          this.resetTiming();
+        }, this.MENU_SUSPEND_MS);
+        return;
+      }
+
+      if (!match || typeof match.pauseMatch !== 'function') {
+        return;
+      }
+
+      if (typeof match.isIntentionalPauseActive === 'function' && match.isIntentionalPauseActive()) {
+        return;
+      }
+
+      if (context === 'local') {
+        this._timers.localPause = setTimeout(() => {
+          if (document.hidden && this.getCurrentContext() === 'local') {
+            match.pauseMatch({
+              reason: 'auto_hidden',
+              message: '⏸️ AUTO-PAUSED (TAB HIDDEN)',
+              broadcast: false,
+              hiddenTriggered: true
+            });
+          }
+        }, this.LOCAL_PAUSE_MS);
+        return;
+      }
+
+      this._timers.livePause = setTimeout(() => {
+        if (!document.hidden || this.getCurrentContext() !== 'live') return;
+        if (typeof match.isIntentionalPauseActive === 'function' && match.isIntentionalPauseActive()) return;
+        match.pauseMatch({
+          reason: 'auto_away',
+          message: '⏸️ AUTO-AWAY PAUSE',
+          broadcast: true,
+          hiddenTriggered: true
+        });
+      }, this.LIVE_PAUSE_MS);
+
+      this._timers.liveConcede = setTimeout(() => {
+        if (!document.hidden || this.getCurrentContext() !== 'live') return;
+        if (typeof match.isLocalAutoAwayPauseActive === 'function' && !match.isLocalAutoAwayPauseActive()) return;
+        if (typeof match.concede === 'function') {
+          match.concede();
+        }
+      }, this.LIVE_CONCEDE_MS);
+    },
+
+    flushMissedHiddenActions(hiddenDurationMs) {
+      const context = this.getCurrentContext();
+      const match = window.currentMatch;
+      if (context === 'local' && match && typeof match.pauseMatch === 'function') {
+        if (hiddenDurationMs >= this.LOCAL_PAUSE_MS && !match.isPaused) {
+          match.pauseMatch({
+            reason: 'auto_hidden',
+            message: '⏸️ AUTO-PAUSED (TAB HIDDEN)',
+            broadcast: false,
+            hiddenTriggered: true
+          });
+        }
+        return;
+      }
+
+      if (context === 'live' && match && typeof match.pauseMatch === 'function') {
+        if (typeof match.isIntentionalPauseActive === 'function' && match.isIntentionalPauseActive()) {
+          return;
+        }
+        if (hiddenDurationMs >= this.LIVE_PAUSE_MS && !match.isPaused) {
+          match.pauseMatch({
+            reason: 'auto_away',
+            message: '⏸️ AUTO-AWAY PAUSE',
+            broadcast: true,
+            hiddenTriggered: true
+          });
+        }
+      }
+    },
+
+    handleVisible() {
+      this.init();
+      const hiddenDurationMs = this.hiddenAt ? (performance.now() - this.hiddenAt) : 0;
+
+      this.flushMissedHiddenActions(hiddenDurationMs);
+      this.hiddenAt = null;
+      this.menuSuspended = false;
+      this.clearTimers();
+      this.setCommandPause(false);
+      this.resetTiming();
+
+      const match = window.currentMatch;
+      if (match && typeof match.onTabVisible === 'function') {
+        match.onTabVisible(hiddenDurationMs / 1000);
+      }
+    }
+  };
+
+  window.hiddenTabController = hiddenTabController;
+  hiddenTabController.init();
   
 
 
@@ -277,25 +458,8 @@ window.aud = {};  // Audio (loaded from game/audio.js)
 
   // Hook existing unit commands to send via network
   function hookUnitCommandsToNetwork() {
-    // Override unit movement to use net.sendCommand
-    const originalMoveUnit = window.pathfinding?.moveUnit || window.Unit.prototype.move;
-    window.pathfinding = window.pathfinding || {};
-    window.pathfinding.moveUnit = function(unit, target) {
-      if (window.isMultiplayer && unit.owner === window.player.id) {
-        // Send move command over network
-        window.net.sendCommand({
-          type: 'move',
-          unitId: unit.id,
-          target: {x: target.x, z: target.z}
-        });
-      }
-      
-      // Execute locally (prediction)
-      return originalMoveUnit.call(this, unit, target);
-    };
-    
-    // Similarly hook attack, build, etc.
-    // ... additional hooks for other command types
+    // Lockstep multiplayer commands must flow through currentMatch.submitCommand().
+    // Keep this function as a no-op for older startup paths that still call it.
   };
   
   // Get opponent color (blue team)
@@ -312,13 +476,14 @@ window.aud = {};  // Audio (loaded from game/audio.js)
     // DON'T re-initialize networking on focus!
     // The lobby system handles network initialization
     // Re-initing creates a new P2P instance and breaks broadcast channels
-    // console.log('🔄 Window focused');
+    if (window.hiddenTabController) {
+      window.hiddenTabController.setCommandPause(false);
+    }
   });
   
   window.addEventListener('blur', () => {
-    if (window.net) {
-      // Pause sending commands while tabbed out (safe even if getStatus missing)
-      window.net.pauseCommands = true;
+    if (window.hiddenTabController) {
+      window.hiddenTabController.setCommandPause(true);
     }
   });
 }(window.app = window.app || {}));

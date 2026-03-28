@@ -76,11 +76,17 @@ Game.prototype.spawnInitialUnits = function() {
       
       // Spawn agora building for this player
       if (window.gameBuildings) {
+        let deterministicAgoraId;
+        if (window.isMultiplayer && window.currentMatch) {
+          const buildingIndex = window.currentMatch.buildingCounter++;
+          deterministicAgoraId = `building-${window.currentMatch.mapSeed}-${buildingIndex}`;
+        }
         // Prefer visual placement path so meshes are created for ALL players (not just local)
         const placeFn = (window.placeBuilding || (typeof placeBuilding === 'function' ? placeBuilding : null));
         if (placeFn && window.gfx && window.gfx.scene) {
           // Agora starts complete (it's the starting building). Pass owner so flag gets team color.
           const placed = placeFn('agora', player.agora.x, player.agora.y, window.gfx.scene, {
+            id: deterministicAgoraId,
             buildProgress: 1.0,
             owner: normalizedOwner
           });
@@ -134,6 +140,7 @@ Game.prototype.spawnInitialUnits = function() {
             y: 0,
             z: player.agora.y * TILE_SIZE
           }, { 
+            id: deterministicAgoraId,
             owner: normalizedOwner,
             gridX: player.agora.x,
             gridZ: player.agora.y
@@ -167,22 +174,15 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
     return;
   }
   
-  // CRITICAL: Use deterministic random based on map seed and player ID for multiplayer
-  // This ensures all clients spawn units at the same positions
+  // CRITICAL: Use deterministic random based on map seed and deterministic player slot,
+  // not player ID. Player IDs have been a recurring source of divergence in multiplayer,
+  // while the sorted player index is the same on every peer.
   let seed = 12345; // Default seed for single player
   if (window.currentMatch && window.currentMatch.mapSeed) {
-    // CRITICAL: Normalize player ID to use only the short suffix for consistent hashing
-    // (e.g., both "p2p-xyz123abc" and "xyz123abc" should hash to the same value)
-    const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
-    const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
-    const playerIdHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    seed = window.currentMatch.mapSeed + playerIdHash;
+    seed = window.currentMatch.mapSeed + ((playerIndex + 1) * 1009);
   } else if (window.mapSeed) {
     // Fallback to global mapSeed if match not yet created
-    const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
-    const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
-    const playerIdHash = normalizedId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    seed = window.mapSeed + playerIdHash;
+    seed = window.mapSeed + ((playerIndex + 1) * 1009);
   }
   
   // Seeded random number generator (deterministic using mulberry32)
@@ -282,10 +282,11 @@ Game.prototype.spawnAdventureUnits = function() {
     unitsByPlayer[u.player].push(u);
   });
   
-  // Map player indices to actual players
-  // For solo adventure: all units go to the single player
-  // For co-op: units for missing player slots are distributed to existing players (round-robin)
-  const players = this.players || [];
+  // Map authored map-player indices to the host-defined runtime player order.
+  // Adventure callers are responsible for constructing `this.players` in the
+  // exact slot order agreed on by all peers. Re-sorting here breaks that contract
+  // and can silently remap authored slot 0/1 ownership to the wrong humans.
+  const players = Array.isArray(this.players) ? this.players.slice() : [];
   if (players.length === 0) return;
   
   Object.entries(unitsByPlayer).forEach(([playerIndex, units]) => {
@@ -323,6 +324,7 @@ Game.prototype.spawnAdventureUnits = function() {
         id: deterministicUnitId || undefined,
         displayName: (unitData.name && String(unitData.name).trim()) || undefined
       });
+      unit.adventureSpawnIndex = Number.isFinite(unitData.spawnIndex) ? unitData.spawnIndex : ((pIndex * 1000) + i);
       
       // Set ownership - CRITICAL: Use same normalization as player.js
       // Player ID format: "adventurer-xxxxxx" or "p2p-xxxxxx"
@@ -341,7 +343,8 @@ Game.prototype.spawnAdventureUnits = function() {
           center: { x: worldX, z: worldZ },
           radius: 50,
           wanderDistance: 2.0,
-          wanderInterval: 30000
+          wanderInterval: 30000,
+          startImmediately: false
         });
       }
       
@@ -356,6 +359,13 @@ Game.prototype.spawnAdventureUnits = function() {
   if (window.player?.units?.[0]) {
     console.log(`  📋 First unit owner: "${window.player.units[0].owner}", player.id.slice(-6): "${window.player.id?.slice(-6)}"`);
   }
+  console.log('🧭 Adventure spawn ownership sample:', (window.gameUnits || []).slice(0, 8).map((unit, index) => ({
+    index,
+    id: unit?.id || null,
+    type: unit?.type || null,
+    owner: unit?.owner || null,
+    displayName: typeof unit?.getDisplayName === 'function' ? unit.getDisplayName() : (unit?.displayName || null)
+  })));
 };
 
 Game.prototype.getGameTime = function() {
@@ -425,6 +435,17 @@ window.gameLoop = {
     // Only cap if tab is currently hidden (to prevent weird behavior during hidden period)
     if (document.hidden && this.deltaTime > 0.1) {
       this.deltaTime = 0.1; // Cap at 100ms only when tab is hidden
+    }
+
+    const matchPaused = !!window.currentMatch?.isPaused;
+    const menuSuspended = !!window.hiddenTabController?.isMenuSuspended?.();
+    if (matchPaused || menuSuspended) {
+      this.deltaTime = 0;
+      this.physicsTime = 0;
+      this.lastTime = currentTime;
+      updateGameTimer();
+      this.animationFrameId = requestAnimationFrame(() => this.update());
+      return;
     }
     
     // Accumulate time for physics

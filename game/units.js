@@ -33,6 +33,11 @@ const UnitTypes = {
     size: 1,
     cost: { food: 15 },
     abilities: ["gather", "build"],
+    attackType: "melee",
+    attackDamage: 3,
+    attackRange: 2.0,
+    attackCooldown: 2000,
+    aggroRange: 0,
     upgradeTo: "brigand",
     description: "Basic civilian unit that can gather resources and construct buildings",
     notes: "DEFEAT: Runs home crying, needs time to recover at village before working again"
@@ -44,11 +49,16 @@ const UnitTypes = {
     model: "assets/models/brigand.glb",
     scale: 0.5,
     health: 65,
-    speed: 31,
+    speed: 58,
     rotationSpeed: 4.0,
     size: 1,
     cost: { food: 20, wood: 10 },
     abilities: ["gather", "build", "sneak"],
+    attackType: "melee",
+    attackDamage: 6,
+    attackRange: 2.5,
+    attackCooldown: 1500,
+    aggroRange: 6,
     upgradeFrom: "villager",
     description: "Upgraded villager with stealth capabilities and faster movement",
     notes: "DEFEAT: Flees into the woods, might return later as a nuisance to both sides"
@@ -60,7 +70,7 @@ const UnitTypes = {
     model: "assets/models/engineer.glb",
     scale: 0.5,
     health: 50,
-    speed: 21,
+    speed: 32,
     rotationSpeed: 4.0,
     size: 1,
     cost: { food: 35, stone: 20 },
@@ -80,7 +90,7 @@ const UnitTypes = {
     model: "assets/models/engineer.glb", // TODO: unique model
     scale: 0.5,
     health: 60,
-    speed: 21,
+    speed: 34,
     rotationSpeed: 4.0,
     size: 1,
     cost: { food: 50, stone: 40 },
@@ -100,11 +110,16 @@ const UnitTypes = {
     model: "assets/models/monk.glb",
     scale: 0.5,
     health: 45,
-    speed: 35,
+    speed: 52,
     rotationSpeed: 8.0,
     size: 1,
     cost: { food: 20, wood: 10 },
     abilities: ["heal", "kick"],
+    attackType: "melee",
+    attackDamage: 10,
+    attackRange: 2.0,
+    attackCooldown: 1400,
+    aggroRange: 6,
     spawner: "village",
     prerequisites: {
       buildings: ["village"]
@@ -120,11 +135,16 @@ const UnitTypes = {
     model: "assets/models/paladin.glb",
     scale: 0.55,
     health: 80,
-    speed: 28,
+    speed: 46,
     rotationSpeed: 6.0,
     size: 1,
     cost: { food: 40, wood: 30 },
     abilities: ["heal", "kick", "bless", "shield"],
+    attackType: "melee",
+    attackDamage: 14,
+    attackRange: 2.5,
+    attackCooldown: 1200,
+    aggroRange: 8,
     upgradeFrom: "monk",
     description: "Elite holy warrior with enhanced healing and protective auras",
     notes: "DEFEAT: Kneels in prayer, glows briefly, then teleports back to church"
@@ -140,11 +160,16 @@ const UnitTypes = {
     model: "assets/models/wizard.glb",
     scale: 0.5,
     health: 40,
-    speed: 30,
+    speed: 42,
     rotationSpeed: 8.0,
     size: 1,
     cost: { food: 30, wood: 20 },
     abilities: ["fireball", "teleport"],
+    attackType: "ranged",
+    attackDamage: 15,
+    attackRange: 5,
+    attackCooldown: 2000,
+    aggroRange: 7,
     spawner: "tower",
     prerequisites: {
       buildings: ["tower"]
@@ -160,11 +185,16 @@ const UnitTypes = {
     model: "assets/models/elemental.glb",
     scale: 0.6,
     health: 70,
-    speed: 35,
+    speed: 50,
     rotationSpeed: 8.0,
     size: 1,
     cost: { food: 50, wood: 50 },
     abilities: ["fireball", "teleport", "storm", "summon"],
+    attackType: "ranged",
+    attackDamage: 22,
+    attackRange: 6,
+    attackCooldown: 1800,
+    aggroRange: 8,
     upgradeFrom: "wizard",
     description: "Ascended wizard wielding raw elemental forces",
     notes: "DEFEAT: Dissolves into swirling elemental particles, reforms at moon well"
@@ -176,11 +206,16 @@ const UnitTypes = {
     model: "assets/models/warlock.glb",
     scale: 0.5,
     health: 45,
-    speed: 25,
+    speed: 40,
     rotationSpeed: 6.0,
     size: 1,
     cost: { food: 35, wood: 30 },
     abilities: ["curse", "drain", "hex"],
+    attackType: "ranged",
+    attackDamage: 11,
+    attackRange: 5,
+    attackCooldown: 1600,
+    aggroRange: 7,
     spawner: "tavern",
     prerequisites: {
       buildings: ["tavern"]
@@ -196,11 +231,16 @@ const UnitTypes = {
     model: "assets/models/wizard.glb", // TODO: unique model
     scale: 0.55,
     health: 65,
-    speed: 25,
+    speed: 42,
     rotationSpeed: 6.0,
     size: 1,
     cost: { food: 55, wood: 60 },
     abilities: ["curse", "drain", "earthquake", "terraform"],
+    attackType: "ranged",
+    attackDamage: 18,
+    attackRange: 6,
+    attackCooldown: 1800,
+    aggroRange: 8,
     spawner: "tavern",
     upgradeFrom: "warlock",
     description: "Master of earth magic who can reshape the battlefield",
@@ -217,11 +257,16 @@ const UnitTypes = {
     model: "assets/models/warrior.glb",
     scale: 0.5,
     health: 80,
-    speed: 22,
+    speed: 44,
     rotationSpeed: 5.0,
     size: 1,
     cost: { food: 25, wood: 15 },
     abilities: ["melee", "charge"],
+    attackType: "melee",
+    attackDamage: 12,
+    attackRange: 2.5,
+    attackCooldown: 1200,
+    aggroRange: 8,
     spawner: "barracks",
     prerequisites: {
       buildings: ["barracks"]
@@ -237,11 +282,16 @@ const UnitTypes = {
     model: "assets/models/brigand.glb", // TODO: unique model
     scale: 0.55,
     health: 120,
-    speed: 24,
+    speed: 48,
     rotationSpeed: 5.0,
     size: 1,
     cost: { food: 45, wood: 40 },
     abilities: ["melee", "charge", "rally", "cleave"],
+    attackType: "melee",
+    attackDamage: 18,
+    attackRange: 2.5,
+    attackCooldown: 1000,
+    aggroRange: 10,
     spawner: "barracks",
     upgradeFrom: "warrior",
     description: "Elite warrior who inspires nearby allies",
@@ -254,11 +304,16 @@ const UnitTypes = {
     model: "assets/models/archer.glb",
     scale: 0.5,
     health: 45,
-    speed: 26,
+    speed: 54,
     rotationSpeed: 6.0,
     size: 1,
     cost: { food: 20, wood: 25 },
     abilities: ["ranged", "volley"],
+    attackType: "ranged",
+    attackDamage: 8,
+    attackRange: 6,
+    attackCooldown: 1800,
+    aggroRange: 8,
     spawner: "barracks",
     prerequisites: {
       buildings: ["barracks"]
@@ -274,11 +329,16 @@ const UnitTypes = {
     model: "assets/models/brigand.glb", // TODO: unique model
     scale: 0.5,
     health: 55,
-    speed: 24,
+    speed: 48,
     rotationSpeed: 5.0,
     size: 1,
     cost: { food: 35, wood: 45, stone: 10 },
     abilities: ["ranged", "volley", "siege"],
+    attackType: "ranged",
+    attackDamage: 14,
+    attackRange: 7,
+    attackCooldown: 2200,
+    aggroRange: 9,
     spawner: "barracks",
     upgradeFrom: "archer",
     description: "Heavy crossbow specialist effective against buildings",
@@ -295,7 +355,7 @@ const UnitTypes = {
     model: "assets/models/wagon.glb",
     scale: 0.4,
     health: 60,
-    speed: 18,
+    speed: 48,
     rotationSpeed: 2.0,
     size: 2,
     cost: { wood: 40, stone: 10 },
@@ -315,11 +375,16 @@ const UnitTypes = {
     model: "assets/models/camp.glb", // TODO: unique model
     scale: 0.45,
     health: 100,
-    speed: 16,
+    speed: 44,
     rotationSpeed: 2.0,
     size: 2,
     cost: { wood: 70, stone: 25 },
     abilities: ["transport", "deploy", "ranged"],
+    attackType: "ranged",
+    attackDamage: 10,
+    attackRange: 5,
+    attackCooldown: 2000,
+    aggroRange: 7,
     upgradeFrom: "wagon",
     description: "Armored wagon with mounted weapons",
     notes: "DEFEAT: Crew bails out with parachutes(?!), wagon rolls away empty"
@@ -336,7 +401,7 @@ const UnitTypes = {
     model: "assets/models/dirigible.glb",
     scale: 0.5,
     health: 70,
-    speed: 35,
+    speed: 68,
     rotationSpeed: 3.0,
     size: 2,
     cost: { wood: 70 },
@@ -357,11 +422,16 @@ const UnitTypes = {
     model: "assets/models/camp.glb", // TODO: unique model
     scale: 0.55,
     health: 100,
-    speed: 30,
+    speed: 58,
     rotationSpeed: 2.5,
     size: 2,
     cost: { wood: 120, stone: 20 },
     abilities: ["fly", "bomb", "transport"],
+    attackType: "ranged",
+    attackDamage: 16,
+    attackRange: 6,
+    attackCooldown: 2500,
+    aggroRange: 8,
     spawner: "perch",
     upgradeFrom: "dirigible",
     description: "Armed airship that rains destruction from above",
@@ -379,11 +449,16 @@ const UnitTypes = {
     model: "assets/models/apc.glb",
     scale: 0.5,
     health: 90,
-    speed: 28,
+    speed: 64,
     rotationSpeed: 3.0,
     size: 2,
     cost: { wood: 30, stone: 40 },
     abilities: ["transport", "armor"],
+    attackType: "melee",
+    attackDamage: 8,
+    attackRange: 2.5,
+    attackCooldown: 1500,
+    aggroRange: 6,
     spawner: "factory",
     prerequisites: {
       buildings: ["factory"]
@@ -400,11 +475,16 @@ const UnitTypes = {
     model: "assets/models/camp.glb", // TODO: unique model
     scale: 0.6,
     health: 150,
-    speed: 20,
+    speed: 46,
     rotationSpeed: 2.0,
     size: 2,
     cost: { wood: 50, stone: 70 },
     abilities: ["siege", "armor", "cannon"],
+    attackType: "ranged",
+    attackDamage: 25,
+    attackRange: 7,
+    attackCooldown: 3000,
+    aggroRange: 9,
     spawner: "factory",
     upgradeFrom: "apc",
     description: "Heavy armored unit with devastating firepower",
@@ -422,11 +502,16 @@ const UnitTypes = {
     model: "assets/models/priest.glb",
     scale: 0.5,
     health: 40,
-    speed: 22,
+    speed: 44,
     rotationSpeed: 6.0,
     size: 1,
     cost: { food: 25, wood: 40 },
     abilities: ["heal", "bless", "resurrect"],
+    attackType: "ranged",
+    attackDamage: 7,
+    attackRange: 4,
+    attackCooldown: 2000,
+    aggroRange: 6,
     spawner: "church",
     prerequisites: {
       buildings: ["church"]
@@ -443,11 +528,16 @@ const UnitTypes = {
     model: "assets/models/monk.glb", // TODO: unique model
     scale: 0.55,
     health: 75,
-    speed: 30,
+    speed: 55,
     rotationSpeed: 7.0,
     size: 1,
     cost: { food: 45, wood: 80 },
     abilities: ["heal", "fly", "smite", "resurrect"],
+    attackType: "melee",
+    attackDamage: 16,
+    attackRange: 3.0,
+    attackCooldown: 1200,
+    aggroRange: 10,
     spawner: "church",
     upgradeFrom: "priest",
     description: "Angelic warrior who soars into battle",
@@ -465,7 +555,7 @@ const UnitTypes = {
     model: "assets/models/myco.glb",
     scale: 0.5,
     health: 50,
-    speed: 20,
+    speed: 38,
     rotationSpeed: 5.0,
     size: 1,
     cost: { food: 30, wood: 30 },
@@ -486,7 +576,7 @@ const UnitTypes = {
     model: "assets/models/wizard.glb", // TODO: unique model
     scale: 0.5,
     health: 60,
-    speed: 22,
+    speed: 42,
     rotationSpeed: 5.0,
     size: 1,
     cost: { food: 50, wood: 70 },
@@ -508,7 +598,7 @@ const UnitTypes = {
     model: "assets/models/shaman.glb",
     scale: 0.5,
     health: 55,
-    speed: 22,
+    speed: 44,
     rotationSpeed: 5.0,
     size: 1,
     cost: { food: 25, wood: 30 },
@@ -529,7 +619,7 @@ const UnitTypes = {
     model: "assets/models/wizard.glb", // TODO: unique model
     scale: 0.55,
     health: 75,
-    speed: 24,
+    speed: 48,
     rotationSpeed: 5.0,
     size: 1,
     cost: { food: 45, wood: 65 },
@@ -681,6 +771,30 @@ let UNIT_BILLBOARD_DISTANCE_SQ = UNIT_BILLBOARD_DISTANCE * UNIT_BILLBOARD_DISTAN
 // Negative values sink units down, positive values lift them up
 // With correct triangular interpolation, this should be 0 or very small
 const UNIT_GROUND_OFFSET = 0;
+const UNIT_FLY_HEIGHT = 8;
+const UNIT_BILLBOARD_BASE_HEIGHT = 3.0; // Matches the shared billboard plane height in gfx.js
+const UNIT_BILLBOARD_FIT_FACTOR = 0.9;
+
+function computeUnitBillboardScale(unit) {
+    const fallbackScale = Math.max(0.85, (unit.scale || 0.5) * Math.max(1.8, unit.size || 1));
+    if (!unit || !unit.mesh) {
+        return fallbackScale;
+    }
+
+    try {
+        const bounds = unit.mesh.getHierarchyBoundingVectors(true);
+        const height = bounds.max.y - bounds.min.y;
+        const width = Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z);
+        const extent = Math.max(height, width);
+        if (extent > 0) {
+            return Math.max(fallbackScale, (extent / UNIT_BILLBOARD_BASE_HEIGHT) * UNIT_BILLBOARD_FIT_FACTOR);
+        }
+    } catch (_) {
+        // Fall back to the unit definition scale if bounds are unavailable.
+    }
+
+    return fallbackScale;
+}
 
 // Unit constructor that uses the definitions
 function Unit(unitType, position, options = {}) {
@@ -738,6 +852,13 @@ function Unit(unitType, position, options = {}) {
     this.state = 'idle'; // idle, moving, attacking, working, etc.
     this.target = null;
     this.inventory = options.inventory || {};
+    
+    // Transport state
+    if (this.abilities && this.abilities.includes('transport')) {
+        this.passengers = [];
+        this.transportCapacity = 6;
+    }
+    this.carriedBy = null;
     
     // Simple LOD properties
     this.distanceToCamera = 0;
@@ -1092,11 +1213,11 @@ function spawnUnitModels(scene) {
     
     let unitsNeedingMeshes = 0;
     units.forEach(unit => {
-        if (!unit.mesh && window.gfx && window.gfx.getModel) {
+        if (!unit.mesh && !unit._meshLoading && window.gfx && window.gfx.getModel) {
+            unit._meshLoading = true;
             unitsNeedingMeshes++;
-            // Load the 3D model for this unit
-            // console.log(`🎮 Loading model ${unit.model} for ${unit.name} (owner: ${unit.owner}, scale: ${unit.scale})`);
             window.gfx.getModel(unit.model, scene).then(model => {
+                unit._meshLoading = false;
                 // console.log(`✅ Model loaded for ${unit.name}!`);
                 unit.mesh = model.root;
                 unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
@@ -1209,13 +1330,15 @@ function spawnUnitModels(scene) {
 
                 // Create LOD billboard for distant rendering
                 if (window.gfx && window.gfx.getBillboardInstance) {
-                    const billboardScale = Math.max(0.6, (unit.scale || 0.5) * 1.5);
-                    unit.billboard = window.gfx.getBillboardInstance(unit.model, unit.mesh.position, billboardScale, scene);
+                    const billboardScale = computeUnitBillboardScale(unit);
+                    const flying = unit.abilities && unit.abilities.includes('fly');
+                    unit.billboard = window.gfx.getBillboardInstance(unit.model, unit.mesh.position, billboardScale, scene, { groundUnitSprite: !flying });
                     unit.billboard.setEnabled(false);
                 }
 
                 // console.log(`✅ Successfully spawned ${unit.name} model at`, unit.pb.state.loc);
             }).catch(err => {
+                unit._meshLoading = false;
                 console.warn(`❌ Failed to load model for ${unit.name}:`, err);
             });
         }
@@ -1437,6 +1560,9 @@ function updateUnits(deltaTime) {
     unitsToUpdate.forEach(unit => {
         if (!unit.pb || !unit.pb.state) return;
         
+        // Loaded passengers: skip physics, slave position to transport
+        if (unit.carriedBy) return;
+        
         // GAMEPLAY UNITS (player/AI) - ALWAYS update physics for smooth movement
         // NEUTRAL UNITS - Use LOD to skip frames for performance
         const isGameplayUnit = unit.owner && unit.owner !== 'neutral';
@@ -1474,8 +1600,10 @@ function updateUnits(deltaTime) {
         unit.pb.state.loc.z += unit.pb.state.vel.z * deltaTime;
         
         // BOUNDARY ENFORCEMENT: Prevent units from walking off table or into blocked tiles
+        // Flying units ignore terrain collisions and table edges
+        const isFlyingUnit = unit.abilities && unit.abilities.includes('fly');
         const field = window.liveField;
-        if (field) {
+        if (field && !isFlyingUnit) {
             const TILE_SIZE = window.TILE_SIZE || 4;
             const oldTileX = Math.floor((unit.pb.state.loc.x - unit.pb.state.vel.x * deltaTime) / TILE_SIZE);
             const oldTileZ = Math.floor((unit.pb.state.loc.z - unit.pb.state.vel.z * deltaTime) / TILE_SIZE);
@@ -1570,71 +1698,6 @@ function updateUnits(deltaTime) {
             unit.pb.state.loc.z = Math.max(TILE_SIZE * 0.5, Math.min(maxZ, unit.pb.state.loc.z));
         }
         
-        // CRITICAL: Apply smooth position correction for P2P sync
-        // Only apply corrections when unit is NOT actively moving to prevent fighting with movement commands
-        // Position correction modifies physics body, visual interpolation will smooth it out
-        if (unit._positionCorrection) {
-          // Check if unit has an active movement behavior (walk/run/linger/wander)
-          const hasActiveBehavior = window.behaviorManager && window.behaviorManager.getBehavior(unit);
-          const behaviorType = hasActiveBehavior ? hasActiveBehavior.constructor?.name : null;
-          const isActiveMovement = behaviorType === 'WalkBehavior' || 
-                                    behaviorType === 'RunBehavior';
-
-          const correction = unit._positionCorrection;
-          const correctionMode = correction.mode || 'idle';
-          const allowDuringMovement = correctionMode === 'moving';
-          const treatAsMovingCorrection = allowDuringMovement && isActiveMovement;
-
-          if (!isActiveMovement || allowDuringMovement) {
-            const currentX = unit.pb.state.loc.x;
-            const currentZ = unit.pb.state.loc.z;
-            
-            const errorX = correction.targetX - currentX;
-            const errorZ = correction.targetZ - currentZ;
-            const errorDistance = Math.sqrt(errorX * errorX + errorZ * errorZ);
-            
-            const maxStrength = treatAsMovingCorrection ? 0.03 : 0.2;
-            const adaptiveStrength = Math.min(correction.strength, maxStrength);
-            let stepX = errorX * adaptiveStrength;
-            let stepZ = errorZ * adaptiveStrength;
-            
-            // While actively moving, clamp correction displacement per physics step
-            // to avoid visible speed bursts or "rubber-band stop" artifacts.
-            if (treatAsMovingCorrection) {
-              const maxStep = 0.02;
-              const stepDistance = Math.sqrt(stepX * stepX + stepZ * stepZ);
-              if (stepDistance > maxStep && stepDistance > 0.0001) {
-                const scale = maxStep / stepDistance;
-                stepX *= scale;
-                stepZ *= scale;
-              }
-            }
-            
-            unit.pb.state.loc.x += stepX;
-            unit.pb.state.loc.z += stepZ;
-            
-            const snapThreshold = treatAsMovingCorrection ? 0.25 : 0.1;
-            const remainingError = Math.sqrt(
-              (correction.targetX - unit.pb.state.loc.x) * (correction.targetX - unit.pb.state.loc.x) +
-              (correction.targetZ - unit.pb.state.loc.z) * (correction.targetZ - unit.pb.state.loc.z)
-            );
-            
-            if (remainingError < snapThreshold) {
-              if (treatAsMovingCorrection) {
-                // End of active movement: don't hard-snap, just stop micro-correcting.
-                // This avoids visible "arrival pop" near destinations.
-                delete unit._positionCorrection;
-              } else {
-                unit.pb.state.loc.x = correction.targetX;
-                unit.pb.state.loc.z = correction.targetZ;
-                delete unit._positionCorrection;
-              }
-            }
-          } else {
-            delete unit._positionCorrection;
-          }
-        }
-        
         // Check if unit has active movement behavior - if so, behavior controls rotation directly
         const activeBehaviorForRot = window.behaviorManager && window.behaviorManager.getBehavior(unit);
         const behaviorTypeForRot = activeBehaviorForRot ? activeBehaviorForRot.constructor?.name : null;
@@ -1671,7 +1734,8 @@ function updateUnits(deltaTime) {
                 // Unit is far away - keep last known height or use cached value
                 // Don't recalculate terrain height (expensive!)
                 if (unit._lastTerrainHeight !== undefined) {
-                    unit.pb.state.loc.y = unit._lastTerrainHeight;
+                    const isFlyingUnit = unit.abilities && unit.abilities.includes('fly');
+                    unit.pb.state.loc.y = unit._lastTerrainHeight + (isFlyingUnit ? UNIT_FLY_HEIGHT : 0);
                     unit.pb.state.vel.y = 0;
                 }
                 // If no cached height, leave Y as-is (will be set when unit gets closer)
@@ -1697,12 +1761,10 @@ function updateUnits(deltaTime) {
                     unit._lastTerrainZ = loc.z;
                 }
                 
-                // Apply ground offset to ensure units sit ON the terrain
-                const newY = terrainHeight + UNIT_GROUND_OFFSET;
+                const isFlyingUnit = unit.abilities && unit.abilities.includes('fly');
+                const newY = terrainHeight + UNIT_GROUND_OFFSET + (isFlyingUnit ? UNIT_FLY_HEIGHT : 0);
                 
-                // CRITICAL: Set Y position AFTER velocity is applied, and ensure vel.y stays 0
-                // This prevents integrate() from overwriting our terrain height
-                unit.pb.state.vel.y = 0; // Ensure no Y velocity
+                unit.pb.state.vel.y = 0;
                 unit.pb.state.loc.y = newY;
             }
         }
@@ -1814,7 +1876,175 @@ function updateUnits(deltaTime) {
         // - Combat logic
         // etc.
     });
+
+    // Transport auto-load: units tagged with _transportTarget load when within range.
+    // Runs deterministically after all positions are updated.
+    const TRANSPORT_LOAD_RANGE_SQ = 36; // 6 units squared
+    const TILE_SIZE = window.TILE_SIZE || 4;
+    const allUnits = (window.gameUnits || gameUnits).slice().sort((a, b) =>
+        window.deterministicStringCompare(a.id || '', b.id || '')
+    );
+    const isInSameTileDeterministic = (a, b) =>
+        Math.floor(a.x / TILE_SIZE) === Math.floor(b.x / TILE_SIZE) &&
+        Math.floor(a.z / TILE_SIZE) === Math.floor(b.z / TILE_SIZE);
+    const getStableDistanceSqDeterministic = (a, b) => {
+        const ax = Math.round(a.x * 10) / 10;
+        const az = Math.round(a.z * 10) / 10;
+        const bx = Math.round(b.x * 10) / 10;
+        const bz = Math.round(b.z * 10) / 10;
+        const dx = bx - ax;
+        const dz = bz - az;
+        return Math.round((dx * dx + dz * dz) * 1000) / 1000;
+    };
+    for (let i = 0; i < allUnits.length; i++) {
+        const rider = allUnits[i];
+        if (!rider._transportTarget || rider.carriedBy) continue;
+        const rLoc = rider.pb && rider.pb.state ? rider.pb.state.loc : null;
+        if (!rLoc) continue;
+
+        // Find transport by ID
+        const transport = allUnits.find(u => u.id === rider._transportTarget);
+        if (!transport || !transport.passengers || transport.passengers.length >= transport.transportCapacity) {
+            delete rider._transportTarget;
+            continue;
+        }
+        const tLoc = transport.pb && transport.pb.state ? transport.pb.state.loc : null;
+        if (!tLoc) continue;
+
+        const closeEnough = isInSameTileDeterministic(rLoc, tLoc) ||
+            getStableDistanceSqDeterministic(rLoc, tLoc) <= TRANSPORT_LOAD_RANGE_SQ;
+        if (closeEnough) {
+            loadUnitIntoTransport(rider, transport);
+        }
+    }
 }
+
+function loadUnitIntoTransport(unit, transport) {
+    unit.carriedBy = transport.id;
+    transport.passengers.push(unit.id);
+    delete unit._transportTarget;
+
+    // Stop behavior
+    if (window.behaviorManager && window.behaviorManager.behaviors) {
+        window.behaviorManager.behaviors.delete(unit);
+    }
+
+    // Zero out velocity
+    if (unit.pb && unit.pb.state && unit.pb.state.vel) {
+        unit.pb.state.vel.x = 0;
+        unit.pb.state.vel.z = 0;
+    }
+    if (unit.pb && unit.pb.imp) {
+        unit.pb.imp.x = 0;
+        unit.pb.imp.z = 0;
+    }
+    if (unit.pb && unit.pb.state && unit.pb.state.loc && transport.pb && transport.pb.state && transport.pb.state.loc) {
+        unit.pb.state.loc.x = transport.pb.state.loc.x;
+        unit.pb.state.loc.z = transport.pb.state.loc.z;
+    }
+
+    // Remove from selection
+    if (window.player && window.player.selectedUnits) {
+        const idx = window.player.selectedUnits.indexOf(unit);
+        if (idx !== -1) window.player.selectedUnits.splice(idx, 1);
+    }
+
+    // Disable picking so clicking the transport doesn't select the rider
+    if (unit.mesh) {
+        unit.mesh.isPickable = false;
+    }
+}
+
+function unloadPassengers(transport, targetPos) {
+    if (!transport.passengers || transport.passengers.length === 0) return;
+    const allUnits = window.gameUnits || gameUnits;
+    const tLoc = transport.pb && transport.pb.state ? transport.pb.state.loc : null;
+    if (!tLoc) return;
+
+    const passengerIds = transport.passengers.slice();
+    const unloadedUnits = [];
+    const normalizeOwnerId = (value) => {
+        const str = typeof value === 'string' ? value : '';
+        return str.length > 6 ? str.slice(-6) : str;
+    };
+    transport.passengers.length = 0;
+
+    if (transport.pb && transport.pb.state && transport.pb.state.vel) {
+        transport.pb.state.vel.x = 0;
+        transport.pb.state.vel.z = 0;
+    }
+    if (transport.pb && transport.pb.imp) {
+        transport.pb.imp.x = 0;
+        transport.pb.imp.z = 0;
+    }
+    if (window.behaviorManager) {
+        window.behaviorManager.setBehavior(transport, 'linger', {});
+    }
+
+    passengerIds.forEach((pid, idx) => {
+        const unit = allUnits.find(u => u.id === pid);
+        if (!unit) return;
+        unit.carriedBy = null;
+        unloadedUnits.push(unit);
+
+        // Drop at the transport's current position, spread in a circle
+        const angle = (idx / passengerIds.length) * Math.PI * 2;
+        const spread = 3;
+        const dropX = Math.round((tLoc.x + Math.cos(angle) * spread) * 100) / 100;
+        const dropZ = Math.round((tLoc.z + Math.sin(angle) * spread) * 100) / 100;
+
+        if (unit.pb && unit.pb.state && unit.pb.state.loc) {
+            unit.pb.state.loc.x = dropX;
+            unit.pb.state.loc.z = dropZ;
+            if (unit.pb.state.vel) {
+                unit.pb.state.vel.x = 0;
+                unit.pb.state.vel.z = 0;
+            }
+            if (unit.pb.imp) {
+                unit.pb.imp.x = 0;
+                unit.pb.imp.z = 0;
+            }
+        }
+        if (unit.visualPosition) {
+            unit.visualPosition.x = dropX;
+            unit.visualPosition.z = dropZ;
+        }
+
+        if (unit.mesh) {
+            unit.mesh.isPickable = true;
+        }
+
+        // Walk to a small spread around the clicked target position so the squad does not re-stack.
+        if (window.behaviorManager && targetPos) {
+            const moveSpread = 4;
+            const moveTarget = {
+                x: Math.round((targetPos.x + Math.cos(angle) * moveSpread) * 100) / 100,
+                z: Math.round((targetPos.z + Math.sin(angle) * moveSpread) * 100) / 100
+            };
+            window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: moveTarget });
+        } else if (window.behaviorManager) {
+            window.behaviorManager.setBehavior(unit, 'linger', {});
+        }
+    });
+
+    const localPlayer = window.player;
+    if (localPlayer && typeof localPlayer.deselectUnit === 'function' && localPlayer.selectedUnits?.includes(transport)) {
+        localPlayer.deselectUnit(transport);
+        const localOwnerId = normalizeOwnerId(localPlayer.id);
+        const transportOwnerId = normalizeOwnerId(transport.owner);
+        if (transportOwnerId && localOwnerId && transportOwnerId === localOwnerId && typeof localPlayer.selectUnit === 'function') {
+            unloadedUnits.forEach(unit => {
+                if (normalizeOwnerId(unit.owner) === localOwnerId) {
+                    localPlayer.selectUnit(unit);
+                }
+            });
+        }
+    }
+}
+
+// Expose for match.js and ui.js
+window.loadUnitIntoTransport = loadUnitIntoTransport;
+window.unloadPassengers = unloadPassengers;
 
 // Constants for monk auto-kick behavior
 // Radius for detecting nearby enemies to kick (monks' legs are only so long!)
@@ -1997,9 +2227,60 @@ function updateUnitMeshes() {
     const units = window.gameUnits || gameUnits;
     units.forEach((unit, index) => {
         if (unit.mesh && unit.pb && unit.pb.state) {
+            // Passenger visual: position inside transport, skip normal updates
+            if (unit.carriedBy) {
+                const allU = window.gameUnits || gameUnits;
+                const transport = allU.find(u => u.id === unit.carriedBy);
+                if (transport && transport.mesh) {
+                    const tPos = transport.mesh.position;
+                    const isAirTransport = transport.abilities && transport.abilities.includes('fly');
+                    const passengerIdx = transport.passengers ? transport.passengers.indexOf(unit.id) : 0;
+                    const total = transport.passengers ? transport.passengers.length : 1;
+
+                    // Pack in a tight grid like eggs in a carton
+                    // 2 columns (left/right), rows front to back
+                    const cols = 2;
+                    const spacing = 1.2;
+                    const col = passengerIdx % cols;
+                    const row = Math.floor(passengerIdx / cols);
+                    const offX = (col - (cols - 1) / 2) * spacing;
+                    const offZ = (row - (Math.ceil(total / cols) - 1) / 2) * spacing;
+
+                    // Rotate offset by transport's facing direction
+                    const tRot = transport.pb && transport.pb.state && transport.pb.state.rot
+                        ? transport.pb.state.rot.y : 0;
+                    const cosR = Math.cos(tRot);
+                    const sinR = Math.sin(tRot);
+                    unit.mesh.position.x = tPos.x + offX * cosR - offZ * sinR;
+                    unit.mesh.position.z = tPos.z + offX * sinR + offZ * cosR;
+
+                    if (isAirTransport) {
+                        unit.mesh.position.y = tPos.y - 3.5;
+                    } else {
+                        unit.mesh.position.y = tPos.y;
+                    }
+
+                    unit.mesh.isVisible = true;
+                }
+                return;
+            }
+
             // GAMEPLAY UNITS (player/AI) - ALWAYS update mesh position every frame for smooth movement
             // NEUTRAL UNITS - Use LOD to skip frames for performance
             if (unit.owner === 'neutral' && !shouldUpdateUnit(unit, currentFrame)) {
+                if (unit.billboard && unit.billboard.isEnabled() && unit.mesh) {
+                    const cam = window.gfx && window.gfx.camera && window.gfx.camera.position;
+                    if (cam) {
+                        if (window.gfx.syncUnitBillboardPositionFromMesh) {
+                            window.gfx.syncUnitBillboardPositionFromMesh(unit.billboard, unit.mesh.position);
+                        } else {
+                            unit.billboard.position.copyFrom(unit.mesh.position);
+                        }
+                        if (window.gfx && window.gfx.applyBillboardYawTowardCameraXZ) {
+                            window.gfx.applyBillboardYawTowardCameraXZ(unit.billboard, cam.x, cam.z);
+                        }
+                    }
+                }
                 return; // Skip neutral units based on LOD
             }
             
@@ -2031,14 +2312,9 @@ function updateUnitMeshes() {
                 
                 // In multiplayer, physics is tick-driven (frozen between ticks).
                 // Extrapolate visuals from velocity for smooth motion between net ticks.
-                // But when an authoritative position correction is active, do not
-                // extrapolate (it will fight correction and cause jitter).
                 const isMultiplayerPlaying = window.isMultiplayer && window.currentMatch?.state === 'playing';
                 if (isMultiplayerPlaying) {
-                    const hasActiveCorrection = !!unit._positionCorrection;
-                    const correctionMode = unit._positionCorrection?.mode || 'idle';
-                    const canExtrapolateWithCorrection = !hasActiveCorrection || correctionMode === 'moving';
-                    if (canExtrapolateWithCorrection && unit.pb.state.vel) {
+                    if (unit.pb.state.vel) {
                         const vel = unit.pb.state.vel;
                         const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
                         const frameDt = window.gameLoop?.deltaTime || (1 / 60);
@@ -2054,7 +2330,8 @@ function updateUnitMeshes() {
                             unit.visualPosition.x = targetX;
                             unit.visualPosition.z = targetZ;
                         }
-                    } else {
+                    }
+                    else {
                         unit.visualPosition.x = targetX;
                         unit.visualPosition.z = targetZ;
                     }
@@ -2128,10 +2405,9 @@ function updateUnitMeshes() {
                     
                     // Flying units get altitude boost
                     if (unit.abilities && unit.abilities.includes('fly')) {
-                        const flyHeight = 8; // Fixed height, no bobbing
                         const terrainHeight = unit.pb && unit.pb.state && unit.pb.state.loc ? 
                             window.getTerrainHeightAtPosition(unit.pb.state.loc.x, unit.pb.state.loc.z) : 0;
-                        unit.mesh.position.y = terrainHeight + flyHeight;
+                        unit.mesh.position.y = terrainHeight + UNIT_FLY_HEIGHT;
                         
                         // Birds fly in circles
                         if (unit.type === 'bird_messenger') {
@@ -2270,9 +2546,19 @@ function updateUnitMeshes() {
             });
             }
 
-            // Sync billboard position to mesh position for LOD
+            // Sync billboard position to mesh; yaw to face camera every frame (same as building LOD billboards)
             if (unit.billboard && unit.billboard.isEnabled()) {
-                unit.billboard.position.copyFrom(unit.mesh.position);
+                if (window.gfx && window.gfx.syncUnitBillboardPositionFromMesh) {
+                    window.gfx.syncUnitBillboardPositionFromMesh(unit.billboard, unit.mesh.position);
+                } else {
+                    unit.billboard.position.copyFrom(unit.mesh.position);
+                }
+                const cam = window.gfx && window.gfx.camera && window.gfx.camera.position;
+                if (cam) {
+                    if (window.gfx && window.gfx.applyBillboardYawTowardCameraXZ) {
+                        window.gfx.applyBillboardYawTowardCameraXZ(unit.billboard, cam.x, cam.z);
+                    }
+                }
             }
         }
     });
@@ -2322,8 +2608,24 @@ function debugLODStats() {
 
 // Destroy a unit completely with particle cleanup
 function destroyUnit(unit) {
-    // console.log(`💥 Destroying unit: ${unit.name || unit.type}`);
-    
+    // Spill passengers out alive when a transport is destroyed
+    if (unit.passengers && unit.passengers.length > 0) {
+        unloadPassengers(unit, unit.pb && unit.pb.state && unit.pb.state.loc
+            ? { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z }
+            : null);
+    }
+
+    // If this unit was a passenger, remove it from its transport
+    if (unit.carriedBy) {
+        const allUnits = window.gameUnits || gameUnits;
+        const transport = allUnits.find(u => u.id === unit.carriedBy);
+        if (transport && transport.passengers) {
+            const idx = transport.passengers.indexOf(unit.id);
+            if (idx !== -1) transport.passengers.splice(idx, 1);
+        }
+        unit.carriedBy = null;
+    }
+
     // Add destruction effects
     if (unit.mesh) {
         const pos = unit.mesh.getAbsolutePosition();
@@ -2365,19 +2667,12 @@ function destroyUnit(unit) {
         gameUnits.splice(globalIndex, 1);
     }
     
-    // Remove from player units if applicable
-    if (window.player && window.player.units) {
-        const playerIndex = window.player.units.indexOf(unit);
-        if (playerIndex > -1) {
-            window.player.units.splice(playerIndex, 1);
-        }
-    }
-    
-    // Remove from opponent units if applicable
-    if (window.opponent && window.opponent.units) {
-        const opponentIndex = window.opponent.units.indexOf(unit);
-        if (opponentIndex > -1) {
-            window.opponent.units.splice(opponentIndex, 1);
+    // Remove from owning player units if applicable
+    const ownerPlayer = window.findPlayerByUnitOwner?.(unit.owner);
+    if (ownerPlayer?.units) {
+        const ownerIndex = ownerPlayer.units.indexOf(unit);
+        if (ownerIndex > -1) {
+            ownerPlayer.units.splice(ownerIndex, 1);
         }
     }
     
@@ -2481,37 +2776,82 @@ function autoInitUnits() {
 
 // Recruit a unit (handles both single-player and multiplayer)
 function recruitUnit(unitType, options = {}) {
+  const unitDef = window.UnitTypes?.[unitType];
+  const spawnerType = unitDef?.spawner; // e.g. 'perch', 'barracks', 'church'
+  const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
+  const shouldLogRecruit = unitType === 'dirigible';
+
+  // Find the spawner building for this unit type, fall back to agora
+  function findSpawnBuilding() {
+    if (!window.gameBuildings || !normalizedPlayerId) return null;
+    if (spawnerType) {
+      const spawner = window.gameBuildings.find(b => {
+        const owner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
+        return b.type === spawnerType && owner === normalizedPlayerId && b.buildProgress >= 1.0;
+      });
+      if (spawner) return spawner;
+    }
+    return window.gameBuildings.find(b => {
+      const owner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
+      return b.type === 'agora' && owner === normalizedPlayerId;
+    });
+  }
+
   // MULTIPLAYER: Use synchronized train command
   if (window.isMultiplayer && window.currentMatch && window.player) {
-    const normalizedPlayerId = window.player.id?.length > 6 ? window.player.id.slice(-6) : window.player.id;
-    
-    const agoraBuilding = window.gameBuildings?.find(b => {
-      const normalizedOwner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
-      return b.type === 'agora' && normalizedOwner === normalizedPlayerId;
-    });
-    
-    if (agoraBuilding) {
-      // CRITICAL: Always use normalized player ID in commands
+    const building = findSpawnBuilding();
+    if (shouldLogRecruit) {
+      const matchingSpawners = (window.gameBuildings || [])
+        .filter(b => {
+          const owner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
+          return b.type === spawnerType && owner === normalizedPlayerId;
+        })
+        .map(b => ({
+          id: b.id,
+          owner: b.owner,
+          progress: b.buildProgress,
+          completionProcessed: !!b.completionProcessed
+        }));
+      console.log('🛫 Dirigible recruit attempt:', {
+        playerId: normalizedPlayerId,
+        requestedUnit: unitType,
+        spawnerType,
+        foundBuildingId: building?.id || null,
+        matchingSpawners
+      });
+    }
+    if (building) {
       window.currentMatch.submitCommand({
         type: 'train',
-        playerId: normalizedPlayerId,  // Use normalized ID, not window.player.id
-        buildingId: agoraBuilding.id,
+        playerId: normalizedPlayerId,
+        buildingId: building.id,
         unitType: unitType
       });
       return true;
     } else {
-      console.warn(`❌ Cannot recruit ${unitType}: No agora found`);
+      console.warn(`❌ Cannot recruit ${unitType}: No ${spawnerType || 'agora'} found`);
       return false;
     }
   }
   
-  // SINGLE-PLAYER: Create directly at agora
-  if (window.player && window.player.agora) {
-    const agoraX = window.player.agora.x * TILE_SIZE;
-    const agoraZ = window.player.agora.y * TILE_SIZE;
+  // SINGLE-PLAYER: Create directly at spawner building or agora
+  if (window.player) {
+    const building = findSpawnBuilding();
+    let spawnX, spawnZ;
+
+    if (building && building.position) {
+      spawnX = building.position.x;
+      spawnZ = building.position.z;
+    } else if (window.player.agora) {
+      spawnX = window.player.agora.x * TILE_SIZE;
+      spawnZ = window.player.agora.y * TILE_SIZE;
+    } else {
+      console.warn(`❌ Cannot recruit ${unitType}: No spawn location`);
+      return false;
+    }
     
     const ownerId = window.player?.id;
-    const unit = new Unit(unitType, { x: agoraX, y: 0, z: agoraZ });
+    const unit = new Unit(unitType, { x: spawnX, y: 0, z: spawnZ });
     unit.owner = ownerId;
     
     const randomRotation = Math.random() * Math.PI * 2;
@@ -2589,8 +2929,11 @@ function rallyUnitsToAgora(radiusInTiles = 30, targetPlayer = null) {
         const otherPid = otherPlayer.id || otherPlayer;
         const normalizedOtherPid = otherPid.length > 6 ? otherPid.slice(-6) : otherPid;
         
-        // Skip self and eliminated players
-        if (normalizedOtherPid === normalizedPlayerId) return;
+        // Skip allies and eliminated players
+        const isHostilePlayer = window.currentMatch?.areOwnersHostile
+          ? window.currentMatch.areOwnersHostile(normalizedOtherPid, normalizedPlayerId)
+          : (normalizedOtherPid !== normalizedPlayerId);
+        if (!isHostilePlayer) return;
         if (window.currentMatch.eliminatedPlayers?.has(otherPid)) return;
         
         // Count units near agora
@@ -2661,18 +3004,10 @@ function rallyUnitsToAgora(radiusInTiles = 30, targetPlayer = null) {
   // Move units to agora using match command system
   if (window.currentMatch) {
     const unitIds = unitsToRally.map(u => u.id);
-    // CRITICAL: Include starting positions to prevent teleporting on other client
-    const startPositions = {};
-    unitsToRally.forEach(u => {
-      if (u.pb && u.pb.state && u.pb.state.loc) {
-        startPositions[u.id] = { x: u.pb.state.loc.x, z: u.pb.state.loc.z };
-      }
-    });
     window.currentMatch.submitCommand({
       type: 'move',
       playerId: player.id,
       unitIds: unitIds,
-      startPositions: startPositions,
       target: agoraWorldPos
     });
     const playerName = player.name || (player === window.player ? 'Player' : 'AI');
@@ -2720,6 +3055,166 @@ if (typeof window !== 'undefined') {
     window.respawnUnits = respawnUnits;
     window.debugUnitRotations = debugUnitRotations;
     window.destroyUnit = destroyUnit;
+
+    window.onUnitDeath = function(unit, attackerOwner) {
+        if (!unit || unit.dead) return;
+
+        // Brigands don't die — they drop their weapon, revert to a villager, and flee home
+        if (unit.type === 'brigand') {
+            if (window.isMultiplayer && window.currentMatch) {
+                const owner = unit.owner;
+                const ownerPlayer = window.findPlayerByUnitOwner?.(owner);
+                const pos = unit.pb?.state?.loc;
+                const TILE_SIZE = window.TILE_SIZE || 4;
+                let homePos = null;
+                if (ownerPlayer?.agora) {
+                    homePos = { x: ownerPlayer.agora.x * TILE_SIZE, z: ownerPlayer.agora.y * TILE_SIZE };
+                }
+                if (!homePos && ownerPlayer?.buildings && pos) {
+                    let closest = Infinity;
+                    for (const b of ownerPlayer.buildings) {
+                        if (!b?.position) continue;
+                        const dx = b.position.x - pos.x;
+                        const dz = b.position.z - pos.z;
+                        const d = dx * dx + dz * dz;
+                        if (d < closest) {
+                            closest = d;
+                            homePos = { x: b.position.x, z: b.position.z };
+                        }
+                    }
+                }
+
+                window.currentMatch.executeConvertCommand({
+                    type: 'convert',
+                    playerId: owner,
+                    unitId: unit.id,
+                    targetType: 'villager',
+                    resetHealth: true,
+                    postConvertBehavior: homePos ? 'run' : 'linger',
+                    postConvertParams: homePos
+                        ? { targetPoint: homePos }
+                        : { center: { x: pos?.x || 0, z: pos?.z || 0 } }
+                });
+                return;
+            }
+            handleBrigandDefeat(unit);
+            return;
+        }
+
+        unit.dead = true;
+        unit.state = 'dead';
+        if (window.destroyUnit) {
+            window.destroyUnit(unit);
+        }
+    };
+
+    function handleBrigandDefeat(brigand) {
+        const pos = brigand.pb?.state?.loc;
+        if (!pos) { brigand.dead = true; window.destroyUnit?.(brigand); return; }
+
+        const owner = brigand.owner;
+        const rotation = brigand.rotation || 0;
+
+        // Remove brigand from all arrays
+        const ownerPlayer = window.findPlayerByUnitOwner?.(owner);
+        if (ownerPlayer?.units) {
+            const idx = ownerPlayer.units.indexOf(brigand);
+            if (idx > -1) ownerPlayer.units.splice(idx, 1);
+        }
+        if (window.gameUnits) {
+            const idx = window.gameUnits.indexOf(brigand);
+            if (idx > -1) window.gameUnits.splice(idx, 1);
+        }
+
+        // Clean up brigand visuals
+        if (brigand.selectionIndicator) { brigand.selectionIndicator.dispose(); brigand.selectionIndicator = null; }
+        if (brigand.billboard && window.gfx?.returnBillboardInstance) { window.gfx.returnBillboardInstance(brigand.billboard); brigand.billboard = null; }
+        if (brigand.mesh) { brigand.mesh.dispose(); brigand.mesh = null; }
+        brigand.dead = true;
+
+        // Create a new villager at the brigand's position
+        const villager = new Unit('villager', { x: pos.x, y: pos.y, z: pos.z });
+        villager.owner = owner;
+        villager.rotation = rotation;
+        villager.health = UnitTypes.villager.health;
+        villager.currentHealth = UnitTypes.villager.health;
+
+        // Add to arrays
+        if (ownerPlayer?.units) ownerPlayer.units.push(villager);
+        if (window.gameUnits) window.gameUnits.push(villager);
+
+        // Find home — agora or nearest friendly village/camp
+        let homePos = null;
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        if (ownerPlayer?.agora) {
+            homePos = { x: ownerPlayer.agora.x * TILE_SIZE, z: ownerPlayer.agora.y * TILE_SIZE };
+        }
+        if (!homePos && ownerPlayer?.buildings) {
+            let closest = Infinity;
+            for (const b of ownerPlayer.buildings) {
+                if (!b.position) continue;
+                const dx = b.position.x - pos.x, dz = b.position.z - pos.z;
+                const d = dx * dx + dz * dz;
+                if (d < closest) { closest = d; homePos = { x: b.position.x, z: b.position.z }; }
+            }
+        }
+
+        // Spawn the villager model and send them running home
+        if (window.gfx?.scene && window.gfx.getModel) {
+            window.gfx.getModel(villager.model, window.gfx.scene).then(model => {
+                villager.mesh = model.root;
+                villager.mesh.scaling = new BABYLON.Vector3(villager.scale, villager.scale, villager.scale);
+
+                if (model.animationGroups?.length > 0) {
+                    villager.animationGroups = {};
+                    model.animationGroups.forEach(group => {
+                        let name = group.name.toLowerCase();
+                        if (name.startsWith('clone of ')) name = name.substring(9);
+                        villager.animationGroups[name] = group;
+                    });
+                    villager.currentAnimation = null;
+                    if (villager.animationGroups['idle']) {
+                        villager.animationGroups['idle'].start(true);
+                        villager.currentAnimation = 'idle';
+                    }
+                }
+
+                villager.mesh.isPickable = true;
+                villager.mesh.getChildMeshes().forEach(mesh => {
+                    mesh.isPickable = true;
+                    if (mesh.rotationQuaternion) {
+                        const q = mesh.rotationQuaternion.clone();
+                        mesh.rotationQuaternion = null;
+                        mesh.originalRotation = q.toEulerAngles();
+                        mesh.rotation.copyFrom(mesh.originalRotation);
+                    }
+                });
+
+                if (villager.pb?.state?.loc) {
+                    villager.mesh.position.x = villager.pb.state.loc.x;
+                    villager.mesh.position.y = villager.pb.state.loc.y;
+                    villager.mesh.position.z = villager.pb.state.loc.z;
+                }
+                if (villager.pb?.state?.rot) {
+                    villager.mesh.rotationQuaternion = null;
+                    villager.mesh.rotation.y = villager.pb.state.rot.y;
+                }
+
+                if (window.createSelectionIndicator) window.createSelectionIndicator(villager);
+                if (window.gfx?.createBlobShadow) window.gfx.createBlobShadow(villager);
+                if (window.applyTeamColorsToMesh) {
+                    const color = window.getTeamColorForOwner ? window.getTeamColorForOwner(owner) : '#4A90E2';
+                    window.applyTeamColorsToMesh(villager.mesh, color);
+                }
+
+                // Run home!
+                if (homePos && window.behaviorManager) {
+                    window.behaviorManager.setBehavior(villager, 'run', { targetPoint: homePos });
+                }
+            });
+        }
+    }
+
     window.maybeAutoMonkKick = maybeAutoMonkKick; // Export monk kick function
     window.isMenuSceneUnit = isMenuSceneUnit; // Export helper to identify menu scene units
     
@@ -2881,48 +3376,45 @@ function getTeamColorForOwner(owner) {
     return suffix.length > 6 ? suffix.slice(-6) : suffix;
   };
   const ownerNorm = normalizeId(owner);
-  
-  // Check if this is the local player (by ID, not string 'player')
-  const localPlayerId = window.player?.id || window.currentMatch?.localPlayerId;
-  const localNorm = normalizeId(localPlayerId);
-  if (owner && (owner === localPlayerId || ownerNorm === localNorm)) {
-    const color = window.player?.color || window.currentPlayerColor || '#4A90E2';
-    return ensureString(color) || '#4A90E2'; // Blue for local player
-  }
-  
-  // Check if this is the opponent
-  const opponentId = window.opponent?.id;
-  const opponentNorm = normalizeId(opponentId);
-  if (owner === 'opponent' || (owner && (owner === opponentId || ownerNorm === opponentNorm))) {
-    const color = window.opponent?.color || '#E24A4A';
-    return ensureString(color) || '#E24A4A'; // Red for opponent
-  }
-  
-  // Check if this is an AI player or any player in the match
+
+  // In multiplayer, prefer the authoritative match player metadata first.
+  // This prevents per-device saved colors from leaking into unit tinting.
   if (window.currentMatch?.players) {
-    // Try exact match first
     let matchPlayer = window.currentMatch.players.find(p => p.id === owner);
-    
-    // If no exact match, try matching by suffix (last 6 chars)
+
     if (!matchPlayer && owner && owner.length >= 6) {
       matchPlayer = window.currentMatch.players.find(p => {
         if (!p.id) return false;
-        // Check if player ID ends with the owner ID (e.g., "local-player-cxhvhb" ends with "cxhvhb")
         return p.id.endsWith(owner) || p.id.endsWith(`-${owner}`);
       });
     }
-    
-    // If still no match, try if owner is full ID and player ID is shortened
+
     if (!matchPlayer && owner) {
       matchPlayer = window.currentMatch.players.find(p => {
         if (!p.id) return false;
         return owner.endsWith(p.id) || owner.endsWith(`-${p.id}`);
       });
     }
-    
+
     if (matchPlayer && matchPlayer.color) {
       return ensureString(matchPlayer.color) || '#8A8A8A';
     }
+  }
+
+  // Check if this is the local player (by ID, not string 'player')
+  const localPlayerId = window.player?.id || window.currentMatch?.localPlayerId;
+  const localNorm = normalizeId(localPlayerId);
+  if (owner && (owner === localPlayerId || ownerNorm === localNorm)) {
+    const color = window.player?.color || window.currentPlayerColor || '#4A90E2';
+    return ensureString(color) || '#4A90E2';
+  }
+
+  // Check if this is the opponent
+  const opponentId = window.opponent?.id;
+  const opponentNorm = normalizeId(opponentId);
+  if (owner === 'opponent' || (owner && (owner === opponentId || ownerNorm === opponentNorm))) {
+    const color = window.opponent?.color || '#E24A4A';
+    return ensureString(color) || '#E24A4A';
   }
   
   // Fallback for any other player IDs

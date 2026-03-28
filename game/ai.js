@@ -36,6 +36,40 @@ function getUnitDeterministicRandom(unit, context = '', includeTick = false) {
     return rng();
 }
 
+function snapWorldPosToTileCenter(pos, tileSize) {
+    return {
+        x: (Math.floor(pos.x / tileSize) + 0.5) * tileSize,
+        z: (Math.floor(pos.z / tileSize) + 0.5) * tileSize
+    };
+}
+
+function getStableWorldSample(pos, precision = 10) {
+    return {
+        x: Math.round(pos.x * precision) / precision,
+        z: Math.round(pos.z * precision) / precision
+    };
+}
+
+function getStableDistanceSq(a, b, precision = 10) {
+    const qa = getStableWorldSample(a, precision);
+    const qb = getStableWorldSample(b, precision);
+    const dx = qb.x - qa.x;
+    const dz = qb.z - qa.z;
+    return Math.round((dx * dx + dz * dz) * 1000) / 1000;
+}
+
+function isInSameTile(a, b, tileSize) {
+    return Math.floor(a.x / tileSize) === Math.floor(b.x / tileSize) &&
+        Math.floor(a.z / tileSize) === Math.floor(b.z / tileSize);
+}
+
+function getStablePathQuery(start, end, tileSize) {
+    return {
+        start: snapWorldPosToTileCenter(start, tileSize),
+        end: snapWorldPosToTileCenter(end, tileSize)
+    };
+}
+
 class Behavior {
     constructor(unit, params = {}) {
         this.unit = unit;
@@ -158,12 +192,26 @@ class Behavior {
         const dist = Math.sqrt(dx * dx + dz * dz);
         if (dist < TILE_SIZE * 0.75) return true; // arrived
 
+        // Flying units: straight line, no pathfinding
+        if (this.unit.abilities && this.unit.abilities.includes('fly')) {
+            if (dist > 0.001) {
+                this.applyMovementWithRotation({ x: dx / dist, z: dz / dist }, speed);
+            }
+            return false;
+        }
+
         // Lazy path calculation
         if (!this._navPath && !this._navChecked && field && field.findPath) {
             this._navChecked = true;
-            this._navDirectClear = this._isDirectClear(pos, target, field, TILE_SIZE);
+            const pathQuery = getStablePathQuery(pos, target, TILE_SIZE);
+            this._navDirectClear = this._isDirectClear(pathQuery.start, pathQuery.end, field, TILE_SIZE);
             if (!this._navDirectClear) {
-                this._navPath = field.findPath(pos.x, pos.z, target.x, target.z);
+                this._navPath = field.findPath(
+                    pathQuery.start.x,
+                    pathQuery.start.z,
+                    pathQuery.end.x,
+                    pathQuery.end.z
+                );
                 this._navIdx = 0;
             }
         }
@@ -373,16 +421,25 @@ class WalkBehavior extends Behavior {
         this._stuckTicks = 0;
         this._lastPos = null;
         this._repathCount = 0;
+        this._isFlying = unit.abilities && unit.abilities.includes('fly');
+        if (this._isFlying && unit.pb && unit.pb.state) {
+            this._flyStartX = unit.pb.state.loc.x;
+            this._flyStartZ = unit.pb.state.loc.z;
+            // Deterministic arc direction from unit ID char codes
+            let idSum = 0;
+            if (unit.id) { for (let i = 0; i < unit.id.length; i++) idSum += unit.id.charCodeAt(i); }
+            this._flyArcSign = (idSum % 2 === 0) ? 1 : -1;
+        }
     }
     
     step() {
         if (!this.unit.pb || !this.unit.pb.state) return true;
         
-        const field = window.liveField;
-        const TILE_SIZE = window.TILE_SIZE || 4;
         const currentPos = this.unit.pb.state.loc;
         
-        const personalityOffset = this.unit.personalityOffset || { x: 0, z: 0 };
+        const personalityOffset = this.params.applyPersonalityOffset === false
+            ? { x: 0, z: 0 }
+            : (this.unit.personalityOffset || { x: 0, z: 0 });
         const roundedOffset = {
             x: Math.round(personalityOffset.x * 1000) / 1000,
             z: Math.round(personalityOffset.z * 1000) / 1000
@@ -391,11 +448,43 @@ class WalkBehavior extends Behavior {
             x: Math.round((this.targetPoint.x + roundedOffset.x) * 1000) / 1000,
             z: Math.round((this.targetPoint.z + roundedOffset.z) * 1000) / 1000
         };
+
+        // Check if arrived at final destination
+        const dx = finalTarget.x - currentPos.x;
+        const dz = finalTarget.z - currentPos.z;
+        const arrivalRadiusSq = this.params.arrivalRadius * this.params.arrivalRadius;
+        const distanceSq = getStableDistanceSq(currentPos, finalTarget);
+        
+        if (distanceSq <= arrivalRadiusSq) {
+            if (this.unit.pb.imp) {
+                this.unit.pb.imp.x = 0;
+                this.unit.pb.imp.z = 0;
+            }
+            if (this.unit.pb.state.vel) {
+                this.unit.pb.state.vel.x = 0;
+                this.unit.pb.state.vel.z = 0;
+            }
+            this.unit.pb.state.loc.x = finalTarget.x;
+            this.unit.pb.state.loc.z = finalTarget.z;
+            this.completed = true;
+            return true;
+        }
+
+        // Flying units: skip A*, fly direct with gentle arc, ignore terrain slowdown
+        if (this._isFlying) {
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            return this._stepFlying(currentPos, finalTarget, distance);
+        }
+
+        // --- Ground unit pathing below ---
+        const field = window.liveField;
+        const TILE_SIZE = window.TILE_SIZE || 4;
         
         // Stuck detection: if barely moved in 30 ticks, force A* re-path
         if (this._lastPos && this._repathCount < 5) {
-            const movedDx = currentPos.x - this._lastPos.x;
-            const movedDz = currentPos.z - this._lastPos.z;
+            const stableCurrentPos = getStableWorldSample(currentPos);
+            const movedDx = stableCurrentPos.x - this._lastPos.x;
+            const movedDz = stableCurrentPos.z - this._lastPos.z;
             if (movedDx * movedDx + movedDz * movedDz < 0.01) {
                 this._stuckTicks++;
             } else {
@@ -408,18 +497,23 @@ class WalkBehavior extends Behavior {
                 this._forcePathfind = true;
             }
         }
-        this._lastPos = { x: currentPos.x, z: currentPos.z };
+        this._lastPos = getStableWorldSample(currentPos);
         
         if (!this.pathCalculated && field && field.findPath) {
             this.pathCalculated = true;
+            const pathQuery = getStablePathQuery(currentPos, finalTarget, TILE_SIZE);
             
-            // After getting stuck, always use A* regardless of line-of-sight
             const directClear = this._forcePathfind ? false
-                : this.isDirectPathClear(currentPos, finalTarget, field, TILE_SIZE);
+                : this.isDirectPathClear(pathQuery.start, pathQuery.end, field, TILE_SIZE);
             this._forcePathfind = false;
             
             if (!directClear) {
-                this.path = field.findPath(currentPos.x, currentPos.z, finalTarget.x, finalTarget.z);
+                this.path = field.findPath(
+                    pathQuery.start.x,
+                    pathQuery.start.z,
+                    pathQuery.end.x,
+                    pathQuery.end.z
+                );
                 this.pathIndex = 0;
                 
                 if (!this.path) {
@@ -436,20 +530,15 @@ class WalkBehavior extends Behavior {
         if (this.path && this.pathIndex < this.path.length) {
             currentTarget = this.path[this.pathIndex];
             
-            // Check if we've reached this waypoint
-            const wpDx = currentTarget.x - currentPos.x;
-            const wpDz = currentTarget.z - currentPos.z;
-            const wpDist = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
+            const waypointRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.25) * 1000) / 1000;
+            const wpReached = isInSameTile(currentPos, currentTarget, TILE_SIZE) ||
+                getStableDistanceSq(currentPos, currentTarget) <= waypointRadiusSq;
             
-            if (wpDist < TILE_SIZE * 0.5) {
+            if (wpReached) {
                 this.pathIndex++;
                 if (this.pathIndex >= this.path.length) {
-                    // Waypoints exhausted -- check if we're actually near the destination
-                    const remDx = finalTarget.x - currentPos.x;
-                    const remDz = finalTarget.z - currentPos.z;
-                    const remaining = Math.sqrt(remDx * remDx + remDz * remDz);
-                    if (remaining > TILE_SIZE * 2 && this._repathCount < 5) {
-                        // Still far from target (partial path ended) -- recalculate
+                    const remainingSq = getStableDistanceSq(currentPos, finalTarget);
+                    if (remainingSq > (TILE_SIZE * 2) * (TILE_SIZE * 2) && this._repathCount < 5) {
                         this._repathCount++;
                         this.pathCalculated = false;
                         this._forcePathfind = true;
@@ -463,33 +552,12 @@ class WalkBehavior extends Behavior {
             currentTarget = finalTarget;
         }
         
-        // Check if arrived at final destination
-        const dx = finalTarget.x - currentPos.x;
-        const dz = finalTarget.z - currentPos.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
-        
-        if (distance <= this.params.arrivalRadius) {
-            if (this.unit.pb.imp) {
-                this.unit.pb.imp.x = 0;
-                this.unit.pb.imp.z = 0;
-            }
-            if (this.unit.pb.state.vel) {
-                this.unit.pb.state.vel.x = 0;
-                this.unit.pb.state.vel.z = 0;
-            }
-            this.unit.pb.state.loc.x = finalTarget.x;
-            this.unit.pb.state.loc.z = finalTarget.z;
-            this.completed = true;
-            return true;
-        }
-        
         // Move toward current target
         const direction = {
             x: currentTarget.x - currentPos.x,
             z: currentTarget.z - currentPos.z
         };
         
-        // Normalize direction
         const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
         if (length > 0.001) {
             direction.x = Math.round((direction.x / length) * 10000) / 10000;
@@ -499,7 +567,7 @@ class WalkBehavior extends Behavior {
             direction.z = 0;
         }
         
-        // Check current tile for slow effect (trees)
+        // Terrain slow effect (trees) -- ground units only
         let speedMultiplier = 1.0;
         if (field && field.getSpeedMultiplier) {
             const currentTileX = Math.floor(currentPos.x / TILE_SIZE);
@@ -507,17 +575,13 @@ class WalkBehavior extends Behavior {
             speedMultiplier = field.getSpeedMultiplier(currentTileX, currentTileZ);
         }
         
-        // Initialize velocity if it doesn't exist
         if (!this.unit.pb.state.vel) {
             this.unit.pb.state.vel = { x: 0, y: 0, z: 0 };
         }
-                
-        // Apply impulse to physics body for immediate movement
         if (!this.unit.pb.imp) {
             this.unit.pb.imp = { x: 0, y: 0, z: 0 };
         }
 
-        // Track that this unit was moved
         if (window.currentMatch && window.currentMatch.tick) {
             this.unit.lastMoveTick = window.currentMatch.tick;
         }
@@ -525,6 +589,56 @@ class WalkBehavior extends Behavior {
         const effectiveSpeed = this.params.walkSpeed * speedMultiplier;
         this.applyMovementWithRotation(direction, effectiveSpeed);
 
+        return false;
+    }
+
+    _stepFlying(currentPos, finalTarget, distance) {
+        // Direct vector to target
+        let dirX = finalTarget.x - currentPos.x;
+        let dirZ = finalTarget.z - currentPos.z;
+
+        // Apply gentle arc: perpendicular offset that peaks at journey midpoint
+        const totalDx = finalTarget.x - this._flyStartX;
+        const totalDz = finalTarget.z - this._flyStartZ;
+        const totalDist = Math.sqrt(totalDx * totalDx + totalDz * totalDz);
+
+        if (totalDist > 5) {
+            // Progress: 0 at start, 1 at destination
+            const traveled = Math.sqrt(
+                (currentPos.x - this._flyStartX) * (currentPos.x - this._flyStartX) +
+                (currentPos.z - this._flyStartZ) * (currentPos.z - this._flyStartZ)
+            );
+            const progress = Math.min(traveled / totalDist, 1.0);
+            // Sine curve peaks at 0.5 progress
+            const arcStrength = Math.sin(progress * Math.PI) * 0.12 * this._flyArcSign;
+            // Perpendicular to travel direction (rotate 90 degrees)
+            const perpX = -totalDz / totalDist;
+            const perpZ = totalDx / totalDist;
+            dirX += perpX * arcStrength * totalDist;
+            dirZ += perpZ * arcStrength * totalDist;
+        }
+
+        const length = Math.sqrt(dirX * dirX + dirZ * dirZ);
+        if (length > 0.001) {
+            dirX = Math.round((dirX / length) * 10000) / 10000;
+            dirZ = Math.round((dirZ / length) * 10000) / 10000;
+        } else {
+            dirX = 0;
+            dirZ = 0;
+        }
+
+        if (!this.unit.pb.state.vel) {
+            this.unit.pb.state.vel = { x: 0, y: 0, z: 0 };
+        }
+        if (!this.unit.pb.imp) {
+            this.unit.pb.imp = { x: 0, y: 0, z: 0 };
+        }
+
+        if (window.currentMatch && window.currentMatch.tick) {
+            this.unit.lastMoveTick = window.currentMatch.tick;
+        }
+
+        this.applyMovementWithRotation({ x: dirX, z: dirZ }, this.params.walkSpeed);
         return false;
     }
     
@@ -616,8 +730,9 @@ class RunBehavior extends Behavior {
         
         // Stuck detection: if barely moved in 30 ticks, force A* re-path
         if (this._lastPos && this._repathCount < 5) {
-            const movedDx = currentPos.x - this._lastPos.x;
-            const movedDz = currentPos.z - this._lastPos.z;
+            const stableCurrentPos = getStableWorldSample(currentPos);
+            const movedDx = stableCurrentPos.x - this._lastPos.x;
+            const movedDz = stableCurrentPos.z - this._lastPos.z;
             if (movedDx * movedDx + movedDz * movedDz < 0.01) {
                 this._stuckTicks++;
             } else {
@@ -630,17 +745,23 @@ class RunBehavior extends Behavior {
                 this._forcePathfind = true;
             }
         }
-        this._lastPos = { x: currentPos.x, z: currentPos.z };
+        this._lastPos = getStableWorldSample(currentPos);
         
         if (!this.pathCalculated && field && field.findPath) {
             this.pathCalculated = true;
+            const pathQuery = getStablePathQuery(currentPos, this.targetPoint, TILE_SIZE);
             
             const directClear = this._forcePathfind ? false
-                : this.isDirectPathClear(currentPos, this.targetPoint, field, TILE_SIZE);
+                : this.isDirectPathClear(pathQuery.start, pathQuery.end, field, TILE_SIZE);
             this._forcePathfind = false;
             
             if (!directClear) {
-                this.path = field.findPath(currentPos.x, currentPos.z, this.targetPoint.x, this.targetPoint.z);
+                this.path = field.findPath(
+                    pathQuery.start.x,
+                    pathQuery.start.z,
+                    pathQuery.end.x,
+                    pathQuery.end.z
+                );
                 this.pathIndex = 0;
                 
                 if (!this.path) {
@@ -657,17 +778,15 @@ class RunBehavior extends Behavior {
         if (this.path && this.pathIndex < this.path.length) {
             currentTarget = this.path[this.pathIndex];
             
-            const wpDx = currentTarget.x - currentPos.x;
-            const wpDz = currentTarget.z - currentPos.z;
-            const wpDist = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
+            const waypointRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.25) * 1000) / 1000;
+            const wpReached = isInSameTile(currentPos, currentTarget, TILE_SIZE) ||
+                getStableDistanceSq(currentPos, currentTarget) <= waypointRadiusSq;
             
-            if (wpDist < TILE_SIZE * 0.5) {
+            if (wpReached) {
                 this.pathIndex++;
                 if (this.pathIndex >= this.path.length) {
-                    const remDx = this.targetPoint.x - currentPos.x;
-                    const remDz = this.targetPoint.z - currentPos.z;
-                    const remaining = Math.sqrt(remDx * remDx + remDz * remDz);
-                    if (remaining > TILE_SIZE * 2 && this._repathCount < 5) {
+                    const remainingSq = getStableDistanceSq(currentPos, this.targetPoint);
+                    if (remainingSq > (TILE_SIZE * 2) * (TILE_SIZE * 2) && this._repathCount < 5) {
                         this._repathCount++;
                         this.pathCalculated = false;
                         this._forcePathfind = true;
@@ -683,9 +802,10 @@ class RunBehavior extends Behavior {
         
         const dx = this.targetPoint.x - currentPos.x;
         const dz = this.targetPoint.z - currentPos.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const arrivalRadiusSq = this.params.arrivalRadius * this.params.arrivalRadius;
+        const distanceSq = getStableDistanceSq(currentPos, this.targetPoint);
         
-        if (distance <= this.params.arrivalRadius) {
+        if (distanceSq <= arrivalRadiusSq) {
             if (this.unit.pb.imp) {
                 this.unit.pb.imp.x = 0;
                 this.unit.pb.imp.z = 0;
@@ -708,8 +828,11 @@ class RunBehavior extends Behavior {
         
         const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
         if (length > 0.001) {
-            direction.x /= length;
-            direction.z /= length;
+            direction.x = Math.round((direction.x / length) * 10000) / 10000;
+            direction.z = Math.round((direction.z / length) * 10000) / 10000;
+        } else {
+            direction.x = 0;
+            direction.z = 0;
         }
         
         // Check current tile for slow effect
@@ -1437,13 +1560,14 @@ class GatherWorkBehavior extends WorkBehavior {
         
         // Add the specific resources this worker gathered to their owner (not always window.player!)
         const owner = findPlayerByUnitOwner(this.unit.owner);
-        if (owner && owner.addResource) {
+        const match = window.currentMatch;
+        if (match && typeof match.queueResourceCredit === 'function') {
+            match.queueResourceCredit(this.unit.owner, playerResourceType, this.gatheredResourceAmount, match.tick || 0);
+        } else if (owner && owner.addResource) {
             owner.addResource(playerResourceType, this.gatheredResourceAmount);
-            // console.log(`💰 ${this.unit.name || this.unit.type} delivered ${this.gatheredResourceAmount} ${playerResourceType} to ${owner.name || owner.id}`);
         }
         
         // RESOURCE DEPLETION: Queue decrement to be applied at sync checkpoint
-        const match = window.currentMatch;
         if (this.lastGatheredResource && match) {
             if (!Array.isArray(match.pendingResourceDecrements)) {
                 match.pendingResourceDecrements = [];
@@ -1668,7 +1792,9 @@ class ManualGatherBehavior extends Behavior {
         if (!owner || !owner.agora) {
             // No base found, just deposit immediately
             // console.log(`💰 [T${currentTick}] ${this.unit.id?.slice(-6)} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} (no agora) at (${loc?.x.toFixed(1)}, ${loc?.z.toFixed(1)})`);
-            if (owner && owner.addResource) {
+            if (window.currentMatch && typeof window.currentMatch.queueResourceCredit === 'function') {
+                window.currentMatch.queueResourceCredit(this.unit.owner, this.gatheredResourceType, this.gatheredResourceAmount, currentTick);
+            } else if (owner && owner.addResource) {
                 owner.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
             }
             this.removeResourceIndicator();
@@ -1710,7 +1836,9 @@ class ManualGatherBehavior extends Behavior {
         if (distance < depositRange) {
             // Arrived! Deposit resources
             // console.log(`💰 [T${currentTick}] ${this.unit.id?.slice(-6)} depositing ${this.gatheredResourceAmount} ${this.gatheredResourceType} at agora, dist=${distance.toFixed(1)}`);
-            if (owner && owner.addResource) {
+            if (window.currentMatch && typeof window.currentMatch.queueResourceCredit === 'function') {
+                window.currentMatch.queueResourceCredit(this.unit.owner, this.gatheredResourceType, this.gatheredResourceAmount, currentTick);
+            } else if (owner && owner.addResource) {
                 owner.addResource(this.gatheredResourceType, this.gatheredResourceAmount);
             }
             this.removeResourceIndicator();
@@ -2032,6 +2160,11 @@ class AttackBuildingBehavior extends Behavior {
     
     step() {
         if (!this.building || !this.building.position) return true; // Building gone, stop attacking
+
+        // Agoras are capture points, not destructible attack targets.
+        if (this.building.type === 'agora') {
+            return true;
+        }
         
         // Check if building is destroyed
         if (!this.building.health || this.building.health <= 0) {
@@ -2153,6 +2286,138 @@ class AttackBuildingBehavior extends Behavior {
         }
         
         return false; // Keep attacking
+    }
+}
+
+class AttackUnitBehavior extends Behavior {
+    constructor(unit, targetUnit, params = {}) {
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const unitDef = window.UnitTypes?.[unit.type] || {};
+        super(unit, {
+            attackRange: (unitDef.attackRange || 2.5) * TILE_SIZE,
+            attackDamage: unitDef.attackDamage || 5,
+            attackCooldown: unitDef.attackCooldown || 1500,
+            attackType: unitDef.attackType || 'melee',
+            ...params
+        });
+
+        this.targetUnit = targetUnit;
+        this.lastAttackTick = 0;
+        this.cooldownTicks = Math.floor(this.params.attackCooldown / 50);
+    }
+
+    step() {
+        const target = this.targetUnit;
+        if (!target || target.dead || target._disposed) return true;
+        if (typeof target.health === 'number' && target.health <= 0) return true;
+
+        const targetLoc = target.pb?.state?.loc;
+        const unitLoc = this.unit.pb?.state?.loc;
+        if (!targetLoc || !unitLoc) return false;
+
+        // Check target is still in the game
+        if (window.gameUnits && !window.gameUnits.includes(target)) return true;
+
+        const dx = targetLoc.x - unitLoc.x;
+        const dz = targetLoc.z - unitLoc.z;
+        const distance = Math.sqrt(dx * dx + dz * dz);
+        const currentTick = window.currentMatch?.tick || 0;
+
+        if (distance <= this.params.attackRange) {
+            // Face the target
+            const targetAngle = Math.atan2(dx, dz);
+            const currentRot = this.unit.pb.state.rot?.y || 0;
+            let rotDiff = targetAngle - currentRot;
+            if (Math.abs(rotDiff) > Math.PI) {
+                rotDiff = rotDiff > 0 ? rotDiff - Math.PI * 2 : rotDiff + Math.PI * 2;
+            }
+            if (!this.unit.pb.rotImp) this.unit.pb.rotImp = { x: 0, y: 0, z: 0 };
+
+            const ticksSinceAttack = currentTick - this.lastAttackTick;
+
+            if (ticksSinceAttack >= this.cooldownTicks) {
+                this.lastAttackTick = currentTick;
+
+                if (this.params.attackType === 'ranged' && window.projectiles) {
+                    const from = new BABYLON.Vector3(unitLoc.x, 1.5, unitLoc.z);
+                    const to = new BABYLON.Vector3(targetLoc.x, 1.0, targetLoc.z);
+                    if (window.projectiles.applyImpact) {
+                        window.projectiles.applyImpact({
+                            unit: target,
+                            attackerOwner: this.unit.owner,
+                            damage: this.params.attackDamage,
+                            sourcePosition: from,
+                            bopStrength: 35,
+                            fallbackDirection: new BABYLON.Vector3(dx, 0, dz)
+                        });
+                    }
+                    window.projectiles.fire({
+                        type: 'arrow',
+                        from: from,
+                        to: to,
+                        damage: this.params.attackDamage,
+                        owner: this.unit.owner,
+                        gameplayImpact: false
+                    });
+                } else {
+                    // Melee: apply damage directly
+                    const newHealth = Math.max(0, (target.currentHealth ?? target.health ?? 0) - this.params.attackDamage);
+                    if (typeof target.health === 'number') target.health = newHealth;
+                    if (typeof target.currentHealth === 'number') target.currentHealth = newHealth;
+
+                    if (window.UnitSpeech && window.UnitSpeech.showDamage) {
+                        window.UnitSpeech.showDamage(target, this.params.attackDamage);
+                    }
+
+                    // Bop the target for impact feel
+                    if (target.pb && target.pb.imp && distance > 0.01) {
+                        const bopStrength = 120;
+                        const ndx = dx / distance;
+                        const ndz = dz / distance;
+                        target.pb.imp.x += ndx * bopStrength;
+                        target.pb.imp.z += ndz * bopStrength;
+                    }
+
+                    if (newHealth <= 0 && typeof window.onUnitDeath === 'function') {
+                        window.onUnitDeath(target, this.unit.owner);
+                    }
+                }
+            }
+
+            // Spin animation during attack wind-up
+            const isSwinging = ticksSinceAttack < this.cooldownTicks * 0.3;
+            if (isSwinging) {
+                this.unit.pb.state.rot.y += 0.3;
+            } else {
+                this.unit.pb.state.rot.y = currentRot + rotDiff * 0.3;
+            }
+            if (this.unit.pb.rotVel) this.unit.pb.rotVel.y = 0;
+
+            // Orbit slightly to look natural in melee
+            if (this.params.attackType === 'melee') {
+                const idHash = (this.unit.id || '').split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+                const angle = ((currentTick * 0.12) + (idHash % 100) * 0.01) % (Math.PI * 2);
+                const orbitR = 1.2;
+                const orbitX = targetLoc.x + Math.cos(angle) * orbitR;
+                const orbitZ = targetLoc.z + Math.sin(angle) * orbitR;
+                const dir = { x: orbitX - unitLoc.x, z: orbitZ - unitLoc.z };
+                const len = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+                if (len > 0.05) {
+                    dir.x /= len;
+                    dir.z /= len;
+                    this.applyMovementWithRotation(dir, this.unit.speed * 0.35);
+                }
+            }
+        } else {
+            // Move towards target
+            const dir = { x: dx / distance, z: dz / distance };
+            const chaseSpeed = this.params.attackType === 'ranged'
+                ? (this.unit.speed || 20) * 0.7
+                : (this.unit.speed || 20);
+            this.applyMovementWithRotation(dir, chaseSpeed);
+        }
+
+        return false;
     }
 }
 
@@ -2382,7 +2647,9 @@ class EngineerWorkBehavior extends WorkBehavior {
                             }
                         }
                         
-                        if (player && player.addResource) {
+                        if (window.currentMatch && typeof window.currentMatch.queueResourceCredit === 'function') {
+                            window.currentMatch.queueResourceCredit(engineerOwner, 'wood', 5, window.currentMatch.tick || 0);
+                        } else if (player && player.addResource) {
                             player.addResource('wood', 5);
                             console.log(`🔧 Engineer deconstructed empty camp and refunded 5 wood`);
                         }
@@ -2963,6 +3230,11 @@ class UnitBehaviorManager {
                     behavior = new AttackBuildingBehavior(unit, params.building, params);
                 }
                 break;
+            case 'attack_unit':
+                if (params.target) {
+                    behavior = new AttackUnitBehavior(unit, params.target, params);
+                }
+                break;
             case 'engineer_work':
                 if (params.building) {
                     behavior = new EngineerWorkBehavior(unit, params.building, params);
@@ -2986,7 +3258,8 @@ class UnitBehaviorManager {
                 (currentBehavior instanceof WalkBehavior || currentBehavior instanceof RunBehavior);
             const isNewMovingBehavior = behavior instanceof WalkBehavior || behavior instanceof RunBehavior;
             
-            if (wasMovingBehavior && isNewMovingBehavior && unit.pb && unit.pb.state) {
+            const deterministicReset = params.forceDeterministicReset === true;
+            if (!deterministicReset && wasMovingBehavior && isNewMovingBehavior && unit.pb && unit.pb.state) {
                 // Unit is already moving - check if new target is similar direction
                 const currentVelX = unit.pb.state.vel.x || 0;
                 const currentVelZ = unit.pb.state.vel.z || 0;
@@ -3030,6 +3303,22 @@ class UnitBehaviorManager {
             // This prevents jerky movement when unit is already moving in similar direction
             if ((behaviorType === 'walk' || behaviorType === 'run') && unit.pb && unit.pb.state) {
                 if (!unit.pb.state.vel) unit.pb.state.vel = { x: 0, y: 0, z: 0 };
+                if (deterministicReset) {
+                    unit.pb.state.vel.x = 0;
+                    unit.pb.state.vel.z = 0;
+                    if (!unit.pb.imp) unit.pb.imp = { x: 0, y: 0, z: 0 };
+                    unit.pb.imp.x = 0;
+                    unit.pb.imp.z = 0;
+                    if (!unit.pb.rotImp) unit.pb.rotImp = { x: 0, y: 0, z: 0 };
+                    unit.pb.rotImp.x = 0;
+                    unit.pb.rotImp.y = 0;
+                    unit.pb.rotImp.z = 0;
+                    if (!unit.pb.rotVel) unit.pb.rotVel = { x: 0, y: 0, z: 0 };
+                    unit.pb.rotVel.x = 0;
+                    unit.pb.rotVel.y = 0;
+                    unit.pb.rotVel.z = 0;
+                    return;
+                }
                 const currentSpeed = Math.sqrt(
                     (unit.pb.state.vel.x || 0) ** 2 + (unit.pb.state.vel.z || 0) ** 2
                 );
@@ -3290,7 +3579,10 @@ class MonkKickBehavior {
             window.gameUnits.forEach(other => {
                 if (!other || other === this.unit) return;
                 if (!other.pb || !other.pb.state || !other.pb.state.loc || !other.pb.imp) return;
-                if (other.owner === this.unit.owner) return; // don't kick allies
+                const isHostile = window.currentMatch?.areOwnersHostile
+                    ? window.currentMatch.areOwnersHostile(other.owner, this.unit.owner)
+                    : (other.owner !== this.unit.owner);
+                if (!isHostile) return; // don't kick allies
 
                 const pos = other.pb.state.loc.clone();
                 const dx = pos.x - origin.x;
@@ -3398,7 +3690,7 @@ class TransformBehavior extends Behavior {
         super(unit, {
             transformDuration: 3000, // Takes 3 seconds to transform (3000ms = 60 ticks at 20Hz)
             transformType: null, // What to transform into
-            revertDelay: 60000, // Brigands revert after 60 seconds of inactivity
+            revertDelay: 20000, // Brigands revert after 20 seconds of inactivity
             ...params
         });
         
@@ -3810,8 +4102,28 @@ class EatBehavior extends Behavior {
     }
     
     consumeFood() {
-        if (window.player && window.player.removeResource) {
-            if (window.player.removeResource('food', this.params.foodCost)) {
+        const isAdventureMode = window.currentMatch?.gameType === 'adventure' || window.gameType === 'adventure';
+        if (isAdventureMode) {
+            this.hasEaten = true;
+            return;
+        }
+
+        const ownerPlayer = findPlayerByUnitOwner(this.unit.owner);
+        const removeFood = () => {
+            if (!ownerPlayer) return false;
+            if (typeof ownerPlayer.removeResource === 'function') {
+                return ownerPlayer.removeResource('food', this.params.foodCost);
+            }
+            if (ownerPlayer.resources && typeof ownerPlayer.resources.food === 'number' &&
+                ownerPlayer.resources.food >= this.params.foodCost) {
+                ownerPlayer.resources.food -= this.params.foodCost;
+                return true;
+            }
+            return false;
+        };
+
+        if (ownerPlayer) {
+            if (removeFood()) {
                 this.hasEaten = true;
                 // console.log(`🍎 ${this.unit.name || this.unit.type} ate ${this.params.foodCost} food`);
             } else {
@@ -3838,11 +4150,19 @@ class EatBehavior extends Behavior {
                     walkSpeed: 0.5 // Walk slowly, dejectedly
                 });
                 
-                // Remove from player's units and game units
-                if (window.player) {
-                    window.player.units = window.player.units.filter(u => u !== this.unit);
+                // Remove from the owning player's units and global units in place
+                if (ownerPlayer.units) {
+                    const ownerIndex = ownerPlayer.units.indexOf(this.unit);
+                    if (ownerIndex > -1) {
+                        ownerPlayer.units.splice(ownerIndex, 1);
+                    }
                 }
-                window.gameUnits = window.gameUnits.filter(u => u !== this.unit);
+                if (Array.isArray(window.gameUnits)) {
+                    const gameUnitIndex = window.gameUnits.indexOf(this.unit);
+                    if (gameUnitIndex > -1) {
+                        window.gameUnits.splice(gameUnitIndex, 1);
+                    }
+                }
                 
                 // Clean up the unit's mesh
                 if (this.unit.mesh) {
@@ -3853,6 +4173,8 @@ class EatBehavior extends Behavior {
                 this.removeFoodIndicator();
                 return true;
             }
+        } else {
+            console.warn(`⚠️ Could not resolve food owner for unit ${this.unit?.id || 'unknown'} (owner=${this.unit?.owner || 'none'})`);
         }
     }
     
@@ -3904,6 +4226,7 @@ if (typeof window !== 'undefined') {
     window.BuildWorkBehavior = BuildWorkBehavior;
     window.EngineerWorkBehavior = EngineerWorkBehavior;
     window.EatBehavior = EatBehavior;
+    window.AttackUnitBehavior = AttackUnitBehavior;
     
     // // console.log('🔥🔥🔥 AI Behavior System initialized:', {
     //     behaviorManager: !!window.behaviorManager,
@@ -4265,7 +4588,7 @@ function updateIdleUnits() {
         
         // Check if villager needs to eat (every 60 seconds, with small random variation)
         // Don't interrupt work behaviors (building, gathering, farming, etc.)
-        if (unit.type === 'villager') {
+        if (unit.type === 'villager' && window.currentMatch?.gameType !== 'adventure' && window.gameType !== 'adventure') {
             const currentBehForEat = window.behaviorManager.getBehavior(unit);
             const isWorking = currentBehForEat && (
                 currentBehForEat.constructor.name === 'BuildWorkBehavior' ||
@@ -4316,20 +4639,25 @@ function updateIdleUnits() {
                     const unitOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
                     const unitX = unit.pb.state.loc.x;
                     const unitZ = unit.pb.state.loc.z;
-                    
-                    for (const building of window.gameBuildings) {
+                    const sortedBuildings = window.gameBuildings
+                        .slice()
+                        .sort((a, b) => window.deterministicStringCompare(a.id || '', b.id || ''));
+
+                    for (const building of sortedBuildings) {
                         if (!building || !building.position) continue;
+                        if (building.type === 'agora') continue;
                         // Don't require mesh - buildings under construction might not have mesh yet
                         if (!building.health || building.health <= 0) continue; // Skip destroyed buildings
                         
                         // Check if building is enemy (different owner)
                         const buildingOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
-                        if (!buildingOwner || buildingOwner === unitOwner) continue; // Skip friendly buildings or buildings with no owner
+                        const isHostileBuilding = window.currentMatch?.areOwnersHostile
+                            ? window.currentMatch.areOwnersHostile(buildingOwner, unitOwner)
+                            : (!!buildingOwner && buildingOwner !== unitOwner);
+                        if (!isHostileBuilding) continue; // Skip friendly buildings or buildings with no owner
                         
                         // Calculate distance
-                        const dx = building.position.x - unitX;
-                        const dz = building.position.z - unitZ;
-                        const distance = Math.sqrt(dx * dx + dz * dz);
+                        const distance = Math.sqrt(getStableDistanceSq({ x: unitX, z: unitZ }, building.position));
                         
                         if (distance < nearestDistance) {
                             nearestDistance = distance;
@@ -4350,18 +4678,71 @@ function updateIdleUnits() {
             }
         }
         
+        // Auto-aggro: combat-capable units engage nearby enemies
+        const unitDef = window.UnitTypes?.[unit.type];
+        if (unitDef && unitDef.aggroRange > 0 && unitDef.attackDamage > 0) {
+            const curBeh = window.behaviorManager.getBehavior(unit);
+            const behName = curBeh?.constructor?.name;
+            const isPassive = !curBeh || behName === 'LingerBehavior' || behName === 'WanderBehavior';
+
+            // Respect recent player move commands
+            const ticksSincePlayerCmd = unit.lastPlayerMoveTick !== undefined
+                ? (currentTick - unit.lastPlayerMoveTick)
+                : Infinity;
+            const respectPlayer = ticksSincePlayerCmd < 120; // 6 seconds at 20Hz
+
+            if (isPassive && !respectPlayer && unit.pb?.state?.loc) {
+                const TILE_SIZE = window.TILE_SIZE || 4;
+                const aggroWorld = unitDef.aggroRange * TILE_SIZE;
+                const aggroSq = aggroWorld * aggroWorld;
+                const ux = unit.pb.state.loc.x;
+                const uz = unit.pb.state.loc.z;
+                const unitOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+                let nearestEnemy = null;
+                let nearestDistSq = aggroSq;
+                const sortedEnemyCandidates = gameUnits
+                    .filter(other => !!other)
+                    .sort((a, b) => window.deterministicStringCompare(a.id || '', b.id || ''));
+
+                for (let i = 0; i < sortedEnemyCandidates.length; i++) {
+                    const other = sortedEnemyCandidates[i];
+                    if (!other || other === unit || other.dead || other._disposed) continue;
+                    if (typeof other.health === 'number' && other.health <= 0) continue;
+                    const otherOwner = other.owner?.length > 6 ? other.owner.slice(-6) : other.owner;
+                    const isHostileUnit = window.currentMatch?.areOwnersHostile
+                        ? window.currentMatch.areOwnersHostile(otherOwner, unitOwner)
+                        : (!!otherOwner && otherOwner !== unitOwner && otherOwner !== 'neutral');
+                    if (!isHostileUnit) continue;
+                    const oLoc = other.pb?.state?.loc;
+                    if (!oLoc) continue;
+                    const dSq = getStableDistanceSq({ x: ux, z: uz }, oLoc);
+                    if (dSq < nearestDistSq) {
+                        nearestDistSq = dSq;
+                        nearestEnemy = other;
+                    }
+                }
+
+                if (nearestEnemy) {
+                    window.behaviorManager.setBehavior(unit, 'attack_unit', {
+                        target: nearestEnemy
+                    });
+                    return;
+                }
+            }
+        }
+
         // Only process units with no active behavior (or safe-to-replace behaviors like linger/wander)
         const currentBehavior = window.behaviorManager.getBehavior(unit);
         
         // CRITICAL: Don't interrupt direct player commands with auto-wander!
         if (currentBehavior) {
             const behaviorName = currentBehavior.constructor.name;
-            // Protect: manual gather, move commands, attack commands
             if (behaviorName === 'ManualGatherBehavior' || 
                 behaviorName === 'WalkBehavior' || 
                 behaviorName === 'RunBehavior' ||
-                behaviorName === 'AttackBuildingBehavior') {
-                return; // Skip units with direct player commands
+                behaviorName === 'AttackBuildingBehavior' ||
+                behaviorName === 'AttackUnitBehavior') {
+                return;
             }
         }
         

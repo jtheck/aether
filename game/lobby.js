@@ -14,6 +14,7 @@ const Lobby = {
   availableLobbies: {}, // {gameType: [{id, name, host, players, maxPlayers, settings}, ...]}
   playerReadyStates: {}, // {peerId: true/false}
   playerConnectionStates: {}, // {peerId: 'connecting' | 'connected' | 'disconnected'}
+  _playersMeta: null,
   globalStatsChannel: null,
   playerStatuses: {}, // {playerId: {gameType, status, timestamp}}
   connectedChannels: {}, // Track which channels are connected
@@ -25,6 +26,134 @@ const Lobby = {
     if (!id) return '';
     const suffix = id.includes('-') ? id.split('-').pop() : id;
     return suffix.length > 6 ? suffix.slice(-6) : suffix;
+  },
+
+  createRemoteMatchPlayer: function({
+    id,
+    name,
+    color,
+    resources,
+    agora,
+    basePosition
+  } = {}) {
+    const startingResources = resources ? { ...resources } : { ...STARTING_RESOURCES };
+    if (window.OpponentPlayer) {
+      const remotePlayer = new window.OpponentPlayer({
+        id,
+        name,
+        color,
+        startingResources,
+        agora,
+        basePosition,
+        isAI: false
+      });
+      remotePlayer.isRemote = true;
+      remotePlayer.selectedUnits = remotePlayer.selectedUnits || [];
+      remotePlayer.buildings = remotePlayer.buildings || [];
+      remotePlayer.units = remotePlayer.units || [];
+      return remotePlayer;
+    }
+
+    return {
+      id,
+      name,
+      color,
+      resources: startingResources,
+      units: [],
+      buildings: [],
+      selectedUnits: [],
+      isAI: false,
+      isRemote: true,
+      addResource(resourceType, amount) {
+        if (Object.prototype.hasOwnProperty.call(this.resources, resourceType)) {
+          this.resources[resourceType] += amount;
+          return true;
+        }
+        return false;
+      },
+      removeResource(resourceType, amount) {
+        if (Object.prototype.hasOwnProperty.call(this.resources, resourceType) &&
+            this.resources[resourceType] >= amount) {
+          this.resources[resourceType] -= amount;
+          return true;
+        }
+        return false;
+      }
+    };
+  },
+
+  normalizeAdventurePlayers: function(players = []) {
+    if (!Array.isArray(players) || players.length === 0) {
+      return players;
+    }
+
+    const normalize = this.normalizePeerId.bind(this);
+    const localP2pId = window.net?.getStatus?.().localPlayerId || '';
+    const localP2pNorm = normalize(localP2pId);
+    const currentLocalNorm = normalize(window.player?.id);
+    const remoteNormalizedIds = new Set(
+      (this.connectedPlayers || [])
+        .map(p => normalize(p?.id || p))
+        .filter(Boolean)
+    );
+
+    const sourcePlayers = players.map((player, index) => {
+      const id = (player && player.id) ? player.id : player;
+      return {
+        id,
+        normalizedId: normalize(id),
+        name: player?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
+        color: player?.color,
+        resources: player?.resources ? { ...player.resources } : undefined
+      };
+    }).filter(entry => !!entry.id);
+
+    let localEntry = sourcePlayers.find(entry => entry.normalizedId === localP2pNorm) || null;
+    if (!localEntry) {
+      localEntry = sourcePlayers.find(entry => entry.normalizedId === currentLocalNorm) || null;
+    }
+    if (!localEntry) {
+      const inferredLocalEntries = sourcePlayers.filter(entry => !remoteNormalizedIds.has(entry.normalizedId));
+      if (inferredLocalEntries.length === 1) {
+        localEntry = inferredLocalEntries[0];
+      }
+    }
+    if (!localEntry && sourcePlayers.length === 1) {
+      localEntry = sourcePlayers[0];
+    }
+
+    console.log('🧭 Adventure player normalization:', {
+      localP2pId,
+      localP2pNorm,
+      currentPlayerId: window.player?.id || null,
+      currentLocalNorm,
+      sourcePlayers: sourcePlayers.map((entry, index) => ({
+        slot: index,
+        id: entry.id,
+        normalizedId: entry.normalizedId,
+        name: entry.name,
+        color: entry.color || null
+      })),
+      resolvedLocalId: localEntry?.id || null,
+      resolvedLocalNorm: localEntry?.normalizedId || null
+    });
+
+    return sourcePlayers.map((entry, index) => {
+      if (localEntry && entry.id === localEntry.id) {
+        window.player.id = entry.id;
+        if (entry.name) window.player.name = entry.name;
+        if (entry.color) window.player.color = entry.color;
+        if (entry.resources) window.player.resources = { ...entry.resources };
+        return window.player;
+      }
+
+      return this.createRemoteMatchPlayer({
+        id: entry.id,
+        name: entry.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
+        color: entry.color,
+        resources: entry.resources
+      });
+    });
   },
   
   // Ensure connected player metadata stays in sync with the peer list
@@ -236,7 +365,8 @@ const Lobby = {
     // Clear existing game units with proper cleanup
     // console.log('🗑️ Destroying game units...');
     if (window.gameUnits) {
-      window.gameUnits.forEach(unit => {
+      const unitsToDestroy = window.gameUnits.slice();
+      unitsToDestroy.forEach(unit => {
         if (window.destroyUnit) {
           window.destroyUnit(unit);
         } else if (unit.mesh && unit.mesh.dispose) {
@@ -506,14 +636,11 @@ const Lobby = {
       seed: resolvedSeed,
       spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
+    if (window.gfx && window.gfx.primeFieldResourcePathing) {
+      window.gfx.primeFieldResourcePathing(window.liveField);
+    }
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
-    }
-    
-    // Apply custom map data if provided (overrides procedural terrain)
-    if (customMapData) {
-      console.log('🗺️ Applying custom map to 1v1 match...');
-      this.applyCustomMapToField(customMapData);
     }
     
     // CRITICAL: Apply current LOD settings to new field immediately!
@@ -529,6 +656,13 @@ const Lobby = {
     
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
       gfx.stretchTable(gfx.table);
+    }
+    
+    // Apply custom map data AFTER stretchTable so rebuildTableFromChunkMask
+    // can hide static table parts without stretchTable re-enabling them.
+    if (customMapData) {
+      console.log('🗺️ Applying custom map to 1v1 match...');
+      this.applyCustomMapToField(customMapData);
     }
     if (window.gfx && typeof gfx.recreateMountains === 'function') {
       gfx.recreateMountains();
@@ -2767,7 +2901,7 @@ const Lobby = {
 
     // Store starting units for adventure mode (units placed in forge)
     if (isV2 && mapData.units) {
-      const units = mapData.units.split(';').map(u => {
+      const units = mapData.units.split(';').map((u, index) => {
         const parts = u.split(',');
         let name = '';
         if (parts[4]) {
@@ -2778,7 +2912,8 @@ const Lobby = {
           y: Number(parts[1]),
           type: parts[2] || 'villager',
           player: Number(parts[3]) || 0,
-          name: name || ''
+          name: name || '',
+          spawnIndex: index
         };
       });
       window.adventureStartingUnits = units;
@@ -2867,6 +3002,22 @@ const Lobby = {
       const peerId = p.id || p;
       playerIds.push(peerId);
     });
+    const playersMeta = playerIds.map((id, index) => {
+      const normalizedId = this.normalizePeerId(id);
+      if (normalizedId === this.normalizePeerId(window.player.id)) {
+        return {
+          id,
+          name: window.currentPlayerName || window.player?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
+          color: window.currentPlayerColor || window.player?.color || this.getPlayerColor(index).primary
+        };
+      }
+      const peerMeta = this.connectedPlayers.find(p => this.normalizePeerId(p?.id || p) === normalizedId);
+      return {
+        id,
+        name: peerMeta?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
+        color: peerMeta?.color || this.getPlayerColor(index).primary
+      };
+    });
     
     if (window.net && window.net.p2p && window.net.p2p.sendData) {
       const startMessage = {
@@ -2875,11 +3026,17 @@ const Lobby = {
         settings: lobby.settings,
         hostPlayerId: window.player.id,  // Host's actual player ID
         playerIds: playerIds,  // CRITICAL: All player IDs in order
+        playersMeta: playersMeta,
         timestamp: Date.now()
       };
       
       window.net.p2p.sendData(startMessage); // Broadcast to all peers
     }
+
+    // Use the exact same player ordering locally as the one broadcast to peers.
+    this._hostPlayerId = window.player.id;
+    this._playerIds = playerIds.slice();
+    this._playersMeta = playersMeta.map(meta => ({ ...meta }));
     
     // Start the match for host
     this.startMultiplayerMatchWithSettings(actualGameType, lobby.settings);
@@ -3286,7 +3443,12 @@ const Lobby = {
         const p = players.find(pp => (pp && pp.id) ? pp.id === id : pp === id);
         const name = (p && p.name) ? p.name : (idx === 0 ? 'Host' : `Player ${idx + 1}`);
         const color = (p && p.color) ? p.color : (fallbackPalette[idx % fallbackPalette.length] || '#ffffff');
-        return { id, name, color };
+        return {
+          id,
+          name,
+          color,
+          resources: p?.resources ? { ...p.resources } : undefined
+        };
       });
       
       // Broadcast map + player list so all peers start the same chapter together.
@@ -3307,15 +3469,18 @@ const Lobby = {
       const localNorm = this.normalizePeerId ? this.normalizePeerId(window.player?.id) : (window.player?.id?.slice ? window.player.id.slice(-6) : window.player?.id);
       const builtPlayers = playerIds.map((id, idx) => {
         const idNorm = this.normalizePeerId ? this.normalizePeerId(id) : (id?.slice ? id.slice(-6) : id);
-        if (localNorm && idNorm === localNorm) return window.player;
-        return {
+        if (localNorm && idNorm === localNorm) {
+          window.player.id = id;
+          if (playersMeta[idx]?.color) window.player.color = playersMeta[idx].color;
+          if (playersMeta[idx]?.name) window.player.name = playersMeta[idx].name;
+          return window.player;
+        }
+        return this.createRemoteMatchPlayer({
           id,
           name: playersMeta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
           color: playersMeta[idx]?.color || (fallbackPalette[idx % fallbackPalette.length] || '#ffffff'),
-          units: [],
-          buildings: [],
-          selectedUnits: []
-        };
+          resources: playersMeta[idx]?.resources
+        });
       });
       this.startAdventureWithMap(mapData, builtPlayers);
     } catch (e) {
@@ -3654,18 +3819,22 @@ const Lobby = {
     
     const players = [window.player];
     this.connectedPlayers.forEach((p, i) => {
-      players.push({
+      players.push(this.createRemoteMatchPlayer({
         id: p.id || p,
         name: p.name || `Player ${i + 2}`,
-        color: p.color || '#00ff00',
-        units: [],
-        buildings: [],
-        selectedUnits: []
-      });
+        color: p.color || '#00ff00'
+      }));
     });
     
     // Send game start to peers (include host ID so they know player order)
     if (window.net && window.net.p2p && window.net.p2p.sendData) {
+      const playerIds = players.map(p => (p && p.id) ? p.id : p).filter(Boolean);
+      const playersMeta = players.map((player, index) => ({
+        id: (player && player.id) ? player.id : player,
+        name: player?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
+        color: player?.color || (index === 0 ? '#ff0000' : '#00ff00'),
+        resources: player?.resources ? { ...player.resources } : undefined
+      }));
       console.log('📡 Sending adventure_start to peers...');
       window.net.p2p.sendData({
         type: 'adventure_start',
@@ -3673,7 +3842,9 @@ const Lobby = {
         chapterId: this._hostingChapterId,
         chapterFile: this._hostingChapterInfo.file,
         mapData: mapData,
-        hostId: window.player.id  // Include host ID for player ordering
+        hostId: window.player.id,  // Include host ID for player ordering
+        playerIds: playerIds,
+        playersMeta: playersMeta
       });
     }
     
@@ -3716,6 +3887,10 @@ const Lobby = {
     // Ensure player instance exists
     if (!window.player) {
       window.player = new Player();
+    }
+
+    if (Array.isArray(players) && players.length > 0) {
+      players = this.normalizeAdventurePlayers(players);
     }
     
     // Generate unique player ID (also reset if still using demo ID from menu)
@@ -3816,15 +3991,20 @@ const Lobby = {
       seed: seed,
       spawnPositions: spawnPositions
     });
+    if (window.gfx && window.gfx.primeFieldResourcePathing) {
+      window.gfx.primeFieldResourcePathing(window.liveField);
+    }
     if (typeof liveField !== 'undefined') liveField = window.liveField;
     
-    // Apply custom map data (terrain, resources, buildings)
-    this.applyCustomMapToField(mapData);
-    
-    // Stretch table and setup camera
+    // Stretch table BEFORE applying custom map so rebuildTableFromChunkMask
+    // (called inside applyCustomMapToField for non-rectangular maps) can hide
+    // the static table parts without stretchTable re-enabling them afterwards.
     if (window.gfx && window.gfx.table && typeof gfx.stretchTable === 'function') {
       gfx.stretchTable(gfx.table);
     }
+    
+    // Apply custom map data (terrain, resources, buildings)
+    this.applyCustomMapToField(mapData);
     if (window.gfx && typeof gfx.recreateMountains === 'function') {
       gfx.recreateMountains();
     }
@@ -3857,6 +4037,14 @@ const Lobby = {
     
     // Use provided players array or default to just local player
     const matchPlayers = players && players.length > 0 ? players : [window.player];
+    console.log('🧭 Adventure match players:', matchPlayers.map((player, index) => ({
+      slot: index,
+      id: player?.id || null,
+      normalizedId: this.normalizePeerId(player?.id || ''),
+      name: player?.name || null,
+      color: player?.color || null,
+      isLocalObject: player === window.player
+    })));
     window.gameBuildings = window.gameBuildings || [];
     window.gameUnits = window.gameUnits || [];
     
@@ -4059,6 +4247,9 @@ const Lobby = {
       seed: resolvedSeed,
       spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
+    if (window.gfx && window.gfx.primeFieldResourcePathing) {
+      window.gfx.primeFieldResourcePathing(window.liveField);
+    }
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
     }
@@ -4286,14 +4477,11 @@ const Lobby = {
         const playerColors = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
         this.connectedPlayers.forEach((p, i) => {
           const playerIndex = i + 1; // P1 is host (0), peers start at P2 (1)
-          players.push({
+          players.push(this.createRemoteMatchPlayer({
             id: p.id || p,
             name: p.name || `Player ${i + 2}`,
-            color: p.color || playerColors[playerIndex % playerColors.length] || '#ffffff',
-            units: [],
-            buildings: [],
-            selectedUnits: []
-          });
+            color: p.color || playerColors[playerIndex % playerColors.length] || '#ffffff'
+          }));
         });
       } else {
         // PEER: Use the player IDs sent by the host for consistency
@@ -4318,14 +4506,11 @@ const Lobby = {
             // This is another player (host or other peer)
             // Assign unique colors for each player slot
             const playerColors = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
-            players.push({
+            players.push(this.createRemoteMatchPlayer({
               id: playerId,
               name: index === 0 ? 'Host' : `Player ${index + 1}`,
-              color: playerColors[index % playerColors.length] || '#ffffff',
-              units: [],
-              buildings: [],
-              selectedUnits: []
-            });
+              color: playerColors[index % playerColors.length] || '#ffffff'
+            }));
             console.log(`   P${index + 1}: ${index === 0 ? 'Host' : 'Peer'} (${playerId.slice(-6)})`);
           }
           });
@@ -4333,14 +4518,11 @@ const Lobby = {
           // Fallback to old behavior if no playerIds received
           console.log('   ⚠️ No playerIds received, using fallback');
           const hostId = this._hostPlayerId || (this.connectedPlayers[0]?.id || this.connectedPlayers[0]);
-          players.push({
+          players.push(this.createRemoteMatchPlayer({
             id: hostId,
             name: 'Host',
-            color: '#ff0000',
-            units: [],
-            buildings: [],
-            selectedUnits: []
-          });
+            color: '#ff0000'
+          }));
           players.push(window.player);
         }
         
@@ -4532,39 +4714,58 @@ const Lobby = {
       window.demo.stop();
     }
     
-    // Calculate total players INCLUDING AI opponents for spawn positions
-    let totalPlayersWithAI = totalPlayers;
-    if (settings && settings.aiSlots) {
-      const aiCount = settings.aiSlots.filter(slot => slot).length;
-      totalPlayersWithAI += aiCount;
+    // Use host-provided player ordering when available so both peers assign spawn slots
+    // and deterministic unit IDs to the same players. Fallback to local reconstruction.
+    let allPlayerIds;
+    if (this._playerIds && this._playerIds.length > 0) {
+      const orderedIds = [];
+      const seenIds = new Set();
+      this._playerIds.forEach(playerId => {
+        const normalized = normalizeId(playerId);
+        if (!normalized || seenIds.has(normalized)) return;
+        seenIds.add(normalized);
+        orderedIds.push(normalized);
+      });
+      allPlayerIds = orderedIds;
+    } else {
+      allPlayerIds = [
+        localPlayerId,  // Already normalized to 6 chars
+        ...this.connectedPlayers.map(p => {
+          const peerId = p.id || p;
+          return normalizeId(peerId);  // Normalize peer IDs to 6 chars too
+        })
+      ].sort();
     }
     
-    // Get spawn positions for all players (spread them out on the map)
-    // CRITICAL: Include AI players in count so we have enough spawn positions
-    const spawnPositions = this.getSpawnPositions(totalPlayersWithAI, fieldSize);
-    const localPlayerName = window.currentPlayerName || 'Player 1';
-    const localPlayerColor = window.currentPlayerColor || '#ff0000';
-    
-    // Sort all player IDs deterministically for consistent spawn order
-    // NOTE: We already normalized localPlayerId to 6 chars earlier
-    // For sorting, we need the full suffix to ensure consistency
-    const getIdForSorting = (id) => {
-      if (!id) return '';
-      // If already normalized to 6 chars, return as-is
-      if (id.length === 6) return id;
-      // Otherwise extract suffix after last dash (e.g., "p2p-xyz123" -> "xyz123")
-      return id.includes('-') ? id.split('-').pop() : id;
+    const hostedPlayersMeta = (gameType !== 'adventure' && Array.isArray(this._playersMeta))
+      ? this._playersMeta.slice()
+      : [];
+    const getHostedPlayerMeta = (normalizedId) => hostedPlayersMeta.find(meta =>
+      normalizeId(meta?.id) === normalizedId
+    ) || null;
+    const getFallbackColor = (playerIndex) => {
+      const colorInfo = this.getPlayerColor ? this.getPlayerColor(playerIndex) : null;
+      return typeof colorInfo === 'string' ? colorInfo : (colorInfo?.primary || '#ffffff');
     };
-    
-    const allPlayerIds = [
-      localPlayerId,  // Already normalized to 6 chars
-      ...this.connectedPlayers.map(p => {
-        const peerId = p.id || p;
-        return normalizeId(peerId);  // Normalize peer IDs to 6 chars too
-      })
-    ].sort();
-    
-    const normalizedLocalId = localPlayerId;  // Already normalized
+
+    let normalizedLocalId = localPlayerId;  // Already normalized
+    if (this._playerIds && this._playerIds.length > 0 && !allPlayerIds.includes(normalizedLocalId)) {
+      const remoteNormalizedIds = new Set(
+        (this.connectedPlayers || [])
+          .map(p => normalizeId(p.id || p))
+          .filter(Boolean)
+      );
+      const inferredLocalIds = allPlayerIds.filter(id => !remoteNormalizedIds.has(id));
+      if (inferredLocalIds.length === 1) {
+        normalizedLocalId = inferredLocalIds[0];
+        console.log(`🎯 Inferred local assigned player ID from host ordering: ${normalizedLocalId}`);
+      } else if (this._hostPlayerId && this.isHost) {
+        const normalizedHostId = normalizeId(this._hostPlayerId);
+        if (normalizedHostId) {
+          normalizedLocalId = normalizedHostId;
+        }
+      }
+    }
     let localPlayerIndex = allPlayerIds.indexOf(normalizedLocalId);
     
     if (localPlayerIndex === -1) {
@@ -4572,14 +4773,26 @@ const Lobby = {
       localPlayerIndex = 0;
     }
     
+    if (new Set(allPlayerIds).size !== allPlayerIds.length) {
+      console.warn('⚠️ Duplicate player IDs detected in lobby:', allPlayerIds);
+    }
+
+    const aiCount = (settings && settings.aiSlots)
+      ? settings.aiSlots.filter(slot => slot).length
+      : 0;
+    const totalPlayersWithAI = allPlayerIds.length + aiCount;
+    
+    // Size spawn slots from the host-authoritative ordered human player list instead of
+    // the local peer count. This prevents one peer from under-allocating spawn slots when
+    // its transient connectedPlayers view lags behind the host's final ordering.
+    const spawnPositions = this.getSpawnPositions(totalPlayersWithAI, fieldSize);
     if (spawnPositions[localPlayerIndex] === undefined) {
       console.error('❌ Not enough spawn positions for players:', { spawnPositions, allPlayerIds, localPlayerIndex });
       return;
     }
-    
-    if (new Set(allPlayerIds).size !== allPlayerIds.length) {
-      console.warn('⚠️ Duplicate player IDs detected in lobby:', allPlayerIds);
-    }
+    const localHostedMeta = getHostedPlayerMeta(normalizedLocalId);
+    const localPlayerName = localHostedMeta?.name || window.currentPlayerName || 'Player 1';
+    const localPlayerColor = localHostedMeta?.color || window.currentPlayerColor || '#ff0000';
     
     // Initialize player if it doesn't exist
     if (!window.player) {
@@ -4638,6 +4851,9 @@ const Lobby = {
       seed: mapSeed,
       spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
+    if (window.gfx && window.gfx.primeFieldResourcePathing) {
+      window.gfx.primeFieldResourcePathing(window.liveField);
+    }
     
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
@@ -4756,9 +4972,11 @@ const Lobby = {
         players.push(window.player);
       } else {
         // This is a remote opponent
-        const playerMeta = this.connectedPlayers.find(p => normalizeId(p.id || p) === normalizedId);
+        const playerMeta = getHostedPlayerMeta(normalizedId)
+          || this.connectedPlayers.find(p => normalizeId(p.id || p) === normalizedId)
+          || null;
         const playerName = playerMeta?.name || `Player ${index + 1}`;
-        const playerColor = playerMeta?.color || this.getPlayerColor(index);
+        const playerColor = playerMeta?.color || getFallbackColor(index);
         
         // CRITICAL: Use normalized ID (6 chars) for consistency
         const opponent = new window.OpponentPlayer({
@@ -4779,6 +4997,10 @@ const Lobby = {
         }
       }
     });
+
+    this._hostPlayerId = null;
+    this._playerIds = null;
+    this._playersMeta = null;
     
     // Add AI opponents if configured in lobby settings
     if (settings && settings.aiSlots) {
@@ -4839,8 +5061,8 @@ const Lobby = {
       mapSeed: mapSeed,
       mapSize: fieldSize,
       players: players,
-      localPlayerId: localPlayerId,  // Already normalized
-      hostId: this.isHost ? localPlayerId : null,  // Already normalized
+      localPlayerId: normalizedLocalId,
+      hostId: this.isHost ? normalizedLocalId : null,
       victoryCondition: 'elimination',
       timeLimit: 0 // No time limit by default
     };
@@ -4859,6 +5081,8 @@ const Lobby = {
     // Ensure gameBuildings array exists and is empty BEFORE creating Game
     if (!window.gameBuildings) {
       window.gameBuildings = [];
+    } else if (window.gameBuildings.length > 0) {
+      window.gameBuildings.length = 0;
     }
     // CRITICAL: NEVER do window.gameUnits = [] as it breaks the reference!
     // Only clear it with .length = 0 to preserve the array reference
@@ -4942,6 +5166,14 @@ const Lobby = {
         // console.log(`  - Owner matches player ID: ${firstUnit.owner === window.player.id}`);
       } else {
         console.warn('❌ No units in window.player.units array!');
+        if (window.player && window.gameUnits && window.player.id) {
+          const normalizedLocalOwner = normalizeId(window.player.id);
+          const recoveredUnits = window.gameUnits.filter(u => normalizeId(u.owner || '') === normalizedLocalOwner);
+          if (recoveredUnits.length > 0) {
+            window.player.units = recoveredUnits;
+            console.warn(`🔧 Recovered ${recoveredUnits.length} local units by owner match for player ${normalizedLocalOwner}`);
+          }
+        }
         console.log(`  - Checking window.gameUnits for any units...`);
         if (window.gameUnits && window.gameUnits.length > 0) {
           console.log(`  - Found ${window.gameUnits.length} units in gameUnits`);

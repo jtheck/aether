@@ -174,14 +174,15 @@ Player.prototype.loadFrogMesh = function() {
     // Scale the frog appropriately for the player
     model.root.scaling = new BABYLON.Vector3(0.21, 0.21, 0.21);
     
-    // Apply the player's color to the frog model
-    if (window.currentPlayerColor) {
-      self.color = window.currentPlayerColor;
+    // Apply the player's current runtime color to the frog model.
+    const runtimePlayerColor = self.color || window.player?.color || window.currentPlayerColor;
+    if (runtimePlayerColor) {
+      self.color = runtimePlayerColor;
       
       // Create a material with the player's color
       const playerMaterial = new BABYLON.StandardMaterial('playerMaterial', self.scene);
-      playerMaterial.diffuseColor = BABYLON.Color3.FromHexString(window.currentPlayerColor.replace('#', ''));
-      playerMaterial.emissiveColor = BABYLON.Color3.FromHexString(window.currentPlayerColor.replace('#', '')).scale(0.2); // Add slight glow
+      playerMaterial.diffuseColor = BABYLON.Color3.FromHexString(runtimePlayerColor.replace('#', ''));
+      playerMaterial.emissiveColor = BABYLON.Color3.FromHexString(runtimePlayerColor.replace('#', '')).scale(0.2); // Add slight glow
       
       // Apply the material to the frog model
       model.root.material = playerMaterial;
@@ -325,11 +326,13 @@ Player.prototype.isUnitSelected = function(unit) {
 };
 
 Player.prototype.getSelectedUnits = function() {
-  return [...this.selectedUnits]; // Return copy to prevent external modification
+  // Loaded passengers are visually attached to a transport and should not be treated
+  // as independently controllable selected units until they are unloaded.
+  return this.selectedUnits.filter(unit => !unit?.carriedBy);
 };
 
 Player.prototype.getSelectedUnitsOfType = function(type) {
-  return this.selectedUnits.filter(unit => unit.type === type);
+  return this.selectedUnits.filter(unit => unit.type === type && !unit?.carriedBy);
 };
 
 Player.prototype.selectAllUnitsOfType = function(type) {

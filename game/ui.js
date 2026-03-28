@@ -183,6 +183,13 @@ function getRandomColor() {
         // Update lobby if we're in one
         if (window.Lobby && window.Lobby.currentLobby) {
           window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
+          if (window.Lobby.sendPlayerPresence) {
+            window.Lobby.sendPlayerPresence();
+          }
+          if (window.Lobby.isHost && window.Lobby.announceLobby) {
+            window.Lobby.currentLobby.hostName = newName;
+            window.Lobby.announceLobby(window.Lobby.currentLobby);
+          }
         }
         
         // console.log('Player name updated to:', newName);
@@ -236,6 +243,13 @@ function getRandomColor() {
         // Update lobby if we're in one
         if (window.Lobby && window.Lobby.currentLobby) {
           window.Lobby.updateLobbyRoomUI(window.Lobby.currentGameType, window.Lobby.currentLobby);
+          if (window.Lobby.sendPlayerPresence) {
+            window.Lobby.sendPlayerPresence();
+          }
+          if (window.Lobby.isHost && window.Lobby.announceLobby) {
+            window.Lobby.currentLobby.hostColor = newColor;
+            window.Lobby.announceLobby(window.Lobby.currentLobby);
+          }
         }
         
         // console.log('Player color updated to:', newColor);
@@ -1011,6 +1025,32 @@ function getRandomColor() {
       return minPlayers[type] || 1;
     };
     
+    window.syncPausedOverlayForMenu = syncPausedOverlayForMenu;
+    function syncPausedOverlayForMenu(menuVisible) {
+      const match = window.currentMatch;
+      if (!match || !match.isPaused || match.state !== 'playing') {
+        return;
+      }
+
+      const overlay = document.getElementById('match_loading_overlay');
+      if (!overlay) {
+        return;
+      }
+
+      if (menuVisible) {
+        overlay.style.display = 'none';
+        overlay.style.pointerEvents = 'none';
+        overlay.style.zIndex = '-1';
+        return;
+      }
+
+      overlay.style.display = 'flex';
+      overlay.style.zIndex = '10000';
+      if (typeof match.syncLoadingOverlayActions === 'function') {
+        match.syncLoadingOverlayActions();
+      }
+    }
+
     // Update showMenu to handle multiplayer states
     ui.showMenu = function(menuId) {
       prevMenu = menuId;
@@ -1031,6 +1071,7 @@ function getRandomColor() {
       if (targetMenu) {
         targetMenu.style.display = 'block';
         document.getElementById('menu').style.display = 'block';
+        syncPausedOverlayForMenu(true);
       }
       
       // Update ingame menu player list if showing ingame menu
@@ -1281,6 +1322,7 @@ function getRandomColor() {
 
   ui.hideMenu = function(){
     document.getElementById('menu').style.display = 'none';
+    window.syncPausedOverlayForMenu(false);
   }
   
   ui.toggleMenu = function() {
@@ -1404,12 +1446,25 @@ function getRandomColor() {
     } else if (key === 'g' && state) {
       ui.togglePathDebug();
     } else if (key === 'f9') {
-      // Toggle Babylon Inspector
+      // Toggle Babylon Inspector v2
       if (state == true && gfx && gfx.scene) {
-        if (gfx.scene.debugLayer.isVisible()) {
-          gfx.scene.debugLayer.hide();
-        } else {
-          gfx.scene.debugLayer.show();
+        if (window._inspectorToken && !window._inspectorToken.isDisposed) {
+          window._inspectorToken.dispose();
+          window._inspectorToken = null;
+        } else if (typeof INSPECTOR !== 'undefined' && INSPECTOR.ShowInspector) {
+          window._inspectorToken = INSPECTOR.ShowInspector(gfx.scene, {
+            layoutMode: 'overlay',
+            themeMode: 'dark',
+            autoResizeEngine: true,
+            rightPaneDefaultCollapsed: false,
+            leftPaneDefaultCollapsed: false,
+          });
+        } else if (gfx.scene.debugLayer) {
+          if (gfx.scene.debugLayer.isVisible()) {
+            gfx.scene.debugLayer.hide();
+          } else {
+            gfx.scene.debugLayer.show();
+          }
         }
       }
     }
@@ -1943,6 +1998,8 @@ function getRandomColor() {
         if (window.lassoSelection && window.lassoSelection.handleLmbMove) {
           window.lassoSelection.handleLmbMove(x, y);
         }
+      } else if (window.lassoSelection && window.lassoSelection.isSelectionActive && window.lassoSelection.isSelectionActive()) {
+        window.lassoSelection.cleanupSelection();
       }
     } else if (e.type === 'pointerup' && e.button === 0) {
       // Handle LMB up for selection FIRST (even if double-click suppressed, we need to clean up lasso state)
@@ -1954,6 +2011,8 @@ function getRandomColor() {
             return; // Exit early to prevent move command from being issued
           }
         }
+      } else if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
+        window.lassoSelection.cleanupSelection();
       }
       
       // Check if we need to suppress this pointerup (due to double-click)
@@ -2008,21 +2067,59 @@ function getRandomColor() {
       // console.log('🎯 UI: Checking for unit click, lasso active:', window.lassoSelection?.isSelectionActive());
       
       if (!window.lassoSelection || !window.lassoSelection.isSelectionActive()) {
-        // Handle unit clicking - find unit at click position
-        // console.log('🎯 UI: Lasso not active, checking for unit at position:', x, y);
         const unit = findUnitAtPosition(x, y);
         if (unit) {
-          // Single click - select just this unit
-          if (window.player && window.player.selectUnit) {
-            window.player.clearSelection();
-            window.player.selectUnit(unit);
-            // console.log(`🎯 UI: Selected unit ${unit.name || unit.type}`);
+          const selectedUnits = (window.player && window.player.getSelectedUnits) ? window.player.getSelectedUnits() : [];
+          const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
+          const controllableSelectedUnits = selectedUnits.filter(u => {
+            const owner = u?.owner?.length > 6 ? u.owner.slice(-6) : u?.owner;
+            return !!owner && owner === normalizedPlayerId;
+          });
+          const clickedOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+          const isEnemy = window.currentMatch?.areOwnersHostile
+            ? window.currentMatch.areOwnersHostile(clickedOwner, normalizedPlayerId)
+            : (!!clickedOwner && clickedOwner !== normalizedPlayerId && clickedOwner !== 'neutral');
+
+          if (isEnemy && controllableSelectedUnits.length > 0) {
+            // Attack the enemy unit
+            if (window.currentMatch) {
+              const unitIds = controllableSelectedUnits.map(u => u.id);
+              window.currentMatch.submitCommand({
+                type: 'attack',
+                playerId: normalizedPlayerId,
+                unitIds: unitIds,
+                targetId: unit.id
+              });
+
+              if (window.UnitSpeech && controllableSelectedUnits[0]) {
+                const ownerOk = controllableSelectedUnits[0].owner === window.player?.id ||
+                    window.player?.id?.endsWith(controllableSelectedUnits[0].owner) ||
+                    controllableSelectedUnits[0].owner?.endsWith(window.player?.id);
+                if (ownerOk) {
+                  window.UnitSpeech.showRandomSpeech(controllableSelectedUnits[0], 'attack', 2000);
+                }
+              }
+            } else {
+              // Single-player fallback
+              controllableSelectedUnits.forEach(u => {
+                if (window.behaviorManager) {
+                  window.behaviorManager.setBehavior(u, 'attack_unit', { target: unit });
+                }
+              });
+            }
+
+            if (window.gfx && window.gfx.scene && unit.pb?.state?.loc) {
+              const tPos = unit.pb.state.loc;
+              createTargetMarker(new BABYLON.Vector3(tPos.x, 0, tPos.z));
+            }
+          } else {
+            // Friendly or neutral unit — select it
+            if (window.player && window.player.selectUnit) {
+              window.player.clearSelection();
+              window.player.selectUnit(unit);
+            }
           }
-        } else {
-          // console.log('🎯 UI: No unit found at click position');
         }
-      } else {
-        // console.log('🎯 UI: Lasso is active, skipping unit click');
       }
     }
     
@@ -2080,6 +2177,11 @@ function getRandomColor() {
 
         // Get selected units for movement commands
         const selectedUnits = (window.player && window.player.getSelectedUnits) ? window.player.getSelectedUnits() : [];
+        const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
+        const controllableSelectedUnits = selectedUnits.filter(u => {
+          const owner = u?.owner?.length > 6 ? u.owner.slice(-6) : u?.owner;
+          return !!owner && owner === normalizedPlayerId;
+        });
 
         // Check what we clicked on
         const clickedOnBuilding = pickResult.pickedMesh && pickResult.pickedMesh.isBuilding;
@@ -2246,8 +2348,8 @@ function getRandomColor() {
               // console.log(`💥 Field action: Small explosion at (${tileX}, ${tileZ})`);
               
               // Make selected units walk to the explosion location
-              if (selectedUnits.length > 0) {
-                  // console.log(`🚶 Making ${selectedUnits.length} selected units walk to explosion location`);
+              if (controllableSelectedUnits.length > 0) {
+                  // console.log(`🚶 Making ${controllableSelectedUnits.length} selected units walk to explosion location`);
                   
                   // Check if we clicked on a building
                   if (clickedOnBuilding && pickResult.pickedMesh) {
@@ -2259,7 +2361,10 @@ function getRandomColor() {
                     
                     if (buildingMesh && buildingMesh.isBuilding) {
                       // Find the building object from gameBuildings
-                      const building = gameBuildings.find(b => b.mesh === buildingMesh);
+                      const buildingIdFromHit = buildingMesh.metadata?.buildingId;
+                      const building = gameBuildings.find(b =>
+                        b.mesh === buildingMesh || b.id === buildingIdFromHit
+                      );
                       
                       if (building) {
                         // Check building ownership
@@ -2267,44 +2372,54 @@ function getRandomColor() {
                         const buildingOwner = normalizeId(building.owner);
                         const playerOwner = normalizeId(window.player?.id);
                         const isOwnBuilding = buildingOwner === playerOwner;
+                        const isHostileBuilding = window.currentMatch?.areOwnersHostile
+                          ? window.currentMatch.areOwnersHostile(buildingOwner, playerOwner)
+                          : (!!buildingOwner && buildingOwner !== playerOwner && buildingOwner !== 'neutral');
                         
-                        if (isOwnBuilding && building.buildProgress < 1.0 && building.workType === 'build') {
-                          // Our building under construction - assign villagers to build it
-                          const villagers = selectedUnits.filter(u => u.type === 'villager');
+                        if (isOwnBuilding && building.needsWorkers) {
+                          const workers = controllableSelectedUnits.filter(u =>
+                            u.type === 'villager' || u.type === 'engineer'
+                          );
                           
-                          if (villagers.length > 0) {
-                            console.log(`🔨 ${villagers.length} villagers manually assigned to build ${building.type}`);
-                            
-                            // Assign each villager to build this building
-                            villagers.forEach(villager => {
-                              // Clear any existing assignment
-                              if (villager.assignedBuilding) {
-                                const oldBuilding = villager.assignedBuilding;
-                                if (oldBuilding.assignedWorkers) {
-                                  const idx = oldBuilding.assignedWorkers.indexOf(villager);
-                                  if (idx > -1) oldBuilding.assignedWorkers.splice(idx, 1);
+                          if (workers.length > 0) {
+                            const actionLabel = (building.buildProgress < 1.0 && building.workType === 'build')
+                              ? 'build'
+                              : 'work';
+                            console.log(`🔨 ${workers.length} workers manually assigned to ${actionLabel} ${building.type}`);
+
+                            if (window.currentMatch && typeof window.currentMatch.submitCommand === 'function') {
+                              window.currentMatch.submitCommand({
+                                type: 'work',
+                                unitIds: workers.map(v => v.id),
+                                buildingId: building.id
+                              });
+                            } else {
+                              workers.forEach(worker => {
+                                if (worker.assignedBuilding) {
+                                  const oldBuilding = worker.assignedBuilding;
+                                  if (oldBuilding.assignedWorkers) {
+                                    const idx = oldBuilding.assignedWorkers.indexOf(worker);
+                                    if (idx > -1) oldBuilding.assignedWorkers.splice(idx, 1);
+                                  }
                                 }
-                              }
-                              
-                              // Assign to new building
-                              if (window.assignVillagerToWork) {
-                                window.assignVillagerToWork(villager, building);
-                              }
-                            });
+                                
+                                if (window.assignVillagerToWork) {
+                                  window.assignVillagerToWork(worker, building);
+                                }
+                              });
+                            }
                             
-                            // Create a visual target marker at the building
                             if (window.gfx && window.gfx.scene) {
                               createTargetMarker(worldPos);
                             }
                             
-                            // Don't issue move command, we're building
                             return;
                           }
-                        } else if (!isOwnBuilding) {
+                        } else if (isHostileBuilding) {
                           // Enemy building or captured Agora!
                           if (building.type === 'agora') {
                             // Special: Agoras are always occupied/captured, never attacked
-                            console.log(`⛳ ${selectedUnits.length} units moving to occupy agora`);
+                            console.log(`⛳ ${controllableSelectedUnits.length} units moving to occupy agora`);
                             
                             // Create a visual target marker
                             if (window.gfx && window.gfx.scene) {
@@ -2315,10 +2430,10 @@ function getRandomColor() {
                             // Fall through to normal move command below
                           } else {
                             // Attack the enemy building!
-                            console.log(`⚔️ ${selectedUnits.length} units attacking enemy ${building.type}`);
+                            console.log(`⚔️ ${controllableSelectedUnits.length} units attacking enemy ${building.type}`);
                             
                             // Show speech bubble for one of the attackers
-                            const unit = selectedUnits[0];
+                            const unit = controllableSelectedUnits[0];
                             const ownerMatches = unit && (unit.owner === window.player?.id || 
                                                 window.player?.id?.endsWith(unit.owner) ||
                                                 unit.owner?.endsWith(window.player?.id));
@@ -2326,24 +2441,30 @@ function getRandomColor() {
                               window.UnitSpeech.showRandomSpeech(unit, 'attack', 2000);
                             }
                             
-                            selectedUnits.forEach(unit => {
-                              if (window.behaviorManager) {
-                                // Clear any existing assignment
-                                if (unit.assignedBuilding) {
-                                  const oldBuilding = unit.assignedBuilding;
-                                  if (oldBuilding.assignedWorkers) {
-                                    const idx = oldBuilding.assignedWorkers.indexOf(unit);
-                                    if (idx > -1) oldBuilding.assignedWorkers.splice(idx, 1);
+                            if (window.currentMatch && typeof window.currentMatch.submitCommand === 'function') {
+                              window.currentMatch.submitCommand({
+                                type: 'attack_building',
+                                unitIds: controllableSelectedUnits.map(unit => unit.id),
+                                buildingId: building.id
+                              });
+                            } else {
+                              controllableSelectedUnits.forEach(unit => {
+                                if (window.behaviorManager) {
+                                  if (unit.assignedBuilding) {
+                                    const oldBuilding = unit.assignedBuilding;
+                                    if (oldBuilding.assignedWorkers) {
+                                      const idx = oldBuilding.assignedWorkers.indexOf(unit);
+                                      if (idx > -1) oldBuilding.assignedWorkers.splice(idx, 1);
+                                    }
+                                    unit.assignedBuilding = null;
                                   }
-                                  unit.assignedBuilding = null;
+                                  
+                                  window.behaviorManager.setBehavior(unit, 'attack_building', {
+                                    building: building
+                                  });
                                 }
-                                
-                                // Set attack behavior
-                                window.behaviorManager.setBehavior(unit, 'attack_building', {
-                                  building: building
-                                });
-                              }
-                            });
+                              });
+                            }
                             
                             // Create a visual target marker
                             if (window.gfx && window.gfx.scene) {
@@ -2356,7 +2477,7 @@ function getRandomColor() {
                         } else if (isOwnBuilding && building.type === 'agora') {
                           // Our own Agora - but might be contested/under attack
                           // Send units to defend/reinforce it
-                          console.log(`🛡️ ${selectedUnits.length} units moving to defend our agora`);
+                          console.log(`🛡️ ${controllableSelectedUnits.length} units moving to defend our agora`);
                           
                           // Create a visual target marker
                           if (window.gfx && window.gfx.scene) {
@@ -2395,7 +2516,7 @@ function getRandomColor() {
                   
                   // If clicked on a resource with villagers selected, start gathering
                   if (resourceInfo && !isDepleted) {
-                    const villagers = selectedUnits.filter(u => u.type === 'villager');
+                    const villagers = controllableSelectedUnits.filter(u => u.type === 'villager');
                     if (villagers.length > 0) {
                       
                       // Create a quick sparkly visual feedback at the resource
@@ -2473,8 +2594,44 @@ function getRandomColor() {
                       
                       // Assign each villager to gather from this resource
                       villagers.forEach(villager => {
-                        if (window.behaviorManager) {
-                          // Clear any existing building assignment
+                        // Calculate model offset to match gfx.js placement
+                        const baseTileX = (resourceGridX + 0.5) * TILE_SIZE;
+                        const baseTileZ = (resourceGridZ + 0.5) * TILE_SIZE;
+                        
+                        // Trees (wood) and rocks (stone/minerals) use different hash seeds
+                        const fieldSeed = window.liveField?.seed || 0;
+                        let hashSeed;
+                        if (resourceInfo.type === 'wood') {
+                          hashSeed = fieldSeed + resourceGridX * 13579 + resourceGridZ * 24680;
+                        } else {
+                          hashSeed = fieldSeed + resourceGridX * 73856093 + resourceGridZ * 19349663;
+                        }
+                        
+                        // Same LCG hash as gfx.js
+                        let hash = hashSeed;
+                        hash = (hash * 1664525 + 1013904223) >>> 0;
+                        const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                        hash = (hash * 1664525 + 1013904223) >>> 0;
+                        const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
+                        
+                        const resourceWorldX = baseTileX + offsetX;
+                        const resourceWorldZ = baseTileZ + offsetZ;
+                        const targetResource = {
+                          gridX: resourceGridX,
+                          gridZ: resourceGridZ,
+                          x: resourceWorldX,
+                          z: resourceWorldZ,
+                          type: resourceInfo.type,
+                          amount: resourceInfo.amount
+                        };
+
+                        if (window.currentMatch && typeof window.currentMatch.submitCommand === 'function') {
+                          window.currentMatch.submitCommand({
+                            type: 'gather',
+                            unitIds: [villager.id],
+                            targetResource
+                          });
+                        } else if (window.behaviorManager) {
                           if (villager.assignedBuilding) {
                             const building = villager.assignedBuilding;
                             if (building.assignedWorkers) {
@@ -2484,39 +2641,8 @@ function getRandomColor() {
                             villager.assignedBuilding = null;
                           }
                           
-                          // Create a temporary "manual gather" behavior
-                          // Calculate model offset to match gfx.js placement
-                          const baseTileX = (resourceGridX + 0.5) * TILE_SIZE;
-                          const baseTileZ = (resourceGridZ + 0.5) * TILE_SIZE;
-                          
-                          // Trees (wood) and rocks (stone/minerals) use different hash seeds
-                          const fieldSeed = window.liveField?.seed || 0;
-                          let hashSeed;
-                          if (resourceInfo.type === 'wood') {
-                            hashSeed = fieldSeed + resourceGridX * 13579 + resourceGridZ * 24680;
-                          } else {
-                            hashSeed = fieldSeed + resourceGridX * 73856093 + resourceGridZ * 19349663;
-                          }
-                          
-                          // Same LCG hash as gfx.js
-                          let hash = hashSeed;
-                          hash = (hash * 1664525 + 1013904223) >>> 0;
-                          const offsetX = ((hash % 1000) / 1000 - 0.5) * 0.6;
-                          hash = (hash * 1664525 + 1013904223) >>> 0;
-                          const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
-                          
-                          const resourceWorldX = baseTileX + offsetX;
-                          const resourceWorldZ = baseTileZ + offsetZ;
-                          
                           window.behaviorManager.setBehavior(villager, 'manual_gather', {
-                            targetResource: {
-                              gridX: resourceGridX,
-                              gridZ: resourceGridZ,
-                              x: resourceWorldX,
-                              z: resourceWorldZ,
-                              type: resourceInfo.type,        // Pass resource type!
-                              amount: resourceInfo.amount     // Pass resource amount!
-                            }
+                            targetResource
                           });
                         }
                       });
@@ -2533,20 +2659,13 @@ function getRandomColor() {
                       }
                       
                       // Non-villager units in the selection should still move to the location
-                      const nonVillagers = selectedUnits.filter(u => u.type !== 'villager');
+                      const nonVillagers = controllableSelectedUnits.filter(u => u.type !== 'villager');
                       if (nonVillagers.length > 0 && window.currentMatch) {
                         const unitIds = nonVillagers.map(u => u.id);
-                        const startPositions = {};
-                        nonVillagers.forEach(u => {
-                          if (u.pb && u.pb.state && u.pb.state.loc) {
-                            startPositions[u.id] = { x: u.pb.state.loc.x, z: u.pb.state.loc.z };
-                          }
-                        });
                         window.currentMatch.submitCommand({
                           type: 'move',
                           playerId: window.player?.id,
                           unitIds: unitIds,
-                          startPositions: startPositions,
                           target: { x: resourceMarkerPos.x, y: 0, z: resourceMarkerPos.z }
                         });
                       }
@@ -2560,36 +2679,24 @@ function getRandomColor() {
                   }
 
                   // Only issue movement commands if units are selected
-                  if (selectedUnits.length > 0) {
+                  if (controllableSelectedUnits.length > 0) {
 
                     // Check if any villagers are being commanded to move (for sound effects)
                     // Apply walk behavior to each selected unit
                     // MATCH SYSTEM: Submit move commands through Match system for synchronization
                   if (window.currentMatch) {
                     // Submit a move command for all selected units through Match system
-                    const unitIds = selectedUnits.map(u => u.id);
-                    // CRITICAL: Include starting positions so other clients can snap units before moving
-                    // This prevents teleporting when positions drift between checkpoints
-                    const startPositions = {};
-                    selectedUnits.forEach(u => {
-                      if (u.pb && u.pb.state && u.pb.state.loc) {
-                        startPositions[u.id] = {
-                          x: u.pb.state.loc.x,
-                          z: u.pb.state.loc.z
-                        };
-                      }
-                    });
+                    const unitIds = controllableSelectedUnits.map(u => u.id);
                     const command = {
                       type: 'move',
                       playerId: window.player?.id, // CRITICAL: Set player ID explicitly
                       unitIds: unitIds,
-                      startPositions: startPositions, // Include where units are starting from
                       target: { x: worldPos.x, y: 0, z: worldPos.z }
                     };
                     window.currentMatch.submitCommand(command);
 
                     // Show speech bubble for one of the moving units
-                    const unit = selectedUnits[0];
+                    const unit = controllableSelectedUnits[0];
                     const ownerMatches = unit && (unit.owner === window.player?.id ||
                                         window.player?.id?.endsWith(unit.owner) ||
                                         unit.owner?.endsWith(window.player?.id));
@@ -3313,16 +3420,58 @@ function getRandomColor() {
     if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) {
       return;
     }
-    const units = window.player.getSelectedUnits();
+    const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
+    const units = window.player.getSelectedUnits().filter(unit => {
+      const owner = unit?.owner?.length > 6 ? unit.owner.slice(-6) : unit?.owner;
+      return !!owner && owner === normalizedPlayerId;
+    });
     
     // MATCH SYSTEM: Submit ability commands through Match system
     if (window.currentMatch && units.length > 0) {
+      // Transport unload: double-click with loaded transport selected
+      const transportsWithPassengers = units.filter(u =>
+        u.abilities && u.abilities.includes('transport') &&
+        u.passengers && u.passengers.length > 0
+      );
+      if (transportsWithPassengers.length > 0 && worldPos) {
+        const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
+        const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
+        transportsWithPassengers.forEach(transport => {
+          window.currentMatch.submitCommand({
+            type: 'unload',
+            playerId: window.player?.id,
+            unitId: transport.id,
+            target: { x: xCoord, z: zCoord }
+          });
+        });
+        return;
+      }
+
       units.forEach(unit => {
         const type = unit.type || unit.name || '';
         let abilityType = null;
         let abilityParams = {};
         
-        if (/engineer/i.test(type)) {
+        if (/^villager$/i.test(type)) {
+          // Villager double-click: upgrade to brigand via convert command
+          const upgradeDef = window.UnitTypes?.brigand;
+          if (upgradeDef) {
+            const cost = upgradeDef.cost || {};
+            let canAfford = true;
+            for (const [res, amt] of Object.entries(cost)) {
+              if ((window.player.resources?.[res] || 0) < amt) { canAfford = false; break; }
+            }
+            if (canAfford) {
+              window.currentMatch.submitCommand({
+                type: 'convert',
+                playerId: window.player.id,
+                unitId: unit.id,
+                targetType: 'brigand'
+              });
+            }
+          }
+          return;
+        } else if (/engineer/i.test(type)) {
           abilityType = 'engineer_productivity_boost';
           abilityParams = { radius: 6, bonus: 1.5, duration: 7000, vfx: 'aura_blue' };
         } else if (/brigand/i.test(type)) {
@@ -3367,9 +3516,30 @@ function getRandomColor() {
       });
     } else {
       // SINGLE PLAYER: Apply abilities directly
+
+      // Transport unload (single player)
+      const spTransports = units.filter(u =>
+        u.abilities && u.abilities.includes('transport') &&
+        u.passengers && u.passengers.length > 0
+      );
+      if (spTransports.length > 0 && worldPos && window.unloadPassengers) {
+        const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
+        const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
+        spTransports.forEach(t => window.unloadPassengers(t, { x: xCoord, z: zCoord }));
+        return;
+      }
+
       units.forEach(unit => {
         const type = unit.type || unit.name || '';
-        if (/engineer/i.test(type)) {
+        if (/^villager$/i.test(type)) {
+          // Villager double-click: upgrade to brigand directly
+          const unitDef = window.UnitTypes?.villager;
+          if (unitDef && unitDef.actionAbilities) {
+            const upgradeAbility = unitDef.actionAbilities.find(a => a.name && a.name.includes('Brigand'));
+            if (upgradeAbility && upgradeAbility.execute) upgradeAbility.execute();
+          }
+          return;
+        } else if (/engineer/i.test(type)) {
           window.behaviorManager.setBehavior(unit, 'engineer_productivity_boost', {
             radius: 6,
             bonus: 1.5,

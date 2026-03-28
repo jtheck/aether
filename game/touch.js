@@ -707,17 +707,10 @@
 
       if (command === 'move' && window.currentMatch) {
         const unitIds = units.map(u => u.id);
-        const startPositions = {};
-        units.forEach(u => {
-          if (u.pb && u.pb.state && u.pb.state.loc) {
-            startPositions[u.id] = { x: u.pb.state.loc.x, z: u.pb.state.loc.z };
-          }
-        });
         window.currentMatch.submitCommand({
           type: 'move',
           playerId: window.player?.id,
           unitIds: unitIds,
-          startPositions: startPositions,
           target: { x: worldPos.x, y: 0, z: worldPos.z }
         });
       }

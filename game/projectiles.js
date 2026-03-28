@@ -100,6 +100,7 @@
       damage = 10,
       owner = null,
       speed = null,
+      gameplayImpact = true,
       onHit = null,
       onMiss = null,
     } = options || {};
@@ -185,6 +186,7 @@
       lifetime: dist / projSpeed + 1.0, // small buffer
       onHit,
       onMiss,
+      gameplayImpact,
       active: true,
     };
 
@@ -281,19 +283,20 @@
       // Using t (interpolation factor) is more efficient than calculating distance
       if (t >= 0.95) {
         const hitPos = p.mesh.position.clone();
-        const hitUnit = checkUnitCollision(hitPos, p.owner);
-        if (hitUnit) {
-          if (p.onHit) {
-            p.onHit(hitUnit, hitPos);
-          } else {
-            applyDamage(hitUnit, p.damage, p.owner);
-          }
-          // Add a physics "bop" so impacts feel punchy
-          // Make tower hits visibly shove units without instantly deleting them
-          bopUnitFromProjectile(hitUnit, hitPos, 240);
-          // TEMP: disable impact FX while we track down Babylon isEnabled crash on hit
-          if (ENABLE_PROJECTILE_IMPACT_FX) {
-            createImpactEffect(p.type, hitPos);
+        if (p.gameplayImpact) {
+          const hitUnit = checkUnitCollision(hitPos, p.owner);
+          if (hitUnit) {
+            if (p.onHit) {
+              p.onHit(hitUnit, hitPos);
+            } else {
+              applyDamage(hitUnit, p.damage, p.owner);
+            }
+            bopUnitFromProjectile(hitUnit, p.from, 240, p.direction);
+            if (ENABLE_PROJECTILE_IMPACT_FX) {
+              createImpactEffect(p.type, hitPos);
+            }
+          } else if (p.onMiss) {
+            p.onMiss(hitPos);
           }
         } else if (p.onMiss) {
           p.onMiss(hitPos);
@@ -548,7 +551,10 @@
 
     for (const unit of window.gameUnits) {
       if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) continue;
-      if (unit.owner === ownerId) continue;
+      const isHostile = window.currentMatch?.areOwnersHostile
+        ? window.currentMatch.areOwnersHostile(unit.owner, ownerId)
+        : (unit.owner !== ownerId);
+      if (!isHostile) continue;
       if (!unit.health || unit.health <= 0) continue;
 
       const loc = unit.pb.state.loc;
@@ -567,31 +573,50 @@
 
   function applyDamage(unit, damage, attackerOwner) {
     if (!unit) return;
-    if (typeof unit.health !== "number") return;
+    const hasHealth = typeof unit.health === "number";
+    const hasCurrentHealth = typeof unit.currentHealth === "number";
+    if (!hasHealth && !hasCurrentHealth) return;
 
-    unit.health = Math.max(0, unit.health - (damage || 0));
+    const baseHealth = hasCurrentHealth ? unit.currentHealth : unit.health;
+    const newHealth = Math.max(0, baseHealth - (damage || 0));
+    if (hasHealth) unit.health = newHealth;
+    if (hasCurrentHealth) unit.currentHealth = newHealth;
 
-    if (unit.health <= 0 && typeof window.onUnitDeath === "function") {
+    if (newHealth <= 0 && typeof window.onUnitDeath === "function") {
       window.onUnitDeath(unit, attackerOwner);
     }
   }
 
   // Give a unit a physics "bop" using its PBody impulse.
-  function bopUnitFromProjectile(unit, hitPosition, power) {
+  function bopUnitFromProjectile(unit, sourcePosition, power, fallbackDirection) {
     if (!unit || !unit.pb || !unit.pb.imp || !unit.pb.state || !unit.pb.state.loc) {
       return;
     }
 
     const unitPos = unit.pb.state.loc.clone();
-    let dir = unitPos.subtract(hitPosition);
+    let dir = sourcePosition ? unitPos.subtract(sourcePosition) : BABYLON.Vector3.Zero();
     if (dir.lengthSquared() < 0.0001) {
-      // Fallback: tiny random push if we're exactly on top
-      dir = new BABYLON.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5);
+      if (fallbackDirection && fallbackDirection.lengthSquared && fallbackDirection.lengthSquared() > 0.0001) {
+        dir = fallbackDirection.clone ? fallbackDirection.clone() : new BABYLON.Vector3(fallbackDirection.x || 0, fallbackDirection.y || 0, fallbackDirection.z || 0);
+      } else {
+        const idHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const angle = (idHash % 360) * (Math.PI / 180);
+        dir = new BABYLON.Vector3(Math.cos(angle), 0, Math.sin(angle));
+      }
     }
     dir.normalize();
 
     const strength = power || 150;
     unit.pb.imp.addInPlace(dir.scale(strength));
+  }
+
+  projectiles.applyImpact = function(options) {
+    const { unit, attackerOwner = null, damage = 0, sourcePosition = null, bopStrength = 0, fallbackDirection = null } = options || {};
+    if (!unit) return;
+    applyDamage(unit, damage, attackerOwner);
+    if (bopStrength > 0) {
+      bopUnitFromProjectile(unit, sourcePosition, bopStrength, fallbackDirection);
+    }
   }
 
   function createImpactEffect(projectileType, position) {

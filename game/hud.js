@@ -1726,13 +1726,13 @@
 
     if (item.menuCategory === 'buildings') {
       if (window.formatBuildingCost) costStr = window.formatBuildingCost(itemKey);
-      if (item.availabilityState === 'locked') statusStr = 'Requires prerequisite';
+      if (item.availabilityState === 'locked') statusStr = window.getMissingPrerequisites ? window.getMissingPrerequisites('buildings', itemKey) : 'Requires prerequisite';
     } else if (item.menuCategory === 'units') {
       if (window.formatUnitCost) costStr = window.formatUnitCost(itemKey);
-      if (item.availabilityState === 'locked') statusStr = 'Requires prerequisite';
+      if (item.availabilityState === 'locked') statusStr = window.getMissingPrerequisites ? window.getMissingPrerequisites('units', itemKey) : 'Requires prerequisite';
     } else if (item.menuCategory === 'research') {
       if (window.formatResearchCost) costStr = window.formatResearchCost(itemKey);
-      if (item.availabilityState === 'locked') statusStr = 'Requires prerequisite';
+      if (item.availabilityState === 'locked') statusStr = window.getMissingPrerequisites ? window.getMissingPrerequisites('research', itemKey) : 'Requires prerequisite';
     }
 
     ctx.textAlign = 'center';

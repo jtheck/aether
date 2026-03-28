@@ -10,6 +10,7 @@
     this.resources = options.startingResources || { ...STARTING_RESOURCES };
     this.units = [];
     this.buildings = []; // Always initialize buildings array
+    this.selectedUnits = [];
     this.isAI = options.isAI !== false; // Default to AI for single-player
     this.difficulty = options.difficulty || 'normal';
     this.isRemote = !this.isAI;
@@ -35,6 +36,24 @@
   // Get resources (mirror player interface)
   Opponent.prototype.getResources = function() {
     return this.resources;
+  };
+
+  Opponent.prototype.addResource = function(resourceType, amount) {
+    if (this.resources && Object.prototype.hasOwnProperty.call(this.resources, resourceType)) {
+      this.resources[resourceType] += amount;
+      return true;
+    }
+    return false;
+  };
+
+  Opponent.prototype.removeResource = function(resourceType, amount) {
+    if (this.resources && Object.prototype.hasOwnProperty.call(this.resources, resourceType)) {
+      if (this.resources[resourceType] >= amount) {
+        this.resources[resourceType] -= amount;
+        return true;
+      }
+    }
+    return false;
   };
   
   // Add unit (ghost for remote, real for AI)
@@ -703,15 +722,10 @@
         const distance = Math.sqrt(dx * dx + dz * dz);
         
         if (distance > 20) {
-          const startPositions = {};
-          if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-            startPositions[unit.id] = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
-          }
           window.currentMatch.submitCommand({
             type: 'move',
             playerId: aiPlayer.id,
             unitIds: [unit.id],
-            startPositions: startPositions,
             target: { x: basePos.x, y: 0, z: basePos.z }
           });
         }
@@ -744,15 +758,10 @@
       const rowOffset = (row - (Math.ceil(militaryUnits.length / unitsPerRow) - 1) / 2) * spacing;
       const colOffset = (col - (unitsPerRow - 1) / 2) * spacing;
       
-      const startPositions = {};
-      if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-        startPositions[unit.id] = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
-      }
       window.currentMatch.submitCommand({
         type: 'move',
         playerId: aiPlayer.id,
         unitIds: [unit.id],
-        startPositions: startPositions,
         target: { 
           x: targetPos.x + colOffset, 
           y: 0,
@@ -813,15 +822,10 @@
       const patrolX = basePos.x + Math.cos(angle) * patrolRadius;
       const patrolZ = basePos.z + Math.sin(angle) * patrolRadius;
       
-      const startPositions = {};
-      if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-        startPositions[unit.id] = { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z };
-      }
       window.currentMatch.submitCommand({
         type: 'move',
         playerId: aiPlayer.id,
         unitIds: [unit.id],
-        startPositions: startPositions,
         target: { x: patrolX, y: 0, z: patrolZ }
       });
     });

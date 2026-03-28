@@ -180,7 +180,10 @@
   // Rows 5-7: [unused] - reserved for future models
   let billboardAtlas = null;
   let billboardMaterial = null;
-  
+  let billboardRoot = null; // Parent node — keeps inspector tidy
+  let sceneryRoot = null; // Parent for instanced scenery containers
+  let terrainRoot = null; // Parent for dynamic table pieces (floors, edges, corners)
+
   // Instanced billboard system for performance - separate mesh per model type
   const billboardInstancedMeshes = new Map(); // modelType -> master mesh
   const billboardInstances = []; // Track all billboard instances
@@ -189,6 +192,37 @@
   
   // LOD distance tweaker - adjust this to change when models switch to billboards
   let LOD_DISTANCE = 225; // Units - models switch to billboards beyond this distance
+  // Agora uses a larger team flag at distance instead of a billboard impostor
+  const AGORA_FLAG_LOD_SCALE_MUL = 2.75;
+
+  function applyAgoraFlagLodState(root, building, farMode) {
+    if (!root || root.isDisposed()) return;
+    const children = root.getChildren ? root.getChildren() : [];
+    if (farMode && building && (!building.flagRoots || !building.flagRoots.length)) {
+      root.setEnabled(true);
+      children.forEach(c => {
+        if (c.setEnabled) c.setEnabled(true);
+      });
+      return;
+    }
+    const base = building && building.flagBaseScale != null ? building.flagBaseScale : 0.6;
+    const scale = base * (farMode ? AGORA_FLAG_LOD_SCALE_MUL : 1);
+    root.setEnabled(true);
+    const flagSet = building && building.flagRoots ? building.flagRoots : [];
+    children.forEach(child => {
+      const isFlagRoot = flagSet.indexOf(child) >= 0;
+      if (isFlagRoot) {
+        if (child.setEnabled) child.setEnabled(true);
+        if (child.scaling && (!child.isDisposed || !child.isDisposed())) {
+          child.scaling.x = scale;
+          child.scaling.y = scale;
+          child.scaling.z = scale;
+        }
+      } else if (child.setEnabled) {
+        child.setEnabled(!farMode);
+      }
+    });
+  }
   
   // Billboard-only mode - for low-end devices or large maps in editor
   // When true, never show 3D models, only billboards
@@ -205,14 +239,19 @@
       if (!lod.model || lod.model.isDisposed()) return;
       
       if (enabled) {
-        // Billboard mode: ALWAYS hide model, show billboard
-        lod.model.setEnabled(false);
-        if (lod.billboard) lod.billboard.setEnabled(true);
+        if (lod.lodType === 'agora-flag') {
+          applyAgoraFlagLodState(lod.model, lod.buildingRef, true);
+        } else {
+          lod.model.setEnabled(false);
+          if (lod.billboard) lod.billboard.setEnabled(true);
+        }
       } else {
-        // Normal mode: temporarily enable model, LOD will correct on next update
-        // Don't enable both - just let LOD system handle the transition
-        if (lod.billboard) lod.billboard.setEnabled(false);
-        lod.model.setEnabled(true);
+        if (lod.lodType === 'agora-flag') {
+          applyAgoraFlagLodState(lod.model, lod.buildingRef, false);
+        } else {
+          if (lod.billboard) lod.billboard.setEnabled(false);
+          lod.model.setEnabled(true);
+        }
       }
     });
     
@@ -258,9 +297,12 @@
       billboardMaterial.diffuseColor = new BABYLON.Color3(0.46, 0.46, 0.46);
       billboardMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
       billboardMaterial.specularPower = 0;
-      billboardMaterial.emissiveColor = new BABYLON.Color3(0, 0, 0);
+      billboardMaterial.emissiveColor = new BABYLON.Color3(0.12, 0.12, 0.12);
       
       billboardMaterial.backFaceCulling = false;
+    }
+    if (!billboardRoot) {
+      billboardRoot = new BABYLON.TransformNode('Billboards', scene);
     }
   }
   
@@ -291,11 +333,12 @@
     if (!billboardInstancedMeshes.has(modelType)) {
       const masterMesh = BABYLON.MeshBuilder.CreatePlane(`billboardMaster_${modelType}`, {width: 3, height: 3}, scene);
       masterMesh.material = billboardMaterial;
-      masterMesh.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
-      
+      masterMesh.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
+
       // Set the correct UV coordinates for this model type
       masterMesh.setVerticesData(BABYLON.VertexBuffer.UVKind, getModelUV(modelPath));
       masterMesh.setEnabled(false); // Hide the master mesh
+      masterMesh.parent = billboardRoot;
       
       billboardInstancedMeshes.set(modelType, masterMesh);
       billboardInstancePools.set(modelType, []); // Initialize pool for this type
@@ -365,8 +408,14 @@
     wagon: 0, dirigible: 0, apc: 0,
   };
 
+  const BILLBOARD_PLANE_HEIGHT = 3; // matches CreatePlane for atlas sprites
+  const BILLBOARD_PLANE_HALF_HEIGHT = BILLBOARD_PLANE_HEIGHT * 0.5;
+
   // Get a billboard instance from the pool (optimized)
-  function getBillboardInstance(modelPath, position, scale, scene) {
+  // options.groundUnitSprite: mesh origin at feet — instanced meshes don't reliably honor bottom pivots,
+  // so we keep pivot at center and lift by half the scaled plane height (see syncUnitBillboardPositionFromMesh).
+  function getBillboardInstance(modelPath, position, scale, scene, options = {}) {
+    const groundUnitSprite = !!(options && options.groundUnitSprite);
     let modelType = modelPathToType(modelPath);
     
     // Get the master mesh for this type
@@ -391,9 +440,16 @@
     // Apply per-type Y offset so squat things (rocks) don't float
     const yOffset = BILLBOARD_Y_OFFSETS[modelType] || 0;
     instance.position.y += yOffset * scale;
-    
-    // Set pivot to bottom of billboard so scaling keeps it grounded
-    instance.setPivotPoint(new BABYLON.Vector3(0, -1.5, 0)); // Bottom of 3-unit-tall plane
+
+    if (instance.metadata) delete instance.metadata.groundUnitBillboard;
+    if (groundUnitSprite) {
+      instance.setPivotPoint(BABYLON.Vector3.Zero());
+      instance.position.y += BILLBOARD_PLANE_HALF_HEIGHT * scale;
+      instance.metadata = instance.metadata || {};
+      instance.metadata.groundUnitBillboard = true;
+    } else {
+      instance.setPivotPoint(new BABYLON.Vector3(0, -BILLBOARD_PLANE_HALF_HEIGHT, 0));
+    }
     
     instance.scaling.x = scale;
     instance.scaling.y = scale;
@@ -590,8 +646,11 @@
     const instances = [];
     const isResourceModel = modelPath && (modelPath.includes('rock') || modelPath.includes('tree'));
     
-    // Create a container TransformNode to hold all instances
+    if (!sceneryRoot) {
+      sceneryRoot = new BABYLON.TransformNode('Scenery', gfx.scene);
+    }
     const container = new BABYLON.TransformNode(`instContainer_${Date.now()}`, gfx.scene);
+    container.parent = sceneryRoot;
     
     // Get the master root's world matrix inverse to compute relative transforms
     // This accounts for the master being positioned at (0, -1000, 0)
@@ -823,18 +882,56 @@
     }
   }
 
+  // Static chunk scenery: only re-yaw billboards past ~20° (less busy). Buildings/units: always face camera.
+  const BILLBOARD_ROTATE_THRESHOLD = 0.35;
+  // When camera is nearly over the billboard on XZ, atan2 jumps wildly — hold last yaw until you orbit out.
+  const BILLBOARD_MIN_HORIZONTAL_DIST_SQ = 8 * 8;
+
+  function applyBillboardYawTowardCameraXZ(bb, camX, camZ) {
+    if (!bb || !bb.position) return;
+    const dx = camX - bb.position.x;
+    const dz = camZ - bb.position.z;
+    if (dx * dx + dz * dz < BILLBOARD_MIN_HORIZONTAL_DIST_SQ) return;
+    bb.rotation.y = Math.atan2(dx, dz) + Math.PI;
+  }
+
+  gfx.applyBillboardYawTowardCameraXZ = applyBillboardYawTowardCameraXZ;
+
+  function orientLodBillboardRotation(lod, camX, camZ) {
+    if (!lod || !lod.billboard) return;
+    const bb = lod.billboard;
+    if (lod.isStatic && lod.chunkKey) {
+      const dx = camX - bb.position.x;
+      const dz = camZ - bb.position.z;
+      if (dx * dx + dz * dz < BILLBOARD_MIN_HORIZONTAL_DIST_SQ) return;
+      const targetAngle = Math.atan2(dx, dz) + Math.PI;
+      const cur = bb.rotation.y;
+      let delta = targetAngle - cur;
+      if (delta > Math.PI) delta -= 2 * Math.PI;
+      if (delta < -Math.PI) delta += 2 * Math.PI;
+      if (Math.abs(delta) > BILLBOARD_ROTATE_THRESHOLD) {
+        bb.rotation.y = targetAngle;
+      }
+    } else {
+      applyBillboardYawTowardCameraXZ(bb, camX, camZ);
+    }
+  }
+
   // Add LOD billboard for distant viewing
   function addLODBillboard(model, scene, modelRule, cameraPosition, chunkKey = null) {
     let billboard = null;
-    let lodType = 'billboard'; // default behavior
+    const lodType = modelRule.lodType === 'agora-flag' ? 'agora-flag' : 'billboard';
     const modelPath = modelRule.path;
     const customLodDistance = modelRule.lodDistance || LOD_DISTANCE;
     
-    // Use instanced billboard system for all models
-    const scale = modelRule.billboardScale || 1;
-    
-    billboard = getBillboardInstance(modelPath, model.root.position, scale, scene);
-    billboard.setEnabled(false); // Start with billboard disabled
+    if (lodType === 'billboard') {
+      const scale = modelRule.billboardScale || 1;
+      billboard = getBillboardInstance(modelPath, model.root.position, scale, scene);
+      if (modelRule.billboardYOffset) {
+        billboard.position.y += modelRule.billboardYOffset;
+      }
+      billboard.setEnabled(false);
+    }
     
     // Store for manual LOD management
     // Determine decoration type from model path
@@ -850,6 +947,7 @@
       model: model.root,
       billboard: billboard,
       lodType: lodType,
+      buildingRef: modelRule.buildingRef || null,
       decorType: decorType, // 'tree', 'rock', or 'decoration'
       modelPath: modelPath,
       modelRule: modelRule, // Store for reload
@@ -918,11 +1016,19 @@
     // CRITICAL: Immediately evaluate and set correct initial state
     // This prevents any flash of full detail at far distances
     
-    // PRIORITY 1: Billboard-only mode - ALWAYS show billboard, NEVER show model
+    // PRIORITY 1: Billboard-only mode — billboards, except agora (enlarged flag only)
     if (BILLBOARD_ONLY_MODE) {
-      model.root.setEnabled(false);
-      billboard.setEnabled(true);
-      return; // Skip all distance calculations
+      if (lastLod.lodType === 'agora-flag') {
+        model.root.setEnabled(true);
+        applyAgoraFlagLodState(model.root, lastLod.buildingRef, true);
+      } else {
+        model.root.setEnabled(false);
+        if (billboard) {
+          billboard.setEnabled(true);
+          if (cameraPosition) orientLodBillboardRotation(lastLod, cameraPosition.x, cameraPosition.z);
+        }
+      }
+      return;
     }
     
     // PRIORITY 2: Distance-based LOD (only when NOT in billboard-only mode)
@@ -936,22 +1042,33 @@
       const cullDistanceSquared = lastLod.cullDistance * lastLod.cullDistance;
       
       if (distanceSquared > cullDistanceSquared) {
-        // Very far - cull everything
         model.root.setEnabled(false);
-        billboard.setEnabled(false);
+        if (billboard) billboard.setEnabled(false);
+      } else if (lastLod.lodType === 'agora-flag') {
+        const far = distanceSquared > lodDistanceSquared;
+        if (far) {
+          applyAgoraFlagLodState(model.root, lastLod.buildingRef, true);
+        } else {
+          applyAgoraFlagLodState(model.root, lastLod.buildingRef, false);
+        }
       } else if (distanceSquared > lodDistanceSquared) {
-        // Medium distance - show billboard only
         model.root.setEnabled(false);
-        billboard.setEnabled(true);
+        if (billboard) {
+          billboard.setEnabled(true);
+          orientLodBillboardRotation(lastLod, cameraPosition.x, cameraPosition.z);
+        }
       } else {
-        // Close - show full model
         model.root.setEnabled(true);
-        billboard.setEnabled(false);
+        if (billboard) billboard.setEnabled(false);
       }
     } else {
-      // No camera position provided - default to disabled until LOD system updates
-      model.root.setEnabled(false);
-      billboard.setEnabled(false);
+      if (lastLod.lodType === 'agora-flag') {
+        model.root.setEnabled(true);
+        applyAgoraFlagLodState(model.root, lastLod.buildingRef, false);
+      } else {
+        model.root.setEnabled(false);
+        if (billboard) billboard.setEnabled(false);
+      }
     }
   }
 
@@ -1033,25 +1150,35 @@
         }
         
       } else if (BILLBOARD_ONLY_MODE) {
-        // Billboard-only mode - never show 3D models, always billboards
-        lod.model.setEnabled(false);
-        if (lod.billboard) {
-          lod.billboard.setEnabled(true);
+        if (lod.lodType === 'agora-flag') {
+          applyAgoraFlagLodState(lod.model, lod.buildingRef, true);
+        } else {
+          lod.model.setEnabled(false);
+          if (lod.billboard) {
+            lod.billboard.setEnabled(true);
+            orientLodBillboardRotation(lod, camX, camZ);
+          }
         }
         
       } else if (distanceSquared > lodDistanceSquared) {
-        // Medium distance - show billboard, hide model
-        lod.model.setEnabled(false);
-        
-        if (lod.lodType === 'billboard' && lod.billboard) {
-          lod.billboard.setEnabled(true);
+        if (lod.lodType === 'agora-flag') {
+          applyAgoraFlagLodState(lod.model, lod.buildingRef, true);
+        } else {
+          lod.model.setEnabled(false);
+          if (lod.lodType === 'billboard' && lod.billboard) {
+            lod.billboard.setEnabled(true);
+            orientLodBillboardRotation(lod, camX, camZ);
+          }
         }
         
       } else {
-        // Close up - show model, hide billboard
-        lod.model.setEnabled(true);
-        if (lod.billboard) {
-          lod.billboard.setEnabled(false);
+        if (lod.lodType === 'agora-flag') {
+          applyAgoraFlagLodState(lod.model, lod.buildingRef, false);
+        } else {
+          lod.model.setEnabled(true);
+          if (lod.billboard) {
+            lod.billboard.setEnabled(false);
+          }
         }
       }
     });
@@ -1059,6 +1186,7 @@
   
   // Expose updateLOD for immediate updates (e.g., when camera teleports)
   gfx.forceUpdateLOD = function(cameraPosition) {
+    lodFrameCounter = LOD_UPDATE_INTERVAL - 1; // bypass throttle for this call
     updateLOD(cameraPosition);
   };
 
@@ -1069,9 +1197,19 @@
   gfx.removeModelFromLOD = function(modelRoot) {
     removeModelFromLOD(modelRoot);
   };
-  gfx.getBillboardInstance = function(modelPath, position, scale, scene) {
+  gfx.getBillboardInstance = function(modelPath, position, scale, scene, options) {
     initBillboardAtlas(scene);
-    return getBillboardInstance(modelPath, position, scale, scene);
+    return getBillboardInstance(modelPath, position, scale, scene, options);
+  };
+
+  gfx.syncUnitBillboardPositionFromMesh = function(billboard, meshPosition) {
+    if (!billboard || !meshPosition) return;
+    billboard.position.x = meshPosition.x;
+    billboard.position.z = meshPosition.z;
+    billboard.position.y = meshPosition.y;
+    if (billboard.metadata && billboard.metadata.groundUnitBillboard) {
+      billboard.position.y += BILLBOARD_PLANE_HALF_HEIGHT * billboard.scaling.y;
+    }
   };
   gfx.returnBillboardInstance = function(instance) {
     returnBillboardInstance(instance);
@@ -1326,11 +1464,46 @@
     // loadingLODCurrent = 0; // DON'T RESET - preserve menu LOD setting!
     isProcessingQueue = false;
     
+    // Clear billboard instance pools (stale references to disposed meshes)
+    billboardInstancePools.forEach((pool, key) => {
+      pool.forEach(inst => {
+        if (inst && !inst.isDisposed() && inst.dispose) inst.dispose();
+      });
+    });
+    billboardInstancePools.clear();
+
+    // Dispose scenery and billboard root nodes so containers don't linger
+    if (sceneryRoot && !sceneryRoot.isDisposed()) {
+      sceneryRoot.dispose();
+      sceneryRoot = null;
+    }
+    if (billboardRoot && !billboardRoot.isDisposed()) {
+      billboardRoot.dispose();
+      billboardRoot = null;
+    }
+
+    // Dispose dynamic table parts from custom map shapes
+    if (gfx._dynamicTableParts) {
+      gfx._dynamicTableParts.forEach(m => {
+        if (m && m.dispose) m.dispose();
+      });
+      gfx._dynamicTableParts = [];
+    }
+    if (terrainRoot && !terrainRoot.isDisposed()) {
+      terrainRoot.dispose();
+      terrainRoot = null;
+    }
+
+    // Restore static table visibility (rebuildTableFromChunkMask hides them)
+    if (gfx.table && gfx.table.parts) {
+      Object.values(gfx.table.parts).forEach(part => {
+        if (part && part.mesh) part.mesh.isVisible = true;
+      });
+    }
+
     // Clear any pending model loads and chunk queue
     modelLoadQueue.length = 0;
     chunkQueue.length = 0;
-    
-    // console.log(`✅ LOD system fully reset - all models disposed`);
     
     // Re-apply shadow mode and reconfigure shadow generator after a delay
     // This ensures new models get the correct shadow treatment
@@ -2052,6 +2225,152 @@ let pov2 = 240;
     }
   };
   
+  function primeFieldResourcePathing(field) {
+    if (!field || field.noAutoResources || field._resourcePathingPrimed) {
+      return;
+    }
+
+    const fieldSeed = field.seed || 12345;
+
+    function tileHash(x, y, seed) {
+      let hash = seed;
+      hash = hash ^ (x * 374761393);
+      hash = hash ^ (y * 668265263);
+      hash = (hash ^ (hash >>> 16)) * 0x85ebca6b;
+      hash = (hash ^ (hash >>> 13)) * 0xc2b2ae35;
+      hash = hash ^ (hash >>> 16);
+      return Math.abs(hash >>> 0) / 4294967296;
+    }
+
+    function getFootprintRadius(scale) {
+      if (scale >= 10) return 2;
+      if (scale >= 6) return 1;
+      return 0;
+    }
+
+    const chunkEntries = [];
+    const chunksX = Math.ceil(field.width / field.chunkSize);
+    const chunksZ = Math.ceil(field.height / field.chunkSize);
+    for (let chunkX = 0; chunkX < chunksX; chunkX++) {
+      for (let chunkZ = 0; chunkZ < chunksZ; chunkZ++) {
+        const chunkKey = `${chunkX},${chunkZ}`;
+        if (field.chunkMask && field.chunkMask.get(chunkKey) === false) {
+          continue;
+        }
+        const chunk = typeof field.getChunk === 'function'
+          ? field.getChunk(chunkX, chunkZ)
+          : field.chunks.get(chunkKey);
+        if (chunk) {
+          chunkEntries.push(chunk);
+        }
+      }
+    }
+
+    chunkEntries.forEach(chunk => {
+      const occupiedTiles = new Set();
+
+      function isFootprintOccupied(gridX, gridZ, radius) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          for (let dz = -radius; dz <= radius; dz++) {
+            if (Math.sqrt(dx * dx + dz * dz) <= radius + 0.5) {
+              if (occupiedTiles.has(`${gridX + dx},${gridZ + dz}`)) return true;
+            }
+          }
+        }
+        return false;
+      }
+
+      function markFootprintOccupied(gridX, gridZ, radius) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          for (let dz = -radius; dz <= radius; dz++) {
+            if (Math.sqrt(dx * dx + dz * dz) <= radius + 0.5) {
+              occupiedTiles.add(`${gridX + dx},${gridZ + dz}`);
+            }
+          }
+        }
+      }
+
+      chunk.tiles.forEach((tile, index) => {
+        const localX = index % (chunk.endX - chunk.startX);
+        const localZ = Math.floor(index / (chunk.endX - chunk.startX));
+        const gridX = chunk.startX + localX;
+        const gridZ = chunk.startZ + localZ;
+
+        if (gridX < 0 || gridX >= field.width || gridZ < 0 || gridZ >= field.height) return;
+
+        if (field.chunkMask && field.chunkSize) {
+          const chunkX = Math.floor(gridX / field.chunkSize);
+          const chunkZ = Math.floor(gridZ / field.chunkSize);
+          if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
+        }
+
+        if (field.isInSpawnZone && field.isInSpawnZone(gridX, gridZ)) return;
+
+        const terrainIndex = gridZ * field.width + gridX;
+        const terrainType = field.terrainTypes[terrainIndex];
+        if (terrainType !== 2) return;
+
+        const tileKey = `${gridX},${gridZ}`;
+        if (depletedResourceTiles.has(tileKey)) return;
+
+        const rockRoll = tileHash(gridX, gridZ, fieldSeed + 1000);
+        if (rockRoll >= 0.03) return;
+
+        const regionX = Math.floor(gridX / 5);
+        const regionZ = Math.floor(gridZ / 5);
+        const sizeRoll = tileHash(regionX, regionZ, fieldSeed + 2000);
+        const scale = sizeRoll < 0.3 ? 3.0 : (sizeRoll < 0.7 ? 7.5 : 11.5);
+        const footprintRadius = getFootprintRadius(scale);
+
+        if (isFootprintOccupied(gridX, gridZ, footprintRadius)) return;
+
+        markFootprintOccupied(gridX, gridZ, footprintRadius);
+        if (field.blockFootprint) {
+          field.blockFootprint(gridX, gridZ, footprintRadius);
+        }
+      });
+
+      chunk.tiles.forEach((tile, index) => {
+        const localX = index % (chunk.endX - chunk.startX);
+        const localZ = Math.floor(index / (chunk.endX - chunk.startX));
+        const gridX = chunk.startX + localX;
+        const gridZ = chunk.startZ + localZ;
+
+        if (gridX < 0 || gridX >= field.width || gridZ < 0 || gridZ >= field.height) return;
+
+        if (field.chunkMask && field.chunkSize) {
+          const chunkX = Math.floor(gridX / field.chunkSize);
+          const chunkZ = Math.floor(gridZ / field.chunkSize);
+          if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
+        }
+
+        if (field.isInSpawnZone && field.isInSpawnZone(gridX, gridZ)) return;
+
+        const terrainIndex = gridZ * field.width + gridX;
+        const terrainType = field.terrainTypes[terrainIndex];
+        if (terrainType !== 3 && terrainType !== 2) return;
+
+        const tileKey = `${gridX},${gridZ}`;
+        if (occupiedTiles.has(tileKey) || depletedResourceTiles.has(tileKey)) return;
+
+        const treeSpawnRate = terrainType === 3 ? 0.20 : 0.05;
+        const treeRoll = tileHash(gridX, gridZ, fieldSeed + 3000);
+        if (treeRoll >= treeSpawnRate) return;
+
+        occupiedTiles.add(tileKey);
+        if (field.slowTile) {
+          field.slowTile(gridX, gridZ);
+        }
+      });
+    });
+
+    field._resourcePathingPrimed = true;
+  }
+
+  gfx.primeFieldResourcePathing = function(field = window.liveField) {
+    primeFieldResourcePathing(field);
+  };
+
   // NEW: Decoration pass system - places models using noise-based clustering
   function placeDecorationsOnChunk(chunk, scene) {
     // console.log(`🎯 placeDecorationsOnChunk called for chunk (${chunk.chunkX},${chunk.chunkZ})`);
@@ -3471,37 +3790,42 @@ let pov2 = 240;
           frameCounter: 0
         };
       }
-      
-      // Calculate delta time
-      const currentTime = performance.now();
-      const deltaTime = Math.min((currentTime - gfx.menuGameLoop.lastTime) / 1000, 0.1); // Cap at 100ms
-      gfx.menuGameLoop.lastTime = currentTime;
-      gfx.menuGameLoop.frameCounter++;
-      
-      // Make frame counter globally available
-      window.frameCounter = gfx.menuGameLoop.frameCounter;
-      
-      // Accumulate time for physics
-      gfx.menuGameLoop.physicsTime += deltaTime;
-      
-      // Run physics at fixed timestep (60Hz)
-      const maxPhysicsSteps = 10; // Cap steps per frame
-      let physicsSteps = 0;
-      while (gfx.menuGameLoop.physicsTime >= gfx.menuGameLoop.physicsTimestep && physicsSteps < maxPhysicsSteps) {
-        physicsSteps++;
+
+      if (window.hiddenTabController?.isMenuSuspended?.()) {
+        gfx.menuGameLoop.physicsTime = 0;
+        gfx.menuGameLoop.lastTime = performance.now();
+      } else {
+        // Calculate delta time
+        const currentTime = performance.now();
+        const deltaTime = Math.min((currentTime - gfx.menuGameLoop.lastTime) / 1000, 0.1); // Cap at 100ms
+        gfx.menuGameLoop.lastTime = currentTime;
+        gfx.menuGameLoop.frameCounter++;
         
-        // Update units and their behaviors (this applies impulses)
-        if (window.updateUnits) {
-          window.updateUnits(gfx.menuGameLoop.physicsTimestep);
+        // Make frame counter globally available
+        window.frameCounter = gfx.menuGameLoop.frameCounter;
+        
+        // Accumulate time for physics
+        gfx.menuGameLoop.physicsTime += deltaTime;
+        
+        // Run physics at fixed timestep (60Hz)
+        const maxPhysicsSteps = 10; // Cap steps per frame
+        let physicsSteps = 0;
+        while (gfx.menuGameLoop.physicsTime >= gfx.menuGameLoop.physicsTimestep && physicsSteps < maxPhysicsSteps) {
+          physicsSteps++;
+          
+          // Update units and their behaviors (this applies impulses)
+          if (window.updateUnits) {
+            window.updateUnits(gfx.menuGameLoop.physicsTimestep);
+          }
+          
+          // Update player physics (cosmetic frog movement)
+          if (window.player && window.player.pbody && window.player.pbody.integrate) {
+            window.player.pbody.integrate(gfx.menuGameLoop.physicsTimestep, true, true);
+          }
+          
+          // Step physics time forward
+          gfx.menuGameLoop.physicsTime -= gfx.menuGameLoop.physicsTimestep;
         }
-        
-        // Update player physics (cosmetic frog movement)
-        if (window.player && window.player.pbody && window.player.pbody.integrate) {
-          window.player.pbody.integrate(gfx.menuGameLoop.physicsTimestep, true, true);
-        }
-        
-        // Step physics time forward
-        gfx.menuGameLoop.physicsTime -= gfx.menuGameLoop.physicsTimestep;
       }
     } else {
       // Game/match is active - clear menu loop state
@@ -4927,7 +5251,9 @@ let pov2 = 240;
       });
     }
     gfx._dynamicTableParts = [];
-    
+    if (terrainRoot && !terrainRoot.isDisposed()) terrainRoot.dispose();
+    terrainRoot = new BABYLON.TransformNode('Terrain', gfx.scene);
+
     // Hide the original static table parts
     const table = gfx.table;
     if (table && table.parts) {
@@ -5026,6 +5352,7 @@ let pov2 = 240;
           break;
       }
       
+      mesh.parent = terrainRoot;
       gfx._dynamicTableParts.push(mesh);
     });
     
@@ -5047,6 +5374,7 @@ let pov2 = 240;
       if (corner.corner.includes('N')) pz += chunkWorldSize;
       
       mesh.position.set(px, cornerY, pz);
+      mesh.parent = terrainRoot;
       gfx._dynamicTableParts.push(mesh);
     });
     
@@ -5063,6 +5391,7 @@ let pov2 = 240;
         if (floorMat) floor.material = floorMat;
         floor.position.set(worldX + chunkWorldSize / 2, -0.777, worldZ + chunkWorldSize / 2);
         floor.scaling.set(chunkWorldSize, 0.4, chunkWorldSize);
+        floor.parent = terrainRoot;
         
         gfx._dynamicTableParts.push(floor);
       }
@@ -5182,8 +5511,8 @@ let pov2 = 240;
     const fieldCenterZ = actualFieldHeight / 2;
     
     // One large plane with lower resolution
-    const mountainSize = Math.max(actualFieldWidth, actualFieldHeight) * 6; // Large plane
-    const subdivisions = 32; // Keep poly count modest
+    const mountainSize = Math.max(actualFieldWidth, actualFieldHeight) * 6;
+    const subdivisions = 64;
     
     // console.log(`🏔️ Mountain vista params: field=${actualFieldWidth}x${actualFieldHeight}, plane size=${mountainSize}`);
     
@@ -5208,67 +5537,133 @@ let pov2 = 240;
     // Seed for consistent noise
     const seed = window.liveField ? window.liveField.seed : 42;
     
-    // Simple terrain: flat at center, increasing randomness and height outward
+    // Vertex spacing ≈ mountainSize / subdivisions.
+    // All noise frequencies must stay well below Nyquist (period > 2× spacing).
+    const vertSpacing = mountainSize / subdivisions;
+    const maxFreq = Math.PI / vertSpacing; // Nyquist limit
+    // Use ~25% of Nyquist for the finest octave to stay smooth
+    const f0 = maxFreq * 0.08; // broad rolling terrain
+    const f1 = maxFreq * 0.16; // medium ridges
+    const f2 = maxFreq * 0.25; // fine detail (still safe)
+
     for (let i = 0; i < numVertices; i++) {
-      let x = positions[i * 3];
-      let z = positions[i * 3 + 2];
-      
-      // Distance from field center
+      const x = positions[i * 3];
+      const z = positions[i * 3 + 2];
+
       const distFromCenter = Math.sqrt((x - fieldCenterX) ** 2 + (z - fieldCenterZ) ** 2);
       const maxDist = mountainSize / 2;
       const normalizedDist = Math.min(1, distFromCenter / maxDist);
-      const distanceCurve = Math.pow(normalizedDist, 0.85); // Slightly stronger central presence
-      
-      let height = 0;
-      
-      // Only add height if not in the center
-      // Base height keeps some relief near center, grows outward
-      const baseHeight = (0.25 + distanceCurve * 0.75) * 140; // Lower amplitude to keep below table
-      
-      // Random noise - always present, stronger outward
-      const noiseStrength = 0.6 + distanceCurve * 1.0; // Some variation even in center
-      let hashX = Math.floor(x);
-      let hashZ = Math.floor(z);
-      let hash = seed;
-      hash = ((hash << 13) ^ hash) >>> 0;
-      hash = ((hash * (hash * hash * 15731 + 789221) + 1376312589 + hashX * 73856093 + hashZ * 19349663) & 0xffffffff) >>> 0;
-      const randomNoise = (Math.sin(hash * 0.5) + Math.sin(hash * 0.1) * 0.5) * noiseStrength * 60;
-      
-      // High-frequency jagged component for sharper peaks
-      const jagged = (Math.abs(Math.sin(x * 0.08 + z * 0.06 + seed * 0.2)) - 0.5) * noiseStrength * 40;
-      
-      // Cross-axis ridges for more isotropic relief (avoid one-direction waves)
-      const ridge = (Math.sin(x * 0.014 + seed * 0.1) + Math.sin(z * 0.014 + seed * 0.13)) * distanceCurve * 32;
-      
-      // Add small high-frequency jitter that is not distance-weighted to break flat rims
-      const jitter = (Math.sin(x * 0.21 + seed * 0.7) + Math.sin(z * 0.23 + seed * 0.9)) * 12;
-      
-      height = baseHeight + randomNoise + jagged + ridge + jitter;
-      
-      // Cap to avoid intersecting the table plane (looser cap to preserve edge relief)
+      const distanceCurve = Math.pow(normalizedDist, 0.85);
+
+      // Base height ramps up away from the play area
+      const baseHeight = (0.15 + distanceCurve * 0.85) * 130;
+
+      // Octave 1 — broad rolling shapes (largest amplitude)
+      const o1 = (Math.sin(x * f0 + seed * 1.3) * Math.cos(z * f0 * 0.9 + seed * 0.7)
+                + Math.sin(z * f0 * 1.1 + seed * 2.1)) * 55 * distanceCurve;
+
+      // Octave 2 — medium ridges
+      const o2 = (Math.sin(x * f1 + z * f1 * 0.6 + seed * 3.7)
+                + Math.cos(z * f1 * 1.2 - x * f1 * 0.4 + seed * 0.9)) * 25 * distanceCurve;
+
+      // Octave 3 — fine craggy detail
+      const o3 = Math.sin(x * f2 * 1.1 + seed * 5.3)
+               * Math.sin(z * f2 * 0.9 + seed * 4.1) * 15 * distanceCurve;
+
+      let height = baseHeight + o1 + o2 + o3;
       height = Math.min(height, 170);
-      
       positions[i * 3 + 1] = height;
     }
     
-    // Apply positions and recalculate normals for proper lighting
     mountainGround.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
-    mountainGround.createNormals(false); // Recalculate normals for proper lighting
-    
-    // Dark phthalo green material - much darker
+    const normals = [];
+    BABYLON.VertexData.ComputeNormals(positions, mountainGround.getIndices(), normals);
+    mountainGround.setVerticesData(BABYLON.VertexBuffer.NormalKind, normals);
+
+    // Vertex colors: deep ocean tones varying by height and position
+    const colors = new Float32Array(numVertices * 4);
+    let minH = Infinity, maxH = -Infinity;
+    for (let i = 0; i < numVertices; i++) {
+      const h = positions[i * 3 + 1];
+      if (h < minH) minH = h;
+      if (h > maxH) maxH = h;
+    }
+    const hRange = maxH - minH || 1;
+
+    for (let i = 0; i < numVertices; i++) {
+      const x = positions[i * 3];
+      const z = positions[i * 3 + 2];
+      const h = positions[i * 3 + 1];
+      const t = (h - minH) / hRange; // 0 = deepest, 1 = peak
+
+      // Positional variation (cheap trig noise, two octaves)
+      const nx = Math.sin(x * 0.013 + seed * 0.7) * Math.cos(z * 0.011 + seed * 1.3);
+      const nz = Math.sin(z * 0.017 + seed * 2.1) * Math.cos(x * 0.009 + seed * 0.3);
+      const n2 = Math.sin(x * 0.031 + z * 0.027 + seed * 4.4) * 0.4;
+      const noise = (nx + nz) * 0.35 + n2 * 0.3; // -1..1
+
+      // Phthalo green base: dark (0.05, 0.08, 0.1) valleys → slightly lighter peaks
+      const r = 0.03 + t * 0.05 + noise * 0.015;
+      const g = 0.05 + t * 0.08 + noise * 0.02;
+      const b = 0.06 + t * 0.09 + noise * 0.025;
+
+      colors[i * 4]     = Math.max(0, Math.min(1, r));
+      colors[i * 4 + 1] = Math.max(0, Math.min(1, g));
+      colors[i * 4 + 2] = Math.max(0, Math.min(1, b));
+      colors[i * 4 + 3] = 1.0;
+    }
+    mountainGround.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+
+    // Procedural caustic texture (baked once on a canvas, then uploaded to GPU)
+    const texSize = 256;
+    const causticCanvas = document.createElement('canvas');
+    causticCanvas.width = texSize;
+    causticCanvas.height = texSize;
+    const ctx = causticCanvas.getContext('2d');
+    const imgData = ctx.createImageData(texSize, texSize);
+    const px = imgData.data;
+
+    for (let py = 0; py < texSize; py++) {
+      for (let px2 = 0; px2 < texSize; px2++) {
+        const u = px2 / texSize * Math.PI * 2;
+        const v = py / texSize * Math.PI * 2;
+        // Tileable caustic: all trig wraps perfectly at 2*PI boundaries
+        const c1 = Math.sin(u * 3 + Math.cos(v * 2)) * Math.cos(v * 3 + Math.sin(u * 2));
+        const c2 = Math.sin(u * 5 - v * 3) * Math.cos(v * 4 + u * 2);
+        const c3 = Math.sin(u * 7 + v * 5) * 0.5;
+        const caustic = (c1 + c2 * 0.6 + c3 * 0.3) * 0.5 + 0.5; // 0..1
+        const bright = 0.35 + caustic * 0.65; // 0.35..1.0
+
+        const idx = (py * texSize + px2) * 4;
+        px[idx]     = Math.floor(bright * 16);  // R: phthalo green
+        px[idx + 1] = Math.floor(bright * 26);  // G
+        px[idx + 2] = Math.floor(bright * 32);  // B
+        px[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    const causticTexture = new BABYLON.DynamicTexture("mountainCaustic", {width: texSize, height: texSize}, scene, false);
+    const dynCtx = causticTexture.getContext();
+    dynCtx.drawImage(causticCanvas, 0, 0);
+    causticTexture.update();
+    causticTexture.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+    causticTexture.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+    const tileRepeat = 40;
+    causticTexture.uScale = tileRepeat;
+    causticTexture.vScale = tileRepeat;
+
     const mat = new BABYLON.StandardMaterial("mountainVistaMat", scene);
-    mat.diffuseColor = new BABYLON.Color3(0.05, 0.08, 0.1); // Very dark phthalo green
-    mat.specularColor = new BABYLON.Color3(0.03, 0.05, 0.06); // Very low specularity
-    mat.ambientColor = new BABYLON.Color3(0.1, 0.13, 0.15); // Dark ambient
+    mat.diffuseTexture = causticTexture;
+    mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+    mat.emissiveColor = new BABYLON.Color3(0.02, 0.03, 0.04);
+    mat.specularColor = new BABYLON.Color3(0.03, 0.05, 0.06);
+    mat.specularPower = 96;
+    mat.ambientColor = new BABYLON.Color3(0.1, 0.13, 0.15);
     mat.alpha = 1.0;
     mat.backFaceCulling = false;
     mat.depthWrite = true;
 
-    // No texture - solid color
-    mat.diffuseTexture = null;
-
-    // console.log('🏔️ Mountain material created - grey with progressive randomness');
-    
     mountainGround.material = mat;
     
     // Render in background group
@@ -5308,36 +5703,101 @@ let pov2 = 240;
     gfx.horizon = null;
   };
   
-  // Create a subtle horizon line/band to show where distant mountains meet sky
   function createHorizon(scene, centerX, centerZ, mountainSize) {
-    // console.log('🌅 Creating horizon line for distant vista');
-    
-    // Create a large thin plane at a height between camera and mountains
-    // This creates a visual "line" at the horizon
     const horizonSize = mountainSize * 1.5;
-    const horizonPlane = BABYLON.MeshBuilder.CreateGround("horizon", 
-      {width: horizonSize, height: horizonSize, subdivisions: 4}, scene);
-    
-    // Position at a mid-distance - creates the horizon "line" effect
+    const subs = 32;
+    const horizonPlane = BABYLON.MeshBuilder.CreateGround("horizon",
+      {width: horizonSize, height: horizonSize, subdivisions: subs}, scene);
+
     horizonPlane.position.x = centerX;
     horizonPlane.position.z = centerZ;
-    horizonPlane.position.y = 100; // World height for mist band
-    
-    // Create horizon material - dark solid band
+    horizonPlane.position.y = 100;
+
+    // Vertex colors: depth gradient from center (dark deep) to edges (lighter shallows)
+    const positions = horizonPlane.getVerticesData(BABYLON.VertexBuffer.PositionKind);
+    const numVerts = positions.length / 3;
+    const colors = new Float32Array(numVerts * 4);
+    const halfSize = horizonSize / 2;
+    const seed = window.liveField ? window.liveField.seed : 42;
+
+    for (let i = 0; i < numVerts; i++) {
+      const x = positions[i * 3];
+      const z = positions[i * 3 + 2];
+      const dist = Math.sqrt(x * x + z * z) / halfSize; // 0 center, 1 edge
+      const t = Math.min(1, dist);
+
+      const n1 = Math.sin(x * 0.008 + seed * 0.7) * Math.cos(z * 0.006 + seed * 1.3);
+      const n2 = Math.sin(z * 0.01 + seed * 2.1) * Math.cos(x * 0.007 + seed * 0.3);
+      const noise = (n1 + n2) * 0.3;
+
+      colors[i * 4]     = Math.max(0, Math.min(1, 0.55 + t * 0.20 + noise * 0.04));  // R: cool mist
+      colors[i * 4 + 1] = Math.max(0, Math.min(1, 0.62 + t * 0.20 + noise * 0.05));  // G
+      colors[i * 4 + 2] = Math.max(0, Math.min(1, 0.72 + t * 0.18 + noise * 0.05));  // B
+      colors[i * 4 + 3] = 1.0;
+    }
+    horizonPlane.setVerticesData(BABYLON.VertexBuffer.ColorKind, colors);
+
+    // Procedural caustic texture (same approach as mountain, baked once)
+    const texSize = 256;
+    const causticCanvas = document.createElement('canvas');
+    causticCanvas.width = texSize;
+    causticCanvas.height = texSize;
+    const ctx = causticCanvas.getContext('2d');
+    const imgData = ctx.createImageData(texSize, texSize);
+    const px = imgData.data;
+
+    for (let py = 0; py < texSize; py++) {
+      for (let px2 = 0; px2 < texSize; px2++) {
+        const u = px2 / texSize * Math.PI * 2;
+        const v = py / texSize * Math.PI * 2;
+        const c1 = Math.sin(u * 3 + Math.cos(v * 2)) * Math.cos(v * 3 + Math.sin(u * 2));
+        const c2 = Math.sin(u * 5 - v * 3) * Math.cos(v * 4 + u * 2);
+        const c3 = Math.sin(u * 7 + v * 5) * 0.5;
+        const caustic = (c1 + c2 * 0.6 + c3 * 0.3) * 0.5 + 0.5;
+        const bright = 0.4 + caustic * 0.6;
+
+        const idx = (py * texSize + px2) * 4;
+        px[idx]     = Math.floor(bright * 170);  // R: cool mist base
+        px[idx + 1] = Math.floor(bright * 190);  // G
+        px[idx + 2] = Math.floor(bright * 215);  // B
+        px[idx + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+
+    const causticTex = new BABYLON.DynamicTexture("horizonCaustic", {width: texSize, height: texSize}, scene, false);
+    const dynCtx = causticTex.getContext();
+    dynCtx.drawImage(causticCanvas, 0, 0);
+    causticTex.update();
+    causticTex.wrapU = BABYLON.Texture.WRAP_ADDRESSMODE;
+    causticTex.wrapV = BABYLON.Texture.WRAP_ADDRESSMODE;
+    causticTex.uScale = 12;
+    causticTex.vScale = 12;
+
     const horizonMat = new BABYLON.StandardMaterial("horizonMat", scene);
-    horizonMat.diffuseColor = new BABYLON.Color3(0.75, 0.82, 0.9); // Cool mist tint
-    horizonMat.emissiveColor = new BABYLON.Color3(0.35, 0.45, 0.55); // Glow to read as haze
-    horizonMat.alpha = 1.0; // Opaque band (no transparency)
+    horizonMat.diffuseTexture = causticTex;
+    horizonMat.diffuseColor = new BABYLON.Color3(1, 1, 1);
+    horizonMat.emissiveColor = new BABYLON.Color3(0.35, 0.45, 0.55);
+    horizonMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.12);
+    horizonMat.specularPower = 64;
+    horizonMat.disableLighting = true;
+    horizonMat.alpha = 1.0;
     horizonMat.backFaceCulling = false;
-    horizonMat.disableLighting = true; // Keep color consistent as a fog bank
-    horizonMat.depthWrite = true; // Opaque draw, relies on color/lighting instead of alpha
-    
+    horizonMat.depthWrite = true;
+
     horizonPlane.material = horizonMat;
-    horizonPlane.renderingGroupId = 0; // Render with background
+    horizonPlane.renderingGroupId = 0;
     horizonPlane.isPickable = false;
-    horizonPlane.isVisible = true; // Make the horizon band visible
-    
-    // console.log('🌅 Horizon line created - enhances sense of vast distance');
+    horizonPlane.isVisible = true;
+
+    scene.registerBeforeRender(function() {
+      if (causticTex && !horizonPlane.isDisposed()) {
+        const t = performance.now() * 0.001;
+        causticTex.uOffset = Math.sin(t * 0.4) * 0.05;
+        causticTex.vOffset = Math.cos(t * 0.3) * 0.04;
+      }
+    });
+
     return horizonPlane;
   }
 

@@ -87,6 +87,32 @@ function addBuildingParticleEffects(building) {
   }
 }
 
+// Derive billboard scale and Y offset from a building's world-space bounding box
+// so the LOD sprite matches the 3D model's visual footprint.
+// Returns { scale, yOffset } — yOffset anchors the billboard bottom to the model's ground.
+function computeBuildingBillboardScale(building) {
+  const BILLBOARD_BASE_HEIGHT = 3.0; // master billboard plane is 3 units tall
+  const FIT_FACTOR = 0.75; // shrink slightly so billboard doesn't overshoot the 3D model
+  if (building.mesh) {
+    try {
+      const bounds = building.mesh.getHierarchyBoundingVectors(true);
+      const height = bounds.max.y - bounds.min.y;
+      const width  = Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z);
+      const extent = Math.max(height, width);
+      if (extent > 0) {
+        const scale = Math.max(1.5, (extent / BILLBOARD_BASE_HEIGHT) * FIT_FACTOR);
+        // yOffset: difference between bounding box bottom and the root position
+        const rootY = building.mesh.position.y;
+        const yOffset = bounds.min.y - rootY;
+        return { scale, yOffset };
+      }
+    } catch (_) { /* fall through */ }
+  }
+  const tileSize = window.TILE_SIZE || 4;
+  const footprint = Math.max(building.size?.width || 2, building.size?.height || 2);
+  return { scale: (footprint * tileSize / BILLBOARD_BASE_HEIGHT) * FIT_FACTOR, yOffset: 0 };
+}
+
 // Building type definitions
 const BuildingTypes = {
   
@@ -220,7 +246,7 @@ const BuildingTypes = {
     workType: "build",
     productionWorkType: "mine",
     productionMaxWorkers: 4,
-    productionWorkRadius: 5,
+    productionWorkRadius: 15,
     workInterval: 12000,
     workOutput: { stone: 3, minerals: 1 },
     description: "Extracts stone and minerals from the earth"
@@ -651,6 +677,7 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
             building.flagMesh.dispose();
             building.flagMesh = null;
           }
+          building.flagRoots = null;
           
           window.gfx.getModel('assets/models/flag.glb', scene).then(flagModel => {
             // Use ALL root nodes from the GLB so nothing is left floating in the scene
@@ -662,14 +689,16 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
             }
             
             const flagScale = 0.6;
+            building.flagBaseScale = flagScale;
+            building.flagRoots = flagNodes;
             
             flagNodes.forEach(node => {
               node.parent = building.mesh;
               node.scaling = new BABYLON.Vector3(flagScale, flagScale, flagScale);
               node.position = new BABYLON.Vector3(0, 0.5, 0);
               node.rotationQuaternion = null;
-              node.rotation.y = 0;
-              // No rotation - use model's default orientation
+              // +90° so banner planes face across the map (toward other bases) instead of tangential to agora facing
+              node.rotation.y = Math.PI / 2;
               // CRITICAL: getModel disables models by default - re-enable
               if (typeof node.setEnabled === 'function') node.setEnabled(true);
             });
@@ -718,6 +747,10 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
             
             // Keep reference for later cleanup
             building.flagMesh = flagRoot;
+            if (window.gfx && window.gfx.forceUpdateLOD) {
+              const camPos = window.gfx.cameraTarget ? window.gfx.cameraTarget.position : window.gfx.camera?.position;
+              if (camPos) window.gfx.forceUpdateLOD(camPos);
+            }
           }).catch(err => {
             console.warn('⚠️ Failed to load agora flag model:', err);
           });
@@ -748,14 +781,23 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
 
         // Pre-completed buildings bypass processBuildingCompletion, so register LOD here
         if (!building.completionProcessed && window.gfx && window.gfx.addLODBillboard) {
-          const billboardScale = Math.max(1.2, (building.scale || 1.0) * 3.0);
           const camPos = window.gfx.cameraTarget ? window.gfx.cameraTarget.position : window.gfx.camera?.position;
-          window.gfx.addLODBillboard(
-            { root: building.mesh },
-            window.gfx.scene,
-            { path: building.model, lodDistance: 175, cullDistance: 500, billboardScale: billboardScale },
-            camPos
-          );
+          if (buildingType === 'agora') {
+            window.gfx.addLODBillboard(
+              { root: building.mesh },
+              window.gfx.scene,
+              { path: building.model, lodDistance: 175, cullDistance: 500, lodType: 'agora-flag', buildingRef: building },
+              camPos
+            );
+          } else {
+            const { scale: bbScale, yOffset: bbYOff } = computeBuildingBillboardScale(building);
+            window.gfx.addLODBillboard(
+              { root: building.mesh },
+              window.gfx.scene,
+              { path: building.model, lodDistance: 175, cullDistance: 500, billboardScale: bbScale, billboardYOffset: bbYOff },
+              camPos
+            );
+          }
         }
       }
     }).catch(err => {
@@ -801,6 +843,7 @@ function initBuildings(scene) {
 // Spawn a villager from a village building
 function spawnVillagerFromVillage(village) {
   if (!village || !village.spawnsVillagers) return;
+  const isAdventureMode = window.currentMatch?.gameType === 'adventure' || window.gameType === 'adventure';
   
   // Check if village has reached max villagers
   if (village.spawnedVillagers >= village.maxVillagers) {
@@ -828,9 +871,18 @@ function spawnVillagerFromVillage(village) {
   // First two villagers are free (founders)
   if (village.spawnedVillagers >= 2) {
     // Check if there's enough food to support new villagers
-    if (window.player && window.player.getResources) {
-      const resources = window.player.getResources();
-      if (!resources.food || resources.food <= 0) {
+    if (!isAdventureMode) {
+      const normalizeOwnerId = (id) => id?.length > 6 ? id.slice(-6) : id;
+      const normalizedVillageOwner = normalizeOwnerId(village.owner);
+      const ownerPlayer = (window.currentMatch?.players || []).find(p => {
+        const playerId = p?.id || p;
+        return normalizeOwnerId(playerId) === normalizedVillageOwner;
+      }) || (normalizeOwnerId(window.player?.id) === normalizedVillageOwner ? window.player : null);
+      const resources = typeof ownerPlayer?.getResources === 'function'
+        ? ownerPlayer.getResources()
+        : ownerPlayer?.resources;
+
+      if (!resources?.food || resources.food <= 0) {
         // No food - double the spawn interval to simulate hardship
         village.lastSpawnTick = currentTick + spawnDelayTicks * 2;
         // console.log("😢 Village has no food - delaying next villager spawn");
@@ -874,27 +926,31 @@ function spawnVillagerFromVillage(village) {
     villager.pb.state.rot.y = deterministicRotation;
   }
   
-  // Add to appropriate unit arrays
-  // CRITICAL: Normalize ALL IDs for comparison (handle both full and shortened IDs)
-  const normalizedVillageOwner = village.owner?.length > 6 ? village.owner.slice(-6) : village.owner;
-  const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
-  const normalizedOpponentId = window.opponent?.id?.length > 6 ? window.opponent.id.slice(-6) : window.opponent?.id;
-  
-  const isPlayerOwned = normalizedVillageOwner === normalizedPlayerId;
-  const isOpponentOwned = normalizedVillageOwner === normalizedOpponentId;
-  
-  if (isPlayerOwned && window.player) {
-    window.player.units.push(villager);
-  } else if (isOpponentOwned && window.opponent) {
-    // This is the opponent's village spawning their villagers - totally normal!
-    window.opponent.units.push(villager);
+  // Add to the owning player's unit array. In co-op adventure there may be more than
+  // one non-local human player, so `window.opponent` is not a reliable source of truth.
+  const normalizeOwnerId = (id) => id?.length > 6 ? id.slice(-6) : id;
+  const normalizedVillageOwner = normalizeOwnerId(village.owner);
+  const normalizedPlayerId = normalizeOwnerId(window.player?.id);
+  let ownerPlayer = null;
+
+  if (normalizedVillageOwner && normalizedVillageOwner === normalizedPlayerId && window.player) {
+    ownerPlayer = window.player;
+  } else if (window.currentMatch?.players) {
+    ownerPlayer = window.currentMatch.players.find(p => {
+      const playerId = p?.id || p;
+      return normalizeOwnerId(playerId) === normalizedVillageOwner;
+    }) || null;
+  }
+
+  if (ownerPlayer) {
+    ownerPlayer.units = ownerPlayer.units || [];
+    ownerPlayer.units.push(villager);
   } else {
-    // This would be unexpected - log as warning
     console.warn(`⚠️ Village spawned villager but owner unclear!`);
     console.warn(`   Village owner: "${village.owner}" (normalized: "${normalizedVillageOwner}")`);
     console.warn(`   Villager owner: "${villager.owner}"`);
     console.warn(`   Player ID: "${window.player?.id}" (normalized: "${normalizedPlayerId}")`);
-    console.warn(`   Opponent ID: "${window.opponent?.id}" (normalized: "${normalizedOpponentId}")`);
+    console.warn(`   Match players: ${(window.currentMatch?.players || []).map(p => normalizeOwnerId(p?.id || p)).join(', ')}`);
   }
   // CRITICAL: Add to GLOBAL gameUnits array so villagers can be found/selected
   window.gameUnits.push(villager);
@@ -990,7 +1046,7 @@ function spawnVillagerFromVillage(village) {
       // Create LOD billboard for distant rendering
       if (window.gfx && window.gfx.getBillboardInstance) {
         const billboardScale = Math.max(0.6, (villager.scale || 0.5) * 1.5);
-        villager.billboard = window.gfx.getBillboardInstance(villager.model, villager.mesh.position, billboardScale, window.gfx.scene);
+        villager.billboard = window.gfx.getBillboardInstance(villager.model, villager.mesh.position, billboardScale, window.gfx.scene, { groundUnitSprite: true });
         villager.billboard.setEnabled(false);
       }
     }).catch(error => {
@@ -1171,16 +1227,21 @@ function findIdleVillagersNearBuilding(building) {
     }
     
     // CRITICAL: Don't auto-assign units that recently received a player command.
+    // EXCEPTION: Skip grace period for under-construction buildings — if the player
+    // moved a villager to a build site, they want it to build.
     const currentTick = window.currentMatch?.tick || 0;
-    const recentTick = (unit.lastPlayerCommandTick !== undefined)
-      ? unit.lastPlayerCommandTick
-      : unit.lastPlayerMoveTick;
-    if (recentTick !== undefined) {
-      const ticksSince = currentTick - recentTick;
-      const graceTicks = (window.isMultiplayer && window.gameType === 'adventure') ? 120 : 60;
-      if (ticksSince < graceTicks) {
-        if (_skipReasons) _skipReasons.recentCmd++;
-        continue;
+    const nearConstruction = building.buildProgress < 1.0 && building.workType === 'build';
+    if (!nearConstruction) {
+      const recentTick = (unit.lastPlayerCommandTick !== undefined)
+        ? unit.lastPlayerCommandTick
+        : unit.lastPlayerMoveTick;
+      if (recentTick !== undefined) {
+        const ticksSince = currentTick - recentTick;
+        const graceTicks = (window.isMultiplayer && window.gameType === 'adventure') ? 120 : 60;
+        if (ticksSince < graceTicks) {
+          if (_skipReasons) _skipReasons.recentCmd++;
+          continue;
+        }
       }
     }
     
@@ -1231,17 +1292,20 @@ function assignVillagerToWork(villager, building) {
   const currentBehavior = window.behaviorManager.getBehavior(villager);
   if (currentBehavior) {
     const behaviorName = currentBehavior.constructor.name;
-    // Protect: manual gather, move commands, attack commands
     if (behaviorName === 'ManualGatherBehavior' || 
         behaviorName === 'WalkBehavior' || 
         behaviorName === 'RunBehavior' ||
-        behaviorName === 'AttackBuildingBehavior') {
-      return false; // Don't interrupt direct player commands
+        behaviorName === 'AttackBuildingBehavior' ||
+        behaviorName === 'AttackUnitBehavior') {
+      return false;
     }
   }
   
-  // Check if building needs more workers
-  if (building.assignedWorkers.length >= building.maxWorkers) {
+  // Check if building needs more workers (use production cap for completed production buildings)
+  const workerCap = (building.buildProgress >= 1.0 && building.productionMaxWorkers)
+    ? building.productionMaxWorkers
+    : building.maxWorkers;
+  if (building.assignedWorkers.length >= workerCap) {
     return false;
   }
   
@@ -1405,14 +1469,23 @@ function processBuildingCompletion(building) {
   
   // Register building with LOD system for billboard swapping at distance
   if (window.gfx && window.gfx.addLODBillboard && building.mesh) {
-    const billboardScale = Math.max(1.2, (building.scale || 1.0) * 3.0);
     const camPos = window.gfx.cameraTarget ? window.gfx.cameraTarget.position : window.gfx.camera?.position;
-    window.gfx.addLODBillboard(
-      { root: building.mesh },
-      window.gfx.scene,
-      { path: building.model, lodDistance: 175, cullDistance: 500, billboardScale: billboardScale },
-      camPos
-    );
+    if (building.type === 'agora') {
+      window.gfx.addLODBillboard(
+        { root: building.mesh },
+        window.gfx.scene,
+        { path: building.model, lodDistance: 175, cullDistance: 500, lodType: 'agora-flag', buildingRef: building },
+        camPos
+      );
+    } else {
+      const { scale: bbScale, yOffset: bbYOff } = computeBuildingBillboardScale(building);
+      window.gfx.addLODBillboard(
+        { root: building.mesh },
+        window.gfx.scene,
+        { path: building.model, lodDistance: 175, cullDistance: 500, billboardScale: bbScale, billboardYOffset: bbYOff },
+        camPos
+      );
+    }
   }
 
   // Add particle effects when construction completes
@@ -1479,9 +1552,13 @@ function processWorkProduction(building) {
       }
       
       if (actualAmount > 0) {
-        // Add resources to the building's owner (not always window.player!)
-        const owner = findPlayerByOwnerId(building.owner);
-        if (owner && owner.addResource) {
+        if (window.currentMatch && typeof window.currentMatch.queueResourceCredit === 'function') {
+          window.currentMatch.queueResourceCredit(building.owner, resourceType, actualAmount, currentTick);
+        } else {
+          const owner = findPlayerByOwnerId(building.owner);
+          if (!owner || !owner.addResource) {
+            continue;
+          }
           owner.addResource(resourceType, actualAmount);
           if (building.name === 'Farm') {
             // // console.log(`🌾 ${owner.name || owner.id}'s Farm produced ${actualAmount} food (${workerCount} farmers)`);
@@ -1711,18 +1788,19 @@ function updateTowerAttack(tower, deltaTime) {
   }
   
   // Initialize tower attack properties
-  if (!tower.attackCooldown) {
-    tower.attackCooldown = 0;
+  if (!tower._attackInitialized) {
+    tower._attackInitialized = true;
     tower.attackRange = 15; // Tower range in world units (tiles * TILE_SIZE)
     // Lower damage so arrows tend to shove units around instead of one-shotting them
     tower.attackDamage = 8;
-    tower.attackInterval = 2.0; // Seconds between attacks
+    tower.attackIntervalTicks = 40; // 2 seconds at 20 TPS
     tower.currentTarget = null;
+    tower.lastAttackTick = -tower.attackIntervalTicks;
   }
-  
-  // Update cooldown
-  if (tower.attackCooldown > 0) {
-    tower.attackCooldown -= deltaTime;
+
+  const currentTick = window.currentMatch?.tick || 0;
+  const ticksSinceAttack = currentTick - (tower.lastAttackTick || 0);
+  if (ticksSinceAttack < (tower.attackIntervalTicks || 40)) {
     return;
   }
   
@@ -1730,16 +1808,16 @@ function updateTowerAttack(tower, deltaTime) {
   const towerPos = tower.mesh ? tower.mesh.getAbsolutePosition() : 
                    new BABYLON.Vector3(tower.position.x, tower.position.y || 2, tower.position.z);
   
-  let nearestEnemy = null;
-  let nearestDistance = tower.attackRange;
-  
+  const candidates = [];
   window.gameUnits.forEach(unit => {
     if (!unit || !unit.pb || !unit.pb.state || !unit.pb.state.loc) {
       return;
     }
     
-    // Skip friendly units (same owner)
-    if (unit.owner === tower.owner) {
+    const isHostileUnit = window.currentMatch?.areOwnersHostile
+      ? window.currentMatch.areOwnersHostile(unit.owner, tower.owner)
+      : (unit.owner !== tower.owner);
+    if (!isHostileUnit) {
       return;
     }
     
@@ -1754,21 +1832,28 @@ function updateTowerAttack(tower, deltaTime) {
       unit.pb.state.loc.z
     );
     
-    const distance = BABYLON.Vector3.Distance(towerPos, unitPos);
-    
-    if (distance <= nearestDistance) {
-      nearestDistance = distance;
-      nearestEnemy = unit;
+    const dx = unitPos.x - towerPos.x;
+    const dz = unitPos.z - towerPos.z;
+    const distanceSq = dx * dx + dz * dz;
+    if (distanceSq <= tower.attackRange * tower.attackRange) {
+      candidates.push({ unit, unitPos, distanceSq });
     }
   });
+
+  candidates.sort((a, b) => {
+    if (a.distanceSq !== b.distanceSq) return a.distanceSq - b.distanceSq;
+    return window.deterministicStringCompare(a.unit?.id || '', b.unit?.id || '');
+  });
+  const nearestEnemy = candidates[0]?.unit || null;
+  const nearestEnemyPos = candidates[0]?.unitPos || null;
   
   // Fire at nearest enemy
-  if (nearestEnemy && window.projectiles && window.projectiles.fire) {
+  if (nearestEnemy && nearestEnemyPos && window.projectiles && window.projectiles.fire) {
     try {
       const targetPos = new BABYLON.Vector3(
-        nearestEnemy.pb.state.loc.x,
-        nearestEnemy.pb.state.loc.y || 0.5,
-        nearestEnemy.pb.state.loc.z
+        nearestEnemyPos.x,
+        nearestEnemyPos.y || 0.5,
+        nearestEnemyPos.z
       );
       
       // Fire arrow
@@ -1777,18 +1862,27 @@ function updateTowerAttack(tower, deltaTime) {
         from: towerPos.clone().add(new BABYLON.Vector3(0, 2, 0)), // Fire from top of tower
         to: targetPos,
         damage: tower.attackDamage,
-        owner: tower.owner
+        owner: tower.owner,
+        gameplayImpact: false
       });
       
-      // Only set cooldown if projectile was successfully created
+      if (window.projectiles.applyImpact) {
+        window.projectiles.applyImpact({
+          unit: nearestEnemy,
+          attackerOwner: tower.owner,
+          damage: tower.attackDamage,
+          sourcePosition: towerPos,
+          bopStrength: 60
+        });
+      }
+
       if (projectile) {
-        tower.attackCooldown = tower.attackInterval;
+        tower.lastAttackTick = currentTick;
         tower.currentTarget = nearestEnemy;
       }
     } catch (e) {
       console.warn('Error firing tower projectile:', e);
-      // Still set cooldown to prevent spam
-      tower.attackCooldown = tower.attackInterval;
+      tower.lastAttackTick = currentTick;
     }
   } else {
     tower.currentTarget = null;
@@ -1870,7 +1964,12 @@ function updateBuildings(deltaTime) {
           size: 1.0  // Will be scaled to 0.5 (half size)
         }, window.gfx.scene);
         building.constructionIndicator.scaling = new BABYLON.Vector3(0.5, 0.5, 0.5); // Half size
-        building.constructionIndicator.isPickable = false;
+        building.constructionIndicator.isPickable = true;
+        building.constructionIndicator.isBuilding = true;
+        building.constructionIndicator.metadata = {
+          ...(building.constructionIndicator.metadata || {}),
+          buildingId: building.id
+        };
         
         // Purple material
         const material = new BABYLON.StandardMaterial(`constructionIndicatorMat_${building.id}`, window.gfx.scene);

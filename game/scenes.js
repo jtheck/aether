@@ -222,7 +222,18 @@
         const name = step.unitName.trim();
         unit = units.find(u => u.getDisplayName && u.getDisplayName() === name);
       }
-      if (!unit) unit = units[step.unitIndex];
+      if (!unit && Number.isFinite(step.unitIndex)) {
+        const orderedUnits = units
+          .filter(u => !!u)
+          .slice()
+          .sort((a, b) => {
+            const aIdx = Number.isFinite(a.adventureSpawnIndex) ? a.adventureSpawnIndex : Number.MAX_SAFE_INTEGER;
+            const bIdx = Number.isFinite(b.adventureSpawnIndex) ? b.adventureSpawnIndex : Number.MAX_SAFE_INTEGER;
+            if (aIdx !== bIdx) return aIdx - bIdx;
+            return window.deterministicStringCompare(a.id || '', b.id || '');
+          });
+        unit = orderedUnits[step.unitIndex];
+      }
       if (!unit || !unit.pb?.state?.loc) return Promise.resolve();
 
       return new Promise(resolve => {

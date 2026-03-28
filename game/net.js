@@ -13,7 +13,8 @@
   net.SNAP_THRESHOLD = 10; // Units >10 units away snap instead of lerp (reduced snapping)
   net.LERP_SPEED = 0.3; // 30% correction per sync (slower, smoother lerp)
   net.PEER_LAG_THRESHOLD = 3; // Slow down if peer is >3 ticks behind
-  net.COMMAND_ACK_TIMEOUT = 1000; // Wait 1s for command acknowledgment before resending
+  net.COMMAND_ACK_TIMEOUT = 150; // Retry within the 3-tick lockstep window
+  net.COMMAND_ACK_MAX_RETRIES = 8;
   
   // Debug flags (default off to avoid noisy yellow console warnings in normal play)
   // You can toggle at runtime from DevTools:
@@ -387,6 +388,14 @@
         tickIntervalId = setTimeout(lockstepTick, 1000 / (currentTickRate || net.TICK_RATE));
         return;
       }
+
+      if (window.currentMatch?.isPaused) {
+        waitingForPeers = false;
+        window.lockstepWaitingForPeers = false;
+        window.fastForwardingTicks = false;
+        tickIntervalId = setTimeout(lockstepTick, 1000 / (currentTickRate || net.TICK_RATE));
+        return;
+      }
       
       // If WE were soft-dropped (slow device), go idle and fast-forward to catch up.
       // We must not gate on peer confirmations while catching up, otherwise we'll never
@@ -714,7 +723,7 @@
     // CRITICAL: Check if we're significantly behind and need to catch up
     // maxPeerLag > 0 means peers are ahead (we're behind)
     // LOCKSTEP MODE: Don't request catch-up. Both players should stay in sync via
-    // deterministic simulation. If there's drift, the gentle position corrections handle it.
+    // deterministic simulation. If they drift, checksums/desync handling should expose it.
     // Requesting catch-up was causing more problems than it solved.
     //
     // Monitor peer lag for debugging only (no action taken)
@@ -731,22 +740,19 @@
       }
     }
     
-    // Execute buffered commands for this tick
-    executeCommandsForTick(tick);
-    
     // Update match state (deterministic) - the match handles victory conditions and game state
     if (window.currentMatch && window.currentMatch.processTick) {
       window.currentMatch.processTick();
     }
     
     // Adaptive state sync frequency (LOD):
-    // - Fast sync (200ms) when player commands are active (last 2 seconds)
-    // - Slow sync (500ms) when idle (no recent player commands)
+    // - Fast snapshots (200ms) when player commands are active (last 2 seconds)
+    // - Slow snapshots (500ms) when idle (no recent player commands)
     const timeSinceLastCommand = Date.now() - lastPlayerCommandTime;
     const isActive = timeSinceLastCommand < 2000; // Active if command within last 2 seconds
     const syncInterval = isActive ? net.STATE_SYNC_INTERVAL : net.STATE_SYNC_INTERVAL_IDLE;
     
-    // Send state sync if needed (BOTH players send their own state)
+    // Send a lightweight diagnostic snapshot if needed.
     if (Date.now() - lastStateSync > syncInterval && isConnected) {
       sendStateSync();
       lastStateSync = Date.now();
@@ -773,15 +779,16 @@
       if (now - ackInfo.sentAt > net.COMMAND_ACK_TIMEOUT) {
         // Command not acknowledged - resend
         ackInfo.retries++;
-        if (ackInfo.retries < 3) { // Max 3 retries
+        if (ackInfo.retries < net.COMMAND_ACK_MAX_RETRIES) {
           p2p.sendData({
             type: 'game_command',
             command: ackInfo.command,
+            requestAck: true,
             isRetry: true
           });
           ackInfo.sentAt = now;
         } else {
-          // Give up after 3 retries
+          // Give up after exhausting retry budget
           console.warn(`⚠️ Command ${commandId} failed after ${ackInfo.retries} retries`);
           pendingCommandAcks.delete(commandId);
         }
@@ -791,49 +798,8 @@
   
   // Queue a command for lockstep execution
   net.sendCommand = function(command) {
-    if (!isConnected) {
-      console.warn('Cannot send command: not connected');
-      return false;
-    }
-    
-    // If we were soft-dropped (slow device), we must go idle (no gameplay-affecting inputs)
-    // until we catch up and rejoin lockstep. This prevents "missed window" commands that
-    // would desync our local state vs the remaining peers.
-    if (selfSoftDropped && isAdventureCoopMatch()) {
-      console.warn('🧊 Command blocked: you are in catch-up (idle) mode.');
-      return false;
-    }
-    
-    // Add tick prediction (execute immediately for local player)
-    command.tick = tick + Math.ceil(50 / (1000 / net.TICK_RATE)); // ~1 tick delay for latency
-    const selfPlayerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
-    command.playerId = selfPlayerId;
-    command.type = command.type || 'unknown';
-    
-    // Store locally for prediction
-    commandBuffer.push(command);
-    
-    // Prune old commands
-    if (commandBuffer.length > net.COMMAND_BUFFER_SIZE) {
-      commandBuffer.shift();
-    }
-    
-    // Send to remote peers
-    const message = {
-      type: 'command',
-      tick: command.tick,
-      content: command
-    };
-    
-    // Broadcast to all connected peers
-    p2p.sendData(message);
-    
-    // Predict execution for local player (optimistic)
-    if (command.playerId === selfPlayerId) {
-      executeCommand(command, tick);
-    }
-    
-    return true;
+    console.error('Legacy net.sendCommand() is disabled. Use currentMatch.submitCommand() for lockstep gameplay commands.');
+    return false;
   };
   
   // Execute all commands scheduled for current tick
@@ -905,9 +871,8 @@
     const attacker = findUnitById(cmd.unitId);
     const target = findUnitById(cmd.targetId);
     if (attacker && target && attacker.owner === cmd.playerId) {
-      // Trigger attack (use existing combat system)
-      if (window.combat && window.combat.attack) {
-        window.combat.attack(attacker, target, cmd.damage);
+      if (window.behaviorManager) {
+        window.behaviorManager.setBehavior(attacker, 'attack_unit', { target: target });
       }
     }
   };
@@ -972,18 +937,8 @@
       // Re-enter the switch now that we've recorded last-seen.
       switch (actualMessage.type) {
         case 'command':
-          // Queue remote command for lockstep
-          if (!remoteCommands.has(peerId)) {
-            remoteCommands.set(peerId, []);
-          }
-          remoteCommands.get(peerId).push(actualMessage.content);
-          
-          // Prune old remote commands
-          remoteCommands.set(peerId, remoteCommands.get(peerId).filter(c => c.tick > tick - 10));
-          
-          // TRUE LOCKSTEP: Any received command implies the peer is alive and has advanced to (at least) that tick.
-          // Some older code paths use {type:'command'} instead of {type:'game_command'}; without this, the host can
-          // falsely think the peer is "not confirming" and soft-drop them.
+          // Legacy predictive command path is disabled in strict lockstep mode.
+          // Ignore the payload, but still count it as peer progress during mixed-version sessions.
           if (actualMessage.content && actualMessage.content.tick !== undefined) {
             const key = normalizePeerId(actualMessage.content.playerId || peerId);
             const currentConfirmed = peerTickConfirmations.get(key) || 0;
@@ -1025,31 +980,31 @@
             const inputDelay = window.currentMatch.inputDelayTicks || 3;
             // Use our current local tick variable in net.js, not match tick (lockstep driver).
             sendTickConfirmation(tick + inputDelay);
-            // Also send state sync to prove liveness / advance implicit confirmations.
+            // Also send a diagnostic snapshot to prove liveness / advance implicit confirmations.
             sendStateSync();
           }
           break;
           
-        case 'state_sync':
-          // P2P: Each player is authoritative for their own units
-          // Only reconcile if there's significant drift (safety net for desync)
-          reconcileState(actualMessage.content);
+        case 'state_sync': {
+          const snapshot = actualMessage.content || actualMessage;
+          // Diagnostics/liveness only. Never reconcile gameplay state from state_sync.
           // Update peer lag tracking
-          if (actualMessage.content && actualMessage.content.tick !== undefined) {
-            updatePeerLag(peerId, actualMessage.content.tick);
+          if (snapshot && snapshot.tick !== undefined) {
+            updatePeerLag(peerId, snapshot.tick);
             
             // TRUE LOCKSTEP FALLBACK: Treat state_sync as an implicit tick confirmation.
             // This prevents stalls if tick_confirm packets are delayed/dropped while other
             // traffic (state_sync) is still flowing.
             const key = normalizePeerId(peerId);
             const currentConfirmed = peerTickConfirmations.get(key) || 0;
-            const confirmTick = actualMessage.content.tick + (window.currentMatch?.inputDelayTicks || 3);
+            const confirmTick = snapshot.tick + (window.currentMatch?.inputDelayTicks || 3);
             if (confirmTick > currentConfirmed) {
               peerTickConfirmations.set(key, confirmTick);
               lastPeerProgressAt.set(key, Date.now());
             }
           }
           break;
+        }
           
         case 'resource_state_sync':
           if (window.currentMatch) {
@@ -1069,32 +1024,37 @@
                 }
               });
             }
+            if (actualMessage.playerResources) {
+              actualMessage.playerResources.forEach(entry => {
+                const player = match.getPlayerById ? match.getPlayerById(entry.playerId) : null;
+                if (!player) return;
+                if (!player.resources) player.resources = {};
+                player.resources.food = Math.floor(entry.resources?.food || 0);
+                player.resources.wood = Math.floor(entry.resources?.wood || 0);
+                player.resources.stone = Math.floor(entry.resources?.stone || 0);
+                player.resources.minerals = Math.floor(entry.resources?.minerals || 0);
+              });
+            }
           }
           break;
           
         case 'unit_position_sync':
-          // P2P: Apply unit positions from other players (they're authoritative for their own units)
-          // This prevents floating-point drift while maintaining P2P fairness
-          if (window.currentMatch && actualMessage.positions && actualMessage.playerId) {
-            window.currentMatch.applyUnitPositions(actualMessage.positions, actualMessage.playerId, actualMessage.tick);
-            
-            // TRUE LOCKSTEP: Position sync also serves as tick confirmation
-            if (actualMessage.tick !== undefined) {
-              const keyFromPeer = normalizePeerId(peerId);
-              const keyFromPlayer = normalizePeerId(actualMessage.playerId);
-              const currentConfirmed = peerTickConfirmations.get(keyFromPeer) || 0;
-              // Position syncs confirm up to the synced tick + inputDelay
-              const confirmTick = actualMessage.tick + (window.currentMatch?.inputDelayTicks || 3);
-              if (confirmTick > currentConfirmed) {
-                peerTickConfirmations.set(keyFromPeer, confirmTick);
-                if (keyFromPlayer) {
-                  peerTickConfirmations.set(keyFromPlayer, Math.max(peerTickConfirmations.get(keyFromPlayer) || 0, confirmTick));
-                }
-                lastPeerProgressAt.set(keyFromPeer, Date.now());
-                if (keyFromPlayer) lastPeerProgressAt.set(keyFromPlayer, Date.now());
+          // Legacy owner-authoritative position sync is disabled.
+          // Ignore the payload rather than rewriting simulation state.
+          if (actualMessage.tick !== undefined) {
+            const keyFromPeer = normalizePeerId(peerId);
+            const keyFromPlayer = normalizePeerId(actualMessage.playerId);
+            const currentConfirmed = peerTickConfirmations.get(keyFromPeer) || 0;
+            const confirmTick = actualMessage.tick + (window.currentMatch?.inputDelayTicks || 3);
+            if (confirmTick > currentConfirmed) {
+              peerTickConfirmations.set(keyFromPeer, confirmTick);
+              if (keyFromPlayer) {
+                peerTickConfirmations.set(keyFromPlayer, Math.max(peerTickConfirmations.get(keyFromPlayer) || 0, confirmTick));
               }
-              updatePeerLag(peerId, actualMessage.tick);
+              lastPeerProgressAt.set(keyFromPeer, Date.now());
+              if (keyFromPlayer) lastPeerProgressAt.set(keyFromPlayer, Date.now());
             }
+            updatePeerLag(peerId, actualMessage.tick);
           }
           break;
         
@@ -1138,8 +1098,7 @@
           break;
         
         case 'force_state_sync':
-          // Best-effort: peers can ask everyone to send an immediate state_sync to help a rejoin/catch-up.
-          // This is safe because each player only includes their OWN units/buildings/resources.
+          // Best-effort: peers can ask everyone to send an immediate diagnostic snapshot.
           if (!actualMessage.targetPeerId || (peerId && actualMessage.targetPeerId === peerId) || actualMessage.targetPeerId === (localPlayerShortId || localPlayerId)) {
             sendStateSync();
           } else {
@@ -1169,7 +1128,7 @@
               baselineTick
             });
             
-            // Ask all peers to send a fresh state sync to smooth out any visual/state divergence.
+            // Ask all peers to send a fresh diagnostic snapshot after rejoin.
             p2p.sendData({
               type: 'force_state_sync'
             });
@@ -1177,107 +1136,16 @@
           break;
           
         case 'request_catchup_sync':
-          // Peer is falling behind and requesting a catch-up sync
-          // Send them our current full state so they can fast-forward
-          if (window.currentMatch && actualMessage.myTick !== undefined) {
-            const theirTick = actualMessage.myMatchTick || actualMessage.myTick;
-            const ourTick = window.currentMatch.tick || tick;
-            const lag = ourTick - theirTick; // Positive = we're ahead, negative = they're ahead
-            
-            // Only help them catch up if we're actually ahead
-            if (lag > 0) {
-              
-              // Send full state sync immediately
-              sendStateSync();
-              
-              // Also send a catchup sync with our tick so they can fast-forward
-              p2p.sendData({
-                type: 'catchup_sync',
-                targetTick: ourTick,
-                matchTick: ourTick,
-                timestamp: Date.now()
-              }, peerId);
-            } else {
-              // They're actually ahead of us, ignore their catch-up request
-              // (Silently ignore - this is normal when peers have slight timing differences)
-            }
-          }
+          // Disabled in strict lockstep mode. Recovery must happen through pause/rejoin,
+          // not ad hoc fast-forwarding of the simulation.
           break;
           
         case 'request_catchup':
-          // Peer is behind and requesting current tick to catch up
-          if (window.currentMatch && actualMessage.fromTick !== undefined) {
-            const currentTick = window.currentMatch.tick || tick;
-            const ticksBehind = currentTick - actualMessage.fromTick;
-            
-            if (ticksBehind > 0) {
-              console.log(`📡 Peer is ${ticksBehind} ticks behind, sending catch-up target: ${currentTick}`);
-              
-              // Send our current tick so they can fast-forward
-              if (window.net && window.net.p2p) {
-                window.net.p2p.sendData({
-                  type: 'catchup_sync',
-                  targetTick: currentTick
-                });
-              }
-            }
-          }
+          // Disabled in strict lockstep mode.
           break;
           
         case 'catchup_sync':
-          // Received catch-up sync - fast-forward our tick to match theirs
-          if (window.currentMatch && actualMessage.targetTick !== undefined) {
-            const targetTick = actualMessage.targetTick;
-            const currentTick = window.currentMatch.tick || tick;
-            const ticksToCatchUp = targetTick - currentTick;
-            
-            if (ticksToCatchUp > 0 && ticksToCatchUp < 1000) { // Sanity check: don't fast-forward more than 20 seconds
-              console.log(`⏩ Fast-forwarding ${ticksToCatchUp} ticks (${(ticksToCatchUp / 20).toFixed(1)}s) to catch up...`);
-              
-              // Pause the regular rAF physics loop during fast-forward to avoid double-sim
-              window.fastForwardingTicks = true;
-              
-              // Fast-forward by processing ticks AND running physics (like selfSoftDropped path)
-              // Without physics, behaviors get set but units never actually move during catch-up
-              for (let i = 0; i < ticksToCatchUp; i++) {
-                tick++;
-                if (window.currentMatch) {
-                  window.currentMatch.tick++;
-                  window.currentMatch.gameTime = window.currentMatch.tick / (net.TICK_RATE || 20);
-                  
-                  window.currentMatch.executeCommandsForTick(window.currentMatch.tick);
-                  
-                  if (window.currentMatch.tick % 20 === 0) {
-                    window.currentMatch.updateAIPlayers();
-                    if (window.currentMatch.isHost()) {
-                      window.currentMatch.generateAICommands();
-                    }
-                    window.currentMatch.checkAgoraOccupation();
-                    window.currentMatch.checkWonderVictory();
-                    window.currentMatch.checkEliminationVictory();
-                  }
-                }
-                runDeterministicPhysicsStepsForOneNetTick();
-              }
-              
-              window.fastForwardingTicks = false;
-              
-              // Mark that we're done catching up
-              if (window.currentMatch) {
-                window.currentMatch.isCatchingUp = false;
-                window.currentMatch.lastCatchupRequest = 0; // Reset catch-up request timer
-              }
-              
-              console.log(`✅ Caught up! Now at tick ${window.currentMatch?.tick || tick}`);
-            } else if (ticksToCatchUp <= 0) {
-              // Already caught up or ahead
-              if (window.currentMatch) {
-                window.currentMatch.isCatchingUp = false;
-              }
-            } else {
-              console.warn(`⚠️ Catch-up sync requested impossible fast-forward: ${ticksToCatchUp} ticks (current: ${currentTick}, target: ${targetTick})`);
-            }
-          }
+          // Disabled in strict lockstep mode.
           break;
           
         case 'ping':
@@ -1472,6 +1340,9 @@
               window.Lobby._playerIds = actualMessage.playerIds;
               console.log(`📡 Received start_game with playerIds:`, actualMessage.playerIds.map(id => id.slice(-6)));
             }
+            if (Array.isArray(actualMessage.playersMeta)) {
+              window.Lobby._playersMeta = actualMessage.playersMeta.map(meta => ({ ...meta }));
+            }
             window.Lobby.startMultiplayerMatchWithSettings(actualMessage.gameType, actualMessage.settings);
           } else {
             console.error('❌ Received invalid start_game message:', actualMessage);
@@ -1526,20 +1397,43 @@
             window.player.buildings = [];
             window.player.selectedUnits = [];
             
-            const players = [];
-            // P1 = Host
-            if (actualMessage.hostId) {
-              players.push({
-                id: actualMessage.hostId,
-                name: 'Host',
-                color: '#ff0000',
-                units: [],
-                buildings: [],
-                selectedUnits: []
+            let players = [];
+            if (Array.isArray(actualMessage.playerIds) && actualMessage.playerIds.length > 0) {
+              const meta = Array.isArray(actualMessage.playersMeta) ? actualMessage.playersMeta : [];
+              const normalize = (id) => {
+                if (!id) return '';
+                const suffix = id.includes('-') ? id.split('-').pop() : id;
+                return suffix.length > 6 ? suffix.slice(-6) : suffix;
+              };
+              const localP2pId = window.net?.getStatus()?.localPlayerId || window.player?.id || '';
+              const localNorm = normalize(localP2pId);
+              players = actualMessage.playerIds.map((id, idx) => {
+                const idNorm = normalize(id);
+                if (localNorm && idNorm === localNorm) {
+                  window.player.id = id;
+                  if (meta[idx]?.color) window.player.color = meta[idx].color;
+                  if (meta[idx]?.name) window.player.name = meta[idx].name;
+                  return window.player;
+                }
+                return window.Lobby.createRemoteMatchPlayer({
+                  id,
+                  name: meta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
+                  color: meta[idx]?.color || (idx === 0 ? '#ff0000' : '#00ff00'),
+                  resources: meta[idx]?.resources
+                });
               });
+            } else {
+              // Legacy fallback: host + local peer only.
+              players = [];
+              if (actualMessage.hostId) {
+                players.push(window.Lobby.createRemoteMatchPlayer({
+                  id: actualMessage.hostId,
+                  name: 'Host',
+                  color: '#ff0000'
+                }));
+              }
+              players.push(window.player);
             }
-            // P2 = Us (the peer)
-            players.push(window.player);
             
             console.log('🎮 Peer player order:', players.map((p, i) => `P${i+1}=${(p.id || 'unknown').slice(-6)}`).join(', '));
             
@@ -1593,55 +1487,12 @@
             
             // Check if command is for a past tick (arrived too late)
             if (cmd.tick < window.currentMatch.tick) {
-              // Execute the command immediately since we're already past its scheduled tick.
-              // Don't fast-forward physics: running extra steps for individual units
-              // desynchronizes them from the simulation, and running updateUnits for ALL
-              // units causes unrelated behaviors to complete early (triggering wandering).
-              // Position sync corrections will handle any remaining drift.
-              try {
-                window.currentMatch.executeCommand(cmd);
-              } catch (error) {
-                console.error(`❌ Error executing late command:`, error);
-              }
+              console.error(`❌ Late lockstep command dropped: type=${cmd.type}, scheduledTick=${cmd.tick}, localTick=${window.currentMatch.tick}`);
+              window.currentMatch.desyncDetected = true;
             } else {
-              // CRITICAL: Deduplicate move commands - remove older commands for same units
-              // This prevents jerky movement from processing intermediate commands
-              if (cmd.type === 'move' && cmd.unitIds && cmd.unitIds.length > 0) {
-                const unitIdSet = new Set(cmd.unitIds);
-                
-                // Check all command buffers for older move commands for these units
-                window.currentMatch.commandBuffer.forEach((commands, tickKey) => {
-                  const filteredCommands = commands.filter(existingCmd => {
-                    // Keep non-move commands
-                    if (existingCmd.type !== 'move') return true;
-                    // Keep move commands for different units
-                    if (!existingCmd.unitIds || existingCmd.unitIds.length === 0) return true;
-                    // Remove if any unit IDs overlap (same units, newer command wins)
-                    const hasOverlap = existingCmd.unitIds.some(id => unitIdSet.has(id));
-                    return !hasOverlap;
-                  });
-                  
-                  // Update the buffer with filtered commands
-                  if (filteredCommands.length !== commands.length) {
-                    if (filteredCommands.length > 0) {
-                      window.currentMatch.commandBuffer.set(tickKey, filteredCommands);
-                    } else {
-                      window.currentMatch.commandBuffer.delete(tickKey);
-                    }
-                  }
-                });
-              }
-              
               // CRITICAL: Add to match command buffer for future execution
               // Ensure command has normalized playerId for consistent processing
-              const tickKey = cmd.tick;
-              if (!window.currentMatch.commandBuffer.has(tickKey)) {
-                window.currentMatch.commandBuffer.set(tickKey, []);
-              }
-              
-              // console.log(`📥 [T${window.currentMatch.tick}] Received command from peer: ${cmd.type} for tick ${tickKey}, commandId=${cmd.commandId?.slice(-6)}, from player ${normalizedPlayerId}`);
-              
-              window.currentMatch.commandBuffer.get(tickKey).push(cmd);
+              window.currentMatch.bufferCommand(cmd);
             }
             
             // Add to command history
@@ -1680,10 +1531,9 @@
           break;
           
         case 'request_state_sync':
-          // Another player detected desync and needs full state
+          // Another player detected desync and requested fresh diagnostics.
           if (window.currentMatch && isHost) {
-            // console.log('📤 Sending full state sync to peer...');
-            // TODO: Implement full state sync
+            sendStateSync(peerId);
           }
           break;
           
@@ -1792,24 +1642,24 @@
                 const suffix = id.includes('-') ? id.split('-').pop() : id;
                 return suffix.length > 6 ? suffix.slice(-6) : suffix;
               };
-              const localNorm = normalize(window.player.id);
+              const localP2pId = window.net?.getStatus()?.localPlayerId || window.player?.id || '';
+              const localNorm = normalize(localP2pId);
               const meta = Array.isArray(actualMessage.playersMeta) ? actualMessage.playersMeta : [];
               const players = playerIds.map((id, idx) => {
                 const idNorm = normalize(id);
                 if (localNorm && idNorm === localNorm) {
                   // Preserve local player object for input/selection, but adopt host-assigned name/color for consistency.
+                  window.player.id = id;
                   if (meta[idx] && meta[idx].color) window.player.color = meta[idx].color;
                   if (meta[idx] && meta[idx].name) window.player.name = meta[idx].name;
                   return window.player;
                 }
-                return {
+                return window.Lobby.createRemoteMatchPlayer({
                   id,
                   name: meta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
                   color: meta[idx]?.color || (idx === 0 ? '#ff0000' : '#00ff00'),
-                  units: [],
-                  buildings: [],
-                  selectedUnits: []
-                };
+                  resources: meta[idx]?.resources
+                });
               });
               window.Lobby.startAdventureWithMap(actualMessage.mapData, players);
             } else {
@@ -1824,8 +1674,12 @@
           // Player broadcasting pause to all others
           if (window.currentMatch) {
             console.log('⏸️ Received match_pause from peer');
-            window.currentMatch.isPaused = true;
-            window.currentMatch.updateLoadingOverlay('⏸️ PAUSED');
+            window.currentMatch.pauseMatch({
+              reason: actualMessage.reason || 'manual',
+              message: actualMessage.message,
+              broadcast: false,
+              remote: true
+            });
             // console.log('⏸️ Match paused by remote player');
           }
           break;
@@ -1834,11 +1688,10 @@
           // Player broadcasting resume to all others
           if (window.currentMatch) {
             console.log('▶️ Received match_resume from peer');
-            window.currentMatch.isPaused = false;
-            const overlay = document.getElementById('match_loading_overlay');
-            if (overlay) {
-              overlay.style.display = 'none';
-            }
+            window.currentMatch.resumeMatch({
+              broadcast: false,
+              remote: true
+            });
             // console.log('▶️ Match resumed by remote player');
           }
           break;
@@ -1978,14 +1831,10 @@
     // Hide overlay
     hideDisconnectOverlay();
     
-    // Send state sync to reconnected player if we're host
+    // Send a diagnostic snapshot to the reconnected player if we're host.
     if (window.Lobby && window.Lobby.isHost) {
       setTimeout(() => {
-        p2p.sendData({
-          type: 'state_sync',
-          tick: match.tick,
-          checksum: match.calculateGameStateChecksum()
-        }, peerId);
+        sendStateSync(peerId);
       }, 500);
     }
   }
@@ -2162,6 +2011,10 @@
   net.getCurrentTickRate = function() {
     return currentTickRate;
   };
+
+  net.getLocalConfirmedTick = function() {
+    return localConfirmedTick;
+  };
   
   // Get peer lag info
   net.getPeerLag = function() {
@@ -2234,226 +2087,45 @@
     }
   };
   
-  // Send full state sync (BOTH players send their own unit positions)
-  function sendStateSync() {
+  // Send a lightweight diagnostic snapshot for liveness / debugging.
+  function sendStateSync(targetPeerId = null) {
     // IMPORTANT: Don't gate state sync on `isConnected`.
     // GetFire can briefly report 0 peers during transitions; if we stop emitting state_sync,
     // lockstep may falsely think a peer is stalled and soft-drop them.
     if (!p2p || !p2p.sendData) return;
     
-    // PEER-TO-PEER: Each player only sends their OWN unit positions
     const localOwnerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
-    
-    // Find only OUR units (don't try to sync opponent's units)
-    const allUnits = window.gameUnits || [];
-    const myUnits = allUnits.filter(u => u.owner === localOwnerId);
-    
-    // CRITICAL: Include resource tile states for camps at sync checkpoints
-    // This ensures resource states stay synchronized even if workers complete at different ticks
-    const resourceStates = {};
-    if (window.gameBuildings && tick % (window.currentMatch?.syncInterval || 100) === 0) {
-      window.gameBuildings.forEach(building => {
-        if (building.owner === localOwnerId && building.availableResources && building.availableResources.length > 0) {
-          resourceStates[building.id] = building.availableResources.map(r => ({
-            gridX: r.gridX,
-            gridZ: r.gridZ,
-            remaining: r.remaining || 0,
-            depleted: r.depleted || false,
-            depletionTick: r.depletionTick
-          }));
-        }
-      });
-    }
-    
-    const state = {
+
+    const snapshot = {
       tick: tick,
-      playerId: localOwnerId, // Identify which player this state is from
-      resources: window.player?.resources || {},
-      units: myUnits.map(u => ({
-        id: u.id,
-        pos: {x: u.pb.state.loc.x, z: u.pb.state.loc.z},
-        health: u.currentHealth,
-        state: u.state
-      })),
-      buildings: window.gameBuildings?.filter(b => b.owner === localOwnerId).map(b => ({
-        id: b.id, 
-        type: b.type, 
-        pos: b.position
-      })) || [],
-      resourceStates: Object.keys(resourceStates).length > 0 ? resourceStates : undefined, // Only include if we have resources
+      playerId: localOwnerId,
+      unitCount: window.gameUnits?.length || 0,
+      buildingCount: window.gameBuildings?.length || 0,
+      checksum: window.currentMatch?.checksums?.get(window.currentMatch.tick) || null,
       timestamp: Date.now()
     };
     
     const message = {
       type: 'state_sync',
-      isHost: true,
-      content: state,
-      tick: tick
+      content: snapshot,
+      tick
     };
-    
-    // Always broadcast (most reliable), and also try direct sends when possible.
+
+    if (targetPeerId) {
+      p2p.sendData(message, targetPeerId);
+      return;
+    }
+
     p2p.sendData(message);
     const peers = p2p.getConnectedPeers ? p2p.getConnectedPeers() : [];
     if (peers && peers.length > 0) {
       peers.forEach(pid => p2p.sendData(message, pid));
     }
-    // Log occasionally (disabled - working!)
-    // if (tick % (net.TICK_RATE * 5) === 0) {
-    //   console.log(`📤 Sent state sync: ${myUnits.length} units from player ${localOwnerId} at tick ${tick}`);
-    // }
   };
   
-  // Reconcile with authoritative state (PEER-TO-PEER version)
+  // State sync no longer reconciles gameplay state in strict lockstep mode.
   function reconcileState(remoteState) {
-    const remoteTick = remoteState.tick;
-    const remotePlayerId = remoteState.playerId;
-    const tickDiff = remoteTick - tick;
-    
-    // Don't sync ticks - let them run independently and rely on command scheduling
-    // Commands are scheduled for specific ticks and will execute when both clients reach that tick
-    // Position sync every 200ms handles any drift in simulation results
-    
-    // Only reconcile positions if reasonably close (prevent massive rewinds)
-    if (Math.abs(tickDiff) > 10) {
-      // console.log(`⚠️ Tick desync: local=${tick}, remote=${remoteTick} (diff: ${tickDiff})`);
-      // Still reconcile positions even if ticks are desynced
-    }
-    
-    // CRITICAL: Never rewind simulation - we're using lockstep with checkpoint sync
-    // If remote tick is behind, it means they sent stale data - skip position updates
-    // The rewindSimulation function is a placeholder and should not be used in P2P lockstep
-    // if (remoteTick < tick) {
-    //   rewindSimulation(remoteTick); // DISABLED: Never rewind in lockstep mode
-    // }
-    
-    // Apply state corrections
-    const localOwnerId = localPlayerShortId || normalizePeerId(localPlayerId) || localPlayerId;
-    
-    // Skip if this is our own state echoed back
-    if (remotePlayerId === localOwnerId) {
-      return;
-    }
-    
-    // Debug: Log state sync info occasionally (disabled - working!)
-    // if (tick % (net.TICK_RATE * 5) === 0) {
-    //   console.log(`📥 Received state from player ${remotePlayerId}: ${remoteState.units.length} units at tick ${remoteTick}`);
-    // }
-    
-    // Update remote player resources
-    if (window.opponent && remotePlayerId === window.opponent.id) {
-      window.opponent.resources = {...remoteState.resources};
-    }
-    
-    // CRITICAL: Sync resource tile states at sync checkpoints
-    // This ensures resource states stay synchronized even if workers complete at different ticks
-    if (remoteState.resourceStates && window.gameBuildings && tick % (window.currentMatch?.syncInterval || 100) === 0) {
-      Object.keys(remoteState.resourceStates).forEach(buildingId => {
-        const building = window.gameBuildings.find(b => b.id === buildingId);
-        if (building && building.availableResources) {
-          const remoteResources = remoteState.resourceStates[buildingId];
-          
-          // Update each resource tile state
-          remoteResources.forEach(remoteResource => {
-            const localResource = building.availableResources.find(r => 
-              r.gridX === remoteResource.gridX && r.gridZ === remoteResource.gridZ
-            );
-            
-            if (localResource) {
-              // Sync remaining amount and depletion state
-              localResource.remaining = remoteResource.remaining;
-              localResource.depleted = remoteResource.depleted;
-              localResource.depletionTick = remoteResource.depletionTick;
-            }
-          });
-          
-          console.log(`🔄 Synced resource states for building ${buildingId} at tick ${tick}`);
-        }
-      });
-    }
-    
-    // Update remote units with smart correction
-    let unitsFound = 0;
-    let unitsUpdated = 0;
-    let ownerMismatches = 0;
-    
-    // CRITICAL: Skip position reconciliation for stale state_sync messages
-    // Checkpoint sync (unit_position_sync) handles position sync, so state_sync should
-    // only be used for health/state updates. Old state_sync messages with stale positions
-    // cause false "catastrophic desync" warnings.
-    const isStaleMessage = Math.abs(tickDiff) > 50; // More than 50 ticks old = stale
-    
-    remoteState.units.forEach(remoteUnit => {
-      const localUnit = findUnitById(remoteUnit.id);
-      if (localUnit) {
-        unitsFound++;
-        
-        // Only accept position updates from the unit's owner
-        // Normalize IDs for comparison (last 6 chars)
-        const localUnitOwnerId = localUnit.owner?.slice ? localUnit.owner.slice(-6) : localUnit.owner;
-        const remoteOwnerId = remotePlayerId?.slice ? remotePlayerId.slice(-6) : remotePlayerId;
-        
-        // Skip if this unit doesn't belong to the remote player
-        if (localUnitOwnerId !== remoteOwnerId) {
-          ownerMismatches++;
-          return; // Not their unit to update
-        }
-        
-        unitsUpdated++;
-        
-        // P2P with checkpoint sync: We now sync positions at checkpoints (every 100 ticks)
-        // This old reconcile system is just a safety net for catastrophic desyncs
-        // Only snap on MASSIVE drift (>50 units = missed command or major logic error)
-        // CRITICAL: Never apply positions from past ticks - only forward or current tick
-        // Skip position reconciliation entirely for stale messages to prevent false desync warnings
-        if (!isStaleMessage && remoteTick >= tick) {
-          // Only reconcile if remote tick is current or future (never past)
-          const dx = remoteUnit.pos.x - localUnit.pb.state.loc.x;
-          const dz = remoteUnit.pos.z - localUnit.pb.state.loc.z;
-          const distanceSq = dx * dx + dz * dz;
-          
-          // Only snap if drift is CATASTROPHIC (> 50 units - probably missed a command)
-          // Normal ~10 unit drift is handled by checkpoint sync every 100 ticks
-          if (distanceSq > 2500) { // 50^2 = 2500
-            localUnit.pb.state.loc.x = remoteUnit.pos.x;
-            localUnit.pb.state.loc.z = remoteUnit.pos.z;
-            console.warn(`⚠️ CATASTROPHIC DESYNC: Snapped unit ${localUnit.id.slice(-4)} - drift: ${Math.sqrt(distanceSq).toFixed(2)} units`);
-          }
-          // Small drift (<50 units) is normal and will be corrected at next checkpoint sync
-        }
-        // If message is stale or from past tick, skip position updates entirely - checkpoint sync handles positions
-        
-        // Always sync health and state immediately (even for stale messages)
-        localUnit.currentHealth = remoteUnit.health;
-        localUnit.state = remoteUnit.state;
-      }
-    });
-    
-    // Log summary occasionally (disabled - working!)
-    // if (tick % (net.TICK_RATE * 5) === 0) {
-    //   console.log(`     ├─ Found: ${unitsFound}/${remoteState.units.length}, Updated: ${unitsUpdated}, Owner mismatches: ${ownerMismatches}`);
-    // }
-    
-    // Update buildings (if provided)
-    if (remoteState.buildings && remoteState.buildings.length > 0) {
-      // Initialize buildings array if it doesn't exist
-      if (!window.buildings) {
-        window.buildings = [];
-      }
-      
-      remoteState.buildings.forEach(remoteBuilding => {
-        // Find or create local building representation
-        let localBuilding = window.buildings.find(b => b.id === remoteBuilding.id);
-        if (!localBuilding) {
-          // Create ghost building for opponent
-          localBuilding = createGhostBuilding(remoteBuilding);
-          window.buildings.push(localBuilding);
-        } else {
-          // Update position if moved (rare)
-          localBuilding.position.x = remoteBuilding.pos.x;
-          localBuilding.position.z = remoteBuilding.pos.z;
-        }
-      });
-    }
+    return remoteState;
   };
   
   // Rewind simulation to previous tick (for corrections)

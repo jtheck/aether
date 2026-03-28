@@ -106,13 +106,11 @@
   
   // Stop demo mode (called when match starts)
   demo.stop = function() {
-    if (!demoActive) return;
-    
-    
+    const wasActive = demoActive;
     demoActive = false;
     
     // Unregister from render loop first
-    if (window.gfx && window.gfx.scene) {
+    if (wasActive && window.gfx && window.gfx.scene) {
       window.gfx.scene.unregisterBeforeRender(demoUpdate);
     }
     
@@ -141,7 +139,13 @@
           unit.mesh = null;
         }
       });
-      window.gameUnits = window.gameUnits.filter(u => u.owner !== 'demo');
+      // Preserve the shared gameUnits array reference. Reassigning it leaves other
+      // systems pointed at stale menu/demo state and causes match-start desyncs.
+      for (let i = window.gameUnits.length - 1; i >= 0; i--) {
+        if (window.gameUnits[i]?.owner === 'demo') {
+          window.gameUnits.splice(i, 1);
+        }
+      }
     }
     
     // Helper to fully dispose a building
@@ -184,7 +188,12 @@
     if (window.gameBuildings) {
       const demoBuildings = window.gameBuildings.filter(b => b.owner === 'demo');
       demoBuildings.forEach(disposeBuilding);
-      window.gameBuildings = window.gameBuildings.filter(b => b.owner !== 'demo');
+      // Preserve the shared gameBuildings array reference for gameplay systems.
+      for (let i = window.gameBuildings.length - 1; i >= 0; i--) {
+        if (window.gameBuildings[i]?.owner === 'demo') {
+          window.gameBuildings.splice(i, 1);
+        }
+      }
     }
     
     // Clear demo player reference
@@ -216,6 +225,11 @@
   // Get demo player (for UI integration)
   demo.getPlayer = function() {
     return demoPlayer;
+  };
+
+  demo.resetTiming = function() {
+    lastDemoUpdateTime = performance.now();
+    demoTickAccumulator = 0;
   };
   
   // Create the demo player object
@@ -478,6 +492,11 @@
       demo.stop();
       return;
     }
+
+    if (window.hiddenTabController?.isMenuSuspended?.()) {
+      demo.resetTiming();
+      return;
+    }
     
     const now = performance.now();
     const elapsed = now - lastDemoUpdateTime;
@@ -641,10 +660,7 @@
       if (building) {
         building.owner = 'demo';
         demoPlayer.buildings.push(building);
-        
-        if (!window.gameBuildings) window.gameBuildings = [];
-        window.gameBuildings.push(building);
-        
+
         // Deduct resources
         const cost = window.BuildingTypes?.[buildingType]?.cost || {};
         Object.keys(cost).forEach(resource => {

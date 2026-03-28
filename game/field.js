@@ -1058,10 +1058,18 @@ PathHeap.prototype.decreaseKey = function(key, node) {
   this.data[idx] = node;
   this._bubbleUp(idx);
 };
+PathHeap.prototype._compare = function(a, b) {
+  if (a.f !== b.f) return a.f - b.f;
+  if (a.h !== b.h) return a.h - b.h;
+  if (a.g !== b.g) return a.g - b.g;
+  if (a.z !== b.z) return a.z - b.z;
+  if (a.x !== b.x) return a.x - b.x;
+  return (a._key || 0) - (b._key || 0);
+};
 PathHeap.prototype._bubbleUp = function(i) {
   while (i > 0) {
     const pi = (i - 1) >> 1;
-    if (this.data[i].f < this.data[pi].f) {
+    if (this._compare(this.data[i], this.data[pi]) < 0) {
       const tmp = this.data[i]; this.data[i] = this.data[pi]; this.data[pi] = tmp;
       i = pi;
     } else break;
@@ -1072,8 +1080,8 @@ PathHeap.prototype._sinkDown = function(i) {
   while (true) {
     let smallest = i;
     const l = 2 * i + 1, r = 2 * i + 2;
-    if (l < n && this.data[l].f < this.data[smallest].f) smallest = l;
-    if (r < n && this.data[r].f < this.data[smallest].f) smallest = r;
+    if (l < n && this._compare(this.data[l], this.data[smallest]) < 0) smallest = l;
+    if (r < n && this._compare(this.data[r], this.data[smallest]) < 0) smallest = r;
     if (smallest === i) break;
     const tmp = this.data[i]; this.data[i] = this.data[smallest]; this.data[smallest] = tmp;
     i = smallest;

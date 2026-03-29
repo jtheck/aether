@@ -315,6 +315,21 @@
       if (loadedPlayers >= totalHumanPlayers && !this.allPlayersReady) {
         this.allPlayersReady = true;
         // console.log(`🎉 All human players loaded! Starting countdown...`);
+
+        if (this._chapterTransitionLoading) {
+          if (this.isHost()) {
+            this.updateLoadingOverlay(`Entering ${this._chapterTransitionLabel || 'next chapter'}...`);
+            if (window.isMultiplayer && window.net && window.net.p2p) {
+              window.net.p2p.sendData({ type: 'match_start' });
+            }
+            setTimeout(() => {
+              this.beginPlaying();
+            }, 150);
+          } else {
+            this.updateLoadingOverlay(`Loading ${this._chapterTransitionLabel || 'next chapter'}...`);
+          }
+          return;
+        }
         
         // Only HOST starts the countdown and broadcasts to clients
         if (this.isHost()) {
@@ -439,6 +454,7 @@
     // Actually start gameplay (called after countdown)
     beginPlaying() {
       this.state = MatchState.PLAYING;
+      this._chapterTransitionLoading = false;
       this.startedAt = Date.now();
       this.tick = 0;
       this.gameTime = 0;
@@ -735,6 +751,7 @@
       // 3. 150ms is within human perception threshold for "immediate"
       const isRealtimePlayerCommand =
         command.type === 'move' ||
+        command.type === 'load' ||
         command.type === 'attack' ||
         command.type === 'attack_building' ||
         command.type === 'ability' ||
@@ -785,6 +802,25 @@
         playerCommandSeq,
         priority: isStatefulPlayerCommand ? 'high' : 'normal' // Mark priority for network layer
       };
+
+      this.traceMoveCommand('submit', enrichedCommand, {
+        requestedPlayerId: command.playerId || null,
+        requestedPlayerNorm: normalizedRequestedPlayerId || null,
+        canonicalizedTo: commandPlayerId || null,
+        canonicalized: shouldCanonicalizeLocalPlayerId,
+        requestedPlayerExists,
+        confirmedHorizon,
+        inputDelayTicks: this.inputDelayTicks
+      });
+      this.traceBuildCommand('submit', enrichedCommand, {
+        requestedPlayerId: command.playerId || null,
+        requestedPlayerNorm: normalizedRequestedPlayerId || null,
+        canonicalizedTo: commandPlayerId || null,
+        canonicalized: shouldCanonicalizeLocalPlayerId,
+        requestedPlayerExists,
+        confirmedHorizon,
+        inputDelayTicks: this.inputDelayTicks
+      });
       
       // Debug: log gather/work commands (disabled for cleaner console)
       // if (command.type === 'gather' || command.type === 'work') {
@@ -806,6 +842,8 @@
       // Repeated move spam for the same player+unit set+scheduled tick collapses to the latest intent.
       this.coalescePendingMoveCommand(enrichedCommand);
       const shouldBroadcast = this.bufferCommand(enrichedCommand);
+      this.traceMoveCommand('submit-buffer-result', enrichedCommand, { shouldBroadcast });
+      this.traceBuildCommand('submit-buffer-result', enrichedCommand, { shouldBroadcast });
       if (!shouldBroadcast) {
         return true;
       }
@@ -876,6 +914,8 @@
       switch (command.type) {
         case 'move':
           return command.unitIds && command.target;
+        case 'load':
+          return command.unitIds && command.transportId;
         case 'attack':
           return command.unitIds && command.targetId;
         case 'attack_building':
@@ -901,6 +941,74 @@
       if (!playerId) return '';
       const id = typeof playerId === 'string' ? playerId : String(playerId);
       return id.length > 6 ? id.slice(-6) : id;
+    }
+
+    shouldTraceMoveCommand(command) {
+      return !!(command && command.type === 'move' && this.isLiveMultiplayerMatch());
+    }
+
+    traceMoveCommand(stage, command, extra = {}) {
+      if (!this.shouldTraceMoveCommand(command)) return;
+      const normalizeId = (id) => this.normalizeCommandPlayerId(id || '');
+      const localNetId = window.net?.getStatus?.().localPlayerId || '';
+      console.log(`🧭 MOVE TRACE ${stage}`, {
+        matchTick: this.tick,
+        matchState: this.state,
+        localPlayerId: this.localPlayerId || null,
+        localPlayerNorm: normalizeId(this.localPlayerId),
+        windowPlayerId: window.player?.id || null,
+        windowPlayerNorm: normalizeId(window.player?.id || ''),
+        netLocalPlayerId: localNetId || null,
+        netLocalPlayerNorm: normalizeId(localNetId),
+        commandId: command.commandId || null,
+        commandPlayerId: command.playerId || null,
+        commandPlayerNorm: normalizeId(command.playerId || ''),
+        playerCommandSeq: Number.isFinite(command.playerCommandSeq) ? command.playerCommandSeq : null,
+        tick: Number.isFinite(command.tick) ? command.tick : null,
+        unitIds: Array.isArray(command.unitIds) ? command.unitIds.slice() : [],
+        transportAssignments: Array.isArray(command.transportAssignments)
+          ? command.transportAssignments.map(entry => ({
+              riderId: entry?.riderId || null,
+              transportId: entry?.transportId || null
+            }))
+          : [],
+        target: command.target
+          ? {
+              x: Math.round((command.target.x || 0) * 10) / 10,
+              z: Math.round((command.target.z || 0) * 10) / 10
+            }
+          : null,
+        ...extra
+      });
+    }
+
+    shouldTraceBuildCommand(command) {
+      return !!(command && command.type === 'build' && this.isLiveMultiplayerMatch());
+    }
+
+    traceBuildCommand(stage, command, extra = {}) {
+      if (!this.shouldTraceBuildCommand(command)) return;
+      const normalizeId = (id) => this.normalizeCommandPlayerId(id || '');
+      const localNetId = window.net?.getStatus?.().localPlayerId || '';
+      console.log(`🏗️ BUILD TRACE ${stage}`, {
+        matchTick: this.tick,
+        matchState: this.state,
+        localPlayerId: this.localPlayerId || null,
+        localPlayerNorm: normalizeId(this.localPlayerId),
+        windowPlayerId: window.player?.id || null,
+        windowPlayerNorm: normalizeId(window.player?.id || ''),
+        netLocalPlayerId: localNetId || null,
+        netLocalPlayerNorm: normalizeId(localNetId),
+        commandId: command.commandId || null,
+        commandPlayerId: command.playerId || null,
+        commandPlayerNorm: normalizeId(command.playerId || ''),
+        playerCommandSeq: Number.isFinite(command.playerCommandSeq) ? command.playerCommandSeq : null,
+        tick: Number.isFinite(command.tick) ? command.tick : null,
+        buildingType: command.buildingType || null,
+        gridX: Number.isFinite(command.gridX) ? command.gridX : null,
+        gridZ: Number.isFinite(command.gridZ) ? command.gridZ : null,
+        ...extra
+      });
     }
 
     nextPlayerCommandSequence(playerId) {
@@ -965,23 +1073,67 @@
       }
 
       const commands = this.commandBuffer.get(tickKey);
+      if (command?.commandId) {
+        const duplicateIndex = commands.findIndex(existing => existing?.commandId === command.commandId);
+        if (duplicateIndex !== -1) {
+          // ACK retries can resend the exact same lockstep command. Keep only one copy.
+          commands[duplicateIndex] = command;
+          this.traceMoveCommand('buffer-duplicate', command, { tickKey, duplicateIndex });
+          this.traceBuildCommand('buffer-duplicate', command, { tickKey, duplicateIndex });
+          return false;
+        }
+      }
       const moveKey = this.getMoveCoalesceKey(command);
       if (!moveKey) {
         commands.push(command);
+        this.traceMoveCommand('buffer-insert', command, {
+          tickKey,
+          slot: commands.length - 1,
+          bufferSize: commands.length,
+          moveKey: null
+        });
+        this.traceBuildCommand('buffer-insert', command, {
+          tickKey,
+          slot: commands.length - 1,
+          bufferSize: commands.length
+        });
         return true;
       }
 
       const existingIndex = commands.findIndex(existing => this.getMoveCoalesceKey(existing) === moveKey);
       if (existingIndex === -1) {
         commands.push(command);
+        this.traceMoveCommand('buffer-insert', command, {
+          tickKey,
+          slot: commands.length - 1,
+          bufferSize: commands.length,
+          moveKey
+        });
         return true;
       }
 
       if (this.isIncomingMoveCommandNewer(commands[existingIndex], command)) {
+        const replacedCommand = commands[existingIndex];
         commands[existingIndex] = command;
+        this.traceMoveCommand('buffer-replace', command, {
+          tickKey,
+          existingIndex,
+          moveKey,
+          replacedCommandId: replacedCommand?.commandId || null,
+          replacedPlayerSeq: Number.isFinite(replacedCommand?.playerCommandSeq) ? replacedCommand.playerCommandSeq : null,
+          replacedTick: Number.isFinite(replacedCommand?.tick) ? replacedCommand.tick : null
+        });
         return true;
       }
 
+      this.traceMoveCommand('buffer-ignore-older', command, {
+        tickKey,
+        existingIndex,
+        moveKey,
+        keptCommandId: commands[existingIndex]?.commandId || null,
+        keptPlayerSeq: Number.isFinite(commands[existingIndex]?.playerCommandSeq) ? commands[existingIndex].playerCommandSeq : null,
+        keptTick: Number.isFinite(commands[existingIndex]?.tick) ? commands[existingIndex].tick : null
+      });
       return false;
     }
     
@@ -1026,6 +1178,9 @@
       switch (command.type) {
         case 'move':
           this.executeMoveCommand(command);
+          break;
+        case 'load':
+          this.executeLoadCommand(command);
           break;
         case 'attack':
           this.executeAttackCommand(command);
@@ -1186,7 +1341,20 @@
         
         // Clear any existing behavior immediately
         if (window.behaviorManager && window.behaviorManager.behaviors) {
-          window.behaviorManager.behaviors.delete(unit);
+          if (window.behaviorManager.deleteBehaviorDirect) {
+            window.behaviorManager.deleteBehaviorDirect(unit, 'executeMove-delete', {
+              commandId: cmd.commandId || null,
+              sequence: cmd.sequence ?? null,
+              target: cmd.target
+                ? {
+                    x: Math.round((cmd.target.x || 0) * 10) / 10,
+                    z: Math.round((cmd.target.z || 0) * 10) / 10
+                  }
+                : null
+            });
+          } else {
+            window.behaviorManager.behaviors.delete(unit);
+          }
         }
         
         // Clear combat state when given a move order
@@ -1271,7 +1439,7 @@
               y: cmd.target.y,
               z: Math.round((cmd.target.z + rowOffset) * 100) / 100
             };
-            
+
             // Explicit player moves already have deterministic spread targets assigned here.
             // Do not layer per-unit personality offsets on top, or peers can diverge.
             window.behaviorManager.setBehavior(unit, 'walk', {
@@ -1290,21 +1458,66 @@
         });
       }
 
-      // Transport auto-load: tag non-transport units with their nearest transport in the group
-      if (commandUnits.length > 1) {
+      const explicitTransportAssignments = Array.isArray(cmd.transportAssignments)
+        ? cmd.transportAssignments
+            .filter(entry => entry && entry.riderId && entry.transportId)
+            .slice()
+            .sort((a, b) => {
+              const riderCompare = window.deterministicStringCompare(a.riderId || '', b.riderId || '');
+              if (riderCompare !== 0) return riderCompare;
+              return window.deterministicStringCompare(a.transportId || '', b.transportId || '');
+            })
+        : [];
+
+      if (explicitTransportAssignments.length > 0 && commandUnits.length > 1) {
+        const allUnits = window.gameUnits || [];
+        const unitById = new Map(commandUnits.map(unit => [unit.id, unit]));
+        const assignedPairs = [];
+
+        explicitTransportAssignments.forEach(entry => {
+          const rider = unitById.get(entry.riderId);
+          const transport = unitById.get(entry.transportId) || this.getUnitById(entry.transportId);
+
+          if (!rider || !transport || rider.id === transport.id || rider.carriedBy) return;
+          if (!transport.abilities?.includes('transport')) return;
+
+          const riderOwner = rider.owner?.length > 6 ? rider.owner.slice(-6) : rider.owner;
+          const transportOwnerId = transport.owner?.length > 6 ? transport.owner.slice(-6) : transport.owner;
+          if (riderOwner !== normalizedPlayerId || transportOwnerId !== normalizedPlayerId) return;
+
+          const passengerCount = window.getTransportPassengerIds
+            ? window.getTransportPassengerIds(transport, allUnits).length
+            : (transport.passengers?.length || 0);
+          const transportCapacity = Number.isFinite(transport.transportCapacity) ? transport.transportCapacity : Infinity;
+          if (passengerCount >= transportCapacity) return;
+
+          rider._transportTarget = transport.id;
+          assignedPairs.push({
+            riderId: rider.id,
+            transportId: transport.id
+          });
+        });
+
+        this.traceMoveCommand('execute-transport-plan', cmd, {
+          appliedTransportAssignments: assignedPairs
+        });
+      } else if (!this.isLiveMultiplayerMatch() && commandUnits.length > 1) {
+        // Transport auto-load fallback for legacy single-player move commands:
+        // tag non-transport units with their nearest transport in the group.
         const transports = commandUnits.filter(u => u.abilities && u.abilities.includes('transport') && u.passengers);
         const riders = commandUnits.filter(u => !u.abilities || !u.abilities.includes('transport'));
         if (transports.length > 0 && riders.length > 0) {
-          // Sort riders deterministically
           const sortedRiders = [...riders].sort((a, b) => window.deterministicStringCompare(a.id, b.id));
           sortedRiders.forEach(rider => {
-            // Find nearest transport with remaining capacity
             let bestTransport = null;
             let bestDistSq = Infinity;
             const rLoc = rider.pb && rider.pb.state ? rider.pb.state.loc : null;
             if (!rLoc) return;
             for (const t of transports) {
-              if (t.passengers.length >= t.transportCapacity) continue;
+              const passengerCount = window.getTransportPassengerIds
+                ? window.getTransportPassengerIds(t, commandUnits).length
+                : (t.passengers?.length || 0);
+              if (passengerCount >= t.transportCapacity) continue;
               const tLoc = t.pb && t.pb.state ? t.pb.state.loc : null;
               if (!tLoc) continue;
               const ddx = rLoc.x - tLoc.x;
@@ -1321,15 +1534,151 @@
           });
         }
       }
+
     }
     
     executeUnloadCommand(cmd) {
       const allUnits = window.gameUnits || [];
       const transport = allUnits.find(u => u.id === cmd.unitId);
-      if (!transport || !transport.passengers || transport.passengers.length === 0) return;
+      if (!transport) return;
+      if (this.isLiveMultiplayerMatch()) {
+        console.log('🛬 UNLOAD TRACE command', {
+          tick: this.tick,
+          commandId: cmd.commandId || null,
+          playerId: cmd.playerId || null,
+          playerNorm: this.normalizeCommandPlayerId(cmd.playerId || ''),
+          transportId: cmd.unitId || null,
+          target: cmd.target
+            ? {
+                x: Math.round((cmd.target.x || 0) * 10) / 10,
+                z: Math.round((cmd.target.z || 0) * 10) / 10
+              }
+            : null
+        });
+      }
       if (window.unloadPassengers) {
         window.unloadPassengers(transport, cmd.target);
       }
+    }
+
+    executeLoadCommand(cmd) {
+      const transport = this.getUnitById(cmd.transportId);
+      const units = this.getUnitsByIds(cmd.unitIds);
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      const transportOwner = (transport?.owner || '').length > 6 ? transport.owner.slice(-6) : transport?.owner;
+
+      if (!transport || transportOwner !== normalizedPlayerId || !transport.abilities?.includes('transport')) {
+        console.warn('🛫 LOAD TRACE reject', {
+          tick: this.tick || 0,
+          rawPlayerId,
+          normalizedPlayerId,
+          transportId: cmd.transportId || null,
+          transportFound: !!transport,
+          transportOwner: transport?.owner || null,
+          transportOwnerNorm: transportOwner || null,
+          transportAbilities: transport?.abilities?.slice?.() || []
+        });
+        return;
+      }
+
+      const currentTick = this.tick || 0;
+      const sortedRiders = units
+        .filter(unit => {
+          if (!unit || unit.id === transport.id || unit.carriedBy) return false;
+          if (unit.abilities?.includes('transport')) return false;
+          const unitOwner = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
+          return unitOwner === normalizedPlayerId;
+        })
+        .sort((a, b) => window.deterministicStringCompare(a.id || '', b.id || ''));
+
+      const tLoc = transport.pb?.state?.loc;
+      if (!tLoc) return;
+
+      const getPassengerCount = () => window.getTransportPassengerIds
+        ? window.getTransportPassengerIds(transport, window.gameUnits || []).length
+        : (transport.passengers?.length || 0);
+      const transportCapacity = Number.isFinite(transport.transportCapacity) ? transport.transportCapacity : Infinity;
+      const tileSize = window.TILE_SIZE || 4;
+      const isInSameTileDeterministic = (a, b) =>
+        Math.floor(a.x / tileSize) === Math.floor(b.x / tileSize) &&
+        Math.floor(a.z / tileSize) === Math.floor(b.z / tileSize);
+      const getStableDistanceSqDeterministic = (a, b) => {
+        const ax = Math.round(a.x * 10) / 10;
+        const az = Math.round(a.z * 10) / 10;
+        const bx = Math.round(b.x * 10) / 10;
+        const bz = Math.round(b.z * 10) / 10;
+        const dx = bx - ax;
+        const dz = bz - az;
+        return Math.round((dx * dx + dz * dz) * 1000) / 1000;
+      };
+      const transportLoadRangeSq = 36;
+
+      console.log('🛫 LOAD TRACE execute', {
+        tick: currentTick,
+        rawPlayerId,
+        normalizedPlayerId,
+        transportId: transport.id || null,
+        transportOwner: transport.owner || null,
+        passengerCount: getPassengerCount(),
+        transportCapacity,
+        riderIds: sortedRiders.map(rider => rider.id)
+      });
+
+      sortedRiders.forEach(rider => {
+        if (getPassengerCount() >= transportCapacity) {
+          console.warn('🛫 LOAD TRACE capacity-stop', {
+            tick: currentTick,
+            transportId: transport.id || null,
+            riderId: rider.id || null,
+            passengerCount: getPassengerCount(),
+            transportCapacity
+          });
+          return;
+        }
+
+        rider.lastPlayerCommandTick = currentTick;
+        rider.lastPlayerMoveTick = currentTick;
+        rider._transportTarget = transport.id;
+
+        const rLoc = rider.pb?.state?.loc;
+        if (!rLoc) return;
+
+        const closeEnough = isInSameTileDeterministic(rLoc, tLoc) ||
+          getStableDistanceSqDeterministic(rLoc, tLoc) <= transportLoadRangeSq;
+
+        console.log('🛫 LOAD TRACE rider', {
+          tick: currentTick,
+          transportId: transport.id || null,
+          riderId: rider.id || null,
+          riderOwner: rider.owner || null,
+          riderLoc: {
+            x: Math.round((rLoc.x || 0) * 10) / 10,
+            z: Math.round((rLoc.z || 0) * 10) / 10
+          },
+          transportLoc: {
+            x: Math.round((tLoc.x || 0) * 10) / 10,
+            z: Math.round((tLoc.z || 0) * 10) / 10
+          },
+          closeEnough
+        });
+
+        if (closeEnough && window.loadUnitIntoTransport) {
+          window.loadUnitIntoTransport(rider, transport);
+          return;
+        }
+
+        if (window.behaviorManager) {
+          window.behaviorManager.setBehavior(rider, 'walk', {
+            targetPoint: {
+              x: Math.round((tLoc.x || 0) * 100) / 100,
+              z: Math.round((tLoc.z || 0) * 100) / 100
+            },
+            applyPersonalityOffset: false,
+            forceDeterministicReset: true
+          });
+        }
+      });
     }
 
     executeAttackCommand(cmd) {
@@ -1544,6 +1893,23 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
       const normalizedOwner = (building?.owner || '').length > 6 ? building.owner.slice(-6) : building?.owner;
+
+      if (shouldLogTrain && this.isLiveMultiplayerMatch()) {
+        console.log('🛫 TRAIN TRACE execute', {
+          tick: this.tick,
+          commandId: cmd.commandId || null,
+          commandPlayerId: cmd.playerId || null,
+          normalizedPlayerId,
+          buildingId: cmd.buildingId || null,
+          buildingExists: !!building,
+          buildingType: building?.type || null,
+          buildingOwner: building?.owner || null,
+          normalizedOwner: normalizedOwner || null,
+          buildProgress: Number.isFinite(building?.buildProgress) ? Math.round(building.buildProgress * 1000) / 1000 : null,
+          playerExists: !!player,
+          playerId: player?.id || null
+        });
+      }
       
       if (!building || !player || normalizedOwner !== normalizedPlayerId) {
         if (shouldLogTrain) {
@@ -1552,8 +1918,10 @@
             normalizedPlayerId,
             buildingId: cmd.buildingId,
             buildingExists: !!building,
+            buildingType: building?.type || null,
             buildingOwner: building?.owner || null,
             normalizedOwner: normalizedOwner || null,
+            buildProgress: Number.isFinite(building?.buildProgress) ? Math.round(building.buildProgress * 1000) / 1000 : null,
             playerExists: !!player
           });
         }
@@ -1565,8 +1933,10 @@
       if (unitDef && unitDef.spawner && building.type !== unitDef.spawner) {
         if (shouldLogTrain) {
           console.warn('❌ Dirigible train rejected: wrong spawner type', {
+            buildingId: cmd.buildingId,
             buildingType: building.type,
-            requiredSpawner: unitDef.spawner
+            requiredSpawner: unitDef.spawner,
+            buildProgress: Number.isFinite(building?.buildProgress) ? Math.round(building.buildProgress * 1000) / 1000 : null
           });
         }
         return;
@@ -1726,7 +2096,11 @@
       // CRITICAL: Remove old unit from behavior manager BEFORE creating new unit
       // This prevents desync from duplicate behaviors
       if (window.behaviorManager && window.behaviorManager.behaviors) {
-        window.behaviorManager.behaviors.delete(unit);
+        if (window.behaviorManager.deleteBehaviorDirect) {
+          window.behaviorManager.deleteBehaviorDirect(unit, 'convert-delete-old-unit');
+        } else {
+          window.behaviorManager.behaviors.delete(unit);
+        }
       }
       
       // Remove from selection if selected (will add new unit back after creation)
@@ -1925,11 +2299,19 @@
         
         // Set behavior based on building state
         if (window.behaviorManager) {
-          if (building.buildProgress !== undefined && building.buildProgress < 1) {
+          const effectiveWorkType = (!building.completionProcessed && building.workType === 'build')
+            ? 'build'
+            : building.workType;
+          if (effectiveWorkType === 'build') {
             window.behaviorManager.setBehavior(unit, 'build_work', { building: building });
-          } else if (building.type === 'camp') {
-            window.behaviorManager.setBehavior(unit, 'gather_work', { building: building });
-          } else if (building.type === 'farm') {
+          } else if (effectiveWorkType === 'gather' || effectiveWorkType === 'mine') {
+            const gatherParams = { building: building };
+            if (effectiveWorkType === 'mine') {
+              gatherParams.gatherDuration = 7500;
+              gatherParams.resourceTypes = ['stone', 'minerals'];
+            }
+            window.behaviorManager.setBehavior(unit, 'gather_work', gatherParams);
+          } else if (effectiveWorkType === 'farm') {
             window.behaviorManager.setBehavior(unit, 'farm_work', { building: building });
           } else {
             window.behaviorManager.setBehavior(unit, 'work', { building: building });
@@ -2088,6 +2470,7 @@
         case 'objectives':
           // Adventure mode - check if any player's units have reached objective zones
           this.checkObjectiveVictory();
+          this.checkAdventureDefeat();
           break;
       }
     }
@@ -2163,10 +2546,82 @@
       // TILE_SIZE is a global constant from constants.js (value = 4)
       const tileSize = (typeof TILE_SIZE !== 'undefined') ? TILE_SIZE : 4;
       
-      // Get all player units (only from window.gameUnits as source of truth)
-      const allUnits = (window.gameUnits || []).filter(u => u && !u.dead);
+      // Get player-owned units only (exclude enemy/NPC units from objective checks).
+      // Build a set of normalized player IDs so we can quickly filter.
+      const playerIdSet = new Set();
+      if (this.players && this.players.length > 0) {
+        for (const p of this.players) {
+          const pid = p.id || '';
+          playerIdSet.add(pid.length > 6 ? pid.slice(-6) : pid);
+        }
+      }
+      const allUnits = (window.gameUnits || []).filter(u => {
+        if (!u || u.dead) return false;
+        if (playerIdSet.size === 0) return true;
+        const owner = (u.owner || '').length > 6 ? u.owner.slice(-6) : (u.owner || '');
+        return playerIdSet.has(owner);
+      });
       
       if (allUnits.length === 0) return;
+
+      const getObjectiveUnitPosition = (unit) => {
+        if (!unit) return { x: 0, z: 0 };
+
+        // Carried passengers keep a stale pb.loc while loaded, so use their transport position
+        // for objective checks. This matches transport LOD handling and keeps exit checks sane.
+        if (unit.carriedBy) {
+          const transport = allUnits.find(other => other && other.id === unit.carriedBy);
+          if (transport?.pb?.state?.loc) {
+            return {
+              x: transport.pb.state.loc.x,
+              z: transport.pb.state.loc.z
+            };
+          }
+        }
+
+        if (unit.pb?.state?.loc) {
+          return {
+            x: unit.pb.state.loc.x,
+            z: unit.pb.state.loc.z
+          };
+        }
+
+        if (unit.mesh?.position) {
+          return {
+            x: unit.mesh.position.x,
+            z: unit.mesh.position.z
+          };
+        }
+
+        return { x: 0, z: 0 };
+      };
+
+      const getAdventureEscapeGroups = () => {
+        // Escape objectives should track the authored adventure party, not every living
+        // human-owned unit in the match. That prevents built extras or allied squads from
+        // blocking chapter exits, and matches the "our party escaped" expectation.
+        const startingPartyUnits = allUnits.filter(unit =>
+          Number.isFinite(unit?.adventureSpawnIndex) &&
+          !unit?.isNPC
+        );
+        const sourceUnits = startingPartyUnits.length > 0 ? startingPartyUnits : allUnits;
+        const groups = new Map();
+
+        sourceUnits.forEach(unit => {
+          const owner = unit?.owner || '';
+          if (!owner) return;
+          if (!groups.has(owner)) groups.set(owner, []);
+          groups.get(owner).push(unit);
+        });
+
+        return Array.from(groups.entries())
+          .map(([owner, units]) => ({
+            owner,
+            units: units.slice().sort((a, b) => window.deterministicStringCompare(a.id || '', b.id || ''))
+          }))
+          .filter(group => group.units.length > 0)
+          .sort((a, b) => window.deterministicStringCompare(a.owner || '', b.owner || ''));
+      };
       
       let objectivesCompleted = 0;
       
@@ -2184,16 +2639,9 @@
         if (obj.type === 'reach' || obj.type === 'escape') {
           // Check each unit's position against the objective zone
           for (const unit of allUnits) {
-            // Get unit position from physics body (primary) or mesh (fallback)
-            let unitX = 0, unitZ = 0;
-            if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-              unitX = unit.pb.state.loc.x;
-              unitZ = unit.pb.state.loc.z;
-            } else if (unit.mesh && unit.mesh.position) {
-              unitX = unit.mesh.position.x;
-              unitZ = unit.mesh.position.z;
-            }
-            
+            const pos = getObjectiveUnitPosition(unit);
+            const unitX = pos.x;
+            const unitZ = pos.z;
             const dx = unitX - objWorldX;
             const dz = unitZ - objWorldZ;
             const dist = Math.sqrt(dx * dx + dz * dz);
@@ -2231,24 +2679,29 @@
         
         // For escape objectives, check if ALL units are in the zone
         if (obj.type === 'escape' && !obj.completed) {
-          const unitsInZone = allUnits.filter(unit => {
-            let ux = 0, uz = 0;
-            if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-              ux = unit.pb.state.loc.x;
-              uz = unit.pb.state.loc.z;
-            } else if (unit.mesh && unit.mesh.position) {
-              ux = unit.mesh.position.x;
-              uz = unit.mesh.position.z;
+          const escapeGroups = getAdventureEscapeGroups();
+          let completedEscapeGroup = null;
+          let unitsInZone = [];
+
+          for (const group of escapeGroups) {
+            const groupUnitsInZone = group.units.filter(unit => {
+              const pos = getObjectiveUnitPosition(unit);
+              const dx = pos.x - objWorldX;
+              const dz = pos.z - objWorldZ;
+              return Math.sqrt(dx * dx + dz * dz) <= objRadius;
+            });
+
+            if (group.units.length > 0 && groupUnitsInZone.length === group.units.length) {
+              completedEscapeGroup = group;
+              unitsInZone = groupUnitsInZone;
+              break;
             }
-            const dx = ux - objWorldX;
-            const dz = uz - objWorldZ;
-            return Math.sqrt(dx * dx + dz * dz) <= objRadius;
-          });
+          }
           
-          if (allUnits.length > 0 && unitsInZone.length === allUnits.length) {
+          if (completedEscapeGroup) {
             obj.completed = true;
             objectivesCompleted++;
-            console.log(`🎯 Escape objective ${obj.id + 1} completed! All units in zone at (${obj.x}, ${obj.y})`);
+            console.log(`🎯 Escape objective ${obj.id + 1} completed! Party ${completedEscapeGroup.owner} escaped at (${obj.x}, ${obj.y}) with ${unitsInZone.length} units`);
             
             // Show speech bubble on first unit if message exists
             if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech && unitsInZone.length > 0) {
@@ -2272,9 +2725,14 @@
         }
       }
       
+      // Log progress periodically so incomplete objectives are visible in console
+      if (objectivesCompleted > 0 && objectivesCompleted < objectives.length && this.tick % 200 === 0) {
+        const incomplete = objectives.filter(o => !o.completed).map(o => `#${o.id+1} ${o.type}@(${o.x},${o.y})`);
+        console.log(`🎯 Objectives: ${objectivesCompleted}/${objectives.length} — incomplete: ${incomplete.join(', ')}`);
+      }
+
       // Check if all objectives are completed
       if (objectivesCompleted === objectives.length && objectives.length > 0) {
-        console.log('🏆 All objectives completed! Adventure victory!');
         
         // Show victory dialogue and transition to next chapter
         this._adventureVictoryHandled = true;
@@ -2291,71 +2749,79 @@
       }
     }
     
-    // Handle adventure victory - show dialogue and transition to next chapter
-    handleAdventureVictory() {
-      // Guard: this can be called multiple times if multiple systems detect victory.
-      if (this._adventureVictoryPromptShown) {
-        return;
-      }
-      this._adventureVictoryPromptShown = true;
-      
-      // Get current chapter info
-      const currentChapterId = window.currentChapterId || 'chapter1';
-      const nextChapterId = this.getNextChapterId(currentChapterId);
-      
-      if (nextChapterId) {
-        // Show victory message with "Continue" option
-        if (window.showStoryDialogue) {
-          window.showStoryDialogue('🏆 Chapter Complete! Ready for the next adventure?', 'victory', () => {
-            // CO-OP: coordinate party transition instead of each peer loading independently.
-            const isCoop = window.isMultiplayer && Array.isArray(this.players) && this.players.filter(p => !p.isAI).length > 1;
-            if (isCoop && window.net && window.net.p2p) {
-              // Initialize transition state (host tracks ready players).
-              if (!this._chapterTransition) {
-                this._chapterTransition = { nextChapterId: null, ready: new Set(), started: false };
-              }
-              
-              // IMPORTANT: Don't wipe readiness if another player already clicked Continue.
-              // This fixes the "peer clicks first, host clicks second → stuck forever" case.
-              if (this._chapterTransition.nextChapterId !== nextChapterId) {
-                this._chapterTransition.nextChapterId = nextChapterId;
-                this._chapterTransition.ready.clear();
-                this._chapterTransition.started = false;
-              } else {
-                // Same transition already in progress; keep existing ready set.
-                this._chapterTransition.started = !!this._chapterTransition.started;
-              }
-              
-              // Mark self ready immediately on Continue.
-              this._chapterTransition.ready.add(this.localPlayerId);
-              window.net.p2p.sendData({
-                type: 'adventure_chapter_ready',
-                nextChapterId,
-                playerId: this.localPlayerId
-              });
-              
-              // Host may already have all players (e.g., 2-player game and peer clicked earlier)
-              if (this.isHost()) {
-                this._checkChapterTransitionReady();
-              } else {
-                // Clients wait for host to broadcast adventure_chapter_start
-                this.updateLoadingOverlay('Waiting for party...');
-              }
-              return;
-            }
-            
-            // Solo (or fallback): Load next chapter locally
-            if (window.Lobby && window.Lobby.loadAdventureChapter) {
-              window.Lobby.loadAdventureChapter(nextChapterId);
-            } else {
-              this.endMatch(this.localPlayerId, 'objectives');
-            }
-          });
-        } else {
-          this.endMatch(this.localPlayerId, 'objectives');
+    // Check if all player units are dead in adventure mode
+    checkAdventureDefeat() {
+      if (this.state === MatchState.VICTORY || this.state === MatchState.DEFEAT) return;
+      if (this._adventureVictoryHandled) return;
+      // Grace period — don't check during the first 5 seconds
+      if (this.tick < 100) return;
+
+      // In multiplayer, only the host decides defeat (same as objectives)
+      if (window.isMultiplayer && !this.isHost()) return;
+
+      // Build set of player owner IDs (same logic as checkObjectiveVictory)
+      const playerIdSet = new Set();
+      if (this.players && this.players.length > 0) {
+        for (const p of this.players) {
+          const pid = p.id || '';
+          playerIdSet.add(pid.length > 6 ? pid.slice(-6) : pid);
         }
+      }
+
+      const livingPlayerUnits = (window.gameUnits || []).filter(u => {
+        if (!u || u.dead) return false;
+        if (playerIdSet.size === 0) return true;
+        const owner = (u.owner || '').length > 6 ? u.owner.slice(-6) : (u.owner || '');
+        return playerIdSet.has(owner);
+      });
+
+      if (livingPlayerUnits.length > 0) return;
+
+      console.log('💀 Adventure defeat — all player units are dead');
+      this.isPaused = true;
+      this.state = MatchState.DEFEAT;
+      this.replay = this.replay || {};
+      this.replay.reason = 'objectives';
+      this.replay.winner = null;
+
+      if (window.isMultiplayer && window.net && window.net.p2p) {
+        window.net.p2p.sendData({ type: 'adventure_defeat' });
+      }
+
+      if (window.showStoryDialogue) {
+        window.showStoryDialogue('💀 All units lost. Mission failed.', 'defeat', () => {
+          this.showEndGameScreen();
+        });
       } else {
-        // No more chapters - final victory!
+        this.showEndGameScreen();
+      }
+    }
+
+    // Handle adventure victory - play victory scene (if any), then transition
+    async handleAdventureVictory() {
+      if (this._adventureVictoryPromptShown) return;
+      this._adventureVictoryPromptShown = true;
+
+      // Play the victory scene if one exists (camera look-back, dialogue, etc.)
+      try {
+        if (this.scenePlayer) {
+          const scenePromise = this.scenePlayer.playByTrigger('victory');
+          if (scenePromise) {
+            this.isPaused = false;
+            await scenePromise;
+          }
+        }
+      } catch (err) {
+        console.error('🎬 Victory scene error:', err);
+      }
+
+      const currentChapterId = this.currentChapterId || window.currentChapterId || 'chapter1';
+      const nextChapterId = this.getNextChapterId(currentChapterId);
+      console.log(`🏆 Adventure victory: current=${currentChapterId}, next=${nextChapterId}`);
+
+      if (nextChapterId) {
+        this._transitionToNextChapter(nextChapterId);
+      } else {
         if (window.showStoryDialogue) {
           window.showStoryDialogue('🎉 Congratulations! You have completed all chapters!', 'victory', () => {
             this.endMatch(this.localPlayerId, 'objectives');
@@ -2363,6 +2829,38 @@
         } else {
           this.endMatch(this.localPlayerId, 'objectives');
         }
+      }
+    }
+
+    _transitionToNextChapter(nextChapterId) {
+      const isCoop = window.isMultiplayer && Array.isArray(this.players) && this.players.filter(p => !p.isAI).length > 1;
+      if (isCoop && window.net && window.net.p2p) {
+        if (!this._chapterTransition) {
+          this._chapterTransition = { nextChapterId: null, ready: new Set(), started: false };
+        }
+        if (this._chapterTransition.nextChapterId !== nextChapterId) {
+          this._chapterTransition.nextChapterId = nextChapterId;
+          this._chapterTransition.ready.clear();
+          this._chapterTransition.started = false;
+        }
+        this._chapterTransition.ready.add(this.localPlayerId);
+        window.net.p2p.sendData({
+          type: 'adventure_chapter_ready',
+          nextChapterId,
+          playerId: this.localPlayerId
+        });
+        if (this.isHost()) {
+          this._checkChapterTransitionReady();
+        } else {
+          this.updateLoadingOverlay('Waiting for party...');
+        }
+        return;
+      }
+
+      if (window.Lobby && window.Lobby.loadAdventureChapter) {
+        window.Lobby.loadAdventureChapter(nextChapterId);
+      } else {
+        this.endMatch(this.localPlayerId, 'objectives');
       }
     }
 
@@ -2620,19 +3118,22 @@
       }
 
       if (this.gameType === 'teams') {
-        // For team games, split players into two teams
-        // First half = team 1, second half = team 2
+        // For team games, split players into two teams.
+        // First half = team 1, second half = team 2.
+        // Use normalized IDs for comparison since playerId may be in any format.
         const totalPlayers = this.players.length;
         const teamSize = Math.ceil(totalPlayers / 2);
-        const playerIndex = this.players.findIndex(p => (p.id || p) === playerId);
+        const normalizedQuery = this.normalizeCommandPlayerId(playerId);
+        const playerIndex = this.players.findIndex(p => 
+          this.normalizeCommandPlayerId(p.id || p) === normalizedQuery
+        );
         
-        if (playerIndex < teamSize) {
-          // Team 1 (first half)
+        if (playerIndex >= 0 && playerIndex < teamSize) {
           return this.players.slice(0, teamSize).map(p => p.id || p);
-        } else {
-          // Team 2 (second half)
+        } else if (playerIndex >= teamSize) {
           return this.players.slice(teamSize).map(p => p.id || p);
         }
+        // Player not found in list — fall through to FFA
       }
       // Free-for-all: each player is their own team
       return [playerId];
@@ -2657,6 +3158,16 @@
       if (!normalizedA || !normalizedB) return false;
       if (normalizedA === normalizedB) return false;
       if (normalizedA === 'neutral' || normalizedB === 'neutral') return false;
+
+      // In adventure mode, NPC units (npc-*) are all on the same hostile team.
+      // They should fight players but not each other.
+      if (this.gameType === 'adventure') {
+        const aIsNPC = (ownerA || '').startsWith('npc-');
+        const bIsNPC = (ownerB || '').startsWith('npc-');
+        if (aIsNPC && bIsNPC) return false;   // NPCs are allied with each other
+        if (aIsNPC || bIsNPC) return true;     // NPC vs player is always hostile
+      }
+
       return !this.arePlayersAllied(normalizedA, normalizedB);
     }
     
@@ -3037,8 +3548,8 @@
       });
     }
     
-    // Sync resource states at sync checkpoint (authoritative sync)
-    // CRITICAL: Make host (or lower player ID) authoritative to prevent desyncs
+    // Sync resource node/depletion state at sync checkpoints.
+    // Player resource banks must remain command-driven for deterministic train/build costs.
     syncResourceStatesAtCheckpoint() {
       if (!window.isMultiplayer) return;
       
@@ -3060,17 +3571,7 @@
         });
       }
 
-      const playerResources = (this.players || []).map(player => ({
-        playerId: this.normalizeCommandPlayerId(player.id || player),
-        resources: {
-          food: Math.floor(player.resources?.food || 0),
-          wood: Math.floor(player.resources?.wood || 0),
-          stone: Math.floor(player.resources?.stone || 0),
-          minerals: Math.floor(player.resources?.minerals || 0)
-        }
-      }));
-
-      if (entries.length === 0 && depletions.length === 0 && playerResources.length === 0) {
+      if (entries.length === 0 && depletions.length === 0) {
         return;
       }
       
@@ -3079,8 +3580,7 @@
           type: 'resource_state_sync',
           tick: this.tick,
           resourceEntries: entries,
-          scheduledDepletions: depletions,
-          playerResources
+          scheduledDepletions: depletions
         });
       }
     }
@@ -3340,10 +3840,12 @@
         : null;
       return {
         id: unit?.id || 'unknown',
+        objectId: window.getDebugUnitIdentity ? window.getDebugUnitIdentity(unit) : (unit?._debugObjectId || null),
         owner: unit?.owner || 'neutral',
         type: unit?.type || 'unknown',
         state: unit?.state || 'idle',
         behavior: behavior?.constructor?.name || 'none',
+        behaviorState: behavior?.gatherState || behavior?.currentState || null,
         x: this.quantizeDebugCoord(loc.x),
         z: this.quantizeDebugCoord(loc.z),
         vx: this.quantizeDebugCoord(vel.x),
@@ -3428,14 +3930,16 @@
         const remote = entry.remote;
         console.error(
           `  ${index + 1}. ${entry.id?.slice(-6)} ` +
+          `LOCAL obj=${local.objectId || 'null'} ` +
           `LOCAL pos=(${local.x}, ${local.z}) tile=(${local.tileX}, ${local.tileZ}) vel=(${local.vx}, ${local.vz}) ` +
           `target=(${local.targetX}, ${local.targetZ}) wp=(${local.waypointX}, ${local.waypointZ}) path=${local.pathIndex}/${local.pathLength} repath=${local.repathCount} ` +
           `lastMove=[tick:${local.lastMoveTick},seq:${local.lastMoveSeq},player:${local.lastMovePlayer},target:(${local.lastMoveTargetX}, ${local.lastMoveTargetZ})] ` +
-          `state=${local.state} behavior=${local.behavior} ` +
+          `state=${local.state} behavior=${local.behavior}${local.behaviorState ? `/${local.behaviorState}` : ''} ` +
+          `REMOTE obj=${remote.objectId || 'null'} ` +
           `REMOTE pos=(${remote.x}, ${remote.z}) tile=(${remote.tileX}, ${remote.tileZ}) vel=(${remote.vx}, ${remote.vz}) ` +
           `target=(${remote.targetX}, ${remote.targetZ}) wp=(${remote.waypointX}, ${remote.waypointZ}) path=${remote.pathIndex}/${remote.pathLength} repath=${remote.repathCount} ` +
           `lastMove=[tick:${remote.lastMoveTick},seq:${remote.lastMoveSeq},player:${remote.lastMovePlayer},target:(${remote.lastMoveTargetX}, ${remote.lastMoveTargetZ})] ` +
-          `state=${remote.state} behavior=${remote.behavior}`
+          `state=${remote.state} behavior=${remote.behavior}${remote.behaviorState ? `/${remote.behaviorState}` : ''}`
         );
       });
     }
@@ -3680,6 +4184,26 @@
           <div style="text-align: center; color: white;">
             <h1 style="font-size: 3em; margin-bottom: 20px;">🎮</h1>
             <p style="font-size: 2em; font-weight: bold;">${message}</p>
+          </div>
+        `;
+      }
+
+      if (this._chapterTransitionLoading) {
+        return `
+          <div style="text-align: center; color: white;">
+            <h1 style="font-size: 2em; margin-bottom: 20px;">📖 Chapter Transition</h1>
+            <div style="font-size: 1.2em; margin-bottom: 15px;">
+              <div class="loading-spinner" style="
+                width: 50px; height: 50px;
+                border: 5px solid rgba(255,255,255,0.3);
+                border-top: 5px solid white;
+                border-radius: 50%;
+                margin: 0 auto 20px;
+                animation: spin 1s linear infinite;
+              "></div>
+              <p>Loading ${this._chapterTransitionLabel || 'next chapter'}...</p>
+              <p style="font-size: 1.5em; margin: 10px 0;">${loadedCount} / ${totalCount} ready</p>
+            </div>
           </div>
         `;
       }

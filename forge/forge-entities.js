@@ -142,9 +142,11 @@
       if (existing >= 0) {
         this.state.spawnPoints[existing].x = p.x;
         this.state.spawnPoints[existing].y = p.y;
+        this.state.spawnPoints[existing].owner = this.state.currentSpawnOwner || 'player';
       } else {
         const spawnIndex = this.state.spawnPoints.length;
-        const spawnData = { x: p.x, y: p.y, team: spawnIndex };
+        const ownerType = this.state.currentSpawnOwner || 'player';
+        const spawnData = { x: p.x, y: p.y, team: spawnIndex, owner: ownerType, agora: ownerType === 'npc', villagers: ownerType === 'npc' };
         this.state.spawnPoints.push(spawnData);
         this.recordChange({ kind: 'spawn_add', data: {...spawnData} });
       }
@@ -266,7 +268,16 @@
 
     let html = '';
     this.state.spawnPoints.forEach((spawn, i) => {
-      html += `<div>🏛️ Spawn ${i + 1}: (${spawn.x}, ${spawn.y})</div>`;
+      const isNpc = spawn.owner === 'npc';
+      const icon = isNpc ? '💀' : '👤';
+      const label = isNpc ? 'NPC' : `P${this.state.spawnPoints.filter((s, j) => j < i && s.owner !== 'npc').length + 1}`;
+      const agoraChecked = spawn.agora ? 'checked' : '';
+      const villagersChecked = spawn.villagers ? 'checked' : '';
+      html += `<div style="margin-bottom:4px;padding:2px 0;border-bottom:1px solid rgba(255,255,255,0.1);">`
+        + `${icon} ${label}: (${spawn.x}, ${spawn.y})<br>`
+        + `<label style="font-size:10px;opacity:0.8;"><input type="checkbox" ${agoraChecked} onchange="forge.state.spawnPoints[${i}].agora=this.checked;forge.updateSpawnList()"> 🏛️ Agora</label> `
+        + `<label style="font-size:10px;opacity:0.8;"><input type="checkbox" ${villagersChecked} onchange="forge.state.spawnPoints[${i}].villagers=this.checked;forge.updateSpawnList()"> 👷 Villagers</label>`
+        + `</div>`;
     });
 
     // Show game mode hints
@@ -312,8 +323,9 @@
       platform.position = new BABYLON.Vector3(worldX, 0.15, worldZ);
 
       const platformMat = new BABYLON.StandardMaterial(`spawnPlatMat_${i}`, gfx.scene);
-      platformMat.diffuseColor = new BABYLON.Color3(0.8, 0.7, 0.5); // Neutral tan
-      platformMat.emissiveColor = new BABYLON.Color3(0.2, 0.15, 0.1);
+      const isNpc = spawn.owner === 'npc';
+      platformMat.diffuseColor = isNpc ? new BABYLON.Color3(0.9, 0.3, 0.3) : new BABYLON.Color3(0.8, 0.7, 0.5);
+      platformMat.emissiveColor = isNpc ? new BABYLON.Color3(0.3, 0.05, 0.05) : new BABYLON.Color3(0.2, 0.15, 0.1);
       platformMat.alpha = 0.25;
       platformMat.backFaceCulling = false;
       platform.material = platformMat;
@@ -354,8 +366,11 @@
       ctx.lineWidth = 4;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.strokeText(`${i + 1}`, 32, 32);
-      ctx.fillText(`${i + 1}`, 32, 32);
+      const isNpcLabel = spawn.owner === 'npc';
+      const labelText = isNpcLabel ? '💀' : `${this.state.spawnPoints.filter((s, j) => j < i && s.owner !== 'npc').length + 1}`;
+      if (isNpcLabel) { ctx.fillStyle = '#ff4444'; }
+      ctx.strokeText(labelText, 32, 32);
+      ctx.fillText(labelText, 32, 32);
       labelTex.update();
 
       const labelMat = new BABYLON.StandardMaterial(`spawnLabelMat_${i}`, gfx.scene);
@@ -651,27 +666,40 @@
 
   forge._unitMarkers = [];
 
-  // Player colors for unit markers
+  // Player colors for unit markers (indexed by player slot)
   forge.playerColors = [
     new BABYLON.Color3(0.3, 0.5, 1.0),   // P1: Blue
     new BABYLON.Color3(1.0, 0.3, 0.3),   // P2: Red
     new BABYLON.Color3(0.3, 1.0, 0.4),   // P3: Green
     new BABYLON.Color3(1.0, 0.9, 0.2)    // P4: Yellow
   ];
+  // NPC colors (indexed by slot 5-8)
+  forge.npcColors = {
+    5: new BABYLON.Color3(0.8, 0.2, 0.2),   // NPC1: Dark red
+    6: new BABYLON.Color3(0.55, 0.27, 0.07), // NPC2: Brown
+    7: new BABYLON.Color3(0.42, 0.18, 0.55), // NPC3: Purple
+    8: new BABYLON.Color3(0.18, 0.31, 0.31)  // NPC4: Dark slate
+  };
 
   forge.playerEmoji = ['🔵', '🔴', '🟢', '🟡'];
+  forge.npcEmoji = { 5: '💀', 6: '💀', 7: '💀', 8: '💀' };
+
+  forge.getPlayerLabel = function(p) {
+    if (p >= 5) return `NPC${p - 4}`;
+    return `P${p + 1}`;
+  };
 
   // Set current unit player
   forge.setUnitPlayer = function(player) {
     this.state.currentUnitPlayer = player;
 
-    // Update button states
-    for (let i = 0; i < 4; i++) {
+    // Update button states for both player and NPC buttons
+    [0, 1, 2, 3, 5, 6, 7, 8].forEach(i => {
       const btn = document.getElementById(`unit-player-${i}`);
       if (btn) btn.classList.toggle('active', i === player);
-    }
+    });
 
-    console.log(`👤 Unit player: P${player + 1}`);
+    console.log(`👤 Unit owner: ${this.getPlayerLabel(player)}`);
   };
 
   // Set current unit type
@@ -859,7 +887,9 @@
     this.state.startingUnits.forEach((unit, i) => {
       const worldX = (unit.x + 0.5) * TILE_SIZE;
       const worldZ = (unit.y + 0.5) * TILE_SIZE;
-      const playerColor = this.playerColors[unit.player] || this.playerColors[0];
+      const playerColor = unit.player >= 5
+        ? (this.npcColors[unit.player] || new BABYLON.Color3(0.8, 0.2, 0.2))
+        : (this.playerColors[unit.player] || this.playerColors[0]);
 
       // Create a small platform to show unit location
       const platform = BABYLON.MeshBuilder.CreateDisc(`unitPlatform_${i}`, {
@@ -946,8 +976,9 @@
       ctx.fillStyle = '#ffffff';
       ctx.strokeStyle = '#000000';
       ctx.lineWidth = 3;
-      ctx.strokeText(`P${unit.player + 1}`, 32, 32);
-      ctx.fillText(`P${unit.player + 1}`, 32, 32);
+      const labelText = unit.player >= 5 ? `N${unit.player - 4}` : `P${unit.player + 1}`;
+      ctx.strokeText(labelText, 32, 32);
+      ctx.fillText(labelText, 32, 32);
       labelTex.update();
 
       const labelMat = new BABYLON.StandardMaterial(`unitLabelMat_${i}`, gfx.scene);
@@ -981,7 +1012,7 @@
     list.innerHTML = this.state.startingUnits.map((u, i) => {
       const unitDef = window.UnitTypes?.[u.type];
       const typeName = unitDef?.name || u.type;
-      const emoji = this.playerEmoji[u.player] || '⚪';
+      const emoji = u.player >= 5 ? (this.npcEmoji[u.player] || '💀') : (this.playerEmoji[u.player] || '⚪');
       const nameVal = (u.name || '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
       return `<div style="margin-bottom:4px;padding:3px;background:rgba(0,0,0,0.2);border-radius:2px;font-size:11px;">
         <span>${emoji} ${typeName} (${u.x},${u.y})</span>

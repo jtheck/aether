@@ -1005,7 +1005,47 @@ Field.prototype.updateBlockedTiles = function() {
       }
     }
   }
-  // console.log(`🚫 Marked ${pureWaterCount} pure water tiles as blocked (shorelines passable)`);
+
+  // Block edge tiles of the table so units can't walk off the sides.
+  // A tile is "edge" if any cardinal neighbor is out of bounds or in a disabled chunk.
+  // Gathering workers bypass blocked tiles so they can still reach edge resources.
+  let edgeCount = 0;
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+  
+  for (let y = 0; y < this.height; y++) {
+    for (let x = 0; x < this.width; x++) {
+      // Skip tiles already blocked or in disabled chunks
+      if (this.blockedTiles.has(`${x},${y}`)) continue;
+      if (this.chunkMask && this.chunkSize) {
+        const cx = Math.floor(x / this.chunkSize);
+        const cz = Math.floor(y / this.chunkSize);
+        if (this.chunkMask.get(`${cx},${cz}`) === false) continue;
+      }
+      
+      let isEdge = false;
+      for (const [dx, dz] of dirs) {
+        const nx = x + dx;
+        const nz = y + dz;
+        if (nx < 0 || nx >= this.width || nz < 0 || nz >= this.height) {
+          isEdge = true;
+          break;
+        }
+        if (this.chunkMask && this.chunkSize) {
+          const ncx = Math.floor(nx / this.chunkSize);
+          const ncz = Math.floor(nz / this.chunkSize);
+          if (this.chunkMask.get(`${ncx},${ncz}`) === false) {
+            isEdge = true;
+            break;
+          }
+        }
+      }
+      
+      if (isEdge) {
+        this.blockTile(x, y);
+        edgeCount++;
+      }
+    }
+  }
 };
 
 // Get movement speed multiplier for a tile (1.0 = normal, 0.5 = slow)

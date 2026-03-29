@@ -47,6 +47,11 @@ Game.prototype.spawnInitialUnits = function() {
   if (this.type === 'adventure') {
     console.log('🎮 Adventure mode: spawning starting units from map data');
     this.spawnAdventureUnits();
+    if (window._adventureSpawnVillagers) {
+      this.spawnAdventureVillagers();
+    }
+    // Spawn agoras and villagers for any NPC/AI opponents
+    this.spawnAdventureAIBases();
     return;
   }
   
@@ -193,9 +198,7 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
   const agoraX = player.agora.x * TILE_SIZE;
   const agoraZ = player.agora.y * TILE_SIZE;
   
-  // CRITICAL: Fixed villager count for all players
-  // Everyone starts with the same number of villagers for fairness
-  const villagerCount = 8; // All players start with 8 villagers
+  const villagerCount = (this.type === 'adventure') ? 3 : 8;
   
   const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
   const normalizedId = rawId.includes('-') ? rawId.split('-').pop() : rawId;
@@ -221,11 +224,8 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
     
     // CRITICAL: Always pass id in options (even if null) to prevent double-incrementing
     const villager = new window.Unit('villager', { x, y: 0, z }, { id: deterministicUnitId || undefined });
-    // CRITICAL: Use last 6 chars of player ID for consistent ownership checks
-    const rawId = player.id; // CRITICAL: No fallback - player.id must be set!
-    // If ID has hyphens, take the part after the last hyphen, else take last 6 chars
-    const parts = rawId.split('-');
-    villager.owner = parts.length > 1 ? parts[parts.length - 1] : (rawId.length > 6 ? rawId.slice(-6) : rawId);
+    const rawId = player.id;
+    villager.owner = rawId.startsWith('npc-') ? rawId : (rawId.length > 6 ? rawId.slice(-6) : rawId);
     
     // Deterministic rotation
     const randomRotation = seededRandom() * Math.PI * 2;
@@ -275,69 +275,80 @@ Game.prototype.spawnAdventureUnits = function() {
   console.log(`  📋 this.players:`, this.players?.map(p => p?.id || 'null'));
   console.log(`  📋 window.player.id:`, window.player?.id);
   
-  // Group units by player index
+  // Separate player units (slots 0-3) from NPC/enemy units (slots 5+)
   const unitsByPlayer = {};
+  const npcUnits = [];
   startingUnits.forEach(u => {
-    if (!unitsByPlayer[u.player]) unitsByPlayer[u.player] = [];
-    unitsByPlayer[u.player].push(u);
+    if (u.player >= 5) {
+      npcUnits.push(u);
+    } else {
+      if (!unitsByPlayer[u.player]) unitsByPlayer[u.player] = [];
+      unitsByPlayer[u.player].push(u);
+    }
   });
   
-  // Map authored map-player indices to the host-defined runtime player order.
-  // Adventure callers are responsible for constructing `this.players` in the
-  // exact slot order agreed on by all peers. Re-sorting here breaks that contract
-  // and can silently remap authored slot 0/1 ownership to the wrong humans.
-  const players = Array.isArray(this.players) ? this.players.slice() : [];
+  // Only use human/co-op players for P1-P4 unit assignment, not NPC AI opponents.
+  const players = Array.isArray(this.players) ? this.players.filter(p => !p.isAI) : [];
   if (players.length === 0) return;
+  const adventurePlayerSlots = Array.isArray(window._adventurePlayerSlots) && window._adventurePlayerSlots.length > 0
+    ? window._adventurePlayerSlots
+    : players;
+  const resolveAdventurePlayerSlot = (playerSlot) => {
+    if (!Number.isFinite(playerSlot) || playerSlot < 0 || adventurePlayerSlots.length === 0) {
+      return null;
+    }
+    const assignedIndex = playerSlot % adventurePlayerSlots.length;
+    const targetPlayer = adventurePlayerSlots[assignedIndex] || window.player || null;
+    if (!targetPlayer) return null;
+    return { targetPlayer, assignedIndex };
+  };
   
   Object.entries(unitsByPlayer).forEach(([playerIndex, units]) => {
     const pIndex = parseInt(playerIndex);
-    // Assign to player at (pIndex % players.length) so "missing" slots go to existing players
-    const targetPlayer = players[pIndex % players.length] || window.player;
+    const slotAssignment = resolveAdventurePlayerSlot(pIndex);
+    const targetPlayer = slotAssignment?.targetPlayer || window.player;
+    const assignedPlayerIndex = slotAssignment?.assignedIndex ?? (players.length > 0 ? (pIndex % players.length) : 0);
     
-    // Ensure player has units array
     if (!targetPlayer.units) {
       targetPlayer.units = [];
     }
     
-    const assignedTo = pIndex < players.length ? `P${pIndex + 1}` : `P${(pIndex % players.length) + 1} (was P${pIndex + 1})`;
+    const assignedTo = pIndex < adventurePlayerSlots.length
+      ? `P${pIndex + 1}`
+      : `P${assignedPlayerIndex + 1} (was P${pIndex + 1})`;
     console.log(`  👤 ${assignedTo}: Spawning ${units.length} units for ${targetPlayer.name || targetPlayer.id}`);
     
     units.forEach((unitData, i) => {
       const worldX = (unitData.x + 0.5) * TILE_SIZE;
       const worldZ = (unitData.y + 0.5) * TILE_SIZE;
       
-      // Generate deterministic unit ID
       let deterministicUnitId = null;
       if (window.isMultiplayer && window.currentMatch) {
         const unitIndex = window.currentMatch.unitCounter++;
         deterministicUnitId = `unit-${window.currentMatch.mapSeed}-${unitIndex}`;
       }
       
-      // Validate unit type exists before creating
       if (!window.UnitTypes || !window.UnitTypes[unitData.type]) {
         console.warn(`⚠️ Skipping unknown unit type: "${unitData.type}" at (${unitData.x},${unitData.y})`);
         return;
       }
 
-      // Create the unit (pass custom name for adventure story characters)
       const unit = new window.Unit(unitData.type, { x: worldX, y: 0, z: worldZ }, {
         id: deterministicUnitId || undefined,
         displayName: (unitData.name && String(unitData.name).trim()) || undefined
       });
       unit.adventureSpawnIndex = Number.isFinite(unitData.spawnIndex) ? unitData.spawnIndex : ((pIndex * 1000) + i);
+      unit.adventureAuthoredPlayerSlot = pIndex;
+      unit.adventureAssignedPlayerSlot = assignedPlayerIndex;
       
-      // Set ownership - CRITICAL: Use same normalization as player.js
-      // Player ID format: "adventurer-xxxxxx" or "p2p-xxxxxx"
-      // We need to match what player.js uses: this.id.slice(-6)
       const rawId = targetPlayer.id || '';
       const normalizedOwner = rawId.length > 6 ? rawId.slice(-6) : rawId;
       unit.owner = normalizedOwner;
+      unit.adventureAssignedPlayerId = normalizedOwner;
       
-      // Add to player's units
       targetPlayer.units.push(unit);
       window.gameUnits.push(unit);
       
-      // Give initial units linger behavior
       if (window.behaviorManager) {
         window.behaviorManager.setBehavior(unit, 'linger', {
           center: { x: worldX, z: worldZ },
@@ -353,6 +364,66 @@ Game.prototype.spawnAdventureUnits = function() {
       }
     });
   });
+
+  // Spawn NPC/enemy units (player slot >= 5) with synthetic hostile ownership
+  if (npcUnits.length > 0) {
+    console.log(`  💀 Spawning ${npcUnits.length} NPC/enemy units`);
+    
+    // Group NPC units by their slot for logging
+    const npcBySlot = {};
+    npcUnits.forEach(u => {
+      if (!npcBySlot[u.player]) npcBySlot[u.player] = [];
+      npcBySlot[u.player].push(u);
+    });
+    
+    npcUnits.forEach((unitData, i) => {
+      const worldX = (unitData.x + 0.5) * TILE_SIZE;
+      const worldZ = (unitData.y + 0.5) * TILE_SIZE;
+      
+      let deterministicUnitId = null;
+      if (window.isMultiplayer && window.currentMatch) {
+        const unitIndex = window.currentMatch.unitCounter++;
+        deterministicUnitId = `unit-${window.currentMatch.mapSeed}-${unitIndex}`;
+      }
+      
+      if (!window.UnitTypes || !window.UnitTypes[unitData.type]) {
+        console.warn(`⚠️ Skipping unknown NPC unit type: "${unitData.type}" at (${unitData.x},${unitData.y})`);
+        return;
+      }
+
+      const unit = new window.Unit(unitData.type, { x: worldX, y: 0, z: worldZ }, {
+        id: deterministicUnitId || undefined,
+        displayName: (unitData.name && String(unitData.name).trim()) || undefined
+      });
+      unit.adventureSpawnIndex = Number.isFinite(unitData.spawnIndex) ? unitData.spawnIndex : (5000 + i);
+      
+      // NPC units get a synthetic owner ID that is hostile to all players
+      const npcOwner = `npc-${unitData.player}`;
+      unit.owner = npcOwner;
+      unit.isNPC = true;
+      
+      window.gameUnits.push(unit);
+      
+      // NPC units get aggressive guard behavior instead of passive linger
+      if (window.behaviorManager) {
+        window.behaviorManager.setBehavior(unit, 'linger', {
+          center: { x: worldX, z: worldZ },
+          radius: 80,
+          wanderDistance: 4.0,
+          wanderInterval: 15000,
+          startImmediately: true
+        });
+      }
+      
+      if (i === 0) {
+        console.log(`    💀 First NPC ${unitData.type}: owner="${npcOwner}", at (${unitData.x}, ${unitData.y})`);
+      }
+    });
+    
+    Object.entries(npcBySlot).forEach(([slot, units]) => {
+      console.log(`    💀 NPC slot ${slot}: ${units.length} units`);
+    });
+  }
   
   console.log(`✅ Adventure units spawned, gameUnits.length=${window.gameUnits.length}`);
   console.log(`  📋 window.player.units.length:`, window.player?.units?.length);
@@ -366,6 +437,153 @@ Game.prototype.spawnAdventureUnits = function() {
     owner: unit?.owner || null,
     displayName: typeof unit?.getDisplayName === 'function' ? unit.getDisplayName() : (unit?.displayName || null)
   })));
+};
+
+// Spawn villagers at adventure spawn points without requiring an agora
+Game.prototype.spawnAdventureVillagers = function() {
+  const spawnPositions = window._adventureSpawnPositions;
+  if (!spawnPositions || spawnPositions.length === 0) {
+    console.warn('❌ No spawn positions for adventure villagers');
+    return;
+  }
+
+  const players = Array.isArray(this.players) ? this.players.filter(p => !p.isAI) : [];
+  if (players.length === 0) return;
+
+  const villagerCount = 3;
+  const tileSize = (typeof TILE_SIZE !== 'undefined') ? TILE_SIZE : 4;
+
+  let seed = 12345;
+  if (window.currentMatch && window.currentMatch.mapSeed) {
+    seed = window.currentMatch.mapSeed + 7777;
+  } else if (window.mapSeed) {
+    seed = window.mapSeed + 7777;
+  }
+
+  const playerRng = window.Determinism ? new window.Determinism.SeededRandom(seed) : null;
+  const seededRandom = playerRng ? () => playerRng.next() : () => Math.random();
+
+  // Spawn villagers at each player's spawn point (only if that spawn has villagers flag)
+  players.forEach((player, pIndex) => {
+    const spawn = spawnPositions[pIndex % spawnPositions.length];
+    if (!spawn) return;
+    if (!spawn.villagers) return;
+    if (!player.units) player.units = [];
+
+    const centerX = spawn.x * tileSize;
+    const centerZ = spawn.y * tileSize;
+    const rawId = player.id || '';
+    const normalizedOwner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+
+    console.log(`  👷 Spawning ${villagerCount} villagers for ${player.name || rawId} at spawn (${spawn.x}, ${spawn.y})`);
+
+    for (let i = 0; i < villagerCount; i++) {
+      const angle = (i / villagerCount) * Math.PI * 2 + (seededRandom() - 0.5) * 0.5;
+      const distance = 3 + seededRandom() * 3;
+      const x = centerX + Math.cos(angle) * distance * tileSize;
+      const z = centerZ + Math.sin(angle) * distance * tileSize;
+
+      let deterministicUnitId = null;
+      if (window.isMultiplayer && window.currentMatch) {
+        const unitIndex = window.currentMatch.unitCounter++;
+        deterministicUnitId = `unit-${window.currentMatch.mapSeed}-${unitIndex}`;
+      }
+
+      if (!window.UnitTypes || !window.UnitTypes['villager']) continue;
+
+      const unit = new window.Unit('villager', { x, y: 0, z }, {
+        id: deterministicUnitId || undefined
+      });
+      unit.owner = normalizedOwner;
+      player.units.push(unit);
+      window.gameUnits.push(unit);
+
+      if (window.behaviorManager) {
+        window.behaviorManager.setBehavior(unit, 'linger', {
+          center: { x: centerX, z: centerZ },
+          radius: 50,
+          wanderDistance: 2.0,
+          wanderInterval: 30000,
+          startImmediately: false
+        });
+      }
+    }
+  });
+
+  console.log(`✅ Adventure villagers spawned: ${players.length * villagerCount} villagers`);
+};
+
+Game.prototype.spawnAdventureAIBases = function() {
+  const aiOpponents = window.aiOpponents;
+  if (!aiOpponents || aiOpponents.length === 0) return;
+
+  const tileSize = (typeof TILE_SIZE !== 'undefined') ? TILE_SIZE : 4;
+  console.log(`🤖 Spawning ${aiOpponents.length} AI bases for adventure mode`);
+
+  aiOpponents.forEach((ai, index) => {
+    if (!ai.buildings) ai.buildings = [];
+    if (!ai.units) ai.units = [];
+
+    const rawId = ai.id || `npc-${5 + index}`;
+    const normalizedOwner = rawId.startsWith('npc-') ? rawId : (rawId.length > 6 ? rawId.slice(-6) : rawId);
+
+    if (ai.agora) {
+      let deterministicAgoraId;
+      if (window.isMultiplayer && window.currentMatch) {
+        const buildingIndex = window.currentMatch.buildingCounter++;
+        deterministicAgoraId = `building-${window.currentMatch.mapSeed}-${buildingIndex}`;
+      }
+
+      const placeFn = (window.placeBuilding || (typeof placeBuilding === 'function' ? placeBuilding : null));
+      if (placeFn && window.gfx && window.gfx.scene) {
+        const placed = placeFn('agora', ai.agora.x, ai.agora.y, window.gfx.scene, {
+          id: deterministicAgoraId,
+          buildProgress: 1.0,
+          owner: normalizedOwner
+        });
+        if (placed) {
+          placed.owner = normalizedOwner;
+          if (typeof window.getTeamColorForOwner === 'function') {
+            placed.teamColor = window.getTeamColorForOwner(placed.owner);
+          }
+          ai.buildings.push(placed);
+
+          if (window.liveField) {
+            const mapCenterX = (window.liveField.width / 2) * tileSize;
+            const mapCenterZ = (window.liveField.height / 2) * tileSize;
+            const agoraX = ai.agora.x * tileSize;
+            const agoraZ = ai.agora.y * tileSize;
+            const dx = mapCenterX - agoraX;
+            const dz = mapCenterZ - agoraZ;
+            const angleToCenter = Math.atan2(dx, dz) + Math.PI * 1.5;
+            placed.targetRotation = angleToCenter;
+            const checkInterval = setInterval(() => {
+              if (placed.mesh) {
+                placed.mesh.rotationQuaternion = null;
+                placed.mesh.rotation.y = angleToCenter;
+                clearInterval(checkInterval);
+              }
+            }, 100);
+          }
+          console.log(`🏛️ Spawned AI agora for ${ai.name || rawId} at (${ai.agora.x}, ${ai.agora.y})`);
+        }
+      } else if (window.Building) {
+        const agoraBuilding = new window.Building('agora', {
+          x: ai.agora.x * tileSize, y: 0, z: ai.agora.y * tileSize
+        }, {
+          id: deterministicAgoraId,
+          owner: normalizedOwner,
+          gridX: ai.agora.x,
+          gridZ: ai.agora.y
+        });
+        ai.buildings.push(agoraBuilding);
+      }
+    }
+
+    if (ai._wantVillagers !== false && ai.agora) {
+      this.spawnVillagersForPlayer(ai, this.players.indexOf(ai));
+    }
+  });
 };
 
 Game.prototype.getGameTime = function() {

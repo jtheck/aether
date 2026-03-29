@@ -62,9 +62,9 @@
       nar: this._noAutoResources ? 1 : undefined,  // No auto-resources flag (set by Clear All)
       // Map metadata
       sp: this.state.spawnPoints.length > 0
-          ? this.state.spawnPoints.map((s, i) => `${s.x},${s.y},${s.team !== undefined ? s.team : i}`).join(';') : undefined,  // Spawn points with team index
+          ? this.state.spawnPoints.map((s, i) => `${s.x},${s.y},${s.team !== undefined ? s.team : i},${s.owner || 'player'},${s.agora ? 1 : 0},${s.villagers ? 1 : 0}`).join(';') : undefined,
       bld: this.state.buildings.length > 0
-          ? this.state.buildings.map(b => `${b.x},${b.y},${b.type},${(b.rotation || 0).toFixed(2)}`).join(';') : undefined,  // Buildings
+          ? this.state.buildings.map(b => `${b.x},${b.y},${b.type},${(b.rotation || 0).toFixed(2)},${b.player ?? -1}`).join(';') : undefined,  // Buildings (x,y,type,rotation,player)
       obj: this.state.objectives.length > 0
           ? this.state.objectives.map(o => {
               // Base64 encode message to avoid issues with special characters
@@ -438,8 +438,14 @@
     // Restore spawn points (v2 format)
     if (mapData.sp) {
       this.state.spawnPoints = mapData.sp.split(';').map(s => {
-        const [x, y, team] = s.split(',').map(Number);
-        return { x, y, team };
+        const parts = s.split(',');
+        const x = Number(parts[0]);
+        const y = Number(parts[1]);
+        const team = Number(parts[2]) || 0;
+        const owner = parts[3] || 'player';
+        const agora = parts[4] === '1' || (!parts[4] && owner === 'npc');
+        const villagers = parts[5] === '1' || (!parts[5] && owner === 'npc');
+        return { x, y, team, owner, agora, villagers };
       });
       this.updateSpawnMarkers();
       this.updateSpawnList();
@@ -458,7 +464,8 @@
           x: Number(parts[0]),
           y: Number(parts[1]),
           type: (parts[2] && parts[2].trim()) || 'agora',
-          rotation: Number(parts[3]) || 0
+          rotation: Number(parts[3]) || 0,
+          player: parts[4] !== undefined ? Number(parts[4]) : -1
         };
       });
       this.updateBuildingMarkers();
@@ -539,6 +546,14 @@
         if (cb) cb.checked = enabled;
       });
       console.log(`🎮 Restored game types: ${mapData.gt}`);
+    }
+
+    // Legacy: migrate old global spAgora/spVillagers flags to per-spawn
+    if (mapData.spAgora || mapData.spVillagers) {
+      this.state.spawnPoints.forEach(sp => {
+        if (mapData.spAgora) sp.agora = true;
+        if (mapData.spVillagers) sp.villagers = true;
+      });
     }
 
     // Restore scenes (v2 format)

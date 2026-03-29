@@ -87,6 +87,7 @@
       case 'dialogue':
         step.speaker = '';
         step.message = '';
+        step.style = 'normal';
         break;
       case 'wait':
         step.duration = 2.0;
@@ -133,7 +134,7 @@
     const scene = this.state.scenes[this.state.selectedSceneIndex];
     if (!scene || stepIndex < 0 || stepIndex >= scene.steps.length) return;
     const step = scene.steps[stepIndex];
-    if (key === 'speaker' || key === 'message' || key === 'type' || key === 'unitName') {
+    if (key === 'speaker' || key === 'message' || key === 'type' || key === 'unitName' || key === 'style') {
       step[key] = value;
     } else {
       step[key] = Number(value);
@@ -235,7 +236,7 @@
       const isSelected = this.state.selectedSceneIndex === i;
       const bg = isSelected ? 'rgba(180,100,255,0.3)' : 'rgba(0,0,0,0.2)';
       const border = isSelected ? 'border:2px solid #b464ff;' : '';
-      const triggerIcon = { match_start: '▶️', objective_reached: '🎯', location_entered: '📍', timer: '⏱️' }[sc.trigger.type] || '❓';
+      const triggerIcon = { match_start: '▶️', objective_reached: '🎯', location_entered: '📍', timer: '⏱️', victory: '🏆' }[sc.trigger.type] || '❓';
       const stepCount = sc.steps.length;
       return `<div style="margin-bottom:4px;padding:4px;${border}background:${bg};border-radius:3px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="forge.selectScene(${i})">
         <div>
@@ -374,11 +375,17 @@
     const inputStyle = 'padding:3px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:3px;font-size:11px;';
 
     switch (step.type) {
-      case 'dialogue':
+      case 'dialogue': {
+        const styles = ['normal','shout','whisper','think','command','scared'];
+        const styleOpts = styles.map(s => `<option value="${s}"${(step.style||'normal')===s?' selected':''}>${s}</option>`).join('');
         return `<div style="margin-top:4px;">
-          <input type="text" value="${this.escAttr(step.speaker)}" placeholder="Speaker name" style="width:100%;${inputStyle}margin-bottom:3px;" onchange="forge.updateStepParam(${index},'speaker',this.value)">
+          <div style="display:flex;gap:4px;align-items:center;margin-bottom:3px;">
+            <input type="text" value="${this.escAttr(step.speaker)}" placeholder="Speaker (empty = narrator)" style="flex:1;${inputStyle}" onchange="forge.updateStepParam(${index},'speaker',this.value)">
+            <select style="width:80px;${inputStyle}" onchange="forge.updateStepParam(${index},'style',this.value)">${styleOpts}</select>
+          </div>
           <textarea rows="2" style="width:100%;${inputStyle}resize:vertical;" onchange="forge.updateStepParam(${index},'message',this.value)" placeholder="Dialogue text...">${this.escHtml(step.message)}</textarea>
         </div>`;
+      }
 
       case 'wait':
         return `<div style="margin-top:4px;display:flex;gap:4px;align-items:center;">

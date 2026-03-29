@@ -6,7 +6,7 @@
   function Opponent(options = {}) {
     this.id = options.id || 'opponent';
     this.name = options.name || 'Opponent';
-    this.color = options.color || {primary: '#0066cc', secondary: '#004499'};
+    this.color = options.color || null;
     this.resources = options.startingResources || { ...STARTING_RESOURCES };
     this.units = [];
     this.buildings = []; // Always initialize buildings array
@@ -886,14 +886,14 @@
         // Only target buildings that actually benefit from workers:
         // 1. Under construction (any type)
         // 2. Completed production buildings (camps, farms)
-        const isUnderConstruction = building.buildProgress !== undefined && building.buildProgress < 1.0;
-        const isProductionBuilding = building.buildProgress >= 1.0 &&
-          (building.type === 'camp' || building.type === 'farm');
+        const isUnderConstruction = building.workType === 'build' && !building.completionProcessed;
+        const isProductionBuilding = building.completionProcessed &&
+          building.needsWorkers &&
+          building.workType !== 'build';
         
         if (!isUnderConstruction && !isProductionBuilding) continue;
         
-        const maxWorkers = isUnderConstruction ? (building.maxWorkers || 3) :
-          (building.productionMaxWorkers || building.maxWorkers || 3);
+        const maxWorkers = building.maxWorkers || 3;
         const currentWorkers = building.assignedWorkers?.length || 0;
         if (currentWorkers >= maxWorkers) continue;
         

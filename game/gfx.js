@@ -5635,9 +5635,9 @@ let pov2 = 240;
         const bright = 0.35 + caustic * 0.65; // 0.35..1.0
 
         const idx = (py * texSize + px2) * 4;
-        px[idx]     = Math.floor(bright * 16);  // R: phthalo green
-        px[idx + 1] = Math.floor(bright * 26);  // G
-        px[idx + 2] = Math.floor(bright * 32);  // B
+        px[idx]     = Math.floor(bright * 45);   // R: phthalo green
+        px[idx + 1] = Math.floor(bright * 70);  // G
+        px[idx + 2] = Math.floor(bright * 85);  // B
         px[idx + 3] = 255;
       }
     }
@@ -5656,7 +5656,7 @@ let pov2 = 240;
     const mat = new BABYLON.StandardMaterial("mountainVistaMat", scene);
     mat.diffuseTexture = causticTexture;
     mat.diffuseColor = new BABYLON.Color3(1, 1, 1);
-    mat.emissiveColor = new BABYLON.Color3(0.02, 0.03, 0.04);
+    mat.emissiveColor = new BABYLON.Color3(0.08, 0.12, 0.15);
     mat.specularColor = new BABYLON.Color3(0.03, 0.05, 0.06);
     mat.specularPower = 96;
     mat.ambientColor = new BABYLON.Color3(0.1, 0.13, 0.15);
@@ -5777,7 +5777,7 @@ let pov2 = 240;
     const horizonMat = new BABYLON.StandardMaterial("horizonMat", scene);
     horizonMat.diffuseTexture = causticTex;
     horizonMat.diffuseColor = new BABYLON.Color3(1, 1, 1);
-    horizonMat.emissiveColor = new BABYLON.Color3(0.35, 0.45, 0.55);
+    horizonMat.emissiveColor = new BABYLON.Color3(0.40, 0.50, 0.60);
     horizonMat.specularColor = new BABYLON.Color3(0.1, 0.1, 0.12);
     horizonMat.specularPower = 64;
     horizonMat.disableLighting = true;
@@ -6767,6 +6767,113 @@ let pov2 = 240;
   // Check if thin instance mode is active
   gfx.isThinInstanceMode = function() {
     return thinInstanceMode;
+  };
+
+  /**
+   * Procedural selection ring: interlocking gear teeth on XZ (Y+ up).
+   * Outward teeth sit on one angular lattice; inward teeth are offset by half a pitch so tips nest between outs.
+   * Bases share the pitch circle; out-apex outside, in-apex inside → zipper / meshing look.
+   * Two submeshes → two materials (manipulate in/out separately).
+   *
+   * Options (world-space radii; default from TILE_SIZE when not passed):
+   *   pairCount — outward teeth count (= inward); total tris = 2 * pairCount
+   *   toothCount — alias: total teeth (must be even); pairCount = toothCount/2
+   *   radiusPitch — base edge circle; default ~0.48 * TILE_SIZE
+   *   depthOut, depthIn — apex distance outside / inside pitch circle
+   *   baseWidth — 0..1 fraction of (angular pitch per pair) used as base half-angle
+   */
+  gfx.createAlternatingTriangleRingMesh = function(scene, options) {
+    const opts = options || {};
+    const TILE = typeof window !== 'undefined' && window.TILE_SIZE ? window.TILE_SIZE : 4;
+
+    let pairCount = opts.pairCount != null ? Math.floor(opts.pairCount) : 0;
+    if (pairCount < 4 && opts.toothCount != null) {
+      const tot = Math.floor(opts.toothCount);
+      pairCount = Math.max(4, Math.floor(tot / 2));
+    }
+    if (pairCount < 4) pairCount = 16;
+
+    const radiusPitch =
+      opts.radiusPitch != null ? opts.radiusPitch : TILE * 0.52;
+    const depthOut =
+      opts.depthOut != null ? opts.depthOut : TILE * 0.26;
+    const depthIn =
+      opts.depthIn != null ? opts.depthIn : TILE * 0.24;
+    // Must stay < 0.25 * pitch (as fraction of pitch) so out/in interleaved bases do not overlap
+    const baseWidth = Math.min(0.23, Math.max(0.1, opts.baseWidth != null ? opts.baseWidth : 0.19));
+
+    const name = opts.name || 'selectionRingAlternating';
+
+    const pitch = (Math.PI * 2) / pairCount;
+    const halfBase = pitch * baseWidth;
+
+    const positions = [];
+    const indicesOut = [];
+    const indicesIn = [];
+
+    function pushOutTri(theta) {
+      const t0 = theta - halfBase;
+      const t1 = theta + halfBase;
+      const ax = Math.cos(t0) * radiusPitch;
+      const az = Math.sin(t0) * radiusPitch;
+      const bx = Math.cos(t1) * radiusPitch;
+      const bz = Math.sin(t1) * radiusPitch;
+      const cx = Math.cos(theta) * (radiusPitch + depthOut);
+      const cz = Math.sin(theta) * (radiusPitch + depthOut);
+      const v = positions.length / 3;
+      positions.push(ax, 0, az, bx, 0, bz, cx, 0, cz);
+      indicesOut.push(v, v + 1, v + 2);
+    }
+
+    function pushInTri(theta) {
+      const t0 = theta - halfBase;
+      const t1 = theta + halfBase;
+      const ax = Math.cos(t0) * radiusPitch;
+      const az = Math.sin(t0) * radiusPitch;
+      const bx = Math.cos(t1) * radiusPitch;
+      const bz = Math.sin(t1) * radiusPitch;
+      const cx = Math.cos(theta) * Math.max(0.08, radiusPitch - depthIn);
+      const cz = Math.sin(theta) * Math.max(0.08, radiusPitch - depthIn);
+      const v = positions.length / 3;
+      positions.push(ax, 0, az, bx, 0, bz, cx, 0, cz);
+      indicesIn.push(v, v + 2, v + 1);
+    }
+
+    for (let i = 0; i < pairCount; i++) {
+      const thetaOut = i * pitch;
+      pushOutTri(thetaOut);
+      const thetaIn = (i + 0.5) * pitch;
+      pushInTri(thetaIn);
+    }
+
+    const mesh = new BABYLON.Mesh(name, scene);
+    const allIndices = indicesOut.concat(indicesIn);
+    const vertexData = new BABYLON.VertexData();
+    vertexData.positions = positions;
+    vertexData.indices = allIndices;
+    vertexData.applyToMesh(mesh);
+
+    const normals = [];
+    BABYLON.VertexData.ComputeNormals(positions, allIndices, normals);
+    mesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, normals);
+
+    const outCount = indicesOut.length;
+    mesh.subMeshes = [];
+    mesh.subMeshes.push(new BABYLON.SubMesh(0, 0, positions.length / 3, 0, outCount, mesh));
+    mesh.subMeshes.push(new BABYLON.SubMesh(1, 0, positions.length / 3, outCount, indicesIn.length, mesh));
+
+    const matOut = new BABYLON.StandardMaterial(name + '_outMat', scene);
+    const matIn = new BABYLON.StandardMaterial(name + '_inMat', scene);
+    matOut.backFaceCulling = false;
+    matIn.backFaceCulling = false;
+
+    const multi = new BABYLON.MultiMaterial(name + '_multi', scene);
+    multi.subMaterials = [matOut, matIn];
+    mesh.material = multi;
+
+    mesh.isPickable = false;
+
+    return { mesh, matOut, matIn, multi, pairCount, radiusPitch, depthOut, depthIn };
   };
 
   // ========================================

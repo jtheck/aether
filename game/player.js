@@ -10,7 +10,11 @@
 initPlayer = function(){
   // Menu scene is now purely visual - just create player, no Game object yet
   // Game and units will be spawned when a match actually starts
-  window.player = new Player();
+  window.player = new Player({
+    id: window.currentPlayerId,
+    name: window.currentPlayerName,
+    color: window.currentPlayerColor
+  });
   // console.log('✅ Player initialized (menu scene - no game yet)');
 }
 

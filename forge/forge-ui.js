@@ -199,13 +199,19 @@
         </div>
         
         <div id="spawns-panel" class="forge-section" style="display:none;">
-          <h3>🏛️ Agora Spawns</h3>
-          <p style="font-size:11px;opacity:0.7;">Click to place spawn (Agora location). Right-click to remove.<br>Terrain is flattened around spawns. Order = player assignment.</p>
+          <h3>🏛️ Spawns</h3>
+          <p style="font-size:11px;opacity:0.7;">Click to place spawn. Right-click to remove.<br>Player spawns = co-op slots. NPC spawns = AI opponents.</p>
+          <div style="margin:6px 0;font-size:12px;">
+            <label><input type="radio" name="spawn-owner" value="player" checked onchange="forge.state.currentSpawnOwner='player'"> 👤 Player</label>
+            <label style="margin-left:8px;"><input type="radio" name="spawn-owner" value="npc" onchange="forge.state.currentSpawnOwner='npc'"> 💀 NPC (Enemy AI)</label>
+          </div>
           <div id="spawn-list" style="margin-top:8px;font-size:12px;"></div>
           <div class="forge-buttons" style="margin-top:8px;">
             <button class="forge-btn" onclick="forge.clearSpawns()">🗑️ Clear All</button>
           </div>
           
+          <p style="font-size:11px;opacity:0.5;margin-top:8px;">Per-spawn agora/villager options shown in list above.</p>
+
           <h3 style="margin-top:12px;">Game Types</h3>
           <div style="font-size:12px;">
             <label><input type="checkbox" id="gt-adventure" onchange="forge.toggleGameType('adventure')"> 🗺️ Adventure</label><br>
@@ -224,6 +230,19 @@
             <button id="bld-move-mode" class="forge-btn" onclick="forge.setBuildingMode('move')">↔️ Move</button>
             <button class="forge-btn" onclick="forge.clearBuildings()">🗑️ Clear All</button>
           </div>
+
+          <h4 style="margin-top:8px;font-size:12px;">Owner</h4>
+          <select id="bld-player" style="width:100%;margin-top:2px;padding:4px;background:#2a2a3e;border:1px solid #444;color:#fff;border-radius:3px;" onchange="forge.state.currentBuildingPlayer=parseInt(this.value)">
+            <option value="-1" selected>Neutral</option>
+            <option value="0">P1 (Player 1)</option>
+            <option value="1">P2 (Player 2)</option>
+            <option value="2">P3 (Player 3)</option>
+            <option value="3">P4 (Player 4)</option>
+            <option value="5">NPC 1 (Enemy)</option>
+            <option value="6">NPC 2 (Enemy)</option>
+            <option value="7">NPC 3 (Enemy)</option>
+            <option value="8">NPC 4 (Enemy)</option>
+          </select>
 
           <div id="buildings-buttons-container" style="max-height:300px;overflow-y:auto;">
             <!-- Buttons will be dynamically generated from BuildingTypes -->
@@ -244,12 +263,18 @@
             <button class="forge-btn" onclick="forge.clearStartingUnits()">🗑️ Clear All</button>
           </div>
 
-          <h4 style="margin-top:8px;font-size:12px;">Player</h4>
+          <h4 style="margin-top:8px;font-size:12px;">Owner</h4>
           <div class="forge-buttons">
             <button id="unit-player-0" class="forge-btn active" onclick="forge.setUnitPlayer(0)">🔵 P1</button>
             <button id="unit-player-1" class="forge-btn" onclick="forge.setUnitPlayer(1)">🔴 P2</button>
             <button id="unit-player-2" class="forge-btn" onclick="forge.setUnitPlayer(2)">🟢 P3</button>
             <button id="unit-player-3" class="forge-btn" onclick="forge.setUnitPlayer(3)">🟡 P4</button>
+          </div>
+          <div class="forge-buttons" style="margin-top:4px;">
+            <button id="unit-player-5" class="forge-btn" onclick="forge.setUnitPlayer(5)" style="border-left:3px solid #CC3333;">💀 NPC1</button>
+            <button id="unit-player-6" class="forge-btn" onclick="forge.setUnitPlayer(6)" style="border-left:3px solid #8B4513;">💀 NPC2</button>
+            <button id="unit-player-7" class="forge-btn" onclick="forge.setUnitPlayer(7)" style="border-left:3px solid #6B2D8B;">💀 NPC3</button>
+            <button id="unit-player-8" class="forge-btn" onclick="forge.setUnitPlayer(8)" style="border-left:3px solid #2F4F4F;">💀 NPC4</button>
           </div>
           
           <h4 style="margin-top:8px;font-size:12px;">Unit Type</h4>
@@ -278,7 +303,7 @@
           
           <h4 style="margin-top:8px;font-size:12px;">Zone Size</h4>
           <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-            <input type="range" id="obj-radius" min="2" max="10" value="4" oninput="forge.setObjectiveRadius(this.value)" style="flex:1;">
+            <input type="range" id="obj-radius" min="2" max="32" value="4" oninput="forge.setObjectiveRadius(this.value)" style="flex:1;">
             <span id="obj-radius-display" style="font-size:11px;min-width:30px;">4</span>
           </div>
           
@@ -322,6 +347,7 @@
               <option value="objective_reached">🎯 Objective Reached</option>
               <option value="location_entered">📍 Location Entered</option>
               <option value="timer">⏱️ Timer</option>
+              <option value="victory">🏆 Victory</option>
             </select>
             <div id="scene-trigger-params" style="margin-bottom:6px;"></div>
 

@@ -216,33 +216,43 @@ function getChildMaterialType(meshName, parentMaterialType) {
 // Create team-colored selection indicator
 function createTeamSelectionIndicator(unit, teamId) {
   if (!unit.mesh || !window.gfx || !window.gfx.scene) return;
-  
+  if (!window.gfx.createAlternatingTriangleRingMesh) return;
+
   const scene = window.gfx.scene;
   const teamColor = getTeamColor(teamId);
-  
-  // Create a ring around the unit for selection indicator
-  const ring = BABYLON.MeshBuilder.CreateTorus("selectionRing", {
-    diameter: 2.5,
-    thickness: 0.06,
-    tessellation: 16
-  }, scene);
-  
-  // Create team-colored material
-  const ringMaterial = new BABYLON.StandardMaterial("teamSelectionRingMat", scene);
-  ringMaterial.diffuseColor = BABYLON.Color3.FromHexString(teamColor.primary.replace('#', ''));
-  ringMaterial.emissiveColor = BABYLON.Color3.FromHexString(teamColor.primary.replace('#', '')).scale(0.5);
-  ringMaterial.alpha = 1.0;
-  
-  ring.material = ringMaterial;
-  ring.isVisible = false; // Hidden by default
-  ring.isPickable = false; // Don't interfere with unit selection
-  
-  // Position ring around the unit
-  ring.position.y = 0.1; // Slightly above ground
-  ring.parent = unit.mesh; // Parent to unit so it moves with it
-  
-  // Store reference to the selection indicator
+  const primary = BABYLON.Color3.FromHexString(teamColor.primary.replace('#', ''));
+
+  const TILE = typeof window !== 'undefined' && window.TILE_SIZE ? window.TILE_SIZE : 4;
+  const built = window.gfx.createAlternatingTriangleRingMesh(scene, {
+    name: 'selectionRing',
+    pairCount: 12,
+    radiusPitch: TILE * 0.4,
+    depthOut: TILE * 0.22,
+    depthIn: TILE * 0.2
+  });
+  const ring = built.mesh;
+
+  built.matOut.diffuseColor = primary;
+  built.matOut.emissiveColor = primary.scale(0.85);
+  built.matIn.diffuseColor = primary;
+  built.matIn.emissiveColor = primary.scale(1.05);
+
+  ring.isVisible = false;
+  ring.isPickable = false;
+  ring.parent = unit.mesh;
+  const sx = Math.abs(unit.mesh.scaling.x);
+  const sy = Math.abs(unit.mesh.scaling.y);
+  const sz = Math.abs(unit.mesh.scaling.z);
+  if (sx > 1e-5 && sz > 1e-5) {
+    ring.scaling.x = 1 / sx;
+    ring.scaling.z = 1 / sz;
+  }
+  if (sy > 1e-5) ring.scaling.y = 1 / sy;
+  ring.position.y = TILE * 0.05;
+
   unit.selectionIndicator = ring;
+  unit.selectionIndicatorMatOut = built.matOut;
+  unit.selectionIndicatorMatIn = built.matIn;
 }
 
 // Update team colors for existing units and buildings

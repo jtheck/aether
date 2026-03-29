@@ -401,7 +401,7 @@ const UnitTypes = {
     model: "assets/models/dirigible.glb",
     scale: 0.5,
     health: 70,
-    speed: 68,
+    speed: 100,
     rotationSpeed: 3.0,
     size: 2,
     cost: { wood: 70 },
@@ -422,7 +422,7 @@ const UnitTypes = {
     model: "assets/models/camp.glb", // TODO: unique model
     scale: 0.55,
     health: 100,
-    speed: 58,
+    speed: 88,
     rotationSpeed: 2.5,
     size: 2,
     cost: { wood: 120, stone: 20 },
@@ -1004,8 +1004,18 @@ function updateUnitDistances() {
     
     unitsToUpdate.forEach(unit => {
         if (unit.pb && unit.pb.state && unit.pb.state.loc) {
-            const dx = unit.pb.state.loc.x - camX;
-            const dz = unit.pb.state.loc.z - camZ;
+            // Passengers: use transport's position for LOD (their own pb.loc is stale)
+            let locX = unit.pb.state.loc.x;
+            let locZ = unit.pb.state.loc.z;
+            if (unit.carriedBy) {
+                const transport = unitsToUpdate.find(u => u.id === unit.carriedBy);
+                if (transport && transport.pb && transport.pb.state && transport.pb.state.loc) {
+                    locX = transport.pb.state.loc.x;
+                    locZ = transport.pb.state.loc.z;
+                }
+            }
+            const dx = locX - camX;
+            const dz = locZ - camZ;
             const distanceSquared = dx * dx + dz * dz;
             
             // Store squared distance for LOD calculations (only calculate sqrt when needed)
@@ -1354,30 +1364,35 @@ function spawnUnitModels(scene) {
 // Create a selection indicator for a unit
 function createSelectionIndicator(unit) {
     if (!unit.mesh || !window.gfx || !window.gfx.scene) return;
-    
-    // Create a ring around the unit for selection indicator
-    const ring = BABYLON.MeshBuilder.CreateTorus("selectionRing", {
-        diameter: 3.5,
-        thickness: 0.15,
-        tessellation: 16
-    }, window.gfx.scene);
-    
-    // Create glowing material
-    const ringMaterial = new BABYLON.StandardMaterial("selectionRingMat", window.gfx.scene);
-    ringMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1); // Cyan to match selection box
-    ringMaterial.emissiveColor = new BABYLON.Color3(0, 0.5, 0.5);
-    ringMaterial.alpha = 1.0;
-    
-    ring.material = ringMaterial;
-    ring.isVisible = false; // Hidden by default
-    ring.isPickable = false; // Don't interfere with unit selection
-    
-    // Position ring around the unit
-    ring.position.y = 0.1; // Slightly above ground
-    ring.parent = unit.mesh; // Parent to unit so it moves with it
-    
-    // Store reference to the selection indicator
+    if (!window.gfx.createAlternatingTriangleRingMesh) return;
+
+    const TILE = window.TILE_SIZE || 4;
+    const built = window.gfx.createAlternatingTriangleRingMesh(window.gfx.scene, {
+        name: 'selectionRing',
+        pairCount: 14
+    });
+    const ring = built.mesh;
+
+    built.matOut.diffuseColor = new BABYLON.Color3(0.15, 1, 1);
+    built.matOut.emissiveColor = new BABYLON.Color3(0.35, 0.95, 1);
+    built.matIn.diffuseColor = new BABYLON.Color3(0.1, 1, 1);
+    built.matIn.emissiveColor = new BABYLON.Color3(0.45, 1, 1);
+
+    ring.isVisible = false;
+    ring.parent = unit.mesh;
+    const sx = Math.abs(unit.mesh.scaling.x);
+    const sy = Math.abs(unit.mesh.scaling.y);
+    const sz = Math.abs(unit.mesh.scaling.z);
+    if (sx > 1e-5 && sz > 1e-5) {
+        ring.scaling.x = 1 / sx;
+        ring.scaling.z = 1 / sz;
+    }
+    if (sy > 1e-5) ring.scaling.y = 1 / sy;
+    ring.position.y = TILE * 0.05;
+
     unit.selectionIndicator = ring;
+    unit.selectionIndicatorMatOut = built.matOut;
+    unit.selectionIndicatorMatIn = built.matIn;
     
     // Create health dots for the unit
     if (window.createHealthDots) {
@@ -1404,14 +1419,17 @@ function updateSelectionIndicators() {
         
         if (unit.selectionIndicator) {
             unit.selectionIndicator.isVisible = isSelected;
-            
-            // Add some animation for selected units
+
             if (isSelected) {
-                // Rotate the ring slowly
                 unit.selectionIndicator.rotation.y += 0.02;
-                
-                // Keep fully opaque for performance (no alpha pulsing)
-                unit.selectionIndicator.material.alpha = 1.0;
+                const t = performance.now() * 0.003;
+                const outPulse = 0.88 + Math.sin(t) * 0.12;
+                const inPulse = 0.88 + Math.sin(t + Math.PI) * 0.12;
+                if (unit.selectionIndicatorMatOut) unit.selectionIndicatorMatOut.alpha = outPulse;
+                if (unit.selectionIndicatorMatIn) unit.selectionIndicatorMatIn.alpha = inPulse;
+            } else {
+                if (unit.selectionIndicatorMatOut) unit.selectionIndicatorMatOut.alpha = 1;
+                if (unit.selectionIndicatorMatIn) unit.selectionIndicatorMatIn.alpha = 1;
             }
         }
         
@@ -1904,7 +1922,8 @@ function updateUnits(deltaTime) {
 
         // Find transport by ID
         const transport = allUnits.find(u => u.id === rider._transportTarget);
-        if (!transport || !transport.passengers || transport.passengers.length >= transport.transportCapacity) {
+        const passengerCount = transport ? getTransportPassengerIds(transport, allUnits).length : 0;
+        if (!transport || passengerCount >= transport.transportCapacity) {
             delete rider._transportTarget;
             continue;
         }
@@ -1921,12 +1940,24 @@ function updateUnits(deltaTime) {
 
 function loadUnitIntoTransport(unit, transport) {
     unit.carriedBy = transport.id;
-    transport.passengers.push(unit.id);
+    if (!Array.isArray(transport.passengers)) {
+        transport.passengers = [];
+    }
+    if (!transport.passengers.includes(unit.id)) {
+        transport.passengers.push(unit.id);
+    }
+    if (window.deterministicStringCompare) {
+        transport.passengers.sort((a, b) => window.deterministicStringCompare(a || '', b || ''));
+    }
     delete unit._transportTarget;
 
     // Stop behavior
     if (window.behaviorManager && window.behaviorManager.behaviors) {
-        window.behaviorManager.behaviors.delete(unit);
+        if (window.behaviorManager.deleteBehaviorDirect) {
+            window.behaviorManager.deleteBehaviorDirect(unit, 'loadIntoTransport-delete');
+        } else {
+            window.behaviorManager.behaviors.delete(unit);
+        }
     }
 
     // Zero out velocity
@@ -1955,18 +1986,62 @@ function loadUnitIntoTransport(unit, transport) {
     }
 }
 
+function getTransportPassengerIds(transport, units = window.gameUnits || gameUnits) {
+    if (!transport?.id) return [];
+    const passengerIds = (units || [])
+        .filter(unit => unit && unit.carriedBy === transport.id)
+        .map(unit => unit.id)
+        .sort((a, b) => window.deterministicStringCompare
+            ? window.deterministicStringCompare(a || '', b || '')
+            : String(a || '').localeCompare(String(b || '')));
+
+    if (Array.isArray(transport.passengers)) {
+        const inSync = transport.passengers.length === passengerIds.length &&
+            transport.passengers.every((id, index) => id === passengerIds[index]);
+        if (!inSync) {
+            transport.passengers = passengerIds.slice();
+        }
+    } else if (transport?.abilities?.includes('transport')) {
+        transport.passengers = passengerIds.slice();
+    }
+
+    return passengerIds;
+}
+
 function unloadPassengers(transport, targetPos) {
-    if (!transport.passengers || transport.passengers.length === 0) return;
     const allUnits = window.gameUnits || gameUnits;
     const tLoc = transport.pb && transport.pb.state ? transport.pb.state.loc : null;
     if (!tLoc) return;
-
-    const passengerIds = transport.passengers.slice();
+    const passengerIds = getTransportPassengerIds(transport, allUnits);
+    if (window.isMultiplayer && transport?.owner && window.currentMatch?.isLiveMultiplayerMatch?.()) {
+        console.log('🛬 UNLOAD TRACE execute', {
+            tick: window.currentMatch?.tick || 0,
+            transportId: transport.id || null,
+            owner: transport.owner || null,
+            ownerNorm: typeof transport.owner === 'string' && transport.owner.length > 6 ? transport.owner.slice(-6) : transport.owner,
+            transportPos: {
+                x: Math.round((tLoc.x || 0) * 10) / 10,
+                z: Math.round((tLoc.z || 0) * 10) / 10
+            },
+            targetPos: targetPos ? {
+                x: Math.round((targetPos.x || 0) * 10) / 10,
+                z: Math.round((targetPos.z || 0) * 10) / 10
+            } : null,
+            passengerIds: passengerIds.slice()
+        });
+    }
+    if (passengerIds.length === 0) {
+        if (Array.isArray(transport.passengers)) {
+            transport.passengers.length = 0;
+        }
+        return;
+    }
     const unloadedUnits = [];
     const normalizeOwnerId = (value) => {
         const str = typeof value === 'string' ? value : '';
         return str.length > 6 ? str.slice(-6) : str;
     };
+    const currentTick = window.currentMatch?.tick || 0;
     transport.passengers.length = 0;
 
     if (transport.pb && transport.pb.state && transport.pb.state.vel) {
@@ -1985,6 +2060,9 @@ function unloadPassengers(transport, targetPos) {
         const unit = allUnits.find(u => u.id === pid);
         if (!unit) return;
         unit.carriedBy = null;
+        delete unit._transportTarget;
+        unit.lastPlayerCommandTick = currentTick;
+        unit.lastPlayerMoveTick = currentTick;
         unloadedUnits.push(unit);
 
         // Drop at the transport's current position, spread in a circle
@@ -1992,6 +2070,16 @@ function unloadPassengers(transport, targetPos) {
         const spread = 3;
         const dropX = Math.round((tLoc.x + Math.cos(angle) * spread) * 100) / 100;
         const dropZ = Math.round((tLoc.z + Math.sin(angle) * spread) * 100) / 100;
+        if (window.isMultiplayer && window.currentMatch?.isLiveMultiplayerMatch?.()) {
+            console.log('🛬 UNLOAD TRACE passenger', {
+                tick: window.currentMatch?.tick || 0,
+                transportId: transport.id || null,
+                passengerId: unit.id || null,
+                index: idx,
+                dropX,
+                dropZ
+            });
+        }
 
         if (unit.pb && unit.pb.state && unit.pb.state.loc) {
             unit.pb.state.loc.x = dropX;
@@ -2021,7 +2109,11 @@ function unloadPassengers(transport, targetPos) {
                 x: Math.round((targetPos.x + Math.cos(angle) * moveSpread) * 100) / 100,
                 z: Math.round((targetPos.z + Math.sin(angle) * moveSpread) * 100) / 100
             };
-            window.behaviorManager.setBehavior(unit, 'walk', { targetPoint: moveTarget });
+            window.behaviorManager.setBehavior(unit, 'walk', {
+                targetPoint: moveTarget,
+                applyPersonalityOffset: false,
+                forceDeterministicReset: true
+            });
         } else if (window.behaviorManager) {
             window.behaviorManager.setBehavior(unit, 'linger', {});
         }
@@ -2044,6 +2136,7 @@ function unloadPassengers(transport, targetPos) {
 
 // Expose for match.js and ui.js
 window.loadUnitIntoTransport = loadUnitIntoTransport;
+window.getTransportPassengerIds = getTransportPassengerIds;
 window.unloadPassengers = unloadPassengers;
 
 // Constants for monk auto-kick behavior
@@ -2234,8 +2327,9 @@ function updateUnitMeshes() {
                 if (transport && transport.mesh) {
                     const tPos = transport.mesh.position;
                     const isAirTransport = transport.abilities && transport.abilities.includes('fly');
-                    const passengerIdx = transport.passengers ? transport.passengers.indexOf(unit.id) : 0;
-                    const total = transport.passengers ? transport.passengers.length : 1;
+                    const passengerIds = getTransportPassengerIds(transport, allU);
+                    const passengerIdx = Math.max(0, passengerIds.indexOf(unit.id));
+                    const total = passengerIds.length || 1;
 
                     // Pack in a tight grid like eggs in a carton
                     // 2 columns (left/right), rows front to back
@@ -2314,7 +2408,29 @@ function updateUnitMeshes() {
                 // Extrapolate visuals from velocity for smooth motion between net ticks.
                 const isMultiplayerPlaying = window.isMultiplayer && window.currentMatch?.state === 'playing';
                 if (isMultiplayerPlaying) {
-                    if (unit.pb.state.vel) {
+                    if (isLocalUnit) {
+                        // Local units should feel smooth like remote units while moving,
+                        // but when a retarget briefly zeroes velocity we must ease back to
+                        // the sim position instead of hard snapping backward.
+                        const frameDt = window.gameLoop?.deltaTime || (1 / 60);
+                        const vel = unit.pb.state.vel;
+                        const speed = vel ? Math.sqrt(vel.x * vel.x + vel.z * vel.z) : 0;
+                        if (speed > 0.12) {
+                            unit.visualPosition.x += vel.x * frameDt;
+                            unit.visualPosition.z += vel.z * frameDt;
+                            const correctionRate = 2.0 * frameDt;
+                            const dx = targetX - unit.visualPosition.x;
+                            const dz = targetZ - unit.visualPosition.z;
+                            unit.visualPosition.x += dx * correctionRate;
+                            unit.visualPosition.z += dz * correctionRate;
+                        } else {
+                            const settleRate = Math.min(1, 12 * frameDt);
+                            const dx = targetX - unit.visualPosition.x;
+                            const dz = targetZ - unit.visualPosition.z;
+                            unit.visualPosition.x += dx * settleRate;
+                            unit.visualPosition.z += dz * settleRate;
+                        }
+                    } else if (unit.pb.state.vel) {
                         const vel = unit.pb.state.vel;
                         const speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
                         const frameDt = window.gameLoop?.deltaTime || (1 / 60);
@@ -2609,7 +2725,7 @@ function debugLODStats() {
 // Destroy a unit completely with particle cleanup
 function destroyUnit(unit) {
     // Spill passengers out alive when a transport is destroyed
-    if (unit.passengers && unit.passengers.length > 0) {
+    if (unit.abilities && unit.abilities.includes('transport')) {
         unloadPassengers(unit, unit.pb && unit.pb.state && unit.pb.state.loc
             ? { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z }
             : null);
@@ -2643,7 +2759,11 @@ function destroyUnit(unit) {
     
     // Remove from behavior manager
     if (window.behaviorManager && window.behaviorManager.behaviors) {
-        window.behaviorManager.behaviors.delete(unit);
+        if (window.behaviorManager.deleteBehaviorDirect) {
+            window.behaviorManager.deleteBehaviorDirect(unit, 'destroyUnit-delete');
+        } else {
+            window.behaviorManager.behaviors.delete(unit);
+        }
     }
     
     // Clean up LOD billboard
@@ -2787,7 +2907,7 @@ function recruitUnit(unitType, options = {}) {
     if (spawnerType) {
       const spawner = window.gameBuildings.find(b => {
         const owner = b.owner?.length > 6 ? b.owner.slice(-6) : b.owner;
-        return b.type === spawnerType && owner === normalizedPlayerId && b.buildProgress >= 1.0;
+        return b.type === spawnerType && owner === normalizedPlayerId && b.completionProcessed;
       });
       if (spawner) return spawner;
     }
@@ -3272,26 +3392,24 @@ function applyTeamColorsToMesh(mesh, teamColor) {
   const b = parseInt(cleanColor.substr(4, 2), 16) / 255;
   const color = new BABYLON.Color3(r, g, b);
   
+  const createTeamMaterial = (sourceMaterial, nameSuffix) => {
+    const teamMaterial = new BABYLON.StandardMaterial(`team_${nameSuffix}_${Date.now()}`, scene);
+    teamMaterial.diffuseColor = new BABYLON.Color3(color.r, color.g, color.b);
+    teamMaterial.emissiveColor = new BABYLON.Color3(color.r, color.g, color.b).scale(0.25);
+    teamMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
+    teamMaterial.disableLighting = true;
+    if (sourceMaterial) {
+      if (typeof sourceMaterial.alpha === 'number') teamMaterial.alpha = sourceMaterial.alpha;
+      if (typeof sourceMaterial.backFaceCulling === 'boolean') {
+        teamMaterial.backFaceCulling = sourceMaterial.backFaceCulling;
+      }
+    }
+    return teamMaterial;
+  };
+
   // Check main mesh
   if (mesh.material && mesh.material.name && mesh.material.name.includes('TeamColor')) {
-    const teamMaterial = mesh.material.clone(`team_${teamColor}_${Date.now()}`);
-    
-    // Apply team color with disabled lighting
-    teamMaterial.diffuseColor = new BABYLON.Color3(0, 0, 0);
-    teamMaterial.emissiveColor = color.scale(0.4);
-    teamMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
-    teamMaterial.roughness = 1.0;
-    teamMaterial.metallic = 0.0;
-    teamMaterial.disableLighting = true;
-    
-    // Disable textures
-    teamMaterial.diffuseTexture = null;
-    teamMaterial.emissiveTexture = null;
-    teamMaterial.specularTexture = null;
-    teamMaterial.normalTexture = null;
-    teamMaterial.ambientTexture = null;
-    
-    mesh.material = teamMaterial;
+    mesh.material = createTeamMaterial(mesh.material, teamColor);
     changed = true;
   }
   
@@ -3299,24 +3417,7 @@ function applyTeamColorsToMesh(mesh, teamColor) {
   if (mesh.getChildMeshes) {
     mesh.getChildMeshes().forEach((childMesh) => {
       if (childMesh.material && childMesh.material.name && childMesh.material.name.includes('TeamColor')) {
-        const teamMaterial = childMesh.material.clone(`team_${teamColor}_${Date.now()}`);
-        
-        // Apply team color with disabled lighting
-        teamMaterial.diffuseColor = new BABYLON.Color3(0, 0, 0);
-        teamMaterial.emissiveColor = color.scale(0.4);
-        teamMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
-        teamMaterial.roughness = 1.0;
-        teamMaterial.metallic = 0.0;
-        teamMaterial.disableLighting = true;
-        
-        // Disable textures
-        teamMaterial.diffuseTexture = null;
-        teamMaterial.emissiveTexture = null;
-        teamMaterial.specularTexture = null;
-        teamMaterial.normalTexture = null;
-        teamMaterial.ambientTexture = null;
-        
-        childMesh.material = teamMaterial;
+        childMesh.material = createTeamMaterial(childMesh.material, `${teamColor}_${childMesh.name}`);
         changed = true;
       }
     });
@@ -3360,6 +3461,9 @@ function getTeamColorForOwner(owner) {
   // Helper to ensure we always return a string
   const ensureString = (color) => {
     if (typeof color === 'string') return color;
+    if (color && typeof color === 'object' && typeof color.primary === 'string') {
+      return color.primary;
+    }
     // If it's a Color3 object, convert to hex string
     if (color && color.r !== undefined && color.g !== undefined && color.b !== undefined) {
       const r = Math.round(color.r * 255).toString(16).padStart(2, '0');
@@ -3405,7 +3509,9 @@ function getTeamColorForOwner(owner) {
   const localPlayerId = window.player?.id || window.currentMatch?.localPlayerId;
   const localNorm = normalizeId(localPlayerId);
   if (owner && (owner === localPlayerId || ownerNorm === localNorm)) {
-    const color = window.player?.color || window.currentPlayerColor || '#4A90E2';
+    const color = window.player?.color
+      || (window.Lobby?.getLocalProfileColor ? window.Lobby.getLocalProfileColor(null) : null)
+      || '#4A90E2';
     return ensureString(color) || '#4A90E2';
   }
 
@@ -3417,6 +3523,17 @@ function getTeamColorForOwner(owner) {
     return ensureString(color) || '#E24A4A';
   }
   
+  // NPC/enemy units get distinct hostile colors
+  if (owner && owner.startsWith('npc-')) {
+    const npcColors = {
+      'npc-5': '#CC3333',   // Dark red
+      'npc-6': '#8B4513',   // Saddle brown
+      'npc-7': '#6B2D8B',   // Dark purple
+      'npc-8': '#2F4F4F'    // Dark slate
+    };
+    return npcColors[owner] || '#CC3333';
+  }
+
   // Fallback for any other player IDs
   const teamColors = {
     'neutral': '#8A8A8A'    // Gray

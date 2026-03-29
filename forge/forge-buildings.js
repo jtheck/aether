@@ -172,7 +172,7 @@
     const baseRotation = (rotHash % 628) / 100; // 0 to ~6.28 radians
     const rotation = baseRotation + (rotationOffset * Math.PI / 2); // Add symmetry rotation offset
     console.log(`🔄 Building rotation: base=${baseRotation.toFixed(2)} (${(baseRotation*180/Math.PI).toFixed(0)}°), final=${rotation.toFixed(2)} (${(rotation*180/Math.PI).toFixed(0)}°)`);
-    this.state.buildings.push({ x: pos.x, y: pos.y, type: buildingType, rotation });
+    this.state.buildings.push({ x: pos.x, y: pos.y, type: buildingType, rotation, player: this.state.currentBuildingPlayer });
 
     // Update field's blocked tiles for pathfinding
     if (field.blockedTiles) {
@@ -536,18 +536,23 @@
       return;
     }
 
-    // Group by type
-    const byType = {};
+    const playerLabels = { '-1': 'Neutral', '0': 'P1', '1': 'P2', '2': 'P3', '3': 'P4' };
+    const getPlayerLabel = (p) => playerLabels[String(p)] || (p >= 5 ? `NPC${p - 4}` : `P${p + 1}`);
+
+    const byTypeAndPlayer = {};
     this.state.buildings.forEach(b => {
-      byType[b.type] = (byType[b.type] || 0) + 1;
+      const key = `${b.type}|${b.player ?? -1}`;
+      byTypeAndPlayer[key] = (byTypeAndPlayer[key] || 0) + 1;
     });
 
-    list.innerHTML = Object.entries(byType)
-      .map(([type, count]) => {
+    list.innerHTML = Object.entries(byTypeAndPlayer)
+      .map(([key, count]) => {
+        const [type, player] = key.split('|');
         const buildingDef = window.BuildingTypes?.[type];
         const icon = this.getBuildingIcon(type, buildingDef || {});
         const name = buildingDef?.name || type;
-        return `${icon} ${name}: ${count}`;
+        const ownerTag = player === '-1' ? '' : ` [${getPlayerLabel(Number(player))}]`;
+        return `${icon} ${name}${ownerTag}: ${count}`;
       }).join('<br>');
   };
 

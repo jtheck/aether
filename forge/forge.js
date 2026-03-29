@@ -58,12 +58,14 @@
       'teams': false
     },
     
-    // Spawn points (array of {x, y, team} objects)
+    // Spawn points (array of {x, y, team, owner} objects; owner: 'player' or 'npc')
     spawnPoints: [],
+    currentSpawnOwner: 'player',
     
-    // Buildings (array of {x, y, type, rotation} objects)
+    // Buildings (array of {x, y, type, rotation, player} objects; player: -1=neutral, 0-3=P1-P4, 5+=NPC/enemy)
     buildings: [],
     currentBuilding: 'agora',
+    currentBuildingPlayer: -1,
     
     // Objectives/Win zones (array of {x, y, radius, type, team} objects)
     // type: 'reach' = any unit enters, 'capture' = hold for time, 'escape' = all units must reach
@@ -75,7 +77,8 @@
     // For adventure mode: players start with units instead of Agoras
     startingUnits: [],
     currentUnitType: 'villager',
-    currentUnitPlayer: 0  // Player index (0 = player 1, 1 = player 2, etc.)
+    currentUnitPlayer: 0,  // Player index (0 = player 1, 1 = player 2, etc.)
+
   };
   
   // Spawn point radius (same as game's spawnZoneRadius for terrain flattening)

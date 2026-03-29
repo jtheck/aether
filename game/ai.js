@@ -189,13 +189,18 @@ class Behavior {
 
         const dx = target.x - pos.x;
         const dz = target.z - pos.z;
-        const dist = Math.sqrt(dx * dx + dz * dz);
-        if (dist < TILE_SIZE * 0.75) return true; // arrived
+        const distSq = getStableDistanceSq(pos, target);
+        const arrivalRadiusSq = Math.round(((TILE_SIZE * 0.75) * (TILE_SIZE * 0.75)) * 1000) / 1000;
+        if (isInSameTile(pos, target, TILE_SIZE) || distSq <= arrivalRadiusSq) return true; // arrived
 
         // Flying units: straight line, no pathfinding
         if (this.unit.abilities && this.unit.abilities.includes('fly')) {
+            const dist = Math.sqrt(distSq);
             if (dist > 0.001) {
-                this.applyMovementWithRotation({ x: dx / dist, z: dz / dist }, speed);
+                this.applyMovementWithRotation({
+                    x: Math.round((dx / dist) * 10000) / 10000,
+                    z: Math.round((dz / dist) * 10000) / 10000
+                }, speed);
             }
             return false;
         }
@@ -225,9 +230,8 @@ class Behavior {
         let cur = target;
         if (this._navPath && this._navIdx < this._navPath.length) {
             cur = this._navPath[this._navIdx];
-            const wdx = cur.x - pos.x;
-            const wdz = cur.z - pos.z;
-            if (wdx * wdx + wdz * wdz < TILE_SIZE * TILE_SIZE * 0.25) {
+            const waypointRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.25) * 1000) / 1000;
+            if (isInSameTile(pos, cur, TILE_SIZE) || getStableDistanceSq(pos, cur) <= waypointRadiusSq) {
                 this._navIdx++;
                 cur = this._navIdx < this._navPath.length ? this._navPath[this._navIdx] : target;
             }
@@ -235,9 +239,12 @@ class Behavior {
 
         const tdx = cur.x - pos.x;
         const tdz = cur.z - pos.z;
-        const tlen = Math.sqrt(tdx * tdx + tdz * tdz);
+        const tlen = Math.sqrt(getStableDistanceSq(pos, cur));
         if (tlen > 0.001) {
-            this.applyMovementWithRotation({ x: tdx / tlen, z: tdz / tlen }, speed);
+            this.applyMovementWithRotation({
+                x: Math.round((tdx / tlen) * 10000) / 10000,
+                z: Math.round((tdz / tlen) * 10000) / 10000
+            }, speed);
         }
         return false;
     }
@@ -324,9 +331,7 @@ class LingerBehavior extends Behavior {
         const wanderIntervalTicks = Math.floor(this.wanderInterval / 1000 * tickRate); // Convert ms to ticks (20 ticks/sec)
         
         // Check if we've been moved far from center (player command)
-        const dx = this.unit.pb.state.loc.x - this.centerPoint.x;
-        const dz = this.unit.pb.state.loc.z - this.centerPoint.z;
-        const distanceFromCenter = Math.sqrt(dx * dx + dz * dz);
+        const distanceFromCenter = Math.sqrt(getStableDistanceSq(this.unit.pb.state.loc, this.centerPoint));
         
         // If moved far away (more than 2x radius), update center point to current location
         if (distanceFromCenter > this.params.radius * 2) {
@@ -382,14 +387,14 @@ class LingerBehavior extends Behavior {
             z: target.z - this.unit.pb.state.loc.z
         };
         
-        const distance = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+        const distance = Math.sqrt(getStableDistanceSq(this.unit.pb.state.loc, target));
         
         // Only walk if target is reasonably far (> 2 units)
         // This prevents jittering from tiny wander movements
         if (distance > 2.0) {
             // Normalize and apply movement
-            direction.x /= distance;
-            direction.z /= distance;
+            direction.x = Math.round((direction.x / distance) * 10000) / 10000;
+            direction.z = Math.round((direction.z / distance) * 10000) / 10000;
             
         // Apply movement with rotation and forward momentum boost
         this.applyMovementWithRotation(direction, 2.4); // Super slow, very relaxed pace (20% speed)
@@ -980,10 +985,12 @@ class WorkBehavior extends Behavior {
             z: workZ - this.unit.pb.state.loc.z
         };
         
-        const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
-        if (length > 0.1) {
-            direction.x /= length;
-            direction.z /= length;
+        const lengthSq = getStableDistanceSq(this.unit.pb.state.loc, { x: workX, z: workZ });
+        const moveThresholdSq = 0.01;
+        if (lengthSq > moveThresholdSq) {
+            const length = Math.sqrt(lengthSq);
+            direction.x = length > 0.001 ? Math.round((direction.x / length) * 10000) / 10000 : 0;
+            direction.z = length > 0.001 ? Math.round((direction.z / length) * 10000) / 10000 : 0;
             this.applyMovementWithRotation(direction, this.params.workSpeed);
         }
     }
@@ -994,11 +1001,16 @@ class WorkBehavior extends Behavior {
         // Stay close to the building during break
         const dx = this.building.position.x - this.unit.pb.state.loc.x;
         const dz = this.building.position.z - this.unit.pb.state.loc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distanceSq = getStableDistanceSq(this.unit.pb.state.loc, this.building.position);
+        const breakRadiusSq = Math.round(((TILE_SIZE * 1.5) * (TILE_SIZE * 1.5)) * 1000) / 1000;
         
-        if (distance > TILE_SIZE * 1.5) {
+        if (distanceSq > breakRadiusSq) {
             // Move closer to building
-            const direction = { x: dx / distance, z: dz / distance };
+            const distance = Math.sqrt(distanceSq);
+            const direction = {
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+            };
             this.applyMovementWithRotation(direction, this.params.workSpeed * 0.5);
         }
     }
@@ -1033,6 +1045,13 @@ class GatherWorkBehavior extends WorkBehavior {
         this.gatheredResourceType = null; // What resource this worker is carrying
         this.gatheredResourceAmount = 0; // How much of that resource
         this.resourceTypes = params.resourceTypes || null; // Optional filter: only gather these types
+
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const unitIdHash = (unit.id || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const idleAngle = ((unitIdHash % 12) / 12) * Math.PI * 2;
+        const idleDistance = TILE_SIZE * 1.15;
+        this.idleSeekX = Math.round((building.position.x + Math.cos(idleAngle) * idleDistance) * 100) / 100;
+        this.idleSeekZ = Math.round((building.position.z + Math.sin(idleAngle) * idleDistance) * 100) / 100;
     }
     
     step() {
@@ -1063,6 +1082,39 @@ class GatherWorkBehavior extends WorkBehavior {
             this.addGatheredResources();
             this.removeResourceIndicator();
         }
+    }
+
+    moveToIdleSeekSpot() {
+        if (!this.unit?.pb?.state?.loc) return;
+
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        const idleTarget = { x: this.idleSeekX, z: this.idleSeekZ };
+        const currentPos = this.unit.pb.state.loc;
+        const arrivalRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.2) * 1000) / 1000;
+
+        if (isInSameTile(currentPos, idleTarget, TILE_SIZE) || getStableDistanceSq(currentPos, idleTarget) <= arrivalRadiusSq) {
+            if (this.unit.pb.imp) {
+                this.unit.pb.imp.x = 0;
+                this.unit.pb.imp.z = 0;
+            }
+            if (this.unit.pb.state.vel) {
+                this.unit.pb.state.vel.x = 0;
+                this.unit.pb.state.vel.z = 0;
+            }
+            this.unit.pb.state.loc.x = idleTarget.x;
+            this.unit.pb.state.loc.z = idleTarget.z;
+            return;
+        }
+
+        const dx = idleTarget.x - currentPos.x;
+        const dz = idleTarget.z - currentPos.z;
+        const distanceSq = getStableDistanceSq(currentPos, idleTarget);
+        const distance = Math.sqrt(distanceSq);
+        const direction = {
+            x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+            z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+        };
+        this.applyMovementWithRotation(direction, this.params.workSpeed * 0.6);
     }
     
     seekResources(currentTime) {
@@ -1115,15 +1167,14 @@ class GatherWorkBehavior extends WorkBehavior {
             // Continuously move toward resource target (with offset)
             const dx = adjustedResourceTarget.x - this.unit.pb.state.loc.x;
             const dz = adjustedResourceTarget.z - this.unit.pb.state.loc.z;
-            const distance = Math.sqrt(dx * dx + dz * dz);
+            const distanceSq = getStableDistanceSq(this.unit.pb.state.loc, adjustedResourceTarget);
             
             // Once we reach the resource, switch to gathering state
             // CRITICAL: Use a slightly larger threshold and round distance to prevent floating-point precision issues
             // This ensures workers on both clients reach the resource at the same tick
-            const arrivalThreshold = TILE_SIZE * 0.6; // Slightly larger threshold for determinism
-            const roundedDistance = Math.round(distance * 100) / 100; // Round to 2 decimal places
+            const arrivalThresholdSq = Math.round(((TILE_SIZE * 0.6) * (TILE_SIZE * 0.6)) * 1000) / 1000;
             
-            if (roundedDistance < arrivalThreshold) {
+            if (isInSameTile(this.unit.pb.state.loc, adjustedResourceTarget, TILE_SIZE) || distanceSq <= arrivalThresholdSq) {
                 this.gatherState = 'gathering';
                 const currentTick = window.currentMatch?.tick || 0;
                 // CRITICAL: Use tick-based timing for deterministic gathering
@@ -1138,6 +1189,7 @@ class GatherWorkBehavior extends WorkBehavior {
             } else {
                 // Keep moving toward resource every frame (with offset applied)
                 // CRITICAL: Round direction to fixed precision for deterministic movement
+                const distance = Math.sqrt(distanceSq);
                 const direction = { 
                     x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0, 
                     z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0 
@@ -1145,9 +1197,9 @@ class GatherWorkBehavior extends WorkBehavior {
                 this.applyMovementWithRotation(direction, this.params.workSpeed);
             }
         } else {
-            // No resources found currently - keep searching by circling around camp
-            // Resources might become available (respawn, other workers finish)
-            super.performWork();
+            // No resources found: hold a fixed deterministic idle spot near camp
+            // rather than endlessly orbiting, which can accumulate drift over time.
+            this.moveToIdleSeekSpot();
         }
     }
     
@@ -1156,13 +1208,24 @@ class GatherWorkBehavior extends WorkBehavior {
             this.gatherState = 'seeking';
             return;
         }
+
+        const personalityOffset = this.unit.personalityOffset || { x: 0, z: 0 };
+        const roundedOffset = {
+            x: Math.round(personalityOffset.x * 1000) / 1000,
+            z: Math.round(personalityOffset.z * 1000) / 1000
+        };
+        const adjustedGatherTarget = {
+            x: Math.round((this.gatherTarget.x + roundedOffset.x) * 1000) / 1000,
+            z: Math.round((this.gatherTarget.z + roundedOffset.z) * 1000) / 1000
+        };
         
         // Continuously check position and move if needed
-        const dx = this.gatherTarget.x - this.unit.pb.state.loc.x;
-        const dz = this.gatherTarget.z - this.unit.pb.state.loc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const dx = adjustedGatherTarget.x - this.unit.pb.state.loc.x;
+        const dz = adjustedGatherTarget.z - this.unit.pb.state.loc.z;
+        const distanceSq = getStableDistanceSq(this.unit.pb.state.loc, adjustedGatherTarget);
+        const gatherArrivalRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.25) * 1000) / 1000;
         
-        if (distance < TILE_SIZE * 0.5) {
+        if (isInSameTile(this.unit.pb.state.loc, adjustedGatherTarget, TILE_SIZE) || distanceSq <= gatherArrivalRadiusSq) {
             // We're at the resource, gathering in place
             // CRITICAL: Use tick-based timing for deterministic gathering completion
             // Convert gatherDuration from ms to ticks (20 ticks per second at 20Hz)
@@ -1203,7 +1266,11 @@ class GatherWorkBehavior extends WorkBehavior {
             // Stay put while gathering (no movement)
         } else {
             // Keep moving towards resource every frame until we reach it
-            const direction = { x: dx / distance, z: dz / distance };
+            const distance = Math.sqrt(distanceSq);
+            const direction = {
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+            };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
         }
     }
@@ -1228,16 +1295,21 @@ class GatherWorkBehavior extends WorkBehavior {
         // Continuously move back to camp every frame (with offset)
         const dx = adjustedCampPosition.x - this.unit.pb.state.loc.x;
         const dz = adjustedCampPosition.z - this.unit.pb.state.loc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distanceSq = getStableDistanceSq(this.unit.pb.state.loc, adjustedCampPosition);
+        const campArrivalRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.25) * 1000) / 1000;
         
         // Get much closer to camp for drop-off (within 0.5 tiles)
-        if (distance > TILE_SIZE * 0.5) {
+        if (!isInSameTile(this.unit.pb.state.loc, adjustedCampPosition, TILE_SIZE) && distanceSq > campArrivalRadiusSq) {
             // Calculate path if we don't have one yet (using pathfinding to avoid mountains)
             if (!this.returnPath || this.returnPath.length === 0) {
                 if (window.liveField && window.liveField.findPath) {
-                    const unitX = this.unit.pb.state.loc.x;
-                    const unitZ = this.unit.pb.state.loc.z;
-                    this.returnPath = window.liveField.findPath(unitX, unitZ, adjustedCampPosition.x, adjustedCampPosition.z);
+                    const pathQuery = getStablePathQuery(this.unit.pb.state.loc, adjustedCampPosition, TILE_SIZE);
+                    this.returnPath = window.liveField.findPath(
+                        pathQuery.start.x,
+                        pathQuery.start.z,
+                        pathQuery.end.x,
+                        pathQuery.end.z
+                    );
                     
                     if (this.returnPath && this.returnPath.length > 0) {
                         this.returnWaypointIndex = 0;
@@ -1258,16 +1330,17 @@ class GatherWorkBehavior extends WorkBehavior {
                 const waypoint = this.returnPath[this.returnWaypointIndex];
                 const wpDx = waypoint.x - this.unit.pb.state.loc.x;
                 const wpDz = waypoint.z - this.unit.pb.state.loc.z;
-                const wpDistance = Math.sqrt(wpDx * wpDx + wpDz * wpDz);
+                const wpDistanceSq = getStableDistanceSq(this.unit.pb.state.loc, waypoint);
                 
                 // Check if we reached current waypoint
-                if (wpDistance < TILE_SIZE * 0.5) {
+                if (isInSameTile(this.unit.pb.state.loc, waypoint, TILE_SIZE) || wpDistanceSq <= campArrivalRadiusSq) {
                     this.returnWaypointIndex++;
                 } else {
                     // Move toward current waypoint
+                    const wpDistance = Math.sqrt(wpDistanceSq);
                     const direction = {
-                        x: wpDx / wpDistance,
-                        z: wpDz / wpDistance
+                        x: wpDistance > 0.001 ? Math.round((wpDx / wpDistance) * 10000) / 10000 : 0,
+                        z: wpDistance > 0.001 ? Math.round((wpDz / wpDistance) * 10000) / 10000 : 0
                     };
                     this.applyMovementWithRotation(direction, this.params.workSpeed);
                 }
@@ -2075,7 +2148,7 @@ class FarmWorkBehavior extends WorkBehavior {
         const currentPoint = this.patrolPoints[this.currentPatrolIndex];
         const dx = currentPoint.x - this.unit.pb.state.loc.x;
         const dz = currentPoint.z - this.unit.pb.state.loc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distance = Math.sqrt(getStableDistanceSq(this.unit.pb.state.loc, currentPoint));
         
         if (distance < TILE_SIZE * 0.3) {
             // Reached current patrol point, move to next
@@ -2096,7 +2169,10 @@ class FarmWorkBehavior extends WorkBehavior {
             }
         } else {
             // Move towards current patrol point
-            const direction = { x: dx / distance, z: dz / distance };
+            const direction = {
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+            };
             this.applyMovementWithRotation(direction, this.params.workSpeed * this.params.patrolSpeed);
         }
     }
@@ -2121,8 +2197,8 @@ class BuildWorkBehavior extends WorkBehavior {
     step() {
         if (!this.building || !this.building.position) return false;
         
-        // Check if building is complete
-        if (this.building.buildProgress >= 1.0) {
+        // Only leave build mode after the synchronized completion transition.
+        if (this.building.completionProcessed) {
             return true;
         }
         
@@ -2130,11 +2206,14 @@ class BuildWorkBehavior extends WorkBehavior {
         const TILE_SIZE = window.TILE_SIZE || 4;
         const dx = this.workX - this.unit.pb.state.loc.x;
         const dz = this.workZ - this.unit.pb.state.loc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distance = Math.sqrt(getStableDistanceSq(this.unit.pb.state.loc, { x: this.workX, z: this.workZ }));
         const arriveThreshold = TILE_SIZE * 0.4; // Consider "at work" when within 0.4 tiles
         
         if (distance > arriveThreshold) {
-            const direction = { x: dx / distance, z: dz / distance };
+            const direction = {
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+            };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
         }
         // Else: already at work spot, stay put - construction progress comes from assignedWorkers count
@@ -2184,7 +2263,7 @@ class AttackBuildingBehavior extends Behavior {
         // Calculate distance to building
         const dx = this.building.position.x - unitPos.x;
         const dz = this.building.position.z - unitPos.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distance = Math.sqrt(getStableDistanceSq(unitPos, this.building.position));
         
         // If within attack range, attack the building
         if (distance <= this.params.attackRange) {
@@ -2270,17 +2349,17 @@ class AttackBuildingBehavior extends Behavior {
                 z: moveZ - unitPos.z
             };
             
-            const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+            const length = Math.sqrt(getStableDistanceSq(unitPos, { x: moveX, z: moveZ }));
             if (length > 0.05) {
-                direction.x /= length;
-                direction.z /= length;
+                direction.x = Math.round((direction.x / length) * 10000) / 10000;
+                direction.z = Math.round((direction.z / length) * 10000) / 10000;
                 this.applyMovementWithRotation(direction, this.unit.speed * 0.4); // Moderate movement while attacking
             }
         } else {
             // Move towards building
             const direction = {
-                x: dx / distance,
-                z: dz / distance
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
             };
             this.applyMovementWithRotation(direction, this.unit.speed || 20);
         }
@@ -2320,7 +2399,7 @@ class AttackUnitBehavior extends Behavior {
 
         const dx = targetLoc.x - unitLoc.x;
         const dz = targetLoc.z - unitLoc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distance = Math.sqrt(getStableDistanceSq(unitLoc, targetLoc));
         const currentTick = window.currentMatch?.tick || 0;
 
         if (distance <= this.params.attackRange) {
@@ -2401,16 +2480,19 @@ class AttackUnitBehavior extends Behavior {
                 const orbitX = targetLoc.x + Math.cos(angle) * orbitR;
                 const orbitZ = targetLoc.z + Math.sin(angle) * orbitR;
                 const dir = { x: orbitX - unitLoc.x, z: orbitZ - unitLoc.z };
-                const len = Math.sqrt(dir.x * dir.x + dir.z * dir.z);
+                const len = Math.sqrt(getStableDistanceSq(unitLoc, { x: orbitX, z: orbitZ }));
                 if (len > 0.05) {
-                    dir.x /= len;
-                    dir.z /= len;
+                    dir.x = Math.round((dir.x / len) * 10000) / 10000;
+                    dir.z = Math.round((dir.z / len) * 10000) / 10000;
                     this.applyMovementWithRotation(dir, this.unit.speed * 0.35);
                 }
             }
         } else {
             // Move towards target
-            const dir = { x: dx / distance, z: dz / distance };
+            const dir = {
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+            };
             const chaseSpeed = this.params.attackType === 'ranged'
                 ? (this.unit.speed || 20) * 0.7
                 : (this.unit.speed || 20);
@@ -2478,10 +2560,10 @@ class EngineerWorkBehavior extends WorkBehavior {
                 z: nearestBuilding.position.z - this.unit.pb.state.loc.z
             };
             
-            const length = Math.sqrt(direction.x * direction.x + direction.z * direction.z);
+            const length = Math.sqrt(getStableDistanceSq(this.unit.pb.state.loc, nearestBuilding.position));
             if (length > 0.1) {
-                direction.x /= length;
-                direction.z /= length;
+                direction.x = Math.round((direction.x / length) * 10000) / 10000;
+                direction.z = Math.round((direction.z / length) * 10000) / 10000;
                 this.applyMovementWithRotation(direction, this.params.workSpeed);
             }
         } else {
@@ -2499,7 +2581,7 @@ class EngineerWorkBehavior extends WorkBehavior {
         // Check if we've reached the building
         const dx = this.inspectionTarget.position.x - this.unit.pb.state.loc.x;
         const dz = this.inspectionTarget.position.z - this.unit.pb.state.loc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distance = Math.sqrt(getStableDistanceSq(this.unit.pb.state.loc, this.inspectionTarget.position));
         
         const TILE_SIZE = window.TILE_SIZE || 4;
         if (distance < TILE_SIZE * 1.5) {
@@ -2735,8 +2817,8 @@ class EngineerWorkBehavior extends WorkBehavior {
                         const buildingOwner = building.owner?.length > 6 ? building.owner.slice(-6) : building.owner;
                         if (buildingOwner !== engineerOwner) continue;
                         
-                        // Only consider completed buildings
-                        if (building.buildProgress !== undefined && building.buildProgress < 1.0) continue;
+                        // Only consider buildings that have completed their synchronized transition.
+                        if (!building.completionProcessed) continue;
                         
                         // Check if building needs more workers
                         const workerCount = building.assignedWorkers?.length || 0;
@@ -2854,7 +2936,10 @@ class EngineerWorkBehavior extends WorkBehavior {
             // Just stay put while inspecting
         } else {
             // Move towards building
-            const direction = { x: dx / distance, z: dz / distance };
+            const direction = {
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+            };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
         }
     }
@@ -2867,11 +2952,14 @@ class EngineerWorkBehavior extends WorkBehavior {
         // Move back to base building
         const dx = this.building.position.x - this.unit.pb.state.loc.x;
         const dz = this.building.position.z - this.unit.pb.state.loc.z;
-        const distance = Math.sqrt(dx * dx + dz * dz);
+        const distance = Math.sqrt(getStableDistanceSq(this.unit.pb.state.loc, this.building.position));
         
         if (distance > TILE_SIZE * 2) {
             // Move towards base
-            const direction = { x: dx / distance, z: dz / distance };
+            const direction = {
+                x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
+                z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
+            };
             this.applyMovementWithRotation(direction, this.params.workSpeed);
         } else {
             // We're back at base, start seeking again
@@ -2904,11 +2992,12 @@ class EngineerWorkBehavior extends WorkBehavior {
             // Skip agora (no need to inspect)
             if (building.type === 'agora') continue;
             
-            const dx = building.position.x - this.building.position.x;
-            const dz = building.position.z - this.building.position.z;
-            const distance = Math.sqrt(dx * dx + dz * dz);
+            const distance = Math.sqrt(getStableDistanceSq(this.building.position, building.position));
             
-            if (distance <= inspectionRadius && distance < nearestDistance) {
+            if (distance <= inspectionRadius && (
+                distance < nearestDistance ||
+                (distance === nearestDistance && window.deterministicStringCompare((building.id || ''), (nearestBuilding?.id || '')) < 0)
+            )) {
                 nearestBuilding = building;
                 nearestDistance = distance;
             }
@@ -3145,6 +3234,19 @@ function findPlayerByUnitOwner(ownerId) {
     return null;
 }
 
+function getDebugUnitIdentity(unit) {
+    if (!unit) return null;
+    if (!window.__nextDebugUnitObjectId) {
+        window.__nextDebugUnitObjectId = 1;
+    }
+    if (!unit._debugObjectId) {
+        unit._debugObjectId = `obj-${window.__nextDebugUnitObjectId++}`;
+    }
+    return unit._debugObjectId;
+}
+
+window.getDebugUnitIdentity = getDebugUnitIdentity;
+
 // Behavior manager for units
 class UnitBehaviorManager {
     constructor() {
@@ -3252,6 +3354,10 @@ class UnitBehaviorManager {
         }
         
         if (behavior) {
+            this.traceBehaviorMutation('setBehavior', unit, {
+                newBehavior: behavior.constructor?.name || behaviorType,
+                previousBehavior: currentBehavior?.constructor?.name || 'none'
+            });
             // CRITICAL: Smart transition - check if unit is already moving in similar direction
             // If so, smoothly update target instead of resetting velocity (prevents jerky movement)
             const wasMovingBehavior = currentBehavior && 
@@ -3343,6 +3449,38 @@ class UnitBehaviorManager {
     stepBehaviors() {
         this.stepBehaviorsFiltered(() => true); // Step all behaviors
     }
+
+    traceBehaviorMutation(stage, unit, details = {}) {
+        if (!window.currentMatch?.isLiveMultiplayerMatch?.() || !unit) return;
+        const normalizeId = (id) => {
+            if (!id) return '';
+            const str = typeof id === 'string' ? id : String(id);
+            return str.length > 6 ? str.slice(-6) : str;
+        };
+        const currentBehavior = this.behaviors.get(unit);
+        console.log(`🧠 BEHAVIOR TRACE ${stage}`, {
+            tick: window.currentMatch?.tick || 0,
+            unitId: unit.id || null,
+            objectId: getDebugUnitIdentity(unit),
+            owner: unit.owner || null,
+            ownerNorm: normalizeId(unit.owner || ''),
+            localPlayerId: window.currentMatch?.localPlayerId || null,
+            localPlayerNorm: normalizeId(window.currentMatch?.localPlayerId || ''),
+            windowPlayerId: window.player?.id || null,
+            windowPlayerNorm: normalizeId(window.player?.id || ''),
+            currentBehavior: currentBehavior?.constructor?.name || 'none',
+            ...details
+        });
+    }
+
+    deleteBehaviorDirect(unit, stage = 'direct-delete', details = {}) {
+        if (!unit) return;
+        this.traceBehaviorMutation(stage, unit, {
+            previousBehavior: this.behaviors.get(unit)?.constructor?.name || 'none',
+            ...details
+        });
+        this.behaviors.delete(unit);
+    }
     
     // Step behaviors with filter (for multiplayer - skip remote units)
     stepBehaviorsFiltered(filterFn) {
@@ -3386,7 +3524,12 @@ class UnitBehaviorManager {
                     // Only delete if the behavior hasn't been replaced during step()
                     // (e.g. EatBehavior restores a previous behavior before completing)
                     if (this.behaviors.get(unit) === behavior) {
-                        this.behaviors.delete(unit);
+                        this.traceBehaviorMutation('step-complete-delete', unit, {
+                            completedBehavior: behavior?.constructor?.name || 'unknown'
+                        });
+                        this.deleteBehaviorDirect(unit, 'step-complete-delete-apply', {
+                            completedBehavior: behavior?.constructor?.name || 'unknown'
+                        });
                     }
                     
                     // After movement completes, give units a subtle idle/linger behavior to spread out
@@ -3437,7 +3580,7 @@ class UnitBehaviorManager {
     
     // Clear a unit's behavior (fall back to linger)
     clearBehavior(unit) {
-        this.behaviors.delete(unit);
+        this.deleteBehaviorDirect(unit, 'clearBehavior-delete');
         this.setBehavior(unit, 'linger');
     }
     
@@ -3711,7 +3854,11 @@ class TransformBehavior extends Behavior {
         // Store previous behavior to resume after transforming
         this.previousBehavior = window.behaviorManager.getBehavior(unit);
         if (this.previousBehavior) {
-            window.behaviorManager.behaviors.delete(unit);
+            if (window.behaviorManager.deleteBehaviorDirect) {
+                window.behaviorManager.deleteBehaviorDirect(unit, 'transform-delete-previous');
+            } else {
+                window.behaviorManager.behaviors.delete(unit);
+            }
         }
         
         // Create visual indicator for transforming
@@ -4062,7 +4209,11 @@ class EatBehavior extends Behavior {
         // Store previous behavior to resume after eating
         this.previousBehavior = window.behaviorManager.getBehavior(unit);
         if (this.previousBehavior) {
-            window.behaviorManager.behaviors.delete(unit);
+            if (window.behaviorManager.deleteBehaviorDirect) {
+                window.behaviorManager.deleteBehaviorDirect(unit, 'eat-delete-previous');
+            } else {
+                window.behaviorManager.behaviors.delete(unit);
+            }
         }
         
         // Create visual indicator for eating

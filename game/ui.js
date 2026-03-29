@@ -2079,7 +2079,6 @@ function getRandomColor() {
           const isEnemy = window.currentMatch?.areOwnersHostile
             ? window.currentMatch.areOwnersHostile(clickedOwner, normalizedPlayerId)
             : (!!clickedOwner && clickedOwner !== normalizedPlayerId && clickedOwner !== 'neutral');
-
           if (isEnemy && controllableSelectedUnits.length > 0) {
             // Attack the enemy unit
             if (window.currentMatch) {
@@ -2661,13 +2660,11 @@ function getRandomColor() {
                       // Non-villager units in the selection should still move to the location
                       const nonVillagers = controllableSelectedUnits.filter(u => u.type !== 'villager');
                       if (nonVillagers.length > 0 && window.currentMatch) {
-                        const unitIds = nonVillagers.map(u => u.id);
-                        window.currentMatch.submitCommand({
-                          type: 'move',
-                          playerId: window.player?.id,
-                          unitIds: unitIds,
-                          target: { x: resourceMarkerPos.x, y: 0, z: resourceMarkerPos.z }
-                        });
+                        window.currentMatch.submitCommand(buildMoveCommand(nonVillagers, {
+                          x: resourceMarkerPos.x,
+                          y: 0,
+                          z: resourceMarkerPos.z
+                        }));
                       }
                       return;
                     }
@@ -2686,13 +2683,11 @@ function getRandomColor() {
                     // MATCH SYSTEM: Submit move commands through Match system for synchronization
                   if (window.currentMatch) {
                     // Submit a move command for all selected units through Match system
-                    const unitIds = controllableSelectedUnits.map(u => u.id);
-                    const command = {
-                      type: 'move',
-                      playerId: window.player?.id, // CRITICAL: Set player ID explicitly
-                      unitIds: unitIds,
-                      target: { x: worldPos.x, y: 0, z: worldPos.z }
-                    };
+                    const command = buildMoveCommand(controllableSelectedUnits, {
+                      x: worldPos.x,
+                      y: 0,
+                      z: worldPos.z
+                    });
                     window.currentMatch.submitCommand(command);
 
                     // Show speech bubble for one of the moving units
@@ -3239,6 +3234,101 @@ function getRandomColor() {
   };
   
   // Find unit at screen position
+  function buildDeterministicTransportAssignments(units) {
+    const selectedUnits = Array.isArray(units) ? units.filter(Boolean) : [];
+    if (selectedUnits.length < 2) return [];
+
+    const transports = selectedUnits
+      .filter(unit => unit?.abilities?.includes('transport') && !unit?.carriedBy)
+      .sort((a, b) => window.deterministicStringCompare(a.id || '', b.id || ''));
+    const riders = selectedUnits
+      .filter(unit => !unit?.abilities?.includes('transport') && !unit?.carriedBy)
+      .sort((a, b) => window.deterministicStringCompare(a.id || '', b.id || ''));
+
+    if (transports.length === 0 || riders.length === 0) return [];
+
+    const allUnits = window.gameUnits || [];
+    const stableDistanceSq = (a, b) => {
+      const ax = Math.round((a?.x || 0) * 10) / 10;
+      const az = Math.round((a?.z || 0) * 10) / 10;
+      const bx = Math.round((b?.x || 0) * 10) / 10;
+      const bz = Math.round((b?.z || 0) * 10) / 10;
+      const dx = bx - ax;
+      const dz = bz - az;
+      return Math.round((dx * dx + dz * dz) * 1000) / 1000;
+    };
+
+    const remainingSlots = new Map();
+    transports.forEach(transport => {
+      const currentPassengers = window.getTransportPassengerIds
+        ? window.getTransportPassengerIds(transport, allUnits).length
+        : (transport.passengers?.length || 0);
+      const capacity = Number.isFinite(transport.transportCapacity) ? transport.transportCapacity : Infinity;
+      remainingSlots.set(transport.id, Math.max(0, capacity - currentPassengers));
+    });
+
+    const assignments = [];
+    riders.forEach(rider => {
+      const riderLoc = rider.pb?.state?.loc;
+      if (!riderLoc) return;
+
+      let bestTransport = null;
+      let bestDistanceSq = Infinity;
+
+      transports.forEach(transport => {
+        if ((remainingSlots.get(transport.id) || 0) <= 0) return;
+        const transportLoc = transport.pb?.state?.loc;
+        if (!transportLoc) return;
+
+        const distanceSq = stableDistanceSq(riderLoc, transportLoc);
+        const shouldReplace =
+          distanceSq < bestDistanceSq ||
+          (distanceSq === bestDistanceSq && bestTransport &&
+            window.deterministicStringCompare(transport.id || '', bestTransport.id || '') < 0);
+
+        if (!bestTransport || shouldReplace) {
+          bestTransport = transport;
+          bestDistanceSq = distanceSq;
+        }
+      });
+
+      if (!bestTransport) return;
+
+      assignments.push({
+        riderId: rider.id,
+        transportId: bestTransport.id
+      });
+      remainingSlots.set(bestTransport.id, (remainingSlots.get(bestTransport.id) || 0) - 1);
+    });
+
+    return assignments;
+  }
+
+  function buildMoveCommand(units, target) {
+    const commandUnits = Array.isArray(units) ? units.filter(Boolean) : [];
+    const command = {
+      type: 'move',
+      playerId: window.player?.id,
+      unitIds: commandUnits.map(unit => unit.id),
+      target
+    };
+
+    const transportAssignments = buildDeterministicTransportAssignments(commandUnits);
+    if (transportAssignments.length > 0) {
+      command.transportAssignments = transportAssignments;
+      if (window.currentMatch?.isLiveMultiplayerMatch?.()) {
+        console.log('🛫 LOAD TRACE move-plan', {
+          tick: window.currentMatch?.tick || 0,
+          playerId: window.player?.id || null,
+          unitIds: command.unitIds.slice(),
+          transportAssignments: transportAssignments.map(entry => ({ ...entry }))
+        });
+      }
+    }
+
+    return command;
+  }
+
   function findUnitAtPosition(screenX, screenY) {
     if (!window.gfx || !window.gfx.scene || !window.player || !window.player.units) return null;
     
@@ -3431,12 +3521,27 @@ function getRandomColor() {
       // Transport unload: double-click with loaded transport selected
       const transportsWithPassengers = units.filter(u =>
         u.abilities && u.abilities.includes('transport') &&
-        u.passengers && u.passengers.length > 0
+        ((window.getTransportPassengerIds
+          ? window.getTransportPassengerIds(u).length
+          : (u.passengers?.length || 0)) > 0)
       );
       if (transportsWithPassengers.length > 0 && worldPos) {
         const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
         const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
         transportsWithPassengers.forEach(transport => {
+          if (window.currentMatch?.isLiveMultiplayerMatch?.()) {
+            console.log('🛬 UNLOAD TRACE submit', {
+              tick: window.currentMatch?.tick || 0,
+              playerId: window.player?.id || null,
+              playerNorm: window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id,
+              transportId: transport.id || null,
+              passengerIds: window.getTransportPassengerIds ? window.getTransportPassengerIds(transport).slice() : (transport.passengers || []).slice(),
+              target: {
+                x: Math.round(xCoord * 10) / 10,
+                z: Math.round(zCoord * 10) / 10
+              }
+            });
+          }
           window.currentMatch.submitCommand({
             type: 'unload',
             playerId: window.player?.id,
@@ -3520,7 +3625,9 @@ function getRandomColor() {
       // Transport unload (single player)
       const spTransports = units.filter(u =>
         u.abilities && u.abilities.includes('transport') &&
-        u.passengers && u.passengers.length > 0
+        ((window.getTransportPassengerIds
+          ? window.getTransportPassengerIds(u).length
+          : (u.passengers?.length || 0)) > 0)
       );
       if (spTransports.length > 0 && worldPos && window.unloadPassengers) {
         const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
@@ -3813,10 +3920,11 @@ window.showStoryDialogue = function(message, type, onContinue) {
   const existing = document.getElementById('story_dialogue');
   if (existing) existing.remove();
   
-  // Pause the game while dialogue is shown
+  // Pause the game while dialogue is shown.
+  // If a scene is playing, it already owns the pause state — don't touch it.
+  const scenePlaying = window.ui && window.ui._scenePlaying;
   const wasPaused = window.currentMatch?.isPaused;
-  if (window.currentMatch) {
-    // Only call pauseMatch when actually playing; otherwise avoid spammy warnings.
+  if (window.currentMatch && !scenePlaying) {
     if (window.currentMatch.state === 'playing' && window.currentMatch.pauseMatch) {
       window.currentMatch.pauseMatch();
     } else {
@@ -3905,8 +4013,8 @@ window.showStoryDialogue = function(message, type, onContinue) {
   continueBtn.onclick = () => {
     dialogue.remove();
     
-    // Resume game if it wasn't paused before
-    if (!wasPaused && window.currentMatch && window.currentMatch.resumeMatch && window.currentMatch.state === 'playing') {
+    // Resume game if it wasn't paused before (skip if scene owns the pause)
+    if (!scenePlaying && !wasPaused && window.currentMatch && window.currentMatch.resumeMatch && window.currentMatch.state === 'playing') {
       window.currentMatch.resumeMatch();
     }
     

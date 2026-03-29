@@ -28,6 +28,90 @@ const Lobby = {
     return suffix.length > 6 ? suffix.slice(-6) : suffix;
   },
 
+  normalizePlayerColor: function(color, fallback = '#ffffff') {
+    if (typeof color === 'string' && color.trim()) {
+      return color.trim();
+    }
+    if (color && typeof color === 'object') {
+      if (typeof color.primary === 'string' && color.primary.trim()) {
+        return color.primary.trim();
+      }
+      if (
+        Number.isFinite(color.r) &&
+        Number.isFinite(color.g) &&
+        Number.isFinite(color.b)
+      ) {
+        const r = Math.round(color.r * 255).toString(16).padStart(2, '0');
+        const g = Math.round(color.g * 255).toString(16).padStart(2, '0');
+        const b = Math.round(color.b * 255).toString(16).padStart(2, '0');
+        return `#${r}${g}${b}`;
+      }
+    }
+    return fallback;
+  },
+
+  getMatchSlotColor: function(playerIndex) {
+    const colorInfo = this.getPlayerColor ? this.getPlayerColor(playerIndex) : null;
+    return this.normalizePlayerColor(colorInfo, '#ffffff');
+  },
+
+  getLocalProfileName: function(fallback = 'Player') {
+    const rawName = window.currentPlayerName || window.player?.name || '';
+    return (typeof rawName === 'string' && rawName.trim()) ? rawName.trim() : fallback;
+  },
+
+  getLocalProfileColor: function(fallback = '#ffffff') {
+    return this.normalizePlayerColor(window.currentPlayerColor || window.player?.color, fallback);
+  },
+
+  syncLocalProfileToPlayer: function() {
+    if (!window.player) return;
+    const profileName = this.getLocalProfileName('');
+    const profileColor = this.getLocalProfileColor(null);
+    if (profileName) window.player.name = profileName;
+    if (profileColor) window.player.color = profileColor;
+  },
+
+  dedupePlayerIds: function(playerIds = []) {
+    const seen = new Set();
+    return (Array.isArray(playerIds) ? playerIds : [])
+      .filter(Boolean)
+      .filter(id => {
+        const normalizedId = this.normalizePeerId(id);
+        if (!normalizedId || seen.has(normalizedId)) return false;
+        seen.add(normalizedId);
+        return true;
+      });
+  },
+
+  buildAuthoritativePlayersMeta: function(playerIds = [], sourcePlayers = []) {
+    const ids = this.dedupePlayerIds(playerIds);
+    const sources = Array.isArray(sourcePlayers) ? sourcePlayers : [];
+    const localNorm = this.normalizePeerId(window.player?.id);
+
+    return ids.map((id, index) => {
+      const normalizedId = this.normalizePeerId(id);
+      const source = sources.find(entry =>
+        this.normalizePeerId(entry?.id || entry) === normalizedId
+      ) || null;
+      const fallbackName = index === 0 ? 'Host' : `Player ${index + 1}`;
+      const resolvedName = source?.name ||
+        (normalizedId === localNorm ? this.getLocalProfileName(null) : null) ||
+        fallbackName;
+      const resolvedColor = this.normalizePlayerColor(
+        normalizedId === localNorm ? this.getLocalProfileColor(null) : source?.color,
+        this.getMatchSlotColor(index)
+      );
+
+      return {
+        id,
+        name: resolvedName,
+        color: resolvedColor,
+        resources: source?.resources ? { ...source.resources } : undefined
+      };
+    });
+  },
+
   createRemoteMatchPlayer: function({
     id,
     name,
@@ -37,11 +121,12 @@ const Lobby = {
     basePosition
   } = {}) {
     const startingResources = resources ? { ...resources } : { ...STARTING_RESOURCES };
+    const resolvedColor = this.normalizePlayerColor(color, '#ffffff');
     if (window.OpponentPlayer) {
       const remotePlayer = new window.OpponentPlayer({
         id,
         name,
-        color,
+        color: resolvedColor,
         startingResources,
         agora,
         basePosition,
@@ -57,7 +142,7 @@ const Lobby = {
     return {
       id,
       name,
-      color,
+      color: resolvedColor,
       resources: startingResources,
       units: [],
       buildings: [],
@@ -103,10 +188,12 @@ const Lobby = {
         id,
         normalizedId: normalize(id),
         name: player?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
-        color: player?.color,
+        color: this.normalizePlayerColor(player?.color, this.getMatchSlotColor(index)),
         resources: player?.resources ? { ...player.resources } : undefined
       };
-    }).filter(entry => !!entry.id);
+    }).filter(entry => !!entry.id).filter((entry, index, arr) =>
+      arr.findIndex(other => other.normalizedId === entry.normalizedId) === index
+    );
 
     let localEntry = sourcePlayers.find(entry => entry.normalizedId === localP2pNorm) || null;
     if (!localEntry) {
@@ -264,12 +351,13 @@ const Lobby = {
     const status = window.net.getStatus ? window.net.getStatus() : {};
     const myId = status.localPlayerId;
     if (!myId) return;
+    this.syncLocalProfileToPlayer();
     
     const payload = {
       type: 'player_joined',
       playerId: myId,
-      playerName: window.currentPlayerName || window.player?.name || `Player ${this.normalizePeerId(myId)}`,
-      playerColor: window.currentPlayerColor || window.player?.color || '#ffffff'
+      playerName: this.getLocalProfileName(`Player ${this.normalizePeerId(myId)}`),
+      playerColor: this.getLocalProfileColor('#ffffff')
     };
     
     try {
@@ -575,8 +663,8 @@ const Lobby = {
     // Configure local player identity and spawn
     const localPlayerId = window.player.id; // CRITICAL: No fallback - ID must be set!
     window.player.id = localPlayerId;
-    window.player.name = window.currentPlayerName || 'Duelist';
-    window.player.color = window.currentPlayerColor || this.getPlayerColor(0).primary;
+    window.player.name = this.getLocalProfileName('Duelist');
+    window.player.color = this.getLocalProfileColor(this.getPlayerColor(0).primary);
     window.player.agora = spawnPositions[0];
     window.player.basePosition = { x: spawnPositions[0].x, z: spawnPositions[0].y };
     
@@ -1144,6 +1232,7 @@ const Lobby = {
   createLobby: function(gameType, lobbyName, settings) {
     const config = this.gameTypes[gameType];
     const lobbyId = 'lobby-' + Math.random().toString(36).substring(7);
+    this.syncLocalProfileToPlayer();
     
     this.currentLobbyId = lobbyId;
     this.isHost = true;
@@ -1159,8 +1248,8 @@ const Lobby = {
       name: lobbyName || `${config.name} Lobby`,
       gameType: gameType,
       host: window.net.getStatus().localPlayerId,
-      hostName: window.currentPlayerName || window.player?.name || 'Host',
-      hostColor: window.currentPlayerColor || window.player?.color || '#ffffff',
+      hostName: this.getLocalProfileName('Host'),
+      hostColor: this.getLocalProfileColor('#ffffff'),
       players: 1,
       maxPlayers: finalSettings.maxPlayers || config.maxPlayers,
       settings: finalSettings,
@@ -1933,8 +2022,8 @@ const Lobby = {
       <div class="lobby_players">`;
     
     // Get local player info
-    const myName = window.currentPlayerName || window.player?.name || 'You';
-    const myColor = window.currentPlayerColor || window.player?.color || '#ffffff';
+    const myName = this.getLocalProfileName('You');
+    const myColor = this.getLocalProfileColor('#ffffff');
     const myId = window.net ? window.net.getStatus().localPlayerId : null;
     const myReadyState = myId ? this.playerReadyStates[myId] : false;
     
@@ -2831,6 +2920,21 @@ const Lobby = {
     
     // Place pre-placed buildings from forge (excluding agoras which are handled by spawn system)
     if (isV2 && mapData.bld && window.placeBuilding && window.gfx && window.gfx.scene) {
+      const adventurePlayerSlots = Array.isArray(window._adventurePlayerSlots)
+        ? window._adventurePlayerSlots
+        : null;
+      const resolveAdventurePlayerSlot = (playerSlot) => {
+        const slotPlayers = adventurePlayerSlots && adventurePlayerSlots.length > 0
+          ? adventurePlayerSlots
+          : [window.player, ...(window.aiOpponents || [])].filter(Boolean);
+        if (!Number.isFinite(playerSlot) || playerSlot < 0 || slotPlayers.length === 0) {
+          return null;
+        }
+        const assignedIndex = playerSlot % slotPlayers.length;
+        const targetPlayer = slotPlayers[assignedIndex] || null;
+        if (!targetPlayer) return null;
+        return { targetPlayer, assignedIndex };
+      };
       const buildings = mapData.bld.split(';');
       let placedCount = 0;
       for (const bld of buildings) {
@@ -2839,16 +2943,45 @@ const Lobby = {
         const z = Number(parts[1]);
         const type = parts[2];
         const rotation = Number(parts[3]) || 0;
+        const playerSlot = parts[4] !== undefined ? Number(parts[4]) : -1;
         
         // Skip agoras - they're placed by the spawn system
         if (type === 'agora') continue;
         
         if (!isNaN(x) && !isNaN(z) && type) {
+          // Resolve owner: -1 = neutral, 0-3 = player slots, 5+ = NPC/enemy
+          let owner = undefined;
+          let isNeutral = true;
+          let assignedPlayerSlot = null;
+          if (playerSlot >= 0 && playerSlot <= 3) {
+            // Redistribute authored player slots across the live co-op roster the same
+            // way starting units are assigned, while preserving the original map slot.
+            const slotAssignment = resolveAdventurePlayerSlot(playerSlot);
+            const targetPlayer = slotAssignment?.targetPlayer || null;
+            assignedPlayerSlot = slotAssignment?.assignedIndex ?? null;
+            if (targetPlayer) {
+              const rawId = targetPlayer.id || '';
+              owner = rawId.length > 6 ? rawId.slice(-6) : rawId;
+              isNeutral = false;
+            }
+          } else if (playerSlot >= 5) {
+            // NPC/enemy slot — use a synthetic owner ID
+            owner = `npc-${playerSlot}`;
+            isNeutral = false;
+          }
+
           const building = window.placeBuilding(type, x, z, window.gfx.scene, {
             rotation: rotation,
-            buildProgress: 1.0,  // Pre-placed buildings start complete
-            isNeutral: true      // Mark as neutral (not owned by player)
+            buildProgress: 1.0,
+            isNeutral: isNeutral,
+            owner: owner
           });
+          if (building && owner) {
+            building.owner = owner;
+            building.adventureAuthoredPlayerSlot = playerSlot;
+            building.adventureAssignedPlayerSlot = assignedPlayerSlot;
+            building.adventureAssignedPlayerId = owner;
+          }
           if (building) placedCount++;
         }
       }
@@ -2992,6 +3125,7 @@ const Lobby = {
       const randomSuffix = Math.random().toString(36).substring(2, 8);
       window.player.id = `adventurer-${randomSuffix}`;
     }
+    this.syncLocalProfileToPlayer();
     
     // Send start game message to all peers via WebRTC
     // Include ALL player IDs so everyone uses consistent IDs
@@ -3002,22 +3136,10 @@ const Lobby = {
       const peerId = p.id || p;
       playerIds.push(peerId);
     });
-    const playersMeta = playerIds.map((id, index) => {
-      const normalizedId = this.normalizePeerId(id);
-      if (normalizedId === this.normalizePeerId(window.player.id)) {
-        return {
-          id,
-          name: window.currentPlayerName || window.player?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
-          color: window.currentPlayerColor || window.player?.color || this.getPlayerColor(index).primary
-        };
-      }
-      const peerMeta = this.connectedPlayers.find(p => this.normalizePeerId(p?.id || p) === normalizedId);
-      return {
-        id,
-        name: peerMeta?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
-        color: peerMeta?.color || this.getPlayerColor(index).primary
-      };
-    });
+    const playersMeta = this.buildAuthoritativePlayersMeta(playerIds, [
+      window.player,
+      ...this.connectedPlayers
+    ]);
     
     if (window.net && window.net.p2p && window.net.p2p.sendData) {
       const startMessage = {
@@ -3251,7 +3373,8 @@ const Lobby = {
   // Adventure chapter metadata
   adventureChapters: {
     chapter1: { file: 'maps/adventure/chapter1.garden', name: 'Chapter 1 - The Beginning' },
-    chapter2: { file: 'maps/adventure/chapter2.garden', name: 'Chapter 2 - Into the Wild' }
+    chapter2: { file: 'maps/adventure/chapter2.garden', name: 'Chapter 2 - Into the Wild' },
+    chapter3: { file: 'maps/adventure/chapter3.garden', name: 'Chapter 3' }
   },
   
   // Chapter info cache
@@ -3345,7 +3468,7 @@ const Lobby = {
       window.currentChapterId = chapterId;
       
       // Start adventure with the custom map
-      this.startAdventureWithMap(mapData);
+      this.startAdventureWithMap(mapData, undefined, { chapterId });
       
     } catch (e) {
       console.error('Failed to load chapter:', e);
@@ -3405,9 +3528,11 @@ const Lobby = {
       //
       // IMPORTANT: In co-op, we must preserve the full player list; otherwise each peer will
       // accidentally start a solo match (players=[window.player]) and everyone "loads" out of sync.
-      const coopPlayers = window.currentMatch?.players;
+      const coopPlayers = Array.isArray(window.currentMatch?.players)
+        ? window.currentMatch.players.filter(player => player && !player.isAI)
+        : null;
       const isCoop = window.isMultiplayer && Array.isArray(coopPlayers) && coopPlayers.length > 1;
-      this.startAdventureWithMap(mapData, isCoop ? coopPlayers : undefined);
+      this.startAdventureWithMap(mapData, isCoop ? coopPlayers : undefined, { chapterId });
       
     } catch (e) {
       console.error('Failed to load chapter:', e);
@@ -3436,20 +3561,11 @@ const Lobby = {
       if (!response.ok) throw new Error(`Failed to load ${chapterInfo.file}`);
       const mapData = await response.json();
       
-      const players = Array.isArray(window.currentMatch?.players) ? window.currentMatch.players : [window.player];
-      const playerIds = players.map(p => (p && p.id) ? p.id : p).filter(Boolean);
-      const fallbackPalette = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
-      const playersMeta = playerIds.map((id, idx) => {
-        const p = players.find(pp => (pp && pp.id) ? pp.id === id : pp === id);
-        const name = (p && p.name) ? p.name : (idx === 0 ? 'Host' : `Player ${idx + 1}`);
-        const color = (p && p.color) ? p.color : (fallbackPalette[idx % fallbackPalette.length] || '#ffffff');
-        return {
-          id,
-          name,
-          color,
-          resources: p?.resources ? { ...p.resources } : undefined
-        };
-      });
+      const players = Array.isArray(window.currentMatch?.players)
+        ? window.currentMatch.players.filter(player => player && !player.isAI)
+        : [window.player];
+      const playerIds = this.dedupePlayerIds(players.map(p => (p && p.id) ? p.id : p));
+      const playersMeta = this.buildAuthoritativePlayersMeta(playerIds, players);
       
       // Broadcast map + player list so all peers start the same chapter together.
       if (window.net && window.net.p2p && window.net.p2p.sendData) {
@@ -3473,16 +3589,17 @@ const Lobby = {
           window.player.id = id;
           if (playersMeta[idx]?.color) window.player.color = playersMeta[idx].color;
           if (playersMeta[idx]?.name) window.player.name = playersMeta[idx].name;
+          if (playersMeta[idx]?.resources) window.player.resources = { ...playersMeta[idx].resources };
           return window.player;
         }
         return this.createRemoteMatchPlayer({
           id,
           name: playersMeta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
-          color: playersMeta[idx]?.color || (fallbackPalette[idx % fallbackPalette.length] || '#ffffff'),
+          color: playersMeta[idx]?.color || this.getMatchSlotColor(idx),
           resources: playersMeta[idx]?.resources
         });
       });
-      this.startAdventureWithMap(mapData, builtPlayers);
+      this.startAdventureWithMap(mapData, builtPlayers, { chapterTransition: true, chapterId });
     } catch (e) {
       console.error('❌ Failed to load co-op next chapter:', e);
       if (window.ui && window.ui.showNotification) {
@@ -3689,8 +3806,8 @@ const Lobby = {
     
     if (this.isHost) {
       // Host view - show self as host
-      const playerName = window.currentPlayerName || 'You';
-      const playerColor = window.currentPlayerColor || '#ffffff';
+      const playerName = this.getLocalProfileName('You');
+      const playerColor = this.getLocalProfileColor('#ffffff');
       html += `<div style="color: ${playerColor};">👑 ${playerName} (Host)</div>`;
       
       // Add connected players - name/color stored directly on player object
@@ -3716,8 +3833,8 @@ const Lobby = {
       const status = window.net?.getStatus?.() || {};
       const isConnected = status.peers && status.peers.length > 0;
       
-      const myName = window.currentPlayerName || 'You';
-      const myColor = window.currentPlayerColor || '#ffffff';
+      const myName = this.getLocalProfileName('You');
+      const myColor = this.getLocalProfileColor('#ffffff');
       html += `<div style="color: ${myColor}; margin-top: 5px;">👤 ${myName} ${isConnected ? '(connected)' : '(connecting...)'}</div>`;
     }
     
@@ -3817,24 +3934,33 @@ const Lobby = {
     window.player.buildings = [];
     window.player.selectedUnits = [];
     
-    const players = [window.player];
-    this.connectedPlayers.forEach((p, i) => {
-      players.push(this.createRemoteMatchPlayer({
-        id: p.id || p,
-        name: p.name || `Player ${i + 2}`,
-        color: p.color || '#00ff00'
-      }));
+    const playerIds = [window.player.id];
+    this.connectedPlayers.forEach(p => {
+      playerIds.push(p.id || p);
+    });
+    const playersMeta = this.buildAuthoritativePlayersMeta(playerIds, [
+      window.player,
+      ...this.connectedPlayers
+    ]);
+    const localNorm = this.normalizePeerId(window.player.id);
+    const players = playersMeta.map(meta => {
+      if (this.normalizePeerId(meta.id) === localNorm) {
+        window.player.id = meta.id;
+        window.player.name = meta.name;
+        window.player.color = meta.color;
+        if (meta.resources) window.player.resources = { ...meta.resources };
+        return window.player;
+      }
+      return this.createRemoteMatchPlayer({
+        id: meta.id,
+        name: meta.name,
+        color: meta.color,
+        resources: meta.resources
+      });
     });
     
     // Send game start to peers (include host ID so they know player order)
     if (window.net && window.net.p2p && window.net.p2p.sendData) {
-      const playerIds = players.map(p => (p && p.id) ? p.id : p).filter(Boolean);
-      const playersMeta = players.map((player, index) => ({
-        id: (player && player.id) ? player.id : player,
-        name: player?.name || (index === 0 ? 'Host' : `Player ${index + 1}`),
-        color: player?.color || (index === 0 ? '#ff0000' : '#00ff00'),
-        resources: player?.resources ? { ...player.resources } : undefined
-      }));
       console.log('📡 Sending adventure_start to peers...');
       window.net.p2p.sendData({
         type: 'adventure_start',
@@ -3853,7 +3979,7 @@ const Lobby = {
     
     // Start the adventure locally with correct player order
     console.log('👥 Host player order:', players.map((p, i) => `P${i+1}=${(p.id || 'unknown').slice(-6)}`).join(', '));
-    this.startAdventureWithMap(mapData, players);
+    this.startAdventureWithMap(mapData, players, { chapterId: this._hostingChapterId });
   },
   
   // Join an adventure lobby
@@ -3865,7 +3991,10 @@ const Lobby = {
   
   // Start adventure mode with a custom map (co-op, no AI)
   // players: optional array of {id, name, color} for multiplayer
-  startAdventureWithMap: function(mapData, players) {
+  startAdventureWithMap: function(mapData, players, options = {}) {
+    const startOptions = (options && typeof options === 'object') ? options : {};
+    const isChapterTransition = !!startOptions.chapterTransition;
+    const chapterId = startOptions.chapterId || window.currentChapterId || null;
     // Hide menu
     const menuEl = document.getElementById('menu');
     if (menuEl) menuEl.style.display = 'none';
@@ -3875,6 +4004,7 @@ const Lobby = {
     
     window.isMultiplayer = true;  // Use match/command system
     window.gameType = 'adventure';
+    window.currentChapterId = chapterId;
     
     // Extract map info
     const isV2 = mapData.v === 2;
@@ -3892,6 +4022,7 @@ const Lobby = {
     if (Array.isArray(players) && players.length > 0) {
       players = this.normalizeAdventurePlayers(players);
     }
+    window._adventurePlayerSlots = Array.isArray(players) ? players.slice() : null;
     
     // Generate unique player ID (also reset if still using demo ID from menu)
     if (!window.player.id || window.player.id === 'undefined' || window.player.id === 'player' || window.player.id === 'demo') {
@@ -3905,15 +4036,25 @@ const Lobby = {
     window.player.buildings = [];
     window.player.selectedUnits = [];
     
-    // Parse spawn points from map
+    // Parse spawn points from map — separate player and NPC spawns
     let spawnPositions = [];
+    let npcSpawns = [];
     if (mapData.sp) {
       const parsedSpawns = mapData.sp.split(';').map((s, index) => {
-        const parts = s.split(',').map(Number);
-        return { x: parts[0], y: parts[1], team: parts[2] !== undefined ? parts[2] : index };
+        const parts = s.split(',');
+        const owner = parts[3] || 'player';
+        return {
+          x: Number(parts[0]),
+          y: Number(parts[1]),
+          team: parts[2] !== undefined ? Number(parts[2]) : index,
+          owner,
+          agora: parts[4] === '1',
+          villagers: parts[5] === '1'
+        };
       });
       parsedSpawns.sort((a, b) => a.team - b.team);
-      spawnPositions = parsedSpawns;
+      spawnPositions = parsedSpawns.filter(s => s.owner !== 'npc');
+      npcSpawns = parsedSpawns.filter(s => s.owner === 'npc');
     }
     
     // Fallback spawn if none defined
@@ -3925,43 +4066,67 @@ const Lobby = {
     const tileSize = (typeof TILE_SIZE === 'number') ? TILE_SIZE : (window.TILE_SIZE || 4);
     
     // Configure player spawn
-    window.player.name = window.currentPlayerName || window.player.name || 'Adventurer';
+    window.player.name = window.player.name || window.currentPlayerName || 'Adventurer';
     // In co-op, prefer the host-assigned slot color (from matchPlayers) over per-device defaults.
     // This keeps team colors consistent across peers and across chapter transitions.
+    const normalizeAdventurePlayerId = (id) => {
+      if (!id) return '';
+      const suffix = id.includes('-') ? id.split('-').pop() : id;
+      return suffix.length > 6 ? suffix.slice(-6) : suffix;
+    };
+    const localNorm = normalizeAdventurePlayerId(window.player.id);
+    const localPlayerIndex = Array.isArray(players)
+      ? Math.max(0, players.findIndex(p => {
+          const pid = (p && p.id) ? p.id : p;
+          return normalizeAdventurePlayerId(pid) === localNorm;
+        }))
+      : 0;
+    const localSpawnPos = spawnPositions[Math.min(localPlayerIndex, Math.max(0, spawnPositions.length - 1))] || spawnPositions[0];
+    window._adventureLocalPlayerIndex = localPlayerIndex;
+
     const providedLocalColor = (() => {
       if (!players || !Array.isArray(players)) return null;
-      const normalize = (id) => {
-        if (!id) return '';
-        const suffix = id.includes('-') ? id.split('-').pop() : id;
-        return suffix.length > 6 ? suffix.slice(-6) : suffix;
-      };
-      const localNorm = normalize(window.player.id);
+      const localNorm = normalizeAdventurePlayerId(window.player.id);
       const entry = players.find(p => {
         const pid = (p && p.id) ? p.id : p;
-        return normalize(pid) === localNorm;
+        return normalizeAdventurePlayerId(pid) === localNorm;
       });
       return entry && entry.color ? entry.color : null;
     })();
-    window.player.color = providedLocalColor || window.currentPlayerColor || window.player.color || '#ff0000';
+    // In co-op, keep the host-assigned slot color once we know it.
+    window.player.color = providedLocalColor
+      || this.getLocalProfileColor(null)
+      || window.player.color
+      || this.getMatchSlotColor(localPlayerIndex);
     
-    // Adventure mode: check if we have starting units instead of Agora spawns
-    // If starting units are defined, don't set player.agora (no Agora in adventure)
     const hasStartingUnits = mapData.units && mapData.units.length > 0;
-    
-    // Parse starting units to find camera start position
-    let cameraStartPos = spawnPositions[0];
-    if (hasStartingUnits) {
-      // Find first unit for player 0 to center camera there
-      const firstUnit = mapData.units.split(';')[0];
-      if (firstUnit) {
-        const parts = firstUnit.split(',');
-        cameraStartPos = { x: Number(parts[0]), y: Number(parts[1]) };
+    // Per-spawn agora/villager flags (check if ANY player spawn wants them, for legacy compat)
+    const playerSpawnsWithAgora = spawnPositions.filter(s => s.agora);
+    const playerSpawnsWithVillagers = spawnPositions.filter(s => s.villagers);
+    // Legacy global flags as fallback
+    const wantAgora = playerSpawnsWithAgora.length > 0 || !!mapData.spAgora;
+    const wantVillagers = playerSpawnsWithVillagers.length > 0 || !!mapData.spVillagers;
+    window._adventureSpawnVillagers = wantVillagers;
+    window._adventureSpawnPositions = spawnPositions;
+
+    let cameraStartPos = localSpawnPos;
+    if (hasStartingUnits && !wantAgora) {
+      const humanPlayerCount = Array.isArray(players) && players.length > 0 ? players.length : 1;
+      const startingUnits = Array.isArray(window.adventureStartingUnits) ? window.adventureStartingUnits : [];
+      const localStartUnit = startingUnits.find(unit =>
+        Number.isFinite(unit?.player) &&
+        unit.player >= 0 &&
+        unit.player < 4 &&
+        (unit.player % humanPlayerCount) === localPlayerIndex
+      );
+      if (localStartUnit) {
+        cameraStartPos = { x: Number(localStartUnit.x), y: Number(localStartUnit.y) };
       }
-      // Don't set agora for adventure mode with starting units
       window.player.agora = null;
+    } else if (wantAgora) {
+      window.player.agora = localSpawnPos;
     } else {
-      // Legacy mode: use spawn points as agora positions
-      window.player.agora = spawnPositions[0];
+      window.player.agora = null;
     }
     
     window.player.basePosition = { x: cameraStartPos.x, z: cameraStartPos.y };
@@ -3974,9 +4139,42 @@ const Lobby = {
       window.player.pbody.imp.set(0, 0, 0);
     }
     
-    // No AI opponents in adventure co-op mode
-    window.aiOpponents = [];
-    window.opponent = null;
+    // Create AI opponents from NPC spawn points
+    const aiPlayers = [];
+    const tileSize2 = tileSize;
+    for (let i = 0; i < npcSpawns.length; i++) {
+      const spawn = npcSpawns[i];
+      const npcSlot = 5 + i;
+      const aiId = `npc-${npcSlot}`;
+      const aiName = `Enemy ${i + 1}`;
+      const npcColorMap = { 5: '#CC3333', 6: '#8B4513', 7: '#6B2D8B', 8: '#2F4F4F' };
+      const aiColor = npcColorMap[npcSlot] || '#cc0000';
+
+      const wantNpcAgora = !!spawn.agora;
+      const wantNpcVillagers = !!spawn.villagers;
+
+      const aiOptions = {
+        id: aiId,
+        name: aiName,
+        color: aiColor,
+        startingResources: (typeof STARTING_RESOURCES !== 'undefined') ? { ...STARTING_RESOURCES } : { food: 200, wood: 200, stone: 50, gold: 50 },
+        agora: wantNpcAgora ? { x: spawn.x, y: spawn.y } : null,
+        basePosition: { x: spawn.x, z: spawn.y },
+        difficulty: 'normal',
+        isAI: true,
+        isNPC: true
+      };
+
+      const aiPlayer = window.AIPlayer ? new window.AIPlayer(aiOptions) : new window.OpponentPlayer(aiOptions);
+      aiPlayer.isAI = true;
+      aiPlayer.isNPC = true;
+      aiPlayer.agora = wantNpcAgora ? { x: spawn.x, y: spawn.y } : null;
+      aiPlayer.basePosition = { x: spawn.x, z: spawn.y };
+      aiPlayer._wantVillagers = wantNpcVillagers;
+      aiPlayers.push(aiPlayer);
+    }
+    window.aiOpponents = aiPlayers;
+    window.opponent = aiPlayers[0] || null;
     
     // Dispose old field
     const oldField = window.liveField;
@@ -3984,12 +4182,13 @@ const Lobby = {
     if (typeof liveField !== 'undefined') liveField = null;
     if (oldField && typeof oldField.dispose === 'function') oldField.dispose();
     
-    // Create new field with map dimensions
+    // Create new field with map dimensions (include NPC spawns for terrain flattening)
+    const allSpawnPositions = [...spawnPositions, ...npcSpawns];
     window.liveField = new window.Field({
       width: width,
       height: height,
       seed: seed,
-      spawnPositions: spawnPositions
+      spawnPositions: allSpawnPositions
     });
     if (window.gfx && window.gfx.primeFieldResourcePathing) {
       window.gfx.primeFieldResourcePathing(window.liveField);
@@ -4011,22 +4210,40 @@ const Lobby = {
     window._cameraLimitsSet = false;
     
     // Position camera at start position (first unit or spawn)
+    // If a match_start scene exists with an opening camera step, start there instead
+    // so the player never sees a flash of the default position.
     if (window.gfx && window.gfx.camera && window.gfx.cameraTarget) {
-      const startX = cameraStartPos.x * tileSize;
-      const startZ = cameraStartPos.y * tileSize;
-      window.gfx.cameraTarget.position.x = startX;
-      window.gfx.cameraTarget.position.y = 9;
-      window.gfx.cameraTarget.position.z = startZ;
-      
-      if (window.cameraAnchor) {
-        window.cameraAnchor.x = startX;
-        window.cameraAnchor.y = 9;
-        window.cameraAnchor.z = startZ;
+      let camX = cameraStartPos.x * tileSize;
+      let camZ = cameraStartPos.y * tileSize;
+      let camAlpha = -2.5;
+      let camRadius = 80;
+
+      const introScene = (window.adventureScenes || []).find(
+        s => s.trigger && s.trigger.type === 'match_start'
+      );
+      if (introScene && introScene.steps && introScene.steps.length > 0) {
+        const first = introScene.steps[0];
+        if (first.type === 'camera') {
+          camX = (first.x + 0.5) * tileSize;
+          camZ = (first.y + 0.5) * tileSize;
+          if (first.alpha !== undefined) camAlpha = first.alpha;
+          if (first.zoom) camRadius = first.zoom;
+        }
       }
-      
-      window.gfx.camera.alpha = -2.5;
+
+      window.gfx.cameraTarget.position.x = camX;
+      window.gfx.cameraTarget.position.y = 9;
+      window.gfx.cameraTarget.position.z = camZ;
+
+      if (window.cameraAnchor) {
+        window.cameraAnchor.x = camX;
+        window.cameraAnchor.y = 9;
+        window.cameraAnchor.z = camZ;
+      }
+
+      window.gfx.camera.alpha = camAlpha;
       window.gfx.camera.beta = 1.1;
-      window.gfx.camera.radius = 80;
+      window.gfx.camera.radius = camRadius;
     }
     
     // Force load chunks at spawn
@@ -4035,8 +4252,8 @@ const Lobby = {
       window.gfx.forceLoadChunks(targetPos.x, targetPos.z);
     }
     
-    // Use provided players array or default to just local player
-    const matchPlayers = players && players.length > 0 ? players : [window.player];
+    // Use provided players array or default to just local player, plus any NPC AI opponents
+    const matchPlayers = players && players.length > 0 ? [...players, ...aiPlayers] : [window.player, ...aiPlayers];
     console.log('🧭 Adventure match players:', matchPlayers.map((player, index) => ({
       slot: index,
       id: player?.id || null,
@@ -4065,6 +4282,9 @@ const Lobby = {
       victoryCondition: 'objectives',  // Adventure uses objectives, not elimination
       timeLimit: 0
     });
+    window.currentMatch.currentChapterId = chapterId;
+    window.currentMatch._chapterTransitionLoading = isChapterTransition;
+    window.currentMatch._chapterTransitionLabel = mapData.n || 'Next Chapter';
     
     // Create game instance (this spawns adventure units)
     window.game = new window.Game({
@@ -4094,6 +4314,9 @@ const Lobby = {
       // Multiplayer: Use the loading/countdown flow
       // Start the match (enters LOADING state, shows loading overlay)
       window.currentMatch.start();
+      if (isChapterTransition) {
+        window.currentMatch.updateLoadingOverlay(`Loading ${mapData.n || 'next chapter'}...`);
+      }
       
       // Signal that local player has finished loading - this triggers countdown when all ready
       setTimeout(() => {
@@ -4179,8 +4402,8 @@ const Lobby = {
     // Configure local player identity and spawn
     const localPlayerId = window.player.id; // CRITICAL: No fallback - ID must be set!
     window.player.id = localPlayerId;
-    window.player.name = window.currentPlayerName || 'Adventurer';
-    window.player.color = window.currentPlayerColor || '#ff0000';
+    window.player.name = this.getLocalProfileName('Adventurer');
+    window.player.color = this.getLocalProfileColor(this.getMatchSlotColor(0));
     window.player.agora = spawnPositions[0];
     window.player.basePosition = { x: spawnPositions[0].x, z: spawnPositions[0].y };
     
@@ -4198,7 +4421,8 @@ const Lobby = {
       const spawn = spawnPositions[i + 1] || spawnPositions[spawnPositions.length - 1];
       const aiId = options.aiIds?.[i] || `ai-${i + 1}-${resolvedSeed.toString(16).padStart(6, '0')}`;
       const aiName = options.aiNames?.[i] || `AI ${i + 1}`;
-      const aiColor = (options.aiColors && options.aiColors[i]) || (this.getPlayerColor ? this.getPlayerColor(i + 1) : '#0066cc');
+      const rawColor = (options.aiColors && options.aiColors[i]) || (this.getPlayerColor ? this.getPlayerColor(i + 1) : null);
+      const aiColor = (rawColor && typeof rawColor === 'object') ? rawColor.primary : (rawColor || '#0066cc');
       const aiResources = (options.aiResources && options.aiResources[i]) || { ...STARTING_RESOURCES };
       const difficulty = Array.isArray(options.difficulty)
         ? (options.difficulty[i] || 'normal')
@@ -4458,8 +4682,7 @@ const Lobby = {
         window.player.id = `adventurer-${randomSuffix}`;
         console.log(`🎮 Generated new co-op player ID: ${window.player.id}`);
       }
-      window.player.name = window.currentPlayerName || window.player.name || 'Player 1';
-      window.player.color = window.currentPlayerColor || window.player.color || '#ff0000';
+      window.player.name = window.player.name || window.currentPlayerName || 'Player 1';
       window.player.units = [];
       window.player.buildings = [];
       window.player.selectedUnits = [];
@@ -4472,15 +4695,24 @@ const Lobby = {
       if (this.isHost) {
         // HOST: We are P1, peers are P2+
         console.log('👑 Host building player list: we are P1');
-        players.push(window.player);
-        // Assign unique colors for each peer slot
-        const playerColors = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
-        this.connectedPlayers.forEach((p, i) => {
-          const playerIndex = i + 1; // P1 is host (0), peers start at P2 (1)
+        const playerIds = [window.player.id, ...this.connectedPlayers.map(p => p.id || p)];
+        const playersMeta = this.buildAuthoritativePlayersMeta(playerIds, [
+          window.player,
+          ...this.connectedPlayers
+        ]);
+        playersMeta.forEach((meta, index) => {
+          if (index === 0) {
+            window.player.id = meta.id;
+            window.player.name = meta.name;
+            window.player.color = meta.color;
+            players.push(window.player);
+            return;
+          }
           players.push(this.createRemoteMatchPlayer({
-            id: p.id || p,
-            name: p.name || `Player ${i + 2}`,
-            color: p.color || playerColors[playerIndex % playerColors.length] || '#ffffff'
+            id: meta.id,
+            name: meta.name,
+            color: meta.color,
+            resources: meta.resources
           }));
         });
       } else {
@@ -4492,26 +4724,32 @@ const Lobby = {
           // Find our own P2P ID to identify which slot we're in
           const myP2pId = window.net?.getStatus()?.localPlayerId || '';
           const myP2pSuffix = myP2pId.slice(-6);
+          const playersMeta = Array.isArray(this._playersMeta) ? this._playersMeta : [];
           
           this._playerIds.forEach((playerId, index) => {
             const idSuffix = playerId.slice(-6);
             const isMe = idSuffix === myP2pSuffix || playerId.includes(myP2pSuffix);
+            const meta = playersMeta[index] && playersMeta[index].id === playerId
+              ? playersMeta[index]
+              : playersMeta.find(entry => (entry?.id || '').slice(-6) === idSuffix) || null;
+            const resolvedName = meta?.name || (index === 0 ? 'Host' : `Player ${index + 1}`);
+            const resolvedColor = this.normalizePlayerColor(meta?.color, this.getMatchSlotColor(index));
             
             if (isMe) {
               // This is our slot - use window.player but with the ID the host expects
               window.player.id = playerId;  // CRITICAL: Use the ID host assigned us
+              if (resolvedName) window.player.name = resolvedName;
+              if (resolvedColor) window.player.color = resolvedColor;
               players.push(window.player);
-              console.log(`   P${index + 1}: ME (using assigned ID: ${playerId.slice(-6)})`);
+              console.log(`   P${index + 1}: ME (using assigned ID: ${playerId.slice(-6)}, color: ${resolvedColor})`);
           } else {
             // This is another player (host or other peer)
-            // Assign unique colors for each player slot
-            const playerColors = ['#ff0000', '#00ff00', '#0066ff', '#ffff00', '#ff00ff', '#00ffff'];
             players.push(this.createRemoteMatchPlayer({
               id: playerId,
-              name: index === 0 ? 'Host' : `Player ${index + 1}`,
-              color: playerColors[index % playerColors.length] || '#ffffff'
+              name: resolvedName,
+              color: resolvedColor
             }));
-            console.log(`   P${index + 1}: ${index === 0 ? 'Host' : 'Peer'} (${playerId.slice(-6)})`);
+            console.log(`   P${index + 1}: ${index === 0 ? 'Host' : 'Peer'} (${playerId.slice(-6)}, color: ${resolvedColor})`);
           }
           });
         } else {
@@ -4521,7 +4759,7 @@ const Lobby = {
           players.push(this.createRemoteMatchPlayer({
             id: hostId,
             name: 'Host',
-            color: '#ff0000'
+            color: this.getMatchSlotColor(0)
           }));
           players.push(window.player);
         }
@@ -4529,10 +4767,13 @@ const Lobby = {
         // Clear the stored IDs after use
         this._hostPlayerId = null;
         this._playerIds = null;
+        this._playersMeta = null;
       }
       
       console.log('👥 Player order:', players.map((p, i) => `P${i+1}=${(p.id || 'unknown').slice(-6)}`).join(', '));
-      this.startAdventureWithMap(settings.customMapData, players);
+      this.startAdventureWithMap(settings.customMapData, players, {
+        chapterId: settings.chapterId || this._hostingChapterId || window.currentChapterId || null
+      });
       return;
     }
     
@@ -4790,9 +5031,12 @@ const Lobby = {
       console.error('❌ Not enough spawn positions for players:', { spawnPositions, allPlayerIds, localPlayerIndex });
       return;
     }
-    const localHostedMeta = getHostedPlayerMeta(normalizedLocalId);
-    const localPlayerName = localHostedMeta?.name || window.currentPlayerName || 'Player 1';
-    const localPlayerColor = localHostedMeta?.color || window.currentPlayerColor || '#ff0000';
+    const localHostedMeta = hostedPlayersMeta[localPlayerIndex] || getHostedPlayerMeta(normalizedLocalId);
+    const localPlayerName = localHostedMeta?.name || this.getLocalProfileName('Player 1');
+    const localPlayerColor = this.normalizePlayerColor(
+      localHostedMeta?.color || this.getLocalProfileColor(null),
+      this.getMatchSlotColor(localPlayerIndex)
+    );
     
     // Initialize player if it doesn't exist
     if (!window.player) {
@@ -4957,6 +5201,9 @@ const Lobby = {
     }
     
     // Initialize players array with proper names and colors
+    // CRITICAL: Reset stale opponent from menu/previous match so multiplayer installs
+    // the real remote player object (with the host-assigned color) below.
+    window.opponent = null;
     // CRITICAL: Build players array in SORTED ORDER so both clients have identical ordering
     const players = [];
     
@@ -4972,7 +5219,8 @@ const Lobby = {
         players.push(window.player);
       } else {
         // This is a remote opponent
-        const playerMeta = getHostedPlayerMeta(normalizedId)
+        const playerMeta = hostedPlayersMeta[index]
+          || getHostedPlayerMeta(normalizedId)
           || this.connectedPlayers.find(p => normalizeId(p.id || p) === normalizedId)
           || null;
         const playerName = playerMeta?.name || `Player ${index + 1}`;

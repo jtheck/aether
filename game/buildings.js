@@ -734,13 +734,18 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
               const color = new BABYLON.Color3(r, g, b);
               
               allFlagMeshes.forEach(mesh => {
-                const mat = mesh.material
-                  ? mesh.material.clone(`flagMat_${teamColorHex}_${Date.now()}`)
-                  : new BABYLON.StandardMaterial(`flagMat_${teamColorHex}_${Date.now()}`, scene);
-                mat.diffuseColor = color;
-                mat.emissiveColor = color.scale(0.6);
+                const sourceMaterial = mesh.material;
+                const mat = new BABYLON.StandardMaterial(`flagMat_${teamColorHex}_${Date.now()}`, scene);
+                mat.diffuseColor = new BABYLON.Color3(color.r, color.g, color.b);
+                mat.emissiveColor = new BABYLON.Color3(color.r, color.g, color.b).scale(0.6);
                 mat.specularColor = new BABYLON.Color3(0, 0, 0);
                 mat.disableLighting = true;
+                if (sourceMaterial) {
+                  if (typeof sourceMaterial.alpha === 'number') mat.alpha = sourceMaterial.alpha;
+                  if (typeof sourceMaterial.backFaceCulling === 'boolean') {
+                    mat.backFaceCulling = sourceMaterial.backFaceCulling;
+                  }
+                }
                 mesh.material = mat;
               });
             }
@@ -775,30 +780,13 @@ function placeBuilding(buildingType, x, z, scene, options = {}) {
         }, 150); // Delay to ensure mesh hierarchy is ready
       }
       
+      if (building.buildProgress >= 1.0 && !building.completionProcessed) {
+        processBuildingCompletion(building);
+      }
+
       // Only add particle effects if building is complete (construction will add them when done)
       if (building.buildProgress >= 1.0) {
         addBuildingParticleEffects(building);
-
-        // Pre-completed buildings bypass processBuildingCompletion, so register LOD here
-        if (!building.completionProcessed && window.gfx && window.gfx.addLODBillboard) {
-          const camPos = window.gfx.cameraTarget ? window.gfx.cameraTarget.position : window.gfx.camera?.position;
-          if (buildingType === 'agora') {
-            window.gfx.addLODBillboard(
-              { root: building.mesh },
-              window.gfx.scene,
-              { path: building.model, lodDistance: 175, cullDistance: 500, lodType: 'agora-flag', buildingRef: building },
-              camPos
-            );
-          } else {
-            const { scale: bbScale, yOffset: bbYOff } = computeBuildingBillboardScale(building);
-            window.gfx.addLODBillboard(
-              { root: building.mesh },
-              window.gfx.scene,
-              { path: building.model, lodDistance: 175, cullDistance: 500, billboardScale: bbScale, billboardYOffset: bbYOff },
-              camPos
-            );
-          }
-        }
       }
     }).catch(err => {
       // console.error(`❌ Failed to load ${building.name} model:`, err);
@@ -1169,10 +1157,7 @@ function findIdleVillagersNearBuilding(building) {
   if (!building || !building.needsWorkers || !building.position) return [];
   
   const idleVillagers = [];
-  // CRITICAL: Use productionWorkRadius for completed buildings with production work
-  const workRadius = (building.buildProgress >= 1.0 && building.productionWorkRadius) 
-    ? building.productionWorkRadius 
-    : (building.workRadius || 20); // Increased radius to find workers across map
+  const workRadius = building.workRadius || 20; // Increased radius to find workers across map
   
   // CRITICAL: Sort units by ID before iterating for deterministic order
   // This ensures both clients check the same units in the same order
@@ -1181,7 +1166,7 @@ function findIdleVillagersNearBuilding(building) {
   );
   
   const currentTick_search = window.currentMatch?.tick || 0;
-  const shouldLogSearch = building.buildProgress < 1.0 && building.workType === 'build' && currentTick_search % 200 === 0;
+  const shouldLogSearch = building.workType === 'build' && !building.completionProcessed && currentTick_search % 200 === 0;
   let _skipReasons = shouldLogSearch ? { noPhysics: 0, notVillager: 0, ownerMismatch: 0, notIdle: 0, protected: 0, recentCmd: 0, tooFar: 0, assigned: 0 } : null;
   
   // Look through all game units for idle villagers and engineers
@@ -1230,7 +1215,7 @@ function findIdleVillagersNearBuilding(building) {
     // EXCEPTION: Skip grace period for under-construction buildings — if the player
     // moved a villager to a build site, they want it to build.
     const currentTick = window.currentMatch?.tick || 0;
-    const nearConstruction = building.buildProgress < 1.0 && building.workType === 'build';
+    const nearConstruction = building.workType === 'build' && !building.completionProcessed;
     if (!nearConstruction) {
       const recentTick = (unit.lastPlayerCommandTick !== undefined)
         ? unit.lastPlayerCommandTick
@@ -1284,6 +1269,31 @@ function findIdleVillagersNearBuilding(building) {
   return idleVillagers.map(v => v.unit);
 }
 
+function isConstructionWorkerAtSite(worker, building) {
+  if (!worker?.pb?.state?.loc || !building?.position) return false;
+  const TILE_SIZE = window.TILE_SIZE || 4;
+  const workRange = TILE_SIZE * 2; // Must be meaningfully at the site to count
+  const dx = building.position.x - worker.pb.state.loc.x;
+  const dz = building.position.z - worker.pb.state.loc.z;
+  return Math.sqrt(dx * dx + dz * dz) <= workRange;
+}
+
+function getEffectiveAssignedWorkerCount(building) {
+  if (!building) return 0;
+  const assignedWorkers = Array.isArray(building.assignedWorkers) ? building.assignedWorkers : [];
+  const isConstruction = building.workType === 'build' && !building.completionProcessed;
+  if (!isConstruction) {
+    return assignedWorkers.length;
+  }
+  return assignedWorkers.filter(worker => isConstructionWorkerAtSite(worker, building)).length;
+}
+
+function getAssignedWorkerSlotCount(building) {
+  if (!building) return 0;
+  const assignedWorkers = Array.isArray(building.assignedWorkers) ? building.assignedWorkers : [];
+  return assignedWorkers.length;
+}
+
 // Assign a villager to work at a building
 function assignVillagerToWork(villager, building) {
   if (!villager || !building || !window.behaviorManager) return false;
@@ -1301,19 +1311,14 @@ function assignVillagerToWork(villager, building) {
     }
   }
   
-  // Check if building needs more workers (use production cap for completed production buildings)
-  const workerCap = (building.buildProgress >= 1.0 && building.productionMaxWorkers)
-    ? building.productionMaxWorkers
-    : building.maxWorkers;
-  if (building.assignedWorkers.length >= workerCap) {
+  // maxWorkers is updated by synchronized completion processing.
+  const workerCap = building.maxWorkers;
+  if (getAssignedWorkerSlotCount(building) >= workerCap) {
     return false;
   }
   
-  // Determine work behavior type based on building and unit type
-  // CRITICAL: For completed buildings with productionWorkType, use that instead of workType
-  const effectiveWorkType = (building.buildProgress >= 1.0 && building.productionWorkType) 
-    ? building.productionWorkType 
-    : building.workType;
+  // workType is updated by synchronized completion processing.
+  const effectiveWorkType = building.workType;
   
   let workBehaviorType = 'work';
   if (villager.type === 'engineer') {
@@ -1951,7 +1956,7 @@ function updateBuildings(deltaTime) {
     // Handle construction progress for buildings being built
     if (building.needsWorkers && building.workType === 'build' && building.buildProgress < 1.0 && (window.game || window.currentMatch)) {
       const currentTick = window.currentMatch?.tick || 0;
-      const workerCount = building.assignedWorkers.length;
+      const workerCount = getEffectiveAssignedWorkerCount(building);
       
       // Debug: Log construction state periodically
       if (currentTick % 100 === 0 && currentTick > 0) {
@@ -1993,12 +1998,9 @@ function updateBuildings(deltaTime) {
       // CRITICAL: Only count workers within work range - prevents progress when they're still walking there
       const TILE_SIZE = window.TILE_SIZE || 4;
       const workRange = TILE_SIZE * 2; // 2 tiles - must be at the site to contribute
-      const workersAtSite = building.position ? building.assignedWorkers.filter(w => {
-        if (!w.pb?.state?.loc) return false;
-        const dx = building.position.x - w.pb.state.loc.x;
-        const dz = building.position.z - w.pb.state.loc.z;
-        return Math.sqrt(dx * dx + dz * dz) <= workRange;
-      }).length : 0;
+      const workersAtSite = building.position
+        ? Math.min(building.maxWorkers || Infinity, building.assignedWorkers.filter(w => isConstructionWorkerAtSite(w, building)).length)
+        : 0;
       
       if (workersAtSite > 0) {
         // CRITICAL: Track construction start tick on first work tick
@@ -2042,16 +2044,9 @@ function updateBuildings(deltaTime) {
         
         // When construction completes, send synchronized completion event
         // CRITICAL: Only process completion once, and synchronize across all peers
-        if (building.buildProgress >= 1.0 && !building.completionProcessed && building.mesh) {
+        if (building.buildProgress >= 1.0 && !building.completionProcessed) {
           building.buildProgress = 1.0; // Clamp to 1.0
-          
-          // Hide construction indicator when done
-          if (building.constructionIndicator) {
-            building.constructionIndicator.setEnabled(false);
-            building.constructionIndicator.dispose();
-            building.constructionIndicator = null;
-          }
-          
+
           // CRITICAL: Send building_complete command to synchronize completion across all peers
           // Schedule completion for the next sync checkpoint to ensure all clients process at the same tick
           if (window.isMultiplayer && window.currentMatch && !building.completionCommandSent) {
@@ -2068,16 +2063,13 @@ function updateBuildings(deltaTime) {
               tick: completionTick // Schedule for sync checkpoint
             });
             building.completionCommandSent = true;
-            // Process immediately locally for visual feedback (command ensures sync on other clients)
-            // The command will be a no-op on clients that already processed it due to completionProcessed flag
-            processBuildingCompletion(building);
           } else {
             // Single-player: process immediately
             processBuildingCompletion(building);
           }
         }
       }
-    } else if (building.buildProgress >= 1.0 && building.constructionIndicator) {
+    } else if (building.completionProcessed && building.constructionIndicator) {
       // Building is complete - hide indicator
       building.constructionIndicator.setEnabled(false);
       building.constructionIndicator.dispose();
@@ -2091,13 +2083,11 @@ function updateBuildings(deltaTime) {
     const tickRate = 20; // Match net.TICK_RATE
     const shouldCheckThisTick = (currentTick % tickRate === 0); // Check every 20 ticks (1 second at 20Hz)
     
-    // For construction buildings, check even if not complete; for production buildings, only when complete
-    // CRITICAL: Check productionWorkType for buildings that have production after construction
-    const hasProductionWork = building.buildProgress >= 1.0 && building.productionWorkType;
+    // Only enter production after the synchronized completion event flips workType.
+    const canAssignConstructionWorkers = building.workType === 'build' && building.buildProgress < 1.0;
+    const canAssignProductionWorkers = building.completionProcessed && building.workType !== 'build';
     const shouldAssignWorkers = building.needsWorkers && (window.game || window.currentMatch) && shouldCheckThisTick && 
-      ((building.workType === 'build' && building.buildProgress < 1.0) || 
-       (building.workType !== 'build' && building.buildProgress >= 1.0) ||
-       hasProductionWork);
+      (canAssignConstructionWorkers || canAssignProductionWorkers);
     
     if (shouldAssignWorkers && (building.lastWorkerCheckTick ?? -1) !== currentTick) {
       building.lastWorkerCheckTick = currentTick;
@@ -2121,22 +2111,21 @@ function updateBuildings(deltaTime) {
         return true; // Keep valid workers
       });
       
-      // Try to assign more workers if needed
-      // CRITICAL: Use productionMaxWorkers for completed buildings with production work
-      const maxWorkersForThisState = (building.buildProgress >= 1.0 && building.productionMaxWorkers) 
-        ? building.productionMaxWorkers 
-        : building.maxWorkers;
+      // Try to assign more workers if needed using the synchronized worker cap.
+      const maxWorkersForThisState = building.maxWorkers;
       
-      if (building.assignedWorkers.length < maxWorkersForThisState) {
+      const effectiveAssignedWorkers = getEffectiveAssignedWorkerCount(building);
+      let assignedWorkerSlots = getAssignedWorkerSlotCount(building);
+      if (assignedWorkerSlots < maxWorkersForThisState) {
         const idleVillagers = findIdleVillagersNearBuilding(building);
         
         if (building.workType === 'build' && building.buildProgress < 1.0 && currentTick % 100 === 0) {
-          console.log(`👷 Construction ${building.type} (${building.id?.slice(-6)}): ${idleVillagers.length} idle nearby, assigned=${building.assignedWorkers.length}/${maxWorkersForThisState}, progress=${(building.buildProgress*100).toFixed(0)}%, owner=${building.owner}`);
+          console.log(`👷 Construction ${building.type} (${building.id?.slice(-6)}): ${idleVillagers.length} idle nearby, activeAssigned=${effectiveAssignedWorkers}/${maxWorkersForThisState}, totalAssigned=${building.assignedWorkers.length}, progress=${(building.buildProgress*100).toFixed(0)}%, owner=${building.owner}`);
         }
         
         
         for (const villager of idleVillagers) {
-          if (building.assignedWorkers.length >= maxWorkersForThisState) break;
+          if (assignedWorkerSlots >= maxWorkersForThisState) break;
           
           // Check if villager is already assigned to a building
           if (villager.assignedBuilding) {
@@ -2151,7 +2140,9 @@ function updateBuildings(deltaTime) {
             continue;
           }
           
-          assignVillagerToWork(villager, building);
+          if (assignVillagerToWork(villager, building)) {
+            assignedWorkerSlots++;
+          }
         }
       }
     }
@@ -2159,12 +2150,12 @@ function updateBuildings(deltaTime) {
     // CRITICAL: Process work production every frame for production buildings
     // This must be separate from worker assignment to ensure deterministic timing
     // Worker assignment only happens every 60 ticks, but production should check every frame
-    if (building.buildProgress >= 1.0 && building.needsWorkers && building.assignedWorkers.length > 0 && (window.game || window.currentMatch)) {
+    if (building.completionProcessed && building.workType !== 'build' && building.needsWorkers && building.assignedWorkers.length > 0 && (window.game || window.currentMatch)) {
       processWorkProduction(building);
     }
     
     // Handle tower attacks
-    if (building.type === 'tower' && building.buildProgress >= 1.0 && isGameActive) {
+    if (building.type === 'tower' && building.completionProcessed && isGameActive) {
       updateTowerAttack(building, deltaTime);
     }
   });

@@ -1009,6 +1009,21 @@
         case 'resource_state_sync':
           if (window.currentMatch) {
             const match = window.currentMatch;
+            const syncTick = Number.isFinite(actualMessage.tick) ? actualMessage.tick : null;
+            const currentTick = Number.isFinite(match.tick) ? match.tick : 0;
+
+            // Never rewind live deterministic state with a late authoritative snapshot.
+            // Resource sync packets are best-effort checkpoint corrections, not gameplay commands.
+            if (syncTick !== null) {
+              const lastAppliedTick = Number.isFinite(match._lastAppliedResourceStateSyncTick)
+                ? match._lastAppliedResourceStateSyncTick
+                : -1;
+              if (syncTick < currentTick || syncTick <= lastAppliedTick) {
+                break;
+              }
+              match._lastAppliedResourceStateSyncTick = syncTick;
+            }
+
             if (actualMessage.resourceEntries) {
               actualMessage.resourceEntries.forEach(entry => {
                 const key = `${entry.gridX},${entry.gridZ}`;
@@ -1022,17 +1037,6 @@
                 if (!match._scheduledDepletions.has(key)) {
                   match._scheduledDepletions.set(key, info);
                 }
-              });
-            }
-            if (actualMessage.playerResources) {
-              actualMessage.playerResources.forEach(entry => {
-                const player = match.getPlayerById ? match.getPlayerById(entry.playerId) : null;
-                if (!player) return;
-                if (!player.resources) player.resources = {};
-                player.resources.food = Math.floor(entry.resources?.food || 0);
-                player.resources.wood = Math.floor(entry.resources?.wood || 0);
-                player.resources.stone = Math.floor(entry.resources?.stone || 0);
-                player.resources.minerals = Math.floor(entry.resources?.minerals || 0);
               });
             }
           }
@@ -1288,11 +1292,18 @@
             
             // Send our info back (if we're already in the lobby) only when this wasn't an acknowledgement
             if (window.Lobby.currentLobbyId && !isAckMessage) {
+              if (window.Lobby?.syncLocalProfileToPlayer) {
+                window.Lobby.syncLocalProfileToPlayer();
+              }
               p2p.sendData({
                 type: 'player_joined',
                 playerId: localPlayerId,
-                playerName: window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`,
-                playerColor: window.currentPlayerColor || window.player?.color || '#ffffff',
+                playerName: window.Lobby?.getLocalProfileName
+                  ? window.Lobby.getLocalProfileName(`Player ${localPlayerId.slice(-4)}`)
+                  : (window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`),
+                playerColor: window.Lobby?.getLocalProfileColor
+                  ? window.Lobby.getLocalProfileColor('#ffffff')
+                  : (window.currentPlayerColor || window.player?.color || '#ffffff'),
                 handshakeAck: true
               }, peerId);
             }
@@ -1409,28 +1420,47 @@
               const localNorm = normalize(localP2pId);
               players = actualMessage.playerIds.map((id, idx) => {
                 const idNorm = normalize(id);
+                const fallbackColor = window.Lobby?.getMatchSlotColor
+                  ? window.Lobby.getMatchSlotColor(idx)
+                  : (idx === 0 ? '#ff0000' : '#00ff00');
                 if (localNorm && idNorm === localNorm) {
                   window.player.id = id;
-                  if (meta[idx]?.color) window.player.color = meta[idx].color;
+                  window.player.color = window.Lobby?.normalizePlayerColor
+                    ? window.Lobby.normalizePlayerColor(meta[idx]?.color, fallbackColor)
+                    : (meta[idx]?.color || fallbackColor);
                   if (meta[idx]?.name) window.player.name = meta[idx].name;
+                  if (meta[idx]?.resources) {
+                    window.player.resources = { ...meta[idx].resources };
+                  }
                   return window.player;
                 }
                 return window.Lobby.createRemoteMatchPlayer({
                   id,
                   name: meta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
-                  color: meta[idx]?.color || (idx === 0 ? '#ff0000' : '#00ff00'),
+                  color: window.Lobby?.normalizePlayerColor
+                    ? window.Lobby.normalizePlayerColor(meta[idx]?.color, fallbackColor)
+                    : (meta[idx]?.color || fallbackColor),
                   resources: meta[idx]?.resources
                 });
               });
             } else {
               // Legacy fallback: host + local peer only.
               players = [];
+              const hostFallbackColor = window.Lobby?.getMatchSlotColor
+                ? window.Lobby.getMatchSlotColor(0)
+                : '#ffffff';
+              const localFallbackColor = window.Lobby?.getMatchSlotColor
+                ? window.Lobby.getMatchSlotColor(1)
+                : '#ffffff';
               if (actualMessage.hostId) {
                 players.push(window.Lobby.createRemoteMatchPlayer({
                   id: actualMessage.hostId,
                   name: 'Host',
-                  color: '#ff0000'
+                  color: hostFallbackColor
                 }));
+              }
+              if (!window.player.color) {
+                window.player.color = localFallbackColor;
               }
               players.push(window.player);
             }
@@ -1439,7 +1469,10 @@
             
             // Brief delay to show GO! then start
             setTimeout(() => {
-              window.Lobby.startAdventureWithMap(actualMessage.mapData, players);
+              window.Lobby.startAdventureWithMap(actualMessage.mapData, players, {
+                chapterTransition: true,
+                chapterId: actualMessage.chapterId
+              });
             }, 300);
           } else {
             console.error('❌ Received invalid adventure_start message:', actualMessage);
@@ -1450,11 +1483,68 @@
           // Receive command from another player for the match
           if (window.currentMatch && actualMessage.command) {
             const cmd = actualMessage.command;
+            const rawPlayerId = cmd.playerId || null;
             
             // CRITICAL: Normalize playerId to ensure consistent matching
             // Commands use normalized playerId (last 6 chars), but we need to match it correctly
             const normalizedPlayerId = cmd.playerId?.length > 6 ? cmd.playerId.slice(-6) : cmd.playerId;
             cmd.playerId = normalizedPlayerId; // Ensure command has normalized ID
+            if (cmd.type === 'move' && window.currentMatch.isLiveMultiplayerMatch()) {
+              console.log('🧭 MOVE TRACE receive', {
+                peerId: peerId || null,
+                peerNorm: normalizePeerId(peerId || ''),
+                rawPlayerId,
+                normalizedPlayerId,
+                commandId: cmd.commandId || null,
+                playerCommandSeq: Number.isFinite(cmd.playerCommandSeq) ? cmd.playerCommandSeq : null,
+                tick: Number.isFinite(cmd.tick) ? cmd.tick : null,
+                localMatchTick: window.currentMatch.tick,
+                localPlayerId: window.currentMatch.localPlayerId || null,
+                windowPlayerId: window.player?.id || null,
+                netLocalPlayerId: net._state?.localPlayerId || null,
+                unitIds: Array.isArray(cmd.unitIds) ? cmd.unitIds.slice() : [],
+                transportAssignments: Array.isArray(cmd.transportAssignments)
+                  ? cmd.transportAssignments.map(entry => ({
+                      riderId: entry?.riderId || null,
+                      transportId: entry?.transportId || null
+                    }))
+                  : [],
+                target: cmd.target
+                  ? {
+                      x: Math.round((cmd.target.x || 0) * 10) / 10,
+                      z: Math.round((cmd.target.z || 0) * 10) / 10
+                    }
+                  : null
+              });
+            }
+            if (cmd.type === 'train' && cmd.unitType === 'dirigible' && window.currentMatch.isLiveMultiplayerMatch()) {
+              console.log('🛫 TRAIN TRACE receive', {
+                peerId: peerId || null,
+                peerNorm: normalizePeerId(peerId || ''),
+                rawPlayerId,
+                normalizedPlayerId,
+                commandId: cmd.commandId || null,
+                tick: Number.isFinite(cmd.tick) ? cmd.tick : null,
+                localMatchTick: window.currentMatch.tick,
+                localPlayerId: window.currentMatch.localPlayerId || null,
+                buildingId: cmd.buildingId || null,
+                unitType: cmd.unitType || null
+              });
+            }
+            if (cmd.type === 'load' && window.currentMatch.isLiveMultiplayerMatch()) {
+              console.log('🛫 LOAD TRACE receive', {
+                peerId: peerId || null,
+                peerNorm: normalizePeerId(peerId || ''),
+                rawPlayerId,
+                normalizedPlayerId,
+                commandId: cmd.commandId || null,
+                tick: Number.isFinite(cmd.tick) ? cmd.tick : null,
+                localMatchTick: window.currentMatch.tick,
+                localPlayerId: window.currentMatch.localPlayerId || null,
+                transportId: cmd.transportId || null,
+                unitIds: Array.isArray(cmd.unitIds) ? cmd.unitIds.slice() : []
+              });
+            }
             
             // TRUE LOCKSTEP: Command for tick N confirms peer is ready for tick N
             // Update tick confirmation (commands serve as implicit heartbeats)
@@ -1606,6 +1696,22 @@
           }
           break;
         
+        case 'adventure_defeat':
+          if (window.currentMatch && window.currentMatch.state !== 'defeat') {
+            window.currentMatch.isPaused = true;
+            window.currentMatch.state = 'defeat';
+            if (window.showStoryDialogue) {
+              window.showStoryDialogue('💀 All units lost. Mission failed.', 'defeat', () => {
+                if (typeof window.currentMatch.showEndGameScreen === 'function') {
+                  window.currentMatch.showEndGameScreen();
+                }
+              });
+            } else if (typeof window.currentMatch.showEndGameScreen === 'function') {
+              window.currentMatch.showEndGameScreen();
+            }
+          }
+          break;
+
         case 'adventure_chapter_ready':
           // Host tracks which players have confirmed they want to continue.
           if (window.currentMatch && window.currentMatch.isHost && window.currentMatch.isHost() && actualMessage.playerId && actualMessage.nextChapterId) {
@@ -1647,25 +1753,38 @@
               const meta = Array.isArray(actualMessage.playersMeta) ? actualMessage.playersMeta : [];
               const players = playerIds.map((id, idx) => {
                 const idNorm = normalize(id);
+                const fallbackColor = window.Lobby?.getMatchSlotColor
+                  ? window.Lobby.getMatchSlotColor(idx)
+                  : (idx === 0 ? '#ff0000' : '#00ff00');
                 if (localNorm && idNorm === localNorm) {
                   // Preserve local player object for input/selection, but adopt host-assigned name/color for consistency.
                   window.player.id = id;
-                  if (meta[idx] && meta[idx].color) window.player.color = meta[idx].color;
+                  window.player.color = window.Lobby?.normalizePlayerColor
+                    ? window.Lobby.normalizePlayerColor(meta[idx]?.color, fallbackColor)
+                    : (meta[idx]?.color || fallbackColor);
                   if (meta[idx] && meta[idx].name) window.player.name = meta[idx].name;
+                  if (meta[idx]?.resources) {
+                    window.player.resources = { ...meta[idx].resources };
+                  }
                   return window.player;
                 }
                 return window.Lobby.createRemoteMatchPlayer({
                   id,
                   name: meta[idx]?.name || (idx === 0 ? 'Host' : `Player ${idx + 1}`),
-                  color: meta[idx]?.color || (idx === 0 ? '#ff0000' : '#00ff00'),
+                  color: window.Lobby?.normalizePlayerColor
+                    ? window.Lobby.normalizePlayerColor(meta[idx]?.color, fallbackColor)
+                    : (meta[idx]?.color || fallbackColor),
                   resources: meta[idx]?.resources
                 });
               });
-              window.Lobby.startAdventureWithMap(actualMessage.mapData, players);
+              window.Lobby.startAdventureWithMap(actualMessage.mapData, players, { chapterTransition: true });
             } else {
               // Fallback: preserve existing players if available
               const coopPlayers = window.currentMatch?.players;
-              window.Lobby.startAdventureWithMap(actualMessage.mapData, Array.isArray(coopPlayers) ? coopPlayers : undefined);
+              window.Lobby.startAdventureWithMap(actualMessage.mapData, Array.isArray(coopPlayers) ? coopPlayers : undefined, {
+                chapterTransition: true,
+                chapterId: actualMessage.chapterId
+              });
             }
           }
           break;
@@ -1786,11 +1905,18 @@
       if (window.Lobby.sendPlayerPresence) {
         window.Lobby.sendPlayerPresence(peerId);
       } else {
+        if (window.Lobby?.syncLocalProfileToPlayer) {
+          window.Lobby.syncLocalProfileToPlayer();
+        }
         p2p.sendData({
           type: 'player_joined',
           playerId: localPlayerId,
-          playerName: window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`,
-          playerColor: window.currentPlayerColor || window.player?.color || '#ffffff'
+          playerName: window.Lobby?.getLocalProfileName
+            ? window.Lobby.getLocalProfileName(`Player ${localPlayerId.slice(-4)}`)
+            : (window.currentPlayerName || window.player?.name || `Player ${localPlayerId.slice(-4)}`),
+          playerColor: window.Lobby?.getLocalProfileColor
+            ? window.Lobby.getLocalProfileColor('#ffffff')
+            : (window.currentPlayerColor || window.player?.color || '#ffffff')
         });
       }
       

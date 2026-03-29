@@ -495,7 +495,7 @@
     // Removed: showMoveOptionsUIAt (single-finger double-tap now triggers special ability)
 
     // === ACTION POPUP UI ===
-    // Shows on double-tap with special ability button, auto-dismisses
+    // Tap-hold, two-finger tap (distinct pointers), or context menu; auto-dismisses
     function showActionPopup(clientX, clientY, selectionSnapshot = null) {
 
       // Dismiss existing popup if any
@@ -1737,15 +1737,22 @@
       const clientX = ps.x;
       const clientY = ps.y;
       
+      // True two-finger tap: another pointer is still down when this one lifts.
+      // (Each new touch gets a fresh pointerId, so "two different ids" does not rule out one-finger double-tap.)
+      const hadAnotherFingerDown = activePointers.size >= 2;
+      
       // Track quick pointer releases for two-finger tap detection
-      recordQuickUp(clientX, clientY, dt, moveSq);
+      recordQuickUp(clientX, clientY, dt, moveSq, hadAnotherFingerDown);
 
       // Detect two-finger tap/double-tap BEFORE processing other gestures
+      // Require at least one lift while a second finger was still down — two sequential
+      // one-finger taps both see only one pointer and must not open the menu.
       if (recentQuickUps.length >= 2) {
         const a = recentQuickUps[recentQuickUps.length - 1];
         const b = recentQuickUps[recentQuickUps.length - 2];
         const timeDiff = Math.abs(a.t - b.t);
-        if (timeDiff < config.twoFingerTapMaxTimeMs) {
+        const overlapTwoFinger = a.hadAnotherFingerDown || b.hadAnotherFingerDown;
+        if (timeDiff < config.twoFingerTapMaxTimeMs && overlapTwoFinger) {
           const cx = (a.x + b.x) / 2;
           const cy = (a.y + b.y) / 2;
           const timeSinceLastTwo = now() - lastTwoTapTime;
@@ -1983,9 +1990,9 @@
 
     // Two-finger tap detection: track recent quick pointer releases
     const recentQuickUps = [];
-    function recordQuickUp(x, y, dt, moveSq) {
+    function recordQuickUp(x, y, dt, moveSq, hadAnotherFingerDown) {
       if (dt <= config.twoFingerTapMaxTimeMs && moveSq <= twoFingerTapMaxMovePxSq) {
-        recentQuickUps.push({ t: now(), x, y });
+        recentQuickUps.push({ t: now(), x, y, hadAnotherFingerDown: !!hadAnotherFingerDown });
         // Prune old entries
         const threshold = config.doubleTapDelayMs;
         const tnow = now();

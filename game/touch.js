@@ -36,7 +36,11 @@
       zoneZoomSensitivity: 0.015,
       zoneRotateSensitivity: 0.018,
       zonePanSensitivity: 8.0,
-      cameraFingerDragThreshold: 8
+      cameraFingerDragThreshold: 8,
+      // Center: brief hold → RMB-style pan; big/fast move → lasso; double-tap → special ability (see onPointerDown)
+      centerPanHoldMs: 95,
+      centerPanHoldMaxMovePx: 10,
+      centerLassoVelocityPxPerMs: 2.0
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -144,6 +148,69 @@
     const dragStartThresholdPxSq = config.dragStartThresholdPx * config.dragStartThresholdPx;
     const twoFingerDoubleTapCenterMaxMovePxSq = config.twoFingerDoubleTapCenterMaxMovePx * config.twoFingerDoubleTapCenterMaxMovePx;
     const doubleTapMaxDistPxSq = config.doubleTapMaxDistPx * config.doubleTapMaxDistPx;
+    const centerPanHoldMaxMoveSq = () => {
+      const m = config.centerPanHoldMaxMovePx;
+      return m * m;
+    };
+    let panHoldTimer = null;
+    let panHoldPointerId = null;
+
+    function cancelPanHoldTimer() {
+      if (panHoldTimer) {
+        clearTimeout(panHoldTimer);
+        panHoldTimer = null;
+      }
+      panHoldPointerId = null;
+    }
+
+    function startPanHoldTimer(pointerId) {
+      cancelPanHoldTimer();
+      panHoldPointerId = pointerId;
+      const delay = Math.max(1, Number(config.centerPanHoldMs) || 95);
+      panHoldTimer = setTimeout(() => {
+        panHoldTimer = null;
+        const id = panHoldPointerId;
+        panHoldPointerId = null;
+        const p = id != null ? activePointers.get(id) : null;
+        if (!p || !p.isDown) return;
+        if (p.isTouchDoubleForAbility || p.syntheticDownEmitted || p.isActioning || p.holdTriggered) return;
+        if (p.startedInEdge || p.isEdgeFinger) return;
+        const mdx = p.x - p.startX;
+        const mdy = p.y - p.startY;
+        if (mdx * mdx + mdy * mdy > centerPanHoldMaxMoveSq()) return;
+        p.isPanning = true;
+        p.isCenterFinger = true;
+        cancelHoldTimer();
+      }, delay);
+    }
+
+    function pickWorldForSpecialAbility(clientX, clientY) {
+      let worldPos = screenToWorld(clientX, clientY);
+      if ((!worldPos || !Number.isFinite(worldPos.x)) && window.gfx && window.gfx.scene) {
+        const rect = canvasRect();
+        const pr = window.gfx.scene.pick(clientX - rect.left, clientY - rect.top);
+        if (pr && pr.hit && pr.pickedPoint) worldPos = pr.pickedPoint;
+      }
+      return worldPos;
+    }
+
+    function checkCenterFastStroke(ps) {
+      if (ps.startedInEdge || ps.isEdgeFinger || ps.isPanning || ps.syntheticDownEmitted || ps.isActioning) return;
+      if (panHoldPointerId !== ps.id) return;
+      const t = now();
+      const dt = t - ps.velLastT;
+      if (dt <= 0) return;
+      const dx = ps.x - ps.velLastX;
+      const dy = ps.y - ps.velLastY;
+      const speed = Math.hypot(dx, dy) / dt;
+      ps.velLastT = t;
+      ps.velLastX = ps.x;
+      ps.velLastY = ps.y;
+      if (speed >= config.centerLassoVelocityPxPerMs) {
+        cancelPanHoldTimer();
+        ps.lassoFastArmed = true;
+      }
+    }
 
     function makePointerState(e) {
       // Determine if touch started in edge zone (for rot/zoom) or center (for pan/action)
@@ -179,13 +246,17 @@
         lastTime: now(),
         isDown: true,
         syntheticDownEmitted: false,
-        isDoubleTapStart: false, // True if this finger started as second tap of double-tap
         startedInEdge: startedInEdge, // True if touch started in edge zone (rot/zoom)
         edgePrimary: edgePrimary, // Nearest screen edge at touch-down (stable for whole gesture)
         isEdgeFinger: false, // Set to true once edge gesture starts
         isCenterFinger: false, // Set to true once center gesture (pan or action) starts
         isPanning: false, // Set to true if this finger committed to panning (sticks even if action mode activates)
-        isActioning: false // Set to true if this finger committed to action/lasso
+        isActioning: false, // Set to true if this finger committed to action/lasso
+        isTouchDoubleForAbility: false, // Second tap of double-tap: special ability (not pan / not click)
+        velLastX: e.clientX,
+        velLastY: e.clientY,
+        velLastT: now(),
+        lassoFastArmed: false
       };
     }
 
@@ -1341,17 +1412,6 @@
           gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
         }
         
-        // Check if there's already a pan finger active
-        // If so, don't create another pan from double-tap (let it be action/lasso)
-        // Note: We allow double-tap pan even while rot/zooming (edge finger)
-        let hasPanFinger = false;
-        for (const [id, p] of activePointers) {
-          if (id !== e.pointerId && p.isPanning) {
-            hasPanFinger = true;
-            break;
-          }
-        }
-        
         const currentTime = now();
         
         // Reset stale tap tracking (more than 2 seconds old) to prevent issues after mouse usage
@@ -1364,32 +1424,31 @@
           lastTapDownPos = null;
         }
         
-        // Check both tap-up time (normal) AND tap-down time (fast overlapping taps)
         const timeSinceUp = currentTime - lastSingleTapTime;
-        const timeSinceDown = currentTime - lastTapDownTime;
         const distFromUpSq = lastSingleTapPos ? distanceSq(e.clientX, e.clientY, lastSingleTapPos.x, lastSingleTapPos.y) : Infinity;
-        const distFromDownSq = lastTapDownPos ? distanceSq(e.clientX, e.clientY, lastTapDownPos.x, lastTapDownPos.y) : Infinity;
+        const isDoubleTapForAbility = lastSingleTapPos && timeSinceUp < config.doubleTapDelayMs && distFromUpSq < doubleTapMaxDistPxSq;
         
-        // Double-tap: check against tap-up (normal case) OR tap-down (fast overlapping case)
-        // BUT don't create a pan finger if one is already active
-        const isDoubleTapFromUp = lastSingleTapPos && timeSinceUp < config.doubleTapDelayMs && distFromUpSq < doubleTapMaxDistPxSq;
-        const isDoubleTapFromDown = lastTapDownPos && timeSinceDown < config.doubleTapDelayMs && distFromDownSq < doubleTapMaxDistPxSq;
-        
-        if ((isDoubleTapFromUp || isDoubleTapFromDown) && !hasPanFinger) {
-          // Double-tap detected - this finger will pan on drag
-          ps.isDoubleTapStart = true;
-          // Reset tap tracking
+        if (isDoubleTapForAbility && !ps.startedInEdge) {
+          cancelPanHoldTimer();
+          cancelHoldTimer();
+          ps.isTouchDoubleForAbility = true;
           lastSingleTapTime = 0;
           lastSingleTapPos = null;
           lastTapDownTime = 0;
           lastTapDownPos = null;
+          const worldPos = pickWorldForSpecialAbility(e.clientX, e.clientY);
+          if (window.ui && window.ui.triggerSpecialAbilityAt) {
+            window.ui.triggerSpecialAbilityAt(worldPos);
+          }
+          if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
+            window.lassoSelection.cleanupSelection();
+          }
         } else {
-          // Record this tap-down for potential fast double-tap detection
           lastTapDownTime = currentTime;
           lastTapDownPos = { x: e.clientX, y: e.clientY };
           
-          // Start hold timer for tap-hold action menu (only for center touches)
-          if (!ps.startedInEdge) {
+          if (!ps.startedInEdge && !ps.isTouchDoubleForAbility && activePointers.size === 1) {
+            startPanHoldTimer(e.pointerId);
             startHoldTimer(e.pointerId, e.clientX, e.clientY);
           }
         }
@@ -1434,11 +1493,8 @@
       lastTouchClientX = e.clientX;
       lastTouchClientY = e.clientY;
       
-      // === NEW TOUCH CONTROL SCHEME ===
-      // Edge zone: rot/zoom (left/right = rotate, up/down = zoom)
-      // Center zone: depends on action mode
-      //   - Camera mode (default): pan
-      //   - Action mode: lasso/select/commands
+      // Center: short hold → pan; far/fast drag → lasso; double-tap → special ability (pointerdown).
+      // Edge: rot/zoom inward blend. Two-finger tap still opens action menu.
       
       if (activePointers.size === 1) {
         invalidateTime();
@@ -1453,57 +1509,59 @@
         const ps = activePointers.values().next().value;
         if (!ps) return;
         
-        // Check movement for drag threshold
         const dx = ps.x - ps.startX;
         const dy = ps.y - ps.startY;
         const movedSq = dx * dx + dy * dy;
         const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
         
-        // Check hold movement (cancel if moved too much)
         if (holdPointerId === ps.id) {
           checkHoldMovement(ps.x, ps.y);
         }
         
-        if (movedSq >= dragThresholdSq) {
-          // Cancel hold timer when drag starts
+        if (!ps.startedInEdge && !ps.isEdgeFinger && panHoldPointerId === ps.id && movedSq > centerPanHoldMaxMoveSq()) {
+          cancelPanHoldTimer();
+        }
+        if (!ps.startedInEdge && !ps.isEdgeFinger) {
+          checkCenterFastStroke(ps);
+        }
+        
+        if (ps.isPanning && !ps.startedInEdge) {
+          applyCenterPan(ps);
+          momentumActive = false;
+        } else if (movedSq >= dragThresholdSq) {
           if (holdPointerId === ps.id) {
             cancelHoldTimer();
           }
-          
-          // === DOUBLE-TAP START: Pan mode (even on edge!) ===
-          if (ps.isDoubleTapStart) {
-            ps.isCenterFinger = true;
-            ps.isPanning = true;
-            applyCenterPan(ps);
-            momentumActive = false;
+          if (panHoldPointerId === ps.id) {
+            cancelPanHoldTimer();
           }
-          // === TOUCH STARTED IN EDGE ZONE: Rot/Zoom ===
-          else if (ps.startedInEdge || ps.isEdgeFinger) {
+          
+          if (ps.startedInEdge || ps.isEdgeFinger) {
             ps.isEdgeFinger = true;
             applyEdgeZoneCamera(ps);
             momentumActive = false;
-          }
-          // === HOLD TRIGGERED: Don't start lasso, menu is showing ===
-          else if (ps.holdTriggered) {
-            // Do nothing - let the action menu handle it
-          }
-          // === DEFAULT CENTER: Action/lasso ===
-          else {
-            ps.isCenterFinger = true;
-            ps.isActioning = true;
-            
-            if (!ps.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
-              sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
-              ps.syntheticDownEmitted = true;
-              // Clear tap tracking when lasso starts - prevents next tap from being double-tap
-              lastSingleTapTime = 0;
-              lastSingleTapPos = null;
-              lastTapDownTime = 0;
-              lastTapDownPos = null;
-            }
-            
-            if (ps.syntheticDownEmitted) {
-              sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+          } else if (ps.holdTriggered) {
+            // Action menu visible
+          } else {
+            const lassoStartSq = ps.lassoFastArmed ? dragThresholdSq : dragStartThresholdPxSq;
+            if (movedSq < lassoStartSq) {
+              // Between rim and full lasso threshold: wait (pan hold may still commit)
+            } else {
+              ps.isCenterFinger = true;
+              ps.isActioning = true;
+              
+              if (!ps.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
+                sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
+                ps.syntheticDownEmitted = true;
+                lastSingleTapTime = 0;
+                lastSingleTapPos = null;
+                lastTapDownTime = 0;
+                lastTapDownPos = null;
+              }
+              
+              if (ps.syntheticDownEmitted) {
+                sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+              }
             }
           }
         }
@@ -1521,57 +1579,59 @@
         const movedSq = dx * dx + dy * dy;
         const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
         
-        if (movedSq >= dragThresholdSq) {
-          // Already committed edge finger: keep rot/zoom
+        if (holdPointerId === movedPs.id) {
+          checkHoldMovement(movedPs.x, movedPs.y);
+        }
+        if (!movedPs.startedInEdge && !movedPs.isEdgeFinger && panHoldPointerId === movedPs.id && movedSq > centerPanHoldMaxMoveSq()) {
+          cancelPanHoldTimer();
+        }
+        if (!movedPs.startedInEdge && !movedPs.isEdgeFinger) {
+          checkCenterFastStroke(movedPs);
+        }
+        
+        if (movedPs.isPanning && !movedPs.startedInEdge) {
+          movedPs.isCenterFinger = true;
+          applyCenterPan(movedPs);
+        } else if (movedSq >= dragThresholdSq) {
+          if (holdPointerId === movedPs.id) {
+            cancelHoldTimer();
+          }
+          if (panHoldPointerId === movedPs.id) {
+            cancelPanHoldTimer();
+          }
+          
           if (movedPs.isEdgeFinger) {
             applyEdgeZoneCamera(movedPs);
-          }
-          // Finger already committed to panning: keep panning
-          else if (movedPs.isPanning) {
-            movedPs.isCenterFinger = true;
-            applyCenterPan(movedPs);
-          }
-          // Finger already committed to action: keep actioning
-          else if (movedPs.isActioning) {
+          } else if (movedPs.isActioning) {
             movedPs.isCenterFinger = true;
             if (movedPs.syntheticDownEmitted) {
               sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
             }
-          }
-          // Double-tap start: pan mode (even on edge!)
-          else if (movedPs.isDoubleTapStart) {
-            movedPs.isCenterFinger = true;
-            movedPs.isPanning = true;
-            applyCenterPan(movedPs);
-          }
-          // Touch started in edge zone: rot/zoom
-          else if (movedPs.startedInEdge) {
+          } else if (movedPs.startedInEdge) {
             movedPs.isEdgeFinger = true;
             applyEdgeZoneCamera(movedPs);
-          }
-          // Hold triggered: menu is showing, don't start lasso
-          else if (movedPs.holdTriggered) {
-            // Do nothing
-          }
-          // Default center: action/lasso
-          else {
-            movedPs.isCenterFinger = true;
-            movedPs.isActioning = true;
-            
-            if (!movedPs.syntheticDownEmitted && movedSq >= dragStartThresholdPxSq) {
-              if (now() >= suppressSingleTapUntil) {
+          } else if (movedPs.holdTriggered) {
+            // no-op
+          } else {
+            const lassoStartSq = movedPs.lassoFastArmed ? dragThresholdSq : dragStartThresholdPxSq;
+            if (movedSq < lassoStartSq) {
+              // wait
+            } else {
+              movedPs.isCenterFinger = true;
+              movedPs.isActioning = true;
+              
+              if (!movedPs.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
                 sendSyntheticPointer('pointerdown', movedPs.startX, movedPs.startY, 0, { suppressTerrainClick: true });
                 movedPs.syntheticDownEmitted = true;
-                // Clear tap tracking when lasso starts - prevents next tap from being double-tap
                 lastSingleTapTime = 0;
                 lastSingleTapPos = null;
                 lastTapDownTime = 0;
                 lastTapDownPos = null;
               }
-            }
-            
-            if (movedPs.syntheticDownEmitted) {
-              sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
+              
+              if (movedPs.syntheticDownEmitted) {
+                sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
+              }
             }
           }
         }
@@ -1663,6 +1723,17 @@
       // Cancel hold timer if this pointer was being tracked
       if (holdPointerId === e.pointerId) {
         cancelHoldTimer();
+      }
+      if (panHoldPointerId === e.pointerId) {
+        cancelPanHoldTimer();
+      }
+
+      if (ps.isTouchDoubleForAbility) {
+        activePointers.delete(e.pointerId);
+        const idxEarly = pointerOrder.indexOf(e.pointerId);
+        if (idxEarly !== -1) pointerOrder.splice(idxEarly, 1);
+        endGestureIfNeeded();
+        return;
       }
 
       // Calculate timing and movement once for reuse
@@ -1761,6 +1832,10 @@
         // If this was an edge finger (rot/zoom) or pan finger, activate momentum
         // BUT only if there's actual velocity (prevents drift on clean lift)
         if (ps.isEdgeFinger || ps.isPanning) {
+          lastSingleTapTime = 0;
+          lastSingleTapPos = null;
+          lastTapDownTime = 0;
+          lastTapDownPos = null;
           const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
                               Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
                               Math.abs(gestureVelocity.rotate) > 0.02 ||
@@ -1780,11 +1855,6 @@
           if (hasVelocity) {
             momentumActive = true;
           }
-          return;
-        }
-        
-        // If this was a double-tap that triggered pan mode, don't treat as tap
-        if (ps.isDoubleTapStart) {
           return;
         }
         
@@ -1862,6 +1932,10 @@
         
         // If this was an edge finger or pan finger, activate momentum (if velocity)
         if (ps.isEdgeFinger || ps.isPanning) {
+          lastSingleTapTime = 0;
+          lastSingleTapPos = null;
+          lastTapDownTime = 0;
+          lastTapDownPos = null;
           const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
                               Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
                               Math.abs(gestureVelocity.rotate) > 0.02 ||
@@ -1912,8 +1986,6 @@
           sendSyntheticPointer('pointerdown', clientX, clientY, 0, { suppressTerrainClick: false });
           sendSyntheticPointer('pointerup', clientX, clientY, 0, { suppressTerrainClick: false });
           
-          // Track this tap for double-tap detection (even while other fingers are down)
-          // This allows double-tap to enter action mode while panning
           if (!ps.startedInEdge) {
             lastSingleTapTime = now();
             lastSingleTapPos = { x: clientX, y: clientY };
@@ -1950,6 +2022,12 @@
       }
       
       if (activePointers.has(e.pointerId)) {
+        if (holdPointerId === e.pointerId) {
+          cancelHoldTimer();
+        }
+        if (panHoldPointerId === e.pointerId) {
+          cancelPanHoldTimer();
+        }
         activePointers.delete(e.pointerId);
         const idx = pointerOrder.indexOf(e.pointerId);
         if (idx !== -1) pointerOrder.splice(idx, 1);

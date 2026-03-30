@@ -1591,9 +1591,11 @@
               }, targetPeerId);
             }
             
-            // Check if command is for a past tick (arrived too late)
-            if (cmd.tick < window.currentMatch.tick) {
-              console.error(`❌ Late lockstep command dropped: type=${cmd.type}, scheduledTick=${cmd.tick}, localTick=${window.currentMatch.tick}`);
+            // Check if command is for a processed tick (arrived too late).
+            // `<=` is intentional: if local tick N already executed, a command for N cannot be replayed safely.
+            if (cmd.tick <= window.currentMatch.tick) {
+              const sameTickLate = cmd.tick === window.currentMatch.tick;
+              console.error(`❌ Late lockstep command dropped: type=${cmd.type}, scheduledTick=${cmd.tick}, localTick=${window.currentMatch.tick}, sameTickLate=${sameTickLate}`);
               window.currentMatch.desyncDetected = true;
             } else {
               // CRITICAL: Add to match command buffer for future execution

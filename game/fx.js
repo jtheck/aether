@@ -191,6 +191,33 @@
       ],
       gravity: new BABYLON.Vector3(0, 1, 0), // Light upward (inverted)
       limitVelocityDamping: 0.9
+    },
+    // Ground-level sparks for Agora capture (emitter = scaled TransformNode on building)
+    agoraCaptureSpark: {
+      texture: 'assets/images/explosion.png',
+      emitRate: 32,
+      minSize: 0.1,
+      maxSize: 0.36,
+      minLifeTime: 0.35,
+      maxLifeTime: 0.9,
+      minEmitPower: 0.9,
+      maxEmitPower: 2.4,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,
+      direction1: new BABYLON.Vector3(-0.12, -1.1, -0.12),
+      direction2: new BABYLON.Vector3(0.12, -1.9, 0.12),
+      minEmitBox: new BABYLON.Vector3(-14, 0.2, -14),
+      maxEmitBox: new BABYLON.Vector3(14, 0.75, 14),
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(0.75, 0.92, 1, 0) },
+        { time: 0.12, color: new BABYLON.Color4(1, 1, 1, 0.92) },
+        { time: 0.45, color: new BABYLON.Color4(0.65, 0.82, 1, 0.72) },
+        { time: 1.0, color: new BABYLON.Color4(0.25, 0.45, 0.85, 0) }
+      ],
+      gravity: new BABYLON.Vector3(0, 0.5, 0),
+      limitVelocityDamping: 0.91,
+      renderingGroupId: 0
     }
   };
   
@@ -627,6 +654,62 @@
     console.log(`🔥 Removed ${effectType || 'all'} particle effects from ${building.name}`);
   }
   
+  fx.ensureAgoraCaptureSparkles = function(agora) {
+    if (!scene || !agora || !agora.mesh) return null;
+    if (agora._agoraCapSparkPS) return agora._agoraCapSparkPS;
+
+    const preset = ParticlePresets.agoraCaptureSpark;
+    if (!preset) return null;
+
+    const emitter = new BABYLON.TransformNode('agoraCapSparkEmitter', scene);
+    emitter.parent = agora.mesh;
+    emitter.position.y = 0.42;
+
+    agora.mesh.computeWorldMatrix(true);
+    const scaledOptions = applyParticleScale({}, preset);
+    const ps = createParticleSystem(preset, BABYLON.Vector3.Zero(), scaledOptions);
+    if (!ps) {
+      emitter.dispose();
+      return null;
+    }
+    ps.emitter = emitter;
+    ps._buildingRef = agora;
+    ps._isAgoraCapSpark = true;
+    ps.start();
+    agora._agoraCapSparkEmitterTNode = emitter;
+    agora._agoraCapSparkPS = ps;
+    return ps;
+  };
+
+  fx.syncAgoraCaptureSparkles = function(agora, radiusScale, progress01, contested) {
+    const ps = agora._agoraCapSparkPS;
+    const emitter = agora._agoraCapSparkEmitterTNode;
+    if (!ps || !emitter) return;
+    const s = Math.max(0.12, Math.min(1.25, radiusScale || 1));
+    emitter.scaling.set(s, 1, s);
+    const p = Math.max(0, Math.min(1, progress01 || 0));
+    let rate = 14 + p * 52;
+    if (contested) rate += 28;
+    ps.emitRate = rate;
+  };
+
+  fx.disposeAgoraCaptureSparkles = function(agora) {
+    if (!agora) return;
+    if (agora._agoraCapSparkPS) {
+      try {
+        agora._agoraCapSparkPS.stop();
+        agora._agoraCapSparkPS.dispose();
+      } catch (_) {}
+      agora._agoraCapSparkPS = null;
+    }
+    if (agora._agoraCapSparkEmitterTNode) {
+      try {
+        agora._agoraCapSparkEmitterTNode.dispose();
+      } catch (_) {}
+      agora._agoraCapSparkEmitterTNode = null;
+    }
+  };
+
   // Create a simple particle effect at a position
   fx.createParticleEffect = function(effectType, position, options = {}) {
     const preset = ParticlePresets[effectType];

@@ -2032,7 +2032,7 @@ function getRandomColor() {
       }
     }
     
-    // Handle double-click detection for left mouse button (mouse only; touch handled in touch.js)
+    // Handle double-click detection for left mouse button (mouse; touch uses touch.js double-tap → triggerSpecialAbilityAt)
     if (e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 0) { // Left click only
       const currentTime = Date.now();
       const distance = lastClickPosition ? Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2) : Infinity;
@@ -3569,12 +3569,22 @@ function getRandomColor() {
               if ((window.player.resources?.[res] || 0) < amt) { canAfford = false; break; }
             }
             if (canAfford) {
-              window.currentMatch.submitCommand({
-                type: 'convert',
-                playerId: window.player.id,
-                unitId: unit.id,
-                targetType: 'brigand'
-              });
+              if (window.currentMatch?.requestUnitConversion) {
+                window.currentMatch.requestUnitConversion({
+                  reason: 'player_upgrade',
+                  playerId: window.player.id,
+                  unitId: unit.id,
+                  targetType: 'brigand',
+                  requireHost: false
+                });
+              } else {
+                window.currentMatch.submitCommand({
+                  type: 'convert',
+                  playerId: window.player.id,
+                  unitId: unit.id,
+                  targetType: 'brigand'
+                });
+              }
             }
           }
           return;

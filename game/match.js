@@ -943,6 +943,96 @@
       return id.length > 6 ? id.slice(-6) : id;
     }
 
+    buildConvertCommand(options = {}) {
+      const {
+        playerId,
+        unitId,
+        targetType,
+        sourceType = null,
+        resetHealth = false,
+        postConvertBehavior = null,
+        postConvertParams = null
+      } = options;
+
+      const command = {
+        type: 'convert',
+        playerId,
+        unitId,
+        targetType
+      };
+      if (sourceType) command.sourceType = sourceType;
+      if (resetHealth === true) command.resetHealth = true;
+      if (postConvertBehavior) command.postConvertBehavior = postConvertBehavior;
+      if (postConvertParams) command.postConvertParams = postConvertParams;
+      return command;
+    }
+
+    requestUnitConversion(options = {}) {
+      const {
+        playerId,
+        unitId,
+        targetType,
+        resetHealth = false,
+        postConvertBehavior = null,
+        postConvertParams = null,
+        reason = 'unspecified',
+        requireHost = false,
+        pendingFlag = null
+      } = options;
+
+      if (!playerId || !unitId || !targetType) {
+        return false;
+      }
+
+      const liveMultiplayer = this.isLiveMultiplayerMatch();
+      if (requireHost && liveMultiplayer && !this.isHost()) {
+        return false;
+      }
+
+      const unit = this.getUnitById(unitId);
+      if (!unit) {
+        return false;
+      }
+      if (pendingFlag && unit && unit[pendingFlag]) {
+        return false;
+      }
+
+      const command = this.buildConvertCommand({
+        playerId,
+        unitId,
+        targetType,
+        sourceType: unit.type || null,
+        resetHealth,
+        postConvertBehavior,
+        postConvertParams
+      });
+
+      if (liveMultiplayer) {
+        console.log('🧬 CONVERT TRACE request', {
+          tick: this.tick,
+          reason,
+          requireHost,
+          playerId,
+          unitId,
+          fromType: unit?.type || null,
+          toType: targetType
+        });
+      }
+
+      if (pendingFlag && unit) {
+        unit[pendingFlag] = true;
+      }
+
+      const queued = liveMultiplayer
+        ? this.submitCommand(command)
+        : (this.executeConvertCommand(command), true);
+
+      if (!queued && pendingFlag && unit) {
+        unit[pendingFlag] = false;
+      }
+      return queued;
+    }
+
     shouldTraceMoveCommand(command) {
       return !!(command && command.type === 'move' && this.isLiveMultiplayerMatch());
     }
@@ -2058,6 +2148,7 @@
           playerNorm: normalizedPlayerId || null,
           unitId: cmd.unitId || null,
           fromType,
+          expectedSourceType: cmd.sourceType || null,
           toType: cmd.targetType || null,
           resetHealth: cmd.resetHealth === true,
           postConvertBehavior: cmd.postConvertBehavior || null
@@ -2074,6 +2165,12 @@
       const allowedConversions = { villager: ['brigand'], brigand: ['villager'] };
       if (!allowedConversions[unit.type] || !allowedConversions[unit.type].includes(cmd.targetType)) {
         console.warn(`⚠️ Cannot convert ${unit.type} to ${cmd.targetType}`);
+        unit.isConverting = false;
+        return;
+      }
+
+      if (cmd.sourceType && unit.type !== cmd.sourceType) {
+        console.warn(`⚠️ Skipping convert due to sourceType mismatch: unit=${unit.type}, expected=${cmd.sourceType}, target=${cmd.targetType}, unitId=${cmd.unitId}`);
         unit.isConverting = false;
         return;
       }
@@ -2187,6 +2284,8 @@
         }
       }
       unit.mesh = null;
+      unit._pendingAutoRevertConvert = false;
+      unit._pendingDefeatConvert = false;
       
       // Create new unit of target type at same position
       // CRITICAL: Pass owner AND id in constructor options so commands still reference the same unit!
@@ -2472,26 +2571,14 @@
 
         const player = this.getPlayerById(unit.owner);
         if (!player) continue;
-        if (liveMultiplayer) {
-          // Deduplicate while the lockstep command is in-flight.
-          if (unit._pendingAutoRevertConvert) continue;
-          const queued = this.submitCommand({
-            type: 'convert',
-            playerId: unit.owner,
-            unitId: unit.id,
-            targetType: 'villager'
-          });
-          if (queued) {
-            unit._pendingAutoRevertConvert = true;
-          }
-        } else {
-          this.executeConvertCommand({
-            type: 'convert',
-            playerId: unit.owner,
-            unitId: unit.id,
-            targetType: 'villager'
-          });
-        }
+        this.requestUnitConversion({
+          reason: 'auto_revert',
+          playerId: unit.owner,
+          unitId: unit.id,
+          targetType: 'villager',
+          requireHost: true,
+          pendingFlag: '_pendingAutoRevertConvert'
+        });
       }
     }
 

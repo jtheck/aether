@@ -36,8 +36,18 @@
     };
   }
 
+  function boostChromaRgb(rgb, satMul) {
+    const lum = 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+    const s = satMul;
+    return {
+      r: Math.min(1, Math.max(0, lum + (rgb.r - lum) * s)),
+      g: Math.min(1, Math.max(0, lum + (rgb.g - lum) * s)),
+      b: Math.min(1, Math.max(0, lum + (rgb.b - lum) * s))
+    };
+  }
+
   function resolveAgoraAttackerRgb01(agora) {
-    const neutral = { r: 0.82, g: 0.84, b: 0.88 };
+    const neutral = { r: 0.38, g: 0.4, b: 0.46 };
     const capBy = agora.contestedBy;
     if (capBy && capBy !== 'defenders' && capBy !== 'multiple') {
       const hex = window.getTeamColorForOwner ? window.getTeamColorForOwner(capBy) : null;
@@ -60,11 +70,13 @@
 
   function paintAgoraCaptureHealthDots(entity) {
     const p = Math.max(0, Math.min(1, (entity.captureProgress || 0) / 100));
-    const def = hexToRgb01(
+    let def = hexToRgb01(
       window.getTeamColorForOwner ? window.getTeamColorForOwner(entity.owner) : '#8A8A8A'
     );
-    const neu = { r: 0.82, g: 0.84, b: 0.88 };
-    const att = resolveAgoraAttackerRgb01(entity);
+    def = boostChromaRgb(def, 1.42);
+    const neu = { r: 0.38, g: 0.4, b: 0.46 };
+    let att = resolveAgoraAttackerRgb01(entity);
+    att = boostChromaRgb(att, 1.42);
     const contested = !!entity.contested;
     const tPulse = contested ? 0.55 + 0.45 * Math.sin(Date.now() * 0.004) : 1;
 
@@ -86,17 +98,22 @@
       }
       if (contested) {
         rgb = {
-          r: Math.min(1, rgb.r + 0.16 * tPulse),
-          g: Math.min(1, rgb.g + 0.1 * tPulse),
-          b: rgb.b * 0.92
+          r: Math.min(1, rgb.r + 0.22 * tPulse),
+          g: Math.min(1, rgb.g + 0.14 * tPulse),
+          b: rgb.b * 0.88
         };
       }
       _capRgb.r = rgb.r;
       _capRgb.g = rgb.g;
       _capRgb.b = rgb.b;
+      // Unlit chips: full-white emissive blows out tint; drive hue from diffuse + modest matching emissive.
       mat.diffuseColor.copyFromFloats(_capRgb.r, _capRgb.g, _capRgb.b);
-      mat.emissiveColor.copyFromFloats(1, 1, 1);
-      mat.alpha = contested ? 0.75 + 0.25 * tPulse : 1;
+      mat.emissiveColor.copyFromFloats(
+        _capRgb.r * 0.52,
+        _capRgb.g * 0.52,
+        _capRgb.b * 0.52
+      );
+      mat.alpha = contested ? 0.78 + 0.22 * tPulse : 1;
     }
   }
 

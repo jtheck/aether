@@ -1578,7 +1578,123 @@ function processWorkProduction(building) {
   building.lastWorkTick = currentTick;
 }
 
-// Agora capture: TF2-style progress on the five health chips only (no ground disc / torus).
+// Agora capture: chips + shrinking torus ring + spark particles (occupation radius matches match.js).
+const AGORA_CAP_OCC_TILES = 5;
+
+function hexToColor3ForAgoraVfx(hex) {
+  if (!hex || typeof hex !== 'string') return new BABYLON.Color3(0.55, 0.55, 0.58);
+  const c = hex.replace('#', '').trim();
+  if (c.length !== 6) return new BABYLON.Color3(0.55, 0.55, 0.58);
+  return new BABYLON.Color3(
+    parseInt(c.slice(0, 2), 16) / 255,
+    parseInt(c.slice(2, 4), 16) / 255,
+    parseInt(c.slice(4, 6), 16) / 255
+  );
+}
+
+function agoraAttackerColor3ForRing(agora) {
+  const cb = agora.contestedBy;
+  if (cb && cb !== 'defenders' && cb !== 'multiple' && window.getTeamColorForOwner) {
+    return hexToColor3ForAgoraVfx(window.getTeamColorForOwner(cb));
+  }
+  const m = window.currentMatch;
+  if (m && m.players && agora.owner && typeof m.areOwnersHostile === 'function') {
+    for (let i = 0; i < m.players.length; i++) {
+      const p = m.players[i];
+      const pid = p && (p.id || p);
+      if (!pid || (m.eliminatedPlayers && m.eliminatedPlayers.has(pid))) continue;
+      if (m.areOwnersHostile(pid, agora.owner)) {
+        return hexToColor3ForAgoraVfx(
+          window.getTeamColorForOwner ? window.getTeamColorForOwner(pid) : '#aa5555'
+        );
+      }
+    }
+  }
+  return new BABYLON.Color3(0.5, 0.52, 0.58);
+}
+
+function agoraCaptureRingRadiusWorld(progress01) {
+  const TILE = window.TILE_SIZE || 4;
+  const rMax = AGORA_CAP_OCC_TILES * TILE;
+  const p = Math.max(0, Math.min(1, progress01));
+  const shrink = 0.82 * p;
+  return Math.max(rMax * 0.13, rMax * (1 - shrink));
+}
+
+function disposeAgoraCaptureShrinkRingAndSparkles(agora) {
+  if (agora._captureShrinkRing) {
+    try { agora._captureShrinkRing.dispose(); } catch (_) {}
+    agora._captureShrinkRing = null;
+  }
+  agora._captureShrinkRingMat = null;
+  agora._captureShrinkRingRefR = undefined;
+  agora._captureShrinkThick = undefined;
+  if (window.fx && window.fx.disposeAgoraCaptureSparkles) {
+    window.fx.disposeAgoraCaptureSparkles(agora);
+  }
+}
+
+function ensureAgoraCaptureShrinkRing(agora, scene) {
+  if (agora._captureShrinkRing) return;
+  const refR = AGORA_CAP_OCC_TILES * (window.TILE_SIZE || 4);
+  const thick = 0.34;
+  const torus = BABYLON.MeshBuilder.CreateTorus('agoraCapShrinkRing', {
+    diameter: 2 * refR + thick,
+    thickness: thick,
+    tessellation: 40
+  }, scene);
+  torus.parent = agora.mesh;
+  torus.position.y = 0.52;
+  torus.rotation.x = Math.PI / 2;
+  const mat = new BABYLON.StandardMaterial('agoraCapShrinkRingMat', scene);
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  mat.alpha = 0.52;
+  torus.material = mat;
+  torus.isPickable = false;
+  torus.renderingGroupId = 0;
+  agora._captureShrinkRing = torus;
+  agora._captureShrinkRingMat = mat;
+  agora._captureShrinkRingRefR = refR;
+  agora._captureShrinkThick = thick;
+}
+
+function syncAgoraCaptureShrinkRing(agora, captureProgress, isContested) {
+  const ring = agora._captureShrinkRing;
+  const mat = agora._captureShrinkRingMat;
+  if (!ring || !mat) return;
+  if (typeof ring.isDisposed === 'function' && ring.isDisposed()) return;
+
+  const refR = agora._captureShrinkRingRefR;
+  const thick = agora._captureShrinkThick || 0.34;
+  const p01 = Math.max(0, Math.min(1, captureProgress / 100));
+  const r = agoraCaptureRingRadiusWorld(p01);
+  const d0 = 2 * refR + thick;
+  const d = 2 * r + thick;
+  ring.scaling.setAll(d / d0);
+
+  const cDef = window.getTeamColorForOwner
+    ? hexToColor3ForAgoraVfx(window.getTeamColorForOwner(agora.owner))
+    : new BABYLON.Color3(0.5, 0.5, 0.55);
+  const cAtk = agoraAttackerColor3ForRing(agora);
+  const neutral = new BABYLON.Color3(0.42, 0.45, 0.52);
+  let col;
+  if (p01 <= 0.5) {
+    col = BABYLON.Color3.Lerp(cDef, neutral, p01 * 2);
+  } else {
+    col = BABYLON.Color3.Lerp(neutral, cAtk, (p01 - 0.5) * 2);
+  }
+  const pulse = isContested ? 0.55 + 0.45 * Math.sin(Date.now() * 0.005) : 1;
+  mat.emissiveColor = new BABYLON.Color3(
+    col.r * (0.42 + 0.35 * pulse),
+    col.g * (0.42 + 0.35 * pulse),
+    col.b * (0.42 + 0.35 * pulse)
+  );
+  mat.diffuseColor = new BABYLON.Color3(col.r * 0.55, col.g * 0.55, col.b * 0.55);
+  mat.alpha = isContested ? 0.38 + 0.28 * pulse : 0.42 + 0.38 * p01;
+}
+
+// Legacy: old filled progress cylinder + chunky warning torus (removed; chips + thin shrink ring + sparks instead).
 function disposeLegacyAgoraCaptureDiscAndRing(visuals) {
   if (!visuals) return;
   if (visuals.progressDisc) {
@@ -1639,7 +1755,18 @@ function updateCapturePointVisuals(agora) {
       window.showHealthDots(agora);
       window.updateHealthDots(agora);
     }
+    ensureAgoraCaptureShrinkRing(agora, window.gfx.scene);
+    syncAgoraCaptureShrinkRing(agora, captureProgress, isContested);
+    if (window.fx && window.fx.ensureAgoraCaptureSparkles && window.fx.syncAgoraCaptureSparkles) {
+      window.fx.ensureAgoraCaptureSparkles(agora);
+      const p01 = Math.max(0, Math.min(1, captureProgress / 100));
+      const r = agoraCaptureRingRadiusWorld(p01);
+      const rMax = AGORA_CAP_OCC_TILES * (window.TILE_SIZE || 4);
+      const scale = rMax > 1e-3 ? r / rMax : 1;
+      window.fx.syncAgoraCaptureSparkles(agora, scale, p01, isContested);
+    }
   } else {
+    disposeAgoraCaptureShrinkRingAndSparkles(agora);
     const isSelected = window.player && window.player.selectedBuilding === agora;
     if (!isSelected && agora.healthDotsContainer && window.hideHealthDots) {
       window.hideHealthDots(agora);

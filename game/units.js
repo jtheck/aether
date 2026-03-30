@@ -3388,20 +3388,7 @@ if (typeof window !== 'undefined') {
         // Brigands don't die — they drop their weapon, revert to a villager, and flee home
         if (unit.type === 'brigand') {
             if (window.isMultiplayer && window.currentMatch) {
-                // Live lockstep: never mutate unit type directly from local death callbacks.
-                // Host submits one deterministic convert command; peers wait to execute it.
                 const match = window.currentMatch;
-                if (match.isLiveMultiplayerMatch && match.isLiveMultiplayerMatch()) {
-                    if (unit._pendingDefeatConvert) {
-                        return;
-                    }
-                    unit._pendingDefeatConvert = true;
-
-                    if (!match.isHost || !match.isHost()) {
-                        return;
-                    }
-                }
-
                 const owner = unit.owner;
                 const ownerPlayer = window.findPlayerByUnitOwner?.(owner);
                 const pos = unit.pb?.state?.loc;
@@ -3423,25 +3410,32 @@ if (typeof window !== 'undefined') {
                         }
                     }
                 }
-
-                const convertCommand = {
-                    type: 'convert',
-                    playerId: owner,
-                    unitId: unit.id,
-                    targetType: 'villager',
-                    resetHealth: true,
-                    postConvertBehavior: homePos ? 'run' : 'linger',
-                    postConvertParams: homePos
-                        ? { targetPoint: homePos }
-                        : { center: { x: pos?.x || 0, z: pos?.z || 0 } }
-                };
-                if (match.isLiveMultiplayerMatch && match.isLiveMultiplayerMatch()) {
-                    const queued = match.submitCommand(convertCommand);
-                    if (!queued) {
-                        unit._pendingDefeatConvert = false;
-                    }
+                if (typeof match.requestUnitConversion === 'function') {
+                    match.requestUnitConversion({
+                        reason: 'brigand_defeat',
+                        playerId: owner,
+                        unitId: unit.id,
+                        targetType: 'villager',
+                        resetHealth: true,
+                        postConvertBehavior: homePos ? 'run' : 'linger',
+                        postConvertParams: homePos
+                            ? { targetPoint: homePos }
+                            : { center: { x: pos?.x || 0, z: pos?.z || 0 } },
+                        requireHost: true,
+                        pendingFlag: '_pendingDefeatConvert'
+                    });
                 } else {
-                    match.executeConvertCommand(convertCommand);
+                    match.executeConvertCommand({
+                        type: 'convert',
+                        playerId: owner,
+                        unitId: unit.id,
+                        targetType: 'villager',
+                        resetHealth: true,
+                        postConvertBehavior: homePos ? 'run' : 'linger',
+                        postConvertParams: homePos
+                            ? { targetPoint: homePos }
+                            : { center: { x: pos?.x || 0, z: pos?.z || 0 } }
+                    });
                 }
                 return;
             }

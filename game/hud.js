@@ -1796,6 +1796,64 @@
     return null;
   }
 
+  function meshBelongsToRadialMenu(mesh) {
+    if (!mesh || !radialMenu) return false;
+    let n = mesh;
+    while (n) {
+      if (n === radialMenu) return true;
+      n = n.parent;
+    }
+    return false;
+  }
+
+  /** True if a client point hits pickable 3D radial menu geometry (canvas picks game first otherwise). */
+  hud.isTouchOverOpenRadialMenu = function(clientX, clientY) {
+    if (!radialMenuVisible || !hud.scene || !hud.canvas || !radialMenu || !window.USE_3D_HUD) return false;
+    const rect = hud.canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) return false;
+    const pick = hud.scene.pick(x, y, (m) => m.isPickable && meshBelongsToRadialMenu(m));
+    return !!(pick && pick.hit);
+  };
+
+  function applyRadialMenuHoverAtCanvas(offsetX, offsetY) {
+    if (!radialMenuVisible || !hud.scene) return;
+
+    const pick = hud.scene.pick(
+      offsetX,
+      offsetY,
+      (m) => m.isPickable && m.name.startsWith('hitbox_')
+    );
+
+    const hitMesh = pick && pick.hit ? pick.pickedMesh : null;
+    const item = findMenuItemByMesh(hitMesh);
+
+    if (item && item !== hoveredItem) {
+      if (hoveredContainer) hoveredContainer.scaling.setAll(1.0);
+
+      hoveredItem = item;
+      hoveredContainer = item.container;
+      if (hoveredContainer) hoveredContainer.scaling.setAll(1.15);
+      if (hud.scene) hud.scene.hoverCursor = 'pointer';
+      showTooltipForItem(item);
+    } else if (!item && hoveredItem) {
+      hideTooltip();
+    }
+  }
+
+  /** Drive the same hover + cost tooltip as mouse move, using screen client coordinates (touch). */
+  hud.updateRadialMenuHoverAtClient = function(clientX, clientY) {
+    if (!hud.canvas || !radialMenuVisible) return;
+    const rect = hud.canvas.getBoundingClientRect();
+    applyRadialMenuHoverAtCanvas(clientX - rect.left, clientY - rect.top);
+  };
+
+  /** Call when a menu-bound touch lifts so scale/tooltip matches mouse-out. */
+  hud.clearRadialMenuHoverHighlight = function() {
+    hideTooltip();
+  };
+
   // Scene pointer observable for hover detection - only active when menu is visible
   function initMenuHoverDetection() {
     if (!hud.scene) return;
@@ -1803,27 +1861,7 @@
       if (!radialMenuVisible) return;
       if (pointerInfo.type !== BABYLON.PointerEventTypes.POINTERMOVE) return;
 
-      const pick = hud.scene.pick(
-        pointerInfo.event.offsetX,
-        pointerInfo.event.offsetY,
-        (m) => m.isPickable && m.name.startsWith('hitbox_')
-      );
-
-      const hitMesh = pick && pick.hit ? pick.pickedMesh : null;
-      const item = findMenuItemByMesh(hitMesh);
-
-      if (item && item !== hoveredItem) {
-        // Unhover previous
-        if (hoveredContainer) hoveredContainer.scaling.setAll(1.0);
-
-        hoveredItem = item;
-        hoveredContainer = item.container;
-        if (hoveredContainer) hoveredContainer.scaling.setAll(1.15);
-        if (hud.scene) hud.scene.hoverCursor = 'pointer';
-        showTooltipForItem(item);
-      } else if (!item && hoveredItem) {
-        hideTooltip();
-      }
+      applyRadialMenuHoverAtCanvas(pointerInfo.event.offsetX, pointerInfo.event.offsetY);
     });
   }
 
@@ -1831,6 +1869,9 @@
   const origHideRadialMenu = hud.hideRadialMenu;
   hud.hideRadialMenu = function() {
     hideTooltip();
+    if (window.touch && typeof window.touch.clear3DRadialMenuTouchPointers === 'function') {
+      window.touch.clear3DRadialMenuTouchPointers();
+    }
     if (origHideRadialMenu) origHideRadialMenu.apply(this, arguments);
   };
 

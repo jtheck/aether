@@ -64,6 +64,33 @@ let currentAnchor = null;
 let activeButtons = [];
 let menuDepth = 0;
 let menuOpenedAt = 0; // Track when menu was last opened to prevent immediate close
+let radialMenu2DTouchHoverEl = null;
+
+function clearRadialMenu2DTouchHover() {
+  if (radialMenu2DTouchHoverEl) {
+    radialMenu2DTouchHoverEl.classList.remove('touch-hover');
+    radialMenu2DTouchHoverEl = null;
+  }
+}
+
+function onDocumentPointerMoveFor2DMenuHover(e) {
+  if (USE_3D_HUD) return;
+  if (!e.buttons) return;
+  if (!activeButtons.length) return;
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const btn = el && el.closest('.radial-menu-button');
+  if (radialMenu2DTouchHoverEl && radialMenu2DTouchHoverEl !== btn) {
+    radialMenu2DTouchHoverEl.classList.remove('touch-hover');
+    radialMenu2DTouchHoverEl = null;
+  }
+  if (btn && activeButtons.includes(btn) && btn.classList.contains('visible')) {
+    btn.classList.add('touch-hover');
+    radialMenu2DTouchHoverEl = btn;
+  } else if (radialMenu2DTouchHoverEl) {
+    radialMenu2DTouchHoverEl.classList.remove('touch-hover');
+    radialMenu2DTouchHoverEl = null;
+  }
+}
 
 // Expose state variables globally
 window.currentAnchor = currentAnchor;
@@ -357,6 +384,7 @@ function showSubmenu(parentButton, submenuItems) {
 
 // Hide buttons
 function hideButtons(buttons) {
+  clearRadialMenu2DTouchHover();
   buttons.forEach((button) => {
     button.classList.remove('visible');
     button.remove();
@@ -857,6 +885,10 @@ function initMenu() {
     window.menuDepth = menuDepth;
     window.currentAnchor = currentAnchor;
   });
+
+  document.addEventListener('pointermove', onDocumentPointerMoveFor2DMenuHover, { passive: true });
+  document.addEventListener('pointerup', clearRadialMenu2DTouchHover, true);
+  document.addEventListener('pointercancel', clearRadialMenu2DTouchHover, true);
 }
 
 // Initialize when the document is ready

@@ -14,6 +14,10 @@
       doubleTapMaxDistPx: 40,
       twoFingerTapMaxTimeMs: 300,
       twoFingerTapMaxMovePx: 16,
+      // Min change in finger span (px) from the moment both contacts exist before unified pinch can start
+      twoFingerGestureMinSpanDeltaPx: 6,
+      // Second finger must land within this many ms of the first contact's down time to count as one simultaneous 2-finger chord (unified pinch/pan). Later = two independent 1-finger streams.
+      twoFingerChordMaxStaggerMs: 90,
       twoFingerDoubleTapCenterMaxMovePx: 80,
       rotateSensitivity: 1.8,
       pinchSensitivity: 1.5,
@@ -27,7 +31,8 @@
       gestureSmoothingFactor: 0.3,
       dragStartThresholdPx: 15,
       suppressSingleTapAfterTwoFingerMs: 300,
-      initialPinchMinSpanPx: 20,
+      // Two-finger pinch session can start at any span ≥ this (px). 0 = as soon as both contacts exist and separate.
+      initialPinchMinSpanPx: 0,
       buildPlaceMinHoldMs: 150,
       // Zone-based camera control (edge-started: rotate in rim; past rim = zoom; tiny linear handoff — set 0 for hard cut)
       edgeZoneWidthPx: 60,
@@ -40,7 +45,10 @@
       // Center: brief hold → RMB-style pan; big/fast move → lasso; double-tap → special ability (see onPointerDown)
       centerPanHoldMs: 95,
       centerPanHoldMaxMovePx: 10,
-      centerLassoVelocityPxPerMs: 2.0
+      centerLassoVelocityPxPerMs: 2.0,
+      // Mid-screen Move/Attack/ability popup: single-finger hold, two-finger tap, contextmenu (e.g. RMB).
+      // Off until UX is reworked.
+      enableTapHoldActionPopup: false
     }, options || {});
 
     // Expose runtime toggles for testing one gesture at a time
@@ -63,6 +71,8 @@
 
     const activePointers = new Map(); // pointerId -> PointerState
     const pointerOrder = []; // Track order of active pointers
+    /** 3D radial menu is drawn on the canvas; those touches must not run game gestures (double-tap, pan, action popup). */
+    const radialMenuTouchPointerIds = new Set();
 
     // Cache canvas rect, update on resize
     let cachedCanvasRect = canvas.getBoundingClientRect();
@@ -100,6 +110,10 @@
     let gesturePrimaryFingerIds = null; // Lock the two finger IDs for the entire gesture
     let gestureEngaged = { pinch: false, rotate: false }; // Track which gestures have engaged
     let gestureStableFrames = 0; // Count consecutive clean frames before allowing engagement
+    /** Snapshot of first two contacts when exactly two pointers are down — avoids starting pinch on motionless 2-finger tap. Null if not in that state. */
+    let twoFingerLanding = null;
+    /** True only while both contacts are a simultaneous chord (see twoFingerChordMaxStaggerMs); unified pinch/pan runs only then — never upgrading a solo 1-finger action. */
+    let twoFingerChordSession = false;
     
     // Momentum/inertia state
     let gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
@@ -152,26 +166,41 @@
       const m = config.centerPanHoldMaxMovePx;
       return m * m;
     };
-    let panHoldTimer = null;
-    let panHoldPointerId = null;
+    /** True while we're still within the brief center hold window (pan vs box-select disambiguation). */
+    function inCenterPanHoldGrace(ps) {
+      if (!ps || ps.startedInEdge || ps.isEdgeFinger || ps.isPanning) return false;
+      if (!panHoldTimers.has(ps.id)) return false;
+      if ((now() - ps.startTime) >= config.centerPanHoldMs) return false;
+      const mdx = ps.x - ps.startX;
+      const mdy = ps.y - ps.startY;
+      return (mdx * mdx + mdy * mdy) <= centerPanHoldMaxMoveSq();
+    }
+    /** One pending pan-hold timeout per pointer so a second finger can chain pan without cancelling the first. */
+    const panHoldTimers = new Map();
 
-    function cancelPanHoldTimer() {
-      if (panHoldTimer) {
-        clearTimeout(panHoldTimer);
-        panHoldTimer = null;
+    function cancelPanHoldTimerFor(pointerId) {
+      if (pointerId == null) return;
+      const t = panHoldTimers.get(pointerId);
+      if (t != null) {
+        clearTimeout(t);
+        panHoldTimers.delete(pointerId);
       }
-      panHoldPointerId = null;
+    }
+
+    function cancelAllPanHoldTimers() {
+      for (const t of panHoldTimers.values()) {
+        clearTimeout(t);
+      }
+      panHoldTimers.clear();
     }
 
     function startPanHoldTimer(pointerId) {
-      cancelPanHoldTimer();
-      panHoldPointerId = pointerId;
+      cancelPanHoldTimerFor(pointerId);
       const delay = Math.max(1, Number(config.centerPanHoldMs) || 95);
-      panHoldTimer = setTimeout(() => {
-        panHoldTimer = null;
-        const id = panHoldPointerId;
-        panHoldPointerId = null;
-        const p = id != null ? activePointers.get(id) : null;
+      const id = pointerId;
+      const timeoutId = setTimeout(() => {
+        panHoldTimers.delete(id);
+        const p = activePointers.get(id);
         if (!p || !p.isDown) return;
         if (p.isTouchDoubleForAbility || p.syntheticDownEmitted || p.isActioning || p.holdTriggered) return;
         if (p.startedInEdge || p.isEdgeFinger) return;
@@ -182,6 +211,7 @@
         p.isCenterFinger = true;
         cancelHoldTimer();
       }, delay);
+      panHoldTimers.set(pointerId, timeoutId);
     }
 
     function pickWorldForSpecialAbility(clientX, clientY) {
@@ -196,10 +226,13 @@
 
     function checkCenterFastStroke(ps) {
       if (ps.startedInEdge || ps.isEdgeFinger || ps.isPanning || ps.syntheticDownEmitted || ps.isActioning) return;
-      if (panHoldPointerId !== ps.id) return;
+      if (!panHoldTimers.has(ps.id)) return;
+      if (inCenterPanHoldGrace(ps)) return;
       const t = now();
       const dt = t - ps.velLastT;
       if (dt <= 0) return;
+      // Ignore coalesced micro-intervals — they inflate px/ms and falsely arm lasso.
+      if (dt < 12) return;
       const dx = ps.x - ps.velLastX;
       const dy = ps.y - ps.velLastY;
       const speed = Math.hypot(dx, dy) / dt;
@@ -207,7 +240,7 @@
       ps.velLastX = ps.x;
       ps.velLastY = ps.y;
       if (speed >= config.centerLassoVelocityPxPerMs) {
-        cancelPanHoldTimer();
+        cancelPanHoldTimerFor(ps.id);
         ps.lassoFastArmed = true;
       }
     }
@@ -256,7 +289,8 @@
         velLastX: e.clientX,
         velLastY: e.clientY,
         velLastT: now(),
-        lassoFastArmed: false
+        lassoFastArmed: false,
+        wasInGesture: false
       };
     }
 
@@ -285,29 +319,9 @@
         const a = activePointers.get(gesturePrimaryFingerIds[0]);
         const b = activePointers.get(gesturePrimaryFingerIds[1]);
         if (!a || !b) return null; // One of the locked fingers was lifted
-        
-        // CRITICAL: Validate both pointers have recent updates
-        // Mobile browsers (Android/iOS) batch touch events aggressively for battery savings
-        const isMobileBrowser = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
-        
-        // Desktop touch (Windows tablets, etc.) works great with strict checks
-        // Allow bypass for testing/debugging
-        if (!isMobileBrowser && !touch._bypassStaleness) {
-          const currentTime = now();
-          const maxStaleness = 50; // ms
-          const aAge = currentTime - a.lastTime;
-          const bAge = currentTime - b.lastTime;
-          
-          // Reject if either finger is stale or if there's a huge age difference
-          const extremelyStale = (aAge > maxStaleness) || (bAge > maxStaleness);
-          const hugeDifference = Math.abs(aAge - bAge) > 30; // One finger way behind the other
-          
-          if (extremelyStale || hugeDifference) {
-            return null;
-          }
-        }
-        // Mobile browsers: skip staleness checks, rely on anomaly detection instead
-        
+        // Use last-known positions for the quiet finger — do not drop the pair when one contact
+        // has no fresh pointermove (common on desktop touch). Staleness caused null → endGesture /
+        // or parallel lasso from 1-finger move handling with stale startX/Y.
         return [a, b];
       }
       
@@ -329,6 +343,59 @@
       const dist = Math.hypot(dx, dy);
       const ang = Math.atan2(dy, dx);
       return { dist, ang };
+    }
+
+    function captureTwoFingerLandingFromContacts() {
+      if (pointerOrder.length < 2) {
+        twoFingerLanding = null;
+        return;
+      }
+      const a = activePointers.get(pointerOrder[0]);
+      const b = activePointers.get(pointerOrder[1]);
+      if (!a || !b) {
+        twoFingerLanding = null;
+        return;
+      }
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      twoFingerLanding = {
+        ax: a.x,
+        ay: a.y,
+        bx: b.x,
+        by: b.y,
+        dist: Math.hypot(dx, dy)
+      };
+    }
+
+    /** Call when activePointers.size === 2 after a new pointer was added. Sets twoFingerChordSession — never true if the first contact already committed to solo behavior. */
+    function syncTwoFingerChordSession() {
+      if (activePointers.size !== 2 || pointerOrder.length < 2) {
+        twoFingerChordSession = false;
+        return;
+      }
+      const a = activePointers.get(pointerOrder[0]);
+      const b = activePointers.get(pointerOrder[1]);
+      if (!a || !b) {
+        twoFingerChordSession = false;
+        return;
+      }
+      const maxStagger = Math.max(1, Number(config.twoFingerChordMaxStaggerMs) || 90);
+      if (Math.abs(a.startTime - b.startTime) > maxStagger) {
+        twoFingerChordSession = false;
+        return;
+      }
+      const chordEligible = p =>
+        !p.syntheticDownEmitted &&
+        !p.isActioning &&
+        !p.isPanning &&
+        !p.isEdgeFinger &&
+        !p.isTouchDoubleForAbility &&
+        !p.holdTriggered;
+      if (!chordEligible(a) || !chordEligible(b)) {
+        twoFingerChordSession = false;
+        return;
+      }
+      twoFingerChordSession = true;
     }
     
     function computeRotationAngle(a, b, centroid) {
@@ -764,6 +831,7 @@
     
     // === TAP-HOLD DETECTION ===
     function startHoldTimer(pointerId, clientX, clientY) {
+      if (!config.enableTapHoldActionPopup) return;
       cancelHoldTimer();
       holdPointerId = pointerId;
       holdPosition = { x: clientX, y: clientY };
@@ -951,24 +1019,58 @@
       sendSyntheticPointer('pointerup', x, y, 2);
     }
 
+    /** After a unified chord ends with one finger still down, re-anchor movement from the current position so the survivor does not inherit a huge "drag" from the original chord down (fixes taps / selection extent). */
+    function soloTouchBaselineResetAfterChord(p) {
+      invalidateTime();
+      const t = now();
+      p.startX = p.x;
+      p.startY = p.y;
+      p.startTime = t;
+      p.velLastX = p.x;
+      p.velLastY = p.y;
+      p.velLastT = t;
+      p.lassoFastArmed = false;
+      cancelPanHoldTimerFor(p.id);
+      if (!p.startedInEdge && !p.isEdgeFinger && !p.isTouchDoubleForAbility) {
+        startPanHoldTimer(p.id);
+        startHoldTimer(p.id, p.x, p.y);
+      }
+    }
+
     function beginGestureIfNeeded() {
+      if (window.buildingSystem && window.buildingSystem.isPlacing) return;
+      if (!twoFingerChordSession) return;
       if (activePointers.size >= 2 && !gestureActive) {
         const pair = getTwoPrimaryPointers();
         if (!pair) return;
         const [a, b] = pair;
         const d = computeDistanceAndAngle(a, b);
-        // Require a minimum initial span to avoid explosive scales
-        if (d.dist < config.initialPinchMinSpanPx) {
+        const minSpan = Math.max(0, Number(config.initialPinchMinSpanPx) || 0);
+        if (d.dist < minSpan) {
           return;
         }
+        if (twoFingerLanding) {
+          const spanDelta = Math.abs(d.dist - twoFingerLanding.dist);
+          const aMoved = Math.hypot(a.x - twoFingerLanding.ax, a.y - twoFingerLanding.ay);
+          const bMoved = Math.hypot(b.x - twoFingerLanding.bx, b.y - twoFingerLanding.by);
+          const minSpanD = Math.max(0, Number(config.twoFingerGestureMinSpanDeltaPx) || 6);
+          const minFinger = Number(config.twoFingerTapMaxMovePx) || 16;
+          if (spanDelta < minSpanD && aMoved < minFinger && bMoved < minFinger) {
+            return;
+          }
+        }
+        twoFingerLanding = null;
         gestureActive = true;
         window.gestureInProgress = true;
+        for (const p of activePointers.values()) {
+          p.wasInGesture = false;
+        }
         
         // Stop any momentum when new gesture starts
         momentumActive = false;
         gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
         
-        // LOCK these two specific finger IDs
+        // LOCK the two chord pointerIds for the whole session — new touches never replace these; a 3rd contact ends the session instead.
         gesturePrimaryFingerIds = [a.id, b.id];
         
         // Store initial and last frame state
@@ -1002,22 +1104,20 @@
     function endGestureIfNeeded() {
       if (!gestureActive) return;
       
-      // End gesture if we have fewer than 2 pointers, OR if one of the locked gesture fingers is gone
-      const shouldEnd = activePointers.size < 2 || 
+      const shouldEnd = activePointers.size < 2 ||
+        activePointers.size > 2 ||
         (gesturePrimaryFingerIds && (!activePointers.has(gesturePrimaryFingerIds[0]) || !activePointers.has(gesturePrimaryFingerIds[1])));
       
       if (shouldEnd) {
-        // Mark remaining gesture fingers to prevent them from starting drag selections
         if (gesturePrimaryFingerIds) {
           for (const id of gesturePrimaryFingerIds) {
             const ps = activePointers.get(id);
             if (ps) {
-              ps.wasInGesture = true; // Flag to suppress drag behavior
+              ps.wasInGesture = true;
             }
           }
         }
         
-        // Activate momentum with current velocity
         momentumActive = true;
         
         gestureActive = false;
@@ -1027,11 +1127,19 @@
         gestureEngaged = { pinch: false, rotate: false };
         gestureStableFrames = 0;
         window.gestureInProgress = false;
-        // Restore camera auto-follow
         if (typeof window._prevCameraAutoFollow !== 'undefined') {
           window.cameraAutoFollowEnabled = window._prevCameraAutoFollow;
           delete window._prevCameraAutoFollow;
         }
+        if (activePointers.size === 1) {
+          for (const p of activePointers.values()) {
+            p.wasInGesture = false;
+            soloTouchBaselineResetAfterChord(p);
+          }
+        }
+        recentQuickUps.length = 0;
+        lastTwoTapTime = 0;
+        lastTwoTapPos = { x: 0, y: 0 };
       }
     }
 
@@ -1051,14 +1159,6 @@
       const [a, b] = pair;
       const cNow = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const da = computeDistanceAndAngle(a, b);
-      
-      // Check if this looks like a 2-finger tap (don't move camera)
-      const aMoveSq = distanceSq(a.startX, a.startY, a.x, a.y);
-      const bMoveSq = distanceSq(b.startX, b.startY, b.x, b.y);
-      const aDt = now() - a.startTime;
-      const bDt = now() - b.startTime;
-      const bothTapLike = (aMoveSq <= twoFingerTapMaxMovePxSq && bMoveSq <= twoFingerTapMaxMovePxSq && aDt <= config.twoFingerTapMaxTimeMs && bDt <= config.twoFingerTapMaxTimeMs);
-      if (bothTapLike) return;
       
       if (!window.gfx || !window.gfx.camera || !window.gfx.cameraTarget) return;
       const cam = window.gfx.camera;
@@ -1382,7 +1482,82 @@
       }
       return false;
     }
-    
+
+    function clearTwoFingerChordStateIfFewerThanTwo() {
+      if (activePointers.size < 2) {
+        twoFingerChordSession = false;
+        twoFingerLanding = null;
+      }
+    }
+
+    /** 1-finger move rules for this pointer only (pan / lasso / edge). Not used while a 2-finger chord is arming or a unified pinch is live. */
+    function applyOneFingerMove(ps) {
+      const dx = ps.x - ps.startX;
+      const dy = ps.y - ps.startY;
+      const movedSq = dx * dx + dy * dy;
+      const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
+
+      if (holdPointerId === ps.id) {
+        checkHoldMovement(ps.x, ps.y);
+      }
+      if (!ps.startedInEdge && !ps.isEdgeFinger && panHoldTimers.has(ps.id) && movedSq > centerPanHoldMaxMoveSq()) {
+        cancelPanHoldTimerFor(ps.id);
+      }
+      if (!ps.startedInEdge && !ps.isEdgeFinger) {
+        checkCenterFastStroke(ps);
+      }
+
+      if (ps.isPanning && !ps.startedInEdge) {
+        ps.isCenterFinger = true;
+        applyCenterPan(ps);
+        momentumActive = false;
+      } else if (movedSq >= dragThresholdSq && !inCenterPanHoldGrace(ps)) {
+        if (holdPointerId === ps.id) {
+          cancelHoldTimer();
+        }
+        if (panHoldTimers.has(ps.id)) {
+          cancelPanHoldTimerFor(ps.id);
+        }
+
+        if (ps.isEdgeFinger) {
+          applyEdgeZoneCamera(ps);
+          momentumActive = false;
+        } else if (ps.isActioning) {
+          ps.isCenterFinger = true;
+          if (ps.syntheticDownEmitted) {
+            sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+          }
+        } else if (ps.startedInEdge) {
+          ps.isEdgeFinger = true;
+          applyEdgeZoneCamera(ps);
+          momentumActive = false;
+        } else if (ps.holdTriggered) {
+          // no-op
+        } else {
+          const lassoStartSq = ps.lassoFastArmed ? dragThresholdSq : dragStartThresholdPxSq;
+          if (movedSq < lassoStartSq) {
+            // wait
+          } else {
+            ps.isCenterFinger = true;
+            ps.isActioning = true;
+            momentumActive = false;
+
+            if (!ps.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
+              sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
+              ps.syntheticDownEmitted = true;
+              lastSingleTapTime = 0;
+              lastSingleTapPos = null;
+              lastTapDownTime = 0;
+              lastTapDownPos = null;
+            }
+
+            if (ps.syntheticDownEmitted) {
+              sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
+            }
+          }
+        }
+      }
+    }
 
     function onPointerDown(e) {
       if (!isTouchLike(e)) return; // leave mouse to existing system
@@ -1393,6 +1568,17 @@
       // Check if tapping on the action popup - let it handle its own events
       if (isInsideActionPopup(e.clientX, e.clientY)) {
         return; // Let popup buttons handle the event
+      }
+
+      // 3D radial menu uses canvas picks — not battlefield touch (prevents false double-tap / action menu / stuck fingers).
+      if (window.USE_3D_HUD && window.hud && typeof window.hud.isTouchOverOpenRadialMenu === 'function' &&
+          window.hud.isRadialMenuVisible && window.hud.isRadialMenuVisible() &&
+          window.hud.isTouchOverOpenRadialMenu(e.clientX, e.clientY)) {
+        radialMenuTouchPointerIds.add(e.pointerId);
+        if (window.hud.updateRadialMenuHoverAtClient) {
+          window.hud.updateRadialMenuHoverAtClient(e.clientX, e.clientY);
+        }
+        return;
       }
       
       e.preventDefault();
@@ -1406,11 +1592,8 @@
         activePointers.set(e.pointerId, ps);
         pointerOrder.push(e.pointerId);
         
-        // Stop any active momentum when finger goes down
-        if (momentumActive) {
-          momentumActive = false;
-          gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
-        }
+        // Do not stop camera momentum on pointer down — quick taps (selection, etc.) should not kill inertia.
+        // Momentum clears when we actually engage camera control (pan, edge, pinch, lasso drag) on pointermove.
         
         const currentTime = now();
         
@@ -1429,7 +1612,7 @@
         const isDoubleTapForAbility = lastSingleTapPos && timeSinceUp < config.doubleTapDelayMs && distFromUpSq < doubleTapMaxDistPxSq;
         
         if (isDoubleTapForAbility && !ps.startedInEdge) {
-          cancelPanHoldTimer();
+          cancelAllPanHoldTimers();
           cancelHoldTimer();
           ps.isTouchDoubleForAbility = true;
           lastSingleTapTime = 0;
@@ -1447,11 +1630,48 @@
           lastTapDownTime = currentTime;
           lastTapDownPos = { x: e.clientX, y: e.clientY };
           
-          if (!ps.startedInEdge && !ps.isTouchDoubleForAbility && activePointers.size === 1) {
-            startPanHoldTimer(e.pointerId);
-            startHoldTimer(e.pointerId, e.clientX, e.clientY);
+          if (!ps.startedInEdge && !ps.isTouchDoubleForAbility) {
+            let otherCenterPanChain = false;
+            for (const p of activePointers.values()) {
+              if (p.id === ps.id) continue;
+              if (p.isPanning && !p.startedInEdge) {
+                otherCenterPanChain = true;
+                break;
+              }
+              if (!p.startedInEdge && !p.isEdgeFinger && panHoldTimers.has(p.id)) {
+                otherCenterPanChain = true;
+                break;
+              }
+              // Another finger is doing edge rotate/zoom — still give this center finger pan-hold vs lasso.
+              if (p.startedInEdge || p.isEdgeFinger) {
+                otherCenterPanChain = true;
+                break;
+              }
+            }
+            if (activePointers.size === 1 || otherCenterPanChain) {
+              startPanHoldTimer(e.pointerId);
+              startHoldTimer(e.pointerId, e.clientX, e.clientY);
+            }
           }
         }
+      }
+
+      if (activePointers.size === 2) {
+        if (!gestureActive) {
+          syncTwoFingerChordSession();
+        }
+        if (twoFingerChordSession) {
+          cancelAllPanHoldTimers();
+          cancelHoldTimer();
+          captureTwoFingerLandingFromContacts();
+        } else {
+          twoFingerLanding = null;
+        }
+      } else if (activePointers.size > 2) {
+        // Does not "add" a third primary — extra contacts break the unified pair and end the session.
+        twoFingerChordSession = false;
+        twoFingerLanding = null;
+        endGestureIfNeeded();
       }
 
       // If only one finger, defer synthetic left button down until drag threshold is crossed
@@ -1469,6 +1689,19 @@
       
       // Check if we're interacting with a UI element - if so, allow normal behavior
       if (isUIElement(e)) return;
+
+      if (radialMenuTouchPointerIds.has(e.pointerId)) {
+        if (!window.hud || !window.hud.isRadialMenuVisible || !window.hud.isRadialMenuVisible()) {
+          radialMenuTouchPointerIds.delete(e.pointerId);
+        } else {
+          e.preventDefault();
+          e.stopPropagation();
+          if (window.hud.updateRadialMenuHoverAtClient) {
+            window.hud.updateRadialMenuHoverAtClient(e.clientX, e.clientY);
+          }
+          return;
+        }
+      }
       
       e.preventDefault();
       e.stopPropagation();
@@ -1493,149 +1726,44 @@
       lastTouchClientX = e.clientX;
       lastTouchClientY = e.clientY;
       
-      // Center: short hold → pan; far/fast drag → lasso; double-tap → special ability (pointerdown).
-      // Edge: rot/zoom inward blend. Two-finger tap still opens action menu.
-      
-      if (activePointers.size === 1) {
+      // 2-finger chord (arming or live pinch): unified handler only; does not share code with 1-finger.
+      if (activePointers.size >= 2 && (gestureActive || twoFingerChordSession)) {
         invalidateTime();
-        
-        // Building placement mode uses single finger for preview positioning
+
+        const movedPs = activePointers.get(e.pointerId);
+        if (!movedPs || movedPs.isTouchDoubleForAbility) return;
+
         if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
           handleBuildingPlacementPreview();
           return;
         }
-        
-        // Get the single pointer
-        const ps = activePointers.values().next().value;
-        if (!ps) return;
-        
-        const dx = ps.x - ps.startX;
-        const dy = ps.y - ps.startY;
-        const movedSq = dx * dx + dy * dy;
-        const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
-        
-        if (holdPointerId === ps.id) {
-          checkHoldMovement(ps.x, ps.y);
+
+        if (!gestureActive) {
+          beginGestureIfNeeded();
         }
-        
-        if (!ps.startedInEdge && !ps.isEdgeFinger && panHoldPointerId === ps.id && movedSq > centerPanHoldMaxMoveSq()) {
-          cancelPanHoldTimer();
-        }
-        if (!ps.startedInEdge && !ps.isEdgeFinger) {
-          checkCenterFastStroke(ps);
-        }
-        
-        if (ps.isPanning && !ps.startedInEdge) {
-          applyCenterPan(ps);
+        if (gestureActive) {
           momentumActive = false;
-        } else if (movedSq >= dragThresholdSq) {
-          if (holdPointerId === ps.id) {
-            cancelHoldTimer();
-          }
-          if (panHoldPointerId === ps.id) {
-            cancelPanHoldTimer();
-          }
-          
-          if (ps.startedInEdge || ps.isEdgeFinger) {
-            ps.isEdgeFinger = true;
-            applyEdgeZoneCamera(ps);
-            momentumActive = false;
-          } else if (ps.holdTriggered) {
-            // Action menu visible
-          } else {
-            const lassoStartSq = ps.lassoFastArmed ? dragThresholdSq : dragStartThresholdPxSq;
-            if (movedSq < lassoStartSq) {
-              // Between rim and full lasso threshold: wait (pan hold may still commit)
-            } else {
-              ps.isCenterFinger = true;
-              ps.isActioning = true;
-              
-              if (!ps.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
-                sendSyntheticPointer('pointerdown', ps.startX, ps.startY, 0, { suppressTerrainClick: true });
-                ps.syntheticDownEmitted = true;
-                lastSingleTapTime = 0;
-                lastSingleTapPos = null;
-                lastTapDownTime = 0;
-                lastTapDownPos = null;
-              }
-              
-              if (ps.syntheticDownEmitted) {
-                sendSyntheticPointer('pointermove', ps.x, ps.y, 0, { suppressTerrainClick: true });
-              }
-            }
+          const drivesUnifiedGesture =
+            !gesturePrimaryFingerIds ||
+            e.pointerId === gesturePrimaryFingerIds[0] ||
+            e.pointerId === gesturePrimaryFingerIds[1];
+          if (drivesUnifiedGesture) {
+            applyTwoFingerGesture();
           }
         }
-        
-      } else if (activePointers.size >= 2) {
-        // TWO+ FINGERS - each finger follows same rules as single finger
-        invalidateTime();
-        
-        const movedPointerId = e.pointerId;
-        const movedPs = activePointers.get(movedPointerId);
-        if (!movedPs || movedPs.wasInGesture) return;
-        
-        const dx = movedPs.x - movedPs.startX;
-        const dy = movedPs.y - movedPs.startY;
-        const movedSq = dx * dx + dy * dy;
-        const dragThresholdSq = config.cameraFingerDragThreshold * config.cameraFingerDragThreshold;
-        
-        if (holdPointerId === movedPs.id) {
-          checkHoldMovement(movedPs.x, movedPs.y);
-        }
-        if (!movedPs.startedInEdge && !movedPs.isEdgeFinger && panHoldPointerId === movedPs.id && movedSq > centerPanHoldMaxMoveSq()) {
-          cancelPanHoldTimer();
-        }
-        if (!movedPs.startedInEdge && !movedPs.isEdgeFinger) {
-          checkCenterFastStroke(movedPs);
-        }
-        
-        if (movedPs.isPanning && !movedPs.startedInEdge) {
-          movedPs.isCenterFinger = true;
-          applyCenterPan(movedPs);
-        } else if (movedSq >= dragThresholdSq) {
-          if (holdPointerId === movedPs.id) {
-            cancelHoldTimer();
-          }
-          if (panHoldPointerId === movedPs.id) {
-            cancelPanHoldTimer();
-          }
-          
-          if (movedPs.isEdgeFinger) {
-            applyEdgeZoneCamera(movedPs);
-          } else if (movedPs.isActioning) {
-            movedPs.isCenterFinger = true;
-            if (movedPs.syntheticDownEmitted) {
-              sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
-            }
-          } else if (movedPs.startedInEdge) {
-            movedPs.isEdgeFinger = true;
-            applyEdgeZoneCamera(movedPs);
-          } else if (movedPs.holdTriggered) {
-            // no-op
-          } else {
-            const lassoStartSq = movedPs.lassoFastArmed ? dragThresholdSq : dragStartThresholdPxSq;
-            if (movedSq < lassoStartSq) {
-              // wait
-            } else {
-              movedPs.isCenterFinger = true;
-              movedPs.isActioning = true;
-              
-              if (!movedPs.syntheticDownEmitted && now() >= suppressSingleTapUntil) {
-                sendSyntheticPointer('pointerdown', movedPs.startX, movedPs.startY, 0, { suppressTerrainClick: true });
-                movedPs.syntheticDownEmitted = true;
-                lastSingleTapTime = 0;
-                lastSingleTapPos = null;
-                lastTapDownTime = 0;
-                lastTapDownPos = null;
-              }
-              
-              if (movedPs.syntheticDownEmitted) {
-                sendSyntheticPointer('pointermove', movedPs.x, movedPs.y, 0, { suppressTerrainClick: true });
-              }
-            }
-          }
-        }
+        return;
       }
+
+      // 1-finger: same rules for the moving pointer only (one contact or several non-chord contacts).
+      invalidateTime();
+
+      if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
+        handleBuildingPlacementPreview();
+        return;
+      }
+
+      if (!ps || ps.isTouchDoubleForAbility) return;
+      applyOneFingerMove(ps);
     }
     
     // Helper function for building placement preview
@@ -1709,6 +1837,14 @@
       
       // Check if we're interacting with a UI element - if so, allow normal behavior
       if (isUIElement(e)) return;
+
+      if (radialMenuTouchPointerIds.has(e.pointerId)) {
+        radialMenuTouchPointerIds.delete(e.pointerId);
+        if (radialMenuTouchPointerIds.size === 0 && window.hud && window.hud.clearRadialMenuHoverHighlight) {
+          window.hud.clearRadialMenuHoverHighlight();
+        }
+        return;
+      }
       
       e.preventDefault();
       e.stopPropagation();
@@ -1724,14 +1860,20 @@
       if (holdPointerId === e.pointerId) {
         cancelHoldTimer();
       }
-      if (panHoldPointerId === e.pointerId) {
-        cancelPanHoldTimer();
-      }
+      cancelPanHoldTimerFor(e.pointerId);
 
       if (ps.isTouchDoubleForAbility) {
+        if (ps.syntheticDownEmitted) {
+          sendSyntheticPointer('pointerup', ps.x, ps.y, 0, { suppressTerrainClick: true });
+          ps.syntheticDownEmitted = false;
+        }
+        if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
+          window.lassoSelection.cleanupSelection();
+        }
         activePointers.delete(e.pointerId);
         const idxEarly = pointerOrder.indexOf(e.pointerId);
         if (idxEarly !== -1) pointerOrder.splice(idxEarly, 1);
+        clearTwoFingerChordStateIfFewerThanTwo();
         endGestureIfNeeded();
         return;
       }
@@ -1746,8 +1888,14 @@
       // (Each new touch gets a fresh pointerId, so "two different ids" does not rule out one-finger double-tap.)
       const hadAnotherFingerDown = activePointers.size >= 2;
       
-      // Track quick pointer releases for two-finger tap detection
-      recordQuickUp(clientX, clientY, dt, moveSq, hadAnotherFingerDown);
+      const skipTwoFingerChord =
+        (gestureActive && activePointers.size >= 2) ||
+        (twoFingerChordSession && activePointers.size >= 2) ||
+        ps.wasInGesture ||
+        moveSq > twoFingerTapMaxMovePxSq;
+      if (!skipTwoFingerChord) {
+        recordQuickUp(clientX, clientY, dt, moveSq, hadAnotherFingerDown);
+      }
 
       // Detect two-finger tap/double-tap BEFORE processing other gestures
       // Require at least one lift while a second finger was still down — two sequential
@@ -1763,34 +1911,45 @@
           const timeSinceLastTwo = now() - lastTwoTapTime;
           const distTwoSq = distanceSq(cx, cy, lastTwoTapPos.x, lastTwoTapPos.y);
           if (timeSinceLastTwo < config.doubleTapDelayMs && distTwoSq < twoFingerDoubleTapCenterMaxMovePxSq) {
-            // Double 2-tap: exit building placement mode if placing, otherwise clear selection
+            // Double 2-finger tap → special ability (same as 1-finger double-tap)
             if (window.buildingSystem && window.buildingSystem.isPlacing) {
               window.buildingSystem.cancelPlacement();
-            } else if (window.player && window.player.clearSelection) {
-              window.player.clearSelection();
+            } else {
+              const worldPos = pickWorldForSpecialAbility(cx, cy);
+              if (window.ui && window.ui.triggerSpecialAbilityAt) {
+                window.ui.triggerSpecialAbilityAt(worldPos);
+              }
+              if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
+                window.lassoSelection.cleanupSelection();
+              }
             }
             skipNextSingleTap = true;
             suppressSingleTapUntil = now() + (config.suppressSingleTapAfterTwoFingerMs || 300);
             lastTwoTapTime = 0;
             lastTwoTapPos = { x: 0, y: 0 };
             recentQuickUps.length = 0;
-            
-            // Clean up pointers and return
+
             activePointers.delete(e.pointerId);
             const idx = pointerOrder.indexOf(e.pointerId);
             if (idx !== -1) pointerOrder.splice(idx, 1);
+            clearTwoFingerChordStateIfFewerThanTwo();
             endGestureIfNeeded();
             return;
           } else {
-            // Single 2-tap: show action menu (same as tap-hold)
+            // Single 2-finger tap → clear selection
             lastTwoTapTime = now();
             lastTwoTapPos = { x: cx, y: cy };
             suppressSingleTapUntil = now() + Math.max(150, config.twoFingerTapMaxTimeMs || 300);
             skipNextSingleTap = true;
             recentQuickUps.length = 0;
-            
-            // Show action menu at the tap center
-            showActionPopup(cx, cy);
+            if (window.buildingSystem && window.buildingSystem.isPlacing) {
+              window.buildingSystem.cancelPlacement();
+            } else if (window.player && window.player.clearSelection) {
+              window.player.clearSelection();
+            }
+            if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
+              window.lassoSelection.cleanupSelection();
+            }
           }
         }
       }
@@ -1809,6 +1968,7 @@
       activePointers.delete(e.pointerId);
       const idx = pointerOrder.indexOf(e.pointerId);
       if (idx !== -1) pointerOrder.splice(idx, 1);
+      clearTwoFingerChordStateIfFewerThanTwo();
 
       // End gesture if needed
       endGestureIfNeeded();
@@ -2010,6 +2170,12 @@
 
     function onPointerCancel(e) {
       if (!isTouchLike(e)) return;
+      if (radialMenuTouchPointerIds.has(e.pointerId)) {
+        radialMenuTouchPointerIds.delete(e.pointerId);
+        if (radialMenuTouchPointerIds.size === 0 && window.hud && window.hud.clearRadialMenuHoverHighlight) {
+          window.hud.clearRadialMenuHoverHighlight();
+        }
+      }
       e.preventDefault();
       e.stopPropagation();
       
@@ -2025,12 +2191,11 @@
         if (holdPointerId === e.pointerId) {
           cancelHoldTimer();
         }
-        if (panHoldPointerId === e.pointerId) {
-          cancelPanHoldTimer();
-        }
+        cancelPanHoldTimerFor(e.pointerId);
         activePointers.delete(e.pointerId);
         const idx = pointerOrder.indexOf(e.pointerId);
         if (idx !== -1) pointerOrder.splice(idx, 1);
+        clearTwoFingerChordStateIfFewerThanTwo();
       }
       endGestureIfNeeded();
       
@@ -2087,11 +2252,13 @@
         e.stopPropagation();
         return;
       }
-      
+
       e.preventDefault();
       e.stopPropagation();
-      
-      // Show action menu at mouse position
+
+      if (!config.enableTapHoldActionPopup) {
+        return;
+      }
       showActionPopup(e.clientX, e.clientY);
     }, { passive: false });
 

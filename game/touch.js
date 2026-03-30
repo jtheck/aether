@@ -35,8 +35,8 @@
       initialPinchMinSpanPx: 0,
       buildPlaceMinHoldMs: 150,
       // Zone-based camera control (edge-started: rotate in rim; past rim = zoom; tiny linear handoff — set 0 for hard cut)
-      edgeZoneWidthPx: 60,
-      edgeInwardZoomBlendPx: 6,
+      edgeZoneWidthPx: 50,
+      edgeInwardZoomBlendPx: 12,
       edgeRotateSign: 1,
       zoneZoomSensitivity: 0.015,
       zoneRotateSensitivity: 0.018,
@@ -367,9 +367,12 @@
       };
     }
 
-    /** Call when activePointers.size === 2 after a new pointer was added. Sets twoFingerChordSession — never true if the first contact already committed to solo behavior. */
+    /** Sets twoFingerChordSession from the first two contacts in pointerOrder; extra fingers do not cancel the chord. */
     function syncTwoFingerChordSession() {
-      if (activePointers.size !== 2 || pointerOrder.length < 2) {
+      for (let i = pointerOrder.length - 1; i >= 0; i--) {
+        if (!activePointers.has(pointerOrder[i])) pointerOrder.splice(i, 1);
+      }
+      if (pointerOrder.length < 2) {
         twoFingerChordSession = false;
         return;
       }
@@ -1037,10 +1040,19 @@
       }
     }
 
+    /** When multi-touch breaks (3rd finger, gesture end, etc.), every still-down contact must get a fresh baseline or the next move compares to ancient startX/Y and instantly arms a bogus lasso. */
+    function reanchorAllActiveTouchesAfterMultiBreak() {
+      for (const p of activePointers.values()) {
+        if (p.isTouchDoubleForAbility) continue;
+        p.wasInGesture = false;
+        soloTouchBaselineResetAfterChord(p);
+      }
+    }
+
     function beginGestureIfNeeded() {
       if (window.buildingSystem && window.buildingSystem.isPlacing) return;
       if (!twoFingerChordSession) return;
-      if (activePointers.size >= 2 && !gestureActive) {
+      if (!gestureActive) {
         const pair = getTwoPrimaryPointers();
         if (!pair) return;
         const [a, b] = pair;
@@ -1061,6 +1073,7 @@
         }
         twoFingerLanding = null;
         gestureActive = true;
+        twoFingerChordSession = false;
         window.gestureInProgress = true;
         for (const p of activePointers.values()) {
           p.wasInGesture = false;
@@ -1070,7 +1083,7 @@
         momentumActive = false;
         gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
         
-        // LOCK the two chord pointerIds for the whole session — new touches never replace these; a 3rd contact ends the session instead.
+        // LOCK the two chord pointerIds for the whole session — extra contacts are ignored for pinch/pan/rotate until a primary lifts.
         gesturePrimaryFingerIds = [a.id, b.id];
         
         // Store initial and last frame state
@@ -1104,20 +1117,11 @@
     function endGestureIfNeeded() {
       if (!gestureActive) return;
       
-      const shouldEnd = activePointers.size < 2 ||
-        activePointers.size > 2 ||
-        (gesturePrimaryFingerIds && (!activePointers.has(gesturePrimaryFingerIds[0]) || !activePointers.has(gesturePrimaryFingerIds[1])));
+      const shouldEnd = !gesturePrimaryFingerIds ||
+        !activePointers.has(gesturePrimaryFingerIds[0]) ||
+        !activePointers.has(gesturePrimaryFingerIds[1]);
       
       if (shouldEnd) {
-        if (gesturePrimaryFingerIds) {
-          for (const id of gesturePrimaryFingerIds) {
-            const ps = activePointers.get(id);
-            if (ps) {
-              ps.wasInGesture = true;
-            }
-          }
-        }
-        
         momentumActive = true;
         
         gestureActive = false;
@@ -1131,11 +1135,14 @@
           window.cameraAutoFollowEnabled = window._prevCameraAutoFollow;
           delete window._prevCameraAutoFollow;
         }
-        if (activePointers.size === 1) {
-          for (const p of activePointers.values()) {
-            p.wasInGesture = false;
-            soloTouchBaselineResetAfterChord(p);
-          }
+        // Was only re-anchoring when exactly one finger remained — with 2+ survivors (e.g. 3rd finger
+        // broke pinch) stale startX/Y caused instant lasso from original downs for every contact.
+        reanchorAllActiveTouchesAfterMultiBreak();
+        twoFingerLanding = null;
+        if (activePointers.size >= 2) {
+          syncTwoFingerChordSession();
+        } else {
+          twoFingerChordSession = false;
         }
         recentQuickUps.length = 0;
         lastTwoTapTime = 0;
@@ -1145,7 +1152,7 @@
 
     function applyTwoFingerGesture() {
       if (window.buildingSystem && window.buildingSystem.isPlacing) return;
-      if (!gestureActive || activePointers.size < 2 || !gestureLast) return;
+      if (!gestureActive || !gestureLast) return;
       
       // Mobile browsers need more lenient gesture detection
       const isMobileBrowser = /android|iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -1656,22 +1663,21 @@
         }
       }
 
-      if (activePointers.size === 2) {
+      if (pointerOrder.length >= 2) {
         if (!gestureActive) {
           syncTwoFingerChordSession();
-        }
-        if (twoFingerChordSession) {
-          cancelAllPanHoldTimers();
-          cancelHoldTimer();
-          captureTwoFingerLandingFromContacts();
+          if (twoFingerChordSession) {
+            cancelAllPanHoldTimers();
+            cancelHoldTimer();
+            captureTwoFingerLandingFromContacts();
+          } else {
+            twoFingerLanding = null;
+          }
         } else {
           twoFingerLanding = null;
         }
-      } else if (activePointers.size > 2) {
-        // Does not "add" a third primary — extra contacts break the unified pair and end the session.
-        twoFingerChordSession = false;
+      } else {
         twoFingerLanding = null;
-        endGestureIfNeeded();
       }
 
       // If only one finger, defer synthetic left button down until drag threshold is crossed
@@ -1687,8 +1693,9 @@
     function onPointerMove(e) {
       if (!isTouchLike(e)) return;
       
-      // Check if we're interacting with a UI element - if so, allow normal behavior
-      if (isUIElement(e)) return;
+      // Ignore moves over UI only when this touch is not tracked on the canvas — otherwise
+      // we strand pointers in activePointers (same class of bug as pointerup over UI).
+      if (isUIElement(e) && !activePointers.has(e.pointerId)) return;
 
       if (radialMenuTouchPointerIds.has(e.pointerId)) {
         if (!window.hud || !window.hud.isRadialMenuVisible || !window.hud.isRadialMenuVisible()) {
@@ -1726,8 +1733,15 @@
       lastTouchClientX = e.clientX;
       lastTouchClientY = e.clientY;
       
-      // 2-finger chord (arming or live pinch): unified handler only; does not share code with 1-finger.
-      if (activePointers.size >= 2 && (gestureActive || twoFingerChordSession)) {
+      // Arming: only the first two contacts in order drive unified math; extra fingers are ignored here.
+      const primariesIntact =
+        gestureActive &&
+        gesturePrimaryFingerIds &&
+        activePointers.has(gesturePrimaryFingerIds[0]) &&
+        activePointers.has(gesturePrimaryFingerIds[1]);
+      const armingChord = twoFingerChordSession && !gestureActive && pointerOrder.length >= 2;
+
+      if (armingChord) {
         invalidateTime();
 
         const movedPs = activePointers.get(e.pointerId);
@@ -1738,20 +1752,49 @@
           return;
         }
 
-        if (!gestureActive) {
-          beginGestureIfNeeded();
+        const pairArming = getTwoPrimaryPointers();
+        if (
+          twoFingerChordSession &&
+          pairArming &&
+          e.pointerId !== pairArming[0].id &&
+          e.pointerId !== pairArming[1].id
+        ) {
+          return;
         }
-        if (gestureActive) {
+        beginGestureIfNeeded();
+        if (gestureActive && gesturePrimaryFingerIds) {
           momentumActive = false;
-          const drivesUnifiedGesture =
-            !gesturePrimaryFingerIds ||
+          if (
             e.pointerId === gesturePrimaryFingerIds[0] ||
-            e.pointerId === gesturePrimaryFingerIds[1];
-          if (drivesUnifiedGesture) {
+            e.pointerId === gesturePrimaryFingerIds[1]
+          ) {
             applyTwoFingerGesture();
           }
         }
         return;
+      }
+
+      // Live pinch: primaries keep unified camera; any other contact uses normal 1-finger rules in parallel.
+      if (primariesIntact) {
+        invalidateTime();
+
+        const movedPs = activePointers.get(e.pointerId);
+        if (!movedPs || movedPs.isTouchDoubleForAbility) return;
+
+        if (window.buildingSystem && window.buildingSystem.isPlacing && window.buildingSystem.previewMesh) {
+          handleBuildingPlacementPreview();
+          return;
+        }
+
+        const isChordPrimary =
+          e.pointerId === gesturePrimaryFingerIds[0] ||
+          e.pointerId === gesturePrimaryFingerIds[1];
+        if (isChordPrimary) {
+          momentumActive = false;
+          applyTwoFingerGesture();
+          return;
+        }
+        // fall through — extra finger while gesture is active
       }
 
       // 1-finger: same rules for the moving pointer only (one contact or several non-chord contacts).
@@ -1835,8 +1878,10 @@
     function onPointerUp(e) {
       if (!isTouchLike(e)) return;
       
-      // Check if we're interacting with a UI element - if so, allow normal behavior
-      if (isUIElement(e)) return;
+      // Lifting over HUD/menu must still untrack a canvas-started touch; otherwise a ghost
+      // pointer stays in activePointers, later touches hit size>2 or chord stagger fails, and
+      // twoFingerChordSession never arms (everything falls through to 1-finger selection).
+      if (isUIElement(e) && !activePointers.has(e.pointerId)) return;
 
       if (radialMenuTouchPointerIds.has(e.pointerId)) {
         radialMenuTouchPointerIds.delete(e.pointerId);
@@ -1954,7 +1999,6 @@
         }
       }
 
-      const wasGesture = gestureActive && activePointers.size >= 2;
       // Determine if this pointer was one of the two gesture primaries
       let isPrimaryGesturePointer = false;
       if (gestureActive) {
@@ -1964,6 +2008,9 @@
         }
       }
 
+      const contactCountBeforeLift = activePointers.size;
+      const unifiedGestureWasActive = gestureActive;
+
       // Remove pointer first
       activePointers.delete(e.pointerId);
       const idx = pointerOrder.indexOf(e.pointerId);
@@ -1972,6 +2019,11 @@
 
       // End gesture if needed
       endGestureIfNeeded();
+
+      // Chord arming without unified pinch: endGesture is a no-op — survivor still had old startX/Y.
+      if (contactCountBeforeLift >= 2 && activePointers.size >= 1 && !unifiedGestureWasActive) {
+        reanchorAllActiveTouchesAfterMultiBreak();
+      }
 
       if (isPrimaryGesturePointer) {
         // Primary gesture finger lifted; don't treat as tap
@@ -2180,6 +2232,8 @@
       e.stopPropagation();
       
       const ps = activePointers.get(e.pointerId);
+      const contactCountBeforeCancel = activePointers.size;
+      const unifiedGestureWasActiveCancel = gestureActive;
       
       // Clean up any pending lasso/drag for this pointer
       if (ps && ps.syntheticDownEmitted) {
@@ -2198,6 +2252,9 @@
         clearTwoFingerChordStateIfFewerThanTwo();
       }
       endGestureIfNeeded();
+      if (contactCountBeforeCancel >= 2 && activePointers.size >= 1 && !unifiedGestureWasActiveCancel) {
+        reanchorAllActiveTouchesAfterMultiBreak();
+      }
       
       // Activate momentum if all fingers gone (and has velocity)
       if (activePointers.size === 0) {

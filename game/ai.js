@@ -3943,11 +3943,16 @@ class TransformBehavior extends Behavior {
         // Clean up old unit's mesh and selection indicator
         if (this.unit.mesh) {
             // Dispose of selection indicator first
-            if (this.unit.selectionIndicator) {
+            if (window.disposeUnitSelectionIndicator) {
+                window.disposeUnitSelectionIndicator(this.unit);
+            } else if (this.unit.selectionIndicator) {
                 this.unit.selectionIndicator.dispose();
                 this.unit.selectionIndicator = null;
             }
-            
+            if (window.disposeHealthDots) {
+                window.disposeHealthDots(this.unit);
+            }
+
             // Dispose of the mesh
             this.unit.mesh.dispose();
             this.unit.mesh = null;
@@ -4054,11 +4059,16 @@ class TransformBehavior extends Behavior {
         // Clean up old unit's mesh and selection indicator
         if (this.unit.mesh) {
             // Dispose of selection indicator first
-            if (this.unit.selectionIndicator) {
+            if (window.disposeUnitSelectionIndicator) {
+                window.disposeUnitSelectionIndicator(this.unit);
+            } else if (this.unit.selectionIndicator) {
                 this.unit.selectionIndicator.dispose();
                 this.unit.selectionIndicator = null;
             }
-            
+            if (window.disposeHealthDots) {
+                window.disposeHealthDots(this.unit);
+            }
+
             // Dispose of the mesh
             this.unit.mesh.dispose();
             this.unit.mesh = null;
@@ -4315,6 +4325,9 @@ class EatBehavior extends Behavior {
                     }
                 }
                 
+                if (window.disposeHealthDots) {
+                    window.disposeHealthDots(this.unit);
+                }
                 // Clean up the unit's mesh
                 if (this.unit.mesh) {
                     this.unit.mesh.dispose();

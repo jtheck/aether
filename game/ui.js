@@ -2630,6 +2630,8 @@ function getRandomColor() {
                             unitIds: [villager.id],
                             targetResource
                           });
+                        } else if (window.isMultiplayer) {
+                          console.warn('Gather click ignored: match.submitCommand unavailable (multiplayer must stay lockstep).');
                         } else if (window.behaviorManager) {
                           if (villager.assignedBuilding) {
                             const building = villager.assignedBuilding;
@@ -2639,7 +2641,7 @@ function getRandomColor() {
                             }
                             villager.assignedBuilding = null;
                           }
-                          
+
                           window.behaviorManager.setBehavior(villager, 'manual_gather', {
                             targetResource
                           });

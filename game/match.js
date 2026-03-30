@@ -1689,16 +1689,19 @@
       
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
-      
-      units.forEach(unit => {
+
+      const ownedUnits = units.filter(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
-        if (unitOwnerId === normalizedPlayerId) {
-          unit.target = target;
-          unit.state = 'attacking';
-          
-          if (window.behaviorManager) {
-            window.behaviorManager.setBehavior(unit, 'attack_unit', { target: target });
-          }
+        return unitOwnerId === normalizedPlayerId;
+      });
+      const commandUnits = this.isLiveMultiplayerMatch() ? units : ownedUnits;
+
+      commandUnits.forEach(unit => {
+        unit.target = target;
+        unit.state = 'attacking';
+
+        if (window.behaviorManager) {
+          window.behaviorManager.setBehavior(unit, 'attack_unit', { target: target });
         }
       });
     }
@@ -1713,10 +1716,13 @@
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
 
-      units.forEach(unit => {
+      const ownedUnits = units.filter(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
-        if (unitOwnerId !== normalizedPlayerId) return;
+        return unitOwnerId === normalizedPlayerId;
+      });
+      const commandUnits = this.isLiveMultiplayerMatch() ? units : ownedUnits;
 
+      commandUnits.forEach(unit => {
         unit.lastPlayerCommandTick = this.tick || 0;
 
         if (unit.assignedBuilding) {
@@ -2041,6 +2047,22 @@
       // Normalize player ID for ownership check
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      const fromType = unit?.type || null;
+
+      if (this.isLiveMultiplayerMatch()) {
+        console.log('🧬 CONVERT TRACE execute', {
+          tick: this.tick,
+          commandTick: Number.isFinite(cmd.tick) ? cmd.tick : null,
+          commandId: cmd.commandId || null,
+          playerId: cmd.playerId || null,
+          playerNorm: normalizedPlayerId || null,
+          unitId: cmd.unitId || null,
+          fromType,
+          toType: cmd.targetType || null,
+          resetHealth: cmd.resetHealth === true,
+          postConvertBehavior: cmd.postConvertBehavior || null
+        });
+      }
       
       if (!unit || !player || unit.owner !== normalizedPlayerId) {
         // Clear converting flag if unit exists (even on failed conversions)
@@ -2124,10 +2146,15 @@
         window.fx.removeParticleEffects(unit);
       }
 
-      // Clean up selection indicator
-      if (unit.selectionIndicator) {
+      if (window.disposeUnitSelectionIndicator) {
+        window.disposeUnitSelectionIndicator(unit);
+      } else if (unit.selectionIndicator) {
         unit.selectionIndicator.dispose();
         unit.selectionIndicator = null;
+      }
+
+      if (window.disposeHealthDots) {
+        window.disposeHealthDots(unit);
       }
 
       // Clean up blob shadow
@@ -2151,10 +2178,12 @@
         unit.animationGroups = null;
       }
 
-      // Dispose old mesh and all children
+      // Dispose old mesh hierarchy only — do NOT dispose materials/textures (second arg false).
+      // Unit clones from getModel often share GLB materials; dispose(..., true) would invalidate
+      // textures on every other instance still using them (e.g. all villagers turn white).
       if (oldMesh) {
         if (oldMesh.dispose) {
-          oldMesh.dispose(false, true);
+          oldMesh.dispose(false, false);
         }
       }
       unit.mesh = null;
@@ -2243,27 +2272,32 @@
       const resource = cmd.targetResource || this.getResourceById(cmd.resourceId);
       if (!resource) return;
       
-      // CRITICAL: Normalize player ID for ownership check
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
-      
-      // P2P DETERMINISTIC: Execute all commands on both clients
-      units.forEach(unit => {
+
+      // Same pattern as executeMoveCommand: in live P2P, lockstep must apply gather to every
+      // unit ID in the command. Owner-only filtering can diverge when cmd.playerId vs unit.owner
+      // normalization differs by a few characters, leaving one peer in linger and the other gathering.
+      const ownedUnits = units.filter(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
-        if (unitOwnerId === normalizedPlayerId) {
-          unit.lastPlayerCommandTick = this.tick || 0;
+        return unitOwnerId === normalizedPlayerId;
+      });
+      const commandUnits = this.isLiveMultiplayerMatch() ? units : ownedUnits;
+      if (commandUnits.length === 0) return;
 
-          if (unit.assignedBuilding) {
-            const prev = unit.assignedBuilding;
-            if (prev.assignedWorkers) {
-              prev.assignedWorkers = prev.assignedWorkers.filter(w => w !== unit);
-            }
-            unit.assignedBuilding = null;
-          }
+      commandUnits.forEach(unit => {
+        unit.lastPlayerCommandTick = this.tick || 0;
 
-          if (window.behaviorManager) {
-            window.behaviorManager.setBehavior(unit, 'manual_gather', { targetResource: resource });
+        if (unit.assignedBuilding) {
+          const prev = unit.assignedBuilding;
+          if (prev.assignedWorkers) {
+            prev.assignedWorkers = prev.assignedWorkers.filter(w => w !== unit);
           }
+          unit.assignedBuilding = null;
+        }
+
+        if (window.behaviorManager) {
+          window.behaviorManager.setBehavior(unit, 'manual_gather', { targetResource: resource });
         }
       });
     }
@@ -2276,28 +2310,27 @@
       
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
-      
-      units.forEach(unit => {
+
+      const ownedUnits = units.filter(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
-        if (unitOwnerId !== normalizedPlayerId) return;
-        
+        return unitOwnerId === normalizedPlayerId;
+      });
+      const commandUnits = this.isLiveMultiplayerMatch() ? units : ownedUnits;
+
+      commandUnits.forEach(unit => {
         unit.lastPlayerCommandTick = this.tick || 0;
-        
-        // Remove from previous building assignment
+
         if (unit.assignedBuilding && unit.assignedBuilding !== building) {
           const prev = unit.assignedBuilding;
           if (prev.assignedWorkers) {
             prev.assignedWorkers = prev.assignedWorkers.filter(w => w !== unit);
           }
         }
-        
-        // Skip if already assigned to this building
+
         if (unit.assignedBuilding === building) return;
-        
-        // Check capacity
+
         if (building.assignedWorkers && building.assignedWorkers.length >= (building.maxWorkers || 3)) return;
-        
-        // Set behavior based on building state
+
         if (window.behaviorManager) {
           const effectiveWorkType = (!building.completionProcessed && building.workType === 'build')
             ? 'build'
@@ -2317,8 +2350,7 @@
             window.behaviorManager.setBehavior(unit, 'work', { building: building });
           }
         }
-        
-        // Track worker assignment
+
         if (!building.assignedWorkers) building.assignedWorkers = [];
         building.assignedWorkers.push(unit);
         unit.assignedBuilding = building;
@@ -2368,29 +2400,27 @@
     
     executeStopCommand(cmd) {
       const units = this.getUnitsByIds(cmd.unitIds);
-      
-      // CRITICAL: Normalize player ID for ownership check
+
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
-      
-      // P2P DETERMINISTIC: Execute all commands on both clients
-      units.forEach(unit => {
+
+      const ownedUnits = units.filter(unit => {
         const unitOwnerId = unit.owner?.length > 6 ? unit.owner.slice(-6) : unit.owner;
-        if (unitOwnerId === normalizedPlayerId) {
-          // Clear any active behavior and set to linger (idle) state
-          if (window.behaviorManager) {
-            window.behaviorManager.clearBehavior(unit);
-          }
-          
-          // Clear any attack target and reset state
-          unit.target = null;
-          unit.state = 'idle';
-          
-          // Stop any movement by zeroing impulse
-          if (unit.pb && unit.pb.imp) {
-            unit.pb.imp.x = 0;
-            unit.pb.imp.z = 0;
-          }
+        return unitOwnerId === normalizedPlayerId;
+      });
+      const commandUnits = this.isLiveMultiplayerMatch() ? units : ownedUnits;
+
+      commandUnits.forEach(unit => {
+        if (window.behaviorManager) {
+          window.behaviorManager.clearBehavior(unit);
+        }
+
+        unit.target = null;
+        unit.state = 'idle';
+
+        if (unit.pb && unit.pb.imp) {
+          unit.pb.imp.x = 0;
+          unit.pb.imp.z = 0;
         }
       });
     }
@@ -2432,6 +2462,8 @@
       const REVERT_TICKS = 400; // 20s at 20Hz
       const units = window.gameUnits;
       if (!units) return;
+      const liveMultiplayer = this.isLiveMultiplayerMatch();
+      if (liveMultiplayer && !this.isHost()) return;
 
       for (let i = units.length - 1; i >= 0; i--) {
         const unit = units[i];
@@ -2440,13 +2472,26 @@
 
         const player = this.getPlayerById(unit.owner);
         if (!player) continue;
-
-        this.executeConvertCommand({
-          type: 'convert',
-          playerId: unit.owner,
-          unitId: unit.id,
-          targetType: 'villager'
-        });
+        if (liveMultiplayer) {
+          // Deduplicate while the lockstep command is in-flight.
+          if (unit._pendingAutoRevertConvert) continue;
+          const queued = this.submitCommand({
+            type: 'convert',
+            playerId: unit.owner,
+            unitId: unit.id,
+            targetType: 'villager'
+          });
+          if (queued) {
+            unit._pendingAutoRevertConvert = true;
+          }
+        } else {
+          this.executeConvertCommand({
+            type: 'convert',
+            playerId: unit.owner,
+            unitId: unit.id,
+            targetType: 'villager'
+          });
+        }
       }
     }
 

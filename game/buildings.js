@@ -1578,20 +1578,35 @@ function processWorkProduction(building) {
   building.lastWorkTick = currentTick;
 }
 
-// TF2-style capture point visual indicators
+// Agora capture: TF2-style progress on the five health chips only (no ground disc / torus).
+function disposeLegacyAgoraCaptureDiscAndRing(visuals) {
+  if (!visuals) return;
+  if (visuals.progressDisc) {
+    try { visuals.progressDisc.dispose(); } catch (_) {}
+    visuals.progressDisc = null;
+  }
+  if (visuals.progressMat) {
+    try { visuals.progressMat.dispose(); } catch (_) {}
+    visuals.progressMat = null;
+  }
+  if (visuals.warningRing) {
+    try { visuals.warningRing.dispose(); } catch (_) {}
+    visuals.warningRing = null;
+  }
+  if (visuals.warningMat) {
+    try { visuals.warningMat.dispose(); } catch (_) {}
+    visuals.warningMat = null;
+  }
+}
+
 function updateCapturePointVisuals(agora) {
   if (!agora || !agora.mesh || !window.gfx || !window.gfx.scene) return;
-  
+
   const captureProgress = agora.captureProgress || 0;
   const isContested = agora.contested || false;
-  const capturerTeam = agora.contestedBy;
-  
-  // Create capture point visuals if they don't exist
+
   if (!agora.captureVisuals) {
     agora.captureVisuals = {};
-    
-    // Base capture disc (always shows owner color)
-    // Diameter = OCCUPATION_RADIUS * 2 * TILE_SIZE = 5 * 2 * 4 = 40 world units
     const baseDisc = BABYLON.MeshBuilder.CreateCylinder('captureBase', {
       height: 0.2,
       diameter: 40,
@@ -1599,64 +1614,25 @@ function updateCapturePointVisuals(agora) {
     }, window.gfx.scene);
     baseDisc.position.y = 0.1;
     baseDisc.parent = agora.mesh;
-    
+
     const baseMat = new BABYLON.StandardMaterial('captureBaseMat', window.gfx.scene);
-    baseMat.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.3); // Gray by default
+    baseMat.diffuseColor = new BABYLON.Color3(0.3, 0.3, 0.3);
     baseMat.emissiveColor = new BABYLON.Color3(0.1, 0.1, 0.1);
-    baseMat.alpha = 1.0; // Opaque
+    baseMat.alpha = 1.0;
     baseDisc.material = baseMat;
-    baseDisc.isVisible = false; // Hidden for mobile performance (translucent meshes are expensive)
-    
+    baseDisc.isVisible = false;
+
     agora.captureVisuals.baseDisc = baseDisc;
     agora.captureVisuals.baseMat = baseMat;
-    
-    // Progress disc (shows capture progress)
-    const progressDisc = BABYLON.MeshBuilder.CreateCylinder('captureProgress', {
-      height: 0.3,
-      diameter: 40,
-      tessellation: 32
-    }, window.gfx.scene);
-    progressDisc.position.y = 0.25;
-    progressDisc.parent = agora.mesh;
-    progressDisc.scaling.x = 0;
-    progressDisc.scaling.z = 0;
-    
-    const progressMat = new BABYLON.StandardMaterial('captureProgressMat', window.gfx.scene);
-    progressMat.diffuseColor = new BABYLON.Color3(1, 0, 0); // Red by default
-    progressMat.emissiveColor = new BABYLON.Color3(0.5, 0, 0);
-    progressMat.alpha = 1.0;
-    progressDisc.material = progressMat;
-    
-    agora.captureVisuals.progressDisc = progressDisc;
-    agora.captureVisuals.progressMat = progressMat;
-    
-    // Warning ring (pulses when being captured)
-    const warningRing = BABYLON.MeshBuilder.CreateTorus('captureWarning', {
-      diameter: 42,
-      thickness: 0.5,
-      tessellation: 32
-    }, window.gfx.scene);
-    warningRing.position.y = 1.0;
-    warningRing.parent = agora.mesh;
-    warningRing.isVisible = false;
-    
-    const warningMat = new BABYLON.StandardMaterial('captureWarningMat', window.gfx.scene);
-    warningMat.diffuseColor = new BABYLON.Color3(1, 0.3, 0);
-    warningMat.emissiveColor = new BABYLON.Color3(1, 0.5, 0);
-    warningMat.alpha = 0.7;
-    warningRing.material = warningMat;
-    
-    agora.captureVisuals.warningRing = warningRing;
-    agora.captureVisuals.warningMat = warningMat;
+  } else if (agora.captureVisuals.progressDisc || agora.captureVisuals.warningRing) {
+    disposeLegacyAgoraCaptureDiscAndRing(agora.captureVisuals);
   }
-  
-  // Update visual state based on capture status
+
   const visuals = agora.captureVisuals;
-  
-  // CRITICAL: Show health dots when contested, hide when not contested
-  if (isContested) {
-    // Agora is being contested - show health dots
-    if (!agora.healthDotsContainer && window.createHealthDots) {
+  const showCapDots = captureProgress > 0 || isContested;
+
+  if (showCapDots) {
+    if (window.createHealthDots) {
       window.createHealthDots(agora);
     }
     if (agora.healthDotsContainer && window.showHealthDots) {
@@ -1664,18 +1640,15 @@ function updateCapturePointVisuals(agora) {
       window.updateHealthDots(agora);
     }
   } else {
-    // Not contested - hide health dots (unless it's selected by player)
     const isSelected = window.player && window.player.selectedBuilding === agora;
     if (!isSelected && agora.healthDotsContainer && window.hideHealthDots) {
       window.hideHealthDots(agora);
     }
   }
-  
-  // Update base disc color to match owner
+
   if (window.getTeamColorForOwner) {
     const ownerColorHex = window.getTeamColorForOwner(agora.owner);
     if (ownerColorHex) {
-      // Convert hex string to Color3
       const clean = typeof ownerColorHex === 'string' ? ownerColorHex.replace('#', '') : '';
       if (clean.length === 6) {
         const r = parseInt(clean.substr(0, 2), 16) / 255;
@@ -1692,95 +1665,6 @@ function updateCapturePointVisuals(agora) {
           ownerColor.g * 0.3,
           ownerColor.b * 0.3
         );
-      }
-    }
-  }
-  
-  // Update progress disc
-  if (captureProgress > 0) {
-    const scale = Math.min(1.0, captureProgress / 100);
-    visuals.progressDisc.scaling.x = scale;
-    visuals.progressDisc.scaling.z = scale;
-    visuals.progressDisc.isVisible = true;
-    
-    // Set color based on capturing team
-    if (capturerTeam && window.getTeamColorForOwner) {
-      const capturerColorHex = window.getTeamColorForOwner(capturerTeam);
-      if (capturerColorHex) {
-        // Convert hex string to Color3
-        const clean = typeof capturerColorHex === 'string' ? capturerColorHex.replace('#', '') : '';
-        if (clean.length === 6) {
-          const r = parseInt(clean.substr(0, 2), 16) / 255;
-          const g = parseInt(clean.substr(2, 2), 16) / 255;
-          const b = parseInt(clean.substr(4, 2), 16) / 255;
-          const capturerColor = new BABYLON.Color3(r, g, b);
-          visuals.progressMat.diffuseColor = new BABYLON.Color3(
-            capturerColor.r,
-            capturerColor.g,
-            capturerColor.b
-          );
-          visuals.progressMat.emissiveColor = new BABYLON.Color3(
-            capturerColor.r * 0.5,
-            capturerColor.g * 0.5,
-            capturerColor.b * 0.5
-          );
-        }
-      }
-    }
-  } else {
-    visuals.progressDisc.isVisible = false;
-  }
-  
-  // Update warning ring (pulse animation when being captured or contested)
-  if (captureProgress > 0 || isContested) {
-    visuals.warningRing.isVisible = true;
-    
-    // Subtle pulse animation
-    const time = Date.now() * 0.002; // Slower, calmer pulse
-    const pulseScale = 1.0 + Math.sin(time) * 0.08; // Gentler pulse (8%)
-    visuals.warningRing.scaling.setAll(pulseScale);
-    
-    // Slow rotation for subtle visual interest
-    visuals.warningRing.rotation.y = time * 0.15;
-    
-    // Change color based on state
-    if (isContested) {
-      // Contested: yellow with subtle fade
-      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 1, 0);
-      visuals.warningMat.emissiveColor = new BABYLON.Color3(0.8, 0.8, 0);
-      visuals.warningMat.alpha = 0.65 + Math.sin(time * 1.5) * 0.1; // Gentle fade
-    } else {
-      // Being captured: orange
-      visuals.warningMat.diffuseColor = new BABYLON.Color3(1, 0.4, 0);
-      visuals.warningMat.emissiveColor = new BABYLON.Color3(0.8, 0.3, 0);
-      visuals.warningMat.alpha = 0.7;
-    }
-  } else {
-    visuals.warningRing.isVisible = false;
-  }
-  
-  // Make the progress disc more prominent and easier to read
-  // The disc itself IS the timer - its size shows the capture progress
-  if (captureProgress > 0) {
-    // Subtle glow effect on progress disc
-    const time = Date.now() * 0.002;
-    
-    // Add glow effect by gently pulsing emissive color
-    if (capturerTeam && window.getTeamColorForOwner) {
-      const capturerColorHex = window.getTeamColorForOwner(capturerTeam);
-      if (capturerColorHex) {
-        const clean = typeof capturerColorHex === 'string' ? capturerColorHex.replace('#', '') : '';
-        if (clean.length === 6) {
-          const r = parseInt(clean.substr(0, 2), 16) / 255;
-          const g = parseInt(clean.substr(2, 2), 16) / 255;
-          const b = parseInt(clean.substr(4, 2), 16) / 255;
-          const glowIntensity = 0.4 + Math.sin(time * 2) * 0.15; // Gentle pulse between 0.25 and 0.55
-          visuals.progressMat.emissiveColor = new BABYLON.Color3(
-            r * glowIntensity,
-            g * glowIntensity,
-            b * glowIntensity
-          );
-        }
       }
     }
   }
@@ -2181,6 +2065,84 @@ function autoInitBuildings() {
   }
 }
 
+// Vertical fence ring for work radius (same plane/scaling pattern as lasso.js 3D selection fence)
+const WORK_RADIUS_FENCE_HEIGHT = 1.25;
+
+function createWorkRadiusFenceMaterial(scene, matName) {
+  const mat = new BABYLON.StandardMaterial(matName, scene);
+  mat.emissiveColor = new BABYLON.Color3(0, 1, 1);
+  mat.diffuseColor = new BABYLON.Color3(0, 1, 1);
+  mat.alpha = 0.8;
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  return mat;
+}
+
+function buildOrUpdateWorkRadiusFencePanels(panels, scene, centerX, centerZ, terrainY, radiusWorld, material, namePrefix) {
+  const NUM_SEGMENTS = Math.min(48, Math.max(16, Math.ceil(radiusWorld / 1.5)));
+  const glow = window.gfx && window.gfx.glowLayer;
+
+  while (panels.length > NUM_SEGMENTS) {
+    const p = panels.pop();
+    if (p && !p.isDisposed()) {
+      if (glow) glow.removeIncludedOnlyMesh(p);
+      p.dispose();
+    }
+  }
+
+  for (let i = 0; i < NUM_SEGMENTS; i++) {
+    const t1 = (i / NUM_SEGMENTS) * Math.PI * 2;
+    const t2 = ((i + 1) / NUM_SEGMENTS) * Math.PI * 2;
+    const p1x = Math.cos(t1) * radiusWorld;
+    const p1z = Math.sin(t1) * radiusWorld;
+    const p2x = Math.cos(t2) * radiusWorld;
+    const p2z = Math.sin(t2) * radiusWorld;
+    const dx = p2x - p1x;
+    const dz = p2z - p1z;
+    const length = Math.sqrt(dx * dx + dz * dz);
+    const lx = (p1x + p2x) / 2;
+    const lz = (p1z + p2z) / 2;
+
+    let panel = panels[i];
+    if (!panel || panel.isDisposed()) {
+      panel = BABYLON.MeshBuilder.CreatePlane(`${namePrefix}_${i}`, { width: 1, height: 1 }, scene);
+      panel.material = material;
+      panel.isPickable = false;
+      panel.receiveShadows = false;
+      panel.renderingGroupId = 0;
+      if (glow) glow.addIncludedOnlyMesh(panel);
+      panels[i] = panel;
+    }
+
+    panel.position.x = centerX + lx;
+    panel.position.y = terrainY + WORK_RADIUS_FENCE_HEIGHT / 2;
+    panel.position.z = centerZ + lz;
+    panel.scaling.x = Math.max(length, 0.01);
+    panel.scaling.y = WORK_RADIUS_FENCE_HEIGHT;
+    panel.rotation.x = 0;
+    panel.rotation.y = Math.atan2(dx, dz) + Math.PI / 2;
+    panel.isVisible = true;
+  }
+  return panels;
+}
+
+function disposeWorkRadiusFencePanels(panels, material) {
+  const glow = window.gfx && window.gfx.glowLayer;
+  for (let i = 0; i < panels.length; i++) {
+    const p = panels[i];
+    if (p && !p.isDisposed()) {
+      if (glow) glow.removeIncludedOnlyMesh(p);
+      p.dispose();
+    }
+  }
+  panels.length = 0;
+  if (material && typeof material.dispose === 'function') {
+    if (typeof material.isDisposed !== 'function' || !material.isDisposed()) {
+      material.dispose();
+    }
+  }
+}
+
 // Building Placement System
 const buildingSystem = {
   isPlacing: false,
@@ -2401,32 +2363,20 @@ const buildingSystem = {
     
     if (radius === 0) return;
     
-    // Create a circle mesh to show the work radius (horizontal)
-    const circle = BABYLON.MeshBuilder.CreateDisc("workRadius", {
-      radius: radius,
-      tessellation: 32 // Reduced from 64 for better performance
-    }, window.gfx.scene);
-    
-    // Position the circle at the building location
-    circle.position = centerPosition.clone();
-    // Get terrain height at this position using bilinear interpolation
     const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(centerPosition.x, centerPosition.z) : 0;
-    circle.position.y = terrainY + 0.05; // Very close to ground, following terrain
-    
-    // Rotate to be horizontal (disc is vertical by default)
-    circle.rotation.x = Math.PI / 2; // 90 degrees to make it horizontal
-    
-    // Create material for the radius circle (worker recruitment radius)
-    const radiusMaterial = new BABYLON.StandardMaterial("radiusMaterial", window.gfx.scene);
-    radiusMaterial.diffuseColor = new BABYLON.Color3(0.3, 0.6, 0.9); // Blue (worker recruitment, not resources)
-    radiusMaterial.emissiveColor = new BABYLON.Color3(0.1, 0.2, 0.3);
-    radiusMaterial.alpha = 0.3; // Semi-transparent
-    radiusMaterial.backFaceCulling = false; // Show from both sides
-    
-    circle.material = radiusMaterial;
-    circle.isPickable = false;
-    
-    this.radiusVisualization = circle;
+    const material = createWorkRadiusFenceMaterial(window.gfx.scene, 'workRadiusFenceMat');
+    const panels = [];
+    buildOrUpdateWorkRadiusFencePanels(
+      panels,
+      window.gfx.scene,
+      centerPosition.x,
+      centerPosition.z,
+      terrainY,
+      radius,
+      material,
+      'workRadiusFence'
+    );
+    this.radiusVisualization = { panels, material };
     
     // NOTE: No longer scanning/highlighting resources - villagers find them dynamically
   },
@@ -2434,7 +2384,12 @@ const buildingSystem = {
   // Clear radius visualization
   clearRadiusVisualization: function() {
     if (this.radiusVisualization) {
-      this.radiusVisualization.dispose();
+      const vis = this.radiusVisualization;
+      if (vis.panels && Array.isArray(vis.panels)) {
+        disposeWorkRadiusFencePanels(vis.panels, vis.material);
+      } else if (typeof vis.dispose === 'function') {
+        vis.dispose();
+      }
       this.radiusVisualization = null;
     }
     
@@ -2475,14 +2430,23 @@ const buildingSystem = {
   
   // Update radius visualization position
   updateRadiusVisualization: function(newPosition) {
-    if (this.radiusVisualization && this.selectedBuildingType === 'camp') {
-      this.radiusVisualization.position = newPosition.clone();
-      // Get terrain height at this position using bilinear interpolation
-      const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(newPosition.x, newPosition.z) : 0;
-      this.radiusVisualization.position.y = terrainY + 0.05; // Very close to ground, following terrain
-      
-      // NOTE: No longer updating resource highlights - villagers find resources dynamically
+    if (!this.radiusVisualization || !this.radiusVisualization.panels || this.selectedBuildingType !== 'camp') {
+      return;
     }
+    const buildingDef = BuildingTypes[this.selectedBuildingType];
+    if (!buildingDef || !buildingDef.workRadius) return;
+    const r = buildingDef.workRadius * TILE_SIZE;
+    const terrainY = window.getTerrainHeightAtPosition ? window.getTerrainHeightAtPosition(newPosition.x, newPosition.z) : 0;
+    buildOrUpdateWorkRadiusFencePanels(
+      this.radiusVisualization.panels,
+      window.gfx.scene,
+      newPosition.x,
+      newPosition.z,
+      terrainY,
+      r,
+      this.radiusVisualization.material,
+      'workRadiusFence'
+    );
   },
   
   // Highlight resources (trees and rocks) within the camp's work radius
@@ -3628,51 +3592,39 @@ if (typeof window !== 'undefined') {
   
 }
 
-// Global functions for showing/hiding building selection radius
-let selectedBuildingRadiusCircle = null;
+// Global functions for showing/hiding building selection radius (fence ring, same style as lasso 3D selection)
+let selectedBuildingRadiusFence = null;
 
 window.showBuildingRadius = function(building) {
   if (!building || !building.mesh || !window.gfx || !window.gfx.scene) return;
   
-  // Clean up existing visualization
   window.hideBuildingRadius();
   
   const buildingDef = window.BuildingTypes[building.type];
   if (!buildingDef || !buildingDef.workRadius) return;
   
-  // Create a circle mesh to show the work radius
-  const TILE_SIZE = window.TILE_SIZE || 4;
-  const radius = buildingDef.workRadius * TILE_SIZE;
-  const circle = BABYLON.MeshBuilder.CreateDisc("selectedBuildingRadius", {
-    radius: radius,
-    tessellation: 32
-  }, window.gfx.scene);
-  
-  // Position the circle at the building location
-  circle.position = building.mesh.position.clone();
-  const terrainY = window.getTerrainHeightAtPosition ? 
+  const TILE_SZ = window.TILE_SIZE || 4;
+  const radius = buildingDef.workRadius * TILE_SZ;
+  const terrainY = window.getTerrainHeightAtPosition ?
     window.getTerrainHeightAtPosition(building.mesh.position.x, building.mesh.position.z) : 0;
-  circle.position.y = terrainY + 0.05;
-  
-  // Rotate to be horizontal
-  circle.rotation.x = Math.PI / 2;
-  
-  // Create material (blue for recruitment radius)
-  const material = new BABYLON.StandardMaterial("selectedBuildingRadiusMaterial", window.gfx.scene);
-  material.diffuseColor = new BABYLON.Color3(0.3, 0.6, 0.9);
-  material.emissiveColor = new BABYLON.Color3(0.1, 0.2, 0.3);
-  material.alpha = 0.3;
-  material.backFaceCulling = false;
-  
-  circle.material = material;
-  circle.isPickable = false;
-  
-  selectedBuildingRadiusCircle = circle;
+  const material = createWorkRadiusFenceMaterial(window.gfx.scene, 'selectedBuildingRadiusFenceMat');
+  const panels = [];
+  buildOrUpdateWorkRadiusFencePanels(
+    panels,
+    window.gfx.scene,
+    building.mesh.position.x,
+    building.mesh.position.z,
+    terrainY,
+    radius,
+    material,
+    'selBldRadiusFence'
+  );
+  selectedBuildingRadiusFence = { panels, material };
 };
 
 window.hideBuildingRadius = function() {
-  if (selectedBuildingRadiusCircle) {
-    selectedBuildingRadiusCircle.dispose();
-    selectedBuildingRadiusCircle = null;
+  if (selectedBuildingRadiusFence) {
+    disposeWorkRadiusFencePanels(selectedBuildingRadiusFence.panels, selectedBuildingRadiusFence.material);
+    selectedBuildingRadiusFence = null;
   }
 };

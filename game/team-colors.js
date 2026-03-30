@@ -216,43 +216,42 @@ function getChildMaterialType(meshName, parentMaterialType) {
 // Create team-colored selection indicator
 function createTeamSelectionIndicator(unit, teamId) {
   if (!unit.mesh || !window.gfx || !window.gfx.scene) return;
-  if (!window.gfx.createAlternatingTriangleRingMesh) return;
 
   const scene = window.gfx.scene;
   const teamColor = getTeamColor(teamId);
   const primary = BABYLON.Color3.FromHexString(teamColor.primary.replace('#', ''));
-
   const TILE = typeof window !== 'undefined' && window.TILE_SIZE ? window.TILE_SIZE : 4;
-  const built = window.gfx.createAlternatingTriangleRingMesh(scene, {
-    name: 'selectionRing',
-    pairCount: 12,
-    radiusPitch: TILE * 0.4,
-    depthOut: TILE * 0.22,
-    depthIn: TILE * 0.2
-  });
-  const ring = built.mesh;
 
-  built.matOut.diffuseColor = primary;
-  built.matOut.emissiveColor = primary.scale(0.85);
-  built.matIn.diffuseColor = primary;
-  built.matIn.emissiveColor = primary.scale(1.05);
+  const ring = BABYLON.MeshBuilder.CreateTorus('selectionRing', {
+    diameter: Math.max(2.2, TILE * 0.65),
+    thickness: Math.max(0.07, TILE * 0.022),
+    tessellation: 20
+  }, scene);
+
+  const ringMaterial = new BABYLON.StandardMaterial('teamSelectionRingMat', scene);
+  ringMaterial.diffuseColor = primary;
+  ringMaterial.emissiveColor = primary.scale(0.55);
+  ringMaterial.backFaceCulling = false;
+  ringMaterial.disableLighting = true;
+  ring.material = ringMaterial;
 
   ring.isVisible = false;
   ring.isPickable = false;
-  ring.parent = unit.mesh;
-  const sx = Math.abs(unit.mesh.scaling.x);
-  const sy = Math.abs(unit.mesh.scaling.y);
-  const sz = Math.abs(unit.mesh.scaling.z);
-  if (sx > 1e-5 && sz > 1e-5) {
-    ring.scaling.x = 1 / sx;
-    ring.scaling.z = 1 / sz;
+  if (window.gfx && window.gfx.markMeshExcludeDirectionalShadows) {
+    window.gfx.markMeshExcludeDirectionalShadows(ring);
   }
-  if (sy > 1e-5) ring.scaling.y = 1 / sy;
-  ring.position.y = TILE * 0.05;
+  ring.parent = null;
+  ring.scaling.setAll(1);
+  ring.renderingGroupId = 0;
+  if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(true);
+  if (unit.mesh.getAbsolutePosition) {
+    const abs = unit.mesh.getAbsolutePosition();
+    ring.position.set(abs.x, abs.y + TILE * 0.035, abs.z);
+  }
 
   unit.selectionIndicator = ring;
-  unit.selectionIndicatorMatOut = built.matOut;
-  unit.selectionIndicatorMatIn = built.matIn;
+  unit.selectionIndicatorMatOut = null;
+  unit.selectionIndicatorMatIn = null;
 }
 
 // Update team colors for existing units and buildings

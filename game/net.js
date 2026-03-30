@@ -1545,6 +1545,22 @@
                 unitIds: Array.isArray(cmd.unitIds) ? cmd.unitIds.slice() : []
               });
             }
+            if (cmd.type === 'convert' && window.currentMatch.isLiveMultiplayerMatch()) {
+              console.log('🧬 CONVERT TRACE receive', {
+                peerId: peerId || null,
+                peerNorm: normalizePeerId(peerId || ''),
+                rawPlayerId,
+                normalizedPlayerId,
+                commandId: cmd.commandId || null,
+                playerCommandSeq: Number.isFinite(cmd.playerCommandSeq) ? cmd.playerCommandSeq : null,
+                tick: Number.isFinite(cmd.tick) ? cmd.tick : null,
+                localMatchTick: window.currentMatch.tick,
+                unitId: cmd.unitId || null,
+                targetType: cmd.targetType || null,
+                resetHealth: cmd.resetHealth === true,
+                postConvertBehavior: cmd.postConvertBehavior || null
+              });
+            }
             
             // TRUE LOCKSTEP: Command for tick N confirms peer is ready for tick N
             // Update tick confirmation (commands serve as implicit heartbeats)

@@ -89,6 +89,9 @@
     const index = this.units.findIndex(u => u.id === unitId);
     if (index > -1) {
       const unit = this.units[index];
+      if (window.disposeHealthDots) {
+        window.disposeHealthDots(unit);
+      }
       if (unit.mesh) unit.mesh.dispose();
       this.units.splice(index, 1);
       // Remove from global units too

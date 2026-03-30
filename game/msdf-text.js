@@ -1,6 +1,9 @@
 // MSDF Text Renderer using custom shader
 // Crisp text at any scale using multi-channel signed distance fields
 
+/** Same as `HEALTH_DOTS_RENDERING_GROUP` in health-display.js — draw over world depth so unit speech is not buried in geometry. */
+const UNIT_OVERLAY_RENDERING_GROUP_ID = 2;
+
 const MSDFText = {
   fontData: null,
   fontTexture: null,
@@ -180,7 +183,8 @@ const MSDFText = {
         const baselineY = this.fontData.common.base * scale;
         plane.position.y = baselineY - charData.yoffset * scale - (charHeight / 2);
         plane.isPickable = false;
-        
+        plane.renderingGroupId = UNIT_OVERLAY_RENDERING_GROUP_ID;
+
         // Set UV coordinates for this character in the atlas
         const u1 = charData.x / atlasWidth;
         const v1 = charData.y / atlasHeight;

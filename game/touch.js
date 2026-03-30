@@ -29,8 +29,10 @@
       suppressSingleTapAfterTwoFingerMs: 300,
       initialPinchMinSpanPx: 20,
       buildPlaceMinHoldMs: 150,
-      // Zone-based camera control
+      // Zone-based camera control (edge-started finger: tangential rotate at rim, blend to zoom inward)
       edgeZoneWidthPx: 60,
+      edgeInwardZoomBlendPx: 48,
+      edgeRotateSign: 1,
       zoneZoomSensitivity: 0.015,
       zoneRotateSensitivity: 0.018,
       zonePanSensitivity: 8.0,
@@ -151,6 +153,18 @@
       const edgeWidth = config.edgeZoneWidthPx;
       const startedInEdge = localX < edgeWidth || localX > (rect.width - edgeWidth) || 
                             localY < edgeWidth || localY > (rect.height - edgeWidth);
+      let edgePrimary = null;
+      if (startedInEdge) {
+        const dl = localX;
+        const dr = rect.width - localX;
+        const dt = localY;
+        const db = rect.height - localY;
+        const m = Math.min(dl, dr, dt, db);
+        if (m === dl) edgePrimary = 'left';
+        else if (m === dt) edgePrimary = 'top';
+        else if (m === dr) edgePrimary = 'right';
+        else edgePrimary = 'bottom';
+      }
       
       return {
         id: e.pointerId,
@@ -167,6 +181,7 @@
         syntheticDownEmitted: false,
         isDoubleTapStart: false, // True if this finger started as second tap of double-tap
         startedInEdge: startedInEdge, // True if touch started in edge zone (rot/zoom)
+        edgePrimary: edgePrimary, // Nearest screen edge at touch-down (stable for whole gesture)
         isEdgeFinger: false, // Set to true once edge gesture starts
         isCenterFinger: false, // Set to true once center gesture (pan or action) starts
         isPanning: false, // Set to true if this finger committed to panning (sticks even if action mode activates)
@@ -258,115 +273,32 @@
       return window.ui.getWorldPositionFromScreen(screenX, screenY);
     }
 
-    // NEW: Calculate edge proximity factors (0 = center, 1 = at edge)
-    function getEdgeProximity(clientX, clientY) {
+    function distanceToNearestScreenEdge(clientX, clientY) {
       const rect = canvasRect();
-      const localX = clientX - rect.left;
-      const localY = clientY - rect.top;
-      
-      const edgeWidth = config.edgeZoneWidthPx;
-      
-      // Calculate proximity to each edge (0 = not in zone, 1 = at edge)
-      // Using fixed pixel width for consistent feel across screen sizes
-      const leftProx = Math.max(0, (edgeWidth - localX) / edgeWidth);
-      const rightProx = Math.max(0, (localX - (rect.width - edgeWidth)) / edgeWidth);
-      const topProx = Math.max(0, (edgeWidth - localY) / edgeWidth);
-      const bottomProx = Math.max(0, (localY - (rect.height - edgeWidth)) / edgeWidth);
-      
-      return {
-        left: leftProx,
-        right: rightProx,
-        top: topProx,
-        bottom: bottomProx,
-        // Combined factors for zoom (left/right) and rotate (top/bottom)
-        zoomFactor: Math.max(leftProx, rightProx),
-        rotateFactor: Math.max(topProx, bottomProx)
-      };
+      const lx = clientX - rect.left;
+      const ly = clientY - rect.top;
+      return Math.min(lx, ly, rect.width - lx, rect.height - ly);
     }
 
-    // NEW: Single-finger camera control with zone blending
-    // Returns true if camera was moved (to prevent tap detection)
-    let cameraFingerActive = false;
-    let cameraFingerLastX = 0;
-    let cameraFingerLastY = 0;
-    
-    function applySingleFingerCamera(ps) {
-      if (!window.gfx || !window.gfx.camera || !window.gfx.cameraTarget) return false;
-      if (window.buildingSystem && window.buildingSystem.isPlacing) return false;
-      
-      const cam = window.gfx.camera;
-      const target = window.gfx.cameraTarget.position;
-      
-      // Calculate delta from last position
-      const dx = ps.x - ps.lastX;
-      const dy = ps.y - ps.lastY;
-      
-      // CRITICAL: Consume the delta by updating lastX/lastY
-      // This prevents the same delta from being applied multiple times
-      ps.lastX = ps.x;
-      ps.lastY = ps.y;
-      
-      // Skip if no movement
-      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
-      
-      // Get edge proximity for zone blending
-      const edge = getEdgeProximity(ps.x, ps.y);
-      
-      // Calculate world-space pan
-      const rect = canvasRect();
-      const pixelsToWorld = (2 * cam.radius * Math.tan((cam.fov || 0.8) / 2)) / Math.max(1, rect.height);
-      
-      // Get camera-aligned axes for panning
-      const camPos = cam.position.clone();
-      const targetPos = target.clone ? target.clone() : new BABYLON.Vector3(target.x, target.y, target.z);
-      const toTarget = targetPos.subtract(camPos).normalize();
-      const groundForward = new BABYLON.Vector3(toTarget.x, 0, toTarget.z);
-      
-      if (groundForward.lengthSquared() < 1e-6) return false;
-      groundForward.normalize();
-      const groundRight = new BABYLON.Vector3(-groundForward.z, 0, groundForward.x);
-      
-      // === PAN (reduced heavily or disabled when in edge zones for zoom/rotate) ===
-      const edgeActivity = Math.max(edge.zoomFactor, edge.rotateFactor);
-      const panStrength = edgeActivity > 0.1 ? 0.2 : 1.0; // Almost no pan when zooming/rotating
-      const panSens = config.zonePanSensitivity * panStrength;
-      const wx = (groundRight.x * dx + groundForward.x * dy) * pixelsToWorld * panSens;
-      const wz = (groundRight.z * dx + groundForward.z * dy) * pixelsToWorld * panSens;
-      
-      if (Number.isFinite(wx) && Number.isFinite(wz)) {
-        const tileSize = (window.TILE_SIZE || 4);
-        const w = (window.liveField && window.liveField.width) ? window.liveField.width * tileSize : 256;
-        const h = (window.liveField && window.liveField.height) ? window.liveField.height * tileSize : 256;
-        const margin = 2 * tileSize;
-        
-        target.x = Math.max(margin, Math.min(w - margin, target.x + wx));
-        target.z = Math.max(margin, Math.min(h - margin, target.z + wz));
-        
-        // Update terrain chunks
-        if (window.liveField && typeof window.liveField.updateVisibleChunks === 'function') {
-          window.liveField.updateVisibleChunks(target.x, target.z);
-        }
+    // Tangential drag along the rim so the board follows the finger (screen-space "grab this edge").
+    function tangentialTableFollowDelta(edgePrimary, dx, dy) {
+      switch (edgePrimary) {
+        case 'left': return -dy;
+        case 'right': return dy;
+        case 'top': return dx;
+        case 'bottom': return -dx;
+        default: return 0;
       }
-      
-      // === ZOOM (when near left/right edges, Y movement = zoom) ===
-      if (edge.zoomFactor > 0.1) {
-        const zoomAmount = -dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius; // Drag up = zoom in
-        cam.radius = Math.max(10, Math.min(200, cam.radius + zoomAmount));
+    }
+
+    function edgeRotateZoomWeights(distToEdgePx, edgeWidth, blendPx) {
+      if (blendPx <= 0) {
+        return distToEdgePx < edgeWidth ? { rotate: 1, zoom: 0 } : { rotate: 0, zoom: 1 };
       }
-      
-      // === ROTATE (when near top/bottom edges, X movement = rotate) ===
-      if (edge.rotateFactor > 0.1) {
-        const rotateAmount = -dx * edge.rotateFactor * config.zoneRotateSensitivity; // Flipped direction
-        cam.alpha += rotateAmount;
-      }
-      
-      // Store velocity for momentum
-      gestureVelocity.pan.x = wx || 0;
-      gestureVelocity.pan.z = wz || 0;
-      gestureVelocity.rotate = edge.rotateFactor > 0.1 ? -dx * edge.rotateFactor * config.zoneRotateSensitivity : 0;
-      gestureVelocity.pinch = edge.zoomFactor > 0.1 ? -dy * edge.zoomFactor * config.zoneZoomSensitivity * cam.radius : 0;
-      
-      return true;
+      if (distToEdgePx < edgeWidth) return { rotate: 1, zoom: 0 };
+      if (distToEdgePx >= edgeWidth + blendPx) return { rotate: 0, zoom: 1 };
+      const t = (distToEdgePx - edgeWidth) / blendPx;
+      return { rotate: 1 - t, zoom: t };
     }
 
     function sendSyntheticPointer(type, clientX, clientY, button, options) {
@@ -842,36 +774,38 @@
     }
     
     // === EDGE ZONE CAMERA CONTROL ===
-    // For touches that start in edge zone: left/right = rotate, up/down = zoom
+    // Touch-down on rim: tangential motion rotates (table follows that edge). Moving inward blends to vertical zoom.
     function applyEdgeZoneCamera(ps) {
       if (!window.gfx || !window.gfx.camera) return false;
       
-      // Cancel any existing momentum when gesture starts
       momentumActive = false;
       
       const cam = window.gfx.camera;
       const dx = ps.x - ps.lastX;
       const dy = ps.y - ps.lastY;
       
-      // Consume the delta
       ps.lastX = ps.x;
       ps.lastY = ps.y;
       
       if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return false;
       
-      // Ramp-up: start slow, reach full speed over 400ms
       const gestureDuration = now() - ps.startTime;
       const rampFactor = Math.min(1.0, 0.2 + 0.8 * (gestureDuration / 400));
       
-      // Left/right = rotate (inverted)
-      const rotateAmount = dx * config.zoneRotateSensitivity * rampFactor;
-      cam.alpha += rotateAmount;
+      const edge = config.edgeZoneWidthPx;
+      const blend = Math.max(0, config.edgeInwardZoomBlendPx || 0);
+      const dist = distanceToNearestScreenEdge(ps.x, ps.y);
+      const w = edgeRotateZoomWeights(dist, edge, blend);
       
-      // Up/down = zoom (inverted: drag up = zoom out, drag down = zoom in)
-      const zoomAmount = dy * config.zoneZoomSensitivity * cam.radius * rampFactor;
+      const edgePrimary = ps.edgePrimary || 'left';
+      const tangential = tangentialTableFollowDelta(edgePrimary, dx, dy);
+      const rotateAmount = tangential * config.zoneRotateSensitivity * rampFactor * w.rotate * config.edgeRotateSign;
+      // Opposite dy sign from legacy edge zoom: drag up (negative dy) zooms out (larger radius)
+      const zoomAmount = -dy * config.zoneZoomSensitivity * cam.radius * rampFactor * w.zoom;
+      
+      cam.alpha += rotateAmount;
       cam.radius = Math.max(10, Math.min(200, cam.radius + zoomAmount));
       
-      // Store velocity for momentum (scaled by ramp)
       gestureVelocity = { pan: { x: 0, z: 0 }, rotate: rotateAmount, pinch: zoomAmount };
       
       return true;

@@ -714,6 +714,10 @@ function initializeUpgradeAbilities() {
               unit.billboard = null;
             }
 
+            if (window.disposeHealthDots) {
+              window.disposeHealthDots(unit);
+            }
+
             // Dispose old mesh
             if (unit.mesh) {
               unit.mesh.dispose();
@@ -1361,38 +1365,178 @@ function spawnUnitModels(scene) {
     }
 }
 
-// Create a selection indicator for a unit
+const SELECTION_COLLAR_MODEL = 'assets/models/collar.glb';
+// World Y lift above unit mesh origin (feet). Lower = closer to ground / less “floating”.
+const SELECTION_INDICATOR_Y_OFFSET = 0.035;
+// Group 0: same pass as world geometry — normal depth test and occlusion.
+const SELECTION_INDICATOR_RENDERING_GROUP = 0;
+// Spin in rad/s (frame-rate independent). Steady rate ≈ old 0.006 rad/frame @ 60fps.
+const SELECTION_SPIN_STEADY_RAD_PER_SEC = 0.006 * 60;
+// When a unit becomes selected, spin starts here then eases toward steady (each unit has its own velocity).
+const SELECTION_SPIN_START_RAD_PER_SEC = 1.7;
+// Larger = settles to steady speed faster (scales with delta time).
+const SELECTION_SPIN_SETTLE_BLEND_PER_SEC = 6;
+
+function collectMeshesUnderNode(node) {
+    const out = [];
+    (function walk(n) {
+        if (!n) return;
+        if (typeof BABYLON !== 'undefined' && n instanceof BABYLON.Mesh) out.push(n);
+        const kids = n.getChildren ? n.getChildren() : [];
+        for (let i = 0; i < kids.length; i++) walk(kids[i]);
+    })(node);
+    return out;
+}
+
+/** Flat shading like HUD: ignore sun/rimlight so the collar reads as UI, not terrain. */
+function applyUnlitSelectionIndicatorMaterial(mesh) {
+    if (!mesh || !mesh.material) return;
+    const raw = mesh.material;
+    const list = Array.isArray(raw) ? raw : [raw];
+    list.forEach(mat => {
+        if (!mat) return;
+        if (typeof BABYLON !== 'undefined') {
+            if (mat instanceof BABYLON.StandardMaterial) {
+                mat.disableLighting = true;
+                mat.specularColor = BABYLON.Color3.Black();
+                mat.specularPower = 0;
+                return;
+            }
+            if (mat instanceof BABYLON.PBRMaterial) {
+                mat.unlit = true;
+                return;
+            }
+        }
+        if ('disableLighting' in mat) mat.disableLighting = true;
+        if ('unlit' in mat) mat.unlit = true;
+    });
+}
+
+function setUnitSelectionIndicatorVisible(root, visible) {
+    if (!root) return;
+    if (typeof root.setEnabled === 'function') root.setEnabled(true);
+    const meshes = collectMeshesUnderNode(root);
+    meshes.forEach(m => {
+        m.isVisible = visible;
+        if (typeof m.setEnabled === 'function') m.setEnabled(true);
+    });
+    if ('isVisible' in root) root.isVisible = visible;
+}
+
+function disposeUnitSelectionIndicator(unit) {
+    if (!unit) return;
+    if (unit.selectionIndicatorDisposeFn) {
+        try {
+            unit.selectionIndicatorDisposeFn();
+        } catch (e) { /* ignore */ }
+        unit.selectionIndicatorDisposeFn = null;
+    } else if (unit.selectionIndicator && typeof unit.selectionIndicator.dispose === 'function') {
+        try {
+            unit.selectionIndicator.dispose();
+        } catch (e) { /* ignore */ }
+    }
+    unit.selectionIndicator = null;
+    unit.selectionIndicatorMatOut = null;
+    unit.selectionIndicatorMatIn = null;
+}
+
+function createTorusSelectionFallback(scene, TILE) {
+    const ring = BABYLON.MeshBuilder.CreateTorus('selectionRing', {
+        diameter: Math.max(2.8, TILE * 0.88),
+        thickness: Math.max(0.12, TILE * 0.038),
+        tessellation: 24
+    }, scene);
+    const ringMaterial = new BABYLON.StandardMaterial('selectionRingMat', scene);
+    ringMaterial.diffuseColor = new BABYLON.Color3(0, 1, 1);
+    ringMaterial.emissiveColor = new BABYLON.Color3(0, 0.5, 0.5);
+    ringMaterial.backFaceCulling = false;
+    ringMaterial.disableLighting = true;
+    ring.material = ringMaterial;
+    ring.isPickable = false;
+    ring.renderingGroupId = SELECTION_INDICATOR_RENDERING_GROUP;
+    if (window.gfx && window.gfx.markMeshExcludeDirectionalShadows) {
+        window.gfx.markMeshExcludeDirectionalShadows(ring);
+    }
+    return ring;
+}
+
+// Selection ring: prefer collar.glb; torus until load finishes or on failure (scene-root + synced pos)
 function createSelectionIndicator(unit) {
     if (!unit.mesh || !window.gfx || !window.gfx.scene) return;
-    if (!window.gfx.createAlternatingTriangleRingMesh) return;
 
     const TILE = window.TILE_SIZE || 4;
-    const built = window.gfx.createAlternatingTriangleRingMesh(window.gfx.scene, {
-        name: 'selectionRing',
-        pairCount: 14
-    });
-    const ring = built.mesh;
+    const scene = window.gfx.scene;
 
-    built.matOut.diffuseColor = new BABYLON.Color3(0.15, 1, 1);
-    built.matOut.emissiveColor = new BABYLON.Color3(0.35, 0.95, 1);
-    built.matIn.diffuseColor = new BABYLON.Color3(0.1, 1, 1);
-    built.matIn.emissiveColor = new BABYLON.Color3(0.45, 1, 1);
+    unit._selectionIndicatorGen = (unit._selectionIndicatorGen || 0) + 1;
+    const gen = unit._selectionIndicatorGen;
 
-    ring.isVisible = false;
-    ring.parent = unit.mesh;
-    const sx = Math.abs(unit.mesh.scaling.x);
-    const sy = Math.abs(unit.mesh.scaling.y);
-    const sz = Math.abs(unit.mesh.scaling.z);
-    if (sx > 1e-5 && sz > 1e-5) {
-        ring.scaling.x = 1 / sx;
-        ring.scaling.z = 1 / sz;
+    const torus = createTorusSelectionFallback(scene, TILE);
+    torus.isVisible = false;
+    torus.parent = null;
+    torus.scaling.setAll(1);
+    if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(true);
+    if (unit.mesh.getAbsolutePosition) {
+        const abs = unit.mesh.getAbsolutePosition();
+        torus.position.set(abs.x, abs.y + TILE * SELECTION_INDICATOR_Y_OFFSET, abs.z);
     }
-    if (sy > 1e-5) ring.scaling.y = 1 / sy;
-    ring.position.y = TILE * 0.05;
 
-    unit.selectionIndicator = ring;
-    unit.selectionIndicatorMatOut = built.matOut;
-    unit.selectionIndicatorMatIn = built.matIn;
+    unit.selectionIndicator = torus;
+    unit.selectionIndicatorDisposeFn = null;
+    unit.selectionIndicatorMatOut = null;
+    unit.selectionIndicatorMatIn = null;
+
+    if (window.gfx.getModel) {
+        window.gfx.getModel(SELECTION_COLLAR_MODEL, scene).then(model => {
+            if (unit._selectionIndicatorGen !== gen || !unit.mesh) {
+                model.dispose();
+                return;
+            }
+            if (unit.selectionIndicator !== torus) {
+                model.dispose();
+                return;
+            }
+            torus.dispose();
+
+            const root = model.root;
+            root.parent = null;
+            root.setEnabled(true);
+            root.rotationQuaternion = null;
+            root.getDescendants(false).forEach(n => {
+                if (typeof n.setEnabled === 'function') n.setEnabled(true);
+            });
+
+            const meshes = collectMeshesUnderNode(root);
+            meshes.forEach(m => {
+                m.isPickable = false;
+                m.renderingGroupId = SELECTION_INDICATOR_RENDERING_GROUP;
+                const base = m.name || 'collar';
+                if (!base.includes('selectionRing')) m.name = base + '_selectionRing';
+                applyUnlitSelectionIndicatorMaterial(m);
+                if (window.gfx && window.gfx.markMeshExcludeDirectionalShadows) {
+                    window.gfx.markMeshExcludeDirectionalShadows(m);
+                }
+            });
+            if (root.name && !String(root.name).includes('selectionRing')) {
+                root.name = String(root.name) + '_selectionRing';
+            }
+
+            const scale = Math.max(0.12, TILE * 0.22);
+            root.scaling.setAll(scale);
+
+            if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(true);
+            if (unit.mesh.getAbsolutePosition) {
+                const abs = unit.mesh.getAbsolutePosition();
+                root.position.set(abs.x, abs.y + TILE * SELECTION_INDICATOR_Y_OFFSET, abs.z);
+            }
+
+            setUnitSelectionIndicatorVisible(root, false);
+
+            unit.selectionIndicator = root;
+            unit.selectionIndicatorDisposeFn = model.dispose;
+        }).catch(err => {
+            console.warn('Selection collar model failed (using torus):', SELECTION_COLLAR_MODEL, err);
+        });
+    }
     
     // Create health dots for the unit
     if (window.createHealthDots) {
@@ -1402,40 +1546,83 @@ function createSelectionIndicator(unit) {
     // console.log(`🎯 Created selection indicator for ${unit.name}`);
 }
 
+function collectUnitsForSelectionVisuals() {
+    const seen = new Set();
+    const out = [];
+    function push(u) {
+        if (!u || !u.id || seen.has(u.id)) return;
+        seen.add(u.id);
+        out.push(u);
+    }
+    const gu = window.gameUnits;
+    if (gu && gu.length) gu.forEach(push);
+    const pu = window.player && window.player.units;
+    if (pu && pu.length) pu.forEach(push);
+    return out;
+}
+
+function unitMatchesSelection(unit, selectedUnits) {
+    if (!unit || !selectedUnits.length) return false;
+    if (selectedUnits.includes(unit)) return true;
+    const id = unit.id;
+    if (!id) return false;
+    for (let i = 0; i < selectedUnits.length; i++) {
+        const s = selectedUnits[i];
+        if (s && s.id === id) return true;
+    }
+    return false;
+}
+
 // Update selection indicators for all units
-function updateSelectionIndicators() {
+function updateSelectionIndicators(deltaTimeOpt) {
     if (!window.player) return;
-    
-    // Defensive check for replay mode where player might not have all methods
+
     if (typeof window.player.getSelectedUnits !== 'function') return;
-    
+
+    let dt = typeof deltaTimeOpt === 'number' && deltaTimeOpt > 0 && deltaTimeOpt < 2 ? deltaTimeOpt : 0;
+    if (dt <= 0 && window.gfx && window.gfx.engine && typeof window.gfx.engine.getDeltaTime === 'function') {
+        dt = window.gfx.engine.getDeltaTime() / 1000;
+    }
+    if (dt <= 0 || dt > 2) dt = 1 / 60;
+
     const selectedUnits = window.player.getSelectedUnits();
-    
-    // Update all units in the game (including opponents), not just player's units
-    const allUnits = window.gameUnits || (window.player.units || []);
-    
+
+    const allUnits = collectUnitsForSelectionVisuals();
+
     allUnits.forEach(unit => {
-        const isSelected = selectedUnits.includes(unit);
-        
-        if (unit.selectionIndicator) {
-            unit.selectionIndicator.isVisible = isSelected;
+        const isSelected = unitMatchesSelection(unit, selectedUnits);
+
+        if (unit.selectionIndicator && unit.mesh) {
+            if (typeof unit.selectionIndicator.setEnabled === 'function') {
+                unit.selectionIndicator.setEnabled(true);
+            }
+            setUnitSelectionIndicatorVisible(unit.selectionIndicator, isSelected);
 
             if (isSelected) {
-                unit.selectionIndicator.rotation.y += 0.02;
-                const t = performance.now() * 0.003;
-                const outPulse = 0.88 + Math.sin(t) * 0.12;
-                const inPulse = 0.88 + Math.sin(t + Math.PI) * 0.12;
-                if (unit.selectionIndicatorMatOut) unit.selectionIndicatorMatOut.alpha = outPulse;
-                if (unit.selectionIndicatorMatIn) unit.selectionIndicatorMatIn.alpha = inPulse;
+                const TILE = window.TILE_SIZE || 4;
+                if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(true);
+                const abs = unit.mesh.getAbsolutePosition();
+                unit.selectionIndicator.position.set(abs.x, abs.y + TILE * SELECTION_INDICATOR_Y_OFFSET, abs.z);
+
+                if (!unit._selectionSpinRampActive) {
+                    unit._selectionSpinAngularVel = SELECTION_SPIN_START_RAD_PER_SEC;
+                    unit._selectionSpinRampActive = true;
+                }
+                const blend = Math.min(1, SELECTION_SPIN_SETTLE_BLEND_PER_SEC * dt);
+                unit._selectionSpinAngularVel +=
+                    (SELECTION_SPIN_STEADY_RAD_PER_SEC - unit._selectionSpinAngularVel) * blend;
+                unit.selectionIndicator.rotation.y += unit._selectionSpinAngularVel * dt;
             } else {
-                if (unit.selectionIndicatorMatOut) unit.selectionIndicatorMatOut.alpha = 1;
-                if (unit.selectionIndicatorMatIn) unit.selectionIndicatorMatIn.alpha = 1;
+                unit._selectionSpinRampActive = false;
             }
         }
-        
-        // Show health dots for selected units, hide for others
+
         if (window.showHealthDots && window.hideHealthDots) {
             if (isSelected) {
+                // Selection can run before mesh exists (e.g. villager→brigand convert); create once mesh is ready.
+                if (unit.mesh && window.createHealthDots) {
+                    window.createHealthDots(unit);
+                }
                 window.showHealthDots(unit);
                 window.updateHealthDots(unit);
             } else {
@@ -1551,9 +1738,7 @@ function updateUnits(deltaTime) {
     
     // Update distances for LOD
     updateUnitDistances();
-    
-    // Update selection indicators once per frame (not per unit)
-    updateSelectionIndicators();
+
     // Update selection panel: 2D DOM or 3D HUD depending on mode
     if (window.hud && window.USE_3D_HUD && window.hud.update3DSelectionPanel) {
       window.hud.update3DSelectionPanel();
@@ -2678,6 +2863,14 @@ function updateUnitMeshes() {
             }
         }
     });
+
+    // After mesh/billboard positions — selection rings follow world space (uses engine Δt; no param on this fn)
+    let selectionDt = 1 / 60;
+    if (window.gfx && window.gfx.engine && typeof window.gfx.engine.getDeltaTime === 'function') {
+        const ms = window.gfx.engine.getDeltaTime();
+        if (ms > 0 && ms < 500) selectionDt = ms / 1000;
+    }
+    updateSelectionIndicators(selectionDt);
 }
 
 // Debug function to check current mesh rotations
@@ -2774,6 +2967,15 @@ function destroyUnit(unit) {
             unit.billboard.dispose();
         }
         unit.billboard = null;
+    }
+
+    disposeUnitSelectionIndicator(unit);
+
+    if (window.disposeHealthDots) {
+        window.disposeHealthDots(unit);
+    }
+    if (window.player && typeof window.player.deselectUnit === 'function') {
+        window.player.deselectUnit(unit);
     }
 
     // Remove from scene
@@ -3175,6 +3377,10 @@ if (typeof window !== 'undefined') {
     window.respawnUnits = respawnUnits;
     window.debugUnitRotations = debugUnitRotations;
     window.destroyUnit = destroyUnit;
+    window.createSelectionIndicator = createSelectionIndicator;
+    window.updateSelectionIndicators = updateSelectionIndicators;
+    window.disposeUnitSelectionIndicator = disposeUnitSelectionIndicator;
+    window.setUnitSelectionIndicatorVisible = setUnitSelectionIndicatorVisible;
 
     window.onUnitDeath = function(unit, attackerOwner) {
         if (!unit || unit.dead) return;
@@ -3182,6 +3388,20 @@ if (typeof window !== 'undefined') {
         // Brigands don't die — they drop their weapon, revert to a villager, and flee home
         if (unit.type === 'brigand') {
             if (window.isMultiplayer && window.currentMatch) {
+                // Live lockstep: never mutate unit type directly from local death callbacks.
+                // Host submits one deterministic convert command; peers wait to execute it.
+                const match = window.currentMatch;
+                if (match.isLiveMultiplayerMatch && match.isLiveMultiplayerMatch()) {
+                    if (unit._pendingDefeatConvert) {
+                        return;
+                    }
+                    unit._pendingDefeatConvert = true;
+
+                    if (!match.isHost || !match.isHost()) {
+                        return;
+                    }
+                }
+
                 const owner = unit.owner;
                 const ownerPlayer = window.findPlayerByUnitOwner?.(owner);
                 const pos = unit.pb?.state?.loc;
@@ -3204,7 +3424,7 @@ if (typeof window !== 'undefined') {
                     }
                 }
 
-                window.currentMatch.executeConvertCommand({
+                const convertCommand = {
                     type: 'convert',
                     playerId: owner,
                     unitId: unit.id,
@@ -3214,7 +3434,15 @@ if (typeof window !== 'undefined') {
                     postConvertParams: homePos
                         ? { targetPoint: homePos }
                         : { center: { x: pos?.x || 0, z: pos?.z || 0 } }
-                });
+                };
+                if (match.isLiveMultiplayerMatch && match.isLiveMultiplayerMatch()) {
+                    const queued = match.submitCommand(convertCommand);
+                    if (!queued) {
+                        unit._pendingDefeatConvert = false;
+                    }
+                } else {
+                    match.executeConvertCommand(convertCommand);
+                }
                 return;
             }
             handleBrigandDefeat(unit);
@@ -3247,7 +3475,13 @@ if (typeof window !== 'undefined') {
         }
 
         // Clean up brigand visuals
-        if (brigand.selectionIndicator) { brigand.selectionIndicator.dispose(); brigand.selectionIndicator = null; }
+        disposeUnitSelectionIndicator(brigand);
+        if (window.disposeHealthDots) {
+            window.disposeHealthDots(brigand);
+        }
+        if (window.player && typeof window.player.deselectUnit === 'function') {
+            window.player.deselectUnit(brigand);
+        }
         if (brigand.billboard && window.gfx?.returnBillboardInstance) { window.gfx.returnBillboardInstance(brigand.billboard); brigand.billboard = null; }
         if (brigand.mesh) { brigand.mesh.dispose(); brigand.mesh = null; }
         brigand.dead = true;

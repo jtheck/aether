@@ -238,11 +238,9 @@ Player.prototype.selectUnit = function(unit) {
   // Commands will only work on own units (handled in command processing)
   this.selectedUnits.push(unit);
   
-  // Show health dots for the selected unit
+  // Show health dots for the selected unit (createHealthDots no-ops if already current impl)
   if (unit.mesh && window.createHealthDots) {
-    if (!unit.healthDotsContainer) {
-      window.createHealthDots(unit);
-    }
+    window.createHealthDots(unit);
     window.showHealthDots(unit);
     window.updateHealthDots(unit);
   }
@@ -272,7 +270,11 @@ Player.prototype.clearSelection = function() {
   // Hide selection indicators for units
   this.selectedUnits.forEach(unit => {
     if (unit.selectionIndicator) {
-      unit.selectionIndicator.isVisible = false;
+      if (window.setUnitSelectionIndicatorVisible) {
+        window.setUnitSelectionIndicatorVisible(unit.selectionIndicator, false);
+      } else {
+        unit.selectionIndicator.isVisible = false;
+      }
     }
     if (unit.healthDotsContainer && window.hideHealthDots) {
       window.hideHealthDots(unit);
@@ -311,11 +313,8 @@ Player.prototype.selectBuilding = function(building) {
     window.showBuildingRadius(building);
   }
   
-  // Show health dots for the selected building
   if (building.mesh && window.createHealthDots) {
-    if (!building.healthDotsContainer) {
-      window.createHealthDots(building);
-    }
+    window.createHealthDots(building);
     window.showHealthDots(building);
     window.updateHealthDots(building);
   }

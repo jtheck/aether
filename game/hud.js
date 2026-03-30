@@ -17,6 +17,14 @@
   // Minimap system state
   let minimapIndicators = [];
   let minimapContainer = null;
+  /** 0–1 from camera zoom (smoothstep); used for HUD offset fade */
+  let minimapZoomSmooth = 0;
+  /** 0–1, biased up when zoom is far — tier checks use this so “max zoom” stacks hardest */
+  let minimapMergeT = 0;
+  /** lower = merge sooner; PER_TYPE = one pile per unit type off-screen */
+  const MINIMAP_MERGE_PER_TYPE = 0.34;
+  const MINIMAP_MERGE_COARSE = 0.13;
+  const MINIMAP_MERGE_ONE_BUCKET = 0.07;
   let radialMenuVisible = false;
   let radialMenuItems = [];
   let currentMenuLevel = 'main'; // Track which menu level we're in
@@ -2184,7 +2192,20 @@
     // SLOW PATH: Recalculate groups and frustum checks (every 5 frames)
     // Group off-screen units by type and direction (continuous spread from corners)
     const groups = new Map(); // Key: "type_direction", Value: {type, direction, units[], position}
-    
+
+    // Zoomed out (large arc-rotate radius) → merge edge icons harder; zoomed in → keep spread
+    let z = 0;
+    const cam = hud.camera;
+    if (cam && typeof cam.radius === 'number' &&
+        typeof cam.lowerRadiusLimit === 'number' && typeof cam.upperRadiusLimit === 'number') {
+      const span = cam.upperRadiusLimit - cam.lowerRadiusLimit;
+      z = span > 1e-6 ? (cam.radius - cam.lowerRadiusLimit) / span : 0;
+      z = Math.min(1, Math.max(0, z));
+    }
+    minimapZoomSmooth = z * z * (3 - 2 * z); // smoothstep — stable HUD polish
+    // Extra weight at high z so “especially far” collapses stacks; stays gentle when zoomed in
+    minimapMergeT = Math.min(1, minimapZoomSmooth + Math.pow(z, 2.15) * 0.68);
+
     // Process each player unit
     window.player.units.forEach((unit) => {
       if (!unit.mesh || !unit.pb.state.loc) return;
@@ -2218,47 +2239,52 @@
         // This prevents jumping between top/bottom when units are far behind.
         // Only units clearly in front (forwardDot > 0) use upDot to determine top/bottom
         let cornerY = isBehind ? 'b' : (upDot > 0 ? 't' : 'b'); // top or bottom
-        let corner = `corner-${cornerY}${cornerX}`;
-        
-        // Determine which edge we're on based on which direction is MORE extreme
-        // Compare the raw absolute dot products - higher = more extreme in that direction
-        // For units behind camera, use absolute value of upDot but ensure cornerY stays 'b'
-        const absRight = Math.abs(rightDot);
-        // When behind, we still need absUp for edge spread calculations, but cornerY is already forced to 'b'
-        const absUp = Math.abs(upDot);
-        const totalMag = absRight + absUp;
-        
-        // Normalize to 0-1 scale
-        const rightNorm = absRight / totalMag; // 0 = pure vertical, 1 = pure horizontal
-        const upNorm = absUp / totalMag;       // 0 = pure horizontal, 1 = pure vertical
-        
-        // At 45° corner: both are 0.5
-        // At cardinal edge: one is ~1, other is ~0
-        // Add deadzone around 0.5 to lock to corners
-        const cornerThreshold = 0.35; // Lock to corner if both are between 0.35-0.65
-        
-        let edgeSpread, spreadDir;
-        if (rightNorm > cornerThreshold && rightNorm < (1 - cornerThreshold) &&
-            upNorm > cornerThreshold && upNorm < (1 - cornerThreshold)) {
-          // Near 45° diagonal - lock to corner
-          // Pick a consistent spread direction (doesn't matter since spread=0)
-          spreadDir = rightNorm > upNorm ? 'v' : 'h';
-          edgeSpread = 0;
-          corner = `${corner}_${spreadDir}0`;
-        } else if (rightNorm > upNorm) {
-          // More horizontal = on LEFT/RIGHT edge, spread VERTICALLY along that edge
-          spreadDir = 'v';
-          // Remap: 0.65 -> 0, 1.0 -> 1
-          edgeSpread = Math.max(0, (rightNorm - (1 - cornerThreshold)) / cornerThreshold);
-          const bucket = Math.round(edgeSpread * 20);
-          corner = `${corner}_v${bucket}`;
+        const baseCorner = `corner-${cornerY}${cornerX}`;
+
+        let corner;
+        let edgeSpread = 0;
+
+        if (minimapMergeT >= MINIMAP_MERGE_PER_TYPE) {
+          // Fully zoomed out: one edge marker per unit type (centroid picks the edge)
+          corner = 'off';
+        } else if (minimapMergeT >= MINIMAP_MERGE_COARSE) {
+          // Mid–zoom out: merge along whole edges / quadrants — no v/h micro-buckets
+          corner = baseCorner;
         } else {
-          // More vertical = on TOP/BOTTOM edge, spread HORIZONTALLY along that edge
-          spreadDir = 'h';
-          // Remap: 0.65 -> 0, 1.0 -> 1
-          edgeSpread = Math.max(0, (upNorm - (1 - cornerThreshold)) / cornerThreshold);
-          const bucket = Math.round(edgeSpread * 20);
-          corner = `${corner}_h${bucket}`;
+          // Zoomed in: keep positional spread, but still fewer buckets when partly zoomed
+          const absRight = Math.abs(rightDot);
+          const absUp = Math.abs(upDot);
+          const totalMag = absRight + absUp;
+
+          const rightNorm = absRight / totalMag;
+          const upNorm = absUp / totalMag;
+
+          const cornerThreshold = 0.42 + 0.08 * (minimapMergeT / Math.max(0.001, MINIMAP_MERGE_COARSE));
+          const EDGE_SPREAD_BUCKETS = minimapMergeT < MINIMAP_MERGE_ONE_BUCKET ? 3 : 1;
+
+          let spreadDir;
+          if (rightNorm > cornerThreshold && rightNorm < (1 - cornerThreshold) &&
+              upNorm > cornerThreshold && upNorm < (1 - cornerThreshold)) {
+            spreadDir = rightNorm > upNorm ? 'v' : 'h';
+            edgeSpread = 0;
+            corner = `${baseCorner}_${spreadDir}0`;
+          } else if (rightNorm > upNorm) {
+            spreadDir = 'v';
+            edgeSpread = Math.max(0, (rightNorm - (1 - cornerThreshold)) / cornerThreshold);
+            const bucket = Math.min(
+              EDGE_SPREAD_BUCKETS - 1,
+              Math.floor(edgeSpread * EDGE_SPREAD_BUCKETS + 1e-6)
+            );
+            corner = `${baseCorner}_v${bucket}`;
+          } else {
+            spreadDir = 'h';
+            edgeSpread = Math.max(0, (upNorm - (1 - cornerThreshold)) / cornerThreshold);
+            const bucket = Math.min(
+              EDGE_SPREAD_BUCKETS - 1,
+              Math.floor(edgeSpread * EDGE_SPREAD_BUCKETS + 1e-6)
+            );
+            corner = `${baseCorner}_h${bucket}`;
+          }
         }
         
         // Group by type AND corner spread position
@@ -2326,19 +2352,19 @@
   }
   
   // Generate consistent offset based on unit type so they don't stack perfectly
-  function getTypeOffset(unitType) {
-    // Simple hash of unit type to generate consistent offsets
+  function getTypeOffset(unitType, mergeStrength) {
+    const t = typeof mergeStrength === 'number' ? mergeStrength : minimapMergeT;
+    if (t >= MINIMAP_MERGE_COARSE) return { x: 0, y: 0 };
+
     let hash = 0;
     for (let i = 0; i < unitType.length; i++) {
       hash = ((hash << 5) - hash) + unitType.charCodeAt(i);
-      hash = hash & hash; // Convert to 32bit integer
+      hash = hash & hash;
     }
-    
-    // Convert hash to small horizontal offset only (spread left/right, not up/down)
-    const offsetMagnitude = 0.08; // Smaller offset for subtle separation
-    const xOffset = ((hash % 100) / 100 - 0.5) * 2 * offsetMagnitude;
-    
-    return { x: xOffset, y: 0 }; // Only offset horizontally
+
+    const offsetMagnitude = 0.045 * (1 - t * 1.35);
+    const xOffset = ((hash % 100) / 100 - 0.5) * 2 * Math.max(0, offsetMagnitude);
+    return { x: xOffset, y: 0 };
   }
   
   // Get compass direction from camera to unit (N, NE, E, SE, S, SW, W, NW)
@@ -2482,7 +2508,7 @@
     const localPos = BABYLON.Vector3.TransformCoordinates(worldPos, inverseCameraMatrix);
     
     // Add type-based offset so different unit types don't stack perfectly
-    const typeOffset = getTypeOffset(group.type);
+    const typeOffset = getTypeOffset(group.type, minimapMergeT);
     localPos.x += typeOffset.x;
     localPos.y += typeOffset.y;
     
@@ -2566,7 +2592,7 @@
     if (unitCount > 1) {
       if (!indicator.countBadge) {
         // Create count badge (text plane)
-        const plane = BABYLON.MeshBuilder.CreatePlane(`countBadge_${index}`, {size: 0.2}, hud.scene);
+        const plane = BABYLON.MeshBuilder.CreatePlane(`countBadge_${index}`, {size: 0.14}, hud.scene);
         const badgeMat = new BABYLON.StandardMaterial(`badgeMat_${index}`, hud.scene);
         badgeMat.diffuseColor = new BABYLON.Color3(1, 1, 1);
         badgeMat.emissiveColor = new BABYLON.Color3(1, 1, 0);
@@ -2579,7 +2605,7 @@
         plane.material = badgeMat;
         
         plane.parent = indicator;
-        plane.position.y = 0.18; // Above sprite
+        plane.position.y = 0.15; // Above sprite
         plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
         
         indicator.countBadge = plane;
@@ -2590,7 +2616,7 @@
       const texture = indicator.badgeTexture;
       texture.clear();
       const ctx = texture.getContext();
-      ctx.font = "bold 48px Arial";
+      ctx.font = "bold 26px Arial";
       ctx.fillStyle = "white";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";

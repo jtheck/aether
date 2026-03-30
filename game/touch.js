@@ -29,9 +29,9 @@
       suppressSingleTapAfterTwoFingerMs: 300,
       initialPinchMinSpanPx: 20,
       buildPlaceMinHoldMs: 150,
-      // Zone-based camera control (edge-started finger: tangential rotate at rim, blend to zoom inward)
+      // Zone-based camera control (edge-started: rotate in rim; past rim = zoom; tiny linear handoff — set 0 for hard cut)
       edgeZoneWidthPx: 60,
-      edgeInwardZoomBlendPx: 48,
+      edgeInwardZoomBlendPx: 6,
       edgeRotateSign: 1,
       zoneZoomSensitivity: 0.015,
       zoneRotateSensitivity: 0.018,
@@ -845,7 +845,7 @@
     }
     
     // === EDGE ZONE CAMERA CONTROL ===
-    // Touch-down on rim: tangential motion rotates (table follows that edge). Moving inward blends to vertical zoom.
+    // Touch-down on rim: tangential rotate in band; narrow inward strip crossfades to vertical zoom (cheap linear mix).
     function applyEdgeZoneCamera(ps) {
       if (!window.gfx || !window.gfx.camera) return false;
       

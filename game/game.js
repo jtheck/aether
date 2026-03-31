@@ -247,7 +247,9 @@ Game.prototype.spawnVillagersForPlayer = function(player, playerIndex = 0) {
         center: { x: villager.pb.state.loc.x, z: villager.pb.state.loc.z },
         radius: 50,  // Large radius - villagers can roam freely
         wanderDistance: 2.0,  // How far they walk each step
-        wanderInterval: 30000  // Pick new target every 30 seconds (very relaxed)
+        wanderInterval: 30000,  // Pick new target every 30 seconds (very relaxed)
+        // Keep starting villagers planted at spawn until the sim has settled.
+        startImmediately: false
       });
     }
     

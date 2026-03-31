@@ -215,6 +215,135 @@
     return modelPromises.get(path).then(cloneFn => cloneFn());
   }
 
+  function setTransientModelEnabled(model, enabled) {
+    if (!model) return;
+    const nodes = new Set();
+    if (Array.isArray(model.nodes)) {
+      model.nodes.forEach(node => {
+        if (node) nodes.add(node);
+      });
+    }
+    if (model.root) {
+      nodes.add(model.root);
+      if (typeof model.root.getDescendants === 'function') {
+        model.root.getDescendants(false).forEach(node => {
+          if (node) nodes.add(node);
+        });
+      }
+    }
+
+    nodes.forEach(node => {
+      if (typeof node.setEnabled === 'function') {
+        node.setEnabled(enabled);
+      }
+    });
+  }
+
+  gfx.playTransientModelHop = function(modelPath, fromPoint, toPoint, options = {}) {
+    const effectScene = gfx.scene;
+    if (!effectScene || !modelPath) return null;
+
+    const from = fromPoint?.clone
+      ? fromPoint.clone()
+      : new BABYLON.Vector3(fromPoint?.x || 0, fromPoint?.y || 0, fromPoint?.z || 0);
+    const to = toPoint?.clone
+      ? toPoint.clone()
+      : new BABYLON.Vector3(toPoint?.x || 0, toPoint?.y || 0, toPoint?.z || 0);
+    const durationMs = Math.max(120, Number.isFinite(options.durationMs) ? options.durationMs : 500);
+    const arcHeight = Number.isFinite(options.arcHeight) ? options.arcHeight : 2.0;
+    const scale = Number.isFinite(options.scale) ? options.scale : 0.15;
+    const rotationOffsetY = Number.isFinite(options.rotationOffsetY) ? options.rotationOffsetY : 0;
+    const lingerMs = Math.max(0, Number.isFinite(options.lingerMs) ? options.lingerMs : 0);
+    const startTimeMs = Number.isFinite(options.startTimeMs) ? options.startTimeMs : performance.now();
+
+    const effectState = {
+      cancelled: false,
+      model: null,
+      cancel() {
+        this.cancelled = true;
+        const model = this.model;
+        this.model = null;
+        if (!model) return;
+        try {
+          model.animationGroups?.forEach(group => group.stop());
+        } catch (_) {
+          // Visual-only cleanup
+        }
+        try {
+          setTransientModelEnabled(model, false);
+        } catch (_) {
+          // Visual-only cleanup
+        }
+        try {
+          model.dispose?.();
+        } catch (_) {
+          // Visual-only cleanup
+        }
+      }
+    };
+
+    getModel(modelPath, effectScene).then(model => {
+      if (!model) return;
+      if (effectState.cancelled || gfx.scene !== effectScene) {
+        model.dispose?.();
+        return;
+      }
+
+      effectState.model = model;
+      const root = model.root || model.nodes?.[0];
+      if (!root) {
+        effectState.cancel();
+        return;
+      }
+
+      if (root.rotationQuaternion) {
+        root.rotationQuaternion = null;
+      }
+      setTransientModelEnabled(model, true);
+
+      const direction = to.subtract(from);
+      const heading = direction.lengthSquared() > 0.0001
+        ? Math.atan2(direction.x, direction.z) + rotationOffsetY
+        : rotationOffsetY;
+
+      const animate = (now) => {
+        if (effectState.cancelled || gfx.scene !== effectScene) {
+          effectState.cancel();
+          return;
+        }
+        if (!root || (typeof root.isDisposed === 'function' && root.isDisposed())) {
+          effectState.cancel();
+          return;
+        }
+
+        const elapsed = now - startTimeMs;
+        const progress = Math.min(Math.max(elapsed / durationMs, 0), 1);
+        const horizontal = BABYLON.Vector3.Lerp(from, to, progress);
+        horizontal.y += Math.sin(Math.PI * progress) * arcHeight;
+        root.position.copyFrom(horizontal);
+        root.rotation.y = heading;
+        root.rotation.x = -Math.sin(Math.PI * progress) * 0.28;
+
+        const squash = 1 + Math.sin(Math.PI * progress) * 0.08;
+        const stretch = 1 - Math.sin(Math.PI * progress) * 0.05;
+        root.scaling.set(scale * squash, scale * stretch, scale * squash);
+
+        if (progress < 1 || elapsed < (durationMs + lingerMs)) {
+          requestAnimationFrame(animate);
+          return;
+        }
+
+        effectState.cancel();
+      };
+
+      requestAnimationFrame(animate);
+    }).catch(() => {
+      effectState.cancelled = true;
+    });
+
+    return effectState;
+  };
+
   // Helper function to place models on terrain
   function placeModelOnTile(modelPath, scene, position, rotation = 0, scale = 1) {
     return getModel(modelPath, scene).then(model => {
@@ -530,8 +659,8 @@
     // Nature: rocks/mushrooms are squat, sprite is centered in cell
     rocks_plain: -0.8, rocks_moss: -0.8, rocks_snow: -0.8,
     mushroom: -0.5, tortle: -0.3, frog: -0.5,
-    // Trees/tall things: origin at base, sprite fills cell top-to-bottom
-    trees: 0, birdy: 0,
+    // Trees/tall things: origin at base, sprite fills cell top-to-bottom (negative = sink toward ground; × billboard scale)
+    trees: -0.6, birdy: 0,
     // Structures: origin at base
     windvane: 0, flag: 0, agora: 0, camp: 0, village: 0, farm: 0,
     silo: 0, tower: 0, mine: 0, tavern: 0, moonwell: 0, barracks: 0,
@@ -2010,6 +2139,10 @@ let pov2 = 240;
   // Function to check if a tile has been depleted
   window.isResourceTileDepleted = function(gridX, gridZ) {
     const key = `${gridX},${gridZ}`;
+    const tracker = window.currentMatch?.resourceRemaining;
+    if (tracker && tracker.has(key)) {
+      return (tracker.get(key) || 0) <= 0;
+    }
     return depletedResourceTiles.has(key);
   };
 
@@ -2053,6 +2186,35 @@ let pov2 = 240;
     };
   }
 
+  function buildMushroomClusterLayout(clusterCount) {
+    const base = [
+      { x: -0.42, z: -0.08, stemHeight: 0.42, capDiameter: 0.34 },
+      { x: 0.14, z: -0.32, stemHeight: 0.34, capDiameter: 0.28 },
+      { x: 0.38, z: 0.1, stemHeight: 0.46, capDiameter: 0.36 },
+      { x: -0.1, z: 0.34, stemHeight: 0.3, capDiameter: 0.24 }
+    ];
+    const n = Math.max(1, Math.min(24, clusterCount));
+    if (n <= base.length) {
+      return base.slice(0, n);
+    }
+    const golden = Math.PI * (3 - Math.sqrt(5));
+    const out = base.slice();
+    for (let i = base.length; i < n; i++) {
+      const t = i - base.length;
+      const ring = 0.22 + ((t % 4) * 0.1);
+      const ang = t * golden;
+      const h = 0.28 + ((t * 37) % 5) * 0.05;
+      const d = 0.2 + ((t * 53) % 4) * 0.05;
+      out.push({
+        x: Math.cos(ang) * ring,
+        z: Math.sin(ang) * ring,
+        stemHeight: h,
+        capDiameter: d
+      });
+    }
+    return out;
+  }
+
   function createGrowthPreviewMushrooms(gridX, gridZ, options = {}) {
     const effectScene = gfx.scene;
     const materials = ensureGrowthPreviewMaterials();
@@ -2063,12 +2225,8 @@ let pov2 = 240;
     const origin = getResourceTileWorldPosition(gridX, gridZ, Number.isFinite(options.yOffset) ? options.yOffset : 0.04);
     root.position.copyFrom(origin);
 
-    const layout = [
-      { x: -0.42, z: -0.08, stemHeight: 0.42, capDiameter: 0.34 },
-      { x: 0.14, z: -0.32, stemHeight: 0.34, capDiameter: 0.28 },
-      { x: 0.38, z: 0.1, stemHeight: 0.46, capDiameter: 0.36 },
-      { x: -0.1, z: 0.34, stemHeight: 0.3, capDiameter: 0.24 }
-    ];
+    const rawCluster = Number.isFinite(options.clusterCount) ? options.clusterCount : 4;
+    const layout = buildMushroomClusterLayout(rawCluster);
     const baseSeed = ((((gridX + 17) * 92821) ^ ((gridZ + 31) * 68917)) >>> 0);
     root.rotation.y = ((baseSeed % 360) * Math.PI) / 180;
 
@@ -4397,8 +4555,9 @@ let pov2 = 240;
       const maxDim = Math.max(worldWidth, worldHeight);
       const minDim = Math.min(worldWidth, worldHeight);
 
-      // Set dynamic zoom limits relative to field size
-      gfx.camera.lowerRadiusLimit = Math.max(35, minDim * 0.25);  // Increased minimum to keep camera further from ground
+      // Closest zoom-in: scale with map size but cap — uncapped minDim*fraction on large maps (~56+) made “more zoom” edits invisible.
+      const scaledClose = minDim * 0.19;
+      gfx.camera.lowerRadiusLimit = Math.max(16, Math.min(scaledClose, 36));
       gfx.camera.upperRadiusLimit = Math.max(150, maxDim * 1.5); // Reduced maximum to keep camera closer to ground
 
       // Clamp current radius into new limits
@@ -5020,8 +5179,7 @@ let pov2 = 240;
     // Initialize FX system
     if (window.fx) {
       fx.init(scene);
-      fx.setupBarrelLauncher();
-      // console.log('FX system ready - press T for explosions!');
+      // T key barrel tests disabled in normal play — call fx.setupBarrelLauncher() from console if needed.
       
       // Initialize projectiles system
       if (window.projectiles && window.projectiles.init) {
@@ -5751,7 +5909,7 @@ let pov2 = 240;
     // Camera setup complete
 
     camera.upperRadiusLimit = 150; // Reduced for closer zoom out
-    camera.lowerRadiusLimit = 21;  // Closer minimum zoom (39% closer than before)
+    camera.lowerRadiusLimit = 16;  // Before liveField applies; match dynamic floor
     camera.upperBetaLimit = 1.2; // Reduced to prevent looking too high when zoomed out
     camera.lowerBetaLimit = 0.5; // Allow looking more down when zoomed out
     camera.maxZ = 50000; // extend far plane to avoid terrain popping on wide zoom

@@ -448,14 +448,22 @@
     
     // Don't auto-close menu on left/right clicks anymore
     // Menu items handle their own clicks via 3D mesh picking
-    // Middle mouse, spacebar, and B key all open the menu at closest anchor
+    // Middle mouse, spacebar, and B / V / N keys open the menu at closest anchor
     
-    // Add spacebar and B key support - opens menu at closest anchor based on HUD mode
+    // Space = main ring; B / V / N = jump to buildings / units / research (upgrades)
     document.addEventListener('keydown', function(e) {
-      if (e.code === 'Space' || e.code === 'KeyB') {
-        e.preventDefault();
+      if (e.code !== 'Space' && e.code !== 'KeyB' && e.code !== 'KeyV' && e.code !== 'KeyN') {
+        return;
+      }
+      e.preventDefault();
 
-        if (USE_3D_HUD) {
+      const categorySubmenu =
+        e.code === 'KeyB' ? 'buildings' :
+        e.code === 'KeyV' ? 'units' :
+        e.code === 'KeyN' ? 'research' :
+        null;
+
+      if (USE_3D_HUD) {
           // 3D HUD mode - find closest screen edge to mouse position
           const canvasRect = hud.canvas.getBoundingClientRect();
           const mouseX = currentMousePosition.x;
@@ -482,20 +490,20 @@
           }
 
           // Show 3D menu at closest screen edge
-          if (e.code === 'KeyB') {
-            // 'B' key - open buildings submenu directly
-            console.log(`🏗️ B key: opening buildings submenu at ${closestEdge.name} edge`);
-            hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
-            // Wait for main menu to initialize, then show buildings submenu
+          hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
+          if (categorySubmenu) {
+            const label =
+              categorySubmenu === 'buildings' ? 'B (buildings)' :
+              categorySubmenu === 'units' ? 'V (units)' :
+              'N (research)';
+            console.log(`⌨️ ${label}: opening ${categorySubmenu} submenu at ${closestEdge.name} edge`);
             setTimeout(() => {
-              hud.showSubMenu('buildings', mouseX, mouseY);
+              hud.showSubMenu(categorySubmenu, mouseX, mouseY);
             }, 50);
           } else {
-            // Spacebar - open main menu
             console.log(`🎯 Spacebar: opening 3D menu at ${closestEdge.name} edge (mouse at ${mouseX}, ${mouseY})`);
-            hud.showRadialMenu(mouseX, mouseY, closestEdge.name);
           }
-        } else {
+      } else {
           // 2D HUD mode - find closest anchor and trigger 2D menu
           const anchors = {
             n: document.getElementById('anchor_n'),
@@ -547,43 +555,44 @@
               if (window.menuDepth !== undefined) window.menuDepth = 0;
             }
 
-            // If 'B' key pressed, show buildings submenu directly
-            if (e.code === 'KeyB' && window.menu && window.menu.buildings) {
-              console.log('🏗️ B key: opening buildings submenu (2D mode)');
+            // 2D: top-level ring like anchor tap; B / V / N expand that category
+            if (window.menu && window.createMenuButton && window.showButtonsInArc) {
+              const buttons = Object.entries(window.menu).map(([key, value]) => {
+                return window.createMenuButton(
+                  `menu-${key}`,
+                  window.getIconForItem ? window.getIconForItem(key) : key,
+                  key,
+                  [key],
+                  0
+                );
+              });
+
               if (window.setCurrentAnchor) {
                 window.setCurrentAnchor({ x: pos.x, y: pos.y, direction: closestAnchor });
               }
-              
-              // Create a temporary parent button to pass to showSubmenu
-              const tempParentButton = document.createElement('div');
-              tempParentButton.dataset.depth = '0';
-              tempParentButton.dataset.menuPath = JSON.stringify(['buildings']);
-              
-              // Call showSubmenu to display buildings with proper multi-arc layout
-              if (window.showSubmenu) {
-                window.showSubmenu(tempParentButton, window.menu.buildings);
-              }
-            } else {
-              // Spacebar - create and show top-level buttons
-              if (window.menu && window.createMenuButton && window.showButtonsInArc) {
-                const buttons = Object.entries(window.menu).map(([key, value]) => {
-                  return window.createMenuButton(
-                    `menu-${key}`,
-                    window.getIconForItem ? window.getIconForItem(key) : key,
-                    key,
-                    [key],
-                    0
-                  );
-                });
+              window.showButtonsInArc(buttons, pos.x, pos.y, 0, closestAnchor);
 
-                if (window.setCurrentAnchor) {
-                  window.setCurrentAnchor({ x: pos.x, y: pos.y, direction: closestAnchor });
+              if (categorySubmenu && window.menu[categorySubmenu] && window.showSubmenu) {
+                const label =
+                  categorySubmenu === 'buildings' ? 'B' :
+                  categorySubmenu === 'units' ? 'V' :
+                  'N';
+                console.log(`⌨️ ${label} key: opening ${categorySubmenu} submenu (2D mode)`);
+                const catBtn = buttons.find((b) => b.id === `menu-${categorySubmenu}`);
+                if (catBtn) {
+                  const raw = window.menu[categorySubmenu];
+                  const submenuKeys = Object.keys(raw).filter(
+                    (k) => k !== 'arc' && k !== 'callback'
+                  );
+                  const filteredSubmenu = {};
+                  submenuKeys.forEach((k) => {
+                    filteredSubmenu[k] = raw[k];
+                  });
+                  window.showSubmenu(catBtn, filteredSubmenu);
                 }
-                window.showButtonsInArc(buttons, pos.x, pos.y, 0, closestAnchor);
               }
             }
           }
-        }
       }
     });
 

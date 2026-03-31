@@ -202,6 +202,27 @@
     console.warn(`⏳➡️ Soft-dropped peer from lockstep: ${peerId.slice(-8)} (reason=${reason})`);
   }
 
+  function markPlayerConceded(peerId, playerId = null) {
+    const normalizedPlayerId = normalizePeerId(playerId || peerId);
+    if (peerId) {
+      softDropPeer(peerId, 'player_conceded');
+      if (window.Lobby && window.Lobby.playerConnectionStates) {
+        window.Lobby.playerConnectionStates[peerId] = 'conceded';
+      }
+    }
+
+    if (normalizedPlayerId) {
+      peerTickConfirmations.delete(normalizedPlayerId);
+      peerWaitStartedAt.delete(normalizedPlayerId);
+      remoteCommands.delete(normalizedPlayerId);
+      lastPeerProgressAt.delete(normalizedPlayerId);
+    }
+  }
+
+  net.markPlayerConceded = function(peerId, playerId = null) {
+    markPlayerConceded(peerId, playerId);
+  };
+
   // NEW: Get current network status
   net.getStatus = function() {
     return {
@@ -1686,9 +1707,14 @@
             const player = window.currentMatch.getPlayerById(actualMessage.playerId);
             const playerName = player?.name || `Player ${normalizePeerId(actualMessage.playerId)}`;
             console.log(`🏳️ ${playerName} conceded the match`);
-            
-            // Eliminate the conceding player
-            if (window.currentMatch.eliminatePlayer) {
+
+            // Remove them from lockstep immediately so remaining peers don't wait on a quitter.
+            markPlayerConceded(peerId || actualMessage.playerId, actualMessage.playerId);
+
+            // Eliminate the conceding player and resolve any immediate winner.
+            if (window.currentMatch.handlePlayerConceded) {
+              window.currentMatch.handlePlayerConceded(actualMessage.playerId, { reason: 'concede' });
+            } else if (window.currentMatch.eliminatePlayer) {
               window.currentMatch.eliminatePlayer(actualMessage.playerId);
             }
           }
@@ -1713,9 +1739,15 @@
         case 'adventure_objective_complete':
           // Host authoritative objective completion for co-op adventure.
           if (window.currentMatch && Array.isArray(window.adventureObjectives) && actualMessage.objectiveId !== undefined) {
-            const obj = window.adventureObjectives.find(o => o && o.id === actualMessage.objectiveId);
-            if (obj && !obj.completed) {
-              obj.completed = true;
+            if (actualMessage.objectiveType === 'advance') {
+              for (const o of window.adventureObjectives) {
+                if (o) o.completed = true;
+              }
+            } else {
+              const obj = window.adventureObjectives.find(o => o && o.id === actualMessage.objectiveId);
+              if (obj && !obj.completed) {
+                obj.completed = true;
+              }
             }
             
             // Show speech/notification on clients to match host.
@@ -1842,19 +1874,46 @@
               reason: actualMessage.reason || 'manual',
               message: actualMessage.message,
               broadcast: false,
-              remote: true
+              remote: true,
+              pauseTick: Number.isFinite(actualMessage.pauseTick) ? actualMessage.pauseTick : null
             });
             // console.log('⏸️ Match paused by remote player');
           }
           break;
           
+        case 'match_resume_request':
+          if (window.currentMatch?.isHost?.()) {
+            console.log('⏳ Received match_resume_request from peer');
+            window.currentMatch.handleRemoteResumeRequest(actualMessage.playerId, {
+              pauseTick: Number.isFinite(actualMessage.pauseTick) ? actualMessage.pauseTick : null,
+              automatic: actualMessage.automatic === true
+            });
+          }
+          break;
+
+        case 'match_resume_commit':
+          if (window.currentMatch) {
+            console.log('▶️ Received match_resume_commit from host');
+            window.currentMatch.resumeMatch({
+              broadcast: false,
+              remote: true,
+              forceCommit: true,
+              pauseTick: Number.isFinite(actualMessage.pauseTick) ? actualMessage.pauseTick : null,
+              resumeTick: Number.isFinite(actualMessage.resumeTick) ? actualMessage.resumeTick : null
+            });
+          }
+          break;
+
         case 'match_resume':
-          // Player broadcasting resume to all others
+          // Legacy immediate resume packet; treat it as a resume commit for compatibility.
           if (window.currentMatch) {
             console.log('▶️ Received match_resume from peer');
             window.currentMatch.resumeMatch({
               broadcast: false,
-              remote: true
+              remote: true,
+              forceCommit: true,
+              pauseTick: Number.isFinite(actualMessage.pauseTick) ? actualMessage.pauseTick : null,
+              resumeTick: Number.isFinite(actualMessage.resumeTick) ? actualMessage.resumeTick : null
             });
             // console.log('▶️ Match resumed by remote player');
           }
@@ -2185,6 +2244,41 @@
 
   net.getLocalConfirmedTick = function() {
     return localConfirmedTick;
+  };
+
+  net.resetLockstepAfterPauseResume = function(resumeTick = null) {
+    const match = window.currentMatch;
+    const baselineTick = Number.isFinite(resumeTick)
+      ? resumeTick
+      : (Number.isFinite(match?.tick) ? match.tick : tick);
+    const inputDelay = match?.inputDelayTicks || 3;
+    const now = Date.now();
+
+    tick = baselineTick;
+    peerTickConfirmations.clear();
+    localConfirmedTick = 0;
+    lastHeartbeatTick = 0;
+    lastHeartbeatSentAt = 0;
+    waitingForPeers = false;
+    waitingStartedAt = 0;
+    lastWaitedAt = 0;
+    lastStableLockstepAt = 0;
+    lastWaitLog = 0;
+    currentTickRate = net.TICK_RATE;
+    window.lockstepWaitingForPeers = false;
+    window.fastForwardingTicks = false;
+
+    const peers = p2p ? p2p.getConnectedPeers() : [];
+    peers.forEach(peerId => {
+      peerWaitStartedAt.delete(peerId);
+      const key = normalizePeerId(peerId);
+      lastLockstepNudgeAt.delete(key);
+      lastPeerMessageAt.set(key, now);
+      lastPeerProgressAt.set(key, now);
+    });
+
+    sendTickConfirmation(baselineTick + inputDelay);
+    sendStateSync();
   };
   
   // Get peer lag info

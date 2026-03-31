@@ -1429,21 +1429,13 @@ function getRandomColor() {
           window.cameraVelocity.radius += zoomSpeed;
         }
       }
-    } else if (key === 'z' && state && gfx && gfx.camera) {
-      // Z key - Zoom in
-      const zoomSpeed = 5;
-      gfx.camera.radius = Math.max(gfx.camera.lowerRadiusLimit || 20, gfx.camera.radius - zoomSpeed);
-    } else if (key === 'x' && state && gfx && gfx.camera) {
-      // X key - Zoom out
-      const zoomSpeed = 5;
-      gfx.camera.radius = Math.min(gfx.camera.upperRadiusLimit || 300, gfx.camera.radius + zoomSpeed);
     } else if (key === 'escape' && state) {
       // Escape key - Toggle main page menu
       ui.toggleMenu();
     } else if (key === 'b') {
       // console.log('🏗️ B key pressed - opening 3D main menu');
       // Handle B key logic here...
-    } else if (key === 'g' && state) {
+    } else if (key === 'i' && state) {
       ui.togglePathDebug();
     } else if (key === 'f9') {
       // Toggle Babylon Inspector v2
@@ -1471,7 +1463,7 @@ function getRandomColor() {
 
     // NEW: ESDF and Arrow key panning (velocity-based, relative to camera angle)
     if (gfx.camera && gfx.cameraTarget && !ui.isKeyChangingRotation(key)) {
-      // Only pan if not a rotation key (Q/E/A/Z/R)
+      // Only pan if not a rotation key (Q/R/W)
       const camera = gfx.camera;
       const cameraTarget = gfx.cameraTarget;
       const canvas = gfx.canvas;
@@ -1691,7 +1683,7 @@ function getRandomColor() {
   // NEW: Helper function to check if a key affects camera rotation (prevents pan conflicts)
   // Note: E and A are excluded because they're used for both rotation AND ESDF panning
   ui.isKeyChangingRotation = function(key) {
-    const rotationKeys = ['q', 'z', 'r', 'w'];
+    const rotationKeys = ['q', 'r', 'w'];
     return rotationKeys.includes(key.toLowerCase());
   };
 
@@ -2036,14 +2028,20 @@ function getRandomColor() {
     if (e.pointerType === 'mouse' && e.type === 'pointerdown' && e.button === 0) { // Left click only
       const currentTime = Date.now();
       const distance = lastClickPosition ? Math.sqrt((x - lastClickPosition.x) ** 2 + (y - lastClickPosition.y) ** 2) : Infinity;
+      const mouseDoubleClickPick = gfx.scene.pick(x, y);
+      const mouseDoubleClickBuilding = resolveBuildingFromPickResult(mouseDoubleClickPick) || resolveBuildingFromScreenPoint(x, y);
       
       // Check if this is a double-click
-      if (lastClickPosition && currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE) {
+      if (lastClickPosition && currentTime - lastClickTime < DOUBLE_CLICK_DELAY && distance < DOUBLE_CLICK_DISTANCE && !mouseDoubleClickBuilding) {
         // Double-click detected! Trigger special abilities on selected units
-        const pickResult = gfx.scene.pick(x, y);
-        const worldPos = pickResult.hit ? pickResult.pickedPoint : null;
+        const specialTarget = {
+          worldPos: mouseDoubleClickPick.hit ? mouseDoubleClickPick.pickedPoint : null,
+          pickResult: mouseDoubleClickPick,
+          screenX: x,
+          screenY: y
+        };
         if (window.ui && window.ui.triggerSpecialAbilityAt) {
-          window.ui.triggerSpecialAbilityAt(worldPos);
+          window.ui.triggerSpecialAbilityAt(specialTarget);
         }
         
         // Cancel any potential lasso drag from the first click
@@ -2136,16 +2134,23 @@ function getRandomColor() {
     }
     
     // Check if we clicked on a menu element - if so, don't process as terrain click
-    const clickedElement = document.elementFromPoint(x, y);
+    // elementFromPoint expects viewport (client) coordinates — not canvas-local x/y
+    const clickedElement = document.elementFromPoint(e.clientX, e.clientY);
     if (clickedElement && (
       clickedElement.closest('.radial-menu-button') ||
       clickedElement.closest('[id^="anchor_"]') ||
       clickedElement.closest('.radial-menu-label') ||
+      clickedElement.closest('.radial-menu-detail') ||
       clickedElement.closest('.lod_slider') ||
       clickedElement.closest('.lod_slider_container') ||
       clickedElement.closest('#lod_slider') ||
       clickedElement.closest('#lod_value')
     )) {
+      return;
+    }
+    // Pointerup right after menu dismissed (DOM target removed under cursor) — ignore terrain command
+    if (e.type === 'pointerup' && e.button === 0 &&
+        window.suppressTerrainPointerUpUntil && Date.now() < window.suppressTerrainPointerUpUntil) {
       return;
     }
     // Convert screen coordinates to world coordinates
@@ -3020,12 +3025,13 @@ function getRandomColor() {
     const maxRadius = gfx.camera.upperRadiusLimit || 199;
     const currentRadius = gfx.camera.radius;
     
-    // Normalize radius between 0 and 1
-    const normalizedRadius = (currentRadius - minRadius) / (maxRadius - minRadius);
+    // Normalize radius between 0 and 1 (clamp so zoom→beta stays stable at limits)
+    const normalizedRadius = Math.max(0, Math.min(1,
+      (currentRadius - minRadius) / Math.max(1e-6, maxRadius - minRadius)));
     
-    // Beta range: 1.2 (looking toward horizon when zoomed in) to 0.62 (looking down when zoomed out)
-    const minBeta = 1.2;  // Looking toward horizon (zoomed in)
-    const maxBeta = 0.61; // Looking down when zoomed out (split between 0.7 and 0.55)
+    // Beta range: 1.2 (zoomed in) → maxBeta (full zoom out). Higher maxBeta = less top-down / shallower tilt.
+    const minBeta = 1.2;
+    const maxBeta = 0.82;
     
     // Calculate target beta based on zoom and apply directly with smooth lerp
     const targetBeta = minBeta + (normalizedRadius * (maxBeta - minBeta));
@@ -3515,6 +3521,136 @@ function getRandomColor() {
     return { x: xCoord, z: zCoord };
   }
 
+  function getBuildingMeshRoot(mesh) {
+    let currentMesh = mesh;
+    while (currentMesh && !currentMesh.isBuilding) {
+      currentMesh = currentMesh.parent;
+    }
+    return currentMesh?.isBuilding ? currentMesh : null;
+  }
+
+  function resolveBuildingFromPickResult(pickResult) {
+    const buildings = window.gameBuildings || [];
+    if (!pickResult?.pickedMesh || buildings.length === 0) return null;
+
+    let currentMesh = pickResult.pickedMesh;
+    while (currentMesh) {
+      const buildingIdFromHit = currentMesh.metadata?.buildingId;
+      const matchedBuilding = buildings.find(building =>
+        building?.mesh === currentMesh ||
+        (buildingIdFromHit && building?.id === buildingIdFromHit)
+      );
+      if (matchedBuilding) {
+        return matchedBuilding;
+      }
+      currentMesh = currentMesh.parent;
+    }
+
+    return null;
+  }
+
+  function resolveBuildingFromScreenPoint(screenX, screenY) {
+    if (!window.gfx?.scene || !Number.isFinite(screenX) || !Number.isFinite(screenY)) {
+      return null;
+    }
+    const pickResult = window.gfx.scene.pick(screenX, screenY, mesh => {
+      return !!mesh?.isBuilding && mesh.isPickable !== false;
+    });
+    return resolveBuildingFromPickResult(pickResult);
+  }
+
+  function normalizeSpecialAbilityTarget(target) {
+    if (target && typeof target === 'object' && (
+      target.worldPos ||
+      target.pickResult ||
+      target.building ||
+      Number.isFinite(target.screenX) ||
+      Number.isFinite(target.screenY)
+    )) {
+      return {
+        worldPos: target.worldPos || null,
+        pickResult: target.pickResult || null,
+        screenX: target.screenX,
+        screenY: target.screenY,
+        building: target.building ||
+          resolveBuildingFromPickResult(target.pickResult) ||
+          resolveBuildingFromScreenPoint(target.screenX, target.screenY)
+      };
+    }
+    return {
+      worldPos: target || null,
+      pickResult: null,
+      screenX: null,
+      screenY: null,
+      building: null
+    };
+  }
+
+  function getTransportPassengerCount(unit) {
+    if (!unit) return 0;
+    if (window.getTransportPassengerIds) {
+      return window.getTransportPassengerIds(unit).length;
+    }
+    return unit.passengers?.length || 0;
+  }
+
+  function tryQueueBuildingUpgradeReturn(units, building, worldPos = null) {
+    if (!window.currentMatch || !building) return false;
+    let queuedAny = false;
+    const targetPoint = normalizeAbilityTargetPoint(worldPos) || {
+      x: building.position?.x || 0,
+      z: building.position?.z || 0
+    };
+    units.forEach(unit => {
+      const upgradeInfo = window.resolveUnitBuildingUpgrade
+        ? window.resolveUnitBuildingUpgrade(unit, building, window.player?.id)
+        : null;
+      if (!upgradeInfo?.targetType) {
+        return;
+      }
+
+      const passengerCount = getTransportPassengerCount(unit);
+      if (passengerCount > 0 && unit?.abilities?.includes('transport')) {
+        window.currentMatch.submitCommand({
+          type: 'unload',
+          playerId: window.player?.id,
+          unitId: unit.id,
+          target: targetPoint
+        });
+      }
+
+      const command = window.currentMatch.buildUpgradeCommand
+        ? window.currentMatch.buildUpgradeCommand({
+            playerId: window.player?.id,
+            unitId: unit.id,
+            buildingId: building.id,
+            sourceType: unit.type,
+            targetType: upgradeInfo.targetType
+          })
+        : {
+            type: 'upgrade',
+            playerId: window.player?.id,
+            unitId: unit.id,
+            buildingId: building.id,
+            sourceType: unit.type,
+            targetType: upgradeInfo.targetType
+          };
+
+      if (window.currentMatch.submitCommand(command)) {
+        queuedAny = true;
+      }
+    });
+
+    if (queuedAny) {
+      const markerPos = building.mesh?.getAbsolutePosition
+        ? building.mesh.getAbsolutePosition()
+        : new BABYLON.Vector3(building.position?.x || 0, building.position?.y || 0, building.position?.z || 0);
+      createTargetMarker(markerPos);
+    }
+
+    return queuedAny;
+  }
+
   function getOwnedSelectedUnits(unitsToUse = null) {
     if (!window.player) return [];
     const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
@@ -3557,7 +3693,7 @@ function getRandomColor() {
   };
 
   // Trigger unit special abilities at optional world position
-  ui.triggerSpecialAbilityAt = function(worldPos) {
+  ui.triggerSpecialAbilityAt = function(target) {
     if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) {
       return;
     }
@@ -3565,13 +3701,18 @@ function getRandomColor() {
     const units = getOwnedSelectedUnits();
     if (units.length === 0) return;
 
+    const specialTarget = normalizeSpecialAbilityTarget(target);
+    const worldPos = specialTarget.worldPos;
+    const targetBuilding = specialTarget.building;
     const targetPoint = normalizeAbilityTargetPoint(worldPos);
+
+    if (targetBuilding && tryQueueBuildingUpgradeReturn(units, targetBuilding, worldPos)) {
+      return;
+    }
 
     const transportsWithPassengers = units.filter(u =>
       u.abilities && u.abilities.includes('transport') &&
-      ((window.getTransportPassengerIds
-        ? window.getTransportPassengerIds(u).length
-        : (u.passengers?.length || 0)) > 0)
+      (getTransportPassengerCount(u) > 0)
     );
 
     if (transportsWithPassengers.length > 0 && targetPoint) {
@@ -3902,6 +4043,8 @@ window.showStoryDialogue = function(message, type, onContinue) {
     display: flex;
     align-items: flex-end;
     justify-content: center;
+    padding-bottom: 33vh;
+    box-sizing: border-box;
     z-index: 10000;
     pointer-events: auto;
     background: rgba(0, 0, 0, 0.3);
@@ -3909,7 +4052,8 @@ window.showStoryDialogue = function(message, type, onContinue) {
   
   // Icon based on type
   let icon = '📜';
-  if (type === 'escape' || type === 'exit') icon = '🚪';
+  if (type === 'advance') icon = '✨';
+  else if (type === 'escape' || type === 'exit') icon = '🚪';
   else if (type === 'victory') icon = '🏆';
   else if (type === 'reach') icon = '🎯';
   
@@ -3918,10 +4062,11 @@ window.showStoryDialogue = function(message, type, onContinue) {
   box.style.cssText = `
     background: linear-gradient(135deg, rgba(30, 40, 60, 0.95), rgba(20, 30, 50, 0.98));
     border: 2px solid rgba(100, 150, 200, 0.5);
+    border-bottom: 4px solid #000;
     border-radius: 12px;
     padding: 24px 32px;
     max-width: 600px;
-    margin: 0 20px 80px 20px;
+    margin: 0 20px 0 20px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
     animation: dialogueSlideIn 0.3s ease-out;
   `;

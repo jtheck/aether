@@ -287,9 +287,15 @@
         
         <div id="objectives-panel" class="forge-section" style="display:none;">
           <h3>🎯 Objectives</h3>
-          <p style="font-size:11px;opacity:0.7;">Click to place objective zone. Right-click to remove.<br>Players must reach these to win in Adventure mode.</p>
+          <p style="font-size:11px;opacity:0.7;">Click to place objective zone. Right-click to remove.<br>Adventure chapters use these for checkpoints, exits, and shortcuts.</p>
 
-          <div class="forge-buttons" style="margin-bottom:8px;">
+          <h4 style="margin-top:8px;font-size:12px;">Chapter victory</h4>
+          <select id="obj-win-mode" onchange="forge.setObjectiveWinMode(this.value)" style="width:100%;font-size:11px;padding:4px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:3px;">
+            <option value="default">Exit / advance can finish chapter (optional reaches)</option>
+            <option value="all">All objectives required</option>
+          </select>
+
+          <div class="forge-buttons" style="margin-bottom:8px;margin-top:8px;">
             <button id="obj-place-mode" class="forge-btn active" onclick="forge.setObjectiveMode('place')">➕ Place</button>
             <button id="obj-move-mode" class="forge-btn" onclick="forge.setObjectiveMode('move')">↔️ Move</button>
             <button class="forge-btn" onclick="forge.clearObjectives()">🗑️ Clear All</button>
@@ -299,6 +305,7 @@
           <div class="forge-buttons">
             <button id="obj-reach" class="forge-btn active" onclick="forge.setObjectiveType('reach')">🏁 Reach</button>
             <button id="obj-escape" class="forge-btn" onclick="forge.setObjectiveType('escape')">🚪 Exit</button>
+            <button id="obj-advance" class="forge-btn" onclick="forge.setObjectiveType('advance')">⏭️ Advance</button>
           </div>
           
           <h4 style="margin-top:8px;font-size:12px;">Zone Size</h4>

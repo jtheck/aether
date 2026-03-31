@@ -244,6 +244,16 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
     }
   }
   
+  // Hover opens submenus on desktop (touch uses press only)
+  button.addEventListener('pointerenter', (e) => {
+    if (typeof USE_3D_HUD !== 'undefined' && USE_3D_HUD) return;
+    if (e.pointerType !== 'mouse' && e.pointerType !== 'pen') return;
+    if (!button.classList.contains('visible')) return;
+    menuOpenedAt = Date.now();
+    window.menuOpenedAt = menuOpenedAt;
+    openSubmenuForButtonIfApplicable(button);
+  });
+  
   // Add pointerdown handler for nested menus (works better with touch)
   button.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -253,50 +263,34 @@ function createMenuButton(id, icon, label, menuPath = [], depth = 0) {
     menuOpenedAt = Date.now();
     window.menuOpenedAt = menuOpenedAt;
     
+    if (openSubmenuForButtonIfApplicable(button)) {
+      return;
+    }
+    
+    // Leaf node — no submenu
     const path = JSON.parse(button.dataset.menuPath);
-    const submenu = getSubmenuFromPath(path);
-    
-    // Check if this has actual submenu items (ignore metadata like 'arc', 'callback')
-    const submenuKeys = submenu ? Object.keys(submenu).filter(k => k !== 'arc' && k !== 'callback') : [];
-    
-    // If has submenu items, show them
-    if (submenuKeys.length > 0) {
-      // Filter out metadata before showing submenu
-      const filteredSubmenu = {};
-      submenuKeys.forEach(k => filteredSubmenu[k] = submenu[k]);
-      showSubmenu(button, filteredSubmenu);
+    const [category, ...itemPath] = path;
+
+    if (category === 'buildings' && window.buildingSystem) {
+      const buildingType = itemPath[itemPath.length - 1];
+
+      hideButtons(activeButtons);
+      activeButtons = [];
+      window.suppressTerrainPointerUpUntil = Date.now() + 320;
+
+      window.buildingSystem.cancelPlacement();
+      window.buildingSystem.selectBuilding(buildingType);
     } else {
-      // Handle leaf node selection
-      const [category, ...itemPath] = path;
-      
-      if (category === 'buildings' && window.buildingSystem) {
-        // Get the actual building type from the path
-        const buildingType = itemPath[itemPath.length - 1];
-        
-        // Hide the 2D menu so it doesn't block building placement
-        hideButtons(activeButtons);
-        activeButtons = [];
-        
-        // Clean up any existing preview before starting new placement
+      if (window.buildingSystem && window.buildingSystem.isPlacing) {
         window.buildingSystem.cancelPlacement();
-        // Start building placement mode
-        window.buildingSystem.selectBuilding(buildingType);
-      } else {
-        // For non-building menu items, exit building placement mode if currently placing
-        if (window.buildingSystem && window.buildingSystem.isPlacing) {
-          window.buildingSystem.cancelPlacement();
-        }
       }
-      
-      // Adventure and other modes can recruit from non-agora spawners (for example perch -> dirigible),
-      // so do not require a local agora before forwarding the recruit action.
-      if (category === 'units' && typeof window.recruitUnit === 'function' && window.player) {
-        const unitType = itemPath[itemPath.length - 1];
-        window.recruitUnit(unitType);
-      } else {
-        // console.log('Selected:', path);
-        // TODO: Handle other selection actions
-      }
+    }
+
+    if (category === 'units' && typeof window.recruitUnit === 'function' && window.player) {
+      const unitType = itemPath[itemPath.length - 1];
+      window.recruitUnit(unitType);
+    } else {
+      // console.log('Selected:', path);
     }
   });
   
@@ -380,6 +374,22 @@ function showSubmenu(parentButton, submenuItems) {
     // Show this arc's buttons
     showButtonsInArc(buttons, x, y, arcDepth, anchor.direction);
   });
+}
+
+// Expand submenu for a button if it has child items (used by click and hover)
+function openSubmenuForButtonIfApplicable(button) {
+  const path = JSON.parse(button.dataset.menuPath);
+  const submenu = getSubmenuFromPath(path);
+  const submenuKeys = submenu
+    ? Object.keys(submenu).filter((k) => k !== 'arc' && k !== 'callback')
+    : [];
+  if (submenuKeys.length === 0) return false;
+  const filteredSubmenu = {};
+  submenuKeys.forEach((k) => {
+    filteredSubmenu[k] = submenu[k];
+  });
+  showSubmenu(button, filteredSubmenu);
+  return true;
 }
 
 // Hide buttons

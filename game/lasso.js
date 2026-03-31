@@ -185,11 +185,26 @@
   // Handle left mouse button down
   lasso.handleLmbDown = function(x, y, e) {
     // Check if we clicked on a UI element - if so, don't start selection
-    const clickedElement = document.elementFromPoint(x, y);
+    // elementFromPoint expects client/viewport coords (same as clientX/Y), not canvas-local x/y
+    let clientX = e && Number.isFinite(e.clientX) ? e.clientX : null;
+    let clientY = e && Number.isFinite(e.clientY) ? e.clientY : null;
+    if (clientX == null || clientY == null) {
+      const c = window.gfx?.canvas;
+      if (c) {
+        const r = c.getBoundingClientRect();
+        clientX = r.left + x;
+        clientY = r.top + y;
+      } else {
+        clientX = x;
+        clientY = y;
+      }
+    }
+    const clickedElement = document.elementFromPoint(clientX, clientY);
     if (clickedElement && (
       clickedElement.closest('.radial-menu-button') ||
       clickedElement.closest('[id^="anchor_"]') ||
       clickedElement.closest('.radial-menu-label') ||
+      clickedElement.closest('.radial-menu-detail') ||
       clickedElement.closest('.lod_slider') ||
       clickedElement.closest('.lod_slider_container') ||
       clickedElement.closest('#lod_slider') ||
@@ -397,14 +412,24 @@
       if (clickDuration < CLICK_TIMEOUT) {
         // Try to find entity at click position
         // console.log(`🎯 Looking for entity at (${x}, ${y})`);
-        handledEntityClick = handleSingleClick(x, y);
+        if (isDoubleClick) {
+          handledEntityClick = handleDoubleClick(x, y);
+        }
+        if (!handledEntityClick) {
+          handledEntityClick = handleSingleClick(x, y);
+        }
       } else {
         // console.log(`🎯 Click too slow (${clickDuration}ms > ${CLICK_TIMEOUT}ms), not handling`);
       }
       
       // Update last click tracking
-      lastClickTime = Date.now();
-      lastClickPoint = { x, y };
+      if (isDoubleClick && handledEntityClick) {
+        lastClickTime = 0;
+        lastClickPoint = { x: 0, y: 0 };
+      } else {
+        lastClickTime = Date.now();
+        lastClickPoint = { x, y };
+      }
       
       // Clean up lasso state
       isPotentialDrag = false;
@@ -930,7 +955,26 @@
   
   // Handle double click - select all units of same type
   function handleDoubleClick(x, y) {
-    if (!window.player) return;
+    if (!window.player) return false;
+
+    const building = findBuildingAtPosition(x, y);
+    const selectedUnits = typeof window.player.getSelectedUnits === 'function'
+      ? window.player.getSelectedUnits()
+      : (window.player.selectedUnits || []);
+    if (building && selectedUnits.length > 0 && window.ui?.triggerSpecialAbilityAt) {
+      const pickResult = window.gfx?.scene?.pick ? window.gfx.scene.pick(x, y) : null;
+      const worldPos = pickResult?.hit
+        ? pickResult.pickedPoint
+        : (building.position ? new BABYLON.Vector3(building.position.x, building.position.y || 0, building.position.z) : null);
+      window.ui.triggerSpecialAbilityAt({
+        worldPos,
+        pickResult,
+        screenX: x,
+        screenY: y,
+        building
+      });
+      return true;
+    }
     
     // Find unit at click position
     const unit = findUnitAtPosition(x, y);
@@ -944,7 +988,10 @@
       if (window.UnitSpeech && ownerMatches) {
         window.UnitSpeech.showRandomSpeech(unit, 'select', 2000);
       }
+      return true;
     }
+
+    return false;
   }
   
   // Find unit at screen position

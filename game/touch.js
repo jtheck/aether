@@ -234,12 +234,22 @@
 
     function pickWorldForSpecialAbility(clientX, clientY) {
       let worldPos = screenToWorld(clientX, clientY);
+      let pickResult = null;
+      const rect = canvasRect();
+      const localX = clientX - rect.left;
+      const localY = clientY - rect.top;
       if ((!worldPos || !Number.isFinite(worldPos.x)) && window.gfx && window.gfx.scene) {
-        const rect = canvasRect();
-        const pr = window.gfx.scene.pick(clientX - rect.left, clientY - rect.top);
-        if (pr && pr.hit && pr.pickedPoint) worldPos = pr.pickedPoint;
+        pickResult = window.gfx.scene.pick(localX, localY);
+        if (pickResult && pickResult.hit && pickResult.pickedPoint) worldPos = pickResult.pickedPoint;
+      } else if (window.gfx && window.gfx.scene) {
+        pickResult = window.gfx.scene.pick(localX, localY);
       }
-      return worldPos;
+      return {
+        worldPos,
+        pickResult,
+        screenX: localX,
+        screenY: localY
+      };
     }
 
     function checkCenterFastStroke(ps) {
@@ -1668,9 +1678,9 @@
           lastSingleTapPos = null;
           lastTapDownTime = 0;
           lastTapDownPos = null;
-          const worldPos = pickWorldForSpecialAbility(e.clientX, e.clientY);
+          const specialTarget = pickWorldForSpecialAbility(e.clientX, e.clientY);
           if (window.ui && window.ui.triggerSpecialAbilityAt) {
-            window.ui.triggerSpecialAbilityAt(worldPos);
+            window.ui.triggerSpecialAbilityAt(specialTarget);
           }
           if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
             window.lassoSelection.cleanupSelection();
@@ -2002,9 +2012,9 @@
             if (window.buildingSystem && window.buildingSystem.isPlacing) {
               window.buildingSystem.cancelPlacement();
             } else {
-              const worldPos = pickWorldForSpecialAbility(cx, cy);
+              const specialTarget = pickWorldForSpecialAbility(cx, cy);
               if (window.ui && window.ui.triggerSpecialAbilityAt) {
-                window.ui.triggerSpecialAbilityAt(worldPos);
+                window.ui.triggerSpecialAbilityAt(specialTarget);
               }
               if (window.lassoSelection && window.lassoSelection.cleanupSelection) {
                 window.lassoSelection.cleanupSelection();

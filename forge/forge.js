@@ -72,6 +72,9 @@
     objectives: [],
     currentObjectiveType: 'reach',
     currentObjectiveRadius: 4,
+    // Adventure victory: 'default' = exit/advance can finish chapter (reaches optional if any terminal exists).
+    // 'all' = every objective must complete (serialized as map key `ow`: 'all').
+    objectiveWinMode: 'default',
     
     // Starting units (array of {x, y, type, player} objects)
     // For adventure mode: players start with units instead of Agoras

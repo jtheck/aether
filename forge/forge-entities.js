@@ -396,8 +396,14 @@
     // Update button states
     document.getElementById('obj-reach')?.classList.toggle('active', type === 'reach');
     document.getElementById('obj-escape')?.classList.toggle('active', type === 'escape');
+    document.getElementById('obj-advance')?.classList.toggle('active', type === 'advance');
 
     console.log(`🎯 Objective type: ${type}`);
+  };
+
+  forge.setObjectiveWinMode = function(mode) {
+    this.state.objectiveWinMode = mode === 'all' ? 'all' : 'default';
+    console.log(`🎯 Objective win mode: ${this.state.objectiveWinMode}`);
   };
 
   // Set objective radius
@@ -496,6 +502,7 @@
     // Populate form with objective data
     document.getElementById('obj-reach').classList.toggle('active', obj.type === 'reach');
     document.getElementById('obj-escape').classList.toggle('active', obj.type === 'escape');
+    document.getElementById('obj-advance').classList.toggle('active', obj.type === 'advance');
     document.getElementById('obj-radius').value = obj.radius;
     document.getElementById('obj-radius-display').textContent = obj.radius;
     document.getElementById('obj-message').value = obj.message || '';
@@ -512,7 +519,13 @@
     const typeRadios = document.querySelectorAll('input[name="obj-type"]:checked');
     const newType = typeRadios.length > 0 ? typeRadios[0].value : obj.type;
 
-    obj.type = document.getElementById('obj-reach').classList.contains('active') ? 'reach' : 'escape';
+    if (document.getElementById('obj-advance').classList.contains('active')) {
+      obj.type = 'advance';
+    } else if (document.getElementById('obj-escape').classList.contains('active')) {
+      obj.type = 'escape';
+    } else {
+      obj.type = 'reach';
+    }
     obj.radius = parseInt(document.getElementById('obj-radius').value);
     obj.message = document.getElementById('obj-message').value.trim();
 
@@ -533,6 +546,7 @@
   forge.clearObjectiveForm = function() {
     document.getElementById('obj-reach').classList.add('active');
     document.getElementById('obj-escape').classList.remove('active');
+    document.getElementById('obj-advance').classList.remove('active');
     document.getElementById('obj-radius').value = '4';
     document.getElementById('obj-radius-display').textContent = '4';
     document.getElementById('obj-message').value = '';
@@ -590,6 +604,13 @@
         mat.emissiveColor = isSelected
           ? new BABYLON.Color3(0.5, 0.4, 0.1)
           : new BABYLON.Color3(0.1, 0.2, 0.5);
+      } else if (obj.type === 'advance') {
+        mat.diffuseColor = isSelected
+          ? new BABYLON.Color3(1, 0.8, 0.2)
+          : new BABYLON.Color3(0.65, 0.25, 0.85);
+        mat.emissiveColor = isSelected
+          ? new BABYLON.Color3(0.5, 0.4, 0.1)
+          : new BABYLON.Color3(0.25, 0.1, 0.35);
       } else {
         mat.diffuseColor = isSelected
           ? new BABYLON.Color3(1, 0.8, 0.2)  // Orange for selected reach
@@ -622,7 +643,9 @@
       const flagMat = new BABYLON.StandardMaterial(`flag_mat_${i}`, scene);
       flagMat.diffuseColor = obj.type === 'escape'
         ? new BABYLON.Color3(0.3, 0.5, 1)
-        : new BABYLON.Color3(0.3, 1, 0.5);
+        : obj.type === 'advance'
+          ? new BABYLON.Color3(0.75, 0.35, 1)
+          : new BABYLON.Color3(0.3, 1, 0.5);
       flagMat.emissiveColor = flagMat.diffuseColor.scale(0.5);
       flagMat.backFaceCulling = false;
       flag.material = flagMat;
@@ -648,7 +671,7 @@
     }
 
     list.innerHTML = this.state.objectives.map((obj, i) => {
-      const icon = obj.type === 'escape' ? '🚪' : '🏁';
+      const icon = obj.type === 'escape' ? '🚪' : obj.type === 'advance' ? '⏭️' : '🏁';
       const msgPreview = obj.message ? ` 💬 "${obj.message.substring(0, 20)}${obj.message.length > 20 ? '...' : ''}"` : '';
       const isSelected = this.state.selectedObjectiveIndex === i;
       const bgColor = isSelected ? 'rgba(76, 175, 80, 0.3)' : 'rgba(0,0,0,0.2)';

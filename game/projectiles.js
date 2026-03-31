@@ -588,20 +588,55 @@
     return null;
   }
 
-  function applyDamage(unit, damage, attackerOwner) {
-    if (!unit) return;
+  function applyDamage(unit, damage, attackerOwner, options = {}) {
+    if (!unit) return null;
+    if (typeof window.resolveIncomingUnitDamage === "function") {
+      return window.resolveIncomingUnitDamage(unit, damage, {
+        ...options,
+        attackerOwner
+      });
+    }
     const hasHealth = typeof unit.health === "number";
     const hasCurrentHealth = typeof unit.currentHealth === "number";
-    if (!hasHealth && !hasCurrentHealth) return;
+    if (!hasHealth && !hasCurrentHealth) return null;
 
     const baseHealth = hasCurrentHealth ? unit.currentHealth : unit.health;
     const newHealth = Math.max(0, baseHealth - (damage || 0));
     if (hasHealth) unit.health = newHealth;
     if (hasCurrentHealth) unit.currentHealth = newHealth;
 
-    if (newHealth <= 0 && typeof window.onUnitDeath === "function") {
-      window.onUnitDeath(unit, attackerOwner);
+    if ((damage || 0) > 0 && options.showDamageSpeech !== false && window.UnitSpeech && window.UnitSpeech.showDamage) {
+      window.UnitSpeech.showDamage(unit, damage || 0);
     }
+
+    if (newHealth <= 0 && typeof window.onUnitDeath === "function") {
+      window.onUnitDeath(unit, attackerOwner, {
+        unit,
+        attackerOwner,
+        damageType: typeof options.damageType === "string" ? options.damageType : "physical",
+        rawDamage: damage || 0,
+        mitigated: 0,
+        absorbed: 0,
+        appliedDamage: damage || 0,
+        preventedDamage: 0,
+        killed: true,
+        healthBefore: baseHealth,
+        healthAfter: newHealth
+      });
+    }
+    return {
+      unit,
+      attackerOwner,
+      damageType: typeof options.damageType === "string" ? options.damageType : "physical",
+      rawDamage: damage || 0,
+      mitigated: 0,
+      absorbed: 0,
+      appliedDamage: damage || 0,
+      preventedDamage: 0,
+      killed: newHealth <= 0,
+      healthBefore: baseHealth,
+      healthAfter: newHealth
+    };
   }
 
   // Give a unit a physics "bop" using its PBody impulse.
@@ -628,12 +663,21 @@
   }
 
   projectiles.applyImpact = function(options) {
-    const { unit, attackerOwner = null, damage = 0, sourcePosition = null, bopStrength = 0, fallbackDirection = null } = options || {};
-    if (!unit) return;
-    applyDamage(unit, damage, attackerOwner);
+    const {
+      unit,
+      attackerOwner = null,
+      damage = 0,
+      damageType = "physical",
+      sourcePosition = null,
+      bopStrength = 0,
+      fallbackDirection = null
+    } = options || {};
+    if (!unit) return null;
+    const result = applyDamage(unit, damage, attackerOwner, { damageType });
     if (bopStrength > 0) {
       bopUnitFromProjectile(unit, sourcePosition, bopStrength, fallbackDirection);
     }
+    return result;
   }
 
   function createImpactEffect(projectileType, position) {

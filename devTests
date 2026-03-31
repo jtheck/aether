@@ -17,28 +17,28 @@ Unit
 Villager        🟩
     Brigand         🟩
 Engineer        🟨
-    Architect       🟥
+    Architect       🟪
 Monk            🟨
-    Paladin         🟪
-Wizard          🟪
-    Elemental       🟪
-Warlock         🟨
+    Paladin         🟥
+Wizard          🟥
+    Elemental       🟥
+Warlock         🟩
     Geomancer       🟪
 Warrior         🟨
     Champion        🟪
 Archer          🟨
     Ballister       🟪
-Wagon           🟨
-    War Wagon       🟪
-Dirigible       🟨
-    War Balloon     🟪
-APC             🟨
-    Tank            🟪
-Priest          🟥
+Wagon           🟩
+    War Wagon       🟨
+Dirigible       🟩
+    War Balloon     🟨
+APC             🟩
+    Tank            🟨
+Priest          🟩
     Valkyrie        🟪
-Myco            🟥
+Myco            🟩
     Alchemist       🟪
-Shaman          🟥
+Shaman          🟩
     Druid           🟪
 
     ======================

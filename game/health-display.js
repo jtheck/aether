@@ -4,11 +4,19 @@
 
   const HEALTH_DOT_COUNT = 5;
   /** Bump when geometry/material pipeline changes so old meshes are disposed. */
-  const HEALTH_DOTS_IMPL_VERSION = 12;
+  const HEALTH_DOTS_IMPL_VERSION = 15;
   const HEALTH_DOTS_RENDERING_GROUP = 2;
   const DOT_DIAMETER_TILE_MUL = 0.22;
   /** Second and fourth dots (0-based indices 1,3) render smaller for a subtle rhythm. */
   const DOT_DIAMETER_ALTERNATE_MUL = 0.4;
+  /**
+   * Ring quads are sized from the full (large) health-dot diameter so holy armor reads at ~large-dot scale.
+   * Holy: ~match large dots + a touch; research armor: outside that, larger than large dots.
+   */
+  const ALT_HOLY_RING_DIAMETER_VS_NORMAL_DOT = 1.04;
+  const ALT_ARMOR_RING_DIAMETER_VS_NORMAL_DOT = 1.26;
+  const ALT_RING_Z_BLACK = -0.004;
+  const ALT_RING_Z_WHITE = -0.002;
   const DOT_SPACING_MUL = 1.06;
   const Y_BELOW_UNIT_MUL = -0.58;
   const Y_BELOW_BUILDING_MUL = -0.72;
@@ -117,6 +125,7 @@
       );
       mat.alpha = contested ? 0.78 + 0.22 * tPulse : 1;
     }
+    syncHealthDotAlternateRings(entity);
   }
 
   function getHealthDotsBelowRootOffsetY(entity) {
@@ -148,6 +157,12 @@
   /** Bump when only the radial alpha profile changes (invalidates shared DynamicTexture). */
   const SOFT_CIRCLE_GRADIENT_VERSION = 3;
   let _softCircleTexGradientVer = -1;
+
+  let _ringWhiteTex = null;
+  let _ringBlackTex = null;
+  let _ringTexScene = null;
+  const RING_TEX_IMPL_VERSION = 1;
+  let _ringTexVer = -1;
 
   function softCircleTexStillUsable(tex) {
     if (!tex) return false;
@@ -206,6 +221,189 @@
     mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
   }
 
+  function makeRingAlphaTexture(scene, name, rgbFill) {
+    const size = 128;
+    const tex = new BABYLON.DynamicTexture(name, { width: size, height: size }, scene, false);
+    const ctx = tex.getContext();
+    const cx = size * 0.5;
+    const cy = size * 0.5;
+    const ir = size * 0.34;
+    const or = size * 0.485;
+    ctx.clearRect(0, 0, size, size);
+    ctx.beginPath();
+    ctx.arc(cx, cy, or, 0, Math.PI * 2);
+    ctx.arc(cx, cy, ir, 0, Math.PI * 2, true);
+    ctx.fillStyle = rgbFill;
+    ctx.fill('evenodd');
+    tex.update();
+    tex.wrapU = BABYLON.Texture.CLAMP_ADDRESSMODE;
+    tex.wrapV = BABYLON.Texture.CLAMP_ADDRESSMODE;
+    tex.hasAlpha = true;
+    return tex;
+  }
+
+  function getSharedAlternateDotRingTextures(scene) {
+    if (
+      _ringWhiteTex &&
+      _ringBlackTex &&
+      _ringTexScene === scene &&
+      softCircleTexStillUsable(_ringWhiteTex) &&
+      softCircleTexStillUsable(_ringBlackTex) &&
+      _ringTexVer === RING_TEX_IMPL_VERSION
+    ) {
+      return { white: _ringWhiteTex, black: _ringBlackTex };
+    }
+    if (_ringWhiteTex && typeof _ringWhiteTex.dispose === 'function') {
+      try { _ringWhiteTex.dispose(); } catch (_) {}
+    }
+    if (_ringBlackTex && typeof _ringBlackTex.dispose === 'function') {
+      try { _ringBlackTex.dispose(); } catch (_) {}
+    }
+    _ringWhiteTex = makeRingAlphaTexture(scene, 'healthChipRingWhite', 'rgba(255,255,255,0.92)');
+    _ringBlackTex = makeRingAlphaTexture(scene, 'healthChipRingBlack', 'rgba(18,18,20,0.94)');
+    _ringTexScene = scene;
+    _ringTexVer = RING_TEX_IMPL_VERSION;
+    return { white: _ringWhiteTex, black: _ringBlackTex };
+  }
+
+  function normalizeOwnerIdForResearch(oid) {
+    if (oid == null) return null;
+    const s = String(oid);
+    return s.length > 6 ? s.slice(-6) : s;
+  }
+
+  function researchPlayersList() {
+    const list = [];
+    const seen = new Set();
+    const add = p => {
+      if (!p || seen.has(p)) return;
+      seen.add(p);
+      list.push(p);
+    };
+    if (window.game && Array.isArray(window.game.players)) {
+      for (let i = 0; i < window.game.players.length; i++) add(window.game.players[i]);
+    }
+    add(window.player);
+    return list;
+  }
+
+  function ownerHasArmorResearch(ownerId) {
+    if (ownerId == null) return false;
+    const want = normalizeOwnerIdForResearch(ownerId);
+    if (!want) return false;
+    const players = researchPlayersList();
+    for (let i = 0; i < players.length; i++) {
+      const p = players[i];
+      const pid = p.id != null ? normalizeOwnerIdForResearch(p.id) : '';
+      if (pid && pid === want && Array.isArray(p.research) && p.research.indexOf('armor') !== -1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function entityHasHolyArmorShield(entity) {
+    if (typeof window.cleanupExpiredIncomingDamageState === 'function') {
+      try {
+        window.cleanupExpiredIncomingDamageState(entity);
+      } catch (_) { /* ignore */ }
+    }
+    const state = entity?._incomingDamageState;
+    const shields = state && state.shields;
+    if (!shields) return false;
+    const keys = Object.keys(shields);
+    for (let i = 0; i < keys.length; i++) {
+      const s = shields[keys[i]];
+      if (!s || s.label !== 'holy_armor') continue;
+      const rem = Number.isFinite(s.remaining) ? s.remaining : 0;
+      if (rem > 0) return true;
+    }
+    return false;
+  }
+
+  function isUnitEntityForArmorRings(entity) {
+    if (!entity || entity.type === 'agora') return false;
+    const isBuilding =
+      entity.gridX !== undefined || (entity.mesh && entity.mesh.isBuilding);
+    return !isBuilding;
+  }
+
+  function syncHealthDotAlternateRings(entity) {
+    const layers = entity.healthDotRingLayers;
+    if (!layers) return;
+    const hideForAgoraCapture =
+      entity.type === 'agora' &&
+      ((entity.captureProgress || 0) > 0 || entity.contested);
+    const isUnit = isUnitEntityForArmorRings(entity);
+    const showHolyRing =
+      !hideForAgoraCapture && isUnit && entityHasHolyArmorShield(entity);
+    const showArmorRing =
+      !hideForAgoraCapture && isUnit && ownerHasArmorResearch(entity.owner);
+    for (let i = 1; i <= 3; i += 2) {
+      const L = layers[i];
+      if (!L) continue;
+      if (L.white && typeof L.white.setEnabled === 'function') L.white.setEnabled(!!showHolyRing);
+      if (L.black && typeof L.black.setEnabled === 'function') L.black.setEnabled(!!showArmorRing);
+    }
+  }
+
+  function buildAlternateDotRingMeshes(scene, rowRoot, xPos, index, normalDotDiameter) {
+    const rings = getSharedAlternateDotRingTextures(scene);
+    const dW = normalDotDiameter * ALT_HOLY_RING_DIAMETER_VS_NORMAL_DOT;
+    const dB = normalDotDiameter * ALT_ARMOR_RING_DIAMETER_VS_NORMAL_DOT;
+    const black = BABYLON.MeshBuilder.CreatePlane(`healthChip_${index}_ringBlack`, {
+      width: dB,
+      height: dB
+    }, scene);
+    black.position.x = xPos;
+    black.position.y = 0;
+    black.position.z = ALT_RING_Z_BLACK;
+    black.parent = rowRoot;
+    black.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
+    const matB = new BABYLON.StandardMaterial(`healthDotRingBlack_${index}`, scene);
+    applyUnlitBillboardChipMaterial(matB);
+    matB.diffuseTexture = rings.black;
+    matB.diffuseTexture.hasAlpha = true;
+    matB.useAlphaFromDiffuseTexture = true;
+    matB.diffuseColor.copyFromFloats(1, 1, 1);
+    matB.emissiveColor.copyFromFloats(1, 1, 1);
+    black.material = matB;
+    black.isPickable = false;
+    black.receiveShadows = false;
+    black.renderingGroupId = HEALTH_DOTS_RENDERING_GROUP;
+    black.setEnabled(false);
+    black.metadata = { ...(black.metadata || {}), excludeFromDirectionalShadows: true };
+
+    const white = BABYLON.MeshBuilder.CreatePlane(`healthChip_${index}_ringWhite`, {
+      width: dW,
+      height: dW
+    }, scene);
+    white.position.x = xPos;
+    white.position.y = 0;
+    white.position.z = ALT_RING_Z_WHITE;
+    white.parent = rowRoot;
+    white.billboardMode = BABYLON.Mesh.BILLBOARDMODE_NONE;
+    const matW = new BABYLON.StandardMaterial(`healthDotRingWhite_${index}`, scene);
+    applyUnlitBillboardChipMaterial(matW);
+    matW.diffuseTexture = rings.white;
+    matW.diffuseTexture.hasAlpha = true;
+    matW.useAlphaFromDiffuseTexture = true;
+    matW.diffuseColor.copyFromFloats(1, 1, 1);
+    matW.emissiveColor.copyFromFloats(1, 1, 1);
+    white.material = matW;
+    white.isPickable = false;
+    white.receiveShadows = false;
+    white.renderingGroupId = HEALTH_DOTS_RENDERING_GROUP;
+    white.setEnabled(false);
+    white.metadata = { ...(white.metadata || {}), excludeFromDirectionalShadows: true };
+
+    if (window.gfx && window.gfx.markMeshExcludeDirectionalShadows) {
+      window.gfx.markMeshExcludeDirectionalShadows(black);
+      window.gfx.markMeshExcludeDirectionalShadows(white);
+    }
+    return { white, black };
+  }
+
   window.createHealthDots = function(entity) {
     if (!entity.mesh || !window.gfx || !window.gfx.scene) return;
 
@@ -235,6 +433,7 @@
     container.parent = null;
 
     entity.healthDots = [];
+    entity.healthDotRingLayers = [null, null, null, null, null];
     entity.healthDotsContainer = container;
 
     const rowRoot = BABYLON.MeshBuilder.CreateBox('healthRowBillboard', { size: 0.001 }, scene);
@@ -252,12 +451,17 @@
     for (let i = 0; i < HEALTH_DOT_COUNT; i++) {
       const d =
         i === 1 || i === 3 ? dotSize * DOT_DIAMETER_ALTERNATE_MUL : dotSize;
+
+      const xPos = (i * dotSpacing) - (totalWidth / 2);
+      if (i === 1 || i === 3) {
+        entity.healthDotRingLayers[i] = buildAlternateDotRingMeshes(scene, rowRoot, xPos, i, dotSize);
+      }
+
       const dot = BABYLON.MeshBuilder.CreatePlane(`healthChip_${i}`, {
         width: d,
         height: d
       }, scene);
 
-      const xPos = (i * dotSpacing) - (totalWidth / 2);
       dot.position.x = xPos;
       dot.position.y = 0;
       dot.position.z = 0;
@@ -305,6 +509,7 @@
     }
     delete entity._healthDotsVisualHealth;
     delete entity._healthDotsVisualMax;
+    delete entity._healthDotsArmorRingKey;
   };
 
   window.updateHealthDots = function(entity) {
@@ -322,14 +527,20 @@
 
     const maxHealth = entity.maxHealth || 100;
     const currentHealth = Math.max(0, entity.health || 0);
+    const armorRingKey = [
+      ownerHasArmorResearch(entity.owner) ? 1 : 0,
+      entityHasHolyArmorShield(entity) ? 1 : 0
+    ].join('');
     if (
       entity._healthDotsVisualHealth === currentHealth &&
-      entity._healthDotsVisualMax === maxHealth
+      entity._healthDotsVisualMax === maxHealth &&
+      entity._healthDotsArmorRingKey === armorRingKey
     ) {
       return;
     }
     entity._healthDotsVisualHealth = currentHealth;
     entity._healthDotsVisualMax = maxHealth;
+    entity._healthDotsArmorRingKey = armorRingKey;
 
     const healthPercent = maxHealth > 0 ? currentHealth / maxHealth : 0;
 
@@ -371,9 +582,28 @@
         mat.alpha = 0.5;
       }
     });
+    syncHealthDotAlternateRings(entity);
   };
 
   window.disposeHealthDots = function(entity) {
+    if (entity.healthDotRingLayers) {
+      entity.healthDotRingLayers.forEach(L => {
+        if (!L) return;
+        ['black', 'white'].forEach(k => {
+          const m = L[k];
+          if (!m) return;
+          const mat = m.material;
+          if (mat) {
+            if (mat.diffuseTexture && mat.diffuseTexture !== _softCircleTex) {
+              mat.diffuseTexture = null;
+            }
+            mat.dispose();
+          }
+          m.dispose();
+        });
+      });
+      entity.healthDotRingLayers = null;
+    }
     if (entity.healthDots) {
       entity.healthDots.forEach(dot => {
         const mat = dot.material;
@@ -394,6 +624,7 @@
     delete entity.healthDotsImplVersion;
     delete entity._healthDotsVisualHealth;
     delete entity._healthDotsVisualMax;
+    delete entity._healthDotsArmorRingKey;
   };
 
 })();

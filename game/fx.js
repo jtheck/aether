@@ -244,6 +244,58 @@
       gravity: new BABYLON.Vector3(0, 1, 0), // Light upward (inverted)
       limitVelocityDamping: 0.9
     },
+    blessing: {
+      texture: "assets/images/explosion.png",
+      emitRate: 42,
+      minSize: 0.16,
+      maxSize: 0.42,
+      minLifeTime: 0.45,
+      maxLifeTime: 0.95,
+      minEmitPower: 0.8,
+      maxEmitPower: 2.1,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,
+      direction1: new BABYLON.Vector3(-0.45, 1.0, -0.45),
+      direction2: new BABYLON.Vector3(0.45, 2.2, 0.45),
+      minEmitBox: new BABYLON.Vector3(-0.16, 0.05, -0.16),
+      maxEmitBox: new BABYLON.Vector3(0.16, 0.25, 0.16),
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(1, 0.98, 0.8, 0) },
+        { time: 0.14, color: new BABYLON.Color4(1, 0.96, 0.72, 0.95) },
+        { time: 0.5, color: new BABYLON.Color4(1, 0.92, 0.56, 0.72) },
+        { time: 0.85, color: new BABYLON.Color4(0.95, 0.86, 0.42, 0.28) },
+        { time: 1.0, color: new BABYLON.Color4(0.7, 0.58, 0.18, 0) }
+      ],
+      gravity: new BABYLON.Vector3(0, 0.7, 0),
+      limitVelocityDamping: 0.88
+    },
+    nature: {
+      texture: "assets/images/explosion.png",
+      emitRate: 28,
+      minSize: 0.14,
+      maxSize: 0.34,
+      minLifeTime: 0.45,
+      maxLifeTime: 0.9,
+      minEmitPower: 0.7,
+      maxEmitPower: 1.8,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,
+      direction1: new BABYLON.Vector3(-0.35, 0.9, -0.35),
+      direction2: new BABYLON.Vector3(0.35, 1.8, 0.35),
+      minEmitBox: new BABYLON.Vector3(-0.14, 0.03, -0.14),
+      maxEmitBox: new BABYLON.Vector3(0.14, 0.18, 0.14),
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(0.76, 1, 0.62, 0) },
+        { time: 0.16, color: new BABYLON.Color4(0.68, 1, 0.52, 0.92) },
+        { time: 0.55, color: new BABYLON.Color4(0.34, 0.88, 0.26, 0.64) },
+        { time: 0.88, color: new BABYLON.Color4(0.2, 0.52, 0.14, 0.22) },
+        { time: 1.0, color: new BABYLON.Color4(0.08, 0.2, 0.04, 0) }
+      ],
+      gravity: new BABYLON.Vector3(0, 0.55, 0),
+      limitVelocityDamping: 0.9
+    },
     // Ground-level sparks for Agora capture (emitter = scaled TransformNode on building)
     agoraCaptureSpark: {
       texture: 'assets/images/explosion.png',
@@ -277,9 +329,7 @@
   fx.init = function(gameScene) {
     scene = gameScene;
     // console.log('FX system initialized');
-    
-    // Enable particle testing with keyboard shortcuts
-    fx.setupParticleTesting();
+    // Particle/explosion keyboard shortcuts (X/B/P, 1–9) disabled in normal play — call fx.setupParticleTesting() from console if needed.
   };
   
   // Get particle system stats for diagnostics

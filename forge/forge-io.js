@@ -71,6 +71,7 @@
               const encodedMsg = o.message ? btoa(encodeURIComponent(o.message)) : '';
               return `${o.x},${o.y},${o.radius},${o.type},${encodedMsg}`;
             }).join(';') : undefined,  // Objectives with messages
+      ow: this.state.objectiveWinMode === 'all' ? 'all' : undefined,
       units: this.state.startingUnits.length > 0
           ? this.state.startingUnits.map(u => {
               const n = (u.name && String(u.name).trim()) ? btoa(encodeURIComponent(u.name.trim())) : '';
@@ -504,6 +505,10 @@
       this._objectiveMarkers?.forEach(m => m.dispose());
       this._objectiveMarkers = [];
     }
+
+    this.state.objectiveWinMode = mapData.ow === 'all' ? 'all' : 'default';
+    const winSel = document.getElementById('obj-win-mode');
+    if (winSel) winSel.value = this.state.objectiveWinMode === 'all' ? 'all' : 'default';
     
     // Restore starting units (v2 format)
     if (mapData.units) {

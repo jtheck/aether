@@ -141,6 +141,7 @@ const UnitTypes = {
       buildings: ["village"]
     },
     upgradeTo: "paladin",
+    upgradeAtBuildingTypes: ["church"],
     description: "Holy warrior with healing abilities and powerful kicks",
     notes: "DEFEAT: Sits down to meditate, becomes invulnerable but useless until meditation ends"
   },
@@ -195,6 +196,8 @@ const UnitTypes = {
       buildings: ["tower"]
     },
     upgradeTo: "elemental",
+    upgradeAtBuildingTypes: ["tower"],
+    upgradeAtAnyOwner: true,
     description: "Powerful magic user with offensive spells",
     notes: "DEFEAT: POOF! Teleports away in a puff of smoke, reappears at lab"
   },
@@ -397,6 +400,7 @@ const UnitTypes = {
       buildings: ["workshop"]
     },
     upgradeTo: "war_wagon",
+    upgradeAtBuildingTypes: ["workshop"],
     description: "Transport vehicle that can carry units and resources",
     notes: "DEFEAT: Wheels fall off cartoonishly, driver runs away, can be repaired"
   },
@@ -404,7 +408,7 @@ const UnitTypes = {
   war_wagon: {
     name: "War Wagon",
     category: "vehicle",
-    model: "assets/models/camp.glb", // TODO: unique model
+    model: "assets/models/frog.glb", // Placeholder until unique model exists
     scale: 0.45,
     health: 100,
     speed: 44,
@@ -443,6 +447,7 @@ const UnitTypes = {
       buildings: ["perch"]
     },
     upgradeTo: "war_balloon",
+    upgradeAtBuildingTypes: ["perch"],
     description: "Floating airship for scouting and transport",
     notes: "DEFEAT: 🌀 Deflates slowly with sad whistle sound, drifts back to perch"
   },
@@ -451,7 +456,7 @@ const UnitTypes = {
     name: "War Balloon",
     category: "air",
     element: "air",
-    model: "assets/models/camp.glb", // TODO: unique model
+    model: "assets/models/frog.glb", // Placeholder until unique model exists
     scale: 0.55,
     health: 100,
     speed: 88,
@@ -496,6 +501,7 @@ const UnitTypes = {
       buildings: ["factory"]
     },
     upgradeTo: "tank",
+    upgradeAtBuildingTypes: ["factory"],
     description: "Armored personnel carrier for rapid deployment",
     notes: "DEFEAT: 🔥 Engine sputters out with smoke, crew exits coughing, towed back to factory"
   },
@@ -504,7 +510,7 @@ const UnitTypes = {
     name: "Tank",
     category: "vehicle",
     element: "fire",
-    model: "assets/models/camp.glb", // TODO: unique model
+    model: "assets/models/frog.glb", // Placeholder until unique model exists
     scale: 0.6,
     health: 150,
     speed: 46,
@@ -538,9 +544,9 @@ const UnitTypes = {
     rotationSpeed: 6.0,
     size: 1,
     cost: { food: 25, wood: 40 },
-    abilities: ["heal", "bless", "resurrect"],
-    commandAbilities: ["heal_pulse"],
-    primaryAbilityId: "heal_pulse",
+    abilities: ["heal", "bless", "shield", "resurrect"],
+    commandAbilities: ["holy_armor"],
+    primaryAbilityId: "holy_armor",
     attackType: "ranged",
     attackDamage: 7,
     attackRange: 4,
@@ -607,13 +613,15 @@ const UnitTypes = {
       type: "ability_burst",
       abilityId: "spore_bloom",
       effectParams: {
-        outerRadius: 12,
-        innerRadius: 6,
+        outerRadius: 22,
+        innerRadius: 9,
         innerWoodAmount: 7,
-        maxSeedCount: 6,
+        maxSeedCount: 48,
+        minSeedCount: 28,
         growthDelayTicks: 70,
         treeRemaining: 28,
-        seedChance: 0.4
+        seedChance: 0.94,
+        mushroomClusterCount: 16
       }
     },
     description: "Fungus expert who weaponizes spores and toxins",
@@ -654,6 +662,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 25, wood: 30 },
     abilities: ["nature", "root", "summon_beast"],
+    commandAbilities: ["frog_swarm"],
+    primaryAbilityId: "frog_swarm",
     spawner: "grove",
     prerequisites: {
       buildings: ["grove"]
@@ -992,6 +1002,69 @@ function getUnitsByCategory(category) {
     return Object.keys(UnitTypes).filter(type => UnitTypes[type].category === category);
 }
 
+const FALLBACK_UPGRADED_UNIT_MODEL = 'assets/models/frog.glb';
+
+function normalizeOwnerId(ownerId) {
+    if (!ownerId) return '';
+    const value = typeof ownerId === 'string' ? ownerId : String(ownerId);
+    return value.length > 6 ? value.slice(-6) : value;
+}
+
+function getUnitBuildingUpgradeRule(unitOrType) {
+    const unitType = typeof unitOrType === 'string' ? unitOrType : unitOrType?.type;
+    const unitDef = unitType ? UnitTypes[unitType] : null;
+    if (!unitDef?.upgradeTo) return null;
+    const buildingTypes = Array.isArray(unitDef.upgradeAtBuildingTypes)
+        ? unitDef.upgradeAtBuildingTypes.filter(Boolean)
+        : [];
+    if (buildingTypes.length === 0) return null;
+    return {
+        sourceType: unitType,
+        targetType: unitDef.upgradeTo,
+        buildingTypes,
+        allowAnyOwner: unitDef.upgradeAtAnyOwner === true
+    };
+}
+
+function resolveUnitBuildingUpgrade(unitOrType, building, playerId) {
+    const rule = getUnitBuildingUpgradeRule(unitOrType);
+    if (!rule || !building) return null;
+    if (Number.isFinite(building.buildProgress) && building.buildProgress < 1) return null;
+    if (!rule.buildingTypes.includes(building.type)) return null;
+
+    const normalizedPlayerId = normalizeOwnerId(playerId);
+    const buildingOwnerId = normalizeOwnerId(building.owner);
+    if (!rule.allowAnyOwner && (!normalizedPlayerId || buildingOwnerId !== normalizedPlayerId)) {
+        return null;
+    }
+
+    return {
+        sourceType: rule.sourceType,
+        targetType: rule.targetType,
+        buildingId: building.id,
+        buildingType: building.type,
+        allowAnyOwner: rule.allowAnyOwner
+    };
+}
+
+function resolveUnitModelPath(unit) {
+    return typeof unit?.model === 'string' && unit.model
+        ? unit.model
+        : FALLBACK_UPGRADED_UNIT_MODEL;
+}
+
+function loadUnitModelForScene(unit, scene) {
+    const primaryPath = resolveUnitModelPath(unit);
+    return window.gfx.getModel(primaryPath, scene).catch(err => {
+        if (primaryPath === FALLBACK_UPGRADED_UNIT_MODEL) {
+            throw err;
+        }
+        console.warn(`⚠️ Falling back to frog model for ${unit?.type || unit?.name || 'unit'} after load failure: ${primaryPath}`);
+        unit.model = FALLBACK_UPGRADED_UNIT_MODEL;
+        return window.gfx.getModel(FALLBACK_UPGRADED_UNIT_MODEL, scene);
+    });
+}
+
 // Simple LOD: check if unit should update this frame
 function shouldUpdateUnit(unit, currentFrame) {
     // Use squared distance for performance (avoid sqrt)
@@ -1282,7 +1355,7 @@ function spawnUnitModels(scene) {
         if (!unit.mesh && !unit._meshLoading && window.gfx && window.gfx.getModel) {
             unit._meshLoading = true;
             unitsNeedingMeshes++;
-            window.gfx.getModel(unit.model, scene).then(model => {
+            loadUnitModelForScene(unit, scene).then(model => {
                 unit._meshLoading = false;
                 // console.log(`✅ Model loaded for ${unit.name}!`);
                 unit.mesh = model.root;
@@ -2377,10 +2450,10 @@ window.unloadPassengers = unloadPassengers;
 
 // Constants for monk auto-kick behavior
 // Radius for detecting nearby enemies to kick (monks' legs are only so long!)
-const MONK_KICK_AUTO_RADIUS = 2.5; // Reduced from 5 - realistic leg reach
+const MONK_KICK_AUTO_RADIUS = 2.0; // Keep the passive shove close-range so it reads like crowd control, not a launch attack
 const MONK_KICK_AUTO_RADIUS_SQ = MONK_KICK_AUTO_RADIUS * MONK_KICK_AUTO_RADIUS;
 // Strong knock-back so enemies get clearly pushed away
-const MONK_KICK_AUTO_POWER = 250; // Increased from 180 to make kicks more visible
+const MONK_KICK_AUTO_POWER = 55; // Passive monk bump should feel assertive, but much softer than the activated kick
 
 // Automatically push units out of the way when monk gets a move command (but NOT while wandering)
 // This can be called when a move command is issued, or continuously during movement
@@ -2440,6 +2513,8 @@ function maybeAutoMonkKick(unit, forceCheck = false) {
         
         // Monks can't kick other monks (they're immune to kicks)
         if (other.type === 'monk') continue;
+        // Don't keep stacking passive kicks while a target is already in the air from a previous shove.
+        if (other._monkKickArc) continue;
         
         // Monks kick everyone else - allies, enemies, and neutrals!
         // (No owner check - monks are peaceful but pushy)
@@ -2464,7 +2539,8 @@ function maybeAutoMonkKick(unit, forceCheck = false) {
                 // Apply push impulse directly (smooth continuous pushing)
                 // Use distance-based falloff so close enemies get pushed harder
                 const falloff = 1.0 - (dist / MONK_KICK_AUTO_RADIUS);
-                const pushStrength = MONK_KICK_AUTO_POWER * falloff;
+                const softenedFalloff = falloff * falloff;
+                const pushStrength = MONK_KICK_AUTO_POWER * softenedFalloff;
                 
                 other.pb.imp.x += dirX * pushStrength;
                 other.pb.imp.z += dirZ * pushStrength;
@@ -2475,8 +2551,8 @@ function maybeAutoMonkKick(unit, forceCheck = false) {
                     const tickRate = 20; // Match net.TICK_RATE
                     other._monkKickArc = {
                         startTick: currentTick,
-                        durationTicks: Math.floor(400 / 1000 * tickRate), // 400ms → ticks (8 ticks at 20Hz)
-                        peakHeight: 2.0, // Peak height of arc
+                        durationTicks: Math.floor(500 / 1000 * tickRate), // Slightly longer hang time for a chunkier pop-up
+                        peakHeight: 2.6, // More lift so reduced horizontal shove still reads as impactful
                         startY: other.pb.state.loc.y || 0
                     };
                 }
@@ -3419,6 +3495,8 @@ if (typeof window !== 'undefined') {
     window.rallyUnitsToAgora = rallyUnitsToAgora;
     window.getUnitDef = getUnitDef;
     window.getUnitsByCategory = getUnitsByCategory;
+    window.getUnitBuildingUpgradeRule = getUnitBuildingUpgradeRule;
+    window.resolveUnitBuildingUpgrade = resolveUnitBuildingUpgrade;
     
     // CRITICAL: Never reassign these arrays if a multiplayer match is active!
     // During match start, we clear the arrays and repopulate them.
@@ -3506,7 +3584,7 @@ if (typeof window !== 'undefined') {
 
     function spawnReplacementUnitVisual(unit, owner, homePos) {
         if (!window.gfx?.scene || !window.gfx.getModel) return;
-        window.gfx.getModel(unit.model, window.gfx.scene).then(model => {
+        loadUnitModelForScene(unit, window.gfx.scene).then(model => {
             unit.mesh = model.root;
             unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
 
@@ -3555,6 +3633,8 @@ if (typeof window !== 'undefined') {
             if (homePos && window.behaviorManager) {
                 window.behaviorManager.setBehavior(unit, 'run', { targetPoint: homePos });
             }
+        }).catch(err => {
+            console.warn(`❌ Failed to spawn replacement model for ${unit?.type || unit?.name || 'unit'}:`, err);
         });
     }
 
@@ -3659,18 +3739,18 @@ if (typeof window !== 'undefined') {
         }
     };
 
-    function handleUnitDefeatOutcome(unit, attackerOwner) {
+    function handleUnitDefeatOutcome(unit, attackerOwner, defeatMeta = null) {
         const outcome = getUnitDefeatOutcome(unit);
         if (!outcome?.type) return false;
         const handler = unitDefeatOutcomeHandlers[outcome.type];
         if (typeof handler !== 'function') return false;
-        return !!handler(unit, outcome, attackerOwner);
+        return !!handler(unit, outcome, attackerOwner, defeatMeta);
     }
 
-    window.onUnitDeath = function(unit, attackerOwner) {
+    window.onUnitDeath = function(unit, attackerOwner, defeatMeta = null) {
         if (!unit || unit.dead) return;
 
-        if (handleUnitDefeatOutcome(unit, attackerOwner)) {
+        if (handleUnitDefeatOutcome(unit, attackerOwner, defeatMeta)) {
             return;
         }
 

@@ -138,6 +138,15 @@ function isHostileToUnit(sourceUnit, otherUnit) {
     return otherUnit.owner !== sourceUnit.owner;
 }
 
+function isFriendlyToUnit(sourceUnit, otherUnit) {
+    if (!sourceUnit || !otherUnit) return false;
+    if (sourceUnit === otherUnit) return true;
+    if (window.currentMatch?.arePlayersAllied) {
+        return window.currentMatch.arePlayersAllied(sourceUnit.owner, otherUnit.owner);
+    }
+    return otherUnit.owner === sourceUnit.owner;
+}
+
 function isHostileToBuilding(sourceUnit, building) {
     if (!sourceUnit || !building) return false;
     if (window.currentMatch?.areOwnersHostile) {
@@ -224,6 +233,236 @@ function clearUnitStatModifier(unit, stat, sourceKey) {
     if (!state?.modifiers?.[stat]?.[sourceKey]) return;
     delete state.modifiers[stat][sourceKey];
     recomputeUnitStat(unit, stat);
+}
+
+function roundDamageValue(value) {
+    return Math.round((Number.isFinite(value) ? value : 0) * 1000) / 1000;
+}
+
+function normalizeDamageType(damageType = 'physical') {
+    return typeof damageType === 'string' && damageType
+        ? damageType.toLowerCase()
+        : 'physical';
+}
+
+function normalizeDamageTypeFilter(filter) {
+    if (!Array.isArray(filter)) return null;
+    const normalized = Array.from(new Set(filter
+        .map(entry => normalizeDamageType(entry))
+        .filter(Boolean)));
+    normalized.sort((a, b) => window.deterministicStringCompare
+        ? window.deterministicStringCompare(a, b)
+        : a.localeCompare(b));
+    return normalized.length > 0 ? normalized : null;
+}
+
+function ensureUnitIncomingDamageState(unit) {
+    if (!unit) return { modifiers: {}, shields: {} };
+    if (!unit._incomingDamageState) {
+        unit._incomingDamageState = {
+            modifiers: {},
+            shields: {}
+        };
+    }
+    return unit._incomingDamageState;
+}
+
+function doesDamageStateApplyToType(entry, damageType) {
+    const appliesTo = entry?.appliesToDamageTypes;
+    if (!Array.isArray(appliesTo) || appliesTo.length === 0) return true;
+    return appliesTo.includes(normalizeDamageType(damageType));
+}
+
+function cleanupExpiredIncomingDamageState(unit, currentTick = getCurrentMatchTick()) {
+    const state = unit?._incomingDamageState;
+    if (!state) return false;
+    let changed = false;
+
+    ['modifiers', 'shields'].forEach(kind => {
+        const entries = state[kind] || {};
+        Object.keys(entries).forEach(sourceKey => {
+            const entry = entries[sourceKey];
+            if (!entry) {
+                delete entries[sourceKey];
+                changed = true;
+                return;
+            }
+
+            if (Number.isFinite(entry.expiresAtTick) && currentTick > entry.expiresAtTick) {
+                delete entries[sourceKey];
+                changed = true;
+                return;
+            }
+
+            if (kind === 'shields') {
+                const remaining = Number.isFinite(entry.remaining) ? entry.remaining : entry.amount;
+                if (!(remaining > 0)) {
+                    delete entries[sourceKey];
+                    changed = true;
+                }
+            }
+        });
+    });
+
+    return changed;
+}
+
+function getSortedIncomingDamageEntries(collection = {}) {
+    return Object.entries(collection).sort((a, b) => window.deterministicStringCompare
+        ? window.deterministicStringCompare(a[0], b[0])
+        : String(a[0]).localeCompare(String(b[0])));
+}
+
+function setUnitIncomingDamageModifier(unit, sourceKey, modifier = {}) {
+    if (!unit || !sourceKey) return null;
+    const state = ensureUnitIncomingDamageState(unit);
+    state.modifiers[sourceKey] = {
+        multiplier: Number.isFinite(modifier.multiplier) ? modifier.multiplier : 1,
+        flatReduction: Number.isFinite(modifier.flatReduction) ? modifier.flatReduction : 0,
+        minDamage: Number.isFinite(modifier.minDamage) ? modifier.minDamage : undefined,
+        maxDamage: Number.isFinite(modifier.maxDamage) ? modifier.maxDamage : undefined,
+        appliesToDamageTypes: normalizeDamageTypeFilter(
+            modifier.appliesToDamageTypes || modifier.damageTypes || modifier.appliesTo
+        ),
+        expiresAtTick: Number.isFinite(modifier.expiresAtTick) ? modifier.expiresAtTick : undefined
+    };
+    return state.modifiers[sourceKey];
+}
+
+function clearUnitIncomingDamageModifier(unit, sourceKey) {
+    const state = unit?._incomingDamageState;
+    if (!state?.modifiers?.[sourceKey]) return false;
+    delete state.modifiers[sourceKey];
+    return true;
+}
+
+function setUnitAbsorbShield(unit, sourceKey, shield = {}) {
+    if (!unit || !sourceKey) return null;
+    const amount = Number.isFinite(shield.remaining) ? shield.remaining : shield.amount;
+    if (!(amount > 0)) {
+        clearUnitAbsorbShield(unit, sourceKey);
+        return null;
+    }
+
+    const state = ensureUnitIncomingDamageState(unit);
+    state.shields[sourceKey] = {
+        remaining: roundDamageValue(amount),
+        maxAmount: roundDamageValue(Number.isFinite(shield.maxAmount) ? shield.maxAmount : amount),
+        appliesToDamageTypes: normalizeDamageTypeFilter(
+            shield.appliesToDamageTypes || shield.damageTypes || shield.appliesTo
+        ),
+        expiresAtTick: Number.isFinite(shield.expiresAtTick) ? shield.expiresAtTick : undefined,
+        label: shield.label || null
+    };
+    return state.shields[sourceKey];
+}
+
+function clearUnitAbsorbShield(unit, sourceKey) {
+    const state = unit?._incomingDamageState;
+    if (!state?.shields?.[sourceKey]) return false;
+    delete state.shields[sourceKey];
+    return true;
+}
+
+function getUnitAbsorbShieldTotal(unit, damageType = null) {
+    const state = unit?._incomingDamageState;
+    if (!state?.shields) return 0;
+    const normalizedType = damageType ? normalizeDamageType(damageType) : null;
+    cleanupExpiredIncomingDamageState(unit);
+
+    return roundDamageValue(getSortedIncomingDamageEntries(state.shields).reduce((total, [, shield]) => {
+        if (!shield) return total;
+        if (normalizedType && !doesDamageStateApplyToType(shield, normalizedType)) return total;
+        return total + (Number.isFinite(shield.remaining) ? shield.remaining : 0);
+    }, 0));
+}
+
+function resolveIncomingUnitDamage(unit, damage, options = {}) {
+    const rawDamage = roundDamageValue(damage);
+    const damageType = normalizeDamageType(options.damageType || 'physical');
+    const attackerOwner = options.attackerOwner ?? null;
+    const result = {
+        unit,
+        attackerOwner,
+        damageType,
+        rawDamage,
+        mitigated: 0,
+        absorbed: 0,
+        appliedDamage: 0,
+        preventedDamage: 0,
+        killed: false,
+        healthBefore: null,
+        healthAfter: null
+    };
+
+    if (!unit || !(rawDamage > 0)) return result;
+
+    cleanupExpiredIncomingDamageState(unit, Number.isFinite(options.currentTick) ? options.currentTick : getCurrentMatchTick());
+
+    const hasHealth = typeof unit.health === 'number';
+    const hasCurrentHealth = typeof unit.currentHealth === 'number';
+    const current = hasCurrentHealth ? unit.currentHealth : unit.health;
+    if (!Number.isFinite(current)) return result;
+
+    result.healthBefore = current;
+    let workingDamage = rawDamage;
+    const damageState = unit._incomingDamageState || { modifiers: {}, shields: {} };
+
+    getSortedIncomingDamageEntries(damageState.modifiers).forEach(([, modifier]) => {
+        if (!modifier || !doesDamageStateApplyToType(modifier, damageType)) return;
+        const before = workingDamage;
+        const multiplier = Number.isFinite(modifier.multiplier) ? modifier.multiplier : 1;
+        workingDamage = roundDamageValue(workingDamage * multiplier);
+        if (Number.isFinite(modifier.flatReduction)) {
+            workingDamage = roundDamageValue(workingDamage - modifier.flatReduction);
+        }
+        if (Number.isFinite(modifier.minDamage)) {
+            workingDamage = Math.max(modifier.minDamage, workingDamage);
+        }
+        if (Number.isFinite(modifier.maxDamage)) {
+            workingDamage = Math.min(modifier.maxDamage, workingDamage);
+        }
+        workingDamage = roundDamageValue(Math.max(0, workingDamage));
+        result.mitigated = roundDamageValue(result.mitigated + Math.max(0, before - workingDamage));
+    });
+
+    getSortedIncomingDamageEntries(damageState.shields).forEach(([sourceKey, shield]) => {
+        if (!(workingDamage > 0) || !shield || !doesDamageStateApplyToType(shield, damageType)) return;
+        const remaining = Number.isFinite(shield.remaining) ? shield.remaining : 0;
+        if (!(remaining > 0)) {
+            delete damageState.shields[sourceKey];
+            return;
+        }
+
+        const absorbed = Math.min(remaining, workingDamage);
+        shield.remaining = roundDamageValue(remaining - absorbed);
+        workingDamage = roundDamageValue(workingDamage - absorbed);
+        result.absorbed = roundDamageValue(result.absorbed + absorbed);
+
+        if (!(shield.remaining > 0)) {
+            delete damageState.shields[sourceKey];
+        }
+    });
+
+    const appliedDamage = roundDamageValue(Math.max(0, workingDamage));
+    const next = roundDamageValue(Math.max(0, current - appliedDamage));
+    result.appliedDamage = appliedDamage;
+    result.preventedDamage = roundDamageValue(Math.max(0, rawDamage - appliedDamage));
+    result.healthAfter = next;
+
+    if (hasHealth) unit.health = next;
+    if (hasCurrentHealth) unit.currentHealth = next;
+
+    if (appliedDamage > 0 && options.showDamageSpeech !== false && window.UnitSpeech?.showDamage) {
+        window.UnitSpeech.showDamage(unit, appliedDamage);
+    }
+
+    if (next <= 0 && typeof window.onUnitDeath === 'function') {
+        result.killed = true;
+        window.onUnitDeath(unit, attackerOwner, result);
+    }
+
+    return result;
 }
 
 function getUnitCommandAbilitySpecs(unit) {
@@ -357,16 +596,22 @@ function getSporeGrowthSeedTiles(sourceUnit, centerPoint, params = {}) {
     if (!field) return [];
 
     const outerRadius = params.outerRadius || tileSize * 3.5;
+    const ringHalfThickness = Number.isFinite(params.seedRingHalfThickness)
+        ? Math.max(tileSize * 0.12, params.seedRingHalfThickness)
+        : Math.max(tileSize * 0.32, outerRadius * 0.08);
     const ringMinRadius = Number.isFinite(params.seedRingMinRadius)
         ? params.seedRingMinRadius
-        : Math.max(tileSize, outerRadius * 0.65);
+        : Math.max(tileSize, outerRadius - ringHalfThickness);
     const ringMaxRadius = Number.isFinite(params.seedRingMaxRadius)
         ? params.seedRingMaxRadius
-        : (outerRadius + tileSize * 0.35);
+        : (outerRadius + Math.min(tileSize * 0.18, ringHalfThickness * 0.5));
     const maxSeedCount = Math.max(1, Number.isFinite(params.maxSeedCount)
         ? params.maxSeedCount
-        : Math.round((outerRadius / tileSize) * 4));
-    const seedChance = Number.isFinite(params.seedChance) ? params.seedChance : 0.38;
+        : Math.round((outerRadius / tileSize) * 7));
+    const seedChance = Number.isFinite(params.seedChance) ? params.seedChance : 0.58;
+    const minSeedCount = Number.isFinite(params.minSeedCount)
+        ? Math.max(0, Math.min(maxSeedCount, params.minSeedCount))
+        : Math.min(maxSeedCount, Math.max(5, Math.ceil(maxSeedCount * 0.45)));
     const ringMinSq = ringMinRadius * ringMinRadius;
     const ringMaxSq = ringMaxRadius * ringMaxRadius;
     const baseSeed = (
@@ -402,17 +647,27 @@ function getSporeGrowthSeedTiles(sourceUnit, centerPoint, params = {}) {
     }
 
     candidates.sort((a, b) => {
-        if (a.seedRoll !== b.seedRoll) return a.seedRoll - b.seedRoll;
         if (a.ringOffset !== b.ringOffset) return a.ringOffset - b.ringOffset;
+        if (a.seedRoll !== b.seedRoll) return a.seedRoll - b.seedRoll;
         if (a.gridX !== b.gridX) return a.gridX - b.gridX;
         return a.gridZ - b.gridZ;
     });
 
-    const selected = candidates.filter(candidate => candidate.seedRoll <= seedChance).slice(0, maxSeedCount);
+    let selected = candidates.filter(candidate => candidate.seedRoll <= seedChance).slice(0, maxSeedCount);
+    if (selected.length < minSeedCount && candidates.length > 0) {
+        const used = new Set(selected.map(c => `${c.gridX},${c.gridZ}`));
+        for (const c of candidates) {
+            if (selected.length >= maxSeedCount) break;
+            const key = `${c.gridX},${c.gridZ}`;
+            if (used.has(key)) continue;
+            selected.push(c);
+            used.add(key);
+        }
+    }
     if (selected.length > 0) {
         return selected;
     }
-    return candidates.slice(0, Math.min(3, maxSeedCount));
+    return candidates.slice(0, Math.min(maxSeedCount, Math.max(4, minSeedCount)));
 }
 
 function executeSporeBloomEffect(sourceUnit, centerPoint, params = {}) {
@@ -463,11 +718,16 @@ function executeSporeBloomEffect(sourceUnit, centerPoint, params = {}) {
         outerRadius
     });
 
+    const perTileMushrooms = Number.isFinite(params.mushroomClusterCount)
+        ? params.mushroomClusterCount
+        : Math.min(18, Math.max(5, Math.round(5 + (destroyedTreeTiles.length || 0) * 0.65)));
+
     growthSeeds.forEach((seed, index) => {
         const growAtTick = getCurrentMatchTick() + growthDelayTicks + (index % 3) * 4;
         window.gfx?.setResourceTileEffect?.(seed.gridX, seed.gridZ, 'growth_preview', 'mushroom_ring', {
             yOffset: 0.03,
-            scale: 1.0
+            scale: 1.0,
+            clusterCount: perTileMushrooms
         });
         if (match?.queueResourceGrowth) {
             match.queueResourceGrowth({
@@ -2830,12 +3090,14 @@ class AttackUnitBehavior extends Behavior {
             attackDamage: unit.attackDamage || unitDef.attackDamage || 5,
             attackCooldown: unitDef.attackCooldown || 1500,
             attackType: unitDef.attackType || 'melee',
+            damageType: unitDef.damageType || 'physical',
             ...params
         });
 
         this.targetUnit = targetUnit;
         this.lastAttackTick = 0;
         this.cooldownTicks = Math.floor(this.params.attackCooldown / 50);
+        this._meleeRecoveryUntilTick = 0;
     }
 
     step() {
@@ -2878,6 +3140,7 @@ class AttackUnitBehavior extends Behavior {
                             unit: target,
                             attackerOwner: this.unit.owner,
                             damage: this.params.attackDamage,
+                            damageType: this.params.damageType || 'physical',
                             sourcePosition: from,
                             bopStrength: 35,
                             fallbackDirection: new BABYLON.Vector3(dx, 0, dz)
@@ -2892,27 +3155,20 @@ class AttackUnitBehavior extends Behavior {
                         gameplayImpact: false
                     });
                 } else {
-                    // Melee: apply damage directly
-                    const newHealth = Math.max(0, (target.currentHealth ?? target.health ?? 0) - this.params.attackDamage);
-                    if (typeof target.health === 'number') target.health = newHealth;
-                    if (typeof target.currentHealth === 'number') target.currentHealth = newHealth;
-
-                    if (window.UnitSpeech && window.UnitSpeech.showDamage) {
-                        window.UnitSpeech.showDamage(target, this.params.attackDamage);
-                    }
+                    // Melee: route through the shared deterministic damage resolver.
+                    applyDirectDamage(target, this.params.attackDamage, this.unit.owner, {
+                        damageType: this.params.damageType || 'physical'
+                    });
 
                     // Bop the target for impact feel
                     if (target.pb && target.pb.imp && distance > 0.01) {
-                        const bopStrength = 120;
+                        const bopStrength = 60;
                         const ndx = dx / distance;
                         const ndz = dz / distance;
                         target.pb.imp.x += ndx * bopStrength;
                         target.pb.imp.z += ndz * bopStrength;
                     }
-
-                    if (newHealth <= 0 && typeof window.onUnitDeath === 'function') {
-                        window.onUnitDeath(target, this.unit.owner);
-                    }
+                    this._meleeRecoveryUntilTick = currentTick + 5;
                 }
             }
 
@@ -2941,6 +3197,18 @@ class AttackUnitBehavior extends Behavior {
                 }
             }
         } else {
+            if (this.params.attackType === 'melee' && currentTick < this._meleeRecoveryUntilTick) {
+                if (this.unit.pb?.state?.vel) {
+                    this.unit.pb.state.vel.x = 0;
+                    this.unit.pb.state.vel.z = 0;
+                }
+                if (this.unit.pb?.imp) {
+                    this.unit.pb.imp.x = 0;
+                    this.unit.pb.imp.z = 0;
+                }
+                return false;
+            }
+
             // Move towards target
             const dir = {
                 x: distance > 0.001 ? Math.round((dx / distance) * 10000) / 10000 : 0,
@@ -3796,6 +4064,9 @@ class UnitBehaviorManager {
             case 'transform':
                 behavior = new TransformBehavior(unit, params);
                 break;
+            case 'upgrade_return':
+                behavior = new UpgradeReturnBehavior(unit, params);
+                break;
             default:
                 console.warn(`Unknown behavior type: ${behaviorType}`);
                 return;
@@ -3852,6 +4123,24 @@ class UnitBehaviorManager {
             // CRITICAL: Immediately replace old behavior with new one
             // This ensures player commands override any existing behavior instantly
             this.behaviors.set(unit, behavior);
+
+            // Lockstep: walk→build_work (etc.) must not inherit carry-over velocity; peers diverge otherwise.
+            if (deterministicReset && unit.pb && unit.pb.state) {
+                if (!unit.pb.state.vel) unit.pb.state.vel = { x: 0, y: 0, z: 0 };
+                unit.pb.state.vel.x = 0;
+                unit.pb.state.vel.z = 0;
+                if (!unit.pb.imp) unit.pb.imp = { x: 0, y: 0, z: 0 };
+                unit.pb.imp.x = 0;
+                unit.pb.imp.z = 0;
+                if (!unit.pb.rotImp) unit.pb.rotImp = { x: 0, y: 0, z: 0 };
+                unit.pb.rotImp.x = 0;
+                unit.pb.rotImp.y = 0;
+                unit.pb.rotImp.z = 0;
+                if (!unit.pb.rotVel) unit.pb.rotVel = { x: 0, y: 0, z: 0 };
+                unit.pb.rotVel.x = 0;
+                unit.pb.rotVel.y = 0;
+                unit.pb.rotVel.z = 0;
+            }
             
             // CRITICAL: Only reset velocity if unit is stopped or changing direction significantly
             // This prevents jerky movement when unit is already moving in similar direction
@@ -3899,7 +4188,7 @@ class UnitBehaviorManager {
     }
 
     traceBehaviorMutation(stage, unit, details = {}) {
-        if (!window.currentMatch?.isLiveMultiplayerMatch?.() || !unit) return;
+        if (!window.currentMatch?.isLiveMultiplayerMatch?.() || !unit || !window.DEBUG_BEHAVIOR_TRACE) return;
         const normalizeId = (id) => {
             if (!id) return '';
             const str = typeof id === 'string' ? id : String(id);
@@ -3965,6 +4254,8 @@ class UnitBehaviorManager {
             if (unit.owner === 'neutral' && unit.distanceToCameraSquared > 90000) { // 300^2
                 return; // Skip behavior stepping for distant neutral units
             }
+
+            cleanupExpiredIncomingDamageState(unit);
             
             if (behavior) {
                 const completed = behavior.step();
@@ -4038,6 +4329,7 @@ class UnitBehaviorManager {
     // Add a special ability as a modifier (doesn't replace existing behavior)
     addSpecialAbilityModifier(unit, abilityType, params = {}) {
         unit._specialModifiers = unit._specialModifiers || {};
+        unit._abilityCooldowns = unit._abilityCooldowns || {};
         const abilitySpec = window.UnitAbilityRegistry?.getSpec?.(abilityType);
         if (!abilitySpec || typeof abilitySpec.createRuntime !== 'function') {
             return;
@@ -4077,19 +4369,11 @@ function holdUnitPosition(unit) {
     }
 }
 
-function applyDirectDamage(unit, damage, attackerOwner) {
-    if (!unit || !Number.isFinite(damage) || damage <= 0) return;
-    const current = Number.isFinite(unit.currentHealth) ? unit.currentHealth : unit.health;
-    if (!Number.isFinite(current)) return;
-    const next = Math.max(0, current - damage);
-    if (typeof unit.health === 'number') unit.health = next;
-    if (typeof unit.currentHealth === 'number') unit.currentHealth = next;
-    if (window.UnitSpeech?.showDamage) {
-        window.UnitSpeech.showDamage(unit, damage);
-    }
-    if (next <= 0 && typeof window.onUnitDeath === 'function') {
-        window.onUnitDeath(unit, attackerOwner);
-    }
+function applyDirectDamage(unit, damage, attackerOwner, options = {}) {
+    return resolveIncomingUnitDamage(unit, damage, {
+        ...options,
+        attackerOwner
+    });
 }
 
 function applyUnitHealing(unit, amount) {
@@ -4133,8 +4417,25 @@ function createAbilityPulseFx(point, effectType = 'particle', options = {}) {
 function applyAreaImpactFromPoint(sourceUnit, centerPoint, radius, damage, options = {}) {
     const sourcePosition = options.sourcePosition || centerPoint;
     const bopStrength = Number.isFinite(options.bopStrength) ? options.bopStrength : 0;
-    const targets = getUnitsInRadius(centerPoint, radius, other => other !== sourceUnit && isHostileToUnit(sourceUnit, other));
+    const damageType = normalizeDamageType(options.damageType || 'physical');
+    const friendlyFireMultiplier = Number.isFinite(options.friendlyFireMultiplier)
+        ? Math.max(0, options.friendlyFireMultiplier)
+        : 0;
+    const includeSourceInFriendlyFire = options.includeSourceInFriendlyFire === true;
+    const targets = getUnitsInRadius(centerPoint, radius, other => {
+        if (other === sourceUnit) {
+            return includeSourceInFriendlyFire && friendlyFireMultiplier > 0;
+        }
+        if (isHostileToUnit(sourceUnit, other)) return true;
+        return friendlyFireMultiplier > 0 && isFriendlyToUnit(sourceUnit, other);
+    });
+    const impactedTargets = [];
     targets.forEach(target => {
+        const isFriendlyTarget = !isHostileToUnit(sourceUnit, target);
+        const appliedDamage = isFriendlyTarget
+            ? Math.max(0, Math.round(damage * friendlyFireMultiplier))
+            : damage;
+        if (!(appliedDamage > 0)) return;
         const targetLoc = target.pb?.state?.loc;
         const fallbackDirection = targetLoc
             ? new BABYLON.Vector3(targetLoc.x - centerPoint.x, 0, targetLoc.z - centerPoint.z)
@@ -4143,19 +4444,23 @@ function applyAreaImpactFromPoint(sourceUnit, centerPoint, radius, damage, optio
             window.projectiles.applyImpact({
                 unit: target,
                 attackerOwner: sourceUnit?.owner || null,
-                damage,
+                damage: appliedDamage,
+                damageType,
                 sourcePosition: createWorldVector(sourcePosition),
                 bopStrength,
                 fallbackDirection
             });
         } else {
-            applyDirectDamage(target, damage, sourceUnit?.owner || null);
+            applyDirectDamage(target, appliedDamage, sourceUnit?.owner || null, {
+                damageType
+            });
             if (bopStrength > 0 && target?.pb?.imp && fallbackDirection?.lengthSquared() > 0.0001) {
                 target.pb.imp.addInPlace(fallbackDirection.normalize().scale(bopStrength));
             }
         }
+        impactedTargets.push(target);
     });
-    return targets;
+    return impactedTargets;
 }
 
 function applyAreaBuildingImpactFromPoint(sourceUnit, centerPoint, radius, damage, options = {}) {
@@ -4192,7 +4497,9 @@ function executeFireballImpact(sourceUnit, centerPoint, params = {}) {
 
     const hitUnits = applyAreaImpactFromPoint(sourceUnit, stableCenter, impactRadius, unitDamage, {
         sourcePosition: getUnitWorldPoint(sourceUnit),
-        bopStrength: Number.isFinite(params.bopStrength) ? params.bopStrength : 45
+        bopStrength: Number.isFinite(params.bopStrength) ? params.bopStrength : 45,
+        damageType: 'fire',
+        friendlyFireMultiplier: Number.isFinite(params.friendlyFireMultiplier) ? params.friendlyFireMultiplier : 0
     });
     const hitBuildings = applyAreaBuildingImpactFromPoint(sourceUnit, stableCenter, impactRadius, buildingDamage, {
         skipDamageFx: true
@@ -4229,7 +4536,7 @@ function applyAreaHealFromPoint(sourceUnit, centerPoint, radius, amount, options
     const includeSelf = options.includeSelf !== false;
     const targets = getUnitsInRadius(centerPoint, radius, other => {
         if (!includeSelf && other === sourceUnit) return false;
-        return other.owner === sourceUnit.owner;
+        return isFriendlyToUnit(sourceUnit, other);
     });
     let healedAny = false;
     targets.forEach(target => {
@@ -4238,6 +4545,51 @@ function applyAreaHealFromPoint(sourceUnit, centerPoint, radius, amount, options
         }
     });
     return healedAny;
+}
+
+function applyHolyArmorToUnit(targetUnit, sourceUnit, params = {}) {
+    if (!isUnitAlive(targetUnit)) return false;
+    const currentTick = getCurrentMatchTick();
+    const durationTicks = Math.max(1, Number.isFinite(params.durationTicks) ? params.durationTicks : 60);
+    const shieldAmount = roundDamageValue(Number.isFinite(params.shieldAmount) ? params.shieldAmount : 12);
+    if (!(shieldAmount > 0)) return false;
+
+    const sourceId = sourceUnit?.id || sourceUnit?.type || 'holy';
+    const sourceKeyBase = `${params.abilityId || 'holy_armor'}:${sourceId}:${targetUnit.id}`;
+    const expiresAtTick = currentTick + durationTicks;
+
+    setUnitAbsorbShield(targetUnit, `${sourceKeyBase}:shield`, {
+        amount: shieldAmount,
+        maxAmount: shieldAmount,
+        expiresAtTick,
+        label: 'holy_armor'
+    });
+
+    if (Number.isFinite(params.damageMultiplier) && params.damageMultiplier !== 1) {
+        setUnitIncomingDamageModifier(targetUnit, `${sourceKeyBase}:modifier`, {
+            multiplier: params.damageMultiplier,
+            expiresAtTick
+        });
+    } else {
+        clearUnitIncomingDamageModifier(targetUnit, `${sourceKeyBase}:modifier`);
+    }
+
+    return true;
+}
+
+function applyAreaHolyArmorFromPoint(sourceUnit, centerPoint, radius, params = {}) {
+    const includeSelf = params.includeSelf !== false;
+    const targets = getUnitsInRadius(centerPoint, radius, other => {
+        if (!includeSelf && other === sourceUnit) return false;
+        return isFriendlyToUnit(sourceUnit, other);
+    });
+
+    const appliedTargets = [];
+    targets.forEach(target => {
+        if (!applyHolyArmorToUnit(target, sourceUnit, params)) return;
+        appliedTargets.push(target);
+    });
+    return appliedTargets;
 }
 
 const VOLLEY_PATTERN_OFFSETS = [
@@ -4259,6 +4611,34 @@ function getVolleyOffset(index, radius) {
     return {
         x: basis.x * scale,
         z: basis.z * scale
+    };
+}
+
+function getForwardSpreadPoint(origin, targetPoint, shotIndex, shotCount, options = {}) {
+    const tileSize = window.TILE_SIZE || 4;
+    const dx = (targetPoint?.x || 0) - (origin?.x || 0);
+    const dz = (targetPoint?.z || 0) - (origin?.z || 0);
+    const rawDistance = Math.sqrt(Math.max(0, getStableDistanceSq(origin || { x: 0, z: 0 }, targetPoint || { x: 0, z: 0 })));
+    const minDistance = Number.isFinite(options.minDistance) ? options.minDistance : (tileSize * 1.5);
+    const maxDistance = Number.isFinite(options.maxDistance) ? options.maxDistance : (tileSize * 4.75);
+    const travelDistance = Math.max(minDistance, Math.min(maxDistance, rawDistance || maxDistance));
+    const baseAngle = rawDistance > 0.001
+        ? Math.atan2(dx, dz)
+        : (Number.isFinite(options.fallbackAngle) ? options.fallbackAngle : 0);
+    const spreadAngle = Number.isFinite(options.spreadAngle) ? options.spreadAngle : (Math.PI / 5);
+    const mid = (shotCount - 1) / 2;
+    const stepAngle = shotCount > 1 ? spreadAngle / Math.max(shotCount - 1, 1) : 0;
+    const offsetIndex = shotIndex - mid;
+    const angle = baseAngle + (offsetIndex * stepAngle);
+    const outerBias = mid > 0 ? Math.abs(offsetIndex) / mid : 0;
+    const distanceScale = 1 - (outerBias * 0.08);
+    const landingDistance = travelDistance * distanceScale;
+
+    return {
+        x: origin.x + Math.sin(angle) * landingDistance,
+        z: origin.z + Math.cos(angle) * landingDistance,
+        angle,
+        distance: landingDistance
     };
 }
 
@@ -4427,7 +4807,7 @@ class MonkKickBehavior extends AreaPulseEffect {
             ...params
         }, spec);
         this.radius = params.radius || 4;
-        this.basePower = params.power || 160;
+        this.basePower = params.power || 95;
     }
 
     emitPulse() {
@@ -4449,8 +4829,8 @@ class MonkKickBehavior extends AreaPulseEffect {
             if (!other._monkKickArc) {
                 other._monkKickArc = {
                     startTick: getCurrentMatchTick(),
-                    durationTicks: Math.floor(400 / 1000 * 20),
-                    peakHeight: 2.0,
+                    durationTicks: Math.floor(500 / 1000 * 20),
+                    peakHeight: 2.6,
                     startY: other.pb.state.loc.y || 0
                 };
             }
@@ -4730,6 +5110,290 @@ class HealPulseBehavior extends AreaPulseEffect {
     }
 }
 
+class FrogSlowEffect extends TimedModifierEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.speedMultiplier = Number.isFinite(params.speedMultiplier) ? params.speedMultiplier : 0.72;
+        this.modifierKey = `${spec.id || 'frog_slow'}:${params.sourceUnitId || 'frog'}:${unit.id}:${this.startTick}`;
+        if (!this.durationTicks) {
+            this.durationTicks = 36;
+        }
+    }
+
+    onStart() {
+        setUnitStatModifier(this.unit, 'speed', this.modifierKey, {
+            multiplier: this.speedMultiplier
+        });
+    }
+
+    onEnd() {
+        clearUnitStatModifier(this.unit, 'speed', this.modifierKey);
+    }
+}
+
+class HolyArmorBehavior extends TimedModifierEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.radius = params.radius || ((window.TILE_SIZE || 4) * 2.8);
+        this.shieldAmount = Number.isFinite(params.shieldAmount) ? params.shieldAmount : 12;
+        this.buffDurationTicks = Math.max(1, Number.isFinite(params.buffDurationTicks) ? params.buffDurationTicks : 60);
+        this.damageMultiplier = Number.isFinite(params.damageMultiplier) ? params.damageMultiplier : 1;
+        this.includeSelf = params.includeSelf !== false;
+        this.castDelayTicks = Number.isFinite(params.castDelayTicks)
+            ? params.castDelayTicks
+            : (Number.isFinite(spec.castDelayTicks) ? spec.castDelayTicks : 0);
+        this._resolved = false;
+        if (!this.durationTicks) {
+            this.durationTicks = this.castDelayTicks + 2;
+        }
+    }
+
+    onStart() {
+        holdUnitPosition(this.unit);
+    }
+
+    onActiveTick(currentTick) {
+        const elapsed = currentTick - this.startTick;
+        if (this._resolved || elapsed < this.castDelayTicks) {
+            return this._resolved;
+        }
+
+        const centerPoint = getUnitWorldPoint(this.unit);
+        const targets = applyAreaHolyArmorFromPoint(this.unit, centerPoint, this.radius, {
+            abilityId: this.spec?.id || 'holy_armor',
+            includeSelf: this.includeSelf,
+            shieldAmount: this.shieldAmount,
+            durationTicks: this.buffDurationTicks,
+            damageMultiplier: this.damageMultiplier
+        });
+
+        createAbilityPulseFx(centerPoint, 'blessing', {
+            scale: 0.75,
+            emitRate: 46,
+            minSize: 0.26,
+            maxSize: 0.64,
+            durationMs: 650
+        });
+
+        targets.forEach(target => {
+            createAbilityPulseFx(getUnitWorldPoint(target), 'blessing', {
+                scale: 0.42,
+                emitRate: 22,
+                minSize: 0.18,
+                maxSize: 0.4,
+                durationMs: 500
+            });
+        });
+
+        this._resolved = true;
+        return true;
+    }
+}
+
+class FrogSwarmBehavior extends PointCastEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.shotCount = Math.max(1, Number.isFinite(params.shotCount) ? params.shotCount : 5);
+        this.shotIntervalTicks = Math.max(1, Number.isFinite(params.shotIntervalTicks) ? params.shotIntervalTicks : 2);
+        this.hopCount = Math.max(1, Number.isFinite(params.hopCount) ? params.hopCount : 2);
+        this.impactRadius = Number.isFinite(params.impactRadius) ? params.impactRadius : ((window.TILE_SIZE || 4) * 0.55);
+        this.damage = Math.max(1, Math.round(Number.isFinite(params.damage) ? params.damage : 5));
+        this.damageType = params.damageType || 'nature';
+        this.slowDurationTicks = Math.max(1, Number.isFinite(params.slowDurationTicks) ? params.slowDurationTicks : 36);
+        this.slowMultiplier = Number.isFinite(params.slowMultiplier) ? params.slowMultiplier : 0.72;
+        this.spreadAngle = Number.isFinite(params.spreadAngle) ? params.spreadAngle : (Math.PI / 5);
+        this.minDistance = Number.isFinite(params.minDistance) ? params.minDistance : ((window.TILE_SIZE || 4) * 1.5);
+        this.maxDistance = Number.isFinite(params.maxDistance) ? params.maxDistance : ((window.TILE_SIZE || 4) * 4.75);
+        this.hopSpeed = Number.isFinite(params.hopSpeed) ? params.hopSpeed : 18;
+        this.hopArcHeight = Number.isFinite(params.hopArcHeight) ? params.hopArcHeight : 2.1;
+        this.bounceDistance = Number.isFinite(params.bounceDistance) ? params.bounceDistance : ((window.TILE_SIZE || 4) * 2.1);
+        this.bounceSpreadStep = Number.isFinite(params.bounceSpreadStep) ? params.bounceSpreadStep : 0.14;
+        this.bounceDistanceFalloff = Number.isFinite(params.bounceDistanceFalloff) ? params.bounceDistanceFalloff : 0.85;
+        this.bounceArcHeightFalloff = Number.isFinite(params.bounceArcHeightFalloff) ? params.bounceArcHeightFalloff : 0.88;
+        this.bounceDamageMultiplier = Number.isFinite(params.bounceDamageMultiplier) ? params.bounceDamageMultiplier : 0.85;
+        this.hopModelPath = params.hopModelPath || 'assets/models/frog.glb';
+        this._shotsLaunched = 0;
+        this._pendingImpacts = [];
+        this._impactCounter = 0;
+
+        const estimatedOrigin = unit?.pb?.state?.loc || { x: 0, z: 0 };
+        const estimatedLanding = getForwardSpreadPoint(
+            estimatedOrigin,
+            this.targetPoint || estimatedOrigin,
+            Math.max(0, this.shotCount - 1),
+            this.shotCount,
+            {
+                spreadAngle: this.spreadAngle,
+                minDistance: this.minDistance,
+                maxDistance: this.maxDistance,
+                fallbackAngle: unit?.pb?.state?.rot?.y || 0
+            }
+        );
+        const estimatedTravelTicks = this.computeTravelTicks(estimatedLanding?.distance || this.maxDistance);
+        this.durationTicks = Math.max(this.durationTicks || 0, this.castDelayTicks + (this.shotIntervalTicks * this.shotCount) + (estimatedTravelTicks * this.hopCount) + 2);
+    }
+
+    computeTravelTicks(distance) {
+        const travelSeconds = Math.max(0.22, (distance || 0) / Math.max(0.1, this.hopSpeed));
+        return Math.max(4, Math.round(travelSeconds * (window.net?.TICK_RATE || 20)));
+    }
+
+    getShotSpreadWeight(shotIndex) {
+        const mid = (this.shotCount - 1) / 2;
+        if (mid <= 0) return 0;
+        return (shotIndex - mid) / mid;
+    }
+
+    createHopPlan(originPoint, shotIndex, hopIndex = 0, previousAngle = null) {
+        const tileSize = window.TILE_SIZE || 4;
+        if (!originPoint) return null;
+
+        let landingPoint;
+        if (hopIndex === 0) {
+            if (!this.targetPoint) return null;
+            landingPoint = getForwardSpreadPoint(originPoint, this.targetPoint, shotIndex, this.shotCount, {
+                spreadAngle: this.spreadAngle,
+                minDistance: this.minDistance,
+                maxDistance: this.maxDistance,
+                fallbackAngle: this.unit?.pb?.state?.rot?.y || 0
+            });
+        } else {
+            const spreadWeight = this.getShotSpreadWeight(shotIndex);
+            const bounceAngle = (Number.isFinite(previousAngle) ? previousAngle : (this.unit?.pb?.state?.rot?.y || 0))
+                + (spreadWeight * this.bounceSpreadStep * hopIndex);
+            const bounceDistance = Math.max(
+                tileSize * 0.85,
+                this.bounceDistance * Math.pow(this.bounceDistanceFalloff, hopIndex - 1) * (1 + Math.abs(spreadWeight) * 0.12)
+            );
+            landingPoint = {
+                x: originPoint.x + Math.sin(bounceAngle) * bounceDistance,
+                z: originPoint.z + Math.cos(bounceAngle) * bounceDistance,
+                angle: bounceAngle,
+                distance: bounceDistance
+            };
+        }
+
+        return {
+            origin: { x: originPoint.x, z: originPoint.z },
+            landingPoint,
+            travelAngle: landingPoint.angle,
+            shotIndex,
+            hopIndex,
+            travelTicks: this.computeTravelTicks(landingPoint.distance)
+        };
+    }
+
+    launchHop(hopPlan, currentTick) {
+        if (!hopPlan) return;
+
+        const launchTimeMs = performance.now();
+        window.gfx?.playTransientModelHop?.(
+            this.hopModelPath,
+            new BABYLON.Vector3(hopPlan.origin.x, 0.12, hopPlan.origin.z),
+            new BABYLON.Vector3(hopPlan.landingPoint.x, 0.08, hopPlan.landingPoint.z),
+            {
+                startTimeMs: launchTimeMs,
+                durationMs: hopPlan.travelTicks * 50,
+                arcHeight: this.hopArcHeight * Math.pow(this.bounceArcHeightFalloff, hopPlan.hopIndex),
+                scale: 0.16,
+                rotationOffsetY: Math.PI,
+                lingerMs: hopPlan.hopIndex + 1 < this.hopCount ? 0 : 80
+            }
+        );
+
+        this._pendingImpacts.push({
+            id: `${this.unit?.id || 'frog'}:${this._impactCounter++}`,
+            shotIndex: hopPlan.shotIndex,
+            hopIndex: hopPlan.hopIndex,
+            impactTick: currentTick + hopPlan.travelTicks,
+            travelAngle: hopPlan.travelAngle,
+            impactPoint: {
+                x: hopPlan.landingPoint.x,
+                z: hopPlan.landingPoint.z
+            }
+        });
+    }
+
+    launchShot(shotIndex, currentTick) {
+        const origin = this.unit?.pb?.state?.loc;
+        const shotPlan = this.createHopPlan(origin, shotIndex, 0);
+        this.launchHop(shotPlan, currentTick);
+    }
+
+    queueBounce(impactEntry, currentTick) {
+        if (!impactEntry || impactEntry.hopIndex + 1 >= this.hopCount) return;
+        const bouncePlan = this.createHopPlan(
+            impactEntry.impactPoint,
+            impactEntry.shotIndex,
+            impactEntry.hopIndex + 1,
+            impactEntry.travelAngle
+        );
+        this.launchHop(bouncePlan, currentTick);
+    }
+
+    resolveImpact(impactEntry, currentTick) {
+        const impactPoint = impactEntry?.impactPoint;
+        if (!impactPoint) return;
+        const landingDamage = Math.max(1, Math.round(this.damage * Math.pow(this.bounceDamageMultiplier, impactEntry.hopIndex || 0)));
+        const impactedTargets = applyAreaImpactFromPoint(this.unit, impactPoint, this.impactRadius, landingDamage, {
+            sourcePosition: getUnitWorldPoint(this.unit),
+            bopStrength: 28,
+            damageType: this.damageType
+        });
+
+        const manager = window.behaviorManager || behaviorManager;
+        impactedTargets.forEach(target => {
+            manager?.addSpecialAbilityModifier(target, 'frog_slow', {
+                sourceUnitId: this.unit?.id || 'shaman',
+                durationTicks: this.slowDurationTicks,
+                speedMultiplier: this.slowMultiplier
+            });
+        });
+
+        createAbilityPulseFx(impactPoint, 'nature', {
+            scale: 0.32,
+            emitRate: 26,
+            minSize: 0.14,
+            maxSize: 0.36,
+            durationMs: 420
+        });
+
+        this.queueBounce(impactEntry, currentTick);
+    }
+
+    onCastStart() {
+        createAbilityPulseFx(getUnitWorldPoint(this.unit), 'nature', {
+            scale: 0.45,
+            emitRate: 34,
+            minSize: 0.16,
+            maxSize: 0.42,
+            durationMs: 500
+        });
+    }
+
+    onCastTick(currentTick, elapsed) {
+        if (!this._castStarted) return false;
+
+        const elapsedSinceCast = currentTick - (this.startTick + this.castDelayTicks);
+        while (this._shotsLaunched < this.shotCount && elapsedSinceCast >= this._shotsLaunched * this.shotIntervalTicks) {
+            this.launchShot(this._shotsLaunched, currentTick);
+            this._shotsLaunched += 1;
+        }
+
+        this._pendingImpacts.sort((a, b) => {
+            if (a.impactTick !== b.impactTick) return a.impactTick - b.impactTick;
+            return a.shotIndex - b.shotIndex;
+        });
+
+        while (this._pendingImpacts.length > 0 && currentTick >= this._pendingImpacts[0].impactTick) {
+            const nextImpact = this._pendingImpacts.shift();
+            this.resolveImpact(nextImpact, currentTick);
+        }
+
+        return this._shotsLaunched >= this.shotCount && this._pendingImpacts.length === 0;
+    }
+}
+
 class EngineerProductivityBoostBehavior extends TimedModifierEffect {}
 
 const registeredAbilitySpecs = {};
@@ -4803,7 +5467,7 @@ registerAbilitySpec({
     allowedUnitTypes: ['monk', 'paladin'],
     defaultParams: {
         radius: (window.TILE_SIZE || 4),
-        power: 160
+        power: 95
     },
     buildParams() {
         return {};
@@ -4862,6 +5526,7 @@ registerAbilitySpec({
             treeIgniteRadius: (window.TILE_SIZE || 4) * 1.35,
             unitDamage: Math.max(1, Math.round((unit?.attackDamage || 11) * 1.35)),
             buildingDamage: Math.max(1, Math.round((unit?.attackDamage || 11) * 2.0)),
+            friendlyFireMultiplier: 0.25,
             burnDurationTicks: 120,
             burnIntervalTicks: 20,
             buildingBurnDamage: 6,
@@ -4896,10 +5561,12 @@ registerAbilitySpec({
             outerRadius: (window.TILE_SIZE || 4) * 3.5,
             innerRadius: (window.TILE_SIZE || 4) * 1.75,
             innerWoodAmount: 7,
-            maxSeedCount: 8,
+            maxSeedCount: 22,
+            minSeedCount: 12,
             growthDelayTicks: 90,
             treeRemaining: 28,
-            seedChance: 0.42
+            seedChance: 0.78,
+            mushroomClusterCount: 9
         };
     },
     createRuntime(unit, params, spec) {
@@ -5002,7 +5669,7 @@ registerAbilitySpec({
     cooldownTicks: 100,
     pulseIntervalTicks: 6,
     maxPulses: 3,
-    allowedUnitTypes: ['monk', 'paladin', 'priest', 'valkyrie'],
+    allowedUnitTypes: ['monk', 'paladin', 'valkyrie'],
     buildParams(unit) {
         const type = unit?.type || '';
         if (type === 'paladin') {
@@ -5033,14 +5700,184 @@ registerAbilitySpec({
     }
 });
 
+registerAbilitySpec({
+    id: 'holy_armor',
+    label: 'Holy Armor',
+    icon: '🛡️',
+    order: 16,
+    commandable: true,
+    primary: true,
+    targetType: 'self',
+    executionKind: 'timed_modifier',
+    cooldownTicks: 115,
+    durationTicks: 10,
+    castDelayTicks: 5,
+    allowedUnitTypes: ['priest'],
+    buildParams(unit) {
+        return {
+            radius: (window.TILE_SIZE || 4) * 3.0,
+            shieldAmount: Math.max(8, Math.round((unit?.attackDamage || 7) * 1.8)),
+            buffDurationTicks: 70,
+            castDelayTicks: 5,
+            includeSelf: true
+        };
+    },
+    createRuntime(unit, params, spec) {
+        return new HolyArmorBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'frog_slow',
+    label: 'Frog Slow',
+    commandable: false,
+    targetType: 'self',
+    executionKind: 'timed_modifier',
+    cooldownTicks: 0,
+    durationTicks: 36,
+    createRuntime(unit, params, spec) {
+        return new FrogSlowEffect(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'frog_swarm',
+    label: 'Frog Swarm',
+    icon: '🐸',
+    order: 17,
+    commandable: true,
+    primary: true,
+    targetType: 'point',
+    executionKind: 'point_cast',
+    cooldownTicks: 100,
+    durationTicks: 36,
+    castDelayTicks: 5,
+    lockMovementDuringCast: true,
+    allowedUnitTypes: ['shaman'],
+    buildParams(unit, worldPos) {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        const tileSize = window.TILE_SIZE || 4;
+        return {
+            targetPoint,
+            shotCount: 5,
+            shotIntervalTicks: 2,
+            hopCount: 2,
+            impactRadius: tileSize * 0.55,
+            damage: Math.max(1, Math.round((unit?.attackDamage || 6) * 0.95)),
+            damageType: 'nature',
+            slowDurationTicks: 34,
+            slowMultiplier: 0.72,
+            spreadAngle: Math.PI / 4.5,
+            minDistance: tileSize * 1.75,
+            maxDistance: tileSize * 4.8,
+            hopSpeed: 18,
+            hopArcHeight: 2.15,
+            bounceDistance: tileSize * 2.2,
+            bounceSpreadStep: 0.16,
+            bounceDistanceFalloff: 0.86,
+            bounceArcHeightFalloff: 0.9,
+            bounceDamageMultiplier: 0.85,
+            hopModelPath: 'assets/models/frog.glb'
+        };
+    },
+    createRuntime(unit, params, spec) {
+        return new FrogSwarmBehavior(unit, params, spec).initialize();
+    }
+});
+
 window.UnitAbilityRegistry = UnitAbilityRegistry;
 window.getUnitCommandAbilitySpecs = getUnitCommandAbilitySpecs;
 window.getPrimaryUnitCommandAbility = getPrimaryUnitCommandAbility;
 window.buildAbilityParamsForUnit = buildAbilityParamsForUnit;
 window.canUnitUseAbility = canUnitUseAbility;
+window.resolveIncomingUnitDamage = resolveIncomingUnitDamage;
+window.setUnitIncomingDamageModifier = setUnitIncomingDamageModifier;
+window.clearUnitIncomingDamageModifier = clearUnitIncomingDamageModifier;
+window.setUnitAbsorbShield = setUnitAbsorbShield;
+window.clearUnitAbsorbShield = clearUnitAbsorbShield;
+window.getUnitAbsorbShieldTotal = getUnitAbsorbShieldTotal;
+window.cleanupExpiredIncomingDamageState = cleanupExpiredIncomingDamageState;
 
 // Global behavior manager instance
 const behaviorManager = new UnitBehaviorManager();
+
+class UpgradeReturnBehavior extends Behavior {
+    constructor(unit, params = {}) {
+        super(unit, {
+            walkSpeed: unit.speed || 20,
+            ...params
+        });
+        this.targetPoint = params.targetPoint || null;
+        this.exitPoint = params.exitPoint || null;
+        this._converted = false;
+    }
+
+    step() {
+        if (this._converted) {
+            return true;
+        }
+        if (!this.targetPoint || !this.params.targetType) {
+            return true;
+        }
+
+        const building = window.gameBuildings?.find?.(candidate => candidate?.id === this.params.buildingId) || null;
+        if (!building || (Number.isFinite(building.buildProgress) && building.buildProgress < 1)) {
+            return true;
+        }
+
+        const arrived = this.navigateTo(this.targetPoint, this.params.walkSpeed || this.unit.speed || 20);
+        if (!arrived) {
+            return false;
+        }
+
+        if (this.unit.pb?.imp) {
+            this.unit.pb.imp.x = 0;
+            this.unit.pb.imp.z = 0;
+        }
+        if (this.unit.pb?.state?.vel) {
+            this.unit.pb.state.vel.x = 0;
+            this.unit.pb.state.vel.z = 0;
+        }
+
+        const match = window.currentMatch;
+        if (!match?.executeConvertCommand) {
+            return true;
+        }
+
+        const convertCommand = match.buildConvertCommand
+            ? match.buildConvertCommand({
+                playerId: this.unit.owner,
+                unitId: this.unit.id,
+                sourceType: this.params.sourceType || this.unit.type,
+                targetType: this.params.targetType,
+                postConvertBehavior: this.exitPoint ? 'walk' : 'linger',
+                postConvertParams: this.exitPoint
+                    ? {
+                        targetPoint: this.exitPoint,
+                        applyPersonalityOffset: false,
+                        forceDeterministicReset: true
+                    }
+                    : {
+                        center: {
+                            x: this.unit.pb?.state?.loc?.x || this.targetPoint.x,
+                            z: this.unit.pb?.state?.loc?.z || this.targetPoint.z
+                        }
+                    }
+            })
+            : {
+                type: 'convert',
+                playerId: this.unit.owner,
+                unitId: this.unit.id,
+                sourceType: this.params.sourceType || this.unit.type,
+                targetType: this.params.targetType
+            };
+
+        this._converted = true;
+        match.executeConvertCommand(convertCommand);
+        return true;
+    }
+}
 
 // EatBehavior - Villagers occasionally need to eat
 class TransformBehavior extends Behavior {

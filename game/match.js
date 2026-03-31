@@ -33,6 +33,7 @@
       this.gameTime = 0; // In seconds
       this.isPaused = false;
       this.pauseContext = null;
+      this._resumeSync = null;
       
       // Players
       this.players = options.players || [];
@@ -177,6 +178,183 @@
       return '⏸️ PAUSED';
     }
 
+    getPauseTick() {
+      if (Number.isFinite(this.pauseContext?.pauseTick)) {
+        return this.pauseContext.pauseTick;
+      }
+      return Number.isFinite(this.tick) ? this.tick : 0;
+    }
+
+    getResumeWaitingMessage() {
+      return '⏳ WAITING FOR ALL PLAYERS TO RESUME';
+    }
+
+    getResumeParticipantIds() {
+      const ids = (this.players || [])
+        .filter(player => !player?.isAI)
+        .map(player => this.normalizeCommandPlayerId(player?.id || player))
+        .filter(Boolean);
+
+      if (ids.length === 0) {
+        const localId = this.normalizeCommandPlayerId(this.localPlayerId || window.player?.id || '');
+        if (localId) ids.push(localId);
+      }
+
+      return [...new Set(ids)];
+    }
+
+    getOrCreateResumeSync(pauseTick = this.getPauseTick()) {
+      const normalizedPauseTick = Number.isFinite(pauseTick) ? pauseTick : this.getPauseTick();
+      if (!this._resumeSync || this._resumeSync.pauseTick !== normalizedPauseTick) {
+        this._resumeSync = {
+          pauseTick: normalizedPauseTick,
+          readyPlayerIds: new Set()
+        };
+      }
+      return this._resumeSync;
+    }
+
+    clearResumeSync() {
+      this._resumeSync = null;
+    }
+
+    setPauseOverlayMessage(message) {
+      if (!this.isPaused || this.state !== MatchState.PLAYING) {
+        return;
+      }
+      this.showLoadingOverlay();
+      this.updateLoadingOverlay(message || this.pauseContext?.message || this.getPauseMessage(this.pauseContext?.reason));
+    }
+
+    requestResumeBarrier(options = {}) {
+      if (!this.isPaused) {
+        return false;
+      }
+
+      const pauseTick = Number.isFinite(options.pauseTick) ? options.pauseTick : this.getPauseTick();
+      const resumeSync = this.getOrCreateResumeSync(pauseTick);
+      const localResumeId = this.normalizeCommandPlayerId(this.localPlayerId || window.player?.id || '');
+      if (localResumeId) {
+        resumeSync.readyPlayerIds.add(localResumeId);
+      }
+
+      this.pauseContext = {
+        ...(this.pauseContext || {}),
+        pauseTick,
+        resumePending: true,
+        message: this.getResumeWaitingMessage()
+      };
+      this.setPauseOverlayMessage(this.pauseContext.message);
+      this.resetLoopTiming();
+
+      if (this.isHost()) {
+        return this.maybeCommitResumeBarrier(pauseTick);
+      }
+
+      const resumePacket = {
+        type: 'match_resume_request',
+        pauseTick,
+        playerId: localResumeId || this.localPlayerId || window.player?.id || null,
+        automatic: !!options.automatic
+      };
+      if (window.net && typeof window.net.sendReliableData === 'function') {
+        window.net.sendReliableData(resumePacket);
+      } else if (window.net?.p2p) {
+        window.net.p2p.sendData(resumePacket);
+      }
+      return true;
+    }
+
+    handleRemoteResumeRequest(playerId, options = {}) {
+      if (!this.isPaused || !this.isLiveMultiplayerMatch() || !this.isHost()) {
+        return false;
+      }
+
+      const pauseTick = Number.isFinite(options.pauseTick) ? options.pauseTick : this.getPauseTick();
+      const currentPauseTick = this.getPauseTick();
+      if (pauseTick !== currentPauseTick) {
+        return false;
+      }
+
+      const normalizedPlayerId = this.normalizeCommandPlayerId(playerId || '');
+      if (!normalizedPlayerId) {
+        return false;
+      }
+
+      const resumeSync = this.getOrCreateResumeSync(pauseTick);
+      resumeSync.readyPlayerIds.add(normalizedPlayerId);
+
+      this.pauseContext = {
+        ...(this.pauseContext || {}),
+        pauseTick,
+        resumePending: true,
+        message: this.getResumeWaitingMessage()
+      };
+      this.setPauseOverlayMessage(this.pauseContext.message);
+
+      return this.maybeCommitResumeBarrier(pauseTick);
+    }
+
+    maybeCommitResumeBarrier(pauseTick = this.getPauseTick()) {
+      if (!this.isPaused) {
+        return false;
+      }
+
+      const resumeSync = this.getOrCreateResumeSync(pauseTick);
+      const participants = this.getResumeParticipantIds();
+      const allReady = participants.length === 0 || participants.every(playerId => resumeSync.readyPlayerIds.has(playerId));
+      if (!allReady) {
+        this.setPauseOverlayMessage(this.getResumeWaitingMessage());
+        return false;
+      }
+
+      const resumeTick = this.tick;
+      const resumePacket = {
+        type: 'match_resume_commit',
+        pauseTick,
+        resumeTick
+      };
+      if (window.net && typeof window.net.sendReliableData === 'function') {
+        window.net.sendReliableData(resumePacket);
+      } else if (window.net?.p2p) {
+        window.net.p2p.sendData(resumePacket);
+      }
+
+      return this.finalizeResume({
+        pauseTick,
+        resumeTick
+      });
+    }
+
+    finalizeResume(options = {}) {
+      if (!this.isPaused) {
+        return false;
+      }
+
+      const currentPauseTick = this.getPauseTick();
+      if (Number.isFinite(options.pauseTick) && Number.isFinite(currentPauseTick) && options.pauseTick !== currentPauseTick) {
+        return false;
+      }
+
+      this.isPaused = false;
+      this.pauseContext = null;
+      this.clearResumeSync();
+
+      const overlay = document.getElementById('match_loading_overlay');
+      if (overlay) {
+        overlay.style.display = 'none';
+        overlay.style.zIndex = '-1';
+      }
+
+      this.resetLoopTiming();
+
+      if (this.isLiveMultiplayerMatch() && window.net && typeof window.net.resetLockstepAfterPauseResume === 'function') {
+        window.net.resetLockstepAfterPauseResume(options.resumeTick);
+      }
+
+      return true;
+    }
+
     resetLoopTiming() {
       if (window.gameLoop) {
         window.gameLoop.physicsTime = 0;
@@ -198,7 +376,8 @@
       remote = false,
       hiddenTriggered = false,
       standbyTriggered = false,
-      lifecycleSource = null
+      lifecycleSource = null,
+      pauseTick = null
     } = {}) {
       if (this.state !== MatchState.PLAYING) {
         console.warn('⚠️ Cannot pause - match not playing');
@@ -206,6 +385,7 @@
       }
 
       const pauseMessage = this.getPauseMessage(reason, message);
+      const normalizedPauseTick = Number.isFinite(pauseTick) ? pauseTick : this.tick;
       const nextContext = {
         reason,
         message: pauseMessage,
@@ -213,6 +393,8 @@
         hiddenTriggered: !!hiddenTriggered,
         standbyTriggered: !!standbyTriggered,
         lifecycleSource: lifecycleSource || null,
+        pauseTick: normalizedPauseTick,
+        resumePending: false,
         startedAt: Date.now()
       };
 
@@ -222,13 +404,15 @@
             this.pauseContext?.remote === nextContext.remote &&
             this.pauseContext?.hiddenTriggered === nextContext.hiddenTriggered &&
             this.pauseContext?.standbyTriggered === nextContext.standbyTriggered &&
-            this.pauseContext?.lifecycleSource === nextContext.lifecycleSource) {
+            this.pauseContext?.lifecycleSource === nextContext.lifecycleSource &&
+            this.pauseContext?.pauseTick === nextContext.pauseTick) {
           return false;
         }
       }
 
       this.isPaused = true;
       this.pauseContext = nextContext;
+      this.clearResumeSync();
       this.showLoadingOverlay();
       this.updateLoadingOverlay(pauseMessage);
       this.resetLoopTiming();
@@ -237,13 +421,26 @@
         const pausePacket = {
           type: 'match_pause',
           reason,
-          message: pauseMessage
+          message: pauseMessage,
+          pauseTick: normalizedPauseTick
         };
         if (typeof window.net.sendReliableData === 'function') {
           window.net.sendReliableData(pausePacket);
         } else if (window.net.p2p) {
           window.net.p2p.sendData(pausePacket);
         }
+      }
+
+      if (remote && this.isLiveMultiplayerMatch() && this.isAutoPauseReason(reason) && !document.hidden) {
+        setTimeout(() => {
+          if (!this.isPaused) return;
+          if ((this.pauseContext?.pauseTick ?? null) !== normalizedPauseTick) return;
+          if (!this.pauseContext?.remote) return;
+          this.resumeMatch({
+            automatic: true,
+            pauseTick: normalizedPauseTick
+          });
+        }, 0);
       }
 
       return true;
@@ -277,7 +474,8 @@
         const pausePacket = {
           type: 'match_pause',
           reason: this.pauseContext?.reason || 'auto_away',
-          message: this.pauseContext?.message || this.getPauseMessage(this.pauseContext?.reason)
+          message: this.pauseContext?.message || this.getPauseMessage(this.pauseContext?.reason),
+          pauseTick: this.getPauseTick()
         };
         if (typeof window.net.sendReliableData === 'function') {
           window.net.sendReliableData(pausePacket);
@@ -297,6 +495,10 @@
 
       if (requestedRecovery && (standbyTriggered || hiddenDurationMs >= 2000)) {
         this.showNotification('Rechecking sync after standby...', 'info');
+      }
+
+      if (localHiddenPause && this.isPaused && this.isAutoPauseReason(this.pauseContext?.reason)) {
+        this.resumeMatch({ automatic: true });
       }
     }
     
@@ -459,7 +661,8 @@
         remote = false,
         hiddenTriggered = false,
         standbyTriggered = false,
-        lifecycleSource = null
+        lifecycleSource = null,
+        pauseTick = null
       } = options;
 
       return this.applyPauseState({
@@ -469,7 +672,8 @@
         remote,
         hiddenTriggered,
         standbyTriggered,
-        lifecycleSource
+        lifecycleSource,
+        pauseTick
       });
     }
     
@@ -477,7 +681,11 @@
     resumeMatch(options = {}) {
       const {
         broadcast = !!window.isMultiplayer,
-        remote = false
+        remote = false,
+        forceCommit = false,
+        pauseTick = null,
+        resumeTick = null,
+        automatic = false
       } = options;
 
       if (!this.isPaused) {
@@ -486,30 +694,19 @@
         }
         return false;
       }
-      
-      this.isPaused = false;
-      this.pauseContext = null;
-      // console.log('▶️ Match resumed');
-      
-      // Hide loading overlay
-      const overlay = document.getElementById('match_loading_overlay');
-      if (overlay) {
-        overlay.style.display = 'none';
-        overlay.style.zIndex = '-1';
+
+      if (this.isLiveMultiplayerMatch() && !forceCommit && !remote) {
+        return this.requestResumeBarrier({
+          broadcast,
+          pauseTick,
+          automatic
+        });
       }
 
-      this.resetLoopTiming();
-      
-      // Broadcast resume to all players
-      if (!remote && broadcast && window.isMultiplayer && window.net) {
-        if (typeof window.net.sendReliableData === 'function') {
-          window.net.sendReliableData({ type: 'match_resume' });
-        } else if (window.net.p2p) {
-          window.net.p2p.sendData({ type: 'match_resume' });
-        }
-      }
-      
-      return true;
+      return this.finalizeResume({
+        pauseTick,
+        resumeTick
+      });
     }
     
     // Toggle pause/resume
@@ -804,6 +1001,11 @@
     
     // Submit a command to the match
     submitCommand(command) {
+      if (this.isPaused) {
+        console.warn(`⚠️ Cannot submit command while paused (type=${command.type})`);
+        return false;
+      }
+
       // Allow commands in READY state (pre-match positioning) and PLAYING state
       if (this.state !== MatchState.PLAYING && this.state !== MatchState.READY) {
         console.warn(`⚠️ Cannot submit command - match in ${this.state} state (type=${command.type})`);
@@ -836,11 +1038,18 @@
         command.type === 'train' ||
         command.type === 'build' ||
         command.type === 'convert' ||
+        command.type === 'upgrade' ||
         command.type === 'unload' ||
         command.type === 'stop';
+      const isLateSensitiveStatefulCommand =
+        command.type === 'train' ||
+        command.type === 'build' ||
+        command.type === 'convert' ||
+        command.type === 'upgrade';
+      const statefulLeadTicks = isLateSensitiveStatefulCommand ? 2 : 1;
       const commandDelay = isRealtimePlayerCommand
         ? this.inputDelayTicks
-        : (this.inputDelayTicks + 1);
+        : (this.inputDelayTicks + statefulLeadTicks);
       const normalizedLocalPlayerId = this.normalizeCommandPlayerId(this.localPlayerId);
       const normalizedWindowPlayerId = this.normalizeCommandPlayerId(window.player?.id || '');
       const normalizedRequestedPlayerId = this.normalizeCommandPlayerId(command.playerId || '');
@@ -864,7 +1073,8 @@
       const confirmedHorizon = (window.net && typeof window.net.getLocalConfirmedTick === 'function')
         ? window.net.getLocalConfirmedTick()
         : 0;
-      const scheduledTick = Math.max(baseScheduledTick, confirmedHorizon + 1);
+      const minimumConfirmedSlack = isLateSensitiveStatefulCommand ? 2 : 1;
+      const scheduledTick = Math.max(baseScheduledTick, confirmedHorizon + minimumConfirmedSlack);
       
       const enrichedCommand = {
         ...command,
@@ -1000,6 +1210,8 @@
           return command.unitType && command.buildingId;
         case 'convert':
           return command.unitId && command.targetType;
+        case 'upgrade':
+          return command.unitId && command.buildingId && command.targetType;
         case 'gather':
           return command.unitIds && (command.resourceId || command.targetResource);
         case 'ability':
@@ -1038,6 +1250,26 @@
       if (resetHealth === true) command.resetHealth = true;
       if (postConvertBehavior) command.postConvertBehavior = postConvertBehavior;
       if (postConvertParams) command.postConvertParams = postConvertParams;
+      return command;
+    }
+
+    buildUpgradeCommand(options = {}) {
+      const {
+        playerId,
+        unitId,
+        buildingId,
+        targetType,
+        sourceType = null
+      } = options;
+
+      const command = {
+        type: 'upgrade',
+        playerId,
+        unitId,
+        buildingId,
+        targetType
+      };
+      if (sourceType) command.sourceType = sourceType;
       return command;
     }
 
@@ -1105,6 +1337,64 @@
         unit[pendingFlag] = false;
       }
       return queued;
+    }
+
+    canConvertUnitType(sourceType, targetType) {
+      if (!sourceType || !targetType) return false;
+      const sourceDef = window.UnitTypes?.[sourceType];
+      const targetDef = window.UnitTypes?.[targetType];
+      if (!sourceDef || !targetDef) return false;
+      return sourceDef.upgradeTo === targetType ||
+        sourceDef.upgradeFrom === targetType ||
+        targetDef.upgradeFrom === sourceType ||
+        targetDef.upgradeTo === sourceType;
+    }
+
+    getBuildingUpgradeRoute(unit, building) {
+      if (!unit || !building) return null;
+      const TILE_SIZE = window.TILE_SIZE || 4;
+      const size = building.size || window.BuildingTypes?.[building.type]?.size || { width: 2, height: 2 };
+      const widthTiles = Math.max(1, Number(size.width) || 1);
+      const heightTiles = Math.max(1, Number(size.height) || 1);
+      const centerX = ((Number.isFinite(building.gridX) ? building.gridX : Math.round((building.position?.x || 0) / TILE_SIZE)) + ((widthTiles - 1) * 0.5)) * TILE_SIZE;
+      const centerZ = ((Number.isFinite(building.gridZ) ? building.gridZ : Math.round((building.position?.z || 0) / TILE_SIZE)) + ((heightTiles - 1) * 0.5)) * TILE_SIZE;
+      const origin = unit.pb?.state?.loc || unit.position || { x: centerX, z: centerZ };
+
+      let dx = (origin.x || 0) - centerX;
+      let dz = (origin.z || 0) - centerZ;
+      if (!Number.isFinite(dx) || !Number.isFinite(dz) || (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001)) {
+        dx = 0;
+        dz = 1;
+      }
+
+      let dirX = 0;
+      let dirZ = 0;
+      if (Math.abs(dx) >= Math.abs(dz)) {
+        dirX = dx >= 0 ? 1 : -1;
+      } else {
+        dirZ = dz >= 0 ? 1 : -1;
+      }
+      if (dirX === 0 && dirZ === 0) {
+        dirZ = 1;
+      }
+
+      const halfWidth = widthTiles * TILE_SIZE * 0.5;
+      const halfHeight = heightTiles * TILE_SIZE * 0.5;
+      const axisExtent = dirX !== 0 ? halfWidth : halfHeight;
+      const approachDistance = axisExtent + (TILE_SIZE * 0.5);
+      const exitDistance = axisExtent + (TILE_SIZE * 1.5);
+      const roundCoord = value => Math.round(value * 1000) / 1000;
+
+      return {
+        targetPoint: {
+          x: roundCoord(centerX + (dirX * approachDistance)),
+          z: roundCoord(centerZ + (dirZ * approachDistance))
+        },
+        exitPoint: {
+          x: roundCoord(centerX + (dirX * exitDistance)),
+          z: roundCoord(centerZ + (dirZ * exitDistance))
+        }
+      };
     }
 
     shouldTraceMoveCommand(command) {
@@ -1361,6 +1651,9 @@
         case 'convert':
           this.executeConvertCommand(command);
           break;
+        case 'upgrade':
+          this.executeUpgradeCommand(command);
+          break;
         case 'gather':
           this.executeGatherCommand(command);
           break;
@@ -1568,7 +1861,7 @@
           // If this is a monk, check for nearby units to kick when starting movement
           if (unit.type === 'monk' && window.maybeAutoMonkKick) {
             // Reset periodic kick timer so periodic kicks start fresh
-            unit._lastPeriodicKick = 0;
+            unit._lastPeriodicKickTick = 0;
             window.maybeAutoMonkKick(unit, true); // forceCheck = true to kick immediately on command
           }
         }
@@ -1615,7 +1908,7 @@
             // If this is a monk, check for nearby units to kick when starting movement
             if (unit.type === 'monk' && window.maybeAutoMonkKick) {
               // Reset periodic kick timer so periodic kicks start fresh
-              unit._lastPeriodicKick = 0;
+              unit._lastPeriodicKickTick = 0;
               window.maybeAutoMonkKick(unit, true); // forceCheck = true to kick immediately on command
             }
           }
@@ -2211,6 +2504,7 @@
       // Normalize player ID for ownership check
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      const unitOwnerId = unit?.owner?.length > 6 ? unit.owner.slice(-6) : unit?.owner;
       const fromType = unit?.type || null;
 
       if (this.isLiveMultiplayerMatch()) {
@@ -2229,15 +2523,13 @@
         });
       }
       
-      if (!unit || !player || unit.owner !== normalizedPlayerId) {
+      if (!unit || !player || unitOwnerId !== normalizedPlayerId) {
         // Clear converting flag if unit exists (even on failed conversions)
         if (unit) unit.isConverting = false;
         return;
       }
       
-      // Only allow villager->brigand and brigand->villager conversions
-      const allowedConversions = { villager: ['brigand'], brigand: ['villager'] };
-      if (!allowedConversions[unit.type] || !allowedConversions[unit.type].includes(cmd.targetType)) {
+      if (!this.canConvertUnitType(unit.type, cmd.targetType)) {
         console.warn(`⚠️ Cannot convert ${unit.type} to ${cmd.targetType}`);
         unit.isConverting = false;
         return;
@@ -2441,7 +2733,7 @@
     }
     
     executeGatherCommand(cmd) {
-      const units = this.getUnitsByIds(cmd.unitIds);
+      const units = this.getUnitsByIdsInCommandOrder(cmd.unitIds);
       const resource = cmd.targetResource || this.getResourceById(cmd.resourceId);
       if (!resource) return;
       
@@ -2476,7 +2768,7 @@
     }
     
     executeWorkCommand(cmd) {
-      const units = this.getUnitsByIds(cmd.unitIds);
+      const units = this.getUnitsByIdsInCommandOrder(cmd.unitIds);
       const building = this.getBuildingById(cmd.buildingId);
       
       if (!building) return;
@@ -2490,37 +2782,42 @@
       });
       const commandUnits = this.isLiveMultiplayerMatch() ? units : ownedUnits;
 
+      const workReset = { forceDeterministicReset: true };
+
       commandUnits.forEach(unit => {
         unit.lastPlayerCommandTick = this.tick || 0;
+
+        if (unit.assignedBuilding === building) return;
+
+        if (building.assignedWorkers && building.assignedWorkers.length >= (building.maxWorkers || 3)) {
+          return;
+        }
 
         if (unit.assignedBuilding && unit.assignedBuilding !== building) {
           const prev = unit.assignedBuilding;
           if (prev.assignedWorkers) {
             prev.assignedWorkers = prev.assignedWorkers.filter(w => w !== unit);
           }
+          unit.assignedBuilding = null;
         }
-
-        if (unit.assignedBuilding === building) return;
-
-        if (building.assignedWorkers && building.assignedWorkers.length >= (building.maxWorkers || 3)) return;
 
         if (window.behaviorManager) {
           const effectiveWorkType = (!building.completionProcessed && building.workType === 'build')
             ? 'build'
             : building.workType;
           if (effectiveWorkType === 'build') {
-            window.behaviorManager.setBehavior(unit, 'build_work', { building: building });
+            window.behaviorManager.setBehavior(unit, 'build_work', { building, ...workReset });
           } else if (effectiveWorkType === 'gather' || effectiveWorkType === 'mine') {
-            const gatherParams = { building: building };
+            const gatherParams = { building, ...workReset };
             if (effectiveWorkType === 'mine') {
               gatherParams.gatherDuration = 7500;
               gatherParams.resourceTypes = ['stone', 'minerals'];
             }
             window.behaviorManager.setBehavior(unit, 'gather_work', gatherParams);
           } else if (effectiveWorkType === 'farm') {
-            window.behaviorManager.setBehavior(unit, 'farm_work', { building: building });
+            window.behaviorManager.setBehavior(unit, 'farm_work', { building, ...workReset });
           } else {
-            window.behaviorManager.setBehavior(unit, 'work', { building: building });
+            window.behaviorManager.setBehavior(unit, 'work', { building, ...workReset });
           }
         }
 
@@ -2545,6 +2842,47 @@
         // Fallback: manually set completion state
         building.buildProgress = 1.0;
         building.completionProcessed = true;
+      }
+    }
+
+    executeUpgradeCommand(cmd) {
+      const unit = this.getUnitById(cmd.unitId);
+      const player = this.getPlayerById(cmd.playerId);
+      const building = this.getBuildingById(cmd.buildingId);
+      const rawPlayerId = cmd.playerId || '';
+      const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      const unitOwnerId = unit?.owner?.length > 6 ? unit.owner.slice(-6) : unit?.owner;
+
+      if (!unit || !player || unitOwnerId !== normalizedPlayerId || !building) {
+        return;
+      }
+
+      if (cmd.sourceType && unit.type !== cmd.sourceType) {
+        return;
+      }
+
+      const upgradeInfo = window.resolveUnitBuildingUpgrade
+        ? window.resolveUnitBuildingUpgrade(unit, building, normalizedPlayerId)
+        : null;
+      if (!upgradeInfo || upgradeInfo.targetType !== cmd.targetType) {
+        return;
+      }
+
+      const route = this.getBuildingUpgradeRoute(unit, building);
+      if (!route?.targetPoint) {
+        return;
+      }
+
+      if (window.behaviorManager) {
+        window.behaviorManager.setBehavior(unit, 'upgrade_return', {
+          buildingId: building.id,
+          sourceType: unit.type,
+          targetType: cmd.targetType,
+          targetPoint: route.targetPoint,
+          exitPoint: route.exitPoint,
+          forceDeterministicReset: true,
+          applyPersonalityOffset: false
+        });
       }
     }
     
@@ -2835,8 +3173,8 @@
       };
       
       let objectivesCompleted = 0;
-      
-      for (const obj of objectives) {
+
+      objectiveLoop: for (const obj of objectives) {
         if (obj.completed) {
           objectivesCompleted++;
           continue;
@@ -2847,7 +3185,7 @@
         const objWorldZ = obj.y * tileSize + 0.5 * tileSize;
         const objRadius = obj.radius * tileSize;
         
-        if (obj.type === 'reach' || obj.type === 'escape') {
+        if (obj.type === 'reach' || obj.type === 'advance' || obj.type === 'escape') {
           // Check each unit's position against the objective zone
           for (const unit of allUnits) {
             const pos = getObjectiveUnitPosition(unit);
@@ -2858,6 +3196,29 @@
             const dist = Math.sqrt(dx * dx + dz * dz);
             
             if (dist <= objRadius) {
+              if (obj.type === 'advance') {
+                // Secret / speedrun exit: any co-op unit in zone skips the rest of the chapter.
+                for (const o of objectives) {
+                  o.completed = true;
+                }
+                objectivesCompleted = objectives.length;
+                console.log(`🎯 Chapter advance (shortcut) at (${obj.x}, ${obj.y}) — skipping to next chapter`);
+                if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech) {
+                  window.UnitSpeech.showSpeech(unit, obj.message, 4000);
+                  if (window.isMultiplayer && window.net && window.net.p2p) {
+                    window.net.p2p.sendData({
+                      type: 'adventure_objective_complete',
+                      objectiveId: obj.id,
+                      unitId: unit.id,
+                      message: obj.message,
+                      objectiveType: obj.type
+                    });
+                  }
+                } else if (window.ui && window.ui.showNotification) {
+                  window.ui.showNotification(`🚪 Secret exit!`, 'success');
+                }
+                break objectiveLoop;
+              }
               if (obj.type === 'reach') {
                 // Reach objective - any unit triggers it
                 obj.completed = true;
@@ -2888,49 +3249,50 @@
           }
         }
         
-        // For escape objectives, check if ALL units are in the zone
+        // For escape objectives: at least one party unit per owner group must be in the zone.
+        // (Older logic required every unit in the group — in solo all heroes share one owner, so
+        // one group had 4 heroes and nothing fired unless all four stood in the circle.)
         if (obj.type === 'escape' && !obj.completed) {
           const escapeGroups = getAdventureEscapeGroups();
-          let completedEscapeGroup = null;
-          let unitsInZone = [];
+          const unitsInZone = [];
+          let allGroupsRepresented = escapeGroups.length > 0;
 
           for (const group of escapeGroups) {
+            if (group.units.length === 0) continue;
             const groupUnitsInZone = group.units.filter(unit => {
               const pos = getObjectiveUnitPosition(unit);
               const dx = pos.x - objWorldX;
               const dz = pos.z - objWorldZ;
               return Math.sqrt(dx * dx + dz * dz) <= objRadius;
             });
-
-            if (group.units.length > 0 && groupUnitsInZone.length === group.units.length) {
-              completedEscapeGroup = group;
-              unitsInZone = groupUnitsInZone;
+            if (groupUnitsInZone.length === 0) {
+              allGroupsRepresented = false;
               break;
             }
+            for (const u of groupUnitsInZone) unitsInZone.push(u);
           }
-          
-          if (completedEscapeGroup) {
+
+          if (allGroupsRepresented && unitsInZone.length > 0) {
             obj.completed = true;
             objectivesCompleted++;
-            console.log(`🎯 Escape objective ${obj.id + 1} completed! Party ${completedEscapeGroup.owner} escaped at (${obj.x}, ${obj.y}) with ${unitsInZone.length} units`);
-            
-            // Show speech bubble on first unit if message exists
-            if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech && unitsInZone.length > 0) {
-              console.log(`💬 Showing escape speech: "${obj.message}" on unit ${unitsInZone[0].id}`);
-              window.UnitSpeech.showSpeech(unitsInZone[0], obj.message, 4000);
-              
-              // Broadcast objective completion to peers (host authoritative)
+            console.log(`🎯 Escape objective ${obj.id + 1} completed at (${obj.x}, ${obj.y}) — ${unitsInZone.length} unit(s) in zone across ${escapeGroups.length} group(s)`);
+
+            if (obj.message && window.UnitSpeech && window.UnitSpeech.showSpeech) {
+              const speaker = unitsInZone[0];
+              console.log(`💬 Showing escape speech: "${obj.message}" on unit ${speaker.id}`);
+              window.UnitSpeech.showSpeech(speaker, obj.message, 4000);
+
               if (window.isMultiplayer && window.net && window.net.p2p) {
                 window.net.p2p.sendData({
                   type: 'adventure_objective_complete',
                   objectiveId: obj.id,
-                  unitId: unitsInZone[0].id,
+                  unitId: speaker.id,
                   message: obj.message,
                   objectiveType: obj.type
                 });
               }
             } else if (window.ui && window.ui.showNotification) {
-              window.ui.showNotification(`🚪 All units escaped!`, 'success');
+              window.ui.showNotification(`🚪 Party escaped!`, 'success');
             }
           }
         }
@@ -2942,8 +3304,20 @@
         console.log(`🎯 Objectives: ${objectivesCompleted}/${objectives.length} — incomplete: ${incomplete.join(', ')}`);
       }
 
-      // Check if all objectives are completed
-      if (objectivesCompleted === objectives.length && objectives.length > 0) {
+      // Chapter complete when:
+      // - Any terminal objective (`escape` or `advance`) is done — reach checkpoints are optional flavor, or
+      // - Maps with no escape/advance: every objective must still be completed (reach-only chapters).
+      const hasTerminalObjective = objectives.some(o => o.type === 'escape' || o.type === 'advance');
+      const terminalComplete = objectives.some(o =>
+        (o.type === 'escape' || o.type === 'advance') && o.completed
+      );
+      const allObjectivesComplete = objectives.every(o => o.completed);
+      const strictAllObjectives = window.adventureObjectiveWinMode === 'all';
+      const chapterObjectivesWin = strictAllObjectives
+        ? allObjectivesComplete
+        : (hasTerminalObjective ? terminalComplete : allObjectivesComplete);
+
+      if (chapterObjectivesWin && objectives.length > 0) {
         
         // Show victory dialogue and transition to next chapter
         this._adventureVictoryHandled = true;
@@ -3525,16 +3899,51 @@
     
     // Eliminate a player
     eliminatePlayer(playerId) {
-      this.eliminatedPlayers.add(playerId);
+      const resolvedPlayer = this.getPlayerById(playerId);
+      const resolvedPlayerId = resolvedPlayer?.id || playerId;
+      if (!resolvedPlayerId || this.eliminatedPlayers.has(resolvedPlayerId)) {
+        return false;
+      }
+
+      this.eliminatedPlayers.add(resolvedPlayerId);
       // console.log(`💀 Player ${playerId} eliminated`);
       
       // Show notification
-      if (playerId === this.localPlayerId) {
+      if (resolvedPlayerId === this.localPlayerId) {
         this.showNotification('You have been eliminated!', 'defeat');
       } else {
-        const player = this.getPlayerById(playerId);
-        this.showNotification(`${player?.name || playerId} has been eliminated`, 'info');
+        const player = resolvedPlayer || this.getPlayerById(resolvedPlayerId);
+        this.showNotification(`${player?.name || resolvedPlayerId} has been eliminated`, 'info');
       }
+
+      return true;
+    }
+
+    resolveImmediateEliminationOutcome(reason = 'elimination') {
+      const remainingPlayers = this.players.filter(player => {
+        const playerId = player?.id || player;
+        return !this.eliminatedPlayers.has(playerId);
+      });
+
+      if (remainingPlayers.length === 1) {
+        this.endMatch(remainingPlayers[0].id || remainingPlayers[0], reason);
+      } else if (remainingPlayers.length === 0) {
+        this.endMatch(null, 'draw');
+      }
+
+      return remainingPlayers;
+    }
+
+    handlePlayerConceded(playerId, options = {}) {
+      const resolvedPlayer = this.getPlayerById(playerId);
+      const resolvedPlayerId = resolvedPlayer?.id || playerId;
+      if (!resolvedPlayerId) {
+        return false;
+      }
+
+      this.eliminatePlayer(resolvedPlayerId);
+      this.resolveImmediateEliminationOutcome(options.reason || 'concede');
+      return true;
     }
     
     // Concede the match (local player quits)
@@ -3545,13 +3954,18 @@
       }
       
       // Broadcast concede FIRST before eliminating (so other players know)
-      if (window.isMultiplayer && window.net && window.net.p2p && window.net.p2p.sendData) {
+      if (window.isMultiplayer && window.net) {
         try {
-          window.net.p2p.sendData({
+          const concedePacket = {
             type: 'player_conceded',
             playerId: this.localPlayerId,
             matchId: this.id
-          });
+          };
+          if (typeof window.net.sendReliableData === 'function') {
+            window.net.sendReliableData(concedePacket);
+          } else if (window.net.p2p && window.net.p2p.sendData) {
+            window.net.p2p.sendData(concedePacket);
+          }
           console.log('📡 Sent concede message to other players');
         } catch (error) {
           console.warn('⚠️ Failed to send concede message:', error);
@@ -3560,16 +3974,7 @@
       
       // Small delay to ensure message is sent before ending
       setTimeout(() => {
-        // For objectives/adventure mode or solo play, just end the match as defeat
-        // For elimination mode, eliminate the player (other players may continue)
-        if (this.victoryCondition === 'objectives' || this.players.length <= 2) {
-          // End match - local player loses
-          this.state = MatchState.DEFEAT;
-          this.showEndGameScreen();
-        } else {
-          // Multiplayer with 3+ players - just eliminate self, others continue
-          this.eliminatePlayer(this.localPlayerId);
-        }
+        this.handlePlayerConceded(this.localPlayerId, { reason: 'concede' });
       }, 100);
     }
     
@@ -4204,6 +4609,7 @@
       let unitTypeHash = 0;
       let unitStateHash = 0;
       let unitHealthHash = 0;
+      let unitDefenseHash = 0;
       const unitSamples = [];
       
       sortedUnits.forEach(unit => {
@@ -4226,9 +4632,16 @@
           unitStateHash ^= stateHash;
           hash ^= stateHash;
           
-          const healthHash = Math.floor((unit.currentHealth || unit.health || 100) * 100);
+          const resolvedUnitHealth = Number.isFinite(unit.currentHealth)
+            ? unit.currentHealth
+            : (Number.isFinite(unit.health) ? unit.health : 100);
+          const healthHash = Math.floor(resolvedUnitHealth * 100);
           unitHealthHash ^= healthHash;
           hash ^= healthHash;
+
+          const defenseHash = this.hashUnitIncomingDamageState(unit);
+          unitDefenseHash ^= defenseHash;
+          hash ^= defenseHash;
 
           unitSamples.push(this.buildUnitDebugSample(unit));
           
@@ -4244,6 +4657,7 @@
         unitTypeHash: unitTypeHash >>> 0,
         unitStateHash: unitStateHash >>> 0,
         unitHealthHash: unitHealthHash >>> 0,
+        unitDefenseHash: unitDefenseHash >>> 0,
         unitSamples
       };
       
@@ -4270,7 +4684,10 @@
         buildingOwnerHash ^= ownerHash;
         hash ^= ownerHash;
         
-        const healthHash = Math.floor((building.health || 100) * 100);
+        const resolvedBuildingHealth = Number.isFinite(building.health)
+          ? building.health
+          : (Number.isFinite(building.currentHealth) ? building.currentHealth : 100);
+        const healthHash = Math.floor(resolvedBuildingHealth * 100);
         buildingHealthHash ^= healthHash;
         hash ^= healthHash;
         
@@ -4367,8 +4784,10 @@
       // For RTS lockstep, X/Z drive pathing, range checks, work assignment, and combat.
       // Y is continuously recomputed from terrain/platform helpers and is not a stable
       // source of gameplay truth, so including it creates false desyncs.
-      const x = Math.round(vec.x * 10);
-      const z = Math.round(vec.z * 10);
+      // Quantize to quarter-world-unit precision. Tenths were sensitive enough to flag
+      // harmless melee/orbit jitter while units were still in the same gameplay state.
+      const x = Math.round(vec.x * 4);
+      const z = Math.round(vec.z * 4);
       return (Math.imul(x, 73856093) ^ Math.imul(z, 19349663)) >>> 0;
     }
     
@@ -4385,6 +4804,48 @@
       return hash >>> 0;
     }
 
+    hashUnitIncomingDamageState(unit) {
+      const state = unit?._incomingDamageState;
+      if (!state) return 0;
+
+      let hash = 0;
+      const sortEntries = (entries) => Object.entries(entries || {}).sort((a, b) =>
+        window.deterministicStringCompare
+          ? window.deterministicStringCompare(a[0], b[0])
+          : String(a[0]).localeCompare(String(b[0]))
+      );
+
+      sortEntries(state.modifiers).forEach(([sourceKey, modifier]) => {
+        if (!modifier) return;
+        const signature = [
+          'modifier',
+          sourceKey,
+          Math.round((modifier.multiplier ?? 1) * 1000),
+          Math.round((modifier.flatReduction ?? 0) * 1000),
+          Number.isFinite(modifier.minDamage) ? Math.round(modifier.minDamage * 1000) : -1,
+          Number.isFinite(modifier.maxDamage) ? Math.round(modifier.maxDamage * 1000) : -1,
+          Number.isFinite(modifier.expiresAtTick) ? modifier.expiresAtTick : -1,
+          Array.isArray(modifier.appliesToDamageTypes) ? modifier.appliesToDamageTypes.join('|') : '*'
+        ].join(':');
+        hash ^= this.hashString(signature);
+      });
+
+      sortEntries(state.shields).forEach(([sourceKey, shield]) => {
+        if (!shield) return;
+        const signature = [
+          'shield',
+          sourceKey,
+          Math.round((shield.remaining ?? 0) * 1000),
+          Math.round((shield.maxAmount ?? 0) * 1000),
+          Number.isFinite(shield.expiresAtTick) ? shield.expiresAtTick : -1,
+          Array.isArray(shield.appliesToDamageTypes) ? shield.appliesToDamageTypes.join('|') : '*'
+        ].join(':');
+        hash ^= this.hashString(signature);
+      });
+
+      return hash >>> 0;
+    }
+
     quantizeDebugCoord(value) {
       return Math.round((value || 0) * 10) / 10;
     }
@@ -4393,6 +4854,10 @@
       const loc = unit?.pb?.state?.loc || { x: 0, z: 0 };
       const vel = unit?.pb?.state?.vel || { x: 0, z: 0 };
       const behavior = window.behaviorManager?.getBehavior(unit);
+      const incomingDamageState = unit?._incomingDamageState || null;
+      const activeShields = incomingDamageState?.shields || {};
+      const activeModifiers = incomingDamageState?.modifiers || {};
+      const shieldTotal = Object.values(activeShields).reduce((total, shield) => total + (shield?.remaining || 0), 0);
       const tileSize = window.TILE_SIZE || 4;
       const lastAppliedMove = unit?._lastAppliedMoveCommand || null;
       const targetPoint = behavior?.targetPoint || null;
@@ -4407,6 +4872,10 @@
         state: unit?.state || 'idle',
         behavior: behavior?.constructor?.name || 'none',
         behaviorState: behavior?.gatherState || behavior?.currentState || null,
+        health: Math.round(((Number.isFinite(unit?.currentHealth) ? unit.currentHealth : unit?.health) || 0) * 1000) / 1000,
+        rawHealth: Number.isFinite(unit?.health) ? Math.round(unit.health * 1000) / 1000 : null,
+        rawCurrentHealth: Number.isFinite(unit?.currentHealth) ? Math.round(unit.currentHealth * 1000) / 1000 : null,
+        maxHealth: Number.isFinite(unit?.maxHealth) ? Math.round(unit.maxHealth * 1000) / 1000 : null,
         x: this.quantizeDebugCoord(loc.x),
         z: this.quantizeDebugCoord(loc.z),
         vx: this.quantizeDebugCoord(vel.x),
@@ -4424,7 +4893,10 @@
         lastMoveSeq: Number.isFinite(lastAppliedMove?.seq) ? lastAppliedMove.seq : null,
         lastMovePlayer: lastAppliedMove?.playerId || null,
         lastMoveTargetX: lastAppliedMove ? this.quantizeDebugCoord(lastAppliedMove.targetX) : null,
-        lastMoveTargetZ: lastAppliedMove ? this.quantizeDebugCoord(lastAppliedMove.targetZ) : null
+        lastMoveTargetZ: lastAppliedMove ? this.quantizeDebugCoord(lastAppliedMove.targetZ) : null,
+        damageShield: Math.round(shieldTotal * 1000) / 1000,
+        damageShieldCount: Object.keys(activeShields).length,
+        damageModifierCount: Object.keys(activeModifiers).length
       };
     }
 
@@ -4462,13 +4934,21 @@
             remote
           });
         } else if (
+          local.owner !== remote.owner ||
+          local.type !== remote.type ||
           local.x !== remote.x ||
           local.z !== remote.z ||
           local.tileX !== remote.tileX ||
           local.tileZ !== remote.tileZ ||
           local.state !== remote.state ||
           local.vx !== remote.vx ||
-          local.vz !== remote.vz
+          local.vz !== remote.vz ||
+          local.health !== remote.health ||
+          local.rawHealth !== remote.rawHealth ||
+          local.rawCurrentHealth !== remote.rawCurrentHealth ||
+          local.damageShield !== remote.damageShield ||
+          local.damageShieldCount !== remote.damageShieldCount ||
+          local.damageModifierCount !== remote.damageModifierCount
         ) {
           mismatches.push({ id, reason: 'state-diff', local, remote });
         }
@@ -4493,14 +4973,16 @@
           `  ${index + 1}. ${entry.id?.slice(-6)} ` +
           `LOCAL obj=${local.objectId || 'null'} ` +
           `LOCAL pos=(${local.x}, ${local.z}) tile=(${local.tileX}, ${local.tileZ}) vel=(${local.vx}, ${local.vz}) ` +
+          `hp=${local.health}/${local.maxHealth} raw=(${local.rawCurrentHealth},${local.rawHealth}) shield=${local.damageShield} mods=${local.damageModifierCount} ` +
           `target=(${local.targetX}, ${local.targetZ}) wp=(${local.waypointX}, ${local.waypointZ}) path=${local.pathIndex}/${local.pathLength} repath=${local.repathCount} ` +
           `lastMove=[tick:${local.lastMoveTick},seq:${local.lastMoveSeq},player:${local.lastMovePlayer},target:(${local.lastMoveTargetX}, ${local.lastMoveTargetZ})] ` +
-          `state=${local.state} behavior=${local.behavior}${local.behaviorState ? `/${local.behaviorState}` : ''} ` +
+          `state=${local.state} owner=${local.owner} type=${local.type} behavior=${local.behavior}${local.behaviorState ? `/${local.behaviorState}` : ''} ` +
           `REMOTE obj=${remote.objectId || 'null'} ` +
           `REMOTE pos=(${remote.x}, ${remote.z}) tile=(${remote.tileX}, ${remote.tileZ}) vel=(${remote.vx}, ${remote.vz}) ` +
+          `hp=${remote.health}/${remote.maxHealth} raw=(${remote.rawCurrentHealth},${remote.rawHealth}) shield=${remote.damageShield} mods=${remote.damageModifierCount} ` +
           `target=(${remote.targetX}, ${remote.targetZ}) wp=(${remote.waypointX}, ${remote.waypointZ}) path=${remote.pathIndex}/${remote.pathLength} repath=${remote.repathCount} ` +
           `lastMove=[tick:${remote.lastMoveTick},seq:${remote.lastMoveSeq},player:${remote.lastMovePlayer},target:(${remote.lastMoveTargetX}, ${remote.lastMoveTargetZ})] ` +
-          `state=${remote.state} behavior=${remote.behavior}${remote.behaviorState ? `/${remote.behaviorState}` : ''}`
+          `state=${remote.state} owner=${remote.owner} type=${remote.type} behavior=${remote.behavior}${remote.behaviorState ? `/${remote.behaviorState}` : ''}`
         );
       });
     }
@@ -4569,6 +5051,21 @@
       if (!Array.isArray(ids)) ids = [ids];
       return window.gameUnits?.filter(u => ids.includes(u.id)) || [];
     }
+
+    /** Same unit set as getUnitsByIds, in network command order (gameUnits.filter order is not cross-client stable). */
+    getUnitsByIdsInCommandOrder(ids) {
+      if (!Array.isArray(ids)) ids = [ids];
+      const byId = new Map();
+      for (const u of window.gameUnits || []) {
+        if (u && u.id != null) byId.set(u.id, u);
+      }
+      const out = [];
+      for (let i = 0; i < ids.length; i++) {
+        const u = byId.get(ids[i]);
+        if (u) out.push(u);
+      }
+      return out;
+    }
     
     getUnitById(id) {
       return window.gameUnits?.find(u => u.id === id);
@@ -4636,11 +5133,11 @@
     hookGameSystems() {
       // Hook unit death
       const originalOnUnitDeath = window.onUnitDeath;
-      window.onUnitDeath = (unit) => {
+      window.onUnitDeath = (unit, attackerOwner, defeatMeta) => {
         if (unit.owner && unit.owner !== 'neutral') {
           this.stats.unitsLost[unit.owner]++;
         }
-        if (originalOnUnitDeath) originalOnUnitDeath(unit);
+        if (originalOnUnitDeath) originalOnUnitDeath(unit, attackerOwner, defeatMeta);
       };
       
       // Hook building destruction
@@ -4691,6 +5188,10 @@
         reasonText = isVictory ? '🎯 All Objectives Complete!' : '❌ Mission Failed';
       } else if (this.replay.reason === 'defeat') {
         reasonText = '🏳️ You Surrendered';
+      } else if (this.replay.reason === 'concede') {
+        reasonText = isVictory ? '🏳️ Opponent Conceded' : '🏳️ You Surrendered';
+      } else if (this.replay.reason === 'disconnect_forfeit') {
+        reasonText = isVictory ? '📡 Opponent Disconnected' : '📡 You Disconnected';
       }
       
       endScreen.innerHTML = `
@@ -5573,6 +6074,11 @@
   // Export to window
   window.Match = Match;
   window.MatchState = MatchState;
+
+  // Hot-reload support: keep the live match state object but upgrade its method table.
+  if (window.currentMatch && Object.getPrototypeOf(window.currentMatch) !== Match.prototype) {
+    Object.setPrototypeOf(window.currentMatch, Match.prototype);
+  }
   
   // console.log('✅ Match system initialized');
 

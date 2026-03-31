@@ -28,6 +28,35 @@ const Lobby = {
     return suffix.length > 6 ? suffix.slice(-6) : suffix;
   },
 
+  generateUniqueAiId: function(slotIndex = 0, seed = 0, existingIds = [], prefix = 'ai') {
+    const taken = new Set(
+      (Array.isArray(existingIds) ? existingIds : [])
+        .map(id => this.normalizePeerId(id))
+        .filter(Boolean)
+    );
+    const numericSlot = Number.isFinite(slotIndex) ? Math.max(0, Math.trunc(slotIndex)) : 0;
+    const slotChar = (numericSlot % 36).toString(36);
+    const baseSeed = Number.isFinite(seed)
+      ? (Math.abs(Math.trunc(seed)) >>> 0)
+      : 0;
+
+    for (let salt = 0; salt < 4096; salt++) {
+      const mixed = (
+        baseSeed +
+        Math.imul(numericSlot + 1, 2654435761) +
+        Math.imul(salt + 1, 2246822519)
+      ) >>> 0;
+      const body = mixed.toString(36).padStart(4, '0').slice(-4);
+      const normalizedSuffix = `a${slotChar}${body}`;
+      if (!taken.has(normalizedSuffix)) {
+        return `${prefix}-${numericSlot}-${normalizedSuffix}`;
+      }
+    }
+
+    const fallbackBody = baseSeed.toString(36).padStart(4, '0').slice(-4);
+    return `${prefix}-${numericSlot}-z${slotChar}${fallbackBody}`;
+  },
+
   normalizePlayerColor: function(color, fallback = '#ffffff') {
     if (typeof color === 'string' && color.trim()) {
       return color.trim();
@@ -412,7 +441,7 @@ const Lobby = {
       name: 'Teams',
       maxPlayers: 4,
       lobbyKey: 'aether-teams-2v2',
-      defaultFieldSize: 'medium'
+      defaultFieldSize: 'small'
     }
   },
   
@@ -680,7 +709,7 @@ const Lobby = {
     
     // Create single AI opponent for 1v1
     const spawn = spawnPositions[1];
-    const aiId = `ai-opponent-${resolvedSeed.toString(16).padStart(6, '0')}`;
+    const aiId = this.generateUniqueAiId(1, resolvedSeed, [window.player?.id], 'ai-opponent');
     const aiOptions = {
       id: aiId,
       name: 'AI Opponent',
@@ -3023,6 +3052,7 @@ const Lobby = {
     } else {
       window.adventureObjectives = [];
     }
+    window.adventureObjectiveWinMode = (isV2 && mapData.ow === 'all') ? 'all' : undefined;
     
     // Store scenes for cinematic playback
     if (isV2 && mapData.sc) {
@@ -3379,7 +3409,7 @@ const Lobby = {
   adventureChapters: {
     chapter1: { file: 'maps/adventure/chapter1.garden', name: 'Chapter 1 - The Beginning' },
     chapter2: { file: 'maps/adventure/chapter2.garden', name: 'Chapter 2 - Into the Wild' },
-    chapter3: { file: 'maps/adventure/chapter3.garden', name: 'Chapter 3' }
+    chapter3: { file: 'maps/adventure/chapter3.garden', name: 'Chapter 3 - Not the End' }
   },
   
   // Chapter info cache
@@ -4419,9 +4449,15 @@ const Lobby = {
     
     // Create AI opponents
     const aiPlayers = [];
+    const usedAiIds = [window.player?.id];
     for (let i = 0; i < aiCount; i++) {
       const spawn = spawnPositions[i + 1] || spawnPositions[spawnPositions.length - 1];
-      const aiId = options.aiIds?.[i] || `ai-${i + 1}-${resolvedSeed.toString(16).padStart(6, '0')}`;
+      const requestedAiId = options.aiIds?.[i] || null;
+      const requestedAiNorm = requestedAiId ? this.normalizePeerId(requestedAiId) : '';
+      const requestedAiTaken = requestedAiNorm && usedAiIds.some(id => this.normalizePeerId(id) === requestedAiNorm);
+      const aiId = (requestedAiId && !requestedAiTaken)
+        ? requestedAiId
+        : this.generateUniqueAiId(i + 1, resolvedSeed, usedAiIds, 'ai');
       const aiName = options.aiNames?.[i] || `AI ${i + 1}`;
       const rawColor = (options.aiColors && options.aiColors[i]) || (this.getPlayerColor ? this.getPlayerColor(i + 1) : null);
       const aiColor = (rawColor && typeof rawColor === 'object') ? rawColor.primary : (rawColor || '#0066cc');
@@ -4446,6 +4482,7 @@ const Lobby = {
       aiPlayer.agora = spawn;
       aiPlayer.basePosition = { x: spawn.x, z: spawn.y };
       aiPlayers.push(aiPlayer);
+      usedAiIds.push(aiId);
     }
     
     window.aiOpponents = aiPlayers;
@@ -5028,7 +5065,7 @@ const Lobby = {
     // Size spawn slots from the host-authoritative ordered human player list instead of
     // the local peer count. This prevents one peer from under-allocating spawn slots when
     // its transient connectedPlayers view lags behind the host's final ordering.
-    const spawnPositions = this.getSpawnPositions(totalPlayersWithAI, fieldSize);
+    const spawnPositions = this.getSpawnPositions(totalPlayersWithAI, fieldSize, gameType);
     if (spawnPositions[localPlayerIndex] === undefined) {
       console.error('❌ Not enough spawn positions for players:', { spawnPositions, allPlayerIds, localPlayerIndex });
       return;
@@ -5254,6 +5291,7 @@ const Lobby = {
     
     // Add AI opponents if configured in lobby settings
     if (settings && settings.aiSlots) {
+      const usedPlayerIds = players.map(player => player?.id).filter(Boolean);
       const enabledAISlots = settings.aiSlots
         .map((enabled, index) => enabled ? index : null)
         .filter(index => index !== null && index >= players.length);
@@ -5263,7 +5301,7 @@ const Lobby = {
         // Use players.length as spawn position index (AI players are added after human players)
         const spawnIndex = players.length;
         if (spawnIndex < spawnPositions.length) {
-          const aiId = `ai-${slotIndex}-${mapSeed.toString(16).padStart(6, '0')}`;
+          const aiId = this.generateUniqueAiId(slotIndex, mapSeed, usedPlayerIds, 'ai');
           const aiName = `AI ${slotIndex}`;
           const aiColor = this.getPlayerColor(slotIndex).primary;
           const aiSpawn = spawnPositions[spawnIndex];
@@ -5291,6 +5329,7 @@ const Lobby = {
           
           aiPlayer.isAI = true;
           players.push(aiPlayer);
+          usedPlayerIds.push(aiId);
           console.log(`🤖 Added AI player ${aiName} at slot ${slotIndex}`);
         }
       });
@@ -5515,7 +5554,7 @@ const Lobby = {
   },
   
   // Get spawn positions for multiplayer (spread players around the map)
-  getSpawnPositions: function(playerCount, fieldSize) {
+  getSpawnPositions: function(playerCount, fieldSize, gameType = null) {
     // Resolve numeric dimensions for the selected field size
     const dims = (typeof fieldSize === 'string')
       ? (this.getFieldDimensions(fieldSize) || { width: 128, height: 128 })
@@ -5524,6 +5563,7 @@ const Lobby = {
     // Use the smaller dimension to keep margin calculations safe
     const mapSize = Math.max(32, Math.min(dims.width, dims.height));
     const margin = Math.floor(Math.max(8, Math.min(20, mapSize * 0.15))); // 15% margin, clamped
+    const resolvedGameType = gameType || this.currentGameType || null;
     
     const positions = [];
     
@@ -5531,6 +5571,12 @@ const Lobby = {
       // 1v1: Opposite corners
       positions.push({ x: margin, y: margin }); // Bottom-left
       positions.push({ x: mapSize - margin, y: mapSize - margin }); // Top-right
+    } else if (resolvedGameType === 'teams' && playerCount === 3) {
+      // Teams with one AI still uses team lanes instead of the generic triangle.
+      // First two slots are allies on the south edge, third slot is the enemy on the north edge.
+      positions.push({ x: margin, y: margin }); // Team A left
+      positions.push({ x: mapSize - margin, y: margin }); // Team A right
+      positions.push({ x: margin, y: mapSize - margin }); // Team B left
     } else if (playerCount === 3) {
       // 3 players: Triangle formation
       positions.push({ x: margin, y: Math.round(mapSize / 2) }); // Left

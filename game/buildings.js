@@ -1201,9 +1201,14 @@ function findIdleVillagersNearBuilding(building) {
       }
     }
     
-    // SPECIAL: Check if villager has GatherWorkBehavior but camp has no resources
+    // SPECIAL: A gather worker can be reclaimed only if it's truly stranded at an empty camp.
+    // Do NOT treat workers that are currently gathering or returning with cargo as idle, or
+    // peers can disagree about whether to reassign them mid-trip.
     if (!isIdleOrLingering && currentBehavior && currentBehavior.constructor.name === 'GatherWorkBehavior') {
-      if (currentBehavior.findNearestResource && !currentBehavior.findNearestResource()) {
+      const gatherState = currentBehavior.gatherState || 'seeking';
+      const isCarryingResources = !!currentBehavior.gatheredResourceType || (currentBehavior.gatheredResourceAmount || 0) > 0;
+      const canReassignEmptyCampWorker = gatherState === 'seeking' && !isCarryingResources && !currentBehavior.gatherTarget;
+      if (canReassignEmptyCampWorker && currentBehavior.findNearestResource && !currentBehavior.findNearestResource()) {
         isIdleOrLingering = true;
       }
     }
@@ -1310,6 +1315,13 @@ function assignVillagerToWork(villager, building) {
         behaviorName === 'AttackBuildingBehavior' ||
         behaviorName === 'AttackUnitBehavior') {
       return false;
+    }
+    if (behaviorName === 'GatherWorkBehavior') {
+      const gatherState = currentBehavior.gatherState || 'seeking';
+      const isCarryingResources = !!currentBehavior.gatheredResourceType || (currentBehavior.gatheredResourceAmount || 0) > 0;
+      if (gatherState !== 'seeking' || isCarryingResources || currentBehavior.gatherTarget) {
+        return false;
+      }
     }
   }
   
@@ -2272,6 +2284,14 @@ function disposeWorkRadiusFencePanels(panels, material) {
   }
 }
 
+// Babylon scene.pick expects canvas-local x/y (not client/viewport coords).
+function canvasPickCoordsFromClient(clientX, clientY) {
+  const canvas = window.gfx?.canvas;
+  if (!canvas) return { x: clientX, y: clientY };
+  const rect = canvas.getBoundingClientRect();
+  return { x: clientX - rect.left, y: clientY - rect.top };
+}
+
 // Building Placement System
 const buildingSystem = {
   isPlacing: false,
@@ -2921,8 +2941,9 @@ const buildingSystem = {
       }
       
       try {
-        // Get world position from mouse
-        const pickResult = window.gfx.scene.pick(e.clientX, e.clientY);
+        // Get world position from mouse (canvas-local — client coords skew the ray when canvas is offset)
+        const { x: pickX, y: pickY } = canvasPickCoordsFromClient(e.clientX, e.clientY);
+        const pickResult = window.gfx.scene.pick(pickX, pickY);
         if (pickResult.hit && pickResult.pickedMesh && pickResult.pickedMesh.name && pickResult.pickedMesh.name.includes('Mesh')) {
           const worldPos = pickResult.pickedPoint;
           
@@ -2977,9 +2998,9 @@ const buildingSystem = {
     this.clickHandler = (e) => {
       if (!this.isPlacing || !this.previewMesh) return;
       
-      // Ignore clicks within 100ms of activating placement mode (prevents button click from placing)
+      // Ignore clicks shortly after activating placement (menu button vanishes before mouseup; stray click hits canvas)
       const timeSinceActivation = Date.now() - (this.placementModeActivatedAt || 0);
-      if (timeSinceActivation < 100) {
+      if (timeSinceActivation < 350) {
         if (DEBUG_BUILDING_PLACEMENT_LOGS) {
           console.log('🏗️ Ignoring click - too soon after activating placement mode');
         }
@@ -2998,8 +3019,8 @@ const buildingSystem = {
       if (e.button !== 0) return;
       
       try {
-        // Get world position from mouse
-        const pickResult = window.gfx.scene.pick(e.clientX, e.clientY);
+        const { x: pickX, y: pickY } = canvasPickCoordsFromClient(e.clientX, e.clientY);
+        const pickResult = window.gfx.scene.pick(pickX, pickY);
         
         if (pickResult.hit && pickResult.pickedMesh && pickResult.pickedMesh.name && pickResult.pickedMesh.name.includes('Mesh')) {
           const worldPos = pickResult.pickedPoint;

@@ -1,0 +1,201 @@
+
+
+
+
+🟩🟢✅🟥🔴❌🟨🟡🟦🔵🟧🟠🟪🟣⬛◯⚪⬜⬤🟫🟤
+
+🟩 - Complete
+🟨 - Partial
+🟥 - Incomplete
+🟪 - Undescribed
+◯
+Unit
+    Behaviors
+    Ability
+    Death
+
+Villager        🟩
+    Brigand         🟩
+Engineer        🟨
+    Architect       🟥
+Monk            🟨
+    Paladin         🟪
+Wizard          🟪
+    Elemental       🟪
+Warlock         🟨
+    Geomancer       🟪
+Warrior         🟨
+    Champion        🟪
+Archer          🟨
+    Ballister       🟪
+Wagon           🟨
+    War Wagon       🟪
+Dirigible       🟨
+    War Balloon     🟪
+APC             🟨
+    Tank            🟪
+Priest          🟥
+    Valkyrie        🟪
+Myco            🟥
+    Alchemist       🟪
+Shaman          🟥
+    Druid           🟪
+
+    ======================
+
+◯🟩
+Villager
+    Build, wander, idle, gather
+    Turn into Brigand; gather, build
+    Runs to nearest village or agora
+
+    ◯🟩
+    Brigand
+        defensive, offensive
+        Small sprint; gather, build, sneak
+        Turns into villager, runs to nearest village or agora
+
+◯🟥
+Engineer
+    Build, repair, idle
+    build, repair
+    Drops tools and surrenders (design note — verify vs destroyUnit)
+
+    ◯🟥
+    Architect
+        Build, repair, fortify, idle
+        build, repair, fortify
+        Dramatically faints onto blueprints (design note — verify)
+
+◯🟨
+Monk
+    Far wander, kicks
+    Heal; kicks nearby units
+    sit and meditates, disappears
+
+    ◯🟪
+    Paladin
+        Support, melee, idle
+        heal, kick, bless, shield
+        Kneels in prayer, teleports back to church (design note — verify)
+
+◯🟪
+Wizard
+    Caster, idle, combat
+    fireball, teleport
+    POOF teleports to lab (design note — verify)
+
+    ◯🟪
+    Elemental
+        Caster, idle, combat
+        fireball, teleport, storm, summon
+        Dissolves into particles, reforms at moon well (design note — verify)
+
+◯🟥
+Warlock
+    Caster, idle, combat
+    curse, drain, hex
+    Sinks into shadow portal (design note — verify)
+
+    ◯🟪
+    Geomancer
+        Caster, idle, combat
+        curse, drain, earthquake, terraform
+        Turns to stone, crumbles (design note — verify)
+
+◯🟨
+Warrior
+    Military, idle, combat
+    melee, charge
+    Surrender walk to barracks (design note — verify)
+
+    ◯🟪
+    Champion
+        Military, idle, combat
+        melee, charge, rally, cleave
+        Salutes, limps off (design note — verify)
+
+◯🟨
+Archer
+    Military, idle, combat
+    ranged, volley
+    Bow snaps, runs away (design note — verify)
+
+    ◯🟪
+    Ballister
+        Military, idle, combat
+        ranged, volley, siege
+        Crossbow jams (design note — verify)
+
+◯🟨
+Wagon
+    Vehicle pathing, idle, embark
+    transport, deploy
+    Wheels fall off / repair fantasy (design note — verify); passengers spill via destroyUnit if implemented
+
+    ◯🟪
+    War Wagon
+        Vehicle + attack, idle
+        transport, deploy, ranged
+        Crew bails (design note — verify)
+
+◯🟨
+Dirigible
+    float
+    fly, scout, transport — load, carry, unload
+    Deflates / pops; passengers dumped via destroyUnit transport branch; verify balloon exit animation
+
+    ◯🟪
+    War Balloon
+        Air combat, idle
+        fly, bomb, transport
+        Pops, parachutes (design note — verify)
+
+◯🟨
+APC
+    Vehicle, idle, combat
+    transport, armor; melee scratch damage
+    Engine sputter (design note — verify)
+
+    ◯🟪
+    Tank
+        Vehicle siege, idle
+        siege, armor, cannon
+        Overheats, crew evac (design note — verify)
+
+◯🟥
+Priest
+    Support, idle, combat
+    heal, bless, resurrect
+    Soul exits, body to church (design note — verify)
+
+    ◯🟪
+    Valkyrie
+        Flying support, idle, combat
+        heal, fly, smite, resurrect
+        Wings fold, beam to church (design note — verify)
+
+◯🟥
+Myco
+    Caster, idle, combat
+    poison, spore, grow
+    Dissolves to spores (design note — verify)
+
+    ◯🟪
+    Alchemist
+        Caster, idle, combat
+        poison, transmute, potion, explosion
+        Emergency potion / frog (design note — verify)
+
+◯🟥
+Shaman
+    Caster, idle, combat
+    nature, root, summon_beast
+    Transforms to creature, to grove (design note — verify)
+
+    ◯🟪
+    Druid
+        Caster, idle, combat
+        nature, entangle, shapeshift, regrowth
+        Becomes tree, to grove (design note — verify)
+

@@ -41,6 +41,8 @@
       zoneZoomSensitivity: 0.015,
       zoneRotateSensitivity: 0.018,
       zonePanSensitivity: 8.0,
+      /** Scales last edge 1-finger rot/zoom delta into inertia (low = almost no coast). */
+      edgeRotateZoomMomentumCarry: 0.2,
       cameraFingerDragThreshold: 8,
       // Center: brief hold → RMB-style pan; big/fast move → lasso; double-tap → special ability (see onPointerDown)
       centerPanHoldMs: 95,
@@ -118,8 +120,24 @@
     // Momentum/inertia state
     let gestureVelocity = { pan: { x: 0, z: 0 }, rotate: 0, pinch: 0 };
     let momentumActive = false;
-    let momentumDecay = 0.85; // Faster decay to stop sooner
+    let momentumDecay = 0.85; // Per-frame retention; combined with (1-decay) steps, total glide ≈ last velocity vector, not v/(1-decay)
     const MIN_VELOCITY_FOR_MOMENTUM = 3.0; // Higher threshold to prevent accidental momentum
+
+    /** Without this, each frame applies full v then v*=d → integrated motion is v/(1-d) (~6.7× at d=0.85). */
+    function momentumStep(v, decay) {
+      const d = typeof decay === 'number' ? decay : momentumDecay;
+      return { step: v * (1 - d), next: v * d };
+    }
+
+    function dampEdgeRotateZoomMomentumForLift(ps) {
+      if (!ps || !ps.isEdgeFinger || ps.isPanning) return;
+      const carry =
+        typeof config.edgeRotateZoomMomentumCarry === 'number'
+          ? config.edgeRotateZoomMomentumCarry
+          : 0.2;
+      gestureVelocity.rotate *= carry;
+      gestureVelocity.pinch *= carry;
+    }
     
     // ACTION POPUP: Shows on tap-hold or two-finger tap, shows abilities/rally options
     let actionPopupElement = null;
@@ -691,6 +709,27 @@
                       ability.execute(clientX, clientY);
                     } else {
                       executeAbility(ability.name, clientX, clientY, unitsToUse);
+                    }
+                  }
+                });
+              }
+            }
+          }
+          // Registry-backed command abilities
+          if (window.getUnitCommandAbilitySpecs) {
+            const commandAbilities = window.getUnitCommandAbilitySpecs(unit) || [];
+            for (const ability of commandAbilities) {
+              if (!seenAbilities.has(ability.id)) {
+                seenAbilities.add(ability.id);
+                actions.push({
+                  icon: ability.icon || '⚡',
+                  label: ability.label || ability.id,
+                  color: ability.color || 'rgba(150,100,255,0.95)',
+                  shadow: ability.shadowColor || 'rgba(150,100,255,0.6)',
+                  action: () => {
+                    const worldPos = screenToWorld(clientX, clientY);
+                    if (window.ui?.triggerAbilityByIdAt) {
+                      window.ui.triggerAbilityByIdAt(ability.id, worldPos, unitsToUse);
                     }
                   }
                 });
@@ -1393,8 +1432,10 @@
       
       // Pan momentum with bounds checking
       if (Math.abs(gestureVelocity.pan.x) > velocityThreshold || Math.abs(gestureVelocity.pan.z) > velocityThreshold) {
-        const newX = target.x + gestureVelocity.pan.x;
-        const newZ = target.z + gestureVelocity.pan.z;
+        const sx = momentumStep(gestureVelocity.pan.x, momentumDecay);
+        const sz = momentumStep(gestureVelocity.pan.z, momentumDecay);
+        const newX = target.x + sx.step;
+        const newZ = target.z + sz.step;
         
         // Clamp to bounds
         const tileSize = (window.TILE_SIZE || 4);
@@ -1409,7 +1450,7 @@
         // Only apply if within bounds, otherwise clamp and stop velocity
         if (newX >= minX && newX <= maxX) {
           target.x = newX;
-          gestureVelocity.pan.x *= momentumDecay;
+          gestureVelocity.pan.x = sx.next;
         } else {
           target.x = Math.max(minX, Math.min(maxX, newX));
           gestureVelocity.pan.x = 0; // Stop velocity if hitting bounds
@@ -1417,7 +1458,7 @@
         
         if (newZ >= minZ && newZ <= maxZ) {
           target.z = newZ;
-          gestureVelocity.pan.z *= momentumDecay;
+          gestureVelocity.pan.z = sz.next;
         } else {
           target.z = Math.max(minZ, Math.min(maxZ, newZ));
           gestureVelocity.pan.z = 0; // Stop velocity if hitting bounds
@@ -1433,16 +1474,17 @@
       
       // Rotate momentum (reversed direction)
       if (Math.abs(gestureVelocity.rotate) > velocityThreshold) {
-        cam.alpha += gestureVelocity.rotate; // Continue in same direction as gesture
-        gestureVelocity.rotate *= momentumDecay;
+        const sr = momentumStep(gestureVelocity.rotate, momentumDecay);
+        cam.alpha += sr.step;
+        gestureVelocity.rotate = sr.next;
         anyVelocity = true;
       }
       
       // Pinch momentum
       if (Math.abs(gestureVelocity.pinch) > velocityThreshold) {
-        cam.radius += gestureVelocity.pinch;
-        cam.radius = Math.max(10, Math.min(200, cam.radius));
-        gestureVelocity.pinch *= momentumDecay;
+        const sp = momentumStep(gestureVelocity.pinch, momentumDecay);
+        cam.radius = Math.max(10, Math.min(200, cam.radius + sp.step));
+        gestureVelocity.pinch = sp.next;
         anyVelocity = true;
       }
       
@@ -2048,6 +2090,7 @@
           lastSingleTapPos = null;
           lastTapDownTime = 0;
           lastTapDownPos = null;
+          dampEdgeRotateZoomMomentumForLift(ps);
           const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
                               Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
                               Math.abs(gestureVelocity.rotate) > 0.02 ||
@@ -2148,6 +2191,7 @@
           lastSingleTapPos = null;
           lastTapDownTime = 0;
           lastTapDownPos = null;
+          dampEdgeRotateZoomMomentumForLift(ps);
           const hasVelocity = Math.abs(gestureVelocity.pan.x) > MIN_VELOCITY_FOR_MOMENTUM || 
                               Math.abs(gestureVelocity.pan.z) > MIN_VELOCITY_FOR_MOMENTUM ||
                               Math.abs(gestureVelocity.rotate) > 0.02 ||

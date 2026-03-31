@@ -4,16 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
   <title>Æther.Garden – Real-Time Strategy Game in the Browser</title>
-  <meta name="description" content="Play Aether Garden (Æther.Garden) in your browser: multiplayer real-time strategy with co-op adventure, 1v1, King of the Hill, and teams. No install—RTS that runs anywhere.">
+  <meta name="description" content="Play Aether Garden (Æther.Garden) in your browser: multiplayer real-time strategy with co-op adventure, 1v1, King of the Hill, and teams. Web install—RTS that runs anywhere.">
   <meta name="keywords" content="garden, experience, interactive, strategy, multiplayer, rts, rtd, game, browser game, real-time strategy, co-op, 1v1">
   <meta property="og:type" content="website" />
   <meta property="og:title" content="Æther.Garden – Real-Time Strategy Game in the Browser" />
-  <meta property="og:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. No install." />
+  <meta property="og:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. Web install." />
   <meta property="og:url" content="https://aether.garden/" />
   <meta property="og:image" content="https://aether.garden/icons/android-chrome-512x512.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Æther.Garden – Real-Time Strategy Game in the Browser" />
-  <meta name="twitter:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. No install." />
+  <meta name="twitter:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. Web install." />
   <link rel="canonical" href="https://aether.garden/" />
 
   <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
@@ -119,9 +119,17 @@
       <div class="menu_title">Settings<div id="fps_meter">fps</div></div>
       <br>
       <div class="settings_option">
-        <span>3D HUD</span>
-        <div id="hud_switch" class="binary_switch" onclick="window.hud.toggleHUDMode()" data-on="false">
-          <div id="hud_handle" class="switch_handle"></div>
+        <span>Tooltips</span>
+        <div id="tooltip_switch" class="binary_switch" onclick="window.hud.toggleTooltips()" data-on="true" style="background: #4CAF50;">
+          <div id="tooltip_handle" class="switch_handle" style="left: 27px;"></div>
+        </div>
+      </div>
+
+      <div class="settings_option">
+        <span>LOD</span>
+        <div class="lod_slider_container">
+          <input type="range" id="lod_slider" class="lod_slider" min="0" max="100" value="50">
+          <div class="lod_value" id="lod_value">50%</div>
         </div>
       </div>
       <div class="settings_option">
@@ -129,13 +137,6 @@
         <div class="lod_slider_container">
           <input type="range" id="shadow_slider" class="lod_slider" min="0" max="3" value="2" step="1">
           <div class="lod_value" id="shadow_value">Med</div>
-        </div>
-      </div>
-      <div class="settings_option">
-        <span>LOD</span>
-        <div class="lod_slider_container">
-          <input type="range" id="lod_slider" class="lod_slider" min="0" max="100" value="50">
-          <div class="lod_value" id="lod_value">50%</div>
         </div>
       </div>
       <div class="settings_option" style="position: relative;">
@@ -146,6 +147,7 @@
         </div>
         <div id="aa_reload_notice" style="position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); font-size: 0.7em; color: #f90; white-space: nowrap; display: none;">⚠ Reload to apply</div>
       </div>
+
       <div class="settings_option">
         <span>Volume</span>
         <div class="lod_slider_container">
@@ -160,6 +162,13 @@
         </div>
         <span style="font-size: 0.8em; color: #888; margin-left: 10px;" id="spatial_mode_label">Off</span>
       </div>
+      
+      <div class="settings_option">
+        <span>3D HUD</span>
+        <div id="hud_switch" class="binary_switch" onclick="window.hud.toggleHUDMode()" data-on="false">
+          <div id="hud_handle" class="switch_handle"></div>
+        </div>
+      </div>
       <div class="settings_option">
         <span>Selection</span>
         <div id="selection_switch" class="binary_switch" onclick="window.hud.toggleSelectionMode()" data-on="false">
@@ -167,12 +176,7 @@
         </div>
         <span style="font-size: 0.8em; color: #888; margin-left: 10px;" id="selection_mode_label">Box</span>
       </div>
-      <div class="settings_option">
-        <span>Tooltips</span>
-        <div id="tooltip_switch" class="binary_switch" onclick="window.hud.toggleTooltips()" data-on="true" style="background: #4CAF50;">
-          <div id="tooltip_handle" class="switch_handle" style="left: 27px;"></div>
-        </div>
-      </div>
+
 
 
       <hr style="width: 60%;">

@@ -3507,211 +3507,157 @@ function getRandomColor() {
     return null;
   };
 
+  function normalizeAbilityTargetPoint(worldPos) {
+    if (!worldPos) return null;
+    const xCoord = worldPos.x !== undefined ? worldPos.x : worldPos._x;
+    const zCoord = worldPos.z !== undefined ? worldPos.z : worldPos._z;
+    if (!Number.isFinite(xCoord) || !Number.isFinite(zCoord)) return null;
+    return { x: xCoord, z: zCoord };
+  }
+
+  function getOwnedSelectedUnits(unitsToUse = null) {
+    if (!window.player) return [];
+    const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
+    const selectedUnits = unitsToUse || (window.player.getSelectedUnits ? window.player.getSelectedUnits() : []);
+    return selectedUnits.filter(unit => {
+      const owner = unit?.owner?.length > 6 ? unit.owner.slice(-6) : unit?.owner;
+      return !!owner && owner === normalizedPlayerId;
+    });
+  }
+
+  ui.triggerAbilityByIdAt = function(abilityId, worldPos, unitsToUse = null) {
+    if (!abilityId || (!window.currentMatch && !window.behaviorManager)) {
+      return;
+    }
+
+    const units = getOwnedSelectedUnits(unitsToUse).filter(unit =>
+      window.canUnitUseAbility ? window.canUnitUseAbility(unit, abilityId) : true
+    );
+
+    units.forEach(unit => {
+      const abilityParams = window.buildAbilityParamsForUnit
+        ? window.buildAbilityParamsForUnit(unit, abilityId, worldPos)
+        : {};
+      if (abilityParams === null) {
+        return;
+      }
+
+      if (window.currentMatch) {
+        window.currentMatch.submitCommand({
+          type: 'ability',
+          playerId: window.player?.id,
+          unitId: unit.id,
+          abilityType: abilityId,
+          params: abilityParams || {}
+        });
+      } else {
+        window.behaviorManager.setBehavior(unit, abilityId, abilityParams || {});
+      }
+    });
+  };
+
   // Trigger unit special abilities at optional world position
   ui.triggerSpecialAbilityAt = function(worldPos) {
     if (!window.player || !window.player.getSelectedUnits || !window.behaviorManager) {
       return;
     }
-    const normalizedPlayerId = window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id;
-    const units = window.player.getSelectedUnits().filter(unit => {
-      const owner = unit?.owner?.length > 6 ? unit.owner.slice(-6) : unit?.owner;
-      return !!owner && owner === normalizedPlayerId;
-    });
-    
-    // MATCH SYSTEM: Submit ability commands through Match system
-    if (window.currentMatch && units.length > 0) {
-      // Transport unload: double-click with loaded transport selected
-      const transportsWithPassengers = units.filter(u =>
-        u.abilities && u.abilities.includes('transport') &&
-        ((window.getTransportPassengerIds
-          ? window.getTransportPassengerIds(u).length
-          : (u.passengers?.length || 0)) > 0)
-      );
-      if (transportsWithPassengers.length > 0 && worldPos) {
-        const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
-        const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
+
+    const units = getOwnedSelectedUnits();
+    if (units.length === 0) return;
+
+    const targetPoint = normalizeAbilityTargetPoint(worldPos);
+
+    const transportsWithPassengers = units.filter(u =>
+      u.abilities && u.abilities.includes('transport') &&
+      ((window.getTransportPassengerIds
+        ? window.getTransportPassengerIds(u).length
+        : (u.passengers?.length || 0)) > 0)
+    );
+
+    if (transportsWithPassengers.length > 0 && targetPoint) {
+      if (window.currentMatch) {
         transportsWithPassengers.forEach(transport => {
-          if (window.currentMatch?.isLiveMultiplayerMatch?.()) {
-            console.log('🛬 UNLOAD TRACE submit', {
-              tick: window.currentMatch?.tick || 0,
-              playerId: window.player?.id || null,
-              playerNorm: window.player?.id?.length > 6 ? window.player.id.slice(-6) : window.player?.id,
-              transportId: transport.id || null,
-              passengerIds: window.getTransportPassengerIds ? window.getTransportPassengerIds(transport).slice() : (transport.passengers || []).slice(),
-              target: {
-                x: Math.round(xCoord * 10) / 10,
-                z: Math.round(zCoord * 10) / 10
-              }
-            });
-          }
           window.currentMatch.submitCommand({
             type: 'unload',
             playerId: window.player?.id,
             unitId: transport.id,
-            target: { x: xCoord, z: zCoord }
+            target: targetPoint
           });
         });
-        return;
+      } else if (window.unloadPassengers) {
+        transportsWithPassengers.forEach(transport => window.unloadPassengers(transport, targetPoint));
       }
-
-      units.forEach(unit => {
-        const type = unit.type || unit.name || '';
-        let abilityType = null;
-        let abilityParams = {};
-        
-        if (/^villager$/i.test(type)) {
-          // Villager double-click: upgrade to brigand via convert command
-          const upgradeDef = window.UnitTypes?.brigand;
-          if (upgradeDef) {
-            const cost = upgradeDef.cost || {};
-            let canAfford = true;
-            for (const [res, amt] of Object.entries(cost)) {
-              if ((window.player.resources?.[res] || 0) < amt) { canAfford = false; break; }
-            }
-            if (canAfford) {
-              if (window.currentMatch?.requestUnitConversion) {
-                window.currentMatch.requestUnitConversion({
-                  reason: 'player_upgrade',
-                  playerId: window.player.id,
-                  unitId: unit.id,
-                  targetType: 'brigand',
-                  requireHost: false
-                });
-              } else {
-                window.currentMatch.submitCommand({
-                  type: 'convert',
-                  playerId: window.player.id,
-                  unitId: unit.id,
-                  targetType: 'brigand'
-                });
-              }
-            }
-          }
-          return;
-        } else if (/engineer/i.test(type)) {
-          abilityType = 'engineer_productivity_boost';
-          abilityParams = { radius: 6, bonus: 1.5, duration: 7000, vfx: 'aura_blue' };
-        } else if (/brigand/i.test(type)) {
-          abilityType = 'brigand_sprint';
-          // Extract coordinates properly from Vector3 or plain object
-          let targetPoint = null;
-          if (worldPos) {
-            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
-            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
-            targetPoint = { x: xCoord, z: zCoord };
-          }
-          abilityParams = { speedMultiplier: 2.25, duration: 6000, targetPoint: targetPoint, vfx: 'speed_trail' };
-        } else if (/monk/i.test(type)) {
-          abilityType = 'monk_stealth';
-          abilityParams = { invisibility: true, duration: 4000, vfx: 'smoke_puff' };
-        } else if (/wizard/i.test(type)) {
-          // For wizards, submit a stop command first
-          window.currentMatch.submitCommand({
-            type: 'stop',
-            unitIds: [unit.id]
-          });
-          abilityType = 'wizard_cast';
-          // Extract coordinates properly from Vector3 or plain object
-          let targetPoint = null;
-          if (worldPos) {
-            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
-            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
-            targetPoint = { x: xCoord, z: zCoord };
-          }
-          abilityParams = { targetPoint: targetPoint, spell: 'arc_blast', power: 1.5, vfx: 'spell_flash' };
-        }
-        
-        if (abilityType) {
-          window.currentMatch.submitCommand({
-            type: 'ability',
-            playerId: window.player?.id, // CRITICAL: Set player ID explicitly
-            unitId: unit.id,
-            abilityType: abilityType,
-            params: abilityParams
-          });
-        }
-      });
-    } else {
-      // SINGLE PLAYER: Apply abilities directly
-
-      // Transport unload (single player)
-      const spTransports = units.filter(u =>
-        u.abilities && u.abilities.includes('transport') &&
-        ((window.getTransportPassengerIds
-          ? window.getTransportPassengerIds(u).length
-          : (u.passengers?.length || 0)) > 0)
-      );
-      if (spTransports.length > 0 && worldPos && window.unloadPassengers) {
-        const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
-        const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
-        spTransports.forEach(t => window.unloadPassengers(t, { x: xCoord, z: zCoord }));
-        return;
-      }
-
-      units.forEach(unit => {
-        const type = unit.type || unit.name || '';
-        if (/^villager$/i.test(type)) {
-          // Villager double-click: upgrade to brigand directly
-          const unitDef = window.UnitTypes?.villager;
-          if (unitDef && unitDef.actionAbilities) {
-            const upgradeAbility = unitDef.actionAbilities.find(a => a.name && a.name.includes('Brigand'));
-            if (upgradeAbility && upgradeAbility.execute) upgradeAbility.execute();
-          }
-          return;
-        } else if (/engineer/i.test(type)) {
-          window.behaviorManager.setBehavior(unit, 'engineer_productivity_boost', {
-            radius: 6,
-            bonus: 1.5,
-            duration: 7000,
-            vfx: 'aura_blue'
-          });
-        } else if (/brigand/i.test(type)) {
-          // Extract coordinates properly from Vector3 or plain object
-          let targetPoint = null;
-          if (worldPos) {
-            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
-            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
-            targetPoint = { x: xCoord, z: zCoord };
-          }
-          window.behaviorManager.setBehavior(unit, 'brigand_sprint', {
-            speedMultiplier: 2.25,
-            duration: 6000,
-            targetPoint: targetPoint,
-            vfx: 'speed_trail'
-          });
-        } else if (/monk/i.test(type)) {
-          window.behaviorManager.setBehavior(unit, 'monk_stealth', {
-            invisibility: true,
-            duration: 4000,
-            vfx: 'smoke_puff'
-          });
-        } else if (/wizard/i.test(type)) {
-          // Stop wizard movement completely before casting
-          window.behaviorManager.setBehavior(unit, 'linger', {
-            center: { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z },
-            radius: 0, // Don't wander at all
-            wanderInterval: 999999 // Never wander
-          });
-          
-          // Extract coordinates properly - worldPos might be a Vector3 or plain object
-          let targetPoint = null;
-          if (worldPos) {
-            // Handle both Vector3 (with _x, _z) and plain objects (with x, z)
-            const xCoord = worldPos.x !== undefined ? worldPos.x : (worldPos._x !== undefined ? worldPos._x : 0);
-            const zCoord = worldPos.z !== undefined ? worldPos.z : (worldPos._z !== undefined ? worldPos._z : 0);
-            targetPoint = { x: xCoord, z: zCoord };
-          }
-          
-          // Then apply the cast ability as a modifier
-          window.behaviorManager.setBehavior(unit, 'wizard_cast', {
-            targetPoint: targetPoint,
-            spell: 'arc_blast',
-            power: 1.5,
-            vfx: 'spell_flash'
-          });
-        }
-      });
+      return;
     }
+
+    const handledFallbackTypes = new Set();
+    units.forEach(unit => {
+      const primaryAbility = window.getPrimaryUnitCommandAbility
+        ? window.getPrimaryUnitCommandAbility(unit)
+        : null;
+
+      if (primaryAbility?.id) {
+        ui.triggerAbilityByIdAt(primaryAbility.id, worldPos, [unit]);
+        return;
+      }
+
+      const unitType = unit.type || '';
+      const unitDef = window.UnitTypes?.[unitType];
+
+      if (unitType === 'villager') {
+        const upgradeDef = window.UnitTypes?.brigand;
+        if (window.currentMatch && upgradeDef) {
+          const cost = upgradeDef.cost || {};
+          let canAfford = true;
+          for (const [res, amt] of Object.entries(cost)) {
+            if ((window.player.resources?.[res] || 0) < amt) {
+              canAfford = false;
+              break;
+            }
+          }
+          if (canAfford) {
+            if (window.currentMatch?.requestUnitConversion) {
+              window.currentMatch.requestUnitConversion({
+                reason: 'player_upgrade',
+                playerId: window.player.id,
+                unitId: unit.id,
+                targetType: 'brigand',
+                requireHost: false
+              });
+            } else {
+              window.currentMatch.submitCommand({
+                type: 'convert',
+                playerId: window.player.id,
+                unitId: unit.id,
+                targetType: 'brigand'
+              });
+            }
+          }
+        } else if (!window.currentMatch && !handledFallbackTypes.has(unitType)) {
+          const upgradeAbility = unitDef?.actionAbilities?.find(a => a.name && a.name.includes('Brigand'));
+          if (upgradeAbility?.execute) {
+            handledFallbackTypes.add(unitType);
+            upgradeAbility.execute();
+          }
+        }
+        return;
+      }
+
+      if (!handledFallbackTypes.has(unitType) && Array.isArray(unitDef?.actionAbilities) && unitDef.actionAbilities.length > 0) {
+        const fallbackAction = unitDef.actionAbilities[0];
+        if (!window.currentMatch && fallbackAction?.execute) {
+          handledFallbackTypes.add(unitType);
+          fallbackAction.execute();
+          return;
+        }
+      }
+
+      if (unit.specialAbility && typeof unit.specialAbility === 'function') {
+        unit.specialAbility(worldPos);
+      } else if (unit.doSpecialAction && typeof unit.doSpecialAction === 'function') {
+        unit.doSpecialAction(worldPos);
+      }
+    });
   };
 
 }(window.ui = window.ui || {}));

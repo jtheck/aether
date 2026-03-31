@@ -45,6 +45,14 @@
       color: new BABYLON.Color3(0.5, 0.3, 1),
       impactEffect: "magic_explosion",
     },
+    fireball: {
+      speed: 14,
+      gravity: 0,
+      size: 0.75,
+      color: new BABYLON.Color3(1, 0.35, 0.05),
+      impactEffect: "fire_hit",
+      lifetimePadding: 0.15,
+    },
   };
 
   // Optional simple mesh pool per type
@@ -54,6 +62,7 @@
     rock: [],
     bullet: [],
     spell: [],
+    fireball: [],
   };
 
   // Shared materials (created once, reused for all projectiles of that type)
@@ -100,6 +109,7 @@
       damage = 10,
       owner = null,
       speed = null,
+      lifetimePadding = null,
       gameplayImpact = true,
       onHit = null,
       onMiss = null,
@@ -109,6 +119,13 @@
     if (!def) {
       if (DEBUG_PROJECTILES) console.warn("[PROJECTILES] unknown type", type);
       return null;
+    }
+    if (!projectileMaterials[type] && scene) {
+      const mat = new BABYLON.StandardMaterial(`proj_${type}_mat_shared`, scene);
+      mat.emissiveColor = def.color;
+      mat.diffuseColor = def.color;
+      mat.freeze();
+      projectileMaterials[type] = mat;
     }
     if (!from || !to) {
       if (DEBUG_PROJECTILES) console.warn("[PROJECTILES] missing from/to", { from, to });
@@ -183,7 +200,7 @@
       to: to.clone(),
       distance: dist,
       elapsed: 0,
-      lifetime: dist / projSpeed + 1.0, // small buffer
+      lifetime: dist / projSpeed + (lifetimePadding ?? def.lifetimePadding ?? 1.0),
       onHit,
       onMiss,
       gameplayImpact,
@@ -625,35 +642,51 @@
     const def = ProjectileTypes[projectileType];
     if (!def) return;
 
+    const spawnImpactFx = (effectType, options = {}) => {
+      if (window.fx.createTransientParticleEffect) {
+        return window.fx.createTransientParticleEffect(effectType, position, options);
+      }
+      const fallbackOptions = Object.assign({}, options);
+      delete fallbackOptions.durationMs;
+      return window.fx.createParticleEffect(effectType, position, fallbackOptions);
+    };
+
     switch (def.impactEffect) {
       case "hit":
-        window.fx.createParticleEffect("particle", position, {
+        spawnImpactFx("particle", {
           scale: 0.2,
           emitRate: 20,
+          durationMs: 220
         });
         break;
       case "fire_hit":
-        window.fx.createParticleEffect("fire", position, {
-          scale: 0.3,
+        spawnImpactFx("burn_fire", {
+          scale: 0.35,
           emitRate: 30,
+          minSize: 0.16,
+          maxSize: 0.38,
+          durationMs: 420
         });
         break;
       case "spark":
-        window.fx.createParticleEffect("particle", position, {
+        spawnImpactFx("particle", {
           scale: 0.15,
           emitRate: 15,
+          durationMs: 180
         });
         break;
       case "magic_explosion":
-        window.fx.createParticleEffect("magefire", position, {
+        spawnImpactFx("magefire", {
           scale: 0.4,
           emitRate: 40,
+          durationMs: 450
         });
         break;
       case "rock_impact":
-        window.fx.createParticleEffect("smoke", position, {
+        spawnImpactFx("smoke", {
           scale: 0.5,
           emitRate: 50,
+          durationMs: 650
         });
         window.fx.createExplosion(position, 0.3);
         break;

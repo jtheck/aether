@@ -28,6 +28,143 @@
   const modelPromises = new Map();
   const cloneCount = {};
 
+  function isRenderableSceneMesh(node) {
+    if (!node) return false;
+    const isAbstractMesh = typeof BABYLON !== 'undefined' && BABYLON.AbstractMesh
+      ? node instanceof BABYLON.AbstractMesh
+      : false;
+    return isAbstractMesh && typeof node.isEnabled === 'function';
+  }
+
+  function sanitizeSceneMeshesInPlace(scene, reason = 'sanitize') {
+    if (!scene?.meshes) return 0;
+    let removed = 0;
+    for (let i = scene.meshes.length - 1; i >= 0; i--) {
+      const mesh = scene.meshes[i];
+      if (!isRenderableSceneMesh(mesh)) {
+        scene.meshes.splice(i, 1);
+        removed++;
+        console.warn(`🧹 Removed invalid scene mesh (${reason}): ${mesh?.name || 'unnamed'} [${mesh?.constructor?.name || typeof mesh}]`);
+      }
+    }
+    return removed;
+  }
+
+  function sanitizeInstantiatedSceneNodes(scene, rootNodes, reason = 'instantiate') {
+    if (!scene || !Array.isArray(rootNodes)) return 0;
+    rootNodes.forEach(root => {
+      if (!root || typeof root.getDescendants !== 'function') return;
+      const allNodes = [root, ...root.getDescendants(false)];
+      allNodes.forEach(node => {
+        if (!isRenderableSceneMesh(node) && scene.meshes.includes(node)) {
+          const idx = scene.meshes.indexOf(node);
+          if (idx >= 0) {
+            scene.meshes.splice(idx, 1);
+            console.warn(`🔧 Removed non-mesh scene node (${reason}): ${node.name || 'unnamed'}`);
+          }
+        }
+      });
+    });
+    return sanitizeSceneMeshesInPlace(scene, reason);
+  }
+
+  function describeInvalidMeshEntry(mesh, index, probeError = null) {
+    return {
+      index,
+      name: mesh?.name || 'unnamed',
+      type: mesh?.constructor?.name || typeof mesh,
+      hasIsEnabled: typeof mesh?.isEnabled,
+      hasSetEnabled: typeof mesh?.setEnabled,
+      probeError: probeError?.message || null
+    };
+  }
+
+  function validateSceneMeshesForRender(scene, reason = 'render-check') {
+    if (!scene?.meshes) return [];
+    const invalidEntries = [];
+    for (let i = scene.meshes.length - 1; i >= 0; i--) {
+      const mesh = scene.meshes[i];
+      let valid = isRenderableSceneMesh(mesh);
+      let probeError = null;
+      if (valid) {
+        try {
+          mesh.isEnabled();
+        } catch (error) {
+          valid = false;
+          probeError = error;
+        }
+      }
+      if (!valid) {
+        invalidEntries.push(describeInvalidMeshEntry(mesh, i, probeError));
+        scene.meshes.splice(i, 1);
+      }
+    }
+    if (invalidEntries.length > 0) {
+      console.error(`🚨 Removed ${invalidEntries.length} invalid scene mesh entries (${reason})`, invalidEntries);
+    }
+    return invalidEntries;
+  }
+
+  function validateShadowRenderList(generator, reason = 'shadow-render-list') {
+    const renderList = generator?.getShadowMap?.()?.renderList;
+    if (!Array.isArray(renderList)) return [];
+    const invalidEntries = [];
+    for (let i = renderList.length - 1; i >= 0; i--) {
+      const mesh = renderList[i];
+      let valid = isRenderableSceneMesh(mesh);
+      let probeError = null;
+      if (valid) {
+        try {
+          mesh.isEnabled();
+        } catch (error) {
+          valid = false;
+          probeError = error;
+        }
+      }
+      if (!valid) {
+        invalidEntries.push(describeInvalidMeshEntry(mesh, i, probeError));
+        renderList.splice(i, 1);
+      }
+    }
+    if (invalidEntries.length > 0) {
+      console.error(`🚨 Removed ${invalidEntries.length} invalid shadow casters (${reason})`, invalidEntries);
+    }
+    return invalidEntries;
+  }
+
+  function sanitizeParticleSystemEmitters(scene, reason = 'particle-emitter-check') {
+    if (!scene?.particleSystems) return [];
+    const repairedEntries = [];
+    for (let i = 0; i < scene.particleSystems.length; i++) {
+      const system = scene.particleSystems[i];
+      const emitter = system?.emitter;
+      if (!emitter || typeof emitter !== 'object') continue;
+
+      const hasPositionProperty = typeof emitter.position !== 'undefined';
+      const hasIsEnabledFn = typeof emitter.isEnabled === 'function';
+      if (!hasPositionProperty || hasIsEnabledFn) continue;
+
+      const pos = emitter.position;
+      const replacement = pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)
+        ? new BABYLON.Vector3(pos.x, pos.y, pos.z)
+        : BABYLON.Vector3.Zero();
+
+      system.emitter = replacement;
+      repairedEntries.push({
+        index: i,
+        systemName: system?.name || `particle-${i}`,
+        emitterType: emitter?.constructor?.name || typeof emitter,
+        replacement: pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)
+          ? 'emitter.position'
+          : 'origin'
+      });
+    }
+    if (repairedEntries.length > 0) {
+      console.error(`🚨 Repaired ${repairedEntries.length} invalid particle emitters (${reason})`, repairedEntries);
+    }
+    return repairedEntries;
+  }
+
   function getModel(path, scene) {
     if (!modelPromises.has(path)) {
       const loadPromise = BABYLON.SceneLoader.LoadAssetContainerAsync(path, undefined, scene)
@@ -53,17 +190,7 @@
             // CRITICAL FIX: Walk all descendants and remove TransformNodes from scene.meshes
             // instantiateModelsToScene adds ALL child nodes to scene.meshes, including TransformNodes
             // which don't have isEnabled as a function and crash the renderer
-            result.rootNodes.forEach(root => {
-              const allDescendants = root.getDescendants(false);
-              allDescendants.forEach(node => {
-                // If this node is in scene.meshes but doesn't have isEnabled as a FUNCTION, remove it
-                if (typeof node.isEnabled !== 'function' && scene.meshes.includes(node)) {
-                  const idx = scene.meshes.indexOf(node);
-                  scene.meshes.splice(idx, 1);
-                  console.warn(`🔧 Removed TransformNode from scene.meshes: ${node.name}`);
-                }
-              });
-            });
+            sanitizeInstantiatedSceneNodes(scene, result.rootNodes, `post-clone:${path}`);
 
             // Cleanup function for this clone
             const dispose = () => {
@@ -753,7 +880,7 @@
     console.log('[Instancing] Master meshes with instances:', masterMeshesWithInstances);
     
     // Draw call estimate - instances share draw calls with their master
-    const regularMeshes = gfx.scene.meshes.filter(m => m.isEnabled() && m.isVisible && m.getTotalVertices && m.getTotalVertices() > 0 && !m.isAnInstance).length;
+    const regularMeshes = gfx.scene.meshes.filter(m => isRenderableSceneMesh(m) && m.isEnabled() && m.isVisible && m.getTotalVertices && m.getTotalVertices() > 0 && !m.isAnInstance).length;
     console.log('[Instancing] Non-instanced enabled meshes:', regularMeshes);
     console.log('[Instancing] Estimated draw calls:', regularMeshes + masterMeshesWithInstances, '(masters batch their instances)');
   };
@@ -948,7 +1075,9 @@
     
     // Read rotation from model - it should already be set by getPooledModel
     const storedRotation = model.root.rotation ? model.root.rotation.y : 0;
-    const storedScale = model.root.scaling ? Math.abs(model.root.scaling.x) : 1;
+    const storedScale = Number.isFinite(modelRule?.originalScale)
+      ? Math.abs(modelRule.originalScale)
+      : (model.root.scaling ? Math.abs(model.root.scaling.x) : 1);
     
     const lodEntry = {
       model: model.root,
@@ -1703,6 +1832,10 @@ let pov2 = 240;
       
       getPooledModel(task.modelPath, task.scene, task.position, task.rotation, task.scale, task.gridX, task.gridZ)
         .then(model => {
+          const growthAnimation = task.growthAnimation && task.growthAnimation !== false
+            ? task.growthAnimation
+            : null;
+
           // Set up shadows for the model
           if (window.gfx && window.gfx.setupMeshShadows) {
             window.gfx.setupMeshShadows(model.root);
@@ -1718,19 +1851,16 @@ let pov2 = 240;
             
             // PERFORMANCE: Freeze resource meshes since they're static until depleted
             // This is a huge win - resources never move/rotate/scale until harvested
-            if (model.root.freezeWorldMatrix) {
-              model.root.freezeWorldMatrix();
-              model.root.metadata.isFrozen = true;
+            if (!growthAnimation) {
+              freezeResourceModel(model.root);
             }
-            // Also freeze child meshes
-            model.root.getChildMeshes && model.root.getChildMeshes().forEach(childMesh => {
-              if (childMesh.freezeWorldMatrix) {
-                childMesh.freezeWorldMatrix();
-              }
-            });
           }
           
           task.models.push(model);
+          if (growthAnimation) {
+            const initialScale = Number.isFinite(growthAnimation.initialScale) ? growthAnimation.initialScale : 0.12;
+            setUniformModelScale(model.root, task.scale * initialScale);
+          }
           
           if (task.chunk) {
             model.root.parent = task.chunk.mesh;
@@ -1793,7 +1923,10 @@ let pov2 = 240;
           // Add LOD billboard with chunk info for grouped checking
           // In forge mode, still create billboard (needed for billboard-only mode)
           const lodChunkKey = task.chunk ? `${task.chunk.chunkX},${task.chunk.chunkZ}` : 'manual';
-          addLODBillboard(model, task.scene, task.modelRule, gfx.cameraTarget ? gfx.cameraTarget.position : null, lodChunkKey);
+          addLODBillboard(model, task.scene, {
+            ...task.modelRule,
+            originalScale: task.scale
+          }, gfx.cameraTarget ? gfx.cameraTarget.position : null, lodChunkKey);
           
           // In forge mode with billboard-only, show billboard immediately
           if (ENABLE_FORGE && BILLBOARD_ONLY_MODE) {
@@ -1801,6 +1934,13 @@ let pov2 = 240;
             if (lodEntry && lodEntry.billboard) {
               lodEntry.billboard.setEnabled(true);
             }
+          }
+
+          if (growthAnimation) {
+            startResourceGrowthAnimation(model.root, {
+              ...growthAnimation,
+              finalScale: task.scale
+            });
           }
         })
         .catch(err => {
@@ -1863,12 +2003,439 @@ let pov2 = 240;
   // Global registry of depleted resource tiles (prevents chunks from recreating them)
   // Map stores: "gridX,gridZ" -> { originalGridX, originalGridZ, felledTime, isTree }
   const depletedResourceTiles = new Map(); // Map of "gridX,gridZ" strings to depletion info
+  const resourceTileEffects = new Map(); // key: "effectKey:gridX,gridZ" -> { handle, gridX, gridZ, effectKey, ... }
+  let growthPreviewCapMaterial = null;
+  let growthPreviewStemMaterial = null;
   
   // Function to check if a tile has been depleted
   window.isResourceTileDepleted = function(gridX, gridZ) {
     const key = `${gridX},${gridZ}`;
     return depletedResourceTiles.has(key);
   };
+
+  function getResourceTileEffectId(gridX, gridZ, effectKey = 'default') {
+    return `${effectKey}:${gridX},${gridZ}`;
+  }
+
+  function getResourceTileWorldPosition(gridX, gridZ, yOffset = 0) {
+    const field = window.liveField;
+    const worldX = (gridX + 0.5) * TILE_SIZE;
+    const worldZ = (gridZ + 0.5) * TILE_SIZE;
+    const baseY = field?.getHeightVariation ? field.getHeightVariation(gridX, gridZ) : 0;
+    return new BABYLON.Vector3(worldX, baseY + yOffset, worldZ);
+  }
+
+  function getResourceTileEffectHandle(entry) {
+    return entry?.handle || entry?.system || entry?.root || null;
+  }
+
+  function ensureGrowthPreviewMaterials() {
+    const effectScene = gfx.scene;
+    if (!effectScene || typeof BABYLON === 'undefined') return null;
+
+    if (!growthPreviewCapMaterial || growthPreviewCapMaterial.getScene?.() !== effectScene) {
+      growthPreviewCapMaterial = new BABYLON.StandardMaterial('growthPreviewCapMat', effectScene);
+      growthPreviewCapMaterial.diffuseColor = new BABYLON.Color3(0.72, 0.48, 0.8);
+      growthPreviewCapMaterial.emissiveColor = new BABYLON.Color3(0.08, 0.03, 0.08);
+      growthPreviewCapMaterial.specularColor = new BABYLON.Color3(0.06, 0.04, 0.06);
+    }
+
+    if (!growthPreviewStemMaterial || growthPreviewStemMaterial.getScene?.() !== effectScene) {
+      growthPreviewStemMaterial = new BABYLON.StandardMaterial('growthPreviewStemMat', effectScene);
+      growthPreviewStemMaterial.diffuseColor = new BABYLON.Color3(0.84, 0.8, 0.68);
+      growthPreviewStemMaterial.emissiveColor = new BABYLON.Color3(0.02, 0.02, 0.01);
+      growthPreviewStemMaterial.specularColor = new BABYLON.Color3(0.03, 0.03, 0.02);
+    }
+
+    return {
+      cap: growthPreviewCapMaterial,
+      stem: growthPreviewStemMaterial
+    };
+  }
+
+  function createGrowthPreviewMushrooms(gridX, gridZ, options = {}) {
+    const effectScene = gfx.scene;
+    const materials = ensureGrowthPreviewMaterials();
+    if (!effectScene || !materials) return null;
+
+    const scale = Math.max(0.45, Number.isFinite(options.scale) ? options.scale : 1);
+    const root = new BABYLON.TransformNode(`growthPreview_${gridX}_${gridZ}`, effectScene);
+    const origin = getResourceTileWorldPosition(gridX, gridZ, Number.isFinite(options.yOffset) ? options.yOffset : 0.04);
+    root.position.copyFrom(origin);
+
+    const layout = [
+      { x: -0.42, z: -0.08, stemHeight: 0.42, capDiameter: 0.34 },
+      { x: 0.14, z: -0.32, stemHeight: 0.34, capDiameter: 0.28 },
+      { x: 0.38, z: 0.1, stemHeight: 0.46, capDiameter: 0.36 },
+      { x: -0.1, z: 0.34, stemHeight: 0.3, capDiameter: 0.24 }
+    ];
+    const baseSeed = ((((gridX + 17) * 92821) ^ ((gridZ + 31) * 68917)) >>> 0);
+    root.rotation.y = ((baseSeed % 360) * Math.PI) / 180;
+
+    const meshes = [];
+    const getJitter = (index, channel) => {
+      const mixed = (((baseSeed + (index * 2654435761) + (channel * 1013904223)) >>> 0) & 1023) / 1023;
+      return mixed - 0.5;
+    };
+
+    layout.forEach((slot, index) => {
+      const stemHeight = slot.stemHeight * scale * (1 + getJitter(index, 0) * 0.18);
+      const capDiameter = slot.capDiameter * scale * (1 + getJitter(index, 1) * 0.18);
+      const stemDiameter = Math.max(0.08, capDiameter * 0.24);
+      const offsetX = slot.x * scale + getJitter(index, 2) * 0.1;
+      const offsetZ = slot.z * scale + getJitter(index, 3) * 0.1;
+
+      const stem = BABYLON.MeshBuilder.CreateCylinder(`growthPreviewStem_${gridX}_${gridZ}_${index}`, {
+        height: stemHeight,
+        diameterTop: stemDiameter * 0.72,
+        diameterBottom: stemDiameter,
+        tessellation: 8
+      }, effectScene);
+      stem.parent = root;
+      stem.position = new BABYLON.Vector3(offsetX, stemHeight * 0.5, offsetZ);
+      stem.material = materials.stem;
+
+      const cap = BABYLON.MeshBuilder.CreateSphere(`growthPreviewCap_${gridX}_${gridZ}_${index}`, {
+        diameter: capDiameter,
+        segments: 8
+      }, effectScene);
+      cap.parent = root;
+      cap.position = new BABYLON.Vector3(offsetX, stemHeight + (capDiameter * 0.16), offsetZ);
+      cap.scaling.y = 0.48;
+      cap.rotation.x = getJitter(index, 4) * 0.22;
+      cap.rotation.z = getJitter(index, 5) * 0.22;
+      cap.material = materials.cap;
+
+      [stem, cap].forEach(mesh => {
+        mesh.isPickable = false;
+        mesh.checkCollisions = false;
+        mesh.receiveShadows = false;
+        mesh.alwaysSelectAsActiveMesh = true;
+      });
+
+      meshes.push(stem, cap);
+    });
+
+    return {
+      handle: root,
+      root,
+      dispose() {
+        meshes.forEach(mesh => {
+          try {
+            mesh.dispose?.();
+          } catch (_) {
+            // Visual-only cleanup
+          }
+        });
+        try {
+          root.dispose?.();
+        } catch (_) {
+          // Visual-only cleanup
+        }
+      }
+    };
+  }
+
+  function disposeResourceTileEffectEntry(entry) {
+    if (!entry) return;
+    if (typeof entry.dispose === 'function') {
+      try {
+        entry.dispose();
+      } catch (_) {
+        // Visual-only cleanup
+      }
+      return;
+    }
+    const system = entry?.system || entry?.handle;
+    if (!system) return;
+    try {
+      system.emitter = null;
+      system.stop?.();
+      if (system._dummyEmitter?.dispose) {
+        system._dummyEmitter.dispose();
+        system._dummyEmitter = null;
+      }
+      system.dispose?.();
+    } catch (_) {
+      // Visual-only cleanup
+    }
+  }
+
+  gfx.setResourceTileEffect = function(gridX, gridZ, effectKey, effectType = effectKey, options = {}) {
+    if (!gfx.scene) return null;
+    const effectId = getResourceTileEffectId(gridX, gridZ, effectKey);
+    const existing = resourceTileEffects.get(effectId);
+    const existingHandle = getResourceTileEffectHandle(existing);
+    if (existingHandle) {
+      return existingHandle;
+    }
+
+    if (effectType === 'mushroom_ring') {
+      const mushroomEntry = createGrowthPreviewMushrooms(gridX, gridZ, options);
+      if (!mushroomEntry) return null;
+      resourceTileEffects.set(effectId, {
+        ...mushroomEntry,
+        gridX,
+        gridZ,
+        effectKey
+      });
+      return mushroomEntry.handle;
+    }
+
+    if (!window.fx?.createParticleEffect) return null;
+    const position = getResourceTileWorldPosition(gridX, gridZ, Number.isFinite(options.yOffset) ? options.yOffset : 0.2);
+    const particleSystem = window.fx.createParticleEffect(effectType, position, options);
+    if (!particleSystem) return null;
+
+    resourceTileEffects.set(effectId, {
+      handle: particleSystem,
+      system: particleSystem,
+      gridX,
+      gridZ,
+      effectKey
+    });
+    return particleSystem;
+  };
+
+  gfx.clearResourceTileEffect = function(gridX, gridZ, effectKey = null) {
+    if (effectKey) {
+      const effectId = getResourceTileEffectId(gridX, gridZ, effectKey);
+      const entry = resourceTileEffects.get(effectId);
+      if (entry) {
+        disposeResourceTileEffectEntry(entry);
+        resourceTileEffects.delete(effectId);
+      }
+      return;
+    }
+
+    gfx.clearAllResourceTileEffects(gridX, gridZ);
+  };
+
+  gfx.clearAllResourceTileEffects = function(gridX = null, gridZ = null) {
+    const removals = [];
+    resourceTileEffects.forEach((entry, effectId) => {
+      if (gridX !== null && entry.gridX !== gridX) return;
+      if (gridZ !== null && entry.gridZ !== gridZ) return;
+      removals.push(effectId);
+    });
+
+    removals.forEach(effectId => {
+      const entry = resourceTileEffects.get(effectId);
+      if (entry) {
+        disposeResourceTileEffectEntry(entry);
+      }
+      resourceTileEffects.delete(effectId);
+    });
+  };
+
+  function getManualResourceRegistry(field) {
+    if (!field) return null;
+    if (!field._manualResourceTiles) {
+      field._manualResourceTiles = new Map();
+    }
+    return field._manualResourceTiles;
+  }
+
+  function getManualResourceDescriptor(resourceType) {
+    const resourceDescriptors = {
+      trees: {
+        path: 'assets/models/trees.glb',
+        scale: 0.9,
+        resultType: 'wood',
+        amount: 7,
+        remaining: 28
+      },
+      rocks_plain: {
+        path: 'assets/models/rocks_plain.glb',
+        scale: 3.0,
+        resultType: 'stone',
+        amount: 4,
+        remaining: 56
+      },
+      rocks_moss: {
+        path: 'assets/models/rocks_moss.glb',
+        scale: 7.5,
+        resultType: 'stone',
+        amount: 5,
+        remaining: 70
+      },
+      rocks_snow: {
+        path: 'assets/models/rocks_snow.glb',
+        scale: 11.5,
+        resultType: 'stone',
+        amount: 6,
+        remaining: 84
+      }
+    };
+    return resourceDescriptors[resourceType] || null;
+  }
+
+  function getDeterministicManualResourceRotation(gridX, gridZ, resourceType, field = window.liveField, seedOffset = 0) {
+    const baseSeed = (field?.seed || 12345) + seedOffset;
+    let hash = baseSeed + gridX * 73856093 + gridZ * 19349663;
+    const typeHash = String(resourceType || '').split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    hash += typeHash * 83492791;
+    hash = (hash * 1664525 + 1013904223) >>> 0;
+    hash = (hash * 1664525 + 1013904223) >>> 0;
+    return ((hash % 6283) / 1000);
+  }
+
+  function hasBuildingAtResourceTile(gridX, gridZ) {
+    if (!Array.isArray(window.gameBuildings)) return false;
+    return window.gameBuildings.some(building => {
+      if (!building) return false;
+      const buildingGridX = Number.isFinite(building.gridX)
+        ? building.gridX
+        : Math.round((building.position?.x || 0) / TILE_SIZE);
+      const buildingGridZ = Number.isFinite(building.gridZ)
+        ? building.gridZ
+        : Math.round((building.position?.z || 0) / TILE_SIZE);
+      const width = Math.max(1, building.size?.width || 1);
+      const height = Math.max(1, building.size?.height || 1);
+      const halfWidth = Math.floor(width / 2);
+      const halfHeight = Math.floor(height / 2);
+      return (
+        gridX >= (buildingGridX - halfWidth) &&
+        gridX <= (buildingGridX + halfWidth) &&
+        gridZ >= (buildingGridZ - halfHeight) &&
+        gridZ <= (buildingGridZ + halfHeight)
+      );
+    });
+  }
+
+  function canGrowTreeAt(gridX, gridZ, options = {}) {
+    const field = options.field || window.liveField;
+    if (!isResourcePathingTileUsable(field, gridX, gridZ)) return false;
+    if (field.isInSpawnZone && field.isInSpawnZone(gridX, gridZ)) return false;
+
+    const terrainIndex = gridZ * field.width + gridX;
+    const terrainType = field.terrainTypes?.[terrainIndex];
+    if (terrainType !== 2 && terrainType !== 3) return false;
+
+    const tileKey = `${gridX},${gridZ}`;
+    if (resourceModelRegistry.has(tileKey) || pendingResourceTiles.has(tileKey)) return false;
+    if (field._manualResourceTiles?.has(tileKey)) return false;
+    if (hasBuildingAtResourceTile(gridX, gridZ)) return false;
+    if (field.blockedTiles?.has(tileKey)) return false;
+
+    const existingResource = window.buildingSystem?.checkTileForResources
+      ? window.buildingSystem.checkTileForResources(gridX, gridZ, false)
+      : null;
+    if (existingResource) return false;
+
+    return true;
+  }
+
+  window.getManualResourceDescriptor = getManualResourceDescriptor;
+  window.canGrowTreeAt = canGrowTreeAt;
+
+  function freezeResourceModel(mesh) {
+    if (!mesh) return;
+    mesh.metadata = mesh.metadata || {};
+    if (mesh.freezeWorldMatrix) {
+      mesh.freezeWorldMatrix();
+      mesh.metadata.isFrozen = true;
+    }
+    mesh.getChildMeshes && mesh.getChildMeshes().forEach(childMesh => {
+      if (childMesh.freezeWorldMatrix) {
+        childMesh.freezeWorldMatrix();
+      }
+    });
+  }
+
+  function setUniformModelScale(mesh, scale) {
+    if (!mesh || !mesh.scaling || !Number.isFinite(scale)) return;
+    mesh.scaling.x = scale;
+    mesh.scaling.y = scale;
+    mesh.scaling.z = scale;
+  }
+
+  let resourceGrowthAnimationCounter = 0;
+  function startResourceGrowthAnimation(mesh, options = {}) {
+    const finalScale = Number.isFinite(options.finalScale) ? options.finalScale : null;
+    if (!mesh || !Number.isFinite(finalScale) || finalScale <= 0) return;
+
+    const initialScaleRatio = Number.isFinite(options.initialScale)
+      ? Math.max(0.05, Math.min(options.initialScale, 1))
+      : 0.12;
+    const durationMs = Number.isFinite(options.durationMs) ? Math.max(500, options.durationMs) : 7000;
+
+    if (mesh.metadata?.isFrozen && mesh.unfreezeWorldMatrix) {
+      mesh.unfreezeWorldMatrix();
+      mesh.metadata.isFrozen = false;
+      mesh.getChildMeshes && mesh.getChildMeshes().forEach(childMesh => {
+        if (childMesh.unfreezeWorldMatrix) {
+          childMesh.unfreezeWorldMatrix();
+        }
+      });
+    }
+
+    mesh.metadata = mesh.metadata || {};
+    const growthToken = `growth-${++resourceGrowthAnimationCounter}`;
+    mesh.metadata.resourceGrowthToken = growthToken;
+    setUniformModelScale(mesh, finalScale * initialScaleRatio);
+
+    const startTime = performance.now();
+    const animate = (now) => {
+      if (!mesh || (mesh.isDisposed && mesh.isDisposed())) return;
+      if (mesh.metadata?.resourceGrowthToken !== growthToken) return;
+
+      const progress = Math.min((now - startTime) / durationMs, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const scale = finalScale * (initialScaleRatio + (1 - initialScaleRatio) * eased);
+      setUniformModelScale(mesh, scale);
+
+      if (progress < 1) {
+        requestAnimationFrame(animate);
+        return;
+      }
+
+      delete mesh.metadata.resourceGrowthToken;
+      setUniformModelScale(mesh, finalScale);
+      freezeResourceModel(mesh);
+    };
+
+    requestAnimationFrame(animate);
+  }
+
+  function isResourcePathingTileUsable(field, gridX, gridZ) {
+    if (!field) return false;
+    if (gridX < 0 || gridX >= field.width || gridZ < 0 || gridZ >= field.height) {
+      return false;
+    }
+    if (field.chunkMask && field.chunkSize) {
+      const chunkX = Math.floor(gridX / field.chunkSize);
+      const chunkZ = Math.floor(gridZ / field.chunkSize);
+      if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function applyManualResourcePathing(field, gridX, gridZ, resourceType) {
+    if (!isResourcePathingTileUsable(field, gridX, gridZ) || !resourceType) return;
+    if (resourceType.includes('rock')) {
+      let radius = 0;
+      if (resourceType.includes('snow')) radius = 2;
+      else if (resourceType.includes('moss')) radius = 1;
+      if (field.blockFootprint) field.blockFootprint(gridX, gridZ, radius);
+    } else if (resourceType.includes('tree')) {
+      if (field.slowTile) field.slowTile(gridX, gridZ);
+    }
+  }
+
+  function reapplyTrackedManualResourcePathing(field) {
+    const manualResources = field?._manualResourceTiles;
+    if (!manualResources || manualResources.size === 0) return;
+
+    manualResources.forEach((resourceType, key) => {
+      if (!resourceType || depletedResourceTiles.has(key)) return;
+      const [gridX, gridZ] = key.split(',').map(Number);
+      if (!Number.isFinite(gridX) || !Number.isFinite(gridZ)) return;
+      applyManualResourcePathing(field, gridX, gridZ, resourceType);
+    });
+  }
   
   // Function to mark a tile as depleted (for loading custom maps with erased resources)
   window.markResourceTileDepleted = function(gridX, gridZ) {
@@ -1879,11 +2446,14 @@ let pov2 = 240;
       felledTime: Date.now(),
       isTree: true  // Assume tree for map-erased resources
     });
+    if (window.liveField?._manualResourceTiles) {
+      window.liveField._manualResourceTiles.delete(key);
+    }
   };
   
   // Function to place a manual resource at a position (for loading custom maps)
   // resourceType: 'trees', 'rocks_plain', 'rocks_moss', 'rocks_snow'
-  window.placeManualResource = function(gridX, gridZ, resourceType) {
+  window.placeManualResource = function(gridX, gridZ, resourceType, options = {}) {
     const field = window.liveField;
     if (!field || !gfx.scene) return;
 
@@ -1894,19 +2464,25 @@ let pov2 = 240;
       if (field.chunkMask.get(`${chunkX},${chunkZ}`) === false) return;
     }
 
-    const resourcePaths = {
-      trees: { path: 'assets/models/trees.glb', scale: 0.9 },
-      rocks_plain: { path: 'assets/models/rocks_plain.glb', scale: 3.0 },
-      rocks_moss: { path: 'assets/models/rocks_moss.glb', scale: 7.5 },
-      rocks_snow: { path: 'assets/models/rocks_snow.glb', scale: 11.5 }
-    };
-    
-    const resInfo = resourcePaths[resourceType];
+    const resInfo = getManualResourceDescriptor(resourceType);
     if (!resInfo) return;
+    const tileKey = `${gridX},${gridZ}`;
+    if (options.clearDepleted) {
+      depletedResourceTiles.delete(tileKey);
+    }
+    const manualResources = getManualResourceRegistry(field);
+    manualResources?.set(tileKey, resourceType);
+    if (window.currentMatch?.resourceRemaining) {
+      const remainingValue = Number.isFinite(options.remaining) ? options.remaining : resInfo.remaining;
+      window.currentMatch.resourceRemaining.set(tileKey, remainingValue);
+    }
     
     const worldX = (gridX + 0.5) * TILE_SIZE;
     const worldZ = (gridZ + 0.5) * TILE_SIZE;
     const worldY = field.getHeightVariation ? field.getHeightVariation(gridX, gridZ) : 0;
+    const rotation = Number.isFinite(options.rotation)
+      ? options.rotation
+      : getDeterministicManualResourceRotation(gridX, gridZ, resourceType, field, options.rotationSeedOffset || 0);
     
     // Queue the model for loading
     initBillboardAtlas(gfx.scene);
@@ -1914,29 +2490,45 @@ let pov2 = 240;
       modelPath: resInfo.path,
       scene: gfx.scene,
       position: new Vec3(worldX, worldY, worldZ),
-      rotation: Math.random() * Math.PI * 2,
+      rotation: rotation,
       scale: resInfo.scale,
       chunk: null,  // Not associated with a chunk
       models: [],
       modelRule: resInfo,
       gridX: gridX,
-      gridZ: gridZ
+      gridZ: gridZ,
+      growthAnimation: options.growthAnimation === false
+        ? null
+        : (options.growthAnimation ? { ...options.growthAnimation } : null)
     });
 
-    // Mark pathfinding tiles for manual resources (rocks = blocked, trees = slow)
-    if (resourceType.includes('rock')) {
-      let radius = 0;
-      if (resInfo.scale >= 10) radius = 2;
-      else if (resInfo.scale >= 6) radius = 1;
-      if (field.blockFootprint) field.blockFootprint(gridX, gridZ, radius);
-    } else if (resourceType.includes('tree')) {
-      if (field.slowTile) field.slowTile(gridX, gridZ);
-    }
+    applyManualResourcePathing(field, gridX, gridZ, resourceType);
 
     // Start processing queue if not running
     if (!isProcessingQueue && modelLoadQueue.length > 0) {
       requestAnimationFrame(processModelQueue);
     }
+
+    return true;
+  };
+
+  window.growTreeAt = function(gridX, gridZ, options = {}) {
+    if (!canGrowTreeAt(gridX, gridZ, options)) {
+      return false;
+    }
+    const growthAnimation = options.growthAnimation === false
+      ? false
+      : (options.growthAnimation || {
+        initialScale: 0.12,
+        durationMs: 7000
+      });
+    return !!window.placeManualResource(gridX, gridZ, 'trees', {
+      clearDepleted: true,
+      remaining: Number.isFinite(options.remaining) ? options.remaining : 28,
+      rotationSeedOffset: Number.isFinite(options.rotationSeedOffset) ? options.rotationSeedOffset : 0,
+      growthAnimation,
+      ...options
+    });
   };
   
   // Function to get respawn position for a depleted tree (further from camp)
@@ -2112,9 +2704,13 @@ let pov2 = 240;
   }
   
   // Function to remove a resource model when depleted
-  window.removeResourceModel = function(gridX, gridZ) {
+  window.removeResourceModel = function(gridX, gridZ, options = {}) {
+    const skipPathingRebuild = options?.skipPathingRebuild === true;
+    const field = window.liveField;
     const key = `${gridX},${gridZ}`;
+    gfx.clearAllResourceTileEffects(gridX, gridZ);
     let mesh = resourceModelRegistry.get(key);
+    let detectedModelPath = mesh?.metadata?.modelPath || null;
     
     // If not found in registry, search through activeModels to find it
     if (!mesh) {
@@ -2132,6 +2728,7 @@ let pov2 = 240;
               // Check if this model is at the target grid position
               if (modelGridX === gridX && modelGridZ === gridZ) {
                 mesh = modelInfo.model.root;
+                detectedModelPath = modelInfo.path || detectedModelPath;
                 // Register it for future lookups
                 resourceModelRegistry.set(key, mesh);
                 break;
@@ -2141,6 +2738,26 @@ let pov2 = 240;
         }
         if (mesh) break;
       }
+    }
+
+    const manualResourceType = field?._manualResourceTiles?.get(key) || null;
+    const fallbackResource = window.buildingSystem?.checkTileForResources
+      ? window.buildingSystem.checkTileForResources(gridX, gridZ, true)
+      : null;
+    const isTree = detectedModelPath
+      ? detectedModelPath.includes('trees.glb')
+      : (manualResourceType ? manualResourceType.includes('tree') : fallbackResource?.type === 'wood');
+
+    depletedResourceTiles.set(key, {
+      originalGridX: gridX,
+      originalGridZ: gridZ,
+      felledTime: Date.now(),
+      isTree: !!isTree
+    });
+    resourceModelRegistry.delete(key);
+    pendingResourceTiles.delete(key);
+    if (field?._manualResourceTiles) {
+      field._manualResourceTiles.delete(key);
     }
     
     if (mesh) {
@@ -2203,23 +2820,9 @@ let pov2 = 240;
            }
       };
       
-      // Mark as depleted immediately - store original position for respawn
-      resourceModelRegistry.delete(key);
-      pendingResourceTiles.delete(key);
       if (mesh.metadata && mesh.metadata.resourceTileKey === key) {
         delete mesh.metadata.resourceTileKey;
       }
-      
-      // Check if this is a tree (for respawn logic)
-      const isTree = mesh.metadata && mesh.metadata.modelPath && mesh.metadata.modelPath.includes('trees.glb');
-      
-      // Store depletion info with original position and timestamp
-      depletedResourceTiles.set(key, {
-        originalGridX: gridX,
-        originalGridZ: gridZ,
-        felledTime: Date.now(),
-        isTree: isTree
-      });
       
       // Clean up any stray duplicates that may exist at this tile
       cleanupDuplicateResourceMeshes(gridX, gridZ, mesh);
@@ -2229,6 +2832,10 @@ let pov2 = 240;
     } else {
       // No registered mesh - still try to clean up any stray duplicates
       cleanupDuplicateResourceMeshes(gridX, gridZ);
+    }
+
+    if (field && !skipPathingRebuild) {
+      rebuildFieldResourcePathing(field);
     }
   };
   
@@ -2376,6 +2983,24 @@ let pov2 = 240;
 
   gfx.primeFieldResourcePathing = function(field = window.liveField) {
     primeFieldResourcePathing(field);
+  };
+
+  function rebuildFieldResourcePathing(field = window.liveField) {
+    if (!field) return;
+
+    if (field.blockedTiles) field.blockedTiles.clear();
+    if (field.slowTiles) field.slowTiles.clear();
+    if (field.updateBlockedTiles) {
+      field.updateBlockedTiles();
+    }
+
+    field._resourcePathingPrimed = false;
+    primeFieldResourcePathing(field);
+    reapplyTrackedManualResourcePathing(field);
+  }
+
+  gfx.rebuildFieldResourcePathing = function(field = window.liveField) {
+    rebuildFieldResourcePathing(field);
   };
 
   // NEW: Decoration pass system - places models using noise-based clustering
@@ -3378,6 +4003,7 @@ let pov2 = 240;
       BABYLON.SceneLoader.LoadAssetContainerAsync("assets/models/frog.glb", undefined, gfx.scene)
         .then(container => {
           const result = container.instantiateModelsToScene();
+          sanitizeInstantiatedSceneNodes(gfx.scene, result.rootNodes, 'cursor-frog');
           gfx.cursorFrog = result.rootNodes[0];
           gfx.cursorFrog.scaling = new BABYLON.Vector3(.2, .2, .2); // Make it visible
           gfx.cursorFrog.position.y = 1; // Float above ground
@@ -3448,8 +4074,8 @@ let pov2 = 240;
     const originalAddMesh = gfx.scene.addMesh;
     if (originalAddMesh) {
       gfx.scene.addMesh = function(mesh) {
-        const hasIsEnabledFn = mesh && (typeof mesh.isEnabled === 'function');
-        if (!mesh || !hasIsEnabledFn) {
+        const hasIsEnabledFn = !!mesh && (typeof mesh.isEnabled === 'function');
+        if (!isRenderableSceneMesh(mesh)) {
           console.error('🚨🚨🚨 BLOCKED INVALID MESH FROM BEING ADDED:', {
             name: mesh?.name,
             type: mesh?.constructor?.name,
@@ -3465,6 +4091,18 @@ let pov2 = 240;
     }
   }
 
+  if (gfx.scene && !gfx.scene._activeMeshCandidateIntercepted) {
+    const originalGetActiveMeshCandidates = gfx.scene.getActiveMeshCandidates;
+    if (originalGetActiveMeshCandidates) {
+      gfx.scene.getActiveMeshCandidates = function() {
+        validateSceneMeshesForRender(this, 'active-mesh-candidates');
+        return originalGetActiveMeshCandidates.call(this);
+      };
+      gfx.scene._activeMeshCandidateIntercepted = true;
+      console.log('✅ Scene.getActiveMeshCandidates intercepted for validation');
+    }
+  }
+
   function mainRenderLoop(){
     // Log once to confirm code is running
     if (!window._renderLoopConfirmed) {
@@ -3476,29 +4114,7 @@ let pov2 = 240;
     // Check for BOTH setEnabled AND isEnabled FUNCTION (the error is about isEnabled!)
     if (gfx.scene && gfx.scene.meshes) {
       const before = gfx.scene.meshes.length;
-      gfx.scene.meshes = gfx.scene.meshes.filter(m => {
-        if (!m) {
-          console.error(`🚨🚨🚨 REMOVING NULL/UNDEFINED MESH`);
-          return false;
-        }
-        
-        // Check for isEnabled as a FUNCTION (this is what Babylon calls internally!)
-        const hasIsEnabled = typeof m.isEnabled === 'function';
-        const hasSetEnabled = typeof m.setEnabled === 'function';
-        
-        if (!hasIsEnabled) {
-          console.error(`🚨🚨🚨 REMOVING MESH WITHOUT isEnabled FUNCTION:`, {
-            name: m.name || 'null',
-            type: m.constructor?.name || 'null',
-            hasIsEnabled,
-            hasSetEnabled: hasSetEnabled,
-            keys: Object.keys(m).slice(0, 10)
-          });
-          return false;
-        }
-        
-        return true;
-      });
+      sanitizeSceneMeshesInPlace(gfx.scene, 'frame-start');
       const after = gfx.scene.meshes.length;
       if (before !== after) {
         console.error(`🚨 Cleaned ${before - after} invalid meshes from scene`);
@@ -3609,12 +4225,13 @@ let pov2 = 240;
     const invalidMeshesBeforeRender = [];
     if (gfx.scene.meshes) {
       gfx.scene.meshes.forEach((mesh, index) => {
-        if (!mesh || typeof mesh.setEnabled !== 'function') {
+        if (!isRenderableSceneMesh(mesh)) {
           invalidMeshesBeforeRender.push({ 
             index, 
             name: mesh?.name || 'unnamed',
             type: mesh?.constructor?.name || 'unknown',
-            hasSetEnabled: typeof mesh?.setEnabled
+            hasSetEnabled: typeof mesh?.setEnabled,
+            hasIsEnabled: typeof mesh?.isEnabled
           });
         }
       });
@@ -3626,7 +4243,7 @@ let pov2 = 240;
       
       // Remove them from the scene
       const beforeCount = gfx.scene.meshes.length;
-      gfx.scene.meshes = gfx.scene.meshes.filter(m => m && typeof m.setEnabled === 'function');
+      sanitizeSceneMeshesInPlace(gfx.scene, 'pre-render');
       const afterCount = gfx.scene.meshes.length;
       console.log(`✅ Cleaned scene.meshes - removed ${beforeCount - afterCount} invalid meshes, now has ${afterCount} valid meshes`);
     }
@@ -3666,6 +4283,24 @@ let pov2 = 240;
     if (window.SHADOW_MODE !== 3 && gfx.updateThinInstances) {
       gfx.updateThinInstances();
     }
+
+    const repairedParticleEmitters = sanitizeParticleSystemEmitters(gfx.scene, 'pre-render-final');
+    const invalidShadowCasters = validateShadowRenderList(gfx.shadowGenerator, 'pre-render-final');
+
+    // LAST-CHANCE validation after per-frame LOD/instance updates.
+    const invalidMeshesRightBeforeRender = validateSceneMeshesForRender(gfx.scene, 'pre-render-final');
+    if (invalidMeshesRightBeforeRender.length > 0 || invalidShadowCasters.length > 0 || repairedParticleEmitters.length > 0) {
+      try {
+        if (gfx.scene._activeMeshes && gfx.scene._activeMeshes.reset) {
+          gfx.scene._activeMeshes.reset();
+        }
+        if (gfx.scene._activeIndices && gfx.scene._activeIndices.reset) {
+          gfx.scene._activeIndices.reset();
+        }
+      } catch (cacheResetError) {
+        // Ignore cache reset issues during emergency cleanup
+      }
+    }
     
     // SAFETY: Wrap the actual render call
     try {
@@ -3673,11 +4308,12 @@ let pov2 = 240;
     } catch (renderError) {
       console.error('CRITICAL: Scene render failed!', renderError);
       console.error('Render error stack:', renderError.stack);
+      sanitizeParticleSystemEmitters(gfx.scene, 'render-error');
       console.error('Scene has', gfx.scene.meshes.length, 'meshes');
       console.error('First 10 meshes:', gfx.scene.meshes.slice(0, 10).map(m => ({
         name: m?.name,
         type: m?.constructor?.name,
-        hasIsEnabled: 'isEnabled' in m
+        hasIsEnabled: typeof m?.isEnabled === 'function'
       })));
       
       // Emergency cleanup - try to identify and fix the problematic mesh
@@ -3690,7 +4326,7 @@ let pov2 = 240;
         gfx.scene.meshes.forEach((mesh, index) => {
           try {
             // Check if it's a valid mesh with isEnabled method
-            if (mesh && typeof mesh.setEnabled === 'function') {
+            if (isRenderableSceneMesh(mesh) && typeof mesh.setEnabled === 'function') {
               validMeshes.push(mesh);
               // Temporarily disable mesh to isolate the problem
               mesh.setEnabled(false);
@@ -3706,10 +4342,13 @@ let pov2 = 240;
         });
         
         // Remove invalid meshes from scene
-        invalidMeshes.forEach(({ mesh }) => {
+        invalidMeshes
+          .slice()
+          .sort((a, b) => b.index - a.index)
+          .forEach(({ mesh, index }) => {
           try {
-            if (mesh && gfx.scene) {
-              gfx.scene.removeMesh(mesh, true);
+            if (gfx.scene?.meshes && gfx.scene.meshes[index] === mesh) {
+              gfx.scene.meshes.splice(index, 1);
             }
           } catch (e) {
             console.warn('Error removing invalid mesh:', e);
@@ -4158,11 +4797,13 @@ let pov2 = 240;
   // We cull shadow casters beyond the frustum for performance, but the fade happens at frustum edge
   gfx.shadowLODConfig = {
     enabled: true,
+    /** Scale shadow frustum / caster cull / blob cull ~35% past old defaults (capped before billboards). */
+    reachMult: 1.35,
     // These are DEFAULT values - they get updated by updateShadowDistancesForLOD()
-    maxShadowDistance: 130, // Cull shadow casters beyond frustum edge (for perf)
-    nearShadowDistance: 50, // Close range for full quality shadows
-    farShadowDistance: 90, // Medium range shadows
-    cullingDistance: 150, // Stop shadow calculations entirely here
+    maxShadowDistance: 176, // ~130*reachMult; overwritten by updateShadowDistancesForLOD
+    nearShadowDistance: 68, // ~50*reachMult
+    farShadowDistance: 122, // ~90*reachMult
+    cullingDistance: 203, // ~150*reachMult
     updateInterval: 250 // Update shadow casters every 250ms
   };
   
@@ -4183,11 +4824,15 @@ let pov2 = 240;
     const resourceCullCap = terrainWorldDistance * 0.7; // Where billboards cull (match above)
     const resourceLodCap = resourceCullCap * 0.5; // Where billboards START (3D ends)
     
-    // Shadow frustum should be ~60% of billboard start distance
+    // Shadow frustum should be ~60% of billboard start distance (scaled by reach)
     // maxShadowDistance should be ~80% (casters extend past frustum for fade)
-    // This leaves 20% of 3D zone with no shadows as buffer before billboards
-    const shadowFrustum = resourceLodCap * 0.6; // Frustum edge where fade happens
-    const shadowCull = resourceLodCap * 0.8; // Cull casters here (past frustum, so fade works)
+    const SHADOW_LOD_REACH_MULT = gfx.shadowLODConfig.reachMult || 1.35;
+    const BILLBOARD_SHADOW_BUFFER = 0.005; // keep maxShadowDistance inside 3D zone
+    const shadowFrustum = resourceLodCap * 0.6 * SHADOW_LOD_REACH_MULT;
+    const shadowCull = Math.min(
+      resourceLodCap * 0.8 * SHADOW_LOD_REACH_MULT,
+      resourceLodCap * (1 - BILLBOARD_SHADOW_BUFFER)
+    );
     
     // Store the frustum size so configureShadowGeneratorSettings can use it
     gfx.shadowLODConfig.frustumSize = shadowFrustum;
@@ -4691,6 +5336,15 @@ let pov2 = 240;
   // Helper function to set up shadows for a mesh with LoD support
   gfx.setupMeshShadows = function(mesh, shouldCastShadows = true) {
     if (!mesh) return;
+
+    if (!isRenderableSceneMesh(mesh)) {
+      if (mesh.getChildMeshes) {
+        mesh.getChildMeshes().forEach(childMesh => {
+          gfx.setupMeshShadows(childMesh, shouldCastShadows);
+        });
+      }
+      return;
+    }
     
     // ALWAYS set receiveShadows even if generator doesn't exist yet
     // (the generator may be created later and updateAllMeshShadows will handle casters)
@@ -5272,6 +5926,7 @@ let pov2 = 240;
     resourceModelRegistry.clear();
     pendingResourceTiles.clear();
     depletedResourceTiles.clear();
+    gfx.clearAllResourceTileEffects();
     
     // console.log(`✅ Resource registries cleared - disposed ${disposedCount} resource meshes`);
   };
@@ -5973,6 +6628,9 @@ let pov2 = 240;
         felledTime: Date.now(),
         isTree: isTree
       });
+      if (window.liveField?._manualResourceTiles) {
+        window.liveField._manualResourceTiles.delete(tileKey);
+      }
       
       // Start the sink animation
       animateModelSink(mesh, delay);
@@ -5998,6 +6656,7 @@ let pov2 = 240;
     }
     
     if (removedCount > 0 || billboardsRemoved > 0) {
+      rebuildFieldResourcePathing(window.liveField);
     }
     
     return removedCount + billboardsRemoved;
@@ -6323,9 +6982,9 @@ let pov2 = 240;
       camZ = gfx.camera.position.z;
     }
     
-    // Shadow cull distance - match LOD system
-    // Use current LOD multiplier if available
-    const baseCullDist = 80;
+    // Shadow cull distance - match LOD system (80 * shadowLODConfig.reachMult baseline)
+    const reach = (gfx.shadowLODConfig && gfx.shadowLODConfig.reachMult) || 1.35;
+    const baseCullDist = 80 * reach;
     const lodMultiplier = (window.hud && window.hud.getCurrentLODMultiplier) 
       ? window.hud.getCurrentLODMultiplier() 
       : 1.0;

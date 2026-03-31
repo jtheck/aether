@@ -26,6 +26,7 @@
 // You can add custom presets with fx.addParticlePreset(name, preset)
 //
 (function(fx) {
+  const DEBUG_BUILDING_FX_LOGS = false; // set true to restore routine building/particle lifecycle logs
   
   let scene = null;
   
@@ -83,6 +84,57 @@
         { time: 1.0, color: new BABYLON.Color4(0.8, 0.8, 0.8, 0) }     // Nearly white, gone
       ],
       limitVelocityDamping: 0.7
+    },
+    burn_fire: {
+      texture: "assets/images/explosion.png",
+      emitRate: 64,
+      minSize: 0.45,
+      maxSize: 0.95,
+      minLifeTime: 0.55,
+      maxLifeTime: 1.2,
+      minEmitPower: 1.2,
+      maxEmitPower: 2.8,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_ADD,
+      direction1: new BABYLON.Vector3(-0.22, 1.4, -0.22),
+      direction2: new BABYLON.Vector3(0.22, 2.6, 0.22),
+      minEmitBox: new BABYLON.Vector3(-0.18, 0, -0.18),
+      maxEmitBox: new BABYLON.Vector3(0.18, 0.15, 0.18),
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(1, 0.95, 0.5, 0) },
+        { time: 0.12, color: new BABYLON.Color4(1, 0.9, 0.3, 0.95) },
+        { time: 0.45, color: new BABYLON.Color4(1, 0.45, 0.05, 0.9) },
+        { time: 0.82, color: new BABYLON.Color4(0.75, 0.12, 0.02, 0.55) },
+        { time: 1.0, color: new BABYLON.Color4(0.15, 0.02, 0.01, 0) }
+      ],
+      gravity: new BABYLON.Vector3(0, 0.45, 0),
+      limitVelocityDamping: 0.82
+    },
+    burn_smoke: {
+      texture: "assets/images/explosion.png",
+      emitRate: 18,
+      minSize: 0.7,
+      maxSize: 1.7,
+      minLifeTime: 1.4,
+      maxLifeTime: 2.8,
+      minEmitPower: 0.55,
+      maxEmitPower: 1.35,
+      minInitialRotation: -Math.PI,
+      maxInitialRotation: Math.PI,
+      blendMode: BABYLON.ParticleSystem.BLENDMODE_STANDARD,
+      direction1: new BABYLON.Vector3(-0.18, 1.1, -0.18),
+      direction2: new BABYLON.Vector3(0.18, 2.2, 0.18),
+      minEmitBox: new BABYLON.Vector3(-0.16, 0, -0.16),
+      maxEmitBox: new BABYLON.Vector3(0.16, 0.28, 0.16),
+      gravity: new BABYLON.Vector3(0, 0.2, 0),
+      colorGradients: [
+        { time: 0.0, color: new BABYLON.Color4(0.25, 0.23, 0.22, 0) },
+        { time: 0.15, color: new BABYLON.Color4(0.4, 0.38, 0.36, 0.55) },
+        { time: 0.6, color: new BABYLON.Color4(0.52, 0.5, 0.48, 0.35) },
+        { time: 1.0, color: new BABYLON.Color4(0.62, 0.6, 0.58, 0) }
+      ],
+      limitVelocityDamping: 0.72
     },
     torch: {
       texture: "assets/images/explosion.png",
@@ -406,17 +458,20 @@
       particleSystem.isGPU = false;
     }
     
-    // Set emitter - use point emitter for fire (more upward), hemispheric for others
-    let emitter;
+    // Configure the particle emitter type, but keep the emitter target itself as a
+    // world-space point. Babylon's render loop expects `particleSystem.emitter` to be
+    // either a mesh/node (with `isEnabled()`) or a plain vector-like point, not the
+    // emitter-type helper object returned by `createPointEmitter/createHemisphericEmitter`.
     if (config.direction1 && config.direction2) {
       // Use point emitter for fire effects (more control over direction)
-      emitter = particleSystem.createPointEmitter(config.direction1, config.direction2);
+      particleSystem.createPointEmitter(config.direction1, config.direction2);
     } else {
       // Use hemispheric emitter for other effects
-      emitter = particleSystem.createHemisphericEmitter(config.hemisphereRadius || 0.2, 0);
+      particleSystem.createHemisphericEmitter(config.hemisphereRadius || 0.2, 0);
     }
-    particleSystem.emitter = emitter;
-    particleSystem.emitter.position = position.clone();
+    particleSystem.emitter = typeof position?.clone === 'function'
+      ? position.clone()
+      : new BABYLON.Vector3(position?.x || 0, position?.y || 0, position?.z || 0);
     
     // Set emit box for directional control
     if (config.minEmitBox && config.maxEmitBox) {
@@ -629,6 +684,65 @@
       debugMeshNames(child, depth + 1);
     }
   }
+
+  function getAvailableAnchors(building) {
+    if (!building?.mesh) return [];
+    const anchors = [];
+    building.mesh.getChildMeshes().forEach(mesh => {
+      if (mesh.name.toLowerCase().includes('anchor')) {
+        anchors.push(mesh.name);
+      }
+    });
+    return anchors;
+  }
+
+  function findBestBuildingAnchor(building, preferredTypes = []) {
+    const availableAnchors = getAvailableAnchors(building);
+    for (const type of preferredTypes) {
+      const match = availableAnchors.find(name =>
+        name.toLowerCase().includes(type.toLowerCase()));
+      if (match) return match;
+    }
+    return availableAnchors[0] || null;
+  }
+
+  function ensureBuildingFireEffect(building, options = {}) {
+    if (!building?.mesh) return null;
+    const effectType = typeof options.effectType === 'string' && options.effectType ? options.effectType : 'fire';
+    const preferredAnchors = Array.isArray(options.preferredAnchors) && options.preferredAnchors.length > 0
+      ? options.preferredAnchors
+      : ['fire_anchor', 'particle_anchor', 'smoke_anchor'];
+    const effectOptions = Object.assign({}, options);
+    delete effectOptions.effectType;
+    delete effectOptions.preferredAnchors;
+    const existing = building.particleEffects?.find(effect => effect.type === effectType);
+    if (existing?.system) {
+      return existing.system;
+    }
+
+    const fireAnchor = findBestBuildingAnchor(building, preferredAnchors);
+    if (!fireAnchor) return null;
+
+    return fx.attachParticleEffect(building, effectType, fireAnchor, {
+      scale: 0.5,
+      emitRate: 30,
+      minSize: 0.5,
+      maxSize: 1.0,
+      ...effectOptions
+    });
+  }
+
+  fx.ensureBuildingSmokeEffect = function(building, options = {}) {
+    return ensureBuildingFireEffect(building, {
+      effectType: 'smoke',
+      preferredAnchors: ['smoke_anchor', 'particle_anchor', 'fire_anchor'],
+      scale: 0.8,
+      emitRate: 40,
+      minSize: 1.0,
+      maxSize: 2.0,
+      ...options
+    });
+  };
   
   // Remove particle effects from a building
   fx.removeParticleEffects = function(building, effectType = null) {
@@ -641,6 +755,9 @@
       : building.particleEffects;
     
     effectsToRemove.forEach(effect => {
+      if (effect.system) {
+        effect.system.emitter = null;
+      }
       effect.system.stop();
       effect.system.dispose();
     });
@@ -651,7 +768,9 @@
       building.particleEffects = [];
     }
     
-    console.log(`🔥 Removed ${effectType || 'all'} particle effects from ${building.name}`);
+    if (DEBUG_BUILDING_FX_LOGS) {
+      console.log(`🔥 Removed ${effectType || 'all'} particle effects from ${building.name}`);
+    }
   }
   
   fx.ensureAgoraCaptureSparkles = function(agora) {
@@ -728,6 +847,46 @@
     
     return particleSystem;
   }
+
+  fx.createTransientParticleEffect = function(effectType, position, options = {}) {
+    const effectOptions = Object.assign({}, options);
+    const durationMs = Math.max(0, Number.isFinite(effectOptions.durationMs) ? effectOptions.durationMs : 0);
+    delete effectOptions.durationMs;
+
+    const particleSystem = fx.createParticleEffect(effectType, position, effectOptions);
+    if (!particleSystem || durationMs <= 0) {
+      return particleSystem;
+    }
+
+    const preset = ParticlePresets[effectType] || {};
+    const maxLifeTime = Number.isFinite(effectOptions.maxLifeTime)
+      ? effectOptions.maxLifeTime
+      : (Number.isFinite(preset.maxLifeTime) ? preset.maxLifeTime : 1);
+    const disposeDelayMs = durationMs + Math.max(200, Math.ceil(maxLifeTime * 1000) + 120);
+
+    setTimeout(() => {
+      try {
+        particleSystem.stop?.();
+      } catch (_) {
+        // Visual-only cleanup
+      }
+    }, durationMs);
+
+    setTimeout(() => {
+      try {
+        particleSystem.emitter = null;
+        if (particleSystem._dummyEmitter?.dispose) {
+          particleSystem._dummyEmitter.dispose();
+          particleSystem._dummyEmitter = null;
+        }
+        particleSystem.dispose?.();
+      } catch (_) {
+        // Visual-only cleanup
+      }
+    }, disposeDelayMs);
+
+    return particleSystem;
+  };
   
   // Public API for creating explosions
   fx.createExplosion = function(position, scale = 1.0) {
@@ -1113,42 +1272,20 @@
     if (!building.mesh) return;
     
     // Find available anchor points first
-    const availableAnchors = [];
-    building.mesh.getChildMeshes().forEach(mesh => {
-      if (mesh.name.toLowerCase().includes('anchor')) {
-        availableAnchors.push(mesh.name);
-      }
-    });
+    const availableAnchors = getAvailableAnchors(building);
     
     // console.log(`📍 Available anchors for ${building.name}:`, availableAnchors);
     
     // Helper to find best matching anchor
-    function findBestAnchor(preferredTypes) {
-      for (const type of preferredTypes) {
-        const match = availableAnchors.find(name => 
-          name.toLowerCase().includes(type.toLowerCase()));
-        if (match) return match;
-      }
-      // Fallback to any anchor if no matches
-      return availableAnchors[0];
-    }
-    
     // Add fire effect for damaged buildings
     if (building.health < building.maxHealth * 0.5) {
-      const hasFire = building.particleEffects && 
-                     building.particleEffects.some(effect => effect.type === 'fire');
-      if (!hasFire && availableAnchors.length > 0) {
-        // Try to find best fire anchor
-        const fireAnchor = findBestAnchor(['fire_anchor', 'particle_anchor', 'smoke_anchor']);
-        if (fireAnchor) {
-          // console.log(`🔥 Using ${fireAnchor} for fire effect on ${building.name}`);
-          fx.attachParticleEffect(building, 'fire', fireAnchor, {
-            scale: 0.5,
-            emitRate: 30,
-            minSize: 0.5,
-            maxSize: 1.0
-          });
-        }
+      if (availableAnchors.length > 0) {
+        ensureBuildingFireEffect(building, {
+          scale: 0.5,
+          emitRate: 30,
+          minSize: 0.5,
+          maxSize: 1.0
+        });
       }
     }
     
@@ -1158,9 +1295,11 @@
                       building.particleEffects.some(effect => effect.type === 'smoke');
       if (!hasSmoke && availableAnchors.length > 0) {
         // Try to find best smoke anchor
-        const smokeAnchor = findBestAnchor(['smoke_anchor', 'particle_anchor', 'fire_anchor']);
+        const smokeAnchor = findBestBuildingAnchor(building, ['smoke_anchor', 'particle_anchor', 'fire_anchor']);
         if (smokeAnchor) {
-          console.log(`💨 Using ${smokeAnchor} for smoke effect on ${building.name}`);
+          if (DEBUG_BUILDING_FX_LOGS) {
+            console.log(`💨 Using ${smokeAnchor} for smoke effect on ${building.name}`);
+          }
           fx.attachParticleEffect(building, 'smoke', smokeAnchor, {
             scale: 0.8,
             emitRate: 40,
@@ -1263,12 +1402,31 @@
       if (position) {
         requestAnimationFrame(() => {
           fx.createExplosion(position, 0.8);
-          fx.createParticleEffect('smoke', position, { scale: 1.5, emitRate: 100 });
-          fx.createParticleEffect('fire', position, { scale: 1.2, emitRate: 80 });
+          if (fx.createTransientParticleEffect) {
+            fx.createTransientParticleEffect('burn_smoke', position, {
+              scale: 1.15,
+              emitRate: 24,
+              minSize: 1.0,
+              maxSize: 2.4,
+              durationMs: 1100
+            });
+            fx.createTransientParticleEffect('burn_fire', position, {
+              scale: 0.95,
+              emitRate: 44,
+              minSize: 0.65,
+              maxSize: 1.5,
+              durationMs: 700
+            });
+          } else {
+            fx.createParticleEffect('smoke', position, { scale: 1.5, emitRate: 100 });
+            fx.createParticleEffect('fire', position, { scale: 1.2, emitRate: 80 });
+          }
         });
       }
 
-      console.log(`🗑️ Building ${building.name} hidden and marked as destroyed`);
+      if (DEBUG_BUILDING_FX_LOGS) {
+        console.log(`🗑️ Building ${building.name} hidden and marked as destroyed`);
+      }
 
     } catch (error) {
       console.error('Error during building destruction:', error);
@@ -1279,5 +1437,9 @@
   fx.dispose = function() {
     document.removeEventListener('keydown', LaunchBarrel);
   };
+
+  fx.ensureBuildingFireEffect = ensureBuildingFireEffect;
+  fx.addBuildingDamageEffects = addBuildingDamageEffects;
+  fx.destroyBuilding = destroyBuilding;
   
 }(window.fx = window.fx || {}));

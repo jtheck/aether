@@ -4,6 +4,8 @@
 // Negative values sink buildings down, positive values lift them up
 // With correct triangular interpolation, this should be 0 or very small
 const BUILDING_GROUND_OFFSET = 0;
+const DEBUG_WORK_ASSIGNMENT_LOGS = false; // set true to restore verbose worker-assignment tracing
+const DEBUG_BUILDING_PLACEMENT_LOGS = false; // set true to restore placement-mode tracing
 
 // Add particle effects to buildings based on their type
 function addBuildingParticleEffects(building) {
@@ -1166,7 +1168,7 @@ function findIdleVillagersNearBuilding(building) {
   );
   
   const currentTick_search = window.currentMatch?.tick || 0;
-  const shouldLogSearch = building.workType === 'build' && !building.completionProcessed && currentTick_search % 200 === 0;
+  const shouldLogSearch = DEBUG_WORK_ASSIGNMENT_LOGS && building.workType === 'build' && !building.completionProcessed && currentTick_search % 200 === 0;
   let _skipReasons = shouldLogSearch ? { noPhysics: 0, notVillager: 0, ownerMismatch: 0, notIdle: 0, protected: 0, recentCmd: 0, tooFar: 0, assigned: 0 } : null;
   
   // Look through all game units for idle villagers and engineers
@@ -2130,7 +2132,7 @@ function updateBuildings(deltaTime) {
       if (assignedWorkerSlots < maxWorkersForThisState) {
         const idleVillagers = findIdleVillagersNearBuilding(building);
         
-        if (building.workType === 'build' && building.buildProgress < 1.0 && currentTick % 100 === 0) {
+        if (DEBUG_WORK_ASSIGNMENT_LOGS && building.workType === 'build' && building.buildProgress < 1.0 && currentTick % 100 === 0) {
           console.log(`👷 Construction ${building.type} (${building.id?.slice(-6)}): ${idleVillagers.length} idle nearby, activeAssigned=${effectiveAssignedWorkers}/${maxWorkersForThisState}, totalAssigned=${building.assignedWorkers.length}, progress=${(building.buildProgress*100).toFixed(0)}%, owner=${building.owner}`);
         }
         
@@ -2295,7 +2297,9 @@ const buildingSystem = {
     // Close the radial menu when starting placement
     if (window.hud && typeof window.hud.hideRadialMenu === 'function') {
       window.hud.hideRadialMenu();
-      console.log('🏗️ Closed radial menu when starting building placement');
+      if (DEBUG_BUILDING_PLACEMENT_LOGS) {
+        console.log('🏗️ Closed radial menu when starting building placement');
+      }
     }
     
     // CRITICAL: Dispose old preview mesh before creating new one!
@@ -2720,6 +2724,24 @@ const buildingSystem = {
     hash = hash ^ (hash >>> 16);
     return Math.abs(hash >>> 0) / 4294967296; // 0-1
   },
+
+  getManualResourceInfo: function(gridX, gridZ) {
+    const manualType = window.liveField?._manualResourceTiles?.get(`${gridX},${gridZ}`);
+    if (!manualType) return null;
+
+    switch (manualType) {
+      case 'trees':
+        return { type: 'wood', amount: 7, remaining: 28, gridX, gridZ };
+      case 'rocks_plain':
+        return { type: 'stone', amount: 4, remaining: 56, gridX, gridZ };
+      case 'rocks_moss':
+        return { type: 'stone', amount: 5, remaining: 70, gridX, gridZ };
+      case 'rocks_snow':
+        return { type: 'stone', amount: 6, remaining: 84, gridX, gridZ };
+      default:
+        return null;
+    }
+  },
   
   // Check if a tile contains resources (trees or rocks)
   // MUST match the exact logic in gfx.js placeDecorationsOnChunk()
@@ -2763,6 +2785,11 @@ const buildingSystem = {
       if (window.isResourceTileDepleted && window.isResourceTileDepleted(gridX, gridZ)) {
         return null; // Don't detect depleted resources (for existing camps)
       }
+    }
+
+    const manualResource = this.getManualResourceInfo(gridX, gridZ);
+    if (manualResource) {
+      return this._applyRemainingOverride(manualResource, ignoreDepletion);
     }
     
     // CHECK 1: Rocks on dirt tiles (terrainType === 2) with ~3% chance
@@ -2924,7 +2951,9 @@ const buildingSystem = {
             const rotationIndex = rotHash % 8;
             const rotation = rotationIndex * Math.PI / 4;
             
-            console.log(`👻 Preview (mouse): pos=(${gx},${gz}), idx=${rotationIndex}, rotation=${(rotation*180/Math.PI).toFixed(0)}°`);
+            if (DEBUG_BUILDING_PLACEMENT_LOGS) {
+              console.log(`👻 Preview (mouse): pos=(${gx},${gz}), idx=${rotationIndex}, rotation=${(rotation*180/Math.PI).toFixed(0)}°`);
+            }
             
             // CRITICAL: Clear rotationQuaternion so rotation.y works
             this.previewMesh.rotationQuaternion = null;
@@ -2951,7 +2980,9 @@ const buildingSystem = {
       // Ignore clicks within 100ms of activating placement mode (prevents button click from placing)
       const timeSinceActivation = Date.now() - (this.placementModeActivatedAt || 0);
       if (timeSinceActivation < 100) {
-        console.log('🏗️ Ignoring click - too soon after activating placement mode');
+        if (DEBUG_BUILDING_PLACEMENT_LOGS) {
+          console.log('🏗️ Ignoring click - too soon after activating placement mode');
+        }
         return;
       }
       
@@ -2982,10 +3013,14 @@ const buildingSystem = {
           
           // Exit placement mode UNLESS shift is held (for rapid building)
           if (placed && !e.shiftKey) {
-            console.log('🏗️ Building placed, exiting placement mode (hold Shift for continuous placement)');
+            if (DEBUG_BUILDING_PLACEMENT_LOGS) {
+              console.log('🏗️ Building placed, exiting placement mode (hold Shift for continuous placement)');
+            }
             this.cancelPlacement();
           } else if (placed && e.shiftKey) {
-            console.log('🏗️ Building placed, staying in placement mode (Shift held)');
+            if (DEBUG_BUILDING_PLACEMENT_LOGS) {
+              console.log('🏗️ Building placed, staying in placement mode (Shift held)');
+            }
             // Recreate preview for next placement
             if (this.previewMesh) {
               this.previewMesh.dispose();

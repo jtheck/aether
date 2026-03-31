@@ -70,6 +70,436 @@ function getStablePathQuery(start, end, tileSize) {
     };
 }
 
+function getCurrentMatchTick() {
+    return window.currentMatch?.tick || 0;
+}
+
+function msToTicks(ms, fallbackTicks = 0) {
+    if (!Number.isFinite(ms)) return fallbackTicks;
+    return Math.max(1, Math.floor(ms / 50));
+}
+
+function getAbilityDurationTicks(params = {}, spec = {}) {
+    if (Number.isFinite(params.durationTicks)) return Math.max(1, params.durationTicks);
+    if (Number.isFinite(params.duration)) return msToTicks(params.duration);
+    if (Number.isFinite(spec.durationTicks)) return Math.max(1, spec.durationTicks);
+    if (Number.isFinite(spec.duration)) return msToTicks(spec.duration);
+    return 0;
+}
+
+function getAbilityPointTarget(params = {}, fallback = null) {
+    const source = params.targetPoint || params.point || fallback;
+    if (!source) return null;
+    const x = source.x !== undefined ? source.x : source._x;
+    const z = source.z !== undefined ? source.z : source._z;
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+    return { x, z };
+}
+
+function getUnitWorldPoint(unit) {
+    const loc = unit?.pb?.state?.loc || unit?.position || { x: 0, z: 0 };
+    return {
+        x: Number.isFinite(loc.x) ? loc.x : 0,
+        z: Number.isFinite(loc.z) ? loc.z : 0
+    };
+}
+
+function createWorldVector(point, y = 0) {
+    return new BABYLON.Vector3(point?.x || 0, y, point?.z || 0);
+}
+
+function isUnitAlive(unit) {
+    if (!unit || unit.dead || unit._disposed) return false;
+    const health = Number.isFinite(unit.currentHealth) ? unit.currentHealth : unit.health;
+    return !Number.isFinite(health) || health > 0;
+}
+
+function getDeterministicUnitsSnapshot() {
+    const units = (window.gameUnits || []).slice();
+    units.sort((a, b) => window.deterministicStringCompare
+        ? window.deterministicStringCompare(a?.id || '', b?.id || '')
+        : String(a?.id || '').localeCompare(String(b?.id || '')));
+    return units;
+}
+
+function getDeterministicBuildingsSnapshot() {
+    const buildings = (window.gameBuildings || []).slice();
+    buildings.sort((a, b) => window.deterministicStringCompare
+        ? window.deterministicStringCompare(a?.id || '', b?.id || '')
+        : String(a?.id || '').localeCompare(String(b?.id || '')));
+    return buildings;
+}
+
+function isHostileToUnit(sourceUnit, otherUnit) {
+    if (!sourceUnit || !otherUnit) return false;
+    if (window.currentMatch?.areOwnersHostile) {
+        return window.currentMatch.areOwnersHostile(otherUnit.owner, sourceUnit.owner);
+    }
+    return otherUnit.owner !== sourceUnit.owner;
+}
+
+function isHostileToBuilding(sourceUnit, building) {
+    if (!sourceUnit || !building) return false;
+    if (window.currentMatch?.areOwnersHostile) {
+        return window.currentMatch.areOwnersHostile(building.owner, sourceUnit.owner);
+    }
+    return !!building.owner && building.owner !== sourceUnit.owner;
+}
+
+function getUnitsInRadius(centerPoint, radius, predicate = () => true) {
+    const radiusSq = radius * radius;
+    return getDeterministicUnitsSnapshot().filter(unit => {
+        if (!isUnitAlive(unit)) return false;
+        if (!unit?.pb?.state?.loc) return false;
+        if (!predicate(unit)) return false;
+        return getStableDistanceSq(centerPoint, unit.pb.state.loc) <= radiusSq;
+    });
+}
+
+function getHostileBuildingsInRadius(sourceUnit, centerPoint, radius) {
+    const radiusSq = radius * radius;
+    return getDeterministicBuildingsSnapshot().filter(building => {
+        if (!building || building.isDestroyed || building.type === 'agora') return false;
+        const health = Number.isFinite(building.health) ? building.health : building.currentHealth;
+        if (Number.isFinite(health) && health <= 0) return false;
+        if (!building.position) return false;
+        if (!isHostileToBuilding(sourceUnit, building)) return false;
+        return getStableDistanceSq(centerPoint, building.position) <= radiusSq;
+    });
+}
+
+function ensureUnitAbilityStatState(unit) {
+    if (!unit) return { bases: {}, modifiers: {} };
+    if (!unit._abilityStatState) {
+        unit._abilityStatState = {
+            bases: {},
+            modifiers: {}
+        };
+    }
+    return unit._abilityStatState;
+}
+
+function getUnitBaseStat(unit, stat) {
+    const state = ensureUnitAbilityStatState(unit);
+    if (!Number.isFinite(state.bases[stat])) {
+        const unitDef = window.UnitTypes?.[unit?.type] || {};
+        const currentValue = unit?.[stat];
+        const fallbackValue = unitDef?.[stat];
+        state.bases[stat] = Number.isFinite(currentValue)
+            ? currentValue
+            : (Number.isFinite(fallbackValue) ? fallbackValue : 0);
+    }
+    return state.bases[stat];
+}
+
+function recomputeUnitStat(unit, stat) {
+    if (!unit) return;
+    const state = ensureUnitAbilityStatState(unit);
+    const baseValue = getUnitBaseStat(unit, stat);
+    const modifiers = Object.values(state.modifiers[stat] || {});
+    let multiplier = 1;
+    let additive = 0;
+    modifiers.forEach(modifier => {
+        if (Number.isFinite(modifier?.multiplier)) multiplier *= modifier.multiplier;
+        if (Number.isFinite(modifier?.additive)) additive += modifier.additive;
+    });
+    unit[stat] = Math.round((baseValue * multiplier + additive) * 1000) / 1000;
+}
+
+function setUnitStatModifier(unit, stat, sourceKey, modifier = {}) {
+    if (!unit || !stat || !sourceKey) return;
+    const state = ensureUnitAbilityStatState(unit);
+    if (!state.modifiers[stat]) {
+        state.modifiers[stat] = {};
+    }
+    state.modifiers[stat][sourceKey] = {
+        multiplier: Number.isFinite(modifier.multiplier) ? modifier.multiplier : 1,
+        additive: Number.isFinite(modifier.additive) ? modifier.additive : 0
+    };
+    recomputeUnitStat(unit, stat);
+}
+
+function clearUnitStatModifier(unit, stat, sourceKey) {
+    const state = unit?._abilityStatState;
+    if (!state?.modifiers?.[stat]?.[sourceKey]) return;
+    delete state.modifiers[stat][sourceKey];
+    recomputeUnitStat(unit, stat);
+}
+
+function getUnitCommandAbilitySpecs(unit) {
+    if (!unit || !window.UnitAbilityRegistry?.listSpecs) return [];
+    const unitDef = window.UnitTypes?.[unit.type] || {};
+    const configuredIds = Array.isArray(unitDef.commandAbilities) ? unitDef.commandAbilities : [];
+    const configuredSet = new Set(configuredIds);
+    return window.UnitAbilityRegistry
+        .listSpecs()
+        .filter(spec => {
+            if (!spec?.commandable) return false;
+            if (configuredSet.has(spec.id)) return true;
+            return Array.isArray(spec.allowedUnitTypes) && spec.allowedUnitTypes.includes(unit.type);
+        })
+        .sort((a, b) => {
+            const aOrder = Number.isFinite(a?.order) ? a.order : 999;
+            const bOrder = Number.isFinite(b?.order) ? b.order : 999;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+            return window.deterministicStringCompare
+                ? window.deterministicStringCompare(a?.id || '', b?.id || '')
+                : String(a?.id || '').localeCompare(String(b?.id || ''));
+        });
+}
+
+function getPrimaryUnitCommandAbility(unit) {
+    const unitDef = window.UnitTypes?.[unit?.type] || {};
+    const preferredId = unitDef.primaryAbilityId || null;
+    const specs = getUnitCommandAbilitySpecs(unit);
+    if (preferredId) {
+        const preferred = specs.find(spec => spec.id === preferredId);
+        if (preferred) return preferred;
+    }
+    return specs.find(spec => spec.primary !== false) || specs[0] || null;
+}
+
+function canUnitUseAbility(unit, abilityId) {
+    return getUnitCommandAbilitySpecs(unit).some(spec => spec.id === abilityId);
+}
+
+function buildAbilityParamsForUnit(unit, abilityId, worldPos) {
+    const spec = window.UnitAbilityRegistry?.getSpec?.(abilityId);
+    if (!spec) return null;
+    const defaultParams = { ...(spec.defaultParams || {}) };
+    if (typeof spec.buildParams === 'function') {
+        const builtParams = spec.buildParams(unit, worldPos);
+        if (builtParams === null) return null;
+        return {
+            ...defaultParams,
+            ...(builtParams || {})
+        };
+    }
+    const params = defaultParams;
+    if (spec.targetType === 'point') {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        params.targetPoint = targetPoint;
+    }
+    return params;
+}
+
+function hashStringDeterministically(value = '') {
+    return String(value).split('').reduce((acc, char) => ((acc * 31) + char.charCodeAt(0)) >>> 0, 0);
+}
+
+function hashTileWithSeed(gridX, gridZ, seed = 0) {
+    let hash = (seed + gridX * 374761393 + gridZ * 668265263) >>> 0;
+    hash = (hash ^ (hash >>> 13)) >>> 0;
+    hash = (hash * 1274126177) >>> 0;
+    hash = (hash ^ (hash >>> 16)) >>> 0;
+    return hash / 4294967296;
+}
+
+function getStableAbilityCenterPoint(point) {
+    const normalized = getAbilityPointTarget({ targetPoint: point });
+    if (!normalized) return null;
+    return {
+        x: Math.round(normalized.x * 1000) / 1000,
+        z: Math.round(normalized.z * 1000) / 1000
+    };
+}
+
+function getTileCenterWorld(gridX, gridZ, tileSize = window.TILE_SIZE || 4) {
+    return {
+        x: (gridX + 0.5) * tileSize,
+        z: (gridZ + 0.5) * tileSize
+    };
+}
+
+function getWoodResourceTilesInRadius(centerPoint, radius) {
+    const field = window.liveField;
+    const tileSize = window.TILE_SIZE || 4;
+    if (!field || !window.buildingSystem?.checkTileForResources) return [];
+
+    const radiusSq = radius * radius;
+    const minGridX = Math.max(0, Math.floor((centerPoint.x - radius) / tileSize) - 1);
+    const maxGridX = Math.min(field.width - 1, Math.ceil((centerPoint.x + radius) / tileSize) + 1);
+    const minGridZ = Math.max(0, Math.floor((centerPoint.z - radius) / tileSize) - 1);
+    const maxGridZ = Math.min(field.height - 1, Math.ceil((centerPoint.z + radius) / tileSize) + 1);
+    const results = [];
+
+    for (let gridX = minGridX; gridX <= maxGridX; gridX++) {
+        for (let gridZ = minGridZ; gridZ <= maxGridZ; gridZ++) {
+            const resourceInfo = window.buildingSystem.checkTileForResources(gridX, gridZ, false);
+            if (!resourceInfo || resourceInfo.type !== 'wood') continue;
+
+            const tileCenter = getTileCenterWorld(gridX, gridZ, tileSize);
+            const distanceSq = getStableDistanceSq(tileCenter, centerPoint, 1000);
+            if (distanceSq > radiusSq) continue;
+
+            results.push({
+                ...resourceInfo,
+                gridX,
+                gridZ,
+                worldX: tileCenter.x,
+                worldZ: tileCenter.z,
+                distanceSq
+            });
+        }
+    }
+
+    results.sort((a, b) => {
+        if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+        return a.gridZ - b.gridZ;
+    });
+    return results;
+}
+
+function getSporeGrowthSeedTiles(sourceUnit, centerPoint, params = {}) {
+    const field = window.liveField;
+    const tileSize = window.TILE_SIZE || 4;
+    if (!field) return [];
+
+    const outerRadius = params.outerRadius || tileSize * 3.5;
+    const ringMinRadius = Number.isFinite(params.seedRingMinRadius)
+        ? params.seedRingMinRadius
+        : Math.max(tileSize, outerRadius * 0.65);
+    const ringMaxRadius = Number.isFinite(params.seedRingMaxRadius)
+        ? params.seedRingMaxRadius
+        : (outerRadius + tileSize * 0.35);
+    const maxSeedCount = Math.max(1, Number.isFinite(params.maxSeedCount)
+        ? params.maxSeedCount
+        : Math.round((outerRadius / tileSize) * 4));
+    const seedChance = Number.isFinite(params.seedChance) ? params.seedChance : 0.38;
+    const ringMinSq = ringMinRadius * ringMinRadius;
+    const ringMaxSq = ringMaxRadius * ringMaxRadius;
+    const baseSeed = (
+        hashStringDeterministically(sourceUnit?.id || sourceUnit?.type || 'spore') +
+        Math.round(centerPoint.x * 10) * 31 +
+        Math.round(centerPoint.z * 10) * 17 +
+        getCurrentMatchTick() * 13
+    ) >>> 0;
+
+    const minGridX = Math.max(0, Math.floor((centerPoint.x - ringMaxRadius) / tileSize) - 1);
+    const maxGridX = Math.min(field.width - 1, Math.ceil((centerPoint.x + ringMaxRadius) / tileSize) + 1);
+    const minGridZ = Math.max(0, Math.floor((centerPoint.z - ringMaxRadius) / tileSize) - 1);
+    const maxGridZ = Math.min(field.height - 1, Math.ceil((centerPoint.z + ringMaxRadius) / tileSize) + 1);
+    const candidates = [];
+
+    for (let gridX = minGridX; gridX <= maxGridX; gridX++) {
+        for (let gridZ = minGridZ; gridZ <= maxGridZ; gridZ++) {
+            const tileCenter = getTileCenterWorld(gridX, gridZ, tileSize);
+            const distanceSq = getStableDistanceSq(tileCenter, centerPoint, 1000);
+            if (distanceSq < ringMinSq || distanceSq > ringMaxSq) continue;
+            if (!window.canGrowTreeAt?.(gridX, gridZ)) continue;
+
+            const seedRoll = hashTileWithSeed(gridX, gridZ, baseSeed);
+            const ringOffset = Math.abs(Math.sqrt(distanceSq) - outerRadius);
+            candidates.push({
+                gridX,
+                gridZ,
+                tileCenter,
+                seedRoll,
+                ringOffset
+            });
+        }
+    }
+
+    candidates.sort((a, b) => {
+        if (a.seedRoll !== b.seedRoll) return a.seedRoll - b.seedRoll;
+        if (a.ringOffset !== b.ringOffset) return a.ringOffset - b.ringOffset;
+        if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+        return a.gridZ - b.gridZ;
+    });
+
+    const selected = candidates.filter(candidate => candidate.seedRoll <= seedChance).slice(0, maxSeedCount);
+    if (selected.length > 0) {
+        return selected;
+    }
+    return candidates.slice(0, Math.min(3, maxSeedCount));
+}
+
+function executeSporeBloomEffect(sourceUnit, centerPoint, params = {}) {
+    const stableCenter = getStableAbilityCenterPoint(centerPoint || getUnitWorldPoint(sourceUnit));
+    if (!stableCenter) return { destroyedTrees: 0, growthSeeds: 0, creditedWood: 0 };
+
+    const tileSize = window.TILE_SIZE || 4;
+    const match = window.currentMatch;
+    const outerRadius = params.outerRadius || tileSize * 3.5;
+    const innerRadius = Number.isFinite(params.innerRadius) ? params.innerRadius : outerRadius * 0.5;
+    const growthDelayTicks = Math.max(1, Number.isFinite(params.growthDelayTicks) ? params.growthDelayTicks : 90);
+    const growthDurationMs = Math.max(1000, Number.isFinite(params.growthDurationMs) ? params.growthDurationMs : 7000);
+    const treeRemaining = Number.isFinite(params.treeRemaining) ? params.treeRemaining : 28;
+    const innerWoodAmount = Number.isFinite(params.innerWoodAmount) ? params.innerWoodAmount : 7;
+    const innerRadiusSq = innerRadius * innerRadius;
+    const destroyedTreeTiles = getWoodResourceTilesInRadius(stableCenter, outerRadius);
+
+    let creditedWood = 0;
+    destroyedTreeTiles.forEach(tree => {
+        const key = `${tree.gridX},${tree.gridZ}`;
+        if (tree.distanceSq <= innerRadiusSq) {
+            creditedWood += innerWoodAmount;
+        }
+        if (match?.resourceRemaining) {
+            match.resourceRemaining.set(key, 0);
+        }
+        if (match?._scheduledDepletions) {
+            match._scheduledDepletions.delete(key);
+        }
+        window.removeResourceModel?.(tree.gridX, tree.gridZ, { skipPathingRebuild: true });
+    });
+
+    if (destroyedTreeTiles.length > 0 && window.gfx?.rebuildFieldResourcePathing) {
+        window.gfx.rebuildFieldResourcePathing(window.liveField);
+    }
+
+    if (creditedWood > 0) {
+        if (match?.queueResourceCredit) {
+            match.queueResourceCredit(sourceUnit?.owner, 'wood', creditedWood, getCurrentMatchTick());
+        } else {
+            const ownerPlayer = window.findPlayerByUnitOwner?.(sourceUnit?.owner);
+            ownerPlayer?.addResource?.('wood', creditedWood);
+        }
+    }
+
+    const growthSeeds = getSporeGrowthSeedTiles(sourceUnit, stableCenter, {
+        ...params,
+        outerRadius
+    });
+
+    growthSeeds.forEach((seed, index) => {
+        const growAtTick = getCurrentMatchTick() + growthDelayTicks + (index % 3) * 4;
+        window.gfx?.setResourceTileEffect?.(seed.gridX, seed.gridZ, 'growth_preview', 'mushroom_ring', {
+            yOffset: 0.03,
+            scale: 1.0
+        });
+        if (match?.queueResourceGrowth) {
+            match.queueResourceGrowth({
+                gridX: seed.gridX,
+                gridZ: seed.gridZ,
+                resourceType: 'trees',
+                growAtTick,
+                remaining: treeRemaining,
+                growthInitialScale: 0.12,
+                growthDurationMs
+            });
+        } else {
+            window.gfx?.clearResourceTileEffect?.(seed.gridX, seed.gridZ, 'growth_preview');
+            window.growTreeAt?.(seed.gridX, seed.gridZ, {
+                remaining: treeRemaining,
+                growthAnimation: {
+                    initialScale: 0.12,
+                    durationMs: growthDurationMs
+                }
+            });
+        }
+    });
+
+    return {
+        destroyedTrees: destroyedTreeTiles.length,
+        growthSeeds: growthSeeds.length,
+        creditedWood
+    };
+}
+
+window.executeSporeBloomEffect = executeSporeBloomEffect;
+
 class Behavior {
     constructor(unit, params = {}) {
         this.unit = unit;
@@ -1093,16 +1523,7 @@ class GatherWorkBehavior extends WorkBehavior {
         const arrivalRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.2) * 1000) / 1000;
 
         if (isInSameTile(currentPos, idleTarget, TILE_SIZE) || getStableDistanceSq(currentPos, idleTarget) <= arrivalRadiusSq) {
-            if (this.unit.pb.imp) {
-                this.unit.pb.imp.x = 0;
-                this.unit.pb.imp.z = 0;
-            }
-            if (this.unit.pb.state.vel) {
-                this.unit.pb.state.vel.x = 0;
-                this.unit.pb.state.vel.z = 0;
-            }
-            this.unit.pb.state.loc.x = idleTarget.x;
-            this.unit.pb.state.loc.z = idleTarget.z;
+            this.holdDeterministicPosition(idleTarget);
             return;
         }
 
@@ -1115,6 +1536,35 @@ class GatherWorkBehavior extends WorkBehavior {
             z: distance > 0.001 ? Math.round((dz / distance) * 10000) / 10000 : 0
         };
         this.applyMovementWithRotation(direction, this.params.workSpeed * 0.6);
+    }
+
+    holdDeterministicPosition(targetPoint) {
+        const unitLoc = this.unit?.pb?.state?.loc;
+        if (!unitLoc || !targetPoint) return;
+
+        const snapX = Math.round(targetPoint.x * 1000) / 1000;
+        const snapZ = Math.round(targetPoint.z * 1000) / 1000;
+
+        if (this.unit.pb.imp) {
+            this.unit.pb.imp.x = 0;
+            this.unit.pb.imp.z = 0;
+        }
+        if (this.unit.pb.state.vel) {
+            this.unit.pb.state.vel.x = 0;
+            this.unit.pb.state.vel.z = 0;
+        }
+
+        unitLoc.x = snapX;
+        unitLoc.z = snapZ;
+
+        if (this.unit.position) {
+            this.unit.position.x = snapX;
+            this.unit.position.z = snapZ;
+        }
+        if (this.unit.visualPosition) {
+            this.unit.visualPosition.x = snapX;
+            this.unit.visualPosition.z = snapZ;
+        }
     }
     
     seekResources(currentTime) {
@@ -1175,6 +1625,7 @@ class GatherWorkBehavior extends WorkBehavior {
             const arrivalThresholdSq = Math.round(((TILE_SIZE * 0.6) * (TILE_SIZE * 0.6)) * 1000) / 1000;
             
             if (isInSameTile(this.unit.pb.state.loc, adjustedResourceTarget, TILE_SIZE) || distanceSq <= arrivalThresholdSq) {
+                this.holdDeterministicPosition(adjustedResourceTarget);
                 this.gatherState = 'gathering';
                 const currentTick = window.currentMatch?.tick || 0;
                 // CRITICAL: Use tick-based timing for deterministic gathering
@@ -1226,6 +1677,7 @@ class GatherWorkBehavior extends WorkBehavior {
         const gatherArrivalRadiusSq = Math.round((TILE_SIZE * TILE_SIZE * 0.25) * 1000) / 1000;
         
         if (isInSameTile(this.unit.pb.state.loc, adjustedGatherTarget, TILE_SIZE) || distanceSq <= gatherArrivalRadiusSq) {
+            this.holdDeterministicPosition(adjustedGatherTarget);
             // We're at the resource, gathering in place
             // CRITICAL: Use tick-based timing for deterministic gathering completion
             // Convert gatherDuration from ms to ticks (20 ticks per second at 20Hz)
@@ -1347,6 +1799,7 @@ class GatherWorkBehavior extends WorkBehavior {
             }
         } else {
             // We're at camp - wait briefly then seek more resources
+            this.holdDeterministicPosition(adjustedCampPosition);
             // CRITICAL: Use tick-based timing for deterministic drop-off
             // Convert returnDuration from ms to ticks (20 ticks per second at 20Hz)
             const tickRate = 20; // Match net.TICK_RATE
@@ -2227,7 +2680,7 @@ class AttackBuildingBehavior extends Behavior {
         const TILE_SIZE = window.TILE_SIZE || 4;
         super(unit, {
             attackRange: 2.0 * TILE_SIZE, // Attack within 2 tiles
-            attackDamage: 5, // Damage per attack
+            attackDamage: unit.attackDamage || 5, // Damage per attack
             attackCooldown: 2000, // 2 seconds between attacks
             ...params
         });
@@ -2373,8 +2826,8 @@ class AttackUnitBehavior extends Behavior {
         const TILE_SIZE = window.TILE_SIZE || 4;
         const unitDef = window.UnitTypes?.[unit.type] || {};
         super(unit, {
-            attackRange: (unitDef.attackRange || 2.5) * TILE_SIZE,
-            attackDamage: unitDef.attackDamage || 5,
+            attackRange: (unit.attackRange || unitDef.attackRange || 2.5) * TILE_SIZE,
+            attackDamage: unit.attackDamage || unitDef.attackDamage || 5,
             attackCooldown: unitDef.attackCooldown || 1500,
             attackType: unitDef.attackType || 'melee',
             ...params
@@ -3255,21 +3708,16 @@ class UnitBehaviorManager {
     
     // Set a unit's active behavior
     setBehavior(unit, behaviorType, params = {}) {
-        // Handle special-ability cooldowns (tick-based)
-        const currentTick = window.currentMatch?.tick || 0;
+        // Handle registry-driven abilities as modifiers/effects.
+        const currentTick = getCurrentMatchTick();
         unit._abilityCooldowns = unit._abilityCooldowns || {};
-        
-        // Special abilities are modifiers - they don't replace existing behaviors
-        const specialAbilities = ['brigand_sprint', 'monk_stealth', 'monk_kick', 'wizard_cast', 'engineer_productivity_boost'];
-        const isSpecialAbility = specialAbilities.includes(behaviorType);
-        
-        if (isSpecialAbility) {
+        const abilitySpec = window.UnitAbilityRegistry?.getSpec?.(behaviorType);
+
+        if (abilitySpec) {
             const nextReadyTick = unit._abilityCooldowns[behaviorType] || 0;
             if (currentTick < nextReadyTick) {
-                // On cooldown, ignore
                 return;
             }
-            // For special abilities, add them as modifiers instead of replacing behavior
             this.addSpecialAbilityModifier(unit, behaviorType, params);
             return;
         }
@@ -3333,8 +3781,8 @@ class UnitBehaviorManager {
                 }
                 break;
             case 'attack_unit':
-                if (params.target) {
-                    behavior = new AttackUnitBehavior(unit, params.target, params);
+                if (params.target || params.targetUnit) {
+                    behavior = new AttackUnitBehavior(unit, params.target || params.targetUnit, params);
                 }
                 break;
             case 'engineer_work':
@@ -3556,7 +4004,10 @@ class UnitBehaviorManager {
             
             // Step special ability modifiers
             if (unit._specialModifiers) {
-                Object.keys(unit._specialModifiers).forEach(modifierType => {
+                const modifierTypes = Object.keys(unit._specialModifiers).sort((a, b) => window.deterministicStringCompare
+                    ? window.deterministicStringCompare(a, b)
+                    : a.localeCompare(b));
+                modifierTypes.forEach(modifierType => {
                     const modifier = unit._specialModifiers[modifierType];
                     if (modifier && modifier.step()) {
                         // Modifier completed, remove it
@@ -3586,108 +4037,380 @@ class UnitBehaviorManager {
     
     // Add a special ability as a modifier (doesn't replace existing behavior)
     addSpecialAbilityModifier(unit, abilityType, params = {}) {
-        // Store the modifier on the unit
         unit._specialModifiers = unit._specialModifiers || {};
-        
-        // Create the modifier behavior
-        let modifier;
-        switch (abilityType) {
-            case 'brigand_sprint':
-                modifier = new BrigandSprintBehavior(unit, params);
-                break;
-            case 'monk_stealth':
-                modifier = new MonkStealthBehavior(unit, params);
-                break;
-            case 'monk_kick':
-                modifier = new MonkKickBehavior(unit, params);
-                break;
-            case 'wizard_cast':
-                modifier = new WizardCastBehavior(unit, params);
-                break;
-            case 'engineer_productivity_boost':
-                modifier = new EngineerProductivityBoostBehavior(unit, params);
-                break;
+        const abilitySpec = window.UnitAbilityRegistry?.getSpec?.(abilityType);
+        if (!abilitySpec || typeof abilitySpec.createRuntime !== 'function') {
+            return;
         }
-        
+
+        const previousModifier = unit._specialModifiers[abilityType];
+        if (previousModifier?.onReassignment) {
+            previousModifier.onReassignment();
+        }
+
+        const modifier = abilitySpec.createRuntime(unit, params, abilitySpec);
         if (modifier) {
             unit._specialModifiers[abilityType] = modifier;
-            // Set cooldown (tick-based)
-            const currentTick = window.currentMatch?.tick || 0;
-            const abilityCooldownTicks = {
-                'wizard_cast': 60,      // 3000ms / 50ms = 60 ticks
-                'monk_stealth': 160,    // 8000ms / 50ms = 160 ticks
-                'monk_kick': 40,        // 2000ms / 50ms = 40 ticks (kick as often as possible)
-                'brigand_sprint': 120,  // 6000ms / 50ms = 120 ticks
-                'engineer_productivity_boost': 100  // 5000ms / 50ms = 100 ticks
-            };
-            unit._abilityCooldowns[abilityType] = currentTick + abilityCooldownTicks[abilityType];
+            const currentTick = getCurrentMatchTick();
+            const cooldownTicks = Number.isFinite(abilitySpec.cooldownTicks) ? abilitySpec.cooldownTicks : 0;
+            unit._abilityCooldowns[abilityType] = currentTick + cooldownTicks;
         }
     }
     
 }
 
-// Minimal special behaviors
-class BrigandSprintBehavior {
-    constructor(unit, params = {}) {
-        this.unit = unit;
-        this.params = params;
-        // DETERMINISTIC: Use tick-based timing
-        const currentTick = window.currentMatch?.tick || 0;
-        this.startTick = currentTick;
-        this.durationTicks = (params.duration || 6000) / 50; // Convert ms to ticks
-        this.mult = params.speedMultiplier || 2.0;
-        // Store and use a consistent base speed so repeated sprints don't drift
-        if (typeof unit._baseSpeed === 'undefined') {
-            unit._baseSpeed = unit.speed || 4;
-        }
-        this.baseSpeed = unit._baseSpeed;
-        unit.speed = this.baseSpeed * this.mult;
-    }
-    
-    step() {
-        // Just check if sprint duration is over - let normal movement behaviors handle movement
-        const currentTick = window.currentMatch?.tick || 0;
-        if ((currentTick - this.startTick) > this.durationTicks) {
-            this.unit.speed = this.baseSpeed;
-            return true;
-        }
-        return false;
-    }
-    
-    onReassignment() {
-        // Ensure speed is restored if this behavior is interrupted/replaced
-        this.unit.speed = this.baseSpeed;
+// Ability effect families
+function holdUnitPosition(unit) {
+    const loc = unit?.pb?.state?.loc;
+    const manager = window.behaviorManager || behaviorManager;
+    if (!loc || !manager) return;
+    manager.setBehavior(unit, 'linger', {
+        center: { x: loc.x, z: loc.z },
+        radius: 0.01,
+        wanderDistance: 0.01,
+        wanderInterval: 999999,
+        startImmediately: false
+    });
+    if (unit.pb?.state?.vel) {
+        unit.pb.state.vel.x = 0;
+        unit.pb.state.vel.z = 0;
     }
 }
 
-class MonkStealthBehavior {
-    constructor(unit, params = {}) {
-        this.unit = unit;
-        this.params = params;
-        // DETERMINISTIC: Use tick-based timing
-        const currentTick = window.currentMatch?.tick || 0;
-        this.startTick = currentTick;
-        this.durationTicks = (params.duration || 4000) / 50; // Convert ms to ticks
-        // Apply stealth flag and simple visual hint if available
-        unit.isStealthed = true;
-        if (unit.mesh) {
-            unit._origAlpha = unit.mesh.visibility !== undefined ? unit.mesh.visibility : 1;
-            unit.mesh.visibility = 0.4;
-        }
+function applyDirectDamage(unit, damage, attackerOwner) {
+    if (!unit || !Number.isFinite(damage) || damage <= 0) return;
+    const current = Number.isFinite(unit.currentHealth) ? unit.currentHealth : unit.health;
+    if (!Number.isFinite(current)) return;
+    const next = Math.max(0, current - damage);
+    if (typeof unit.health === 'number') unit.health = next;
+    if (typeof unit.currentHealth === 'number') unit.currentHealth = next;
+    if (window.UnitSpeech?.showDamage) {
+        window.UnitSpeech.showDamage(unit, damage);
     }
-    step() {
-        const currentTick = window.currentMatch?.tick || 0;
-        if ((currentTick - this.startTick) > this.durationTicks) {
-            this.unit.isStealthed = false;
-            if (this.unit.mesh && this.unit._origAlpha !== undefined) {
-                this.unit.mesh.visibility = this.unit._origAlpha;
+    if (next <= 0 && typeof window.onUnitDeath === 'function') {
+        window.onUnitDeath(unit, attackerOwner);
+    }
+}
+
+function applyUnitHealing(unit, amount) {
+    if (!isUnitAlive(unit) || !Number.isFinite(amount) || amount <= 0) return 0;
+    const maxHealth = Number.isFinite(unit.maxHealth)
+        ? unit.maxHealth
+        : (window.UnitTypes?.[unit.type]?.health || unit.health || 0);
+    const current = Number.isFinite(unit.currentHealth)
+        ? unit.currentHealth
+        : (Number.isFinite(unit.health) ? unit.health : maxHealth);
+    if (!Number.isFinite(maxHealth) || maxHealth <= 0 || !Number.isFinite(current)) return 0;
+    const next = Math.min(maxHealth, current + amount);
+    const healed = Math.max(0, next - current);
+    if (healed <= 0) return 0;
+    if (typeof unit.health === 'number') unit.health = next;
+    if (typeof unit.currentHealth === 'number') unit.currentHealth = next;
+    if (window.UnitSpeech?.showHeal) {
+        window.UnitSpeech.showHeal(unit, healed);
+    }
+    return healed;
+}
+
+function createAbilityPulseFx(point, effectType = 'particle', options = {}) {
+    if ((!window.fx?.createParticleEffect && !window.fx?.createTransientParticleEffect) || !point) return;
+    try {
+        const effectOptions = Object.assign({}, options);
+        if (!Number.isFinite(effectOptions.durationMs)) {
+            effectOptions.durationMs = 450;
+        }
+        if (effectOptions.durationMs > 0 && window.fx?.createTransientParticleEffect) {
+            window.fx.createTransientParticleEffect(effectType, createWorldVector(point), effectOptions);
+        } else {
+            delete effectOptions.durationMs;
+            window.fx.createParticleEffect(effectType, createWorldVector(point), effectOptions);
+        }
+    } catch (_) {
+        // Visual only
+    }
+}
+
+function applyAreaImpactFromPoint(sourceUnit, centerPoint, radius, damage, options = {}) {
+    const sourcePosition = options.sourcePosition || centerPoint;
+    const bopStrength = Number.isFinite(options.bopStrength) ? options.bopStrength : 0;
+    const targets = getUnitsInRadius(centerPoint, radius, other => other !== sourceUnit && isHostileToUnit(sourceUnit, other));
+    targets.forEach(target => {
+        const targetLoc = target.pb?.state?.loc;
+        const fallbackDirection = targetLoc
+            ? new BABYLON.Vector3(targetLoc.x - centerPoint.x, 0, targetLoc.z - centerPoint.z)
+            : null;
+        if (window.projectiles?.applyImpact) {
+            window.projectiles.applyImpact({
+                unit: target,
+                attackerOwner: sourceUnit?.owner || null,
+                damage,
+                sourcePosition: createWorldVector(sourcePosition),
+                bopStrength,
+                fallbackDirection
+            });
+        } else {
+            applyDirectDamage(target, damage, sourceUnit?.owner || null);
+            if (bopStrength > 0 && target?.pb?.imp && fallbackDirection?.lengthSquared() > 0.0001) {
+                target.pb.imp.addInPlace(fallbackDirection.normalize().scale(bopStrength));
             }
+        }
+    });
+    return targets;
+}
+
+function applyAreaBuildingImpactFromPoint(sourceUnit, centerPoint, radius, damage, options = {}) {
+    const targets = getHostileBuildingsInRadius(sourceUnit, centerPoint, radius);
+    targets.forEach(building => {
+        const current = Number.isFinite(building.health) ? building.health : building.currentHealth;
+        if (!Number.isFinite(current)) return;
+        const next = Math.max(0, current - damage);
+        if (typeof building.health === 'number') building.health = next;
+        if (typeof building.currentHealth === 'number') building.currentHealth = next;
+        if (!options.skipDamageFx && window.fx?.addBuildingDamageEffects) {
+            window.fx.addBuildingDamageEffects(building);
+        }
+        if (next <= 0 && window.fx?.destroyBuilding) {
+            window.fx.destroyBuilding(building);
+        }
+    });
+    return targets;
+}
+
+function executeFireballImpact(sourceUnit, centerPoint, params = {}) {
+    const stableCenter = getStableAbilityCenterPoint(centerPoint || getUnitWorldPoint(sourceUnit));
+    if (!stableCenter) {
+        return { hitUnits: 0, hitBuildings: 0, ignitedTrees: 0 };
+    }
+
+    const impactRadius = params.impactRadius || ((window.TILE_SIZE || 4) * 1.25);
+    const unitDamage = Math.max(1, Math.round(params.unitDamage || (sourceUnit?.attackDamage || 11) * 1.35));
+    const buildingDamage = Math.max(unitDamage, Math.round(params.buildingDamage || unitDamage * 1.6));
+    const burnDurationTicks = Math.max(1, Number.isFinite(params.burnDurationTicks) ? params.burnDurationTicks : 120);
+    const burnIntervalTicks = Math.max(1, Number.isFinite(params.burnIntervalTicks) ? params.burnIntervalTicks : 20);
+    const buildingBurnDamage = Math.max(1, Number.isFinite(params.buildingBurnDamage) ? params.buildingBurnDamage : 6);
+    const treeBurnDamage = Math.max(1, Number.isFinite(params.treeBurnDamage) ? params.treeBurnDamage : 4);
+
+    const hitUnits = applyAreaImpactFromPoint(sourceUnit, stableCenter, impactRadius, unitDamage, {
+        sourcePosition: getUnitWorldPoint(sourceUnit),
+        bopStrength: Number.isFinite(params.bopStrength) ? params.bopStrength : 45
+    });
+    const hitBuildings = applyAreaBuildingImpactFromPoint(sourceUnit, stableCenter, impactRadius, buildingDamage, {
+        skipDamageFx: true
+    });
+
+    const match = window.currentMatch;
+    let ignitedTrees = 0;
+    if (match?.igniteTreesInRadius) {
+        ignitedTrees = match.igniteTreesInRadius(stableCenter, Number.isFinite(params.treeIgniteRadius) ? params.treeIgniteRadius : impactRadius, {
+            burnDurationTicks,
+            burnIntervalTicks,
+            treeBurnDamage
+        });
+    }
+    if (match?.igniteBuilding) {
+        hitBuildings.forEach(building => {
+            if (!building || building.isDestroyed || !Number.isFinite(building.health) || building.health <= 0) return;
+            match.igniteBuilding(building, {
+                burnDurationTicks,
+                burnIntervalTicks,
+                buildingBurnDamage
+            });
+        });
+    }
+
+    return {
+        hitUnits: hitUnits.length,
+        hitBuildings: hitBuildings.length,
+        ignitedTrees
+    };
+}
+
+function applyAreaHealFromPoint(sourceUnit, centerPoint, radius, amount, options = {}) {
+    const includeSelf = options.includeSelf !== false;
+    const targets = getUnitsInRadius(centerPoint, radius, other => {
+        if (!includeSelf && other === sourceUnit) return false;
+        return other.owner === sourceUnit.owner;
+    });
+    let healedAny = false;
+    targets.forEach(target => {
+        if (applyUnitHealing(target, amount) > 0) {
+            healedAny = true;
+        }
+    });
+    return healedAny;
+}
+
+const VOLLEY_PATTERN_OFFSETS = [
+    { x: 0, z: 0 },
+    { x: -1, z: 0 },
+    { x: 1, z: 0 },
+    { x: 0, z: -1 },
+    { x: 0, z: 1 },
+    { x: -0.75, z: -0.75 },
+    { x: 0.75, z: -0.75 },
+    { x: -0.75, z: 0.75 },
+    { x: 0.75, z: 0.75 }
+];
+
+function getVolleyOffset(index, radius) {
+    const basis = VOLLEY_PATTERN_OFFSETS[index % VOLLEY_PATTERN_OFFSETS.length];
+    const ring = Math.floor(index / VOLLEY_PATTERN_OFFSETS.length);
+    const scale = radius * (1 + ring * 0.35);
+    return {
+        x: basis.x * scale,
+        z: basis.z * scale
+    };
+}
+
+class TimedModifierEffect {
+    constructor(unit, params = {}, spec = {}) {
+        this.unit = unit;
+        this.params = params;
+        this.spec = spec;
+        this.startTick = getCurrentMatchTick();
+        this.durationTicks = getAbilityDurationTicks(params, spec);
+        this._initialized = false;
+        this._cleanedUp = false;
+    }
+
+    initialize() {
+        if (this._initialized) return this;
+        this._initialized = true;
+        if (typeof this.onStart === 'function') {
+            this.onStart();
+        }
+        return this;
+    }
+
+    isExpired(currentTick) {
+        return this.durationTicks > 0 && (currentTick - this.startTick) > this.durationTicks;
+    }
+
+    cleanup() {
+        if (this._cleanedUp) return;
+        this._cleanedUp = true;
+        if (typeof this.onEnd === 'function') {
+            this.onEnd();
+        }
+    }
+
+    step() {
+        this.initialize();
+        const currentTick = getCurrentMatchTick();
+        if (typeof this.onActiveTick === 'function' && this.onActiveTick(currentTick) === true) {
+            this.cleanup();
+            return true;
+        }
+        if (this.isExpired(currentTick)) {
+            this.cleanup();
             return true;
         }
         return false;
     }
+
     onReassignment() {
-        // Restore immediately if interrupted
+        this.cleanup();
+    }
+}
+
+class PointCastEffect extends TimedModifierEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.targetPoint = getAbilityPointTarget(params, getUnitWorldPoint(unit));
+        this.castDelayTicks = Number.isFinite(params.castDelayTicks)
+            ? params.castDelayTicks
+            : (Number.isFinite(spec.castDelayTicks) ? spec.castDelayTicks : 0);
+        this.lockMovementDuringCast = params.lockMovementDuringCast ?? spec.lockMovementDuringCast ?? false;
+        this._castStarted = false;
+    }
+
+    onStart() {
+        if (this.lockMovementDuringCast) {
+            holdUnitPosition(this.unit);
+        }
+    }
+
+    onActiveTick(currentTick) {
+        const elapsed = currentTick - this.startTick;
+        if (!this._castStarted && elapsed >= this.castDelayTicks) {
+            this._castStarted = true;
+            if (typeof this.onCastStart === 'function') {
+                this.onCastStart(currentTick, elapsed);
+            }
+        }
+        if (typeof this.onCastTick === 'function') {
+            return this.onCastTick(currentTick, elapsed);
+        }
+        return false;
+    }
+}
+
+class AreaPulseEffect extends TimedModifierEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.pulseIntervalTicks = Math.max(1, Number.isFinite(params.pulseIntervalTicks)
+            ? params.pulseIntervalTicks
+            : (Number.isFinite(spec.pulseIntervalTicks) ? spec.pulseIntervalTicks : 1));
+        this.maxPulses = Math.max(1, Number.isFinite(params.maxPulses)
+            ? params.maxPulses
+            : (Number.isFinite(spec.maxPulses) ? spec.maxPulses : 1));
+        this.initialDelayTicks = Math.max(0, Number.isFinite(params.initialDelayTicks)
+            ? params.initialDelayTicks
+            : (Number.isFinite(spec.initialDelayTicks) ? spec.initialDelayTicks : 0));
+        this._nextPulseTick = this.startTick + this.initialDelayTicks;
+        this._pulsesEmitted = 0;
+        if (!this.durationTicks) {
+            this.durationTicks = this.initialDelayTicks + (this.pulseIntervalTicks * this.maxPulses);
+        }
+    }
+
+    onActiveTick(currentTick) {
+        while (this._pulsesEmitted < this.maxPulses && currentTick >= this._nextPulseTick) {
+            if (typeof this.emitPulse === 'function') {
+                this.emitPulse(currentTick, this._pulsesEmitted);
+            }
+            this._pulsesEmitted += 1;
+            this._nextPulseTick += this.pulseIntervalTicks;
+        }
+        return this._pulsesEmitted >= this.maxPulses;
+    }
+}
+
+class BrigandSprintBehavior extends TimedModifierEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.speedMultiplier = params.speedMultiplier || 2.0;
+        this.targetPoint = getAbilityPointTarget(params);
+        this.modifierKey = `${spec.id || 'brigand_sprint'}:${unit.id}:${this.startTick}`;
+    }
+
+    onStart() {
+        setUnitStatModifier(this.unit, 'speed', this.modifierKey, { multiplier: this.speedMultiplier });
+        if (this.targetPoint) {
+            const manager = window.behaviorManager || behaviorManager;
+            manager?.setBehavior(this.unit, 'run', {
+                targetPoint: this.targetPoint,
+                applyPersonalityOffset: false,
+                forceDeterministicReset: true
+            });
+        }
+    }
+
+    onEnd() {
+        clearUnitStatModifier(this.unit, 'speed', this.modifierKey);
+    }
+}
+
+class MonkStealthBehavior extends TimedModifierEffect {
+    onStart() {
+        this.unit.isStealthed = true;
+        if (this.unit.mesh) {
+            this.unit._origAlpha = this.unit.mesh.visibility !== undefined ? this.unit.mesh.visibility : 1;
+            this.unit.mesh.visibility = 0.4;
+        }
+    }
+
+    onEnd() {
         this.unit.isStealthed = false;
         if (this.unit.mesh && this.unit._origAlpha !== undefined) {
             this.unit.mesh.visibility = this.unit._origAlpha;
@@ -3695,134 +4418,626 @@ class MonkStealthBehavior {
     }
 }
 
-// Monk kick: radial knock-back around the monk using existing PBody physics.
-class MonkKickBehavior {
-    constructor(unit, params = {}) {
-        this.unit = unit;
-        this.params = params;
-        this.executed = false;
+class MonkKickBehavior extends AreaPulseEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, {
+            maxPulses: 1,
+            pulseIntervalTicks: 1,
+            initialDelayTicks: 0,
+            ...params
+        }, spec);
+        this.radius = params.radius || 4;
+        this.basePower = params.power || 160;
     }
-    step() {
-        if (this.executed) {
-            return true;
-        }
-        this.executed = true;
 
-        const radius = this.params.radius || 4;
-        const basePower = this.params.power || 160;
-
-        if (!this.unit.pb || !this.unit.pb.state || !this.unit.pb.state.loc) {
-            return true;
-        }
-
+    emitPulse() {
+        if (!this.unit?.pb?.state?.loc) return;
         const origin = this.unit.pb.state.loc.clone();
-        let kickedAny = false;
+        const targets = getUnitsInRadius(origin, this.radius, other => other !== this.unit && isHostileToUnit(this.unit, other));
+        targets.forEach(other => {
+            if (!other?.pb?.state?.loc || !other?.pb?.imp) return;
+            const pos = other.pb.state.loc.clone();
+            const dx = pos.x - origin.x;
+            const dz = pos.z - origin.z;
+            const dist = Math.sqrt(dx * dx + dz * dz);
+            if (dist <= 0 || dist > this.radius) return;
 
-        if (Array.isArray(window.gameUnits)) {
-            window.gameUnits.forEach(other => {
-                if (!other || other === this.unit) return;
-                if (!other.pb || !other.pb.state || !other.pb.state.loc || !other.pb.imp) return;
-                const isHostile = window.currentMatch?.areOwnersHostile
-                    ? window.currentMatch.areOwnersHostile(other.owner, this.unit.owner)
-                    : (other.owner !== this.unit.owner);
-                if (!isHostile) return; // don't kick allies
+            const dir = new BABYLON.Vector3(dx / dist, 0, dz / dist);
+            const strength = this.basePower * (1 - dist / this.radius);
+            other.pb.imp.addInPlace(dir.scale(strength));
 
-                const pos = other.pb.state.loc.clone();
-                const dx = pos.x - origin.x;
-                const dz = pos.z - origin.z;
-                const dist = Math.sqrt(dx * dx + dz * dz);
+            if (!other._monkKickArc) {
+                other._monkKickArc = {
+                    startTick: getCurrentMatchTick(),
+                    durationTicks: Math.floor(400 / 1000 * 20),
+                    peakHeight: 2.0,
+                    startY: other.pb.state.loc.y || 0
+                };
+            }
+        });
 
-                if (dist <= 0 || dist > radius) return;
-
-                const dir = new BABYLON.Vector3(dx / dist, 0, dz / dist);
-                // Linear falloff so close targets get hit harder
-                const strength = basePower * (1 - dist / radius);
-                other.pb.imp.addInPlace(dir.scale(strength));
-                
-                // Add fake vertical arc animation to kicked unit
-                // CRITICAL: Use tick-based timing for deterministic animation
-                if (!other._monkKickArc) {
-                    const currentTick = window.currentMatch?.tick || 0;
-                    const tickRate = 20; // Match net.TICK_RATE
-                    other._monkKickArc = {
-                        startTick: currentTick,
-                        durationTicks: Math.floor(400 / 1000 * tickRate), // 400ms → ticks (8 ticks at 20Hz)
-                        peakHeight: 2.0, // Peak height of arc
-                        startY: other.pb.state.loc.y || 0
-                    };
-                }
-                
-                kickedAny = true;
+        if (targets.length > 0) {
+            createAbilityPulseFx(getUnitWorldPoint(this.unit), 'particle', {
+                scale: 0.4,
+                emitRate: 40,
+                minSize: 0.2,
+                maxSize: 0.4
             });
         }
-
-        // Create sparkle effect at monk position when kicking
-        if (kickedAny && window.fx && window.fx.createParticleEffect) {
-            try {
-                const p = this.unit.mesh ? this.unit.mesh.position.clone() : origin.clone();
-                // Create sparkle effect (bright particles)
-                window.fx.createParticleEffect('particle', p, {
-                    scale: 0.4,
-                    emitRate: 40,
-                    minSize: 0.2,
-                    maxSize: 0.4
-                });
-            } catch (e) {
-                // Visual only, ignore errors
-            }
-        }
-
-        return true; // one-shot ability
-    }
-    onReassignment() {
-        this.executed = true;
     }
 }
 
-class WizardCastBehavior {
-    constructor(unit, params = {}) {
-        this.unit = unit;
-        this.params = params;
-        // DETERMINISTIC: Use tick-based timing
-        const currentTick = window.currentMatch?.tick || 0;
-        this.startTick = currentTick;
-        this.durationTicks = 40; // 2000ms / 50ms = 40 ticks
-        // Optional: spawn simple VFX at target or unit position if available
-        if (window.fx && window.fx.createExplosion) {
-            const p = params.targetPoint ? new BABYLON.Vector3(params.targetPoint.x, 0, params.targetPoint.z) : (unit.mesh ? unit.mesh.position.clone() : new BABYLON.Vector3(0,0,0));
-            try { 
-                window.fx.createExplosion(p, 0.2);
+class ChargeBehavior extends TimedModifierEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.targetPoint = getAbilityPointTarget(params, getUnitWorldPoint(unit));
+        this.speedMultiplier = params.speedMultiplier || 1.9;
+        this.impactRadius = params.impactRadius || ((window.TILE_SIZE || 4) * 0.75);
+        this.damageMultiplier = params.damageMultiplier || 1.65;
+        this.bopStrength = params.bopStrength || 130;
+        this.impactResolveRadius = params.impactResolveRadius || this.impactRadius;
+        this.hasResolvedImpact = false;
+        this.modifierKey = `${spec.id || 'charge'}:${unit.id}:${this.startTick}`;
+    }
+
+    onStart() {
+        setUnitStatModifier(this.unit, 'speed', this.modifierKey, { multiplier: this.speedMultiplier });
+        const manager = window.behaviorManager || behaviorManager;
+        if (this.targetPoint && manager) {
+            manager.setBehavior(this.unit, 'run', {
+                targetPoint: this.targetPoint,
+                applyPersonalityOffset: false,
+                forceDeterministicReset: true
+            });
+        }
+    }
+
+    onActiveTick() {
+        const loc = this.unit?.pb?.state?.loc;
+        if (!loc) return true;
+        if (!this.targetPoint) {
+            return true;
+        }
+
+        if (getStableDistanceSq(loc, this.targetPoint) <= this.impactResolveRadius * this.impactResolveRadius) {
+            return this.resolveImpactAtTargetPoint();
+        }
+
+        return false;
+    }
+
+    resolveImpactAtTargetPoint() {
+        if (this.hasResolvedImpact || !this.targetPoint) {
+            return true;
+        }
+        this.hasResolvedImpact = true;
+
+        const impactPoint = {
+            x: Math.round(this.targetPoint.x * 1000) / 1000,
+            z: Math.round(this.targetPoint.z * 1000) / 1000
+        };
+        const targets = getUnitsInRadius(impactPoint, this.impactRadius, other => other !== this.unit && isHostileToUnit(this.unit, other));
+
+        if (targets.length > 0) {
+            const impactDamage = Math.max(1, Math.round((this.unit.attackDamage || 10) * this.damageMultiplier));
+            applyAreaImpactFromPoint(this.unit, impactPoint, this.impactRadius, impactDamage, {
+                sourcePosition: getUnitWorldPoint(this.unit),
+                bopStrength: this.bopStrength
+            });
+            createAbilityPulseFx(impactPoint, 'particle', {
+                scale: 0.35,
+                emitRate: 30,
+                minSize: 0.2,
+                maxSize: 0.35
+            });
+            const target = targets[0];
+            const manager = window.behaviorManager || behaviorManager;
+            manager?.setBehavior(this.unit, 'attack_unit', {
+                target,
+                targetUnit: target
+            });
+        }
+
+        return true;
+    }
+
+    onEnd() {
+        clearUnitStatModifier(this.unit, 'speed', this.modifierKey);
+    }
+}
+
+class VolleyBehavior extends PointCastEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.shotCount = params.shotCount || 5;
+        this.shotIntervalTicks = Math.max(1, params.shotIntervalTicks || 3);
+        this.impactRadius = params.impactRadius || ((window.TILE_SIZE || 4) * 0.75);
+        this.patternRadius = params.patternRadius || ((window.TILE_SIZE || 4) * 0.6);
+        this.damage = Math.max(1, Math.round(params.damage || (unit.attackDamage || 8) * 0.8));
+        this.projectileType = params.projectileType || 'arrow';
+        this._shotsFired = 0;
+        if (!this.durationTicks) {
+            this.durationTicks = this.castDelayTicks + (this.shotIntervalTicks * (this.shotCount + 1));
+        }
+    }
+
+    fireShot(shotIndex) {
+        const origin = this.unit?.pb?.state?.loc;
+        if (!origin || !this.targetPoint) return;
+        const offset = getVolleyOffset(shotIndex, this.patternRadius);
+        const impactPoint = {
+            x: this.targetPoint.x + offset.x,
+            z: this.targetPoint.z + offset.z
+        };
+        if (window.projectiles?.fire) {
+            window.projectiles.fire({
+                type: this.projectileType,
+                from: new BABYLON.Vector3(origin.x, 1.5, origin.z),
+                to: new BABYLON.Vector3(impactPoint.x, 1.0, impactPoint.z),
+                damage: this.damage,
+                owner: this.unit.owner,
+                gameplayImpact: false
+            });
+        }
+        applyAreaImpactFromPoint(this.unit, impactPoint, this.impactRadius, this.damage, {
+            sourcePosition: getUnitWorldPoint(this.unit),
+            bopStrength: 35
+        });
+        createAbilityPulseFx(impactPoint, 'particle', {
+            scale: 0.25,
+            emitRate: 22,
+            minSize: 0.12,
+            maxSize: 0.3
+        });
+    }
+
+    onCastTick(currentTick) {
+        if (!this._castStarted) return false;
+        const elapsedSinceCast = currentTick - (this.startTick + this.castDelayTicks);
+        while (this._shotsFired < this.shotCount && elapsedSinceCast >= this._shotsFired * this.shotIntervalTicks) {
+            this.fireShot(this._shotsFired);
+            this._shotsFired += 1;
+        }
+        return this._shotsFired >= this.shotCount;
+    }
+}
+
+class WizardCastBehavior extends PointCastEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        if (!this.durationTicks) {
+            this.durationTicks = 40;
+        }
+    }
+
+    onCastStart() {
+        const point = this.targetPoint || getUnitWorldPoint(this.unit);
+        if (window.fx?.createExplosion) {
+            try {
+                window.fx.createExplosion(createWorldVector(point), 0.2);
             } catch (e) {
                 console.error('Explosion creation failed:', e);
             }
         }
     }
-    step() {
-        const currentTick = window.currentMatch?.tick || 0;
-        return (currentTick - this.startTick) > this.durationTicks;
+}
+
+class FireballBehavior extends PointCastEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.projectileType = params.projectileType || 'fireball';
+        this.projectileSpeed = Number.isFinite(params.projectileSpeed) ? params.projectileSpeed : 14;
+        this.projectileLifetimePadding = Number.isFinite(params.projectileLifetimePadding) ? params.projectileLifetimePadding : 0.15;
+        this.impactDelayTicks = this.computeImpactDelayTicks();
+        this._impactResolved = false;
+        this._impactFxPlayed = false;
+        this.durationTicks = Math.max(this.durationTicks || 0, this.castDelayTicks + this.impactDelayTicks + 2);
+    }
+
+    computeImpactDelayTicks() {
+        const origin = this.unit?.pb?.state?.loc;
+        if (!origin || !this.targetPoint) return 1;
+        const distance = Math.sqrt(getStableDistanceSq(origin, this.targetPoint));
+        const totalTravelSeconds = (distance / Math.max(0.1, this.projectileSpeed)) + this.projectileLifetimePadding;
+        return Math.max(1, Math.round(totalTravelSeconds * (window.net?.TICK_RATE || 20)));
+    }
+
+    playImpactFx(point) {
+        if (this._impactFxPlayed) return;
+        this._impactFxPlayed = true;
+        if (window.fx?.createExplosion) {
+            window.fx.createExplosion(createWorldVector(point, 0.35), 0.35);
+        }
+        createAbilityPulseFx(point, 'burn_fire', {
+            scale: 0.42,
+            emitRate: 34,
+            minSize: 0.18,
+            maxSize: 0.42,
+            durationMs: 500
+        });
+    }
+
+    onCastStart() {
+        const origin = this.unit?.pb?.state?.loc;
+        if (!origin || !this.targetPoint || !window.projectiles?.fire) return;
+
+        window.projectiles.fire({
+            type: this.projectileType,
+            from: new BABYLON.Vector3(origin.x, 1.6, origin.z),
+            to: new BABYLON.Vector3(this.targetPoint.x, 0.8, this.targetPoint.z),
+            owner: this.unit.owner,
+            gameplayImpact: false,
+            speed: this.projectileSpeed,
+            lifetimePadding: this.projectileLifetimePadding,
+            onMiss: (hitPos) => {
+                this.playImpactFx({ x: hitPos.x, z: hitPos.z });
+            }
+        });
+    }
+
+    onCastTick(currentTick, elapsed) {
+        if (!this._castStarted) return false;
+        if (!this._impactResolved && elapsed >= (this.castDelayTicks + this.impactDelayTicks)) {
+            const impactPoint = this.targetPoint || getUnitWorldPoint(this.unit);
+            this.playImpactFx(impactPoint);
+            executeFireballImpact(this.unit, impactPoint, this.params);
+            this._impactResolved = true;
+        }
+        return this._impactResolved;
     }
 }
 
-class EngineerProductivityBoostBehavior {
-    constructor(unit, params = {}) {
-        this.unit = unit;
-        this.params = params;
-        // DETERMINISTIC: Use tick-based timing
-        const currentTick = window.currentMatch?.tick || 0;
-        this.startTick = currentTick;
-        this.durationTicks = (params.duration || 7000) / 50; // Convert ms to ticks
-        this.radius = params.radius || 6;
-        this.bonus = params.bonus || 1.5;
-    }
-    
-    step() {
-        const currentTick = window.currentMatch?.tick || 0;
-        if ((currentTick - this.startTick) > this.durationTicks) {
-            return true;
+class SporeBloomBehavior extends PointCastEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this._resolved = false;
+        if (!this.durationTicks) {
+            this.durationTicks = this.castDelayTicks + 2;
         }
-        return false;
+    }
+
+    onCastStart() {
+        executeSporeBloomEffect(this.unit, this.targetPoint || getUnitWorldPoint(this.unit), this.params);
+        this._resolved = true;
+    }
+
+    onCastTick() {
+        return this._resolved;
     }
 }
+
+class HealPulseBehavior extends AreaPulseEffect {
+    constructor(unit, params = {}, spec = {}) {
+        super(unit, params, spec);
+        this.radius = params.radius || ((window.TILE_SIZE || 4) * 2.5);
+        this.healAmount = params.healAmount || 6;
+        this.includeSelf = params.includeSelf !== false;
+    }
+
+    emitPulse() {
+        const centerPoint = getUnitWorldPoint(this.unit);
+        const healedAny = applyAreaHealFromPoint(this.unit, centerPoint, this.radius, this.healAmount, {
+            includeSelf: this.includeSelf
+        });
+        if (healedAny) {
+            createAbilityPulseFx(centerPoint, 'particle', {
+                scale: 0.35,
+                emitRate: 28,
+                minSize: 0.18,
+                maxSize: 0.32
+            });
+        }
+    }
+}
+
+class EngineerProductivityBoostBehavior extends TimedModifierEffect {}
+
+const registeredAbilitySpecs = {};
+
+function registerAbilitySpec(spec) {
+    if (!spec?.id) return null;
+    registeredAbilitySpecs[spec.id] = spec;
+    return spec;
+}
+
+const UnitAbilityRegistry = {
+    registerSpec: registerAbilitySpec,
+    getSpec(id) {
+        return registeredAbilitySpecs[id] || null;
+    },
+    listSpecs() {
+        return Object.values(registeredAbilitySpecs);
+    }
+};
+
+registerAbilitySpec({
+    id: 'brigand_sprint',
+    label: 'Sprint',
+    icon: '💨',
+    order: 20,
+    commandable: true,
+    primary: true,
+    targetType: 'point',
+    executionKind: 'timed_modifier',
+    cooldownTicks: 120,
+    durationTicks: 120,
+    allowedUnitTypes: ['brigand'],
+    buildParams(unit, worldPos) {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        return { targetPoint, speedMultiplier: 2.0 };
+    },
+    createRuntime(unit, params, spec) {
+        return new BrigandSprintBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'monk_stealth',
+    label: 'Stealth',
+    icon: '👤',
+    order: 50,
+    commandable: false,
+    targetType: 'self',
+    executionKind: 'timed_modifier',
+    cooldownTicks: 160,
+    durationTicks: 80,
+    buildParams() {
+        return {};
+    },
+    createRuntime(unit, params, spec) {
+        return new MonkStealthBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'monk_kick',
+    label: 'Kick',
+    icon: '🦶',
+    order: 60,
+    commandable: true,
+    primary: false,
+    targetType: 'self',
+    executionKind: 'area_pulse',
+    cooldownTicks: 40,
+    allowedUnitTypes: ['monk', 'paladin'],
+    defaultParams: {
+        radius: (window.TILE_SIZE || 4),
+        power: 160
+    },
+    buildParams() {
+        return {};
+    },
+    createRuntime(unit, params, spec) {
+        return new MonkKickBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'wizard_cast',
+    label: 'Arc Blast',
+    icon: '✨',
+    order: 30,
+    commandable: true,
+    primary: true,
+    targetType: 'point',
+    executionKind: 'point_cast',
+    cooldownTicks: 60,
+    durationTicks: 40,
+    castDelayTicks: 4,
+    allowedUnitTypes: ['wizard'],
+    buildParams(unit, worldPos) {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        return { targetPoint };
+    },
+    createRuntime(unit, params, spec) {
+        return new WizardCastBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'warlock_fireball',
+    label: 'Fireball',
+    icon: '🔥',
+    order: 14,
+    commandable: true,
+    primary: true,
+    targetType: 'point',
+    executionKind: 'point_cast',
+    cooldownTicks: 95,
+    castDelayTicks: 5,
+    durationTicks: 32,
+    lockMovementDuringCast: true,
+    allowedUnitTypes: ['warlock'],
+    buildParams(unit, worldPos) {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        return {
+            targetPoint,
+            projectileType: 'fireball',
+            projectileSpeed: 14,
+            projectileLifetimePadding: 0.15,
+            impactRadius: (window.TILE_SIZE || 4) * 1.25,
+            treeIgniteRadius: (window.TILE_SIZE || 4) * 1.35,
+            unitDamage: Math.max(1, Math.round((unit?.attackDamage || 11) * 1.35)),
+            buildingDamage: Math.max(1, Math.round((unit?.attackDamage || 11) * 2.0)),
+            burnDurationTicks: 120,
+            burnIntervalTicks: 20,
+            buildingBurnDamage: 6,
+            treeBurnDamage: 4,
+            bopStrength: 45
+        };
+    },
+    createRuntime(unit, params, spec) {
+        return new FireballBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'spore_bloom',
+    label: 'Spore',
+    icon: '🍄',
+    order: 12,
+    commandable: true,
+    primary: true,
+    targetType: 'point',
+    executionKind: 'point_cast',
+    cooldownTicks: 120,
+    durationTicks: 12,
+    castDelayTicks: 6,
+    lockMovementDuringCast: true,
+    allowedUnitTypes: ['mycorrhizae'],
+    buildParams(unit, worldPos) {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        return {
+            targetPoint,
+            outerRadius: (window.TILE_SIZE || 4) * 3.5,
+            innerRadius: (window.TILE_SIZE || 4) * 1.75,
+            innerWoodAmount: 7,
+            maxSeedCount: 8,
+            growthDelayTicks: 90,
+            treeRemaining: 28,
+            seedChance: 0.42
+        };
+    },
+    createRuntime(unit, params, spec) {
+        return new SporeBloomBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'engineer_productivity_boost',
+    label: 'Boost',
+    icon: '🔧',
+    order: 70,
+    commandable: true,
+    primary: true,
+    targetType: 'self',
+    executionKind: 'timed_modifier',
+    cooldownTicks: 100,
+    durationTicks: 140,
+    allowedUnitTypes: ['engineer'],
+    buildParams() {
+        return {};
+    },
+    createRuntime(unit, params, spec) {
+        return new EngineerProductivityBoostBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'charge',
+    label: 'Charge',
+    icon: '⚔️',
+    order: 10,
+    commandable: true,
+    primary: true,
+    targetType: 'point',
+    executionKind: 'timed_modifier',
+    cooldownTicks: 80,
+    durationTicks: 30,
+    allowedUnitTypes: ['warrior', 'champion'],
+    buildParams(unit, worldPos) {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        const isChampion = unit?.type === 'champion';
+        return {
+            targetPoint,
+            durationTicks: isChampion ? 36 : 30,
+            speedMultiplier: isChampion ? 2.15 : 1.9,
+            damageMultiplier: isChampion ? 1.95 : 1.65,
+            impactRadius: (window.TILE_SIZE || 4) * (isChampion ? 0.95 : 0.75),
+            bopStrength: isChampion ? 160 : 130
+        };
+    },
+    createRuntime(unit, params, spec) {
+        return new ChargeBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'volley',
+    label: 'Volley',
+    icon: '🏹',
+    order: 10,
+    commandable: true,
+    primary: true,
+    targetType: 'point',
+    executionKind: 'point_cast',
+    cooldownTicks: 90,
+    durationTicks: 30,
+    castDelayTicks: 5,
+    lockMovementDuringCast: true,
+    allowedUnitTypes: ['archer', 'ballister'],
+    buildParams(unit, worldPos) {
+        const targetPoint = getAbilityPointTarget({ targetPoint: worldPos });
+        if (!targetPoint) return null;
+        const isBallister = unit?.type === 'ballister';
+        return {
+            targetPoint,
+            shotCount: isBallister ? 7 : 5,
+            shotIntervalTicks: isBallister ? 2 : 3,
+            impactRadius: (window.TILE_SIZE || 4) * (isBallister ? 1.05 : 0.75),
+            patternRadius: (window.TILE_SIZE || 4) * (isBallister ? 0.9 : 0.6),
+            damage: Math.max(1, Math.round((unit.attackDamage || (isBallister ? 14 : 8)) * (isBallister ? 0.85 : 0.7))),
+            projectileType: 'arrow'
+        };
+    },
+    createRuntime(unit, params, spec) {
+        return new VolleyBehavior(unit, params, spec).initialize();
+    }
+});
+
+registerAbilitySpec({
+    id: 'heal_pulse',
+    label: 'Heal Pulse',
+    icon: '💚',
+    order: 15,
+    commandable: true,
+    primary: true,
+    targetType: 'self',
+    executionKind: 'area_pulse',
+    cooldownTicks: 100,
+    pulseIntervalTicks: 6,
+    maxPulses: 3,
+    allowedUnitTypes: ['monk', 'paladin', 'priest', 'valkyrie'],
+    buildParams(unit) {
+        const type = unit?.type || '';
+        if (type === 'paladin') {
+            return {
+                radius: (window.TILE_SIZE || 4) * 3.0,
+                healAmount: 8,
+                maxPulses: 4,
+                pulseIntervalTicks: 5
+            };
+        }
+        if (type === 'priest' || type === 'valkyrie') {
+            return {
+                radius: (window.TILE_SIZE || 4) * 3.2,
+                healAmount: 9,
+                maxPulses: 4,
+                pulseIntervalTicks: 5
+            };
+        }
+        return {
+            radius: (window.TILE_SIZE || 4) * 2.5,
+            healAmount: 6,
+            maxPulses: 3,
+            pulseIntervalTicks: 6
+        };
+    },
+    createRuntime(unit, params, spec) {
+        return new HealPulseBehavior(unit, params, spec).initialize();
+    }
+});
+
+window.UnitAbilityRegistry = UnitAbilityRegistry;
+window.getUnitCommandAbilitySpecs = getUnitCommandAbilitySpecs;
+window.getPrimaryUnitCommandAbility = getPrimaryUnitCommandAbility;
+window.buildAbilityParamsForUnit = buildAbilityParamsForUnit;
+window.canUnitUseAbility = canUnitUseAbility;
 
 // Global behavior manager instance
 const behaviorManager = new UnitBehaviorManager();

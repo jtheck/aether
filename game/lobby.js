@@ -724,8 +724,8 @@ const Lobby = {
       seed: resolvedSeed,
       spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
-    if (window.gfx && window.gfx.primeFieldResourcePathing) {
-      window.gfx.primeFieldResourcePathing(window.liveField);
+    if (!customMapData && window.gfx && window.gfx.rebuildFieldResourcePathing) {
+      window.gfx.rebuildFieldResourcePathing(window.liveField);
     }
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
@@ -2917,6 +2917,11 @@ const Lobby = {
       }
       console.log(`🌲 Placed ${resources.length} manual resources`);
     }
+
+    if (window.gfx && window.gfx.rebuildFieldResourcePathing) {
+      // Rebuild blocker/slow tiles from the final authored resource state.
+      window.gfx.rebuildFieldResourcePathing(field);
+    }
     
     // Place pre-placed buildings from forge (excluding agoras which are handled by spawn system)
     if (isV2 && mapData.bld && window.placeBuilding && window.gfx && window.gfx.scene) {
@@ -4190,9 +4195,6 @@ const Lobby = {
       seed: seed,
       spawnPositions: allSpawnPositions
     });
-    if (window.gfx && window.gfx.primeFieldResourcePathing) {
-      window.gfx.primeFieldResourcePathing(window.liveField);
-    }
     if (typeof liveField !== 'undefined') liveField = window.liveField;
     
     // Stretch table BEFORE applying custom map so rebuildTableFromChunkMask
@@ -4471,8 +4473,8 @@ const Lobby = {
       seed: resolvedSeed,
       spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
-    if (window.gfx && window.gfx.primeFieldResourcePathing) {
-      window.gfx.primeFieldResourcePathing(window.liveField);
+    if (window.gfx && window.gfx.rebuildFieldResourcePathing) {
+      window.gfx.rebuildFieldResourcePathing(window.liveField);
     }
     if (typeof liveField !== 'undefined') {
       liveField = window.liveField;
@@ -5095,8 +5097,8 @@ const Lobby = {
       seed: mapSeed,
       spawnPositions: spawnPositions // Pass spawn positions for flattening
     });
-    if (window.gfx && window.gfx.primeFieldResourcePathing) {
-      window.gfx.primeFieldResourcePathing(window.liveField);
+    if (window.gfx && window.gfx.rebuildFieldResourcePathing) {
+      window.gfx.rebuildFieldResourcePathing(window.liveField);
     }
     
     if (typeof liveField !== 'undefined') {

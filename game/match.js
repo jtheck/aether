@@ -87,6 +87,8 @@
       // checkTileForResources() is stateless (seed-based), so we store overrides here.
       // Key: "gridX,gridZ"  Value: remaining amount
       this.resourceRemaining = new Map();
+      this._scheduledResourceGrowths = new Map(); // Key: "gridX,gridZ" Value: {gridX, gridZ, resourceType, growAtTick, remaining}
+      this._activeFires = new Map(); // Key -> active burn state for buildings/trees
       
       // Statistics tracking
       this.stats = {
@@ -194,7 +196,9 @@
       message,
       broadcast = false,
       remote = false,
-      hiddenTriggered = false
+      hiddenTriggered = false,
+      standbyTriggered = false,
+      lifecycleSource = null
     } = {}) {
       if (this.state !== MatchState.PLAYING) {
         console.warn('⚠️ Cannot pause - match not playing');
@@ -207,6 +211,8 @@
         message: pauseMessage,
         remote: !!remote,
         hiddenTriggered: !!hiddenTriggered,
+        standbyTriggered: !!standbyTriggered,
+        lifecycleSource: lifecycleSource || null,
         startedAt: Date.now()
       };
 
@@ -214,7 +220,9 @@
         if (this.pauseContext?.reason === nextContext.reason &&
             this.pauseContext?.message === nextContext.message &&
             this.pauseContext?.remote === nextContext.remote &&
-            this.pauseContext?.hiddenTriggered === nextContext.hiddenTriggered) {
+            this.pauseContext?.hiddenTriggered === nextContext.hiddenTriggered &&
+            this.pauseContext?.standbyTriggered === nextContext.standbyTriggered &&
+            this.pauseContext?.lifecycleSource === nextContext.lifecycleSource) {
           return false;
         }
       }
@@ -225,19 +233,71 @@
       this.updateLoadingOverlay(pauseMessage);
       this.resetLoopTiming();
 
-      if (broadcast && window.isMultiplayer && window.net && window.net.p2p) {
-        window.net.p2p.sendData({
+      if (broadcast && window.isMultiplayer && window.net) {
+        const pausePacket = {
           type: 'match_pause',
           reason,
           message: pauseMessage
-        });
+        };
+        if (typeof window.net.sendReliableData === 'function') {
+          window.net.sendReliableData(pausePacket);
+        } else if (window.net.p2p) {
+          window.net.p2p.sendData(pausePacket);
+        }
       }
 
       return true;
     }
 
-    onTabVisible(hiddenDurationSeconds = 0) {
+    onTabVisible(hiddenDurationSeconds = 0, options = {}) {
       this.resetLoopTiming();
+
+      if (!this.isLiveMultiplayerMatch()) {
+        return;
+      }
+
+      const hiddenDurationMs = Math.max(0, hiddenDurationSeconds * 1000);
+      const localHiddenPause = !!this.pauseContext?.hiddenTriggered && !this.pauseContext?.remote;
+      const standbyTriggered = !!this.pauseContext?.standbyTriggered;
+      const lifecycleSource = options?.lifecycleSource || null;
+      const lastHiddenSource = options?.lastHiddenSource || this.pauseContext?.lifecycleSource || null;
+      const shouldProbeRecovery =
+        localHiddenPause ||
+        standbyTriggered ||
+        hiddenDurationMs >= 2000 ||
+        lifecycleSource === 'resume' ||
+        lastHiddenSource === 'freeze' ||
+        lastHiddenSource === 'pagehide';
+
+      if (!shouldProbeRecovery || !window.net || typeof window.net.requestWakeRecovery !== 'function') {
+        return;
+      }
+
+      if (localHiddenPause && this.isPaused) {
+        const pausePacket = {
+          type: 'match_pause',
+          reason: this.pauseContext?.reason || 'auto_away',
+          message: this.pauseContext?.message || this.getPauseMessage(this.pauseContext?.reason)
+        };
+        if (typeof window.net.sendReliableData === 'function') {
+          window.net.sendReliableData(pausePacket);
+        } else if (window.net.p2p) {
+          window.net.p2p.sendData(pausePacket);
+        }
+      }
+
+      const requestedRecovery = window.net.requestWakeRecovery({
+        hiddenDurationSeconds,
+        hiddenDurationMs,
+        paused: this.isPaused,
+        standbyTriggered,
+        lifecycleSource,
+        lastHiddenSource
+      });
+
+      if (requestedRecovery && (standbyTriggered || hiddenDurationMs >= 2000)) {
+        this.showNotification('Rechecking sync after standby...', 'info');
+      }
     }
     
     // Start the match (enter loading phase)
@@ -397,7 +457,9 @@
         message,
         broadcast = !!window.isMultiplayer,
         remote = false,
-        hiddenTriggered = false
+        hiddenTriggered = false,
+        standbyTriggered = false,
+        lifecycleSource = null
       } = options;
 
       return this.applyPauseState({
@@ -405,21 +467,25 @@
         message,
         broadcast,
         remote,
-        hiddenTriggered
+        hiddenTriggered,
+        standbyTriggered,
+        lifecycleSource
       });
     }
     
     // Resume the match (broadcasts to all players in multiplayer)
     resumeMatch(options = {}) {
-      if (!this.isPaused) {
-        console.warn('⚠️ Match is not paused');
-        return false;
-      }
-
       const {
         broadcast = !!window.isMultiplayer,
         remote = false
       } = options;
+
+      if (!this.isPaused) {
+        if (!remote) {
+          console.warn('⚠️ Match is not paused');
+        }
+        return false;
+      }
       
       this.isPaused = false;
       this.pauseContext = null;
@@ -435,8 +501,12 @@
       this.resetLoopTiming();
       
       // Broadcast resume to all players
-      if (!remote && broadcast && window.isMultiplayer && window.net && window.net.p2p) {
-        window.net.p2p.sendData({ type: 'match_resume' });
+      if (!remote && broadcast && window.isMultiplayer && window.net) {
+        if (typeof window.net.sendReliableData === 'function') {
+          window.net.sendReliableData({ type: 'match_resume' });
+        } else if (window.net.p2p) {
+          window.net.p2p.sendData({ type: 'match_resume' });
+        }
       }
       
       return true;
@@ -670,6 +740,10 @@
       if (this.tick % 20 === 0) {
         this.checkBrigandRevert();
       }
+
+      // Deterministic delayed environmental growth (e.g. spore-seeded trees).
+      this.processPendingResourceGrowths();
+      this.processActiveFires();
       
       // Synchronization checkpoint with adaptive frequency
       // During active construction or movement, sync more frequently to prevent drift
@@ -2480,18 +2554,14 @@
       // CRITICAL: Normalize player ID for ownership check
       const rawPlayerId = cmd.playerId || '';
       const normalizedPlayerId = rawPlayerId.length > 6 ? rawPlayerId.slice(-6) : rawPlayerId;
+      const unitOwnerId = unit?.owner?.length > 6 ? unit.owner.slice(-6) : unit?.owner;
       
-      if (!unit || unit.owner !== normalizedPlayerId) return;
-      
-      // MULTIPLAYER: Only create behaviors if this is OUR unit
-      if (window.isMultiplayer) {
-        const localPlayerId = window.player?.id?.slice(-6);
-        if (normalizedPlayerId !== localPlayerId) {
-          return; // Skip behavior creation for remote units
-        }
+      if (!unit || unitOwnerId !== normalizedPlayerId) return;
+
+      if (cmd.abilityType && window.canUnitUseAbility && !window.canUnitUseAbility(unit, cmd.abilityType)) {
+        return;
       }
       
-      // Apply ability behavior using behavior manager
       if (window.behaviorManager && cmd.abilityType) {
         window.behaviorManager.setBehavior(unit, cmd.abilityType, cmd.params || {});
       }
@@ -2732,9 +2802,18 @@
         // Escape objectives should track the authored adventure party, not every living
         // human-owned unit in the match. That prevents built extras or allied squads from
         // blocking chapter exits, and matches the "our party escaped" expectation.
+        // Exclude civilians (e.g. map-placed villagers): only non-civilian party units must
+        // reach the exit so one hero per player is enough.
+        const isEscapePartyUnit = (unit) => {
+          if (!unit || unit.isNPC) return false;
+          if (unit.type === 'villager') return false;
+          const cat = window.UnitTypes?.[unit.type]?.category;
+          return cat !== 'civilian';
+        };
         const startingPartyUnits = allUnits.filter(unit =>
           Number.isFinite(unit?.adventureSpawnIndex) &&
-          !unit?.isNPC
+          !unit?.isNPC &&
+          isEscapePartyUnit(unit)
         );
         const sourceUnits = startingPartyUnits.length > 0 ? startingPartyUnits : allUnits;
         const groups = new Map();
@@ -3703,7 +3782,14 @@
         });
       }
 
-      if (entries.length === 0 && depletions.length === 0) {
+      const growths = [];
+      if (this._scheduledResourceGrowths) {
+        this._scheduledResourceGrowths.forEach((info) => {
+          growths.push(info);
+        });
+      }
+
+      if (entries.length === 0 && depletions.length === 0 && growths.length === 0) {
         return;
       }
       
@@ -3712,7 +3798,8 @@
           type: 'resource_state_sync',
           tick: this.tick,
           resourceEntries: entries,
-          scheduledDepletions: depletions
+          scheduledDepletions: depletions,
+          scheduledGrowths: growths
         });
       }
     }
@@ -3724,12 +3811,354 @@
       this._scheduledDepletions.forEach((info, key) => {
         if (info.depletionTick === this.tick) {
           if (window.removeResourceModel) {
-            window.removeResourceModel(info.gridX, info.gridZ);
+            window.removeResourceModel(info.gridX, info.gridZ, { skipPathingRebuild: true });
           }
           toRemove.push(key);
         }
       });
       toRemove.forEach(key => this._scheduledDepletions.delete(key));
+      if (toRemove.length > 0 && window.gfx?.rebuildFieldResourcePathing) {
+        window.gfx.rebuildFieldResourcePathing(window.liveField);
+      }
+    }
+
+    clearFireState(fireKey) {
+      if (!this._activeFires) this._activeFires = new Map();
+      const fireState = this._activeFires.get(fireKey);
+      if (!fireState) return false;
+
+      if (fireState.kind === 'tree') {
+        window.gfx?.clearResourceTileEffect?.(fireState.gridX, fireState.gridZ, 'burn_fire');
+        window.gfx?.clearResourceTileEffect?.(fireState.gridX, fireState.gridZ, 'burn_smoke');
+      } else if (fireState.kind === 'building') {
+        const building = this.getBuildingById(fireState.buildingId);
+        if (building && window.fx?.removeParticleEffects) {
+          window.fx.removeParticleEffects(building, 'burn_fire');
+          window.fx.removeParticleEffects(building, 'burn_smoke');
+        }
+      }
+
+      this._activeFires.delete(fireKey);
+      return true;
+    }
+
+    igniteBuilding(building, options = {}) {
+      if (!building?.id || building.isDestroyed || building.type === 'agora') return false;
+      const health = Number.isFinite(building.health) ? building.health : building.currentHealth;
+      if (Number.isFinite(health) && health <= 0) return false;
+      if (!this._activeFires) this._activeFires = new Map();
+
+      const fireKey = `building:${building.id}`;
+      const existing = this._activeFires.get(fireKey);
+      const burnIntervalTicks = Math.max(1, Number.isFinite(options.burnIntervalTicks) ? options.burnIntervalTicks : 20);
+      const fireState = {
+        kind: 'building',
+        buildingId: building.id,
+        damagePerTick: Math.max(1, Number.isFinite(options.buildingBurnDamage) ? options.buildingBurnDamage : 6),
+        burnIntervalTicks,
+        nextDamageTick: existing?.nextDamageTick || (this.tick + burnIntervalTicks),
+        expiresAtTick: Math.max(existing?.expiresAtTick || 0, this.tick + Math.max(1, Number.isFinite(options.burnDurationTicks) ? options.burnDurationTicks : 120))
+      };
+      this._activeFires.set(fireKey, fireState);
+
+      if (window.fx?.ensureBuildingFireEffect) {
+        window.fx.ensureBuildingFireEffect(building, {
+          effectType: 'burn_fire',
+          scale: 1.05,
+          emitRate: 68,
+          minSize: 0.75,
+          maxSize: 1.45,
+          minLifeTime: 0.55,
+          maxLifeTime: 1.15,
+          minEmitPower: 1.0,
+          maxEmitPower: 2.3
+        });
+        window.fx.ensureBuildingSmokeEffect?.(building, {
+          effectType: 'burn_smoke',
+          scale: 1.0,
+          emitRate: 20,
+          minSize: 0.9,
+          maxSize: 1.9,
+          minLifeTime: 1.4,
+          maxLifeTime: 2.6,
+          minEmitPower: 0.5,
+          maxEmitPower: 1.2
+        });
+      } else if (window.fx?.attachParticleEffect && !building.particleEffects?.some(effect => effect.type === 'burn_fire')) {
+        window.fx.attachParticleEffect(building, 'burn_fire', 'fire_anchor', {
+          scale: 1.05,
+          emitRate: 68,
+          minSize: 0.75,
+          maxSize: 1.45,
+          minLifeTime: 0.55,
+          maxLifeTime: 1.15,
+          minEmitPower: 1.0,
+          maxEmitPower: 2.3
+        });
+        if (!building.particleEffects?.some(effect => effect.type === 'burn_smoke')) {
+          window.fx.attachParticleEffect(building, 'burn_smoke', 'smoke_anchor', {
+            scale: 1.0,
+            emitRate: 20,
+            minSize: 0.9,
+            maxSize: 1.9,
+            minLifeTime: 1.4,
+            maxLifeTime: 2.6,
+            minEmitPower: 0.5,
+            maxEmitPower: 1.2
+          });
+        }
+      } else if (window.fx?.attachParticleEffect && !building.particleEffects?.some(effect => effect.type === 'burn_smoke')) {
+        window.fx.attachParticleEffect(building, 'burn_smoke', 'smoke_anchor', {
+          scale: 1.0,
+          emitRate: 20,
+          minSize: 0.9,
+          maxSize: 1.9,
+          minLifeTime: 1.4,
+          maxLifeTime: 2.6,
+          minEmitPower: 0.5,
+          maxEmitPower: 1.2
+        });
+      }
+
+      return true;
+    }
+
+    igniteTreeTile(gridX, gridZ, options = {}) {
+      const resourceInfo = window.buildingSystem?.checkTileForResources
+        ? window.buildingSystem.checkTileForResources(gridX, gridZ, false)
+        : null;
+      if (!resourceInfo || resourceInfo.type !== 'wood') return false;
+      if (!this._activeFires) this._activeFires = new Map();
+
+      const fireKey = `tree:${gridX},${gridZ}`;
+      const existing = this._activeFires.get(fireKey);
+      const burnIntervalTicks = Math.max(1, Number.isFinite(options.burnIntervalTicks) ? options.burnIntervalTicks : 20);
+      this._activeFires.set(fireKey, {
+        kind: 'tree',
+        gridX,
+        gridZ,
+        damagePerTick: Math.max(1, Number.isFinite(options.treeBurnDamage) ? options.treeBurnDamage : 4),
+        burnIntervalTicks,
+        nextDamageTick: existing?.nextDamageTick || (this.tick + burnIntervalTicks),
+        expiresAtTick: Math.max(existing?.expiresAtTick || 0, this.tick + Math.max(1, Number.isFinite(options.burnDurationTicks) ? options.burnDurationTicks : 120))
+      });
+
+      window.gfx?.setResourceTileEffect?.(gridX, gridZ, 'burn_fire', 'burn_fire', {
+        yOffset: 0.55,
+        scale: 0.9,
+        emitRate: 42,
+        minSize: 0.34,
+        maxSize: 0.78,
+        minLifeTime: 0.5,
+        maxLifeTime: 1.1
+      });
+      window.gfx?.setResourceTileEffect?.(gridX, gridZ, 'burn_smoke', 'burn_smoke', {
+        yOffset: 0.85,
+        scale: 0.9,
+        emitRate: 14,
+        minSize: 0.6,
+        maxSize: 1.4,
+        minLifeTime: 1.4,
+        maxLifeTime: 2.4
+      });
+      return true;
+    }
+
+    igniteTreesInRadius(centerPoint, radius, options = {}) {
+      const field = window.liveField;
+      const tileSize = window.TILE_SIZE || 4;
+      if (!field || !window.buildingSystem?.checkTileForResources) return 0;
+
+      const radiusSq = radius * radius;
+      const minGridX = Math.max(0, Math.floor((centerPoint.x - radius) / tileSize) - 1);
+      const maxGridX = Math.min(field.width - 1, Math.ceil((centerPoint.x + radius) / tileSize) + 1);
+      const minGridZ = Math.max(0, Math.floor((centerPoint.z - radius) / tileSize) - 1);
+      const maxGridZ = Math.min(field.height - 1, Math.ceil((centerPoint.z + radius) / tileSize) + 1);
+
+      let ignited = 0;
+      for (let gridX = minGridX; gridX <= maxGridX; gridX++) {
+        for (let gridZ = minGridZ; gridZ <= maxGridZ; gridZ++) {
+          const resourceInfo = window.buildingSystem.checkTileForResources(gridX, gridZ, false);
+          if (!resourceInfo || resourceInfo.type !== 'wood') continue;
+          const centerX = (gridX + 0.5) * tileSize;
+          const centerZ = (gridZ + 0.5) * tileSize;
+          const dx = centerX - centerPoint.x;
+          const dz = centerZ - centerPoint.z;
+          if ((dx * dx + dz * dz) > radiusSq) continue;
+          if (this.igniteTreeTile(gridX, gridZ, options)) {
+            ignited += 1;
+          }
+        }
+      }
+      return ignited;
+    }
+
+    processActiveFires() {
+      if (!this._activeFires || this._activeFires.size === 0) return;
+
+      const sortedEntries = Array.from(this._activeFires.entries()).sort((a, b) => {
+        if (window.deterministicStringCompare) {
+          return window.deterministicStringCompare(a[0], b[0]);
+        }
+        return String(a[0]).localeCompare(String(b[0]));
+      });
+
+      const treesToFell = [];
+
+      sortedEntries.forEach(([fireKey, fireState]) => {
+        if (!fireState) return;
+
+        if (fireState.kind === 'building') {
+          const building = this.getBuildingById(fireState.buildingId);
+          const health = Number.isFinite(building?.health) ? building.health : building?.currentHealth;
+          if (!building || building.isDestroyed || (Number.isFinite(health) && health <= 0)) {
+            this.clearFireState(fireKey);
+            return;
+          }
+
+          if (this.tick >= fireState.nextDamageTick && this.tick <= fireState.expiresAtTick) {
+            const current = Number.isFinite(building.health) ? building.health : building.currentHealth;
+            const next = Math.max(0, current - fireState.damagePerTick);
+            if (typeof building.health === 'number') building.health = next;
+            if (typeof building.currentHealth === 'number') building.currentHealth = next;
+            fireState.nextDamageTick += fireState.burnIntervalTicks;
+
+            if (next <= 0) {
+              if (window.fx?.destroyBuilding) {
+                window.fx.destroyBuilding(building);
+              }
+              this.clearFireState(fireKey);
+              return;
+            }
+          }
+
+          if (this.tick >= fireState.expiresAtTick) {
+            this.clearFireState(fireKey);
+          }
+          return;
+        }
+
+        if (fireState.kind !== 'tree') return;
+        const tileKey = `${fireState.gridX},${fireState.gridZ}`;
+        const resourceInfo = window.buildingSystem?.checkTileForResources
+          ? window.buildingSystem.checkTileForResources(fireState.gridX, fireState.gridZ, false)
+          : null;
+        if (!resourceInfo || resourceInfo.type !== 'wood') {
+          this.clearFireState(fireKey);
+          return;
+        }
+
+        if (!this.resourceRemaining.has(tileKey)) {
+          this.resourceRemaining.set(tileKey, resourceInfo.remaining);
+        }
+
+        if (this.tick >= fireState.nextDamageTick && this.tick <= fireState.expiresAtTick) {
+          const oldRemaining = this.resourceRemaining.get(tileKey);
+          const nextRemaining = Math.max(0, oldRemaining - fireState.damagePerTick);
+          this.resourceRemaining.set(tileKey, nextRemaining);
+          fireState.nextDamageTick += fireState.burnIntervalTicks;
+
+          if (nextRemaining <= 0) {
+            treesToFell.push({
+              gridX: fireState.gridX,
+              gridZ: fireState.gridZ,
+              tileKey
+            });
+            this.clearFireState(fireKey);
+            return;
+          }
+        }
+
+        if (this.tick >= fireState.expiresAtTick) {
+          this.clearFireState(fireKey);
+        }
+      });
+
+      if (treesToFell.length > 0) {
+        treesToFell.sort((a, b) => {
+          if (a.gridX !== b.gridX) return a.gridX - b.gridX;
+          return a.gridZ - b.gridZ;
+        });
+
+        treesToFell.forEach(tree => {
+          this.resourceRemaining.set(tree.tileKey, 0);
+          if (this._scheduledDepletions) {
+            this._scheduledDepletions.delete(tree.tileKey);
+          }
+          window.removeResourceModel?.(tree.gridX, tree.gridZ, { skipPathingRebuild: true });
+        });
+
+        if (window.gfx?.rebuildFieldResourcePathing) {
+          window.gfx.rebuildFieldResourcePathing(window.liveField);
+        }
+      }
+    }
+
+    queueResourceGrowth(options = {}) {
+      const gridX = Number.isFinite(options.gridX) ? options.gridX : null;
+      const gridZ = Number.isFinite(options.gridZ) ? options.gridZ : null;
+      if (gridX === null || gridZ === null) return false;
+
+      const key = `${gridX},${gridZ}`;
+      const growthInfo = {
+        gridX,
+        gridZ,
+        resourceType: options.resourceType || 'trees',
+        growAtTick: Number.isFinite(options.growAtTick) ? Math.max(0, options.growAtTick) : (this.tick || 0),
+        remaining: Number.isFinite(options.remaining) ? options.remaining : 28,
+        growthInitialScale: Number.isFinite(options.growthInitialScale) ? options.growthInitialScale : undefined,
+        growthDurationMs: Number.isFinite(options.growthDurationMs) ? options.growthDurationMs : undefined
+      };
+
+      const existing = this._scheduledResourceGrowths.get(key);
+      if (!existing || growthInfo.growAtTick < existing.growAtTick) {
+        this._scheduledResourceGrowths.set(key, growthInfo);
+      }
+      return true;
+    }
+
+    processPendingResourceGrowths() {
+      if (!this._scheduledResourceGrowths || this._scheduledResourceGrowths.size === 0) return;
+
+      const dueGrowths = [];
+      this._scheduledResourceGrowths.forEach((info, key) => {
+        if ((info.growAtTick || 0) <= this.tick) {
+          dueGrowths.push({ key, info });
+        }
+      });
+
+      if (dueGrowths.length === 0) return;
+
+      dueGrowths.sort((a, b) => {
+        if (a.info.gridX !== b.info.gridX) return a.info.gridX - b.info.gridX;
+        return a.info.gridZ - b.info.gridZ;
+      });
+
+      let grewAny = false;
+      dueGrowths.forEach(({ key, info }) => {
+        this._scheduledResourceGrowths.delete(key);
+        window.gfx?.clearResourceTileEffect?.(info.gridX, info.gridZ, 'growth_preview');
+
+        const grewTree = window.growTreeAt?.(info.gridX, info.gridZ, {
+          remaining: info.remaining,
+          growthAnimation: {
+            initialScale: Number.isFinite(info.growthInitialScale) ? info.growthInitialScale : 0.12,
+            durationMs: Number.isFinite(info.growthDurationMs) ? info.growthDurationMs : 7000
+          }
+        });
+
+        if (grewTree) {
+          this.resourceRemaining.set(key, info.remaining);
+          if (this._scheduledDepletions) {
+            this._scheduledDepletions.delete(key);
+          }
+          grewAny = true;
+        }
+      });
+
+      if (grewAny && window.gfx?.rebuildFieldResourcePathing) {
+        window.gfx.rebuildFieldResourcePathing(window.liveField);
+      }
     }
     
     // Create synchronization checkpoint
@@ -4814,8 +5243,8 @@
           seed: replayData.mapSeed,
           spawnPositions: spawnPositions // Critical: pass spawn positions for flattening
         });
-        if (window.gfx && window.gfx.primeFieldResourcePathing) {
-          window.gfx.primeFieldResourcePathing(window.liveField);
+        if (window.gfx && window.gfx.rebuildFieldResourcePathing) {
+          window.gfx.rebuildFieldResourcePathing(window.liveField);
         }
         
         // Update global liveField reference

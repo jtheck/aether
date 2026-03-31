@@ -63,6 +63,7 @@
   let peerLag = new Map(); // Track peer lag: peerId -> { lastTick: number, lastSeen: timestamp }
   let pendingCommandAcks = new Map(); // Track pending command acknowledgments: commandId -> { command, sentAt, retries }
   let lastPlayerCommandTime = 0; // Track when we last sent a player command (for LOD)
+  let lastWakeRecoveryAt = 0; // Rate-limit wake recovery probes after standby/backgrounding
   
   // TRUE LOCKSTEP: Tick confirmation system
   // Each peer confirms they're ready for tick N by sending commands or a heartbeat
@@ -127,6 +128,26 @@
     const nb = normalizePeerId(b);
     return na && nb && na === nb;
   }
+
+  function sendReliableData(message, targetPeerId = null) {
+    if (!p2p || !p2p.sendData || !message) return false;
+
+    if (targetPeerId) {
+      p2p.sendData(message, targetPeerId);
+      return true;
+    }
+
+    p2p.sendData(message);
+    const peers = p2p.getConnectedPeers ? p2p.getConnectedPeers() : [];
+    if (peers && peers.length > 0) {
+      peers.forEach(pid => p2p.sendData(message, pid));
+    }
+    return true;
+  }
+
+  net.sendReliableData = function(message, targetPeerId = null) {
+    return sendReliableData(message, targetPeerId);
+  };
   
   function getCatchupTargetTick() {
     // Catch up to where the slowest non-soft-dropped peer has confirmed, minus input delay.
@@ -328,12 +349,8 @@
       playerId: localPlayerShortId || localPlayerId
     };
     
-    // Always broadcast (most reliable), and also try direct sends when possible.
-    p2p.sendData(msg);
-    const peers = p2p.getConnectedPeers ? p2p.getConnectedPeers() : [];
-    if (peers && peers.length > 0) {
-      peers.forEach(pid => p2p.sendData(msg, pid));
-    }
+    // Always broadcast, and also try direct sends when possible.
+    sendReliableData(msg);
   }
 
   net.startTickLoop = function() {
@@ -1036,6 +1053,16 @@
                 const key = `${info.gridX},${info.gridZ}`;
                 if (!match._scheduledDepletions.has(key)) {
                   match._scheduledDepletions.set(key, info);
+                }
+              });
+            }
+            if (actualMessage.scheduledGrowths) {
+              if (!match._scheduledResourceGrowths) match._scheduledResourceGrowths = new Map();
+              actualMessage.scheduledGrowths.forEach(info => {
+                const key = `${info.gridX},${info.gridZ}`;
+                const existing = match._scheduledResourceGrowths.get(key);
+                if (!existing || (info.growAtTick || 0) < (existing.growAtTick || 0)) {
+                  match._scheduledResourceGrowths.set(key, info);
                 }
               });
             }
@@ -2255,16 +2282,41 @@
       tick
     };
 
-    if (targetPeerId) {
-      p2p.sendData(message, targetPeerId);
-      return;
+    sendReliableData(message, targetPeerId);
+  };
+
+  net.requestWakeRecovery = function(options = {}) {
+    if (!window.currentMatch || !window.currentMatch.isLiveMultiplayerMatch?.()) {
+      return false;
+    }
+    if (!p2p || !p2p.sendData) {
+      return false;
     }
 
-    p2p.sendData(message);
-    const peers = p2p.getConnectedPeers ? p2p.getConnectedPeers() : [];
-    if (peers && peers.length > 0) {
-      peers.forEach(pid => p2p.sendData(message, pid));
+    const now = Date.now();
+    if ((now - lastWakeRecoveryAt) < 1000) {
+      return false;
     }
+    lastWakeRecoveryAt = now;
+
+    const peers = p2p.getConnectedPeers ? p2p.getConnectedPeers() : [];
+    isConnected = peers.length > 0;
+
+    const isPaused = !!options.paused || !!window.currentMatch?.isPaused;
+    if (!isPaused) {
+      const inputDelay = window.currentMatch?.inputDelayTicks || 3;
+      sendTickConfirmation(tick + inputDelay);
+    }
+    sendStateSync();
+
+    peers.forEach(peerId => {
+      if (!isPaused) {
+        sendReliableData({ type: 'request_tick_confirm' }, peerId);
+      }
+      sendReliableData({ type: 'force_state_sync' }, peerId);
+    });
+
+    return true;
   };
   
   // State sync no longer reconciles gameplay state in strict lockstep mode.
@@ -2335,6 +2387,7 @@
     remoteCommands.clear();
     peerLag.clear();
     lastStateSync = 0;
+    lastWakeRecoveryAt = 0;
     
     // Reset lockstep state
     peerTickConfirmations.clear();
@@ -2367,7 +2420,7 @@
     
     // Send initial confirmation to peers (best-effort; safe even if peer list is briefly empty)
     if (p2p && p2p.sendData) {
-      p2p.sendData({
+      sendReliableData({
         type: 'tick_confirm',
         tick: inputDelay,
         playerId: localPlayerShortId || localPlayerId

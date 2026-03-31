@@ -2,6 +2,8 @@
 // Handles both AI opponents (single-player) and remote players (multiplayer)
 
 (function(opponent) {
+  const DEBUG_AI_DECISION_LOGS = false; // set true to restore periodic AI decision summaries
+
   // Base Opponent class
   function Opponent(options = {}) {
     this.id = options.id || 'opponent';
@@ -356,7 +358,7 @@
     // This prevents the AI from spamming multiple buildings at once
     
     // Debug: Log AI decision state every 5 seconds
-    if (currentTick % 100 === 0) {
+    if (DEBUG_AI_DECISION_LOGS && currentTick % 100 === 0) {
       console.log(`🤖 AI ${aiPlayer.id?.slice(-6)}: phase=${aiState.phase}, actions=${actions.length}, canBuild=${canBuild}, defense=${aiState.defenseMode}`);
       if (actions.length > 0) {
         console.log(`   Actions:`, actions.map(a => `${a.type}:${a.buildingType || a.unitType}`).join(', '));

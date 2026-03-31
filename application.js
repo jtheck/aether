@@ -19,6 +19,7 @@ window.aud = {};  // Audio (loaded from game/audio.js)
     LIVE_CONCEDE_MS: 60000,
     hiddenAt: null,
     menuSuspended: false,
+    _lastHiddenSource: null,
     _timers: {
       menuSuspend: null,
       localPause: null,
@@ -31,9 +32,25 @@ window.aud = {};  // Audio (loaded from game/audio.js)
       this._initialized = true;
       document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
-          this.handleHidden();
+          this.handleHidden('visibilitychange');
         } else {
-          this.handleVisible();
+          this.handleVisible('visibilitychange');
+        }
+      });
+      window.addEventListener('pagehide', () => {
+        this.handleHidden('pagehide');
+      });
+      window.addEventListener('pageshow', () => {
+        if (!document.hidden) {
+          this.handleVisible('pageshow');
+        }
+      });
+      document.addEventListener('freeze', () => {
+        this.handleHidden('freeze');
+      });
+      document.addEventListener('resume', () => {
+        if (!document.hidden) {
+          this.handleVisible('resume');
         }
       });
     },
@@ -78,13 +95,50 @@ window.aud = {};  // Audio (loaded from game/audio.js)
       }
     },
 
+    isLikelyMobileStandbyRisk() {
+      const uaMobile = !!navigator.userAgentData?.mobile;
+      const touchPoints = navigator.maxTouchPoints || 0;
+      let coarsePointer = false;
+      if (typeof window.matchMedia === 'function') {
+        coarsePointer = window.matchMedia('(pointer: coarse)').matches;
+      }
+      return uaMobile || (touchPoints > 0 && coarsePointer);
+    },
+
+    shouldPauseLiveImmediately(source) {
+      if (source === 'freeze' || source === 'pagehide') {
+        return true;
+      }
+      return source === 'visibilitychange' && this.isLikelyMobileStandbyRisk();
+    },
+
+    pauseLiveMatchForHidden(match, source, options = {}) {
+      if (!match || typeof match.pauseMatch !== 'function') {
+        return false;
+      }
+      if (typeof match.isIntentionalPauseActive === 'function' && match.isIntentionalPauseActive()) {
+        return false;
+      }
+      return match.pauseMatch({
+        reason: 'auto_away',
+        message: '⏸️ AUTO-AWAY PAUSE',
+        broadcast: true,
+        hiddenTriggered: true,
+        standbyTriggered: !!options.standbyTriggered,
+        lifecycleSource: source
+      });
+    },
+
     isMenuSuspended() {
       return !!this.menuSuspended;
     },
 
-    handleHidden() {
+    handleHidden(source = 'visibilitychange') {
       this.init();
-      this.hiddenAt = performance.now();
+      if (this.hiddenAt === null) {
+        this.hiddenAt = performance.now();
+      }
+      this._lastHiddenSource = source;
       this.menuSuspended = false;
       this.clearTimers();
       this.setCommandPause(true);
@@ -123,16 +177,14 @@ window.aud = {};  // Audio (loaded from game/audio.js)
         return;
       }
 
-      this._timers.livePause = setTimeout(() => {
-        if (!document.hidden || this.getCurrentContext() !== 'live') return;
-        if (typeof match.isIntentionalPauseActive === 'function' && match.isIntentionalPauseActive()) return;
-        match.pauseMatch({
-          reason: 'auto_away',
-          message: '⏸️ AUTO-AWAY PAUSE',
-          broadcast: true,
-          hiddenTriggered: true
-        });
-      }, this.LIVE_PAUSE_MS);
+      if (this.shouldPauseLiveImmediately(source)) {
+        this.pauseLiveMatchForHidden(match, source, { standbyTriggered: true });
+      } else {
+        this._timers.livePause = setTimeout(() => {
+          if (!document.hidden || this.getCurrentContext() !== 'live') return;
+          this.pauseLiveMatchForHidden(match, 'hidden_timeout');
+        }, this.LIVE_PAUSE_MS);
+      }
 
       this._timers.liveConcede = setTimeout(() => {
         if (!document.hidden || this.getCurrentContext() !== 'live') return;
@@ -163,30 +215,32 @@ window.aud = {};  // Audio (loaded from game/audio.js)
           return;
         }
         if (hiddenDurationMs >= this.LIVE_PAUSE_MS && !match.isPaused) {
-          match.pauseMatch({
-            reason: 'auto_away',
-            message: '⏸️ AUTO-AWAY PAUSE',
-            broadcast: true,
-            hiddenTriggered: true
-          });
+          this.pauseLiveMatchForHidden(match, 'visible_flush');
         }
       }
     },
 
-    handleVisible() {
+    handleVisible(source = 'visibilitychange') {
       this.init();
-      const hiddenDurationMs = this.hiddenAt ? (performance.now() - this.hiddenAt) : 0;
+      const hadHiddenSession = this.hiddenAt !== null;
+      const lastHiddenSource = this._lastHiddenSource;
+      const hiddenDurationMs = hadHiddenSession ? (performance.now() - this.hiddenAt) : 0;
 
       this.flushMissedHiddenActions(hiddenDurationMs);
       this.hiddenAt = null;
+      this._lastHiddenSource = null;
       this.menuSuspended = false;
       this.clearTimers();
       this.setCommandPause(false);
       this.resetTiming();
 
       const match = window.currentMatch;
-      if (match && typeof match.onTabVisible === 'function') {
-        match.onTabVisible(hiddenDurationMs / 1000);
+      if (hadHiddenSession && match && typeof match.onTabVisible === 'function') {
+        match.onTabVisible(hiddenDurationMs / 1000, {
+          lifecycleSource: source,
+          lastHiddenSource,
+          hiddenDurationMs
+        });
       }
     }
   };
@@ -266,7 +320,7 @@ window.aud = {};  // Audio (loaded from game/audio.js)
     let chat;
     // Init chat
     if (typeof GETFIRE !== "undefined"){
-      chat = GETFIRE({topicNames: ["AEG"],
+      chat = GETFIRE({topicNames: ["AEG", "gaming", "SC2"],
         defaultName: "Strategist",
         startOpen: false,
         startPreview: false,

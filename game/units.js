@@ -54,12 +54,22 @@ const UnitTypes = {
     size: 1,
     cost: { food: 20, wood: 10 },
     abilities: ["gather", "build", "sneak"],
+    commandAbilities: ["brigand_sprint"],
+    primaryAbilityId: "brigand_sprint",
     attackType: "melee",
     attackDamage: 6,
     attackRange: 2.5,
     attackCooldown: 1500,
     aggroRange: 6,
     upgradeFrom: "villager",
+    defeatOutcome: {
+      type: "convert_and_flee",
+      targetType: "villager",
+      resetHealth: true,
+      requireHost: true,
+      pendingFlag: "_pendingDefeatConvert",
+      retreatToAgora: true
+    },
     description: "Upgraded villager with stealth capabilities and faster movement",
     notes: "DEFEAT: Flees into the woods, might return later as a nuisance to both sides"
   },
@@ -75,6 +85,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 35, stone: 20 },
     abilities: ["build", "repair"],
+    commandAbilities: ["engineer_productivity_boost"],
+    primaryAbilityId: "engineer_productivity_boost",
     spawner: "village",
     prerequisites: {
       buildings: ["village"]
@@ -95,6 +107,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 50, stone: 40 },
     abilities: ["build", "repair", "fortify"],
+    commandAbilities: ["engineer_productivity_boost"],
+    primaryAbilityId: "engineer_productivity_boost",
     upgradeFrom: "engineer",
     description: "Master builder who can fortify and upgrade buildings",
     notes: "DEFEAT: Dramatically faints onto blueprints, revives at workshop"
@@ -115,6 +129,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 20, wood: 10 },
     abilities: ["heal", "kick"],
+    commandAbilities: ["heal_pulse", "monk_kick"],
+    primaryAbilityId: "heal_pulse",
     attackType: "melee",
     attackDamage: 10,
     attackRange: 2.0,
@@ -140,6 +156,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 40, wood: 30 },
     abilities: ["heal", "kick", "bless", "shield"],
+    commandAbilities: ["heal_pulse", "monk_kick"],
+    primaryAbilityId: "heal_pulse",
     attackType: "melee",
     attackDamage: 14,
     attackRange: 2.5,
@@ -165,6 +183,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 30, wood: 20 },
     abilities: ["fireball", "teleport"],
+    commandAbilities: ["wizard_cast"],
+    primaryAbilityId: "wizard_cast",
     attackType: "ranged",
     attackDamage: 15,
     attackRange: 5,
@@ -190,6 +210,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 50, wood: 50 },
     abilities: ["fireball", "teleport", "storm", "summon"],
+    commandAbilities: ["wizard_cast"],
+    primaryAbilityId: "wizard_cast",
     attackType: "ranged",
     attackDamage: 22,
     attackRange: 6,
@@ -210,7 +232,9 @@ const UnitTypes = {
     rotationSpeed: 6.0,
     size: 1,
     cost: { food: 35, wood: 30 },
-    abilities: ["curse", "drain", "hex"],
+    abilities: ["fireball", "curse", "drain", "hex"],
+    commandAbilities: ["warlock_fireball"],
+    primaryAbilityId: "warlock_fireball",
     attackType: "ranged",
     attackDamage: 11,
     attackRange: 5,
@@ -262,6 +286,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 25, wood: 15 },
     abilities: ["melee", "charge"],
+    commandAbilities: ["charge"],
+    primaryAbilityId: "charge",
     attackType: "melee",
     attackDamage: 12,
     attackRange: 2.5,
@@ -287,6 +313,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 45, wood: 40 },
     abilities: ["melee", "charge", "rally", "cleave"],
+    commandAbilities: ["charge"],
+    primaryAbilityId: "charge",
     attackType: "melee",
     attackDamage: 18,
     attackRange: 2.5,
@@ -309,6 +337,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 20, wood: 25 },
     abilities: ["ranged", "volley"],
+    commandAbilities: ["volley"],
+    primaryAbilityId: "volley",
     attackType: "ranged",
     attackDamage: 8,
     attackRange: 6,
@@ -334,6 +364,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 35, wood: 45, stone: 10 },
     abilities: ["ranged", "volley", "siege"],
+    commandAbilities: ["volley"],
+    primaryAbilityId: "volley",
     attackType: "ranged",
     attackDamage: 14,
     attackRange: 7,
@@ -507,6 +539,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 25, wood: 40 },
     abilities: ["heal", "bless", "resurrect"],
+    commandAbilities: ["heal_pulse"],
+    primaryAbilityId: "heal_pulse",
     attackType: "ranged",
     attackDamage: 7,
     attackRange: 4,
@@ -533,6 +567,8 @@ const UnitTypes = {
     size: 1,
     cost: { food: 45, wood: 80 },
     abilities: ["heal", "fly", "smite", "resurrect"],
+    commandAbilities: ["heal_pulse"],
+    primaryAbilityId: "heal_pulse",
     attackType: "melee",
     attackDamage: 16,
     attackRange: 3.0,
@@ -560,11 +596,26 @@ const UnitTypes = {
     size: 1,
     cost: { food: 30, wood: 30 },
     abilities: ["poison", "spore", "grow"],
+    commandAbilities: ["spore_bloom"],
+    primaryAbilityId: "spore_bloom",
     spawner: "well",
     prerequisites: {
       buildings: ["camp"]
     },
     upgradeTo: "alchemist",
+    defeatOutcome: {
+      type: "ability_burst",
+      abilityId: "spore_bloom",
+      effectParams: {
+        outerRadius: 12,
+        innerRadius: 6,
+        innerWoodAmount: 7,
+        maxSeedCount: 6,
+        growthDelayTicks: 70,
+        treeRemaining: 28,
+        seedChance: 0.4
+      }
+    },
     description: "Fungus expert who weaponizes spores and toxins",
     notes: "DEFEAT: 💧 Dissolves into a puddle of spores, regrows at well over time"
   },
@@ -810,6 +861,7 @@ function Unit(unitType, position, options = {}) {
     
     // Copy all properties from definition
     Object.assign(this, def);
+    this.maxHealth = def.health;
     
     // Unit instance properties
     this.type = unitType; // Store the original unit type
@@ -2539,6 +2591,17 @@ function updateUnitMeshes() {
                     }
 
                     unit.mesh.isVisible = true;
+                    if (unit.billboard) {
+                        if (window.gfx && window.gfx.syncUnitBillboardPositionFromMesh) {
+                            window.gfx.syncUnitBillboardPositionFromMesh(unit.billboard, unit.mesh.position);
+                        } else {
+                            unit.billboard.position.copyFrom(unit.mesh.position);
+                        }
+                        const cam = window.gfx && window.gfx.camera && window.gfx.camera.position;
+                        if (cam && unit.billboard.isEnabled() && window.gfx && window.gfx.applyBillboardYawTowardCameraXZ) {
+                            window.gfx.applyBillboardYawTowardCameraXZ(unit.billboard, cam.x, cam.z);
+                        }
+                    }
                 }
                 return;
             }
@@ -3381,64 +3444,233 @@ if (typeof window !== 'undefined') {
     window.disposeUnitSelectionIndicator = disposeUnitSelectionIndicator;
     window.setUnitSelectionIndicatorVisible = setUnitSelectionIndicatorVisible;
 
-    window.onUnitDeath = function(unit, attackerOwner) {
-        if (!unit || unit.dead) return;
+    function getUnitDefeatOutcome(unit) {
+        return window.UnitTypes?.[unit?.type]?.defeatOutcome || null;
+    }
 
-        // Brigands don't die — they drop their weapon, revert to a villager, and flee home
-        if (unit.type === 'brigand') {
+    function resolveDefeatRetreatTarget(unit, outcome = {}) {
+        const owner = unit?.owner;
+        const ownerPlayer = window.findPlayerByUnitOwner?.(owner);
+        const pos = unit?.pb?.state?.loc;
+        const TILE_SIZE = window.TILE_SIZE || 4;
+        let homePos = null;
+
+        if (outcome.retreatToAgora && ownerPlayer?.agora) {
+            homePos = { x: ownerPlayer.agora.x * TILE_SIZE, z: ownerPlayer.agora.y * TILE_SIZE };
+        }
+
+        const preferredTypes = Array.isArray(outcome.retreatBuildingTypes) ? outcome.retreatBuildingTypes : null;
+        const candidateBuildings = Array.isArray(ownerPlayer?.buildings) ? ownerPlayer.buildings : [];
+
+        function maybePickClosest(buildings) {
+            if (!pos) return;
+            let closest = Infinity;
+            for (const building of buildings) {
+                if (!building?.position) continue;
+                const dx = building.position.x - pos.x;
+                const dz = building.position.z - pos.z;
+                const distanceSq = dx * dx + dz * dz;
+                if (distanceSq < closest) {
+                    closest = distanceSq;
+                    homePos = { x: building.position.x, z: building.position.z };
+                }
+            }
+        }
+
+        if (!homePos && preferredTypes?.length) {
+            maybePickClosest(candidateBuildings.filter(building => preferredTypes.includes(building.type)));
+        }
+        if (!homePos) {
+            maybePickClosest(candidateBuildings);
+        }
+
+        return { ownerPlayer, pos, homePos };
+    }
+
+    function buildDefeatConvertPayload(unit, outcome = {}) {
+        const { pos, homePos } = resolveDefeatRetreatTarget(unit, outcome);
+        return {
+            playerId: unit.owner,
+            unitId: unit.id,
+            targetType: outcome.targetType || 'villager',
+            resetHealth: outcome.resetHealth !== false,
+            postConvertBehavior: homePos ? 'run' : 'linger',
+            postConvertParams: homePos
+                ? { targetPoint: homePos }
+                : { center: { x: pos?.x || 0, z: pos?.z || 0 } },
+            requireHost: outcome.requireHost !== false,
+            pendingFlag: outcome.pendingFlag || '_pendingDefeatConvert',
+            reason: outcome.reason || 'unit_defeat'
+        };
+    }
+
+    function spawnReplacementUnitVisual(unit, owner, homePos) {
+        if (!window.gfx?.scene || !window.gfx.getModel) return;
+        window.gfx.getModel(unit.model, window.gfx.scene).then(model => {
+            unit.mesh = model.root;
+            unit.mesh.scaling = new BABYLON.Vector3(unit.scale, unit.scale, unit.scale);
+
+            if (model.animationGroups?.length > 0) {
+                unit.animationGroups = {};
+                model.animationGroups.forEach(group => {
+                    let name = group.name.toLowerCase();
+                    if (name.startsWith('clone of ')) name = name.substring(9);
+                    unit.animationGroups[name] = group;
+                });
+                unit.currentAnimation = null;
+                if (unit.animationGroups['idle']) {
+                    unit.animationGroups['idle'].start(true);
+                    unit.currentAnimation = 'idle';
+                }
+            }
+
+            unit.mesh.isPickable = true;
+            unit.mesh.getChildMeshes().forEach(mesh => {
+                mesh.isPickable = true;
+                if (mesh.rotationQuaternion) {
+                    const q = mesh.rotationQuaternion.clone();
+                    mesh.rotationQuaternion = null;
+                    mesh.originalRotation = q.toEulerAngles();
+                    mesh.rotation.copyFrom(mesh.originalRotation);
+                }
+            });
+
+            if (unit.pb?.state?.loc) {
+                unit.mesh.position.x = unit.pb.state.loc.x;
+                unit.mesh.position.y = unit.pb.state.loc.y;
+                unit.mesh.position.z = unit.pb.state.loc.z;
+            }
+            if (unit.pb?.state?.rot) {
+                unit.mesh.rotationQuaternion = null;
+                unit.mesh.rotation.y = unit.pb.state.rot.y;
+            }
+
+            if (window.createSelectionIndicator) window.createSelectionIndicator(unit);
+            if (window.gfx?.createBlobShadow) window.gfx.createBlobShadow(unit);
+            if (window.applyTeamColorsToMesh) {
+                const color = window.getTeamColorForOwner ? window.getTeamColorForOwner(owner) : '#4A90E2';
+                window.applyTeamColorsToMesh(unit.mesh, color);
+            }
+
+            if (homePos && window.behaviorManager) {
+                window.behaviorManager.setBehavior(unit, 'run', { targetPoint: homePos });
+            }
+        });
+    }
+
+    function handleLocalConvertAndFleeOutcome(unit, outcome = {}) {
+        const { ownerPlayer, pos, homePos } = resolveDefeatRetreatTarget(unit, outcome);
+        if (!pos) {
+            unit.dead = true;
+            window.destroyUnit?.(unit);
+            return true;
+        }
+
+        const owner = unit.owner;
+        const rotation = unit.rotation || 0;
+        const targetType = outcome.targetType || 'villager';
+        const targetDef = UnitTypes[targetType];
+        if (!targetDef) {
+            unit.dead = true;
+            window.destroyUnit?.(unit);
+            return true;
+        }
+
+        if (ownerPlayer?.units) {
+            const idx = ownerPlayer.units.indexOf(unit);
+            if (idx > -1) ownerPlayer.units.splice(idx, 1);
+        }
+        if (window.gameUnits) {
+            const idx = window.gameUnits.indexOf(unit);
+            if (idx > -1) window.gameUnits.splice(idx, 1);
+        }
+
+        disposeUnitSelectionIndicator(unit);
+        if (window.disposeHealthDots) {
+            window.disposeHealthDots(unit);
+        }
+        if (window.player && typeof window.player.deselectUnit === 'function') {
+            window.player.deselectUnit(unit);
+        }
+        if (unit.billboard && window.gfx?.returnBillboardInstance) {
+            window.gfx.returnBillboardInstance(unit.billboard);
+            unit.billboard = null;
+        }
+        if (unit.mesh) {
+            unit.mesh.dispose();
+            unit.mesh = null;
+        }
+        unit.dead = true;
+
+        const replacement = new Unit(targetType, { x: pos.x, y: pos.y, z: pos.z });
+        replacement.owner = owner;
+        replacement.rotation = rotation;
+        const restoredHealth = outcome.resetHealth === false
+            ? Math.max(1, Math.min(targetDef.health, unit.currentHealth || unit.health || targetDef.health))
+            : targetDef.health;
+        replacement.maxHealth = targetDef.health;
+        replacement.health = restoredHealth;
+        replacement.currentHealth = restoredHealth;
+
+        if (ownerPlayer?.units) ownerPlayer.units.push(replacement);
+        if (window.gameUnits) window.gameUnits.push(replacement);
+
+        spawnReplacementUnitVisual(replacement, owner, homePos);
+        return true;
+    }
+
+    const unitDefeatOutcomeHandlers = {
+        convert_and_flee(unit, outcome) {
             if (window.isMultiplayer && window.currentMatch) {
                 const match = window.currentMatch;
-                const owner = unit.owner;
-                const ownerPlayer = window.findPlayerByUnitOwner?.(owner);
-                const pos = unit.pb?.state?.loc;
-                const TILE_SIZE = window.TILE_SIZE || 4;
-                let homePos = null;
-                if (ownerPlayer?.agora) {
-                    homePos = { x: ownerPlayer.agora.x * TILE_SIZE, z: ownerPlayer.agora.y * TILE_SIZE };
-                }
-                if (!homePos && ownerPlayer?.buildings && pos) {
-                    let closest = Infinity;
-                    for (const b of ownerPlayer.buildings) {
-                        if (!b?.position) continue;
-                        const dx = b.position.x - pos.x;
-                        const dz = b.position.z - pos.z;
-                        const d = dx * dx + dz * dz;
-                        if (d < closest) {
-                            closest = d;
-                            homePos = { x: b.position.x, z: b.position.z };
-                        }
-                    }
-                }
+                const payload = buildDefeatConvertPayload(unit, outcome);
                 if (typeof match.requestUnitConversion === 'function') {
-                    match.requestUnitConversion({
-                        reason: 'brigand_defeat',
-                        playerId: owner,
-                        unitId: unit.id,
-                        targetType: 'villager',
-                        resetHealth: true,
-                        postConvertBehavior: homePos ? 'run' : 'linger',
-                        postConvertParams: homePos
-                            ? { targetPoint: homePos }
-                            : { center: { x: pos?.x || 0, z: pos?.z || 0 } },
-                        requireHost: true,
-                        pendingFlag: '_pendingDefeatConvert'
-                    });
+                    match.requestUnitConversion(payload);
                 } else {
                     match.executeConvertCommand({
                         type: 'convert',
-                        playerId: owner,
-                        unitId: unit.id,
-                        targetType: 'villager',
-                        resetHealth: true,
-                        postConvertBehavior: homePos ? 'run' : 'linger',
-                        postConvertParams: homePos
-                            ? { targetPoint: homePos }
-                            : { center: { x: pos?.x || 0, z: pos?.z || 0 } }
+                        playerId: payload.playerId,
+                        unitId: payload.unitId,
+                        targetType: payload.targetType,
+                        resetHealth: payload.resetHealth,
+                        postConvertBehavior: payload.postConvertBehavior,
+                        postConvertParams: payload.postConvertParams
                     });
                 }
-                return;
+                return true;
             }
-            handleBrigandDefeat(unit);
+            return handleLocalConvertAndFleeOutcome(unit, outcome);
+        },
+        ability_burst(unit, outcome) {
+            const centerPoint = unit?.pb?.state?.loc
+                ? { x: unit.pb.state.loc.x, z: unit.pb.state.loc.z }
+                : null;
+
+            if (centerPoint && outcome?.abilityId === 'spore_bloom' && window.executeSporeBloomEffect) {
+                window.executeSporeBloomEffect(unit, centerPoint, outcome.effectParams || {});
+            }
+
+            unit.dead = true;
+            unit.state = 'dead';
+            if (window.destroyUnit) {
+                window.destroyUnit(unit);
+            }
+            return true;
+        }
+    };
+
+    function handleUnitDefeatOutcome(unit, attackerOwner) {
+        const outcome = getUnitDefeatOutcome(unit);
+        if (!outcome?.type) return false;
+        const handler = unitDefeatOutcomeHandlers[outcome.type];
+        if (typeof handler !== 'function') return false;
+        return !!handler(unit, outcome, attackerOwner);
+    }
+
+    window.onUnitDeath = function(unit, attackerOwner) {
+        if (!unit || unit.dead) return;
+
+        if (handleUnitDefeatOutcome(unit, attackerOwner)) {
             return;
         }
 
@@ -3448,119 +3680,6 @@ if (typeof window !== 'undefined') {
             window.destroyUnit(unit);
         }
     };
-
-    function handleBrigandDefeat(brigand) {
-        const pos = brigand.pb?.state?.loc;
-        if (!pos) { brigand.dead = true; window.destroyUnit?.(brigand); return; }
-
-        const owner = brigand.owner;
-        const rotation = brigand.rotation || 0;
-
-        // Remove brigand from all arrays
-        const ownerPlayer = window.findPlayerByUnitOwner?.(owner);
-        if (ownerPlayer?.units) {
-            const idx = ownerPlayer.units.indexOf(brigand);
-            if (idx > -1) ownerPlayer.units.splice(idx, 1);
-        }
-        if (window.gameUnits) {
-            const idx = window.gameUnits.indexOf(brigand);
-            if (idx > -1) window.gameUnits.splice(idx, 1);
-        }
-
-        // Clean up brigand visuals
-        disposeUnitSelectionIndicator(brigand);
-        if (window.disposeHealthDots) {
-            window.disposeHealthDots(brigand);
-        }
-        if (window.player && typeof window.player.deselectUnit === 'function') {
-            window.player.deselectUnit(brigand);
-        }
-        if (brigand.billboard && window.gfx?.returnBillboardInstance) { window.gfx.returnBillboardInstance(brigand.billboard); brigand.billboard = null; }
-        if (brigand.mesh) { brigand.mesh.dispose(); brigand.mesh = null; }
-        brigand.dead = true;
-
-        // Create a new villager at the brigand's position
-        const villager = new Unit('villager', { x: pos.x, y: pos.y, z: pos.z });
-        villager.owner = owner;
-        villager.rotation = rotation;
-        villager.health = UnitTypes.villager.health;
-        villager.currentHealth = UnitTypes.villager.health;
-
-        // Add to arrays
-        if (ownerPlayer?.units) ownerPlayer.units.push(villager);
-        if (window.gameUnits) window.gameUnits.push(villager);
-
-        // Find home — agora or nearest friendly village/camp
-        let homePos = null;
-        const TILE_SIZE = window.TILE_SIZE || 4;
-        if (ownerPlayer?.agora) {
-            homePos = { x: ownerPlayer.agora.x * TILE_SIZE, z: ownerPlayer.agora.y * TILE_SIZE };
-        }
-        if (!homePos && ownerPlayer?.buildings) {
-            let closest = Infinity;
-            for (const b of ownerPlayer.buildings) {
-                if (!b.position) continue;
-                const dx = b.position.x - pos.x, dz = b.position.z - pos.z;
-                const d = dx * dx + dz * dz;
-                if (d < closest) { closest = d; homePos = { x: b.position.x, z: b.position.z }; }
-            }
-        }
-
-        // Spawn the villager model and send them running home
-        if (window.gfx?.scene && window.gfx.getModel) {
-            window.gfx.getModel(villager.model, window.gfx.scene).then(model => {
-                villager.mesh = model.root;
-                villager.mesh.scaling = new BABYLON.Vector3(villager.scale, villager.scale, villager.scale);
-
-                if (model.animationGroups?.length > 0) {
-                    villager.animationGroups = {};
-                    model.animationGroups.forEach(group => {
-                        let name = group.name.toLowerCase();
-                        if (name.startsWith('clone of ')) name = name.substring(9);
-                        villager.animationGroups[name] = group;
-                    });
-                    villager.currentAnimation = null;
-                    if (villager.animationGroups['idle']) {
-                        villager.animationGroups['idle'].start(true);
-                        villager.currentAnimation = 'idle';
-                    }
-                }
-
-                villager.mesh.isPickable = true;
-                villager.mesh.getChildMeshes().forEach(mesh => {
-                    mesh.isPickable = true;
-                    if (mesh.rotationQuaternion) {
-                        const q = mesh.rotationQuaternion.clone();
-                        mesh.rotationQuaternion = null;
-                        mesh.originalRotation = q.toEulerAngles();
-                        mesh.rotation.copyFrom(mesh.originalRotation);
-                    }
-                });
-
-                if (villager.pb?.state?.loc) {
-                    villager.mesh.position.x = villager.pb.state.loc.x;
-                    villager.mesh.position.y = villager.pb.state.loc.y;
-                    villager.mesh.position.z = villager.pb.state.loc.z;
-                }
-                if (villager.pb?.state?.rot) {
-                    villager.mesh.rotationQuaternion = null;
-                    villager.mesh.rotation.y = villager.pb.state.rot.y;
-                }
-
-                if (window.createSelectionIndicator) window.createSelectionIndicator(villager);
-                if (window.gfx?.createBlobShadow) window.gfx.createBlobShadow(villager);
-                if (window.applyTeamColorsToMesh) {
-                    const color = window.getTeamColorForOwner ? window.getTeamColorForOwner(owner) : '#4A90E2';
-                    window.applyTeamColorsToMesh(villager.mesh, color);
-                }
-
-                // Run home!
-                if (homePos && window.behaviorManager) {
-                    window.behaviorManager.setBehavior(villager, 'run', { targetPoint: homePos });
-                }
-            });
-        }
-    }
 
     window.maybeAutoMonkKick = maybeAutoMonkKick; // Export monk kick function
     window.isMenuSceneUnit = isMenuSceneUnit; // Export helper to identify menu scene units

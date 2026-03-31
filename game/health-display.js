@@ -4,9 +4,11 @@
 
   const HEALTH_DOT_COUNT = 5;
   /** Bump when geometry/material pipeline changes so old meshes are disposed. */
-  const HEALTH_DOTS_IMPL_VERSION = 10;
+  const HEALTH_DOTS_IMPL_VERSION = 12;
   const HEALTH_DOTS_RENDERING_GROUP = 2;
   const DOT_DIAMETER_TILE_MUL = 0.22;
+  /** Second and fourth dots (0-based indices 1,3) render smaller for a subtle rhythm. */
+  const DOT_DIAMETER_ALTERNATE_MUL = 0.4;
   const DOT_SPACING_MUL = 1.06;
   const Y_BELOW_UNIT_MUL = -0.58;
   const Y_BELOW_BUILDING_MUL = -0.72;
@@ -248,9 +250,11 @@
     }
 
     for (let i = 0; i < HEALTH_DOT_COUNT; i++) {
+      const d =
+        i === 1 || i === 3 ? dotSize * DOT_DIAMETER_ALTERNATE_MUL : dotSize;
       const dot = BABYLON.MeshBuilder.CreatePlane(`healthChip_${i}`, {
-        width: dotSize,
-        height: dotSize
+        width: d,
+        height: d
       }, scene);
 
       const xPos = (i * dotSpacing) - (totalWidth / 2);

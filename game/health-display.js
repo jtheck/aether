@@ -133,7 +133,7 @@
     if (typeof c.isDisposed === 'function' && c.isDisposed()) return;
     if (typeof mesh.isDisposed === 'function' && mesh.isDisposed()) return;
     try {
-      mesh.computeWorldMatrix(true);
+      mesh.computeWorldMatrix(false);
       const wm = mesh.getWorldMatrix();
       const yOff = getHealthDotsBelowRootOffsetY(entity);
       _healthDotsLocalBelow.copyFromFloats(0, yOff, 0);
@@ -299,6 +299,8 @@
     if (entity.healthDotsContainer) {
       entity.healthDotsContainer.setEnabled(false);
     }
+    delete entity._healthDotsVisualHealth;
+    delete entity._healthDotsVisualMax;
   };
 
   window.updateHealthDots = function(entity) {
@@ -316,6 +318,15 @@
 
     const maxHealth = entity.maxHealth || 100;
     const currentHealth = Math.max(0, entity.health || 0);
+    if (
+      entity._healthDotsVisualHealth === currentHealth &&
+      entity._healthDotsVisualMax === maxHealth
+    ) {
+      return;
+    }
+    entity._healthDotsVisualHealth = currentHealth;
+    entity._healthDotsVisualMax = maxHealth;
+
     const healthPercent = maxHealth > 0 ? currentHealth / maxHealth : 0;
 
     const filledDots = Math.min(
@@ -377,6 +388,8 @@
       entity.healthDotsContainer = null;
     }
     delete entity.healthDotsImplVersion;
+    delete entity._healthDotsVisualHealth;
+    delete entity._healthDotsVisualMax;
   };
 
 })();

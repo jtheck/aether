@@ -1474,7 +1474,7 @@ function createSelectionIndicator(unit) {
     torus.isVisible = false;
     torus.parent = null;
     torus.scaling.setAll(1);
-    if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(true);
+    if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(false);
     if (unit.mesh.getAbsolutePosition) {
         const abs = unit.mesh.getAbsolutePosition();
         torus.position.set(abs.x, abs.y + TILE * SELECTION_INDICATOR_Y_OFFSET, abs.z);
@@ -1523,7 +1523,7 @@ function createSelectionIndicator(unit) {
             const scale = Math.max(0.12, TILE * 0.22);
             root.scaling.setAll(scale);
 
-            if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(true);
+            if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(false);
             if (unit.mesh.getAbsolutePosition) {
                 const abs = unit.mesh.getAbsolutePosition();
                 root.position.set(abs.x, abs.y + TILE * SELECTION_INDICATOR_Y_OFFSET, abs.z);
@@ -1561,16 +1561,14 @@ function collectUnitsForSelectionVisuals() {
     return out;
 }
 
-function unitMatchesSelection(unit, selectedUnits) {
-    if (!unit || !selectedUnits.length) return false;
-    if (selectedUnits.includes(unit)) return true;
-    const id = unit.id;
-    if (!id) return false;
+/** O(1) membership in the selection loop: one Set build per frame, not per unit. */
+function buildSelectedUnitIdSet(selectedUnits) {
+    const set = new Set();
     for (let i = 0; i < selectedUnits.length; i++) {
-        const s = selectedUnits[i];
-        if (s && s.id === id) return true;
+        const u = selectedUnits[i];
+        if (u && u.id) set.add(u.id);
     }
-    return false;
+    return set;
 }
 
 // Update selection indicators for all units
@@ -1586,11 +1584,12 @@ function updateSelectionIndicators(deltaTimeOpt) {
     if (dt <= 0 || dt > 2) dt = 1 / 60;
 
     const selectedUnits = window.player.getSelectedUnits();
+    const selectedIdSet = selectedUnits.length ? buildSelectedUnitIdSet(selectedUnits) : null;
 
     const allUnits = collectUnitsForSelectionVisuals();
 
     allUnits.forEach(unit => {
-        const isSelected = unitMatchesSelection(unit, selectedUnits);
+        const isSelected = !!(selectedIdSet && unit.id && selectedIdSet.has(unit.id));
 
         if (unit.selectionIndicator && unit.mesh) {
             if (typeof unit.selectionIndicator.setEnabled === 'function') {
@@ -1600,7 +1599,7 @@ function updateSelectionIndicators(deltaTimeOpt) {
 
             if (isSelected) {
                 const TILE = window.TILE_SIZE || 4;
-                if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(true);
+                if (unit.mesh.computeWorldMatrix) unit.mesh.computeWorldMatrix(false);
                 const abs = unit.mesh.getAbsolutePosition();
                 unit.selectionIndicator.position.set(abs.x, abs.y + TILE * SELECTION_INDICATOR_Y_OFFSET, abs.z);
 

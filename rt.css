@@ -1036,6 +1036,7 @@ a:after{
   align-items: center;
   gap: 6px;
   padding: 4px;
+  color: wheat;
 }
 .selection_panel_item {
   display: inline-flex;

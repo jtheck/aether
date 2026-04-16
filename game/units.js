@@ -587,7 +587,7 @@ const UnitTypes = {
   },
 
   // ═══════════════════════════════════════════════════════════════
-  // ELEMENTAL UNITS - WATER (Well) 💧
+  // ELEMENTAL UNITS - WATER (Moon Well) 💧
   // ═══════════════════════════════════════════════════════════════
 
   mycorrhizae: {
@@ -604,9 +604,10 @@ const UnitTypes = {
     abilities: ["poison", "spore", "grow"],
     commandAbilities: ["spore_bloom"],
     primaryAbilityId: "spore_bloom",
-    spawner: "well",
+    spawner: "moonwell",
     prerequisites: {
-      buildings: ["camp"]
+      buildings: ["moonwell"],
+      research: ["prospecting"]
     },
     upgradeTo: "alchemist",
     defeatOutcome: {
@@ -625,7 +626,7 @@ const UnitTypes = {
       }
     },
     description: "Fungus expert who weaponizes spores and toxins",
-    notes: "DEFEAT: 💧 Dissolves into a puddle of spores, regrows at well over time"
+    notes: "DEFEAT: 💧 Dissolves into a puddle of spores, regrows at moon well over time"
   },
 
   alchemist: {
@@ -640,10 +641,10 @@ const UnitTypes = {
     size: 1,
     cost: { food: 50, wood: 70 },
     abilities: ["poison", "transmute", "potion", "explosion"],
-    spawner: "well",
+    spawner: "moonwell",
     upgradeFrom: "mycorrhizae",
     description: "Master of potions and chemical warfare",
-    notes: "DEFEAT: 💧 Drinks emergency potion, turns into frog temporarily, hops back to well"
+    notes: "DEFEAT: 💧 Drinks emergency potion, turns into frog temporarily, hops back to moon well"
   },
 
   // ═══════════════════════════════════════════════════════════════

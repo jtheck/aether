@@ -57,12 +57,12 @@
       },
         arc: 1
       },
-      tower: {
+      farm: {
         callback: () => {
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
-            window.buildingSystem.selectBuilding('tower');
-        }
+            window.buildingSystem.selectBuilding('farm');
+          }
         },
         arc: 1
       },
@@ -71,15 +71,6 @@
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
             window.buildingSystem.selectBuilding('silo');
-          }
-        },
-        arc: 1
-      },
-      farm: {
-        callback: () => {
-          if (window.buildingSystem) {
-            window.buildingSystem.cancelPlacement();
-            window.buildingSystem.selectBuilding('farm');
           }
         },
         arc: 1
@@ -93,12 +84,12 @@
         },
         arc: 1
       },
-      // Arc 2: Intermediate structures
-      lab: {
+      // Arc 2: Intermediate structures (tower from arc 1; lab centered)
+      tower: {
         callback: () => {
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
-            window.buildingSystem.selectBuilding('lab');
+            window.buildingSystem.selectBuilding('tower');
           }
         },
         arc: 2
@@ -112,11 +103,11 @@
         },
         arc: 2
       },
-      moonwell: {
+      lab: {
         callback: () => {
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
-            window.buildingSystem.selectBuilding('moonwell');
+            window.buildingSystem.selectBuilding('lab');
           }
         },
         arc: 2
@@ -139,7 +130,7 @@
         },
         arc: 2
       },
-      // Arc 3: Advanced structures
+      // Arc 3: Advanced structures (moonwell centered on this ring)
       factory: {
         callback: () => {
           if (window.buildingSystem) {
@@ -158,11 +149,11 @@
         },
         arc: 3
       },
-      well: {
+      moonwell: {
         callback: () => {
           if (window.buildingSystem) {
             window.buildingSystem.cancelPlacement();
-            window.buildingSystem.selectBuilding('well');
+            window.buildingSystem.selectBuilding('moonwell');
           }
         },
         arc: 3

@@ -231,6 +231,7 @@ const BuildingTypes = {
     workType: "build",
     visionRange: 20,
     garrisonCapacity: 4,
+    requires: ["camp"],
     description: "Defensive structure with extended sight range"
   },
 
@@ -272,7 +273,7 @@ const BuildingTypes = {
     workType: "build",
     spawnsUnits: ["warlock"],
     enablesUpgrades: ["scribes", "patronage"],
-    requires: ["village"],
+    requires: ["camp"],
     description: "Social hub that spawns Warlocks and enables upgrades"
   },
 
@@ -283,7 +284,8 @@ const BuildingTypes = {
     rotation: 0,
     size: { width: 2, height: 2 },
     cost: { stone: 5, minerals: 1 },
-    category: "support",
+    category: "elemental",
+    element: "water",
     needsWorkers: true,
     maxWorkers: 2,
     workRadius: 15,
@@ -291,7 +293,8 @@ const BuildingTypes = {
     healRadius: 8,
     healAmount: 2,
     healInterval: 3000,
-    description: "Magical well that heals nearby friendly units"
+    spawnsUnits: ["mycorrhizae"],
+    description: "💧 Moon well — heals allies nearby and trains Myco / Alchemists"
   },
 
   barracks: {
@@ -308,7 +311,7 @@ const BuildingTypes = {
     workType: "build",
     spawnsUnits: ["warrior", "archer"],
     trainingSpeed: 1.0,
-    requires: ["farm"],
+    requires: ["village"],
     description: "Trains Warriors and Archers for combat"
   },
 
@@ -325,6 +328,7 @@ const BuildingTypes = {
     workRadius: 15,
     workType: "build",
     enablesUpgrades: ["prospecting", "armor", "artillery"],
+    requires: ["camp"],
     description: "Research facility that unlocks advanced upgrades"
   },
 
@@ -342,7 +346,7 @@ const BuildingTypes = {
     workType: "build",
     enablesUpgrades: ["stewardship", "drayage"],
     buildsVehicles: true,
-    requires: ["mine"],
+    requires: ["village"],
     description: "Crafting center for vehicles and mechanical upgrades"
   },
 
@@ -364,7 +368,6 @@ const BuildingTypes = {
     workRadius: 15,
     workType: "build",
     spawnsUnits: ["apc"],
-    requires: ["workshop"],
     description: "🔥 Fire elemental building - produces APCs and Tanks"
   },
 
@@ -385,24 +388,6 @@ const BuildingTypes = {
     description: "✨ Spirit elemental building - trains Priests and Valkyries"
   },
 
-  well: {
-    name: "Well",
-    model: "assets/models/well.glb",
-    scale: 0.25,
-    rotation: 0,
-    size: { width: 2, height: 2 },
-    cost: { stone: 5, minerals: 1 },
-    category: "elemental",
-    element: "water",
-    needsWorkers: true,
-    maxWorkers: 2,
-    workRadius: 15,
-    workType: "build",
-    spawnsUnits: ["mycorrhizae"],
-    prerequisites: { research: ["prospecting"] },
-    description: "💧 Water elemental building - trains Myco and Alchemists"
-  },
-
   perch: {
     name: "Perch",
     model: "assets/models/perch.glb",
@@ -417,7 +402,6 @@ const BuildingTypes = {
     workRadius: 15,
     workType: "build",
     spawnsUnits: ["dirigible"],
-    prerequisites: { research: ["drayage"] },
     description: "🌀 Air elemental building - launches Dirigibles and War Balloons"
   },
 
@@ -518,6 +502,7 @@ const buildingModelPools = new Map(); // path -> array of model instances
 
 // Building constructor
 function Building(buildingType, position, options = {}) {
+  if (buildingType === 'well') buildingType = 'moonwell';
   const def = BuildingTypes[buildingType];
   if (!def) {
     // console.error(`Unknown building type: ${buildingType}`);

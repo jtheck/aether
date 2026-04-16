@@ -1,0 +1,44 @@
+body.motion-cursor-page {
+  margin: 0;
+  min-height: 100vh;
+  cursor: none;
+}
+
+.motion-cursor {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+  contain: layout paint;
+  backface-visibility: hidden;
+}
+
+.motion-cursor--lead {
+  z-index: 10001;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.motion-cursor--lead.motion-cursor--visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.motion-cursor--trail {
+  z-index: 10000;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.motion-cursor--trail[data-trail='1'] {
+  z-index: 9999;
+}
+
+.motion-cursor-svg {
+  display: block;
+}
+
+.motion-cursor-svg--trail {
+  filter: none;
+}

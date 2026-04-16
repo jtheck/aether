@@ -1165,6 +1165,9 @@
   lasso.setMode = function(mode) {
     if (mode === 'rectangle' || mode === 'lasso') {
       selectionMode = mode;
+      if (window.motionCursor && typeof window.motionCursor.syncSelectionMode === 'function') {
+        window.motionCursor.syncSelectionMode(selectionMode);
+      }
       // console.log(`🎯 Selection mode changed to: ${mode}`);
     } else {
       console.warn(`🎯 Invalid selection mode: ${mode}`);

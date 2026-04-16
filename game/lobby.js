@@ -2975,7 +2975,8 @@ const Lobby = {
         const parts = bld.split(',');
         const x = Number(parts[0]);
         const z = Number(parts[1]);
-        const type = parts[2];
+        let type = parts[2];
+        if (type === 'well') type = 'moonwell';
         const rotation = Number(parts[3]) || 0;
         const playerSlot = parts[4] !== undefined ? Number(parts[4]) : -1;
         

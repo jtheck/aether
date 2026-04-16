@@ -29,20 +29,19 @@ const menu = {
     // Arc 1: Basic structures
     camp: { arc: 1 },
     village: { arc: 1 },
-    tower: { arc: 1 },
-    silo: { arc: 1 },
     farm: { arc: 1 },
+    silo: { arc: 1 },
     mine: { arc: 1 },
-    // Arc 2: Intermediate structures
-    lab: { arc: 2 },
+    // Arc 2: Intermediate structures (tower from arc 1; lab centered)
+    tower: { arc: 2 },
     tavern: { arc: 2 },
-    moonwell: { arc: 2 },
+    lab: { arc: 2 },
     barracks: { arc: 2 },
     workshop: { arc: 2 },
-    // Arc 3: Advanced structures
+    // Arc 3: Advanced structures (moonwell centered on this ring)
     factory: { arc: 3 },
     church: { arc: 3 },
-    well: { arc: 3 },
+    moonwell: { arc: 3 },
     perch: { arc: 3 },
     grove: { arc: 3 }
   },
@@ -994,8 +993,8 @@ window.debugPlayerState = function() {
     { type: 'warrior', category: 'units', prereq: 'barracks' },
     { type: 'wagon', category: 'units', prereq: 'workshop' },
     { type: 'scribes', category: 'research', prereq: 'workshop' },
-    { type: 'tavern', category: 'buildings', prereq: 'village' },
-    { type: 'barracks', category: 'buildings', prereq: 'farm' }
+    { type: 'tavern', category: 'buildings', prereq: 'camp' },
+    { type: 'barracks', category: 'buildings', prereq: 'village' }
   ];
 
   // Show ALL research and their requirements

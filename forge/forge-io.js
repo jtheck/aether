@@ -461,10 +461,12 @@
       const bldParts = mapData.bld.split(';').filter(s => s && s.trim());
       this.state.buildings = bldParts.map(b => {
         const parts = b.split(',');
+        let t = (parts[2] && parts[2].trim()) || 'agora';
+        if (t === 'well') t = 'moonwell';
         return {
           x: Number(parts[0]),
           y: Number(parts[1]),
-          type: (parts[2] && parts[2].trim()) || 'agora',
+          type: t,
           rotation: Number(parts[3]) || 0,
           player: parts[4] !== undefined ? Number(parts[4]) : -1
         };

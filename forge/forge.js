@@ -103,7 +103,6 @@
     workshop: '🔧',
     factory: '🏭',
     church: '⛪',
-    well: '💧',
     perch: '🦅',
     grove: '🌳',
     // Category fallbacks

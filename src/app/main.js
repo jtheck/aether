@@ -2,10 +2,12 @@
 
 import { livingByOwner } from '../sim/world.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
-import { PLAYER_ARMY, stressPerSideFromSearch, PLAYER, AI_OWNER } from '../sim/worldSetup.js';
+import { PLAYER_ARMY, stressPerSideFromSearch } from '../sim/worldSetup.js';
 import { createRenderer } from '../render/renderer.js';
 import { setupInput } from './input.js';
 import { SimSession } from './simSession.js';
+import { createNetMatch, netModeFromSearch } from './net.js';
+import { PLAYER, AI_OWNER } from '../sim/worldSetup.js';
 
 const SEED = 0x1234;
 
@@ -42,14 +44,41 @@ async function main() {
   }
 
   const stress = stressPerSideFromSearch(location.search);
+  const useNet = netModeFromSearch(location.search);
+
+  let localPlayerId = PLAYER;
+  let netMatch = null;
+  let matchSeed = SEED;
+
+  if (useNet) {
+    if (!(await waitForGetFireP2p())) {
+      showFallback('GetFire P2P failed to load. Hard-refresh or use ?solo=1 for offline.');
+      return;
+    }
+    setStatusText('Joining match lobby…');
+    netMatch = createNetMatch({
+      seed: SEED,
+      onStatus: setStatusText,
+    });
+    try {
+      const match = await netMatch.waitForMatch();
+      localPlayerId = match.localPlayerId;
+      matchSeed = match.seed;
+      setStatusText(match.isHost ? 'Host — match started' : 'Guest — match started');
+    } catch (err) {
+      showFallback(String(err?.message ?? err));
+      return;
+    }
+  }
+
   const session = new SimSession({
-    localPlayerId: PLAYER,
-    humanPlayers: [PLAYER],
-    aiPlayers: stress > 0 ? [] : [AI_OWNER],
-    inputDelayTicks: 0,
+    localPlayerId,
+    humanPlayers: useNet ? [PLAYER, AI_OWNER] : [PLAYER],
+    aiPlayers: useNet || stress > 0 ? [] : [AI_OWNER],
+    inputDelayTicks: useNet ? 1 : 0,
   });
 
-  const { count } = await session.start({ seed: SEED, stressPerSide: stress });
+  const { count } = await session.start({ seed: matchSeed, stressPerSide: stress });
   const world = session.state;
 
   const renderer = await createRenderer(canvas, count, { types: world.type });
@@ -81,7 +110,7 @@ async function main() {
       if (selected[i] && world.alive[i]) c = SELECT_COLOR;
       else {
         c = hpColor(def, world.hp[i]);
-        if (world.owner[i] !== PLAYER) c = tintColor(c, ENEMY_TINT, 0.25);
+        if (world.owner[i] !== localPlayerId) c = tintColor(c, ENEMY_TINT, 0.25);
       }
       const alpha = world.alive[i] ? 1 : fade;
       colors[i * 4] = c[0];
@@ -90,7 +119,7 @@ async function main() {
       colors[i * 4 + 3] = alpha;
     }
     renderer.setColors(colors);
-    updateStatus(session, world, selected, fpsDisplay, stress);
+    updateStatus(session, world, selected, fpsDisplay, stress, localPlayerId, useNet);
   };
   updateColors();
   updateLegend();
@@ -102,6 +131,7 @@ async function main() {
     renderer,
     world,
     selected,
+    localPlayerId,
     getUnitWorldPos: (i) => ({
       x: renderX[i],
       y: renderY[i],
@@ -122,6 +152,8 @@ async function main() {
     updateColors();
   };
 
+  if (netMatch) netMatch.attachSession(session);
+
   renderer.onFrame((deltaMs) => {
     session.pump(deltaMs);
 
@@ -131,7 +163,7 @@ async function main() {
       fpsDisplay = Math.round((fpsFrames * 1000) / fpsAcc);
       fpsAcc = 0;
       fpsFrames = 0;
-      updateStatus(session, world, selected, fpsDisplay, stress);
+      updateStatus(session, world, selected, fpsDisplay, stress, localPlayerId, useNet);
     }
 
     const alpha = session.displayAlpha;
@@ -201,17 +233,33 @@ function updateLegend() {
   }).join('');
 }
 
-function updateStatus(session, world, selected, fps = 0, stress = 0) {
+function updateStatus(session, world, selected, fps = 0, stress = 0, localPlayerId = PLAYER, useNet = false) {
   const el = document.getElementById('status');
   if (!el) return;
-  const p = livingByOwner(world, PLAYER);
-  const e = livingByOwner(world, AI_OWNER);
+  const p = livingByOwner(world, localPlayerId);
+  const e = livingByOwner(world, localPlayerId === PLAYER ? AI_OWNER : PLAYER);
   let sel = 0;
   for (let i = 0; i < world.count; i++) if (selected[i]) sel++;
-  let line = `You: ${p}  ·  Enemy: ${e}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
+  let line = useNet
+    ? `You: ${p}  ·  Foe: ${e}  ·  Selected: ${sel}  ·  Tick ${world.tick}`
+    : `You: ${p}  ·  Enemy: ${e}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
   if (fps > 0) line += `  ·  ${fps} fps`;
   if (stress > 0) line += `  ·  stress ${world.count} units`;
+  if (useNet) line += `  ·  P2P`;
   el.textContent = line;
+}
+
+function setStatusText(text) {
+  const el = document.getElementById('status');
+  if (el) el.textContent = text;
+}
+
+async function waitForGetFireP2p(timeoutMs = 5000) {
+  const start = performance.now();
+  while (typeof globalThis.GETFIREP2P !== 'function' && performance.now() - start < timeoutMs) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return typeof globalThis.GETFIREP2P === 'function';
 }
 
 async function waitForWebGPU(timeoutMs = 3000) {

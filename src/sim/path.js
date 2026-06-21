@@ -17,6 +17,15 @@ export function clearPath(w, i) {
   w.navWpIndex[i] = 0;
 }
 
+export function attackInRange(w, i) {
+  if (w.order[i] !== ORDER.ATTACK || w.targetEntity[i] < 0) return false;
+  const t = w.targetEntity[i];
+  if (!w.alive[t]) return false;
+  const def = getUnitDef(w.type[i]);
+  const range2 = fx.mul(def.attackRange, def.attackRange);
+  return fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]) <= range2;
+}
+
 /** Stand just inside attack range of a target — avoids dog-piling on its center. */
 export function attackStandPoint(w, i, target) {
   const def = getUnitDef(w.type[i]);
@@ -145,6 +154,10 @@ export function movementGoal(w, field, i) {
   if (w.order[i] === ORDER.ATTACK && w.targetEntity[i] >= 0) {
     const t = w.targetEntity[i];
     if (w.alive[t]) {
+      if (attackInRange(w, i)) {
+        clearPath(w, i);
+        return null;
+      }
       const stand = attackStandPoint(w, i, t);
       w.navDestX[i] = stand.x;
       w.navDestY[i] = stand.y;

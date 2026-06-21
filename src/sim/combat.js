@@ -10,13 +10,22 @@ export function combatSystem(w, field) {
   resolveAttacks(w);
 }
 
-/** Attack-move: pick nearest hostile in aggro range. */
+function canAutoAcquire(w, i) {
+  const order = w.order[i];
+  if (order === w.ORDER.ATTACK_MOVE) return true;
+  if (order === w.ORDER.IDLE) return true;
+  return false;
+}
+
+/** Attack-move + idle military: pick nearest hostile in aggro range. */
 function acquireTargets(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
-    if (w.order[i] !== w.ORDER.ATTACK_MOVE) continue;
+    if (!canAutoAcquire(w, i)) continue;
 
     const def = getUnitDef(w.type[i]);
+    if (def.category !== 'military' || def.aggroRange === 0) continue;
+
     const aggro2 = fx.mul(def.aggroRange, def.aggroRange);
     let best = -1;
     let bestD = aggro2 + 1;
@@ -60,6 +69,7 @@ function resolveAttacks(w) {
       w.vx[i] = 0;
       w.vy[i] = 0;
       w.hasTarget[i] = 0;
+      clearPath(w, i);
       if (w.attackCd[i] <= 0) {
         w.hp[target] -= def.attackDamage;
         w.attackCd[i] = def.attackCooldown;

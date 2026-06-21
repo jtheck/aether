@@ -5,7 +5,6 @@ import { CMD } from '../sim/commands.js';
 import { getUnitDef } from '../sim/unitTypes.js';
 import { isHostile } from '../sim/teams.js';
 
-const PLAYER = 0;
 const CLICK_SLOP_PX = 6;
 
 export function setupInput({
@@ -13,6 +12,7 @@ export function setupInput({
   renderer,
   world,
   selected,
+  localPlayerId,
   getUnitWorldPos,
   enqueueCommand,
   onSelectionChanged,
@@ -20,7 +20,7 @@ export function setupInput({
 }) {
   const downPos = {};
   let boxStart = null;
-  let attackMoveMode = false;
+  let dragPointerId = null;
   let selectionBox = null;
 
   ensureSelectionBox();
@@ -30,44 +30,78 @@ export function setupInput({
     downPos[e.button] = { x: e.clientX, y: e.clientY };
     if (e.button === 0) {
       boxStart = { x: e.clientX, y: e.clientY };
+      dragPointerId = e.pointerId;
       hideSelectionBox();
+      try {
+        canvas.setPointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
     }
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (!boxStart || !(e.buttons & 1)) return;
+    if (dragPointerId !== e.pointerId || !boxStart || !(e.buttons & 1)) return;
     const moved = Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y);
     if (moved > CLICK_SLOP_PX) showSelectionBox(boxStart.x, boxStart.y, e.clientX, e.clientY);
   });
 
-  canvas.addEventListener('pointerup', (e) => {
-    const d = downPos[e.button];
-    delete downPos[e.button];
+  canvas.addEventListener('pointerup', onPointerUp);
+  canvas.addEventListener('pointercancel', onPointerUp);
+  window.addEventListener('pointerup', onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+
+  function onPointerUp(e) {
+    if (e.button === 0) finishLmb(e);
+    else if (e.button === 2) finishRmb(e);
+  }
+
+  function finishLmb(e) {
+    if (e.button !== 0 || dragPointerId === null) return;
+    if (e.pointerId !== dragPointerId) return;
+
+    const d = downPos[0];
+    delete downPos[0];
     const moved = d ? Math.hypot(e.clientX - d.x, e.clientY - d.y) : Infinity;
 
-    if (e.button === 0) {
-      hideSelectionBox();
-      if (moved > CLICK_SLOP_PX && boxStart) {
-        boxSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
-      } else if (moved <= CLICK_SLOP_PX) {
-        selectAt(e.clientX, e.clientY, e.shiftKey);
+    if (moved > CLICK_SLOP_PX && boxStart) {
+      boxSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
+    } else if (moved <= CLICK_SLOP_PX) {
+      const hit = pickUnit(e.clientX, e.clientY, (i) => world.owner[i] === localPlayerId);
+      if (hit >= 0) {
+        if (!e.shiftKey) selected.fill(0);
+        selected[hit] = 1;
+        onSelectionChanged();
+      } else if (selectedIds().length > 0) {
+        orderAt(e.clientX, e.clientY, CMD.MOVE);
+      } else if (!e.shiftKey) {
+        clearSelection();
       }
-      boxStart = null;
-    } else if (e.button === 2 && moved <= CLICK_SLOP_PX) {
-      const mode = attackMoveMode || e.shiftKey;
-      if (attackMoveMode) attackMoveMode = false;
-      orderAt(e.clientX, e.clientY, mode ? CMD.ATTACK_MOVE : CMD.MOVE);
     }
-  });
+
+    hideSelectionBox();
+    boxStart = null;
+    dragPointerId = null;
+    try {
+      canvas.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function finishRmb(e) {
+    const d = downPos[2];
+    delete downPos[2];
+    const moved = d ? Math.hypot(e.clientX - d.x, e.clientY - d.y) : Infinity;
+    if (moved <= CLICK_SLOP_PX) {
+      orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE);
+    }
+  }
 
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'a' || e.key === 'A') {
-      if (e.repeat) return;
-      attackMoveMode = true;
-    } else if (e.key === 's' || e.key === 'S') {
+    if (e.key === 's' || e.key === 'S') {
       stopSelected();
     } else if (e.key === 'Escape') {
-      attackMoveMode = false;
       clearSelection();
     }
   });
@@ -116,13 +150,6 @@ export function setupInput({
     return renderer.rayPickSpheres(clientX, clientY, buildSphereList(filter));
   }
 
-  function selectAt(clientX, clientY, add) {
-    const hit = pickUnit(clientX, clientY, (i) => world.owner[i] === PLAYER);
-    if (!add) selected.fill(0);
-    if (hit >= 0) selected[hit] = 1;
-    onSelectionChanged();
-  }
-
   function boxSelect(x0, y0, x1, y1, add) {
     const rect = canvas.getBoundingClientRect();
     const minX = Math.min(x0, x1) - rect.left;
@@ -131,7 +158,7 @@ export function setupInput({
     const maxY = Math.max(y0, y1) - rect.top;
     if (!add) selected.fill(0);
     for (let i = 0; i < world.count; i++) {
-      if (!world.alive[i] || world.owner[i] !== PLAYER) continue;
+      if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
       const pos = getUnitWorldPos(i);
       const p = renderer.worldToScreen(pos.x, pos.y, pos.z);
       if (!p) continue;
@@ -152,8 +179,8 @@ export function setupInput({
     const ids = selectedIds();
     if (ids.length === 0) return;
 
-    const enemy = pickUnit(clientX, clientY, (i) => isHostile(PLAYER, world.owner[i]));
-    if (enemy >= 0 && cmdType !== CMD.ATTACK_MOVE) {
+    const enemy = pickUnit(clientX, clientY, (i) => isHostile(localPlayerId, world.owner[i]));
+    if (enemy >= 0 && cmdType === CMD.MOVE) {
       enqueueCommand({ type: CMD.ATTACK, entities: ids, target: enemy });
       return;
     }
@@ -173,7 +200,6 @@ export function setupInput({
     }
     const cenX = sumX / n;
     const cenZ = sumZ / n;
-    // Preserve layout: shift the group so its centroid lands on the click.
     for (let k = 0; k < n; k++) {
       const i = ids[k];
       tx[k] = fx.fromFloat(g.x + (fx.toFloat(world.px[i]) - cenX));

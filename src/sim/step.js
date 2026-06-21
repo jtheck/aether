@@ -13,7 +13,7 @@
 import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
 import { combatSystem } from './combat.js';
-import { movementGoal, advanceWaypoint, checkStuck, planPathBudget } from './path.js';
+import { movementGoal, advanceWaypoint, checkStuck, planPathBudget, attackInRange } from './path.js';
 import { getUnitDef } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { WORLD_HALF } from './field.js';
@@ -54,13 +54,8 @@ function movementSystem(w, field) {
       continue;
     }
 
-    // In attack range — combat system zeroed velocity; don't re-move.
-    if (order === ORDER.ATTACK && w.targetEntity[i] >= 0 && w.alive[w.targetEntity[i]]) {
-      const def = getUnitDef(w.type[i]);
-      const range2 = fx.mul(def.attackRange, def.attackRange);
-      const d2 = fx.dist2(w.px[i], w.py[i], w.px[w.targetEntity[i]], w.py[w.targetEntity[i]]);
-      if (d2 <= range2) continue;
-    }
+    // In attack range — hold and strike; combat cleared the path.
+    if (order === ORDER.ATTACK && attackInRange(w, i)) continue;
 
     const goal = movementGoal(w, field, i);
     if (!goal) {
@@ -163,6 +158,7 @@ function sepCellKey(px, py) {
 }
 
 function applySeparation(w, i, j) {
+  if (attackInRange(w, i) || attackInRange(w, j)) return;
   const dx = w.px[j] - w.px[i];
   const dy = w.py[j] - w.py[i];
   const dist = fx.len(dx, dy);

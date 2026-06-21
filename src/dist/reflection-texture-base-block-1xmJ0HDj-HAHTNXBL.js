@@ -1,0 +1,1 @@
+var t={className:"ReflectionTextureBaseBlock",emit(e){throw new Error(`ReflectionTextureBaseBlock "${e.name}" is an abstract compatibility block and cannot be emitted directly.`)}};export{t as emitter};

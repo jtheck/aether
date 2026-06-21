@@ -1,0 +1,38 @@
+var e=`
+fn perturbNormal(vNormalW: vec3<f32>, positionW: vec3<f32>, uv: vec2<f32>, bumpScale: f32) -> vec3<f32> {
+let normalSample = textureSample(bT, bS, uv).rgb * 2.0 - 1.0;
+let N = normalize(vNormalW) * bumpScale;
+let dp1 = dpdx(positionW);
+let dp2 = -dpdy(positionW);
+let duv1 = dpdx(uv);
+let duv2 = -dpdy(uv);
+let dp2perp = cross(dp2, N);
+let dp1perp = cross(N, dp1);
+var tangent = dp2perp * duv1.x + dp1perp * duv2.x;
+var bitangent = dp2perp * duv1.y + dp1perp * duv2.y;
+let det = max(dot(tangent, tangent), dot(bitangent, bitangent));
+let invmax = select(inverseSqrt(det), 0.0, det == 0.0);
+let cotangentFrame = mat3x3<f32>(tangent * invmax, bitangent * invmax, N);
+return normalize(cotangentFrame * normalSample);
+}
+`,t=`
+const E_FOG: f32 = 2.71828;
+fn calcFogFactor(fogDistance: vec3<f32>) -> f32 {
+var fogCoeff: f32 = 1.0;
+let fogMode = scene.vFogInfos.x;
+let fogStart = scene.vFogInfos.y;
+let fogEnd = scene.vFogInfos.z;
+let fogDensity = scene.vFogInfos.w;
+let dist = length(fogDistance);
+if (fogMode == 3.0) { fogCoeff = (fogEnd - dist) / (fogEnd - fogStart); }
+else if (fogMode == 1.0) { fogCoeff = 1.0 / pow(E_FOG, dist * fogDensity); }
+else if (fogMode == 2.0) { fogCoeff = 1.0 / pow(E_FOG, dist * dist * fogDensity * fogDensity); }
+return clamp(fogCoeff, 0.0, 1.0);
+}
+`,n=`
+fn dither(seed: vec2<f32>, varianceAmount: f32) -> f32 {
+let rand = fract(sin(dot(seed, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+let normVariance = varianceAmount / 255.0;
+return mix(-normVariance, normVariance, rand);
+}
+`,o="fn dither(a:vec2<f32>,b:f32)->f32{return 0.0;}";export{e as a,t as b,n as c,o as d};

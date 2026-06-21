@@ -1,0 +1,1 @@
+import{a as c}from"./chunk-5P2ED4J4.js";var f={className:"LerpBlock",emit(t,y,o,s,e){let p=e.resolve(t,"left",o,s),n=e.resolve(t,"right",o,s),i=e.resolve(t,"gradient",o,s),r=c(p.type,n.type),m=e.cast(p,r).expr,l=e.cast(n,r).expr,a=e.cast(i,r).expr;return{expr:`mix(${m}, ${l}, ${a})`,type:r}}};export{f as emitter};

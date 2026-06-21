@@ -1,0 +1,1 @@
+var s={dx:"dpdx",dy:"dpdy"},d={className:"DerivativeBlock",stage:"fragment",emit(o,e,i,n,p){let t=s[e];if(!t)throw new Error(`NodeMaterial: DerivativeBlock output "${e}" is not supported`);let r=p.resolve(o,"input",i,n);return{expr:`${t}(${r.expr})`,type:r.type}}};export{d as emitter};

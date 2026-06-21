@@ -1,0 +1,1 @@
+var o={className:"ReciprocalBlock",emit(t,n,p,r,i){let e=i.resolve(t,"input",p,r);return e.type==="mat4f"?{expr:`inverse(${e.expr})`,type:"mat4f"}:{expr:`(1.0 / ${e.expr})`,type:e.type}}};export{o as emitter};

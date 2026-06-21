@@ -1,0 +1,1 @@
+var x={className:"Rotate2dBlock",emit(s,o,t,n,e){let r=e.cast(e.resolve(s,"input",t,n),"vec2f"),p=e.cast(e.resolve(s,"angle",t,n),"f32");return{expr:`vec2<f32>(cos(${p.expr}) * (${r.expr}).x - sin(${p.expr}) * (${r.expr}).y, sin(${p.expr}) * (${r.expr}).x + cos(${p.expr}) * (${r.expr}).y)`,type:"vec2f"}}};export{x as emitter};

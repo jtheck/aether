@@ -1,0 +1,14 @@
+{
+  "name": "aether-v2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:determinism": "node sim/determinism.test.js",
+    "build": "node build.mjs",
+    "serve": "node serve.mjs"
+  },
+  "dependencies": {
+    "@babylonjs/lite": "^1.0.1",
+    "esbuild": "^0.28.1"
+  }
+}

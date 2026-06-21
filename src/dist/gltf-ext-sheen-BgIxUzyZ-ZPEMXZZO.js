@@ -1,0 +1,1 @@
+var o={id:"KHR_materials_sheen",async applyMaterial(r,s){var t,n;let e=(n=(t=r._rawMatDef)==null?void 0:t.extensions)==null?void 0:n.KHR_materials_sheen;if(!e)return null;let a=await s._texture(e.sheenColorTexture,!0);return{sheen:{isEnabled:!0,color:e.sheenColorFactor??[0,0,0],roughness:e.sheenRoughnessFactor??0,intensity:1,texture:a,albedoScaling:!0}}}};export{o as default};

@@ -1,0 +1,1 @@
+var u={id:"KHR_xmp_json_ld",async applyAsset(i,p,l){var s,e,t,n,o;let a=l._json,_=((e=(s=a.extensions)==null?void 0:s.KHR_xmp_json_ld)==null?void 0:e.packets)??[],d=(o=(n=(t=a.asset)==null?void 0:t.extensions)==null?void 0:n.KHR_xmp_json_ld)==null?void 0:o.packet,c=d!==void 0?_[d]:void 0;return{xmpMetadata:{packets:_,assetPacket:c}}}};export{u as default};

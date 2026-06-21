@@ -30,9 +30,9 @@ export class SimClient {
     this._stepDoneHandler = handler;
   }
 
-  /** Queue one or more sim ticks; worker processes messages in order. */
-  postStep(commands, steps = 1) {
-    this.worker.postMessage({ type: 'step', commands, steps });
+  /** Commit one lockstep tick with merged human command frames. */
+  commitTick(tick, frames) {
+    this.worker.postMessage({ type: 'commitTick', tick, frames });
   }
 
   terminate() {
@@ -45,7 +45,7 @@ export class SimClient {
       this._initResolve?.({ count: msg.count });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {
-      this._stepDoneHandler?.(msg.tick);
+      this._stepDoneHandler?.(msg.tick, msg.checksum);
     } else if (msg.type === 'error') {
       const err = new Error(msg.message);
       if (msg.stack) err.stack = msg.stack;

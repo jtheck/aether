@@ -31,7 +31,7 @@ import {
   startEngine,
   getViewProjectionMatrix,
   mat4Invert,
-} from '@babylonjs/lite';
+} from '../vendor/lite/liteVendor.js';
 
 // Column-major mat4 * vec4.
 function matVec4(m, x, y, z, w) {

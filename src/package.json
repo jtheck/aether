@@ -4,11 +4,12 @@
   "type": "module",
   "scripts": {
     "test:determinism": "node sim/determinism.test.js",
+    "build:lite": "node build-lite.mjs",
     "build": "node build.mjs",
     "serve": "node serve.mjs"
   },
   "dependencies": {
-    "@babylonjs/lite": "^1.0.1",
+    "@babylonjs/lite": "^1.2.0",
     "esbuild": "^0.28.1"
   }
 }

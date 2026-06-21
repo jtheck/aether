@@ -1,0 +1,3 @@
+import{Oa as t,oe as r,se as s}from"./chunk-2GVZXICG.js";var o=`let depthMetricSM = (input.clipPos.z + shadowParams.depthValues.x) / shadowParams.depthValues.y + shadowParams.biasAndScale.x;
+let depthSM = clamp(exp(-min(87.0, shadowParams.biasAndScale.z * depthMetricSM)), 0.0, 1.0);
+return vec4<f32>(depthSM, 1.0, 1.0, 1.0);`;function l(a,d){let n=a._renderFeatures??{features:0},e=t(a,{features:n.features&~r|s});return Object.defineProperty(e,"_esmShadowParamsUBO",{value:d,enumerable:!1}),Object.defineProperty(e,"_esmShadowDepthCode",{value:o,enumerable:!1}),e}export{l as createStandardEsmShadowMaterialView};

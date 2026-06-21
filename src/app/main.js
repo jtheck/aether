@@ -1,23 +1,17 @@
-// app/ — wires the sim worker to the Lite renderer and owns the clock + input.
+// app/ — SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner } from '../sim/world.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
-import { PLAYER_ARMY, stressPerSideFromSearch } from '../sim/worldSetup.js';
-import * as fx from '../sim/fixed.js';
+import { PLAYER_ARMY, stressPerSideFromSearch, PLAYER, AI_OWNER } from '../sim/worldSetup.js';
 import { createRenderer } from '../render/renderer.js';
 import { setupInput } from './input.js';
-import { SimClient } from './simClient.js';
+import { SimSession } from './simSession.js';
 
-const TICK_HZ = 20;
-const TICK_MS = 1000 / TICK_HZ;
 const SEED = 0x1234;
-const PLAYER = 0;
-const AI_OWNER = 1;
 
 const SELECT_COLOR = [1.0, 0.95, 0.15];
 const SELECT_SCALE = 1.15;
 const ENEMY_TINT = [0.55, 0.55, 0.62];
-
 const DEATH_FADE_MS = 450;
 
 function tintColor(base, tint, amount) {
@@ -48,9 +42,15 @@ async function main() {
   }
 
   const stress = stressPerSideFromSearch(location.search);
-  const sim = new SimClient();
-  const { count } = await sim.init({ seed: SEED, stressPerSide: stress });
-  const world = sim.state;
+  const session = new SimSession({
+    localPlayerId: PLAYER,
+    humanPlayers: [PLAYER],
+    aiPlayers: stress > 0 ? [] : [AI_OWNER],
+    inputDelayTicks: 0,
+  });
+
+  const { count } = await session.start({ seed: SEED, stressPerSide: stress });
+  const world = session.state;
 
   const renderer = await createRenderer(canvas, count);
   renderer.setCount(count);
@@ -90,12 +90,11 @@ async function main() {
       colors[i * 4 + 3] = alpha;
     }
     renderer.setColors(colors);
-    updateStatus(world, selected, fpsDisplay, stress);
+    updateStatus(session, world, selected, fpsDisplay, stress);
   };
   updateColors();
   updateLegend();
 
-  let pending = [];
   let orderPing = null;
 
   setupInput({
@@ -108,73 +107,37 @@ async function main() {
       y: renderY[i],
       z: renderZ[i],
     }),
-    enqueueCommand: (cmd) => pending.push(cmd),
+    enqueueCommand: (cmd) => session.submitCommand(cmd),
     onSelectionChanged: updateColors,
     onOrder: (x, z) => {
       orderPing = { x, z, until: performance.now() + 900 };
     },
   });
 
-  const prevX = new Float32Array(count);
-  const prevZ = new Float32Array(count);
-  const curX = new Float32Array(count);
-  const curZ = new Float32Array(count);
-
-  const capture = () => {
-    for (let i = 0; i < count; i++) {
-      curX[i] = fx.toFloat(world.px[i]);
-      curZ[i] = fx.toFloat(world.py[i]);
-    }
-  };
-  capture();
-  prevX.set(curX);
-  prevZ.set(curZ);
-  for (let i = 0; i < count; i++) {
-    const def = getUnitDef(world.type[i]);
-    renderX[i] = curX[i];
-    renderZ[i] = curZ[i];
-    renderY[i] = def.size * 0.5;
-  }
-
-  sim.onStepDone(() => {
-    prevX.set(curX);
-    prevZ.set(curZ);
-    capture();
+  session.onCommit = () => {
     for (let i = 0; i < count; i++) {
       if (wasAlive[i] && !world.alive[i]) deathFade[i] = 1;
       wasAlive[i] = world.alive[i];
     }
     updateColors();
-  });
+  };
 
-  let acc = 0;
   renderer.onFrame((deltaMs) => {
-    let dt = deltaMs;
-    if (dt > 250) dt = 250;
-    acc += dt;
+    session.pump(deltaMs);
 
-    let tickSteps = 0;
-    while (acc >= TICK_MS) {
-      tickSteps++;
-      acc -= TICK_MS;
-    }
-    if (tickSteps > 0) {
-      const cmds = pending.length ? [...pending] : null;
-      pending = [];
-      sim.postStep(cmds, tickSteps);
-    }
-
-    fpsAcc += dt;
+    fpsAcc += deltaMs;
     fpsFrames++;
     if (fpsAcc >= 500) {
       fpsDisplay = Math.round((fpsFrames * 1000) / fpsAcc);
       fpsAcc = 0;
       fpsFrames = 0;
-      updateStatus(world, selected, fpsDisplay, stress);
+      updateStatus(session, world, selected, fpsDisplay, stress);
     }
 
-    const alpha = acc / TICK_MS;
+    const alpha = session.displayAlpha;
+    const { prev, cur } = session.displaySnapshots();
     const ringPulse = 1.38 + 0.07 * Math.sin(performance.now() * 0.004);
+
     if (orderPing) {
       const left = orderPing.until - performance.now();
       if (left <= 0) orderPing = null;
@@ -186,7 +149,7 @@ async function main() {
     let colorsDirty = false;
     for (let i = 0; i < count; i++) {
       if (deathFade[i] > 0) {
-        deathFade[i] = Math.max(0, deathFade[i] - dt / DEATH_FADE_MS);
+        deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
           renderer.writeInstance(i, 0, 0, 0);
           renderer.writeSelectionRing(i, 0, 0, 0);
@@ -201,10 +164,10 @@ async function main() {
       }
 
       const def = getUnitDef(world.type[i]);
-      const x = prevX[i] + (curX[i] - prevX[i]) * alpha;
-      const z = prevZ[i] + (curZ[i] - prevZ[i]) * alpha;
-      const dx = curX[i] - prevX[i];
-      const dz = curZ[i] - prevZ[i];
+      const x = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
+      const z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
+      const dx = cur.x[i] - prev.x[i];
+      const dz = cur.z[i] - prev.z[i];
       const moving = dx * dx + dz * dz > 0.0004;
       const yaw = moving ? Math.atan2(dx, dz) : 0;
       let size = selected[i] && world.alive[i] ? def.size * SELECT_SCALE : def.size;
@@ -238,7 +201,7 @@ function updateLegend() {
   }).join('');
 }
 
-function updateStatus(world, selected, fps = 0, stress = 0) {
+function updateStatus(session, world, selected, fps = 0, stress = 0) {
   const el = document.getElementById('status');
   if (!el) return;
   const p = livingByOwner(world, PLAYER);

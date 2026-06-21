@@ -1,11 +1,13 @@
-// Minimal static server for dist/ (module scripts + dynamic imports + wasm need
-// real HTTP, not file://). Dev-only.
+// Dev server: serves src/ directly (app + sim as native ES modules).
+// vendor/lite.bundle.js is prebuilt — run `npm run build:lite` when Lite version changes.
+// COOP/COEP required for SharedArrayBuffer / sim worker.
 
 import { createServer } from 'http';
-import { readFile } from 'fs/promises';
+import { readFile, access } from 'fs/promises';
 import { extname, join, normalize } from 'path';
+import { fileURLToPath } from 'url';
 
-const ROOT = join(process.cwd(), 'dist');
+const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT) || 5173;
 
 const MIME = {
@@ -17,6 +19,12 @@ const MIME = {
   '.wasm': 'application/wasm',
   '.map': 'application/json; charset=utf-8',
 };
+
+try {
+  await access(join(ROOT, 'vendor', 'lite', 'liteVendor.js'));
+} catch {
+  console.warn('⚠️  vendor/lite/ missing — run: npm run build:lite');
+}
 
 createServer(async (req, res) => {
   try {
@@ -35,5 +43,6 @@ createServer(async (req, res) => {
     res.end('not found');
   }
 }).listen(PORT, () => {
-  console.log(`serving dist/ at http://localhost:${PORT}`);
+  console.log(`serving src/ at http://localhost:${PORT}`);
+  console.log('edit app/ sim/ render/ — refresh browser, no rebuild');
 });

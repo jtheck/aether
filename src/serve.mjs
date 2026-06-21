@@ -8,6 +8,7 @@ import { extname, join, normalize } from 'path';
 import { fileURLToPath } from 'url';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const REPO = fileURLToPath(new URL('..', import.meta.url));
 const PORT = Number(process.env.PORT) || 5173;
 
 const MIME = {
@@ -17,8 +18,15 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm',
+  '.glb': 'model/gltf-binary',
   '.map': 'application/json; charset=utf-8',
 };
+
+function resolvePath(urlPath) {
+  const safe = normalize(urlPath).replace(/^(\.\.[/\\])+/, '').replace(/\\/g, '/');
+  if (safe.startsWith('assets/')) return join(REPO, ...safe.split('/'));
+  return join(ROOT, ...safe.split('/'));
+}
 
 try {
   await access(join(ROOT, 'vendor', 'lite', 'liteVendor.js'));
@@ -30,7 +38,7 @@ createServer(async (req, res) => {
   try {
     let path = decodeURIComponent((req.url || '/').split('?')[0]);
     if (path === '/') path = '/index.html';
-    const file = join(ROOT, normalize(path).replace(/^(\.\.[/\\])+/, ''));
+    const file = resolvePath(path.replace(/^\//, ''));
     const body = await readFile(file);
     res.writeHead(200, {
       'Content-Type': MIME[extname(file)] || 'application/octet-stream',

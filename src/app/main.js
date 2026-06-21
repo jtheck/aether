@@ -52,7 +52,7 @@ async function main() {
   const { count } = await session.start({ seed: SEED, stressPerSide: stress });
   const world = session.state;
 
-  const renderer = await createRenderer(canvas, count);
+  const renderer = await createRenderer(canvas, count, { types: world.type });
   renderer.setCount(count);
 
   const selected = new Uint8Array(count);
@@ -151,14 +151,14 @@ async function main() {
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
-          renderer.writeInstance(i, 0, 0, 0);
+          renderer.writeInstance(i, world.type[i], 0, 0, 0);
           renderer.writeSelectionRing(i, 0, 0, 0);
           colors[i * 4 + 3] = 0;
           colorsDirty = true;
           continue;
         }
       } else if (!world.alive[i]) {
-        renderer.writeInstance(i, 0, 0, 0);
+        renderer.writeInstance(i, world.type[i], 0, 0, 0);
         renderer.writeSelectionRing(i, 0, 0, 0);
         continue;
       }
@@ -181,7 +181,7 @@ async function main() {
         colors[i * 4 + 3] = fade;
         colorsDirty = true;
       }
-      renderer.writeInstance(i, x, z, size, yaw, moving && world.alive[i]);
+      renderer.writeInstance(i, world.type[i], x, z, size, yaw, moving && world.alive[i]);
       renderer.writeSelectionRing(i, x, z, selected[i] && world.alive[i] ? size * ringPulse : 0);
     }
     if (colorsDirty) renderer.setColors(colors);

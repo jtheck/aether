@@ -1,14 +1,7 @@
 // render/ — Babylon Lite view layer.
 //
-// PARTITION: render/ READS simulation state and never mutates it. It knows
-// nothing about gameplay rules; it just draws whatever positions it is handed.
-// The sim could be swapped, re-seeded, or run in a worker and this file wouldn't
-// care.
-//
-// Entities are drawn as a single thin-instanced mesh — one draw call for the
-// whole army. The instance matrix slab is filled straight from interpolated
-// SoA positions by the caller (app/), which is why the sim's Structure-of-Arrays
-// layout matters here too.
+// Military units are thin-instanced GLB meshes (one draw call per type).
+// Selection rings and picking still use analytic spheres from sim sizes.
 
 import {
   createEngine,
@@ -22,6 +15,8 @@ import {
   createCylinder,
   createStandardMaterial,
   addToScene,
+  loadGltf,
+  cloneTransformNode,
   setThinInstances,
   flushThinInstances,
   setThinInstanceColors,
@@ -32,6 +27,8 @@ import {
   getViewProjectionMatrix,
   mat4Invert,
 } from '../vendor/lite/liteVendor.js';
+import { getUnitDef } from '../sim/unitTypes.js';
+import { UNIT_MODEL_URLS, findFirstMesh, hasUnitModel, prepareLegacyModel } from './unitModels.js';
 
 // Column-major mat4 * vec4.
 function matVec4(m, x, y, z, w) {
@@ -43,11 +40,10 @@ function matVec4(m, x, y, z, w) {
   ];
 }
 
-// MMB pans, Alt+LMB orbits. Inertia is applied by attachControl's beforeRender hook.
 function setupRtsCameraControls(camera, canvas) {
   const angularSensibility = 1000;
   const panningSensibility = 50;
-  let mode = 0; // 0 none, 1 pan, 2 orbit
+  let mode = 0;
   let lastX = 0;
   let lastY = 0;
 
@@ -96,7 +92,6 @@ function setupRtsCameraControls(camera, canvas) {
   canvas.addEventListener('pointercancel', endDrag);
 }
 
-// Picking helpers — copied from Lite's createPickingRay (not exported from the package).
 function pickingRay(canvasX, canvasY, vp, width, height) {
   const inv = mat4Invert(vp);
   if (!inv) return null;
@@ -149,7 +144,6 @@ function rayHitGround(ray) {
   return { x: ray.ox + ray.dx * t, z: ray.oz + ray.dz * t };
 }
 
-// Upload thin-instance CPU slabs to GPU before the cached opaque bundle replays.
 function uploadThinInstanceGpu(engine, ti, hasColor) {
   if (!ti) return;
   const BU = globalThis.GPUBufferUsage;
@@ -216,13 +210,86 @@ function uploadThinInstanceGpu(engine, ti, hasColor) {
   }
 }
 
-export async function createRenderer(canvas, capacity) {
+function writeUnitMatrix(matrices, slot, x, z, uniformScale, yaw, moving) {
+  const o = slot * 16;
+  if (uniformScale <= 0) {
+    for (let k = 0; k < 16; k++) matrices[o + k] = 0;
+    return;
+  }
+  const stretch = moving ? 1.08 : 1;
+  const narrow = moving ? 0.94 : 1;
+  const sx = uniformScale * narrow;
+  const sy = uniformScale;
+  const sz = uniformScale * stretch;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  matrices[o] = c * sx;
+  matrices[o + 1] = 0;
+  matrices[o + 2] = s * sz;
+  matrices[o + 3] = 0;
+  matrices[o + 4] = 0;
+  matrices[o + 5] = sy;
+  matrices[o + 6] = 0;
+  matrices[o + 7] = 0;
+  matrices[o + 8] = -s * sx;
+  matrices[o + 9] = 0;
+  matrices[o + 10] = c * sz;
+  matrices[o + 11] = 0;
+  matrices[o + 12] = x;
+  matrices[o + 13] = 0;
+  matrices[o + 14] = z;
+  matrices[o + 15] = 1;
+}
+
+function writeFlatRing(matrices, i, x, z, diameter, ringDiam, ringH) {
+  const o = i * 16;
+  if (diameter <= 0) {
+    for (let k = 0; k < 16; k++) matrices[o + k] = 0;
+    return;
+  }
+  const s = diameter / ringDiam;
+  const y = ringH * 0.5;
+  matrices[o] = s;
+  matrices[o + 1] = 0;
+  matrices[o + 2] = 0;
+  matrices[o + 3] = 0;
+  matrices[o + 4] = 0;
+  matrices[o + 5] = 1;
+  matrices[o + 6] = 0;
+  matrices[o + 7] = 0;
+  matrices[o + 8] = 0;
+  matrices[o + 9] = 0;
+  matrices[o + 10] = s;
+  matrices[o + 11] = 0;
+  matrices[o + 12] = x;
+  matrices[o + 13] = y;
+  matrices[o + 14] = z;
+  matrices[o + 15] = 1;
+}
+
+async function loadUnitMeshTemplate(engine, url) {
+  const container = await loadGltf(engine, url);
+  const root = container.entities[0];
+  const src = findFirstMesh(root);
+  if (!src) throw new Error(`no mesh in ${url}`);
+  const mesh = cloneTransformNode(src);
+  mesh.pickable = false;
+  prepareLegacyModel(mesh);
+  return mesh;
+}
+
+/**
+ * @param {HTMLCanvasElement} canvas
+ * @param {number} capacity
+ * @param {{ types?: Int8Array | Uint8Array | number[] }} [opts]
+ */
+export async function createRenderer(canvas, capacity, opts = {}) {
+  const types = opts.types;
   const engine = await createEngine(canvas, { msaaSamples: 1 });
   const scene = createSceneContext(engine);
 
   const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, 620, { x: 0, y: 0, z: 0 });
   scene.camera = camera;
-  // Wheel zoom only — LMB/RMB belong to RTS selection/orders (see setupRtsCameraControls).
   attachControl(camera, canvas, scene, { shouldHandlePointerDown: () => false });
   setupRtsCameraControls(camera, canvas);
 
@@ -237,28 +304,71 @@ export async function createRenderer(canvas, capacity) {
   ground.material = groundMat;
   addToScene(scene, ground);
 
-  const marker = createSphere(engine, { diameter: 6, segments: capacity > 500 ? 6 : 10 });
-  const material = createStandardMaterial();
-  material.diffuseColor = [1, 1, 1];
-  marker.material = material;
+  const entitySlot = new Int32Array(capacity);
+  entitySlot.fill(-1);
+  const typeEntities = new Map();
+
+  if (types) {
+    for (let i = 0; i < capacity; i++) {
+      const type = types[i];
+      if (!typeEntities.has(type)) typeEntities.set(type, []);
+      typeEntities.get(type).push(i);
+    }
+    for (const ids of typeEntities.values()) {
+      for (let s = 0; s < ids.length; s++) entitySlot[ids[s]] = s;
+    }
+  }
+
+  /** @type {Map<number, { mesh: object, matrices: Float32Array, colors: Float32Array, baseSize: number, entityIds: number[] }>} */
+  const typeBatches = new Map();
+  const fallbackEntities = [];
+
+  for (const [typeId, entityIds] of typeEntities) {
+    const def = getUnitDef(typeId);
+    const batchSize = entityIds.length;
+    if (batchSize === 0) continue;
+
+    if (hasUnitModel(typeId)) {
+      const mesh = await loadUnitMeshTemplate(engine, UNIT_MODEL_URLS[typeId]);
+      const matrices = new Float32Array(16 * batchSize);
+      setThinInstances(mesh, matrices, batchSize);
+      const colors = new Float32Array(4 * batchSize);
+      for (let s = 0; s < batchSize; s++) {
+        colors[s * 4] = 1;
+        colors[s * 4 + 1] = 1;
+        colors[s * 4 + 2] = 1;
+        colors[s * 4 + 3] = 1;
+      }
+      setThinInstanceColors(mesh, colors);
+      addToScene(scene, mesh);
+      typeBatches.set(typeId, { mesh, matrices, colors, baseSize: def.size, entityIds });
+    } else {
+      fallbackEntities.push(...entityIds);
+    }
+  }
 
   const BASE_DIAMETER = 6;
-
-  // 16 floats (a 4x4 world matrix) per instance.
-  const matrices = new Float32Array(16 * capacity);
-  setThinInstances(marker, matrices, capacity);
-  // Pipeline must see instance colors before registerScene or tints never compile in.
-  const instanceColors = new Float32Array(4 * capacity);
-  for (let i = 0; i < capacity; i++) {
-    instanceColors[i * 4] = 1;
-    instanceColors[i * 4 + 1] = 1;
-    instanceColors[i * 4 + 2] = 1;
-    instanceColors[i * 4 + 3] = 1;
+  let fallback = null;
+  if (fallbackEntities.length > 0) {
+    const mesh = createSphere(engine, { diameter: BASE_DIAMETER, segments: capacity > 500 ? 6 : 10 });
+    const material = createStandardMaterial();
+    material.diffuseColor = [1, 1, 1];
+    mesh.material = material;
+    const matrices = new Float32Array(16 * fallbackEntities.length);
+    setThinInstances(mesh, matrices, fallbackEntities.length);
+    const colors = new Float32Array(4 * fallbackEntities.length);
+    for (let s = 0; s < fallbackEntities.length; s++) {
+      colors[s * 4] = 1;
+      colors[s * 4 + 1] = 1;
+      colors[s * 4 + 2] = 1;
+      colors[s * 4 + 3] = 1;
+    }
+    setThinInstanceColors(mesh, colors);
+    addToScene(scene, mesh);
+    for (let s = 0; s < fallbackEntities.length; s++) entitySlot[fallbackEntities[s]] = s;
+    fallback = { mesh, matrices, colors, baseSize: BASE_DIAMETER, entityIds: fallbackEntities };
   }
-  setThinInstanceColors(marker, instanceColors);
-  addToScene(scene, marker);
 
-  // Flat selection rings (thin-instanced cylinders on the ground).
   const RING_DIAM = 1;
   const RING_H = 0.12;
   const selRing = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 24 });
@@ -279,7 +389,6 @@ export async function createRenderer(canvas, capacity) {
   setThinInstanceColors(selRing, ringColors);
   addToScene(scene, selRing);
 
-  // Move-order ping (single instance).
   const orderRing = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 32 });
   const orderMat = createStandardMaterial();
   orderMat.diffuseColor = [0.35, 0.75, 1];
@@ -290,32 +399,6 @@ export async function createRenderer(canvas, capacity) {
   setThinInstances(orderRing, orderMatrices, 1);
   setThinInstanceColors(orderRing, new Float32Array([0.35, 0.75, 1, 0]));
   addToScene(scene, orderRing);
-
-  function writeFlatRing(matrices, i, x, z, diameter) {
-    const o = i * 16;
-    if (diameter <= 0) {
-      for (let k = 0; k < 16; k++) matrices[o + k] = 0;
-      return;
-    }
-    const s = diameter / RING_DIAM;
-    const y = RING_H * 0.5;
-    matrices[o] = s;
-    matrices[o + 1] = 0;
-    matrices[o + 2] = 0;
-    matrices[o + 3] = 0;
-    matrices[o + 4] = 0;
-    matrices[o + 5] = 1;
-    matrices[o + 6] = 0;
-    matrices[o + 7] = 0;
-    matrices[o + 8] = 0;
-    matrices[o + 9] = 0;
-    matrices[o + 10] = s;
-    matrices[o + 11] = 0;
-    matrices[o + 12] = x;
-    matrices[o + 13] = y;
-    matrices[o + 14] = z;
-    matrices[o + 15] = 1;
-  }
 
   let frameCb = null;
   onBeforeRender(scene, (deltaMs) => {
@@ -342,79 +425,107 @@ export async function createRenderer(canvas, capacity) {
     return getViewProjectionMatrix(camera, aspect);
   }
 
+  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY) {
+    const scale = diameter / batch.baseSize;
+    if (useSphereY) {
+      const o = slot * 16;
+      if (scale <= 0) {
+        for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
+        return;
+      }
+      const stretch = moving ? 1.14 : 1;
+      const narrow = moving ? 0.9 : 1;
+      const sx = scale * narrow;
+      const sy = scale;
+      const sz = scale * stretch;
+      const c = Math.cos(yaw);
+      const s = Math.sin(yaw);
+      const y = diameter * 0.5;
+      batch.matrices[o] = c * sx;
+      batch.matrices[o + 1] = 0;
+      batch.matrices[o + 2] = s * sz;
+      batch.matrices[o + 3] = 0;
+      batch.matrices[o + 4] = 0;
+      batch.matrices[o + 5] = sy;
+      batch.matrices[o + 6] = 0;
+      batch.matrices[o + 7] = 0;
+      batch.matrices[o + 8] = -s * sx;
+      batch.matrices[o + 9] = 0;
+      batch.matrices[o + 10] = c * sz;
+      batch.matrices[o + 11] = 0;
+      batch.matrices[o + 12] = x;
+      batch.matrices[o + 13] = y;
+      batch.matrices[o + 14] = z;
+      batch.matrices[o + 15] = 1;
+    } else {
+      writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, moving);
+    }
+  }
+
   return {
     engine,
     scene,
     camera,
-    matrices,
 
-    // Limit the active instance count to the live entity count.
     setCount(n) {
-      setThinInstances(marker, matrices, n);
       setThinInstances(selRing, ringMatrices, n);
     },
 
-    // Per-instance RGBA tint (team colors).
-    setColors(colors) {
-      setThinInstanceColors(marker, colors);
+    setColors(allColors) {
+      for (const batch of typeBatches.values()) {
+        for (let s = 0; s < batch.entityIds.length; s++) {
+          const i = batch.entityIds[s];
+          batch.colors[s * 4] = allColors[i * 4];
+          batch.colors[s * 4 + 1] = allColors[i * 4 + 1];
+          batch.colors[s * 4 + 2] = allColors[i * 4 + 2];
+          batch.colors[s * 4 + 3] = allColors[i * 4 + 3];
+        }
+        setThinInstanceColors(batch.mesh, batch.colors);
+      }
+      if (fallback) {
+        for (let s = 0; s < fallback.entityIds.length; s++) {
+          const i = fallback.entityIds[s];
+          fallback.colors[s * 4] = allColors[i * 4];
+          fallback.colors[s * 4 + 1] = allColors[i * 4 + 1];
+          fallback.colors[s * 4 + 2] = allColors[i * 4 + 2];
+          fallback.colors[s * 4 + 3] = allColors[i * 4 + 3];
+        }
+        setThinInstanceColors(fallback.mesh, fallback.colors);
+      }
     },
 
-    // scale is world diameter; yaw = facing on XZ; moving stretches forward.
-    writeInstance(i, x, z, diameter = BASE_DIAMETER, yaw = 0, moving = false) {
-      const base = diameter / BASE_DIAMETER;
-      const stretch = moving ? 1.14 : 1;
-      const narrow = moving ? 0.9 : 1;
-      const sx = base * narrow;
-      const sy = base;
-      const sz = base * stretch;
-      const c = Math.cos(yaw);
-      const s = Math.sin(yaw);
-      const y = diameter * 0.5;
-      const o = i * 16;
-      matrices[o] = c * sx;
-      matrices[o + 1] = 0;
-      matrices[o + 2] = s * sz;
-      matrices[o + 3] = 0;
-      matrices[o + 4] = 0;
-      matrices[o + 5] = sy;
-      matrices[o + 6] = 0;
-      matrices[o + 7] = 0;
-      matrices[o + 8] = -s * sx;
-      matrices[o + 9] = 0;
-      matrices[o + 10] = c * sz;
-      matrices[o + 11] = 0;
-      matrices[o + 12] = x;
-      matrices[o + 13] = y;
-      matrices[o + 14] = z;
-      matrices[o + 15] = 1;
+    writeInstance(i, typeId, x, z, diameter, yaw = 0, moving = false) {
+      const slot = entitySlot[i];
+      if (slot < 0) return;
+      const batch = typeBatches.get(typeId) ?? fallback;
+      if (!batch) return;
+      writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback);
     },
 
     commit() {
-      flushThinInstances(marker);
+      for (const batch of typeBatches.values()) flushThinInstances(batch.mesh);
+      if (fallback) flushThinInstances(fallback.mesh);
       flushThinInstances(selRing);
       flushThinInstances(orderRing);
-      uploadThinInstanceGpu(engine, marker.thinInstances, true);
+      for (const batch of typeBatches.values()) uploadThinInstanceGpu(engine, batch.mesh.thinInstances, true);
+      if (fallback) uploadThinInstanceGpu(engine, fallback.mesh.thinInstances, true);
       uploadThinInstanceGpu(engine, selRing.thinInstances, true);
       uploadThinInstanceGpu(engine, orderRing.thinInstances, true);
     },
 
-    /** Ground ring under a selected unit. diameter 0 hides it. */
     writeSelectionRing(i, x, z, diameter) {
-      writeFlatRing(ringMatrices, i, x, z, diameter);
+      writeFlatRing(ringMatrices, i, x, z, diameter, RING_DIAM, RING_H);
     },
 
-    /** Blue ping where a move order was issued. alpha 0 hides it. */
     showOrderMarker(x, z, diameter, alpha) {
-      writeFlatRing(orderMatrices, 0, x, z, alpha > 0 ? diameter : 0);
+      writeFlatRing(orderMatrices, 0, x, z, alpha > 0 ? diameter : 0, RING_DIAM, RING_H);
       setThinInstanceColor(orderRing, 0, 0.35, 0.75, 1, alpha);
     },
 
-    // Register the per-frame callback (driven by Lite's render loop).
     onFrame(cb) {
       frameCb = cb;
     },
 
-    // Project a world point to canvas-local CSS pixel coordinates.
     worldToScreen(x, y, z) {
       const { width, height } = canvasCoords(0, 0);
       const c = matVec4(viewProjection(), x, y, z, 1);
@@ -428,7 +539,6 @@ export async function createRenderer(canvas, capacity) {
       };
     },
 
-    /** Ray-sphere pick — returns closest sphere id, or -1. */
     rayPickSpheres(clientX, clientY, spheres) {
       const cc = canvasCoords(clientX, clientY);
       const ray = pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
@@ -446,14 +556,12 @@ export async function createRenderer(canvas, capacity) {
       return best;
     },
 
-    // Unproject a viewport client coordinate onto the y=0 ground plane.
     screenToGround(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
       const ray = pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
       return ray ? rayHitGround(ray) : null;
     },
 
-    /** Canvas-local x/y from a pointer event's clientX/clientY. */
     canvasCoords,
 
     start() {

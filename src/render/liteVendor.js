@@ -13,6 +13,8 @@ export {
   createCylinder,
   createStandardMaterial,
   addToScene,
+  loadGltf,
+  cloneTransformNode,
   setThinInstances,
   flushThinInstances,
   setThinInstanceColors,

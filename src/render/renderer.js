@@ -231,6 +231,15 @@ function writeFlatRing(matrices, i, x, z, diameter, ringDiam, ringH) {
   matrices[o + 15] = 1;
 }
 
+function writeSelectionRingColors(colors, count) {
+  for (let i = 0; i < count; i++) {
+    colors[i * 4] = 1;
+    colors[i * 4 + 1] = 0.92;
+    colors[i * 4 + 2] = 0.15;
+    colors[i * 4 + 3] = 0.9;
+  }
+}
+
 function resizeTypeBatch(batch, entityIds) {
   const newSize = entityIds.length;
   if (newSize > batch.gpuCapacity) {
@@ -279,23 +288,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   ground.material = groundMat;
   addToScene(scene, ground);
 
-  const hillMat = createStandardMaterial();
-  hillMat.diffuseColor = [0.45, 0.38, 0.22];
-  hillMat.emissiveColor = [0.15, 0.12, 0.05];
-  const hill = createCylinder(engine, { diameter: 48, height: 8, tessellation: 32 });
-  hill.position = [0, 4, 0];
-  hill.material = hillMat;
-  addToScene(scene, hill);
-
-  const hillRingMat = createStandardMaterial();
-  hillRingMat.diffuseColor = [0.9, 0.75, 0.2];
-  hillRingMat.emissiveColor = [0.5, 0.4, 0.05];
-  hillRingMat.alpha = 0.35;
-  const hillRing = createCylinder(engine, { diameter: 80, height: 0.5, tessellation: 48 });
-  hillRing.position = [0, 0.3, 0];
-  hillRing.material = hillRingMat;
-  addToScene(scene, hillRing);
-
   const entitySlot = new Int32Array(Math.max(capacity, gpuCapacity));
   entitySlot.fill(-1);
   const typeEntities = new Map();
@@ -311,6 +303,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
+  if (preallocKoth) {
+    for (const typeId of Object.keys(UNIT_MODEL_URLS).map(Number)) {
+      if (kothMaxUnitsOfType(typeId) > 0 && !typeEntities.has(typeId)) typeEntities.set(typeId, []);
+    }
+  }
+
   /** @type {Map<number, { mesh: object, matrices: Float32Array, colors: Float32Array, baseSize: number, entityIds: number[] }>} */
   const typeBatches = new Map();
   const fallbackEntities = [];
@@ -318,7 +316,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   for (const [typeId, entityIds] of typeEntities) {
     const def = getUnitDef(typeId);
     const batchSize = entityIds.length;
-    if (batchSize === 0) continue;
+    if (batchSize === 0 && !preallocKoth) continue;
 
     if (hasUnitModel(typeId)) {
       const mesh = await loadUnitMeshTemplate(engine, UNIT_MODEL_URLS[typeId]);
@@ -347,6 +345,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   const RING_DIAM = 1;
   const RING_H = 0.12;
+  const teamDisc = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 18 });
+  const teamDiscMat = createStandardMaterial();
+  teamDiscMat.diffuseColor = [1, 1, 1];
+  teamDiscMat.emissiveColor = [0.25, 0.25, 0.25];
+  teamDiscMat.alpha = 0.55;
+  teamDisc.material = teamDiscMat;
+  const teamDiscInit = initThinInstances(teamDisc, capacity, Math.max(capacity, gpuCapacity, 1));
+  const teamDiscMatrices = teamDiscInit.matrices;
+  const teamDiscColors = teamDiscInit.colors;
+  addToScene(scene, teamDisc);
+
   const selRing = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 24 });
   const ringMat = createStandardMaterial();
   ringMat.diffuseColor = [1, 0.92, 0.15];
@@ -357,12 +366,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const ringInit = initThinInstances(selRing, capacity, ringCap);
   const ringMatrices = ringInit.matrices;
   const ringColors = ringInit.colors;
-  for (let i = 0; i < capacity; i++) {
-    ringColors[i * 4] = 1;
-    ringColors[i * 4 + 1] = 0.92;
-    ringColors[i * 4 + 2] = 0.15;
-    ringColors[i * 4 + 3] = 0.85;
-  }
+  writeSelectionRingColors(ringColors, ringCap);
   setThinInstanceColors(selRing, ringColors);
   addToScene(scene, selRing);
 
@@ -445,11 +449,29 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     camera,
 
     setCount(n) {
+      setThinInstanceCount(teamDisc, n);
       setThinInstanceCount(selRing, n);
+      writeSelectionRingColors(ringColors, n);
+      setThinInstanceColors(selRing, ringColors);
+    },
+
+    resetCamera() {
+      camera.alpha = -Math.PI / 2.1;
+      camera.beta = Math.PI / 3.2;
+      camera.radius = 720;
+      if (typeof camera.setTarget === 'function') camera.setTarget({ x: 0, y: 0, z: 0 });
+      else if (camera.target?.copyFromFloats) camera.target.copyFromFloats(0, 0, 0);
+      else if (Array.isArray(camera.target)) camera.target = [0, 0, 0];
+      else camera.target = { x: 0, y: 0, z: 0 };
+      camera.inertialPanningX = 0;
+      camera.inertialPanningY = 0;
+      camera.inertialAlphaOffset = 0;
+      camera.inertialBetaOffset = 0;
     },
 
     /** Rebuild type-batch mapping when entity count/types change (e.g. sandbox → live). */
     rebuildFromTypes(count, typesArr) {
+      setThinInstanceCount(teamDisc, count);
       setThinInstanceCount(selRing, count);
 
       entitySlot.fill(-1);
@@ -513,19 +535,60 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     },
 
+    setTeamDiscColors(allColors) {
+      const n = Math.min(allColors.length / 4, teamDiscColors.length / 4);
+      for (let i = 0; i < n; i++) {
+        teamDiscColors[i * 4] = allColors[i * 4];
+        teamDiscColors[i * 4 + 1] = allColors[i * 4 + 1];
+        teamDiscColors[i * 4 + 2] = allColors[i * 4 + 2];
+        teamDiscColors[i * 4 + 3] = allColors[i * 4 + 3] > 0 ? 0.55 : 0;
+      }
+      setThinInstanceColors(teamDisc, teamDiscColors);
+    },
+
     writeInstance(i, typeId, x, z, diameter, yaw = 0, moving = false) {
       const slot = entitySlot[i];
-      if (slot < 0) return;
+      if (slot < 0) return false;
       const batch = typeBatches.get(typeId) ?? fallback;
-      if (!batch) return;
+      if (!batch) return false;
       writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback);
+      return true;
+    },
+
+    debugBatches(count, typesArr) {
+      const unmapped = [];
+      const byType = {};
+      for (let i = 0; i < count; i++) {
+        const type = typesArr[i];
+        byType[type] = (byType[type] ?? 0) + 1;
+        if (entitySlot[i] < 0) unmapped.push(i);
+      }
+      const batches = {};
+      for (const [typeId, batch] of typeBatches) {
+        batches[typeId] = {
+          entities: batch.entityIds.length,
+          capacity: batch.gpuCapacity,
+        };
+      }
+      if (fallback) {
+        batches.fallback = {
+          entities: fallback.entityIds.length,
+          capacity: fallback.gpuCapacity,
+        };
+      }
+      return { count, byType, batches, unmapped };
     },
 
     commit() {
       for (const batch of typeBatches.values()) flushThinInstances(batch.mesh);
       if (fallback) flushThinInstances(fallback.mesh);
+      flushThinInstances(teamDisc);
       flushThinInstances(selRing);
       flushThinInstances(orderRing);
+    },
+
+    writeTeamDisc(i, x, z, diameter) {
+      writeFlatRing(teamDiscMatrices, i, x, z, diameter, RING_DIAM, RING_H);
     },
 
     writeSelectionRing(i, x, z, diameter) {

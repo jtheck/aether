@@ -14,6 +14,7 @@ import { clearPath, queuePath, attackStandPoint } from './path.js';
 import { spawnKothSlot } from './worldSetup.js';
 import { kothRegisterJoin } from './kothMeta.js';
 import { kill } from './combat.js';
+import { livingByOwner } from './world.js';
 
 export const CMD = {
   MOVE: 1,
@@ -97,6 +98,7 @@ function applyStop(world, ids) {
 
 function applySpawnSlot(world, playerId) {
   if (playerId == null || playerId < 0) return;
+  if (livingByOwner(world, playerId) > 0) return;
   if (world.koth) kothRegisterJoin(world.koth, playerId, world.tick);
   spawnKothSlot(world, playerId);
 }

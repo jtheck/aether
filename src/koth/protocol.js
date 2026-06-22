@@ -25,6 +25,7 @@ export const MSG = {
   SHARD_HELLO: 'shard_hello',
   SHARD_STATE: 'shard_state',
   MATCH_RESET: 'match_reset',
+  MATCH_SNAPSHOT: 'match_snapshot',
 
   // lockstep (existing)
   COMMAND_FRAME: 'command_frame',
@@ -39,6 +40,7 @@ export const MSG = {
   JOIN_INTENT: 'join_intent',
   JOIN_PREPARE: 'join_prepare',
   JOIN_ACCEPT: 'join_accept',
+  JOIN_READY: 'join_ready',
 
   // roster / slots
   ROSTER_UPDATE: 'roster_update',
@@ -50,7 +52,16 @@ export const MSG = {
   PONG: 'pong',
 };
 
-/** Lowest userId breaks ties — "convene" peer for match_reset / join_accept. */
+export const KOTH_APP_STATE = {
+  PRIVATE_SANDBOX: 'privateSandbox',
+  MATCHMAKING: 'matchmaking',
+  SPECTATOR: 'spectator',
+  QUEUED: 'queued',
+  JOINING: 'joining',
+  LIVE_PLAYER: 'livePlayer',
+};
+
+/** Lowest userId is still useful as a deterministic tie-breaker for proposals. */
 export function negotiateConvene(userIds) {
   if (!userIds.length) return null;
   return [...userIds].sort()[0];
@@ -86,6 +97,13 @@ export function slotForUser(slots, userId) {
     if (s.userId === userId) return s;
   }
   return null;
+}
+
+/** Commands and tick confirms must come from the user who owns frame.playerId. */
+export function ownsPlayerFrame(slots, frame) {
+  if (!frame || frame.playerId == null || !frame.userId) return false;
+  const slot = slots[frame.playerId];
+  return slot?.playerId === frame.playerId && slot.state === 'active' && slot.userId === frame.userId;
 }
 
 /** @param {SlotEntry[]} slots */

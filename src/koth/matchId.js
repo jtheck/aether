@@ -1,6 +1,7 @@
 // Match ID persistence — quick reconnect after refresh / brief disconnect.
 
-const STORAGE_KEY = 'aether-koth-match';
+const STORAGE_KEY = 'aether-koth-match-v2';
+const SESSION_STORAGE_KEY = 'aether-koth-tab-match-v2';
 export const REJOIN_TTL_MS = 120_000;
 
 /** @typedef {{ matchId: string, savedAt: number, slot?: number, userId?: string }} SavedMatch */
@@ -15,11 +16,16 @@ export function generateMatchId() {
 export function loadSavedMatch(now = Date.now()) {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
+    const tabRaw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw && !tabRaw) return null;
+    const sharedRaw = raw ? JSON.parse(raw) : {};
+    const shared = { matchId: sharedRaw.matchId, savedAt: sharedRaw.savedAt };
+    const tab = tabRaw ? JSON.parse(tabRaw) : {};
+    const data = { ...shared, ...tab };
     if (!data?.matchId || !data.savedAt) return null;
     if (now - data.savedAt > REJOIN_TTL_MS) {
       localStorage.removeItem(STORAGE_KEY);
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
       return null;
     }
     return data;
@@ -32,8 +38,21 @@ export function loadSavedMatch(now = Date.now()) {
 export function saveMatch(patch, now = Date.now()) {
   const prev = loadSavedMatch(now) ?? {};
   const next = { ...prev, ...patch, savedAt: now };
+  if (Object.prototype.hasOwnProperty.call(patch, 'slot') && patch.slot == null) delete next.slot;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ matchId: next.matchId, savedAt: next.savedAt }),
+    );
+    sessionStorage.setItem(
+      SESSION_STORAGE_KEY,
+      JSON.stringify({
+        matchId: next.matchId,
+        savedAt: next.savedAt,
+        slot: next.slot,
+        userId: next.userId,
+      }),
+    );
   } catch {
     /* quota / private mode */
   }
@@ -43,6 +62,7 @@ export function saveMatch(patch, now = Date.now()) {
 export function clearSavedMatch() {
   try {
     localStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
   } catch {
     /* ignore */
   }

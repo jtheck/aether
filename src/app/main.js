@@ -8,14 +8,20 @@ import { setupInput } from './input.js';
 import { SimSession } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { PLAYER, AI_OWNER } from '../sim/worldSetup.js';
-import { unitsOnHill, hillController } from '../sim/kothHill.js';
 
 const SEED = 0x1234;
 
 const SELECT_COLOR = [1.0, 0.95, 0.15];
 const SELECT_SCALE = 1.15;
-const ENEMY_TINT = [0.55, 0.55, 0.62];
+const OWNER_TINTS = [
+  [0.25, 0.55, 1.0],
+  [1.0, 0.32, 0.25],
+  [0.4, 1.0, 0.45],
+  [0.95, 0.8, 0.25],
+  [0.75, 0.45, 1.0],
+];
 const DEATH_FADE_MS = 450;
+const DEBUG_KOTH = new URLSearchParams(location.search).get('debug') === 'koth';
 
 function tintColor(base, tint, amount) {
   const a = amount;
@@ -59,6 +65,11 @@ async function main() {
     await applyLiveConfig(ctx, cfg, kothShard);
   }
 
+  function handlePresentationSync(cfg) {
+    if (!ctx) return;
+    syncPresentation(ctx, cfg);
+  }
+
   let bootCfg = {
     mode: stress > 0 ? 'legacy' : 'legacy',
     seed: SEED,
@@ -76,6 +87,7 @@ async function main() {
     kothShard = createKothShard({
       onStatus: setStatusText,
       onLiveStart: handleLiveStart,
+      onPresentationSync: handlePresentationSync,
     });
     bootCfg = await kothShard.waitForBoot();
   }
@@ -145,6 +157,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
   let localPlayerId = bootCfg.localPlayerId;
   let matchMeta = { mode: bootCfg.mode, matchId: bootCfg.matchId };
   let matchOverShown = false;
+  let lastRenderDebugAt = 0;
 
   const updateColors = () => {
     const world = session.state;
@@ -160,7 +173,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
       if (selected[i] && world.alive[i]) c = SELECT_COLOR;
       else {
         c = hpColor(def, world.hp[i]);
-        if (world.owner[i] !== localPlayerId) c = tintColor(c, ENEMY_TINT, 0.25);
+        c = tintColor(c, OWNER_TINTS[world.owner[i] % OWNER_TINTS.length], 0.45);
       }
       const alpha = world.alive[i] ? 1 : fade;
       colors[i * 4] = c[0];
@@ -169,6 +182,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
       colors[i * 4 + 3] = alpha;
     }
     renderer.setColors(colors);
+    renderer.setTeamDiscColors?.(colors);
     paintStatus();
   };
 
@@ -179,14 +193,15 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     const p = livingByOwner(world, localPlayerId);
     let sel = 0;
     for (let i = 0; i < session.count; i++) if (bufs.selected[i]) sel++;
-    let line = `You: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
+    let line = `You P${localPlayerId}: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
     if (matchMeta.mode === 'sandbox') line = `Sandbox  ·  ${line}`;
     if (matchMeta.mode === 'koth') {
       const k = session.koth;
-      const hill = hillController(world);
-      const onHill = unitsOnHill(world, localPlayerId);
       if (k) {
-        line = `KOTH  ·  👑 P${k.kingOwner}  ·  Score ${k.scores[localPlayerId] ?? 0}  ·  Hill ${onHill}${hill === localPlayerId ? ' ★' : ''}  ·  ${line}`;
+        const players = k.active?.reduce?.((n, v) => n + (v ? 1 : 0), 0) ?? 0;
+        const p0 = livingByOwner(world, 0);
+        const p1 = livingByOwner(world, 1);
+        line = `KOTH  ·  👑 P${k.kingOwner}  ·  Players ${players}  ·  Units ${world.count} P0 ${p0} P1 ${p1}  ·  Score ${k.scores[localPlayerId] ?? 0}  ·  ${line}`;
       } else line = `KOTH  ·  ${line}`;
     }
     if (session.role === 'spectator') line = `Spectating  ·  ${line}`;
@@ -194,6 +209,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     if (stress > 0) line += `  ·  stress ${world.count} units`;
     if (matchMeta.matchId) line += `  ·  …${matchMeta.matchId.slice(-8)}`;
     el.textContent = line;
+    updateKothControls(kothShard);
   }
 
   updateColors();
@@ -216,6 +232,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     onOrder: (x, z) => {
       orderPing = { x, z, until: performance.now() + 900 };
     },
+    canInteract: () => session.role === 'player' && localPlayerId >= 0,
   });
 
   window.addEventListener('keydown', (e) => {
@@ -223,8 +240,11 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
       if (kothShard?.canJoin?.()) kothShard.requestJoin();
     }
   });
+  setupKothControls(kothShard);
 
-  session.onCommit = () => {
+  const prevCommit = session.onCommit;
+  session.onCommit = (tick, checksum) => {
+    prevCommit?.(tick, checksum);
     const world = session.state;
     const { wasAlive, deathFade } = bufs;
     for (let i = 0; i < session.count; i++) {
@@ -252,6 +272,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
 
     const alpha = session.displayAlpha;
     const { prev, cur } = session.displaySnapshots();
+    if (!prev || !cur) return;
     const ringPulse = 1.38 + 0.07 * Math.sin(performance.now() * 0.004);
 
     if (orderPing) {
@@ -263,6 +284,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     }
 
     let colorsDirty = false;
+    const drawStats = { p0: 0, p1: 0, unmapped: 0 };
     const n = session.count;
     const world = session.state;
     const { selected, deathFade, colors, renderX, renderY, renderZ } = bufs;
@@ -270,14 +292,16 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
-          renderer.writeInstance(i, world.type[i], 0, 0, 0);
+          if (!renderer.writeInstance(i, world.type[i], 0, 0, 0)) drawStats.unmapped++;
+          renderer.writeTeamDisc?.(i, 0, 0, 0);
           renderer.writeSelectionRing(i, 0, 0, 0);
           colors[i * 4 + 3] = 0;
           colorsDirty = true;
           continue;
         }
       } else if (!world.alive[i]) {
-        renderer.writeInstance(i, world.type[i], 0, 0, 0);
+        if (!renderer.writeInstance(i, world.type[i], 0, 0, 0)) drawStats.unmapped++;
+        renderer.writeTeamDisc?.(i, 0, 0, 0);
         renderer.writeSelectionRing(i, 0, 0, 0);
         continue;
       }
@@ -300,8 +324,20 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
         colors[i * 4 + 3] = fade;
         colorsDirty = true;
       }
-      renderer.writeInstance(i, world.type[i], x, z, size, yaw, moving && world.alive[i]);
+      if (renderer.writeInstance(i, world.type[i], x, z, size, yaw, moving && world.alive[i])) {
+        if (world.owner[i] === 0) drawStats.p0++;
+        else if (world.owner[i] === 1) drawStats.p1++;
+      } else drawStats.unmapped++;
+      renderer.writeTeamDisc?.(i, x, z, size * 1.1);
       renderer.writeSelectionRing(i, x, z, selected[i] && world.alive[i] ? size * ringPulse : 0);
+    }
+    if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
+      lastRenderDebugAt = performance.now();
+      console.info('[KOTH] render frame', {
+        count: n,
+        drawStats,
+        batches: renderer.debugBatches?.(n, world.type),
+      });
     }
     if (colorsDirty) renderer.setColors(colors);
     renderer.commit();
@@ -339,29 +375,85 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
 }
 
 async function applyLiveConfig(ctx, cfg, kothShard) {
-  ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
-  ctx.localPlayerId = cfg.localPlayerId;
-  ctx.session.setHumanPlayers(cfg.humanPlayers);
-  ctx.session.setRole(cfg.role ?? 'player');
+  const activeSlots = cfg.activeSlots ?? cfg.humanPlayers ?? [];
+  if (cfg.mode === 'sandbox' && activeSlots.length === 0) {
+    ctx.setMatchMeta({ mode: 'sandbox', matchId: cfg.matchId });
+    ctx.session.setRole(cfg.role ?? 'spectator');
+    setStatusText('Looking for live shard…');
+    return;
+  }
+  if (cfg.mode === 'koth' && activeSlots.length < 2) {
+    console.warn('[KOTH] ignoring live config with fewer than 2 active slots', cfg);
+    setStatusText(`Waiting for roster sync — got ${activeSlots.length} active slot${activeSlots.length === 1 ? '' : 's'}`);
+    return;
+  }
+  if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', cfg);
 
   const simMode = cfg.mode === 'sandbox' ? 'sandbox' : 'koth';
   const { count } = await ctx.session.reset({
     seed: cfg.seed,
     mode: simMode,
-    activeSlots: cfg.activeSlots ?? cfg.humanPlayers,
+    activeSlots,
   });
+  if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] sim after reset', ownerStats(ctx.session.state));
 
+  syncPresentation(ctx, cfg, { count });
+}
+
+function syncPresentation(ctx, cfg, options = {}) {
+  const count = options.count ?? ctx.session.count;
+  ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
+  if (cfg.localPlayerId != null) ctx.localPlayerId = cfg.localPlayerId;
+  if (cfg.localPlayerId != null) ctx.session.setLocalPlayerId?.(cfg.localPlayerId);
+  if (cfg.humanPlayers && (cfg.reset || cfg.updateHumanPlayers || options.updateHumanPlayers)) {
+    ctx.session.setHumanPlayers(cfg.humanPlayers);
+  }
+  ctx.session.setRole(cfg.role ?? 'player');
+  ctx.inputApi?.setRole?.(cfg.role ?? 'player');
+  if (cfg.inputEnabled != null) ctx.inputApi?.setInputEnabled?.(Boolean(cfg.inputEnabled));
+  if ((cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
+  ctx.session.inputDelayTicks = cfg.mode === 'koth' ? 1 : 0;
   ctx.resizeRenderBuffers(count);
   ctx.renderer.setCount(count);
   ctx.renderer.rebuildFromTypes(count, ctx.session.state.type);
+  if (cfg.mode === 'koth') ctx.renderer.resetCamera?.();
 
   const overEl = document.getElementById('match-over');
   if (overEl) overEl.style.display = 'none';
   ctx.matchOverShown = false;
 
   ctx.updateColors();
-  const label = cfg.mode === 'sandbox' ? 'Sandbox' : `Live — player ${cfg.localPlayerId}`;
+  const label =
+    cfg.mode === 'sandbox'
+      ? 'Sandbox'
+      : cfg.role === 'player'
+        ? `Live — player ${cfg.localPlayerId}`
+        : 'Live — spectating';
   setStatusText(label);
+}
+
+function ownerStats(world) {
+  const owners = new Map();
+  for (let i = 0; i < world.count; i++) {
+    if (!world.alive[i]) continue;
+    const owner = world.owner[i];
+    let s = owners.get(owner);
+    if (!s) {
+      s = { count: 0, minX: Infinity, maxX: -Infinity, minZ: Infinity, maxZ: -Infinity };
+      owners.set(owner, s);
+    }
+    const x = world.px[i] / 65536;
+    const z = world.py[i] / 65536;
+    s.count++;
+    s.minX = Math.min(s.minX, x);
+    s.maxX = Math.max(s.maxX, x);
+    s.minZ = Math.min(s.minZ, z);
+    s.maxZ = Math.max(s.maxZ, z);
+  }
+  return {
+    count: world.count,
+    owners: Object.fromEntries([...owners.entries()].map(([owner, s]) => [owner, s])),
+  };
 }
 
 function showMatchOver(session) {
@@ -404,6 +496,40 @@ function updateLegend() {
 function setStatusText(text) {
   const el = document.getElementById('status');
   if (el) el.textContent = text;
+}
+
+function setupKothControls(kothShard) {
+  const start = document.getElementById('koth-start');
+  const join = document.getElementById('koth-join');
+  if (!start || !join || !kothShard) {
+    if (start) start.hidden = true;
+    if (join) join.hidden = true;
+    return;
+  }
+  start.addEventListener('click', () => {
+    kothShard.startOrJoinLive?.();
+    updateKothControls(kothShard);
+  });
+  join.addEventListener('click', () => {
+    kothShard.requestJoin?.();
+    updateKothControls(kothShard);
+  });
+  updateKothControls(kothShard);
+}
+
+function updateKothControls(kothShard) {
+  const start = document.getElementById('koth-start');
+  const join = document.getElementById('koth-join');
+  if (!start || !join) return;
+  if (!kothShard) {
+    start.hidden = true;
+    join.hidden = true;
+    return;
+  }
+  const canJoin = Boolean(kothShard.canJoin?.());
+  start.hidden = !kothShard.canStartOrJoinLive?.() || canJoin;
+  join.hidden = !canJoin;
+  join.textContent = kothShard.joinActionLabel?.() ?? 'Join Match';
 }
 
 async function waitForGetFireP2p(timeoutMs = 5000) {

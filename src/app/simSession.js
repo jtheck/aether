@@ -33,6 +33,10 @@ export class SimSession {
 
     /** @type {Map<number, Map<number, import('../sim/commandFrame.js').SimCommand[]>>} */
     this.ledger = new Map();
+    /** @type {import('../sim/commandFrame.js').CommandFrame[]} */
+    this.fullLedgerFrames = [];
+    /** @type {import('../sim/commandFrame.js').CommandFrame[]} frames proven by committed worker ticks */
+    this.committedLedgerFrames = [];
     /** @type {Map<number, { x: Float32Array, z: Float32Array }>} */
     this.snapshots = new Map();
 
@@ -40,6 +44,7 @@ export class SimSession {
     this.simAcc = 0;
     this.waitingForWorker = false;
     this.inFlightTick = 0;
+    this.inFlightFrames = [];
     this.lateFramesDropped = 0;
 
     /** peerId -> highest tick they've confirmed ready for (multiplayer). */
@@ -48,8 +53,10 @@ export class SimSession {
     this.onCommit = null;
     this.onCatchupReady = null;
     this._commandSeq = 0;
+    this._seenFrameIds = new Set();
     this.lastSnapshotAt = 0;
     this.pauseLockstep = false;
+    this.resetting = false;
     this.koth = null;
     this.kothMatchOver = 0;
     /** @type {Map<number, number[]>} tick -> playerIds joining lockstep */
@@ -60,19 +67,7 @@ export class SimSession {
   async start(config) {
     const { count } = await this.client.init({ ...config, aiPlayers: this.aiPlayers });
     this._count = count;
-    this.client.onStepDone((tick, checksum, extra) => {
-      this.confirmedTick = tick;
-      this._lastChecksum = checksum;
-      if (extra?.koth) this.koth = extra.koth;
-      if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
-      this.waitingForWorker = false;
-      this.inFlightTick = 0;
-      this._captureSnapshot(tick);
-      this.lastSnapshotAt = performance.now();
-      pruneLedger(this.ledger, tick, LEDGER_KEEP);
-      this.onCommit?.(tick, checksum);
-      this._drainPendingCommits();
-    });
+    this._bindStepHandler();
     this._captureSnapshot(0);
     this.lastSnapshotAt = performance.now();
     return { count };
@@ -90,25 +85,35 @@ export class SimSession {
   /** Schedule a local player command into the lockstep ledger. */
   submitCommand(command) {
     if (this.role !== 'player') return null;
+    const commandId = `${this.localPlayerId}:${++this._commandSeq}`;
     const tick = this._nextOpenTick() + this.inputDelayTicks;
     const frame = {
       tick,
       playerId: this.localPlayerId,
       commands: [command],
-      playerCommandSeq: ++this._commandSeq,
+      commandId,
+      playerCommandSeq: this._commandSeq,
     };
     if (!bufferFrame(this.ledger, frame, this.confirmedTick)) {
       this.lateFramesDropped++;
+      return null;
     }
+    this._seenFrameIds.add(commandId);
+    this._recordFullFrame(frame);
     return frame;
   }
 
   /** Incoming P2P frame — late frames are dropped, never applied retroactively. */
   bufferRemoteFrame(frame) {
+    if (frame?.commandId) {
+      if (this._seenFrameIds.has(frame.commandId)) return true;
+      this._seenFrameIds.add(frame.commandId);
+    }
     if (!bufferFrame(this.ledger, frame, this.confirmedTick)) {
       this.lateFramesDropped++;
       return false;
     }
+    this._recordFullFrame(frame);
     return true;
   }
 
@@ -141,6 +146,7 @@ export class SimSession {
 
   /** Snapshot pair for render interpolation (display lags sim by inputDelayTicks). */
   displaySnapshots() {
+    if (this.resetting) return { prev: null, cur: null, displayTick: this.confirmedTick };
     const displayTick = Math.max(0, this.confirmedTick - this.inputDelayTicks);
     const prevTick = Math.max(0, displayTick - 1);
     const prev = this.snapshots.get(prevTick) ?? this.snapshots.get(0);
@@ -150,6 +156,10 @@ export class SimSession {
 
   setHumanPlayers(playerIds) {
     this.humanPlayers = [...playerIds].sort((a, b) => a - b);
+  }
+
+  setLocalPlayerId(playerId) {
+    this.localPlayerId = playerId;
   }
 
   setRole(role) {
@@ -178,40 +188,37 @@ export class SimSession {
   }
 
   /** Convene peer: inject a command at a specific tick (spawn slot, etc.). */
-  submitAtTick(tick, command) {
+  submitAtTick(tick, command, options = {}) {
     if (this.role !== 'player') return null;
+    const sourcePlayerId = options.playerId ?? this.localPlayerId;
+    const seq = ++this._commandSeq;
+    const commandId = options.commandId ?? `${sourcePlayerId}:${seq}`;
+    if (this._seenFrameIds.has(commandId)) return null;
     const frame = {
       tick,
-      playerId: this.localPlayerId,
+      playerId: sourcePlayerId,
       commands: [command],
-      playerCommandSeq: ++this._commandSeq,
+      commandId,
+      playerCommandSeq: seq,
     };
-    bufferFrame(this.ledger, frame, this.confirmedTick);
+    if (!bufferFrame(this.ledger, frame, this.confirmedTick)) {
+      this.lateFramesDropped++;
+      return null;
+    }
+    this._seenFrameIds.add(commandId);
+    this._recordFullFrame(frame);
     return frame;
   }
 
   /** Full ledger for catch-up export (not pruned by retention). */
   exportFullLedger() {
-    const frames = [];
-    for (const [tick, byPlayer] of this.ledger) {
-      for (const [playerId, commands] of byPlayer) {
-        if (commands?.length) frames.push({ tick, playerId, commands });
-      }
-    }
-    frames.sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
-    return frames;
+    return this.committedLedgerFrames
+      .map((frame) => ({ ...frame, commands: frame.commands?.map((cmd) => ({ ...cmd })) ?? [] }))
+      .sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
   }
   /** Export command ledger slice for catch-up gap-fill. */
   exportLedger(fromTick, toTick) {
-    const frames = [];
-    for (const [tick, byPlayer] of this.ledger) {
-      if (tick <= fromTick || tick > toTick) continue;
-      for (const [playerId, commands] of byPlayer) {
-        if (commands?.length) frames.push({ tick, playerId, commands });
-      }
-    }
-    frames.sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
-    return frames;
+    return this.exportFullLedger().filter((frame) => frame.tick > fromTick && frame.tick <= toTick);
   }
 
   /** @deprecated */
@@ -226,23 +233,118 @@ export class SimSession {
     this.onCatchupReady?.(offer);
   }
 
+  replaceFullLedger(frames) {
+    this.fullLedgerFrames = [];
+    this.committedLedgerFrames = [];
+    this._seenFrameIds.clear();
+    for (const frame of frames ?? []) {
+      this._recordFullFrame(frame);
+      this._recordCommittedFrame(frame);
+      if (frame.commandId) this._seenFrameIds.add(frame.commandId);
+    }
+  }
+
   async reset(config) {
+    this.resetting = true;
     this.ledger.clear();
+    this.fullLedgerFrames = [];
+    this.committedLedgerFrames = [];
     this.snapshots.clear();
     this.peerConfirmedTick.clear();
     this.pendingJoins.clear();
+    this._seenFrameIds.clear();
     this.confirmedTick = 0;
     this.simAcc = 0;
     this.waitingForWorker = false;
     this.inFlightTick = 0;
+    this.inFlightFrames = [];
     this.client.terminate();
     this.client = new SimClient();
     this.state = this.client.state;
-    return this.start(config);
+    try {
+      return await this.start(config);
+    } finally {
+      this.resetting = false;
+    }
   }
 
   terminate() {
-    this.client.terminate();
+    this.client?.terminate?.();
+  }
+
+  adoptFrom(other) {
+    this.client?.terminate?.();
+    this.client = other.client;
+    other.client = null;
+    this.state = other.state;
+    this._count = other._count;
+    this.ledger = other.ledger;
+    this.fullLedgerFrames = other.fullLedgerFrames;
+    this.committedLedgerFrames = other.committedLedgerFrames;
+    this.snapshots = other.snapshots;
+    this.peerConfirmedTick = other.peerConfirmedTick;
+    this.pendingJoins = other.pendingJoins;
+    this._seenFrameIds = other._seenFrameIds;
+    this.confirmedTick = other.confirmedTick;
+    this.simAcc = 0;
+    this.waitingForWorker = false;
+    this.inFlightTick = 0;
+    this.inFlightFrames = [];
+    this.lateFramesDropped = other.lateFramesDropped;
+    this._commandSeq = other._commandSeq;
+    this.lastSnapshotAt = performance.now();
+    this.pauseLockstep = false;
+    this.resetting = false;
+    this.koth = other.koth;
+    this.kothMatchOver = other.kothMatchOver;
+    this._lastChecksum = other._lastChecksum;
+    this._bindStepHandler();
+  }
+
+  _recordFullFrame(frame) {
+    if (!frame || !frame.commands?.length) return;
+    if (frame.commandId && this.fullLedgerFrames.some((existing) => existing.commandId === frame.commandId)) return;
+    this.fullLedgerFrames.push({
+      ...frame,
+      commands: frame.commands.map((cmd) => ({ ...cmd })),
+    });
+  }
+
+  _recordCommittedFrame(frame) {
+    if (!frame || !frame.commands?.length) return;
+    const key = frame.commandId ?? `${frame.tick}:${frame.playerId}:${JSON.stringify(frame.commands)}`;
+    const exists = this.committedLedgerFrames.some((existing) => {
+      const existingKey = existing.commandId ?? `${existing.tick}:${existing.playerId}:${JSON.stringify(existing.commands)}`;
+      return existingKey === key;
+    });
+    if (exists) return;
+    this.committedLedgerFrames.push({
+      ...frame,
+      commands: frame.commands.map((cmd) => ({ ...cmd })),
+    });
+  }
+
+  _recordCommittedTick(tick, framesUsed) {
+    for (const frame of framesUsed ?? []) this._recordCommittedFrame(frame);
+  }
+
+  _bindStepHandler() {
+    this.client.onStepDone((tick, checksum, extra) => {
+      this.confirmedTick = tick;
+      this._lastChecksum = checksum;
+      if (extra?.koth) this.koth = extra.koth;
+      if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
+      this.waitingForWorker = false;
+      this.inFlightTick = 0;
+      const committedFrames = this.inFlightFrames;
+      this.inFlightFrames = [];
+      this._recordCommittedTick(tick, committedFrames);
+      this._captureSnapshot(tick);
+      this.lastSnapshotAt = performance.now();
+      pruneLedger(this.ledger, tick, LEDGER_KEEP);
+      this.onCommit?.(tick, checksum);
+      this._drainPendingCommits();
+    });
   }
 
   _canAdvance(tick) {
@@ -271,6 +373,10 @@ export class SimSession {
     const frames = collectFramesForTick(this.ledger, next, this.humanPlayers);
     this.waitingForWorker = true;
     this.inFlightTick = next;
+    this.inFlightFrames = frames.map((frame) => ({
+      ...frame,
+      commands: frame.commands.map((cmd) => ({ ...cmd })),
+    }));
     this.client.commitTick(next, frames);
     return true;
   }

@@ -17,9 +17,11 @@ export function setupInput({
   enqueueCommand,
   onSelectionChanged,
   onOrder,
+  canInteract,
 }) {
   let localPlayerId = initialPlayerId;
   let selectedBuf = selected;
+  let inputEnabled = true;
   const getWorld = typeof worldOrGetter === 'function' ? worldOrGetter : () => worldOrGetter;
   const downPos = {};
   let boxStart = null;
@@ -30,6 +32,7 @@ export function setupInput({
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
   canvas.addEventListener('pointerdown', (e) => {
+    if (!canUseInput()) return;
     downPos[e.button] = { x: e.clientX, y: e.clientY };
     if (e.button === 0) {
       boxStart = { x: e.clientX, y: e.clientY };
@@ -44,6 +47,7 @@ export function setupInput({
   });
 
   canvas.addEventListener('pointermove', (e) => {
+    if (!canUseInput()) return;
     if (dragPointerId !== e.pointerId || !boxStart || !(e.buttons & 1)) return;
     const moved = Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y);
     if (moved > CLICK_SLOP_PX) showSelectionBox(boxStart.x, boxStart.y, e.clientX, e.clientY);
@@ -55,11 +59,18 @@ export function setupInput({
   window.addEventListener('pointercancel', onPointerUp);
 
   function onPointerUp(e) {
+    if (!canUseInput()) {
+      hideSelectionBox();
+      boxStart = null;
+      dragPointerId = null;
+      return;
+    }
     if (e.button === 0) finishLmb(e);
     else if (e.button === 2) finishRmb(e);
   }
 
   function finishLmb(e) {
+    if (!canUseInput()) return;
     if (e.button !== 0 || dragPointerId === null) return;
     if (e.pointerId !== dragPointerId) return;
 
@@ -94,6 +105,7 @@ export function setupInput({
   }
 
   function finishRmb(e) {
+    if (!canUseInput()) return;
     const d = downPos[2];
     delete downPos[2];
     const moved = d ? Math.hypot(e.clientX - d.x, e.clientY - d.y) : Infinity;
@@ -103,6 +115,7 @@ export function setupInput({
   }
 
   window.addEventListener('keydown', (e) => {
+    if (!canUseInput() && e.key !== 'Escape') return;
     if (e.key === 's' || e.key === 'S') {
       stopSelected();
     } else if (e.key === 'Escape') {
@@ -156,6 +169,7 @@ export function setupInput({
   }
 
   function boxSelect(x0, y0, x1, y1, add) {
+    if (!canUseInput()) return;
     const rect = canvas.getBoundingClientRect();
     const minX = Math.min(x0, x1) - rect.left;
     const maxX = Math.max(x0, x1) - rect.left;
@@ -183,6 +197,7 @@ export function setupInput({
   }
 
   function orderAt(clientX, clientY, cmdType) {
+    if (!canUseInput()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
 
@@ -217,6 +232,7 @@ export function setupInput({
   }
 
   function stopSelected() {
+    if (!canUseInput()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
     enqueueCommand({ type: CMD.STOP, entities: ids });
@@ -227,6 +243,10 @@ export function setupInput({
     onSelectionChanged();
   }
 
+  function canUseInput() {
+    return inputEnabled && localPlayerId >= 0 && (canInteract?.() ?? true);
+  }
+
   return {
     setLocalPlayerId(id) {
       localPlayerId = id;
@@ -234,5 +254,14 @@ export function setupInput({
     setSelectedBuffer(buf) {
       selectedBuf = buf;
     },
+    setInputEnabled(enabled) {
+      inputEnabled = Boolean(enabled);
+      if (!inputEnabled) clearSelection();
+    },
+    setRole(role) {
+      inputEnabled = role === 'player' || role === 'livePlayer' || role === 'sandboxPlayer';
+      if (!inputEnabled) clearSelection();
+    },
+    clearSelection,
   };
 }

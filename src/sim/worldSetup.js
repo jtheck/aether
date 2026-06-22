@@ -50,8 +50,8 @@ export function kothMaxUnitsOfType(typeId) {
 
 /** Spawn one KOTH army at a slot base (mid-game join). */
 export function spawnKothSlot(w, slot) {
-  const base = KOTH_BASES[slot] ?? KOTH_BASES[0];
-  spawnArmy(w, ENEMY_ARMY, slot, base[0], base[1]);
+  const base = bestKothSpawnPoint(w, slot);
+  spawnArmy(w, PLAYER_ARMY, slot, base[0], base[1]);
 }
 
 export function stressPerSideFromSearch(search = '') {
@@ -77,6 +77,46 @@ function spawnArmy(w, layout, owner, baseX, baseZ) {
       });
     }
   }
+}
+
+function bestKothSpawnPoint(w, slot) {
+  const fallback = KOTH_BASES[slot] ?? KOTH_BASES[0];
+  const candidates = [];
+  for (const base of KOTH_BASES) candidates.push(base);
+  const radius = 175;
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    candidates.push([Math.cos(a) * radius, Math.sin(a) * radius]);
+  }
+
+  let best = fallback;
+  let bestScore = -1;
+  for (const c of candidates) {
+    const score = spawnClearanceScore(w, c[0], c[1], slot);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return best;
+}
+
+function spawnClearanceScore(w, x, z, owner) {
+  let nearest = 0x7fffffff;
+  for (const base of KOTH_BASES) {
+    const dx = x - base[0];
+    const dz = z - base[1];
+    nearest = Math.min(nearest, dx * dx + dz * dz);
+  }
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] === owner) continue;
+    const ux = fx.toFloat(w.px[i]);
+    const uz = fx.toFloat(w.py[i]);
+    const dx = x - ux;
+    const dz = z - uz;
+    nearest = Math.min(nearest, dx * dx + dz * dz);
+  }
+  return nearest;
 }
 
 function spawnStressSide(w, owner, baseX, baseZ, count) {
@@ -109,6 +149,7 @@ export function buildWorldFromConfig({ seed, stressPerSide, mode = 'legacy', act
   }
 
   if (mode === 'sandbox') {
+    if (activeSlots && activeSlots.length === 0) return w;
     const [bx, bz] = KOTH_BASES[0];
     spawnArmy(w, PLAYER_ARMY, PLAYER, bx, bz);
     return w;
@@ -118,8 +159,7 @@ export function buildWorldFromConfig({ seed, stressPerSide, mode = 'legacy', act
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
     for (const slot of slots) {
       const base = KOTH_BASES[slot] ?? KOTH_BASES[0];
-      const army = slot === PLAYER ? PLAYER_ARMY : ENEMY_ARMY;
-      spawnArmy(w, army, slot, base[0], base[1]);
+      spawnArmy(w, PLAYER_ARMY, slot, base[0], base[1]);
     }
     w.koth = createKothMeta(slots);
     return w;

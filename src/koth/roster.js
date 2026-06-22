@@ -43,10 +43,16 @@ export function reserveSlot(slots, playerId, userId) {
 export function claimOpenSlot(slots, userId) {
   const next = cloneSlots(slots);
   const existing = next.find((s) => s.userId === userId);
-  if (existing?.state === 'active') return { slots: next, playerId: existing.playerId };
+  if (existing) {
+    if (existing.state === 'active') return { slots: next, playerId: existing.playerId };
+    if (existing.state === 'spectator' || existing.state === 'reserved') {
+      existing.state = 'active';
+      return { slots: next, playerId: existing.playerId };
+    }
+  }
 
   for (const s of next) {
-    if (s.state === 'empty' || (s.state === 'reserved' && s.userId === userId)) {
+    if (s.state === 'empty') {
       s.userId = userId;
       s.state = 'active';
       return { slots: next, playerId: s.playerId };
@@ -54,6 +60,45 @@ export function claimOpenSlot(slots, userId) {
   }
   return { slots: next, playerId: -1 };
 }
+
+export function reserveOpenSlot(slots, userId) {
+  const next = cloneSlots(slots);
+  const existing = next.find((s) => s.userId === userId);
+  if (existing) {
+    if (existing.state === 'active' || existing.state === 'reserved') {
+      return { slots: next, playerId: existing.playerId };
+    }
+    if (existing.state === 'spectator') {
+      existing.state = 'reserved';
+      return { slots: next, playerId: existing.playerId };
+    }
+  }
+
+  for (const s of next) {
+    if (s.state === 'empty') {
+      s.userId = userId;
+      s.state = 'reserved';
+      return { slots: next, playerId: s.playerId };
+    }
+  }
+  return { slots: next, playerId: -1 };
+}
+
+
+export function activateSlot(slots, playerId, userId) {
+  const next = cloneSlots(slots);
+  const s = next[playerId];
+  if (!s || !userId) return { slots: next, playerId: -1 };
+  const current = next.find((entry) => entry.userId === userId);
+  if (current && current.playerId !== playerId) {
+    current.userId = null;
+    current.state = 'empty';
+  }
+  s.userId = userId;
+  s.state = 'active';
+  return { slots: next, playerId };
+}
+
 
 /** @param {SlotEntry[]} slots @param {string} userId */
 export function releaseUser(slots, userId, toSpectator = true) {

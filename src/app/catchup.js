@@ -1,6 +1,7 @@
 // Catch-up replay — rebuild sim from match config + command ledger, verify checksum.
 
 import { collectFramesForTick } from '../sim/commandFrame.js';
+import { SimSession } from './simSession.js';
 
 /**
  * @param {import('./simSession.js').SimSession} session
@@ -10,9 +11,31 @@ import { collectFramesForTick } from '../sim/commandFrame.js';
  * @param {number} [expectedChecksum]
  */
 export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTick, expectedChecksum) {
+  const replay = new SimSession({
+    localPlayerId: -1,
+    humanPlayers: matchConfig.humanPlayers ?? [],
+    aiPlayers: [],
+    inputDelayTicks: session.inputDelayTicks,
+    role: 'spectator',
+  });
+  try {
+    await replayCatchUpInto(replay, matchConfig, ledgerFrames, targetTick, expectedChecksum);
+    session.adoptFrom(replay);
+    session.setHumanPlayers(matchConfig.humanPlayers);
+    session.setLocalPlayerId(-1);
+    session.setRole('spectator');
+    session.replaceFullLedger?.(ledgerFrames);
+    return session._lastChecksum;
+  } catch (err) {
+    replay.terminate();
+    throw err;
+  }
+}
+
+export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum) {
   const byTick = groupFramesByTick(ledgerFrames);
 
-  await session.reset({
+  await session.start({
     seed: matchConfig.seed,
     mode: 'koth',
     activeSlots: matchConfig.activeSlots,
@@ -40,6 +63,7 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
     );
   }
 
+  session.replaceFullLedger?.(ledgerFrames);
   return session._lastChecksum;
 }
 

@@ -13,11 +13,16 @@
     #legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
     #status { position: fixed; left: 12px; top: 12px; font-size: 13px; opacity: 0.9; pointer-events: none; }
     #hint { position: fixed; right: 12px; top: 12px; font-size: 12px; opacity: 0.65; pointer-events: none; text-align: right; line-height: 1.5; }
+    #koth-controls { position: fixed; left: 12px; top: 40px; display: flex; gap: 8px; }
   </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
   <div id="status"></div>
+  <div id="koth-controls">
+    <button id="koth-start">Start or Join Lobby</button>
+    <button id="koth-join" hidden>Join Match</button>
+  </div>
   <div id="hint">LMB drag select · LMB click unit · LMB ground move · RMB attack-move<br>S stop · Esc clear · J join (spectators) · MMB pan · Alt+LMB orbit<br>?solo=1 offline AI · ?stress=1000 perf · ?koth=0 legacy</div>
   <div id="match-over" style="display:none;position:fixed;inset:0;place-content:center;background:rgba(0,0,0,0.55);font-size:1.4rem;pointer-events:none;"></div>
   <div id="legend"></div>

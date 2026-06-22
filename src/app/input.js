@@ -10,14 +10,17 @@ const CLICK_SLOP_PX = 6;
 export function setupInput({
   canvas,
   renderer,
-  world,
+  world: worldOrGetter,
   selected,
-  localPlayerId,
+  localPlayerId: initialPlayerId,
   getUnitWorldPos,
   enqueueCommand,
   onSelectionChanged,
   onOrder,
 }) {
+  let localPlayerId = initialPlayerId;
+  let selectedBuf = selected;
+  const getWorld = typeof worldOrGetter === 'function' ? worldOrGetter : () => worldOrGetter;
   const downPos = {};
   let boxStart = null;
   let dragPointerId = null;
@@ -67,10 +70,11 @@ export function setupInput({
     if (moved > CLICK_SLOP_PX && boxStart) {
       boxSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
     } else if (moved <= CLICK_SLOP_PX) {
+      const world = getWorld();
       const hit = pickUnit(e.clientX, e.clientY, (i) => world.owner[i] === localPlayerId);
       if (hit >= 0) {
-        if (!e.shiftKey) selected.fill(0);
-        selected[hit] = 1;
+        if (!e.shiftKey) selectedBuf.fill(0);
+        selectedBuf[hit] = 1;
         onSelectionChanged();
       } else if (selectedIds().length > 0) {
         orderAt(e.clientX, e.clientY, CMD.MOVE);
@@ -129,6 +133,7 @@ export function setupInput({
   }
 
   function buildSphereList(filter) {
+    const world = getWorld();
     const list = [];
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i]) continue;
@@ -156,21 +161,23 @@ export function setupInput({
     const maxX = Math.max(x0, x1) - rect.left;
     const minY = Math.min(y0, y1) - rect.top;
     const maxY = Math.max(y0, y1) - rect.top;
-    if (!add) selected.fill(0);
+    if (!add) selectedBuf.fill(0);
+    const world = getWorld();
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
       const pos = getUnitWorldPos(i);
       const p = renderer.worldToScreen(pos.x, pos.y, pos.z);
       if (!p) continue;
-      if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) selected[i] = 1;
+      if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) selectedBuf[i] = 1;
     }
     onSelectionChanged();
   }
 
   function selectedIds() {
+    const world = getWorld();
     const ids = [];
     for (let i = 0; i < world.count; i++) {
-      if (selected[i] && world.alive[i]) ids.push(i);
+      if (selectedBuf[i] && world.alive[i]) ids.push(i);
     }
     return ids;
   }
@@ -179,6 +186,7 @@ export function setupInput({
     const ids = selectedIds();
     if (ids.length === 0) return;
 
+    const world = getWorld();
     const enemy = pickUnit(clientX, clientY, (i) => isHostile(localPlayerId, world.owner[i]));
     if (enemy >= 0 && cmdType === CMD.MOVE) {
       enqueueCommand({ type: CMD.ATTACK, entities: ids, target: enemy });
@@ -215,7 +223,16 @@ export function setupInput({
   }
 
   function clearSelection() {
-    selected.fill(0);
+    selectedBuf.fill(0);
     onSelectionChanged();
   }
+
+  return {
+    setLocalPlayerId(id) {
+      localPlayerId = id;
+    },
+    setSelectedBuffer(buf) {
+      selectedBuf = buf;
+    },
+  };
 }

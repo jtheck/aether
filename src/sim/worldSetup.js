@@ -2,10 +2,20 @@
 
 import { createWorld, spawn } from './world.js';
 import { UNIT } from './unitTypes.js';
+import { createKothMeta } from './kothMeta.js';
 import * as fx from './fixed.js';
 
 export const PLAYER = 0;
 export const AI_OWNER = 1;
+
+/** Pentagonal spawn bases for KOTH slots 0–4 (world units). */
+export const KOTH_BASES = [
+  [-120, 0],
+  [120, 0],
+  [0, -120],
+  [0, 120],
+  [-85, 85],
+];
 
 const PLAYER_ARMY = [
   { type: UNIT.WARRIOR, count: 10 },
@@ -27,6 +37,22 @@ const ROW_SPACING = 16;
 const STRESS_TYPES = [UNIT.WARRIOR, UNIT.ARCHER, UNIT.SPEARMAN, UNIT.SCOUT, UNIT.CAVALRY];
 
 export { PLAYER_ARMY, ENEMY_ARMY };
+
+export const UNITS_PER_ARMY = PLAYER_ARMY.reduce((s, c) => s + c.count, 0);
+export const KOTH_MAX_SLOTS = 5;
+export const KOTH_MAX_ENTITIES = UNITS_PER_ARMY * KOTH_MAX_SLOTS;
+
+/** Max thin-instance slots for a unit type across all KOTH slots. */
+export function kothMaxUnitsOfType(typeId) {
+  const entry = PLAYER_ARMY.find((u) => u.type === typeId);
+  return entry ? entry.count * KOTH_MAX_SLOTS : 0;
+}
+
+/** Spawn one KOTH army at a slot base (mid-game join). */
+export function spawnKothSlot(w, slot) {
+  const base = KOTH_BASES[slot] ?? KOTH_BASES[0];
+  spawnArmy(w, ENEMY_ARMY, slot, base[0], base[1]);
+}
 
 export function stressPerSideFromSearch(search = '') {
   const n = parseInt(new URLSearchParams(search).get('stress') || '0', 10);
@@ -69,14 +95,37 @@ function spawnStressSide(w, owner, baseX, baseZ, count) {
   }
 }
 
-export function buildWorldFromConfig({ seed, stressPerSide }) {
+/**
+ * @param {{ seed: number, stressPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[] }} config
+ */
+export function buildWorldFromConfig({ seed, stressPerSide, mode = 'legacy', activeSlots }) {
   const w = createWorld(seed);
+  w.kothMatchOver = 0;
+
   if (stressPerSide > 0) {
     spawnStressSide(w, PLAYER, -175, -50, stressPerSide);
     spawnStressSide(w, AI_OWNER, 175, 50, stressPerSide);
-  } else {
-    spawnArmy(w, PLAYER_ARMY, PLAYER, -120, 0);
-    spawnArmy(w, ENEMY_ARMY, AI_OWNER, 120, 0);
+    return w;
   }
+
+  if (mode === 'sandbox') {
+    const [bx, bz] = KOTH_BASES[0];
+    spawnArmy(w, PLAYER_ARMY, PLAYER, bx, bz);
+    return w;
+  }
+
+  if (mode === 'koth') {
+    const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
+    for (const slot of slots) {
+      const base = KOTH_BASES[slot] ?? KOTH_BASES[0];
+      const army = slot === PLAYER ? PLAYER_ARMY : ENEMY_ARMY;
+      spawnArmy(w, army, slot, base[0], base[1]);
+    }
+    w.koth = createKothMeta(slots);
+    return w;
+  }
+
+  spawnArmy(w, PLAYER_ARMY, PLAYER, -120, 0);
+  spawnArmy(w, ENEMY_ARMY, AI_OWNER, 120, 0);
   return w;
 }

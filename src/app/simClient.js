@@ -35,6 +35,24 @@ export class SimClient {
     this.worker.postMessage({ type: 'commitTick', tick, frames });
   }
 
+  /** Await one tick commit (catch-up replay). */
+  commitTickAsync(tick, frames) {
+    return new Promise((resolve, reject) => {
+      const prev = this._stepDoneHandler;
+      const timeout = setTimeout(() => {
+        this._stepDoneHandler = prev;
+        reject(new Error(`commitTick ${tick} timeout`));
+      }, 30_000);
+      this._stepDoneHandler = (doneTick, checksum, extra) => {
+        if (doneTick !== tick) return;
+        clearTimeout(timeout);
+        this._stepDoneHandler = prev;
+        resolve({ tick: doneTick, checksum, extra });
+      };
+      this.worker.postMessage({ type: 'commitTick', tick, frames });
+    });
+  }
+
   terminate() {
     this.worker.terminate();
   }
@@ -45,7 +63,10 @@ export class SimClient {
       this._initResolve?.({ count: msg.count });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {
-      this._stepDoneHandler?.(msg.tick, msg.checksum);
+      this._stepDoneHandler?.(msg.tick, msg.checksum, {
+        koth: msg.koth,
+        kothMatchOver: msg.kothMatchOver,
+      });
     } else if (msg.type === 'error') {
       const err = new Error(msg.message);
       if (msg.stack) err.stack = msg.stack;

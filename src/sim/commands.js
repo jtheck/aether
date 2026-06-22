@@ -11,12 +11,17 @@
 
 import { ORDER } from './world.js';
 import { clearPath, queuePath, attackStandPoint } from './path.js';
+import { spawnKothSlot } from './worldSetup.js';
+import { kothRegisterJoin } from './kothMeta.js';
+import { kill } from './combat.js';
 
 export const CMD = {
   MOVE: 1,
   ATTACK: 2,
   ATTACK_MOVE: 3,
   STOP: 4,
+  SPAWN_SLOT: 5,
+  FORCE_ELIMINATE: 6,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[], ty?: number[], target?: number }} Command */
@@ -38,6 +43,12 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.STOP:
         applyStop(world, cmd.entities);
+        break;
+      case CMD.SPAWN_SLOT:
+        applySpawnSlot(world, cmd.playerId);
+        break;
+      case CMD.FORCE_ELIMINATE:
+        applyForceEliminate(world, cmd.playerId);
         break;
       default:
         break;
@@ -81,6 +92,19 @@ function applyStop(world, ids) {
     world.vx[i] = 0;
     world.vy[i] = 0;
     clearPath(world, i);
+  }
+}
+
+function applySpawnSlot(world, playerId) {
+  if (playerId == null || playerId < 0) return;
+  if (world.koth) kothRegisterJoin(world.koth, playerId, world.tick);
+  spawnKothSlot(world, playerId);
+}
+
+function applyForceEliminate(world, playerId) {
+  if (playerId == null || playerId < 0) return;
+  for (let i = 0; i < world.count; i++) {
+    if (world.alive[i] && world.owner[i] === playerId) kill(world, i);
   }
 }
 

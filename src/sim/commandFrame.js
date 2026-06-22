@@ -44,9 +44,10 @@ export function collectFramesForTick(ledger, tick, playerIds) {
   return frames;
 }
 
-/** Drop ledger entries at or before confirmedTick. */
-export function pruneLedger(ledger, confirmedTick) {
+/** Drop ledger entries at or before confirmedTick - keepTicks. */
+export function pruneLedger(ledger, confirmedTick, keepTicks = 0) {
+  const minKeep = confirmedTick - keepTicks;
   for (const tick of ledger.keys()) {
-    if (tick <= confirmedTick) ledger.delete(tick);
+    if (tick <= minKeep) ledger.delete(tick);
   }
 }

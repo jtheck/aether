@@ -9,6 +9,7 @@ import { SimClient } from './simClient.js';
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
 const SNAPSHOT_KEEP = 128;
+const LEDGER_KEEP = 7200;
 
 export { TICK_HZ, TICK_MS };
 
@@ -25,6 +26,7 @@ export class SimSession {
     this.humanPlayers = options.humanPlayers;
     this.aiPlayers = options.aiPlayers ?? [];
     this.inputDelayTicks = options.inputDelayTicks ?? 1;
+    this.role = options.role ?? 'player';
 
     this.client = new SimClient();
     this.state = this.client.state;
@@ -44,20 +46,30 @@ export class SimSession {
     this.peerConfirmedTick = new Map();
 
     this.onCommit = null;
+    this.onCatchupReady = null;
     this._commandSeq = 0;
     this.lastSnapshotAt = 0;
+    this.pauseLockstep = false;
+    this.koth = null;
+    this.kothMatchOver = 0;
+    /** @type {Map<number, number[]>} tick -> playerIds joining lockstep */
+    this.pendingJoins = new Map();
+    this.matchConfig = null;
   }
 
   async start(config) {
     const { count } = await this.client.init({ ...config, aiPlayers: this.aiPlayers });
     this._count = count;
-    this.client.onStepDone((tick, checksum) => {
+    this.client.onStepDone((tick, checksum, extra) => {
       this.confirmedTick = tick;
+      this._lastChecksum = checksum;
+      if (extra?.koth) this.koth = extra.koth;
+      if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
       this.waitingForWorker = false;
       this.inFlightTick = 0;
       this._captureSnapshot(tick);
       this.lastSnapshotAt = performance.now();
-      pruneLedger(this.ledger, tick);
+      pruneLedger(this.ledger, tick, LEDGER_KEEP);
       this.onCommit?.(tick, checksum);
       this._drainPendingCommits();
     });
@@ -77,6 +89,7 @@ export class SimSession {
 
   /** Schedule a local player command into the lockstep ledger. */
   submitCommand(command) {
+    if (this.role !== 'player') return null;
     const tick = this._nextOpenTick() + this.inputDelayTicks;
     const frame = {
       tick,
@@ -114,6 +127,7 @@ export class SimSession {
   }
 
   _drainPendingCommits() {
+    if (this.pauseLockstep) return;
     while (this.simAcc >= TICK_MS && !this.waitingForWorker) {
       this.simAcc -= TICK_MS;
       if (!this._tryCommitNextTick()) break;
@@ -134,6 +148,99 @@ export class SimSession {
     return { prev, cur, displayTick };
   }
 
+  setHumanPlayers(playerIds) {
+    this.humanPlayers = [...playerIds].sort((a, b) => a - b);
+  }
+
+  setRole(role) {
+    this.role = role;
+  }
+
+  /** Export position snapshot + checksum for catch-up. */
+  exportSnapshot(tick) {
+    const snap = this.snapshots.get(tick);
+    if (!snap) return null;
+    return {
+      tick,
+      checksum: this._lastChecksum,
+      positions: { x: snap.x.slice(), z: snap.z.slice() },
+    };
+  }
+
+  /** Schedule a player to enter lockstep quorum at a future tick. */
+  scheduleJoin(tick, playerId) {
+    let list = this.pendingJoins.get(tick);
+    if (!list) {
+      list = [];
+      this.pendingJoins.set(tick, list);
+    }
+    if (!list.includes(playerId)) list.push(playerId);
+  }
+
+  /** Convene peer: inject a command at a specific tick (spawn slot, etc.). */
+  submitAtTick(tick, command) {
+    if (this.role !== 'player') return null;
+    const frame = {
+      tick,
+      playerId: this.localPlayerId,
+      commands: [command],
+      playerCommandSeq: ++this._commandSeq,
+    };
+    bufferFrame(this.ledger, frame, this.confirmedTick);
+    return frame;
+  }
+
+  /** Full ledger for catch-up export (not pruned by retention). */
+  exportFullLedger() {
+    const frames = [];
+    for (const [tick, byPlayer] of this.ledger) {
+      for (const [playerId, commands] of byPlayer) {
+        if (commands?.length) frames.push({ tick, playerId, commands });
+      }
+    }
+    frames.sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
+    return frames;
+  }
+  /** Export command ledger slice for catch-up gap-fill. */
+  exportLedger(fromTick, toTick) {
+    const frames = [];
+    for (const [tick, byPlayer] of this.ledger) {
+      if (tick <= fromTick || tick > toTick) continue;
+      for (const [playerId, commands] of byPlayer) {
+        if (commands?.length) frames.push({ tick, playerId, commands });
+      }
+    }
+    frames.sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
+    return frames;
+  }
+
+  /** @deprecated */
+  _exportLedgerSlice(fromTick, toTick) {
+    return this.exportLedger(fromTick, toTick);
+  }
+
+  ingestCatchup(offer) {
+    if (offer.ledger) {
+      for (const frame of offer.ledger) this.bufferRemoteFrame(frame);
+    }
+    this.onCatchupReady?.(offer);
+  }
+
+  async reset(config) {
+    this.ledger.clear();
+    this.snapshots.clear();
+    this.peerConfirmedTick.clear();
+    this.pendingJoins.clear();
+    this.confirmedTick = 0;
+    this.simAcc = 0;
+    this.waitingForWorker = false;
+    this.inFlightTick = 0;
+    this.client.terminate();
+    this.client = new SimClient();
+    this.state = this.client.state;
+    return this.start(config);
+  }
+
   terminate() {
     this.client.terminate();
   }
@@ -149,6 +256,16 @@ export class SimSession {
 
   _tryCommitNextTick() {
     const next = this.confirmedTick + 1;
+
+    const joining = this.pendingJoins.get(next);
+    if (joining?.length) {
+      for (const pid of joining) {
+        if (!this.humanPlayers.includes(pid)) this.humanPlayers.push(pid);
+      }
+      this.humanPlayers.sort((a, b) => a - b);
+      this.pendingJoins.delete(next);
+    }
+
     if (!this._canAdvance(next)) return false;
 
     const frames = collectFramesForTick(this.ledger, next, this.humanPlayers);

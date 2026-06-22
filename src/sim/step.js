@@ -17,6 +17,7 @@ import { movementGoal, advanceWaypoint, checkStuck, planPathBudget, attackInRang
 import { getUnitDef } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { WORLD_HALF } from './field.js';
+import { kothMetaStep } from './kothMeta.js';
 
 const ARRIVE = fx.fromFloat(1.5);
 const SEP_RADIUS = fx.fromFloat(3.0);
@@ -31,6 +32,7 @@ function pathBudget(count) {
 export function step(world, field, commands) {
   applyCommands(world, field, commands);
   combatSystem(world, field);
+  kothMetaStep(world);
   planPathBudget(world, field, pathBudget(world.count));
   movementSystem(world, field);
   if (world.count < GRID_SEP_THRESHOLD || (world.tick & 1) === 0) {

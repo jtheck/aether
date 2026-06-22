@@ -28,7 +28,21 @@ import {
   mat4Invert,
 } from '../vendor/lite/liteVendor.js';
 import { getUnitDef } from '../sim/unitTypes.js';
+import { kothMaxUnitsOfType } from '../sim/worldSetup.js';
 import { UNIT_MODEL_URLS, findFirstMesh, hasUnitModel, prepareLegacyModel } from './unitModels.js';
+
+/** Change active instance count without shrinking GPU buffer capacity. */
+function setThinInstanceCount(mesh, count) {
+  const ti = mesh.thinInstances;
+  if (!ti) return;
+  if (count > ti._capacity) {
+    throw new Error(`thin-instance count ${count} exceeds capacity ${ti._capacity}`);
+  }
+  ti.count = count;
+  ti._version++;
+  ti._dirtyMin = 0;
+  ti._dirtyMax = count;
+}
 
 // Column-major mat4 * vec4.
 function matVec4(m, x, y, z, w) {
@@ -144,70 +158,20 @@ function rayHitGround(ray) {
   return { x: ray.ox + ray.dx * t, z: ray.oz + ray.dz * t };
 }
 
-function uploadThinInstanceGpu(engine, ti, hasColor) {
-  if (!ti) return;
-  const BU = globalThis.GPUBufferUsage;
-  const device = engine._device;
-  const needsStorage = ti._gpuCullingEnabled;
-
-  if (ti._version !== ti._gpuVersion || ti._gpuBufferStorage !== needsStorage) {
-    const byteSize = ti.count * 64;
-    let bufferRecreated = false;
-    if (!ti._gpuBuffer || ti._gpuBuffer.size < byteSize || ti._gpuBufferStorage !== needsStorage) {
-      ti._gpuBuffer?.destroy();
-      ti._gpuBuffer = device.createBuffer({
-        size: Math.max(ti._capacity * 64, 4),
-        usage: BU.VERTEX | BU.COPY_DST | BU.STORAGE,
-      });
-      ti._gpuBufferStorage = needsStorage;
-      bufferRecreated = true;
-    }
-    const dirtyMin = bufferRecreated ? 0 : ti._dirtyMin;
-    const dirtyMax = bufferRecreated ? ti.count : Math.min(ti._dirtyMax, ti.count);
-    if (dirtyMax > dirtyMin) {
-      const minByte = dirtyMin * 64;
-      device.queue.writeBuffer(
-        ti._gpuBuffer,
-        minByte,
-        ti.matrices.buffer,
-        ti.matrices.byteOffset + minByte,
-        (dirtyMax - dirtyMin) * 64,
-      );
-    }
-    ti._dirtyMin = ti.count;
-    ti._dirtyMax = 0;
-    ti._gpuVersion = ti._version;
+function initThinInstances(mesh, activeCount, gpuCapacity) {
+  const cap = Math.max(activeCount, gpuCapacity, 1);
+  const matrices = new Float32Array(cap * 16);
+  setThinInstances(mesh, matrices, cap);
+  if (activeCount < cap) setThinInstanceCount(mesh, activeCount);
+  const colors = new Float32Array(cap * 4);
+  for (let s = 0; s < cap; s++) {
+    colors[s * 4] = 1;
+    colors[s * 4 + 1] = 1;
+    colors[s * 4 + 2] = 1;
+    colors[s * 4 + 3] = 1;
   }
-
-  if (hasColor && ti.colors) {
-    if (ti._colorVersion !== ti._colorGpuVersion || ti._colorGpuBufferStorage !== needsStorage) {
-      const colorByteSize = ti.count * 16;
-      let colorRecreated = false;
-      if (!ti._colorGpuBuffer || ti._colorGpuBuffer.size < colorByteSize || ti._colorGpuBufferStorage !== needsStorage) {
-        ti._colorGpuBuffer?.destroy();
-        ti._colorGpuBuffer = device.createBuffer({
-          size: Math.max(ti._capacity * 16, 4),
-          usage: BU.VERTEX | BU.COPY_DST | (needsStorage ? BU.STORAGE : 0),
-        });
-        ti._colorGpuBufferStorage = needsStorage;
-        colorRecreated = true;
-      }
-      const cMin = colorRecreated ? 0 : ti._colorDirtyMin;
-      const cMax = colorRecreated ? ti.count : Math.min(ti._colorDirtyMax, ti.count);
-      if (cMax > cMin) {
-        device.queue.writeBuffer(
-          ti._colorGpuBuffer,
-          cMin * 16,
-          ti.colors.buffer,
-          ti.colors.byteOffset + cMin * 16,
-          (cMax - cMin) * 16,
-        );
-      }
-      ti._colorDirtyMin = ti.count;
-      ti._colorDirtyMax = 0;
-      ti._colorGpuVersion = ti._colorVersion;
-    }
-  }
+  setThinInstanceColors(mesh, colors);
+  return { matrices, colors, gpuCapacity: cap };
 }
 
 function writeUnitMatrix(matrices, slot, x, z, uniformScale, yaw, moving) {
@@ -267,6 +231,15 @@ function writeFlatRing(matrices, i, x, z, diameter, ringDiam, ringH) {
   matrices[o + 15] = 1;
 }
 
+function resizeTypeBatch(batch, entityIds) {
+  const newSize = entityIds.length;
+  if (newSize > batch.gpuCapacity) {
+    throw new Error(`type batch overflow: ${newSize} > ${batch.gpuCapacity}`);
+  }
+  setThinInstanceCount(batch.mesh, newSize);
+  batch.entityIds = entityIds;
+}
+
 async function loadUnitMeshTemplate(engine, url) {
   const container = await loadGltf(engine, url);
   const root = container.entities[0];
@@ -281,10 +254,12 @@ async function loadUnitMeshTemplate(engine, url) {
 /**
  * @param {HTMLCanvasElement} canvas
  * @param {number} capacity
- * @param {{ types?: Int8Array | Uint8Array | number[] }} [opts]
+ * @param {{ types?: Int8Array | Uint8Array | number[], gpuCapacity?: number }} [opts]
  */
 export async function createRenderer(canvas, capacity, opts = {}) {
   const types = opts.types;
+  const gpuCapacity = opts.gpuCapacity ?? capacity;
+  const preallocKoth = gpuCapacity > capacity;
   const engine = await createEngine(canvas, { msaaSamples: 1 });
   const scene = createSceneContext(engine);
 
@@ -304,7 +279,24 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   ground.material = groundMat;
   addToScene(scene, ground);
 
-  const entitySlot = new Int32Array(capacity);
+  const hillMat = createStandardMaterial();
+  hillMat.diffuseColor = [0.45, 0.38, 0.22];
+  hillMat.emissiveColor = [0.15, 0.12, 0.05];
+  const hill = createCylinder(engine, { diameter: 48, height: 8, tessellation: 32 });
+  hill.position = [0, 4, 0];
+  hill.material = hillMat;
+  addToScene(scene, hill);
+
+  const hillRingMat = createStandardMaterial();
+  hillRingMat.diffuseColor = [0.9, 0.75, 0.2];
+  hillRingMat.emissiveColor = [0.5, 0.4, 0.05];
+  hillRingMat.alpha = 0.35;
+  const hillRing = createCylinder(engine, { diameter: 80, height: 0.5, tessellation: 48 });
+  hillRing.position = [0, 0.3, 0];
+  hillRing.material = hillRingMat;
+  addToScene(scene, hillRing);
+
+  const entitySlot = new Int32Array(Math.max(capacity, gpuCapacity));
   entitySlot.fill(-1);
   const typeEntities = new Map();
 
@@ -330,18 +322,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     if (hasUnitModel(typeId)) {
       const mesh = await loadUnitMeshTemplate(engine, UNIT_MODEL_URLS[typeId]);
-      const matrices = new Float32Array(16 * batchSize);
-      setThinInstances(mesh, matrices, batchSize);
-      const colors = new Float32Array(4 * batchSize);
-      for (let s = 0; s < batchSize; s++) {
-        colors[s * 4] = 1;
-        colors[s * 4 + 1] = 1;
-        colors[s * 4 + 2] = 1;
-        colors[s * 4 + 3] = 1;
-      }
-      setThinInstanceColors(mesh, colors);
+      const typeGpuCap = Math.max(batchSize, preallocKoth ? kothMaxUnitsOfType(typeId) : batchSize, 1);
+      const { matrices, colors, gpuCapacity: cap } = initThinInstances(mesh, batchSize, typeGpuCap);
       addToScene(scene, mesh);
-      typeBatches.set(typeId, { mesh, matrices, colors, baseSize: def.size, entityIds });
+      typeBatches.set(typeId, { mesh, matrices, colors, baseSize: def.size, entityIds, gpuCapacity: cap });
     } else {
       fallbackEntities.push(...entityIds);
     }
@@ -354,19 +338,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const material = createStandardMaterial();
     material.diffuseColor = [1, 1, 1];
     mesh.material = material;
-    const matrices = new Float32Array(16 * fallbackEntities.length);
-    setThinInstances(mesh, matrices, fallbackEntities.length);
-    const colors = new Float32Array(4 * fallbackEntities.length);
-    for (let s = 0; s < fallbackEntities.length; s++) {
-      colors[s * 4] = 1;
-      colors[s * 4 + 1] = 1;
-      colors[s * 4 + 2] = 1;
-      colors[s * 4 + 3] = 1;
-    }
-    setThinInstanceColors(mesh, colors);
+    const fbCap = Math.max(fallbackEntities.length, gpuCapacity, 1);
+    const { matrices, colors, gpuCapacity: cap } = initThinInstances(mesh, fallbackEntities.length, fbCap);
     addToScene(scene, mesh);
     for (let s = 0; s < fallbackEntities.length; s++) entitySlot[fallbackEntities[s]] = s;
-    fallback = { mesh, matrices, colors, baseSize: BASE_DIAMETER, entityIds: fallbackEntities };
+    fallback = { mesh, matrices, colors, baseSize: BASE_DIAMETER, entityIds: fallbackEntities, gpuCapacity: cap };
   }
 
   const RING_DIAM = 1;
@@ -377,9 +353,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   ringMat.emissiveColor = [1, 0.85, 0.1];
   ringMat.alpha = 0.9;
   selRing.material = ringMat;
-  const ringMatrices = new Float32Array(16 * capacity);
-  setThinInstances(selRing, ringMatrices, capacity);
-  const ringColors = new Float32Array(4 * capacity);
+  const ringCap = Math.max(capacity, gpuCapacity, 1);
+  const ringInit = initThinInstances(selRing, capacity, ringCap);
+  const ringMatrices = ringInit.matrices;
+  const ringColors = ringInit.colors;
   for (let i = 0; i < capacity; i++) {
     ringColors[i * 4] = 1;
     ringColors[i * 4 + 1] = 0.92;
@@ -468,7 +445,49 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     camera,
 
     setCount(n) {
-      setThinInstances(selRing, ringMatrices, n);
+      setThinInstanceCount(selRing, n);
+    },
+
+    /** Rebuild type-batch mapping when entity count/types change (e.g. sandbox → live). */
+    rebuildFromTypes(count, typesArr) {
+      setThinInstanceCount(selRing, count);
+
+      entitySlot.fill(-1);
+      const nextByType = new Map();
+      for (let i = 0; i < count; i++) {
+        const type = typesArr[i];
+        if (!nextByType.has(type)) nextByType.set(type, []);
+        nextByType.get(type).push(i);
+      }
+
+      for (const [typeId, entityIds] of nextByType) {
+        const batch = typeBatches.get(typeId);
+        if (batch) {
+          resizeTypeBatch(batch, entityIds);
+          for (let s = 0; s < entityIds.length; s++) entitySlot[entityIds[s]] = s;
+        }
+      }
+
+      for (const [typeId, batch] of typeBatches) {
+        if (!nextByType.has(typeId)) {
+          setThinInstanceCount(batch.mesh, 0);
+          batch.entityIds = [];
+        }
+      }
+
+      if (fallback) {
+        const fbIds = [];
+        for (let i = 0; i < count; i++) {
+          if (!typeBatches.has(typesArr[i])) fbIds.push(i);
+        }
+        if (fbIds.length > 0) {
+          resizeTypeBatch(fallback, fbIds);
+          for (let s = 0; s < fbIds.length; s++) entitySlot[fbIds[s]] = s;
+        } else {
+          setThinInstanceCount(fallback.mesh, 0);
+          fallback.entityIds = [];
+        }
+      }
     },
 
     setColors(allColors) {
@@ -507,10 +526,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (fallback) flushThinInstances(fallback.mesh);
       flushThinInstances(selRing);
       flushThinInstances(orderRing);
-      for (const batch of typeBatches.values()) uploadThinInstanceGpu(engine, batch.mesh.thinInstances, true);
-      if (fallback) uploadThinInstanceGpu(engine, fallback.mesh.thinInstances, true);
-      uploadThinInstanceGpu(engine, selRing.thinInstances, true);
-      uploadThinInstanceGpu(engine, orderRing.thinInstances, true);
     },
 
     writeSelectionRing(i, x, z, diameter) {

@@ -8,6 +8,16 @@ import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
 import { mapSharedState, publishWorld, publishType } from '../sim/sharedState.js';
 
+function serializeKoth(k) {
+  if (!k) return null;
+  return {
+    kingOwner: k.kingOwner,
+    scores: Array.from(k.scores),
+    active: Array.from(k.active),
+    eliminated: Array.from(k.eliminated),
+  };
+}
+
 let world;
 let field;
 let views;
@@ -36,7 +46,14 @@ self.onmessage = (e) => {
     } else if (msg.type === 'commitTick') {
       step(world, field, commandsForTick(msg.frames));
       publishWorld(world, views);
-      postMessage({ type: 'stepDone', tick: world.tick, checksum: checksum(world) });
+      publishType(world, views);
+      postMessage({
+        type: 'stepDone',
+        tick: world.tick,
+        checksum: checksum(world),
+        kothMatchOver: world.kothMatchOver ?? 0,
+        koth: serializeKoth(world.koth),
+      });
     }
   } catch (err) {
     postMessage({ type: 'error', message: String(err?.message ?? err), stack: err?.stack });

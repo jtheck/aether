@@ -2,12 +2,13 @@
 
 import { livingByOwner } from '../sim/world.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
-import { PLAYER_ARMY, stressPerSideFromSearch } from '../sim/worldSetup.js';
+import { PLAYER_ARMY, stressPerSideFromSearch, KOTH_MAX_ENTITIES } from '../sim/worldSetup.js';
 import { createRenderer } from '../render/renderer.js';
 import { setupInput } from './input.js';
 import { SimSession } from './simSession.js';
-import { createNetMatch, netModeFromSearch } from './net.js';
+import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { PLAYER, AI_OWNER } from '../sim/worldSetup.js';
+import { unitsOnHill, hillController } from '../sim/kothHill.js';
 
 const SEED = 0x1234;
 
@@ -30,8 +31,6 @@ function hpColor(def, hp) {
 
 async function main() {
   const canvas = document.getElementById('canvas');
-  resizeCanvas(canvas);
-  window.addEventListener('resize', () => resizeCanvas(canvas));
 
   if (!(await waitForWebGPU())) {
     showFallback('This browser has no WebGPU. Use Chrome/Edge 113+ or Firefox/Safari with WebGPU enabled.');
@@ -44,62 +43,113 @@ async function main() {
   }
 
   const stress = stressPerSideFromSearch(location.search);
-  const useNet = netModeFromSearch(location.search);
+  const solo = new URLSearchParams(location.search).has('solo');
+  const useKoth = kothModeFromSearch(location.search) && !solo;
 
-  let localPlayerId = PLAYER;
-  let netMatch = null;
-  let matchSeed = SEED;
+  let kothShard = null;
+  let ctx = null;
+  /** @type {object | null} Live config received before bootGame finished. */
+  let pendingLiveCfg = null;
 
-  if (useNet) {
+  async function handleLiveStart(cfg) {
+    if (!ctx) {
+      pendingLiveCfg = cfg;
+      return;
+    }
+    await applyLiveConfig(ctx, cfg, kothShard);
+  }
+
+  let bootCfg = {
+    mode: stress > 0 ? 'legacy' : 'legacy',
+    seed: SEED,
+    localPlayerId: PLAYER,
+    humanPlayers: [PLAYER],
+    role: 'player',
+    activeSlots: [PLAYER],
+  };
+
+  if (useKoth && stress === 0) {
     if (!(await waitForGetFireP2p())) {
       showFallback('GetFire P2P failed to load. Hard-refresh or use ?solo=1 for offline.');
       return;
     }
-    setStatusText('Joining match lobby…');
-    netMatch = createNetMatch({
-      seed: SEED,
+    kothShard = createKothShard({
       onStatus: setStatusText,
+      onLiveStart: handleLiveStart,
     });
-    try {
-      const match = await netMatch.waitForMatch();
-      localPlayerId = match.localPlayerId;
-      matchSeed = match.seed;
-      setStatusText(match.isHost ? 'Host — match started' : 'Guest — match started');
-    } catch (err) {
-      showFallback(String(err?.message ?? err));
-      return;
-    }
+    bootCfg = await kothShard.waitForBoot();
   }
 
+  ctx = await bootGame(canvas, bootCfg, { stress, kothShard, solo });
+  if (pendingLiveCfg) {
+    const cfg = pendingLiveCfg;
+    pendingLiveCfg = null;
+    await applyLiveConfig(ctx, cfg, kothShard);
+  }
+}
+
+async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
+  const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'sandbox';
+
   const session = new SimSession({
-    localPlayerId,
-    humanPlayers: useNet ? [PLAYER, AI_OWNER] : [PLAYER],
-    aiPlayers: useNet || stress > 0 ? [] : [AI_OWNER],
+    localPlayerId: bootCfg.localPlayerId,
+    humanPlayers: bootCfg.humanPlayers,
+    aiPlayers: useKothAi(bootCfg, stress, solo),
     inputDelayTicks: useNet ? 1 : 0,
+    role: bootCfg.role ?? 'player',
   });
 
-  const { count } = await session.start({ seed: matchSeed, stressPerSide: stress });
-  const world = session.state;
+  const simConfig = {
+    seed: bootCfg.seed ?? SEED,
+    stressPerSide: stress,
+    mode: bootCfg.mode === 'sandbox' ? 'sandbox' : bootCfg.mode === 'koth' ? 'koth' : 'legacy',
+    activeSlots: bootCfg.activeSlots ?? [bootCfg.localPlayerId],
+  };
 
-  const renderer = await createRenderer(canvas, count, { types: world.type });
+  const { count } = await session.start(simConfig);
+  if (kothShard) kothShard.attachSession(session);
+
+  const renderer = await createRenderer(canvas, count, {
+    types: session.state.type,
+    gpuCapacity: useNet ? KOTH_MAX_ENTITIES : count,
+  });
   renderer.setCount(count);
 
-  const selected = new Uint8Array(count);
-  const wasAlive = new Uint8Array(count);
-  const deathFade = new Float32Array(count);
-  const colors = new Float32Array(count * 4);
-  wasAlive.fill(1);
+  /** Mutable render buffers — frame loop reads this object, not closed-over copies. */
+  const bufs = {
+    selected: new Uint8Array(count),
+    wasAlive: new Uint8Array(count),
+    deathFade: new Float32Array(count),
+    colors: new Float32Array(count * 4),
+    renderX: new Float32Array(count),
+    renderY: new Float32Array(count),
+    renderZ: new Float32Array(count),
+  };
+  bufs.wasAlive.fill(1);
 
-  const renderX = new Float32Array(count);
-  const renderY = new Float32Array(count);
-  const renderZ = new Float32Array(count);
+  function resizeRenderBuffers(n) {
+    bufs.selected = new Uint8Array(n);
+    bufs.wasAlive = new Uint8Array(n);
+    bufs.wasAlive.fill(1);
+    bufs.deathFade = new Float32Array(n);
+    bufs.colors = new Float32Array(n * 4);
+    bufs.renderX = new Float32Array(n);
+    bufs.renderY = new Float32Array(n);
+    bufs.renderZ = new Float32Array(n);
+    inputApi?.setSelectedBuffer?.(bufs.selected);
+  }
 
   let fpsDisplay = 0;
   let fpsAcc = 0;
   let fpsFrames = 0;
+  let localPlayerId = bootCfg.localPlayerId;
+  let matchMeta = { mode: bootCfg.mode, matchId: bootCfg.matchId };
+  let matchOverShown = false;
 
   const updateColors = () => {
-    for (let i = 0; i < count; i++) {
+    const world = session.state;
+    const { selected, deathFade, colors } = bufs;
+    for (let i = 0; i < session.count; i++) {
       const fade = deathFade[i];
       if (!world.alive[i] && fade <= 0) {
         colors[i * 4 + 3] = 0;
@@ -119,23 +169,47 @@ async function main() {
       colors[i * 4 + 3] = alpha;
     }
     renderer.setColors(colors);
-    updateStatus(session, world, selected, fpsDisplay, stress, localPlayerId, useNet);
+    paintStatus();
   };
+
+  function paintStatus() {
+    const world = session.state;
+    const el = document.getElementById('status');
+    if (!el) return;
+    const p = livingByOwner(world, localPlayerId);
+    let sel = 0;
+    for (let i = 0; i < session.count; i++) if (bufs.selected[i]) sel++;
+    let line = `You: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
+    if (matchMeta.mode === 'sandbox') line = `Sandbox  ·  ${line}`;
+    if (matchMeta.mode === 'koth') {
+      const k = session.koth;
+      const hill = hillController(world);
+      const onHill = unitsOnHill(world, localPlayerId);
+      if (k) {
+        line = `KOTH  ·  👑 P${k.kingOwner}  ·  Score ${k.scores[localPlayerId] ?? 0}  ·  Hill ${onHill}${hill === localPlayerId ? ' ★' : ''}  ·  ${line}`;
+      } else line = `KOTH  ·  ${line}`;
+    }
+    if (session.role === 'spectator') line = `Spectating  ·  ${line}`;
+    if (fpsDisplay > 0) line += `  ·  ${fpsDisplay} fps`;
+    if (stress > 0) line += `  ·  stress ${world.count} units`;
+    if (matchMeta.matchId) line += `  ·  …${matchMeta.matchId.slice(-8)}`;
+    el.textContent = line;
+  }
+
   updateColors();
   updateLegend();
 
   let orderPing = null;
-
-  setupInput({
+  let inputApi = setupInput({
     canvas,
     renderer,
-    world,
-    selected,
+    world: () => session.state,
+    selected: bufs.selected,
     localPlayerId,
     getUnitWorldPos: (i) => ({
-      x: renderX[i],
-      y: renderY[i],
-      z: renderZ[i],
+      x: bufs.renderX[i],
+      y: bufs.renderY[i],
+      z: bufs.renderZ[i],
     }),
     enqueueCommand: (cmd) => session.submitCommand(cmd),
     onSelectionChanged: updateColors,
@@ -144,15 +218,25 @@ async function main() {
     },
   });
 
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'j' || e.key === 'J') {
+      if (kothShard?.canJoin?.()) kothShard.requestJoin();
+    }
+  });
+
   session.onCommit = () => {
-    for (let i = 0; i < count; i++) {
+    const world = session.state;
+    const { wasAlive, deathFade } = bufs;
+    for (let i = 0; i < session.count; i++) {
       if (wasAlive[i] && !world.alive[i]) deathFade[i] = 1;
       wasAlive[i] = world.alive[i];
     }
+    if (session.kothMatchOver && !matchOverShown) {
+      matchOverShown = true;
+      showMatchOver(session);
+    }
     updateColors();
   };
-
-  if (netMatch) netMatch.attachSession(session);
 
   renderer.onFrame((deltaMs) => {
     session.pump(deltaMs);
@@ -163,7 +247,7 @@ async function main() {
       fpsDisplay = Math.round((fpsFrames * 1000) / fpsAcc);
       fpsAcc = 0;
       fpsFrames = 0;
-      updateStatus(session, world, selected, fpsDisplay, stress, localPlayerId, useNet);
+      paintStatus();
     }
 
     const alpha = session.displayAlpha;
@@ -179,7 +263,10 @@ async function main() {
     }
 
     let colorsDirty = false;
-    for (let i = 0; i < count; i++) {
+    const n = session.count;
+    const world = session.state;
+    const { selected, deathFade, colors, renderX, renderY, renderZ } = bufs;
+    for (let i = 0; i < n; i++) {
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
@@ -221,6 +308,87 @@ async function main() {
   });
 
   await renderer.start();
+
+  return {
+    session,
+    renderer,
+    bufs,
+    resizeRenderBuffers,
+    inputApi,
+    kothShard,
+    get matchOverShown() {
+      return matchOverShown;
+    },
+    set matchOverShown(v) {
+      matchOverShown = v;
+    },
+    get localPlayerId() {
+      return localPlayerId;
+    },
+    set localPlayerId(v) {
+      localPlayerId = v;
+      inputApi.setLocalPlayerId?.(v);
+    },
+    matchMeta,
+    setMatchMeta(m) {
+      matchMeta = { ...matchMeta, ...m };
+    },
+    paintStatus,
+    updateColors,
+  };
+}
+
+async function applyLiveConfig(ctx, cfg, kothShard) {
+  ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
+  ctx.localPlayerId = cfg.localPlayerId;
+  ctx.session.setHumanPlayers(cfg.humanPlayers);
+  ctx.session.setRole(cfg.role ?? 'player');
+
+  const simMode = cfg.mode === 'sandbox' ? 'sandbox' : 'koth';
+  const { count } = await ctx.session.reset({
+    seed: cfg.seed,
+    mode: simMode,
+    activeSlots: cfg.activeSlots ?? cfg.humanPlayers,
+  });
+
+  ctx.resizeRenderBuffers(count);
+  ctx.renderer.setCount(count);
+  ctx.renderer.rebuildFromTypes(count, ctx.session.state.type);
+
+  const overEl = document.getElementById('match-over');
+  if (overEl) overEl.style.display = 'none';
+  ctx.matchOverShown = false;
+
+  ctx.updateColors();
+  const label = cfg.mode === 'sandbox' ? 'Sandbox' : `Live — player ${cfg.localPlayerId}`;
+  setStatusText(label);
+}
+
+function showMatchOver(session) {
+  const el = document.getElementById('match-over');
+  if (!el) return;
+  const k = session.koth;
+  let text = 'Match over';
+  if (k) {
+    let best = 0;
+    let bestScore = -1;
+    for (let i = 0; i < 5; i++) {
+      if ((k.scores[i] ?? 0) > bestScore) {
+        bestScore = k.scores[i];
+        best = i;
+      }
+    }
+    text = `Match over — Player ${best} wins (${bestScore} pts)`;
+  }
+  el.textContent = text;
+  el.style.display = 'block';
+}
+
+function useKothAi(bootCfg, stress, solo) {
+  if (stress > 0) return [];
+  if (solo) return [AI_OWNER];
+  if (bootCfg.mode === 'sandbox' || bootCfg.mode === 'koth') return [];
+  return [AI_OWNER];
 }
 
 function updateLegend() {
@@ -231,22 +399,6 @@ function updateLegend() {
     const rgb = d.color.map((v) => Math.round(v * 255)).join(',');
     return `<span class="legend-item"><i style="background:rgb(${rgb})"></i>${d.name}</span>`;
   }).join('');
-}
-
-function updateStatus(session, world, selected, fps = 0, stress = 0, localPlayerId = PLAYER, useNet = false) {
-  const el = document.getElementById('status');
-  if (!el) return;
-  const p = livingByOwner(world, localPlayerId);
-  const e = livingByOwner(world, localPlayerId === PLAYER ? AI_OWNER : PLAYER);
-  let sel = 0;
-  for (let i = 0; i < world.count; i++) if (selected[i]) sel++;
-  let line = useNet
-    ? `You: ${p}  ·  Foe: ${e}  ·  Selected: ${sel}  ·  Tick ${world.tick}`
-    : `You: ${p}  ·  Enemy: ${e}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
-  if (fps > 0) line += `  ·  ${fps} fps`;
-  if (stress > 0) line += `  ·  stress ${world.count} units`;
-  if (useNet) line += `  ·  P2P`;
-  el.textContent = line;
 }
 
 function setStatusText(text) {
@@ -268,12 +420,6 @@ async function waitForWebGPU(timeoutMs = 3000) {
     await new Promise((r) => setTimeout(r, 100));
   }
   return !!navigator.gpu;
-}
-
-function resizeCanvas(canvas) {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.floor(window.innerWidth * dpr);
-  canvas.height = Math.floor(window.innerHeight * dpr);
 }
 
 function showFallback(msg) {

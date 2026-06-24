@@ -13,6 +13,22 @@ const LEDGER_KEEP = 7200;
 
 export { TICK_HZ, TICK_MS };
 
+export function matchSecondsFromTick(tick) {
+  return Math.max(0, Math.floor(tick / TICK_HZ));
+}
+
+/** Wall-clock-style label from sim tick age (e.g. `42s`, `2:05`). */
+export function formatMatchTime(totalSec) {
+  const s = Math.max(0, Math.floor(totalSec));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return `${m}:${String(r).padStart(2, '0')}`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h}:${String(rm).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+}
+
 export class SimSession {
   /**
    * @param {object} options
@@ -56,6 +72,7 @@ export class SimSession {
     this._seenFrameIds = new Set();
     this.lastSnapshotAt = 0;
     this.pauseLockstep = false;
+    this.replayingCatchUp = false;
     this.resetting = false;
     this.koth = null;
     this.kothMatchOver = 0;
@@ -74,7 +91,7 @@ export class SimSession {
   }
 
   get count() {
-    return this._count ?? this.state.count;
+    return this.state?.count ?? this._count ?? 0;
   }
 
   /** First tick index not yet committed (in-flight counts as reserved). */
@@ -278,7 +295,12 @@ export class SimSession {
     other.client = null;
     this.state = other.state;
     this._count = other._count;
-    this.ledger = other.ledger;
+    // The replay rebuilds authoritative state up to other.confirmedTick from the
+    // full historical ledger, so its own pending ledger is empty. Keep THIS
+    // session's pending ledger instead: it holds the live command frames that
+    // streamed in during the (awaited) replay. Only drop frames the replay
+    // already baked in (tick <= confirmedTick); the rest bridge the catch-up gap.
+    pruneLedger(this.ledger, other.confirmedTick, 0);
     this.fullLedgerFrames = other.fullLedgerFrames;
     this.committedLedgerFrames = other.committedLedgerFrames;
     this.snapshots = other.snapshots;

@@ -5,7 +5,7 @@ import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
 import { PLAYER_ARMY, stressPerSideFromSearch, KOTH_MAX_ENTITIES } from '../sim/worldSetup.js';
 import { createRenderer } from '../render/renderer.js';
 import { setupInput } from './input.js';
-import { SimSession } from './simSession.js';
+import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { PLAYER, AI_OWNER } from '../sim/worldSetup.js';
 
@@ -193,6 +193,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     const p = livingByOwner(world, localPlayerId);
     let sel = 0;
     for (let i = 0; i < session.count; i++) if (bufs.selected[i]) sel++;
+    const matchTime = formatMatchTime(matchSecondsFromTick(session.confirmedTick));
     let line = `You P${localPlayerId}: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
     if (matchMeta.mode === 'sandbox') line = `Sandbox  ·  ${line}`;
     if (matchMeta.mode === 'koth') {
@@ -201,8 +202,8 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
         const players = k.active?.reduce?.((n, v) => n + (v ? 1 : 0), 0) ?? 0;
         const p0 = livingByOwner(world, 0);
         const p1 = livingByOwner(world, 1);
-        line = `KOTH  ·  👑 P${k.kingOwner}  ·  Players ${players}  ·  Units ${world.count} P0 ${p0} P1 ${p1}  ·  Score ${k.scores[localPlayerId] ?? 0}  ·  ${line}`;
-      } else line = `KOTH  ·  ${line}`;
+        line = `KOTH  ·  ⏱ ${matchTime}  ·  👑 P${k.kingOwner}  ·  Players ${players}  ·  Units ${world.count} P0 ${p0} P1 ${p1}  ·  Score ${k.scores[localPlayerId] ?? 0}  ·  ${line}`;
+      } else line = `KOTH  ·  ⏱ ${matchTime}  ·  ${line}`;
     }
     if (session.role === 'spectator') line = `Spectating  ·  ${line}`;
     if (fpsDisplay > 0) line += `  ·  ${fpsDisplay} fps`;
@@ -237,7 +238,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
 
   window.addEventListener('keydown', (e) => {
     if (e.key === 'j' || e.key === 'J') {
-      if (kothShard?.canJoin?.()) kothShard.requestJoin();
+      kothShard?.requestJoin?.();
     }
   });
   setupKothControls(kothShard);
@@ -260,6 +261,11 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
 
   renderer.onFrame((deltaMs) => {
     session.pump(deltaMs);
+
+    if (session.replayingCatchUp) {
+      paintStatus();
+      updateColors();
+    }
 
     fpsAcc += deltaMs;
     fpsFrames++;
@@ -288,6 +294,11 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     const n = session.count;
     const world = session.state;
     const { selected, deathFade, colors, renderX, renderY, renderZ } = bufs;
+    if (selected.length < n) {
+      resizeRenderBuffers(n);
+      renderer.setCount(n);
+      renderer.rebuildFromTypes(n, world.type);
+    }
     for (let i = 0; i < n; i++) {
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
@@ -382,22 +393,31 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     setStatusText('Looking for live shard…');
     return;
   }
-  if (cfg.mode === 'koth' && activeSlots.length < 2) {
-    console.warn('[KOTH] ignoring live config with fewer than 2 active slots', cfg);
-    setStatusText(`Waiting for roster sync — got ${activeSlots.length} active slot${activeSlots.length === 1 ? '' : 's'}`);
+  // A live KOTH match can legitimately have a single active army: the opening
+  // creator before anyone joins, and the king left standing after every
+  // opponent is slain. Only a zero-slot koth config is meaningless here.
+  if (cfg.mode === 'koth' && activeSlots.length < 1) {
+    console.warn('[KOTH] ignoring live config with no active slots', cfg);
+    setStatusText('Waiting for roster sync…');
     return;
   }
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', cfg);
 
   const simMode = cfg.mode === 'sandbox' ? 'sandbox' : 'koth';
+  const humanPlayers = cfg.humanPlayers ?? activeSlots;
   const { count } = await ctx.session.reset({
     seed: cfg.seed,
     mode: simMode,
     activeSlots,
   });
+  ctx.session.setHumanPlayers(humanPlayers);
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] sim after reset', ownerStats(ctx.session.state));
 
   syncPresentation(ctx, cfg, { count });
+
+  // The live world is rebuilt and confirmedTick is back at 0 for this match;
+  // seed the lockstep confirm handshake so the sim can leave tick 0.
+  if (cfg.mode === 'koth') kothShard?.notifyLiveSessionReady?.();
 }
 
 function syncPresentation(ctx, cfg, options = {}) {

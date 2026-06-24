@@ -68,7 +68,12 @@ export function kothMetaStep(w) {
       k.kingOwner = pickLongestLiving(k.active, k.eliminated, k.joinedAtTick);
     }
 
-    if (survivors <= 1 && survivors >= 0) {
+    // KOTH persists with a single survivor: the king stays on the field and
+    // spectators keep watching until someone elects to join (which resets the
+    // match) or the king leaves. Only a true wipe — no living active owners at
+    // all — ends the round here; the shard winds down separately when the active
+    // roster empties.
+    if (survivors === 0) {
       w.kothMatchOver = 1;
     }
   }

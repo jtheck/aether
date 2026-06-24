@@ -55,29 +55,49 @@
     let onPeerDisconnected = config.onPeerDisconnected || function(peerId) { 
       // console.log('Peer disconnected:', peerId); 
     };
+    let onPeerLinkFailed = config.onPeerLinkFailed || function(peerId) {};
     let onBroadcastMessage = config.onBroadcastMessage || function(data) { 
       // console.log('Broadcast message:', data); 
     };
     let onGameLobbyMessage = config.onGameLobbyMessage || function(data) {
       // console.log('Game lobby message:', data);
     };
+    let onMatchLobbyConnected = config.onMatchLobbyConnected || function(lobbyName) {};
 
     // WebRTC Configuration
     const rtcConfig = {
       iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
-      ]
+        { urls: 'stun:stun1.l.google.com:19302' },
+        {
+          urls: [
+            'turn:openrelay.metered.ca:80',
+            'turn:openrelay.metered.ca:443',
+            'turn:openrelay.metered.ca:443?transport=tcp',
+          ],
+          username: 'open',
+          credential: 'open',
+        },
+      ],
     };
 
     // Internal state
     let peers = new Map();
-    let gameLobbyChannel = null;
+    // Map of lobbyName -> { channel, autoMatch }. A client may be subscribed to
+    // several game lobbies at once (e.g. a discovery-only matchmaking lobby plus
+    // a per-match lobby). `autoMatch:false` lobbies relay messages for discovery
+    // but never set up WebRTC — RTC only happens in real match lobbies. P2P
+    // connections are deduped globally via `peers`.
+    let gameLobbyChannels = new Map();
     let p2pSignalingChannels = new Map();
     let broadcastChannels = new Map();
     let currentBroadcastChannels = new Set();
     let localUserId = userId;
     let currentGameLobby = null;
+    /** @type {Map<string, boolean>} lobbyName -> subscribed and ready */
+    const lobbyReady = new Map();
+    /** peerId keys we sent match_request to — only these become WebRTC initiator */
+    const outboundMatchRequests = new Set();
 
     // Development mode — force signaling init on http://localhost (still uses getfire.net unless localRails)
     if (config.devMode === true) {
@@ -87,6 +107,13 @@
         uri = "http://localhost:3000/";
       }
     }
+
+    const p2pDebug = config.devMode === true;
+    function p2pLog(...args) {
+      if (p2pDebug) console.log('[GetFire P2P]', ...args);
+    }
+
+    const ICE_CONNECT_TIMEOUT_MS = 25000;
 
     function isLocalDevHost() {
       const h = window.location.hostname;
@@ -99,6 +126,40 @@
 
     function generateSessionId() {
       return Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
+    }
+
+    // Stable per pair so retries reuse the same signaling session instead of
+    // spawning parallel offers with different room_ids (WebRTC glare).
+    function pairRoomId(a, b) {
+      return [a, b].sort().join('|');
+    }
+
+    function userIdsMatch(a, b) {
+      if (!a || !b) return false;
+      if (a === b) return true;
+      return a.endsWith(b) || b.endsWith(a);
+    }
+
+    function findPeerEntry(peerId) {
+      if (peers.has(peerId)) return [peerId, peers.get(peerId)];
+      for (const [id, data] of peers) {
+        if (userIdsMatch(id, peerId)) return [id, data];
+      }
+      return [null, null];
+    }
+
+    function peerRequestKey(peerId) {
+      const [id] = findPeerEntry(peerId);
+      return id ?? peerId;
+    }
+
+    function peerLinkState(peerId) {
+      const [, data] = findPeerEntry(peerId);
+      return data?.state ?? null;
+    }
+
+    function clearOutboundRequest(peerId) {
+      outboundMatchRequests.delete(peerRequestKey(peerId));
     }
 
     const SIGNALING_URL =
@@ -141,18 +202,28 @@
       return true;
     }
 
-    // Join a game lobby for matchmaking
-    function joinGameLobby(lobbyName) {
+    // Join a game lobby. Additive: joining a new lobby does NOT leave previously
+    // joined lobbies, so a client can hold a discovery lobby and a match lobby at
+    // once. When `autoMatch` is false the lobby only relays messages (for
+    // discovery) and never establishes WebRTC connections.
+    function joinGameLobby(lobbyName, autoMatch = true) {
       if (!ensureConnected()) return;
-      if (gameLobbyChannel) {
-        gameLobbyChannel.unsubscribe();
-      }
+      if (!lobbyName) return;
       currentGameLobby = lobbyName;
-      gameLobbyChannel = GETFIREP2P.consumer.subscriptions.create(
+      const existing = gameLobbyChannels.get(lobbyName);
+      if (existing) {
+        // Upgrade a discovery lobby to a matchmaking lobby if re-joined as one.
+        if (autoMatch) existing.autoMatch = true;
+        if (lobbyReady.get(lobbyName)) onMatchLobbyConnected(lobbyName);
+        return;
+      }
+      const channel = GETFIREP2P.consumer.subscriptions.create(
         { channel: "P2pChannel", game_lobby: lobbyName },
         {
           connected() {
-            console.log('[GetFire P2P] lobby connected:', lobbyName);
+            lobbyReady.set(lobbyName, true);
+            console.log('[GetFire P2P] lobby connected:', lobbyName, autoMatch ? '' : '(discovery)');
+            onMatchLobbyConnected(lobbyName);
             this.perform('speak', {
               game_lobby: lobbyName,
               type: 'player_join',
@@ -162,9 +233,23 @@
             });
           },
           disconnected() { },
-          received(data) { handleGameLobbyMessage(data); }
+          received(data) { handleGameLobbyMessage(data, lobbyName); }
         }
       );
+      gameLobbyChannels.set(lobbyName, { channel, autoMatch });
+    }
+
+    // Leave a single game lobby (other lobbies stay joined).
+    function leaveGameLobby(lobbyName) {
+      const entry = gameLobbyChannels.get(lobbyName);
+      if (!entry) return;
+      try { entry.channel.unsubscribe(); } catch { /* already gone */ }
+      gameLobbyChannels.delete(lobbyName);
+      lobbyReady.delete(lobbyName);
+      if (currentGameLobby === lobbyName) {
+        const remaining = Array.from(gameLobbyChannels.keys());
+        currentGameLobby = remaining.length ? remaining[remaining.length - 1] : null;
+      }
     }
 
     // Join a broadcast-only channel (no P2P matching)
@@ -226,41 +311,41 @@
       return signalingChannel;
     }
 
-    // Handle game lobby messages
-    function handleGameLobbyMessage(data) {
-      onGameLobbyMessage(data);
-      
-      // Skip auto-matching for broadcast channels
-      if (currentGameLobby && currentGameLobby.startsWith('broadcast-')) {
-        return; // Broadcast channels don't auto-match
-      }
-      
-      if ((data.type === 'player_join' || data.type === 'player_rejoin') && data.from !== localUserId) {
-        // Auto-request match with new players (avoid duplicates)
-        setTimeout(() => {
-          if (localUserId > data.from && !peers.has(data.from)) { 
-            const roomId = generateSessionId();
-            gameLobbyChannel.perform('speak', {
-              game_lobby: currentGameLobby,
-              type: 'match_request',
-              from: localUserId,
-              to: data.from,
-              room_id: roomId
-            });
-          }
-        }, 200);
-      } else if (data.type === 'match_request') {
-        if (data.to === localUserId) {
-          acceptMatch(data.from, data.room_id);
+    // Handle game lobby messages. `lobbyName` identifies which lobby channel the
+    // message arrived on so replies go back through the correct channel.
+    function handleGameLobbyMessage(data, lobbyName) {
+      onGameLobbyMessage(data, lobbyName);
+
+      const entry = gameLobbyChannels.get(lobbyName);
+      if (!entry) return; // stale lobby
+      if (!entry.autoMatch) return; // discovery-only lobby: never set up RTC here
+      const channel = entry.channel;
+
+      // RTC initiation is owned by kothShard (spectators dial in; live players
+      // dial each other). No auto-dial here — avoids glare with app-layer logic.
+      if (data.type === 'match_request') {
+        if (userIdsMatch(data.to, localUserId)) {
+          p2pLog('match_request accept', { from: data.from?.slice(-8), lobby: lobbyName?.slice(-24) });
+          acceptMatch(data.from, data.room_id, lobbyName);
         }
-      } else if (data.type === 'match_accepted' && data.to === localUserId) {
-        startP2PConnection(data.from, data.room_id, true);
+      } else if (data.type === 'match_accepted' && userIdsMatch(data.to, localUserId)) {
+        p2pLog('match_accepted', { from: data.from?.slice(-8) });
+        const key = peerRequestKey(data.from);
+        if (!outboundMatchRequests.has(key)) {
+          p2pLog('match_accepted ignored — we are answerer', { from: data.from?.slice(-8) });
+          return;
+        }
+        outboundMatchRequests.delete(key);
+        const state = peerLinkState(data.from);
+        if (state !== 'connecting' && state !== 'connected') {
+          startP2PConnection(data.from, data.room_id, true);
+        }
       }
     }
 
     // Handle P2P signaling messages
     function handleP2PSignalingMessage(data) {
-      if (data.to !== localUserId) return;
+      if (!userIdsMatch(data.to, localUserId)) return;
       const peerId = data.from;
       if (data.type === 'webrtc_offer') {
         handleOffer(data);
@@ -272,14 +357,36 @@
     }
 
     // Accept match and start P2P
-    function acceptMatch(peerId, roomId) {
-      gameLobbyChannel.perform('speak', {
-        game_lobby: currentGameLobby,
-        type: 'match_accepted',
-        from: localUserId,
-        to: peerId,
-        room_id: roomId
-      });
+    function acceptMatch(peerId, roomId, lobbyName) {
+      const key = peerRequestKey(peerId);
+      if (outboundMatchRequests.has(key)) {
+        if (localUserId > peerId) {
+          p2pLog('match_request ignored — glare, we initiate', { peer: peerId?.slice(-8) });
+          return;
+        }
+        outboundMatchRequests.delete(key);
+        p2pLog('match_request — glare, we yield', { peer: peerId?.slice(-8) });
+      }
+      const [, existing] = findPeerEntry(peerId);
+      const state = existing?.state;
+      if (state === 'connected') return;
+      if (state === 'connecting') {
+        const age = Date.now() - (existing.connectStartedAt ?? 0);
+        if (age < 12000) return;
+        cleanupPeer(peerId);
+      } else if (existing) {
+        cleanupPeer(peerId);
+      }
+      const entry = gameLobbyChannels.get(lobbyName);
+      if (entry) {
+        entry.channel.perform('speak', {
+          game_lobby: lobbyName,
+          type: 'match_accepted',
+          from: localUserId,
+          to: peerId,
+          room_id: roomId
+        });
+      }
       startP2PConnection(peerId, roomId, false);
     }
 
@@ -291,16 +398,28 @@
 
     // Create WebRTC peer connection
     function createPeerConnection(peerId, sessionId, isInitiator, signalingChannel) {
-      if (peers.has(peerId)) return peers.get(peerId);
+      const [, existing] = findPeerEntry(peerId);
+      if (existing) return existing;
       const peerConnection = new RTCPeerConnection(rtcConfig);
       const peerData = {
         connection: peerConnection,
         dataChannel: null,
         state: 'connecting',
         sessionId: sessionId,
-        signalingChannel: signalingChannel
+        signalingChannel: signalingChannel,
+        pendingIceCandidates: [],
+        connectStartedAt: Date.now(),
       };
       peers.set(peerId, peerData);
+
+      let connectionTimeout;
+      peerData.markConnected = () => {
+        if (peerData.state === 'connected') return;
+        clearTimeout(connectionTimeout);
+        peerData.state = 'connected';
+        p2pLog('connected', { peer: peerId?.slice(-8) });
+        onPeerConnected(peerId);
+      };
 
       peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
@@ -316,32 +435,43 @@
 
       // Monitor ICE connection for TURN detection
       peerConnection.oniceconnectionstatechange = () => {
-        if (peerConnection.iceConnectionState === 'failed') {
+        const ice = peerConnection.iceConnectionState;
+        p2pLog('ice state', { peer: peerId?.slice(-8), ice });
+        if (ice === 'connected' || ice === 'completed') {
+          peerData.markConnected();
+        } else if (ice === 'failed') {
           console.log('⚠️ Having trouble connecting? This might be due to network restrictions.');
+          onPeerLinkFailed(peerId);
         }
       };
 
+      connectionTimeout = setTimeout(() => {
+        if (peerData.state !== 'connected') {
+          p2pLog('connect timeout', {
+            peer: peerId?.slice(-8),
+            ice: peerConnection.iceConnectionState,
+            conn: peerConnection.connectionState,
+          });
+          console.log('Having trouble connecting? This might be due to network restrictions.');
+          onPeerLinkFailed(peerId);
+        }
+      }, ICE_CONNECT_TIMEOUT_MS);
+
       peerConnection.onconnectionstatechange = () => {
-        if (peerConnection.connectionState === 'connected') {
-          peerData.state = 'connected';
-          onPeerConnected(peerId);
-        } else if (peerConnection.connectionState === 'disconnected' || 
-                   peerConnection.connectionState === 'failed' ||
-                   peerConnection.connectionState === 'closed') {
+        const conn = peerConnection.connectionState;
+        p2pLog('conn state', { peer: peerId?.slice(-8), conn });
+        if (conn === 'connected') {
+          peerData.markConnected();
+        } else if (conn === 'disconnected' || conn === 'failed' || conn === 'closed') {
+          clearTimeout(connectionTimeout);
           peerData.state = 'disconnected';
+          if (conn === 'failed') onPeerLinkFailed(peerId);
           onPeerDisconnected(peerId);
           setTimeout(() => {
             cleanupPeer(peerId);
           }, 500);
         }
       };
-
-      // Connection timeout detection
-      const connectionTimeout = setTimeout(() => {
-        if (peerConnection.connectionState !== 'connected') {
-          console.log('Having trouble connecting? This might be due to network restrictions.');
-        }
-      }, 10000);
 
       if (isInitiator) {
         const dataChannel = peerConnection.createDataChannel('ftxxCanvas', { 
@@ -362,6 +492,7 @@
           peerConnection.createOffer().then(offer => {
             return peerConnection.setLocalDescription(offer);
           }).then(() => {
+            p2pLog('offer sent', { to: peerId?.slice(-8) });
             signalingChannel.perform('speak', {
               p2p_session: sessionId,
               type: 'webrtc_offer',
@@ -386,6 +517,8 @@
     // Set up data channel
     function setupDataChannel(dataChannel, peerId) {
       dataChannel.onopen = () => {
+        const [, peerData] = findPeerEntry(peerId);
+        peerData?.markConnected?.();
         // Test the connection with a ping
         setTimeout(() => {
           if (dataChannel.readyState === 'open') {
@@ -428,75 +561,108 @@
       };
     }
 
+    function flushPendingIceCandidates(peerData) {
+      const pending = peerData?.pendingIceCandidates;
+      if (!pending?.length) return;
+      peerData.pendingIceCandidates = [];
+      for (const candidate of pending) {
+        peerData.connection
+          .addIceCandidate(new RTCIceCandidate(candidate))
+          .catch((error) => console.error('Error adding ICE candidate:', error));
+      }
+    }
+
     // Handle WebRTC offer
     function handleOffer(data) {
-      const peerData = peers.get(data.from);
+      const [fromId, existing] = findPeerEntry(data.from);
+      let peerData = existing;
+      if (!peerData && data.p2p_session) {
+        const signalingChannel = createP2PSession(data.p2p_session, data.from);
+        peerData = createPeerConnection(data.from, data.p2p_session, false, signalingChannel);
+      }
       if (!peerData) return;
-      peerData.connection.setRemoteDescription(new RTCSessionDescription(data.offer))
+      p2pLog('offer received', { from: (fromId ?? data.from)?.slice(-8) });
+      peerData.connection
+        .setRemoteDescription(new RTCSessionDescription(data.offer))
         .then(() => peerData.connection.createAnswer())
-        .then(answer => peerData.connection.setLocalDescription(answer))
+        .then((answer) => peerData.connection.setLocalDescription(answer))
         .then(() => {
+          flushPendingIceCandidates(peerData);
+          p2pLog('answer sent', { to: (fromId ?? data.from)?.slice(-8) });
           peerData.signalingChannel.perform('speak', {
             p2p_session: peerData.sessionId,
             type: 'webrtc_answer',
             from: localUserId,
             to: data.from,
-            answer: peerData.connection.localDescription
+            answer: peerData.connection.localDescription,
           });
-        }).catch(error => console.error('Error handling offer:', error));
+        })
+        .catch((error) => console.error('Error handling offer:', error));
     }
 
     // Handle WebRTC answer
     function handleAnswer(data) {
-      const peerData = peers.get(data.from);
-      if (peerData) {
-        peerData.connection.setRemoteDescription(new RTCSessionDescription(data.answer))
-          .catch(error => console.error('Error handling answer:', error));
-      }
+      const [, peerData] = findPeerEntry(data.from);
+      if (!peerData) return;
+      p2pLog('answer received', { from: data.from?.slice(-8) });
+      peerData.connection
+        .setRemoteDescription(new RTCSessionDescription(data.answer))
+        .then(() => flushPendingIceCandidates(peerData))
+        .catch((error) => console.error('Error handling answer:', error));
     }
 
-    // Handle ICE candidate
+    // Handle ICE candidate — buffer until remote description is set.
     function handleIceCandidate(data) {
-      const peerData = peers.get(data.from);
-      if (peerData) {
-        peerData.connection.addIceCandidate(new RTCIceCandidate(data.candidate))
-          .catch(error => console.error('Error adding ICE candidate:', error));
+      const [, peerData] = findPeerEntry(data.from);
+      if (!peerData) return;
+      p2pLog('ice candidate', { from: data.from?.slice(-8) });
+      const pc = peerData.connection;
+      if (pc.remoteDescription?.type) {
+        pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch((error) =>
+          console.error('Error adding ICE candidate:', error),
+        );
+      } else {
+        peerData.pendingIceCandidates.push(data.candidate);
       }
     }
 
     // Clean up peer
     function cleanupPeer(peerId) {
-      const peerData = peers.get(peerId);
-      if (peerData) {
-        try {
-          if (peerData.dataChannel && peerData.dataChannel.readyState !== 'closed') {
-            peerData.dataChannel.close();
-          }
-          if (peerData.connection && peerData.connection.connectionState !== 'closed') {
-            peerData.connection.close();
-          }
-          if (peerData.signalingChannel) {
-            peerData.signalingChannel.unsubscribe();
-            p2pSignalingChannels.delete(peerData.sessionId);
-          }
-        } catch (e) {
-          // Cleanup error
+      const [id, peerData] = findPeerEntry(peerId);
+      if (!peerData) return;
+      const key = id ?? peerId;
+      try {
+        if (peerData.dataChannel && peerData.dataChannel.readyState !== 'closed') {
+          peerData.dataChannel.close();
         }
-        peers.delete(peerId);
-        
-        // Try to reconnect to any remaining peers in the lobby after cleanup
-        setTimeout(() => {
-          if (gameLobbyChannel && peers.size === 0) {
-            gameLobbyChannel.perform('speak', {
-              game_lobby: currentGameLobby,
+        if (peerData.connection && peerData.connection.connectionState !== 'closed') {
+          peerData.connection.close();
+        }
+        if (peerData.signalingChannel) {
+          peerData.signalingChannel.unsubscribe();
+          p2pSignalingChannels.delete(peerData.sessionId);
+        }
+      } catch (e) {
+        // Cleanup error
+      }
+      peers.delete(key);
+      clearOutboundRequest(peerId);
+
+      // Try to reconnect to any remaining peers across all joined lobbies.
+      setTimeout(() => {
+        if (peers.size === 0) {
+          for (const [lobbyName, entry] of gameLobbyChannels) {
+            if (!entry.autoMatch) continue;
+            entry.channel.perform('speak', {
+              game_lobby: lobbyName,
               type: 'player_rejoin',
               from: localUserId,
               room_type: 'ftxx-canvas',
-              content: 'ready for connections'
+              content: 'ready for connections',
             });
           }
-        }, 2000);
-      }
+        }
+      }, 2000);
     }
 
     // Public API
@@ -517,40 +683,63 @@
       sendBroadcast(data, channelName);
     };
     
-    // P2P matching lobbies (auto-connects peers)
-    GETFIREP2P.joinMatchLobby = function(lobbyName) {
-      joinGameLobby(lobbyName || roomType);
+    // P2P matching lobbies (auto-connects peers). Additive — does not leave
+    // other joined lobbies. Pass { autoMatch:false } for a discovery-only lobby
+    // that relays messages but never establishes WebRTC.
+    GETFIREP2P.joinMatchLobby = function(lobbyName, options) {
+      joinGameLobby(lobbyName || roomType, options?.autoMatch !== false);
     };
 
-    GETFIREP2P.announcePresence = function() {
-      if (!gameLobbyChannel || !currentGameLobby) return;
-      gameLobbyChannel.perform('speak', {
-        game_lobby: currentGameLobby,
-        type: 'player_rejoin',
-        from: localUserId,
-        room_type: roomType,
-        content: 'ready for connections',
-      });
+    GETFIREP2P.leaveMatchLobby = function(lobbyName) {
+      leaveGameLobby(lobbyName);
+    };
+
+    GETFIREP2P.announcePresence = function(lobbyName) {
+      // Re-announce in matchmaking lobby(ies). Pass lobbyName to scope to one match.
+      for (const [name, entry] of gameLobbyChannels) {
+        if (!entry.autoMatch) continue;
+        if (lobbyName && name !== lobbyName) continue;
+        entry.channel.perform('speak', {
+          game_lobby: name,
+          type: 'player_rejoin',
+          from: localUserId,
+          room_type: roomType,
+          content: 'ready for connections',
+        });
+      }
     };
     
     // Legacy alias for backward compatibility
-    GETFIREP2P.joinLobby = function(lobbyName) {
-      joinGameLobby(lobbyName || roomType);
+    GETFIREP2P.joinLobby = function(lobbyName, options) {
+      joinGameLobby(lobbyName || roomType, options?.autoMatch !== false);
     };
 
-    GETFIREP2P.requestMatch = function(targetPeerId) {
-      if (!gameLobbyChannel) {
-        console.error('Not connected to game lobby');
-        return;
+    GETFIREP2P.isMatchLobbyReady = function(lobbyName) {
+      return lobbyReady.get(lobbyName) === true;
+    };
+
+    GETFIREP2P.requestMatch = function(targetPeerId, lobbyName) {
+      if (!targetPeerId || targetPeerId === localUserId) return;
+      const [, existing] = findPeerEntry(targetPeerId);
+      if (existing?.state === 'connected') return;
+      if (existing?.state === 'connecting') {
+        if (Date.now() - (existing.connectStartedAt ?? 0) < 12000) return;
+        cleanupPeer(targetPeerId);
       }
-      const roomId = generateSessionId();
-      gameLobbyChannel.perform('speak', {
-        game_lobby: currentGameLobby,
-        type: 'match_request',
-        from: localUserId,
-        to: targetPeerId,
-        room_id: roomId
-      });
+      const roomId = pairRoomId(localUserId, targetPeerId);
+      outboundMatchRequests.add(peerRequestKey(targetPeerId));
+      p2pLog('requestMatch', { to: targetPeerId?.slice(-8), lobby: lobbyName?.slice(-24) });
+      for (const [name, entry] of gameLobbyChannels) {
+        if (!entry.autoMatch) continue;
+        if (lobbyName && name !== lobbyName) continue;
+        entry.channel.perform('speak', {
+          game_lobby: name,
+          type: 'match_request',
+          from: localUserId,
+          to: targetPeerId,
+          room_id: roomId
+        });
+      }
     };
 
     GETFIREP2P.sendData = function(data, targetPeerId = null) {
@@ -562,7 +751,7 @@
       };
       
       if (targetPeerId) {
-        const peerData = peers.get(targetPeerId);
+        const [, peerData] = findPeerEntry(targetPeerId);
         if (peerData && peerData.dataChannel && peerData.dataChannel.readyState === 'open') {
           peerData.dataChannel.send(JSON.stringify(message));
         }
@@ -584,10 +773,11 @@
 
     GETFIREP2P.disconnect = function() {
       peers.forEach((peerData, peerId) => cleanupPeer(peerId));
-      if (gameLobbyChannel) {
-        gameLobbyChannel.unsubscribe();
-        gameLobbyChannel = null;
-      }
+      gameLobbyChannels.forEach((entry) => {
+        try { entry.channel.unsubscribe(); } catch { /* already gone */ }
+      });
+      gameLobbyChannels.clear();
+      currentGameLobby = null;
       p2pSignalingChannels.forEach((channel) => channel.unsubscribe());
       p2pSignalingChannels.clear();
     };

@@ -1,7 +1,12 @@
 // Catch-up replay — rebuild sim from match config + command ledger, verify checksum.
 
 import { collectFramesForTick } from '../sim/commandFrame.js';
-import { SimSession } from './simSession.js';
+import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
+
+/** Sim ticks committed per display frame during visible catch-up (~1 match-second at 60fps). */
+export const CATCHUP_TICKS_PER_FRAME = 20;
+
+export { formatMatchTime, matchSecondsFromTick };
 
 /**
  * @param {import('./simSession.js').SimSession} session
@@ -9,62 +14,86 @@ import { SimSession } from './simSession.js';
  * @param {import('../sim/commandFrame.js').CommandFrame[]} ledgerFrames
  * @param {number} targetTick
  * @param {number} [expectedChecksum]
+ * @param {{ ticksPerFrame?: number, onProgress?: (p: { tick: number, targetTick: number }) => void }} [options]
  */
-export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTick, expectedChecksum) {
-  const replay = new SimSession({
-    localPlayerId: -1,
-    humanPlayers: matchConfig.humanPlayers ?? [],
-    aiPlayers: [],
-    inputDelayTicks: session.inputDelayTicks,
-    role: 'spectator',
-  });
-  try {
-    await replayCatchUpInto(replay, matchConfig, ledgerFrames, targetTick, expectedChecksum);
-    session.adoptFrom(replay);
-    session.setHumanPlayers(matchConfig.humanPlayers);
-    session.setLocalPlayerId(-1);
-    session.setRole('spectator');
-    session.replaceFullLedger?.(ledgerFrames);
-    return session._lastChecksum;
-  } catch (err) {
-    replay.terminate();
-    throw err;
-  }
-}
-
-export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum) {
-  const byTick = groupFramesByTick(ledgerFrames);
-
-  await session.start({
+export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
+  await session.reset({
     seed: matchConfig.seed,
     mode: 'koth',
     activeSlots: matchConfig.activeSlots,
   });
-
-  session.setHumanPlayers(matchConfig.humanPlayers);
+  session.setHumanPlayers(matchConfig.humanPlayers ?? []);
+  session.setLocalPlayerId(-1);
   session.setRole('spectator');
+
+  const checksum = await replayCatchUpInto(
+    session,
+    matchConfig,
+    ledgerFrames,
+    targetTick,
+    expectedChecksum,
+    options,
+  );
+  session.replaceFullLedger?.(ledgerFrames);
+  return checksum;
+}
+
+/**
+ * @param {import('./simSession.js').SimSession} session — must already be reset/started for this match
+ */
+export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
+  const ticksPerFrame = options.ticksPerFrame ?? CATCHUP_TICKS_PER_FRAME;
+  const onProgress = options.onProgress;
+  const byTick = groupFramesByTick(ledgerFrames);
+
+  session.setHumanPlayers(matchConfig.humanPlayers ?? []);
+  session.setRole('spectator');
+  session.replayingCatchUp = true;
   session.pauseLockstep = true;
 
-  for (let t = 1; t <= targetTick; t++) {
-    const frames = collectFramesForTick(byTick, t, matchConfig.humanPlayers);
-    const { checksum, extra } = await session.client.commitTickAsync(t, frames);
-    session.confirmedTick = t;
+  try {
+    await runReplayTicks(session, byTick, matchConfig.humanPlayers ?? [], targetTick, ticksPerFrame, onProgress);
+
+    if (expectedChecksum != null && session._lastChecksum !== expectedChecksum) {
+      throw new Error(
+        `Catch-up checksum mismatch: got ${session._lastChecksum?.toString(16)}, expected ${expectedChecksum.toString(16)}`,
+      );
+    }
+    return session._lastChecksum;
+  } finally {
+    session.replayingCatchUp = false;
+    session.pauseLockstep = false;
+  }
+}
+
+async function runReplayTicks(session, byTick, humanPlayers, targetTick, ticksPerFrame, onProgress) {
+  const commitOne = async (tick) => {
+    const frames = collectFramesForTick(byTick, tick, humanPlayers);
+    const { checksum, extra } = await session.client.commitTickAsync(tick, frames);
+    session.confirmedTick = tick;
     session._lastChecksum = checksum;
     if (extra?.koth) session.koth = extra.koth;
     if (extra?.kothMatchOver != null) session.kothMatchOver = extra.kothMatchOver;
-    session._captureSnapshot(t);
+    session._captureSnapshot(tick);
+  };
+
+  if (ticksPerFrame <= 0) {
+    for (let t = 1; t <= targetTick; t++) await commitOne(t);
+    return;
   }
 
-  session.pauseLockstep = false;
-
-  if (expectedChecksum != null && session._lastChecksum !== expectedChecksum) {
-    throw new Error(
-      `Catch-up checksum mismatch: got ${session._lastChecksum?.toString(16)}, expected ${expectedChecksum.toString(16)}`,
-    );
+  for (let t = 1; t <= targetTick; ) {
+    const batchEnd = Math.min(t + ticksPerFrame - 1, targetTick);
+    for (let tick = t; tick <= batchEnd; tick++) await commitOne(tick);
+    session.lastSnapshotAt = performance.now();
+    onProgress?.({ tick: batchEnd, targetTick });
+    if (batchEnd < targetTick) await waitAnimationFrame();
+    t = batchEnd + 1;
   }
+}
 
-  session.replaceFullLedger?.(ledgerFrames);
-  return session._lastChecksum;
+function waitAnimationFrame() {
+  return new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
 /** @param {import('../sim/commandFrame.js').CommandFrame[]} frames */

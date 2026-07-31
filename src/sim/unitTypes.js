@@ -8,6 +8,10 @@ export const UNIT = {
   VILLAGER: 0,
   WARRIOR: 1,
   ARCHER: 2,
+  WARLOCK: 3,
+  PRIEST: 4,
+  MYCO: 5,
+  SHAMAN: 6,
 };
 
 export const ATTACK_DELIVERY = {
@@ -15,7 +19,7 @@ export const ATTACK_DELIVERY = {
   PROJECTILE: 1,
 };
 
-/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number }>} */
+/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null }>} */
 export const UNIT_DEFS = [
   {
     id: UNIT.VILLAGER,
@@ -35,6 +39,7 @@ export const UNIT_DEFS = [
     projectileType: -1,
     minRange: 0,
     preferredRange: fx.fromFloat(2),
+    primaryAbility: null,
   },
   {
     id: UNIT.WARRIOR,
@@ -55,6 +60,7 @@ export const UNIT_DEFS = [
     projectileType: -1,
     minRange: 0,
     preferredRange: fx.fromFloat(2.5),
+    primaryAbility: null,
   },
   {
     id: UNIT.ARCHER,
@@ -74,6 +80,87 @@ export const UNIT_DEFS = [
     projectileType: PROJECTILE.ARROW,
     minRange: fx.fromFloat(5),
     preferredRange: fx.fromFloat(57.5),
+    primaryAbility: null,
+  },
+  {
+    id: UNIT.WARLOCK,
+    name: 'Warlock',
+    category: 'military',
+    hp: 55,
+    speed: fx.fromFloat(2.2),
+    size: 5.5,
+    pickRadius: 1.6,
+    pickHeight: 1.05,
+    color: [0.55, 0.22, 0.72],
+    attackDamage: 9,
+    attackRange: fx.fromFloat(55),
+    attackCooldown: 36,
+    aggroRange: fx.fromFloat(50),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.ORB,
+    minRange: fx.fromFloat(4),
+    preferredRange: fx.fromFloat(42),
+    primaryAbility: 'warlock_fireball',
+  },
+  {
+    id: UNIT.PRIEST,
+    name: 'Priest',
+    category: 'military',
+    hp: 50,
+    speed: fx.fromFloat(2.3),
+    size: 5.2,
+    pickRadius: 1.55,
+    pickHeight: 1.05,
+    color: [0.92, 0.88, 0.72],
+    attackDamage: 6,
+    attackRange: fx.fromFloat(45),
+    attackCooldown: 44,
+    aggroRange: fx.fromFloat(42),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.ORB,
+    minRange: fx.fromFloat(4),
+    preferredRange: fx.fromFloat(35),
+    primaryAbility: 'holy_armor',
+  },
+  {
+    id: UNIT.MYCO,
+    name: 'Myco',
+    category: 'military',
+    hp: 60,
+    speed: fx.fromFloat(2.1),
+    size: 5.4,
+    pickRadius: 1.6,
+    pickHeight: 1.0,
+    color: [0.45, 0.72, 0.55],
+    attackDamage: 5,
+    attackRange: fx.fromFloat(40),
+    attackCooldown: 42,
+    aggroRange: fx.fromFloat(38),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.ORB,
+    minRange: fx.fromFloat(3),
+    preferredRange: fx.fromFloat(30),
+    primaryAbility: 'spore_bloom',
+  },
+  {
+    id: UNIT.SHAMAN,
+    name: 'Shaman',
+    category: 'military',
+    hp: 65,
+    speed: fx.fromFloat(2.3),
+    size: 5.5,
+    pickRadius: 1.6,
+    pickHeight: 1.05,
+    color: [0.35, 0.55, 0.38],
+    attackDamage: 5,
+    attackRange: fx.fromFloat(42),
+    attackCooldown: 40,
+    aggroRange: fx.fromFloat(40),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.ORB,
+    minRange: fx.fromFloat(3),
+    preferredRange: fx.fromFloat(32),
+    primaryAbility: 'frog_swarm',
   },
 ];
 
@@ -84,4 +171,3 @@ export function getUnitDef(typeId) {
 export function isMilitary(typeId) {
   return getUnitDef(typeId).category === 'military';
 }
-

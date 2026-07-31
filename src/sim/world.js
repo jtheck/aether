@@ -86,6 +86,7 @@ export function createWorld(seed) {
 
     // combat
     attackCd: new Int16Array(MAX_ENTITIES),
+    abilityCd: new Int16Array(MAX_ENTITIES),
 
     // gameplay
     hp: new Int32Array(MAX_ENTITIES),
@@ -125,6 +126,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.lastPx[i] = x;
   w.lastPy[i] = y;
   w.attackCd[i] = 0;
+  w.abilityCd[i] = 0;
   w.hp[i] = hp ?? def.hp;
   w.type[i] = type;
   w.owner[i] = owner;

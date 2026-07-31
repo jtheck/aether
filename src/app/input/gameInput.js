@@ -11,6 +11,8 @@ export const DRAG_THRESHOLD_PX = 25;
 /** Manual double-tap window — PointerEvent.detail is not a click count. */
 const DOUBLE_MS = 350;
 const DOUBLE_PX = 14;
+/** Tap+hold on ground with selection → primary ability cast. */
+const ABILITY_HOLD_MS = 400;
 
 /**
  * @param {object} opts
@@ -23,6 +25,7 @@ const DOUBLE_PX = 14;
  * @param {(cmd: object) => void} opts.enqueueCommand
  * @param {() => void} [opts.onSelectionChanged]
  * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]
+ * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
  */
 export function createGameInput(opts) {
@@ -36,6 +39,7 @@ export function createGameInput(opts) {
     enqueueCommand,
     onSelectionChanged,
     onOrder,
+    onAbilityHold,
     canInteract,
   } = opts;
 
@@ -52,6 +56,11 @@ export function createGameInput(opts) {
   let selectionBox = null;
   /** @type {{ t: number, x: number, y: number, kind: 'unit' | 'ground', typeId?: number } | null} */
   let lastTap = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let abilityHoldTimer = null;
+  let abilityHoldFired = false;
+  let abilityHoldClientX = 0;
+  let abilityHoldClientY = 0;
 
   ensureSelectionBox();
 
@@ -79,6 +88,13 @@ export function createGameInput(opts) {
 
   function hideSelectionBox() {
     if (selectionBox) selectionBox.style.display = 'none';
+  }
+
+  function clearAbilityHold() {
+    if (abilityHoldTimer != null) {
+      clearTimeout(abilityHoldTimer);
+      abilityHoldTimer = null;
+    }
   }
 
   function buildSphereList(filter) {
@@ -216,6 +232,42 @@ export function createGameInput(opts) {
     enqueueCommand({ type: cmdType, entities: ids, tx, ty });
   }
 
+  /** Tap+hold cast — always procs feedback; sim no-ops units without a live ability. */
+  function castAbilityAt(clientX, clientY) {
+    if (!canUseInput()) return;
+    const ids = selectedIds();
+    if (ids.length === 0) return;
+    const g = renderer.screenToGround(clientX, clientY);
+    if (!g) return;
+
+    onAbilityHold?.(g.x, g.z, g.y);
+    enqueueCommand({
+      type: CMD.CAST,
+      entities: ids,
+      tx: fx.fromFloat(g.x),
+      ty: fx.fromFloat(g.z),
+    });
+  }
+
+  function armAbilityHold(clientX, clientY) {
+    clearAbilityHold();
+    abilityHoldFired = false;
+    abilityHoldClientX = clientX;
+    abilityHoldClientY = clientY;
+    if (selectedIds().length === 0) return;
+    // Don't arm over own units — that press is for selection.
+    const world = getWorld();
+    const own = pickUnit(clientX, clientY, (i) => world.owner[i] === localPlayerId);
+    if (own >= 0) return;
+
+    abilityHoldTimer = setTimeout(() => {
+      abilityHoldTimer = null;
+      if (boxDragging || dragPointerId == null) return;
+      abilityHoldFired = true;
+      castAbilityAt(abilityHoldClientX, abilityHoldClientY);
+    }, ABILITY_HOLD_MS);
+  }
+
   function handlePointerDown(e) {
     if (!canUseInput()) return false;
     if (e.pointerType === 'touch') return false;
@@ -225,7 +277,9 @@ export function createGameInput(opts) {
     lmbDownPos = { x: e.clientX, y: e.clientY };
     dragPointerId = e.pointerId;
     boxDragging = false;
+    abilityHoldFired = false;
     hideSelectionBox();
+    armAbilityHold(e.clientX, e.clientY);
     return true;
   }
 
@@ -233,8 +287,15 @@ export function createGameInput(opts) {
     if (!canUseInput()) return false;
     if (dragPointerId !== e.pointerId || !boxStart) return false;
     const moved = Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y);
-    if (!boxDragging && moved > DRAG_THRESHOLD_PX) boxDragging = true;
+    if (!boxDragging && moved > DRAG_THRESHOLD_PX) {
+      boxDragging = true;
+      clearAbilityHold();
+    }
     if (boxDragging) showSelectionBox(boxStart.x, boxStart.y, e.clientX, e.clientY);
+    else {
+      abilityHoldClientX = e.clientX;
+      abilityHoldClientY = e.clientY;
+    }
     return true;
   }
 
@@ -246,10 +307,16 @@ export function createGameInput(opts) {
     const d = lmbDownPos;
     lmbDownPos = null;
     const wasDragging = boxDragging;
+    const holdCast = abilityHoldFired;
     boxDragging = false;
+    abilityHoldFired = false;
+    clearAbilityHold();
 
     if (canUseInput() && e.type !== 'pointercancel') {
-      if (wasDragging && boxStart) {
+      if (holdCast) {
+        // Ability already issued on hold — swallow click so we don't also attack-move.
+        lastTap = null;
+      } else if (wasDragging && boxStart) {
         lastTap = null;
         boxSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
       } else if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX) {
@@ -286,6 +353,8 @@ export function createGameInput(opts) {
   }
 
   function cancelDrag() {
+    clearAbilityHold();
+    abilityHoldFired = false;
     hideSelectionBox();
     boxStart = null;
     dragPointerId = null;
@@ -308,11 +377,17 @@ export function createGameInput(opts) {
     },
     setInputEnabled(enabled) {
       inputEnabled = Boolean(enabled);
-      if (!inputEnabled) clearSelection();
+      if (!inputEnabled) {
+        clearAbilityHold();
+        clearSelection();
+      }
     },
     setRole(role) {
       inputEnabled = role === 'player' || role === 'livePlayer' || role === 'sandboxPlayer';
-      if (!inputEnabled) clearSelection();
+      if (!inputEnabled) {
+        clearAbilityHold();
+        clearSelection();
+      }
     },
   };
 }

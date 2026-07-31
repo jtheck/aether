@@ -7,6 +7,7 @@ export const PROJECTILE = {
   BOLT: 1,
   ORB: 2,
   ROCK: 3,
+  FIREBALL: 4,
 };
 
 export const PROJECTILE_MESH = {
@@ -83,6 +84,25 @@ export const PROJECTILE_DEFS = [
     color: [0.3, 0.27, 0.24],
     launchHeight: 4,
     arcHeight: 5,
+    renderCapacity: 4096,
+  },
+  {
+    id: PROJECTILE.FIREBALL,
+    name: 'Fireball',
+    speed: fx.fromFloat(7),
+    maxTicks: 40,
+    hitRadius: fx.fromFloat(2),
+    homing: 0,
+    blockedByTerrain: 0,
+    pierce: 1,
+    // v1 ≈ 1.25 tiles × 4 world units.
+    splashRadius: fx.fromFloat(5),
+    friendlyFireMultiplier: 0.25,
+    mesh: PROJECTILE_MESH.ORB,
+    scale: [0.95, 0.95, 0.95],
+    color: [1, 0.35, 0.05],
+    launchHeight: 3.6,
+    arcHeight: 0.6,
     renderCapacity: 4096,
   },
 ];

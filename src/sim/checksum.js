@@ -40,6 +40,7 @@ export function checksum(w) {
     mix(w.navDestX[i]);
     mix(w.navDestY[i]);
     mix(w.attackCd[i]);
+    mix(w.abilityCd[i]);
     mix(w.hp[i]);
     mix(w.type[i]);
     mix(w.owner[i]);

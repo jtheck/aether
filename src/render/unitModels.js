@@ -18,6 +18,10 @@ export const UNIT_FOOT_Y = 1;
 export const UNIT_MODEL_URLS = {
   [UNIT.WARRIOR]: '/assets/models/warrior.glb',
   [UNIT.ARCHER]: '/assets/models/archer.glb',
+  [UNIT.WARLOCK]: '/assets/models/warlock.glb',
+  [UNIT.PRIEST]: '/assets/models/priest.glb',
+  [UNIT.MYCO]: '/assets/models/myco.glb',
+  [UNIT.SHAMAN]: '/assets/models/shaman.glb',
 };
 
 export function hasUnitModel(typeId) {

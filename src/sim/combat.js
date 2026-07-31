@@ -166,5 +166,6 @@ function resolveAttacks(w) {
 
   for (let i = 0; i < w.count; i++) {
     if (w.attackCd[i] > 0) w.attackCd[i]--;
+    if (w.abilityCd[i] > 0) w.abilityCd[i]--;
   }
 }

@@ -17,6 +17,8 @@ import { kothRegisterJoin } from './kothMeta.js';
 import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
+import { tryCast } from './abilities.js';
+import { getUnitDef } from './unitTypes.js';
 
 export const CMD = {
   MOVE: 1,
@@ -25,9 +27,10 @@ export const CMD = {
   STOP: 4,
   SPAWN_SLOT: 5,
   FORCE_ELIMINATE: 6,
+  CAST: 7,
 };
 
-/** @typedef {{ type: number, entities: number[], tx?: number[], ty?: number[], target?: number }} Command */
+/** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string }} Command */
 
 export function applyCommands(world, field, commands) {
   if (!commands || commands.length === 0) return;
@@ -52,6 +55,9 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.FORCE_ELIMINATE:
         applyForceEliminate(world, cmd.playerId);
+        break;
+      case CMD.CAST:
+        applyCast(world, cmd.entities, cmd.abilityId, cmd.tx, cmd.ty);
         break;
       default:
         break;
@@ -123,6 +129,26 @@ function applyForceEliminate(world, playerId) {
   if (playerId == null || playerId < 0) return;
   for (let i = 0; i < world.count; i++) {
     if (world.alive[i] && world.owner[i] === playerId) kill(world, i);
+  }
+}
+
+/**
+ * Point-cast primary (or named) ability for each entity.
+ * `tx`/`ty` may be a single fixed-point aim or per-entity arrays.
+ */
+function applyCast(world, ids, abilityId, tx, ty) {
+  if (!ids || ids.length === 0) return;
+  const sharedAim = typeof tx === 'number' && typeof ty === 'number';
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    if (!world.alive[i]) continue;
+    const aimX = sharedAim ? tx : tx?.[k];
+    const aimY = sharedAim ? ty : ty?.[k];
+    if (aimX == null || aimY == null) continue;
+    const def = getUnitDef(world.type[i]);
+    const id = abilityId || def.primaryAbility;
+    if (!id) continue;
+    tryCast(world, i, id, aimX, aimY);
   }
 }
 

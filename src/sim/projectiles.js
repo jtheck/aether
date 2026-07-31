@@ -4,6 +4,7 @@ import * as fx from './fixed.js';
 import { applyDamage } from './damage.js';
 import { lineClear } from './field.js';
 import { getProjectileDef } from './projectileTypes.js';
+import { isHostile } from './teams.js';
 
 export const MAX_PROJECTILES = 32768;
 
@@ -119,6 +120,31 @@ function freeProjectile(w, slot, reason) {
   else w.metrics.projectileMisses++;
 }
 
+/** Splash at impact point; hostiles take full damage, friendlies use multiplier. */
+function applySplash(w, slot, impactX, impactY, def) {
+  const store = w.projectiles;
+  const radius = def.splashRadius;
+  if (!radius || radius <= 0) return false;
+  const radius2 = fx.mul(radius, radius);
+  const baseDamage = store.damage[slot];
+  const owner = store.owner[slot];
+  const source = store.source[slot];
+  const friendlyMul = def.friendlyFireMultiplier ?? 0;
+  let hit = false;
+
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i]) continue;
+    if (fx.dist2(impactX, impactY, w.px[i], w.py[i]) > radius2) continue;
+    let dmg = baseDamage;
+    if (!isHostile(owner, w.owner[i])) {
+      if (friendlyMul <= 0) continue;
+      dmg = Math.max(1, Math.round(baseDamage * friendlyMul));
+    }
+    if (applyDamage(w, i, dmg, source)) hit = true;
+  }
+  return hit;
+}
+
 export function projectileSystem(w, field) {
   const store = w.projectiles;
   for (let slot = 0; slot < store.capacity; slot++) {
@@ -143,7 +169,12 @@ export function projectileSystem(w, field) {
       def.blockedByTerrain &&
       !lineClear(field, store.px[slot], store.py[slot], nextX, nextY)
     ) {
-      freeProjectile(w, slot, PROJECTILE_DESPAWN.TERRAIN);
+      if (def.splashRadius > 0) {
+        const hit = applySplash(w, slot, store.px[slot], store.py[slot], def);
+        freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.TERRAIN);
+      } else {
+        freeProjectile(w, slot, PROJECTILE_DESPAWN.TERRAIN);
+      }
       continue;
     }
 
@@ -151,7 +182,7 @@ export function projectileSystem(w, field) {
     store.py[slot] = nextY;
     store.age[slot]++;
 
-    if (targetAlive) {
+    if (targetAlive && !(def.splashRadius > 0)) {
       const hitRadius2 = fx.mul(def.hitRadius, def.hitRadius);
       if (fx.dist2(nextX, nextY, w.px[target], w.py[target]) <= hitRadius2) {
         applyDamage(w, target, store.damage[slot], store.source[slot]);
@@ -166,9 +197,16 @@ export function projectileSystem(w, field) {
     const reachedAim = dist <= def.speed;
     if (
       store.age[slot] >= store.lifetime[slot] ||
-      (reachedAim && (!targetAlive || !def.homing))
+      (reachedAim && (!targetAlive || !def.homing || def.splashRadius > 0))
     ) {
-      freeProjectile(w, slot, PROJECTILE_DESPAWN.MISS);
+      if (def.splashRadius > 0) {
+        const ix = reachedAim ? store.aimX[slot] : nextX;
+        const iy = reachedAim ? store.aimY[slot] : nextY;
+        const hit = applySplash(w, slot, ix, iy, def);
+        freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
+      } else {
+        freeProjectile(w, slot, PROJECTILE_DESPAWN.MISS);
+      }
     }
   }
   w.metrics.projectileActive = store.activeCount;

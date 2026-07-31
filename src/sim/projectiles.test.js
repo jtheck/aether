@@ -279,6 +279,78 @@ function kothEliminationAfterImpact() {
   assert.equal(w.koth.eliminated[1], 1, 'projectile impacts resolve before KOTH elimination');
 }
 
+function fireballSplashDamagesAndFriendlyFire() {
+  const field = openField();
+  const w = createWorld(21);
+  const caster = spawn(w, {
+    x: fx.fromInt(0),
+    y: fx.fromInt(0),
+    type: UNIT.WARLOCK,
+    owner: 0,
+  });
+  const foe = spawn(w, {
+    x: fx.fromInt(20),
+    y: fx.fromInt(0),
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const ally = spawn(w, {
+    x: fx.fromInt(22),
+    y: fx.fromInt(0),
+    type: UNIT.WARRIOR,
+    owner: 0,
+  });
+  const foeHp = w.hp[foe];
+  const allyHp = w.hp[ally];
+  const damage = Math.max(1, Math.round(9 * 1.35)); // warlock attackDamage * 1.35
+  spawnProjectile(w, {
+    type: PROJECTILE.FIREBALL,
+    owner: 0,
+    source: caster,
+    target: -1,
+    x: 0,
+    y: 0,
+    aimX: fx.fromInt(20),
+    aimY: 0,
+    damage,
+  });
+  for (let tick = 0; tick < 16 && w.projectiles.activeCount; tick++) {
+    projectileSystem(w, field);
+  }
+  assert.equal(w.projectiles.activeCount, 0);
+  assert.equal(w.hp[foe], foeHp - damage, 'hostile takes full fireball splash');
+  assert.equal(
+    w.hp[ally],
+    allyHp - Math.max(1, Math.round(damage * 0.25)),
+    'friendly takes reduced splash',
+  );
+}
+
+function castCommandSpawnsFireball() {
+  const field = openField();
+  const w = createWorld(22);
+  const warlock = spawn(w, {
+    x: 0,
+    y: 0,
+    type: UNIT.WARLOCK,
+    owner: 0,
+  });
+  step(w, field, [{
+    type: CMD.CAST,
+    entities: [warlock],
+    tx: fx.fromInt(30),
+    ty: 0,
+  }]);
+  assert.equal(w.projectiles.activeCount, 1);
+  let slot = -1;
+  for (let s = 0; s < w.projectiles.highWater; s++) {
+    if (w.projectiles.alive[s]) { slot = s; break; }
+  }
+  assert.ok(slot >= 0);
+  assert.equal(w.projectiles.type[slot], PROJECTILE.FIREBALL);
+  assert.ok(w.abilityCd[warlock] > 0);
+}
+
 archerTravelAndCooldown();
 deadTargetMisses();
 poolReuseAndOverflow();
@@ -287,4 +359,6 @@ simultaneousImpactAndChecksum();
 engagementSlotsAndRangedSpacing();
 sharedProjectilePublication();
 kothEliminationAfterImpact();
+fireballSplashDamagesAndFriendlyFire();
+castCommandSpawnsFireball();
 console.log('[PASS] authoritative projectile behavior and pooling');

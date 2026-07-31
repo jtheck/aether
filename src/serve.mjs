@@ -24,6 +24,10 @@ const MIME = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.map': 'application/json; charset=utf-8',
+  '.ogg': 'audio/ogg',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
 };
 
 function resolvePath(urlPath) {
@@ -41,6 +45,11 @@ try {
   await access(join(ROOT, 'vendor', 'lite-explorer', 'explorer.js'));
 } catch {
   console.warn('⚠️  vendor/lite-explorer/ missing — run: npm run build:explorer');
+}
+try {
+  await access(join(ROOT, 'vendor', 'howler.js'));
+} catch {
+  console.warn('⚠️  vendor/howler.js missing — run: npm run build:howler');
 }
 
 createServer(async (req, res) => {

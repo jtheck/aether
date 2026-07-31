@@ -15,6 +15,7 @@ import { setupPointerHub } from './input/pointerHub.js';
  * @param {(cmd: object) => void} opts.enqueueCommand
  * @param {() => void} [opts.onSelectionChanged]
  * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]
+ * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
  */
 export function setupInput(opts) {

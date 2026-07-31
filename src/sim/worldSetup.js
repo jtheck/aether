@@ -21,14 +21,22 @@ export const KOTH_BASES = [
 
 const PLAYER_ARMY = [
   { type: UNIT.VILLAGER, count: 5 },
-  { type: UNIT.WARRIOR, count: 10 },
-  { type: UNIT.ARCHER, count: 8 },
+  { type: UNIT.WARRIOR, count: 8 },
+  { type: UNIT.ARCHER, count: 6 },
+  { type: UNIT.WARLOCK, count: 3 },
+  { type: UNIT.PRIEST, count: 2 },
+  { type: UNIT.MYCO, count: 2 },
+  { type: UNIT.SHAMAN, count: 2 },
 ];
 
 const ENEMY_ARMY = [
   { type: UNIT.VILLAGER, count: 5 },
-  { type: UNIT.WARRIOR, count: 10 },
-  { type: UNIT.ARCHER, count: 8 },
+  { type: UNIT.WARRIOR, count: 8 },
+  { type: UNIT.ARCHER, count: 6 },
+  { type: UNIT.WARLOCK, count: 3 },
+  { type: UNIT.PRIEST, count: 2 },
+  { type: UNIT.MYCO, count: 2 },
+  { type: UNIT.SHAMAN, count: 2 },
 ];
 
 const COL_SPACING = 22;

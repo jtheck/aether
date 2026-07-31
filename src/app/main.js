@@ -16,6 +16,7 @@ import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { isVatUnitType } from '../render/vatUnits.js';
 import { setupInput } from './input.js';
+import { init as initAudio } from './audio.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 
@@ -114,6 +115,7 @@ function forceRendererSync(ctx) {
 
 async function main() {
   const canvas = document.getElementById('canvas');
+  initAudio();
 
   if (!(await waitForWebGPU())) {
     showFallback('This browser has no WebGPU. Use Chrome/Edge 113+ or Firefox/Safari with WebGPU enabled.');
@@ -382,6 +384,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     onOrder: (x, z, y, cmdType) => {
       const tint = cmdType === CMD.ATTACK_MOVE ? 'red' : 'white';
       renderer.pingOrderMarker?.(x, z, y, tint, { forceMove: cmdType === CMD.MOVE });
+    },
+    onAbilityHold: (x, z, y) => {
+      renderer.pingOrderMarker?.(x, z, y, 'white');
     },
     canInteract: () => session.role === 'player' && localPlayerId >= 0,
   });

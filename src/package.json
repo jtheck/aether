@@ -10,12 +10,14 @@
     "bench:scale:50k": "node sim/scale.bench.js --acceptance --enforce",
     "build:lite": "node build-lite.mjs",
     "build:explorer": "node build-explorer.mjs",
+    "build:howler": "node build-howler.mjs",
     "build": "node build.mjs",
     "serve": "node serve.mjs"
   },
   "dependencies": {
     "@babylonjs/lite": "^1.11.0",
     "babylon-lite-explorer": "^0.4.1",
-    "esbuild": "^0.28.1"
+    "esbuild": "^0.28.1",
+    "howler": "^2.2.4"
   }
 }

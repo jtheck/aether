@@ -1,6 +1,6 @@
 
 ////////////////////////////////
-// GetFire.net P2P API v0.0.1
+// GetFire.net P2P API v0.0.1 (aether v2 — signaling: wss://getfire.net/ws/cable)
 ////////////////////////////////
   //
   // Usage:
@@ -29,6 +29,14 @@
 
   let GETFIREP2P = window.GETFIREP2P = function(config) {
     GETFIREP2P.ready = false;
+    if (GETFIREP2P.consumer) {
+      try {
+        GETFIREP2P.disconnect?.();
+      } catch {
+        /* stale consumer from prior load */
+      }
+      GETFIREP2P.consumer = null;
+    }
 
     let uri = "https://getfire.net/";
     let ssl = document.location.protocol == "https:";
@@ -64,18 +72,30 @@
 
     // Internal state
     let peers = new Map();
-    let gameLobbyChannel = null;
+    // Map of lobbyName -> { channel, autoMatch }. A client may be subscribed to
+    // several game lobbies at once (e.g. a discovery-only matchmaking lobby plus
+    // a per-match lobby). `autoMatch:false` lobbies relay messages for discovery
+    // but never set up WebRTC — RTC only happens in real match lobbies. P2P
+    // connections are deduped globally via `peers`.
+    let gameLobbyChannels = new Map();
     let p2pSignalingChannels = new Map();
     let broadcastChannels = new Map();
     let currentBroadcastChannels = new Set();
     let localUserId = userId;
     let currentGameLobby = null;
 
-    // Development mode detection
+    // Development mode — force signaling init on http://localhost (still uses getfire.net unless localRails)
     if (config.devMode === true) {
-      uri = "http://localhost:3000/";
       ssl = true;
       env = "development";
+      if (config.localRails === true) {
+        uri = "http://localhost:3000/";
+      }
+    }
+
+    function isLocalDevHost() {
+      const h = window.location.hostname;
+      return h === 'localhost' || h === '127.0.0.1' || h === '[::1]';
     }
 
     function generateUserId() {
@@ -86,24 +106,61 @@
       return Math.random().toString(36).substring(2) + Math.random().toString(36).substring(2);
     }
 
+    const SIGNALING_URL =
+      config.localRails === true ? 'ws://localhost:3000/ws/cable' : 'wss://getfire.net/ws/cable';
+
     // Initialize ActionCable consumer
     function initializeConsumer() {
-      let wsUrl;
-      if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        wsUrl = 'ws://localhost:3000/ws/cable';
-      } else {
-        wsUrl = 'wss://getfire.net/ws/cable';
-      }
-      GETFIREP2P.consumer = ActionCable.createConsumer(wsUrl);
+      GETFIREP2P.consumer = ActionCable.createConsumer(SIGNALING_URL);
+      console.log('[GetFire P2P] signaling →', SIGNALING_URL);
     }
 
-    // Join a game lobby for matchmaking
-    function joinGameLobby(lobbyName) {
-      if (gameLobbyChannel) {
-        gameLobbyChannel.unsubscribe();
+    function consumerUrlOk() {
+      const url = GETFIREP2P.consumer?.url ?? '';
+      if (config.localRails === true) return url.includes('localhost:3000');
+      return url.includes('getfire.net');
+    }
+
+    function ensureConnected() {
+      if (GETFIREP2P.consumer && consumerUrlOk()) return true;
+      if (GETFIREP2P.consumer) {
+        try {
+          GETFIREP2P.disconnect?.();
+        } catch {
+          /* replace stale consumer */
+        }
+        GETFIREP2P.consumer = null;
       }
+      if (typeof ActionCable === 'undefined') {
+        console.error('[GetFire P2P] ActionCable not loaded');
+        return false;
+      }
+      const canConnect = ssl || config.devMode === true || isLocalDevHost();
+      if (!canConnect) {
+        console.log('P2P Connection failed: SSL Required.');
+        return false;
+      }
+      initializeConsumer();
+      GETFIREP2P.ready = true;
+      console.log('GetFire P2P ready! User ID:', localUserId);
+      return true;
+    }
+
+    // Join a game lobby. Additive: joining a new lobby does NOT leave previously
+    // joined lobbies, so a client can hold a discovery lobby and a match lobby at
+    // once. When `autoMatch` is false the lobby only relays messages (for
+    // discovery) and never establishes WebRTC connections.
+    function joinGameLobby(lobbyName, autoMatch = true) {
+      if (!ensureConnected()) return;
+      if (!lobbyName) return;
       currentGameLobby = lobbyName;
-      gameLobbyChannel = GETFIREP2P.consumer.subscriptions.create(
+      const existing = gameLobbyChannels.get(lobbyName);
+      if (existing) {
+        // Upgrade a discovery lobby to a matchmaking lobby if re-joined as one.
+        if (autoMatch) existing.autoMatch = true;
+        return;
+      }
+      const channel = GETFIREP2P.consumer.subscriptions.create(
         { channel: "P2pChannel", game_lobby: lobbyName },
         {
           connected() {
@@ -116,9 +173,22 @@
             });
           },
           disconnected() { },
-          received(data) { handleGameLobbyMessage(data); }
+          received(data) { handleGameLobbyMessage(data, lobbyName); }
         }
       );
+      gameLobbyChannels.set(lobbyName, { channel, autoMatch });
+    }
+
+    // Leave a single game lobby (other lobbies stay joined).
+    function leaveGameLobby(lobbyName) {
+      const entry = gameLobbyChannels.get(lobbyName);
+      if (!entry) return;
+      try { entry.channel.unsubscribe(); } catch { /* already gone */ }
+      gameLobbyChannels.delete(lobbyName);
+      if (currentGameLobby === lobbyName) {
+        const remaining = Array.from(gameLobbyChannels.keys());
+        currentGameLobby = remaining.length ? remaining[remaining.length - 1] : null;
+      }
     }
 
     // Join a broadcast-only channel (no P2P matching)
@@ -180,22 +250,23 @@
       return signalingChannel;
     }
 
-    // Handle game lobby messages
-    function handleGameLobbyMessage(data) {
+    // Handle game lobby messages. `lobbyName` identifies which lobby channel the
+    // message arrived on so replies go back through the correct channel.
+    function handleGameLobbyMessage(data, lobbyName) {
       onGameLobbyMessage(data);
-      
-      // Skip auto-matching for broadcast channels
-      if (currentGameLobby && currentGameLobby.startsWith('broadcast-')) {
-        return; // Broadcast channels don't auto-match
-      }
-      
+
+      const entry = gameLobbyChannels.get(lobbyName);
+      if (!entry) return; // stale lobby
+      if (!entry.autoMatch) return; // discovery-only lobby: never set up RTC here
+      const channel = entry.channel;
+
       if ((data.type === 'player_join' || data.type === 'player_rejoin') && data.from !== localUserId) {
         // Auto-request match with new players (avoid duplicates)
         setTimeout(() => {
-          if (localUserId > data.from && !peers.has(data.from)) { 
+          if (localUserId > data.from && !peers.has(data.from)) {
             const roomId = generateSessionId();
-            gameLobbyChannel.perform('speak', {
-              game_lobby: currentGameLobby,
+            channel.perform('speak', {
+              game_lobby: lobbyName,
               type: 'match_request',
               from: localUserId,
               to: data.from,
@@ -205,7 +276,7 @@
         }, 200);
       } else if (data.type === 'match_request') {
         if (data.to === localUserId) {
-          acceptMatch(data.from, data.room_id);
+          acceptMatch(data.from, data.room_id, lobbyName);
         }
       } else if (data.type === 'match_accepted' && data.to === localUserId) {
         startP2PConnection(data.from, data.room_id, true);
@@ -226,14 +297,17 @@
     }
 
     // Accept match and start P2P
-    function acceptMatch(peerId, roomId) {
-      gameLobbyChannel.perform('speak', {
-        game_lobby: currentGameLobby,
-        type: 'match_accepted',
-        from: localUserId,
-        to: peerId,
-        room_id: roomId
-      });
+    function acceptMatch(peerId, roomId, lobbyName) {
+      const entry = gameLobbyChannels.get(lobbyName);
+      if (entry) {
+        entry.channel.perform('speak', {
+          game_lobby: lobbyName,
+          type: 'match_accepted',
+          from: localUserId,
+          to: peerId,
+          room_id: roomId
+        });
+      }
       startP2PConnection(peerId, roomId, false);
     }
 
@@ -438,16 +512,19 @@
         }
         peers.delete(peerId);
         
-        // Try to reconnect to any remaining peers in the lobby after cleanup
+        // Try to reconnect to any remaining peers across all joined lobbies.
         setTimeout(() => {
-          if (gameLobbyChannel && peers.size === 0) {
-            gameLobbyChannel.perform('speak', {
-              game_lobby: currentGameLobby,
-              type: 'player_rejoin',
-              from: localUserId,
-              room_type: 'ftxx-canvas',
-              content: 'ready for connections'
-            });
+          if (peers.size === 0) {
+            for (const [lobbyName, entry] of gameLobbyChannels) {
+              if (!entry.autoMatch) continue;
+              entry.channel.perform('speak', {
+                game_lobby: lobbyName,
+                type: 'player_rejoin',
+                from: localUserId,
+                room_type: 'ftxx-canvas',
+                content: 'ready for connections'
+              });
+            }
           }
         }, 2000);
       }
@@ -471,29 +548,49 @@
       sendBroadcast(data, channelName);
     };
     
-    // P2P matching lobbies (auto-connects peers)
-    GETFIREP2P.joinMatchLobby = function(lobbyName) {
-      joinGameLobby(lobbyName || roomType);
-    };
-    
-    // Legacy alias for backward compatibility
-    GETFIREP2P.joinLobby = function(lobbyName) {
-      joinGameLobby(lobbyName || roomType);
+    // P2P matching lobbies (auto-connects peers). Additive — does not leave
+    // other joined lobbies. Pass { autoMatch:false } for a discovery-only lobby
+    // that relays messages but never establishes WebRTC.
+    GETFIREP2P.joinMatchLobby = function(lobbyName, options) {
+      joinGameLobby(lobbyName || roomType, options?.autoMatch !== false);
     };
 
-    GETFIREP2P.requestMatch = function(targetPeerId) {
-      if (!gameLobbyChannel) {
-        console.error('Not connected to game lobby');
-        return;
+    GETFIREP2P.leaveMatchLobby = function(lobbyName) {
+      leaveGameLobby(lobbyName);
+    };
+
+    GETFIREP2P.announcePresence = function(lobbyName) {
+      for (const [name, entry] of gameLobbyChannels) {
+        if (!entry.autoMatch) continue;
+        if (lobbyName && name !== lobbyName) continue;
+        entry.channel.perform('speak', {
+          game_lobby: name,
+          type: 'player_rejoin',
+          from: localUserId,
+          room_type: roomType,
+          content: 'ready for connections',
+        });
       }
+    };
+
+    // Legacy alias for backward compatibility
+    GETFIREP2P.joinLobby = function(lobbyName, options) {
+      joinGameLobby(lobbyName || roomType, options?.autoMatch !== false);
+    };
+
+    GETFIREP2P.requestMatch = function(targetPeerId, lobbyName) {
       const roomId = generateSessionId();
-      gameLobbyChannel.perform('speak', {
-        game_lobby: currentGameLobby,
-        type: 'match_request',
-        from: localUserId,
-        to: targetPeerId,
-        room_id: roomId
-      });
+      for (const [name, entry] of gameLobbyChannels) {
+        if (!entry.autoMatch) continue;
+        if (lobbyName && name !== lobbyName) continue;
+        entry.channel.perform('speak', {
+          game_lobby: name,
+          type: 'match_request',
+          from: localUserId,
+          to: targetPeerId,
+          room_id: roomId
+        });
+      }
     };
 
     GETFIREP2P.sendData = function(data, targetPeerId = null) {
@@ -527,10 +624,11 @@
 
     GETFIREP2P.disconnect = function() {
       peers.forEach((peerData, peerId) => cleanupPeer(peerId));
-      if (gameLobbyChannel) {
-        gameLobbyChannel.unsubscribe();
-        gameLobbyChannel = null;
-      }
+      gameLobbyChannels.forEach((entry) => {
+        try { entry.channel.unsubscribe(); } catch { /* already gone */ }
+      });
+      gameLobbyChannels.clear();
+      currentGameLobby = null;
       p2pSignalingChannels.forEach((channel) => channel.unsubscribe());
       p2pSignalingChannels.clear();
     };
@@ -539,14 +637,9 @@
       return localUserId;
     };
 
-    // Initialize
-    if (ssl) {
-      initializeConsumer();
-      GETFIREP2P.ready = true;
-      console.log('GetFire P2P ready! User ID:', localUserId);
-    } else {
-      console.log('P2P Connection failed: SSL Required.');
-    }
+    GETFIREP2P.ensureConnected = ensureConnected;
+
+    ensureConnected();
     
     return GETFIREP2P;
   };

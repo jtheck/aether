@@ -1,0 +1,1 @@
+var n={id:"_primitive",async applyMesh(i,e){let t=i._primitive?.mode,r=t===0?1:t===1?2:t===3?3:t===5?4:void 0;r&&(e._topology=r);let o=i._worldMatrix;o[0]*(o[5]*o[10]-o[6]*o[9])+o[1]*(o[6]*o[8]-o[4]*o[10])+o[2]*(o[4]*o[9]-o[5]*o[8])>0&&(e._reverseWinding=!0)}};export{n as default};

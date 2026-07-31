@@ -1,21 +1,36 @@
-// Render-only GLB paths per sim unit type (military roster for demo armies).
+// Render-only GLB paths per sim unit type.
+// Hierarchy transforms are baked (same idea as scenery) so multi-mesh assets
+// like collar.glb keep every part, and glTF root mirroring is preserved.
 
+import {
+  cloneTransformNode,
+  createMeshFromData,
+  loadGltf,
+} from '../vendor/lite/liteVendor.js';
 import { UNIT } from '../sim/unitTypes.js';
+import { isVatUnitType, VAT_UNIT_DEFS } from './vatUnits.js';
 
-/** v1 glTF units were authored oversized; game/units.js used scale ~0.5. */
-export const LEGACY_MODEL_SCALE = 1;
+/** World Y for unit soles (ground plane stays at y=0). */
+export const UNIT_FOOT_Y = 1;
 
+/** Static (non-VAT) thin-instance templates. */
 /** @type {Readonly<Record<number, string>>} */
 export const UNIT_MODEL_URLS = {
   [UNIT.WARRIOR]: '/assets/models/warrior.glb',
   [UNIT.ARCHER]: '/assets/models/archer.glb',
-  [UNIT.SPEARMAN]: '/assets/models/monk.glb',
-  [UNIT.SCOUT]: '/assets/models/brigand.glb',
-  [UNIT.CAVALRY]: '/assets/models/engineer.glb',
 };
 
 export function hasUnitModel(typeId) {
-  return typeId in UNIT_MODEL_URLS;
+  return typeId in UNIT_MODEL_URLS || isVatUnitType(typeId);
+}
+
+/** All thin-instanced unit type ids (static + VAT). */
+export function unitModelTypeIds() {
+  const ids = new Set([
+    ...Object.keys(UNIT_MODEL_URLS).map(Number),
+    ...Object.keys(VAT_UNIT_DEFS).map(Number),
+  ]);
+  return [...ids];
 }
 
 /** Depth-first — first mesh with geometry/material in a loaded glTF hierarchy. */
@@ -28,17 +43,230 @@ export function findFirstMesh(node) {
   return null;
 }
 
-/** Feet on y=0, XZ centered — legacy uniform scale only (no per-type resize). */
-export function prepareLegacyModel(mesh, scale = LEGACY_MODEL_SCALE) {
+export function collectRenderableMeshes(node, out = []) {
+  if (node?.material) out.push(node);
+  for (const child of node?.children ?? []) collectRenderableMeshes(child, out);
+  return out;
+}
+
+/** Union local AABBs across a loaded glTF hierarchy (node translations only). */
+export function computeHierarchyBounds(root) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  let any = false;
+
+  function visit(node, ox, oy, oz) {
+    const tx = ox + (node.position?.x ?? 0);
+    const ty = oy + (node.position?.y ?? 0);
+    const tz = oz + (node.position?.z ?? 0);
+    if (node.boundMin && node.boundMax) {
+      any = true;
+      min[0] = Math.min(min[0], tx + node.boundMin[0]);
+      min[1] = Math.min(min[1], ty + node.boundMin[1]);
+      min[2] = Math.min(min[2], tz + node.boundMin[2]);
+      max[0] = Math.max(max[0], tx + node.boundMax[0]);
+      max[1] = Math.max(max[1], ty + node.boundMax[1]);
+      max[2] = Math.max(max[2], tz + node.boundMax[2]);
+    }
+    for (const child of node.children ?? []) visit(child, tx, ty, tz);
+  }
+
+  visit(root, 0, 0, 0);
+  return any ? { min, max } : null;
+}
+
+function bakeSourceGeometry(source, world) {
+  const srcPositions = source._cpuPositions;
+  const srcIndices = source._cpuIndices;
+  if (!srcPositions || !srcIndices) {
+    throw new Error(`mesh "${source.name}" has no CPU geometry`);
+  }
+
+  const positions = new Float32Array(srcPositions.length);
+  for (let i = 0; i < srcPositions.length; i += 3) {
+    const x = srcPositions[i];
+    const y = srcPositions[i + 1];
+    const z = srcPositions[i + 2];
+    positions[i] = world[0] * x + world[4] * y + world[8] * z + world[12];
+    positions[i + 1] = world[1] * x + world[5] * y + world[9] * z + world[13];
+    positions[i + 2] = world[2] * x + world[6] * y + world[10] * z + world[14];
+  }
+
+  // Rebuild normals from baked triangles (same LH / CW convention as scenery).
+  const indices = srcIndices instanceof Uint32Array
+    ? srcIndices
+    : new Uint32Array(srcIndices);
+  const normals = computeSmoothNormalsLH(positions, indices);
+
+  return {
+    positions,
+    normals,
+    indices,
+    uvs: source._cpuUvs ? new Float32Array(source._cpuUvs) : null,
+    material: source.material,
+    reverseWinding: true,
+  };
+}
+
+/** Smooth normals for Lite left-handed / CW front faces (AC × AB). */
+function computeSmoothNormalsLH(positions, indices) {
+  const normals = new Float32Array(positions.length);
+  for (let i = 0; i < indices.length; i += 3) {
+    const ia = indices[i] * 3;
+    const ib = indices[i + 1] * 3;
+    const ic = indices[i + 2] * 3;
+    const abx = positions[ib] - positions[ia];
+    const aby = positions[ib + 1] - positions[ia + 1];
+    const abz = positions[ib + 2] - positions[ia + 2];
+    const acx = positions[ic] - positions[ia];
+    const acy = positions[ic + 1] - positions[ia + 1];
+    const acz = positions[ic + 2] - positions[ia + 2];
+    const nx = acy * abz - acz * aby;
+    const ny = acz * abx - acx * abz;
+    const nz = acx * aby - acy * abx;
+    for (const o of [ia, ib, ic]) {
+      normals[o] += nx;
+      normals[o + 1] += ny;
+      normals[o + 2] += nz;
+    }
+  }
+  for (let i = 0; i < normals.length; i += 3) {
+    const len = Math.hypot(normals[i], normals[i + 1], normals[i + 2]) || 1;
+    normals[i] /= len;
+    normals[i + 1] /= len;
+    normals[i + 2] /= len;
+  }
+  return normals;
+}
+
+async function bakeGltfParts(engine, url) {
+  const container = await loadGltf(engine, url);
+  const root = cloneTransformNode(container.entities[0]);
+  const sources = collectRenderableMeshes(root);
+  if (sources.length === 0) throw new Error(`no mesh in ${url}`);
+  return sources.map((source) => bakeSourceGeometry(source, source.worldMatrix));
+}
+
+function boundsOfPositions(positions) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < positions.length; i += 3) {
+    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (z < minZ) minZ = z;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+    if (z > maxZ) maxZ = z;
+  }
+  return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
+}
+
+/**
+ * Load a glTF, bake hierarchy world matrices, one mesh per source primitive
+ * (preserves multi-material collars: red / white / yellow bands).
+ * All parts share the same foot lift so instance matrices stay aligned.
+ *
+ * @returns {Promise<object[]>}
+ */
+export async function loadBakedUnitMeshParts(engine, url) {
+  const baked = await bakeGltfParts(engine, url);
+  let footY = Infinity;
+  for (const part of baked) {
+    for (let i = 1; i < part.positions.length; i += 3) {
+      if (part.positions[i] < footY) footY = part.positions[i];
+    }
+  }
+  if (!Number.isFinite(footY)) footY = 0;
+
+  return baked.map((part, index) => {
+    const mesh = createMeshFromData(
+      engine,
+      `${url}#${index}`,
+      part.positions,
+      part.normals,
+      part.indices instanceof Uint32Array ? part.indices : new Uint32Array(part.indices),
+      part.uvs ?? undefined,
+    );
+    mesh.material = part.material;
+    mesh.pickable = false;
+    mesh._reverseWinding = part.reverseWinding;
+    const b = boundsOfPositions(part.positions);
+    mesh.boundMin = b.min;
+    mesh.boundMax = b.max;
+    mesh.scaling.x = 1;
+    mesh.scaling.y = 1;
+    mesh.scaling.z = 1;
+    mesh.position.x = 0;
+    mesh.position.y = -footY;
+    mesh.position.z = 0;
+    return mesh;
+  });
+}
+
+/**
+ * Load a glTF, bake hierarchy world matrices, merge all meshes into one
+ * thin-instance template (feet-centered via prepareLegacyModel).
+ * Prefer {@link loadBakedUnitMeshParts} when materials must stay separate.
+ */
+export async function loadBakedUnitMesh(engine, url) {
+  const baked = await bakeGltfParts(engine, url);
+
+  let vertCount = 0;
+  let indexCount = 0;
+  let hasUvs = false;
+  for (const part of baked) {
+    vertCount += part.positions.length / 3;
+    indexCount += part.indices.length;
+    if (part.uvs) hasUvs = true;
+  }
+
+  const positions = new Float32Array(vertCount * 3);
+  const normals = new Float32Array(vertCount * 3);
+  const indices = new Uint32Array(indexCount);
+  const uvs = hasUvs ? new Float32Array(vertCount * 2) : undefined;
+  let vBase = 0;
+  let iBase = 0;
+  for (const part of baked) {
+    positions.set(part.positions, vBase * 3);
+    normals.set(part.normals, vBase * 3);
+    if (uvs) {
+      if (part.uvs) uvs.set(part.uvs, vBase * 2);
+      else {
+        for (let i = 0; i < part.positions.length / 3; i++) {
+          uvs[(vBase + i) * 2] = 0;
+          uvs[(vBase + i) * 2 + 1] = 0;
+        }
+      }
+    }
+    const idx = part.indices;
+    for (let i = 0; i < idx.length; i++) indices[iBase + i] = idx[i] + vBase;
+    vBase += part.positions.length / 3;
+    iBase += idx.length;
+  }
+
+  const mesh = createMeshFromData(engine, url, positions, normals, indices, uvs);
+  mesh.material = baked[0].material;
+  mesh.pickable = false;
+  mesh._reverseWinding = baked.some((p) => p.reverseWinding);
+  const b = boundsOfPositions(positions);
+  mesh.boundMin = b.min;
+  mesh.boundMax = b.max;
+  prepareLegacyModel(mesh);
+  return mesh;
+}
+
+/**
+ * Feet on y=0 locally (instance matrix adds ground Y).
+ * Keep authored XZ origin — do not recenter on AABB (swords/bows pull the body off the cursor).
+ */
+export function prepareLegacyModel(mesh) {
   const min = mesh.boundMin ?? [-0.5, 0, -0.5];
-  const max = mesh.boundMax ?? [0.5, 1, 0.5];
-  const centerX = (min[0] + max[0]) * 0.5;
   const footY = min[1];
-  const centerZ = (min[2] + max[2]) * 0.5;
-  mesh.scaling.x = scale;
-  mesh.scaling.y = scale;
-  mesh.scaling.z = scale;
-  mesh.position.x = -centerX * scale;
-  mesh.position.y = -footY * scale;
-  mesh.position.z = -centerZ * scale;
+  mesh.scaling.x = 1;
+  mesh.scaling.y = 1;
+  mesh.scaling.z = 1;
+  mesh.position.x = 0;
+  mesh.position.y = -footY;
+  mesh.position.z = 0;
 }

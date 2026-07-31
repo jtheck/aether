@@ -1,0 +1,1 @@
+import{a as u}from"./chunk-L72ETLOD.js";var l={build(o,t){let e=t.state,r=t.input(o,"particle")(e);if(t.setOutput(o.id,"output",()=>r),!t.isConnected(o,"color"))return;let p=t.input(o,"color");r._updateQueue.push((s,n)=>{e.particle=s,e.system=n,u(s.color,p(e))})}};export{l as updateColorBlock};

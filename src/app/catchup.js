@@ -59,10 +59,12 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
         `Catch-up checksum mismatch: got ${session._lastChecksum?.toString(16)}, expected ${expectedChecksum.toString(16)}`,
       );
     }
+    // Resume lockstep only after a clean replay. Failures leave pauseLockstep
+    // set so pump() cannot free-run a half-caught-up world during retry.
+    session.pauseLockstep = false;
     return session._lastChecksum;
   } finally {
     session.replayingCatchUp = false;
-    session.pauseLockstep = false;
   }
 }
 

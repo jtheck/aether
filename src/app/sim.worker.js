@@ -1,12 +1,21 @@
 // Web Worker — deterministic sim authority (one commitTick = one lockstep step).
 
-import { buildDemoField } from '../sim/field.js';
-import { buildWorldFromConfig, PLAYER } from '../sim/worldSetup.js';
+import { buildField, fieldSnapshot } from '../sim/field.js';
+import { populateScenery } from '../sim/scenery.js';
+import { buildWorldFromConfig, KOTH_BASES, PLAYER } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { generateAiCommands } from '../sim/ai.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
-import { mapSharedState, publishWorld, publishType } from '../sim/sharedState.js';
+import {
+  beginSharedPublish,
+  endSharedPublish,
+  mapSharedState,
+  publishProjectiles,
+  publishWorld,
+  publishType,
+  SHARED_LAYOUT_VERSION,
+} from '../sim/sharedState.js';
 
 function serializeKoth(k) {
   if (!k) return null;
@@ -22,6 +31,7 @@ let world;
 let field;
 let views;
 let aiPlayers = [];
+let publishedTypeCount = 0;
 
 function commandsForTick(frames) {
   let cmds = mergeFrames(frames);
@@ -38,19 +48,36 @@ self.onmessage = (e) => {
     if (msg.type === 'init') {
       views = mapSharedState(msg.sab);
       aiPlayers = msg.config.aiPlayers ?? [];
-      field = buildDemoField(msg.config.seed);
+      field = buildField(msg.config.seed);
       world = buildWorldFromConfig(msg.config);
+      populateScenery(field, world, KOTH_BASES);
+      beginSharedPublish(views);
       publishType(world, views);
+      publishedTypeCount = world.count;
       publishWorld(world, views);
-      postMessage({ type: 'ready', count: world.count });
+      publishProjectiles(world, views);
+      endSharedPublish(views);
+      postMessage({
+        type: 'ready',
+        count: world.count,
+        field: fieldSnapshot(field),
+        layoutVersion: SHARED_LAYOUT_VERSION,
+      });
     } else if (msg.type === 'commitTick') {
       step(world, field, commandsForTick(msg.frames));
+      beginSharedPublish(views);
       publishWorld(world, views);
-      publishType(world, views);
+      if (world.count > publishedTypeCount) {
+        publishType(world, views, publishedTypeCount);
+        publishedTypeCount = world.count;
+      }
+      publishProjectiles(world, views);
+      endSharedPublish(views);
       postMessage({
         type: 'stepDone',
         tick: world.tick,
         checksum: checksum(world),
+        metrics: { ...world.metrics },
         kothMatchOver: world.kothMatchOver ?? 0,
         koth: serializeKoth(world.koth),
       });

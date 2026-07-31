@@ -11,13 +11,20 @@ import { step } from './step.js';
 import { checksum } from './checksum.js';
 import { rngRange } from './rng.js';
 import { CMD } from './commands.js';
-import { buildDemoField } from './field.js';
+import { buildField, createField, isSlowTile, worldToTile } from './field.js';
+import {
+  populateScenery,
+  rockFootprintRadius,
+  SCENERY,
+  SPAWN_CLEAR_RADIUS_TILES,
+} from './scenery.js';
 import * as fx from './fixed.js';
 import { buildWorldFromConfig, UNITS_PER_ARMY, KOTH_BASES } from './worldSetup.js';
 import { ownsPlayerFrame } from '../koth/protocol.js';
 import { createEmptyRoster, activateSlot, releaseUser } from '../koth/roster.js';
+import { UNIT } from './unitTypes.js';
 
-const field = buildDemoField(0xabc);
+const field = buildField(0xabc);
 
 function build(seed) {
   const w = createWorld(seed);
@@ -184,12 +191,166 @@ function committedLedgerExportOk() {
   return exportedBeforeCommit.length === 0 && exportedAfterCommit.length === 1;
 }
 
+function sceneryLayoutOk() {
+  const seed = 0x5ce9;
+  const aField = buildField(seed);
+  const bField = buildField(seed);
+  const cField = buildField(seed + 1);
+  populateScenery(aField);
+  populateScenery(bField);
+  populateScenery(cField);
+
+  const same =
+    aField.sceneryType.every((v, i) => v === bField.sceneryType[i]) &&
+    aField.pass.every((v, i) => v === bField.pass[i]) &&
+    aField.slowMask.every((v, i) => v === bField.slowMask[i]);
+  const different = aField.sceneryType.some((v, i) => v !== cField.sceneryType[i]);
+
+  let rockBlocked = false;
+  let treeSlow = false;
+  for (let i = 0; i < aField.sceneryType.length; i++) {
+    const kind = aField.sceneryType[i];
+    if (!rockBlocked && kind >= SCENERY.ROCK_PLAIN) {
+      const tx = i % aField.width;
+      const tz = (i / aField.width) | 0;
+      const radius = rockFootprintRadius(kind);
+      rockBlocked = true;
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx * dx + dz * dz > (radius + 0.5) ** 2) continue;
+          if (aField.pass[(tz + dz) * aField.width + tx + dx] !== 0) rockBlocked = false;
+        }
+      }
+    }
+    if (!treeSlow && kind === SCENERY.TREE) {
+      const tx = i % aField.width;
+      const tz = (i / aField.width) | 0;
+      treeSlow = isSlowTile(aField, tx, tz) && aField.pass[i] !== 0;
+    }
+    if (rockBlocked && treeSlow) break;
+  }
+
+  const masked = buildField(seed);
+  for (let z = 20; z < 30; z++) {
+    for (let x = 20; x < 30; x++) masked.activeMask[z * masked.width + x] = 0;
+  }
+  populateScenery(masked);
+  let maskClear = true;
+  for (let z = 20; z < 30; z++) {
+    for (let x = 20; x < 30; x++) {
+      if (masked.sceneryType[z * masked.width + x] !== SCENERY.NONE) maskClear = false;
+    }
+  }
+
+  const reserved = buildField(seed);
+  populateScenery(reserved, null, [[0, 0]]);
+  const cx = worldToTile(0);
+  const cz = worldToTile(0);
+  let spawnClear = true;
+  for (let dz = -SPAWN_CLEAR_RADIUS_TILES; dz <= SPAWN_CLEAR_RADIUS_TILES; dz++) {
+    for (let dx = -SPAWN_CLEAR_RADIUS_TILES; dx <= SPAWN_CLEAR_RADIUS_TILES; dx++) {
+      if (dx * dx + dz * dz > SPAWN_CLEAR_RADIUS_TILES ** 2) continue;
+      if (reserved.sceneryType[(cz + dz) * reserved.width + cx + dx] !== SCENERY.NONE) {
+        spawnClear = false;
+      }
+    }
+  }
+
+  return same && different && rockBlocked && treeSlow && maskClear && spawnClear;
+}
+
+function treeMovementSlowOk() {
+  const normalField = createField(1);
+  normalField.pass.fill(1);
+  const slowField = createField(1);
+  slowField.pass.fill(1);
+  const start = fx.fromInt(0);
+  const target = fx.fromInt(20);
+  const tx = worldToTile(start);
+  const tz = worldToTile(start);
+  slowField.slowMask[tz * slowField.width + tx] = 1;
+
+  const makeMover = () => {
+    const w = createWorld(1);
+    spawn(w, { x: start, y: start, type: 0, owner: 0 });
+    return w;
+  };
+  const normal = makeMover();
+  const slow = makeMover();
+  const cmd = [{ type: CMD.MOVE, entities: [0], tx: [target], ty: [start] }];
+  step(normal, normalField, cmd);
+  step(slow, slowField, cmd);
+  const normalDistance = fx.abs(normal.px[0] - start);
+  const slowDistance = fx.abs(slow.px[0] - start);
+  return normalDistance > 0 && slowDistance > 0 && slowDistance * 2 === normalDistance;
+}
+
+function highEntityReferenceOk() {
+  const w = createWorld(1);
+  w.count = 50000;
+  w.targetEntity[49999] = 49998;
+  return w.targetEntity[49999] === 49998;
+}
+
+function runGridChecksum() {
+  const w = createWorld(0x600d);
+  const open = createField(0x600d);
+  open.pass.fill(1);
+  for (let i = 0; i < 500; i++) {
+    spawn(w, {
+      x: fx.fromInt((i % 25) * 2 - 25),
+      y: fx.fromInt(((i / 25) | 0) * 2 - 20),
+      type: 0,
+      owner: 0,
+    });
+  }
+  for (let tick = 0; tick < 20; tick++) step(w, open);
+  return checksum(w);
+}
+
+function runProjectileTrace() {
+  const w = createWorld(0xa770);
+  const open = createField(0xa770);
+  open.pass.fill(1);
+  const archer = spawn(w, {
+    x: fx.fromInt(0),
+    y: fx.fromInt(0),
+    type: UNIT.ARCHER,
+    owner: 0,
+  });
+  const target = spawn(w, {
+    x: fx.fromInt(12),
+    y: fx.fromInt(0),
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const trace = [];
+  let sawProjectile = false;
+  for (let tick = 0; tick < 80; tick++) {
+    const commands =
+      tick === 0 ? [{ type: CMD.ATTACK, entities: [archer], target }] : undefined;
+    step(w, open, commands);
+    if (w.projectiles.activeCount > 0) sawProjectile = true;
+    trace.push(checksum(w));
+  }
+  return { trace, sawProjectile };
+}
+
 const worldSetupOk = kothWorldSetupOk();
 const ownerFrameOk = ownershipOk();
 const catchupOk = catchupReplayOk();
 const samePlayerOrderOk = samePlayerCommandOrderOk();
 const joinDeathOk = joinAndDeathOk();
 const committedLedgerOk = committedLedgerExportOk();
+const sceneryOk = sceneryLayoutOk();
+const treeSlowOk = treeMovementSlowOk();
+const highEntityOk = highEntityReferenceOk();
+const gridDeterminismOk = runGridChecksum() === runGridChecksum();
+const projectileA = runProjectileTrace();
+const projectileB = runProjectileTrace();
+const projectileDeterminismOk =
+  projectileA.sawProjectile &&
+  projectileA.trace.every((value, i) => value === projectileB.trace[i]);
 
 console.log(`same seed   A=${a.toString(16)}  B=${b.toString(16)}  ->  ${sameSeed ? 'OK' : 'MISMATCH'}`);
 console.log(`diff seed   C=${c.toString(16)}                  ->  ${diffSeed ? 'OK (differs)' : 'SUSPICIOUS (same)'}`);
@@ -201,6 +362,11 @@ console.log(`koth catch-up replay equivalence             ->  ${catchupOk ? 'OK'
 console.log(`koth same-player command order matters       ->  ${samePlayerOrderOk ? 'OK' : 'MISMATCH'}`);
 console.log(`koth join spawn + death cleanup              ->  ${joinDeathOk ? 'OK' : 'MISMATCH'}`);
 console.log(`koth committed ledger export                 ->  ${committedLedgerOk ? 'OK' : 'MISMATCH'}`);
+console.log(`scenery deterministic placement + collision ->  ${sceneryOk ? 'OK' : 'MISMATCH'}`);
+console.log(`tree movement slowdown                       ->  ${treeSlowOk ? 'OK' : 'MISMATCH'}`);
+console.log(`50k entity reference width                  ->  ${highEntityOk ? 'OK' : 'MISMATCH'}`);
+console.log(`grid separation repeated-run checksum       ->  ${gridDeterminismOk ? 'OK' : 'MISMATCH'}`);
+console.log(`projectile repeated-run checksum trace      ->  ${projectileDeterminismOk ? 'OK' : 'MISMATCH'}`);
 
 if (!sameSeed) ok = false;
 if (!diffSeed) ok = false;
@@ -212,6 +378,11 @@ if (!catchupOk) ok = false;
 if (!samePlayerOrderOk) ok = false;
 if (!joinDeathOk) ok = false;
 if (!committedLedgerOk) ok = false;
+if (!sceneryOk) ok = false;
+if (!treeSlowOk) ok = false;
+if (!highEntityOk) ok = false;
+if (!gridDeterminismOk) ok = false;
+if (!projectileDeterminismOk) ok = false;
 
 console.log(ok ? '\n[PASS] determinism holds (with commands + movement + combat)' : '\n[FAIL] determinism broken');
 process.exit(ok ? 0 : 1);

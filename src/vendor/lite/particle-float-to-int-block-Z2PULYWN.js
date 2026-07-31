@@ -1,0 +1,1 @@
+function i(n,t){switch(n){case 1:return Math.ceil(t);case 2:return Math.floor(t);case 3:return Math.trunc(t);default:return Math.round(t)}}var s={build(n,t){let e=typeof n.serialized.operation=="number"?n.serialized.operation:0,o=t.input(n,"input",()=>0),r=O=>i(e,o(O));t.setOutput(n.id,"output",r)}};export{s as particleFloatToIntBlock};

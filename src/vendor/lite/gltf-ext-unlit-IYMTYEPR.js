@@ -1,0 +1,1 @@
+var n={id:"KHR_materials_unlit",async applyMaterial(t){if(!t._rawMatDef?.extensions?.KHR_materials_unlit)return null;let e=t._baseColorFactor,l=t._baseColorImage?[e[0],e[1],e[2]]:void 0;return l?{unlit:!0,unlitColor:l}:{unlit:!0}}};export{n as default};

@@ -1,7 +1,7 @@
 // P2P lockstep transport — GetFire match lobby + command/tick_confirm relay.
 // Sim rules live in simSession.js; this file only moves frames between peers.
 
-import { stressPerSideFromSearch } from '../sim/worldSetup.js';
+import { animStressPerSideFromSearch, stressPerSideFromSearch } from '../sim/worldSetup.js';
 
 const LOBBY = 'aether-v2-dev';
 const MATCH_TIMEOUT_MS = 120_000;
@@ -262,11 +262,12 @@ export function createNetMatch(options = {}) {
   };
 }
 
-/** Net on by default; ?solo=1 or ?stress=N disables. */
+/** Net on by default; ?solo=1, ?stress=N, or ?animStress=N disables. */
 export function netModeFromSearch(search = '') {
   const params = new URLSearchParams(search);
   if (params.has('solo')) return false;
   if (stressPerSideFromSearch(search) > 0) return false;
+  if (animStressPerSideFromSearch(search) > 0) return false;
   if (params.has('net') && params.get('net') === '0') return false;
   return true;
 }

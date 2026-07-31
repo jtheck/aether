@@ -3,8 +3,9 @@
 // Order each tick:
 //   1) apply commands (the only external input)
 //   2) combat acquire + attacks
-//   3) movement (path follow + separation)
-//   4) advance the tick counter
+//   3) movement (path follow)
+//   4) light separation (idle/stacked only — never fights path follow)
+//   5) advance the tick counter
 //
 // Determinism rules (enforced by discipline + the partition): no Date.now /
 // performance.now, no Math.random (rng.js only), no DOM / Babylon, all math in
@@ -13,31 +14,65 @@
 import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
 import { combatSystem } from './combat.js';
-import { movementGoal, advanceWaypoint, checkStuck, planPathBudget, attackInRange } from './path.js';
-import { getUnitDef } from './unitTypes.js';
+import {
+  movementGoal,
+  advanceWaypoint,
+  checkStuck,
+  planPathBudget,
+  attackInRange,
+  atFinalDest,
+  waypointReached,
+  onPathExhausted,
+  wpBase,
+  MAX_REPATHS,
+} from './path.js';
+import { getUnitDef, UNIT_DEFS } from './unitTypes.js';
 import { ORDER } from './world.js';
-import { WORLD_HALF } from './field.js';
+import { worldToTile, isPassable, isSlowTile } from './field.js';
+import { TREE_SLOW_MULTIPLIER } from './scenery.js';
 import { kothMetaStep } from './kothMeta.js';
+import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
+import { projectileSystem } from './projectiles.js';
 
-const ARRIVE = fx.fromFloat(1.5);
-const SEP_RADIUS = fx.fromFloat(3.0);
-const SEP_PUSH = fx.fromFloat(0.35);
-const SEP_CELL = fx.fromFloat(8);
+const SEP_RADIUS = fx.fromFloat(2.5);
+const SEP_PUSH = fx.fromFloat(0.2);
+const MOVE_AVOID_PUSH = fx.fromFloat(0.06);
 const GRID_SEP_THRESHOLD = 400;
-
-function pathBudget(count) {
-  return Math.min(512, Math.max(96, count >> 3));
+// Visit every source cell over eight deterministic ticks to bound dense idle work.
+const SEP_PHASES = 8;
+const SEP_NEIGHBORS = [[0, 1], [1, -1], [1, 0], [1, 1]];
+const SEP_TYPE_COUNT = UNIT_DEFS.length;
+const SEP_MIN_DIST = new Int32Array(SEP_TYPE_COUNT * SEP_TYPE_COUNT);
+const SEP_MIN_DIST_SQ = new Int32Array(SEP_TYPE_COUNT * SEP_TYPE_COUNT);
+for (let a = 0; a < SEP_TYPE_COUNT; a++) {
+  for (let b = 0; b < SEP_TYPE_COUNT; b++) {
+    const key = a * SEP_TYPE_COUNT + b;
+    SEP_MIN_DIST[key] = fx.mul(
+      SEP_RADIUS,
+      fx.fromFloat(UNIT_DEFS[a].size / 6 + UNIT_DEFS[b].size / 6),
+    );
+    SEP_MIN_DIST_SQ[key] = fx.mul(SEP_MIN_DIST[key], SEP_MIN_DIST[key]);
+  }
 }
 
 export function step(world, field, commands) {
+  world.metrics.combatCandidates = 0;
+  world.metrics.separationPairs = 0;
+  world.metrics.movingAvoidancePairs = 0;
+  world.metrics.losAttempts = 0;
+  world.metrics.astarSearches = 0;
+  world.metrics.projectileSpawned = 0;
+  world.metrics.projectileHits = 0;
+  world.metrics.projectileMisses = 0;
+  world.metrics.projectileOverflow = 0;
   applyCommands(world, field, commands);
   combatSystem(world, field);
+  projectileSystem(world, field);
   kothMetaStep(world);
-  planPathBudget(world, field, pathBudget(world.count));
+  planPathBudget(world, field);
   movementSystem(world, field);
-  if (world.count < GRID_SEP_THRESHOLD || (world.tick & 1) === 0) {
-    separationSystem(world);
-  }
+  movingAvoidanceSystem(world, field);
+  separationSystem(world, field);
   world.tick++;
 }
 
@@ -57,9 +92,23 @@ function movementSystem(w, field) {
     }
 
     // In attack range — hold and strike; combat cleared the path.
-    if (order === ORDER.ATTACK && attackInRange(w, i)) continue;
+    if (order === ORDER.ATTACK && attackInRange(w, i)) {
+      w.vx[i] = 0;
+      w.vy[i] = 0;
+      continue;
+    }
 
-    const goal = movementGoal(w, field, i);
+    // Final destination reached — settle the order (v1 arrivalRadius).
+    if (
+      (order === ORDER.MOVE || order === ORDER.ATTACK_MOVE) &&
+      w.hasTarget[i] &&
+      atFinalDest(w, i)
+    ) {
+      finishMove(w, i, order);
+      continue;
+    }
+
+    let goal = movementGoal(w, field, i);
     if (!goal) {
       w.vx[i] = 0;
       w.vy[i] = 0;
@@ -67,39 +116,204 @@ function movementSystem(w, field) {
     }
 
     checkStuck(w, field, i);
+    // Stuck may have rebuilt the path — refresh goal.
+    if (w.navWpCount[i] > 0) {
+      const base = wpBase(i) + w.navWpIndex[i];
+      goal = { x: w.navWx[base], y: w.navWy[base] };
+    }
+
+    if (waypointReached(w, i)) {
+      if (advanceWaypoint(w, i)) {
+        const base = wpBase(i) + w.navWpIndex[i];
+        goal = { x: w.navWx[base], y: w.navWy[base] };
+      } else {
+        // Path exhausted — repath or seek final dest (do not go IDLE early).
+        onPathExhausted(w, field, i);
+        if (atFinalDest(w, i)) {
+          finishMove(w, i, order);
+          continue;
+        }
+        if (w.navWpCount[i] === 0) {
+          // Gave up after max repaths, or A* found nothing — stop cleanly.
+          if (w.repathCount[i] >= MAX_REPATHS) {
+            finishMove(w, i, order);
+          } else {
+            w.vx[i] = 0;
+            w.vy[i] = 0;
+          }
+          continue;
+        }
+        const base = wpBase(i) + w.navWpIndex[i];
+        goal = { x: w.navWx[base], y: w.navWy[base] };
+      }
+    }
 
     const dx = goal.x - w.px[i];
     const dy = goal.y - w.py[i];
     const dist = fx.len(dx, dy);
-    const speed = w.speed[i];
-
-    if (dist <= ARRIVE) {
-      advanceWaypoint(w, i, ARRIVE);
-      if (w.navWpIndex[i] >= w.navWpCount[i]) {
-        w.vx[i] = 0;
-        w.vy[i] = 0;
-        if (order === ORDER.MOVE) {
-          w.order[i] = ORDER.IDLE;
-          w.hasTarget[i] = 0;
-        }
-        // ATTACK_MOVE keeps order — combat acquire may pick a target.
-      }
+    if (dist === 0) {
+      w.vx[i] = 0;
+      w.vy[i] = 0;
       continue;
     }
 
-    const mx = fx.mul(fx.div(dx, dist), speed);
-    const my = fx.mul(fx.div(dy, dist), speed);
-    w.px[i] += mx;
-    w.py[i] += my;
-    w.vx[i] = mx;
-    w.vy[i] = my;
+    const currentTx = worldToTile(w.px[i]);
+    const currentTz = worldToTile(w.py[i]);
+    const speed = isSlowTile(field, currentTx, currentTz)
+      ? fx.mul(w.speed[i], TREE_SLOW_MULTIPLIER)
+      : w.speed[i];
+    // Don't overshoot the goal in one tick (reduces orbit jitter).
+    const stepDist = dist < speed ? dist : speed;
+    const mx = fx.mul(fx.div(dx, dist), stepDist);
+    const my = fx.mul(fx.div(dy, dist), stepDist);
+    applyMoveWithSlide(w, field, i, mx, my);
   }
 }
 
-// Light separation so formations don't pile onto one pixel.
-function separationSystem(w) {
+function finishMove(w, i, order) {
+  w.navWpCount[i] = 0;
+  w.navWpIndex[i] = 0;
+  w.pathRequest[i] = 0;
+  w.vx[i] = 0;
+  w.vy[i] = 0;
+  if (order === ORDER.MOVE) {
+    w.order[i] = ORDER.IDLE;
+    w.hasTarget[i] = 0;
+  }
+  // ATTACK_MOVE keeps order — combat acquire may pick a target.
+}
+
+/** Axis-by-axis wall slide — enter blocked tiles only when escaping them. */
+function applyMoveWithSlide(w, field, i, mx, my) {
+  const oldX = w.px[i];
+  const oldY = w.py[i];
+  const newX = oldX + mx;
+  const newY = oldY + my;
+
+  const oldTx = worldToTile(oldX);
+  const oldTz = worldToTile(oldY);
+  const newTx = worldToTile(newX);
+  const newTz = worldToTile(newY);
+
+  const wasPassable = isPassable(field, oldTx, oldTz);
+  const isNewPassable = isPassable(field, newTx, newTz);
+
+  if (!wasPassable || isNewPassable) {
+    w.px[i] = newX;
+    w.py[i] = newY;
+    w.vx[i] = mx;
+    w.vy[i] = my;
+    return;
+  }
+
+  const xOnlyPassable = isPassable(field, worldToTile(newX), oldTz);
+  const yOnlyPassable = isPassable(field, oldTx, worldToTile(newY));
+
+  if (!xOnlyPassable && !yOnlyPassable) {
+    w.vx[i] = 0;
+    w.vy[i] = 0;
+    return;
+  }
+  if (!xOnlyPassable) {
+    w.py[i] = newY;
+    w.vx[i] = 0;
+    w.vy[i] = my;
+    return;
+  }
+  if (!yOnlyPassable) {
+    w.px[i] = newX;
+    w.vx[i] = mx;
+    w.vy[i] = 0;
+    return;
+  }
+  // Diagonal corner: drop the larger axis to hug the wall.
+  if (fx.abs(mx) > fx.abs(my)) {
+    w.py[i] = newY;
+    w.vx[i] = 0;
+    w.vy[i] = my;
+  } else {
+    w.px[i] = newX;
+    w.vx[i] = mx;
+    w.vy[i] = 0;
+  }
+}
+
+function isMovingUnit(w, i) {
+  return w.vx[i] !== 0 || w.vy[i] !== 0;
+}
+
+function movingAvoidanceSystem(w, field) {
+  if (w.count < GRID_SEP_THRESHOLD) {
+    for (let i = 0; i < w.count; i++) {
+      if (!w.alive[i] || !isMovingUnit(w, i)) continue;
+      for (let j = i + 1; j < w.count; j++) {
+        if (!w.alive[j] || !isMovingUnit(w, j) || w.owner[i] !== w.owner[j]) continue;
+        w.metrics.movingAvoidancePairs++;
+        applyMovingAvoidance(w, field, i, j);
+      }
+    }
+    return;
+  }
+
+  const grid = w.spatial;
+  rebuildSpatialGrid(grid, w, isMovingUnit, false);
+  for (let z = 0; z < grid.rows; z++) {
+    for (let x = 0; x < grid.cols; x++) {
+      const cell = spatialCellId(x, z);
+      if (cell % SEP_PHASES !== w.tick % SEP_PHASES) continue;
+      for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
+        for (let j = grid.next[i]; j >= 0; j = grid.next[j]) {
+          if (w.owner[i] !== w.owner[j]) continue;
+          w.metrics.movingAvoidancePairs++;
+          applyMovingAvoidance(w, field, i, j);
+        }
+      }
+      for (let n = 0; n < SEP_NEIGHBORS.length; n++) {
+        const nx = x + SEP_NEIGHBORS[n][0];
+        const nz = z + SEP_NEIGHBORS[n][1];
+        if (nx < 0 || nz < 0 || nx >= grid.cols || nz >= grid.rows) continue;
+        const other = spatialCellId(nx, nz);
+        for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
+          for (let j = grid.head[other]; j >= 0; j = grid.next[j]) {
+            if (w.owner[i] !== w.owner[j]) continue;
+            w.metrics.movingAvoidancePairs++;
+            applyMovingAvoidance(w, field, i, j);
+          }
+        }
+      }
+    }
+  }
+}
+
+function applyMovingAvoidance(w, field, i, j) {
+  const dx = w.px[j] - w.px[i];
+  const dy = w.py[j] - w.py[i];
+  const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
+  const minDist = SEP_MIN_DIST[typePair];
+  const dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
+  if (dist2 === 0 || dist2 >= SEP_MIN_DIST_SQ[typePair]) return;
+  const dist = fx.sqrt(dist2);
+  const push = fx.div(fx.mul(MOVE_AVOID_PUSH, minDist - dist), dist);
+  const px = fx.mul(dx, push);
+  const py = fx.mul(dy, push);
+  w.px[i] -= px;
+  w.py[i] -= py;
+  w.px[j] += px;
+  w.py[j] += py;
+  if (!isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))) {
+    w.px[i] += px;
+    w.py[i] += py;
+  }
+  if (!isPassable(field, worldToTile(w.px[j]), worldToTile(w.py[j]))) {
+    w.px[j] -= px;
+    w.py[j] -= py;
+  }
+}
+
+// Soft separation for idle units that somehow overlap — never while pathing.
+function separationSystem(w, field) {
   if (w.count >= GRID_SEP_THRESHOLD) {
-    gridSeparation(w);
+    gridSeparation(w, field);
     return;
   }
   for (let i = 0; i < w.count; i++) {
@@ -107,65 +321,68 @@ function separationSystem(w) {
     for (let j = i + 1; j < w.count; j++) {
       if (!w.alive[j]) continue;
       if (isAttackPair(w, i, j)) continue;
-      applySeparation(w, i, j);
+      applySeparation(w, field, i, j);
     }
   }
 }
 
-function gridSeparation(w) {
-  const buckets = new Map();
-  for (let i = 0; i < w.count; i++) {
-    if (!w.alive[i]) continue;
-    const key = sepCellKey(w.px[i], w.py[i]);
-    let bucket = buckets.get(key);
-    if (!bucket) {
-      bucket = [];
-      buckets.set(key, bucket);
-    }
-    bucket.push(i);
-  }
-  for (const bucket of buckets.values()) {
-    for (let a = 0; a < bucket.length; a++) {
-      for (let b = a + 1; b < bucket.length; b++) {
-        const i = bucket[a];
-        const j = bucket[b];
-        if (isAttackPair(w, i, j)) continue;
-        applySeparation(w, i, j);
+function gridSeparation(w, field) {
+  const grid = w.spatial;
+  rebuildSpatialGrid(grid, w, canSeparate, false);
+  for (let z = 0; z < grid.rows; z++) {
+    for (let x = 0; x < grid.cols; x++) {
+      const cell = spatialCellId(x, z);
+      if (cell % SEP_PHASES !== w.tick % SEP_PHASES) continue;
+      for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
+        for (let j = grid.next[i]; j >= 0; j = grid.next[j]) {
+          w.metrics.separationPairs++;
+          if (isAttackPair(w, i, j)) continue;
+          applySeparation(w, field, i, j);
+        }
       }
     }
   }
-  // Neighbouring cells — units near cell edges still repel.
-  for (const [key, bucket] of buckets) {
-    const cx = (key >> 10) - 512;
-    const cz = (key & 0x3ff) - 512;
-    for (const [ox, oz] of [[0, 1], [1, -1], [1, 0], [1, 1]]) {
-      const other = buckets.get(((cx + ox + 512) & 0x3ff) << 10 | ((cz + oz + 512) & 0x3ff));
-      if (!other) continue;
-      for (let a = 0; a < bucket.length; a++) {
-        for (let b = 0; b < other.length; b++) {
-          const i = bucket[a];
-          const j = other[b];
-          if (isAttackPair(w, i, j)) continue;
-          applySeparation(w, i, j);
+  for (let z = 0; z < grid.rows; z++) {
+    for (let x = 0; x < grid.cols; x++) {
+      const cell = spatialCellId(x, z);
+      if (cell % SEP_PHASES !== w.tick % SEP_PHASES) continue;
+      if (grid.head[cell] < 0) continue;
+      for (let n = 0; n < SEP_NEIGHBORS.length; n++) {
+        const nx = x + SEP_NEIGHBORS[n][0];
+        const nz = z + SEP_NEIGHBORS[n][1];
+        if (nx < 0 || nz < 0 || nx >= grid.cols || nz >= grid.rows) continue;
+        const other = spatialCellId(nx, nz);
+        if (grid.head[other] < 0) continue;
+        for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
+          for (let j = grid.head[other]; j >= 0; j = grid.next[j]) {
+            w.metrics.separationPairs++;
+            if (isAttackPair(w, i, j)) continue;
+            applySeparation(w, field, i, j);
+          }
         }
       }
     }
   }
 }
 
-function sepCellKey(px, py) {
-  const cx = fx.toInt(fx.div(px + WORLD_HALF, SEP_CELL));
-  const cz = fx.toInt(fx.div(py + WORLD_HALF, SEP_CELL));
-  return ((cx + 512) & 0x3ff) << 10 | ((cz + 512) & 0x3ff);
+function canSeparate(w, i) {
+  return (
+    w.navWpCount[i] === 0 &&
+    !w.hasTarget[i] &&
+    w.order[i] === ORDER.IDLE
+  );
 }
 
-function applySeparation(w, i, j) {
-  if (attackInRange(w, i) || attackInRange(w, j)) return;
+function applySeparation(w, field, i, j) {
+  // Small-count pairwise path does not prefilter; keep this guard authoritative.
+  if (!canSeparate(w, i) || !canSeparate(w, j)) return;
   const dx = w.px[j] - w.px[i];
   const dy = w.py[j] - w.py[i];
-  const dist = fx.len(dx, dy);
-  const minDist = fx.mul(SEP_RADIUS, fx.fromFloat(getUnitDef(w.type[i]).size / 6 + getUnitDef(w.type[j]).size / 6));
-  if (dist === 0 || dist >= minDist) return;
+  const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
+  const minDist = SEP_MIN_DIST[typePair];
+  const dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
+  if (dist2 === 0 || dist2 >= SEP_MIN_DIST_SQ[typePair]) return;
+  const dist = fx.sqrt(dist2);
   const push = fx.div(fx.mul(SEP_PUSH, minDist - dist), dist);
   const px = fx.mul(dx, push);
   const py = fx.mul(dy, push);
@@ -173,6 +390,14 @@ function applySeparation(w, i, j) {
   w.py[i] -= py;
   w.px[j] += px;
   w.py[j] += py;
+  if (!isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))) {
+    w.px[i] += px;
+    w.py[i] += py;
+  }
+  if (!isPassable(field, worldToTile(w.px[j]), worldToTile(w.py[j]))) {
+    w.px[j] -= px;
+    w.py[j] -= py;
+  }
 }
 
 function isAttackPair(w, i, j) {

@@ -1,0 +1,1 @@
+var p={className:"ArcTan2Block",emit(r,n,t,o,e){let s=e.cast(e.resolve(r,"x",t,o),"f32").expr,a=e.cast(e.resolve(r,"y",t,o),"f32").expr;return{expr:`atan2(${s}, ${a})`,type:"f32"}}};export{p as emitter};

@@ -133,6 +133,8 @@ export function createKothShard(options = {}) {
   const pendingAcceptedJoins = new Map();
   let pendingLocalJoin = null;
   let activeCatchupRequestId = '';
+  /** True while replayCatchUp is awaited — blocks overlapping offers/retries. */
+  let catchupInFlight = false;
   let catchupRetryTimer = null;
   let catchupOfferTimer = null;
   let catchupRequestStartedAt = 0;
@@ -188,7 +190,7 @@ export function createKothShard(options = {}) {
       role,
       matchId,
       phase,
-      activeSlots: activePlayerIds(roster),
+      activeSlots: matchStartSlots.length ? [...matchStartSlots] : activePlayerIds(roster),
       startKey: liveStartKey,
       tick: session?.confirmedTick ?? 0,
       reset,
@@ -196,7 +198,7 @@ export function createKothShard(options = {}) {
   }
 
   function notifyLiveStart(reset = false) {
-    onLiveStart(liveConfig(reset));
+    return onLiveStart(liveConfig(reset));
   }
 
   function notifyPresentationSync(extra = {}) {
@@ -247,10 +249,23 @@ export function createKothShard(options = {}) {
 
   function announcerCount(id) {
     const set = matchAnnouncers.get(id);
-    if (!set) return 0;
     let n = 0;
-    for (const uid of set) {
-      if (peerPresenceRole.get(uid) === 'spectator') continue;
+    if (set) {
+      for (const uid of set) {
+        if (peerPresenceRole.get(uid) === 'spectator') continue;
+        n++;
+      }
+    }
+    // Presence is not echoed to the sender, so we never appear in our own
+    // matchAnnouncers set. Count a local live player or the match tips every
+    // simultaneous solo-king comparison toward the peer (mutual yield).
+    if (
+      id === matchId &&
+      localUserId &&
+      phase === SHARD_PHASE.LIVE &&
+      role === 'player' &&
+      peerPresenceRole.get(localUserId) !== 'spectator'
+    ) {
       n++;
     }
     return n;
@@ -391,6 +406,37 @@ export function createKothShard(options = {}) {
     return best ?? bestFallback;
   }
 
+  // Publish our own live match into the registry. Clients never receive their
+  // own presence broadcast, so without this a solo king has no `current` entry
+  // and convergeToBestMatch used to treat every peer solo match as stronger —
+  // both kings abandoned into spectator at once (mutual yield).
+  function noteSelfLiveMatch() {
+    if (!matchId || !localUserId || phase !== SHARD_PHASE.LIVE) return;
+    if (role !== 'player') return;
+    const now = Date.now();
+    const tick = session?.confirmedTick ?? 0;
+    const active = countActive(roster);
+    const prev = liveMatches.get(matchId);
+    if (!prev) {
+      liveMatches.set(matchId, {
+        matchId,
+        from: localUserId,
+        activeCount: active,
+        tick,
+        ts: now,
+        lastTickAt: now,
+      });
+      return;
+    }
+    prev.ts = now;
+    prev.from = localUserId;
+    prev.activeCount = Math.max(prev.activeCount, active);
+    if (tick >= prev.tick) {
+      prev.tick = tick;
+      prev.lastTickAt = now;
+    }
+  }
+
   // Move onto the strongest known live match unless we are already an
   // authoritative multi-army host. Works for solo kings AND spectators, so a
   // peer stranded on a host that has since yielded re-converges to the real one.
@@ -401,13 +447,23 @@ export function createKothShard(options = {}) {
     // Never tear down a live match that already has a P2P link or running sim.
     if (role === 'player' && connectedPeerIds().length > 0) return false;
     if (role === 'player' && (session?.confirmedTick ?? 0) > 0) return false;
+    if (role === 'player') noteSelfLiveMatch();
     const best = bestLiveMatch();
     if (!best || !best.from || best.matchId === matchId) return false;
-    const current = liveMatches.get(matchId);
+    // Synthesize a local entry when the registry only has peer matches (we never
+    // hear our own presence). Equal activeCount then falls through to tick /
+    // announcer / matchId ordering so exactly one simultaneous solo king yields.
+    const current = liveMatches.get(matchId) ?? {
+      matchId,
+      from: localUserId,
+      activeCount: myActive,
+      tick: session?.confirmedTick ?? 0,
+      ts: Date.now(),
+      lastTickAt: Date.now(),
+    };
     const stronger =
       best.activeCount > myActive ||
-      (best.activeCount === myActive &&
-        (!current || compareLiveMatches(best, current) > 0));
+      (best.activeCount === myActive && compareLiveMatches(best, current) > 0);
     if (!stronger) return false;
     if (DEBUG_KOTH) {
       console.info('[KOTH] converge', {
@@ -641,7 +697,7 @@ export function createKothShard(options = {}) {
     if (role !== 'spectator' || catchUpReady || phase !== SHARD_PHASE.LIVE || matchId !== id) {
       return false;
     }
-    if (connectedPeerIds().length > 0) return false;
+    if (hasLiveSponsorLink()) return false;
     if (dialSwitchBusy) return false;
     dialSwitchBusy = true;
     setTimeout(() => {
@@ -677,7 +733,7 @@ export function createKothShard(options = {}) {
       connectFallbackTimer = null;
       connectFallbackFor = null;
       if (phase !== SHARD_PHASE.LIVE || matchId !== id || catchUpReady) return;
-      if (connectedPeerIds().length > 0) return;
+      if (hasLiveSponsorLink()) return;
       dialTargetsTried.clear();
       activeDialTarget = null;
       if (DEBUG_KOTH) console.info('[KOTH] dial retry cycle — starting over');
@@ -707,9 +763,9 @@ export function createKothShard(options = {}) {
   function pickConnectTargets(id = matchId) {
     const targets = [];
     const add = (uid) => {
-      if (uid && !userIdsMatch(uid, localUserId) && !targets.some((t) => userIdsMatch(t, uid))) {
-        targets.push(uid);
-      }
+      if (!uid || userIdsMatch(uid, localUserId)) return;
+      if (peerPresenceRole.get(uid) === 'spectator') return;
+      if (!targets.some((t) => userIdsMatch(t, uid))) targets.push(uid);
     };
     const live = liveMatches.get(id);
     const announcers = matchAnnouncers.get(id);
@@ -743,6 +799,46 @@ export function createKothShard(options = {}) {
   function isConnectedTo(userId) {
     if (!userId) return false;
     return connectedPeerIds().some((pid) => userIdsMatch(pid, userId));
+  }
+
+  /** True when this user is a live participant who can answer SNAPSHOT_REQUEST. */
+  function userCanSponsorCatchUp(userId) {
+    if (!userId) return false;
+    if (userIdsMatch(userId, localUserId)) return role === 'player' && localPlayerId >= 0;
+    if (peerPresenceRole.get(userId) === 'spectator') return false;
+    if (peerPresenceRole.get(userId) === 'player') return true;
+    for (const pid of connectedPeerIds()) {
+      if (!userIdsMatch(peerUserIds.get(pid) ?? pid, userId)) continue;
+      if (!readyPeerIds.has(pid)) continue;
+      const slot = slotForUser(roster, userId);
+      if (slot?.state === 'active' || slot?.state === 'reserved') return true;
+    }
+    const live = liveMatches.get(matchId);
+    if (
+      live?.from &&
+      userIdsMatch(live.from, userId) &&
+      !isStaleGhostMatch(live) &&
+      Date.now() - (live.lastTickAt ?? live.ts) < LIVE_MATCH_TTL_MS
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function peerCanSponsorCatchUp(peerId) {
+    return userCanSponsorCatchUp(peerUserIds.get(peerId) ?? peerId);
+  }
+
+  function messageFromLivePlayer(msg) {
+    if (!msg?.from) return false;
+    if (peerPresenceRole.get(msg.from) === 'player') return true;
+    if (peerPresenceRole.get(msg.from) === 'spectator') return false;
+    const slot = slotForUser(msg.roster ?? roster, msg.from);
+    return slot?.state === 'active' || slot?.state === 'reserved';
+  }
+
+  function hasLiveSponsorLink() {
+    return connectedPeerIds().some((pid) => peerCanSponsorCatchUp(pid));
   }
 
   // Spectators always dial live players for catch-up RTC. Live players dial each
@@ -850,7 +946,7 @@ export function createKothShard(options = {}) {
     ) {
       return;
     }
-    if (connectedPeerIds().length > 0 && role === 'spectator' && !catchUpReady) {
+    if (hasLiveSponsorLink() && role === 'spectator' && !catchUpReady) {
       clearConnectFallbackTimer();
       activeDialTarget = null;
       return;
@@ -902,9 +998,9 @@ export function createKothShard(options = {}) {
 
   function pumpSpectatorConnect() {
     if (phase !== SHARD_PHASE.LIVE || role !== 'spectator' || catchUpReady) return;
-    if (connectedPeerIds().length === 0 && !activeDialTarget) connectToMatchPeers();
-    const linked = connectedPeerIds().length;
-    if (linked === 0) {
+    if (!hasLiveSponsorLink()) connectToMatchPeers();
+    const linked = hasLiveSponsorLink();
+    if (!linked) {
       const n = matchAnnouncers.get(matchId)?.size ?? 0;
       onStatus(`Connecting to match …${shortId(matchId)}${n ? ` (${n} players heard)` : ''}`);
       return;
@@ -912,6 +1008,7 @@ export function createKothShard(options = {}) {
     if (!activeCatchupRequestId) {
       const sponsor = pickSponsorPeerId();
       if (sponsor) scheduleCatchupAfterConnect(sponsor);
+      else scheduleBroadcastCatchup(0);
     }
   }
 
@@ -938,6 +1035,11 @@ export function createKothShard(options = {}) {
     // Re-settle onto the strongest known match (covers the case where a better
     // match's presence arrived but didn't trigger an immediate follow).
     if (phase === SHARD_PHASE.LIVE && convergeToBestMatch()) return;
+    // Mutual-yield safety net: if every peer we know is also a spectator, the
+    // lowest userId claims host instead of waiting on catch-up timeouts.
+    if (phase === SHARD_PHASE.LIVE && role === 'spectator' && !catchUpReady) {
+      tryClaimOrphanMatch();
+    }
     pumpSpectatorConnect();
     if (phase === SHARD_PHASE.LIVE && role === 'player') {
       for (const uid of matchAnnouncers.get(matchId) ?? []) {
@@ -1087,13 +1189,8 @@ export function createKothShard(options = {}) {
   function pickSponsorPeerId() {
     const peers = connectedPeerIds();
     if (!peers.length) return null;
-    const sponsors = [];
-    for (const pid of peers) {
-      const uid = peerUserIds.get(pid) ?? pid;
-      const slot = slotForUser(roster, uid);
-      if (slot?.state === 'active') sponsors.push(pid);
-    }
-    if (!sponsors.length) return peers[0];
+    const sponsors = peers.filter((pid) => peerCanSponsorCatchUp(pid));
+    if (!sponsors.length) return null;
     let h = 0;
     for (let i = 0; i < localUserId.length; i++) h = (h * 31 + localUserId.charCodeAt(i)) | 0;
     return sponsors[Math.abs(h) % sponsors.length];
@@ -1103,9 +1200,12 @@ export function createKothShard(options = {}) {
   function pickSponsorUserId() {
     const linked = pickSponsorPeerId();
     if (linked) return peerUserIds.get(linked) ?? linked;
-    for (const uid of pickConnectTargets()) return uid;
-    if (matchHostUserId) return matchHostUserId;
-    return liveMatches.get(matchId)?.from ?? null;
+    for (const uid of pickConnectTargets()) {
+      if (userCanSponsorCatchUp(uid)) return uid;
+    }
+    const liveFrom = liveMatches.get(matchId)?.from;
+    if (liveFrom && userCanSponsorCatchUp(liveFrom)) return liveFrom;
+    return null;
   }
 
   function clearBroadcastCatchupTimer() {
@@ -1121,10 +1221,13 @@ export function createKothShard(options = {}) {
     broadcastCatchupTimer = setTimeout(() => {
       broadcastCatchupTimer = null;
       if (phase !== SHARD_PHASE.LIVE || role !== 'spectator' || catchUpReady) return;
-      if (connectedPeerIds().length > 0) return;
+      if (hasLiveSponsorLink()) return;
       if (activeCatchupRequestId) return;
       const sponsor = pickSponsorUserId();
-      if (!sponsor) return;
+      if (!sponsor) {
+        tryClaimOrphanMatch();
+        return;
+      }
       if (DEBUG_KOTH) console.info('[KOTH] broadcast catch-up', { sponsor: shortId(sponsor) });
       beginCatchup(sponsor, session?.confirmedTick ?? 0);
     }, delayMs);
@@ -1445,12 +1548,80 @@ export function createKothShard(options = {}) {
   // pipeline, so two-P0 is structurally impossible.
   function maybeStartLive() {}
 
+  /** When every known participant is a stranded spectator, lowest userId becomes king. */
+  function tryClaimOrphanMatch() {
+    if (role !== 'spectator' || phase !== SHARD_PHASE.LIVE || catchUpReady) return false;
+    if (pendingLocalJoin || appState === KOTH_APP_STATE.JOINING || appState === KOTH_APP_STATE.QUEUED) {
+      return false;
+    }
+
+    const participants = new Set([localUserId]);
+    for (const uid of lobbyPeers) {
+      if (uid) participants.add(uid);
+    }
+    for (const uid of matchAnnouncers.get(matchId) ?? []) {
+      if (uid) participants.add(uid);
+    }
+    const live = liveMatches.get(matchId);
+    if (live?.from) participants.add(live.from);
+    if (matchHostUserId) participants.add(matchHostUserId);
+    // A peer only blocks the claim while they still look like a live player on
+    // THIS match. Do not use pickSponsorUserId / userCanSponsorCatchUp — those
+    // treat liveMatches.from as a sponsor even after that peer has also yielded
+    // to spectator (mutual-yield deadlock). Ignore stale `player` roles once
+    // match presence has gone quiet so a dead host can be replaced.
+    const liveFresh = live && Date.now() - live.ts <= LIVE_MATCH_TTL_MS;
+    for (const uid of participants) {
+      if (uid === localUserId) continue;
+      if (peerPresenceRole.get(uid) !== 'player') continue;
+      if (!liveFresh) continue;
+      if (live?.from && userIdsMatch(live.from, uid)) return false;
+      if (matchAnnouncers.get(matchId)?.has(uid)) return false;
+    }
+
+    const sorted = [...participants].filter(Boolean).sort();
+    if (sorted[0] !== localUserId) return false;
+
+    if (DEBUG_KOTH) console.info('[KOTH] orphan match — claiming as host', { matchId: shortId(matchId) });
+    void promoteOrphanToHost();
+    return true;
+  }
+
+  async function promoteOrphanToHost() {
+    clearCatchupOfferTimer();
+    clearBroadcastCatchupTimer();
+    activeCatchupRequestId = '';
+    catchupRetryAttempt = 0;
+    roster = createEmptyRoster();
+    roster[0] = { userId: localUserId, state: 'active', playerId: 0 };
+    matchHostUserId = localUserId;
+    localPlayerId = 0;
+    role = 'player';
+    appState = KOTH_APP_STATE.LIVE_PLAYER;
+    catchUpReady = true;
+    seed = hashSeed(matchId);
+    matchStartSlots = [0];
+    matchHumanPlayers = [0];
+    liveStartKey = matchStartKey(matchId, roster, seed);
+    notePlayerConfirm(0);
+    session?.setLocalPlayerId?.(0);
+    session?.setRole?.('player');
+    saveMatch({ matchId, userId: localUserId, slot: 0 });
+    noteSelfLiveMatch();
+    await notifyLiveStart(true);
+    kickstartLockstep();
+    broadcastPresence();
+    emitShard();
+    notifyPresentationSync({ role: 'player', appState, localPlayerId: 0, inputEnabled: true, reset: true });
+    onStatus(`Match live — …${shortId(matchId)} — waiting for challengers`);
+  }
+
   // The lone creator does not wait for a second player. It goes live solo as the
   // host (single active slot, player 0 — the king). Everyone else, including the
   // very next player, discovers this match, spectates, and joins through the
   // normal pipeline; the first join flips solo→2 and resets to a fresh two-army
   // game (see resetForJoin). This is the ONLY path that creates a public match.
-  function startSoloLive() {
+  async function startSoloLive() {
     const existing = bestLiveMatch();
     if (existing?.matchId && existing.from && existing.matchId !== matchId) {
       if (DEBUG_KOTH) {
@@ -1478,8 +1649,9 @@ export function createKothShard(options = {}) {
     session?.setRole?.('player');
     saveMatch({ matchId, userId: localUserId, slot: 0 });
     setPhase(SHARD_PHASE.LIVE);
+    noteSelfLiveMatch();
     joinShardLobby();
-    notifyLiveStart(true);
+    await notifyLiveStart(true);
     if (DEBUG_KOTH) console.info('[KOTH] solo-live created', { matchId: shortId(matchId) });
     onStatus(`Match live — …${shortId(matchId)} — waiting for challengers`);
   }
@@ -1557,7 +1729,7 @@ export function createKothShard(options = {}) {
     saveMatch({ matchId, slot: localPlayerId, userId: localUserId });
     if (DEBUG_KOTH) console.info('[KOTH] match snapshot adopted — promoted', { localPlayerId, role });
     onStatus(`Synced — player ${localPlayerId}`);
-    notifyLiveStart(true);
+    void notifyLiveStart(true).catch((err) => console.error('[KOTH] live start after snapshot failed', err));
   }
 
   function handleJoinIntent(msg) {
@@ -1605,7 +1777,7 @@ export function createKothShard(options = {}) {
   // The creator/king keeps player 0 (kingOwner stays the longest-living slot);
   // the joiner takes player 1. A single MATCH_SNAPSHOT carries the new roster to
   // every peer, who all rebuild at tick 0. Only the current host runs this.
-  function resetForJoin(joinerUserId) {
+  async function resetForJoin(joinerUserId) {
     if (!joinerUserId || joinerUserId === localUserId) return;
     const next = createEmptyRoster();
     next[0] = { userId: localUserId, state: 'active', playerId: 0 };
@@ -1627,6 +1799,8 @@ export function createKothShard(options = {}) {
     session?.setLocalPlayerId?.(0);
     session?.setRole?.('player');
     saveMatch({ matchId, userId: localUserId, slot: 0 });
+    // Reset local sim + renderer to two armies before broadcasting the snapshot.
+    await notifyLiveStart(true);
     sendAll({
       type: MSG.MATCH_SNAPSHOT,
       v: KOTH_PROTOCOL_VERSION,
@@ -1639,7 +1813,6 @@ export function createKothShard(options = {}) {
       humanPlayers: [0, 1],
       startKey: liveStartKey,
     });
-    notifyLiveStart(true);
     emitShard();
     broadcastPresence();
     onStatus(`Player joined — match reset (2 armies) …${shortId(matchId)}`);
@@ -1661,7 +1834,7 @@ export function createKothShard(options = {}) {
       (countActive(roster) === 0 && role === 'player' && localPlayerId >= 0);
     if (soloKing && intents.length) {
       if (DEBUG_KOTH) console.info('[KOTH] solo→2 reset for first joiner', { joiner: shortId(intents[0].userId) });
-      resetForJoin(intents[0].userId);
+      void resetForJoin(intents[0].userId);
       return;
     }
 
@@ -1777,6 +1950,10 @@ export function createKothShard(options = {}) {
       const sponsor = pickSponsorPeerId();
       if (sponsor && sponsor !== fromPeerId) {
         sendPeer(sponsor, { ...msg, relay: true });
+        return;
+      }
+      if (!msg.viaBroadcast) {
+        sendBroadcastMsg({ ...msg, viaBroadcast: true, relay: true });
       }
       return;
     }
@@ -1816,7 +1993,13 @@ export function createKothShard(options = {}) {
     if (msg.to && msg.to !== localUserId && !userIdsMatch(msg.to, localUserId)) return;
     if (!activeCatchupRequestId || msg.requestId !== activeCatchupRequestId) return;
     if (!session || !msg.matchConfig) return;
+    // Clearing requestId before await used to let a second offer/retry start a
+    // concurrent replayCatchUp on the same SimClient — commitTickAsync handlers
+    // stomped each other and hung until the 30s timeout (looked like "super lag").
+    if (catchupInFlight) return;
+    catchupInFlight = true;
     clearCatchupOfferTimer();
+    const acceptedRequestId = activeCatchupRequestId;
     activeCatchupRequestId = '';
     catchUpReady = false;
     onStatus('Replaying catch-up…');
@@ -1850,7 +2033,13 @@ export function createKothShard(options = {}) {
       session.setLocalPlayerId?.(-1);
       setRole('spectator');
       saveMatch({ matchId, userId: localUserId, slot: null });
-      if (DEBUG_KOTH) console.info('[KOTH] caught up — ready to join', { tick: msg.tick, rosterActive: countActive(roster) });
+      if (DEBUG_KOTH) {
+        console.info('[KOTH] caught up — ready to join', {
+          tick: msg.tick,
+          rosterActive: countActive(roster),
+          requestId: acceptedRequestId.slice(-12),
+        });
+      }
       onStatus('Caught up — J to join');
       notifyPresentationSync({
         mode: 'koth',
@@ -1870,11 +2059,15 @@ export function createKothShard(options = {}) {
       localPlayerId = -1;
       role = 'spectator';
       appState = KOTH_APP_STATE.SPECTATOR;
+      // Leave pauseLockstep set — half-replayed worlds must not free-run until reset.
+      if (session) session.pauseLockstep = true;
       session?.setLocalPlayerId?.(-1);
       session?.setRole?.('spectator');
       notifyPresentationSync({ mode: 'koth', role: 'spectator', localPlayerId: -1, appState, reset: false, inputEnabled: false });
       onStatus('Catch-up failed — retrying…');
       scheduleCatchupRetry(msg.tick ?? 0);
+    } finally {
+      catchupInFlight = false;
     }
   }
 
@@ -1917,9 +2110,13 @@ export function createKothShard(options = {}) {
           startKey: liveStartKey,
         });
         if (phase === SHARD_PHASE.SANDBOX) maybeStartLive();
-        else if (phase === SHARD_PHASE.LIVE && role !== 'player') {
-          setRole('spectator');
-          scheduleCatchupAfterConnect(fromPeerId);
+        else if (phase === SHARD_PHASE.LIVE && role === 'spectator' && !catchUpReady) {
+          if (peerCanSponsorCatchUp(fromPeerId)) {
+            scheduleCatchupAfterConnect(fromPeerId);
+          } else if (!hasLiveSponsorLink()) {
+            connectToMatchPeers();
+            scheduleBroadcastCatchup(2000);
+          }
         }
         break;
 
@@ -1947,6 +2144,7 @@ export function createKothShard(options = {}) {
             msg.phase === SHARD_PHASE.LIVE &&
             phase === SHARD_PHASE.LIVE &&
             role === 'spectator' &&
+            messageFromLivePlayer(msg) &&
             !pendingLocalJoin &&
             appState !== KOTH_APP_STATE.JOINING &&
             appState !== KOTH_APP_STATE.QUEUED &&
@@ -1955,6 +2153,7 @@ export function createKothShard(options = {}) {
             msg.phase === SHARD_PHASE.LIVE &&
             phase === SHARD_PHASE.LIVE &&
             role === 'spectator' &&
+            messageFromLivePlayer(msg) &&
             !catchUpReady &&
             !pendingLocalJoin &&
             appState !== KOTH_APP_STATE.JOINING &&
@@ -1980,12 +2179,22 @@ export function createKothShard(options = {}) {
               reset: false,
               inputEnabled: false,
             });
-            scheduleCatchupAfterConnect(fromPeerId);
+            if (peerCanSponsorCatchUp(fromPeerId)) {
+              scheduleCatchupAfterConnect(fromPeerId);
+            } else if (!hasLiveSponsorLink()) {
+              connectToMatchPeers();
+              scheduleBroadcastCatchup(2000);
+            }
           } else if (liveSpectatorNeedsCatchup) {
             if (countActive(msg.roster ?? []) > countActive(roster)) {
               roster = cloneSlots(msg.roster ?? roster);
             }
-            scheduleCatchupAfterConnect(fromPeerId);
+            if (peerCanSponsorCatchUp(fromPeerId)) {
+              scheduleCatchupAfterConnect(fromPeerId);
+            } else if (!hasLiveSponsorLink()) {
+              connectToMatchPeers();
+              scheduleBroadcastCatchup(2000);
+            }
           }
         }
         break;
@@ -2087,7 +2296,11 @@ export function createKothShard(options = {}) {
       if (DEBUG_KOTH) console.info('[KOTH] catch-up offer timeout — retrying', { requestId: requestId.slice(-12) });
       activeCatchupRequestId = '';
       const sponsor = pickSponsorUserId();
-      if (sponsor) beginCatchup(sponsor, tick);
+      if (sponsor) {
+        beginCatchup(sponsor, tick);
+        return;
+      }
+      if (!tryClaimOrphanMatch()) scheduleBroadcastCatchup(0);
     }, CATCHUP_OFFER_TIMEOUT_MS);
   }
 
@@ -2098,7 +2311,7 @@ export function createKothShard(options = {}) {
     if (pendingLocalJoin || appState === KOTH_APP_STATE.JOINING || appState === KOTH_APP_STATE.QUEUED) return;
     for (const delayMs of [600, 1800, 4000]) {
       setTimeout(() => {
-        if (catchUpReady || phase !== SHARD_PHASE.LIVE || role !== 'spectator') return;
+        if (catchUpReady || catchupInFlight || phase !== SHARD_PHASE.LIVE || role !== 'spectator') return;
         if (!connectedPeerIds().includes(peerId)) return;
         if (activeCatchupRequestId) {
           if (performance.now() - catchupRequestStartedAt < CATCHUP_OFFER_TIMEOUT_MS) return;
@@ -2112,6 +2325,7 @@ export function createKothShard(options = {}) {
 
   function beginCatchup(peerOrUserId, tick = 0) {
     if (pendingLocalJoin || appState === KOTH_APP_STATE.JOINING || appState === KOTH_APP_STATE.QUEUED) return;
+    if (catchupInFlight) return;
     if (catchUpReady && (session?.confirmedTick ?? 0) > 0) return;
     if (!session || !peerOrUserId) {
       if (DEBUG_KOTH) {
@@ -2131,13 +2345,29 @@ export function createKothShard(options = {}) {
       clearTimeout(catchupRetryTimer);
       catchupRetryTimer = null;
     }
+    const target = tick || session.confirmedTick || 0;
+    let sponsorUserId = peerUserIds.get(peerOrUserId) ?? peerOrUserId;
+    if (!userCanSponsorCatchUp(sponsorUserId)) {
+      const fallback = pickSponsorUserId();
+      if (!fallback) {
+        if (DEBUG_KOTH) {
+          console.info('[KOTH] catch-up deferred — no live sponsor', {
+            connectedPeers: connectedPeerIds().length,
+            tick: target,
+          });
+        }
+        scheduleBroadcastCatchup(0);
+        if (!hasLiveSponsorLink()) connectToMatchPeers();
+        if (!tryClaimOrphanMatch()) scheduleCatchupRetry(target);
+        return;
+      }
+      sponsorUserId = fallback;
+    }
     catchUpReady = false;
     activeCatchupRequestId = `catchup:${matchId}:${localUserId}:${Date.now().toString(36)}:${++messageSeq}`;
     catchupRequestStartedAt = performance.now();
-    const target = tick || session.confirmedTick || 0;
-    const sponsorUserId = peerUserIds.get(peerOrUserId) ?? peerOrUserId;
-    const linkedPeer = connectedPeerIds().find((pid) =>
-      userIdsMatch(peerUserIds.get(pid) ?? pid, sponsorUserId),
+    const linkedPeer = connectedPeerIds().find(
+      (pid) => userIdsMatch(peerUserIds.get(pid) ?? pid, sponsorUserId) && peerCanSponsorCatchUp(pid),
     );
     const viaBroadcast = !linkedPeer;
     const payload = {
@@ -2167,11 +2397,12 @@ export function createKothShard(options = {}) {
   }
 
   function scheduleCatchupRetry(tick = 0) {
-    if (catchupRetryTimer) return;
+    if (catchupRetryTimer || catchupInFlight) return;
     const delay = Math.min(5000, 500 * 2 ** catchupRetryAttempt);
     catchupRetryAttempt++;
     catchupRetryTimer = setTimeout(() => {
       catchupRetryTimer = null;
+      if (catchupInFlight) return;
       const sponsor = pickSponsorUserId();
       if (sponsor) beginCatchup(sponsor, tick);
     }, delay);
@@ -2227,7 +2458,12 @@ export function createKothShard(options = {}) {
     });
 
     if (phase === SHARD_PHASE.LIVE && role === 'spectator' && !catchUpReady) {
-      scheduleCatchupAfterConnect(peerId);
+      if (peerCanSponsorCatchUp(peerId)) {
+        scheduleCatchupAfterConnect(peerId);
+      } else if (!hasLiveSponsorLink()) {
+        connectToMatchPeers();
+        scheduleBroadcastCatchup(2000);
+      }
     }
 
     if (phase === SHARD_PHASE.SANDBOX) maybeStartLive();
@@ -2521,7 +2757,7 @@ export function createKothShard(options = {}) {
         clearSavedMatch();
         matchId = generateMatchId();
         seed = hashSeed(matchId);
-        startSoloLive();
+        void startSoloLive();
       }, discoveryDelayMs());
     },
 
@@ -2553,6 +2789,8 @@ export function createKothShard(options = {}) {
           scheduleBroadcastCatchup(0);
           onStatus('Connecting to match — waiting for data link…');
         } else {
+          if (!hasLiveSponsorLink()) connectToMatchPeers();
+          scheduleBroadcastCatchup(0);
           onStatus('Still catching up…');
         }
         return;
@@ -2634,11 +2872,12 @@ function matchStartKey(matchId, roster, seed) {
   return `${matchId}:${seed}:${users}`;
 }
 
-/** KOTH on by default; ?solo=1 or ?stress=N disables. */
+/** KOTH on by default; ?solo=1, ?stress=N, or ?animStress=N disables. */
 export function kothModeFromSearch(search = '') {
   const params = new URLSearchParams(search);
   if (params.has('solo')) return false;
   if (params.get('stress')) return false;
+  if (params.get('animStress')) return false;
   if (params.has('koth') && params.get('koth') === '0') return false;
   return true;
 }

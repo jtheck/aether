@@ -1,0 +1,1 @@
+var f={className:"CrossBlock",emit(r,p,s,t,e){let o=e.cast(e.resolve(r,"left",s,t),"vec3f").expr,c=e.cast(e.resolve(r,"right",s,t),"vec3f").expr;return{expr:`cross(${o}, ${c})`,type:"vec3f"}}};export{f as emitter};

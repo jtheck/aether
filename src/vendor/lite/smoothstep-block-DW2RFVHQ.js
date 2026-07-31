@@ -1,0 +1,1 @@
+var v={className:"SmoothStepBlock",emit(t,u,p,r,e){let o=e.resolve(t,"value",p,r),s=e.resolve(t,"edge0",p,r),n=e.resolve(t,"edge1",p,r),m=e.cast(s,o.type).expr,l=e.cast(n,o.type).expr;return{expr:`smoothstep(${m}, ${l}, ${o.expr})`,type:o.type}}};export{v as emitter};

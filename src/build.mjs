@@ -47,7 +47,7 @@ writeFileSync(
 <body>
   <canvas id="canvas"></canvas>
   <div id="status"></div>
-  <div id="hint">LMB select · drag box · RMB move selected<br>A then RMB attack-move · RMB enemy attack<br>S stop · Esc clear · MMB pan · Alt+LMB orbit<br>?stress=1000 perf test</div>
+  <div id="hint">LMB select · drag box · RMB move selected<br>A then RMB attack-move · RMB enemy attack<br>S stop · Esc clear · MMB pan · Alt+LMB orbit<br>B shadows · ?shadows=0 · ?stress=1000 · ?animStress=32 skinned</div>
   <div id="legend"></div>
   <div id="fallback">
     <div>

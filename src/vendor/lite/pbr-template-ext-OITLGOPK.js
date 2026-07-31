@@ -1,0 +1,10 @@
+function O(n){let{_hasUvTransform:r,_hasVertexColor:c,_hasUv2:l,_hasAnyNormal:_,_hasEmissiveTexture:f,_hasSpecGloss:x}=n,h=l?n._uv2Mask:0,y=e=>h&e?"input.uv2":"input.uv",d=!!(h&32),T=1<<28,u=((n._features2??0)&T)!==0,s=e=>[{_name:`${e}UVm`,_type:"vec4<f32>"},{_name:`${e}UVt`,_type:"vec4<f32>"}],a=(e,p)=>r?`${e}UV`:y(p),t=(e,p)=>r?`let ${e}UV = txfUV(${y(p)}, material.${e}UVm, material.${e}UVt.xy);
+`:"",U=r?`fn txfUV(uv: vec2<f32>, m: vec4<f32>, t: vec2<f32>) -> vec2<f32> {
+return vec2<f32>(dot(m.xy, uv), dot(m.zw, uv)) + t;
+}
+`:"",i=[];l&&i.push({_name:"uv2",_type:"vec2<f32>",_gpuFormat:"float32x2",_arrayStride:8}),c&&i.push({_name:"color",_type:"vec4<f32>",_gpuFormat:"float32x4",_arrayStride:16});let m=[];l&&m.push({_name:"uv2",_type:"vec2<f32>"}),c&&m.push({_name:"vColor",_type:"vec4<f32>"});let o=[];r&&(o.push(...s("baseColor")),_&&o.push(...s("normal")),o.push(...s("orm")),u&&o.push(...s("occl")),f&&o.push(...s("emissive")),x&&o.push(...s("specGloss")));let S=[];d&&S.push({_name:"occlusionTexture",_type:{_kind:"texture",_textureType:"texture_2d<f32>"},_visibility:2},{_name:"occlusionSampler_",_type:{_kind:"sampler",_samplerType:"sampler"},_visibility:2});let v="";l&&(v+=`out.uv2 = uv2;
+`),c&&(v+=`out.vColor = color;
+`);let V=U,b=r?t("baseColor",1)+(_?t("normal",4):"")+t("orm",2)+(u?t("occl",0):"")+(f?t("emissive",8):"")+(x?t("specGloss",16):""):"",C=a("baseColor",1),F=a("normal",4),M=a("orm",2),E=a("emissive",8),G=a("specGloss",16);return{extraVertexAttributes:i,extraVaryings:m,extraMaterialUboFields:o,extraBindings:S,vertexBodyExtra:v,fragmentHelpers:V,fragmentPrelude:b,uvForBaseColor:C,uvForNormal:F,uvForOrm:M,uvForEmissive:E,uvForSpecGloss:G,baseColorMod:c?`
+baseColor *= input.vColor.rgb;
+alpha *= input.vColor.a;`:"",normalScaleMod:`let scaledNormal = vec3<f32>(normalMapRaw.xy * material.normalScale, normalMapRaw.z);
+`,occlusionOverride:d?"let occlusion = textureSample(occlusionTexture, occlusionSampler_, input.uv2).r;":u?"let occlusion = textureSample(ormTexture, ormSampler, occlUV).r;":null}}export{O as createPbrTemplateExt};

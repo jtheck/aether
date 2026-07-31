@@ -9,8 +9,13 @@
 import { makeRng } from './rng.js';
 import { getUnitDef } from './unitTypes.js';
 import { MAX_WAYPOINTS } from './path.js';
+import { createSpatialGrid } from './spatialGrid.js';
+import { createProjectileStore } from './projectiles.js';
 
-export const MAX_ENTITIES = 8192;
+// Storage headroom is intentionally above the supported 50k stress target.
+// Keep this centralized: world state and the SharedArrayBuffer derive from it.
+export const MAX_ENTITIES = 65536;
+export const STRESS_ENTITY_LIMIT = 50000;
 
 export const ORDER = {
   IDLE: 0,
@@ -20,12 +25,31 @@ export const ORDER = {
 };
 
 export function createWorld(seed) {
+  const engagementTarget = new Int32Array(MAX_ENTITIES);
+  const engagementSlot = new Int16Array(MAX_ENTITIES);
+  engagementTarget.fill(-1);
+  engagementSlot.fill(-1);
   return {
     tick: 0,
     count: 0,
-    pathCursor: 0,
+    pathLosCursor: 0,
+    pathAstarCursor: 0,
     rng: makeRng(seed),
     ORDER,
+    spatial: createSpatialGrid(MAX_ENTITIES),
+    projectiles: createProjectileStore(),
+    metrics: {
+      combatCandidates: 0,
+      separationPairs: 0,
+      movingAvoidancePairs: 0,
+      losAttempts: 0,
+      astarSearches: 0,
+      projectileSpawned: 0,
+      projectileHits: 0,
+      projectileMisses: 0,
+      projectileOverflow: 0,
+      projectileActive: 0,
+    },
 
     // transform
     px: new Int32Array(MAX_ENTITIES),
@@ -41,16 +65,22 @@ export function createWorld(seed) {
 
     // orders
     order: new Uint8Array(MAX_ENTITIES),
-    targetEntity: new Int16Array(MAX_ENTITIES), // -1 = none
+    targetEntity: new Int32Array(MAX_ENTITIES), // -1 = none
+    engagementTarget,
+    engagementSlot,
+    engagementMask: new Uint16Array(MAX_ENTITIES),
+    targetLoad: new Uint16Array(MAX_ENTITIES),
 
     // pathfinding
     navDestX: new Int32Array(MAX_ENTITIES),
     navDestY: new Int32Array(MAX_ENTITIES),
     navWpCount: new Uint8Array(MAX_ENTITIES),
     navWpIndex: new Uint8Array(MAX_ENTITIES),
+    pathRequest: new Uint8Array(MAX_ENTITIES),
     navWx: new Int32Array(MAX_ENTITIES * MAX_WAYPOINTS),
     navWy: new Int32Array(MAX_ENTITIES * MAX_WAYPOINTS),
     stuckTicks: new Uint8Array(MAX_ENTITIES),
+    repathCount: new Uint8Array(MAX_ENTITIES),
     lastPx: new Int32Array(MAX_ENTITIES),
     lastPy: new Int32Array(MAX_ENTITIES),
 
@@ -66,6 +96,9 @@ export function createWorld(seed) {
 }
 
 export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) {
+  if (w.count >= MAX_ENTITIES) {
+    throw new RangeError(`entity capacity exceeded (${MAX_ENTITIES})`);
+  }
   const def = getUnitDef(type);
   const i = w.count++;
   w.px[i] = x;
@@ -78,11 +111,17 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.speed[i] = speed ?? def.speed;
   w.order[i] = ORDER.IDLE;
   w.targetEntity[i] = -1;
+  w.engagementTarget[i] = -1;
+  w.engagementSlot[i] = -1;
+  w.engagementMask[i] = 0;
+  w.targetLoad[i] = 0;
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;
+  w.pathRequest[i] = 0;
   w.navDestX[i] = x;
   w.navDestY[i] = y;
   w.stuckTicks[i] = 0;
+  w.repathCount[i] = 0;
   w.lastPx[i] = x;
   w.lastPy[i] = y;
   w.attackCd[i] = 0;

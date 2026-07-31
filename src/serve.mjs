@@ -19,6 +19,10 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm',
   '.glb': 'model/gltf-binary',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.map': 'application/json; charset=utf-8',
 };
 
@@ -33,6 +37,11 @@ try {
 } catch {
   console.warn('⚠️  vendor/lite/ missing — run: npm run build:lite');
 }
+try {
+  await access(join(ROOT, 'vendor', 'lite-explorer', 'explorer.js'));
+} catch {
+  console.warn('⚠️  vendor/lite-explorer/ missing — run: npm run build:explorer');
+}
 
 createServer(async (req, res) => {
   try {
@@ -44,6 +53,7 @@ createServer(async (req, res) => {
       'Content-Type': MIME[extname(file)] || 'application/octet-stream',
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Resource-Policy': 'same-origin',
     });
     res.end(body);
   } catch {

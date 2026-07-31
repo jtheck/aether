@@ -1,18 +1,26 @@
 // app/ — SimSession (lockstep) + Lite renderer + input.
 
-import { livingByOwner } from '../sim/world.js';
+import { livingByOwner, ORDER } from '../sim/world.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
-import { PLAYER_ARMY, stressPerSideFromSearch, KOTH_MAX_ENTITIES } from '../sim/worldSetup.js';
+import * as fx from '../sim/fixed.js';
+import {
+  PLAYER_ARMY,
+  stressPerSideFromSearch,
+  animStressPerSideFromSearch,
+  KOTH_MAX_ENTITIES,
+  PLAYER,
+  AI_OWNER,
+} from '../sim/worldSetup.js';
+import { CMD } from '../sim/commands.js';
 import { createRenderer } from '../render/renderer.js';
+import { createLiteExplorerToggle } from '../render/liteExplorer.js';
+import { isVatUnitType } from '../render/vatUnits.js';
 import { setupInput } from './input.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
-import { PLAYER, AI_OWNER } from '../sim/worldSetup.js';
 
 const SEED = 0x1234;
 
-const SELECT_COLOR = [1.0, 0.95, 0.15];
-const SELECT_SCALE = 1.15;
 const OWNER_TINTS = [
   [0.25, 0.55, 1.0],
   [1.0, 0.32, 0.25],
@@ -21,7 +29,14 @@ const OWNER_TINTS = [
   [0.75, 0.45, 1.0],
 ];
 const DEATH_FADE_MS = 450;
+/** Match game/units.js selection spin. */
+const SEL_SPIN_STEADY = 0.006 * 60;
+const SEL_SPIN_START = 1.7;
+const SEL_SPIN_SETTLE = 6;
 const DEBUG_KOTH = new URLSearchParams(location.search).get('debug') === 'koth';
+
+/** Drops stale applyLiveConfig completions (solo reset finishing after join reset). */
+let liveConfigGeneration = 0;
 
 function tintColor(base, tint, amount) {
   const a = amount;
@@ -29,10 +44,72 @@ function tintColor(base, tint, amount) {
   return [base[0] * b + tint[0] * a, base[1] * b + tint[1] * a, base[2] * b + tint[2] * a];
 }
 
-function hpColor(def, hp) {
-  const t = Math.max(0, Math.min(1, hp / def.hp));
-  const hurt = [1, 0.35, 0.3];
-  return tintColor(def.color, hurt, 1 - t);
+function worldPositionsForSync(state, count) {
+  const x = new Float32Array(count);
+  const z = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    x[i] = fx.toFloat(state.px[i]);
+    z[i] = fx.toFloat(state.py[i]);
+  }
+  return { x, z };
+}
+
+function logArmyRenderState(renderer, session, label) {
+  const world = session.state;
+  const count = session.count;
+  const batches = renderer.debugBatches?.(count, world.type, world.owner);
+  console.info(`[render] ${label}`, {
+    count,
+    p0: livingByOwner(world, 0),
+    p1: livingByOwner(world, 1),
+    batches,
+  });
+}
+
+function rebuildRendererEntities(renderer, session) {
+  const count = session.count;
+  const world = session.state;
+  const unmapped = renderer.rebuildFromTypes(count, world.type, world.owner);
+  const stillUnmapped = renderer.syncInstances(count, world.type, worldPositionsForSync(world, count), {
+    alive: world.alive,
+    owners: world.owner,
+  });
+  if (unmapped.length || stillUnmapped) {
+    const sample = unmapped.slice(0, 12);
+    const owners = sample.map((i) => world.owner[i]);
+    console.warn('[render] unmapped entities after rebuild', {
+      count,
+      unmapped: unmapped.length,
+      stillUnmapped,
+      sample,
+      owners,
+      batches: renderer.debugBatches?.(count, world.type, world.owner),
+    });
+  } else if (livingByOwner(world, 1) > 0) {
+    const dbg = renderer.debugBatches?.(count, world.type, world.owner);
+    const tiMismatch = dbg?.batches && Object.values(dbg.batches).some(
+      (b) => b.entities > 0 && b.tiCount < b.entities,
+    );
+    if (tiMismatch) {
+      console.warn('[render] thin-instance count below entity mapping', dbg);
+    }
+    console.info('[render] entity rebuild', {
+      count,
+      p0: livingByOwner(world, 0),
+      p1: livingByOwner(world, 1),
+      batches: dbg?.batches,
+    });
+  }
+  return count;
+}
+
+function forceRendererSync(ctx) {
+  if (!ctx?.renderer || !ctx.session) return 0;
+  const count = ctx.session.count;
+  ctx.resizeRenderBuffers(count);
+  ctx.renderer.setCount(count);
+  if (ctx.syncRenderer) return ctx.syncRenderer();
+  return rebuildRendererEntities(ctx.renderer, ctx.session);
 }
 
 async function main() {
@@ -49,6 +126,7 @@ async function main() {
   }
 
   const stress = stressPerSideFromSearch(location.search);
+  const animStress = animStressPerSideFromSearch(location.search);
   const solo = new URLSearchParams(location.search).has('solo');
   const useKoth = kothModeFromSearch(location.search) && !solo;
 
@@ -71,7 +149,7 @@ async function main() {
   }
 
   let bootCfg = {
-    mode: stress > 0 ? 'legacy' : 'legacy',
+    mode: 'legacy',
     seed: SEED,
     localPlayerId: PLAYER,
     humanPlayers: [PLAYER],
@@ -79,7 +157,7 @@ async function main() {
     activeSlots: [PLAYER],
   };
 
-  if (useKoth && stress === 0) {
+  if (useKoth && stress === 0 && animStress === 0) {
     if (!(await waitForGetFireP2p())) {
       showFallback('GetFire P2P failed to load. Hard-refresh or use ?solo=1 for offline.');
       return;
@@ -92,7 +170,7 @@ async function main() {
     bootCfg = await kothShard.waitForBoot();
   }
 
-  ctx = await bootGame(canvas, bootCfg, { stress, kothShard, solo });
+  ctx = await bootGame(canvas, bootCfg, { stress, animStress, kothShard, solo });
   if (pendingLiveCfg) {
     const cfg = pendingLiveCfg;
     pendingLiveCfg = null;
@@ -100,13 +178,13 @@ async function main() {
   }
 }
 
-async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
+async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, solo = false }) {
   const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'sandbox';
 
   const session = new SimSession({
     localPlayerId: bootCfg.localPlayerId,
     humanPlayers: bootCfg.humanPlayers,
-    aiPlayers: useKothAi(bootCfg, stress, solo),
+    aiPlayers: useKothAi(bootCfg, stress, animStress, solo),
     inputDelayTicks: useNet ? 1 : 0,
     role: bootCfg.role ?? 'player',
   });
@@ -114,6 +192,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
   const simConfig = {
     seed: bootCfg.seed ?? SEED,
     stressPerSide: stress,
+    animStressPerSide: animStress,
     mode: bootCfg.mode === 'sandbox' ? 'sandbox' : bootCfg.mode === 'koth' ? 'koth' : 'legacy',
     activeSlots: bootCfg.activeSlots ?? [bootCfg.localPlayerId],
   };
@@ -121,33 +200,91 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
   const { count } = await session.start(simConfig);
   if (kothShard) kothShard.attachSession(session);
 
+  // rAF stops when the tab is hidden; lockstep still needs tick confirms.
+  const onVisibility = () => session.setBackgroundPump(document.hidden);
+  document.addEventListener('visibilitychange', onVisibility);
+  if (document.hidden) session.setBackgroundPump(true);
+
+  if (animStress > 0) {
+    setStatusText(`Baking VAT for ${count} villagers…`);
+  }
+
   const renderer = await createRenderer(canvas, count, {
     types: session.state.type,
     gpuCapacity: useNet ? KOTH_MAX_ENTITIES : count,
+    field: session.field,
+    onAnimLoadProgress: animStress > 0
+      ? (done, total) => setStatusText(
+        done >= total
+          ? `VAT ready — ${count} villagers`
+          : `VAT shards ${done}/${total} for ${count} villagers…`,
+      )
+      : undefined,
   });
   renderer.setCount(count);
+  // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
+  window.renderer = renderer;
+  if (new URLSearchParams(location.search).get('tiles') === '1') {
+    renderer.setTileGridVisible(true);
+  }
+  if (new URLSearchParams(location.search).get('hitboxes') === '1') {
+    renderer.setPickHitboxesVisible?.(true);
+  }
+  if (new URLSearchParams(location.search).get('shadows') === '0') {
+    renderer.setShadowsEnabled?.(false);
+  }
+  const liteExplorer = createLiteExplorerToggle({
+    engine: renderer.engine,
+    scene: renderer.scene,
+    canvas,
+  });
+  let renderEntityCount = rebuildRendererEntities(renderer, session);
 
   /** Mutable render buffers — frame loop reads this object, not closed-over copies. */
   const bufs = {
     selected: new Uint8Array(count),
+    wasSelected: new Uint8Array(count),
     wasAlive: new Uint8Array(count),
     deathFade: new Float32Array(count),
+    facingYaw: new Float32Array(count),
+    selSpinYaw: new Float32Array(count),
+    selSpinVel: new Float32Array(count),
     colors: new Float32Array(count * 4),
     renderX: new Float32Array(count),
     renderY: new Float32Array(count),
     renderZ: new Float32Array(count),
+    /** Deferred health chips: [x, z, size, ratio] × N (selected first at flush). */
+    hbSelected: new Float32Array(count * 4),
+    hbHurt: new Float32Array(count * 4),
   };
   bufs.wasAlive.fill(1);
 
   function resizeRenderBuffers(n) {
+    const prevFacing = bufs.facingYaw;
+    const prevSpinYaw = bufs.selSpinYaw;
+    const prevSpinVel = bufs.selSpinVel;
+    const prevWasSel = bufs.wasSelected;
     bufs.selected = new Uint8Array(n);
+    bufs.wasSelected = new Uint8Array(n);
     bufs.wasAlive = new Uint8Array(n);
     bufs.wasAlive.fill(1);
     bufs.deathFade = new Float32Array(n);
+    bufs.facingYaw = new Float32Array(n);
+    bufs.selSpinYaw = new Float32Array(n);
+    bufs.selSpinVel = new Float32Array(n);
     bufs.colors = new Float32Array(n * 4);
     bufs.renderX = new Float32Array(n);
     bufs.renderY = new Float32Array(n);
     bufs.renderZ = new Float32Array(n);
+    bufs.hbSelected = new Float32Array(n * 4);
+    bufs.hbHurt = new Float32Array(n * 4);
+    const copy = Math.min(n, prevFacing?.length ?? 0);
+    for (let i = 0; i < copy; i++) {
+      bufs.facingYaw[i] = prevFacing[i];
+      bufs.selSpinYaw[i] = prevSpinYaw[i];
+      bufs.selSpinVel[i] = prevSpinVel[i];
+      bufs.wasSelected[i] = prevWasSel[i];
+    }
     inputApi?.setSelectedBuffer?.(bufs.selected);
   }
 
@@ -169,12 +306,12 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
         continue;
       }
       const def = getUnitDef(world.type[i]);
-      let c;
-      if (selected[i] && world.alive[i]) c = SELECT_COLOR;
-      else {
-        c = hpColor(def, world.hp[i]);
-        c = tintColor(c, OWNER_TINTS[world.owner[i] % OWNER_TINTS.length], 0.45);
-      }
+      // VAT shirts use pure owner color (v1 TeamColor material). Other units
+      // keep a soft blend of unit-def color + owner tint.
+      const ownerTint = OWNER_TINTS[world.owner[i] % OWNER_TINTS.length];
+      const c = isVatUnitType(world.type[i])
+        ? ownerTint
+        : tintColor(def.color, ownerTint, 0.45);
       const alpha = world.alive[i] ? 1 : fade;
       colors[i * 4] = c[0];
       colors[i * 4 + 1] = c[1];
@@ -182,8 +319,20 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
       colors[i * 4 + 3] = alpha;
     }
     renderer.setColors(colors);
-    renderer.setTeamDiscColors?.(colors);
     paintStatus();
+  };
+
+  session.onWorldRebuilt = (entityCount) => {
+    if (session._pendingWorldGen != null && session._pendingWorldGen !== liveConfigGeneration) return;
+    resizeRenderBuffers(entityCount);
+    renderer.setCount(entityCount);
+    renderEntityCount = rebuildRendererEntities(renderer, session);
+    renderer.clearProjectiles?.();
+    if (session.field) renderer.setField?.(session.field);
+    updateColors();
+    if (matchMeta.mode === 'koth') {
+      logArmyRenderState(renderer, session, 'world rebuilt');
+    }
   };
 
   function paintStatus() {
@@ -208,6 +357,7 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     if (session.role === 'spectator') line = `Spectating  ·  ${line}`;
     if (fpsDisplay > 0) line += `  ·  ${fpsDisplay} fps`;
     if (stress > 0) line += `  ·  stress ${world.count} units`;
+    if (animStress > 0) line += `  ·  animStress ${world.count} VAT`;
     if (matchMeta.matchId) line += `  ·  …${matchMeta.matchId.slice(-8)}`;
     el.textContent = line;
     updateKothControls(kothShard);
@@ -216,7 +366,6 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
   updateColors();
   updateLegend();
 
-  let orderPing = null;
   let inputApi = setupInput({
     canvas,
     renderer,
@@ -230,18 +379,60 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     }),
     enqueueCommand: (cmd) => session.submitCommand(cmd),
     onSelectionChanged: updateColors,
-    onOrder: (x, z) => {
-      orderPing = { x, z, until: performance.now() + 900 };
+    onOrder: (x, z, y, cmdType) => {
+      const tint = cmdType === CMD.ATTACK_MOVE ? 'red' : 'white';
+      renderer.pingOrderMarker?.(x, z, y, tint, { forceMove: cmdType === CMD.MOVE });
     },
     canInteract: () => session.role === 'player' && localPlayerId >= 0,
   });
 
   window.addEventListener('keydown', (e) => {
-    if (e.key === 'j' || e.key === 'J') {
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.code === 'KeyJ') {
       kothShard?.requestJoin?.();
+      return;
+    }
+    if (e.code === 'KeyG') {
+      e.preventDefault();
+      renderer.toggleTileGrid();
+      return;
+    }
+    if (e.code === 'KeyH') {
+      e.preventDefault();
+      renderer.togglePickHitboxes?.();
+      return;
+    }
+    if (e.code === 'KeyB') {
+      e.preventDefault();
+      const on = renderer.toggleShadows?.();
+      if (typeof on === 'boolean') setStatusText(on ? 'Shadows on' : 'Shadows off');
+      return;
+    }
+    if (e.code === 'F9') {
+      e.preventDefault();
+      liteExplorer.toggle();
     }
   });
   setupKothControls(kothShard);
+
+  // Walk everyone so idle→walk skinning is under load (not just idle poses).
+  if (animStress > 0) {
+    const world = session.state;
+    const entities = [];
+    const tx = [];
+    const ty = [];
+    for (let i = 0; i < world.count; i++) {
+      if (!world.alive[i]) continue;
+      entities.push(i);
+      // Swap sides — two blocks march through each other.
+      const destX = world.owner[i] === PLAYER ? 240 : -240;
+      tx.push(fx.fromFloat(destX));
+      ty.push(world.py[i]);
+    }
+    if (entities.length) {
+      session.submitCommand({ type: CMD.MOVE, entities, tx, ty });
+    }
+  }
 
   const prevCommit = session.onCommit;
   session.onCommit = (tick, checksum) => {
@@ -252,6 +443,12 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
       if (wasAlive[i] && !world.alive[i]) deathFade[i] = 1;
       wasAlive[i] = world.alive[i];
     }
+    if (session.count !== renderEntityCount) {
+      renderEntityCount = session.count;
+      resizeRenderBuffers(renderEntityCount);
+      renderer.setCount(renderEntityCount);
+      rebuildRendererEntities(renderer, session);
+    }
     if (session.kothMatchOver && !matchOverShown) {
       matchOverShown = true;
       showMatchOver(session);
@@ -259,7 +456,10 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     updateColors();
   };
 
+  let lastUnmappedRebuild = 0;
+
   renderer.onFrame((deltaMs) => {
+    renderer.cameraController?.tick?.(deltaMs);
     session.pump(deltaMs);
 
     if (session.replayingCatchUp) {
@@ -279,40 +479,40 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     const alpha = session.displayAlpha;
     const { prev, cur } = session.displaySnapshots();
     if (!prev || !cur) return;
-    const ringPulse = 1.38 + 0.07 * Math.sin(performance.now() * 0.004);
-
-    if (orderPing) {
-      const left = orderPing.until - performance.now();
-      if (left <= 0) orderPing = null;
-      else renderer.showOrderMarker(orderPing.x, orderPing.z, 16, (left / 900) * 0.9);
-    } else {
-      renderer.showOrderMarker(0, 0, 0, 0);
-    }
+    const dt = Math.min(0.05, deltaMs / 1000);
 
     let colorsDirty = false;
     const drawStats = { p0: 0, p1: 0, unmapped: 0 };
     const n = session.count;
     const world = session.state;
-    const { selected, deathFade, colors, renderX, renderY, renderZ } = bufs;
-    if (selected.length < n) {
+    const {
+      selected, wasSelected, deathFade, facingYaw, selSpinYaw, selSpinVel,
+      colors, renderX, renderY, renderZ,
+    } = bufs;
+    if (n !== renderEntityCount) {
+      renderEntityCount = n;
       resizeRenderBuffers(n);
       renderer.setCount(n);
-      renderer.rebuildFromTypes(n, world.type);
+      rebuildRendererEntities(renderer, session);
     }
+    renderer.beginHealthBars?.();
+    // Defer chip writes so selected units win if the bar pool is ever capped again.
+    let hbSelCount = 0;
+    let hbHurtCount = 0;
+    const hbSel = bufs.hbSelected;
+    const hbHurt = bufs.hbHurt;
     for (let i = 0; i < n; i++) {
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
-          if (!renderer.writeInstance(i, world.type[i], 0, 0, 0)) drawStats.unmapped++;
-          renderer.writeTeamDisc?.(i, 0, 0, 0);
+          if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
           renderer.writeSelectionRing(i, 0, 0, 0);
           colors[i * 4 + 3] = 0;
           colorsDirty = true;
           continue;
         }
       } else if (!world.alive[i]) {
-        if (!renderer.writeInstance(i, world.type[i], 0, 0, 0)) drawStats.unmapped++;
-        renderer.writeTeamDisc?.(i, 0, 0, 0);
+        if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
         renderer.writeSelectionRing(i, 0, 0, 0);
         continue;
       }
@@ -323,34 +523,107 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
       const dx = cur.x[i] - prev.x[i];
       const dz = cur.z[i] - prev.z[i];
       const moving = dx * dx + dz * dz > 0.0004;
-      const yaw = moving ? Math.atan2(dx, dz) : 0;
-      let size = selected[i] && world.alive[i] ? def.size * SELECT_SCALE : def.size;
+      if (moving) facingYaw[i] = Math.atan2(dx, dz);
+      const yaw = facingYaw[i];
+      let size = def.size;
       const fade = deathFade[i];
       if (fade > 0) size *= fade;
-      const y = size * 0.5;
+      // Pick sphere center at chest height over terrain (not sim `size`, which is spacing).
+      const gy = renderer.groundYAt?.(x, z) ?? 0;
       renderX[i] = x;
-      renderY[i] = y;
+      renderY[i] = gy + (def.pickHeight ?? 1.1);
       renderZ[i] = z;
       if (fade > 0) {
         colors[i * 4 + 3] = fade;
         colorsDirty = true;
       }
-      if (renderer.writeInstance(i, world.type[i], x, z, size, yaw, moving && world.alive[i])) {
+      if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, moving && world.alive[i])) {
         if (world.owner[i] === 0) drawStats.p0++;
         else if (world.owner[i] === 1) drawStats.p1++;
       } else drawStats.unmapped++;
-      renderer.writeTeamDisc?.(i, x, z, size * 1.1);
-      renderer.writeSelectionRing(i, x, z, selected[i] && world.alive[i] ? size * ringPulse : 0);
+      const isSel = !!selected[i] && !!world.alive[i];
+      if (isSel) {
+        if (!wasSelected[i]) selSpinVel[i] = SEL_SPIN_START;
+        const blend = Math.min(1, SEL_SPIN_SETTLE * dt);
+        selSpinVel[i] += (SEL_SPIN_STEADY - selSpinVel[i]) * blend;
+        selSpinYaw[i] += selSpinVel[i] * dt;
+        // Authored colors when standing. Red/yellow only while en route (ATTACK_MOVE
+        // stays set after arrival for acquire — don't leave the collar stuck red).
+        // Hard ATTACK while engaged stays red even if not translating.
+        const ord = world.order?.[i] ?? ORDER.IDLE;
+        let ringTint = 'white';
+        if (ord === ORDER.ATTACK) ringTint = 'red';
+        else if (moving) {
+          if (ord === ORDER.ATTACK_MOVE) ringTint = 'red';
+          else if (ord === ORDER.MOVE) ringTint = 'yellow';
+        }
+        renderer.writeSelectionRing(i, x, z, size, selSpinYaw[i], ringTint);
+      } else {
+        selSpinVel[i] = 0;
+        renderer.writeSelectionRing(i, 0, 0, 0);
+      }
+      wasSelected[i] = isSel ? 1 : 0;
+
+      const maxHp = def.hp;
+      const hp = world.hp[i];
+      if (maxHp > 0 && (isSel || hp < maxHp)) {
+        const slot = isSel ? hbSelCount++ : hbHurtCount++;
+        const buf = isSel ? hbSel : hbHurt;
+        const o = slot * 4;
+        buf[o] = x;
+        buf[o + 1] = z;
+        buf[o + 2] = size;
+        buf[o + 3] = hp / maxHp;
+      }
     }
+    for (let s = 0; s < hbSelCount; s++) {
+      const o = s * 4;
+      renderer.writeHealthBar?.(hbSel[o], hbSel[o + 1], hbSel[o + 2], hbSel[o + 3], {
+        armor: false,
+        holy: false,
+      });
+    }
+    for (let s = 0; s < hbHurtCount; s++) {
+      const o = s * 4;
+      renderer.writeHealthBar?.(hbHurt[o], hbHurt[o + 1], hbHurt[o + 2], hbHurt[o + 3], {
+        armor: false,
+        holy: false,
+      });
+    }
+    renderer.endHealthBars?.();
     if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
       lastRenderDebugAt = performance.now();
       console.info('[KOTH] render frame', {
         count: n,
         drawStats,
-        batches: renderer.debugBatches?.(n, world.type),
+        batches: renderer.debugBatches?.(n, world.type, world.owner),
       });
     }
+    if (drawStats.unmapped > 0 && performance.now() - lastUnmappedRebuild > 400) {
+      lastUnmappedRebuild = performance.now();
+      renderEntityCount = rebuildRendererEntities(renderer, session);
+    }
     if (colorsDirty) renderer.setColors(colors);
+    if (renderer.getPickHitboxesVisible?.()) {
+      const spheres = [];
+      for (let i = 0; i < n; i++) {
+        if (!world.alive[i]) continue;
+        const def = getUnitDef(world.type[i]);
+        spheres.push({
+          x: renderX[i],
+          y: renderY[i],
+          z: renderZ[i],
+          r: def.pickRadius ?? 1.8,
+        });
+      }
+      renderer.syncPickHitboxes?.(spheres);
+    }
+    const projectileSnapshots = session.displayProjectileSnapshots();
+    renderer.syncProjectiles?.(
+      projectileSnapshots.prev,
+      projectileSnapshots.cur,
+      alpha,
+    );
     renderer.commit();
   });
 
@@ -360,6 +633,10 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
     session,
     renderer,
     bufs,
+    syncRenderer: () => {
+      renderEntityCount = rebuildRendererEntities(renderer, session);
+      return renderEntityCount;
+    },
     resizeRenderBuffers,
     inputApi,
     kothShard,
@@ -386,8 +663,10 @@ async function bootGame(canvas, bootCfg, { stress, kothShard, solo = false }) {
 }
 
 async function applyLiveConfig(ctx, cfg, kothShard) {
+  const gen = ++liveConfigGeneration;
   const activeSlots = cfg.activeSlots ?? cfg.humanPlayers ?? [];
   if (cfg.mode === 'sandbox' && activeSlots.length === 0) {
+    if (gen !== liveConfigGeneration) return;
     ctx.setMatchMeta({ mode: 'sandbox', matchId: cfg.matchId });
     ctx.session.setRole(cfg.role ?? 'spectator');
     setStatusText('Looking for live shard…');
@@ -401,19 +680,37 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     setStatusText('Waiting for roster sync…');
     return;
   }
-  if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', cfg);
+  if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', { gen, activeSlots });
 
   const simMode = cfg.mode === 'sandbox' ? 'sandbox' : 'koth';
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
-  const { count } = await ctx.session.reset({
+  ctx.session._pendingWorldGen = gen;
+  await ctx.session.reset({
     seed: cfg.seed,
     mode: simMode,
     activeSlots,
   });
+  if (gen !== liveConfigGeneration) {
+    if (ctx.session._pendingWorldGen === gen) ctx.session._pendingWorldGen = null;
+    if (DEBUG_KOTH) console.info('[KOTH] stale live config ignored after reset', { gen, current: liveConfigGeneration });
+    return;
+  }
+  ctx.session._pendingWorldGen = null;
   ctx.session.setHumanPlayers(humanPlayers);
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] sim after reset', ownerStats(ctx.session.state));
 
-  syncPresentation(ctx, cfg, { count });
+  forceRendererSync(ctx);
+  syncPresentation(ctx, cfg, { skipRenderSync: true });
+
+  if (cfg.mode === 'koth') {
+    const world = ctx.session.state;
+    console.info('[live] world ready', {
+      activeSlots,
+      count: ctx.session.count,
+      p0: livingByOwner(world, 0),
+      p1: livingByOwner(world, 1),
+    });
+  }
 
   // The live world is rebuilt and confirmedTick is back at 0 for this match;
   // seed the lockstep confirm handshake so the sim can leave tick 0.
@@ -421,7 +718,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 }
 
 function syncPresentation(ctx, cfg, options = {}) {
-  const count = options.count ?? ctx.session.count;
+  if (!options.skipRenderSync && !ctx.session.resetting) forceRendererSync(ctx);
   ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
   if (cfg.localPlayerId != null) ctx.localPlayerId = cfg.localPlayerId;
   if (cfg.localPlayerId != null) ctx.session.setLocalPlayerId?.(cfg.localPlayerId);
@@ -433,10 +730,9 @@ function syncPresentation(ctx, cfg, options = {}) {
   if (cfg.inputEnabled != null) ctx.inputApi?.setInputEnabled?.(Boolean(cfg.inputEnabled));
   if ((cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
   ctx.session.inputDelayTicks = cfg.mode === 'koth' ? 1 : 0;
-  ctx.resizeRenderBuffers(count);
-  ctx.renderer.setCount(count);
-  ctx.renderer.rebuildFromTypes(count, ctx.session.state.type);
-  if (cfg.mode === 'koth') ctx.renderer.resetCamera?.();
+  // Only snap the camera on a real match reset — presentation syncs (join/role)
+  // used to call this every time and yank the view back to origin.
+  if (cfg.mode === 'koth' && cfg.reset) ctx.renderer.resetCamera?.();
 
   const overEl = document.getElementById('match-over');
   if (overEl) overEl.style.display = 'none';
@@ -496,8 +792,8 @@ function showMatchOver(session) {
   el.style.display = 'block';
 }
 
-function useKothAi(bootCfg, stress, solo) {
-  if (stress > 0) return [];
+function useKothAi(bootCfg, stress, animStress, solo) {
+  if (stress > 0 || animStress > 0) return [];
   if (solo) return [AI_OWNER];
   if (bootCfg.mode === 'sandbox' || bootCfg.mode === 'koth') return [];
   return [AI_OWNER];

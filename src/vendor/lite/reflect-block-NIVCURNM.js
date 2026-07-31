@@ -1,0 +1,1 @@
+var s={className:"ReflectBlock",emit(r,l,t,c,e){let n=e.cast(e.resolve(r,"incident",t,c),"vec3f").expr,o=e.cast(e.resolve(r,"normal",t,c),"vec3f").expr;return{expr:`reflect(${n}, ${o})`,type:"vec3f"}}};export{s as emitter};

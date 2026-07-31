@@ -8,7 +8,6 @@ import { SimClient } from './simClient.js';
 
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
-const SNAPSHOT_KEEP = 128;
 const LEDGER_KEEP = 7200;
 
 export { TICK_HZ, TICK_MS };
@@ -55,6 +54,10 @@ export class SimSession {
     this.committedLedgerFrames = [];
     /** @type {Map<number, { x: Float32Array, z: Float32Array }>} */
     this.snapshots = new Map();
+    this.snapshotRing = new Array(Math.max(4, this.inputDelayTicks + 3));
+    /** @type {Map<number, object>} */
+    this.projectileSnapshots = new Map();
+    this.projectileSnapshotRing = new Array(this.snapshotRing.length);
 
     this.confirmedTick = 0;
     this.simAcc = 0;
@@ -74,20 +77,30 @@ export class SimSession {
     this.pauseLockstep = false;
     this.replayingCatchUp = false;
     this.resetting = false;
+    this._bgPumpTimer = null;
     this.koth = null;
     this.kothMatchOver = 0;
+    this.simMetrics = null;
     /** @type {Map<number, number[]>} tick -> playerIds joining lockstep */
     this.pendingJoins = new Map();
     this.matchConfig = null;
+    this._resetChain = Promise.resolve();
+    /** When set, onWorldRebuilt ignores stale resets (see applyLiveConfig). */
+    this._pendingWorldGen = null;
+    /** Called after worker init / world rebuild (count is live entity total). */
+    this.onWorldRebuilt = null;
+    /** Read-only tile field snapshot from worker (static after gen). */
+    this.field = null;
   }
 
   async start(config) {
-    const { count } = await this.client.init({ ...config, aiPlayers: this.aiPlayers });
+    const { count, field } = await this.client.init({ ...config, aiPlayers: this.aiPlayers });
     this._count = count;
+    this.field = field ?? this.client.field;
     this._bindStepHandler();
     this._captureSnapshot(0);
     this.lastSnapshotAt = performance.now();
-    return { count };
+    return { count, field: this.field };
   }
 
   get count() {
@@ -148,6 +161,26 @@ export class SimSession {
     this._drainPendingCommits();
   }
 
+  /**
+   * Keep lockstep advancing when the tab is backgrounded (rAF pauses).
+   * Without this, peer tick_confirms stop and the other player freezes.
+   * Browsers may throttle the interval; still better than a hard stall.
+   */
+  setBackgroundPump(enabled) {
+    if (this._bgPumpTimer != null) {
+      clearInterval(this._bgPumpTimer);
+      this._bgPumpTimer = null;
+    }
+    if (!enabled) return;
+    let last = performance.now();
+    this._bgPumpTimer = setInterval(() => {
+      const now = performance.now();
+      const dt = now - last;
+      last = now;
+      this.pump(dt);
+    }, TICK_MS);
+  }
+
   _drainPendingCommits() {
     if (this.pauseLockstep) return;
     while (this.simAcc >= TICK_MS && !this.waitingForWorker) {
@@ -168,6 +201,16 @@ export class SimSession {
     const prevTick = Math.max(0, displayTick - 1);
     const prev = this.snapshots.get(prevTick) ?? this.snapshots.get(0);
     const cur = this.snapshots.get(displayTick) ?? prev;
+    return { prev, cur, displayTick };
+  }
+
+  displayProjectileSnapshots() {
+    if (this.resetting) return { prev: null, cur: null };
+    const displayTick = Math.max(0, this.confirmedTick - this.inputDelayTicks);
+    const prevTick = Math.max(0, displayTick - 1);
+    const prev =
+      this.projectileSnapshots.get(prevTick) ?? this.projectileSnapshots.get(0) ?? null;
+    const cur = this.projectileSnapshots.get(displayTick) ?? prev;
     return { prev, cur, displayTick };
   }
 
@@ -262,11 +305,18 @@ export class SimSession {
   }
 
   async reset(config) {
+    const task = this._resetChain.then(() => this._resetInner(config));
+    this._resetChain = task.catch(() => {});
+    return task;
+  }
+
+  async _resetInner(config) {
     this.resetting = true;
     this.ledger.clear();
     this.fullLedgerFrames = [];
     this.committedLedgerFrames = [];
     this.snapshots.clear();
+    this.projectileSnapshots.clear();
     this.peerConfirmedTick.clear();
     this.pendingJoins.clear();
     this._seenFrameIds.clear();
@@ -279,13 +329,16 @@ export class SimSession {
     this.client = new SimClient();
     this.state = this.client.state;
     try {
-      return await this.start(config);
+      const result = await this.start(config);
+      this.onWorldRebuilt?.(this.count);
+      return result;
     } finally {
       this.resetting = false;
     }
   }
 
   terminate() {
+    this.setBackgroundPump(false);
     this.client?.terminate?.();
   }
 
@@ -304,6 +357,9 @@ export class SimSession {
     this.fullLedgerFrames = other.fullLedgerFrames;
     this.committedLedgerFrames = other.committedLedgerFrames;
     this.snapshots = other.snapshots;
+    this.snapshotRing = other.snapshotRing;
+    this.projectileSnapshots = other.projectileSnapshots;
+    this.projectileSnapshotRing = other.projectileSnapshotRing;
     this.peerConfirmedTick = other.peerConfirmedTick;
     this.pendingJoins = other.pendingJoins;
     this._seenFrameIds = other._seenFrameIds;
@@ -320,6 +376,8 @@ export class SimSession {
     this.koth = other.koth;
     this.kothMatchOver = other.kothMatchOver;
     this._lastChecksum = other._lastChecksum;
+    this.simMetrics = other.simMetrics;
+    this.field = other.field ?? other.client?.field ?? null;
     this._bindStepHandler();
   }
 
@@ -356,6 +414,7 @@ export class SimSession {
       this._lastChecksum = checksum;
       if (extra?.koth) this.koth = extra.koth;
       if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
+      if (extra?.metrics) this.simMetrics = extra.metrics;
       this.waitingForWorker = false;
       this.inFlightTick = 0;
       const committedFrames = this.inFlightFrames;
@@ -405,19 +464,65 @@ export class SimSession {
 
   _captureSnapshot(tick) {
     const n = this.count;
-    let snap = this.snapshots.get(tick);
-    if (!snap) {
-      snap = { x: new Float32Array(n), z: new Float32Array(n) };
-      this.snapshots.set(tick, snap);
+    const slot = tick % this.snapshotRing.length;
+    let snap = this.snapshotRing[slot];
+    if (snap?.tick != null) this.snapshots.delete(snap.tick);
+    if (!snap || snap.x.length < n) {
+      snap = { tick, x: new Float32Array(n), z: new Float32Array(n) };
     }
+    snap.tick = tick;
+    this.snapshotRing[slot] = snap;
+    this.snapshots.set(tick, snap);
     const { px, py } = this.state;
     for (let i = 0; i < n; i++) {
       snap.x[i] = fx.toFloat(px[i]);
       snap.z[i] = fx.toFloat(py[i]);
     }
-    const minKeep = tick - SNAPSHOT_KEEP;
-    for (const t of this.snapshots.keys()) {
-      if (t < minKeep) this.snapshots.delete(t);
+    this._captureProjectileSnapshot(tick);
+  }
+
+  _captureProjectileSnapshot(tick) {
+    const state = this.state.projectiles;
+    const n = state?.highWater ?? 0;
+    const slot = tick % this.projectileSnapshotRing.length;
+    let snap = this.projectileSnapshotRing[slot];
+    if (snap?.tick != null) this.projectileSnapshots.delete(snap.tick);
+    if (!snap || snap.x.length < n) {
+      snap = {
+        tick,
+        highWater: n,
+        activeCount: 0,
+        x: new Float32Array(n),
+        z: new Float32Array(n),
+        vx: new Float32Array(n),
+        vz: new Float32Array(n),
+        generation: new Uint32Array(n),
+        age: new Uint16Array(n),
+        lifetime: new Uint16Array(n),
+        alive: new Uint8Array(n),
+        type: new Uint8Array(n),
+        owner: new Uint8Array(n),
+        despawnReason: new Uint8Array(n),
+      };
     }
+    snap.tick = tick;
+    snap.highWater = n;
+    snap.activeCount = state?.activeCount ?? 0;
+    snap.alive.fill(0);
+    for (let i = 0; i < n; i++) {
+      snap.x[i] = fx.toFloat(state.px[i]);
+      snap.z[i] = fx.toFloat(state.py[i]);
+      snap.vx[i] = fx.toFloat(state.vx[i]);
+      snap.vz[i] = fx.toFloat(state.vy[i]);
+      snap.generation[i] = state.generation[i];
+      snap.age[i] = state.age[i];
+      snap.lifetime[i] = state.lifetime[i];
+      snap.alive[i] = state.alive[i];
+      snap.type[i] = state.type[i];
+      snap.owner[i] = state.owner[i];
+      snap.despawnReason[i] = state.despawnReason[i];
+    }
+    this.projectileSnapshotRing[slot] = snap;
+    this.projectileSnapshots.set(tick, snap);
   }
 }

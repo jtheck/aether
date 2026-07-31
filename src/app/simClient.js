@@ -1,6 +1,11 @@
 // Main-thread bridge to the sim worker.
 
-import { simSharedByteSize, mapSharedState, simViewFacade } from '../sim/sharedState.js';
+import {
+  simSharedByteSize,
+  mapSharedState,
+  simViewFacade,
+  SHARED_LAYOUT_VERSION,
+} from '../sim/sharedState.js';
 
 export class SimClient {
   constructor() {
@@ -12,9 +17,13 @@ export class SimClient {
     this.state = simViewFacade(this.views);
     this.worker = new Worker(new URL('./sim.worker.js', import.meta.url), { type: 'module' });
     this._stepDoneHandler = null;
+    /** @type {{ tick: number, reject: (err: Error) => void } | null} */
+    this._tickWait = null;
     this.worker.onmessage = (e) => this._onMessage(e);
     this.worker.onerror = (e) => {
-      throw new Error(e.message || 'sim worker failed');
+      const err = new Error(e.message || 'sim worker failed');
+      if (this._tickWait) this._tickWait.reject(err);
+      else throw err;
     };
   }
 
@@ -24,6 +33,11 @@ export class SimClient {
       this._initReject = reject;
       this.worker.postMessage({ type: 'init', config, sab: this.sab });
     });
+  }
+
+  /** Latest field snapshot from worker init (static after gen). */
+  get field() {
+    return this._field ?? null;
   }
 
   onStepDone(handler) {
@@ -38,16 +52,32 @@ export class SimClient {
   /** Await one tick commit (catch-up replay). */
   commitTickAsync(tick, frames) {
     return new Promise((resolve, reject) => {
+      if (this._tickWait) {
+        reject(new Error(`commitTick ${tick} busy (waiting on ${this._tickWait.tick})`));
+        return;
+      }
       const prev = this._stepDoneHandler;
-      const timeout = setTimeout(() => {
-        this._stepDoneHandler = prev;
-        reject(new Error(`commitTick ${tick} timeout`));
-      }, 30_000);
-      this._stepDoneHandler = (doneTick, checksum, extra) => {
-        if (doneTick !== tick) return;
+      let settled = false;
+      const finish = (fn) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
+        this._tickWait = null;
         this._stepDoneHandler = prev;
-        resolve({ tick: doneTick, checksum, extra });
+        fn();
+      };
+      const timeout = setTimeout(() => {
+        finish(() => reject(new Error(`commitTick ${tick} timeout`)));
+      }, 30_000);
+      this._tickWait = { tick, reject: (err) => finish(() => reject(err)) };
+      this._stepDoneHandler = (doneTick, checksum, extra) => {
+        if (doneTick !== tick) {
+          finish(() =>
+            reject(new Error(`commitTick expected ${tick}, got ${doneTick}`)),
+          );
+          return;
+        }
+        finish(() => resolve({ tick: doneTick, checksum, extra }));
       };
       this.worker.postMessage({ type: 'commitTick', tick, frames });
     });
@@ -60,12 +90,21 @@ export class SimClient {
   _onMessage(e) {
     const msg = e.data;
     if (msg.type === 'ready') {
-      this._initResolve?.({ count: msg.count });
+      if (msg.layoutVersion !== SHARED_LAYOUT_VERSION) {
+        this._initReject?.(
+          new Error(`shared layout mismatch: worker ${msg.layoutVersion}, main ${SHARED_LAYOUT_VERSION}`),
+        );
+        this._initReject = null;
+        return;
+      }
+      this._field = msg.field ?? null;
+      this._initResolve?.({ count: msg.count, field: this._field });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {
       this._stepDoneHandler?.(msg.tick, msg.checksum, {
         koth: msg.koth,
         kothMatchOver: msg.kothMatchOver,
+        metrics: msg.metrics,
       });
     } else if (msg.type === 'error') {
       const err = new Error(msg.message);
@@ -73,6 +112,8 @@ export class SimClient {
       if (this._initReject) {
         this._initReject(err);
         this._initReject = null;
+      } else if (this._tickWait) {
+        this._tickWait.reject(err);
       } else {
         throw err;
       }

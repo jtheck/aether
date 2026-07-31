@@ -1,0 +1,1 @@
+var a={build(t,e){let s=e.state,u=e.input(t,"particle")(s);if(e.setOutput(t.id,"output",()=>u),!e.isConnected(t,"size"))return;let n=e.input(t,"size");u._updateQueue.push((i,p)=>{s.particle=i,s.system=p,i.size=n(s)})}};export{a as updateSizeBlock};

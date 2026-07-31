@@ -4,12 +4,18 @@
   "type": "module",
   "scripts": {
     "test:determinism": "node sim/determinism.test.js",
+    "test:spatial": "node sim/spatial.test.js",
+    "test:projectiles": "node sim/projectiles.test.js",
+    "bench:scale": "node sim/scale.bench.js",
+    "bench:scale:50k": "node sim/scale.bench.js --acceptance --enforce",
     "build:lite": "node build-lite.mjs",
+    "build:explorer": "node build-explorer.mjs",
     "build": "node build.mjs",
     "serve": "node serve.mjs"
   },
   "dependencies": {
-    "@babylonjs/lite": "^1.2.0",
+    "@babylonjs/lite": "^1.11.0",
+    "babylon-lite-explorer": "^0.4.1",
     "esbuild": "^0.28.1"
   }
 }

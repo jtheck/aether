@@ -4,6 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="icon" href="data:,">
+  <script type="importmap">
+  {
+    "imports": {
+      "@babylonjs/lite": "./vendor/lite/liteVendor.js"
+    }
+  }
+  </script>
+  <link rel="stylesheet" href="./vendor/lite-explorer/explorer.css">
   <style>
     html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0f14; color: #cdd6e4; font-family: system-ui, sans-serif; }
     #canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -23,7 +31,7 @@
     <button id="koth-start">Start or Join Lobby</button>
     <button id="koth-join" hidden>Join Match</button>
   </div>
-  <div id="hint">LMB drag select · LMB click unit · LMB ground move · RMB attack-move<br>S stop · Esc clear · J join (spectators) · MMB pan · Alt+LMB orbit<br>?solo=1 offline AI · ?stress=1000 perf · ?koth=0 legacy</div>
+  <div id="hint">LMB select / box-select · dbl-click or Ctrl-click unit = all of type<br>LMB ground attack-move · double-tap ground force-move · LMB enemy attack<br>RMB pan · double-RMB clear · wheel zoom · Shift/RMB+wheel rotate<br>ESDF/arrows pan · W/R rotate · Q/T zoom · J join · G tile grid · H pick hitboxes · B shadows · F9 explorer<br>?solo=1 · ?tiles=1 · ?hitboxes=1 · ?shadows=0 · ?stress=1000 · ?animStress=32 · ?koth=0</div>
   <div id="match-over" style="display:none;position:fixed;inset:0;place-content:center;background:rgba(0,0,0,0.55);font-size:1.4rem;pointer-events:none;"></div>
   <div id="legend"></div>
   <div id="fallback">

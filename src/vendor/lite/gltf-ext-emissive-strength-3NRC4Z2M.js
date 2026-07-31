@@ -1,0 +1,1 @@
+var r={id:"KHR_materials_emissive_strength",async applyMaterial(t){let i=t._rawMatDef?.extensions?.KHR_materials_emissive_strength;if(!i)return null;let e=i.emissiveStrength??1,s=t._emissiveFactor;return{emissiveColor:[s[0]*e,s[1]*e,s[2]*e]}}};export{r as default};

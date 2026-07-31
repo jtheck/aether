@@ -1,0 +1,1 @@
+var s={className:"ViewDirectionBlock",emit(o,t,r,c,e){let i=e.cast(e.resolve(o,"worldPosition",r,c),"vec3f").expr;return{expr:`normalize(${e.cast(e.resolve(o,"cameraPosition",r,c),"vec3f").expr} - ${i})`,type:"vec3f"}}};export{s as emitter};

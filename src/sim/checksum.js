@@ -18,6 +18,8 @@ export function checksum(w) {
   mix(w.tick);
   mix(w.count);
   mix(w.rng.s);
+  mix(w.pathLosCursor);
+  mix(w.pathAstarCursor);
 
   for (let i = 0; i < w.count; i++) {
     mix(w.alive[i]);
@@ -28,8 +30,13 @@ export function checksum(w) {
     mix(w.vy[i]);
     mix(w.order[i]);
     mix(w.targetEntity[i]);
+    mix(w.engagementTarget[i]);
+    mix(w.engagementSlot[i]);
+    mix(w.targetLoad[i]);
+    mix(w.engagementMask[i]);
     mix(w.navWpCount[i]);
     mix(w.navWpIndex[i]);
+    mix(w.pathRequest[i]);
     mix(w.navDestX[i]);
     mix(w.navDestY[i]);
     mix(w.attackCd[i]);
@@ -38,6 +45,30 @@ export function checksum(w) {
     mix(w.owner[i]);
   }
 
+  const p = w.projectiles;
+  mix(p.activeCount);
+  mix(p.freeTop);
+  mix(p.highWater);
+  mix(p.allocatorHash);
+  for (let i = 0; i < p.highWater; i++) {
+    mix(p.generation[i]);
+    mix(p.alive[i]);
+    if (!p.alive[i]) continue;
+    mix(p.type[i]);
+    mix(p.owner[i]);
+    mix(p.source[i]);
+    mix(p.target[i]);
+    mix(p.px[i]);
+    mix(p.py[i]);
+    mix(p.vx[i]);
+    mix(p.vy[i]);
+    mix(p.aimX[i]);
+    mix(p.aimY[i]);
+    mix(p.damage[i]);
+    mix(p.age[i]);
+    mix(p.lifetime[i]);
+    mix(p.hitCount[i]);
+  }
   mix(w.kothMatchOver ?? 0);
   h = mixKothChecksum(h, mix, w.koth);
 

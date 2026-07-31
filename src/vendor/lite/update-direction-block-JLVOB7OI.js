@@ -1,0 +1,1 @@
+import{a as s}from"./chunk-GWU6AEBJ.js";var d={build(e,t){let i=t.state,n=t.input(e,"particle")(i);if(t.setOutput(e.id,"output",()=>n),!t.isConnected(e,"direction"))return;let u=t.input(e,"direction");n._updateQueue.push((o,r)=>{i.particle=o,i.system=r,s(o.direction,u(i))})}};export{d as updateDirectionBlock};

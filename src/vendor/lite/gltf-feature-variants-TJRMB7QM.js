@@ -1,0 +1,1 @@
+var _={id:"KHR_materials_variants",async applyAsset(t,e,a){let n=a._json.extensions?.KHR_materials_variants?.variants?.map(r=>r.name);if(!n?.length)return{};let{loadVariantMaterials:s}=await import("./gltf-variants-A2NFU22V.js");return{materialVariants:await s(a._json,a._binChunk,a._baseUrl,n,t,a._engine,a._matExts,a._runMatExts,a._wrapTex)}}};export{_ as default};

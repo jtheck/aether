@@ -1,0 +1,1 @@
+import{a,c as m}from"./chunk-LGZPHUPV.js";function d(t=[{lightIndex:0,shadowType:"esm"}]){let r=t.filter(e=>e.shadowType==="csm");if(r.length>0)return m()(r.map(e=>({lightIndex:e.lightIndex})));let o=a("pbr-shadow",t),n=o._fragmentSlots?.AD;return{...o,_fragmentSlots:n?{AS:n}:void 0}}export{d as createPbrShadowFragment};

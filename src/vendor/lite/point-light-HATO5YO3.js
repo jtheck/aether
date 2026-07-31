@@ -1,0 +1,1 @@
+import{a}from"./chunk-GQSXGD4M.js";import"./chunk-4S6F4MXQ.js";import"./chunk-AXI5M7LZ.js";import"./chunk-OG424QW5.js";import"./chunk-IJL5AUX4.js";import"./chunk-RYWGU6XF.js";export{a as createPointLight};

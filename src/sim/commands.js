@@ -11,10 +11,12 @@
 
 import { ORDER } from './world.js';
 import { clearPath, queuePath, attackStandPoint } from './path.js';
+import { isPassable, snapToPassable, worldToTile } from './field.js';
 import { spawnKothSlot } from './worldSetup.js';
 import { kothRegisterJoin } from './kothMeta.js';
 import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
+import { clearEngagement } from './engagement.js';
 
 export const CMD = {
   MOVE: 1,
@@ -61,12 +63,24 @@ function applyMove(world, field, ids, tx, ty, order) {
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i]) continue;
+    let destX = tx[k];
+    let destY = ty[k];
+    const destTileX = worldToTile(destX);
+    const destTileY = worldToTile(destY);
+    if (!isPassable(field, destTileX, destTileY)) {
+      const snapped = snapToPassable(field, destX, destY);
+      if (snapped) {
+        destX = snapped.x;
+        destY = snapped.y;
+      }
+    }
     world.order[i] = order;
     world.targetEntity[i] = -1;
-    world.tx[i] = tx[k];
-    world.ty[i] = ty[k];
+    clearEngagement(world, i);
+    world.tx[i] = destX;
+    world.ty[i] = destY;
     world.hasTarget[i] = 1;
-    queuePath(world, i, tx[k], ty[k]);
+    queuePath(world, i, destX, destY);
   }
 }
 
@@ -77,6 +91,7 @@ function applyAttack(world, field, ids, target) {
     if (!world.alive[i]) continue;
     world.order[i] = ORDER.ATTACK;
     world.targetEntity[i] = target;
+    clearEngagement(world, i);
     world.hasTarget[i] = 0;
     const stand = attackStandPoint(world, i, target);
     queuePath(world, i, stand.x, stand.y);
@@ -89,6 +104,7 @@ function applyStop(world, ids) {
     if (!world.alive[i]) continue;
     world.order[i] = ORDER.IDLE;
     world.targetEntity[i] = -1;
+    clearEngagement(world, i);
     world.hasTarget[i] = 0;
     world.vx[i] = 0;
     world.vy[i] = 0;

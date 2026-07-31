@@ -2,7 +2,7 @@
 
 import * as fx from './fixed.js';
 
-export const HILL_RADIUS = fx.fromFloat(40);
+export const HILL_RADIUS = fx.fromFloat(160);
 const HILL_R2 = fx.mul(HILL_RADIUS, HILL_RADIUS);
 
 export function unitsOnHill(w, owner = -1) {

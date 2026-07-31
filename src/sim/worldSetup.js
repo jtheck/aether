@@ -1,40 +1,41 @@
 // Demo spawn layouts — used by the sim worker at init.
 
-import { createWorld, spawn } from './world.js';
+import { createWorld, spawn, STRESS_ENTITY_LIMIT } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { createKothMeta } from './kothMeta.js';
+import { WORLD_HALF_F } from './field.js';
 import * as fx from './fixed.js';
 
 export const PLAYER = 0;
 export const AI_OWNER = 1;
 
-/** Pentagonal spawn bases for KOTH slots 0–4 (world units). */
+/** Pentagonal spawn bases for KOTH slots 0–4 (world units; scale with board). */
+const H = WORLD_HALF_F;
 export const KOTH_BASES = [
-  [-120, 0],
-  [120, 0],
-  [0, -120],
-  [0, 120],
-  [-85, 85],
+  [-H * 0.6, 0],
+  [H * 0.6, 0],
+  [0, -H * 0.6],
+  [0, H * 0.6],
+  [-H * 0.425, H * 0.425],
 ];
 
 const PLAYER_ARMY = [
+  { type: UNIT.VILLAGER, count: 5 },
   { type: UNIT.WARRIOR, count: 10 },
   { type: UNIT.ARCHER, count: 8 },
-  { type: UNIT.SPEARMAN, count: 6 },
-  { type: UNIT.SCOUT, count: 4 },
-  { type: UNIT.CAVALRY, count: 4 },
 ];
 
 const ENEMY_ARMY = [
+  { type: UNIT.VILLAGER, count: 5 },
   { type: UNIT.WARRIOR, count: 10 },
   { type: UNIT.ARCHER, count: 8 },
-  { type: UNIT.SPEARMAN, count: 6 },
-  { type: UNIT.CAVALRY, count: 4 },
 ];
 
 const COL_SPACING = 22;
 const ROW_SPACING = 16;
-const STRESS_TYPES = [UNIT.WARRIOR, UNIT.ARCHER, UNIT.SPEARMAN, UNIT.SCOUT, UNIT.CAVALRY];
+/** Stress uses military types only (thin-instanced). Animated villagers: ?animStress=N. */
+const STRESS_TYPES = [UNIT.WARRIOR, UNIT.ARCHER];
+const STRESS_SPACING = 10;
 
 export { PLAYER_ARMY, ENEMY_ARMY };
 
@@ -57,7 +58,15 @@ export function spawnKothSlot(w, slot) {
 export function stressPerSideFromSearch(search = '') {
   const n = parseInt(new URLSearchParams(search).get('stress') || '0', 10);
   if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(n, 4000);
+  return Math.min(n, STRESS_ENTITY_LIMIT >> 1);
+}
+
+/** Per-side skinned villagers for render stress (`?animStress=32` → 64 total). */
+export function animStressPerSideFromSearch(search = '') {
+  const n = parseInt(new URLSearchParams(search).get('animStress') || '0', 10);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  // Same entity ceiling as ?stress= — GPU/skinning will die long before this.
+  return Math.min(n, STRESS_ENTITY_LIMIT >> 1);
 }
 
 function spawnArmy(w, layout, owner, baseX, baseZ) {
@@ -83,7 +92,7 @@ function bestKothSpawnPoint(w, slot) {
   const fallback = KOTH_BASES[slot] ?? KOTH_BASES[0];
   const candidates = [];
   for (const base of KOTH_BASES) candidates.push(base);
-  const radius = 175;
+  const radius = WORLD_HALF_F * 0.875;
   for (let i = 0; i < 16; i++) {
     const a = (i / 16) * Math.PI * 2;
     candidates.push([Math.cos(a) * radius, Math.sin(a) * radius]);
@@ -119,32 +128,45 @@ function spawnClearanceScore(w, x, z, owner) {
   return nearest;
 }
 
-function spawnStressSide(w, owner, baseX, baseZ, count) {
-  const cols = Math.ceil(Math.sqrt(count));
+/** Pack `count` units in a square grid centered on (baseX, baseZ). */
+function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
+  const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
   const rows = Math.ceil(count / cols);
-  const spacing = 5;
+  const halfX = ((cols - 1) * STRESS_SPACING) / 2;
+  const halfZ = ((rows - 1) * STRESS_SPACING) / 2;
   for (let k = 0; k < count; k++) {
     const col = k % cols;
     const row = (k / cols) | 0;
     spawn(w, {
-      x: fx.fromFloat(baseX + (col - (cols - 1) / 2) * spacing),
-      y: fx.fromFloat(baseZ + (row - (rows - 1) / 2) * spacing),
-      type: STRESS_TYPES[k % STRESS_TYPES.length],
+      x: fx.fromFloat(baseX + col * STRESS_SPACING - halfX),
+      y: fx.fromFloat(baseZ + row * STRESS_SPACING - halfZ),
+      type: typePicker(k),
       owner,
     });
   }
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[] }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[] }} config
  */
-export function buildWorldFromConfig({ seed, stressPerSide, mode = 'legacy', activeSlots }) {
+export function buildWorldFromConfig({ seed, stressPerSide, animStressPerSide, mode = 'legacy', activeSlots }) {
   const w = createWorld(seed);
   w.kothMatchOver = 0;
 
+  if (animStressPerSide > 0) {
+    const count = Math.min(Math.floor(animStressPerSide), STRESS_ENTITY_LIMIT >> 1);
+    const bx = WORLD_HALF_F * 0.3;
+    spawnStressSide(w, PLAYER, -bx, 0, count, () => UNIT.VILLAGER);
+    spawnStressSide(w, AI_OWNER, bx, 0, count, () => UNIT.VILLAGER);
+    return w;
+  }
+
   if (stressPerSide > 0) {
-    spawnStressSide(w, PLAYER, -175, -50, stressPerSide);
-    spawnStressSide(w, AI_OWNER, 175, 50, stressPerSide);
+    const count = Math.min(Math.floor(stressPerSide), STRESS_ENTITY_LIMIT >> 1);
+    // Two facing blocks near the usual west/east bases — not sprayed across the map.
+    const bx = WORLD_HALF_F * 0.3;
+    spawnStressSide(w, PLAYER, -bx, 0, count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
+    spawnStressSide(w, AI_OWNER, bx, 0, count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
     return w;
   }
 
@@ -165,7 +187,7 @@ export function buildWorldFromConfig({ seed, stressPerSide, mode = 'legacy', act
     return w;
   }
 
-  spawnArmy(w, PLAYER_ARMY, PLAYER, -120, 0);
-  spawnArmy(w, ENEMY_ARMY, AI_OWNER, 120, 0);
+  spawnArmy(w, PLAYER_ARMY, PLAYER, KOTH_BASES[0][0], KOTH_BASES[0][1]);
+  spawnArmy(w, ENEMY_ARMY, AI_OWNER, KOTH_BASES[1][0], KOTH_BASES[1][1]);
   return w;
 }

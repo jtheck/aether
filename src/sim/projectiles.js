@@ -5,6 +5,8 @@ import { applyDamage } from './damage.js';
 import { lineClear } from './field.js';
 import { getProjectileDef } from './projectileTypes.js';
 import { isHostile } from './teams.js';
+import { applyTreeSplash } from './trees.js';
+import { rngFrac } from './rng.js';
 
 export const MAX_PROJECTILES = 32768;
 
@@ -76,15 +78,16 @@ export function spawnProjectile(w, {
   store.target[slot] = target;
   store.px[slot] = x;
   store.py[slot] = y;
-  store.aimX[slot] = aimX;
-  store.aimY[slot] = aimY;
+  const aimed = applyAimScatter(w, x, y, aimX, aimY, def.aimScatter);
+  store.aimX[slot] = aimed.aimX;
+  store.aimY[slot] = aimed.aimY;
   store.damage[slot] = damage;
   store.age[slot] = 0;
   store.hitCount[slot] = 0;
   store.despawnReason[slot] = PROJECTILE_DESPAWN.NONE;
 
-  const dx = aimX - x;
-  const dy = aimY - y;
+  const dx = aimed.aimX - x;
+  const dy = aimed.aimY - y;
   const dist = fx.len(dx, dy);
   setVelocity(store, slot, dx, dy, dist, def.speed);
   const travelTicks = dist > 0 ? Math.ceil(dist / Math.max(1, def.speed)) + 2 : 1;
@@ -92,6 +95,23 @@ export function spawnProjectile(w, {
   store.activeCount++;
   w.metrics.projectileSpawned++;
   return slot;
+}
+
+/** Deterministic aim wander; max offset grows with throw distance. */
+function applyAimScatter(w, x, y, aimX, aimY, scatter) {
+  if (!scatter || scatter <= 0 || !w?.rng) return { aimX, aimY };
+  const dist = fx.len(aimX - x, aimY - y);
+  if (dist <= 0) return { aimX, aimY };
+  let maxOffset = fx.mul(dist, scatter);
+  const cap = fx.fromFloat(20);
+  if (maxOffset > cap) maxOffset = cap;
+  // Signed [-1, 1) from the sim RNG — farther shots use a larger maxOffset.
+  const nx = (rngFrac(w.rng) - fx.HALF) * 2;
+  const ny = (rngFrac(w.rng) - fx.HALF) * 2;
+  return {
+    aimX: aimX + fx.mul(maxOffset, nx),
+    aimY: aimY + fx.mul(maxOffset, ny),
+  };
 }
 
 function setVelocity(store, slot, dx, dy, dist, speed) {
@@ -121,7 +141,7 @@ function freeProjectile(w, slot, reason) {
 }
 
 /** Splash at impact point; hostiles take full damage, friendlies use multiplier. */
-function applySplash(w, slot, impactX, impactY, def) {
+function applySplash(w, slot, impactX, impactY, def, field) {
   const store = w.projectiles;
   const radius = def.splashRadius;
   if (!radius || radius <= 0) return false;
@@ -141,6 +161,9 @@ function applySplash(w, slot, impactX, impactY, def) {
       dmg = Math.max(1, Math.round(baseDamage * friendlyMul));
     }
     if (applyDamage(w, i, dmg, source)) hit = true;
+  }
+  if (def.ignitesTrees && field && applyTreeSplash(field, impactX, impactY, radius)) {
+    hit = true;
   }
   return hit;
 }
@@ -170,7 +193,7 @@ export function projectileSystem(w, field) {
       !lineClear(field, store.px[slot], store.py[slot], nextX, nextY)
     ) {
       if (def.splashRadius > 0) {
-        const hit = applySplash(w, slot, store.px[slot], store.py[slot], def);
+        const hit = applySplash(w, slot, store.px[slot], store.py[slot], def, field);
         freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.TERRAIN);
       } else {
         freeProjectile(w, slot, PROJECTILE_DESPAWN.TERRAIN);
@@ -202,7 +225,7 @@ export function projectileSystem(w, field) {
       if (def.splashRadius > 0) {
         const ix = reachedAim ? store.aimX[slot] : nextX;
         const iy = reachedAim ? store.aimY[slot] : nextY;
-        const hit = applySplash(w, slot, ix, iy, def);
+        const hit = applySplash(w, slot, ix, iy, def, field);
         freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
       } else {
         freeProjectile(w, slot, PROJECTILE_DESPAWN.MISS);

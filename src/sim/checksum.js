@@ -7,8 +7,9 @@
 // to paper over.
 
 import { mixKothChecksum } from './kothMeta.js';
+import { mixTreeChecksum } from './trees.js';
 
-export function checksum(w) {
+export function checksum(w, field = null) {
   let h = 0x811c9dc5 | 0;
   const mix = (v) => {
     h ^= v | 0;
@@ -72,6 +73,7 @@ export function checksum(w) {
   }
   mix(w.kothMatchOver ?? 0);
   h = mixKothChecksum(h, mix, w.koth);
+  if (field) mixTreeChecksum(mix, field);
 
   return h >>> 0;
 }

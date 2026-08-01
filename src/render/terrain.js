@@ -42,9 +42,15 @@ const woodTextures = new WeakMap();
  * @param {object} camera
  * @returns {Promise<{ meshes: object[], update: (camera: object, deltaMs: number) => void, dispose: () => void }>}
  */
-export async function createTerrainFromField(engine, scene, field, camera) {
+export async function createTerrainFromField(engine, scene, field, camera, opts = {}) {
   const textures = await loadAtlasTextures(engine);
-  const scenery = await createSceneryFromField(engine, field, surfaceHeightAt, camera);
+  const scenery = await createSceneryFromField(
+    engine,
+    field,
+    surfaceHeightAt,
+    camera,
+    opts,
+  );
   const active = createActiveCellLookup(field);
   const built = [
     ...buildEnvironmentMeshes(engine, field),
@@ -57,6 +63,9 @@ export async function createTerrainFromField(engine, scene, field, camera) {
     meshes: built,
     update(activeCamera, deltaMs) {
       scenery.update(activeCamera, deltaMs);
+    },
+    applyTreeUpdates(updates) {
+      scenery.applyTreeUpdates?.(updates);
     },
     dispose() {
       const list = scene?.meshes;

@@ -12,6 +12,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { SCENERY } from '../sim/scenery.js';
 import { TILE_SIZE_F, WORLD_HALF_F } from '../sim/field.js';
+import { treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
 const ATLAS_GRID = 8;
@@ -74,12 +75,17 @@ const modelContainersByEngine = new WeakMap();
  * @param {object} field
  * @param {(field: object, x: number, z: number) => number} surfaceHeightAt
  * @param {object} camera
+ * @param {{ emitFire?: (x: number, y: number, z: number, scale: number) => void }} [opts]
  */
-export async function createSceneryFromField(engine, field, surfaceHeightAt, camera) {
-  if (!field?.sceneryType) return { meshes: [], update() {} };
+export async function createSceneryFromField(engine, field, surfaceHeightAt, camera, opts = {}) {
+  if (!field?.sceneryType) {
+    return { meshes: [], update() {}, applyTreeUpdates() {} };
+  }
   const atlas = await getAtlas(engine);
   const meshes = [];
   const batches = [];
+  /** @type {Map<number, { batch: object, index: number }>} */
+  const treeByTile = new Map();
 
   for (const variant of VARIANTS) {
     const instances = collectInstances(field, variant, surfaceHeightAt);
@@ -99,16 +105,24 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       meshes.push(part.mesh);
     }
 
-    batches.push({
+    const batch = {
       variant,
       instances,
       billboardMesh,
       billboardMatrices,
       modelParts,
-    });
+      dirty: true,
+    };
+    batches.push(batch);
+    if (variant.kind === SCENERY.TREE) {
+      for (let i = 0; i < instances.length; i++) {
+        treeByTile.set(instances[i].tileIndex, { batch, index: i });
+      }
+    }
   }
 
   let elapsed = LOD_UPDATE_MS;
+  let fireElapsed = 0;
   let lastCameraX = Infinity;
   let lastCameraY = Infinity;
   let lastCameraZ = Infinity;
@@ -116,22 +130,61 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   function update(activeCamera = camera, deltaMs = LOD_UPDATE_MS, force = false) {
     if (!activeCamera) return;
     elapsed += deltaMs;
+    fireElapsed += deltaMs;
     const cameraPos = cameraPosition(activeCamera);
     const movedSq =
       (cameraPos.x - lastCameraX) ** 2 +
       (cameraPos.y - lastCameraY) ** 2 +
       (cameraPos.z - lastCameraZ) ** 2;
-    if (!force && elapsed < LOD_UPDATE_MS && movedSq < LOD_MOVE_THRESHOLD_SQ) return;
-    elapsed = 0;
-    lastCameraX = cameraPos.x;
-    lastCameraY = cameraPos.y;
-    lastCameraZ = cameraPos.z;
+    const lodDue = force || elapsed >= LOD_UPDATE_MS || movedSq >= LOD_MOVE_THRESHOLD_SQ;
+    let anyDirty = false;
+    for (let b = 0; b < batches.length; b++) {
+      if (batches[b].dirty) { anyDirty = true; break; }
+    }
+    if (lodDue || anyDirty) {
+      if (lodDue) {
+        elapsed = 0;
+        lastCameraX = cameraPos.x;
+        lastCameraY = cameraPos.y;
+        lastCameraZ = cameraPos.z;
+      }
+      for (const batch of batches) {
+        if (!batch.dirty && !lodDue) continue;
+        updateBatchLod(batch, cameraPos);
+        batch.dirty = false;
+      }
+    }
+    if (opts.emitFire && fireElapsed >= 48) {
+      fireElapsed = 0;
+      for (const batch of batches) {
+        if (batch.variant.kind !== SCENERY.TREE) continue;
+        for (let i = 0; i < batch.instances.length; i++) {
+          const p = batch.instances[i];
+          if (!(p.burn > 0) || p.stock <= 0) continue;
+          // Full-tree spray — emitter spreads wisps from trunk to crown.
+          opts.emitFire(p.x, p.y, p.z, Math.max(0.65, p.stockScale));
+        }
+      }
+    }
+  }
 
-    for (const batch of batches) updateBatchLod(batch, cameraPos);
+  function applyTreeUpdates(updates) {
+    if (!updates?.tiles?.length) return;
+    const { tiles, stock, burn } = updates;
+    for (let i = 0; i < tiles.length; i++) {
+      const ref = treeByTile.get(tiles[i]);
+      if (!ref) continue;
+      const p = ref.batch.instances[ref.index];
+      p.stock = stock[i];
+      p.burn = burn[i];
+      const stage = treeStageFromStock(p.stock);
+      p.stockScale = treeScaleForStage(stage);
+      ref.batch.dirty = true;
+    }
   }
 
   update(camera, LOD_UPDATE_MS, true);
-  return { meshes, update };
+  return { meshes, update, applyTreeUpdates };
 }
 
 async function getAtlas(engine) {
@@ -333,7 +386,7 @@ function createBillboardMesh(engine, variant, atlas) {
 
 function collectInstances(field, variant, surfaceHeightAt) {
   const out = [];
-  const { width, height, seed, sceneryType } = field;
+  const { width, height, seed, sceneryType, treeStock } = field;
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
@@ -342,16 +395,29 @@ function collectInstances(field, variant, surfaceHeightAt) {
       const x = (tx + 0.5) * TILE_SIZE_F - WORLD_HALF_F + placement.offsetX;
       const z = (tz + 0.5) * TILE_SIZE_F - WORLD_HALF_F + placement.offsetZ;
       const groundY = surfaceHeightAt(field, x, z);
+      const stock = variant.kind === SCENERY.TREE
+        ? (treeStock?.[i] ?? TREE_STAGE_FALLBACK_STOCK)
+        : 0;
+      const stockScale = variant.kind === SCENERY.TREE
+        ? treeScaleForStage(treeStageFromStock(stock))
+        : 1;
       out.push({
+        tileIndex: i,
         x,
         y: groundY,
         z,
         yaw: placement.yaw,
+        stock,
+        burn: 0,
+        stockScale,
       });
     }
   }
   return out;
 }
+
+// Fallback if an older snapshot omits treeStock (full-size tree).
+const TREE_STAGE_FALLBACK_STOCK = 42;
 
 function updateBatchLod(batch, cameraPos) {
   const {
@@ -364,6 +430,14 @@ function updateBatchLod(batch, cameraPos) {
   const lodDistanceSq = variant.lodDistance * variant.lodDistance;
   for (let i = 0; i < instances.length; i++) {
     const p = instances[i];
+    const stockScale = p.stockScale ?? 1;
+    if (variant.kind === SCENERY.TREE && stockScale <= 0) {
+      for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
+      writeHiddenMatrix(billboardMatrices, i);
+      continue;
+    }
+    const modelScale = variant.modelScale * stockScale;
+    const billboardScale = variant.billboardScale * stockScale;
     const dx = cameraPos.x - p.x;
     const dy = cameraPos.y - p.y;
     const dz = cameraPos.z - p.z;
@@ -377,7 +451,7 @@ function updateBatchLod(batch, cameraPos) {
           p.y,
           p.z,
           p.yaw,
-          variant.modelScale,
+          modelScale,
           part.baseMatrix,
         );
       }
@@ -388,10 +462,10 @@ function updateBatchLod(batch, cameraPos) {
         billboardMatrices,
         i,
         p.x,
-        p.y + variant.billboardYOffset * variant.billboardScale,
+        p.y + variant.billboardYOffset * billboardScale,
         p.z,
         p.yaw,
-        variant.billboardScale,
+        billboardScale,
       );
     }
   }

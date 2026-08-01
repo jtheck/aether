@@ -43,6 +43,14 @@ function createSoftParticleAtlas(engine) {
   });
 }
 
+function sizePair(value, fallback = 1) {
+  if (Array.isArray(value)) {
+    return [Math.max(0, value[0] ?? fallback), Math.max(0, value[1] ?? value[0] ?? fallback)];
+  }
+  const n = Math.max(0, value ?? fallback);
+  return [n, n];
+}
+
 function makeParticle() {
   const position = [0, 0, 0];
   const sizeWorld = [1, 1];
@@ -62,8 +70,10 @@ function makeParticle() {
     drag: 0,
     age: 0,
     lifetime: 1,
-    startSize: 1,
-    endSize: 1,
+    startSizeW: 1,
+    startSizeH: 1,
+    endSizeW: 1,
+    endSizeH: 1,
     startAlpha: 1,
   };
 }
@@ -115,15 +125,19 @@ export function createParticleSystem(engine, scene, options = {}) {
     particle.drag = Math.max(0, init.drag ?? 0);
     particle.age = 0;
     particle.lifetime = Math.max(0.001, init.lifetime ?? 0.5);
-    particle.startSize = Math.max(0, init.startSize ?? init.size ?? 1);
-    particle.endSize = Math.max(0, init.endSize ?? particle.startSize);
+    const startSize = sizePair(init.startSize ?? init.size ?? 1);
+    const endSize = sizePair(init.endSize ?? startSize, startSize[0]);
+    particle.startSizeW = startSize[0];
+    particle.startSizeH = startSize[1];
+    particle.endSizeW = endSize[0];
+    particle.endSizeH = endSize[1];
     particle.startAlpha = color[3] ?? 1;
     particle.drawColor[0] = color[0];
     particle.drawColor[1] = color[1];
     particle.drawColor[2] = color[2];
     particle.drawColor[3] = particle.startAlpha;
-    particle.sizeWorld[0] = particle.startSize;
-    particle.sizeWorld[1] = particle.startSize;
+    particle.sizeWorld[0] = particle.startSizeW;
+    particle.sizeWorld[1] = particle.startSizeH;
     const system = init.blend === 'alpha' ? systems.alpha : systems.additive;
     particle.handle = addBillboardSprite(system, {
       position: particle.position,
@@ -183,9 +197,10 @@ export function createParticleSystem(engine, scene, options = {}) {
       particle.position[1] += particle.vy * dt;
       particle.position[2] += particle.vz * dt;
       const progress = particle.age / particle.lifetime;
-      const size = particle.startSize + (particle.endSize - particle.startSize) * progress;
-      particle.sizeWorld[0] = size;
-      particle.sizeWorld[1] = size;
+      particle.sizeWorld[0] =
+        particle.startSizeW + (particle.endSizeW - particle.startSizeW) * progress;
+      particle.sizeWorld[1] =
+        particle.startSizeH + (particle.endSizeH - particle.startSizeH) * progress;
       particle.drawColor[3] = particle.startAlpha * (1 - progress);
       updateBillboardSprite(particle.handle, particle.patch);
     }

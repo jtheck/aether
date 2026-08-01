@@ -7,6 +7,7 @@ import { step } from '../sim/step.js';
 import { generateAiCommands } from '../sim/ai.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
+import { takeTreeUpdates } from '../sim/trees.js';
 import {
   beginSharedPublish,
   endSharedPublish,
@@ -73,13 +74,15 @@ self.onmessage = (e) => {
       }
       publishProjectiles(world, views);
       endSharedPublish(views);
+      const treeUpdates = takeTreeUpdates(field);
       postMessage({
         type: 'stepDone',
         tick: world.tick,
-        checksum: checksum(world),
+        checksum: checksum(world, field),
         metrics: { ...world.metrics },
         kothMatchOver: world.kothMatchOver ?? 0,
         koth: serializeKoth(world.koth),
+        treeUpdates,
       });
     }
   } catch (err) {

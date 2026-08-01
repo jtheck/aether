@@ -15,25 +15,32 @@ import { WORLD_HALF_F } from './field.js';
 import { getUnitDef, UNIT } from './unitTypes.js';
 import { createWorld, MAX_ENTITIES, ORDER, spawn } from './world.js';
 
+const LOAD_SPREAD = fx.mul(fx.fromInt(10), fx.fromInt(10));
+
 function expectedTargets(w) {
   const expected = new Int32Array(w.count);
   expected.fill(-1);
+  const load = new Uint16Array(w.count);
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
     if (i % ACQUIRE_PHASES !== w.tick % ACQUIRE_PHASES) continue;
     const def = getUnitDef(w.type[i]);
+    if (def.category !== 'military' || def.aggroRange === 0) continue;
     const aggro2 = fx.mul(def.aggroRange, def.aggroRange);
     let best = -1;
-    let bestD = aggro2 + 1;
+    let bestScore = 0x7fffffff;
     for (let j = 0; j < w.count; j++) {
       if (i === j || !w.alive[j] || !isHostile(w.owner[i], w.owner[j])) continue;
       const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
-      if (d2 <= aggro2 && (d2 < bestD || (d2 === bestD && (best < 0 || j < best)))) {
+      if (d2 > aggro2) continue;
+      const score = d2 + load[j] * LOAD_SPREAD;
+      if (score < bestScore || (score === bestScore && (best < 0 || j < best))) {
         best = j;
-        bestD = d2;
+        bestScore = score;
       }
     }
     expected[i] = best;
+    if (best >= 0) load[best]++;
   }
   return expected;
 }

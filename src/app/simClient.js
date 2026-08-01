@@ -105,6 +105,7 @@ export class SimClient {
         koth: msg.koth,
         kothMatchOver: msg.kothMatchOver,
         metrics: msg.metrics,
+        treeUpdates: msg.treeUpdates ?? null,
       });
     } else if (msg.type === 'error') {
       const err = new Error(msg.message);

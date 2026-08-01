@@ -33,10 +33,14 @@ import { TREE_SLOW_MULTIPLIER } from './scenery.js';
 import { kothMetaStep } from './kothMeta.js';
 import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
 import { projectileSystem } from './projectiles.js';
+import { treeBurnSystem } from './trees.js';
 
-const SEP_RADIUS = fx.fromFloat(2.5);
+// Soft personal space ≈ right-click formation spacing (2.5 for warriors).
+// Old code multiplied by an extra 2.5× factor, so idle post-combat piles
+// kept drifting out to ~6+ and looked like endless turning/inching.
 const SEP_PUSH = fx.fromFloat(0.2);
 const MOVE_AVOID_PUSH = fx.fromFloat(0.06);
+const SEP_MAX_STEP = fx.fromFloat(0.25);
 const GRID_SEP_THRESHOLD = 400;
 // Visit every source cell over eight deterministic ticks to bound dense idle work.
 const SEP_PHASES = 8;
@@ -47,10 +51,8 @@ const SEP_MIN_DIST_SQ = new Int32Array(SEP_TYPE_COUNT * SEP_TYPE_COUNT);
 for (let a = 0; a < SEP_TYPE_COUNT; a++) {
   for (let b = 0; b < SEP_TYPE_COUNT; b++) {
     const key = a * SEP_TYPE_COUNT + b;
-    SEP_MIN_DIST[key] = fx.mul(
-      SEP_RADIUS,
-      fx.fromFloat(UNIT_DEFS[a].size / 6 + UNIT_DEFS[b].size / 6),
-    );
+    const spacing = Math.max(2.0, UNIT_DEFS[a].size / 6 + UNIT_DEFS[b].size / 6);
+    SEP_MIN_DIST[key] = fx.fromFloat(spacing);
     SEP_MIN_DIST_SQ[key] = fx.mul(SEP_MIN_DIST[key], SEP_MIN_DIST[key]);
   }
 }
@@ -68,6 +70,7 @@ export function step(world, field, commands) {
   applyCommands(world, field, commands);
   combatSystem(world, field);
   projectileSystem(world, field);
+  treeBurnSystem(field);
   kothMetaStep(world);
   planPathBudget(world, field);
   movementSystem(world, field);
@@ -286,28 +289,7 @@ function movingAvoidanceSystem(w, field) {
 }
 
 function applyMovingAvoidance(w, field, i, j) {
-  const dx = w.px[j] - w.px[i];
-  const dy = w.py[j] - w.py[i];
-  const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
-  const minDist = SEP_MIN_DIST[typePair];
-  const dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
-  if (dist2 === 0 || dist2 >= SEP_MIN_DIST_SQ[typePair]) return;
-  const dist = fx.sqrt(dist2);
-  const push = fx.div(fx.mul(MOVE_AVOID_PUSH, minDist - dist), dist);
-  const px = fx.mul(dx, push);
-  const py = fx.mul(dy, push);
-  w.px[i] -= px;
-  w.py[i] -= py;
-  w.px[j] += px;
-  w.py[j] += py;
-  if (!isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))) {
-    w.px[i] += px;
-    w.py[i] += py;
-  }
-  if (!isPassable(field, worldToTile(w.px[j]), worldToTile(w.py[j]))) {
-    w.px[j] -= px;
-    w.py[j] -= py;
-  }
+  applyPairPush(w, field, i, j, MOVE_AVOID_PUSH);
 }
 
 // Soft separation for idle units that somehow overlap — never while pathing.
@@ -376,14 +358,29 @@ function canSeparate(w, i) {
 function applySeparation(w, field, i, j) {
   // Small-count pairwise path does not prefilter; keep this guard authoritative.
   if (!canSeparate(w, i) || !canSeparate(w, j)) return;
-  const dx = w.px[j] - w.px[i];
-  const dy = w.py[j] - w.py[i];
+  applyPairPush(w, field, i, j, SEP_PUSH);
+}
+
+/** Soft radial push; clamps near-zero 1/dist spikes and breaks exact overlaps. */
+function applyPairPush(w, field, i, j, strength) {
+  let dx = w.px[j] - w.px[i];
+  let dy = w.py[j] - w.py[i];
   const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
   const minDist = SEP_MIN_DIST[typePair];
-  const dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
-  if (dist2 === 0 || dist2 >= SEP_MIN_DIST_SQ[typePair]) return;
+  let dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
+  if (dist2 >= SEP_MIN_DIST_SQ[typePair]) return;
+  if (dist2 === 0) {
+    // Exact stacks used to be skipped forever; pick a stable unit axis from ids.
+    const axis = (i * 31 + j * 17) & 3;
+    if (axis === 0) { dx = fx.ONE; dy = 0; }
+    else if (axis === 1) { dx = -fx.ONE; dy = 0; }
+    else if (axis === 2) { dx = 0; dy = fx.ONE; }
+    else { dx = 0; dy = -fx.ONE; }
+    dist2 = fx.ONE;
+  }
   const dist = fx.sqrt(dist2);
-  const push = fx.div(fx.mul(SEP_PUSH, minDist - dist), dist);
+  let push = fx.div(fx.mul(strength, minDist - dist), dist);
+  if (push > SEP_MAX_STEP) push = SEP_MAX_STEP;
   const px = fx.mul(dx, push);
   const py = fx.mul(dy, push);
   w.px[i] -= px;

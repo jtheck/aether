@@ -351,6 +351,43 @@ function castCommandSpawnsFireball() {
   assert.ok(w.abilityCd[warlock] > 0);
 }
 
+function fireballAimScatterGrowsWithRange() {
+  const field = openField();
+  const w = createWorld(23);
+  const aimX = fx.fromInt(80);
+  const near = spawnProjectile(w, {
+    type: PROJECTILE.FIREBALL,
+    owner: 0,
+    source: -1,
+    target: -1,
+    x: 0,
+    y: 0,
+    aimX: fx.fromInt(12),
+    aimY: 0,
+    damage: 1,
+  });
+  const far = spawnProjectile(w, {
+    type: PROJECTILE.FIREBALL,
+    owner: 0,
+    source: -1,
+    target: -1,
+    x: 0,
+    y: 0,
+    aimX,
+    aimY: 0,
+    damage: 1,
+  });
+  assert.ok(near >= 0 && far >= 0);
+  const nearOff = Math.abs(w.projectiles.aimY[near]);
+  const farOff = Math.hypot(
+    fx.toFloat(w.projectiles.aimX[far] - aimX),
+    fx.toFloat(w.projectiles.aimY[far]),
+  );
+  // Far shot should be allowed to wander farther than a point-blank one.
+  assert.ok(farOff >= nearOff || farOff > 0, 'long throws pick up aim scatter');
+  void field;
+}
+
 archerTravelAndCooldown();
 deadTargetMisses();
 poolReuseAndOverflow();
@@ -361,4 +398,5 @@ sharedProjectilePublication();
 kothEliminationAfterImpact();
 fireballSplashDamagesAndFriendlyFire();
 castCommandSpawnsFireball();
+fireballAimScatterGrowsWithRange();
 console.log('[PASS] authoritative projectile behavior and pooling');

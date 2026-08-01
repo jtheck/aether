@@ -27,7 +27,8 @@ import {
   setShadowTaskCasterMeshes,
 } from '../vendor/lite/liteVendor.js';
 import { getUnitDef } from '../sim/unitTypes.js';
-import { MAX_PROJECTILES } from '../sim/projectiles.js';
+import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
+import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
 import { HEIGHT_AMPLITUDE, WORLD_HALF_F } from '../sim/field.js';
 import { kothMaxUnitsOfType, KOTH_MAX_SLOTS } from '../sim/worldSetup.js';
 import {
@@ -48,6 +49,7 @@ import {
 import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from './terrain.js';
 import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
+import { createArrowTrails } from './arrowTrails.js';
 import { createParticleSystem } from './particleSystem.js';
 import { createHealthBars } from './healthBars.js';
 
@@ -464,6 +466,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
     entityIds: [],
     gpuCapacity: cap,
     mappedSize: 0,
+    fxSockets: mesh.fxSockets ?? [],
   };
 }
 
@@ -541,7 +544,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let shadowCasterList = [];
   const SHADOW_CASTERS_OFF = [];
 
-  /** @type {{ meshes: object[], update?: (camera: object, deltaMs: number) => void, dispose: () => void } | null} */
+  /** @type {{ meshes: object[], update?: (camera: object, deltaMs: number) => void, applyTreeUpdates?: Function, dispose: () => void } | null} */
   let terrain = null;
   /** @type {{ setVisible: (on: boolean) => void, dispose: () => void } | null} */
   let tileGrid = null;
@@ -549,6 +552,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let ground = null;
   /** @type {object | null} */
   let fieldSnap = opts.field ?? null;
+  /** Late-bound so scenery can emit before the particle system exists. */
+  const treeFireEmit = { fn: null };
+
+  function sceneryOpts() {
+    return {
+      emitFire(x, y, z, scale) {
+        treeFireEmit.fn?.(x, y, z, scale);
+      },
+    };
+  }
 
   function groundYAt(x, z) {
     return fieldSnap ? surfaceHeightAt(fieldSnap, x, z) : 0;
@@ -564,7 +577,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   if (opts.field) {
-    terrain = await createTerrainFromField(engine, scene, opts.field, camera);
+    terrain = await createTerrainFromField(engine, scene, opts.field, camera, sceneryOpts());
     rebuildTileGrid(opts.field);
   } else {
     const groundMat = createStandardMaterial();
@@ -830,7 +843,68 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   addToScene(scene, pickDebugMesh);
   let pickDebugVisible = false;
   let pickDebugCount = 0;
-  const particles = createParticleSystem(engine, scene, { capacity: 8192 });
+  const particles = createParticleSystem(engine, scene, { capacity: 16384 });
+  /** Wide at the base, then pull inward while climbing (column, not fountain). */
+  treeFireEmit.fn = (x, groundY, z, scale = 1) => {
+    const s = Math.max(0.65, scale);
+    const count = 6;
+    for (let i = 0; i < count; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = (0.35 + Math.random() * 1.35) * s;
+      const ox = Math.cos(ang) * rad;
+      const oz = Math.sin(ang) * rad;
+      const px = x + ox;
+      const pz = z + oz;
+      // Keep births near the roots / lower trunk.
+      const py = groundY + 0.15 + Math.random() * 0.9 * s;
+      const roll = Math.random();
+      const color =
+        roll > 0.62
+          ? [1, 0.88, 0.35, 0.36]
+          : roll > 0.28
+            ? [1, 0.48, 0.08, 0.4]
+            : [0.95, 0.18, 0.02, 0.32];
+      const w = (0.28 + Math.random() * 0.38) * s;
+      const h = (0.65 + Math.random() * 0.85) * s;
+      // Inward toward trunk + mostly up. Outer sparks die sooner.
+      const pull = 0.55 + Math.random() * 0.45;
+      const life = 1.1 + Math.random() * 0.7 + (1.1 - Math.min(1, rad / (1.7 * s))) * 0.8;
+      particles.emit({
+        position: [px, py, pz],
+        velocity: [
+          -ox * pull,
+          2.4 + Math.random() * 2.6 * s,
+          -oz * pull,
+        ],
+        gravity: [0, 1.5, 0],
+        color,
+        lifetime: life,
+        startSize: [w, h],
+        endSize: [w * 0.15, h * 0.35],
+        drag: 0.95,
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const rad = (0.2 + Math.random() * 0.7) * s;
+      const ox = Math.cos(ang) * rad;
+      const oz = Math.sin(ang) * rad;
+      particles.emit({
+        position: [x + ox, groundY + 0.2 + Math.random() * 0.5 * s, z + oz],
+        velocity: [
+          -ox * 0.7,
+          2.8 + Math.random() * 2.2,
+          -oz * 0.7,
+        ],
+        gravity: [0, 1.2, 0],
+        color: [1, 0.7, 0.2, 0.5],
+        lifetime: 1.6 + Math.random() * 0.8,
+        startSize: 0.16 * s,
+        endSize: 0.03,
+        drag: 0.45,
+      });
+    }
+  };
   // Match entity capacity — a 512 cap made mass-select / stress only show chips
   // on the first N entity indices (later selected units looked "unhealthy-less").
   const healthBars = createHealthBars(engine, scene, {
@@ -838,34 +912,141 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   });
   const trailGenerations = new Uint32Array(MAX_PROJECTILES);
   const trailLastEmitMs = new Float64Array(MAX_PROJECTILES);
+  /** Generation last splashed — avoids double FX if a dead slot lingers. */
+  const fireballSplashSeen = new Uint32Array(MAX_PROJECTILES);
   let particleClockMs = 0;
+
+  function emitFireballGroundSplashes(prev, cur) {
+    if (!cur) return;
+    const n = cur.highWater ?? 0;
+    for (let i = 0; i < n; i++) {
+      if (cur.alive[i]) continue;
+      if (cur.type[i] !== PROJECTILE.FIREBALL) continue;
+      const reason = cur.despawnReason?.[i] ?? PROJECTILE_DESPAWN.NONE;
+      if (
+        reason !== PROJECTILE_DESPAWN.HIT &&
+        reason !== PROJECTILE_DESPAWN.MISS &&
+        reason !== PROJECTILE_DESPAWN.TERRAIN
+      ) {
+        continue;
+      }
+      const gen = cur.generation[i];
+      if (!gen || fireballSplashSeen[i] === gen) continue;
+      const wasAlive =
+        prev && i < prev.highWater && prev.alive[i] && prev.generation[i] === gen;
+      if (!wasAlive) continue;
+      fireballSplashSeen[i] = gen;
+      const x = cur.x[i];
+      const z = cur.z[i];
+      const y = groundYAt(x, z) + 0.25;
+      // Ground splash: wide burst of wisps + sparks.
+      for (let n = 0; n < 36; n++) {
+        const ang = (n / 36) * Math.PI * 2 + Math.random() * 0.35;
+        const speed = 6 + Math.random() * 8;
+        const roll = Math.random();
+        particles.emit({
+          position: [x, y + Math.random() * 0.55, z],
+          velocity: [
+            Math.cos(ang) * speed,
+            4 + Math.random() * 8,
+            Math.sin(ang) * speed,
+          ],
+          gravity: [0, -16, 0],
+          color:
+            roll > 0.5
+              ? [1, 0.8, 0.3, 0.5]
+              : [1, 0.4, 0.06, 0.55],
+          lifetime: 0.5 + Math.random() * 0.45,
+          startSize: [
+            1.3 + Math.random() * 1.6,
+            2.2 + Math.random() * 2.4,
+          ],
+          endSize: [0.25, 0.55],
+          drag: 1.15,
+        });
+      }
+      for (let n = 0; n < 20; n++) {
+        const ang = Math.random() * Math.PI * 2;
+        const speed = 3.5 + Math.random() * 7;
+        particles.emit({
+          position: [x, y, z],
+          velocity: [
+            Math.cos(ang) * speed,
+            6 + Math.random() * 9,
+            Math.sin(ang) * speed,
+          ],
+          gravity: [0, -10, 0],
+          color: [1, 0.65, 0.15, 0.7],
+          lifetime: 0.55 + Math.random() * 0.55,
+          startSize: 0.55,
+          endSize: 0.06,
+          drag: 0.45,
+        });
+      }
+      // Soft bloom at the impact point.
+      particles.emit({
+        position: [x, y + 0.4, z],
+        velocity: [0, 3.5, 0],
+        gravity: [0, 1.2, 0],
+        color: [1, 0.55, 0.1, 0.4],
+        lifetime: 0.45,
+        startSize: 7.5,
+        endSize: 2.2,
+        drag: 1.0,
+      });
+    }
+  }
+  const arrowTrails = createArrowTrails(engine, scene);
   const projectileRenderer = createProjectileRenderer(
     engine,
     scene,
     groundYAt,
-    (slot, generation, x, y, z, vx, vz, def) => {
+    (slot, generation, x, y, z, vx, vz, def, vy = 0) => {
+      const isFireball = def.id === PROJECTILE.FIREBALL;
+      const isArrow = def.mesh === PROJECTILE_MESH.ARROW;
+      const emitGapMs = isFireball ? 18 : isArrow ? 22 : 32;
       if (
         trailGenerations[slot] === generation &&
-        particleClockMs - trailLastEmitMs[slot] < 32
+        particleClockMs - trailLastEmitMs[slot] < emitGapMs
       ) {
         return;
       }
       trailGenerations[slot] = generation;
       trailLastEmitMs[slot] = particleClockMs;
+      if (isArrow) {
+        // World-oriented dashes (not camera billboards) so they follow travel.
+        arrowTrails.emit(x, y, z, vx, vy, vz);
+        return;
+      }
       const speed = Math.hypot(vx, vz);
-      const offset = speed > 1e-6 ? 0.8 / speed : 0;
-      particles.emit({
-        position: [x - vx * offset, y, z - vz * offset],
-        color: [
-          Math.min(1, def.color[0] * 1.8 + 0.15),
-          Math.min(1, def.color[1] * 1.8 + 0.15),
-          Math.min(1, def.color[2] * 1.8 + 0.15),
-          0.8,
-        ],
-        lifetime: 0.22,
-        startSize: 1.2,
-        endSize: 0.25,
-      });
+      const offset = speed > 1e-6 ? 0.55 / speed : 0;
+      const px = x - vx * offset;
+      const pz = z - vz * offset;
+      if (isFireball) {
+        // Fat near the ball, taper off behind — trail shrink handles the fade.
+        const trailVy = -vy * 0.35 + 0.15;
+        particles.emit({
+          position: [px, y, pz],
+          velocity: speed > 1e-6 ? [-vx * 0.18, trailVy, -vz * 0.18] : [0, trailVy, 0],
+          gravity: [0, -1.2, 0],
+          color: [1, 0.42, 0.05, 0.9],
+          lifetime: 0.32,
+          startSize: 3.4,
+          endSize: 0.4,
+          drag: 1.1,
+        });
+        particles.emit({
+          position: [px, y, pz],
+          velocity: speed > 1e-6 ? [-vx * 0.1, trailVy + 0.35, -vz * 0.1] : [0, trailVy + 0.35, 0],
+          gravity: [0, -0.4, 0],
+          color: [1, 0.78, 0.2, 0.8],
+          lifetime: 0.24,
+          startSize: 2.2,
+          endSize: 0.12,
+          drag: 0.6,
+        });
+        return;
+      }
     },
   );
 
@@ -956,10 +1137,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   applyShadowState();
 
   let frameCb = null;
+  let unitFxElapsed = 0;
+  // 1 particle/unit @ ~12Hz — much cheaper than the old 3× @ 25Hz, still visible in armies.
+  const UNIT_FX_INTERVAL_MS = 80;
   onBeforeRender(scene, (deltaMs) => {
     terrain?.update?.(camera, deltaMs);
     particleClockMs += Math.min(100, Math.max(0, deltaMs));
+    unitFxElapsed += deltaMs;
+    if (unitFxElapsed >= UNIT_FX_INTERVAL_MS) {
+      unitFxElapsed = 0;
+      emitUnitSocketFire();
+    }
     particles.update(deltaMs);
+    arrowTrails.update(deltaMs);
+    arrowTrails.commit();
     const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
     for (const batch of typeBatches.values()) {
       if (batch.vatParts?.length) {
@@ -970,6 +1161,62 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     if (frameCb) frameCb(deltaMs);
   });
+
+  /** Constant little fire at particle_anchor / torch_anchor sockets. */
+  function emitUnitSocketFire() {
+    for (const batch of typeBatches.values()) {
+      const sockets = batch.fxSockets;
+      if (!sockets?.length) continue;
+      const count = batch.mesh?.thinInstances?.count ?? 0;
+      const m = batch.matrices;
+      for (let slot = 0; slot < count; slot++) {
+        const o = slot * 16;
+        if (!(m[o + 15] > 0)) continue;
+        for (let s = 0; s < sockets.length; s++) {
+          const sock = sockets[s];
+          const lx = sock.x;
+          const ly = sock.y;
+          const lz = sock.z;
+          const wx = m[o + 12] + m[o] * lx + m[o + 8] * lz;
+          const wy = m[o + 13] + m[o + 5] * ly;
+          const wz = m[o + 14] + m[o + 2] * lx + m[o + 10] * lz;
+          const torch = /torch/i.test(sock.name);
+          emitSocketFlame(wx, wy, wz, torch ? 0.55 : 0.8, torch ? 'torch' : 'mage');
+        }
+      }
+    }
+  }
+
+  function emitSocketFlame(x, y, z, scale, style) {
+    const s = scale;
+    const mage = style === 'mage';
+    const ang = Math.random() * Math.PI * 2;
+    const rad = Math.random() * 0.1 * s;
+    particles.emit({
+      position: [
+        x + Math.cos(ang) * rad,
+        y + Math.random() * 0.06 * s,
+        z + Math.sin(ang) * rad,
+      ],
+      velocity: [
+        (Math.random() - 0.5) * (mage ? 0.1 : 0.12),
+        0.45 + Math.random() * 0.55,
+        (Math.random() - 0.5) * (mage ? 0.1 : 0.12),
+      ],
+      gravity: [0, mage ? 0.45 : 0.8, 0],
+      color: mage
+        ? Math.random() > 0.4
+          ? [0.85, 0.95, 1, 0.6]
+          : [1, 1, 1, 0.55]
+        : Math.random() > 0.45
+          ? [1, 0.75, 0.2, 0.55]
+          : [1, 0.4, 0.06, 0.5],
+      lifetime: 0.5 + Math.random() * 0.25,
+      startSize: [0.22 * s, 0.42 * s],
+      endSize: [0.05 * s, 0.12 * s],
+      drag: mage ? 0.9 : 1.2,
+    });
+  }
 
   await registerSceneWithShadowSupport(scene);
 
@@ -1139,6 +1386,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     flushThinInstances(orderMarker);
     if (pickDebugVisible) flushThinInstances(pickDebugMesh);
     projectileRenderer.commit();
+    arrowTrails.commit();
     if (shadowsEnabled) applyShadowState();
   }
 
@@ -1362,10 +1610,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         applyShadowState();
         return;
       }
-      terrain = await createTerrainFromField(engine, scene, snap, camera);
+      terrain = await createTerrainFromField(engine, scene, snap, camera, sceneryOpts());
       markShadowReceivers(true);
       applyShadowState();
       rebuildTileGrid(snap);
+    },
+
+    applyTreeUpdates(updatesList) {
+      if (!updatesList?.length) return;
+      for (let i = 0; i < updatesList.length; i++) {
+        terrain?.applyTreeUpdates?.(updatesList[i]);
+      }
     },
 
     setTileGridVisible(on) {
@@ -1560,15 +1815,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     syncProjectiles(prev, cur, alpha) {
+      emitFireballGroundSplashes(prev, cur);
       return projectileRenderer.sync(prev, cur, alpha);
     },
 
     clearProjectiles() {
       projectileRenderer.clear();
+      arrowTrails.clear();
       particles.clear();
       trailGenerations.fill(0);
       trailLastEmitMs.fill(0);
+      fireballSplashSeen.fill(0);
       projectileRenderer.commit();
+      arrowTrails.commit();
     },
 
     emitParticle(init) {

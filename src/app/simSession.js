@@ -4,6 +4,7 @@
 
 import * as fx from '../sim/fixed.js';
 import { bufferFrame, collectFramesForTick, pruneLedger } from '../sim/commandFrame.js';
+import { applyTreeUpdatesToField } from '../sim/trees.js';
 import { SimClient } from './simClient.js';
 
 const TICK_HZ = 20;
@@ -89,8 +90,10 @@ export class SimSession {
     this._pendingWorldGen = null;
     /** Called after worker init / world rebuild (count is live entity total). */
     this.onWorldRebuilt = null;
-    /** Read-only tile field snapshot from worker (static after gen). */
+    /** Tile field snapshot from worker (tree stock/burn mutate in place). */
     this.field = null;
+    /** @type {Array<{ tiles: Uint32Array, stock: Uint8Array, burn: Uint8Array }> | null} */
+    this.pendingTreeUpdates = null;
   }
 
   async start(config) {
@@ -415,6 +418,11 @@ export class SimSession {
       if (extra?.koth) this.koth = extra.koth;
       if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
       if (extra?.metrics) this.simMetrics = extra.metrics;
+      if (extra?.treeUpdates) {
+        applyTreeUpdatesToField(this.field, extra.treeUpdates);
+        if (!this.pendingTreeUpdates) this.pendingTreeUpdates = [];
+        this.pendingTreeUpdates.push(extra.treeUpdates);
+      }
       this.waitingForWorker = false;
       this.inFlightTick = 0;
       const committedFrames = this.inFlightFrames;
@@ -426,6 +434,13 @@ export class SimSession {
       this.onCommit?.(tick, checksum);
       this._drainPendingCommits();
     });
+  }
+
+  /** Drain tree stock/burn patches for the renderer (since last call). */
+  takePendingTreeUpdates() {
+    const out = this.pendingTreeUpdates;
+    this.pendingTreeUpdates = null;
+    return out;
   }
 
   _canAdvance(tick) {

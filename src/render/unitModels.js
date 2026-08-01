@@ -53,6 +53,42 @@ export function collectRenderableMeshes(node, out = []) {
   return out;
 }
 
+function gltfNodeBaseName(node) {
+  // cloneTransformNode appends "_clone"; strip before matching.
+  return (node?.name ?? '').replace(/_clone$/i, '');
+}
+
+/**
+ * Blender FX empties / marker cubes — not part of the visible unit.
+ * Bare "Cube" is only treated as a helper when the asset also has *anchor*
+ * sockets (e.g. warlock). target.glb is itself named Cube and must render.
+ *
+ * @param {object} node
+ * @param {{ hideBareCube?: boolean }} [opts]
+ */
+export function isFxSocketNode(node, opts = {}) {
+  const name = gltfNodeBaseName(node);
+  if (/anchor/i.test(name)) return true;
+  if (opts.hideBareCube && name === 'Cube') return true;
+  return false;
+}
+
+function collectFxSockets(node, out = []) {
+  if (/anchor/i.test(gltfNodeBaseName(node))) {
+    const w = node.worldMatrix;
+    if (w) {
+      out.push({
+        name: gltfNodeBaseName(node),
+        x: w[12],
+        y: w[13],
+        z: w[14],
+      });
+    }
+  }
+  for (const child of node?.children ?? []) collectFxSockets(child, out);
+  return out;
+}
+
 /** Union local AABBs across a loaded glTF hierarchy (node translations only). */
 export function computeHierarchyBounds(root) {
   const min = [Infinity, Infinity, Infinity];
@@ -146,9 +182,14 @@ function computeSmoothNormalsLH(positions, indices) {
 async function bakeGltfParts(engine, url) {
   const container = await loadGltf(engine, url);
   const root = cloneTransformNode(container.entities[0]);
-  const sources = collectRenderableMeshes(root);
+  const sockets = collectFxSockets(root);
+  const hideBareCube = sockets.length > 0;
+  const sources = collectRenderableMeshes(root).filter(
+    (n) => !isFxSocketNode(n, { hideBareCube }),
+  );
   if (sources.length === 0) throw new Error(`no mesh in ${url}`);
-  return sources.map((source) => bakeSourceGeometry(source, source.worldMatrix));
+  const parts = sources.map((source) => bakeSourceGeometry(source, source.worldMatrix));
+  return { parts, sockets };
 }
 
 function boundsOfPositions(positions) {
@@ -174,7 +215,7 @@ function boundsOfPositions(positions) {
  * @returns {Promise<object[]>}
  */
 export async function loadBakedUnitMeshParts(engine, url) {
-  const baked = await bakeGltfParts(engine, url);
+  const { parts: baked, sockets } = await bakeGltfParts(engine, url);
   let footY = Infinity;
   for (const part of baked) {
     for (let i = 1; i < part.positions.length; i += 3) {
@@ -183,7 +224,7 @@ export async function loadBakedUnitMeshParts(engine, url) {
   }
   if (!Number.isFinite(footY)) footY = 0;
 
-  return baked.map((part, index) => {
+  const meshes = baked.map((part, index) => {
     const mesh = createMeshFromData(
       engine,
       `${url}#${index}`,
@@ -206,6 +247,15 @@ export async function loadBakedUnitMeshParts(engine, url) {
     mesh.position.z = 0;
     return mesh;
   });
+  // Foot-centered like prepareLegacyModel so instance matrices line up.
+  const fxSockets = sockets.map((s) => ({
+    name: s.name,
+    x: s.x,
+    y: s.y - footY,
+    z: s.z,
+  }));
+  if (meshes[0]) meshes[0].fxSockets = fxSockets;
+  return meshes;
 }
 
 /**
@@ -214,7 +264,7 @@ export async function loadBakedUnitMeshParts(engine, url) {
  * Prefer {@link loadBakedUnitMeshParts} when materials must stay separate.
  */
 export async function loadBakedUnitMesh(engine, url) {
-  const baked = await bakeGltfParts(engine, url);
+  const { parts: baked, sockets } = await bakeGltfParts(engine, url);
 
   let vertCount = 0;
   let indexCount = 0;
@@ -257,6 +307,14 @@ export async function loadBakedUnitMesh(engine, url) {
   mesh.boundMin = b.min;
   mesh.boundMax = b.max;
   prepareLegacyModel(mesh);
+  const footY = mesh.boundMin?.[1] ?? 0;
+  // prepareLegacyModel shifts by -footY via mesh.position; sockets match that space.
+  mesh.fxSockets = sockets.map((s) => ({
+    name: s.name,
+    x: s.x,
+    y: s.y - footY,
+    z: s.z,
+  }));
   return mesh;
 }
 

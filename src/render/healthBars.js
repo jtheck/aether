@@ -19,8 +19,8 @@ const FRAME_SOFT = 0;
 const FRAME_RING_HOLY = 1;
 const FRAME_RING_ARMOR = 2;
 
-/** Matches game/health-display.js rhythm (half of prior v2 size). */
-const DOT_DIAMETER_MUL = 0.11;
+/** Fixed chip size for every unit (world units). Alternate dots stay a bit smaller for rhythm. */
+const NORMAL_DOT_DIAMETER = 0.4;
 const DOT_DIAMETER_ALTERNATE_MUL = 0.2;
 const DOT_SPACING_MUL = 1.06;
 const HOLY_RING_VS_NORMAL = 1.04;
@@ -29,10 +29,10 @@ const ARMOR_RING_VS_NORMAL = 1.26;
 /** Max sprites per unit: 5 dots + 2 holy rings + 2 armor rings. */
 const SPRITES_PER_SLOT = 9;
 /**
- * Tiny toward-camera pull so chips clear the ground plane only.
- * Large bias made them draw over units — keep natural unit occlusion.
+ * Toward-camera pull so chips win depth against terrain and unit meshes.
+ * (Billboard API always depth-tests; bias is the HUD-style always-visible path.)
  */
-const CAMERA_DEPTH_BIAS = 0.55;
+const CAMERA_DEPTH_BIAS = 10;
 /** Toward-camera XZ offset — reads as "below the unit" on a typical RTS view. */
 const BELOW_SCREEN_OFFSET = 2.4;
 
@@ -203,8 +203,8 @@ export function createHealthBars(engine, scene, opts = {}) {
   }
 
   /**
-   * Place chips: above ground, shifted toward camera on XZ (below unit on screen).
-   * Only a tiny view-ray nudge so terrain doesn't eat them; units still occlude.
+   * Place chips: above ground, shifted toward camera on XZ (below unit on screen),
+   * then pulled along the view ray so terrain/units don't occlude them.
    */
   function placeChipAnchor(x, y, z) {
     const eye = cameraEye();
@@ -218,7 +218,8 @@ export function createHealthBars(engine, scene, opts = {}) {
     const xzLen = Math.hypot(dx, dz) || 1;
     const ox = x + (dx / xzLen) * BELOW_SCREEN_OFFSET;
     const oz = z + (dz / xzLen) * BELOW_SCREEN_OFFSET;
-    const b = CAMERA_DEPTH_BIAS;
+    // Cap so we never pull past the camera; scale up a bit when the cam is far.
+    const b = Math.min(len * 0.45, Math.max(CAMERA_DEPTH_BIAS, len * 0.08));
     return [ox + dx * inv * b, y + dy * inv * b, oz + dz * inv * b];
   }
 
@@ -228,22 +229,22 @@ export function createHealthBars(engine, scene, opts = {}) {
     },
 
     /**
-     * Place one v1-style chip row.
+     * Place one v1-style chip row (fixed size; unitSize kept for call-site compat).
      * @param {number} x
      * @param {number} y
      * @param {number} z
-     * @param {number} unitSize
+     * @param {number} _unitSize unused — chips are a fixed small size for all units
      * @param {number} ratio 0..1
      * @param {{ armor?: boolean, holy?: boolean }} [flags]
      */
-    write(x, y, z, unitSize, ratio, flags = {}) {
+    write(x, y, z, _unitSize, ratio, flags = {}) {
       if (used >= capacity) return;
       const slot = slots[used++];
       const r = Math.max(0, Math.min(1, ratio));
       const armor = !!flags.armor;
       const holy = !!flags.holy;
 
-      const normalDot = Math.max(0.35, unitSize * DOT_DIAMETER_MUL);
+      const normalDot = NORMAL_DOT_DIAMETER;
       const spacing = normalDot * DOT_SPACING_MUL;
       const totalWidth = (DOT_COUNT - 1) * spacing;
       const [rx, rz] = cameraRight();

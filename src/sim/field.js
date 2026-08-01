@@ -51,6 +51,12 @@ export function createField(seed = 0) {
     pass: new Uint8Array(n),
     slowMask: new Uint8Array(n),
     sceneryType: new Uint8Array(n),
+    // Per-tile wood remaining / burn timer (0 when no living tree).
+    treeStock: new Uint8Array(n),
+    treeBurn: new Uint16Array(n),
+    burningTrees: [],
+    treeDirty: [],
+    treeStockHash: 0,
     heightMap: new Float32Array(n),
     terrainTypes: new Uint8Array(n),
     tileType: new Uint8Array(n),
@@ -91,6 +97,10 @@ export function fieldSnapshot(field) {
     pass: field.pass.slice(),
     slowMask: field.slowMask.slice(),
     sceneryType: field.sceneryType.slice(),
+    treeStock: field.treeStock?.slice?.() ?? new Uint8Array(field.width * field.height),
+    treeBurn: field.treeBurn instanceof Uint16Array
+      ? field.treeBurn.slice()
+      : new Uint16Array(field.treeBurn ?? field.width * field.height),
   };
   const tileMask = field.activeMask ?? field.tileMask ?? field.enabledMask;
   if (tileMask?.slice) snapshot.activeMask = tileMask.slice();

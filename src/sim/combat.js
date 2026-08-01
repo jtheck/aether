@@ -19,6 +19,10 @@ import {
 } from './spatialGrid.js';
 
 export const ACQUIRE_PHASES = 5;
+/** Squared-distance penalty per existing attacker — spreads fire without ignoring nearer threats. */
+const LOAD_SPREAD = fx.mul(fx.fromInt(10), fx.fromInt(10));
+/** Must beat the current target by this much score before switching (anti-thrash). */
+const REBALANCE_MARGIN = fx.mul(fx.fromInt(4), fx.fromInt(4));
 
 export function combatSystem(w, field) {
   rebuildSpatialGrid(w.spatial, w);
@@ -31,12 +35,21 @@ export { kill };
 
 function canAutoAcquire(w, i) {
   const order = w.order[i];
+  // ATTACK: periodic rebalance off dogpiled targets when alternatives exist.
+  if (order === w.ORDER.ATTACK) return true;
   if (order === w.ORDER.ATTACK_MOVE) return true;
   if (order === w.ORDER.IDLE) return true;
   return false;
 }
 
-/** Attack-move + idle military: pick nearest hostile in aggro range. */
+function targetScore(w, attacker, target, d2) {
+  let load = w.targetLoad[target];
+  // Don't count ourselves when re-scoring our current target.
+  if (w.targetEntity[attacker] === target && load > 0) load--;
+  return d2 + load * LOAD_SPREAD;
+}
+
+/** Idle / attack-move / attack military: pick a hostile in aggro, preferring lower load. */
 export function acquireTargets(w, field) {
   const grid = w.spatial;
   for (let i = 0; i < w.count; i++) {
@@ -49,8 +62,24 @@ export function acquireTargets(w, field) {
 
     const aggro2 = fx.mul(def.aggroRange, def.aggroRange);
     let best = -1;
-    let bestD = aggro2 + 1;
-    let bestLoad = 0x7fffffff;
+    let bestScore = 0x7fffffff;
+    const prev = w.targetEntity[i];
+    const wasAttack = w.order[i] === w.ORDER.ATTACK;
+
+    const consider = (j) => {
+      if (j === i || !w.alive[j] || !isHostile(w.owner[i], w.owner[j])) return;
+      w.metrics.combatCandidates++;
+      const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
+      if (d2 > aggro2) return;
+      const score = targetScore(w, i, j, d2);
+      if (
+        score < bestScore ||
+        (score === bestScore && (best < 0 || j < best))
+      ) {
+        bestScore = score;
+        best = j;
+      }
+    };
 
     const bounds = queryCellBounds(w.px[i], w.py[i], def.aggroRange);
     for (let z = bounds.minZ; z <= bounds.maxZ; z++) {
@@ -59,21 +88,7 @@ export function acquireTargets(w, field) {
         if (grid.overflowOwners || w.owner[i] >= SPATIAL_OWNER_SLOTS) {
           let j = grid.head[cell];
           while (j >= 0) {
-            if (j !== i && w.alive[j] && isHostile(w.owner[i], w.owner[j])) {
-              w.metrics.combatCandidates++;
-              const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
-              const load = w.targetLoad[j];
-              if (
-                d2 <= aggro2 &&
-                (d2 < bestD ||
-                  (d2 === bestD &&
-                    (load < bestLoad || (load === bestLoad && (best < 0 || j < best)))))
-              ) {
-                bestD = d2;
-                bestLoad = load;
-                best = j;
-              }
-            }
+            consider(j);
             j = grid.next[j];
           }
           continue;
@@ -82,32 +97,29 @@ export function acquireTargets(w, field) {
           if (owner === w.owner[i] || !grid.activeOwners[owner]) continue;
           let j = grid.ownerHead[cell * SPATIAL_OWNER_SLOTS + owner];
           while (j >= 0) {
-            w.metrics.combatCandidates++;
-            const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
-            const load = w.targetLoad[j];
-            if (
-              d2 <= aggro2 &&
-              (d2 < bestD ||
-                (d2 === bestD &&
-                  (load < bestLoad || (load === bestLoad && (best < 0 || j < best)))))
-            ) {
-              bestD = d2;
-              bestLoad = load;
-              best = j;
-            }
+            consider(j);
             j = grid.ownerNext[j];
           }
         }
       }
     }
 
-    if (best >= 0) {
-      w.targetEntity[i] = best;
-      w.order[i] = w.ORDER.ATTACK;
-      claimEngagement(w, i, best);
-      const stand = attackStandPoint(w, i, best);
-      queuePath(w, i, stand.x, stand.y);
+    if (best < 0) continue;
+    if (wasAttack && prev === best) continue;
+    if (wasAttack && prev >= 0 && w.alive[prev]) {
+      const prevD2 = fx.dist2(w.px[i], w.py[i], w.px[prev], w.py[prev]);
+      if (prevD2 <= aggro2) {
+        const prevScore = targetScore(w, i, prev, prevD2);
+        if (bestScore + REBALANCE_MARGIN >= prevScore) continue;
+      }
+      w.targetLoad[prev] = Math.max(0, w.targetLoad[prev] - 1);
     }
+
+    w.targetEntity[i] = best;
+    w.order[i] = w.ORDER.ATTACK;
+    claimEngagement(w, i, best);
+    const stand = attackStandPoint(w, i, best);
+    queuePath(w, i, stand.x, stand.y);
   }
 }
 

@@ -42,7 +42,7 @@ const ENEMY_ARMY = [
 const COL_SPACING = 22;
 const ROW_SPACING = 16;
 /** Stress uses military types only (thin-instanced). Animated villagers: ?animStress=N. */
-const STRESS_TYPES = [UNIT.WARRIOR, UNIT.ARCHER];
+const STRESS_TYPES = [UNIT.WARRIOR, UNIT.ARCHER, UNIT.WARLOCK];
 const STRESS_SPACING = 10;
 
 export { PLAYER_ARMY, ENEMY_ARMY };

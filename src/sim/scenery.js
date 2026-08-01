@@ -3,6 +3,21 @@
 
 import * as fx from './fixed.js';
 import { TERRAIN, worldToTile } from './field.js';
+import {
+  TREE_STAGE_MAX,
+  TREE_STAGE_MIN,
+  TREE_WOOD_PER_STAGE,
+  ensureTreeArrays,
+} from './trees.js';
+
+function initialTreeStock(tx, tz, seed) {
+  const h = sceneryTileHash(tx, tz, seed + 4000);
+  // Bias toward the high end so big trees are common, saplings less so.
+  const biased = 1 - (1 - h) * (1 - h);
+  const span = TREE_STAGE_MAX - TREE_STAGE_MIN + 1;
+  const stages = TREE_STAGE_MIN + Math.min(span - 1, Math.floor(biased * span));
+  return stages * TREE_WOOD_PER_STAGE;
+}
 
 export const SCENERY = {
   NONE: 0,
@@ -55,6 +70,12 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
   slowMask.fill(0);
   field.sceneryType = sceneryType;
   field.slowMask = slowMask;
+  ensureTreeArrays(field);
+  field.treeStock.fill(0);
+  field.treeBurn.fill(0);
+  field.burningTrees.length = 0;
+  field.treeDirty.length = 0;
+  field.treeStockHash = 0;
 
   const reserved = buildReservedMask(field, world, reservedWorldPoints);
   const occupied = new Uint8Array(n);
@@ -95,6 +116,7 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
       sceneryType[i] = SCENERY.TREE;
       slowMask[i] = 1;
       occupied[i] = 1;
+      field.treeStock[i] = initialTreeStock(tx, tz, seed);
     }
   }
 

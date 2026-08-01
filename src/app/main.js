@@ -527,7 +527,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       const z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
       const dx = cur.x[i] - prev.x[i];
       const dz = cur.z[i] - prev.z[i];
-      const moving = dx * dx + dz * dz > 0.0004;
+      // Idle soft-separation nudges positions without an order — don't spin facing / walk.
+      const orderedMove = world.order[i] !== ORDER.IDLE;
+      const moving = orderedMove && dx * dx + dz * dz > 0.0004;
       if (moving) facingYaw[i] = Math.atan2(dx, dz);
       const yaw = facingYaw[i];
       let size = def.size;
@@ -629,6 +631,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       projectileSnapshots.cur,
       alpha,
     );
+    const treeUpdates = session.takePendingTreeUpdates?.();
+    if (treeUpdates?.length) renderer.applyTreeUpdates?.(treeUpdates);
     renderer.commit();
   });
 

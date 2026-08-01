@@ -5,6 +5,7 @@ import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
 import { getUnitDef } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
+import { playVillagerMove } from '../audio.js';
 
 /** v1 lasso drag threshold. */
 export const DRAG_THRESHOLD_PX = 25;
@@ -230,6 +231,8 @@ export function createGameInput(opts) {
       }
     }
     enqueueCommand({ type: cmdType, entities: ids, tx, ty });
+    // Placeholder SFX — proves Howler works until real unit VO lands.
+    playVillagerMove();
   }
 
   /** Tap+hold cast — always procs feedback; sim no-ops units without a live ability. */

@@ -10,12 +10,47 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 import {
+  PROJECTILE,
   PROJECTILE_DEFS,
   PROJECTILE_MESH,
   getProjectileDef,
 } from '../sim/projectileTypes.js';
+import { MAX_PROJECTILES } from '../sim/projectiles.js';
 
-const PROJECTILE_VISIBILITY_SCALE = 5;
+// Kept modest — was 5 while debugging visibility and arrows looked gigantic.
+const PROJECTILE_VISIBILITY_SCALE = 5 / 3;
+
+/** Peak loft scales with throw range so long shots stay arched, not flat skims. */
+function lobPeakHeight(def, rangeApprox) {
+  const base = def.arcHeight ?? 8;
+  const factor = def.lobRangeFactor ?? 0.28;
+  // Cap so map-spanners aren't orbital.
+  return Math.min(def.lobPeakCap ?? 52, Math.max(base, rangeApprox * factor));
+}
+
+/** World-Y for a projectile. Lobs throw up from the hand and crash down. */
+function projectileWorldY(def, groundY, originGroundY, progress, loftPeak) {
+  if (def.lob) {
+    // Baseline drops from hand → impact; 4t(1-t) is a unit-peak throw parabola.
+    const impact = def.impactHeight ?? 1;
+    const clearance = def.launchHeight + (impact - def.launchHeight) * progress;
+    const loft = 4 * progress * (1 - progress) * loftPeak;
+    // Only meet local ground in the last slice — earlier blend made long shots swim.
+    const landT = progress < 0.9 ? 0 : (progress - 0.9) / 0.1;
+    const base = originGroundY + (groundY - originGroundY) * landT * landT;
+    return base + clearance + loft;
+  }
+  return groundY + def.launchHeight + Math.sin(progress * Math.PI) * def.arcHeight;
+}
+
+/** Vertical speed along a lob arc (world units per lifetime), for trails. */
+function projectileArcVy(def, progress, life, loftPeak) {
+  if (!def.lob) return 0;
+  const impact = def.impactHeight ?? 1;
+  const dClear = impact - def.launchHeight;
+  const dLoft = loftPeak * 4 * (1 - 2 * progress);
+  return (dClear + dLoft) / Math.max(1, life);
+}
 
 function createArrowMesh(engine, name) {
   const positions = new Float32Array([
@@ -37,9 +72,13 @@ function createArchetypeMesh(engine, def) {
   if (def.mesh === PROJECTILE_MESH.ARROW) {
     return createArrowMesh(engine, `projectile-${def.name.toLowerCase()}`);
   }
+  const segments =
+    def.id === PROJECTILE.FIREBALL ? 14 :
+    def.mesh === PROJECTILE_MESH.ROCK ? 6 :
+    8;
   return createSphere(engine, {
     diameter: 1,
-    segments: def.mesh === PROJECTILE_MESH.ROCK ? 6 : 8,
+    segments,
   });
 }
 
@@ -48,24 +87,53 @@ function hideMatrix(matrices, slot) {
   for (let i = 0; i < 16; i++) matrices[offset + i] = 0;
 }
 
-function writeMatrix(matrices, slot, x, y, z, vx, vz, scale) {
+function writeMatrix(matrices, slot, x, y, z, vx, vy, vz, scale) {
   const offset = slot * 16;
-  const len = Math.hypot(vx, vz);
-  const fx = len > 1e-6 ? vx / len : 0;
-  const fz = len > 1e-6 ? vz / len : 1;
-  const rx = fz;
-  const rz = -fx;
-  matrices[offset] = rx * scale[0] * PROJECTILE_VISIBILITY_SCALE;
-  matrices[offset + 1] = 0;
-  matrices[offset + 2] = rz * scale[0] * PROJECTILE_VISIBILITY_SCALE;
+  const len = Math.hypot(vx, vy, vz);
+  let fx = 0;
+  let fy = 0;
+  let fz = 1;
+  if (len > 1e-6) {
+    fx = vx / len;
+    fy = vy / len;
+    fz = vz / len;
+  }
+  // right = normalize(worldUp × forward); fall back to XZ if nearly vertical.
+  let rx = fz;
+  let ry = 0;
+  let rz = -fx;
+  const rLen = Math.hypot(rx, ry, rz);
+  if (rLen > 1e-6) {
+    rx /= rLen;
+    ry /= rLen;
+    rz /= rLen;
+  } else {
+    rx = 1;
+    ry = 0;
+    rz = 0;
+  }
+  // up = forward × right
+  let ux = fy * rz - fz * ry;
+  let uy = fz * rx - fx * rz;
+  let uz = fx * ry - fy * rx;
+  const uLen = Math.hypot(ux, uy, uz) || 1;
+  ux /= uLen;
+  uy /= uLen;
+  uz /= uLen;
+  const sx = scale[0] * PROJECTILE_VISIBILITY_SCALE;
+  const sy = scale[1] * PROJECTILE_VISIBILITY_SCALE;
+  const sz = scale[2] * PROJECTILE_VISIBILITY_SCALE;
+  matrices[offset] = rx * sx;
+  matrices[offset + 1] = ry * sx;
+  matrices[offset + 2] = rz * sx;
   matrices[offset + 3] = 0;
-  matrices[offset + 4] = 0;
-  matrices[offset + 5] = scale[1] * PROJECTILE_VISIBILITY_SCALE;
-  matrices[offset + 6] = 0;
+  matrices[offset + 4] = ux * sy;
+  matrices[offset + 5] = uy * sy;
+  matrices[offset + 6] = uz * sy;
   matrices[offset + 7] = 0;
-  matrices[offset + 8] = fx * scale[2] * PROJECTILE_VISIBILITY_SCALE;
-  matrices[offset + 9] = 0;
-  matrices[offset + 10] = fz * scale[2] * PROJECTILE_VISIBILITY_SCALE;
+  matrices[offset + 8] = fx * sz;
+  matrices[offset + 9] = fy * sz;
+  matrices[offset + 10] = fz * sz;
   matrices[offset + 11] = 0;
   matrices[offset + 12] = x;
   matrices[offset + 13] = y;
@@ -76,13 +144,21 @@ function writeMatrix(matrices, slot, x, y, z, vx, vz, scale) {
 export function createProjectileRenderer(engine, scene, groundYAt, onProjectile) {
   const batches = new Map();
   const counts = new Uint32Array(PROJECTILE_DEFS.length);
+  // Frozen spawn ground so lobbed shots don't porpoise over terrain.
+  const lobOriginGround = new Float32Array(MAX_PROJECTILES);
+  const lobOriginGen = new Uint32Array(MAX_PROJECTILES);
   for (const def of PROJECTILE_DEFS) {
     const mesh = createArchetypeMesh(engine, def);
     mesh.pickable = false;
     const material = createStandardMaterial();
-    material.diffuseColor = def.color;
-    material.emissiveColor = def.color.map((v) => v * 0.3);
+    const isFireball = def.id === PROJECTILE.FIREBALL;
+    material.diffuseColor = isFireball ? [1, 0.55, 0.12] : def.color;
+    // Self-lit fireball core; other archetypes keep a mild tint.
+    material.emissiveColor = isFireball
+      ? [1, 0.38, 0.04]
+      : def.color.map((v) => v * 0.3);
     material.specularColor = [0, 0, 0];
+    if (isFireball) material.disableLighting = true;
     // Lite caches opaque draws in a render bundle before dynamic projectile
     // instances exist. Keep these on its per-frame path so matrices upload.
     material.alpha = 0.99;
@@ -135,14 +211,28 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile)
         ? prev.z[i] + (cur.z[i] - prev.z[i]) * alpha
         : cur.z[i] - cur.vz[i] * (1 - alpha);
       const age = Math.max(0, cur.age[i] - (1 - alpha));
-      const life = Math.max(1, cur.lifetime[i]);
+      // Lifetime includes +2 travel padding; lobs should finish the dive when
+      // gameplay reaches the aim point (typically lifetime - 2).
+      const lifePad = def.lob ? 2 : 0;
+      const life = Math.max(1, cur.lifetime[i] - lifePad);
       const progress = Math.min(1, age / life);
-      const y =
-        groundYAt(x, z) +
-        def.launchHeight +
-        Math.sin(progress * Math.PI) * def.arcHeight;
-      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], cur.vz[i], def.scale);
-      onProjectile?.(i, cur.generation[i], x, y, z, cur.vx[i], cur.vz[i], def);
+      const localGround = groundYAt(x, z);
+      if (def.lob && lobOriginGen[i] !== cur.generation[i]) {
+        lobOriginGen[i] = cur.generation[i];
+        lobOriginGround[i] = localGround;
+      }
+      const rangeApprox = Math.hypot(cur.vx[i], cur.vz[i]) * Math.max(1, cur.lifetime[i]);
+      const loftPeak = def.lob ? lobPeakHeight(def, rangeApprox) : def.arcHeight;
+      const y = projectileWorldY(
+        def,
+        localGround,
+        def.lob ? lobOriginGround[i] : localGround,
+        progress,
+        loftPeak,
+      );
+      const vy = projectileArcVy(def, progress, life, loftPeak);
+      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], def.scale);
+      onProjectile?.(i, cur.generation[i], x, y, z, cur.vx[i], cur.vz[i], def, vy);
       active++;
     }
 

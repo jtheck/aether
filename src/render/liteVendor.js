@@ -12,6 +12,8 @@ export {
   createGround,
   createCylinder,
   createMeshFromData,
+  createTube,
+  updateMeshGeometryCapacity,
   createTexture2DFromPixels,
   createGridSpriteAtlas,
   loadTexture2D,

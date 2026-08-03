@@ -13,13 +13,17 @@ import {
   TREE_IGNITE_DAMAGE,
   TREE_WOOD_PER_STAGE,
   applyTreeSplash,
+  applyTreeUpdatesToField,
+  canGrowTreeAt,
   damageTree,
+  growTreeAt,
   igniteTree,
   takeTreeUpdates,
   treeScaleForStage,
   treeStageFromStock,
   treeBurnSystem,
 } from './trees.js';
+import { TERRAIN } from './field.js';
 
 function fieldWithTree(tx = 50, tz = 50, stock = TREE_WOOD_PER_STAGE * 4) {
   const field = createField(1);
@@ -149,6 +153,32 @@ function stepRunsBurnSystem() {
   assert.ok(field.treeStock[i] < before);
 }
 
+function growTreeAtAndMainFieldSync() {
+  const field = createField(1);
+  const tx = 33;
+  const tz = 33;
+  const i = tz * field.width + tx;
+  field.terrainTypes[i] = TERRAIN.GRASS;
+  field.pass[i] = 1;
+  assert.ok(canGrowTreeAt(field, tx, tz));
+  assert.ok(growTreeAt(field, i, TREE_WOOD_PER_STAGE * 4));
+  assert.equal(field.sceneryType[i], SCENERY.TREE);
+
+  const mirror = createField(1);
+  mirror.terrainTypes[i] = TERRAIN.GRASS;
+  mirror.pass[i] = 1;
+  const updates = takeTreeUpdates(field);
+  applyTreeUpdatesToField(mirror, updates);
+  assert.equal(mirror.treeStock[i], TREE_WOOD_PER_STAGE * 4);
+  assert.equal(mirror.sceneryType[i], SCENERY.TREE);
+  assert.equal(mirror.slowMask[i], 1);
+
+  damageTree(field, i, TREE_WOOD_PER_STAGE * 4);
+  applyTreeUpdatesToField(mirror, takeTreeUpdates(field));
+  assert.equal(mirror.treeStock[i], 0);
+  assert.equal(mirror.sceneryType[i], SCENERY.NONE);
+}
+
 stagesAndScales();
 damageShrinksThenFells();
 burnConsumesStages();
@@ -157,4 +187,5 @@ fireballProjectileBurnsTreesThroughStep();
 populateAssignsVariedStock();
 dirtyUpdatesPublish();
 stepRunsBurnSystem();
+growTreeAtAndMainFieldSync();
 console.log('[PASS] tree stock, burn, and fireball ignition');

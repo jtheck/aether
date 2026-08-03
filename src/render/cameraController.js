@@ -32,20 +32,21 @@ const MAX_BETA = 0.82;
 
 const DEFAULT_ALPHA = -Math.PI / 2.1;
 const DEFAULT_BETA = Math.PI / 3.2;
-// Zoom tracks board half-extent (800×800 → WORLD_HALF_F = 400).
-const DEFAULT_RADIUS = WORLD_HALF_F * 1.55;
-const RESET_RADIUS = WORLD_HALF_F * 1.8;
 const LOWER_RADIUS = 40;
-const UPPER_RADIUS = WORLD_HALF_F * 3.5;
 /** v1's typical play radius; used to remap (60/r)^1.5 onto v2's larger default zoom. */
 const V1_REF_RADIUS = 80;
 
 /**
  * @param {object} camera Lite ArcRotateCamera
  * @param {HTMLCanvasElement} canvas
- * @param {{ onClearSelection?: () => void }} [opts]
+ * @param {{ onClearSelection?: () => void, worldHalfF?: number }} [opts]
  */
 export function createCameraController(camera, canvas, opts = {}) {
+  const worldHalfF = opts.worldHalfF ?? WORLD_HALF_F;
+  // Zoom / pan clamp tracks the active board half-extent.
+  const DEFAULT_RADIUS = worldHalfF * 1.55;
+  const RESET_RADIUS = worldHalfF * 1.8;
+  const UPPER_RADIUS = worldHalfF * 3.5;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
@@ -122,8 +123,8 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function clampTargetPan(nx, nz) {
     const margin = 2 * TILE_SIZE_F;
-    const min = -WORLD_HALF_F + margin;
-    const max = WORLD_HALF_F - margin;
+    const min = -worldHalfF + margin;
+    const max = worldHalfF - margin;
     let px = velocity.panX;
     let pz = velocity.panZ;
     const t = getTarget();

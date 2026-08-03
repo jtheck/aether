@@ -152,13 +152,21 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile)
     mesh.pickable = false;
     const material = createStandardMaterial();
     const isFireball = def.id === PROJECTILE.FIREBALL;
+    const isShadow = def.id === PROJECTILE.SHADOW_BOLT;
+    const isHoly = def.id === PROJECTILE.HOLY_SLASH;
+    const isIce = def.id === PROJECTILE.ICE_BOLT;
     material.diffuseColor = isFireball ? [1, 0.55, 0.12] : def.color;
-    // Self-lit fireball core; other archetypes keep a mild tint.
     material.emissiveColor = isFireball
       ? [1, 0.38, 0.04]
-      : def.color.map((v) => v * 0.3);
+      : isShadow
+        ? [0.12, 0.04, 0.22]
+        : isHoly
+          ? [1, 0.95, 0.75]
+          : isIce
+            ? [0.35, 0.65, 0.95]
+            : def.color.map((v) => v * 0.3);
     material.specularColor = [0, 0, 0];
-    if (isFireball) material.disableLighting = true;
+    if (isFireball || isShadow || isHoly || isIce) material.disableLighting = true;
     // Lite caches opaque draws in a render bundle before dynamic projectile
     // instances exist. Keep these on its per-frame path so matrices upload.
     material.alpha = 0.99;

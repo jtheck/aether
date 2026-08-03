@@ -11,6 +11,15 @@ import { getUnitDef } from './unitTypes.js';
 import { MAX_WAYPOINTS } from './path.js';
 import { createSpatialGrid } from './spatialGrid.js';
 import { createProjectileStore } from './projectiles.js';
+import { createFireZoneStore } from './fireZones.js';
+import { createFrogStore } from './frogs.js';
+import { createLightningFxStore } from './lightning.js';
+import { createHolyArmorFxStore } from './holyArmor.js';
+import {
+  createSporeBloomFxStore,
+  createSporeGrowthStore,
+} from './sporeBloom.js';
+import { createMonkKickFxStore } from './monkKick.js';
 
 // Storage headroom is intentionally above the supported 50k stress target.
 // Keep this centralized: world state and the SharedArrayBuffer derive from it.
@@ -22,6 +31,8 @@ export const ORDER = {
   MOVE: 1,
   ATTACK: 2,
   ATTACK_MOVE: 3,
+  /** Engineer repairing a mechanical ally (or future building). */
+  REPAIR: 4,
 };
 
 export function createWorld(seed) {
@@ -38,6 +49,13 @@ export function createWorld(seed) {
     ORDER,
     spatial: createSpatialGrid(MAX_ENTITIES),
     projectiles: createProjectileStore(),
+    fireZones: createFireZoneStore(),
+    frogs: createFrogStore(),
+    lightningFx: createLightningFxStore(),
+    holyArmorFx: createHolyArmorFxStore(),
+    sporeBloomFx: createSporeBloomFxStore(),
+    treeGrowth: createSporeGrowthStore(),
+    monkKickFx: createMonkKickFxStore(),
     metrics: {
       combatCandidates: 0,
       separationPairs: 0,
@@ -87,6 +105,41 @@ export function createWorld(seed) {
     // combat
     attackCd: new Int16Array(MAX_ENTITIES),
     abilityCd: new Int16Array(MAX_ENTITIES),
+    /** Ticks remaining of frog-plague confusion (no acquire / no attack). */
+    distractCd: new Int16Array(MAX_ENTITIES),
+    /** Absorb HP remaining from Holy Armor (and future absorb buffs). */
+    shieldHp: new Int16Array(MAX_ENTITIES),
+    /** Ticks remaining before shieldHp clears. */
+    shieldTicks: new Int16Array(MAX_ENTITIES),
+    /** Warlock shadow DoT remaining ticks. */
+    dotTicks: new Int16Array(MAX_ENTITIES),
+    dotDamage: new Int16Array(MAX_ENTITIES),
+    dotPeriod: new Int16Array(MAX_ENTITIES),
+    dotAcc: new Int16Array(MAX_ENTITIES),
+    dotSource: new Int32Array(MAX_ENTITIES),
+    /** Wizard frost slow remaining ticks. */
+    frostTicks: new Int16Array(MAX_ENTITIES),
+    /** Monk stick-bonk lob: ticks remaining in air (0 = grounded). */
+    lobTicks: new Int16Array(MAX_ENTITIES),
+    lobDur: new Int16Array(MAX_ENTITIES),
+    lobFromX: new Int32Array(MAX_ENTITIES),
+    lobFromY: new Int32Array(MAX_ENTITIES),
+    lobToX: new Int32Array(MAX_ENTITIES),
+    lobToY: new Int32Array(MAX_ENTITIES),
+    /** Render loft peak (world units, integer). */
+    lobPeak: new Int16Array(MAX_ENTITIES),
+    /** Trail style: 0 dust, 1 fire (see LOB_TRAIL). */
+    lobTrail: new Uint8Array(MAX_ENTITIES),
+    /**
+     * Shared control-group id (selection / multi-unit order).
+     * Monks skip bonking same-owner units with the same non-zero squadId.
+     */
+    squadId: new Int32Array(MAX_ENTITIES),
+    nextSquadId: 1,
+
+    // transport — carriedBy / transportTarget are −1 when unset
+    carriedBy: new Int32Array(MAX_ENTITIES).fill(-1),
+    transportTarget: new Int32Array(MAX_ENTITIES).fill(-1),
 
     // gameplay
     hp: new Int32Array(MAX_ENTITIES),
@@ -127,6 +180,26 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.lastPy[i] = y;
   w.attackCd[i] = 0;
   w.abilityCd[i] = 0;
+  w.distractCd[i] = 0;
+  w.shieldHp[i] = 0;
+  w.shieldTicks[i] = 0;
+  w.dotTicks[i] = 0;
+  w.dotDamage[i] = 0;
+  w.dotPeriod[i] = 0;
+  w.dotAcc[i] = 0;
+  w.dotSource[i] = -1;
+  w.frostTicks[i] = 0;
+  w.lobTicks[i] = 0;
+  w.lobDur[i] = 0;
+  w.lobFromX[i] = x;
+  w.lobFromY[i] = y;
+  w.lobToX[i] = x;
+  w.lobToY[i] = y;
+  w.lobPeak[i] = 0;
+  w.lobTrail[i] = 0;
+  w.squadId[i] = 0;
+  w.carriedBy[i] = -1;
+  w.transportTarget[i] = -1;
   w.hp[i] = hp ?? def.hp;
   w.type[i] = type;
   w.owner[i] = owner;

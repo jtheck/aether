@@ -17,6 +17,7 @@ import {
   SPATIAL_OWNER_SLOTS,
   spatialCellId,
 } from './spatialGrid.js';
+import { tickHolyArmorShields } from './holyArmor.js';
 
 export const ACQUIRE_PHASES = 5;
 /** Squared-distance penalty per existing attacker — spreads fire without ignoring nearer threats. */
@@ -34,6 +35,9 @@ export function combatSystem(w, field) {
 export { kill };
 
 function canAutoAcquire(w, i) {
+  // Frogs underfoot — too busy gawking to pick a fight.
+  if (w.distractCd[i] > 0) return false;
+  if (w.carriedBy?.[i] >= 0) return false;
   const order = w.order[i];
   // ATTACK: periodic rebalance off dogpiled targets when alternatives exist.
   if (order === w.ORDER.ATTACK) return true;
@@ -68,6 +72,7 @@ export function acquireTargets(w, field) {
 
     const consider = (j) => {
       if (j === i || !w.alive[j] || !isHostile(w.owner[i], w.owner[j])) return;
+      if (w.carriedBy?.[j] >= 0) return;
       w.metrics.combatCandidates++;
       const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
       if (d2 > aggro2) return;
@@ -81,10 +86,10 @@ export function acquireTargets(w, field) {
       }
     };
 
-    const bounds = queryCellBounds(w.px[i], w.py[i], def.aggroRange);
+    const bounds = queryCellBounds(w.px[i], w.py[i], def.aggroRange, grid);
     for (let z = bounds.minZ; z <= bounds.maxZ; z++) {
       for (let x = bounds.minX; x <= bounds.maxX; x++) {
-        const cell = spatialCellId(x, z);
+        const cell = spatialCellId(x, z, grid);
         if (grid.overflowOwners || w.owner[i] >= SPATIAL_OWNER_SLOTS) {
           let j = grid.head[cell];
           while (j >= 0) {
@@ -139,10 +144,13 @@ function endAttack(w, i) {
 function resolveAttacks(w) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
+    if (w.carriedBy?.[i] >= 0) continue;
     if (w.order[i] !== w.ORDER.ATTACK) continue;
+    // Distracted units don't pick new fights, but a frog-confused unit may
+    // already be locked onto an ally — let that swing through.
 
     const target = w.targetEntity[i];
-    if (target < 0 || !w.alive[target]) {
+    if (target < 0 || !w.alive[target] || w.carriedBy?.[target] >= 0) {
       endAttack(w, i);
       continue;
     }
@@ -179,5 +187,21 @@ function resolveAttacks(w) {
   for (let i = 0; i < w.count; i++) {
     if (w.attackCd[i] > 0) w.attackCd[i]--;
     if (w.abilityCd[i] > 0) w.abilityCd[i]--;
+    if (w.distractCd[i] > 0) {
+      w.distractCd[i]--;
+      // Confusion ends — stop beating up your own team.
+      if (w.distractCd[i] === 0) {
+        const t = w.targetEntity[i];
+        if (
+          t >= 0 &&
+          w.alive[t] &&
+          w.owner[t] === w.owner[i] &&
+          w.order[i] === w.ORDER.ATTACK
+        ) {
+          endAttack(w, i);
+        }
+      }
+    }
   }
+  tickHolyArmorShields(w);
 }

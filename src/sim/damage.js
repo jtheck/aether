@@ -2,8 +2,9 @@
 
 import { clearPath, queuePath, attackStandPoint } from './path.js';
 import { claimEngagement } from './engagement.js';
-import { getUnitDef } from './unitTypes.js';
+import { getUnitDef, isTransport } from './unitTypes.js';
 import { isHostile } from './teams.js';
+import { unloadPassengers } from './transport.js';
 
 /**
  * @param {object} w
@@ -13,7 +14,23 @@ import { isHostile } from './teams.js';
  */
 export function applyDamage(w, target, amount, source = -1) {
   if (target < 0 || target >= w.count || !w.alive[target] || amount <= 0) return false;
-  w.hp[target] -= amount;
+  let remain = amount;
+  const shield = w.shieldHp?.[target] ?? 0;
+  if (shield > 0) {
+    if (shield >= remain) {
+      w.shieldHp[target] = shield - remain;
+      if (w.shieldHp[target] <= 0) {
+        w.shieldHp[target] = 0;
+        w.shieldTicks[target] = 0;
+      }
+      if (source >= 0) tryRetaliate(w, target, source);
+      return true;
+    }
+    remain -= shield;
+    w.shieldHp[target] = 0;
+    w.shieldTicks[target] = 0;
+  }
+  w.hp[target] -= remain;
   if (w.hp[target] <= 0) {
     kill(w, target);
     return true;
@@ -26,6 +43,8 @@ export function applyDamage(w, target, amount, source = -1) {
 function tryRetaliate(w, victim, attacker) {
   if (attacker < 0 || attacker >= w.count || !w.alive[attacker]) return;
   if (!isHostile(w.owner[victim], w.owner[attacker])) return;
+  // Too busy staring at frogs.
+  if (w.distractCd?.[victim] > 0) return;
   const order = w.order[victim];
   if (order !== w.ORDER.IDLE && order !== w.ORDER.ATTACK_MOVE) return;
   const def = getUnitDef(w.type[victim]);
@@ -40,12 +59,21 @@ function tryRetaliate(w, victim, attacker) {
 
 export function kill(w, i) {
   if (i < 0 || i >= w.count || !w.alive[i]) return;
+  // Spill passengers alive before clearing the hull.
+  if (isTransport(w.type[i])) {
+    unloadPassengers(w, i, null, null);
+  }
+  // Drop out of a living transport's passenger set.
+  if (w.carriedBy) w.carriedBy[i] = -1;
+  if (w.transportTarget) w.transportTarget[i] = -1;
   w.alive[i] = 0;
   w.order[i] = w.ORDER.IDLE;
   w.targetEntity[i] = -1;
   w.hasTarget[i] = 0;
   w.vx[i] = 0;
   w.vy[i] = 0;
+  if (w.shieldHp) w.shieldHp[i] = 0;
+  if (w.shieldTicks) w.shieldTicks[i] = 0;
   if (w.engagementTarget) w.engagementTarget[i] = -1;
   if (w.engagementSlot) w.engagementSlot[i] = -1;
   clearPath(w, i);

@@ -4,7 +4,7 @@
 import { MAX_ENTITIES } from './world.js';
 import { MAX_PROJECTILES } from './projectiles.js';
 
-export const SHARED_LAYOUT_VERSION = 3;
+export const SHARED_LAYOUT_VERSION = 6;
 const HEADER_I32 = 6; // version, unitCount, tick, projectileActive, publishSeq, projectileHighWater
 
 export function simSharedByteSize() {
@@ -13,10 +13,14 @@ export function simSharedByteSize() {
     MAX_ENTITIES * 4 + // px
     MAX_ENTITIES * 4 + // py
     MAX_ENTITIES * 4 + // hp
+    MAX_ENTITIES * 2 + // shieldHp (absorb remaining)
+    MAX_ENTITIES * 2 + // frostTicks
+    MAX_ENTITIES * 2 + // dotTicks
     MAX_ENTITIES + // alive
     MAX_ENTITIES + // owner
     MAX_ENTITIES + // type (written once at init)
-    MAX_ENTITIES + // order (IDLE / MOVE / ATTACK / ATTACK_MOVE)
+    MAX_ENTITIES + // order (IDLE / MOVE / ATTACK / ATTACK_MOVE / REPAIR)
+    MAX_ENTITIES * 4 + // carriedBy (−1 = free)
     MAX_PROJECTILES * 4 * 4 + // projectile px, py, vx, vy
     MAX_PROJECTILES * 4 + // projectile generation
     MAX_PROJECTILES * 2 * 2 + // projectile age, lifetime
@@ -34,6 +38,12 @@ export function mapSharedState(sab) {
   o += MAX_ENTITIES * 4;
   const hp = new Int32Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES * 4;
+  const shieldHp = new Int16Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 2;
+  const frostTicks = new Int16Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 2;
+  const dotTicks = new Int16Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 2;
   const alive = new Uint8Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES;
   const owner = new Uint8Array(sab, o, MAX_ENTITIES);
@@ -42,6 +52,8 @@ export function mapSharedState(sab) {
   o += MAX_ENTITIES;
   const order = new Uint8Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES;
+  const carriedBy = new Int32Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 4;
 
   const projectilePx = new Int32Array(sab, o, MAX_PROJECTILES);
   o += MAX_PROJECTILES * 4;
@@ -66,15 +78,20 @@ export function mapSharedState(sab) {
   const projectileDespawnReason = new Uint8Array(sab, o, MAX_PROJECTILES);
 
   header[0] = SHARED_LAYOUT_VERSION;
+  carriedBy.fill(-1);
   return {
     header,
     px,
     py,
     hp,
+    shieldHp,
+    frostTicks,
+    dotTicks,
     alive,
     owner,
     type,
     order,
+    carriedBy,
     projectiles: {
       px: projectilePx,
       py: projectilePy,
@@ -104,9 +121,15 @@ export function publishWorld(w, s) {
   s.px.set(w.px.subarray(0, n));
   s.py.set(w.py.subarray(0, n));
   s.hp.set(w.hp.subarray(0, n));
+  s.shieldHp.set(w.shieldHp.subarray(0, n));
+  if (s.frostTicks && w.frostTicks) s.frostTicks.set(w.frostTicks.subarray(0, n));
+  if (s.dotTicks && w.dotTicks) s.dotTicks.set(w.dotTicks.subarray(0, n));
   s.alive.set(w.alive.subarray(0, n));
   s.owner.set(w.owner.subarray(0, n));
   s.order.set(w.order.subarray(0, n));
+  if (w.carriedBy && s.carriedBy) {
+    s.carriedBy.set(w.carriedBy.subarray(0, n));
+  }
 }
 
 export function publishProjectiles(w, s) {
@@ -147,10 +170,14 @@ export function simViewFacade(s) {
     px: s.px,
     py: s.py,
     hp: s.hp,
+    shieldHp: s.shieldHp,
+    frostTicks: s.frostTicks,
+    dotTicks: s.dotTicks,
     alive: s.alive,
     owner: s.owner,
     type: s.type,
     order: s.order,
+    carriedBy: s.carriedBy,
     projectiles: {
       get activeCount() {
         return s.header[3];

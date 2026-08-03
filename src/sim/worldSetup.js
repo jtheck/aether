@@ -1,23 +1,34 @@
 // Demo spawn layouts — used by the sim worker at init.
 
 import { createWorld, spawn, STRESS_ENTITY_LIMIT } from './world.js';
-import { UNIT } from './unitTypes.js';
+import { UNIT, UNIT_DEFS, isTransport } from './unitTypes.js';
 import { createKothMeta } from './kothMeta.js';
-import { WORLD_HALF_F } from './field.js';
+import {
+  WORLD_HALF_F,
+  activeWorldHalfF,
+  mapSizeForConfig,
+  setActiveMapSize,
+  worldHalfFFromMap,
+} from './field.js';
 import * as fx from './fixed.js';
 
 export const PLAYER = 0;
 export const AI_OWNER = 1;
 
-/** Pentagonal spawn bases for KOTH slots 0–4 (world units; scale with board). */
-const H = WORLD_HALF_F;
-export const KOTH_BASES = [
-  [-H * 0.6, 0],
-  [H * 0.6, 0],
-  [0, -H * 0.6],
-  [0, H * 0.6],
-  [-H * 0.425, H * 0.425],
-];
+/** Pentagonal spawn bases — scale with the active board half-extent. */
+export function kothBases(worldHalfF = activeWorldHalfF()) {
+  const H = worldHalfF;
+  return [
+    [-H * 0.6, 0],
+    [H * 0.6, 0],
+    [0, -H * 0.6],
+    [0, H * 0.6],
+    [-H * 0.425, H * 0.425],
+  ];
+}
+
+/** Default-map bases (tests / importers that expect a stable export). */
+export const KOTH_BASES = kothBases(WORLD_HALF_F);
 
 const PLAYER_ARMY = [
   { type: UNIT.VILLAGER, count: 5 },
@@ -27,6 +38,12 @@ const PLAYER_ARMY = [
   { type: UNIT.PRIEST, count: 2 },
   { type: UNIT.MYCO, count: 2 },
   { type: UNIT.SHAMAN, count: 2 },
+  { type: UNIT.WIZARD, count: 2 },
+  { type: UNIT.MONK, count: 3 },
+  { type: UNIT.ENGINEER, count: 2 },
+  { type: UNIT.WAGON, count: 1 },
+  { type: UNIT.DIRIGIBLE, count: 1 },
+  { type: UNIT.APC, count: 1 },
 ];
 
 const ENEMY_ARMY = [
@@ -37,13 +54,34 @@ const ENEMY_ARMY = [
   { type: UNIT.PRIEST, count: 2 },
   { type: UNIT.MYCO, count: 2 },
   { type: UNIT.SHAMAN, count: 2 },
+  { type: UNIT.WIZARD, count: 2 },
+  { type: UNIT.MONK, count: 3 },
+  { type: UNIT.ENGINEER, count: 2 },
+  { type: UNIT.WAGON, count: 1 },
+  { type: UNIT.DIRIGIBLE, count: 1 },
+  { type: UNIT.APC, count: 1 },
 ];
 
 const COL_SPACING = 22;
 const ROW_SPACING = 16;
-/** Stress uses military types only (thin-instanced). Animated villagers: ?animStress=N. */
-const STRESS_TYPES = [UNIT.WARRIOR, UNIT.ARCHER, UNIT.WARLOCK];
-const STRESS_SPACING = 10;
+
+/** Relative stress mix: baseline 10, casters 5, transports/vehicles 1. */
+function stressTypeWeight(def) {
+  if (isTransport(def.id)) return 1;
+  if (def.primaryAbility) return 5;
+  return 10;
+}
+
+/** Weighted bag cycled under `?stress=N`. VAT villagers: `?animStress=N`. */
+const STRESS_TYPES = [];
+for (const def of UNIT_DEFS) {
+  const weight = stressTypeWeight(def);
+  for (let i = 0; i < weight; i++) STRESS_TYPES.push(def.id);
+}
+
+/** Soft cap on stress packing; shrinks automatically so both armies fit the board. */
+const STRESS_SPACING_MAX = 14;
+const STRESS_SPACING_MIN = 4;
 
 export { PLAYER_ARMY, ENEMY_ARMY };
 
@@ -59,7 +97,8 @@ export function kothMaxUnitsOfType(typeId) {
 
 /** Spawn one KOTH army at a slot base (mid-game join). */
 export function spawnKothSlot(w, slot) {
-  const base = bestKothSpawnPoint(w, slot);
+  const bases = kothBases(w.worldHalfF ?? activeWorldHalfF());
+  const base = bestKothSpawnPoint(w, slot, bases);
   spawnArmy(w, PLAYER_ARMY, slot, base[0], base[1]);
 }
 
@@ -96,11 +135,12 @@ function spawnArmy(w, layout, owner, baseX, baseZ) {
   }
 }
 
-function bestKothSpawnPoint(w, slot) {
-  const fallback = KOTH_BASES[slot] ?? KOTH_BASES[0];
+function bestKothSpawnPoint(w, slot, bases) {
+  const fallback = bases[slot] ?? bases[0];
   const candidates = [];
-  for (const base of KOTH_BASES) candidates.push(base);
-  const radius = WORLD_HALF_F * 0.875;
+  for (const base of bases) candidates.push(base);
+  const half = activeWorldHalfF();
+  const radius = half * 0.875;
   for (let i = 0; i < 16; i++) {
     const a = (i / 16) * Math.PI * 2;
     candidates.push([Math.cos(a) * radius, Math.sin(a) * radius]);
@@ -109,7 +149,7 @@ function bestKothSpawnPoint(w, slot) {
   let best = fallback;
   let bestScore = -1;
   for (const c of candidates) {
-    const score = spawnClearanceScore(w, c[0], c[1], slot);
+    const score = spawnClearanceScore(w, c[0], c[1], slot, bases);
     if (score > bestScore) {
       bestScore = score;
       best = c;
@@ -118,9 +158,9 @@ function bestKothSpawnPoint(w, slot) {
   return best;
 }
 
-function spawnClearanceScore(w, x, z, owner) {
+function spawnClearanceScore(w, x, z, owner, bases) {
   let nearest = 0x7fffffff;
-  for (const base of KOTH_BASES) {
+  for (const base of bases) {
     const dx = x - base[0];
     const dz = z - base[1];
     nearest = Math.min(nearest, dx * dx + dz * dz);
@@ -140,14 +180,20 @@ function spawnClearanceScore(w, x, z, owner) {
 function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
   const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
   const rows = Math.ceil(count / cols);
-  const halfX = ((cols - 1) * STRESS_SPACING) / 2;
-  const halfZ = ((rows - 1) * STRESS_SPACING) / 2;
+  // Fit each army block inside ~42% of board half so two facing sides + gap stay in-bounds.
+  const maxExtent = activeWorldHalfF() * 0.42;
+  const spacing = Math.max(
+    STRESS_SPACING_MIN,
+    Math.min(STRESS_SPACING_MAX, (maxExtent * 2) / Math.max(1, cols - 1)),
+  );
+  const halfX = ((cols - 1) * spacing) / 2;
+  const halfZ = ((rows - 1) * spacing) / 2;
   for (let k = 0; k < count; k++) {
     const col = k % cols;
     const row = (k / cols) | 0;
     spawn(w, {
-      x: fx.fromFloat(baseX + col * STRESS_SPACING - halfX),
-      y: fx.fromFloat(baseZ + row * STRESS_SPACING - halfZ),
+      x: fx.fromFloat(baseX + col * spacing - halfX),
+      y: fx.fromFloat(baseZ + row * spacing - halfZ),
       type: typePicker(k),
       owner,
     });
@@ -155,15 +201,31 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[] }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number }} config
  */
-export function buildWorldFromConfig({ seed, stressPerSide, animStressPerSide, mode = 'legacy', activeSlots }) {
+export function buildWorldFromConfig({
+  seed,
+  stressPerSide,
+  animStressPerSide,
+  mode = 'legacy',
+  activeSlots,
+  mapW,
+  mapH,
+}) {
+  const size = mapSizeForConfig({ stressPerSide, animStressPerSide, mapW, mapH });
+  setActiveMapSize(size.mapW, size.mapH);
+  const half = worldHalfFFromMap(size.mapW);
+  const bases = kothBases(half);
+
   const w = createWorld(seed);
   w.kothMatchOver = 0;
+  w.mapW = size.mapW;
+  w.mapH = size.mapH;
+  w.worldHalfF = half;
 
   if (animStressPerSide > 0) {
     const count = Math.min(Math.floor(animStressPerSide), STRESS_ENTITY_LIMIT >> 1);
-    const bx = WORLD_HALF_F * 0.3;
+    const bx = half * 0.35;
     spawnStressSide(w, PLAYER, -bx, 0, count, () => UNIT.VILLAGER);
     spawnStressSide(w, AI_OWNER, bx, 0, count, () => UNIT.VILLAGER);
     return w;
@@ -172,7 +234,7 @@ export function buildWorldFromConfig({ seed, stressPerSide, animStressPerSide, m
   if (stressPerSide > 0) {
     const count = Math.min(Math.floor(stressPerSide), STRESS_ENTITY_LIMIT >> 1);
     // Two facing blocks near the usual west/east bases — not sprayed across the map.
-    const bx = WORLD_HALF_F * 0.3;
+    const bx = half * 0.35;
     spawnStressSide(w, PLAYER, -bx, 0, count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
     spawnStressSide(w, AI_OWNER, bx, 0, count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
     return w;
@@ -180,7 +242,7 @@ export function buildWorldFromConfig({ seed, stressPerSide, animStressPerSide, m
 
   if (mode === 'sandbox') {
     if (activeSlots && activeSlots.length === 0) return w;
-    const [bx, bz] = KOTH_BASES[0];
+    const [bx, bz] = bases[0];
     spawnArmy(w, PLAYER_ARMY, PLAYER, bx, bz);
     return w;
   }
@@ -188,14 +250,14 @@ export function buildWorldFromConfig({ seed, stressPerSide, animStressPerSide, m
   if (mode === 'koth') {
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
     for (const slot of slots) {
-      const base = KOTH_BASES[slot] ?? KOTH_BASES[0];
+      const base = bases[slot] ?? bases[0];
       spawnArmy(w, PLAYER_ARMY, slot, base[0], base[1]);
     }
     w.koth = createKothMeta(slots);
     return w;
   }
 
-  spawnArmy(w, PLAYER_ARMY, PLAYER, KOTH_BASES[0][0], KOTH_BASES[0][1]);
-  spawnArmy(w, ENEMY_ARMY, AI_OWNER, KOTH_BASES[1][0], KOTH_BASES[1][1]);
+  spawnArmy(w, PLAYER_ARMY, PLAYER, bases[0][0], bases[0][1]);
+  spawnArmy(w, ENEMY_ARMY, AI_OWNER, bases[1][0], bases[1][1]);
   return w;
 }

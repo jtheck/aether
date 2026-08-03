@@ -115,7 +115,8 @@ function kothWorldSetupOk() {
   });
   const distinct = centers.every(([x, z], owner) => {
     const [bx, bz] = KOTH_BASES[owner];
-    return Math.hypot(x - bx, z - bz) < 30;
+    // Formation half-width grows with army column count (~13 types × COL_SPACING).
+    return Math.hypot(x - bx, z - bz) < 80;
   });
   return countsOk && distinct;
 }
@@ -282,7 +283,12 @@ function treeMovementSlowOk() {
   step(slow, slowField, cmd);
   const normalDistance = fx.abs(normal.px[0] - start);
   const slowDistance = fx.abs(slow.px[0] - start);
-  return normalDistance > 0 && slowDistance > 0 && slowDistance * 2 === normalDistance;
+  // SLOW_MULTIPLIER = 0.45 → slow distance is 45% of normal (exact Q16.16 mul).
+  return (
+    normalDistance > 0 &&
+    slowDistance > 0 &&
+    slowDistance === fx.mul(normalDistance, fx.fromFloat(0.45))
+  );
 }
 
 function highEntityReferenceOk() {

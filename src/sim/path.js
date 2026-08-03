@@ -2,7 +2,7 @@
 
 import * as fx from './fixed.js';
 import { findPath, lineClear, worldToTile, TILE } from './field.js';
-import { getUnitDef } from './unitTypes.js';
+import { getUnitDef, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { effectiveAttackRange, engagementPoint } from './engagement.js';
 
@@ -64,12 +64,14 @@ export function queuePath(w, i, destX, destY) {
   w.pathRequest[i] = PATH_REQUEST.LOS;
 }
 
-/** One straight-line waypoint if LOS is clear. */
+/** One straight-line waypoint if LOS is clear (always for flyers). */
 export function tryQuickPath(w, field, i) {
   w.metrics.losAttempts++;
   const destX = w.navDestX[i];
   const destY = w.navDestY[i];
-  if (!lineClear(field, w.px[i], w.py[i], destX, destY)) return false;
+  if (!isFlyer(w.type[i]) && !lineClear(field, w.px[i], w.py[i], destX, destY)) {
+    return false;
+  }
   setSingleWaypoint(w, i, destX, destY);
   return true;
 }
@@ -90,6 +92,12 @@ function setSingleWaypoint(w, i, x, y) {
 export function planPath(w, field, i, destX, destY, forceAstar = false) {
   w.navDestX[i] = destX;
   w.navDestY[i] = destY;
+  // Air units fly straight — never A* around ground blockers.
+  if (isFlyer(w.type[i])) {
+    setSingleWaypoint(w, i, destX, destY);
+    w.stuckTicks[i] = 0;
+    return;
+  }
   if (!forceAstar && tryQuickPath(w, field, i)) {
     w.stuckTicks[i] = 0;
     return;
@@ -190,6 +198,7 @@ function needsPath(w, i) {
   if (order === ORDER.IDLE) return false;
   if (order === ORDER.MOVE || order === ORDER.ATTACK_MOVE) return w.hasTarget[i] !== 0;
   if (order === ORDER.ATTACK) return w.targetEntity[i] >= 0;
+  if (order === ORDER.REPAIR) return w.targetEntity[i] >= 0;
   return false;
 }
 

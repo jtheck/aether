@@ -8,6 +8,12 @@
 
 import { mixKothChecksum } from './kothMeta.js';
 import { mixTreeChecksum } from './trees.js';
+import { mixFireZoneChecksum } from './fireZones.js';
+import { mixFrogChecksum } from './frogs.js';
+import { mixHolyArmorChecksum } from './holyArmor.js';
+import { mixSporeGrowthChecksum } from './sporeBloom.js';
+import { mixMonkLobChecksum } from './monkKick.js';
+import { mixCombatStatusChecksum } from './combatStatus.js';
 
 export function checksum(w, field = null) {
   let h = 0x811c9dc5 | 0;
@@ -42,9 +48,12 @@ export function checksum(w, field = null) {
     mix(w.navDestY[i]);
     mix(w.attackCd[i]);
     mix(w.abilityCd[i]);
+    mix(w.distractCd[i]);
     mix(w.hp[i]);
     mix(w.type[i]);
     mix(w.owner[i]);
+    if (w.carriedBy) mix(w.carriedBy[i]);
+    if (w.transportTarget) mix(w.transportTarget[i]);
   }
 
   const p = w.projectiles;
@@ -66,6 +75,8 @@ export function checksum(w, field = null) {
     mix(p.vy[i]);
     mix(p.aimX[i]);
     mix(p.aimY[i]);
+    if (p.wanderOx) mix(p.wanderOx[i]);
+    if (p.wanderOy) mix(p.wanderOy[i]);
     mix(p.damage[i]);
     mix(p.age[i]);
     mix(p.lifetime[i]);
@@ -74,6 +85,19 @@ export function checksum(w, field = null) {
   mix(w.kothMatchOver ?? 0);
   h = mixKothChecksum(h, mix, w.koth);
   if (field) mixTreeChecksum(mix, field);
+  mixFireZoneChecksum(mix, w);
+  mixFrogChecksum(mix, w);
+  mixHolyArmorChecksum(mix, w);
+  mixCombatStatusChecksum(mix, w);
+  mixSporeGrowthChecksum(mix, w);
+  mixMonkLobChecksum(mix, w);
+  if (w.squadId) {
+    mix(w.nextSquadId | 0);
+    for (let i = 0; i < w.count; i++) {
+      if (!w.alive[i]) continue;
+      mix(w.squadId[i]);
+    }
+  }
 
   return h >>> 0;
 }

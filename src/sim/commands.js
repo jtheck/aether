@@ -18,7 +18,13 @@ import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
 import { tryCast } from './abilities.js';
-import { getUnitDef } from './unitTypes.js';
+import { getUnitDef, isFlyer, isMechanical, UNIT } from './unitTypes.js';
+import {
+  applyTransportAssignments,
+  isCarried,
+  unloadPassengers,
+} from './transport.js';
+import { beginRepair } from './repair.js';
 
 export const CMD = {
   MOVE: 1,
@@ -28,9 +34,13 @@ export const CMD = {
   SPAWN_SLOT: 5,
   FORCE_ELIMINATE: 6,
   CAST: 7,
+  /** Sync local selection → sim squad stamps (monk won't bonk co-selected). */
+  SELECT: 8,
+  /** Spill passengers from selected transports; optional walk target. */
+  UNLOAD: 9,
 };
 
-/** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string }} Command */
+/** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
 
 export function applyCommands(world, field, commands) {
   if (!commands || commands.length === 0) return;
@@ -40,12 +50,18 @@ export function applyCommands(world, field, commands) {
     switch (cmd.type) {
       case CMD.MOVE:
         applyMove(world, field, cmd.entities, cmd.tx, cmd.ty, ORDER.MOVE);
+        if (cmd.transportAssignments?.length) {
+          applyTransportAssignments(world, cmd.transportAssignments);
+        }
         break;
       case CMD.ATTACK:
         applyAttack(world, field, cmd.entities, cmd.target);
         break;
       case CMD.ATTACK_MOVE:
         applyMove(world, field, cmd.entities, cmd.tx, cmd.ty, ORDER.ATTACK_MOVE);
+        if (cmd.transportAssignments?.length) {
+          applyTransportAssignments(world, cmd.transportAssignments);
+        }
         break;
       case CMD.STOP:
         applyStop(world, cmd.entities);
@@ -57,7 +73,13 @@ export function applyCommands(world, field, commands) {
         applyForceEliminate(world, cmd.playerId);
         break;
       case CMD.CAST:
-        applyCast(world, cmd.entities, cmd.abilityId, cmd.tx, cmd.ty);
+        applyCast(world, field, cmd.entities, cmd.abilityId, cmd.tx, cmd.ty);
+        break;
+      case CMD.SELECT:
+        applySelect(world, cmd.playerId, cmd.entities);
+        break;
+      case CMD.UNLOAD:
+        applyUnload(world, field, cmd.entities, cmd.tx, cmd.ty);
         break;
       default:
         break;
@@ -65,19 +87,57 @@ export function applyCommands(world, field, commands) {
   }
 }
 
-function applyMove(world, field, ids, tx, ty, order) {
+/** Assign a fresh squad id to every living unit in `ids` (multi-unit orders). */
+export function stampSquadGroup(world, ids) {
+  if (!ids || ids.length < 2 || !world.squadId) return 0;
+  const sid = (world.nextSquadId = (world.nextSquadId | 0) + 1) || 1;
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
-    if (!world.alive[i]) continue;
+    if (i < 0 || i >= world.count || !world.alive[i]) continue;
+    world.squadId[i] = sid;
+  }
+  return sid;
+}
+
+/**
+ * Replace this player's squad stamps with the current selection.
+ * Empty selection clears all of that player's squad ids.
+ */
+function applySelect(world, playerId, entities) {
+  if (playerId == null || playerId < 0 || !world.squadId) return;
+  const sid = (world.nextSquadId = (world.nextSquadId | 0) + 1) || 1;
+  const chosen = new Set();
+  if (entities?.length) {
+    for (let k = 0; k < entities.length; k++) {
+      const i = entities[k];
+      if (i < 0 || i >= world.count || !world.alive[i]) continue;
+      if (world.owner[i] !== playerId) continue;
+      chosen.add(i);
+    }
+  }
+  for (let i = 0; i < world.count; i++) {
+    if (world.owner[i] !== playerId) continue;
+    world.squadId[i] = chosen.has(i) ? sid : 0;
+  }
+}
+
+function applyMove(world, field, ids, tx, ty, order) {
+  stampSquadGroup(world, ids);
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    if (!world.alive[i] || isCarried(world, i)) continue;
+    world.transportTarget[i] = -1;
     let destX = tx[k];
     let destY = ty[k];
-    const destTileX = worldToTile(destX);
-    const destTileY = worldToTile(destY);
-    if (!isPassable(field, destTileX, destTileY)) {
-      const snapped = snapToPassable(field, destX, destY);
-      if (snapped) {
-        destX = snapped.x;
-        destY = snapped.y;
+    if (!isFlyer(world.type[i])) {
+      const destTileX = worldToTile(destX);
+      const destTileY = worldToTile(destY);
+      if (!isPassable(field, destTileX, destTileY)) {
+        const snapped = snapToPassable(field, destX, destY);
+        if (snapped) {
+          destX = snapped.x;
+          destY = snapped.y;
+        }
       }
     }
     world.order[i] = order;
@@ -92,9 +152,20 @@ function applyMove(world, field, ids, tx, ty, order) {
 
 function applyAttack(world, field, ids, target) {
   if (target < 0 || !world.alive[target]) return;
+  stampSquadGroup(world, ids);
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
-    if (!world.alive[i]) continue;
+    if (!world.alive[i] || isCarried(world, i)) continue;
+    world.transportTarget[i] = -1;
+    // Engineers convert ally-mechanical attacks into repair orders.
+    if (
+      world.type[i] === UNIT.ENGINEER &&
+      world.owner[i] === world.owner[target] &&
+      isMechanical(world.type[target])
+    ) {
+      beginRepair(world, i, target);
+      continue;
+    }
     world.order[i] = ORDER.ATTACK;
     world.targetEntity[i] = target;
     clearEngagement(world, i);
@@ -105,9 +176,31 @@ function applyAttack(world, field, ids, target) {
 }
 
 function applyStop(world, ids) {
+  stampSquadGroup(world, ids);
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
-    if (!world.alive[i]) continue;
+    if (!world.alive[i] || isCarried(world, i)) continue;
+    world.transportTarget[i] = -1;
+    world.order[i] = ORDER.IDLE;
+    world.targetEntity[i] = -1;
+    clearEngagement(world, i);
+    world.hasTarget[i] = 0;
+    world.vx[i] = 0;
+    world.vy[i] = 0;
+    clearPath(world, i);
+  }
+}
+
+function applyUnload(world, field, ids, tx, ty) {
+  if (!ids || ids.length === 0) return;
+  const sharedAim = typeof tx === 'number' && typeof ty === 'number';
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    if (!world.alive[i] || isCarried(world, i)) continue;
+    const walkTx = sharedAim ? tx : tx?.[k] ?? null;
+    const walkTy = sharedAim ? ty : ty?.[k] ?? null;
+    unloadPassengers(world, i, walkTx, walkTy);
+    // Transport idles after spilling.
     world.order[i] = ORDER.IDLE;
     world.targetEntity[i] = -1;
     clearEngagement(world, i);
@@ -136,19 +229,19 @@ function applyForceEliminate(world, playerId) {
  * Point-cast primary (or named) ability for each entity.
  * `tx`/`ty` may be a single fixed-point aim or per-entity arrays.
  */
-function applyCast(world, ids, abilityId, tx, ty) {
+function applyCast(world, field, ids, abilityId, tx, ty) {
   if (!ids || ids.length === 0) return;
   const sharedAim = typeof tx === 'number' && typeof ty === 'number';
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
-    if (!world.alive[i]) continue;
+    if (!world.alive[i] || isCarried(world, i)) continue;
     const aimX = sharedAim ? tx : tx?.[k];
     const aimY = sharedAim ? ty : ty?.[k];
     if (aimX == null || aimY == null) continue;
     const def = getUnitDef(world.type[i]);
     const id = abilityId || def.primaryAbility;
     if (!id) continue;
-    tryCast(world, i, id, aimX, aimY);
+    tryCast(world, i, id, aimX, aimY, field);
   }
 }
 

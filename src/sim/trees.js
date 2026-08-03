@@ -4,9 +4,12 @@
 import * as fx from './fixed.js';
 import {
   TILE_SIZE_F,
-  WORLD_HALF_F,
+  TERRAIN,
   inBounds,
   worldToTile,
+  isPassable,
+  isTerrainSlowTile,
+  activeWorldHalfF,
 } from './field.js';
 
 // Keep in sync with SCENERY in scenery.js (avoid circular import).
@@ -72,7 +75,8 @@ function mixStockHash(field, tileIndex, stock) {
 
 function fellTree(field, tileIndex) {
   field.sceneryType[tileIndex] = SCENERY_NONE;
-  field.slowMask[tileIndex] = 0;
+  // Keep partial-water slow if this tile is wet shore.
+  field.slowMask[tileIndex] = isTerrainSlowTile(field, tileIndex) ? 1 : 0;
   field.treeStock[tileIndex] = 0;
   field.treeBurn[tileIndex] = 0;
 }
@@ -106,6 +110,54 @@ export function igniteTree(field, tileIndex) {
   return true;
 }
 
+/**
+ * Empty grass/dirt tile that can accept a new tree (spore growth, etc.).
+ * Spawn pads are cleared only at scenery populate — mid-game growth may fill them.
+ * @param {Set<number>|null} [pendingTiles] tile indices already queued to grow
+ */
+export function canGrowTreeAt(field, tx, tz, pendingTiles = null) {
+  if (!inBounds(tx, tz)) return false;
+  if (!isPassable(field, tx, tz)) return false;
+  const i = tz * field.width + tx;
+  if (field.activeMask?.[i] === 0) return false;
+  const terrain = field.terrainTypes?.[i];
+  if (terrain !== TERRAIN.GRASS && terrain !== TERRAIN.DIRT) return false;
+  const kind = field.sceneryType?.[i] ?? SCENERY_NONE;
+  if (kind !== SCENERY_NONE) return false;
+  if ((field.treeStock?.[i] ?? 0) > 0) return false;
+  if (pendingTiles?.has(i)) return false;
+  return true;
+}
+
+/**
+ * Plant a living tree on an empty tile. Returns false if the tile is occupied.
+ */
+export function growTreeAt(field, tileIndex, stock) {
+  ensureTreeArrays(field);
+  if (tileIndex < 0 || tileIndex >= field.treeStock.length) return false;
+  const amount = Math.max(0, Math.min(255, stock | 0));
+  if (amount <= 0) return false;
+  if ((field.treeStock[tileIndex] ?? 0) > 0) return false;
+  const kind = field.sceneryType?.[tileIndex] ?? SCENERY_NONE;
+  if (kind !== SCENERY_NONE && kind !== SCENERY_TREE) return false;
+
+  field.sceneryType[tileIndex] = SCENERY_TREE;
+  field.treeStock[tileIndex] = amount;
+  field.treeBurn[tileIndex] = 0;
+  field.slowMask[tileIndex] = 1;
+  mixStockHash(field, tileIndex, amount);
+  markTreeDirty(field, tileIndex);
+  return true;
+}
+
+/** Instantly fell a living tree (full stock wipe). */
+export function fellTreeAt(field, tileIndex) {
+  ensureTreeArrays(field);
+  const stock = field.treeStock[tileIndex];
+  if (stock <= 0) return 0;
+  return damageTree(field, tileIndex, stock);
+}
+
 /** Fireball / AoE: ignite + chip trees inside splash radius. */
 export function applyTreeSplash(field, impactX, impactY, radius) {
   if (!field?.treeStock || !radius || radius <= 0) return false;
@@ -121,8 +173,9 @@ export function applyTreeSplash(field, impactX, impactY, radius) {
       if (!inBounds(tx, tz)) continue;
       const i = tz * field.width + tx;
       if (field.treeStock[i] <= 0) continue;
-      const wx = fx.fromFloat((tx + 0.5) * TILE_SIZE_F - WORLD_HALF_F);
-      const wz = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - WORLD_HALF_F);
+      const half = activeWorldHalfF();
+      const wx = fx.fromFloat((tx + 0.5) * TILE_SIZE_F - half);
+      const wz = fx.fromFloat((tz + 0.5) * TILE_SIZE_F - half);
       if (fx.dist2(impactX, impactY, wx, wz) > radius2) continue;
       if (igniteTree(field, i)) hit = true;
       if (damageTree(field, i, TREE_IGNITE_DAMAGE) > 0) hit = true;
@@ -192,8 +245,11 @@ export function applyTreeUpdatesToField(field, updates) {
     if (nextStock === 0) {
       if (field.sceneryType[ti] === SCENERY_TREE) {
         field.sceneryType[ti] = SCENERY_NONE;
-        field.slowMask[ti] = 0;
+        field.slowMask[ti] = isTerrainSlowTile(field, ti) ? 1 : 0;
       }
+    } else {
+      field.sceneryType[ti] = SCENERY_TREE;
+      field.slowMask[ti] = 1;
     }
   }
 }

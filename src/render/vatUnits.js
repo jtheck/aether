@@ -260,19 +260,19 @@ export async function loadVatUnitTemplate(engine, def) {
 export function fillVatInstanceParams(params, capacity, idleClip, walkClip, movingFlags) {
   for (let s = 0; s < capacity; s++) {
     const moving = movingFlags ? movingFlags[s] : 0;
-    const clip = moving ? walkClip : idleClip;
+    const clip = moving === 1 ? walkClip : idleClip;
     const o = s * 4;
     params[o] = clip.fromRow;
     params[o + 1] = clip.fromRow + clip.frameCount - 1;
     params[o + 2] = (s * 17 + 3) % Math.max(1, clip.frameCount);
-    params[o + 3] = clip.fps;
+    params[o + 3] = moving === 2 ? 0 : clip.fps;
   }
 }
 
-export function writeVatSlotParams(params, slot, clip, phase) {
+export function writeVatSlotParams(params, slot, clip, phase, fps = clip.fps) {
   const o = slot * 4;
   params[o] = clip.fromRow;
   params[o + 1] = clip.fromRow + clip.frameCount - 1;
   params[o + 2] = phase % Math.max(1, clip.frameCount);
-  params[o + 3] = clip.fps;
+  params[o + 3] = fps;
 }

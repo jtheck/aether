@@ -11,9 +11,16 @@ import {
 } from './projectiles.js';
 import { PROJECTILE } from './projectileTypes.js';
 import { step } from './step.js';
-import { UNIT } from './unitTypes.js';
+import { getUnitDef, UNIT } from './unitTypes.js';
 import { createWorld, spawn } from './world.js';
 import { buildWorldFromConfig } from './worldSetup.js';
+import {
+  FIREBALL_BLAST_LOB_DIST,
+  FIREBALL_BLAST_PEAK_HEIGHT,
+  LOB_TRAIL,
+  MONK_KICK_LOB_DIST,
+  isLobbing,
+} from './monkKick.js';
 import {
   beginSharedPublish,
   endSharedPublish,
@@ -302,7 +309,7 @@ function fireballSplashDamagesAndFriendlyFire() {
   });
   const foeHp = w.hp[foe];
   const allyHp = w.hp[ally];
-  const damage = Math.max(1, Math.round(9 * 1.35)); // warlock attackDamage * 1.35
+  const damage = Math.max(1, Math.round(getUnitDef(UNIT.WARLOCK).attackDamage * 1.35));
   spawnProjectile(w, {
     type: PROJECTILE.FIREBALL,
     owner: 0,
@@ -324,6 +331,87 @@ function fireballSplashDamagesAndFriendlyFire() {
     allyHp - Math.max(1, Math.round(damage * 0.25)),
     'friendly takes reduced splash',
   );
+}
+
+function fireballSplashBlastLobsUnits() {
+  const field = openField();
+  const w = createWorld(24);
+  const caster = spawn(w, {
+    x: fx.fromInt(0),
+    y: 0,
+    type: UNIT.WARLOCK,
+    owner: 0,
+  });
+  const foe = spawn(w, {
+    x: fx.fromInt(20),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const wagon = spawn(w, {
+    x: fx.fromInt(21),
+    y: 0,
+    type: UNIT.WAGON,
+    owner: 1,
+  });
+  const start = w.px[foe];
+  const damage = 12;
+  spawnProjectile(w, {
+    type: PROJECTILE.FIREBALL,
+    owner: 0,
+    source: caster,
+    target: -1,
+    x: fx.fromInt(20),
+    y: 0,
+    aimX: fx.fromInt(20),
+    aimY: 0,
+    damage,
+  });
+  // Impact immediately (already at aim).
+  projectileSystem(w, field);
+  assert.ok(isLobbing(w, foe), 'splash yeets the warrior');
+  assert.ok(!isLobbing(w, wagon), 'vehicles stay grounded');
+  assert.equal(w.lobTrail[foe], LOB_TRAIL.FIRE);
+  assert.equal(w.lobPeak[foe], FIREBALL_BLAST_PEAK_HEIGHT);
+  const planned = Math.abs(fx.toFloat(w.lobToX[foe] - start));
+  assert.ok(
+    planned < fx.toFloat(MONK_KICK_LOB_DIST) * 0.55,
+    `blast shorter than monk kick: ${planned}`,
+  );
+  assert.ok(
+    planned >= fx.toFloat(FIREBALL_BLAST_LOB_DIST) * 0.35,
+    `blast not a noop: ${planned}`,
+  );
+}
+
+function fireballBlastDistanceIsRandom() {
+  const field = openField();
+  const dists = new Set();
+  for (let seed = 100; seed < 112; seed++) {
+    const w = createWorld(seed);
+    spawn(w, { x: 0, y: 0, type: UNIT.WARLOCK, owner: 0 });
+    const foe = spawn(w, {
+      x: fx.fromInt(10),
+      y: 0,
+      type: UNIT.WARRIOR,
+      owner: 1,
+    });
+    spawnProjectile(w, {
+      type: PROJECTILE.FIREBALL,
+      owner: 0,
+      source: 0,
+      target: -1,
+      x: fx.fromInt(10),
+      y: 0,
+      aimX: fx.fromInt(10),
+      aimY: 0,
+      damage: 8,
+    });
+    projectileSystem(w, field);
+    assert.ok(isLobbing(w, foe));
+    dists.add(w.lobToX[foe]);
+  }
+  assert.ok(dists.size >= 3, 'throw distance varies across seeds');
 }
 
 function castCommandSpawnsFireball() {
@@ -388,6 +476,160 @@ function fireballAimScatterGrowsWithRange() {
   void field;
 }
 
+function sporeStreamPathHitsSecondTarget() {
+  const field = openField();
+  const w = createWorld(31);
+  const myco = spawn(w, {
+    x: 0,
+    y: 0,
+    type: UNIT.MYCO,
+    owner: 0,
+  });
+  const front = spawn(w, {
+    x: fx.fromInt(8),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const back = spawn(w, {
+    x: fx.fromInt(14),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const frontHp = w.hp[front];
+  const backHp = w.hp[back];
+  spawnProjectile(w, {
+    type: PROJECTILE.SPORE_STREAM,
+    owner: 0,
+    source: myco,
+    target: back,
+    x: 0,
+    y: 0,
+    aimX: w.px[back],
+    aimY: w.py[back],
+    damage: 5,
+  });
+  for (let t = 0; t < 40 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  assert.ok(w.hp[front] < frontHp, 'spore stream damages units in the path');
+  assert.ok(w.hp[back] < backHp, 'spore stream still reaches the aimed target');
+}
+
+function shadowBoltAppliesDot() {
+  const field = openField();
+  const w = createWorld(32);
+  const warlock = spawn(w, { x: 0, y: 0, type: UNIT.WARLOCK, owner: 0 });
+  const foe = spawn(w, {
+    x: fx.fromInt(6),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  spawnProjectile(w, {
+    type: PROJECTILE.SHADOW_BOLT,
+    owner: 0,
+    source: warlock,
+    target: foe,
+    x: 0,
+    y: 0,
+    aimX: w.px[foe],
+    aimY: w.py[foe],
+    damage: 9,
+  });
+  for (let t = 0; t < 20 && w.projectiles.activeCount; t++) {
+    step(w, field);
+  }
+  assert.ok(w.dotTicks[foe] > 0 || w.hp[foe] < 120, 'shadow bolt lands DoT or damage');
+  const hpAfterHit = w.hp[foe];
+  assert.ok(w.dotTicks[foe] > 0, 'shadow bolt applies DoT');
+  for (let t = 0; t < 12; t++) step(w, field);
+  assert.ok(w.hp[foe] < hpAfterHit, 'DoT ticks deal damage');
+}
+
+function iceBoltAppliesFrost() {
+  const field = openField();
+  const w = createWorld(33);
+  const wizard = spawn(w, { x: 0, y: 0, type: UNIT.WIZARD, owner: 0 });
+  const foe = spawn(w, {
+    x: fx.fromInt(8),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  spawnProjectile(w, {
+    type: PROJECTILE.ICE_BOLT,
+    owner: 0,
+    source: wizard,
+    target: foe,
+    x: 0,
+    y: 0,
+    aimX: w.px[foe],
+    aimY: w.py[foe],
+    damage: 10,
+  });
+  for (let t = 0; t < 20 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  assert.ok(w.frostTicks[foe] > 0, 'ice bolt applies frost');
+}
+
+function locustSwarmDistracts() {
+  const field = openField();
+  const w = createWorld(34);
+  const shaman = spawn(w, { x: 0, y: 0, type: UNIT.SHAMAN, owner: 0 });
+  const foe = spawn(w, {
+    x: fx.fromInt(8),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  spawnProjectile(w, {
+    type: PROJECTILE.LOCUST_SWARM,
+    owner: 0,
+    source: shaman,
+    target: foe,
+    x: 0,
+    y: 0,
+    aimX: w.px[foe],
+    aimY: w.py[foe],
+    damage: 5,
+  });
+  for (let t = 0; t < 20 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  assert.ok(w.distractCd[foe] > 0, 'locust swarm distracts');
+}
+
+function holySlashDamages() {
+  const field = openField();
+  const w = createWorld(35);
+  const priest = spawn(w, { x: 0, y: 0, type: UNIT.PRIEST, owner: 0 });
+  const foe = spawn(w, {
+    x: fx.fromInt(10),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  const hp = w.hp[foe];
+  spawnProjectile(w, {
+    type: PROJECTILE.HOLY_SLASH,
+    owner: 0,
+    source: priest,
+    target: foe,
+    x: 0,
+    y: 0,
+    aimX: w.px[foe],
+    aimY: w.py[foe],
+    damage: 6,
+  });
+  for (let t = 0; t < 12 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  assert.equal(w.hp[foe], hp - 6);
+}
+
 archerTravelAndCooldown();
 deadTargetMisses();
 poolReuseAndOverflow();
@@ -397,6 +639,13 @@ engagementSlotsAndRangedSpacing();
 sharedProjectilePublication();
 kothEliminationAfterImpact();
 fireballSplashDamagesAndFriendlyFire();
+fireballSplashBlastLobsUnits();
+fireballBlastDistanceIsRandom();
 castCommandSpawnsFireball();
 fireballAimScatterGrowsWithRange();
+sporeStreamPathHitsSecondTarget();
+shadowBoltAppliesDot();
+iceBoltAppliesFrost();
+locustSwarmDistracts();
+holySlashDamages();
 console.log('[PASS] authoritative projectile behavior and pooling');

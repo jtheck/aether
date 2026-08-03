@@ -15,7 +15,7 @@ import {
   HEIGHT_AMPLITUDE,
   TERRAIN,
   TILE_SIZE_F,
-  WORLD_HALF_F,
+  worldHalfFFromField,
 } from '../sim/field.js';
 import { createSceneryFromField } from './scenery.js';
 
@@ -126,7 +126,7 @@ function buildAtlasMeshes(engine, field, textures, active) {
       const i = tz * width + tx;
       const aid = atlasId[i];
       const bucket = buckets[aid] ?? buckets[ATLAS.GRASS_DIRT];
-      pushTileQuad(bucket, tx, tz, tileType[i], heightMap, terrainTypes, width, height);
+      pushTileQuad(bucket, tx, tz, tileType[i], heightMap, terrainTypes, width, height, worldHalfFFromField(field));
     }
   }
 
@@ -201,9 +201,9 @@ function buildTableFrameMeshes(engine, field, active) {
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       if (!active(tx, tz)) continue;
-      const x0 = tx * TILE_SIZE_F - WORLD_HALF_F;
+      const x0 = tx * TILE_SIZE_F - worldHalfFFromField(field);
       const x1 = x0 + TILE_SIZE_F;
-      const z0 = tz * TILE_SIZE_F - WORLD_HALF_F;
+      const z0 = tz * TILE_SIZE_F - worldHalfFFromField(field);
       const z1 = z0 + TILE_SIZE_F;
 
       if (!active(tx, tz - 1)) {
@@ -248,8 +248,8 @@ function buildTableFrameMeshes(engine, field, active) {
       const sw = active(cx - 1, cz);
       const count = Number(nw) + Number(ne) + Number(se) + Number(sw);
       if (count !== 1 && count !== 3) continue;
-      const x = cx * TILE_SIZE_F - WORLD_HALF_F;
-      const z = cz * TILE_SIZE_F - WORLD_HALF_F;
+      const x = cx * TILE_SIZE_F - worldHalfFFromField(field);
+      const z = cz * TILE_SIZE_F - worldHalfFFromField(field);
       const top = frameInnerY + FRAME_TOP_RISE * 1.35;
       pushBox(
         cornerPositions, cornerNormals, cornerUvs, cornerIndices,
@@ -561,7 +561,7 @@ function emptyBucket() {
   return { positions: [], uvs: [], indices: [], count: 0 };
 }
 
-function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width, height) {
+function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width, height, worldHalfF) {
   const col = atlasCell % ATLAS_GRID;
   const row = (atlasCell / ATLAS_GRID) | 0;
   // Image-space UVs: row 0 is top of PNG (V=0), matching pixel upload.
@@ -570,10 +570,10 @@ function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width,
   const vTop = row * UV_SCALE + UV_INSET;
   const vBot = (row + 1) * UV_SCALE - UV_INSET;
 
-  const x1 = tx * TILE_SIZE_F - WORLD_HALF_F;
-  const x2 = (tx + 1) * TILE_SIZE_F - WORLD_HALF_F;
-  const z1 = tz * TILE_SIZE_F - WORLD_HALF_F;
-  const z2 = (tz + 1) * TILE_SIZE_F - WORLD_HALF_F;
+  const x1 = tx * TILE_SIZE_F - worldHalfF;
+  const x2 = (tx + 1) * TILE_SIZE_F - worldHalfF;
+  const z1 = tz * TILE_SIZE_F - worldHalfF;
+  const z2 = (tz + 1) * TILE_SIZE_F - worldHalfF;
 
   const y00 = sampleHeight(heightMap, terrainTypes, width, height, tx, tz);
   const y10 = sampleHeight(heightMap, terrainTypes, width, height, tx + 1, tz);
@@ -601,8 +601,8 @@ function sampleHeight(heightMap, terrainTypes, width, height, cx, cz) {
 export function surfaceHeightAt(field, x, z) {
   if (!field?.heightMap) return 0;
   const { width, height, heightMap, terrainTypes } = field;
-  const fx = (x + WORLD_HALF_F) / TILE_SIZE_F;
-  const fz = (z + WORLD_HALF_F) / TILE_SIZE_F;
+  const fx = (x + worldHalfFFromField(field)) / TILE_SIZE_F;
+  const fz = (z + worldHalfFFromField(field)) / TILE_SIZE_F;
   const tx0 = Math.floor(fx);
   const tz0 = Math.floor(fz);
   const tx1 = tx0 + 1;
@@ -626,28 +626,32 @@ function flatUpNormals(vertexCount) {
 
 const GRID_LIFT = 0.12;
 const BLOCK_LIFT = 0.06;
+const SLOW_LIFT = 0.05;
 const GRID_HALF = 0.05;
 const BLOCK_INSET = 0.15;
 
 /**
- * Dev overlay: cyan tile edges + magenta fills on impassable cells.
+ * Dev overlay: cyan tile edges, magenta impassable, amber slow tiles.
  * @returns {{ setVisible: (on: boolean) => void, dispose: () => void }}
  */
 export function createTileGridOverlay(engine, scene, field) {
-  const { width, height, heightMap, terrainTypes, pass } = field;
+  const { width, height, heightMap, terrainTypes, pass, slowMask } = field;
   const edgePos = [];
   const edgeIdx = [];
   let ev = 0;
   const blockPos = [];
   const blockIdx = [];
   let bv = 0;
+  const slowPos = [];
+  const slowIdx = [];
+  let sv = 0;
 
   function heightAtCorner(cx, cz) {
     return sampleHeight(heightMap, terrainTypes, width, height, cx, cz) + GRID_LIFT;
   }
 
-  function blockHeightAtCorner(cx, cz) {
-    return sampleHeight(heightMap, terrainTypes, width, height, cx, cz) + BLOCK_LIFT;
+  function fillHeightAtCorner(cx, cz, lift) {
+    return sampleHeight(heightMap, terrainTypes, width, height, cx, cz) + lift;
   }
 
   function pushEdge(ax, ay, az, bx, by, bz) {
@@ -666,27 +670,27 @@ export function createTileGridOverlay(engine, scene, field) {
     ev += 4;
   }
 
-  function pushBlockedQuad(tx, tz) {
-    const x0 = tx * TILE_SIZE_F - WORLD_HALF_F + BLOCK_INSET;
-    const x1 = (tx + 1) * TILE_SIZE_F - WORLD_HALF_F - BLOCK_INSET;
-    const z0 = tz * TILE_SIZE_F - WORLD_HALF_F + BLOCK_INSET;
-    const z1 = (tz + 1) * TILE_SIZE_F - WORLD_HALF_F - BLOCK_INSET;
-    const y00 = blockHeightAtCorner(tx, tz);
-    const y10 = blockHeightAtCorner(tx + 1, tz);
-    const y11 = blockHeightAtCorner(tx + 1, tz + 1);
-    const y01 = blockHeightAtCorner(tx, tz + 1);
+  function pushFillQuad(tx, tz, lift, posOut, idxOut, base) {
+    const x0 = tx * TILE_SIZE_F - worldHalfFFromField(field) + BLOCK_INSET;
+    const x1 = (tx + 1) * TILE_SIZE_F - worldHalfFFromField(field) - BLOCK_INSET;
+    const z0 = tz * TILE_SIZE_F - worldHalfFFromField(field) + BLOCK_INSET;
+    const z1 = (tz + 1) * TILE_SIZE_F - worldHalfFFromField(field) - BLOCK_INSET;
+    const y00 = fillHeightAtCorner(tx, tz, lift);
+    const y10 = fillHeightAtCorner(tx + 1, tz, lift);
+    const y11 = fillHeightAtCorner(tx + 1, tz + 1, lift);
+    const y01 = fillHeightAtCorner(tx, tz + 1, lift);
     // CW from +Y
-    blockPos.push(x0, y00, z0, x1, y10, z0, x1, y11, z1, x0, y01, z1);
-    blockIdx.push(bv, bv + 1, bv + 2, bv, bv + 2, bv + 3);
-    bv += 4;
+    posOut.push(x0, y00, z0, x1, y10, z0, x1, y11, z1, x0, y01, z1);
+    idxOut.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    return base + 4;
   }
 
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
-      const x0 = tx * TILE_SIZE_F - WORLD_HALF_F;
-      const x1 = (tx + 1) * TILE_SIZE_F - WORLD_HALF_F;
-      const z0 = tz * TILE_SIZE_F - WORLD_HALF_F;
-      const z1 = (tz + 1) * TILE_SIZE_F - WORLD_HALF_F;
+      const x0 = tx * TILE_SIZE_F - worldHalfFFromField(field);
+      const x1 = (tx + 1) * TILE_SIZE_F - worldHalfFFromField(field);
+      const z0 = tz * TILE_SIZE_F - worldHalfFFromField(field);
+      const z1 = (tz + 1) * TILE_SIZE_F - worldHalfFFromField(field);
       const y00 = heightAtCorner(tx, tz);
       const y10 = heightAtCorner(tx + 1, tz);
       const y01 = heightAtCorner(tx, tz + 1);
@@ -696,7 +700,12 @@ export function createTileGridOverlay(engine, scene, field) {
       if (tx === width - 1) pushEdge(x1, y10, z0, x1, y11, z1);
       if (tz === height - 1) pushEdge(x0, y01, z1, x1, y11, z1);
 
-      if (pass && pass[tz * width + tx] === 0) pushBlockedQuad(tx, tz);
+      const i = tz * width + tx;
+      if (pass && pass[i] === 0) {
+        bv = pushFillQuad(tx, tz, BLOCK_LIFT, blockPos, blockIdx, bv);
+      } else if (slowMask && slowMask[i]) {
+        sv = pushFillQuad(tx, tz, SLOW_LIFT, slowPos, slowIdx, sv);
+      }
     }
   }
 
@@ -726,15 +735,32 @@ export function createTileGridOverlay(engine, scene, field) {
     setSubtreeVisible(blockMesh, false);
   }
 
+  /** @type {object | null} */
+  let slowMesh = null;
+  if (sv > 0) {
+    slowMesh = makeDevMesh(
+      engine,
+      'tile-slow',
+      slowPos,
+      slowIdx,
+      [1, 0.72, 0.12],
+      [1, 0.85, 0.25],
+    );
+    addToScene(scene, slowMesh);
+    setSubtreeVisible(slowMesh, false);
+  }
+
   return {
     setVisible(on) {
       const show = !!on;
       setSubtreeVisible(edgeMesh, show);
       if (blockMesh) setSubtreeVisible(blockMesh, show);
+      if (slowMesh) setSubtreeVisible(slowMesh, show);
     },
     dispose() {
       setSubtreeVisible(edgeMesh, false);
       if (blockMesh) setSubtreeVisible(blockMesh, false);
+      if (slowMesh) setSubtreeVisible(slowMesh, false);
     },
   };
 }

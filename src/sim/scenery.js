@@ -2,7 +2,7 @@
 // Sim owns the layout because rocks affect passability and trees affect speed.
 
 import * as fx from './fixed.js';
-import { TERRAIN, worldToTile } from './field.js';
+import { TERRAIN, worldToTile, applyTerrainSlow } from './field.js';
 import {
   TREE_STAGE_MAX,
   TREE_STAGE_MIN,
@@ -27,7 +27,10 @@ export const SCENERY = {
   ROCK_SNOW: 4,
 };
 
-export const TREE_SLOW_MULTIPLIER = fx.HALF;
+/** Speed scale on slowMask tiles (trees + partial water). */
+export const SLOW_MULTIPLIER = fx.fromFloat(0.45);
+/** @deprecated Use {@link SLOW_MULTIPLIER} */
+export const TREE_SLOW_MULTIPLIER = SLOW_MULTIPLIER;
 export const SPAWN_CLEAR_RADIUS_TILES = 6;
 
 const ROCK_RATE = 0.03;
@@ -119,6 +122,9 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
       field.treeStock[i] = initialTreeStock(tx, tz, seed);
     }
   }
+
+  // Partial-water slow only (after trees so fill(0) above does not wipe it).
+  applyTerrainSlow(field);
 
   return field;
 }

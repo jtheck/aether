@@ -22,6 +22,12 @@ export const UNIT_MODEL_URLS = {
   [UNIT.PRIEST]: '/assets/models/priest.glb',
   [UNIT.MYCO]: '/assets/models/myco.glb',
   [UNIT.SHAMAN]: '/assets/models/shaman.glb',
+  [UNIT.WIZARD]: '/assets/models/wizard.glb',
+  [UNIT.MONK]: '/assets/models/monk.glb',
+  [UNIT.ENGINEER]: '/assets/models/engineer.glb',
+  [UNIT.WAGON]: '/assets/models/wagon.glb',
+  [UNIT.DIRIGIBLE]: '/assets/models/dirigible.glb',
+  [UNIT.APC]: '/assets/models/apc.glb',
 };
 
 export function hasUnitModel(typeId) {

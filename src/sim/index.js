@@ -16,9 +16,14 @@ export * from './step.js';
 export * from './checksum.js';
 export * from './commands.js';
 export * from './abilities.js';
+export * from './frogs.js';
+export * from './lightning.js';
+export * from './holyArmor.js';
+export * from './sporeBloom.js';
+export * from './monkKick.js';
 export * from './field.js';
 export * from './path.js';
 export * from './combat.js';
 export * from './teams.js';
 export * from './ai.js';
-
+

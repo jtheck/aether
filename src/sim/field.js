@@ -8,12 +8,71 @@ import * as fx from './fixed.js';
 export const TILE = fx.fromFloat(4);
 export const HALF_TILE = fx.div(TILE, fx.fromInt(2));
 export const TILE_SIZE_F = 4;
-/** Playable board in tiles (keep MAP_* × TILE_SIZE_F === WORLD_HALF_F × 2). */
-export const MAP_W = 200;
-export const MAP_H = 200;
-/** Ground is 800×800 centered on the origin (−400…400 world units). */
+
+/** Normal play board (keep MAP_* × TILE_SIZE_F === WORLD_HALF_F × 2). */
+export const DEFAULT_MAP_W = 200;
+export const DEFAULT_MAP_H = 200;
+/** Stress / animStress only — do not use as the global default. */
+export const STRESS_MAP_W = 400;
+export const STRESS_MAP_H = 400;
+
+/** Default playable board in tiles (aliases for callers that want the normal size). */
+export const MAP_W = DEFAULT_MAP_W;
+export const MAP_H = DEFAULT_MAP_H;
+/** Ground is 800×800 centered on the origin (−400…400 world units) for default play. */
 export const WORLD_HALF_F = (MAP_W * TILE_SIZE_F) / 2;
 export const WORLD_HALF = fx.fromInt(WORLD_HALF_F);
+
+/** Active session dims — set by createField/buildField / setActiveMapSize. */
+let _mapW = MAP_W;
+let _mapH = MAP_H;
+let _worldHalfF = WORLD_HALF_F;
+let _worldHalf = WORLD_HALF;
+
+export function worldHalfFFromMap(mapW) {
+  return (mapW * TILE_SIZE_F) / 2;
+}
+
+export function worldHalfFFromField(field) {
+  return worldHalfFFromMap(field.width);
+}
+
+export function activeMapW() {
+  return _mapW;
+}
+
+export function activeMapH() {
+  return _mapH;
+}
+
+export function activeWorldHalfF() {
+  return _worldHalfF;
+}
+
+export function activeWorldHalf() {
+  return _worldHalf;
+}
+
+/** Switch session map size (A*, world↔tile, spatial). Call before createWorld for that session. */
+export function setActiveMapSize(mapW = DEFAULT_MAP_W, mapH = DEFAULT_MAP_H) {
+  const w = Math.max(1, mapW | 0);
+  const h = Math.max(1, mapH | 0);
+  _mapW = w;
+  _mapH = h;
+  _worldHalfF = worldHalfFFromMap(w);
+  _worldHalf = fx.fromInt(_worldHalfF);
+}
+
+/** Map tile counts for boot config — large board only under stress. */
+export function mapSizeForConfig({ stressPerSide = 0, animStressPerSide = 0, mapW, mapH } = {}) {
+  if (mapW != null && mapH != null) {
+    return { mapW: mapW | 0, mapH: mapH | 0 };
+  }
+  if ((stressPerSide | 0) > 0 || (animStressPerSide | 0) > 0) {
+    return { mapW: STRESS_MAP_W, mapH: STRESS_MAP_H };
+  }
+  return { mapW: DEFAULT_MAP_W, mapH: DEFAULT_MAP_H };
+}
 
 /** Semantic terrain per cell. */
 export const TERRAIN = {
@@ -40,12 +99,19 @@ const CASE_TO_ATLAS = new Uint8Array([
   12, 0, 15, 11, 13, 3, 4, 2, 8, 14, 9, 7, 1, 5, 10, 6,
 ]);
 
-/** @param {number} [seed] */
-export function createField(seed = 0) {
-  const n = MAP_W * MAP_H;
+/**
+ * @param {number} [seed]
+ * @param {{ width?: number, height?: number }} [dims]
+ */
+export function createField(seed = 0, dims = {}) {
+  const width = dims.width ?? DEFAULT_MAP_W;
+  const height = dims.height ?? DEFAULT_MAP_H;
+  setActiveMapSize(width, height);
+  const n = width * height;
   const field = {
-    width: MAP_W,
-    height: MAP_H,
+    width,
+    height,
+    worldHalfF: _worldHalfF,
     seed: seed >>> 0,
     activeMask: new Uint8Array(n),
     pass: new Uint8Array(n),
@@ -69,9 +135,10 @@ export function createField(seed = 0) {
 /**
  * Seeded procedural field: shallow height → terrain → marching squares → pass.
  * @param {number} [seed]
+ * @param {{ width?: number, height?: number }} [dims]
  */
-export function buildField(seed = 0) {
-  const field = createField(seed);
+export function buildField(seed = 0, dims = {}) {
+  const field = createField(seed, dims);
   generateHeightMap(field);
   assignTerrainByElevation(field);
   applyTerrainTransitions(field);
@@ -89,6 +156,7 @@ export function fieldSnapshot(field) {
   const snapshot = {
     width: field.width,
     height: field.height,
+    worldHalfF: field.worldHalfF ?? worldHalfFFromField(field),
     seed: field.seed,
     heightMap: field.heightMap.slice(),
     terrainTypes: field.terrainTypes.slice(),
@@ -119,11 +187,11 @@ export function cornerHeightWorld(field, cx, cz) {
 }
 
 export function tileKey(tx, tz) {
-  return tz * MAP_W + tx;
+  return tz * _mapW + tx;
 }
 
 export function inBounds(tx, tz) {
-  return tx >= 0 && tz >= 0 && tx < MAP_W && tz < MAP_H;
+  return tx >= 0 && tz >= 0 && tx < _mapW && tz < _mapH;
 }
 
 export function isPassable(field, tx, tz) {
@@ -159,15 +227,15 @@ export function applyChunkMask(field, chunkMask, chunkSize = 16) {
 }
 
 export function worldToTile(x) {
-  return fx.toInt(fx.div(x + WORLD_HALF, TILE));
+  return fx.toInt(fx.div(x + _worldHalf, TILE));
 }
 
 export function tileCenterX(tx) {
-  return fx.mul(fx.fromInt(tx), TILE) + HALF_TILE - WORLD_HALF;
+  return fx.mul(fx.fromInt(tx), TILE) + HALF_TILE - _worldHalf;
 }
 
 export function tileCenterY(tz) {
-  return fx.mul(fx.fromInt(tz), TILE) + HALF_TILE - WORLD_HALF;
+  return fx.mul(fx.fromInt(tz), TILE) + HALF_TILE - _worldHalf;
 }
 
 /** Bresenham tile walk — true if every tile on the line is passable. */
@@ -203,8 +271,8 @@ export function lineClear(field, x0, z0, x1, z1) {
  * wx/wy must have room for at least maxWp entries.
  * Returns 0 if no path.
  */
-// Reused A* scratch — avoid allocating 200×200 arrays every path query.
-const ASTAR_CELLS = MAP_W * MAP_H;
+// Reused A* scratch — sized for the largest supported board (stress), not default MAP_*.
+const ASTAR_CELLS = STRESS_MAP_W * STRESS_MAP_H;
 const _gScore = new Int32Array(ASTAR_CELLS);
 const _cameFrom = new Int32Array(ASTAR_CELLS);
 const _closed = new Uint8Array(ASTAR_CELLS);
@@ -269,7 +337,7 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32) {
     return 1;
   }
 
-  const W = MAP_W;
+  const W = field.width;
   const toKey = (x, z) => z * W + x;
   const startKey = toKey(stx, stz);
   const endKey = toKey(etx, etz);
@@ -376,7 +444,7 @@ function octileH(x, z, etx, etz) {
  * to a handful of LOS corners (fits in MAX_WAYPOINTS).
  */
 function buildWaypoints(cameFrom, endKey, startX, startY, ex, ey, wx, wy, maxWp, reachedGoal, field) {
-  const W = MAP_W;
+  const W = field.width;
   // Collect end→start keys.
   let raw = 0;
   let k = endKey;
@@ -613,6 +681,30 @@ function updatePassFromWater(field) {
     // Pure water (solid atlas cell) is impassable; shore transitions stay walkable.
     if (terrainTypes[i] === TERRAIN.WATER && tileType[i] === 12) pass[i] = 0;
   }
+}
+
+/**
+ * Walkable partial-water cells only (water terrain, not solid tileType 12).
+ * Does not mark grass–water atlas grass — those are dry shore.
+ */
+export function isTerrainSlowTile(field, tileIndex) {
+  if (!field?.pass || field.pass[tileIndex] === 0) return false;
+  return (
+    field.terrainTypes[tileIndex] === TERRAIN.WATER &&
+    field.tileType[tileIndex] !== 12
+  );
+}
+
+/** OR partial-water slow into slowMask (does not clear trees). */
+export function applyTerrainSlow(field) {
+  const n = field.width * field.height;
+  if (!field.slowMask || field.slowMask.length !== n) {
+    field.slowMask = new Uint8Array(n);
+  }
+  for (let i = 0; i < n; i++) {
+    if (isTerrainSlowTile(field, i)) field.slowMask[i] = 1;
+  }
+  return field;
 }
 
 function nearestPassable(field, tx, tz, radius) {

@@ -26,15 +26,29 @@ import {
   wpBase,
   MAX_REPATHS,
 } from './path.js';
-import { getUnitDef, UNIT_DEFS } from './unitTypes.js';
+import { getUnitDef, UNIT_DEFS, unitFootprint } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { worldToTile, isPassable, isSlowTile } from './field.js';
-import { TREE_SLOW_MULTIPLIER } from './scenery.js';
+import { SLOW_MULTIPLIER } from './scenery.js';
 import { kothMetaStep } from './kothMeta.js';
 import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
 import { projectileSystem } from './projectiles.js';
 import { treeBurnSystem } from './trees.js';
+import { fireZoneSystem } from './fireZones.js';
+import { frogSystem } from './frogs.js';
+import { sporeGrowthSystem } from './sporeBloom.js';
+import { monkKickSystem, isLobbing } from './monkKick.js';
+import {
+  transportAutoLoadSystem,
+  syncCarriedPositions,
+  isCarried,
+} from './transport.js';
+import { repairSystem } from './repair.js';
+import { isFlyer } from './unitTypes.js';
+import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
 
+/** Extra slow while gawking at frogs (stacks with terrain slow). */
+const DISTRACT_MOVE_MUL = fx.fromFloat(0.55);
 // Soft personal space ≈ right-click formation spacing (2.5 for warriors).
 // Old code multiplied by an extra 2.5× factor, so idle post-combat piles
 // kept drifting out to ~6+ and looked like endless turning/inching.
@@ -51,7 +65,7 @@ const SEP_MIN_DIST_SQ = new Int32Array(SEP_TYPE_COUNT * SEP_TYPE_COUNT);
 for (let a = 0; a < SEP_TYPE_COUNT; a++) {
   for (let b = 0; b < SEP_TYPE_COUNT; b++) {
     const key = a * SEP_TYPE_COUNT + b;
-    const spacing = Math.max(2.0, UNIT_DEFS[a].size / 6 + UNIT_DEFS[b].size / 6);
+    const spacing = Math.max(2.0, unitFootprint(a) + unitFootprint(b));
     SEP_MIN_DIST[key] = fx.fromFloat(spacing);
     SEP_MIN_DIST_SQ[key] = fx.mul(SEP_MIN_DIST[key], SEP_MIN_DIST[key]);
   }
@@ -68,20 +82,43 @@ export function step(world, field, commands) {
   world.metrics.projectileMisses = 0;
   world.metrics.projectileOverflow = 0;
   applyCommands(world, field, commands);
+  transportAutoLoadSystem(world);
+  repairSystem(world);
   combatSystem(world, field);
   projectileSystem(world, field);
+  tickCombatStatus(world);
+  frogSystem(world, field);
+  monkKickSystem(world, field);
   treeBurnSystem(field);
+  sporeGrowthSystem(world, field);
   kothMetaStep(world);
   planPathBudget(world, field);
   movementSystem(world, field);
+  syncCarriedPositions(world);
   movingAvoidanceSystem(world, field);
   separationSystem(world, field);
+  // After movement so standing/walking through the patch uses current positions.
+  fireZoneSystem(world);
   world.tick++;
 }
 
 function movementSystem(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) {
+      w.vx[i] = 0;
+      w.vy[i] = 0;
+      continue;
+    }
+
+    // Riders are glued to their transport in syncCarriedPositions.
+    if (isCarried(w, i)) {
+      w.vx[i] = 0;
+      w.vy[i] = 0;
+      continue;
+    }
+
+    // Mid-air from a monk stick-bonk — flight owns position this tick.
+    if (isLobbing(w, i)) {
       w.vx[i] = 0;
       w.vy[i] = 0;
       continue;
@@ -99,6 +136,16 @@ function movementSystem(w, field) {
       w.vx[i] = 0;
       w.vy[i] = 0;
       continue;
+    }
+
+    // Engineer holding repair range — repairSystem owns cadence.
+    if (order === ORDER.REPAIR) {
+      // Still allow movement toward target when out of range (path active).
+      if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
+        w.vx[i] = 0;
+        w.vy[i] = 0;
+        continue;
+      }
     }
 
     // Final destination reached — settle the order (v1 arrivalRadius).
@@ -162,9 +209,13 @@ function movementSystem(w, field) {
 
     const currentTx = worldToTile(w.px[i]);
     const currentTz = worldToTile(w.py[i]);
-    const speed = isSlowTile(field, currentTx, currentTz)
-      ? fx.mul(w.speed[i], TREE_SLOW_MULTIPLIER)
-      : w.speed[i];
+    let speed = w.speed[i];
+    // Trees / mud only snag ground units.
+    if (!isFlyer(w.type[i]) && isSlowTile(field, currentTx, currentTz)) {
+      speed = fx.mul(speed, SLOW_MULTIPLIER);
+    }
+    if (w.distractCd[i] > 0) speed = fx.mul(speed, DISTRACT_MOVE_MUL);
+    if (w.frostTicks?.[i] > 0) speed = fx.mul(speed, FROST_MOVE_MUL);
     // Don't overshoot the goal in one tick (reduces orbit jitter).
     const stepDist = dist < speed ? dist : speed;
     const mx = fx.mul(fx.div(dx, dist), stepDist);
@@ -192,6 +243,15 @@ function applyMoveWithSlide(w, field, i, mx, my) {
   const oldY = w.py[i];
   const newX = oldX + mx;
   const newY = oldY + my;
+
+  // Air units ignore ground impassability.
+  if (isFlyer(w.type[i])) {
+    w.px[i] = newX;
+    w.py[i] = newY;
+    w.vx[i] = mx;
+    w.vy[i] = my;
+    return;
+  }
 
   const oldTx = worldToTile(oldX);
   const oldTz = worldToTile(oldY);
@@ -242,6 +302,7 @@ function applyMoveWithSlide(w, field, i, mx, my) {
 }
 
 function isMovingUnit(w, i) {
+  if (isCarried(w, i)) return false;
   return w.vx[i] !== 0 || w.vy[i] !== 0;
 }
 
@@ -262,7 +323,7 @@ function movingAvoidanceSystem(w, field) {
   rebuildSpatialGrid(grid, w, isMovingUnit, false);
   for (let z = 0; z < grid.rows; z++) {
     for (let x = 0; x < grid.cols; x++) {
-      const cell = spatialCellId(x, z);
+      const cell = spatialCellId(x, z, grid);
       if (cell % SEP_PHASES !== w.tick % SEP_PHASES) continue;
       for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
         for (let j = grid.next[i]; j >= 0; j = grid.next[j]) {
@@ -275,7 +336,7 @@ function movingAvoidanceSystem(w, field) {
         const nx = x + SEP_NEIGHBORS[n][0];
         const nz = z + SEP_NEIGHBORS[n][1];
         if (nx < 0 || nz < 0 || nx >= grid.cols || nz >= grid.rows) continue;
-        const other = spatialCellId(nx, nz);
+        const other = spatialCellId(nx, nz, grid);
         for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
           for (let j = grid.head[other]; j >= 0; j = grid.next[j]) {
             if (w.owner[i] !== w.owner[j]) continue;
@@ -313,7 +374,7 @@ function gridSeparation(w, field) {
   rebuildSpatialGrid(grid, w, canSeparate, false);
   for (let z = 0; z < grid.rows; z++) {
     for (let x = 0; x < grid.cols; x++) {
-      const cell = spatialCellId(x, z);
+      const cell = spatialCellId(x, z, grid);
       if (cell % SEP_PHASES !== w.tick % SEP_PHASES) continue;
       for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
         for (let j = grid.next[i]; j >= 0; j = grid.next[j]) {
@@ -326,14 +387,14 @@ function gridSeparation(w, field) {
   }
   for (let z = 0; z < grid.rows; z++) {
     for (let x = 0; x < grid.cols; x++) {
-      const cell = spatialCellId(x, z);
+      const cell = spatialCellId(x, z, grid);
       if (cell % SEP_PHASES !== w.tick % SEP_PHASES) continue;
       if (grid.head[cell] < 0) continue;
       for (let n = 0; n < SEP_NEIGHBORS.length; n++) {
         const nx = x + SEP_NEIGHBORS[n][0];
         const nz = z + SEP_NEIGHBORS[n][1];
         if (nx < 0 || nz < 0 || nx >= grid.cols || nz >= grid.rows) continue;
-        const other = spatialCellId(nx, nz);
+        const other = spatialCellId(nx, nz, grid);
         if (grid.head[other] < 0) continue;
         for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
           for (let j = grid.head[other]; j >= 0; j = grid.next[j]) {
@@ -348,6 +409,7 @@ function gridSeparation(w, field) {
 }
 
 function canSeparate(w, i) {
+  if (isCarried(w, i)) return false;
   return (
     w.navWpCount[i] === 0 &&
     !w.hasTarget[i] &&
@@ -387,11 +449,17 @@ function applyPairPush(w, field, i, j, strength) {
   w.py[i] -= py;
   w.px[j] += px;
   w.py[j] += py;
-  if (!isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))) {
+  if (
+    !isFlyer(w.type[i]) &&
+    !isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))
+  ) {
     w.px[i] += px;
     w.py[i] += py;
   }
-  if (!isPassable(field, worldToTile(w.px[j]), worldToTile(w.py[j]))) {
+  if (
+    !isFlyer(w.type[j]) &&
+    !isPassable(field, worldToTile(w.px[j]), worldToTile(w.py[j]))
+  ) {
     w.px[j] -= px;
     w.py[j] -= py;
   }

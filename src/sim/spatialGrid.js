@@ -1,24 +1,37 @@
 // Allocation-free deterministic uniform grid for local simulation queries.
 
 import * as fx from './fixed.js';
-import { WORLD_HALF, WORLD_HALF_F } from './field.js';
+import {
+  WORLD_HALF_F,
+  activeWorldHalf,
+  activeWorldHalfF,
+} from './field.js';
 
 export const SPATIAL_CELL_WORLD = 8;
 export const SPATIAL_CELL = fx.fromInt(SPATIAL_CELL_WORLD);
+/** Default-map cell counts (tests / exports). Active sessions may use a larger grid. */
 export const SPATIAL_COLS = Math.ceil((WORLD_HALF_F * 2) / SPATIAL_CELL_WORLD);
 export const SPATIAL_ROWS = SPATIAL_COLS;
 export const SPATIAL_CELL_COUNT = SPATIAL_COLS * SPATIAL_ROWS;
 export const SPATIAL_OWNER_SLOTS = 8;
 
-export function createSpatialGrid(capacity) {
-  const head = new Int32Array(SPATIAL_CELL_COUNT);
-  const tail = new Int32Array(SPATIAL_CELL_COUNT);
+function colsForHalf(worldHalfF) {
+  return Math.ceil((worldHalfF * 2) / SPATIAL_CELL_WORLD);
+}
+
+export function createSpatialGrid(capacity, worldHalfF = activeWorldHalfF()) {
+  const cols = colsForHalf(worldHalfF);
+  const rows = cols;
+  const cellCount = cols * rows;
+  const worldHalf = fx.fromInt(worldHalfF | 0);
+  const head = new Int32Array(cellCount);
+  const tail = new Int32Array(cellCount);
   const next = new Int32Array(capacity);
-  const touched = new Int32Array(SPATIAL_CELL_COUNT);
-  const ownerHead = new Int32Array(SPATIAL_CELL_COUNT * SPATIAL_OWNER_SLOTS);
-  const ownerTail = new Int32Array(SPATIAL_CELL_COUNT * SPATIAL_OWNER_SLOTS);
+  const touched = new Int32Array(cellCount);
+  const ownerHead = new Int32Array(cellCount * SPATIAL_OWNER_SLOTS);
+  const ownerTail = new Int32Array(cellCount * SPATIAL_OWNER_SLOTS);
   const ownerNext = new Int32Array(capacity);
-  const touchedOwner = new Int32Array(SPATIAL_CELL_COUNT * SPATIAL_OWNER_SLOTS);
+  const touchedOwner = new Int32Array(cellCount * SPATIAL_OWNER_SLOTS);
   head.fill(-1);
   tail.fill(-1);
   next.fill(-1);
@@ -38,8 +51,10 @@ export function createSpatialGrid(capacity) {
     touchedOwnerCount: 0,
     activeOwners: new Uint8Array(SPATIAL_OWNER_SLOTS),
     overflowOwners: false,
-    cols: SPATIAL_COLS,
-    rows: SPATIAL_ROWS,
+    cols,
+    rows,
+    worldHalf,
+    worldHalfF,
   };
 }
 
@@ -66,22 +81,27 @@ function clampCell(value, limit) {
   return value;
 }
 
-export function spatialCoords(px, py) {
-  const x = clampCell(Math.floor((px + WORLD_HALF) / SPATIAL_CELL), SPATIAL_COLS);
-  const z = clampCell(Math.floor((py + WORLD_HALF) / SPATIAL_CELL), SPATIAL_ROWS);
+/** Prefer passing `grid` so coords match that grid's half-extent. */
+export function spatialCoords(px, py, grid = null) {
+  const half = grid?.worldHalf ?? activeWorldHalf();
+  const cols = grid?.cols ?? colsForHalf(activeWorldHalfF());
+  const rows = grid?.rows ?? cols;
+  const x = clampCell(Math.floor((px + half) / SPATIAL_CELL), cols);
+  const z = clampCell(Math.floor((py + half) / SPATIAL_CELL), rows);
   return { x, z };
 }
 
-export function spatialCellId(x, z) {
-  return z * SPATIAL_COLS + x;
+export function spatialCellId(x, z, grid = null) {
+  const cols = grid?.cols ?? colsForHalf(activeWorldHalfF());
+  return z * cols + x;
 }
 
 export function rebuildSpatialGrid(grid, world, include = null, indexOwners = true) {
   clearSpatialGrid(grid);
   for (let i = 0; i < world.count; i++) {
     if (!world.alive[i] || (include && !include(world, i))) continue;
-    const { x, z } = spatialCoords(world.px[i], world.py[i]);
-    const cell = spatialCellId(x, z);
+    const { x, z } = spatialCoords(world.px[i], world.py[i], grid);
+    const cell = spatialCellId(x, z, grid);
     grid.next[i] = -1;
     const previousTail = grid.tail[cell];
     if (previousTail < 0) {
@@ -112,13 +132,15 @@ export function rebuildSpatialGrid(grid, world, include = null, indexOwners = tr
   }
 }
 
-export function queryCellBounds(px, py, radius) {
-  const { x, z } = spatialCoords(px, py);
+export function queryCellBounds(px, py, radius, grid = null) {
+  const { x, z } = spatialCoords(px, py, grid);
+  const cols = grid?.cols ?? colsForHalf(activeWorldHalfF());
+  const rows = grid?.rows ?? cols;
   const ring = Math.max(0, Math.ceil(radius / SPATIAL_CELL));
   return {
     minX: Math.max(0, x - ring),
-    maxX: Math.min(SPATIAL_COLS - 1, x + ring),
+    maxX: Math.min(cols - 1, x + ring),
     minZ: Math.max(0, z - ring),
-    maxZ: Math.min(SPATIAL_ROWS - 1, z + ring),
+    maxZ: Math.min(rows - 1, z + ring),
   };
 }

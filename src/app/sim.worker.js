@@ -1,13 +1,19 @@
 // Web Worker — deterministic sim authority (one commitTick = one lockstep step).
 
-import { buildField, fieldSnapshot } from '../sim/field.js';
+import { buildField, fieldSnapshot, mapSizeForConfig } from '../sim/field.js';
 import { populateScenery } from '../sim/scenery.js';
-import { buildWorldFromConfig, KOTH_BASES, PLAYER } from '../sim/worldSetup.js';
+import { buildWorldFromConfig, kothBases, PLAYER } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { generateAiCommands } from '../sim/ai.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
 import { takeTreeUpdates } from '../sim/trees.js';
+import { takeFireZoneUpdates } from '../sim/fireZones.js';
+import { takeFrogUpdates } from '../sim/frogs.js';
+import { takeLightningUpdates } from '../sim/lightning.js';
+import { takeHolyArmorUpdates } from '../sim/holyArmor.js';
+import { takeSporeBloomUpdates } from '../sim/sporeBloom.js';
+import { takeMonkKickUpdates } from '../sim/monkKick.js';
 import {
   beginSharedPublish,
   endSharedPublish,
@@ -49,9 +55,10 @@ self.onmessage = (e) => {
     if (msg.type === 'init') {
       views = mapSharedState(msg.sab);
       aiPlayers = msg.config.aiPlayers ?? [];
-      field = buildField(msg.config.seed);
-      world = buildWorldFromConfig(msg.config);
-      populateScenery(field, world, KOTH_BASES);
+      const size = mapSizeForConfig(msg.config);
+      field = buildField(msg.config.seed, { width: size.mapW, height: size.mapH });
+      world = buildWorldFromConfig({ ...msg.config, mapW: size.mapW, mapH: size.mapH });
+      populateScenery(field, world, kothBases(field.worldHalfF));
       beginSharedPublish(views);
       publishType(world, views);
       publishedTypeCount = world.count;
@@ -75,6 +82,12 @@ self.onmessage = (e) => {
       publishProjectiles(world, views);
       endSharedPublish(views);
       const treeUpdates = takeTreeUpdates(field);
+      const fireZoneUpdates = takeFireZoneUpdates(world);
+      const frogUpdates = takeFrogUpdates(world);
+      const lightningUpdates = takeLightningUpdates(world);
+      const holyArmorUpdates = takeHolyArmorUpdates(world);
+      const sporeBloomUpdates = takeSporeBloomUpdates(world);
+      const monkKickUpdates = takeMonkKickUpdates(world);
       postMessage({
         type: 'stepDone',
         tick: world.tick,
@@ -83,6 +96,12 @@ self.onmessage = (e) => {
         kothMatchOver: world.kothMatchOver ?? 0,
         koth: serializeKoth(world.koth),
         treeUpdates,
+        fireZoneUpdates,
+        frogUpdates,
+        lightningUpdates,
+        holyArmorUpdates,
+        sporeBloomUpdates,
+        monkKickUpdates,
       });
     }
   } catch (err) {

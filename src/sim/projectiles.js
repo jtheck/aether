@@ -6,9 +6,24 @@ import { lineClear } from './field.js';
 import { getProjectileDef } from './projectileTypes.js';
 import { isHostile } from './teams.js';
 import { applyTreeSplash } from './trees.js';
+import { spawnFireZone } from './fireZones.js';
+import { fireballBlastLob } from './monkKick.js';
 import { rngFrac } from './rng.js';
+import {
+  queryCellBounds,
+  rebuildSpatialGrid,
+  spatialCellId,
+} from './spatialGrid.js';
+import {
+  applyFrost,
+  applyShadowDot,
+  LOCUST_DISTRACT_TICKS,
+} from './combatStatus.js';
+import { applyDistract } from './frogs.js';
 
 export const MAX_PROJECTILES = 32768;
+/** Max unique entities a path-hit projectile can damage. */
+export const MAX_PATH_HITS = 8;
 
 export const PROJECTILE_DESPAWN = {
   NONE: 0,
@@ -20,6 +35,8 @@ export const PROJECTILE_DESPAWN = {
 export function createProjectileStore(capacity = MAX_PROJECTILES) {
   const freeStack = new Int32Array(capacity);
   for (let i = 0; i < capacity; i++) freeStack[i] = capacity - 1 - i;
+  const pathHits = new Int32Array(capacity * MAX_PATH_HITS);
+  pathHits.fill(-1);
   return {
     capacity,
     activeCount: 0,
@@ -39,11 +56,14 @@ export function createProjectileStore(capacity = MAX_PROJECTILES) {
     vy: new Int32Array(capacity),
     aimX: new Int32Array(capacity),
     aimY: new Int32Array(capacity),
+    wanderOx: new Int32Array(capacity),
+    wanderOy: new Int32Array(capacity),
     damage: new Int32Array(capacity),
     age: new Uint16Array(capacity),
     lifetime: new Uint16Array(capacity),
     hitCount: new Uint8Array(capacity),
     despawnReason: new Uint8Array(capacity),
+    pathHits,
   };
 }
 
@@ -81,10 +101,14 @@ export function spawnProjectile(w, {
   const aimed = applyAimScatter(w, x, y, aimX, aimY, def.aimScatter);
   store.aimX[slot] = aimed.aimX;
   store.aimY[slot] = aimed.aimY;
+  store.wanderOx[slot] = 0;
+  store.wanderOy[slot] = 0;
   store.damage[slot] = damage;
   store.age[slot] = 0;
   store.hitCount[slot] = 0;
   store.despawnReason[slot] = PROJECTILE_DESPAWN.NONE;
+  const hitBase = slot * MAX_PATH_HITS;
+  for (let h = 0; h < MAX_PATH_HITS; h++) store.pathHits[hitBase + h] = -1;
 
   const dx = aimed.aimX - x;
   const dy = aimed.aimY - y;
@@ -140,6 +164,34 @@ function freeProjectile(w, slot, reason) {
   else w.metrics.projectileMisses++;
 }
 
+function alreadyPathHit(store, slot, entity) {
+  const base = slot * MAX_PATH_HITS;
+  const n = store.hitCount[slot];
+  for (let h = 0; h < n; h++) {
+    if (store.pathHits[base + h] === entity) return true;
+  }
+  return false;
+}
+
+function recordPathHit(store, slot, entity) {
+  const n = store.hitCount[slot];
+  if (n >= MAX_PATH_HITS) return false;
+  store.pathHits[slot * MAX_PATH_HITS + n] = entity;
+  store.hitCount[slot] = n + 1;
+  return true;
+}
+
+function applyHitEffects(w, def, entity, source) {
+  if (def.appliesDot) applyShadowDot(w, entity, { source });
+  if (def.appliesFrost) applyFrost(w, entity);
+  if (def.appliesDistract) applyDistract(w, entity, LOCUST_DISTRACT_TICKS);
+}
+
+function hitEntity(w, store, slot, def, entity) {
+  applyDamage(w, entity, store.damage[slot], store.source[slot]);
+  applyHitEffects(w, def, entity, store.source[slot]);
+}
+
 /** Splash at impact point; hostiles take full damage, friendlies use multiplier. */
 function applySplash(w, slot, impactX, impactY, def, field) {
   const store = w.projectiles;
@@ -165,11 +217,85 @@ function applySplash(w, slot, impactX, impactY, def, field) {
   if (def.ignitesTrees && field && applyTreeSplash(field, impactX, impactY, radius)) {
     hit = true;
   }
+  if (def.leavesGroundFire) {
+    // Slightly tighter than splash so walking the rim isn't a free DoT.
+    const zoneRadius = fx.mul(radius, fx.fromFloat(0.85));
+    spawnFireZone(w, {
+      x: impactX,
+      y: impactY,
+      radius: zoneRadius,
+      owner,
+      source,
+      friendlyMul: friendlyMul,
+    });
+  }
+  if (def.blastLob) {
+    if (fireballBlastLob(w, field, impactX, impactY, radius) > 0) hit = true;
+  }
   return hit;
+}
+
+function refreshWander(w, store, slot, def) {
+  const period = def.wanderPeriod | 0;
+  if (!period || !def.wanderAmount) return;
+  if (store.age[slot] % period !== 0) return;
+  if (!w?.rng) return;
+  const nx = (rngFrac(w.rng) - fx.HALF) * 2;
+  const ny = (rngFrac(w.rng) - fx.HALF) * 2;
+  store.wanderOx[slot] = fx.mul(def.wanderAmount, nx);
+  store.wanderOy[slot] = fx.mul(def.wanderAmount, ny);
+}
+
+/** Damage hostiles near the projectile; skip already-hit entities. */
+function applyPathHits(w, store, slot, def) {
+  const grid = w.spatial;
+  if (!grid) return false;
+  const cx = store.px[slot];
+  const cy = store.py[slot];
+  const radius = def.hitRadius;
+  const radius2 = fx.mul(radius, radius);
+  const owner = store.owner[slot];
+  const pierce = def.pierce || 1;
+  const bounds = queryCellBounds(cx, cy, radius, grid);
+  let any = false;
+
+  for (let z = bounds.minZ; z <= bounds.maxZ; z++) {
+    for (let x = bounds.minX; x <= bounds.maxX; x++) {
+      let i = grid.head[spatialCellId(x, z, grid)];
+      while (i >= 0) {
+        if (
+          w.alive[i] &&
+          isHostile(owner, w.owner[i]) &&
+          fx.dist2(cx, cy, w.px[i], w.py[i]) <= radius2 &&
+          !alreadyPathHit(store, slot, i)
+        ) {
+          if (!recordPathHit(store, slot, i)) {
+            i = grid.next[i];
+            continue;
+          }
+          hitEntity(w, store, slot, def, i);
+          any = true;
+          if (store.hitCount[slot] >= pierce) return true;
+        }
+        i = grid.next[i];
+      }
+    }
+  }
+  return any;
 }
 
 export function projectileSystem(w, field) {
   const store = w.projectiles;
+  let needPathGrid = false;
+  for (let slot = 0; slot < store.highWater; slot++) {
+    if (!store.alive[slot]) continue;
+    if (getProjectileDef(store.type[slot]).pathHit) {
+      needPathGrid = true;
+      break;
+    }
+  }
+  if (needPathGrid) rebuildSpatialGrid(w.spatial, w);
+
   for (let slot = 0; slot < store.capacity; slot++) {
     if (!store.alive[slot]) continue;
     const def = getProjectileDef(store.type[slot]);
@@ -181,8 +307,12 @@ export function projectileSystem(w, field) {
       store.aimY[slot] = w.py[target];
     }
 
-    const dx = store.aimX[slot] - store.px[slot];
-    const dy = store.aimY[slot] - store.py[slot];
+    refreshWander(w, store, slot, def);
+    const aimX = store.aimX[slot] + store.wanderOx[slot];
+    const aimY = store.aimY[slot] + store.wanderOy[slot];
+
+    const dx = aimX - store.px[slot];
+    const dy = aimY - store.py[slot];
     const dist = fx.len(dx, dy);
     setVelocity(store, slot, dx, dy, dist, def.speed);
     const nextX = store.px[slot] + store.vx[slot];
@@ -205,14 +335,22 @@ export function projectileSystem(w, field) {
     store.py[slot] = nextY;
     store.age[slot]++;
 
-    if (targetAlive && !(def.splashRadius > 0)) {
-      const hitRadius2 = fx.mul(def.hitRadius, def.hitRadius);
-      if (fx.dist2(nextX, nextY, w.px[target], w.py[target]) <= hitRadius2) {
-        applyDamage(w, target, store.damage[slot], store.source[slot]);
-        store.hitCount[slot]++;
-        if (store.hitCount[slot] >= def.pierce) {
+    if (!(def.splashRadius > 0)) {
+      if (def.pathHit) {
+        applyPathHits(w, store, slot, def);
+        if (store.hitCount[slot] >= (def.pierce || 1)) {
           freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
           continue;
+        }
+      } else if (targetAlive) {
+        const hitRadius2 = fx.mul(def.hitRadius, def.hitRadius);
+        if (fx.dist2(nextX, nextY, w.px[target], w.py[target]) <= hitRadius2) {
+          hitEntity(w, store, slot, def, target);
+          store.hitCount[slot]++;
+          if (store.hitCount[slot] >= def.pierce) {
+            freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
+            continue;
+          }
         }
       }
     }
@@ -228,7 +366,8 @@ export function projectileSystem(w, field) {
         const hit = applySplash(w, slot, ix, iy, def, field);
         freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
       } else {
-        freeProjectile(w, slot, PROJECTILE_DESPAWN.MISS);
+        const hadHit = store.hitCount[slot] > 0;
+        freeProjectile(w, slot, hadHit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
       }
     }
   }

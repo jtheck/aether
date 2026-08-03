@@ -12,6 +12,12 @@ export const UNIT = {
   PRIEST: 4,
   MYCO: 5,
   SHAMAN: 6,
+  WIZARD: 7,
+  MONK: 8,
+  ENGINEER: 9,
+  WAGON: 10,
+  DIRIGIBLE: 11,
+  APC: 12,
 };
 
 export const ATTACK_DELIVERY = {
@@ -19,7 +25,7 @@ export const ATTACK_DELIVERY = {
   PROJECTILE: 1,
 };
 
-/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null }>} */
+/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean }>} */
 export const UNIT_DEFS = [
   {
     id: UNIT.VILLAGER,
@@ -97,7 +103,7 @@ export const UNIT_DEFS = [
     attackCooldown: 36,
     aggroRange: fx.fromFloat(50),
     attackDelivery: ATTACK_DELIVERY.PROJECTILE,
-    projectileType: PROJECTILE.ORB,
+    projectileType: PROJECTILE.SHADOW_BOLT,
     minRange: fx.fromFloat(4),
     preferredRange: fx.fromFloat(42),
     primaryAbility: 'warlock_fireball',
@@ -117,7 +123,7 @@ export const UNIT_DEFS = [
     attackCooldown: 44,
     aggroRange: fx.fromFloat(42),
     attackDelivery: ATTACK_DELIVERY.PROJECTILE,
-    projectileType: PROJECTILE.ORB,
+    projectileType: PROJECTILE.HOLY_SLASH,
     minRange: fx.fromFloat(4),
     preferredRange: fx.fromFloat(35),
     primaryAbility: 'holy_armor',
@@ -137,7 +143,7 @@ export const UNIT_DEFS = [
     attackCooldown: 42,
     aggroRange: fx.fromFloat(38),
     attackDelivery: ATTACK_DELIVERY.PROJECTILE,
-    projectileType: PROJECTILE.ORB,
+    projectileType: PROJECTILE.SPORE_STREAM,
     minRange: fx.fromFloat(3),
     preferredRange: fx.fromFloat(30),
     primaryAbility: 'spore_bloom',
@@ -157,10 +163,143 @@ export const UNIT_DEFS = [
     attackCooldown: 40,
     aggroRange: fx.fromFloat(40),
     attackDelivery: ATTACK_DELIVERY.PROJECTILE,
-    projectileType: PROJECTILE.ORB,
+    projectileType: PROJECTILE.LOCUST_SWARM,
     minRange: fx.fromFloat(3),
     preferredRange: fx.fromFloat(32),
-    primaryAbility: 'frog_swarm',
+    primaryAbility: 'plague_of_frogs',
+  },
+  {
+    id: UNIT.WIZARD,
+    name: 'Wizard',
+    category: 'military',
+    hp: 50,
+    speed: fx.fromFloat(2.2),
+    size: 5.5,
+    pickRadius: 1.6,
+    pickHeight: 1.05,
+    color: [0.42, 0.62, 0.95],
+    attackDamage: 10,
+    attackRange: fx.fromFloat(58),
+    attackCooldown: 42,
+    aggroRange: fx.fromFloat(52),
+    attackDelivery: ATTACK_DELIVERY.PROJECTILE,
+    projectileType: PROJECTILE.ICE_BOLT,
+    minRange: fx.fromFloat(4),
+    preferredRange: fx.fromFloat(45),
+    primaryAbility: 'wizard_lightning',
+  },
+  {
+    id: UNIT.MONK,
+    name: 'Monk',
+    category: 'military',
+    hp: 70,
+    speed: fx.fromFloat(2.6),
+    size: 5.2,
+    pickRadius: 1.55,
+    pickHeight: 1.05,
+    color: [0.78, 0.55, 0.28],
+    attackDamage: 10,
+    attackRange: fx.fromFloat(2.2),
+    attackCooldown: 32,
+    aggroRange: fx.fromFloat(40),
+    attackDelivery: ATTACK_DELIVERY.MELEE,
+    projectileType: -1,
+    minRange: 0,
+    preferredRange: fx.fromFloat(2.2),
+    primaryAbility: null,
+  },
+  {
+    id: UNIT.ENGINEER,
+    name: 'Engineer',
+    category: 'civilian',
+    hp: 50,
+    speed: fx.fromFloat(2.1),
+    size: 5.0,
+    pickRadius: 1.5,
+    pickHeight: 1.0,
+    color: [0.55, 0.58, 0.62],
+    attackDamage: 0,
+    attackRange: fx.fromFloat(3.5),
+    attackCooldown: 40,
+    aggroRange: fx.fromFloat(0),
+    attackDelivery: ATTACK_DELIVERY.MELEE,
+    projectileType: -1,
+    minRange: 0,
+    preferredRange: fx.fromFloat(3.5),
+    primaryAbility: null,
+  },
+  {
+    id: UNIT.WAGON,
+    name: 'Wagon',
+    category: 'vehicle',
+    hp: 60,
+    speed: fx.fromFloat(2.5),
+    size: 9.0,
+    /** Ground clearance radius — vehicles need more than size/6 infantry packing. */
+    footprint: 6.5,
+    pickRadius: 4.5,
+    pickHeight: 1.2,
+    color: [0.62, 0.42, 0.22],
+    attackDamage: 0,
+    attackRange: fx.fromFloat(0),
+    attackCooldown: 40,
+    aggroRange: fx.fromFloat(0),
+    attackDelivery: ATTACK_DELIVERY.MELEE,
+    projectileType: -1,
+    minRange: 0,
+    preferredRange: fx.fromFloat(0),
+    primaryAbility: null,
+    transportCapacity: 4,
+    mechanical: true,
+    canHaul: true,
+  },
+  {
+    id: UNIT.DIRIGIBLE,
+    name: 'Dirigible',
+    category: 'air',
+    hp: 70,
+    speed: fx.fromFloat(3.2),
+    size: 12.0,
+    footprint: 5.5,
+    pickRadius: 4.0,
+    pickHeight: 1.4,
+    color: [0.72, 0.78, 0.88],
+    attackDamage: 0,
+    attackRange: fx.fromFloat(0),
+    attackCooldown: 40,
+    aggroRange: fx.fromFloat(0),
+    attackDelivery: ATTACK_DELIVERY.MELEE,
+    projectileType: -1,
+    minRange: 0,
+    preferredRange: fx.fromFloat(0),
+    primaryAbility: null,
+    transportCapacity: 6,
+    mechanical: true,
+    fly: true,
+  },
+  {
+    id: UNIT.APC,
+    name: 'APC',
+    category: 'military',
+    hp: 90,
+    speed: fx.fromFloat(2.8),
+    size: 10.0,
+    footprint: 7.0,
+    pickRadius: 5.0,
+    pickHeight: 1.25,
+    color: [0.48, 0.42, 0.28],
+    attackDamage: 8,
+    attackRange: fx.fromFloat(2.5),
+    attackCooldown: 30,
+    // Combat transport: fights on order / retaliation, does not idle-hunt.
+    aggroRange: fx.fromFloat(0),
+    attackDelivery: ATTACK_DELIVERY.MELEE,
+    projectileType: -1,
+    minRange: 0,
+    preferredRange: fx.fromFloat(2.5),
+    primaryAbility: null,
+    transportCapacity: 6,
+    mechanical: true,
   },
 ];
 
@@ -168,6 +307,28 @@ export function getUnitDef(typeId) {
   return UNIT_DEFS[typeId] ?? UNIT_DEFS[UNIT.VILLAGER];
 }
 
+/** Soft personal-space radius (world units). Defaults to infantry size/6 packing. */
+export function unitFootprint(typeId) {
+  const def = getUnitDef(typeId);
+  if (def.footprint != null) return def.footprint;
+  return Math.max(1.0, def.size / 6);
+}
+
 export function isMilitary(typeId) {
   return getUnitDef(typeId).category === 'military';
 }
+
+export function isTransport(typeId) {
+  return (getUnitDef(typeId).transportCapacity ?? 0) > 0;
+}
+
+export function isMechanical(typeId) {
+  return !!getUnitDef(typeId).mechanical;
+}
+
+export function isFlyer(typeId) {
+  return !!getUnitDef(typeId).fly;
+}
+
+/** World-Y loft for flying units (v1 air altitude). */
+export const FLY_HEIGHT = 16;

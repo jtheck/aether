@@ -75,6 +75,8 @@ export class SimSession {
     this._commandSeq = 0;
     this._seenFrameIds = new Set();
     this.lastSnapshotAt = 0;
+    /** EMA of wall time between snapshots — used so render blend matches real tick cost. */
+    this._displayBlendMs = TICK_MS;
     this.pauseLockstep = false;
     this.replayingCatchUp = false;
     this.resetting = false;
@@ -94,6 +96,8 @@ export class SimSession {
     this.field = null;
     /** @type {Array<{ tiles: Uint32Array, stock: Uint8Array, burn: Uint8Array }> | null} */
     this.pendingTreeUpdates = null;
+    /** @type {Array<object> | null} */
+    this.pendingFireZoneUpdates = null;
   }
 
   async start(config) {
@@ -161,6 +165,8 @@ export class SimSession {
     let dt = deltaMs;
     if (dt > 250) dt = 250;
     this.simAcc += dt;
+    // Bound clock debt: slow ticks (stress) must not accumulate a catch-up storm.
+    if (this.simAcc > TICK_MS * 3) this.simAcc = TICK_MS * 3;
     this._drainPendingCommits();
   }
 
@@ -192,9 +198,14 @@ export class SimSession {
     }
   }
 
-  /** Fraction through the current display tick (0–1), keyed to last confirmed snapshot. */
+  /**
+   * Fraction through the current display tick (0–1).
+   * Blend window tracks real inter-snapshot time so a slow worker (stress) eases
+   * across the whole interval instead of freezing at alpha=1 after TICK_MS.
+   */
   get displayAlpha() {
-    return Math.min(1, (performance.now() - this.lastSnapshotAt) / TICK_MS);
+    const blend = Math.max(TICK_MS, this._displayBlendMs || TICK_MS);
+    return Math.min(1, (performance.now() - this.lastSnapshotAt) / blend);
   }
 
   /** Snapshot pair for render interpolation (display lags sim by inputDelayTicks). */
@@ -331,6 +342,7 @@ export class SimSession {
     this.client.terminate();
     this.client = new SimClient();
     this.state = this.client.state;
+    this._displayBlendMs = TICK_MS;
     try {
       const result = await this.start(config);
       this.onWorldRebuilt?.(this.count);
@@ -374,6 +386,7 @@ export class SimSession {
     this.lateFramesDropped = other.lateFramesDropped;
     this._commandSeq = other._commandSeq;
     this.lastSnapshotAt = performance.now();
+    this._displayBlendMs = other._displayBlendMs || TICK_MS;
     this.pauseLockstep = false;
     this.resetting = false;
     this.koth = other.koth;
@@ -423,13 +436,48 @@ export class SimSession {
         if (!this.pendingTreeUpdates) this.pendingTreeUpdates = [];
         this.pendingTreeUpdates.push(extra.treeUpdates);
       }
+      if (extra?.fireZoneUpdates) {
+        if (!this.pendingFireZoneUpdates) this.pendingFireZoneUpdates = [];
+        this.pendingFireZoneUpdates.push(extra.fireZoneUpdates);
+      }
+      if (extra?.frogUpdates) {
+        if (!this.pendingFrogUpdates) this.pendingFrogUpdates = [];
+        this.pendingFrogUpdates.push(extra.frogUpdates);
+      }
+      if (extra?.lightningUpdates) {
+        if (!this.pendingLightningUpdates) this.pendingLightningUpdates = [];
+        this.pendingLightningUpdates.push(extra.lightningUpdates);
+      }
+      if (extra?.holyArmorUpdates) {
+        if (!this.pendingHolyArmorUpdates) this.pendingHolyArmorUpdates = [];
+        this.pendingHolyArmorUpdates.push(extra.holyArmorUpdates);
+      }
+      if (extra?.sporeBloomUpdates) {
+        if (!this.pendingSporeBloomUpdates) this.pendingSporeBloomUpdates = [];
+        this.pendingSporeBloomUpdates.push(extra.sporeBloomUpdates);
+      }
+      if (extra?.monkKickUpdates) {
+        if (!this.pendingMonkKickUpdates) this.pendingMonkKickUpdates = [];
+        this.pendingMonkKickUpdates.push(extra.monkKickUpdates);
+      }
       this.waitingForWorker = false;
       this.inFlightTick = 0;
       const committedFrames = this.inFlightFrames;
       this.inFlightFrames = [];
       this._recordCommittedTick(tick, committedFrames);
       this._captureSnapshot(tick);
-      this.lastSnapshotAt = performance.now();
+      const now = performance.now();
+      if (this.lastSnapshotAt > 0) {
+        const measured = Math.max(1, now - this.lastSnapshotAt);
+        // First real interval: adopt immediately so stress doesn't spend the
+        // opening ticks frozen on a 50ms blend window.
+        if (this._displayBlendMs <= TICK_MS) {
+          this._displayBlendMs = measured;
+        } else {
+          this._displayBlendMs = this._displayBlendMs * 0.65 + measured * 0.35;
+        }
+      }
+      this.lastSnapshotAt = now;
       pruneLedger(this.ledger, tick, LEDGER_KEEP);
       this.onCommit?.(tick, checksum);
       this._drainPendingCommits();
@@ -440,6 +488,48 @@ export class SimSession {
   takePendingTreeUpdates() {
     const out = this.pendingTreeUpdates;
     this.pendingTreeUpdates = null;
+    return out;
+  }
+
+  /** Drain ground-fire zone spawn/despawn patches for the renderer. */
+  takePendingFireZoneUpdates() {
+    const out = this.pendingFireZoneUpdates;
+    this.pendingFireZoneUpdates = null;
+    return out;
+  }
+
+  /** Drain plague-of-frogs hop patches for the renderer. */
+  takePendingFrogUpdates() {
+    const out = this.pendingFrogUpdates;
+    this.pendingFrogUpdates = null;
+    return out;
+  }
+
+  /** Drain wizard lightning strike FX for the renderer. */
+  takePendingLightningUpdates() {
+    const out = this.pendingLightningUpdates;
+    this.pendingLightningUpdates = null;
+    return out;
+  }
+
+  /** Drain priest holy-armor cast pulses for the renderer. */
+  takePendingHolyArmorUpdates() {
+    const out = this.pendingHolyArmorUpdates;
+    this.pendingHolyArmorUpdates = null;
+    return out;
+  }
+
+  /** Drain myco spore-bloom cast/seed FX for the renderer. */
+  takePendingSporeBloomUpdates() {
+    const out = this.pendingSporeBloomUpdates;
+    this.pendingSporeBloomUpdates = null;
+    return out;
+  }
+
+  /** Drain monk kick cast pulses for the renderer. */
+  takePendingMonkKickUpdates() {
+    const out = this.pendingMonkKickUpdates;
+    this.pendingMonkKickUpdates = null;
     return out;
   }
 

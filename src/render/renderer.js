@@ -29,7 +29,7 @@ import {
 import { getUnitDef } from '../sim/unitTypes.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
-import { HEIGHT_AMPLITUDE, WORLD_HALF_F } from '../sim/field.js';
+import { HEIGHT_AMPLITUDE, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
 import { kothMaxUnitsOfType, KOTH_MAX_SLOTS } from '../sim/worldSetup.js';
 import {
   UNIT_MODEL_URLS,
@@ -49,9 +49,21 @@ import {
 import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from './terrain.js';
 import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
+import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
+import { createLightningBolts } from './lightningBolts.js';
 import { createParticleSystem } from './particleSystem.js';
+import { createUnitAuras, AURA } from './unitAuras.js';
+import { createMonkLobFx } from './monkLobFx.js';
+import { createSporeBloomFx } from './sporeBloomFx.js';
+import { createMushroomPreviews } from './mushrooms.js';
+import {
+  FX_DISTANCE_SQ,
+  LOD_ENABLED,
+  VAT_DISTANCE_SQ,
+} from './lodDistances.js';
 import { createHealthBars } from './healthBars.js';
+import { LIGHTNING_HIT } from '../sim/lightning.js';
 
 /** Change active instance count without shrinking GPU buffer capacity. */
 function setThinInstanceCount(mesh, count) {
@@ -66,6 +78,23 @@ function setThinInstanceCount(mesh, count) {
   ti._dirtyMax = count;
   // Lite still records drawIndexed(..., 0) into render bundles — WebGPU warns.
   mesh.visible = count > 0;
+}
+
+/**
+ * Expand Lite's dirty range for one instance slot.
+ * Prefer this over flushThinInstances(), which always marks the full buffer dirty.
+ */
+function markThinInstanceSlotDirty(mesh, slot) {
+  const ti = mesh?.thinInstances;
+  if (!ti || slot < 0 || slot >= (ti.count ?? 0)) return;
+  if (ti._version === ti._gpuVersion) {
+    ti._version++;
+    ti._dirtyMin = slot;
+    ti._dirtyMax = slot + 1;
+  } else {
+    if (slot < ti._dirtyMin) ti._dirtyMin = slot;
+    if (slot + 1 > ti._dirtyMax) ti._dirtyMax = slot + 1;
+  }
 }
 
 // Column-major mat4 * vec4.
@@ -201,8 +230,8 @@ function initThinInstances(mesh, activeCount, gpuCapacity) {
 /** Small clearance above sampled terrain (GLB soles are at local y=0). */
 const FOOT_CLEARANCE = 0.06;
 
-/** Y-rotation so local +Z faces (sin θ, 0, cos θ) — matches atan2(dx, dz). */
-function writeUnitMatrix(matrices, slot, x, z, uniformScale, yaw, moving, groundY = 0) {
+/** Yaw, then pitch (somersault), then roll (barrel) — comic air tumble. */
+function writeUnitMatrix(matrices, slot, x, z, uniformScale, yaw, moving, groundY = 0, pitch = 0, roll = 0) {
   const o = slot * 16;
   if (uniformScale <= 0) {
     for (let k = 0; k < 16; k++) matrices[o + k] = 0;
@@ -213,20 +242,34 @@ function writeUnitMatrix(matrices, slot, x, z, uniformScale, yaw, moving, ground
   const sx = uniformScale * narrow;
   const sy = uniformScale;
   const sz = uniformScale * stretch;
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
-  // Column0 (local +X) = (cos, 0, -sin); column2 (local +Z) = (sin, 0, cos).
-  matrices[o] = c * sx;
-  matrices[o + 1] = 0;
-  matrices[o + 2] = -s * sx;
+  const cy = Math.cos(yaw);
+  const syw = Math.sin(yaw);
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  const cr = Math.cos(roll);
+  const sr = Math.sin(roll);
+  // After yaw+pitch: X0=(cy,0,-syw), Y0=(syw*sp,cp,cy*sp), Z0=(syw*cp,-sp,cy*cp)
+  // Then roll about local Z: X=X0*cr+Y0*sr, Y=-X0*sr+Y0*cr, Z=Z0
+  const x0x = cy;
+  const x0z = -syw;
+  const y0x = syw * sp;
+  const y0y = cp;
+  const y0z = cy * sp;
+  const z0x = syw * cp;
+  const z0y = -sp;
+  const z0z = cy * cp;
+
+  matrices[o] = (x0x * cr + y0x * sr) * sx;
+  matrices[o + 1] = (y0y * sr) * sx;
+  matrices[o + 2] = (x0z * cr + y0z * sr) * sx;
   matrices[o + 3] = 0;
-  matrices[o + 4] = 0;
-  matrices[o + 5] = sy;
-  matrices[o + 6] = 0;
+  matrices[o + 4] = (-x0x * sr + y0x * cr) * sy;
+  matrices[o + 5] = (y0y * cr) * sy;
+  matrices[o + 6] = (-x0z * sr + y0z * cr) * sy;
   matrices[o + 7] = 0;
-  matrices[o + 8] = s * sz;
-  matrices[o + 9] = 0;
-  matrices[o + 10] = c * sz;
+  matrices[o + 8] = z0x * sz;
+  matrices[o + 9] = z0y * sz;
+  matrices[o + 10] = z0z * sz;
   matrices[o + 11] = 0;
   matrices[o + 12] = x;
   matrices[o + 13] = groundY + FOOT_CLEARANCE;
@@ -293,32 +336,26 @@ function writeSelectionCollar(matrices, i, x, z, scale, spinYaw, groundY = 0) {
   writeGroundSpinMarker(matrices, i, x, z, scale, spinYaw, 0.14, groundY);
 }
 
-/** Instance tint: white = authored GLB colors; red/yellow = order feedback. */
+/**
+ * Order / fallback washes. Collar idle bands are NOT this — each part keeps its
+ * authored color in a per-part buffer (materials are whitened so instance color
+ * can fully replace: multiply cannot bleach red/yellow albedo to gray).
+ */
 const RING_TINT = {
   white: [1, 1, 1, 1],
   cyan: [0.15, 1, 1, 1],
   red: [1, 0.12, 0.08, 1],
-  yellow: [1, 0.9, 0.12, 1],
+  /** Force-move wash — same gray as target.glb move arrow. */
+  yellow: [0.68, 0.68, 0.68, 1],
 };
 
-/** @param {'white' | 'cyan' | 'red' | 'yellow'} [mode] */
-function writeSelectionRingColors(colors, count, mode = 'white') {
-  const c = RING_TINT[mode] ?? RING_TINT.white;
-  for (let i = 0; i < count; i++) {
-    colors[i * 4] = c[0];
-    colors[i * 4 + 1] = c[1];
-    colors[i * 4 + 2] = c[2];
-    colors[i * 4 + 3] = c[3];
-  }
-}
-
-function writeSelectionRingColorAt(colors, i, mode = 'white') {
-  const c = RING_TINT[mode] ?? RING_TINT.white;
+/** Write RGBA into a color buffer at instance i. */
+function writeRgbaAt(colors, i, c) {
   const o = i * 4;
   colors[o] = c[0];
   colors[o + 1] = c[1];
   colors[o + 2] = c[2];
-  colors[o + 3] = c[3];
+  colors[o + 3] = c[3] ?? 1;
 }
 
 function applyUnlitHudMaterial(mat) {
@@ -328,9 +365,43 @@ function applyUnlitHudMaterial(mat) {
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
 }
 
+/**
+ * collar.glb bakes solid band colors into 1×1 baseColor textures — setting
+ * diffuseColor / baseColorFactor does not clear them. Read the authored RGB
+ * (factor if present, else material name) before swapping to a white mat.
+ */
+function authoredCollarBandColor(mat) {
+  const f = mat?.baseColorFactor ?? mat?._baseColorFactor;
+  if (Array.isArray(f) && f.length >= 3) {
+    return [f[0], f[1], f[2], 1];
+  }
+  const name = String(mat?.name || '').toLowerCase();
+  if (name.includes('red')) return [1, 0.02, 0.02, 1];
+  if (name.includes('yellow')) return [1, 0.77, 0, 1];
+  if (name.includes('white') || name.includes('grey') || name.includes('gray')) {
+    return [0.8, 0.8, 0.8, 1];
+  }
+  return [1, 1, 1, 1];
+}
+
+/** White unlit std mat so thin-instance color fully owns the collar look. */
+function makeCollarTintMaterial() {
+  const mat = createStandardMaterial();
+  mat.diffuseColor = [1, 1, 1];
+  // disableLighting path is emissive × diffuse × instanceColor
+  mat.emissiveColor = [1, 1, 1];
+  mat.alpha = 1;
+  applyUnlitHudMaterial(mat);
+  return mat;
+}
+
 const SELECTION_COLLAR_URL = '/assets/models/collar.glb';
 /** v1: max(0.12, TILE * 0.22) with TILE=4. */
 const SELECTION_COLLAR_SCALE = 0.88;
+/** Casters — 50% larger than the base infantry collar. */
+const SELECTION_COLLAR_CASTER_SCALE = SELECTION_COLLAR_SCALE * 1.5;
+/** Vehicles / air — fixed large collar (10% under prior 3.4). */
+const SELECTION_COLLAR_VEHICLE_SCALE = 3.4 * 0.9;
 
 /** v1 click-command marker (`game/ui.js` createTargetMarker). */
 const ORDER_MARKER_URL = '/assets/models/target.glb';
@@ -488,7 +559,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     scene.clearColor.a = 1;
   }
 
-  const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, WORLD_HALF_F * 1.55, {
+  const worldHalfF = opts.field ? worldHalfFFromField(opts.field) : WORLD_HALF_F;
+
+  const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, worldHalfF * 1.55, {
     x: 0,
     y: 0,
     z: 0,
@@ -499,7 +572,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   scene.camera = camera;
   // Camera input is owned by cameraController (v1 mouse/keyboard). Do not attachControl —
   // Lite would still register wheel/touch handlers that fight our hub.
-  const cameraController = createCameraController(camera, canvas);
+  const cameraController = createCameraController(camera, canvas, { worldHalfF });
 
   // Hemi is unshadowed fill — too high and tree "dark" sides stay brighter than
   // sun-cast ground shadows. Keep it low; let the directional carry the look.
@@ -513,7 +586,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // Place the directional light "above" the board so ortho near/far contain casters.
   {
     const d = sun.direction;
-    const dist = WORLD_HALF_F * 2.75;
+    const dist = worldHalfF * 2.75;
     sun.position.x = -d.x * dist;
     sun.position.y = -d.y * dist;
     sun.position.z = -d.z * dist;
@@ -530,7 +603,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     lambda: 0.85,
     cascadeBlendPercentage: 0.08,
     stabilizeCascades: true,
-    shadowMaxZ: WORLD_HALF_F * 2.75,
+    shadowMaxZ: worldHalfF * 2.75,
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
     darkness: 0.08,
@@ -567,6 +640,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return fieldSnap ? surfaceHeightAt(fieldSnap, x, z) : 0;
   }
 
+  function cameraEyePos() {
+    const wm = camera.worldMatrix;
+    if (wm && Number.isFinite(wm[12])) return { x: wm[12], y: wm[13], z: wm[14] };
+    const p = camera.position;
+    return { x: p?.x ?? 0, y: p?.y ?? 0, z: p?.z ?? 0 };
+  }
+
   function rebuildTileGrid(snap) {
     tileGrid?.dispose?.();
     tileGrid = null;
@@ -582,7 +662,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   } else {
     const groundMat = createStandardMaterial();
     groundMat.diffuseColor = [0.18, 0.28, 0.16];
-    ground = createGround(engine, { width: WORLD_HALF_F * 2, height: WORLD_HALF_F * 2 });
+    ground = createGround(engine, { width: worldHalfF * 2, height: worldHalfF * 2 });
     ground.material = groundMat;
     addToScene(scene, ground);
   }
@@ -753,11 +833,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** @type {object[]} */
   let selRingParts = [];
   let useCollar = false;
+  /** Authored band RGBA per collar part (idle tint). Empty for fallback disc. */
+  /** @type {number[][]} */
+  let collarBandColors = [];
   try {
     // Keep red/white/yellow bands as separate draws (merge would paint all red).
     selRingParts = await loadBakedUnitMeshParts(engine, SELECTION_COLLAR_URL);
     useCollar = selRingParts.length > 0;
-    for (const mesh of selRingParts) applyUnlitHudMaterial(mesh.material);
+    for (const mesh of selRingParts) {
+      collarBandColors.push(authoredCollarBandColor(mesh.material));
+      // Drop glTF 1×1 band textures — otherwise order washes still multiply
+      // through red/yellow albedo and read as the default collar.
+      mesh.material = makeCollarTintMaterial();
+    }
   } catch (err) {
     console.warn('Selection collar model failed (using disc):', SELECTION_COLLAR_URL, err);
     const selRing = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 24 });
@@ -767,14 +855,42 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     ringMat.alpha = 0.9;
     selRing.material = ringMat;
     selRingParts = [selRing];
+    collarBandColors = [];
   }
   const ringMatrices = new Float32Array(ringCap * 16);
-  const ringColors = new Float32Array(ringCap * 4);
-  writeSelectionRingColors(ringColors, ringCap, useCollar ? 'white' : 'cyan');
-  for (const mesh of selRingParts) {
+  /** One color buffer per part — idle needs different band colors per draw. */
+  const ringColorBufs = selRingParts.map(() => new Float32Array(ringCap * 4));
+
+  function ringTintForPart(partIndex, mode) {
+    if (useCollar && mode === 'white') {
+      return collarBandColors[partIndex] ?? RING_TINT.white;
+    }
+    if (!useCollar && mode === 'white') return RING_TINT.cyan;
+    return RING_TINT[mode] ?? RING_TINT.white;
+  }
+
+  function writeSelRingColors(count, mode = 'white') {
+    for (let p = 0; p < ringColorBufs.length; p++) {
+      const c = ringTintForPart(p, mode);
+      const colors = ringColorBufs[p];
+      for (let i = 0; i < count; i++) writeRgbaAt(colors, i, c);
+    }
+  }
+
+  function writeSelRingColorAt(i, mode = 'white') {
+    for (let p = 0; p < ringColorBufs.length; p++) {
+      writeRgbaAt(ringColorBufs[p], i, ringTintForPart(p, mode));
+    }
+    ringColorsDirty = true;
+  }
+
+  writeSelRingColors(ringCap, useCollar ? 'white' : 'cyan');
+  let ringColorsDirty = true;
+  for (let p = 0; p < selRingParts.length; p++) {
+    const mesh = selRingParts[p];
     setThinInstances(mesh, ringMatrices, ringCap);
     setThinInstanceCount(mesh, capacity);
-    setThinInstanceColors(mesh, ringColors);
+    setThinInstanceColors(mesh, ringColorBufs[p]);
     addToScene(scene, mesh);
   }
 
@@ -817,6 +933,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   addToScene(scene, orderMarker);
   /** @type {{ x: number, y: number, z: number, started: number, tint: string, spinDir: number } | null} */
   let orderPing = null;
+  let orderMarkerShown = false;
   /** Alternate pop spin direction each new ping. */
   let nextOrderSpinDir = 1;
 
@@ -844,6 +961,38 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let pickDebugVisible = false;
   let pickDebugCount = 0;
   const particles = createParticleSystem(engine, scene, { capacity: 16384 });
+  const unitAuras = createUnitAuras((init) => particles.emit(init), groundYAt, {
+    maxSparkleDistSq: FX_DISTANCE_SQ,
+    getEye: cameraEyePos,
+  });
+  const monkLobFx = createMonkLobFx((init) => particles.emit(init), groundYAt);
+  /** Filled after mushroom.glb loads; spore FX calls through this bridge. */
+  let mushrooms = null;
+  const mushroomBridge = {
+    spawnCluster(x, z, growAt) {
+      if (!mushrooms?.spawnCluster) return false;
+      const ok = mushrooms.spawnCluster(x, z, growAt);
+      return ok !== false;
+    },
+    clearGrown(tick) {
+      mushrooms?.clearGrown?.(tick);
+    },
+    clear() {
+      mushrooms?.clear?.();
+    },
+    update(deltaMs, tick) {
+      mushrooms?.update?.(deltaMs, tick);
+    },
+  };
+  const sporeBloomFx = createSporeBloomFx(
+    (init) => particles.emit(init),
+    groundYAt,
+    mushroomBridge,
+  );
+  /** Scratch bitfield when syncing auras from shieldHp. */
+  let auraScratch = null;
+  /** Latest sim tick for time-based FX (spore seed expiry). */
+  let fxSimTick = 0;
   /** Wide at the base, then pull inward while climbing (column, not fountain). */
   treeFireEmit.fn = (x, groundY, z, scale = 1) => {
     const s = Math.max(0.65, scale);
@@ -914,6 +1063,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const trailLastEmitMs = new Float64Array(MAX_PROJECTILES);
   /** Generation last splashed — avoids double FX if a dead slot lingers. */
   const fireballSplashSeen = new Uint32Array(MAX_PROJECTILES);
+  const holySlashSeen = new Uint32Array(MAX_PROJECTILES);
   let particleClockMs = 0;
 
   function emitFireballGroundSplashes(prev, cur) {
@@ -996,7 +1146,286 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       });
     }
   }
+
+  /** Bright Smite-style slash across the foe on holy-slash hit. */
+  function emitHolySlashImpacts(prev, cur) {
+    if (!cur) return;
+    const n = cur.highWater ?? 0;
+    for (let i = 0; i < n; i++) {
+      if (cur.alive[i]) continue;
+      if (cur.type[i] !== PROJECTILE.HOLY_SLASH) continue;
+      if ((cur.despawnReason?.[i] ?? PROJECTILE_DESPAWN.NONE) !== PROJECTILE_DESPAWN.HIT) {
+        continue;
+      }
+      const gen = cur.generation[i];
+      if (!gen || holySlashSeen[i] === gen) continue;
+      const wasAlive =
+        prev && i < prev.highWater && prev.alive[i] && prev.generation[i] === gen;
+      if (!wasAlive) continue;
+      holySlashSeen[i] = gen;
+      const x = cur.x[i];
+      const z = cur.z[i];
+      const y = groundYAt(x, z) + 2.2;
+      const vx = cur.vx?.[i] ?? 0;
+      const vz = cur.vz?.[i] ?? 1;
+      const len = Math.hypot(vx, vz) || 1;
+      const fx = vx / len;
+      const fz = vz / len;
+      const rx = -fz;
+      const rz = fx;
+      // Core slash beam.
+      for (let s = 0; s < 14; s++) {
+        const t = (s / 13) * 2 - 1;
+        particles.emit({
+          position: [
+            x + rx * t * 4.5,
+            y + (Math.random() - 0.5) * 0.6,
+            z + rz * t * 4.5,
+          ],
+          velocity: [fx * 2, 1.5 + Math.random(), fz * 2],
+          gravity: [0, 0.5, 0],
+          color: [1, 0.98, 0.85, 0.95],
+          lifetime: 0.18 + Math.random() * 0.12,
+          startSize: [2.8, 0.55],
+          endSize: [0.2, 0.05],
+          drag: 0.4,
+        });
+      }
+      particles.emit({
+        position: [x, y, z],
+        velocity: [0, 6, 0],
+        gravity: [0, -2, 0],
+        color: [1, 1, 0.92, 0.85],
+        lifetime: 0.22,
+        startSize: 8,
+        endSize: 1.2,
+        drag: 0.3,
+      });
+      for (let s = 0; s < 10; s++) {
+        const t = (Math.random() * 2 - 1);
+        particles.emit({
+          position: [x + rx * t * 3.2, y + Math.random() * 1.2, z + rz * t * 3.2],
+          velocity: [
+            (Math.random() - 0.5) * 3,
+            4 + Math.random() * 5,
+            (Math.random() - 0.5) * 3,
+          ],
+          gravity: [0, -8, 0],
+          color: [1, 0.95, 0.7, 0.7],
+          lifetime: 0.35 + Math.random() * 0.25,
+          startSize: 0.45,
+          endSize: 0.05,
+          drag: 0.6,
+        });
+      }
+    }
+  }
+
+  /** Impact splash — white-hot punch from the rectangle-beam era. */
+  function emitLightningImpact(worldX, gy, worldZ, kind = LIGHTNING_HIT.GROUND) {
+    // Nuclear contact flash.
+    particles.emit({
+      position: [worldX, gy + 1.2, worldZ],
+      velocity: [0, 22, 0],
+      gravity: [0, -12, 0],
+      color: [1, 1, 1, 1],
+      lifetime: 0.18,
+      startSize: 28,
+      endSize: 4,
+      drag: 0.3,
+    });
+    particles.emit({
+      position: [worldX, gy + 2.5, worldZ],
+      velocity: [0, 8, 0],
+      gravity: [0, -4, 0],
+      color: [0.85, 0.92, 1, 0.9],
+      lifetime: 0.32,
+      startSize: 18,
+      endSize: 6,
+      drag: 0.4,
+    });
+    // Dual expanding shock rings.
+    particles.emit({
+      position: [worldX, gy + 0.4, worldZ],
+      velocity: [0, 1.2, 0],
+      gravity: [0, 0, 0],
+      color: [0.35, 0.55, 1, 0.75],
+      lifetime: 0.45,
+      startSize: 5,
+      endSize: 32,
+      drag: 0.04,
+    });
+    particles.emit({
+      position: [worldX, gy + 0.6, worldZ],
+      velocity: [0, 2, 0],
+      gravity: [0, 0, 0],
+      color: [0.95, 0.98, 1, 0.6],
+      lifetime: 0.28,
+      startSize: 8,
+      endSize: 20,
+      drag: 0.06,
+    });
+    // Short contact plasma only — a tall vertical ion column looked like
+    // glow beads ignoring the bolt path.
+    for (let i = 0; i < 6; i++) {
+      particles.emit({
+        position: [
+          worldX + (Math.random() - 0.5) * 1.5,
+          gy + 1.2 + i * 1.8,
+          worldZ + (Math.random() - 0.5) * 1.5,
+        ],
+        velocity: [
+          (Math.random() - 0.5) * 2,
+          2 + Math.random() * 4,
+          (Math.random() - 0.5) * 2,
+        ],
+        gravity: [0, 0, 0],
+        color: [0.55 + Math.random() * 0.25, 0.75, 1, 0.5 - i * 0.05],
+        lifetime: 0.28 + Math.random() * 0.2,
+        startSize: [1.6, 3.2],
+        endSize: [0.3, 0.6],
+        drag: 0.35,
+      });
+    }
+    // Violent radial sparks.
+    for (let n = 0; n < 55; n++) {
+      const ang = (n / 55) * Math.PI * 2 + Math.random() * 0.2;
+      const speed = 16 + Math.random() * 28;
+      particles.emit({
+        position: [worldX, gy + 0.6 + Math.random() * 3, worldZ],
+        velocity: [
+          Math.cos(ang) * speed,
+          14 + Math.random() * 28,
+          Math.sin(ang) * speed,
+        ],
+        gravity: [0, -48, 0],
+        color:
+          Math.random() > 0.3
+            ? [1, 1, 1, 0.95]
+            : [0.35, 0.55, 1, 0.8],
+        lifetime: 0.4 + Math.random() * 0.55,
+        startSize: 0.7 + Math.random() * 1.2,
+        endSize: 0.04,
+        drag: 1.35,
+      });
+    }
+    // Slow drifting plasma wisps.
+    for (let n = 0; n < 12; n++) {
+      const ang = Math.random() * Math.PI * 2;
+      particles.emit({
+        position: [worldX, gy + 1 + Math.random() * 8, worldZ],
+        velocity: [
+          Math.cos(ang) * (2 + Math.random() * 4),
+          1 + Math.random() * 3,
+          Math.sin(ang) * (2 + Math.random() * 4),
+        ],
+        gravity: [0, 1.5, 0],
+        color: [0.25, 0.45, 1, 0.4],
+        lifetime: 0.7 + Math.random() * 0.5,
+        startSize: [3, 5],
+        endSize: [6, 9],
+        drag: 0.6,
+      });
+    }
+    if (kind === LIGHTNING_HIT.TREE) {
+      for (let n = 0; n < 22; n++) {
+        const ang = Math.random() * Math.PI * 2;
+        particles.emit({
+          position: [worldX, gy + 2, worldZ],
+          velocity: [
+            Math.cos(ang) * (3 + Math.random() * 6),
+            6 + Math.random() * 12,
+            Math.sin(ang) * (3 + Math.random() * 6),
+          ],
+          gravity: [0, -10, 0],
+          color: [1, 0.45, 0.08, 0.8],
+          lifetime: 0.8 + Math.random() * 0.6,
+          startSize: 1.5,
+          endSize: 0.12,
+          drag: 0.8,
+        });
+      }
+    }
+    if (kind === LIGHTNING_HIT.UNIT) {
+      particles.emit({
+        position: [worldX, gy + 3.5, worldZ],
+        velocity: [0, 10, 0],
+        gravity: [0, -3, 0],
+        color: [0.95, 0.98, 1, 0.95],
+        lifetime: 0.35,
+        startSize: 16,
+        endSize: 4,
+        drag: 0.45,
+      });
+      for (let n = 0; n < 18; n++) {
+        const ang = Math.random() * Math.PI * 2;
+        particles.emit({
+          position: [worldX, gy + 2.5, worldZ],
+          velocity: [
+            Math.cos(ang) * (8 + Math.random() * 12),
+            4 + Math.random() * 10,
+            Math.sin(ang) * (8 + Math.random() * 12),
+          ],
+          gravity: [0, -20, 0],
+          color: [1, 1, 1, 0.85],
+          lifetime: 0.35 + Math.random() * 0.3,
+          startSize: 0.8 + Math.random() * 0.6,
+          endSize: 0.05,
+          drag: 1.1,
+        });
+      }
+    }
+  }
+
+  const skyBaseIntensity = sky.intensity ?? (opts.field ? 0.2 : 0.7);
+  let lightningFlash = 0;
+
+  const lightningBolts = createLightningBolts(engine, scene, groundYAt, {
+    emitImpact: emitLightningImpact,
+    emitGlow(init) {
+      // Additive soft beads — blue halo without a covering tube shell.
+      particles.emit(init);
+    },
+    onFlash(amount) {
+      lightningFlash = Math.max(lightningFlash, amount);
+    },
+    getSkyOrigin(impactX, impactY, impactZ, seed) {
+      const eye = cameraEyePos();
+      const radius = Math.max(40, camera.radius ?? 200);
+      // Always start above the camera so the bolt enters from off-screen.
+      const aboveCam = eye.y + radius * 0.45 + 60;
+      const aboveImpact = impactY + Math.max(90, radius * 0.2);
+      const skyY = Math.max(aboveCam, aboveImpact);
+      const boltLen = Math.max(90, skyY - impactY);
+      // Big lateral entry — scales with bolt height so zoomed-out strikes lean hard.
+      const lateral = Math.max(55, boltLen * 0.38, radius * 0.12);
+      const ang = ((seed & 0xffff) / 0xffff) * Math.PI * 2;
+      return {
+        x: impactX + Math.cos(ang) * lateral,
+        y: skyY,
+        z: impactZ + Math.sin(ang) * lateral,
+      };
+    },
+  });
+
   const arrowTrails = createArrowTrails(engine, scene);
+  const frogRenderer = await createFrogRenderer(engine, scene, groundYAt, (x, z) => {
+    const gy = groundYAt(x, z);
+    particles.emitBurst({
+      position: [x, gy + 0.2, z],
+      color: [0.45, 0.95, 0.4, 0.55],
+      // Keep land pops cheap when the swarm is thick.
+      count: 4,
+      speed: 4,
+      verticalSpeed: 3.5,
+      gravity: [0, -18, 0],
+      drag: 1.6,
+      lifetime: 0.28,
+      startSize: 0.7,
+      endSize: 0.06,
+    });
+  });
+  mushrooms = await createMushroomPreviews(engine, scene, groundYAt);
   const projectileRenderer = createProjectileRenderer(
     engine,
     scene,
@@ -1004,7 +1433,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     (slot, generation, x, y, z, vx, vz, def, vy = 0) => {
       const isFireball = def.id === PROJECTILE.FIREBALL;
       const isArrow = def.mesh === PROJECTILE_MESH.ARROW;
-      const emitGapMs = isFireball ? 18 : isArrow ? 22 : 32;
+      const isShadow = def.id === PROJECTILE.SHADOW_BOLT;
+      const isSpore = def.id === PROJECTILE.SPORE_STREAM;
+      const isLocust = def.id === PROJECTILE.LOCUST_SWARM;
+      const emitGapMs = isFireball
+        ? 18
+        : isShadow || isSpore || isLocust
+          ? 20
+          : isArrow
+            ? 22
+            : 32;
       if (
         trailGenerations[slot] === generation &&
         particleClockMs - trailLastEmitMs[slot] < emitGapMs
@@ -1016,6 +1454,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (isArrow) {
         // World-oriented dashes (not camera billboards) so they follow travel.
         arrowTrails.emit(x, y, z, vx, vy, vz);
+        // Ice bolts also leave a soft frost wisp.
+        if (def.id === PROJECTILE.ICE_BOLT) {
+          particles.emit({
+            position: [x, y, z],
+            velocity: [-vx * 0.08, 0.4, -vz * 0.08],
+            gravity: [0, -0.2, 0],
+            color: [0.65, 0.9, 1, 0.45],
+            lifetime: 0.28,
+            startSize: 0.9,
+            endSize: 0.1,
+            drag: 1.2,
+          });
+        }
         return;
       }
       const speed = Math.hypot(vx, vz);
@@ -1046,6 +1497,87 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           drag: 0.6,
         });
         return;
+      }
+      if (isShadow) {
+        // Purple inky star beads trailing the round black bolt.
+        for (let n = 0; n < 2; n++) {
+          const hang = 0.12 + Math.random() * 0.18;
+          particles.emit({
+            blend: 'alpha',
+            shape: 'star',
+            fadeOut: false,
+            hangTime: hang,
+            position: [
+              px + (Math.random() - 0.5) * 0.5,
+              y + (Math.random() - 0.5) * 0.4,
+              pz + (Math.random() - 0.5) * 0.5,
+            ],
+            velocity: [0, -0.1 - Math.random() * 0.2, 0],
+            gravity: [0, -14 - Math.random() * 8, 0],
+            color:
+              Math.random() > 0.35
+                ? [0.55, 0.15, 0.85, 1]
+                : [0.12, 0.02, 0.18, 1],
+            lifetime: hang + 0.55,
+            startSize: 0.22 + Math.random() * 0.14,
+            peakSize: 0.45 + Math.random() * 0.25,
+            endSize: 0.12,
+            drag: 0.1,
+          });
+        }
+        return;
+      }
+      if (isSpore) {
+        particles.emit({
+          blend: 'alpha',
+          position: [
+            px + (Math.random() - 0.5) * 1.4,
+            y + (Math.random() - 0.5) * 0.8,
+            pz + (Math.random() - 0.5) * 1.4,
+          ],
+          velocity: [
+            (Math.random() - 0.5) * 1.2,
+            0.4 + Math.random() * 1.2,
+            (Math.random() - 0.5) * 1.2,
+          ],
+          gravity: [0, -1.5, 0],
+          color:
+            Math.random() > 0.45
+              ? [0.45, 0.85, 0.4, 0.55]
+              : [0.55, 0.35, 0.75, 0.45],
+          lifetime: 0.55 + Math.random() * 0.35,
+          startSize: 1.1 + Math.random() * 0.9,
+          endSize: 0.15,
+          drag: 1.4,
+        });
+        return;
+      }
+      if (isLocust) {
+        for (let n = 0; n < 3; n++) {
+          const ang = Math.random() * Math.PI * 2;
+          const rad = 0.3 + Math.random() * 1.1;
+          particles.emit({
+            blend: 'alpha',
+            hard: true,
+            position: [
+              x + Math.cos(ang) * rad,
+              y + (Math.random() - 0.5) * 0.9,
+              z + Math.sin(ang) * rad,
+            ],
+            velocity: [
+              vx * 0.4 + (Math.random() - 0.5) * 2.5,
+              (Math.random() - 0.5) * 2,
+              vz * 0.4 + (Math.random() - 0.5) * 2.5,
+            ],
+            gravity: [0, -2, 0],
+            color: [0.15 + Math.random() * 0.12, 0.2, 0.08, 0.9],
+            lifetime: 0.22 + Math.random() * 0.18,
+            startSize: [0.55, 0.22],
+            endSize: [0.15, 0.06],
+            drag: 0.8,
+            rotation: ang,
+          });
+        }
       }
     },
   );
@@ -1138,8 +1670,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   let frameCb = null;
   let unitFxElapsed = 0;
+  let groundFireElapsed = 0;
+  /** @type {Map<number, { x: number, z: number, radius: number, generation: number, endsAtMs: number }>} */
+  const groundFires = new Map();
   // 1 particle/unit @ ~12Hz — much cheaper than the old 3× @ 25Hz, still visible in armies.
   const UNIT_FX_INTERVAL_MS = 80;
+  const GROUND_FIRE_INTERVAL_MS = 55;
+  /** Match sim FIRE_ZONE_TTL (50 ticks @ 20Hz). */
+  const FIRE_ZONE_VISUAL_MS = 2500;
   onBeforeRender(scene, (deltaMs) => {
     terrain?.update?.(camera, deltaMs);
     particleClockMs += Math.min(100, Math.max(0, deltaMs));
@@ -1148,9 +1686,28 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       unitFxElapsed = 0;
       emitUnitSocketFire();
     }
+    groundFireElapsed += deltaMs;
+    if (groundFireElapsed >= GROUND_FIRE_INTERVAL_MS) {
+      groundFireElapsed = 0;
+      emitGroundFirePatches();
+    }
     particles.update(deltaMs);
+    unitAuras.update(deltaMs);
+    monkLobFx.update(deltaMs);
+    sporeBloomFx.update(deltaMs, fxSimTick);
+    mushrooms?.commit?.();
+    frogRenderer.advance(deltaMs);
     arrowTrails.update(deltaMs);
     arrowTrails.commit();
+    lightningBolts.update(deltaMs);
+    lightningBolts.commit();
+    if (lightningFlash > 0.001) {
+      sky.intensity = skyBaseIntensity + lightningFlash * 1.8;
+      lightningFlash *= Math.exp(-deltaMs * 0.012);
+    } else if (lightningFlash !== 0) {
+      lightningFlash = 0;
+      sky.intensity = skyBaseIntensity;
+    }
     const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
     for (const batch of typeBatches.values()) {
       if (batch.vatParts?.length) {
@@ -1162,8 +1719,47 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (frameCb) frameCb(deltaMs);
   });
 
+  function emitGroundFirePatches() {
+    for (const [slot, fire] of groundFires) {
+      const remain = fire.endsAtMs - particleClockMs;
+      if (remain <= 0) {
+        groundFires.delete(slot);
+        continue;
+      }
+      const gy = groundYAt(fire.x, fire.z);
+      const r = Math.max(1.2, fire.radius * 0.85);
+      const fade = Math.max(0.3, Math.min(1, remain / (FIRE_ZONE_VISUAL_MS * 0.85)));
+      const count = 3 + Math.floor(fade * 3);
+      for (let i = 0; i < count; i++) {
+        const ang = Math.random() * Math.PI * 2;
+        const rad = Math.random() * r;
+        const ox = Math.cos(ang) * rad;
+        const oz = Math.sin(ang) * rad;
+        const roll = Math.random();
+        particles.emit({
+          position: [fire.x + ox, gy + 0.1 + Math.random() * 0.35, fire.z + oz],
+          velocity: [
+            (Math.random() - 0.5) * 0.6,
+            1.4 + Math.random() * 2.2,
+            (Math.random() - 0.5) * 0.6,
+          ],
+          gravity: [0, 1.1, 0],
+          color:
+            roll > 0.55
+              ? [1, 0.75, 0.2, 0.45 * fade]
+              : [1, 0.35, 0.05, 0.4 * fade],
+          lifetime: 0.4 + Math.random() * 0.35,
+          startSize: [0.45 + Math.random() * 0.55, 0.9 + Math.random() * 0.9],
+          endSize: [0.08, 0.2],
+          drag: 1.1,
+        });
+      }
+    }
+  }
+
   /** Constant little fire at particle_anchor / torch_anchor sockets. */
   function emitUnitSocketFire() {
+    const eye = LOD_ENABLED ? cameraEyePos() : null;
     for (const batch of typeBatches.values()) {
       const sockets = batch.fxSockets;
       if (!sockets?.length) continue;
@@ -1172,6 +1768,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (let slot = 0; slot < count; slot++) {
         const o = slot * 16;
         if (!(m[o + 15] > 0)) continue;
+        if (eye) {
+          const dx = eye.x - m[o + 12];
+          const dy = eye.y - m[o + 13];
+          const dz = eye.z - m[o + 14];
+          if (dx * dx + dy * dy + dz * dz > FX_DISTANCE_SQ) continue;
+        }
         for (let s = 0; s < sockets.length; s++) {
           const sock = sockets[s];
           const lx = sock.x;
@@ -1246,13 +1848,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     batch.vatDirty = false;
   }
 
-  function cameraEyePos() {
-    const wm = camera.worldMatrix;
-    if (wm && Number.isFinite(wm[12])) return { x: wm[12], y: wm[13], z: wm[14] };
-    const p = camera.position;
-    return { x: p?.x ?? 0, y: p?.y ?? 0, z: p?.z ?? 0 };
-  }
-
   function easeOutCubic(t) {
     const u = 1 - t;
     return 1 - u * u * u;
@@ -1294,8 +1889,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function hideOrderMarker() {
+    if (!orderMarkerShown) return;
     clearOrderMatrix(orderMatrices);
     setThinInstanceColor(orderMarker, 0, 1, 1, 1, 0);
+    markThinInstanceSlotDirty(orderMarker, 0);
+    orderMarkerShown = false;
   }
 
   /**
@@ -1372,21 +1970,27 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     const tint = RING_TINT[orderPing.tint] ?? RING_TINT.white;
     setThinInstanceColor(orderMarker, 0, tint[0], tint[1], tint[2], 1);
+    markThinInstanceSlotDirty(orderMarker, 0);
+    orderMarkerShown = true;
   }
 
   function flushAllBatches() {
     updateOrderMarker();
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
-      for (const mesh of vatPartMeshes(batch)) flushThinInstances(mesh);
+      // Unit matrices: markThinInstanceSlotDirty on write — do not flushThinInstances
+      // (that API forces a full-buffer upload every call).
     }
-    if (fallback) flushThinInstances(fallback.mesh);
-    pushSelRingColors();
-    for (const mesh of selRingParts) flushThinInstances(mesh);
-    flushThinInstances(orderMarker);
-    if (pickDebugVisible) flushThinInstances(pickDebugMesh);
+    if (ringColorsDirty) {
+      pushSelRingColors();
+      ringColorsDirty = false;
+    }
+    // Selection / order / pick matrices also marked dirty on write.
     projectileRenderer.commit();
+    frogRenderer.sync();
+    frogRenderer.commit();
     arrowTrails.commit();
+    lightningBolts.commit();
     if (shadowsEnabled) applyShadowState();
   }
 
@@ -1395,13 +1999,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function pushSelRingColors() {
-    for (const mesh of selRingParts) setThinInstanceColors(mesh, ringColors);
+    for (let p = 0; p < selRingParts.length; p++) {
+      setThinInstanceColors(selRingParts[p], ringColorBufs[p]);
+    }
   }
 
   function writePickDebugSphere(slot, x, y, z, radius) {
     const o = slot * 16;
     if (radius <= 0) {
       for (let k = 0; k < 16; k++) pickDebugMatrices[o + k] = 0;
+      markThinInstanceSlotDirty(pickDebugMesh, slot);
       return;
     }
     // Mesh diameter is 2 → uniform scale equals radius.
@@ -1422,9 +2029,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     pickDebugMatrices[o + 13] = y;
     pickDebugMatrices[o + 14] = z;
     pickDebugMatrices[o + 15] = 1;
+    markThinInstanceSlotDirty(pickDebugMesh, slot);
   }
 
-  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false) {
+  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN) {
     const slot = entitySlot[i];
     if (slot < 0) return false;
     const key = entityBatchKey[i] ?? batchKey(typeId, owner);
@@ -1432,7 +2040,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!batch) return false;
     const tiCount = batch.mesh.thinInstances?.count ?? 0;
     if (slot >= tiCount) return false;
-    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback);
+    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride);
+    if (monkLobFx.isFlying(i)) monkLobFx.notePose(i, x, z);
     return true;
   }
 
@@ -1527,13 +2136,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return getViewProjectionMatrix(camera, aspect);
   }
 
-  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY) {
-    const gy = groundYAt(x, z);
+  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN) {
+    const baseGy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
+    const gy = baseGy + (loft || 0);
+    let animateVat = diameter > 0;
+    if (LOD_ENABLED && animateVat) {
+      const eye = cameraEyePos();
+      const edx = eye.x - x;
+      const edy = eye.y - gy;
+      const edz = eye.z - z;
+      animateVat = edx * edx + edy * edy + edz * edz <= VAT_DISTANCE_SQ;
+    }
+
     if (useSphereY) {
       const scale = diameter / batch.baseSize;
       const o = slot * 16;
       if (scale <= 0) {
         for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
+        syncVatSlot(batch, slot, false, false);
+        for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
         return;
       }
       const stretch = moving ? 1.14 : 1;
@@ -1541,42 +2162,59 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const sx = scale * narrow;
       const sy = scale;
       const sz = scale * stretch;
-      const c = Math.cos(yaw);
-      const s = Math.sin(yaw);
+      const cy = Math.cos(yaw);
+      const syw = Math.sin(yaw);
+      const cp = Math.cos(pitch);
+      const sp = Math.sin(pitch);
+      const cr = Math.cos(roll);
+      const sr = Math.sin(roll);
       const y = gy + FOOT_CLEARANCE + diameter * 0.5;
-      batch.matrices[o] = c * sx;
-      batch.matrices[o + 1] = 0;
-      batch.matrices[o + 2] = -s * sx;
+      const x0x = cy;
+      const x0z = -syw;
+      const y0x = syw * sp;
+      const y0y = cp;
+      const y0z = cy * sp;
+      const z0x = syw * cp;
+      const z0y = -sp;
+      const z0z = cy * cp;
+      batch.matrices[o] = (x0x * cr + y0x * sr) * sx;
+      batch.matrices[o + 1] = (y0y * sr) * sx;
+      batch.matrices[o + 2] = (x0z * cr + y0z * sr) * sx;
       batch.matrices[o + 3] = 0;
-      batch.matrices[o + 4] = 0;
-      batch.matrices[o + 5] = sy;
-      batch.matrices[o + 6] = 0;
+      batch.matrices[o + 4] = (-x0x * sr + y0x * cr) * sy;
+      batch.matrices[o + 5] = (y0y * cr) * sy;
+      batch.matrices[o + 6] = (-x0z * sr + y0z * cr) * sy;
       batch.matrices[o + 7] = 0;
-      batch.matrices[o + 8] = s * sz;
-      batch.matrices[o + 9] = 0;
-      batch.matrices[o + 10] = c * sz;
+      batch.matrices[o + 8] = z0x * sz;
+      batch.matrices[o + 9] = z0y * sz;
+      batch.matrices[o + 10] = z0z * sz;
       batch.matrices[o + 11] = 0;
       batch.matrices[o + 12] = x;
       batch.matrices[o + 13] = y;
       batch.matrices[o + 14] = z;
       batch.matrices[o + 15] = 1;
     } else if (diameter <= 0) {
-      writeUnitMatrix(batch.matrices, slot, x, z, 0, yaw, false, gy);
+      writeUnitMatrix(batch.matrices, slot, x, z, 0, yaw, false, gy, pitch, roll);
     } else {
       const scale = batch.vatScale ?? 1;
       const lift = batch.vatFootLift ?? 0;
-      writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift);
+      writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift, pitch, roll);
     }
 
-    if (batch.vatHandle && slot < batch.vatMoving.length) {
-      const want = diameter > 0 && moving ? 1 : 0;
-      if (batch.vatMoving[slot] !== want) {
-        batch.vatMoving[slot] = want;
-        const clip = want ? batch.walkClip : batch.idleClip;
-        writeVatSlotParams(batch.vatParams, slot, clip, batch.vatPhase[slot]);
-        batch.vatDirty = true;
-      }
-    }
+    syncVatSlot(batch, slot, diameter > 0 && moving, animateVat);
+    for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
+  }
+
+  /** VAT state: 0 idle, 1 walk, 2 frozen (fps=0) beyond VAT distance when LOD on. */
+  function syncVatSlot(batch, slot, moving, animate) {
+    if (!batch.vatHandle || slot >= batch.vatMoving.length) return;
+    const want = !animate ? 2 : moving ? 1 : 0;
+    if (batch.vatMoving[slot] === want) return;
+    batch.vatMoving[slot] = want;
+    const clip = want === 1 ? batch.walkClip : batch.idleClip;
+    const fps = want === 2 ? 0 : clip.fps;
+    writeVatSlotParams(batch.vatParams, slot, clip, batch.vatPhase[slot], fps);
+    batch.vatDirty = true;
   }
 
   return {
@@ -1587,7 +2225,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     setCount(n) {
       setSelRingCount(n);
-      writeSelectionRingColors(ringColors, n, useCollar ? 'white' : 'cyan');
+      writeSelRingColors(n, useCollar ? 'white' : 'cyan');
       pushSelRingColors();
     },
 
@@ -1621,6 +2259,120 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (let i = 0; i < updatesList.length; i++) {
         terrain?.applyTreeUpdates?.(updatesList[i]);
       }
+    },
+
+    applyFireZoneUpdates(updatesList) {
+      if (!updatesList?.length) return;
+      for (let u = 0; u < updatesList.length; u++) {
+        const patch = updatesList[u];
+        const n = patch?.slots?.length ?? 0;
+        for (let i = 0; i < n; i++) {
+          const slot = patch.slots[i];
+          if (!patch.alive[i]) {
+            const cur = groundFires.get(slot);
+            if (cur && cur.generation === patch.generation[i]) {
+              groundFires.delete(slot);
+            }
+            continue;
+          }
+          const ttlMs = (patch.ttl[i] || 50) * 50;
+          groundFires.set(slot, {
+            x: patch.px[i],
+            z: patch.py[i],
+            radius: patch.radius[i],
+            generation: patch.generation[i],
+            endsAtMs: particleClockMs + ttlMs,
+          });
+        }
+      }
+    },
+
+    applyFrogUpdates(updatesList) {
+      frogRenderer.applyUpdates(updatesList);
+    },
+
+    applyLightningUpdates(updatesList) {
+      if (!updatesList?.length) return;
+      for (let u = 0; u < updatesList.length; u++) {
+        const patch = updatesList[u];
+        const n = patch?.count ?? 0;
+        for (let i = 0; i < n; i++) {
+          lightningBolts.strike(patch.x[i], patch.y[i], patch.kind[i]);
+        }
+      }
+    },
+
+    applyHolyArmorUpdates(updatesList) {
+      unitAuras.applyHolyArmorUpdates(updatesList);
+    },
+
+    applyMonkKickUpdates(updatesList) {
+      monkLobFx.applyUpdates(updatesList);
+    },
+
+    setMonkLobDisplayAlpha(alpha) {
+      monkLobFx.setDisplayAlpha(alpha);
+    },
+
+    monkLobHeight(entity) {
+      return monkLobFx.loftFor(entity);
+    },
+
+    monkLobPitch(entity) {
+      return monkLobFx.pitchFor(entity);
+    },
+
+    monkLobYawTwist(entity) {
+      return monkLobFx.yawTwistFor(entity);
+    },
+
+    monkLobRoll(entity) {
+      return monkLobFx.rollFor(entity);
+    },
+
+    /** @deprecated alias for monkLobPitch */
+    monkLobSpin(entity) {
+      return monkLobFx.pitchFor(entity);
+    },
+
+    applySporeBloomUpdates(updatesList, tick) {
+      if (Number.isFinite(tick)) fxSimTick = tick;
+      sporeBloomFx.applyUpdates(updatesList, fxSimTick);
+    },
+
+    setFxSimTick(tick) {
+      if (Number.isFinite(tick)) fxSimTick = tick;
+    },
+
+    /**
+     * Sync ongoing unit buff/debuff auras for sparkles.
+     * @param {number} count
+     * @param {Int16Array|Uint8Array|Int32Array|{ shieldHp?: Int16Array, frostTicks?: Int16Array, dotTicks?: Int16Array }} maskOrStatus
+     * @param {Float32Array} x
+     * @param {Float32Array} y
+     * @param {Float32Array} z
+     * @param {{ fromShieldHp?: boolean, fromStatus?: boolean }} [opts]
+     */
+    syncUnitAuras(count, maskOrStatus, x, y, z, opts = {}) {
+      const n = count | 0;
+      if (opts.fromStatus || opts.fromShieldHp) {
+        if (!auraScratch || auraScratch.length < n) {
+          auraScratch = new Uint8Array(Math.max(n, 256));
+        }
+        const shield = opts.fromStatus ? maskOrStatus?.shieldHp : maskOrStatus;
+        const frost = opts.fromStatus ? maskOrStatus?.frostTicks : null;
+        const dot = opts.fromStatus ? maskOrStatus?.dotTicks : null;
+        for (let i = 0; i < n; i++) {
+          let mask = 0;
+          if (shield && shield[i] > 0) mask |= AURA.HOLY;
+          if (frost && frost[i] > 0) mask |= AURA.FROST;
+          if (dot && dot[i] > 0) mask |= AURA.SHADOW;
+          auraScratch[i] = mask;
+        }
+        unitAuras.sync(n, auraScratch, x, y, z);
+        return;
+      }
+      unitAuras.sync(count, maskOrStatus, x, y, z);
     },
 
     setTileGridVisible(on) {
@@ -1780,8 +2532,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     },
 
-    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false) {
-      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving);
+    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN) {
+      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride);
     },
 
     debugBatches(count, typesArr, ownersArr) {
@@ -1816,18 +2568,29 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     syncProjectiles(prev, cur, alpha) {
       emitFireballGroundSplashes(prev, cur);
+      emitHolySlashImpacts(prev, cur);
       return projectileRenderer.sync(prev, cur, alpha);
     },
 
     clearProjectiles() {
       projectileRenderer.clear();
+      frogRenderer.clear();
       arrowTrails.clear();
+      lightningBolts.clear();
       particles.clear();
+      unitAuras.clear();
+      monkLobFx.clear();
+      sporeBloomFx.clear();
+      mushrooms?.clear?.();
+      groundFires.clear();
       trailGenerations.fill(0);
       trailLastEmitMs.fill(0);
       fireballSplashSeen.fill(0);
+      holySlashSeen.fill(0);
       projectileRenderer.commit();
+      frogRenderer.commit();
       arrowTrails.commit();
+      lightningBolts.commit();
     },
 
     emitParticle(init) {
@@ -1849,17 +2612,33 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /**
      * Selection cursor. With collar.glb: `spinYaw` rotates in place.
      * Fallback disc: `unitSize` is treated as ground diameter (legacy).
-     * @param {'white' | 'red' | 'yellow' | 'cyan'} [tint] white = authored collar colors
+     * @param {'white' | 'red' | 'yellow' | 'cyan'} [tint]
+     *   white = authored collar bands; red = attack wash; yellow = force-move gray
+     * @param {{ kind?: 'default' | 'caster' | 'vehicle' }} [opts]
      */
-    writeSelectionRing(i, x, z, unitSize, spinYaw = 0, tint = 'white') {
+    writeSelectionRing(i, x, z, unitSize, spinYaw = 0, tint = 'white', opts = {}) {
+      // Clear path: no terrain sample — callers only hit this on select→deselect edges.
+      if (!(unitSize > 0)) {
+        if (useCollar) writeSelectionCollar(ringMatrices, i, 0, 0, 0, 0, 0);
+        else writeFlatRing(ringMatrices, i, 0, 0, 0, RING_DIAM, RING_H, 0);
+        writeSelRingColorAt(i, tint);
+        for (const mesh of selRingParts) markThinInstanceSlotDirty(mesh, i);
+        return;
+      }
       const gy = groundYAt(x, z);
       if (useCollar) {
-        const scale = unitSize > 0 ? SELECTION_COLLAR_SCALE : 0;
-        writeSelectionCollar(ringMatrices, i, x, z, scale, spinYaw, gy);
+        let base = SELECTION_COLLAR_SCALE;
+        if (opts.kind === 'vehicle') base = SELECTION_COLLAR_VEHICLE_SCALE;
+        else if (opts.kind === 'caster') base = SELECTION_COLLAR_CASTER_SCALE;
+        writeSelectionCollar(ringMatrices, i, x, z, base, spinYaw, gy);
       } else {
-        writeFlatRing(ringMatrices, i, x, z, unitSize, RING_DIAM, RING_H, gy);
+        let diam = unitSize;
+        if (opts.kind === 'vehicle') diam = Math.max(unitSize, 10);
+        else if (opts.kind === 'caster') diam = unitSize * 1.5;
+        writeFlatRing(ringMatrices, i, x, z, diam, RING_DIAM, RING_H, gy);
       }
-      writeSelectionRingColorAt(ringColors, i, useCollar ? tint : (tint === 'white' ? 'cyan' : tint));
+      writeSelRingColorAt(i, tint);
+      for (const mesh of selRingParts) markThinInstanceSlotDirty(mesh, i);
     },
 
     beginHealthBars() {
@@ -1868,6 +2647,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** v1-style chips below the selection collar. flags: { armor?, holy? }. */
     writeHealthBar(x, z, unitSize, ratio, flags) {
+      if (LOD_ENABLED) {
+        const eye = cameraEyePos();
+        const dx = eye.x - x;
+        const dz = eye.z - z;
+        if (dx * dx + dz * dz > FX_DISTANCE_SQ) return;
+        const gy = groundYAt(x, z);
+        const dy = eye.y - gy;
+        if (dx * dx + dy * dy + dz * dz > FX_DISTANCE_SQ) return;
+        const y = gy + FOOT_CLEARANCE + 0.04;
+        healthBars.write(x, y, z, unitSize, ratio, flags);
+        return;
+      }
       const gy = groundYAt(x, z);
       // Just above terrain; screen-space "below unit" is the toward-camera XZ offset.
       const y = gy + FOOT_CLEARANCE + 0.04;

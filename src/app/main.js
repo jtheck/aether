@@ -1,7 +1,7 @@
 // app/ — SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner, ORDER } from '../sim/world.js';
-import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
+import { UNIT_DEFS, getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
 import * as fx from '../sim/fixed.js';
 import {
   PLAYER_ARMY,
@@ -20,6 +20,31 @@ import { init as initAudio } from './audio.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 
+/** v1 carton packing — local XZ offsets for riders on a transport deck. */
+const PASSENGER_COLS = 2;
+const PASSENGER_SPACING = 1.2;
+/** Hang passengers this far under air transports (v1 gondola drop, scaled with loft). */
+const AIR_PASSENGER_DROP = 7;
+
+function passengerLocalOffset(slot, total) {
+  const col = slot % PASSENGER_COLS;
+  const row = (slot / PASSENGER_COLS) | 0;
+  const rows = Math.max(1, Math.ceil(total / PASSENGER_COLS));
+  return {
+    x: (col - (PASSENGER_COLS - 1) / 2) * PASSENGER_SPACING,
+    z: (row - (rows - 1) / 2) * PASSENGER_SPACING,
+  };
+}
+
+function rotateYawOffset(offX, offZ, yaw) {
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return {
+    x: offX * c - offZ * s,
+    z: offX * s + offZ * c,
+  };
+}
+
 const SEED = 0x1234;
 
 const OWNER_TINTS = [
@@ -34,6 +59,12 @@ const DEATH_FADE_MS = 450;
 const SEL_SPIN_STEADY = 0.006 * 60;
 const SEL_SPIN_START = 1.7;
 const SEL_SPIN_SETTLE = 6;
+/** Skip matrix rewrite when display pose is within this (world units / radians). */
+const POSE_XZ_EPS = 0.03;
+const POSE_XZ_EPS_SQ = POSE_XZ_EPS * POSE_XZ_EPS;
+const POSE_YAW_EPS = 0.03;
+const POSE_SIZE_EPS = 0.002;
+const POSE_LOFT_EPS = 0.02;
 const DEBUG_KOTH = new URLSearchParams(location.search).get('debug') === 'koth';
 
 /** Drops stale applyLiveConfig completions (solo reset finishing after join reset). */
@@ -255,11 +286,30 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     renderX: new Float32Array(count),
     renderY: new Float32Array(count),
     renderZ: new Float32Array(count),
+    /** Last matrix write — skip rewrite when pose is unchanged. */
+    poseX: new Float32Array(count),
+    poseZ: new Float32Array(count),
+    poseYaw: new Float32Array(count),
+    poseSize: new Float32Array(count),
+    poseLoft: new Float32Array(count),
+    poseMoving: new Uint8Array(count),
+    poseValid: new Uint8Array(count),
+    /** Cached terrain height for unchanged xz. */
+    cacheGx: new Float32Array(count),
+    cacheGz: new Float32Array(count),
+    cacheGy: new Float32Array(count),
     /** Deferred health chips: [x, z, size, ratio] × N (selected first at flush). */
     hbSelected: new Float32Array(count * 4),
     hbHurt: new Float32Array(count * 4),
+    /** Passenger deck packing for carried units. */
+    passengerSlot: new Int32Array(count),
+    passengerTotalOf: new Int32Array(count),
+    passengerNextSlot: new Int32Array(count),
   };
   bufs.wasAlive.fill(1);
+  bufs.cacheGx.fill(NaN);
+  bufs.cacheGz.fill(NaN);
+  bufs.cacheGy.fill(NaN);
 
   function resizeRenderBuffers(n) {
     const prevFacing = bufs.facingYaw;
@@ -278,8 +328,24 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     bufs.renderX = new Float32Array(n);
     bufs.renderY = new Float32Array(n);
     bufs.renderZ = new Float32Array(n);
+    bufs.poseX = new Float32Array(n);
+    bufs.poseZ = new Float32Array(n);
+    bufs.poseYaw = new Float32Array(n);
+    bufs.poseSize = new Float32Array(n);
+    bufs.poseLoft = new Float32Array(n);
+    bufs.poseMoving = new Uint8Array(n);
+    bufs.poseValid = new Uint8Array(n);
+    bufs.cacheGx = new Float32Array(n);
+    bufs.cacheGz = new Float32Array(n);
+    bufs.cacheGy = new Float32Array(n);
+    bufs.cacheGx.fill(NaN);
+    bufs.cacheGz.fill(NaN);
+    bufs.cacheGy.fill(NaN);
     bufs.hbSelected = new Float32Array(n * 4);
     bufs.hbHurt = new Float32Array(n * 4);
+    bufs.passengerSlot = new Int32Array(n);
+    bufs.passengerTotalOf = new Int32Array(n);
+    bufs.passengerNextSlot = new Int32Array(n);
     const copy = Math.min(n, prevFacing?.length ?? 0);
     for (let i = 0; i < copy; i++) {
       bufs.facingYaw[i] = prevFacing[i];
@@ -357,6 +423,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       } else line = `KOTH  ·  ⏱ ${matchTime}  ·  ${line}`;
     }
     if (session.role === 'spectator') line = `Spectating  ·  ${line}`;
+    if (session.pauseLockstep) line = `PAUSED  ·  ${line}`;
     if (fpsDisplay > 0) line += `  ·  ${fpsDisplay} fps`;
     if (stress > 0) line += `  ·  stress ${world.count} units`;
     if (animStress > 0) line += `  ·  animStress ${world.count} VAT`;
@@ -385,10 +452,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       const tint = cmdType === CMD.ATTACK_MOVE ? 'red' : 'white';
       renderer.pingOrderMarker?.(x, z, y, tint, { forceMove: cmdType === CMD.MOVE });
     },
-    onAbilityHold: (x, z, y) => {
-      renderer.pingOrderMarker?.(x, z, y, 'white');
-    },
-    canInteract: () => session.role === 'player' && localPlayerId >= 0,
+    onAbilityHold: null,
+    canInteract: () =>
+      session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep,
   });
 
   window.addEventListener('keydown', (e) => {
@@ -411,6 +477,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       e.preventDefault();
       const on = renderer.toggleShadows?.();
       if (typeof on === 'boolean') setStatusText(on ? 'Shadows on' : 'Shadows off');
+      return;
+    }
+    if (e.code === 'KeyP') {
+      e.preventDefault();
+      session.pauseLockstep = !session.pauseLockstep;
+      if (session.pauseLockstep) session.simAcc = 0;
+      paintStatus();
       return;
     }
     if (e.code === 'F9') {
@@ -493,32 +566,164 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     const {
       selected, wasSelected, deathFade, facingYaw, selSpinYaw, selSpinVel,
       colors, renderX, renderY, renderZ,
+      poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseValid,
+      cacheGx, cacheGz, cacheGy,
     } = bufs;
+
+    const groundYCached = (i, x, z) => {
+      if (
+        Math.abs(cacheGx[i] - x) <= POSE_XZ_EPS &&
+        Math.abs(cacheGz[i] - z) <= POSE_XZ_EPS &&
+        Number.isFinite(cacheGy[i])
+      ) {
+        return cacheGy[i];
+      }
+      const gy = renderer.groundYAt?.(x, z) ?? 0;
+      cacheGx[i] = x;
+      cacheGz[i] = z;
+      cacheGy[i] = gy;
+      return gy;
+    };
+
+    const poseDirty = (i, x, z, yaw, size, loft, movingBit) => {
+      if (!poseValid[i]) return true;
+      if (movingBit !== poseMoving[i]) return true;
+      const pdx = x - poseX[i];
+      const pdz = z - poseZ[i];
+      if (pdx * pdx + pdz * pdz > POSE_XZ_EPS_SQ) return true;
+      if (Math.abs(yaw - poseYaw[i]) > POSE_YAW_EPS) return true;
+      if (Math.abs(size - poseSize[i]) > POSE_SIZE_EPS) return true;
+      if (Math.abs(loft - poseLoft[i]) > POSE_LOFT_EPS) return true;
+      return false;
+    };
+
+    const commitPose = (i, x, z, yaw, size, loft, movingBit) => {
+      poseX[i] = x;
+      poseZ[i] = z;
+      poseYaw[i] = yaw;
+      poseSize[i] = size;
+      poseLoft[i] = loft;
+      poseMoving[i] = movingBit;
+      poseValid[i] = 1;
+    };
+
     if (n !== renderEntityCount) {
       renderEntityCount = n;
       resizeRenderBuffers(n);
       renderer.setCount(n);
       rebuildRendererEntities(renderer, session);
     }
+    // Apply lob flight snapshot before drawing so loft/trail match this frame.
+    const monkKickUpdates = session.takePendingMonkKickUpdates?.();
+    if (monkKickUpdates?.length) renderer.applyMonkKickUpdates?.(monkKickUpdates);
+    renderer.setMonkLobDisplayAlpha?.(alpha);
     renderer.beginHealthBars?.();
     // Defer chip writes so selected units win if the bar pool is ever capped again.
     let hbSelCount = 0;
     let hbHurtCount = 0;
     const hbSel = bufs.hbSelected;
     const hbHurt = bufs.hbHurt;
+
+    // Pack passengers into transport decks (v1 grid — vehicle GLBs have no seat anchors).
+    const passengerSlot = bufs.passengerSlot;
+    const passengerTotalOf = bufs.passengerTotalOf;
+    if (passengerSlot && passengerSlot.length >= n) {
+      passengerSlot.fill(-1);
+      passengerTotalOf.fill(0);
+      for (let i = 0; i < n; i++) {
+        if (!world.alive[i] || !world.carriedBy || world.carriedBy[i] < 0) continue;
+        passengerTotalOf[world.carriedBy[i]]++;
+      }
+      const nextSlot = bufs.passengerNextSlot;
+      if (nextSlot && nextSlot.length >= n) {
+        nextSlot.fill(0);
+        for (let i = 0; i < n; i++) {
+          if (!world.alive[i] || !world.carriedBy || world.carriedBy[i] < 0) continue;
+          const t = world.carriedBy[i];
+          passengerSlot[i] = nextSlot[t]++;
+        }
+      }
+    }
+
     for (let i = 0; i < n; i++) {
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
-          if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
-          renderer.writeSelectionRing(i, 0, 0, 0);
+          if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
+            if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
+            commitPose(i, 0, 0, 0, 0, 0, 0);
+          }
+          if (wasSelected[i]) {
+            renderer.writeSelectionRing(i, 0, 0, 0);
+            wasSelected[i] = 0;
+          }
           colors[i * 4 + 3] = 0;
           colorsDirty = true;
           continue;
         }
       } else if (!world.alive[i]) {
-        if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
-        renderer.writeSelectionRing(i, 0, 0, 0);
+        if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
+          if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
+          commitPose(i, 0, 0, 0, 0, 0, 0);
+        }
+        if (wasSelected[i]) {
+          renderer.writeSelectionRing(i, 0, 0, 0);
+          wasSelected[i] = 0;
+        }
+        continue;
+      }
+
+      // Passengers ride on the transport deck (procedural grid — no seat anchors in GLBs).
+      if (world.carriedBy && world.carriedBy[i] >= 0) {
+        const t = world.carriedBy[i];
+        if (t < 0 || t >= n || !world.alive[t]) {
+          if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
+            if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
+            commitPose(i, 0, 0, 0, 0, 0, 0);
+          }
+          if (wasSelected[i]) {
+            renderer.writeSelectionRing(i, 0, 0, 0);
+            wasSelected[i] = 0;
+          }
+          selected[i] = 0;
+          continue;
+        }
+        const def = getUnitDef(world.type[i]);
+        const tx = prev.x[t] + (cur.x[t] - prev.x[t]) * alpha;
+        const tz = prev.z[t] + (cur.z[t] - prev.z[t]) * alpha;
+        const yaw = facingYaw[t] || 0;
+        const slot = passengerSlot?.[i] ?? 0;
+        const total = Math.max(1, passengerTotalOf?.[t] ?? 1);
+        const local = passengerLocalOffset(slot, total);
+        const worldOff = rotateYawOffset(local.x, local.z, yaw);
+        const x = tx + worldOff.x;
+        const z = tz + worldOff.z;
+        const air = isFlyer(world.type[t]);
+        const loft = air ? Math.max(0, FLY_HEIGHT - AIR_PASSENGER_DROP) : 0;
+        let size = def.size * 0.85;
+        const fade = deathFade[i];
+        if (fade > 0) size *= fade;
+        const gy = groundYCached(i, x, z);
+        renderX[i] = x;
+        renderY[i] = gy + loft + (def.pickHeight ?? 1.1);
+        renderZ[i] = z;
+        if (fade > 0) {
+          colors[i * 4 + 3] = fade;
+          colorsDirty = true;
+        }
+        if (poseDirty(i, x, z, yaw, size, loft, 0) || fade > 0) {
+          if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, false, loft, 0, 0, gy)) {
+            if (world.owner[i] === 0) drawStats.p0++;
+            else if (world.owner[i] === 1) drawStats.p1++;
+          } else drawStats.unmapped++;
+          commitPose(i, x, z, yaw, size, loft, 0);
+        } else if (world.owner[i] === 0) drawStats.p0++;
+        else if (world.owner[i] === 1) drawStats.p1++;
+        if (wasSelected[i] || selected[i]) {
+          renderer.writeSelectionRing(i, 0, 0, 0);
+        }
+        selected[i] = 0;
+        wasSelected[i] = 0;
         continue;
       }
 
@@ -531,23 +736,37 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       const orderedMove = world.order[i] !== ORDER.IDLE;
       const moving = orderedMove && dx * dx + dz * dz > 0.0004;
       if (moving) facingYaw[i] = Math.atan2(dx, dz);
-      const yaw = facingYaw[i];
+      const flyLoft = isFlyer(world.type[i]) ? FLY_HEIGHT : 0;
+      const loft = (renderer.monkLobHeight?.(i) ?? 0) + flyLoft;
+      const pitch = renderer.monkLobPitch?.(i) ?? 0;
+      const roll = renderer.monkLobRoll?.(i) ?? 0;
+      const yawTwist = renderer.monkLobYawTwist?.(i) ?? 0;
+      // Face along flight path while tumbling; twist spins on top.
+      let yaw = facingYaw[i];
+      if (loft > 0.01 && dx * dx + dz * dz > 0.0004) yaw = Math.atan2(dx, dz);
+      yaw += yawTwist;
       let size = def.size;
       const fade = deathFade[i];
       if (fade > 0) size *= fade;
       // Pick sphere center at chest height over terrain (not sim `size`, which is spacing).
-      const gy = renderer.groundYAt?.(x, z) ?? 0;
+      const gy = groundYCached(i, x, z);
       renderX[i] = x;
-      renderY[i] = gy + (def.pickHeight ?? 1.1);
+      renderY[i] = gy + loft + (def.pickHeight ?? 1.1);
       renderZ[i] = z;
       if (fade > 0) {
         colors[i * 4 + 3] = fade;
         colorsDirty = true;
       }
-      if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, moving && world.alive[i])) {
-        if (world.owner[i] === 0) drawStats.p0++;
-        else if (world.owner[i] === 1) drawStats.p1++;
-      } else drawStats.unmapped++;
+      const movingBit = moving && world.alive[i] ? 1 : 0;
+      const forcePose = fade > 0 || loft > 0.01 || pitch !== 0 || roll !== 0;
+      if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit)) {
+        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy)) {
+          if (world.owner[i] === 0) drawStats.p0++;
+          else if (world.owner[i] === 1) drawStats.p1++;
+        } else drawStats.unmapped++;
+        commitPose(i, x, z, yaw, size, loft, movingBit);
+      } else if (world.owner[i] === 0) drawStats.p0++;
+      else if (world.owner[i] === 1) drawStats.p1++;
       const isSel = !!selected[i] && !!world.alive[i];
       if (isSel) {
         if (!wasSelected[i]) selSpinVel[i] = SEL_SPIN_START;
@@ -564,10 +783,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
           if (ord === ORDER.ATTACK_MOVE) ringTint = 'red';
           else if (ord === ORDER.MOVE) ringTint = 'yellow';
         }
-        renderer.writeSelectionRing(i, x, z, size, selSpinYaw[i], ringTint);
+        let ringKind = 'default';
+        if (isTransport(world.type[i]) || def.category === 'vehicle' || def.category === 'air') {
+          ringKind = 'vehicle';
+        } else if (def.primaryAbility) {
+          ringKind = 'caster';
+        }
+        renderer.writeSelectionRing(i, x, z, size, selSpinYaw[i], ringTint, { kind: ringKind });
       } else {
         selSpinVel[i] = 0;
-        renderer.writeSelectionRing(i, 0, 0, 0);
+        if (wasSelected[i]) renderer.writeSelectionRing(i, 0, 0, 0);
       }
       wasSelected[i] = isSel ? 1 : 0;
 
@@ -598,6 +823,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       });
     }
     renderer.endHealthBars?.();
+    if (renderer.syncUnitAuras) {
+      renderer.syncUnitAuras(
+        n,
+        {
+          shieldHp: world.shieldHp,
+          frostTicks: world.frostTicks,
+          dotTicks: world.dotTicks,
+        },
+        renderX,
+        renderY,
+        renderZ,
+        { fromStatus: true },
+      );
+    }
     if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
       lastRenderDebugAt = performance.now();
       console.info('[KOTH] render frame', {
@@ -609,6 +848,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     if (drawStats.unmapped > 0 && performance.now() - lastUnmappedRebuild > 400) {
       lastUnmappedRebuild = performance.now();
       renderEntityCount = rebuildRendererEntities(renderer, session);
+      bufs.poseValid.fill(0);
     }
     if (colorsDirty) renderer.setColors(colors);
     if (renderer.getPickHitboxesVisible?.()) {
@@ -633,6 +873,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     );
     const treeUpdates = session.takePendingTreeUpdates?.();
     if (treeUpdates?.length) renderer.applyTreeUpdates?.(treeUpdates);
+    const fireZoneUpdates = session.takePendingFireZoneUpdates?.();
+    if (fireZoneUpdates?.length) renderer.applyFireZoneUpdates?.(fireZoneUpdates);
+    const frogUpdates = session.takePendingFrogUpdates?.();
+    if (frogUpdates?.length) renderer.applyFrogUpdates?.(frogUpdates);
+    const lightningUpdates = session.takePendingLightningUpdates?.();
+    if (lightningUpdates?.length) renderer.applyLightningUpdates?.(lightningUpdates);
+    const holyArmorUpdates = session.takePendingHolyArmorUpdates?.();
+    if (holyArmorUpdates?.length) renderer.applyHolyArmorUpdates?.(holyArmorUpdates);
+    const sporeBloomUpdates = session.takePendingSporeBloomUpdates?.();
+    if (sporeBloomUpdates?.length) {
+      renderer.applySporeBloomUpdates?.(sporeBloomUpdates, world.tick);
+    } else {
+      renderer.setFxSimTick?.(world.tick);
+    }
     renderer.commit();
   });
 

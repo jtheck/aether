@@ -106,6 +106,12 @@ export class SimClient {
         kothMatchOver: msg.kothMatchOver,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,
+        fireZoneUpdates: msg.fireZoneUpdates ?? null,
+        frogUpdates: msg.frogUpdates ?? null,
+        lightningUpdates: msg.lightningUpdates ?? null,
+        holyArmorUpdates: msg.holyArmorUpdates ?? null,
+        sporeBloomUpdates: msg.sporeBloomUpdates ?? null,
+        monkKickUpdates: msg.monkKickUpdates ?? null,
       });
     } else if (msg.type === 'error') {
       const err = new Error(msg.message);

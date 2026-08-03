@@ -11,8 +11,9 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 import { SCENERY } from '../sim/scenery.js';
-import { TILE_SIZE_F, WORLD_HALF_F } from '../sim/field.js';
+import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 import { treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
+import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
 const ATLAS_GRID = 8;
@@ -20,7 +21,30 @@ const CELL_INSET = 0.0015;
 const PLANE_SIZE = 3;
 const LOD_UPDATE_MS = 120;
 const LOD_MOVE_THRESHOLD_SQ = 16;
+/** Extra tree instance slots for spore growth / dynamic plant. */
+const TREE_GROWTH_HEADROOM = 512;
+/** Grow-in from sapling (spore / revive). */
+const TREE_GROW_IN_MS = 1600;
+/** Stage-to-stage shrink (fire / chip) — matches burn cadence feel. */
+const TREE_SHRINK_MS = 2200;
+/** Full fell → vanish (after drip beat). */
+const TREE_FELL_MS = 1400;
+/** Hold full size while ink drips, then melt. */
+const TREE_FELL_DELAY_MS = 850;
 const placementScratch = new Float64Array(16);
+
+function setThinInstanceCount(mesh, count) {
+  const ti = mesh.thinInstances;
+  if (!ti) return;
+  if (count > ti._capacity) {
+    throw new Error(`thin-instance count ${count} exceeds capacity ${ti._capacity}`);
+  }
+  ti.count = count;
+  ti._version++;
+  ti._dirtyMin = 0;
+  ti._dirtyMax = count;
+  mesh.visible = count > 0;
+}
 
 const VARIANTS = [
   {
@@ -31,7 +55,7 @@ const VARIANTS = [
     modelScale: 0.9,
     billboardScale: 2.4,
     billboardYOffset: -0.6,
-    lodDistance: 480,
+    lodDistance: LOD_ENABLED ? SCENERY_LOD_TREE : Infinity,
   },
   {
     kind: SCENERY.ROCK_PLAIN,
@@ -41,7 +65,7 @@ const VARIANTS = [
     modelScale: 3,
     billboardScale: 3,
     billboardYOffset: -0.8,
-    lodDistance: 520,
+    lodDistance: LOD_ENABLED ? SCENERY_LOD_ROCK : Infinity,
   },
   {
     kind: SCENERY.ROCK_MOSS,
@@ -51,7 +75,7 @@ const VARIANTS = [
     modelScale: 7.5,
     billboardScale: 5.9,
     billboardYOffset: -0.8,
-    lodDistance: 520,
+    lodDistance: LOD_ENABLED ? SCENERY_LOD_ROCK : Infinity,
   },
   {
     kind: SCENERY.ROCK_SNOW,
@@ -61,7 +85,7 @@ const VARIANTS = [
     modelScale: 11.5,
     billboardScale: 7.5,
     billboardYOffset: -0.8,
-    lodDistance: 520,
+    lodDistance: LOD_ENABLED ? SCENERY_LOD_ROCK : Infinity,
   },
 ];
 
@@ -86,21 +110,37 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   const batches = [];
   /** @type {Map<number, { batch: object, index: number }>} */
   const treeByTile = new Map();
+  /** @type {number[]} unused tree instance indices (headroom). */
+  const treeFreeSlots = [];
+  /** @type {object | null} */
+  let treeBatch = null;
 
   for (const variant of VARIANTS) {
-    const instances = collectInstances(field, variant, surfaceHeightAt);
-    if (instances.length === 0) continue;
+    const live = collectInstances(field, variant, surfaceHeightAt);
+    const isTree = variant.kind === SCENERY.TREE;
+    // Trees always get a batch (even if empty) so spore growth can claim slots.
+    if (live.length === 0 && !isTree) continue;
+
+    const capacity = isTree
+      ? Math.max(live.length + TREE_GROWTH_HEADROOM, TREE_GROWTH_HEADROOM)
+      : live.length;
+    const instances = live.slice();
+    while (instances.length < capacity) {
+      instances.push(makeEmptyTreeInstance());
+    }
 
     const billboardMesh = createBillboardMesh(engine, variant, atlas);
-    const billboardMatrices = new Float32Array(instances.length * 16);
-    setThinInstances(billboardMesh, billboardMatrices, instances.length);
+    const billboardMatrices = new Float32Array(capacity * 16);
+    setThinInstances(billboardMesh, billboardMatrices, capacity);
+    setThinInstanceCount(billboardMesh, capacity);
     billboardMesh.pickable = false;
     meshes.push(billboardMesh);
 
     const modelParts = await loadModelParts(engine, variant);
     for (const part of modelParts) {
-      part.matrices = new Float32Array(instances.length * 16);
-      setThinInstances(part.mesh, part.matrices, instances.length);
+      part.matrices = new Float32Array(capacity * 16);
+      setThinInstances(part.mesh, part.matrices, capacity);
+      setThinInstanceCount(part.mesh, capacity);
       part.mesh.pickable = false;
       meshes.push(part.mesh);
     }
@@ -112,25 +152,117 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       billboardMatrices,
       modelParts,
       dirty: true,
+      capacity,
     };
     batches.push(batch);
-    if (variant.kind === SCENERY.TREE) {
-      for (let i = 0; i < instances.length; i++) {
+    if (isTree) {
+      treeBatch = batch;
+      for (let i = 0; i < live.length; i++) {
         treeByTile.set(instances[i].tileIndex, { batch, index: i });
+      }
+      for (let i = live.length; i < capacity; i++) {
+        treeFreeSlots.push(i);
+        writeHiddenMatrix(billboardMatrices, i);
+        for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
       }
     }
   }
 
   let elapsed = LOD_UPDATE_MS;
   let fireElapsed = 0;
+  let growElapsed = 0;
   let lastCameraX = Infinity;
   let lastCameraY = Infinity;
   let lastCameraZ = Infinity;
+
+  function beginScaleAnim(p, nextTarget, durationMs) {
+    // Compare against visible scale — targetScale may already be set during fell delay.
+    if (Math.abs((p.stockScale ?? 0) - nextTarget) < 0.001 && !p.scaling) {
+      p.targetScale = nextTarget;
+      return;
+    }
+    p.scaleFrom = p.stockScale ?? 0;
+    p.targetScale = nextTarget;
+    p.scaleT = 0;
+    p.scaleDur = Math.max(1, durationMs);
+    p.scaling = true;
+  }
+
+  function placeTreeInstance(p, tileIndex, stock, burn) {
+    const width = field.width;
+    const tz = Math.floor(tileIndex / width);
+    const tx = tileIndex - tz * width;
+    const placement = deterministicPlacement(tx, tz, field.seed, SCENERY.TREE);
+    const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
+    const z = (tz + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetZ;
+    const groundY = surfaceHeightAt(field, x, z);
+    const stage = treeStageFromStock(stock);
+    const targetScale = treeScaleForStage(stage);
+    p.tileIndex = tileIndex;
+    p.x = x;
+    p.y = groundY;
+    p.z = z;
+    p.yaw = placement.yaw;
+    p.stock = stock;
+    p.burn = burn;
+    p.stockScale = targetScale > 0 ? targetScale * 0.12 : 0;
+    p.scaleFrom = p.stockScale;
+    p.targetScale = targetScale;
+    p.scaleT = 0;
+    p.scaleDur = TREE_GROW_IN_MS;
+    p.scaling = targetScale > 0;
+    p.fellDelayMs = 0;
+  }
+
+  function claimTreeSlot(tileIndex, stock, burn) {
+    if (!treeBatch) return null;
+    if (treeFreeSlots.length === 0) return null;
+    const index = treeFreeSlots.pop();
+    const p = treeBatch.instances[index];
+    placeTreeInstance(p, tileIndex, stock, burn);
+    const ref = { batch: treeBatch, index };
+    treeByTile.set(tileIndex, ref);
+    treeBatch.dirty = true;
+    return ref;
+  }
 
   function update(activeCamera = camera, deltaMs = LOD_UPDATE_MS, force = false) {
     if (!activeCamera) return;
     elapsed += deltaMs;
     fireElapsed += deltaMs;
+    growElapsed += deltaMs;
+
+    // Advance scale lerps (sprout, fire shrink, fell melt).
+    if (treeBatch && growElapsed > 0) {
+      const dt = Math.min(100, growElapsed);
+      growElapsed = 0;
+      let moved = false;
+      for (let i = 0; i < treeBatch.instances.length; i++) {
+        const p = treeBatch.instances[i];
+        if (p.fellDelayMs > 0) {
+          p.fellDelayMs -= dt;
+          if (p.fellDelayMs <= 0) {
+            p.fellDelayMs = 0;
+            beginScaleAnim(p, 0, TREE_FELL_MS);
+          }
+          moved = true;
+          continue;
+        }
+        if (!p.scaling) continue;
+        p.scaleT = Math.min(1, p.scaleT + dt / (p.scaleDur || TREE_SHRINK_MS));
+        const ease = 1 - (1 - p.scaleT) ** 3;
+        const from = p.scaleFrom ?? 0;
+        const to = p.targetScale ?? 0;
+        p.stockScale = from + (to - from) * ease;
+        if (p.scaleT >= 1) {
+          p.scaling = false;
+          p.stockScale = to;
+        }
+        moved = true;
+      }
+      if (moved) treeBatch.dirty = true;
+    }
+
     const cameraPos = cameraPosition(activeCamera);
     const movedSq =
       (cameraPos.x - lastCameraX) ** 2 +
@@ -161,7 +293,6 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         for (let i = 0; i < batch.instances.length; i++) {
           const p = batch.instances[i];
           if (!(p.burn > 0) || p.stock <= 0) continue;
-          // Full-tree spray — emitter spreads wisps from trunk to crown.
           opts.emitFire(p.x, p.y, p.z, Math.max(0.65, p.stockScale));
         }
       }
@@ -172,19 +303,66 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (!updates?.tiles?.length) return;
     const { tiles, stock, burn } = updates;
     for (let i = 0; i < tiles.length; i++) {
-      const ref = treeByTile.get(tiles[i]);
-      if (!ref) continue;
+      const ti = tiles[i];
+      let ref = treeByTile.get(ti);
+      const nextStock = stock[i];
+      const nextBurn = burn[i];
+      if (!ref) {
+        if (nextStock <= 0) continue;
+        ref = claimTreeSlot(ti, nextStock, nextBurn);
+        continue;
+      }
       const p = ref.batch.instances[ref.index];
-      p.stock = stock[i];
-      p.burn = burn[i];
+      const wasDead = !(p.stock > 0);
+      const prevScale = p.stockScale ?? 0;
+      p.stock = nextStock;
+      p.burn = nextBurn;
       const stage = treeStageFromStock(p.stock);
-      p.stockScale = treeScaleForStage(stage);
+      const nextTarget = treeScaleForStage(stage);
+      if (nextStock <= 0) {
+        // Ink drips first, then melt — don't snap-hide under the blobs.
+        p.scaling = false;
+        p.fellDelayMs = TREE_FELL_DELAY_MS;
+        p.targetScale = 0;
+      } else if (wasDead) {
+        p.fellDelayMs = 0;
+        p.stockScale = nextTarget * 0.12;
+        beginScaleAnim(p, nextTarget, TREE_GROW_IN_MS);
+      } else if (Math.abs(nextTarget - (p.targetScale ?? prevScale)) > 0.001) {
+        p.fellDelayMs = 0;
+        beginScaleAnim(
+          p,
+          nextTarget,
+          nextTarget < prevScale ? TREE_SHRINK_MS : TREE_GROW_IN_MS,
+        );
+      } else {
+        p.targetScale = nextTarget;
+      }
       ref.batch.dirty = true;
     }
   }
 
   update(camera, LOD_UPDATE_MS, true);
   return { meshes, update, applyTreeUpdates };
+}
+
+function makeEmptyTreeInstance() {
+  return {
+    tileIndex: -1,
+    x: 0,
+    y: 0,
+    z: 0,
+    yaw: 0,
+    stock: 0,
+    burn: 0,
+    stockScale: 0,
+    targetScale: 0,
+    scaleFrom: 0,
+    scaleT: 1,
+    scaleDur: TREE_SHRINK_MS,
+    scaling: false,
+    fellDelayMs: 0,
+  };
 }
 
 async function getAtlas(engine) {
@@ -392,8 +570,8 @@ function collectInstances(field, variant, surfaceHeightAt) {
       const i = tz * width + tx;
       if (sceneryType[i] !== variant.kind) continue;
       const placement = deterministicPlacement(tx, tz, seed, variant.kind);
-      const x = (tx + 0.5) * TILE_SIZE_F - WORLD_HALF_F + placement.offsetX;
-      const z = (tz + 0.5) * TILE_SIZE_F - WORLD_HALF_F + placement.offsetZ;
+      const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
+      const z = (tz + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetZ;
       const groundY = surfaceHeightAt(field, x, z);
       const stock = variant.kind === SCENERY.TREE
         ? (treeStock?.[i] ?? TREE_STAGE_FALLBACK_STOCK)
@@ -410,6 +588,12 @@ function collectInstances(field, variant, surfaceHeightAt) {
         stock,
         burn: 0,
         stockScale,
+        targetScale: stockScale,
+        scaleFrom: stockScale,
+        scaleT: 1,
+        scaleDur: TREE_SHRINK_MS,
+        scaling: false,
+        fellDelayMs: 0,
       });
     }
   }

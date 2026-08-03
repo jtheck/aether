@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import * as fx from './fixed.js';
 import { checksum } from './checksum.js';
 import { CMD } from './commands.js';
-import { buildField } from './field.js';
+import { buildField, WORLD_HALF_F, mapSizeForConfig, setActiveMapSize } from './field.js';
 import {
   mapSharedState,
   publishProjectiles,
@@ -40,13 +40,14 @@ function buildScenario(count, scenario) {
       w.owner[i] = i & 1;
     }
   } else if (scenario === 'dense-cells') {
+    const origin = -(w.worldHalfF ?? WORLD_HALF_F) + 4;
     for (let i = 0; i < w.count; i++) {
       const cell = i % 10000;
       const lane = (i / 10000) | 0;
       const cx = cell % 100;
       const cz = (cell / 100) | 0;
-      w.px[i] = fx.fromFloat(-396 + cx * 8 + 1 + lane);
-      w.py[i] = fx.fromFloat(-396 + cz * 8 + 1 + lane);
+      w.px[i] = fx.fromFloat(origin + cx * 8 + 1 + lane);
+      w.py[i] = fx.fromFloat(origin + cz * 8 + 1 + lane);
       w.owner[i] = 0;
     }
   } else if (scenario === 'saturated-projectiles') {
@@ -86,7 +87,8 @@ function percentile(values, p) {
 }
 
 function runScenario(count, scenario) {
-  const field = buildField(0x50ca1e);
+  const size = mapSizeForConfig({ stressPerSide: count >> 1 });
+  const field = buildField(0x50ca1e, { width: size.mapW, height: size.mapH });
   const w = buildScenario(count, scenario);
   const shared = mapSharedState(new SharedArrayBuffer(simSharedByteSize()));
   publishType(w, shared);

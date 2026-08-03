@@ -3,8 +3,9 @@
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
-import { getUnitDef } from '../../sim/unitTypes.js';
+import { getUnitDef, isMechanical, isTransport, UNIT } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
+import { canRideTransport, passengerCount } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
 
 /** v1 lasso drag threshold. */
@@ -103,6 +104,8 @@ export function createGameInput(opts) {
     const list = [];
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i]) continue;
+      // Passengers ride inside — not independently pickable.
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
       if (filter && !filter(i)) continue;
       const def = getUnitDef(world.type[i]);
       const pos = getUnitWorldPos(i);
@@ -127,13 +130,26 @@ export function createGameInput(opts) {
     const world = getWorld();
     const ids = [];
     for (let i = 0; i < world.count; i++) {
-      if (selectedBuf[i] && world.alive[i]) ids.push(i);
+      if (!selectedBuf[i] || !world.alive[i]) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      ids.push(i);
     }
     return ids;
   }
 
+  /** Push current selection into the sim so monks skip co-selected friendlies. */
+  function syncSelectionSquad() {
+    if (!canUseInput()) return;
+    enqueueCommand({
+      type: CMD.SELECT,
+      playerId: localPlayerId,
+      entities: selectedIds(),
+    });
+  }
+
   function clearSelection() {
     selectedBuf.fill(0);
+    syncSelectionSquad();
     onSelectionChanged?.();
   }
 
@@ -142,8 +158,10 @@ export function createGameInput(opts) {
     if (!add) selectedBuf.fill(0);
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
       if (world.type[i] === typeId) selectedBuf[i] = 1;
     }
+    syncSelectionSquad();
     onSelectionChanged?.();
   }
 
@@ -177,12 +195,55 @@ export function createGameInput(opts) {
     const world = getWorld();
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
       const pos = getUnitWorldPos(i);
       const p = renderer.worldToScreen(pos.x, pos.y, pos.z);
       if (!p) continue;
       if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) selectedBuf[i] = 1;
     }
+    syncSelectionSquad();
     onSelectionChanged?.();
+  }
+
+  /**
+   * Slide the selection as a rigid group: keep relative layout, move centroid to click.
+   * Avoids the old id-sorted parade grid that reshuffled everyone by type.
+   * @param {object} world
+   * @param {number[]} ids
+   * @param {number} gx
+   * @param {number} gz
+   */
+  function moveDestinations(world, ids, gx, gz) {
+    const n = ids.length;
+    const tx = new Array(n);
+    const ty = new Array(n);
+    if (n === 1) {
+      tx[0] = fx.fromFloat(gx);
+      ty[0] = fx.fromFloat(gz);
+      return { tx, ty };
+    }
+    let cx = 0;
+    let cz = 0;
+    const px = new Array(n);
+    const pz = new Array(n);
+    for (let k = 0; k < n; k++) {
+      const i = ids[k];
+      const x = fx.toFloat(world.px[i]);
+      const z = fx.toFloat(world.py[i]);
+      px[k] = x;
+      pz[k] = z;
+      cx += x;
+      cz += z;
+    }
+    cx /= n;
+    cz /= n;
+    const dx = gx - cx;
+    const dz = gz - cz;
+    for (let k = 0; k < n; k++) {
+      tx[k] = fx.fromFloat(Math.round((px[k] + dx) * 100) / 100);
+      ty[k] = fx.fromFloat(Math.round((pz[k] + dz) * 100) / 100);
+    }
+    return { tx, ty };
   }
 
   /**
@@ -203,45 +264,103 @@ export function createGameInput(opts) {
       return;
     }
 
+    // Click a friendly transport → embark riders (explicit). Do not auto-board on
+    // every mixed move — that stole half the army away from the click.
+    // Engineer-only clicks still fall through to repair below.
+    if (cmdType === CMD.MOVE || cmdType === CMD.ATTACK_MOVE) {
+      const transport = pickUnit(
+        clientX,
+        clientY,
+        (i) =>
+          world.owner[i] === localPlayerId &&
+          isTransport(world.type[i]) &&
+          !ids.every((id) => id === i),
+      );
+      if (transport >= 0) {
+        const riders = ids.filter(
+          (id) => id !== transport && canRideTransport(world.type[id]),
+        );
+        const onlyEngineers =
+          riders.length > 0 && riders.every((id) => world.type[id] === UNIT.ENGINEER);
+        if (riders.length > 0 && !onlyEngineers) {
+          const moveIds = [...riders, transport];
+          const { tx, ty } = moveDestinations(
+            world,
+            moveIds,
+            fx.toFloat(world.px[transport]),
+            fx.toFloat(world.py[transport]),
+          );
+          enqueueCommand({
+            type: CMD.MOVE,
+            entities: moveIds,
+            tx,
+            ty,
+            transportAssignments: riders.map((riderId) => ({
+              riderId,
+              transportId: transport,
+            })),
+          });
+          playVillagerMove();
+          return;
+        }
+      }
+    }
+
+    // Engineers on a mechanical ally → repair. Mixed selections: only engineers
+    // repair; everyone else still gets the ground order (old path returned early).
+    const ally = pickUnit(
+      clientX,
+      clientY,
+      (i) => world.owner[i] === localPlayerId && isMechanical(world.type[i]),
+    );
+    let moveIds = ids;
+    if (ally >= 0) {
+      const engineers = ids.filter((id) => world.type[id] === UNIT.ENGINEER);
+      if (engineers.length > 0) {
+        enqueueCommand({ type: CMD.ATTACK, entities: engineers, target: ally });
+        moveIds = ids.filter((id) => world.type[id] !== UNIT.ENGINEER);
+        if (moveIds.length === 0) {
+          playVillagerMove();
+          return;
+        }
+      }
+    }
+
     const g = renderer.screenToGround(clientX, clientY);
     if (!g) return;
     onOrder?.(g.x, g.z, g.y, cmdType);
 
-    const n = ids.length;
-    const tx = new Array(n);
-    const ty = new Array(n);
-    if (n === 1) {
-      tx[0] = fx.fromFloat(g.x);
-      ty[0] = fx.fromFloat(g.z);
-    } else {
-      const sorted = ids.slice().sort((a, b) => a - b);
-      const slotOf = new Map();
-      for (let s = 0; s < sorted.length; s++) slotOf.set(sorted[s], s);
-      const spacing = 2.5;
-      const unitsPerRow = Math.ceil(Math.sqrt(n));
-      const rows = Math.ceil(n / unitsPerRow);
-      for (let k = 0; k < n; k++) {
-        const index = slotOf.get(ids[k]);
-        const row = Math.floor(index / unitsPerRow);
-        const col = index % unitsPerRow;
-        const colOffset = Math.round((col - (unitsPerRow - 1) / 2) * spacing * 100) / 100;
-        const rowOffset = Math.round((row - (rows - 1) / 2) * spacing * 100) / 100;
-        tx[k] = fx.fromFloat(Math.round((g.x + colOffset) * 100) / 100);
-        ty[k] = fx.fromFloat(Math.round((g.z + rowOffset) * 100) / 100);
-      }
-    }
-    enqueueCommand({ type: cmdType, entities: ids, tx, ty });
+    const { tx, ty } = moveDestinations(world, moveIds, g.x, g.z);
+    enqueueCommand({ type: cmdType, entities: moveIds, tx, ty });
     // Placeholder SFX — proves Howler works until real unit VO lands.
     playVillagerMove();
   }
 
-  /** Tap+hold cast — always procs feedback; sim no-ops units without a live ability. */
+  /** Tap+hold — unload loaded transports, else cast primary ability. */
   function castAbilityAt(clientX, clientY) {
     if (!canUseInput()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
     const g = renderer.screenToGround(clientX, clientY);
     if (!g) return;
+
+    const world = getWorld();
+    const loadedTransports = ids.filter(
+      (i) => isTransport(world.type[i]) && passengerCount(world, i) > 0,
+    );
+    if (loadedTransports.length > 0) {
+      onAbilityHold?.(g.x, g.z, g.y);
+      enqueueCommand({
+        type: CMD.UNLOAD,
+        entities: loadedTransports,
+        tx: fx.fromFloat(g.x),
+        ty: fx.fromFloat(g.z),
+      });
+      for (const t of loadedTransports) selectedBuf[t] = 0;
+      syncSelectionSquad();
+      onSelectionChanged?.();
+      return;
+    }
 
     onAbilityHold?.(g.x, g.z, g.y);
     enqueueCommand({
@@ -334,6 +453,7 @@ export function createGameInput(opts) {
           } else {
             if (!e.shiftKey) selectedBuf.fill(0);
             selectedBuf[hit] = 1;
+            syncSelectionSquad();
             onSelectionChanged?.();
           }
         } else if (selectedIds().length > 0) {

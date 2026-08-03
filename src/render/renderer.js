@@ -613,6 +613,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const shadowGen = createCsmDirectionalShadowGenerator(engine, sun, shadowOpts);
   sun.shadowGenerator = shadowGen;
   let shadowsEnabled = true;
+  /** Socket fire / ground fire / particles / aura sparkles — A/B with F key. */
+  let fxEnabled = true;
+  /** VAT clock advance — A/B with V key. */
+  let vatEnabled = true;
+  /** Unit meshes + pose loop — A/B with U key. */
+  let unitsEnabled = true;
   /** Stable list so shadow task state is not rebuilt every flush. */
   let shadowCasterList = [];
   const SHADOW_CASTERS_OFF = [];
@@ -1600,9 +1606,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function collectShadowCasters() {
     /** @type {object[]} */
     const casters = [];
-    const pushMesh = (mesh) => {
+    const pushMesh = (mesh, { ignoreVisible = false } = {}) => {
       if (!isRenderableMesh(mesh)) return;
-      if (mesh.visible === false) return;
+      // Units-off A/B hides meshes for the color pass but should still cast —
+      // otherwise U looks like a huge win that is really just shadows.
+      if (!ignoreVisible && mesh.visible === false) return;
       const ti = mesh.thinInstances;
       if (ti && !(ti.count > 0)) return;
       casters.push(mesh);
@@ -1610,9 +1618,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     for (const batch of typeBatches.values()) {
       // KOTH keeps empty owner batches at full ti.count with zero matrices — skip those.
       if (!(batch.mappedSize > 0)) continue;
-      for (const mesh of vatPartMeshes(batch)) pushMesh(mesh);
+      for (const mesh of vatPartMeshes(batch)) {
+        pushMesh(mesh, { ignoreVisible: !unitsEnabled });
+      }
     }
-    if (fallback?.mappedSize > 0) pushMesh(fallback.mesh);
+    if (fallback?.mappedSize > 0) {
+      pushMesh(fallback.mesh, { ignoreVisible: !unitsEnabled });
+    }
     if (terrain?.meshes) {
       for (const root of terrain.meshes) {
         // GLB scenery only — billboard impostors are flat cards and cast junk.
@@ -1678,21 +1690,41 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const GROUND_FIRE_INTERVAL_MS = 55;
   /** Match sim FIRE_ZONE_TTL (50 ticks @ 20Hz). */
   const FIRE_ZONE_VISUAL_MS = 2500;
+
+  function applyUnitMeshVisibility() {
+    for (const batch of typeBatches.values()) {
+      for (const mesh of vatPartMeshes(batch)) {
+        const count = mesh.thinInstances?.count ?? 0;
+        mesh.visible = unitsEnabled && count > 0;
+      }
+    }
+    if (fallback?.mesh) {
+      const count = fallback.mesh.thinInstances?.count ?? 0;
+      fallback.mesh.visible = unitsEnabled && count > 0;
+    }
+    for (const mesh of selRingParts) {
+      const count = mesh.thinInstances?.count ?? 0;
+      mesh.visible = unitsEnabled && count > 0;
+    }
+  }
+
   onBeforeRender(scene, (deltaMs) => {
     terrain?.update?.(camera, deltaMs);
     particleClockMs += Math.min(100, Math.max(0, deltaMs));
-    unitFxElapsed += deltaMs;
-    if (unitFxElapsed >= UNIT_FX_INTERVAL_MS) {
-      unitFxElapsed = 0;
-      emitUnitSocketFire();
+    if (fxEnabled) {
+      unitFxElapsed += deltaMs;
+      if (unitFxElapsed >= UNIT_FX_INTERVAL_MS) {
+        unitFxElapsed = 0;
+        emitUnitSocketFire();
+      }
+      groundFireElapsed += deltaMs;
+      if (groundFireElapsed >= GROUND_FIRE_INTERVAL_MS) {
+        groundFireElapsed = 0;
+        emitGroundFirePatches();
+      }
+      particles.update(deltaMs);
+      unitAuras.update(deltaMs);
     }
-    groundFireElapsed += deltaMs;
-    if (groundFireElapsed >= GROUND_FIRE_INTERVAL_MS) {
-      groundFireElapsed = 0;
-      emitGroundFirePatches();
-    }
-    particles.update(deltaMs);
-    unitAuras.update(deltaMs);
     monkLobFx.update(deltaMs);
     sporeBloomFx.update(deltaMs, fxSimTick);
     mushrooms?.commit?.();
@@ -1708,12 +1740,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       lightningFlash = 0;
       sky.intensity = skyBaseIntensity;
     }
-    const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
-    for (const batch of typeBatches.values()) {
-      if (batch.vatParts?.length) {
-        for (const part of batch.vatParts) part.handle.update(dt);
-      } else {
-        batch.vatHandle?.update?.(dt);
+    if (vatEnabled) {
+      const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
+      for (const batch of typeBatches.values()) {
+        if (batch.vatParts?.length) {
+          for (const part of batch.vatParts) part.handle.update(dt);
+        } else {
+          batch.vatHandle?.update?.(dt);
+        }
       }
     }
     if (frameCb) frameCb(deltaMs);
@@ -2401,6 +2435,54 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     toggleShadows() {
       return this.setShadowsEnabled(!shadowsEnabled);
+    },
+
+    setFxEnabled(on) {
+      fxEnabled = !!on;
+      if (!fxEnabled) {
+        particles.clear();
+        unitAuras.clear();
+        unitFxElapsed = 0;
+        groundFireElapsed = 0;
+      }
+      return fxEnabled;
+    },
+
+    getFxEnabled() {
+      return fxEnabled;
+    },
+
+    toggleFx() {
+      return this.setFxEnabled(!fxEnabled);
+    },
+
+    setVatEnabled(on) {
+      vatEnabled = !!on;
+      return vatEnabled;
+    },
+
+    getVatEnabled() {
+      return vatEnabled;
+    },
+
+    toggleVat() {
+      return this.setVatEnabled(!vatEnabled);
+    },
+
+    setUnitsEnabled(on) {
+      unitsEnabled = !!on;
+      applyUnitMeshVisibility();
+      // Refresh casters so units-off still feeds CSM (see collectShadowCasters).
+      if (shadowsEnabled) applyShadowState();
+      return unitsEnabled;
+    },
+
+    getUnitsEnabled() {
+      return unitsEnabled;
+    },
+
+    toggleUnits() {
+      return this.setUnitsEnabled(!unitsEnabled);
     },
 
     /** Console helper: renderer.debugShadows() */

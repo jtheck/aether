@@ -31,7 +31,7 @@ const scenarioNames = [
 ];
 
 function buildScenario(count, scenario) {
-  const w = buildWorldFromConfig({ seed: 0x50ca1e, stressPerSide: count >> 1 });
+  const w = buildWorldFromConfig({ seed: 0x50ca1e, stressPerSide: Math.floor(count / 5) });
   if (scenario === 'active-combat') {
     for (let i = 0; i < w.count; i++) w.owner[i] = i & 1;
   } else if (scenario === 'ranged-combat') {
@@ -87,7 +87,7 @@ function percentile(values, p) {
 }
 
 function runScenario(count, scenario) {
-  const size = mapSizeForConfig({ stressPerSide: count >> 1 });
+  const size = mapSizeForConfig({ stressPerSide: Math.floor(count / 5) });
   const field = buildField(0x50ca1e, { width: size.mapW, height: size.mapH });
   const w = buildScenario(count, scenario);
   const shared = mapSharedState(new SharedArrayBuffer(simSharedByteSize()));

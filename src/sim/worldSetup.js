@@ -10,10 +10,15 @@ import {
   setActiveMapSize,
   worldHalfFFromMap,
 } from './field.js';
+import { setTeamAssignments } from './teams.js';
 import * as fx from './fixed.js';
 
 export const PLAYER = 0;
 export const AI_OWNER = 1;
+
+/** Stress FFA AI owners (player is always 0). */
+export const STRESS_AI_OWNERS = [1, 2, 3, 4];
+export const STRESS_ARMY_COUNT = 1 + STRESS_AI_OWNERS.length;
 
 /** Pentagonal spawn bases — scale with the active board half-extent. */
 export function kothBases(worldHalfF = activeWorldHalfF()) {
@@ -105,14 +110,14 @@ export function spawnKothSlot(w, slot) {
 export function stressPerSideFromSearch(search = '') {
   const n = parseInt(new URLSearchParams(search).get('stress') || '0', 10);
   if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(n, STRESS_ENTITY_LIMIT >> 1);
+  return Math.min(n, (STRESS_ENTITY_LIMIT / STRESS_ARMY_COUNT) | 0);
 }
 
 /** Per-side skinned villagers for render stress (`?animStress=32` → 64 total). */
 export function animStressPerSideFromSearch(search = '') {
   const n = parseInt(new URLSearchParams(search).get('animStress') || '0', 10);
   if (!Number.isFinite(n) || n <= 0) return 0;
-  // Same entity ceiling as ?stress= — GPU/skinning will die long before this.
+  // Two-army VAT path — GPU/skinning will die long before the entity ceiling.
   return Math.min(n, STRESS_ENTITY_LIMIT >> 1);
 }
 
@@ -223,6 +228,9 @@ export function buildWorldFromConfig({
   w.mapH = size.mapH;
   w.worldHalfF = half;
 
+  // Default FFA until a mode opts into alliances via setTeamAssignments.
+  setTeamAssignments(null);
+
   if (animStressPerSide > 0) {
     const count = Math.min(Math.floor(animStressPerSide), STRESS_ENTITY_LIMIT >> 1);
     const bx = half * 0.35;
@@ -232,11 +240,15 @@ export function buildWorldFromConfig({
   }
 
   if (stressPerSide > 0) {
-    const count = Math.min(Math.floor(stressPerSide), STRESS_ENTITY_LIMIT >> 1);
-    // Two facing blocks near the usual west/east bases — not sprayed across the map.
-    const bx = half * 0.35;
-    spawnStressSide(w, PLAYER, -bx, 0, count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
-    spawnStressSide(w, AI_OWNER, bx, 0, count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
+    const perArmyCap = (STRESS_ENTITY_LIMIT / STRESS_ARMY_COUNT) | 0;
+    const count = Math.min(Math.floor(stressPerSide), perArmyCap);
+    // Player + 4 AIs at pentagon bases — FFA stress load.
+    spawnStressSide(w, PLAYER, bases[0][0], bases[0][1], count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
+    for (let s = 0; s < STRESS_AI_OWNERS.length; s++) {
+      const owner = STRESS_AI_OWNERS[s];
+      const base = bases[owner] ?? bases[1];
+      spawnStressSide(w, owner, base[0], base[1], count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
+    }
     return w;
   }
 

@@ -2,7 +2,7 @@
 
 import { buildField, fieldSnapshot, mapSizeForConfig } from '../sim/field.js';
 import { populateScenery } from '../sim/scenery.js';
-import { buildWorldFromConfig, kothBases, PLAYER } from '../sim/worldSetup.js';
+import { buildWorldFromConfig, kothBases } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { generateAiCommands } from '../sim/ai.js';
 import { mergeFrames } from '../sim/commandFrame.js';
@@ -43,7 +43,8 @@ let publishedTypeCount = 0;
 function commandsForTick(frames) {
   let cmds = mergeFrames(frames);
   for (let p = 0; p < aiPlayers.length; p++) {
-    const ai = generateAiCommands(world, aiPlayers[p], PLAYER);
+    const entry = aiPlayers[p];
+    const ai = generateAiCommands(world, entry);
     if (ai.length) cmds = cmds ? [...cmds, ...ai] : ai;
   }
   return cmds;

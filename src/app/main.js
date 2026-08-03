@@ -479,6 +479,24 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       if (typeof on === 'boolean') setStatusText(on ? 'Shadows on' : 'Shadows off');
       return;
     }
+    if (e.code === 'KeyF') {
+      e.preventDefault();
+      const on = renderer.toggleFx?.();
+      if (typeof on === 'boolean') setStatusText(on ? 'FX on' : 'FX off');
+      return;
+    }
+    if (e.code === 'KeyV') {
+      e.preventDefault();
+      const on = renderer.toggleVat?.();
+      if (typeof on === 'boolean') setStatusText(on ? 'VAT on' : 'VAT off');
+      return;
+    }
+    if (e.code === 'KeyU') {
+      e.preventDefault();
+      const on = renderer.toggleUnits?.();
+      if (typeof on === 'boolean') setStatusText(on ? 'Units on' : 'Units off');
+      return;
+    }
     if (e.code === 'KeyP') {
       e.preventDefault();
       session.pauseLockstep = !session.pauseLockstep;
@@ -557,6 +575,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     const alpha = session.displayAlpha;
     const { prev, cur } = session.displaySnapshots();
     if (!prev || !cur) return;
+
+    // A/B: skip pose loop + health/auras when units are hidden.
+    if (renderer.getUnitsEnabled && !renderer.getUnitsEnabled()) {
+      renderer.commit();
+      return;
+    }
+
     const dt = Math.min(0.05, deltaMs / 1000);
 
     let colorsDirty = false;

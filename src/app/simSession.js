@@ -34,7 +34,7 @@ export class SimSession {
    * @param {object} options
    * @param {number} options.localPlayerId
    * @param {number[]} options.humanPlayers — peers required before advancing a tick
-   * @param {number[]} [options.aiPlayers] — deterministic AI generated in worker
+   * @param {Array<number | { owner: number, temperament?: string }>} [options.aiPlayers] — deterministic AI generated in worker
    * @param {number} [options.inputDelayTicks]
    */
   constructor(options) {

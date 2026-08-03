@@ -583,10 +583,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // ~30° elevation (was ~60° / near-noon) — longer unit/tree shadows, more contrast.
   const sun = createDirectionalLight([-0.78, -0.48, -0.52], opts.field ? 1.55 : 1.15);
   sun.diffuse = [1, 0.94, 0.84];
+  // Cap CSM reach near the camera (v1 mid-LOD was ~80–176); whole-map
+  // shadowMaxZ just burns cascade texels on far blobs.
+  const shadowMaxZ = Math.min(worldHalfF * 2.75, 320);
   // Place the directional light "above" the board so ortho near/far contain casters.
   {
     const d = sun.direction;
-    const dist = worldHalfF * 2.75;
+    const dist = Math.max(shadowMaxZ * 1.25, worldHalfF * 0.75);
     sun.position.x = -d.x * dist;
     sun.position.y = -d.y * dist;
     sun.position.z = -d.z * dist;
@@ -597,18 +600,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // mesh.world × local bounds, so board-scale TI units vanish or become ~2 texels).
   // Keep worldSpaceBias tiny — unit height is ~1–2; 0.15+ eats character contact shadows.
   // Note: Lite keeps darkness / worldSpaceBias on an internal csmCfg, not sg._config.
+  // Tuned down from 2048×4 + forceRefresh: ~75% fewer shadow texels; Lite still
+  // refreshes when camera / light / thin-instance version changes.
   const shadowOpts = {
-    mapSize: 2048,
-    numCascades: 4,
+    mapSize: 1024,
+    numCascades: 3,
     lambda: 0.85,
     cascadeBlendPercentage: 0.08,
     stabilizeCascades: true,
-    shadowMaxZ: worldHalfF * 2.75,
+    shadowMaxZ,
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
     darkness: 0.08,
-    frustumEdgeFalloff: 0.08,
-    forceRefreshEveryFrame: true,
+    frustumEdgeFalloff: 0.12,
+    forceRefreshEveryFrame: false,
   };
   const shadowGen = createCsmDirectionalShadowGenerator(engine, sun, shadowOpts);
   sun.shadowGenerator = shadowGen;
@@ -2508,6 +2513,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return {
         enabled: shadowsEnabled,
         type: shadowGen?._shadowType,
+        mapSize: shadowOpts.mapSize,
+        numCascades: shadowOpts.numCascades,
+        shadowMaxZ: shadowOpts.shadowMaxZ,
+        forceRefreshEveryFrame: shadowOpts.forceRefreshEveryFrame,
         darkness: shadowOpts.darkness,
         worldSpaceBias: shadowOpts.worldSpaceBias,
         depthBias: shadowGen?._config?._bias,

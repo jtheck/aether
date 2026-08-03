@@ -11,6 +11,7 @@ import {
   PLAYER,
   AI_OWNER,
 } from '../sim/worldSetup.js';
+import { STRESS_AI_PROFILES } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
@@ -1081,7 +1082,8 @@ function showMatchOver(session) {
 }
 
 function useKothAi(bootCfg, stress, animStress, solo) {
-  if (stress > 0 || animStress > 0) return [];
+  if (animStress > 0) return [];
+  if (stress > 0) return STRESS_AI_PROFILES.map((p) => ({ ...p }));
   if (solo) return [AI_OWNER];
   if (bootCfg.mode === 'sandbox' || bootCfg.mode === 'koth') return [];
   return [AI_OWNER];

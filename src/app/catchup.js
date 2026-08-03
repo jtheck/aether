@@ -1,4 +1,5 @@
 // Catch-up replay — rebuild sim from match config + command ledger, verify checksum.
+// Prefer mid-match world checkpoint + ledger delta when available.
 
 import { collectFramesForTick } from '../sim/commandFrame.js';
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
@@ -16,7 +17,13 @@ export { formatMatchTime, matchSecondsFromTick };
  * @param {import('../sim/commandFrame.js').CommandFrame[]} ledgerFrames
  * @param {number} targetTick
  * @param {number} [expectedChecksum]
- * @param {{ ticksPerFrame?: number, onProgress?: (p: { tick: number, targetTick: number }) => void }} [options]
+ * @param {{
+ *   ticksPerFrame?: number,
+ *   onProgress?: (p: { tick: number, targetTick: number }) => void,
+ *   checkpoint?: object | null,
+ *   checkpointTick?: number,
+ *   baseLedger?: import('../sim/commandFrame.js').CommandFrame[],
+ * }} [options]
  */
 export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
   await session.reset({
@@ -29,15 +36,38 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
   session.setLocalPlayerId(-1);
   session.setRole('spectator');
 
+  const checkpoint = options.checkpoint ?? null;
+  const checkpointTick = (options.checkpointTick ?? checkpoint?.tick ?? 0) | 0;
+
+  if (checkpoint && checkpointTick > 0) {
+    const imported = await session.importCheckpoint(checkpoint, checkpoint.checksum);
+    session.confirmedTick = imported.tick;
+    session._lastChecksum = imported.checksum;
+    if (imported.koth) session.koth = imported.koth;
+    if (imported.kothMatchOver != null) session.kothMatchOver = imported.kothMatchOver;
+    session._captureSnapshot?.(imported.tick);
+  }
+
   const checksum = await replayCatchUpInto(
     session,
     matchConfig,
     ledgerFrames,
     targetTick,
     expectedChecksum,
-    options,
+    {
+      ...options,
+      fromTick: checkpoint && checkpointTick > 0 ? checkpointTick : 0,
+    },
   );
-  session.replaceFullLedger?.(ledgerFrames);
+
+  const base = options.baseLedger ?? [];
+  const merged = checkpoint && checkpointTick > 0
+    ? [...base, ...ledgerFrames]
+    : ledgerFrames;
+  session.replaceFullLedger?.(merged);
+  if (checkpoint && checkpointTick > 0) {
+    session.cacheCheckpoint?.(checkpoint, checkpoint.checksum >>> 0);
+  }
   return checksum;
 }
 
@@ -47,16 +77,25 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
 export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
   const ticksPerFrame = options.ticksPerFrame ?? CATCHUP_TICKS_PER_FRAME;
   const onProgress = options.onProgress;
+  const fromTick = (options.fromTick ?? 0) | 0;
   const byTick = groupFramesByTick(ledgerFrames);
 
   session.setHumanPlayers(matchConfig.humanPlayers ?? []);
   session.setRole('spectator');
   session.replayingCatchUp = true;
   session.pauseLockstep = true;
-  session.catchupProgress = { tick: 0, targetTick: targetTick | 0 };
+  session.catchupProgress = { tick: fromTick, targetTick: targetTick | 0 };
 
   try {
-    await runReplayTicks(session, byTick, matchConfig.humanPlayers ?? [], targetTick, ticksPerFrame, onProgress);
+    await runReplayTicks(
+      session,
+      byTick,
+      matchConfig.humanPlayers ?? [],
+      fromTick,
+      targetTick,
+      ticksPerFrame,
+      onProgress,
+    );
 
     if (expectedChecksum != null && session._lastChecksum !== expectedChecksum) {
       throw new Error(
@@ -73,7 +112,14 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
   }
 }
 
-async function runReplayTicks(session, byTick, humanPlayers, targetTick, ticksPerFrame, onProgress) {
+async function runReplayTicks(session, byTick, humanPlayers, fromTick, targetTick, ticksPerFrame, onProgress) {
+  const startTick = Math.max(1, (fromTick | 0) + 1);
+  if (startTick > targetTick) {
+    session.catchupProgress = { tick: targetTick | 0, targetTick: targetTick | 0 };
+    onProgress?.({ tick: targetTick, targetTick });
+    return;
+  }
+
   const commitOne = async (tick) => {
     const frames = collectFramesForTick(byTick, tick, humanPlayers);
     const { checksum, extra } = await session.client.commitTickAsync(tick, frames);
@@ -85,11 +131,11 @@ async function runReplayTicks(session, byTick, humanPlayers, targetTick, ticksPe
   };
 
   if (ticksPerFrame <= 0) {
-    for (let t = 1; t <= targetTick; t++) await commitOne(t);
+    for (let t = startTick; t <= targetTick; t++) await commitOne(t);
     return;
   }
 
-  for (let t = 1; t <= targetTick; ) {
+  for (let t = startTick; t <= targetTick; ) {
     const batchEnd = Math.min(t + ticksPerFrame - 1, targetTick);
     for (let tick = t; tick <= batchEnd; tick++) await commitOne(tick);
     session.lastSnapshotAt = performance.now();

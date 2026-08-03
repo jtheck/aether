@@ -98,6 +98,10 @@ export class SimSession {
     this._resetChain = Promise.resolve();
     /** When set, onWorldRebuilt ignores stale resets (see applyLiveConfig). */
     this._pendingWorldGen = null;
+    /** Latest mid-match world checkpoint (for observer catch-up). */
+    this._checkpoint = null;
+    this._checkpointTick = 0;
+    this._checkpointChecksum = 0;
     /** Called after worker init / world rebuild (count is live entity total). */
     this.onWorldRebuilt = null;
     /** Tile field snapshot from worker (tree stock/burn mutate in place). */
@@ -330,6 +334,49 @@ export class SimSession {
   /** Export command ledger slice for catch-up gap-fill. */
   exportLedger(fromTick, toTick) {
     return this.exportFullLedger().filter((frame) => frame.tick > fromTick && frame.tick <= toTick);
+  }
+
+  /** Cache a world checkpoint and optionally prune older committed frames. */
+  cacheCheckpoint(checkpoint, checksum) {
+    if (!checkpoint) return;
+    this._checkpoint = checkpoint;
+    this._checkpointTick = checkpoint.tick | 0;
+    this._checkpointChecksum = (checksum ?? checkpoint.checksum) >>> 0;
+  }
+
+  getCachedCheckpoint() {
+    if (!this._checkpoint) return null;
+    return {
+      checkpoint: this._checkpoint,
+      tick: this._checkpointTick,
+      checksum: this._checkpointChecksum,
+    };
+  }
+
+  async exportCheckpoint() {
+    const msg = await this.client.exportCheckpointAsync();
+    this.cacheCheckpoint(msg.checkpoint, msg.checksum);
+    this.pruneCommittedBefore(msg.tick | 0);
+    return msg;
+  }
+
+  async importCheckpoint(checkpoint, expectedChecksum) {
+    const msg = await this.client.importCheckpointAsync(checkpoint, expectedChecksum);
+    this._count = msg.count ?? this._count;
+    this.confirmedTick = msg.tick | 0;
+    this._lastChecksum = msg.checksum;
+    if (msg.koth) this.koth = msg.koth;
+    if (msg.kothMatchOver != null) this.kothMatchOver = msg.kothMatchOver;
+    this.cacheCheckpoint(checkpoint, msg.checksum);
+    this.onWorldRebuilt?.(this.count);
+    return msg;
+  }
+
+  /** Drop committed ledger frames at/before checkpointTick (keep frames after). */
+  pruneCommittedBefore(checkpointTick) {
+    const keepFrom = checkpointTick | 0;
+    this.committedLedgerFrames = this.committedLedgerFrames.filter((f) => (f.tick | 0) > keepFrom);
+    this.fullLedgerFrames = this.fullLedgerFrames.filter((f) => (f.tick | 0) > keepFrom);
   }
 
   /** @deprecated */

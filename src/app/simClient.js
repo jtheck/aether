@@ -83,6 +83,48 @@ export class SimClient {
     });
   }
 
+  /** Export a mid-match world checkpoint from the worker. */
+  exportCheckpointAsync() {
+    return this._requestWorker('exportCheckpoint', 'checkpoint', {});
+  }
+
+  /** Import a world checkpoint into the current worker world. */
+  importCheckpointAsync(checkpoint, expectedChecksum) {
+    return this._requestWorker('importCheckpoint', 'checkpointImported', {
+      checkpoint,
+      expectedChecksum,
+    });
+  }
+
+  _requestWorker(sendType, replyType, payload) {
+    return new Promise((resolve, reject) => {
+      const requestId = `${sendType}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error(`${sendType} timeout`));
+      }, 60_000);
+      const onMsg = (e) => {
+        const msg = e.data;
+        if (msg?.type === 'error') {
+          cleanup();
+          const err = new Error(msg.message);
+          if (msg.stack) err.stack = msg.stack;
+          reject(err);
+          return;
+        }
+        if (msg?.type !== replyType || msg.requestId !== requestId) return;
+        cleanup();
+        resolve(msg);
+      };
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.worker.removeEventListener('message', onMsg);
+      };
+      this.worker.addEventListener('message', onMsg);
+      this.worker.postMessage({ type: sendType, requestId, ...payload });
+    });
+  }
+
   terminate() {
     this.worker.terminate();
   }
@@ -113,6 +155,8 @@ export class SimClient {
         sporeBloomUpdates: msg.sporeBloomUpdates ?? null,
         monkKickUpdates: msg.monkKickUpdates ?? null,
       });
+    } else if (msg.type === 'checkpoint' || msg.type === 'checkpointImported') {
+      // Handled by _requestWorker listeners.
     } else if (msg.type === 'error') {
       const err = new Error(msg.message);
       if (msg.stack) err.stack = msg.stack;

@@ -434,7 +434,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         line = `KOTH  ·  ⏱ ${matchTime}  ·  👑 P${k.kingOwner}  ·  Players ${players}  ·  Units ${world.count} P0 ${p0} P1 ${p1}  ·  Score ${k.scores[localPlayerId] ?? 0}  ·  ${line}`;
       } else line = `KOTH  ·  ⏱ ${matchTime}  ·  ${line}`;
     }
-    if (session.role === 'spectator') line = `Spectating  ·  ${line}`;
+    if (session.role === 'spectator') {
+      const depth = kothShard?.getObserverDepth?.() ?? 0;
+      const offered = kothShard?.isOfferEligible?.();
+      if (offered) line = `Offer ready  ·  ${line}`;
+      else if (depth > 0) line = `Observing L${depth}  ·  ${line}`;
+      else line = `Spectating  ·  ${line}`;
+    }
     if (session.replayingCatchUp && session.catchupProgress) {
       const { tick, targetTick } = session.catchupProgress;
       const elapsed = formatMatchTime(matchSecondsFromTick(tick));

@@ -42,6 +42,15 @@ export const MSG = {
   JOIN_ACCEPT: 'join_accept',
   JOIN_READY: 'join_ready',
 
+  // observer topology + checkpoints
+  CHECKPOINT_META: 'checkpoint_meta',
+  CHECKPOINT_CHUNK: 'checkpoint_chunk',
+  SPONSOR_ASSIGN: 'sponsor_assign',
+  SPONSOR_HANDOFF: 'sponsor_handoff',
+  SLOT_OFFER: 'slot_offer',
+  SLOT_CLAIM: 'slot_claim',
+  SLOT_OFFER_END: 'slot_offer_end',
+
   // roster / slots
   ROSTER_UPDATE: 'roster_update',
   SLOT_RELEASE: 'slot_release',

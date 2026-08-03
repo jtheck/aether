@@ -23,6 +23,10 @@ import {
   publishType,
   SHARED_LAYOUT_VERSION,
 } from '../sim/sharedState.js';
+import {
+  exportWorldCheckpoint,
+  importWorldCheckpoint,
+} from '../sim/worldCheckpoint.js';
 
 function serializeKoth(k) {
   if (!k) return null;
@@ -103,6 +107,41 @@ self.onmessage = (e) => {
         holyArmorUpdates,
         sporeBloomUpdates,
         monkKickUpdates,
+      });
+    } else if (msg.type === 'exportCheckpoint') {
+      if (!world || !field) throw new Error('exportCheckpoint before init');
+      const cs = checksum(world, field);
+      const checkpoint = exportWorldCheckpoint(world, field, cs);
+      postMessage({
+        type: 'checkpoint',
+        requestId: msg.requestId,
+        tick: world.tick,
+        checksum: cs,
+        checkpoint,
+      });
+    } else if (msg.type === 'importCheckpoint') {
+      if (!world || !field) throw new Error('importCheckpoint before init');
+      const tick = importWorldCheckpoint(world, field, msg.checkpoint);
+      beginSharedPublish(views);
+      publishType(world, views);
+      publishedTypeCount = world.count;
+      publishWorld(world, views);
+      publishProjectiles(world, views);
+      endSharedPublish(views);
+      const cs = checksum(world, field);
+      if (msg.expectedChecksum != null && cs !== (msg.expectedChecksum >>> 0)) {
+        throw new Error(
+          `checkpoint checksum mismatch: got ${cs.toString(16)}, expected ${(msg.expectedChecksum >>> 0).toString(16)}`,
+        );
+      }
+      postMessage({
+        type: 'checkpointImported',
+        requestId: msg.requestId,
+        tick,
+        checksum: cs,
+        count: world.count,
+        koth: serializeKoth(world.koth),
+        kothMatchOver: world.kothMatchOver ?? 0,
       });
     }
   } catch (err) {

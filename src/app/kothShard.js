@@ -97,6 +97,7 @@ export function createKothShard(options = {}) {
   const onShardChange = options.onShardChange ?? (() => {});
   const onLiveStart = options.onLiveStart ?? (() => {});
   const onPresentationSync = options.onPresentationSync ?? (() => {});
+  let armyPerSide = (options.armyPerSide | 0) || 0;
 
   if (typeof globalThis.GETFIREP2P !== 'function') {
     throw new Error('GETFIREP2P not loaded');
@@ -191,6 +192,7 @@ export function createKothShard(options = {}) {
       matchId,
       phase,
       activeSlots: matchStartSlots.length ? [...matchStartSlots] : activePlayerIds(roster),
+      armyPerSide,
       startKey: liveStartKey,
       tick: session?.confirmedTick ?? 0,
       reset,
@@ -207,7 +209,79 @@ export function createKothShard(options = {}) {
 
 
   let announceTimer = null;
+  let pingTimer = null;
   let presencePeers = new Map();
+  /** Smoothed worst-peer RTT (ms), null when no live peers. */
+  let rttMs = null;
+  let pingSeq = 0;
+  /** @type {Map<number, { t0: number, peerId: string }>} */
+  const pendingPings = new Map();
+  /** @type {Map<string, number>} peerId -> last RTT sample */
+  const peerRttMs = new Map();
+
+  const PING_INTERVAL_MS = 1000;
+  const PING_STALE_MS = 5000;
+
+  function refreshRttFromPeers() {
+    const peers = connectedPeerIds();
+    for (const id of [...peerRttMs.keys()]) {
+      if (!peers.includes(id)) peerRttMs.delete(id);
+    }
+    if (!peers.length) {
+      rttMs = null;
+      return;
+    }
+    let worst = 0;
+    let any = false;
+    for (const peerId of peers) {
+      const sample = peerRttMs.get(peerId);
+      if (sample == null) continue;
+      any = true;
+      if (sample > worst) worst = sample;
+    }
+    rttMs = any ? worst : null;
+  }
+
+  function pumpPing() {
+    if (phase !== SHARD_PHASE.LIVE) {
+      rttMs = null;
+      pendingPings.clear();
+      peerRttMs.clear();
+      return;
+    }
+    const peers = connectedPeerIds();
+    if (!peers.length) {
+      rttMs = null;
+      pendingPings.clear();
+      peerRttMs.clear();
+      return;
+    }
+    const now = performance.now();
+    for (const [id, pending] of pendingPings) {
+      if (now - pending.t0 > PING_STALE_MS) pendingPings.delete(id);
+    }
+    for (const peerId of peers) {
+      const id = ++pingSeq;
+      pendingPings.set(id, { t0: now, peerId });
+      sendPeer(peerId, { type: MSG.PING, id, matchId });
+    }
+  }
+
+  function handlePingMsg(msg, fromPeerId) {
+    if (!fromPeerId || msg?.id == null) return;
+    sendPeer(fromPeerId, { type: MSG.PONG, id: msg.id, matchId });
+  }
+
+  function handlePongMsg(msg, fromPeerId) {
+    if (msg?.id == null) return;
+    const pending = pendingPings.get(msg.id);
+    if (!pending) return;
+    pendingPings.delete(msg.id);
+    const sample = performance.now() - pending.t0;
+    const peerId = fromPeerId || pending.peerId;
+    if (peerId) peerRttMs.set(peerId, sample);
+    refreshRttFromPeers();
+  }
 
   function emitShard() {
     onShardChange({
@@ -1125,6 +1199,7 @@ export function createKothShard(options = {}) {
       matchId,
       phase,
       activeSlots: [0],
+      armyPerSide,
       reset: true,
     });
     emitShard();
@@ -1183,6 +1258,7 @@ export function createKothShard(options = {}) {
       mode: 'koth',
       activeSlots: matchStartSlots,
       humanPlayers: [...matchHumanPlayers],
+      armyPerSide,
     };
   }
 
@@ -1398,6 +1474,7 @@ export function createKothShard(options = {}) {
       matchId,
       phase: SHARD_PHASE.SANDBOX,
       activeSlots: [0],
+      armyPerSide,
       reset: true,
     });
   }
@@ -1678,6 +1755,7 @@ export function createKothShard(options = {}) {
       // They need to replay from a live sponsor to the current tick first.
       roster = nextRoster;
       seed = nextSeed;
+      if (msg.armyPerSide != null) armyPerSide = msg.armyPerSide | 0;
       liveStartKey = nextKey;
       matchStartSlots = msg.activeSlots ?? activePlayerIds(roster);
       matchHumanPlayers = msg.humanPlayers ?? [...matchStartSlots];
@@ -1718,6 +1796,7 @@ export function createKothShard(options = {}) {
     // isCanonicalResetSender (only the recognized host can author a re-key).
     roster = cloneSlots(msg.roster ?? roster);
     seed = msg.seed ?? seed;
+    if (msg.armyPerSide != null) armyPerSide = msg.armyPerSide | 0;
     liveStartKey = nextKey;
     matchStartSlots = msg.activeSlots ?? activePlayerIds(roster);
     matchHumanPlayers = msg.humanPlayers ?? [...matchStartSlots];
@@ -1811,6 +1890,7 @@ export function createKothShard(options = {}) {
       tick: 0,
       activeSlots: [0, 1],
       humanPlayers: [0, 1],
+      armyPerSide,
       startKey: liveStartKey,
     });
     emitShard();
@@ -2025,6 +2105,7 @@ export function createKothShard(options = {}) {
       session.pauseLockstep = false;
       matchStartSlots = msg.matchConfig.activeSlots ?? matchStartSlots;
       matchHumanPlayers = msg.matchConfig.humanPlayers ?? matchHumanPlayers;
+      if (msg.matchConfig.armyPerSide != null) armyPerSide = msg.matchConfig.armyPerSide | 0;
       session.setHumanPlayers?.(matchHumanPlayers);
       // Adopt the sponsor's roster so TICK_CONFIRM/COMMAND_FRAME ownership checks
       // resolve to the right users; otherwise the spectator rejects all live
@@ -2060,7 +2141,10 @@ export function createKothShard(options = {}) {
       role = 'spectator';
       appState = KOTH_APP_STATE.SPECTATOR;
       // Leave pauseLockstep set — half-replayed worlds must not free-run until reset.
-      if (session) session.pauseLockstep = true;
+      if (session) {
+        session.pauseLockstep = true;
+        session.catchupProgress = null;
+      }
       session?.setLocalPlayerId?.(-1);
       session?.setRole?.('spectator');
       notifyPresentationSync({ mode: 'koth', role: 'spectator', localPlayerId: -1, appState, reset: false, inputEnabled: false });
@@ -2273,6 +2357,14 @@ export function createKothShard(options = {}) {
         break;
 
       case MSG.CATCHUP_READY:
+        break;
+
+      case MSG.PING:
+        handlePingMsg(msg, fromPeerId);
+        break;
+
+      case MSG.PONG:
+        handlePongMsg(msg, fromPeerId);
         break;
 
       default:
@@ -2670,10 +2762,12 @@ export function createKothShard(options = {}) {
       matchId,
       phase,
       activeSlots: role === 'player' ? [0] : [],
+      armyPerSide,
     });
     bootResolve = null;
 
     announceTimer = setInterval(() => broadcastPresence(), SHARD_ANNOUNCE_MS);
+    pingTimer = setInterval(() => pumpPing(), PING_INTERVAL_MS);
     discoveryTimer = setInterval(() => pumpDiscovery(), 3000);
     lagTimer = setInterval(() => checkLagTimeouts(), 5000);
     setTimeout(() => pumpDiscovery(), 500);
@@ -2692,6 +2786,8 @@ export function createKothShard(options = {}) {
       role,
       appState,
     }),
+    /** Worst connected-peer RTT in ms, or null if solo / unknown. */
+    getRttMs: () => (rttMs == null ? null : Math.round(rttMs)),
 
     // Called by the app once a live session has finished (re)building its world,
     // so confirmedTick reflects THIS match. Seeds the lockstep confirm handshake.
@@ -2846,6 +2942,7 @@ export function createKothShard(options = {}) {
       cancelDiscoverStart();
       clearCatchupOfferTimer();
       if (announceTimer) clearInterval(announceTimer);
+      if (pingTimer) clearInterval(pingTimer);
       if (discoveryTimer) clearInterval(discoveryTimer);
       if (catchupRetryTimer) clearTimeout(catchupRetryTimer);
       if (lagTimer) clearInterval(lagTimer);

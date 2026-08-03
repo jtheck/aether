@@ -206,42 +206,21 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Slide the selection as a rigid group: keep relative layout, move centroid to click.
-   * Avoids the old id-sorted parade grid that reshuffled everyone by type.
-   * @param {object} world
+   * Everyone goes to the click. Soft-separation handles overlap — no parade grid,
+   * no centroid slide (clicking inside the blob used to no-op).
    * @param {number[]} ids
    * @param {number} gx
    * @param {number} gz
    */
-  function moveDestinations(world, ids, gx, gz) {
+  function moveDestinations(ids, gx, gz) {
     const n = ids.length;
     const tx = new Array(n);
     const ty = new Array(n);
-    if (n === 1) {
-      tx[0] = fx.fromFloat(gx);
-      ty[0] = fx.fromFloat(gz);
-      return { tx, ty };
-    }
-    let cx = 0;
-    let cz = 0;
-    const px = new Array(n);
-    const pz = new Array(n);
+    const x = fx.fromFloat(gx);
+    const z = fx.fromFloat(gz);
     for (let k = 0; k < n; k++) {
-      const i = ids[k];
-      const x = fx.toFloat(world.px[i]);
-      const z = fx.toFloat(world.py[i]);
-      px[k] = x;
-      pz[k] = z;
-      cx += x;
-      cz += z;
-    }
-    cx /= n;
-    cz /= n;
-    const dx = gx - cx;
-    const dz = gz - cz;
-    for (let k = 0; k < n; k++) {
-      tx[k] = fx.fromFloat(Math.round((px[k] + dx) * 100) / 100);
-      ty[k] = fx.fromFloat(Math.round((pz[k] + dz) * 100) / 100);
+      tx[k] = x;
+      ty[k] = z;
     }
     return { tx, ty };
   }
@@ -285,7 +264,6 @@ export function createGameInput(opts) {
         if (riders.length > 0 && !onlyEngineers) {
           const moveIds = [...riders, transport];
           const { tx, ty } = moveDestinations(
-            world,
             moveIds,
             fx.toFloat(world.px[transport]),
             fx.toFloat(world.py[transport]),
@@ -330,7 +308,7 @@ export function createGameInput(opts) {
     if (!g) return;
     onOrder?.(g.x, g.z, g.y, cmdType);
 
-    const { tx, ty } = moveDestinations(world, moveIds, g.x, g.z);
+    const { tx, ty } = moveDestinations(moveIds, g.x, g.z);
     enqueueCommand({ type: cmdType, entities: moveIds, tx, ty });
     // Placeholder SFX — proves Howler works until real unit VO lands.
     playVillagerMove();

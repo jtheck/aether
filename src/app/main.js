@@ -7,7 +7,9 @@ import {
   PLAYER_ARMY,
   stressPerSideFromSearch,
   animStressPerSideFromSearch,
-  KOTH_MAX_ENTITIES,
+  armyPerSideFromSearch,
+  kothMaxEntities,
+  setArmyPerSide,
   PLAYER,
   AI_OWNER,
 } from '../sim/worldSetup.js';
@@ -161,6 +163,7 @@ async function main() {
 
   const stress = stressPerSideFromSearch(location.search);
   const animStress = animStressPerSideFromSearch(location.search);
+  const armyPerSide = armyPerSideFromSearch(location.search);
   const solo = new URLSearchParams(location.search).has('solo');
   const useKoth = kothModeFromSearch(location.search) && !solo;
 
@@ -189,6 +192,7 @@ async function main() {
     humanPlayers: [PLAYER],
     role: 'player',
     activeSlots: [PLAYER],
+    armyPerSide,
   };
 
   if (useKoth && stress === 0 && animStress === 0) {
@@ -200,11 +204,13 @@ async function main() {
       onStatus: setStatusText,
       onLiveStart: handleLiveStart,
       onPresentationSync: handlePresentationSync,
+      armyPerSide,
     });
     bootCfg = await kothShard.waitForBoot();
+    if (bootCfg.armyPerSide == null) bootCfg.armyPerSide = armyPerSide;
   }
 
-  ctx = await bootGame(canvas, bootCfg, { stress, animStress, kothShard, solo });
+  ctx = await bootGame(canvas, bootCfg, { stress, animStress, armyPerSide: bootCfg.armyPerSide ?? armyPerSide, kothShard, solo });
   if (pendingLiveCfg) {
     const cfg = pendingLiveCfg;
     pendingLiveCfg = null;
@@ -212,8 +218,9 @@ async function main() {
   }
 }
 
-async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, solo = false }) {
+async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
   const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'sandbox';
+  const army = bootCfg.armyPerSide ?? armyPerSide ?? 0;
 
   const session = new SimSession({
     localPlayerId: bootCfg.localPlayerId,
@@ -227,12 +234,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
     seed: bootCfg.seed ?? SEED,
     stressPerSide: stress,
     animStressPerSide: animStress,
+    armyPerSide: army,
     mode: bootCfg.mode === 'sandbox' ? 'sandbox' : bootCfg.mode === 'koth' ? 'koth' : 'legacy',
     activeSlots: bootCfg.activeSlots ?? [bootCfg.localPlayerId],
   };
 
   const { count } = await session.start(simConfig);
   if (kothShard) kothShard.attachSession(session);
+
+  // Main-thread army size for KOTH GPU prealloc (worker has its own copy).
+  setArmyPerSide(army);
 
   // rAF stops when the tab is hidden; lockstep still needs tick confirms.
   const onVisibility = () => session.setBackgroundPump(document.hidden);
@@ -245,7 +256,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
 
   const renderer = await createRenderer(canvas, count, {
     types: session.state.type,
-    gpuCapacity: useNet ? KOTH_MAX_ENTITIES : count,
+    gpuCapacity: useNet ? kothMaxEntities(army) : count,
     field: session.field,
     onAnimLoadProgress: animStress > 0
       ? (done, total) => setStatusText(
@@ -424,8 +435,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       } else line = `KOTH  ·  ⏱ ${matchTime}  ·  ${line}`;
     }
     if (session.role === 'spectator') line = `Spectating  ·  ${line}`;
-    if (session.pauseLockstep) line = `PAUSED  ·  ${line}`;
+    if (session.replayingCatchUp && session.catchupProgress) {
+      const { tick, targetTick } = session.catchupProgress;
+      const elapsed = formatMatchTime(matchSecondsFromTick(tick));
+      const total = formatMatchTime(matchSecondsFromTick(targetTick));
+      line = `Catch-up ${elapsed} / ${total}  ·  ${line}`;
+    } else if (session.pauseLockstep) {
+      line = `PAUSED  ·  ${line}`;
+    }
     if (fpsDisplay > 0) line += `  ·  ${fpsDisplay} fps`;
+    const rtt = kothShard?.getRttMs?.();
+    if (rtt != null) line += `  ·  ${rtt} ms`;
     if (stress > 0) line += `  ·  stress ${world.count} units`;
     if (animStress > 0) line += `  ·  animStress ${world.count} VAT`;
     if (matchMeta.matchId) line += `  ·  …${matchMeta.matchId.slice(-8)}`;
@@ -502,6 +522,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
       e.preventDefault();
       session.pauseLockstep = !session.pauseLockstep;
       if (session.pauseLockstep) session.simAcc = 0;
+      renderer.setFxPaused?.(session.pauseLockstep);
       paintStatus();
       return;
     }
@@ -556,6 +577,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, kothShard, so
   let lastUnmappedRebuild = 0;
 
   renderer.onFrame((deltaMs) => {
+    // Keep FX clocks in sync with pause (catch-up / KOTH also toggle pauseLockstep).
+    renderer.setFxPaused?.(session.pauseLockstep);
     renderer.cameraController?.tick?.(deltaMs);
     session.pump(deltaMs);
 
@@ -978,7 +1001,9 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     seed: cfg.seed,
     mode: simMode,
     activeSlots,
+    armyPerSide: cfg.armyPerSide ?? 0,
   });
+  setArmyPerSide(cfg.armyPerSide ?? 0);
   if (gen !== liveConfigGeneration) {
     if (ctx.session._pendingWorldGen === gen) ctx.session._pendingWorldGen = null;
     if (DEBUG_KOTH) console.info('[KOTH] stale live config ignored after reset', { gen, current: liveConfigGeneration });

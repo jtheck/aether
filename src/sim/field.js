@@ -63,12 +63,13 @@ export function setActiveMapSize(mapW = DEFAULT_MAP_W, mapH = DEFAULT_MAP_H) {
   _worldHalf = fx.fromInt(_worldHalfF);
 }
 
-/** Map tile counts for boot config — large board only under stress. */
-export function mapSizeForConfig({ stressPerSide = 0, animStressPerSide = 0, mapW, mapH } = {}) {
+/** Map tile counts for boot config — large board under stress / oversized armies. */
+export function mapSizeForConfig({ stressPerSide = 0, animStressPerSide = 0, armyPerSide = 0, mapW, mapH } = {}) {
   if (mapW != null && mapH != null) {
     return { mapW: mapW | 0, mapH: mapH | 0 };
   }
-  if ((stressPerSide | 0) > 0 || (animStressPerSide | 0) > 0) {
+  // Default KOTH army is 76; anything larger gets the stress board for packing room.
+  if ((stressPerSide | 0) > 0 || (animStressPerSide | 0) > 0 || (armyPerSide | 0) > 76) {
     return { mapW: STRESS_MAP_W, mapH: STRESS_MAP_H };
   }
   return { mapW: DEFAULT_MAP_W, mapH: DEFAULT_MAP_H };

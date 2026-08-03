@@ -94,23 +94,79 @@ export const UNITS_PER_ARMY = PLAYER_ARMY.reduce((s, c) => s + c.count, 0);
 export const KOTH_MAX_SLOTS = 5;
 export const KOTH_MAX_ENTITIES = UNITS_PER_ARMY * KOTH_MAX_SLOTS;
 
+/** Active per-slot army size (0 = default PLAYER_ARMY layout). */
+let _armyPerSide = 0;
+
+export function setArmyPerSide(n) {
+  _armyPerSide = Math.max(0, n | 0);
+}
+
+export function activeArmyPerSide() {
+  return _armyPerSide > 0 ? _armyPerSide : UNITS_PER_ARMY;
+}
+
+/** Max entities for current army size across all KOTH slots. */
+export function kothMaxEntities(armyPerSide = _armyPerSide) {
+  const per = armyPerSide > 0 ? armyPerSide : UNITS_PER_ARMY;
+  return per * KOTH_MAX_SLOTS;
+}
+
 /** Max thin-instance slots for a unit type across all KOTH slots. */
 export function kothMaxUnitsOfType(typeId) {
   const entry = PLAYER_ARMY.find((u) => u.type === typeId);
-  return entry ? entry.count * KOTH_MAX_SLOTS : 0;
+  if (!entry) return 0;
+  const army = activeArmyPerSide();
+  const perArmy = Math.max(1, Math.ceil((entry.count * army) / UNITS_PER_ARMY));
+  return perArmy * KOTH_MAX_SLOTS;
+}
+
+/** Scale the default mix so counts sum to `n` (deterministic). */
+export function scaledArmyLayout(n) {
+  const target = Math.max(1, n | 0);
+  if (target === UNITS_PER_ARMY) {
+    return PLAYER_ARMY.map((c) => ({ type: c.type, count: c.count }));
+  }
+  const layout = PLAYER_ARMY.map((c) => ({
+    type: c.type,
+    count: Math.floor((c.count * target) / UNITS_PER_ARMY),
+  }));
+  let sum = layout.reduce((s, c) => s + c.count, 0);
+  let i = 0;
+  while (sum < target) {
+    layout[i % layout.length].count++;
+    sum++;
+    i++;
+  }
+  return layout.filter((c) => c.count > 0);
+}
+
+/** Spawn one army — default layout, or packed scaled mix when armyPerSide > 0. */
+function spawnConfiguredArmy(w, owner, baseX, baseZ) {
+  if (_armyPerSide > 0) {
+    spawnArmyPacked(w, scaledArmyLayout(_armyPerSide), owner, baseX, baseZ);
+  } else {
+    spawnArmy(w, PLAYER_ARMY, owner, baseX, baseZ);
+  }
 }
 
 /** Spawn one KOTH army at a slot base (mid-game join). */
 export function spawnKothSlot(w, slot) {
   const bases = kothBases(w.worldHalfF ?? activeWorldHalfF());
   const base = bestKothSpawnPoint(w, slot, bases);
-  spawnArmy(w, PLAYER_ARMY, slot, base[0], base[1]);
+  spawnConfiguredArmy(w, slot, base[0], base[1]);
 }
 
 export function stressPerSideFromSearch(search = '') {
   const n = parseInt(new URLSearchParams(search).get('stress') || '0', 10);
   if (!Number.isFinite(n) || n <= 0) return 0;
   return Math.min(n, (STRESS_ENTITY_LIMIT / STRESS_ARMY_COUNT) | 0);
+}
+
+/** Per-player army size for KOTH/legacy (`?army=2000`). 0 = default 76-unit mix. */
+export function armyPerSideFromSearch(search = '') {
+  const n = parseInt(new URLSearchParams(search).get('army') || '0', 10);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, (STRESS_ENTITY_LIMIT / KOTH_MAX_SLOTS) | 0);
 }
 
 /** Per-side skinned villagers for render stress (`?animStress=32` → 64 total). */
@@ -138,6 +194,16 @@ function spawnArmy(w, layout, owner, baseX, baseZ) {
       });
     }
   }
+}
+
+/** Pack a typed layout in a square grid (large `?army=` counts). */
+function spawnArmyPacked(w, layout, owner, baseX, baseZ) {
+  const total = layout.reduce((s, c) => s + c.count, 0);
+  const types = [];
+  for (const col of layout) {
+    for (let i = 0; i < col.count; i++) types.push(col.type);
+  }
+  spawnStressSide(w, owner, baseX, baseZ, total, (k) => types[k]);
 }
 
 function bestKothSpawnPoint(w, slot, bases) {
@@ -206,18 +272,20 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number }} config
  */
 export function buildWorldFromConfig({
   seed,
   stressPerSide,
   animStressPerSide,
+  armyPerSide = 0,
   mode = 'legacy',
   activeSlots,
   mapW,
   mapH,
 }) {
-  const size = mapSizeForConfig({ stressPerSide, animStressPerSide, mapW, mapH });
+  setArmyPerSide(armyPerSide);
+  const size = mapSizeForConfig({ stressPerSide, animStressPerSide, armyPerSide, mapW, mapH });
   setActiveMapSize(size.mapW, size.mapH);
   const half = worldHalfFFromMap(size.mapW);
   const bases = kothBases(half);
@@ -227,6 +295,7 @@ export function buildWorldFromConfig({
   w.mapW = size.mapW;
   w.mapH = size.mapH;
   w.worldHalfF = half;
+  w.armyPerSide = _armyPerSide;
 
   // Default FFA until a mode opts into alliances via setTeamAssignments.
   setTeamAssignments(null);
@@ -255,7 +324,7 @@ export function buildWorldFromConfig({
   if (mode === 'sandbox') {
     if (activeSlots && activeSlots.length === 0) return w;
     const [bx, bz] = bases[0];
-    spawnArmy(w, PLAYER_ARMY, PLAYER, bx, bz);
+    spawnConfiguredArmy(w, PLAYER, bx, bz);
     return w;
   }
 
@@ -263,13 +332,17 @@ export function buildWorldFromConfig({
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
     for (const slot of slots) {
       const base = bases[slot] ?? bases[0];
-      spawnArmy(w, PLAYER_ARMY, slot, base[0], base[1]);
+      spawnConfiguredArmy(w, slot, base[0], base[1]);
     }
     w.koth = createKothMeta(slots);
     return w;
   }
 
-  spawnArmy(w, PLAYER_ARMY, PLAYER, bases[0][0], bases[0][1]);
-  spawnArmy(w, ENEMY_ARMY, AI_OWNER, bases[1][0], bases[1][1]);
+  spawnConfiguredArmy(w, PLAYER, bases[0][0], bases[0][1]);
+  if (_armyPerSide > 0) {
+    spawnConfiguredArmy(w, AI_OWNER, bases[1][0], bases[1][1]);
+  } else {
+    spawnArmy(w, ENEMY_ARMY, AI_OWNER, bases[1][0], bases[1][1]);
+  }
   return w;
 }

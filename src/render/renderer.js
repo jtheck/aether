@@ -583,13 +583,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // ~30° elevation (was ~60° / near-noon) — longer unit/tree shadows, more contrast.
   const sun = createDirectionalLight([-0.78, -0.48, -0.52], opts.field ? 1.55 : 1.15);
   sun.diffuse = [1, 0.94, 0.84];
-  // Cap CSM reach near the camera (v1 mid-LOD was ~80–176); whole-map
-  // shadowMaxZ just burns cascade texels on far blobs.
-  const shadowMaxZ = Math.min(worldHalfF * 2.75, 320);
   // Place the directional light "above" the board so ortho near/far contain casters.
   {
     const d = sun.direction;
-    const dist = Math.max(shadowMaxZ * 1.25, worldHalfF * 0.75);
+    const dist = worldHalfF * 2.75;
     sun.position.x = -d.x * dist;
     sun.position.y = -d.y * dist;
     sun.position.z = -d.z * dist;
@@ -600,20 +597,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // mesh.world × local bounds, so board-scale TI units vanish or become ~2 texels).
   // Keep worldSpaceBias tiny — unit height is ~1–2; 0.15+ eats character contact shadows.
   // Note: Lite keeps darkness / worldSpaceBias on an internal csmCfg, not sg._config.
-  // Tuned down from 2048×4 + forceRefresh: ~75% fewer shadow texels; Lite still
-  // refreshes when camera / light / thin-instance version changes.
   const shadowOpts = {
-    mapSize: 1024,
-    numCascades: 3,
+    mapSize: 2048,
+    numCascades: 4,
     lambda: 0.85,
     cascadeBlendPercentage: 0.08,
     stabilizeCascades: true,
-    shadowMaxZ,
+    shadowMaxZ: worldHalfF * 2.75,
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
     darkness: 0.08,
-    frustumEdgeFalloff: 0.12,
-    forceRefreshEveryFrame: false,
+    frustumEdgeFalloff: 0.08,
+    forceRefreshEveryFrame: true,
   };
   const shadowGen = createCsmDirectionalShadowGenerator(engine, sun, shadowOpts);
   sun.shadowGenerator = shadowGen;
@@ -624,9 +619,23 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let vatEnabled = true;
   /** Unit meshes + pose loop — A/B with U key. */
   let unitsEnabled = true;
+  /** When true, FX / trail / lightning clocks freeze (sim pause). */
+  let fxPaused = false;
   /** Stable list so shadow task state is not rebuilt every flush. */
   let shadowCasterList = [];
-  const SHADOW_CASTERS_OFF = [];
+  // Tiny hidden caster used while shadows are "off". Keeps CSM passes non-empty
+  // (empty [] still records depth-only passes that crash billboards) without
+  // detaching the generator (that poisoned near cascades on re-enable).
+  const shadowOffCasterMat = createStandardMaterial();
+  shadowOffCasterMat.diffuseColor = [0, 0, 0];
+  const shadowOffCaster = createSphere(engine, { diameter: 0.05, segments: 4 });
+  shadowOffCaster.name = 'shadow-off-caster';
+  shadowOffCaster.material = shadowOffCasterMat;
+  shadowOffCaster.visible = false;
+  shadowOffCaster.receiveShadows = false;
+  shadowOffCaster.position.y = -1000;
+  addToScene(scene, shadowOffCaster);
+  const SHADOW_CASTERS_OFF = [shadowOffCaster];
 
   /** @type {{ meshes: object[], update?: (camera: object, deltaMs: number) => void, applyTreeUpdates?: Function, dispose: () => void } | null} */
   let terrain = null;
@@ -1663,22 +1672,31 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function sameCasterList(a, b) {
+    if (a === b) return true;
+    if (!a || !b) return false;
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
     return true;
   }
 
   function applyShadowState() {
-    // Keep the generator on the light so shadow-capable pipelines stay valid.
-    // Off = empty caster list → cleared depth maps → fully lit receivers.
+    // Never detach the generator or pass an empty caster list — both broke Lite
+    // CSM (billboard pipeline crash, or near-cascade dead / far still lit).
+    // Off = dummy caster only (cheap map fill) + receivers cleared (fully lit).
     if (!shadowsEnabled) {
-      shadowCasterList = SHADOW_CASTERS_OFF;
-      setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+      if (!sameCasterList(shadowCasterList, SHADOW_CASTERS_OFF)) {
+        shadowCasterList = SHADOW_CASTERS_OFF;
+        setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+      }
+      markShadowReceivers(false);
       return;
     }
+    markShadowReceivers(true);
     const next = collectShadowCasters();
-    if (!sameCasterList(shadowCasterList, next)) shadowCasterList = next;
-    setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+    if (!sameCasterList(shadowCasterList, next)) {
+      shadowCasterList = next;
+      setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+    }
   }
 
   // Receivers must be flagged before register so Lite builds shadow sampling in.
@@ -1715,37 +1733,39 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   onBeforeRender(scene, (deltaMs) => {
     terrain?.update?.(camera, deltaMs);
-    particleClockMs += Math.min(100, Math.max(0, deltaMs));
+    // Freeze FX aging while sim is paused so bolts/trails don't burn out.
+    const fxDt = fxPaused ? 0 : deltaMs;
+    particleClockMs += Math.min(100, Math.max(0, fxDt));
     if (fxEnabled) {
-      unitFxElapsed += deltaMs;
+      unitFxElapsed += fxDt;
       if (unitFxElapsed >= UNIT_FX_INTERVAL_MS) {
         unitFxElapsed = 0;
         emitUnitSocketFire();
       }
-      groundFireElapsed += deltaMs;
+      groundFireElapsed += fxDt;
       if (groundFireElapsed >= GROUND_FIRE_INTERVAL_MS) {
         groundFireElapsed = 0;
         emitGroundFirePatches();
       }
-      particles.update(deltaMs);
-      unitAuras.update(deltaMs);
+      particles.update(fxDt);
+      unitAuras.update(fxDt);
     }
-    monkLobFx.update(deltaMs);
-    sporeBloomFx.update(deltaMs, fxSimTick);
+    monkLobFx.update(fxDt);
+    sporeBloomFx.update(fxDt, fxSimTick);
     mushrooms?.commit?.();
-    frogRenderer.advance(deltaMs);
-    arrowTrails.update(deltaMs);
+    frogRenderer.advance(fxDt);
+    arrowTrails.update(fxDt);
     arrowTrails.commit();
-    lightningBolts.update(deltaMs);
+    lightningBolts.update(fxDt);
     lightningBolts.commit();
     if (lightningFlash > 0.001) {
       sky.intensity = skyBaseIntensity + lightningFlash * 1.8;
-      lightningFlash *= Math.exp(-deltaMs * 0.012);
+      lightningFlash *= Math.exp(-fxDt * 0.012);
     } else if (lightningFlash !== 0) {
       lightningFlash = 0;
       sky.intensity = skyBaseIntensity;
     }
-    if (vatEnabled) {
+    if (vatEnabled && !fxPaused) {
       const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
       for (const batch of typeBatches.values()) {
         if (batch.vatParts?.length) {
@@ -2288,7 +2308,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       terrain = await createTerrainFromField(engine, scene, snap, camera, sceneryOpts());
-      markShadowReceivers(true);
       applyShadowState();
       rebuildTileGrid(snap);
     },
@@ -2490,6 +2509,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return this.setUnitsEnabled(!unitsEnabled);
     },
 
+    /** Freeze particle / lightning / trail clocks (wire to sim pause). */
+    setFxPaused(on) {
+      fxPaused = !!on;
+      return fxPaused;
+    },
+
     /** Console helper: renderer.debugShadows() */
     debugShadows() {
       const parts = [];
@@ -2513,10 +2538,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return {
         enabled: shadowsEnabled,
         type: shadowGen?._shadowType,
-        mapSize: shadowOpts.mapSize,
-        numCascades: shadowOpts.numCascades,
-        shadowMaxZ: shadowOpts.shadowMaxZ,
-        forceRefreshEveryFrame: shadowOpts.forceRefreshEveryFrame,
         darkness: shadowOpts.darkness,
         worldSpaceBias: shadowOpts.worldSpaceBias,
         depthBias: shadowGen?._config?._bias,

@@ -77,8 +77,16 @@ export class SimSession {
     this.lastSnapshotAt = 0;
     /** EMA of wall time between snapshots — used so render blend matches real tick cost. */
     this._displayBlendMs = TICK_MS;
+    /** Last alpha / display tick actually drawn — pause freezes to these (not live clock). */
+    this._lastDisplayAlpha = 0;
+    this._lastDisplayTick = 0;
+    /** Frozen render blend while pauseLockstep (null when running). */
+    this._pausedDisplayAlpha = null;
+    this._pausedDisplayTick = null;
     this.pauseLockstep = false;
     this.replayingCatchUp = false;
+    /** @type {{ tick: number, targetTick: number } | null} */
+    this.catchupProgress = null;
     this.resetting = false;
     this._bgPumpTimer = null;
     this.koth = null;
@@ -202,16 +210,45 @@ export class SimSession {
    * Fraction through the current display tick (0–1).
    * Blend window tracks real inter-snapshot time so a slow worker (stress) eases
    * across the whole interval instead of freezing at alpha=1 after TICK_MS.
+   * While paused, hold the last *drawn* alpha so projectiles don't take one more step.
    */
   get displayAlpha() {
     const blend = Math.max(TICK_MS, this._displayBlendMs || TICK_MS);
-    return Math.min(1, (performance.now() - this.lastSnapshotAt) / blend);
+    if (this.pauseLockstep) {
+      if (this._pausedDisplayAlpha == null) {
+        this._pausedDisplayAlpha = this._lastDisplayAlpha;
+      }
+      return this._pausedDisplayAlpha;
+    }
+    if (this._pausedDisplayAlpha != null) {
+      const a = this._pausedDisplayAlpha;
+      this._pausedDisplayAlpha = null;
+      this._pausedDisplayTick = null;
+      this.lastSnapshotAt = performance.now() - a * blend;
+      this._lastDisplayAlpha = a;
+      return a;
+    }
+    const live = Math.min(1, (performance.now() - this.lastSnapshotAt) / blend);
+    this._lastDisplayAlpha = live;
+    return live;
+  }
+
+  _displayTick() {
+    if (this.pauseLockstep) {
+      if (this._pausedDisplayTick == null) {
+        this._pausedDisplayTick = this._lastDisplayTick;
+      }
+      return this._pausedDisplayTick;
+    }
+    const displayTick = Math.max(0, this.confirmedTick - this.inputDelayTicks);
+    this._lastDisplayTick = displayTick;
+    return displayTick;
   }
 
   /** Snapshot pair for render interpolation (display lags sim by inputDelayTicks). */
   displaySnapshots() {
     if (this.resetting) return { prev: null, cur: null, displayTick: this.confirmedTick };
-    const displayTick = Math.max(0, this.confirmedTick - this.inputDelayTicks);
+    const displayTick = this._displayTick();
     const prevTick = Math.max(0, displayTick - 1);
     const prev = this.snapshots.get(prevTick) ?? this.snapshots.get(0);
     const cur = this.snapshots.get(displayTick) ?? prev;
@@ -220,7 +257,7 @@ export class SimSession {
 
   displayProjectileSnapshots() {
     if (this.resetting) return { prev: null, cur: null };
-    const displayTick = Math.max(0, this.confirmedTick - this.inputDelayTicks);
+    const displayTick = this._displayTick();
     const prevTick = Math.max(0, displayTick - 1);
     const prev =
       this.projectileSnapshots.get(prevTick) ?? this.projectileSnapshots.get(0) ?? null;
@@ -387,6 +424,8 @@ export class SimSession {
     this._commandSeq = other._commandSeq;
     this.lastSnapshotAt = performance.now();
     this._displayBlendMs = other._displayBlendMs || TICK_MS;
+    this._pausedDisplayAlpha = null;
+    this._pausedDisplayTick = null;
     this.pauseLockstep = false;
     this.resetting = false;
     this.koth = other.koth;
@@ -467,17 +506,21 @@ export class SimSession {
       this._recordCommittedTick(tick, committedFrames);
       this._captureSnapshot(tick);
       const now = performance.now();
-      if (this.lastSnapshotAt > 0) {
-        const measured = Math.max(1, now - this.lastSnapshotAt);
-        // First real interval: adopt immediately so stress doesn't spend the
-        // opening ticks frozen on a 50ms blend window.
-        if (this._displayBlendMs <= TICK_MS) {
-          this._displayBlendMs = measured;
-        } else {
-          this._displayBlendMs = this._displayBlendMs * 0.65 + measured * 0.35;
+      // Don't advance the render blend clock while paused — display is frozen to
+      // the last drawn tick/alpha (an in-flight commit may still land).
+      if (!this.pauseLockstep) {
+        if (this.lastSnapshotAt > 0) {
+          const measured = Math.max(1, now - this.lastSnapshotAt);
+          // First real interval: adopt immediately so stress doesn't spend the
+          // opening ticks frozen on a 50ms blend window.
+          if (this._displayBlendMs <= TICK_MS) {
+            this._displayBlendMs = measured;
+          } else {
+            this._displayBlendMs = this._displayBlendMs * 0.65 + measured * 0.35;
+          }
         }
+        this.lastSnapshotAt = now;
       }
-      this.lastSnapshotAt = now;
       pruneLedger(this.ledger, tick, LEDGER_KEEP);
       this.onCommit?.(tick, checksum);
       this._drainPendingCommits();

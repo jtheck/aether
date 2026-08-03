@@ -3,8 +3,10 @@
 import { collectFramesForTick } from '../sim/commandFrame.js';
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
 
-/** Sim ticks committed per display frame during visible catch-up (~1 match-second at 60fps). */
-export const CATCHUP_TICKS_PER_FRAME = 20;
+/** Sim ticks committed per display frame during visible catch-up.
+ *  Higher = faster catch-up (less rAF overhead). Large armies still pay per-tick
+ *  worker cost — late joiners can treadmill if the live match outruns replay. */
+export const CATCHUP_TICKS_PER_FRAME = 80;
 
 export { formatMatchTime, matchSecondsFromTick };
 
@@ -21,6 +23,7 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
     seed: matchConfig.seed,
     mode: 'koth',
     activeSlots: matchConfig.activeSlots,
+    armyPerSide: matchConfig.armyPerSide ?? 0,
   });
   session.setHumanPlayers(matchConfig.humanPlayers ?? []);
   session.setLocalPlayerId(-1);
@@ -50,6 +53,7 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
   session.setRole('spectator');
   session.replayingCatchUp = true;
   session.pauseLockstep = true;
+  session.catchupProgress = { tick: 0, targetTick: targetTick | 0 };
 
   try {
     await runReplayTicks(session, byTick, matchConfig.humanPlayers ?? [], targetTick, ticksPerFrame, onProgress);
@@ -62,6 +66,7 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
     // Resume lockstep only after a clean replay. Failures leave pauseLockstep
     // set so pump() cannot free-run a half-caught-up world during retry.
     session.pauseLockstep = false;
+    session.catchupProgress = null;
     return session._lastChecksum;
   } finally {
     session.replayingCatchUp = false;
@@ -88,6 +93,7 @@ async function runReplayTicks(session, byTick, humanPlayers, targetTick, ticksPe
     const batchEnd = Math.min(t + ticksPerFrame - 1, targetTick);
     for (let tick = t; tick <= batchEnd; tick++) await commitOne(tick);
     session.lastSnapshotAt = performance.now();
+    session.catchupProgress = { tick: batchEnd, targetTick: targetTick | 0 };
     onProgress?.({ tick: batchEnd, targetTick });
     if (batchEnd < targetTick) await waitAnimationFrame();
     t = batchEnd + 1;

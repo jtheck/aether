@@ -4,7 +4,7 @@
 // Broadcast channel = shard presence (matchId, phase, tick).
 //
 // Hard KOTH invariants:
-// - Page load creates a private sandbox and never claims a public live slot.
+// - Page load creates a private staging and never claims a public live slot.
 // - Public live state is entered by applying one complete MATCH_SNAPSHOT.
 // - Mid-match sync uses checkpoint + ledger delta (or full replay before the
 //   first checkpoint); L2+ observers only pull from their sponsor observer.
@@ -1494,9 +1494,9 @@ export function createKothShard(options = {}) {
     role = 'player';
     appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
     catchUpReady = true;
-    onStatus(`${reason} — new sandbox …${shortId(matchId)}`);
+    onStatus(`${reason} — new staging …${shortId(matchId)}`);
     onLiveStart({
-      mode: 'sandbox',
+      mode: 'staging',
       seed,
       localPlayerId: 0,
       humanPlayers: [0],
@@ -1795,9 +1795,9 @@ export function createKothShard(options = {}) {
     role = 'player';
     catchUpReady = true;
     setPhase(SHARD_PHASE.SANDBOX);
-    onStatus(`New sandbox — …${shortId(matchId)}`);
+    onStatus(`New staging — …${shortId(matchId)}`);
     onLiveStart({
-      mode: 'sandbox',
+      mode: 'staging',
       seed: hashSeed(matchId),
       localPlayerId: 0,
       humanPlayers: [0],
@@ -2782,7 +2782,7 @@ export function createKothShard(options = {}) {
         // The match start config is authoritative on live participants and never
         // changes after the match begins (joins grow the roster, not the start
         // slots). Only learn it from a LIVE sender while we ourselves are still
-        // discovering — otherwise a freshly-booted late joiner's stale sandbox
+        // discovering — otherwise a freshly-booted late joiner's stale staging
         // defaults ([0]) clobber an in-progress roster and break catch-up replay.
         if (msg.phase === SHARD_PHASE.LIVE && phase !== SHARD_PHASE.LIVE) {
           if (msg.matchStartSlots) matchStartSlots = msg.matchStartSlots;
@@ -3114,7 +3114,7 @@ export function createKothShard(options = {}) {
 
   function sendTickConfirm(tick) {
     if (!session || role !== 'player') return;
-    // Tick confirms are a live-lockstep concept. A sandbox/matchmaking session
+    // Tick confirms are a live-lockstep concept. A staging/matchmaking session
     // free-runs and would otherwise spam playerId-0 confirms to every peer (all
     // rejected), drowning out real signal and risking stale cross-match confirms.
     if (phase !== SHARD_PHASE.LIVE) return;
@@ -3125,7 +3125,7 @@ export function createKothShard(options = {}) {
   // Tick 0 is the init snapshot and is never committed, so the commit-driven
   // confirm cascade has no seed. Once the freshly-reset live session is ready
   // (confirmedTick === 0 for THIS match — calling before reset would broadcast a
-  // stale sandbox tick), nudge confirms until the sim leaves tick 0. Repeats
+  // stale staging tick), nudge confirms until the sim leaves tick 0. Repeats
   // because peers reset asynchronously and may miss the first confirm.
   function kickstartLockstep() {
     if (bootstrapTimer) clearInterval(bootstrapTimer);
@@ -3389,7 +3389,7 @@ export function createKothShard(options = {}) {
 
     p2p.joinBroadcast?.(BROADCAST);
     // Every client joins the global matchmaking lobby immediately (phase 1:
-    // sandbox while pinging for presence). This is what lets peers mesh and
+    // staging while pinging for presence). This is what lets peers mesh and
     // discover the live match before anyone elects to join; without it, tabs
     // can only requestMatch inside their own per-match lobby and never find
     // each other.
@@ -3399,11 +3399,11 @@ export function createKothShard(options = {}) {
     onStatus(
       role === 'spectator'
         ? `Looking for live shard …${shortId(matchId)}`
-        : `Sandbox — match …${shortId(matchId)} — waiting for challengers`,
+        : `Staging — match …${shortId(matchId)} — waiting for challengers`,
     );
 
     bootResolve?.({
-      mode: 'sandbox',
+      mode: 'staging',
       seed,
       localPlayerId: 0,
       humanPlayers: [0],
@@ -3487,7 +3487,7 @@ export function createKothShard(options = {}) {
         return;
       }
       // Otherwise listen in the matchmaking lobby for an existing match before
-      // creating one. Leaving the private sandbox lets live presence arriving
+      // creating one. Leaving the private staging lets live presence arriving
       // during the window auto-follow (see onBroadcastMessage), so two players
       // pressing start join the same match instead of each making their own.
       if (discoverThenStartTimer) return; // already searching

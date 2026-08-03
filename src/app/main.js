@@ -219,7 +219,7 @@ async function main() {
 }
 
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
-  const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'sandbox';
+  const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox';
   const army = bootCfg.armyPerSide ?? armyPerSide ?? 0;
 
   const session = new SimSession({
@@ -235,11 +235,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     stressPerSide: stress,
     animStressPerSide: animStress,
     armyPerSide: army,
-    mode: bootCfg.mode === 'sandbox' ? 'sandbox' : bootCfg.mode === 'koth' ? 'koth' : 'legacy',
+    mode:
+      bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox'
+        ? 'staging'
+        : bootCfg.mode === 'koth'
+          ? 'koth'
+          : 'legacy',
     activeSlots: bootCfg.activeSlots ?? [bootCfg.localPlayerId],
   };
 
-  const { count } = await session.start(simConfig);
+  const { count, agoras, buildings } = await session.start(simConfig);
   if (kothShard) kothShard.attachSession(session);
 
   // Main-thread army size for KOTH GPU prealloc (worker has its own copy).
@@ -267,6 +272,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       : undefined,
   });
   renderer.setCount(count);
+  renderer.placeAgoras?.(agoras ?? session.agoras);
+  renderer.placeBuildings?.(buildings ?? session.buildings);
   // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
   window.renderer = renderer;
   if (new URLSearchParams(location.search).get('tiles') === '1') {
@@ -408,11 +415,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setCount(entityCount);
     renderEntityCount = rebuildRendererEntities(renderer, session);
     renderer.clearProjectiles?.();
+    renderer.placeAgoras?.(session.agoras);
+    renderer.placeBuildings?.(session.buildings);
     if (session.field) renderer.setField?.(session.field);
     updateColors();
     if (matchMeta.mode === 'koth') {
       logArmyRenderState(renderer, session, 'world rebuilt');
     }
+  };
+
+  session.onBuildingsChanged = (list) => {
+    renderer.placeBuildings?.(list);
   };
 
   function paintStatus() {
@@ -424,7 +437,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     for (let i = 0; i < session.count; i++) if (bufs.selected[i]) sel++;
     const matchTime = formatMatchTime(matchSecondsFromTick(session.confirmedTick));
     let line = `You P${localPlayerId}: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
-    if (matchMeta.mode === 'sandbox') line = `Sandbox  ·  ${line}`;
+    if (matchMeta.mode === 'staging' || matchMeta.mode === 'sandbox') line = `Staging  ·  ${line}`;
     if (matchMeta.mode === 'koth') {
       const k = session.koth;
       if (k) {
@@ -462,6 +475,36 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   updateColors();
   updateLegend();
 
+  /** @type {string | null} */
+  let placingType = null;
+  /** Keep agora selected after placing so radial can reopen. */
+  let lastAgoraIndex = -1;
+
+  function buildingWorldPos(sel) {
+    if (!sel) return null;
+    if (sel.kind === 'agora') {
+      const a = session.agoras?.[sel.index];
+      return a ? { x: a.x, z: a.z, scale: 18 } : null;
+    }
+    const b = session.buildings?.[sel.index];
+    return b ? { x: b.x, z: b.z, scale: 5.5 } : null;
+  }
+
+  function syncBuildingHighlight(sel) {
+    renderer.setBuildingSelectionHighlight?.(buildingWorldPos(sel));
+  }
+
+  function openRadialForAgora(index) {
+    lastAgoraIndex = index;
+    const a = session.agoras?.[index];
+    if (!a) return;
+    renderer.showBuildingRadial?.(a.x, a.z);
+  }
+
+  function closeRadial() {
+    renderer.hideBuildingRadial?.();
+  }
+
   let inputApi = setupInput({
     canvas,
     renderer,
@@ -482,10 +525,74 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onAbilityHold: null,
     canInteract: () =>
       session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep,
+    getAgoras: () => session.agoras ?? [],
+    getBuildings: () => session.buildings ?? [],
+    onBuildingSelected: (sel) => {
+      syncBuildingHighlight(sel);
+      if (sel?.kind === 'agora') openRadialForAgora(sel.index);
+      else closeRadial();
+    },
+    getPlacingType: () => placingType,
+    setPlacingType: (t) => {
+      placingType = t;
+      if (!t) renderer.setBuildingGhost?.(null);
+    },
+    onPlacementMove: (x, z) => {
+      if (!placingType) return;
+      renderer.setBuildingGhost?.({ type: placingType, x, z, yaw: 0 });
+    },
+    onPlacementConfirm: (x, z) => {
+      if (!placingType) return;
+      const type = placingType;
+      placingType = null;
+      renderer.setBuildingGhost?.(null);
+      session.submitCommand({
+        type: CMD.PLACE_BUILDING,
+        playerId: localPlayerId,
+        buildingType: type,
+        tx: fx.fromFloat(x),
+        ty: fx.fromFloat(z),
+        yaw: 0,
+      });
+      if (lastAgoraIndex >= 0) {
+        inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
+      }
+    },
+    onPlacementCancel: () => {
+      placingType = null;
+      renderer.setBuildingGhost?.(null);
+      if (lastAgoraIndex >= 0) {
+        inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
+      }
+    },
+    isRadialOpen: () => renderer.isBuildingRadialOpen?.() ?? false,
+    pickRadialOption: (cx, cy) => renderer.pickBuildingRadial?.(cx, cy) ?? null,
+    onRadialPick: (buildingType) => {
+      placingType = buildingType;
+      closeRadial();
+      // Ghost appears on next pointer move with the chosen type.
+      renderer.setBuildingGhost?.(null);
+    },
+    onRadialHover: (cx, cy) => renderer.hoverBuildingRadial?.(cx, cy),
+    hitRadial: (cx, cy) => renderer.hitBuildingRadial?.(cx, cy) ?? false,
   });
 
   window.addEventListener('keydown', (e) => {
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.code === 'Escape') {
+      e.preventDefault();
+      if (placingType) {
+        inputApi.cancelPlacement?.();
+        return;
+      }
+      if (renderer.isBuildingRadialOpen?.()) {
+        closeRadial();
+        return;
+      }
+      inputApi.clearSelection?.();
+      renderer.setBuildingSelectionHighlight?.(null);
+      return;
+    }
     if (e.code === 'KeyJ') {
       kothShard?.requestJoin?.();
       return;
@@ -777,7 +884,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         if (wasSelected[i] || selected[i]) {
           renderer.writeSelectionRing(i, 0, 0, 0);
         }
-        selected[i] = 0;
+        // Don't clear selected[] — unload stamps riders before the sim spills them,
+        // and wiping here dropped that handoff every frame they were still carried.
         wasSelected[i] = 0;
         continue;
       }
@@ -787,8 +895,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
       const dx = cur.x[i] - prev.x[i];
       const dz = cur.z[i] - prev.z[i];
-      // Idle soft-separation nudges positions without an order — don't spin facing / walk.
-      const orderedMove = world.order[i] !== ORDER.IDLE;
+      // Soft-separation nudges positions without an order — don't spin facing / walk.
+      // (navWpCount is worker-only; shared render state exposes order.)
+      const orderedMove = (world.order?.[i] ?? ORDER.IDLE) !== ORDER.IDLE;
       const moving = orderedMove && dx * dx + dz * dz > 0.0004;
       if (moving) facingYaw[i] = Math.atan2(dx, dz);
       const flyLoft = isFlyer(world.type[i]) ? FLY_HEIGHT : 0;
@@ -983,9 +1092,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 async function applyLiveConfig(ctx, cfg, kothShard) {
   const gen = ++liveConfigGeneration;
   const activeSlots = cfg.activeSlots ?? cfg.humanPlayers ?? [];
-  if (cfg.mode === 'sandbox' && activeSlots.length === 0) {
+  if ((cfg.mode === 'staging' || cfg.mode === 'sandbox') && activeSlots.length === 0) {
     if (gen !== liveConfigGeneration) return;
-    ctx.setMatchMeta({ mode: 'sandbox', matchId: cfg.matchId });
+    ctx.setMatchMeta({ mode: 'staging', matchId: cfg.matchId });
     ctx.session.setRole(cfg.role ?? 'spectator');
     setStatusText('Looking for live shard…');
     return;
@@ -1000,7 +1109,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   }
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', { gen, activeSlots });
 
-  const simMode = cfg.mode === 'sandbox' ? 'sandbox' : 'koth';
+  const simMode = cfg.mode === 'staging' || cfg.mode === 'sandbox' ? 'staging' : 'koth';
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
   ctx.session._pendingWorldGen = gen;
   await ctx.session.reset({
@@ -1060,8 +1169,8 @@ function syncPresentation(ctx, cfg, options = {}) {
 
   ctx.updateColors();
   const label =
-    cfg.mode === 'sandbox'
-      ? 'Sandbox'
+    cfg.mode === 'staging' || cfg.mode === 'sandbox'
+      ? 'Staging'
       : cfg.role === 'player'
         ? `Live — player ${cfg.localPlayerId}`
         : 'Live — spectating';
@@ -1097,7 +1206,13 @@ function showMatchOver(session) {
   if (!el) return;
   const k = session.koth;
   let text = 'Match over';
-  if (k) {
+  if (session.matchWinner != null && session.matchWinner >= 0) {
+    const winner = session.matchWinner;
+    text =
+      winner === (session.localPlayerId ?? 0)
+        ? 'Victory — agora captured'
+        : `Defeat — Player ${winner} captured the agora`;
+  } else if (k) {
     let best = 0;
     let bestScore = -1;
     for (let i = 0; i < 5; i++) {
@@ -1116,7 +1231,10 @@ function useKothAi(bootCfg, stress, animStress, solo) {
   if (animStress > 0) return [];
   if (stress > 0) return STRESS_AI_PROFILES.map((p) => ({ ...p }));
   if (solo) return [AI_OWNER];
-  if (bootCfg.mode === 'sandbox' || bootCfg.mode === 'koth') return [];
+  if (bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox') {
+    return [{ owner: AI_OWNER, temperament: 'cautious' }];
+  }
+  if (bootCfg.mode === 'koth') return [];
   return [AI_OWNER];
 }
 

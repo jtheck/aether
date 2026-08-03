@@ -21,8 +21,23 @@ export const ASTAR_PATH_BUDGET_MAX = 128;
 /** Waypoint accept: same tile OR within half a tile (v1 TILE²×0.25). */
 const WAYPOINT_RADIUS_SQ = fx.mul(fx.mul(TILE, TILE), fx.fromFloat(0.25));
 /** Final order completion radius (v1 WalkBehavior arrivalRadius 0.5). */
-export const FINAL_ARRIVE = fx.fromFloat(0.5);
+export const FINAL_ARRIVE = fx.fromFloat(1.2);
 export const FINAL_ARRIVE_SQ = fx.mul(FINAL_ARRIVE, FINAL_ARRIVE);
+
+/**
+ * Soft gather disk for a multi-unit move. Big enough to cover a relaxed soft-sep
+ * pack so a click inside the blob does not yank everyone onto one pixel.
+ * @param {number} groupSize
+ */
+export function groupArriveRadius(groupSize) {
+  const n = Math.max(1, groupSize | 0);
+  return fx.fromFloat(Math.max(fx.toFloat(FINAL_ARRIVE), 1.2 * Math.sqrt(n)));
+}
+
+export function groupArriveRadiusSq(groupSize) {
+  const r = groupArriveRadius(groupSize);
+  return fx.mul(r, r);
+}
 
 export function wpBase(i) {
   return i * MAX_WAYPOINTS;
@@ -262,7 +277,7 @@ export function movementGoal(w, field, i) {
           w.stuckTicks[i] > 10 ? PATH_REQUEST.ASTAR : PATH_REQUEST.LOS;
       }
     }
-  } else {
+  } else if (needsPath(w, i)) {
     ensurePath(w, field, i);
   }
   if (w.navWpCount[i] === 0) return null;

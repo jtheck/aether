@@ -140,12 +140,21 @@ export class SimClient {
         return;
       }
       this._field = msg.field ?? null;
-      this._initResolve?.({ count: msg.count, field: this._field });
+      this._agoras = msg.agoras ?? [];
+      this._buildings = msg.buildings ?? [];
+      this._initResolve?.({
+        count: msg.count,
+        field: this._field,
+        agoras: this._agoras,
+        buildings: this._buildings,
+      });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {
       this._stepDoneHandler?.(msg.tick, msg.checksum, {
         koth: msg.koth,
         kothMatchOver: msg.kothMatchOver,
+        matchWinner: msg.matchWinner,
+        buildings: msg.buildings,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,
         fireZoneUpdates: msg.fireZoneUpdates ?? null,

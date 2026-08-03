@@ -7,6 +7,8 @@ import { step } from '../sim/step.js';
 import { generateAiCommands } from '../sim/ai.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
+import { serializeAgoras } from '../sim/agora.js';
+import { serializeBuildings } from '../sim/buildings.js';
 import { takeTreeUpdates } from '../sim/trees.js';
 import { takeFireZoneUpdates } from '../sim/fireZones.js';
 import { takeFrogUpdates } from '../sim/frogs.js';
@@ -75,6 +77,8 @@ self.onmessage = (e) => {
         count: world.count,
         field: fieldSnapshot(field),
         layoutVersion: SHARED_LAYOUT_VERSION,
+        agoras: serializeAgoras(world.agoras),
+        buildings: serializeBuildings(world.buildings),
       });
     } else if (msg.type === 'commitTick') {
       step(world, field, commandsForTick(msg.frames));
@@ -93,13 +97,16 @@ self.onmessage = (e) => {
       const holyArmorUpdates = takeHolyArmorUpdates(world);
       const sporeBloomUpdates = takeSporeBloomUpdates(world);
       const monkKickUpdates = takeMonkKickUpdates(world);
+      if (world.buildingsDirty) world.buildingsDirty = 0;
       postMessage({
         type: 'stepDone',
         tick: world.tick,
         checksum: checksum(world, field),
         metrics: { ...world.metrics },
         kothMatchOver: world.kothMatchOver ?? 0,
+        matchWinner: world.matchWinner ?? -1,
         koth: serializeKoth(world.koth),
+        buildings: serializeBuildings(world.buildings),
         treeUpdates,
         fireZoneUpdates,
         frogUpdates,

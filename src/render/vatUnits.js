@@ -39,8 +39,8 @@ function getTeamColorMaps(engine) {
 export const VAT_UNIT_DEFS = {
   [UNIT.VILLAGER]: {
     url: '/assets/models/villager.glb',
-    // Matches game/units.js villager.scale — applied via thin-instance matrix.
-    scale: 0.5,
+    // Raw glTF scale — no aftermarket resize (instance matrix only).
+    scale: 1,
     idleClip: 'idle',
     walkClip: 'walk_cycle',
   },

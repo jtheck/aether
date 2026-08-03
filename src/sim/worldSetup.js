@@ -3,6 +3,7 @@
 import { createWorld, spawn, STRESS_ENTITY_LIMIT } from './world.js';
 import { UNIT, UNIT_DEFS, isTransport } from './unitTypes.js';
 import { createKothMeta } from './kothMeta.js';
+import { createAgoras } from './agora.js';
 import {
   WORLD_HALF_F,
   activeWorldHalfF,
@@ -12,6 +13,11 @@ import {
 } from './field.js';
 import { setTeamAssignments } from './teams.js';
 import * as fx from './fixed.js';
+
+/** Staging AI cold start. */
+const STAGING_AI_VILLAGERS = 5;
+/** Army block sits this far toward map center from the agora. */
+const ARMY_FORWARD = 36;
 
 export const PLAYER = 0;
 export const AI_OWNER = 1;
@@ -178,21 +184,52 @@ export function animStressPerSideFromSearch(search = '') {
 }
 
 function spawnArmy(w, layout, owner, baseX, baseZ) {
+  spawnArmyOriented(w, layout, owner, baseX, baseZ, 0);
+}
+
+/**
+ * Grid facing map center: columns = types (lateral), rows = depth toward enemy.
+ * @param {number} forward0 — offset from agora toward center for the first row
+ */
+function spawnArmyOriented(w, layout, owner, baseX, baseZ, forward0) {
+  const len = Math.hypot(baseX, baseZ) || 1;
+  const fX = -baseX / len;
+  const fZ = -baseZ / len;
+  const rX = -fZ;
+  const rZ = fX;
+
   const cols = layout.length;
-  const maxRows = Math.max(...layout.map((c) => c.count));
-  const halfX = ((cols - 1) * COL_SPACING) / 2;
-  const halfZ = ((maxRows - 1) * ROW_SPACING) / 2;
+  const maxRows = Math.max(1, ...layout.map((c) => c.count));
+  const halfLat = ((cols - 1) * COL_SPACING) / 2;
 
   for (let c = 0; c < layout.length; c++) {
     const col = layout[c];
+    const lat = c * COL_SPACING - halfLat;
     for (let r = 0; r < col.count; r++) {
+      const forward = forward0 + r * ROW_SPACING;
+      const wx = baseX + rX * lat + fX * forward;
+      const wz = baseZ + rZ * lat + fZ * forward;
       spawn(w, {
-        x: fx.fromFloat(baseX + c * COL_SPACING - halfX),
-        y: fx.fromFloat(baseZ + r * ROW_SPACING - halfZ),
+        x: fx.fromFloat(wx),
+        y: fx.fromFloat(wz),
         type: col.type,
         owner,
       });
     }
+  }
+}
+
+/** Ring of villagers around the agora (AI cold start). */
+function spawnVillagersAround(w, owner, baseX, baseZ, count) {
+  const radius = 16;
+  for (let i = 0; i < count; i++) {
+    const a = (i / Math.max(1, count)) * Math.PI * 2 + 0.35;
+    spawn(w, {
+      x: fx.fromFloat(baseX + Math.cos(a) * radius),
+      y: fx.fromFloat(baseZ + Math.sin(a) * radius),
+      type: UNIT.VILLAGER,
+      owner,
+    });
   }
 }
 
@@ -272,7 +309,7 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number }} config
  */
 export function buildWorldFromConfig({
   seed,
@@ -292,6 +329,10 @@ export function buildWorldFromConfig({
 
   const w = createWorld(seed);
   w.kothMatchOver = 0;
+  w.matchWinner = -1;
+  w.agoras = [];
+  w.buildings = [];
+  w.buildingsDirty = 0;
   w.mapW = size.mapW;
   w.mapH = size.mapH;
   w.worldHalfF = half;
@@ -321,10 +362,21 @@ export function buildWorldFromConfig({
     return w;
   }
 
-  if (mode === 'sandbox') {
+  // Private boot field (renamed from sandbox).
+  if (mode === 'staging' || mode === 'sandbox') {
     if (activeSlots && activeSlots.length === 0) return w;
-    const [bx, bz] = bases[0];
-    spawnConfiguredArmy(w, PLAYER, bx, bz);
+    const [px, pz] = bases[0];
+    const [ax, az] = bases[1];
+    w.agoras = createAgoras([
+      { owner: PLAYER, x: px, z: pz },
+      { owner: AI_OWNER, x: ax, z: az },
+    ]);
+    if (_armyPerSide > 0) {
+      spawnArmyOriented(w, scaledArmyLayout(_armyPerSide), PLAYER, px, pz, ARMY_FORWARD);
+    } else {
+      spawnArmyOriented(w, PLAYER_ARMY, PLAYER, px, pz, ARMY_FORWARD);
+    }
+    spawnVillagersAround(w, AI_OWNER, ax, az, STAGING_AI_VILLAGERS);
     return w;
   }
 

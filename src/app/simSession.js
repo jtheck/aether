@@ -91,6 +91,9 @@ export class SimSession {
     this._bgPumpTimer = null;
     this.koth = null;
     this.kothMatchOver = 0;
+    this.matchWinner = -1;
+    this.agoras = [];
+    this.buildings = [];
     this.simMetrics = null;
     /** @type {Map<number, number[]>} tick -> playerIds joining lockstep */
     this.pendingJoins = new Map();
@@ -104,6 +107,8 @@ export class SimSession {
     this._checkpointChecksum = 0;
     /** Called after worker init / world rebuild (count is live entity total). */
     this.onWorldRebuilt = null;
+    /** Fired when placed building list updates from the worker. */
+    this.onBuildingsChanged = null;
     /** Tile field snapshot from worker (tree stock/burn mutate in place). */
     this.field = null;
     /** @type {Array<{ tiles: Uint32Array, stock: Uint8Array, burn: Uint8Array }> | null} */
@@ -113,13 +118,20 @@ export class SimSession {
   }
 
   async start(config) {
-    const { count, field } = await this.client.init({ ...config, aiPlayers: this.aiPlayers });
+    const { count, field, agoras, buildings } = await this.client.init({
+      ...config,
+      aiPlayers: this.aiPlayers,
+    });
     this._count = count;
     this.field = field ?? this.client.field;
+    this.agoras = agoras ?? this.client._agoras ?? [];
+    this.buildings = buildings ?? this.client._buildings ?? [];
+    this.kothMatchOver = 0;
+    this.matchWinner = -1;
     this._bindStepHandler();
     this._captureSnapshot(0);
     this.lastSnapshotAt = performance.now();
-    return { count, field: this.field };
+    return { count, field: this.field, agoras: this.agoras, buildings: this.buildings };
   }
 
   get count() {
@@ -516,6 +528,11 @@ export class SimSession {
       this._lastChecksum = checksum;
       if (extra?.koth) this.koth = extra.koth;
       if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;
+      if (extra?.matchWinner != null) this.matchWinner = extra.matchWinner;
+      if (extra?.buildings) {
+        this.buildings = extra.buildings;
+        this.onBuildingsChanged?.(this.buildings);
+      }
       if (extra?.metrics) this.simMetrics = extra.metrics;
       if (extra?.treeUpdates) {
         applyTreeUpdatesToField(this.field, extra.treeUpdates);

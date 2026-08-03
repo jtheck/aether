@@ -15,6 +15,7 @@ export function setupPointerHub({ canvas, camera, game }) {
 
     if (e.button === 2) {
       game.cancelDrag();
+      if (game.cancelPlacement?.()) return;
       camera.handlePointerDown(e);
       return;
     }

@@ -235,8 +235,8 @@ export const UNIT_DEFS = [
     hp: 60,
     speed: fx.fromFloat(2.5),
     size: 9.0,
-    /** Ground clearance radius — vehicles need more than size/6 infantry packing. */
-    footprint: 6.5,
+    /** Soft-sep radius (not mesh half-extent) — keep modest so they don't bully infantry. */
+    footprint: 2.6,
     pickRadius: 4.5,
     pickHeight: 1.2,
     color: [0.62, 0.42, 0.22],
@@ -260,7 +260,8 @@ export const UNIT_DEFS = [
     hp: 70,
     speed: fx.fromFloat(3.2),
     size: 12.0,
-    footprint: 5.5,
+    /** Soft-sep among flyers only (air/ground layers are split). */
+    footprint: 3.2,
     pickRadius: 4.0,
     pickHeight: 1.4,
     color: [0.72, 0.78, 0.88],
@@ -284,7 +285,8 @@ export const UNIT_DEFS = [
     hp: 90,
     speed: fx.fromFloat(2.8),
     size: 10.0,
-    footprint: 7.0,
+    /** Soft-sep radius — old 7.0 cleared a huge bubble around the APC. */
+    footprint: 3.0,
     pickRadius: 5.0,
     pickHeight: 1.25,
     color: [0.48, 0.42, 0.28],

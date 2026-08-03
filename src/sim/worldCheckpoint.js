@@ -38,6 +38,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     pathAstarCursor: w.pathAstarCursor | 0,
     rng: w.rng.s >>> 0,
     kothMatchOver: w.kothMatchOver | 0,
+    matchWinner: w.matchWinner ?? -1,
     arrays: {},
   };
   for (const key of ENTITY_I32) entities.arrays[key] = encodeTA(w[key], n);
@@ -79,6 +80,8 @@ export function exportWorldCheckpoint(w, field, checksum) {
     }),
     treeGrowth: exportTreeGrowth(w.treeGrowth),
     koth: exportKoth(w.koth),
+    agoras: exportAgoras(w.agoras),
+    buildings: exportBuildings(w.buildings),
     field: exportFieldMutable(field),
   };
 }
@@ -102,6 +105,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   w.pathAstarCursor = ent.pathAstarCursor | 0;
   w.rng.s = ent.rng >>> 0;
   w.kothMatchOver = ent.kothMatchOver | 0;
+  w.matchWinner = ent.matchWinner ?? -1;
 
   for (const key of Object.keys(ent.arrays)) {
     decodeTAInto(w[key], ent.arrays[key]);
@@ -139,6 +143,8 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   }
   importTreeGrowth(w.treeGrowth, checkpoint.treeGrowth);
   importKoth(w, checkpoint.koth);
+  importAgoras(w, checkpoint.agoras);
+  importBuildings(w, checkpoint.buildings);
   importFieldMutable(field, checkpoint.field);
 
   // Render-only queues — empty after restore.
@@ -241,6 +247,60 @@ function importKoth(w, data) {
   decodeTAInto(w.koth.eliminated, data.eliminated);
   decodeTAInto(w.koth.joinedAtTick, data.joinedAtTick);
   decodeTAInto(w.koth.scores, data.scores);
+}
+
+function exportAgoras(agoras) {
+  if (!agoras?.length) return [];
+  return agoras.map((a) => ({
+    owner: a.owner | 0,
+    x: a.x | 0,
+    z: a.z | 0,
+    progress: a.progress | 0,
+    capturer: a.capturer | 0,
+    contested: a.contested | 0,
+    captured: a.captured | 0,
+  }));
+}
+
+function importAgoras(w, data) {
+  if (!data?.length) {
+    w.agoras = [];
+    return;
+  }
+  w.agoras = data.map((a) => ({
+    owner: a.owner | 0,
+    x: a.x | 0,
+    z: a.z | 0,
+    progress: a.progress | 0,
+    capturer: a.capturer | 0,
+    contested: a.contested | 0,
+    captured: a.captured | 0,
+  }));
+}
+
+function exportBuildings(buildings) {
+  if (!buildings?.length) return [];
+  return buildings.map((b) => ({
+    owner: b.owner | 0,
+    type: b.type,
+    x: b.x | 0,
+    z: b.z | 0,
+    yaw: b.yaw | 0,
+  }));
+}
+
+function importBuildings(w, data) {
+  if (!data?.length) {
+    w.buildings = [];
+    return;
+  }
+  w.buildings = data.map((b) => ({
+    owner: b.owner | 0,
+    type: String(b.type),
+    x: b.x | 0,
+    z: b.z | 0,
+    yaw: b.yaw | 0,
+  }));
 }
 
 function exportFieldMutable(field) {

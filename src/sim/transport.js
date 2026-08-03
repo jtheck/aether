@@ -126,7 +126,7 @@ export function unloadPassengers(w, transport, walkTx = null, walkTy = null) {
   return unloaded;
 }
 
-/** Assign riders to seek a transport (group-move embark). Capacity checked at load. */
+/** Stamp riders to seek a transport (click-to-load). Capacity checked at load. */
 export function applyTransportAssignments(w, assignments) {
   if (!assignments || assignments.length === 0) return;
   for (let a = 0; a < assignments.length; a++) {
@@ -209,49 +209,40 @@ export function syncCarriedPositions(w) {
 }
 
 /**
- * Deterministic nearest-slot embark assignments for a mixed selection.
- * @param {number[]} unitIds
+ * Click-to-load: nearest eligible selected units fill the transport up to free seats.
+ * Deterministic: distance, then lower entity id.
+ * @param {number} transportId
+ * @param {number[]} candidateIds selection (may include the transport)
  * @returns {{ riderId: number, transportId: number }[]}
  */
-export function buildTransportAssignments(w, unitIds) {
-  if (!unitIds || unitIds.length === 0) return [];
-  const transports = [];
-  const riders = [];
-  for (let k = 0; k < unitIds.length; k++) {
-    const i = unitIds[k];
-    if (i < 0 || i >= w.count || !w.alive[i] || isCarried(w, i)) continue;
-    if (isTransport(w.type[i])) transports.push(i);
-    else if (canRideTransport(w.type[i])) riders.push(i);
+export function assignNearestRidersToTransport(w, transportId, candidateIds) {
+  if (
+    transportId < 0 ||
+    transportId >= w.count ||
+    !w.alive[transportId] ||
+    !isTransport(w.type[transportId])
+  ) {
+    return [];
   }
-  if (transports.length === 0 || riders.length === 0) return [];
+  const slots = transportCapacityOf(w.type[transportId]) - passengerCount(w, transportId);
+  if (slots <= 0 || !candidateIds?.length) return [];
 
-  transports.sort((a, b) => a - b);
-  riders.sort((a, b) => a - b);
-
-  const remaining = new Map();
-  for (let t = 0; t < transports.length; t++) {
-    const id = transports[t];
-    const cap = transportCapacityOf(w.type[id]);
-    remaining.set(id, Math.max(0, cap - passengerCount(w, id)));
+  const ranked = [];
+  for (let k = 0; k < candidateIds.length; k++) {
+    const rider = candidateIds[k] | 0;
+    if (rider === transportId) continue;
+    if (rider < 0 || rider >= w.count || !w.alive[rider] || isCarried(w, rider)) continue;
+    if (w.owner[rider] !== w.owner[transportId]) continue;
+    if (!canRideTransport(w.type[rider])) continue;
+    const d2 = fx.dist2(w.px[rider], w.py[rider], w.px[transportId], w.py[transportId]);
+    ranked.push({ rider, d2 });
   }
+  ranked.sort((a, b) => (a.d2 - b.d2) || (a.rider - b.rider));
 
   const assignments = [];
-  for (let r = 0; r < riders.length; r++) {
-    const rider = riders[r];
-    let best = -1;
-    let bestD2 = 0x7fffffff;
-    for (let t = 0; t < transports.length; t++) {
-      const transport = transports[t];
-      if ((remaining.get(transport) || 0) <= 0) continue;
-      const d2 = fx.dist2(w.px[rider], w.py[rider], w.px[transport], w.py[transport]);
-      if (d2 < bestD2 || (d2 === bestD2 && (best < 0 || transport < best))) {
-        bestD2 = d2;
-        best = transport;
-      }
-    }
-    if (best < 0) continue;
-    assignments.push({ riderId: rider, transportId: best });
-    remaining.set(best, (remaining.get(best) || 0) - 1);
+  const n = Math.min(slots, ranked.length);
+  for (let i = 0; i < n; i++) {
+    assignments.push({ riderId: ranked[i].rider, transportId });
   }
   return assignments;
 }

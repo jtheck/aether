@@ -7,6 +7,8 @@
 // to paper over.
 
 import { mixKothChecksum } from './kothMeta.js';
+import { mixAgoraChecksum } from './agora.js';
+import { mixBuildingChecksum } from './buildings.js';
 import { mixTreeChecksum } from './trees.js';
 import { mixFireZoneChecksum } from './fireZones.js';
 import { mixFrogChecksum } from './frogs.js';
@@ -83,7 +85,10 @@ export function checksum(w, field = null) {
     mix(p.hitCount[i]);
   }
   mix(w.kothMatchOver ?? 0);
+  mix(w.matchWinner ?? -1);
   h = mixKothChecksum(h, mix, w.koth);
+  h = mixAgoraChecksum(h, mix, w.agoras);
+  h = mixBuildingChecksum(h, mix, w.buildings);
   if (field) mixTreeChecksum(mix, field);
   mixFireZoneChecksum(mix, w);
   mixFrogChecksum(mix, w);

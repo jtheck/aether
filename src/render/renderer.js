@@ -25,6 +25,8 @@ import {
   mat4Invert,
   createCsmDirectionalShadowGenerator,
   setShadowTaskCasterMeshes,
+  createGpuPicker,
+  pickAsync,
 } from '../vendor/lite/liteVendor.js';
 import { getUnitDef } from '../sim/unitTypes.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
@@ -57,6 +59,9 @@ import { createUnitAuras, AURA } from './unitAuras.js';
 import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
+import { createAgoraProps } from './agoras.js';
+import { createBuildingProps } from './buildings.js';
+import { createBuildingRadialMenu } from './buildingRadial.js';
 import {
   FX_DISTANCE_SQ,
   LOD_ENABLED,
@@ -429,6 +434,16 @@ function vatPartMeshes(batch) {
   return [batch.mesh];
 }
 
+/** Mark unit thin-instance meshes pickable and map them to their batch. */
+function registerUnitPickBatch(unitPickMeshes, batch) {
+  if (!batch) return;
+  for (const mesh of vatPartMeshes(batch)) {
+    if (!mesh) continue;
+    mesh.pickable = true;
+    unitPickMeshes.set(mesh, batch);
+  }
+}
+
 function resizeTypeBatch(batch, entityIds, opts = {}) {
   const prealloc = opts.preallocKoth ?? false;
   const newSize = entityIds.length;
@@ -695,6 +710,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /** @type {Map<string | number, object>} */
   const typeBatches = new Map();
+  /** Mesh → batch for GPU unit picking (static + VAT parts). */
+  const unitPickMeshes = new Map();
   const fallbackEntities = [];
   const vatInstanceCap = maxVatInstancesPerBatch(engine);
 
@@ -727,6 +744,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       else for (const mesh of vatPartMeshes(batch)) addToScene(scene, mesh);
       refineVatFootLift(batch);
       typeBatches.set(key, batch);
+      registerUnitPickBatch(unitPickMeshes, batch);
       for (let s = 0; s < slice.length; s++) {
         entitySlot[slice[s]] = s;
         entityBatchKey[slice[s]] = key;
@@ -788,6 +806,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         batch.entityIds = entityIds;
         batch.mappedSize = owner === 0 ? batchSize : 0;
         typeBatches.set(key, batch);
+        registerUnitPickBatch(unitPickMeshes, batch);
         for (let s = 0; s < entityIds.length; s++) {
           entityBatchKey[entityIds[s]] = key;
         }
@@ -817,6 +836,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         batch.mappedSize = batchSize;
         addToScene(scene, batch.mesh);
         typeBatches.set(typeId, batch);
+        registerUnitPickBatch(unitPickMeshes, batch);
         for (let s = 0; s < entityIds.length; s++) {
           entitySlot[entityIds[s]] = s;
           entityBatchKey[entityIds[s]] = typeId;
@@ -845,6 +865,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       entityBatchKey[fallbackEntities[s]] = null;
     }
     fallback = { mesh, matrices, colors, baseSize: BASE_DIAMETER, entityIds: [...fallbackEntities], gpuCapacity: cap, mappedSize: fbInitCount };
+    registerUnitPickBatch(unitPickMeshes, fallback);
   }
 
   const RING_DIAM = 1;
@@ -957,7 +978,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Alternate pop spin direction each new ping. */
   let nextOrderSpinDir = 1;
 
-  // Debug: unit pick proxies are spheres (pickRadius @ pickHeight), not mesh tris.
+  // Debug: optional sphere proxies (pickRadius @ pickHeight) — live pick uses GPU meshes.
   const pickDebugCap = Math.max(capacity, gpuCapacity, 1);
   const pickDebugMesh = createSphere(engine, { diameter: 2, segments: 10 });
   const pickDebugMat = createStandardMaterial();
@@ -1446,6 +1467,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     });
   });
   mushrooms = await createMushroomPreviews(engine, scene, groundYAt);
+  const agoraProps = await createAgoraProps(engine, scene, groundYAt);
+  const buildingProps = await createBuildingProps(engine, scene, groundYAt);
+  const buildingRadial = await createBuildingRadialMenu(engine, scene, groundYAt);
+  let radialHoverInFlight = false;
+  /** @type {{ clientX: number, clientY: number } | null} */
+  let radialHoverQueued = null;
   const projectileRenderer = createProjectileRenderer(
     engine,
     scene,
@@ -1880,6 +1907,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   await registerSceneWithShadowSupport(scene);
+  const gpuPicker = createGpuPicker(scene);
 
   function canvasCoords(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -2035,6 +2063,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function flushAllBatches() {
     updateOrderMarker();
+    if (buildingRadial.isOpen()) {
+      buildingRadial.update?.(camera);
+    }
+    if (buildingProps.selectionVisible) {
+      buildingProps.updateSelectionHighlight?.(camera);
+    }
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
       // Unit matrices: markThinInstanceSlotDirty on write — do not flushThinInstances
@@ -2286,6 +2320,118 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       setSelRingCount(n);
       writeSelRingColors(n, useCollar ? 'white' : 'cyan');
       pushSelRingColors();
+    },
+
+    /** Place static agora meshes (init / world rebuild). */
+    placeAgoras(list) {
+      agoraProps.place(list ?? []);
+    },
+
+    /** Place constructed buildings. */
+    placeBuildings(list) {
+      buildingProps.place(list ?? []);
+    },
+
+    /** Building selection highlight (HUD-scaled flattened collar). */
+    setBuildingSelectionHighlight(pos) {
+      buildingProps.setSelectionHighlight?.(pos ?? null, camera);
+    },
+
+    /** Placement ghost (translucent building mesh). */
+    setBuildingGhost(pos) {
+      buildingProps.setGhost?.(pos ?? null);
+    },
+
+    /**
+     * GPU mesh pick → own agora / placeable under the cursor, or null.
+     * Hits the actual building mesh (thin instance), not a ground radius.
+     * @param {number} clientX
+     * @param {number} clientY
+     * @returns {Promise<{ kind: 'agora' | 'building', index: number } | null>}
+     */
+    async pickBuilding(clientX, clientY) {
+      const cc = canvasCoords(clientX, clientY);
+      const info = await pickAsync(gpuPicker, cc.x, cc.y, {
+        filter: (mesh) =>
+          Boolean(buildingProps.isPickMesh?.(mesh) || agoraProps.isPickMesh?.(mesh)),
+      });
+      if (!info?.hit || !info.pickedMesh) return null;
+      const slot = info.thinInstanceIndex;
+      return (
+        buildingProps.resolvePick?.(info.pickedMesh, slot) ??
+        agoraProps.resolvePick?.(info.pickedMesh, slot) ??
+        null
+      );
+    },
+
+    /** In-engine agora build radial (HUD-scaled ring + rim models). */
+    showBuildingRadial(x, z) {
+      buildingRadial.showAt(x, z, camera);
+    },
+
+    hideBuildingRadial() {
+      buildingRadial.hide();
+    },
+
+    isBuildingRadialOpen() {
+      return buildingRadial.isOpen();
+    },
+
+    /**
+     * GPU mesh-pick a radial option. Call on click (and throttled hover) only.
+     * @param {number} clientX
+     * @param {number} clientY
+     */
+    async pickBuildingRadial(clientX, clientY) {
+      if (!buildingRadial.isOpen()) return null;
+      const cc = canvasCoords(clientX, clientY);
+      const info = await pickAsync(gpuPicker, cc.x, cc.y, {
+        filter: (mesh) => Boolean(buildingRadial.isPickMesh?.(mesh)),
+      });
+      if (!info?.hit || !info.pickedMesh) return null;
+      return buildingRadial.resolvePick?.(info.pickedMesh) ?? null;
+    },
+
+    /**
+     * Hover via GPU mesh pick (coalesced — never floods the picker queue).
+     * Color highlight only; no model scale.
+     */
+    async hoverBuildingRadial(clientX, clientY) {
+      if (!buildingRadial.isOpen()) return;
+      if (radialHoverInFlight) {
+        radialHoverQueued = { clientX, clientY };
+        return;
+      }
+      radialHoverInFlight = true;
+      try {
+        let cx = clientX;
+        let cy = clientY;
+        for (;;) {
+          const type = await this.pickBuildingRadial(cx, cy);
+          if (!buildingRadial.isOpen()) break;
+          if (type) buildingRadial.setHoverByType?.(type);
+          else buildingRadial.clearHover();
+          const next = radialHoverQueued;
+          radialHoverQueued = null;
+          if (!next) break;
+          cx = next.clientX;
+          cy = next.clientY;
+        }
+      } finally {
+        radialHoverInFlight = false;
+      }
+    },
+
+    /**
+     * Sync gesture test: over the ring band, or currently mesh-hovered option.
+     * Must not await GPU (pointerdown latch).
+     */
+    hitBuildingRadial(clientX, clientY) {
+      if (!buildingRadial.isOpen()) return false;
+      if (buildingRadial.hoveredType?.()) return true;
+      const g = this.screenToGround?.(clientX, clientY);
+      if (!g) return false;
+      return buildingRadial.hitRingBand?.(g.x, g.z) ?? false;
     },
 
     /** Swap flat ground for atlas terrain (or rebuild after world reset). */
@@ -2566,7 +2712,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Sync debug spheres to the same proxies `rayPickSpheres` uses:
+     * Sync debug spheres (manual A/B). Live picking uses GPU meshes via `pickUnit`.
      * `{ x, y, z, r }[]` with center at pickHeight and radius pickRadius.
      */
     syncPickHitboxes(spheres) {
@@ -2588,7 +2734,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return groundYAt(x, z);
     },
 
-    /** Rebuild type-batch mapping when entity count/types change (e.g. sandbox → live). */
+    /** Rebuild type-batch mapping when entity count/types change (e.g. staging → live). */
     rebuildFromTypes(count, typesArr, ownersArr) {
       setSelRingCount(count);
       const stillUnmapped = mapEntitySlots(count, typesArr, ownersArr);
@@ -2869,6 +3015,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       };
     },
 
+    /**
+     * GPU mesh pick → sim entity id, or -1.
+     * Uses rest-pose geometry for VAT units (instance matrix only).
+     * Caller should filter alive / carried / owner.
+     */
+    async pickUnit(clientX, clientY) {
+      const cc = canvasCoords(clientX, clientY);
+      const info = await pickAsync(gpuPicker, cc.x, cc.y, {
+        filter: (mesh) => unitPickMeshes.has(mesh),
+      });
+      if (!info?.hit || !info.pickedMesh) return -1;
+      const batch = unitPickMeshes.get(info.pickedMesh);
+      if (!batch) return -1;
+      const slot = info.thinInstanceIndex;
+      if (slot < 0 || slot >= batch.entityIds.length) return -1;
+      const id = batch.entityIds[slot];
+      return Number.isInteger(id) && id >= 0 ? id : -1;
+    },
+
     rayPickSpheres(clientX, clientY, spheres) {
       const cc = canvasCoords(clientX, clientY);
       const ray = pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
@@ -2880,7 +3045,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const t = rayHitSphere(ray, sp.x, sp.y, sp.z, sp.r);
         if (t !== null && t < bestT) {
           bestT = t;
-          best = sp.id;
+          best = sp.id != null ? sp.id : s;
         }
       }
       return best;

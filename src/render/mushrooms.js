@@ -1,5 +1,5 @@
 // Thin-instanced mushroom clusters for Spore Bloom seed previews.
-// Appear on pending growth tiles; clear when the tree sprouts.
+// Appear on pending growth tiles; linger and shrink while trees grow over them.
 
 import {
   addToScene,
@@ -14,6 +14,8 @@ const MAX_MUSHROOMS = 1024;
 /** Per-tile cluster size (matches v1 preview density). */
 const CLUSTER_COUNT = 9;
 const GROW_IN_MS = 900;
+/** Shrink away after sprout while trees grow over them (~tree grow-in). */
+const FADE_OUT_MS = 1600;
 
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
@@ -129,7 +131,8 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   /**
    * @type {Map<string, {
    *   x: number, z: number, growAtTick: number,
-   *   growT: number, instances: Array<{ slot: number, ox: number, oz: number, yaw: number, scale: number }>
+   *   growT: number, shrinkT: number,
+   *   instances: Array<{ slot: number, ox: number, oz: number, yaw: number, scale: number }>
    * }>}
    */
   const clusters = new Map();
@@ -173,6 +176,7 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       z,
       growAtTick: growAtTick | 0,
       growT: 0,
+      shrinkT: 0,
       instances,
     });
     dirty = true;
@@ -181,14 +185,6 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
 
   function clearGrown(tick) {
     if (Number.isFinite(tick)) simTick = tick;
-    let changed = false;
-    for (const [key, c] of clusters) {
-      if (simTick < c.growAtTick) continue;
-      releaseCluster(c);
-      clusters.delete(key);
-      changed = true;
-    }
-    if (changed) dirty = true;
   }
 
   function rebuild() {
@@ -196,11 +192,14 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     let drawCount = 0;
     for (const c of clusters.values()) {
       const gy = groundYAt(c.x, c.z);
-      const ease = 1 - (1 - Math.min(1, c.growT)) ** 3;
+      const growEase = 1 - (1 - Math.min(1, c.growT)) ** 3;
+      const shrinkEase = 1 - (1 - Math.min(1, c.shrinkT)) ** 3;
+      const size = (0.2 + 0.8 * growEase) * (1 - shrinkEase);
+      if (size <= 0.001) continue;
       for (let i = 0; i < c.instances.length; i++) {
         if (drawCount >= MAX_MUSHROOMS) break;
         const inst = c.instances[i];
-        const scale = inst.scale * (0.2 + 0.8 * ease);
+        const scale = inst.scale * size;
         for (let b = 0; b < batches.length; b++) {
           writeMatrix(
             batches[b].matrices,
@@ -224,15 +223,27 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   }
 
   function update(deltaMs, tick) {
-    if (Number.isFinite(tick)) clearGrown(tick);
+    if (Number.isFinite(tick)) simTick = tick;
     const dt = Math.min(100, Math.max(0, deltaMs));
-    let growing = false;
-    for (const c of clusters.values()) {
-      if (c.growT >= 1) continue;
-      c.growT = Math.min(1, c.growT + dt / GROW_IN_MS);
-      growing = true;
+    let animating = false;
+    for (const [key, c] of clusters) {
+      if (c.growT < 1) {
+        c.growT = Math.min(1, c.growT + dt / GROW_IN_MS);
+        animating = true;
+      }
+      if (simTick >= c.growAtTick) {
+        if (c.shrinkT < 1) {
+          c.shrinkT = Math.min(1, c.shrinkT + dt / FADE_OUT_MS);
+          animating = true;
+        }
+        if (c.shrinkT >= 1) {
+          releaseCluster(c);
+          clusters.delete(key);
+          dirty = true;
+        }
+      }
     }
-    if (growing || dirty) {
+    if (animating || dirty) {
       rebuild();
       dirty = false;
     }

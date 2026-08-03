@@ -1,5 +1,5 @@
 // Render-only Spore Bloom FX.
-// Stage order: inky drips + colorful seed wisps → trees shrink → mushrooms → trees.
+// Stage order: inky drips → colorful seed wisps → trees shrink → mushrooms → trees.
 
 /**
  * @param {(init: object) => unknown} emit
@@ -12,13 +12,18 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
   const drips = [];
   /** @type {Array<{ x: number, z: number, growAtTick: number, wait: number }>} */
   const pendingMushrooms = [];
-  /** Seed-tile wisps — start with drips, keep until grow tick. */
-  /** @type {Map<string, { x: number, z: number, growAtTick: number, acc: number }>} */
+  /** Seed-tile wisps — delayed so ink drips lead; stop just before trees sprout. */
+  /** @type {Map<string, { x: number, z: number, growAtTick: number, delay: number, acc: number }>} */
   const seeds = new Map();
 
   const DRIP_LIFE = 1.35;
+  // Let ink beads hang/drop before fungal sparkles kick in.
+  const WISP_START_DELAY = 0.55;
   // Trees start melt ~0.85s and finish ~2.25s; sprout mushies as melt wraps up.
   const MUSHROOM_DELAY = 1.55;
+  // Sim runs at 20Hz; cut wisps this many ticks before grow so live ones fade before trees.
+  const TICK_HZ = 20;
+  const WISP_END_LEAD_TICKS = Math.round(1.0 * TICK_HZ);
 
   function seedKey(x, z) {
     return `${x.toFixed(2)},${z.toFixed(2)}`;
@@ -88,7 +93,11 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
   /** Purple / green fungal sparkles on seed tiles (pre-mushroom placeholder look). */
   function emitSeedWisps(dt) {
     for (const s of seeds.values()) {
-      if (simTick >= s.growAtTick) continue;
+      if (simTick >= s.growAtTick - WISP_END_LEAD_TICKS) continue;
+      if (s.delay > 0) {
+        s.delay -= dt;
+        continue;
+      }
       s.acc += dt;
       if (s.acc < 0.08) continue;
       s.acc = 0;
@@ -122,7 +131,7 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
   function clearGrownSeeds(tick) {
     if (Number.isFinite(tick)) simTick = tick;
     for (const [key, s] of seeds) {
-      if (simTick >= s.growAtTick) seeds.delete(key);
+      if (simTick >= s.growAtTick - WISP_END_LEAD_TICKS) seeds.delete(key);
     }
   }
 
@@ -151,8 +160,14 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
         const x = patch.seedX[i];
         const z = patch.seedY[i];
         const growAtTick = patch.seedGrowAt[i] | 0;
-        // Wisps begin immediately with the ink drips.
-        seeds.set(seedKey(x, z), { x, z, growAtTick, acc: 0 });
+        // Wisps wait so ink drips read first.
+        seeds.set(seedKey(x, z), {
+          x,
+          z,
+          growAtTick,
+          delay: WISP_START_DELAY,
+          acc: 0,
+        });
         pendingMushrooms.push({
           x,
           z,

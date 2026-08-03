@@ -14,8 +14,8 @@ import { FROG_PHASE, MAX_FROGS } from '../sim/frogs.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 
 const FROG_MODEL_URL = '/assets/models/frog.glb';
-/** v1 scenery used 0.1; ability frogs need to read in a fight. */
-const FROG_SCALE = 2.2;
+/** Raw glTF scale — no aftermarket resize. */
+const FROG_SCALE = 1;
 const HOP_ARC_OUT = 3.2;
 const HOP_ARC_AWAY = 2.4;
 const HOP_ARC_ESCAPE = 2.8;

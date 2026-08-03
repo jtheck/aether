@@ -4,7 +4,7 @@
 //   1) apply commands (the only external input)
 //   2) combat acquire + attacks
 //   3) movement (path follow)
-//   4) light separation (idle/stacked only — never fights path follow)
+//   4) soft separation (standing units + light moving avoidance — never fights path follow)
 //   5) advance the tick counter
 //
 // Determinism rules (enforced by discipline + the partition): no Date.now /
@@ -31,6 +31,7 @@ import { ORDER } from './world.js';
 import { worldToTile, isPassable, isSlowTile } from './field.js';
 import { SLOW_MULTIPLIER } from './scenery.js';
 import { kothMetaStep } from './kothMeta.js';
+import { agoraCaptureSystem } from './agora.js';
 import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
 import { projectileSystem } from './projectiles.js';
 import { treeBurnSystem } from './trees.js';
@@ -49,12 +50,17 @@ import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
 const DISTRACT_MOVE_MUL = fx.fromFloat(0.55);
-// Soft personal space ≈ right-click formation spacing (2.5 for warriors).
-// Old code multiplied by an extra 2.5× factor, so idle post-combat piles
-// kept drifting out to ~6+ and looked like endless turning/inching.
-const SEP_PUSH = fx.fromFloat(0.2);
-const MOVE_AVOID_PUSH = fx.fromFloat(0.06);
+// Soft personal space — enough that meshes don't occupy the same pixel,
+// not a parade grid. Old code multiplied by an extra 2.5× factor, so idle
+// post-combat piles kept drifting out to ~6+ (endless turning/inching).
+//
+// Dense arrivals can't satisfy full spacing for every pair; without slack the
+// pack ripples forever. Push only past SEP_SLACK, quadratic near the edge.
+const SEP_PUSH = fx.fromFloat(0.35);
+const MOVE_AVOID_PUSH = fx.fromFloat(0.12);
 const SEP_MAX_STEP = fx.fromFloat(0.25);
+/** Stop separating once within this of minDist — kills overpack wave chatter. */
+const SEP_SLACK = fx.fromFloat(0.4);
 const GRID_SEP_THRESHOLD = 400;
 // Visit every source cell over eight deterministic ticks to bound dense idle work.
 const SEP_PHASES = 8;
@@ -65,7 +71,8 @@ const SEP_MIN_DIST_SQ = new Int32Array(SEP_TYPE_COUNT * SEP_TYPE_COUNT);
 for (let a = 0; a < SEP_TYPE_COUNT; a++) {
   for (let b = 0; b < SEP_TYPE_COUNT; b++) {
     const key = a * SEP_TYPE_COUNT + b;
-    const spacing = Math.max(2.0, unitFootprint(a) + unitFootprint(b));
+    // Footprints alone are size/6 (~0.75); floor keeps infantry from looking glued.
+    const spacing = Math.max(2.4, unitFootprint(a) + unitFootprint(b));
     SEP_MIN_DIST[key] = fx.fromFloat(spacing);
     SEP_MIN_DIST_SQ[key] = fx.mul(SEP_MIN_DIST[key], SEP_MIN_DIST[key]);
   }
@@ -92,6 +99,7 @@ export function step(world, field, commands) {
   treeBurnSystem(field);
   sporeGrowthSystem(world, field);
   kothMetaStep(world);
+  agoraCaptureSystem(world);
   planPathBudget(world, field);
   movementSystem(world, field);
   syncCarriedPositions(world);
@@ -154,7 +162,7 @@ function movementSystem(w, field) {
       w.hasTarget[i] &&
       atFinalDest(w, i)
     ) {
-      finishMove(w, i, order);
+      finishMove(w, i);
       continue;
     }
 
@@ -180,13 +188,13 @@ function movementSystem(w, field) {
         // Path exhausted — repath or seek final dest (do not go IDLE early).
         onPathExhausted(w, field, i);
         if (atFinalDest(w, i)) {
-          finishMove(w, i, order);
+          finishMove(w, i);
           continue;
         }
         if (w.navWpCount[i] === 0) {
           // Gave up after max repaths, or A* found nothing — stop cleanly.
           if (w.repathCount[i] >= MAX_REPATHS) {
-            finishMove(w, i, order);
+            finishMove(w, i);
           } else {
             w.vx[i] = 0;
             w.vy[i] = 0;
@@ -224,17 +232,17 @@ function movementSystem(w, field) {
   }
 }
 
-function finishMove(w, i, order) {
+function finishMove(w, i) {
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;
   w.pathRequest[i] = 0;
   w.vx[i] = 0;
   w.vy[i] = 0;
-  if (order === ORDER.MOVE) {
-    w.order[i] = ORDER.IDLE;
-    w.hasTarget[i] = 0;
-  }
-  // ATTACK_MOVE keeps order — combat acquire may pick a target.
+  // Click fulfilled — drop the move target so soft-sep can bloom. Leaving
+  // hasTarget set made ATTACK_MOVE repath into the pile forever (crowd waves).
+  w.hasTarget[i] = 0;
+  // IDLE still auto-acquires; keeps render facing from treating sep nudges as walks.
+  w.order[i] = ORDER.IDLE;
 }
 
 /** Axis-by-axis wall slide — enter blocked tiles only when escaping them. */
@@ -306,12 +314,20 @@ function isMovingUnit(w, i) {
   return w.vx[i] !== 0 || w.vy[i] !== 0;
 }
 
+/** Same-owner crowding candidate — movers and standers both count. */
+function isAvoidanceUnit(w, i) {
+  if (!w.alive[i] || isCarried(w, i) || isLobbing(w, i)) return false;
+  return true;
+}
+
 function movingAvoidanceSystem(w, field) {
   if (w.count < GRID_SEP_THRESHOLD) {
     for (let i = 0; i < w.count; i++) {
-      if (!w.alive[i] || !isMovingUnit(w, i)) continue;
+      if (!isAvoidanceUnit(w, i)) continue;
       for (let j = i + 1; j < w.count; j++) {
-        if (!w.alive[j] || !isMovingUnit(w, j) || w.owner[i] !== w.owner[j]) continue;
+        if (!isAvoidanceUnit(w, j) || w.owner[i] !== w.owner[j]) continue;
+        // Need at least one mover — pure standers are separationSystem's job.
+        if (!isMovingUnit(w, i) && !isMovingUnit(w, j)) continue;
         w.metrics.movingAvoidancePairs++;
         applyMovingAvoidance(w, field, i, j);
       }
@@ -320,7 +336,7 @@ function movingAvoidanceSystem(w, field) {
   }
 
   const grid = w.spatial;
-  rebuildSpatialGrid(grid, w, isMovingUnit, false);
+  rebuildSpatialGrid(grid, w, isAvoidanceUnit, false);
   for (let z = 0; z < grid.rows; z++) {
     for (let x = 0; x < grid.cols; x++) {
       const cell = spatialCellId(x, z, grid);
@@ -328,6 +344,7 @@ function movingAvoidanceSystem(w, field) {
       for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
         for (let j = grid.next[i]; j >= 0; j = grid.next[j]) {
           if (w.owner[i] !== w.owner[j]) continue;
+          if (!isMovingUnit(w, i) && !isMovingUnit(w, j)) continue;
           w.metrics.movingAvoidancePairs++;
           applyMovingAvoidance(w, field, i, j);
         }
@@ -340,6 +357,7 @@ function movingAvoidanceSystem(w, field) {
         for (let i = grid.head[cell]; i >= 0; i = grid.next[i]) {
           for (let j = grid.head[other]; j >= 0; j = grid.next[j]) {
             if (w.owner[i] !== w.owner[j]) continue;
+            if (!isMovingUnit(w, i) && !isMovingUnit(w, j)) continue;
             w.metrics.movingAvoidancePairs++;
             applyMovingAvoidance(w, field, i, j);
           }
@@ -350,10 +368,11 @@ function movingAvoidanceSystem(w, field) {
 }
 
 function applyMovingAvoidance(w, field, i, j) {
-  applyPairPush(w, field, i, j, MOVE_AVOID_PUSH);
+  if (!sameSepLayer(w, i, j)) return;
+  applyPairPush(w, field, i, j, MOVE_AVOID_PUSH, false);
 }
 
-// Soft separation for idle units that somehow overlap — never while pathing.
+// Soft separation for units that aren't pathing — never fights an active route.
 function separationSystem(w, field) {
   if (w.count >= GRID_SEP_THRESHOLD) {
     gridSeparation(w, field);
@@ -408,23 +427,35 @@ function gridSeparation(w, field) {
   }
 }
 
+/**
+ * Soft personal space while standing. Path follow owns position while navigating
+ * (nav waypoints or pending plan) — right-click ATTACK_MOVE holders used to stay
+ * stacked forever because this required ORDER.IDLE.
+ */
 function canSeparate(w, i) {
-  if (isCarried(w, i)) return false;
-  return (
-    w.navWpCount[i] === 0 &&
-    !w.hasTarget[i] &&
-    w.order[i] === ORDER.IDLE
-  );
+  if (!w.alive[i] || isCarried(w, i) || isLobbing(w, i)) return false;
+  if (w.navWpCount[i] > 0 || w.pathRequest[i]) return false;
+  return true;
+}
+
+/** Air and ground don't shove each other — dirigibles aren't in the infantry pile. */
+function sameSepLayer(w, i, j) {
+  return isFlyer(w.type[i]) === isFlyer(w.type[j]);
 }
 
 function applySeparation(w, field, i, j) {
   // Small-count pairwise path does not prefilter; keep this guard authoritative.
   if (!canSeparate(w, i) || !canSeparate(w, j)) return;
-  applyPairPush(w, field, i, j, SEP_PUSH);
+  if (!sameSepLayer(w, i, j)) return;
+  // Mutual + slack: one-sided push left march piles stuck on a line.
+  applyPairPush(w, field, i, j, SEP_PUSH, false);
 }
 
-/** Soft radial push; clamps near-zero 1/dist spikes and breaks exact overlaps. */
-function applyPairPush(w, field, i, j, strength) {
+/**
+ * Soft radial push. Slack deadzone + quadratic depth so near-spaced units stay
+ * put; exact stacks still break. `asymmetric` moves only the higher id (stable).
+ */
+function applyPairPush(w, field, i, j, strength, asymmetric) {
   let dx = w.px[j] - w.px[i];
   let dy = w.py[j] - w.py[i];
   const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
@@ -439,29 +470,51 @@ function applyPairPush(w, field, i, j, strength) {
     else if (axis === 2) { dx = 0; dy = fx.ONE; }
     else { dx = 0; dy = -fx.ONE; }
     dist2 = fx.ONE;
+  } else if (fx.abs(dy) < fx.fromFloat(0.08) && dist2 < SEP_MIN_DIST_SQ[typePair]) {
+    // March columns are nearly collinear — add a stable lateral bias so the
+    // pack can bloom into 2D instead of accordioning on one axis.
+    dy = ((i * 31 + j * 17) & 1) ? fx.ONE : -fx.ONE;
+    dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
   }
   const dist = fx.sqrt(dist2);
-  let push = fx.div(fx.mul(strength, minDist - dist), dist);
-  if (push > SEP_MAX_STEP) push = SEP_MAX_STEP;
-  const px = fx.mul(dx, push);
-  const py = fx.mul(dy, push);
+  const overlap = minDist - dist;
+  if (overlap <= SEP_SLACK) return;
+  // Only the hard overlap past slack — linear so stacks break, tiny near the edge.
+  const hard = overlap - SEP_SLACK;
+  let mag = fx.mul(strength, hard);
+  if (mag > SEP_MAX_STEP) mag = SEP_MAX_STEP;
+  // Unit direction i→j; displacement along that axis.
+  const ux = fx.div(dx, dist);
+  const uy = fx.div(dy, dist);
+  if (asymmetric) {
+    // Higher id yields — same relative close-rate as mutual ±mag/2 each.
+    const step = mag;
+    if (i > j) {
+      w.px[i] -= fx.mul(ux, step);
+      w.py[i] -= fx.mul(uy, step);
+      revertIfBlocked(w, field, i, fx.mul(ux, step), fx.mul(uy, step));
+    } else {
+      w.px[j] += fx.mul(ux, step);
+      w.py[j] += fx.mul(uy, step);
+      revertIfBlocked(w, field, j, fx.mul(-ux, step), fx.mul(-uy, step));
+    }
+    return;
+  }
+  const px = fx.mul(ux, mag);
+  const py = fx.mul(uy, mag);
   w.px[i] -= px;
   w.py[i] -= py;
   w.px[j] += px;
   w.py[j] += py;
-  if (
-    !isFlyer(w.type[i]) &&
-    !isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))
-  ) {
-    w.px[i] += px;
-    w.py[i] += py;
-  }
-  if (
-    !isFlyer(w.type[j]) &&
-    !isPassable(field, worldToTile(w.px[j]), worldToTile(w.py[j]))
-  ) {
-    w.px[j] -= px;
-    w.py[j] -= py;
+  revertIfBlocked(w, field, i, px, py);
+  revertIfBlocked(w, field, j, -px, -py);
+}
+
+function revertIfBlocked(w, field, i, undoX, undoY) {
+  if (isFlyer(w.type[i])) return;
+  if (!isPassable(field, worldToTile(w.px[i]), worldToTile(w.py[i]))) {
+    w.px[i] += undoX;
+    w.py[i] += undoY;
   }
 }
 

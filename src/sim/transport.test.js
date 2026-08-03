@@ -13,6 +13,7 @@ import {
   passengerCount,
   isCarried,
   TRANSPORT_LOAD_RANGE,
+  assignNearestRidersToTransport,
 } from './transport.js';
 
 function loadRespectsCapacity() {
@@ -175,6 +176,72 @@ function dirigibleCapacitySix() {
   assert.equal(loaded, 6);
 }
 
+/** Click-to-load picks nearest selected riders up to free seats. */
+function nearestRidersFillCapacity() {
+  const w = createWorld(20);
+  const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
+  // Wagon cap 4. Far crowd + two close units — close ones must win seats.
+  const nearA = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.WARRIOR, owner: 0 });
+  const nearB = spawn(w, { x: fx.fromFloat(3), y: 0, type: UNIT.WARRIOR, owner: 0 });
+  const far = [];
+  for (let k = 0; k < 6; k++) {
+    far.push(
+      spawn(w, {
+        x: fx.fromFloat(40 + k),
+        y: 0,
+        type: UNIT.WARRIOR,
+        owner: 0,
+      }),
+    );
+  }
+  const ids = [wagon, nearA, nearB, ...far];
+  const assignments = assignNearestRidersToTransport(w, wagon, ids);
+  assert.equal(assignments.length, 4, 'fills free seats only');
+  const riders = assignments.map((a) => a.riderId);
+  assert.ok(riders.includes(nearA) && riders.includes(nearB), 'nearest pair embark');
+  assert.equal(riders.includes(far[far.length - 1]), false, 'farthest left behind');
+}
+
+/** Embark command from click-style assignment actually loads. */
+function clickEmbarkLoadsNearest() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(21);
+  const wagon = spawn(w, { x: 0, y: 0, type: UNIT.WAGON, owner: 0 });
+  const near = spawn(w, {
+    x: TRANSPORT_LOAD_RANGE + fx.fromFloat(4),
+    y: 0,
+    type: UNIT.ARCHER,
+    owner: 0,
+  });
+  const far = spawn(w, {
+    x: fx.fromFloat(80),
+    y: 0,
+    type: UNIT.ARCHER,
+    owner: 0,
+  });
+  const assignments = assignNearestRidersToTransport(w, wagon, [wagon, near, far]);
+  assert.equal(assignments.length, 2);
+  assert.equal(assignments[0].riderId, near);
+
+  const moveIds = [...assignments.map((a) => a.riderId), wagon];
+  step(w, field, [
+    {
+      type: CMD.MOVE,
+      entities: moveIds,
+      tx: moveIds.map(() => 0),
+      ty: moveIds.map(() => 0),
+      transportAssignments: assignments,
+    },
+  ]);
+  for (let t = 0; t < 200; t++) {
+    step(w, field, []);
+    if (isCarried(w, near)) break;
+  }
+  assert.equal(isCarried(w, near), true);
+  assert.equal(isCarried(w, far), false, 'far rider not assigned — stays out');
+}
+
 loadRespectsCapacity();
 rejectsTransportInTransport();
 rejectsMonks();
@@ -184,4 +251,6 @@ carriedSkipsCombat();
 autoLoadOnApproach();
 autoLoadOnAttackMove();
 dirigibleCapacitySix();
+nearestRidersFillCapacity();
+clickEmbarkLoadsNearest();
 console.log('transport.test.js: ok');

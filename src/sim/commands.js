@@ -10,7 +10,8 @@
 // command can be applied locally, sent over the wire, or replayed from a log.
 
 import { ORDER } from './world.js';
-import { clearPath, queuePath, attackStandPoint } from './path.js';
+import * as fx from './fixed.js';
+import { clearPath, queuePath, attackStandPoint, groupArriveRadiusSq } from './path.js';
 import { isPassable, snapToPassable, worldToTile } from './field.js';
 import { spawnKothSlot } from './worldSetup.js';
 import { kothRegisterJoin } from './kothMeta.js';
@@ -25,6 +26,7 @@ import {
   unloadPassengers,
 } from './transport.js';
 import { beginRepair } from './repair.js';
+import { applyPlaceBuilding } from './buildings.js';
 
 export const CMD = {
   MOVE: 1,
@@ -38,6 +40,8 @@ export const CMD = {
   SELECT: 8,
   /** Spill passengers from selected transports; optional walk target. */
   UNLOAD: 9,
+  /** Place a building at world xz (stub — no cost / build time). */
+  PLACE_BUILDING: 10,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -81,6 +85,9 @@ export function applyCommands(world, field, commands) {
       case CMD.UNLOAD:
         applyUnload(world, field, cmd.entities, cmd.tx, cmd.ty);
         break;
+      case CMD.PLACE_BUILDING:
+        applyPlaceBuilding(world, cmd);
+        break;
       default:
         break;
     }
@@ -123,6 +130,13 @@ function applySelect(world, playerId, entities) {
 
 function applyMove(world, field, ids, tx, ty, order) {
   stampSquadGroup(world, ids);
+  let movers = 0;
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    if (world.alive[i] && !isCarried(world, i)) movers++;
+  }
+  const arriveR2 = groupArriveRadiusSq(movers);
+
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
@@ -140,11 +154,22 @@ function applyMove(world, field, ids, tx, ty, order) {
         }
       }
     }
-    world.order[i] = order;
-    world.targetEntity[i] = -1;
-    clearEngagement(world, i);
     world.tx[i] = destX;
     world.ty[i] = destY;
+    world.targetEntity[i] = -1;
+    clearEngagement(world, i);
+
+    // Already inside the soft gather disk — stay put (don't smash onto the click).
+    if (fx.dist2(world.px[i], world.py[i], destX, destY) <= arriveR2) {
+      world.order[i] = ORDER.IDLE;
+      world.hasTarget[i] = 0;
+      world.vx[i] = 0;
+      world.vy[i] = 0;
+      clearPath(world, i);
+      continue;
+    }
+
+    world.order[i] = order;
     world.hasTarget[i] = 1;
     queuePath(world, i, destX, destY);
   }

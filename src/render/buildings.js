@@ -1,4 +1,5 @@
-// Thin-instanced placeable buildings + ghost preview + flattened selection collar.
+// Thin-instanced placeable buildings + ghost preview + building selection collar.
+// Selection collar is S/M/L only (not the agora build menu).
 
 import {
   addToScene,
@@ -15,17 +16,17 @@ const MAX_PER_TYPE = 64;
 const GHOST_ALPHA = 0.42;
 const SELECTION_COLLAR_URL = '/assets/models/collar.glb';
 const FOOT_CLEARANCE = 0.06;
-/** Squash factor — collar.glb reads as a flat ring, not a tower. */
-const COLLAR_Y_SCALE = 0.1;
-/** Lift above ground so the ring reads over the building foot. */
-const COLLAR_Y_LIFT = 1.35;
-const COLLAR_ALPHA = 0.78;
-/** Base collar size at mid-zoom (scaled by camera radius across full zoom range). */
-const BUILDING_COLLAR_SCALE = 5.5;
-/** Match radial ring radius (~18) so agora selection collar is the menu base. */
-const AGORA_COLLAR_SCALE = 18;
-const HUD_SCALE_AT_NEAR = 0.28;
-const HUD_SCALE_AT_FAR = 2.75;
+/** Thicker than the old paper-thin squash. */
+const COLLAR_Y_SCALE = 0.32;
+const COLLAR_Y_LIFT = 0.9;
+const COLLAR_ALPHA = 0.82;
+
+/** Building selection sizes — same idea as unit S / caster / vehicle collars. */
+export const BUILDING_SEL_SIZE = /** @type {const} */ ({
+  s: 4.2,
+  m: 7.0,
+  l: 11.5,
+});
 
 const MODEL_URLS = {
   barracks: '/assets/models/barracks.glb',
@@ -71,11 +72,11 @@ function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
   matrices[o + 15] = 1;
 }
 
-/** Flat collar: full XZ scale, crushed Y. */
+/** Flattened collar: XZ = size, Y crushed but thicker than before. */
 function writeFlatCollar(matrices, slot, x, z, scaleXZ, groundY) {
   const o = slot * 16;
   const sx = scaleXZ;
-  const sy = scaleXZ * COLLAR_Y_SCALE;
+  const sy = Math.max(0.35, scaleXZ * COLLAR_Y_SCALE);
   const sz = scaleXZ;
   matrices[o] = sx;
   matrices[o + 1] = 0;
@@ -130,6 +131,14 @@ function tintGhostMaterial(mat) {
 }
 
 /**
+ * @param {'s' | 'm' | 'l' | string | undefined} size
+ */
+function resolveSelScale(size) {
+  const key = size === 's' || size === 'm' || size === 'l' ? size : 'm';
+  return BUILDING_SEL_SIZE[key];
+}
+
+/**
  * @param {object} engine
  * @param {object} scene
  * @param {(x: number, z: number) => number} groundYAt
@@ -139,10 +148,8 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   const byType = new Map();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
   const ghostByType = new Map();
-  /** mesh → building type id (solid placed meshes only). */
   /** @type {Map<object, string>} */
   const pickMeshes = new Map();
-  /** type → thin-instance slot → global buildings[] index */
   /** @type {Map<string, number[]>} */
   const slotToIndex = new Map();
 
@@ -207,7 +214,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     }
   } catch (err) {
     console.warn('[buildings] selection collar failed; using cyan disc', err);
-    const mesh = createCylinder(engine, { diameter: 1, height: 0.06, tessellation: 32 });
+    const mesh = createCylinder(engine, { diameter: 1, height: 0.2, tessellation: 32 });
     const mat = createStandardMaterial();
     mat.diffuseColor = [0.2, 0.95, 1];
     mat.emissiveColor = [0.15, 0.7, 0.85];
@@ -229,7 +236,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   let selVisible = false;
   /** @type {string | null} */
   let ghostType = null;
-  /** @type {{ x: number, z: number, baseScale: number } | null} */
+  /** @type {{ x: number, z: number, size: 's' | 'm' | 'l' } | null} */
   let selAnchor = null;
 
   function hideAllGhosts() {
@@ -286,23 +293,12 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   }
 
   /**
-   * @param {object | null | undefined} camera
+   * Fixed S/M/L world size — does not HUD-scale with camera (menu does that).
    */
-  function hudMul(camera) {
-    const minR = camera?.lowerRadiusLimit ?? 40;
-    const maxR = camera?.upperRadiusLimit ?? 400;
-    const r = camera?.radius ?? (minR + maxR) * 0.5;
-    const t = Math.min(1, Math.max(0, (r - minR) / Math.max(1e-6, maxR - minR)));
-    return HUD_SCALE_AT_NEAR + t * (HUD_SCALE_AT_FAR - HUD_SCALE_AT_NEAR);
-  }
-
-  /**
-   * @param {object | null | undefined} camera
-   */
-  function applySelectionHighlight(camera) {
+  function applySelectionHighlight() {
     if (!selAnchor) return;
     const gy = groundYAt(selAnchor.x, selAnchor.z);
-    const scale = selAnchor.baseScale * hudMul(camera);
+    const scale = resolveSelScale(selAnchor.size);
     for (const part of selParts) {
       writeFlatCollar(part.matrices, 0, selAnchor.x, selAnchor.z, scale, gy);
       setThinInstanceCount(part.mesh, 1);
@@ -313,10 +309,9 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   }
 
   /**
-   * @param {{ x: number, z: number, scale?: number, radius?: number } | null} pos
-   * @param {object | null} [camera]
+   * @param {{ x: number, z: number, size?: 's' | 'm' | 'l' } | null} pos
    */
-  function setSelectionHighlight(pos, camera = null) {
+  function setSelectionHighlight(pos) {
     if (!pos) {
       selAnchor = null;
       for (const part of selParts) {
@@ -327,18 +322,14 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       selVisible = false;
       return;
     }
-    selAnchor = {
-      x: pos.x,
-      z: pos.z,
-      baseScale: pos.scale ?? pos.radius ?? BUILDING_COLLAR_SCALE,
-    };
-    applySelectionHighlight(camera);
+    const size = pos.size === 's' || pos.size === 'l' ? pos.size : 'm';
+    selAnchor = { x: pos.x, z: pos.z, size };
+    applySelectionHighlight();
   }
 
-  /** Per-frame: keep selection collar readable across the full zoom range. */
-  function updateSelectionHighlight(camera) {
+  function updateSelectionHighlight() {
     if (!selVisible || !selAnchor) return;
-    applySelectionHighlight(camera);
+    applySelectionHighlight();
   }
 
   /**
@@ -397,8 +388,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     clear,
     isPickMesh,
     resolvePick,
-    BUILDING_COLLAR_SCALE,
-    AGORA_COLLAR_SCALE,
+    BUILDING_SEL_SIZE,
     get ghostVisible() {
       return ghostVisible;
     },

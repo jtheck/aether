@@ -484,10 +484,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (!sel) return null;
     if (sel.kind === 'agora') {
       const a = session.agoras?.[sel.index];
-      return a ? { x: a.x, z: a.z, scale: 18 } : null;
+      return a ? { x: a.x, z: a.z, size: /** @type {const} */ ('l') } : null;
     }
     const b = session.buildings?.[sel.index];
-    return b ? { x: b.x, z: b.z, scale: 5.5 } : null;
+    // Placeables default to M; perch is small.
+    if (!b) return null;
+    const size = b.type === 'perch' ? 's' : 'm';
+    return { x: b.x, z: b.z, size };
   }
 
   function syncBuildingHighlight(sel) {

@@ -1,9 +1,9 @@
-// In-engine agora build radial — hollow ring + rim building icons.
-// Icons sit on the ring (selection-collar height). World size tracks camera distance.
+// Agora build menu — flat annulus rings (real ring meshes) + icons.
+// Menu HUD-scales with camera. Selection collar is unrelated.
 
 import {
   addToScene,
-  createTube,
+  createMeshFromData,
   createStandardMaterial,
   flushThinInstances,
   setThinInstances,
@@ -12,20 +12,20 @@ import {
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { PLACEABLE_BUILDINGS } from '../sim/buildings.js';
 
-/**
- * Layout at HUD ref distance (scale = 1).
- * Ring matches selection-collar height; wide rim so icons aren't piled on each other.
- */
-const COLLAR_Y_LIFT = 1.35;
-const RING_R = 18;
-const RING_TUBE = 0.55;
-/** Icons sit on the ring path (same radius as the tube centerline). */
-const RIM_R = 18;
+/** Layout at HUD scale = 1 (ring outer radius in world units). */
+const MENU_Y = 2.4;
+const MENU_RING_OUTER = 16;
+const MENU_RING_INNER = 13.2;
+const MENU_RING_H = 0.35;
+const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
+const PAD_OUTER = 2.6;
+const PAD_INNER = 1.7;
+const PAD_H = 0.22;
+/** Lift pad rings (and icons) above the base menu ring. */
+const PAD_LIFT = 1.15;
+/** Extra lift of icons above their pad ring. */
+const ICON_LIFT = 0.85;
 const OPTION_SCALE = 0.26;
-/**
- * HUD scale tracks camera.radius across the full zoom range (not a narrow
- * distance band that plateaus for most of the scroll).
- */
 const HUD_SCALE_AT_NEAR = 0.28;
 const HUD_SCALE_AT_FAR = 2.75;
 const MAX_OPTIONS = 8;
@@ -37,6 +37,105 @@ const MODEL_URLS = {
   tavern: '/assets/models/tavern.glb',
   perch: '/assets/models/perch.glb',
 };
+
+/**
+ * Flat washer / annulus in XZ (Y up). Unit scale: outer radius = 1.
+ * @param {object} engine
+ * @param {string} name
+ * @param {{ inner?: number, height?: number, segments?: number }} [opts]
+ *   inner = innerRadius / outerRadius (0..1). height in units of outer radius.
+ */
+function createAnnulusMesh(engine, name, opts = {}) {
+  const innerFrac = opts.inner ?? 0.75;
+  const h = opts.height ?? 0.04;
+  const segments = opts.segments ?? 48;
+  const ro = 1;
+  const ri = Math.max(0.05, Math.min(0.95, innerFrac));
+  const y0 = -h * 0.5;
+  const y1 = h * 0.5;
+
+  /** @type {number[]} */
+  const positions = [];
+  /** @type {number[]} */
+  const normals = [];
+  /** @type {number[]} */
+  const indices = [];
+
+  function pushVert(x, y, z, nx, ny, nz) {
+    positions.push(x, y, z);
+    normals.push(nx, ny, nz);
+    return positions.length / 3 - 1;
+  }
+
+  // Top + bottom caps
+  for (let cap = 0; cap < 2; cap++) {
+    const y = cap === 0 ? y1 : y0;
+    const ny = cap === 0 ? 1 : -1;
+    const base = positions.length / 3;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      pushVert(c * ro, y, s * ro, 0, ny, 0);
+      pushVert(c * ri, y, s * ri, 0, ny, 0);
+    }
+    for (let i = 0; i < segments; i++) {
+      const i0 = base + i * 2;
+      const i1 = base + ((i + 1) % segments) * 2;
+      const o0 = i0;
+      const o1 = i1;
+      const n0 = i0 + 1;
+      const n1 = i1 + 1;
+      if (cap === 0) {
+        indices.push(o0, o1, n1, o0, n1, n0);
+      } else {
+        indices.push(o0, n1, o1, o0, n0, n1);
+      }
+    }
+  }
+
+  // Outer wall
+  {
+    const base = positions.length / 3;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      pushVert(c * ro, y0, s * ro, c, 0, s);
+      pushVert(c * ro, y1, s * ro, c, 0, s);
+    }
+    for (let i = 0; i < segments; i++) {
+      const a = base + i * 2;
+      const b = base + ((i + 1) % segments) * 2;
+      indices.push(a, b, b + 1, a, b + 1, a + 1);
+    }
+  }
+
+  // Inner wall
+  {
+    const base = positions.length / 3;
+    for (let i = 0; i < segments; i++) {
+      const a = (i / segments) * Math.PI * 2;
+      const c = Math.cos(a);
+      const s = Math.sin(a);
+      pushVert(c * ri, y0, s * ri, -c, 0, -s);
+      pushVert(c * ri, y1, s * ri, -c, 0, -s);
+    }
+    for (let i = 0; i < segments; i++) {
+      const a = base + i * 2;
+      const b = base + ((i + 1) % segments) * 2;
+      indices.push(a, b + 1, b, a, a + 1, b + 1);
+    }
+  }
+
+  return createMeshFromData(
+    engine,
+    name,
+    new Float32Array(positions),
+    new Float32Array(normals),
+    new Uint32Array(indices),
+  );
+}
 
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
@@ -74,21 +173,41 @@ function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
   matrices[o + 15] = 1;
 }
 
-function circlePath(radius, segments = 64) {
-  const pts = [];
-  for (let i = 0; i <= segments; i++) {
-    const a = (i / segments) * Math.PI * 2;
-    pts.push([Math.cos(a) * radius, 0, Math.sin(a) * radius]);
-  }
-  return pts;
+function makeRingMaterial(diffuse = [0.4, 0.65, 1], emissive = [0.3, 0.5, 0.85]) {
+  const mat = createStandardMaterial();
+  mat.diffuseColor = [...diffuse];
+  mat.emissiveColor = [...emissive];
+  mat.alpha = 0.92;
+  if ('disableLighting' in mat) mat.disableLighting = true;
+  if ('unlit' in mat) mat.unlit = true;
+  if (mat.specularColor) mat.specularColor = [0, 0, 0];
+  return mat;
 }
 
-/** Ignore a single junk low vertex — use lower-quartile of per-part mins. */
-function robustFootY(parts) {
-  const mins = parts.map((m) => m.boundMin?.[1] ?? 0);
-  mins.sort((a, b) => a - b);
-  const idx = Math.min(mins.length - 1, Math.floor((mins.length - 1) * 0.25));
-  return mins[idx];
+const PAD_COLOR = [0.4, 0.65, 1];
+const PAD_EMISSIVE = [0.3, 0.5, 0.85];
+const PAD_HOVER_COLOR = [1, 0.85, 0.25];
+const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
+
+function placeMesh(mesh, x, y, z, scaleXZ, scaleY = scaleXZ) {
+  if (mesh.position) {
+    mesh.position.x = x;
+    mesh.position.y = y;
+    mesh.position.z = z;
+  }
+  if (mesh.scaling) {
+    mesh.scaling.x = scaleXZ;
+    mesh.scaling.y = scaleY;
+    mesh.scaling.z = scaleXZ;
+  }
+  mesh.visible = true;
+  mesh.markLocalDirty?.();
+}
+
+function hideMesh(mesh) {
+  mesh.visible = false;
+  if (mesh.position) mesh.position.y = -9999;
+  mesh.markLocalDirty?.();
 }
 
 /**
@@ -97,23 +216,37 @@ function robustFootY(parts) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createBuildingRadialMenu(engine, scene, groundYAt) {
-  const ring = createTube(engine, {
-    path: circlePath(RING_R, 72),
-    radius: RING_TUBE,
-    tessellation: 10,
-  });
-  const ringMat = createStandardMaterial();
-  ringMat.diffuseColor = [0.22, 0.28, 0.38];
-  ringMat.emissiveColor = [0.18, 0.28, 0.45];
-  ringMat.alpha = 0.88;
-  ring.material = ringMat;
-  ring.pickable = false;
-  const ringMatrices = new Float32Array(16);
-  setThinInstances(ring, ringMatrices, 1);
-  setThinInstanceCount(ring, 0);
-  addToScene(scene, ring);
+  const ringMat = makeRingMaterial();
 
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null }[], footY: number }>} */
+  // Menu ring: annulus authored at outerR=1 → scale XZ to MENU_RING_OUTER.
+  const menuRing = createAnnulusMesh(engine, 'build-menu-ring', {
+    inner: MENU_RING_INNER / MENU_RING_OUTER,
+    height: MENU_RING_H / MENU_RING_OUTER,
+    segments: 64,
+  });
+  menuRing.material = ringMat;
+  menuRing.pickable = false;
+  hideMesh(menuRing);
+  addToScene(scene, menuRing);
+
+  /** Pad rings under each option — own material so hover can recolor. */
+  /** @type {{ mesh: object, mat: object }[]} */
+  const pads = [];
+  for (let i = 0; i < MAX_OPTIONS; i++) {
+    const pad = createAnnulusMesh(engine, `build-menu-pad-${i}`, {
+      inner: PAD_INNER / PAD_OUTER,
+      height: PAD_H / PAD_OUTER,
+      segments: 28,
+    });
+    const mat = makeRingMaterial(PAD_COLOR, PAD_EMISSIVE);
+    pad.material = mat;
+    pad.pickable = false;
+    hideMesh(pad);
+    addToScene(scene, pad);
+    pads.push({ mesh: pad, mat });
+  }
+
+  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null }[] }>} */
   const icons = new Map();
   /** @type {Map<object, string>} */
   const pickMeshes = new Map();
@@ -123,11 +256,9 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     if (!url) continue;
     try {
       const parts = await loadBakedUnitMeshParts(engine, url);
-      const footY = robustFootY(parts);
       /** @type {{ mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null }[]} */
       const layers = [];
       for (const mesh of parts) {
-        // Bake sole into instance Y — don't rely on mesh.position with thin instances.
         mesh.position.x = 0;
         mesh.position.y = 0;
         mesh.position.z = 0;
@@ -150,7 +281,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
         layers.push({ mesh, matrices, baseEmissive, baseDiffuse });
         pickMeshes.set(mesh, def.id);
       }
-      icons.set(def.id, { layers, footY });
+      icons.set(def.id, { layers });
     } catch (err) {
       console.warn(`[buildingRadial] icon ${def.id} failed`, err);
     }
@@ -164,7 +295,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   let anchorZ = 0;
   let centerX = 0;
   let centerZ = 0;
-  /** Ring centerline Y (selection-collar height). */
   let centerY = 0;
   let hudScale = 1;
   let hoverIndex = -1;
@@ -177,8 +307,25 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
         if (layer.baseEmissive && layer.mesh.material?.emissiveColor) {
           layer.mesh.material.emissiveColor = [...layer.baseEmissive];
         }
+        if (layer.baseDiffuse && layer.mesh.material?.diffuseColor) {
+          layer.mesh.material.diffuseColor = [...layer.baseDiffuse];
+        }
       }
     }
+  }
+
+  function applyPadHover(index, hovered) {
+    const pad = pads[index];
+    if (!pad) return;
+    const mat = pad.mat;
+    if (hovered) {
+      mat.diffuseColor = [...PAD_HOVER_COLOR];
+      mat.emissiveColor = [...PAD_HOVER_EMISSIVE];
+    } else {
+      mat.diffuseColor = [...PAD_COLOR];
+      mat.emissiveColor = [...PAD_EMISSIVE];
+    }
+    markMaterialUboDirty(mat);
   }
 
   function applyIconHover(type, hovered) {
@@ -222,40 +369,42 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     return HUD_SCALE_AT_NEAR + t * (HUD_SCALE_AT_FAR - HUD_SCALE_AT_NEAR);
   }
 
-  /** Top of the tube ring — icons' soles rest here. */
-  function ringTopY() {
-    return centerY + RING_TUBE * hudScale;
-  }
-
   function redrawSlot(i) {
     const s = slots[i];
     if (!s) return;
     const iconScale = OPTION_SCALE * hudScale;
+    const iconY = s.y + ICON_LIFT * hudScale;
     const batch = icons.get(s.type);
     if (!batch) return;
-    // Sole on ring top: worldY + footY * scale = ringTop (footY is mesh-local min).
-    const iconY = ringTopY() - batch.footY * iconScale;
     for (const layer of batch.layers) {
       writeMatrix(layer.matrices, 0, s.x, iconY, s.z, s.yaw, iconScale);
       setThinInstanceCount(layer.mesh, 1);
       flushThinInstances(layer.mesh);
     }
     applyIconHover(s.type, i === hoverIndex);
+    applyPadHover(i, i === hoverIndex);
   }
 
   function layout() {
-    const rimR = RIM_R * hudScale;
-    writeMatrix(ringMatrices, 0, centerX, centerY, centerZ, 0, hudScale);
-    setThinInstanceCount(ring, 1);
-    flushThinInstances(ring);
+    const s = hudScale;
+    // Annulus mesh outerR=1 → world outer = MENU_RING_OUTER * s
+    placeMesh(menuRing, centerX, centerY, centerZ, MENU_RING_OUTER * s, MENU_RING_OUTER * s);
 
-    const top = ringTopY();
-    for (let i = 0; i < slots.length; i++) {
-      const s = slots[i];
-      s.x = centerX + Math.cos(s.ang) * rimR;
-      s.z = centerZ + Math.sin(s.ang) * rimR;
-      s.y = top;
-      s.yaw = s.ang + Math.PI;
+    const rimR = RIM_R * s;
+    const padY = centerY + PAD_LIFT * s;
+    const n = slots.length;
+    for (let i = 0; i < pads.length; i++) {
+      if (i >= n) {
+        hideMesh(pads[i].mesh);
+        applyPadHover(i, false);
+        continue;
+      }
+      const slot = slots[i];
+      slot.x = centerX + Math.cos(slot.ang) * rimR;
+      slot.z = centerZ + Math.sin(slot.ang) * rimR;
+      slot.y = padY;
+      slot.yaw = slot.ang + Math.PI;
+      placeMesh(pads[i].mesh, slot.x, slot.y, slot.z, PAD_OUTER * s, PAD_OUTER * s);
       redrawSlot(i);
     }
   }
@@ -270,8 +419,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     anchorZ = z;
     centerX = x;
     centerZ = z;
-    // Same lift as the selection collar — menu sits on that base.
-    centerY = groundYAt(x, z) + COLLAR_Y_LIFT;
+    centerY = groundYAt(x, z) + MENU_Y;
     hoverIndex = -1;
     hudScale = scaleForCamera(camera);
 
@@ -295,18 +443,16 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   }
 
   /**
-   * Per-frame: keep menu readable across the full zoom range.
    * @param {object} camera
    */
   function update(camera) {
     if (!open) return;
     centerX = anchorX;
     centerZ = anchorZ;
-    centerY = groundYAt(anchorX, anchorZ) + COLLAR_Y_LIFT;
+    centerY = groundYAt(anchorX, anchorZ) + MENU_Y;
     const next = scaleForCamera(camera);
     if (Math.abs(next - hudScale) < 0.0005) {
-      const top = ringTopY();
-      if (slots.length && Math.abs(slots[0].y - top) > 0.01) layout();
+      if (slots.length && Math.abs(slots[0].y - centerY) > 0.01) layout();
       return;
     }
     hudScale = next;
@@ -315,8 +461,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
 
   function hide() {
     if (!open) return;
-    setThinInstanceCount(ring, 0);
-    flushThinInstances(ring);
+    hideMesh(menuRing);
+    for (let i = 0; i < pads.length; i++) {
+      hideMesh(pads[i].mesh);
+      applyPadHover(i, false);
+    }
     hideAllIcons();
     slots = [];
     hoverIndex = -1;
@@ -333,9 +482,14 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     if (next === hoverIndex) return;
     const prev = hoverIndex;
     hoverIndex = next >= 0 && next < slots.length ? next : -1;
-    // Color only — never rescale / lift the model.
-    if (prev >= 0) applyIconHover(slots[prev].type, false);
-    if (hoverIndex >= 0) applyIconHover(slots[hoverIndex].type, true);
+    if (prev >= 0) {
+      applyIconHover(slots[prev].type, false);
+      applyPadHover(prev, false);
+    }
+    if (hoverIndex >= 0) {
+      applyIconHover(slots[hoverIndex].type, true);
+      applyPadHover(hoverIndex, true);
+    }
   }
 
   /** @param {string | null | undefined} type */
@@ -344,8 +498,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
       setHover(-1);
       return;
     }
-    const idx = slots.findIndex((s) => s.type === type);
-    setHover(idx);
+    setHover(slots.findIndex((s) => s.type === type));
   }
 
   function clearHover() {
@@ -362,14 +515,9 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     const dx = wx - centerX;
     const dz = wz - centerZ;
     const d = Math.hypot(dx, dz);
-    const rim = RIM_R * hudScale;
-    const tube = RING_TUBE * hudScale * 4;
-    return d >= rim - tube && d <= rim + tube;
-  }
-
-  function typeAtSlot(index) {
-    if (index < 0 || index >= slots.length) return null;
-    return slots[index].type;
+    const outer = MENU_RING_OUTER * hudScale;
+    const inner = MENU_RING_INNER * hudScale;
+    return d >= inner && d <= outer;
   }
 
   function isPickMesh(mesh) {
@@ -397,7 +545,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     clearHover,
     hoveredType,
     hitRingBand,
-    typeAtSlot,
     isPickMesh,
     resolvePick,
     get center() {

@@ -2063,11 +2063,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function flushAllBatches() {
     updateOrderMarker();
+    // Only the build MENU HUD-scales with zoom — selection collar is fixed S/M/L.
     if (buildingRadial.isOpen()) {
       buildingRadial.update?.(camera);
-    }
-    if (buildingProps.selectionVisible) {
-      buildingProps.updateSelectionHighlight?.(camera);
     }
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
@@ -2332,9 +2330,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       buildingProps.place(list ?? []);
     },
 
-    /** Building selection highlight (HUD-scaled flattened collar). */
+    /** Building selection collar — fixed S/M/L world size (not the build menu). */
     setBuildingSelectionHighlight(pos) {
-      buildingProps.setSelectionHighlight?.(pos ?? null, camera);
+      buildingProps.setSelectionHighlight?.(pos ?? null);
     },
 
     /** Placement ghost (translucent building mesh). */
@@ -2364,7 +2362,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       );
     },
 
-    /** In-engine agora build radial (HUD-scaled ring + rim models). */
+    /** Build menu (torus ring + pads + icons). This is what HUD-scales with zoom. */
     showBuildingRadial(x, z) {
       buildingRadial.showAt(x, z, camera);
     },

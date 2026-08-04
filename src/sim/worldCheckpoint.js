@@ -5,6 +5,8 @@ import { MAX_WAYPOINTS } from './path.js';
 import { MAX_PATH_HITS } from './projectiles.js';
 import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
+import { applyWorldStructureOccupancy } from './buildings.js';
+import { ensureFrogCapacity } from './frogs.js';
 
 export const CHECKPOINT_FORMAT = 1;
 
@@ -128,6 +130,13 @@ export function importWorldCheckpoint(w, field, checkpoint) {
     i32: ['source', 'px', 'py', 'radius'],
   });
   if (w.fireZones) w.fireZones.dirty = [];
+  if (w.frogs && checkpoint.frogs) {
+    const need = Math.max(
+      checkpoint.frogs.highWater | 0,
+      checkpoint.frogs.freeStack?.n | 0,
+    );
+    ensureFrogCapacity(w.frogs, need);
+  }
   importPoolStore(w.frogs, checkpoint.frogs, {
     u8: ['alive', 'owner', 'phase', 'hopsLeft', 'hopsDone', 'landPulse', 'escaping', 'escapeHops'],
     u16: ['hopAge', 'hopDuration', 'waitTicks', 'damage'],
@@ -146,6 +155,8 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   importAgoras(w, checkpoint.agoras);
   importBuildings(w, checkpoint.buildings);
   importFieldMutable(field, checkpoint.field);
+  // pass is not checkpointed; re-stamp building/agora footprints (rocks stay from init).
+  applyWorldStructureOccupancy(field, w);
 
   // Render-only queues — empty after restore.
   clearFxStore(w.lightningFx);

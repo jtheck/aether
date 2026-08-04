@@ -55,6 +55,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   let rmbPanActive = false;
   let rmbDidPan = false;
   let rmbLastScreen = { x: 0, y: 0 };
+  let rmbDownScreen = { x: 0, y: 0 };
   let rmbPointerId = null;
   let lastRightClickTime = 0;
   let lastRightClickPos = { x: 0, y: 0 };
@@ -198,6 +199,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     rmbDidPan = false;
     rmbPointerId = e.pointerId;
     rmbLastScreen = { x: e.clientX, y: e.clientY };
+    rmbDownScreen = { x: e.clientX, y: e.clientY };
     e.preventDefault();
     return true;
   }
@@ -213,8 +215,9 @@ export function createCameraController(camera, canvas, opts = {}) {
       (2 * (cam.radius || 60) * Math.tan(fov / 2)) / Math.max(1, rect.height);
     const screenDx = e.clientX - rmbLastScreen.x;
     const screenDy = e.clientY - rmbLastScreen.y;
-    const panDistance = Math.hypot(screenDx, screenDy);
-    if (panDistance > PAN_DRAG_THRESHOLD) rmbDidPan = true;
+    // Cumulative from pointer-down — per-event deltas are often < threshold.
+    const totalDist = Math.hypot(e.clientX - rmbDownScreen.x, e.clientY - rmbDownScreen.y);
+    if (totalDist > PAN_DRAG_THRESHOLD) rmbDidPan = true;
     rmbLastScreen = { x: e.clientX, y: e.clientY };
 
     const { rightX, rightZ, forwardX, forwardZ } = groundAxes();

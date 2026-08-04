@@ -6,14 +6,22 @@ import {
   createCylinder,
   createStandardMaterial,
   flushThinInstances,
+  markMaterialUboDirty,
   setThinInstances,
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { PLACEABLE_BUILDINGS } from '../sim/buildings.js';
 
-const MAX_PER_TYPE = 64;
+/** Start small; grow in 64-instance chunks when place() needs more. */
+const INITIAL_CAPACITY = 64;
+const CAPACITY_CHUNK = 64;
 const GHOST_ALPHA = 0.42;
+const GHOST_VALID_EMISSIVE = [0.25, 0.45, 0.7];
+const GHOST_INVALID_EMISSIVE = [1.0, 0.05, 0.02];
+const GHOST_VALID_DIFFUSE = [0.45, 0.65, 0.95];
+const GHOST_INVALID_DIFFUSE = [1.0, 0.08, 0.04];
+const GHOST_INVALID_ALPHA = 0.62;
 const SELECTION_COLLAR_URL = '/assets/models/collar.glb';
 const FOOT_CLEARANCE = 0.06;
 /** Thicker than the old paper-thin squash. */
@@ -47,6 +55,12 @@ function setThinInstanceCount(mesh, count) {
   ti._dirtyMin = 0;
   ti._dirtyMax = count;
   mesh.visible = count > 0;
+}
+
+/** @param {number} needed */
+function capacityFor(needed) {
+  if (needed <= INITIAL_CAPACITY) return INITIAL_CAPACITY;
+  return Math.ceil(needed / CAPACITY_CHUNK) * CAPACITY_CHUNK;
 }
 
 function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
@@ -120,14 +134,28 @@ function makeCollarMaterial() {
 function tintGhostMaterial(mat) {
   if (!mat) return;
   mat.alpha = GHOST_ALPHA;
-  if (mat.diffuseColor) {
-    mat.diffuseColor = [
-      mat.diffuseColor[0] * 0.55 + 0.35,
-      mat.diffuseColor[1] * 0.55 + 0.55,
-      mat.diffuseColor[2] * 0.55 + 0.75,
-    ];
+  mat.diffuseColor = [...GHOST_VALID_DIFFUSE];
+  mat.emissiveColor = [...GHOST_VALID_EMISSIVE];
+  applyUnlit(mat);
+  markMaterialUboDirty(mat);
+}
+
+/**
+ * @param {object | null | undefined} mat
+ * @param {boolean} valid
+ */
+function applyGhostValidityTint(mat, valid) {
+  if (!mat) return;
+  if (valid) {
+    mat.alpha = GHOST_ALPHA;
+    mat.diffuseColor = [...GHOST_VALID_DIFFUSE];
+    mat.emissiveColor = [...GHOST_VALID_EMISSIVE];
+  } else {
+    mat.alpha = GHOST_INVALID_ALPHA;
+    mat.diffuseColor = [...GHOST_INVALID_DIFFUSE];
+    mat.emissiveColor = [...GHOST_INVALID_EMISSIVE];
   }
-  mat.emissiveColor = [0.25, 0.45, 0.7];
+  markMaterialUboDirty(mat);
 }
 
 /**
@@ -144,7 +172,7 @@ function resolveSelScale(size) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createBuildingProps(engine, scene, groundYAt) {
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
+  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[], capacity: number }>} */
   const byType = new Map();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
   const ghostByType = new Map();
@@ -162,14 +190,14 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       const layers = [];
       for (const mesh of parts) {
         mesh.pickable = true;
-        const matrices = new Float32Array(MAX_PER_TYPE * 16);
-        setThinInstances(mesh, matrices, MAX_PER_TYPE);
+        const matrices = new Float32Array(INITIAL_CAPACITY * 16);
+        setThinInstances(mesh, matrices, INITIAL_CAPACITY);
         setThinInstanceCount(mesh, 0);
         addToScene(scene, mesh);
         layers.push({ mesh, matrices });
         pickMeshes.set(mesh, def.id);
       }
-      byType.set(def.id, { layers });
+      byType.set(def.id, { layers, capacity: INITIAL_CAPACITY });
       slotToIndex.set(def.id, []);
     } catch (err) {
       console.warn(`[buildings] ${def.id} failed`, err);
@@ -251,6 +279,22 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   }
 
   /**
+   * Grow thin-instance buffers in CAPACITY_CHUNK steps when needed.
+   * @param {{ layers: { mesh: object, matrices: Float32Array }[], capacity: number }} batch
+   * @param {number} needed
+   */
+  function ensureCapacity(batch, needed) {
+    if (needed <= batch.capacity) return;
+    const cap = capacityFor(needed);
+    for (const layer of batch.layers) {
+      const matrices = new Float32Array(cap * 16);
+      setThinInstances(layer.mesh, matrices, cap);
+      layer.matrices = matrices;
+    }
+    batch.capacity = cap;
+  }
+
+  /**
    * @param {{ type: string, x: number, z: number, yaw?: number }[]} list
    */
   function place(list) {
@@ -274,7 +318,8 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     }
     for (const [typeId, batch] of byType) {
       const items = groups.get(typeId) ?? [];
-      const n = Math.min(MAX_PER_TYPE, items.length);
+      const n = items.length;
+      ensureCapacity(batch, n);
       const slots = [];
       for (let i = 0; i < n; i++) {
         const b = items[i];
@@ -333,7 +378,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   }
 
   /**
-   * @param {{ type: string, x: number, z: number, yaw?: number } | null} pos
+   * @param {{ type: string, x: number, z: number, yaw?: number, valid?: boolean } | null} pos
    */
   function setGhost(pos) {
     if (!pos?.type) {
@@ -349,10 +394,12 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     ghostType = pos.type;
     const y = groundYAt(pos.x, pos.z);
     const yaw = pos.yaw ?? 0;
+    const valid = pos.valid !== false;
     for (const layer of batch.layers) {
       writeMatrix(layer.matrices, 0, pos.x, y, pos.z, yaw, 1);
       setThinInstanceCount(layer.mesh, 1);
       flushThinInstances(layer.mesh);
+      applyGhostValidityTint(layer.mesh.material, valid);
     }
     ghostVisible = true;
   }

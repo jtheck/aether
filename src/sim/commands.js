@@ -86,7 +86,7 @@ export function applyCommands(world, field, commands) {
         applyUnload(world, field, cmd.entities, cmd.tx, cmd.ty);
         break;
       case CMD.PLACE_BUILDING:
-        applyPlaceBuilding(world, cmd);
+        applyPlaceBuilding(world, field, cmd);
         break;
       default:
         break;

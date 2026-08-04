@@ -8,7 +8,7 @@ import { generateAiCommands } from '../sim/ai.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
 import { serializeAgoras } from '../sim/agora.js';
-import { serializeBuildings } from '../sim/buildings.js';
+import { serializeBuildings, applyWorldStructureOccupancy } from '../sim/buildings.js';
 import { takeTreeUpdates } from '../sim/trees.js';
 import { takeFireZoneUpdates } from '../sim/fireZones.js';
 import { takeFrogUpdates } from '../sim/frogs.js';
@@ -66,6 +66,7 @@ self.onmessage = (e) => {
       field = buildField(msg.config.seed, { width: size.mapW, height: size.mapH });
       world = buildWorldFromConfig({ ...msg.config, mapW: size.mapW, mapH: size.mapH });
       populateScenery(field, world, kothBases(field.worldHalfF));
+      applyWorldStructureOccupancy(field, world);
       beginSharedPublish(views);
       publishType(world, views);
       publishedTypeCount = world.count;
@@ -97,6 +98,7 @@ self.onmessage = (e) => {
       const holyArmorUpdates = takeHolyArmorUpdates(world);
       const sporeBloomUpdates = takeSporeBloomUpdates(world);
       const monkKickUpdates = takeMonkKickUpdates(world);
+      const buildingsChanged = !!world.buildingsDirty;
       if (world.buildingsDirty) world.buildingsDirty = 0;
       postMessage({
         type: 'stepDone',
@@ -107,6 +109,7 @@ self.onmessage = (e) => {
         matchWinner: world.matchWinner ?? -1,
         koth: serializeKoth(world.koth),
         buildings: serializeBuildings(world.buildings),
+        buildingsChanged,
         treeUpdates,
         fireZoneUpdates,
         frogUpdates,

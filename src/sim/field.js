@@ -117,6 +117,8 @@ export function createField(seed = 0, dims = {}) {
     activeMask: new Uint8Array(n),
     pass: new Uint8Array(n),
     slowMask: new Uint8Array(n),
+    /** Slow tiles owned by farms/agoras — survives tree fell clears. */
+    structureSlowMask: new Uint8Array(n),
     sceneryType: new Uint8Array(n),
     // Per-tile wood remaining / burn timer (0 when no living tree).
     treeStock: new Uint8Array(n),
@@ -165,6 +167,8 @@ export function fieldSnapshot(field) {
     atlasId: field.atlasId.slice(),
     pass: field.pass.slice(),
     slowMask: field.slowMask.slice(),
+    structureSlowMask: field.structureSlowMask?.slice?.()
+      ?? new Uint8Array(field.width * field.height),
     sceneryType: field.sceneryType.slice(),
     treeStock: field.treeStock?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeBurn: field.treeBurn instanceof Uint16Array

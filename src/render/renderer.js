@@ -657,6 +657,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** @type {{ setVisible: (on: boolean) => void, dispose: () => void } | null} */
   let tileGrid = null;
   let tileGridVisible = false;
+  /** Occupancy fills lag behind field while grid is hidden; refresh on show. */
+  let tileGridOccupancyDirty = false;
   let ground = null;
   /** @type {object | null} */
   let fieldSnap = opts.field ?? null;
@@ -685,10 +687,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   function rebuildTileGrid(snap) {
     tileGrid?.dispose?.();
     tileGrid = null;
+    tileGridOccupancyDirty = false;
     if (!snap) return;
     tileGrid = createTileGridOverlay(engine, scene, snap);
     // Apply current toggle after rebuild (mesh starts hidden / off-scene).
     tileGrid.setVisible(tileGridVisible);
+  }
+
+  /** Refresh blocked/slow fills from the live field (trees, buildings, etc.). */
+  function refreshTileGridOccupancy() {
+    if (!tileGrid || !fieldSnap) return;
+    tileGrid.refreshOccupancy?.(fieldSnap);
+    tileGridOccupancyDirty = false;
   }
 
   if (opts.field) {
@@ -1470,9 +1480,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const agoraProps = await createAgoraProps(engine, scene, groundYAt);
   const buildingProps = await createBuildingProps(engine, scene, groundYAt);
   const buildingRadial = await createBuildingRadialMenu(engine, scene, groundYAt);
-  let radialHoverInFlight = false;
-  /** @type {{ clientX: number, clientY: number } | null} */
-  let radialHoverQueued = null;
+
+  function radialPickingRay(clientX, clientY) {
+    const cc = canvasCoords(clientX, clientY);
+    return pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
+  }
   const projectileRenderer = createProjectileRenderer(
     engine,
     scene,
@@ -2362,7 +2374,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       );
     },
 
-    /** Build menu (torus ring + pads + icons). This is what HUD-scales with zoom. */
+    /** Build menu (annulus ring + pads + icons). HUD-scales with zoom. */
     showBuildingRadial(x, z) {
       buildingRadial.showAt(x, z, camera);
     },
@@ -2376,60 +2388,38 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * GPU mesh-pick a radial option. Call on click (and throttled hover) only.
+     * Pick a radial option (CPU disc hit — ring + hole). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
      */
     async pickBuildingRadial(clientX, clientY) {
       if (!buildingRadial.isOpen()) return null;
-      const cc = canvasCoords(clientX, clientY);
-      const info = await pickAsync(gpuPicker, cc.x, cc.y, {
-        filter: (mesh) => Boolean(buildingRadial.isPickMesh?.(mesh)),
-      });
-      if (!info?.hit || !info.pickedMesh) return null;
-      return buildingRadial.resolvePick?.(info.pickedMesh) ?? null;
+      const ray = radialPickingRay(clientX, clientY);
+      return buildingRadial.pickOptionAtRay?.(ray) ?? null;
     },
 
     /**
-     * Hover via GPU mesh pick (coalesced — never floods the picker queue).
-     * Color highlight only; no model scale.
+     * Hover via CPU disc pick (full pad including hole). Sync — no GPU queue.
+     * @param {number} clientX
+     * @param {number} clientY
      */
-    async hoverBuildingRadial(clientX, clientY) {
+    hoverBuildingRadial(clientX, clientY) {
       if (!buildingRadial.isOpen()) return;
-      if (radialHoverInFlight) {
-        radialHoverQueued = { clientX, clientY };
-        return;
-      }
-      radialHoverInFlight = true;
-      try {
-        let cx = clientX;
-        let cy = clientY;
-        for (;;) {
-          const type = await this.pickBuildingRadial(cx, cy);
-          if (!buildingRadial.isOpen()) break;
-          if (type) buildingRadial.setHoverByType?.(type);
-          else buildingRadial.clearHover();
-          const next = radialHoverQueued;
-          radialHoverQueued = null;
-          if (!next) break;
-          cx = next.clientX;
-          cy = next.clientY;
-        }
-      } finally {
-        radialHoverInFlight = false;
-      }
+      const ray = radialPickingRay(clientX, clientY);
+      const type = buildingRadial.pickOptionAtRay?.(ray) ?? null;
+      if (type) buildingRadial.setHoverByType?.(type);
+      else buildingRadial.clearHover();
     },
 
     /**
-     * Sync gesture test: over the ring band, or currently mesh-hovered option.
+     * Sync gesture test: over an option disc or the main ring band.
      * Must not await GPU (pointerdown latch).
      */
     hitBuildingRadial(clientX, clientY) {
       if (!buildingRadial.isOpen()) return false;
       if (buildingRadial.hoveredType?.()) return true;
-      const g = this.screenToGround?.(clientX, clientY);
-      if (!g) return false;
-      return buildingRadial.hitRingBand?.(g.x, g.z) ?? false;
+      const ray = radialPickingRay(clientX, clientY);
+      return buildingRadial.hitAtRay?.(ray) ?? false;
     },
 
     /** Swap flat ground for atlas terrain (or rebuild after world reset). */
@@ -2461,6 +2451,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (let i = 0; i < updatesList.length; i++) {
         terrain?.applyTreeUpdates?.(updatesList[i]);
       }
+      // Field slowMask is already synced on session.field (= fieldSnap).
+      if (tileGridVisible) refreshTileGridOccupancy();
+      else tileGridOccupancyDirty = true;
+    },
+
+    /** Rebuild blocked/slow overlay from the current field (grid-based buildings, etc.). */
+    refreshTileGrid() {
+      if (tileGridVisible) refreshTileGridOccupancy();
+      else tileGridOccupancyDirty = true;
     },
 
     applyFireZoneUpdates(updatesList) {
@@ -2579,6 +2578,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     setTileGridVisible(on) {
       tileGridVisible = !!on;
+      if (tileGridVisible && tileGridOccupancyDirty) refreshTileGridOccupancy();
       tileGrid?.setVisible(tileGridVisible);
       return tileGridVisible;
     },

@@ -531,7 +531,7 @@ export class SimSession {
       if (extra?.matchWinner != null) this.matchWinner = extra.matchWinner;
       if (extra?.buildings) {
         this.buildings = extra.buildings;
-        this.onBuildingsChanged?.(this.buildings);
+        if (extra.buildingsChanged) this.onBuildingsChanged?.(this.buildings);
       }
       if (extra?.metrics) this.simMetrics = extra.metrics;
       if (extra?.treeUpdates) {

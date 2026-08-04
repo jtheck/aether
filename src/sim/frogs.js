@@ -19,8 +19,11 @@ import {
   worldToTile,
 } from './field.js';
 
-/** Pool size / thin-instance capacity. 8k murdered FPS; 1k still stress-ok. */
-export const MAX_FROGS = 1024;
+/** Initial pool / thin-instance size; grows in FROG_CAPACITY_CHUNK steps. */
+export const FROG_INITIAL_CAPACITY = 1024;
+export const FROG_CAPACITY_CHUNK = 1024;
+/** @deprecated Prefer FROG_INITIAL_CAPACITY — alias kept for older call sites. */
+export const MAX_FROGS = FROG_INITIAL_CAPACITY;
 
 export const FROG_PHASE = {
   WAIT: 0,
@@ -54,8 +57,6 @@ export const FROG_HOPS_MIN = 6;
 export const FROG_HOPS_MAX = 11;
 /** Chance out of 256 to birth one child while lingering. */
 export const FROG_SPLIT_CHANCE_Q8 = 72;
-/** Active frog ceiling (matches pool — stress shamans need room). */
-export const FROG_ACTIVE_SOFT_CAP = MAX_FROGS;
 
 const HOP_SPEED = fx.fromFloat(1.05);
 /** Escape hops are quick but short — many of them, not one mega-leap. */
@@ -81,7 +82,7 @@ const SPLASH_RADIUS2 = fx.mul(SPLASH_RADIUS, SPLASH_RADIUS);
 const FRIENDLY_MUL = 0.12;
 const DAMAGE_FALLOFF_Q8 = 220;
 
-export function createFrogStore(capacity = MAX_FROGS) {
+export function createFrogStore(capacity = FROG_INITIAL_CAPACITY) {
   const freeStack = new Int32Array(capacity);
   for (let i = 0; i < capacity; i++) freeStack[i] = capacity - 1 - i;
   return {
@@ -124,6 +125,59 @@ export function createFrogStore(capacity = MAX_FROGS) {
     dirtyFlag: new Uint8Array(capacity),
     dirty: [],
   };
+}
+
+/**
+ * Grow frog pool arrays in FROG_CAPACITY_CHUNK steps (new slots added to free list).
+ * @param {ReturnType<typeof createFrogStore>} store
+ * @param {number} minCapacity
+ */
+export function ensureFrogCapacity(store, minCapacity) {
+  if (!store || minCapacity <= store.capacity) return;
+  const oldCap = store.capacity;
+  const newCap =
+    Math.ceil(minCapacity / FROG_CAPACITY_CHUNK) * FROG_CAPACITY_CHUNK;
+
+  const grow = (arr, TypedArray) => {
+    const next = new TypedArray(newCap);
+    next.set(arr);
+    return next;
+  };
+
+  store.alive = grow(store.alive, Uint8Array);
+  store.generation = grow(store.generation, Uint32Array);
+  store.owner = grow(store.owner, Uint8Array);
+  store.source = grow(store.source, Int32Array);
+  store.px = grow(store.px, Int32Array);
+  store.py = grow(store.py, Int32Array);
+  store.originX = grow(store.originX, Int32Array);
+  store.originY = grow(store.originY, Int32Array);
+  store.destX = grow(store.destX, Int32Array);
+  store.destY = grow(store.destY, Int32Array);
+  store.dirX = grow(store.dirX, Int32Array);
+  store.dirY = grow(store.dirY, Int32Array);
+  store.hopAge = grow(store.hopAge, Uint16Array);
+  store.hopDuration = grow(store.hopDuration, Uint16Array);
+  store.phase = grow(store.phase, Uint8Array);
+  store.hopsLeft = grow(store.hopsLeft, Uint8Array);
+  store.hopsDone = grow(store.hopsDone, Uint8Array);
+  store.waitTicks = grow(store.waitTicks, Uint16Array);
+  store.damage = grow(store.damage, Uint16Array);
+  store.landPulse = grow(store.landPulse, Uint8Array);
+  store.escaping = grow(store.escaping, Uint8Array);
+  store.waterX = grow(store.waterX, Int32Array);
+  store.waterY = grow(store.waterY, Int32Array);
+  store.escapeHops = grow(store.escapeHops, Uint8Array);
+  store.dirtyFlag = grow(store.dirtyFlag, Uint8Array);
+
+  const newFree = new Int32Array(newCap);
+  newFree.set(store.freeStack.subarray(0, store.freeTop));
+  let ft = store.freeTop;
+  // Push high→low so the next alloc prefers the lowest new index (matches boot order).
+  for (let i = newCap - 1; i >= oldCap; i--) newFree[ft++] = i;
+  store.freeStack = newFree;
+  store.freeTop = ft;
+  store.capacity = newCap;
 }
 
 function markDirty(store, slot) {
@@ -198,6 +252,7 @@ export function findNearestWater(field, wx, wy, maxTiles = WATER_SEARCH_TILES) {
 }
 
 function allocFrog(store) {
+  if (store.freeTop <= 0) ensureFrogCapacity(store, store.capacity + 1);
   if (store.freeTop <= 0) return -1;
   const slot = store.freeStack[--store.freeTop];
   store.alive[slot] = 1;
@@ -337,7 +392,6 @@ function beginLinger(w, store, slot) {
 }
 
 function tryBirthChild(w, store, parentSlot) {
-  if (store.activeCount >= FROG_ACTIVE_SOFT_CAP) return -1;
   if ((rngU8(w.rng) & 0xff) >= FROG_SPLIT_CHANCE_Q8) return -1;
 
   const slot = allocFrog(store);
@@ -487,7 +541,6 @@ export function spawnFrogPlague(w, {
   let spawned = 0;
   const n = Math.max(1, count | 0);
   for (let i = 0; i < n; i++) {
-    if (store.activeCount >= FROG_ACTIVE_SOFT_CAP) break;
     const slot = allocFrog(store);
     if (slot < 0) break;
 

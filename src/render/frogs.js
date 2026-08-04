@@ -1,6 +1,7 @@
 // Thin-instanced plague-of-frogs renderer (frog.glb).
 // Sim publishes hop *plans* on phase changes; we lerp hops locally so the
 // swarm stays smooth without per-tick worker patches.
+// Instance buffers start at FROG_INITIAL_CAPACITY and grow in FROG_CAPACITY_CHUNK steps.
 
 import {
   addToScene,
@@ -10,7 +11,11 @@ import {
   setThinInstanceColors,
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
-import { FROG_PHASE, MAX_FROGS } from '../sim/frogs.js';
+import {
+  FROG_CAPACITY_CHUNK,
+  FROG_INITIAL_CAPACITY,
+  FROG_PHASE,
+} from '../sim/frogs.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 
 const FROG_MODEL_URL = '/assets/models/frog.glb';
@@ -23,7 +28,6 @@ const BODY_HEIGHT = 0.15;
 /** Match sim tick length for local hop playback. */
 const TICK_MS = 50;
 
-/** Capacity stays at MAX_FROGS; draw count must start at 0 or we pay for 1k instances idle. */
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
   if (!ti) return;
@@ -35,6 +39,11 @@ function setThinInstanceCount(mesh, count) {
   ti._dirtyMin = 0;
   ti._dirtyMax = count;
   mesh.visible = count > 0;
+}
+
+function capacityFor(needed) {
+  if (needed <= FROG_INITIAL_CAPACITY) return FROG_INITIAL_CAPACITY;
+  return Math.ceil(needed / FROG_CAPACITY_CHUNK) * FROG_CAPACITY_CHUNK;
 }
 
 function hideMatrix(matrices, slot) {
@@ -93,19 +102,20 @@ function isHoppingPhase(phase) {
  * @param {(x: number, z: number) => void} [onLand]
  */
 export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
-  /** @type {{ mesh: object, matrices: Float32Array }[]} */
+  /** @type {{ mesh: object, matrices: Float32Array, colors?: Float32Array | null }[]} */
   const batches = [];
+  let capacity = FROG_INITIAL_CAPACITY;
 
   try {
     const parts = await loadBakedUnitMeshParts(engine, FROG_MODEL_URL);
     for (let p = 0; p < parts.length; p++) {
       const mesh = parts[p];
       mesh.pickable = false;
-      const matrices = new Float32Array(MAX_FROGS * 16);
-      setThinInstances(mesh, matrices, MAX_FROGS);
+      const matrices = new Float32Array(capacity * 16);
+      setThinInstances(mesh, matrices, capacity);
       setThinInstanceCount(mesh, 0);
       addToScene(scene, mesh);
-      batches.push({ mesh, matrices });
+      batches.push({ mesh, matrices, colors: null });
     }
   } catch (err) {
     console.warn('[frogs] frog.glb failed, using sphere fallback', err);
@@ -118,19 +128,19 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
     material.alpha = 0.99;
     material.backFaceCulling = false;
     mesh.material = material;
-    const matrices = new Float32Array(MAX_FROGS * 16);
-    const colors = new Float32Array(MAX_FROGS * 4);
-    for (let i = 0; i < MAX_FROGS; i++) {
+    const matrices = new Float32Array(capacity * 16);
+    const colors = new Float32Array(capacity * 4);
+    for (let i = 0; i < capacity; i++) {
       colors[i * 4] = 0.3;
       colors[i * 4 + 1] = 0.78;
       colors[i * 4 + 2] = 0.35;
       colors[i * 4 + 3] = 1;
     }
-    setThinInstances(mesh, matrices, MAX_FROGS);
+    setThinInstances(mesh, matrices, capacity);
     setThinInstanceColors(mesh, colors);
     setThinInstanceCount(mesh, 0);
     addToScene(scene, mesh);
-    batches.push({ mesh, matrices });
+    batches.push({ mesh, matrices, colors });
   }
 
   /**
@@ -144,6 +154,29 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
   let previousCount = 0;
   let dirty = true;
   let hopping = false;
+
+  function ensureCapacity(needed) {
+    if (needed <= capacity) return;
+    const cap = capacityFor(needed);
+    for (const batch of batches) {
+      const matrices = new Float32Array(cap * 16);
+      setThinInstances(batch.mesh, matrices, cap);
+      batch.matrices = matrices;
+      if (batch.colors) {
+        const colors = new Float32Array(cap * 4);
+        colors.set(batch.colors);
+        for (let i = capacity; i < cap; i++) {
+          colors[i * 4] = 0.3;
+          colors[i * 4 + 1] = 0.78;
+          colors[i * 4 + 2] = 0.35;
+          colors[i * 4 + 3] = 1;
+        }
+        setThinInstanceColors(batch.mesh, colors);
+        batch.colors = colors;
+      }
+    }
+    capacity = cap;
+  }
 
   function hopHeight(progress, phase) {
     if (phase === FROG_PHASE.WAIT || phase === FROG_PHASE.LINGER) return BODY_HEIGHT;
@@ -166,9 +199,10 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
   }
 
   function rebuild() {
+    const n = active.size;
+    ensureCapacity(n);
     let count = 0;
     for (const state of active.values()) {
-      if (count >= MAX_FROGS) break;
       const pos = sampleState(state);
       const gy = groundYAt(pos.x, pos.z);
       for (let b = 0; b < batches.length; b++) {

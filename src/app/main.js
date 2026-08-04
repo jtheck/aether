@@ -15,6 +15,7 @@ import {
 } from '../sim/worldSetup.js';
 import { STRESS_AI_PROFILES } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
+import { applySerializedBuildingOccupancy, canPlaceBuildingAt, snapBuildingYaw } from '../sim/buildings.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { isVatUnitType } from '../render/vatUnits.js';
@@ -425,6 +426,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   };
 
   session.onBuildingsChanged = (list) => {
+    if (session.field) {
+      applySerializedBuildingOccupancy(session.field, list);
+      renderer.refreshTileGrid?.();
+    }
     renderer.placeBuildings?.(list);
   };
 
@@ -477,6 +482,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /** @type {string | null} */
   let placingType = null;
+  /** Radians — kept across multi-place until cancel / type switch. */
+  let placingYaw = 0;
   /** Keep agora selected after placing so radial can reopen. */
   let lastAgoraIndex = -1;
 
@@ -538,31 +545,64 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getPlacingType: () => placingType,
     setPlacingType: (t) => {
       placingType = t;
-      if (!t) renderer.setBuildingGhost?.(null);
+      if (!t) {
+        placingYaw = 0;
+        renderer.setBuildingGhost?.(null);
+      }
     },
-    onPlacementMove: (x, z) => {
+    getPlacementYaw: () => placingYaw,
+    setPlacementYaw: (yaw) => {
+      placingYaw = snapBuildingYaw(yaw);
+    },
+    onPlacementMove: (x, z, yaw = placingYaw) => {
       if (!placingType) return;
-      renderer.setBuildingGhost?.({ type: placingType, x, z, yaw: 0 });
+      const yawRad = snapBuildingYaw(yaw ?? placingYaw);
+      placingYaw = yawRad;
+      const valid = session.field
+        ? canPlaceBuildingAt(
+            session.field,
+            placingType,
+            fx.fromFloat(x),
+            fx.fromFloat(z),
+          )
+        : true;
+      renderer.setBuildingGhost?.({ type: placingType, x, z, yaw: yawRad, valid });
     },
-    onPlacementConfirm: (x, z) => {
+    onPlacementConfirm: (x, z, yaw = placingYaw) => {
       if (!placingType) return;
       const type = placingType;
-      placingType = null;
-      renderer.setBuildingGhost?.(null);
+      const yawRad = snapBuildingYaw(yaw ?? placingYaw);
+      placingYaw = yawRad;
+      if (
+        session.field &&
+        !canPlaceBuildingAt(
+          session.field,
+          type,
+          fx.fromFloat(x),
+          fx.fromFloat(z),
+        )
+      ) {
+        // Stay in placement mode; ghost already shows invalid.
+        renderer.setBuildingGhost?.({ type, x, z, yaw: yawRad, valid: false });
+        return;
+      }
       session.submitCommand({
         type: CMD.PLACE_BUILDING,
         playerId: localPlayerId,
         buildingType: type,
         tx: fx.fromFloat(x),
         ty: fx.fromFloat(z),
-        yaw: 0,
+        yaw: fx.fromFloat(yawRad),
       });
+      // Multi-place: keep type + yaw; ghost follows on next move.
+      renderer.setBuildingGhost?.(null);
       if (lastAgoraIndex >= 0) {
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
       }
     },
     onPlacementCancel: () => {
       placingType = null;
+      placingYaw = 0;
       renderer.setBuildingGhost?.(null);
       if (lastAgoraIndex >= 0) {
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
@@ -572,8 +612,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     pickRadialOption: (cx, cy) => renderer.pickBuildingRadial?.(cx, cy) ?? null,
     onRadialPick: (buildingType) => {
       placingType = buildingType;
-      closeRadial();
-      // Ghost appears on next pointer move with the chosen type.
+      placingYaw = 0;
+      // Keep the agora radial open while ghost-placing / switching types.
       renderer.setBuildingGhost?.(null);
     },
     onRadialHover: (cx, cy) => renderer.hoverBuildingRadial?.(cx, cy),

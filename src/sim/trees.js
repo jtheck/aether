@@ -75,8 +75,11 @@ function mixStockHash(field, tileIndex, stock) {
 
 function fellTree(field, tileIndex) {
   field.sceneryType[tileIndex] = SCENERY_NONE;
-  // Keep partial-water slow if this tile is wet shore.
-  field.slowMask[tileIndex] = isTerrainSlowTile(field, tileIndex) ? 1 : 0;
+  // Keep wet shore + farm/agora slow after the tree is gone.
+  field.slowMask[tileIndex] =
+    isTerrainSlowTile(field, tileIndex) || field.structureSlowMask?.[tileIndex]
+      ? 1
+      : 0;
   field.treeStock[tileIndex] = 0;
   field.treeBurn[tileIndex] = 0;
 }
@@ -120,6 +123,7 @@ export function canGrowTreeAt(field, tx, tz, pendingTiles = null) {
   if (!isPassable(field, tx, tz)) return false;
   const i = tz * field.width + tx;
   if (field.activeMask?.[i] === 0) return false;
+  if (field.structureSlowMask?.[i]) return false;
   const terrain = field.terrainTypes?.[i];
   if (terrain !== TERRAIN.GRASS && terrain !== TERRAIN.DIRT) return false;
   const kind = field.sceneryType?.[i] ?? SCENERY_NONE;
@@ -245,7 +249,8 @@ export function applyTreeUpdatesToField(field, updates) {
     if (nextStock === 0) {
       if (field.sceneryType[ti] === SCENERY_TREE) {
         field.sceneryType[ti] = SCENERY_NONE;
-        field.slowMask[ti] = isTerrainSlowTile(field, ti) ? 1 : 0;
+        field.slowMask[ti] =
+          isTerrainSlowTile(field, ti) || field.structureSlowMask?.[ti] ? 1 : 0;
       }
     } else {
       field.sceneryType[ti] = SCENERY_TREE;

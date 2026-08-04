@@ -15,7 +15,8 @@ export function setupPointerHub({ canvas, camera, game }) {
 
     if (e.button === 2) {
       game.cancelDrag();
-      if (game.cancelPlacement?.()) return;
+      // Always allow camera pan while placing — cancel placement only on a
+      // click (no drag) in pointerup, not here on down.
       camera.handlePointerDown(e);
       return;
     }
@@ -39,7 +40,9 @@ export function setupPointerHub({ canvas, camera, game }) {
       return;
     }
     if (e.button === 2) {
-      camera.handlePointerUp(e);
+      const didPan = camera.handlePointerUp(e);
+      // RMB click (no pan) cancels ghost placement; drag pans the camera.
+      if (!didPan) game.cancelPlacement?.();
       return;
     }
     if (e.button === 0) {

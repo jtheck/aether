@@ -155,6 +155,7 @@ export class SimClient {
         kothMatchOver: msg.kothMatchOver,
         matchWinner: msg.matchWinner,
         buildings: msg.buildings,
+        buildingsChanged: !!msg.buildingsChanged,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,
         fireZoneUpdates: msg.fireZoneUpdates ?? null,

@@ -3,6 +3,7 @@
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
+import { snapBuildingYaw } from '../../sim/buildings.js';
 import { isMechanical, isTransport, UNIT } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers } from '../../sim/transport.js';
@@ -10,6 +11,8 @@ import { playVillagerMove } from '../audio.js';
 
 /** v1 lasso drag threshold. */
 export const DRAG_THRESHOLD_PX = 25;
+/** Hold-drag past this while placing enters rotate mode. */
+const PLACE_ROTATE_THRESHOLD_PX = 18;
 /** Manual double-tap window — PointerEvent.detail is not a click count. */
 const DOUBLE_MS = 350;
 const DOUBLE_PX = 14;
@@ -34,9 +37,11 @@ const ABILITY_HOLD_MS = 400;
  * @param {(sel: { kind: 'agora' | 'building', index: number } | null) => void} [opts.onBuildingSelected]
  * @param {() => string | null} [opts.getPlacingType]
  * @param {(buildingType: string | null) => void} [opts.setPlacingType]
- * @param {(x: number, z: number) => void} [opts.onPlacementMove]
- * @param {(x: number, z: number) => void} [opts.onPlacementConfirm]
+ * @param {(x: number, z: number, yaw?: number) => void} [opts.onPlacementMove]
+ * @param {(x: number, z: number, yaw?: number) => void} [opts.onPlacementConfirm]
  * @param {() => void} [opts.onPlacementCancel]
+ * @param {() => number} [opts.getPlacementYaw]
+ * @param {(yaw: number) => void} [opts.setPlacementYaw]
  * @param {() => boolean} [opts.isRadialOpen]
  * @param {(clientX: number, clientY: number) => (string | null) | Promise<string | null>} [opts.pickRadialOption]
  * @param {(buildingType: string) => void} [opts.onRadialPick]
@@ -64,6 +69,8 @@ export function createGameInput(opts) {
     onPlacementMove,
     onPlacementConfirm,
     onPlacementCancel,
+    getPlacementYaw,
+    setPlacementYaw,
     isRadialOpen,
     pickRadialOption,
     onRadialPick,
@@ -86,6 +93,9 @@ export function createGameInput(opts) {
   let boxDragging = false;
   /** Pointer-down started on the build radial — never box-select this gesture. */
   let radialGesture = false;
+  /** @type {{ x: number, z: number } | null} */
+  let placeAnchor = null;
+  let placeRotating = false;
   let selectionBox = null;
   /** @type {{ t: number, x: number, y: number, kind: 'unit' | 'ground', typeId?: number } | null} */
   let lastTap = null;
@@ -105,6 +115,19 @@ export function createGameInput(opts) {
 
   function isPlacing() {
     return Boolean(getPlacingType?.());
+  }
+
+  function currentYaw() {
+    return getPlacementYaw?.() ?? 0;
+  }
+
+  function emitPlacementGhost(x, z, yaw = currentYaw()) {
+    onPlacementMove?.(x, z, yaw);
+  }
+
+  function resetPlaceGesture() {
+    placeAnchor = null;
+    placeRotating = false;
   }
 
   function ensureSelectionBox() {
@@ -478,9 +501,19 @@ export function createGameInput(opts) {
     abilityHoldFired = false;
     hideSelectionBox();
 
-    // Placement: LMB down starts a click; confirm on up.
+    // Placement: LMB down locks anchor; drag past threshold rotates (30° snaps).
+    // Radial stays usable so you can switch building type without canceling.
     if (isPlacing()) {
-      radialGesture = false;
+      radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
+      placeRotating = false;
+      placeAnchor = null;
+      if (!radialGesture) {
+        const g = renderer.screenToGround?.(e.clientX, e.clientY);
+        if (g) {
+          placeAnchor = { x: g.x, z: g.z };
+          emitPlacementGhost(g.x, g.z, currentYaw());
+        }
+      }
       return true;
     }
 
@@ -494,8 +527,32 @@ export function createGameInput(opts) {
     if (!canUseInput()) return false;
 
     if (isPlacing()) {
+      if (isRadialOpen?.()) void onRadialHover?.(e.clientX, e.clientY);
+      if (radialGesture) return true;
+
       const g = renderer.screenToGround?.(e.clientX, e.clientY);
-      if (g) onPlacementMove?.(g.x, g.z);
+      if (!g) return true;
+
+      // LMB held with an anchor → rotate once dragged far enough.
+      if (dragPointerId === e.pointerId && placeAnchor && lmbDownPos) {
+        const moved = Math.hypot(e.clientX - lmbDownPos.x, e.clientY - lmbDownPos.y);
+        if (moved > PLACE_ROTATE_THRESHOLD_PX) {
+          placeRotating = true;
+          const yaw = snapBuildingYaw(Math.atan2(g.x - placeAnchor.x, g.z - placeAnchor.z));
+          setPlacementYaw?.(yaw);
+          emitPlacementGhost(placeAnchor.x, placeAnchor.z, yaw);
+          return true;
+        }
+        if (placeRotating) {
+          emitPlacementGhost(placeAnchor.x, placeAnchor.z, currentYaw());
+          return true;
+        }
+      }
+
+      // Free cursor move (or pre-threshold hold): ghost follows pointer.
+      if (dragPointerId !== e.pointerId || !placeRotating) {
+        emitPlacementGhost(g.x, g.z, currentYaw());
+      }
       return true;
     }
 
@@ -598,10 +655,33 @@ export function createGameInput(opts) {
 
     if (canUseInput() && e.type !== 'pointercancel') {
       if (isPlacing()) {
-        if (d && Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX) {
-          const g = renderer.screenToGround?.(e.clientX, e.clientY);
-          if (g) onPlacementConfirm?.(g.x, g.z);
+        let radialHandled = false;
+        if (isRadialOpen?.() || wasRadialGesture) {
+          const picked = await pickRadialOption?.(e.clientX, e.clientY);
+          if (picked) {
+            lastTap = null;
+            onRadialPick?.(picked);
+            radialHandled = true;
+          } else if (wasRadialGesture || hitRadial?.(e.clientX, e.clientY)) {
+            lastTap = null;
+            radialHandled = true;
+          }
         }
+        if (!radialHandled) {
+          const yaw = currentYaw();
+          if (placeRotating && placeAnchor) {
+            onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
+          } else if (
+            d &&
+            Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
+          ) {
+            const g =
+              placeAnchor ??
+              renderer.screenToGround?.(e.clientX, e.clientY);
+            if (g) onPlacementConfirm?.(g.x, g.z, yaw);
+          }
+        }
+        resetPlaceGesture();
       } else {
         let radialHandled = false;
         if (isRadialOpen?.() || wasRadialGesture) {
@@ -643,6 +723,7 @@ export function createGameInput(opts) {
     clearAbilityHold();
     abilityHoldFired = false;
     radialGesture = false;
+    resetPlaceGesture();
     hideSelectionBox();
     boxStart = null;
     dragPointerId = null;
@@ -650,9 +731,10 @@ export function createGameInput(opts) {
     boxDragging = false;
   }
 
-  /** RMB / Esc while placing — cancel placement. */
+  /** Esc / RMB-click (no pan) while placing — cancel placement. */
   function cancelPlacement() {
     if (!isPlacing()) return false;
+    resetPlaceGesture();
     setPlacingType?.(null);
     onPlacementCancel?.();
     return true;

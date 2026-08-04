@@ -8,6 +8,7 @@ import {
   loadTexture2D as loadLiteTexture2D,
   createStandardMaterial,
   addToScene,
+  removeFromScene,
   setSubtreeVisible,
 } from '../vendor/lite/liteVendor.js';
 import {
@@ -626,25 +627,33 @@ function flatUpNormals(vertexCount) {
 
 const GRID_LIFT = 0.12;
 const BLOCK_LIFT = 0.06;
+const STRUCT_SLOW_LIFT = 0.055;
 const SLOW_LIFT = 0.05;
 const GRID_HALF = 0.05;
 const BLOCK_INSET = 0.15;
 
 /**
- * Dev overlay: cyan tile edges, magenta impassable, amber slow tiles.
- * @returns {{ setVisible: (on: boolean) => void, dispose: () => void }}
+ * Dev overlay: cyan edges, magenta blocked, orange structure-slow, amber tree/shore slow.
+ * Edges are static; occupancy fills refresh from live pass/slow/structureSlow masks.
+ * @returns {{
+ *   setVisible: (on: boolean) => void,
+ *   refreshOccupancy: (field: object) => void,
+ *   dispose: () => void,
+ * }}
  */
 export function createTileGridOverlay(engine, scene, field) {
-  const { width, height, heightMap, terrainTypes, pass, slowMask } = field;
+  const { width, height, heightMap, terrainTypes } = field;
   const edgePos = [];
   const edgeIdx = [];
   let ev = 0;
-  const blockPos = [];
-  const blockIdx = [];
-  let bv = 0;
-  const slowPos = [];
-  const slowIdx = [];
-  let sv = 0;
+  let visible = false;
+
+  /** @type {object | null} */
+  let blockMesh = null;
+  /** @type {object | null} */
+  let structureSlowMesh = null;
+  /** @type {object | null} */
+  let slowMesh = null;
 
   function heightAtCorner(cx, cz) {
     return sampleHeight(heightMap, terrainTypes, width, height, cx, cz) + GRID_LIFT;
@@ -670,11 +679,11 @@ export function createTileGridOverlay(engine, scene, field) {
     ev += 4;
   }
 
-  function pushFillQuad(tx, tz, lift, posOut, idxOut, base) {
-    const x0 = tx * TILE_SIZE_F - worldHalfFFromField(field) + BLOCK_INSET;
-    const x1 = (tx + 1) * TILE_SIZE_F - worldHalfFFromField(field) - BLOCK_INSET;
-    const z0 = tz * TILE_SIZE_F - worldHalfFFromField(field) + BLOCK_INSET;
-    const z1 = (tz + 1) * TILE_SIZE_F - worldHalfFFromField(field) - BLOCK_INSET;
+  function pushFillQuad(tx, tz, lift, half, posOut, idxOut, base) {
+    const x0 = tx * TILE_SIZE_F - half + BLOCK_INSET;
+    const x1 = (tx + 1) * TILE_SIZE_F - half - BLOCK_INSET;
+    const z0 = tz * TILE_SIZE_F - half + BLOCK_INSET;
+    const z1 = (tz + 1) * TILE_SIZE_F - half - BLOCK_INSET;
     const y00 = fillHeightAtCorner(tx, tz, lift);
     const y10 = fillHeightAtCorner(tx + 1, tz, lift);
     const y11 = fillHeightAtCorner(tx + 1, tz + 1, lift);
@@ -685,12 +694,13 @@ export function createTileGridOverlay(engine, scene, field) {
     return base + 4;
   }
 
+  const half = worldHalfFFromField(field);
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
-      const x0 = tx * TILE_SIZE_F - worldHalfFFromField(field);
-      const x1 = (tx + 1) * TILE_SIZE_F - worldHalfFFromField(field);
-      const z0 = tz * TILE_SIZE_F - worldHalfFFromField(field);
-      const z1 = (tz + 1) * TILE_SIZE_F - worldHalfFFromField(field);
+      const x0 = tx * TILE_SIZE_F - half;
+      const x1 = (tx + 1) * TILE_SIZE_F - half;
+      const z0 = tz * TILE_SIZE_F - half;
+      const z1 = (tz + 1) * TILE_SIZE_F - half;
       const y00 = heightAtCorner(tx, tz);
       const y10 = heightAtCorner(tx + 1, tz);
       const y01 = heightAtCorner(tx, tz + 1);
@@ -699,13 +709,6 @@ export function createTileGridOverlay(engine, scene, field) {
       pushEdge(x0, y00, z0, x0, y01, z1);
       if (tx === width - 1) pushEdge(x1, y10, z0, x1, y11, z1);
       if (tz === height - 1) pushEdge(x0, y01, z1, x1, y11, z1);
-
-      const i = tz * width + tx;
-      if (pass && pass[i] === 0) {
-        bv = pushFillQuad(tx, tz, BLOCK_LIFT, blockPos, blockIdx, bv);
-      } else if (slowMask && slowMask[i]) {
-        sv = pushFillQuad(tx, tz, SLOW_LIFT, slowPos, slowIdx, sv);
-      }
     }
   }
 
@@ -720,47 +723,120 @@ export function createTileGridOverlay(engine, scene, field) {
   addToScene(scene, edgeMesh);
   setSubtreeVisible(edgeMesh, false);
 
-  /** @type {object | null} */
-  let blockMesh = null;
-  if (bv > 0) {
-    blockMesh = makeDevMesh(
-      engine,
-      'tile-blocked',
-      blockPos,
-      blockIdx,
-      [1, 0.15, 0.55],
-      [1, 0.2, 0.65],
-    );
-    addToScene(scene, blockMesh);
-    setSubtreeVisible(blockMesh, false);
+  function disposeDevMesh(mesh) {
+    if (!mesh) return;
+    removeFromScene(scene, mesh);
+    const gpu = mesh._gpu;
+    if (gpu) {
+      gpu.positionBuffer?.destroy?.();
+      gpu.normalBuffer?.destroy?.();
+      gpu.indexBuffer?.destroy?.();
+      gpu.uvBuffer?.destroy?.();
+      gpu.uv2Buffer?.destroy?.();
+      gpu.tangentBuffer?.destroy?.();
+      gpu.colorBuffer?.destroy?.();
+    }
   }
 
-  /** @type {object | null} */
-  let slowMesh = null;
-  if (sv > 0) {
-    slowMesh = makeDevMesh(
-      engine,
-      'tile-slow',
-      slowPos,
-      slowIdx,
-      [1, 0.72, 0.12],
-      [1, 0.85, 0.25],
-    );
-    addToScene(scene, slowMesh);
-    setSubtreeVisible(slowMesh, false);
+  function applyVisibility() {
+    setSubtreeVisible(edgeMesh, visible);
+    if (blockMesh) setSubtreeVisible(blockMesh, visible);
+    if (structureSlowMesh) setSubtreeVisible(structureSlowMesh, visible);
+    if (slowMesh) setSubtreeVisible(slowMesh, visible);
   }
+
+  function refreshOccupancy(snap) {
+    if (!snap?.pass) return;
+    const { pass, slowMask, structureSlowMask } = snap;
+    const fillHalf = worldHalfFFromField(snap);
+    const w = snap.width | 0;
+    const h = snap.height | 0;
+    const blockPos = [];
+    const blockIdx = [];
+    let bv = 0;
+    const structPos = [];
+    const structIdx = [];
+    let uv = 0;
+    const slowPos = [];
+    const slowIdx = [];
+    let sv = 0;
+
+    for (let tz = 0; tz < h; tz++) {
+      for (let tx = 0; tx < w; tx++) {
+        const i = tz * w + tx;
+        if (pass[i] === 0) {
+          bv = pushFillQuad(tx, tz, BLOCK_LIFT, fillHalf, blockPos, blockIdx, bv);
+        } else if (structureSlowMask?.[i]) {
+          uv = pushFillQuad(tx, tz, STRUCT_SLOW_LIFT, fillHalf, structPos, structIdx, uv);
+        } else if (slowMask?.[i]) {
+          sv = pushFillQuad(tx, tz, SLOW_LIFT, fillHalf, slowPos, slowIdx, sv);
+        }
+      }
+    }
+
+    disposeDevMesh(blockMesh);
+    blockMesh = null;
+    disposeDevMesh(structureSlowMesh);
+    structureSlowMesh = null;
+    disposeDevMesh(slowMesh);
+    slowMesh = null;
+
+    if (bv > 0) {
+      blockMesh = makeDevMesh(
+        engine,
+        'tile-blocked',
+        blockPos,
+        blockIdx,
+        [1, 0.15, 0.55],
+        [1, 0.2, 0.65],
+      );
+      addToScene(scene, blockMesh);
+      setSubtreeVisible(blockMesh, visible);
+    }
+    if (uv > 0) {
+      // Orange — farm / agora / building slow pad (blocks placement).
+      structureSlowMesh = makeDevMesh(
+        engine,
+        'tile-structure-slow',
+        structPos,
+        structIdx,
+        [1, 0.45, 0.08],
+        [1, 0.55, 0.12],
+      );
+      addToScene(scene, structureSlowMesh);
+      setSubtreeVisible(structureSlowMesh, visible);
+    }
+    if (sv > 0) {
+      // Amber — trees / shore (pathing slow, placement OK).
+      slowMesh = makeDevMesh(
+        engine,
+        'tile-slow',
+        slowPos,
+        slowIdx,
+        [1, 0.85, 0.2],
+        [1, 0.95, 0.35],
+      );
+      addToScene(scene, slowMesh);
+      setSubtreeVisible(slowMesh, visible);
+    }
+  }
+
+  refreshOccupancy(field);
 
   return {
     setVisible(on) {
-      const show = !!on;
-      setSubtreeVisible(edgeMesh, show);
-      if (blockMesh) setSubtreeVisible(blockMesh, show);
-      if (slowMesh) setSubtreeVisible(slowMesh, show);
+      visible = !!on;
+      applyVisibility();
     },
+    refreshOccupancy,
     dispose() {
-      setSubtreeVisible(edgeMesh, false);
-      if (blockMesh) setSubtreeVisible(blockMesh, false);
-      if (slowMesh) setSubtreeVisible(slowMesh, false);
+      disposeDevMesh(edgeMesh);
+      disposeDevMesh(blockMesh);
+      disposeDevMesh(structureSlowMesh);
+      disposeDevMesh(slowMesh);
+      blockMesh = null;
+      structureSlowMesh = null;
+      slowMesh = null;
     },
   };
 }

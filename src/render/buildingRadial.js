@@ -1,5 +1,5 @@
-// Agora build menu — flat annulus rings (real ring meshes) + icons.
-// Menu HUD-scales with camera. Selection collar is unrelated.
+// Agora build menu — flat annulus rings + icons. HUD-scales with camera.
+// Option hover/click uses CPU disc hits (full pad including hole), not GPU mesh picks.
 
 import {
   addToScene,
@@ -22,13 +22,22 @@ const PAD_OUTER = 2.6;
 const PAD_INNER = 1.7;
 const PAD_H = 0.22;
 /** Lift pad rings (and icons) above the base menu ring. */
-const PAD_LIFT = 1.15;
+const PAD_LIFT = 1.35;
 /** Extra lift of icons above their pad ring. */
 const ICON_LIFT = 0.85;
 const OPTION_SCALE = 0.26;
 const HUD_SCALE_AT_NEAR = 0.28;
 const HUD_SCALE_AT_FAR = 2.75;
 const MAX_OPTIONS = 8;
+
+/** Opaque so depth wins — transparent sort otherwise draws far pads under the main ring. */
+const MENU_RING_COLOR = [0.38, 0.62, 1.0];
+const MENU_RING_EMISSIVE = [0.22, 0.42, 0.82];
+/** Item pads: distinct teal vs main blue. */
+const PAD_COLOR = [0.25, 0.82, 0.72];
+const PAD_EMISSIVE = [0.12, 0.55, 0.48];
+const PAD_HOVER_COLOR = [1, 0.85, 0.25];
+const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
 
 const MODEL_URLS = {
   barracks: '/assets/models/barracks.glb',
@@ -173,21 +182,25 @@ function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
   matrices[o + 15] = 1;
 }
 
-function makeRingMaterial(diffuse = [0.4, 0.65, 1], emissive = [0.3, 0.5, 0.85]) {
+function makeRingMaterial(diffuse, emissive) {
   const mat = createStandardMaterial();
   mat.diffuseColor = [...diffuse];
   mat.emissiveColor = [...emissive];
-  mat.alpha = 0.92;
+  // Opaque: transparent back-to-front sort puts far pads under the main ring.
+  mat.alpha = 1;
   if ('disableLighting' in mat) mat.disableLighting = true;
   if ('unlit' in mat) mat.unlit = true;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
   return mat;
 }
 
-const PAD_COLOR = [0.4, 0.65, 1];
-const PAD_EMISSIVE = [0.3, 0.5, 0.85];
-const PAD_HOVER_COLOR = [1, 0.85, 0.25];
-const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
+/** @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray */
+function rayHitPlaneY(ray, y) {
+  if (Math.abs(ray.dy) < 1e-8) return null;
+  const t = (y - ray.oy) / ray.dy;
+  if (t < 0) return null;
+  return { x: ray.ox + ray.dx * t, z: ray.oz + ray.dz * t, t };
+}
 
 function placeMesh(mesh, x, y, z, scaleXZ, scaleY = scaleXZ) {
   if (mesh.position) {
@@ -216,7 +229,7 @@ function hideMesh(mesh) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createBuildingRadialMenu(engine, scene, groundYAt) {
-  const ringMat = makeRingMaterial();
+  const ringMat = makeRingMaterial(MENU_RING_COLOR, MENU_RING_EMISSIVE);
 
   // Menu ring: annulus authored at outerR=1 → scale XZ to MENU_RING_OUTER.
   const menuRing = createAnnulusMesh(engine, 'build-menu-ring', {
@@ -226,6 +239,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   });
   menuRing.material = ringMat;
   menuRing.pickable = false;
+  menuRing.renderOrder = 210;
   hideMesh(menuRing);
   addToScene(scene, menuRing);
 
@@ -241,6 +255,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     const mat = makeRingMaterial(PAD_COLOR, PAD_EMISSIVE);
     pad.material = mat;
     pad.pickable = false;
+    pad.renderOrder = 220;
     hideMesh(pad);
     addToScene(scene, pad);
     pads.push({ mesh: pad, mat });
@@ -248,8 +263,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
 
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null }[] }>} */
   const icons = new Map();
-  /** @type {Map<object, string>} */
-  const pickMeshes = new Map();
 
   for (const def of PLACEABLE_BUILDINGS) {
     const url = MODEL_URLS[def.id];
@@ -262,7 +275,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
         mesh.position.x = 0;
         mesh.position.y = 0;
         mesh.position.z = 0;
-        mesh.pickable = true;
+        // Hover/click uses CPU pad discs — icons need not be GPU-pickable.
+        mesh.pickable = false;
         const mat = mesh.material;
         let baseEmissive = null;
         let baseDiffuse = null;
@@ -279,7 +293,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
         setThinInstanceCount(mesh, 0);
         addToScene(scene, mesh);
         layers.push({ mesh, matrices, baseEmissive, baseDiffuse });
-        pickMeshes.set(mesh, def.id);
       }
       icons.set(def.id, { layers });
     } catch (err) {
@@ -510,29 +523,49 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     return slots[hoverIndex]?.type ?? null;
   }
 
-  function hitRingBand(wx, wz) {
-    if (!open) return false;
-    const dx = wx - centerX;
-    const dz = wz - centerZ;
-    const d = Math.hypot(dx, dz);
-    const outer = MENU_RING_OUTER * hudScale;
-    const inner = MENU_RING_INNER * hudScale;
-    return d >= inner && d <= outer;
-  }
-
-  function isPickMesh(mesh) {
-    return open && pickMeshes.has(mesh);
+  function padPlaneY() {
+    return centerY + PAD_LIFT * hudScale;
   }
 
   /**
-   * @param {object} mesh
+   * Full option disc (ring + hole) under the cursor ray.
+   * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    * @returns {string | null}
    */
-  function resolvePick(mesh) {
-    if (!open) return null;
-    const type = pickMeshes.get(mesh);
-    if (!type) return null;
-    return slots.some((s) => s.type === type) ? type : null;
+  function pickOptionAtRay(ray) {
+    if (!open || !ray || !slots.length) return null;
+    const hit = rayHitPlaneY(ray, padPlaneY());
+    if (!hit) return null;
+    const r = PAD_OUTER * hudScale;
+    const r2 = r * r;
+    let bestType = null;
+    let bestD2 = Infinity;
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      const dx = hit.x - s.x;
+      const dz = hit.z - s.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 <= r2 && d2 < bestD2) {
+        bestD2 = d2;
+        bestType = s.type;
+      }
+    }
+    return bestType;
+  }
+
+  /**
+   * Sync gesture: over an option disc or the main ring band.
+   * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
+   */
+  function hitAtRay(ray) {
+    if (!open || !ray) return false;
+    if (pickOptionAtRay(ray)) return true;
+    const hit = rayHitPlaneY(ray, centerY);
+    if (!hit) return false;
+    const d = Math.hypot(hit.x - centerX, hit.z - centerZ);
+    const outer = MENU_RING_OUTER * hudScale;
+    const inner = MENU_RING_INNER * hudScale;
+    return d >= inner && d <= outer;
   }
 
   return {
@@ -544,9 +577,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     setHoverByType,
     clearHover,
     hoveredType,
-    hitRingBand,
-    isPickMesh,
-    resolvePick,
+    pickOptionAtRay,
+    hitAtRay,
     get center() {
       return open ? { x: centerX, y: centerY, z: centerZ } : null;
     },

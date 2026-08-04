@@ -13,6 +13,7 @@ import {
 import { SCENERY } from '../sim/scenery.js';
 import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 import { treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
+import { capacityFor } from '../sim/capacity.js';
 import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
@@ -21,8 +22,8 @@ const CELL_INSET = 0.0015;
 const PLANE_SIZE = 3;
 const LOD_UPDATE_MS = 120;
 const LOD_MOVE_THRESHOLD_SQ = 16;
-/** Extra tree instance slots for spore growth / dynamic plant. */
-const TREE_GROWTH_HEADROOM = 512;
+/** Initial scenery batch size; grows by powers of two. */
+const SCENERY_INITIAL = 32;
 /** Grow-in from sapling (spore / revive). */
 const TREE_GROW_IN_MS = 1600;
 /** Stage-to-stage shrink (fire / chip) — matches burn cadence feel. */
@@ -121,9 +122,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     // Trees always get a batch (even if empty) so spore growth can claim slots.
     if (live.length === 0 && !isTree) continue;
 
-    const capacity = isTree
-      ? Math.max(live.length + TREE_GROWTH_HEADROOM, TREE_GROWTH_HEADROOM)
-      : live.length;
+    const capacity = capacityFor(live.length, { initial: SCENERY_INITIAL });
     const instances = live.slice();
     while (instances.length < capacity) {
       instances.push(makeEmptyTreeInstance());
@@ -166,6 +165,32 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
       }
     }
+  }
+
+  function ensureTreeCapacity(needed) {
+    if (!treeBatch || needed <= treeBatch.capacity) return;
+    const cap = capacityFor(needed, { initial: SCENERY_INITIAL });
+    const oldCap = treeBatch.capacity;
+    const billboardMatrices = new Float32Array(cap * 16);
+    billboardMatrices.set(treeBatch.billboardMatrices.subarray(0, oldCap * 16));
+    setThinInstances(treeBatch.billboardMesh, billboardMatrices, cap);
+    setThinInstanceCount(treeBatch.billboardMesh, cap);
+    treeBatch.billboardMatrices = billboardMatrices;
+    for (const part of treeBatch.modelParts) {
+      const matrices = new Float32Array(cap * 16);
+      matrices.set(part.matrices.subarray(0, oldCap * 16));
+      setThinInstances(part.mesh, matrices, cap);
+      setThinInstanceCount(part.mesh, cap);
+      part.matrices = matrices;
+    }
+    for (let i = oldCap; i < cap; i++) {
+      treeBatch.instances.push(makeEmptyTreeInstance());
+      treeFreeSlots.push(i);
+      writeHiddenMatrix(billboardMatrices, i);
+      for (const part of treeBatch.modelParts) writeHiddenMatrix(part.matrices, i);
+    }
+    treeBatch.capacity = cap;
+    treeBatch.dirty = true;
   }
 
   let elapsed = LOD_UPDATE_MS;
@@ -216,6 +241,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 
   function claimTreeSlot(tileIndex, stock, burn) {
     if (!treeBatch) return null;
+    if (treeFreeSlots.length === 0) {
+      ensureTreeCapacity(treeBatch.capacity + 1);
+    }
     if (treeFreeSlots.length === 0) return null;
     const index = treeFreeSlots.pop();
     const p = treeBatch.instances[index];

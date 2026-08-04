@@ -7,6 +7,9 @@ import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
 import { applyWorldStructureOccupancy } from './buildings.js';
 import { ensureFrogCapacity } from './frogs.js';
+import { ensureFireZoneCapacity } from './fireZones.js';
+import { capacityFor } from './capacity.js';
+import { SPORE_PENDING_INITIAL } from './sporeBloom.js';
 
 export const CHECKPOINT_FORMAT = 1;
 
@@ -123,6 +126,13 @@ export function importWorldCheckpoint(w, field, checkpoint) {
     ],
     pathHits: true,
   });
+  if (w.fireZones && checkpoint.fireZones) {
+    const need = Math.max(
+      checkpoint.fireZones.highWater | 0,
+      checkpoint.fireZones.freeStack?.n | 0,
+    );
+    ensureFireZoneCapacity(w.fireZones, need);
+  }
   importPoolStore(w.fireZones, checkpoint.fireZones, {
     u8: ['alive', 'owner', 'friendlyMulQ8'],
     u16: ['ttl', 'damage'],
@@ -219,7 +229,15 @@ function exportTreeGrowth(store) {
 
 function importTreeGrowth(store, data) {
   if (!store || !data) return;
-  store.count = data.count | 0;
+  const n = data.count | 0;
+  if (n > store.capacity) {
+    const newCap = capacityFor(n, { initial: SPORE_PENDING_INITIAL });
+    store.tile = new Int32Array(newCap);
+    store.growAtTick = new Int32Array(newCap);
+    store.stock = new Uint8Array(newCap);
+    store.capacity = newCap;
+  }
+  store.count = n;
   store.tile.fill(0);
   store.growAtTick.fill(0);
   store.stock.fill(0);

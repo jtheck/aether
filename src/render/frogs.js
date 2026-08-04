@@ -1,7 +1,7 @@
 // Thin-instanced plague-of-frogs renderer (frog.glb).
 // Sim publishes hop *plans* on phase changes; we lerp hops locally so the
 // swarm stays smooth without per-tick worker patches.
-// Instance buffers start at FROG_INITIAL_CAPACITY and grow in FROG_CAPACITY_CHUNK steps.
+// Instance buffers start at FROG_INITIAL_CAPACITY and grow by powers of two.
 
 import {
   addToScene,
@@ -12,10 +12,10 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 import {
-  FROG_CAPACITY_CHUNK,
   FROG_INITIAL_CAPACITY,
   FROG_PHASE,
 } from '../sim/frogs.js';
+import { capacityFor } from '../sim/capacity.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 
 const FROG_MODEL_URL = '/assets/models/frog.glb';
@@ -41,9 +41,8 @@ function setThinInstanceCount(mesh, count) {
   mesh.visible = count > 0;
 }
 
-function capacityFor(needed) {
-  if (needed <= FROG_INITIAL_CAPACITY) return FROG_INITIAL_CAPACITY;
-  return Math.ceil(needed / FROG_CAPACITY_CHUNK) * FROG_CAPACITY_CHUNK;
+function capacityForFrogs(needed) {
+  return capacityFor(needed, { initial: FROG_INITIAL_CAPACITY });
 }
 
 function hideMatrix(matrices, slot) {
@@ -157,7 +156,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
 
   function ensureCapacity(needed) {
     if (needed <= capacity) return;
-    const cap = capacityFor(needed);
+    const cap = capacityForFrogs(needed);
     for (const batch of batches) {
       const matrices = new Float32Array(cap * 16);
       setThinInstances(batch.mesh, matrices, cap);
@@ -309,6 +308,9 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
     },
     sync() {
       return active.size;
+    },
+    stats() {
+      return { active: active.size, capacity };
     },
     commit() {
       if (active.size === 0 && previousCount === 0) return;

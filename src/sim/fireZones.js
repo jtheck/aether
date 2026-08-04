@@ -9,8 +9,12 @@ import {
   rebuildSpatialGrid,
   spatialCellId,
 } from './spatialGrid.js';
+import { capacityFor } from './capacity.js';
 
-export const MAX_FIRE_ZONES = 256;
+/** Initial pool size; grows by powers of two when exhausted. */
+export const FIRE_ZONE_INITIAL_CAPACITY = 256;
+/** @deprecated Prefer FIRE_ZONE_INITIAL_CAPACITY */
+export const MAX_FIRE_ZONES = FIRE_ZONE_INITIAL_CAPACITY;
 /** ~2.5s at 20Hz. */
 export const FIRE_ZONE_TTL = 50;
 /** Damage pulse cadence (~0.25s). */
@@ -18,7 +22,7 @@ export const FIRE_ZONE_DAMAGE_INTERVAL = 5;
 /** HP per pulse while standing in the patch. */
 export const FIRE_ZONE_DAMAGE = 2;
 
-export function createFireZoneStore(capacity = MAX_FIRE_ZONES) {
+export function createFireZoneStore(capacity = FIRE_ZONE_INITIAL_CAPACITY) {
   const freeStack = new Int32Array(capacity);
   for (let i = 0; i < capacity; i++) freeStack[i] = capacity - 1 - i;
   return {
@@ -41,6 +45,42 @@ export function createFireZoneStore(capacity = MAX_FIRE_ZONES) {
     friendlyMulQ8: new Uint8Array(capacity),
     dirty: [],
   };
+}
+
+/**
+ * @param {ReturnType<typeof createFireZoneStore>} store
+ * @param {number} minCapacity
+ */
+export function ensureFireZoneCapacity(store, minCapacity) {
+  if (!store || minCapacity <= store.capacity) return;
+  const oldCap = store.capacity;
+  const newCap = capacityFor(minCapacity, { initial: FIRE_ZONE_INITIAL_CAPACITY });
+  if (newCap <= oldCap) return;
+
+  const grow = (arr, TypedArray) => {
+    const next = new TypedArray(newCap);
+    next.set(arr);
+    return next;
+  };
+
+  store.alive = grow(store.alive, Uint8Array);
+  store.generation = grow(store.generation, Uint32Array);
+  store.owner = grow(store.owner, Uint8Array);
+  store.source = grow(store.source, Int32Array);
+  store.px = grow(store.px, Int32Array);
+  store.py = grow(store.py, Int32Array);
+  store.radius = grow(store.radius, Int32Array);
+  store.ttl = grow(store.ttl, Uint16Array);
+  store.damage = grow(store.damage, Uint16Array);
+  store.friendlyMulQ8 = grow(store.friendlyMulQ8, Uint8Array);
+
+  const newFree = new Int32Array(newCap);
+  newFree.set(store.freeStack.subarray(0, store.freeTop));
+  let ft = store.freeTop;
+  for (let i = newCap - 1; i >= oldCap; i--) newFree[ft++] = i;
+  store.freeStack = newFree;
+  store.freeTop = ft;
+  store.capacity = newCap;
 }
 
 function markDirty(store, slot) {
@@ -74,7 +114,9 @@ function freeFireZone(store, slot) {
  */
 export function spawnFireZone(w, opts) {
   const store = w.fireZones;
-  if (!store || store.freeTop <= 0) return -1;
+  if (!store) return -1;
+  if (store.freeTop <= 0) ensureFireZoneCapacity(store, store.capacity + 1);
+  if (store.freeTop <= 0) return -1;
   const slot = store.freeStack[--store.freeTop];
   store.alive[slot] = 1;
   store.generation[slot] = (store.generation[slot] + 1) >>> 0 || 1;

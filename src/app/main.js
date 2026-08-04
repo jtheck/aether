@@ -262,6 +262,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   const renderer = await createRenderer(canvas, count, {
     types: session.state.type,
+    owners: session.state.owner,
     gpuCapacity: useNet ? kothMaxEntities(army) : count,
     field: session.field,
     onAnimLoadProgress: animStress > 0
@@ -277,6 +278,43 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   renderer.placeBuildings?.(buildings ?? session.buildings);
   // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
   window.renderer = renderer;
+  window.dumpPools = () => {
+    const world = session.state;
+    const pools = renderer.poolStats?.() ?? {};
+    const proj = world.projectiles;
+    const out = {
+      unitsWorld: world.count,
+      projectiles: {
+        active: proj?.activeCount ?? 0,
+        highWater: proj?.highWater ?? 0,
+        capacity: 32768,
+      },
+      ...pools,
+    };
+    console.table(
+      Object.fromEntries(
+        Object.entries({
+          units_mapped: out.units,
+          particles: out.particles,
+          trails: out.trails,
+          frogs: out.frogs,
+          lightning: out.lightning,
+          groundFires: out.groundFires,
+          projectiles: out.projectiles,
+        }).filter(([, v]) => v),
+      ),
+    );
+    if (out.units?.batches) {
+      const hot = Object.entries(out.units.batches)
+        .map(([k, v]) => ({ batch: k, ...v, fill: v.capacity ? +(v.active / v.capacity).toFixed(2) : 0 }))
+        .filter((r) => r.active > 0 || r.capacity > 32)
+        .sort((a, b) => b.active - a.active)
+        .slice(0, 20);
+      console.table(hot);
+    }
+    console.log('[dumpPools]', out);
+    return out;
+  };
   if (new URLSearchParams(location.search).get('tiles') === '1') {
     renderer.setTileGridVisible(true);
   }

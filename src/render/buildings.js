@@ -3,6 +3,7 @@
 
 import {
   addToScene,
+  cloneTransformNode,
   createCylinder,
   createStandardMaterial,
   flushThinInstances,
@@ -12,10 +13,18 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { PLACEABLE_BUILDINGS } from '../sim/buildings.js';
+import { capacityFor } from '../sim/capacity.js';
 
-/** Start small; grow in 64-instance chunks when place() needs more. */
-const INITIAL_CAPACITY = 64;
-const CAPACITY_CHUNK = 64;
+/** Start small; grow by powers of two when place() needs more. */
+const INITIAL_CAPACITY = 32;
+/** Matches unit OWNER_TINTS in main.js (blue / red / green / gold / purple). */
+const OWNER_TINTS = [
+  [0.25, 0.55, 1.0],
+  [1.0, 0.32, 0.25],
+  [0.4, 1.0, 0.45],
+  [0.95, 0.8, 0.25],
+  [0.75, 0.45, 1.0],
+];
 const GHOST_ALPHA = 0.42;
 const GHOST_VALID_EMISSIVE = [0.25, 0.45, 0.7];
 const GHOST_INVALID_EMISSIVE = [1.0, 0.05, 0.02];
@@ -57,10 +66,25 @@ function setThinInstanceCount(mesh, count) {
   mesh.visible = count > 0;
 }
 
-/** @param {number} needed */
-function capacityFor(needed) {
-  if (needed <= INITIAL_CAPACITY) return INITIAL_CAPACITY;
-  return Math.ceil(needed / CAPACITY_CHUNK) * CAPACITY_CHUNK;
+function batchKey(typeId, owner) {
+  return `${typeId}:${owner | 0}`;
+}
+
+function ownerTint(owner) {
+  return OWNER_TINTS[(owner | 0) % OWNER_TINTS.length];
+}
+
+/** @param {number} cap @param {number} owner */
+function makeOwnerColors(cap, owner) {
+  const t = ownerTint(owner);
+  const colors = new Float32Array(cap * 4);
+  for (let i = 0; i < cap; i++) {
+    colors[i * 4] = t[0];
+    colors[i * 4 + 1] = t[1];
+    colors[i * 4 + 2] = t[2];
+    colors[i * 4 + 3] = 1;
+  }
+  return colors;
 }
 
 function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
@@ -172,11 +196,15 @@ function resolveSelScale(size) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createBuildingProps(engine, scene, groundYAt) {
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[], capacity: number }>} */
-  const byType = new Map();
+  /** @type {Map<string, object[]>} typeId → template meshes (owner-0 reuses; others clone) */
+  const templates = new Map();
+  /** Types whose template meshes were claimed by the first owner batch. */
+  const templateClaimed = new Set();
+  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array }[], capacity: number, typeId: string, owner: number }>} */
+  const byKey = new Map();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
   const ghostByType = new Map();
-  /** @type {Map<object, string>} */
+  /** @type {Map<object, string>} mesh → batch key */
   const pickMeshes = new Map();
   /** @type {Map<string, number[]>} */
   const slotToIndex = new Map();
@@ -186,19 +214,10 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     if (!url) continue;
     try {
       const parts = await loadBakedUnitMeshParts(engine, url);
-      /** @type {{ mesh: object, matrices: Float32Array }[]} */
-      const layers = [];
       for (const mesh of parts) {
         mesh.pickable = true;
-        const matrices = new Float32Array(INITIAL_CAPACITY * 16);
-        setThinInstances(mesh, matrices, INITIAL_CAPACITY);
-        setThinInstanceCount(mesh, 0);
-        addToScene(scene, mesh);
-        layers.push({ mesh, matrices });
-        pickMeshes.set(mesh, def.id);
       }
-      byType.set(def.id, { layers, capacity: INITIAL_CAPACITY });
-      slotToIndex.set(def.id, []);
+      templates.set(def.id, parts);
     } catch (err) {
       console.warn(`[buildings] ${def.id} failed`, err);
     }
@@ -279,45 +298,95 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   }
 
   /**
-   * Grow thin-instance buffers in CAPACITY_CHUNK steps when needed.
-   * @param {{ layers: { mesh: object, matrices: Float32Array }[], capacity: number }} batch
+   * @param {string} typeId
+   * @param {number} owner
+   */
+  function ensureBatch(typeId, owner) {
+    const key = batchKey(typeId, owner);
+    let batch = byKey.get(key);
+    if (batch) return batch;
+    const template = templates.get(typeId);
+    if (!template) return null;
+
+    /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array }[]} */
+    const layers = [];
+    const colors = makeOwnerColors(INITIAL_CAPACITY, owner);
+    const claimTemplate = !templateClaimed.has(typeId);
+    if (claimTemplate) templateClaimed.add(typeId);
+    for (let i = 0; i < template.length; i++) {
+      const src = template[i];
+      // First owner batch for this type reuses the template mesh; later owners clone.
+      const mesh = claimTemplate ? src : cloneTransformNode(src);
+      mesh.pickable = true;
+      const matrices = new Float32Array(INITIAL_CAPACITY * 16);
+      setThinInstances(mesh, matrices, INITIAL_CAPACITY);
+      setThinInstanceColors(mesh, colors);
+      setThinInstanceCount(mesh, 0);
+      addToScene(scene, mesh);
+      layers.push({ mesh, matrices, colors });
+      pickMeshes.set(mesh, key);
+    }
+    batch = { layers, capacity: INITIAL_CAPACITY, typeId, owner: owner | 0 };
+    byKey.set(key, batch);
+    slotToIndex.set(key, []);
+    return batch;
+  }
+
+  /**
+   * Grow thin-instance buffers to next power of two when needed.
+   * @param {{ layers: { mesh: object, matrices: Float32Array, colors: Float32Array }[], capacity: number, owner: number }} batch
    * @param {number} needed
    */
   function ensureCapacity(batch, needed) {
     if (needed <= batch.capacity) return;
-    const cap = capacityFor(needed);
+    const cap = capacityFor(needed, { initial: INITIAL_CAPACITY });
+    const colors = makeOwnerColors(cap, batch.owner);
     for (const layer of batch.layers) {
       const matrices = new Float32Array(cap * 16);
       setThinInstances(layer.mesh, matrices, cap);
+      setThinInstanceColors(layer.mesh, colors);
       layer.matrices = matrices;
+      layer.colors = colors;
     }
     batch.capacity = cap;
   }
 
   /**
-   * @param {{ type: string, x: number, z: number, yaw?: number }[]} list
+   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number }[]} list
    */
   function place(list) {
-    /** @type {Map<string, { globalIndex: number, x: number, z: number, yaw: number }[]>} */
+    /** @type {Map<string, { globalIndex: number, x: number, z: number, yaw: number, owner: number }[]>} */
     const groups = new Map();
-    for (const def of PLACEABLE_BUILDINGS) {
-      groups.set(def.id, []);
-      slotToIndex.set(def.id, []);
+    for (const key of byKey.keys()) {
+      slotToIndex.set(key, []);
     }
     const all = list ?? [];
     for (let gi = 0; gi < all.length; gi++) {
       const b = all[gi];
-      const g = groups.get(b.type);
-      if (!g) continue;
+      const owner = b.owner | 0;
+      const key = batchKey(b.type, owner);
+      let g = groups.get(key);
+      if (!g) {
+        g = [];
+        groups.set(key, g);
+      }
       g.push({
         globalIndex: gi,
         x: b.x,
         z: b.z,
         yaw: b.yaw ?? 0,
+        owner,
       });
     }
-    for (const [typeId, batch] of byType) {
-      const items = groups.get(typeId) ?? [];
+
+    /** @type {Set<string>} */
+    const used = new Set();
+    for (const [key, items] of groups) {
+      const owner = items[0]?.owner | 0;
+      const typeId = key.slice(0, key.lastIndexOf(':'));
+      const batch = ensureBatch(typeId, owner);
+      if (!batch) continue;
+      used.add(key);
       const n = items.length;
       ensureCapacity(batch, n);
       const slots = [];
@@ -329,9 +398,17 @@ export async function createBuildingProps(engine, scene, groundYAt) {
           writeMatrix(layer.matrices, i, b.x, y, b.z, b.yaw, 1);
         }
       }
-      slotToIndex.set(typeId, slots);
+      slotToIndex.set(key, slots);
       for (const layer of batch.layers) {
         setThinInstanceCount(layer.mesh, n);
+        flushThinInstances(layer.mesh);
+      }
+    }
+    for (const [key, batch] of byKey) {
+      if (used.has(key)) continue;
+      slotToIndex.set(key, []);
+      for (const layer of batch.layers) {
+        setThinInstanceCount(layer.mesh, 0);
         flushThinInstances(layer.mesh);
       }
     }
@@ -414,9 +491,9 @@ export async function createBuildingProps(engine, scene, groundYAt) {
    * @returns {{ kind: 'building', index: number } | null}
    */
   function resolvePick(mesh, thinInstanceIndex) {
-    const type = pickMeshes.get(mesh);
-    if (!type) return null;
-    const slots = slotToIndex.get(type);
+    const key = pickMeshes.get(mesh);
+    if (!key) return null;
+    const slots = slotToIndex.get(key);
     if (!slots || thinInstanceIndex < 0 || thinInstanceIndex >= slots.length) return null;
     return { kind: 'building', index: slots[thinInstanceIndex] };
   }

@@ -7,10 +7,11 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { capacityFor } from '../sim/capacity.js';
 
 const MUSHROOM_MODEL_URL = '/assets/models/mushroom.glb';
-/** Max individual mushrooms across all active seed tiles. */
-const MAX_MUSHROOMS = 1024;
+/** Initial mushroom instance budget; grows by powers of two. */
+const MUSHROOM_INITIAL = 256;
 /** Per-tile cluster size (matches v1 preview density). */
 const CLUSTER_COUNT = 9;
 const GROW_IN_MS = 900;
@@ -103,13 +104,14 @@ function tileSeed(x, z) {
 export async function createMushroomPreviews(engine, scene, groundYAt) {
   /** @type {{ mesh: object, matrices: Float32Array }[]} */
   const batches = [];
+  let capacity = MUSHROOM_INITIAL;
   try {
     const parts = await loadBakedUnitMeshParts(engine, MUSHROOM_MODEL_URL);
     for (let p = 0; p < parts.length; p++) {
       const mesh = parts[p];
       mesh.pickable = false;
-      const matrices = new Float32Array(MAX_MUSHROOMS * 16);
-      setThinInstances(mesh, matrices, MAX_MUSHROOMS);
+      const matrices = new Float32Array(capacity * 16);
+      setThinInstances(mesh, matrices, capacity);
       setThinInstanceCount(mesh, 0);
       addToScene(scene, mesh);
       batches.push({ mesh, matrices });
@@ -126,7 +128,7 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   }
 
   const freeSlots = [];
-  for (let i = MAX_MUSHROOMS - 1; i >= 0; i--) freeSlots.push(i);
+  for (let i = capacity - 1; i >= 0; i--) freeSlots.push(i);
 
   /**
    * @type {Map<string, {
@@ -138,9 +140,22 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   const clusters = new Map();
   let dirty = true;
   let simTick = 0;
+  let previousDraw = 0;
 
   function keyOf(x, z) {
     return `${x.toFixed(2)},${z.toFixed(2)}`;
+  }
+
+  function ensureCapacity(needed) {
+    if (needed <= capacity) return;
+    const cap = capacityFor(needed, { initial: MUSHROOM_INITIAL });
+    for (const batch of batches) {
+      const matrices = new Float32Array(cap * 16);
+      setThinInstances(batch.mesh, matrices, cap);
+      batch.matrices = matrices;
+    }
+    for (let i = capacity; i < cap; i++) freeSlots.push(i);
+    capacity = cap;
   }
 
   function releaseCluster(cluster) {
@@ -158,8 +173,12 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       return true;
     }
     const layout = clusterLayout(CLUSTER_COUNT, tileSeed(x, z));
+    ensureCapacity(capacity - freeSlots.length + layout.length);
     const instances = [];
     for (let i = 0; i < layout.length; i++) {
+      if (freeSlots.length === 0) {
+        ensureCapacity(capacity + layout.length - i);
+      }
       if (freeSlots.length === 0) break;
       const slot = freeSlots.pop();
       instances.push({
@@ -189,6 +208,15 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
 
   function rebuild() {
     // Pack live mushrooms densely into 0..drawCount-1 (Lite draws by count).
+    let needed = 0;
+    for (const c of clusters.values()) {
+      const growEase = 1 - (1 - Math.min(1, c.growT)) ** 3;
+      const shrinkEase = 1 - (1 - Math.min(1, c.shrinkT)) ** 3;
+      const size = (0.2 + 0.8 * growEase) * (1 - shrinkEase);
+      if (size > 0.001) needed += c.instances.length;
+    }
+    ensureCapacity(needed);
+
     let drawCount = 0;
     for (const c of clusters.values()) {
       const gy = groundYAt(c.x, c.z);
@@ -197,7 +225,6 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       const size = (0.2 + 0.8 * growEase) * (1 - shrinkEase);
       if (size <= 0.001) continue;
       for (let i = 0; i < c.instances.length; i++) {
-        if (drawCount >= MAX_MUSHROOMS) break;
         const inst = c.instances[i];
         const scale = inst.scale * size;
         for (let b = 0; b < batches.length; b++) {
@@ -215,11 +242,12 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       }
     }
     for (let b = 0; b < batches.length; b++) {
-      for (let s = drawCount; s < MAX_MUSHROOMS; s++) {
+      for (let s = drawCount; s < previousDraw; s++) {
         hideMatrix(batches[b].matrices, s);
       }
       setThinInstanceCount(batches[b].mesh, drawCount);
     }
+    previousDraw = drawCount;
   }
 
   function update(deltaMs, tick) {
@@ -258,9 +286,10 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   function clear() {
     for (const c of clusters.values()) releaseCluster(c);
     clusters.clear();
-    for (let i = 0; i < MAX_MUSHROOMS; i++) {
+    for (let i = 0; i < previousDraw; i++) {
       for (let b = 0; b < batches.length; b++) hideMatrix(batches[b].matrices, i);
     }
+    previousDraw = 0;
     for (let b = 0; b < batches.length; b++) {
       setThinInstanceCount(batches[b].mesh, 0);
     }

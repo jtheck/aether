@@ -10,7 +10,7 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 
-const CAPACITY = 8192;
+const CAPACITY = 32768;
 const LIFETIME_MS = 240;
 // Arrow render length is ~3 — keep streaks readable and clear of the shaft.
 const BASE_WIDTH = 0.18;

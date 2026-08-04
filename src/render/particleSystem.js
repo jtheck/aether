@@ -12,8 +12,20 @@ import {
   removeBillboardSprite,
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
+import { capacityFor } from '../sim/capacity.js';
 
 const TEXTURE_SIZE = 32;
+/** Lean boot; grows by powers of two (Lite billboard buffers grow on add). */
+export const PARTICLE_INITIAL_CAPACITY = 8192;
+/** Absolute ceiling so a runaway emitter cannot OOM. */
+export const PARTICLE_HARD_MAX = 262144;
+/**
+ * Size-aware camera cull: keep if dist ≤ max(MIN, size × K).
+ * Tiny staff sparks (~0.16) fall off near MIN; fireball-scale (~2–8+) keep far.
+ * K set so fireball-sized FX reach ~3× the prior mid-tune range.
+ */
+export const PARTICLE_CULL_MIN_RANGE = 220;
+export const PARTICLE_CULL_SIZE_K = 660;
 
 function atlasFromAlphaDisk(engine, soft) {
   const pixels = new Uint8Array(TEXTURE_SIZE * TEXTURE_SIZE * 4);
@@ -129,15 +141,33 @@ function makeParticle() {
     fadeOut: true,
     killY: -Infinity,
     startAlpha: 1,
+    noCull: false,
+    cullSize: 1,
   };
 }
 
+function cullRange(size) {
+  return Math.max(PARTICLE_CULL_MIN_RANGE, size * PARTICLE_CULL_SIZE_K);
+}
+
 /**
- * CPU particle simulation with pooled Lite billboard sprites.
+ * CPU particle simulation with pooled Lite facing billboards.
  * Particle positions and velocities use world-units and seconds.
+ * Capacity starts lean and grows by powers of two (billboard systems grow with it).
+ * Far tiny particles are skipped / released via size-aware camera distance.
+ *
+ * @param {object} engine
+ * @param {object} scene
+ * @param {{
+ *   capacity?: number,
+ *   hardMax?: number,
+ *   getEye?: () => { x: number, y: number, z: number } | null,
+ * }} [options]
  */
 export function createParticleSystem(engine, scene, options = {}) {
-  const capacity = Math.max(1, options.capacity ?? 8192);
+  let capacity = Math.max(1, options.capacity ?? PARTICLE_INITIAL_CAPACITY);
+  const hardMax = Math.max(capacity, options.hardMax ?? PARTICLE_HARD_MAX);
+  const getEye = options.getEye;
   const softAtlas = atlasFromAlphaDisk(engine, true);
   const hardAtlas = atlasFromAlphaDisk(engine, false);
   const starAtlas = atlasFromAlphaStar(engine);
@@ -168,14 +198,53 @@ export function createParticleSystem(engine, scene, options = {}) {
   const free = [];
   let dropped = 0;
   let emitted = 0;
+  let culled = 0;
+
+  function ensureCapacity(needed) {
+    if (needed <= capacity) return true;
+    if (needed > hardMax) return false;
+    capacity = capacityFor(needed, { initial: PARTICLE_INITIAL_CAPACITY });
+    if (capacity > hardMax) capacity = hardMax;
+    return needed <= capacity;
+  }
+
+  /** @returns {boolean} true if too far from camera for this size */
+  function isTooFar(x, y, z, size) {
+    if (!getEye) return false;
+    const eye = getEye();
+    if (!eye) return false;
+    const range = cullRange(size);
+    const dx = x - eye.x;
+    const dy = y - eye.y;
+    const dz = z - eye.z;
+    return dx * dx + dy * dy + dz * dz > range * range;
+  }
 
   function emit(init = {}) {
-    if (active.length >= capacity) {
+    const position = init.position ?? [0, 0, 0];
+    const startSize = sizePair(init.startSize ?? init.size ?? 1);
+    const endSize = sizePair(init.endSize ?? startSize, startSize[0]);
+    // peakSize only matters for hang/swell particles (ink drips, dust puffs).
+    const peakSize = sizePair(init.peakSize ?? startSize, startSize[0]);
+    const sizeHint = Math.max(
+      startSize[0],
+      startSize[1],
+      peakSize[0],
+      peakSize[1],
+      endSize[0],
+      endSize[1],
+    );
+    const noCull = init.cull === false || init.noCull === true;
+    if (!noCull && isTooFar(position[0], position[1], position[2], sizeHint)) {
+      culled++;
+      return null;
+    }
+
+    if (!ensureCapacity(active.length + 1)) {
       dropped++;
       return null;
     }
     const particle = free.pop() ?? makeParticle();
-    const position = init.position ?? [0, 0, 0];
     const velocity = init.velocity ?? [0, 0, 0];
     const gravity = init.gravity ?? [0, 0, 0];
     const color = init.color ?? [1, 1, 1, 1];
@@ -191,11 +260,6 @@ export function createParticleSystem(engine, scene, options = {}) {
     particle.drag = Math.max(0, init.drag ?? 0);
     particle.age = 0;
     particle.lifetime = Math.max(0.001, init.lifetime ?? 0.5);
-    const startSize = sizePair(init.startSize ?? init.size ?? 1);
-    const endSize = sizePair(init.endSize ?? startSize, startSize[0]);
-    // peakSize only matters for hang/swell particles (ink drips, dust puffs).
-    // Default to startSize so a missing peak never collapses ordinary emitters.
-    const peakSize = sizePair(init.peakSize ?? startSize, startSize[0]);
     particle.startSizeW = startSize[0];
     particle.startSizeH = startSize[1];
     particle.peakSizeW = peakSize[0];
@@ -212,6 +276,8 @@ export function createParticleSystem(engine, scene, options = {}) {
     particle.drawColor[3] = particle.startAlpha;
     particle.sizeWorld[0] = particle.startSizeW;
     particle.sizeWorld[1] = particle.startSizeH;
+    particle.noCull = noCull;
+    particle.cullSize = sizeHint;
     const system =
       init.shape === 'star' && init.blend === 'alpha'
         ? systems.alphaHardStar
@@ -220,6 +286,7 @@ export function createParticleSystem(engine, scene, options = {}) {
           : init.blend === 'alpha'
             ? systems.alpha
             : systems.additive;
+    // Lite doubles billboard capacity when count exceeds current _capacity.
     particle.handle = addBillboardSprite(system, {
       position: particle.position,
       sizeWorld: particle.sizeWorld,
@@ -260,6 +327,7 @@ export function createParticleSystem(engine, scene, options = {}) {
 
   function update(deltaMs) {
     const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
+    const eye = getEye?.() ?? null;
     for (let i = active.length - 1; i >= 0; i--) {
       const particle = active[i];
       particle.age += dt;
@@ -308,6 +376,24 @@ export function createParticleSystem(engine, scene, options = {}) {
         particle.sizeWorld[1] =
           particle.startSizeH + (particle.endSizeH - particle.startSizeH) * progress;
       }
+
+      if (eye && !particle.noCull) {
+        const size = Math.max(
+          particle.sizeWorld[0],
+          particle.sizeWorld[1],
+          particle.cullSize || 0,
+        );
+        const range = cullRange(size);
+        const dx = particle.position[0] - eye.x;
+        const dy = particle.position[1] - eye.y;
+        const dz = particle.position[2] - eye.z;
+        if (dx * dx + dy * dy + dz * dz > range * range) {
+          culled++;
+          release(i);
+          continue;
+        }
+      }
+
       particle.drawColor[3] = particle.fadeOut
         ? particle.startAlpha * (1 - particle.age / particle.lifetime)
         : particle.startAlpha;
@@ -334,7 +420,7 @@ export function createParticleSystem(engine, scene, options = {}) {
     clear,
     dispose: clear,
     stats() {
-      return { active: active.length, capacity, dropped, emitted };
+      return { active: active.length, capacity, hardMax, dropped, culled, emitted };
     },
   };
 }

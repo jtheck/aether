@@ -33,6 +33,7 @@ import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
 import { HEIGHT_AMPLITUDE, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
 import { kothMaxUnitsOfType, KOTH_MAX_SLOTS } from '../sim/worldSetup.js';
+import { capacityFor } from '../sim/capacity.js';
 import {
   UNIT_MODEL_URLS,
   hasUnitModel,
@@ -423,11 +424,14 @@ const ORDER_TOTAL_MS = ORDER_POP_MS + ORDER_HOLD_MS + ORDER_FADE_MS;
 /** Radians of Y spin during pop (settles to camera-facing). Was 1.35π; punched to 2.4π — midpoint. */
 const ORDER_SPIN_RAD = Math.PI * 1.875;
 
-/** Max thin-instance slots per army for a unit type (KOTH). */
+/** Max thin-instance slots per army for a unit type (KOTH soft guidance). */
 function kothPerArmyCap(typeId) {
   const max = kothMaxUnitsOfType(typeId);
   return max > 0 ? max / KOTH_MAX_SLOTS : 0;
 }
+
+/** Boot / grow floor for type×owner unit batches. */
+const UNIT_BATCH_INITIAL = 32;
 
 function vatPartMeshes(batch) {
   if (batch.vatParts?.length) return batch.vatParts.map((p) => p.mesh);
@@ -448,10 +452,12 @@ function resizeTypeBatch(batch, entityIds, opts = {}) {
   const prealloc = opts.preallocKoth ?? false;
   const newSize = entityIds.length;
   if (newSize > batch.gpuCapacity) {
-    throw new Error(`type batch overflow: ${newSize} > ${batch.gpuCapacity}`);
+    const cap = capacityFor(newSize, { initial: UNIT_BATCH_INITIAL });
+    growTypeBatchCapacity(batch, cap);
   }
-  // Keep GPU draw count at capacity for KOTH — Lite fails when ti.count grows after boot.
-  // Shadow casters key off mappedSize; empty prealloc batches stay at full ti.count but do not cast.
+  // Keep GPU draw count at capacity for KOTH — Lite fails when ti.count grows after boot
+  // without a setThinInstances realloc. Shadow casters key off mappedSize; empty
+  // prealloc batches stay at full ti.count but do not cast.
   const drawCount = prealloc ? Math.max(batch.gpuCapacity, 1) : newSize;
   for (const mesh of vatPartMeshes(batch)) setThinInstanceCount(mesh, drawCount);
   batch.entityIds = entityIds;
@@ -470,6 +476,66 @@ function resizeTypeBatch(batch, entityIds, opts = {}) {
     setThinInstanceColors(batch.mesh, batch.colors);
   }
   for (const mesh of vatPartMeshes(batch)) flushThinInstances(mesh);
+}
+
+/**
+ * Realloc thin-instance / VAT buffers to a larger capacity (pow2 grow).
+ * @param {object} batch
+ * @param {number} newCap
+ */
+function growTypeBatchCapacity(batch, newCap) {
+  const oldCap = batch.gpuCapacity | 0;
+  if (newCap <= oldCap) return;
+
+  const matrices = new Float32Array(newCap * 16);
+  matrices.set(batch.matrices.subarray(0, oldCap * 16));
+  const colors = new Float32Array(newCap * 4);
+  colors.set(batch.colors.subarray(0, oldCap * 4));
+  for (let s = oldCap; s < newCap; s++) {
+    colors[s * 4] = 1;
+    colors[s * 4 + 1] = 1;
+    colors[s * 4 + 2] = 1;
+    colors[s * 4 + 3] = 1;
+  }
+
+  if (batch.vatParts?.length) {
+    const vatWhiteColors = new Float32Array(newCap * 4);
+    vatWhiteColors.set(batch.vatWhiteColors.subarray(0, oldCap * 4));
+    for (let s = oldCap; s < newCap; s++) {
+      vatWhiteColors[s * 4] = 1;
+      vatWhiteColors[s * 4 + 1] = 1;
+      vatWhiteColors[s * 4 + 2] = 1;
+      vatWhiteColors[s * 4 + 3] = 1;
+    }
+    const vatParams = new Float32Array(newCap * 4);
+    vatParams.set(batch.vatParams.subarray(0, oldCap * 4));
+    const vatMoving = new Uint8Array(newCap);
+    vatMoving.set(batch.vatMoving.subarray(0, oldCap));
+    const vatPhase = new Float32Array(newCap);
+    vatPhase.set(batch.vatPhase.subarray(0, oldCap));
+    const frameCount = Math.max(1, batch.idleClip?.frameCount ?? 1);
+    for (let s = oldCap; s < newCap; s++) {
+      vatPhase[s] = (s * 17 + 3) % frameCount;
+    }
+    fillVatInstanceParams(vatParams, newCap, batch.idleClip, batch.walkClip, vatMoving);
+
+    for (const part of batch.vatParts) {
+      setThinInstances(part.mesh, matrices, newCap);
+      setThinInstanceColors(part.mesh, part.isTeamColor ? colors : vatWhiteColors);
+      part.handle.setInstances(vatParams);
+    }
+    batch.vatWhiteColors = vatWhiteColors;
+    batch.vatParams = vatParams;
+    batch.vatMoving = vatMoving;
+    batch.vatPhase = vatPhase;
+  } else if (batch.mesh) {
+    setThinInstances(batch.mesh, matrices, newCap);
+    setThinInstanceColors(batch.mesh, colors);
+  }
+
+  batch.matrices = matrices;
+  batch.colors = colors;
+  batch.gpuCapacity = newCap;
 }
 
 async function loadUnitMeshTemplate(engine, url) {
@@ -559,7 +625,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
 /**
  * @param {HTMLCanvasElement} canvas
  * @param {number} capacity
- * @param {{ types?: Int8Array | Uint8Array | number[], gpuCapacity?: number, field?: object | null, onAnimLoadProgress?: (done: number, total: number) => void }} [opts]
+ * @param {{ types?: Int8Array | Uint8Array | number[], owners?: Uint8Array | number[], gpuCapacity?: number, field?: object | null, onAnimLoadProgress?: (done: number, total: number) => void }} [opts]
  */
 export async function createRenderer(canvas, capacity, opts = {}) {
   const types = opts.types;
@@ -726,7 +792,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const vatInstanceCap = maxVatInstancesPerBatch(engine);
 
   function batchKey(typeId, owner = 0) {
-    return preallocKoth ? `${typeId}:${owner}` : typeId;
+    return `${typeId}:${owner | 0}`;
   }
 
   function vatShardKey(typeId, shard) {
@@ -739,16 +805,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return out.length ? out : [[]];
   }
 
-  async function addVatShards(typeId, entityIds) {
+  async function addVatShards(typeId, entityIds, owner = 0) {
+    const base = batchKey(typeId, owner);
     const chunks = chunkIds(entityIds, vatInstanceCap);
     for (let shard = 0; shard < chunks.length; shard++) {
       const slice = chunks[shard];
-      const key = chunks.length === 1 ? typeId : vatShardKey(typeId, shard);
-      const batch = await createTypeBatch(engine, typeId, slice.length, slice.length);
+      const key = chunks.length === 1 ? base : vatShardKey(base, shard);
+      const gpuCap = capacityFor(slice.length, { initial: UNIT_BATCH_INITIAL });
+      const batch = await createTypeBatch(engine, typeId, slice.length, gpuCap);
       batch.entityIds = slice;
       batch.mappedSize = slice.length;
       batch.vatShard = shard;
-      batch.vatShardBase = typeId;
+      batch.vatShardBase = base;
       if (batch.vatContainer) addToScene(scene, batch.vatContainer);
       else if (batch.vatRoot) addToScene(scene, batch.vatRoot);
       else for (const mesh of vatPartMeshes(batch)) addToScene(scene, mesh);
@@ -781,23 +849,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   if (preallocKoth) {
-    // One thin-instance mesh per (type, owner) so solo→2 never grows a batch 10→20
-    // (Lite fails to render instances beyond the solo active count on the same mesh).
+    // One thin-instance mesh per (type, owner). Start lean (pow2 ≥ 32); grow via
+    // setThinInstances when an army exceeds batch.gpuCapacity.
     for (const typeId of unitModelTypeIds()) {
-      const perArmy = kothPerArmyCap(typeId);
-      if (perArmy <= 0) continue;
+      const softCap = kothPerArmyCap(typeId);
+      if (softCap <= 0) continue;
       for (let owner = 0; owner < KOTH_MAX_SLOTS; owner++) {
         let batchSize = 0;
         if (types && owner === 0) {
           for (let i = 0; i < capacity; i++) if (types[i] === typeId) batchSize++;
         }
-        const initActive = owner === 0 ? batchSize : perArmy;
-        const batch = await createTypeBatch(engine, typeId, initActive, perArmy);
-        if (owner > 0) {
-          for (let s = 0; s < perArmy; s++) {
-            const o = s * 16;
-            for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
-          }
+        const initActive = owner === 0 ? batchSize : 0;
+        const gpuCap = capacityFor(Math.max(initActive, 1), { initial: UNIT_BATCH_INITIAL });
+        const batch = await createTypeBatch(engine, typeId, Math.max(initActive, 1), gpuCap);
+        // KOTH keeps draw count at capacity (hide unused matrices) so Lite never
+        // sees ti.count grow without a setThinInstances realloc.
+        for (const mesh of vatPartMeshes(batch)) setThinInstanceCount(mesh, gpuCap);
+        for (let s = initActive; s < gpuCap; s++) {
+          const o = s * 16;
+          for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
         }
         if (batch.vatContainer) addToScene(scene, batch.vatContainer);
         else if (batch.vatRoot) addToScene(scene, batch.vatRoot);
@@ -814,7 +884,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           }
         }
         batch.entityIds = entityIds;
-        batch.mappedSize = owner === 0 ? batchSize : 0;
+        batch.mappedSize = initActive;
         typeBatches.set(key, batch);
         registerUnitPickBatch(unitPickMeshes, batch);
         for (let s = 0; s < entityIds.length; s++) {
@@ -823,33 +893,38 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     }
   } else {
-    const typeEntities = new Map();
+    const ownersArr = opts.owners;
+    const typeOwnerEntities = new Map();
     if (types) {
       for (let i = 0; i < capacity; i++) {
         const type = types[i];
-        if (!typeEntities.has(type)) typeEntities.set(type, []);
-        typeEntities.get(type).push(i);
+        const owner = ownersArr ? Number(ownersArr[i]) : 0;
+        const key = batchKey(type, owner);
+        if (!typeOwnerEntities.has(key)) typeOwnerEntities.set(key, []);
+        typeOwnerEntities.get(key).push(i);
       }
     }
 
-    for (const [typeId, entityIds] of typeEntities) {
+    for (const [key, entityIds] of typeOwnerEntities) {
       const batchSize = entityIds.length;
       if (batchSize === 0) continue;
+      const colon = key.lastIndexOf(':');
+      const typeId = Number(key.slice(0, colon));
+      const owner = Number(key.slice(colon + 1));
 
       if (isVatUnitType(typeId)) {
-        // Split past Lite's 1-row VAT instance-param texture width.
-        await addVatShards(typeId, entityIds);
+        await addVatShards(typeId, entityIds, owner);
       } else if (hasUnitModel(typeId)) {
-        const typeGpuCap = Math.max(batchSize, 1);
-        const batch = await createTypeBatch(engine, typeId, batchSize, typeGpuCap);
+        const gpuCap = capacityFor(batchSize, { initial: UNIT_BATCH_INITIAL });
+        const batch = await createTypeBatch(engine, typeId, batchSize, gpuCap);
         batch.entityIds = entityIds;
         batch.mappedSize = batchSize;
         addToScene(scene, batch.mesh);
-        typeBatches.set(typeId, batch);
+        typeBatches.set(key, batch);
         registerUnitPickBatch(unitPickMeshes, batch);
         for (let s = 0; s < entityIds.length; s++) {
           entitySlot[entityIds[s]] = s;
-          entityBatchKey[entityIds[s]] = typeId;
+          entityBatchKey[entityIds[s]] = key;
         }
       } else {
         fallbackEntities.push(...entityIds);
@@ -1011,7 +1086,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   addToScene(scene, pickDebugMesh);
   let pickDebugVisible = false;
   let pickDebugCount = 0;
-  const particles = createParticleSystem(engine, scene, { capacity: 16384 });
+  const particles = createParticleSystem(engine, scene, { getEye: cameraEyePos });
   const unitAuras = createUnitAuras((init) => particles.emit(init), groundYAt, {
     maxSparkleDistSq: FX_DISTANCE_SQ,
     getEye: cameraEyePos,
@@ -2164,10 +2239,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const usedKeys = new Set();
 
     for (const [baseKey, entityIds] of nextByBase) {
-      // VAT shards: typeId#0, typeId#1, … created at boot when count > vatInstanceCap.
-      const sharded = typeBatches.has(vatShardKey(baseKey, 0))
-        || (typeof baseKey === 'number' && typeBatches.has(vatShardKey(baseKey, 0)));
-      if (sharded || (isVatUnitType(Number(baseKey)) && !typeBatches.has(baseKey))) {
+      // VAT shards: `${type:owner}#shard` created at boot when count > vatInstanceCap.
+      const typeFromKey = Number(String(baseKey).split(':')[0]);
+      const sharded = typeBatches.has(vatShardKey(baseKey, 0));
+      if (sharded || (isVatUnitType(typeFromKey) && !typeBatches.has(baseKey))) {
         const chunks = chunkIds(entityIds, vatInstanceCap);
         for (let shard = 0; shard < chunks.length; shard++) {
           const key = chunks.length === 1 && typeBatches.has(baseKey)
@@ -2863,6 +2938,38 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     particleStats() {
       return particles.stats();
+    },
+
+    /**
+     * Live vs allocated for stress / capacity checks.
+     * `active` = currently used; `capacity` = reserved buffers.
+     */
+    poolStats() {
+      let unitLive = 0;
+      let unitCap = 0;
+      const unitBatches = {};
+      for (const [key, batch] of typeBatches) {
+        const live = batch.entityIds?.length ?? 0;
+        const cap = batch.gpuCapacity | 0;
+        unitLive += live;
+        unitCap += cap;
+        unitBatches[key] = { active: live, capacity: cap };
+      }
+      if (fallback) {
+        const live = fallback.entityIds?.length ?? 0;
+        const cap = fallback.gpuCapacity | 0;
+        unitLive += live;
+        unitCap += cap;
+        unitBatches.fallback = { active: live, capacity: cap };
+      }
+      return {
+        units: { active: unitLive, capacity: unitCap, batches: unitBatches },
+        particles: particles.stats(),
+        trails: arrowTrails.stats?.() ?? null,
+        frogs: frogRenderer.stats?.() ?? null,
+        lightning: lightningBolts.stats?.() ?? null,
+        groundFires: { active: groundFires.size },
+      };
     },
 
     /**

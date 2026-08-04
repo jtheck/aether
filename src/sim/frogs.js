@@ -18,10 +18,10 @@ import {
   tileCenterY,
   worldToTile,
 } from './field.js';
+import { capacityFor } from './capacity.js';
 
-/** Initial pool / thin-instance size; grows in FROG_CAPACITY_CHUNK steps. */
-export const FROG_INITIAL_CAPACITY = 1024;
-export const FROG_CAPACITY_CHUNK = 1024;
+/** Initial pool / thin-instance size; grows by powers of two. */
+export const FROG_INITIAL_CAPACITY = 256;
 /** @deprecated Prefer FROG_INITIAL_CAPACITY — alias kept for older call sites. */
 export const MAX_FROGS = FROG_INITIAL_CAPACITY;
 
@@ -128,15 +128,15 @@ export function createFrogStore(capacity = FROG_INITIAL_CAPACITY) {
 }
 
 /**
- * Grow frog pool arrays in FROG_CAPACITY_CHUNK steps (new slots added to free list).
+ * Grow frog pool arrays to the next power-of-two (new slots added to free list).
  * @param {ReturnType<typeof createFrogStore>} store
  * @param {number} minCapacity
  */
 export function ensureFrogCapacity(store, minCapacity) {
   if (!store || minCapacity <= store.capacity) return;
   const oldCap = store.capacity;
-  const newCap =
-    Math.ceil(minCapacity / FROG_CAPACITY_CHUNK) * FROG_CAPACITY_CHUNK;
+  const newCap = capacityFor(minCapacity, { initial: FROG_INITIAL_CAPACITY });
+  if (newCap <= oldCap) return;
 
   const grow = (arr, TypedArray) => {
     const next = new TypedArray(newCap);

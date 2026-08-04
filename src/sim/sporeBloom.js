@@ -15,6 +15,8 @@ import {
   growTreeAt,
 } from './trees.js';
 
+import { capacityFor } from './capacity.js';
+
 /** Blast clears trees out to this radius. */
 export const SPORE_OUTER_RADIUS = fx.fromFloat(TILE_SIZE_F * 3.5);
 /** (v1 wood credit zone — unused in v2, kept for parity.) */
@@ -30,10 +32,11 @@ export const SPORE_MAX_SEEDS = 22;
 export const SPORE_MIN_SEEDS = 3;
 export const SPORE_SEED_CHANCE = 0.78;
 
-const MAX_PENDING = 2048;
+/** Initial delayed-sprout queue; grows by powers of two. */
+export const SPORE_PENDING_INITIAL = 512;
 const CANDIDATE_CAP = 512;
 
-export function createSporeGrowthStore(capacity = MAX_PENDING) {
+export function createSporeGrowthStore(capacity = SPORE_PENDING_INITIAL) {
   return {
     capacity,
     count: 0,
@@ -41,6 +44,21 @@ export function createSporeGrowthStore(capacity = MAX_PENDING) {
     growAtTick: new Int32Array(capacity),
     stock: new Uint8Array(capacity),
   };
+}
+
+function ensureSporePendingCapacity(store, minCapacity) {
+  if (!store || minCapacity <= store.capacity) return;
+  const newCap = capacityFor(minCapacity, { initial: SPORE_PENDING_INITIAL });
+  if (newCap <= store.capacity) return;
+  const grow = (arr, TypedArray) => {
+    const next = new TypedArray(newCap);
+    next.set(arr);
+    return next;
+  };
+  store.tile = grow(store.tile, Int32Array);
+  store.growAtTick = grow(store.growAtTick, Int32Array);
+  store.stock = grow(store.stock, Uint8Array);
+  store.capacity = newCap;
 }
 
 export function createSporeBloomFxStore() {
@@ -105,6 +123,9 @@ function pendingTileSet(store) {
 }
 
 function queueGrowth(store, tileIndex, growAtTick, stock) {
+  if (store.count >= store.capacity) {
+    ensureSporePendingCapacity(store, store.count + 1);
+  }
   if (store.count >= store.capacity) return false;
   const i = store.count++;
   store.tile[i] = tileIndex;

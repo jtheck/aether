@@ -258,23 +258,16 @@ export function createGameInput(opts) {
     onSelectionChanged?.();
   }
 
-  /**
-   * @param {number} clientX
-   * @param {number} clientY
-   * @param {'unit' | 'ground'} kind
-   * @param {{ typeId?: number }} [extra]
-   */
-  function consumeDoubleTap(clientX, clientY, kind, extra = {}) {
-    const now = performance.now();
+  /** Read-only double-tap check (does not stamp). */
+  function isDoubleTap(clientX, clientY, kind, extra = {}, at = performance.now()) {
     const prev = lastTap;
-    const matched =
+    return (
       !!prev &&
       prev.kind === kind &&
-      now - prev.t <= DOUBLE_MS &&
+      at - prev.t <= DOUBLE_MS &&
       Math.hypot(clientX - prev.x, clientY - prev.y) <= DOUBLE_PX &&
-      (kind !== 'unit' || prev.typeId === extra.typeId);
-    lastTap = { t: now, x: clientX, y: clientY, kind, typeId: extra.typeId };
-    return matched;
+      (kind !== 'unit' || prev.typeId === extra.typeId)
+    );
   }
 
   function boxSelect(x0, y0, x1, y1, add) {
@@ -472,20 +465,26 @@ export function createGameInput(opts) {
     abilityHoldClientX = clientX;
     abilityHoldClientY = clientY;
     if (isPlacing() || selectedIds().length === 0) return;
-    // Don't arm over own units — that press is for selection.
-    const gen = ++abilityHoldGen;
-    const world = getWorld();
-    const hit = await pickUnitAt(clientX, clientY);
-    if (gen !== abilityHoldGen) return;
-    if (hit >= 0 && world.owner[hit] === localPlayerId) return;
-    if (boxDragging || dragPointerId == null) return;
 
+    // Arm the timer immediately. Waiting on GPU pick first made hold-cast miss under
+    // stress (pick latency ate the whole gesture before the 400ms timer even started).
+    const gen = ++abilityHoldGen;
     abilityHoldTimer = setTimeout(() => {
       abilityHoldTimer = null;
+      if (gen !== abilityHoldGen) return;
       if (boxDragging || dragPointerId == null) return;
       abilityHoldFired = true;
       castAbilityAt(abilityHoldClientX, abilityHoldClientY);
     }, ABILITY_HOLD_MS);
+
+    // Best-effort: cancel if this press is on an own unit (selection, not cast).
+    const world = getWorld();
+    const hit = await pickUnitAt(clientX, clientY);
+    if (gen !== abilityHoldGen) return;
+    if (hit >= 0 && world.owner[hit] === localPlayerId) {
+      clearAbilityHold();
+      abilityHoldFired = false;
+    }
   }
 
   function handlePointerDown(e) {
@@ -580,8 +579,18 @@ export function createGameInput(opts) {
   /**
    * Normal LMB click (select unit / building / order / clear).
    * Shared by free clicks and radial misses so the menu never traps selection.
+   * @param {PointerEvent} e
+   * @param {{ x: number, y: number } | null} d
+   * @param {{
+   *   tapAt?: number,
+   *   forceMove?: boolean,
+   *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground', typeId?: number } | null,
+   * }} [click]
    */
-  async function handleWorldClick(e, d) {
+  async function handleWorldClick(e, d, click = {}) {
+    const tapAt = click.tapAt ?? performance.now();
+    const forceMove = !!click.forceMove;
+    const prevTap = click.prevTap !== undefined ? click.prevTap : lastTap;
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > DRAG_THRESHOLD_PX) return;
     const world = getWorld();
     const hit = await pickUnitAt(e.clientX, e.clientY);
@@ -599,8 +608,16 @@ export function createGameInput(opts) {
         await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit);
       } else {
         const typeId = world.type[hit];
+        // Use prevTap from before speculative ground stamp (pointer-up).
         const selectAll =
-          e.ctrlKey || e.metaKey || consumeDoubleTap(e.clientX, e.clientY, 'unit', { typeId });
+          e.ctrlKey ||
+          e.metaKey ||
+          (!!prevTap &&
+            prevTap.kind === 'unit' &&
+            prevTap.typeId === typeId &&
+            tapAt - prevTap.t <= DOUBLE_MS &&
+            Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX);
+        lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'unit', typeId };
         if (selectAll) {
           selectAllOfType(typeId, e.shiftKey);
         } else {
@@ -623,13 +640,8 @@ export function createGameInput(opts) {
     }
 
     if (selectedIds().length > 0) {
-      // Immediate attack-move; double-tap upgrades to force-move (arrow reuses ping).
-      // Reuse `hit` so we don't GPU-pick twice in one click.
-      if (consumeDoubleTap(e.clientX, e.clientY, 'ground')) {
-        await orderAt(e.clientX, e.clientY, CMD.MOVE, hit);
-      } else {
-        await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit);
-      }
+      // forceMove decided sync on pointer-up so overlapping GPU picks can't miss the window.
+      await orderAt(e.clientX, e.clientY, forceMove ? CMD.MOVE : CMD.ATTACK_MOVE, hit);
       return;
     }
 
@@ -642,6 +654,8 @@ export function createGameInput(opts) {
     if (dragPointerId === null) return false;
     if (e.pointerId !== dragPointerId && e.type !== 'pointercancel') return false;
 
+    // Capture before any await — GPU picks under stress can take longer than DOUBLE_MS.
+    const tapAt = performance.now();
     const d = lmbDownPos;
     lmbDownPos = null;
     const wasDragging = boxDragging;
@@ -652,6 +666,22 @@ export function createGameInput(opts) {
     radialGesture = false;
     abilityHoldGen++;
     clearAbilityHold();
+
+    // Decide force-move sync while selected, before GPU picks race each other.
+    let forceMove = false;
+    const prevTap = lastTap;
+    if (
+      canUseInput() &&
+      e.type !== 'pointercancel' &&
+      !wasDragging &&
+      !holdCast &&
+      !isPlacing() &&
+      selectedIds().length > 0
+    ) {
+      forceMove = isDoubleTap(e.clientX, e.clientY, 'ground', {}, tapAt);
+      if (forceMove) lastTap = null;
+      else lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'ground' };
+    }
 
     if (canUseInput() && e.type !== 'pointercancel') {
       if (isPlacing()) {
@@ -706,7 +736,7 @@ export function createGameInput(opts) {
             lastTap = null;
             boxSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
           } else {
-            await handleWorldClick(e, d);
+            await handleWorldClick(e, d, { tapAt, forceMove, prevTap });
           }
         }
       }

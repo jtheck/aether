@@ -8,8 +8,10 @@
 //   5) advance the tick counter
 //
 // Determinism rules (enforced by discipline + the partition): no Date.now /
-// performance.now, no Math.random (rng.js only), no DOM / Babylon, all math in
-// fixed-point via fixed.js.
+// performance.now in gameplay, no Math.random (rng.js only), no DOM / Babylon,
+// all math in fixed-point via fixed.js.
+// Exception: when world.profileSim is set, performance.now() fills metrics.timing
+// only — never read back into decisions or checksum.
 
 import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
@@ -88,26 +90,45 @@ export function step(world, field, commands) {
   world.metrics.projectileHits = 0;
   world.metrics.projectileMisses = 0;
   world.metrics.projectileOverflow = 0;
-  applyCommands(world, field, commands);
-  transportAutoLoadSystem(world);
-  repairSystem(world);
-  combatSystem(world, field);
-  projectileSystem(world, field);
-  tickCombatStatus(world);
-  frogSystem(world, field);
-  monkKickSystem(world, field);
-  treeBurnSystem(field);
-  sporeGrowthSystem(world, field);
-  kothMetaStep(world);
-  agoraCaptureSystem(world);
-  planPathBudget(world, field);
-  movementSystem(world, field);
-  syncCarriedPositions(world);
-  movingAvoidanceSystem(world, field);
-  separationSystem(world, field);
+
+  // Diagnostic only — never read timing back into gameplay / checksum.
+  const profile = !!world.profileSim;
+  const timing = profile ? {} : null;
+  if (profile) world.metrics.timing = timing;
+  else world.metrics.timing = null;
+  const tAll = profile ? performance.now() : 0;
+
+  const phase = (name, fn) => {
+    if (!profile) {
+      fn();
+      return;
+    }
+    const t0 = performance.now();
+    fn();
+    timing[name] = performance.now() - t0;
+  };
+
+  phase('commands', () => applyCommands(world, field, commands));
+  phase('transport', () => transportAutoLoadSystem(world));
+  phase('repair', () => repairSystem(world));
+  phase('combat', () => combatSystem(world, field));
+  phase('projectiles', () => projectileSystem(world, field));
+  phase('status', () => tickCombatStatus(world));
+  phase('frogs', () => frogSystem(world, field));
+  phase('monkKick', () => monkKickSystem(world, field));
+  phase('trees', () => treeBurnSystem(field));
+  phase('spore', () => sporeGrowthSystem(world, field));
+  phase('koth', () => kothMetaStep(world));
+  phase('agora', () => agoraCaptureSystem(world));
+  phase('pathBudget', () => planPathBudget(world, field));
+  phase('movement', () => movementSystem(world, field));
+  phase('carried', () => syncCarriedPositions(world));
+  phase('avoidance', () => movingAvoidanceSystem(world, field));
+  phase('separation', () => separationSystem(world, field));
   // After movement so standing/walking through the patch uses current positions.
-  fireZoneSystem(world);
+  phase('fireZones', () => fireZoneSystem(world));
   world.tick++;
+  if (profile) timing.step = performance.now() - tAll;
 }
 
 function movementSystem(w, field) {

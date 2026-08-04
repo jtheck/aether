@@ -12,6 +12,11 @@ import { applyDamage } from './damage.js';
 import { isHostile } from './teams.js';
 import { rngFrac } from './rng.js';
 import { isCarried } from './transport.js';
+import {
+  queryCellBounds,
+  rebuildSpatialGrid,
+  spatialCellId,
+} from './spatialGrid.js';
 
 /** Stick reach — close enough to whap with a staff. */
 export const MONK_KICK_RADIUS = fx.fromFloat(TILE_SIZE_F * 0.75);
@@ -315,15 +320,18 @@ export function tickMonkLobs(w) {
 
 /**
  * Pick the closest living non-monk in stick range (entity-index tiebreak).
+ * Expects `w.spatial` rebuilt for current positions.
  * @returns {number} entity index or -1
  */
 export function findStickTarget(w, monk) {
   const ox = w.px[monk];
   const oy = w.py[monk];
+  const grid = w.spatial;
   let best = -1;
   let bestD2 = RADIUS2 + 1;
-  for (let i = 0; i < w.count; i++) {
-    if (i === monk || !canBeLobbbed(w, i)) continue;
+
+  const consider = (i) => {
+    if (i === monk || !canBeLobbbed(w, i)) return;
     // Don't whap units sharing this monk's selection / multi-unit order.
     if (
       w.squadId &&
@@ -331,13 +339,24 @@ export function findStickTarget(w, monk) {
       w.owner[i] === w.owner[monk] &&
       w.squadId[i] === w.squadId[monk]
     ) {
-      continue;
+      return;
     }
     const d2 = fx.dist2(ox, oy, w.px[i], w.py[i]);
-    if (d2 > RADIUS2) continue;
+    if (d2 > RADIUS2) return;
     if (d2 < bestD2 || (d2 === bestD2 && (best < 0 || i < best))) {
       bestD2 = d2;
       best = i;
+    }
+  };
+
+  const bounds = queryCellBounds(ox, oy, MONK_KICK_RADIUS, grid);
+  for (let z = bounds.minZ; z <= bounds.maxZ; z++) {
+    for (let x = bounds.minX; x <= bounds.maxX; x++) {
+      let j = grid.head[spatialCellId(x, z, grid)];
+      while (j >= 0) {
+        consider(j);
+        j = grid.next[j];
+      }
     }
   }
   return best;
@@ -349,6 +368,8 @@ export function findStickTarget(w, monk) {
  */
 export function monkKickSystem(w, field) {
   tickMonkLobs(w);
+  // Stick seek is local — full-N scan was the stress hot path.
+  rebuildSpatialGrid(w.spatial, w);
 
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;

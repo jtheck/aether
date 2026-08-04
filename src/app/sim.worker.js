@@ -56,6 +56,20 @@ function commandsForTick(frames) {
   return cmds;
 }
 
+/** @returns {{ ai: number, merge: number }} */
+function commandsForTickTimed(frames) {
+  const t0 = performance.now();
+  let cmds = mergeFrames(frames);
+  const mergeMs = performance.now() - t0;
+  const t1 = performance.now();
+  for (let p = 0; p < aiPlayers.length; p++) {
+    const entry = aiPlayers[p];
+    const ai = generateAiCommands(world, entry);
+    if (ai.length) cmds = cmds ? [...cmds, ...ai] : ai;
+  }
+  return { cmds, mergeMs, aiMs: performance.now() - t1 };
+}
+
 self.onmessage = (e) => {
   const msg = e.data;
   try {
@@ -65,6 +79,10 @@ self.onmessage = (e) => {
       const size = mapSizeForConfig(msg.config);
       field = buildField(msg.config.seed, { width: size.mapW, height: size.mapH });
       world = buildWorldFromConfig({ ...msg.config, mapW: size.mapW, mapH: size.mapH });
+      // Stress / explicit flag — timing never feeds gameplay.
+      world.profileSim = msg.config.profileSim === true
+        || (msg.config.stressPerSide | 0) > 0
+        || (msg.config.animStressPerSide | 0) > 0;
       populateScenery(field, world, kothBases(field.worldHalfF));
       applyWorldStructureOccupancy(field, world);
       beginSharedPublish(views);
@@ -80,9 +98,26 @@ self.onmessage = (e) => {
         layoutVersion: SHARED_LAYOUT_VERSION,
         agoras: serializeAgoras(world.agoras),
         buildings: serializeBuildings(world.buildings),
+        profileSim: !!world.profileSim,
       });
+    } else if (msg.type === 'setProfileSim') {
+      if (world) world.profileSim = !!msg.enabled;
+      postMessage({ type: 'profileSim', enabled: !!world?.profileSim });
     } else if (msg.type === 'commitTick') {
-      step(world, field, commandsForTick(msg.frames));
+      const tTick = performance.now();
+      let cmds;
+      let mergeMs = 0;
+      let aiMs = 0;
+      if (world.profileSim) {
+        const timed = commandsForTickTimed(msg.frames);
+        cmds = timed.cmds;
+        mergeMs = timed.mergeMs;
+        aiMs = timed.aiMs;
+      } else {
+        cmds = commandsForTick(msg.frames);
+      }
+      step(world, field, cmds);
+      const tPub0 = performance.now();
       beginSharedPublish(views);
       publishWorld(world, views);
       if (world.count > publishedTypeCount) {
@@ -91,6 +126,7 @@ self.onmessage = (e) => {
       }
       publishProjectiles(world, views);
       endSharedPublish(views);
+      const publishMs = performance.now() - tPub0;
       const treeUpdates = takeTreeUpdates(field);
       const fireZoneUpdates = takeFireZoneUpdates(world);
       const frogUpdates = takeFrogUpdates(world);
@@ -100,11 +136,21 @@ self.onmessage = (e) => {
       const monkKickUpdates = takeMonkKickUpdates(world);
       const buildingsChanged = !!world.buildingsDirty;
       if (world.buildingsDirty) world.buildingsDirty = 0;
+      const metrics = { ...world.metrics };
+      if (world.profileSim) {
+        metrics.timing = {
+          ...(world.metrics.timing ?? {}),
+          merge: mergeMs,
+          ai: aiMs,
+          publish: publishMs,
+          tick: performance.now() - tTick,
+        };
+      }
       postMessage({
         type: 'stepDone',
         tick: world.tick,
         checksum: checksum(world, field),
-        metrics: { ...world.metrics },
+        metrics,
         kothMatchOver: world.kothMatchOver ?? 0,
         matchWinner: world.matchWinner ?? -1,
         koth: serializeKoth(world.koth),

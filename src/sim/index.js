@@ -2,7 +2,8 @@
 //
 // HARD PARTITION RULE (the thing v1 never had):
 //   Nothing under sim/ may import from render/, app/, ui/, net/, Babylon, or
-//   touch the DOM. No Date.now/performance.now. No Math.random.
+//   touch the DOM. No Date.now/performance.now in gameplay (profileSim timing
+//   in step metrics is diagnostic-only). No Math.random.
 //   All randomness goes through rng.js; all math goes through fixed.js.
 //
 // Everything outside sim/ READS sim state and never mutates it directly —

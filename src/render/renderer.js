@@ -1996,6 +1996,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   await registerSceneWithShadowSupport(scene);
   const gpuPicker = createGpuPicker(scene);
 
+  /**
+   * Lite's pick walks `scene.meshes` by captured length and reads `.pickable`
+   * without null-checks. Under load (async mesh churn) a hole throws — treat
+   * as miss instead of an uncaught rejection on click.
+   */
+  async function safePickAsync(x, y, opts) {
+    try {
+      return await pickAsync(gpuPicker, x, y, opts);
+    } catch {
+      return null;
+    }
+  }
+
   function canvasCoords(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
     const width = rect.width || canvas.clientWidth;
@@ -2436,7 +2449,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      */
     async pickBuilding(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
-      const info = await pickAsync(gpuPicker, cc.x, cc.y, {
+      const info = await safePickAsync(cc.x, cc.y, {
         filter: (mesh) =>
           Boolean(buildingProps.isPickMesh?.(mesh) || agoraProps.isPickMesh?.(mesh)),
       });
@@ -3127,7 +3140,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      */
     async pickUnit(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
-      const info = await pickAsync(gpuPicker, cc.x, cc.y, {
+      const info = await safePickAsync(cc.x, cc.y, {
         filter: (mesh) => unitPickMeshes.has(mesh),
       });
       if (!info?.hit || !info.pickedMesh) return -1;

@@ -67,7 +67,11 @@ export function createWorld(seed) {
       projectileMisses: 0,
       projectileOverflow: 0,
       projectileActive: 0,
+      /** Diagnostic ms per phase — never feeds sim decisions. */
+      timing: null,
     },
+    /** When true, step() fills metrics.timing via performance.now (diag only). */
+    profileSim: false,
 
     // transform
     px: new Int32Array(MAX_ENTITIES),

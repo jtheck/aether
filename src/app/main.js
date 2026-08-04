@@ -236,6 +236,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     stressPerSide: stress,
     animStressPerSide: animStress,
     armyPerSide: army,
+    profileSim: new URLSearchParams(location.search).has('profileSim'),
     mode:
       bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox'
         ? 'staging'
@@ -314,6 +315,47 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     console.log('[dumpPools]', out);
     return out;
+  };
+  window.dumpSimProfile = () => {
+    const ema = session.simTimingEma;
+    const last = session.simTimingLast ?? session.simMetrics?.timing;
+    if (!ema && !last) {
+      console.warn('[dumpSimProfile] no timing yet — stress/?profileSim=1 enables worker profiling');
+      return null;
+    }
+    const keys = new Set([
+      ...Object.keys(ema ?? {}),
+      ...Object.keys(last ?? {}),
+    ]);
+    const rows = [...keys]
+      .map((phase) => ({
+        phase,
+        emaMs: ema?.[phase] != null ? +ema[phase].toFixed(2) : null,
+        lastMs: last?.[phase] != null ? +Number(last[phase]).toFixed(2) : null,
+        pct: ema?.tick > 0 && ema?.[phase] != null
+          ? +((ema[phase] / ema.tick) * 100).toFixed(1)
+          : null,
+      }))
+      .sort((a, b) => (b.emaMs ?? b.lastMs ?? 0) - (a.emaMs ?? a.lastMs ?? 0));
+    console.table(rows);
+    const m = session.simMetrics;
+    console.log('[dumpSimProfile]', {
+      units: session.state?.count,
+      tick: session.confirmedTick,
+      emaTickMs: ema?.tick != null ? +ema.tick.toFixed(2) : null,
+      budgetMs: 50,
+      counters: m
+        ? {
+            combatCandidates: m.combatCandidates,
+            separationPairs: m.separationPairs,
+            movingAvoidancePairs: m.movingAvoidancePairs,
+            losAttempts: m.losAttempts,
+            astarSearches: m.astarSearches,
+            projectileActive: m.projectileActive,
+          }
+        : null,
+    });
+    return { rows, ema, last, metrics: m };
   };
   if (new URLSearchParams(location.search).get('tiles') === '1') {
     renderer.setTileGridVisible(true);

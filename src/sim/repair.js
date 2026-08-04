@@ -6,6 +6,12 @@ import { clearPath, queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { ORDER } from './world.js';
 import { isCarried } from './transport.js';
+import {
+  queryCellBounds,
+  rebuildSpatialGrid,
+  SPATIAL_OWNER_SLOTS,
+  spatialCellId,
+} from './spatialGrid.js';
 
 /** Stand-off / work range for repairs. */
 export const REPAIR_RANGE = fx.fromFloat(4);
@@ -70,17 +76,44 @@ function endRepair(w, i) {
   w.hasTarget[i] = 0;
 }
 
+/** Closest damaged same-owner mechanical in aggro. Expects fresh `w.spatial`. */
 function findDamagedMechanical(w, engineer) {
+  const grid = w.spatial;
+  const ox = w.px[engineer];
+  const oy = w.py[engineer];
+  const owner = w.owner[engineer];
   let best = -1;
   let bestD2 = 0x7fffffff;
-  for (let j = 0; j < w.count; j++) {
-    if (j === engineer) continue;
-    if (!canRepairTarget(w, engineer, j)) continue;
-    const d2 = fx.dist2(w.px[engineer], w.py[engineer], w.px[j], w.py[j]);
-    if (d2 > REPAIR_AGGRO_SQ) continue;
+
+  const consider = (j) => {
+    if (j === engineer) return;
+    if (!canRepairTarget(w, engineer, j)) return;
+    const d2 = fx.dist2(ox, oy, w.px[j], w.py[j]);
+    if (d2 > REPAIR_AGGRO_SQ) return;
     if (d2 < bestD2 || (d2 === bestD2 && (best < 0 || j < best))) {
       bestD2 = d2;
       best = j;
+    }
+  };
+
+  const bounds = queryCellBounds(ox, oy, REPAIR_AGGRO, grid);
+  const useOwnerLists = !grid.overflowOwners && owner < SPATIAL_OWNER_SLOTS;
+  for (let z = bounds.minZ; z <= bounds.maxZ; z++) {
+    for (let x = bounds.minX; x <= bounds.maxX; x++) {
+      const cell = spatialCellId(x, z, grid);
+      if (useOwnerLists) {
+        let j = grid.ownerHead[cell * SPATIAL_OWNER_SLOTS + owner];
+        while (j >= 0) {
+          consider(j);
+          j = grid.ownerNext[j];
+        }
+      } else {
+        let j = grid.head[cell];
+        while (j >= 0) {
+          consider(j);
+          j = grid.next[j];
+        }
+      }
     }
   }
   return best;
@@ -100,6 +133,9 @@ function pulseRepair(w, engineer, target) {
  * Idle engineers auto-seek damaged mechanicals; REPAIR orders walk in and heal.
  */
 export function repairSystem(w) {
+  // Auto-seek used to scan all units per idle engineer — spatialize once.
+  rebuildSpatialGrid(w.spatial, w);
+
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i] || isCarried(w, i)) continue;
     if (w.type[i] !== UNIT.ENGINEER) continue;

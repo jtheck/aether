@@ -95,6 +95,10 @@ export class SimSession {
     this.agoras = [];
     this.buildings = [];
     this.simMetrics = null;
+    /** EMA of worker metrics.timing (ms). */
+    this.simTimingEma = null;
+    /** Last raw timing sample (ms). */
+    this.simTimingLast = null;
     /** @type {Map<number, number[]>} tick -> playerIds joining lockstep */
     this.pendingJoins = new Map();
     this.matchConfig = null;
@@ -491,6 +495,8 @@ export class SimSession {
     this.kothMatchOver = other.kothMatchOver;
     this._lastChecksum = other._lastChecksum;
     this.simMetrics = other.simMetrics;
+    this.simTimingEma = other.simTimingEma ? { ...other.simTimingEma } : null;
+    this.simTimingLast = other.simTimingLast ? { ...other.simTimingLast } : null;
     this.field = other.field ?? other.client?.field ?? null;
     this._bindStepHandler();
   }
@@ -533,7 +539,21 @@ export class SimSession {
         this.buildings = extra.buildings;
         if (extra.buildingsChanged) this.onBuildingsChanged?.(this.buildings);
       }
-      if (extra?.metrics) this.simMetrics = extra.metrics;
+      if (extra?.metrics) {
+        this.simMetrics = extra.metrics;
+        const timing = extra.metrics.timing;
+        if (timing) {
+          this.simTimingLast = timing;
+          if (!this.simTimingEma) this.simTimingEma = {};
+          const alpha = 0.12;
+          for (const key of Object.keys(timing)) {
+            const n = Number(timing[key]);
+            if (!Number.isFinite(n)) continue;
+            const prev = this.simTimingEma[key];
+            this.simTimingEma[key] = prev == null ? n : prev + (n - prev) * alpha;
+          }
+        }
+      }
       if (extra?.treeUpdates) {
         applyTreeUpdatesToField(this.field, extra.treeUpdates);
         if (!this.pendingTreeUpdates) this.pendingTreeUpdates = [];

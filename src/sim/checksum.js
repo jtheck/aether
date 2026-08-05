@@ -37,6 +37,8 @@ export function checksum(w, field = null) {
     mix(w.py[i]);
     mix(w.vx[i]);
     mix(w.vy[i]);
+    if (w.faceX) mix(w.faceX[i]);
+    if (w.faceY) mix(w.faceY[i]);
     mix(w.order[i]);
     mix(w.targetEntity[i]);
     mix(w.engagementTarget[i]);

@@ -28,7 +28,7 @@ import {
   wpBase,
   MAX_REPATHS,
 } from './path.js';
-import { getUnitDef, UNIT_DEFS, unitFootprint } from './unitTypes.js';
+import { getUnitDef, UNIT_DEFS, unitFootprint, unitSteer, unitAccel, unitDecel, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { worldToTile, isPassable, isSlowTile } from './field.js';
 import { SLOW_MULTIPLIER } from './scenery.js';
@@ -47,7 +47,6 @@ import {
   isCarried,
 } from './transport.js';
 import { repairSystem } from './repair.js';
-import { isFlyer } from './unitTypes.js';
 import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
@@ -76,6 +75,25 @@ const SEP_BLOOM_MAX = fx.fromFloat(0.45);
 const SEP_BLOOM_FRAC = fx.fromFloat(0.40);
 /** Stop separating once within this of minDist — kills overpack wave chatter. */
 const SEP_SLACK = fx.fromFloat(0.28);
+/**
+ * Per-type heading blend (0–1), accel, and decel (world units / tick).
+ * Authored on defs via `steer` / `accel` / `decel`, else size-scaled defaults.
+ */
+const STEER_BY_TYPE = new Int32Array(UNIT_DEFS.length);
+const ACCEL_BY_TYPE = new Int32Array(UNIT_DEFS.length);
+const DECEL_BY_TYPE = new Int32Array(UNIT_DEFS.length);
+for (let t = 0; t < UNIT_DEFS.length; t++) {
+  STEER_BY_TYPE[t] = fx.fromFloat(unitSteer(t));
+  ACCEL_BY_TYPE[t] = fx.fromFloat(unitAccel(t));
+  DECEL_BY_TYPE[t] = fx.fromFloat(unitDecel(t));
+}
+/** Ignore leftover face below this when blending. */
+const STEER_MIN_PREV = fx.fromFloat(0.02);
+/**
+ * Face·want below this ⇒ prioritize pivot (no full reverse rocket / orbit).
+ * Still bleeds speed via decel instead of a hard zero.
+ */
+const TURN_PLACE_DOT = fx.fromFloat(0.57);
 const GRID_SEP_THRESHOLD = 400;
 // Visit every source cell over N deterministic ticks. Was 8 — dense arrivals
 // rippled as a slow wave; 2 keeps cost bounded without the grotesque pulse.
@@ -169,8 +187,8 @@ function movementSystem(w, field) {
 
     const order = w.order[i];
     if (order === ORDER.IDLE) {
-      w.vx[i] = 0;
-      w.vy[i] = 0;
+      // Bleed leftover momentum (blimps etc.) — never hard-zero a floaty coast.
+      coastBrake(w, field, i);
       continue;
     }
 
@@ -209,10 +227,13 @@ function movementSystem(w, field) {
     }
 
     checkStuck(w, field, i);
-    // Stuck may have rebuilt the path — refresh goal.
+    // Stuck may have cleared the path for A* — keep sliding toward dest, or
+    // refresh the active waypoint if one remains.
     if (w.navWpCount[i] > 0) {
       const base = wpBase(i) + w.navWpIndex[i];
       goal = { x: w.navWx[base], y: w.navWy[base] };
+    } else if (w.pathRequest[i]) {
+      goal = { x: w.navDestX[i], y: w.navDestY[i] };
     }
 
     if (waypointReached(w, i)) {
@@ -227,17 +248,23 @@ function movementSystem(w, field) {
           continue;
         }
         if (w.navWpCount[i] === 0) {
-          // Gave up after max repaths, or A* found nothing — stop cleanly.
-          if (w.repathCount[i] >= MAX_REPATHS) {
+          // Gave up after max repaths — stop cleanly.
+          if (w.repathCount[i] >= MAX_REPATHS && w.pathRequest[i] === 0) {
             finishMove(w, i);
+            continue;
+          }
+          // Repath pending — keep sliding toward dest (no hard stop / stutter).
+          if (w.pathRequest[i]) {
+            goal = { x: w.navDestX[i], y: w.navDestY[i] };
           } else {
             w.vx[i] = 0;
             w.vy[i] = 0;
+            continue;
           }
-          continue;
+        } else {
+          const base = wpBase(i) + w.navWpIndex[i];
+          goal = { x: w.navWx[base], y: w.navWy[base] };
         }
-        const base = wpBase(i) + w.navWpIndex[i];
-        goal = { x: w.navWx[base], y: w.navWy[base] };
       }
     }
 
@@ -259,10 +286,92 @@ function movementSystem(w, field) {
     }
     if (w.distractCd[i] > 0) speed = fx.mul(speed, DISTRACT_MOVE_MUL);
     if (w.frostTicks?.[i] > 0) speed = fx.mul(speed, FROST_MOVE_MUL);
-    // Don't overshoot the goal in one tick (reduces orbit jitter).
-    const stepDist = dist < speed ? dist : speed;
-    const mx = fx.mul(fx.div(dx, dist), stepDist);
-    const my = fx.mul(fx.div(dy, dist), stepDist);
+
+    const typeId = w.type[i];
+    const wantX = fx.div(dx, dist);
+    const wantY = fx.div(dy, dist);
+
+    // Ease facing toward the goal; gate translation on alignment.
+    let dirX = wantX;
+    let dirY = wantY;
+    let align = fx.ONE;
+    if (w.faceX && w.faceY) {
+      const fLen = fx.len(w.faceX[i], w.faceY[i]);
+      if (fLen > STEER_MIN_PREV) {
+        const fx0 = fx.div(w.faceX[i], fLen);
+        const fy0 = fx.div(w.faceY[i], fLen);
+        align = fx.mul(fx0, wantX) + fx.mul(fy0, wantY);
+        // Aim blend target: if >90° off, steer via a perpendicular first so
+        // linear blend never collapses through zero on reverse orders.
+        let aimX = wantX;
+        let aimY = wantY;
+        if (align < 0) {
+          // Perp of face; pick the side closer to want (stable tie → +perp).
+          let px = -fy0;
+          let py = fx0;
+          if (fx.mul(px, wantX) + fx.mul(py, wantY) < 0) {
+            px = -px;
+            py = -py;
+          }
+          aimX = px;
+          aimY = py;
+        }
+        const blend = STEER_BY_TYPE[typeId] ?? STEER_BY_TYPE[0];
+        const keep = fx.ONE - blend;
+        let sx = fx.mul(keep, fx0) + fx.mul(blend, aimX);
+        let sy = fx.mul(keep, fy0) + fx.mul(blend, aimY);
+        const sLen = fx.len(sx, sy);
+        if (sLen > 0) {
+          dirX = fx.div(sx, sLen);
+          dirY = fx.div(sy, sLen);
+        }
+      }
+      w.faceX[i] = dirX;
+      w.faceY[i] = dirY;
+    }
+
+    // Ground vehicles: pivot + coast when badly aimed (no reverse rocket).
+    // Flyers: never lock — keep drifting on the steered nose (wide floaty arcs).
+    // Old flyer lock coasted on *old* vx while face turned, then snapped.
+    if (!isFlyer(typeId) && align < TURN_PLACE_DOT) {
+      coastBrake(w, field, i);
+      continue;
+    }
+
+    let targetSpeed;
+    if (isFlyer(typeId)) {
+      // align −1..1 → 0..1; floor so a 180° order still banks instead of stalling.
+      // (Fixed add is plain + — there is no fx.add.)
+      let alignSpeed = fx.mul(align + fx.ONE, fx.HALF);
+      if (alignSpeed < fx.fromFloat(0.30)) alignSpeed = fx.fromFloat(0.30);
+      targetSpeed = fx.mul(speed, alignSpeed);
+    } else {
+      // Alignment gates top speed (1 at aligned, 0 at TURN_PLACE_DOT).
+      const alignSpan = fx.ONE - TURN_PLACE_DOT;
+      const alignT = alignSpan > 0 ? fx.div(align - TURN_PLACE_DOT, alignSpan) : fx.ONE;
+      targetSpeed = fx.mul(speed, alignT);
+    }
+
+    const accel = ACCEL_BY_TYPE[typeId] ?? ACCEL_BY_TYPE[0];
+    const decel = DECEL_BY_TYPE[typeId] ?? DECEL_BY_TYPE[0];
+
+    // Final-approach only: v_max ≈ √(2 a d). The old dist×0.4 cap slammed
+    // heavies for half a straight cruise. Intermediate waypoints stay full speed.
+    const onFinalLeg =
+      w.navWpCount[i] === 0 || w.navWpIndex[i] + 1 >= w.navWpCount[i];
+    if (onFinalLeg) {
+      const stopCap = fx.sqrt(fx.mul(fx.mul(fx.fromFloat(2), decel), dist));
+      if (stopCap < targetSpeed) targetSpeed = stopCap;
+    }
+    if (dist < targetSpeed) targetSpeed = dist;
+
+    const pLen = fx.len(w.vx[i], w.vy[i]);
+    let stepSpeed = targetSpeed;
+    if (pLen + accel < targetSpeed) stepSpeed = pLen + accel;
+    else if (pLen > targetSpeed + decel) stepSpeed = pLen - decel;
+
+    const mx = fx.mul(dirX, stepSpeed);
+    const my = fx.mul(dirY, stepSpeed);
     applyMoveWithSlide(w, field, i, mx, my);
   }
 }
@@ -271,13 +380,28 @@ function finishMove(w, i) {
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;
   w.pathRequest[i] = 0;
-  w.vx[i] = 0;
-  w.vy[i] = 0;
-  // Click fulfilled — drop the move target so soft-sep can bloom. Leaving
-  // hasTarget set made ATTACK_MOVE repath into the pile forever (crowd waves).
+  // Keep vx/vy — IDLE coastBrake bleeds them. Hard-zero felt like a dime stop
+  // on dirigibles after an otherwise soft approach.
   w.hasTarget[i] = 0;
   // IDLE still auto-acquires; keeps render facing from treating sep nudges as walks.
   w.order[i] = ORDER.IDLE;
+}
+
+/** Bleed speed along current velocity (IDLE arrive coast / turn-in-place). */
+function coastBrake(w, field, i) {
+  const pLen = fx.len(w.vx[i], w.vy[i]);
+  if (pLen === 0) return;
+  const typeId = w.type[i];
+  const decel = DECEL_BY_TYPE[typeId] ?? DECEL_BY_TYPE[0];
+  if (pLen <= decel) {
+    w.vx[i] = 0;
+    w.vy[i] = 0;
+    return;
+  }
+  const next = pLen - decel;
+  const mx = fx.mul(fx.div(w.vx[i], pLen), next);
+  const my = fx.mul(fx.div(w.vy[i], pLen), next);
+  applyMoveWithSlide(w, field, i, mx, my);
 }
 
 /** Axis-by-axis wall slide — enter blocked tiles only when escaping them. */

@@ -1024,8 +1024,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const orderedMove = ord !== ORDER.IDLE;
       const orderedMarch = ord === ORDER.MOVE || ord === ORDER.ATTACK_MOVE;
       const displacing = dx * dx + dz * dz > 0.0004;
-      const moving = orderedMarch || (orderedMove && displacing);
-      if (displacing && orderedMove) facingYaw[i] = Math.atan2(dx, dz);
+      // Interpolated sim face — shows turn-in-place (XZ snapshots alone looked frozen).
+      let faceDx = dx;
+      let faceDz = dz;
+      if (cur.faceX && prev.faceX) {
+        faceDx = prev.faceX[i] + (cur.faceX[i] - prev.faceX[i]) * alpha;
+        faceDz = prev.faceZ[i] + (cur.faceZ[i] - prev.faceZ[i]) * alpha;
+      }
+      const turning = orderedMove && faceDx * faceDx + faceDz * faceDz > 1e-6;
+      const moving = orderedMarch || (orderedMove && (displacing || turning));
+      if (turning) facingYaw[i] = Math.atan2(faceDx, faceDz);
+      else if (displacing && orderedMove) facingYaw[i] = Math.atan2(dx, dz);
       const flyLoft = isFlyer(world.type[i]) ? FLY_HEIGHT : 0;
       const loft = (renderer.monkLobHeight?.(i) ?? 0) + flyLoft;
       const pitch = renderer.monkLobPitch?.(i) ?? 0;

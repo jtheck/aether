@@ -25,7 +25,7 @@ export const ATTACK_DELIVERY = {
   PROJECTILE: 1,
 };
 
-/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean }>} */
+/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, steer?: number, accel?: number, decel?: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean }>} */
 export const UNIT_DEFS = [
   {
     id: UNIT.VILLAGER,
@@ -54,6 +54,10 @@ export const UNIT_DEFS = [
     hp: 120,
     speed: fx.fromFloat(2.4),
     size: 7.5,
+    /** Heavier footwork than light infantry. */
+    steer: 0.30,
+    accel: 0.55,
+    decel: 0.85,
     pickRadius: 1.8,
     pickHeight: 1.1,
     color: [0.82, 0.22, 0.18],
@@ -237,6 +241,10 @@ export const UNIT_DEFS = [
     size: 9.0,
     /** Soft-sep radius (not mesh half-extent) — keep modest so they don't bully infantry. */
     footprint: 2.6,
+    /** Slow wagon swing — turn in place, then pull away gently. */
+    steer: 0.20,
+    accel: 0.28,
+    decel: 0.34,
     pickRadius: 4.5,
     pickHeight: 1.2,
     color: [0.62, 0.42, 0.22],
@@ -262,6 +270,10 @@ export const UNIT_DEFS = [
     size: 12.0,
     /** Soft-sep among flyers only (air/ground layers are split). */
     footprint: 3.2,
+    /** Airship — slow yaw while still drifting (wide floaty arcs, no pivot-lock). */
+    steer: 0.18,
+    accel: 0.10,
+    decel: 0.07,
     pickRadius: 4.0,
     pickHeight: 1.4,
     color: [0.72, 0.78, 0.88],
@@ -287,6 +299,10 @@ export const UNIT_DEFS = [
     size: 10.0,
     /** Soft-sep radius — old 7.0 cleared a huge bubble around the APC. */
     footprint: 3.0,
+    /** Armored haul — pivot then roll; brakes harder than spool, not a slam. */
+    steer: 0.18,
+    accel: 0.26,
+    decel: 0.36,
     pickRadius: 5.0,
     pickHeight: 1.25,
     color: [0.48, 0.42, 0.28],
@@ -307,6 +323,42 @@ export const UNIT_DEFS = [
 
 export function getUnitDef(typeId) {
   return UNIT_DEFS[typeId] ?? UNIT_DEFS[UNIT.VILLAGER];
+}
+
+/**
+ * Heading blend per tick (0–1). Higher = snappier turn.
+ * Override with `def.steer`; else scales with size (big = slower).
+ */
+export function unitSteer(typeId) {
+  const def = getUnitDef(typeId);
+  if (def.steer != null) return def.steer;
+  const ref = 5.5;
+  const raw = 0.48 * (ref / Math.max(1, def.size));
+  return Math.min(0.62, Math.max(0.16, raw));
+}
+
+/**
+ * Speed change per tick while speeding up (world units).
+ * Override with `def.accel`; else a fraction of top speed, heavier for bigger bodies.
+ */
+export function unitAccel(typeId) {
+  const def = getUnitDef(typeId);
+  if (def.accel != null) return def.accel;
+  const speedF = fx.toFloat(def.speed);
+  const ref = 5.5;
+  const frac = Math.min(0.55, Math.max(0.14, 0.40 * (ref / Math.max(1, def.size))));
+  return speedF * frac;
+}
+
+/**
+ * Speed change per tick while braking (world units). Defaults stronger than accel
+ * so big units can shed speed before a click instead of orbiting it.
+ */
+export function unitDecel(typeId) {
+  const def = getUnitDef(typeId);
+  if (def.decel != null) return def.decel;
+  const a = unitAccel(typeId);
+  return Math.max(a * 1.35, fx.toFloat(def.speed) * 0.28);
 }
 
 /** Soft personal-space radius (world units). Defaults to infantry size/6 packing. */

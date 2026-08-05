@@ -699,16 +699,29 @@ export class SimSession {
     const slot = tick % this.snapshotRing.length;
     let snap = this.snapshotRing[slot];
     if (snap?.tick != null) this.snapshots.delete(snap.tick);
-    if (!snap || snap.x.length < n) {
-      snap = { tick, x: new Float32Array(n), z: new Float32Array(n) };
+    if (!snap || snap.x.length < n || !snap.faceX || snap.faceX.length < n) {
+      snap = {
+        tick,
+        x: new Float32Array(n),
+        z: new Float32Array(n),
+        faceX: new Float32Array(n),
+        faceZ: new Float32Array(n),
+      };
     }
     snap.tick = tick;
     this.snapshotRing[slot] = snap;
     this.snapshots.set(tick, snap);
-    const { px, py } = this.state;
+    const { px, py, faceX, faceY } = this.state;
     for (let i = 0; i < n; i++) {
       snap.x[i] = fx.toFloat(px[i]);
       snap.z[i] = fx.toFloat(py[i]);
+      if (faceX && faceY) {
+        snap.faceX[i] = fx.toFloat(faceX[i]);
+        snap.faceZ[i] = fx.toFloat(faceY[i]);
+      } else {
+        snap.faceX[i] = 0;
+        snap.faceZ[i] = 1;
+      }
     }
     this._captureProjectileSnapshot(tick);
   }

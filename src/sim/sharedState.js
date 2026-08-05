@@ -4,7 +4,7 @@
 import { MAX_ENTITIES } from './world.js';
 import { MAX_PROJECTILES } from './projectiles.js';
 
-export const SHARED_LAYOUT_VERSION = 6;
+export const SHARED_LAYOUT_VERSION = 7;
 const HEADER_I32 = 6; // version, unitCount, tick, projectileActive, publishSeq, projectileHighWater
 
 export function simSharedByteSize() {
@@ -12,6 +12,8 @@ export function simSharedByteSize() {
     HEADER_I32 * 4 +
     MAX_ENTITIES * 4 + // px
     MAX_ENTITIES * 4 + // py
+    MAX_ENTITIES * 4 + // faceX
+    MAX_ENTITIES * 4 + // faceY
     MAX_ENTITIES * 4 + // hp
     MAX_ENTITIES * 2 + // shieldHp (absorb remaining)
     MAX_ENTITIES * 2 + // frostTicks
@@ -35,6 +37,10 @@ export function mapSharedState(sab) {
   const px = new Int32Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES * 4;
   const py = new Int32Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 4;
+  const faceX = new Int32Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 4;
+  const faceY = new Int32Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES * 4;
   const hp = new Int32Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES * 4;
@@ -79,10 +85,14 @@ export function mapSharedState(sab) {
 
   header[0] = SHARED_LAYOUT_VERSION;
   carriedBy.fill(-1);
+  // Default face +Y (matches spawn).
+  faceY.fill(1 << 16);
   return {
     header,
     px,
     py,
+    faceX,
+    faceY,
     hp,
     shieldHp,
     frostTicks,
@@ -120,6 +130,8 @@ export function publishWorld(w, s) {
   s.header[2] = w.tick;
   s.px.set(w.px.subarray(0, n));
   s.py.set(w.py.subarray(0, n));
+  if (s.faceX && w.faceX) s.faceX.set(w.faceX.subarray(0, n));
+  if (s.faceY && w.faceY) s.faceY.set(w.faceY.subarray(0, n));
   s.hp.set(w.hp.subarray(0, n));
   s.shieldHp.set(w.shieldHp.subarray(0, n));
   if (s.frostTicks && w.frostTicks) s.frostTicks.set(w.frostTicks.subarray(0, n));
@@ -169,6 +181,8 @@ export function simViewFacade(s) {
     },
     px: s.px,
     py: s.py,
+    faceX: s.faceX,
+    faceY: s.faceY,
     hp: s.hp,
     shieldHp: s.shieldHp,
     frostTicks: s.frostTicks,

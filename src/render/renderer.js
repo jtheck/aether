@@ -1554,7 +1554,35 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   mushrooms = await createMushroomPreviews(engine, scene, groundYAt);
   const agoraProps = await createAgoraProps(engine, scene, groundYAt);
   const buildingProps = await createBuildingProps(engine, scene, groundYAt);
-  const buildingRadial = await createBuildingRadialMenu(engine, scene, groundYAt);
+  const buildingRadial = await createBuildingRadialMenu(engine, scene, groundYAt, {
+    worldToScreen(x, y, z) {
+      const { width, height } = canvasCoords(0, 0);
+      const c = matVec4(viewProjection(), x, y, z, 1);
+      if (Math.abs(c[3]) < 1e-8) return null;
+      // Behind camera: flip clip xy so edge clamp aims the correct side.
+      let cx = c[0];
+      let cy = c[1];
+      let cw = c[3];
+      if (cw < 0) {
+        cx = -cx;
+        cy = -cy;
+        cw = -cw;
+      }
+      const iw = 1 / cw;
+      return {
+        x: (cx * iw * 0.5 + 0.5) * width,
+        y: (1 - cy * iw) * 0.5 * height,
+      };
+    },
+    rayFromCanvas(canvasX, canvasY) {
+      const { width, height } = canvasCoords(0, 0);
+      return pickingRay(canvasX, canvasY, viewProjection(), width, height);
+    },
+    getViewport() {
+      const { width, height } = canvasCoords(0, 0);
+      return { width, height };
+    },
+  });
 
   function radialPickingRay(clientX, clientY) {
     const cc = canvasCoords(clientX, clientY);
@@ -2163,7 +2191,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function flushAllBatches() {
     updateOrderMarker();
-    // Build menu tilts toward camera and scales with eye→agora distance.
+    // Build menu: screen-anchored HUD (project agora, edge-clamp, fixed depth).
     if (buildingRadial.isOpen()) {
       buildingRadial.update?.(camera);
     }

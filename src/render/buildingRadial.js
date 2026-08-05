@@ -1,7 +1,6 @@
-// Agora build menu — tilted annulus rings + icons, anchored at the agora.
-// World scale tracks eye distance so on-screen size stays steady.
-// Option angles stay screen-stable as the camera orbits.
-// Option hover/click uses CPU disc hits (full pad including hole), not GPU mesh picks.
+// Agora build menu — tilted annulus above the agora (EDGE_PIN_HUD gates
+// screen-edge placement; currently off). Option angles stay screen-stable;
+// hover/click uses CPU disc/sphere hits.
 
 import {
   addToScene,
@@ -35,15 +34,23 @@ const ICON_PICK_R = 5.5;
  * ~32° — readable without standing the ring on end.
  */
 const MENU_TILT = 0.56;
-/** World scale = BASE * (eyeDist / REF). Grows as you pull back; shrinks when close. */
+/**
+ * Screen-edge pin (project agora → clamp → place on ray). Off for now — menu
+ * stays above the agora. Flip to true when revisiting the HUD placement.
+ */
+const EDGE_PIN_HUD = false;
+/**
+ * Preferred depth from the camera eye (edge-pin path). Scale is tied to depth
+ * so on-screen size stays steady. When the agora is closer, we pull in.
+ */
+const HUD_PLACE_DIST = 70;
+const HUD_PLACE_MIN = 24;
+const HUD_PLACE_FRAC = 0.82;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 1;
-/** Floor only so the menu doesn't vanish if the cam clips through it. */
-const HUD_SCALE_MIN = 0.06;
-/**
- * Pull slightly toward the eye so the tilted ring clears terrain/buildings.
- */
-const MENU_DEPTH_BIAS_FRAC = 0.12;
+const HUD_SCALE_MIN = 0.35;
+/** Inset so the whole ring stays inside the viewport when edge-pinned. */
+const HUD_EDGE_MARGIN_FRAC = 0.2;
 const MAX_OPTIONS = 8;
 
 /** Opaque so depth wins — transparent sort otherwise draws far pads under the main ring. */
@@ -328,8 +335,13 @@ function hideMesh(mesh) {
  * @param {object} engine
  * @param {object} scene
  * @param {(x: number, z: number) => number} groundYAt
+ * @param {{
+ *   worldToScreen?: (x: number, y: number, z: number) => { x: number, y: number } | null,
+ *   rayFromCanvas?: (canvasX: number, canvasY: number) => { ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null,
+ *   getViewport?: () => { width: number, height: number },
+ * }} [screen]
  */
-export async function createBuildingRadialMenu(engine, scene, groundYAt) {
+export async function createBuildingRadialMenu(engine, scene, groundYAt, screen = {}) {
   const ringMat = makeRingMaterial(MENU_RING_COLOR, MENU_RING_EMISSIVE, MENU_RING_ALPHA);
 
   // Menu ring: annulus authored at outerR=1 → scale XZ to MENU_RING_OUTER.
@@ -580,54 +592,111 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     }
   }
 
-  /** World scale from eye→menu distance so apparent size stays steady. */
-  function scaleForDistance(camera, fromX, fromY, fromZ) {
-    const eye = cameraEye(camera);
-    const dist =
-      Math.hypot(eye.x - fromX, eye.y - fromY, eye.z - fromZ) || HUD_REF_DIST;
-    if (!Number.isFinite(dist)) return hudScale;
-    return Math.max(HUD_SCALE_MIN, HUD_BASE_SCALE * (dist / HUD_REF_DIST));
+  /** World scale for a given camera depth (∝ depth → steady on-screen size). */
+  function scaleForPlaceDist(placeDist) {
+    if (!Number.isFinite(placeDist) || placeDist < 1e-3) return HUD_BASE_SCALE;
+    return Math.max(HUD_SCALE_MIN, HUD_BASE_SCALE * (placeDist / HUD_REF_DIST));
+  }
+
+  /** Sit above the agora; scale from eye distance. */
+  function syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye) {
+    const distA =
+      Math.hypot(eye.x - agoraX, eye.y - agoraY, eye.z - agoraZ) || HUD_REF_DIST;
+    hudScale = scaleForPlaceDist(distA);
+    centerX = agoraX;
+    centerY = agoraY + Math.sin(MENU_TILT) * RIM_R * hudScale + 1.2;
+    centerZ = agoraZ;
+    updateBasis(camera);
   }
 
   /**
-   * Stay on the agora: height clears the tilted rim, slight pull toward the eye.
+   * Pose the menu. With EDGE_PIN_HUD: project agora → clamp → place on ray.
+   * Otherwise: stay above the agora.
    * @param {object | null | undefined} camera
    */
-  function placeCenter(camera) {
+  function syncPose(camera) {
+    const eye = cameraEye(camera);
     const gy = groundYAt(anchorX, anchorZ);
     const groundY = Number.isFinite(gy) ? gy : 0;
-    const clearY = MENU_Y + Math.sin(MENU_TILT) * RIM_R * hudScale + 1.2;
-    let x = anchorX;
-    let y = groundY + clearY;
-    let z = anchorZ;
+    const agoraX = anchorX;
+    const agoraY = groundY + MENU_Y;
+    const agoraZ = anchorZ;
 
-    const eye = cameraEye(camera);
-    const dx = eye.x - x;
-    const dy = eye.y - y;
-    const dz = eye.z - z;
-    const dist = Math.hypot(dx, dy, dz);
-    if (Number.isFinite(dist) && dist > 1e-4) {
-      const t = MENU_DEPTH_BIAS_FRAC;
-      x += dx * t;
-      y += dy * t;
-      z += dz * t;
-    }
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-      centerX = anchorX;
-      centerY = groundY + clearY;
-      centerZ = anchorZ;
+    if (!EDGE_PIN_HUD) {
+      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
       return;
     }
-    centerX = x;
-    centerY = y;
-    centerZ = z;
-  }
 
-  /** Agora-anchored pose only — no screen-edge floating. */
-  function syncPose(camera) {
-    placeCenter(camera);
-    hudScale = scaleForDistance(camera, centerX, centerY, centerZ);
-    placeCenter(camera);
+    const distA =
+      Math.hypot(eye.x - agoraX, eye.y - agoraY, eye.z - agoraZ) || HUD_PLACE_DIST;
+    const placeDist = Math.min(
+      HUD_PLACE_DIST,
+      Math.max(HUD_PLACE_MIN, distA * HUD_PLACE_FRAC),
+    );
+    hudScale = scaleForPlaceDist(placeDist);
+
+    const worldToScreen = screen.worldToScreen;
+    const rayFromCanvas = screen.rayFromCanvas;
+    const getViewport = screen.getViewport;
+
+    // Fallback: sit above the agora if screen helpers aren't wired.
+    if (!worldToScreen || !rayFromCanvas || !getViewport) {
+      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
+      return;
+    }
+
+    const vp = getViewport();
+    const vw = vp?.width ?? 0;
+    const vh = vp?.height ?? 0;
+    if (vw < 8 || vh < 8) {
+      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
+      return;
+    }
+
+    const margin = Math.min(vw, vh) * HUD_EDGE_MARGIN_FRAC;
+    const scr = worldToScreen(agoraX, agoraY, agoraZ);
+    let sx = vw * 0.5;
+    let sy = vh * 0.5;
+    if (scr && Number.isFinite(scr.x) && Number.isFinite(scr.y)) {
+      sx = scr.x;
+      sy = scr.y;
+    }
+
+    const cx = Math.min(vw - margin, Math.max(margin, sx));
+    const cy = Math.min(vh - margin, Math.max(margin, sy));
+    const ray = rayFromCanvas(cx, cy);
+    if (!ray) {
+      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
+      return;
+    }
+
+    // Aim along the screen ray, then sit at placeDist from the eye.
+    const aimX = ray.ox + ray.dx * Math.max(placeDist, 10);
+    const aimY = ray.oy + ray.dy * Math.max(placeDist, 10);
+    const aimZ = ray.oz + ray.dz * Math.max(placeDist, 10);
+    let ax = aimX - eye.x;
+    let ay = aimY - eye.y;
+    let az = aimZ - eye.z;
+    const alen = Math.hypot(ax, ay, az);
+    if (alen < 1e-6) {
+      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
+      return;
+    }
+    ax /= alen;
+    ay /= alen;
+    az /= alen;
+
+    const px = eye.x + ax * placeDist;
+    const py = eye.y + ay * placeDist;
+    const pz = eye.z + az * placeDist;
+    if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) {
+      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
+      return;
+    }
+
+    centerX = px;
+    centerY = py;
+    centerZ = pz;
     updateBasis(camera);
   }
 

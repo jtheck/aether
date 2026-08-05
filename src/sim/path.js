@@ -282,14 +282,11 @@ export function movementGoal(w, field, i) {
     ensurePath(w, field, i);
   }
   if (w.navWpCount[i] === 0) {
-    // Path pending — keep marching toward dest so mass orders don't freeze
-    // while the A* budget drains. Only when LOS is clear (or flyer).
+    // Path pending — keep marching toward dest so orders don't freeze / stutter
+    // while LOS→A* drains. Wall-slide blocks water/walls; A* corrects the route
+    // when it lands. (LOS-only provisional used to zero vel on blocked clicks.)
     if (w.pathRequest[i] !== PATH_REQUEST.NONE && needsPath(w, i)) {
-      const destX = w.navDestX[i];
-      const destY = w.navDestY[i];
-      if (isFlyer(w.type[i]) || lineClear(field, w.px[i], w.py[i], destX, destY)) {
-        return { x: destX, y: destY };
-      }
+      return { x: w.navDestX[i], y: w.navDestY[i] };
     }
     return null;
   }

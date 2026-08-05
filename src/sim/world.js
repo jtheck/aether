@@ -78,6 +78,9 @@ export function createWorld(seed) {
     py: new Int32Array(MAX_ENTITIES),
     vx: new Int32Array(MAX_ENTITIES),
     vy: new Int32Array(MAX_ENTITIES),
+    /** Persisted facing (unit vector) — steer blends from this even when idle vx=0. */
+    faceX: new Int32Array(MAX_ENTITIES),
+    faceY: new Int32Array(MAX_ENTITIES),
 
     // movement order (legacy direct-seek; path system drives actual motion)
     tx: new Int32Array(MAX_ENTITIES),
@@ -163,6 +166,9 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.py[i] = y;
   w.vx[i] = 0;
   w.vy[i] = 0;
+  // Default face +Y (matches common spawn look); first move eases from here.
+  w.faceX[i] = 0;
+  w.faceY[i] = 1 << 16; // fx.ONE without importing fixed here
   w.tx[i] = x;
   w.ty[i] = y;
   w.hasTarget[i] = 0;

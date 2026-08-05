@@ -14,7 +14,7 @@ import { SPORE_PENDING_INITIAL } from './sporeBloom.js';
 export const CHECKPOINT_FORMAT = 1;
 
 const ENTITY_I32 = [
-  'px', 'py', 'vx', 'vy', 'tx', 'ty', 'speed', 'targetEntity', 'engagementTarget',
+  'px', 'py', 'vx', 'vy', 'faceX', 'faceY', 'tx', 'ty', 'speed', 'targetEntity', 'engagementTarget',
   'navDestX', 'navDestY', 'lastPx', 'lastPy', 'hp', 'carriedBy', 'transportTarget',
   'dotSource', 'lobFromX', 'lobFromY', 'lobToX', 'lobToY', 'squadId',
 ];

@@ -15,8 +15,8 @@ import { capacityFor } from './capacity.js';
 export const FIRE_ZONE_INITIAL_CAPACITY = 256;
 /** @deprecated Prefer FIRE_ZONE_INITIAL_CAPACITY */
 export const MAX_FIRE_ZONES = FIRE_ZONE_INITIAL_CAPACITY;
-/** ~2.5s at 20Hz. */
-export const FIRE_ZONE_TTL = 50;
+/** ~5s at 20Hz. */
+export const FIRE_ZONE_TTL = 100;
 /** Damage pulse cadence (~0.25s). */
 export const FIRE_ZONE_DAMAGE_INTERVAL = 5;
 /** HP per pulse while standing in the patch. */

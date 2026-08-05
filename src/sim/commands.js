@@ -11,7 +11,13 @@
 
 import { ORDER } from './world.js';
 import * as fx from './fixed.js';
-import { clearPath, queuePath, attackStandPoint, groupArriveRadiusSq } from './path.js';
+import {
+  clearPath,
+  queuePath,
+  attackStandPoint,
+  groupArriveRadiusSq,
+  FINAL_ARRIVE_SQ,
+} from './path.js';
 import { isPassable, snapToPassable, worldToTile } from './field.js';
 import { spawnKothSlot } from './worldSetup.js';
 import { kothRegisterJoin } from './kothMeta.js';
@@ -128,6 +134,31 @@ function applySelect(world, playerId, entities) {
   }
 }
 
+/**
+ * Soft gather scatter for group moves — deterministic per-entity jitter so a
+ * shared click does not path everyone onto one pixel. Box scatter from an
+ * integer hash (no trig / no formation grid). Single-unit moves stay exact.
+ * Amplitude scales with √movers so hundreds don't all path into a tiny box.
+ * See docs/unit-separation.md.
+ */
+const GATHER_JITTER_MIN = 2.4;
+const GATHER_JITTER_MAX_CAP = 24;
+
+function gatherJitterMax(movers) {
+  const scaled = 1.2 * Math.sqrt(Math.max(1, movers | 0));
+  return fx.fromFloat(Math.min(GATHER_JITTER_MAX_CAP, Math.max(GATHER_JITTER_MIN, scaled)));
+}
+
+function gatherJitter(entityId, maxFixed) {
+  const h = Math.imul(entityId + 1, 2654435761) >>> 0;
+  const rx = (h & 0xfff) - 2048;
+  const ry = ((h >>> 12) & 0xfff) - 2048;
+  return {
+    x: Math.floor((rx * maxFixed) / 2048),
+    y: Math.floor((ry * maxFixed) / 2048),
+  };
+}
+
 function applyMove(world, field, ids, tx, ty, order) {
   stampSquadGroup(world, ids);
   let movers = 0;
@@ -136,13 +167,22 @@ function applyMove(world, field, ids, tx, ty, order) {
     if (world.alive[i] && !isCarried(world, i)) movers++;
   }
   const arriveR2 = groupArriveRadiusSq(movers);
+  const scatter = movers > 1;
+  const jitterMax = scatter ? gatherJitterMax(movers) : 0;
 
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
     world.transportTarget[i] = -1;
-    let destX = tx[k];
-    let destY = ty[k];
+    const clickX = tx[k];
+    const clickY = ty[k];
+    let destX = clickX;
+    let destY = clickY;
+    if (scatter) {
+      const j = gatherJitter(i, jitterMax);
+      destX += j.x;
+      destY += j.y;
+    }
     if (!isFlyer(world.type[i])) {
       const destTileX = worldToTile(destX);
       const destTileY = worldToTile(destY);
@@ -159,8 +199,20 @@ function applyMove(world, field, ids, tx, ty, order) {
     world.targetEntity[i] = -1;
     clearEngagement(world, i);
 
-    // Already inside the soft gather disk — stay put (don't smash onto the click).
-    if (fx.dist2(world.px[i], world.py[i], destX, destY) <= arriveR2) {
+    // Already inside the soft gather disk around the click — stay put.
+    // Measure vs the shared click (not jittered dest) so a scaled scatter
+    // doesn't yank edge units out of a settled pack.
+    // Busy / mid-order units only cancel within FINAL_ARRIVE so a huge √n disk
+    // does not idle an army when only the front is near the click.
+    const busy =
+      world.order[i] !== ORDER.IDLE &&
+      (world.hasTarget[i] ||
+        world.navWpCount[i] > 0 ||
+        world.pathRequest[i] ||
+        world.order[i] === ORDER.ATTACK ||
+        world.order[i] === ORDER.REPAIR);
+    const stayR2 = busy ? FINAL_ARRIVE_SQ : arriveR2;
+    if (fx.dist2(world.px[i], world.py[i], clickX, clickY) <= stayR2) {
       world.order[i] = ORDER.IDLE;
       world.hasTarget[i] = 0;
       world.vx[i] = 0;

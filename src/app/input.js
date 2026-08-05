@@ -25,7 +25,6 @@ export function setupInput(opts) {
   }
 
   const game = createGameInput(opts);
-  camera.setClearSelection(() => game.clearSelection());
 
   const hub = setupPointerHub({ canvas: opts.canvas, camera, game });
 

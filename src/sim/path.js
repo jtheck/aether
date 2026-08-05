@@ -27,11 +27,12 @@ export const FINAL_ARRIVE_SQ = fx.mul(FINAL_ARRIVE, FINAL_ARRIVE);
 /**
  * Soft gather disk for a multi-unit move. Big enough to cover a relaxed soft-sep
  * pack so a click inside the blob does not yank everyone onto one pixel.
+ * Tuning: docs/unit-separation.md
  * @param {number} groupSize
  */
 export function groupArriveRadius(groupSize) {
   const n = Math.max(1, groupSize | 0);
-  return fx.fromFloat(Math.max(fx.toFloat(FINAL_ARRIVE), 1.2 * Math.sqrt(n)));
+  return fx.fromFloat(Math.max(fx.toFloat(FINAL_ARRIVE), 1.4 * Math.sqrt(n)));
 }
 
 export function groupArriveRadiusSq(groupSize) {
@@ -159,7 +160,7 @@ export function planPathBudget(w, field, opts = {}) {
   const pendingAstar = opts.astarLimit == null ? countPathRequests(w, PATH_REQUEST.ASTAR) : 0;
   const astarLimit = opts.astarLimit ?? Math.min(
     ASTAR_PATH_BUDGET_MAX,
-    Math.max(ASTAR_PATH_BUDGET, ASTAR_PATH_BUDGET + Math.ceil(pendingAstar / 8)),
+    Math.max(ASTAR_PATH_BUDGET, Math.ceil(pendingAstar / 2)),
   );
   w.pathLosCursor = processPathRequests(
     w,
@@ -280,7 +281,18 @@ export function movementGoal(w, field, i) {
   } else if (needsPath(w, i)) {
     ensurePath(w, field, i);
   }
-  if (w.navWpCount[i] === 0) return null;
+  if (w.navWpCount[i] === 0) {
+    // Path pending — keep marching toward dest so mass orders don't freeze
+    // while the A* budget drains. Only when LOS is clear (or flyer).
+    if (w.pathRequest[i] !== PATH_REQUEST.NONE && needsPath(w, i)) {
+      const destX = w.navDestX[i];
+      const destY = w.navDestY[i];
+      if (isFlyer(w.type[i]) || lineClear(field, w.px[i], w.py[i], destX, destY)) {
+        return { x: destX, y: destY };
+      }
+    }
+    return null;
+  }
   const idx = w.navWpIndex[i];
   const base = wpBase(i) + idx;
   return { x: w.navWx[base], y: w.navWy[base] };

@@ -1,4 +1,4 @@
-// Selection + orders (LMB). Camera/RMB owned by cameraController via pointerHub.
+// Selection + orders (LMB). Camera pan / force-move on RMB via pointerHub.
 // Touch later synthesizes into the hub; gamepad can call order helpers / enqueueCommand.
 
 import * as fx from '../../sim/fixed.js';
@@ -6,7 +6,7 @@ import { CMD } from '../../sim/commands.js';
 import { snapBuildingYaw } from '../../sim/buildings.js';
 import { isMechanical, isTransport, UNIT } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
-import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers } from '../../sim/transport.js';
+import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
 
 /** v1 lasso drag threshold. */
@@ -106,8 +106,18 @@ export function createGameInput(opts) {
   let abilityHoldClientY = 0;
   /** Bumps to cancel in-flight ability-hold GPU picks. */
   let abilityHoldGen = 0;
+  /**
+   * Bumps when a newer LMB press/click supersedes an older one.
+   * Under stress, click-1's GPU pick can finish after click-2's force-move and
+   * re-issue attack-move — epoch checks drop those stale completions.
+   */
+  let worldClickEpoch = 0;
 
   ensureSelectionBox();
+
+  function clickCurrent(epoch) {
+    return epoch === worldClickEpoch;
+  }
 
   function canUseInput() {
     return inputEnabled && localPlayerId >= 0 && (canInteract?.() ?? true);
@@ -115,6 +125,16 @@ export function createGameInput(opts) {
 
   function isPlacing() {
     return Boolean(getPlacingType?.());
+  }
+
+  /**
+   * Drop ghost placement without re-selecting the agora (unlike cancelPlacement).
+   * Used when the player leaves build UI by selecting units / clearing.
+   */
+  function abandonPlacement() {
+    if (!isPlacing()) return;
+    resetPlaceGesture();
+    setPlacingType?.(null);
   }
 
   function currentYaw() {
@@ -160,8 +180,8 @@ export function createGameInput(opts) {
   }
 
   /**
-   * GPU mesh pick → alive, non-passenger entity id, or -1.
-   * One pick per click; callers classify by owner / role.
+   * GPU mesh pick → alive entity id, or -1.
+   * Passengers resolve to their transport (clicking the deck = click the vehicle).
    */
   async function pickUnitAt(clientX, clientY) {
     if (!renderer.pickUnit) return -1;
@@ -169,7 +189,10 @@ export function createGameInput(opts) {
     if (id < 0) return -1;
     const world = getWorld();
     if (!world.alive[id]) return -1;
-    if (world.carriedBy && world.carriedBy[id] >= 0) return -1;
+    const carrier = world.carriedBy?.[id] ?? -1;
+    if (carrier >= 0) {
+      return world.alive[carrier] ? carrier : -1;
+    }
     return id;
   }
 
@@ -201,6 +224,7 @@ export function createGameInput(opts) {
   }
 
   function clearBuildingSelection() {
+    abandonPlacement();
     if (!selectedBuilding) {
       onBuildingSelected?.(null);
       return;
@@ -239,10 +263,6 @@ export function createGameInput(opts) {
   function clearSelection() {
     clearUnitSelection();
     clearBuildingSelection();
-    if (isPlacing()) {
-      setPlacingType?.(null);
-      onPlacementCancel?.();
-    }
   }
 
   function selectAllOfType(typeId, add) {
@@ -258,20 +278,10 @@ export function createGameInput(opts) {
     onSelectionChanged?.();
   }
 
-  /** Read-only double-tap check (does not stamp). */
-  function isDoubleTap(clientX, clientY, kind, extra = {}, at = performance.now()) {
-    const prev = lastTap;
-    return (
-      !!prev &&
-      prev.kind === kind &&
-      at - prev.t <= DOUBLE_MS &&
-      Math.hypot(clientX - prev.x, clientY - prev.y) <= DOUBLE_PX &&
-      (kind !== 'unit' || prev.typeId === extra.typeId)
-    );
-  }
-
   function boxSelect(x0, y0, x1, y1, add) {
-    if (!canUseInput() || isPlacing()) return;
+    if (!canUseInput()) return;
+    // Selecting units leaves build/place UI.
+    abandonPlacement();
     const rect = canvas.getBoundingClientRect();
     const minX = Math.min(x0, x1) - rect.left;
     const maxX = Math.max(x0, x1) - rect.left;
@@ -318,14 +328,17 @@ export function createGameInput(opts) {
    * @param {number} clientY
    * @param {number} cmdType
    * @param {number} [preHit] entity id from an earlier pick this click, or -1
+   * @param {number} [epoch] worldClickEpoch snapshot — drop if superseded
    */
-  async function orderAt(clientX, clientY, cmdType, preHit) {
+  async function orderAt(clientX, clientY, cmdType, preHit, epoch) {
     if (!canUseInput() || isPlacing()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
+    if (epoch !== undefined && !clickCurrent(epoch)) return;
 
     const world = getWorld();
     const hit = preHit !== undefined ? preHit : await pickUnitAt(clientX, clientY);
+    if (epoch !== undefined && !clickCurrent(epoch)) return;
 
     // Force-move (CMD.MOVE) ignores enemies under the cursor; attack-move still hard-attacks.
     if (
@@ -333,6 +346,7 @@ export function createGameInput(opts) {
       cmdType === CMD.ATTACK_MOVE &&
       isHostile(localPlayerId, world.owner[hit])
     ) {
+      if (epoch !== undefined && !clickCurrent(epoch)) return;
       enqueueCommand({ type: CMD.ATTACK, entities: ids, target: hit });
       return;
     }
@@ -347,6 +361,7 @@ export function createGameInput(opts) {
       if (isOwnTransport) {
         const assignments = assignNearestRidersToTransport(world, hit, ids);
         if (assignments.length > 0) {
+          if (epoch !== undefined && !clickCurrent(epoch)) return;
           const moveIds = [...assignments.map((a) => a.riderId), hit];
           const { tx, ty } = moveDestinations(
             moveIds,
@@ -384,6 +399,7 @@ export function createGameInput(opts) {
     ) {
       const engineers = ids.filter((id) => world.type[id] === UNIT.ENGINEER);
       if (engineers.length > 0) {
+        if (epoch !== undefined && !clickCurrent(epoch)) return;
         enqueueCommand({ type: CMD.ATTACK, entities: engineers, target: hit });
         moveIds = ids.filter((id) => world.type[id] !== UNIT.ENGINEER);
         if (moveIds.length === 0) {
@@ -393,8 +409,13 @@ export function createGameInput(opts) {
       }
     }
 
+    // Friendly under cursor that wasn't embark/repair — don't smash a ground
+    // order onto them (caller should have re-selected instead).
+    if (hit >= 0 && world.owner[hit] === localPlayerId) return;
+
     const g = renderer.screenToGround(clientX, clientY);
     if (!g) return;
+    if (epoch !== undefined && !clickCurrent(epoch)) return;
     onOrder?.(g.x, g.z, g.y, cmdType);
 
     const { tx, ty } = moveDestinations(moveIds, g.x, g.z);
@@ -585,30 +606,34 @@ export function createGameInput(opts) {
    *   tapAt?: number,
    *   forceMove?: boolean,
    *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground', typeId?: number } | null,
+   *   epoch?: number,
    * }} [click]
    */
   async function handleWorldClick(e, d, click = {}) {
     const tapAt = click.tapAt ?? performance.now();
-    const forceMove = !!click.forceMove;
     const prevTap = click.prevTap !== undefined ? click.prevTap : lastTap;
+    const epoch = click.epoch ?? worldClickEpoch;
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > DRAG_THRESHOLD_PX) return;
     const world = getWorld();
     const hit = await pickUnitAt(e.clientX, e.clientY);
+    if (!clickCurrent(epoch)) return;
     if (hit >= 0 && world.owner[hit] === localPlayerId) {
       const selected = selectedIds();
-      // Riders selected + click transport → embark (don't steal as re-select).
-      const embarkClick =
+      // Riders + room on transport → embark. Otherwise always re-select (never
+      // ground-move onto a friendly — full vehicles / random infantry included).
+      const canEmbark =
         !e.shiftKey &&
         !e.ctrlKey &&
         !e.metaKey &&
         isTransport(world.type[hit]) &&
+        passengerCount(world, hit) < transportCapacityOf(world.type[hit]) &&
         selected.some((id) => id !== hit && canRideTransport(world.type[id]));
-      if (embarkClick) {
+      if (canEmbark) {
         lastTap = null;
-        await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit);
+        if (!clickCurrent(epoch)) return;
+        await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
       } else {
         const typeId = world.type[hit];
-        // Use prevTap from before speculative ground stamp (pointer-up).
         const selectAll =
           e.ctrlKey ||
           e.metaKey ||
@@ -617,6 +642,7 @@ export function createGameInput(opts) {
             prevTap.typeId === typeId &&
             tapAt - prevTap.t <= DOUBLE_MS &&
             Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX);
+        if (!clickCurrent(epoch)) return;
         lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'unit', typeId };
         if (selectAll) {
           selectAllOfType(typeId, e.shiftKey);
@@ -632,6 +658,7 @@ export function createGameInput(opts) {
     }
 
     const bld = await pickBuildingAt(e.clientX, e.clientY);
+    if (!clickCurrent(epoch)) return;
     if (bld) {
       lastTap = null;
       clearUnitSelection();
@@ -640,11 +667,12 @@ export function createGameInput(opts) {
     }
 
     if (selectedIds().length > 0) {
-      // forceMove decided sync on pointer-up so overlapping GPU picks can't miss the window.
-      await orderAt(e.clientX, e.clientY, forceMove ? CMD.MOVE : CMD.ATTACK_MOVE, hit);
+      if (!clickCurrent(epoch)) return;
+      await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
       return;
     }
 
+    if (!clickCurrent(epoch)) return;
     lastTap = null;
     clearBuildingSelection();
   }
@@ -667,21 +695,8 @@ export function createGameInput(opts) {
     abilityHoldGen++;
     clearAbilityHold();
 
-    // Decide force-move sync while selected, before GPU picks race each other.
-    let forceMove = false;
+    // Snapshot before this click mutates lastTap (unit double-select-all).
     const prevTap = lastTap;
-    if (
-      canUseInput() &&
-      e.type !== 'pointercancel' &&
-      !wasDragging &&
-      !holdCast &&
-      !isPlacing() &&
-      selectedIds().length > 0
-    ) {
-      forceMove = isDoubleTap(e.clientX, e.clientY, 'ground', {}, tapAt);
-      if (forceMove) lastTap = null;
-      else lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'ground' };
-    }
 
     if (canUseInput() && e.type !== 'pointercancel') {
       if (isPlacing()) {
@@ -698,17 +713,41 @@ export function createGameInput(opts) {
           }
         }
         if (!radialHandled) {
-          const yaw = currentYaw();
-          if (placeRotating && placeAnchor) {
-            onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
-          } else if (
+          // Clicking an own unit abandons place mode and selects (don't confirm place).
+          const unitHit = await pickUnitAt(e.clientX, e.clientY);
+          const world = getWorld();
+          if (
+            unitHit >= 0 &&
+            world.owner[unitHit] === localPlayerId &&
             d &&
             Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
           ) {
-            const g =
-              placeAnchor ??
-              renderer.screenToGround?.(e.clientX, e.clientY);
-            if (g) onPlacementConfirm?.(g.x, g.z, yaw);
+            abandonPlacement();
+            lastTap = {
+              t: tapAt,
+              x: e.clientX,
+              y: e.clientY,
+              kind: 'unit',
+              typeId: world.type[unitHit],
+            };
+            if (!e.shiftKey) selectedBuf.fill(0);
+            selectedBuf[unitHit] = 1;
+            clearBuildingSelection();
+            syncSelectionSquad();
+            onSelectionChanged?.();
+          } else {
+            const yaw = currentYaw();
+            if (placeRotating && placeAnchor) {
+              onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
+            } else if (
+              d &&
+              Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
+            ) {
+              const g =
+                placeAnchor ??
+                renderer.screenToGround?.(e.clientX, e.clientY);
+              if (g) onPlacementConfirm?.(g.x, g.z, yaw);
+            }
           }
         }
         resetPlaceGesture();
@@ -736,7 +775,8 @@ export function createGameInput(opts) {
             lastTap = null;
             boxSelect(boxStart.x, boxStart.y, e.clientX, e.clientY, e.shiftKey);
           } else {
-            await handleWorldClick(e, d, { tapAt, forceMove, prevTap });
+            const epoch = ++worldClickEpoch;
+            await handleWorldClick(e, d, { tapAt, prevTap, epoch });
           }
         }
       }
@@ -748,7 +788,21 @@ export function createGameInput(opts) {
     return true;
   }
 
+  /**
+   * RMB tap (no pan) / touch 2-finger later — force MOVE to ground.
+   * No unit pick; ignores enemies. Drag pan is filtered by the camera controller.
+   */
+  function forceMoveAt(clientX, clientY) {
+    if (!canUseInput() || isPlacing()) return false;
+    if (selectedIds().length === 0) return false;
+    lastTap = null;
+    const epoch = ++worldClickEpoch;
+    void orderAt(clientX, clientY, CMD.MOVE, -1, epoch);
+    return true;
+  }
+
   function cancelDrag() {
+    worldClickEpoch++;
     abilityHoldGen++;
     clearAbilityHold();
     abilityHoldFired = false;
@@ -761,7 +815,7 @@ export function createGameInput(opts) {
     boxDragging = false;
   }
 
-  /** Esc / RMB-click (no pan) while placing — cancel placement. */
+  /** Esc / RMB-tap while placing — cancel placement. */
   function cancelPlacement() {
     if (!isPlacing()) return false;
     resetPlaceGesture();
@@ -774,6 +828,7 @@ export function createGameInput(opts) {
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
+    forceMoveAt,
     cancelDrag,
     clearSelection,
     cancelPlacement,

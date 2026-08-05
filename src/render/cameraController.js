@@ -24,9 +24,6 @@ const KEY_PAN_BASE = 5 * 1.2;
 const RMB_PAN_BASE = 5;
 const PAN_DRAG_THRESHOLD = 5;
 
-const DOUBLE_CLICK_MS = 300;
-const DOUBLE_CLICK_PX = 10;
-
 const MIN_BETA = 1.2;
 const MAX_BETA = 0.82;
 
@@ -39,7 +36,7 @@ const V1_REF_RADIUS = 80;
 /**
  * @param {object} camera Lite ArcRotateCamera
  * @param {HTMLCanvasElement} canvas
- * @param {{ onClearSelection?: () => void, worldHalfF?: number }} [opts]
+ * @param {{ worldHalfF?: number }} [opts]
  */
 export function createCameraController(camera, canvas, opts = {}) {
   const worldHalfF = opts.worldHalfF ?? WORLD_HALF_F;
@@ -50,15 +47,12 @@ export function createCameraController(camera, canvas, opts = {}) {
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
-  let onClearSelection = opts.onClearSelection ?? null;
 
   let rmbPanActive = false;
   let rmbDidPan = false;
   let rmbLastScreen = { x: 0, y: 0 };
   let rmbDownScreen = { x: 0, y: 0 };
   let rmbPointerId = null;
-  let lastRightClickTime = 0;
-  let lastRightClickPos = { x: 0, y: 0 };
 
   camera.lowerRadiusLimit = LOWER_RADIUS;
   camera.upperRadiusLimit = UPPER_RADIUS;
@@ -179,21 +173,6 @@ export function createCameraController(camera, canvas, opts = {}) {
   function handlePointerDown(e) {
     if (e.pointerType === 'touch') return false;
     if (e.button !== 2) return false;
-
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    const now = performance.now();
-    const dist = Math.hypot(x - lastRightClickPos.x, y - lastRightClickPos.y);
-    if (now - lastRightClickTime < DOUBLE_CLICK_MS && dist < DOUBLE_CLICK_PX) {
-      onClearSelection?.();
-      lastRightClickTime = 0;
-      lastRightClickPos = { x: 0, y: 0 };
-      e.preventDefault();
-      return true;
-    }
-    lastRightClickTime = now;
-    lastRightClickPos = { x, y };
 
     rmbPanActive = true;
     rmbDidPan = false;
@@ -435,8 +414,5 @@ export function createCameraController(camera, canvas, opts = {}) {
     tick,
     reset,
     markNudged,
-    setClearSelection(fn) {
-      onClearSelection = fn;
-    },
   };
 }

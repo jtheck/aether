@@ -13,8 +13,8 @@ export const TILE_SIZE_F = 4;
 export const DEFAULT_MAP_W = 200;
 export const DEFAULT_MAP_H = 200;
 /** Stress / animStress only — do not use as the global default. */
-export const STRESS_MAP_W = 400;
-export const STRESS_MAP_H = 400;
+export const STRESS_MAP_W = 480;
+export const STRESS_MAP_H = 480;
 
 /** Default playable board in tiles (aliases for callers that want the normal size). */
 export const MAP_W = DEFAULT_MAP_W;

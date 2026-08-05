@@ -1019,10 +1019,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const dx = cur.x[i] - prev.x[i];
       const dz = cur.z[i] - prev.z[i];
       // Soft-separation nudges positions without an order — don't spin facing / walk.
-      // (navWpCount is worker-only; shared render state exposes order.)
-      const orderedMove = (world.order?.[i] ?? ORDER.IDLE) !== ORDER.IDLE;
-      const moving = orderedMove && dx * dx + dz * dz > 0.0004;
-      if (moving) facingYaw[i] = Math.atan2(dx, dz);
+      // MOVE/ATTACK_MOVE keep walk/rings even while path is pending (zero dx).
+      const ord = world.order?.[i] ?? ORDER.IDLE;
+      const orderedMove = ord !== ORDER.IDLE;
+      const orderedMarch = ord === ORDER.MOVE || ord === ORDER.ATTACK_MOVE;
+      const displacing = dx * dx + dz * dz > 0.0004;
+      const moving = orderedMarch || (orderedMove && displacing);
+      if (displacing && orderedMove) facingYaw[i] = Math.atan2(dx, dz);
       const flyLoft = isFlyer(world.type[i]) ? FLY_HEIGHT : 0;
       const loft = (renderer.monkLobHeight?.(i) ?? 0) + flyLoft;
       const pitch = renderer.monkLobPitch?.(i) ?? 0;
@@ -1063,7 +1066,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         // Authored colors when standing. Red/yellow only while en route (ATTACK_MOVE
         // stays set after arrival for acquire — don't leave the collar stuck red).
         // Hard ATTACK while engaged stays red even if not translating.
-        const ord = world.order?.[i] ?? ORDER.IDLE;
         let ringTint = 'white';
         if (ord === ORDER.ATTACK) ringTint = 'red';
         else if (moving) {

@@ -1034,8 +1034,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       // Leave authored albedo; instance tint sets order color (red / yellow).
       if (mat.emissiveColor) mat.emissiveColor = [0, 0, 0];
     }
-    // Tip = lowest geometry Y (points at the ground click). Clear mesh.position
-    // from prepareLegacyModel and bake the tip offset into the instance matrix.
+    // Tip = lowest geometry Y (points at the ground click). Unit loaders bake
+    // feet to local y=0; tip offset is usually ~0 and goes into the instance matrix.
     orderTipLocalY = orderMarker.boundMin?.[1] ?? 0;
     if (orderMarker.position) {
       orderMarker.position.x = 0;
@@ -1825,8 +1825,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // 1 particle/unit @ ~12Hz — much cheaper than the old 3× @ 25Hz, still visible in armies.
   const UNIT_FX_INTERVAL_MS = 80;
   const GROUND_FIRE_INTERVAL_MS = 55;
-  /** Match sim FIRE_ZONE_TTL (50 ticks @ 20Hz). */
-  const FIRE_ZONE_VISUAL_MS = 2500;
+  /** Match sim FIRE_ZONE_TTL (100 ticks @ 20Hz). */
+  const FIRE_ZONE_VISUAL_MS = 5000;
 
   function applyUnitMeshVisibility() {
     for (const batch of typeBatches.values()) {
@@ -2163,7 +2163,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function flushAllBatches() {
     updateOrderMarker();
-    // Only the build MENU HUD-scales with zoom — selection collar is fixed S/M/L.
+    // Build menu tilts toward camera and scales with eye→agora distance.
     if (buildingRadial.isOpen()) {
       buildingRadial.update?.(camera);
     }
@@ -2462,7 +2462,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       );
     },
 
-    /** Build menu (annulus ring + pads + icons). HUD-scales with zoom. */
+    /** Build menu (tilted ring + pads + icons). Screen-stable size via eye distance. */
     showBuildingRadial(x, z) {
       buildingRadial.showAt(x, z, camera);
     },
@@ -2502,10 +2502,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /**
      * Sync gesture test: over an option disc or the main ring band.
      * Must not await GPU (pointerdown latch).
+     * Always ray-test — a stale hover must not claim the whole screen.
      */
     hitBuildingRadial(clientX, clientY) {
       if (!buildingRadial.isOpen()) return false;
-      if (buildingRadial.hoveredType?.()) return true;
       const ray = radialPickingRay(clientX, clientY);
       return buildingRadial.hitAtRay?.(ray) ?? false;
     },

@@ -65,7 +65,7 @@ function attackMoveHoldersUnstack() {
   }
 }
 
-/** Group move to one click — arrive then bloom without a parade grid. */
+/** Group move to one click — organic jitter + soft bloom, not a parade grid. */
 function sharedDestinationBlooms() {
   const field = openField();
   const w = createWorld(91);
@@ -189,13 +189,13 @@ function clickInsidePackStaysPut() {
   const field = openField();
   const w = createWorld(94);
   const ids = [];
-  // ~3×3 lattice, spacing 2 — already a soft-sep pack.
+  // Soft-sep lattice near the settle distance — already a relaxed pack.
   for (let z = 0; z < 3; z++) {
     for (let x = 0; x < 3; x++) {
       ids.push(
         spawn(w, {
-          x: fx.fromFloat((x - 1) * 2),
-          y: fx.fromFloat((z - 1) * 2),
+          x: fx.fromFloat((x - 1) * 2.7),
+          y: fx.fromFloat((z - 1) * 2.7),
           type: UNIT.WARRIOR,
           owner: 0,
         }),

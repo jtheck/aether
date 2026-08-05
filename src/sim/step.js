@@ -57,15 +57,29 @@ const DISTRACT_MOVE_MUL = fx.fromFloat(0.55);
 // post-combat piles kept drifting out to ~6+ (endless turning/inching).
 //
 // Dense arrivals can't satisfy full spacing for every pair; without slack the
-// pack ripples forever. Push only past SEP_SLACK, quadratic near the edge.
-const SEP_PUSH = fx.fromFloat(0.35);
-const MOVE_AVOID_PUSH = fx.fromFloat(0.12);
-const SEP_MAX_STEP = fx.fromFloat(0.25);
+// pack ripples forever. Push only past SEP_SLACK.
+//
+// Knob table (values + gather jitter / arrive disk): docs/unit-separation.md
+const SEP_PUSH = fx.fromFloat(0.42);
+/** Soft shoulder-check while pathing — weak so routes still win. */
+const MOVE_AVOID_PUSH = fx.fromFloat(0.22);
+/** Near-pixel glue mid-march — stronger shove without restoring idle parade radius. */
+const MOVE_AVOID_HARD = fx.fromFloat(0.38);
+/** dist2 below this fraction of minDist² counts as hard overlap. */
+const MOVE_AVOID_HARD_FRAC = fx.fromFloat(0.36);
+const SEP_MAX_STEP = fx.fromFloat(0.30);
+/** Hard mid-march unstack can step a bit farther per tick than idle sep. */
+const MOVE_AVOID_HARD_MAX = fx.fromFloat(0.40);
+/** Idle deep-pile bloom — peel stacked arrivals fast; rim still uses SEP_SLACK. */
+const SEP_BLOOM_PUSH = fx.fromFloat(0.50);
+const SEP_BLOOM_MAX = fx.fromFloat(0.45);
+const SEP_BLOOM_FRAC = fx.fromFloat(0.40);
 /** Stop separating once within this of minDist — kills overpack wave chatter. */
-const SEP_SLACK = fx.fromFloat(0.4);
+const SEP_SLACK = fx.fromFloat(0.28);
 const GRID_SEP_THRESHOLD = 400;
-// Visit every source cell over eight deterministic ticks to bound dense idle work.
-const SEP_PHASES = 8;
+// Visit every source cell over N deterministic ticks. Was 8 — dense arrivals
+// rippled as a slow wave; 2 keeps cost bounded without the grotesque pulse.
+const SEP_PHASES = 2;
 const SEP_NEIGHBORS = [[0, 1], [1, -1], [1, 0], [1, 1]];
 const SEP_TYPE_COUNT = UNIT_DEFS.length;
 const SEP_MIN_DIST = new Int32Array(SEP_TYPE_COUNT * SEP_TYPE_COUNT);
@@ -73,8 +87,8 @@ const SEP_MIN_DIST_SQ = new Int32Array(SEP_TYPE_COUNT * SEP_TYPE_COUNT);
 for (let a = 0; a < SEP_TYPE_COUNT; a++) {
   for (let b = 0; b < SEP_TYPE_COUNT; b++) {
     const key = a * SEP_TYPE_COUNT + b;
-    // Footprints alone are size/6 (~0.75); floor keeps infantry from looking glued.
-    const spacing = Math.max(2.4, unitFootprint(a) + unitFootprint(b));
+    // Footprints alone are size/6 (~1.25); floor is the main "how far apart" knob.
+    const spacing = Math.max(2.9, unitFootprint(a) + unitFootprint(b));
     SEP_MIN_DIST[key] = fx.fromFloat(spacing);
     SEP_MIN_DIST_SQ[key] = fx.mul(SEP_MIN_DIST[key], SEP_MIN_DIST[key]);
   }
@@ -390,7 +404,18 @@ function movingAvoidanceSystem(w, field) {
 
 function applyMovingAvoidance(w, field, i, j) {
   if (!sameSepLayer(w, i, j)) return;
-  applyPairPush(w, field, i, j, MOVE_AVOID_PUSH, false);
+  const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
+  const dx = w.px[j] - w.px[i];
+  const dy = w.py[j] - w.py[i];
+  const dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
+  const hardLimit = fx.mul(SEP_MIN_DIST_SQ[typePair], MOVE_AVOID_HARD_FRAC);
+  // Deep overlap: ignore slack so glued marchers actually peel apart.
+  // Mild packing keeps slack so path follow still owns the route.
+  if (dist2 < hardLimit) {
+    applyPairPush(w, field, i, j, MOVE_AVOID_HARD, false, 0, MOVE_AVOID_HARD_MAX);
+  } else {
+    applyPairPush(w, field, i, j, MOVE_AVOID_PUSH, false);
+  }
 }
 
 // Soft separation for units that aren't pathing — never fights an active route.
@@ -468,15 +493,25 @@ function applySeparation(w, field, i, j) {
   // Small-count pairwise path does not prefilter; keep this guard authoritative.
   if (!canSeparate(w, i) || !canSeparate(w, j)) return;
   if (!sameSepLayer(w, i, j)) return;
-  // Mutual + slack: one-sided push left march piles stuck on a line.
-  applyPairPush(w, field, i, j, SEP_PUSH, false);
+  const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
+  const dx = w.px[j] - w.px[i];
+  const dy = w.py[j] - w.py[i];
+  const dist2 = fx.mul(dx, dx) + fx.mul(dy, dy);
+  const bloomLimit = fx.mul(SEP_MIN_DIST_SQ[typePair], SEP_BLOOM_FRAC);
+  // Deep pile: ignore slack and shove harder so arrivals don't wave-pulse out.
+  if (dist2 < bloomLimit) {
+    applyPairPush(w, field, i, j, SEP_BLOOM_PUSH, false, 0, SEP_BLOOM_MAX);
+  } else {
+    applyPairPush(w, field, i, j, SEP_PUSH, false);
+  }
 }
 
 /**
- * Soft radial push. Slack deadzone + quadratic depth so near-spaced units stay
- * put; exact stacks still break. `asymmetric` moves only the higher id (stable).
+ * Soft radial push. Slack deadzone so near-spaced units stay put; exact stacks
+ * still break. `asymmetric` moves only the higher id (stable). Optional
+ * `slack`/`maxStep` let mid-march hard-unstack ignore the idle deadzone.
  */
-function applyPairPush(w, field, i, j, strength, asymmetric) {
+function applyPairPush(w, field, i, j, strength, asymmetric, slack = SEP_SLACK, maxStep = SEP_MAX_STEP) {
   let dx = w.px[j] - w.px[i];
   let dy = w.py[j] - w.py[i];
   const typePair = w.type[i] * SEP_TYPE_COUNT + w.type[j];
@@ -499,11 +534,11 @@ function applyPairPush(w, field, i, j, strength, asymmetric) {
   }
   const dist = fx.sqrt(dist2);
   const overlap = minDist - dist;
-  if (overlap <= SEP_SLACK) return;
+  if (overlap <= slack) return;
   // Only the hard overlap past slack — linear so stacks break, tiny near the edge.
-  const hard = overlap - SEP_SLACK;
+  const hard = overlap - slack;
   let mag = fx.mul(strength, hard);
-  if (mag > SEP_MAX_STEP) mag = SEP_MAX_STEP;
+  if (mag > maxStep) mag = maxStep;
   // Unit direction i→j; displacement along that axis.
   const ux = fx.div(dx, dist);
   const uy = fx.div(dy, dist);

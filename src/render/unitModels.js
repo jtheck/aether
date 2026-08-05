@@ -216,7 +216,8 @@ function boundsOfPositions(positions) {
 /**
  * Load a glTF, bake hierarchy world matrices, one mesh per source primitive
  * (preserves multi-material collars: red / white / yellow bands).
- * All parts share the same foot lift so instance matrices stay aligned.
+ * Foot-center is baked into vertex Y so thin-instance GPU pick (instance × pos,
+ * no mesh.world) matches the rendered mesh.world × instance path.
  *
  * @returns {Promise<object[]>}
  */
@@ -231,10 +232,14 @@ export async function loadBakedUnitMeshParts(engine, url) {
   if (!Number.isFinite(footY)) footY = 0;
 
   const meshes = baked.map((part, index) => {
+    const positions = part.positions;
+    if (footY !== 0) {
+      for (let i = 1; i < positions.length; i += 3) positions[i] -= footY;
+    }
     const mesh = createMeshFromData(
       engine,
       `${url}#${index}`,
-      part.positions,
+      positions,
       part.normals,
       part.indices instanceof Uint32Array ? part.indices : new Uint32Array(part.indices),
       part.uvs ?? undefined,
@@ -242,18 +247,17 @@ export async function loadBakedUnitMeshParts(engine, url) {
     mesh.material = part.material;
     mesh.pickable = false;
     mesh._reverseWinding = part.reverseWinding;
-    const b = boundsOfPositions(part.positions);
+    const b = boundsOfPositions(positions);
     mesh.boundMin = b.min;
     mesh.boundMax = b.max;
     mesh.scaling.x = 1;
     mesh.scaling.y = 1;
     mesh.scaling.z = 1;
     mesh.position.x = 0;
-    mesh.position.y = -footY;
+    mesh.position.y = 0;
     mesh.position.z = 0;
     return mesh;
   });
-  // Foot-centered like prepareLegacyModel so instance matrices line up.
   const fxSockets = sockets.map((s) => ({
     name: s.name,
     x: s.x,
@@ -266,7 +270,7 @@ export async function loadBakedUnitMeshParts(engine, url) {
 
 /**
  * Load a glTF, bake hierarchy world matrices, merge all meshes into one
- * thin-instance template (feet-centered via prepareLegacyModel).
+ * thin-instance template. Foot-center is baked into vertex Y so GPU pick matches render.
  * Prefer {@link loadBakedUnitMeshParts} when materials must stay separate.
  */
 export async function loadBakedUnitMesh(engine, url) {
@@ -305,6 +309,15 @@ export async function loadBakedUnitMesh(engine, url) {
     iBase += idx.length;
   }
 
+  let footY = Infinity;
+  for (let i = 1; i < positions.length; i += 3) {
+    if (positions[i] < footY) footY = positions[i];
+  }
+  if (!Number.isFinite(footY)) footY = 0;
+  if (footY !== 0) {
+    for (let i = 1; i < positions.length; i += 3) positions[i] -= footY;
+  }
+
   const mesh = createMeshFromData(engine, url, positions, normals, indices, uvs);
   mesh.material = baked[0].material;
   mesh.pickable = false;
@@ -312,9 +325,12 @@ export async function loadBakedUnitMesh(engine, url) {
   const b = boundsOfPositions(positions);
   mesh.boundMin = b.min;
   mesh.boundMax = b.max;
-  prepareLegacyModel(mesh);
-  const footY = mesh.boundMin?.[1] ?? 0;
-  // prepareLegacyModel shifts by -footY via mesh.position; sockets match that space.
+  mesh.scaling.x = 1;
+  mesh.scaling.y = 1;
+  mesh.scaling.z = 1;
+  mesh.position.x = 0;
+  mesh.position.y = 0;
+  mesh.position.z = 0;
   mesh.fxSockets = sockets.map((s) => ({
     name: s.name,
     x: s.x,
@@ -322,19 +338,4 @@ export async function loadBakedUnitMesh(engine, url) {
     z: s.z,
   }));
   return mesh;
-}
-
-/**
- * Feet on y=0 locally (instance matrix adds ground Y).
- * Keep authored XZ origin — do not recenter on AABB (swords/bows pull the body off the cursor).
- */
-export function prepareLegacyModel(mesh) {
-  const min = mesh.boundMin ?? [-0.5, 0, -0.5];
-  const footY = min[1];
-  mesh.scaling.x = 1;
-  mesh.scaling.y = 1;
-  mesh.scaling.z = 1;
-  mesh.position.x = 0;
-  mesh.position.y = -footY;
-  mesh.position.z = 0;
 }

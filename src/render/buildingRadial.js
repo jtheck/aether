@@ -1,4 +1,6 @@
-// Agora build menu — flat annulus rings + icons. HUD-scales with camera.
+// Agora build menu — tilted annulus rings + icons, anchored at the agora.
+// World scale tracks eye distance so on-screen size stays steady.
+// Option angles stay screen-stable as the camera orbits.
 // Option hover/click uses CPU disc hits (full pad including hole), not GPU mesh picks.
 
 import {
@@ -21,19 +23,35 @@ const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
 const PAD_OUTER = 2.6;
 const PAD_INNER = 1.7;
 const PAD_H = 0.22;
-/** Lift pad rings (and icons) above the base menu ring. */
+/** Lift pad rings (and icons) along the menu normal, off the base ring. */
 const PAD_LIFT = 1.35;
-/** Extra lift of icons above their pad ring. */
+/** Extra lift of icons along the menu normal above their pad ring. */
 const ICON_LIFT = 0.85;
 const OPTION_SCALE = 0.26;
-const HUD_SCALE_AT_NEAR = 0.28;
-const HUD_SCALE_AT_FAR = 2.75;
+/** Pick sphere around each icon (covers the mini building, not just the pad). */
+const ICON_PICK_R = 5.5;
+/**
+ * Lean from horizontal toward the camera (not a full billboard).
+ * ~32° — readable without standing the ring on end.
+ */
+const MENU_TILT = 0.56;
+/** World scale = BASE * (eyeDist / REF). Grows as you pull back; shrinks when close. */
+const HUD_REF_DIST = 110;
+const HUD_BASE_SCALE = 1;
+/** Floor only so the menu doesn't vanish if the cam clips through it. */
+const HUD_SCALE_MIN = 0.06;
+/**
+ * Pull slightly toward the eye so the tilted ring clears terrain/buildings.
+ */
+const MENU_DEPTH_BIAS_FRAC = 0.12;
 const MAX_OPTIONS = 8;
 
 /** Opaque so depth wins — transparent sort otherwise draws far pads under the main ring. */
 const MENU_RING_COLOR = [0.38, 0.62, 1.0];
 const MENU_RING_EMISSIVE = [0.22, 0.42, 0.82];
-/** Item pads: distinct teal vs main blue. */
+/** Main ring only — sits above the world, so let terrain/units read through a bit. */
+const MENU_RING_ALPHA = 0.55;
+/** Item pads: distinct teal vs main blue (stay opaque for clean hover). */
 const PAD_COLOR = [0.25, 0.82, 0.72];
 const PAD_EMISSIVE = [0.12, 0.55, 0.48];
 const PAD_HOVER_COLOR = [1, 0.85, 0.25];
@@ -159,22 +177,25 @@ function setThinInstanceCount(mesh, count) {
   mesh.visible = count > 0;
 }
 
-function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
+/**
+ * Thin-instance matrix: X=right, Y=up, Z=forward (column-major), uniform scale.
+ * @param {Float32Array} matrices
+ * @param {number} slot
+ */
+function writeFacingMatrix(matrices, slot, x, y, z, rx, ry, rz, ux, uy, uz, fx, fy, fz, scale) {
   const o = slot * 16;
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
   const sc = scale;
-  matrices[o] = c * sc;
-  matrices[o + 1] = 0;
-  matrices[o + 2] = -s * sc;
+  matrices[o] = rx * sc;
+  matrices[o + 1] = ry * sc;
+  matrices[o + 2] = rz * sc;
   matrices[o + 3] = 0;
-  matrices[o + 4] = 0;
-  matrices[o + 5] = sc;
-  matrices[o + 6] = 0;
+  matrices[o + 4] = ux * sc;
+  matrices[o + 5] = uy * sc;
+  matrices[o + 6] = uz * sc;
   matrices[o + 7] = 0;
-  matrices[o + 8] = s * sc;
-  matrices[o + 9] = 0;
-  matrices[o + 10] = c * sc;
+  matrices[o + 8] = fx * sc;
+  matrices[o + 9] = fy * sc;
+  matrices[o + 10] = fz * sc;
   matrices[o + 11] = 0;
   matrices[o + 12] = x;
   matrices[o + 13] = y;
@@ -182,36 +203,116 @@ function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
   matrices[o + 15] = 1;
 }
 
-function makeRingMaterial(diffuse, emissive) {
+/**
+ * Quaternion from orthonormal basis columns (X, Y, Z).
+ * @returns {{ x: number, y: number, z: number, w: number }}
+ */
+function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
+  const trace = xx + yy + zz;
+  let x;
+  let y;
+  let z;
+  let w;
+  if (trace > 0) {
+    const s = Math.sqrt(trace + 1) * 2;
+    w = 0.25 * s;
+    x = (yz - zy) / s;
+    y = (zx - xz) / s;
+    z = (xy - yx) / s;
+  } else if (xx > yy && xx > zz) {
+    const s = Math.sqrt(1 + xx - yy - zz) * 2;
+    w = (yz - zy) / s;
+    x = 0.25 * s;
+    y = (xy + yx) / s;
+    z = (zx + xz) / s;
+  } else if (yy > zz) {
+    const s = Math.sqrt(1 + yy - xx - zz) * 2;
+    w = (zx - xz) / s;
+    x = (xy + yx) / s;
+    y = 0.25 * s;
+    z = (yz + zy) / s;
+  } else {
+    const s = Math.sqrt(1 + zz - xx - yy) * 2;
+    w = (xy - yx) / s;
+    x = (zx + xz) / s;
+    y = (yz + zy) / s;
+    z = 0.25 * s;
+  }
+  return { x, y, z, w };
+}
+
+function makeRingMaterial(diffuse, emissive, alpha = 1) {
   const mat = createStandardMaterial();
   mat.diffuseColor = [...diffuse];
   mat.emissiveColor = [...emissive];
-  // Opaque: transparent back-to-front sort puts far pads under the main ring.
-  mat.alpha = 1;
+  mat.alpha = alpha;
   if ('disableLighting' in mat) mat.disableLighting = true;
   if ('unlit' in mat) mat.unlit = true;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
   return mat;
 }
 
-/** @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray */
-function rayHitPlaneY(ray, y) {
-  if (Math.abs(ray.dy) < 1e-8) return null;
-  const t = (y - ray.oy) / ray.dy;
+/**
+ * Ray × plane. Plane through (px,py,pz) with unit normal (nx,ny,nz).
+ * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
+ */
+function rayHitPlane(ray, px, py, pz, nx, ny, nz) {
+  const denom = ray.dx * nx + ray.dy * ny + ray.dz * nz;
+  if (Math.abs(denom) < 1e-8) return null;
+  const t = ((px - ray.ox) * nx + (py - ray.oy) * ny + (pz - ray.oz) * nz) / denom;
   if (t < 0) return null;
-  return { x: ray.ox + ray.dx * t, z: ray.oz + ray.dz * t, t };
+  return {
+    x: ray.ox + ray.dx * t,
+    y: ray.oy + ray.dy * t,
+    z: ray.oz + ray.dz * t,
+    t,
+  };
 }
 
-function placeMesh(mesh, x, y, z, scaleXZ, scaleY = scaleXZ) {
+/**
+ * Nearest positive ray–sphere hit distance, or null.
+ * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
+ */
+function rayHitSphereT(ray, cx, cy, cz, radius) {
+  const lx = ray.ox - cx;
+  const ly = ray.oy - cy;
+  const lz = ray.oz - cz;
+  const b = ray.dx * lx + ray.dy * ly + ray.dz * lz;
+  const c = lx * lx + ly * ly + lz * lz - radius * radius;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const root = Math.sqrt(disc);
+  const t0 = -b - root;
+  if (t0 >= 0) return t0;
+  const t1 = -b + root;
+  return t1 >= 0 ? t1 : null;
+}
+
+/**
+ * Place annulus (local Y = face normal) with camera-facing basis.
+ * Basis columns: X=right, Y=normal(toCam), Z=planeZ (−screenUp).
+ */
+function placeMeshOriented(mesh, x, y, z, scale, rx, ry, rz, nx, ny, nz, tx, ty, tz) {
   if (mesh.position) {
     mesh.position.x = x;
     mesh.position.y = y;
     mesh.position.z = z;
   }
   if (mesh.scaling) {
-    mesh.scaling.x = scaleXZ;
-    mesh.scaling.y = scaleY;
-    mesh.scaling.z = scaleXZ;
+    mesh.scaling.x = scale;
+    mesh.scaling.y = scale;
+    mesh.scaling.z = scale;
+  }
+  const q = quatFromBasis(rx, ry, rz, nx, ny, nz, tx, ty, tz);
+  const rq = mesh.rotationQuaternion;
+  if (rq) {
+    if (typeof rq.set === 'function') rq.set(q.x, q.y, q.z, q.w);
+    else {
+      rq.x = q.x;
+      rq.y = q.y;
+      rq.z = q.z;
+      rq.w = q.w;
+    }
   }
   mesh.visible = true;
   mesh.markLocalDirty?.();
@@ -229,7 +330,7 @@ function hideMesh(mesh) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createBuildingRadialMenu(engine, scene, groundYAt) {
-  const ringMat = makeRingMaterial(MENU_RING_COLOR, MENU_RING_EMISSIVE);
+  const ringMat = makeRingMaterial(MENU_RING_COLOR, MENU_RING_EMISSIVE, MENU_RING_ALPHA);
 
   // Menu ring: annulus authored at outerR=1 → scale XZ to MENU_RING_OUTER.
   const menuRing = createAnnulusMesh(engine, 'build-menu-ring', {
@@ -301,7 +402,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   }
 
   const items = PLACEABLE_BUILDINGS.filter((b) => icons.has(b.id));
-  /** @type {{ type: string, ang: number, x: number, y: number, z: number, yaw: number }[]} */
+  /** @type {{ type: string, ang: number, x: number, y: number, z: number }[]} */
   let slots = [];
   let open = false;
   let anchorX = 0;
@@ -311,6 +412,111 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   let centerY = 0;
   let hudScale = 1;
   let hoverIndex = -1;
+  // Menu basis: right (screen X), normal (tilted up), planeZ (−planeUp), planeUp.
+  let bx = 1;
+  let by = 0;
+  let bz = 0;
+  let nx = 0;
+  let ny = 1;
+  let nz = 0;
+  let tx = 0;
+  let ty = 0;
+  let tz = -1;
+  let ux = 0;
+  let uy = 1;
+  let uz = 0;
+  // Horizontal toward-camera (for upright icon facing).
+  let hx = 0;
+  let hz = 1;
+
+  function cameraEye(camera) {
+    const wm = camera?.worldMatrix;
+    if (
+      wm &&
+      Number.isFinite(wm[12]) &&
+      Number.isFinite(wm[13]) &&
+      Number.isFinite(wm[14])
+    ) {
+      return { x: wm[12], y: wm[13], z: wm[14] };
+    }
+    const p = camera?.position;
+    if (
+      p &&
+      Number.isFinite(p.x) &&
+      Number.isFinite(p.y) &&
+      Number.isFinite(p.z)
+    ) {
+      return { x: p.x, y: p.y, z: p.z };
+    }
+    // ArcRotate: eye = target + (r·cosα·sinβ, r·cosβ, r·sinα·sinβ).
+    const t = camera?.target;
+    const tx = t?.x ?? 0;
+    const ty = t?.y ?? 0;
+    const tz = t?.z ?? 0;
+    const a = camera?.alpha ?? -Math.PI / 2.1;
+    const b = camera?.beta ?? Math.PI / 3.2;
+    const r = camera?.radius ?? 110;
+    let sb = Math.sin(b);
+    if (Math.abs(sb) < 1e-4) sb = 1e-4;
+    const cb = Math.cos(b);
+    return {
+      x: tx + r * Math.cos(a) * sb,
+      y: ty + r * cb,
+      z: tz + r * Math.sin(a) * sb,
+    };
+  }
+
+  /**
+   * Tilt the menu toward the camera (fixed lean, not a billboard).
+   * Option angles stay screen-stable: ang=−π/2 is screen-top.
+   * Annulus local axes: X=right, Y=normal, Z=−planeUp.
+   * @param {object | null | undefined} camera
+   */
+  function updateBasis(camera) {
+    const eye = cameraEye(camera);
+    let thx = eye.x - centerX;
+    let thz = eye.z - centerZ;
+    let hlen = Math.hypot(thx, thz);
+    if (hlen < 1e-4) {
+      const a = camera?.alpha ?? 0;
+      thx = Math.cos(a);
+      thz = Math.sin(a);
+      hlen = 1;
+    } else {
+      thx /= hlen;
+      thz /= hlen;
+    }
+    hx = thx;
+    hz = thz;
+
+    const st = Math.sin(MENU_TILT);
+    const ct = Math.cos(MENU_TILT);
+    // Lean toward camera azimuth; stay mostly horizontal.
+    nx = thx * st;
+    ny = ct;
+    nz = thz * st;
+
+    // Screen-right = worldUp × towardCamHorizontal.
+    bx = thz;
+    by = 0;
+    bz = -thx;
+
+    // planeUp = normal × right → toward screen-top on the tilted disc.
+    let pux = ny * bz - nz * by;
+    let puy = nz * bx - nx * bz;
+    let puz = nx * by - ny * bx;
+    const pulen = Math.hypot(pux, puy, puz) || 1;
+    pux /= pulen;
+    puy /= pulen;
+    puz /= pulen;
+    ux = pux;
+    uy = puy;
+    uz = puz;
+
+    tx = -ux;
+    ty = -uy;
+    tz = -uz;
+  }
 
   function hideAllIcons() {
     for (const batch of icons.values()) {
@@ -374,23 +580,86 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     }
   }
 
-  function scaleForCamera(camera) {
-    const minR = camera?.lowerRadiusLimit ?? 40;
-    const maxR = camera?.upperRadiusLimit ?? 400;
-    const r = camera?.radius ?? (minR + maxR) * 0.5;
-    const t = Math.min(1, Math.max(0, (r - minR) / Math.max(1e-6, maxR - minR)));
-    return HUD_SCALE_AT_NEAR + t * (HUD_SCALE_AT_FAR - HUD_SCALE_AT_NEAR);
+  /** World scale from eye→menu distance so apparent size stays steady. */
+  function scaleForDistance(camera, fromX, fromY, fromZ) {
+    const eye = cameraEye(camera);
+    const dist =
+      Math.hypot(eye.x - fromX, eye.y - fromY, eye.z - fromZ) || HUD_REF_DIST;
+    if (!Number.isFinite(dist)) return hudScale;
+    return Math.max(HUD_SCALE_MIN, HUD_BASE_SCALE * (dist / HUD_REF_DIST));
+  }
+
+  /**
+   * Stay on the agora: height clears the tilted rim, slight pull toward the eye.
+   * @param {object | null | undefined} camera
+   */
+  function placeCenter(camera) {
+    const gy = groundYAt(anchorX, anchorZ);
+    const groundY = Number.isFinite(gy) ? gy : 0;
+    const clearY = MENU_Y + Math.sin(MENU_TILT) * RIM_R * hudScale + 1.2;
+    let x = anchorX;
+    let y = groundY + clearY;
+    let z = anchorZ;
+
+    const eye = cameraEye(camera);
+    const dx = eye.x - x;
+    const dy = eye.y - y;
+    const dz = eye.z - z;
+    const dist = Math.hypot(dx, dy, dz);
+    if (Number.isFinite(dist) && dist > 1e-4) {
+      const t = MENU_DEPTH_BIAS_FRAC;
+      x += dx * t;
+      y += dy * t;
+      z += dz * t;
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      centerX = anchorX;
+      centerY = groundY + clearY;
+      centerZ = anchorZ;
+      return;
+    }
+    centerX = x;
+    centerY = y;
+    centerZ = z;
+  }
+
+  /** Agora-anchored pose only — no screen-edge floating. */
+  function syncPose(camera) {
+    placeCenter(camera);
+    hudScale = scaleForDistance(camera, centerX, centerY, centerZ);
+    placeCenter(camera);
+    updateBasis(camera);
   }
 
   function redrawSlot(i) {
     const s = slots[i];
     if (!s) return;
     const iconScale = OPTION_SCALE * hudScale;
-    const iconY = s.y + ICON_LIFT * hudScale;
+    const lift = ICON_LIFT * hudScale;
+    const iconX = s.x + nx * lift;
+    const iconY = s.y + ny * lift;
+    const iconZ = s.z + nz * lift;
     const batch = icons.get(s.type);
     if (!batch) return;
+    // Upright icons, yawed toward camera (right-handed: X×Y=Z, −Z toward camera).
     for (const layer of batch.layers) {
-      writeMatrix(layer.matrices, 0, s.x, iconY, s.z, s.yaw, iconScale);
+      writeFacingMatrix(
+        layer.matrices,
+        0,
+        iconX,
+        iconY,
+        iconZ,
+        -bx,
+        0,
+        -bz,
+        0,
+        1,
+        0,
+        -hx,
+        0,
+        -hz,
+        iconScale,
+      );
       setThinInstanceCount(layer.mesh, 1);
       flushThinInstances(layer.mesh);
     }
@@ -401,10 +670,25 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   function layout() {
     const s = hudScale;
     // Annulus mesh outerR=1 → world outer = MENU_RING_OUTER * s
-    placeMesh(menuRing, centerX, centerY, centerZ, MENU_RING_OUTER * s, MENU_RING_OUTER * s);
+    placeMeshOriented(
+      menuRing,
+      centerX,
+      centerY,
+      centerZ,
+      MENU_RING_OUTER * s,
+      bx,
+      by,
+      bz,
+      nx,
+      ny,
+      nz,
+      tx,
+      ty,
+      tz,
+    );
 
     const rimR = RIM_R * s;
-    const padY = centerY + PAD_LIFT * s;
+    const padLift = PAD_LIFT * s;
     const n = slots.length;
     for (let i = 0; i < pads.length; i++) {
       if (i >= n) {
@@ -413,11 +697,28 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
         continue;
       }
       const slot = slots[i];
-      slot.x = centerX + Math.cos(slot.ang) * rimR;
-      slot.z = centerZ + Math.sin(slot.ang) * rimR;
-      slot.y = padY;
-      slot.yaw = slot.ang + Math.PI;
-      placeMesh(pads[i].mesh, slot.x, slot.y, slot.z, PAD_OUTER * s, PAD_OUTER * s);
+      const ca = Math.cos(slot.ang);
+      const sa = Math.sin(slot.ang);
+      // Polar on the tilted plane; ang=−π/2 → screen-top.
+      slot.x = centerX + (ca * bx + sa * tx) * rimR + nx * padLift;
+      slot.y = centerY + (ca * by + sa * ty) * rimR + ny * padLift;
+      slot.z = centerZ + (ca * bz + sa * tz) * rimR + nz * padLift;
+      placeMeshOriented(
+        pads[i].mesh,
+        slot.x,
+        slot.y,
+        slot.z,
+        PAD_OUTER * s,
+        bx,
+        by,
+        bz,
+        nx,
+        ny,
+        nz,
+        tx,
+        ty,
+        tz,
+      );
       redrawSlot(i);
     }
   }
@@ -430,11 +731,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   function showAt(x, z, camera = null) {
     anchorX = x;
     anchorZ = z;
-    centerX = x;
-    centerZ = z;
-    centerY = groundYAt(x, z) + MENU_Y;
     hoverIndex = -1;
-    hudScale = scaleForCamera(camera);
+    syncPose(camera);
 
     const n = Math.min(MAX_OPTIONS, items.length);
     slots = [];
@@ -448,7 +746,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
         x: 0,
         y: centerY,
         z: 0,
-        yaw: 0,
       });
     }
     open = true;
@@ -460,15 +757,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
    */
   function update(camera) {
     if (!open) return;
-    centerX = anchorX;
-    centerZ = anchorZ;
-    centerY = groundYAt(anchorX, anchorZ) + MENU_Y;
-    const next = scaleForCamera(camera);
-    if (Math.abs(next - hudScale) < 0.0005) {
-      if (slots.length && Math.abs(slots[0].y - centerY) > 0.01) layout();
-      return;
-    }
-    hudScale = next;
+    syncPose(camera);
     layout();
   }
 
@@ -523,30 +812,53 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
     return slots[hoverIndex]?.type ?? null;
   }
 
-  function padPlaneY() {
-    return centerY + PAD_LIFT * hudScale;
+  function padPlanePoint() {
+    const lift = PAD_LIFT * hudScale;
+    return {
+      x: centerX + nx * lift,
+      y: centerY + ny * lift,
+      z: centerZ + nz * lift,
+    };
   }
 
   /**
-   * Full option disc (ring + hole) under the cursor ray.
+   * Option under the cursor: pad disc (ring + hole) and/or icon sphere.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    * @returns {string | null}
    */
   function pickOptionAtRay(ray) {
     if (!open || !ray || !slots.length) return null;
-    const hit = rayHitPlaneY(ray, padPlaneY());
-    if (!hit) return null;
-    const r = PAD_OUTER * hudScale;
-    const r2 = r * r;
+    const pp = padPlanePoint();
+    const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
+    const padR = PAD_OUTER * hudScale;
+    const padR2 = padR * padR;
+    const iconR = ICON_PICK_R * hudScale;
+    const iconLift = ICON_LIFT * hudScale;
+
     let bestType = null;
-    let bestD2 = Infinity;
+    let bestT = Infinity;
+
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
-      const dx = hit.x - s.x;
-      const dz = hit.z - s.z;
-      const d2 = dx * dx + dz * dz;
-      if (d2 <= r2 && d2 < bestD2) {
-        bestD2 = d2;
+
+      // Pad disc on the tilted menu plane (full disc including hole).
+      if (padHit) {
+        const dx = padHit.x - s.x;
+        const dy = padHit.y - s.y;
+        const dz = padHit.z - s.z;
+        if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
+          bestT = padHit.t;
+          bestType = s.type;
+        }
+      }
+
+      // Icon volume — models sit above the pad and are larger than PAD_OUTER.
+      const ix = s.x + nx * iconLift;
+      const iy = s.y + ny * iconLift;
+      const iz = s.z + nz * iconLift;
+      const iconT = rayHitSphereT(ray, ix, iy, iz, iconR);
+      if (iconT != null && iconT < bestT) {
+        bestT = iconT;
         bestType = s.type;
       }
     }
@@ -554,15 +866,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt) {
   }
 
   /**
-   * Sync gesture: over an option disc or the main ring band.
+   * Sync gesture: over an option (pad or icon) or the main ring band.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    */
   function hitAtRay(ray) {
     if (!open || !ray) return false;
     if (pickOptionAtRay(ray)) return true;
-    const hit = rayHitPlaneY(ray, centerY);
+    const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
     if (!hit) return false;
-    const d = Math.hypot(hit.x - centerX, hit.z - centerZ);
+    const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
     const outer = MENU_RING_OUTER * hudScale;
     const inner = MENU_RING_INNER * hudScale;
     return d >= inner && d <= outer;

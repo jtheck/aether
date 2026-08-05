@@ -9,7 +9,7 @@ import { fellTreeAt } from './trees.js';
 /** @typedef {'block' | 'slow'} BuildingOccupancyMode */
 
 /** Placement / ghost yaw snaps (radians). Visual only — footprints stay axis-aligned. */
-export const BUILDING_YAW_SNAP = Math.PI / 6;
+export const BUILDING_YAW_SNAP = Math.PI / 12;
 
 /**
  * @param {number} yawRad

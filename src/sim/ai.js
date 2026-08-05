@@ -100,7 +100,7 @@ export function generateAiCommands(world, aiConfig, opts = {}) {
     const aDist2 = fx.mul(adx, adx) + fx.mul(ady, ady);
     if (aDist2 > range2) {
       // Still allow occasional casts if somehow in range unit-wise — skip move.
-      return collectCasts(world, aiOwner, temper, cx, cy);
+      return collectCasts(world, aiOwner, temper);
     }
   }
 
@@ -132,20 +132,36 @@ export function generateAiCommands(world, aiConfig, opts = {}) {
     cmds.push({ type: CMD.ATTACK_MOVE, entities: ids, tx, ty });
   }
 
-  const casts = collectCasts(world, aiOwner, temper, cx, cy);
+  const casts = collectCasts(world, aiOwner, temper);
   for (let c = 0; c < casts.length; c++) cmds.push(casts[c]);
   return cmds;
+}
+
+/**
+ * Aim point for an offensive cast — current combat target only.
+ * Skipping the FFA enemy centroid avoids every caster dumping on map-middle.
+ * @returns {{ x: number, y: number } | null}
+ */
+function castAimPoint(world, caster, aiOwner) {
+  const t = world.targetEntity[caster];
+  if (
+    t < 0 ||
+    t >= world.count ||
+    !world.alive[t] ||
+    !isHostile(aiOwner, world.owner[t])
+  ) {
+    return null;
+  }
+  return { x: world.px[t], y: world.py[t] };
 }
 
 /**
  * @param {object} world
  * @param {number} aiOwner
  * @param {AiTemperament} temper
- * @param {number} aimX
- * @param {number} aimY
  * @returns {import('./commands.js').Command[]}
  */
-function collectCasts(world, aiOwner, temper, aimX, aimY) {
+function collectCasts(world, aiOwner, temper) {
   /** @type {import('./commands.js').Command[]} */
   const out = [];
   let castCount = 0;
@@ -158,11 +174,16 @@ function collectCasts(world, aiOwner, temper, aimX, aimY) {
     if (def.category !== 'military') continue;
     if ((rngU32(world.rng) % 100) >= temper.castChance) continue;
 
-    let tx = aimX;
-    let ty = aimY;
+    let tx;
+    let ty;
     if (def.primaryAbility === ABILITY.HOLY_ARMOR) {
       tx = world.px[i];
       ty = world.py[i];
+    } else {
+      const aim = castAimPoint(world, i, aiOwner);
+      if (!aim) continue;
+      tx = aim.x;
+      ty = aim.y;
     }
     out.push({
       type: CMD.CAST,

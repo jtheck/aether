@@ -4,6 +4,7 @@
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
 import { snapBuildingYaw } from '../../sim/buildings.js';
+import { MAX_ENTITIES } from '../../sim/world.js';
 import { isMechanical, isTransport, UNIT } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
@@ -40,11 +41,16 @@ const ABILITY_HOLD_MS = 400;
  * @param {(x: number, z: number, yaw?: number) => void} [opts.onPlacementMove]
  * @param {(x: number, z: number, yaw?: number) => void} [opts.onPlacementConfirm]
  * @param {() => void} [opts.onPlacementCancel]
+ * @param {() => boolean} [opts.isPlacingRally]
+ * @param {(x: number, z: number) => void} [opts.onRallyMove]
+ * @param {(x: number, z: number) => void} [opts.onRallyConfirm]
+ * @param {() => void} [opts.onRallyCancel]
+ * @param {() => void} [opts.clearRallyPlacement]
  * @param {() => number} [opts.getPlacementYaw]
  * @param {(yaw: number) => void} [opts.setPlacementYaw]
  * @param {() => boolean} [opts.isRadialOpen]
  * @param {(clientX: number, clientY: number) => (string | null) | Promise<string | null>} [opts.pickRadialOption]
- * @param {(pick: string | { kind: 'building' | 'category' | 'unit' | 'upgrade', id: string }) => void} [opts.onRadialPick]
+ * @param {(pick: string | { kind: 'building' | 'category' | 'unit' | 'upgrade' | 'utility' | 'cancel', id?: string }) => void} [opts.onRadialPick]
  * @param {(clientX: number, clientY: number) => void} [opts.onRadialHover]
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadial]
  */
@@ -69,6 +75,11 @@ export function createGameInput(opts) {
     onPlacementMove,
     onPlacementConfirm,
     onPlacementCancel,
+    isPlacingRally,
+    onRallyMove,
+    onRallyConfirm,
+    onRallyCancel,
+    clearRallyPlacement,
     getPlacementYaw,
     setPlacementYaw,
     isRadialOpen,
@@ -82,6 +93,63 @@ export function createGameInput(opts) {
   let selectedBuf = selected;
   let inputEnabled = true;
   const getWorld = typeof worldOrGetter === 'function' ? worldOrGetter : () => worldOrGetter;
+
+  /** Dense selection list — bitset stays for O(1) membership; list for O(sel) orders. */
+  const selIds = new Int32Array(MAX_ENTITIES);
+  const selSlot = new Int32Array(MAX_ENTITIES);
+  selSlot.fill(-1);
+  let selCount = 0;
+
+  function selectEntity(i) {
+    if (i < 0 || selSlot[i] >= 0) return;
+    selSlot[i] = selCount;
+    selIds[selCount++] = i;
+    selectedBuf[i] = 1;
+  }
+
+  function deselectEntity(i) {
+    const s = selSlot[i];
+    if (s < 0) {
+      selectedBuf[i] = 0;
+      return;
+    }
+    const last = selIds[--selCount];
+    selIds[s] = last;
+    selSlot[last] = s;
+    selSlot[i] = -1;
+    selectedBuf[i] = 0;
+  }
+
+  /** Drop dead / externally cleared entries; keep carried (orders skip them). */
+  function compactSelection() {
+    const world = getWorld();
+    let w = 0;
+    for (let k = 0; k < selCount; k++) {
+      const i = selIds[k];
+      if (!selectedBuf[i] || !world.alive[i]) {
+        selectedBuf[i] = 0;
+        selSlot[i] = -1;
+        continue;
+      }
+      if (w !== k) {
+        selIds[w] = i;
+        selSlot[i] = w;
+      }
+      w++;
+    }
+    selCount = w;
+  }
+
+  function rebuildDenseFromBuf() {
+    selCount = 0;
+    selSlot.fill(-1);
+    const n = selectedBuf.length;
+    for (let i = 0; i < n; i++) {
+      if (!selectedBuf[i]) continue;
+      selSlot[i] = selCount;
+      selIds[selCount++] = i;
+    }
+  }
 
   /** @type {{ kind: 'agora' | 'building', index: number } | null} */
   let selectedBuilding = null;
@@ -126,7 +194,7 @@ export function createGameInput(opts) {
   }
 
   function isPlacing() {
-    return Boolean(getPlacingType?.());
+    return Boolean(getPlacingType?.()) || Boolean(isPlacingRally?.());
   }
 
   /**
@@ -136,7 +204,10 @@ export function createGameInput(opts) {
   function abandonPlacement() {
     if (!isPlacing()) return;
     resetPlaceGesture();
-    setPlacingType?.(null);
+    if (isPlacingRally?.()) {
+      if (clearRallyPlacement) clearRallyPlacement();
+      else onRallyCancel?.();
+    } else setPlacingType?.(null);
   }
 
   function currentYaw() {
@@ -294,29 +365,53 @@ export function createGameInput(opts) {
     notifyBuildingSelected(primary, ptr, matched);
   }
 
-  function selectedIds() {
+  /**
+   * Orderable selection (alive, not carried). O(sel), not O(world).
+   * @param {Set<number>} [includeCarried] — unload handoff: keep these riders
+   */
+  function selectedIds(includeCarried) {
+    compactSelection();
     const world = getWorld();
     const ids = [];
-    for (let i = 0; i < world.count; i++) {
-      if (!selectedBuf[i] || !world.alive[i]) continue;
-      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+    for (let k = 0; k < selCount; k++) {
+      const i = selIds[k];
+      if (world.carriedBy && world.carriedBy[i] >= 0 && !includeCarried?.has(i)) continue;
       ids.push(i);
     }
     return ids;
   }
 
+  function hasOrderableSelection() {
+    compactSelection();
+    const world = getWorld();
+    for (let k = 0; k < selCount; k++) {
+      const i = selIds[k];
+      if (!(world.carriedBy && world.carriedBy[i] >= 0)) return true;
+    }
+    return false;
+  }
+
   /** Push current selection into the sim so monks skip co-selected friendlies. */
-  function syncSelectionSquad() {
+  function syncSelectionSquad(includeCarried) {
     if (!canUseInput()) return;
     enqueueCommand({
       type: CMD.SELECT,
       playerId: localPlayerId,
-      entities: selectedIds(),
+      entities: selectedIds(includeCarried),
     });
   }
 
+  function clearUnitSelectionBits() {
+    for (let k = 0; k < selCount; k++) {
+      const i = selIds[k];
+      selectedBuf[i] = 0;
+      selSlot[i] = -1;
+    }
+    selCount = 0;
+  }
+
   function clearUnitSelection() {
-    selectedBuf.fill(0);
+    clearUnitSelectionBits();
     syncSelectionSquad();
     onSelectionChanged?.();
   }
@@ -328,11 +423,11 @@ export function createGameInput(opts) {
 
   function selectAllOfType(typeId, add) {
     const world = getWorld();
-    if (!add) selectedBuf.fill(0);
+    if (!add) clearUnitSelectionBits();
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
-      if (world.type[i] === typeId) selectedBuf[i] = 1;
+      if (world.type[i] === typeId) selectEntity(i);
     }
     clearBuildingSelection();
     syncSelectionSquad();
@@ -348,7 +443,7 @@ export function createGameInput(opts) {
     const maxX = Math.max(x0, x1) - rect.left;
     const minY = Math.min(y0, y1) - rect.top;
     const maxY = Math.max(y0, y1) - rect.top;
-    if (!add) selectedBuf.fill(0);
+    if (!add) clearUnitSelectionBits();
     const world = getWorld();
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
@@ -356,7 +451,7 @@ export function createGameInput(opts) {
       const pos = getUnitWorldPos(i);
       const p = renderer.worldToScreen(pos.x, pos.y, pos.z);
       if (!p) continue;
-      if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) selectedBuf[i] = 1;
+      if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) selectEntity(i);
     }
     clearBuildingSelection();
     syncSelectionSquad();
@@ -438,9 +533,9 @@ export function createGameInput(opts) {
           });
           // Drop boarding riders from selection; keep everyone else; add the vehicle.
           for (let a = 0; a < assignments.length; a++) {
-            selectedBuf[assignments[a].riderId] = 0;
+            deselectEntity(assignments[a].riderId);
           }
-          selectedBuf[hit] = 1;
+          selectEntity(hit);
           clearBuildingSelection();
           syncSelectionSquad();
           onSelectionChanged?.();
@@ -513,21 +608,11 @@ export function createGameInput(opts) {
       // Drop the vehicles; keep the rest of the selection; add spilled riders.
       const spilledSet = new Set(spilled);
       for (let k = 0; k < loadedTransports.length; k++) {
-        selectedBuf[loadedTransports[k]] = 0;
+        deselectEntity(loadedTransports[k]);
       }
-      for (let k = 0; k < spilled.length; k++) selectedBuf[spilled[k]] = 1;
-      const sel = [];
-      for (let i = 0; i < world.count; i++) {
-        if (!selectedBuf[i] || !world.alive[i]) continue;
-        // selectedIds skips carried — include spilled even before sim unloads.
-        if (world.carriedBy?.[i] >= 0 && !spilledSet.has(i)) continue;
-        sel.push(i);
-      }
-      enqueueCommand({
-        type: CMD.SELECT,
-        playerId: localPlayerId,
-        entities: sel,
-      });
+      for (let k = 0; k < spilled.length; k++) selectEntity(spilled[k]);
+      // selectedIds skips carried — include spilled even before sim unloads.
+      syncSelectionSquad(spilledSet);
       onSelectionChanged?.();
       return;
     }
@@ -546,7 +631,7 @@ export function createGameInput(opts) {
     abilityHoldFired = false;
     abilityHoldClientX = clientX;
     abilityHoldClientY = clientY;
-    if (isPlacing() || selectedIds().length === 0) return;
+    if (isPlacing() || !hasOrderableSelection()) return;
 
     // Arm the timer immediately. Waiting on GPU pick first made hold-cast miss under
     // stress (pick latency ate the whole gesture before the 400ms timer even started).
@@ -584,6 +669,7 @@ export function createGameInput(opts) {
 
     // Placement: LMB down locks anchor; drag past threshold rotates (30° snaps).
     // Radial stays usable so you can switch building type without canceling.
+    // Rally mode: click-to-set (no rotate).
     if (isPlacing()) {
       radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
       placeRotating = false;
@@ -591,8 +677,12 @@ export function createGameInput(opts) {
       if (!radialGesture) {
         const g = renderer.screenToGround?.(e.clientX, e.clientY);
         if (g) {
-          placeAnchor = { x: g.x, z: g.z };
-          emitPlacementGhost(g.x, g.z, currentYaw());
+          if (isPlacingRally?.()) {
+            onRallyMove?.(g.x, g.z);
+          } else {
+            placeAnchor = { x: g.x, z: g.z };
+            emitPlacementGhost(g.x, g.z, currentYaw());
+          }
         }
       }
       return true;
@@ -613,6 +703,11 @@ export function createGameInput(opts) {
 
       const g = renderer.screenToGround?.(e.clientX, e.clientY);
       if (!g) return true;
+
+      if (isPlacingRally?.()) {
+        onRallyMove?.(g.x, g.z);
+        return true;
+      }
 
       // LMB held with an anchor → rotate once dragged far enough.
       if (dragPointerId === e.pointerId && placeAnchor && lmbDownPos) {
@@ -708,8 +803,8 @@ export function createGameInput(opts) {
         if (selectAll) {
           selectAllOfType(typeId, e.shiftKey);
         } else {
-          if (!e.shiftKey) selectedBuf.fill(0);
-          selectedBuf[hit] = 1;
+          if (!e.shiftKey) clearUnitSelectionBits();
+          selectEntity(hit);
           clearBuildingSelection();
           syncSelectionSquad();
           onSelectionChanged?.();
@@ -745,7 +840,7 @@ export function createGameInput(opts) {
       return;
     }
 
-    if (selectedIds().length > 0) {
+    if (hasOrderableSelection()) {
       if (!clickCurrent(epoch)) return;
       await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
       return;
@@ -793,17 +888,27 @@ export function createGameInput(opts) {
         }
         if (!radialHandled) {
           // Placement owns LMB — never steal the click for unit selection.
-          const yaw = currentYaw();
-          if (placeRotating && placeAnchor) {
-            onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
-          } else if (
-            d &&
-            Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
-          ) {
-            const g =
-              placeAnchor ??
-              renderer.screenToGround?.(e.clientX, e.clientY);
-            if (g) onPlacementConfirm?.(g.x, g.z, yaw);
+          if (isPlacingRally?.()) {
+            if (
+              d &&
+              Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
+            ) {
+              const g = renderer.screenToGround?.(e.clientX, e.clientY);
+              if (g) onRallyConfirm?.(g.x, g.z);
+            }
+          } else {
+            const yaw = currentYaw();
+            if (placeRotating && placeAnchor) {
+              onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
+            } else if (
+              d &&
+              Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
+            ) {
+              const g =
+                placeAnchor ??
+                renderer.screenToGround?.(e.clientX, e.clientY);
+              if (g) onPlacementConfirm?.(g.x, g.z, yaw);
+            }
           }
         }
         resetPlaceGesture();
@@ -850,7 +955,7 @@ export function createGameInput(opts) {
    */
   function forceMoveAt(clientX, clientY) {
     if (!canUseInput() || isPlacing()) return false;
-    if (selectedIds().length === 0) return false;
+    if (!hasOrderableSelection()) return false;
     lastTap = null;
     const epoch = ++worldClickEpoch;
     void orderAt(clientX, clientY, CMD.MOVE, -1, epoch);
@@ -871,12 +976,33 @@ export function createGameInput(opts) {
     boxDragging = false;
   }
 
-  /** Esc / RMB-tap while placing — cancel placement. */
+  /** Esc while placing — cancel ghost and return to the agora radial. */
   function cancelPlacement() {
     if (!isPlacing()) return false;
     resetPlaceGesture();
+    if (isPlacingRally?.()) {
+      onRallyCancel?.();
+      return true;
+    }
     setPlacingType?.(null);
     onPlacementCancel?.();
+    return true;
+  }
+
+  /**
+   * RMB tap: drop ghost + close radials the same way LMB empty-ground does
+   * (clear building selection). Returns true if build UI was dismissed.
+   */
+  function dismissMenus() {
+    if (!canUseInput()) return false;
+    const hadUi =
+      isPlacing() ||
+      selectedBuilding != null ||
+      selectedBuildings.length > 0 ||
+      Boolean(isRadialOpen?.());
+    if (!hadUi) return false;
+    lastTap = null;
+    clearBuildingSelection();
     return true;
   }
 
@@ -887,7 +1013,9 @@ export function createGameInput(opts) {
     forceMoveAt,
     cancelDrag,
     clearSelection,
+    deselectEntity,
     cancelPlacement,
+    dismissMenus,
     getSelectedBuilding: () => selectedBuilding,
     setSelectedBuilding(sel) {
       notifyBuildingSelected(sel);
@@ -898,6 +1026,7 @@ export function createGameInput(opts) {
     },
     setSelectedBuffer(buf) {
       selectedBuf = buf;
+      rebuildDenseFromBuf();
     },
     setInputEnabled(enabled) {
       inputEnabled = Boolean(enabled);

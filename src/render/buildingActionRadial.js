@@ -1,6 +1,7 @@
 // Building action menu — tilted ring above a selected placeable.
-// Units + upgrades on one ring (no center pie). When both sides exist, the
-// ring splits into two arcs with the fuller side getting more span (≥120°).
+// Center utility pie (Rally / Garrison / Demolish) + outer arcs for units,
+// upgrades, and a fixed bottom Cancel slice. Pad rings show progress; badges
+// show queue counts. Sim wiring comes later — display state is UI-fed.
 
 import {
   addToScene,
@@ -34,35 +35,72 @@ function unitMenuModelUrl(typeId) {
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
-const MENU_RING_OUTER = 14;
-const MENU_RING_INNER = 11.4;
+/**
+ * Outer option ring — kept a fixed band width; pushed out so pads sit farther
+ * from the center pie without scaling the whole menu up.
+ */
+const MENU_RING_OUTER = 17.4;
+const MENU_RING_INNER = 14.8;
 const MENU_RING_H = 0.35;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
-const PAD_OUTER = 2.4;
-const PAD_INNER = 1.55;
+const PAD_OUTER = 4.32;
+const PAD_INNER = 2.79;
 const PAD_H = 0.22;
 const PAD_LIFT = 1.35;
 const ICON_LIFT = 0.85;
-const OPTION_SCALE = 1.0;
-const ICON_PICK_R = 5.2;
-/** Min arc per category when both sides are present (~120°). */
-const MIN_ARC = (Math.PI * 2 * 120) / 360;
-/** Gap between the two category arcs. */
-const ARC_GAP = 0.28;
+const OPTION_SCALE = 1.8;
+const ICON_PICK_R = 9.36;
+/** Min arc for units/upgrades when sharing the usable band (~100°). */
+const MIN_ARC = (Math.PI * 2 * 100) / 360;
+/** Fixed bottom Cancel bite (~75°). */
+const CANCEL_SPAN = (Math.PI * 2 * 75) / 360;
+/**
+ * Constant-width channels between arcs (world units at HUD scale 1).
+ * Parallel-edge treatment — not an angular wedge cut.
+ */
+const ARC_GAP = 2.3;
+/** Center utility pie — fixed size (not tied to ring radius). */
+const PIE_OUTER = 10;
+const PIE_INNER = 3.2;
+const PIE_H = 0.4;
+const PIE_LIFT = 0.25;
+const PIE_SLICE_GAP = 0.8;
+const PIE_ROTATION = 0.13;
 const MENU_TILT = 0.56;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 1;
 const HUD_SCALE_MIN = 0.35;
 const LABEL_FONT_SIZE = 28;
-const LABEL_SCREEN_SCALE = 0.65;
-const LABEL_DOWN = 2.4;
+const LABEL_SCREEN_SCALE = 1.17;
+const LABEL_DOWN = 4.32;
 const LABEL_LIFT = 1.25;
+const BADGE_FONT_SIZE = 34;
+const BADGE_SCREEN_SCALE = 0.95;
+const BADGE_OUT = 2.8;
+const BADGE_SIDE = 2.6;
+const BADGE_LIFT = 1.4;
+const PIE_LABEL_FONT_SIZE = 22;
+const PIE_LABEL_SCREEN_SCALE = 0.72;
+const PIE_LABEL_R = (PIE_OUTER + PIE_INNER) * 0.5;
 const MAX_OPTIONS = 8;
 const MENU_RING_ALPHA = 0.55;
 const PAD_HOVER_COLOR = [1, 0.85, 0.25];
 const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
+const PROGRESS_COLOR = [1, 0.92, 0.35];
+const PROGRESS_EMISSIVE = [0.95, 0.75, 0.2];
+const ARMED_COLOR = [1, 0.45, 0.35];
+const ARMED_EMISSIVE = [0.95, 0.28, 0.18];
+const DULL_ALPHA = 0.28;
+const DULL_COLOR = [0.35, 0.38, 0.42];
+const DULL_EMISSIVE = [0.08, 0.09, 0.1];
+/** Screen label colors — light when live, dark when disabled. */
+const LABEL_TEXT_COLOR = [0.96, 0.94, 0.88, 1];
+const CANCEL_LABEL_TEXT_COLOR = [0.98, 0.85, 0.8, 1];
+const DULL_TEXT_COLOR = [0.18, 0.2, 0.24, 1];
 
-/** @typedef {'unit' | 'upgrade'} ActionCategoryId */
+/** @typedef {'unit' | 'upgrade' | 'cancel'} ActionCategoryId */
+/** @typedef {'rally' | 'garrison' | 'demolish'} UtilityId */
+/** @typedef {null | 'demolish' | 'cancel'} ArmedId */
 
 const CATEGORIES = /** @type {const} */ ({
   unit: {
@@ -81,7 +119,44 @@ const CATEGORIES = /** @type {const} */ ({
     pad: [0.38, 0.86, 0.9],
     padEm: [0.12, 0.52, 0.56],
   },
+  cancel: {
+    id: 'cancel',
+    name: 'Cancel',
+    color: [0.85, 0.32, 0.28],
+    emissive: [0.55, 0.12, 0.1],
+    pad: [0.9, 0.4, 0.35],
+    padEm: [0.5, 0.15, 0.12],
+  },
 });
+
+/** Slash on the cancel pad (🚫) — matches pad color. Unit pad = radius 1. */
+const CANCEL_SLASH_LEN = 1.55;
+const CANCEL_SLASH_WIDTH = 0.38;
+const CANCEL_SLASH_H = 0.12;
+const CANCEL_SLASH_LIFT = 0.2;
+/** Pad-plane rotation for the slash (radians). */
+const CANCEL_SLASH_ANG = -Math.PI / 4;
+
+const UTILITIES = /** @type {const} */ ([
+  {
+    id: 'rally',
+    name: 'Rally',
+    color: [0.45, 0.78, 0.55],
+    emissive: [0.2, 0.5, 0.28],
+  },
+  {
+    id: 'garrison',
+    name: 'Garrison',
+    color: [0.55, 0.62, 0.88],
+    emissive: [0.25, 0.32, 0.62],
+  },
+  {
+    id: 'demolish',
+    name: 'Demolish',
+    color: [0.9, 0.4, 0.32],
+    emissive: [0.6, 0.18, 0.12],
+  },
+]);
 
 /**
  * Flat washer / annulus in XZ (Y up). Unit scale: outer radius = 1.
@@ -172,6 +247,50 @@ function createAnnulusMesh(engine, name, opts = {}) {
     new Float32Array(normals),
     new Uint32Array(indices),
   );
+}
+
+/**
+ * Thin bar in XZ (Y up) for the cancel 🚫 slash. Length along +X.
+ * @param {object} engine
+ * @param {string} name
+ * @param {{ length?: number, width?: number, height?: number }} [opts]
+ */
+function createSlashBarMesh(engine, name, opts = {}) {
+  const len = opts.length ?? CANCEL_SLASH_LEN;
+  const width = opts.width ?? CANCEL_SLASH_WIDTH;
+  const h = opts.height ?? CANCEL_SLASH_H;
+  const hx = len * 0.5;
+  const hz = width * 0.5;
+  const hy = h * 0.5;
+  const positions = new Float32Array([
+    // top (+Y)
+    -hx, hy, -hz, hx, hy, -hz, hx, hy, hz, -hx, hy, hz,
+    // bottom (−Y)
+    -hx, -hy, -hz, -hx, -hy, hz, hx, -hy, hz, hx, -hy, -hz,
+    // +Z
+    -hx, -hy, hz, -hx, hy, hz, hx, hy, hz, hx, -hy, hz,
+    // −Z
+    -hx, -hy, -hz, hx, -hy, -hz, hx, hy, -hz, -hx, hy, -hz,
+    // +X
+    hx, -hy, -hz, hx, -hy, hz, hx, hy, hz, hx, hy, -hz,
+    // −X
+    -hx, -hy, -hz, -hx, hy, -hz, -hx, hy, hz, -hx, -hy, hz,
+  ]);
+  const normals = new Float32Array([
+    0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+    0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
+    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+    0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+    1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+    -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
+  ]);
+  /** @type {number[]} */
+  const indices = [];
+  for (let f = 0; f < 6; f++) {
+    const b = f * 4;
+    indices.push(b, b + 1, b + 2, b, b + 2, b + 3);
+  }
+  return createMeshFromData(engine, name, positions, normals, new Uint32Array(indices));
 }
 
 /**
@@ -473,44 +592,54 @@ function hideMesh(mesh) {
 }
 
 /**
- * Arc spans for units (left) / upgrades (right). Fuller side gets more angle;
- * each side keeps at least MIN_ARC when both are present.
- * `full`: even spacing from screen-top (agora-style). Otherwise center in arc.
+ * Cancel always at screen-bottom (+π/2). Units/upgrades share the remaining
+ * band above it. Arcs abut on separator rays; ARC_GAP is parallel mesh channels.
  * @param {number} unitCount
  * @param {number} upgradeCount
- * @returns {{
- *   units: { start: number, span: number, full?: boolean } | null,
- *   upgrades: { start: number, span: number, full?: boolean } | null,
- * }}
  */
 function computeArcs(unitCount, upgradeCount) {
   const hasU = unitCount > 0;
   const hasG = upgradeCount > 0;
-  if (!hasU && !hasG) return { units: null, upgrades: null };
+  if (!hasU && !hasG) {
+    return { units: null, upgrades: null, cancel: null };
+  }
+
+  const cancel = {
+    start: Math.PI / 2 - CANCEL_SPAN * 0.5,
+    span: CANCEL_SPAN,
+  };
+  const usableStart = cancel.start + cancel.span;
+  const usableSpan = Math.PI * 2 - CANCEL_SPAN;
 
   if (hasU && !hasG) {
     return {
-      units: { start: -Math.PI / 2, span: Math.PI * 2, full: true },
+      units: { start: usableStart, span: usableSpan },
       upgrades: null,
+      cancel,
     };
   }
   if (!hasU && hasG) {
     return {
       units: null,
-      upgrades: { start: -Math.PI / 2, span: Math.PI * 2, full: true },
+      upgrades: { start: usableStart, span: usableSpan },
+      cancel,
     };
   }
 
-  const usable = Math.PI * 2 - 2 * ARC_GAP;
-  const spare = Math.max(0, usable - 2 * MIN_ARC);
+  const minSide = Math.min(MIN_ARC, usableSpan * 0.42);
+  const spare = Math.max(0, usableSpan - 2 * minSide);
   const totalN = unitCount + upgradeCount;
-  const arcU = MIN_ARC + spare * (unitCount / totalN);
-  const arcG = MIN_ARC + spare * (upgradeCount / totalN);
-  // Units left (center π), upgrades right (center 0).
+  const arcU = minSide + spare * (unitCount / totalN);
+  const arcG = usableSpan - arcU;
   return {
-    units: { start: Math.PI - arcU * 0.5, span: arcU },
-    upgrades: { start: -arcG * 0.5, span: arcG },
+    units: { start: usableStart, span: arcU },
+    upgrades: { start: usableStart + arcU, span: arcG },
+    cancel,
   };
+}
+
+function trackKey(kind, id) {
+  return `${kind}:${id}`;
 }
 
 /**
@@ -525,24 +654,7 @@ function computeArcs(unitCount, upgradeCount) {
  * }} [screen]
  */
 export async function createBuildingActionRadial(engine, scene, groundYAt, screen = {}) {
-  const fullRingMat = makeRingMaterial(
-    CATEGORIES.unit.color,
-    CATEGORIES.unit.emissive,
-    MENU_RING_ALPHA,
-  );
-  const fullRing = createAnnulusMesh(engine, 'action-menu-ring', {
-    inner: MENU_RING_INNER / MENU_RING_OUTER,
-    height: MENU_RING_H / MENU_RING_OUTER,
-    segments: 64,
-  });
-  fullRing.material = fullRingMat;
-  fullRing.pickable = false;
-  fullRing.renderOrder = 210;
-  hideMesh(fullRing);
-  addToScene(scene, fullRing);
-
-  /** Split-ring halves — pie-annulus meshes cached per (category, start, end). */
-  /** @type {Map<ActionCategoryId, { mesh: object | null, mat: object, startAng: number, endAng: number }>} */
+  /** @type {Map<'unit' | 'upgrade' | 'cancel', { mesh: object | null, mat: object, startAng: number, endAng: number }>} */
   const arcRings = new Map([
     [
       'unit',
@@ -570,12 +682,25 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         endAng: 0,
       },
     ],
+    [
+      'cancel',
+      {
+        mesh: null,
+        mat: makeRingMaterial(
+          CATEGORIES.cancel.color,
+          CATEGORIES.cancel.emissive,
+          MENU_RING_ALPHA,
+        ),
+        startAng: 0,
+        endAng: 0,
+      },
+    ],
   ]);
   /** @type {Map<string, object>} */
   const arcMeshByKey = new Map();
 
   /**
-   * @param {ActionCategoryId} id
+   * @param {'unit' | 'upgrade' | 'cancel'} id
    * @param {number} startAng
    * @param {number} endAng
    */
@@ -597,7 +722,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       inner: MENU_RING_INNER / MENU_RING_OUTER,
       height: MENU_RING_H / MENU_RING_OUTER,
       segments: 32,
-      gap: 0.04,
+      gap: ARC_GAP / MENU_RING_OUTER,
     });
     mesh.material = entry.mat;
     mesh.pickable = false;
@@ -619,8 +744,46 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const mesh of arcMeshByKey.values()) hideMesh(mesh);
   }
 
+  // Center utility pie
+  const sliceSpan = (Math.PI * 2) / UTILITIES.length;
+  const sliceStart0 = -Math.PI / 2 - sliceSpan * 0.5 + PIE_ROTATION;
+  /** @type {{ id: UtilityId, name: string, mesh: object, mat: object, startAng: number, endAng: number, color: number[], emissive: number[] }[]} */
+  const pieSlices = [];
+  for (let i = 0; i < UTILITIES.length; i++) {
+    const util = UTILITIES[i];
+    const startAng = sliceStart0 + i * sliceSpan;
+    const endAng = startAng + sliceSpan;
+    const mesh = createPieSliceMesh(engine, `action-menu-pie-${util.id}`, {
+      startAng,
+      endAng,
+      inner: PIE_INNER / PIE_OUTER,
+      height: PIE_H / PIE_OUTER,
+      segments: 18,
+      gap: PIE_SLICE_GAP / PIE_OUTER,
+    });
+    const mat = makeRingMaterial(util.color, util.emissive, 0.92);
+    mesh.material = mat;
+    mesh.pickable = false;
+    mesh.renderOrder = 215;
+    hideMesh(mesh);
+    addToScene(scene, mesh);
+    pieSlices.push({
+      id: util.id,
+      name: util.name,
+      mesh,
+      mat,
+      startAng,
+      endAng,
+      color: [...util.color],
+      emissive: [...util.emissive],
+    });
+  }
+
   /** @type {{ mesh: object, mat: object, category: ActionCategoryId }[]} */
   const pads = [];
+  /** Progress overlays — recreated when quantized progress changes. */
+  /** @type {{ mesh: object | null, mat: object, q: number }[]} */
+  const progressPads = [];
   for (let i = 0; i < MAX_OPTIONS; i++) {
     const pad = createAnnulusMesh(engine, `action-menu-pad-${i}`, {
       inner: PAD_INNER / PAD_OUTER,
@@ -634,7 +797,44 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     hideMesh(pad);
     addToScene(scene, pad);
     pads.push({ mesh: pad, mat, category: 'unit' });
+    progressPads.push({
+      mesh: null,
+      mat: makeRingMaterial(PROGRESS_COLOR, PROGRESS_EMISSIVE, 0.95),
+      q: -1,
+    });
   }
+
+  // Dedicated cancel pad + 🚫 slash (no GLB).
+  const cancelPadMesh = createAnnulusMesh(engine, 'action-menu-pad-cancel', {
+    inner: PAD_INNER / PAD_OUTER,
+    height: PAD_H / PAD_OUTER,
+    segments: 28,
+  });
+  const cancelPadMat = makeRingMaterial(
+    CATEGORIES.cancel.pad,
+    CATEGORIES.cancel.padEm,
+  );
+  cancelPadMesh.material = cancelPadMat;
+  cancelPadMesh.pickable = false;
+  cancelPadMesh.renderOrder = 220;
+  hideMesh(cancelPadMesh);
+  addToScene(scene, cancelPadMesh);
+
+  const cancelSlashMesh = createSlashBarMesh(engine, 'action-menu-pad-cancel-slash', {
+    length: CANCEL_SLASH_LEN,
+    width: CANCEL_SLASH_WIDTH,
+    height: CANCEL_SLASH_H / PAD_OUTER,
+  });
+  const cancelSlashMat = makeRingMaterial(
+    CATEGORIES.cancel.pad,
+    CATEGORIES.cancel.padEm,
+    0.98,
+  );
+  cancelSlashMesh.material = cancelSlashMat;
+  cancelSlashMesh.pickable = false;
+  cancelSlashMesh.renderOrder = 221;
+  hideMesh(cancelSlashMesh);
+  addToScene(scene, cancelSlashMesh);
 
   /**
    * Icon key: `unit:warlock` / `upgrade:patronage`
@@ -678,7 +878,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
   }
 
-  // Prefetch every unit/upgrade referenced by any building menu (+ known upgrade assets).
   const unitKeys = new Set();
   const upgradeKeys = new Set(Object.keys(UPGRADE_MODEL_URLS));
   for (const menu of Object.values(BUILDING_MENUS)) {
@@ -696,10 +895,19 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   /** @type {{ data: object, layer: object, text: string }[]} */
   const labels = [];
+  /** @type {{ data: object, layer: object, text: string }[]} */
+  const badges = [];
+  /** @type {{ data: object, layer: object, text: string, id: UtilityId }[]} */
+  const pieLabels = [];
+  /** @type {{ data: object, layer: object, text: string } | null} */
+  let cancelLabel = null;
   let textRenderer = null;
   let textRendererRegistered = false;
+
   if (screen.font) {
     try {
+      /** @type {object[]} */
+      const layers = [];
       for (let i = 0; i < MAX_OPTIONS; i++) {
         const data = createDefaultTextData(
           screen.font,
@@ -713,25 +921,97 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           visible: false,
         });
         labels.push({ data, layer, text: 'Action' });
+        layers.push(layer);
+      }
+      for (let i = 0; i < MAX_OPTIONS; i++) {
+        const data = createDefaultTextData(
+          screen.font,
+          BADGE_FONT_SIZE,
+          '0',
+          [1, 0.95, 0.55, 1],
+        );
+        const layer = createTextLayer(data, {
+          order: MAX_OPTIONS + i,
+          opacity: 0,
+          visible: false,
+        });
+        badges.push({ data, layer, text: '0' });
+        layers.push(layer);
+      }
+      for (let i = 0; i < UTILITIES.length; i++) {
+        const util = UTILITIES[i];
+        const data = createDefaultTextData(
+          screen.font,
+          PIE_LABEL_FONT_SIZE,
+          util.name,
+          LABEL_TEXT_COLOR,
+        );
+        const layer = createTextLayer(data, {
+          order: MAX_OPTIONS * 2 + i,
+          opacity: 0,
+          visible: false,
+        });
+        pieLabels.push({ data, layer, text: util.name, id: util.id, dull: false });
+        layers.push(layer);
+      }
+      {
+        const data = createDefaultTextData(
+          screen.font,
+          LABEL_FONT_SIZE,
+          'Cancel',
+          CANCEL_LABEL_TEXT_COLOR,
+        );
+        const layer = createTextLayer(data, {
+          order: MAX_OPTIONS * 2 + UTILITIES.length,
+          opacity: 0,
+          visible: false,
+        });
+        cancelLabel = { data, layer, text: 'Cancel', dull: false };
+        layers.push(layer);
       }
       textRenderer = createTextRenderer(engine, {
-        layers: labels.map((label) => label.layer),
+        layers,
         clear: false,
       });
     } catch (err) {
       console.warn('[buildingActionRadial] native labels unavailable', err);
-      for (const label of labels) {
-        disposeDefaultTextData(label.data);
-      }
+      for (const label of labels) disposeDefaultTextData(label.data);
+      for (const badge of badges) disposeDefaultTextData(badge.data);
+      for (const label of pieLabels) disposeDefaultTextData(label.data);
+      if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
       labels.length = 0;
+      badges.length = 0;
+      pieLabels.length = 0;
+      cancelLabel = null;
       textRenderer = null;
     }
   }
 
-  /** @type {{ kind: ActionCategoryId, id: string, name: string, iconKey: string, ang: number, x: number, y: number, z: number, category: ActionCategoryId }[]} */
+  /**
+   * @type {{
+   *   kind: 'unit' | 'upgrade' | 'cancel',
+   *   id: string,
+   *   name: string,
+   *   iconKey: string | null,
+   *   ang: number,
+   *   x: number,
+   *   y: number,
+   *   z: number,
+   *   category: ActionCategoryId,
+   * }[]}
+   */
   let slots = [];
-  /** @type {{ units: { start: number, span: number } | null, upgrades: { start: number, span: number } | null }} */
-  let arcs = { units: null, upgrades: null };
+  /** @type {{
+   *   units: { start: number, span: number } | null,
+   *   upgrades: { start: number, span: number } | null,
+   *   cancel: { start: number, span: number } | null,
+   * }}
+   */
+  let arcs = { units: null, upgrades: null, cancel: null };
+  /** Cancel pad world pose (separate from unit/upgrade slots). */
+  let cancelSlot = /** @type {{ ang: number, x: number, y: number, z: number } | null} */ (
+    null
+  );
   let open = false;
   let anchorX = 0;
   let anchorZ = 0;
@@ -740,6 +1020,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   let centerY = 0;
   let hudScale = 1;
   let hoverIndex = -1;
+  let pieHoverId = /** @type {UtilityId | null} */ (null);
+  let cancelHovered = false;
   let bx = 1;
   let by = 0;
   let bz = 0;
@@ -756,6 +1038,18 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   let hz = 1;
   /** @type {string | null} */
   let activeBuildingType = null;
+
+  /** @type {Record<UtilityId | 'cancel', boolean>} */
+  let utilityAvailable = {
+    rally: true,
+    garrison: false,
+    demolish: true,
+    cancel: false,
+  };
+  /** @type {ArmedId} */
+  let armed = null;
+  /** @type {Map<string, { progress: number, count: number }>} */
+  const tracks = new Map();
 
   function hideLabel(label) {
     if (!label) return;
@@ -862,6 +1156,29 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
   }
 
+  function disposeProgressMesh(entry) {
+    if (!entry?.mesh) return;
+    hideMesh(entry.mesh);
+    entry.mesh.dispose?.();
+    entry.mesh = null;
+    entry.q = -1;
+  }
+
+  function hideAllProgress() {
+    for (const entry of progressPads) disposeProgressMesh(entry);
+  }
+
+  function anyTracksActive() {
+    for (const t of tracks.values()) {
+      if ((t.count | 0) > 0 || t.progress > 0) return true;
+    }
+    return false;
+  }
+
+  function syncCancelAvailability() {
+    utilityAvailable.cancel = anyTracksActive();
+  }
+
   function applyPadHover(index, hovered) {
     const pad = pads[index];
     if (!pad) return;
@@ -877,15 +1194,93 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     markMaterialUboDirty(mat);
   }
 
+  function applyCancelPadAppearance() {
+    const mat = cancelPadMat;
+    const available = utilityAvailable.cancel;
+    if (!available) {
+      mat.diffuseColor = [...DULL_COLOR];
+      mat.emissiveColor = [...DULL_EMISSIVE];
+      mat.alpha = DULL_ALPHA;
+    } else if (armed === 'cancel') {
+      mat.diffuseColor = [...ARMED_COLOR];
+      mat.emissiveColor = [...ARMED_EMISSIVE];
+      mat.alpha = 0.98;
+    } else if (cancelHovered) {
+      mat.diffuseColor = [...PAD_HOVER_COLOR];
+      mat.emissiveColor = [...PAD_HOVER_EMISSIVE];
+      mat.alpha = 0.95;
+    } else {
+      mat.diffuseColor = [...CATEGORIES.cancel.pad];
+      mat.emissiveColor = [...CATEGORIES.cancel.padEm];
+      mat.alpha = 0.92;
+    }
+    markMaterialUboDirty(mat);
+
+    // Same color/state as the cancel pad.
+    cancelSlashMat.diffuseColor = [...mat.diffuseColor];
+    cancelSlashMat.emissiveColor = [...mat.emissiveColor];
+    cancelSlashMat.alpha = mat.alpha;
+    markMaterialUboDirty(cancelSlashMat);
+
+    const arcMat = arcRings.get('cancel')?.mat;
+    if (arcMat) {
+      if (!available) {
+        arcMat.diffuseColor = [...DULL_COLOR];
+        arcMat.emissiveColor = [...DULL_EMISSIVE];
+        arcMat.alpha = DULL_ALPHA;
+      } else if (armed === 'cancel') {
+        arcMat.diffuseColor = [...ARMED_COLOR];
+        arcMat.emissiveColor = [...ARMED_EMISSIVE];
+        arcMat.alpha = 0.85;
+      } else {
+        arcMat.diffuseColor = [...CATEGORIES.cancel.color];
+        arcMat.emissiveColor = [...CATEGORIES.cancel.emissive];
+        arcMat.alpha = MENU_RING_ALPHA;
+      }
+      markMaterialUboDirty(arcMat);
+    }
+  }
+
+  function applyPieAppearance() {
+    for (const slice of pieSlices) {
+      const available = utilityAvailable[slice.id];
+      const isArmed = armed === slice.id;
+      const hovered = pieHoverId === slice.id;
+      if (!available) {
+        slice.mat.diffuseColor = [...DULL_COLOR];
+        slice.mat.emissiveColor = [...DULL_EMISSIVE];
+        slice.mat.alpha = DULL_ALPHA;
+      } else if (isArmed) {
+        slice.mat.diffuseColor = [...ARMED_COLOR];
+        slice.mat.emissiveColor = [...ARMED_EMISSIVE];
+        slice.mat.alpha = 0.98;
+      } else if (hovered) {
+        slice.mat.diffuseColor = [
+          Math.min(1, slice.color[0] * 1.15 + 0.08),
+          Math.min(1, slice.color[1] * 1.15 + 0.08),
+          Math.min(1, slice.color[2] * 1.15 + 0.08),
+        ];
+        slice.mat.emissiveColor = [
+          Math.min(1, slice.emissive[0] * 1.25 + 0.1),
+          Math.min(1, slice.emissive[1] * 1.25 + 0.1),
+          Math.min(1, slice.emissive[2] * 1.25 + 0.1),
+        ];
+        slice.mat.alpha = 0.95;
+      } else {
+        slice.mat.diffuseColor = [...slice.color];
+        slice.mat.emissiveColor = [...slice.emissive];
+        slice.mat.alpha = 0.88;
+      }
+      markMaterialUboDirty(slice.mat);
+    }
+  }
+
   function pushSlotsForArc(items, category, arc) {
     if (!arc || !items.length) return;
     const n = Math.min(items.length, MAX_OPTIONS - slots.length);
     for (let i = 0; i < n; i++) {
       const item = items[i];
-      // Full ring: same as agora (first slot at screen-top). Split: center in arc.
-      const ang = arc.full
-        ? arc.start + (i / n) * arc.span
-        : arc.start + ((i + 0.5) / n) * arc.span;
+      const ang = arc.start + ((i + 0.5) / n) * arc.span;
       const iconKey = `${category}:${item.id}`;
       if (!icons.has(iconKey)) continue;
       slots.push({
@@ -904,15 +1299,27 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   function rebuildSlots(menu) {
     hoverIndex = -1;
+    pieHoverId = null;
+    cancelHovered = false;
     hideAllIcons();
+    hideAllProgress();
     slots = [];
+    cancelSlot = null;
     if (!menu) {
-      arcs = { units: null, upgrades: null };
+      arcs = { units: null, upgrades: null, cancel: null };
       return;
     }
     arcs = computeArcs(menu.units.length, menu.upgrades.length);
     pushSlotsForArc(menu.units, 'unit', arcs.units);
     pushSlotsForArc(menu.upgrades, 'upgrade', arcs.upgrades);
+    if (arcs.cancel) {
+      cancelSlot = {
+        ang: arcs.cancel.start + arcs.cancel.span * 0.5,
+        x: 0,
+        y: centerY,
+        z: 0,
+      };
+    }
 
     for (let i = 0; i < labels.length; i++) {
       const label = labels[i];
@@ -923,11 +1330,15 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         label.text = text;
       }
     }
+    for (const badge of badges) hideLabel(badge);
+    hideLabel(cancelLabel);
     for (let i = 0; i < pads.length; i++) {
       const cat = slots[i]?.category ?? 'unit';
       pads[i].category = cat;
       applyPadHover(i, false);
     }
+    applyCancelPadAppearance();
+    applyPieAppearance();
   }
 
   function applyIconHover(iconKey, hovered) {
@@ -982,6 +1393,36 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     updateBasis(camera);
   }
 
+  function ensurePadProgress(i, progress) {
+    const entry = progressPads[i];
+    if (!entry) return;
+    const p = Math.max(0, Math.min(1, progress));
+    const q = p <= 0 ? 0 : Math.max(1, Math.round(p * 32)) / 32;
+    if (q <= 0) {
+      disposeProgressMesh(entry);
+      return;
+    }
+    if (entry.q === q && entry.mesh) return;
+    disposeProgressMesh(entry);
+    const startAng = -Math.PI / 2;
+    const endAng = startAng + q * Math.PI * 2;
+    const mesh = createPieSliceMesh(engine, `action-menu-progress-${i}-${q}`, {
+      startAng,
+      endAng,
+      inner: PAD_INNER / PAD_OUTER,
+      height: (PAD_H * 1.35) / PAD_OUTER,
+      segments: Math.max(6, Math.ceil(q * 28)),
+      gap: 0,
+    });
+    mesh.material = entry.mat;
+    mesh.pickable = false;
+    mesh.renderOrder = 225;
+    hideMesh(mesh);
+    addToScene(scene, mesh);
+    entry.mesh = mesh;
+    entry.q = q;
+  }
+
   function redrawSlot(i) {
     const s = slots[i];
     if (!s) return;
@@ -990,89 +1431,50 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const iconX = s.x + nx * lift;
     const iconY = s.y + ny * lift;
     const iconZ = s.z + nz * lift;
-    const batch = icons.get(s.iconKey);
-    if (!batch) return;
-    // Upright; local +Z (unit forward) toward camera.
-    for (const layer of batch.layers) {
-      writeFacingMatrix(
-        layer.matrices,
-        0,
-        iconX,
-        iconY,
-        iconZ,
-        bx,
-        0,
-        bz,
-        0,
-        1,
-        0,
-        hx,
-        0,
-        hz,
-        iconScale,
-      );
-      setThinInstanceCount(layer.mesh, 1);
-      flushThinInstances(layer.mesh);
-      if (!layer.visible) {
-        setSubtreeVisible(layer.mesh, true);
-        layer.visible = true;
+    if (s.iconKey) {
+      const batch = icons.get(s.iconKey);
+      if (batch) {
+        for (const layer of batch.layers) {
+          writeFacingMatrix(
+            layer.matrices,
+            0,
+            iconX,
+            iconY,
+            iconZ,
+            bx,
+            0,
+            bz,
+            0,
+            1,
+            0,
+            hx,
+            0,
+            hz,
+            iconScale,
+          );
+          setThinInstanceCount(layer.mesh, 1);
+          flushThinInstances(layer.mesh);
+          if (!layer.visible) {
+            setSubtreeVisible(layer.mesh, true);
+            layer.visible = true;
+          }
+        }
+        applyIconHover(s.iconKey, i === hoverIndex);
       }
     }
-    applyIconHover(s.iconKey, i === hoverIndex);
     applyPadHover(i, i === hoverIndex);
-  }
 
-  function redrawLabel(i) {
-    const label = labels[i];
-    const slot = slots[i];
-    const worldToScreen = screen.worldToScreen;
-    const getViewport = screen.getViewport;
-    if (!label || !slot || !open || !worldToScreen || !getViewport) {
-      hideLabel(label);
-      return;
-    }
-    const hovered = i === hoverIndex;
-    const down = LABEL_DOWN * hudScale;
-    const lift = LABEL_LIFT * hudScale;
-    const worldX = slot.x + tx * down + nx * lift;
-    const worldY = slot.y + ty * down + ny * lift;
-    const worldZ = slot.z + tz * down + nz * lift;
-    const origin = worldToScreen(worldX, worldY, worldZ);
-    const viewport = getViewport();
-    if (!origin || !viewport?.width || !viewport?.height) {
-      hideLabel(label);
-      return;
-    }
-    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
-    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
-    const pixelRatio = (sx + sy) * 0.5;
-    const scale = LABEL_SCREEN_SCALE * pixelRatio * (hovered ? 1.05 : 1);
-    const centerOffset = label.data.width * scale * 0.5;
-    const layer = label.layer;
-    layer.positionPx.x = origin.x * sx - centerOffset;
-    layer.positionPx.y = origin.y * sy;
-    layer.rotationRad = 0;
-    layer.scale = scale;
-    layer.opacity = hovered ? 1 : 0.88;
-    layer.visible = true;
-    layer._version++;
-  }
-
-  function layoutRings(s) {
-    const split = Boolean(arcs.units && arcs.upgrades);
-    if (!split) {
-      hideArcRings();
-      const onlyUpgrade = Boolean(arcs.upgrades && !arcs.units);
-      const cat = onlyUpgrade ? CATEGORIES.upgrade : CATEGORIES.unit;
-      fullRingMat.diffuseColor = [...cat.color];
-      fullRingMat.emissiveColor = [...cat.emissive];
-      markMaterialUboDirty(fullRingMat);
+    const track = tracks.get(trackKey(s.kind, s.id));
+    const progress = track?.progress ?? 0;
+    ensurePadProgress(i, progress);
+    const prog = progressPads[i];
+    if (prog?.mesh) {
       placeMeshOriented(
-        fullRing,
-        centerX,
-        centerY,
-        centerZ,
-        MENU_RING_OUTER * s,
+        prog.mesh,
+        s.x,
+        s.y,
+        s.z,
+        PAD_OUTER * hudScale,
         bx,
         by,
         bz,
@@ -1083,13 +1485,161 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         ty,
         tz,
       );
+    }
+  }
+
+  function placeScreenText(label, worldX, worldY, worldZ, scaleMul, opacity) {
+    const worldToScreen = screen.worldToScreen;
+    const getViewport = screen.getViewport;
+    if (!label || !open || !worldToScreen || !getViewport) {
+      hideLabel(label);
       return;
     }
+    const origin = worldToScreen(worldX, worldY, worldZ);
+    const viewport = getViewport();
+    if (!origin || !viewport?.width || !viewport?.height) {
+      hideLabel(label);
+      return;
+    }
+    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
+    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
+    const pixelRatio = (sx + sy) * 0.5;
+    const scale = scaleMul * pixelRatio;
+    const centerOffset = label.data.width * scale * 0.5;
+    const layer = label.layer;
+    layer.positionPx.x = origin.x * sx - centerOffset;
+    layer.positionPx.y = origin.y * sy;
+    layer.rotationRad = 0;
+    layer.scale = scale;
+    layer.opacity = opacity;
+    layer.visible = true;
+    layer._version++;
+  }
 
-    hideMesh(fullRing);
+  function redrawLabel(i) {
+    const label = labels[i];
+    const slot = slots[i];
+    if (!label || !slot) {
+      hideLabel(label);
+      return;
+    }
+    const hovered = i === hoverIndex;
+    const down = LABEL_DOWN * hudScale;
+    const lift = LABEL_LIFT * hudScale;
+    placeScreenText(
+      label,
+      slot.x + tx * down + nx * lift,
+      slot.y + ty * down + ny * lift,
+      slot.z + tz * down + nz * lift,
+      LABEL_SCREEN_SCALE * (hovered ? 1.05 : 1),
+      hovered ? 1 : 0.88,
+    );
+  }
+
+  function redrawBadge(i) {
+    const badge = badges[i];
+    const slot = slots[i];
+    if (!badge || !slot) {
+      hideLabel(badge);
+      return;
+    }
+    const track = tracks.get(trackKey(slot.kind, slot.id));
+    const count = track?.count | 0;
+    if (count < 1) {
+      hideLabel(badge);
+      return;
+    }
+    const text = String(count);
+    if (text !== badge.text) {
+      updateDefaultTextData(badge.data, text, [1, 0.95, 0.55, 1]);
+      badge.text = text;
+    }
+    const out = BADGE_OUT * hudScale;
+    const side = BADGE_SIDE * hudScale;
+    const lift = BADGE_LIFT * hudScale;
+    // Top-right of pad: outward along -tx (toward screen-up-ish) + along bx.
+    placeScreenText(
+      badge,
+      slot.x - tx * out + bx * side + nx * lift,
+      slot.y - ty * out + by * side + ny * lift,
+      slot.z - tz * out + bz * side + nz * lift,
+      BADGE_SCREEN_SCALE,
+      1,
+    );
+  }
+
+  function redrawPieLabels() {
+    const pieLift = PIE_LIFT * hudScale;
+    const r = PIE_LABEL_R * hudScale;
+    for (let i = 0; i < pieLabels.length; i++) {
+      const label = pieLabels[i];
+      const slice = pieSlices[i];
+      if (!label || !slice || !open) {
+        hideLabel(label);
+        continue;
+      }
+      const mid = (slice.startAng + slice.endAng) * 0.5;
+      const ca = Math.cos(mid);
+      const sa = Math.sin(mid);
+      const available = utilityAvailable[slice.id];
+      const dull = !available;
+      if (label.dull !== dull) {
+        updateDefaultTextData(
+          label.data,
+          label.text,
+          dull ? DULL_TEXT_COLOR : LABEL_TEXT_COLOR,
+        );
+        label.dull = dull;
+      }
+      const opacity = dull ? 0.82 : pieHoverId === slice.id || armed === slice.id ? 1 : 0.85;
+      placeScreenText(
+        label,
+        centerX + (ca * bx + sa * tx) * r + nx * pieLift,
+        centerY + (ca * by + sa * ty) * r + ny * pieLift,
+        centerZ + (ca * bz + sa * tz) * r + nz * pieLift,
+        PIE_LABEL_SCREEN_SCALE,
+        opacity,
+      );
+    }
+  }
+
+  function redrawCancelLabel() {
+    if (!cancelLabel || !cancelSlot || !open) {
+      hideLabel(cancelLabel);
+      return;
+    }
+    const down = LABEL_DOWN * hudScale;
+    const lift = LABEL_LIFT * hudScale;
+    const dull = !utilityAvailable.cancel;
+    if (cancelLabel.dull !== dull) {
+      updateDefaultTextData(
+        cancelLabel.data,
+        cancelLabel.text,
+        dull ? DULL_TEXT_COLOR : CANCEL_LABEL_TEXT_COLOR,
+      );
+      cancelLabel.dull = dull;
+    }
+    const opacity = dull
+      ? 0.82
+      : cancelHovered || armed === 'cancel'
+        ? 1
+        : 0.88;
+    placeScreenText(
+      cancelLabel,
+      cancelSlot.x + tx * down + nx * lift,
+      cancelSlot.y + ty * down + ny * lift,
+      cancelSlot.z + tz * down + nz * lift,
+      LABEL_SCREEN_SCALE * (cancelHovered || armed === 'cancel' ? 1.05 : 1),
+      opacity,
+    );
+  }
+
+  function layoutRings(s) {
+    hideArcRings();
     for (const side of [
       { id: /** @type {const} */ ('unit'), arc: arcs.units },
       { id: /** @type {const} */ ('upgrade'), arc: arcs.upgrades },
+      { id: /** @type {const} */ ('cancel'), arc: arcs.cancel },
     ]) {
       if (!side.arc) {
         const entry = arcRings.get(side.id);
@@ -1117,11 +1667,35 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         tz,
       );
     }
+    applyCancelPadAppearance();
   }
 
   function layout() {
     const s = hudScale;
     layoutRings(s);
+
+    const pieLift = PIE_LIFT * s;
+    const pieScale = PIE_OUTER * s;
+    for (const slice of pieSlices) {
+      placeMeshOriented(
+        slice.mesh,
+        centerX + nx * pieLift,
+        centerY + ny * pieLift,
+        centerZ + nz * pieLift,
+        pieScale,
+        bx,
+        by,
+        bz,
+        nx,
+        ny,
+        nz,
+        tx,
+        ty,
+        tz,
+      );
+    }
+    applyPieAppearance();
+    redrawPieLabels();
 
     const rimR = RIM_R * s;
     const padLift = PAD_LIFT * s;
@@ -1129,8 +1703,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (let i = 0; i < pads.length; i++) {
       if (i >= n) {
         hideMesh(pads[i].mesh);
+        disposeProgressMesh(progressPads[i]);
         applyPadHover(i, false);
         hideLabel(labels[i]);
+        hideLabel(badges[i]);
         continue;
       }
       const slot = slots[i];
@@ -1157,6 +1733,63 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       );
       redrawSlot(i);
       redrawLabel(i);
+      redrawBadge(i);
+    }
+
+    if (cancelSlot && arcs.cancel) {
+      const ca = Math.cos(cancelSlot.ang);
+      const sa = Math.sin(cancelSlot.ang);
+      cancelSlot.x = centerX + (ca * bx + sa * tx) * rimR + nx * padLift;
+      cancelSlot.y = centerY + (ca * by + sa * ty) * rimR + ny * padLift;
+      cancelSlot.z = centerZ + (ca * bz + sa * tz) * rimR + nz * padLift;
+      placeMeshOriented(
+        cancelPadMesh,
+        cancelSlot.x,
+        cancelSlot.y,
+        cancelSlot.z,
+        PAD_OUTER * s,
+        bx,
+        by,
+        bz,
+        nx,
+        ny,
+        nz,
+        tx,
+        ty,
+        tz,
+      );
+      // Rotate right/tangent in the pad plane so the bar reads as 🚫.
+      const sc = Math.cos(CANCEL_SLASH_ANG);
+      const ss = Math.sin(CANCEL_SLASH_ANG);
+      const srx = bx * sc + tx * ss;
+      const sry = by * sc + ty * ss;
+      const srz = bz * sc + tz * ss;
+      const stx = -bx * ss + tx * sc;
+      const sty = -by * ss + ty * sc;
+      const stz = -bz * ss + tz * sc;
+      const slashLift = CANCEL_SLASH_LIFT * s;
+      placeMeshOriented(
+        cancelSlashMesh,
+        cancelSlot.x + nx * slashLift,
+        cancelSlot.y + ny * slashLift,
+        cancelSlot.z + nz * slashLift,
+        PAD_OUTER * s,
+        srx,
+        sry,
+        srz,
+        nx,
+        ny,
+        nz,
+        stx,
+        sty,
+        stz,
+      );
+      applyCancelPadAppearance();
+      redrawCancelLabel();
+    } else {
+      hideMesh(cancelPadMesh);
+      hideMesh(cancelSlashMesh);
+      hideLabel(cancelLabel);
     }
   }
 
@@ -1176,6 +1809,16 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     anchorZ = z;
     activeBuildingType = buildingType;
     hoverIndex = -1;
+    pieHoverId = null;
+    cancelHovered = false;
+    armed = null;
+    tracks.clear();
+    utilityAvailable = {
+      rally: true,
+      garrison: false,
+      demolish: true,
+      cancel: false,
+    };
     syncPose(camera);
     rebuildSlots(menu);
     open = true;
@@ -1189,17 +1832,28 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   }
 
   function hide() {
-    hideMesh(fullRing);
     hideArcRings();
+    for (const slice of pieSlices) hideMesh(slice.mesh);
     for (let i = 0; i < pads.length; i++) {
       hideMesh(pads[i].mesh);
       applyPadHover(i, false);
     }
+    hideMesh(cancelPadMesh);
+    hideMesh(cancelSlashMesh);
+    hideAllProgress();
     hideAllIcons();
     for (const label of labels) hideLabel(label);
+    for (const badge of badges) hideLabel(badge);
+    for (const label of pieLabels) hideLabel(label);
+    hideLabel(cancelLabel);
     slots = [];
-    arcs = { units: null, upgrades: null };
+    cancelSlot = null;
+    arcs = { units: null, upgrades: null, cancel: null };
     hoverIndex = -1;
+    pieHoverId = null;
+    cancelHovered = false;
+    armed = null;
+    tracks.clear();
     activeBuildingType = null;
     open = false;
   }
@@ -1215,30 +1869,85 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const prev = hoverIndex;
     hoverIndex = next >= 0 && next < slots.length ? next : -1;
     if (prev >= 0) {
-      applyIconHover(slots[prev].iconKey, false);
+      const prevSlot = slots[prev];
+      if (prevSlot?.iconKey) applyIconHover(prevSlot.iconKey, false);
       applyPadHover(prev, false);
       redrawLabel(prev);
+      redrawBadge(prev);
     }
     if (hoverIndex >= 0) {
-      applyIconHover(slots[hoverIndex].iconKey, true);
+      const slot = slots[hoverIndex];
+      if (slot?.iconKey) applyIconHover(slot.iconKey, true);
       applyPadHover(hoverIndex, true);
       redrawLabel(hoverIndex);
+      redrawBadge(hoverIndex);
     }
   }
 
   function clearHover() {
     setHover(-1);
+    if (pieHoverId != null) {
+      pieHoverId = null;
+      applyPieAppearance();
+      redrawPieLabels();
+    }
+    if (cancelHovered) {
+      cancelHovered = false;
+      applyCancelPadAppearance();
+      redrawCancelLabel();
+    }
   }
 
   /**
-   * @param {{ kind: 'unit' | 'upgrade', id: string } | null | undefined} pick
+   * @param {{ kind: string, id?: string } | null | undefined} pick
    */
   function setHoverFromPick(pick) {
     if (!pick) {
       clearHover();
       return;
     }
-    setHover(slots.findIndex((s) => s.kind === pick.kind && s.id === pick.id));
+    if (pick.kind === 'utility') {
+      setHover(-1);
+      if (cancelHovered) {
+        cancelHovered = false;
+        applyCancelPadAppearance();
+        redrawCancelLabel();
+      }
+      const id = /** @type {UtilityId} */ (pick.id);
+      if (pieHoverId !== id) {
+        pieHoverId = id;
+        applyPieAppearance();
+        redrawPieLabels();
+      }
+      return;
+    }
+    if (pick.kind === 'cancel') {
+      setHover(-1);
+      if (pieHoverId != null) {
+        pieHoverId = null;
+        applyPieAppearance();
+        redrawPieLabels();
+      }
+      if (!cancelHovered) {
+        cancelHovered = true;
+        applyCancelPadAppearance();
+        redrawCancelLabel();
+      }
+      return;
+    }
+    if (pieHoverId != null) {
+      pieHoverId = null;
+      applyPieAppearance();
+      redrawPieLabels();
+    }
+    if (cancelHovered) {
+      cancelHovered = false;
+      applyCancelPadAppearance();
+      redrawCancelLabel();
+    }
+    setHover(
+      slots.findIndex((s) => s.kind === pick.kind && s.id === pick.id),
+    );
   }
 
   function padPlanePoint() {
@@ -1250,12 +1959,66 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     };
   }
 
+  function piePlanePoint() {
+    const lift = PIE_LIFT * hudScale;
+    return {
+      x: centerX + nx * lift,
+      y: centerY + ny * lift,
+      z: centerZ + nz * lift,
+    };
+  }
+
+  function angInSlice(ang, startAng, endAng) {
+    let a = ang;
+    while (a < startAng) a += Math.PI * 2;
+    while (a >= startAng + Math.PI * 2) a -= Math.PI * 2;
+    return a >= startAng && a < endAng;
+  }
+
+  /**
+   * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
+   * @returns {{ kind: 'utility', id: UtilityId } | null}
+   */
+  function pickUtilityAtRay(ray) {
+    const pp = piePlanePoint();
+    const hit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
+    if (!hit) return null;
+    const dx = hit.x - pp.x;
+    const dy = hit.y - pp.y;
+    const dz = hit.z - pp.z;
+    const dist = Math.hypot(dx, dy, dz);
+    const outer = PIE_OUTER * hudScale;
+    const inner = PIE_INNER * hudScale;
+    if (dist > outer || dist < inner) return null;
+    const alongB = dx * bx + dy * by + dz * bz;
+    const alongT = dx * tx + dy * ty + dz * tz;
+    const ang = Math.atan2(alongT, alongB);
+    const edgeInsetAng = Math.asin(
+      Math.min(0.95, (PIE_SLICE_GAP * 0.5 * hudScale) / Math.max(dist, 1e-4)),
+    );
+    for (const slice of pieSlices) {
+      if (
+        angInSlice(
+          ang,
+          slice.startAng + edgeInsetAng,
+          slice.endAng - edgeInsetAng,
+        )
+      ) {
+        return { kind: 'utility', id: slice.id };
+      }
+    }
+    return null;
+  }
+
   /**
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
-   * @returns {{ kind: 'unit' | 'upgrade', id: string } | null}
+   * @returns {{ kind: 'unit' | 'upgrade' | 'utility' | 'cancel', id?: string } | null}
    */
   function pickOptionAtRay(ray) {
-    if (!open || !ray || !slots.length) return null;
+    if (!open || !ray) return null;
+
+    const utilPick = pickUtilityAtRay(ray);
+    if (utilPick) return utilPick;
 
     const pp = padPlanePoint();
     const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
@@ -1266,6 +2029,16 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
     let best = null;
     let bestT = Infinity;
+
+    if (cancelSlot && padHit) {
+      const dx = padHit.x - cancelSlot.x;
+      const dy = padHit.y - cancelSlot.y;
+      const dz = padHit.z - cancelSlot.z;
+      if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
+        bestT = padHit.t;
+        best = { kind: /** @type {const} */ ('cancel') };
+      }
+    }
 
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
@@ -1300,24 +2073,93 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const inner = MENU_RING_INNER * hudScale;
     if (d < inner || d > outer) return false;
 
-    // Split ring: only count hits on an active arc band.
-    if (arcs.units && arcs.upgrades) {
-      const dx = hit.x - centerX;
-      const dy = hit.y - centerY;
-      const dz = hit.z - centerZ;
-      const alongB = dx * bx + dy * by + dz * bz;
-      const alongT = dx * tx + dy * ty + dz * tz;
-      let ang = Math.atan2(alongT, alongB);
-      const inArc = (arc) => {
-        if (!arc) return false;
-        let a = ang;
-        while (a < arc.start) a += Math.PI * 2;
-        while (a >= arc.start + Math.PI * 2) a -= Math.PI * 2;
-        return a >= arc.start && a < arc.start + arc.span;
-      };
-      return inArc(arcs.units) || inArc(arcs.upgrades);
+    const dx = hit.x - centerX;
+    const dy = hit.y - centerY;
+    const dz = hit.z - centerZ;
+    const alongB = dx * bx + dy * by + dz * bz;
+    const alongT = dx * tx + dy * ty + dz * tz;
+    let ang = Math.atan2(alongT, alongB);
+    const edgeInsetAng = Math.asin(
+      Math.min(0.95, (ARC_GAP * 0.5 * hudScale) / Math.max(d, 1e-4)),
+    );
+    const inArc = (arc) => {
+      if (!arc) return false;
+      let a = ang;
+      while (a < arc.start) a += Math.PI * 2;
+      while (a >= arc.start + Math.PI * 2) a -= Math.PI * 2;
+      return (
+        a >= arc.start + edgeInsetAng && a < arc.start + arc.span - edgeInsetAng
+      );
+    };
+    return inArc(arcs.units) || inArc(arcs.upgrades) || inArc(arcs.cancel);
+  }
+
+  /**
+   * @param {{ rally?: boolean, garrison?: boolean, demolish?: boolean, cancel?: boolean }} avail
+   */
+  function setUtilityAvailability(avail) {
+    if (avail.rally != null) utilityAvailable.rally = Boolean(avail.rally);
+    if (avail.garrison != null) utilityAvailable.garrison = Boolean(avail.garrison);
+    if (avail.demolish != null) utilityAvailable.demolish = Boolean(avail.demolish);
+    if (avail.cancel != null) utilityAvailable.cancel = Boolean(avail.cancel);
+    else syncCancelAvailability();
+    if (open) {
+      applyPieAppearance();
+      applyCancelPadAppearance();
+      redrawPieLabels();
+      redrawCancelLabel();
     }
-    return true;
+  }
+
+  /**
+   * @param {Record<string, { progress?: number, count?: number }> | Map<string, { progress?: number, count?: number }>} next
+   */
+  function setTrackDisplay(next) {
+    tracks.clear();
+    const entries =
+      next instanceof Map ? next.entries() : Object.entries(next ?? {});
+    for (const [key, val] of entries) {
+      if (!val) continue;
+      tracks.set(key, {
+        progress: Math.max(0, Math.min(1, Number(val.progress) || 0)),
+        count: Math.max(0, val.count | 0),
+      });
+    }
+    syncCancelAvailability();
+    if (open) layout();
+  }
+
+  /** @param {ArmedId} id */
+  function setArmed(id) {
+    armed = id ?? null;
+    if (open) {
+      applyPieAppearance();
+      applyCancelPadAppearance();
+      redrawPieLabels();
+      redrawCancelLabel();
+    }
+  }
+
+  function clearTracks() {
+    tracks.clear();
+    syncCancelAvailability();
+    armed = armed === 'cancel' ? null : armed;
+    if (open) layout();
+  }
+
+  function getTracks() {
+    /** @type {Record<string, { progress: number, count: number }>} */
+    const out = {};
+    for (const [k, v] of tracks) out[k] = { ...v };
+    return out;
+  }
+
+  function getArmed() {
+    return armed;
+  }
+
+  function isUtilityAvailable(id) {
+    return Boolean(utilityAvailable[id]);
   }
 
   let labelsDisposed = false;
@@ -1333,9 +2175,11 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     if (textRenderer) disposeTextRenderer(textRenderer);
     textRenderer = null;
     textRendererRegistered = false;
-    for (const label of labels) {
-      disposeDefaultTextData(label.data);
-    }
+    for (const label of labels) disposeDefaultTextData(label.data);
+    for (const badge of badges) disposeDefaultTextData(badge.data);
+    for (const label of pieLabels) disposeDefaultTextData(label.data);
+    if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
+    hideAllProgress();
   }
 
   return {
@@ -1348,6 +2192,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     clearHover,
     pickOptionAtRay,
     hitAtRay,
+    setUtilityAvailability,
+    setTrackDisplay,
+    setArmed,
+    clearTracks,
+    getTracks,
+    getArmed,
+    isUtilityAvailable,
     registerLabels,
     disposeLabels,
     get buildingType() {

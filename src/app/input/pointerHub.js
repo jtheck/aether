@@ -41,9 +41,9 @@ export function setupPointerHub({ canvas, camera, game }) {
     }
     if (e.button === 2) {
       const didPan = camera.handlePointerUp(e);
-      // RMB drag pans; RMB tap = force-move (or cancel placement ghost).
+      // RMB drag pans; RMB tap = dismiss build menus / ghost, else force-move.
       if (!didPan) {
-        if (game.cancelPlacement?.()) return;
+        if (game.dismissMenus?.()) return;
         game.forceMoveAt?.(e.clientX, e.clientY);
       }
       return;

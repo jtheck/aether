@@ -5,7 +5,8 @@ import { MAX_WAYPOINTS } from './path.js';
 import { MAX_PATH_HITS } from './projectiles.js';
 import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
-import { applyWorldStructureOccupancy } from './buildings.js';
+import { applyWorldStructureOccupancy, defaultRallyWorld } from './buildings.js';
+import * as fx from './fixed.js';
 import { ensureFrogCapacity } from './frogs.js';
 import { ensureFireZoneCapacity } from './fireZones.js';
 import { capacityFor } from './capacity.js';
@@ -315,6 +316,9 @@ function exportBuildings(buildings) {
     x: b.x | 0,
     z: b.z | 0,
     yaw: b.yaw | 0,
+    hasRally: b.hasRally | 0,
+    rallyX: b.rallyX | 0,
+    rallyZ: b.rallyZ | 0,
   }));
 }
 
@@ -323,13 +327,25 @@ function importBuildings(w, data) {
     w.buildings = [];
     return;
   }
-  w.buildings = data.map((b) => ({
-    owner: b.owner | 0,
-    type: String(b.type),
-    x: b.x | 0,
-    z: b.z | 0,
-    yaw: b.yaw | 0,
-  }));
+  w.buildings = data.map((b) => {
+    const type = String(b.type);
+    const x = b.x | 0;
+    const z = b.z | 0;
+    const yaw = b.yaw | 0;
+    const def = defaultRallyWorld(type, fx.toFloat(x), fx.toFloat(z), fx.toFloat(yaw));
+    const hasRally = b.hasRally != null ? b.hasRally | 0 : 0;
+    return {
+      owner: b.owner | 0,
+      type,
+      x,
+      z,
+      yaw,
+      hasRally,
+      rallyX: hasRally && b.rallyX != null ? b.rallyX | 0 : fx.fromFloat(def.x),
+      rallyZ: hasRally && b.rallyZ != null ? b.rallyZ | 0 : fx.fromFloat(def.z),
+      tracks: [],
+    };
+  });
 }
 
 function exportFieldMutable(field) {

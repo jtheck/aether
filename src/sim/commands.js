@@ -32,7 +32,12 @@ import {
   unloadPassengers,
 } from './transport.js';
 import { beginRepair } from './repair.js';
-import { applyPlaceBuilding } from './buildings.js';
+import {
+  applyPlaceBuilding,
+  applyQueueTrain,
+  applyCancelTrain,
+  applySetRally,
+} from './buildings.js';
 
 export const CMD = {
   MOVE: 1,
@@ -48,6 +53,12 @@ export const CMD = {
   UNLOAD: 9,
   /** Place a building at world xz (stub — no cost / build time). */
   PLACE_BUILDING: 10,
+  /** Queue a unit on a building production track. */
+  QUEUE_TRAIN: 11,
+  /** Cancel all production tracks on a building. */
+  CANCEL_TRAIN: 12,
+  /** Set a building's train rally point (world xz). */
+  SET_RALLY: 13,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -93,6 +104,15 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.PLACE_BUILDING:
         applyPlaceBuilding(world, field, cmd);
+        break;
+      case CMD.QUEUE_TRAIN:
+        applyQueueTrain(world, cmd);
+        break;
+      case CMD.CANCEL_TRAIN:
+        applyCancelTrain(world, cmd);
+        break;
+      case CMD.SET_RALLY:
+        applySetRally(world, cmd);
         break;
       default:
         break;

@@ -26,22 +26,26 @@ import {
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
-const MENU_RING_OUTER = 16;
-const MENU_RING_INNER = 13.2;
+/**
+ * Outer option ring — fixed band width, pushed out from the center pie
+ * (pads move out; pie + pad size stay put).
+ */
+const MENU_RING_OUTER = 19.3;
+const MENU_RING_INNER = 16.5;
 const MENU_RING_H = 0.35;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
-const PAD_OUTER = 2.6;
-const PAD_INNER = 1.7;
+const PAD_OUTER = 4.68;
+const PAD_INNER = 3.06;
 const PAD_H = 0.22;
 /** Lift pad rings (and icons) along the menu normal, off the base ring. */
 const PAD_LIFT = 1.35;
 /** Extra lift of icons along the menu normal above their pad ring. */
 const ICON_LIFT = 0.85;
-const OPTION_SCALE = 0.26;
+const OPTION_SCALE = 0.468;
 /** Pick sphere around each icon (covers the mini building, not just the pad). */
-const ICON_PICK_R = 5.5;
-/** Center category pie — sits in the ring hole. */
-const PIE_OUTER = MENU_RING_INNER * 0.88;
+const ICON_PICK_R = 9.9;
+/** Center category pie — fixed size (not tied to ring radius). */
+const PIE_OUTER = 11.6;
 const PIE_INNER = 3.2;
 const PIE_H = 0.4;
 const PIE_LIFT = 0.25;
@@ -80,8 +84,8 @@ const HUD_SCALE_MIN = 0.35;
 /** While ghost-placing, shrink the open radial so it stays out of the way. */
 const COMPACT_SCALE = 0.7;
 const LABEL_FONT_SIZE = 28;
-const LABEL_SCREEN_SCALE = 0.65;
-const LABEL_DOWN = 2.4;
+const LABEL_SCREEN_SCALE = 1.17;
+const LABEL_DOWN = 4.32;
 const LABEL_LIFT = 1.25;
 /** Exp approach rate for compact scale (higher = snappier; ~30 ≈ 0.1s). */
 const COMPACT_LERP_SPEED = 30;

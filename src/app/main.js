@@ -1,6 +1,6 @@
 // app/ — SimSession (lockstep) + Lite renderer + input.
 
-import { livingByOwner, ORDER } from '../sim/world.js';
+import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
 import { UNIT_DEFS, getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
 import * as fx from '../sim/fixed.js';
 import {
@@ -20,11 +20,21 @@ import {
   BUILDING_FOOTPRINTS,
   buildingHasMenu,
   canPlaceBuildingAt,
+  defaultRallyWorld,
+  isRallyBeyondBuilding,
+  rallyPathWorldPoints,
   snapBuildingYaw,
   snapBuildingWorld,
 } from '../sim/buildings.js';
+import { worldToTile } from '../sim/field.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
+import {
+  OVERLAY_COLLAR_SPIN_DISTANCE_SQ,
+  OVERLAY_MAX_BARS,
+  markNearestN,
+  overlayCameraRef,
+} from '../render/overlayLod.js';
 import { isVatUnitType } from '../render/vatUnits.js';
 import { setupInput } from './input.js';
 import { init as initAudio } from './audio.js';
@@ -66,10 +76,15 @@ const OWNER_TINTS = [
   [0.75, 0.45, 1.0],
 ];
 const DEATH_FADE_MS = 450;
-/** Match game/units.js selection spin. */
+/** Select flourish → idle spin (distance-gated in overlay LOD). */
 const SEL_SPIN_STEADY = 0.006 * 60;
-const SEL_SPIN_START = 1.7;
+const SEL_SPIN_START = 2.8;
 const SEL_SPIN_SETTLE = 6;
+const SEL_SPIN_EPS = 1e-3;
+/** Tint codes for ring write skip. */
+const RING_TINT_WHITE = 0;
+const RING_TINT_RED = 1;
+const RING_TINT_YELLOW = 2;
 /** Skip matrix rewrite when display pose is within this (world units / radians). */
 const POSE_XZ_EPS = 0.03;
 const POSE_XZ_EPS_SQ = POSE_XZ_EPS * POSE_XZ_EPS;
@@ -149,7 +164,6 @@ function rebuildRendererEntities(renderer, session) {
 function forceRendererSync(ctx) {
   if (!ctx?.renderer || !ctx.session) return 0;
   const count = ctx.session.count;
-  ctx.resizeRenderBuffers(count);
   ctx.renderer.setCount(count);
   if (ctx.syncRenderer) return ctx.syncRenderer();
   return rebuildRendererEntities(ctx.renderer, ctx.session);
@@ -380,88 +394,58 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   let renderEntityCount = rebuildRendererEntities(renderer, session);
 
+  // Match sim SoA: fixed MAX_ENTITIES. Never realloc on spawn — selection/pose
+  // state stays stable for the whole match; only live `count` moves.
+  const CAP = MAX_ENTITIES;
   /** Mutable render buffers — frame loop reads this object, not closed-over copies. */
   const bufs = {
-    selected: new Uint8Array(count),
-    wasSelected: new Uint8Array(count),
-    wasAlive: new Uint8Array(count),
-    deathFade: new Float32Array(count),
-    facingYaw: new Float32Array(count),
-    selSpinYaw: new Float32Array(count),
-    selSpinVel: new Float32Array(count),
-    colors: new Float32Array(count * 4),
-    renderX: new Float32Array(count),
-    renderY: new Float32Array(count),
-    renderZ: new Float32Array(count),
+    selected: new Uint8Array(CAP),
+    wasSelected: new Uint8Array(CAP),
+    wasAlive: new Uint8Array(CAP),
+    deathFade: new Float32Array(CAP),
+    facingYaw: new Float32Array(CAP),
+    selSpinYaw: new Float32Array(CAP),
+    selSpinVel: new Float32Array(CAP),
+    /** Last collar write — skip GPU dirty once spin settles and pose/tint hold. */
+    ringX: new Float32Array(CAP),
+    ringZ: new Float32Array(CAP),
+    ringSize: new Float32Array(CAP),
+    ringTint: new Uint8Array(CAP),
+    colors: new Float32Array(CAP * 4),
+    renderX: new Float32Array(CAP),
+    renderY: new Float32Array(CAP),
+    renderZ: new Float32Array(CAP),
     /** Last matrix write — skip rewrite when pose is unchanged. */
-    poseX: new Float32Array(count),
-    poseZ: new Float32Array(count),
-    poseYaw: new Float32Array(count),
-    poseSize: new Float32Array(count),
-    poseLoft: new Float32Array(count),
-    poseMoving: new Uint8Array(count),
-    poseValid: new Uint8Array(count),
+    poseX: new Float32Array(CAP),
+    poseZ: new Float32Array(CAP),
+    poseYaw: new Float32Array(CAP),
+    poseSize: new Float32Array(CAP),
+    poseLoft: new Float32Array(CAP),
+    poseMoving: new Uint8Array(CAP),
+    poseValid: new Uint8Array(CAP),
     /** Cached terrain height for unchanged xz. */
-    cacheGx: new Float32Array(count),
-    cacheGz: new Float32Array(count),
-    cacheGy: new Float32Array(count),
+    cacheGx: new Float32Array(CAP),
+    cacheGz: new Float32Array(CAP),
+    cacheGy: new Float32Array(CAP),
     /** Deferred health chips: [x, z, size, ratio] × N (selected first at flush). */
-    hbSelected: new Float32Array(count * 4),
-    hbHurt: new Float32Array(count * 4),
+    hbSelected: new Float32Array(CAP * 4),
+    hbHurt: new Float32Array(CAP * 4),
     /** Passenger deck packing for carried units. */
-    passengerSlot: new Int32Array(count),
-    passengerTotalOf: new Int32Array(count),
-    passengerNextSlot: new Int32Array(count),
+    passengerSlot: new Int32Array(CAP),
+    passengerTotalOf: new Int32Array(CAP),
+    passengerNextSlot: new Int32Array(CAP),
+    /** Overlay LOD: spin allow mask + nearest-N health-bar pick. */
+    overlaySpinAllow: new Uint8Array(CAP),
+    overlayBarIds: new Int32Array(CAP),
+    overlayBarD2: new Float32Array(CAP),
+    overlayBarAllow: new Uint8Array(CAP),
   };
   bufs.wasAlive.fill(1);
   bufs.cacheGx.fill(NaN);
   bufs.cacheGz.fill(NaN);
   bufs.cacheGy.fill(NaN);
-
-  function resizeRenderBuffers(n) {
-    const prevFacing = bufs.facingYaw;
-    const prevSpinYaw = bufs.selSpinYaw;
-    const prevSpinVel = bufs.selSpinVel;
-    const prevWasSel = bufs.wasSelected;
-    bufs.selected = new Uint8Array(n);
-    bufs.wasSelected = new Uint8Array(n);
-    bufs.wasAlive = new Uint8Array(n);
-    bufs.wasAlive.fill(1);
-    bufs.deathFade = new Float32Array(n);
-    bufs.facingYaw = new Float32Array(n);
-    bufs.selSpinYaw = new Float32Array(n);
-    bufs.selSpinVel = new Float32Array(n);
-    bufs.colors = new Float32Array(n * 4);
-    bufs.renderX = new Float32Array(n);
-    bufs.renderY = new Float32Array(n);
-    bufs.renderZ = new Float32Array(n);
-    bufs.poseX = new Float32Array(n);
-    bufs.poseZ = new Float32Array(n);
-    bufs.poseYaw = new Float32Array(n);
-    bufs.poseSize = new Float32Array(n);
-    bufs.poseLoft = new Float32Array(n);
-    bufs.poseMoving = new Uint8Array(n);
-    bufs.poseValid = new Uint8Array(n);
-    bufs.cacheGx = new Float32Array(n);
-    bufs.cacheGz = new Float32Array(n);
-    bufs.cacheGy = new Float32Array(n);
-    bufs.cacheGx.fill(NaN);
-    bufs.cacheGz.fill(NaN);
-    bufs.cacheGy.fill(NaN);
-    bufs.hbSelected = new Float32Array(n * 4);
-    bufs.hbHurt = new Float32Array(n * 4);
-    bufs.passengerSlot = new Int32Array(n);
-    bufs.passengerTotalOf = new Int32Array(n);
-    bufs.passengerNextSlot = new Int32Array(n);
-    const copy = Math.min(n, prevFacing?.length ?? 0);
-    for (let i = 0; i < copy; i++) {
-      bufs.facingYaw[i] = prevFacing[i];
-      bufs.selSpinYaw[i] = prevSpinYaw[i];
-      bufs.selSpinVel[i] = prevSpinVel[i];
-      bufs.wasSelected[i] = prevWasSel[i];
-    }
-    inputApi?.setSelectedBuffer?.(bufs.selected);
-  }
+  bufs.ringX.fill(NaN);
+  bufs.ringZ.fill(NaN);
 
   let fpsDisplay = 0;
   let fpsAcc = 0;
@@ -499,12 +483,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   session.onWorldRebuilt = (entityCount) => {
     if (session._pendingWorldGen != null && session._pendingWorldGen !== liveConfigGeneration) return;
-    resizeRenderBuffers(entityCount);
     renderer.setCount(entityCount);
     renderEntityCount = rebuildRendererEntities(renderer, session);
     renderer.clearProjectiles?.();
     renderer.placeAgoras?.(session.agoras);
     renderer.placeBuildings?.(session.buildings);
+    syncRallyFlagMarkers();
     if (session.field) renderer.setField?.(session.field);
     updateColors();
     if (matchMeta.mode === 'koth') {
@@ -518,6 +502,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.refreshTileGrid?.();
     }
     renderer.placeBuildings?.(list);
+    syncRallyFlagMarkers(list);
   };
 
   function paintStatus() {
@@ -569,6 +554,101 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /** @type {string | null} */
   let placingType = null;
+  /** True while setting a production building's train rally with the flag cursor. */
+  let placingRally = false;
+  /** @type {{ kind: 'agora' | 'building', index: number }[]} */
+  let selectedBuildings = [];
+  /** Ghost A* cache — repath only when the cursor enters a new tile. */
+  let ghostPathTileKey = -1;
+  /** @type {{ x: number, z: number }[] | null} */
+  let ghostPathPoints = null;
+
+  function rallyMarkerFor(b, rx, rz) {
+    return {
+      x: rx,
+      z: rz,
+      fromX: b.x,
+      fromZ: b.z,
+      points: rallyPathWorldPoints(session.field, b, rx, rz),
+      yaw: b.yaw ?? 0,
+      owner: b.owner | 0,
+    };
+  }
+
+  function setRallyGhostAt(b, x, z) {
+    const tx = worldToTile(fx.fromFloat(x));
+    const tz = worldToTile(fx.fromFloat(z));
+    const key = ((tz & 0xffff) << 16) | (tx & 0xffff);
+    if (key !== ghostPathTileKey || !ghostPathPoints) {
+      ghostPathTileKey = key;
+      ghostPathPoints = rallyPathWorldPoints(session.field, b, x, z);
+    } else {
+      // Same tile — keep the A* spine, pin the tip to the live cursor.
+      const pts = ghostPathPoints.slice();
+      if (pts.length) pts[pts.length - 1] = { x, z };
+      else pts.push({ x, z });
+      ghostPathPoints = pts;
+    }
+    renderer.setRallyGhost?.({
+      x,
+      z,
+      fromX: b.x,
+      fromZ: b.z,
+      points: ghostPathPoints,
+      owner: localPlayerId,
+    });
+  }
+
+  function syncRallyFlagMarkers(list = session.buildings) {
+    const markers = [];
+    const buildings = list ?? [];
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (sel?.kind !== 'building') continue;
+      const b = buildings[sel.index];
+      if (!b?.hasRally) continue;
+      if (!isRallyBeyondBuilding(b.type, b.x, b.z, b.rallyX, b.rallyZ)) continue;
+      markers.push(rallyMarkerFor(b, b.rallyX, b.rallyZ));
+    }
+    renderer.placeRallyFlags?.(markers);
+  }
+
+  function beginRallyPlacement() {
+    if (actionBuildingIndex < 0 || localPlayerId < 0) return;
+    const b = session.buildings?.[actionBuildingIndex];
+    if (!b || b.owner !== localPlayerId) return;
+    placingRally = true;
+    ghostPathTileKey = -1;
+    ghostPathPoints = null;
+    applyPlacingType(null);
+    renderer.setActionRadialArmed?.(null);
+    renderer.hideActionRadial?.();
+    const yaw = b.yaw ?? 0;
+    let rx;
+    let rz;
+    if (
+      b.hasRally &&
+      isRallyBeyondBuilding(b.type, b.x, b.z, b.rallyX, b.rallyZ)
+    ) {
+      rx = b.rallyX;
+      rz = b.rallyZ;
+    } else {
+      const def = defaultRallyWorld(b.type, b.x, b.z, yaw);
+      rx = def.x;
+      rz = def.z;
+    }
+    setRallyGhostAt(b, rx, rz);
+    // Hide planted marker while the ghost owns the cursor.
+    renderer.placeRallyFlags?.([]);
+  }
+
+  function endRallyPlacement() {
+    placingRally = false;
+    ghostPathTileKey = -1;
+    ghostPathPoints = null;
+    renderer.setRallyGhost?.(null);
+    syncRallyFlagMarkers();
+  }
   /** Radians — kept across multi-place until cancel / type switch. */
   let placingYaw = 0;
   /** Keep agora selected after placing so radial can reopen. */
@@ -613,17 +693,40 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.showBuildingRadial?.(a.x, a.z);
   }
 
+  /** Selected placeable driving the action radial (for train / cancel cmds). */
+  let actionBuildingIndex = -1;
+
+  /** Push sim building tracks onto the open action radial. */
+  function syncActionRadialTracksFromSim() {
+    if (!renderer.isActionRadialOpen?.() || actionBuildingIndex < 0) return;
+    const b = session.buildings?.[actionBuildingIndex];
+    /** @type {Record<string, { progress: number, count: number }>} */
+    const tracks = {};
+    for (const t of b?.tracks ?? []) {
+      if (!t?.id || (t.count | 0) < 1) continue;
+      tracks[`${t.kind}:${t.id}`] = {
+        progress: Number(t.progress) || 0,
+        count: t.count | 0,
+      };
+    }
+    renderer.setActionRadialTracks?.(tracks);
+  }
+
   function openActionRadialForBuilding(index) {
     const b = session.buildings?.[index];
     if (!b || !buildingHasMenu(b.type)) {
       closeRadial();
       return;
     }
+    actionBuildingIndex = index;
     renderer.hideBuildingRadial?.();
     renderer.showActionRadial?.(b.x, b.z, b.type);
+    syncActionRadialTracksFromSim();
   }
 
   function closeRadial() {
+    actionBuildingIndex = -1;
+    renderer.setActionRadialArmed?.(null);
     renderer.hideBuildingRadial?.();
     renderer.hideActionRadial?.();
   }
@@ -637,6 +740,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /** @param {string | null} t */
   function applyPlacingType(t) {
+    if (t) endRallyPlacement();
     placingType = t ?? null;
     if (!placingType) {
       placingYaw = 0;
@@ -669,7 +773,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getBuildings: () => session.buildings ?? [],
     onBuildingSelected: (sel, _ptr, all) => {
       const list = all ?? (sel ? [sel] : null);
+      selectedBuildings = list ? list.slice() : [];
       syncBuildingHighlight(list);
+      syncRallyFlagMarkers();
       // Action / build radials only for a single selection.
       if (sel && list && list.length === 1) {
         if (sel.kind === 'agora') {
@@ -686,6 +792,39 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     getPlacingType: () => placingType,
     setPlacingType: (t) => {
       applyPlacingType(t);
+    },
+    isPlacingRally: () => placingRally,
+    onRallyMove: (x, z) => {
+      if (!placingRally || actionBuildingIndex < 0) return;
+      const b = session.buildings?.[actionBuildingIndex];
+      if (!b) return;
+      setRallyGhostAt(b, x, z);
+    },
+    onRallyConfirm: (x, z) => {
+      if (!placingRally || actionBuildingIndex < 0 || localPlayerId < 0) return;
+      const b = session.buildings?.[actionBuildingIndex];
+      if (!b || !isRallyBeyondBuilding(b.type, b.x, b.z, x, z)) {
+        // Keep placement open until the point clears the footprint.
+        return;
+      }
+      session.submitCommand({
+        type: CMD.SET_RALLY,
+        playerId: localPlayerId,
+        buildingIndex: actionBuildingIndex,
+        tx: fx.fromFloat(x),
+        ty: fx.fromFloat(z),
+      });
+      endRallyPlacement();
+      openActionRadialForBuilding(actionBuildingIndex);
+      renderer.pingOrderMarker?.(x, z, undefined, 'white', { forceMove: true });
+    },
+    clearRallyPlacement: () => {
+      endRallyPlacement();
+    },
+    onRallyCancel: () => {
+      const bi = actionBuildingIndex;
+      endRallyPlacement();
+      if (bi >= 0) openActionRadialForBuilding(bi);
     },
     getPlacementYaw: () => placingYaw,
     setPlacementYaw: (yaw) => {
@@ -763,8 +902,58 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         renderer.setBuildingGhost?.(null);
         return;
       }
-      if (picked.kind === 'unit' || picked.kind === 'upgrade') {
-        // Train / research wiring comes later — menu is interactive for now.
+      if (picked.kind === 'unit') {
+        renderer.setActionRadialArmed?.(null);
+        if (actionBuildingIndex < 0 || localPlayerId < 0) return;
+        session.submitCommand({
+          type: CMD.QUEUE_TRAIN,
+          playerId: localPlayerId,
+          buildingIndex: actionBuildingIndex,
+          unitKey: picked.id,
+        });
+        return;
+      }
+      if (picked.kind === 'upgrade') {
+        // Research wiring comes later.
+        renderer.setActionRadialArmed?.(null);
+        return;
+      }
+      if (picked.kind === 'utility') {
+        const id = picked.id;
+        if (id === 'garrison') return; // unavailable until sim garrison lands
+        if (id === 'rally') {
+          beginRallyPlacement();
+          return;
+        }
+        if (id === 'demolish') {
+          if (renderer.getActionRadialArmed?.() === 'demolish') {
+            renderer.setActionRadialArmed?.(null);
+            // Demolish confirm stub — no building delete yet.
+          } else {
+            renderer.setActionRadialArmed?.('demolish');
+          }
+          return;
+        }
+        return;
+      }
+      if (picked.kind === 'cancel') {
+        const tracks = renderer.getActionRadialTracks?.() ?? {};
+        const hasWork = Object.values(tracks).some(
+          (t) => (t?.count | 0) > 0 || (t?.progress ?? 0) > 0,
+        );
+        if (!hasWork) return;
+        if (renderer.getActionRadialArmed?.() === 'cancel') {
+          if (actionBuildingIndex >= 0 && localPlayerId >= 0) {
+            session.submitCommand({
+              type: CMD.CANCEL_TRAIN,
+              playerId: localPlayerId,
+              buildingIndex: actionBuildingIndex,
+            });
+          }
+          renderer.setActionRadialArmed?.(null);
+        } else {
+          renderer.setActionRadialArmed?.('cancel');
+        }
         return;
       }
       if (picked.kind === 'category') {
@@ -884,7 +1073,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (session.count !== renderEntityCount) {
       renderEntityCount = session.count;
-      resizeRenderBuffers(renderEntityCount);
       renderer.setCount(renderEntityCount);
       rebuildRendererEntities(renderer, session);
     }
@@ -935,6 +1123,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const world = session.state;
     const {
       selected, wasSelected, deathFade, facingYaw, selSpinYaw, selSpinVel,
+      ringX, ringZ, ringSize, ringTint,
       colors, renderX, renderY, renderZ,
       poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseValid,
       cacheGx, cacheGz, cacheGy,
@@ -979,7 +1168,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
     if (n !== renderEntityCount) {
       renderEntityCount = n;
-      resizeRenderBuffers(n);
       renderer.setCount(n);
       rebuildRendererEntities(renderer, session);
     }
@@ -993,6 +1181,41 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     let hbHurtCount = 0;
     const hbSel = bufs.hbSelected;
     const hbHurt = bufs.hbHurt;
+
+    // Overlay LOD: collar spin by eye distance; health bars nearest-N to look-at.
+    const overlay = overlayCameraRef(renderer);
+    const overlaySpinAllow = bufs.overlaySpinAllow;
+    const overlayBarAllow = bufs.overlayBarAllow;
+    overlaySpinAllow.fill(0);
+    overlayBarAllow.fill(0);
+    const barIds = bufs.overlayBarIds;
+    const barD2 = bufs.overlayBarD2;
+    let barCand = 0;
+    const refX = overlay.x;
+    const refZ = overlay.z;
+    const eyeX = overlay.eyeX;
+    const eyeZ = overlay.eyeZ;
+    for (let i = 0; i < n; i++) {
+      if (!world.alive[i]) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      const isSel = !!selected[i];
+      const def = getUnitDef(world.type[i]);
+      const hurt = def.hp > 0 && world.hp[i] < def.hp;
+      if (!isSel && !hurt) continue;
+      const x = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
+      const z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
+      if (isSel) {
+        const sx = x - eyeX;
+        const sz = z - eyeZ;
+        if (sx * sx + sz * sz <= OVERLAY_COLLAR_SPIN_DISTANCE_SQ) overlaySpinAllow[i] = 1;
+      }
+      barIds[barCand] = i;
+      const dx = x - refX;
+      const dz = z - refZ;
+      barD2[barCand] = dx * dx + dz * dz;
+      barCand++;
+    }
+    markNearestN(barIds, barD2, barCand, OVERLAY_MAX_BARS, overlayBarAllow);
 
     // Pack passengers into transport decks (v1 grid — vehicle GLBs have no seat anchors).
     const passengerSlot = bufs.passengerSlot;
@@ -1055,7 +1278,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
             renderer.writeSelectionRing(i, 0, 0, 0);
             wasSelected[i] = 0;
           }
-          selected[i] = 0;
+          inputApi?.deselectEntity?.(i);
           continue;
         }
         const def = getUnitDef(world.type[i]);
@@ -1153,18 +1376,44 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       else if (world.owner[i] === 1) drawStats.p1++;
       const isSel = !!selected[i] && !!world.alive[i];
       if (isSel) {
-        if (!wasSelected[i]) selSpinVel[i] = SEL_SPIN_START;
-        const blend = Math.min(1, SEL_SPIN_SETTLE * dt);
-        selSpinVel[i] += (SEL_SPIN_STEADY - selSpinVel[i]) * blend;
-        selSpinYaw[i] += selSpinVel[i] * dt;
+        // Burst + idle spin within spin distance; static collar beyond (always drawn).
+        const spinOk = !!overlaySpinAllow[i];
+        if (spinOk) {
+          if (!wasSelected[i]) {
+            selSpinVel[i] = SEL_SPIN_START;
+            ringX[i] = NaN;
+          } else if (selSpinVel[i] < SEL_SPIN_EPS) {
+            // Re-entered range — ease back to idle spin without another burst.
+            selSpinVel[i] = SEL_SPIN_STEADY;
+          }
+          const blend = Math.min(1, SEL_SPIN_SETTLE * dt);
+          selSpinVel[i] += (SEL_SPIN_STEADY - selSpinVel[i]) * blend;
+          if (selSpinVel[i] > SEL_SPIN_EPS) selSpinYaw[i] += selSpinVel[i] * dt;
+          else selSpinVel[i] = 0;
+        } else {
+          selSpinVel[i] = 0;
+          if (!wasSelected[i]) {
+            selSpinYaw[i] = 0;
+            ringX[i] = NaN;
+          }
+        }
+        const spinning = spinOk && selSpinVel[i] > SEL_SPIN_EPS;
         // Authored colors when standing. Red/yellow only while en route (ATTACK_MOVE
         // stays set after arrival for acquire — don't leave the collar stuck red).
         // Hard ATTACK while engaged stays red even if not translating.
-        let ringTint = 'white';
-        if (ord === ORDER.ATTACK) ringTint = 'red';
-        else if (moving) {
-          if (ord === ORDER.ATTACK_MOVE) ringTint = 'red';
-          else if (ord === ORDER.MOVE) ringTint = 'yellow';
+        let tintName = 'white';
+        let tintCode = RING_TINT_WHITE;
+        if (ord === ORDER.ATTACK) {
+          tintName = 'red';
+          tintCode = RING_TINT_RED;
+        } else if (moving) {
+          if (ord === ORDER.ATTACK_MOVE) {
+            tintName = 'red';
+            tintCode = RING_TINT_RED;
+          } else if (ord === ORDER.MOVE) {
+            tintName = 'yellow';
+            tintCode = RING_TINT_YELLOW;
+          }
         }
         let ringKind = 'default';
         if (isTransport(world.type[i]) || def.category === 'vehicle' || def.category === 'air') {
@@ -1172,16 +1421,33 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         } else if (def.primaryAbility) {
           ringKind = 'caster';
         }
-        renderer.writeSelectionRing(i, x, z, size, selSpinYaw[i], ringTint, { kind: ringKind });
+        // After the flourish, only rewrite when the unit moved or tint changed.
+        const needRing =
+          spinning ||
+          tintCode !== ringTint[i] ||
+          !Number.isFinite(ringX[i]) ||
+          Math.abs(x - ringX[i]) > POSE_XZ_EPS ||
+          Math.abs(z - ringZ[i]) > POSE_XZ_EPS ||
+          Math.abs(size - ringSize[i]) > POSE_SIZE_EPS;
+        if (needRing) {
+          renderer.writeSelectionRing(i, x, z, size, selSpinYaw[i], tintName, { kind: ringKind });
+          ringX[i] = x;
+          ringZ[i] = z;
+          ringSize[i] = size;
+          ringTint[i] = tintCode;
+        }
       } else {
         selSpinVel[i] = 0;
-        if (wasSelected[i]) renderer.writeSelectionRing(i, 0, 0, 0);
+        if (wasSelected[i]) {
+          renderer.writeSelectionRing(i, 0, 0, 0);
+          ringX[i] = NaN;
+        }
       }
       wasSelected[i] = isSel ? 1 : 0;
 
       const maxHp = def.hp;
       const hp = world.hp[i];
-      if (maxHp > 0 && (isSel || hp < maxHp)) {
+      if (maxHp > 0 && (isSel || hp < maxHp) && overlayBarAllow[i]) {
         const slot = isSel ? hbSelCount++ : hbHurtCount++;
         const buf = isSel ? hbSel : hbHurt;
         const o = slot * 4;
@@ -1270,6 +1536,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     } else {
       renderer.setFxSimTick?.(world.tick);
     }
+    syncActionRadialTracksFromSim();
     renderer.commit();
   });
 
@@ -1283,7 +1550,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderEntityCount = rebuildRendererEntities(renderer, session);
       return renderEntityCount;
     },
-    resizeRenderBuffers,
     inputApi,
     kothShard,
     get matchOverShown() {

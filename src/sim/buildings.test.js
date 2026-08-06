@@ -98,13 +98,14 @@ describe('buildings place', () => {
     const field = buildField(11, { width: 64, height: 64 });
     const hitX = 41.3;
     const hitZ = 39.1;
-    clearClaim(field, 'farm', hitX, hitZ);
-    const expected = snapFloat('farm', hitX, hitZ);
+    // Mine is 2×2 (even); farm is 3×3 (odd).
+    clearClaim(field, 'mine', hitX, hitZ);
+    const expected = snapFloat('mine', hitX, hitZ);
     applyCommands(w, field, [
       {
         type: CMD.PLACE_BUILDING,
         playerId: 0,
-        buildingType: 'farm',
+        buildingType: 'mine',
         tx: fx.fromFloat(hitX),
         ty: fx.fromFloat(hitZ),
       },
@@ -116,10 +117,10 @@ describe('buildings place', () => {
     const mod = (v) => ((v % TILE_SIZE_F) + TILE_SIZE_F) % TILE_SIZE_F;
     assert.ok(mod(expected.x) < 1e-4);
     assert.ok(mod(expected.z) < 1e-4);
-    const b = buildingFootprintBounds('farm', expected.xFixed, expected.zFixed);
+    const b = buildingFootprintBounds('mine', expected.xFixed, expected.zFixed);
     assert.equal(b.coreW, 2);
     assert.equal(b.coreH, 2);
-    assert.equal(footprintTiles('farm', hitX, hitZ).length, 4);
+    assert.equal(footprintTiles('mine', hitX, hitZ).length, 4);
   });
 
   it('rejects unknown types', () => {
@@ -240,7 +241,7 @@ describe('buildings place', () => {
       },
     ]);
     const tiles = footprintTiles('farm', x, z);
-    assert.equal(tiles.length, 4);
+    assert.equal(tiles.length, 9);
     for (const { tx, tz } of tiles) {
       assert.equal(isPassable(field, tx, tz), true, `passable ${tx},${tz}`);
       assert.equal(isSlowTile(field, tx, tz), true, `slow ${tx},${tz}`);

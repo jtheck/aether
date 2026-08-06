@@ -15,6 +15,7 @@
 
 import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
+import { buildingProductionSystem } from './buildingProduction.js';
 import { combatSystem } from './combat.js';
 import {
   movementGoal,
@@ -141,6 +142,7 @@ export function step(world, field, commands) {
   };
 
   phase('commands', () => applyCommands(world, field, commands));
+  phase('buildings', () => buildingProductionSystem(world, field));
   phase('transport', () => transportAutoLoadSystem(world));
   phase('repair', () => repairSystem(world));
   phase('combat', () => combatSystem(world, field));

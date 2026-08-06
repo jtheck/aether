@@ -5,16 +5,23 @@ import * as fx from './fixed.js';
 import {
   TILE,
   HALF_TILE,
+  TILE_SIZE_F,
   worldToTile,
   tileCenterX,
   tileCenterY,
   activeWorldHalf,
   isPassable,
+  findPath,
+  snapToPassable,
 } from './field.js';
 import { fellTreeAt } from './trees.js';
 import { UNIT, getUnitDef, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
-import { queuePath } from './path.js';
+import { MAX_WAYPOINTS, queuePath } from './path.js';
+
+/** Scratch buffers for render-side rally A* (main thread only). */
+const _rallyWx = new Int32Array(MAX_WAYPOINTS);
+const _rallyWy = new Int32Array(MAX_WAYPOINTS);
 import { clearEngagement } from './engagement.js';
 import { isCarried } from './transport.js';
 
@@ -25,6 +32,39 @@ import { isCarried } from './transport.js';
 
 /** Placement / ghost yaw snaps (radians). Visual only — footprints stay axis-aligned. */
 export const BUILDING_YAW_SNAP = Math.PI / 12;
+
+/**
+ * Baked spawn empties from building GLBs (`spawn_anchor` local translation).
+ * Sim uses these — does not dig through live meshes.
+ * @type {Readonly<Record<string, { x: number, y: number, z: number }>>}
+ */
+export const BUILDING_SPAWN_LOCAL = Object.freeze({
+  tavern: Object.freeze({
+    x: 0.5513424873352051,
+    y: 0.7969854474067688,
+    z: -8.04394245147705,
+  }),
+});
+
+/** Base train time per unit (~2.5s at 20Hz). Split across active tracks. */
+export const TRAIN_TICKS = 50;
+
+/**
+ * Rotate a model-local XZ offset into world XZ (Y-up yaw, matches render writeMatrix).
+ * @param {number} bx
+ * @param {number} bz
+ * @param {number} yawRad
+ * @param {number} lx
+ * @param {number} lz
+ */
+export function buildingLocalToWorld(bx, bz, yawRad, lx, lz) {
+  const c = Math.cos(yawRad);
+  const s = Math.sin(yawRad);
+  return {
+    x: bx + c * lx + s * lz,
+    z: bz - s * lx + c * lz,
+  };
+}
 
 /**
  * @param {number} yawRad
@@ -46,7 +86,7 @@ export const BUILDING_FOOTPRINTS = {
   camp: { w: 2, h: 2, mode: 'slow' },
   village: { w: 3, h: 3, mode: 'slow' },
   silo: { w: 2, h: 2, mode: 'block' },
-  farm: { w: 2, h: 2, mode: 'slow' },
+  farm: { w: 3, h: 3, mode: 'slow' },
   mine: { w: 2, h: 2, mode: 'slow' },
   // Advanced
   tower: { w: 2, h: 2, mode: 'block' },
@@ -428,13 +468,118 @@ export function applySerializedBuildingOccupancy(field, buildings) {
  *   x/z are world floats; stored as Q16.16.
  */
 export function createBuilding(opts) {
+  const type = String(opts.type);
+  const x = fx.fromFloat(opts.x);
+  const z = fx.fromFloat(opts.z);
+  const yaw = opts.yaw != null ? fx.fromFloat(opts.yaw) : 0;
   return {
     owner: opts.owner | 0,
-    type: String(opts.type),
-    x: fx.fromFloat(opts.x),
-    z: fx.fromFloat(opts.z),
-    yaw: opts.yaw != null ? fx.fromFloat(opts.yaw) : 0,
+    type,
+    x,
+    z,
+    yaw,
+    /** 1 = player-set rally; 0 = use doorway default on train spawn. */
+    hasRally: 0,
+    rallyX: 0,
+    rallyZ: 0,
+    /** @type {{ kind: 'unit', id: string, unitType: number, count: number, progress: number }[]} */
+    tracks: [],
   };
+}
+
+/**
+ * True when the rally point sits outside the building's axis-aligned footprint.
+ * @param {string} typeId
+ * @param {number} bx world float
+ * @param {number} bz world float
+ * @param {number} rx world float
+ * @param {number} rz world float
+ */
+export function isRallyBeyondBuilding(typeId, bx, bz, rx, rz) {
+  const fp = getBuildingFootprint(typeId);
+  const halfW = ((fp?.w ?? 2) * TILE_SIZE_F) * 0.5;
+  const halfH = ((fp?.h ?? 2) * TILE_SIZE_F) * 0.5;
+  const margin = 0.75;
+  return Math.abs(rx - bx) > halfW + margin || Math.abs(rz - bz) > halfH + margin;
+}
+
+/**
+ * Default walk-out point just past the spawn doorway.
+ * @param {string} typeId
+ * @param {number} xF
+ * @param {number} zF
+ * @param {number} yawF
+ */
+export function defaultRallyWorld(typeId, xF, zF, yawF) {
+  const local = BUILDING_SPAWN_LOCAL[typeId] ?? { x: 0, y: 0, z: 0 };
+  return buildingLocalToWorld(xF, zF, yawF, local.x * 1.35, local.z * 1.35);
+}
+
+/**
+ * World-float polyline for a train rally: building → spawn door → A* → rally.
+ * Falls back to a straight stem if the field is missing or A* finds nothing.
+ * @param {object | null | undefined} field
+ * @param {{ type: string, x: number, z: number, yaw?: number }} b world-float building
+ * @param {number} rx
+ * @param {number} rz
+ * @returns {{ x: number, z: number }[]}
+ */
+export function rallyPathWorldPoints(field, b, rx, rz) {
+  const bx = b.x;
+  const bz = b.z;
+  const yaw = b.yaw ?? 0;
+  const local = BUILDING_SPAWN_LOCAL[b.type] ?? { x: 0, y: 0, z: 0 };
+  const spawn = buildingLocalToWorld(bx, bz, yaw, local.x, local.z);
+  /** @type {{ x: number, z: number }[]} */
+  const pts = [{ x: bx, z: bz }];
+  if (Math.hypot(spawn.x - bx, spawn.z - bz) > 0.35) {
+    pts.push({ x: spawn.x, z: spawn.z });
+  }
+
+  if (!field) {
+    pts.push({ x: rx, z: rz });
+    return pts;
+  }
+
+  let sx = fx.fromFloat(spawn.x);
+  let sz = fx.fromFloat(spawn.z);
+  let dx = fx.fromFloat(rx);
+  let dz = fx.fromFloat(rz);
+  const snappedS = snapToPassable(field, sx, sz);
+  if (snappedS) {
+    sx = snappedS.x;
+    sz = snappedS.y;
+  }
+  const snappedE = snapToPassable(field, dx, dz);
+  if (snappedE) {
+    dx = snappedE.x;
+    dz = snappedE.y;
+  }
+
+  const n = findPath(field, sx, sz, dx, dz, _rallyWx, _rallyWy, MAX_WAYPOINTS);
+  if (n <= 0) {
+    pts.push({ x: rx, z: rz });
+    return pts;
+  }
+
+  const sxf = fx.toFloat(sx);
+  const szf = fx.toFloat(sz);
+  const last = pts[pts.length - 1];
+  if (Math.hypot(sxf - last.x, szf - last.z) > 0.35) {
+    pts.push({ x: sxf, z: szf });
+  }
+  for (let i = 0; i < n; i++) {
+    const x = fx.toFloat(_rallyWx[i]);
+    const z = fx.toFloat(_rallyWy[i]);
+    const prev = pts[pts.length - 1];
+    if (Math.hypot(x - prev.x, z - prev.z) < 0.2) continue;
+    pts.push({ x, z });
+  }
+  const end = pts[pts.length - 1];
+  if (Math.hypot(rx - end.x, rz - end.z) > 0.2) {
+    pts.push({ x: rx, z: rz });
+  }
+  return pts;
 }
 
 /**
@@ -544,6 +689,10 @@ export function applyPlaceBuilding(w, field, cmd) {
     x,
     z,
     yaw,
+    hasRally: 0,
+    rallyX: 0,
+    rallyZ: 0,
+    tracks: [],
   });
   if (field) {
     applyStructureOccupancyAt(field, type, x, z);
@@ -551,6 +700,78 @@ export function applyPlaceBuilding(w, field, cmd) {
   }
   w.buildingsDirty = 1;
   return w.buildings.length - 1;
+}
+
+/**
+ * Set a building's train rally point (world Q16.16 xz).
+ * @param {object} w
+ * @param {{ playerId?: number, buildingIndex: number, tx: number, ty: number }} cmd
+ */
+export function applySetRally(w, cmd) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const bi = cmd.buildingIndex | 0;
+  if (bi < 0 || bi >= buildings.length) return;
+  const b = buildings[bi];
+  const playerId = (cmd.playerId ?? -1) | 0;
+  if (playerId >= 0 && b.owner !== playerId) return;
+  b.hasRally = 1;
+  b.rallyX = cmd.tx | 0;
+  b.rallyZ = cmd.ty | 0;
+  w.buildingsDirty = 1;
+}
+
+/**
+ * Queue one unit on a building's production track (multi-track; slowdown in step).
+ * @param {object} w
+ * @param {{ playerId?: number, buildingIndex: number, unitKey: string }} cmd
+ */
+export function applyQueueTrain(w, cmd) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const bi = cmd.buildingIndex | 0;
+  if (bi < 0 || bi >= buildings.length) return;
+  const b = buildings[bi];
+  const playerId = (cmd.playerId ?? -1) | 0;
+  if ((b.owner | 0) !== playerId) return;
+  const unitKey = String(cmd.unitKey ?? '');
+  const unitType = BUILDING_MENU_UNITS[unitKey];
+  if (unitType == null) return;
+  const menu = BUILDING_MENUS[b.type];
+  if (!menu?.units?.includes(unitKey)) return;
+  if (!b.tracks) b.tracks = [];
+  let track = null;
+  for (let i = 0; i < b.tracks.length; i++) {
+    const t = b.tracks[i];
+    if (t.kind === 'unit' && t.id === unitKey) {
+      track = t;
+      break;
+    }
+  }
+  if (!track) {
+    track = { kind: 'unit', id: unitKey, unitType, count: 0, progress: 0 };
+    b.tracks.push(track);
+  }
+  track.count = (track.count | 0) + 1;
+  w.buildingsDirty = 1;
+}
+
+/**
+ * Clear all production tracks on a building.
+ * @param {object} w
+ * @param {{ playerId?: number, buildingIndex: number }} cmd
+ */
+export function applyCancelTrain(w, cmd) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const bi = cmd.buildingIndex | 0;
+  if (bi < 0 || bi >= buildings.length) return;
+  const b = buildings[bi];
+  const playerId = (cmd.playerId ?? -1) | 0;
+  if ((b.owner | 0) !== playerId) return;
+  if (!b.tracks?.length) return;
+  b.tracks = [];
+  w.buildingsDirty = 1;
 }
 
 /**
@@ -564,6 +785,16 @@ export function serializeBuildings(buildings) {
     x: fx.toFloat(b.x),
     z: fx.toFloat(b.z),
     yaw: fx.toFloat(b.yaw),
+    hasRally: b.hasRally | 0,
+    rallyX: b.hasRally ? fx.toFloat(b.rallyX) : 0,
+    rallyZ: b.hasRally ? fx.toFloat(b.rallyZ) : 0,
+    tracks: (b.tracks ?? []).map((t) => ({
+      kind: t.kind,
+      id: t.id,
+      unitType: t.unitType | 0,
+      count: t.count | 0,
+      progress: Number(t.progress) || 0,
+    })),
   }));
 }
 
@@ -583,6 +814,20 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.x);
     mix(b.z);
     mix(b.yaw);
+    mix(b.hasRally | 0);
+    mix(b.rallyX | 0);
+    mix(b.rallyZ | 0);
+    const tracks = b.tracks ?? [];
+    mix(tracks.length);
+    for (let ti = 0; ti < tracks.length; ti++) {
+      const t = tracks[ti];
+      const id = t.id || '';
+      mix(id.length);
+      for (let c = 0; c < id.length; c++) mix(id.charCodeAt(c));
+      mix(t.unitType | 0);
+      mix(t.count | 0);
+      mix(fx.fromFloat(Number(t.progress) || 0));
+    }
   }
   return h;
 }

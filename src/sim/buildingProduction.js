@@ -1,0 +1,114 @@
+// Building production tick — kept separate from buildings.js so importing
+// spawn() from world.js cannot circular-init footprint tables.
+
+import * as fx from './fixed.js';
+import { snapToPassable } from './field.js';
+import { ORDER, spawn } from './world.js';
+import { queuePath } from './path.js';
+import { clearEngagement } from './engagement.js';
+import {
+  BUILDING_SPAWN_LOCAL,
+  TRAIN_TICKS,
+  buildingLocalToWorld,
+} from './buildings.js';
+
+/**
+ * @param {object} w
+ * @param {object | null | undefined} field
+ * @param {{ owner: number, type: string, x: number, z: number, yaw: number }} b
+ * @param {number} unitType
+ */
+function spawnTrainedUnit(w, field, b, unitType) {
+  const bx = fx.toFloat(b.x);
+  const bz = fx.toFloat(b.z);
+  const yaw = fx.toFloat(b.yaw | 0);
+  const local = BUILDING_SPAWN_LOCAL[b.type] ?? { x: 0, y: 0, z: 0 };
+  const spawnPos = buildingLocalToWorld(bx, bz, yaw, local.x, local.z);
+  let sx = fx.fromFloat(spawnPos.x);
+  let sz = fx.fromFloat(spawnPos.z);
+  if (field) {
+    const snapped = snapToPassable(field, sx, sz);
+    if (snapped) {
+      sx = snapped.x;
+      sz = snapped.y;
+    }
+  }
+  const i = spawn(w, { x: sx, y: sz, type: unitType, owner: b.owner | 0 });
+  // Rally point (player-set) or default walk-out past the doorway.
+  let rx;
+  let rz;
+  if (b.hasRally) {
+    rx = b.rallyX | 0;
+    rz = b.rallyZ | 0;
+  } else {
+    const rally = buildingLocalToWorld(bx, bz, yaw, local.x * 1.35, local.z * 1.35);
+    rx = fx.fromFloat(rally.x);
+    rz = fx.fromFloat(rally.z);
+  }
+  if (field) {
+    const snapped = snapToPassable(field, rx, rz);
+    if (snapped) {
+      rx = snapped.x;
+      rz = snapped.y;
+    }
+  }
+  w.transportTarget[i] = -1;
+  w.order[i] = ORDER.MOVE;
+  w.tx[i] = rx;
+  w.ty[i] = rz;
+  w.targetEntity[i] = -1;
+  clearEngagement(w, i);
+  w.hasTarget[i] = 1;
+  w.vx[i] = 0;
+  w.vy[i] = 0;
+  if (field) queuePath(w, i, rx, rz);
+}
+
+/**
+ * Advance multi-track production; slowdown by active track count.
+ * @param {object} w
+ * @param {object | null | undefined} field
+ */
+export function buildingProductionSystem(w, field) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  for (let bi = 0; bi < buildings.length; bi++) {
+    const b = buildings[bi];
+    const tracks = b.tracks;
+    if (!tracks?.length) continue;
+    let active = 0;
+    for (let i = 0; i < tracks.length; i++) {
+      if ((tracks[i].count | 0) > 0) active++;
+    }
+    if (active === 0) {
+      b.tracks = [];
+      w.buildingsDirty = 1;
+      continue;
+    }
+    const stepProg = 1 / (TRAIN_TICKS * active);
+    let dirty = false;
+    for (let ti = tracks.length - 1; ti >= 0; ti--) {
+      const t = tracks[ti];
+      if ((t.count | 0) < 1) {
+        tracks.splice(ti, 1);
+        dirty = true;
+        continue;
+      }
+      t.progress = (Number(t.progress) || 0) + stepProg;
+      while (t.progress >= 1 && (t.count | 0) > 0) {
+        t.progress -= 1;
+        t.count = (t.count | 0) - 1;
+        if (t.kind === 'unit') spawnTrainedUnit(w, field, b, t.unitType);
+        dirty = true;
+      }
+      if ((t.count | 0) < 1) {
+        tracks.splice(ti, 1);
+        dirty = true;
+      } else {
+        if (t.progress >= 1) t.progress = t.progress % 1;
+        dirty = true;
+      }
+    }
+    if (dirty) w.buildingsDirty = 1;
+  }
+}

@@ -1912,6 +1912,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (unitFxElapsed >= UNIT_FX_INTERVAL_MS) {
         unitFxElapsed = 0;
         emitUnitSocketFire();
+        emitBuildingSocketFx();
       }
       groundFireElapsed += fxDt;
       if (groundFireElapsed >= GROUND_FIRE_INTERVAL_MS) {
@@ -1921,6 +1922,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       particles.update(fxDt);
       unitAuras.update(fxDt);
     }
+    agoraProps.update?.(camera);
     monkLobFx.update(fxDt);
     sporeBloomFx.update(fxDt, fxSimTick);
     mushrooms?.commit?.();
@@ -2019,11 +2021,64 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
+  /** Building `smoke_anchor*` / `fire_anchor*` empties → chimney smoke / hearth fire. */
+  function emitBuildingSocketFx() {
+    const eye = LOD_ENABLED ? cameraEyePos() : null;
+    buildingProps.forEachFxInstance?.((_typeId, m, slot, sockets) => {
+      const o = slot * 16;
+      if (eye) {
+        const dx = eye.x - m[o + 12];
+        const dy = eye.y - m[o + 13];
+        const dz = eye.z - m[o + 14];
+        if (dx * dx + dy * dy + dz * dz > FX_DISTANCE_SQ) return;
+      }
+      for (let s = 0; s < sockets.length; s++) {
+        const sock = sockets[s];
+        const isSmoke = /smoke/i.test(sock.name);
+        const isFire = /fire/i.test(sock.name);
+        if (!isSmoke && !isFire) continue;
+        const lx = sock.x;
+        const ly = sock.y;
+        const lz = sock.z;
+        const wx = m[o + 12] + m[o] * lx + m[o + 8] * lz;
+        const wy = m[o + 13] + m[o + 5] * ly;
+        const wz = m[o + 14] + m[o + 2] * lx + m[o + 10] * lz;
+        if (isSmoke) emitSocketFlame(wx, wy, wz, 1.15, 'smoke');
+        else emitSocketFlame(wx, wy, wz, 1.0, 'torch');
+      }
+    });
+  }
+
   function emitSocketFlame(x, y, z, scale, style) {
     const s = scale;
     const mage = style === 'mage';
+    const smoke = style === 'smoke';
     const ang = Math.random() * Math.PI * 2;
-    const rad = Math.random() * 0.1 * s;
+    const rad = Math.random() * (smoke ? 0.18 : 0.1) * s;
+    if (smoke) {
+      particles.emit({
+        position: [
+          x + Math.cos(ang) * rad,
+          y + Math.random() * 0.08 * s,
+          z + Math.sin(ang) * rad,
+        ],
+        velocity: [
+          (Math.random() - 0.5) * 0.18,
+          0.55 + Math.random() * 0.65,
+          (Math.random() - 0.5) * 0.18,
+        ],
+        gravity: [0, 0.15, 0],
+        color:
+          Math.random() > 0.35
+            ? [0.55, 0.55, 0.58, 0.42]
+            : [0.4, 0.4, 0.42, 0.35],
+        lifetime: 1.1 + Math.random() * 0.7,
+        startSize: [0.35 * s, 0.65 * s],
+        endSize: [0.9 * s, 1.4 * s],
+        drag: 0.55,
+      });
+      return;
+    }
     particles.emit({
       position: [
         x + Math.cos(ang) * rad,
@@ -2487,6 +2542,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       agoraProps.place(list ?? []);
     },
 
+    /** Planted train-rally flags for production buildings. */
+    placeRallyFlags(list) {
+      agoraProps.placeRallyFlags?.(list ?? []);
+    },
+
+    /** Flag cursor while setting a building rally point. */
+    setRallyGhost(pos) {
+      agoraProps.setRallyGhost?.(pos ?? null);
+    },
+
     /** Place constructed buildings. */
     placeBuildings(list) {
       buildingProps.place(list ?? []);
@@ -2557,6 +2622,37 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return actionRadial.isOpen();
     },
 
+    /** Dull / enable Rally · Garrison · Demolish · Cancel on the open action radial. */
+    setActionRadialUtilityAvailability(avail) {
+      actionRadial.setUtilityAvailability?.(avail);
+    },
+
+    /**
+     * Queue/progress display for action pads.
+     * Keys: `unit:id` / `upgrade:id` → `{ progress: 0..1, count }`.
+     * @param {Record<string, { progress?: number, count?: number }> | Map<string, { progress?: number, count?: number }>} tracks
+     */
+    setActionRadialTracks(tracks) {
+      actionRadial.setTrackDisplay?.(tracks);
+    },
+
+    /** Arm demolish/cancel for two-click confirm (`null` clears). */
+    setActionRadialArmed(id) {
+      actionRadial.setArmed?.(id ?? null);
+    },
+
+    clearActionRadialTracks() {
+      actionRadial.clearTracks?.();
+    },
+
+    getActionRadialTracks() {
+      return actionRadial.getTracks?.() ?? {};
+    },
+
+    getActionRadialArmed() {
+      return actionRadial.getArmed?.() ?? null;
+    },
+
     /** Shrink the open radial (~50%, animated) while ghost-placing so it stays out of the way. */
     setBuildingRadialCompact(on) {
       buildingRadial.setCompact?.(Boolean(on));
@@ -2576,7 +2672,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * Pick a radial option (CPU disc hit — pie / pad / icon). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
-     * @returns {Promise<{ kind: 'building' | 'category', id: string } | null>}
+     * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'utility' | 'cancel', id?: string } | null>}
      */
     async pickBuildingRadial(clientX, clientY) {
       const ray = radialPickingRay(clientX, clientY);

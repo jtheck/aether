@@ -28,12 +28,12 @@ const OWNER_TINTS = [
   [0.95, 0.8, 0.25],
   [0.75, 0.45, 1.0],
 ];
-const GHOST_ALPHA = 0.42;
-const GHOST_VALID_EMISSIVE = [0.25, 0.45, 0.7];
+const GHOST_ALPHA = 0.62;
+const GHOST_VALID_EMISSIVE = [0.15, 0.55, 0.22];
 const GHOST_INVALID_EMISSIVE = [1.0, 0.05, 0.02];
-const GHOST_VALID_DIFFUSE = [0.45, 0.65, 0.95];
+const GHOST_VALID_DIFFUSE = [0.35, 0.85, 0.45];
 const GHOST_INVALID_DIFFUSE = [1.0, 0.08, 0.04];
-const GHOST_INVALID_ALPHA = 0.62;
+const GHOST_INVALID_ALPHA = 0.72;
 const SELECTION_COLLAR_URL = '/assets/models/collar.glb';
 const FOOT_CLEARANCE = 0.06;
 /** Thicker than the old paper-thin squash. */
@@ -207,11 +207,11 @@ function resolveSelScale(size) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createBuildingProps(engine, scene, groundYAt) {
-  /** @type {Map<string, object[]>} typeId → template meshes (owner-0 reuses; others clone) */
+  /** @type {Map<string, { parts: object[], fxSockets: { name: string, x: number, y: number, z: number }[] }>} typeId → template */
   const templates = new Map();
   /** Types whose template meshes were claimed by the first owner batch. */
   const templateClaimed = new Set();
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[], capacity: number, typeId: string, owner: number }>} */
+  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[], capacity: number, typeId: string, owner: number, fxSockets: { name: string, x: number, y: number, z: number }[] }>} */
   const byKey = new Map();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
   const ghostByType = new Map();
@@ -228,7 +228,13 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       for (const mesh of parts) {
         mesh.pickable = true;
       }
-      templates.set(def.id, parts);
+      const fxSockets = (parts[0]?.fxSockets ?? []).map((s) => ({
+        name: s.name,
+        x: s.x,
+        y: s.y,
+        z: s.z,
+      }));
+      templates.set(def.id, { parts, fxSockets });
     } catch (err) {
       console.warn(`[buildings] ${def.id} failed`, err);
     }
@@ -410,6 +416,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     if (batch) return batch;
     const template = templates.get(typeId);
     if (!template) return null;
+    const { parts, fxSockets } = template;
 
     /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[]} */
     const layers = [];
@@ -417,8 +424,8 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     const whiteColors = makeWhiteColors(INITIAL_CAPACITY);
     const claimTemplate = !templateClaimed.has(typeId);
     if (claimTemplate) templateClaimed.add(typeId);
-    for (let i = 0; i < template.length; i++) {
-      const src = template[i];
+    for (let i = 0; i < parts.length; i++) {
+      const src = parts[i];
       // First owner batch for this type reuses the template mesh; later owners clone.
       const mesh = claimTemplate ? src : cloneTransformNode(src);
       mesh.pickable = true;
@@ -432,7 +439,13 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       layers.push({ mesh, matrices, colors, isTeamColor });
       pickMeshes.set(mesh, key);
     }
-    batch = { layers, capacity: INITIAL_CAPACITY, typeId, owner: owner | 0 };
+    batch = {
+      layers,
+      capacity: INITIAL_CAPACITY,
+      typeId,
+      owner: owner | 0,
+      fxSockets,
+    };
     byKey.set(key, batch);
     slotToIndex.set(key, []);
     return batch;
@@ -575,6 +588,31 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     setSelectionHighlight(null);
   }
 
+  /**
+   * Iterate live building instances with baked FX sockets (smoke / spawn / …).
+   * @param {(
+   *   typeId: string,
+   *   matrices: Float32Array,
+   *   slot: number,
+   *   sockets: { name: string, x: number, y: number, z: number }[],
+   * ) => void} fn
+   */
+  function forEachFxInstance(fn) {
+    for (const batch of byKey.values()) {
+      const sockets = batch.fxSockets;
+      if (!sockets?.length) continue;
+      const layer = batch.layers[0];
+      if (!layer) continue;
+      const count = layer.mesh?.thinInstances?.count ?? 0;
+      const m = layer.matrices;
+      for (let slot = 0; slot < count; slot++) {
+        const o = slot * 16;
+        if (!(m[o + 15] > 0)) continue;
+        fn(batch.typeId, m, slot, sockets);
+      }
+    }
+  }
+
   return {
     place,
     setGhost,
@@ -583,6 +621,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     clear,
     isPickMesh,
     resolvePick,
+    forEachFxInstance,
     BUILDING_SEL_SIZE,
     get ghostVisible() {
       return ghostVisible;

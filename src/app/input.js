@@ -34,6 +34,7 @@ export function setupInput(opts) {
     setInputEnabled: (enabled) => game.setInputEnabled(enabled),
     setRole: (role) => game.setRole(role),
     clearSelection: () => game.clearSelection(),
+    deselectEntity: (i) => game.deselectEntity?.(i),
     cancelPlacement: () => game.cancelPlacement?.(),
     getSelectedBuilding: () => game.getSelectedBuilding?.(),
     setSelectedBuilding: (sel) => game.setSelectedBuilding?.(sel),

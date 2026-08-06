@@ -5,6 +5,11 @@ import { UNIT, UNIT_DEFS, isTransport } from './unitTypes.js';
 import { createKothMeta } from './kothMeta.js';
 import { createAgoras } from './agora.js';
 import {
+  PLACEABLE_BUILDINGS,
+  createBuilding,
+  snapBuildingWorld,
+} from './buildings.js';
+import {
   WORLD_HALF_F,
   activeWorldHalfF,
   mapSizeForConfig,
@@ -18,6 +23,10 @@ import * as fx from './fixed.js';
 const STAGING_AI_VILLAGERS = 5;
 /** Army block sits this far toward map center from the agora. */
 const ARMY_FORWARD = 36;
+/** Building showcase sits this far behind the agora (away from army). */
+const BUILDING_BACK = 40;
+const BUILDING_SPACING = 36;
+const BUILDING_COLS = 5;
 
 export const PLAYER = 0;
 export const AI_OWNER = 1;
@@ -233,6 +242,38 @@ function spawnVillagersAround(w, owner, baseX, baseZ, count) {
   }
 }
 
+/** One of every placeable building behind the agora (staging showcase). */
+function spawnStagingBuildings(w, owner, baseX, baseZ) {
+  if (!w.buildings) w.buildings = [];
+  const len = Math.hypot(baseX, baseZ) || 1;
+  const fX = -baseX / len;
+  const fZ = -baseZ / len;
+  const rX = -fZ;
+  const rZ = fX;
+  const halfLat = ((BUILDING_COLS - 1) * BUILDING_SPACING) / 2;
+
+  for (let i = 0; i < PLACEABLE_BUILDINGS.length; i++) {
+    const type = PLACEABLE_BUILDINGS[i].id;
+    const c = i % BUILDING_COLS;
+    const r = (i / BUILDING_COLS) | 0;
+    const lat = c * BUILDING_SPACING - halfLat;
+    const back = BUILDING_BACK + r * BUILDING_SPACING;
+    const wx = baseX + rX * lat - fX * back;
+    const wz = baseZ + rZ * lat - fZ * back;
+    const snapped = snapBuildingWorld(type, fx.fromFloat(wx), fx.fromFloat(wz));
+    w.buildings.push(
+      createBuilding({
+        owner: owner | 0,
+        type,
+        x: fx.toFloat(snapped.x),
+        z: fx.toFloat(snapped.z),
+        yaw: 0,
+      }),
+    );
+  }
+  w.buildingsDirty = 1;
+}
+
 /** Pack a typed layout in a square grid (large `?army=` counts). */
 function spawnArmyPacked(w, layout, owner, baseX, baseZ) {
   const total = layout.reduce((s, c) => s + c.count, 0);
@@ -371,6 +412,7 @@ export function buildWorldFromConfig({
       { owner: PLAYER, x: px, z: pz },
       { owner: AI_OWNER, x: ax, z: az },
     ]);
+    spawnStagingBuildings(w, PLAYER, px, pz);
     if (_armyPerSide > 0) {
       spawnArmyOriented(w, scaledArmyLayout(_armyPerSide), PLAYER, px, pz, ARMY_FORWARD);
     } else {

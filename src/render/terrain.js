@@ -794,7 +794,7 @@ export function createTileGridOverlay(engine, scene, field) {
       setSubtreeVisible(blockMesh, visible);
     }
     if (uv > 0) {
-      // Orange — farm / agora / building slow pad (blocks placement).
+      // Orange — farm / agora / slow buildings (blocks placement).
       structureSlowMesh = makeDevMesh(
         engine,
         'tile-structure-slow',

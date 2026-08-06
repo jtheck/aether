@@ -12,7 +12,10 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
-import { PLACEABLE_BUILDINGS } from '../sim/buildings.js';
+import {
+  BUILDING_MODEL_URLS,
+  PLACEABLE_BUILDINGS,
+} from '../sim/buildings.js';
 import { capacityFor } from '../sim/capacity.js';
 
 /** Start small; grow by powers of two when place() needs more. */
@@ -45,13 +48,7 @@ export const BUILDING_SEL_SIZE = /** @type {const} */ ({
   l: 11.5,
 });
 
-const MODEL_URLS = {
-  barracks: '/assets/models/barracks.glb',
-  farm: '/assets/models/farm.glb',
-  church: '/assets/models/church.glb',
-  tavern: '/assets/models/tavern.glb',
-  perch: '/assets/models/perch.glb',
-};
+const MODEL_URLS = BUILDING_MODEL_URLS;
 
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
@@ -74,17 +71,30 @@ function ownerTint(owner) {
   return OWNER_TINTS[(owner | 0) % OWNER_TINTS.length];
 }
 
-/** @param {number} cap @param {number} owner */
-function makeOwnerColors(cap, owner) {
-  const t = ownerTint(owner);
+/** @param {number} cap @param {readonly number[]} tint */
+function makeColors(cap, tint) {
   const colors = new Float32Array(cap * 4);
   for (let i = 0; i < cap; i++) {
-    colors[i * 4] = t[0];
-    colors[i * 4 + 1] = t[1];
-    colors[i * 4 + 2] = t[2];
+    colors[i * 4] = tint[0];
+    colors[i * 4 + 1] = tint[1];
+    colors[i * 4 + 2] = tint[2];
     colors[i * 4 + 3] = 1;
   }
   return colors;
+}
+
+/** @param {number} cap @param {number} owner */
+function makeOwnerColors(cap, owner) {
+  return makeColors(cap, ownerTint(owner));
+}
+
+/** Keep authored PBR colors on non-TeamColor building parts. */
+function makeWhiteColors(cap) {
+  return makeColors(cap, [1, 1, 1]);
+}
+
+function isTeamColorMaterial(mat) {
+  return String(mat?.name ?? '').toLowerCase().includes('teamcolor');
 }
 
 function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
@@ -155,13 +165,14 @@ function makeCollarMaterial() {
   return mat;
 }
 
-function tintGhostMaterial(mat) {
-  if (!mat) return;
+function makeGhostMaterial() {
+  const mat = createStandardMaterial();
   mat.alpha = GHOST_ALPHA;
   mat.diffuseColor = [...GHOST_VALID_DIFFUSE];
   mat.emissiveColor = [...GHOST_VALID_EMISSIVE];
   applyUnlit(mat);
   markMaterialUboDirty(mat);
+  return mat;
 }
 
 /**
@@ -200,7 +211,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   const templates = new Map();
   /** Types whose template meshes were claimed by the first owner batch. */
   const templateClaimed = new Set();
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array }[], capacity: number, typeId: string, owner: number }>} */
+  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[], capacity: number, typeId: string, owner: number }>} */
   const byKey = new Map();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
   const ghostByType = new Map();
@@ -228,7 +239,9 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       const layers = [];
       for (const mesh of parts) {
         mesh.pickable = false;
-        tintGhostMaterial(mesh.material);
+        // GLB parts use PBR materials; use a dedicated StandardMaterial so
+        // ghost tint/alpha is reliable and cannot affect authored materials.
+        mesh.material = makeGhostMaterial();
         const matrices = new Float32Array(16);
         setThinInstances(mesh, matrices, 1);
         setThinInstanceCount(mesh, 0);
@@ -283,8 +296,9 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   let selVisible = false;
   /** @type {string | null} */
   let ghostType = null;
-  /** @type {{ x: number, z: number, size: 's' | 'm' | 'l' } | null} */
-  let selAnchor = null;
+  /** @type {{ x: number, z: number, size: 's' | 'm' | 'l' }[]} */
+  let selAnchors = [];
+  let selCapacity = 1;
 
   function hideAllGhosts() {
     for (const batch of ghostByType.values()) {
@@ -295,6 +309,95 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     }
     ghostType = null;
     ghostVisible = false;
+  }
+
+  function writeSelCollarColors(colors, count) {
+    for (let i = 0; i < count; i++) {
+      const o = i * 4;
+      colors[o] = 0.35;
+      colors[o + 1] = 0.95;
+      colors[o + 2] = 1;
+      colors[o + 3] = COLLAR_ALPHA;
+    }
+  }
+
+  /** @param {number} needed */
+  function ensureSelCapacity(needed) {
+    if (needed <= selCapacity) return;
+    const cap = capacityFor(needed, { initial: 1 });
+    for (const part of selParts) {
+      const matrices = new Float32Array(cap * 16);
+      setThinInstances(part.mesh, matrices, cap);
+      part.matrices = matrices;
+      if (part.colors) {
+        const colors = new Float32Array(cap * 4);
+        writeSelCollarColors(colors, cap);
+        setThinInstanceColors(part.mesh, colors);
+        part.colors = colors;
+      }
+    }
+    selCapacity = cap;
+  }
+
+  function clearSelectionHighlight() {
+    selAnchors = [];
+    for (const part of selParts) {
+      clearMatrix(part.matrices, 0);
+      setThinInstanceCount(part.mesh, 0);
+      flushThinInstances(part.mesh);
+      part.mesh.visible = false;
+    }
+    selVisible = false;
+  }
+
+  /**
+   * Fixed S/M/L world size — does not HUD-scale with camera (menu does that).
+   */
+  function applySelectionHighlight() {
+    const n = selAnchors.length;
+    if (n === 0) {
+      clearSelectionHighlight();
+      return;
+    }
+    ensureSelCapacity(n);
+    for (const part of selParts) {
+      for (let i = 0; i < n; i++) {
+        const a = selAnchors[i];
+        const gy = groundYAt(a.x, a.z);
+        writeFlatCollar(part.matrices, i, a.x, a.z, resolveSelScale(a.size), gy);
+      }
+      setThinInstanceCount(part.mesh, n);
+      if (part.colors) setThinInstanceColors(part.mesh, part.colors);
+      flushThinInstances(part.mesh);
+      part.mesh.visible = true;
+    }
+    selVisible = true;
+  }
+
+  /**
+   * @param {{ x: number, z: number, size?: 's' | 'm' | 'l' } | { x: number, z: number, size?: 's' | 'm' | 'l' }[] | null} pos
+   */
+  function setSelectionHighlight(pos) {
+    if (!pos) {
+      clearSelectionHighlight();
+      return;
+    }
+    const list = Array.isArray(pos) ? pos : [pos];
+    if (list.length === 0) {
+      clearSelectionHighlight();
+      return;
+    }
+    selAnchors = list.map((p) => ({
+      x: p.x,
+      z: p.z,
+      size: p.size === 's' || p.size === 'l' ? p.size : 'm',
+    }));
+    applySelectionHighlight();
+  }
+
+  function updateSelectionHighlight() {
+    if (!selVisible || selAnchors.length === 0) return;
+    applySelectionHighlight();
   }
 
   /**
@@ -308,9 +411,10 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     const template = templates.get(typeId);
     if (!template) return null;
 
-    /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array }[]} */
+    /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[]} */
     const layers = [];
-    const colors = makeOwnerColors(INITIAL_CAPACITY, owner);
+    const ownerColors = makeOwnerColors(INITIAL_CAPACITY, owner);
+    const whiteColors = makeWhiteColors(INITIAL_CAPACITY);
     const claimTemplate = !templateClaimed.has(typeId);
     if (claimTemplate) templateClaimed.add(typeId);
     for (let i = 0; i < template.length; i++) {
@@ -318,12 +422,14 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       // First owner batch for this type reuses the template mesh; later owners clone.
       const mesh = claimTemplate ? src : cloneTransformNode(src);
       mesh.pickable = true;
+      const isTeamColor = isTeamColorMaterial(mesh.material);
+      const colors = isTeamColor ? ownerColors : whiteColors;
       const matrices = new Float32Array(INITIAL_CAPACITY * 16);
       setThinInstances(mesh, matrices, INITIAL_CAPACITY);
       setThinInstanceColors(mesh, colors);
       setThinInstanceCount(mesh, 0);
       addToScene(scene, mesh);
-      layers.push({ mesh, matrices, colors });
+      layers.push({ mesh, matrices, colors, isTeamColor });
       pickMeshes.set(mesh, key);
     }
     batch = { layers, capacity: INITIAL_CAPACITY, typeId, owner: owner | 0 };
@@ -334,14 +440,16 @@ export async function createBuildingProps(engine, scene, groundYAt) {
 
   /**
    * Grow thin-instance buffers to next power of two when needed.
-   * @param {{ layers: { mesh: object, matrices: Float32Array, colors: Float32Array }[], capacity: number, owner: number }} batch
+   * @param {{ layers: { mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[], capacity: number, owner: number }} batch
    * @param {number} needed
    */
   function ensureCapacity(batch, needed) {
     if (needed <= batch.capacity) return;
     const cap = capacityFor(needed, { initial: INITIAL_CAPACITY });
-    const colors = makeOwnerColors(cap, batch.owner);
+    const ownerColors = makeOwnerColors(cap, batch.owner);
+    const whiteColors = makeWhiteColors(cap);
     for (const layer of batch.layers) {
+      const colors = layer.isTeamColor ? ownerColors : whiteColors;
       const matrices = new Float32Array(cap * 16);
       setThinInstances(layer.mesh, matrices, cap);
       setThinInstanceColors(layer.mesh, colors);
@@ -401,6 +509,9 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       slotToIndex.set(key, slots);
       for (const layer of batch.layers) {
         setThinInstanceCount(layer.mesh, n);
+        // Color buffers were created while count was zero. Rebind after count
+        // grows so every newly active slot is uploaded instead of reading 0/black.
+        setThinInstanceColors(layer.mesh, layer.colors);
         flushThinInstances(layer.mesh);
       }
     }
@@ -412,46 +523,6 @@ export async function createBuildingProps(engine, scene, groundYAt) {
         flushThinInstances(layer.mesh);
       }
     }
-  }
-
-  /**
-   * Fixed S/M/L world size — does not HUD-scale with camera (menu does that).
-   */
-  function applySelectionHighlight() {
-    if (!selAnchor) return;
-    const gy = groundYAt(selAnchor.x, selAnchor.z);
-    const scale = resolveSelScale(selAnchor.size);
-    for (const part of selParts) {
-      writeFlatCollar(part.matrices, 0, selAnchor.x, selAnchor.z, scale, gy);
-      setThinInstanceCount(part.mesh, 1);
-      flushThinInstances(part.mesh);
-      part.mesh.visible = true;
-    }
-    selVisible = true;
-  }
-
-  /**
-   * @param {{ x: number, z: number, size?: 's' | 'm' | 'l' } | null} pos
-   */
-  function setSelectionHighlight(pos) {
-    if (!pos) {
-      selAnchor = null;
-      for (const part of selParts) {
-        clearMatrix(part.matrices, 0);
-        flushThinInstances(part.mesh);
-        part.mesh.visible = false;
-      }
-      selVisible = false;
-      return;
-    }
-    const size = pos.size === 's' || pos.size === 'l' ? pos.size : 'm';
-    selAnchor = { x: pos.x, z: pos.z, size };
-    applySelectionHighlight();
-  }
-
-  function updateSelectionHighlight() {
-    if (!selVisible || !selAnchor) return;
-    applySelectionHighlight();
   }
 
   /**

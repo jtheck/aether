@@ -34,7 +34,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {() => boolean} [opts.canInteract]
  * @param {() => { owner: number, x: number, z: number }[]} [opts.getAgoras]
  * @param {() => { owner: number, type: string, x: number, z: number, yaw?: number }[]} [opts.getBuildings]
- * @param {(sel: { kind: 'agora' | 'building', index: number } | null) => void} [opts.onBuildingSelected]
+ * @param {(sel: { kind: 'agora' | 'building', index: number } | null, ptr?: { clientX: number, clientY: number }, all?: { kind: 'agora' | 'building', index: number }[]) => void} [opts.onBuildingSelected]
  * @param {() => string | null} [opts.getPlacingType]
  * @param {(buildingType: string | null) => void} [opts.setPlacingType]
  * @param {(x: number, z: number, yaw?: number) => void} [opts.onPlacementMove]
@@ -44,7 +44,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {(yaw: number) => void} [opts.setPlacementYaw]
  * @param {() => boolean} [opts.isRadialOpen]
  * @param {(clientX: number, clientY: number) => (string | null) | Promise<string | null>} [opts.pickRadialOption]
- * @param {(buildingType: string) => void} [opts.onRadialPick]
+ * @param {(pick: string | { kind: 'building' | 'category' | 'unit' | 'upgrade', id: string }) => void} [opts.onRadialPick]
  * @param {(clientX: number, clientY: number) => void} [opts.onRadialHover]
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadial]
  */
@@ -85,6 +85,8 @@ export function createGameInput(opts) {
 
   /** @type {{ kind: 'agora' | 'building', index: number } | null} */
   let selectedBuilding = null;
+  /** @type {{ kind: 'agora' | 'building', index: number }[]} */
+  let selectedBuildings = [];
 
   let boxStart = null;
   let dragPointerId = null;
@@ -97,7 +99,7 @@ export function createGameInput(opts) {
   let placeAnchor = null;
   let placeRotating = false;
   let selectionBox = null;
-  /** @type {{ t: number, x: number, y: number, kind: 'unit' | 'ground', typeId?: number } | null} */
+  /** @type {{ t: number, x: number, y: number, kind: 'unit' | 'ground' | 'building', typeId?: number, buildingTypeKey?: string } | null} */
   let lastTap = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let abilityHoldTimer = null;
@@ -214,23 +216,82 @@ export function createGameInput(opts) {
     return hit;
   }
 
-  function setSelectedBuilding(sel) {
+  /**
+   * @param {{ kind: 'agora' | 'building', index: number } | null} sel
+   * @param {{ clientX: number, clientY: number } | undefined} [ptr]
+   * @param {{ kind: 'agora' | 'building', index: number }[] | null | undefined} [all]
+   */
+  function notifyBuildingSelected(sel, ptr, all) {
     selectedBuilding = sel;
-  }
-
-  function notifyBuildingSelected(sel, ptr) {
-    selectedBuilding = sel;
-    onBuildingSelected?.(sel, ptr);
+    selectedBuildings = all ?? (sel ? [sel] : []);
+    onBuildingSelected?.(sel, ptr, selectedBuildings);
   }
 
   function clearBuildingSelection() {
     abandonPlacement();
-    if (!selectedBuilding) {
+    if (!selectedBuilding && selectedBuildings.length === 0) {
       onBuildingSelected?.(null);
       return;
     }
     selectedBuilding = null;
+    selectedBuildings = [];
     onBuildingSelected?.(null);
+  }
+
+  /**
+   * Type key for double-click / ctrl select-all (agora or placeable id).
+   * @param {{ kind: 'agora' | 'building', index: number }} hit
+   * @returns {string | null}
+   */
+  function buildingTypeKeyOf(hit) {
+    if (hit.kind === 'agora') return 'agora';
+    const b = getBuildings?.()?.[hit.index];
+    return b?.type ?? null;
+  }
+
+  /**
+   * Select every own building matching typeKey (agora or placeable type).
+   * @param {string} typeKey
+   * @param {boolean} add
+   * @param {{ kind: 'agora' | 'building', index: number }} primary
+   * @param {{ clientX: number, clientY: number } | undefined} [ptr]
+   */
+  function selectAllBuildingsOfType(typeKey, add, primary, ptr) {
+    clearUnitSelection();
+    /** @type {{ kind: 'agora' | 'building', index: number }[]} */
+    const matched = [];
+    if (typeKey === 'agora') {
+      const agoras = getAgoras?.() ?? [];
+      for (let i = 0; i < agoras.length; i++) {
+        if ((agoras[i].owner | 0) === localPlayerId) matched.push({ kind: 'agora', index: i });
+      }
+    } else {
+      const buildings = getBuildings?.() ?? [];
+      for (let i = 0; i < buildings.length; i++) {
+        const b = buildings[i];
+        if ((b.owner | 0) !== localPlayerId) continue;
+        if (b.type !== typeKey) continue;
+        matched.push({ kind: 'building', index: i });
+      }
+    }
+    if (matched.length === 0) {
+      notifyBuildingSelected(primary, ptr, [primary]);
+      return;
+    }
+    if (add && selectedBuildings.length > 0) {
+      const seen = new Set(selectedBuildings.map((s) => `${s.kind}:${s.index}`));
+      const merged = selectedBuildings.slice();
+      for (let i = 0; i < matched.length; i++) {
+        const s = matched[i];
+        const k = `${s.kind}:${s.index}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        merged.push(s);
+      }
+      notifyBuildingSelected(primary, ptr, merged);
+      return;
+    }
+    notifyBuildingSelected(primary, ptr, matched);
   }
 
   function selectedIds() {
@@ -605,7 +666,7 @@ export function createGameInput(opts) {
    * @param {{
    *   tapAt?: number,
    *   forceMove?: boolean,
-   *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground', typeId?: number } | null,
+   *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground' | 'building', typeId?: number, buildingTypeKey?: string } | null,
    *   epoch?: number,
    * }} [click]
    */
@@ -660,9 +721,27 @@ export function createGameInput(opts) {
     const bld = await pickBuildingAt(e.clientX, e.clientY);
     if (!clickCurrent(epoch)) return;
     if (bld) {
-      lastTap = null;
-      clearUnitSelection();
-      notifyBuildingSelected(bld, { clientX: e.clientX, clientY: e.clientY });
+      const typeKey = buildingTypeKeyOf(bld);
+      const selectAll =
+        !!typeKey &&
+        (e.ctrlKey ||
+          e.metaKey ||
+          (!!prevTap &&
+            prevTap.kind === 'building' &&
+            prevTap.buildingTypeKey === typeKey &&
+            tapAt - prevTap.t <= DOUBLE_MS &&
+            Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX));
+      if (!clickCurrent(epoch)) return;
+      lastTap = typeKey
+        ? { t: tapAt, x: e.clientX, y: e.clientY, kind: 'building', buildingTypeKey: typeKey }
+        : null;
+      const ptr = { clientX: e.clientX, clientY: e.clientY };
+      if (selectAll && typeKey) {
+        selectAllBuildingsOfType(typeKey, e.shiftKey, bld, ptr);
+      } else {
+        clearUnitSelection();
+        notifyBuildingSelected(bld, ptr);
+      }
       return;
     }
 
@@ -695,7 +774,7 @@ export function createGameInput(opts) {
     abilityHoldGen++;
     clearAbilityHold();
 
-    // Snapshot before this click mutates lastTap (unit double-select-all).
+    // Snapshot before this click mutates lastTap (unit/building double-select-all).
     const prevTap = lastTap;
 
     if (canUseInput() && e.type !== 'pointercancel') {
@@ -713,41 +792,18 @@ export function createGameInput(opts) {
           }
         }
         if (!radialHandled) {
-          // Clicking an own unit abandons place mode and selects (don't confirm place).
-          const unitHit = await pickUnitAt(e.clientX, e.clientY);
-          const world = getWorld();
-          if (
-            unitHit >= 0 &&
-            world.owner[unitHit] === localPlayerId &&
+          // Placement owns LMB — never steal the click for unit selection.
+          const yaw = currentYaw();
+          if (placeRotating && placeAnchor) {
+            onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
+          } else if (
             d &&
             Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
           ) {
-            abandonPlacement();
-            lastTap = {
-              t: tapAt,
-              x: e.clientX,
-              y: e.clientY,
-              kind: 'unit',
-              typeId: world.type[unitHit],
-            };
-            if (!e.shiftKey) selectedBuf.fill(0);
-            selectedBuf[unitHit] = 1;
-            clearBuildingSelection();
-            syncSelectionSquad();
-            onSelectionChanged?.();
-          } else {
-            const yaw = currentYaw();
-            if (placeRotating && placeAnchor) {
-              onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
-            } else if (
-              d &&
-              Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
-            ) {
-              const g =
-                placeAnchor ??
-                renderer.screenToGround?.(e.clientX, e.clientY);
-              if (g) onPlacementConfirm?.(g.x, g.z, yaw);
-            }
+            const g =
+              placeAnchor ??
+              renderer.screenToGround?.(e.clientX, e.clientY);
+            if (g) onPlacementConfirm?.(g.x, g.z, yaw);
           }
         }
         resetPlaceGesture();

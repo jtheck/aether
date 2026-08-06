@@ -19,10 +19,12 @@ import {
   setThinInstanceColors,
   setThinInstanceColor,
   onBeforeRender,
+  onSceneDispose,
   registerSceneWithShadowSupport,
   startEngine,
   getViewProjectionMatrix,
   mat4Invert,
+  loadFont,
   createCsmDirectionalShadowGenerator,
   setShadowTaskCasterMeshes,
   createGpuPicker,
@@ -63,6 +65,7 @@ import { createMushroomPreviews } from './mushrooms.js';
 import { createAgoraProps } from './agoras.js';
 import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
+import { createBuildingActionRadial } from './buildingActionRadial.js';
 import {
   FX_DISTANCE_SQ,
   LOD_ENABLED,
@@ -233,7 +236,7 @@ function initThinInstances(mesh, activeCount, gpuCapacity) {
   return { matrices, colors, gpuCapacity: cap };
 }
 
-/** Small clearance above sampled terrain (GLB soles are at local y=0). */
+/** Small clearance above sampled terrain (instance origin at ground + this). */
 const FOOT_CLEARANCE = 0.06;
 
 /** Yaw, then pitch (somersault), then roll (barrel) — comic air tumble. */
@@ -633,6 +636,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const preallocKoth = gpuCapacity > capacity;
   const engine = await createEngine(canvas, { msaaSamples: 1 });
   const scene = createSceneContext(engine);
+  const buildingMenuFontPromise = loadFont('/assets/fonts/Roboto-Regular.ttf').catch((err) => {
+    console.warn('Building menu labels disabled: Roboto font failed to load.', err);
+    return null;
+  });
   if (opts.field && scene.clearColor) {
     scene.clearColor.r = 0.06;
     scene.clearColor.g = 0.11;
@@ -1554,7 +1561,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   mushrooms = await createMushroomPreviews(engine, scene, groundYAt);
   const agoraProps = await createAgoraProps(engine, scene, groundYAt);
   const buildingProps = await createBuildingProps(engine, scene, groundYAt);
-  const buildingRadial = await createBuildingRadialMenu(engine, scene, groundYAt, {
+  const radialScreen = {
     worldToScreen(x, y, z) {
       const { width, height } = canvasCoords(0, 0);
       const c = matVec4(viewProjection(), x, y, z, 1);
@@ -1580,8 +1587,30 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
     getViewport() {
       const { width, height } = canvasCoords(0, 0);
-      return { width, height };
+      return {
+        width,
+        height,
+        pixelWidth: canvas.width,
+        pixelHeight: canvas.height,
+      };
     },
+    font: await buildingMenuFontPromise,
+  };
+  const buildingRadial = await createBuildingRadialMenu(
+    engine,
+    scene,
+    groundYAt,
+    radialScreen,
+  );
+  const actionRadial = await createBuildingActionRadial(
+    engine,
+    scene,
+    groundYAt,
+    radialScreen,
+  );
+  onSceneDispose(scene, () => {
+    buildingRadial.disposeLabels?.();
+    actionRadial.disposeLabels?.();
   });
 
   function radialPickingRay(clientX, clientY) {
@@ -2022,6 +2051,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   await registerSceneWithShadowSupport(scene);
+  buildingRadial.registerLabels?.();
+  actionRadial.registerLabels?.();
   const gpuPicker = createGpuPicker(scene);
 
   /**
@@ -2194,6 +2225,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // Build menu: screen-anchored HUD (project agora, edge-clamp, fixed depth).
     if (buildingRadial.isOpen()) {
       buildingRadial.update?.(camera);
+    }
+    if (actionRadial.isOpen()) {
+      actionRadial.update?.(camera);
     }
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
@@ -2458,7 +2492,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       buildingProps.place(list ?? []);
     },
 
-    /** Building selection collar — fixed S/M/L world size (not the build menu). */
+    /** Building selection collar(s) — fixed S/M/L world size (not the build menu). */
     setBuildingSelectionHighlight(pos) {
       buildingProps.setSelectionHighlight?.(pos ?? null);
     },
@@ -2492,6 +2526,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** Build menu (tilted ring + pads + icons). Screen-stable size via eye distance. */
     showBuildingRadial(x, z) {
+      actionRadial.hide();
       buildingRadial.showAt(x, z, camera);
     },
 
@@ -2504,27 +2539,83 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Pick a radial option (CPU disc hit — ring + hole). Sync-friendly.
+     * Placeable action menu (units / upgrades). Mutually exclusive with the agora build radial.
+     * @param {number} x
+     * @param {number} z
+     * @param {string} buildingType
+     */
+    showActionRadial(x, z, buildingType) {
+      buildingRadial.hide();
+      actionRadial.showAt(x, z, buildingType, camera);
+    },
+
+    hideActionRadial() {
+      actionRadial.hide();
+    },
+
+    isActionRadialOpen() {
+      return actionRadial.isOpen();
+    },
+
+    /** Shrink the open radial (~50%, animated) while ghost-placing so it stays out of the way. */
+    setBuildingRadialCompact(on) {
+      buildingRadial.setCompact?.(Boolean(on));
+    },
+
+    /** Switch Basic / Advanced / Elemental page on the open radial. */
+    setBuildingRadialCategory(categoryId, lock = false) {
+      buildingRadial.setCategory?.(categoryId, { lock: Boolean(lock) });
+    },
+
+    /** Let pie hover switch pages again (after canceling a building ghost). */
+    unlockBuildingRadialCategory() {
+      buildingRadial.unlockCategory?.();
+    },
+
+    /**
+     * Pick a radial option (CPU disc hit — pie / pad / icon). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
+     * @returns {Promise<{ kind: 'building' | 'category', id: string } | null>}
      */
     async pickBuildingRadial(clientX, clientY) {
-      if (!buildingRadial.isOpen()) return null;
       const ray = radialPickingRay(clientX, clientY);
-      return buildingRadial.pickOptionAtRay?.(ray) ?? null;
+      if (buildingRadial.isOpen()) {
+        return buildingRadial.pickOptionAtRay?.(ray) ?? null;
+      }
+      if (actionRadial.isOpen()) {
+        return actionRadial.pickOptionAtRay?.(ray) ?? null;
+      }
+      return null;
     },
 
     /**
      * Hover via CPU disc pick (full pad including hole). Sync — no GPU queue.
+     * When switchCategory is true and the page is unlocked, pie hover flips pages.
+     * After a pie click (locked), hover only highlights — page stays put.
      * @param {number} clientX
      * @param {number} clientY
      */
-    hoverBuildingRadial(clientX, clientY) {
-      if (!buildingRadial.isOpen()) return;
+    hoverBuildingRadial(clientX, clientY, switchCategory = false) {
       const ray = radialPickingRay(clientX, clientY);
-      const type = buildingRadial.pickOptionAtRay?.(ray) ?? null;
-      if (type) buildingRadial.setHoverByType?.(type);
-      else buildingRadial.clearHover();
+      if (buildingRadial.isOpen()) {
+        const pick = buildingRadial.pickOptionAtRay?.(ray) ?? null;
+        if (
+          switchCategory &&
+          pick?.kind === 'category' &&
+          !buildingRadial.categoryLocked
+        ) {
+          buildingRadial.setCategory?.(pick.id);
+        }
+        if (buildingRadial.setHoverFromPick) buildingRadial.setHoverFromPick(pick);
+        else if (pick?.kind === 'building') buildingRadial.setHoverByType?.(pick.id);
+        else buildingRadial.clearHover();
+        return;
+      }
+      if (actionRadial.isOpen()) {
+        const pick = actionRadial.pickOptionAtRay?.(ray) ?? null;
+        actionRadial.setHoverFromPick?.(pick);
+      }
     },
 
     /**
@@ -2533,9 +2624,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * Always ray-test — a stale hover must not claim the whole screen.
      */
     hitBuildingRadial(clientX, clientY) {
-      if (!buildingRadial.isOpen()) return false;
       const ray = radialPickingRay(clientX, clientY);
-      return buildingRadial.hitAtRay?.(ray) ?? false;
+      if (buildingRadial.isOpen()) {
+        return buildingRadial.hitAtRay?.(ray) ?? false;
+      }
+      if (actionRadial.isOpen()) {
+        return actionRadial.hitAtRay?.(ray) ?? false;
+      }
+      return false;
     },
 
     /** Swap flat ground for atlas terrain (or rebuild after world reset). */
@@ -3075,8 +3171,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /**
      * Start a click-command ping at ground (x, z).
-     * Attack-move = red; force-move = authored/white. Particles stay cyan.
-     * Force-move adds a wider splash; double-tap upgrades without restarting.
+     * Attack-move = red arrow + hot red ring; force-move = gray arrow + cyan ring.
+     * Both get a flat radial ring; force-move is wider. Double-tap upgrades
+     * without restarting the arrow.
      * @param {'white' | 'red' | 'yellow'} [tint]
      * @param {{ forceMove?: boolean }} [opts]
      */
@@ -3088,7 +3185,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const eye = cameraEyePos();
       const dist = Math.hypot(x - eye.x, gy - eye.y, z - eye.z) || 1;
       const zoom = Math.min(3.5, Math.max(0.8, dist / 200));
-      const burstColor = [0.45, 0.95, 1, 0.95];
+      const moveBurst = [0.45, 0.95, 1, 0.95];
+      const attackBurst = [1, 0.22, 0.1, 1];
+      const attackPulse = [1, 0.18, 0.08, 0.85];
 
       // Double-tap force-move upgrades the pending attack-move arrow — don't restart.
       const upgrade =
@@ -3105,9 +3204,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const spinDir = nextOrderSpinDir;
         nextOrderSpinDir = -nextOrderSpinDir;
         orderPing = { x, y: gy, z, started: now, tint: mode, spinDir };
+        const sparkColor = forceMove ? moveBurst : attackBurst;
         particles.emitBurst({
           position: [x, gy + 0.35 * zoom, z],
-          color: burstColor,
+          color: sparkColor,
           count: 14,
           speed: 8 * zoom,
           verticalSpeed: 6 * zoom,
@@ -3117,11 +3217,37 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           startSize: 1.4 * zoom,
           endSize: 0.12 * zoom,
         });
+        // Attack-move ground ring — hot red flat wash (force-move gets cyan below).
+        if (!forceMove) {
+          particles.emitBurst({
+            position: [x, gy + 0.18 * zoom, z],
+            color: attackBurst,
+            count: 20,
+            speed: 14 * zoom,
+            verticalSpeed: 3.0 * zoom,
+            gravity: [0, -40 * zoom, 0],
+            drag: 2.0,
+            lifetime: 0.38,
+            startSize: 1.9 * zoom,
+            endSize: 0.06 * zoom,
+          });
+          // Soft expanding pulse so the ring silhouette reads at a glance.
+          particles.emit({
+            position: [x, gy + 0.1 * zoom, z],
+            velocity: [0, 0.5 * zoom, 0],
+            gravity: [0, 0, 0],
+            color: attackPulse,
+            lifetime: 0.3,
+            startSize: 2.2 * zoom,
+            endSize: 12 * zoom,
+            drag: 0.05,
+          });
+        }
       }
       if (forceMove) {
         particles.emitBurst({
           position: [x, gy + 0.18 * zoom, z],
-          color: burstColor,
+          color: moveBurst,
           count: 22,
           speed: 16 * zoom,
           verticalSpeed: 3.5 * zoom,

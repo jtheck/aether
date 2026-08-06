@@ -1,6 +1,6 @@
-// Agora build menu — tilted annulus above the agora (EDGE_PIN_HUD gates
-// screen-edge placement; currently off). Option angles stay screen-stable;
-// hover/click uses CPU disc/sphere hits.
+// Building action menu — tilted ring above a selected placeable.
+// Units + upgrades on one ring (no center pie). When both sides exist, the
+// ring splits into two arcs with the fuller side getting more span (≥120°).
 
 import {
   addToScene,
@@ -18,120 +18,76 @@ import {
   setSubtreeVisible,
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
-import { loadBakedUnitMeshParts } from './unitModels.js';
+import { loadBakedUnitMeshParts, UNIT_MODEL_URLS } from './unitModels.js';
+import { VAT_UNIT_DEFS } from './vatUnits.js';
 import {
-  BUILDING_MODEL_URLS,
-  PLACEABLE_BUILDINGS,
+  BUILDING_MENUS,
+  BUILDING_MENU_UNITS,
+  UPGRADE_MODEL_URLS,
+  getBuildingMenu,
 } from '../sim/buildings.js';
+
+/** Static or VAT unit GLB for radial icons. */
+function unitMenuModelUrl(typeId) {
+  return UNIT_MODEL_URLS[typeId] ?? VAT_UNIT_DEFS[typeId]?.url ?? null;
+}
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
-const MENU_RING_OUTER = 16;
-const MENU_RING_INNER = 13.2;
+const MENU_RING_OUTER = 14;
+const MENU_RING_INNER = 11.4;
 const MENU_RING_H = 0.35;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
-const PAD_OUTER = 2.6;
-const PAD_INNER = 1.7;
+const PAD_OUTER = 2.4;
+const PAD_INNER = 1.55;
 const PAD_H = 0.22;
-/** Lift pad rings (and icons) along the menu normal, off the base ring. */
 const PAD_LIFT = 1.35;
-/** Extra lift of icons along the menu normal above their pad ring. */
 const ICON_LIFT = 0.85;
-const OPTION_SCALE = 0.26;
-/** Pick sphere around each icon (covers the mini building, not just the pad). */
-const ICON_PICK_R = 5.5;
-/** Center category pie — sits in the ring hole. */
-const PIE_OUTER = MENU_RING_INNER * 0.88;
-const PIE_INNER = 3.2;
-const PIE_H = 0.4;
-const PIE_LIFT = 0.25;
-/** Constant-width channels between slices (parallel opposing edges). */
-const PIE_SLICE_GAP = 0.8;
-/** Slight deliberate skew so the center control is not cardinally aligned. */
-const PIE_ROTATION = 0.13;
-/** Three five-button pages interleave at exactly one-third of a 72° slot. */
-const BUTTON_RING_BASE_ROTATION = -0.08;
-const BUTTON_RING_PAGE_STEP = (Math.PI * 2) / (5 * 3);
-const BUTTON_RING_ROTATIONS = /** @type {const} */ ({
-  basic: BUTTON_RING_BASE_ROTATION - BUTTON_RING_PAGE_STEP,
-  advanced: BUTTON_RING_BASE_ROTATION,
-  elemental: BUTTON_RING_BASE_ROTATION + BUTTON_RING_PAGE_STEP,
-});
-/**
- * Lean from horizontal toward the camera (not a full billboard).
- * ~32° — readable without standing the ring on end.
- */
+const OPTION_SCALE = 1.0;
+const ICON_PICK_R = 5.2;
+/** Min arc per category when both sides are present (~120°). */
+const MIN_ARC = (Math.PI * 2 * 120) / 360;
+/** Gap between the two category arcs. */
+const ARC_GAP = 0.28;
 const MENU_TILT = 0.56;
-/**
- * Screen-edge pin (project agora → clamp → place on ray). Off for now — menu
- * stays above the agora. Flip to true when revisiting the HUD placement.
- */
-const EDGE_PIN_HUD = false;
-/**
- * Preferred depth from the camera eye (edge-pin path). Scale is tied to depth
- * so on-screen size stays steady. When the agora is closer, we pull in.
- */
-const HUD_PLACE_DIST = 70;
-const HUD_PLACE_MIN = 24;
-const HUD_PLACE_FRAC = 0.82;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 1;
 const HUD_SCALE_MIN = 0.35;
-/** While ghost-placing, shrink the open radial so it stays out of the way. */
-const COMPACT_SCALE = 0.7;
 const LABEL_FONT_SIZE = 28;
 const LABEL_SCREEN_SCALE = 0.65;
 const LABEL_DOWN = 2.4;
 const LABEL_LIFT = 1.25;
-/** Exp approach rate for compact scale (higher = snappier; ~30 ≈ 0.1s). */
-const COMPACT_LERP_SPEED = 30;
-/** Inset so the whole ring stays inside the viewport when edge-pinned. */
-const HUD_EDGE_MARGIN_FRAC = 0.2;
-const MAX_OPTIONS = 5;
-
-/** Main ring only — sits above the world, so let terrain/units read through a bit. */
+const MAX_OPTIONS = 8;
 const MENU_RING_ALPHA = 0.55;
 const PAD_HOVER_COLOR = [1, 0.85, 0.25];
 const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
 
-/** @typedef {'basic' | 'advanced' | 'elemental'} CategoryId */
+/** @typedef {'unit' | 'upgrade'} ActionCategoryId */
 
-/** Category pie + ring tints. */
-const CATEGORIES = /** @type {const} */ ([
-  {
-    id: 'basic',
-    name: 'Basic',
-    color: [0.2, 0.82, 0.9],
-    emissive: [0.08, 0.55, 0.68],
-    pad: [0.28, 0.9, 0.88],
-    padEm: [0.08, 0.58, 0.56],
+const CATEGORIES = /** @type {const} */ ({
+  unit: {
+    id: 'unit',
+    name: 'Units',
+    color: [0.92, 0.52, 0.28],
+    emissive: [0.62, 0.32, 0.12],
+    pad: [0.95, 0.62, 0.38],
+    padEm: [0.55, 0.3, 0.12],
   },
-  {
-    id: 'advanced',
-    name: 'Advanced',
-    color: [0.38, 0.58, 0.95],
-    emissive: [0.2, 0.38, 0.78],
-    pad: [0.35, 0.72, 0.92],
-    padEm: [0.15, 0.45, 0.65],
+  upgrade: {
+    id: 'upgrade',
+    name: 'Upgrades',
+    color: [0.28, 0.78, 0.86],
+    emissive: [0.12, 0.5, 0.58],
+    pad: [0.38, 0.86, 0.9],
+    padEm: [0.12, 0.52, 0.56],
   },
-  {
-    id: 'elemental',
-    name: 'Elemental',
-    color: [0.28, 0.85, 0.55],
-    emissive: [0.12, 0.55, 0.35],
-    pad: [0.3, 0.82, 0.58],
-    padEm: [0.12, 0.5, 0.32],
-  },
-]);
-
-const MODEL_URLS = BUILDING_MODEL_URLS;
+});
 
 /**
  * Flat washer / annulus in XZ (Y up). Unit scale: outer radius = 1.
  * @param {object} engine
  * @param {string} name
  * @param {{ inner?: number, height?: number, segments?: number }} [opts]
- *   inner = innerRadius / outerRadius (0..1). height in units of outer radius.
  */
 function createAnnulusMesh(engine, name, opts = {}) {
   const innerFrac = opts.inner ?? 0.75;
@@ -155,7 +111,6 @@ function createAnnulusMesh(engine, name, opts = {}) {
     return positions.length / 3 - 1;
   }
 
-  // Top + bottom caps
   for (let cap = 0; cap < 2; cap++) {
     const y = cap === 0 ? y1 : y0;
     const ny = cap === 0 ? 1 : -1;
@@ -170,19 +125,14 @@ function createAnnulusMesh(engine, name, opts = {}) {
     for (let i = 0; i < segments; i++) {
       const i0 = base + i * 2;
       const i1 = base + ((i + 1) % segments) * 2;
-      const o0 = i0;
-      const o1 = i1;
-      const n0 = i0 + 1;
-      const n1 = i1 + 1;
       if (cap === 0) {
-        indices.push(o0, o1, n1, o0, n1, n0);
+        indices.push(i0, i1, i1 + 1, i0, i1 + 1, i0 + 1);
       } else {
-        indices.push(o0, n1, o1, o0, n0, n1);
+        indices.push(i0, i1 + 1, i1, i0, i0 + 1, i1 + 1);
       }
     }
   }
 
-  // Outer wall
   {
     const base = positions.length / 3;
     for (let i = 0; i < segments; i++) {
@@ -199,7 +149,6 @@ function createAnnulusMesh(engine, name, opts = {}) {
     }
   }
 
-  // Inner wall
   {
     const base = positions.length / 3;
     for (let i = 0; i < segments; i++) {
@@ -226,21 +175,18 @@ function createAnnulusMesh(engine, name, opts = {}) {
 }
 
 /**
- * Pie wedge in XZ (Y up). Unit outer radius = 1; optional inner hub hole.
+ * Annulus sector in XZ (Y up). Unit outer radius = 1.
  * @param {object} engine
  * @param {string} name
  * @param {{ startAng?: number, endAng?: number, inner?: number, height?: number, segments?: number, gap?: number }} [opts]
  */
 function createPieSliceMesh(engine, name, opts = {}) {
   const startAng = opts.startAng ?? 0;
-  const endAng = opts.endAng ?? (Math.PI * 2) / 3;
-  const segments = Math.max(4, opts.segments ?? 20);
+  const endAng = opts.endAng ?? Math.PI;
+  const segments = Math.max(4, opts.segments ?? 24);
   const h = opts.height ?? 0.04;
   const ro = 1;
   const ri = Math.max(0.02, Math.min(0.9, opts.inner ?? 0.12));
-  // Each slice retreats half the requested channel width. At each radius the
-  // angular retreat differs, keeping the resulting cut edge parallel to the
-  // separator ray instead of producing a narrow missing wedge.
   const edgeInset = Math.max(0, opts.gap ?? 0) * 0.5;
   const insetAngle = (radius) =>
     Math.asin(Math.min(0.95, edgeInset / Math.max(radius, 1e-4)));
@@ -270,7 +216,6 @@ function createPieSliceMesh(engine, name, opts = {}) {
     return start + (i / segments) * (end - start);
   }
 
-  // Top + bottom caps (annulus sector)
   for (let cap = 0; cap < 2; cap++) {
     const y = cap === 0 ? y1 : y0;
     const ny = cap === 0 ? 1 : -1;
@@ -284,17 +229,14 @@ function createPieSliceMesh(engine, name, opts = {}) {
     for (let i = 0; i < segments; i++) {
       const o0 = base + i * 2;
       const o1 = base + (i + 1) * 2;
-      const n0 = o0 + 1;
-      const n1 = o1 + 1;
       if (cap === 0) {
-        indices.push(o0, o1, n1, o0, n1, n0);
+        indices.push(o0, o1, o1 + 1, o0, o1 + 1, o0 + 1);
       } else {
-        indices.push(o0, n1, o1, o0, n0, n1);
+        indices.push(o0, o1 + 1, o1, o0, o0 + 1, o1 + 1);
       }
     }
   }
 
-  // Outer arc wall
   {
     const base = positions.length / 3;
     for (let i = 0; i <= segments; i++) {
@@ -311,7 +253,6 @@ function createPieSliceMesh(engine, name, opts = {}) {
     }
   }
 
-  // Inner arc wall
   {
     const base = positions.length / 3;
     for (let i = 0; i <= segments; i++) {
@@ -328,7 +269,6 @@ function createPieSliceMesh(engine, name, opts = {}) {
     }
   }
 
-  // Parallel cut walls at start / end.
   const cuts = [
     { separatorAng: startAng, outerAng: outerStartAng, innerAng: innerStartAng },
     { separatorAng: endAng, outerAng: outerEndAng, innerAng: innerEndAng },
@@ -336,7 +276,6 @@ function createPieSliceMesh(engine, name, opts = {}) {
   for (const cut of cuts) {
     const c = Math.cos(cut.separatorAng);
     const s = Math.sin(cut.separatorAng);
-    // Outward normal for start wall faces −tangent; end wall +tangent.
     const outward = cut.separatorAng === startAng ? -1 : 1;
     const nx = -s * outward;
     const nz = c * outward;
@@ -377,7 +316,6 @@ function setThinInstanceCount(mesh, count) {
 }
 
 /**
- * Thin-instance matrix: X=right, Y=up, Z=forward (column-major), uniform scale.
  * @param {Float32Array} matrices
  * @param {number} slot
  */
@@ -402,10 +340,6 @@ function writeFacingMatrix(matrices, slot, x, y, z, rx, ry, rz, ux, uy, uz, fx, 
   matrices[o + 15] = 1;
 }
 
-/**
- * Quaternion from orthonormal basis columns (X, Y, Z).
- * @returns {{ x: number, y: number, z: number, w: number }}
- */
 function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
   const trace = xx + yy + zz;
   let x;
@@ -466,14 +400,10 @@ function previewColorFromMaterial(mat) {
   return [0.72, 0.75, 0.8];
 }
 
-/**
- * Radial icons use isolated lit StandardMaterials. A strong emissive wash keeps
- * the resting icon silhouette-like; hover lowers it to reveal normal shading.
- */
 function makeIconPreviewMaterial(source) {
   const color = previewColorFromMaterial(source);
   const mat = createStandardMaterial();
-  mat.name = `${source?.name ?? 'building'}-radial`;
+  mat.name = `${source?.name ?? 'action'}-radial`;
   mat.diffuseColor = color;
   mat.emissiveColor = [0.82, 0.82, 0.82];
   mat.alpha = 1;
@@ -482,10 +412,6 @@ function makeIconPreviewMaterial(source) {
   return mat;
 }
 
-/**
- * Ray × plane. Plane through (px,py,pz) with unit normal (nx,ny,nz).
- * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
- */
 function rayHitPlane(ray, px, py, pz, nx, ny, nz) {
   const denom = ray.dx * nx + ray.dy * ny + ray.dz * nz;
   if (Math.abs(denom) < 1e-8) return null;
@@ -499,10 +425,6 @@ function rayHitPlane(ray, px, py, pz, nx, ny, nz) {
   };
 }
 
-/**
- * Nearest positive ray–sphere hit distance, or null.
- * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
- */
 function rayHitSphereT(ray, cx, cy, cz, radius) {
   const lx = ray.ox - cx;
   const ly = ray.oy - cy;
@@ -518,10 +440,6 @@ function rayHitSphereT(ray, cx, cy, cz, radius) {
   return t1 >= 0 ? t1 : null;
 }
 
-/**
- * Place annulus (local Y = face normal) with camera-facing basis.
- * Basis columns: X=right, Y=normal(toCam), Z=planeZ (−screenUp).
- */
 function placeMeshOriented(mesh, x, y, z, scale, rx, ry, rz, nx, ny, nz, tx, ty, tz) {
   if (mesh.position) {
     mesh.position.x = x;
@@ -555,6 +473,47 @@ function hideMesh(mesh) {
 }
 
 /**
+ * Arc spans for units (left) / upgrades (right). Fuller side gets more angle;
+ * each side keeps at least MIN_ARC when both are present.
+ * `full`: even spacing from screen-top (agora-style). Otherwise center in arc.
+ * @param {number} unitCount
+ * @param {number} upgradeCount
+ * @returns {{
+ *   units: { start: number, span: number, full?: boolean } | null,
+ *   upgrades: { start: number, span: number, full?: boolean } | null,
+ * }}
+ */
+function computeArcs(unitCount, upgradeCount) {
+  const hasU = unitCount > 0;
+  const hasG = upgradeCount > 0;
+  if (!hasU && !hasG) return { units: null, upgrades: null };
+
+  if (hasU && !hasG) {
+    return {
+      units: { start: -Math.PI / 2, span: Math.PI * 2, full: true },
+      upgrades: null,
+    };
+  }
+  if (!hasU && hasG) {
+    return {
+      units: null,
+      upgrades: { start: -Math.PI / 2, span: Math.PI * 2, full: true },
+    };
+  }
+
+  const usable = Math.PI * 2 - 2 * ARC_GAP;
+  const spare = Math.max(0, usable - 2 * MIN_ARC);
+  const totalN = unitCount + upgradeCount;
+  const arcU = MIN_ARC + spare * (unitCount / totalN);
+  const arcG = MIN_ARC + spare * (upgradeCount / totalN);
+  // Units left (center π), upgrades right (center 0).
+  return {
+    units: { start: Math.PI - arcU * 0.5, span: arcU },
+    upgrades: { start: -arcG * 0.5, span: arcG },
+  };
+}
+
+/**
  * @param {object} engine
  * @param {object} scene
  * @param {(x: number, z: number) => number} groundYAt
@@ -565,72 +524,126 @@ function hideMesh(mesh) {
  *   font?: object | null,
  * }} [screen]
  */
-export async function createBuildingRadialMenu(engine, scene, groundYAt, screen = {}) {
-  const basicCat = CATEGORIES[0];
-  const ringMat = makeRingMaterial(basicCat.color, basicCat.emissive, MENU_RING_ALPHA);
-
-  // Menu ring: annulus authored at outerR=1 → scale XZ to MENU_RING_OUTER.
-  const menuRing = createAnnulusMesh(engine, 'build-menu-ring', {
+export async function createBuildingActionRadial(engine, scene, groundYAt, screen = {}) {
+  const fullRingMat = makeRingMaterial(
+    CATEGORIES.unit.color,
+    CATEGORIES.unit.emissive,
+    MENU_RING_ALPHA,
+  );
+  const fullRing = createAnnulusMesh(engine, 'action-menu-ring', {
     inner: MENU_RING_INNER / MENU_RING_OUTER,
     height: MENU_RING_H / MENU_RING_OUTER,
     segments: 64,
   });
-  menuRing.material = ringMat;
-  menuRing.pickable = false;
-  menuRing.renderOrder = 210;
-  hideMesh(menuRing);
-  addToScene(scene, menuRing);
+  fullRing.material = fullRingMat;
+  fullRing.pickable = false;
+  fullRing.renderOrder = 210;
+  hideMesh(fullRing);
+  addToScene(scene, fullRing);
 
-  /** Center category pie — 3 wedges. Angles match rim coords (−π/2 = screen-top). */
-  const sliceSpan = (Math.PI * 2) / CATEGORIES.length;
-  const sliceStart0 = -Math.PI / 2 - sliceSpan * 0.5 + PIE_ROTATION;
-  /** @type {{ id: CategoryId, mesh: object, mat: object, startAng: number, endAng: number }[]} */
-  const pieSlices = [];
-  for (let i = 0; i < CATEGORIES.length; i++) {
-    const cat = CATEGORIES[i];
-    const startAng = sliceStart0 + i * sliceSpan;
-    const endAng = startAng + sliceSpan;
-    const mesh = createPieSliceMesh(engine, `build-menu-pie-${cat.id}`, {
+  /** Split-ring halves — pie-annulus meshes cached per (category, start, end). */
+  /** @type {Map<ActionCategoryId, { mesh: object | null, mat: object, startAng: number, endAng: number }>} */
+  const arcRings = new Map([
+    [
+      'unit',
+      {
+        mesh: null,
+        mat: makeRingMaterial(
+          CATEGORIES.unit.color,
+          CATEGORIES.unit.emissive,
+          MENU_RING_ALPHA,
+        ),
+        startAng: 0,
+        endAng: 0,
+      },
+    ],
+    [
+      'upgrade',
+      {
+        mesh: null,
+        mat: makeRingMaterial(
+          CATEGORIES.upgrade.color,
+          CATEGORIES.upgrade.emissive,
+          MENU_RING_ALPHA,
+        ),
+        startAng: 0,
+        endAng: 0,
+      },
+    ],
+  ]);
+  /** @type {Map<string, object>} */
+  const arcMeshByKey = new Map();
+
+  /**
+   * @param {ActionCategoryId} id
+   * @param {number} startAng
+   * @param {number} endAng
+   */
+  function ensureArcMesh(id, startAng, endAng) {
+    const entry = arcRings.get(id);
+    if (!entry) return null;
+    const key = `${id}:${startAng.toFixed(4)}:${endAng.toFixed(4)}`;
+    const cached = arcMeshByKey.get(key);
+    if (cached) {
+      if (entry.mesh && entry.mesh !== cached) hideMesh(entry.mesh);
+      entry.mesh = cached;
+      entry.startAng = startAng;
+      entry.endAng = endAng;
+      return entry;
+    }
+    const mesh = createPieSliceMesh(engine, `action-menu-arc-${key}`, {
       startAng,
       endAng,
-      inner: PIE_INNER / PIE_OUTER,
-      height: PIE_H / PIE_OUTER,
-      segments: 18,
-      gap: PIE_SLICE_GAP / PIE_OUTER,
+      inner: MENU_RING_INNER / MENU_RING_OUTER,
+      height: MENU_RING_H / MENU_RING_OUTER,
+      segments: 32,
+      gap: 0.04,
     });
-    const mat = makeRingMaterial(cat.color, cat.emissive, 0.92);
-    mesh.material = mat;
+    mesh.material = entry.mat;
     mesh.pickable = false;
-    mesh.renderOrder = 215;
+    mesh.renderOrder = 210;
     hideMesh(mesh);
     addToScene(scene, mesh);
-    pieSlices.push({ id: cat.id, mesh, mat, startAng, endAng });
+    arcMeshByKey.set(key, mesh);
+    if (entry.mesh) hideMesh(entry.mesh);
+    entry.mesh = mesh;
+    entry.startAng = startAng;
+    entry.endAng = endAng;
+    return entry;
   }
 
-  /** Pad rings under each option — own material so hover can recolor. */
-  /** @type {{ mesh: object, mat: object }[]} */
+  function hideArcRings() {
+    for (const entry of arcRings.values()) {
+      if (entry.mesh) hideMesh(entry.mesh);
+    }
+    for (const mesh of arcMeshByKey.values()) hideMesh(mesh);
+  }
+
+  /** @type {{ mesh: object, mat: object, category: ActionCategoryId }[]} */
   const pads = [];
   for (let i = 0; i < MAX_OPTIONS; i++) {
-    const pad = createAnnulusMesh(engine, `build-menu-pad-${i}`, {
+    const pad = createAnnulusMesh(engine, `action-menu-pad-${i}`, {
       inner: PAD_INNER / PAD_OUTER,
       height: PAD_H / PAD_OUTER,
       segments: 28,
     });
-    const mat = makeRingMaterial(basicCat.pad, basicCat.padEm);
+    const mat = makeRingMaterial(CATEGORIES.unit.pad, CATEGORIES.unit.padEm);
     pad.material = mat;
     pad.pickable = false;
     pad.renderOrder = 220;
     hideMesh(pad);
     addToScene(scene, pad);
-    pads.push({ mesh: pad, mat });
+    pads.push({ mesh: pad, mat, category: 'unit' });
   }
 
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[] }>} */
+  /**
+   * Icon key: `unit:warlock` / `upgrade:patronage`
+   * @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[] }>}
+   */
   const icons = new Map();
 
-  for (const def of PLACEABLE_BUILDINGS) {
-    const url = MODEL_URLS[def.id];
-    if (!url) continue;
+  async function loadIcon(key, url) {
+    if (icons.has(key) || !url) return;
     try {
       const parts = await loadBakedUnitMeshParts(engine, url);
       /** @type {{ mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[]} */
@@ -639,7 +652,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         mesh.position.x = 0;
         mesh.position.y = 0;
         mesh.position.z = 0;
-        // Hover/click uses CPU pad discs — icons need not be GPU-pickable.
         mesh.pickable = false;
         mesh.material = makeIconPreviewMaterial(mesh.material);
         const mat = mesh.material;
@@ -660,10 +672,26 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         setSubtreeVisible(mesh, false);
         layers.push({ mesh, matrices, baseEmissive, baseDiffuse, visible: false });
       }
-      icons.set(def.id, { layers });
+      icons.set(key, { layers });
     } catch (err) {
-      console.warn(`[buildingRadial] icon ${def.id} failed`, err);
+      console.warn(`[buildingActionRadial] icon ${key} failed`, err);
     }
+  }
+
+  // Prefetch every unit/upgrade referenced by any building menu (+ known upgrade assets).
+  const unitKeys = new Set();
+  const upgradeKeys = new Set(Object.keys(UPGRADE_MODEL_URLS));
+  for (const menu of Object.values(BUILDING_MENUS)) {
+    for (const k of menu.units ?? []) unitKeys.add(k);
+    for (const k of menu.upgrades ?? []) upgradeKeys.add(k);
+  }
+  for (const key of unitKeys) {
+    const typeId = BUILDING_MENU_UNITS[key];
+    const url = typeId != null ? unitMenuModelUrl(typeId) : null;
+    await loadIcon(`unit:${key}`, url);
+  }
+  for (const key of upgradeKeys) {
+    await loadIcon(`upgrade:${key}`, UPGRADE_MODEL_URLS[key]);
   }
 
   /** @type {{ data: object, layer: object, text: string }[]} */
@@ -676,24 +704,22 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         const data = createDefaultTextData(
           screen.font,
           LABEL_FONT_SIZE,
-          'Building',
-          [0.86, 0.96, 1, 1],
+          'Action',
+          [0.96, 0.94, 0.88, 1],
         );
         const layer = createTextLayer(data, {
           order: i,
           opacity: 0,
           visible: false,
         });
-        labels.push({ data, layer, text: 'Building' });
+        labels.push({ data, layer, text: 'Action' });
       }
-      // A separate load-op text pass cannot leak its bind group into the
-      // scene render pass, unlike world-space TextRenderable.
       textRenderer = createTextRenderer(engine, {
         layers: labels.map((label) => label.layer),
         clear: false,
       });
     } catch (err) {
-      console.warn('[buildingRadial] native labels unavailable', err);
+      console.warn('[buildingActionRadial] native labels unavailable', err);
       for (const label of labels) {
         disposeDefaultTextData(label.data);
       }
@@ -701,28 +727,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       textRenderer = null;
     }
   }
-  /** @type {CategoryId} */
-  let activeCategory = 'basic';
-  /**
-   * After a pie-slice click, hover no longer switches pages — so the cursor can
-   * cross other wedges to reach ring buildings without flipping the menu.
-   */
-  let categoryLocked = false;
-  /** @type {CategoryId | null} */
-  let pieHoverId = null;
 
-  function categoryDef(id) {
-    return CATEGORIES.find((c) => c.id === id) ?? CATEGORIES[0];
-  }
-
-  function itemsForCategory(catId) {
-    return PLACEABLE_BUILDINGS.filter(
-      (b) => b.category === catId && icons.has(b.id),
-    );
-  }
-
-  /** @type {{ type: string, name: string, ang: number, x: number, y: number, z: number }[]} */
+  /** @type {{ kind: ActionCategoryId, id: string, name: string, iconKey: string, ang: number, x: number, y: number, z: number, category: ActionCategoryId }[]} */
   let slots = [];
+  /** @type {{ units: { start: number, span: number } | null, upgrades: { start: number, span: number } | null }} */
+  let arcs = { units: null, upgrades: null };
   let open = false;
   let anchorX = 0;
   let anchorZ = 0;
@@ -730,12 +739,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   let centerZ = 0;
   let centerY = 0;
   let hudScale = 1;
-  /** Animated scale mul (1 full → COMPACT_SCALE while placing). */
-  let compactMul = 1;
-  let compactTarget = 1;
-  let compactLastMs = 0;
   let hoverIndex = -1;
-  // Menu basis: right (screen X), normal (tilted up), planeZ (−planeUp), planeUp.
   let bx = 1;
   let by = 0;
   let bz = 0;
@@ -748,9 +752,10 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   let ux = 0;
   let uy = 1;
   let uz = 0;
-  // Horizontal toward-camera (for upright icon facing).
   let hx = 0;
   let hz = 1;
+  /** @type {string | null} */
+  let activeBuildingType = null;
 
   function hideLabel(label) {
     if (!label) return;
@@ -778,11 +783,10 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     ) {
       return { x: p.x, y: p.y, z: p.z };
     }
-    // ArcRotate: eye = target + (r·cosα·sinβ, r·cosβ, r·sinα·sinβ).
     const t = camera?.target;
-    const tx = t?.x ?? 0;
-    const ty = t?.y ?? 0;
-    const tz = t?.z ?? 0;
+    const tx0 = t?.x ?? 0;
+    const ty0 = t?.y ?? 0;
+    const tz0 = t?.z ?? 0;
     const a = camera?.alpha ?? -Math.PI / 2.1;
     const b = camera?.beta ?? Math.PI / 3.2;
     const r = camera?.radius ?? 110;
@@ -790,18 +794,12 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     if (Math.abs(sb) < 1e-4) sb = 1e-4;
     const cb = Math.cos(b);
     return {
-      x: tx + r * Math.cos(a) * sb,
-      y: ty + r * cb,
-      z: tz + r * Math.sin(a) * sb,
+      x: tx0 + r * Math.cos(a) * sb,
+      y: ty0 + r * cb,
+      z: tz0 + r * Math.sin(a) * sb,
     };
   }
 
-  /**
-   * Tilt the menu toward the camera (fixed lean, not a billboard).
-   * Option angles stay screen-stable: ang=−π/2 is screen-top.
-   * Annulus local axes: X=right, Y=normal, Z=−planeUp.
-   * @param {object | null | undefined} camera
-   */
   function updateBasis(camera) {
     const eye = cameraEye(camera);
     let thx = eye.x - centerX;
@@ -821,17 +819,14 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
 
     const st = Math.sin(MENU_TILT);
     const ct = Math.cos(MENU_TILT);
-    // Lean toward camera azimuth; stay mostly horizontal.
     nx = thx * st;
     ny = ct;
     nz = thz * st;
 
-    // Screen-right = worldUp × towardCamHorizontal.
     bx = thz;
     by = 0;
     bz = -thx;
 
-    // planeUp = normal × right → toward screen-top on the tilted disc.
     let pux = ny * bz - nz * by;
     let puy = nz * bx - nx * bz;
     let puz = nx * by - ny * bx;
@@ -852,8 +847,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     for (const batch of icons.values()) {
       for (const layer of batch.layers) {
         if (layer.visible) {
-          // Event-only visibility changes invalidate the cached bundle without
-          // rebuilding it from the per-frame layout path.
           setSubtreeVisible(layer.mesh, false);
           layer.visible = false;
         }
@@ -872,7 +865,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   function applyPadHover(index, hovered) {
     const pad = pads[index];
     if (!pad) return;
-    const cat = categoryDef(activeCategory);
+    const cat = CATEGORIES[pad.category] ?? CATEGORIES.unit;
     const mat = pad.mat;
     if (hovered) {
       mat.diffuseColor = [...PAD_HOVER_COLOR];
@@ -884,96 +877,67 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     markMaterialUboDirty(mat);
   }
 
-  function applyPieAppearance() {
-    for (const slice of pieSlices) {
-      const cat = categoryDef(slice.id);
-      const selected = slice.id === activeCategory;
-      const hovered = slice.id === pieHoverId;
-      // Inactive wedges stay readable — only a mild dim vs the active page.
-      const boost = selected ? 1 : hovered ? 0.9 : 0.78;
-      slice.mat.diffuseColor = [
-        cat.color[0] * boost,
-        cat.color[1] * boost,
-        cat.color[2] * boost,
-      ];
-      slice.mat.emissiveColor = [
-        cat.emissive[0] * (selected || hovered ? 1.15 : 0.75),
-        cat.emissive[1] * (selected || hovered ? 1.15 : 0.75),
-        cat.emissive[2] * (selected || hovered ? 1.15 : 0.75),
-      ];
-      slice.mat.alpha = selected ? 0.95 : hovered ? 0.88 : 0.72;
-      markMaterialUboDirty(slice.mat);
-    }
-  }
-
-  function applyRingColor() {
-    const cat = categoryDef(activeCategory);
-    ringMat.diffuseColor = [...cat.color];
-    ringMat.emissiveColor = [...cat.emissive];
-    markMaterialUboDirty(ringMat);
-  }
-
-  function rebuildSlots() {
-    const items = itemsForCategory(activeCategory);
-    const n = Math.min(MAX_OPTIONS, items.length);
-    hoverIndex = -1;
-    hideAllIcons();
-    slots = [];
-    const ringRotation = BUTTON_RING_ROTATIONS[activeCategory] ?? 0;
+  function pushSlotsForArc(items, category, arc) {
+    if (!arc || !items.length) return;
+    const n = Math.min(items.length, MAX_OPTIONS - slots.length);
     for (let i = 0; i < n; i++) {
-      const ang = -Math.PI / 2 + ringRotation + (i / n) * Math.PI * 2;
+      const item = items[i];
+      // Full ring: same as agora (first slot at screen-top). Split: center in arc.
+      const ang = arc.full
+        ? arc.start + (i / n) * arc.span
+        : arc.start + ((i + 0.5) / n) * arc.span;
+      const iconKey = `${category}:${item.id}`;
+      if (!icons.has(iconKey)) continue;
       slots.push({
-        type: items[i].id,
-        name: items[i].name,
+        kind: category,
+        id: item.id,
+        name: item.name,
+        iconKey,
         ang,
         x: 0,
         y: centerY,
         z: 0,
+        category,
       });
     }
+  }
+
+  function rebuildSlots(menu) {
+    hoverIndex = -1;
+    hideAllIcons();
+    slots = [];
+    if (!menu) {
+      arcs = { units: null, upgrades: null };
+      return;
+    }
+    arcs = computeArcs(menu.units.length, menu.upgrades.length);
+    pushSlotsForArc(menu.units, 'unit', arcs.units);
+    pushSlotsForArc(menu.upgrades, 'upgrade', arcs.upgrades);
+
     for (let i = 0; i < labels.length; i++) {
       const label = labels[i];
       const text = slots[i]?.name;
       hideLabel(label);
       if (text && text !== label.text) {
-        updateDefaultTextData(label.data, text, [0.86, 0.96, 1, 1]);
+        updateDefaultTextData(label.data, text, [0.96, 0.94, 0.88, 1]);
         label.text = text;
       }
     }
-    applyRingColor();
-    applyPieAppearance();
-    for (let i = 0; i < pads.length; i++) applyPadHover(i, false);
+    for (let i = 0; i < pads.length; i++) {
+      const cat = slots[i]?.category ?? 'unit';
+      pads[i].category = cat;
+      applyPadHover(i, false);
+    }
   }
 
-  /**
-   * @param {CategoryId | string} catId
-   * @param {{ lock?: boolean }} [opts]
-   *   lock: true after a pie click — hover stops changing pages until reopen.
-   */
-  function setCategory(catId, opts = {}) {
-    if (!CATEGORIES.some((c) => c.id === catId)) return;
-    if (opts.lock) categoryLocked = true;
-    if (catId === activeCategory && slots.length) return;
-    activeCategory = /** @type {CategoryId} */ (catId);
-    rebuildSlots();
-    if (open) layout();
-  }
-
-  /** Allow pie hover to switch pages again (e.g. after canceling a building ghost). */
-  function unlockCategory() {
-    if (!categoryLocked) return;
-    categoryLocked = false;
-  }
-
-  function applyIconHover(type, hovered) {
-    const batch = icons.get(type);
+  function applyIconHover(iconKey, hovered) {
+    const batch = icons.get(iconKey);
     if (!batch) return;
     for (const layer of batch.layers) {
       const mat = layer.mesh.material;
       if (!mat) continue;
       if (hovered) {
         if (mat.emissiveColor && layer.baseEmissive) {
-          // Remove the flat silhouette wash so scene lighting reveals normals.
           mat.emissiveColor = [0.06, 0.075, 0.09];
         }
         if (mat.diffuseColor && layer.baseDiffuse) {
@@ -997,141 +961,24 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
   }
 
-  /** World scale for a given camera depth (∝ depth → steady on-screen size). */
-  function scaleForPlaceDist(placeDist) {
-    if (!Number.isFinite(placeDist) || placeDist < 1e-3) {
-      return HUD_BASE_SCALE * compactMul;
-    }
-    return (
-      Math.max(HUD_SCALE_MIN, HUD_BASE_SCALE * (placeDist / HUD_REF_DIST)) *
-      compactMul
-    );
+  function scaleForDist(dist) {
+    if (!Number.isFinite(dist) || dist < 1e-3) return HUD_BASE_SCALE;
+    return Math.max(HUD_SCALE_MIN, HUD_BASE_SCALE * (dist / HUD_REF_DIST));
   }
 
-  /**
-   * Shrink (or restore) the open radial while placing.
-   * Target is approached smoothly in `update`.
-   * @param {boolean} on
-   */
-  function setCompact(on) {
-    compactTarget = on ? COMPACT_SCALE : 1;
-  }
-
-  /** Ease compactMul toward compactTarget (frame-rate independent). */
-  function tickCompact() {
-    const now = performance.now();
-    const dt =
-      compactLastMs > 0
-        ? Math.min(0.05, Math.max(0, (now - compactLastMs) / 1000))
-        : 0;
-    compactLastMs = now;
-    const err = compactTarget - compactMul;
-    if (Math.abs(err) < 1e-4) {
-      compactMul = compactTarget;
-      return;
-    }
-    compactMul += err * (1 - Math.exp(-COMPACT_LERP_SPEED * dt));
-  }
-
-  /** Sit above the agora; scale from eye distance. */
-  function syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye) {
-    const distA =
-      Math.hypot(eye.x - agoraX, eye.y - agoraY, eye.z - agoraZ) || HUD_REF_DIST;
-    hudScale = scaleForPlaceDist(distA);
-    centerX = agoraX;
-    centerY = agoraY + Math.sin(MENU_TILT) * RIM_R * hudScale + 1.2;
-    centerZ = agoraZ;
-    updateBasis(camera);
-  }
-
-  /**
-   * Pose the menu. With EDGE_PIN_HUD: project agora → clamp → place on ray.
-   * Otherwise: stay above the agora.
-   * @param {object | null | undefined} camera
-   */
   function syncPose(camera) {
     const eye = cameraEye(camera);
     const gy = groundYAt(anchorX, anchorZ);
     const groundY = Number.isFinite(gy) ? gy : 0;
-    const agoraX = anchorX;
-    const agoraY = groundY + MENU_Y;
-    const agoraZ = anchorZ;
-
-    if (!EDGE_PIN_HUD) {
-      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
-      return;
-    }
-
+    const ax = anchorX;
+    const ay = groundY + MENU_Y;
+    const az = anchorZ;
     const distA =
-      Math.hypot(eye.x - agoraX, eye.y - agoraY, eye.z - agoraZ) || HUD_PLACE_DIST;
-    const placeDist = Math.min(
-      HUD_PLACE_DIST,
-      Math.max(HUD_PLACE_MIN, distA * HUD_PLACE_FRAC),
-    );
-    hudScale = scaleForPlaceDist(placeDist);
-
-    const worldToScreen = screen.worldToScreen;
-    const rayFromCanvas = screen.rayFromCanvas;
-    const getViewport = screen.getViewport;
-
-    // Fallback: sit above the agora if screen helpers aren't wired.
-    if (!worldToScreen || !rayFromCanvas || !getViewport) {
-      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
-      return;
-    }
-
-    const vp = getViewport();
-    const vw = vp?.width ?? 0;
-    const vh = vp?.height ?? 0;
-    if (vw < 8 || vh < 8) {
-      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
-      return;
-    }
-
-    const margin = Math.min(vw, vh) * HUD_EDGE_MARGIN_FRAC;
-    const scr = worldToScreen(agoraX, agoraY, agoraZ);
-    let sx = vw * 0.5;
-    let sy = vh * 0.5;
-    if (scr && Number.isFinite(scr.x) && Number.isFinite(scr.y)) {
-      sx = scr.x;
-      sy = scr.y;
-    }
-
-    const cx = Math.min(vw - margin, Math.max(margin, sx));
-    const cy = Math.min(vh - margin, Math.max(margin, sy));
-    const ray = rayFromCanvas(cx, cy);
-    if (!ray) {
-      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
-      return;
-    }
-
-    // Aim along the screen ray, then sit at placeDist from the eye.
-    const aimX = ray.ox + ray.dx * Math.max(placeDist, 10);
-    const aimY = ray.oy + ray.dy * Math.max(placeDist, 10);
-    const aimZ = ray.oz + ray.dz * Math.max(placeDist, 10);
-    let ax = aimX - eye.x;
-    let ay = aimY - eye.y;
-    let az = aimZ - eye.z;
-    const alen = Math.hypot(ax, ay, az);
-    if (alen < 1e-6) {
-      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
-      return;
-    }
-    ax /= alen;
-    ay /= alen;
-    az /= alen;
-
-    const px = eye.x + ax * placeDist;
-    const py = eye.y + ay * placeDist;
-    const pz = eye.z + az * placeDist;
-    if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) {
-      syncPoseAgora(camera, agoraX, agoraY, agoraZ, eye);
-      return;
-    }
-
-    centerX = px;
-    centerY = py;
-    centerZ = pz;
+      Math.hypot(eye.x - ax, eye.y - ay, eye.z - az) || HUD_REF_DIST;
+    hudScale = scaleForDist(distA);
+    centerX = ax;
+    centerY = ay + Math.sin(MENU_TILT) * RIM_R * hudScale + 1.2;
+    centerZ = az;
     updateBasis(camera);
   }
 
@@ -1143,9 +990,9 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const iconX = s.x + nx * lift;
     const iconY = s.y + ny * lift;
     const iconZ = s.z + nz * lift;
-    const batch = icons.get(s.type);
+    const batch = icons.get(s.iconKey);
     if (!batch) return;
-    // Upright icons, yawed toward camera (right-handed: X×Y=Z, −Z toward camera).
+    // Upright; local +Z (unit forward) toward camera.
     for (const layer of batch.layers) {
       writeFacingMatrix(
         layer.matrices,
@@ -1153,15 +1000,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         iconX,
         iconY,
         iconZ,
-        -bx,
+        bx,
         0,
-        -bz,
+        bz,
         0,
         1,
         0,
-        -hx,
+        hx,
         0,
-        -hz,
+        hz,
         iconScale,
       );
       setThinInstanceCount(layer.mesh, 1);
@@ -1171,7 +1018,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         layer.visible = true;
       }
     }
-    applyIconHover(s.type, i === hoverIndex);
+    applyIconHover(s.iconKey, i === hoverIndex);
     applyPadHover(i, i === hoverIndex);
   }
 
@@ -1199,8 +1046,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
     const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
     const pixelRatio = (sx + sy) * 0.5;
-    const scale =
-      LABEL_SCREEN_SCALE * pixelRatio * compactMul * (hovered ? 1.05 : 1);
+    const scale = LABEL_SCREEN_SCALE * pixelRatio * (hovered ? 1.05 : 1);
     const centerOffset = label.data.width * scale * 0.5;
     const layer = label.layer;
     layer.positionPx.x = origin.x * sx - centerOffset;
@@ -1212,35 +1058,54 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     layer._version++;
   }
 
-  function layout() {
-    const s = hudScale;
-    // Annulus mesh outerR=1 → world outer = MENU_RING_OUTER * s
-    placeMeshOriented(
-      menuRing,
-      centerX,
-      centerY,
-      centerZ,
-      MENU_RING_OUTER * s,
-      bx,
-      by,
-      bz,
-      nx,
-      ny,
-      nz,
-      tx,
-      ty,
-      tz,
-    );
-
-    const pieLift = PIE_LIFT * s;
-    const pieScale = PIE_OUTER * s;
-    for (const slice of pieSlices) {
+  function layoutRings(s) {
+    const split = Boolean(arcs.units && arcs.upgrades);
+    if (!split) {
+      hideArcRings();
+      const onlyUpgrade = Boolean(arcs.upgrades && !arcs.units);
+      const cat = onlyUpgrade ? CATEGORIES.upgrade : CATEGORIES.unit;
+      fullRingMat.diffuseColor = [...cat.color];
+      fullRingMat.emissiveColor = [...cat.emissive];
+      markMaterialUboDirty(fullRingMat);
       placeMeshOriented(
-        slice.mesh,
-        centerX + nx * pieLift,
-        centerY + ny * pieLift,
-        centerZ + nz * pieLift,
-        pieScale,
+        fullRing,
+        centerX,
+        centerY,
+        centerZ,
+        MENU_RING_OUTER * s,
+        bx,
+        by,
+        bz,
+        nx,
+        ny,
+        nz,
+        tx,
+        ty,
+        tz,
+      );
+      return;
+    }
+
+    hideMesh(fullRing);
+    for (const side of [
+      { id: /** @type {const} */ ('unit'), arc: arcs.units },
+      { id: /** @type {const} */ ('upgrade'), arc: arcs.upgrades },
+    ]) {
+      if (!side.arc) {
+        const entry = arcRings.get(side.id);
+        if (entry?.mesh) hideMesh(entry.mesh);
+        continue;
+      }
+      const start = side.arc.start;
+      const end = side.arc.start + side.arc.span;
+      const entry = ensureArcMesh(side.id, start, end);
+      if (!entry?.mesh) continue;
+      placeMeshOriented(
+        entry.mesh,
+        centerX,
+        centerY,
+        centerZ,
+        MENU_RING_OUTER * s,
         bx,
         by,
         bz,
@@ -1252,6 +1117,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         tz,
       );
     }
+  }
+
+  function layout() {
+    const s = hudScale;
+    layoutRings(s);
 
     const rimR = RIM_R * s;
     const padLift = PAD_LIFT * s;
@@ -1266,7 +1136,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       const slot = slots[i];
       const ca = Math.cos(slot.ang);
       const sa = Math.sin(slot.ang);
-      // Polar on the tilted plane; ang=−π/2 → screen-top.
       slot.x = centerX + (ca * bx + sa * tx) * rimR + nx * padLift;
       slot.y = centerY + (ca * by + sa * ty) * rimR + ny * padLift;
       slot.z = centerZ + (ca * bz + sa * tz) * rimR + nz * padLift;
@@ -1294,34 +1163,34 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   /**
    * @param {number} x
    * @param {number} z
+   * @param {string} buildingType
    * @param {object | null} [camera]
    */
-  function showAt(x, z, camera = null) {
+  function showAt(x, z, buildingType, camera = null) {
+    const menu = getBuildingMenu(buildingType);
+    if (!menu) {
+      hide();
+      return;
+    }
     anchorX = x;
     anchorZ = z;
+    activeBuildingType = buildingType;
     hoverIndex = -1;
-    pieHoverId = null;
-    categoryLocked = false;
     syncPose(camera);
-    rebuildSlots();
+    rebuildSlots(menu);
     open = true;
     layout();
   }
 
-  /**
-   * @param {object} camera
-   */
   function update(camera) {
     if (!open) return;
-    tickCompact();
     syncPose(camera);
     layout();
   }
 
   function hide() {
-    if (!open) return;
-    hideMesh(menuRing);
-    for (const slice of pieSlices) hideMesh(slice.mesh);
+    hideMesh(fullRing);
+    hideArcRings();
     for (let i = 0; i < pads.length; i++) {
       hideMesh(pads[i].mesh);
       applyPadHover(i, false);
@@ -1329,12 +1198,9 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     hideAllIcons();
     for (const label of labels) hideLabel(label);
     slots = [];
+    arcs = { units: null, upgrades: null };
     hoverIndex = -1;
-    pieHoverId = null;
-    categoryLocked = false;
-    compactMul = 1;
-    compactTarget = 1;
-    compactLastMs = 0;
+    activeBuildingType = null;
     open = false;
   }
 
@@ -1349,60 +1215,30 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const prev = hoverIndex;
     hoverIndex = next >= 0 && next < slots.length ? next : -1;
     if (prev >= 0) {
-      applyIconHover(slots[prev].type, false);
+      applyIconHover(slots[prev].iconKey, false);
       applyPadHover(prev, false);
       redrawLabel(prev);
     }
     if (hoverIndex >= 0) {
-      applyIconHover(slots[hoverIndex].type, true);
+      applyIconHover(slots[hoverIndex].iconKey, true);
       applyPadHover(hoverIndex, true);
       redrawLabel(hoverIndex);
     }
   }
 
-  /** @param {string | null | undefined} type */
-  function setHoverByType(type) {
-    if (!type) {
-      setHover(-1);
-      return;
-    }
-    setHover(slots.findIndex((s) => s.type === type));
+  function clearHover() {
+    setHover(-1);
   }
 
   /**
-   * @param {{ kind: 'building' | 'category', id: string } | null | undefined} pick
+   * @param {{ kind: 'unit' | 'upgrade', id: string } | null | undefined} pick
    */
   function setHoverFromPick(pick) {
     if (!pick) {
       clearHover();
       return;
     }
-    if (pick.kind === 'category') {
-      setHover(-1);
-      if (pieHoverId !== pick.id) {
-        pieHoverId = /** @type {CategoryId} */ (pick.id);
-        applyPieAppearance();
-      }
-      return;
-    }
-    if (pieHoverId != null) {
-      pieHoverId = null;
-      applyPieAppearance();
-    }
-    setHoverByType(pick.id);
-  }
-
-  function clearHover() {
-    setHover(-1);
-    if (pieHoverId != null) {
-      pieHoverId = null;
-      applyPieAppearance();
-    }
-  }
-
-  function hoveredType() {
-    if (!open || hoverIndex < 0) return null;
-    return slots[hoverIndex]?.type ?? null;
+    setHover(slots.findIndex((s) => s.kind === pick.kind && s.id === pick.id));
   }
 
   function padPlanePoint() {
@@ -1414,75 +1250,13 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     };
   }
 
-  function piePlanePoint() {
-    const lift = PIE_LIFT * hudScale;
-    return {
-      x: centerX + nx * lift,
-      y: centerY + ny * lift,
-      z: centerZ + nz * lift,
-    };
-  }
-
   /**
-   * Normalize atan2 angle into [startAng, startAng+2π) then test slice span.
-   * @param {number} ang
-   * @param {number} startAng
-   * @param {number} endAng
-   */
-  function angInSlice(ang, startAng, endAng) {
-    let a = ang;
-    while (a < startAng) a += Math.PI * 2;
-    while (a >= startAng + Math.PI * 2) a -= Math.PI * 2;
-    return a >= startAng && a < endAng;
-  }
-
-  /**
-   * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
-   * @returns {{ kind: 'category', id: CategoryId } | null}
-   */
-  function pickCategoryAtRay(ray) {
-    const pp = piePlanePoint();
-    const hit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
-    if (!hit) return null;
-    const dx = hit.x - pp.x;
-    const dy = hit.y - pp.y;
-    const dz = hit.z - pp.z;
-    const dist = Math.hypot(dx, dy, dz);
-    const outer = PIE_OUTER * hudScale;
-    const inner = PIE_INNER * hudScale;
-    if (dist > outer || dist < inner) return null;
-    const alongB = dx * bx + dy * by + dz * bz;
-    const alongT = dx * tx + dy * ty + dz * tz;
-    const ang = Math.atan2(alongT, alongB);
-    const edgeInsetAng = Math.asin(
-      Math.min(0.95, (PIE_SLICE_GAP * 0.5 * hudScale) / Math.max(dist, 1e-4)),
-    );
-    for (const slice of pieSlices) {
-      if (
-        angInSlice(
-          ang,
-          slice.startAng + edgeInsetAng,
-          slice.endAng - edgeInsetAng,
-        )
-      ) {
-        return { kind: 'category', id: slice.id };
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Option under the cursor: category pie, then pad disc / icon sphere.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
-   * @returns {{ kind: 'building' | 'category', id: string } | null}
+   * @returns {{ kind: 'unit' | 'upgrade', id: string } | null}
    */
   function pickOptionAtRay(ray) {
-    if (!open || !ray) return null;
+    if (!open || !ray || !slots.length) return null;
 
-    const catPick = pickCategoryAtRay(ray);
-    if (catPick) return catPick;
-
-    if (!slots.length) return null;
     const pp = padPlanePoint();
     const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
     const padR = PAD_OUTER * hudScale;
@@ -1490,40 +1264,32 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const iconR = ICON_PICK_R * hudScale;
     const iconLift = ICON_LIFT * hudScale;
 
-    let bestType = null;
+    let best = null;
     let bestT = Infinity;
 
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
-
-      // Pad disc on the tilted menu plane (full disc including hole).
       if (padHit) {
         const dx = padHit.x - s.x;
         const dy = padHit.y - s.y;
         const dz = padHit.z - s.z;
         if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
           bestT = padHit.t;
-          bestType = s.type;
+          best = { kind: s.kind, id: s.id };
         }
       }
-
-      // Icon volume — models sit above the pad and are larger than PAD_OUTER.
       const ix = s.x + nx * iconLift;
       const iy = s.y + ny * iconLift;
       const iz = s.z + nz * iconLift;
       const iconT = rayHitSphereT(ray, ix, iy, iz, iconR);
       if (iconT != null && iconT < bestT) {
         bestT = iconT;
-        bestType = s.type;
+        best = { kind: s.kind, id: s.id };
       }
     }
-    return bestType ? { kind: 'building', id: bestType } : null;
+    return best;
   }
 
-  /**
-   * Sync gesture: over an option, category pie, or the main ring band.
-   * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
-   */
   function hitAtRay(ray) {
     if (!open || !ray) return false;
     if (pickOptionAtRay(ray)) return true;
@@ -1532,7 +1298,26 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
     const outer = MENU_RING_OUTER * hudScale;
     const inner = MENU_RING_INNER * hudScale;
-    return d >= inner && d <= outer;
+    if (d < inner || d > outer) return false;
+
+    // Split ring: only count hits on an active arc band.
+    if (arcs.units && arcs.upgrades) {
+      const dx = hit.x - centerX;
+      const dy = hit.y - centerY;
+      const dz = hit.z - centerZ;
+      const alongB = dx * bx + dy * by + dz * bz;
+      const alongT = dx * tx + dy * ty + dz * tz;
+      let ang = Math.atan2(alongT, alongB);
+      const inArc = (arc) => {
+        if (!arc) return false;
+        let a = ang;
+        while (a < arc.start) a += Math.PI * 2;
+        while (a >= arc.start + Math.PI * 2) a -= Math.PI * 2;
+        return a >= arc.start && a < arc.start + arc.span;
+      };
+      return inArc(arcs.units) || inArc(arcs.upgrades);
+    }
+    return true;
   }
 
   let labelsDisposed = false;
@@ -1558,23 +1343,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     update,
     hide,
     isOpen,
-    setCompact,
-    setCategory,
-    unlockCategory,
     setHover,
-    setHoverByType,
     setHoverFromPick,
     clearHover,
-    hoveredType,
     pickOptionAtRay,
     hitAtRay,
     registerLabels,
     disposeLabels,
-    get category() {
-      return activeCategory;
-    },
-    get categoryLocked() {
-      return categoryLocked;
+    get buildingType() {
+      return activeBuildingType;
     },
     get center() {
       return open ? { x: centerX, y: centerY, z: centerZ } : null;

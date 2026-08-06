@@ -15,7 +15,14 @@ import {
 } from '../sim/worldSetup.js';
 import { STRESS_AI_PROFILES } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
-import { applySerializedBuildingOccupancy, canPlaceBuildingAt, snapBuildingYaw } from '../sim/buildings.js';
+import {
+  applySerializedBuildingOccupancy,
+  BUILDING_FOOTPRINTS,
+  buildingHasMenu,
+  canPlaceBuildingAt,
+  snapBuildingYaw,
+  snapBuildingWorld,
+} from '../sim/buildings.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { isVatUnitType } from '../render/vatUnits.js';
@@ -574,25 +581,68 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return a ? { x: a.x, z: a.z, size: /** @type {const} */ ('l') } : null;
     }
     const b = session.buildings?.[sel.index];
-    // Placeables default to M; perch is small.
+    // Placeables: S for 2×2 footprints, M otherwise.
     if (!b) return null;
-    const size = b.type === 'perch' ? 's' : 'm';
+    const fp = BUILDING_FOOTPRINTS[b.type];
+    const size = fp && fp.w <= 2 ? 's' : 'm';
     return { x: b.x, z: b.z, size };
   }
 
-  function syncBuildingHighlight(sel) {
-    renderer.setBuildingSelectionHighlight?.(buildingWorldPos(sel));
+  /**
+   * @param {{ kind: 'agora' | 'building', index: number } | { kind: 'agora' | 'building', index: number }[] | null | undefined} selOrList
+   */
+  function syncBuildingHighlight(selOrList) {
+    if (!selOrList) {
+      renderer.setBuildingSelectionHighlight?.(null);
+      return;
+    }
+    const list = Array.isArray(selOrList) ? selOrList : [selOrList];
+    const positions = [];
+    for (let i = 0; i < list.length; i++) {
+      const pos = buildingWorldPos(list[i]);
+      if (pos) positions.push(pos);
+    }
+    renderer.setBuildingSelectionHighlight?.(positions.length ? positions : null);
   }
 
   function openRadialForAgora(index) {
     lastAgoraIndex = index;
     const a = session.agoras?.[index];
     if (!a) return;
+    renderer.hideActionRadial?.();
     renderer.showBuildingRadial?.(a.x, a.z);
+  }
+
+  function openActionRadialForBuilding(index) {
+    const b = session.buildings?.[index];
+    if (!b || !buildingHasMenu(b.type)) {
+      closeRadial();
+      return;
+    }
+    renderer.hideBuildingRadial?.();
+    renderer.showActionRadial?.(b.x, b.z, b.type);
   }
 
   function closeRadial() {
     renderer.hideBuildingRadial?.();
+    renderer.hideActionRadial?.();
+  }
+
+  function isAnyRadialOpen() {
+    return (
+      (renderer.isBuildingRadialOpen?.() ?? false) ||
+      (renderer.isActionRadialOpen?.() ?? false)
+    );
+  }
+
+  /** @param {string | null} t */
+  function applyPlacingType(t) {
+    placingType = t ?? null;
+    if (!placingType) {
+      placingYaw = 0;
+      renderer.setBuildingGhost?.(null);
+    }
+    renderer.setBuildingRadialCompact?.(Boolean(placingType));
   }
 
   let inputApi = setupInput({
@@ -617,18 +667,25 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep,
     getAgoras: () => session.agoras ?? [],
     getBuildings: () => session.buildings ?? [],
-    onBuildingSelected: (sel) => {
-      syncBuildingHighlight(sel);
-      if (sel?.kind === 'agora') openRadialForAgora(sel.index);
-      else closeRadial();
+    onBuildingSelected: (sel, _ptr, all) => {
+      const list = all ?? (sel ? [sel] : null);
+      syncBuildingHighlight(list);
+      // Action / build radials only for a single selection.
+      if (sel && list && list.length === 1) {
+        if (sel.kind === 'agora') {
+          openRadialForAgora(sel.index);
+          return;
+        }
+        if (sel.kind === 'building') {
+          openActionRadialForBuilding(sel.index);
+          return;
+        }
+      }
+      closeRadial();
     },
     getPlacingType: () => placingType,
     setPlacingType: (t) => {
-      placingType = t;
-      if (!t) {
-        placingYaw = 0;
-        renderer.setBuildingGhost?.(null);
-      }
+      applyPlacingType(t);
     },
     getPlacementYaw: () => placingYaw,
     setPlacementYaw: (yaw) => {
@@ -638,40 +695,49 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (!placingType) return;
       const yawRad = snapBuildingYaw(yaw ?? placingYaw);
       placingYaw = yawRad;
+      const snapped = snapBuildingWorld(
+        placingType,
+        fx.fromFloat(x),
+        fx.fromFloat(z),
+      );
+      const sx = fx.toFloat(snapped.x);
+      const sz = fx.toFloat(snapped.z);
       const valid = session.field
-        ? canPlaceBuildingAt(
-            session.field,
-            placingType,
-            fx.fromFloat(x),
-            fx.fromFloat(z),
-          )
+        ? canPlaceBuildingAt(session.field, placingType, snapped.x, snapped.z)
         : true;
-      renderer.setBuildingGhost?.({ type: placingType, x, z, yaw: yawRad, valid });
+      renderer.setBuildingGhost?.({
+        type: placingType,
+        x: sx,
+        z: sz,
+        yaw: yawRad,
+        valid,
+      });
     },
     onPlacementConfirm: (x, z, yaw = placingYaw) => {
       if (!placingType) return;
       const type = placingType;
       const yawRad = snapBuildingYaw(yaw ?? placingYaw);
       placingYaw = yawRad;
-      if (
-        session.field &&
-        !canPlaceBuildingAt(
-          session.field,
-          type,
-          fx.fromFloat(x),
-          fx.fromFloat(z),
-        )
-      ) {
+      const snapped = snapBuildingWorld(type, fx.fromFloat(x), fx.fromFloat(z));
+      const sx = fx.toFloat(snapped.x);
+      const sz = fx.toFloat(snapped.z);
+      if (session.field && !canPlaceBuildingAt(session.field, type, snapped.x, snapped.z)) {
         // Stay in placement mode; ghost already shows invalid.
-        renderer.setBuildingGhost?.({ type, x, z, yaw: yawRad, valid: false });
+        renderer.setBuildingGhost?.({
+          type,
+          x: sx,
+          z: sz,
+          yaw: yawRad,
+          valid: false,
+        });
         return;
       }
       session.submitCommand({
         type: CMD.PLACE_BUILDING,
         playerId: localPlayerId,
         buildingType: type,
-        tx: fx.fromFloat(x),
-        ty: fx.fromFloat(z),
+        tx: snapped.x,
+        ty: snapped.z,
         yaw: fx.fromFloat(yawRad),
       });
       // Multi-place: keep type + yaw; ghost follows on next move.
@@ -681,22 +747,41 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     },
     onPlacementCancel: () => {
-      placingType = null;
-      placingYaw = 0;
-      renderer.setBuildingGhost?.(null);
+      applyPlacingType(null);
+      renderer.unlockBuildingRadialCategory?.();
       if (lastAgoraIndex >= 0) {
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
       }
     },
-    isRadialOpen: () => renderer.isBuildingRadialOpen?.() ?? false,
+    isRadialOpen: () => isAnyRadialOpen(),
     pickRadialOption: (cx, cy) => renderer.pickBuildingRadial?.(cx, cy) ?? null,
-    onRadialPick: (buildingType) => {
-      placingType = buildingType;
-      placingYaw = 0;
-      // Keep the agora radial open while ghost-placing / switching types.
-      renderer.setBuildingGhost?.(null);
+    onRadialPick: (picked) => {
+      if (!picked) return;
+      if (typeof picked === 'string') {
+        applyPlacingType(picked);
+        placingYaw = 0;
+        renderer.setBuildingGhost?.(null);
+        return;
+      }
+      if (picked.kind === 'unit' || picked.kind === 'upgrade') {
+        // Train / research wiring comes later — menu is interactive for now.
+        return;
+      }
+      if (picked.kind === 'category') {
+        // Lock the page and drop any in-progress ghost so hover can browse again.
+        applyPlacingType(null);
+        renderer.setBuildingRadialCategory?.(picked.id, true);
+        return;
+      }
+      if (picked.kind === 'building') {
+        // Keep the agora radial open while ghost-placing / switching types.
+        applyPlacingType(picked.id);
+        placingYaw = 0;
+        renderer.setBuildingGhost?.(null);
+      }
     },
-    onRadialHover: (cx, cy) => renderer.hoverBuildingRadial?.(cx, cy),
+    onRadialHover: (cx, cy) =>
+      renderer.hoverBuildingRadial?.(cx, cy, !placingType),
     hitRadial: (cx, cy) => renderer.hitBuildingRadial?.(cx, cy) ?? false,
   });
 
@@ -708,7 +793,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         inputApi.cancelPlacement?.();
         return;
       }
-      if (renderer.isBuildingRadialOpen?.()) {
+      if (isAnyRadialOpen()) {
         closeRadial();
         return;
       }

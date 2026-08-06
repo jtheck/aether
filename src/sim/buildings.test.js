@@ -1,8 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld } from './world.js';
+import { createWorld, spawn, ORDER } from './world.js';
 import { applyCommands, CMD } from './commands.js';
-import { buildField, worldToTile, isPassable, isSlowTile } from './field.js';
+import {
+  buildField,
+  isPassable,
+  isSlowTile,
+  TILE_SIZE_F,
+  worldToTile,
+  tileCenterX,
+  tileCenterY,
+} from './field.js';
 import * as fx from './fixed.js';
 import {
   serializeBuildings,
@@ -11,12 +19,22 @@ import {
   applyWorldStructureOccupancy,
   canPlaceBuildingAt,
   buildingFootprintBounds,
+  snapBuildingWorld,
   BUILDING_FOOTPRINTS,
 } from './buildings.js';
 import { createAgoras } from './agora.js';
+import { UNIT } from './unitTypes.js';
+import { planPathBudget } from './path.js';
+import { step } from './step.js';
+
+function snapFloat(type, xF, zF) {
+  const s = snapBuildingWorld(type, fx.fromFloat(xF), fx.fromFloat(zF));
+  return { x: fx.toFloat(s.x), z: fx.toFloat(s.z), xFixed: s.x, zFixed: s.z };
+}
 
 function clearClaim(field, type, xF, zF) {
-  const b = buildingFootprintBounds(type, fx.fromFloat(xF), fx.fromFloat(zF));
+  const { xFixed, zFixed } = snapFloat(type, xF, zF);
+  const b = buildingFootprintBounds(type, xFixed, zFixed);
   for (let dz = 0; dz < b.h; dz++) {
     for (let dx = 0; dx < b.w; dx++) {
       const tx = b.x0 + dx;
@@ -30,34 +48,35 @@ function clearClaim(field, type, xF, zF) {
   }
 }
 
-function footprintTiles(field, type, xF, zF) {
-  const fp = BUILDING_FOOTPRINTS[type];
-  const cx = worldToTile(fx.fromFloat(xF));
-  const cz = worldToTile(fx.fromFloat(zF));
-  const x0 = cx - ((fp.w - 1) >> 1);
-  const z0 = cz - ((fp.h - 1) >> 1);
+function footprintTiles(type, xF, zF) {
+  const { xFixed, zFixed } = snapFloat(type, xF, zF);
+  const b = buildingFootprintBounds(type, xFixed, zFixed);
   const tiles = [];
-  for (let dz = 0; dz < fp.h; dz++) {
-    for (let dx = 0; dx < fp.w; dx++) {
-      tiles.push({ tx: x0 + dx, tz: z0 + dz });
+  for (let dz = 0; dz < b.coreH; dz++) {
+    for (let dx = 0; dx < b.coreW; dx++) {
+      tiles.push({ tx: b.coreX0 + dx, tz: b.coreZ0 + dz });
     }
   }
   return tiles;
 }
 
 describe('buildings place', () => {
-  it('PLACE_BUILDING appends to w.buildings', () => {
+  it('PLACE_BUILDING snaps odd footprints to tile centers', () => {
     const w = createWorld(1);
     w.buildings = [];
     const field = buildField(1, { width: 64, height: 64 });
-    clearClaim(field, 'barracks', 10, 20);
+    // Off-center hit; barracks is 3×3 (odd).
+    const hitX = 10.7;
+    const hitZ = 20.2;
+    clearClaim(field, 'barracks', hitX, hitZ);
+    const expected = snapFloat('barracks', hitX, hitZ);
     applyCommands(w, field, [
       {
         type: CMD.PLACE_BUILDING,
         playerId: 0,
         buildingType: 'barracks',
-        tx: fx.fromFloat(10),
-        ty: fx.fromFloat(20),
+        tx: fx.fromFloat(hitX),
+        ty: fx.fromFloat(hitZ),
         yaw: 0,
       },
     ]);
@@ -65,8 +84,42 @@ describe('buildings place', () => {
     assert.equal(w.buildings[0].type, 'barracks');
     assert.equal(w.buildings[0].owner, 0);
     const ser = serializeBuildings(w.buildings);
-    assert.ok(Math.abs(ser[0].x - 10) < 0.01);
-    assert.ok(Math.abs(ser[0].z - 20) < 0.01);
+    assert.ok(Math.abs(ser[0].x - expected.x) < 1e-4);
+    assert.ok(Math.abs(ser[0].z - expected.z) < 1e-4);
+    // Odd snap lands on tile centers (… + 2 mod 4).
+    const mod = (v) => ((v % TILE_SIZE_F) + TILE_SIZE_F) % TILE_SIZE_F;
+    assert.ok(Math.abs(mod(expected.x) - TILE_SIZE_F / 2) < 1e-4);
+    assert.ok(Math.abs(mod(expected.z) - TILE_SIZE_F / 2) < 1e-4);
+  });
+
+  it('PLACE_BUILDING snaps even footprints to tile intersections', () => {
+    const w = createWorld(11);
+    w.buildings = [];
+    const field = buildField(11, { width: 64, height: 64 });
+    const hitX = 41.3;
+    const hitZ = 39.1;
+    clearClaim(field, 'farm', hitX, hitZ);
+    const expected = snapFloat('farm', hitX, hitZ);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'farm',
+        tx: fx.fromFloat(hitX),
+        ty: fx.fromFloat(hitZ),
+      },
+    ]);
+    assert.equal(w.buildings.length, 1);
+    const ser = serializeBuildings(w.buildings);
+    assert.ok(Math.abs(ser[0].x - expected.x) < 1e-4);
+    assert.ok(Math.abs(ser[0].z - expected.z) < 1e-4);
+    const mod = (v) => ((v % TILE_SIZE_F) + TILE_SIZE_F) % TILE_SIZE_F;
+    assert.ok(mod(expected.x) < 1e-4);
+    assert.ok(mod(expected.z) < 1e-4);
+    const b = buildingFootprintBounds('farm', expected.xFixed, expected.zFixed);
+    assert.equal(b.coreW, 2);
+    assert.equal(b.coreH, 2);
+    assert.equal(footprintTiles('farm', hitX, hitZ).length, 4);
   });
 
   it('rejects unknown types', () => {
@@ -86,7 +139,7 @@ describe('buildings place', () => {
     assert.equal(w.buildings.length, 0);
   });
 
-  it('barracks footprint blocks core and slows pad', () => {
+  it('barracks footprint blocks core only (no slow pad)', () => {
     const w = createWorld(3);
     w.buildings = [];
     const field = buildField(3, { width: 64, height: 64 });
@@ -102,32 +155,72 @@ describe('buildings place', () => {
         ty: fx.fromFloat(z),
       },
     ]);
-    const core = footprintTiles(field, 'barracks', x, z);
+    const core = footprintTiles('barracks', x, z);
     assert.equal(core.length, 9);
     for (const { tx, tz } of core) {
       assert.equal(isPassable(field, tx, tz), false, `blocked ${tx},${tz}`);
     }
-    const b = buildingFootprintBounds('barracks', fx.fromFloat(x), fx.fromFloat(z));
-    assert.equal(b.slowPad, 1);
-    assert.equal(b.w, 5);
-    assert.equal(b.h, 5);
-    let slowPadTiles = 0;
-    for (let dz = 0; dz < b.h; dz++) {
-      for (let dx = 0; dx < b.w; dx++) {
-        const tx = b.x0 + dx;
-        const tz = b.z0 + dz;
-        const inCore =
-          tx >= b.coreX0 &&
-          tx < b.coreX0 + b.coreW &&
-          tz >= b.coreZ0 &&
-          tz < b.coreZ0 + b.coreH;
-        if (inCore) continue;
-        assert.equal(isPassable(field, tx, tz), true, `pad passable ${tx},${tz}`);
-        assert.equal(isSlowTile(field, tx, tz), true, `pad slow ${tx},${tz}`);
-        slowPadTiles++;
-      }
+    const snapped = snapFloat('barracks', x, z);
+    const b = buildingFootprintBounds('barracks', snapped.xFixed, snapped.zFixed);
+    assert.equal(b.w, 3);
+    assert.equal(b.h, 3);
+    // Neighbors stay passable and are not structure-slow.
+    for (const [dx, dz] of [
+      [-1, 0],
+      [3, 0],
+      [0, -1],
+      [0, 3],
+    ]) {
+      const tx = b.coreX0 + dx;
+      const tz = b.coreZ0 + dz;
+      assert.equal(isPassable(field, tx, tz), true, `neighbor passable ${tx},${tz}`);
+      assert.equal(
+        field.structureSlowMask?.[tz * field.width + tx] ?? 0,
+        0,
+        `neighbor not structure-slow ${tx},${tz}`,
+      );
     }
-    assert.equal(slowPadTiles, 5 * 5 - 9);
+  });
+
+  it('ejects units standing in a newly blocked footprint', () => {
+    const w = createWorld(11);
+    w.buildings = [];
+    const field = buildField(11, { width: 64, height: 64 });
+    const x = 32;
+    const z = 32;
+    clearClaim(field, 'tower', x, z);
+    const tiles = footprintTiles('tower', x, z);
+    assert.ok(tiles.length >= 1);
+    const stand = tiles[0];
+    const u = spawn(w, {
+      x: tileCenterX(stand.tx),
+      y: tileCenterY(stand.tz),
+      type: UNIT.WARRIOR,
+      owner: 0,
+    });
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'tower',
+        tx: fx.fromFloat(x),
+        ty: fx.fromFloat(z),
+      },
+    ]);
+    assert.equal(w.buildings.length, 1);
+    assert.equal(w.order[u], ORDER.MOVE);
+    assert.equal(w.hasTarget[u], 1);
+    // Path + a few steps should leave the blocked core.
+    planPathBudget(w, field);
+    for (let t = 0; t < 40; t++) step(w, field);
+    const tx = worldToTile(w.px[u]);
+    const tz = worldToTile(w.py[u]);
+    assert.equal(isPassable(field, tx, tz), true, `escaped to ${tx},${tz}`);
+    assert.equal(
+      tiles.some((c) => c.tx === tx && c.tz === tz),
+      false,
+      'left the footprint',
+    );
   });
 
   it('farm footprint is slow but passable', () => {
@@ -146,7 +239,7 @@ describe('buildings place', () => {
         ty: fx.fromFloat(z),
       },
     ]);
-    const tiles = footprintTiles(field, 'farm', x, z);
+    const tiles = footprintTiles('farm', x, z);
     assert.equal(tiles.length, 4);
     for (const { tx, tz } of tiles) {
       assert.equal(isPassable(field, tx, tz), true, `passable ${tx},${tz}`);
@@ -164,7 +257,7 @@ describe('buildings place', () => {
     w.agoras = createAgoras([{ owner: 0, x, z }]);
     w.buildings = [];
     applyWorldStructureOccupancy(field, w);
-    const tiles = footprintTiles(field, 'agora', x, z);
+    const tiles = footprintTiles('agora', x, z);
     assert.equal(tiles.length, 16);
     for (const { tx, tz } of tiles) {
       assert.equal(isPassable(field, tx, tz), true);
@@ -179,9 +272,13 @@ describe('buildings place', () => {
     const x = 28;
     const z = 28;
     clearClaim(field, 'farm', x, z);
-    const tiles = footprintTiles(field, 'farm', x, z);
+    const tiles = footprintTiles('farm', x, z);
+    const farmSnap = snapFloat('farm', x, z);
     field.pass[tiles[0].tz * field.width + tiles[0].tx] = 0;
-    assert.equal(canPlaceBuildingAt(field, 'farm', fx.fromFloat(x), fx.fromFloat(z)), false);
+    assert.equal(
+      canPlaceBuildingAt(field, 'farm', farmSnap.xFixed, farmSnap.zFixed),
+      false,
+    );
     applyCommands(w, field, [
       {
         type: CMD.PLACE_BUILDING,
@@ -194,16 +291,18 @@ describe('buildings place', () => {
     assert.equal(w.buildings.length, 0);
 
     clearClaim(field, 'barracks', x, z);
+    const barracksTiles = footprintTiles('barracks', x, z);
+    const barracksSnap = snapFloat('barracks', x, z);
     // Tree / shore yellow alone must NOT block placement.
-    field.slowMask[tiles[0].tz * field.width + tiles[0].tx] = 1;
+    field.slowMask[barracksTiles[0].tz * field.width + barracksTiles[0].tx] = 1;
     assert.equal(
-      canPlaceBuildingAt(field, 'barracks', fx.fromFloat(x), fx.fromFloat(z)),
+      canPlaceBuildingAt(field, 'barracks', barracksSnap.xFixed, barracksSnap.zFixed),
       true,
     );
-    // Structure yellow (farm/agora pad) does block.
-    field.structureSlowMask[tiles[0].tz * field.width + tiles[0].tx] = 1;
+    // Structure yellow (farm/agora/slow building) does block.
+    field.structureSlowMask[barracksTiles[0].tz * field.width + barracksTiles[0].tx] = 1;
     assert.equal(
-      canPlaceBuildingAt(field, 'barracks', fx.fromFloat(x), fx.fromFloat(z)),
+      canPlaceBuildingAt(field, 'barracks', barracksSnap.xFixed, barracksSnap.zFixed),
       false,
     );
   });
@@ -225,7 +324,11 @@ describe('buildings place', () => {
       },
     ]);
     assert.equal(w.buildings.length, 1);
-    assert.equal(canPlaceBuildingAt(field, 'farm', fx.fromFloat(x), fx.fromFloat(z)), false);
+    const snapped = snapFloat('farm', x, z);
+    assert.equal(
+      canPlaceBuildingAt(field, 'farm', snapped.xFixed, snapped.zFixed),
+      false,
+    );
     applyCommands(w, field, [
       {
         type: CMD.PLACE_BUILDING,
@@ -245,7 +348,7 @@ describe('buildings place', () => {
     const x = 44;
     const z = 44;
     clearClaim(field, 'farm', x, z);
-    const tiles = footprintTiles(field, 'farm', x, z);
+    const tiles = footprintTiles('farm', x, z);
     for (const { tx, tz } of tiles) {
       const i = tz * field.width + tx;
       field.sceneryType[i] = 1; // TREE
@@ -274,14 +377,40 @@ describe('buildings place', () => {
   it('applyStructureOccupancyAt is idempotent', () => {
     const field = buildField(6, { width: 64, height: 64 });
     clearClaim(field, 'church', 24, 24);
-    const x = fx.fromFloat(24);
-    const z = fx.fromFloat(24);
-    applyStructureOccupancyAt(field, 'church', x, z);
-    applyStructureOccupancyAt(field, 'church', x, z);
-    const tiles = footprintTiles(field, 'church', 24, 24);
+    const snapped = snapFloat('church', 24, 24);
+    applyStructureOccupancyAt(field, 'church', snapped.xFixed, snapped.zFixed);
+    applyStructureOccupancyAt(field, 'church', snapped.xFixed, snapped.zFixed);
+    const tiles = footprintTiles('church', 24, 24);
     assert.equal(tiles.length, 9);
     for (const { tx, tz } of tiles) {
       assert.equal(field.pass[tz * field.width + tx], 0);
+    }
+  });
+
+  it('1×1 and 6×6 centering math is size-agnostic', () => {
+    buildField(12, { width: 64, height: 64 });
+    BUILDING_FOOTPRINTS.__wall = { w: 1, h: 1, mode: 'block' };
+    BUILDING_FOOTPRINTS.__keep = { w: 6, h: 6, mode: 'block' };
+    try {
+      const mod = (v) => ((v % TILE_SIZE_F) + TILE_SIZE_F) % TILE_SIZE_F;
+      const wall = snapFloat('__wall', 12.4, -3.1);
+      const wallB = buildingFootprintBounds('__wall', wall.xFixed, wall.zFixed);
+      assert.equal(wallB.coreW, 1);
+      assert.equal(wallB.coreH, 1);
+      assert.ok(Math.abs(mod(wall.x) - TILE_SIZE_F / 2) < 1e-4);
+
+      const keep = snapFloat('__keep', 8.9, 8.1);
+      const keepB = buildingFootprintBounds('__keep', keep.xFixed, keep.zFixed);
+      assert.equal(keepB.coreW, 6);
+      assert.equal(keepB.coreH, 6);
+      assert.ok(mod(keep.x) < 1e-4);
+      assert.ok(mod(keep.z) < 1e-4);
+      // Six tiles centered on the intersection: indices i-3 .. i+2.
+      assert.equal(keepB.coreX0 + keepB.coreW / 2, keepB.coreX0 + 3);
+      assert.equal(keepB.coreZ0 + keepB.coreH / 2, keepB.coreZ0 + 3);
+    } finally {
+      delete BUILDING_FOOTPRINTS.__wall;
+      delete BUILDING_FOOTPRINTS.__keep;
     }
   });
 });

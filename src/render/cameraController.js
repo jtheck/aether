@@ -183,15 +183,40 @@ export function createCameraController(camera, canvas, opts = {}) {
     return true;
   }
 
-  function handlePointerMove(e) {
-    if (!rmbPanActive) return false;
-    if (rmbPointerId != null && e.pointerId !== rmbPointerId) return false;
-
+  /** Screen-space px delta → ground-plane world delta (camera-relative axes, current zoom). */
+  function screenDeltaToGroundPan(screenDx, screenDy) {
     const cam = camera;
     const rect = canvas.getBoundingClientRect();
     const fov = cam.fov ?? 0.8;
     const pixelsToWorld =
-      (2 * (cam.radius || 60) * Math.tan(fov / 2)) / Math.max(1, rect.height);
+      (2 * (cam.radius || DEFAULT_RADIUS) * Math.tan(fov / 2)) / Math.max(1, rect.height);
+    const { rightX, rightZ, forwardX, forwardZ } = groundAxes();
+    return {
+      wx: (rightX * screenDx + forwardX * screenDy) * pixelsToWorld,
+      wz: (rightZ * screenDx + forwardZ * screenDy) * pixelsToWorld,
+    };
+  }
+
+  /** v1: basePanSens * min(1, (60/r)^1.5), with r remapped so DEFAULT_RADIUS ≈ v1's ~80. */
+  function panZoomFactor() {
+    const r = Math.max(1, camera.radius || DEFAULT_RADIUS);
+    const effectiveR = r * (V1_REF_RADIUS / DEFAULT_RADIUS);
+    return Math.min(1.0, Math.pow(60 / effectiveR, 1.5));
+  }
+
+  /** Shared by RMB drag and touch centroid-pan — same feel, one formula. */
+  function panByScreenDelta(screenDx, screenDy, sensBase) {
+    const { wx, wz } = screenDeltaToGroundPan(screenDx, screenDy);
+    const panSens = sensBase * panZoomFactor();
+    markNudged();
+    velocity.panX += wx * panSens;
+    velocity.panZ += wz * panSens;
+  }
+
+  function handlePointerMove(e) {
+    if (!rmbPanActive) return false;
+    if (rmbPointerId != null && e.pointerId !== rmbPointerId) return false;
+
     const screenDx = e.clientX - rmbLastScreen.x;
     const screenDy = e.clientY - rmbLastScreen.y;
     // Cumulative from pointer-down — per-event deltas are often < threshold.
@@ -199,19 +224,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (totalDist > PAN_DRAG_THRESHOLD) rmbDidPan = true;
     rmbLastScreen = { x: e.clientX, y: e.clientY };
 
-    const { rightX, rightZ, forwardX, forwardZ } = groundAxes();
-    const wx = rightX * screenDx * pixelsToWorld + forwardX * screenDy * pixelsToWorld;
-    const wz = rightZ * screenDx * pixelsToWorld + forwardZ * screenDy * pixelsToWorld;
-
-    // v1: basePanSens * min(1, (60/r)^1.5), with r remapped so DEFAULT_RADIUS ≈ v1's ~80.
-    const r = Math.max(1, cam.radius || DEFAULT_RADIUS);
-    const effectiveR = r * (V1_REF_RADIUS / DEFAULT_RADIUS);
-    const zoomFactor = Math.min(1.0, Math.pow(60 / effectiveR, 1.5));
-    const panSens = RMB_PAN_BASE * zoomFactor;
-
-    markNudged();
-    velocity.panX += wx * panSens;
-    velocity.panZ += wz * panSens;
+    panByScreenDelta(screenDx, screenDy, RMB_PAN_BASE);
     return true;
   }
 
@@ -411,6 +424,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     nudgePan,
     nudgeZoom,
     nudgeRotate,
+    panByScreenDelta,
+    getRadius: () => camera.radius,
     tick,
     reset,
     markNudged,

@@ -1,21 +1,28 @@
-// Sole pointer/wheel surface for mouse (now).
+// Sole pointer/wheel surface for mouse and touch.
 // Document-level move/up like v1 — no pointer capture.
-// Touch later: synthesize into this hub. Gamepad: call nudge* / command helpers.
+// Touch is fully owned by the touch adapter (its own multi-finger bookkeeping);
+// it drives camera + game through the same surfaces mouse uses. Gamepad: call
+// nudge* / command helpers directly, same idea.
 
 /**
  * @param {object} opts
  * @param {HTMLCanvasElement} opts.canvas
  * @param {ReturnType<import('../../render/cameraController.js').createCameraController>} opts.camera
  * @param {ReturnType<import('./gameInput.js').createGameInput>} opts.game
+ * @param {ReturnType<import('./touchAdapter.js').createTouchAdapter>} [opts.touch]
  * @param {() => boolean} [opts.active] — when false, camera + game ignore input (boot splash)
  */
-export function setupPointerHub({ canvas, camera, game, active }) {
+export function setupPointerHub({ canvas, camera, game, touch, active }) {
   const isActive = () => active?.() ?? true;
 
   function onPointerDown(e) {
     if (!isActive()) return;
-    if (e.pointerType === 'touch') return;
     if (e.target !== canvas && !canvas.contains(/** @type {Node} */ (e.target))) return;
+
+    if (e.pointerType === 'touch') {
+      touch?.handlePointerDown(e);
+      return;
+    }
 
     if (e.button === 2) {
       game.cancelDrag();
@@ -31,14 +38,20 @@ export function setupPointerHub({ canvas, camera, game, active }) {
 
   function onPointerMove(e) {
     if (!isActive()) return;
-    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch') {
+      touch?.handlePointerMove(e);
+      return;
+    }
     if (camera.isRmbPanning()) camera.handlePointerMove(e);
     game.handlePointerMove(e);
   }
 
   function onPointerUp(e) {
     if (!isActive()) return;
-    if (e.pointerType === 'touch') return;
+    if (e.pointerType === 'touch') {
+      touch?.handlePointerUp(e);
+      return;
+    }
 
     if (e.type === 'pointercancel') {
       camera.handlePointerUp(e);
@@ -88,6 +101,7 @@ export function setupPointerHub({ canvas, camera, game, active }) {
       camera.handlePointerUp({ button: 2, type: 'pointercancel', pointerId: -1 });
     }
     game.cancelDrag();
+    touch?.reset();
   }
 
   document.addEventListener('pointerdown', onPointerDown);

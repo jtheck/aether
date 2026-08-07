@@ -102,8 +102,10 @@ const mainHash = mainFile.replace(/^main-/, '').replace(/\.js$/, '');
   console.log(`worker URL → ./${workerFile}`);
 }
 
-// Obfuscation breaks ESM module workers (preamble before import → "sim worker failed").
-// Opt in only when you have time to validate: PACKAGE_OBFUSCATE=1 npm run package
+// Opt in: PACKAGE_OBFUSCATE=1 npm run package
+// Safe on both bundles because splitting:false fully inlines them (no import/export
+// left for the obfuscator to put a preamble in front of). Module workers only reject
+// statements-before-import; import-free scripts are fine.
 const doObfuscate = process.env.PACKAGE_OBFUSCATE === '1' || process.env.PACKAGE_OBFUSCATE === 'true';
 if (doObfuscate) {
   const obfuscateOpts = {
@@ -120,17 +122,22 @@ if (doObfuscate) {
     target: 'browser',
     ignoreImports: true,
   };
-  // Never obfuscate the worker — only main.
   for (const name of readdirSync(DEPLOY)) {
-    if (!/^main-.+\.js$/.test(name)) continue;
+    if (!/^(main|sim\.worker)-.+\.js$/.test(name)) continue;
     const path = join(DEPLOY, name);
     const src = readFileSync(path, 'utf8');
+    // Statement-boundary ESM only (avoid matching "export" inside string literals).
+    if (/(?:^|[;\n])\s*import\s*[\*{'"']|(?:^|[;\n])\s*export\s/.test(src)) {
+      throw new Error(
+        `${name} still has import/export — obfuscation would break module loading; fix the bundle first`,
+      );
+    }
     const obfuscated = JavaScriptObfuscator.obfuscate(src, obfuscateOpts).getObfuscatedCode();
     writeFileSync(path, obfuscated);
     console.log('obfuscated', name);
   }
 } else {
-  console.log('skip obfuscate (set PACKAGE_OBFUSCATE=1 to enable main-only)');
+  console.log('skip obfuscate (set PACKAGE_OBFUSCATE=1 to enable main+worker)');
 }
 
 // Ensure baked manifest exists (avoids per-mesh 404 probes at runtime).

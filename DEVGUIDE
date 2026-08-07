@@ -32,7 +32,7 @@ npm run package
 ```
 Fills ../DEPLOY/ (index at root, hashed+minified JS, assets incl. baked, PWA).
 JS is two bundles (main + worker) — not hundreds of Lite chunks.
-Obfuscation off by default (breaks the sim module worker); opt-in: PACKAGE_OBFUSCATE=1.
+Obfuscation off by default; opt-in: PACKAGE_OBFUSCATE=1 (main + sim worker — both are fully bundled).
 Do not open index.html from disk (file:// / CORS / SAB).
 
 To deploy:

@@ -685,9 +685,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // mesh.world × local bounds, so board-scale TI units vanish or become ~2 texels).
   // Keep worldSpaceBias tiny — unit height is ~1–2; 0.15+ eats character contact shadows.
   // Note: Lite keeps darkness / worldSpaceBias on an internal csmCfg, not sg._config.
+  // Quality is fixed at construction: the depth texture is allocated at these
+  // dimensions and csmCfg is captured in the generator's closures, with no
+  // setter and no dispose. Changing tiers therefore needs a reload — see the
+  // settings menu, which persists the choice and says so.
+  const shadowQuality = opts.shadowQuality ?? {};
   const shadowOpts = {
-    mapSize: 2048,
-    numCascades: 4,
+    mapSize: shadowQuality.mapSize ?? 2048,
+    numCascades: shadowQuality.numCascades ?? 4,
     lambda: 0.85,
     cascadeBlendPercentage: 0.08,
     stabilizeCascades: true,
@@ -700,6 +705,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   };
   const shadowGen = createCsmDirectionalShadowGenerator(engine, sun, shadowOpts);
   sun.shadowGenerator = shadowGen;
+  // Always boots enabled so receivers register with shadow sampling compiled in
+  // (see markShadowReceivers before applyShadowState). Callers wanting shadows
+  // off apply setShadowsEnabled(false) after start().
   let shadowsEnabled = true;
   /** Socket fire / ground fire / particles / aura sparkles — A/B with F key. */
   let fxEnabled = true;

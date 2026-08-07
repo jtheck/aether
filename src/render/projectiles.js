@@ -141,6 +141,18 @@ function writeMatrix(matrices, slot, x, y, z, vx, vy, vz, scale) {
   matrices[offset + 15] = 1;
 }
 
+/**
+ * Draw only the live slots. Pools are allocated at full renderCapacity, and
+ * `flushThinInstances` marks 0..ti.count dirty — leaving count at capacity
+ * re-uploads and re-draws the whole pool every frame for a handful of shots.
+ */
+function setPoolDrawCount(mesh, count) {
+  const ti = mesh.thinInstances;
+  if (!ti || ti.count === count) return;
+  ti.count = count;
+  mesh.visible = count > 0;
+}
+
 export function createProjectileRenderer(engine, scene, groundYAt, onProjectile) {
   const batches = new Map();
   const counts = new Uint32Array(PROJECTILE_DEFS.length);
@@ -251,6 +263,7 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile)
         hideMatrix(batch.matrices, slot);
       }
       batch.previousCount = count;
+      setPoolDrawCount(batch.mesh, count);
     }
     return { active, dropped };
   }
@@ -261,6 +274,7 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile)
         hideMatrix(batch.matrices, slot);
       }
       batch.previousCount = 0;
+      setPoolDrawCount(batch.mesh, 0);
     }
   }
 

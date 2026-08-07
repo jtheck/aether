@@ -164,8 +164,13 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         treeByTile.set(instances[i].tileIndex, { batch, index: i });
       }
       for (let i = live.length; i < capacity; i++) {
-        treeFreeSlots.push(i);
         writeHiddenMatrix(billboardMatrices, i);
+      }
+      // Slots are claimed with pop(), and the draw count is the highest occupied
+      // slot — so hand out the lowest index first to keep the range compact.
+      // Kept in descending order for that reason.
+      for (let i = capacity - 1; i >= live.length; i--) {
+        treeFreeSlots.push(i);
       }
     }
 
@@ -220,6 +225,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       writeHiddenMatrix(billboardMatrices, i);
       for (const part of treeBatch.modelParts) writeHiddenMatrix(part.matrices, i);
     }
+    treeFreeSlots.sort((a, b) => b - a);
     treeBatch.capacity = cap;
     treeBatch.dirty = true;
   }
@@ -684,6 +690,11 @@ function updateBatchLod(batch, cameraPos) {
     modelParts,
   } = batch;
   const lodDistanceSq = variant.lodDistance * variant.lodDistance;
+  // Highest slot each bucket actually occupies. Batches are allocated at full
+  // capacity with headroom, and with LOD off the billboard bucket stays empty —
+  // drawing/flushing all of it every update is pure waste.
+  let lastModelSlot = -1;
+  let lastBillboardSlot = -1;
   for (let i = 0; i < instances.length; i++) {
     const p = instances[i];
     const stockScale = p.stockScale ?? 1;
@@ -712,6 +723,7 @@ function updateBatchLod(batch, cameraPos) {
         );
       }
       writeHiddenMatrix(billboardMatrices, i);
+      lastModelSlot = i;
     } else {
       for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
       writeInstanceMatrix(
@@ -723,9 +735,14 @@ function updateBatchLod(batch, cameraPos) {
         p.yaw,
         billboardScale,
       );
+      lastBillboardSlot = i;
     }
   }
-  for (const part of modelParts) flushThinInstances(part.mesh);
+  for (const part of modelParts) {
+    setThinInstanceCount(part.mesh, lastModelSlot + 1);
+    flushThinInstances(part.mesh);
+  }
+  setThinInstanceCount(billboardMesh, lastBillboardSlot + 1);
   flushThinInstances(billboardMesh);
 }
 

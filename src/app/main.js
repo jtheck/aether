@@ -30,6 +30,8 @@ import { worldToTile } from '../sim/field.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
+import { setupMenu } from './menu.js';
+import { ensureShadowModeDefault, resolveShadowMode, shadowTier } from './settings.js';
 import {
   OVERLAY_COLLAR_SPIN_DISTANCE_SQ,
   OVERLAY_MAX_BARS,
@@ -275,7 +277,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   setStatusText('Waking the world…');
 
+  // Seeds the saved tier from the GPU on first run only; no-op afterwards.
+  await ensureShadowModeDefault();
+  const bootShadowMode = resolveShadowMode();
   const renderer = await createRenderer(canvas, count, {
+    shadowQuality: shadowTier(bootShadowMode),
     types: session.state.type,
     owners: session.state.owner,
     gpuCapacity: useNet ? kothMaxEntities(army) : count,
@@ -381,9 +387,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (new URLSearchParams(location.search).get('hitboxes') === '1') {
     renderer.setPickHitboxesVisible?.(true);
   }
-  if (new URLSearchParams(location.search).get('shadows') === '0') {
+  // Applied after start() rather than at construction so receivers still
+  // register with shadow sampling compiled in and B can re-enable them.
+  if (bootShadowMode === 0) {
     renderer.setShadowsEnabled?.(false);
   }
+  const sideMenu = setupMenu({ renderer });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
     scene: renderer.scene,
@@ -1061,6 +1070,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       e.preventDefault();
       const on = renderer.toggleShadows?.();
       if (typeof on === 'boolean') setStatusText(on ? 'Shadows on' : 'Shadows off');
+      sideMenu.refresh();
       return;
     }
     if (e.code === 'KeyF') {

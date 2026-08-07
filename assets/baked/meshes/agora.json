@@ -1,0 +1,154 @@
+{
+  "sourceUrl": "/assets/models/agora.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.027212277054786682,
+        0.027212277054786682,
+        0.027212277054786682,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.1600571572780609,
+        0.1600571572780609,
+        0.1600571572780609,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.002",
+      "baseColorFactor": [
+        0.12331452965736389,
+        0.12331452965736389,
+        0.12331452965736389,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 312,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1248,
+        "length": 312,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 2496,
+        "length": 162,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 3144,
+        "length": 208,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 3976,
+        "length": 204,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 4792,
+        "length": 204,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 5608,
+        "length": 102,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 6016,
+        "length": 136,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.002",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 6560,
+        "length": 48,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 6752,
+        "length": 48,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 6944,
+        "length": 24,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 7040,
+        "length": 32,
+        "type": "f32"
+      }
+    }
+  ]
+}

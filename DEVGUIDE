@@ -1,11 +1,50 @@
 
 
 
+## v2 build / deploy (src/)
+
+Dev (readable modules, COOP/COEP):
+```
+cd src
+npm install
+npm run serve
+```
+Open http://localhost:5173 — edit app/ sim/ render/, refresh. No rebuild.
+
+Optional vendor rebuilds (only when those deps change — not every edit):
+```
+npm run build:lite
+npm run build:explorer
+npm run build:howler
+```
+
+Prebake (VAT dumps, mesh packages with materials, spawn/FX sockets → ../assets/baked/).
+Needs Chrome + WebGPU. Speeds up both local serve and prod:
+```
+npm run prebake
+```
+Re-run when models / VAT clips change. Serve and package both use assets/baked/ when present.
+Static meshes load bake geo+materials (no GLB parse); villager VAT still needs its GLB for skinning.
+
+Package upload folder:
+```
+npm run package
+```
+Fills ../DEPLOY/ (index at root, hashed+minified JS, assets incl. baked, PWA).
+JS is two bundles (main + worker) — not hundreds of Lite chunks.
+Obfuscation off by default (breaks the sim module worker); opt-in: PACKAGE_OBFUSCATE=1.
+Do not open index.html from disk (file:// / CORS / SAB).
+
 To deploy:
- - Go to AWS S3 bucket
-  - Upload changed files
- - Go to CLoudfront -> Distributions
-  - Run Invalidation " /* "
+ - Upload the *contents* of DEPLOY/ to the S3 bucket root (not the DEPLOY folder name)
+ - CloudFront → Distributions → Invalidation "/*"
+ - CloudFront MUST send these on HTML (ideally all responses) or the game stays a black/fallback screen:
+     Cross-Origin-Opener-Policy: same-origin
+     Cross-Origin-Embedder-Policy: require-corp
+   (Response headers policy on the distribution. Without them SharedArrayBuffer is undefined
+   and crossOriginIsolated is false — check console: window.crossOriginIsolated)
+
+
 
 
 

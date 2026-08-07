@@ -102,10 +102,16 @@ export function createWorld(seed) {
     navWpCount: new Uint8Array(MAX_ENTITIES),
     navWpIndex: new Uint8Array(MAX_ENTITIES),
     pathRequest: new Uint8Array(MAX_ENTITIES),
+    /** 1 = use slow-aware A* for this entity's path requests (rally / Drayage). */
+    pathSlowAware: new Uint8Array(MAX_ENTITIES),
     navWx: new Int32Array(MAX_ENTITIES * MAX_WAYPOINTS),
     navWy: new Int32Array(MAX_ENTITIES * MAX_WAYPOINTS),
     stuckTicks: new Uint8Array(MAX_ENTITIES),
     repathCount: new Uint8Array(MAX_ENTITIES),
+    /** Owner-wide researched tech bitmasks (see tech.js MAX_TECH_OWNERS). */
+    tech: new Uint32Array(16),
+    /** Set when tech bits change; worker publishes then clears. */
+    techDirty: 0,
     lastPx: new Int32Array(MAX_ENTITIES),
     lastPy: new Int32Array(MAX_ENTITIES),
 
@@ -182,6 +188,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;
   w.pathRequest[i] = 0;
+  if (w.pathSlowAware) w.pathSlowAware[i] = 0;
   w.navDestX[i] = x;
   w.navDestY[i] = y;
   w.stuckTicks[i] = 0;

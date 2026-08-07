@@ -884,14 +884,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const k of menu.units ?? []) unitKeys.add(k);
     for (const k of menu.upgrades ?? []) upgradeKeys.add(k);
   }
-  for (const key of unitKeys) {
-    const typeId = BUILDING_MENU_UNITS[key];
-    const url = typeId != null ? unitMenuModelUrl(typeId) : null;
-    await loadIcon(`unit:${key}`, url);
-  }
-  for (const key of upgradeKeys) {
-    await loadIcon(`upgrade:${key}`, UPGRADE_MODEL_URLS[key]);
-  }
+  await Promise.all([
+    ...[...unitKeys].map((key) => {
+      const typeId = BUILDING_MENU_UNITS[key];
+      const url = typeId != null ? unitMenuModelUrl(typeId) : null;
+      return loadIcon(`unit:${key}`, url);
+    }),
+    ...[...upgradeKeys].map((key) => loadIcon(`upgrade:${key}`, UPGRADE_MODEL_URLS[key])),
+  ]);
 
   /** @type {{ data: object, layer: object, text: string }[]} */
   const labels = [];
@@ -1046,6 +1046,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     demolish: true,
     cancel: false,
   };
+  /** Upgrade ids already researched by the local player (dull + full ring). */
+  /** @type {Set<string>} */
+  const researchedUpgrades = new Set();
   /** @type {ArmedId} */
   let armed = null;
   /** @type {Map<string, { progress: number, count: number }>} */
@@ -1179,17 +1182,28 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     utilityAvailable.cancel = anyTracksActive();
   }
 
+  function slotResearched(slot) {
+    return slot?.kind === 'upgrade' && researchedUpgrades.has(slot.id);
+  }
+
   function applyPadHover(index, hovered) {
     const pad = pads[index];
     if (!pad) return;
     const cat = CATEGORIES[pad.category] ?? CATEGORIES.unit;
     const mat = pad.mat;
-    if (hovered) {
+    const owned = slotResearched(slots[index]);
+    if (owned && !hovered) {
+      mat.diffuseColor = [...DULL_COLOR];
+      mat.emissiveColor = [...DULL_EMISSIVE];
+      mat.alpha = DULL_ALPHA;
+    } else if (hovered) {
       mat.diffuseColor = [...PAD_HOVER_COLOR];
       mat.emissiveColor = [...PAD_HOVER_EMISSIVE];
+      mat.alpha = 0.95;
     } else {
       mat.diffuseColor = [...cat.pad];
       mat.emissiveColor = [...cat.padEm];
+      mat.alpha = 0.92;
     }
     markMaterialUboDirty(mat);
   }
@@ -1326,8 +1340,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       const text = slots[i]?.name;
       hideLabel(label);
       if (text && text !== label.text) {
-        updateDefaultTextData(label.data, text, [0.96, 0.94, 0.88, 1]);
+        updateDefaultTextData(label.data, text, LABEL_TEXT_COLOR);
         label.text = text;
+        label.dull = false;
       }
     }
     for (const badge of badges) hideLabel(badge);
@@ -1465,7 +1480,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     applyPadHover(i, i === hoverIndex);
 
     const track = tracks.get(trackKey(s.kind, s.id));
-    const progress = track?.progress ?? 0;
+    // Owned upgrades stay dull with no yellow fill; in-progress uses the same ring as units.
+    const progress = slotResearched(s) ? 0 : track?.progress ?? 0;
     ensurePadProgress(i, progress);
     const prog = progressPads[i];
     if (prog?.mesh) {
@@ -1524,6 +1540,15 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       return;
     }
     const hovered = i === hoverIndex;
+    const owned = slotResearched(slot);
+    if (label.dull !== owned) {
+      updateDefaultTextData(
+        label.data,
+        label.text || slot.name,
+        owned ? DULL_TEXT_COLOR : LABEL_TEXT_COLOR,
+      );
+      label.dull = owned;
+    }
     const down = LABEL_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
     placeScreenText(
@@ -1532,7 +1557,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       slot.y + ty * down + ny * lift,
       slot.z + tz * down + nz * lift,
       LABEL_SCREEN_SCALE * (hovered ? 1.05 : 1),
-      hovered ? 1 : 0.88,
+      owned ? 0.82 : hovered ? 1 : 0.88,
     );
   }
 
@@ -2112,6 +2137,23 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   }
 
   /**
+   * @param {Iterable<string> | Record<string, boolean> | null | undefined} ids
+   */
+  function setResearchedUpgrades(ids) {
+    researchedUpgrades.clear();
+    if (ids) {
+      if (Array.isArray(ids) || ids instanceof Set) {
+        for (const id of ids) if (id) researchedUpgrades.add(String(id));
+      } else {
+        for (const [id, on] of Object.entries(ids)) {
+          if (on) researchedUpgrades.add(id);
+        }
+      }
+    }
+    if (open) layout();
+  }
+
+  /**
    * @param {Record<string, { progress?: number, count?: number }> | Map<string, { progress?: number, count?: number }>} next
    */
   function setTrackDisplay(next) {
@@ -2193,6 +2235,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     pickOptionAtRay,
     hitAtRay,
     setUtilityAvailability,
+    setResearchedUpgrades,
     setTrackDisplay,
     setArmed,
     clearTracks,

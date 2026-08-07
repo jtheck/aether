@@ -1,0 +1,106 @@
+{
+  "sourceUrl": "/assets/models/priest.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.6543563604354858,
+        0.6543563604354858,
+        0.6543563604354858,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 60,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 240,
+        "length": 60,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 480,
+        "length": 30,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 600,
+        "length": 40,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 760,
+        "length": 2907,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 12388,
+        "length": 2907,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 24016,
+        "length": 1533,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 30148,
+        "length": 1938,
+        "type": "f32"
+      }
+    }
+  ]
+}

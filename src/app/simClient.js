@@ -21,7 +21,11 @@ export class SimClient {
     this._tickWait = null;
     this.worker.onmessage = (e) => this._onMessage(e);
     this.worker.onerror = (e) => {
-      const err = new Error(e.message || 'sim worker failed');
+      const detail = [e.message, e.filename && `at ${e.filename}:${e.lineno || 0}`]
+        .filter(Boolean)
+        .join(' ');
+      const err = new Error(detail || 'sim worker failed');
+      console.error('[sim] worker error', e.message, e.filename, e.lineno, e.error);
       if (this._tickWait) this._tickWait.reject(err);
       else throw err;
     };
@@ -71,6 +75,8 @@ export class SimClient {
       }, 30_000);
       this._tickWait = { tick, reject: (err) => finish(() => reject(err)) };
       this._stepDoneHandler = (doneTick, checksum, extra) => {
+        // Ignore stale completions from a prior in-flight tick (e.g. after reset).
+        if (doneTick < tick) return;
         if (doneTick !== tick) {
           finish(() =>
             reject(new Error(`commitTick expected ${tick}, got ${doneTick}`)),
@@ -142,11 +148,13 @@ export class SimClient {
       this._field = msg.field ?? null;
       this._agoras = msg.agoras ?? [];
       this._buildings = msg.buildings ?? [];
+      this._tech = msg.tech ?? [];
       this._initResolve?.({
         count: msg.count,
         field: this._field,
         agoras: this._agoras,
         buildings: this._buildings,
+        tech: this._tech,
       });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {
@@ -156,6 +164,8 @@ export class SimClient {
         matchWinner: msg.matchWinner,
         buildings: msg.buildings,
         buildingsChanged: !!msg.buildingsChanged,
+        tech: msg.tech,
+        techChanged: !!msg.techChanged,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,
         fireZoneUpdates: msg.fireZoneUpdates ?? null,

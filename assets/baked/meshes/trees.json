@@ -1,0 +1,58 @@
+{
+  "sourceUrl": "/assets/models/trees.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.08108571171760559,
+        0.3415611982345581,
+        0.0431225560605526,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.001",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 1680,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 6720,
+        "length": 1680,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 13440,
+        "length": 816,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 16704,
+        "length": 1120,
+        "type": "f32"
+      }
+    }
+  ]
+}

@@ -13,6 +13,8 @@ import {
   createGround,
   createCylinder,
   createStandardMaterial,
+  createPbrMaterial,
+  createTexture2DFromPixels,
   addToScene,
   setThinInstances,
   flushThinInstances,
@@ -34,14 +36,12 @@ import { getUnitDef } from '../sim/unitTypes.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
 import { HEIGHT_AMPLITUDE, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
-import { kothMaxUnitsOfType, KOTH_MAX_SLOTS } from '../sim/worldSetup.js';
 import { capacityFor } from '../sim/capacity.js';
 import {
   UNIT_MODEL_URLS,
   hasUnitModel,
   loadBakedUnitMesh,
   loadBakedUnitMeshParts,
-  unitModelTypeIds,
 } from './unitModels.js';
 import {
   fillVatInstanceParams,
@@ -427,12 +427,6 @@ const ORDER_TOTAL_MS = ORDER_POP_MS + ORDER_HOLD_MS + ORDER_FADE_MS;
 /** Radians of Y spin during pop (settles to camera-facing). Was 1.35π; punched to 2.4π — midpoint. */
 const ORDER_SPIN_RAD = Math.PI * 1.875;
 
-/** Max thin-instance slots per army for a unit type (KOTH soft guidance). */
-function kothPerArmyCap(typeId) {
-  const max = kothMaxUnitsOfType(typeId);
-  return max > 0 ? max / KOTH_MAX_SLOTS : 0;
-}
-
 /** Boot / grow floor for type×owner unit batches. */
 const UNIT_BATCH_INITIAL = 32;
 
@@ -551,6 +545,7 @@ async function loadUnitMeshTemplate(engine, url) {
  * @param {number} activeCount
  * @param {number} gpuCap
  */
+/** VAT when registered; otherwise static mesh bake (interim until all units are skinned). */
 async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
   if (isVatUnitType(typeId)) {
     const def = VAT_UNIT_DEFS[typeId];
@@ -631,10 +626,15 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
  * @param {{ types?: Int8Array | Uint8Array | number[], owners?: Uint8Array | number[], gpuCapacity?: number, field?: object | null, onAnimLoadProgress?: (done: number, total: number) => void }} [opts]
  */
 export async function createRenderer(canvas, capacity, opts = {}) {
+  const bootT0 = performance.now();
+  const bootLog = (label) => {
+    console.info(`[boot] ${label} +${(performance.now() - bootT0).toFixed(0)}ms`);
+  };
   const types = opts.types;
   const gpuCapacity = opts.gpuCapacity ?? capacity;
   const preallocKoth = gpuCapacity > capacity;
   const engine = await createEngine(canvas, { msaaSamples: 1 });
+  bootLog('engine');
   const scene = createSceneContext(engine);
   const buildingMenuFontPromise = loadFont('/assets/fonts/Roboto-Regular.ttf').catch((err) => {
     console.warn('Building menu labels disabled: Roboto font failed to load.', err);
@@ -743,6 +743,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       emitFire(x, y, z, scale) {
         treeFireEmit.fn?.(x, y, z, scale);
       },
+      // 3D trees/rocks pop in after Phase A register — fold them into CSM.
+      onModelMesh(mesh) {
+        if (!mesh) return;
+        mesh.receiveShadows = shadowsEnabled && !isBackdropMesh(mesh);
+        noteShadowMesh(mesh);
+      },
     };
   }
 
@@ -774,8 +780,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     tileGridOccupancyDirty = false;
   }
 
+  /** Unit templates wait on this so 3D trees/rocks win the first pop-in. */
+  let sceneryModelsReady = Promise.resolve();
   if (opts.field) {
     terrain = await createTerrainFromField(engine, scene, opts.field, camera, sceneryOpts());
+    sceneryModelsReady = terrain.modelsReady ?? Promise.resolve();
     rebuildTileGrid(opts.field);
   } else {
     const groundMat = createStandardMaterial();
@@ -795,7 +804,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const typeBatches = new Map();
   /** Mesh → batch for GPU unit picking (static + VAT parts). */
   const unitPickMeshes = new Map();
-  const fallbackEntities = [];
   const vatInstanceCap = maxVatInstancesPerBatch(engine);
 
   function batchKey(typeId, owner = 0) {
@@ -827,6 +835,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (batch.vatContainer) addToScene(scene, batch.vatContainer);
       else if (batch.vatRoot) addToScene(scene, batch.vatRoot);
       else for (const mesh of vatPartMeshes(batch)) addToScene(scene, mesh);
+      noteBatchMeshesForShadow(batch);
       refineVatFootLift(batch);
       typeBatches.set(key, batch);
       registerUnitPickBatch(unitPickMeshes, batch);
@@ -846,117 +855,145 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     batch.vatFootLift = 0.08;
   }
 
-  if (opts.onAnimLoadProgress && types) {
-    let vatTotal = 0;
-    for (let i = 0; i < capacity; i++) if (isVatUnitType(types[i])) vatTotal++;
-    if (vatTotal > 0) {
-      const shardHint = Math.max(1, Math.ceil(vatTotal / vatInstanceCap));
-      opts.onAnimLoadProgress(0, shardHint);
+  // Progressive boot: unit templates load in Phase B / on demand — not before first paint.
+  bootLog('terrain ready');
+
+  /** @type {Map<string, Promise<void>>} */
+  const batchEnsureInflight = new Map();
+  let lastMapCount = 0;
+  /** @type {Int8Array | Uint8Array | number[] | null} */
+  let lastMapTypes = null;
+  /** @type {Uint8Array | number[] | null} */
+  let lastMapOwners = null;
+  let firstUnitLogged = false;
+  let poseResyncGeneration = 0;
+  let lastConsumedPoseResync = 0;
+
+  async function createAndRegisterStaticBatch(typeId, entityIds, owner) {
+    const batchSize = entityIds.length;
+    const gpuCap = capacityFor(Math.max(batchSize, 1), { initial: UNIT_BATCH_INITIAL });
+    const batch = await createTypeBatch(engine, typeId, Math.max(batchSize, 1), gpuCap);
+    const key = batchKey(typeId, owner);
+    batch.entityIds = entityIds;
+    batch.mappedSize = batchSize;
+    if (preallocKoth) {
+      for (const mesh of vatPartMeshes(batch)) setThinInstanceCount(mesh, gpuCap);
+      for (let s = batchSize; s < gpuCap; s++) {
+        const o = s * 16;
+        for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
+      }
     }
+    addToScene(scene, batch.mesh);
+    noteBatchMeshesForShadow(batch);
+    typeBatches.set(key, batch);
+    registerUnitPickBatch(unitPickMeshes, batch);
+    for (let s = 0; s < entityIds.length; s++) {
+      entitySlot[entityIds[s]] = s;
+      entityBatchKey[entityIds[s]] = key;
+    }
+    return batch;
   }
 
-  if (preallocKoth) {
-    // One thin-instance mesh per (type, owner). Start lean (pow2 ≥ 32); grow via
-    // setThinInstances when an army exceeds batch.gpuCapacity.
-    for (const typeId of unitModelTypeIds()) {
-      const softCap = kothPerArmyCap(typeId);
-      if (softCap <= 0) continue;
-      for (let owner = 0; owner < KOTH_MAX_SLOTS; owner++) {
-        let batchSize = 0;
-        if (types && owner === 0) {
-          for (let i = 0; i < capacity; i++) if (types[i] === typeId) batchSize++;
+  /**
+   * Lazy VAT-first unit batches (static mesh fallback when not in VAT_UNIT_DEFS).
+   * @param {number} typeId
+   * @param {number} owner
+   * @param {number[]} entityIds
+   */
+  function ensureTypeOwnerBatch(typeId, owner, entityIds) {
+    const base = batchKey(typeId, owner);
+    if (typeBatches.has(base) || typeBatches.has(vatShardKey(base, 0))) {
+      return batchEnsureInflight.get(base) ?? Promise.resolve();
+    }
+    let pending = batchEnsureInflight.get(base);
+    if (pending) return pending;
+    pending = (async () => {
+      try {
+        if (isVatUnitType(typeId)) {
+          await addVatShards(typeId, entityIds, owner);
+        } else if (hasUnitModel(typeId)) {
+          await createAndRegisterStaticBatch(typeId, entityIds, owner);
         }
-        const initActive = owner === 0 ? batchSize : 0;
-        const gpuCap = capacityFor(Math.max(initActive, 1), { initial: UNIT_BATCH_INITIAL });
-        const batch = await createTypeBatch(engine, typeId, Math.max(initActive, 1), gpuCap);
-        // KOTH keeps draw count at capacity (hide unused matrices) so Lite never
-        // sees ti.count grow without a setThinInstances realloc.
-        for (const mesh of vatPartMeshes(batch)) setThinInstanceCount(mesh, gpuCap);
-        for (let s = initActive; s < gpuCap; s++) {
-          const o = s * 16;
-          for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
+        if (!firstUnitLogged && typeBatches.size > 0) {
+          firstUnitLogged = true;
+          bootLog('first unit template');
         }
-        if (batch.vatContainer) addToScene(scene, batch.vatContainer);
-        else if (batch.vatRoot) addToScene(scene, batch.vatRoot);
-        else for (const mesh of vatPartMeshes(batch)) addToScene(scene, mesh);
-        refineVatFootLift(batch);
-        const key = batchKey(typeId, owner);
-        const entityIds = [];
-        if (types && owner === 0) {
-          for (let i = 0; i < capacity; i++) {
-            if (types[i] === typeId) {
-              entityIds.push(i);
-              entitySlot[i] = entityIds.length - 1;
+        opts.onAnimLoadProgress?.(typeBatches.size, typeBatches.size);
+        if (lastMapTypes) {
+          mapEntitySlots(lastMapCount, lastMapTypes, lastMapOwners);
+          // New slots need a full pose rewrite — mark dirty + ask main to drop pose cache.
+          for (const batch of typeBatches.values()) {
+            for (const mesh of vatPartMeshes(batch)) {
+              const n = mesh.thinInstances?.count ?? 0;
+              if (n > 0) flushThinInstances(mesh);
             }
+            flushVatParams(batch);
           }
+          poseResyncGeneration++;
+          flushAllBatches();
         }
-        batch.entityIds = entityIds;
-        batch.mappedSize = initActive;
-        typeBatches.set(key, batch);
-        registerUnitPickBatch(unitPickMeshes, batch);
-        for (let s = 0; s < entityIds.length; s++) {
-          entityBatchKey[entityIds[s]] = key;
-        }
+      } catch (err) {
+        console.warn(`[boot] unit type ${typeId} owner ${owner} failed`, err);
+      } finally {
+        batchEnsureInflight.delete(base);
       }
-    }
-  } else {
-    const ownersArr = opts.owners;
-    const typeOwnerEntities = new Map();
-    if (types) {
-      for (let i = 0; i < capacity; i++) {
-        const type = types[i];
-        const owner = ownersArr ? Number(ownersArr[i]) : 0;
-        const key = batchKey(type, owner);
-        if (!typeOwnerEntities.has(key)) typeOwnerEntities.set(key, []);
-        typeOwnerEntities.get(key).push(i);
-      }
-    }
-
-    for (const [key, entityIds] of typeOwnerEntities) {
-      const batchSize = entityIds.length;
-      if (batchSize === 0) continue;
-      const colon = key.lastIndexOf(':');
-      const typeId = Number(key.slice(0, colon));
-      const owner = Number(key.slice(colon + 1));
-
-      if (isVatUnitType(typeId)) {
-        await addVatShards(typeId, entityIds, owner);
-      } else if (hasUnitModel(typeId)) {
-        const gpuCap = capacityFor(batchSize, { initial: UNIT_BATCH_INITIAL });
-        const batch = await createTypeBatch(engine, typeId, batchSize, gpuCap);
-        batch.entityIds = entityIds;
-        batch.mappedSize = batchSize;
-        addToScene(scene, batch.mesh);
-        typeBatches.set(key, batch);
-        registerUnitPickBatch(unitPickMeshes, batch);
-        for (let s = 0; s < entityIds.length; s++) {
-          entitySlot[entityIds[s]] = s;
-          entityBatchKey[entityIds[s]] = key;
-        }
-      } else {
-        fallbackEntities.push(...entityIds);
-      }
-    }
+    })();
+    batchEnsureInflight.set(base, pending);
+    return pending;
   }
 
-  if (opts.onAnimLoadProgress) opts.onAnimLoadProgress(1, 1);
+  /** @returns {Promise<void>} */
+  function scheduleBatchesForTypes(count, typesArr, ownersArr) {
+    if (!typesArr || count <= 0) return Promise.resolve();
+    /** @type {Map<string, number[]>} */
+    const groups = new Map();
+    for (let i = 0; i < count; i++) {
+      const typeId = Number(typesArr[i]);
+      const owner = ownersArr ? Number(ownersArr[i]) : 0;
+      if (!isVatUnitType(typeId) && !hasUnitModel(typeId)) continue;
+      const key = batchKey(typeId, owner);
+      let list = groups.get(key);
+      if (!list) {
+        list = [];
+        groups.set(key, list);
+      }
+      list.push(i);
+    }
+    // Start ensures only after scenery — building the job list must not call
+    // ensureTypeOwnerBatch early (that raced past the gate).
+    return sceneryModelsReady.then(() => {
+      /** @type {Promise<unknown>[]} */
+      const jobs = [];
+      for (const [key, entityIds] of groups) {
+        const colon = key.lastIndexOf(':');
+        const typeId = Number(key.slice(0, colon));
+        const owner = Number(key.slice(colon + 1));
+        jobs.push(ensureTypeOwnerBatch(typeId, owner, entityIds));
+      }
+      return Promise.all(jobs);
+    }).then(() => {});
+  }
 
   const BASE_DIAMETER = 6;
   let fallback = null;
   const fallbackCap = Math.max(gpuCapacity, capacity, 1);
-  if (fallbackEntities.length > 0 || preallocKoth) {
+  {
+    // Always keep a cheap sphere fallback for unknown / still-loading types.
     const mesh = createSphere(engine, { diameter: BASE_DIAMETER, segments: capacity > 500 ? 6 : 10 });
     const material = createStandardMaterial();
     material.diffuseColor = [1, 1, 1];
     mesh.material = material;
-    const fbInitCount = fallbackEntities.length;
-    const { matrices, colors, gpuCapacity: cap } = initThinInstances(mesh, fbInitCount, fallbackCap);
+    const { matrices, colors, gpuCapacity: cap } = initThinInstances(mesh, 0, fallbackCap);
     addToScene(scene, mesh);
-    for (let s = 0; s < fallbackEntities.length; s++) {
-      entitySlot[fallbackEntities[s]] = s;
-      entityBatchKey[fallbackEntities[s]] = null;
-    }
-    fallback = { mesh, matrices, colors, baseSize: BASE_DIAMETER, entityIds: [...fallbackEntities], gpuCapacity: cap, mappedSize: fbInitCount };
+    fallback = {
+      mesh,
+      matrices,
+      colors,
+      baseSize: BASE_DIAMETER,
+      entityIds: [],
+      gpuCapacity: cap,
+      mappedSize: 0,
+    };
     registerUnitPickBatch(unitPickMeshes, fallback);
   }
 
@@ -969,18 +1006,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Authored band RGBA per collar part (idle tint). Empty for fallback disc. */
   /** @type {number[][]} */
   let collarBandColors = [];
-  try {
-    // Keep red/white/yellow bands as separate draws (merge would paint all red).
-    selRingParts = await loadBakedUnitMeshParts(engine, SELECTION_COLLAR_URL);
-    useCollar = selRingParts.length > 0;
-    for (const mesh of selRingParts) {
-      collarBandColors.push(authoredCollarBandColor(mesh.material));
-      // Drop glTF 1×1 band textures — otherwise order washes still multiply
-      // through red/yellow albedo and read as the default collar.
-      mesh.material = makeCollarTintMaterial();
-    }
-  } catch (err) {
-    console.warn('Selection collar model failed (using disc):', SELECTION_COLLAR_URL, err);
+  // Phase A: cheap disc now; collar GLB upgrades in Phase B.
+  {
     const selRing = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 24 });
     const ringMat = createStandardMaterial();
     ringMat.diffuseColor = [0, 1, 1];
@@ -1031,27 +1058,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let useOrderTarget = false;
   /** Local-space Y of the arrow tip (placed on the click ray). */
   let orderTipLocalY = 0;
-  try {
-    orderMarker = await loadUnitMeshTemplate(engine, ORDER_MARKER_URL);
-    useOrderTarget = true;
-    const mat = orderMarker.material;
-    if (mat) {
-      applyUnlitHudMaterial(mat);
-      if ('alpha' in mat) mat.alpha = 1;
-      // Leave authored albedo; instance tint sets order color (red / yellow).
-      if (mat.emissiveColor) mat.emissiveColor = [0, 0, 0];
-    }
-    // Tip = lowest geometry Y (points at the ground click). Unit loaders bake
-    // feet to local y=0; tip offset is usually ~0 and goes into the instance matrix.
-    orderTipLocalY = orderMarker.boundMin?.[1] ?? 0;
-    if (orderMarker.position) {
-      orderMarker.position.x = 0;
-      orderMarker.position.y = 0;
-      orderMarker.position.z = 0;
-      orderMarker.markLocalDirty?.();
-    }
-  } catch (err) {
-    console.warn('Order marker model failed (using disc):', ORDER_MARKER_URL, err);
+  // Phase A: disc marker; target.glb upgrades in Phase B.
+  {
     orderMarker = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 32 });
     const orderMat = createStandardMaterial();
     orderMat.diffuseColor = [0.35, 0.75, 1];
@@ -1542,12 +1550,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   });
 
   const arrowTrails = createArrowTrails(engine, scene);
-  const frogRenderer = await createFrogRenderer(engine, scene, groundYAt, (x, z) => {
+
+  const frogLandBurst = (x, z) => {
     const gy = groundYAt(x, z);
     particles.emitBurst({
       position: [x, gy + 0.2, z],
       color: [0.45, 0.95, 0.4, 0.55],
-      // Keep land pops cheap when the swarm is thick.
       count: 4,
       speed: 4,
       verticalSpeed: 3.5,
@@ -1557,16 +1565,77 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       startSize: 0.7,
       endSize: 0.06,
     });
-  });
-  mushrooms = await createMushroomPreviews(engine, scene, groundYAt);
-  const agoraProps = await createAgoraProps(engine, scene, groundYAt);
-  const buildingProps = await createBuildingProps(engine, scene, groundYAt);
+  };
+
+  /** @type {any} */
+  let frogRenderer = {
+    advance() {},
+    sync() {},
+    commit() {},
+    applyUpdates() {},
+    clear() {},
+    stats: () => null,
+  };
+  /** Queued placements until Phase B props are ready. */
+  let pendingAgoras = null;
+  let pendingBuildings = null;
+  let pendingRallyFlags = null;
+  /** @type {any} */
+  let agoraProps = {
+    place(list) { pendingAgoras = list ?? []; },
+    placeRallyFlags(list) { pendingRallyFlags = list ?? []; },
+    setRallyGhost() {},
+    update() {},
+    isPickMesh() { return false; },
+    resolvePick() { return null; },
+    clear() {},
+  };
+  /** @type {any} */
+  let buildingProps = {
+    place(list) { pendingBuildings = list ?? []; },
+    setSelectionHighlight() {},
+    setGhost() {},
+    isPickMesh() { return false; },
+    resolvePick() { return null; },
+    forEachFxInstance() {},
+    clear() {},
+    updateSelectionHighlight() {},
+  };
+  const radialStub = {
+    showAt() {},
+    update() {},
+    hide() {},
+    isOpen() { return false; },
+    setCompact() {},
+    setCategory() {},
+    unlockCategory() {},
+    setHover() {},
+    setHoverByType() {},
+    setHoverFromPick() {},
+    clearHover() {},
+    pickOptionAtRay() { return null; },
+    hitAtRay() { return false; },
+    registerLabels() {},
+    disposeLabels() {},
+    setUtilityAvailability() {},
+    setResearchedUpgrades() {},
+    setTrackDisplay() {},
+    setArmed() {},
+    clearTracks() {},
+    getTracks() { return {}; },
+    getArmed() { return null; },
+    categoryLocked: false,
+  };
+  /** @type {any} */
+  let buildingRadial = radialStub;
+  /** @type {any} */
+  let actionRadial = { ...radialStub };
+
   const radialScreen = {
     worldToScreen(x, y, z) {
       const { width, height } = canvasCoords(0, 0);
       const c = matVec4(viewProjection(), x, y, z, 1);
       if (Math.abs(c[3]) < 1e-8) return null;
-      // Behind camera: flip clip xy so edge clamp aims the correct side.
       let cx = c[0];
       let cy = c[1];
       let cw = c[3];
@@ -1594,20 +1663,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         pixelHeight: canvas.height,
       };
     },
-    font: await buildingMenuFontPromise,
+    font: null,
   };
-  const buildingRadial = await createBuildingRadialMenu(
-    engine,
-    scene,
-    groundYAt,
-    radialScreen,
-  );
-  const actionRadial = await createBuildingActionRadial(
-    engine,
-    scene,
-    groundYAt,
-    radialScreen,
-  );
+
   onSceneDispose(scene, () => {
     buildingRadial.disposeLabels?.();
     actionRadial.disposeLabels?.();
@@ -1788,11 +1846,67 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
+  /**
+   * Late-loaded PBR meshes must not enter CSM until Lite finishes their color-pass
+   * materialize. Immediate setShadowTaskCasterMeshes → task.addMesh throws in
+   * resolvePendingMeshes (ext topo / missing rebuild) on hard refresh.
+   * @type {WeakSet<object>}
+   */
+  const shadowCasterDefer = new WeakSet();
+  /** Meshes already queued/deferred at least once (avoid re-defer on every place()). */
+  const shadowCasterNoted = new WeakSet();
+  /** @type {object[]} */
+  const pendingShadowNotes = [];
+  let shadowNotesReady = false;
+
+  function isBackdropMesh(mesh) {
+    return (mesh?.name || '') === 'distant-mountains';
+  }
+
+  function deferShadowCaster(mesh) {
+    if (!mesh) return;
+    shadowCasterDefer.add(mesh);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        shadowCasterDefer.delete(mesh);
+        try {
+          applyShadowState();
+        } catch (err) {
+          console.warn('[boot] shadow update after defer failed', err);
+        }
+      });
+    });
+  }
+
+  /** First-seen mesh → defer into CSM (safe during progressive boot). */
+  function noteShadowMesh(mesh) {
+    if (!mesh || shadowCasterNoted.has(mesh)) return;
+    shadowCasterNoted.add(mesh);
+    if (!shadowNotesReady) {
+      pendingShadowNotes.push(mesh);
+      return;
+    }
+    deferShadowCaster(mesh);
+  }
+
+  function flushPendingShadowNotes() {
+    shadowNotesReady = true;
+    for (let i = 0; i < pendingShadowNotes.length; i++) {
+      deferShadowCaster(pendingShadowNotes[i]);
+    }
+    pendingShadowNotes.length = 0;
+  }
+
+  function noteBatchMeshesForShadow(batch) {
+    for (const mesh of vatPartMeshes(batch)) noteShadowMesh(mesh);
+  }
+
   function collectShadowCasters() {
     /** @type {object[]} */
     const casters = [];
     const pushMesh = (mesh, { ignoreVisible = false } = {}) => {
       if (!isRenderableMesh(mesh)) return;
+      if (shadowCasterDefer.has(mesh)) return;
       // Units-off A/B hides meshes for the color pass but should still cast —
       // otherwise U looks like a huge win that is really just shadows.
       if (!ignoreVisible && mesh.visible === false) return;
@@ -1812,18 +1926,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     if (terrain?.meshes) {
       for (const root of terrain.meshes) {
-        // GLB scenery only — billboard impostors are flat cards and cast junk.
+        // GLB/bake scenery only — billboard impostors are flat cards and cast junk.
         const name = root.name || '';
         if (typeof name === 'string' && name.startsWith('scenery-model-')) {
           forEachMesh(root, pushMesh);
         }
       }
     }
+    buildingProps.forEachShadowMesh?.(pushMesh);
+    agoraProps.forEachShadowMesh?.(pushMesh);
     return casters;
-  }
-
-  function isBackdropMesh(mesh) {
-    return (mesh?.name || '') === 'distant-mountains';
   }
 
   function markShadowReceivers(on) {
@@ -1840,6 +1952,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (const mesh of vatPartMeshes(batch)) mesh.receiveShadows = recv;
     }
     if (fallback?.mesh) fallback.mesh.receiveShadows = recv;
+    buildingProps.forEachShadowMesh?.((mesh) => {
+      mesh.receiveShadows = recv;
+    });
+    agoraProps.forEachShadowMesh?.((mesh) => {
+      mesh.receiveShadows = recv;
+    });
   }
 
   function sameCasterList(a, b) {
@@ -1866,11 +1984,23 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const next = collectShadowCasters();
     if (!sameCasterList(shadowCasterList, next)) {
       shadowCasterList = next;
-      setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+      try {
+        setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+      } catch (err) {
+        // Progressive boot: caster list included a mesh Lite can't shadow yet.
+        console.warn('[boot] setShadowTaskCasterMeshes failed; keeping prior casters', err);
+        shadowCasterList = SHADOW_CASTERS_OFF;
+        try {
+          setShadowTaskCasterMeshes(shadowGen, shadowCasterList);
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
 
   // Receivers must be flagged before register so Lite builds shadow sampling in.
+  flushPendingShadowNotes();
   markShadowReceivers(true);
   applyShadowState();
 
@@ -2105,9 +2235,45 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     });
   }
 
+  // Lite only runs material-group builders during register. Phase B adds the first
+  // PBR meshes (units/buildings) after `_built` — without a primed PBR group,
+  // render-task pending resolve throws (no group.r / _rebuildSingle).
+  {
+    const white = createTexture2DFromPixels(
+      engine,
+      new Uint8Array([255, 255, 255, 255]),
+      1,
+      1,
+      { minFilter: 'linear', magFilter: 'linear' },
+    );
+    const orm = createTexture2DFromPixels(
+      engine,
+      new Uint8Array([255, 128, 0, 255]),
+      1,
+      1,
+      { minFilter: 'linear', magFilter: 'linear' },
+    );
+    const prime = createSphere(engine, { diameter: 0.05, segments: 4 });
+    prime.name = 'pbr-group-prime';
+    prime.material = createPbrMaterial({
+      name: 'pbr-group-prime',
+      baseColorTexture: white,
+      ormTexture: orm,
+      baseColorFactor: [1, 1, 1, 1],
+      metallicFactor: 0,
+      roughnessFactor: 1,
+      doubleSided: true,
+      occlusionStrength: 0,
+    });
+    prime.visible = false;
+    prime.pickable = false;
+    prime.receiveShadows = false;
+    prime.position.y = -1000;
+    addToScene(scene, prime);
+  }
+
   await registerSceneWithShadowSupport(scene);
-  buildingRadial.registerLabels?.();
-  actionRadial.registerLabels?.();
+  bootLog('scene registered (first paint ready)');
   const gpuPicker = createGpuPicker(scene);
 
   /**
@@ -2354,6 +2520,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function mapEntitySlots(count, typesArr, ownersArr) {
+    lastMapCount = count;
+    lastMapTypes = typesArr;
+    lastMapOwners = ownersArr ?? null;
+    scheduleBatchesForTypes(count, typesArr, ownersArr);
+
     entitySlot.fill(-1);
     entityBatchKey.fill(null);
     const nextByBase = new Map();
@@ -2427,8 +2598,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       if (entitySlot[i] < 0) unmapped.push(i);
     }
 
+    // Sphere fallback only for types with no model. Pending VAT/static loads stay
+    // invisible until their template arrives (then remapped).
     if (unmapped.length > 0 && fallback) {
-      const fbIds = unmapped.slice();
+      const fbIds = unmapped.filter((i) => {
+        const t = Number(typesArr[i]);
+        return !isVatUnitType(t) && !hasUnitModel(t);
+      });
       resizeTypeBatch(fallback, fbIds, { preallocKoth: false });
       for (let s = 0; s < fbIds.length; s++) {
         entitySlot[fbIds[s]] = s;
@@ -2525,11 +2701,144 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     batch.vatDirty = true;
   }
 
+  async function upgradeHudMeshes() {
+    try {
+      const parts = await loadBakedUnitMeshParts(engine, SELECTION_COLLAR_URL);
+      if (!parts.length) return;
+      for (const mesh of selRingParts) {
+        mesh.visible = false;
+        setThinInstanceCount(mesh, 0);
+      }
+      selRingParts = parts;
+      useCollar = true;
+      collarBandColors = [];
+      for (const mesh of selRingParts) {
+        collarBandColors.push(authoredCollarBandColor(mesh.material));
+        mesh.material = makeCollarTintMaterial();
+        setThinInstances(mesh, ringMatrices, ringCap);
+        setThinInstanceCount(mesh, capacity);
+        addToScene(scene, mesh);
+      }
+      while (ringColorBufs.length < selRingParts.length) {
+        ringColorBufs.push(new Float32Array(ringCap * 4));
+      }
+      writeSelRingColors(capacity, 'white');
+      pushSelRingColors();
+      ringColorsDirty = true;
+    } catch (err) {
+      console.warn('Selection collar model failed (keeping disc):', SELECTION_COLLAR_URL, err);
+    }
+
+    try {
+      const marker = await loadUnitMeshTemplate(engine, ORDER_MARKER_URL);
+      const mat = marker.material;
+      if (mat) {
+        applyUnlitHudMaterial(mat);
+        if ('alpha' in mat) mat.alpha = 1;
+        if (mat.emissiveColor) mat.emissiveColor = [0, 0, 0];
+      }
+      orderTipLocalY = marker.boundMin?.[1] ?? 0;
+      if (marker.position) {
+        marker.position.x = 0;
+        marker.position.y = 0;
+        marker.position.z = 0;
+        marker.markLocalDirty?.();
+      }
+      orderMarker.visible = false;
+      setThinInstanceCount(orderMarker, 0);
+      orderMarker = marker;
+      useOrderTarget = true;
+      setThinInstances(orderMarker, orderMatrices, 1);
+      setThinInstanceColors(orderMarker, new Float32Array([1, 1, 1, 0]));
+      addToScene(scene, orderMarker);
+      orderMarkerShown = false;
+    } catch (err) {
+      console.warn('Order marker model failed (keeping disc):', ORDER_MARKER_URL, err);
+    }
+  }
+
+  let engineStarted = false;
+
+  /** Resolves when heavy boot assets are in — safe to unlock input / fade splash. */
+  let resolveInteractive = /** @type {(v?: void) => void} */ (() => {});
+  const interactiveReady = new Promise((resolve) => {
+    resolveInteractive = resolve;
+  });
+
+  // Phase B — background loads; do not gate start()/first paint.
+  // World scenery (3D trees/rocks) finishes before unit templates so the board
+  // reads as place-first. Interactive waits on units+buildings; radials later.
+  void (async () => {
+    try {
+      await sceneryModelsReady;
+      bootLog('scenery models');
+
+      const unitsP = scheduleBatchesForTypes(capacity, types, opts.owners);
+
+      const propsP = Promise.all([
+        createFrogRenderer(engine, scene, groundYAt, frogLandBurst),
+        createMushroomPreviews(engine, scene, groundYAt),
+        createAgoraProps(engine, scene, groundYAt),
+        createBuildingProps(engine, scene, groundYAt),
+        upgradeHudMeshes(),
+      ]).then(async ([frogs, shrooms, agoras, buildings]) => {
+        frogRenderer = frogs;
+        mushrooms = shrooms;
+        agoraProps = agoras;
+        buildingProps = buildings;
+        if (pendingAgoras) agoraProps.place(pendingAgoras);
+        if (pendingRallyFlags) agoraProps.placeRallyFlags?.(pendingRallyFlags);
+        // Lazy building templates — only types in this list are fetched.
+        if (pendingBuildings) await buildingProps.place(pendingBuildings);
+        pendingAgoras = null;
+        pendingRallyFlags = null;
+        pendingBuildings = null;
+        // Late PBR props: receive + cast after color-pass materialize.
+        agoraProps.forEachShadowMesh?.(noteShadowMesh);
+        buildingProps.forEachShadowMesh?.(noteShadowMesh);
+        if (shadowsEnabled) applyShadowState();
+        bootLog('buildings + props');
+      });
+
+      void (async () => {
+        try {
+          const font = await buildingMenuFontPromise;
+          radialScreen.font = font;
+          const [buildMenu, actionMenu] = await Promise.all([
+            createBuildingRadialMenu(engine, scene, groundYAt, radialScreen),
+            createBuildingActionRadial(engine, scene, groundYAt, radialScreen),
+          ]);
+          buildingRadial = buildMenu;
+          actionRadial = actionMenu;
+          buildingRadial.registerLabels?.();
+          actionRadial.registerLabels?.();
+          bootLog('radials');
+        } catch (err) {
+          console.error('[boot] radials failed', err);
+        }
+      })();
+
+      await Promise.all([propsP, unitsP]);
+      bootLog('phase B core complete');
+    } catch (err) {
+      console.error('[boot] phase B failed', err);
+    } finally {
+      // Assets are in — don't wait on rAF (can stall ~1s under upload jank).
+      bootLog('interactive');
+      resolveInteractive();
+    }
+  })();
+
   return {
     engine,
     scene,
     camera,
     cameraController,
+
+    /** Resolves when boot asset work is done and input should feel smooth. */
+    whenInteractive() {
+      return interactiveReady;
+    },
 
     setCount(n) {
       setSelRingCount(n);
@@ -2537,9 +2846,21 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       pushSelRingColors();
     },
 
+    /**
+     * True when a late unit batch remapped slots — clear pose cache and rewrite instances.
+     * @returns {boolean}
+     */
+    consumePoseResync() {
+      if (poseResyncGeneration === lastConsumedPoseResync) return false;
+      lastConsumedPoseResync = poseResyncGeneration;
+      return true;
+    },
+
     /** Place static agora meshes (init / world rebuild). */
     placeAgoras(list) {
       agoraProps.place(list ?? []);
+      agoraProps.forEachShadowMesh?.(noteShadowMesh);
+      if (shadowsEnabled) applyShadowState();
     },
 
     /** Planted train-rally flags for production buildings. */
@@ -2553,8 +2874,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /** Place constructed buildings. */
-    placeBuildings(list) {
-      buildingProps.place(list ?? []);
+    async placeBuildings(list) {
+      await buildingProps.place?.(list ?? []);
+      buildingProps.forEachShadowMesh?.(noteShadowMesh);
+      if (shadowsEnabled) applyShadowState();
     },
 
     /** Building selection collar(s) — fixed S/M/L world size (not the build menu). */
@@ -2620,6 +2943,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     isActionRadialOpen() {
       return actionRadial.isOpen();
+    },
+
+    /** Mark researched upgrade pads (dull + full progress ring). */
+    setActionRadialResearched(ids) {
+      actionRadial.setResearchedUpgrades?.(ids);
     },
 
     /** Dull / enable Rally · Garrison · Demolish · Cancel on the open action radial. */
@@ -2750,6 +3078,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       terrain = await createTerrainFromField(engine, scene, snap, camera, sceneryOpts());
+      sceneryModelsReady = terrain.modelsReady ?? Promise.resolve();
       applyShadowState();
       rebuildTileGrid(snap);
     },
@@ -3429,6 +3758,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     canvasCoords,
 
     start() {
+      if (engineStarted) return Promise.resolve();
+      engineStarted = true;
       return startEngine(engine);
     },
   };

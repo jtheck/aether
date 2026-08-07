@@ -7,6 +7,7 @@ import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
 import { applyWorldStructureOccupancy, defaultRallyWorld } from './buildings.js';
 import * as fx from './fixed.js';
+import { applySerializedTech, serializeTech } from './tech.js';
 import { ensureFrogCapacity } from './frogs.js';
 import { ensureFireZoneCapacity } from './fireZones.js';
 import { capacityFor } from './capacity.js';
@@ -25,8 +26,8 @@ const ENTITY_I16 = [
 ];
 const ENTITY_U16 = ['engagementMask', 'targetLoad'];
 const ENTITY_U8 = [
-  'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'stuckTicks',
-  'repathCount', 'lobTrail', 'type', 'owner', 'alive',
+  'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
+  'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive',
 ];
 
 /**
@@ -88,6 +89,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     koth: exportKoth(w.koth),
     agoras: exportAgoras(w.agoras),
     buildings: exportBuildings(w.buildings),
+    tech: serializeTech(w),
     field: exportFieldMutable(field),
   };
 }
@@ -114,8 +116,10 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   w.matchWinner = ent.matchWinner ?? -1;
 
   for (const key of Object.keys(ent.arrays)) {
-    decodeTAInto(w[key], ent.arrays[key]);
+    if (w[key]) decodeTAInto(w[key], ent.arrays[key]);
   }
+  // Older checkpoints omit pathSlowAware — clear so restore stays geometric.
+  if (!ent.arrays.pathSlowAware && w.pathSlowAware) w.pathSlowAware.fill(0);
 
   importPoolStore(w.projectiles, checkpoint.projectiles, {
     u8: ['alive', 'type', 'owner', 'hitCount', 'despawnReason'],
@@ -165,6 +169,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   importKoth(w, checkpoint.koth);
   importAgoras(w, checkpoint.agoras);
   importBuildings(w, checkpoint.buildings);
+  applySerializedTech(w, checkpoint.tech);
   importFieldMutable(field, checkpoint.field);
   // pass is not checkpointed; re-stamp building/agora footprints (rocks stay from init).
   applyWorldStructureOccupancy(field, w);

@@ -94,6 +94,8 @@ export class SimSession {
     this.matchWinner = -1;
     this.agoras = [];
     this.buildings = [];
+    /** Owner tech bitmasks from the worker (see sim/tech.js). */
+    this.tech = [];
     this.simMetrics = null;
     /** EMA of worker metrics.timing (ms). */
     this.simTimingEma = null;
@@ -113,6 +115,8 @@ export class SimSession {
     this.onWorldRebuilt = null;
     /** Fired when placed building list updates from the worker. */
     this.onBuildingsChanged = null;
+    /** Fired when owner tech bits change (e.g. Drayage researched). */
+    this.onTechChanged = null;
     /** Tile field snapshot from worker (tree stock/burn mutate in place). */
     this.field = null;
     /** @type {Array<{ tiles: Uint32Array, stock: Uint8Array, burn: Uint8Array }> | null} */
@@ -122,7 +126,7 @@ export class SimSession {
   }
 
   async start(config) {
-    const { count, field, agoras, buildings } = await this.client.init({
+    const { count, field, agoras, buildings, tech } = await this.client.init({
       ...config,
       aiPlayers: this.aiPlayers,
     });
@@ -130,12 +134,19 @@ export class SimSession {
     this.field = field ?? this.client.field;
     this.agoras = agoras ?? this.client._agoras ?? [];
     this.buildings = buildings ?? this.client._buildings ?? [];
+    this.tech = tech ?? this.client._tech ?? [];
     this.kothMatchOver = 0;
     this.matchWinner = -1;
     this._bindStepHandler();
     this._captureSnapshot(0);
     this.lastSnapshotAt = performance.now();
-    return { count, field: this.field, agoras: this.agoras, buildings: this.buildings };
+    return {
+      count,
+      field: this.field,
+      agoras: this.agoras,
+      buildings: this.buildings,
+      tech: this.tech,
+    };
   }
 
   get count() {
@@ -538,6 +549,10 @@ export class SimSession {
       if (extra?.buildings) {
         this.buildings = extra.buildings;
         if (extra.buildingsChanged) this.onBuildingsChanged?.(this.buildings);
+      }
+      if (extra?.tech) {
+        this.tech = extra.tech;
+        if (extra.techChanged) this.onTechChanged?.(this.tech);
       }
       if (extra?.metrics) {
         this.simMetrics = extra.metrics;

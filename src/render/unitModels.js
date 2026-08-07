@@ -1,6 +1,7 @@
 // Render-only GLB paths per sim unit type.
 // Hierarchy transforms are baked (same idea as scenery) so multi-mesh assets
 // like collar.glb keep every part, and glTF root mirroring is preserved.
+// Prefer /assets/baked/meshes/* when present (see npm run prebake).
 
 import {
   cloneTransformNode,
@@ -9,6 +10,15 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { UNIT } from '../sim/unitTypes.js';
 import { isVatUnitType, VAT_UNIT_DEFS } from './vatUnits.js';
+import {
+  bakedMeshBinUrl,
+  bakedMeshJsonUrl,
+  float32Slice,
+  hasBakedMesh,
+  tryFetch,
+  uint32Slice,
+} from './bakedAssets.js';
+import { materialsFromBakeMeta } from './bakedMaterials.js';
 
 /** Static (non-VAT) thin-instance templates. */
 /** @type {Readonly<Record<number, string>>} */
@@ -76,7 +86,7 @@ export function isFxSocketNode(node, opts = {}) {
   return false;
 }
 
-function collectFxSockets(node, out = []) {
+export function collectFxSockets(node, out = []) {
   if (/anchor/i.test(gltfNodeBaseName(node))) {
     const w = node.worldMatrix;
     if (w) {
@@ -182,7 +192,11 @@ function computeSmoothNormalsLH(positions, indices) {
   return normals;
 }
 
-async function bakeGltfParts(engine, url) {
+/**
+ * Live GLB hierarchy bake (CPU). Also used by prebake to dump packages.
+ * @returns {Promise<{ parts: object[], sockets: { name: string, x: number, y: number, z: number }[], sources: object[] }>}
+ */
+export async function bakeGltfParts(engine, url) {
   const container = await loadGltf(engine, url);
   const root = cloneTransformNode(container.entities[0]);
   const sockets = collectFxSockets(root);
@@ -192,7 +206,164 @@ async function bakeGltfParts(engine, url) {
   );
   if (sources.length === 0) throw new Error(`no mesh in ${url}`);
   const parts = sources.map((source) => bakeSourceGeometry(source, source.worldMatrix));
-  return { parts, sockets };
+  return { parts, sockets, sources };
+}
+
+/**
+ * @typedef {{
+ *   positions: Float32Array,
+ *   normals: Float32Array,
+ *   indices: Uint32Array,
+ *   uvs: Float32Array | null,
+ *   material: object | null,
+ *   reverseWinding: boolean,
+ * }} CpuMeshPart
+ */
+
+/** @type {Map<string, Promise<{ parts: CpuMeshPart[], sockets: { name: string, x: number, y: number, z: number }[] }>>} */
+const meshCpuCache = new Map();
+
+/** Materials (and CPU geo fallback) from one GLB load per URL. */
+/** @type {Map<string, Promise<object[]>>} */
+const glbMaterialSourcesCache = new Map();
+
+function loadMaterialSources(engine, url, hideBareCube) {
+  let pending = glbMaterialSourcesCache.get(url);
+  if (!pending) {
+    pending = (async () => {
+      const container = await loadGltf(engine, url);
+      const root = cloneTransformNode(container.entities[0]);
+      return collectRenderableMeshes(root).filter(
+        (n) => !isFxSocketNode(n, { hideBareCube }),
+      );
+    })();
+    glbMaterialSourcesCache.set(url, pending);
+  }
+  return pending;
+}
+
+async function loadCpuMeshPackage(engine, url) {
+  let pending = meshCpuCache.get(url);
+  if (!pending) {
+    pending = (async () => {
+      // VAT units use /vat/* dumps — never probe /meshes/ (avoids villager.json 404 RTT).
+      // Skinning still needs the live GLB; mesh packages are for static models only.
+      if (Object.values(VAT_UNIT_DEFS).some((d) => d.url === url)) {
+        const { parts: baked, sockets } = await bakeGltfParts(engine, url);
+        return cpuPackageFromLive(baked, sockets);
+      }
+
+      // Only hit the network for bake artifacts we know exist (manifest).
+      if (await hasBakedMesh(url)) {
+        const [jsonRes, binRes] = await Promise.all([
+          tryFetch(bakedMeshJsonUrl(url)),
+          tryFetch(bakedMeshBinUrl(url)),
+        ]);
+        if (jsonRes && binRes) {
+          const meta = await jsonRes.json();
+          const bin = await binRes.arrayBuffer();
+
+          // v2+: materials + textures in bake — no GLB load.
+          if ((meta.version | 0) >= 2 && Array.isArray(meta.materials)) {
+            const materials = await materialsFromBakeMeta(engine, url, meta);
+            const parts = (meta.parts ?? []).map((part) => {
+              const mi = part.materialIndex ?? 0;
+              return {
+                positions: float32Slice(bin, part.positions),
+                normals: float32Slice(bin, part.normals),
+                indices: uint32Slice(bin, part.indices),
+                uvs: part.uvs ? float32Slice(bin, part.uvs) : null,
+                material: materials[mi] ?? materials[0] ?? null,
+                reverseWinding: part.reverseWinding !== false,
+              };
+            });
+            return {
+              parts,
+              sockets: (meta.sockets ?? []).map((s) => ({
+                name: s.name,
+                x: s.x,
+                y: s.y,
+                z: s.z,
+              })),
+            };
+          }
+
+          // Legacy bake: geo only — pull materials from GLB.
+          const hideBareCubeGuess = true;
+          const sources = await loadMaterialSources(engine, url, hideBareCubeGuess);
+          const parts = (meta.parts ?? []).map((part, index) => {
+            const src = sources[part.materialIndex] ?? sources[index] ?? sources[0];
+            return {
+              positions: float32Slice(bin, part.positions),
+              normals: float32Slice(bin, part.normals),
+              indices: uint32Slice(bin, part.indices),
+              uvs: part.uvs ? float32Slice(bin, part.uvs) : null,
+              material: src?.material ?? null,
+              reverseWinding: part.reverseWinding !== false,
+            };
+          });
+          return {
+            parts,
+            sockets: (meta.sockets ?? []).map((s) => ({
+              name: s.name,
+              x: s.x,
+              y: s.y,
+              z: s.z,
+            })),
+          };
+        }
+      }
+
+      const { parts: baked, sockets } = await bakeGltfParts(engine, url);
+      return cpuPackageFromLive(baked, sockets);
+    })();
+    meshCpuCache.set(url, pending);
+  }
+  return pending;
+}
+
+function cpuPackageFromLive(baked, sockets) {
+  return {
+    parts: baked.map((p) => ({
+      positions: p.positions,
+      normals: p.normals,
+      indices: p.indices instanceof Uint32Array ? p.indices : new Uint32Array(p.indices),
+      uvs: p.uvs,
+      material: p.material,
+      reverseWinding: p.reverseWinding,
+    })),
+    sockets,
+  };
+}
+
+function meshesFromCpuPackage(engine, url, pkg) {
+  const meshes = pkg.parts.map((part, index) => {
+    const mesh = createMeshFromData(
+      engine,
+      `${url}#${index}`,
+      part.positions,
+      part.normals,
+      part.indices,
+      part.uvs ?? undefined,
+    );
+    mesh.material = part.material;
+    mesh.pickable = false;
+    mesh._reverseWinding = part.reverseWinding;
+    const b = boundsOfPositions(part.positions);
+    mesh.boundMin = b.min;
+    mesh.boundMax = b.max;
+    mesh.scaling.x = 1;
+    mesh.scaling.y = 1;
+    mesh.scaling.z = 1;
+    mesh.position.x = 0;
+    mesh.position.y = 0;
+    mesh.position.z = 0;
+    return mesh;
+  });
+  if (meshes[0]) {
+    meshes[0].fxSockets = pkg.sockets.map((s) => ({ ...s }));
+  }
+  return meshes;
 }
 
 function boundsOfPositions(positions) {
@@ -213,47 +384,13 @@ function boundsOfPositions(positions) {
 /**
  * Load a glTF, bake hierarchy world matrices into verts, one mesh per source
  * primitive (preserves multi-material). Authored origin and scale are kept —
- * no foot rebasing or resize.
+ * no foot rebasing or resize. Uses offline bake when present; session-cached.
  *
  * @returns {Promise<object[]>}
  */
 export async function loadBakedUnitMeshParts(engine, url) {
-  const { parts: baked, sockets } = await bakeGltfParts(engine, url);
-
-  const meshes = baked.map((part, index) => {
-    const positions = part.positions;
-    const mesh = createMeshFromData(
-      engine,
-      `${url}#${index}`,
-      positions,
-      part.normals,
-      part.indices instanceof Uint32Array ? part.indices : new Uint32Array(part.indices),
-      part.uvs ?? undefined,
-    );
-    mesh.material = part.material;
-    mesh.pickable = false;
-    mesh._reverseWinding = part.reverseWinding;
-    const b = boundsOfPositions(positions);
-    mesh.boundMin = b.min;
-    mesh.boundMax = b.max;
-    // Identity mesh transform — placement lives in thin-instance matrices.
-    mesh.scaling.x = 1;
-    mesh.scaling.y = 1;
-    mesh.scaling.z = 1;
-    mesh.position.x = 0;
-    mesh.position.y = 0;
-    mesh.position.z = 0;
-    return mesh;
-  });
-  if (meshes[0]) {
-    meshes[0].fxSockets = sockets.map((s) => ({
-      name: s.name,
-      x: s.x,
-      y: s.y,
-      z: s.z,
-    }));
-  }
-  return meshes;
+  const pkg = await loadCpuMeshPackage(engine, url);
+  return meshesFromCpuPackage(engine, url, pkg);
 }
 
 /**
@@ -262,12 +399,16 @@ export async function loadBakedUnitMeshParts(engine, url) {
  * Prefer {@link loadBakedUnitMeshParts} when materials must stay separate.
  */
 export async function loadBakedUnitMesh(engine, url) {
-  const { parts: baked, sockets } = await bakeGltfParts(engine, url);
+  const pkg = await loadCpuMeshPackage(engine, url);
+  if (pkg.parts.length === 1) {
+    return meshesFromCpuPackage(engine, url, pkg)[0];
+  }
 
   let vertCount = 0;
   let indexCount = 0;
   let hasUvs = false;
-  for (const part of baked) {
+  const cpu = pkg.parts;
+  for (const part of cpu) {
     vertCount += part.positions.length / 3;
     indexCount += part.indices.length;
     if (part.uvs) hasUvs = true;
@@ -279,7 +420,7 @@ export async function loadBakedUnitMesh(engine, url) {
   const uvs = hasUvs ? new Float32Array(vertCount * 2) : undefined;
   let vBase = 0;
   let iBase = 0;
-  for (const part of baked) {
+  for (const part of cpu) {
     positions.set(part.positions, vBase * 3);
     normals.set(part.normals, vBase * 3);
     if (uvs) {
@@ -298,9 +439,9 @@ export async function loadBakedUnitMesh(engine, url) {
   }
 
   const mesh = createMeshFromData(engine, url, positions, normals, indices, uvs);
-  mesh.material = baked[0].material;
+  mesh.material = cpu[0]?.material ?? null;
   mesh.pickable = false;
-  mesh._reverseWinding = baked.some((p) => p.reverseWinding);
+  mesh._reverseWinding = cpu.some((p) => p.reverseWinding);
   const b = boundsOfPositions(positions);
   mesh.boundMin = b.min;
   mesh.boundMax = b.max;
@@ -310,7 +451,7 @@ export async function loadBakedUnitMesh(engine, url) {
   mesh.position.x = 0;
   mesh.position.y = 0;
   mesh.position.z = 0;
-  mesh.fxSockets = sockets.map((s) => ({
+  mesh.fxSockets = pkg.sockets.map((s) => ({
     name: s.name,
     x: s.x,
     y: s.y,

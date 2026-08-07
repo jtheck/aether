@@ -45,23 +45,36 @@ const woodTextures = new WeakMap();
  */
 export async function createTerrainFromField(engine, scene, field, camera, opts = {}) {
   const textures = await loadAtlasTextures(engine);
-  const scenery = await createSceneryFromField(
-    engine,
-    field,
-    surfaceHeightAt,
-    camera,
-    opts,
-  );
   const active = createActiveCellLookup(field);
   const built = [
     ...buildEnvironmentMeshes(engine, field),
     ...buildTableFrameMeshes(engine, field, active),
     ...buildAtlasMeshes(engine, field, textures, active),
-    ...scenery.meshes,
   ];
+  // 3D tree/rock models load after billboards; keep `built` in sync so shadow
+  // collection (and dispose) sees them.
+  const scenery = await createSceneryFromField(
+    engine,
+    field,
+    surfaceHeightAt,
+    camera,
+    {
+      ...opts,
+      scene,
+      onModelMesh(mesh) {
+        if (built.indexOf(mesh) < 0) built.push(mesh);
+        opts.onModelMesh?.(mesh);
+      },
+    },
+  );
+  for (const mesh of scenery.meshes) {
+    if (built.indexOf(mesh) < 0) built.push(mesh);
+  }
   for (const mesh of built) addToScene(scene, mesh);
   return {
     meshes: built,
+    /** Resolves when 3D tree/rock models have replaced billboards (or failed). */
+    modelsReady: scenery.modelsReady ?? Promise.resolve(),
     update(activeCamera, deltaMs) {
       scenery.update(activeCamera, deltaMs);
     },
@@ -85,9 +98,11 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
 async function loadAtlasTextures(engine) {
   /** @type {Map<number, object>} */
   const out = new Map();
-  for (const [id, url] of Object.entries(ATLAS_URLS)) {
-    out.set(Number(id), await loadTexture2D(engine, url));
-  }
+  await Promise.all(
+    Object.entries(ATLAS_URLS).map(async ([id, url]) => {
+      out.set(Number(id), await loadTexture2D(engine, url));
+    }),
+  );
   return out;
 }
 

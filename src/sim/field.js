@@ -94,6 +94,11 @@ export const HEIGHT_AMPLITUDE = 6.5;
 // Diagonal step cost in fixed-point (sqrt(2) ≈ 1.414 * ONE).
 const DIAG_COST = fx.fromFloat(1.414);
 const CARD_COST = fx.ONE;
+/**
+ * Extra A* edge cost when entering a slow tile (Drayage / rally planner).
+ * Matches move slow ≈ 0.45 → path pays ~1/0.45 so detours can win.
+ */
+export const SLOW_PATH_COST_MUL = fx.fromFloat(1 / 0.45);
 
 /** Marching-squares case (0–15) → atlas cell index (matches v1 atlas art). */
 const CASE_TO_ATLAS = new Uint8Array([
@@ -243,8 +248,13 @@ export function tileCenterY(tz) {
   return fx.mul(fx.fromInt(tz), TILE) + HALF_TILE - _worldHalf;
 }
 
-/** Bresenham tile walk — true if every tile on the line is passable. */
-export function lineClear(field, x0, z0, x1, z1) {
+/**
+ * Bresenham tile walk — true if every tile on the line is passable.
+ * @param {object} [opts]
+ * @param {boolean} [opts.avoidSlow] — also reject slowMask tiles (Drayage string-pull).
+ */
+export function lineClear(field, x0, z0, x1, z1, opts = null) {
+  const avoidSlow = !!opts?.avoidSlow;
   let tx0 = worldToTile(x0);
   let tz0 = worldToTile(z0);
   const tx1 = worldToTile(x1);
@@ -258,6 +268,7 @@ export function lineClear(field, x0, z0, x1, z1) {
 
   while (true) {
     if (!isPassable(field, tx0, tz0)) return false;
+    if (avoidSlow && isSlowTile(field, tx0, tz0)) return false;
     if (tx0 === tx1 && tz0 === tz1) return true;
     const e2 = err << 1;
     if (e2 > -dz) {
@@ -275,6 +286,9 @@ export function lineClear(field, x0, z0, x1, z1) {
  * A* on the tile grid. Returns waypoint count and fills wx/wy (fixed world coords).
  * wx/wy must have room for at least maxWp entries.
  * Returns 0 if no path.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.slowAware] — charge extra to enter slowMask tiles (rally / Drayage).
  */
 // Reused A* scratch — sized for the largest supported board (stress), not default MAP_*.
 const ASTAR_CELLS = STRESS_MAP_W * STRESS_MAP_H;
@@ -301,7 +315,8 @@ function astarTouch(key) {
   }
 }
 
-export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32) {
+export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null) {
+  const slowAware = !!opts?.slowAware;
   let stx = worldToTile(sx);
   let stz = worldToTile(sy);
   let etx = worldToTile(ex);
@@ -336,7 +351,8 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32) {
     return 1;
   }
 
-  if (lineClear(field, startX, startY, ex, ey)) {
+  // Geometric LOS shortcut — skip when costing slow tiles (trees are "clear" but expensive).
+  if (!slowAware && lineClear(field, startX, startY, ex, ey)) {
     wx[0] = ex;
     wy[0] = ey;
     return 1;
@@ -410,7 +426,11 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32) {
       astarTouch(nKey);
       if (_closed[nKey]) continue;
 
-      const tentative = gHere + neighbors[n][2];
+      let step = neighbors[n][2];
+      if (slowAware && isSlowTile(field, nx, nz)) {
+        step = fx.mul(step, SLOW_PATH_COST_MUL);
+      }
+      const tentative = (gHere + step) | 0;
       if (_gScore[nKey] !== -1 && tentative >= _gScore[nKey]) continue;
 
       _cameFrom[nKey] = currentKey;
@@ -430,7 +450,20 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32) {
     ey = tileCenterY(bz);
   }
 
-  return buildWaypoints(_cameFrom, bestKey, startX, startY, ex, ey, wx, wy, maxWp, reachedGoal, field);
+  return buildWaypoints(
+    _cameFrom,
+    bestKey,
+    startX,
+    startY,
+    ex,
+    ey,
+    wx,
+    wy,
+    maxWp,
+    reachedGoal,
+    field,
+    slowAware,
+  );
 }
 
 function octileH(x, z, etx, etz) {
@@ -448,8 +481,22 @@ function octileH(x, z, etx, etz) {
  * Pull against the COMPLETE route so long detours around lakes collapse
  * to a handful of LOS corners (fits in MAX_WAYPOINTS).
  */
-function buildWaypoints(cameFrom, endKey, startX, startY, ex, ey, wx, wy, maxWp, reachedGoal, field) {
+function buildWaypoints(
+  cameFrom,
+  endKey,
+  startX,
+  startY,
+  ex,
+  ey,
+  wx,
+  wy,
+  maxWp,
+  reachedGoal,
+  field,
+  slowAware = false,
+) {
   const W = field.width;
+  const pullOpts = slowAware ? { avoidSlow: true } : null;
   // Collect end→start keys.
   let raw = 0;
   let k = endKey;
@@ -488,7 +535,7 @@ function buildWaypoints(cameFrom, endKey, startX, startY, ex, ey, wx, wy, maxWp,
   while (i < nPts && out < maxWp) {
     let best = i;
     for (let j = nPts - 1; j > i; j--) {
-      if (lineClear(field, ax, ay, ptX(j), ptY(j))) {
+      if (lineClear(field, ax, ay, ptX(j), ptY(j), pullOpts)) {
         best = j;
         break;
       }

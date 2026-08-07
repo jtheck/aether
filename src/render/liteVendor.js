@@ -19,6 +19,7 @@ export {
   loadTexture2D,
   getOrCreateSampler,
   createStandardMaterial,
+  createPbrMaterial,
   addToScene,
   removeFromScene,
   setSubtreeVisible,

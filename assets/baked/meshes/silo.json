@@ -1,0 +1,58 @@
+{
+  "sourceUrl": "/assets/models/silo.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.017",
+      "baseColorFactor": [
+        0.17529229819774628,
+        0.17529229819774628,
+        0.17529229819774628,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.017",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 555,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 2220,
+        "length": 555,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 4440,
+        "length": 288,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 5592,
+        "length": 370,
+        "type": "f32"
+      }
+    }
+  ]
+}

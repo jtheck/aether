@@ -2,8 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" href="data:,">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
+  <title>Æther.Garden – Real-Time Strategy Game in the Browser</title>
+  <meta name="description" content="Play Aether Garden (Æther.Garden) in your browser: multiplayer real-time strategy with co-op adventure, 1v1, King of the Hill, and teams. Web install—RTS that runs anywhere.">
+  <meta name="keywords" content="garden, experience, interactive, strategy, multiplayer, rts, rtd, game, browser game, real-time strategy, co-op, 1v1">
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="Æther.Garden – Real-Time Strategy Game in the Browser" />
+  <meta property="og:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. Web install." />
+  <meta property="og:url" content="https://aether.garden/" />
+  <meta property="og:image" content="https://aether.garden/icons/android-chrome-512x512.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Æther.Garden – Real-Time Strategy Game in the Browser" />
+  <meta name="twitter:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. Web install." />
+  <link rel="canonical" href="https://aether.garden/" />
+
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/android-chrome-192x192.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="icons/favicon-16x16.png">
+  <link rel="manifest" href="manifest.json">
+  <link rel="mask-icon" href="icons/safari-pinned-tab.svg" color="#5bbad5">
+  <meta name="msapplication-TileColor" content="#00a300">
+  <meta name="theme-color" content="#ffffff">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ÆG">
+  <meta name="mobile-web-app-capable" content="yes">
+
   <script type="importmap">
   {
     "imports": {
@@ -20,12 +45,42 @@
     #legend { position: fixed; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; opacity: 0.85; pointer-events: none; }
     #legend .legend-item { display: inline-flex; align-items: center; gap: 6px; }
     #legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-    #status { position: fixed; left: 12px; top: 12px; font-size: 13px; opacity: 0.9; pointer-events: none; }
+    #status { position: fixed; left: 12px; top: 12px; z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; }
     #hint { position: fixed; right: 12px; top: 12px; font-size: 12px; opacity: 0.65; pointer-events: none; text-align: right; line-height: 1.5; }
-    #koth-controls { position: fixed; left: 12px; top: 40px; display: flex; gap: 8px; }
+    #koth-controls { position: fixed; left: 12px; top: 40px; display: flex; gap: 8px; z-index: 10001; }
+    /* Transparent hit-layer eats mouse/touch; logo only is visible over the scene. */
+    #boot-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      margin: 0;
+      background: transparent;
+      cursor: default;
+      transition: opacity 0.55s ease;
+    }
+    #boot-splash img {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(42vw, 214px);
+      height: auto;
+      /* PNG is white-on-black — black drops out over the board. */
+      mix-blend-mode: screen;
+      pointer-events: none;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
+    #boot-splash.is-leaving {
+      opacity: 0;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
+  <div id="boot-splash" aria-hidden="true">
+    <img src="./icons/splash.png" alt="" width="512" height="512" decoding="sync" fetchpriority="high" />
+  </div>
   <canvas id="canvas"></canvas>
   <div id="status"></div>
   <div id="koth-controls">
@@ -43,5 +98,12 @@
   </div>
   <script src="./vendor/getfire-p2p.js?v=aether-v2-getfire14-iceopen"></script>
   <script type="module" src="./app/main.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      if (!navigator.serviceWorker.controller) {
+        navigator.serviceWorker.register('/sw-aether.js', { scope: './' }).catch(function () {});
+      }
+    }
+  </script>
 </body>
 </html>

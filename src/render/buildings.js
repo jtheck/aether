@@ -12,10 +12,7 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
-import {
-  BUILDING_MODEL_URLS,
-  PLACEABLE_BUILDINGS,
-} from '../sim/buildings.js';
+import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { capacityFor } from '../sim/capacity.js';
 
 /** Start small; grow by powers of two when place() needs more. */
@@ -219,46 +216,8 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   const pickMeshes = new Map();
   /** @type {Map<string, number[]>} */
   const slotToIndex = new Map();
-
-  for (const def of PLACEABLE_BUILDINGS) {
-    const url = MODEL_URLS[def.id];
-    if (!url) continue;
-    try {
-      const parts = await loadBakedUnitMeshParts(engine, url);
-      for (const mesh of parts) {
-        mesh.pickable = true;
-      }
-      const fxSockets = (parts[0]?.fxSockets ?? []).map((s) => ({
-        name: s.name,
-        x: s.x,
-        y: s.y,
-        z: s.z,
-      }));
-      templates.set(def.id, { parts, fxSockets });
-    } catch (err) {
-      console.warn(`[buildings] ${def.id} failed`, err);
-    }
-
-    try {
-      const parts = await loadBakedUnitMeshParts(engine, url);
-      /** @type {{ mesh: object, matrices: Float32Array }[]} */
-      const layers = [];
-      for (const mesh of parts) {
-        mesh.pickable = false;
-        // GLB parts use PBR materials; use a dedicated StandardMaterial so
-        // ghost tint/alpha is reliable and cannot affect authored materials.
-        mesh.material = makeGhostMaterial();
-        const matrices = new Float32Array(16);
-        setThinInstances(mesh, matrices, 1);
-        setThinInstanceCount(mesh, 0);
-        addToScene(scene, mesh);
-        layers.push({ mesh, matrices });
-      }
-      ghostByType.set(def.id, { layers });
-    } catch (err) {
-      console.warn(`[buildings] ghost ${def.id} failed`, err);
-    }
-  }
+  /** @type {Map<string, Promise<boolean>>} */
+  const typeInflight = new Map();
 
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array | null }[]} */
   let selParts = [];
@@ -305,6 +264,57 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   /** @type {{ x: number, z: number, size: 's' | 'm' | 'l' }[]} */
   let selAnchors = [];
   let selCapacity = 1;
+  let placeGen = 0;
+  let ghostGen = 0;
+
+  /**
+   * Load template + ghost for one building type (first place / ghost need).
+   * @param {string} typeId
+   * @returns {Promise<boolean>}
+   */
+  function ensureType(typeId) {
+    if (templates.has(typeId) && ghostByType.has(typeId)) return Promise.resolve(true);
+    let pending = typeInflight.get(typeId);
+    if (pending) return pending;
+    pending = (async () => {
+      const url = MODEL_URLS[typeId];
+      if (!url) return false;
+      try {
+        const parts = await loadBakedUnitMeshParts(engine, url);
+        for (const mesh of parts) mesh.pickable = true;
+        const fxSockets = (parts[0]?.fxSockets ?? []).map((s) => ({
+          name: s.name,
+          x: s.x,
+          y: s.y,
+          z: s.z,
+        }));
+        templates.set(typeId, { parts, fxSockets });
+
+        /** @type {{ mesh: object, matrices: Float32Array }[]} */
+        const layers = [];
+        for (const src of parts) {
+          const mesh = cloneTransformNode(src);
+          mesh.pickable = false;
+          // Dedicated StandardMaterial so ghost tint/alpha can't touch authored mats.
+          mesh.material = makeGhostMaterial();
+          const matrices = new Float32Array(16);
+          setThinInstances(mesh, matrices, 1);
+          setThinInstanceCount(mesh, 0);
+          addToScene(scene, mesh);
+          layers.push({ mesh, matrices });
+        }
+        ghostByType.set(typeId, { layers });
+        return true;
+      } catch (err) {
+        console.warn(`[buildings] ${typeId} failed`, err);
+        return false;
+      } finally {
+        typeInflight.delete(typeId);
+      }
+    })();
+    typeInflight.set(typeId, pending);
+    return pending;
+  }
 
   function hideAllGhosts() {
     for (const batch of ghostByType.values()) {
@@ -475,7 +485,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   /**
    * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number }[]} list
    */
-  function place(list) {
+  function applyPlace(list) {
     /** @type {Map<string, { globalIndex: number, x: number, z: number, yaw: number, owner: number }[]>} */
     const groups = new Map();
     for (const key of byKey.keys()) {
@@ -539,13 +549,23 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   }
 
   /**
-   * @param {{ type: string, x: number, z: number, yaw?: number, valid?: boolean } | null} pos
+   * Ensure types then place. Stale generations drop if a newer place() wins.
+   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number }[]} list
    */
-  function setGhost(pos) {
-    if (!pos?.type) {
-      hideAllGhosts();
-      return;
-    }
+  async function place(list) {
+    const snapshot = list ?? [];
+    const gen = ++placeGen;
+    const types = new Set();
+    for (let i = 0; i < snapshot.length; i++) types.add(snapshot[i].type);
+    await Promise.all([...types].map((t) => ensureType(t)));
+    if (gen !== placeGen) return;
+    applyPlace(snapshot);
+  }
+
+  /**
+   * @param {{ type: string, x: number, z: number, yaw?: number, valid?: boolean }} pos
+   */
+  function applyGhost(pos) {
     if (ghostType && ghostType !== pos.type) hideAllGhosts();
     const batch = ghostByType.get(pos.type);
     if (!batch) {
@@ -563,6 +583,22 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       applyGhostValidityTint(layer.mesh.material, valid);
     }
     ghostVisible = true;
+  }
+
+  /**
+   * @param {{ type: string, x: number, z: number, yaw?: number, valid?: boolean } | null} pos
+   */
+  async function setGhost(pos) {
+    if (!pos?.type) {
+      ghostGen++;
+      hideAllGhosts();
+      return;
+    }
+    const gen = ++ghostGen;
+    const want = pos;
+    await ensureType(want.type);
+    if (gen !== ghostGen) return;
+    applyGhost(want);
   }
 
   function isPickMesh(mesh) {
@@ -613,6 +649,18 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     }
   }
 
+  /** Live placed building meshes (not ghosts / selection). */
+  function forEachShadowMesh(fn) {
+    for (const batch of byKey.values()) {
+      for (const layer of batch.layers) {
+        const mesh = layer.mesh;
+        if (!mesh) continue;
+        const count = mesh.thinInstances?.count ?? 0;
+        if (count > 0) fn(mesh);
+      }
+    }
+  }
+
   return {
     place,
     setGhost,
@@ -622,6 +670,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     isPickMesh,
     resolvePick,
     forEachFxInstance,
+    forEachShadowMesh,
     BUILDING_SEL_SIZE,
     get ghostVisible() {
       return ghostVisible;

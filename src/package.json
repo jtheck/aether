@@ -20,12 +20,18 @@
     "build:explorer": "node build-explorer.mjs",
     "build:howler": "node build-howler.mjs",
     "build": "node build.mjs",
-    "serve": "node serve.mjs"
+    "serve": "node serve.mjs",
+    "prebake": "node prebake.mjs",
+    "package": "node package.mjs"
   },
   "dependencies": {
     "@babylonjs/lite": "1.16.0",
     "babylon-lite-explorer": "^0.4.1",
     "esbuild": "^0.28.1",
-    "howler": "^2.2.4"
+    "howler": "^2.2.4",
+    "javascript-obfuscator": "^4.1.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.54.2"
   }
 }

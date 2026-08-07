@@ -1,0 +1,58 @@
+{
+  "sourceUrl": "/assets/models/mushroom.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.45235273241996765,
+        0,
+        1,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.001",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 1098,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 4392,
+        "length": 1098,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 8784,
+        "length": 498,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 10776,
+        "length": 732,
+        "type": "f32"
+      }
+    }
+  ]
+}

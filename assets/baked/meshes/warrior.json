@@ -1,0 +1,131 @@
+{
+  "sourceUrl": "/assets/models/warrior.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.8015627861022949,
+        0.5141313672065735,
+        0.042943280190229416,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.001",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 1920,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 7680,
+        "length": 1920,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 15360,
+        "length": 972,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 19248,
+        "length": 1280,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "part1",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 24368,
+        "length": 168,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 25040,
+        "length": 168,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 25712,
+        "length": 84,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 26048,
+        "length": 112,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 26496,
+        "length": 72,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 26784,
+        "length": 72,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 27072,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 27216,
+        "length": 48,
+        "type": "f32"
+      }
+    }
+  ]
+}

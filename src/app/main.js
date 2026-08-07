@@ -27,6 +27,7 @@ import {
   snapBuildingWorld,
 } from '../sim/buildings.js';
 import { worldToTile } from '../sim/field.js';
+import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import {
@@ -132,18 +133,8 @@ function rebuildRendererEntities(renderer, session) {
     alive: world.alive,
     owners: world.owner,
   });
-  if (unmapped.length || stillUnmapped) {
-    const sample = unmapped.slice(0, 12);
-    const owners = sample.map((i) => world.owner[i]);
-    console.warn('[render] unmapped entities after rebuild', {
-      count,
-      unmapped: unmapped.length,
-      stillUnmapped,
-      sample,
-      owners,
-      batches: renderer.debugBatches?.(count, world.type, world.owner),
-    });
-  } else if (livingByOwner(world, 1) > 0) {
+  // Progressive boot leaves units unmapped until templates arrive — don't warn.
+  if (!(unmapped.length || stillUnmapped) && livingByOwner(world, 1) > 0) {
     const dbg = renderer.debugBatches?.(count, world.type, world.owner);
     const tiMismatch = dbg?.batches && Object.values(dbg.batches).some(
       (b) => b.entities > 0 && b.tiCount < b.entities,
@@ -179,7 +170,11 @@ async function main() {
   }
 
   if (typeof SharedArrayBuffer === 'undefined') {
-    showFallback('SharedArrayBuffer unavailable. Run via node serve.mjs (COOP/COEP headers required).');
+    showFallback(
+      'SharedArrayBuffer unavailable — need Cross-Origin-Opener-Policy: same-origin and '
+      + 'Cross-Origin-Embedder-Policy: require-corp (local: npm run serve; prod: set on CloudFront). '
+      + 'crossOriginIsolated must be true.',
+    );
     return;
   }
 
@@ -278,9 +273,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   document.addEventListener('visibilitychange', onVisibility);
   if (document.hidden) session.setBackgroundPump(true);
 
-  if (animStress > 0) {
-    setStatusText(`Baking VAT for ${count} villagers…`);
-  }
+  setStatusText('Waking the world…');
 
   const renderer = await createRenderer(canvas, count, {
     types: session.state.type,
@@ -298,6 +291,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   renderer.setCount(count);
   renderer.placeAgoras?.(agoras ?? session.agoras);
   renderer.placeBuildings?.(buildings ?? session.buildings);
+  // First paint ASAP — props/units/radials continue loading in the background.
+  await renderer.start();
+  rebuildRendererEntities(renderer, session);
+  setStatusText('');
   // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
   window.renderer = renderer;
   window.dumpPools = () => {
@@ -505,6 +502,30 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     syncRallyFlagMarkers(list);
   };
 
+  function ownerTechBits(owner = localPlayerId) {
+    return session.tech?.[owner | 0] | 0;
+  }
+
+  function ownerHasDrayage(owner) {
+    return (ownerTechBits(owner) & TECH.DRAYAGE) !== 0;
+  }
+
+  /** @returns {string[]} */
+  function researchedUpgradeIdsFor(owner = localPlayerId) {
+    const bits = ownerTechBits(owner);
+    /** @type {string[]} */
+    const ids = [];
+    for (const [id, bit] of Object.entries(TECH_BY_ID)) {
+      if (bits & bit) ids.push(id);
+    }
+    return ids;
+  }
+
+  function syncActionRadialResearch() {
+    if (!renderer.isActionRadialOpen?.()) return;
+    renderer.setActionRadialResearched?.(researchedUpgradeIdsFor(localPlayerId));
+  }
+
   function paintStatus() {
     const world = session.state;
     const el = document.getElementById('status');
@@ -563,13 +584,30 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   /** @type {{ x: number, z: number }[] | null} */
   let ghostPathPoints = null;
 
+  session.onTechChanged = () => {
+    ghostPathTileKey = -1;
+    ghostPathPoints = null;
+    syncRallyFlagMarkers();
+    syncActionRadialResearch();
+  };
+
+  function rallyPathOptsForOwner(owner) {
+    return ownerHasDrayage(owner) ? { slowAware: true } : null;
+  }
+
   function rallyMarkerFor(b, rx, rz) {
     return {
       x: rx,
       z: rz,
       fromX: b.x,
       fromZ: b.z,
-      points: rallyPathWorldPoints(session.field, b, rx, rz),
+      points: rallyPathWorldPoints(
+        session.field,
+        b,
+        rx,
+        rz,
+        rallyPathOptsForOwner(b.owner),
+      ),
       yaw: b.yaw ?? 0,
       owner: b.owner | 0,
     };
@@ -579,9 +617,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const tx = worldToTile(fx.fromFloat(x));
     const tz = worldToTile(fx.fromFloat(z));
     const key = ((tz & 0xffff) << 16) | (tx & 0xffff);
+    const pathOpts = rallyPathOptsForOwner(b.owner);
     if (key !== ghostPathTileKey || !ghostPathPoints) {
       ghostPathTileKey = key;
-      ghostPathPoints = rallyPathWorldPoints(session.field, b, x, z);
+      ghostPathPoints = rallyPathWorldPoints(session.field, b, x, z, pathOpts);
     } else {
       // Same tile — keep the A* spine, pin the tip to the live cursor.
       const pts = ghostPathPoints.slice();
@@ -710,6 +749,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       };
     }
     renderer.setActionRadialTracks?.(tracks);
+    syncActionRadialResearch();
   }
 
   function openActionRadialForBuilding(index) {
@@ -749,9 +789,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setBuildingRadialCompact?.(Boolean(placingType));
   }
 
+  // Locked until boot splash fades — camera + commands stay quiet together.
+  let bootInteractive = false;
   let inputApi = setupInput({
     canvas,
     renderer,
+    inputActive: () => bootInteractive,
     world: () => session.state,
     selected: bufs.selected,
     localPlayerId,
@@ -914,8 +957,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         return;
       }
       if (picked.kind === 'upgrade') {
-        // Research wiring comes later.
         renderer.setActionRadialArmed?.(null);
+        if (actionBuildingIndex < 0 || localPlayerId < 0) return;
+        const techId = picked.id;
+        if (!techId) return;
+        // Already owned — pad is dull; ignore re-queue.
+        if (researchedUpgradeIdsFor(localPlayerId).includes(techId)) return;
+        session.submitCommand({
+          type: CMD.RESEARCH,
+          playerId: localPlayerId,
+          buildingIndex: actionBuildingIndex,
+          techId,
+        });
         return;
       }
       if (picked.kind === 'utility') {
@@ -1166,6 +1219,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       poseValid[i] = 1;
     };
 
+    if (renderer.consumePoseResync?.()) {
+      bufs.poseValid.fill(0);
+      renderEntityCount = rebuildRendererEntities(renderer, session);
+    }
     if (n !== renderEntityCount) {
       renderEntityCount = n;
       renderer.setCount(n);
@@ -1540,7 +1597,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.commit();
   });
 
+  // Engine already started after createRenderer for progressive first paint.
   await renderer.start();
+
+  // Splash logo sits on top while Phase B loads; don't block bootGame return.
+  // Fade + unlock once units/buildings settle (scene visible underneath the whole time).
+  const unlock = () => {
+    if (bootInteractive) return;
+    bootInteractive = true;
+    dismissBootSplash();
+  };
+  void Promise.race([
+    renderer.whenInteractive?.() ?? Promise.resolve(),
+    new Promise((r) => setTimeout(r, 12000)),
+  ]).then(unlock);
 
   return {
     session,
@@ -1788,7 +1858,24 @@ async function waitForWebGPU(timeoutMs = 3000) {
   return !!navigator.gpu;
 }
 
+function dismissBootSplash() {
+  const el = document.getElementById('boot-splash');
+  if (!el || el.classList.contains('is-leaving')) return;
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    el.remove();
+  };
+  // Stop eating input immediately; opacity fade is visual only.
+  el.style.pointerEvents = 'none';
+  el.classList.add('is-leaving');
+  el.addEventListener('transitionend', finish, { once: true });
+  setTimeout(finish, 800);
+}
+
 function showFallback(msg) {
+  dismissBootSplash();
   const el = document.getElementById('fallback');
   if (!el) return;
   el.style.display = 'grid';

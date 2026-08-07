@@ -1,0 +1,346 @@
+{
+  "sourceUrl": "/assets/models/barracks.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.018",
+      "baseColorFactor": [
+        0.037373751401901245,
+        0.04076504334807396,
+        0.06301984190940857,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.019",
+      "baseColorFactor": [
+        0.4262715280056,
+        0.4853590428829193,
+        0.6450870037078857,
+        1
+      ],
+      "metallicFactor": 0.19014084339141846,
+      "roughnessFactor": 0.5845070481300354,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.020",
+      "baseColorFactor": [
+        0.4262715280056,
+        0.4853590428829193,
+        0.6450870037078857,
+        1
+      ],
+      "metallicFactor": 0.19014084339141846,
+      "roughnessFactor": 0.5845070481300354,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.8015627861022949,
+        0.5141313672065735,
+        0.042943280190229416,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.016",
+      "baseColorFactor": [
+        0.26599201560020447,
+        0.5866263508796692,
+        0.1002596914768219,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.022",
+      "baseColorFactor": [
+        0.43368807435035706,
+        0.43368807435035706,
+        0.43368807435035706,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.018",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 360,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 720,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 912,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.019",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 1152,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1512,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 1872,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 2064,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.020",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 2304,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 2664,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 3024,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 3216,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 3,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 3456,
+        "length": 216,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 4320,
+        "length": 216,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 5184,
+        "length": 108,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 5616,
+        "length": 144,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.016",
+      "materialIndex": 4,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 6192,
+        "length": 216,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 7056,
+        "length": 216,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 7920,
+        "length": 108,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 8352,
+        "length": 144,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 5,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 8928,
+        "length": 216,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 9792,
+        "length": 216,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 10656,
+        "length": 108,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 11088,
+        "length": 144,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.022",
+      "materialIndex": 6,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 11664,
+        "length": 216,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 12528,
+        "length": 216,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 13392,
+        "length": 108,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 13824,
+        "length": 144,
+        "type": "f32"
+      }
+    }
+  ]
+}

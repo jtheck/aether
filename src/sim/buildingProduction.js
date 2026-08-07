@@ -6,11 +6,14 @@ import { snapToPassable } from './field.js';
 import { ORDER, spawn } from './world.js';
 import { queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
+import { isFlyer } from './unitTypes.js';
 import {
   BUILDING_SPAWN_LOCAL,
   TRAIN_TICKS,
+  RESEARCH_TICKS,
   buildingLocalToWorld,
 } from './buildings.js';
+import { grantTech, ownerHasTech, TECH } from './tech.js';
 
 /**
  * @param {object} w
@@ -19,6 +22,7 @@ import {
  * @param {number} unitType
  */
 function spawnTrainedUnit(w, field, b, unitType) {
+  const flyer = isFlyer(unitType);
   const bx = fx.toFloat(b.x);
   const bz = fx.toFloat(b.z);
   const yaw = fx.toFloat(b.yaw | 0);
@@ -26,7 +30,8 @@ function spawnTrainedUnit(w, field, b, unitType) {
   const spawnPos = buildingLocalToWorld(bx, bz, yaw, local.x, local.z);
   let sx = fx.fromFloat(spawnPos.x);
   let sz = fx.fromFloat(spawnPos.z);
-  if (field) {
+  // Ground units snap onto passable; air units keep the spawn/rally xz.
+  if (field && !flyer) {
     const snapped = snapToPassable(field, sx, sz);
     if (snapped) {
       sx = snapped.x;
@@ -45,7 +50,7 @@ function spawnTrainedUnit(w, field, b, unitType) {
     rx = fx.fromFloat(rally.x);
     rz = fx.fromFloat(rally.z);
   }
-  if (field) {
+  if (field && !flyer) {
     const snapped = snapToPassable(field, rx, rz);
     if (snapped) {
       rx = snapped.x;
@@ -61,7 +66,12 @@ function spawnTrainedUnit(w, field, b, unitType) {
   w.hasTarget[i] = 1;
   w.vx[i] = 0;
   w.vy[i] = 0;
-  if (field) queuePath(w, i, rx, rz);
+  if (field) {
+    // Flyers path straight in planPath; Drayage slow-aware is ground-only.
+    const slowAware =
+      !flyer && ownerHasTech(w, b.owner | 0, TECH.DRAYAGE);
+    queuePath(w, i, rx, rz, slowAware ? { slowAware: true } : null);
+  }
 }
 
 /**
@@ -85,7 +95,6 @@ export function buildingProductionSystem(w, field) {
       w.buildingsDirty = 1;
       continue;
     }
-    const stepProg = 1 / (TRAIN_TICKS * active);
     let dirty = false;
     for (let ti = tracks.length - 1; ti >= 0; ti--) {
       const t = tracks[ti];
@@ -94,11 +103,17 @@ export function buildingProductionSystem(w, field) {
         dirty = true;
         continue;
       }
+      const ticks = t.kind === 'upgrade' ? RESEARCH_TICKS : TRAIN_TICKS;
+      const stepProg = 1 / (ticks * active);
       t.progress = (Number(t.progress) || 0) + stepProg;
       while (t.progress >= 1 && (t.count | 0) > 0) {
         t.progress -= 1;
         t.count = (t.count | 0) - 1;
-        if (t.kind === 'unit') spawnTrainedUnit(w, field, b, t.unitType);
+        if (t.kind === 'unit') {
+          spawnTrainedUnit(w, field, b, t.unitType);
+        } else if (t.kind === 'upgrade') {
+          grantTech(w, b.owner | 0, t.id);
+        }
         dirty = true;
       }
       if ((t.count | 0) < 1) {

@@ -1,0 +1,292 @@
+{
+  "sourceUrl": "/assets/models/village.glb",
+  "version": 2,
+  "sockets": [
+    {
+      "name": "smoke_anchor",
+      "x": -2.5975229740142822,
+      "y": 2.0212860107421875,
+      "z": 2.5362329483032227
+    },
+    {
+      "name": "smoke_anchor.001",
+      "x": 5.570056915283203,
+      "y": 1.7656062841415405,
+      "z": -1.2277741432189941
+    }
+  ],
+  "materials": [
+    {
+      "name": "Material.017",
+      "baseColorFactor": [
+        0.4262715280056,
+        0.4853590428829193,
+        0.6450870037078857,
+        1
+      ],
+      "metallicFactor": 0.19014084339141846,
+      "roughnessFactor": 0.5845070481300354,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.018",
+      "baseColorFactor": [
+        0.037373751401901245,
+        0.04076504334807396,
+        0.06301984190940857,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.017",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 360,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 720,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 912,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.018",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 1152,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1512,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 1872,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 2064,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.018",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 2304,
+        "length": 114,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 2760,
+        "length": 114,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 3216,
+        "length": 60,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 3456,
+        "length": 76,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 3760,
+        "length": 24,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 3856,
+        "length": 24,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 3952,
+        "length": 12,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 4000,
+        "length": 16,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.017",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 4064,
+        "length": 138,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 4616,
+        "length": 138,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 5168,
+        "length": 72,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 5456,
+        "length": 92,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.018",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 5824,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 6184,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 6544,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 6736,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "part6",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 6976,
+        "length": 72,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 7264,
+        "length": 72,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 7552,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 7696,
+        "length": 48,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.018",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 7888,
+        "length": 72,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 8176,
+        "length": 72,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 8464,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 8608,
+        "length": 48,
+        "type": "f32"
+      }
+    }
+  ]
+}

@@ -1,0 +1,163 @@
+{
+  "sourceUrl": "/assets/models/workshop.glb",
+  "version": 2,
+  "sockets": [
+    {
+      "name": "smoke_anchor",
+      "x": -1.0825375318527222,
+      "y": 0.8765778541564941,
+      "z": -4.166792392730713
+    }
+  ],
+  "materials": [
+    {
+      "name": "Material.017",
+      "baseColorFactor": [
+        0.04641709476709366,
+        0.6450997591018677,
+        0.023280741646885872,
+        1
+      ],
+      "metallicFactor": 0.19014084339141846,
+      "roughnessFactor": 0.5845070481300354,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.018",
+      "baseColorFactor": [
+        0.037373751401901245,
+        0.04076504334807396,
+        0.06301984190940857,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.017",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 360,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 720,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 912,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.017",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 1152,
+        "length": 138,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1704,
+        "length": 138,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 2256,
+        "length": 72,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 2544,
+        "length": 92,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.018",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 2912,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 3272,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 3632,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 3824,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "part3",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 4064,
+        "length": 72,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 4352,
+        "length": 72,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 4640,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 4784,
+        "length": 48,
+        "type": "f32"
+      }
+    }
+  ]
+}

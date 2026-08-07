@@ -16,6 +16,7 @@ import { mixHolyArmorChecksum } from './holyArmor.js';
 import { mixSporeGrowthChecksum } from './sporeBloom.js';
 import { mixMonkLobChecksum } from './monkKick.js';
 import { mixCombatStatusChecksum } from './combatStatus.js';
+import { mixTechChecksum } from './tech.js';
 
 export function checksum(w, field = null) {
   let h = 0x811c9dc5 | 0;
@@ -48,6 +49,7 @@ export function checksum(w, field = null) {
     mix(w.navWpCount[i]);
     mix(w.navWpIndex[i]);
     mix(w.pathRequest[i]);
+    if (w.pathSlowAware) mix(w.pathSlowAware[i]);
     mix(w.navDestX[i]);
     mix(w.navDestY[i]);
     mix(w.attackCd[i]);
@@ -91,6 +93,7 @@ export function checksum(w, field = null) {
   h = mixKothChecksum(h, mix, w.koth);
   h = mixAgoraChecksum(h, mix, w.agoras);
   h = mixBuildingChecksum(h, mix, w.buildings);
+  mixTechChecksum(h, mix, w);
   if (field) mixTreeChecksum(mix, field);
   mixFireZoneChecksum(mix, w);
   mixFrogChecksum(mix, w);

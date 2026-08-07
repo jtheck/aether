@@ -30,7 +30,9 @@ const RALLY_GAP = 1.05;
 const RALLY_LINE_RADIUS = 0.22;
 const RALLY_ARROW_RADIUS = 0.38;
 const RALLY_ARROW_LEN = 0.95;
-const RALLY_LINE_Y = 0.55;
+/** Hover above ground samples so segments don't clip into hills. */
+const RALLY_LINE_Y = 1.15;
+/** Positive = dashes crawl building → flag. */
 const RALLY_FLOW_SPEED = 0.0045;
 /** Matches unit / building OWNER_TINTS. */
 const OWNER_TINTS = [
@@ -149,6 +151,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     resolvePick() {
       return null;
     },
+    forEachShadowMesh() {},
   };
 
   try {
@@ -329,6 +332,8 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     let slot = startSlot;
     let arrowCounter = 0;
     const baseAlpha = ghost ? 0.7 : 0.95;
+    // Negate so the crawl reads building → flag (toward the tip).
+    const flow = -phase;
 
     for (let i = 0; i < points.length - 1 && slot < maxSlot; i++) {
       const ax = points[i].x;
@@ -339,11 +344,9 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       if (segLen < 0.05) continue;
       const ux = (bx - ax) / segLen;
       const uz = (bz - az) / segLen;
-      const ay = groundYAt(ax, az) + RALLY_LINE_Y;
-      const by = groundYAt(bx, bz) + RALLY_LINE_Y;
 
       // Walk this segment in dash/gap steps, offset by animated phase.
-      let t = -((phase % period) + period) % period;
+      let t = -((flow % period) + period) % period;
       while (t < segLen && slot < maxSlot) {
         const dashStart = Math.max(0, t);
         const dashEnd = Math.min(segLen, t + RALLY_DASH);
@@ -354,8 +357,9 @@ export async function createAgoraProps(engine, scene, groundYAt) {
         const z0 = az + uz * dashStart;
         const x1 = ax + ux * dashEnd;
         const z1 = az + uz * dashEnd;
-        const y0 = ay + (by - ay) * (dashStart / segLen);
-        const y1 = ay + (by - ay) * (dashEnd / segLen);
+        // Sample ground at each tip — lerp Y sinks under convex terrain.
+        const y0 = groundYAt(x0, z0) + RALLY_LINE_Y;
+        const y1 = groundYAt(x1, z1) + RALLY_LINE_Y;
 
         arrowCounter++;
         const isArrow = arrowCounter % 3 === 0;
@@ -367,11 +371,11 @@ export async function createAgoraProps(engine, scene, groundYAt) {
         let pz1 = z1;
         let py1 = y1;
         if (isArrow) {
-          // Short fat tip near the dash end, reading as a chevron along the flow.
+          // Fat tip at the forward end of the dash (toward the flag).
           const tipStart = Math.max(dashStart, dashEnd - RALLY_ARROW_LEN);
           px0 = ax + ux * tipStart;
           pz0 = az + uz * tipStart;
-          py0 = ay + (by - ay) * (tipStart / segLen);
+          py0 = groundYAt(px0, pz0) + RALLY_LINE_Y;
           px1 = x1;
           pz1 = z1;
           py1 = y1;
@@ -394,7 +398,6 @@ export async function createAgoraProps(engine, scene, groundYAt) {
         }
         const pulse = isArrow ? 1 : 0.82;
         writeOwnerColor(batch.colors, slot, owner, baseAlpha * pulse);
-        // Lift emissive feel via brighter RGB for arrows.
         if (isArrow) {
           const o = slot * 4;
           batch.colors[o] = Math.min(1, batch.colors[o] * 1.25);
@@ -577,6 +580,14 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     return { kind: 'agora', index: thinInstanceIndex };
   }
 
+  /** Placed agora body meshes (not flags / rally lines / ghosts). */
+  function forEachShadowMesh(fn) {
+    if (placedCount <= 0) return;
+    for (const layer of layers) {
+      if (layer.mesh) fn(layer.mesh);
+    }
+  }
+
   return {
     place,
     placeRallyFlags,
@@ -585,5 +596,6 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     clear,
     isPickMesh,
     resolvePick,
+    forEachShadowMesh,
   };
 }

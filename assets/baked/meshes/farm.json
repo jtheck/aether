@@ -1,0 +1,298 @@
+{
+  "sourceUrl": "/assets/models/farm.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.016",
+      "baseColorFactor": [
+        0.015324689447879791,
+        0.003878714982420206,
+        0.0011837134370580316,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Yellow",
+      "baseColorFactor": [
+        0.44797465205192566,
+        0.3547384738922119,
+        0.11264380812644958,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Yellow.001",
+      "baseColorFactor": [
+        0.44797465205192566,
+        0.3547384738922119,
+        0.11264380812644958,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Yellow.002",
+      "baseColorFactor": [
+        0.44797465205192566,
+        0.3547384738922119,
+        0.11264380812644958,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Yellow.003",
+      "baseColorFactor": [
+        0.44797465205192566,
+        0.3547384738922119,
+        0.11264380812644958,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Yellow.004",
+      "baseColorFactor": [
+        0.44797465205192566,
+        0.3547384738922119,
+        0.11264380812644958,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.016",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 1584,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 6336,
+        "length": 1584,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 12672,
+        "length": 888,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 16224,
+        "length": 1056,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Yellow",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 20448,
+        "length": 2358,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 29880,
+        "length": 2358,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 39312,
+        "length": 1224,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 44208,
+        "length": 1572,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Yellow.001",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 50496,
+        "length": 2358,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 59928,
+        "length": 2358,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 69360,
+        "length": 1224,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 74256,
+        "length": 1572,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Yellow.002",
+      "materialIndex": 3,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 80544,
+        "length": 2358,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 89976,
+        "length": 2358,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 99408,
+        "length": 1224,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 104304,
+        "length": 1572,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Yellow.003",
+      "materialIndex": 4,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 110592,
+        "length": 2358,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 120024,
+        "length": 2358,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 129456,
+        "length": 1224,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 134352,
+        "length": 1572,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Yellow.004",
+      "materialIndex": 5,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 140640,
+        "length": 2358,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 150072,
+        "length": 2358,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 159504,
+        "length": 1224,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 164400,
+        "length": 1572,
+        "type": "f32"
+      }
+    }
+  ]
+}

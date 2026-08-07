@@ -1,0 +1,65 @@
+{
+  "sourceUrl": "/assets/models/tower.glb",
+  "version": 2,
+  "sockets": [
+    {
+      "name": "torch_anchor",
+      "x": -4.025928497314453,
+      "y": 11.370916366577148,
+      "z": 4.370614051818848
+    }
+  ],
+  "materials": [
+    {
+      "name": "Material.003",
+      "baseColorFactor": [
+        0.04862057417631149,
+        0.022641824558377266,
+        0.017087019979953766,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.003",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 312,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1248,
+        "length": 312,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 2496,
+        "length": 156,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 3120,
+        "length": 208,
+        "type": "f32"
+      }
+    }
+  ]
+}

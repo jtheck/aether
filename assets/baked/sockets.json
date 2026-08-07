@@ -1,0 +1,183 @@
+{
+  "byUrl": {
+    "/assets/models/agora.glb": [],
+    "/assets/models/apc.glb": [
+      {
+        "name": "particle_anchor",
+        "x": -0.3160458207130432,
+        "y": 4.534229278564453,
+        "z": 1.758104920387268
+      }
+    ],
+    "/assets/models/archer.glb": [],
+    "/assets/models/armor.glb": [],
+    "/assets/models/artillery.glb": [],
+    "/assets/models/barracks.glb": [],
+    "/assets/models/camp.glb": [
+      {
+        "name": "fire_anchor",
+        "x": -0.8113429546356201,
+        "y": 0.7209600210189819,
+        "z": -5.576159954071045
+      }
+    ],
+    "/assets/models/church.glb": [
+      {
+        "name": "smoke_anchor.001",
+        "x": 0.11788272857666016,
+        "y": 7.83561372756958,
+        "z": 3.580498695373535
+      }
+    ],
+    "/assets/models/collar.glb": [],
+    "/assets/models/dirigible.glb": [],
+    "/assets/models/drayage.glb": [],
+    "/assets/models/engineer.glb": [],
+    "/assets/models/factory.glb": [
+      {
+        "name": "smoke_anchor",
+        "x": 2.5187957286834717,
+        "y": 4.650452613830566,
+        "z": -1.363725185394287
+      },
+      {
+        "name": "smoke_anchor.001",
+        "x": 1.0693614482879639,
+        "y": 3.907607316970825,
+        "z": 1.3195585012435913
+      }
+    ],
+    "/assets/models/farm.glb": [],
+    "/assets/models/flag.glb": [],
+    "/assets/models/frog.glb": [],
+    "/assets/models/grove.glb": [],
+    "/assets/models/lab.glb": [
+      {
+        "name": "smoke_anchor",
+        "x": -5.591320037841797,
+        "y": 1.6579794883728027,
+        "z": 5.552299499511719
+      }
+    ],
+    "/assets/models/mine.glb": [
+      {
+        "name": "fire_anchor",
+        "x": -3.6217942237854004,
+        "y": 0.09835206717252731,
+        "z": -2.4694838523864746
+      }
+    ],
+    "/assets/models/monk.glb": [],
+    "/assets/models/moonwell.glb": [],
+    "/assets/models/mushroom.glb": [],
+    "/assets/models/myco.glb": [],
+    "/assets/models/patronage.glb": [],
+    "/assets/models/perch.glb": [
+      {
+        "name": "fire_anchor",
+        "x": 5.384038925170898,
+        "y": 14.689143180847168,
+        "z": -3.5874478816986084
+      },
+      {
+        "name": "fire_anchor.001",
+        "x": -3.7790093421936035,
+        "y": 11.8151216506958,
+        "z": 4.515974998474121
+      }
+    ],
+    "/assets/models/priest.glb": [],
+    "/assets/models/prospecting.glb": [],
+    "/assets/models/rocks_moss.glb": [],
+    "/assets/models/rocks_plain.glb": [],
+    "/assets/models/rocks_snow.glb": [],
+    "/assets/models/scribes.glb": [],
+    "/assets/models/shaman.glb": [
+      {
+        "name": "particle_anchor",
+        "x": -1.3194955587387085,
+        "y": 4.286964416503906,
+        "z": 0.2605471909046173
+      }
+    ],
+    "/assets/models/silo.glb": [],
+    "/assets/models/stewardship.glb": [],
+    "/assets/models/target.glb": [],
+    "/assets/models/tavern.glb": [
+      {
+        "name": "spawn_anchor",
+        "x": -0.5513424873352051,
+        "y": 0.7969854474067688,
+        "z": -8.04394245147705
+      },
+      {
+        "name": "smoke_anchor",
+        "x": -4.299328804016113,
+        "y": 5.186521053314209,
+        "z": -4.670814514160156
+      },
+      {
+        "name": "smoke_anchor.001",
+        "x": 1.875744104385376,
+        "y": 4.02739953994751,
+        "z": 4.6676225662231445
+      }
+    ],
+    "/assets/models/tower.glb": [
+      {
+        "name": "torch_anchor",
+        "x": -4.025928497314453,
+        "y": 11.370916366577148,
+        "z": 4.370614051818848
+      }
+    ],
+    "/assets/models/trees.glb": [],
+    "/assets/models/village.glb": [
+      {
+        "name": "smoke_anchor",
+        "x": -2.5975229740142822,
+        "y": 2.0212860107421875,
+        "z": 2.5362329483032227
+      },
+      {
+        "name": "smoke_anchor.001",
+        "x": 5.570056915283203,
+        "y": 1.7656062841415405,
+        "z": -1.2277741432189941
+      }
+    ],
+    "/assets/models/wagon.glb": [],
+    "/assets/models/warlock.glb": [
+      {
+        "name": "particle_anchor",
+        "x": -0.3160458207130432,
+        "y": 3.9605050086975098,
+        "z": 1.758104920387268
+      }
+    ],
+    "/assets/models/warrior.glb": [],
+    "/assets/models/wizard.glb": [
+      {
+        "name": "particle_anchor",
+        "x": -1.3194955587387085,
+        "y": 4.286964416503906,
+        "z": 0.2605471909046173
+      }
+    ],
+    "/assets/models/workshop.glb": [
+      {
+        "name": "smoke_anchor",
+        "x": -1.0825375318527222,
+        "y": 0.8765778541564941,
+        "z": -4.166792392730713
+      }
+    ]
+  },
+  "buildingSpawns": {
+    "tavern": {
+      "x": -0.5513424873352051,
+      "y": 0.7969854474067688,
+      "z": -8.04394245147705
+    }
+  }
+}

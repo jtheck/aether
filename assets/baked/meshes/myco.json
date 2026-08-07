@@ -1,0 +1,179 @@
+{
+  "sourceUrl": "/assets/models/myco.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.03389464318752289,
+        0.020644057542085648,
+        0.01137630082666874,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.8000156879425049,
+        0.03641071170568466,
+        0.016027485951781273,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 120,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 480,
+        "length": 120,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 960,
+        "length": 60,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 1200,
+        "length": 80,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 1520,
+        "length": 2847,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 12908,
+        "length": 2847,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 24296,
+        "length": 1503,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 30308,
+        "length": 1898,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 37900,
+        "length": 720,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 40780,
+        "length": 720,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 43660,
+        "length": 240,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 44620,
+        "length": 480,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 46540,
+        "length": 720,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 49420,
+        "length": 720,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 52300,
+        "length": 240,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 53260,
+        "length": 480,
+        "type": "f32"
+      }
+    }
+  ]
+}

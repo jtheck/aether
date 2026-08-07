@@ -1,6 +1,7 @@
 // Static v1-style tree/rock sprites, batched with Lite thin instances.
 
 import {
+  addToScene,
   cloneTransformNode,
   createMeshFromData,
   createStandardMaterial,
@@ -15,6 +16,8 @@ import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 import { treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
 import { capacityFor } from '../sim/capacity.js';
 import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
+import { hasBakedMesh } from './bakedAssets.js';
+import { loadBakedUnitMeshParts } from './unitModels.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
 const ATLAS_GRID = 8;
@@ -104,11 +107,18 @@ const modelContainersByEngine = new WeakMap();
  */
 export async function createSceneryFromField(engine, field, surfaceHeightAt, camera, opts = {}) {
   if (!field?.sceneryType) {
-    return { meshes: [], update() {}, applyTreeUpdates() {} };
+    return {
+      meshes: [],
+      modelsReady: Promise.resolve(),
+      update() {},
+      applyTreeUpdates() {},
+    };
   }
   const atlas = await getAtlas(engine);
   const meshes = [];
   const batches = [];
+  /** @type {Promise<void>[]} */
+  const modelJobs = [];
   /** @type {Map<number, { batch: object, index: number }>} */
   const treeByTile = new Map();
   /** @type {number[]} unused tree instance indices (headroom). */
@@ -135,15 +145,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     billboardMesh.pickable = false;
     meshes.push(billboardMesh);
 
-    const modelParts = await loadModelParts(engine, variant);
-    for (const part of modelParts) {
-      part.matrices = new Float32Array(capacity * 16);
-      setThinInstances(part.mesh, part.matrices, capacity);
-      setThinInstanceCount(part.mesh, capacity);
-      part.mesh.pickable = false;
-      meshes.push(part.mesh);
-    }
-
+    // Billboards first for early paint; 3D models pop in when bake/GLB resolves.
+    /** @type {{ mesh: object, baseMatrix: Float32Array, matrices: Float32Array | null }[]} */
+    const modelParts = [];
     const batch = {
       variant,
       instances,
@@ -162,10 +166,37 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       for (let i = live.length; i < capacity; i++) {
         treeFreeSlots.push(i);
         writeHiddenMatrix(billboardMatrices, i);
-        for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
       }
     }
+
+    modelJobs.push(
+      loadModelParts(engine, variant)
+        .then((parts) => {
+          for (const part of parts) {
+            part.matrices = new Float32Array(capacity * 16);
+            setThinInstances(part.mesh, part.matrices, capacity);
+            setThinInstanceCount(part.mesh, capacity);
+            part.mesh.pickable = false;
+            if (opts.scene) addToScene(opts.scene, part.mesh);
+            meshes.push(part.mesh);
+            modelParts.push(part);
+            if (isTree) {
+              for (let i = live.length; i < capacity; i++) {
+                writeHiddenMatrix(part.matrices, i);
+              }
+            }
+            // terrain.meshes is a snapshot unless it listens — notify so CSM can catch up.
+            opts.onModelMesh?.(part.mesh);
+          }
+          batch.dirty = true;
+        })
+        .catch((err) => {
+          console.warn(`[scenery] model ${variant.modelUrl} failed`, err);
+        }),
+    );
   }
+
+  const modelsReady = Promise.all(modelJobs).then(() => {});
 
   function ensureTreeCapacity(needed) {
     if (!treeBatch || needed <= treeBatch.capacity) return;
@@ -371,7 +402,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   }
 
   update(camera, LOD_UPDATE_MS, true);
-  return { meshes, update, applyTreeUpdates };
+  return { meshes, modelsReady, update, applyTreeUpdates };
 }
 
 function makeEmptyTreeInstance() {
@@ -427,29 +458,42 @@ async function loadModelParts(engine, variant) {
   }
   let promise = cache.get(variant.modelUrl);
   if (!promise) {
-    promise = loadGltf(engine, variant.modelUrl);
+    promise = (async () => {
+      // Prefer offline bake (geo + mats) — skips GLB parse on cold boot.
+      if (await hasBakedMesh(variant.modelUrl)) {
+        const meshes = await loadBakedUnitMeshParts(engine, variant.modelUrl);
+        const isTree = variant.kind === SCENERY.TREE;
+        return meshes.map((mesh, index) => {
+          // Must match GLB path + collectShadowCasters filter (`scenery-model-*`).
+          mesh.name = `scenery-model-${variant.name}-${index}`;
+          mesh.material = prepareSceneryMaterial(mesh.material, isTree);
+          return { mesh, baseMatrix: identityMatrix(), matrices: null };
+        });
+      }
+
+      const container = await loadGltf(engine, variant.modelUrl);
+      // Cloning the hierarchy assigns real parent links and computes the node
+      // world matrices; the raw asset container only stores child arrays.
+      const root = cloneTransformNode(container.entities[0]);
+      const sources = [];
+      collectRenderableMeshes(root, sources);
+      if (sources.length === 0) throw new Error(`no scenery mesh in ${variant.modelUrl}`);
+      return sources.map((source, index) => {
+        // Bake authored hierarchy transforms once. Required for trees: their GLB
+        // node supplies the upright orientation and most of their height.
+        const mesh = bakeModelMesh(
+          engine,
+          source,
+          source.worldMatrix,
+          `scenery-model-${variant.name}-${index}`,
+          variant.kind === SCENERY.TREE,
+        );
+        return { mesh, baseMatrix: identityMatrix(), matrices: null };
+      });
+    })();
     cache.set(variant.modelUrl, promise);
   }
-  const container = await promise;
-  // Cloning the hierarchy assigns real parent links and computes the node
-  // world matrices; the raw asset container only stores child arrays.
-  const root = cloneTransformNode(container.entities[0]);
-  const sources = [];
-  collectRenderableMeshes(root, sources);
-  if (sources.length === 0) throw new Error(`no scenery mesh in ${variant.modelUrl}`);
-  return sources.map((source, index) => {
-    // Bake authored hierarchy transforms once. Required for trees: their GLB
-    // node supplies the upright orientation and most of their height.
-    const mesh = bakeModelMesh(
-      engine,
-      source,
-      source.worldMatrix,
-      `scenery-model-${variant.name}-${index}`,
-      variant.kind === SCENERY.TREE,
-    );
-    const baseMatrix = identityMatrix();
-    return { mesh, baseMatrix, matrices: null };
-  });
+  return promise;
 }
 
 function bakeModelMesh(engine, source, world, name, isTree = false) {

@@ -4,6 +4,10 @@ node_modules/
 # Full production bundle (npm run build)
 src/dist/
 
+# Upload artifact (npm run package) — keep folder via .gitkeep
+DEPLOY/**
+!DEPLOY/.gitkeep
+
 # OS / editor
 .DS_Store
 Thumbs.db

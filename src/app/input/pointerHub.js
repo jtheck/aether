@@ -7,9 +7,13 @@
  * @param {HTMLCanvasElement} opts.canvas
  * @param {ReturnType<import('../../render/cameraController.js').createCameraController>} opts.camera
  * @param {ReturnType<import('./gameInput.js').createGameInput>} opts.game
+ * @param {() => boolean} [opts.active] — when false, camera + game ignore input (boot splash)
  */
-export function setupPointerHub({ canvas, camera, game }) {
+export function setupPointerHub({ canvas, camera, game, active }) {
+  const isActive = () => active?.() ?? true;
+
   function onPointerDown(e) {
+    if (!isActive()) return;
     if (e.pointerType === 'touch') return;
     if (e.target !== canvas && !canvas.contains(/** @type {Node} */ (e.target))) return;
 
@@ -26,12 +30,14 @@ export function setupPointerHub({ canvas, camera, game }) {
   }
 
   function onPointerMove(e) {
+    if (!isActive()) return;
     if (e.pointerType === 'touch') return;
     if (camera.isRmbPanning()) camera.handlePointerMove(e);
     game.handlePointerMove(e);
   }
 
   function onPointerUp(e) {
+    if (!isActive()) return;
     if (e.pointerType === 'touch') return;
 
     if (e.type === 'pointercancel') {
@@ -54,21 +60,25 @@ export function setupPointerHub({ canvas, camera, game }) {
   }
 
   function onWheel(e) {
+    if (!isActive()) return;
     if (e.target !== canvas && !canvas.contains(/** @type {Node} */ (e.target))) return;
     camera.handleWheel(e);
   }
 
   function onContextMenu(e) {
+    if (!isActive()) return;
     if (e.target === canvas || canvas.contains(/** @type {Node} */ (e.target))) {
       e.preventDefault();
     }
   }
 
   function onKeyDown(e) {
+    if (!isActive()) return;
     camera.handleKeyDown(e);
   }
 
   function onKeyUp(e) {
+    if (!isActive()) return;
     camera.handleKeyUp(e);
   }
 

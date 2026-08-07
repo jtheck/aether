@@ -1,0 +1,138 @@
+{
+  "sourceUrl": "/assets/models/warlock.glb",
+  "version": 2,
+  "sockets": [
+    {
+      "name": "particle_anchor",
+      "x": -0.3160458207130432,
+      "y": 3.9605050086975098,
+      "z": 1.758104920387268
+    }
+  ],
+  "materials": [
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.013457173481583595,
+        0.013457173481583595,
+        0.013457173481583595,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 120,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 480,
+        "length": 120,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 960,
+        "length": 60,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 1200,
+        "length": 80,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 1520,
+        "length": 2847,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 12908,
+        "length": 2847,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 24296,
+        "length": 1503,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 30308,
+        "length": 1898,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "part2",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 37900,
+        "length": 72,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 38188,
+        "length": 72,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 38476,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 38620,
+        "length": 48,
+        "type": "f32"
+      }
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "sourceUrl": "/assets/models/villager.glb",
+  "bakeClipName": "idle",
+  "idleName": "idle",
+  "walkName": "walk_cycle",
+  "idleClip": {
+    "fromRow": 1,
+    "frameCount": 63,
+    "fps": 15
+  },
+  "walkClip": {
+    "fromRow": 1,
+    "frameCount": 63,
+    "fps": 60
+  },
+  "prims": [
+    {
+      "boneCount": 10,
+      "frameCount": 64,
+      "clips": {
+        "idle": {
+          "fromRow": 0,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "walk_cycle": {
+          "fromRow": 1,
+          "frameCount": 63,
+          "fps": 60
+        }
+      },
+      "byteOffset": 0,
+      "floatCount": 10240
+    },
+    {
+      "boneCount": 10,
+      "frameCount": 64,
+      "clips": {
+        "idle": {
+          "fromRow": 0,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "walk_cycle": {
+          "fromRow": 1,
+          "frameCount": 63,
+          "fps": 60
+        }
+      },
+      "byteOffset": 40960,
+      "floatCount": 10240
+    },
+    {
+      "boneCount": 10,
+      "frameCount": 64,
+      "clips": {
+        "idle": {
+          "fromRow": 0,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "walk_cycle": {
+          "fromRow": 1,
+          "frameCount": 63,
+          "fps": 60
+        }
+      },
+      "byteOffset": 81920,
+      "floatCount": 10240
+    },
+    {
+      "boneCount": 10,
+      "frameCount": 64,
+      "clips": {
+        "idle": {
+          "fromRow": 0,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "walk_cycle": {
+          "fromRow": 1,
+          "frameCount": 63,
+          "fps": 60
+        }
+      },
+      "byteOffset": 122880,
+      "floatCount": 10240
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+{
+  "sourceUrl": "/assets/models/flag.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.008",
+      "baseColorFactor": [
+        0.800315260887146,
+        0.7964662313461304,
+        0.5809630155563354,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.006",
+      "baseColorFactor": [
+        0.02614932879805565,
+        0.016204115003347397,
+        0.010455102659761906,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.3260672986507416,
+        0.36105525493621826,
+        0.5132578015327454,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.008",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 24,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 96,
+        "length": 24,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 192,
+        "length": 18,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 264,
+        "length": 16,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 328,
+        "length": 24,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 424,
+        "length": 24,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 520,
+        "length": 18,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 592,
+        "length": 16,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.006",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 656,
+        "length": 252,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1664,
+        "length": 252,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 2672,
+        "length": 84,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 3008,
+        "length": 168,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 3,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 3680,
+        "length": 360,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 5120,
+        "length": 360,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 6560,
+        "length": 180,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 7280,
+        "length": 240,
+        "type": "f32"
+      }
+    }
+  ]
+}

@@ -15,6 +15,12 @@ import {
   stopAnimation,
 } from '../vendor/lite/liteVendor.js';
 import { UNIT } from '../sim/unitTypes.js';
+import {
+  bakedVatBinUrl,
+  bakedVatJsonUrl,
+  hasBakedVat,
+  tryFetch,
+} from './bakedAssets.js';
 
 /** Shared 1×1 white + ORM for TeamColor (v1 used an unlit solid). */
 let teamColorMaps = null;
@@ -116,6 +122,61 @@ function prepareTeamColorMaterial(engine, mesh, donorMat) {
 const vatBakeCache = new Map();
 
 /**
+ * Rebuild Lite VAT bake handles from an offline float dump (skip bakeVatMany).
+ * @param {object} engine
+ * @param {object} meta
+ * @param {ArrayBuffer} bin
+ */
+function vatBakedListFromDump(engine, meta, bin) {
+  const device = engine._device;
+  const bakedList = [];
+  for (const prim of meta.prims ?? []) {
+    const data = new Float32Array(bin, prim.byteOffset, prim.floatCount);
+    const texWidth = prim.boneCount * 4;
+    const texture = device.createTexture({
+      size: [texWidth, prim.frameCount],
+      format: 'rgba32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    device.queue.writeTexture(
+      { texture },
+      data.buffer,
+      { offset: data.byteOffset, bytesPerRow: texWidth * 16, rowsPerImage: prim.frameCount },
+      { width: texWidth, height: prim.frameCount },
+    );
+    const resource = { texture, _refCount: 0 };
+    bakedList.push({
+      texture,
+      boneCount: prim.boneCount,
+      frameCount: prim.frameCount,
+      clips: { ...prim.clips },
+      _textureResource: resource,
+    });
+  }
+  return bakedList;
+}
+
+async function tryLoadOfflineVatBake(engine, url) {
+  if (!(await hasBakedVat(url))) return null;
+  const [jsonRes, binRes] = await Promise.all([
+    tryFetch(bakedVatJsonUrl(url)),
+    tryFetch(bakedVatBinUrl(url)),
+  ]);
+  if (!jsonRes || !binRes) return null;
+  const meta = await jsonRes.json();
+  const bin = await binRes.arrayBuffer();
+  const bakedList = vatBakedListFromDump(engine, meta, bin);
+  return {
+    bakedList,
+    bakeClipName: meta.bakeClipName,
+    idleName: meta.idleName,
+    walkName: meta.walkName,
+    idleClip: meta.idleClip,
+    walkClip: meta.walkClip,
+  };
+}
+
+/**
  * Load glTF, bake idle+walk for every skinned primitive, attach VAT.
  * Keeps the glTF hierarchy (required for correct skin space).
  * Caller must setThinInstances + handle.setInstances before registerScene,
@@ -123,6 +184,7 @@ const vatBakeCache = new Map();
  *
  * Bone-texture bake is cached per URL so VAT shards (past the instance-param
  * texture width) can share one bake and only reload/attach mesh copies.
+ * Prefers /assets/baked/vat/* when present.
  *
  * @param {object} engine
  * @param {{ url: string, scale: number, idleClip: string, walkClip: string }} def
@@ -140,25 +202,46 @@ export async function loadVatUnitTemplate(engine, def) {
 
   let cached = vatBakeCache.get(def.url);
   if (!cached) {
-    const idle = findGroup(groups, def.idleClip);
-    const walk = findGroup(groups, def.walkClip) ?? findGroup(groups, 'walk');
-    const bakeGroups = [];
-    if (idle) bakeGroups.push(idle);
-    if (walk && walk !== idle) bakeGroups.push(walk);
-    if (bakeGroups.length === 0) {
-      throw new Error(`no idle/walk clips in ${def.url}`);
+    const offline = await tryLoadOfflineVatBake(engine, def.url);
+    if (offline) {
+      cached = offline;
+      vatBakeCache.set(def.url, cached);
+    } else {
+      const idle = findGroup(groups, def.idleClip);
+      const walk = findGroup(groups, def.walkClip) ?? findGroup(groups, 'walk');
+      const bakeGroups = [];
+      if (idle) bakeGroups.push(idle);
+      if (walk && walk !== idle) bakeGroups.push(walk);
+      if (bakeGroups.length === 0) {
+        throw new Error(`no idle/walk clips in ${def.url}`);
+      }
+
+      const bakedList = bakeVatMany(
+        engine,
+        skinned.map((mesh) => ({ mesh })),
+        bakeGroups,
+      );
+      const bakeClipName = bakeGroups[0].name;
+      const idleName = idle?.name ?? bakeClipName;
+      const walkName = walk?.name ?? idleName;
+
+      let idleClip = bakedList[0].clips[idleName];
+      const walkClip = bakedList[0].clips[walkName] ?? idleClip;
+      if (!idleClip) throw new Error(`VAT missing clip ${idleName} in ${def.url}`);
+      // villager.glb "idle" is a single key at t=0 (bind/T-pose).
+      if (idleClip.frameCount <= 1 && walkClip && walkClip.frameCount > 1) {
+        idleClip = {
+          fromRow: walkClip.fromRow,
+          frameCount: walkClip.frameCount,
+          fps: Math.max(8, Math.round(walkClip.fps * 0.25)),
+        };
+      }
+
+      cached = { bakedList, bakeClipName, idleName, walkName, idleClip, walkClip };
+      vatBakeCache.set(def.url, cached);
     }
 
-    const bakedList = bakeVatMany(
-      engine,
-      skinned.map((mesh) => ({ mesh })),
-      bakeGroups,
-    );
-    const bakeClipName = bakeGroups[0].name;
-    const idleName = idle?.name ?? bakeClipName;
-    const walkName = walk?.name ?? idleName;
-
-    // Attach all prims, then cache bake + clip rows for later shards.
+    // Attach all prims (first shard path continues below).
     const donorMat = skinned.find((m) => /material\.001/i.test(materialName(m)))?.material
       ?? skinned.find((m) => /kicks/i.test(materialName(m)))?.material
       ?? skinned.find((m) => !isTeamColorPart(m))?.material
@@ -168,7 +251,7 @@ export async function loadVatUnitTemplate(engine, def) {
     const parts = [];
     for (let i = 0; i < skinned.length; i++) {
       const mesh = skinned[i];
-      const handle = attachVat(engine, mesh, bakedList[i], bakeClipName);
+      const handle = attachVat(engine, mesh, cached.bakedList[i], cached.bakeClipName);
       const team = isTeamColorPart(mesh);
       if (mesh.material) {
         mesh.material.doubleSided = true;
@@ -179,21 +262,6 @@ export async function loadVatUnitTemplate(engine, def) {
       if ('visible' in mesh) mesh.visible = true;
       parts.push({ mesh, handle, isTeamColor: team });
     }
-
-    let idleClip = parts[0].handle.clips[idleName];
-    const walkClip = parts[0].handle.clips[walkName] ?? idleClip;
-    if (!idleClip) throw new Error(`VAT missing clip ${idleName} in ${def.url}`);
-    // villager.glb "idle" is a single key at t=0 (bind/T-pose).
-    if (idleClip.frameCount <= 1 && walkClip && walkClip.frameCount > 1) {
-      idleClip = {
-        fromRow: walkClip.fromRow,
-        frameCount: walkClip.frameCount,
-        fps: Math.max(8, Math.round(walkClip.fps * 0.25)),
-      };
-    }
-
-    cached = { bakedList, bakeClipName, idleName, walkName, idleClip, walkClip };
-    vatBakeCache.set(def.url, cached);
 
     const extIds = typeof debugPbrExtIds === 'function' ? debugPbrExtIds() : [];
     if (!extIds.includes('vat')) {
@@ -206,10 +274,10 @@ export async function loadVatUnitTemplate(engine, def) {
       mesh: parts[0].mesh,
       handle: parts[0].handle,
       parts,
-      idleName,
-      walkName,
-      idleClip,
-      walkClip,
+      idleName: cached.idleName,
+      walkName: cached.walkName,
+      idleClip: cached.idleClip,
+      walkClip: cached.walkClip,
       instanceScale: Math.abs(def.scale),
       footLift: 0.08,
     };

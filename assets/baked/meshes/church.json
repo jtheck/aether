@@ -1,0 +1,115 @@
+{
+  "sourceUrl": "/assets/models/church.glb",
+  "version": 2,
+  "sockets": [
+    {
+      "name": "smoke_anchor.001",
+      "x": 0.11788272857666016,
+      "y": 7.83561372756958,
+      "z": 3.580498695373535
+    }
+  ],
+  "materials": [
+    {
+      "name": "white",
+      "baseColorFactor": [
+        0.8488541841506958,
+        0.8434665203094482,
+        0.7636994123458862,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "white",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 360,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 720,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 912,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "white",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 1152,
+        "length": 90,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1512,
+        "length": 90,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 1872,
+        "length": 48,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 2064,
+        "length": 60,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "white",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 2304,
+        "length": 72,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 2592,
+        "length": 72,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 2880,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 3024,
+        "length": 48,
+        "type": "f32"
+      }
+    }
+  ]
+}

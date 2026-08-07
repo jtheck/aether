@@ -1,0 +1,58 @@
+{
+  "sourceUrl": "/assets/models/armor.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.800000011920929,
+        0.800000011920929,
+        0.800000011920929,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 126,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 504,
+        "length": 126,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 1008,
+        "length": 72,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 1296,
+        "length": 84,
+        "type": "f32"
+      }
+    }
+  ]
+}

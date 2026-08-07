@@ -17,6 +17,7 @@ import { setupPointerHub } from './input/pointerHub.js';
  * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
+ * @param {() => boolean} [opts.inputActive] — gates camera + game (boot splash)
  */
 export function setupInput(opts) {
   const camera = opts.renderer.cameraController;
@@ -26,7 +27,12 @@ export function setupInput(opts) {
 
   const game = createGameInput(opts);
 
-  const hub = setupPointerHub({ canvas: opts.canvas, camera, game });
+  const hub = setupPointerHub({
+    canvas: opts.canvas,
+    camera,
+    game,
+    active: opts.inputActive,
+  });
 
   return {
     setLocalPlayerId: (id) => game.setLocalPlayerId(id),

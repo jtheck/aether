@@ -632,43 +632,45 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[] }>} */
   const icons = new Map();
 
-  for (const def of PLACEABLE_BUILDINGS) {
-    const url = MODEL_URLS[def.id];
-    if (!url) continue;
-    try {
-      const parts = await loadBakedUnitMeshParts(engine, url);
-      /** @type {{ mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[]} */
-      const layers = [];
-      for (const mesh of parts) {
-        mesh.position.x = 0;
-        mesh.position.y = 0;
-        mesh.position.z = 0;
-        // Hover/click uses CPU pad discs — icons need not be GPU-pickable.
-        mesh.pickable = false;
-        mesh.material = makeIconPreviewMaterial(mesh.material);
-        const mat = mesh.material;
-        let baseEmissive = null;
-        let baseDiffuse = null;
-        if (mat) {
-          if (mat.emissiveColor) baseEmissive = [...mat.emissiveColor];
-          else {
-            mat.emissiveColor = [0, 0, 0];
-            baseEmissive = [0, 0, 0];
+  await Promise.all(
+    PLACEABLE_BUILDINGS.map(async (def) => {
+      const url = MODEL_URLS[def.id];
+      if (!url) return;
+      try {
+        const parts = await loadBakedUnitMeshParts(engine, url);
+        /** @type {{ mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[]} */
+        const layers = [];
+        for (const mesh of parts) {
+          mesh.position.x = 0;
+          mesh.position.y = 0;
+          mesh.position.z = 0;
+          // Hover/click uses CPU pad discs — icons need not be GPU-pickable.
+          mesh.pickable = false;
+          mesh.material = makeIconPreviewMaterial(mesh.material);
+          const mat = mesh.material;
+          let baseEmissive = null;
+          let baseDiffuse = null;
+          if (mat) {
+            if (mat.emissiveColor) baseEmissive = [...mat.emissiveColor];
+            else {
+              mat.emissiveColor = [0, 0, 0];
+              baseEmissive = [0, 0, 0];
+            }
+            if (mat.diffuseColor) baseDiffuse = [...mat.diffuseColor];
           }
-          if (mat.diffuseColor) baseDiffuse = [...mat.diffuseColor];
+          const matrices = new Float32Array(16);
+          setThinInstances(mesh, matrices, 1);
+          setThinInstanceCount(mesh, 0);
+          addToScene(scene, mesh);
+          setSubtreeVisible(mesh, false);
+          layers.push({ mesh, matrices, baseEmissive, baseDiffuse, visible: false });
         }
-        const matrices = new Float32Array(16);
-        setThinInstances(mesh, matrices, 1);
-        setThinInstanceCount(mesh, 0);
-        addToScene(scene, mesh);
-        setSubtreeVisible(mesh, false);
-        layers.push({ mesh, matrices, baseEmissive, baseDiffuse, visible: false });
+        icons.set(def.id, { layers });
+      } catch (err) {
+        console.warn(`[buildingRadial] icon ${def.id} failed`, err);
       }
-      icons.set(def.id, { layers });
-    } catch (err) {
-      console.warn(`[buildingRadial] icon ${def.id} failed`, err);
-    }
-  }
+    }),
+  );
 
   /** @type {{ data: object, layer: object, text: string }[]} */
   const labels = [];

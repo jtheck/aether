@@ -9,6 +9,7 @@ import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
 import { serializeAgoras } from '../sim/agora.js';
 import { serializeBuildings, applyWorldStructureOccupancy } from '../sim/buildings.js';
+import { serializeTech } from '../sim/tech.js';
 import { takeTreeUpdates } from '../sim/trees.js';
 import { takeFireZoneUpdates } from '../sim/fireZones.js';
 import { takeFrogUpdates } from '../sim/frogs.js';
@@ -98,12 +99,17 @@ self.onmessage = (e) => {
         layoutVersion: SHARED_LAYOUT_VERSION,
         agoras: serializeAgoras(world.agoras),
         buildings: serializeBuildings(world.buildings),
+        tech: serializeTech(world),
         profileSim: !!world.profileSim,
       });
     } else if (msg.type === 'setProfileSim') {
       if (world) world.profileSim = !!msg.enabled;
       postMessage({ type: 'profileSim', enabled: !!world?.profileSim });
     } else if (msg.type === 'commitTick') {
+      const expect = (msg.tick | 0);
+      if (expect > 0 && expect !== world.tick + 1) {
+        throw new Error(`commitTick expect ${expect}, world.tick=${world.tick}`);
+      }
       const tTick = performance.now();
       let cmds;
       let mergeMs = 0;
@@ -136,6 +142,8 @@ self.onmessage = (e) => {
       const monkKickUpdates = takeMonkKickUpdates(world);
       const buildingsChanged = !!world.buildingsDirty;
       if (world.buildingsDirty) world.buildingsDirty = 0;
+      const techChanged = !!world.techDirty;
+      if (world.techDirty) world.techDirty = 0;
       const metrics = { ...world.metrics };
       if (world.profileSim) {
         metrics.timing = {
@@ -156,6 +164,8 @@ self.onmessage = (e) => {
         koth: serializeKoth(world.koth),
         buildings: serializeBuildings(world.buildings),
         buildingsChanged,
+        tech: serializeTech(world),
+        techChanged,
         treeUpdates,
         fireZoneUpdates,
         frogUpdates,

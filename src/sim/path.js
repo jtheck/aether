@@ -71,13 +71,23 @@ export function attackStandPoint(w, i, target) {
   return engagementPoint(w, i, target);
 }
 
-export function queuePath(w, i, destX, destY) {
+/**
+ * @param {object} w
+ * @param {number} i
+ * @param {number} destX
+ * @param {number} destY
+ * @param {{ slowAware?: boolean }} [opts]
+ */
+export function queuePath(w, i, destX, destY, opts = null) {
   w.navDestX[i] = destX;
   w.navDestY[i] = destY;
   w.repathCount[i] = 0;
   w.stuckTicks[i] = 0;
   clearPath(w, i);
-  w.pathRequest[i] = PATH_REQUEST.LOS;
+  const slowAware = !!opts?.slowAware;
+  if (w.pathSlowAware) w.pathSlowAware[i] = slowAware ? 1 : 0;
+  // Slow-aware skips LOS shortcut (trees are passable but expensive).
+  w.pathRequest[i] = slowAware ? PATH_REQUEST.ASTAR : PATH_REQUEST.LOS;
 }
 
 /** One straight-line waypoint if LOS is clear (always for flyers). */
@@ -108,13 +118,14 @@ function setSingleWaypoint(w, i, x, y) {
 export function planPath(w, field, i, destX, destY, forceAstar = false) {
   w.navDestX[i] = destX;
   w.navDestY[i] = destY;
+  const slowAware = !!w.pathSlowAware?.[i];
   // Air units fly straight — never A* around ground blockers.
   if (isFlyer(w.type[i])) {
     setSingleWaypoint(w, i, destX, destY);
     w.stuckTicks[i] = 0;
     return;
   }
-  if (!forceAstar && tryQuickPath(w, field, i)) {
+  if (!forceAstar && !slowAware && tryQuickPath(w, field, i)) {
     w.stuckTicks[i] = 0;
     return;
   }
@@ -129,6 +140,7 @@ export function planPath(w, field, i, destX, destY, forceAstar = false) {
     w.navWx.subarray(base, base + MAX_WAYPOINTS),
     w.navWy.subarray(base, base + MAX_WAYPOINTS),
     MAX_WAYPOINTS,
+    slowAware ? { slowAware: true } : null,
   );
   w.stuckTicks[i] = 0;
   if (count > 0) {

@@ -35,6 +35,7 @@ import { beginRepair } from './repair.js';
 import {
   applyPlaceBuilding,
   applyQueueTrain,
+  applyQueueResearch,
   applyCancelTrain,
   applySetRally,
 } from './buildings.js';
@@ -59,6 +60,8 @@ export const CMD = {
   CANCEL_TRAIN: 12,
   /** Set a building's train rally point (world xz). */
   SET_RALLY: 13,
+  /** Queue research on a building (completes via production tick). */
+  RESEARCH: 14,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -113,6 +116,9 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.SET_RALLY:
         applySetRally(world, cmd);
+        break;
+      case CMD.RESEARCH:
+        applyQueueResearch(world, cmd);
         break;
       default:
         break;
@@ -238,11 +244,13 @@ function applyMove(world, field, ids, tx, ty, order) {
       world.vx[i] = 0;
       world.vy[i] = 0;
       clearPath(world, i);
+      if (world.pathSlowAware) world.pathSlowAware[i] = 0;
       continue;
     }
 
     world.order[i] = order;
     world.hasTarget[i] = 1;
+    // Player orders always use geometric pathing (clears rally slowAware).
     queuePath(world, i, destX, destY);
   }
 }
@@ -285,6 +293,7 @@ function applyStop(world, ids) {
     world.vx[i] = 0;
     world.vy[i] = 0;
     clearPath(world, i);
+    if (world.pathSlowAware) world.pathSlowAware[i] = 0;
   }
 }
 
@@ -305,6 +314,7 @@ function applyUnload(world, field, ids, tx, ty) {
     world.vx[i] = 0;
     world.vy[i] = 0;
     clearPath(world, i);
+    if (world.pathSlowAware) world.pathSlowAware[i] = 0;
   }
 }
 

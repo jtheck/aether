@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aether prebake</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "@babylonjs/lite": "../vendor/lite/liteVendor.js",
+      "howler": "../vendor/howler.js"
+    }
+  }
+  </script>
+  <style>
+    html, body { margin: 0; font-family: system-ui, sans-serif; background: #0c0f14; color: #cdd6e4; }
+    #status { padding: 1rem; white-space: pre-wrap; }
+    canvas { width: 64px; height: 64px; opacity: 0.2; }
+  </style>
+</head>
+<body>
+  <div id="status">Ready — waiting for runPrebake()…</div>
+  <canvas id="canvas" width="64" height="64"></canvas>
+  <script type="module">
+    import { runPrebake } from './prebakeClient.js';
+    const auto = new URLSearchParams(location.search).has('auto');
+    if (auto) {
+      runPrebake().catch((err) => {
+        document.getElementById('status').textContent = String(err?.stack || err);
+        window.__PREBAKE_RESULT__ = { ok: false, error: String(err?.message || err) };
+      });
+    } else {
+      document.getElementById('status').textContent =
+        'Open with ?auto=1 or call window.runPrebake() from the console.';
+      window.runPrebake = runPrebake;
+    }
+  </script>
+</body>
+</html>

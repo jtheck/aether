@@ -24,6 +24,8 @@ const _rallyWx = new Int32Array(MAX_WAYPOINTS);
 const _rallyWy = new Int32Array(MAX_WAYPOINTS);
 import { clearEngagement } from './engagement.js';
 import { isCarried } from './transport.js';
+import { ownerHasTech, TECH_BY_ID } from './tech.js';
+import { GENERATED_BUILDING_SPAWN_LOCAL } from './buildingSpawnLocal.generated.js';
 
 /** @typedef {'basic' | 'advanced' | 'elemental'} BuildingCategoryId */
 /** @typedef {'camp' | 'village' | 'silo' | 'farm' | 'mine' | 'tower' | 'tavern' | 'lab' | 'barracks' | 'workshop' | 'factory' | 'church' | 'moonwell' | 'perch' | 'grove'} BuildingTypeId */
@@ -36,18 +38,23 @@ export const BUILDING_YAW_SNAP = Math.PI / 12;
 /**
  * Baked spawn empties from building GLBs (`spawn_anchor` local translation).
  * Sim uses these — does not dig through live meshes.
+ * Hand fallback for tavern until prebake has been run; generated wins on key clash.
  * @type {Readonly<Record<string, { x: number, y: number, z: number }>>}
  */
 export const BUILDING_SPAWN_LOCAL = Object.freeze({
+  // Fallback if prebake hasn't been run; overwritten by GENERATED_* when present.
   tavern: Object.freeze({
-    x: 0.5513424873352051,
+    x: -0.5513424873352051,
     y: 0.7969854474067688,
     z: -8.04394245147705,
   }),
+  ...GENERATED_BUILDING_SPAWN_LOCAL,
 });
 
 /** Base train time per unit (~2.5s at 20Hz). Split across active tracks. */
 export const TRAIN_TICKS = 50;
+/** Research time per upgrade (~same as one unit; shares multi-track slowdown). */
+export const RESEARCH_TICKS = 50;
 
 /**
  * Rotate a model-local XZ offset into world XZ (Y-up yaw, matches render writeMatrix).
@@ -482,7 +489,7 @@ export function createBuilding(opts) {
     hasRally: 0,
     rallyX: 0,
     rallyZ: 0,
-    /** @type {{ kind: 'unit', id: string, unitType: number, count: number, progress: number }[]} */
+    /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
     tracks: [],
   };
 }
@@ -516,15 +523,32 @@ export function defaultRallyWorld(typeId, xF, zF, yawF) {
 }
 
 /**
+ * True when every trainable unit on this building is a flyer (e.g. perch → dirigible).
+ * Air rallies are straight-line — no ground A*.
+ * @param {string} typeId
+ */
+export function buildingTrainsOnlyFlyers(typeId) {
+  const units = BUILDING_MENUS[typeId]?.units;
+  if (!units?.length) return false;
+  for (let i = 0; i < units.length; i++) {
+    const ut = BUILDING_MENU_UNITS[units[i]];
+    if (ut == null || !isFlyer(ut)) return false;
+  }
+  return true;
+}
+
+/**
  * World-float polyline for a train rally: building → spawn door → A* → rally.
- * Falls back to a straight stem if the field is missing or A* finds nothing.
+ * Flyer buildings (perch) use a straight air stem. Falls back to a straight
+ * stem if the field is missing or A* finds nothing.
  * @param {object | null | undefined} field
  * @param {{ type: string, x: number, z: number, yaw?: number }} b world-float building
  * @param {number} rx
  * @param {number} rz
+ * @param {{ slowAware?: boolean }} [opts]
  * @returns {{ x: number, z: number }[]}
  */
-export function rallyPathWorldPoints(field, b, rx, rz) {
+export function rallyPathWorldPoints(field, b, rx, rz, opts = null) {
   const bx = b.x;
   const bz = b.z;
   const yaw = b.yaw ?? 0;
@@ -536,7 +560,8 @@ export function rallyPathWorldPoints(field, b, rx, rz) {
     pts.push({ x: spawn.x, z: spawn.z });
   }
 
-  if (!field) {
+  // Dirigibles / air units ignore ground blockers and slow — fly straight.
+  if (buildingTrainsOnlyFlyers(b.type) || !field) {
     pts.push({ x: rx, z: rz });
     return pts;
   }
@@ -556,7 +581,17 @@ export function rallyPathWorldPoints(field, b, rx, rz) {
     dz = snappedE.y;
   }
 
-  const n = findPath(field, sx, sz, dx, dz, _rallyWx, _rallyWy, MAX_WAYPOINTS);
+  const n = findPath(
+    field,
+    sx,
+    sz,
+    dx,
+    dz,
+    _rallyWx,
+    _rallyWy,
+    MAX_WAYPOINTS,
+    opts?.slowAware ? { slowAware: true } : null,
+  );
   if (n <= 0) {
     pts.push({ x: rx, z: rz });
     return pts;
@@ -753,6 +788,34 @@ export function applyQueueTrain(w, cmd) {
     b.tracks.push(track);
   }
   track.count = (track.count | 0) + 1;
+  w.buildingsDirty = 1;
+}
+
+/**
+ * Queue research on a building's upgrade track (one at a time per tech).
+ * Completes via buildingProductionSystem → grantTech.
+ * @param {object} w
+ * @param {{ playerId?: number, buildingIndex: number, techId: string }} cmd
+ */
+export function applyQueueResearch(w, cmd) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const bi = cmd.buildingIndex | 0;
+  if (bi < 0 || bi >= buildings.length) return;
+  const b = buildings[bi];
+  const playerId = (cmd.playerId ?? -1) | 0;
+  if ((b.owner | 0) !== playerId) return;
+  const techId = String(cmd.techId ?? '');
+  if (!TECH_BY_ID[techId]) return;
+  const menu = BUILDING_MENUS[b.type];
+  if (!menu?.upgrades?.includes(techId)) return;
+  if (ownerHasTech(w, playerId, TECH_BY_ID[techId])) return;
+  if (!b.tracks) b.tracks = [];
+  for (let i = 0; i < b.tracks.length; i++) {
+    const t = b.tracks[i];
+    if (t.kind === 'upgrade' && t.id === techId && (t.count | 0) > 0) return;
+  }
+  b.tracks.push({ kind: 'upgrade', id: techId, count: 1, progress: 0 });
   w.buildingsDirty = 1;
 }
 

@@ -1,0 +1,106 @@
+{
+  "sourceUrl": "/assets/models/moonwell.glb",
+  "version": 2,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "Material.018",
+      "baseColorFactor": [
+        0.026442956179380417,
+        0.026442956179380417,
+        0.026442956179380417,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.00005779233470093459,
+        0,
+        0.2320287823677063,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "Material.018",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 0,
+        "length": 1782,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 7128,
+        "length": 1782,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 14256,
+        "length": 1386,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 19800,
+        "length": 1188,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 24552,
+        "length": 198,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 25344,
+        "length": 198,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 26136,
+        "length": 66,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 26400,
+        "length": 132,
+        "type": "f32"
+      }
+    }
+  ]
+}

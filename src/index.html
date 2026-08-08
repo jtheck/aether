@@ -3,17 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
-  <title>Æther.Garden – Real-Time Strategy Game in the Browser</title>
-  <meta name="description" content="Play Aether Garden (Æther.Garden) in your browser: multiplayer real-time strategy with co-op adventure, 1v1, King of the Hill, and teams. Web install—RTS that runs anywhere.">
-  <meta name="keywords" content="garden, experience, interactive, strategy, multiplayer, rts, rtd, game, browser game, real-time strategy, co-op, 1v1">
+  <title>Æther.Garden – Free Browser RTS</title>
+  <meta name="description" content="Aether Garden is the New, Free RTS that runs in your browser. Fight for King of the Hill, battle 1v1, in Teams, or enjoy the Adventure, solo or cooperatively.">
+  <meta name="keywords" content="aether garden, browser rts, free to play, king of the hill, koth, multiplayer, real-time strategy, adventure, 1v1, teams">
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="Æther.Garden – Real-Time Strategy Game in the Browser" />
-  <meta property="og:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. Web install." />
+  <meta property="og:title" content="Aether Garden – Free Browser RTS" />
+  <meta property="og:description" content="Aether Garden is the New, Free RTS that runs in your browser. Fight for King of the Hill, battle 1v1, in Teams, or enjoy the Adventure, solo or cooperatively." />
   <meta property="og:url" content="https://aether.garden/" />
-  <meta property="og:image" content="https://aether.garden/icons/android-chrome-512x512.png" />
+  <meta property="og:image" content="https://aether.garden/icons/og-banner.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Æther.Garden – Real-Time Strategy Game in the Browser" />
-  <meta name="twitter:description" content="Play Aether Garden in your browser: multiplayer RTS with co-op adventure, 1v1, King of the Hill, and teams. Web install." />
+  <meta name="twitter:title" content="Aether Garden – Free Browser RTS" />
+  <meta name="twitter:description" content="Aether Garden is the New, Free RTS that runs in your browser. Fight for King of the Hill, battle 1v1, in Teams, or enjoy the Adventure, solo or cooperatively." />
+  <meta name="twitter:image" content="https://aether.garden/icons/og-banner.png" />
   <link rel="canonical" href="https://aether.garden/" />
 
   <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
@@ -42,11 +45,12 @@
     html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0f14; color: #cdd6e4; font-family: system-ui, sans-serif; }
     #canvas { display: block; width: 100%; height: 100%; touch-action: none; }
     #fallback { display: none; place-content: center; height: 100%; padding: 2rem; text-align: center; line-height: 1.6; }
-    #legend { position: fixed; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12px; opacity: 0.85; pointer-events: none; }
-    #legend .legend-item { display: inline-flex; align-items: center; gap: 6px; }
-    #legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    /* In-DOM for crawlers / screen readers; not a HUD element. */
+    #seo {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
     #status { position: fixed; left: 12px; top: 12px; z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; }
-    #hint { position: fixed; right: 12px; top: 12px; font-size: 12px; opacity: 0.65; pointer-events: none; text-align: right; line-height: 1.5; }
     #koth-controls { position: fixed; left: 12px; top: 40px; display: flex; gap: 8px; z-index: 10001; }
     /* Transparent hit-layer eats mouse/touch; logo only is visible over the scene. */
     #boot-splash {
@@ -56,7 +60,6 @@
       margin: 0;
       background: transparent;
       cursor: default;
-      transition: opacity 0.55s ease;
     }
     #boot-splash img {
       position: absolute;
@@ -65,19 +68,62 @@
       transform: translate(-50%, -50%);
       width: min(42vw, 214px);
       height: auto;
-      /* PNG is white-on-black — black drops out over the board. */
+      opacity: 1;
+      /* White-on-black PNG — screen blend drops the black over the board. */
       mix-blend-mode: screen;
       pointer-events: none;
       user-select: none;
       -webkit-user-drag: none;
     }
-    #boot-splash.is-leaving {
-      opacity: 0;
-      pointer-events: none;
+    /* Side menu — accent colours match v1's rt.css (aqua hover, darkmagenta active). */
+    #menu_b { position: fixed; top: 0; left: 0; width: 24px; height: 24px; padding: 4px; fill: #fff; opacity: .42; cursor: pointer; z-index: 10003; }
+    #menu_b:hover { fill: aqua; opacity: 1; }
+    #menu_b:active { fill: darkmagenta; }
+    #side_menu { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; z-index: 10002; display: none; flex-direction: column; box-sizing: border-box; padding: 34px 14px 44px; background: #0c0f14; border-right: 1px solid #2a3140; font-size: 13px; }
+    #side_menu.is-open { display: flex; }
+    #side_menu h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+    #side_menu .page { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; }
+    #side_menu .page.is-active { display: block; }
+    #side_menu .row { margin-bottom: 14px; }
+    #side_menu label { display: block; margin-bottom: 4px; opacity: .8; }
+    #side_menu input, #side_menu select { margin: 0; }
+    #side_menu input[type="text"], #side_menu select { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px; font: inherit; }
+    #side_menu input[type="range"] { width: 100%; }
+    #side_menu .value { float: right; opacity: .7; }
+    #side_menu .note { min-height: 15px; font-size: 11px; color: #e0b050; }
+    #side_menu .btn {
+      display: block; width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 8px 10px;
+      background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px;
+      font: inherit; text-align: left; cursor: pointer;
     }
+    #side_menu .btn:hover { border-color: aqua; color: aqua; }
+    #side_menu .btn:active { border-color: darkmagenta; color: darkmagenta; }
+    #side_menu .btn:disabled { opacity: .45; cursor: default; border-color: #2a3140; color: inherit; }
+    #settings_b { position: absolute; right: 10px; bottom: 8px; width: 28px; height: 28px; stroke: #fff; fill: none; opacity: .55; cursor: pointer; }
+    #settings_b:hover { stroke: aqua; opacity: 1; }
+    #settings_b:active { stroke: darkmagenta; }
+    #side_menu .about { margin-top: 8px; line-height: 1.45; }
+    #side_menu .about h4 { margin: 10px 0 8px; font-size: 13px; font-weight: 600; }
+    #side_menu .about hr { width: 60%; border: 0; border-top: 1px solid #2a3140; margin: 14px 0; }
+    /* v1 link buttons — corner brackets, aqua / darkmagenta */
+    #side_menu .about > a {
+      text-decoration: none; color: #fff; white-space: nowrap; font-size: .8em;
+    }
+    #side_menu .about > a:hover { color: aqua; }
+    #side_menu .about > a:active { color: darkmagenta; }
+    #side_menu .about > a:visited { color: #fff; }
+    #side_menu .about > a:before { content: "\300C\000A0"; }
+    #side_menu .about > a:after { content: "\000A0\300D"; }
+    #side_menu #privacy_poli {
+      font-size: .5em; text-align: right; height: 42px; margin: 24px; margin-top: -8px; margin-bottom: -3px;
+      color: lightgrey; background: black; overflow: auto;
+    }
+    #side_menu .about .credit { font-size: .7em; }
   </style>
 </head>
 <body>
+  <div id="seo"><h1>Aether Garden</h1></div>
+  <div style="position:absolute;bottom: 9px;left: 9px;color: #9999;z-index: 9;font-size: 9px;user-select: none;font-family: georgia;">v 0.4</div>
   <div id="boot-splash" aria-hidden="true">
     <img src="./icons/splash.png" alt="" width="512" height="512" decoding="sync" fetchpriority="high" />
   </div>
@@ -87,9 +133,106 @@
     <button id="koth-start">Start or Join Lobby</button>
     <button id="koth-join" hidden>Join Match</button>
   </div>
-  <div id="hint">LMB select / box-select · dbl-click or Ctrl-click unit = all of type<br>LMB ground attack-move · double-tap ground force-move · LMB enemy attack<br>RMB pan · double-RMB clear · wheel zoom · Shift/RMB+wheel rotate<br>ESDF/arrows pan · W/R rotate · Q/T zoom · J join · G tile grid · H pick hitboxes · B shadows · F9 explorer<br>?solo=1 · ?tiles=1 · ?hitboxes=1 · ?shadows=0 · ?stress=1000 · ?animStress=32 · ?koth=0</div>
+  <div id="menu_b" title="Menu" hidden>
+    <svg width="100%" height="100%" viewBox="0 0 26 26"><path style="fill-opacity:1;stroke:none;stroke-width:.260162;stroke-dasharray:none;stroke-opacity:.998532" d="M13.834 7.576s9.03-.316 9.707-.854c.676-.539 1.076-1.46 1.076-1.46s-.348 2.096-.35 3.038c0 .94.495 2.816.495 2.816s-.975-1.292-1.452-1.603c-.476-.31-8.693-.457-8.693-.457l-1.67-.002s-9.018.19-9.7.37c-.68.181-1.988 1.51-1.988 1.51s.51-1.739.63-2.693c.12-.953-.65-2.89-.65-2.89s1.323 1.115 2.314 1.701c.99.586 8.564.506 8.564.506zM1.121 14.024s.755 1.26 1.838 1.938c1.082.676 9.677.33 9.677.33l1.674.038s8.009-.135 8.81-.38c.798-.244 1.669-1.478 1.669-1.478s-.375 2.046-.353 2.954c.02.907.443 2.919.443 2.919s-.649-1.273-1.469-1.968c-.822-.696-9.916-.591-9.916-.591l-1.711-.004s-7.573.677-8.35 1.154c-.776.477-2.09 1.801-2.09 1.801s.819-2.034.668-3.154c-.15-1.12-.89-3.559-.89-3.559z"/></svg>
+  </div>
+  <div id="side_menu">
+    <div class="page is-active" data-page="main">
+      <h2>Æther.Garden</h2>
+      <div class="row" data-profile></div>
+      <div class="row">
+        <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
+        <div class="note">Offline match — same armies as a live game.</div>
+      </div>
+    </div>
+    <div class="page" data-page="settings">
+      <h2>Settings</h2>
+      <div class="row">
+        <label for="shadow_slider">Shadows <span class="value" id="shadow_value"></span></label>
+        <input type="range" id="shadow_slider" min="0" max="3" step="1">
+        <div class="note" id="shadow_note"></div>
+      </div>
+      <div class="row">
+        <label for="fx_slider">FX <span class="value" id="fx_value"></span></label>
+        <input type="range" id="fx_slider" min="0" max="3" step="1">
+        <div class="note" id="fx_note"></div>
+      </div>
+      <div class="row">
+        <label for="name_input">Player name</label>
+        <input type="text" id="name_input" maxlength="24" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="row">
+        <label for="color_picker">Colour</label>
+        <select id="color_picker">
+          <option value="#FFFFFF">White</option>
+          <option value="#FF0000">Red</option>
+          <option value="#0000FF">Blue</option>
+          <option value="#00FFFF">Teal</option>
+          <option value="#800080">Purple</option>
+          <option value="#FFFF00">Yellow</option>
+          <option value="#FFA500">Orange</option>
+          <option value="#008000">Green</option>
+        </select>
+      </div>
+      <div class="about">
+        <hr>
+        <h4>About</h4>
+        Aether Garden is the New, Free RTS that runs in your browser. Fight for King of the Hill, battle 1v1, in Teams, or enjoy the Adventure, solo or cooperatively.
+        <br><br>
+        <a href="https://aether.garden/forge" target="_blank" title="Field Editor">Forge</a>
+        <br><br><br>
+        Privacy
+        <div id="privacy_poli"><br>
+          This Privacy Policy governs the manner in which Aether.Garden collects, uses, maintains and discloses information collected from users (each, a "User") of the <a href="https://aether.garden">Aether.Garden</a> website ("Site"). This privacy policy applies to the Site and all products and services offered by Aether.Garden.
+          <br><br><b>Personal identification information</b><br><br>
+          We may collect personal identification information from Users in a variety of ways, including, but not limited to, when Users visit our site, register on the site, and in connection with other activities, services, features or resources we make available on our Site. Users may be asked for, as appropriate, name, e-mail address. We will collect personal identification information from Users only if they voluntarily submit such information to us. Users can always refuse to supply personally identification information, except that it may prevent them from engaging in certain Site related activities.
+          <br><br><b>Non-personal identification information</b><br><br>
+          We may collect non-personal identification information about Users whenever they interact with our Site. Non-personal identification information may include the browser name, the type of computer and technical information about Users means of connection to our Site, such as the operating system and the Internet service providers utilized and other similar information.
+          <br><br><b>Web browser cookies</b><br><br>
+          Our Site may use "cookies" to enhance User experience. User's web browser places cookies on their hard drive for record-keeping purposes and sometimes to track information about them. User may choose to set their web browser to refuse cookies, or to alert you when cookies are being sent. If they do so, note that some parts of the Site may not function properly.
+          <br><br><b>How we use collected information</b><br><br>
+          Aether.Garden may collect and use Users personal information for the following purposes:<br>
+          <ul><li>
+              <i>- To improve customer service</i><br>
+              Information you provide helps us respond to your customer service requests and support needs more efficiently.
+            </li><li>
+              <i>- To personalize user experience</i><br>
+              We may use information in the aggregate to understand how our Users as a group use the services and resources provided on our Site.
+            </li><li>
+              <i>- To improve our Site</i><br>
+              We may use feedback you provide to improve our products and services.
+            </li><li>
+              <i>- To send periodic e-mails</i><br>
+              We may use the e-mail address to respond to their inquiries, questions, and/or other requests.
+          </li></ul>
+          <b>How we protect your information</b><br><br>
+          We adopt appropriate data collection, storage and processing practices and security measures to protect against unauthorized access, alteration, disclosure or destruction of your personal information, username, password, transaction information and data stored on our Site.
+          <br><br>Sensitive and private data exchange between the Site and its Users happens over a SSL secured communication channel and is encrypted and protected with digital signatures.
+          <br><br><b>Sharing your personal information</b><br><br>
+          We do not sell, trade, or rent Users personal identification information to others. We may share generic aggregated demographic information not linked to any personal identification information regarding visitors and users with our business partners, trusted affiliates and advertisers for the purposes outlined above.
+          <br><br><b>Compliance with children's online privacy protection act</b><br><br>
+          Protecting the privacy of the very young is especially important. For that reason, we never collect or maintain information at our Site from those we actually know are under 13, and no part of our website is structured to attract anyone under 13.
+          <br><br><b>Changes to this privacy policy</b><br><br>
+          Aether.Garden has the discretion to update this privacy policy at any time. When we do, we will revise the updated date at the bottom of this page. We encourage Users to frequently check this page for any changes to stay informed about how we are helping to protect the personal information we collect. You acknowledge and agree that it is your responsibility to review this privacy policy periodically and become aware of modifications.
+          <br><br><b>Your acceptance of these terms</b><br><br>
+          By using this Site, you signify your acceptance of this policy. If you do not agree to this policy, please do not use our Site. Your continued use of the Site following the posting of changes to this policy will be deemed your acceptance of those changes.
+          <br><br><b>Contacting us</b><br><br>
+          If you have any questions about this Privacy Policy, the practices of this site, or your dealings with this site, please contact us at:
+          <br>Aether.Garden<br>aethergarden123@pm.me<br><br>
+          This document was last updated on August 23, 2025
+          <br><br>
+        </div>
+        <a href="mailto:aethergarden123@pm.me" title="Contact e-mail">Contact</a>
+        <hr>
+        ÆæXi0m
+        <span class="credit">©'26 Aether.Garden</span>
+      </div>
+    </div>
+    <div id="settings_b" title="Settings">
+      <svg width="100%" height="100%" viewBox="0 0 99 99"><path style="fill:none;stroke-width:5.7247;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1" d="M19.848 32.659c-1.806-1.905-4.302-3.979-3.715-6.864.587-2.886 3.377-4.255 5.047-6.328 2.445-2.1 4.659-5.56 7.23-6.445 2.572-.885 4.303.334 5.625 2.136 1.444 2.713 4.159.962 5.743-.022 1.584-.983.24-3.364.553-4.91.847-2.783 3.137-3.896 6.53-3.612 3.393.285 8.163-.171 12.152.131 2.662.855 3.88 3.565 3.551 6.178-.847 2.877 2.343 3.544 4.249 3.831 1.906.287 2.703-3.106 4.718-3.6 2.318-.704 4.694.416 6.074 2.332 2.76 2.844 5.757 5.526 8.373 8.47 1.432 2.208.843 5.306-1.37 6.84-2.75 1.304-.863 3.523-.202 5.424.56 1.77 3.223.504 4.69.965 2.867.574 4.58 3.565 4.027 6.362-.087 4.144.173 8.37-.129 12.463-.903 2.728-3.739 3.794-6.36 3.4-2.815-.855-3.66 2.272-3.701 4.4-.044 2.129 3.832 3.143 3.715 6.158-.116 3.015-3.148 4.714-4.856 6.902-2.183 2.054-4.186 4.389-6.481 6.268-2.39 1.178-5.253.166-6.771-1.984-1.428-2.729-3.793.123-5.917.4M19.98 80.1c-5.245 1.61-7.395.366-8.912-3.324-1.517-3.69-5.408-9.343-.99-11.256 4.418-1.913 1.252-5.106-2.313-5.849-3.565-.743-1.383-5.87-.649-8.652.595-3.907 3.17-8.828 7.766-7.428 4.596 1.401 2.93-3.363 1.658-6.44-1.272-3.076 3.584-4.967 6.12-6.444 2.633-1.203 6.81-5.717 8.635-2.048 1.825 3.669 6.523 4.471 7.034.12.512-4.351 5.305-2.722 7.898-1.583 2.61.841 5.56 1.053 7.88 2.547 2.932 2.642-.63 8.371 3.075 8.724 3.705.354 5.675-3.05 7.805-.139 1.775 3.475 4.201 6.704 5.57 10.36.73 4.216-6.377 5.791-3.895 8.755 2.481 2.963 6.003 1.783 5.552 5.261-1.079 3.69-1.956 7.472-3.179 11.132-2.418 3.981-8.885-.369-9.17 3.624-.287 3.992 3.078 6.539-.7 8.185-3.041 1.654-6.004 3.484-9.102 5.008-4.584 1.5-6.762-6.63-9.566-3.565-2.803 3.065-1.815 5.694-4.947 5.31-3.62-.996-7.274-1.972-11.295-3.579-4.021-1.606.97-10.329-4.275-8.72zm30.24-22.711c.178 1.042.34 2.142.14 3.18-.377 1.97-.998 3.998-2.263 5.56-.794.98-1.716 1.896-2.78 2.576-2.67 1.707-6.104 2.281-9.212 1.467h0c-1.337-.451-2.836-.829-3.865-1.813-1.038-.991-2.251-1.885-2.992-3.108-1.627-2.687-2.132-6.068-1.269-9.143 1.01-3.593 3.887-6.46 7.381-7.759 1.176-.437 2.344-.556 3.568-.529 1.275.03 2.572.092 3.785.513"/></svg>
+    </div>
+  </div>
   <div id="match-over" style="display:none;position:fixed;inset:0;place-content:center;background:rgba(0,0,0,0.55);font-size:1.4rem;pointer-events:none;"></div>
-  <div id="legend"></div>
   <div id="fallback">
     <div>
       <p><strong>WebGPU required</strong></p>

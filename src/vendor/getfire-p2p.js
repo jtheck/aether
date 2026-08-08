@@ -108,7 +108,11 @@
       }
     }
 
-    const p2pDebug = config.devMode === true;
+    // Quiet by default — `?debug=p2p` or config.debug for signaling/lobby chatter.
+    const p2pDebug =
+      config.debug === true ||
+      (typeof location !== 'undefined' &&
+        new URLSearchParams(location.search).get('debug') === 'p2p');
     function p2pLog(...args) {
       if (p2pDebug) console.log('[GetFire P2P]', ...args);
     }
@@ -168,7 +172,7 @@
     // Initialize ActionCable consumer
     function initializeConsumer() {
       GETFIREP2P.consumer = ActionCable.createConsumer(SIGNALING_URL);
-      console.log('[GetFire P2P] signaling →', SIGNALING_URL);
+      p2pLog('signaling →', SIGNALING_URL);
     }
 
     function consumerUrlOk() {
@@ -193,12 +197,12 @@
       }
       const canConnect = ssl || config.devMode === true || isLocalDevHost();
       if (!canConnect) {
-        console.log('P2P Connection failed: SSL Required.');
+        console.error('[GetFire P2P] Connection failed: SSL Required.');
         return false;
       }
       initializeConsumer();
       GETFIREP2P.ready = true;
-      console.log('GetFire P2P ready! User ID:', localUserId);
+      p2pLog('ready! User ID:', localUserId);
       return true;
     }
 
@@ -222,7 +226,7 @@
         {
           connected() {
             lobbyReady.set(lobbyName, true);
-            console.log('[GetFire P2P] lobby connected:', lobbyName, autoMatch ? '' : '(discovery)');
+            p2pLog('lobby connected:', lobbyName, autoMatch ? '' : '(discovery)');
             onMatchLobbyConnected(lobbyName);
             this.perform('speak', {
               game_lobby: lobbyName,
@@ -440,7 +444,7 @@
         if (ice === 'connected' || ice === 'completed') {
           peerData.markConnected();
         } else if (ice === 'failed') {
-          console.log('⚠️ Having trouble connecting? This might be due to network restrictions.');
+          p2pLog('ICE failed — possible network restrictions', peerId?.slice(-8));
           onPeerLinkFailed(peerId);
         }
       };
@@ -452,7 +456,7 @@
             ice: peerConnection.iceConnectionState,
             conn: peerConnection.connectionState,
           });
-          console.log('Having trouble connecting? This might be due to network restrictions.');
+          p2pLog('connect timeout — possible network restrictions', peerId?.slice(-8));
           onPeerLinkFailed(peerId);
         }
       }, ICE_CONNECT_TIMEOUT_MS);

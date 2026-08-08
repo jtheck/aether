@@ -266,10 +266,6 @@ export async function ensureShadowModeDefault() {
   if (fallback) mode = 0;
   else mode = shadowModeForAdapter(info);
 
-  console.info(
-    `[settings] shadow default ${SHADOW_LABELS[mode]} for ${info?.vendor || 'unknown gpu'}`
-    + `${info?.architecture ? `/${info.architecture}` : ''}`,
-  );
   return setShadowMode(mode);
 }
 
@@ -285,10 +281,6 @@ export async function ensureFxModeDefault() {
   if (fallback) mode = 0;
   else mode = fxModeForAdapter(info);
 
-  console.info(
-    `[settings] fx default ${FX_LABELS[mode]} for ${info?.vendor || 'unknown gpu'}`
-    + `${info?.architecture ? `/${info.architecture}` : ''}`,
-  );
   return setFxMode(mode);
 }
 

@@ -3147,7 +3147,7 @@ export function createKothShard(options = {}) {
   }
 
   function onPeerConnected(peerId) {
-    console.log('[KOTH] peer connected', shortId(peerId));
+    if (DEBUG_KOTH) console.info('[KOTH] peer connected', shortId(peerId));
     activeDialTarget = null;
     clearConnectFallbackTimer();
     clearBroadcastCatchupTimer();

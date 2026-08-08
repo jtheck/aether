@@ -122,18 +122,6 @@ function worldPositionsForSync(state, count) {
   return { x, z };
 }
 
-function logArmyRenderState(renderer, session, label) {
-  const world = session.state;
-  const count = session.count;
-  const batches = renderer.debugBatches?.(count, world.type, world.owner);
-  console.info(`[render] ${label}`, {
-    count,
-    p0: livingByOwner(world, 0),
-    p1: livingByOwner(world, 1),
-    batches,
-  });
-}
-
 function rebuildRendererEntities(renderer, session) {
   const count = session.count;
   const world = session.state;
@@ -151,12 +139,6 @@ function rebuildRendererEntities(renderer, session) {
     if (tiMismatch) {
       console.warn('[render] thin-instance count below entity mapping', dbg);
     }
-    console.info('[render] entity rebuild', {
-      count,
-      p0: livingByOwner(world, 0),
-      p1: livingByOwner(world, 1),
-      batches: dbg?.batches,
-    });
   }
   return count;
 }
@@ -170,6 +152,7 @@ function forceRendererSync(ctx) {
 }
 
 async function main() {
+  console.log("©'26 Aether.Garden");
   const canvas = document.getElementById('canvas');
   initAudio();
 
@@ -598,9 +581,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     syncRallyFlagMarkers();
     if (session.field) await renderer.setField?.(session.field);
     updateColors();
-    if (matchMeta.mode === 'koth' || matchMeta.mode === 'solo') {
-      logArmyRenderState(renderer, session, 'world rebuilt');
-    }
   };
 
   session.onBuildingsChanged = (list) => {
@@ -682,7 +662,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   updateColors();
-  updateLegend();
 
   /** @type {string | null} */
   let placingType = null;
@@ -900,10 +879,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setBuildingRadialCompact?.(Boolean(placingType));
   }
 
-  // Locked until splash fades — camera + commands stay quiet together.
+  // Locked until boot/match ready — camera + commands stay quiet together.
   let bootInteractive = false;
+  let menuUnlocked = false;
   const setInteractive = (on) => {
     bootInteractive = !!on;
+    // Menu button: hide only for cold boot, not match-load splash.
+    if (bootInteractive && !menuUnlocked) {
+      menuUnlocked = true;
+      sideMenu.setAvailable?.(true);
+    }
   };
   let inputApi = setupInput({
     canvas,
@@ -1745,8 +1730,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   // Engine already started after createRenderer for progressive first paint.
   await renderer.start();
 
-  // Splash logo sits on top while Phase B loads; don't block bootGame return.
-  // Fade + unlock once units/buildings settle (scene visible underneath the whole time).
+  // Splash stays up through the first heavy frames; fade starts after settle.
   const unlock = () => {
     if (bootInteractive) return;
     setInteractive(true);
@@ -1840,7 +1824,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     console.error('[live] match rebuild failed', err);
     setStatusText('Match load failed');
     ctx.setInteractive?.(true);
-    dismissBootSplash();
+    dismissBootSplash({ immediate: true });
     throw err;
   }
   setArmyPerSide(cfg.armyPerSide ?? 0);
@@ -1856,17 +1840,6 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 
   forceRendererSync(ctx);
   syncPresentation(ctx, cfg, { skipRenderSync: true });
-
-  if (cfg.mode === 'koth') {
-    const world = ctx.session.state;
-    console.info('[live] world ready', {
-      activeSlots,
-      count: ctx.session.count,
-      p0: livingByOwner(world, 0),
-      p1: livingByOwner(world, 1),
-      localSolo,
-    });
-  }
 
   // The live world is rebuilt and confirmedTick is back at 0 for this match;
   // seed the lockstep confirm handshake so the sim can leave tick 0.
@@ -2006,16 +1979,6 @@ function useKothAi(bootCfg, stress, animStress, solo) {
   return [AI_OWNER];
 }
 
-function updateLegend() {
-  const el = document.getElementById('legend');
-  if (!el) return;
-  el.innerHTML = PLAYER_ARMY.map(({ type }) => {
-    const d = UNIT_DEFS[type];
-    const rgb = d.color.map((v) => Math.round(v * 255)).join(',');
-    return `<span class="legend-item"><i style="background:rgb(${rgb})"></i>${d.name}</span>`;
-  }).join('');
-}
-
 function setStatusText(text) {
   const el = document.getElementById('status');
   if (el) el.textContent = text;
@@ -2071,44 +2034,81 @@ async function waitForWebGPU(timeoutMs = 3000) {
   return !!navigator.gpu;
 }
 
-function ensureBootSplashEl() {
-  let el = document.getElementById('boot-splash');
-  if (el) return el;
-  el = document.createElement('div');
-  el.id = 'boot-splash';
-  el.setAttribute('aria-hidden', 'true');
-  el.innerHTML =
-    '<img src="./icons/splash.png" alt="" width="512" height="512" decoding="async" />';
-  document.body.appendChild(el);
-  return el;
-}
+// Splash: hold opaque through the ready hitch, then fade. Starting the dissolve
+// on the same tick as scene-ready starves it of frames.
+const SPLASH_FADE_MS = 550;
+const SPLASH_SETTLE_FRAMES = 14;
+const SPLASH_SETTLE_MAX_MS = 900;
 
-/** Show splash over the board while a match teardown/rebuild runs. */
 function showMatchSplash() {
-  const el = ensureBootSplashEl();
-  el.classList.remove('is-leaving');
-  el.style.opacity = '';
+  let el = document.getElementById('boot-splash');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'boot-splash';
+    el.setAttribute('aria-hidden', 'true');
+    el.innerHTML =
+      '<img src="./icons/splash.png" alt="" width="512" height="512" decoding="async" />';
+    document.body.appendChild(el);
+  }
+  delete el.dataset.leaving;
+  delete el.dataset.settle;
   el.style.pointerEvents = '';
+  const img = el.querySelector('img');
+  if (img) {
+    img.getAnimations?.().forEach((a) => a.cancel());
+    img.style.opacity = '1';
+  }
 }
 
-function dismissBootSplash() {
+/** @param {{ immediate?: boolean }} [opts] */
+function dismissBootSplash(opts = {}) {
   const el = document.getElementById('boot-splash');
-  if (!el || el.classList.contains('is-leaving')) return;
-  let done = false;
-  const finish = () => {
-    if (done) return;
-    done = true;
+  if (!el) return;
+  if (opts.immediate) {
+    el.dataset.leaving = '1';
     el.remove();
-  };
-  // Stop eating input immediately; opacity fade is visual only.
+    return;
+  }
+  if (el.dataset.leaving === '1' || el.dataset.settle === '1') return;
+  el.dataset.settle = '1';
   el.style.pointerEvents = 'none';
-  el.classList.add('is-leaving');
-  el.addEventListener('transitionend', finish, { once: true });
-  setTimeout(finish, 800);
+
+  let frames = 0;
+  const t0 = performance.now();
+  const tick = () => {
+    if (!el.isConnected || el.dataset.leaving === '1' || el.dataset.settle !== '1') return;
+    frames += 1;
+    if (frames < SPLASH_SETTLE_FRAMES && performance.now() - t0 < SPLASH_SETTLE_MAX_MS) {
+      requestAnimationFrame(tick);
+      return;
+    }
+    el.dataset.leaving = '1';
+    delete el.dataset.settle;
+    const img = el.querySelector('img') || el;
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      el.remove();
+    };
+    if (typeof img.animate === 'function') {
+      img.animate(
+        [{ opacity: 1 }, { opacity: 0 }],
+        { duration: SPLASH_FADE_MS, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' },
+      ).finished.then(finish, finish);
+    } else {
+      img.style.transition = `opacity ${SPLASH_FADE_MS}ms cubic-bezier(0.4, 0, 1, 1)`;
+      void img.offsetWidth;
+      img.style.opacity = '0';
+      img.addEventListener('transitionend', finish, { once: true });
+    }
+    setTimeout(finish, SPLASH_FADE_MS + 200);
+  };
+  requestAnimationFrame(tick);
 }
 
 function showFallback(msg) {
-  dismissBootSplash();
+  dismissBootSplash({ immediate: true });
   const el = document.getElementById('fallback');
   if (!el) return;
   el.style.display = 'grid';

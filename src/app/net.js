@@ -78,7 +78,6 @@ export function createNetMatch(options = {}) {
     matchDone = true;
     clearTimeout(matchTimeout);
     if (rejoinTimer) clearInterval(rejoinTimer);
-    console.log('[Aether net] match ready — player', config.localPlayerId, config.isHost ? '(host)' : '(guest)');
     matchResolve(config);
   }
 
@@ -90,7 +89,6 @@ export function createNetMatch(options = {}) {
 
     const myId = localUserId;
     if (myId > theirId) {
-      console.log('[Aether net] requestMatch →', shortId(theirId));
       p2p.requestMatch(theirId);
       return;
     }
@@ -98,7 +96,6 @@ export function createNetMatch(options = {}) {
     setTimeout(() => {
       const now = p2p.getConnectedPeers?.() ?? [];
       if (!now.includes(theirId) && !matchDone) {
-        console.log('[Aether net] fallback requestMatch →', shortId(theirId));
         p2p.requestMatch(theirId);
       }
     }, 3000);
@@ -111,7 +108,6 @@ export function createNetMatch(options = {}) {
         onStatus(`In lobby — id …${shortId(localUserId)} — open 2nd tab`);
         return;
       }
-      console.log('[Aether net] lobby:', data.type, shortId(data.from));
       onStatus(`Found peer …${shortId(data.from)} — connecting…`);
       setTimeout(() => tryMatchWithPeer(data.from), 300);
     }
@@ -167,7 +163,6 @@ export function createNetMatch(options = {}) {
 
   function onPeerConnected(id) {
     peerId = id;
-    console.log('[Aether net] WebRTC connected →', shortId(id));
     onStatus(`P2P linked …${shortId(id)} — starting…`);
 
     if (!localUserId) localUserId = p2p.getUserId();
@@ -220,7 +215,6 @@ export function createNetMatch(options = {}) {
       return;
     }
     localUserId = p2p.getUserId?.() ?? null;
-    console.log('[Aether net] joining lobby', lobby, 'as', shortId(localUserId));
     p2p.joinMatchLobby?.(lobby);
     onStatus(`Matching in ${lobby}… (open another tab)`);
 

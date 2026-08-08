@@ -630,7 +630,9 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
  */
 export async function createRenderer(canvas, capacity, opts = {}) {
   const bootT0 = performance.now();
+  const bootDebug = new URLSearchParams(location.search).get('debug') === 'boot';
   const bootLog = (label) => {
+    if (!bootDebug) return;
     console.info(`[boot] ${label} +${(performance.now() - bootT0).toFixed(0)}ms`);
   };
   const types = opts.types;
@@ -2811,7 +2813,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   let engineStarted = false;
 
-  /** Resolves when heavy boot assets are in — safe to unlock input / fade splash. */
+  /** Resolves when heavy boot assets are in — safe to unlock input. */
   let resolveInteractive = /** @type {(v?: void) => void} */ (() => {});
   const interactiveReady = new Promise((resolve) => {
     resolveInteractive = resolve;

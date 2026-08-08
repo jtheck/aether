@@ -12,7 +12,7 @@ import { createTouchAdapter } from './input/touchAdapter.js';
  * @param {object|(() => object)} opts.world
  * @param {Uint8Array} opts.selected
  * @param {number} opts.localPlayerId
- * @param {(i: number) => {x:number,y:number,z:number}} opts.getUnitWorldPos
+ * @param {(i: number, out: {x:number,y:number,z:number}) => {x:number,y:number,z:number}} opts.getUnitWorldPos
  * @param {(cmd: object) => void} opts.enqueueCommand
  * @param {() => void} [opts.onSelectionChanged]
  * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]

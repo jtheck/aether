@@ -3,12 +3,19 @@
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
-import { snapBuildingYaw } from '../../sim/buildings.js';
+import { snapBuildingYaw, BUILDING_FOOTPRINTS } from '../../sim/buildings.js';
 import { MAX_ENTITIES } from '../../sim/world.js';
-import { isMechanical, isTransport, UNIT } from '../../sim/unitTypes.js';
+import { isMechanical, isTransport, UNIT, getUnitDef } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
+import { TILE_SIZE_F } from '../../sim/field.js';
+import { USE_GPU_PICK } from '../../render/pickMode.js';
+
+/** Debug-sphere-equivalent minimum pick height for buildings/agoras (world units). */
+const BUILDING_PICK_MIN_Y = 2.5;
+/** Reused empty hit list — never mutate. */
+const EMPTY_HITS = Object.freeze([]);
 
 /** v1 lasso drag threshold. */
 export const DRAG_THRESHOLD_PX = 25;
@@ -27,7 +34,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {object|(() => object)} opts.world
  * @param {Uint8Array} opts.selected
  * @param {number} opts.localPlayerId
- * @param {(i: number) => {x:number,y:number,z:number}} opts.getUnitWorldPos
+ * @param {(i: number, out: {x:number,y:number,z:number}) => {x:number,y:number,z:number}} opts.getUnitWorldPos
  * @param {(cmd: object) => void} opts.enqueueCommand
  * @param {() => void} [opts.onSelectionChanged]
  * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]
@@ -252,11 +259,111 @@ export function createGameInput(opts) {
     }
   }
 
+  // --- CPU pick scratch (no per-click allocations on the live path) ---
+  /** @type {{ id: number, x: number, y: number, z: number, r: number }[]} */
+  const unitSpherePool = [];
+  /** @type {{ id: { kind: 'agora' | 'building', index: number }, x: number, y: number, z: number, r: number }[]} */
+  const buildingSpherePool = [];
+  const unitHitIds = new Int32Array(MAX_ENTITIES);
+  const unitHitTs = new Float32Array(MAX_ENTITIES);
+  const resolvedHitIds = [];
+  const posScratch = { x: 0, y: 0, z: 0 };
+  const seenStamp = new Uint32Array(MAX_ENTITIES);
+  let seenGen = 1;
+
+  function beginSeen() {
+    seenGen++;
+    if (seenGen === 0xffffffff) {
+      seenStamp.fill(0);
+      seenGen = 1;
+    }
+  }
+
+  /** Fill unitSpherePool; returns live count. */
+  function fillUnitPickSpheres() {
+    const world = getWorld();
+    let n = 0;
+    for (let i = 0; i < world.count; i++) {
+      if (!world.alive[i]) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      const def = getUnitDef(world.type[i]);
+      getUnitWorldPos(i, posScratch);
+      let sp = unitSpherePool[n];
+      if (!sp) unitSpherePool[n] = sp = { id: 0, x: 0, y: 0, z: 0, r: 0 };
+      sp.id = i;
+      sp.x = posScratch.x;
+      sp.y = posScratch.y;
+      sp.z = posScratch.z;
+      sp.r = def?.pickRadius ?? 1.8;
+      n++;
+    }
+    return n;
+  }
+
+  /** Half the footprint diagonal (world units) — a tight-ish circle around the pad. */
+  function buildingPickRadius(typeKey) {
+    const fp = BUILDING_FOOTPRINTS[typeKey];
+    if (!fp) return 3;
+    return 0.5 * Math.hypot(fp.w, fp.h) * TILE_SIZE_F;
+  }
+
+  /** Fill buildingSpherePool (own structures only); returns live count. */
+  function fillBuildingPickSpheres() {
+    let n = 0;
+    const agoras = getAgoras?.() ?? [];
+    for (let i = 0; i < agoras.length; i++) {
+      const a = agoras[i];
+      if ((a.owner | 0) !== localPlayerId) continue;
+      const r = buildingPickRadius('agora');
+      let sp = buildingSpherePool[n];
+      if (!sp) {
+        buildingSpherePool[n] = sp = {
+          id: { kind: 'agora', index: 0 },
+          x: 0,
+          y: 0,
+          z: 0,
+          r: 0,
+        };
+      }
+      sp.id.kind = 'agora';
+      sp.id.index = i;
+      sp.x = a.x;
+      sp.y = Math.max(BUILDING_PICK_MIN_Y, r * 0.6);
+      sp.z = a.z;
+      sp.r = r;
+      n++;
+    }
+    const buildings = getBuildings?.() ?? [];
+    for (let i = 0; i < buildings.length; i++) {
+      const b = buildings[i];
+      if ((b.owner | 0) !== localPlayerId) continue;
+      const r = buildingPickRadius(b.type);
+      let sp = buildingSpherePool[n];
+      if (!sp) {
+        buildingSpherePool[n] = sp = {
+          id: { kind: 'building', index: 0 },
+          x: 0,
+          y: 0,
+          z: 0,
+          r: 0,
+        };
+      }
+      sp.id.kind = 'building';
+      sp.id.index = i;
+      sp.x = b.x;
+      sp.y = Math.max(BUILDING_PICK_MIN_Y, r * 0.6);
+      sp.z = b.z;
+      sp.r = r;
+      n++;
+    }
+    return n;
+  }
+
   /**
    * GPU mesh pick → alive entity id, or -1.
-   * Passengers resolve to their transport (clicking the deck = click the vehicle).
+   * Kept for USE_GPU_PICK / dumpPickBench — not the live path.
    */
-  async function pickUnitAt(clientX, clientY) {
+  async function pickUnitAtGpu(clientX, clientY) {
     if (!renderer.pickUnit) return -1;
     const id = await renderer.pickUnit(clientX, clientY);
     if (id < 0) return -1;
@@ -270,10 +377,62 @@ export function createGameInput(opts) {
   }
 
   /**
-   * GPU mesh pick → own agora / placeable under the cursor (actual mesh), or null.
-   * @returns {Promise<{ kind: 'agora' | 'building', index: number } | null>}
+   * CPU ray-vs-sphere → every alive entity under the ray, nearest first.
+   * Passengers resolve to their transport (clicking the deck = click the vehicle).
+   * @param {object | null} ray
+   * @returns {number[]}
    */
-  async function pickBuildingAt(clientX, clientY) {
+  function pickUnitsAtRay(ray) {
+    if (!ray || !renderer.rayHitSpheresAllInto) return EMPTY_HITS;
+    const sphereN = fillUnitPickSpheres();
+    const hitN = renderer.rayHitSpheresAllInto(
+      ray,
+      unitSpherePool,
+      sphereN,
+      unitHitIds,
+      unitHitTs,
+    );
+    if (hitN === 0) return EMPTY_HITS;
+    const world = getWorld();
+    resolvedHitIds.length = 0;
+    beginSeen();
+    for (let k = 0; k < hitN; k++) {
+      let id = unitHitIds[k];
+      if (!world.alive[id]) continue;
+      const carrier = world.carriedBy?.[id] ?? -1;
+      if (carrier >= 0) id = world.alive[carrier] ? carrier : -1;
+      if (id < 0 || seenStamp[id] === seenGen) continue;
+      seenStamp[id] = seenGen;
+      resolvedHitIds.push(id);
+    }
+    return resolvedHitIds;
+  }
+
+  /**
+   * All entities under the cursor, nearest first.
+   * Sync on the CPU path; returns a Promise only when USE_GPU_PICK.
+   * @returns {number[] | Promise<number[]>}
+   */
+  function pickUnitsAt(clientX, clientY) {
+    if (USE_GPU_PICK) {
+      return pickUnitAtGpu(clientX, clientY).then((id) => (id >= 0 ? [id] : EMPTY_HITS));
+    }
+    const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+    return pickUnitsAtRay(ray);
+  }
+
+  /** Nearest entity under the cursor, or -1. */
+  function pickUnitAt(clientX, clientY) {
+    if (USE_GPU_PICK) return pickUnitAtGpu(clientX, clientY);
+    const hits = pickUnitsAt(clientX, clientY);
+    return hits.length > 0 ? hits[0] : -1;
+  }
+
+  /**
+   * GPU mesh pick → own agora / placeable under the cursor, or null.
+   * Kept for USE_GPU_PICK — not the live path.
+   */
+  async function pickBuildingAtGpu(clientX, clientY) {
     if (!renderer.pickBuilding) return null;
     const hit = await renderer.pickBuilding(clientX, clientY);
     if (!hit) return null;
@@ -285,6 +444,27 @@ export function createGameInput(opts) {
     const b = getBuildings?.()?.[hit.index];
     if (!b || (b.owner | 0) !== localPlayerId) return null;
     return hit;
+  }
+
+  /**
+   * CPU ray-vs-sphere → own agora / placeable, or null.
+   * @param {object | null} ray
+   * @returns {{ kind: 'agora' | 'building', index: number } | null}
+   */
+  function pickBuildingAtRay(ray) {
+    if (!ray || !renderer.rayHitSpheresNearest) return null;
+    const n = fillBuildingPickSpheres();
+    const hit = renderer.rayHitSpheresNearest(ray, buildingSpherePool, n);
+    // Copy out of the pool — pooled id objects are reused on the next pick.
+    if (!hit || hit === -1) return null;
+    return { kind: hit.kind, index: hit.index };
+  }
+
+  /** @returns {{ kind: 'agora' | 'building', index: number } | null | Promise<...>} */
+  function pickBuildingAt(clientX, clientY) {
+    if (USE_GPU_PICK) return pickBuildingAtGpu(clientX, clientY);
+    const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+    return pickBuildingAtRay(ray);
   }
 
   /**
@@ -448,8 +628,8 @@ export function createGameInput(opts) {
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
-      const pos = getUnitWorldPos(i);
-      const p = renderer.worldToScreen(pos.x, pos.y, pos.z);
+      getUnitWorldPos(i, posScratch);
+      const p = renderer.worldToScreen(posScratch.x, posScratch.y, posScratch.z);
       if (!p) continue;
       if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) selectEntity(i);
     }
@@ -771,7 +951,20 @@ export function createGameInput(opts) {
     const epoch = click.epoch ?? worldClickEpoch;
     if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > DRAG_THRESHOLD_PX) return;
     const world = getWorld();
-    const hit = await pickUnitAt(e.clientX, e.clientY);
+    // One unproject for unit + building miss — GPU path still goes through pickUnitsAt.
+    let hits;
+    let bld = null;
+    if (USE_GPU_PICK) {
+      hits = await pickUnitsAt(e.clientX, e.clientY);
+    } else {
+      const ray = renderer.clientPickingRay?.(e.clientX, e.clientY) ?? null;
+      hits = pickUnitsAtRay(ray);
+      // Defer building fill until units miss (avoid wasted building scan).
+      if (hits.length === 0 || world.owner[hits[0]] !== localPlayerId) {
+        bld = pickBuildingAtRay(ray);
+      }
+    }
+    const hit = hits.length > 0 ? hits[0] : -1;
     if (!clickCurrent(epoch)) return;
     if (hit >= 0 && world.owner[hit] === localPlayerId) {
       const selected = selectedIds();
@@ -803,8 +996,14 @@ export function createGameInput(opts) {
         if (selectAll) {
           selectAllOfType(typeId, e.shiftKey);
         } else {
+          // Packed-tight units under the same tap all come back from pickUnitsAt —
+          // select every own one instead of just the nearest. Degrades to a normal
+          // single select when hits is just [hit].
           if (!e.shiftKey) clearUnitSelectionBits();
-          selectEntity(hit);
+          for (let k = 0; k < hits.length; k++) {
+            const id = hits[k];
+            if (world.owner[id] === localPlayerId) selectEntity(id);
+          }
           clearBuildingSelection();
           syncSelectionSquad();
           onSelectionChanged?.();
@@ -813,7 +1012,7 @@ export function createGameInput(opts) {
       return;
     }
 
-    const bld = await pickBuildingAt(e.clientX, e.clientY);
+    if (USE_GPU_PICK) bld = await pickBuildingAt(e.clientX, e.clientY);
     if (!clickCurrent(epoch)) return;
     if (bld) {
       const typeKey = buildingTypeKeyOf(bld);
@@ -915,7 +1114,7 @@ export function createGameInput(opts) {
       } else {
         let radialHandled = false;
         if (isRadialOpen?.() || wasRadialGesture) {
-          // One GPU mesh pick on click only (not on move / down).
+          // One radial pick on click only (not on move / down).
           const picked = await pickRadialOption?.(e.clientX, e.clientY);
           if (picked) {
             lastTap = null;

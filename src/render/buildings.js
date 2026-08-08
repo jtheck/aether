@@ -14,6 +14,7 @@ import {
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { capacityFor } from '../sim/capacity.js';
+import { USE_GPU_PICK } from './pickMode.js';
 
 /** Start small; grow by powers of two when place() needs more. */
 const INITIAL_CAPACITY = 32;
@@ -281,7 +282,8 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       if (!url) return false;
       try {
         const parts = await loadBakedUnitMeshParts(engine, url);
-        for (const mesh of parts) mesh.pickable = true;
+        // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
+        for (const mesh of parts) mesh.pickable = USE_GPU_PICK;
         const fxSockets = (parts[0]?.fxSockets ?? []).map((s) => ({
           name: s.name,
           x: s.x,
@@ -438,7 +440,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       const src = parts[i];
       // First owner batch for this type reuses the template mesh; later owners clone.
       const mesh = claimTemplate ? src : cloneTransformNode(src);
-      mesh.pickable = true;
+      mesh.pickable = USE_GPU_PICK;
       const isTeamColor = isTeamColorMaterial(mesh.material);
       const colors = isTeamColor ? ownerColors : whiteColors;
       const matrices = new Float32Array(INITIAL_CAPACITY * 16);

@@ -26,7 +26,7 @@ import {
   snapBuildingYaw,
   snapBuildingWorld,
 } from '../sim/buildings.js';
-import { worldToTile } from '../sim/field.js';
+import { TILE_SIZE_F, worldToTile } from '../sim/field.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
@@ -303,6 +303,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   setStatusText('');
   // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
   window.renderer = renderer;
+  window.session = session;
   window.dumpPools = () => {
     const world = session.state;
     const pools = renderer.poolStats?.() ?? {};
@@ -380,6 +381,88 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         : null,
     });
     return { rows, ema, last, metrics: m };
+  };
+  /**
+   * GPU pixel-perfect pick (renderer.pickUnit) vs CPU ray-vs-sphere (renderer.rayPickSpheres)
+   * latency + accuracy, sampled against currently on-screen units. Aim the camera at your
+   * army first — needs live units in view to build sample points.
+   * Flip USE_GPU_PICK in render/pickMode.js and hard-refresh before GPU samples.
+   */
+  window.dumpPickBench = async (trials = 60) => {
+    const world = session.state;
+    const rect = canvas.getBoundingClientRect();
+    const { renderX, renderY, renderZ } = bufs;
+
+    const candidates = [];
+    const spheres = [];
+    for (let i = 0; i < session.count; i++) {
+      if (!world.alive[i]) continue;
+      if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      const def = getUnitDef(world.type[i]);
+      spheres.push({ id: i, x: renderX[i], y: renderY[i], z: renderZ[i], r: def.pickRadius ?? 1.8 });
+      const p = renderer.worldToScreen(renderX[i], renderY[i], renderZ[i]);
+      if (!p || p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) continue;
+      candidates.push({ id: i, clientX: rect.left + p.x, clientY: rect.top + p.y });
+    }
+    if (candidates.length === 0) {
+      console.warn('[dumpPickBench] no on-screen units — aim the camera at your army first');
+      return null;
+    }
+
+    const samples = [];
+    for (let k = 0; k < trials; k++) samples.push(candidates[k % candidates.length]);
+
+    function stats(ms) {
+      const sorted = ms.slice().sort((a, b) => a - b);
+      const sum = sorted.reduce((a, b) => a + b, 0);
+      const pct = (p) => sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+      return {
+        n: sorted.length,
+        meanMs: +(sum / sorted.length).toFixed(3),
+        medianMs: +pct(0.5).toFixed(3),
+        p95Ms: +pct(0.95).toFixed(3),
+        maxMs: +sorted[sorted.length - 1].toFixed(3),
+        minMs: +sorted[0].toFixed(3),
+      };
+    }
+
+    // Sequential (not pipelined) — isolates each round trip's true latency.
+    const gpuTimes = [];
+    let gpuHits = 0;
+    for (const s of samples) {
+      const t0 = performance.now();
+      // eslint-disable-next-line no-await-in-loop
+      const id = await renderer.pickUnit(s.clientX, s.clientY);
+      gpuTimes.push(performance.now() - t0);
+      if (id === s.id) gpuHits++;
+    }
+
+    const cpuTimes = [];
+    let cpuHits = 0;
+    for (const s of samples) {
+      const t0 = performance.now();
+      const id = renderer.rayPickSpheres(s.clientX, s.clientY, spheres);
+      cpuTimes.push(performance.now() - t0);
+      if (id === s.id) cpuHits++;
+    }
+
+    const gpuStats = stats(gpuTimes);
+    const cpuStats = stats(cpuTimes);
+    console.table({
+      'GPU pixel-perfect (pickUnit)': { ...gpuStats, hitRate: `${gpuHits}/${samples.length}` },
+      'CPU ray-vs-sphere (rayPickSpheres)': { ...cpuStats, hitRate: `${cpuHits}/${samples.length}` },
+    });
+    console.log(
+      '[dumpPickBench] GPU/CPU mean speedup:',
+      `${(gpuStats.meanMs / Math.max(cpuStats.meanMs, 1e-6)).toFixed(1)}x`,
+      '· units in view:', candidates.length,
+    );
+    return {
+      gpu: { ...gpuStats, hitRate: gpuHits / samples.length },
+      cpu: { ...cpuStats, hitRate: cpuHits / samples.length },
+      samples: samples.length,
+      unitsInView: candidates.length,
+    };
   };
   if (new URLSearchParams(location.search).get('tiles') === '1') {
     renderer.setTileGridVisible(true);
@@ -807,11 +890,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     world: () => session.state,
     selected: bufs.selected,
     localPlayerId,
-    getUnitWorldPos: (i) => ({
-      x: bufs.renderX[i],
-      y: bufs.renderY[i],
-      z: bufs.renderZ[i],
-    }),
+    getUnitWorldPos: (i, out) => {
+      out.x = bufs.renderX[i];
+      out.y = bufs.renderY[i];
+      out.z = bufs.renderZ[i];
+      return out;
+    },
     enqueueCommand: (cmd) => session.submitCommand(cmd),
     onSelectionChanged: updateColors,
     onOrder: (x, z, y, cmdType) => {
@@ -1063,7 +1147,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (e.code === 'KeyH') {
       e.preventDefault();
-      renderer.togglePickHitboxes?.();
+      const on = renderer.togglePickHitboxes?.();
+      if (typeof on === 'boolean') {
+        console.info('[pick hitboxes]', on ? 'on' : 'off');
+        setStatusText(on ? 'Pick hitboxes on' : 'Pick hitboxes off');
+      }
       return;
     }
     if (e.code === 'KeyB') {
@@ -1578,6 +1666,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           z: renderZ[i],
           r: def.pickRadius ?? 1.8,
         });
+      }
+      // Match gameInput collectBuildingPickSpheres (own structures only).
+      const buildingPickRadius = (typeKey) => {
+        const fp = BUILDING_FOOTPRINTS[typeKey];
+        if (!fp) return 3;
+        return 0.5 * Math.hypot(fp.w, fp.h) * TILE_SIZE_F;
+      };
+      const BUILDING_PICK_MIN_Y = 2.5;
+      for (const a of session.agoras ?? []) {
+        if ((a.owner | 0) !== localPlayerId) continue;
+        const r = buildingPickRadius('agora');
+        spheres.push({ x: a.x, y: Math.max(BUILDING_PICK_MIN_Y, r * 0.6), z: a.z, r });
+      }
+      for (const b of session.buildings ?? []) {
+        if ((b.owner | 0) !== localPlayerId) continue;
+        const r = buildingPickRadius(b.type);
+        spheres.push({ x: b.x, y: Math.max(BUILDING_PICK_MIN_Y, r * 0.6), z: b.z, r });
       }
       renderer.syncPickHitboxes?.(spheres);
     }

@@ -32,6 +32,7 @@ import {
   createGpuPicker,
   pickAsync,
 } from '../vendor/lite/liteVendor.js';
+import { USE_GPU_PICK } from './pickMode.js';
 import { getUnitDef } from '../sim/unitTypes.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
@@ -54,6 +55,7 @@ import {
 import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from './terrain.js';
 import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
+import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
 import { createLightningBolts } from './lightningBolts.js';
@@ -435,12 +437,12 @@ function vatPartMeshes(batch) {
   return [batch.mesh];
 }
 
-/** Mark unit thin-instance meshes pickable and map them to their batch. */
+/** Map unit thin-instance meshes for GPU pick (pickable only when USE_GPU_PICK). */
 function registerUnitPickBatch(unitPickMeshes, batch) {
   if (!batch) return;
   for (const mesh of vatPartMeshes(batch)) {
     if (!mesh) continue;
-    mesh.pickable = true;
+    mesh.pickable = USE_GPU_PICK;
     unitPickMeshes.set(mesh, batch);
   }
 }
@@ -1086,29 +1088,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Alternate pop spin direction each new ping. */
   let nextOrderSpinDir = 1;
 
-  // Debug: optional sphere proxies (pickRadius @ pickHeight) — live pick uses GPU meshes.
-  const pickDebugCap = Math.max(capacity, gpuCapacity, 1);
-  const pickDebugMesh = createSphere(engine, { diameter: 2, segments: 10 });
-  const pickDebugMat = createStandardMaterial();
-  pickDebugMat.diffuseColor = [1, 0.2, 0.85];
-  pickDebugMat.emissiveColor = [0.7, 0.1, 0.55];
-  pickDebugMat.alpha = 0.28;
-  pickDebugMesh.material = pickDebugMat;
-  pickDebugMesh.visible = false;
-  const pickDebugMatrices = new Float32Array(pickDebugCap * 16);
-  const pickDebugColors = new Float32Array(pickDebugCap * 4);
-  for (let s = 0; s < pickDebugCap; s++) {
-    pickDebugColors[s * 4] = 1;
-    pickDebugColors[s * 4 + 1] = 0.35;
-    pickDebugColors[s * 4 + 2] = 0.9;
-    pickDebugColors[s * 4 + 3] = 0.35;
-  }
-  setThinInstances(pickDebugMesh, pickDebugMatrices, pickDebugCap);
-  setThinInstanceCount(pickDebugMesh, 0);
-  setThinInstanceColors(pickDebugMesh, pickDebugColors);
-  addToScene(scene, pickDebugMesh);
-  let pickDebugVisible = false;
-  let pickDebugCount = 0;
+  // +64 headroom so agora/building debug spheres fit on top of unit caps.
+  const pickHitboxes = createPickHitboxRenderer(
+    engine,
+    scene,
+    Math.max(capacity, gpuCapacity, 1) + 64,
+  );
   const particles = createParticleSystem(engine, scene, { getEye: cameraEyePos });
   const unitAuras = createUnitAuras((init) => particles.emit(init), groundYAt, {
     maxSparkleDistSq: FX_DISTANCE_SQ,
@@ -2282,7 +2267,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   await registerSceneWithShadowSupport(scene);
   bootLog('scene registered (first paint ready)');
-  const gpuPicker = createGpuPicker(scene);
+  // GPU picker retained for USE_GPU_PICK / dumpPickBench — not created on the live CPU path.
+  const gpuPicker = USE_GPU_PICK ? createGpuPicker(scene) : null;
 
   /**
    * Lite's pick walks `scene.meshes` by captured length and reads `.pickable`
@@ -2290,6 +2276,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    * as miss instead of an uncaught rejection on click.
    */
   async function safePickAsync(x, y, opts) {
+    if (!gpuPicker) return null;
     try {
       return await pickAsync(gpuPicker, x, y, opts);
     } catch {
@@ -2467,7 +2454,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       pushSelRingColors();
       ringColorsDirty = false;
     }
-    // Selection / order / pick matrices also marked dirty on write.
+    // Selection / order matrices marked dirty on write.
+    pickHitboxes.commit();
     projectileRenderer.commit();
     frogRenderer.sync();
     frogRenderer.commit();
@@ -2484,34 +2472,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     for (let p = 0; p < selRingParts.length; p++) {
       setThinInstanceColors(selRingParts[p], ringColorBufs[p]);
     }
-  }
-
-  function writePickDebugSphere(slot, x, y, z, radius) {
-    const o = slot * 16;
-    if (radius <= 0) {
-      for (let k = 0; k < 16; k++) pickDebugMatrices[o + k] = 0;
-      markThinInstanceSlotDirty(pickDebugMesh, slot);
-      return;
-    }
-    // Mesh diameter is 2 → uniform scale equals radius.
-    const s = radius;
-    pickDebugMatrices[o] = s;
-    pickDebugMatrices[o + 1] = 0;
-    pickDebugMatrices[o + 2] = 0;
-    pickDebugMatrices[o + 3] = 0;
-    pickDebugMatrices[o + 4] = 0;
-    pickDebugMatrices[o + 5] = s;
-    pickDebugMatrices[o + 6] = 0;
-    pickDebugMatrices[o + 7] = 0;
-    pickDebugMatrices[o + 8] = 0;
-    pickDebugMatrices[o + 9] = 0;
-    pickDebugMatrices[o + 10] = s;
-    pickDebugMatrices[o + 11] = 0;
-    pickDebugMatrices[o + 12] = x;
-    pickDebugMatrices[o + 13] = y;
-    pickDebugMatrices[o + 14] = z;
-    pickDebugMatrices[o + 15] = 1;
-    markThinInstanceSlotDirty(pickDebugMesh, slot);
   }
 
   function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN) {
@@ -2901,11 +2861,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /**
      * GPU mesh pick → own agora / placeable under the cursor, or null.
      * Hits the actual building mesh (thin instance), not a ground radius.
+     * Gated by USE_GPU_PICK — live path is rayPickSpheres / rayHitSpheresNearest.
      * @param {number} clientX
      * @param {number} clientY
      * @returns {Promise<{ kind: 'agora' | 'building', index: number } | null>}
      */
     async pickBuilding(clientX, clientY) {
+      if (!USE_GPU_PICK || !gpuPicker) return null;
       const cc = canvasCoords(clientX, clientY);
       const info = await safePickAsync(cc.x, cc.y, {
         filter: (mesh) =>
@@ -3337,36 +3299,28 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     setPickHitboxesVisible(on) {
-      pickDebugVisible = !!on;
-      pickDebugMesh.visible = pickDebugVisible;
-      if (!pickDebugVisible) {
-        pickDebugCount = 0;
-        setThinInstanceCount(pickDebugMesh, 0);
-      }
-      return pickDebugVisible;
+      return pickHitboxes.setVisible(on);
     },
 
     getPickHitboxesVisible() {
-      return pickDebugVisible;
+      return pickHitboxes.getVisible();
     },
 
     togglePickHitboxes() {
-      return this.setPickHitboxesVisible(!pickDebugVisible);
+      return pickHitboxes.toggle();
+    },
+
+    /** Console: renderer.debugPickHitboxes() */
+    debugPickHitboxes() {
+      return pickHitboxes.debug();
     },
 
     /**
-     * Sync debug spheres (manual A/B). Live picking uses GPU meshes via `pickUnit`.
+     * Sync debug spheres to match CPU pick volumes.
      * `{ x, y, z, r }[]` with center at pickHeight and radius pickRadius.
      */
     syncPickHitboxes(spheres) {
-      if (!pickDebugVisible) return;
-      const n = Math.min(spheres?.length ?? 0, pickDebugCap);
-      pickDebugCount = n;
-      for (let i = 0; i < n; i++) {
-        const sp = spheres[i];
-        writePickDebugSphere(i, sp.x, sp.y, sp.z, sp.r);
-      }
-      setThinInstanceCount(pickDebugMesh, n);
+      pickHitboxes.sync(spheres);
     },
 
     resetCamera() {
@@ -3724,8 +3678,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * GPU mesh pick → sim entity id, or -1.
      * Uses rest-pose geometry for VAT units (instance matrix only).
      * Caller should filter alive / carried / owner.
+     * Gated by USE_GPU_PICK — live path is rayPickSpheres*.
      */
     async pickUnit(clientX, clientY) {
+      if (!USE_GPU_PICK || !gpuPicker) return -1;
       const cc = canvasCoords(clientX, clientY);
       const info = await safePickAsync(cc.x, cc.y, {
         filter: (mesh) => unitPickMeshes.has(mesh),
@@ -3739,13 +3695,28 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return Number.isInteger(id) && id >= 0 ? id : -1;
     },
 
-    rayPickSpheres(clientX, clientY, spheres) {
+    /** Screen → world ray (shared across unit + building picks on one click). */
+    clientPickingRay(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
-      const ray = pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
+      return pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
+    },
+
+    /**
+     * Nearest sphere hit. `count` defaults to spheres.length.
+     * Pass a prebuilt ray to avoid a second unproject on the same click.
+     */
+    rayPickSpheres(clientX, clientY, spheres, count) {
+      const ray = this.clientPickingRay(clientX, clientY);
       if (!ray) return -1;
+      return this.rayHitSpheresNearest(ray, spheres, count);
+    },
+
+    rayHitSpheresNearest(ray, spheres, count = spheres.length) {
+      if (!ray) return -1;
+      const n = Math.min(count, spheres.length);
       let best = -1;
       let bestT = Infinity;
-      for (let s = 0; s < spheres.length; s++) {
+      for (let s = 0; s < n; s++) {
         const sp = spheres[s];
         const t = rayHitSphere(ray, sp.x, sp.y, sp.z, sp.r);
         if (t !== null && t < bestT) {
@@ -3754,6 +3725,58 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         }
       }
       return best;
+    },
+
+    /**
+     * Every sphere the ray hits, nearest first — packed-tight units all come back
+     * instead of just the closest one, so callers can multi-select the whole clump.
+     * Allocating form kept for dumpPickBench; prefer rayHitSpheresAllInto.
+     */
+    rayPickSpheresAll(clientX, clientY, spheres, count) {
+      const ray = this.clientPickingRay(clientX, clientY);
+      if (!ray) return [];
+      const n = Math.min(count ?? spheres.length, spheres.length);
+      const hits = [];
+      for (let s = 0; s < n; s++) {
+        const sp = spheres[s];
+        const t = rayHitSphere(ray, sp.x, sp.y, sp.z, sp.r);
+        if (t !== null) hits.push({ id: sp.id != null ? sp.id : s, t });
+      }
+      hits.sort((a, b) => a.t - b.t);
+      return hits.map((h) => h.id);
+    },
+
+    /**
+     * Zero-alloc multi-hit: writes sorted ids into outIds[0..return).
+     * outTs is scratch for sort keys (same length as outIds).
+     */
+    rayHitSpheresAllInto(ray, spheres, count, outIds, outTs) {
+      if (!ray) return 0;
+      const sphereN = Math.min(count, spheres.length);
+      const outCap = Math.min(outIds.length, outTs.length);
+      let hitN = 0;
+      for (let s = 0; s < sphereN && hitN < outCap; s++) {
+        const sp = spheres[s];
+        const t = rayHitSphere(ray, sp.x, sp.y, sp.z, sp.r);
+        if (t === null) continue;
+        outIds[hitN] = sp.id != null ? sp.id : s;
+        outTs[hitN] = t;
+        hitN++;
+      }
+      // Insertion sort — hitN is tiny (overlaps under cursor).
+      for (let i = 1; i < hitN; i++) {
+        const id = outIds[i];
+        const t = outTs[i];
+        let j = i - 1;
+        while (j >= 0 && outTs[j] > t) {
+          outIds[j + 1] = outIds[j];
+          outTs[j + 1] = outTs[j];
+          j--;
+        }
+        outIds[j + 1] = id;
+        outTs[j + 1] = t;
+      }
+      return hitN;
     },
 
     screenToGround(clientX, clientY) {

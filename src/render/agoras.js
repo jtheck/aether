@@ -10,6 +10,7 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { USE_GPU_PICK } from './pickMode.js';
 
 const AGORA_MODEL_URL = '/assets/models/agora.glb';
 const FLAG_MODEL_URL = '/assets/models/flag.glb';
@@ -158,7 +159,8 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     const parts = await loadBakedUnitMeshParts(engine, AGORA_MODEL_URL);
     for (let p = 0; p < parts.length; p++) {
       const mesh = parts[p];
-      mesh.pickable = true;
+      // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
+      mesh.pickable = USE_GPU_PICK;
       const matrices = new Float32Array(MAX_AGORAS * 16);
       setThinInstances(mesh, matrices, MAX_AGORAS);
       setThinInstanceCount(mesh, 0);
@@ -193,7 +195,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     }
   }
 
-  await loadFlagLayers(MAX_AGORAS, true, agoraFlagLayers);
+  await loadFlagLayers(MAX_AGORAS, USE_GPU_PICK, agoraFlagLayers);
   await loadFlagLayers(MAX_RALLY_FLAGS, false, rallyFlagLayers);
   await loadFlagLayers(1, false, ghostFlagLayers);
 

@@ -199,6 +199,7 @@ async function main() {
   let pendingLiveCfg = null;
 
   async function handleLiveStart(cfg) {
+    if (ctx?.localSoloHold) return;
     if (!ctx) {
       pendingLiveCfg = cfg;
       return;
@@ -207,7 +208,7 @@ async function main() {
   }
 
   function handlePresentationSync(cfg) {
-    if (!ctx) return;
+    if (!ctx || ctx.localSoloHold) return;
     syncPresentation(ctx, cfg);
   }
 
@@ -486,7 +487,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (bootShadowMode === 0) {
     renderer.setShadowsEnabled?.(false);
   }
-  const sideMenu = setupMenu({ renderer });
+  /** Filled just before return so the menu callback can reach the live ctx. */
+  const ctxRef = { current: null };
+  const sideMenu = setupMenu({
+    renderer,
+    onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
+  });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
     scene: renderer.scene,
@@ -581,17 +587,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     paintStatus();
   };
 
-  session.onWorldRebuilt = (entityCount) => {
+  session.onWorldRebuilt = async (entityCount) => {
     if (session._pendingWorldGen != null && session._pendingWorldGen !== liveConfigGeneration) return;
     renderer.setCount(entityCount);
     renderEntityCount = rebuildRendererEntities(renderer, session);
     renderer.clearProjectiles?.();
+    renderer.clearParticles?.();
     renderer.placeAgoras?.(session.agoras);
     renderer.placeBuildings?.(session.buildings);
     syncRallyFlagMarkers();
-    if (session.field) renderer.setField?.(session.field);
+    if (session.field) await renderer.setField?.(session.field);
     updateColors();
-    if (matchMeta.mode === 'koth') {
+    if (matchMeta.mode === 'koth' || matchMeta.mode === 'solo') {
       logArmyRenderState(renderer, session, 'world rebuilt');
     }
   };
@@ -639,6 +646,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const matchTime = formatMatchTime(matchSecondsFromTick(session.confirmedTick));
     let line = `You P${localPlayerId}: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
     if (matchMeta.mode === 'staging' || matchMeta.mode === 'sandbox') line = `Staging  ·  ${line}`;
+    else if (matchMeta.mode === 'solo') line = `1v1 AI  ·  ${line}`;
     if (matchMeta.mode === 'koth') {
       const k = session.koth;
       if (k) {
@@ -892,8 +900,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setBuildingRadialCompact?.(Boolean(placingType));
   }
 
-  // Locked until boot splash fades — camera + commands stay quiet together.
+  // Locked until splash fades — camera + commands stay quiet together.
   let bootInteractive = false;
+  const setInteractive = (on) => {
+    bootInteractive = !!on;
+  };
   let inputApi = setupInput({
     canvas,
     renderer,
@@ -1738,7 +1749,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   // Fade + unlock once units/buildings settle (scene visible underneath the whole time).
   const unlock = () => {
     if (bootInteractive) return;
-    bootInteractive = true;
+    setInteractive(true);
     dismissBootSplash();
   };
   void Promise.race([
@@ -1746,7 +1757,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     new Promise((r) => setTimeout(r, 12000)),
   ]).then(unlock);
 
-  return {
+  const ctx = {
     session,
     renderer,
     bufs,
@@ -1755,7 +1766,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return renderEntityCount;
     },
     inputApi,
+    setInteractive,
     kothShard,
+    /** When true, ignore KOTH presentation/live stomps (local 1v1 AI). */
+    localSoloHold: false,
     get matchOverShown() {
       return matchOverShown;
     },
@@ -1776,11 +1790,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     paintStatus,
     updateColors,
   };
+  ctxRef.current = ctx;
+  return ctx;
 }
 
 async function applyLiveConfig(ctx, cfg, kothShard) {
   const gen = ++liveConfigGeneration;
   const activeSlots = cfg.activeSlots ?? cfg.humanPlayers ?? [];
+  const localSolo = !!cfg.localSolo;
   if ((cfg.mode === 'staging' || cfg.mode === 'sandbox') && activeSlots.length === 0) {
     if (gen !== liveConfigGeneration) return;
     ctx.setMatchMeta({ mode: 'staging', matchId: cfg.matchId });
@@ -1796,21 +1813,41 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     setStatusText('Waiting for roster sync…');
     return;
   }
-  if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', { gen, activeSlots });
+  if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', { gen, activeSlots, localSolo });
+
+  // Cover the teardown/rebuild — same splash as cold boot.
+  showMatchSplash();
+  ctx.setInteractive?.(false);
+  setStatusText(localSolo ? 'Starting 1v1…' : 'Loading match…');
 
   const simMode = cfg.mode === 'staging' || cfg.mode === 'sandbox' ? 'staging' : 'koth';
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
+  if (cfg.aiPlayers) ctx.session.aiPlayers = cfg.aiPlayers;
   ctx.session._pendingWorldGen = gen;
-  await ctx.session.reset({
-    seed: cfg.seed,
-    mode: simMode,
-    activeSlots,
-    armyPerSide: cfg.armyPerSide ?? 0,
-  });
+  try {
+    await ctx.session.reset({
+      seed: cfg.seed,
+      mode: simMode,
+      activeSlots,
+      armyPerSide: cfg.armyPerSide ?? 0,
+    });
+    // onWorldRebuilt awaited setField; wait for scenery models too.
+    await Promise.race([
+      ctx.renderer.whenFieldReady?.() ?? Promise.resolve(),
+      new Promise((r) => setTimeout(r, 12000)),
+    ]);
+  } catch (err) {
+    console.error('[live] match rebuild failed', err);
+    setStatusText('Match load failed');
+    ctx.setInteractive?.(true);
+    dismissBootSplash();
+    throw err;
+  }
   setArmyPerSide(cfg.armyPerSide ?? 0);
   if (gen !== liveConfigGeneration) {
     if (ctx.session._pendingWorldGen === gen) ctx.session._pendingWorldGen = null;
     if (DEBUG_KOTH) console.info('[KOTH] stale live config ignored after reset', { gen, current: liveConfigGeneration });
+    // A newer applyLiveConfig owns the splash / input gate.
     return;
   }
   ctx.session._pendingWorldGen = null;
@@ -1827,12 +1864,53 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       count: ctx.session.count,
       p0: livingByOwner(world, 0),
       p1: livingByOwner(world, 1),
+      localSolo,
     });
   }
 
   // The live world is rebuilt and confirmedTick is back at 0 for this match;
   // seed the lockstep confirm handshake so the sim can leave tick 0.
-  if (cfg.mode === 'koth') kothShard?.notifyLiveSessionReady?.();
+  // Local 1v1 AI runs offline (delay 0) — no shard handshake.
+  if (cfg.mode === 'koth' && !localSolo) kothShard?.notifyLiveSessionReady?.();
+
+  ctx.setInteractive?.(true);
+  dismissBootSplash();
+}
+
+/**
+ * Offline 1v1 vs AI — same two-army KOTH spawn as a real match, no P2P.
+ * Exercises the hardened match teardown/rebuild path from the menu.
+ * @param {object | null} ctx
+ */
+async function startSoloAiMatch(ctx) {
+  if (!ctx?.session || !ctx.renderer) return;
+  if (ctx._soloStarting) return;
+  ctx._soloStarting = true;
+  ctx.localSoloHold = true;
+  try {
+    const armyPerSide = ctx.session.state?.armyPerSide ?? 0;
+    await applyLiveConfig(ctx, {
+      mode: 'koth',
+      localSolo: true,
+      seed: (Math.random() * 0xffffffff) >>> 0,
+      localPlayerId: PLAYER,
+      humanPlayers: [PLAYER],
+      activeSlots: [PLAYER, AI_OWNER],
+      aiPlayers: [AI_OWNER],
+      role: 'player',
+      reset: true,
+      inputEnabled: true,
+      armyPerSide,
+      matchId: `solo-${Date.now().toString(36)}`,
+    }, ctx.kothShard);
+    ctx.setMatchMeta?.({ mode: 'solo' });
+    setStatusText('1v1 vs AI');
+  } catch (err) {
+    ctx.localSoloHold = false;
+    console.error('[solo] start failed', err);
+  } finally {
+    ctx._soloStarting = false;
+  }
 }
 
 function syncPresentation(ctx, cfg, options = {}) {
@@ -1847,18 +1925,19 @@ function syncPresentation(ctx, cfg, options = {}) {
   ctx.inputApi?.setRole?.(cfg.role ?? 'player');
   if (cfg.inputEnabled != null) ctx.inputApi?.setInputEnabled?.(Boolean(cfg.inputEnabled));
   if ((cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
-  ctx.session.inputDelayTicks = cfg.mode === 'koth' ? 1 : 0;
+  ctx.session.inputDelayTicks = cfg.localSolo ? 0 : cfg.mode === 'koth' ? 1 : 0;
   // Only snap the camera on a real match reset — presentation syncs (join/role)
   // used to call this every time and yank the view back to origin.
-  if (cfg.mode === 'koth' && cfg.reset) ctx.renderer.resetCamera?.();
+  if ((cfg.mode === 'koth' || cfg.localSolo) && cfg.reset) ctx.renderer.resetCamera?.();
 
   const overEl = document.getElementById('match-over');
   if (overEl) overEl.style.display = 'none';
   ctx.matchOverShown = false;
 
   ctx.updateColors();
-  const label =
-    cfg.mode === 'staging' || cfg.mode === 'sandbox'
+  const label = cfg.localSolo
+    ? '1v1 vs AI'
+    : cfg.mode === 'staging' || cfg.mode === 'sandbox'
       ? 'Staging'
       : cfg.role === 'player'
         ? `Live — player ${cfg.localPlayerId}`
@@ -1990,6 +2069,26 @@ async function waitForWebGPU(timeoutMs = 3000) {
     await new Promise((r) => setTimeout(r, 100));
   }
   return !!navigator.gpu;
+}
+
+function ensureBootSplashEl() {
+  let el = document.getElementById('boot-splash');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'boot-splash';
+  el.setAttribute('aria-hidden', 'true');
+  el.innerHTML =
+    '<img src="./icons/splash.png" alt="" width="512" height="512" decoding="async" />';
+  document.body.appendChild(el);
+  return el;
+}
+
+/** Show splash over the board while a match teardown/rebuild runs. */
+function showMatchSplash() {
+  const el = ensureBootSplashEl();
+  el.classList.remove('is-leaving');
+  el.style.opacity = '';
+  el.style.pointerEvents = '';
 }
 
 function dismissBootSplash() {

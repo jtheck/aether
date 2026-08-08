@@ -75,6 +75,7 @@ import {
 } from './lodDistances.js';
 import { createHealthBars } from './healthBars.js';
 import { LIGHTNING_HIT } from '../sim/lightning.js';
+import { softDetachMesh } from './meshLifecycle.js';
 
 /** Change active instance count without shrinking GPU buffer capacity. */
 function setThinInstanceCount(mesh, count) {
@@ -760,6 +761,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /** @type {{ meshes: object[], update?: (camera: object, deltaMs: number) => void, applyTreeUpdates?: Function, dispose: () => void } | null} */
   let terrain = null;
+  /** Serializes setField + drops stale rebuilds (match start / seed change). */
+  let fieldGen = 0;
+  /** @type {AbortController | null} */
+  let fieldAbort = null;
+  let setFieldChain = Promise.resolve();
   /** @type {{ setVisible: (on: boolean) => void, dispose: () => void } | null} */
   let tileGrid = null;
   let tileGridVisible = false;
@@ -3106,29 +3112,56 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return false;
     },
 
-    /** Swap flat ground for atlas terrain (or rebuild after world reset). */
-    async setField(snap) {
-      terrain?.dispose?.();
-      terrain = null;
-      fieldSnap = snap ?? null;
-      if (ground) {
-        const list = scene?.meshes;
-        if (Array.isArray(list)) {
-          const idx = list.indexOf(ground);
-          if (idx >= 0) list.splice(idx, 1);
-        }
-        ground.visible = false;
-        ground = null;
-      }
-      if (!snap) {
-        rebuildTileGrid(null);
+    /**
+     * Swap flat ground for atlas terrain (or rebuild after world reset).
+     * Serialized + generation-gated so overlapping match starts can't leave
+     * two forests in the scene.
+     */
+    setField(snap) {
+      const gen = ++fieldGen;
+      const ac = new AbortController();
+      fieldAbort?.abort();
+      fieldAbort = ac;
+      const run = async () => {
+        const prev = terrain;
+        // Drop terrain from the update + CSM caster paths BEFORE destroying GPU
+        // buffers — otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
+        terrain = null;
+        fieldSnap = snap ?? null;
         applyShadowState();
-        return;
-      }
-      terrain = await createTerrainFromField(engine, scene, snap, camera, sceneryOpts());
-      sceneryModelsReady = terrain.modelsReady ?? Promise.resolve();
-      applyShadowState();
-      rebuildTileGrid(snap);
+        prev?.dispose?.();
+        if (ground) {
+          softDetachMesh(scene, ground);
+          ground = null;
+        }
+        if (!snap) {
+          if (gen !== fieldGen) return;
+          rebuildTileGrid(null);
+          applyShadowState();
+          return;
+        }
+        const next = await createTerrainFromField(engine, scene, snap, camera, {
+          ...sceneryOpts(),
+          signal: ac.signal,
+        });
+        if (gen !== fieldGen || ac.signal.aborted) {
+          next.dispose?.();
+          applyShadowState();
+          return;
+        }
+        terrain = next;
+        sceneryModelsReady = next.modelsReady ?? Promise.resolve();
+        applyShadowState();
+        rebuildTileGrid(snap);
+      };
+      const p = setFieldChain.then(run, run);
+      setFieldChain = p.catch(() => {});
+      return p;
+    },
+
+    /** Resolves when the latest setField terrain (and scenery models) is ready. */
+    whenFieldReady() {
+      return setFieldChain.then(() => sceneryModelsReady);
     },
 
     applyTreeUpdates(updatesList) {

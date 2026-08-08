@@ -456,7 +456,8 @@ export class SimSession {
     this._displayBlendMs = TICK_MS;
     try {
       const result = await this.start(config);
-      this.onWorldRebuilt?.(this.count);
+      const rebuilt = this.onWorldRebuilt?.(this.count);
+      if (rebuilt != null && typeof rebuilt.then === 'function') await rebuilt;
       return result;
     } finally {
       this.resetting = false;

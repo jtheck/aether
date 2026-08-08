@@ -18,6 +18,7 @@ import { capacityFor } from '../sim/capacity.js';
 import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
 import { hasBakedMesh } from './bakedAssets.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { softDetachMesh } from './meshLifecycle.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
 const ATLAS_GRID = 8;
@@ -112,6 +113,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       modelsReady: Promise.resolve(),
       update() {},
       applyTreeUpdates() {},
+      dispose() {},
     };
   }
   const atlas = await getAtlas(engine);
@@ -119,6 +121,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   const batches = [];
   /** @type {Promise<void>[]} */
   const modelJobs = [];
+  /** Set by dispose() so late GLB jobs never re-add to the scene. */
+  let disposed = false;
   /** @type {Map<number, { batch: object, index: number }>} */
   const treeByTile = new Map();
   /** @type {number[]} unused tree instance indices (headroom). */
@@ -177,7 +181,15 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     modelJobs.push(
       loadModelParts(engine, variant)
         .then((parts) => {
+          if (disposed) {
+            for (const part of parts) softDetachMesh(opts.scene, part.mesh);
+            return;
+          }
           for (const part of parts) {
+            if (disposed) {
+              softDetachMesh(opts.scene, part.mesh);
+              continue;
+            }
             part.matrices = new Float32Array(capacity * 16);
             setThinInstances(part.mesh, part.matrices, capacity);
             setThinInstanceCount(part.mesh, capacity);
@@ -193,15 +205,20 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
             // terrain.meshes is a snapshot unless it listens — notify so CSM can catch up.
             opts.onModelMesh?.(part.mesh);
           }
-          batch.dirty = true;
+          if (!disposed) batch.dirty = true;
         })
         .catch((err) => {
-          console.warn(`[scenery] model ${variant.modelUrl} failed`, err);
+          if (!disposed) console.warn(`[scenery] model ${variant.modelUrl} failed`, err);
         }),
     );
   }
 
-  const modelsReady = Promise.all(modelJobs).then(() => {});
+  // After 3D models land, force a LOD rewrite — the boot pass (LOD off) hides
+  // billboards immediately, so without this a field rebuild can stay empty until
+  // something else dirties the batch.
+  const modelsReady = Promise.all(modelJobs).then(() => {
+    if (!disposed) update(camera, 0, true);
+  });
 
   function ensureTreeCapacity(needed) {
     if (!treeBatch || needed <= treeBatch.capacity) return;
@@ -413,7 +430,22 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   }
 
   update(camera, LOD_UPDATE_MS, true);
-  return { meshes, modelsReady, update, applyTreeUpdates };
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    const scene = opts.scene;
+    // Soft-detach only — Lite's removeFromScene disposables can destroy shared
+    // atlas/material GPU state still used by the next field's scenery.
+    for (const mesh of meshes) softDetachMesh(scene, mesh);
+    meshes.length = 0;
+    batches.length = 0;
+    treeByTile.clear();
+    treeFreeSlots.length = 0;
+    treeBatch = null;
+  }
+
+  return { meshes, modelsReady, update, applyTreeUpdates, dispose };
 }
 
 function makeEmptyTreeInstance() {

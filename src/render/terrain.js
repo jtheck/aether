@@ -8,7 +8,6 @@ import {
   loadTexture2D as loadLiteTexture2D,
   createStandardMaterial,
   addToScene,
-  removeFromScene,
   setSubtreeVisible,
 } from '../vendor/lite/liteVendor.js';
 import {
@@ -19,6 +18,7 @@ import {
   worldHalfFFromField,
 } from '../sim/field.js';
 import { createSceneryFromField } from './scenery.js';
+import { softDetachMesh } from './meshLifecycle.js';
 
 const ATLAS_URLS = {
   [ATLAS.GRASS_DIRT]: '/assets/textures/atlas-grass-dirt.png',
@@ -51,6 +51,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     ...buildTableFrameMeshes(engine, field, active),
     ...buildAtlasMeshes(engine, field, textures, active),
   ];
+  let disposed = false;
   // 3D tree/rock models load after billboards; keep `built` in sync so shadow
   // collection (and dispose) sees them.
   const scenery = await createSceneryFromField(
@@ -62,11 +63,28 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       ...opts,
       scene,
       onModelMesh(mesh) {
+        if (disposed) {
+          softDetachMesh(scene, mesh);
+          return;
+        }
         if (built.indexOf(mesh) < 0) built.push(mesh);
         opts.onModelMesh?.(mesh);
       },
     },
   );
+  if (opts.signal?.aborted) {
+    disposed = true;
+    scenery.dispose?.();
+    for (const mesh of built) softDetachMesh(scene, mesh);
+    built.length = 0;
+    return {
+      meshes: [],
+      modelsReady: Promise.resolve(),
+      update() {},
+      applyTreeUpdates() {},
+      dispose() {},
+    };
+  }
   for (const mesh of scenery.meshes) {
     if (built.indexOf(mesh) < 0) built.push(mesh);
   }
@@ -76,19 +94,20 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     /** Resolves when 3D tree/rock models have replaced billboards (or failed). */
     modelsReady: scenery.modelsReady ?? Promise.resolve(),
     update(activeCamera, deltaMs) {
-      scenery.update(activeCamera, deltaMs);
+      if (!disposed) scenery.update(activeCamera, deltaMs);
     },
     applyTreeUpdates(updates) {
-      scenery.applyTreeUpdates?.(updates);
+      if (!disposed) scenery.applyTreeUpdates?.(updates);
     },
     dispose() {
-      const list = scene?.meshes;
-      if (Array.isArray(list)) {
-        for (const mesh of built) {
-          const idx = list.indexOf(mesh);
-          if (idx >= 0) list.splice(idx, 1);
-          mesh.visible = false;
-        }
+      if (disposed) return;
+      disposed = true;
+      // Scenery owns its meshes (and late model jobs); don't double-detach.
+      const scenerySet = new Set(scenery.meshes ?? []);
+      scenery.dispose?.();
+      for (const mesh of built) {
+        if (!mesh || scenerySet.has(mesh)) continue;
+        softDetachMesh(scene, mesh);
       }
       built.length = 0;
     },
@@ -740,17 +759,7 @@ export function createTileGridOverlay(engine, scene, field) {
 
   function disposeDevMesh(mesh) {
     if (!mesh) return;
-    removeFromScene(scene, mesh);
-    const gpu = mesh._gpu;
-    if (gpu) {
-      gpu.positionBuffer?.destroy?.();
-      gpu.normalBuffer?.destroy?.();
-      gpu.indexBuffer?.destroy?.();
-      gpu.uvBuffer?.destroy?.();
-      gpu.uv2Buffer?.destroy?.();
-      gpu.tangentBuffer?.destroy?.();
-      gpu.colorBuffer?.destroy?.();
-    }
+    softDetachMesh(scene, mesh);
   }
 
   function applyVisibility() {

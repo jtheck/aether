@@ -45,6 +45,14 @@ const CSS = `
 #side_menu input[type="range"] { width: 100%; }
 #side_menu .value { float: right; opacity: .7; }
 #side_menu .note { min-height: 15px; font-size: 11px; color: #e0b050; }
+#side_menu .btn {
+  display: block; width: 100%; box-sizing: border-box; margin: 0 0 8px; padding: 8px 10px;
+  background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px;
+  font: inherit; text-align: left; cursor: pointer;
+}
+#side_menu .btn:hover { border-color: aqua; color: aqua; }
+#side_menu .btn:active { border-color: darkmagenta; color: darkmagenta; }
+#side_menu .btn:disabled { opacity: .45; cursor: default; border-color: #2a3140; color: inherit; }
 #settings_b { position: absolute; right: 10px; bottom: 8px; width: 28px; height: 28px; stroke: #fff; fill: none; opacity: .55; cursor: pointer; }
 #settings_b:hover { stroke: aqua; opacity: 1; }
 #settings_b:active { stroke: darkmagenta; }
@@ -59,8 +67,9 @@ const CSS = `
  *   getFxMode?: () => number,
  *   particleStats?: () => { active?: number, capacity?: number, hardMax?: number },
  * }} opts.renderer
+ * @param {() => unknown} [opts.onStartSoloAi]
  */
-export function setupMenu({ renderer }) {
+export function setupMenu({ renderer, onStartSoloAi }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload.
   const bootMode = resolveShadowMode();
@@ -81,6 +90,10 @@ export function setupMenu({ renderer }) {
     <div class="page is-active" data-page="main">
       <h2>Æther.Garden</h2>
       <div class="row" data-profile></div>
+      <div class="row">
+        <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
+        <div class="note">Offline match — same armies as a live game.</div>
+      </div>
     </div>
     <div class="page" data-page="settings">
       <h2>Settings</h2>
@@ -120,6 +133,7 @@ export function setupMenu({ renderer }) {
   const fxNote = /** @type {HTMLElement} */ (drawer.querySelector('#fx_note'));
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
   const colorPicker = /** @type {HTMLSelectElement} */ (drawer.querySelector('#color_picker'));
+  const soloBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#solo_ai_b'));
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
 
   function showPage(name) {
@@ -177,9 +191,20 @@ export function setupMenu({ renderer }) {
     paintProfile();
   });
 
+  soloBtn.addEventListener('click', async () => {
+    if (!onStartSoloAi || soloBtn.disabled) return;
+    soloBtn.disabled = true;
+    setOpen(false);
+    try {
+      await onStartSoloAi();
+    } finally {
+      soloBtn.disabled = false;
+    }
+  });
+
   // The camera and hotkeys listen on window with no target check, so typing a
   // name would otherwise pan the board and trip B/G/H.
-  for (const field of [nameInput, colorPicker, slider, fxSlider]) {
+  for (const field of [nameInput, colorPicker, slider, fxSlider, soloBtn]) {
     field.addEventListener('keydown', (e) => e.stopPropagation());
     field.addEventListener('keyup', (e) => e.stopPropagation());
   }

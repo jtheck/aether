@@ -711,8 +711,31 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // (see markShadowReceivers before applyShadowState). Callers wanting shadows
   // off apply setShadowsEnabled(false) after start().
   let shadowsEnabled = true;
-  /** Socket fire / ground fire / particles / aura sparkles — A/B with F key. */
-  let fxEnabled = true;
+  /** Socket fire / ground fire / particles / aura sparkles — settings slider + F key. */
+  const DEFAULT_FX_QUALITY = {
+    hardMax: 65536,
+    initial: 8192,
+    unitFxIntervalMs: 80,
+    groundFireIntervalMs: 55,
+    sparkleIntervalMs: 70,
+    emitChance: 1,
+    distance: 900,
+    cullRangeScale: 1,
+    socketFire: true,
+  };
+  let fxMode = opts.fxMode ?? 3;
+  let lastNonZeroFxMode = fxMode > 0 ? fxMode : 3;
+  let fxQuality = { ...DEFAULT_FX_QUALITY, ...(opts.fxQuality || {}) };
+  let lastNonZeroFxQuality = { ...fxQuality };
+  let fxEnabled = fxMode !== 0;
+  let unitFxIntervalMs = fxQuality.unitFxIntervalMs;
+  let groundFireIntervalMs = fxQuality.groundFireIntervalMs;
+  let fxEmitChance = fxQuality.emitChance;
+  let fxDistanceSq =
+    fxQuality.distance > 0 ? fxQuality.distance * fxQuality.distance : 0;
+  let socketFireEnabled = fxMode !== 0 && !!fxQuality.socketFire;
+  let unitFxElapsed = 0;
+  let groundFireElapsed = 0;
   /** VAT clock advance — A/B with V key. */
   let vatEnabled = true;
   /** Unit meshes + pose loop — A/B with U key. */
@@ -748,9 +771,21 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Late-bound so scenery can emit before the particle system exists. */
   const treeFireEmit = { fn: null };
 
+  function allowContinuousFx() {
+    return fxEmitChance >= 1 || Math.random() < fxEmitChance;
+  }
+
   function sceneryOpts() {
     return {
       emitFire(x, y, z, scale) {
+        if (!fxEnabled || !socketFireEnabled || !allowContinuousFx()) return;
+        const eye = cameraEyePos();
+        if (eye && Number.isFinite(fxDistanceSq) && fxDistanceSq > 0) {
+          const dx = eye.x - x;
+          const dy = eye.y - y;
+          const dz = eye.z - z;
+          if (dx * dx + dy * dy + dz * dz > fxDistanceSq) return;
+        }
         treeFireEmit.fn?.(x, y, z, scale);
       },
       // 3D trees/rocks pop in after Phase A register — fold them into CSM.
@@ -1094,11 +1129,48 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     scene,
     Math.max(capacity, gpuCapacity, 1) + 64,
   );
-  const particles = createParticleSystem(engine, scene, { getEye: cameraEyePos });
+  const particles = createParticleSystem(engine, scene, {
+    getEye: cameraEyePos,
+    capacity: Math.max(1, fxQuality.initial | 0),
+    hardMax: Math.max(1, fxQuality.hardMax | 0),
+    cullRangeScale: fxQuality.cullRangeScale ?? 1,
+  });
   const unitAuras = createUnitAuras((init) => particles.emit(init), groundYAt, {
-    maxSparkleDistSq: FX_DISTANCE_SQ,
+    // Continuous FX distance is quality-tiered — not tied to scenery LOD_ENABLED.
+    maxSparkleDistSq: fxDistanceSq > 0 ? fxDistanceSq : 0,
+    sparkleIntervalMs: fxQuality.sparkleIntervalMs,
     getEye: cameraEyePos,
   });
+
+  function applyFxQuality(mode, quality) {
+    fxMode = Math.max(0, mode | 0);
+    if (quality) fxQuality = { ...DEFAULT_FX_QUALITY, ...quality };
+    if (fxMode > 0) {
+      lastNonZeroFxMode = fxMode;
+      lastNonZeroFxQuality = { ...fxQuality };
+    }
+    unitFxIntervalMs = fxQuality.unitFxIntervalMs;
+    groundFireIntervalMs = fxQuality.groundFireIntervalMs;
+    fxEmitChance = fxQuality.emitChance;
+    fxDistanceSq =
+      fxQuality.distance > 0 ? fxQuality.distance * fxQuality.distance : 0;
+    socketFireEnabled = fxMode !== 0 && !!fxQuality.socketFire;
+    particles.configure({
+      hardMax: Math.max(1, fxQuality.hardMax | 0),
+      cullRangeScale: fxQuality.cullRangeScale ?? 1,
+    });
+    unitAuras.configure?.({
+      maxSparkleDistSq: fxDistanceSq > 0 ? fxDistanceSq : 0,
+      sparkleIntervalMs: fxQuality.sparkleIntervalMs,
+    });
+    fxEnabled = fxMode !== 0;
+    if (!fxEnabled) {
+      particles.clear();
+      unitAuras.clear();
+      unitFxElapsed = 0;
+      groundFireElapsed = 0;
+    }
+  }
   const monkLobFx = createMonkLobFx((init) => particles.emit(init), groundYAt);
   /** Filled after mushroom.glb loads; spore FX calls through this bridge. */
   let mushrooms = null;
@@ -1130,7 +1202,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Wide at the base, then pull inward while climbing (column, not fountain). */
   treeFireEmit.fn = (x, groundY, z, scale = 1) => {
     const s = Math.max(0.65, scale);
-    const count = 6;
+    const count = Math.max(1, Math.round(6 * Math.min(1, fxEmitChance)));
     for (let i = 0; i < count; i++) {
       const ang = Math.random() * Math.PI * 2;
       const rad = (0.35 + Math.random() * 1.35) * s;
@@ -1998,13 +2070,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   applyShadowState();
 
   let frameCb = null;
-  let unitFxElapsed = 0;
-  let groundFireElapsed = 0;
   /** @type {Map<number, { x: number, z: number, radius: number, generation: number, endsAtMs: number }>} */
   const groundFires = new Map();
-  // 1 particle/unit @ ~12Hz — much cheaper than the old 3× @ 25Hz, still visible in armies.
-  const UNIT_FX_INTERVAL_MS = 80;
-  const GROUND_FIRE_INTERVAL_MS = 55;
+  // Continuous FX intervals come from fxQuality (settings slider); see applyFxQuality.
   /** Match sim FIRE_ZONE_TTL (100 ticks @ 20Hz). */
   const FIRE_ZONE_VISUAL_MS = 5000;
 
@@ -2032,13 +2100,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     particleClockMs += Math.min(100, Math.max(0, fxDt));
     if (fxEnabled) {
       unitFxElapsed += fxDt;
-      if (unitFxElapsed >= UNIT_FX_INTERVAL_MS) {
+      if (unitFxElapsed >= unitFxIntervalMs) {
         unitFxElapsed = 0;
         emitUnitSocketFire();
         emitBuildingSocketFx();
       }
       groundFireElapsed += fxDt;
-      if (groundFireElapsed >= GROUND_FIRE_INTERVAL_MS) {
+      if (groundFireElapsed >= groundFireIntervalMs) {
         groundFireElapsed = 0;
         emitGroundFirePatches();
       }
@@ -2081,6 +2149,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         groundFires.delete(slot);
         continue;
       }
+      if (!allowContinuousFx()) continue;
       const gy = groundYAt(fire.x, fire.z);
       const r = Math.max(1.2, fire.radius * 0.85);
       const fade = Math.max(0.3, Math.min(1, remain / (FIRE_ZONE_VISUAL_MS * 0.85)));
@@ -2114,7 +2183,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /** Constant little fire at particle_anchor / torch_anchor sockets. */
   function emitUnitSocketFire() {
-    const eye = LOD_ENABLED ? cameraEyePos() : null;
+    if (!socketFireEnabled) return;
+    // Always camera-gate continuous FX (scenery LOD_ENABLED is a separate switch).
+    const eye = cameraEyePos();
+    const distSq = fxDistanceSq;
     for (const batch of typeBatches.values()) {
       const sockets = batch.fxSockets;
       if (!sockets?.length) continue;
@@ -2123,12 +2195,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (let slot = 0; slot < count; slot++) {
         const o = slot * 16;
         if (!(m[o + 15] > 0)) continue;
-        if (eye) {
+        if (eye && distSq > 0) {
           const dx = eye.x - m[o + 12];
           const dy = eye.y - m[o + 13];
           const dz = eye.z - m[o + 14];
-          if (dx * dx + dy * dy + dz * dz > FX_DISTANCE_SQ) continue;
+          if (dx * dx + dy * dy + dz * dz > distSq) continue;
         }
+        if (!allowContinuousFx()) continue;
         for (let s = 0; s < sockets.length; s++) {
           const sock = sockets[s];
           const lx = sock.x;
@@ -2146,15 +2219,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /** Building `smoke_anchor*` / `fire_anchor*` empties → chimney smoke / hearth fire. */
   function emitBuildingSocketFx() {
-    const eye = LOD_ENABLED ? cameraEyePos() : null;
+    if (!socketFireEnabled) return;
+    const eye = cameraEyePos();
+    const distSq = fxDistanceSq;
     buildingProps.forEachFxInstance?.((_typeId, m, slot, sockets) => {
       const o = slot * 16;
-      if (eye) {
+      if (eye && distSq > 0) {
         const dx = eye.x - m[o + 12];
         const dy = eye.y - m[o + 13];
         const dz = eye.z - m[o + 14];
-        if (dx * dx + dy * dy + dz * dz > FX_DISTANCE_SQ) return;
+        if (dx * dx + dy * dy + dz * dz > distSq) return;
       }
+      if (!allowContinuousFx()) return;
       for (let s = 0; s < sockets.length; s++) {
         const sock = sockets[s];
         const isSmoke = /smoke/i.test(sock.name);
@@ -3213,8 +3289,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     setFxEnabled(on) {
-      fxEnabled = !!on;
-      if (!fxEnabled) {
+      if (on) {
+        applyFxQuality(lastNonZeroFxMode, lastNonZeroFxQuality);
+      } else {
+        fxEnabled = false;
+        socketFireEnabled = false;
         particles.clear();
         unitAuras.clear();
         unitFxElapsed = 0;
@@ -3225,6 +3304,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     getFxEnabled() {
       return fxEnabled;
+    },
+
+    /** @param {number} mode 0..3 */
+    setFxMode(mode, quality) {
+      applyFxQuality(mode, quality);
+      return fxMode;
+    },
+
+    getFxMode() {
+      return fxEnabled ? fxMode : 0;
     },
 
     toggleFx() {

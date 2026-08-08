@@ -146,8 +146,9 @@ function makeParticle() {
   };
 }
 
-function cullRange(size) {
-  return Math.max(PARTICLE_CULL_MIN_RANGE, size * PARTICLE_CULL_SIZE_K);
+function cullRange(size, scale = 1) {
+  const s = Math.max(0.05, scale);
+  return Math.max(PARTICLE_CULL_MIN_RANGE * s, size * PARTICLE_CULL_SIZE_K * s);
 }
 
 /**
@@ -161,12 +162,16 @@ function cullRange(size) {
  * @param {{
  *   capacity?: number,
  *   hardMax?: number,
+ *   cullRangeScale?: number,
  *   getEye?: () => { x: number, y: number, z: number } | null,
  * }} [options]
  */
 export function createParticleSystem(engine, scene, options = {}) {
-  let capacity = Math.max(1, options.capacity ?? PARTICLE_INITIAL_CAPACITY);
-  const hardMax = Math.max(capacity, options.hardMax ?? PARTICLE_HARD_MAX);
+  const bootInitial = Math.max(1, options.capacity ?? PARTICLE_INITIAL_CAPACITY);
+  let capacity = bootInitial;
+  let hardMax = Math.max(1, options.hardMax ?? PARTICLE_HARD_MAX);
+  if (hardMax < capacity) capacity = hardMax;
+  let cullRangeScale = Math.max(0.05, options.cullRangeScale ?? 1);
   const getEye = options.getEye;
   const softAtlas = atlasFromAlphaDisk(engine, true);
   const hardAtlas = atlasFromAlphaDisk(engine, false);
@@ -203,9 +208,14 @@ export function createParticleSystem(engine, scene, options = {}) {
   function ensureCapacity(needed) {
     if (needed <= capacity) return true;
     if (needed > hardMax) return false;
-    capacity = capacityFor(needed, { initial: PARTICLE_INITIAL_CAPACITY });
+    capacity = capacityFor(needed, { initial: bootInitial });
     if (capacity > hardMax) capacity = hardMax;
     return needed <= capacity;
+  }
+
+  /** Drop newest first until active ≤ hardMax (GPU buffers do not shrink). */
+  function trimToHardMax() {
+    while (active.length > hardMax) release(active.length - 1);
   }
 
   /** @returns {boolean} true if too far from camera for this size */
@@ -213,7 +223,7 @@ export function createParticleSystem(engine, scene, options = {}) {
     if (!getEye) return false;
     const eye = getEye();
     if (!eye) return false;
-    const range = cullRange(size);
+    const range = cullRange(size, cullRangeScale);
     const dx = x - eye.x;
     const dy = y - eye.y;
     const dz = z - eye.z;
@@ -383,7 +393,7 @@ export function createParticleSystem(engine, scene, options = {}) {
           particle.sizeWorld[1],
           particle.cullSize || 0,
         );
-        const range = cullRange(size);
+        const range = cullRange(size, cullRangeScale);
         const dx = particle.position[0] - eye.x;
         const dy = particle.position[1] - eye.y;
         const dz = particle.position[2] - eye.z;
@@ -419,8 +429,30 @@ export function createParticleSystem(engine, scene, options = {}) {
     update,
     clear,
     dispose: clear,
+    /**
+     * Live quality knob. Lowers drop excess actives; cannot reclaim GPU
+     * billboard buffer peak until clear+reload.
+     * @param {{ hardMax?: number, cullRangeScale?: number }} opts
+     */
+    configure(opts = {}) {
+      if (opts.hardMax != null) {
+        hardMax = Math.max(1, opts.hardMax | 0);
+        trimToHardMax();
+      }
+      if (opts.cullRangeScale != null) {
+        cullRangeScale = Math.max(0.05, opts.cullRangeScale);
+      }
+    },
     stats() {
-      return { active: active.length, capacity, hardMax, dropped, culled, emitted };
+      return {
+        active: active.length,
+        capacity,
+        hardMax,
+        dropped,
+        culled,
+        emitted,
+        cullRangeScale,
+      };
     },
   };
 }

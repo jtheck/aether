@@ -31,7 +31,14 @@ import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { setupMenu } from './menu.js';
-import { ensureShadowModeDefault, resolveShadowMode, shadowTier } from './settings.js';
+import {
+  ensureFxModeDefault,
+  ensureShadowModeDefault,
+  fxTier,
+  resolveFxMode,
+  resolveShadowMode,
+  shadowTier,
+} from './settings.js';
 import {
   OVERLAY_COLLAR_SPIN_DISTANCE_SQ,
   OVERLAY_MAX_BARS,
@@ -279,9 +286,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   // Seeds the saved tier from the GPU on first run only; no-op afterwards.
   await ensureShadowModeDefault();
+  await ensureFxModeDefault();
   const bootShadowMode = resolveShadowMode();
+  const bootFxMode = resolveFxMode();
   const renderer = await createRenderer(canvas, count, {
     shadowQuality: shadowTier(bootShadowMode),
+    fxMode: bootFxMode,
+    fxQuality: fxTier(bootFxMode),
     types: session.state.type,
     owners: session.state.owner,
     gpuCapacity: useNet ? kothMaxEntities(army) : count,
@@ -1164,7 +1175,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (e.code === 'KeyF') {
       e.preventDefault();
       const on = renderer.toggleFx?.();
-      if (typeof on === 'boolean') setStatusText(on ? 'FX on' : 'FX off');
+      if (typeof on === 'boolean') {
+        const st = renderer.particleStats?.();
+        setStatusText(
+          on
+            ? `FX on${st ? ` · ${st.active}/${st.hardMax} p` : ''}`
+            : 'FX off',
+        );
+      }
+      sideMenu.refresh();
       return;
     }
     if (e.code === 'KeyV') {

@@ -6,12 +6,16 @@
 // dev and dist in step. The icons are v1's, lifted from game/ui.js.
 
 import {
+  FX_LABELS,
   PLAYER_COLORS,
   SHADOW_LABELS,
+  fxTier,
+  getFxMode,
   getPlayerColor,
   getPlayerName,
   getShadowMode,
   resolveShadowMode,
+  setFxMode,
   setPlayerColor,
   setPlayerName,
   setShadowMode,
@@ -48,7 +52,13 @@ const CSS = `
 
 /**
  * @param {object} opts
- * @param {{ setShadowsEnabled?: (on: boolean) => unknown, getShadowsEnabled?: () => boolean }} opts.renderer
+ * @param {{
+ *   setShadowsEnabled?: (on: boolean) => unknown,
+ *   getShadowsEnabled?: () => boolean,
+ *   setFxMode?: (mode: number, quality?: object) => unknown,
+ *   getFxMode?: () => number,
+ *   particleStats?: () => { active?: number, capacity?: number, hardMax?: number },
+ * }} opts.renderer
  */
 export function setupMenu({ renderer }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
@@ -80,6 +90,11 @@ export function setupMenu({ renderer }) {
         <div class="note" id="shadow_note"></div>
       </div>
       <div class="row">
+        <label for="fx_slider">FX <span class="value" id="fx_value"></span></label>
+        <input type="range" id="fx_slider" min="0" max="${FX_LABELS.length - 1}" step="1">
+        <div class="note" id="fx_note"></div>
+      </div>
+      <div class="row">
         <label for="name_input">Player name</label>
         <input type="text" id="name_input" maxlength="24" spellcheck="false" autocomplete="off">
       </div>
@@ -100,6 +115,9 @@ export function setupMenu({ renderer }) {
   const slider = /** @type {HTMLInputElement} */ (drawer.querySelector('#shadow_slider'));
   const sliderValue = /** @type {HTMLElement} */ (drawer.querySelector('#shadow_value'));
   const note = /** @type {HTMLElement} */ (drawer.querySelector('#shadow_note'));
+  const fxSlider = /** @type {HTMLInputElement} */ (drawer.querySelector('#fx_slider'));
+  const fxValue = /** @type {HTMLElement} */ (drawer.querySelector('#fx_value'));
+  const fxNote = /** @type {HTMLElement} */ (drawer.querySelector('#fx_note'));
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
   const colorPicker = /** @type {HTMLSelectElement} */ (drawer.querySelector('#color_picker'));
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
@@ -121,12 +139,32 @@ export function setupMenu({ renderer }) {
     note.textContent = needsReload ? 'Reload to apply this quality.' : '';
   }
 
+  function paintFx(mode) {
+    fxValue.textContent = FX_LABELS[mode];
+    const st = renderer.particleStats?.();
+    if (mode === 0) {
+      fxNote.textContent = 'Particles / socket fire off.';
+      return;
+    }
+    if (st) {
+      fxNote.textContent = `${st.active ?? 0} active · cap ${st.capacity ?? '?'} · max ${st.hardMax ?? '?'}`;
+    } else {
+      fxNote.textContent = 'Applies live.';
+    }
+  }
+
   slider.addEventListener('input', () => {
     const mode = setShadowMode(Number(slider.value));
     paintShadow(mode);
     // Off/on is the one part that can change live; the cascade count and map
     // size behind Low/Med/Full are baked into the depth texture at boot.
     renderer.setShadowsEnabled?.(mode !== 0);
+  });
+
+  fxSlider.addEventListener('input', () => {
+    const mode = setFxMode(Number(fxSlider.value));
+    renderer.setFxMode?.(mode, fxTier(mode));
+    paintFx(mode);
   });
 
   nameInput.addEventListener('change', () => {
@@ -141,16 +179,19 @@ export function setupMenu({ renderer }) {
 
   // The camera and hotkeys listen on window with no target check, so typing a
   // name would otherwise pan the board and trip B/G/H.
-  for (const field of [nameInput, colorPicker, slider]) {
+  for (const field of [nameInput, colorPicker, slider, fxSlider]) {
     field.addEventListener('keydown', (e) => e.stopPropagation());
     field.addEventListener('keyup', (e) => e.stopPropagation());
   }
 
   function syncFromState() {
-    // B toggles shadows outside the menu; reflect that rather than fighting it.
+    // B / F toggle outside the menu; reflect that rather than fighting it.
     const mode = renderer.getShadowsEnabled?.() === false ? 0 : getShadowMode();
     slider.value = String(mode);
     paintShadow(mode);
+    const fx = renderer.getFxMode?.() ?? getFxMode();
+    fxSlider.value = String(fx);
+    paintFx(fx);
     nameInput.value = getPlayerName();
     colorPicker.value = getPlayerColor();
     paintProfile();
@@ -165,6 +206,7 @@ export function setupMenu({ renderer }) {
   gear.addEventListener('click', () => {
     const onSettings = drawer.querySelector('.page.is-active')?.dataset.page === 'settings';
     showPage(onSettings ? 'main' : 'settings');
+    if (!onSettings) syncFromState();
   });
 
   syncFromState();
@@ -172,7 +214,7 @@ export function setupMenu({ renderer }) {
   return {
     open: () => setOpen(true),
     close: () => setOpen(false),
-    /** Keep the slider honest when shadows are toggled with B. */
+    /** Keep the sliders honest when B/F toggle outside the menu. */
     refresh: syncFromState,
   };
 }

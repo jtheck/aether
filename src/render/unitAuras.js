@@ -26,10 +26,9 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
   /** @type {Float32Array | null} */
   let posZ = null;
   let sparkleAcc = 0;
-  const maxSparkleDistSq = opts.maxSparkleDistSq ?? Infinity;
+  let maxSparkleDistSq = opts.maxSparkleDistSq ?? Infinity;
+  let sparkleIntervalMs = Math.max(16, opts.sparkleIntervalMs ?? 70);
   const getEye = opts.getEye ?? null;
-
-  const SPARKLE_INTERVAL_MS = 70;
 
   function spawnPulse(worldX, worldZ, maxRadius) {
     pulses.push({
@@ -257,7 +256,7 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
     const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
     updatePulses(dt);
     sparkleAcc += deltaMs;
-    if (sparkleAcc >= SPARKLE_INTERVAL_MS) {
+    if (sparkleAcc >= sparkleIntervalMs) {
       sparkleAcc = 0;
       emitSparkles();
     }
@@ -271,6 +270,16 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
     sparkleAcc = 0;
   }
 
+  /**
+   * @param {{ maxSparkleDistSq?: number, sparkleIntervalMs?: number }} next
+   */
+  function configure(next = {}) {
+    if (next.maxSparkleDistSq != null) maxSparkleDistSq = next.maxSparkleDistSq;
+    if (next.sparkleIntervalMs != null) {
+      sparkleIntervalMs = Math.max(16, next.sparkleIntervalMs);
+    }
+  }
+
   return {
     AURA,
     spawnPulse,
@@ -278,5 +287,6 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
     sync,
     update,
     clear,
+    configure,
   };
 }

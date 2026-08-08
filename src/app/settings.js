@@ -4,6 +4,7 @@
 // browser that already played v1 carries its profile over.
 
 const SHADOW_KEY = 'shadowMode';
+const FX_KEY = 'fxMode';
 const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
 
@@ -26,6 +27,65 @@ export const SHADOW_TIERS = [
 
 /** Fallback when the GPU is unrecognised or storage is unavailable. */
 export const DEFAULT_SHADOW_MODE = 2;
+
+/** Particles / socket fire / aura sparkles — live-applied (unlike shadow map size). */
+export const FX_LABELS = ['Off', 'Low', 'Med', 'Full'];
+
+/**
+ * hardMax: particle pool ceiling (GPU billboard buffers still ratchet up to peak).
+ * distance: camera cull for continuous FX (socket fire, sparkles) — independent of scenery LOD.
+ * emitChance: keep-probability for continuous emitters (combat bursts stay full).
+ * cullRangeScale: tightens size-aware particle camera cull.
+ */
+export const FX_TIERS = [
+  {
+    hardMax: 0,
+    initial: 1,
+    unitFxIntervalMs: 99999,
+    groundFireIntervalMs: 99999,
+    sparkleIntervalMs: 99999,
+    emitChance: 0,
+    distance: 0,
+    cullRangeScale: 0,
+    socketFire: false,
+  },
+  {
+    hardMax: 2048,
+    initial: 512,
+    unitFxIntervalMs: 220,
+    groundFireIntervalMs: 140,
+    sparkleIntervalMs: 160,
+    emitChance: 0.4,
+    distance: 380,
+    cullRangeScale: 0.55,
+    socketFire: true,
+  },
+  {
+    hardMax: 8192,
+    initial: 2048,
+    unitFxIntervalMs: 120,
+    groundFireIntervalMs: 80,
+    sparkleIntervalMs: 100,
+    emitChance: 0.7,
+    distance: 650,
+    cullRangeScale: 0.75,
+    socketFire: true,
+  },
+  {
+    hardMax: 65536,
+    initial: 8192,
+    unitFxIntervalMs: 80,
+    groundFireIntervalMs: 55,
+    sparkleIntervalMs: 70,
+    emitChance: 1,
+    distance: 900,
+    cullRangeScale: 1,
+    socketFire: true,
+  },
+];
+
+/** Fallback when the GPU is unrecognised or storage is unavailable. */
+export const DEFAULT_FX_MODE = 3;
 
 export const PLAYER_NAMES = [
   'Cultivator', 'Gardener', 'Bloomwarden',
@@ -104,6 +164,39 @@ export function resolveShadowMode() {
   return getShadowMode();
 }
 
+/** @returns {number} 0..3 */
+export function getFxMode() {
+  const raw = Number.parseInt(read(FX_KEY) ?? '', 10);
+  if (!Number.isInteger(raw) || raw < 0 || raw >= FX_TIERS.length) {
+    return DEFAULT_FX_MODE;
+  }
+  return raw;
+}
+
+export function setFxMode(mode) {
+  const clamped = Math.max(0, Math.min(FX_TIERS.length - 1, mode | 0));
+  write(FX_KEY, String(clamped));
+  return clamped;
+}
+
+/**
+ * FX mode for this session. `?fx=0` is a one-off override for profiling —
+ * it forces Off without overwriting the saved preference.
+ */
+export function resolveFxMode() {
+  const q = new URLSearchParams(location.search).get('fx');
+  if (q === '0') return 0;
+  if (q != null) {
+    const n = Number.parseInt(q, 10);
+    if (Number.isInteger(n) && n >= 0 && n < FX_TIERS.length) return n;
+  }
+  return getFxMode();
+}
+
+export function fxTier(mode) {
+  return FX_TIERS[Math.max(0, Math.min(FX_TIERS.length - 1, mode | 0))];
+}
+
 /**
  * First-run tier, inferred from the GPU's reported class.
  *
@@ -134,33 +227,69 @@ export function shadowModeForAdapter(info) {
   return DEFAULT_SHADOW_MODE;
 }
 
+/** Same GPU-class heuristic as shadows; mobile parts start on Low FX. */
+export function fxModeForAdapter(info) {
+  const vendor = String(info?.vendor ?? '').toLowerCase();
+  const arch = String(info?.architecture ?? '').toLowerCase();
+  if (!vendor) return DEFAULT_FX_MODE;
+  if (vendor === 'microsoft' || vendor === 'mesa' || arch.includes('swiftshader')) return 0;
+  if (vendor === 'qualcomm' || vendor === 'arm' || vendor === 'imagination' || vendor === 'broadcom') {
+    return 1;
+  }
+  if (vendor === 'intel') return arch.startsWith('gen-') ? 1 : 2;
+  if (vendor === 'nvidia') return 3;
+  return DEFAULT_FX_MODE;
+}
+
 /**
  * Seed the saved shadow mode from the GPU on first run. No-op once the user (or
  * a previous run) has a stored preference, so it never overrides a real choice.
  */
+async function probeAdapterInfo() {
+  try {
+    const adapter = await navigator.gpu?.requestAdapter();
+    if (!adapter) return { fallback: true, info: null };
+    if (adapter.isFallbackAdapter) return { fallback: true, info: null };
+    // adapter.info is the current surface; requestAdapterInfo() the older one.
+    const info = adapter.info ?? (await adapter.requestAdapterInfo?.()) ?? null;
+    return { fallback: false, info };
+  } catch {
+    return { fallback: false, info: null };
+  }
+}
+
 export async function ensureShadowModeDefault() {
   if (read(SHADOW_KEY) !== null) return getShadowMode();
 
   let mode = DEFAULT_SHADOW_MODE;
-  let info = null;
-  try {
-    const adapter = await navigator.gpu?.requestAdapter();
-    if (adapter?.isFallbackAdapter) {
-      mode = 0;
-    } else {
-      // adapter.info is the current surface; requestAdapterInfo() the older one.
-      info = adapter?.info ?? (await adapter?.requestAdapterInfo?.()) ?? null;
-      mode = shadowModeForAdapter(info);
-    }
-  } catch {
-    /* keep the fallback */
-  }
+  const { fallback, info } = await probeAdapterInfo();
+  if (fallback) mode = 0;
+  else mode = shadowModeForAdapter(info);
 
   console.info(
     `[settings] shadow default ${SHADOW_LABELS[mode]} for ${info?.vendor || 'unknown gpu'}`
     + `${info?.architecture ? `/${info.architecture}` : ''}`,
   );
   return setShadowMode(mode);
+}
+
+/**
+ * Seed the saved FX mode from the GPU on first run. No-op once a preference
+ * exists. Shares the adapter probe with shadows when both are unset.
+ */
+export async function ensureFxModeDefault() {
+  if (read(FX_KEY) !== null) return getFxMode();
+
+  let mode = DEFAULT_FX_MODE;
+  const { fallback, info } = await probeAdapterInfo();
+  if (fallback) mode = 0;
+  else mode = fxModeForAdapter(info);
+
+  console.info(
+    `[settings] fx default ${FX_LABELS[mode]} for ${info?.vendor || 'unknown gpu'}`
+    + `${info?.architecture ? `/${info.architecture}` : ''}`,
+  );
+  return setFxMode(mode);
 }
 
 export function shadowTier(mode) {

@@ -163,6 +163,7 @@ function cullRange(size, scale = 1) {
  *   capacity?: number,
  *   hardMax?: number,
  *   cullRangeScale?: number,
+ *   muted?: boolean,
  *   getEye?: () => { x: number, y: number, z: number } | null,
  * }} [options]
  */
@@ -172,6 +173,7 @@ export function createParticleSystem(engine, scene, options = {}) {
   let hardMax = Math.max(1, options.hardMax ?? PARTICLE_HARD_MAX);
   if (hardMax < capacity) capacity = hardMax;
   let cullRangeScale = Math.max(0.05, options.cullRangeScale ?? 1);
+  let muted = !!options.muted;
   const getEye = options.getEye;
   const softAtlas = atlasFromAlphaDisk(engine, true);
   const hardAtlas = atlasFromAlphaDisk(engine, false);
@@ -231,6 +233,7 @@ export function createParticleSystem(engine, scene, options = {}) {
   }
 
   function emit(init = {}) {
+    if (muted) return null;
     const position = init.position ?? [0, 0, 0];
     const startSize = sizePair(init.startSize ?? init.size ?? 1);
     const endSize = sizePair(init.endSize ?? startSize, startSize[0]);
@@ -310,6 +313,7 @@ export function createParticleSystem(engine, scene, options = {}) {
   }
 
   function emitBurst(init = {}) {
+    if (muted) return;
     const count = Math.max(0, Math.floor(init.count ?? 1));
     const speed = init.speed ?? 1;
     for (let i = 0; i < count; i++) {
@@ -442,6 +446,15 @@ export function createParticleSystem(engine, scene, options = {}) {
       if (opts.cullRangeScale != null) {
         cullRangeScale = Math.max(0.05, opts.cullRangeScale);
       }
+      if (opts.muted != null) {
+        muted = !!opts.muted;
+        if (muted) clear();
+      }
+    },
+    setMuted(on) {
+      muted = !!on;
+      if (muted) clear();
+      return muted;
     },
     stats() {
       return {
@@ -452,6 +465,7 @@ export function createParticleSystem(engine, scene, options = {}) {
         culled,
         emitted,
         cullRangeScale,
+        muted,
       };
     },
   };

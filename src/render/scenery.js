@@ -329,14 +329,19 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     }
 
     const cameraPos = cameraPosition(activeCamera);
-    const movedSq =
-      (cameraPos.x - lastCameraX) ** 2 +
-      (cameraPos.y - lastCameraY) ** 2 +
-      (cameraPos.z - lastCameraZ) ** 2;
-    const lodDue = force || elapsed >= LOD_UPDATE_MS || movedSq >= LOD_MOVE_THRESHOLD_SQ;
+    // With LOD off every instance stays on the model path — camera moves and the
+    // 120ms timer must NOT full-flush thin instances (that was the mobile FPS bleed).
     let anyDirty = false;
     for (let b = 0; b < batches.length; b++) {
       if (batches[b].dirty) { anyDirty = true; break; }
+    }
+    let lodDue = force;
+    if (LOD_ENABLED) {
+      const movedSq =
+        (cameraPos.x - lastCameraX) ** 2 +
+        (cameraPos.y - lastCameraY) ** 2 +
+        (cameraPos.z - lastCameraZ) ** 2;
+      lodDue = force || elapsed >= LOD_UPDATE_MS || movedSq >= LOD_MOVE_THRESHOLD_SQ;
     }
     if (lodDue || anyDirty) {
       if (lodDue) {

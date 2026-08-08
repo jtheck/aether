@@ -28,9 +28,11 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
   let sparkleAcc = 0;
   let maxSparkleDistSq = opts.maxSparkleDistSq ?? Infinity;
   let sparkleIntervalMs = Math.max(16, opts.sparkleIntervalMs ?? 70);
+  let muted = !!opts.muted;
   const getEye = opts.getEye ?? null;
 
   function spawnPulse(worldX, worldZ, maxRadius) {
+    if (muted) return;
     pulses.push({
       x: worldX,
       z: worldZ,
@@ -64,7 +66,7 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
   }
 
   function applyHolyArmorUpdates(updatesList) {
-    if (!updatesList?.length) return;
+    if (muted || !updatesList?.length) return;
     for (let u = 0; u < updatesList.length; u++) {
       const patch = updatesList[u];
       const n = patch?.count ?? 0;
@@ -253,6 +255,7 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
   }
 
   function update(deltaMs) {
+    if (muted) return;
     const dt = Math.min(0.1, Math.max(0, deltaMs / 1000));
     updatePulses(dt);
     sparkleAcc += deltaMs;
@@ -271,12 +274,16 @@ export function createUnitAuras(emit, groundYAt, opts = {}) {
   }
 
   /**
-   * @param {{ maxSparkleDistSq?: number, sparkleIntervalMs?: number }} next
+   * @param {{ maxSparkleDistSq?: number, sparkleIntervalMs?: number, muted?: boolean }} next
    */
   function configure(next = {}) {
     if (next.maxSparkleDistSq != null) maxSparkleDistSq = next.maxSparkleDistSq;
     if (next.sparkleIntervalMs != null) {
       sparkleIntervalMs = Math.max(16, next.sparkleIntervalMs);
+    }
+    if (next.muted != null) {
+      muted = !!next.muted;
+      if (muted) clear();
     }
   }
 

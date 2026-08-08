@@ -1134,12 +1134,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     capacity: Math.max(1, fxQuality.initial | 0),
     hardMax: Math.max(1, fxQuality.hardMax | 0),
     cullRangeScale: fxQuality.cullRangeScale ?? 1,
+    muted: !fxEnabled,
   });
   const unitAuras = createUnitAuras((init) => particles.emit(init), groundYAt, {
     // Continuous FX distance is quality-tiered — not tied to scenery LOD_ENABLED.
     maxSparkleDistSq: fxDistanceSq > 0 ? fxDistanceSq : 0,
     sparkleIntervalMs: fxQuality.sparkleIntervalMs,
     getEye: cameraEyePos,
+    muted: !fxEnabled,
   });
 
   function applyFxQuality(mode, quality) {
@@ -1155,18 +1157,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     fxDistanceSq =
       fxQuality.distance > 0 ? fxQuality.distance * fxQuality.distance : 0;
     socketFireEnabled = fxMode !== 0 && !!fxQuality.socketFire;
+    fxEnabled = fxMode !== 0;
     particles.configure({
       hardMax: Math.max(1, fxQuality.hardMax | 0),
       cullRangeScale: fxQuality.cullRangeScale ?? 1,
+      muted: !fxEnabled,
     });
     unitAuras.configure?.({
       maxSparkleDistSq: fxDistanceSq > 0 ? fxDistanceSq : 0,
       sparkleIntervalMs: fxQuality.sparkleIntervalMs,
+      muted: !fxEnabled,
     });
-    fxEnabled = fxMode !== 0;
     if (!fxEnabled) {
-      particles.clear();
-      unitAuras.clear();
       unitFxElapsed = 0;
       groundFireElapsed = 0;
     }
@@ -3294,8 +3296,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       } else {
         fxEnabled = false;
         socketFireEnabled = false;
-        particles.clear();
-        unitAuras.clear();
+        particles.configure({ muted: true, hardMax: 1 });
+        unitAuras.configure?.({ muted: true });
         unitFxElapsed = 0;
         groundFireElapsed = 0;
       }

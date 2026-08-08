@@ -139,6 +139,11 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array } | null} */
   let ghostLine = null;
   let dashPhase = 0;
+  let lastFlagEyeX = NaN;
+  let lastFlagEyeY = NaN;
+  let lastFlagEyeZ = NaN;
+  /** ~3 world-units of eye motion before flag scales are rewritten. */
+  const FLAG_EYE_MOVE_SQ = 9;
 
   const emptyApi = {
     place() {},
@@ -462,6 +467,10 @@ export async function createAgoraProps(engine, scene, groundYAt) {
 
   function rewriteFlags(camera) {
     const eye = cameraEye(camera);
+    // Force a fresh latch so the next update() doesn't skip after place/rally.
+    lastFlagEyeX = eye.x;
+    lastFlagEyeY = eye.y;
+    lastFlagEyeZ = eye.z;
     writeFlagBatch(agoraFlagLayers, agoraCache, eye);
     writeFlagBatch(rallyFlagLayers, rallyCache, eye);
     if (rallyGhost) {
@@ -558,7 +567,19 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       rewriteRallyLines();
       rewriteGhostLine();
     }
-    rewriteFlags(camera);
+    // Flags only need a rewrite when the eye moves enough to change scale, or
+    // when place/rally mutated the cache (rewriteFlags(null) resets the latch).
+    const eye = cameraEye(camera);
+    const movedSq =
+      (eye.x - lastFlagEyeX) ** 2 +
+      (eye.y - lastFlagEyeY) ** 2 +
+      (eye.z - lastFlagEyeZ) ** 2;
+    if (!Number.isFinite(lastFlagEyeX) || movedSq >= FLAG_EYE_MOVE_SQ) {
+      lastFlagEyeX = eye.x;
+      lastFlagEyeY = eye.y;
+      lastFlagEyeZ = eye.z;
+      rewriteFlags(camera);
+    }
   }
 
   function clear() {

@@ -1,6 +1,7 @@
 // Particle Effects System
 // 
-// A simple, reusable particle system that can be attached to buildings using named anchor meshes.
+// A simple, reusable particle system that can be attached to buildings using named
+// anchor empties (TransformNodes) or legacy anchor meshes.
 // 
 // Usage Examples:
 // 
@@ -688,40 +689,43 @@
     return particleSystem;
   }
   
-  // Find a mesh by name in a hierarchy
+  // Match authored socket names on meshes or empties (TransformNodes).
+  function nodeNameMatches(nodeName, name) {
+    if (!nodeName || !name) return false;
+    if (nodeName === name) return true;
+    // Model instancing prefix
+    if (nodeName === `Clone of ${name}`) return true;
+    // Blender duplicate naming (smoke_anchor.001, …)
+    if (nodeName.startsWith(name + '.') && /^\d+$/.test(nodeName.substring(name.length + 1))) {
+      return true;
+    }
+    if (nodeName.startsWith(`Clone of ${name}.`) && /^\d+$/.test(nodeName.substring(`Clone of ${name}.`.length))) {
+      return true;
+    }
+    // Other loader prefixes
+    if (nodeName.endsWith(name)) return true;
+    return false;
+  }
+
   function findMeshByName(rootMesh, name) {
-    // Check exact match first
-    if (rootMesh.name === name) {
-      return rootMesh;
-    }
-    
-    // Check for "Clone of " prefix (from model instancing)
-    if (rootMesh.name === `Clone of ${name}`) {
-      return rootMesh;
-    }
-    
-    // Check for Blender duplicate naming patterns (smoke_anchor.001, smoke_anchor.002, etc.)
-    if (rootMesh.name.startsWith(name + '.') && /^\d+$/.test(rootMesh.name.substring(name.length + 1))) {
-      return rootMesh;
-    }
-    
-    // Check for "Clone of " + Blender duplicate pattern
-    if (rootMesh.name.startsWith(`Clone of ${name}.`) && /^\d+$/.test(rootMesh.name.substring(`Clone of ${name}.`.length))) {
-      return rootMesh;
-    }
-    
-    // Check if the name ends with the target name (for other prefixes)
-    if (rootMesh.name.endsWith(name)) {
-      return rootMesh;
-    }
-    
-    for (let child of rootMesh.getChildMeshes()) {
-      const found = findMeshByName(child, name);
-      if (found) {
-        return found;
+    if (!rootMesh || !name) return null;
+    if (nodeNameMatches(rootMesh.name, name)) return rootMesh;
+
+    // Prefer TransformNodes so Blender empties win over any leftover mesh markers.
+    if (typeof rootMesh.getChildTransformNodes === 'function') {
+      const tnodes = rootMesh.getChildTransformNodes(true);
+      for (let i = 0; i < tnodes.length; i++) {
+        if (nodeNameMatches(tnodes[i].name, name)) return tnodes[i];
       }
     }
-    
+
+    const meshes = typeof rootMesh.getChildMeshes === 'function'
+      ? rootMesh.getChildMeshes(true)
+      : [];
+    for (let i = 0; i < meshes.length; i++) {
+      if (nodeNameMatches(meshes[i].name, name)) return meshes[i];
+    }
+
     return null;
   }
   
@@ -738,11 +742,19 @@
   function getAvailableAnchors(building) {
     if (!building?.mesh) return [];
     const anchors = [];
-    building.mesh.getChildMeshes().forEach(mesh => {
-      if (mesh.name.toLowerCase().includes('anchor')) {
-        anchors.push(mesh.name);
-      }
-    });
+    const seen = new Set();
+    const pushIfAnchor = (node) => {
+      if (!node?.name || !/anchor/i.test(node.name) || seen.has(node.name)) return;
+      seen.add(node.name);
+      anchors.push(node.name);
+    };
+    if (typeof building.mesh.getChildTransformNodes === 'function') {
+      building.mesh.getChildTransformNodes(true).forEach(pushIfAnchor);
+    }
+    if (typeof building.mesh.getChildMeshes === 'function') {
+      building.mesh.getChildMeshes(true).forEach(pushIfAnchor);
+    }
+    pushIfAnchor(building.mesh);
     return anchors;
   }
 

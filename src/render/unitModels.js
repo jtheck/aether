@@ -72,20 +72,28 @@ function gltfNodeBaseName(node) {
 }
 
 /**
- * Blender FX empties / marker cubes — not part of the visible unit.
- * Bare "Cube" is only treated as a helper when the asset also has *anchor*
- * sockets (e.g. warlock). target.glb is itself named Cube and must render.
+ * Named FX sockets (`*_anchor*`). Proper empties have no mesh/material and
+ * never reach {@link collectRenderableMeshes}; this only strips leftover mesh
+ * markers that still use an anchor name.
  *
  * @param {object} node
- * @param {{ hideBareCube?: boolean }} [opts]
  */
-export function isFxSocketNode(node, opts = {}) {
-  const name = gltfNodeBaseName(node);
-  if (/anchor/i.test(name)) return true;
-  if (opts.hideBareCube && name === 'Cube') return true;
-  return false;
+export function isFxSocketNode(node) {
+  return /anchor/i.test(gltfNodeBaseName(node));
 }
 
+/** Uniform scale from a column-major world matrix (abs — Blender may mirror). */
+function worldUniformScale(w) {
+  const sx = Math.hypot(w[0], w[1], w[2]);
+  const sy = Math.hypot(w[4], w[5], w[6]);
+  const sz = Math.hypot(w[8], w[9], w[10]);
+  const s = (sx + sy + sz) / 3;
+  return Number.isFinite(s) && s > 1e-6 ? s : 1;
+}
+
+/**
+ * @returns {{ name: string, x: number, y: number, z: number, scale: number }[]}
+ */
 export function collectFxSockets(node, out = []) {
   if (/anchor/i.test(gltfNodeBaseName(node))) {
     const w = node.worldMatrix;
@@ -95,6 +103,7 @@ export function collectFxSockets(node, out = []) {
         x: w[12],
         y: w[13],
         z: w[14],
+        scale: worldUniformScale(w),
       });
     }
   }
@@ -200,10 +209,7 @@ export async function bakeGltfParts(engine, url) {
   const container = await loadGltf(engine, url);
   const root = cloneTransformNode(container.entities[0]);
   const sockets = collectFxSockets(root);
-  const hideBareCube = sockets.length > 0;
-  const sources = collectRenderableMeshes(root).filter(
-    (n) => !isFxSocketNode(n, { hideBareCube }),
-  );
+  const sources = collectRenderableMeshes(root).filter((n) => !isFxSocketNode(n));
   if (sources.length === 0) throw new Error(`no mesh in ${url}`);
   const parts = sources.map((source) => bakeSourceGeometry(source, source.worldMatrix));
   return { parts, sockets, sources };
@@ -227,15 +233,13 @@ const meshCpuCache = new Map();
 /** @type {Map<string, Promise<object[]>>} */
 const glbMaterialSourcesCache = new Map();
 
-function loadMaterialSources(engine, url, hideBareCube) {
+function loadMaterialSources(engine, url) {
   let pending = glbMaterialSourcesCache.get(url);
   if (!pending) {
     pending = (async () => {
       const container = await loadGltf(engine, url);
       const root = cloneTransformNode(container.entities[0]);
-      return collectRenderableMeshes(root).filter(
-        (n) => !isFxSocketNode(n, { hideBareCube }),
-      );
+      return collectRenderableMeshes(root).filter((n) => !isFxSocketNode(n));
     })();
     glbMaterialSourcesCache.set(url, pending);
   }
@@ -279,18 +283,12 @@ async function loadCpuMeshPackage(engine, url) {
             });
             return {
               parts,
-              sockets: (meta.sockets ?? []).map((s) => ({
-                name: s.name,
-                x: s.x,
-                y: s.y,
-                z: s.z,
-              })),
+              sockets: (meta.sockets ?? []).map(normalizeSocket),
             };
           }
 
           // Legacy bake: geo only — pull materials from GLB.
-          const hideBareCubeGuess = true;
-          const sources = await loadMaterialSources(engine, url, hideBareCubeGuess);
+          const sources = await loadMaterialSources(engine, url);
           const parts = (meta.parts ?? []).map((part, index) => {
             const src = sources[part.materialIndex] ?? sources[index] ?? sources[0];
             return {
@@ -304,12 +302,7 @@ async function loadCpuMeshPackage(engine, url) {
           });
           return {
             parts,
-            sockets: (meta.sockets ?? []).map((s) => ({
-              name: s.name,
-              x: s.x,
-              y: s.y,
-              z: s.z,
-            })),
+            sockets: (meta.sockets ?? []).map(normalizeSocket),
           };
         }
       }
@@ -322,6 +315,17 @@ async function loadCpuMeshPackage(engine, url) {
   return pending;
 }
 
+function normalizeSocket(s) {
+  const scale = Number(s?.scale);
+  return {
+    name: s.name,
+    x: s.x,
+    y: s.y,
+    z: s.z,
+    scale: Number.isFinite(scale) && scale > 1e-6 ? scale : 1,
+  };
+}
+
 function cpuPackageFromLive(baked, sockets) {
   return {
     parts: baked.map((p) => ({
@@ -332,7 +336,7 @@ function cpuPackageFromLive(baked, sockets) {
       material: p.material,
       reverseWinding: p.reverseWinding,
     })),
-    sockets,
+    sockets: (sockets ?? []).map(normalizeSocket),
   };
 }
 
@@ -451,11 +455,6 @@ export async function loadBakedUnitMesh(engine, url) {
   mesh.position.x = 0;
   mesh.position.y = 0;
   mesh.position.z = 0;
-  mesh.fxSockets = pkg.sockets.map((s) => ({
-    name: s.name,
-    x: s.x,
-    y: s.y,
-    z: s.z,
-  }));
+  mesh.fxSockets = pkg.sockets.map(normalizeSocket);
   return mesh;
 }

@@ -90,7 +90,7 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
     }
   }
 
-  /** Purple / green fungal sparkles on seed tiles (pre-mushroom placeholder look). */
+  /** Purple / green fungal wisps — slow, floaty spore-drift (not sparks). */
   function emitSeedWisps(dt) {
     for (const s of seeds.values()) {
       if (simTick >= s.growAtTick - WISP_END_LEAD_TICKS) continue;
@@ -99,31 +99,35 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
         continue;
       }
       s.acc += dt;
-      if (s.acc < 0.08) continue;
+      // Sparse cadence so they hang in the air instead of spraying.
+      if (s.acc < 0.28) continue;
       s.acc = 0;
       const gy = groundYAt(s.x, s.z);
       const ang = Math.random() * Math.PI * 2;
-      const rad = Math.random() * 0.9;
+      const rad = Math.random() * 0.85;
+      const drift = 0.08 + Math.random() * 0.18;
       emit({
+        blend: 'alpha',
+        fadeOut: true,
         position: [
           s.x + Math.cos(ang) * rad,
-          gy + 0.15 + Math.random() * 0.5,
+          gy + 0.2 + Math.random() * 0.7,
           s.z + Math.sin(ang) * rad,
         ],
         velocity: [
-          (Math.random() - 0.5) * 0.4,
-          0.6 + Math.random() * 1.2,
-          (Math.random() - 0.5) * 0.4,
+          Math.cos(ang) * drift,
+          0.08 + Math.random() * 0.22,
+          Math.sin(ang) * drift,
         ],
-        gravity: [0, 0.35, 0],
+        gravity: [0, 0.04, 0],
         color:
           Math.random() > 0.4
-            ? [0.65, 0.4, 0.95, 0.5]
-            : [0.4, 0.9, 0.45, 0.45],
-        lifetime: 0.55 + Math.random() * 0.45,
-        startSize: 0.2 + Math.random() * 0.25,
-        endSize: 0.04,
-        drag: 0.7,
+            ? [0.65, 0.4, 0.95, 0.42]
+            : [0.4, 0.9, 0.45, 0.38],
+        lifetime: 1.8 + Math.random() * 1.4,
+        startSize: 0.22 + Math.random() * 0.28,
+        endSize: 0.06 + Math.random() * 0.08,
+        drag: 0.25,
       });
     }
   }

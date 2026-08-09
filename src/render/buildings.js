@@ -289,6 +289,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
           x: s.x,
           y: s.y,
           z: s.z,
+          scale: Number.isFinite(s.scale) && s.scale > 1e-6 ? s.scale : 1,
         }));
         templates.set(typeId, { parts, fxSockets });
 

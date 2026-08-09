@@ -737,7 +737,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let fxDistanceSq =
     fxQuality.distance > 0 ? fxQuality.distance * fxQuality.distance : 0;
   let socketFireEnabled = fxMode !== 0 && !!fxQuality.socketFire;
-  let unitFxElapsed = 0;
+  /**
+   * Per-style cadences (not one global pulse). Classic recipe:
+   * fire = steady rate-over-time, smoke = slow puffs, sparkle = intermittent twinkles.
+   * unitFxIntervalMs remains a quality scale factor (~1 at default 80).
+   */
+  const SOCKET_FX_CADENCE = {
+    fire: 70,
+    smoke: 320,
+    sparkle: 210,
+  };
+  let socketFireElapsed = Math.random() * SOCKET_FX_CADENCE.fire;
+  let socketSmokeElapsed = Math.random() * SOCKET_FX_CADENCE.smoke;
+  let socketSparkleElapsed = Math.random() * SOCKET_FX_CADENCE.sparkle;
   let groundFireElapsed = 0;
   /** VAT clock advance — A/B with V key. */
   let vatEnabled = true;
@@ -1177,7 +1189,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       muted: !fxEnabled,
     });
     if (!fxEnabled) {
-      unitFxElapsed = 0;
+      socketFireElapsed = 0;
+      socketSmokeElapsed = 0;
+      socketSparkleElapsed = 0;
       groundFireElapsed = 0;
     }
   }
@@ -2109,11 +2123,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const fxDt = fxPaused ? 0 : deltaMs;
     particleClockMs += Math.min(100, Math.max(0, fxDt));
     if (fxEnabled) {
-      unitFxElapsed += fxDt;
-      if (unitFxElapsed >= unitFxIntervalMs) {
-        unitFxElapsed = 0;
-        emitUnitSocketFire();
-        emitBuildingSocketFx();
+      // Quality slider scales all socket cadences (default unitFxIntervalMs=80 → 1×).
+      const cadenceScale = Math.max(0.5, (unitFxIntervalMs || 80) / 80);
+      socketFireElapsed += fxDt;
+      socketSmokeElapsed += fxDt;
+      socketSparkleElapsed += fxDt;
+      if (socketFireElapsed >= SOCKET_FX_CADENCE.fire * cadenceScale) {
+        socketFireElapsed = 0;
+        emitUnitSocketFire('fire');
+        emitBuildingSocketFx('fire');
+      }
+      if (socketSmokeElapsed >= SOCKET_FX_CADENCE.smoke * cadenceScale) {
+        socketSmokeElapsed = 0;
+        emitUnitSocketFire('smoke');
+        emitBuildingSocketFx('smoke');
+      }
+      if (socketSparkleElapsed >= SOCKET_FX_CADENCE.sparkle * cadenceScale) {
+        socketSparkleElapsed = 0;
+        emitUnitSocketFire('sparkle');
+        emitBuildingSocketFx('sparkle');
       }
       groundFireElapsed += fxDt;
       if (groundFireElapsed >= groundFireIntervalMs) {
@@ -2191,8 +2219,45 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  /** Constant little fire at particle_anchor / torch_anchor sockets. */
-  function emitUnitSocketFire() {
+  /**
+   * Inherent FX size before empty scale. Blender empties are often ~0.3–0.5;
+   * this keeps the effect readable at those sizes while empty scale still
+   * relative-tunes them.
+   */
+  const SOCKET_FX_INHERENT = 3.0;
+
+  /**
+   * Map authored empty names → FX style + default size.
+   * Supported: smoke_anchor*, fire_anchor*, sparkle_anchor* (spawn_* ignored).
+   * Final size = inherent × styleBase × emptyScale × instanceScale.
+   * @returns {{ style: string, base: number } | null}
+   */
+  function socketFxKind(name) {
+    if (!name || /spawn/i.test(name)) return null;
+    if (/smoke/i.test(name)) return { style: 'smoke', base: 1.15 };
+    if (/sparkle/i.test(name)) return { style: 'sparkle', base: 1.0 };
+    if (/fire/i.test(name)) return { style: 'mage', base: 0.8 };
+    return null;
+  }
+
+  function instanceUniformScale(m, o) {
+    const s =
+      (Math.hypot(m[o], m[o + 1], m[o + 2]) +
+        Math.hypot(m[o + 4], m[o + 5], m[o + 6]) +
+        Math.hypot(m[o + 8], m[o + 9], m[o + 10])) /
+      3;
+    return Number.isFinite(s) && s > 1e-6 ? s : 1;
+  }
+
+  /** @param {'fire' | 'smoke' | 'sparkle'} group */
+  function socketMatchesGroup(style, group) {
+    if (group === 'smoke') return style === 'smoke';
+    if (group === 'sparkle') return style === 'sparkle';
+    return style === 'mage' || style === 'torch';
+  }
+
+  /** Constant FX at unit empties for one cadence group. */
+  function emitUnitSocketFire(group) {
     if (!socketFireEnabled) return;
     // Always camera-gate continuous FX (scenery LOD_ENABLED is a separate switch).
     const eye = cameraEyePos();
@@ -2212,23 +2277,31 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           if (dx * dx + dy * dy + dz * dz > distSq) continue;
         }
         if (!allowContinuousFx()) continue;
+        const instScale = instanceUniformScale(m, o);
         for (let s = 0; s < sockets.length; s++) {
           const sock = sockets[s];
+          const kind = socketFxKind(sock.name);
+          if (!kind || !socketMatchesGroup(kind.style, group)) continue;
+          // Socket x/y/z is the empty origin (world translation from bake).
           const lx = sock.x;
           const ly = sock.y;
           const lz = sock.z;
           const wx = m[o + 12] + m[o] * lx + m[o + 8] * lz;
           const wy = m[o + 13] + m[o + 5] * ly;
           const wz = m[o + 14] + m[o + 2] * lx + m[o + 10] * lz;
-          const torch = /torch/i.test(sock.name);
-          emitSocketFlame(wx, wy, wz, torch ? 0.55 : 0.8, torch ? 'torch' : 'mage');
+          const sockScale = Number.isFinite(sock.scale) && sock.scale > 1e-6 ? sock.scale : 1;
+          emitSocketFlame(
+            wx, wy, wz,
+            SOCKET_FX_INHERENT * kind.base * sockScale * instScale,
+            kind.style,
+          );
         }
       }
     }
   }
 
-  /** Building `smoke_anchor*` / `fire_anchor*` empties → chimney smoke / hearth fire. */
-  function emitBuildingSocketFx() {
+  /** Building empties for one cadence group (spawn_* ignored). */
+  function emitBuildingSocketFx(group) {
     if (!socketFireEnabled) return;
     const eye = cameraEyePos();
     const distSq = fxDistanceSq;
@@ -2241,77 +2314,277 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         if (dx * dx + dy * dy + dz * dz > distSq) return;
       }
       if (!allowContinuousFx()) return;
+      const instScale = instanceUniformScale(m, o);
       for (let s = 0; s < sockets.length; s++) {
         const sock = sockets[s];
-        const isSmoke = /smoke/i.test(sock.name);
-        const isFire = /fire/i.test(sock.name);
-        if (!isSmoke && !isFire) continue;
+        const kind = socketFxKind(sock.name);
+        if (!kind) continue;
+        // Buildings use orange hearth fire; units use mage-blue (socketFxKind).
+        const style = kind.style === 'mage' ? 'torch' : kind.style;
+        if (!socketMatchesGroup(style, group)) continue;
+        const base = kind.style === 'mage' ? 1.0 : kind.base;
         const lx = sock.x;
         const ly = sock.y;
         const lz = sock.z;
         const wx = m[o + 12] + m[o] * lx + m[o + 8] * lz;
         const wy = m[o + 13] + m[o + 5] * ly;
         const wz = m[o + 14] + m[o + 2] * lx + m[o + 10] * lz;
-        if (isSmoke) emitSocketFlame(wx, wy, wz, 1.15, 'smoke');
-        else emitSocketFlame(wx, wy, wz, 1.0, 'torch');
+        const sockScale = Number.isFinite(sock.scale) && sock.scale > 1e-6 ? sock.scale : 1;
+        emitSocketFlame(
+          wx, wy, wz,
+          SOCKET_FX_INHERENT * base * sockScale * instScale,
+          style,
+        );
       }
     });
   }
 
+  /**
+   * Layered socket FX (classic game-fire recipe):
+   * hot core + rising flame tongues + ember sparks; smoke is separate soft puffs.
+   * Density scales with fxEmitChance so low FX settings stay cheap.
+   */
   function emitSocketFlame(x, y, z, scale, style) {
-    const s = scale;
-    const mage = style === 'mage';
-    const smoke = style === 'smoke';
-    const ang = Math.random() * Math.PI * 2;
-    const rad = Math.random() * (smoke ? 0.18 : 0.1) * s;
-    if (smoke) {
+    const s = Math.max(0.12, scale);
+    if (style === 'smoke') {
+      emitSocketSmoke(x, y, z, s);
+      return;
+    }
+    if (style === 'sparkle') {
+      emitSocketSparkle(x, y, z, s);
+      return;
+    }
+    emitSocketFire(x, y, z, s, style === 'mage');
+  }
+
+  /** Wisps per fire tick — density is what separates a body of flame from a streamer. */
+  const FIRE_WISPS_PER_TICK = 3;
+  /**
+   * Wide discs pooled at the socket. Wisps are born inside this pool rather
+   * than in empty air, which is what stops each one reading as a circle
+   * popping into existence at the base. Roughly one every other tick against
+   * a multi-second life: churn rate is what reads as boiling, not population.
+   */
+  const FIRE_BASE_CHANCE = 0.5;
+  /** Ember rolls per fire tick — see the loop for the per-roll chance. */
+  const FIRE_EMBERS_PER_TICK = 2;
+
+  /**
+   * Spawn angle for the next wisp: two out-of-step sweeps rather than a steady
+   * precession, so the spoke licks back and forth across ~±90° and never
+   * completes a turn (a full rotation reads as a spinning streamer, not fire).
+   * Clock-derived rather than a counter so sockets appearing or dying cannot
+   * desync it; position seeds the phase to keep neighbours out of lockstep.
+   */
+  function fireSpokeAngle(x, z) {
+    const t = particleClockMs / 1000;
+    const phase = x * 0.7139 + z * 1.3157;
+    return (
+      phase +
+      1.15 * Math.sin(t * 2.1 + phase) +
+      0.45 * Math.sin(t * 3.7 + phase * 2.3)
+    );
+  }
+
+  function emitSocketFire(x, y, z, s, mage) {
+    const dens = Math.min(1, fxEmitChance);
+    if (Math.random() < FIRE_BASE_CHANCE * dens) {
+      const bSize = (0.32 + Math.random() * 0.22) * s;
       particles.emit({
+        // Sunk by a fraction of the disc's own width, so only the top of the
+        // pool shows and discs surface into the flame instead of appearing in
+        // mid-air. Tied to bSize so resizing cannot bury or float the pool.
+        position: [
+          x + (Math.random() - 0.5) * 0.22 * s,
+          y - bSize * (0.2 + Math.random() * 0.3),
+          z + (Math.random() - 0.5) * 0.22 * s,
+        ],
+        velocity: [
+          (Math.random() - 0.5) * 0.08 * s,
+          (0.5 + Math.random() * 0.6) * s,
+          (Math.random() - 0.5) * 0.08 * s,
+        ],
+        gravity: [0, 0.1, 0],
+        color: mage ? [0.72, 0.9, 1, 0.33] : [1, 0.72, 0.24, 0.34],
+        lifetime: 1.8 + Math.random() * 1.2,
+        startSize: bSize,
+        // Collapses to a tenth of its width, so the pool narrows to a point as
+        // it climbs instead of carrying a slab of fire upward.
+        endSize: bSize * (0.06 + Math.random() * 0.09),
+        drag: 1.6,
+      });
+    }
+    // Wisps land in a band around the sweeping spoke and curl as they climb,
+    // so the column reads as arcs of fire built from plain round particles.
+    const spoke = fireSpokeAngle(x, z);
+    for (let i = 0; i < FIRE_WISPS_PER_TICK; i++) {
+      if (Math.random() > dens) continue;
+      const ang = spoke + (Math.random() - 0.5) * 0.85;
+      const cs = Math.cos(ang);
+      const sn = Math.sin(ang);
+      const rad = (0.04 + Math.random() * 0.12) * s;
+      const swirl = (0.2 + Math.random() * 0.26) * s;
+      const outward = (0.04 + Math.random() * 0.12) * s;
+      const roll = Math.random();
+      // Tuned against the soft sprite's squared falloff so ~60 overlapping
+      // wisps leave the plume reading as colour while the base clips to white.
+      const color = mage
+        ? roll > 0.55
+          ? [0.7, 0.92, 1, 0.22]
+          : roll > 0.2
+            ? [0.4, 0.7, 1, 0.19]
+            : [1, 1, 1, 0.26]
+        : roll > 0.55
+          ? [1, 0.88, 0.3, 0.23]
+          : roll > 0.22
+            ? [1, 0.42, 0.05, 0.22]
+            : [0.9, 0.14, 0.02, 0.18];
+      // Wisps are deliberately small against the column they build: structure
+      // is only visible while the flame stands several diameters tall.
+      const size = (0.11 + Math.random() * 0.12) * s;
+      particles.emit({
+        position: [x + cs * rad, y + Math.random() * 0.06 * s, z + sn * rad],
+        // Mostly tangential with a little outward drift — drag bleeds the
+        // swirl off early, leaving a curved kick rather than an orbit.
+        velocity: [
+          cs * outward - sn * swirl,
+          (0.63 + Math.random() * 0.81) * s,
+          sn * outward + cs * swirl,
+        ],
+        // Weak buoyancy against heavy drag: wisps coast up, then hang and fade
+        // near the top instead of streaming off it.
+        gravity: [0, mage ? 0.12 : 0.18, 0],
+        color,
+        // Lifetime × wisps-per-tick sets the live count (~60 per socket).
+        lifetime: 1.2 + Math.random() * 0.9,
+        startSize: size,
+        endSize: size * (0.35 + Math.random() * 0.25),
+        drag: 1.5,
+      });
+    }
+    // Embers — small, drift sideways more than up. Rolled per tick rather than
+    // per wisp, so wisp density changes do not multiply the sparks. Two rolls
+    // rather than a single higher chance: pairs read as a spit of sparks.
+    for (let i = 0; i < FIRE_EMBERS_PER_TICK; i++) {
+      if (Math.random() > 0.22 * dens) continue;
+      const eAng = Math.random() * Math.PI * 2;
+      const kick = (0.2 + Math.random() * 0.4) * s;
+      particles.emit({
+        position: [x, y + 0.04 * s, z],
+        velocity: [
+          Math.cos(eAng) * kick,
+          (0.4 + Math.random() * 0.6) * s,
+          Math.sin(eAng) * kick,
+        ],
+        gravity: [0, 0.1, 0],
+        color: mage
+          ? [0.75, 0.92, 1, 0.55]
+          : [1, 0.7, 0.2, 0.55],
+        lifetime: 0.7 + Math.random() * 0.5,
+        startSize: (0.035 + Math.random() * 0.04) * s,
+        endSize: 0.01 * s,
+        drag: 0.5,
+      });
+    }
+  }
+
+  /** Puff rolls per chimney tick; the second one is a coin flip, see the loop. */
+  const SMOKE_PUFFS_PER_TICK = 2;
+  /** Stars per sparkle tick — short-lived, so the live count tracks this closely. */
+  const SPARKLE_PER_TICK = 4;
+
+  function emitSocketSmoke(x, y, z, s) {
+    const dens = Math.min(1, fxEmitChance);
+    // Slow chimney rhythm: a puff every ~320ms tick, often doubled. Thickness
+    // comes from puffs overlapping each other, not from raising their alpha,
+    // which would only darken the column rather than fill it out.
+    for (let i = 0; i < SMOKE_PUFFS_PER_TICK; i++) {
+      if (Math.random() > (i === 0 ? 1 : 0.6) * dens) continue;
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.random() * 0.1 * s;
+      const drift = 0.08 + Math.random() * 0.2;
+      const start = (0.28 + Math.random() * 0.22) * s;
+      const end = (1.0 + Math.random() * 0.8) * s;
+      particles.emit({
+        blend: 'alpha',
+        fadeOut: true,
         position: [
           x + Math.cos(ang) * rad,
-          y + Math.random() * 0.08 * s,
+          y + Math.random() * 0.05 * s,
           z + Math.sin(ang) * rad,
         ],
         velocity: [
-          (Math.random() - 0.5) * 0.18,
-          0.55 + Math.random() * 0.65,
-          (Math.random() - 0.5) * 0.18,
+          Math.cos(ang) * drift,
+          (0.4 + Math.random() * 0.55) * s,
+          Math.sin(ang) * drift,
         ],
-        gravity: [0, 0.15, 0],
+        gravity: [0, 0.18, 0],
         color:
-          Math.random() > 0.35
-            ? [0.55, 0.55, 0.58, 0.42]
-            : [0.4, 0.4, 0.42, 0.35],
-        lifetime: 1.1 + Math.random() * 0.7,
-        startSize: [0.35 * s, 0.65 * s],
-        endSize: [0.9 * s, 1.4 * s],
-        drag: 0.55,
+          Math.random() > 0.5
+            ? [0.42, 0.42, 0.45, 0.34]
+            : [0.28, 0.28, 0.3, 0.28],
+        lifetime: 2.2 + Math.random() * 1.4,
+        startSize: start,
+        endSize: end,
+        drag: 0.35,
       });
-      return;
     }
-    particles.emit({
-      position: [
-        x + Math.cos(ang) * rad,
-        y + Math.random() * 0.06 * s,
-        z + Math.sin(ang) * rad,
-      ],
-      velocity: [
-        (Math.random() - 0.5) * (mage ? 0.1 : 0.12),
-        0.45 + Math.random() * 0.55,
-        (Math.random() - 0.5) * (mage ? 0.1 : 0.12),
-      ],
-      gravity: [0, mage ? 0.45 : 0.8, 0],
-      color: mage
-        ? Math.random() > 0.4
-          ? [0.85, 0.95, 1, 0.6]
-          : [1, 1, 1, 0.55]
-        : Math.random() > 0.45
-          ? [1, 0.75, 0.2, 0.55]
-          : [1, 0.4, 0.06, 0.5],
-      lifetime: 0.5 + Math.random() * 0.25,
-      startSize: [0.22 * s, 0.42 * s],
-      endSize: [0.05 * s, 0.12 * s],
-      drag: mage ? 0.9 : 1.2,
-    });
+    if (Math.random() < 0.2 * dens) {
+      particles.emit({
+        blend: 'alpha',
+        fadeOut: true,
+        position: [x, y + 0.04 * s, z],
+        velocity: [
+          (Math.random() - 0.5) * 0.15,
+          (0.25 + Math.random() * 0.3) * s,
+          (Math.random() - 0.5) * 0.15,
+        ],
+        gravity: [0, 0.12, 0],
+        color: [0.18, 0.18, 0.2, 0.4],
+        lifetime: 1.2 + Math.random() * 0.6,
+        startSize: 0.2 * s,
+        endSize: 0.6 * s,
+        drag: 0.5,
+      });
+    }
+  }
+
+  function emitSocketSparkle(x, y, z, s) {
+    const dens = Math.min(1, fxEmitChance);
+    // A handful of stars per ~210ms tick, each free to skip its beat so the
+    // cloud keeps twinkling irregularly instead of pulsing with the cadence.
+    for (let i = 0; i < SPARKLE_PER_TICK; i++) {
+      if (Math.random() > 0.85 * dens) continue;
+      const ang = Math.random() * Math.PI * 2;
+      const rad = Math.random() * 0.18 * s;
+      const roll = Math.random();
+      particles.emit({
+        blend: 'alpha',
+        shape: 'star',
+        fadeOut: true,
+        position: [
+          x + Math.cos(ang) * rad,
+          y + Math.random() * 0.1 * s,
+          z + Math.sin(ang) * rad,
+        ],
+        velocity: [
+          (Math.random() - 0.5) * 0.4 * s,
+          (0.3 + Math.random() * 0.6) * s,
+          (Math.random() - 0.5) * 0.4 * s,
+        ],
+        gravity: [0, 0.06, 0],
+        color:
+          roll > 0.66
+            ? [1, 0.95, 0.55, 0.9]
+            : roll > 0.33
+              ? [0.75, 0.55, 1, 0.85]
+              : [0.55, 0.9, 1, 0.85],
+        lifetime: 0.5 + Math.random() * 0.45,
+        startSize: (0.14 + Math.random() * 0.16) * s,
+        endSize: 0.02 * s,
+        drag: 0.7,
+      });
+    }
   }
 
   // Lite only runs material-group builders during register. Phase B adds the first
@@ -3333,7 +3606,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         socketFireEnabled = false;
         particles.configure({ muted: true, hardMax: 1 });
         unitAuras.configure?.({ muted: true });
-        unitFxElapsed = 0;
+        socketFireElapsed = 0;
+        socketSmokeElapsed = 0;
+        socketSparkleElapsed = 0;
         groundFireElapsed = 0;
       }
       return fxEnabled;

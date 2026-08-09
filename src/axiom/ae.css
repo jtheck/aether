@@ -39,3 +39,41 @@ body {
     z-index: 1;
     background-color: #fff5;
 }
+
+/* Mobile move stick (look stays on canvas; stick follows camera facing) */
+#mobi_move {
+    display: none;
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    z-index: 20;
+    padding: 16px 16px 28px;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+@media (pointer: coarse), (hover: none) {
+    #mobi_move { display: flex; }
+}
+.mobi-stick {
+    pointer-events: auto;
+    width: 112px;
+    height: 112px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    touch-action: none;
+    position: relative;
+}
+.mobi-stick-knob {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 44px;
+    height: 44px;
+    margin: -22px 0 0 -22px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    will-change: transform;
+}

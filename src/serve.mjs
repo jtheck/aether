@@ -29,32 +29,26 @@ const MIME = {
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
   '.m4a': 'audio/mp4',
+  '.garden': 'application/octet-stream',
 };
 
-function resolveRepoDir(safe, dir) {
+function resolveSrcDir(safe, dir) {
   if (safe !== dir && !safe.startsWith(`${dir}/`)) return null;
   let rest = safe === dir || safe === `${dir}/` ? 'index.html' : safe.slice(dir.length + 1);
   if (!rest || rest.endsWith('/')) rest = `${rest}index.html`;
-  return join(REPO, dir, ...rest.split('/').filter(Boolean));
+  return join(ROOT, dir, ...rest.split('/').filter(Boolean));
 }
 
 function resolvePath(urlPath) {
   const safe = normalize(urlPath).replace(/^(\.\.[/\\])+/, '').replace(/\\/g, '/');
+  // Shared asset library lives at repo root (forge <base href="../"> → /assets/).
   if (safe.startsWith('assets/')) return join(REPO, ...safe.split('/'));
-  // Soft-landing for no-WebGPU — serve ../axiom/ at /axiom/
-  const axiomPath = resolveRepoDir(safe, 'axiom');
+  // Soft-landing for no-WebGPU — serve src/axiom/ at /axiom/
+  const axiomPath = resolveSrcDir(safe, 'axiom');
   if (axiomPath) return axiomPath;
-  // Classic map editor — serve ../forge/ (+ sibling game/vendor/rt.css via <base href="../">)
-  const forgePath = resolveRepoDir(safe, 'forge');
+  // Classic map editor — self-contained under src/forge/ (game + babylon vendor nested)
+  const forgePath = resolveSrcDir(safe, 'forge');
   if (forgePath) return forgePath;
-  if (safe.startsWith('game/')) return join(REPO, ...safe.split('/'));
-  if (safe === 'rt.css') return join(REPO, 'rt.css');
-  // Prefer src/vendor, fall back to repo vendor (babylon8 etc. for forge).
-  if (safe.startsWith('vendor/')) {
-    const fromSrc = join(ROOT, ...safe.split('/'));
-    if (existsSync(fromSrc)) return fromSrc;
-    return join(REPO, ...safe.split('/'));
-  }
   return join(ROOT, ...safe.split('/'));
 }
 
@@ -77,9 +71,15 @@ try {
 createServer(async (req, res) => {
   try {
     let path = decodeURIComponent((req.url || '/').split('?')[0]);
+    // Trailing slash required so relative script/css URLs resolve under /axiom/ and /forge/.
+    if (path === '/axiom' || path === '/forge') {
+      res.writeHead(302, { Location: `${path}/` });
+      res.end();
+      return;
+    }
     if (path === '/') path = '/index.html';
-    if (path === '/axiom' || path === '/axiom/') path = '/axiom/index.html';
-    if (path === '/forge' || path === '/forge/') path = '/forge/index.html';
+    if (path === '/axiom/') path = '/axiom/index.html';
+    if (path === '/forge/') path = '/forge/index.html';
     const file = resolvePath(path.replace(/^\//, ''));
     const body = await readFile(file);
     res.writeHead(200, {

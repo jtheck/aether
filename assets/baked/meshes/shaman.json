@@ -6,7 +6,8 @@
       "name": "particle_anchor",
       "x": -1.3194955587387085,
       "y": 4.286964416503906,
-      "z": 0.2605471909046173
+      "z": 0.2605471909046173,
+      "scale": 0.5232384204864502
     }
   ],
   "materials": [
@@ -82,6 +83,31 @@
       },
       "uvs": {
         "offset": 38620,
+        "length": 48,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "part2",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 38812,
+        "length": 72,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 39100,
+        "length": 72,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 39388,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 39532,
         "length": 48,
         "type": "f32"
       }

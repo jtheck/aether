@@ -1,28 +1,26 @@
 <!DOCTYPE html>
 <html>
-
 <head>
 <title>_garden</title>
 <meta name="description" content="Simulation Universe">
-
 <link rel="icon" href="data:,">
-<script src="vendor/babylon8.js"></script>
-<script src="js/render.js"></script>
-<script src="js/aether.js"></script>
-<script src="js/mote.js"></script>
-<script src="js/wave.js"></script>
-<script src="js/particle.js"></script>
-<script src="js/glob.js"></script>
-<script src="js/element.js"></script>
-<script src="js/wind-particles.js"></script>
-<script src="js/fps-meter.js"></script>
 <link rel="stylesheet" href="ae.css">
 <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<meta name="description" content="garden">
 <meta name="keywords" content="garden">
 <meta property="og:type" content="website" />
-</head>
 
+<!-- Classic BJS9 UMD (sim is engine-agnostic ES modules) -->
+<script src="vendor/babylon9.js"></script>
+<!-- Inspector stack for F9 (optional at runtime) -->
+<script src="vendor/babylonjs.materials.min.js"></script>
+<script src="vendor/babylonjs.loaders.min.js"></script>
+<script src="vendor/babylon.gui.min.js"></script>
+<script src="vendor/babylonjs.serializers.min.js"></script>
+<script src="vendor/babylonjs.addons.min.js"></script>
+<script src="vendor/babylon.inspector.bundle.js"></script>
+
+<script type="module" src="js/app.js"></script>
+</head>
 <body>
   <div id="xr_button"></div>
   <div id="canvas_container">
@@ -30,5 +28,4 @@
   </div>
   <div id="console_log"></div>
 </body>
-
 </html>

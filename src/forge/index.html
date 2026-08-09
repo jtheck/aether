@@ -9,12 +9,16 @@
   <base href="../">
   
   <link rel="icon" href="icons/favicon-32x32.png">
-  <link rel="stylesheet" href="rt.css">
+  <link rel="stylesheet" href="forge/rt.css">
   <link rel="stylesheet" href="forge/forge.css">
 
-  <script src="vendor/babylon8.js"></script>
-  <script src="vendor/babylonjs.loaders.min.js"></script>
-  <script src="vendor/babylon.inspector.bundle.js"></script>
+  <script src="forge/vendor/babylon9.js"></script>
+  <script src="forge/vendor/babylonjs.materials.min.js"></script>
+  <script src="forge/vendor/babylonjs.loaders.min.js"></script>
+  <script src="forge/vendor/babylon.gui.min.js"></script>
+  <script src="forge/vendor/babylonjs.serializers.min.js"></script>
+  <script src="forge/vendor/babylonjs.addons.min.js"></script>
+  <script src="forge/vendor/babylon.inspector.bundle.js"></script>
 
   <!-- Set ENABLE_FORGE and initialize namespaces before loading game scripts -->
   <script>
@@ -36,15 +40,15 @@
 <body>
   <canvas id="canvas"></canvas>
 
-  <!-- Load core game modules (only what forge needs) -->
-  <script src="game/utility.js"></script>
-  <script src="game/constants.js"></script>
-  <script src="game/determinism.js"></script>
-  <script src="game/lighting.js"></script>
-  <script src="game/gfx.js"></script>
-  <script src="game/field.js"></script>
-  <script src="game/buildings.js"></script>
-  <script src="game/units.js"></script>
+  <!-- Load core game modules (forge-local copies; not shared with v2) -->
+  <script src="forge/game/utility.js"></script>
+  <script src="forge/game/constants.js"></script>
+  <script src="forge/game/determinism.js"></script>
+  <script src="forge/game/lighting.js"></script>
+  <script src="forge/game/gfx.js"></script>
+  <script src="forge/game/field.js"></script>
+  <script src="forge/game/buildings.js"></script>
+  <script src="forge/game/units.js"></script>
   
   <!-- Forge tools -->
   <script src="forge/forge.js"></script>

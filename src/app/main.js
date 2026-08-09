@@ -2026,9 +2026,12 @@ async function waitForGetFireP2p(timeoutMs = 5000) {
   return typeof globalThis.GETFIREP2P === 'function';
 }
 
-/** Soft landing for Lite (WebGPU-only) — raw axiom/ is packaged at /axiom/. */
+/** Soft landing for Lite (WebGPU-only) — src/axiom/ is packaged at /axiom/. */
 function goAxiom() {
-  location.replace(`${location.origin}/axiom/`);
+  showFallback('WebGPU support not detected, going elsewhere...');
+  setTimeout(() => {
+    location.replace(`${location.origin}/axiom/`);
+  }, 1400);
 }
 
 function withTimeout(promise, ms, label) {

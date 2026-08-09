@@ -3,10 +3,10 @@
   "version": 2,
   "sockets": [
     {
-      "name": "particle_anchor",
-      "x": -1.3194955587387085,
-      "y": 4.286964416503906,
-      "z": 0.2605471909046173
+      "name": "sparkle_anchor",
+      "x": -1.2894923686981201,
+      "y": 4.496167182922363,
+      "z": 0.2631452679634094
     }
   ],
   "materials": [
@@ -42,22 +42,22 @@
       "reverseWinding": true,
       "positions": {
         "offset": 0,
-        "length": 2967,
+        "length": 3141,
         "type": "f32"
       },
       "normals": {
-        "offset": 11868,
-        "length": 2967,
+        "offset": 12564,
+        "length": 3141,
         "type": "f32"
       },
       "indices": {
-        "offset": 23736,
-        "length": 1563,
+        "offset": 25128,
+        "length": 1635,
         "type": "u32"
       },
       "uvs": {
-        "offset": 29988,
-        "length": 1978,
+        "offset": 31668,
+        "length": 2094,
         "type": "f32"
       }
     },
@@ -66,22 +66,22 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "positions": {
-        "offset": 37900,
+        "offset": 40044,
         "length": 72,
         "type": "f32"
       },
       "normals": {
-        "offset": 38188,
+        "offset": 40332,
         "length": 72,
         "type": "f32"
       },
       "indices": {
-        "offset": 38476,
+        "offset": 40620,
         "length": 36,
         "type": "u32"
       },
       "uvs": {
-        "offset": 38620,
+        "offset": 40764,
         "length": 48,
         "type": "f32"
       }

@@ -101,6 +101,56 @@
         "length": 1938,
         "type": "f32"
       }
+    },
+    {
+      "materialName": "part2",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 37900,
+        "length": 408,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 39532,
+        "length": 408,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 41164,
+        "length": 204,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 41980,
+        "length": 272,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "part3",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 43068,
+        "length": 42,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 43236,
+        "length": 42,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 43404,
+        "length": 36,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 43548,
+        "length": 28,
+        "type": "f32"
+      }
     }
   ]
 }

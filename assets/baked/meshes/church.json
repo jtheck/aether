@@ -1,14 +1,7 @@
 {
   "sourceUrl": "/assets/models/church.glb",
   "version": 2,
-  "sockets": [
-    {
-      "name": "smoke_anchor.001",
-      "x": 0.11788272857666016,
-      "y": 7.83561372756958,
-      "z": 3.580498695373535
-    }
-  ],
+  "sockets": [],
   "materials": [
     {
       "name": "white",

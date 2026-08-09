@@ -4,9 +4,15 @@
   "sockets": [
     {
       "name": "smoke_anchor",
-      "x": -1.0825375318527222,
-      "y": 0.8765778541564941,
-      "z": -4.166792392730713
+      "x": 0.4453500509262085,
+      "y": 2.5830886363983154,
+      "z": -5.887932300567627
+    },
+    {
+      "name": "spawn_anchor",
+      "x": -4.270832061767578,
+      "y": 1.2745810747146606,
+      "z": 4.848942279815674
     }
   ],
   "materials": [
@@ -131,31 +137,6 @@
       "uvs": {
         "offset": 3824,
         "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part3",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 4064,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 4352,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 4640,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 4784,
-        "length": 48,
         "type": "f32"
       }
     }

@@ -4,9 +4,9 @@
   "sockets": [
     {
       "name": "fire_anchor",
-      "x": -3.6217942237854004,
-      "y": 0.09835206717252731,
-      "z": -2.4694838523864746
+      "x": 4.017306327819824,
+      "y": 0.7579934597015381,
+      "z": 6.835797309875488
     }
   ],
   "materials": [
@@ -39,29 +39,6 @@
         0.0422445572912693,
         0.02459133416414261,
         0.004401430021971464,
-        1
-      ],
-      "metallicFactor": 0,
-      "roughnessFactor": 0.5,
-      "emissiveFactor": [
-        0,
-        0,
-        0
-      ],
-      "doubleSided": true,
-      "alphaMode": "OPAQUE",
-      "alphaCutoff": 0.5,
-      "baseColorImage": null,
-      "normalImage": null,
-      "ormImage": null,
-      "emissiveImage": null
-    },
-    {
-      "name": "Material.003",
-      "baseColorFactor": [
-        0.800000011920929,
-        0.800000011920929,
-        0.800000011920929,
         1
       ],
       "metallicFactor": 0,
@@ -231,7 +208,7 @@
       }
     },
     {
-      "materialName": "Material.003",
+      "materialName": "part5",
       "materialIndex": 2,
       "reverseWinding": true,
       "positions": {
@@ -257,7 +234,7 @@
     },
     {
       "materialName": "part6",
-      "materialIndex": 3,
+      "materialIndex": 2,
       "reverseWinding": true,
       "positions": {
         "offset": 5472,
@@ -281,51 +258,26 @@
       }
     },
     {
-      "materialName": "part7",
-      "materialIndex": 3,
+      "materialName": "Rock.003",
+      "materialIndex": 2,
       "reverseWinding": true,
       "positions": {
         "offset": 6384,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 6672,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 6960,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 7104,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Rock.003",
-      "materialIndex": 3,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 7296,
         "length": 552,
         "type": "f32"
       },
       "normals": {
-        "offset": 9504,
+        "offset": 8592,
         "length": 552,
         "type": "f32"
       },
       "indices": {
-        "offset": 11712,
+        "offset": 10800,
         "length": 270,
         "type": "u32"
       },
       "uvs": {
-        "offset": 12792,
+        "offset": 11880,
         "length": 368,
         "type": "f32"
       }
@@ -335,22 +287,22 @@
       "materialIndex": 1,
       "reverseWinding": true,
       "positions": {
-        "offset": 14264,
+        "offset": 13352,
         "length": 90,
         "type": "f32"
       },
       "normals": {
-        "offset": 14624,
+        "offset": 13712,
         "length": 90,
         "type": "f32"
       },
       "indices": {
-        "offset": 14984,
+        "offset": 14072,
         "length": 48,
         "type": "u32"
       },
       "uvs": {
-        "offset": 15176,
+        "offset": 14264,
         "length": 60,
         "type": "f32"
       }
@@ -360,22 +312,22 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "positions": {
-        "offset": 15416,
+        "offset": 14504,
         "length": 42,
         "type": "f32"
       },
       "normals": {
-        "offset": 15584,
+        "offset": 14672,
         "length": 42,
         "type": "f32"
       },
       "indices": {
-        "offset": 15752,
+        "offset": 14840,
         "length": 36,
         "type": "u32"
       },
       "uvs": {
-        "offset": 15896,
+        "offset": 14984,
         "length": 28,
         "type": "f32"
       }

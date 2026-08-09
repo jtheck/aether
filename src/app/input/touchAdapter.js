@@ -6,11 +6,13 @@
 //   - Center finger: brief still hold → pan; early drag → synth LMB (box);
 //     short lift → tap. Each center contact runs its own pan-hold / pan /
 //     action stream so one hand can pan while the other selects / a-moves.
-//   - Chord: two *uncommitted* center fingers within CHORD_MAX_STAGGER_MS
-//     merge into pinch/rotate/pan. Extra fingers during a live chord still get
-//     their own stream: tap → force-move (can't cleanly 2-finger-tap while
-//     already chorded), drag → box-select. A finger already panning, soloing,
-//     or on the rim never upgrades into a chord (late 2nd finger stays independent).
+//   - Camera chord: two *uncommitted* center fingers within CHORD_MAX_STAGGER_MS
+//     → pinch/rotate/pan. A finger already panning/soloing/edge never joins.
+//   - Parallel orders while camera-chording:
+//       • 1 extra finger tap → a-move / select (same as with 1-finger pan)
+//       • 1 extra finger drag → box-select
+//       • 2 extra fingers (simultaneous, stationary) → force-move tap chord
+//         (second pair; does not steal the camera chord)
 //   - Gameplay LMB is a single seat (gameInput): at most one solo stream;
 //     a new solo take over cancels the previous. Camera pan has no such limit.
 //
@@ -86,19 +88,19 @@ const BOX_DRAG_THRESHOLD_SQ = DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX;
 export function createTouchAdapter({ canvas, camera, game }) {
   /**
    * role:
-   *   edge    — rim camera
-   *   pending — center, pan-hold vs tap/box not decided
-   *   pan     — center camera pan
-   *   solo    — synth LMB into gameInput
-   *   pinch   — member of active two-finger chord
+   *   edge     — rim camera
+   *   pending  — center, pan-hold vs tap/box not decided
+   *   pan      — center camera pan
+   *   solo     — synth LMB into gameInput
+   *   pinch    — member of active two-finger camera chord
+   *   tapChord — member of a parallel 2-finger force-move tap (while camera chords)
    *
    * @typedef {{
    *   x: number, y: number, startX: number, startY: number, startTime: number,
    *   lastX: number, lastY: number,
    *   isEdge: boolean, edgeAxis: 'left'|'right'|'top'|'bottom'|null,
-   *   role: 'edge' | 'pending' | 'pan' | 'solo' | 'pinch',
+   *   role: 'edge' | 'pending' | 'pan' | 'solo' | 'pinch' | 'tapChord',
    *   suppressTap?: boolean,
-   *   forceMoveOnTap?: boolean, // tap during live 2-finger chord → force-move
    * }} TouchState
    * @type {Map<number, TouchState>}
    */
@@ -112,6 +114,11 @@ export function createTouchAdapter({ canvas, camera, game }) {
   /** @type {[number, number] | null} */
   let pinchIds = null;
   let pinchBaseline = null;
+  /** Parallel 2-finger force-move tap while a camera chord is already live. */
+  /** @type {[number, number] | null} */
+  let tapChordIds = null;
+  /** @type {{ startTime: number, startCentroid: {x:number,y:number}, dist: number, movedPx: number, angleAccum: number, lastAngle: number } | null} */
+  let tapChordBaseline = null;
 
   function edgeAxisAt(clientX, clientY) {
     const r = canvas.getBoundingClientRect();
@@ -243,9 +250,6 @@ export function createTouchAdapter({ canvas, camera, game }) {
       return;
     }
     t.role = 'pending';
-    // While pinching/rotating/2-finger-panning, a free finger can't start a new
-    // 2-finger tap — treat its tap as force-move (same order as 2-finger tap).
-    if (pinchIds != null) t.forceMoveOnTap = true;
     startPanHoldTimer(id);
   }
 
@@ -283,12 +287,107 @@ export function createTouchAdapter({ canvas, camera, game }) {
       if (t.role === 'pending') t.role = 'pan';
       return;
     }
-    if (t.forceMoveOnTap) {
-      game.forceMoveAt?.(t.x, t.y);
-      return;
-    }
     beginSolo(id, t, t.startX, t.startY);
     endSolo('pointerup', t);
+  }
+
+  function isCameraChordId(id) {
+    return pinchIds != null && (pinchIds[0] === id || pinchIds[1] === id);
+  }
+
+  function isTapChordId(id) {
+    return tapChordIds != null && (tapChordIds[0] === id || tapChordIds[1] === id);
+  }
+
+  /** Second simultaneous pair while a camera chord is live → force-move tap only. */
+  function findTapChordPartner(id, t) {
+    if (pinchIds == null || tapChordIds != null) return null;
+    for (const [otherId, other] of touches) {
+      if (otherId === id) continue;
+      if (other.isEdge || other.role !== 'pending') continue;
+      if (isCameraChordId(otherId)) continue;
+      if (Math.abs(t.startTime - other.startTime) > CHORD_MAX_STAGGER_MS) continue;
+      return otherId;
+    }
+    return null;
+  }
+
+  function beginTapChord(idA, idB) {
+    const a = touches.get(idA);
+    const b = touches.get(idB);
+    if (!a || !b) return;
+    clearPanHoldTimerFor(idA);
+    clearPanHoldTimerFor(idB);
+    if (soloId === idA || soloId === idB) cancelSolo();
+    a.role = 'tapChord';
+    b.role = 'tapChord';
+    a.suppressTap = true;
+    b.suppressTap = true;
+    tapChordIds = [idA, idB];
+    const c0 = centroidOf(a, b);
+    tapChordBaseline = {
+      startTime: performance.now(),
+      startCentroid: c0,
+      dist: distOf(a, b),
+      movedPx: 0,
+      angleAccum: 0,
+      lastAngle: angleOf(a, b),
+      lastCentroid: c0,
+    };
+  }
+
+  function updateTapChord(movedId) {
+    if (!tapChordIds || !tapChordBaseline) return;
+    const a = touches.get(tapChordIds[0]);
+    const b = touches.get(tapChordIds[1]);
+    if (!a || !b) return;
+    const b0 = tapChordBaseline;
+    const c = centroidOf(a, b);
+    const ang = angleOf(a, b);
+    let dangle = ang - b0.lastAngle;
+    if (dangle > Math.PI) dangle -= 2 * Math.PI;
+    if (dangle < -Math.PI) dangle += 2 * Math.PI;
+    b0.movedPx += Math.hypot(c.x - b0.lastCentroid.x, c.y - b0.lastCentroid.y);
+    b0.angleAccum += Math.abs(dangle);
+    b0.lastCentroid = c;
+    b0.lastAngle = ang;
+    void movedId;
+  }
+
+  function endTapChord() {
+    if (!tapChordIds || !tapChordBaseline) {
+      tapChordIds = null;
+      tapChordBaseline = null;
+      return;
+    }
+    const [idA, idB] = tapChordIds;
+    const a = touches.get(idA);
+    const b = touches.get(idB);
+    const b0 = tapChordBaseline;
+    tapChordIds = null;
+    tapChordBaseline = null;
+    if (a) {
+      a.role = 'pending';
+      a.suppressTap = true;
+    }
+    if (b) {
+      b.role = 'pending';
+      b.suppressTap = true;
+    }
+    if (!a || !b) return;
+    const dur = performance.now() - b0.startTime;
+    const spanDelta = Math.abs(distOf(a, b) - b0.dist);
+    const c = centroidOf(a, b);
+    const centroidDrift = Math.hypot(c.x - b0.startCentroid.x, c.y - b0.startCentroid.y);
+    const wasTap =
+      dur < TWO_FINGER_TAP_MAX_MS &&
+      b0.movedPx < TWO_FINGER_TAP_MAX_PATH_PX &&
+      centroidDrift < TWO_FINGER_TAP_MAX_CENTROID_PX &&
+      spanDelta < TWO_FINGER_TAP_MAX_SPAN_DELTA_PX &&
+      b0.angleAccum < TWO_FINGER_TAP_MAX_ANGLE_RAD;
+    if (wasTap) {
+      if (!game.dismissMenus?.()) game.forceMoveAt?.(c.x, c.y);
+    }
   }
 
   function centroidOf(a, b) {
@@ -523,14 +622,19 @@ export function createTouchAdapter({ canvas, camera, game }) {
 
     if (t.isEdge) return;
 
+    // First free pair → camera chord. Second free pair while camera chords → force-move tap.
     const partnerId = findChordPartner(id, t);
     if (partnerId != null) {
       beginPinch(partnerId, id);
       return;
     }
+    const tapPartnerId = findTapChordPartner(id, t);
+    if (tapPartnerId != null) {
+      beginTapChord(tapPartnerId, id);
+      return;
+    }
 
-    // Independent stream — including a 3rd+ finger while a 2-finger chord is live
-    // (camera chord + tap → force-move; drag → box-select).
+    // Single extra finger: a-move / select / box (works alongside 1-finger pan or camera chord).
     armCenterFinger(id, t);
   }
 
@@ -555,7 +659,10 @@ export function createTouchAdapter({ canvas, camera, game }) {
         game.handlePointerMove(synthMouse('pointermove', t.x, t.y, id));
         return;
       case 'pinch':
-        if (pinchIds && (pinchIds[0] === id || pinchIds[1] === id)) updatePinch();
+        if (isCameraChordId(id)) updatePinch();
+        return;
+      case 'tapChord':
+        if (isTapChordId(id)) updateTapChord(id);
         return;
       default:
         return;
@@ -580,7 +687,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
     const cancelled = upType === 'pointercancel';
     clearPanHoldTimerFor(id);
 
-    if (t.role === 'pinch' && pinchIds && (pinchIds[0] === id || pinchIds[1] === id)) {
+    if (t.role === 'pinch' && isCameraChordId(id)) {
       const otherId = pinchIds[0] === id ? pinchIds[1] : pinchIds[0];
       endPinch();
       touches.delete(id);
@@ -589,6 +696,12 @@ export function createTouchAdapter({ canvas, camera, game }) {
         // Keep camera control if they stay down; lift will not a-move (suppressTap).
         armSurvivor(otherId, other);
       }
+      return;
+    }
+
+    if (t.role === 'tapChord' && isTapChordId(id)) {
+      endTapChord();
+      touches.delete(id);
       return;
     }
 
@@ -627,6 +740,8 @@ export function createTouchAdapter({ canvas, camera, game }) {
     }
     pinchIds = null;
     pinchBaseline = null;
+    tapChordIds = null;
+    tapChordBaseline = null;
     touches.clear();
   }
 

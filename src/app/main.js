@@ -156,8 +156,8 @@ async function main() {
   const canvas = document.getElementById('canvas');
   initAudio();
 
-  if (!(await waitForWebGPU())) {
-    showFallback('This browser has no WebGPU. Use Chrome/Edge 113+ or Firefox/Safari with WebGPU enabled.');
+  if (!(await probeWebGPU())) {
+    goAxiom();
     return;
   }
 
@@ -2026,12 +2026,46 @@ async function waitForGetFireP2p(timeoutMs = 5000) {
   return typeof globalThis.GETFIREP2P === 'function';
 }
 
-async function waitForWebGPU(timeoutMs = 3000) {
-  const start = performance.now();
-  while (!navigator.gpu && performance.now() - start < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 100));
+/** Soft landing for Lite (WebGPU-only) — raw axiom/ is packaged at /axiom/. */
+function goAxiom() {
+  location.replace(`${location.origin}/axiom/`);
+}
+
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(label)), ms);
+    }),
+  ]);
+}
+
+/**
+ * True only when a real WebGPU adapter+device can be created.
+ * `navigator.gpu` alone is not enough (blocklisted GPUs, some mobiles).
+ */
+async function probeWebGPU(timeoutMs = 2500) {
+  const gpu = navigator.gpu;
+  if (!gpu) return false;
+  try {
+    const adapter = await withTimeout(gpu.requestAdapter(), timeoutMs, 'WebGPU adapter timeout');
+    if (!adapter || adapter.isFallbackAdapter) return false;
+    const device = await withTimeout(adapter.requestDevice(), timeoutMs, 'WebGPU device timeout');
+    if (!device) return false;
+    try {
+      device.destroy?.();
+    } catch {
+      /* ignore */
+    }
+    return true;
+  } catch {
+    return false;
   }
-  return !!navigator.gpu;
+}
+
+function isWebGpuFailure(err) {
+  const m = String(err?.message ?? err).toLowerCase();
+  return /webgpu|requestadapter|requestdevice|gpuadapter|gpu device|no compatible/i.test(m);
 }
 
 // Splash: hold opaque through the ready hitch, then fade. Starting the dissolve
@@ -2118,5 +2152,9 @@ function showFallback(msg) {
 
 main().catch((err) => {
   console.error(err);
+  if (isWebGpuFailure(err)) {
+    goAxiom();
+    return;
+  }
   showFallback(String(err?.message ?? err));
 });

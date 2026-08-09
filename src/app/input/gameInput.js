@@ -174,7 +174,7 @@ export function createGameInput(opts) {
   let placeAnchor = null;
   let placeRotating = false;
   let selectionBox = null;
-  /** @type {{ t: number, x: number, y: number, kind: 'unit' | 'ground' | 'building', typeId?: number, buildingTypeKey?: string } | null} */
+  /** @type {{ t: number, x: number, y: number, kind: 'unit' | 'ground' | 'enemy' | 'building', typeId?: number, buildingTypeKey?: string } | null} */
   let lastTap = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
   let abilityHoldTimer = null;
@@ -836,8 +836,9 @@ export function createGameInput(opts) {
 
   function handlePointerDown(e) {
     if (!canUseInput()) return false;
-    if (e.pointerType === 'touch') return false;
     if (e.button !== 0) return false;
+    // Raw touch is owned by touchAdapter (pointerHub). Synthetic touch objects
+    // from the adapter are intentional and must be accepted here.
 
     // Latch pointer state synchronously — never await before this or pointerup is lost.
     boxStart = { x: e.clientX, y: e.clientY };
@@ -869,8 +870,9 @@ export function createGameInput(opts) {
     }
 
     // Sync only — GPU picks here starve the picker and race pointerup.
+    // Touch: still-hold is one-finger pan; cast is double-tap on enemy/ground.
     radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));
-    if (!radialGesture) void armAbilityHold(e.clientX, e.clientY);
+    if (!radialGesture && e.pointerType !== 'touch') void armAbilityHold(e.clientX, e.clientY);
     return true;
   }
 
@@ -941,7 +943,7 @@ export function createGameInput(opts) {
    * @param {{
    *   tapAt?: number,
    *   forceMove?: boolean,
-   *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground' | 'building', typeId?: number, buildingTypeKey?: string } | null,
+   *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground' | 'enemy' | 'building', typeId?: number, buildingTypeKey?: string } | null,
    *   epoch?: number,
    * }} [click]
    */
@@ -1041,7 +1043,22 @@ export function createGameInput(opts) {
 
     if (hasOrderableSelection()) {
       if (!clickCurrent(epoch)) return;
+      // Double-tap enemy/ground → cast (first tap already a-moved; do not delay it).
+      const castEligible =
+        !!prevTap &&
+        (prevTap.kind === 'ground' || prevTap.kind === 'enemy') &&
+        tapAt - prevTap.t <= DOUBLE_MS &&
+        Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX;
+      if (castEligible) {
+        lastTap = null;
+        castAbilityAt(e.clientX, e.clientY);
+        return;
+      }
+      const orderKind =
+        hit >= 0 && world.owner[hit] !== localPlayerId ? 'enemy' : 'ground';
       await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
+      if (!clickCurrent(epoch)) return;
+      lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: orderKind };
       return;
     }
 
@@ -1210,11 +1227,13 @@ export function createGameInput(opts) {
     handlePointerMove,
     handlePointerUp,
     forceMoveAt,
+    castAbilityAt,
     cancelDrag,
     clearSelection,
     deselectEntity,
     cancelPlacement,
     dismissMenus,
+    isPlacing,
     getSelectedBuilding: () => selectedBuilding,
     setSelectedBuilding(sel) {
       notifyBuildingSelected(sel);

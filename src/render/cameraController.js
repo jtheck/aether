@@ -43,7 +43,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   // Zoom / pan clamp tracks the active board half-extent.
   const DEFAULT_RADIUS = worldHalfF * 1.55;
   const RESET_RADIUS = worldHalfF * 1.8;
-  const UPPER_RADIUS = worldHalfF * 3.5;
+  /** Max zoom-out — was 3.5×; pulled in so pinch feels less "runaway" without changing input sens. */
+  const UPPER_RADIUS = worldHalfF * 2.6;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
@@ -241,6 +242,19 @@ export function createCameraController(camera, canvas, opts = {}) {
     for (const k of Object.keys(keyStates)) keyStates[k] = false;
   }
 
+  /** Drop coasting velocity (e.g. input unlock after splash) without resetting the camera pose. */
+  function clearVelocity() {
+    velocity.alpha = 0;
+    velocity.radius = 0;
+    velocity.panX = 0;
+    velocity.panZ = 0;
+    camera.inertialPanningX = 0;
+    camera.inertialPanningY = 0;
+    camera.inertialAlphaOffset = 0;
+    camera.inertialBetaOffset = 0;
+    camera.inertialRadiusOffset = 0;
+  }
+
   function isRmbPanning() {
     return rmbPanActive;
   }
@@ -420,6 +434,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     handleKeyDown,
     handleKeyUp,
     clearKeyStates,
+    clearVelocity,
     isRmbPanning,
     nudgePan,
     nudgeZoom,

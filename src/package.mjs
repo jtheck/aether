@@ -1,5 +1,6 @@
 // Fill ../DEPLOY/ for S3/CloudFront upload: hashed+minified+obfuscated JS,
 // assets (incl. baked), PWA bits, index derived from src/index.html.
+// Also copies ../axiom/ and ../forge/ raw (plus forge's classic Babylon deps).
 // Does NOT rebuild vendor lite/howler — uses whatever is already in vendor/.
 
 import esbuild from 'esbuild';
@@ -166,6 +167,69 @@ cpSync(join(ROOT, 'config', 'offline.html'), join(DEPLOY, 'config', 'offline.htm
 mkdirSync(join(DEPLOY, 'vendor'), { recursive: true });
 cpSync(join(ROOT, 'vendor', 'getfire-p2p.js'), join(DEPLOY, 'vendor', 'getfire-p2p.js'));
 cpSync(join(ROOT, 'manifest.json'), join(DEPLOY, 'manifest.json'));
+
+// Legacy extras — copy raw, no minify/obfuscate.
+function copyRawDir(name, { required = false, note = '' } = {}) {
+  const src = join(REPO, name);
+  if (!existsSync(src)) {
+    const msg = `⚠️  ../${name}/ missing${note ? ` — ${note}` : ''}`;
+    if (required) throw new Error(msg);
+    console.warn(msg);
+    return;
+  }
+  cpSync(src, join(DEPLOY, name), { recursive: true });
+  console.log(`copied ${name}/ (raw)`);
+}
+
+copyRawDir('axiom', { note: 'no-WebGPU redirect target will 404' });
+
+// Forge uses <base href="../"> — needs game scripts, classic Babylon, rt.css.
+{
+  copyRawDir('forge', { note: '/forge will 404' });
+  const forgeGame = [
+    'utility.js',
+    'constants.js',
+    'determinism.js',
+    'lighting.js',
+    'gfx.js',
+    'field.js',
+    'buildings.js',
+    'units.js',
+  ];
+  mkdirSync(join(DEPLOY, 'game'), { recursive: true });
+  for (const file of forgeGame) {
+    const src = join(REPO, 'game', file);
+    if (!existsSync(src)) {
+      console.warn(`⚠️  game/${file} missing — forge may break`);
+      continue;
+    }
+    cpSync(src, join(DEPLOY, 'game', file));
+  }
+  console.log(`copied game/ (${forgeGame.length} forge deps, raw)`);
+
+  const forgeVendor = [
+    'babylon8.js',
+    'babylonjs.loaders.min.js',
+    'babylon.inspector.bundle.js',
+  ];
+  for (const file of forgeVendor) {
+    const src = join(REPO, 'vendor', file);
+    if (!existsSync(src)) {
+      console.warn(`⚠️  vendor/${file} missing — forge may break`);
+      continue;
+    }
+    cpSync(src, join(DEPLOY, 'vendor', file));
+  }
+  console.log(`copied vendor/ (${forgeVendor.length} forge babylon files, raw)`);
+
+  const rtCss = join(REPO, 'rt.css');
+  if (existsSync(rtCss)) {
+    cpSync(rtCss, join(DEPLOY, 'rt.css'));
+    console.log('copied rt.css (raw)');
+  } else {
+    console.warn('⚠️  rt.css missing — forge styling may break');
+  }
+}
 
 let sw = readFileSync(join(ROOT, 'sw-aether.js'), 'utf8');
 sw = sw.replace(/const CACHE = ["'][^"']*["']/, `const CACHE = "aether-${mainHash.slice(0, 12)}"`);

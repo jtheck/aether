@@ -19,7 +19,6 @@
     "build:lite": "node build-lite.mjs",
     "build:explorer": "node build-explorer.mjs",
     "build:howler": "node build-howler.mjs",
-    "build": "node build.mjs",
     "serve": "node serve.mjs",
     "prebake": "node prebake.mjs",
     "package": "node package.mjs"

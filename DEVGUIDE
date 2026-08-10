@@ -43,6 +43,10 @@ To deploy:
      Cross-Origin-Embedder-Policy: require-corp
    (Response headers policy on the distribution. Without them SharedArrayBuffer is undefined
    and crossOriginIsolated is false — check console: window.crossOriginIsolated)
+ - Cache-Control (S3 metadata or CF response headers) — origin currently sends none, which sticks old HTML/assets on phones:
+     index.html, sw-aether.js, manifest.json → Cache-Control: no-cache
+     main-*.js / sim.worker-*.js → Cache-Control: public, max-age=31536000, immutable
+     /assets/* → Cache-Control: no-cache   (unhashed bake/GLB paths; or short max-age)
 
 
 

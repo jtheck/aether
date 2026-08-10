@@ -1,56 +1,39 @@
 
-
-// This is the "Offline page" service worker
+// Offline-fallback only. Does NOT cache game JS/assets.
+// Each `npm run package` rewrites CACHE to aether-<mainHash>.
 
 const CACHE = "aether-5";
-
-// TODO: replace the following with the correct offline fallback page i.e.: const offlineFallbackPage = "offline.html";
 const offlineFallbackPage = "/config/offline.html";
 
-// Install stage sets up the offline page in the cache and opens a new cache
-self.addEventListener("install", function (event) {
-  console.log("sw Install Event processing");
-
+self.addEventListener("install", (event) => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE).then(function (cache) {
-      console.log("sw Cached offline page during install");
-    //   return cache.addAll([
-    //     // '<%= asset_path "application.js" %>',
-    //     // '<%= asset_path "application.css" %>',
-    //     '/offline.html'
-    //   ]);
-    //   if (offlineFallbackPage === "offline.html") {
-    //     return cache.add(new Response(offlineFallbackPage));
-    //   }
-
-      return cache.add(offlineFallbackPage);
-    })
+    caches.open(CACHE).then((cache) => cache.add(offlineFallbackPage)).catch(() => {}),
   );
 });
 
-// Only intercept navigation requests; on failure show offline page.
-self.addEventListener("fetch", function (event) {
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((k) => k.startsWith("aether-") && k !== CACHE)
+          .map((k) => caches.delete(k)),
+      );
+      await self.clients.claim();
+    })(),
+  );
+});
+
+// Navigations: network only; offline page if the document fetch fails.
+self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   if (event.request.mode !== "navigate" || event.request.destination !== "document") return;
 
   event.respondWith(
-    fetch(event.request).catch(function (error) {
-      console.error("sw Network request Failed. Serving offline page " + error);
-      return caches.open(CACHE).then(function (cache) {
-        return cache.match(offlineFallbackPage);
-      });
-    })
+    fetch(event.request).catch(() =>
+      caches.open(CACHE).then((cache) => cache.match(offlineFallbackPage)),
+    ),
   );
-});
-
-// This is an event that can be fired from your page to tell the SW to update the offline page
-self.addEventListener("refreshOffline", function () {
-  const offlinePageRequest = new Request(offlineFallbackPage);
-
-  return fetch(offlineFallbackPage).then(function (response) {
-    return caches.open(CACHE).then(function (cache) {
-      console.log("sw Offline page updated from refreshOffline event: " + response.url);
-      return cache.put(offlinePageRequest, response);
-    });
-  });
 });

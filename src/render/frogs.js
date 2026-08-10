@@ -146,7 +146,8 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
    * @type {Map<number, {
    *   ox: number, oz: number, dx: number, dz: number,
    *   hopProgress: number, hopDuration: number, phase: number,
-   *   generation: number, x: number, z: number
+   *   generation: number, x: number, z: number,
+   *   faceX: number, faceZ: number
    * }>}
    */
   const active = new Map();
@@ -192,9 +193,24 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
     const t = hopping ? Math.max(0, Math.min(1, state.hopProgress)) : 0;
     const x = hopping ? state.ox + (state.dx - state.ox) * t : state.x;
     const z = hopping ? state.oz + (state.dz - state.oz) * t : state.z;
-    const faceX = state.dx - state.ox;
-    const faceZ = state.dz - state.oz;
-    return { x, z, yOff: hopHeight(t, state.phase), faceX, faceZ };
+    return {
+      x,
+      z,
+      yOff: hopHeight(t, state.phase),
+      faceX: state.faceX,
+      faceZ: state.faceZ,
+    };
+  }
+
+  /** Keep last hop heading when origin/dest collapse on land. */
+  function facingFromHop(ox, oz, dx, dz, prev) {
+    const faceX = dx - ox;
+    const faceZ = dz - oz;
+    if (Math.hypot(faceX, faceZ) >= 1e-5) return { faceX, faceZ };
+    return {
+      faceX: prev?.faceX ?? 0,
+      faceZ: prev?.faceZ ?? 1,
+    };
   }
 
   function rebuild() {
@@ -250,17 +266,25 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
           }
           continue;
         }
+        const prev = active.get(slot);
+        const ox = patch.originX?.[i] ?? patch.px[i];
+        const oz = patch.originY?.[i] ?? patch.py[i];
+        const dx = patch.destX?.[i] ?? patch.px[i];
+        const dz = patch.destY?.[i] ?? patch.py[i];
+        const face = facingFromHop(ox, oz, dx, dz, prev);
         active.set(slot, {
-          ox: patch.originX?.[i] ?? patch.px[i],
-          oz: patch.originY?.[i] ?? patch.py[i],
-          dx: patch.destX?.[i] ?? patch.px[i],
-          dz: patch.destY?.[i] ?? patch.py[i],
+          ox,
+          oz,
+          dx,
+          dz,
           x: patch.px[i],
           z: patch.py[i],
           hopProgress: patch.hopProgress[i] ?? 0,
           hopDuration: patch.hopDuration?.[i] || 1,
           phase: patch.phase[i],
           generation: patch.generation[i],
+          faceX: face.faceX,
+          faceZ: face.faceZ,
         });
         if (patch.landPulse?.[i] && landFxLeft > 0) {
           landFxLeft--;

@@ -2227,8 +2227,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const SOCKET_FX_INHERENT = 3.0;
 
   /**
-   * Map authored empty names → FX style + default size.
-   * Supported: smoke_anchor*, fire_anchor*, sparkle_anchor* (spawn_* ignored).
+   * Map authored empty names → FX style + default size. The name is the only
+   * thing that picks a style; nothing downstream rewrites it based on what the
+   * socket is attached to. Add a style here rather than branching at the
+   * emitter, and keep new names clear of the words already matched below.
+   * Supported: smoke_anchor*, fire_anchor*, hex_anchor*, sparkle_anchor*
+   * (spawn_* ignored).
    * Final size = inherent × styleBase × emptyScale × instanceScale.
    * @returns {{ style: string, base: number } | null}
    */
@@ -2236,7 +2240,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!name || /spawn/i.test(name)) return null;
     if (/smoke/i.test(name)) return { style: 'smoke', base: 1.15 };
     if (/sparkle/i.test(name)) return { style: 'sparkle', base: 1.0 };
-    if (/fire/i.test(name)) return { style: 'mage', base: 0.8 };
+    if (/hex/i.test(name)) return { style: 'hex', base: 0.8 };
+    if (/fire/i.test(name)) return { style: 'torch', base: 1.0 };
     return null;
   }
 
@@ -2249,11 +2254,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return Number.isFinite(s) && s > 1e-6 ? s : 1;
   }
 
-  /** @param {'fire' | 'smoke' | 'sparkle'} group */
+  /**
+   * Cadence groups, not styles: hex and torch both tick at the fire rate.
+   * @param {'fire' | 'smoke' | 'sparkle'} group
+   */
   function socketMatchesGroup(style, group) {
     if (group === 'smoke') return style === 'smoke';
     if (group === 'sparkle') return style === 'sparkle';
-    return style === 'mage' || style === 'torch';
+    return style === 'hex' || style === 'torch';
   }
 
   /** Constant FX at unit empties for one cadence group. */
@@ -2319,10 +2327,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const sock = sockets[s];
         const kind = socketFxKind(sock.name);
         if (!kind) continue;
-        // Buildings use orange hearth fire; units use mage-blue (socketFxKind).
-        const style = kind.style === 'mage' ? 'torch' : kind.style;
-        if (!socketMatchesGroup(style, group)) continue;
-        const base = kind.style === 'mage' ? 1.0 : kind.base;
+        if (!socketMatchesGroup(kind.style, group)) continue;
         const lx = sock.x;
         const ly = sock.y;
         const lz = sock.z;
@@ -2332,8 +2337,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const sockScale = Number.isFinite(sock.scale) && sock.scale > 1e-6 ? sock.scale : 1;
         emitSocketFlame(
           wx, wy, wz,
-          SOCKET_FX_INHERENT * base * sockScale * instScale,
-          style,
+          SOCKET_FX_INHERENT * kind.base * sockScale * instScale,
+          kind.style,
         );
       }
     });
@@ -2354,7 +2359,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       emitSocketSparkle(x, y, z, s);
       return;
     }
-    emitSocketFire(x, y, z, s, style === 'mage');
+    emitSocketFire(x, y, z, s, style === 'hex');
   }
 
   /** Wisps per fire tick — density is what separates a body of flame from a streamer. */
@@ -2386,7 +2391,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     );
   }
 
-  function emitSocketFire(x, y, z, s, mage) {
+  /** @param {boolean} hex Arcane white-blue with ink beads, vs orange hearth. */
+  function emitSocketFire(x, y, z, s, hex) {
     const dens = Math.min(1, fxEmitChance);
     if (Math.random() < FIRE_BASE_CHANCE * dens) {
       const bSize = (0.32 + Math.random() * 0.22) * s;
@@ -2405,7 +2411,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           (Math.random() - 0.5) * 0.08 * s,
         ],
         gravity: [0, 0.1, 0],
-        color: mage ? [0.72, 0.9, 1, 0.33] : [1, 0.72, 0.24, 0.34],
+        color: hex ? [0.72, 0.9, 1, 0.33] : [1, 0.72, 0.24, 0.34],
         lifetime: 1.8 + Math.random() * 1.2,
         startSize: bSize,
         // Collapses to a tenth of its width, so the pool narrows to a point as
@@ -2428,7 +2434,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const roll = Math.random();
       // Tuned against the soft sprite's squared falloff so ~60 overlapping
       // wisps leave the plume reading as colour while the base clips to white.
-      const color = mage
+      const color = hex
         ? roll > 0.55
           ? [0.7, 0.92, 1, 0.22]
           : roll > 0.2
@@ -2453,7 +2459,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         ],
         // Weak buoyancy against heavy drag: wisps coast up, then hang and fade
         // near the top instead of streaming off it.
-        gravity: [0, mage ? 0.12 : 0.18, 0],
+        gravity: [0, hex ? 0.12 : 0.18, 0],
         color,
         // Lifetime × wisps-per-tick sets the live count (~60 per socket).
         lifetime: 1.2 + Math.random() * 0.9,
@@ -2462,6 +2468,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         drag: 1.5,
       });
     }
+    if (hex) emitStaffInkDrip(x, y, z, s, dens);
     // Embers — small, drift sideways more than up. Rolled per tick rather than
     // per wisp, so wisp density changes do not multiply the sparks. Two rolls
     // rather than a single higher chance: pairs read as a spit of sparks.
@@ -2477,7 +2484,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           Math.sin(eAng) * kick,
         ],
         gravity: [0, 0.1, 0],
-        color: mage
+        color: hex
           ? [0.75, 0.92, 1, 0.55]
           : [1, 0.7, 0.2, 0.55],
         lifetime: 0.7 + Math.random() * 0.5,
@@ -2486,6 +2493,42 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         drag: 0.5,
       });
     }
+  }
+
+  /**
+   * Hex fire only: a bead of ink gathers under the flame, swells, then falls.
+   * Alpha blend is required — additive black draws nothing. Solid (no fadeOut)
+   * so the drop stays inky against the white flame right up to the ground,
+   * where killY culls it. A shrunken cousin of the spore-bloom tree drips.
+   */
+  function emitStaffInkDrip(x, y, z, s, dens) {
+    if (Math.random() > 0.12 * dens) return;
+    const hang = 0.18 + Math.random() * 0.22;
+    const peak = (0.11 + Math.random() * 0.06) * s;
+    particles.emit({
+      blend: 'alpha',
+      hard: true,
+      fadeOut: false,
+      killY: groundYAt(x, z) - 0.2,
+      // Sits below the socket so beads bud off the underside of the flame
+      // rather than out of its bright core, where they read as holes.
+      position: [
+        x + (Math.random() - 0.5) * 0.18 * s,
+        y - (0.18 + Math.random() * 0.08) * s,
+        z + (Math.random() - 0.5) * 0.18 * s,
+      ],
+      velocity: [0, (-0.05 - Math.random() * 0.1) * s, 0],
+      // Far gentler than the tree drips: this one only falls a metre or two,
+      // and at their gravity it would be a single blurred frame.
+      gravity: [0, -9 - Math.random() * 5, 0],
+      color: [0, 0, 0, 1],
+      hangTime: hang,
+      lifetime: hang + 1.6,
+      startSize: (0.05 + Math.random() * 0.04) * s,
+      peakSize: peak,
+      endSize: peak,
+      drag: 0.05,
+    });
   }
 
   /** Puff rolls per chimney tick; the second one is a coin flip, see the loop. */

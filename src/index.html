@@ -243,9 +243,11 @@
   <script type="module" src="./app/main.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      if (!navigator.serviceWorker.controller) {
-        navigator.serviceWorker.register('/sw-aether.js', { scope: './' }).catch(function () {});
-      }
+      // Always register (update check). updateViaCache:'none' so HTTP cache can't pin an old SW.
+      navigator.serviceWorker
+        .register('/sw-aether.js', { scope: './', updateViaCache: 'none' })
+        .then(function (reg) { return reg.update(); })
+        .catch(function () {});
     }
   </script>
 </body>

@@ -76,7 +76,9 @@ export async function hasBakedVat(glbUrl) {
  */
 export async function tryFetch(url) {
   try {
-    const res = await fetch(url, { cache: 'force-cache' });
+    // no-cache: always revalidate (ETag/304). force-cache stuck returning
+    // visitors on old unhashed bake/GLB bytes after deploy — hard-to-kill on mobile.
+    const res = await fetch(url, { cache: 'no-cache' });
     if (!res.ok) return null;
     return res;
   } catch {

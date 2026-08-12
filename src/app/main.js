@@ -47,7 +47,7 @@ import {
 } from '../render/overlayLod.js';
 import { isVatUnitType } from '../render/vatUnits.js';
 import { setupInput } from './input.js';
-import { init as initAudio } from './audio.js';
+import { init as initAudio, playThunder } from './audio.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 
@@ -1714,7 +1714,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const frogUpdates = session.takePendingFrogUpdates?.();
     if (frogUpdates?.length) renderer.applyFrogUpdates?.(frogUpdates);
     const lightningUpdates = session.takePendingLightningUpdates?.();
-    if (lightningUpdates?.length) renderer.applyLightningUpdates?.(lightningUpdates);
+    if (lightningUpdates?.length) {
+      renderer.applyLightningUpdates?.(lightningUpdates);
+      for (let u = 0; u < lightningUpdates.length; u++) {
+        const n = lightningUpdates[u]?.count ?? 0;
+        for (let i = 0; i < n; i++) playThunder();
+      }
+    }
     const holyArmorUpdates = session.takePendingHolyArmorUpdates?.();
     if (holyArmorUpdates?.length) renderer.applyHolyArmorUpdates?.(holyArmorUpdates);
     const sporeBloomUpdates = session.takePendingSporeBloomUpdates?.();

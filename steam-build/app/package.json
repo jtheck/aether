@@ -1,0 +1,22 @@
+{
+  "name": "aether",
+  "version": "0.1.0",
+  "description": "Aether desktop shell (NW.js) for https://aether.garden",
+  "main": "https://aether.garden",
+  "node-main": "node-main.js",
+  "inject_js_start": "bridge.js",
+  "dependencies": {
+    "steamworks-ffi-node": "^0.10.4",
+    "steamworks.js": "^0.4.0"
+  },
+  "window": {
+    "title": "Æther.Garden",
+    "width": 1280,
+    "height": 800,
+    "min_width": 320,
+    "min_height": 240,
+    "icon": "build/icon.png",
+    "position": "center"
+  },
+  "chromium-args": "--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding --remote-debugging-port=9222 --user-data-dir=.nw-user-data --in-process-gpu --disable-direct-composition"
+}

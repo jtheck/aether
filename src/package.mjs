@@ -103,11 +103,12 @@ const mainHash = mainFile.replace(/^main-/, '').replace(/\.js$/, '');
   console.log(`worker URL → ./${workerFile}`);
 }
 
-// Opt in: PACKAGE_OBFUSCATE=1 npm run package
+// On by default. Opt out: PACKAGE_OBFUSCATE=0 npm run package
 // Safe on both bundles because splitting:false fully inlines them (no import/export
 // left for the obfuscator to put a preamble in front of). Module workers only reject
 // statements-before-import; import-free scripts are fine.
-const doObfuscate = process.env.PACKAGE_OBFUSCATE === '1' || process.env.PACKAGE_OBFUSCATE === 'true';
+const obfEnv = (process.env.PACKAGE_OBFUSCATE ?? '1').toLowerCase();
+const doObfuscate = !(obfEnv === '0' || obfEnv === 'false' || obfEnv === 'off' || obfEnv === 'no');
 if (doObfuscate) {
   const obfuscateOpts = {
     compact: true,
@@ -138,7 +139,7 @@ if (doObfuscate) {
     console.log('obfuscated', name);
   }
 } else {
-  console.log('skip obfuscate (set PACKAGE_OBFUSCATE=1 to enable main+worker)');
+  console.log('skip obfuscate (PACKAGE_OBFUSCATE=0)');
 }
 
 // Ensure baked manifest exists (avoids per-mesh 404 probes at runtime).

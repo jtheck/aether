@@ -1,0 +1,21 @@
+{
+  "name": "steam-build",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Æther NW.js desktop shell — Steam build tooling",
+  "scripts": {
+    "prestart": "node ensure-sdk.mjs && node ensure-steam-sdk.mjs && node ensure-node-steam.mjs win && npm install --prefix app && node strip-parent-link.mjs",
+    "start": "nw app --flavor sdk",
+    "dist:win": "node ensure-app-deps.mjs && node strip-parent-link.mjs && node ensure-steam-sdk.mjs && node ensure-node-steam.mjs win && node build.mjs win && node postbuild-trim.mjs dist-win && node verify-shipped-steam.mjs dist-win",
+    "dist:linux": "node ensure-app-deps.mjs && node strip-parent-link.mjs && node ensure-steam-sdk.mjs && node ensure-node-steam.mjs linux && node build.mjs linux && node postbuild-trim.mjs dist-linux && node verify-shipped-steam.mjs dist-linux",
+    "zip:win": "npm run dist:win && node zip-dist.mjs win",
+    "zip:linux": "npm run dist:linux && node zip-dist.mjs linux",
+    "upload:steam": "node upload-steam.mjs",
+    "upload:win": "node upload-steam.mjs --win-only",
+    "upload:linux": "node upload-steam.mjs --linux-only"
+  },
+  "devDependencies": {
+    "nw": "^0.96.0",
+    "nw-builder": "^4.17.10"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "appId": "5043860",
+  "depots": {
+    "win": "5043861",
+    "linux": "PASTE_LINUX_DEPOT_ID_HERE"
+  },
+  "buildDesc": "aether-win64+linux64"
+}

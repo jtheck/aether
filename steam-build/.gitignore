@@ -1,0 +1,30 @@
+# Dependencies & downloaded NW.js runtimes
+node_modules/
+cache/
+
+# Build output — upload to Steam, not git
+dist/
+dist-win/
+dist-win*/
+dist-linux/
+dist-linux*/
+Aether-win64.zip
+Aether-linux64.zip
+
+# SteamCMD upload
+steampipe/config.json
+steampipe/app_build_*.vdf
+steampipe/depot_build_*.vdf
+steampipe-output/
+
+# Local Chromium profile
+.nw-user-data/
+app/.nw-user-data/
+
+# Steam SDK redistributables / worker node
+app/steamworks_sdk/
+app/node-steam/
+app/node_modules/
+app/steam_appid.txt
+
+package-lock.json

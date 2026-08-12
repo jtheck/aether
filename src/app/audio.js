@@ -77,11 +77,16 @@ export function isLoaded(name) {
 export function loadDefaults() {
   load('villager_move_1', 'assets/sounds/units/villager.ogg', { volume: 1 });
   load('villager_move_2', 'assets/sounds/units/villager2.ogg', { volume: 0.85 });
+  load('thunder', 'assets/sounds/thunder.ogg', { volume: 0.9 });
 }
 
 export function playVillagerMove() {
   const pick = Math.random() < 0.5 ? 'villager_move_1' : 'villager_move_2';
   return play(pick);
+}
+
+export function playThunder() {
+  return play('thunder');
 }
 
 export function init() {

@@ -1,1 +1,0 @@
-var r={id:"alpha-test",phase:"fragment",frag(a){return a._features&8?{_id:"alpha-test",_uboFields:[{_name:"alphaCutOff",_type:"f32"}],_fragmentSlots:{AT:"if(alpha*material.materialAlpha<material.alphaCutOff){discard;}"}}:null},writeUbo(a,f,e){let t=e.get("alphaCutOff");t!==void 0&&(a[t/4]=f.alphaCutOff??0)}};export{r as pbrExt};

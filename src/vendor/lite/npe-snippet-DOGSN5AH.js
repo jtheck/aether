@@ -1,1 +1,0 @@
-async function c(o,a="https://snippet.babylonjs.com"){let n=o.replace(/#/g,"/"),t=await fetch(`${a}/${n}`);if(!t.ok)throw new Error(`NodeParticle: snippet fetch failed (${t.status})`);let s=await t.json(),e=JSON.parse(s.jsonPayload).nodeParticle;return typeof e=="string"?JSON.parse(e):e}export{c as fetchNodeParticleSnippet};

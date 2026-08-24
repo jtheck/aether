@@ -318,20 +318,16 @@ export function createBabylonBackend() {
 
       if (mode === 'points') {
         if (!upload.positions) return;
-        const dst = entry.positions;
-        const prev = entry.liveCount | 0;
-        dst.set(upload.positions.subarray(0, count * 3));
-        // Only park the shrink gap — old path looped count→capacity (~200k) every frame.
-        if (count < prev) {
-          for (let i = count; i < prev; i++) {
-            const p = i * 3;
-            dst[p] = 0;
-            dst[p + 1] = -9999;
-            dst[p + 2] = 0;
-          }
+        const B = globalThis.BABYLON;
+        const vb = mesh.getVertexBuffer(B.VertexBuffer.PositionKind);
+        if (count > 0) vb.updateDirectly(upload.positions, 0, count);
+        // PointFillMode draws submesh.verticesCount (not the parked tail).
+        const sub = mesh.subMeshes?.[0];
+        if (sub) {
+          sub.verticesStart = 0;
+          sub.verticesCount = count;
         }
         entry.liveCount = count;
-        mesh.updateVerticesData(globalThis.BABYLON.VertexBuffer.PositionKind, dst);
         mesh.setEnabled(count > 0);
         return;
       }
@@ -443,7 +439,7 @@ export function createBabylonBackend() {
       assertReady();
       const B = globalThis.BABYLON;
 
-      // Only the outermost Chebyshev layer. Caller should skip when chunksVersion unchanged;
+      // Only the outermost streamed shell. Caller should skip when chunksVersion unchanged;
       // keep a cheap focus+count sig as a backstop (no sort/join of hundreds of keys).
       const shell = chunks.filter((c) => c.shell);
       const focus = chunks.find((c) => c.focus);

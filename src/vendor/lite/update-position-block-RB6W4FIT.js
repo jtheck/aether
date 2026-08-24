@@ -1,1 +1,0 @@
-import{a as p}from"./chunk-GWU6AEBJ.js";var a={build(i,t){let o=t.state,s=t.input(i,"particle")(o);if(t.setOutput(i.id,"output",()=>s),!t.isConnected(i,"position"))return;let n=t.input(i,"position");s._updateQueue.push((e,u)=>{o.particle=e,o.system=u,p(e.position,n(o))})}};export{a as updatePositionBlock};

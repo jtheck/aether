@@ -44,7 +44,17 @@
   <style>
     html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0f14; color: #cdd6e4; font-family: system-ui, sans-serif; }
     #canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-    #fallback { display: none; place-content: center; height: 100%; padding: 2rem; text-align: center; line-height: 1.6; }
+    #fallback {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 10005;
+      place-content: center;
+      padding: 2rem;
+      text-align: center;
+      line-height: 1.6;
+      background: #0c0f14;
+    }
     /* In-DOM for crawlers / screen readers; not a HUD element. */
     #seo {
       position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

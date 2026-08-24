@@ -1,20 +1,21 @@
 /**
  * Axiom bootstrap: chunk-streamed volume + multi-kind particles.
- * Render backend: Babylon (default) or Three via ?backend=three
+ * Render backend: Three (default). ?backend=lite or ?backend=babylon
  */
 import { createWorld } from './sim/world.js';
-import { createBabylonBackend } from './render/babylon-backend.js';
 import { FPSMeter } from './fps-meter.js';
 import { attachMobileMove } from './mobile-move.js';
 
 const params = new URLSearchParams(location.search);
-const BACKEND = (params.get('backend') || 'babylon').toLowerCase();
+const BACKEND_PARAM = (params.get('backend') || '').toLowerCase();
+/** Three is the default. Lite / BJS9 stay behind ?backend=. */
+let BACKEND = BACKEND_PARAM || 'three';
 // Store/GPU buffers size to this — keep default sane (8M prealloc was freezing mid machines
 // at 16k live). Raise with ?n= / ?cap= on a strong box (max 16M).
 const CAPACITY = clampInt(params.get('cap'), 1_500_000, 1000, 16_000_000);
 const INITIAL = clampInt(params.get('n'), Math.min(1_500_000, CAPACITY), 100, CAPACITY);
 const CHUNK_SIZE = clampInt(params.get('chunk'), 16, 8, 64);
-// Chebyshev radius: 5 → 11³ = 1331 cubes.
+// Chebyshev paging cube: 5 → 11³ chunks. Live fill is a sphere inscribed in that cube.
 const CHUNK_RADIUS = clampInt(params.get('radius'), 5, 1, 8);
 
 function clampInt(v, fallback, lo, hi) {
@@ -29,13 +30,22 @@ async function main() {
 
   /** @type {import('./render/backend.js').AxiomRenderer & Record<string, any>} */
   let renderer;
-  if (BACKEND === 'three') {
+  if (BACKEND === 'lite') {
+    if (!navigator.gpu) throw new Error('Lite backend requires WebGPU');
+    const { createLiteBackend } = await import('./render/lite-backend.js');
+    renderer = createLiteBackend();
+    await renderer.init(canvas);
+  } else if (BACKEND === 'babylon') {
+    await loadBabylonUmd();
+    const { createBabylonBackend } = await import('./render/babylon-backend.js');
+    renderer = createBabylonBackend();
+    await renderer.init(canvas);
+  } else {
+    BACKEND = 'three';
     const { createThreeBackend } = await import('./render/three-backend.js');
     renderer = createThreeBackend();
-  } else {
-    renderer = createBabylonBackend();
+    await renderer.init(canvas);
   }
-  await renderer.init(canvas);
   // Mobile stick is Babylon FreeCamera-shaped; Three uses ESDF/pointer on desktop.
   const cam = renderer.getCamera?.();
   const mobiMove =
@@ -90,11 +100,13 @@ async function main() {
     const bump = fps >= 55 ? 16000 : fps >= 48 ? 8000 : 3000;
     if (nAim < nCeiling && world.count < room - 32) {
       const next = Math.min(nCeiling, room, Math.max(nAim + bump, Math.ceil(nAim * grow)));
-      if (next <= nAim) return false;
-      nAim = next;
-      world.setTargetCount(nAim);
-      console.log(`[axiom] throttle ↑ aim→${nAim} live=${world.count} (fps ${fps})`);
-      return true;
+      if (next > nAim) {
+        nAim = next;
+        world.setTargetCount(nAim);
+        console.log(`[axiom] throttle ↑ aim→${nAim} live=${world.count} (fps ${fps})`);
+        return true;
+      }
+      // room already claimed (sphere fill < cube quota) — fall through to grow r
     }
     if (rAim < rCeiling) {
       // Expand volume at current count (dilute) — do NOT fill the new shell to max
@@ -158,6 +170,10 @@ async function main() {
   });
   document.addEventListener('keydown', (evt) => {
     if (evt.key === 'F9') {
+      if (renderer.toggleInspector) {
+        renderer.toggleInspector();
+        return;
+      }
       const scene = renderer.getScene?.();
       if (!scene?.debugLayer) return;
       if (scene.debugLayer.isVisible()) scene.debugLayer.hide();
@@ -201,6 +217,27 @@ async function main() {
       `budget=${INITIAL}/${CAPACITY} boot=${nAim}/r${rAim} throttle=${throttleOn ? 'up' : 'off'} — ` +
       `ESDF fly (R/C up/down), mobi stick (look-dir), G cube wires, F9 inspector`,
   );
+}
+
+async function loadScript(src) {
+  await new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = () => reject(new Error(`failed to load ${src}`));
+    document.head.appendChild(el);
+  });
+}
+
+async function loadBabylonUmd() {
+  if (globalThis.BABYLON) return;
+  await loadScript('vendor/babylon9.js');
+  await loadScript('vendor/babylonjs.materials.min.js');
+  await loadScript('vendor/babylonjs.loaders.min.js');
+  await loadScript('vendor/babylon.gui.min.js');
+  await loadScript('vendor/babylonjs.serializers.min.js');
+  await loadScript('vendor/babylonjs.addons.min.js');
+  await loadScript('vendor/babylon.inspector.bundle.js');
 }
 
 /**

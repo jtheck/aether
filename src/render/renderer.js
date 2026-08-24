@@ -31,6 +31,7 @@ import {
   setShadowTaskCasterMeshes,
   createGpuPicker,
   pickAsync,
+  setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { getUnitDef } from '../sim/unitTypes.js';
@@ -373,7 +374,8 @@ function writeRgbaAt(colors, i, c) {
 function applyUnlitHudMaterial(mat) {
   if (!mat) return;
   if ('disableLighting' in mat) mat.disableLighting = true;
-  if ('unlit' in mat) mat.unlit = true;
+  if ('ormTexture' in mat || 'baseColorTexture' in mat) setPbrUnlit(mat);
+  else if ('unlit' in mat) mat.unlit = true;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
 }
 

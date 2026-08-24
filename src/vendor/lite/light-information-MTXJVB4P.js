@@ -1,1 +1,0 @@
-var g={className:"LightInformationBlock",emit(s,o,r,n,c){n.usesLightsUbo=!0;let e=s.serialized.lightId,t=`nmeLights.lights[nli(${typeof e=="number"?e:0}u)]`,i={direction:{expr:`${t}.vLightData.xyz`,type:"vec3f"},color:{expr:`${t}.vLightDiffuse.rgb`,type:"vec3f"},intensity:{expr:`${t}.vLightDiffuse.a`,type:"f32"}};return i[o]??i.direction}};export{g as emitter};

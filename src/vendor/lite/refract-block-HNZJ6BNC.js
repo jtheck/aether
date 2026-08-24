@@ -1,1 +1,0 @@
-var p={className:"RefractBlock",emit(r,t,o,n,e){let c=e.cast(e.resolve(r,"incident",o,n),"vec3f").expr,i=e.cast(e.resolve(r,"normal",o,n),"vec3f").expr,s=e.cast(e.resolve(r,"ior",o,n),"f32").expr;return{expr:`refract(${c}, ${i}, ${s})`,type:"vec3f"}}};export{p as emitter};

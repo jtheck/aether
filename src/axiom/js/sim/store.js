@@ -115,6 +115,121 @@ export function spawnInBox(store, count, bounds) {
 }
 
 /**
+ * @param {{ minX: number, minY: number, minZ: number, size: number }} bounds
+ * @param {{ x: number, y: number, z: number, r: number }} sphere
+ */
+function closestAabbPointToSphere(bounds, sphere) {
+  const maxX = bounds.minX + bounds.size;
+  const maxY = bounds.minY + bounds.size;
+  const maxZ = bounds.minZ + bounds.size;
+  return {
+    x: Math.min(maxX, Math.max(bounds.minX, sphere.x)),
+    y: Math.min(maxY, Math.max(bounds.minY, sphere.y)),
+    z: Math.min(maxZ, Math.max(bounds.minZ, sphere.z)),
+  };
+}
+
+function inSphere(x, y, z, sphere) {
+  const dx = x - sphere.x;
+  const dy = y - sphere.y;
+  const dz = z - sphere.z;
+  return dx * dx + dy * dy + dz * dz <= sphere.r * sphere.r;
+}
+
+/**
+ * Approximate volume fraction of `bounds` that lies inside `sphere` (0..1).
+ * Used so grazing chunks don't pack a full quota into a thin spherical cap.
+ * @param {{ minX: number, minY: number, minZ: number, size: number }} bounds
+ * @param {{ x: number, y: number, z: number, r: number }} sphere
+ * @param {number} [samples]
+ */
+export function boxSphereOverlapFraction(bounds, sphere, samples = 40) {
+  const { minX, minY, minZ, size } = bounds;
+  const r2 = sphere.r * sphere.r;
+  let cornersIn = 0;
+  for (let i = 0; i < 8; i++) {
+    const x = minX + (i & 1) * size;
+    const y = minY + ((i >> 1) & 1) * size;
+    const z = minZ + ((i >> 2) & 1) * size;
+    const dx = x - sphere.x;
+    const dy = y - sphere.y;
+    const dz = z - sphere.z;
+    if (dx * dx + dy * dy + dz * dz <= r2) cornersIn++;
+  }
+  if (cornersIn === 8) return 1;
+  const near = closestAabbPointToSphere(bounds, sphere);
+  if (!inSphere(near.x, near.y, near.z, sphere)) return 0;
+  let hit = 0;
+  for (let i = 0; i < samples; i++) {
+    if (
+      inSphere(
+        minX + Math.random() * size,
+        minY + Math.random() * size,
+        minZ + Math.random() * size,
+        sphere,
+      )
+    ) {
+      hit++;
+    }
+  }
+  return hit / samples;
+}
+
+/**
+ * Uniform fill of AABB ∩ sphere. `count` should already be scaled by overlap.
+ * @param {ReturnType<typeof createStore>} store
+ * @param {number} count
+ * @param {{ minX: number, minY: number, minZ: number, size: number }} bounds
+ * @param {{ x: number, y: number, z: number, r: number }} sphere
+ */
+export function spawnInBoxSphere(store, count, bounds, sphere) {
+  const n = Math.min(store.capacity, count | 0);
+  if (n <= 0) {
+    store.count = 0;
+    return;
+  }
+  const { minX, minY, minZ, size } = bounds;
+  let i = 0;
+  const maxTries = Math.max(n * 24, 24);
+  for (let tries = 0; tries < maxTries && i < n; tries++) {
+    const x = minX + Math.random() * size;
+    const y = minY + Math.random() * size;
+    const z = minZ + Math.random() * size;
+    if (!inSphere(x, y, z, sphere)) continue;
+    initParticleAt(store, i, x, y, z);
+    i++;
+  }
+  store.count = i;
+}
+
+/**
+ * Grow/shrink in AABB ∩ sphere. Existing in-sphere slots are kept.
+ * @param {ReturnType<typeof createStore>} store
+ * @param {number} count
+ * @param {{ minX: number, minY: number, minZ: number, size: number }} bounds
+ * @param {{ x: number, y: number, z: number, r: number }} sphere
+ */
+export function resizeInBoxSphere(store, count, bounds, sphere) {
+  const want = Math.max(0, Math.min(store.capacity, count | 0));
+  if (want <= store.count) {
+    store.count = want;
+    return;
+  }
+  const { minX, minY, minZ, size } = bounds;
+  let i = store.count;
+  const maxTries = Math.max((want - i) * 24, 24);
+  for (let tries = 0; tries < maxTries && i < want; tries++) {
+    const x = minX + Math.random() * size;
+    const y = minY + Math.random() * size;
+    const z = minZ + Math.random() * size;
+    if (!inSphere(x, y, z, sphere)) continue;
+    initParticleAt(store, i, x, y, z);
+    i++;
+  }
+  store.count = i;
+}
+
+/**
  * Random cluster center inside a box (inset by spread so the ball fits).
  * @param {{ minX: number, minY: number, minZ: number, size: number }} bounds
  * @param {number} [spread]
@@ -247,12 +362,22 @@ export function ensureCount(store, n) {
  * @param {ReturnType<typeof createStore>} store
  * @param {{ r: number, g: number, b: number }} tint
  * @param {number} [baseScale=1] extra scale multiplier for mesh kind
- * @param {{ billboard?: { rx: number, ry: number, rz: number, ux: number, uy: number, uz: number } }} [opts]
+ * @param {{ billboard?: { rx: number, ry: number, rz: number, ux: number, uy: number, uz: number }, positionsOnly?: boolean }} [opts]
  *   billboard: camera right/up axes — bake facing into matrices (thin-instance safe; mesh billboardMode is not)
+ *   positionsOnly: point clouds — skip 4×4 / color (Three/BJS/Lite points use xyz)
  */
 export function packRenderBuffers(store, tint, baseScale = 1, opts = {}) {
   const n = store.count;
   const { px, py, pz, size, matrices, colors, positions, spinC, spinS, ori } = store;
+  if (opts.positionsOnly) {
+    for (let i = 0; i < n; i++) {
+      const p = i * 3;
+      positions[p] = px[i];
+      positions[p + 1] = py[i];
+      positions[p + 2] = pz[i];
+    }
+    return;
+  }
   const tr = tint.r;
   const tg = tint.g;
   const tb = tint.b;

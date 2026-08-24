@@ -1,1 +1,0 @@
-import{a as n}from"./chunk-5P2ED4J4.js";var y={className:"DistanceBlock",emit(t,m,r,o,e){let s=e.resolve(t,"left",r,o),p=e.resolve(t,"right",r,o),c=n(s.type,p.type),i=e.cast(s,c).expr,l=e.cast(p,c).expr;return{expr:`length(${i} - ${l})`,type:"f32"}}};export{y as emitter};

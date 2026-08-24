@@ -12,6 +12,7 @@ import {
   createTexture2DFromPixels,
   debugPbrExtIds,
   loadGltf,
+  setPbrEmissive,
   stopAnimation,
 } from '../vendor/lite/liteVendor.js';
 import { UNIT } from '../sim/unitTypes.js';
@@ -105,8 +106,6 @@ function prepareTeamColorMaterial(engine, mesh, donorMat) {
     name: 'TeamColor',
     // White albedo × thin-instance owner tint (see renderer setColors).
     baseColorFactor: [1, 1, 1, 1],
-    // v1 used ~0.25 unlit emissive of the team color; small lift only.
-    emissiveColor: [0.18, 0.18, 0.18],
     doubleSided: true,
     alpha: 1,
     metallicFactor: 0,
@@ -116,6 +115,8 @@ function prepareTeamColorMaterial(engine, mesh, donorMat) {
     _buildGroup: build,
     _uboVersion: 0,
   };
+  // v1 used ~0.25 unlit emissive of the team color; small lift only.
+  setPbrEmissive(mesh.material, [0.18, 0.18, 0.18]);
 }
 
 /** @type {Map<string, { bakedList: object[], bakeClipName: string, idleName: string, walkName: string, idleClip: object, walkClip: object }>} */

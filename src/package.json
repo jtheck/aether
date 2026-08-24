@@ -24,7 +24,7 @@
     "package": "node package.mjs"
   },
   "dependencies": {
-    "@babylonjs/lite": "1.16.0",
+    "@babylonjs/lite": "1.23.0",
     "babylon-lite-explorer": "^0.4.1",
     "esbuild": "^0.28.1",
     "howler": "^2.2.4",

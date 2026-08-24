@@ -1,1 +1,0 @@
-async function n(r,e,i){let s;for(let o of r.meshes)if(o.material?.subsurface?.refraction?.dispersion){s=(await import("./refraction-dispersion-wgsl-TCVFG4OS.js")).DISPERSION_SAMPLE_WGSL;break}(await import("./pbr-transmission-ext-SCHTA5XA.js")).registerPbrTransmission(r,e,i,s)}export{n as registerPbrRefraction};

@@ -1,6 +1,6 @@
 /**
  * Thin render-port contract for axiom.
- * BJS9 + Three implement this today; Lite can later.
+ * Three is the default; Lite + BJS9 remain behind ?backend=
  *
  * Lifecycle:
  *   init(canvas) → registerSpecies(...) → each frame: uploadSpecies + render

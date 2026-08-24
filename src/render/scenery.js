@@ -9,6 +9,8 @@ import {
   getOrCreateSampler,
   loadGltf,
   loadTexture2D,
+  setPbrEmissive,
+  setStandardOpacityTexture,
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 import { SCENERY } from '../sim/scenery.js';
@@ -584,6 +586,7 @@ function bakeModelMesh(engine, source, world, name, isTree = false) {
 function prepareSceneryMaterial(sourceMat, isTree) {
   if (!sourceMat) return sourceMat;
   const mat = sourceMat;
+  if (mat._emissiveColor) setPbrEmissive(mat, [0, 0, 0]);
   if (mat.emissiveColor) mat.emissiveColor = [0, 0, 0];
   if (mat.emissiveIntensity != null) mat.emissiveIntensity = 0;
   const f = mat.baseColorFactor;
@@ -665,7 +668,7 @@ function createBillboardMesh(engine, variant, atlas) {
   );
   const mat = createStandardMaterial();
   mat.diffuseTexture = atlas;
-  mat.opacityTexture = atlas;
+  setStandardOpacityTexture(mat, atlas);
   mat.opacityFromRGB = false;
   mat.alphaCutOff = 0.35;
   mat.diffuseColor = [1, 1, 1];

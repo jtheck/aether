@@ -1,1 +1,0 @@
-var s={xy:{swizzle:"",type:"vec2f"},x:{swizzle:".x",type:"f32"},y:{swizzle:".y",type:"f32"}},i={className:"ScreenSizeBlock",stage:"fragment",emit(o,t,c,r){r.usesScreenSize=!0;let e=s[t];if(!e)throw new Error(`NodeMaterial: ScreenSizeBlock has no output "${t}"`);return{expr:`_NME_SCREEN_SIZE_${e.swizzle}`,type:e.type}}};export{i as emitter};

@@ -2035,9 +2035,15 @@ async function waitForGetFireP2p(timeoutMs = 5000) {
 /** Soft landing for Lite (WebGPU-only) — src/axiom/ is packaged at /axiom/. */
 function goAxiom() {
   showFallback('WebGPU support not detected, going elsewhere...');
-  setTimeout(() => {
-    location.replace(`${location.origin}/axiom/`);
-  }, 1400);
+  // Slow / no-WebGPU boxes often miss a 1-frame notice. Wait for a real paint,
+  // then hold so the card can settle before the URL swap.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        location.replace(`${location.origin}/axiom/`);
+      }, 3600);
+    });
+  });
 }
 
 function withTimeout(promise, ms, label) {
@@ -2152,6 +2158,8 @@ function dismissBootSplash(opts = {}) {
 
 function showFallback(msg) {
   dismissBootSplash({ immediate: true });
+  const canvas = document.getElementById('canvas');
+  if (canvas) canvas.style.display = 'none';
   const el = document.getElementById('fallback');
   if (!el) return;
   el.style.display = 'grid';

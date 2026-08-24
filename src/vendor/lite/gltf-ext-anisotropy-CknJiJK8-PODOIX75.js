@@ -1,1 +1,0 @@
-var r={id:"KHR_materials_anisotropy",async applyMaterial(i){var a,n;let t=(n=(a=i._rawMatDef)==null?void 0:a.extensions)==null?void 0:n.KHR_materials_anisotropy;if(!t)return null;let o=t.anisotropyRotation??0;return{anisotropy:{isEnabled:!0,intensity:t.anisotropyStrength??0,direction:[Math.cos(o),Math.sin(o)]}}}};export{r as default};

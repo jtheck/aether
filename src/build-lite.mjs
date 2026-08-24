@@ -7,11 +7,9 @@ import { gzipSync } from 'zlib';
 import { join } from 'path';
 
 mkdirSync('vendor/lite', { recursive: true });
-// Drop stale code-split chunks from older builds (they duplicate pbr-flags).
+// Drop leftover dynamic-import chunks from older Lite versions.
 for (const f of readdirSync('vendor/lite')) {
-  if (f.startsWith('chunk-') && f.endsWith('.js')) {
-    rmSync(join('vendor/lite', f), { force: true });
-  }
+  rmSync(join('vendor/lite', f), { force: true, recursive: true });
 }
 
 // splitting:false — VAT's _registerPbrExt must share the same pbr-flags

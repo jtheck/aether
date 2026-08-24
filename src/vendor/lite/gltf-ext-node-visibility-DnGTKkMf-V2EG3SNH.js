@@ -1,1 +1,0 @@
-import{ra as _}from"./chunk-ZBW7LZ4P.js";function r(e,n){var i,o,l;let t=e.nodes??[];for(let s=0;s<t.length;s++){let d=(l=(o=(i=t[s])==null?void 0:i.extensions)==null?void 0:o.KHR_node_visibility)==null?void 0:l.visible,a=n[s];d===!1&&a&&_(a,!1)}}var f={id:"KHR_node_visibility",async applyAsset(e,n,i){return i._nodeMap&&r(i._json,i._nodeMap),{}}};export{f as default};

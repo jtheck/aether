@@ -9,15 +9,14 @@
 <meta name="keywords" content="garden">
 <meta property="og:type" content="website" />
 
-<!-- Classic BJS9 UMD (sim is engine-agnostic ES modules) -->
-<script src="vendor/babylon9.js"></script>
-<!-- Inspector stack for F9 (optional at runtime) -->
-<script src="vendor/babylonjs.materials.min.js"></script>
-<script src="vendor/babylonjs.loaders.min.js"></script>
-<script src="vendor/babylon.gui.min.js"></script>
-<script src="vendor/babylonjs.serializers.min.js"></script>
-<script src="vendor/babylonjs.addons.min.js"></script>
-<script src="vendor/babylon.inspector.bundle.js"></script>
+<script type="importmap">
+{
+  "imports": {
+    "@babylonjs/lite": "/vendor/lite/liteVendor.js"
+  }
+}
+</script>
+<link rel="stylesheet" href="/vendor/lite-explorer/explorer.css">
 
 <script type="module" src="js/app.js"></script>
 </head>

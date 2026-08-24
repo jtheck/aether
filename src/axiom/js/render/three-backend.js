@@ -56,6 +56,8 @@ export function createThreeBackend() {
   const wish = new THREE.Vector3();
   const forward = new THREE.Vector3();
   const right = new THREE.Vector3();
+  let stickX = 0;
+  let stickZ = 0;
   let rafId = 0;
 
   function assertReady() {
@@ -110,6 +112,8 @@ export function createThreeBackend() {
     if (keys.has('KeyF') || keys.has('ArrowRight')) mx += 1;
     if (keys.has('KeyR')) my += 1;
     if (keys.has('KeyC')) my -= 1;
+    mx += stickX;
+    mz += stickZ;
 
     if (mx || my || mz) {
       const len = Math.hypot(mx, my, mz) || 1;
@@ -185,6 +189,63 @@ export function createThreeBackend() {
       mat.depthWrite = true;
     }
     return mat;
+  }
+
+  function attachMobileStick() {
+    const want =
+      (typeof navigator !== 'undefined' && navigator.maxTouchPoints > 0) ||
+      window.matchMedia?.('(pointer: coarse)')?.matches;
+    if (!want) return;
+    const root = document.createElement('div');
+    root.id = 'mobi_move';
+    root.innerHTML = `
+      <div class="mobi-stick" id="mobi_stick">
+        <div class="mobi-stick-knob" id="mobi_knob"></div>
+      </div>
+    `;
+    document.body.appendChild(root);
+    root.style.display = 'flex';
+    const stickEl = root.querySelector('#mobi_stick');
+    const knobEl = root.querySelector('#mobi_knob');
+    let stickId = -1;
+    const maxR = 48;
+    const onDown = (e) => {
+      if (stickId !== -1) return;
+      stickId = e.pointerId;
+      stickEl.setPointerCapture?.(e.pointerId);
+      onMove(e);
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onMove = (e) => {
+      if (e.pointerId !== stickId) return;
+      const rect = stickEl.getBoundingClientRect();
+      let dx = e.clientX - (rect.left + rect.width * 0.5);
+      let dy = e.clientY - (rect.top + rect.height * 0.5);
+      const len = Math.hypot(dx, dy) || 1;
+      if (len > maxR) {
+        dx = (dx / len) * maxR;
+        dy = (dy / len) * maxR;
+      }
+      stickX = dx / maxR;
+      stickZ = -dy / maxR;
+      knobEl.style.transform = `translate(${dx}px, ${dy}px)`;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const onUp = (e) => {
+      if (e.pointerId !== stickId) return;
+      stickId = -1;
+      stickX = 0;
+      stickZ = 0;
+      knobEl.style.transform = 'translate(0px, 0px)';
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    stickEl.addEventListener('pointerdown', onDown);
+    stickEl.addEventListener('pointermove', onMove);
+    stickEl.addEventListener('pointerup', onUp);
+    stickEl.addEventListener('pointercancel', onUp);
   }
 
   function copyColorsRgb(dst, src, count) {
@@ -298,6 +359,7 @@ export function createThreeBackend() {
       canvas.addEventListener('pointerup', endDrag);
       canvas.addEventListener('pointercancel', endDrag);
 
+      attachMobileStick();
       canvas.focus();
     },
 

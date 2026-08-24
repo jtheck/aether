@@ -6,6 +6,8 @@ import {
   createPbrMaterial,
   createTexture2DFromPixels,
   loadTexture2D,
+  setPbrAlphaCutoff,
+  setPbrEmissive,
 } from '../vendor/lite/liteVendor.js';
 import { bakedMeshStem } from './bakedAssets.js';
 
@@ -80,7 +82,7 @@ export async function materialFromBakeDesc(engine, glbUrl, matDesc, images) {
   // Must use createPbrMaterial so `_buildGroup` is set — plain objects never draw.
   // When ORM is a factor 1×1 (no MR image), omit metallic/roughness factors —
   // shader does orm.channel * factor, and UBO defaults factor to 1.
-  return createPbrMaterial({
+  const mat = createPbrMaterial({
     name: matDesc.name || '',
     baseColorTexture,
     ormTexture,
@@ -89,14 +91,16 @@ export async function materialFromBakeDesc(engine, glbUrl, matDesc, images) {
     // Keep factor for TeamColor / scenery tweaks (white tex × factor).
     baseColorFactor: factor.slice(),
     ...(hasOrmImage ? { metallicFactor: metallic, roughnessFactor: roughness } : {}),
-    ...(ef[0] || ef[1] || ef[2] ? { emissiveColor: ef.slice() } : {}),
     doubleSided: !!matDesc.doubleSided,
     occlusionStrength: hasOrmImage ? 1 : 0,
     enableSpecularAA: true,
     alpha: alphaMode === 'BLEND' ? (factor[3] ?? 1) : 1,
     ...(alphaMode === 'BLEND' ? { alphaBlend: true } : {}),
-    ...(alphaMode === 'MASK' ? { alphaCutOff: matDesc.alphaCutoff ?? 0.5 } : {}),
   });
+  // Lite 1.20+: emissive color / alpha-test are opt-in extensions.
+  if (emissiveTexture || ef[0] || ef[1] || ef[2]) setPbrEmissive(mat, ef.slice());
+  if (alphaMode === 'MASK') setPbrAlphaCutoff(mat, matDesc.alphaCutoff ?? 0.5);
+  return mat;
 }
 
 /**

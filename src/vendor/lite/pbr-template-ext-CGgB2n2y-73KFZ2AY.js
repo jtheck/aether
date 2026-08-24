@@ -1,9 +1,0 @@
-function C(x){let{_hasUvTransform:r,_hasVertexColor:l,_hasUv2:n,_hasOcclusionUv2:m,_hasAnyNormal:v,_hasEmissiveTexture:p,_hasSpecGloss:_}=x,s=e=>[{_name:`${e}UVm`,_type:"vec4<f32>"},{_name:`${e}UVt`,_type:"vec4<f32>"}],t=e=>r?`${e}UV`:"input.uv",a=e=>r?`let ${e}UV = txfUV(input.uv, material.${e}UVm, material.${e}UVt.xy);
-`:"",y=r?`fn txfUV(uv: vec2<f32>, m: vec4<f32>, t: vec2<f32>) -> vec2<f32> {
-return vec2<f32>(dot(m.xy, uv), dot(m.zw, uv)) + t;
-}
-`:"",c=[];n&&c.push({_name:"uv2",_type:"vec2<f32>",_gpuFormat:"float32x2",_arrayStride:8}),l&&c.push({_name:"color",_type:"vec3<f32>",_gpuFormat:"float32x3",_arrayStride:12});let i=[];n&&i.push({_name:"uv2",_type:"vec2<f32>"}),l&&i.push({_name:"vColor",_type:"vec3<f32>"});let o=[];r&&(o.push(...s("baseColor")),v&&o.push(...s("normal")),o.push(...s("orm")),p&&o.push(...s("emissive")),_&&o.push(...s("specGloss")));let f=[];m&&f.push({_name:"occlusionTexture",_type:{_kind:"texture",_textureType:"texture_2d<f32>"},_visibility:2},{_name:"occlusionSampler_",_type:{_kind:"sampler",_samplerType:"sampler"},_visibility:2});let u="";n&&(u+=`out.uv2 = uv2;
-`),l&&(u+=`out.vColor = color;
-`);let d=y,h=r?a("baseColor")+(v?a("normal"):"")+a("orm")+(p?a("emissive"):"")+(_?a("specGloss"):""):"",T=t("baseColor"),S=t("normal"),U=t("orm"),F=t("emissive"),V=t("specGloss");return{extraVertexAttributes:c,extraVaryings:i,extraMaterialUboFields:o,extraBindings:f,vertexBodyExtra:u,fragmentHelpers:d,fragmentPrelude:h,uvForBaseColor:T,uvForNormal:S,uvForOrm:U,uvForEmissive:F,uvForSpecGloss:V,baseColorMod:l?`
-baseColor *= input.vColor;`:"",normalScaleMod:`let scaledNormal = vec3<f32>(normalMapRaw.xy * material.normalScale, normalMapRaw.z);
-`,occlusionOverride:m?"let occlusion = textureSample(occlusionTexture, occlusionSampler_, input.uv2).r;":null}}export{C as createPbrTemplateExt};

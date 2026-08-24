@@ -1,1 +1,0 @@
-import{a as o,b as m}from"./chunk-LGZPHUPV.js";function c(e){let r=e.filter(t=>t.shadowType==="csm");return r.length>0?m()(r.map(t=>({lightIndex:t.lightIndex}))):o("std-shadow",e)}export{c as createStdShadowFragment};

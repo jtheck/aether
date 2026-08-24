@@ -1,1 +1,0 @@
-var a={className:"DesaturateBlock",emit(r,n,m,t,o){let e=o.cast(o.resolve(r,"color",m,t),"vec3f").expr,c=o.cast(o.resolve(r,"level",m,t),"f32").expr,l=`min(min((${e}).x, (${e}).y), (${e}).z)`,s=`max(max((${e}).x, (${e}).y), (${e}).z)`,$=`(0.5 * (${l} + ${s}))`;return{expr:`mix(${e}, vec3<f32>(${$}), ${c})`,type:"vec3f"}}};export{a as emitter};

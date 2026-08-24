@@ -1,1 +1,0 @@
-import{a as n}from"./chunk-5P2ED4J4.js";var y={className:"DotBlock",emit(t,i,r,o,e){let s=e.resolve(t,"left",r,o),p=e.resolve(t,"right",r,o),c=n(s.type,p.type),l=e.cast(s,c).expr,m=e.cast(p,c).expr;return{expr:`dot(${l}, ${m})`,type:"f32"}}};export{y as emitter};

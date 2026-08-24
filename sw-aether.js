@@ -1,56 +1,81 @@
 
-
-// This is the "Offline page" service worker
+// Network-first for app HTML/JS/CSS. Offline fallback for navigations.
+// Never intercept or cache.put the worker script itself.
 
 const CACHE = "aether-5";
-
-// TODO: replace the following with the correct offline fallback page i.e.: const offlineFallbackPage = "offline.html";
 const offlineFallbackPage = "/config/offline.html";
 
-// Install stage sets up the offline page in the cache and opens a new cache
-self.addEventListener("install", function (event) {
-  console.log("sw Install Event processing");
+function workerScriptPath(url) {
+  try {
+    return new URL(url, self.location.origin).pathname;
+  } catch {
+    return "";
+  }
+}
 
+function isWorkerScript(url) {
+  const path = workerScriptPath(url);
+  return /\/sw-[^/]*\.js$/i.test(path) || /\/serviceworker\.js$/i.test(path);
+}
+
+function isAppHtmlJsCss(request) {
+  const dest = request.destination;
+  if (dest === "document" || dest === "iframe" || dest === "script" || dest === "style") {
+    return true;
+  }
+  if (request.mode === "navigate") return true;
+  try {
+    return /\.(html?|js|mjs|cjs|css)$/i.test(new URL(request.url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+async function networkFirst(request) {
+  try {
+    const response = await fetch(request);
+    if (response.ok && !isWorkerScript(request.url)) {
+      const cache = await caches.open(CACHE);
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (err) {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    if (request.mode === "navigate" || request.destination === "document") {
+      const offline = await caches.match(offlineFallbackPage);
+      if (offline) return offline;
+    }
+    throw err;
+  }
+}
+
+self.addEventListener("install", (event) => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE).then(function (cache) {
-      console.log("sw Cached offline page during install");
-    //   return cache.addAll([
-    //     // '<%= asset_path "application.js" %>',
-    //     // '<%= asset_path "application.css" %>',
-    //     '/offline.html'
-    //   ]);
-    //   if (offlineFallbackPage === "offline.html") {
-    //     return cache.add(new Response(offlineFallbackPage));
-    //   }
-
-      return cache.add(offlineFallbackPage);
-    })
+    caches.open(CACHE).then((cache) => cache.add(offlineFallbackPage)).catch(() => {}),
   );
 });
 
-// Only intercept navigation requests; on failure show offline page.
-self.addEventListener("fetch", function (event) {
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((k) => k.startsWith("aether-") && k !== CACHE)
+          .map((k) => caches.delete(k)),
+      );
+      await self.clients.claim();
+    })(),
+  );
+});
+
+self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
-  if (event.request.mode !== "navigate" || event.request.destination !== "document") return;
+  // Never intercept the worker script — no respondWith, no cache.put.
+  if (isWorkerScript(event.request.url)) return;
+  if (!isAppHtmlJsCss(event.request)) return;
 
-  event.respondWith(
-    fetch(event.request).catch(function (error) {
-      console.error("sw Network request Failed. Serving offline page " + error);
-      return caches.open(CACHE).then(function (cache) {
-        return cache.match(offlineFallbackPage);
-      });
-    })
-  );
-});
-
-// This is an event that can be fired from your page to tell the SW to update the offline page
-self.addEventListener("refreshOffline", function () {
-  const offlinePageRequest = new Request(offlineFallbackPage);
-
-  return fetch(offlineFallbackPage).then(function (response) {
-    return caches.open(CACHE).then(function (cache) {
-      console.log("sw Offline page updated from refreshOffline event: " + response.url);
-      return cache.put(offlinePageRequest, response);
-    });
-  });
+  event.respondWith(networkFirst(event.request));
 });

@@ -1,1 +1,0 @@
-var s={className:"ImageSourceBlock",emit(e,i,a,n,m){let t=u(e.name||`img${e.id}`);return n.textures.find(r=>r.name===t)||n.textures.push({name:t,kind:"texture2d",texture:null}),{expr:t,type:"texture2d"}}};function u(e){return e.replace(/[^A-Za-z0-9_]/g,"_")}export{s as emitter};

@@ -1,1 +1,0 @@
-var t={className:"PannerBlock",emit(r,m,s,p,e){let o=e.cast(e.resolve(r,"uv",s,p),"vec2f"),v=e.cast(e.resolve(r,"speed",s,p),"vec2f"),n=e.cast(e.resolve(r,"time",s,p),"f32");return{expr:`(${o.expr} + ${v.expr} * ${n.expr})`,type:"vec2f"}}};export{t as emitter};

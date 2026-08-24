@@ -1,1 +1,0 @@
-var i={build(t,e){let n=e.state,s=e.input(t,"particle")(n);if(e.setOutput(t.id,"output",()=>s),!e.isConnected(t,"angle"))return;let a=e.input(t,"angle");s._updateQueue.push((u,p)=>{n.particle=u,n.system=p,u.angle=a(n)})}};export{i as updateAngleBlock};

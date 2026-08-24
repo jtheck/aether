@@ -1,1 +1,0 @@
-import{Tb as f}from"./chunk-2GVZXICG.js";var p={id:"alpha-test",phase:"fragment",frag(a){return a._features&f?{_id:"alpha-test",_uboFields:[{_name:"alphaCutOff",_type:"f32"}],_fragmentSlots:{AT:"if(alpha*material.materialAlpha<material.alphaCutOff){discard;}"}}:null},writeUbo(a,e,l){let t=l.get("alphaCutOff");t!==void 0&&(a[t/4]=e.alphaCutOff??0)}};export{p as pbrExt};

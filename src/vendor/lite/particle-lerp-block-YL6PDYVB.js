@@ -1,1 +1,0 @@
-import{a as i}from"./chunk-5TQDXPOE.js";var s={build(t,e){let p=e.input(t,"left"),u=e.input(t,"right"),o=e.input(t,"gradient",()=>0),g=r=>{let n=o(r);return i(p(r),u(r),typeof n=="number"?n:0)};e.setOutput(t.id,"output",g)}};export{s as particleLerpBlock};

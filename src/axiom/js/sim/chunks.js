@@ -34,9 +34,10 @@ export function parseChunkKey(key) {
  * @param {(cx: number, cy: number, cz: number) => void} fn
  */
 export function forEachChunkInRadius(cx, cy, cz, radius, fn) {
-  for (let dz = -radius; dz <= radius; dz++) {
-    for (let dy = -radius; dy <= radius; dy++) {
-      for (let dx = -radius; dx <= radius; dx++) {
+  const r = radius | 0;
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
         fn(cx + dx, cy + dy, cz + dz);
       }
     }
@@ -44,8 +45,19 @@ export function forEachChunkInRadius(cx, cy, cz, radius, fn) {
 }
 
 export function maxChunksForRadius(radius) {
-  const e = 2 * radius + 1;
+  const e = 2 * (radius | 0) + 1;
   return e * e * e;
+}
+
+/**
+ * Full-chunk equivalents inside the inscribed live sphere
+ * (r = (radius + 0.5) * chunkSize). Particle budget divides by this, not the
+ * paging cube — corner chunks never fill and must not steal quota.
+ * @param {number} radius
+ */
+export function sphereChunkEquivalent(radius) {
+  const R = (radius | 0) + 0.5;
+  return (4 / 3) * Math.PI * R * R * R;
 }
 
 /**

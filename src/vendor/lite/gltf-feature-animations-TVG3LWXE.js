@@ -1,1 +1,0 @@
-var t={id:"_animations",async applyAsset(o,e,a){let[{parseAnimationData:r},{createAnimationGroups:i}]=await Promise.all([import("./gltf-animation-RRDPC7RB.js"),import("./animation-group-XGZRHHOY.js")]),n=r(a._json,a._binChunk,o,a._parentMap,a._worldMatrixCache,a._nodeMap,a._boneOverrides);return n?{animationGroups:i(n)}:{}}};export{t as default};

@@ -1,1 +1,0 @@
-var v={className:"VertexOutputBlock",stage:"vertex",emit(o,c,p,e,t){let s=t.resolve(o,"vector","vertex",e),r=t.cast(s,"vec4f").expr;return e.vertex.body.push(`_NME_VTX_OUTPUT_ = ${r};`),{expr:r,type:"vec4f"}}};export{v as emitter};

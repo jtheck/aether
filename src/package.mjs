@@ -167,6 +167,10 @@ mkdirSync(join(DEPLOY, 'config'), { recursive: true });
 cpSync(join(ROOT, 'config', 'offline.html'), join(DEPLOY, 'config', 'offline.html'));
 mkdirSync(join(DEPLOY, 'vendor'), { recursive: true });
 cpSync(join(ROOT, 'vendor', 'getfire-p2p.js'), join(DEPLOY, 'vendor', 'getfire-p2p.js'));
+cpSync(join(ROOT, 'vendor', 'lite'), join(DEPLOY, 'vendor', 'lite'), { recursive: true });
+if (existsSync(join(ROOT, 'vendor', 'lite-explorer'))) {
+  cpSync(join(ROOT, 'vendor', 'lite-explorer'), join(DEPLOY, 'vendor', 'lite-explorer'), { recursive: true });
+}
 cpSync(join(ROOT, 'manifest.json'), join(DEPLOY, 'manifest.json'));
 
 // Legacy extras (under src/) — copy raw, no minify/obfuscate.
@@ -182,7 +186,7 @@ function copyRawDir(name, { required = false, note = '' } = {}) {
   console.log(`copied ${name}/ (raw)`);
 }
 
-copyRawDir('axiom', { note: 'no-WebGPU redirect target will 404' });
+copyRawDir('axiom', { note: 'Three default; ?backend=lite / babylon' });
 copyRawDir('forge', { note: '/forge will 404' });
 
 let sw = readFileSync(join(ROOT, 'sw-aether.js'), 'utf8');

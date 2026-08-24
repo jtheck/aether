@@ -1,1 +1,0 @@
-import{b as o}from"./chunk-6R3BZD2T.js";var r=o,F="if(scene.vFogInfos.x>0.0){var fogFactor=calcFogFactor((scene.view*vec4<f32>(input.worldPos,1.0)).xyz);fogFactor=pow(fogFactor,2.2);color=mix(pow(scene.vFogColor.rgb,vec3<f32>(2.2)),color,fogFactor);}";export{F as PBR_FOG_BLOCK,r as PBR_FOG_HELPER};

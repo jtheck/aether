@@ -1,1 +1,0 @@
-var i={build(e,t){let r=typeof e.serialized.reference=="number"?e.serialized.reference:0,n=t.input(e,"value",()=>0),u={reference:r,value:n};t.setOutput(e.id,"output",()=>u)}};export{i as particleGradientValueBlock};

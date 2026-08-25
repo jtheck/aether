@@ -1,6 +1,7 @@
 // Web Worker — deterministic sim authority (one commitTick = one lockstep step).
 
 import { buildField, fieldSnapshot, mapSizeForConfig } from '../sim/field.js';
+import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { buildWorldFromConfig, kothBases } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
@@ -84,6 +85,8 @@ self.onmessage = (e) => {
       world.profileSim = msg.config.profileSim === true
         || (msg.config.stressPerSide | 0) > 0
         || (msg.config.animStressPerSide | 0) > 0;
+      // Felt + red/yellow rim (same pass gardens will reuse).
+      applyTableSilhouette(field);
       populateScenery(field, world, kothBases(field.worldHalfF));
       applyWorldStructureOccupancy(field, world);
       beginSharedPublish(views);

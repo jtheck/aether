@@ -124,6 +124,10 @@ export function createField(seed = 0, dims = {}) {
     slowMask: new Uint8Array(n),
     /** Slow tiles owned by farms/agoras — survives tree fell clears. */
     structureSlowMask: new Uint8Array(n),
+    /** 1-tile yellow ring around rocks — survives tree fell clears. */
+    rockSlowMask: new Uint8Array(n),
+    /** Yellow ring inside the table silhouette — survives tree fell clears. */
+    tableSlowMask: new Uint8Array(n),
     sceneryType: new Uint8Array(n),
     // Per-tile wood remaining / burn timer (0 when no living tree).
     treeStock: new Uint8Array(n),
@@ -174,6 +178,12 @@ export function fieldSnapshot(field) {
     slowMask: field.slowMask.slice(),
     structureSlowMask: field.structureSlowMask?.slice?.()
       ?? new Uint8Array(field.width * field.height),
+    rockSlowMask: field.rockSlowMask?.slice?.()
+      ?? new Uint8Array(field.width * field.height),
+    tableSlowMask: field.tableSlowMask?.slice?.()
+      ?? new Uint8Array(field.width * field.height),
+    tableEdge: field.tableEdge?.slice?.()
+      ?? new Uint8Array(field.width * field.height),
     sceneryType: field.sceneryType.slice(),
     treeStock: field.treeStock?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeBurn: field.treeBurn instanceof Uint16Array
@@ -192,8 +202,8 @@ export function fieldSnapshot(field) {
       chunksX: field.tableShape.chunksX,
       chunksZ: field.tableShape.chunksZ,
       cellMask: field.tableShape.cellMask.slice(),
-      cornerRadius: field.tableShape.cornerRadius,
-      holes: (field.tableShape.holes ?? []).map((h) => ({ x: h.x, z: h.z, r: h.r })),
+      cellRadius: field.tableShape.cellRadius?.slice?.()
+        ?? new Uint8Array(field.tableShape.cellMask.length),
     };
   }
   return snapshot;

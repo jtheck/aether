@@ -73,13 +73,19 @@ function mixStockHash(field, tileIndex, stock) {
   );
 }
 
+function tileKeepsSlowAfterTree(field, tileIndex) {
+  return !!(
+    isTerrainSlowTile(field, tileIndex)
+    || field.structureSlowMask?.[tileIndex]
+    || field.rockSlowMask?.[tileIndex]
+    || field.tableSlowMask?.[tileIndex]
+  );
+}
+
 function fellTree(field, tileIndex) {
   field.sceneryType[tileIndex] = SCENERY_NONE;
-  // Keep wet shore + farm/agora slow after the tree is gone.
-  field.slowMask[tileIndex] =
-    isTerrainSlowTile(field, tileIndex) || field.structureSlowMask?.[tileIndex]
-      ? 1
-      : 0;
+  // Keep wet shore + farm/agora + rock-border + table-edge slow after the tree is gone.
+  field.slowMask[tileIndex] = tileKeepsSlowAfterTree(field, tileIndex) ? 1 : 0;
   field.treeStock[tileIndex] = 0;
   field.treeBurn[tileIndex] = 0;
 }
@@ -249,8 +255,7 @@ export function applyTreeUpdatesToField(field, updates) {
     if (nextStock === 0) {
       if (field.sceneryType[ti] === SCENERY_TREE) {
         field.sceneryType[ti] = SCENERY_NONE;
-        field.slowMask[ti] =
-          isTerrainSlowTile(field, ti) || field.structureSlowMask?.[ti] ? 1 : 0;
+        field.slowMask[ti] = tileKeepsSlowAfterTree(field, ti) ? 1 : 0;
       }
     } else {
       field.sceneryType[ti] = SCENERY_TREE;

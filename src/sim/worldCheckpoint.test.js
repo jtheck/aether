@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorld, spawn } from './world.js';
 import { buildField } from './field.js';
+import { applyTableSilhouette } from './tableShape.js';
 import { populateScenery } from './scenery.js';
 import { kothBases } from './worldSetup.js';
 import { checksum } from './checksum.js';
@@ -15,6 +16,7 @@ import * as fx from './fixed.js';
 test('checkpoint round-trips entity + koth state with matching checksum', () => {
   const seed = 0xabcd;
   const field = buildField(seed, { width: 64, height: 64 });
+  applyTableSilhouette(field);
   populateScenery(field, createWorld(seed), kothBases(field.worldHalfF));
   const w = createWorld(seed);
   w.koth = createKothMeta([0, 1]);
@@ -31,6 +33,7 @@ test('checkpoint round-trips entity + koth state with matching checksum', () => 
   const w2 = createWorld(seed);
   w2.koth = createKothMeta([]);
   const field2 = buildField(seed, { width: 64, height: 64 });
+  applyTableSilhouette(field2);
   populateScenery(field2, createWorld(seed), kothBases(field2.worldHalfF));
   importWorldCheckpoint(w2, field2, blob);
 

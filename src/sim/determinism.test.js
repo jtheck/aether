@@ -208,6 +208,7 @@ function sceneryLayoutOk() {
   const different = aField.sceneryType.some((v, i) => v !== cField.sceneryType[i]);
 
   let rockBlocked = false;
+  let rockBorderSlow = false;
   let treeSlow = false;
   for (let i = 0; i < aField.sceneryType.length; i++) {
     const kind = aField.sceneryType[i];
@@ -222,13 +223,16 @@ function sceneryLayoutOk() {
           if (aField.pass[(tz + dz) * aField.width + tx + dx] !== 0) rockBlocked = false;
         }
       }
+      if (rockBlocked) {
+        rockBorderSlow = aField.rockSlowMask?.some((v) => v !== 0) === true;
+      }
     }
     if (!treeSlow && kind === SCENERY.TREE) {
       const tx = i % aField.width;
       const tz = (i / aField.width) | 0;
       treeSlow = isSlowTile(aField, tx, tz) && aField.pass[i] !== 0;
     }
-    if (rockBlocked && treeSlow) break;
+    if (rockBlocked && rockBorderSlow && treeSlow) break;
   }
 
   const masked = buildField(seed);
@@ -257,7 +261,7 @@ function sceneryLayoutOk() {
     }
   }
 
-  return same && different && rockBlocked && treeSlow && maskClear && spawnClear;
+  return same && different && rockBlocked && rockBorderSlow && treeSlow && maskClear && spawnClear;
 }
 
 function treeMovementSlowOk() {

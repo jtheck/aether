@@ -1,5 +1,6 @@
-// Table silhouette — large cells minus circle holes, filleted convex corners.
-// Authoring resolution is the cell grid (default 16 tiles). Tiles are derived.
+// Table silhouette — 16-tile chunks with per-chunk corner radius.
+// A chunk's radius fillets its outside corners (convex) or inside corners
+// (concave / punched hole). Radius 0 stays sharp for a wooden corner block.
 
 import {
   TILE_SIZE_F,
@@ -8,6 +9,7 @@ import {
 } from './field.js';
 
 export const DEFAULT_CELL_SIZE = 16;
+export const DEFAULT_CELL_RADIUS = 12;
 const ARC_SEGMENTS = 10;
 const EPS = 1e-5;
 
@@ -20,11 +22,23 @@ export function cellCounts(width, height, cellSize = DEFAULT_CELL_SIZE) {
   };
 }
 
+export function maxCellRadius(cellSize = DEFAULT_CELL_SIZE) {
+  return (Math.max(1, cellSize | 0) * TILE_SIZE_F) * 0.5 - EPS;
+}
+
 export function createFullCellMask(width, height, cellSize = DEFAULT_CELL_SIZE) {
   const { chunksX, chunksZ } = cellCounts(width, height, cellSize);
   const mask = new Uint8Array(chunksX * chunksZ);
   mask.fill(1);
   return mask;
+}
+
+export function createFullCellRadius(width, height, cellSize = DEFAULT_CELL_SIZE, value = DEFAULT_CELL_RADIUS) {
+  const { chunksX, chunksZ } = cellCounts(width, height, cellSize);
+  const radii = new Uint8Array(chunksX * chunksZ);
+  const maxR = maxCellRadius(cellSize);
+  radii.fill(Math.max(0, Math.min(maxR, Number(value) || 0)));
+  return radii;
 }
 
 export function cloneTableShape(shape) {
@@ -34,8 +48,7 @@ export function cloneTableShape(shape) {
     chunksX: shape.chunksX,
     chunksZ: shape.chunksZ,
     cellMask: shape.cellMask.slice(),
-    cornerRadius: shape.cornerRadius,
-    holes: (shape.holes ?? []).map((h) => ({ x: h.x, z: h.z, r: h.r })),
+    cellRadius: shape.cellRadius.slice(),
   };
 }
 
@@ -49,16 +62,18 @@ export function normalizeTableShape(field, opts = {}) {
   } else {
     cellMask = cellMask instanceof Uint8Array ? cellMask.slice() : Uint8Array.from(cellMask);
   }
-  const maxR = (cellSize * TILE_SIZE_F) * 0.5 - EPS;
-  const cornerRadius = Math.max(0, Math.min(maxR, Number(opts.cornerRadius ?? field.tableShape?.cornerRadius) || 0));
-  const holes = (opts.holes ?? field.tableShape?.holes ?? [])
-    .map((h) => ({
-      x: Number(h.x) || 0,
-      z: Number(h.z) || 0,
-      r: Math.max(0, Number(h.r) || 0),
-    }))
-    .filter((h) => h.r > 0);
-  return { cellSize, chunksX, chunksZ, cellMask, cornerRadius, holes };
+  const maxR = maxCellRadius(cellSize);
+  let cellRadius = opts.cellRadius ?? field.tableShape?.cellRadius;
+  if (!cellRadius || cellRadius.length !== expected) {
+    const fallback = Number(opts.cornerRadius ?? DEFAULT_CELL_RADIUS) || 0;
+    cellRadius = createFullCellRadius(field.width, field.height, cellSize, fallback);
+  } else {
+    cellRadius = cellRadius instanceof Uint8Array ? cellRadius.slice() : Uint8Array.from(cellRadius);
+    for (let i = 0; i < cellRadius.length; i++) {
+      cellRadius[i] = Math.max(0, Math.min(maxR, cellRadius[i]));
+    }
+  }
+  return { cellSize, chunksX, chunksZ, cellMask, cellRadius };
 }
 
 export function isCellEnabled(shape, cx, cz) {
@@ -69,6 +84,17 @@ export function isCellEnabled(shape, cx, cz) {
 export function setCellEnabled(shape, cx, cz, enabled) {
   if (cx < 0 || cz < 0 || cx >= shape.chunksX || cz >= shape.chunksZ) return;
   shape.cellMask[cz * shape.chunksX + cx] = enabled ? 1 : 0;
+}
+
+export function getCellRadius(shape, cx, cz) {
+  if (cx < 0 || cz < 0 || cx >= shape.chunksX || cz >= shape.chunksZ) return 0;
+  return shape.cellRadius[cz * shape.chunksX + cx] || 0;
+}
+
+export function setCellRadius(shape, cx, cz, radius) {
+  if (cx < 0 || cz < 0 || cx >= shape.chunksX || cz >= shape.chunksZ) return;
+  const maxR = maxCellRadius(shape.cellSize);
+  shape.cellRadius[cz * shape.chunksX + cx] = Math.max(0, Math.min(maxR, Number(radius) || 0));
 }
 
 export function tileCellCoords(tx, tz, cellSize) {
@@ -100,7 +126,7 @@ export function tileCenterWorld(field, tx, tz) {
   };
 }
 
-function cellWorldBox(field, cx, cz, cellSize) {
+export function cellWorldBox(field, cx, cz, cellSize) {
   const half = worldHalfFFromField(field);
   const span = cellSize * TILE_SIZE_F;
   return {
@@ -117,90 +143,11 @@ function vertexWorld(field, gx, gz, cellSize) {
   return { x: gx * span - half, z: gz * span - half };
 }
 
-function pointInHole(x, z, holes) {
-  for (let i = 0; i < holes.length; i++) {
-    const h = holes[i];
-    const dx = x - h.x;
-    const dz = z - h.z;
-    if (dx * dx + dz * dz < h.r * h.r) return true;
-  }
-  return false;
-}
-
-export function tileInSharpTable(field, shape, tx, tz) {
-  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
-  const { cx, cz } = tileCellCoords(tx, tz, shape.cellSize);
-  if (!isCellEnabled(shape, cx, cz)) return false;
-  const c = tileCenterWorld(field, tx, tz);
-  return !pointInHole(c.x, c.z, shape.holes);
-}
-
-function distPointToAabb(px, pz, x0, z0, x1, z1) {
-  const cx = Math.max(x0, Math.min(px, x1));
-  const cz = Math.max(z0, Math.min(pz, z1));
-  return Math.hypot(px - cx, pz - cz);
-}
-
-function maxDistPointToAabb(px, pz, x0, z0, x1, z1) {
-  let max = 0;
-  const xs = [x0, x1];
-  const zs = [z0, z1];
-  for (let i = 0; i < 2; i++) {
-    for (let j = 0; j < 2; j++) {
-      const d = Math.hypot(xs[i] - px, zs[j] - pz);
-      if (d > max) max = d;
-    }
-  }
-  return max;
-}
-
-function aabbOverlap(ax0, az0, ax1, az1, bx0, bz0, bx1, bz1) {
-  return ax0 < bx1 && ax1 > bx0 && az0 < bz1 && az1 > bz0;
-}
-
-function tileIntersectsCircleRim(field, tx, tz, hole) {
-  const q = tileWorldQuad(field, tx, tz);
-  const dMin = distPointToAabb(hole.x, hole.z, q.x0, q.z0, q.x1, q.z1);
-  const dMax = maxDistPointToAabb(hole.x, hole.z, q.x0, q.z0, q.x1, q.z1);
-  return dMin <= hole.r && dMax >= hole.r;
-}
-
-/** Convex outer corners of the cell union (count === 1 around a cell vertex). */
-export function convexCorners(field, shape) {
-  const corners = [];
-  const { chunksX, chunksZ, cellSize, cornerRadius } = shape;
-  for (let gz = 0; gz <= chunksZ; gz++) {
-    for (let gx = 0; gx <= chunksX; gx++) {
-      const inward = convexInward(shape, gx, gz);
-      if (!inward) continue;
-      const V = vertexWorld(field, gx, gz, cellSize);
-      corners.push({
-        x: V.x,
-        z: V.z,
-        ix: inward.ix,
-        iz: inward.iz,
-        r: cornerRadius,
-        cx: V.x + inward.ix * cornerRadius,
-        cz: V.z + inward.iz * cornerRadius,
-      });
-    }
-  }
-  return corners;
-}
-
-/** Concave inner corners (count === 3). */
-export function concaveCorners(field, shape) {
-  const corners = [];
-  const { chunksX, chunksZ, cellSize } = shape;
-  for (let gz = 0; gz <= chunksZ; gz++) {
-    for (let gx = 0; gx <= chunksX; gx++) {
-      const missing = concaveMissing(shape, gx, gz);
-      if (!missing) continue;
-      const V = vertexWorld(field, gx, gz, cellSize);
-      corners.push({ x: V.x, z: V.z, ix: missing.ix, iz: missing.iz });
-    }
-  }
-  return corners;
+function ownerFromInward(gx, gz, inward) {
+  return {
+    cx: gx + (inward.ix > 0 ? 0 : -1),
+    cz: gz + (inward.iz > 0 ? 0 : -1),
+  };
 }
 
 function concaveMissing(shape, gx, gz) {
@@ -229,6 +176,76 @@ function convexInward(shape, gx, gz) {
   return { ix: -1, iz: -1 };
 }
 
+function makeCorner(field, shape, gx, gz, inward, kind) {
+  const owner = ownerFromInward(gx, gz, inward);
+  const r = getCellRadius(shape, owner.cx, owner.cz);
+  const V = vertexWorld(field, gx, gz, shape.cellSize);
+  return {
+    kind,
+    x: V.x,
+    z: V.z,
+    ix: inward.ix,
+    iz: inward.iz,
+    r,
+    cx: V.x + inward.ix * r,
+    cz: V.z + inward.iz * r,
+    ocx: owner.cx,
+    ocz: owner.cz,
+  };
+}
+
+/** Convex outer corners (exactly one chunk around the vertex). */
+export function convexCorners(field, shape) {
+  const corners = [];
+  for (let gz = 0; gz <= shape.chunksZ; gz++) {
+    for (let gx = 0; gx <= shape.chunksX; gx++) {
+      const inward = convexInward(shape, gx, gz);
+      if (inward) corners.push(makeCorner(field, shape, gx, gz, inward, 'convex'));
+    }
+  }
+  return corners;
+}
+
+/** Concave inner corners (exactly three chunks around the vertex). */
+export function concaveCorners(field, shape) {
+  const corners = [];
+  for (let gz = 0; gz <= shape.chunksZ; gz++) {
+    for (let gx = 0; gx <= shape.chunksX; gx++) {
+      const missing = concaveMissing(shape, gx, gz);
+      if (missing) corners.push(makeCorner(field, shape, gx, gz, missing, 'concave'));
+    }
+  }
+  return corners;
+}
+
+export function silhouetteCorners(field, shape) {
+  return [...convexCorners(field, shape), ...concaveCorners(field, shape)];
+}
+
+/** Which silhouette corners this chunk owns. */
+export function chunkCornerKind(shape, cx, cz) {
+  let convex = 0;
+  let concave = 0;
+  for (let gz = cz; gz <= cz + 1; gz++) {
+    for (let gx = cx; gx <= cx + 1; gx++) {
+      const inward = convexInward(shape, gx, gz);
+      if (inward) {
+        const o = ownerFromInward(gx, gz, inward);
+        if (o.cx === cx && o.cz === cz) convex++;
+      }
+      const missing = concaveMissing(shape, gx, gz);
+      if (missing) {
+        const o = ownerFromInward(gx, gz, missing);
+        if (o.cx === cx && o.cz === cz) concave++;
+      }
+    }
+  }
+  if (convex && concave) return 'inside + outside';
+  if (concave) return 'inside corner';
+  if (convex) return 'outside corner';
+  return 'no corner';
+}
+
 function cornerBox(corner) {
   const r = Math.max(corner.r, EPS);
   return {
@@ -239,30 +256,117 @@ function cornerBox(corner) {
   };
 }
 
-function tileIntersectsFillet(field, tx, tz, corner) {
+function pointInCornerBox(x, z, corner) {
+  const box = cornerBox(corner);
+  return x >= box.x0 - EPS && x <= box.x1 + EPS && z >= box.z0 - EPS && z <= box.z1 + EPS;
+}
+
+function aabbOverlap(ax0, az0, ax1, az1, bx0, bz0, bx1, bz1) {
+  return ax0 < bx1 && ax1 > bx0 && az0 < bz1 && az1 > bz0;
+}
+
+function distPointToAabb(px, pz, x0, z0, x1, z1) {
+  const cx = Math.max(x0, Math.min(px, x1));
+  const cz = Math.max(z0, Math.min(pz, z1));
+  return Math.hypot(px - cx, pz - cz);
+}
+
+function maxDistPointToAabb(px, pz, x0, z0, x1, z1) {
+  let max = 0;
+  const xs = [x0, x1];
+  const zs = [z0, z1];
+  for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < 2; j++) {
+      const d = Math.hypot(xs[i] - px, zs[j] - pz);
+      if (d > max) max = d;
+    }
+  }
+  return max;
+}
+
+function tileSamplePoints(field, tx, tz) {
+  const q = tileWorldQuad(field, tx, tz);
+  const mx = (q.x0 + q.x1) * 0.5;
+  const mz = (q.z0 + q.z1) * 0.5;
+  return [
+    [mx, mz],
+    [q.x0, q.z0], [q.x1, q.z0], [q.x1, q.z1], [q.x0, q.z1],
+    [mx, q.z0], [q.x1, mz], [mx, q.z1], [q.x0, mz],
+  ];
+}
+
+function tileIntersectsFilletArc(field, tx, tz, corner) {
   if (corner.r <= 0) return false;
   const q = tileWorldQuad(field, tx, tz);
   const box = cornerBox(corner);
-  return aabbOverlap(q.x0, q.z0, q.x1, q.z1, box.x0, box.z0, box.x1, box.z1);
+  if (!aabbOverlap(q.x0, q.z0, q.x1, q.z1, box.x0, box.z0, box.x1, box.z1)) return false;
+  const dMin = distPointToAabb(corner.cx, corner.cz, q.x0, q.z0, q.x1, q.z1);
+  const dMax = maxDistPointToAabb(corner.cx, corner.cz, q.x0, q.z0, q.x1, q.z1);
+  return dMin <= corner.r + EPS && dMax >= corner.r - EPS;
 }
 
-function tileOnOuterPerimeter(field, shape, tx, tz) {
-  return !tileInSharpTable(field, shape, tx, tz - 1)
-    || !tileInSharpTable(field, shape, tx, tz + 1)
-    || !tileInSharpTable(field, shape, tx - 1, tz)
-    || !tileInSharpTable(field, shape, tx + 1, tz);
-}
-
-function tileIntersectsEdge(field, shape, tx, tz, corners) {
-  if (!tileInSharpTable(field, shape, tx, tz)) return false;
-  if (tileOnOuterPerimeter(field, shape, tx, tz)) return true;
-  for (let i = 0; i < shape.holes.length; i++) {
-    if (tileIntersectsCircleRim(field, tx, tz, shape.holes[i])) return true;
+function pointInTableForCell(field, shape, x, z, cx, cz, corners) {
+  const enabled = isCellEnabled(shape, cx, cz);
+  const list = corners ?? silhouetteCorners(field, shape);
+  for (let i = 0; i < list.length; i++) {
+    const corner = list[i];
+    if (corner.r <= 0) continue;
+    if (corner.ocx !== cx || corner.ocz !== cz) continue;
+    if (!pointInCornerBox(x, z, corner)) continue;
+    const d = Math.hypot(x - corner.cx, z - corner.cz);
+    if (corner.kind === 'convex') return d <= corner.r + EPS;
+    return d > corner.r;
   }
-  for (let i = 0; i < corners.length; i++) {
-    if (tileIntersectsFillet(field, tx, tz, corners[i])) return true;
+  return enabled;
+}
+
+/** World-space felt test after per-chunk inside/outside fillets. */
+export function pointInTable(field, shape, x, z, corners) {
+  const half = worldHalfFFromField(field);
+  const span = shape.cellSize * TILE_SIZE_F;
+  const cx = Math.floor((x + half) / span);
+  const cz = Math.floor((z + half) / span);
+  return pointInTableForCell(field, shape, x, z, cx, cz, corners);
+}
+
+export function tileInTable(field, shape, tx, tz, corners) {
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  const c = tileCenterWorld(field, tx, tz);
+  return pointInTable(field, shape, c.x, c.z, corners);
+}
+
+/** True if any part of the tile quad is still felt (fills staircase holes on large fillets). */
+export function tileHitsTable(field, shape, tx, tz, corners) {
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  const { cx, cz } = tileCellCoords(tx, tz, shape.cellSize);
+  const list = corners ?? silhouetteCorners(field, shape);
+  const pts = tileSamplePoints(field, tx, tz);
+  for (let i = 0; i < pts.length; i++) {
+    if (pointInTableForCell(field, shape, pts[i][0], pts[i][1], cx, cz, list)) return true;
   }
   return false;
+}
+
+function tileCrossesBoundary(field, shape, tx, tz, corners) {
+  const { cx, cz } = tileCellCoords(tx, tz, shape.cellSize);
+  const list = corners ?? silhouetteCorners(field, shape);
+  const pts = tileSamplePoints(field, tx, tz);
+  let inside = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (pointInTableForCell(field, shape, pts[i][0], pts[i][1], cx, cz, list)) inside++;
+  }
+  if (inside > 0 && inside < pts.length) return true;
+  for (let i = 0; i < list.length; i++) {
+    if (tileIntersectsFilletArc(field, tx, tz, list[i])) return true;
+  }
+  return false;
+}
+
+/** @deprecated Use tileInTable — sharp cell membership without fillets. */
+export function tileInSharpTable(field, shape, tx, tz) {
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return false;
+  const { cx, cz } = tileCellCoords(tx, tz, shape.cellSize);
+  return isCellEnabled(shape, cx, cz);
 }
 
 /** Write activeMask / pass / slow from the silhouette. Red = edge, yellow = touches red. */
@@ -274,31 +378,86 @@ export function applyTableSilhouette(field, opts = {}) {
 
   const { width, height } = field;
   const n = width * height;
-  const corners = shape.cornerRadius > 0 ? convexCorners(field, shape) : [];
+  const corners = silhouetteCorners(field, shape);
   const edge = new Uint8Array(n);
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
-      const on = tileInSharpTable(field, shape, tx, tz);
-      field.activeMask[i] = on ? 1 : 0;
-      if (on && tileIntersectsEdge(field, shape, tx, tz, corners)) edge[i] = 1;
+      field.activeMask[i] = tileHitsTable(field, shape, tx, tz, corners) ? 1 : 0;
+    }
+  }
+  for (let tz = 0; tz < height; tz++) {
+    for (let tx = 0; tx < width; tx++) {
+      const i = tz * width + tx;
+      if (field.activeMask[i] === 0) continue;
+      if (
+        tileCrossesBoundary(field, shape, tx, tz, corners)
+        || hasInactiveNeighbor8(field.activeMask, width, height, tx, tz)
+      ) {
+        edge[i] = 1;
+      }
     }
   }
 
-  field.slowMask.fill(0);
-  refreshTerrainDerived(field);
+  field.tableEdge = edge;
+  refreshTableTerrain(field);
+  return field;
+}
 
+/**
+ * OR table-edge red/yellow onto pass + slow without wiping trees/rocks.
+ * Safe after populateScenery.
+ */
+export function applyTableEdgeOccupancy(field) {
+  const edge = field.tableEdge;
+  if (!edge || !field.pass) return field;
+  const { width, height } = field;
+  const n = width * height;
+  if (!field.slowMask || field.slowMask.length !== n) {
+    field.slowMask = new Uint8Array(n);
+  }
+  if (!field.tableSlowMask || field.tableSlowMask.length !== n) {
+    field.tableSlowMask = new Uint8Array(n);
+  } else {
+    field.tableSlowMask.fill(0);
+  }
+  const tableSlow = field.tableSlowMask;
   for (let i = 0; i < n; i++) {
     if (edge[i]) field.pass[i] = 0;
   }
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
-      if (field.activeMask[i] === 0 || field.pass[i] === 0) continue;
-      if (hasRedNeighbor(edge, width, height, tx, tz)) field.slowMask[i] = 1;
+      if (field.activeMask?.[i] === 0 || field.pass[i] === 0) continue;
+      if (!hasRedNeighbor(edge, width, height, tx, tz)) continue;
+      field.slowMask[i] = 1;
+      tableSlow[i] = 1;
     }
   }
   return field;
+}
+
+/** Recompute atlas/pass/slow after terrain paint without rebuilding the silhouette. */
+export function refreshTableTerrain(field) {
+  field.slowMask?.fill?.(0);
+  field.tableSlowMask?.fill?.(0);
+  refreshTerrainDerived(field);
+  applyTableEdgeOccupancy(field);
+  return field;
+}
+
+function hasInactiveNeighbor8(mask, width, height, tx, tz) {
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dz === 0) continue;
+      const nx = tx + dx;
+      const nz = tz + dz;
+      if (nx < 0 || nz < 0 || nx >= width || nz >= height || mask[nz * width + nx] === 0) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function hasRedNeighbor(edge, width, height, tx, tz) {
@@ -331,24 +490,13 @@ function outwardOfDirected(ax, az, bx, bz, insideFn) {
   return { ox: nx, oz: nz };
 }
 
-function pointInSharpWorld(field, shape, x, z) {
-  const half = worldHalfFFromField(field);
-  const tx = Math.floor((x + half) / TILE_SIZE_F);
-  const tz = Math.floor((z + half) / TILE_SIZE_F);
-  return tileInSharpTable(field, shape, tx, tz);
-}
-
 /** Closed polylines in world XZ, each point {x,z}. Used to extrude rails. */
 export function silhouetteLoops(field, shape) {
   const loops = [];
+  const corners = silhouetteCorners(field, shape);
   const cellLoops = buildCellLoops(field, shape);
-  const r = shape.cornerRadius;
-  const corners = r > 0 ? convexCorners(field, shape) : [];
   for (const loop of cellLoops) {
-    loops.push(filletLoop(loop, corners, r));
-  }
-  for (const hole of shape.holes) {
-    loops.push(holeLoop(hole));
+    loops.push(filletLoop(loop, corners));
   }
   return loops;
 }
@@ -448,8 +596,7 @@ function chainSegments(edges) {
   return loops;
 }
 
-function filletLoop(pts, corners, r) {
-  if (r <= 0 || corners.length === 0) return pts;
+function filletLoop(pts, corners) {
   const verts = pts[pts.length - 1] && pts[0]
     && Math.hypot(pts[pts.length - 1].x - pts[0].x, pts[pts.length - 1].z - pts[0].z) < 0.05
     ? pts.slice(0, -1)
@@ -461,10 +608,11 @@ function filletLoop(pts, corners, r) {
     const cur = verts[i];
     const next = verts[(i + 1) % m];
     const corner = matchCorner(cur, corners);
-    if (!corner) {
+    if (!corner || corner.r <= 0) {
       filleted.push(cur);
       continue;
     }
+    const r = corner.r;
     const inDx = cur.x - prev.x;
     const inDz = cur.z - prev.z;
     const inLen = Math.hypot(inDx, inDz) || 1;
@@ -485,8 +633,8 @@ function filletLoop(pts, corners, r) {
       const t = s / ARC_SEGMENTS;
       const ang = a0 + delta * t;
       filleted.push({
-        x: c.x + Math.cos(ang) * corner.r,
-        z: c.z + Math.sin(ang) * corner.r,
+        x: c.x + Math.cos(ang) * r,
+        z: c.z + Math.sin(ang) * r,
       });
     }
     filleted.push(b);
@@ -502,28 +650,16 @@ function matchCorner(pt, corners) {
   return null;
 }
 
-function holeLoop(hole) {
-  const pts = [];
-  const segs = 36;
-  for (let i = 0; i <= segs; i++) {
-    const a = (i / segs) * Math.PI * 2;
-    pts.push({
-      x: hole.x + Math.cos(a) * hole.r,
-      z: hole.z + Math.sin(a) * hole.r,
-    });
-  }
-  return pts;
+export function loopOutward(field, shape, ax, az, bx, bz, corners) {
+  const list = corners ?? silhouetteCorners(field, shape);
+  return outwardOfDirected(ax, az, bx, bz, (x, z) => pointInTable(field, shape, x, z, list));
 }
 
-export function loopOutward(field, shape, ax, az, bx, bz) {
-  return outwardOfDirected(ax, az, bx, bz, (x, z) => pointInSharpWorld(field, shape, x, z));
-}
-
-/** Paint terrainTypes in a tile-radius brush on remaining felt. */
+/** Paint terrainTypes in a tile-radius brush on remaining felt. Returns dirty tiles. */
 export function paintTerrainBrush(field, tx, tz, terrainType, radius = 0) {
   const r = Math.max(0, radius | 0);
   const r2 = r * r;
-  let changed = false;
+  const dirty = [];
   for (let dz = -r; dz <= r; dz++) {
     for (let dx = -r; dx <= r; dx++) {
       if (dx * dx + dz * dz > r2) continue;
@@ -534,9 +670,9 @@ export function paintTerrainBrush(field, tx, tz, terrainType, radius = 0) {
       if (field.activeMask[i] === 0) continue;
       if (field.terrainTypes[i] !== terrainType) {
         field.terrainTypes[i] = terrainType;
-        changed = true;
+        dirty.push({ x, z });
       }
     }
   }
-  return changed;
+  return dirty;
 }

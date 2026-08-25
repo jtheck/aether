@@ -17,7 +17,7 @@ import {
   TILE_SIZE_F,
   worldHalfFFromField,
 } from '../sim/field.js';
-import { concaveCorners, convexCorners, loopOutward, silhouetteLoops } from '../sim/tableShape.js';
+import { loopOutward, silhouetteCorners, silhouetteLoops } from '../sim/tableShape.js';
 import { createSceneryFromField } from './scenery.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
@@ -36,6 +36,8 @@ const FRAME_UV_WORLD_SIZE = 18;
 
 /** @type {WeakMap<object, object>} */
 const woodTextures = new WeakMap();
+/** @type {WeakMap<object, Map<number, object>>} */
+const atlasTextureCache = new WeakMap();
 
 /**
  * @param {import('@babylonjs/lite').EngineContext} engine
@@ -47,10 +49,20 @@ const woodTextures = new WeakMap();
 export async function createTerrainFromField(engine, scene, field, camera, opts = {}) {
   const textures = await loadAtlasTextures(engine);
   const active = createActiveCellLookup(field);
+  const chunkSize = opts.chunkedAtlas
+    ? Math.max(1, field.tableShape?.cellSize || field.chunkSize || 16)
+    : 0;
+  /** @type {Map<string, object[]>} */
+  const atlasByChunk = new Map();
+  const atlasMaterials = createAtlasMaterials(textures);
+  let atlasRev = 0;
+  const atlasMeshes = chunkSize
+    ? buildChunkedAtlasMeshes(engine, field, atlasMaterials, active, chunkSize, atlasByChunk, atlasRev)
+    : buildAtlasMeshes(engine, field, atlasMaterials, active);
   const built = [
     ...buildEnvironmentMeshes(engine, field),
     ...buildTableFrameMeshes(engine, field, active),
-    ...buildAtlasMeshes(engine, field, textures, active),
+    ...atlasMeshes,
   ];
   let disposed = false;
   const scenery = opts.skipScenery
@@ -104,6 +116,39 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     applyFogDim(isVisible) {
       if (!disposed) scenery.applyFogDim?.(isVisible);
     },
+    rebuildAtlasChunks(nextField, chunkKeys) {
+      if (disposed || !chunkSize) return false;
+      const keys = chunkKeys instanceof Set ? chunkKeys : new Set(chunkKeys ?? []);
+      if (!keys.size) return false;
+      const nextActive = createActiveCellLookup(nextField);
+      atlasRev += 1;
+      for (const key of keys) {
+        const prev = atlasByChunk.get(key) ?? [];
+        for (const mesh of prev) {
+          const idx = built.indexOf(mesh);
+          if (idx >= 0) built.splice(idx, 1);
+          softDetachMesh(scene, mesh);
+        }
+        const [cx, cz] = String(key).split(',').map(Number);
+        const next = buildAtlasMeshesInRect(
+          engine,
+          nextField,
+          atlasMaterials,
+          nextActive,
+          cx * chunkSize,
+          cz * chunkSize,
+          Math.min(nextField.width, (cx + 1) * chunkSize),
+          Math.min(nextField.height, (cz + 1) * chunkSize),
+          `-${cx}-${cz}-r${atlasRev}`,
+        );
+        for (const mesh of next) {
+          addToScene(scene, mesh);
+          built.push(mesh);
+        }
+        atlasByChunk.set(key, next);
+      }
+      return true;
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -120,6 +165,8 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
 }
 
 async function loadAtlasTextures(engine) {
+  const cached = atlasTextureCache.get(engine);
+  if (cached) return cached;
   /** @type {Map<number, object>} */
   const out = new Map();
   await Promise.all(
@@ -127,7 +174,25 @@ async function loadAtlasTextures(engine) {
       out.set(Number(id), await loadTexture2D(engine, url));
     }),
   );
+  atlasTextureCache.set(engine, out);
   return out;
+}
+
+function createAtlasMaterials(textures) {
+  /** @type {Map<number, object>} */
+  const materials = new Map();
+  for (const aid of [ATLAS.GRASS_DIRT, ATLAS.GRASS_WATER]) {
+    const mat = createStandardMaterial();
+    mat.diffuseColor = [1.2, 1.2, 1.14];
+    mat.ambientColor = [0.12, 0.12, 0.1];
+    mat.emissiveColor = [0.01, 0.01, 0.008];
+    mat.specularColor = [0.06, 0.06, 0.05];
+    mat.specularPower = 32;
+    mat.diffuseTexture = textures.get(aid) ?? null;
+    mat.backFaceCulling = true;
+    materials.set(aid, mat);
+  }
+  return materials;
 }
 
 async function loadTexture2D(engine, url) {
@@ -153,20 +218,60 @@ async function loadTexture2D(engine, url) {
   return texture;
 }
 
-function buildAtlasMeshes(engine, field, textures, active) {
+function buildAtlasMeshes(engine, field, materials, active) {
+  return buildAtlasMeshesInRect(
+    engine,
+    field,
+    materials,
+    active,
+    0,
+    0,
+    field.width,
+    field.height,
+    '',
+  );
+}
+
+function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, atlasByChunk, atlasRev) {
+  const meshes = [];
+  const chunksX = Math.ceil(field.width / chunkSize);
+  const chunksZ = Math.ceil(field.height / chunkSize);
+  for (let cz = 0; cz < chunksZ; cz++) {
+    for (let cx = 0; cx < chunksX; cx++) {
+      const key = `${cx},${cz}`;
+      const chunkMeshes = buildAtlasMeshesInRect(
+        engine,
+        field,
+        materials,
+        active,
+        cx * chunkSize,
+        cz * chunkSize,
+        Math.min(field.width, (cx + 1) * chunkSize),
+        Math.min(field.height, (cz + 1) * chunkSize),
+        `-${cx}-${cz}-r${atlasRev}`,
+      );
+      atlasByChunk.set(key, chunkMeshes);
+      for (const mesh of chunkMeshes) meshes.push(mesh);
+    }
+  }
+  return meshes;
+}
+
+function buildAtlasMeshesInRect(engine, field, materials, active, tx0, tz0, tx1, tz1, nameSuffix) {
   const { width, height, heightMap, terrainTypes, tileType, atlasId } = field;
   const buckets = {
     [ATLAS.GRASS_DIRT]: emptyBucket(),
     [ATLAS.GRASS_WATER]: emptyBucket(),
   };
+  const half = worldHalfFFromField(field);
 
-  for (let tz = 0; tz < height; tz++) {
-    for (let tx = 0; tx < width; tx++) {
+  for (let tz = tz0; tz < tz1; tz++) {
+    for (let tx = tx0; tx < tx1; tx++) {
       if (!active(tx, tz)) continue;
       const i = tz * width + tx;
       const aid = atlasId[i];
       const bucket = buckets[aid] ?? buckets[ATLAS.GRASS_DIRT];
-      pushTileQuad(bucket, tx, tz, tileType[i], heightMap, terrainTypes, width, height, worldHalfFFromField(field));
+      pushTileQuad(bucket, tx, tz, tileType[i], heightMap, terrainTypes, width, height, half);
     }
   }
 
@@ -177,19 +282,9 @@ function buildAtlasMeshes(engine, field, textures, active) {
     const positions = new Float32Array(b.positions);
     const uvs = new Float32Array(b.uvs);
     const indices = new Uint32Array(b.indices);
-    // Lite is left-handed (CW front faces). Quads are CW from +Y; normals stay +Y for lighting.
     const normals = flatUpNormals(positions.length / 3);
-    const mesh = createMeshFromData(engine, `terrain-${aid}`, positions, normals, indices, uvs);
-    const mat = createStandardMaterial();
-    mat.diffuseColor = [1.2, 1.2, 1.14];
-    // Keep ambient low so sun shadows read on grass (ambient bypasses shadowFactors).
-    mat.ambientColor = [0.12, 0.12, 0.1];
-    mat.emissiveColor = [0.01, 0.01, 0.008];
-    mat.specularColor = [0.06, 0.06, 0.05];
-    mat.specularPower = 32;
-    mat.diffuseTexture = textures.get(aid) ?? null;
-    mat.backFaceCulling = true;
-    mesh.material = mat;
+    const mesh = createMeshFromData(engine, `terrain-${aid}${nameSuffix}`, positions, normals, indices, uvs);
+    mesh.material = materials.get(aid) ?? materials.get(ATLAS.GRASS_DIRT);
     mesh.pickable = false;
     mesh.receiveShadows = true;
     meshes.push(mesh);
@@ -228,6 +323,7 @@ function createActiveCellLookup(field) {
 function buildSilhouetteFrameMeshes(engine, field) {
   const shape = field.tableShape;
   const loops = silhouetteLoops(field, shape);
+  const corners = silhouetteCorners(field, shape);
   const positions = [];
   const normals = [];
   const uvs = [];
@@ -255,7 +351,7 @@ function buildSilhouetteFrameMeshes(engine, field) {
       const a = pts[i];
       const b = pts[i + 1];
       if (Math.hypot(b.x - a.x, b.z - a.z) < 1e-4) continue;
-      const o = loopOutward(field, shape, a.x, a.z, b.x, b.z);
+      const o = loopOutward(field, shape, a.x, a.z, b.x, b.z, corners);
       pushFrameSegment(
         positions, normals, uvs, indices,
         a.x, a.z, b.x, b.z, o.ox, o.oz, frameInnerY,
@@ -263,24 +359,12 @@ function buildSilhouetteFrameMeshes(engine, field) {
     }
   }
   const top = frameInnerY + FRAME_TOP_RISE * 1.35;
-  const corners = [
-    ...convexCorners(field, shape),
-    ...concaveCorners(field, shape),
-  ];
-  if (shape.cornerRadius <= 0) {
-    for (const c of corners) {
-      pushBox(
-        cornerPositions, cornerNormals, cornerUvs, cornerIndices,
-        c.x, c.z, FRAME_THICKNESS * 2.1, top, FRAME_BOTTOM_Y,
-      );
-    }
-  } else {
-    for (const c of concaveCorners(field, shape)) {
-      pushBox(
-        cornerPositions, cornerNormals, cornerUvs, cornerIndices,
-        c.x, c.z, FRAME_THICKNESS * 2.1, top, FRAME_BOTTOM_Y,
-      );
-    }
+  for (const c of corners) {
+    if (c.r > 0) continue;
+    pushBox(
+      cornerPositions, cornerNormals, cornerUvs, cornerIndices,
+      c.x, c.z, FRAME_THICKNESS * 2.1, top, FRAME_BOTTOM_Y,
+    );
   }
 
   const meshes = [];
@@ -936,7 +1020,7 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
       setSubtreeVisible(structureSlowMesh, visible);
     }
     if (sv > 0) {
-      // Amber — trees / shore (pathing slow, placement OK).
+      // Amber — trees / shore / rock border (pathing slow, placement OK).
       slowMesh = makeDevMesh(
         engine,
         'tile-slow',

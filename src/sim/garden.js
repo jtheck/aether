@@ -1,6 +1,6 @@
-// .garden v3 — cell mask + corner radius + circle holes + terrain RLE.
+// .garden v3 — cell mask + per-chunk radii + terrain RLE.
 
-import { applyTableSilhouette, createFullCellMask, normalizeTableShape } from './tableShape.js';
+import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
 import { buildField, createField, refreshTerrainDerived } from './field.js';
 
 export const GARDEN_VERSION = 3;
@@ -56,19 +56,6 @@ function decodeCellBits(str, expected) {
   return mask;
 }
 
-function encodeHoles(holes) {
-  if (!holes?.length) return undefined;
-  return holes.map((h) => `${h.x},${h.z},${h.r}`).join(';');
-}
-
-function decodeHoles(str) {
-  if (!str) return [];
-  return String(str).split(';').map((part) => {
-    const [x, z, r] = part.split(',').map(Number);
-    return { x, z, r };
-  }).filter((h) => h.r > 0);
-}
-
 export function encodeGarden(field, extras = {}) {
   const shape = normalizeTableShape(field, field.tableShape ?? {});
   return {
@@ -79,8 +66,7 @@ export function encodeGarden(field, extras = {}) {
     s: field.seed >>> 0,
     cs: shape.cellSize,
     cm: encodeCellBits(shape.cellMask),
-    cr: shape.cornerRadius,
-    hl: encodeHoles(shape.holes),
+    rr: encodeRle(shape.cellRadius),
     t: encodeRle(field.terrainTypes),
   };
 }
@@ -94,6 +80,7 @@ export function decodeGarden(data) {
   const cellSize = Math.max(1, (data.cs | 0) || 16);
   const chunksX = Math.ceil(width / cellSize);
   const chunksZ = Math.ceil(height / cellSize);
+  const expected = chunksX * chunksZ;
   return {
     name: data.n || '',
     width,
@@ -101,10 +88,11 @@ export function decodeGarden(data) {
     seed: (data.s >>> 0),
     cellSize,
     cellMask: data.cm
-      ? decodeCellBits(data.cm, chunksX * chunksZ)
+      ? decodeCellBits(data.cm, expected)
       : createFullCellMask(width, height, cellSize),
-    cornerRadius: Number(data.cr) || 0,
-    holes: decodeHoles(data.hl),
+    cellRadius: data.rr
+      ? decodeRle(data.rr, expected)
+      : createFullCellRadius(width, height, cellSize, Number(data.cr) || 0),
     terrainTypes: decodeRle(data.t, width * height),
   };
 }
@@ -121,8 +109,7 @@ export function fieldFromGarden(data) {
   applyTableSilhouette(field, {
     cellSize: g.cellSize,
     cellMask: g.cellMask,
-    cornerRadius: g.cornerRadius,
-    holes: g.holes,
+    cellRadius: g.cellRadius,
   });
   if (g.terrainTypes.length !== field.terrainTypes.length) {
     refreshTerrainDerived(field);

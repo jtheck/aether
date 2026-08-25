@@ -3,6 +3,7 @@
 
 import * as fx from './fixed.js';
 import { TERRAIN, worldToTile, applyTerrainSlow } from './field.js';
+import { applyTableEdgeOccupancy } from './tableShape.js';
 import {
   TREE_STAGE_MAX,
   TREE_STAGE_MIN,
@@ -27,7 +28,7 @@ export const SCENERY = {
   ROCK_SNOW: 4,
 };
 
-/** Speed scale on slowMask tiles (trees + partial water). */
+/** Speed scale on slowMask tiles (trees + partial water + rock borders). */
 export const SLOW_MULTIPLIER = fx.fromFloat(0.45);
 /** @deprecated Use {@link SLOW_MULTIPLIER} */
 export const TREE_SLOW_MULTIPLIER = SLOW_MULTIPLIER;
@@ -73,6 +74,11 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
   slowMask.fill(0);
   field.sceneryType = sceneryType;
   field.slowMask = slowMask;
+  if (!field.rockSlowMask || field.rockSlowMask.length !== n) {
+    field.rockSlowMask = new Uint8Array(n);
+  } else {
+    field.rockSlowMask.fill(0);
+  }
   ensureTreeArrays(field);
   field.treeStock.fill(0);
   field.treeBurn.fill(0);
@@ -107,6 +113,9 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
     }
   }
 
+  // Yellow ring around rock-red (same overlay language as table edge).
+  applyRockSlowBorder(field, occupied);
+
   // Pass 2: trees on unoccupied grass/dirt.
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
@@ -125,6 +134,8 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
 
   // Partial-water slow only (after trees so fill(0) above does not wipe it).
   applyTerrainSlow(field);
+  // Table-edge yellow/red — populate wipes slowMask, so re-OR the rim.
+  applyTableEdgeOccupancy(field);
 
   return field;
 }
@@ -190,4 +201,68 @@ function markFootprint(field, occupied, pass, cx, cz, radius) {
       pass[i] = 0;
     }
   }
+}
+
+/**
+ * OR a 1-tile slow ring around rock footprints.
+ * @param {object} field
+ * @param {Uint8Array} [rockMask] rock tiles (defaults to footprints from sceneryType)
+ */
+export function applyRockSlowBorder(field, rockMask = null) {
+  const { width, height, pass, slowMask, activeMask } = field;
+  const n = width * height;
+  if (!field.rockSlowMask || field.rockSlowMask.length !== n) {
+    field.rockSlowMask = new Uint8Array(n);
+  } else {
+    field.rockSlowMask.fill(0);
+  }
+  const rockSlow = field.rockSlowMask;
+  const mask = rockMask ?? collectRockMask(field);
+  for (let tz = 0; tz < height; tz++) {
+    for (let tx = 0; tx < width; tx++) {
+      const i = tz * width + tx;
+      if (activeMask && activeMask[i] === 0) continue;
+      if (pass[i] === 0) continue;
+      if (!hasRockNeighbor(mask, width, height, tx, tz)) continue;
+      slowMask[i] = 1;
+      rockSlow[i] = 1;
+    }
+  }
+  return field;
+}
+
+function collectRockMask(field) {
+  const { width, height, sceneryType } = field;
+  const mask = new Uint8Array(width * height);
+  if (!sceneryType) return mask;
+  for (let tz = 0; tz < height; tz++) {
+    for (let tx = 0; tx < width; tx++) {
+      const kind = sceneryType[tz * width + tx];
+      if (kind < SCENERY.ROCK_PLAIN) continue;
+      const radius = rockFootprintRadius(kind);
+      for (let dz = -radius; dz <= radius; dz++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          if (dx * dx + dz * dz > (radius + 0.5) ** 2) continue;
+          const x = tx + dx;
+          const z = tz + dz;
+          if (x < 0 || z < 0 || x >= width || z >= height) continue;
+          mask[z * width + x] = 1;
+        }
+      }
+    }
+  }
+  return mask;
+}
+
+function hasRockNeighbor(mask, width, height, tx, tz) {
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dz === 0) continue;
+      const nx = tx + dx;
+      const nz = tz + dz;
+      if (nx < 0 || nz < 0 || nx >= width || nz >= height) continue;
+      if (mask[nz * width + nx]) return true;
+    }
+  }
+  return false;
 }

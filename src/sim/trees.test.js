@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
 import { buildField, createField, TILE_SIZE_F, WORLD_HALF_F } from './field.js';
-import { SCENERY, populateScenery } from './scenery.js';
+import { SCENERY, applyRockSlowBorder, populateScenery } from './scenery.js';
 import { createWorld, spawn } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { PROJECTILE } from './projectileTypes.js';
@@ -112,6 +112,42 @@ function fireballProjectileBurnsTreesThroughStep() {
   assert.ok(field.treeBurn[i] > 0 || field.treeStock[i] < TREE_WOOD_PER_STAGE * 4);
 }
 
+function rockBorderIsYellowRing() {
+  const field = createField(1, { width: 16, height: 16 });
+  field.pass.fill(1);
+  field.terrainTypes.fill(TERRAIN.DIRT);
+  const cx = 8;
+  const cz = 8;
+  const i = cz * field.width + cx;
+  field.sceneryType[i] = SCENERY.ROCK_PLAIN;
+  field.pass[i] = 0;
+  applyRockSlowBorder(field);
+
+  assert.equal(field.pass[i], 0);
+  assert.equal(field.slowMask[i], 0);
+  let yellow = 0;
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dz === 0) continue;
+      const ni = (cz + dz) * field.width + (cx + dx);
+      assert.equal(field.pass[ni], 1);
+      assert.equal(field.slowMask[ni], 1);
+      assert.equal(field.rockSlowMask[ni], 1);
+      yellow++;
+    }
+  }
+  assert.equal(yellow, 8);
+  assert.equal(field.slowMask[(cz + 2) * field.width + cx], 0);
+
+  const treeI = (cz + 1) * field.width + cx;
+  field.sceneryType[treeI] = SCENERY.TREE;
+  field.treeStock[treeI] = TREE_WOOD_PER_STAGE * 2;
+  field.slowMask[treeI] = 1;
+  damageTree(field, treeI, TREE_WOOD_PER_STAGE * 2);
+  assert.equal(field.sceneryType[treeI], SCENERY.NONE);
+  assert.equal(field.slowMask[treeI], 1, 'rock border stays yellow after fell');
+}
+
 function populateAssignsVariedStock() {
   const field = buildField(7);
   populateScenery(field, null, []);
@@ -184,6 +220,7 @@ damageShrinksThenFells();
 burnConsumesStages();
 fireballSplashIgnitesNearbyTree();
 fireballProjectileBurnsTreesThroughStep();
+rockBorderIsYellowRing();
 populateAssignsVariedStock();
 dirtyUpdatesPublish();
 stepRunsBurnSystem();

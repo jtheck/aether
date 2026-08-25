@@ -186,6 +186,16 @@ export function fieldSnapshot(field) {
     snapshot.chunkMask = new Map(field.chunkMask);
     snapshot.chunkSize = Number(field.chunkSize) || 16;
   }
+  if (field.tableShape?.cellMask) {
+    snapshot.tableShape = {
+      cellSize: field.tableShape.cellSize,
+      chunksX: field.tableShape.chunksX,
+      chunksZ: field.tableShape.chunksZ,
+      cellMask: field.tableShape.cellMask.slice(),
+      cornerRadius: field.tableShape.cornerRadius,
+      holes: (field.tableShape.holes ?? []).map((h) => ({ x: h.x, z: h.z, r: h.r })),
+    };
+  }
   return snapshot;
 }
 
@@ -719,6 +729,14 @@ function cornerFilled(cx, cz, density, width, height) {
     if (v > max) max = v;
   }
   return max;
+}
+
+/** Marching-squares atlas + water pass + water slow. Does not clear tree slow. */
+export function refreshTerrainDerived(field) {
+  applyTerrainTransitions(field);
+  updatePassFromWater(field);
+  applyTerrainSlow(field);
+  return field;
 }
 
 function updatePassFromWater(field) {

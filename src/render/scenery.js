@@ -12,6 +12,7 @@ import {
   setPbrEmissive,
   setStandardOpacityTexture,
   setThinInstances,
+  setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { SCENERY } from '../sim/scenery.js';
 import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
@@ -38,6 +39,8 @@ const TREE_SHRINK_MS = 2200;
 const TREE_FELL_MS = 1400;
 /** Hold full size while ink drips, then melt. */
 const TREE_FELL_DELAY_MS = 850;
+/** Match the terrain fog veil (~0.4 overlay) so trees/rocks don't pop bright. */
+const FOG_DIM = 0.58;
 const placementScratch = new Float64Array(16);
 
 function setThinInstanceCount(mesh, count) {
@@ -146,7 +149,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 
     const billboardMesh = createBillboardMesh(engine, variant, atlas);
     const billboardMatrices = new Float32Array(capacity * 16);
+    const colors = makeWhiteColors(capacity);
     setThinInstances(billboardMesh, billboardMatrices, capacity);
+    setThinInstanceColors(billboardMesh, colors);
     setThinInstanceCount(billboardMesh, capacity);
     billboardMesh.pickable = false;
     meshes.push(billboardMesh);
@@ -159,6 +164,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       instances,
       billboardMesh,
       billboardMatrices,
+      colors,
       modelParts,
       dirty: true,
       capacity,
@@ -194,6 +200,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
             }
             part.matrices = new Float32Array(capacity * 16);
             setThinInstances(part.mesh, part.matrices, capacity);
+            setThinInstanceColors(part.mesh, batch.colors);
             setThinInstanceCount(part.mesh, capacity);
             part.mesh.pickable = false;
             if (opts.scene) addToScene(opts.scene, part.mesh);
@@ -219,7 +226,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   // billboards immediately, so without this a field rebuild can stay empty until
   // something else dirties the batch.
   const modelsReady = Promise.all(modelJobs).then(() => {
-    if (!disposed) update(camera, 0, true);
+    if (disposed) return;
+    update(camera, 0, true);
+    if (fogFactor) applyFogDim(fogFactor);
   });
 
   function ensureTreeCapacity(needed) {
@@ -228,13 +237,18 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const oldCap = treeBatch.capacity;
     const billboardMatrices = new Float32Array(cap * 16);
     billboardMatrices.set(treeBatch.billboardMatrices.subarray(0, oldCap * 16));
+    const colors = makeWhiteColors(cap);
+    if (treeBatch.colors) colors.set(treeBatch.colors.subarray(0, oldCap * 4));
     setThinInstances(treeBatch.billboardMesh, billboardMatrices, cap);
+    setThinInstanceColors(treeBatch.billboardMesh, colors);
     setThinInstanceCount(treeBatch.billboardMesh, cap);
     treeBatch.billboardMatrices = billboardMatrices;
+    treeBatch.colors = colors;
     for (const part of treeBatch.modelParts) {
       const matrices = new Float32Array(cap * 16);
       matrices.set(part.matrices.subarray(0, oldCap * 16));
       setThinInstances(part.mesh, matrices, cap);
+      setThinInstanceColors(part.mesh, colors);
       setThinInstanceCount(part.mesh, cap);
       part.matrices = matrices;
     }
@@ -247,11 +261,14 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     treeFreeSlots.sort((a, b) => b - a);
     treeBatch.capacity = cap;
     treeBatch.dirty = true;
+    if (fogFactor) applyFogDim(fogFactor);
   }
 
   let elapsed = LOD_UPDATE_MS;
   let fireElapsed = 0;
   let growElapsed = 0;
+  /** @type {((x: number, z: number) => number) | null} */
+  let fogFactor = null;
   let lastCameraX = Infinity;
   let lastCameraY = Infinity;
   let lastCameraZ = Infinity;
@@ -307,6 +324,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const ref = { batch: treeBatch, index };
     treeByTile.set(tileIndex, ref);
     treeBatch.dirty = true;
+    writeFogColor(treeBatch, index);
+    flushBatchColors(treeBatch);
     return ref;
   }
 
@@ -433,6 +452,37 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 
   update(camera, LOD_UPDATE_MS, true);
 
+  function writeFogColor(batch, index) {
+    const colors = batch.colors;
+    if (!colors) return;
+    const p = batch.instances[index];
+    const t = fogFactor ? fogFactor(p.x, p.z) : 0;
+    const c = 1 - t * (1 - FOG_DIM);
+    const o = index * 4;
+    colors[o] = c;
+    colors[o + 1] = c;
+    colors[o + 2] = c;
+    colors[o + 3] = 1;
+  }
+
+  function flushBatchColors(batch) {
+    if (!batch.colors) return;
+    setThinInstanceColors(batch.billboardMesh, batch.colors);
+    for (let p = 0; p < batch.modelParts.length; p++) {
+      setThinInstanceColors(batch.modelParts[p].mesh, batch.colors);
+    }
+  }
+
+  function applyFogDim(factorAt) {
+    fogFactor = typeof factorAt === 'function' ? factorAt : null;
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      if (!batch.colors) continue;
+      for (let i = 0; i < batch.instances.length; i++) writeFogColor(batch, i);
+      flushBatchColors(batch);
+    }
+  }
+
   function dispose() {
     if (disposed) return;
     disposed = true;
@@ -447,7 +497,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     treeBatch = null;
   }
 
-  return { meshes, modelsReady, update, applyTreeUpdates, dispose };
+  return { meshes, modelsReady, update, applyTreeUpdates, applyFogDim, dispose };
 }
 
 function makeEmptyTreeInstance() {
@@ -831,6 +881,12 @@ function deterministicPlacement(tx, tz, seed, kind) {
   const offsetZ = ((hash % 1000) / 1000 - 0.5) * 0.6;
   hash = (hash * 1664525 + 1013904223) >>> 0;
   return { offsetX, offsetZ, yaw: (hash % 628) / 100 };
+}
+
+function makeWhiteColors(cap) {
+  const colors = new Float32Array(cap * 4);
+  colors.fill(1);
+  return colors;
 }
 
 function writeHiddenMatrix(matrices, slot) {

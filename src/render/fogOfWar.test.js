@@ -1,0 +1,166 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import * as fx from '../sim/fixed.js';
+import { UNIT } from '../sim/unitTypes.js';
+import {
+  createFogOfWar,
+  structureKey,
+  visionTilesForBuilding,
+  visionTilesForDef,
+  visionTilesForUnitType,
+  worldToTileF,
+} from './fogOfWar.js';
+
+function fakeField(w, h) {
+  return {
+    width: w,
+    height: h,
+    heightMap: new Float32Array(w * h),
+    terrainTypes: new Uint8Array(w * h),
+  };
+}
+
+function fakeWorld(units) {
+  const n = units.length;
+  const world = {
+    count: n,
+    alive: new Uint8Array(n),
+    owner: new Uint8Array(n),
+    type: new Uint8Array(n),
+    px: new Int32Array(n),
+    py: new Int32Array(n),
+    carriedBy: new Int32Array(n),
+  };
+  world.carriedBy.fill(-1);
+  for (let i = 0; i < n; i++) {
+    const u = units[i];
+    world.alive[i] = 1;
+    world.owner[i] = u.owner;
+    world.type[i] = u.type;
+    world.px[i] = fx.fromFloat(u.x);
+    world.py[i] = fx.fromFloat(u.z);
+  }
+  return world;
+}
+
+describe('fogOfWar vision radii', () => {
+  it('gives civilians a short circle and military a larger one', () => {
+    assert.equal(visionTilesForDef({ category: 'civilian', aggroRange: 0 }), 8);
+    assert.ok(visionTilesForUnitType(UNIT.WARRIOR) >= 10);
+    assert.equal(visionTilesForBuilding('camp'), 7);
+  });
+
+  it('gives casters extra range, dirigibles more, and mirrors those on tower/agora', () => {
+    const warrior = visionTilesForUnitType(UNIT.WARRIOR);
+    const caster = visionTilesForUnitType(UNIT.WIZARD);
+    const dirigible = visionTilesForUnitType(UNIT.DIRIGIBLE);
+    assert.equal(visionTilesForUnitType(UNIT.WARLOCK), caster);
+    assert.equal(visionTilesForUnitType(UNIT.PRIEST), caster);
+    assert.equal(visionTilesForUnitType(UNIT.MYCO), caster);
+    assert.equal(visionTilesForUnitType(UNIT.SHAMAN), caster);
+    assert.ok(caster > warrior);
+    assert.ok(dirigible > caster);
+    assert.equal(visionTilesForBuilding('tower'), caster);
+    assert.equal(visionTilesForBuilding('perch'), caster);
+    assert.equal(visionTilesForBuilding('agora'), dirigible);
+  });
+});
+
+describe('fogOfWar stamp + hide', () => {
+  it('dims nothing for spectators and hides hostiles outside the stamp', () => {
+    const field = fakeField(20, 20);
+    const half = (20 * 4) / 2;
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const origin = worldToTileF(field, 0, 0);
+    assert.equal(origin.tx, 10);
+    assert.equal(origin.tz, 10);
+
+    const world = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: half - 2, z: half - 2 },
+    ]);
+
+    fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [] });
+    assert.equal(fog.isEnabled(), true);
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.hidesHostile(1, 0, 0), false);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), true);
+    assert.equal(fog.hidesHostile(0, half - 2, half - 2), false);
+
+    fog.stamp({ world, field, localPlayerId: 0, enabled: false });
+    assert.equal(fog.isEnabled(), false);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), false);
+  });
+});
+
+describe('fogOfWar last-known buildings', () => {
+  it('hides unseen enemies, then freezes last-known while fogged', () => {
+    const field = fakeField(20, 20);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    const enemy = { owner: 1, type: 'camp', x: 36, z: 36, yaw: 0, tracks: [{ id: 'warrior', count: 1 }] };
+    fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [enemy], agoras: [] });
+    assert.equal(fog.filterBuildings([enemy]).length, 0);
+
+    const scouted = { ...enemy, x: 0, z: 0, tracks: [{ id: 'warrior', count: 1 }] };
+    fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [scouted], agoras: [] });
+    assert.equal(fog.filterBuildings([scouted]).length, 1);
+    assert.equal(structureKey(scouted), structureKey({ type: 'camp', x: 0, z: 0 }));
+
+    const movedAway = { ...scouted, tracks: [{ id: 'warrior', count: 9 }] };
+    const farWorld = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: -36, z: -36 }]);
+    fog.stamp({
+      world: farWorld,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [movedAway],
+      agoras: [],
+    });
+    const shown = fog.filterBuildings([movedAway]);
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0].tracks[0].count, 1);
+  });
+});
+
+describe('fogOfWar overlay edge', () => {
+  it('keeps hide binary and fades overlay alpha just past the stamp', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [] });
+
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.overlayAlphaAt(0, 0), 0);
+
+    // Civilian radius is 8 tiles (32wu). 36wu is one tile past the hard circle.
+    assert.equal(fog.isWorldVisible(36, 0), false);
+    const skirt = fog.overlayAlphaAt(36, 0);
+    assert.ok(skirt > 0 && skirt < 255, `expected a fade skirt, got ${skirt}`);
+
+    assert.equal(fog.isWorldVisible(64, 0), false);
+    assert.equal(fog.overlayAlphaAt(64, 0), 255);
+    assert.equal(fog.fogFactorAt(0, 0), 0);
+    assert.ok(fog.fogFactorAt(36, 0) > 0 && fog.fogFactorAt(36, 0) < 1);
+    assert.equal(fog.fogFactorAt(64, 0), 1);
+  });
+});
+
+describe('fogOfWar agoras', () => {
+  it('keeps enemy agoras visible even when their tile is fogged', () => {
+    const field = fakeField(20, 20);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    const enemyAgora = { owner: 1, x: 36, z: 36 };
+    fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [enemyAgora] });
+    assert.equal(fog.isWorldVisible(36, 36), false);
+    const shown = fog.filterAgoras([enemyAgora]);
+    assert.equal(shown.length, 1);
+    assert.equal(shown[0], enemyAgora);
+  });
+});

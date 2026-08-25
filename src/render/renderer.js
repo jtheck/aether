@@ -1766,6 +1766,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const cc = canvasCoords(clientX, clientY);
     return pickingRay(cc.x, cc.y, viewProjection(), cc.width, cc.height);
   }
+  const visionDraw = { fn: null };
+  /** @type {{ attachOverlay?: Function, detachOverlay?: Function, syncOverlay?: Function } | null} */
+  let fogApi = null;
   const projectileRenderer = createProjectileRenderer(
     engine,
     scene,
@@ -1919,6 +1922,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           });
         }
       }
+    },
+    {
+      shouldDraw(x, z, owner) {
+        return visionDraw.fn ? visionDraw.fn(x, z, owner) : true;
+      },
     },
   );
 
@@ -3433,6 +3441,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
+     * Client fog overlay + projectile/unit hide queries. Overlay rebuilds with setField.
+     * @param {{ attachOverlay?: Function, detachOverlay?: Function, syncOverlay?: Function } | null} api
+     */
+    attachFogOfWar(api) {
+      fogApi?.detachOverlay?.();
+      fogApi = api ?? null;
+      if (fogApi && fieldSnap) {
+        fogApi.attachOverlay?.(engine, scene, fieldSnap);
+        fogApi.syncOverlay?.();
+      }
+    },
+
+    /**
+     * @param {((x: number, z: number, owner: number) => boolean) | null} fn
+     */
+    setVisionDraw(fn) {
+      visionDraw.fn = fn ?? null;
+    },
+
+    /**
      * Swap flat ground for atlas terrain (or rebuild after world reset).
      * Serialized + generation-gated so overlapping match starts can't leave
      * two forests in the scene.
@@ -3448,6 +3476,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         // buffers — otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
         terrain = null;
         fieldSnap = snap ?? null;
+        fogApi?.detachOverlay?.();
         applyShadowState();
         prev?.dispose?.();
         if (ground) {
@@ -3457,6 +3486,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         if (!snap) {
           if (gen !== fieldGen) return;
           rebuildTileGrid(null);
+          fogApi?.detachOverlay?.();
           applyShadowState();
           return;
         }
@@ -3473,6 +3503,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         sceneryModelsReady = next.modelsReady ?? Promise.resolve();
         applyShadowState();
         rebuildTileGrid(snap);
+        fogApi?.attachOverlay?.(engine, scene, snap);
+        fogApi?.syncOverlay?.();
+        terrain?.applyFogDim?.(
+          fogApi?.isEnabled?.() ? (x, z) => fogApi.fogFactorAt(x, z) : null,
+        );
       };
       const p = setFieldChain.then(run, run);
       setFieldChain = p.catch(() => {});
@@ -3482,6 +3517,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /** Resolves when the latest setField terrain (and scenery models) is ready. */
     whenFieldReady() {
       return setFieldChain.then(() => sceneryModelsReady);
+    },
+
+    applySceneryFog(isVisible) {
+      terrain?.applyFogDim?.(isVisible);
     },
 
     applyTreeUpdates(updatesList) {
@@ -3602,6 +3641,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const frost = opts.fromStatus ? maskOrStatus?.frostTicks : null;
         const dot = opts.fromStatus ? maskOrStatus?.dotTicks : null;
         for (let i = 0; i < n; i++) {
+          if (opts.skip?.[i]) {
+            auraScratch[i] = 0;
+            continue;
+          }
           let mask = 0;
           if (shield && shield[i] > 0) mask |= AURA.HOLY;
           if (frost && frost[i] > 0) mask |= AURA.FROST;

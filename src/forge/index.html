@@ -2,130 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
-  <title>ÆG Forge - Map Editor</title>
-  
-  <!-- Base URL so asset paths (textures, models) resolve correctly -->
-  <base href="../">
-  
-  <link rel="icon" href="icons/favicon-32x32.png">
-  <link rel="stylesheet" href="forge/rt.css">
-  <link rel="stylesheet" href="forge/forge.css">
-
-  <script src="forge/vendor/babylon9.js"></script>
-  <script src="forge/vendor/babylonjs.materials.min.js"></script>
-  <script src="forge/vendor/babylonjs.loaders.min.js"></script>
-  <script src="forge/vendor/babylon.gui.min.js"></script>
-  <script src="forge/vendor/babylonjs.serializers.min.js"></script>
-  <script src="forge/vendor/babylonjs.addons.min.js"></script>
-  <script src="forge/vendor/babylon.inspector.bundle.js"></script>
-
-  <!-- Set ENABLE_FORGE and initialize namespaces before loading game scripts -->
-  <script>
-    window.ENABLE_FORGE = true;
-    
-    // Initialize namespaces that scripts expect to exist
-    window.app = {};
-    window.ui = { 
-      keyInput: function(){}, 
-      handlePointer: function(){}, 
-      handleWheel: function(){},
-      rightClick: function(e) { e.preventDefault(); }
-    };
-    window.gfx = {};
-    window.net = {};
-  </script>
-
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ÆG Forge</title>
+  <link rel="icon" href="/icons/favicon-32x32.png">
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; background: #0e1418; color: #ddd; font: 13px/1.4 sans-serif; }
+    canvas { display: block; width: 100%; height: 100%; }
+    #forge-ui {
+      position: absolute; top: 10px; left: 10px; width: 260px;
+      background: rgba(18, 22, 28, 0.92); border: 1px solid #333; padding: 10px;
+    }
+    #forge-ui h1 { margin: 0 0 8px; font-size: 16px; }
+    #forge-ui label { display: block; margin: 6px 0 2px; color: #aaa; }
+    #forge-ui input, #forge-ui select { width: 100%; box-sizing: border-box; }
+    #forge-ui button { margin: 2px 2px 2px 0; }
+    .row { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+    .row button.active { outline: 1px solid #ccc; }
+    .panel { margin-top: 8px; }
+    .hint { color: #888; font-size: 11px; }
+  </style>
 </head>
 <body>
   <canvas id="canvas"></canvas>
-
-  <!-- Load core game modules (forge-local copies; not shared with v2) -->
-  <script src="forge/game/utility.js"></script>
-  <script src="forge/game/constants.js"></script>
-  <script src="forge/game/determinism.js"></script>
-  <script src="forge/game/lighting.js"></script>
-  <script src="forge/game/gfx.js"></script>
-  <script src="forge/game/field.js"></script>
-  <script src="forge/game/buildings.js"></script>
-  <script src="forge/game/units.js"></script>
-  
-  <!-- Forge tools -->
-  <script src="forge/forge.js"></script>
-  <script src="forge/forge-history.js"></script>
-  <script src="forge/forge-terrain.js"></script>
-  <script src="forge/forge-resources.js"></script>
-  <script src="forge/forge-io.js"></script>
-  <script src="forge/forge-buildings.js"></script>
-  <script src="forge/forge-entities.js"></script>
-  <script src="forge/forge-scenes.js"></script>
-  <script src="forge/forge-ui.js"></script>
-
-  <!-- Forge-specific initialization -->
-  <script>
-    window.addEventListener('DOMContentLoaded', function() {
-      console.log('🔨 Forge Mode Active');
-      
-      // Initialize graphics (creates scene, camera, terrain)
-      if (gfx.init) {
-        gfx.init();
-      }
-      
-      // Position camera for top-down editing view (controls are set up in forge.js)
-      if (gfx.camera && gfx.canvas) {
-        const cam = gfx.camera;
-        
-        // Position camera for top-down editing view
-        const fieldCenterX = liveField ? (liveField.width * TILE_SIZE) / 2 : 128;
-        const fieldCenterZ = liveField ? (liveField.height * TILE_SIZE) / 2 : 128;
-        cam.position = new Vec3(fieldCenterX, 100, fieldCenterZ - 80);
-        if (gfx.cameraTarget) {
-          gfx.cameraTarget.position = new Vec3(fieldCenterX, 0, fieldCenterZ);
-        } else if (cam.setTarget) {
-          cam.setTarget(new Vec3(fieldCenterX, 0, fieldCenterZ));
-        }
-        
-        console.log('📷 Camera positioned for forge');
-      }
-      
-      // Stretch the table to match field size
-      if (gfx.table && gfx.table.parts && gfx.stretchTable) {
-        gfx.stretchTable(gfx.table);
-        console.log('🪑 Table stretched to field size');
-      }
-      
-      // Wait for scene to be ready
-      gfx.scene.whenReadyAsync().then(function() {
-        console.log('🎬 Scene ready');
-        
-        // Initialize forge editor
-        if (window.forge && window.forge.init) {
-          window.forge.init();
-        }
-        
-        // Keyboard shortcuts
-        document.addEventListener('keydown', function(e) {
-          if (e.key === 'F9') {
-            if (gfx.scene.debugLayer.isVisible()) {
-              gfx.scene.debugLayer.hide();
-            } else {
-              gfx.scene.debugLayer.show();
-            }
-          }
-        });
-        
-        console.log('✅ Forge ready!');
-      });
-      
-      // Handle window resize
-      window.addEventListener('resize', function() {
-        if (gfx.engine) gfx.engine.resize();
-      });
-      
-      // Disable right-click menu
-      document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
-    });
-  </script>
-
+  <script type="module" src="./main.js"></script>
 </body>
 </html>

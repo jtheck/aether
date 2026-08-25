@@ -17,6 +17,7 @@ import {
   TILE_SIZE_F,
   worldHalfFFromField,
 } from '../sim/field.js';
+import { concaveCorners, convexCorners, loopOutward, silhouetteLoops } from '../sim/tableShape.js';
 import { createSceneryFromField } from './scenery.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
@@ -52,26 +53,26 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     ...buildAtlasMeshes(engine, field, textures, active),
   ];
   let disposed = false;
-  // 3D tree/rock models load after billboards; keep `built` in sync so shadow
-  // collection (and dispose) sees them.
-  const scenery = await createSceneryFromField(
-    engine,
-    field,
-    surfaceHeightAt,
-    camera,
-    {
-      ...opts,
-      scene,
-      onModelMesh(mesh) {
-        if (disposed) {
-          softDetachMesh(scene, mesh);
-          return;
-        }
-        if (built.indexOf(mesh) < 0) built.push(mesh);
-        opts.onModelMesh?.(mesh);
+  const scenery = opts.skipScenery
+    ? { meshes: [], modelsReady: Promise.resolve(), update() {}, dispose() {} }
+    : await createSceneryFromField(
+      engine,
+      field,
+      surfaceHeightAt,
+      camera,
+      {
+        ...opts,
+        scene,
+        onModelMesh(mesh) {
+          if (disposed) {
+            softDetachMesh(scene, mesh);
+            return;
+          }
+          if (built.indexOf(mesh) < 0) built.push(mesh);
+          opts.onModelMesh?.(mesh);
+        },
       },
-    },
-  );
+    );
   if (opts.signal?.aborted) {
     disposed = true;
     scenery.dispose?.();
@@ -82,6 +83,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       modelsReady: Promise.resolve(),
       update() {},
       applyTreeUpdates() {},
+      applyFogDim() {},
       dispose() {},
     };
   }
@@ -98,6 +100,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     },
     applyTreeUpdates(updates) {
       if (!disposed) scenery.applyTreeUpdates?.(updates);
+    },
+    applyFogDim(isVisible) {
+      if (!disposed) scenery.applyFogDim?.(isVisible);
     },
     dispose() {
       if (disposed) return;
@@ -220,7 +225,97 @@ function createActiveCellLookup(field) {
   return (tx, tz) => tx >= 0 && tz >= 0 && tx < width && tz < height;
 }
 
+function buildSilhouetteFrameMeshes(engine, field) {
+  const shape = field.tableShape;
+  const loops = silhouetteLoops(field, shape);
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const cornerPositions = [];
+  const cornerNormals = [];
+  const cornerUvs = [];
+  const cornerIndices = [];
+  const { heightMap, terrainTypes, width, height } = field;
+  let highestBoundary = 0;
+  for (const pts of loops) {
+    for (let i = 0; i < pts.length; i++) {
+      const half = worldHalfFFromField(field);
+      const tx = Math.max(0, Math.min(width, Math.round((pts[i].x + half) / TILE_SIZE_F)));
+      const tz = Math.max(0, Math.min(height, Math.round((pts[i].z + half) / TILE_SIZE_F)));
+      highestBoundary = Math.max(
+        highestBoundary,
+        sampleHeight(heightMap, terrainTypes, width, height, tx, tz),
+      );
+    }
+  }
+  const frameInnerY = highestBoundary + 0.12;
+  for (const pts of loops) {
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i];
+      const b = pts[i + 1];
+      if (Math.hypot(b.x - a.x, b.z - a.z) < 1e-4) continue;
+      const o = loopOutward(field, shape, a.x, a.z, b.x, b.z);
+      pushFrameSegment(
+        positions, normals, uvs, indices,
+        a.x, a.z, b.x, b.z, o.ox, o.oz, frameInnerY,
+      );
+    }
+  }
+  const top = frameInnerY + FRAME_TOP_RISE * 1.35;
+  const corners = [
+    ...convexCorners(field, shape),
+    ...concaveCorners(field, shape),
+  ];
+  if (shape.cornerRadius <= 0) {
+    for (const c of corners) {
+      pushBox(
+        cornerPositions, cornerNormals, cornerUvs, cornerIndices,
+        c.x, c.z, FRAME_THICKNESS * 2.1, top, FRAME_BOTTOM_Y,
+      );
+    }
+  } else {
+    for (const c of concaveCorners(field, shape)) {
+      pushBox(
+        cornerPositions, cornerNormals, cornerUvs, cornerIndices,
+        c.x, c.z, FRAME_THICKNESS * 2.1, top, FRAME_BOTTOM_Y,
+      );
+    }
+  }
+
+  const meshes = [];
+  const wood = getWoodTexture(engine);
+  if (positions.length > 0) {
+    const mesh = createMeshFromData(
+      engine,
+      'table-frame-edges',
+      new Float32Array(positions),
+      new Float32Array(normals),
+      new Uint32Array(indices),
+      new Float32Array(uvs),
+    );
+    mesh.material = createWoodMaterial(wood, false);
+    mesh.pickable = false;
+    meshes.push(mesh);
+  }
+  if (cornerPositions.length > 0) {
+    const mesh = createMeshFromData(
+      engine,
+      'table-frame-corners',
+      new Float32Array(cornerPositions),
+      new Float32Array(cornerNormals),
+      new Uint32Array(cornerIndices),
+      new Float32Array(cornerUvs),
+    );
+    mesh.material = createWoodMaterial(wood, true);
+    mesh.pickable = false;
+    meshes.push(mesh);
+  }
+  return meshes;
+}
+
 function buildTableFrameMeshes(engine, field, active) {
+  if (field.tableShape?.cellMask) return buildSilhouetteFrameMeshes(engine, field);
   const { width, height, heightMap, terrainTypes } = field;
   const positions = [];
   const normals = [];
@@ -675,8 +770,9 @@ const BLOCK_INSET = 0.15;
  *   dispose: () => void,
  * }}
  */
-export function createTileGridOverlay(engine, scene, field) {
+export function createTileGridOverlay(engine, scene, field, opts = {}) {
   const { width, height, heightMap, terrainTypes } = field;
+  const showEdges = opts.edges !== false;
   const edgePos = [];
   const edgeIdx = [];
   let ev = 0;
@@ -729,33 +825,41 @@ export function createTileGridOverlay(engine, scene, field) {
   }
 
   const half = worldHalfFFromField(field);
-  for (let tz = 0; tz < height; tz++) {
-    for (let tx = 0; tx < width; tx++) {
-      const x0 = tx * TILE_SIZE_F - half;
-      const x1 = (tx + 1) * TILE_SIZE_F - half;
-      const z0 = tz * TILE_SIZE_F - half;
-      const z1 = (tz + 1) * TILE_SIZE_F - half;
-      const y00 = heightAtCorner(tx, tz);
-      const y10 = heightAtCorner(tx + 1, tz);
-      const y01 = heightAtCorner(tx, tz + 1);
-      const y11 = heightAtCorner(tx + 1, tz + 1);
-      pushEdge(x0, y00, z0, x1, y10, z0);
-      pushEdge(x0, y00, z0, x0, y01, z1);
-      if (tx === width - 1) pushEdge(x1, y10, z0, x1, y11, z1);
-      if (tz === height - 1) pushEdge(x0, y01, z1, x1, y11, z1);
+  const activeMask = field.activeMask;
+  if (showEdges) {
+    for (let tz = 0; tz < height; tz++) {
+      for (let tx = 0; tx < width; tx++) {
+        if (activeMask && activeMask[tz * width + tx] === 0) continue;
+        const x0 = tx * TILE_SIZE_F - half;
+        const x1 = (tx + 1) * TILE_SIZE_F - half;
+        const z0 = tz * TILE_SIZE_F - half;
+        const z1 = (tz + 1) * TILE_SIZE_F - half;
+        const y00 = heightAtCorner(tx, tz);
+        const y10 = heightAtCorner(tx + 1, tz);
+        const y01 = heightAtCorner(tx, tz + 1);
+        const y11 = heightAtCorner(tx + 1, tz + 1);
+        pushEdge(x0, y00, z0, x1, y10, z0);
+        pushEdge(x0, y00, z0, x0, y01, z1);
+        if (tx === width - 1) pushEdge(x1, y10, z0, x1, y11, z1);
+        if (tz === height - 1) pushEdge(x0, y01, z1, x1, y11, z1);
+      }
     }
   }
 
-  const edgeMesh = makeDevMesh(
-    engine,
-    'tile-grid',
-    edgePos,
-    edgeIdx,
-    [0.15, 0.9, 1],
-    [0.35, 0.95, 1],
-  );
-  addToScene(scene, edgeMesh);
-  setSubtreeVisible(edgeMesh, false);
+  const edgeMesh = showEdges && edgePos.length
+    ? makeDevMesh(
+      engine,
+      'tile-grid',
+      edgePos,
+      edgeIdx,
+      [0.15, 0.9, 1],
+      [0.35, 0.95, 1],
+    )
+    : null;
+  if (edgeMesh) {
+    addToScene(scene, edgeMesh);
+    setSubtreeVisible(edgeMesh, false);
+  }
 
   function disposeDevMesh(mesh) {
     if (!mesh) return;
@@ -763,7 +867,7 @@ export function createTileGridOverlay(engine, scene, field) {
   }
 
   function applyVisibility() {
-    setSubtreeVisible(edgeMesh, visible);
+    if (edgeMesh) setSubtreeVisible(edgeMesh, visible);
     if (blockMesh) setSubtreeVisible(blockMesh, visible);
     if (structureSlowMesh) setSubtreeVisible(structureSlowMesh, visible);
     if (slowMesh) setSubtreeVisible(slowMesh, visible);
@@ -788,6 +892,7 @@ export function createTileGridOverlay(engine, scene, field) {
     for (let tz = 0; tz < h; tz++) {
       for (let tx = 0; tx < w; tx++) {
         const i = tz * w + tx;
+        if (snap.activeMask && snap.activeMask[i] === 0) continue;
         if (pass[i] === 0) {
           bv = pushFillQuad(tx, tz, BLOCK_LIFT, fillHalf, blockPos, blockIdx, bv);
         } else if (structureSlowMask?.[i]) {

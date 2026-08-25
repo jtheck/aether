@@ -1,6 +1,6 @@
 // Fill ../DEPLOY/ for S3/CloudFront upload: hashed+minified+obfuscated JS,
 // assets (incl. baked), PWA bits, index derived from src/index.html.
-// Also copies src/axiom/ and src/forge/ raw (forge is self-contained: game + babylon).
+// Also copies src/axiom/ raw. Forge is an esbuild entry (forge-*.js + forge/index.html).
 // Does NOT rebuild vendor lite/howler — uses whatever is already in vendor/.
 
 import esbuild from 'esbuild';
@@ -47,7 +47,11 @@ for (const name of readdirSync(DEPLOY)) {
 // splitting:false + liteVendor alias → 2 JS files instead of 400+ Lite shader chunks.
 // (splitting:true re-emits every dynamic import from @babylonjs/lite as its own file.)
 const result = await esbuild.build({
-  entryPoints: [join(ROOT, 'app/main.js'), join(ROOT, 'app/sim.worker.js')],
+  entryPoints: {
+    main: join(ROOT, 'app/main.js'),
+    'sim.worker': join(ROOT, 'app/sim.worker.js'),
+    forge: join(ROOT, 'forge/main.js'),
+  },
   bundle: true,
   format: 'esm',
   splitting: false,
@@ -69,12 +73,15 @@ const result = await esbuild.build({
 });
 
 const outputs = Object.keys(result.metafile.outputs);
-const mainOut = outputs.find((p) => /main-[^/\\]+\.js$/i.test(p.replace(/\\/g, '/')));
+const mainOut = outputs.find((p) => /(?:^|\/)main-[^/\\]+\.js$/i.test(p.replace(/\\/g, '/')));
 const workerOut = outputs.find((p) => /sim\.worker-[^/\\]+\.js$/i.test(p.replace(/\\/g, '/')));
+const forgeOut = outputs.find((p) => /(?:^|\/)forge-[^/\\]+\.js$/i.test(p.replace(/\\/g, '/')));
 if (!mainOut) throw new Error('esbuild did not emit main-*.js');
 if (!workerOut) throw new Error('esbuild did not emit sim.worker-*.js');
+if (!forgeOut) throw new Error('esbuild did not emit forge-*.js');
 const mainFile = mainOut.replace(/\\/g, '/').split('/').pop();
 const workerFile = workerOut.replace(/\\/g, '/').split('/').pop();
+const forgeFile = forgeOut.replace(/\\/g, '/').split('/').pop();
 const mainHash = mainFile.replace(/^main-/, '').replace(/\.js$/, '');
 
 // splitting:false does not rewrite `new URL('./sim.worker.js', import.meta.url)`.
@@ -187,7 +194,16 @@ function copyRawDir(name, { required = false, note = '' } = {}) {
 }
 
 copyRawDir('axiom', { note: 'Three default; ?backend=lite / babylon' });
-copyRawDir('forge', { note: '/forge will 404' });
+{
+  mkdirSync(join(DEPLOY, 'forge'), { recursive: true });
+  let forgeHtml = readFileSync(join(ROOT, 'forge/index.html'), 'utf8');
+  forgeHtml = forgeHtml.replace(
+    /<script type="module" src="\.\/main\.js"><\/script>/i,
+    `<script type="module" src="../${forgeFile}"></script>`,
+  );
+  writeFileSync(join(DEPLOY, 'forge/index.html'), forgeHtml);
+  console.log(`forge/index.html → ../${forgeFile}`);
+}
 
 let sw = readFileSync(join(ROOT, 'sw-aether.js'), 'utf8');
 sw = sw.replace(/const CACHE = ["'][^"']*["']/, `const CACHE = "aether-${mainHash.slice(0, 12)}"`);

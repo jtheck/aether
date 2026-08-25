@@ -29,6 +29,7 @@ import {
 import { TILE_SIZE_F, worldToTile } from '../sim/field.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
+import { createFogOfWar } from '../render/fogOfWar.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { setupMenu } from './menu.js';
 import {
@@ -290,8 +291,25 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       : undefined,
   });
   renderer.setCount(count);
-  renderer.placeAgoras?.(agoras ?? session.agoras);
-  renderer.placeBuildings?.(buildings ?? session.buildings);
+  const fog = createFogOfWar();
+  fog.reset(session.field);
+  fog.stamp({
+    world: session.state,
+    buildings: session.buildings ?? buildings,
+    agoras: session.agoras ?? agoras,
+    field: session.field,
+    localPlayerId: bootCfg.localPlayerId,
+    enabled: (bootCfg.role ?? 'player') === 'player' && bootCfg.localPlayerId >= 0,
+  });
+  renderer.attachFogOfWar?.(fog);
+  renderer.setVisionDraw?.((x, z, owner) => !fog.hidesHostile(owner, x, z));
+  {
+    const shownA = fog.filterAgoras(agoras ?? session.agoras);
+    const shownB = fog.filterBuildings(buildings ?? session.buildings);
+    fog.commitDisplayLists(shownB, shownA);
+    renderer.placeAgoras?.(shownA);
+    renderer.placeBuildings?.(shownB);
+  }
   // First paint ASAP — props/units/radials continue loading in the background.
   await renderer.start();
   rebuildRendererEntities(renderer, session);
@@ -299,6 +317,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
   window.renderer = renderer;
   window.session = session;
+  window.fog = fog;
   window.dumpPools = () => {
     const world = session.state;
     const pools = renderer.poolStats?.() ?? {};
@@ -528,6 +547,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     overlayBarIds: new Int32Array(CAP),
     overlayBarD2: new Float32Array(CAP),
     overlayBarAllow: new Uint8Array(CAP),
+    fogHidden: new Uint8Array(CAP),
   };
   bufs.wasAlive.fill(1);
   bufs.cacheGx.fill(NaN);
@@ -543,6 +563,39 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let matchMeta = { mode: bootCfg.mode, matchId: bootCfg.matchId };
   let matchOverShown = false;
   let lastRenderDebugAt = 0;
+
+  function fogActive() {
+    return session.role === 'player' && localPlayerId >= 0;
+  }
+
+  function stampFog() {
+    fog.stamp({
+      world: session.state,
+      buildings: session.buildings,
+      agoras: session.agoras,
+      field: session.field,
+      localPlayerId,
+      enabled: fogActive(),
+    });
+    fog.syncOverlay();
+    renderer.applySceneryFog?.(fog.isEnabled() ? (x, z) => fog.fogFactorAt(x, z) : null);
+  }
+
+  function placeFoggedProps(buildingList = session.buildings, agoraList = session.agoras) {
+    const shownB = fog.filterBuildings(buildingList);
+    const shownA = fog.filterAgoras(agoraList);
+    fog.commitDisplayLists(shownB, shownA);
+    renderer.placeAgoras?.(shownA);
+    void renderer.placeBuildings?.(shownB);
+  }
+
+  function refreshFoggedProps() {
+    const shownB = fog.filterBuildings(session.buildings);
+    const shownA = fog.filterAgoras(session.agoras);
+    if (!fog.commitDisplayLists(shownB, shownA)) return;
+    renderer.placeAgoras?.(shownA);
+    void renderer.placeBuildings?.(shownB);
+  }
 
   const updateColors = () => {
     const world = session.state;
@@ -576,8 +629,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderEntityCount = rebuildRendererEntities(renderer, session);
     renderer.clearProjectiles?.();
     renderer.clearParticles?.();
-    renderer.placeAgoras?.(session.agoras);
-    renderer.placeBuildings?.(session.buildings);
+    fog.reset(session.field);
+    stampFog();
+    placeFoggedProps();
     syncRallyFlagMarkers();
     if (session.field) await renderer.setField?.(session.field);
     updateColors();
@@ -588,7 +642,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       applySerializedBuildingOccupancy(session.field, list);
       renderer.refreshTileGrid?.();
     }
-    renderer.placeBuildings?.(list);
+    const shownB = fog.filterBuildings(list);
+    fog.commitDisplayLists(shownB, fog.filterAgoras(session.agoras));
+    renderer.placeBuildings?.(shownB);
     syncRallyFlagMarkers(list);
   };
 
@@ -897,6 +953,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     world: () => session.state,
     selected: bufs.selected,
     localPlayerId,
+    isUnitVisible: (i) => !bufs.fogHidden[i],
     getUnitWorldPos: (i, out) => {
       out.x = bufs.renderX[i];
       out.y = bufs.renderY[i];
@@ -1246,6 +1303,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       matchOverShown = true;
       showMatchOver(session);
     }
+    stampFog();
+    refreshFoggedProps();
     updateColors();
   };
 
@@ -1293,7 +1352,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       colors, renderX, renderY, renderZ,
       poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseValid,
       cacheGx, cacheGz, cacheGy,
+      fogHidden,
     } = bufs;
+
+    fogHidden.fill(0);
+    for (let i = 0; i < n; i++) {
+      if (!world.alive[i]) continue;
+      let owner = world.owner[i];
+      let hx = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
+      let hz = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
+      const carrier = world.carriedBy?.[i] ?? -1;
+      if (carrier >= 0 && carrier < n && world.alive[carrier]) {
+        owner = world.owner[carrier];
+        hx = prev.x[carrier] + (cur.x[carrier] - prev.x[carrier]) * alpha;
+        hz = prev.z[carrier] + (cur.z[carrier] - prev.z[carrier]) * alpha;
+      }
+      if (fog.hidesHostile(owner, hx, hz)) fogHidden[i] = 1;
+    }
 
     const groundYCached = (i, x, z) => {
       if (
@@ -1368,6 +1443,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     for (let i = 0; i < n; i++) {
       if (!world.alive[i]) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      if (fogHidden[i]) continue;
       const isSel = !!selected[i];
       const def = getUnitDef(world.type[i]);
       const hurt = def.hp > 0 && world.hp[i] < def.hp;
@@ -1408,7 +1484,22 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     }
 
+    const hideDrawnUnit = (i) => {
+      if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
+        if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
+        commitPose(i, 0, 0, 0, 0, 0, 0);
+      }
+      if (wasSelected[i]) {
+        renderer.writeSelectionRing(i, 0, 0, 0);
+        wasSelected[i] = 0;
+      }
+    };
+
     for (let i = 0; i < n; i++) {
+      if (fogHidden[i]) {
+        hideDrawnUnit(i);
+        continue;
+      }
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
@@ -1653,7 +1744,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         renderX,
         renderY,
         renderZ,
-        { fromStatus: true },
+        { fromStatus: true, skip: fogHidden },
       );
     }
     if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
@@ -1673,7 +1764,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (renderer.getPickHitboxesVisible?.()) {
       const spheres = [];
       for (let i = 0; i < n; i++) {
-        if (!world.alive[i]) continue;
+        if (!world.alive[i] || fogHidden[i]) continue;
         const def = getUnitDef(world.type[i]);
         spheres.push({
           x: renderX[i],
@@ -1772,6 +1863,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     set localPlayerId(v) {
       localPlayerId = v;
       inputApi.setLocalPlayerId?.(v);
+      stampFog();
+      refreshFoggedProps();
     },
     matchMeta,
     setMatchMeta(m) {
@@ -1779,6 +1872,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     paintStatus,
     updateColors,
+    stampFog,
+    refreshFoggedProps,
   };
   ctxRef.current = ctx;
   return ctx;
@@ -1902,6 +1997,8 @@ function syncPresentation(ctx, cfg, options = {}) {
   }
   ctx.session.setRole(cfg.role ?? 'player');
   ctx.inputApi?.setRole?.(cfg.role ?? 'player');
+  ctx.stampFog?.();
+  ctx.refreshFoggedProps?.();
   if (cfg.inputEnabled != null) ctx.inputApi?.setInputEnabled?.(Boolean(cfg.inputEnabled));
   if ((cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
   ctx.session.inputDelayTicks = cfg.localSolo ? 0 : cfg.mode === 'koth' ? 1 : 0;

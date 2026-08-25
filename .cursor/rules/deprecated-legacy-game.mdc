@@ -1,0 +1,12 @@
+---
+description: Root index.html and game/ are deprecated; src/ is what ships via DEPLOY
+alwaysApply: true
+---
+
+# Shipping stack
+
+- **Current game:** `src/` (Lite / WebGPU). Local: `src/index.html`. Ship: `npm run package` in `src/` → `DEPLOY/` (S3/CloudFront).
+- **Deprecated:** root `index.html`, `game/`, `vendor/babylon9*`. Babylon 9 JS stack. Do not add features here unless the user explicitly asks to touch the legacy build.
+- `src/forge/game/` is the forge copy, not the deprecated root `game/` tree.
+
+If a task is "the game" or "what ships", work in `src/`.

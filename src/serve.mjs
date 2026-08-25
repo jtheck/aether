@@ -46,7 +46,7 @@ function resolvePath(urlPath) {
   // Soft-landing for no-WebGPU — serve src/axiom/ at /axiom/
   const axiomPath = resolveSrcDir(safe, 'axiom');
   if (axiomPath) return axiomPath;
-  // Classic map editor — self-contained under src/forge/ (game + babylon vendor nested)
+  // Lite map editor at src/forge/ (ESM; shares sim/ + render/)
   const forgePath = resolveSrcDir(safe, 'forge');
   if (forgePath) return forgePath;
   return join(ROOT, ...safe.split('/'));

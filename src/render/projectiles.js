@@ -153,7 +153,7 @@ function setPoolDrawCount(mesh, count) {
   mesh.visible = count > 0;
 }
 
-export function createProjectileRenderer(engine, scene, groundYAt, onProjectile) {
+export function createProjectileRenderer(engine, scene, groundYAt, onProjectile, opts = {}) {
   const batches = new Map();
   const counts = new Uint32Array(PROJECTILE_DEFS.length);
   // Frozen spawn ground so lobbed shots don't porpoise over terrain.
@@ -214,11 +214,6 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile)
       const def = getProjectileDef(type);
       const batch = batches.get(type);
       if (!batch) continue;
-      const slot = counts[type]++;
-      if (slot >= batch.capacity) {
-        dropped++;
-        continue;
-      }
       const samePrevious =
         prev &&
         i < prev.highWater &&
@@ -230,6 +225,12 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile)
       const z = samePrevious
         ? prev.z[i] + (cur.z[i] - prev.z[i]) * alpha
         : cur.z[i] - cur.vz[i] * (1 - alpha);
+      if (opts.shouldDraw && !opts.shouldDraw(x, z, cur.owner[i])) continue;
+      const slot = counts[type]++;
+      if (slot >= batch.capacity) {
+        dropped++;
+        continue;
+      }
       const age = Math.max(0, cur.age[i] - (1 - alpha));
       // Lifetime includes +2 travel padding; lobs should finish the dive when
       // gameplay reaches the aim point (typically lifetime - 2).

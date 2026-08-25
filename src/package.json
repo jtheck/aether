@@ -14,6 +14,7 @@
     "test:transport": "node sim/transport.test.js",
     "test:repair": "node sim/repair.test.js",
     "test:separation": "node sim/separation.test.js",
+    "test:garden": "node sim/garden.test.js",
     "bench:scale": "node sim/scale.bench.js",
     "bench:scale:50k": "node sim/scale.bench.js --acceptance --enforce",
     "build:lite": "node build-lite.mjs",

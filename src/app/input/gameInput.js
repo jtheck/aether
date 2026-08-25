@@ -60,6 +60,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {(pick: string | { kind: 'building' | 'category' | 'unit' | 'upgrade' | 'utility' | 'cancel', id?: string }) => void} [opts.onRadialPick]
  * @param {(clientX: number, clientY: number) => void} [opts.onRadialHover]
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadial]
+ * @param {(i: number) => boolean} [opts.isUnitVisible] — skip fog-hidden hostiles
  */
 export function createGameInput(opts) {
   const {
@@ -94,6 +95,7 @@ export function createGameInput(opts) {
     onRadialPick,
     onRadialHover,
     hitRadial,
+    isUnitVisible,
   } = opts;
 
   let localPlayerId = initialPlayerId;
@@ -286,6 +288,7 @@ export function createGameInput(opts) {
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i]) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
+      if (isUnitVisible && !isUnitVisible(i)) continue;
       const def = getUnitDef(world.type[i]);
       getUnitWorldPos(i, posScratch);
       let sp = unitSpherePool[n];

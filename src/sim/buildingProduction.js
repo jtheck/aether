@@ -58,7 +58,10 @@ function spawnTrainedUnit(w, field, b, unitType) {
     }
   }
   w.transportTarget[i] = -1;
-  w.order[i] = ORDER.MOVE;
+  w.order[i] =
+    b.hasRally && (b.rallyOrder | 0) === ORDER.ATTACK_MOVE
+      ? ORDER.ATTACK_MOVE
+      : ORDER.MOVE;
   w.tx[i] = rx;
   w.ty[i] = rz;
   w.targetEntity[i] = -1;

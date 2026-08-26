@@ -26,15 +26,39 @@ function castBuffsFriendliesInRadius() {
     type: UNIT.WARRIOR,
     owner: 0,
   });
+  const allyRow = spawn(w, {
+    x: fx.fromInt(16),
+    y: 0,
+    type: UNIT.ARCHER,
+    owner: 0,
+  });
+  const allyCol = spawn(w, {
+    x: fx.fromInt(22),
+    y: 0,
+    type: UNIT.WARLOCK,
+    owner: 0,
+  });
   const allyFar = spawn(w, {
     x: fx.fromInt(40),
     y: 0,
     type: UNIT.WARRIOR,
     owner: 0,
   });
-  const foe = spawn(w, {
+  const wagon = spawn(w, {
     x: fx.fromInt(4),
     y: 0,
+    type: UNIT.WAGON,
+    owner: 0,
+  });
+  const apc = spawn(w, {
+    x: fx.fromInt(0),
+    y: fx.fromInt(6),
+    type: UNIT.APC,
+    owner: 0,
+  });
+  const foe = spawn(w, {
+    x: fx.fromInt(8),
+    y: fx.fromInt(8),
     type: UNIT.WARRIOR,
     owner: 1,
   });
@@ -51,7 +75,11 @@ function castBuffsFriendliesInRadius() {
   assert.equal(w.abilityCd[priest], HOLY_ARMOR_COOLDOWN - 1);
   assert.equal(w.shieldHp[priest], amount, 'self included');
   assert.equal(w.shieldHp[allyNear], amount, 'nearby ally shielded');
+  assert.equal(w.shieldHp[allyRow], amount, 'row-spaced huddle shielded');
+  assert.equal(w.shieldHp[allyCol], amount, 'column-spaced huddle shielded');
   assert.equal(w.shieldHp[allyFar], 0, 'out of radius not shielded');
+  assert.equal(w.shieldHp[wagon], 0, 'wagons not shielded');
+  assert.equal(w.shieldHp[apc], 0, 'APCs not shielded');
   assert.equal(w.shieldHp[foe], 0, 'hostiles not shielded');
   assert.equal(w.shieldTicks[priest], HOLY_ARMOR_DURATION - 1);
 

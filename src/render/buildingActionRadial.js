@@ -1,7 +1,6 @@
-// Building action menu — tilted ring above a selected placeable.
-// Center utility pie (Rally / Garrison / Demolish) + outer arcs for units,
-// upgrades, and a fixed bottom Cancel slice. Pad rings show progress; badges
-// show queue counts. Sim wiring comes later — display state is UI-fed.
+// Building action menu — tilted ring framing a selected placeable
+// (empty hub stays on the building). Outer arcs for units, upgrades, and a
+// fixed bottom Cancel slice. Pad rings show progress; badges show queue counts.
 
 import {
   addToScene,
@@ -27,6 +26,7 @@ import {
   UPGRADE_MODEL_URLS,
   getBuildingMenu,
 } from '../sim/buildings.js';
+import { poseRadialFramingBuilding } from './radialPose.js';
 
 /** Static or VAT unit GLB for radial icons. */
 function unitMenuModelUrl(typeId) {
@@ -37,7 +37,7 @@ function unitMenuModelUrl(typeId) {
 const MENU_Y = 2.4;
 /**
  * Outer option ring — kept a fixed band width; pushed out so pads sit farther
- * from the center pie without scaling the whole menu up.
+ * from the empty hub without scaling the whole menu up.
  */
 const MENU_RING_OUTER = 17.4;
 const MENU_RING_INNER = 14.8;
@@ -59,13 +59,6 @@ const CANCEL_SPAN = (Math.PI * 2 * 75) / 360;
  * Parallel-edge treatment — not an angular wedge cut.
  */
 const ARC_GAP = 2.3;
-/** Center utility pie — fixed size (not tied to ring radius). */
-const PIE_OUTER = 10;
-const PIE_INNER = 3.2;
-const PIE_H = 0.4;
-const PIE_LIFT = 0.25;
-const PIE_SLICE_GAP = 0.8;
-const PIE_ROTATION = 0.13;
 const MENU_TILT = 0.56;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 1;
@@ -79,9 +72,6 @@ const BADGE_SCREEN_SCALE = 0.95;
 const BADGE_OUT = 2.8;
 const BADGE_SIDE = 2.6;
 const BADGE_LIFT = 1.4;
-const PIE_LABEL_FONT_SIZE = 22;
-const PIE_LABEL_SCREEN_SCALE = 0.72;
-const PIE_LABEL_R = (PIE_OUTER + PIE_INNER) * 0.5;
 const MAX_OPTIONS = 8;
 const MENU_RING_ALPHA = 0.55;
 const PAD_HOVER_COLOR = [1, 0.85, 0.25];
@@ -99,8 +89,7 @@ const CANCEL_LABEL_TEXT_COLOR = [0.98, 0.85, 0.8, 1];
 const DULL_TEXT_COLOR = [0.18, 0.2, 0.24, 1];
 
 /** @typedef {'unit' | 'upgrade' | 'cancel'} ActionCategoryId */
-/** @typedef {'rally' | 'garrison' | 'demolish'} UtilityId */
-/** @typedef {null | 'demolish' | 'cancel'} ArmedId */
+/** @typedef {null | 'cancel'} ArmedId */
 
 const CATEGORIES = /** @type {const} */ ({
   unit: {
@@ -136,27 +125,6 @@ const CANCEL_SLASH_H = 0.12;
 const CANCEL_SLASH_LIFT = 0.2;
 /** Pad-plane rotation for the slash (radians). */
 const CANCEL_SLASH_ANG = -Math.PI / 4;
-
-const UTILITIES = /** @type {const} */ ([
-  {
-    id: 'rally',
-    name: 'Rally',
-    color: [0.45, 0.78, 0.55],
-    emissive: [0.2, 0.5, 0.28],
-  },
-  {
-    id: 'garrison',
-    name: 'Garrison',
-    color: [0.55, 0.62, 0.88],
-    emissive: [0.25, 0.32, 0.62],
-  },
-  {
-    id: 'demolish',
-    name: 'Demolish',
-    color: [0.9, 0.4, 0.32],
-    emissive: [0.6, 0.18, 0.12],
-  },
-]);
 
 /**
  * Flat washer / annulus in XZ (Y up). Unit scale: outer radius = 1.
@@ -744,41 +712,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const mesh of arcMeshByKey.values()) hideMesh(mesh);
   }
 
-  // Center utility pie
-  const sliceSpan = (Math.PI * 2) / UTILITIES.length;
-  const sliceStart0 = -Math.PI / 2 - sliceSpan * 0.5 + PIE_ROTATION;
-  /** @type {{ id: UtilityId, name: string, mesh: object, mat: object, startAng: number, endAng: number, color: number[], emissive: number[] }[]} */
-  const pieSlices = [];
-  for (let i = 0; i < UTILITIES.length; i++) {
-    const util = UTILITIES[i];
-    const startAng = sliceStart0 + i * sliceSpan;
-    const endAng = startAng + sliceSpan;
-    const mesh = createPieSliceMesh(engine, `action-menu-pie-${util.id}`, {
-      startAng,
-      endAng,
-      inner: PIE_INNER / PIE_OUTER,
-      height: PIE_H / PIE_OUTER,
-      segments: 18,
-      gap: PIE_SLICE_GAP / PIE_OUTER,
-    });
-    const mat = makeRingMaterial(util.color, util.emissive, 0.92);
-    mesh.material = mat;
-    mesh.pickable = false;
-    mesh.renderOrder = 215;
-    hideMesh(mesh);
-    addToScene(scene, mesh);
-    pieSlices.push({
-      id: util.id,
-      name: util.name,
-      mesh,
-      mat,
-      startAng,
-      endAng,
-      color: [...util.color],
-      emissive: [...util.emissive],
-    });
-  }
-
   /** @type {{ mesh: object, mat: object, category: ActionCategoryId }[]} */
   const pads = [];
   /** Progress overlays — recreated when quantized progress changes. */
@@ -897,8 +830,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   const labels = [];
   /** @type {{ data: object, layer: object, text: string }[]} */
   const badges = [];
-  /** @type {{ data: object, layer: object, text: string, id: UtilityId }[]} */
-  const pieLabels = [];
   /** @type {{ data: object, layer: object, text: string } | null} */
   let cancelLabel = null;
   let textRenderer = null;
@@ -938,22 +869,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         badges.push({ data, layer, text: '0' });
         layers.push(layer);
       }
-      for (let i = 0; i < UTILITIES.length; i++) {
-        const util = UTILITIES[i];
-        const data = createDefaultTextData(
-          screen.font,
-          PIE_LABEL_FONT_SIZE,
-          util.name,
-          LABEL_TEXT_COLOR,
-        );
-        const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 2 + i,
-          opacity: 0,
-          visible: false,
-        });
-        pieLabels.push({ data, layer, text: util.name, id: util.id, dull: false });
-        layers.push(layer);
-      }
       {
         const data = createDefaultTextData(
           screen.font,
@@ -962,7 +877,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           CANCEL_LABEL_TEXT_COLOR,
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 2 + UTILITIES.length,
+          order: MAX_OPTIONS * 2,
           opacity: 0,
           visible: false,
         });
@@ -977,11 +892,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       console.warn('[buildingActionRadial] native labels unavailable', err);
       for (const label of labels) disposeDefaultTextData(label.data);
       for (const badge of badges) disposeDefaultTextData(badge.data);
-      for (const label of pieLabels) disposeDefaultTextData(label.data);
       if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
       labels.length = 0;
       badges.length = 0;
-      pieLabels.length = 0;
       cancelLabel = null;
       textRenderer = null;
     }
@@ -1020,7 +933,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   let centerY = 0;
   let hudScale = 1;
   let hoverIndex = -1;
-  let pieHoverId = /** @type {UtilityId | null} */ (null);
   let cancelHovered = false;
   let bx = 1;
   let by = 0;
@@ -1039,11 +951,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   /** @type {string | null} */
   let activeBuildingType = null;
 
-  /** @type {Record<UtilityId | 'cancel', boolean>} */
+  /** Cancel pad is live only while a queue/research track is running. */
   let utilityAvailable = {
-    rally: true,
-    garrison: false,
-    demolish: true,
     cancel: false,
   };
   /** Upgrade ids already researched by the local player (dull + full ring). */
@@ -1255,40 +1164,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
   }
 
-  function applyPieAppearance() {
-    for (const slice of pieSlices) {
-      const available = utilityAvailable[slice.id];
-      const isArmed = armed === slice.id;
-      const hovered = pieHoverId === slice.id;
-      if (!available) {
-        slice.mat.diffuseColor = [...DULL_COLOR];
-        slice.mat.emissiveColor = [...DULL_EMISSIVE];
-        slice.mat.alpha = DULL_ALPHA;
-      } else if (isArmed) {
-        slice.mat.diffuseColor = [...ARMED_COLOR];
-        slice.mat.emissiveColor = [...ARMED_EMISSIVE];
-        slice.mat.alpha = 0.98;
-      } else if (hovered) {
-        slice.mat.diffuseColor = [
-          Math.min(1, slice.color[0] * 1.15 + 0.08),
-          Math.min(1, slice.color[1] * 1.15 + 0.08),
-          Math.min(1, slice.color[2] * 1.15 + 0.08),
-        ];
-        slice.mat.emissiveColor = [
-          Math.min(1, slice.emissive[0] * 1.25 + 0.1),
-          Math.min(1, slice.emissive[1] * 1.25 + 0.1),
-          Math.min(1, slice.emissive[2] * 1.25 + 0.1),
-        ];
-        slice.mat.alpha = 0.95;
-      } else {
-        slice.mat.diffuseColor = [...slice.color];
-        slice.mat.emissiveColor = [...slice.emissive];
-        slice.mat.alpha = 0.88;
-      }
-      markMaterialUboDirty(slice.mat);
-    }
-  }
-
   function pushSlotsForArc(items, category, arc) {
     if (!arc || !items.length) return;
     const n = Math.min(items.length, MAX_OPTIONS - slots.length);
@@ -1313,7 +1188,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   function rebuildSlots(menu) {
     hoverIndex = -1;
-    pieHoverId = null;
     cancelHovered = false;
     hideAllIcons();
     hideAllProgress();
@@ -1353,7 +1227,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       applyPadHover(i, false);
     }
     applyCancelPadAppearance();
-    applyPieAppearance();
   }
 
   function applyIconHover(iconKey, hovered) {
@@ -1396,15 +1269,19 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const eye = cameraEye(camera);
     const gy = groundYAt(anchorX, anchorZ);
     const groundY = Number.isFinite(gy) ? gy : 0;
-    const ax = anchorX;
-    const ay = groundY + MENU_Y;
-    const az = anchorZ;
-    const distA =
-      Math.hypot(eye.x - ax, eye.y - ay, eye.z - az) || HUD_REF_DIST;
-    hudScale = scaleForDist(distA);
-    centerX = ax;
-    centerY = ay + Math.sin(MENU_TILT) * RIM_R * hudScale + 1.2;
-    centerZ = az;
+    const posed = poseRadialFramingBuilding(
+      eye,
+      anchorX,
+      groundY + MENU_Y,
+      anchorZ,
+      scaleForDist,
+      RIM_R,
+      MENU_TILT,
+    );
+    hudScale = posed.hudScale;
+    centerX = posed.x;
+    centerY = posed.y;
+    centerZ = posed.z;
     updateBasis(camera);
   }
 
@@ -1593,41 +1470,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     );
   }
 
-  function redrawPieLabels() {
-    const pieLift = PIE_LIFT * hudScale;
-    const r = PIE_LABEL_R * hudScale;
-    for (let i = 0; i < pieLabels.length; i++) {
-      const label = pieLabels[i];
-      const slice = pieSlices[i];
-      if (!label || !slice || !open) {
-        hideLabel(label);
-        continue;
-      }
-      const mid = (slice.startAng + slice.endAng) * 0.5;
-      const ca = Math.cos(mid);
-      const sa = Math.sin(mid);
-      const available = utilityAvailable[slice.id];
-      const dull = !available;
-      if (label.dull !== dull) {
-        updateDefaultTextData(
-          label.data,
-          label.text,
-          dull ? DULL_TEXT_COLOR : LABEL_TEXT_COLOR,
-        );
-        label.dull = dull;
-      }
-      const opacity = dull ? 0.82 : pieHoverId === slice.id || armed === slice.id ? 1 : 0.85;
-      placeScreenText(
-        label,
-        centerX + (ca * bx + sa * tx) * r + nx * pieLift,
-        centerY + (ca * by + sa * ty) * r + ny * pieLift,
-        centerZ + (ca * bz + sa * tz) * r + nz * pieLift,
-        PIE_LABEL_SCREEN_SCALE,
-        opacity,
-      );
-    }
-  }
-
   function redrawCancelLabel() {
     if (!cancelLabel || !cancelSlot || !open) {
       hideLabel(cancelLabel);
@@ -1698,29 +1540,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   function layout() {
     const s = hudScale;
     layoutRings(s);
-
-    const pieLift = PIE_LIFT * s;
-    const pieScale = PIE_OUTER * s;
-    for (const slice of pieSlices) {
-      placeMeshOriented(
-        slice.mesh,
-        centerX + nx * pieLift,
-        centerY + ny * pieLift,
-        centerZ + nz * pieLift,
-        pieScale,
-        bx,
-        by,
-        bz,
-        nx,
-        ny,
-        nz,
-        tx,
-        ty,
-        tz,
-      );
-    }
-    applyPieAppearance();
-    redrawPieLabels();
 
     const rimR = RIM_R * s;
     const padLift = PAD_LIFT * s;
@@ -1834,14 +1653,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     anchorZ = z;
     activeBuildingType = buildingType;
     hoverIndex = -1;
-    pieHoverId = null;
     cancelHovered = false;
     armed = null;
     tracks.clear();
     utilityAvailable = {
-      rally: true,
-      garrison: false,
-      demolish: true,
       cancel: false,
     };
     syncPose(camera);
@@ -1858,7 +1673,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   function hide() {
     hideArcRings();
-    for (const slice of pieSlices) hideMesh(slice.mesh);
     for (let i = 0; i < pads.length; i++) {
       hideMesh(pads[i].mesh);
       applyPadHover(i, false);
@@ -1869,13 +1683,11 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     hideAllIcons();
     for (const label of labels) hideLabel(label);
     for (const badge of badges) hideLabel(badge);
-    for (const label of pieLabels) hideLabel(label);
     hideLabel(cancelLabel);
     slots = [];
     cancelSlot = null;
     arcs = { units: null, upgrades: null, cancel: null };
     hoverIndex = -1;
-    pieHoverId = null;
     cancelHovered = false;
     armed = null;
     tracks.clear();
@@ -1911,11 +1723,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   function clearHover() {
     setHover(-1);
-    if (pieHoverId != null) {
-      pieHoverId = null;
-      applyPieAppearance();
-      redrawPieLabels();
-    }
     if (cancelHovered) {
       cancelHovered = false;
       applyCancelPadAppearance();
@@ -1931,39 +1738,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       clearHover();
       return;
     }
-    if (pick.kind === 'utility') {
-      setHover(-1);
-      if (cancelHovered) {
-        cancelHovered = false;
-        applyCancelPadAppearance();
-        redrawCancelLabel();
-      }
-      const id = /** @type {UtilityId} */ (pick.id);
-      if (pieHoverId !== id) {
-        pieHoverId = id;
-        applyPieAppearance();
-        redrawPieLabels();
-      }
-      return;
-    }
     if (pick.kind === 'cancel') {
       setHover(-1);
-      if (pieHoverId != null) {
-        pieHoverId = null;
-        applyPieAppearance();
-        redrawPieLabels();
-      }
       if (!cancelHovered) {
         cancelHovered = true;
         applyCancelPadAppearance();
         redrawCancelLabel();
       }
       return;
-    }
-    if (pieHoverId != null) {
-      pieHoverId = null;
-      applyPieAppearance();
-      redrawPieLabels();
     }
     if (cancelHovered) {
       cancelHovered = false;
@@ -1984,66 +1766,12 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     };
   }
 
-  function piePlanePoint() {
-    const lift = PIE_LIFT * hudScale;
-    return {
-      x: centerX + nx * lift,
-      y: centerY + ny * lift,
-      z: centerZ + nz * lift,
-    };
-  }
-
-  function angInSlice(ang, startAng, endAng) {
-    let a = ang;
-    while (a < startAng) a += Math.PI * 2;
-    while (a >= startAng + Math.PI * 2) a -= Math.PI * 2;
-    return a >= startAng && a < endAng;
-  }
-
-  /**
-   * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
-   * @returns {{ kind: 'utility', id: UtilityId } | null}
-   */
-  function pickUtilityAtRay(ray) {
-    const pp = piePlanePoint();
-    const hit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
-    if (!hit) return null;
-    const dx = hit.x - pp.x;
-    const dy = hit.y - pp.y;
-    const dz = hit.z - pp.z;
-    const dist = Math.hypot(dx, dy, dz);
-    const outer = PIE_OUTER * hudScale;
-    const inner = PIE_INNER * hudScale;
-    if (dist > outer || dist < inner) return null;
-    const alongB = dx * bx + dy * by + dz * bz;
-    const alongT = dx * tx + dy * ty + dz * tz;
-    const ang = Math.atan2(alongT, alongB);
-    const edgeInsetAng = Math.asin(
-      Math.min(0.95, (PIE_SLICE_GAP * 0.5 * hudScale) / Math.max(dist, 1e-4)),
-    );
-    for (const slice of pieSlices) {
-      if (
-        angInSlice(
-          ang,
-          slice.startAng + edgeInsetAng,
-          slice.endAng - edgeInsetAng,
-        )
-      ) {
-        return { kind: 'utility', id: slice.id };
-      }
-    }
-    return null;
-  }
-
   /**
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
-   * @returns {{ kind: 'unit' | 'upgrade' | 'utility' | 'cancel', id?: string } | null}
+   * @returns {{ kind: 'unit' | 'upgrade' | 'cancel', id?: string } | null}
    */
   function pickOptionAtRay(ray) {
     if (!open || !ray) return null;
-
-    const utilPick = pickUtilityAtRay(ray);
-    if (utilPick) return utilPick;
 
     const pp = padPlanePoint();
     const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
@@ -2088,9 +1816,19 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return best;
   }
 
+  function hitHubHoleAtRay(ray) {
+    if (!open || !ray) return false;
+    const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
+    if (!hit) return false;
+    const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
+    return d < MENU_RING_INNER * hudScale;
+  }
+
   function hitAtRay(ray) {
     if (!open || !ray) return false;
     if (pickOptionAtRay(ray)) return true;
+    // Empty hub — gesture so box-select does not start on the building.
+    if (hitHubHoleAtRay(ray)) return true;
     const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
     if (!hit) return false;
     const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
@@ -2120,18 +1858,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   }
 
   /**
-   * @param {{ rally?: boolean, garrison?: boolean, demolish?: boolean, cancel?: boolean }} avail
+   * @param {{ cancel?: boolean }} avail
    */
   function setUtilityAvailability(avail) {
-    if (avail.rally != null) utilityAvailable.rally = Boolean(avail.rally);
-    if (avail.garrison != null) utilityAvailable.garrison = Boolean(avail.garrison);
-    if (avail.demolish != null) utilityAvailable.demolish = Boolean(avail.demolish);
     if (avail.cancel != null) utilityAvailable.cancel = Boolean(avail.cancel);
     else syncCancelAvailability();
     if (open) {
-      applyPieAppearance();
       applyCancelPadAppearance();
-      redrawPieLabels();
       redrawCancelLabel();
     }
   }
@@ -2175,9 +1908,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   function setArmed(id) {
     armed = id ?? null;
     if (open) {
-      applyPieAppearance();
       applyCancelPadAppearance();
-      redrawPieLabels();
       redrawCancelLabel();
     }
   }
@@ -2200,10 +1931,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return armed;
   }
 
-  function isUtilityAvailable(id) {
-    return Boolean(utilityAvailable[id]);
-  }
-
   let labelsDisposed = false;
   function registerLabels() {
     if (!textRenderer || textRendererRegistered || labelsDisposed) return;
@@ -2219,7 +1946,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     textRendererRegistered = false;
     for (const label of labels) disposeDefaultTextData(label.data);
     for (const badge of badges) disposeDefaultTextData(badge.data);
-    for (const label of pieLabels) disposeDefaultTextData(label.data);
     if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
     hideAllProgress();
   }
@@ -2234,6 +1960,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     clearHover,
     pickOptionAtRay,
     hitAtRay,
+    hitHubHoleAtRay,
     setUtilityAvailability,
     setResearchedUpgrades,
     setTrackDisplay,
@@ -2241,7 +1968,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     clearTracks,
     getTracks,
     getArmed,
-    isUtilityAvailable,
     registerLabels,
     disposeLabels,
     get buildingType() {

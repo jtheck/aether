@@ -15,7 +15,8 @@ import { loadBakedUnitMeshParts } from './unitModels.js';
 import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
-import { OWNER_TINTS } from './ownerTints.js';
+import { ownerTint } from './ownerTints.js';
+import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
 
 /** Start small; grow by powers of two when place() needs more. */
 const INITIAL_CAPACITY = 32;
@@ -58,10 +59,6 @@ function batchKey(typeId, owner) {
   return `${typeId}:${owner | 0}`;
 }
 
-function ownerTint(owner) {
-  return OWNER_TINTS[(owner | 0) % OWNER_TINTS.length];
-}
-
 /** @param {number} cap @param {readonly number[]} tint */
 function makeColors(cap, tint) {
   const colors = new Float32Array(cap * 4);
@@ -82,10 +79,6 @@ function makeOwnerColors(cap, owner) {
 /** Keep authored PBR colors on non-TeamColor building parts. */
 function makeWhiteColors(cap) {
   return makeColors(cap, [1, 1, 1]);
-}
-
-function isTeamColorMaterial(mat) {
-  return String(mat?.name ?? '').toLowerCase().includes('teamcolor');
 }
 
 function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
@@ -276,7 +269,10 @@ export async function createBuildingProps(engine, scene, groundYAt) {
       try {
         const parts = await loadBakedUnitMeshParts(engine, url);
         // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
-        for (const mesh of parts) mesh.pickable = USE_GPU_PICK;
+        for (const mesh of parts) {
+          mesh.pickable = USE_GPU_PICK;
+          if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
+        }
         const fxSockets = (parts[0]?.fxSockets ?? []).map((s) => ({
           name: s.name,
           x: s.x,
@@ -657,8 +653,20 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     }
   }
 
+  function refreshTeamColors() {
+    for (const batch of byKey.values()) {
+      const ownerColors = makeOwnerColors(batch.capacity, batch.owner);
+      for (const layer of batch.layers) {
+        if (!layer.isTeamColor) continue;
+        layer.colors = ownerColors;
+        setThinInstanceColors(layer.mesh, ownerColors);
+      }
+    }
+  }
+
   return {
     place,
+    refreshTeamColors,
     setGhost,
     setSelectionHighlight,
     updateSelectionHighlight,

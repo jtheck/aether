@@ -11,7 +11,9 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { USE_GPU_PICK } from './pickMode.js';
-import { OWNER_TINTS } from './ownerTints.js';
+import { ownerTint } from './ownerTints.js';
+import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
+import { forEachRallyDash } from './rallyDash.js';
 
 const AGORA_MODEL_URL = '/assets/models/agora.glb';
 const FLAG_MODEL_URL = '/assets/models/flag.glb';
@@ -34,10 +36,14 @@ const RALLY_GAP = 1.05;
 const RALLY_LINE_RADIUS = 0.22;
 const RALLY_ARROW_RADIUS = 0.38;
 const RALLY_ARROW_LEN = 0.95;
+/** Sparse chevrons that race ahead of the dash pattern. */
+const RALLY_ARROW_PERIOD = 6.4;
 /** Hover above ground samples so segments don't clip into hills. */
 const RALLY_LINE_Y = 1.15;
-/** Positive = dashes crawl building → flag. */
+/** World-units per ms — dashes crawl building → flag. */
 const RALLY_FLOW_SPEED = 0.0045;
+/** Big ants run ahead of the dashed stroke. */
+const RALLY_ARROW_FLOW_SPEED = 0.011;
 
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
@@ -52,12 +58,19 @@ function setThinInstanceCount(mesh, count) {
   mesh.visible = count > 0;
 }
 
-function isTeamColorMaterial(mat) {
-  return String(mat?.name ?? '').toLowerCase().includes('teamcolor');
-}
+/** Attack-move rally stroke / teamcolor — same red as unit a-move pings. */
+const ATTACK_MOVE_TINT = [0.95, 0.22, 0.18];
 
-function ownerTint(owner) {
-  return OWNER_TINTS[(owner | 0) % OWNER_TINTS.length];
+function writeRallyColor(colors, slot, owner, alpha, attackMove) {
+  if (attackMove) {
+    const o = slot * 4;
+    colors[o] = ATTACK_MOVE_TINT[0];
+    colors[o + 1] = ATTACK_MOVE_TINT[1];
+    colors[o + 2] = ATTACK_MOVE_TINT[2];
+    colors[o + 3] = alpha;
+    return;
+  }
+  writeOwnerColor(colors, slot, owner, alpha);
 }
 
 function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
@@ -144,12 +157,15 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array } | null} */
   let ghostLine = null;
   let dashPhase = 0;
+  let arrowPhase = 0;
   let lastFlagEyeX = NaN;
   let lastFlagEyeY = NaN;
   let lastFlagEyeZ = NaN;
   let lastFlagRadius = NaN;
   /** @type {object | null} */
   let lastFlagCamera = null;
+  /** @type {{ anchorX: number, anchorZ: number } | null} */
+  let hubFlagPose = null;
   /** ~3 world-units of eye motion before rally flag scales are rewritten. */
   const FLAG_EYE_MOVE_SQ = 9;
   const FLAG_RADIUS_EPS = 0.35;
@@ -158,6 +174,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     place() {},
     placeRallyFlags() {},
     setRallyGhost() {},
+    setHubFlagPose() {},
     update() {},
     clear() {},
     isPickMesh() {
@@ -175,6 +192,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       const mesh = parts[p];
       // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
       mesh.pickable = USE_GPU_PICK;
+      if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
       const matrices = new Float32Array(MAX_AGORAS * 16);
       setThinInstances(mesh, matrices, MAX_AGORAS);
       setThinInstanceCount(mesh, 0);
@@ -193,6 +211,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       for (let p = 0; p < parts.length; p++) {
         const mesh = parts[p];
         mesh.pickable = pickable;
+        if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
         const isTeamColor = isTeamColorMaterial(mesh.material);
         const matrices = new Float32Array(cap * 16);
         const colors = new Float32Array(cap * 4);
@@ -244,26 +263,40 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   rallyLine = makeLineBatch(MAX_RALLY_LINE_SEGS);
   ghostLine = makeLineBatch(MAX_GHOST_LINE_SEGS);
 
-  function writeFlagBatch(batchLayers, list, eye, scaleFor) {
+  function writeFlagBatch(batchLayers, list, eye, scaleFor, hideAt) {
     const n = list.length;
     for (let i = 0; i < n; i++) {
       const a = list[i];
+      const owner = a.owner | 0;
+      const hide =
+        hideAt &&
+        (a.x - hideAt.anchorX) ** 2 + (a.z - hideAt.anchorZ) ** 2 < 4;
+      const yaw = a.yaw != null ? a.yaw : Math.atan2(-a.x, -a.z);
       const x = a.x;
       const z = a.z;
-      const y = groundYAt(x, z);
-      const yaw = a.yaw != null ? a.yaw : Math.atan2(-x, -z);
-      const owner = a.owner | 0;
+      const y = groundYAt(a.x, a.z);
       const dist = Math.hypot(eye.x - x, eye.y - y, eye.z - z) || FLAG_DIST_REF;
-      const scale = scaleFor ? scaleFor(dist) : flagScaleForDist(dist);
+      const scale = hide
+        ? 0
+        : scaleFor
+          ? scaleFor(dist)
+          : flagScaleForDist(dist);
       for (const layer of batchLayers) {
         writeMatrix(layer.matrices, i, x, y, z, yaw, scale);
-        if (layer.isTeamColor) writeOwnerColor(layer.colors, i, owner);
+        if (layer.isTeamColor) writeRallyColor(layer.colors, i, owner, 1, a.attackMove);
         else {
           const o = i * 4;
-          layer.colors[o] = 1;
-          layer.colors[o + 1] = 1;
-          layer.colors[o + 2] = 1;
-          layer.colors[o + 3] = 1;
+          if (a.attackMove) {
+            layer.colors[o] = ATTACK_MOVE_TINT[0];
+            layer.colors[o + 1] = ATTACK_MOVE_TINT[1];
+            layer.colors[o + 2] = ATTACK_MOVE_TINT[2];
+            layer.colors[o + 3] = 1;
+          } else {
+            layer.colors[o] = 1;
+            layer.colors[o + 1] = 1;
+            layer.colors[o + 2] = 1;
+            layer.colors[o + 3] = 1;
+          }
         }
       }
     }
@@ -340,81 +373,63 @@ export async function createAgoraProps(engine, scene, groundYAt) {
 
   /**
    * Flowing dashed polyline (dashes + arrowheads) along world XZ points.
+   * Dashes and chevrons share the polyline but march at different speeds
+   * (big ants run ahead) — both crawl building → flag.
    * @returns {number} next free slot
    */
-  function writeDashedPath(batch, points, owner, startSlot, maxSlot, phase, ghost) {
+  function writeDashedPath(batch, points, owner, startSlot, maxSlot, phase, ghost, attackMove) {
     if (!batch || !points || points.length < 2) return startSlot;
     const period = RALLY_DASH + RALLY_GAP;
-    let slot = startSlot;
-    let arrowCounter = 0;
-    const baseAlpha = ghost ? 0.7 : 0.95;
-    // Negate so the crawl reads building → flag (toward the tip).
-    const flow = -phase;
-
-    for (let i = 0; i < points.length - 1 && slot < maxSlot; i++) {
+    /** @type {{ ax: number, az: number, ux: number, uz: number, len: number, s0: number }[]} */
+    const segs = [];
+    let total = 0;
+    for (let i = 0; i < points.length - 1; i++) {
       const ax = points[i].x;
       const az = points[i].z;
       const bx = points[i + 1].x;
       const bz = points[i + 1].z;
-      const segLen = Math.hypot(bx - ax, bz - az);
-      if (segLen < 0.05) continue;
-      const ux = (bx - ax) / segLen;
-      const uz = (bz - az) / segLen;
+      const len = Math.hypot(bx - ax, bz - az);
+      if (len < 0.05) continue;
+      segs.push({
+        ax,
+        az,
+        ux: (bx - ax) / len,
+        uz: (bz - az) / len,
+        len,
+        s0: total,
+      });
+      total += len;
+    }
+    if (segs.length === 0 || total < 0.05) return startSlot;
 
-      // Walk this segment in dash/gap steps, offset by animated phase.
-      let t = -((flow % period) + period) % period;
-      while (t < segLen && slot < maxSlot) {
-        const dashStart = Math.max(0, t);
-        const dashEnd = Math.min(segLen, t + RALLY_DASH);
-        t += period;
-        if (dashEnd - dashStart < 0.12) continue;
+    let slot = startSlot;
+    const baseAlpha = ghost ? 0.7 : 0.95;
+    let segI = 0;
 
-        const x0 = ax + ux * dashStart;
-        const z0 = az + uz * dashStart;
-        const x1 = ax + ux * dashEnd;
-        const z1 = az + uz * dashEnd;
-        // Sample ground at each tip — lerp Y sinks under convex terrain.
-        const y0 = groundYAt(x0, z0) + RALLY_LINE_Y;
-        const y1 = groundYAt(x1, z1) + RALLY_LINE_Y;
-
-        arrowCounter++;
-        const isArrow = arrowCounter % 3 === 0;
-        const radius = isArrow ? RALLY_ARROW_RADIUS : RALLY_LINE_RADIUS;
-        let px0 = x0;
-        let pz0 = z0;
-        let py0 = y0;
-        let px1 = x1;
-        let pz1 = z1;
-        let py1 = y1;
-        if (isArrow) {
-          // Fat tip at the forward end of the dash (toward the flag).
-          const tipStart = Math.max(dashStart, dashEnd - RALLY_ARROW_LEN);
-          px0 = ax + ux * tipStart;
-          pz0 = az + uz * tipStart;
-          py0 = groundYAt(px0, pz0) + RALLY_LINE_Y;
-          px1 = x1;
-          pz1 = z1;
-          py1 = y1;
-        }
-
-        if (
-          !writeSegmentMatrix(
-            batch.matrices,
-            slot,
-            px0,
-            py0,
-            pz0,
-            px1,
-            py1,
-            pz1,
-            radius,
-          )
-        ) {
+    const emit = (s0, s1, radius, pulse) => {
+      if (slot >= maxSlot || s1 - s0 < 0.12) return;
+      while (segI < segs.length && segs[segI].s0 + segs[segI].len < s0 - 1e-6) segI++;
+      for (let i = segI; i < segs.length && slot < maxSlot; i++) {
+        const seg = segs[i];
+        const lo = Math.max(s0, seg.s0);
+        const hi = Math.min(s1, seg.s0 + seg.len);
+        if (hi - lo < 0.12) {
+          if (seg.s0 >= s1) break;
           continue;
         }
-        const pulse = isArrow ? 1 : 0.82;
-        writeOwnerColor(batch.colors, slot, owner, baseAlpha * pulse);
-        if (isArrow) {
+        const t0 = lo - seg.s0;
+        const t1 = hi - seg.s0;
+        const x0 = seg.ax + seg.ux * t0;
+        const z0 = seg.az + seg.uz * t0;
+        const x1 = seg.ax + seg.ux * t1;
+        const z1 = seg.az + seg.uz * t1;
+        const y0 = groundYAt(x0, z0) + RALLY_LINE_Y;
+        const y1 = groundYAt(x1, z1) + RALLY_LINE_Y;
+        if (!writeSegmentMatrix(batch.matrices, slot, x0, y0, z0, x1, y1, z1, radius)) {
+          continue;
+        }
+        writeRallyColor(batch.colors, slot, owner, baseAlpha * pulse, attackMove);
+        if (pulse > 0.95) {
           const o = slot * 4;
           batch.colors[o] = Math.min(1, batch.colors[o] * 1.25);
           batch.colors[o + 1] = Math.min(1, batch.colors[o + 1] * 1.25);
@@ -422,7 +437,18 @@ export async function createAgoraProps(engine, scene, groundYAt) {
         }
         slot++;
       }
-    }
+    };
+
+    forEachRallyDash(total, phase, RALLY_DASH, period, (a, b) => {
+      if (slot >= maxSlot) return;
+      emit(a, b, RALLY_LINE_RADIUS, 0.82);
+    });
+    // Chevrons are a second, faster march — reset the segment cursor.
+    segI = 0;
+    forEachRallyDash(total, arrowPhase, RALLY_ARROW_LEN, RALLY_ARROW_PERIOD, (a, b) => {
+      if (slot >= maxSlot) return;
+      emit(a, b, RALLY_ARROW_RADIUS, 1);
+    });
     return slot;
   }
 
@@ -447,6 +473,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
         MAX_RALLY_LINE_SEGS,
         dashPhase,
         false,
+        r.attackMove,
       );
     }
     flushLineBatch(rallyLine, n);
@@ -470,6 +497,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       MAX_GHOST_LINE_SEGS,
       dashPhase,
       true,
+      rallyGhost.attackMove,
     );
     flushLineBatch(ghostLine, n);
   }
@@ -484,7 +512,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     lastFlagEyeZ = eye.z;
     if (cam && Number.isFinite(cam.radius)) lastFlagRadius = cam.radius;
     const agoraScale = flagScaleForCamera(cam);
-    writeFlagBatch(agoraFlagLayers, agoraCache, eye, () => agoraScale);
+    writeFlagBatch(agoraFlagLayers, agoraCache, eye, () => agoraScale, hubFlagPose);
     writeFlagBatch(rallyFlagLayers, rallyCache, eye);
     if (rallyGhost) {
       writeFlagBatch(ghostFlagLayers, [rallyGhost], eye);
@@ -542,6 +570,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
         points,
         yaw: a.yaw != null ? a.yaw : 0,
         owner: a.owner | 0,
+        attackMove: !!a.attackMove,
       });
     }
     rewriteRallyLines();
@@ -572,11 +601,29 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     rewriteFlags(null);
   }
 
+  /**
+   * Hide the world standard at this agora while the radial draws its HUD copy.
+   * @param {{ anchorX: number, anchorZ: number } | null | undefined} pose
+   */
+  function setHubFlagPose(pose) {
+    const next =
+      pose &&
+      Number.isFinite(pose.anchorX) &&
+      Number.isFinite(pose.anchorZ)
+        ? pose
+        : null;
+    if (!hubFlagPose && !next) return;
+    hubFlagPose = next;
+    rewriteFlags(null);
+  }
+
   function update(camera) {
     const showLines = rallyCache.length > 0 || rallyGhost;
     if (!agoraCache.length && !showLines) return;
     if (showLines) {
-      dashPhase = (performance.now() * RALLY_FLOW_SPEED) % (RALLY_DASH + RALLY_GAP);
+      const now = performance.now();
+      dashPhase = now * RALLY_FLOW_SPEED;
+      arrowPhase = now * RALLY_ARROW_FLOW_SPEED;
       rewriteRallyLines();
       rewriteGhostLine();
     }
@@ -591,7 +638,12 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     const zoomed =
       Number.isFinite(r) &&
       (!Number.isFinite(lastFlagRadius) || Math.abs(r - lastFlagRadius) >= FLAG_RADIUS_EPS);
-    if (!Number.isFinite(lastFlagEyeX) || movedSq >= FLAG_EYE_MOVE_SQ || zoomed) {
+    if (
+      hubFlagPose ||
+      !Number.isFinite(lastFlagEyeX) ||
+      movedSq >= FLAG_EYE_MOVE_SQ ||
+      zoomed
+    ) {
       rewriteFlags(camera);
     }
   }
@@ -625,10 +677,16 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     }
   }
 
+  function refreshTeamColors() {
+    rewriteFlags(null);
+  }
+
   return {
     place,
+    refreshTeamColors,
     placeRallyFlags,
     setRallyGhost,
+    setHubFlagPose,
     update,
     clear,
     isPickMesh,

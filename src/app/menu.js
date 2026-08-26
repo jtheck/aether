@@ -26,8 +26,9 @@ import {
  *   particleStats?: () => { active?: number, capacity?: number, hardMax?: number },
  * }} opts.renderer
  * @param {() => unknown} [opts.onStartSoloAi]
+ * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
  */
-export function setupMenu({ renderer, onStartSoloAi }) {
+export function setupMenu({ renderer, onStartSoloAi, onPlayerColorChange }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload.
   const bootMode = resolveShadowMode();
@@ -101,8 +102,9 @@ export function setupMenu({ renderer, onStartSoloAi }) {
   });
 
   colorPicker.addEventListener('change', () => {
-    setPlayerColor(colorPicker.value);
+    const hex = setPlayerColor(colorPicker.value);
     paintProfile();
+    onPlayerColorChange?.(hex);
   });
 
   soloBtn.addEventListener('click', async () => {

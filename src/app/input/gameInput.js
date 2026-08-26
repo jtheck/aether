@@ -3,14 +3,20 @@
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
-import { snapBuildingYaw, BUILDING_FOOTPRINTS } from '../../sim/buildings.js';
-import { MAX_ENTITIES } from '../../sim/world.js';
+import { snapBuildingYaw, BUILDING_FOOTPRINTS, buildingCanRally, isRallyBeyondBuilding } from '../../sim/buildings.js';
+import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
 import { isMechanical, isTransport, UNIT, getUnitDef } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
 import { TILE_SIZE_F } from '../../sim/field.js';
 import { USE_GPU_PICK } from '../../render/pickMode.js';
+import {
+  boxSelectWinner,
+  mergeBuildingSels,
+  radialClickKind,
+  screenPosInRect,
+} from './buildingSelect.js';
 
 /** Debug-sphere-equivalent minimum pick height for buildings/agoras (world units). */
 const BUILDING_PICK_MIN_Y = 2.5;
@@ -57,9 +63,10 @@ const ABILITY_HOLD_MS = 400;
  * @param {(yaw: number) => void} [opts.setPlacementYaw]
  * @param {() => boolean} [opts.isRadialOpen]
  * @param {(clientX: number, clientY: number) => (string | null) | Promise<string | null>} [opts.pickRadialOption]
- * @param {(pick: string | { kind: 'building' | 'category' | 'unit' | 'upgrade' | 'utility' | 'cancel', id?: string }) => void} [opts.onRadialPick]
+ * @param {(pick: string | { kind: 'building' | 'category' | 'unit' | 'upgrade' | 'cancel', id?: string }) => void} [opts.onRadialPick]
  * @param {(clientX: number, clientY: number) => void} [opts.onRadialHover]
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadial]
+ * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadialHub]
  * @param {(i: number) => boolean} [opts.isUnitVisible] — skip fog-hidden hostiles
  */
 export function createGameInput(opts) {
@@ -95,6 +102,7 @@ export function createGameInput(opts) {
     onRadialPick,
     onRadialHover,
     hitRadial,
+    hitRadialHub,
     isUnitVisible,
   } = opts;
 
@@ -506,6 +514,44 @@ export function createGameInput(opts) {
   }
 
   /**
+   * Replace or shift-add buildings. Empty `list` is a no-op unless replacing
+   * (`add` false), which clears.
+   * @param {{ kind: 'agora' | 'building', index: number }[]} list
+   * @param {boolean} add
+   * @param {{ kind: 'agora' | 'building', index: number } | null | undefined} [primary]
+   * @param {{ clientX: number, clientY: number } | undefined} [ptr]
+   */
+  function setBuildingSelection(list, add, primary, ptr) {
+    if (list.length === 0) {
+      if (!add) clearBuildingSelection();
+      return;
+    }
+    if (add && selectedBuildings.length > 0) {
+      notifyBuildingSelected(primary ?? list[0], ptr, mergeBuildingSels(selectedBuildings, list));
+      return;
+    }
+    notifyBuildingSelected(primary ?? list[0], ptr, list);
+  }
+
+  /**
+   * Own agora / placeable centers whose pick height projects into the canvas
+   * rect. Copies ids out of the sphere pool.
+   * @returns {{ kind: 'agora' | 'building', index: number }[]}
+   */
+  function buildingsInScreenRect(minX, maxX, minY, maxY) {
+    /** @type {{ kind: 'agora' | 'building', index: number }[]} */
+    const matched = [];
+    const n = fillBuildingPickSpheres();
+    for (let i = 0; i < n; i++) {
+      const sp = buildingSpherePool[i];
+      const p = renderer.worldToScreen(sp.x, sp.y, sp.z);
+      if (!screenPosInRect(p, minX, maxX, minY, maxY)) continue;
+      matched.push({ kind: sp.id.kind, index: sp.id.index });
+    }
+    return matched;
+  }
+
+  /**
    * Select every own building matching typeKey (agora or placeable type).
    * @param {string} typeKey
    * @param {boolean} add
@@ -534,21 +580,7 @@ export function createGameInput(opts) {
       if (primary) notifyBuildingSelected(primary, ptr, [primary]);
       return;
     }
-    const head = primary ?? matched[0];
-    if (add && selectedBuildings.length > 0) {
-      const seen = new Set(selectedBuildings.map((s) => `${s.kind}:${s.index}`));
-      const merged = selectedBuildings.slice();
-      for (let i = 0; i < matched.length; i++) {
-        const s = matched[i];
-        const k = `${s.kind}:${s.index}`;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        merged.push(s);
-      }
-      notifyBuildingSelected(head, ptr, merged);
-      return;
-    }
-    notifyBuildingSelected(head, ptr, matched);
+    setBuildingSelection(matched, add, primary ?? matched[0], ptr);
   }
 
   /**
@@ -590,6 +622,53 @@ export function createGameInput(opts) {
       if (!(world.carriedBy && world.carriedBy[i] >= 0)) return true;
     }
     return false;
+  }
+
+  /** Own selected production buildings that can take a train rally. */
+  function rallyCapableBuildings() {
+    const buildings = getBuildings?.() ?? [];
+    /** @type {{ index: number, type: string, x: number, z: number }[]} */
+    const out = [];
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (sel.kind !== 'building') continue;
+      const b = buildings[sel.index];
+      if (!b || (b.owner | 0) !== localPlayerId) continue;
+      if (!buildingCanRally(b.type)) continue;
+      out.push({ index: sel.index, type: b.type, x: b.x, z: b.z });
+    }
+    return out;
+  }
+
+  function hasRallySelection() {
+    return rallyCapableBuildings().length > 0;
+  }
+
+  /**
+   * Plant rally on every selected production building (LMB attack-move, RMB force-move).
+   * @param {number} x
+   * @param {number} z
+   * @param {number} cmdType CMD.MOVE | CMD.ATTACK_MOVE
+   */
+  function rallyOrderAt(x, z, cmdType) {
+    const list = rallyCapableBuildings();
+    const order = cmdType === CMD.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE;
+    let any = false;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      if (!isRallyBeyondBuilding(b.type, b.x, b.z, x, z)) continue;
+      enqueueCommand({
+        type: CMD.SET_RALLY,
+        playerId: localPlayerId,
+        buildingIndex: b.index,
+        tx: fx.fromFloat(x),
+        ty: fx.fromFloat(z),
+        order,
+      });
+      any = true;
+    }
+    if (any) onOrder?.(x, z, undefined, cmdType);
+    return any;
   }
 
   /** Push current selection into the sim so monks skip co-selected friendlies. */
@@ -637,7 +716,7 @@ export function createGameInput(opts) {
 
   function boxSelect(x0, y0, x1, y1, add) {
     if (!canUseInput()) return;
-    // Selecting units leaves build/place UI.
+    // Selecting units / buildings leaves build/place UI.
     abandonPlacement();
     const rect = canvas.getBoundingClientRect();
     const minX = Math.min(x0, x1) - rect.left;
@@ -646,15 +725,32 @@ export function createGameInput(opts) {
     const maxY = Math.max(y0, y1) - rect.top;
     if (!add) clearUnitSelectionBits();
     const world = getWorld();
+    let unitHits = 0;
     for (let i = 0; i < world.count; i++) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
       getUnitWorldPos(i, posScratch);
       const p = renderer.worldToScreen(posScratch.x, posScratch.y, posScratch.z);
       if (!p) continue;
-      if (p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY) selectEntity(i);
+      if (screenPosInRect(p, minX, maxX, minY, maxY)) {
+        selectEntity(i);
+        unitHits++;
+      }
     }
-    clearBuildingSelection();
+    const buildings = unitHits > 0 ? [] : buildingsInScreenRect(minX, maxX, minY, maxY);
+    const winner = boxSelectWinner(unitHits, buildings.length);
+    if (winner === 'units') {
+      clearBuildingSelection();
+      syncSelectionSquad();
+      onSelectionChanged?.();
+      return;
+    }
+    if (winner === 'buildings') {
+      clearUnitSelection();
+      setBuildingSelection(buildings, add, buildings[0]);
+      return;
+    }
+    if (!add) clearBuildingSelection();
     syncSelectionSquad();
     onSelectionChanged?.();
   }
@@ -974,6 +1070,7 @@ export function createGameInput(opts) {
    *   forceMove?: boolean,
    *   prevTap?: { t: number, x: number, y: number, kind: 'unit' | 'ground' | 'enemy' | 'building', typeId?: number, buildingTypeKey?: string } | null,
    *   epoch?: number,
+   *   hubPassThrough?: boolean,
    * }} [click]
    */
   async function handleWorldClick(e, d, click = {}) {
@@ -1065,10 +1162,13 @@ export function createGameInput(opts) {
         selectAllBuildingsOfType(typeKey, e.shiftKey, bld, ptr);
       } else {
         clearUnitSelection();
-        notifyBuildingSelected(bld, ptr);
+        setBuildingSelection([bld], e.shiftKey, bld, ptr);
       }
       return;
     }
+
+    // Hub frames the selected building — a miss must not rally / deselect.
+    if (click.hubPassThrough) return;
 
     if (hasOrderableSelection()) {
       if (!clickCurrent(epoch)) return;
@@ -1088,6 +1188,14 @@ export function createGameInput(opts) {
       await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
       if (!clickCurrent(epoch)) return;
       lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: orderKind };
+      return;
+    }
+
+    if (hasRallySelection()) {
+      if (!clickCurrent(epoch)) return;
+      const g = renderer.screenToGround?.(e.clientX, e.clientY);
+      if (g) rallyOrderAt(g.x, g.z, CMD.ATTACK_MOVE);
+      lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'ground' };
       return;
     }
 
@@ -1121,7 +1229,7 @@ export function createGameInput(opts) {
 
     if (canUseInput() && e.type !== 'pointercancel') {
       if (wasSelHud) {
-        // Release on the same chip → select every own unit of that type
+        // Release on the same chip → select every own unit/building of that type
         // (shift adds to the current selection), like v1's selection panel.
         const slot = renderer.pickSelectionHud?.(e.clientX, e.clientY);
         if (slot != null) selectHudSlot(slot, e.shiftKey);
@@ -1170,11 +1278,26 @@ export function createGameInput(opts) {
         if (isRadialOpen?.() || wasRadialGesture) {
           // One radial pick on click only (not on move / down).
           const picked = await pickRadialOption?.(e.clientX, e.clientY);
-          if (picked) {
+          const kind = radialClickKind({
+            picked: !!picked,
+            onHub: hitRadialHub?.(e.clientX, e.clientY),
+            onChrome: wasRadialGesture || !!hitRadial?.(e.clientX, e.clientY),
+          });
+          if (kind === 'pick') {
             lastTap = null;
             onRadialPick?.(picked);
             radialHandled = true;
-          } else if (wasRadialGesture || hitRadial?.(e.clientX, e.clientY)) {
+          } else if (kind === 'hub') {
+            // Empty hole sits on the selected building — re-select / select-all.
+            const epoch = ++worldClickEpoch;
+            await handleWorldClick(e, d, {
+              tapAt,
+              prevTap,
+              epoch,
+              hubPassThrough: true,
+            });
+            radialHandled = true;
+          } else if (kind === 'chrome') {
             // Ring / near-option gesture — keep menu, no world click.
             lastTap = null;
             radialHandled = true;
@@ -1208,6 +1331,12 @@ export function createGameInput(opts) {
    */
   function forceMoveAt(clientX, clientY) {
     if (!canUseInput() || isPlacing()) return false;
+    if (hasRallySelection()) {
+      lastTap = null;
+      const g = renderer.screenToGround?.(clientX, clientY);
+      if (!g) return false;
+      return rallyOrderAt(g.x, g.z, CMD.MOVE);
+    }
     if (!hasOrderableSelection()) return false;
     lastTap = null;
     const epoch = ++worldClickEpoch;
@@ -1244,13 +1373,18 @@ export function createGameInput(opts) {
   }
 
   /**
-   * RMB tap: drop ghost + close radials the same way LMB empty-ground does
-   * (clear building selection). Returns true if build UI was dismissed.
+   * RMB tap: cancel placement / close build UI. Rally-capable buildings keep
+   * selection so forceMoveAt can plant a force-move rally.
    */
   function dismissMenus() {
     if (!canUseInput()) return false;
+    if (isPlacing()) {
+      lastTap = null;
+      clearBuildingSelection();
+      return true;
+    }
+    if (hasRallySelection()) return false;
     const hadUi =
-      isPlacing() ||
       selectedBuilding != null ||
       selectedBuildings.length > 0 ||
       Boolean(isRadialOpen?.());

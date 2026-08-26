@@ -11,12 +11,22 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 
-/** Draw only live slots — same helper as projectiles. */
-function setPoolDrawCount(mesh, count) {
+/**
+ * Keep GPU draw count at buffer capacity. Lite drops instances if `ti.count`
+ * grows after the first upload (same reason unit batches prealloc and hide
+ * unused slots with zero matrices).
+ */
+function setPoolDrawCount(mesh, liveCount) {
   const ti = mesh.thinInstances;
-  if (!ti || ti.count === count) return;
-  ti.count = count;
-  mesh.visible = count > 0;
+  if (!ti) return;
+  const cap = ti._capacity | 0;
+  if (cap > 0 && ti.count !== cap) {
+    ti.count = cap;
+    ti._version++;
+    ti._dirtyMin = 0;
+    ti._dirtyMax = cap;
+  }
+  mesh.visible = liveCount > 0;
 }
 
 function hideMatrix(matrices, slot) {
@@ -57,9 +67,23 @@ function writeSphere(matrices, slot, x, y, z, radius) {
  * @param {object} engine
  * @param {object} scene
  * @param {number} capacity
+ * @param {{
+ *   startVisible?: boolean,
+ *   name?: string,
+ *   segments?: number,
+ *   renderOrder?: number,
+ *   depthWrite?: boolean,
+ *   diffuseColor?: [number, number, number],
+ *   emissiveColor?: [number, number, number],
+ *   alpha?: number,
+ * }} [opts]
  */
-export function createPickHitboxRenderer(engine, scene, capacity) {
+export function createPickHitboxRenderer(engine, scene, capacity, opts = {}) {
   const cap = Math.max(1, capacity | 0);
+  const diffuseColor = opts.diffuseColor ?? [0.82, 0.32, 0.4];
+  const emissiveColor = opts.emissiveColor ?? [0.36, 0.1, 0.14];
+  const alpha = Number.isFinite(opts.alpha) ? opts.alpha : 0.2;
+  const segments = Math.max(6, opts.segments ?? 10);
 
   /** @type {object | null} */
   let mesh = null;
@@ -68,21 +92,24 @@ export function createPickHitboxRenderer(engine, scene, capacity) {
   /** @type {Float32Array | null} */
   let matrices = null;
   let previousCount = 0;
-  let enabled = false;
+  let enabled = !!opts.startVisible;
 
   function ensureMesh() {
     if (mesh) return;
-    mesh = createSphere(engine, { diameter: 2, segments: 10 });
+    mesh = createSphere(engine, { diameter: 2, segments });
     mesh.pickable = false;
+    if (opts.name) mesh.name = opts.name;
+    if (Number.isFinite(opts.renderOrder)) mesh.renderOrder = opts.renderOrder;
     material = createStandardMaterial();
-    material.diffuseColor = [0.82, 0.32, 0.4];
-    material.emissiveColor = [0.36, 0.1, 0.14];
+    material.diffuseColor = diffuseColor;
+    material.emissiveColor = emissiveColor;
     material.specularColor = [0, 0, 0];
     material.disableLighting = true;
     // Any alpha < 1 keeps Lite on the per-frame transparent path (not a frozen
     // opaque bundle). Instance color alpha stays 1 so this doesn't stack down.
-    material.alpha = 0.2;
+    material.alpha = alpha;
     material.backFaceCulling = false;
+    if (opts.depthWrite === false) material.depthWrite = false;
     mesh.material = material;
 
     matrices = new Float32Array(cap * 16);
@@ -97,6 +124,7 @@ export function createPickHitboxRenderer(engine, scene, capacity) {
     // capacity (zero matrices); first sync sets the live draw count.
     setThinInstances(mesh, matrices, cap);
     setThinInstanceColors(mesh, colors);
+    if (mesh.thinInstances) mesh.thinInstances._gpuCullingEnabled = false;
     addToScene(scene, mesh);
     previousCount = 0;
   }
@@ -111,8 +139,7 @@ export function createPickHitboxRenderer(engine, scene, capacity) {
   return {
     setVisible(on) {
       enabled = !!on;
-      if (enabled) ensureMesh();
-      else clear();
+      if (!enabled) clear();
       return enabled;
     },
 
@@ -129,8 +156,14 @@ export function createPickHitboxRenderer(engine, scene, capacity) {
      */
     sync(spheres) {
       if (!enabled) return;
-      ensureMesh();
       const n = Math.min(spheres?.length ?? 0, cap);
+      // Don't spawn an empty pool — Lite can freeze a count=0 thin-instance mesh
+      // so later uploads never show (same class of bug as pre-registerScene debug).
+      if (n === 0) {
+        if (mesh) clear();
+        return;
+      }
+      ensureMesh();
       for (let i = 0; i < n; i++) {
         const sp = spheres[i];
         writeSphere(matrices, i, sp.x, sp.y, sp.z, sp.r ?? 0);
@@ -144,6 +177,8 @@ export function createPickHitboxRenderer(engine, scene, capacity) {
       if (!enabled || !mesh) return;
       flushThinInstances(mesh);
     },
+
+    clear,
 
     debug() {
       const ti = mesh?.thinInstances;

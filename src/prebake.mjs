@@ -78,7 +78,9 @@ async function writeArtifacts(files) {
   for (const [rel, payload] of Object.entries(files)) {
     if (rel.startsWith('__generated__/')) {
       const name = rel.slice('__generated__/'.length);
-      const out = join(ROOT, 'sim', name);
+      const out = name.startsWith('render/')
+        ? join(ROOT, name)
+        : join(ROOT, 'sim', name);
       await mkdir(dirname(out), { recursive: true });
       await writeFile(out, typeof payload === 'string' ? payload : Buffer.from(payload));
       console.log('wrote', out);

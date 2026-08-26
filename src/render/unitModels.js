@@ -19,6 +19,7 @@ import {
   uint32Slice,
 } from './bakedAssets.js';
 import { materialsFromBakeMeta } from './bakedMaterials.js';
+import { yawPitchRollFromWorldMatrix } from './transportSeats.js';
 
 /** Static (non-VAT) thin-instance templates. */
 /** @type {Readonly<Record<number, string>>} */
@@ -92,18 +93,22 @@ function worldUniformScale(w) {
 }
 
 /**
- * @returns {{ name: string, x: number, y: number, z: number, scale: number }[]}
+ * @returns {{ name: string, x: number, y: number, z: number, scale: number, yaw: number, pitch: number, roll: number }[]}
  */
 export function collectFxSockets(node, out = []) {
   if (/anchor/i.test(gltfNodeBaseName(node))) {
     const w = node.worldMatrix;
     if (w) {
+      const ypr = yawPitchRollFromWorldMatrix(w);
       out.push({
         name: gltfNodeBaseName(node),
         x: w[12],
         y: w[13],
         z: w[14],
         scale: worldUniformScale(w),
+        yaw: ypr.yaw,
+        pitch: ypr.pitch,
+        roll: ypr.roll,
       });
     }
   }
@@ -203,7 +208,7 @@ function computeSmoothNormalsLH(positions, indices) {
 
 /**
  * Live GLB hierarchy bake (CPU). Also used by prebake to dump packages.
- * @returns {Promise<{ parts: object[], sockets: { name: string, x: number, y: number, z: number }[], sources: object[] }>}
+ * @returns {Promise<{ parts: object[], sockets: { name: string, x: number, y: number, z: number, yaw: number, pitch: number, roll: number }[], sources: object[] }>}
  */
 export async function bakeGltfParts(engine, url) {
   const container = await loadGltf(engine, url);
@@ -323,6 +328,9 @@ function normalizeSocket(s) {
     y: s.y,
     z: s.z,
     scale: Number.isFinite(scale) && scale > 1e-6 ? scale : 1,
+    yaw: +s?.yaw || 0,
+    pitch: +s?.pitch || 0,
+    roll: +s?.roll || 0,
   };
 }
 

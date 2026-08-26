@@ -2,10 +2,11 @@
 // Driven by prebake.mjs via Playwright (or open /prebake/prebake.html manually).
 
 import { createEngine, createSceneContext, bakeVatMany, loadGltf, stopAnimation } from '../vendor/lite/liteVendor.js';
-import { bakeGltfParts } from '../render/unitModels.js';
+import { bakeGltfParts, UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { packBinary, bakedMeshStem } from '../render/bakedAssets.js';
 import { allMeshBakeUrls, allVatBakeDefs } from './bakeUrls.js';
 import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
+import { serializeGeneratedTransportSeats, spawnSeatsFromSockets } from '../render/transportSeats.js';
 import { extractGlbMaterials } from './glbMaterials.js';
 
 function mimeExt(mime) {
@@ -318,6 +319,15 @@ ${Object.entries(buildingSpawns).map(([id, s]) => (
 });
 `;
   files['__generated__/buildingSpawnLocal.generated.js'] = spawnSrc;
+
+  const transportSeats = {};
+  for (const modelUrl of Object.values(UNIT_MODEL_URLS)) {
+    const seats = spawnSeatsFromSockets(allSockets[modelUrl]);
+    if (!seats.length) continue;
+    transportSeats[bakedMeshStem(modelUrl)] = seats;
+  }
+  files['__generated__/render/transportSeats.generated.js'] =
+    serializeGeneratedTransportSeats(transportSeats);
 
   setStatus(`Done — ${Object.keys(files).length} files`);
   window.__PREBAKE_RESULT__ = { ok: true, files, buildingSpawns };

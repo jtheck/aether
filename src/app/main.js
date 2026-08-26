@@ -28,7 +28,7 @@ import {
   snapBuildingWorld,
 } from '../sim/buildings.js';
 import { TILE_SIZE_F, worldToTile } from '../sim/field.js';
-import { OWNER_TINTS } from '../render/ownerTints.js';
+import { ownerTint, setLocalOwnerTint } from '../render/ownerTints.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
@@ -39,6 +39,7 @@ import {
   ensureFxModeDefault,
   ensureShadowModeDefault,
   fxTier,
+  getPlayerColor,
   resolveFxMode,
   resolveShadowMode,
   shadowTier,
@@ -49,36 +50,11 @@ import {
   markNearestN,
   overlayCameraRef,
 } from '../render/overlayLod.js';
-import { isVatUnitType } from '../render/vatUnits.js';
+import { posePassengerOnTransport, seatsForUnitType } from '../render/transportSeats.js';
 import { setupInput } from './input.js';
 import { init as initAudio, playThunder } from './audio.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
-
-/** v1 carton packing — local XZ offsets for riders on a transport deck. */
-const PASSENGER_COLS = 2;
-const PASSENGER_SPACING = 1.2;
-/** Hang passengers this far under air transports (v1 gondola drop, scaled with loft). */
-const AIR_PASSENGER_DROP = 7;
-
-function passengerLocalOffset(slot, total) {
-  const col = slot % PASSENGER_COLS;
-  const row = (slot / PASSENGER_COLS) | 0;
-  const rows = Math.max(1, Math.ceil(total / PASSENGER_COLS));
-  return {
-    x: (col - (PASSENGER_COLS - 1) / 2) * PASSENGER_SPACING,
-    z: (row - (rows - 1) / 2) * PASSENGER_SPACING,
-  };
-}
-
-function rotateYawOffset(offX, offZ, yaw) {
-  const c = Math.cos(yaw);
-  const s = Math.sin(yaw);
-  return {
-    x: offX * c - offZ * s,
-    z: offX * s + offZ * c,
-  };
-}
 
 const SEED = 0x1234;
 
@@ -120,12 +96,6 @@ const DEBUG_KOTH = new URLSearchParams(location.search).get('debug') === 'koth';
 
 /** Drops stale applyLiveConfig completions (solo reset finishing after join reset). */
 let liveConfigGeneration = 0;
-
-function tintColor(base, tint, amount) {
-  const a = amount;
-  const b = 1 - amount;
-  return [base[0] * b + tint[0] * a, base[1] * b + tint[1] * a, base[2] * b + tint[2] * a];
-}
 
 function worldPositionsForSync(state, count) {
   const x = new Float32Array(count);
@@ -510,6 +480,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const sideMenu = setupMenu({
     renderer,
     onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
+    onPlayerColorChange: (hex) => {
+      setLocalOwnerTint(localPlayerId, hex);
+      updateColors();
+      renderer.refreshOwnerTints?.();
+    },
   });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
@@ -576,6 +551,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let fpsAcc = 0;
   let fpsFrames = 0;
   let localPlayerId = bootCfg.localPlayerId;
+  setLocalOwnerTint(localPlayerId, getPlayerColor());
   let matchMeta = { mode: bootCfg.mode, matchId: bootCfg.matchId };
   let matchOverShown = false;
   let lastRenderDebugAt = 0;
@@ -622,13 +598,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         colors[i * 4 + 3] = 0;
         continue;
       }
-      const def = getUnitDef(world.type[i]);
-      // VAT shirts use pure owner color (v1 TeamColor material). Other units
-      // keep a soft blend of unit-def color + owner tint.
-      const ownerTint = OWNER_TINTS[world.owner[i] % OWNER_TINTS.length];
-      const c = isVatUnitType(world.type[i])
-        ? ownerTint
-        : tintColor(def.color, ownerTint, 0.45);
+      // TeamColor parts read this as a solid owner swatch; other parts stay white.
+      const c = ownerTint(world.owner[i]);
       const alpha = world.alive[i] ? 1 : fade;
       colors[i * 4] = c[0];
       colors[i * 4 + 1] = c[1];
@@ -772,6 +743,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       ),
       yaw: b.yaw ?? 0,
       owner: b.owner | 0,
+      attackMove: (b.rallyOrder | 0) === ORDER.ATTACK_MOVE,
     };
   }
 
@@ -891,7 +863,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const a = session.agoras?.[index];
     if (!a) return;
     renderer.hideActionRadial?.();
-    renderer.showBuildingRadial?.(a.x, a.z);
+    renderer.showBuildingRadial?.(a.x, a.z, a.owner);
   }
 
   /** Selected placeable driving the action radial (for train / cancel cmds). */
@@ -1029,10 +1001,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         buildingIndex: actionBuildingIndex,
         tx: fx.fromFloat(x),
         ty: fx.fromFloat(z),
+        order: ORDER.ATTACK_MOVE,
       });
       endRallyPlacement();
       openActionRadialForBuilding(actionBuildingIndex);
-      renderer.pingOrderMarker?.(x, z, undefined, 'white', { forceMove: true });
+      renderer.pingOrderMarker?.(x, z, undefined, 'red', { forceMove: false });
     },
     clearRallyPlacement: () => {
       endRallyPlacement();
@@ -1144,24 +1117,6 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         });
         return;
       }
-      if (picked.kind === 'utility') {
-        const id = picked.id;
-        if (id === 'garrison') return; // unavailable until sim garrison lands
-        if (id === 'rally') {
-          beginRallyPlacement();
-          return;
-        }
-        if (id === 'demolish') {
-          if (renderer.getActionRadialArmed?.() === 'demolish') {
-            renderer.setActionRadialArmed?.(null);
-            // Demolish confirm stub — no building delete yet.
-          } else {
-            renderer.setActionRadialArmed?.('demolish');
-          }
-          return;
-        }
-        return;
-      }
       if (picked.kind === 'cancel') {
         const tracks = renderer.getActionRadialTracks?.() ?? {};
         const hasWork = Object.values(tracks).some(
@@ -1198,6 +1153,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onRadialHover: (cx, cy) =>
       renderer.hoverBuildingRadial?.(cx, cy, !placingType),
     hitRadial: (cx, cy) => renderer.hitBuildingRadial?.(cx, cy) ?? false,
+    hitRadialHub: (cx, cy) => renderer.hitBuildingRadialHub?.(cx, cy) ?? false,
   });
 
   window.addEventListener('keydown', (e) => {
@@ -1488,7 +1444,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     markNearestN(barIds, barD2, barCand, OVERLAY_MAX_BARS, overlayBarAllow);
 
-    // Pack passengers into transport decks (v1 grid — vehicle GLBs have no seat anchors).
+    // Pack passengers into transport seats (`spawn_anchor*`) or the v1 deck grid.
     const passengerSlot = bufs.passengerSlot;
     const passengerTotalOf = bufs.passengerTotalOf;
     if (passengerSlot && passengerSlot.length >= n) {
@@ -1552,7 +1508,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         continue;
       }
 
-      // Passengers ride on the transport deck (procedural grid — no seat anchors in GLBs).
+      // Passengers ride authored spawn empties (position + suggested rotation).
       if (world.carriedBy && world.carriedBy[i] >= 0) {
         const t = world.carriedBy[i];
         if (t < 0 || t >= n || !world.alive[t]) {
@@ -1570,19 +1526,29 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const def = getUnitDef(world.type[i]);
         const tx = prev.x[t] + (cur.x[t] - prev.x[t]) * alpha;
         const tz = prev.z[t] + (cur.z[t] - prev.z[t]) * alpha;
-        const yaw = facingYaw[t] || 0;
+        const vehicleYaw = facingYaw[t] || 0;
         const slot = passengerSlot?.[i] ?? 0;
         const total = Math.max(1, passengerTotalOf?.[t] ?? 1);
-        const local = passengerLocalOffset(slot, total);
-        const worldOff = rotateYawOffset(local.x, local.z, yaw);
-        const x = tx + worldOff.x;
-        const z = tz + worldOff.z;
-        const air = isFlyer(world.type[t]);
-        const loft = air ? Math.max(0, FLY_HEIGHT - AIR_PASSENGER_DROP) : 0;
+        const liveSeats = renderer.transportSeats?.(world.type[t]);
+        const seats = liveSeats?.length ? liveSeats : seatsForUnitType(world.type[t]);
+        const vehicleLoft = isFlyer(world.type[t]) ? FLY_HEIGHT : 0;
+        const posed = posePassengerOnTransport({
+          tx,
+          tz,
+          vehicleYaw,
+          vehicleLoft,
+          seats,
+          slot,
+          total,
+        });
+        const x = posed.x;
+        const z = posed.z;
+        const loft = posed.loft;
+        const yaw = posed.yaw;
         let size = def.size * 0.85;
         const fade = deathFade[i];
         if (fade > 0) size *= fade;
-        const gy = groundYCached(i, x, z);
+        const gy = groundYCached(t, tx, tz);
         renderX[i] = x;
         renderY[i] = gy + loft + (def.pickHeight ?? 1.1);
         renderZ[i] = z;
@@ -1590,8 +1556,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           colors[i * 4 + 3] = fade;
           colorsDirty = true;
         }
-        if (poseDirty(i, x, z, yaw, size, loft, 0) || fade > 0) {
-          if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, false, loft, 0, 0, gy)) {
+        const forcePose = fade > 0 || posed.pitch !== 0 || posed.roll !== 0;
+        if (forcePose || poseDirty(i, x, z, yaw, size, loft, 0)) {
+          if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, false, loft, posed.pitch, posed.roll, gy)) {
             if (world.owner[i] === 0) drawStats.p0++;
             else if (world.owner[i] === 1) drawStats.p1++;
           } else drawStats.unmapped++;
@@ -1790,6 +1757,24 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         { fromStatus: true, skip: fogHidden },
       );
     }
+    if (renderer.syncHolyShields) {
+      const shieldSpheres = [];
+      for (let i = 0; i < n; i++) {
+        if (!world.alive[i] || fogHidden[i]) continue;
+        if (!(world.shieldHp[i] > 0)) continue;
+        const def = getUnitDef(world.type[i]);
+        const pick = def.pickRadius ?? 1.8;
+        // Pick spheres sit inside the VAT mesh; the shield has to wrap the body.
+        const wrap = Math.max(pick * 2.2, (def.size ?? 5) * 0.5);
+        shieldSpheres.push({
+          x: renderX[i],
+          y: renderY[i] + pick * 0.35,
+          z: renderZ[i],
+          r: wrap,
+        });
+      }
+      renderer.syncHolyShields(shieldSpheres);
+    }
     if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
       lastRenderDebugAt = performance.now();
       console.info('[KOTH] render frame', {
@@ -1905,9 +1890,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     set localPlayerId(v) {
       localPlayerId = v;
+      setLocalOwnerTint(localPlayerId, getPlayerColor());
       inputApi.setLocalPlayerId?.(v);
       stampFog();
       refreshFoggedProps();
+      updateColors();
+      renderer.refreshOwnerTints?.();
     },
     matchMeta,
     setMatchMeta(m) {

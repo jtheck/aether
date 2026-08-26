@@ -24,12 +24,38 @@ const KEY_PAN_BASE = 5 * 1.2;
 const RMB_PAN_BASE = 5;
 const PAN_DRAG_THRESHOLD = 5;
 
-const MIN_BETA = 1.2;
-const MAX_BETA = 0.82;
+// Beta: 0 = straight down, π/2 = horizon. Zoomed out looks up; play looks down;
+// the last stretch of zoom-in tilts back toward the horizon.
+const MIN_BETA = 0.82;
+const MAX_BETA = 1.2;
+const CLOSE_BETA = 1.2;
+const CLOSE_SPAN = 0.12;
+/** Gentle, centered bowl — small mid/edge gap so the whole range feels even. */
+const ZOOM_MID_SPEED = 0.72;
+const ZOOM_EDGE_SPEED = 1.06;
+
+/** @param {number} normalized 0 = closest, 1 = farthest — linear so angle and distance stay locked. */
+function betaForNormalizedZoom(normalized) {
+  const n = Math.max(0, Math.min(1, normalized));
+  if (n < CLOSE_SPAN) {
+    const t = n / CLOSE_SPAN;
+    return CLOSE_BETA + t * (MIN_BETA - CLOSE_BETA);
+  }
+  const t = (n - CLOSE_SPAN) / (1 - CLOSE_SPAN);
+  return MIN_BETA + t * (MAX_BETA - MIN_BETA);
+}
+
+/** Centered cosine: slowest at mid-zoom, barely quicker at either extreme. */
+function zoomSpeedForNormalized(normalized) {
+  const n = Math.max(0, Math.min(1, normalized));
+  const edge = Math.abs(n - 0.5) * 2;
+  const t = 0.5 - 0.5 * Math.cos(Math.PI * edge);
+  return ZOOM_MID_SPEED + t * (ZOOM_EDGE_SPEED - ZOOM_MID_SPEED);
+}
 
 const DEFAULT_ALPHA = -Math.PI / 2.1;
 const DEFAULT_BETA = Math.PI / 3.2;
-const LOWER_RADIUS = 40;
+const LOWER_RADIUS = 50;
 /** v1's typical play radius; used to remap (60/r)^1.5 onto v2's larger default zoom. */
 const V1_REF_RADIUS = 80;
 
@@ -43,8 +69,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   // Zoom / pan clamp tracks the active board half-extent.
   const DEFAULT_RADIUS = worldHalfF * 1.55;
   const RESET_RADIUS = worldHalfF * 1.8;
-  /** Max zoom-out — was 3.5×; pulled in so pinch feels less "runaway" without changing input sens. */
-  const UPPER_RADIUS = worldHalfF * 2.6;
+  /** Max zoom-out — keep the look-up view near the table, not a wide pullback. */
+  const UPPER_RADIUS = worldHalfF * 2.15;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
@@ -141,9 +167,30 @@ export function createCameraController(camera, canvas, opts = {}) {
     velocity.panZ += dz;
   }
 
-  function nudgeZoom(delta) {
+  function radiusLimits() {
+    const minR = camera.lowerRadiusLimit ?? LOWER_RADIUS;
+    const maxR = camera.upperRadiusLimit ?? UPPER_RADIUS;
+    return { minR, maxR, span: Math.max(1e-6, maxR - minR) };
+  }
+
+  function applyZoomInput(delta) {
     markNudged();
+    const { minR, maxR } = radiusLimits();
+    const r = camera.radius;
+    // At a zoom stop, drop momentum into the wall instead of banking it.
+    if (delta < 0 && r <= minR + 1e-3) {
+      if (velocity.radius < 0) velocity.radius = 0;
+      return;
+    }
+    if (delta > 0 && r >= maxR - 1e-3) {
+      if (velocity.radius > 0) velocity.radius = 0;
+      return;
+    }
     velocity.radius += delta;
+  }
+
+  function nudgeZoom(delta) {
+    applyZoomInput(delta);
   }
 
   function nudgeRotate(deltaAlpha) {
@@ -160,7 +207,7 @@ export function createCameraController(camera, canvas, opts = {}) {
       const impulse = INVERSE_ROT * delta * ROT_WHEEL;
       velocity.alpha += Math.max(-ROT_WHEEL_MAX, Math.min(ROT_WHEEL_MAX, impulse));
     } else {
-      velocity.radius += INVERSE_ZOOM * delta * ZOOM_WHEEL;
+      applyZoomInput(INVERSE_ZOOM * delta * ZOOM_WHEEL);
     }
   }
 
@@ -280,11 +327,9 @@ export function createCameraController(camera, canvas, opts = {}) {
       markNudged();
       camera.alpha -= KEY_ROT_SPEED;
     } else if (key === 'q') {
-      markNudged();
-      velocity.radius += 2.0;
+      applyZoomInput(2.0);
     } else if (key === 't') {
-      markNudged();
-      velocity.radius -= 2.0;
+      applyZoomInput(-2.0);
     }
   }
 
@@ -300,14 +345,8 @@ export function createCameraController(camera, canvas, opts = {}) {
       markNudged();
       camera.alpha -= KEY_ROT_SPEED;
     }
-    if (keyStates.q) {
-      markNudged();
-      velocity.radius += KEY_ZOOM_SPEED;
-    }
-    if (keyStates.t) {
-      markNudged();
-      velocity.radius -= KEY_ZOOM_SPEED;
-    }
+    if (keyStates.q) applyZoomInput(KEY_ZOOM_SPEED);
+    if (keyStates.t) applyZoomInput(-KEY_ZOOM_SPEED);
 
     let panX = 0;
     let panZ = 0;
@@ -357,16 +396,8 @@ export function createCameraController(camera, canvas, opts = {}) {
 
     applyHeldKeys();
 
-    // Zoom → beta coupling
-    const minR = camera.lowerRadiusLimit ?? LOWER_RADIUS;
-    const maxR = camera.upperRadiusLimit ?? UPPER_RADIUS;
-    const normalized = Math.max(
-      0,
-      Math.min(1, (camera.radius - minR) / Math.max(1e-6, maxR - minR)),
-    );
-    const targetBeta = MIN_BETA + normalized * (MAX_BETA - MIN_BETA);
-    if (Math.abs(camera.beta - targetBeta) < 0.01) camera.beta = targetBeta;
-    else camera.beta += (targetBeta - camera.beta) * 0.35;
+    const { minR, maxR, span } = radiusLimits();
+    const normalized = Math.max(0, Math.min(1, (camera.radius - minR) / span));
 
     velocity.alpha *= MOMENTUM;
     velocity.radius *= MOMENTUM;
@@ -387,12 +418,19 @@ export function createCameraController(camera, canvas, opts = {}) {
     const t = getTarget();
     clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
 
-    camera.radius += velocity.radius;
-    camera.radius = Math.max(minR, Math.min(maxR, camera.radius));
+    camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
+    if (camera.radius <= minR) {
+      camera.radius = minR;
+      if (velocity.radius < 0) velocity.radius = 0;
+    } else if (camera.radius >= maxR) {
+      camera.radius = maxR;
+      if (velocity.radius > 0) velocity.radius = 0;
+    }
 
+    const nAfter = Math.max(0, Math.min(1, (camera.radius - minR) / span));
     const loB = camera.lowerBetaLimit ?? 0.1;
     const hiB = camera.upperBetaLimit ?? 1.5;
-    camera.beta = Math.max(loB, Math.min(hiB, camera.beta));
+    camera.beta = Math.max(loB, Math.min(hiB, betaForNormalizedZoom(nAfter)));
 
     // Clear Lite inertial leftovers so they never fight us.
     camera.inertialPanningX = 0;
@@ -412,8 +450,12 @@ export function createCameraController(camera, canvas, opts = {}) {
     velocity.panX = 0;
     velocity.panZ = 0;
     camera.alpha = DEFAULT_ALPHA;
-    camera.beta = DEFAULT_BETA;
     camera.radius = RESET_RADIUS;
+    {
+      const { minR, span } = radiusLimits();
+      const n = Math.max(0, Math.min(1, (RESET_RADIUS - minR) / span));
+      camera.beta = betaForNormalizedZoom(n);
+    }
     setTargetXZ(0, 0);
     camera.inertialPanningX = 0;
     camera.inertialPanningY = 0;

@@ -6,6 +6,7 @@ import { MAX_PATH_HITS } from './projectiles.js';
 import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
 import { applyWorldStructureOccupancy, defaultRallyWorld } from './buildings.js';
+import { ORDER } from './world.js';
 import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
 import { ensureFrogCapacity } from './frogs.js';
@@ -324,6 +325,7 @@ function exportBuildings(buildings) {
     hasRally: b.hasRally | 0,
     rallyX: b.rallyX | 0,
     rallyZ: b.rallyZ | 0,
+    rallyOrder: b.rallyOrder | 0,
   }));
 }
 
@@ -348,6 +350,10 @@ function importBuildings(w, data) {
       hasRally,
       rallyX: hasRally && b.rallyX != null ? b.rallyX | 0 : fx.fromFloat(def.x),
       rallyZ: hasRally && b.rallyZ != null ? b.rallyZ | 0 : fx.fromFloat(def.z),
+      rallyOrder:
+        hasRally && (b.rallyOrder | 0) === ORDER.ATTACK_MOVE
+          ? ORDER.ATTACK_MOVE
+          : ORDER.MOVE,
       tracks: [],
     };
   });

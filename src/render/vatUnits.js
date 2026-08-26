@@ -9,10 +9,8 @@
 import {
   attachVat,
   bakeVatMany,
-  createTexture2DFromPixels,
   debugPbrExtIds,
   loadGltf,
-  setPbrEmissive,
   stopAnimation,
 } from '../vendor/lite/liteVendor.js';
 import { UNIT } from '../sim/unitTypes.js';
@@ -22,25 +20,7 @@ import {
   hasBakedVat,
   tryFetch,
 } from './bakedAssets.js';
-
-/** Shared 1×1 white + ORM for TeamColor (v1 used an unlit solid). */
-let teamColorMaps = null;
-
-function getTeamColorMaps(engine) {
-  if (teamColorMaps) return teamColorMaps;
-  // RGBA white albedo
-  const white = createTexture2DFromPixels(engine, new Uint8Array([255, 255, 255, 255]), 1, 1, {
-    minFilter: 'linear',
-    magFilter: 'linear',
-  });
-  // ORM: occlusion=1, roughness=0.55, metal=0 (glTF ORM packing)
-  const orm = createTexture2DFromPixels(engine, new Uint8Array([255, 140, 0, 255]), 1, 1, {
-    minFilter: 'linear',
-    magFilter: 'linear',
-  });
-  teamColorMaps = { white, orm };
-  return teamColorMaps;
-}
+import { isTeamColorName, prepareTeamColorMaterial } from './teamColor.js';
 
 /** @type {Readonly<Record<number, { url: string, scale: number, idleClip: string, walkClip: string }>>} */
 export const VAT_UNIT_DEFS = {
@@ -87,36 +67,7 @@ function materialName(mesh) {
 }
 
 function isTeamColorPart(mesh) {
-  return materialName(mesh).toLowerCase().includes('teamcolor');
-}
-
-/**
- * TeamColor shirts are tinted via thin-instance colors (v1 swapped in an unlit
- * StandardMaterial with the team diffuse). New material identity avoids Lite
- * coalescing with pants/kicks. Use 1×1 white/ORM maps so owner tint reads as a
- * solid shirt color (glTF TeamColor maps + wrong-donor UVs both fight the tint).
- */
-function prepareTeamColorMaterial(engine, mesh, donorMat) {
-  const build = donorMat?._buildGroup ?? mesh.material?._buildGroup;
-  if (!build) return;
-  const maps = getTeamColorMaps(engine);
-  mesh.material = {
-    baseColorTexture: maps.white,
-    ormTexture: maps.orm,
-    name: 'TeamColor',
-    // White albedo × thin-instance owner tint (see renderer setColors).
-    baseColorFactor: [1, 1, 1, 1],
-    doubleSided: true,
-    alpha: 1,
-    metallicFactor: 0,
-    roughnessFactor: 0.55,
-    occlusionStrength: 0,
-    enableSpecularAA: true,
-    _buildGroup: build,
-    _uboVersion: 0,
-  };
-  // v1 used ~0.25 unlit emissive of the team color; small lift only.
-  setPbrEmissive(mesh.material, [0.28, 0.28, 0.28]);
+  return isTeamColorName(materialName(mesh));
 }
 
 /** @type {Map<string, { bakedList: object[], bakeClipName: string, idleName: string, walkName: string, idleClip: object, walkClip: object }>} */

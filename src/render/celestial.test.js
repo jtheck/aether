@@ -21,6 +21,7 @@ describe('celestial angles', () => {
     assert.equal(state.bodies[1].kind, BODY.HEMI);
     const delta = Math.abs(state.bodies[1].azimuth - state.bodies[0].azimuth);
     assert.ok(Math.abs(delta - 180) < 1);
-    assert.ok(state.bodies[1].intensity > 0.6);
+    assert.ok(state.bodies[1].intensity > 0.3);
+    assert.ok(state.bodies[1].intensity < 0.55);
   });
 });

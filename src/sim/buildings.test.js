@@ -22,7 +22,10 @@ import {
   snapBuildingWorld,
   BUILDING_FOOTPRINTS,
   getBuildingDisplayName,
+  buildingCanRally,
+  TRAIN_TICKS,
 } from './buildings.js';
+import { buildingProductionSystem } from './buildingProduction.js';
 import { createAgoras } from './agora.js';
 import { UNIT } from './unitTypes.js';
 import { planPathBudget } from './path.js';
@@ -423,5 +426,91 @@ describe('getBuildingDisplayName', () => {
     assert.equal(getBuildingDisplayName('moonwell'), 'Moon Well');
     assert.equal(getBuildingDisplayName('camp'), 'Camp');
     assert.equal(getBuildingDisplayName('unknown-keep'), 'unknown-keep');
+  });
+});
+
+describe('building rally order', () => {
+  it('only production buildings that train units can rally', () => {
+    assert.equal(buildingCanRally('camp'), true);
+    assert.equal(buildingCanRally('barracks'), true);
+    assert.equal(buildingCanRally('lab'), false);
+    assert.equal(buildingCanRally('moonwell'), false);
+    assert.equal(buildingCanRally('agora'), false);
+  });
+
+  it('SET_RALLY stores attack-move and trains walk out on that order', () => {
+    const w = createWorld(21);
+    w.buildings = [];
+    const field = buildField(21, { width: 64, height: 64 });
+    const x = 32;
+    const z = 32;
+    clearClaim(field, 'camp', x, z);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'camp',
+        tx: fx.fromFloat(x),
+        ty: fx.fromFloat(z),
+      },
+    ]);
+    assert.equal(w.buildings.length, 1);
+    const b = w.buildings[0];
+    const rx = fx.fromFloat(fx.toFloat(b.x) + 16);
+    const rz = fx.fromFloat(fx.toFloat(b.z) + 16);
+    applyCommands(w, field, [
+      {
+        type: CMD.SET_RALLY,
+        playerId: 0,
+        buildingIndex: 0,
+        tx: rx,
+        ty: rz,
+        order: ORDER.ATTACK_MOVE,
+      },
+    ]);
+    assert.equal(w.buildings[0].hasRally, 1);
+    assert.equal(w.buildings[0].rallyOrder, ORDER.ATTACK_MOVE);
+    const ser = serializeBuildings(w.buildings);
+    assert.equal(ser[0].rallyOrder, ORDER.ATTACK_MOVE);
+
+    applyCommands(w, field, [
+      {
+        type: CMD.QUEUE_TRAIN,
+        playerId: 0,
+        buildingIndex: 0,
+        unitKey: 'myco',
+      },
+    ]);
+    for (let i = 0; i < TRAIN_TICKS + 2; i++) buildingProductionSystem(w, field);
+    assert.ok(w.count >= 1);
+    const spawned = w.count - 1;
+    assert.equal(w.order[spawned], ORDER.ATTACK_MOVE);
+  });
+
+  it('SET_RALLY without order defaults to force-move', () => {
+    const w = createWorld(22);
+    w.buildings = [];
+    const field = buildField(22, { width: 64, height: 64 });
+    clearClaim(field, 'camp', 32, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'camp',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    const b = w.buildings[0];
+    applyCommands(w, field, [
+      {
+        type: CMD.SET_RALLY,
+        playerId: 0,
+        buildingIndex: 0,
+        tx: fx.fromFloat(fx.toFloat(b.x) + 16),
+        ty: fx.fromFloat(fx.toFloat(b.z) + 16),
+      },
+    ]);
+    assert.equal(w.buildings[0].rallyOrder, ORDER.MOVE);
   });
 });

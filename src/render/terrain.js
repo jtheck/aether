@@ -36,6 +36,8 @@ import {
 } from '../sim/tableShape.js';
 import { createSceneryFromField } from './scenery.js';
 import { softDetachMesh } from './meshLifecycle.js';
+import { classifyGridTile, placementFillKind, placementGridWindow } from './placementGrid.js';
+import * as fx from '../sim/fixed.js';
 
 const ATLAS_URLS = {
   [ATLAS.GRASS_DIRT]: '/assets/textures/atlas-grass-dirt.png',
@@ -63,13 +65,13 @@ const ATLAS_TERRAIN_PAIRS = [
 const TERRAIN_LOOK = {
   [TERRAIN.DIRT]: {
     diffuseColor: [1.42, 1.14, 0.86],
-    ambientColor: [0.38, 0.28, 0.18],
+    ambientColor: [0.28, 0.20, 0.14],
     specularColor: [0.008, 0.006, 0.004],
     specularPower: 4,
   },
   [TERRAIN.GRASS]: {
     diffuseColor: [1.12, 1.38, 1.08],
-    ambientColor: [0.26, 0.38, 0.22],
+    ambientColor: [0.16, 0.24, 0.14],
     // Soft sheen only — shore atlas cells already look tiled; spec must not flash them.
     specularColor: [0.032, 0.048, 0.022],
     specularPower: 10,
@@ -330,8 +332,9 @@ function createAtlasMaterials(textures, specTexture) {
     const mat = createStandardMaterial();
     mat.diffuseColor = look.diffuseColor;
     mat.ambientColor = look.ambientColor;
-    // Floor so dirt/grass still read when the key is behind the camera.
-    mat.emissiveColor = [0.075, 0.085, 0.06];
+    // Dim floor only — a brighter emissive filled CSM so tree shadows
+    // vanished into the grass except when looking into the sun.
+    mat.emissiveColor = [0.038, 0.044, 0.030];
     mat.specularColor = look.specularColor;
     mat.specularPower = look.specularPower;
     mat.specularCoordIndex = 1;
@@ -1604,6 +1607,7 @@ const GRID_LIFT = 0.12;
 const BLOCK_LIFT = 0.06;
 const STRUCT_SLOW_LIFT = 0.055;
 const SLOW_LIFT = 0.05;
+const CLEAR_LIFT = 0.045;
 const GRID_HALF = 0.05;
 const BLOCK_INSET = 0.15;
 
@@ -1613,6 +1617,7 @@ const GRID_INK = {
   blocked: { diffuse: [1, 0.08, 0.1], emissive: [0.55, 0.02, 0.04], alpha: 0.42 },
   structure: { diffuse: [1, 0.82, 0.05], emissive: [0.5, 0.35, 0], alpha: 0.4 },
   slow: { diffuse: [1, 0.95, 0.15], emissive: [0.45, 0.4, 0], alpha: 0.36 },
+  clear: { diffuse: [0.18, 1, 0.28], emissive: [0.08, 0.62, 0.12], alpha: 0.42 },
 };
 
 /**
@@ -1816,6 +1821,229 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
       blockMesh = null;
       structureSlowMesh = null;
       slowMesh = null;
+    },
+  };
+}
+
+function clampPlacementWindow(field, win) {
+  const w = field.width | 0;
+  const h = field.height | 0;
+  const x0 = Math.max(0, win.x0 | 0);
+  const z0 = Math.max(0, win.z0 | 0);
+  const x1 = Math.min(w, win.x1 | 0);
+  const z1 = Math.min(h, win.z1 | 0);
+  if (x1 <= x0 || z1 <= z0) return null;
+  return { x0, z0, x1, z1 };
+}
+
+function placementOccupancySignature(field, win) {
+  let s = `${win.x0},${win.z0},${win.x1},${win.z1}:`;
+  for (let tz = win.z0; tz < win.z1; tz++) {
+    for (let tx = win.x0; tx < win.x1; tx++) {
+      const kind = classifyGridTile(field, tx, tz);
+      s += kind ? kind[0] : '-';
+    }
+  }
+  return s;
+}
+
+/**
+ * Placement-only G-grid: same ink plus green open tiles, clipped to the ghost pad.
+ * @returns {{
+ *   setFocus: (field: object | null, pos: { type: string, x: number, z: number, valid?: boolean } | null) => void,
+ *   dispose: () => void,
+ * }}
+ */
+export function createPlacementGridOverlay(engine, scene) {
+  /** @type {object | null} */
+  let edgeMesh = null;
+  /** @type {object | null} */
+  let blockMesh = null;
+  /** @type {object | null} */
+  let structureSlowMesh = null;
+  /** @type {object | null} */
+  let slowMesh = null;
+  /** @type {object | null} */
+  let clearMesh = null;
+  let lastSig = '';
+
+  function disposeDevMesh(mesh) {
+    if (!mesh) return;
+    softDetachMesh(scene, mesh);
+  }
+
+  function clearMeshes() {
+    disposeDevMesh(edgeMesh);
+    disposeDevMesh(blockMesh);
+    disposeDevMesh(structureSlowMesh);
+    disposeDevMesh(slowMesh);
+    disposeDevMesh(clearMesh);
+    edgeMesh = null;
+    blockMesh = null;
+    structureSlowMesh = null;
+    slowMesh = null;
+    clearMesh = null;
+  }
+
+  function hide() {
+    lastSig = '';
+    clearMeshes();
+  }
+
+  function heightAtCorner(field, cx, cz) {
+    if (!field.heightMap || !field.terrainTypes) return GRID_LIFT;
+    return sampleHeight(field.heightMap, field.terrainTypes, field.width, field.height, cx, cz)
+      + GRID_LIFT;
+  }
+
+  function fillHeightAtCorner(field, cx, cz, lift) {
+    if (!field.heightMap || !field.terrainTypes) return lift;
+    return sampleHeight(field.heightMap, field.terrainTypes, field.width, field.height, cx, cz)
+      + lift;
+  }
+
+  function pushLocalEdge(ax, ay, az, bx, by, bz, posOut, idxOut, base) {
+    const dx = bx - ax;
+    const dz = bz - az;
+    const len = Math.hypot(dx, dz) || 1;
+    const px = (-dz / len) * GRID_HALF;
+    const pz = (dx / len) * GRID_HALF;
+    posOut.push(
+      ax + px, ay, az + pz,
+      bx + px, by, bz + pz,
+      bx - px, by, bz - pz,
+      ax - px, ay, az - pz,
+    );
+    idxOut.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    return base + 4;
+  }
+
+  function pushLocalFill(field, tx, tz, lift, half, posOut, idxOut, base) {
+    const x0 = tx * TILE_SIZE_F - half + BLOCK_INSET;
+    const x1 = (tx + 1) * TILE_SIZE_F - half - BLOCK_INSET;
+    const z0 = tz * TILE_SIZE_F - half + BLOCK_INSET;
+    const z1 = (tz + 1) * TILE_SIZE_F - half - BLOCK_INSET;
+    const y00 = fillHeightAtCorner(field, tx, tz, lift);
+    const y10 = fillHeightAtCorner(field, tx + 1, tz, lift);
+    const y11 = fillHeightAtCorner(field, tx + 1, tz + 1, lift);
+    const y01 = fillHeightAtCorner(field, tx, tz + 1, lift);
+    posOut.push(x0, y00, z0, x1, y10, z0, x1, y11, z1, x0, y01, z1);
+    idxOut.push(base, base + 1, base + 2, base, base + 2, base + 3);
+    return base + 4;
+  }
+
+  function rebuild(field, win) {
+    clearMeshes();
+    const half = worldHalfFFromField(field);
+    const edgePos = [];
+    const edgeIdx = [];
+    let ev = 0;
+    const blockPos = [];
+    const blockIdx = [];
+    let bv = 0;
+    const structPos = [];
+    const structIdx = [];
+    let uv = 0;
+    const slowPos = [];
+    const slowIdx = [];
+    let sv = 0;
+    const clearPos = [];
+    const clearIdx = [];
+    let cv = 0;
+
+    for (let tz = win.z0; tz < win.z1; tz++) {
+      for (let tx = win.x0; tx < win.x1; tx++) {
+        const kind = classifyGridTile(field, tx, tz);
+        if (!kind) continue;
+        const x0 = tx * TILE_SIZE_F - half;
+        const x1 = (tx + 1) * TILE_SIZE_F - half;
+        const z0 = tz * TILE_SIZE_F - half;
+        const z1 = (tz + 1) * TILE_SIZE_F - half;
+        const y00 = heightAtCorner(field, tx, tz);
+        const y10 = heightAtCorner(field, tx + 1, tz);
+        const y01 = heightAtCorner(field, tx, tz + 1);
+        const y11 = heightAtCorner(field, tx + 1, tz + 1);
+        ev = pushLocalEdge(x0, y00, z0, x1, y10, z0, edgePos, edgeIdx, ev);
+        ev = pushLocalEdge(x0, y00, z0, x0, y01, z1, edgePos, edgeIdx, ev);
+        if (tx === win.x1 - 1) ev = pushLocalEdge(x1, y10, z0, x1, y11, z1, edgePos, edgeIdx, ev);
+        if (tz === win.z1 - 1) ev = pushLocalEdge(x0, y01, z1, x1, y11, z1, edgePos, edgeIdx, ev);
+        const fill = placementFillKind(kind, tx, tz, win);
+        if (fill === 'blocked') {
+          bv = pushLocalFill(field, tx, tz, BLOCK_LIFT, half, blockPos, blockIdx, bv);
+        } else if (fill === 'structure') {
+          uv = pushLocalFill(field, tx, tz, STRUCT_SLOW_LIFT, half, structPos, structIdx, uv);
+        } else if (fill === 'slow') {
+          sv = pushLocalFill(field, tx, tz, SLOW_LIFT, half, slowPos, slowIdx, sv);
+        } else if (fill === 'clear') {
+          cv = pushLocalFill(field, tx, tz, CLEAR_LIFT, half, clearPos, clearIdx, cv);
+        }
+      }
+    }
+
+    if (ev > 0) {
+      edgeMesh = makeDevMesh(engine, 'place-grid', edgePos, edgeIdx, GRID_INK.edge);
+      addToScene(scene, edgeMesh);
+      setSubtreeVisible(edgeMesh, true);
+    }
+    if (bv > 0) {
+      blockMesh = makeDevMesh(engine, 'place-blocked', blockPos, blockIdx, GRID_INK.blocked);
+      addToScene(scene, blockMesh);
+      setSubtreeVisible(blockMesh, true);
+    }
+    if (uv > 0) {
+      structureSlowMesh = makeDevMesh(
+        engine,
+        'place-structure-slow',
+        structPos,
+        structIdx,
+        GRID_INK.structure,
+      );
+      addToScene(scene, structureSlowMesh);
+      setSubtreeVisible(structureSlowMesh, true);
+    }
+    if (sv > 0) {
+      slowMesh = makeDevMesh(engine, 'place-slow', slowPos, slowIdx, GRID_INK.slow);
+      addToScene(scene, slowMesh);
+      setSubtreeVisible(slowMesh, true);
+    }
+    if (cv > 0) {
+      clearMesh = makeDevMesh(engine, 'place-clear', clearPos, clearIdx, GRID_INK.clear);
+      addToScene(scene, clearMesh);
+      setSubtreeVisible(clearMesh, true);
+    }
+  }
+
+  return {
+    /**
+     * @param {object | null} field
+     * @param {{ type: string, x: number, z: number, valid?: boolean } | null} pos World-space snapped ghost.
+     */
+    setFocus(field, pos) {
+      if (!field?.pass || !pos?.type) {
+        hide();
+        return;
+      }
+      const win = placementGridWindow(pos.type, fx.fromFloat(pos.x), fx.fromFloat(pos.z));
+      const clamped = win ? clampPlacementWindow(field, win) : null;
+      if (!clamped) {
+        hide();
+        return;
+      }
+      const valid = pos.valid !== false;
+      const sig = `${pos.type}:${valid ? 1 : 0}:${placementOccupancySignature(field, clamped)}`;
+      if (sig === lastSig) return;
+      lastSig = sig;
+      rebuild(field, {
+        ...clamped,
+        claimX0: win.claimX0,
+        claimZ0: win.claimZ0,
+        claimX1: win.claimX1,
+        claimZ1: win.claimZ1,
+        valid,
+      });
+    },
+    dispose() {
+      hide();
     },
   };
 }

@@ -27,7 +27,7 @@ const KIND_LOOK = {
 };
 
 const CLEAR_COLOR = [0.2, 0.23, 0.21];
-const EXPOSURE = 1.55;
+export const EXPOSURE = 1.55;
 const CONTRAST = 1.05;
 
 /**
@@ -69,11 +69,12 @@ export function defaultCelestialState() {
     contrast: CONTRAST,
     clearColor: [...CLEAR_COLOR],
     bodies: [
-      // Key stays directional; fill is the floor so wrap does not collapse when
-      // the camera yaws or the sun sweeps. Exposure is the all-angle lift —
-      // do not balance brightness by pushing the key from one view.
+      // Key stays directional; fill is only a floor so yaw does not go black.
+      // Keep it well below the key or CSM on grass washes out except when
+      // looking into the sun (shadows fall into the near cascade).
+      // Exposure is the all-angle lift — do not balance by pushing the key.
       { kind: BODY.SUN, azimuth: 56, elevation: 36, intensity: 1.85 },
-      { kind: BODY.HEMI, azimuth: 236, elevation: 68, intensity: 0.72 },
+      { kind: BODY.HEMI, azimuth: 236, elevation: 68, intensity: 0.48 },
     ],
   };
 }

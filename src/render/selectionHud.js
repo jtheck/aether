@@ -11,9 +11,7 @@ import {
   createTextRenderer,
   disposeDefaultTextData,
   disposeTextRenderer,
-  flushThinInstances,
   registerTextRenderer,
-  setThinInstances,
   createShaderMaterial,
   setSubtreeVisible,
   updateDefaultTextData,
@@ -29,18 +27,19 @@ import {
 /** Distinct types the strip can show at once (typical selections use few). */
 const MAX_SLOTS = 14;
 /**
- * Depth from the camera eye the icons sit at (world units). Kept shallow so
- * chips stay near the eye — a bottom-screen ray dips toward the ground, and a
- * far depth would sink icons under the map. Overlay materials also skip the
- * depth test so world geometry cannot cover the strip.
+ * Depth from the camera eye the icons sit at (world units). The scene's
+ * reverse-Z compare overrides per-material "always", so chips have to sit
+ * nearer than terrain / trees / buildings or they lose the depth test. A
+ * bottom-screen ray dips toward the ground — keep this shallow.
  */
-const ICON_DEPTH = 28;
+const ICON_DEPTH = 0.8;
 /**
  * Every icon is normalized so its largest dimension maps to this world size at
  * ICON_DEPTH, then centered on its slot — so chips read as evenly sized buttons
- * regardless of the source model's proportions.
+ * regardless of the source model's proportions. Paired with ICON_DEPTH so
+ * on-screen size matches the original 1.55-at-28 look.
  */
-const UNIT_ICON_WORLD = 1.55;
+const UNIT_ICON_WORLD = 1.55 * (0.8 / 28);
 /** Preferred horizontal spacing between chips (CSS px); compressed to fit. */
 const SLOT_PX = 112;
 /** Keep the whole row inside the viewport with this side inset (CSS px). */
@@ -80,7 +79,7 @@ export function selectionHudSlot(group) {
   return null;
 }
 
-/** Thin-instance batch key for a group row. */
+/** Icon batch key for a group row. */
 export function selectionHudIconKey(group) {
   if (group?.kind === 'building') return `b:${group.typeKey}`;
   if (group?.typeId != null) return `u:${group.typeId}`;
@@ -174,7 +173,6 @@ function makeIconMaterial(source) {
   return vec4<f32>(shaderUniforms.iconColor * lit, 1.0);
 }`,
   });
-  mat.useThinInstances = true;
   return mat;
 }
 
@@ -183,36 +181,69 @@ function unitIconModelUrl(typeId) {
   return UNIT_MODEL_URLS[typeId] ?? VAT_UNIT_DEFS[typeId]?.url ?? null;
 }
 
-function setThinInstanceCount(mesh, count) {
-  const ti = mesh.thinInstances;
-  if (!ti) return;
-  ti.count = count;
-  ti._version++;
-  ti._dirtyMin = 0;
-  ti._dirtyMax = count;
+/**
+ * Quaternion from orthonormal basis columns (X, Y, Z).
+ * @returns {{ x: number, y: number, z: number, w: number }}
+ */
+function quatFromBasis(xx, xy, xz, yx, yy, yz, zx, zy, zz) {
+  const trace = xx + yy + zz;
+  let x;
+  let y;
+  let z;
+  let w;
+  if (trace > 0) {
+    const s = Math.sqrt(trace + 1) * 2;
+    w = 0.25 * s;
+    x = (yz - zy) / s;
+    y = (zx - xz) / s;
+    z = (xy - yx) / s;
+  } else if (xx > yy && xx > zz) {
+    const s = Math.sqrt(1 + xx - yy - zz) * 2;
+    w = (yz - zy) / s;
+    x = 0.25 * s;
+    y = (xy + yx) / s;
+    z = (zx + xz) / s;
+  } else if (yy > zz) {
+    const s = Math.sqrt(1 + yy - xx - zz) * 2;
+    w = (zx - xz) / s;
+    x = (xy + yx) / s;
+    y = 0.25 * s;
+    z = (yz + zy) / s;
+  } else {
+    const s = Math.sqrt(1 + zz - xx - yy) * 2;
+    w = (xy - yx) / s;
+    x = (zx + xz) / s;
+    y = (yz + zy) / s;
+    z = 0.25 * s;
+  }
+  return { x, y, z, w };
 }
 
-/**
- * Thin-instance matrix from an orthonormal basis (columns X/Y/Z) + translation.
- * Uniform scale.
- */
-function writeFacingMatrix(matrices, x, y, z, rx, ry, rz, ux, uy, uz, fx, fy, fz, scale) {
-  matrices[0] = rx * scale;
-  matrices[1] = ry * scale;
-  matrices[2] = rz * scale;
-  matrices[3] = 0;
-  matrices[4] = ux * scale;
-  matrices[5] = uy * scale;
-  matrices[6] = uz * scale;
-  matrices[7] = 0;
-  matrices[8] = fx * scale;
-  matrices[9] = fy * scale;
-  matrices[10] = fz * scale;
-  matrices[11] = 0;
-  matrices[12] = x;
-  matrices[13] = y;
-  matrices[14] = z;
-  matrices[15] = 1;
+/** Place a HUD icon with a regular world transform (not thin instances). */
+function placeIconMesh(mesh, x, y, z, rx, ry, rz, fx, fy, fz, scale) {
+  if (mesh.position) {
+    mesh.position.x = x;
+    mesh.position.y = y;
+    mesh.position.z = z;
+  }
+  if (mesh.scaling) {
+    mesh.scaling.x = scale;
+    mesh.scaling.y = scale;
+    mesh.scaling.z = scale;
+  }
+  const q = quatFromBasis(rx, ry, rz, 0, 1, 0, fx, fy, fz);
+  const rq = mesh.rotationQuaternion;
+  if (rq) {
+    if (typeof rq.set === 'function') rq.set(q.x, q.y, q.z, q.w);
+    else {
+      rq.x = q.x;
+      rq.y = q.y;
+      rq.z = q.z;
+      rq.w = q.w;
+    }
+  }
+  setSubtreeVisible(mesh, true);
+  mesh.markLocalDirty?.();
 }
 
 function cameraEye(camera) {
@@ -252,7 +283,7 @@ function cameraEye(camera) {
 export async function createSelectionHud(engine, scene, screen = {}) {
   /**
    * @type {Map<string, {
-   *   layers: { mesh: object, matrices: Float32Array }[],
+   *   layers: { mesh: object }[],
    *   visible: boolean,
    *   normScale: number,
    *   cx: number, cy: number, cz: number,
@@ -281,12 +312,9 @@ export async function createSelectionHud(engine, scene, screen = {}) {
         if ('receiveShadows' in mesh) mesh.receiveShadows = false;
         mesh.material = makeIconMaterial(mesh.material);
         mesh.renderOrder = HUD_RENDER_ORDER;
-        const matrices = new Float32Array(16);
-        setThinInstances(mesh, matrices, 1);
-        setThinInstanceCount(mesh, 0);
         addToScene(scene, mesh);
         setSubtreeVisible(mesh, false);
-        layers.push({ mesh, matrices });
+        layers.push({ mesh });
       }
       const spanX = Number.isFinite(max[0] - min[0]) ? max[0] - min[0] : 1;
       const spanY = Number.isFinite(max[1] - min[1]) ? max[1] - min[1] : 1;
@@ -354,10 +382,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     const oy = ay - s * (ry * batch.cx + batch.cy + fy * batch.cz);
     const oz = az - s * (rz * batch.cx + fz * batch.cz);
     for (const layer of batch.layers) {
-      writeFacingMatrix(layer.matrices, ox, oy, oz, rx, ry, rz, 0, 1, 0, fx, fy, fz, s);
-      setThinInstanceCount(layer.mesh, 1);
-      flushThinInstances(layer.mesh);
-      setSubtreeVisible(layer.mesh, true);
+      placeIconMesh(layer.mesh, ox, oy, oz, rx, ry, rz, fx, fy, fz, s);
     }
     batch.visible = true;
   }
@@ -365,9 +390,9 @@ export async function createSelectionHud(engine, scene, screen = {}) {
   function hideIcon(batch) {
     if (!batch.visible) return;
     for (const layer of batch.layers) {
-      setThinInstanceCount(layer.mesh, 0);
-      flushThinInstances(layer.mesh);
       setSubtreeVisible(layer.mesh, false);
+      if (layer.mesh.position) layer.mesh.position.y = -9999;
+      layer.mesh.markLocalDirty?.();
     }
     batch.visible = false;
   }

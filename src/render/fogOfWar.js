@@ -25,10 +25,15 @@ const CASTER_VISION_TILES = 18;
 /** Airships see farther still; agoras share this radius. */
 const DIRIGIBLE_VISION_TILES = 24;
 const BUILDING_VISION_TILES = 7;
-/** Overlay fragment alpha on fogged tiles — dark enough to read vs sight. */
-const FOG_MESH_ALPHA = 0.64;
-/** Cool slate so fogged dirt shifts hue, not just luminance, vs warm sunlit ground. */
-const FOG_DIFFUSE = [0.03, 0.05, 0.09];
+/** Never-seen shroud — heavier than visited so wilderness is a third step. */
+const UNSEEN_MESH_ALPHA = 0.90;
+const UNSEEN_DIFFUSE = [0.01, 0.016, 0.028];
+/** Visited veil — darker than daylight, still lighter than the shroud. */
+const VISITED_MESH_ALPHA = 0.50;
+const VISITED_DIFFUSE = [0.045, 0.058, 0.072];
+/** Unlit olive wash on current sight only — lifts the hole without a second sun. */
+const SIGHT_LIFT_ALPHA = 0.30;
+const SIGHT_LIFT_DIFFUSE = [0.46, 0.50, 0.36];
 const OVERLAY_LIFT = 0.18;
 const TEXEL_ALIGN = 64;
 /** Overlay-only skirt past the hard vision circle. Gameplay hide stays binary. */
@@ -108,6 +113,7 @@ function cloneBuilding(b) {
     hasRally: b.hasRally | 0,
     rallyX: b.rallyX ?? 0,
     rallyZ: b.rallyZ ?? 0,
+    rallyOrder: b.rallyOrder ?? 0,
     tracks: (b.tracks ?? []).map((t) => ({ ...t })),
   };
 }
@@ -216,9 +222,25 @@ export function createFogOfWar() {
   /** @type {object | null} */
   let material = null;
   /** @type {object | null} */
+  let visitedMesh = null;
+  /** @type {object | null} */
+  let visitedMaterial = null;
+  /** @type {object | null} */
+  let liftMesh = null;
+  /** @type {object | null} */
+  let liftMaterial = null;
+  /** @type {object | null} */
   let texture = null;
+  /** @type {object | null} */
+  let visitedTexture = null;
+  /** @type {object | null} */
+  let liftTexture = null;
   /** @type {Uint8Array | null} */
   let pixels = null;
+  /** @type {Uint8Array | null} */
+  let visitedPixels = null;
+  /** @type {Uint8Array | null} */
+  let liftPixels = null;
   let texW = 0;
   let texH = 0;
 
@@ -310,7 +332,7 @@ export function createFogOfWar() {
     const r = Math.ceil(outer);
     const hardR2 = radiusTiles * radiusTiles;
     const outer2 = outer * outer;
-    const inner = Math.max(0, radiusTiles - 0.35);
+    const inner = radiusTiles;
     const fadeSpan = Math.max(0.001, outer - inner);
     const active = tileActiveLookup(field);
     for (let tz = cz - r; tz <= cz + r; tz++) {
@@ -487,9 +509,37 @@ export function createFogOfWar() {
     return (c00 * (1 - tx) + c10 * tx) * (1 - tz) + (c01 * (1 - tx) + c11 * tx) * tz;
   }
 
+  function layerAlphas(seen) {
+    if (seen <= 0) return { unseen: 255, visited: 0, lift: 0 };
+    if (seen >= 255) return { unseen: 0, visited: 0, lift: 255 };
+    if (seen <= VISITED_COVER) {
+      const t = seen / VISITED_COVER;
+      return {
+        unseen: Math.round(255 * (1 - t)),
+        visited: Math.round(255 * t),
+        lift: 0,
+      };
+    }
+    const t = (seen - VISITED_COVER) / (255 - VISITED_COVER);
+    return {
+      unseen: 0,
+      visited: Math.round(255 * (1 - t)),
+      lift: Math.round(255 * t),
+    };
+  }
+
+  function writeLayer(buf, o, alpha) {
+    buf[o] = 255;
+    buf[o + 1] = 255;
+    buf[o + 2] = 255;
+    buf[o + 3] = alpha;
+  }
+
   function paintPixels() {
-    if (!pixels) return;
-    pixels.fill(255);
+    if (!pixels || !visitedPixels || !liftPixels) return;
+    pixels.fill(0);
+    visitedPixels.fill(0);
+    liftPixels.fill(0);
     if (!cover && !visible) return;
     const scale = FOG_TEX_SCALE;
     const srcH = height * scale;
@@ -499,54 +549,56 @@ export function createFogOfWar() {
       const fz = (sz + 0.5) / scale - 0.5;
       for (let sx = 0; sx < srcW; sx++) {
         const o = (dstRow + sx) * 4;
-        pixels[o] = 255;
-        pixels[o + 1] = 255;
-        pixels[o + 2] = 255;
         const fx = (sx + 0.5) / scale - 0.5;
         const seen = cover
           ? sampleCover(fx, fz)
           : visible && visible[Math.round(fz) * width + Math.round(fx)] === gen
             ? 255
             : 0;
-        pixels[o + 3] = 255 - seen;
+        const layers = layerAlphas(seen);
+        writeLayer(pixels, o, layers.unseen);
+        writeLayer(visitedPixels, o, layers.visited);
+        writeLayer(liftPixels, o, layers.lift);
       }
     }
   }
 
-  function bindOpacityTexture(next) {
-    if (!material) return;
-    setStandardOpacityTexture(material, next);
-    material.opacityFromRGB = false;
+  function bindOneOpacity(mat, next) {
+    if (!mat || !next) return;
+    setStandardOpacityTexture(mat, next);
+    mat.opacityFromRGB = false;
     // Blend, don't cutoff — bilinear then fades the tile stairs for free.
-    if ('alphaCutOff' in material) material.alphaCutOff = 0;
-    markMaterialUboDirty?.(material);
+    if ('alphaCutOff' in mat) mat.alphaCutOff = 0;
+    markMaterialUboDirty?.(mat);
+  }
+
+  function writeOpacityTexture(prev, data) {
+    if (prev && tryWriteTexture(engine, prev, data, texW, texH)) return prev;
+    const next = createTexture2DFromPixels(engine, data, texW, texH, {
+      minFilter: 'linear',
+      magFilter: 'linear',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+    });
+    next.sampler = getOrCreateSampler(engine, {
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+      minFilter: 'linear',
+      magFilter: 'linear',
+    });
+    disposeTexture(prev);
+    return next;
   }
 
   function uploadTexture() {
-    if (!engine || !pixels || !texW || !texH) return;
+    if (!engine || !pixels || !visitedPixels || !liftPixels || !texW || !texH) return;
     paintPixels();
-    if (texture && tryWriteTexture(engine, texture, pixels, texW, texH)) return;
-    const next = createTexture2DFromPixels(engine, pixels, texW, texH, {
-      minFilter: 'linear',
-      magFilter: 'linear',
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-    });
-    next.sampler = getOrCreateSampler(engine, {
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-      minFilter: 'linear',
-      magFilter: 'linear',
-    });
-    disposeTexture(texture);
-    texture = next;
-    bindOpacityTexture(next);
-    next.sampler = getOrCreateSampler(engine, {
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge',
-      minFilter: 'linear',
-      magFilter: 'linear',
-    });
+    texture = writeOpacityTexture(texture, pixels);
+    visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels);
+    liftTexture = writeOpacityTexture(liftTexture, liftPixels);
+    bindOneOpacity(material, texture);
+    bindOneOpacity(visitedMaterial, visitedTexture);
+    bindOneOpacity(liftMaterial, liftTexture);
   }
 
   function buildOverlayMesh() {
@@ -582,37 +634,74 @@ export function createFogOfWar() {
     const pos = new Float32Array(positions);
     const normals = new Float32Array(pos.length);
     for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
-    mesh = createMeshFromData(
-      engine,
-      'fog-of-war',
-      pos,
-      normals,
-      new Uint32Array(indices),
-      new Float32Array(uvs),
+    const idx = new Uint32Array(indices);
+    const uv = new Float32Array(uvs);
+    material = createOverlayMaterial(UNSEEN_DIFFUSE, UNSEEN_MESH_ALPHA);
+    visitedMaterial = createOverlayMaterial(VISITED_DIFFUSE, VISITED_MESH_ALPHA);
+    liftMaterial = createOverlayMaterial(SIGHT_LIFT_DIFFUSE, SIGHT_LIFT_ALPHA);
+    mesh = addOverlayMesh('fog-of-war', pos, normals, idx, uv, material);
+    visitedMesh = addOverlayMesh(
+      'fog-visited',
+      pos.slice(),
+      normals.slice(),
+      idx.slice(),
+      uv.slice(),
+      visitedMaterial,
     );
-    material = createStandardMaterial();
-    material.diffuseColor = FOG_DIFFUSE;
-    material.emissiveColor = [0, 0, 0];
-    material.ambientColor = [0, 0, 0];
-    material.specularColor = [0, 0, 0];
-    material.disableLighting = true;
-    material.alpha = FOG_MESH_ALPHA;
-    material.backFaceCulling = true;
-    mesh.material = material;
-    mesh.pickable = false;
-    mesh.receiveShadows = false;
-    mesh.visible = enabled;
-    addToScene(scene, mesh);
+    liftMesh = addOverlayMesh(
+      'fog-sight-lift',
+      pos.slice(),
+      normals.slice(),
+      idx.slice(),
+      uv.slice(),
+      liftMaterial,
+    );
+    if (visitedMesh.position) visitedMesh.position.y = 0.03;
+    if (liftMesh.position) liftMesh.position.y = 0.05;
     uploadTexture();
+  }
+
+  function createOverlayMaterial(color, alpha) {
+    const mat = createStandardMaterial();
+    mat.diffuseColor = color;
+    mat.emissiveColor = [0, 0, 0];
+    mat.ambientColor = [0, 0, 0];
+    mat.specularColor = [0, 0, 0];
+    mat.disableLighting = true;
+    mat.alpha = alpha;
+    mat.backFaceCulling = true;
+    return mat;
+  }
+
+  function addOverlayMesh(name, pos, normals, idx, uv, mat) {
+    const next = createMeshFromData(engine, name, pos, normals, idx, uv);
+    next.material = mat;
+    next.pickable = false;
+    next.receiveShadows = false;
+    next.visible = enabled;
+    addToScene(scene, next);
+    return next;
   }
 
   function detachOverlay() {
     if (mesh) softDetachMesh(scene, mesh);
+    if (visitedMesh) softDetachMesh(scene, visitedMesh);
+    if (liftMesh) softDetachMesh(scene, liftMesh);
     mesh = null;
     material = null;
+    visitedMesh = null;
+    visitedMaterial = null;
+    liftMesh = null;
+    liftMaterial = null;
     disposeTexture(texture);
+    disposeTexture(visitedTexture);
+    disposeTexture(liftTexture);
     texture = null;
+    visitedTexture = null;
+    liftTexture = null;
     pixels = null;
+    visitedPixels = null;
+    liftPixels = null;
     texW = 0;
     texH = 0;
     engine = null;
@@ -628,12 +717,16 @@ export function createFogOfWar() {
     texW = padTexWidth(width * FOG_TEX_SCALE);
     texH = Math.max(1, height * FOG_TEX_SCALE);
     pixels = new Uint8Array(texW * texH * 4);
+    visitedPixels = new Uint8Array(texW * texH * 4);
+    liftPixels = new Uint8Array(texW * texH * 4);
     buildOverlayMesh();
   }
 
   function syncOverlay() {
     if (!mesh || !material) return;
     mesh.visible = enabled;
+    if (visitedMesh) visitedMesh.visible = enabled;
+    if (liftMesh) liftMesh.visible = enabled;
     if (!enabled) return;
     uploadTexture();
   }

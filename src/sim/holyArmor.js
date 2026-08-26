@@ -2,10 +2,13 @@
 
 import * as fx from './fixed.js';
 import { TILE_SIZE_F } from './field.js';
-import { getUnitDef, UNIT } from './unitTypes.js';
+import { getUnitDef, isMechanical, UNIT } from './unitTypes.js';
 
-/** Friendly buff radius (~3 tiles). */
-export const HOLY_ARMOR_RADIUS = fx.fromFloat(TILE_SIZE_F * 3);
+/**
+ * Friendly absorb radius (~6 tiles / 24 world).
+ * Army grid is 16–22 apart, so 3 tiles only ever hit the caster + a stacked ally.
+ */
+export const HOLY_ARMOR_RADIUS = fx.fromFloat(TILE_SIZE_F * 6);
 /** Ticks before another cast (~5.75s at 20Hz). */
 export const HOLY_ARMOR_COOLDOWN = 115;
 /** Absorb duration on buffed units (~7s at 20Hz). */
@@ -69,6 +72,7 @@ export function applyAreaHolyArmor(w, owner, cx, cy, {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
     if (w.owner[i] !== owner) continue;
+    if (isMechanical(w.type[i])) continue;
     if (fx.dist2(cx, cy, w.px[i], w.py[i]) > radius2) continue;
     w.shieldHp[i] = shield;
     w.shieldTicks[i] = duration;

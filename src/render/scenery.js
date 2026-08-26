@@ -39,8 +39,23 @@ const TREE_SHRINK_MS = 2200;
 const TREE_FELL_MS = 1400;
 /** Hold full size while ink drips, then melt. */
 const TREE_FELL_DELAY_MS = 850;
-/** Match leftover terrain after the 0.64 fog veil so trees/rocks don't stay sunlit. */
-const FOG_DIM = 0.38;
+/** Never-seen trees/rocks — match the heavier shroud. */
+const FOG_DIM = 0.16;
+/** Visited trees/rocks — mid step, darker than sight, lighter than wilderness. */
+const VISITED_DIM = 0.50;
+/** Matches fogOfWar VISITED_ALPHA / 255 so the mid step lands on explored tiles. */
+const VISITED_FOG_T = 110 / 255;
+/** Extra albedo in the live vision hole so current sight reads brighter than visited. */
+const SIGHT_LIFT = 1.4;
+
+function fogAlbedoScale(t) {
+  if (t <= 0) return SIGHT_LIFT;
+  if (t >= 1) return FOG_DIM;
+  if (t <= VISITED_FOG_T) {
+    return SIGHT_LIFT + (t / VISITED_FOG_T) * (VISITED_DIM - SIGHT_LIFT);
+  }
+  return VISITED_DIM + ((t - VISITED_FOG_T) / (1 - VISITED_FOG_T)) * (FOG_DIM - VISITED_DIM);
+}
 /**
  * Untextured PBR + outdoor key / 1.55 exposure reads as a chalk wash.
  * Thin-instance color multiplies albedo (same path as fog), so this hits
@@ -464,7 +479,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (!colors) return;
     const p = batch.instances[index];
     const t = fogFactor ? fogFactor(p.x, p.z) : 0;
-    const c = albedoDimFor(batch.variant.kind) * (1 - t * (1 - FOG_DIM));
+    const scale = fogFactor ? fogAlbedoScale(t) : 1;
+    const c = albedoDimFor(batch.variant.kind) * scale;
     const o = index * 4;
     colors[o] = c;
     colors[o + 1] = c;

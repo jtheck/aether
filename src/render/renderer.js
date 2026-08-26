@@ -40,9 +40,10 @@ import { capacityFor } from '../sim/capacity.js';
 import {
   UNIT_MODEL_URLS,
   hasUnitModel,
-  loadBakedUnitMesh,
   loadBakedUnitMeshParts,
 } from './unitModels.js';
+import { spawnSeatsFromSockets } from './transportSeats.js';
+import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
 import {
   fillVatInstanceParams,
   isVatUnitType,
@@ -52,7 +53,7 @@ import {
   writeVatSlotParams,
 } from './vatUnits.js';
 import { createCelestialRig } from './celestial.js';
-import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from './terrain.js';
+import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, surfaceHeightAt } from './terrain.js';
 import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
@@ -436,9 +437,39 @@ const ORDER_SPIN_RAD = Math.PI * 1.875;
 /** Boot / grow floor for type×owner unit batches. */
 const UNIT_BATCH_INITIAL = 32;
 
+function tintableParts(batch) {
+  return batch.vatParts ?? batch.staticParts ?? null;
+}
+
+function partWhiteColors(batch) {
+  return batch.vatWhiteColors ?? batch.partWhiteColors ?? null;
+}
+
 function vatPartMeshes(batch) {
-  if (batch.vatParts?.length) return batch.vatParts.map((p) => p.mesh);
-  return [batch.mesh];
+  const parts = tintableParts(batch);
+  if (parts?.length) return parts.map((p) => p.mesh);
+  return batch.mesh ? [batch.mesh] : [];
+}
+
+function applyPartColors(batch) {
+  const parts = tintableParts(batch);
+  if (parts?.length) {
+    const white = partWhiteColors(batch);
+    for (const part of parts) {
+      setThinInstanceColors(part.mesh, part.isTeamColor ? batch.colors : white);
+    }
+    return;
+  }
+  if (batch.mesh) setThinInstanceColors(batch.mesh, batch.colors);
+}
+
+function fillRgbaWhite(buf, from, to) {
+  for (let s = from; s < to; s++) {
+    buf[s * 4] = 1;
+    buf[s * 4 + 1] = 1;
+    buf[s * 4 + 2] = 1;
+    buf[s * 4 + 3] = 1;
+  }
 }
 
 /** Map unit thin-instance meshes for GPU pick (pickable only when USE_GPU_PICK). */
@@ -471,13 +502,7 @@ function resizeTypeBatch(batch, entityIds, opts = {}) {
       for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
     }
   }
-  if (batch.vatParts?.length) {
-    for (const part of batch.vatParts) {
-      setThinInstanceColors(part.mesh, part.isTeamColor ? batch.colors : batch.vatWhiteColors);
-    }
-  } else {
-    setThinInstanceColors(batch.mesh, batch.colors);
-  }
+  applyPartColors(batch);
   for (const mesh of vatPartMeshes(batch)) flushThinInstances(mesh);
 }
 
@@ -501,36 +526,40 @@ function growTypeBatchCapacity(batch, newCap) {
     colors[s * 4 + 3] = 1;
   }
 
-  if (batch.vatParts?.length) {
-    const vatWhiteColors = new Float32Array(newCap * 4);
-    vatWhiteColors.set(batch.vatWhiteColors.subarray(0, oldCap * 4));
-    for (let s = oldCap; s < newCap; s++) {
-      vatWhiteColors[s * 4] = 1;
-      vatWhiteColors[s * 4 + 1] = 1;
-      vatWhiteColors[s * 4 + 2] = 1;
-      vatWhiteColors[s * 4 + 3] = 1;
+  const parts = tintableParts(batch);
+  if (parts?.length) {
+    const prevWhite = partWhiteColors(batch);
+    const white = new Float32Array(newCap * 4);
+    if (prevWhite) white.set(prevWhite.subarray(0, oldCap * 4));
+    fillRgbaWhite(white, oldCap, newCap);
+    if (batch.vatParts?.length) {
+      const vatParams = new Float32Array(newCap * 4);
+      vatParams.set(batch.vatParams.subarray(0, oldCap * 4));
+      const vatMoving = new Uint8Array(newCap);
+      vatMoving.set(batch.vatMoving.subarray(0, oldCap));
+      const vatPhase = new Float32Array(newCap);
+      vatPhase.set(batch.vatPhase.subarray(0, oldCap));
+      const frameCount = Math.max(1, batch.idleClip?.frameCount ?? 1);
+      for (let s = oldCap; s < newCap; s++) {
+        vatPhase[s] = (s * 17 + 3) % frameCount;
+      }
+      fillVatInstanceParams(vatParams, newCap, batch.idleClip, batch.walkClip, vatMoving);
+      for (const part of batch.vatParts) {
+        setThinInstances(part.mesh, matrices, newCap);
+        setThinInstanceColors(part.mesh, part.isTeamColor ? colors : white);
+        part.handle.setInstances(vatParams);
+      }
+      batch.vatWhiteColors = white;
+      batch.vatParams = vatParams;
+      batch.vatMoving = vatMoving;
+      batch.vatPhase = vatPhase;
+    } else {
+      for (const part of batch.staticParts) {
+        setThinInstances(part.mesh, matrices, newCap);
+        setThinInstanceColors(part.mesh, part.isTeamColor ? colors : white);
+      }
+      batch.partWhiteColors = white;
     }
-    const vatParams = new Float32Array(newCap * 4);
-    vatParams.set(batch.vatParams.subarray(0, oldCap * 4));
-    const vatMoving = new Uint8Array(newCap);
-    vatMoving.set(batch.vatMoving.subarray(0, oldCap));
-    const vatPhase = new Float32Array(newCap);
-    vatPhase.set(batch.vatPhase.subarray(0, oldCap));
-    const frameCount = Math.max(1, batch.idleClip?.frameCount ?? 1);
-    for (let s = oldCap; s < newCap; s++) {
-      vatPhase[s] = (s * 17 + 3) % frameCount;
-    }
-    fillVatInstanceParams(vatParams, newCap, batch.idleClip, batch.walkClip, vatMoving);
-
-    for (const part of batch.vatParts) {
-      setThinInstances(part.mesh, matrices, newCap);
-      setThinInstanceColors(part.mesh, part.isTeamColor ? colors : vatWhiteColors);
-      part.handle.setInstances(vatParams);
-    }
-    batch.vatWhiteColors = vatWhiteColors;
-    batch.vatParams = vatParams;
-    batch.vatMoving = vatMoving;
-    batch.vatPhase = vatPhase;
   } else if (batch.mesh) {
     setThinInstances(batch.mesh, matrices, newCap);
     setThinInstanceColors(batch.mesh, colors);
@@ -541,8 +570,16 @@ function growTypeBatchCapacity(batch, newCap) {
   batch.gpuCapacity = newCap;
 }
 
-async function loadUnitMeshTemplate(engine, url) {
-  return loadBakedUnitMesh(engine, url);
+async function loadStaticUnitParts(engine, url) {
+  const meshes = await loadBakedUnitMeshParts(engine, url);
+  /** @type {{ mesh: object, isTeamColor: boolean }[]} */
+  const parts = [];
+  for (const mesh of meshes) {
+    const team = isTeamColorMaterial(mesh.material);
+    if (team) prepareTeamColorMaterial(engine, mesh);
+    parts.push({ mesh, isTeamColor: team });
+  }
+  return parts;
 }
 
 /**
@@ -612,12 +649,26 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
     };
   }
 
-  const mesh = await loadUnitMeshTemplate(engine, UNIT_MODEL_URLS[typeId]);
-  const { matrices, colors, gpuCapacity: cap } = initThinInstances(mesh, activeCount, gpuCap);
+  const staticParts = await loadStaticUnitParts(engine, UNIT_MODEL_URLS[typeId]);
+  if (!staticParts.length) throw new Error(`no mesh parts for unit type ${typeId}`);
+  const mesh = staticParts[0].mesh;
+  const cap = Math.max(activeCount, gpuCap, 1);
+  const matrices = new Float32Array(cap * 16);
+  const colors = new Float32Array(cap * 4);
+  const partWhite = new Float32Array(cap * 4);
+  fillRgbaWhite(colors, 0, cap);
+  fillRgbaWhite(partWhite, 0, cap);
+  for (const part of staticParts) {
+    setThinInstances(part.mesh, matrices, cap);
+    if (activeCount < cap) setThinInstanceCount(part.mesh, activeCount);
+    setThinInstanceColors(part.mesh, part.isTeamColor ? colors : partWhite);
+  }
   return {
     mesh,
     matrices,
     colors,
+    partWhiteColors: partWhite,
+    staticParts,
     baseSize: 1,
     entityIds: [],
     gpuCapacity: cap,
@@ -686,8 +737,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     shadowMaxZ: worldHalfF * 2.75,
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
-    darkness: 0.22,
-    frustumEdgeFalloff: 0.08,
+    darkness: 0.16,
+    frustumEdgeFalloff: 0.04,
     forceRefreshEveryFrame: true,
   };
   const shadowGen = createCsmDirectionalShadowGenerator(engine, sun, shadowOpts);
@@ -767,6 +818,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let tileGridVisible = false;
   /** Occupancy fills lag behind field while grid is hidden; refresh on show. */
   let tileGridOccupancyDirty = false;
+  /** @type {{ setFocus: Function, dispose: () => void } | null} */
+  let placementGrid = null;
+  /** @type {{ type: string, x: number, z: number, valid?: boolean } | null} */
+  let placementFocus = null;
   let ground = null;
   /** @type {object | null} */
   let fieldSnap = opts.field ?? null;
@@ -812,12 +867,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function rebuildTileGrid(snap) {
     tileGrid?.dispose?.();
+    placementGrid?.dispose?.();
     tileGrid = null;
+    placementGrid = null;
     tileGridOccupancyDirty = false;
     if (!snap) return;
     tileGrid = createTileGridOverlay(engine, scene, snap);
     // Apply current toggle after rebuild (mesh starts hidden / off-scene).
     tileGrid.setVisible(tileGridVisible);
+    placementGrid = createPlacementGridOverlay(engine, scene);
+    syncPlacementGrid();
   }
 
   /** Refresh blocked/slow fills from the live field (trees, buildings, etc.). */
@@ -825,6 +884,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!tileGrid || !fieldSnap) return;
     tileGrid.refreshOccupancy?.(fieldSnap);
     tileGridOccupancyDirty = false;
+  }
+
+  /** Local G-grid around the placement ghost. Hidden while the full G overlay is on. */
+  function syncPlacementGrid() {
+    if (!placementGrid) return;
+    if (tileGridVisible || !placementFocus || !fieldSnap) {
+      placementGrid.setFocus(null);
+      return;
+    }
+    placementGrid.setFocus(fieldSnap, placementFocus);
   }
 
   /** Unit templates wait on this so 3D trees/rocks win the first pop-in. */
@@ -930,7 +999,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
       }
     }
-    addToScene(scene, batch.mesh);
+    for (const partMesh of vatPartMeshes(batch)) addToScene(scene, partMesh);
     noteBatchMeshesForShadow(batch);
     typeBatches.set(key, batch);
     registerUnitPickBatch(unitPickMeshes, batch);
@@ -1130,6 +1199,22 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     engine,
     scene,
     Math.max(capacity, gpuCapacity, 1) + 64,
+  );
+  // Same thin-instance spheres as H-key pick volumes — always on for holy armor.
+  const holyShields = createPickHitboxRenderer(
+    engine,
+    scene,
+    capacityFor(Math.max(capacity, gpuCapacity, 1), { initial: 256 }),
+    {
+      startVisible: true,
+      name: 'holy-shield',
+      segments: 16,
+      renderOrder: 190,
+      depthWrite: false,
+      diffuseColor: [0.78, 0.9, 1],
+      emissiveColor: [0.7, 0.84, 1],
+      alpha: 0.5,
+    },
   );
   const particles = createParticleSystem(engine, scene, {
     getEye: cameraEyePos,
@@ -1689,6 +1774,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     clearHover() {},
     pickOptionAtRay() { return null; },
     hitAtRay() { return false; },
+    hitHubHoleAtRay() { return false; },
     registerLabels() {},
     disposeLabels() {},
     setUtilityAvailability() {},
@@ -2802,6 +2888,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // Build menu: screen-anchored HUD (project agora, edge-clamp, fixed depth).
     if (buildingRadial.isOpen()) {
       buildingRadial.update?.(camera);
+      agoraProps.setHubFlagPose?.(buildingRadial.hubFlagPose ?? null);
+    } else {
+      agoraProps.setHubFlagPose?.(null);
     }
     if (actionRadial.isOpen()) {
       actionRadial.update?.(camera);
@@ -2818,6 +2907,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     // Selection / order matrices marked dirty on write.
     pickHitboxes.commit();
+    holyShields.commit();
     projectileRenderer.commit();
     frogRenderer.sync();
     frogRenderer.commit();
@@ -3070,7 +3160,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
 
     try {
-      const marker = await loadUnitMeshTemplate(engine, ORDER_MARKER_URL);
+      const markerParts = await loadBakedUnitMeshParts(engine, ORDER_MARKER_URL);
+      const marker = markerParts[0];
+      if (!marker) throw new Error('order marker mesh missing');
       const mat = marker.material;
       if (mat) {
         applyUnlitHudMaterial(mat);
@@ -3216,6 +3308,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       agoraProps.setRallyGhost?.(pos ?? null);
     },
 
+    /** Rewash TeamColor after the local profile swatch changes. */
+    refreshOwnerTints() {
+      buildingProps?.refreshTeamColors?.();
+      agoraProps?.refreshTeamColors?.();
+      buildingRadial?.refreshHubFlagOwner?.();
+    },
+
     /** Place constructed buildings. */
     async placeBuildings(list) {
       await buildingProps.place?.(list ?? []);
@@ -3231,6 +3330,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /** Placement ghost (translucent building mesh). */
     setBuildingGhost(pos) {
       buildingProps.setGhost?.(pos ?? null);
+      placementFocus = pos?.type
+        ? { type: pos.type, x: pos.x, z: pos.z, valid: pos.valid !== false }
+        : null;
+      syncPlacementGrid();
     },
 
     /**
@@ -3258,13 +3361,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /** Build menu (tilted ring + pads + icons). Screen-stable size via eye distance. */
-    showBuildingRadial(x, z) {
+    showBuildingRadial(x, z, owner = 0) {
       actionRadial.hide();
-      buildingRadial.showAt(x, z, camera);
+      buildingRadial.showAt(x, z, camera, owner);
+      agoraProps.setHubFlagPose?.(buildingRadial.hubFlagPose ?? null);
     },
 
     hideBuildingRadial() {
       buildingRadial.hide();
+      agoraProps.setHubFlagPose?.(null);
     },
 
     isBuildingRadialOpen() {
@@ -3279,6 +3384,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      */
     showActionRadial(x, z, buildingType) {
       buildingRadial.hide();
+      agoraProps.setHubFlagPose?.(null);
       actionRadial.showAt(x, z, buildingType, camera);
     },
 
@@ -3295,7 +3401,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       actionRadial.setResearchedUpgrades?.(ids);
     },
 
-    /** Dull / enable Rally · Garrison · Demolish · Cancel on the open action radial. */
+    /** Dull / enable Cancel on the open action radial. */
     setActionRadialUtilityAvailability(avail) {
       actionRadial.setUtilityAvailability?.(avail);
     },
@@ -3309,7 +3415,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       actionRadial.setTrackDisplay?.(tracks);
     },
 
-    /** Arm demolish/cancel for two-click confirm (`null` clears). */
+    /** Arm cancel for two-click confirm (`null` clears). */
     setActionRadialArmed(id) {
       actionRadial.setArmed?.(id ?? null);
     },
@@ -3342,10 +3448,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Pick a radial option (CPU disc hit — pie / pad / icon). Sync-friendly.
+     * Pick a radial option (CPU disc hit — pie / pad / icon; agora pie only). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
-     * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'utility' | 'cancel', id?: string } | null>}
+     * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'cancel', id?: string } | null>}
      */
     async pickBuildingRadial(clientX, clientY) {
       const ray = radialPickingRay(clientX, clientY);
@@ -3388,7 +3494,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Sync gesture test: over an option disc or the main ring band.
+     * Sync gesture test: over an option disc, hub hole, or the main ring band.
      * Must not await GPU (pointerdown latch).
      * Always ray-test — a stale hover must not claim the whole screen.
      */
@@ -3399,6 +3505,20 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       if (actionRadial.isOpen()) {
         return actionRadial.hitAtRay?.(ray) ?? false;
+      }
+      return false;
+    },
+
+    /**
+     * Empty hub hole that frames the selected building (click-through on pointer-up).
+     */
+    hitBuildingRadialHub(clientX, clientY) {
+      const ray = radialPickingRay(clientX, clientY);
+      if (buildingRadial.isOpen()) {
+        return buildingRadial.hitHubHoleAtRay?.(ray) ?? false;
+      }
+      if (actionRadial.isOpen()) {
+        return actionRadial.hitHubHoleAtRay?.(ray) ?? false;
       }
       return false;
     },
@@ -3494,12 +3614,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       // Field slowMask is already synced on session.field (= fieldSnap).
       if (tileGridVisible) refreshTileGridOccupancy();
       else tileGridOccupancyDirty = true;
+      syncPlacementGrid();
     },
 
     /** Rebuild blocked/slow overlay from the current field (grid-based buildings, etc.). */
     refreshTileGrid() {
       if (tileGridVisible) refreshTileGridOccupancy();
       else tileGridOccupancyDirty = true;
+      syncPlacementGrid();
     },
 
     applyFireZoneUpdates(updatesList) {
@@ -3624,6 +3746,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       tileGridVisible = !!on;
       if (tileGridVisible && tileGridOccupancyDirty) refreshTileGridOccupancy();
       tileGrid?.setVisible(tileGridVisible);
+      syncPlacementGrid();
       return tileGridVisible;
     },
 
@@ -3788,6 +3911,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       pickHitboxes.sync(spheres);
     },
 
+    /**
+     * White absorb bubbles on living units with shieldHp.
+     * Same `{ x, y, z, r }` shape as pick hitboxes.
+     */
+    syncHolyShields(spheres) {
+      holyShields.sync(spheres);
+    },
+
+    debugHolyShields() {
+      return holyShields.debug();
+    },
+
     resetCamera() {
       cameraController.reset();
     },
@@ -3831,14 +3966,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           batch.colors[s * 4 + 2] = allColors[i * 4 + 2];
           batch.colors[s * 4 + 3] = allColors[i * 4 + 3];
         }
-        if (batch.vatParts?.length) {
-          // Shirt (TeamColor) gets owner tint; body/pants/shoes stay authored colors.
-          for (const part of batch.vatParts) {
-            setThinInstanceColors(part.mesh, part.isTeamColor ? batch.colors : batch.vatWhiteColors);
-          }
-        } else {
-          setThinInstanceColors(batch.mesh, batch.colors);
-        }
+        applyPartColors(batch);
       }
       if (fallback) {
         for (let s = 0; s < fallback.entityIds.length; s++) {
@@ -3854,6 +3982,21 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN) {
       return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride);
+    },
+
+    /**
+     * Authored rider empties for a transport type, once its mesh package is in.
+     * Empty until bake includes `spawn_anchor*` — callers fall back to generated seats.
+     */
+    transportSeats(typeId) {
+      const want = typeId | 0;
+      for (const [key, batch] of typeBatches) {
+        const typeFromKey = Number(String(key).split(/[:#]/)[0]);
+        if (typeFromKey !== want) continue;
+        const seats = spawnSeatsFromSockets(batch.fxSockets);
+        if (seats.length) return seats;
+      }
+      return [];
     },
 
     debugBatches(count, typesArr, ownersArr) {
@@ -3910,6 +4053,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       sporeBloomFx.clear();
       locustFx.clear();
       mushrooms?.clear?.();
+      holyShields.clear();
       groundFires.clear();
       trailGenerations.fill(0);
       trailLastEmitMs.fill(0);

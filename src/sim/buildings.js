@@ -255,6 +255,11 @@ export function buildingHasMenu(typeId) {
   return getBuildingMenu(typeId) != null;
 }
 
+/** Production buildings that spawn units can take a train rally. */
+export function buildingCanRally(typeId) {
+  return (BUILDING_MENUS[typeId]?.units?.length ?? 0) > 0;
+}
+
 /**
  * @param {string} typeId
  * @returns {typeId is BuildingTypeId}
@@ -499,6 +504,8 @@ export function createBuilding(opts) {
     hasRally: 0,
     rallyX: 0,
     rallyZ: 0,
+    /** ORDER.MOVE or ORDER.ATTACK_MOVE for trained units walking to the rally. */
+    rallyOrder: ORDER.MOVE,
     /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
     tracks: [],
   };
@@ -737,6 +744,7 @@ export function applyPlaceBuilding(w, field, cmd) {
     hasRally: 0,
     rallyX: 0,
     rallyZ: 0,
+    rallyOrder: ORDER.MOVE,
     tracks: [],
   });
   if (field) {
@@ -748,22 +756,46 @@ export function applyPlaceBuilding(w, field, cmd) {
 }
 
 /**
- * Set a building's train rally point (world Q16.16 xz).
+ * Set a building's train rally point (world Q16.16 xz) and walk-out order.
  * @param {object} w
- * @param {{ playerId?: number, buildingIndex: number, tx: number, ty: number }} cmd
+ * @param {{ playerId?: number, buildingIndex?: number, buildingIndices?: number[], tx: number, ty: number, order?: number }} cmd
  */
 export function applySetRally(w, cmd) {
   const buildings = w.buildings;
   if (!buildings?.length) return;
-  const bi = cmd.buildingIndex | 0;
-  if (bi < 0 || bi >= buildings.length) return;
-  const b = buildings[bi];
-  const playerId = (cmd.playerId ?? -1) | 0;
-  if (playerId >= 0 && b.owner !== playerId) return;
-  b.hasRally = 1;
-  b.rallyX = cmd.tx | 0;
-  b.rallyZ = cmd.ty | 0;
-  w.buildingsDirty = 1;
+  const indices = cmd.buildingIndices?.length
+    ? cmd.buildingIndices
+    : [cmd.buildingIndex];
+  const order =
+    (cmd.order | 0) === ORDER.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE;
+  let dirty = false;
+  for (let i = 0; i < indices.length; i++) {
+    const bi = indices[i] | 0;
+    if (bi < 0 || bi >= buildings.length) continue;
+    const b = buildings[bi];
+    const playerId = (cmd.playerId ?? -1) | 0;
+    if (playerId >= 0 && b.owner !== playerId) continue;
+    if (!buildingCanRally(b.type)) continue;
+    const rx = cmd.tx | 0;
+    const rz = cmd.ty | 0;
+    if (
+      !isRallyBeyondBuilding(
+        b.type,
+        fx.toFloat(b.x),
+        fx.toFloat(b.z),
+        fx.toFloat(rx),
+        fx.toFloat(rz),
+      )
+    ) {
+      continue;
+    }
+    b.hasRally = 1;
+    b.rallyX = rx;
+    b.rallyZ = rz;
+    b.rallyOrder = order;
+    dirty = true;
+  }
+  if (dirty) w.buildingsDirty = 1;
 }
 
 /**
@@ -861,6 +893,11 @@ export function serializeBuildings(buildings) {
     hasRally: b.hasRally | 0,
     rallyX: b.hasRally ? fx.toFloat(b.rallyX) : 0,
     rallyZ: b.hasRally ? fx.toFloat(b.rallyZ) : 0,
+    rallyOrder: b.hasRally
+      ? (b.rallyOrder | 0) === ORDER.ATTACK_MOVE
+        ? ORDER.ATTACK_MOVE
+        : ORDER.MOVE
+      : ORDER.MOVE,
     tracks: (b.tracks ?? []).map((t) => ({
       kind: t.kind,
       id: t.id,
@@ -890,6 +927,7 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.hasRally | 0);
     mix(b.rallyX | 0);
     mix(b.rallyZ | 0);
+    mix(b.rallyOrder | 0);
     const tracks = b.tracks ?? [];
     mix(tracks.length);
     for (let ti = 0; ti < tracks.length; ti++) {

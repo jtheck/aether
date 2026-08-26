@@ -4,8 +4,6 @@ import {
   createEngine,
   createSceneContext,
   createArcRotateCamera,
-  createHemisphericLight,
-  createDirectionalLight,
   addToScene,
   onBeforeRender,
   registerScene,
@@ -16,7 +14,15 @@ import {
   createMeshFromData,
   createStandardMaterial,
 } from '../vendor/lite/liteVendor.js';
-import { buildField, TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
+import {
+  buildField,
+  FORGE_MAP_SIZES,
+  snapTilesToOddChunks,
+  TABLE_CHUNK_TILES,
+  TILE_SIZE_F,
+  worldHalfFFromField,
+} from '../sim/field.js';
+import * as fx from '../sim/fixed.js';
 import {
   applyTableSilhouette,
   cellWorldBox,
@@ -34,33 +40,48 @@ import {
   worldToCell,
 } from '../sim/tableShape.js';
 import { TERRAIN } from '../sim/field.js';
-import { encodeGarden, fieldFromGarden } from '../sim/garden.js';
+import { decodeGarden, encodeGarden, fieldFromGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
+import { UNIT_DEFS } from '../sim/unitTypes.js';
+import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
 import { createCameraController } from '../render/cameraController.js';
+import { createCelestialRig, defaultCelestialState } from '../render/celestial.js';
 import { createTerrainFromField, createTileGridOverlay } from '../render/terrain.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
 
-const SIZES = [64, 128, 192];
-const DEFAULT_SIZE = 128;
+const SIZES = FORGE_MAP_SIZES;
+const DEFAULT_SIZE = SIZES[1];
 const DEFAULT_SEED = 12345;
 
 const state = {
   layer: 'table',
   terrain: TERRAIN.GRASS,
+  scenery: SCENERY.TREE,
+  placeKind: 'unit',
+  placeType: 1,
+  owner: 0,
   brush: 1,
-  showGrid: true,
+  showGrid: false,
   mapName: '',
   painting: false,
   selected: [],
+  units: [],
+  buildings: [],
+  agoras: [],
 };
+
+const CELESTIAL_STORE_KEY = 'aether.forge.celestial';
 
 let field;
 let engine;
 let scene;
 let camera;
 let cam;
+let celestial = null;
 let terrain = null;
 let grid = null;
 let selectMesh = null;
+let placeMeshes = [];
 let fieldGen = 0;
 let rebuildTimer = 0;
 let sceneRegistered = false;
@@ -98,11 +119,12 @@ function pickGround(clientX, clientY) {
 }
 
 function newField(width, seed, extras = {}) {
-  const next = buildField(seed, { width, height: width });
+  const size = snapTilesToOddChunks(width);
+  const next = buildField(seed, { width: size, height: size });
   applyTableSilhouette(next, {
-    cellSize: 16,
-    cellMask: extras.cellMask ?? createFullCellMask(width, width, 16),
-    cellRadius: extras.cellRadius ?? createFullCellRadius(width, width, 16, extras.radius ?? DEFAULT_CELL_RADIUS),
+    cellSize: TABLE_CHUNK_TILES,
+    cellMask: extras.cellMask ?? createFullCellMask(size, size, TABLE_CHUNK_TILES),
+    cellRadius: extras.cellRadius ?? createFullCellRadius(size, size, TABLE_CHUNK_TILES, extras.radius ?? DEFAULT_CELL_RADIUS),
   });
   return next;
 }
@@ -117,6 +139,8 @@ function cancelPendingPaint() {
   if (paintRaf) cancelAnimationFrame(paintRaf);
   paintRaf = 0;
   pendingPaintTiles.length = 0;
+  if (sceneryRaf) cancelAnimationFrame(sceneryRaf);
+  sceneryRaf = 0;
 }
 
 function atlasChunkSize(snap = field) {
@@ -145,11 +169,165 @@ function queueTerrainPaint(tiles) {
   paintRaf = requestAnimationFrame(flushTerrainPaint);
 }
 
+let sceneryRaf = 0;
+function queueSceneryPaint() {
+  if (sceneryRaf) return;
+  sceneryRaf = requestAnimationFrame(async () => {
+    sceneryRaf = 0;
+    if (!terrain?.rebuildScenery) {
+      scheduleRebuild();
+      return;
+    }
+    await terrain.rebuildScenery(field, camera);
+    grid?.refreshOccupancy(field);
+    if (sceneRegistered) invalidateRenderBundles(engine);
+  });
+}
+
+function reservedFromPlacements() {
+  const half = worldHalfFFromField(field);
+  const pts = [];
+  for (const u of state.units) {
+    pts.push([(u.tx + 0.5) * TILE_SIZE_F - half, (u.tz + 0.5) * TILE_SIZE_F - half]);
+  }
+  for (const b of state.buildings) pts.push([b.x, b.z]);
+  for (const g of state.agoras) pts.push([g.x, g.z]);
+  return pts;
+}
+
+function applyPlace(pos, { remove = false } = {}) {
+  if (remove) {
+    removeNearestPlacement(pos);
+    updatePlaceMarkers();
+    return;
+  }
+  const half = worldHalfFFromField(field);
+  const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
+  const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return;
+  if (field.activeMask?.[tz * field.width + tx] === 0) return;
+  if (state.placeKind === 'unit') {
+    state.units.push({ owner: state.owner, type: state.placeType | 0, tx, tz });
+  } else if (state.placeKind === 'agora') {
+    state.agoras.push({ owner: state.owner, x: pos.x, z: pos.z });
+  } else {
+    const snapped = snapBuildingWorld(String(state.placeType), fx.fromFloat(pos.x), fx.fromFloat(pos.z));
+    state.buildings.push({
+      owner: state.owner,
+      type: String(state.placeType),
+      x: fx.toFloat(snapped.x),
+      z: fx.toFloat(snapped.z),
+      yaw: 0,
+    });
+  }
+  updatePlaceMarkers();
+}
+
+function removeNearestPlacement(pos) {
+  const pickNear = (list, getXZ) => {
+    let best = -1;
+    let bestD = 18;
+    for (let i = 0; i < list.length; i++) {
+      const p = getXZ(list[i]);
+      const d = Math.hypot(p.x - pos.x, p.z - pos.z);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    if (best >= 0) list.splice(best, 1);
+  };
+  const half = worldHalfFFromField(field);
+  if (state.placeKind === 'unit') {
+    pickNear(state.units, (u) => ({
+      x: (u.tx + 0.5) * TILE_SIZE_F - half,
+      z: (u.tz + 0.5) * TILE_SIZE_F - half,
+    }));
+  } else if (state.placeKind === 'agora') {
+    pickNear(state.agoras, (g) => ({ x: g.x, z: g.z }));
+  } else {
+    pickNear(state.buildings, (b) => ({ x: b.x, z: b.z }));
+  }
+}
+
+function pushBoxMarker(pos, idx, x, y, z, sx, sy, sz) {
+  const x0 = x - sx * 0.5;
+  const x1 = x + sx * 0.5;
+  const y0 = y;
+  const y1 = y + sy;
+  const z0 = z - sz * 0.5;
+  const z1 = z + sz * 0.5;
+  const faces = [
+    [x0, y1, z0, x1, y1, z0, x1, y1, z1, x0, y1, z1],
+    [x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0],
+    [x1, y0, z0, x1, y1, z0, x1, y1, z1, x1, y0, z1],
+    [x1, y0, z1, x1, y1, z1, x0, y1, z1, x0, y0, z1],
+    [x0, y0, z1, x0, y1, z1, x0, y1, z0, x0, y0, z0],
+  ];
+  for (const f of faces) {
+    const base = pos.length / 3;
+    pos.push(...f);
+    idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+}
+
+function updatePlaceMarkers() {
+  for (const mesh of placeMeshes) softDetachMesh(scene, mesh);
+  placeMeshes = [];
+  if (!engine || !scene) return;
+  const half = field ? worldHalfFFromField(field) : 0;
+  const ownerColor = (owner) => [
+    [0.25, 0.55, 1],
+    [1, 0.32, 0.25],
+    [0.4, 1, 0.45],
+    [0.95, 0.8, 0.25],
+    [0.75, 0.45, 1],
+  ][owner | 0] ?? [0.8, 0.8, 0.8];
+  const addMarker = (name, positions, indices, color) => {
+    if (!positions.length) return;
+    const pos = new Float32Array(positions);
+    const normals = new Float32Array(pos.length);
+    for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
+    const mesh = createMeshFromData(engine, name, pos, normals, new Uint32Array(indices));
+    const mat = createStandardMaterial();
+    mat.diffuseColor = color;
+    mat.emissiveColor = color.map((c) => c * 0.35);
+    mat.ambientColor = color.map((c) => c * 0.4);
+    mat.specularColor = [0, 0, 0];
+    mat.backFaceCulling = false;
+    mesh.material = mat;
+    mesh.pickable = false;
+    addToScene(scene, mesh);
+    placeMeshes.push(mesh);
+  };
+  const byOwner = new Map();
+  for (const u of state.units) {
+    const key = u.owner | 0;
+    if (!byOwner.has(key)) byOwner.set(key, { pos: [], idx: [] });
+    const b = byOwner.get(key);
+    pushBoxMarker(b.pos, b.idx, (u.tx + 0.5) * TILE_SIZE_F - half, 1.2, (u.tz + 0.5) * TILE_SIZE_F - half, 3.2, 6, 3.2);
+  }
+  for (const [owner, b] of byOwner) addMarker(`forge-units-${owner}`, b.pos, b.idx, ownerColor(owner));
+  const bBy = new Map();
+  for (const building of state.buildings) {
+    const key = building.owner | 0;
+    if (!bBy.has(key)) bBy.set(key, { pos: [], idx: [] });
+    const b = bBy.get(key);
+    pushBoxMarker(b.pos, b.idx, building.x, 0.4, building.z, 10, 8, 10);
+  }
+  for (const [owner, b] of bBy) addMarker(`forge-buildings-${owner}`, b.pos, b.idx, ownerColor(owner));
+  const gPos = [];
+  const gIdx = [];
+  for (const g of state.agoras) pushBoxMarker(gPos, gIdx, g.x, 0.2, g.z, 16, 3, 16);
+  addMarker('forge-agoras', gPos, gIdx, [0.95, 0.85, 0.25]);
+  if (sceneRegistered) invalidateRenderBundles(engine);
+}
+
 function flushTerrainPaint() {
   paintRaf = 0;
   const tiles = pendingPaintTiles.splice(0);
   if (!tiles.length || !field) return;
-  refreshTableTerrain(field);
+  applyAuthoredScenery(field);
   const keys = dirtyAtlasChunks(field, tiles);
   if (terrain?.rebuildAtlasChunks?.(field, keys)) {
     grid?.refreshOccupancy(field);
@@ -230,7 +408,7 @@ async function rebuildTerrain() {
   prev?.dispose?.();
   prevGrid?.dispose?.();
   const next = await createTerrainFromField(engine, scene, snap, camera, {
-    skipScenery: true,
+    skipScenery: false,
     chunkedAtlas: true,
   });
   if (gen !== fieldGen) {
@@ -247,6 +425,7 @@ async function rebuildTerrain() {
     invalidateRenderBundles(engine);
   }
   updateSelectIndicator();
+  updatePlaceMarkers();
   updateStats();
 }
 
@@ -295,11 +474,34 @@ function applyAt(pos, { add = false } = {}) {
     const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
     const dirty = paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
     if (dirty.length) queueTerrainPaint(dirty);
+    return;
   }
+  if (state.layer === 'scenery') {
+    const half = worldHalfFFromField(field);
+    const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
+    const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
+    const dirty = paintSceneryBrush(field, tx, tz, state.scenery, state.brush);
+    if (dirty.length) queueSceneryPaint();
+    return;
+  }
+  if (state.layer === 'place') applyPlace(pos, { remove: add });
+}
+
+function gardenExtras() {
+  return {
+    name: state.mapName,
+    units: state.units,
+    buildings: state.buildings,
+    agoras: state.agoras,
+  };
+}
+
+function gardenPayload() {
+  return encodeGarden(field, gardenExtras());
 }
 
 function exportMap() {
-  const json = JSON.stringify(encodeGarden(field, { name: state.mapName }), null, 0);
+  const json = JSON.stringify(gardenPayload(), null, 0);
   const blob = new Blob([json], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -308,10 +510,20 @@ function exportMap() {
   URL.revokeObjectURL(a.href);
 }
 
+function playMap() {
+  sessionStorage.setItem(GARDEN_SESSION_KEY, JSON.stringify(gardenPayload()));
+  window.open('/?garden=session&solo=1', '_blank');
+}
+
 function importFile(file) {
   file.text().then((text) => {
-    field = fieldFromGarden(JSON.parse(text));
-    state.mapName = JSON.parse(text).n || '';
+    const json = JSON.parse(text);
+    const g = decodeGarden(json);
+    field = fieldFromGarden(json);
+    state.mapName = g.name || '';
+    state.units = g.units;
+    state.buildings = g.buildings;
+    state.agoras = g.agoras;
     state.selected = [];
     syncFormFromField();
     rebuildTerrain();
@@ -373,7 +585,16 @@ function syncFormFromField() {
   const sizeEl = document.getElementById('map-size');
   const seedEl = document.getElementById('map-seed');
   const nameEl = document.getElementById('map-name');
-  if (sizeEl) sizeEl.value = String(field.width);
+  if (sizeEl) {
+    const w = String(field.width);
+    if (![...sizeEl.options].some((o) => o.value === w)) {
+      const opt = document.createElement('option');
+      opt.value = w;
+      opt.textContent = `${field.width}×${field.height}`;
+      sizeEl.appendChild(opt);
+    }
+    sizeEl.value = w;
+  }
   if (seedEl) seedEl.value = String(field.seed);
   if (nameEl) nameEl.value = state.mapName;
   updateStats();
@@ -392,6 +613,9 @@ function setLayer(layer) {
   document.getElementById('panel-file').style.display = layer === 'file' ? 'block' : 'none';
   document.getElementById('panel-table').style.display = layer === 'table' ? 'block' : 'none';
   document.getElementById('panel-terrain').style.display = layer === 'terrain' ? 'block' : 'none';
+  document.getElementById('panel-scenery').style.display = layer === 'scenery' ? 'block' : 'none';
+  document.getElementById('panel-place').style.display = layer === 'place' ? 'block' : 'none';
+  document.getElementById('panel-light').style.display = layer === 'light' ? 'block' : 'none';
 }
 
 function setTerrain(type) {
@@ -410,6 +634,9 @@ function mountUi() {
       <button data-layer="file">File</button>
       <button data-layer="table" class="active">Table</button>
       <button data-layer="terrain">Terrain</button>
+      <button data-layer="scenery">Scenery</button>
+      <button data-layer="place">Place</button>
+      <button data-layer="light">Light</button>
     </div>
     <div id="stats" class="hint"></div>
     <div id="panel-file" class="panel" style="display:none">
@@ -421,21 +648,23 @@ function mountUi() {
       <input id="map-seed" type="number" value="${DEFAULT_SEED}">
       <div class="row">
         <button id="btn-generate">Generate</button>
-        <button id="btn-export">Export</button>
+        <button id="btn-export">Export .garden</button>
         <button id="btn-import">Import</button>
+        <button id="btn-play">Play</button>
       </div>
       <input id="import-file" type="file" accept=".garden,.json" style="display:none">
+      <p class="hint">v4 .garden: table, terrain, scenery, units, buildings, agoras. Play opens a solo match from this map.</p>
     </div>
     <div id="panel-table" class="panel">
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
       <label><input id="chunk-enabled" type="checkbox" checked disabled> Chunk enabled</label>
       <label>Radius <span id="radius-label">${DEFAULT_CELL_RADIUS}</span></label>
       <input id="chunk-radius" type="range" min="0" max="32" value="${DEFAULT_CELL_RADIUS}" disabled>
-      <p class="hint">0 = corner block. Outside and inside corners use the selected chunk's radius.</p>
+      <p class="hint">0 = sharp corner + plinth. Raise radius to fillet that corner. Odd boards get a center plinth. Outer rails get matching side plinths.</p>
       <div class="row">
         <button id="btn-enable-all">Enable all chunks</button>
       </div>
-      <label><input id="show-grid" type="checkbox" checked> Show pass grid (red / yellow)</label>
+      <label><input id="show-grid" type="checkbox"> Show pass grid (dev red / yellow)</label>
     </div>
     <div id="panel-terrain" class="panel" style="display:none">
       <div class="row">
@@ -445,6 +674,57 @@ function mountUi() {
       </div>
       <label>Brush <span id="brush-label">1</span></label>
       <input id="brush-size" type="range" min="0" max="6" value="1">
+    </div>
+    <div id="panel-scenery" class="panel" style="display:none">
+      <div class="row">
+        <button data-scenery="${SCENERY.TREE}" class="active">Tree</button>
+        <button data-scenery="${SCENERY.ROCK_PLAIN}">Rock</button>
+        <button data-scenery="${SCENERY.ROCK_MOSS}">Moss rock</button>
+        <button data-scenery="${SCENERY.ROCK_SNOW}">Big rock</button>
+        <button data-scenery="${SCENERY.NONE}">Erase</button>
+      </div>
+      <div class="row">
+        <button id="btn-gen-scenery">Generate trees / rocks</button>
+        <button id="btn-clear-scenery">Clear scenery</button>
+      </div>
+      <p class="hint">Uses the File seed. Generation keeps units and buildings clear.</p>
+    </div>
+    <div id="panel-place" class="panel" style="display:none">
+      <label>Owner</label>
+      <input id="place-owner" type="number" min="0" max="4" value="0">
+      <label>Units</label>
+      <div class="row">
+        ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}">${u.name}</button>`).join('')}
+      </div>
+      <label>Buildings</label>
+      <div class="row">
+        <button data-place="agora" data-type="agora">Agora</button>
+        ${PLACEABLE_BUILDINGS.map((b) => `<button data-place="building" data-type="${b.id}">${b.name}</button>`).join('')}
+      </div>
+      <p class="hint">Click to place. Shift-click to remove the nearest of that kind.</p>
+    </div>
+    <div id="panel-light" class="panel" style="display:none">
+      <p class="hint">Body 1 casts shadows. Hemi / emit fill the olive board; moon is a cool second sun.</p>
+      ${[0, 1].map((i) => `
+        <p class="hint">${i === 0 ? 'Body 1' : 'Body 2'}</p>
+        <label>Kind</label>
+        <select id="light-${i}-kind">
+          <option value="sun">Sun</option>
+          <option value="moon">Moon</option>
+          <option value="hemi">Hemi</option>
+          <option value="emit">Emit</option>
+        </select>
+        <label>Azimuth <span id="light-${i}-az-label"></span></label>
+        <input id="light-${i}-az" type="range" min="0" max="360" step="1">
+        <label>Elevation <span id="light-${i}-el-label"></span></label>
+        <input id="light-${i}-el" type="range" min="5" max="85" step="1">
+        <label>Intensity <span id="light-${i}-int-label"></span></label>
+        <input id="light-${i}-int" type="range" min="0" max="2.5" step="0.01">
+      `).join('')}
+      <div class="row">
+        <button id="btn-light-spin">Spin lights</button>
+        <button id="btn-light-reset">Reset lights</button>
+      </div>
     </div>
   `;
   document.body.appendChild(ui);
@@ -457,6 +737,39 @@ function mountUi() {
   });
   ui.querySelectorAll('[data-terrain]').forEach((b) => {
     b.addEventListener('click', () => setTerrain(Number(b.dataset.terrain)));
+  });
+  ui.querySelectorAll('[data-scenery]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.scenery = Number(b.dataset.scenery);
+      ui.querySelectorAll('[data-scenery]').forEach((x) => {
+        x.classList.toggle('active', Number(x.dataset.scenery) === state.scenery);
+      });
+    });
+  });
+  ui.querySelectorAll('[data-place]').forEach((b) => {
+    b.addEventListener('click', () => {
+      state.placeKind = b.dataset.place;
+      state.placeType = b.dataset.place === 'unit' ? Number(b.dataset.type) : b.dataset.type;
+      ui.querySelectorAll('[data-place]').forEach((x) => {
+        x.classList.toggle('active', x === b);
+      });
+    });
+  });
+  ui.querySelector('[data-place]')?.classList.add('active');
+  document.getElementById('place-owner').addEventListener('input', (e) => {
+    state.owner = Math.max(0, Math.min(4, Number(e.target.value) || 0));
+  });
+  document.getElementById('btn-gen-scenery').addEventListener('click', () => {
+    populateScenery(field, null, reservedFromPlacements());
+    queueSceneryPaint();
+    grid?.refreshOccupancy(field);
+  });
+  document.getElementById('btn-clear-scenery').addEventListener('click', () => {
+    if (field.sceneryType) field.sceneryType.fill(0);
+    if (field.treeStock) field.treeStock.fill(0);
+    applyAuthoredScenery(field);
+    queueSceneryPaint();
+    grid?.refreshOccupancy(field);
   });
   document.getElementById('map-name').addEventListener('input', (e) => {
     state.mapName = e.target.value;
@@ -484,19 +797,24 @@ function mountUi() {
   document.getElementById('btn-enable-all').addEventListener('click', () => {
     applyTableSilhouette(field, {
       ...field.tableShape,
-      cellMask: createFullCellMask(field.width, field.height, 16),
+      cellMask: createFullCellMask(field.width, field.height, TABLE_CHUNK_TILES),
     });
     scheduleRebuild();
     updateSelectUi();
   });
   document.getElementById('btn-generate').addEventListener('click', () => {
-    const size = Number(document.getElementById('map-size').value) || DEFAULT_SIZE;
+    const size = snapTilesToOddChunks(Number(document.getElementById('map-size').value) || DEFAULT_SIZE);
     const seed = Number(document.getElementById('map-seed').value) || 0;
     field = newField(size, seed);
     state.selected = [];
+    state.units = [];
+    state.buildings = [];
+    state.agoras = [];
+    celestial?.setWorldHalfF(worldHalfFFromField(field));
     rebuildTerrain();
   });
   document.getElementById('btn-export').addEventListener('click', exportMap);
+  document.getElementById('btn-play').addEventListener('click', playMap);
   document.getElementById('btn-import').addEventListener('click', () => {
     document.getElementById('import-file').click();
   });
@@ -507,18 +825,76 @@ function mountUi() {
   });
 }
 
+function loadForgeCelestial() {
+  try {
+    const raw = localStorage.getItem(CELESTIAL_STORE_KEY);
+    return raw ? JSON.parse(raw) : defaultCelestialState();
+  } catch {
+    return defaultCelestialState();
+  }
+}
+
+function persistCelestial() {
+  if (!celestial) return;
+  try {
+    localStorage.setItem(CELESTIAL_STORE_KEY, JSON.stringify(celestial.getState()));
+  } catch { /* quota / private mode */ }
+}
+
+function syncLightUi() {
+  if (!celestial) return;
+  const s = celestial.getState();
+  for (let i = 0; i < 2; i++) {
+    const b = s.bodies[i];
+    const az = ((b.azimuth % 360) + 360) % 360;
+    document.getElementById(`light-${i}-kind`).value = b.kind;
+    document.getElementById(`light-${i}-az`).value = String(Math.round(az));
+    document.getElementById(`light-${i}-el`).value = String(Math.round(b.elevation));
+    document.getElementById(`light-${i}-int`).value = String(b.intensity);
+    document.getElementById(`light-${i}-az-label`).textContent = `${Math.round(az)}°`;
+    document.getElementById(`light-${i}-el-label`).textContent = `${Math.round(b.elevation)}°`;
+    document.getElementById(`light-${i}-int-label`).textContent = b.intensity.toFixed(2);
+  }
+}
+
+function readLightUi() {
+  if (!celestial) return;
+  const s = celestial.getState();
+  for (let i = 0; i < 2; i++) {
+    s.bodies[i].kind = document.getElementById(`light-${i}-kind`).value;
+    s.bodies[i].azimuth = Number(document.getElementById(`light-${i}-az`).value);
+    s.bodies[i].elevation = Number(document.getElementById(`light-${i}-el`).value);
+    s.bodies[i].intensity = Number(document.getElementById(`light-${i}-int`).value);
+  }
+  celestial.apply(s);
+  persistCelestial();
+  syncLightUi();
+}
+
+function bindLightUi() {
+  for (let i = 0; i < 2; i++) {
+    for (const id of [`light-${i}-kind`, `light-${i}-az`, `light-${i}-el`, `light-${i}-int`]) {
+      document.getElementById(id).addEventListener('input', readLightUi);
+    }
+  }
+  document.getElementById('btn-light-reset').addEventListener('click', () => {
+    celestial.apply(defaultCelestialState());
+    persistCelestial();
+    syncLightUi();
+  });
+  document.getElementById('btn-light-spin').addEventListener('click', (e) => {
+    const on = celestial.toggleSpin();
+    e.currentTarget.textContent = on ? 'Stop spin' : 'Spin lights';
+  });
+  syncLightUi();
+}
+
 const canvas = document.getElementById('canvas');
 
 async function main() {
   mountUi();
   engine = await createEngine(canvas, { msaaSamples: 1 });
   scene = createSceneContext(engine);
-  if (scene.clearColor) {
-    scene.clearColor.r = 0.06;
-    scene.clearColor.g = 0.11;
-    scene.clearColor.b = 0.16;
-    scene.clearColor.a = 1;
-  }
 
   field = newField(DEFAULT_SIZE, DEFAULT_SEED);
   const worldHalfF = worldHalfFFromField(field);
@@ -529,20 +905,11 @@ async function main() {
   scene.camera = camera;
   cam = createCameraController(camera, canvas, { worldHalfF });
 
-  const sky = createHemisphericLight([0.2, 1, 0.1], 0.2);
-  sky.diffuseColor = [0.78, 0.86, 1];
-  sky.groundColor = [0.1, 0.08, 0.06];
-  addToScene(scene, sky);
-  const sun = createDirectionalLight([-0.78, -0.48, -0.52], 1.55);
-  sun.diffuse = [1, 0.94, 0.84];
-  {
-    const d = sun.direction;
-    const dist = worldHalfF * 2.75;
-    sun.position.x = -d.x * dist;
-    sun.position.y = -d.y * dist;
-    sun.position.z = -d.z * dist;
-  }
-  addToScene(scene, sun);
+  celestial = createCelestialRig(scene, {
+    worldHalfF,
+    state: loadForgeCelestial(),
+  });
+  bindLightUi();
 
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   canvas.addEventListener('wheel', (e) => {
@@ -567,7 +934,7 @@ async function main() {
   });
   canvas.addEventListener('pointermove', (e) => {
     cam.handlePointerMove(e);
-    if (state.painting && state.layer === 'terrain' && e.buttons & 1) {
+    if (state.painting && (state.layer === 'terrain' || state.layer === 'scenery') && e.buttons & 1) {
       applyAt(pickGround(e.clientX, e.clientY));
     }
   });
@@ -580,6 +947,7 @@ async function main() {
 
   onBeforeRender(scene, (deltaMs) => {
     cam.tick(deltaMs);
+    celestial?.update?.(deltaMs);
     terrain?.update?.(camera, deltaMs);
   });
 

@@ -394,11 +394,22 @@ function clearSporeFx(store) {
   if (!store) return;
   store.dripCount = 0;
   store.seedCount = 0;
+  store.arcCount = 0;
+  store.headCount = 0;
   store.dripX.length = 0;
   store.dripY.length = 0;
   store.seedX.length = 0;
   store.seedY.length = 0;
   store.seedGrowAt.length = 0;
+  if (store.arcX) store.arcX.length = 0;
+  if (store.arcY) store.arcY.length = 0;
+  if (store.arcDirX) store.arcDirX.length = 0;
+  if (store.arcDirY) store.arcDirY.length = 0;
+  if (store.arcRadius) store.arcRadius.length = 0;
+  if (store.headEntity) store.headEntity.length = 0;
+  if (store.headX) store.headX.length = 0;
+  if (store.headY) store.headY.length = 0;
+  if (store.headKill) store.headKill.length = 0;
 }
 
 function clearMonkFx(store) {

@@ -1,6 +1,20 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildField, isPassable, isSlowTile, TERRAIN } from './field.js';
+import {
+  buildField,
+  createField,
+  isPassable,
+  isSlowTile,
+  TERRAIN,
+  DEFAULT_MAP_W,
+  DEFAULT_MAP_H,
+  STRESS_MAP_W,
+  STRESS_MAP_H,
+  TABLE_CHUNK_TILES,
+  tilesForOddChunks,
+  snapTilesToOddChunks,
+} from './field.js';
+import { createWorld } from './world.js';
 import {
   applyTableSilhouette,
   createFullCellMask,
@@ -13,10 +27,13 @@ import {
   setCellEnabled,
   setCellRadius,
   silhouetteLoops,
+  tableCornerPlinths,
+  tableEdgeMidpoints,
+  tableHasCenterBlock,
   tileInTable,
   tileCenterWorld,
 } from './tableShape.js';
-import { encodeGarden, decodeGarden, fieldFromGarden } from './garden.js';
+import { encodeGarden, decodeGarden, fieldFromGarden, applyGardenPlacements } from './garden.js';
 import { populateScenery } from './scenery.js';
 
 function makeLMask(width, height, cellSize = 16) {
@@ -54,9 +71,72 @@ describe('table silhouette', () => {
       cellRadius: createFullCellRadius(32, 32, 16, 0),
     });
     assert.equal(isPassable(field, 0, 8), false);
-    assert.equal(isSlowTile(field, 1, 8), true);
+    assert.equal(isSlowTile(field, 1, 7), true);
     assert.equal(isPassable(field, 8, 8), true);
     assert.equal(isSlowTile(field, 8, 8), false);
+    assert.equal(tableHasCenterBlock(field), false);
+  });
+
+  it('defaults every chunk to radius 0', () => {
+    const field = buildField(1, { width: 48, height: 48 });
+    applyTableSilhouette(field);
+    assert.ok(field.tableShape.cellRadius.every((r) => r === 0));
+  });
+
+  it('plants a blocked center block on odd-chunk boards', () => {
+    const field = createField(1, { width: 48, height: 48 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(48, 48, 16),
+      cellRadius: createFullCellRadius(48, 48, 16, 0),
+    });
+    assert.equal(tableHasCenterBlock(field), true);
+    assert.equal(isPassable(field, 24, 24), false);
+    assert.equal(isPassable(field, 24, 20), false);
+    assert.equal(isPassable(field, 24, 16), true);
+    assert.equal(isSlowTile(field, 24, 18), true);
+    assert.equal(isPassable(field, 8, 8), true);
+  });
+
+  it('places a block halfway along each table edge', () => {
+    const field = createField(1, { width: 48, height: 48 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(48, 48, 16),
+      cellRadius: createFullCellRadius(48, 48, 16, 0),
+    });
+    const mids = tableEdgeMidpoints(field);
+    assert.equal(mids.length, 4);
+    assert.ok(mids.some((p) => Math.abs(p.x) < 1 && p.z < -80 && p.oz < 0));
+    assert.ok(mids.some((p) => Math.abs(p.x) < 1 && p.z > 80 && p.oz > 0));
+    assert.ok(mids.some((p) => p.x < -80 && Math.abs(p.z) < 1 && p.ox < 0));
+    assert.ok(mids.some((p) => p.x > 80 && Math.abs(p.z) < 1 && p.ox > 0));
+    assert.equal(field.tableEdgeBlocks.length, 4);
+    assert.equal(field.tableCornerBlocks.length, 4);
+    assert.equal(tableCornerPlinths(field).length, 4);
+    assert.equal(isPassable(field, 0, 0), false);
+    assert.equal(isPassable(field, 3, 3), false);
+    assert.equal(isPassable(field, 8, 8), true);
+    assert.equal(isPassable(field, 24, 0), false);
+    assert.equal(isPassable(field, 24, 4), false);
+    assert.equal(isPassable(field, 24, 7), true);
+    assert.equal(isSlowTile(field, 24, 5), true);
+  });
+
+  it('drops the corner plinth when that chunk is filleted', () => {
+    const field = createField(1, { width: 48, height: 48 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    const cellRadius = createFullCellRadius(48, 48, 16, 0);
+    cellRadius[0] = 12;
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(48, 48, 16),
+      cellRadius,
+    });
+    assert.equal(tableCornerPlinths(field).length, 3);
+    assert.equal(field.tableCornerBlocks.length, 3);
   });
 
   it('keeps table-edge red/yellow after scenery populate', () => {
@@ -68,33 +148,39 @@ describe('table silhouette', () => {
     });
     populateScenery(field, null, []);
     assert.equal(isPassable(field, 0, 8), false);
-    assert.equal(isSlowTile(field, 1, 8), true);
-    assert.equal(field.tableSlowMask[1 * 32 + 8], 1);
+    assert.equal(isSlowTile(field, 1, 7), true);
+    assert.equal(field.tableSlowMask[1 * 32 + 7], 1);
   });
 
   it('puts a red-then-yellow rim on every side of a removed chunk', () => {
-    const field = buildField(1, { width: 48, height: 48 });
-    const cellMask = createFullCellMask(48, 48, 16);
-    cellMask[1 * 3 + 1] = 0;
+    const field = createField(1, { width: 80, height: 80 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    const cellMask = createFullCellMask(80, 80, 16);
+    cellMask[2 * 5 + 2] = 0;
     applyTableSilhouette(field, {
       cellSize: 16,
       cellMask,
-      cellRadius: createFullCellRadius(48, 48, 16, 0),
+      cellRadius: createFullCellRadius(80, 80, 16, 0),
     });
-    const at = (tx, tz) => field.activeMask[tz * 48 + tx];
-    assert.equal(at(24, 24), 0);
-    assert.equal(at(16, 24), 0);
-    assert.equal(at(31, 24), 0);
-    assert.equal(at(24, 16), 0);
-    assert.equal(at(24, 31), 0);
-    assert.equal(isPassable(field, 15, 24), false);
-    assert.equal(isSlowTile(field, 14, 24), true);
-    assert.equal(isPassable(field, 32, 24), false);
-    assert.equal(isSlowTile(field, 33, 24), true);
-    assert.equal(isPassable(field, 24, 15), false);
-    assert.equal(isSlowTile(field, 24, 14), true);
-    assert.equal(isPassable(field, 24, 32), false);
-    assert.equal(isSlowTile(field, 24, 33), true);
+    const at = (tx, tz) => field.activeMask[tz * 80 + tx];
+    assert.equal(at(40, 40), 0);
+    assert.equal(at(32, 40), 0);
+    assert.equal(at(47, 40), 0);
+    assert.equal(at(40, 32), 0);
+    assert.equal(at(40, 47), 0);
+    assert.equal(tableEdgeMidpoints(field).length, 4);
+    assert.equal(isPassable(field, 31, 40), false);
+    assert.equal(isSlowTile(field, 30, 40), true);
+    assert.equal(isPassable(field, 24, 40), true);
+    assert.equal(isPassable(field, 48, 40), false);
+    assert.equal(isSlowTile(field, 49, 40), true);
+    assert.equal(isPassable(field, 55, 40), true);
+    assert.equal(isPassable(field, 40, 31), false);
+    assert.equal(isSlowTile(field, 40, 30), true);
+    assert.equal(isPassable(field, 40, 24), true);
+    assert.equal(isPassable(field, 40, 48), false);
+    assert.equal(isSlowTile(field, 40, 49), true);
+    assert.equal(isPassable(field, 40, 55), true);
   });
 
   it('cuts an outside-corner fillet from the owning chunk', () => {
@@ -189,7 +275,7 @@ describe('table silhouette', () => {
   });
 });
 
-describe('garden v3', () => {
+describe('garden codec', () => {
   it('roundtrips w/h/s/cs/cm/rr/t', () => {
     const field = buildField(99, { width: 32, height: 32 });
     const cellMask = makeLMask(32, 32, 16);
@@ -213,5 +299,51 @@ describe('garden v3', () => {
     assert.equal(json2.cm, json.cm);
     assert.equal(json2.rr, json.rr);
     assert.equal(json2.t, json.t);
+  });
+
+  it('roundtrips authored scenery and placements', () => {
+    const field = buildField(7, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    field.sceneryType[8 * 32 + 8] = 1;
+    field.treeStock[8 * 32 + 8] = 28;
+    const json = encodeGarden(field, {
+      name: 'placed',
+      units: [{ owner: 0, type: 1, tx: 10, tz: 10 }],
+      buildings: [{ owner: 0, type: 'camp', x: 4, z: -4, yaw: 0 }],
+      agoras: [{ owner: 0, x: 0, z: 0 }],
+    });
+    assert.equal(json.v, 4);
+    const g = decodeGarden(json);
+    assert.equal(g.authoredScenery, true);
+    assert.equal(g.sceneryType[8 * 32 + 8], 1);
+    assert.equal(g.units.length, 1);
+    assert.equal(g.buildings[0].type, 'camp');
+    assert.equal(g.agoras.length, 1);
+    const again = fieldFromGarden(json);
+    assert.equal(again.sceneryType[8 * 32 + 8], 1);
+
+    const world = createWorld(7);
+    applyGardenPlacements(world, again, g);
+    assert.equal(world.count, 1);
+    assert.equal(world.buildings.length, 1);
+    assert.equal(world.agoras.length, 1);
+  });
+
+  it('keeps live boards on odd 16-tile chunk counts', () => {
+    assert.equal(DEFAULT_MAP_W % TABLE_CHUNK_TILES, 0);
+    assert.equal(DEFAULT_MAP_H % TABLE_CHUNK_TILES, 0);
+    assert.equal(STRESS_MAP_W % TABLE_CHUNK_TILES, 0);
+    assert.equal(STRESS_MAP_H % TABLE_CHUNK_TILES, 0);
+    assert.equal((DEFAULT_MAP_W / TABLE_CHUNK_TILES) % 2, 1);
+    assert.equal((DEFAULT_MAP_H / TABLE_CHUNK_TILES) % 2, 1);
+    assert.equal((STRESS_MAP_W / TABLE_CHUNK_TILES) % 2, 1);
+    assert.equal((STRESS_MAP_H / TABLE_CHUNK_TILES) % 2, 1);
+    assert.equal(tilesForOddChunks(12), 13 * TABLE_CHUNK_TILES);
+    assert.equal(snapTilesToOddChunks(192), 13 * TABLE_CHUNK_TILES);
+    assert.equal(snapTilesToOddChunks(128), 9 * TABLE_CHUNK_TILES);
   });
 });

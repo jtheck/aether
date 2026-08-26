@@ -1,6 +1,6 @@
 // Client-only fog of war. Vision is a 20 Hz tile stamp — not in lockstep/checksums.
-// Map stays visible and is dimmed outside current sight. Hostile units hide.
-// Enemy buildings hide until seen, then freeze as last-known while fogged.
+// Three overlay levels: current sight, visited, never-seen. Hostile units hide
+// outside the live circle. Enemy buildings hide until seen, then last-known while fogged.
 
 import {
   addToScene,
@@ -25,12 +25,20 @@ const CASTER_VISION_TILES = 18;
 /** Airships see farther still; agoras share this radius. */
 const DIRIGIBLE_VISION_TILES = 24;
 const BUILDING_VISION_TILES = 7;
-/** Overlay fragment alpha on fogged tiles — dim, not a black sheet. */
-const FOG_MESH_ALPHA = 0.4;
+/** Overlay fragment alpha on fogged tiles — dark enough to read vs sight. */
+const FOG_MESH_ALPHA = 0.64;
+/** Cool slate so fogged dirt shifts hue, not just luminance, vs warm sunlit ground. */
+const FOG_DIFFUSE = [0.03, 0.05, 0.09];
 const OVERLAY_LIFT = 0.18;
 const TEXEL_ALIGN = 64;
 /** Overlay-only skirt past the hard vision circle. Gameplay hide stays binary. */
 const EDGE_FADE_TILES = 3;
+/** Overlay pixel alpha on explored tiles that are no longer in sight. */
+export const VISITED_ALPHA = 110;
+/** Remaining cover (seen-ness) once a visited tile finishes fading. */
+const VISITED_COVER = 255 - VISITED_ALPHA;
+/** Time for leftover overlay cover to fade from current sight to its floor. */
+export const COVER_DECAY_MS = 3200;
 /** Upsample the cover field so bilinear has more than one texel per tile. */
 const FOG_TEX_SCALE = 2;
 
@@ -165,6 +173,7 @@ function tryWriteTexture(engine, texture, pixels, w, h) {
  *   stamp: (input: object) => void,
  *   isEnabled: () => boolean,
  *   isWorldVisible: (x: number, z: number) => boolean,
+ *   isWorldExplored: (x: number, z: number) => boolean,
  *   hidesHostile: (owner: number, x: number, z: number) => boolean,
  *   filterBuildings: (list: object[] | null | undefined) => object[],
  *   filterAgoras: (list: object[] | null | undefined) => object[],
@@ -186,9 +195,13 @@ export function createFogOfWar() {
   /** Overlay coverage 0–255 (255 = fully seen). Soft edge only — not used to hide. */
   /** @type {Uint8Array | null} */
   let cover = null;
+  /** Hard-circle memory. Once seen, overlay never returns to unexplored. */
+  /** @type {Uint8Array | null} */
+  let explored = null;
   let gen = 1;
   let enabled = false;
   let localPlayerId = 0;
+  let lastStampAt = 0;
   /** @type {Map<string, object>} */
   const lastBuildings = new Map();
   let buildingSig = '';
@@ -218,7 +231,28 @@ export function createFogOfWar() {
     else visible.fill(0);
     if (!cover || cover.length !== n) cover = n ? new Uint8Array(n) : null;
     else cover.fill(0);
+    if (!explored || explored.length !== n) explored = n ? new Uint8Array(n) : null;
+    else explored.fill(0);
     gen = 1;
+    lastStampAt = 0;
+  }
+
+  function forgetOverlay() {
+    if (cover) cover.fill(0);
+    if (explored) explored.fill(0);
+    lastStampAt = 0;
+  }
+
+  function decayCover(dtMs) {
+    if (!cover || dtMs <= 0) return;
+    for (let i = 0; i < cover.length; i++) {
+      const floor = explored && explored[i] ? VISITED_COVER : 0;
+      const v = cover[i];
+      if (v <= floor) continue;
+      const span = 255 - floor;
+      const drop = Math.max(1, Math.round((span * dtMs) / COVER_DECAY_MS));
+      cover[i] = v - drop > floor ? v - drop : floor;
+    }
   }
 
   function adoptField(nextField) {
@@ -253,6 +287,15 @@ export function createFogOfWar() {
     return visible[tz * width + tx] === gen;
   }
 
+  function isWorldExplored(x, z) {
+    if (!enabled) return true;
+    if (!explored || !field) return true;
+    const tx = Math.floor((x + half) / TILE_SIZE_F);
+    const tz = Math.floor((z + half) / TILE_SIZE_F);
+    if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
+    return explored[tz * width + tx] !== 0;
+  }
+
   function hidesHostile(owner, x, z) {
     if (!enabled) return false;
     if (localPlayerId < 0) return false;
@@ -280,7 +323,10 @@ export function createFogOfWar() {
         const dx = tx - cx;
         const d2 = dx * dx + dz * dz;
         if (d2 > outer2) continue;
-        if (d2 <= hardR2) visible[row + tx] = gen;
+        if (d2 <= hardR2) {
+          visible[row + tx] = gen;
+          if (explored) explored[row + tx] = 1;
+        }
         if (!cover) continue;
         const d = Math.sqrt(d2);
         let c = 255;
@@ -304,22 +350,30 @@ export function createFogOfWar() {
    *   field?: object,
    *   localPlayerId?: number,
    *   enabled?: boolean,
+   *   now?: number,
    * }} input
    */
   function stamp(input) {
-    localPlayerId = input.localPlayerId ?? localPlayerId;
+    const nextPlayer = input.localPlayerId ?? localPlayerId;
+    if (nextPlayer !== localPlayerId) forgetOverlay();
+    localPlayerId = nextPlayer;
     enabled = input.enabled !== false && localPlayerId >= 0;
     if (input.field) adoptField(input.field);
     if (!enabled || !field || !visible) {
+      forgetOverlay();
       if (mesh) mesh.visible = false;
       return;
     }
+    const now = input.now ?? Date.now();
+    if (lastStampAt > 0) {
+      decayCover(Math.min(COVER_DECAY_MS, Math.max(0, now - lastStampAt)));
+    }
+    lastStampAt = now;
     gen++;
     if (gen === 0xffffffff) {
       visible.fill(0);
       gen = 1;
     }
-    if (cover) cover.fill(0);
     const world = input.world;
     if (world) {
       const n = world.count | 0;
@@ -408,14 +462,17 @@ export function createFogOfWar() {
     return 255 - sampleCover(fx, fz);
   }
 
-  /** 0 = fully seen, 1 = fully fogged. Same skirt as the ground overlay. */
+  /** 0 = current sight, ~VISITED_ALPHA/255 = explored, 1 = never seen. */
   function fogFactorAt(x, z) {
     return overlayAlphaAt(x, z) / 255;
   }
 
   function coverAt(tx, tz) {
     if (!cover || tx < 0 || tz < 0 || tx >= width || tz >= height) return 0;
-    return cover[tz * width + tx];
+    const i = tz * width + tx;
+    const c = cover[i];
+    if (explored && explored[i] && c < VISITED_COVER) return VISITED_COVER;
+    return c;
   }
 
   function sampleCover(fx, fz) {
@@ -534,8 +591,8 @@ export function createFogOfWar() {
       new Float32Array(uvs),
     );
     material = createStandardMaterial();
-    material.diffuseColor = [0.05, 0.07, 0.1];
-    material.emissiveColor = [0.03, 0.04, 0.06];
+    material.diffuseColor = FOG_DIFFUSE;
+    material.emissiveColor = [0, 0, 0];
     material.ambientColor = [0, 0, 0];
     material.specularColor = [0, 0, 0];
     material.disableLighting = true;
@@ -586,6 +643,7 @@ export function createFogOfWar() {
     stamp,
     isEnabled: () => enabled,
     isWorldVisible,
+    isWorldExplored,
     hidesHostile,
     filterBuildings,
     filterAgoras,

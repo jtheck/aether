@@ -24,6 +24,7 @@ import {
   SPORE_GROWTH_DELAY,
   SPORE_MIN_SEEDS,
   SPORE_OUTER_RADIUS,
+  SPORE_SEED_ARC_COS,
   SPORE_TREE_STOCK,
   castSporeBloom,
   fellTreesInRadius,
@@ -207,11 +208,9 @@ function castsAreDeterministic() {
   assert.equal(run(42), run(42));
 }
 
-function emptyGroundStillCasts() {
-  const field = createField(1);
-  // Open grass around aim — no trees; ring seeds should still land.
-  for (let tz = 40; tz < 60; tz++) {
-    for (let tx = 40; tx < 60; tx++) {
+function stampGrass(field, tx0, tz0, tx1, tz1) {
+  for (let tz = tz0; tz <= tz1; tz++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
       const i = tz * field.width + tx;
       field.terrainTypes[i] = TERRAIN.GRASS;
       field.pass[i] = 1;
@@ -220,6 +219,12 @@ function emptyGroundStillCasts() {
       field.treeStock[i] = 0;
     }
   }
+}
+
+function emptyGroundStillCasts() {
+  const field = createField(1);
+  // Open grass around aim — no trees; outward-arc seeds should still land.
+  stampGrass(field, 40, 40, 59, 59);
   const aim = tileWorld(50, 50);
   const w = createWorld(92);
   const myco = spawn(w, { x: aim.x, y: aim.y, type: UNIT.MYCO, owner: 0 });
@@ -230,6 +235,57 @@ function emptyGroundStillCasts() {
   assert.ok(fxPatch);
   assert.ok(fxPatch.seedCount >= SPORE_MIN_SEEDS);
   assert.ok(fxPatch.seedCount > SPORE_MIN_SEEDS, 'top-up goes beyond the floor');
+  assert.equal(fxPatch.arcCount, 1, 'cast publishes an arc flash');
+  assert.ok(fxPatch.arcRadius[0] > 0);
+}
+
+function seedsFormOutwardArcAwayFromMyco() {
+  const field = createField(1);
+  const aimTx = 80;
+  const aimTz = 80;
+  stampGrass(field, aimTx - 8, aimTz - 8, aimTx + 8, aimTz + 8);
+  const aim = tileWorld(aimTx, aimTz);
+  const mycoPos = tileWorld(aimTx - 2, aimTz);
+  const w = createWorld(93);
+  const myco = spawn(w, {
+    x: mycoPos.x,
+    y: mycoPos.y,
+    type: UNIT.MYCO,
+    owner: 0,
+  });
+  assert.ok(castSporeBloom(w, field, myco, aim.x, aim.y));
+  assert.ok(w.treeGrowth.count >= SPORE_MIN_SEEDS, 'arc still seeds');
+
+  const aimXF = fx.toFloat(aim.x);
+  const aimYF = fx.toFloat(aim.y);
+  const mycoXF = fx.toFloat(mycoPos.x);
+  const mycoYF = fx.toFloat(mycoPos.y);
+  const dirX = aimXF - mycoXF;
+  const dirY = aimYF - mycoYF;
+  const dirLen = Math.hypot(dirX, dirY);
+  const clear2 = (TILE_SIZE_F * 2) * (TILE_SIZE_F * 2);
+  let nearMyco = 0;
+  let offArc = 0;
+  for (let i = 0; i < w.treeGrowth.count; i++) {
+    const ti = w.treeGrowth.tile[i];
+    const tz = Math.floor(ti / field.width);
+    const tx = ti - tz * field.width;
+    const c = tileWorld(tx, tz);
+    const wx = fx.toFloat(c.x);
+    const wz = fx.toFloat(c.y);
+    const toMycoX = wx - mycoXF;
+    const toMycoZ = wz - mycoYF;
+    if (toMycoX * toMycoX + toMycoZ * toMycoZ < clear2) nearMyco++;
+    const adx = wx - aimXF;
+    const adz = wz - aimYF;
+    const d = Math.hypot(adx, adz);
+    const cos = (adx * dirX + adz * dirY) / (d * dirLen);
+    if (cos < SPORE_SEED_ARC_COS - 0.02) offArc++;
+  }
+  assert.equal(nearMyco, 0, 'no seeds next to the myco');
+  assert.equal(offArc, 0, 'seeds stay on the outward arc');
+  const fxPatch = takeSporeBloomUpdates(w);
+  assert.ok(fxPatch?.arcCount >= 1, 'outward arc flash published');
 }
 
 growTreeAtPlantsAndPublishes();
@@ -237,4 +293,5 @@ castFellsTreesAndQueuesSeeds();
 delayedGrowthSproutsTrees();
 castsAreDeterministic();
 emptyGroundStillCasts();
+seedsFormOutwardArcAwayFromMyco();
 console.log('sporeBloom.test.js: ok');

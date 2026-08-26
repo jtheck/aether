@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import * as fx from '../sim/fixed.js';
 import { UNIT } from '../sim/unitTypes.js';
 import {
+  COVER_DECAY_MS,
+  VISITED_ALPHA,
   createFogOfWar,
   structureKey,
   visionTilesForBuilding,
@@ -123,6 +125,98 @@ describe('fogOfWar last-known buildings', () => {
     const shown = fog.filterBuildings([movedAway]);
     assert.equal(shown.length, 1);
     assert.equal(shown[0].tracks[0].count, 1);
+  });
+});
+
+describe('fogOfWar overlay decay', () => {
+  it('hides immediately and fades overlay from sight to visited, not black', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const atOrigin = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    fog.stamp({
+      world: atOrigin,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now: 1000,
+    });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.isWorldExplored(0, 0), true);
+    assert.equal(fog.overlayAlphaAt(0, 0), 0);
+
+    const far = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: -36, z: -36 }]);
+    fog.stamp({
+      world: far,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now: 1400,
+    });
+    assert.equal(fog.isWorldVisible(0, 0), false);
+    assert.equal(fog.isWorldExplored(0, 0), true);
+    const mid = fog.overlayAlphaAt(0, 0);
+    assert.ok(mid > 0 && mid < VISITED_ALPHA, `expected a fading trail, got ${mid}`);
+
+    fog.stamp({
+      world: far,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now: 1400 + COVER_DECAY_MS,
+    });
+    assert.equal(fog.isWorldVisible(0, 0), false);
+    assert.equal(fog.overlayAlphaAt(0, 0), VISITED_ALPHA);
+    assert.equal(fog.overlayAlphaAt(64, 0), 255);
+  });
+});
+
+describe('fogOfWar three levels', () => {
+  it('keeps sight, visited, and never-seen as three overlay steps', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const atOrigin = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    fog.stamp({
+      world: atOrigin,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now: 1000,
+    });
+    const far = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: -36, z: -36 }]);
+    fog.stamp({
+      world: far,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now: 1000 + COVER_DECAY_MS,
+    });
+
+    const sight = fog.overlayAlphaAt(-36, -36);
+    const visited = fog.overlayAlphaAt(0, 0);
+    const unseen = fog.overlayAlphaAt(64, 0);
+    assert.equal(fog.isWorldVisible(-36, -36), true);
+    assert.equal(fog.isWorldVisible(0, 0), false);
+    assert.equal(fog.isWorldExplored(0, 0), true);
+    assert.equal(fog.isWorldExplored(64, 0), false);
+    assert.equal(sight, 0);
+    assert.equal(visited, VISITED_ALPHA);
+    assert.equal(unseen, 255);
+    assert.ok(sight < visited && visited < unseen);
+    assert.equal(fog.fogFactorAt(-36, -36), 0);
+    assert.ok(Math.abs(fog.fogFactorAt(0, 0) - VISITED_ALPHA / 255) < 1e-6);
+    assert.equal(fog.fogFactorAt(64, 0), 1);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   LOCUST_DISTRACT_TICKS,
 } from './combatStatus.js';
 import { applyDistract } from './frogs.js';
+import { pushSporeHeadFx, queueTreeSeedAt } from './sporeBloom.js';
 
 export const MAX_PROJECTILES = 32768;
 /** Max unique entities a path-hit projectile can damage. */
@@ -187,9 +188,15 @@ function applyHitEffects(w, def, entity, source) {
   if (def.appliesDistract) applyDistract(w, entity, LOCUST_DISTRACT_TICKS);
 }
 
-function hitEntity(w, store, slot, def, entity) {
+function hitEntity(w, store, slot, def, entity, field) {
+  const wasAlive = !!w.alive[entity];
   applyDamage(w, entity, store.damage[slot], store.source[slot]);
   applyHitEffects(w, def, entity, store.source[slot]);
+  if (def.growsHeadMushroom) {
+    const killed = wasAlive && !w.alive[entity];
+    pushSporeHeadFx(w, entity, w.px[entity], w.py[entity], killed);
+    if (killed) queueTreeSeedAt(w, field, w.px[entity], w.py[entity]);
+  }
 }
 
 /** Splash at impact point; hostiles take full damage, friendlies use multiplier. */
@@ -247,7 +254,7 @@ function refreshWander(w, store, slot, def) {
 }
 
 /** Damage hostiles near the projectile; skip already-hit entities. */
-function applyPathHits(w, store, slot, def) {
+function applyPathHits(w, store, slot, def, field) {
   const grid = w.spatial;
   if (!grid) return false;
   const cx = store.px[slot];
@@ -273,7 +280,7 @@ function applyPathHits(w, store, slot, def) {
             i = grid.next[i];
             continue;
           }
-          hitEntity(w, store, slot, def, i);
+          hitEntity(w, store, slot, def, i, field);
           any = true;
           if (store.hitCount[slot] >= pierce) return true;
         }
@@ -337,7 +344,7 @@ export function projectileSystem(w, field) {
 
     if (!(def.splashRadius > 0)) {
       if (def.pathHit) {
-        applyPathHits(w, store, slot, def);
+        applyPathHits(w, store, slot, def, field);
         if (store.hitCount[slot] >= (def.pierce || 1)) {
           freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
           continue;
@@ -345,7 +352,7 @@ export function projectileSystem(w, field) {
       } else if (targetAlive) {
         const hitRadius2 = fx.mul(def.hitRadius, def.hitRadius);
         if (fx.dist2(nextX, nextY, w.px[target], w.py[target]) <= hitRadius2) {
-          hitEntity(w, store, slot, def, target);
+          hitEntity(w, store, slot, def, target, field);
           store.hitCount[slot]++;
           if (store.hitCount[slot] >= def.pierce) {
             freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);

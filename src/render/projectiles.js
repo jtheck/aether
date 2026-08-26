@@ -226,11 +226,6 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
         ? prev.z[i] + (cur.z[i] - prev.z[i]) * alpha
         : cur.z[i] - cur.vz[i] * (1 - alpha);
       if (opts.shouldDraw && !opts.shouldDraw(x, z, cur.owner[i])) continue;
-      const slot = counts[type]++;
-      if (slot >= batch.capacity) {
-        dropped++;
-        continue;
-      }
       const age = Math.max(0, cur.age[i] - (1 - alpha));
       // Lifetime includes +2 travel padding; lobs should finish the dive when
       // gameplay reaches the aim point (typically lifetime - 2).
@@ -252,8 +247,17 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
         loftPeak,
       );
       const vy = projectileArcVy(def, progress, life, loftPeak);
-      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], def.scale);
       onProjectile?.(i, cur.generation[i], x, y, z, cur.vx[i], cur.vz[i], def, vy);
+      if (def.hidden) {
+        active++;
+        continue;
+      }
+      const slot = counts[type]++;
+      if (slot >= batch.capacity) {
+        dropped++;
+        continue;
+      }
+      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], def.scale);
       active++;
     }
 

@@ -350,7 +350,7 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean }} config
  */
 export function buildWorldFromConfig({
   seed,
@@ -361,6 +361,7 @@ export function buildWorldFromConfig({
   activeSlots,
   mapW,
   mapH,
+  skipDefaultSpawns = false,
 }) {
   setArmyPerSide(armyPerSide);
   const size = mapSizeForConfig({ stressPerSide, animStressPerSide, armyPerSide, mapW, mapH });
@@ -381,6 +382,14 @@ export function buildWorldFromConfig({
 
   // Default FFA until a mode opts into alliances via setTeamAssignments.
   setTeamAssignments(null);
+
+  if (skipDefaultSpawns) {
+    if (mode === 'koth') {
+      const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
+      w.koth = createKothMeta(slots);
+    }
+    return w;
+  }
 
   if (animStressPerSide > 0) {
     const count = Math.min(Math.floor(animStressPerSide), STRESS_ENTITY_LIMIT >> 1);

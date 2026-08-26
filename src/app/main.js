@@ -15,6 +15,7 @@ import {
 } from '../sim/worldSetup.js';
 import { STRESS_AI_PROFILES } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
+import { GARDEN_SESSION_KEY } from '../sim/garden.js';
 import {
   applySerializedBuildingOccupancy,
   BUILDING_FOOTPRINTS,
@@ -27,9 +28,11 @@ import {
   snapBuildingWorld,
 } from '../sim/buildings.js';
 import { TILE_SIZE_F, worldToTile } from '../sim/field.js';
+import { OWNER_TINTS } from '../render/ownerTints.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
+import { selectionGroupsFromBuildings } from '../render/selectionHud.js';
 import { createLiteExplorerToggle } from '../render/liteExplorer.js';
 import { setupMenu } from './menu.js';
 import {
@@ -79,13 +82,24 @@ function rotateYawOffset(offX, offZ, yaw) {
 
 const SEED = 0x1234;
 
-const OWNER_TINTS = [
-  [0.25, 0.55, 1.0],
-  [1.0, 0.32, 0.25],
-  [0.4, 1.0, 0.45],
-  [0.95, 0.8, 0.25],
-  [0.75, 0.45, 1.0],
-];
+async function loadGardenFromSearch(search) {
+  const raw = new URLSearchParams(search).get('garden');
+  if (!raw) return null;
+  try {
+    if (raw === 'session' || raw === 'local') {
+      const text = sessionStorage.getItem(GARDEN_SESSION_KEY);
+      if (!text) throw new Error('no session garden');
+      return JSON.parse(text);
+    }
+    const res = await fetch(raw);
+    if (!res.ok) throw new Error(`garden ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    console.error('Could not load garden', raw, err);
+    return null;
+  }
+}
+
 const DEATH_FADE_MS = 450;
 /** Select flourish → idle spin (distance-gated in overlay LOD). */
 const SEL_SPIN_STEADY = 0.006 * 60;
@@ -241,12 +255,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     role: bootCfg.role ?? 'player',
   });
 
+  const garden = await loadGardenFromSearch(location.search);
   const simConfig = {
-    seed: bootCfg.seed ?? SEED,
+    seed: garden?.s ?? bootCfg.seed ?? SEED,
     stressPerSide: stress,
     animStressPerSide: animStress,
     armyPerSide: army,
     profileSim: new URLSearchParams(location.search).has('profileSim'),
+    garden,
     mode:
       bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox'
         ? 'staging'
@@ -1251,6 +1267,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (typeof on === 'boolean') setStatusText(on ? 'Units on' : 'Units off');
       return;
     }
+    if (e.code === 'KeyL') {
+      e.preventDefault();
+      const on = renderer.toggleCelestialSpin?.();
+      if (typeof on === 'boolean') setStatusText(on ? 'Sun spin on' : 'Sun spin off');
+      return;
+    }
     if (e.code === 'KeyP') {
       e.preventDefault();
       session.pauseLockstep = !session.pauseLockstep;
@@ -1309,6 +1331,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   };
 
   let lastUnmappedRebuild = 0;
+  /** Reused per-frame: selected unit count keyed by sim type id. */
+  const selCountByType = new Map();
 
   renderer.onFrame((deltaMs) => {
     // Keep FX clocks in sync with pause (catch-up / KOTH also toggle pauseLockstep).
@@ -1356,6 +1380,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     } = bufs;
 
     fogHidden.fill(0);
+    selCountByType.clear();
     for (let i = 0; i < n; i++) {
       if (!world.alive[i]) continue;
       let owner = world.owner[i];
@@ -1637,6 +1662,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       else if (world.owner[i] === 1) drawStats.p1++;
       const isSel = !!selected[i] && !!world.alive[i];
       if (isSel) {
+        selCountByType.set(world.type[i], (selCountByType.get(world.type[i]) ?? 0) + 1);
         // Burst + idle spin within spin distance; static collar beyond (always drawn).
         const spinOk = !!overlaySpinAllow[i];
         if (spinOk) {
@@ -1733,6 +1759,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       });
     }
     renderer.endHealthBars?.();
+    if (renderer.setSelectionGroups) {
+      if (selectedBuildings.length > 0) {
+        renderer.setSelectionGroups(
+          selectionGroupsFromBuildings(
+            selectedBuildings,
+            session.buildings,
+            session.agoras,
+          ),
+        );
+      } else {
+        const groups = [];
+        for (const [typeId, count] of selCountByType) {
+          groups.push({ kind: 'unit', typeId, name: getUnitDef(typeId).name, count });
+        }
+        renderer.setSelectionGroups(groups);
+      }
+    }
     if (renderer.syncUnitAuras) {
       renderer.syncUnitAuras(
         n,

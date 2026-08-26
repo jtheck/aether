@@ -7,8 +7,6 @@ import {
   createEngine,
   createSceneContext,
   createArcRotateCamera,
-  createHemisphericLight,
-  createDirectionalLight,
   createSphere,
   createGround,
   createCylinder,
@@ -53,6 +51,7 @@ import {
   VAT_UNIT_DEFS,
   writeVatSlotParams,
 } from './vatUnits.js';
+import { createCelestialRig } from './celestial.js';
 import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from './terrain.js';
 import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
@@ -64,11 +63,13 @@ import { createParticleSystem } from './particleSystem.js';
 import { createUnitAuras, AURA } from './unitAuras.js';
 import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
+import { createLocustFx } from './locustFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createAgoraProps } from './agoras.js';
 import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
 import { createBuildingActionRadial } from './buildingActionRadial.js';
+import { createSelectionHud } from './selectionHud.js';
 import {
   FX_DISTANCE_SQ,
   LOD_ENABLED,
@@ -647,13 +648,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     console.warn('Building menu labels disabled: Roboto font failed to load.', err);
     return null;
   });
-  if (opts.field && scene.clearColor) {
-    scene.clearColor.r = 0.06;
-    scene.clearColor.g = 0.11;
-    scene.clearColor.b = 0.16;
-    scene.clearColor.a = 1;
-  }
-
   const worldHalfF = opts.field ? worldHalfFFromField(opts.field) : WORLD_HALF_F;
 
   const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, worldHalfF * 1.55, {
@@ -669,24 +663,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // Lite would still register wheel/touch handlers that fight our hub.
   const cameraController = createCameraController(camera, canvas, { worldHalfF });
 
-  // Hemi is unshadowed fill — too high and tree "dark" sides stay brighter than
-  // sun-cast ground shadows. Keep it low; let the directional carry the look.
-  const sky = createHemisphericLight([0.2, 1, 0.1], opts.field ? 0.2 : 0.7);
-  sky.diffuseColor = [0.78, 0.86, 1];
-  sky.groundColor = [0.1, 0.08, 0.06];
-  addToScene(scene, sky);
-  // ~30° elevation (was ~60° / near-noon) — longer unit/tree shadows, more contrast.
-  const sun = createDirectionalLight([-0.78, -0.48, -0.52], opts.field ? 1.55 : 1.15);
-  sun.diffuse = [1, 0.94, 0.84];
-  // Place the directional light "above" the board so ortho near/far contain casters.
-  {
-    const d = sun.direction;
-    const dist = worldHalfF * 2.75;
-    sun.position.x = -d.x * dist;
-    sun.position.y = -d.y * dist;
-    sun.position.z = -d.z * dist;
-  }
-  addToScene(scene, sun);
+  const celestial = createCelestialRig(scene, { worldHalfF });
+  const sun = celestial.shadowLight;
+  const sky = celestial.fillLight;
+  const skyBaseIntensity = celestial.fillBaseIntensity;
 
   // CSM: fits cascades from thin-instance world AABBs + camera (ESM only fits
   // mesh.world × local bounds, so board-scale TI units vanish or become ~2 texels).
@@ -706,7 +686,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     shadowMaxZ: worldHalfF * 2.75,
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
-    darkness: 0.08,
+    darkness: 0.22,
     frustumEdgeFalloff: 0.08,
     forceRefreshEveryFrame: true,
   };
@@ -1206,6 +1186,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const ok = mushrooms.spawnCluster(x, z, growAt);
       return ok !== false;
     },
+    spawnHead(entity, x, z, killed) {
+      return mushrooms?.spawnHead?.(entity, x, z, killed) === true;
+    },
     clearGrown(tick) {
       mushrooms?.clearGrown?.(tick);
     },
@@ -1221,6 +1204,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     groundYAt,
     mushroomBridge,
   );
+  const locustFx = createLocustFx((init) => particles.emit(init));
   /** Scratch bitfield when syncing auras from shieldHp. */
   let auraScratch = null;
   /** Latest sim tick for time-based FX (spore seed expiry). */
@@ -1609,7 +1593,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  const skyBaseIntensity = sky.intensity ?? (opts.field ? 0.2 : 0.7);
   let lightningFlash = 0;
 
   const lightningBolts = createLightningBolts(engine, scene, groundYAt, {
@@ -1721,6 +1704,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let buildingRadial = radialStub;
   /** @type {any} */
   let actionRadial = { ...radialStub };
+  /** @type {any} Bottom-of-screen selection strip (camera-locked HUD). */
+  let selectionHud = {
+    setGroups() {},
+    update() {},
+    pickSlot() { return null; },
+    clear() {},
+    registerLabels() {},
+    disposeLabels() {},
+  };
 
   const radialScreen = {
     worldToScreen(x, y, z) {
@@ -1760,6 +1752,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   onSceneDispose(scene, () => {
     buildingRadial.disposeLabels?.();
     actionRadial.disposeLabels?.();
+    selectionHud.disposeLabels?.();
   });
 
   function radialPickingRay(clientX, clientY) {
@@ -1777,11 +1770,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const isFireball = def.id === PROJECTILE.FIREBALL;
       const isArrow = def.mesh === PROJECTILE_MESH.ARROW;
       const isShadow = def.id === PROJECTILE.SHADOW_BOLT;
-      const isSpore = def.id === PROJECTILE.SPORE_STREAM;
       const isLocust = def.id === PROJECTILE.LOCUST_SWARM;
+      if (isLocust) {
+        locustFx.track(slot, generation, x, y, z, vx, vz);
+        return;
+      }
+      if (def.id === PROJECTILE.SPORE_STREAM) return;
       const emitGapMs = isFireball
         ? 18
-        : isShadow || isSpore || isLocust
+        : isShadow
           ? 20
           : isArrow
             ? 22
@@ -1869,58 +1866,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           });
         }
         return;
-      }
-      if (isSpore) {
-        particles.emit({
-          blend: 'alpha',
-          position: [
-            px + (Math.random() - 0.5) * 1.4,
-            y + (Math.random() - 0.5) * 0.8,
-            pz + (Math.random() - 0.5) * 1.4,
-          ],
-          velocity: [
-            (Math.random() - 0.5) * 1.2,
-            0.4 + Math.random() * 1.2,
-            (Math.random() - 0.5) * 1.2,
-          ],
-          gravity: [0, -1.5, 0],
-          color:
-            Math.random() > 0.45
-              ? [0.45, 0.85, 0.4, 0.55]
-              : [0.55, 0.35, 0.75, 0.45],
-          lifetime: 0.55 + Math.random() * 0.35,
-          startSize: 1.1 + Math.random() * 0.9,
-          endSize: 0.15,
-          drag: 1.4,
-        });
-        return;
-      }
-      if (isLocust) {
-        for (let n = 0; n < 3; n++) {
-          const ang = Math.random() * Math.PI * 2;
-          const rad = 0.3 + Math.random() * 1.1;
-          particles.emit({
-            blend: 'alpha',
-            hard: true,
-            position: [
-              x + Math.cos(ang) * rad,
-              y + (Math.random() - 0.5) * 0.9,
-              z + Math.sin(ang) * rad,
-            ],
-            velocity: [
-              vx * 0.4 + (Math.random() - 0.5) * 2.5,
-              (Math.random() - 0.5) * 2,
-              vz * 0.4 + (Math.random() - 0.5) * 2.5,
-            ],
-            gravity: [0, -2, 0],
-            color: [0.15 + Math.random() * 0.12, 0.2, 0.08, 0.9],
-            lifetime: 0.22 + Math.random() * 0.18,
-            startSize: [0.55, 0.22],
-            endSize: [0.15, 0.06],
-            drag: 0.8,
-            rotation: ang,
-          });
-        }
       }
     },
     {
@@ -2128,6 +2073,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   onBeforeRender(scene, (deltaMs) => {
+    // Celestial spin demo (no-op unless toggled). Uses wall-clock delta so the
+    // sun keeps sweeping even when the sim is paused.
+    celestial.update(deltaMs);
     terrain?.update?.(camera, deltaMs);
     // Freeze FX aging while sim is paused so bolts/trails don't burn out.
     const fxDt = fxPaused ? 0 : deltaMs;
@@ -2164,6 +2112,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     agoraProps.update?.(camera);
     monkLobFx.update(fxDt);
     sporeBloomFx.update(fxDt, fxSimTick);
+    locustFx.update(fxDt);
     mushrooms?.commit?.();
     frogRenderer.advance(fxDt);
     arrowTrails.update(fxDt);
@@ -2857,6 +2806,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (actionRadial.isOpen()) {
       actionRadial.update?.(camera);
     }
+    selectionHud.update?.(camera);
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
       // Unit matrices: markThinInstanceSlotDirty on write — do not flushThinInstances
@@ -2896,6 +2846,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (slot >= tiCount) return false;
     writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride);
     if (monkLobFx.isFlying(i)) monkLobFx.notePose(i, x, z);
+    if (diameter > 0.05) {
+      const def = getUnitDef(typeId);
+      const gy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
+      mushrooms?.noteHeadPose?.(
+        i,
+        x,
+        gy + loft + (def.pickHeight ?? 1.1) * 1.85,
+        z,
+      );
+    }
     return true;
   }
 
@@ -3184,14 +3144,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         try {
           const font = await buildingMenuFontPromise;
           radialScreen.font = font;
-          const [buildMenu, actionMenu] = await Promise.all([
+          const [buildMenu, actionMenu, selHud] = await Promise.all([
             createBuildingRadialMenu(engine, scene, groundYAt, radialScreen),
             createBuildingActionRadial(engine, scene, groundYAt, radialScreen),
+            createSelectionHud(engine, scene, radialScreen),
           ]);
           buildingRadial = buildMenu;
           actionRadial = actionMenu;
+          selectionHud = selHud;
           buildingRadial.registerLabels?.();
           actionRadial.registerLabels?.();
+          selectionHud.registerLabels?.();
           bootLog('radials');
         } catch (err) {
           console.error('[boot] radials failed', err);
@@ -3749,6 +3712,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return this.setUnitsEnabled(!unitsEnabled);
     },
 
+    /** Spin the sun/fill through all angles to preview lighting. Client-only. */
+    setCelestialSpin(on, opts) {
+      return celestial.setSpin(on, opts);
+    },
+
+    toggleCelestialSpin() {
+      return celestial.toggleSpin();
+    },
+
+    getCelestialSpin() {
+      return celestial.getSpin();
+    },
+
     /** Freeze particle / lightning / trail clocks (wire to sim pause). */
     setFxPaused(on) {
       fxPaused = !!on;
@@ -3911,9 +3887,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     syncProjectiles(prev, cur, alpha) {
+      if (!cur) {
+        locustFx.clear();
+        return projectileRenderer.sync(prev, cur, alpha);
+      }
+      locustFx.beginFrame();
       emitFireballGroundSplashes(prev, cur);
       emitHolySlashImpacts(prev, cur);
-      return projectileRenderer.sync(prev, cur, alpha);
+      const result = projectileRenderer.sync(prev, cur, alpha);
+      locustFx.endFrame();
+      return result;
     },
 
     clearProjectiles() {
@@ -3925,6 +3908,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       unitAuras.clear();
       monkLobFx.clear();
       sporeBloomFx.clear();
+      locustFx.clear();
       mushrooms?.clear?.();
       groundFires.clear();
       trailGenerations.fill(0);
@@ -4015,6 +3999,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       writeSelRingColorAt(i, tint);
       for (const mesh of selRingParts) markThinInstanceSlotDirty(mesh, i);
+    },
+
+    /**
+     * Feed the bottom-of-screen selection strip. `entries` is one row per
+     * distinct selected type: units `{ kind:'unit', typeId, name, count }` or
+     * buildings `{ kind:'building', typeKey, name, count }`. Empty/undefined
+     * clears the strip.
+     */
+    setSelectionGroups(entries) {
+      selectionHud.setGroups?.(entries ?? []);
+    },
+
+    /**
+     * Selection-strip chip under a client point →
+     * `{ kind:'unit', typeId }` / `{ kind:'building', typeKey }`, or null.
+     * Lets input treat the bottom strip as clickable buttons.
+     */
+    pickSelectionHud(clientX, clientY) {
+      const cc = canvasCoords(clientX, clientY);
+      return selectionHud.pickSlot?.(cc.x, cc.y) ?? null;
     },
 
     beginHealthBars() {

@@ -149,6 +149,16 @@ export const PLACEABLE_BUILDINGS = /** @type {const} */ ([
 
 const PLACEABLE_IDS = new Set(PLACEABLE_BUILDINGS.map((b) => b.id));
 
+const BUILDING_DISPLAY_NAMES = Object.freeze({
+  agora: 'Agora',
+  ...Object.fromEntries(PLACEABLE_BUILDINGS.map((b) => [b.id, b.name])),
+});
+
+/** Display name for agora / placeable type ids (selection HUD, menus). */
+export function getBuildingDisplayName(typeId) {
+  return BUILDING_DISPLAY_NAMES[typeId] ?? String(typeId ?? '');
+}
+
 /**
  * Menu unit keys → sim unit type ids. Add entries here as buildings gain train options.
  * @type {Readonly<Record<string, number>>}

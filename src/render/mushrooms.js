@@ -120,6 +120,8 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     console.warn('[mushrooms] mushroom.glb failed', err);
     return {
       spawnCluster() { return false; },
+      spawnHead() { return false; },
+      noteHeadPose() {},
       clearGrown() {},
       clear() {},
       update() {},
@@ -138,6 +140,19 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
    * }>}
    */
   const clusters = new Map();
+  /**
+   * @type {Map<number, {
+   *   x: number, y: number, z: number,
+   *   growT: number, shrinkT: number, age: number, killed: boolean,
+   *   slot: number, yaw: number, scale: number,
+   * }>}
+   */
+  const heads = new Map();
+  const HEAD_GROW_MS = 380;
+  const HEAD_LIVE_HOLD_MS = 720;
+  const HEAD_LIVE_FADE_MS = 560;
+  const HEAD_KILL_HOLD_MS = 1650;
+  const HEAD_KILL_FADE_MS = 900;
   let dirty = true;
   let simTick = 0;
   let previousDraw = 0;
@@ -202,6 +217,56 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     return true;
   }
 
+  function allocSlot() {
+    if (freeSlots.length === 0) ensureCapacity(capacity + 8);
+    return freeSlots.length ? freeSlots.pop() : -1;
+  }
+
+  function spawnHead(entity, x, z, killed) {
+    const id = entity | 0;
+    const existing = heads.get(id);
+    if (existing) {
+      existing.growT = Math.min(existing.growT, 0.2);
+      existing.shrinkT = 0;
+      existing.age = 0;
+      existing.killed = existing.killed || !!killed;
+      existing.x = x;
+      existing.z = z;
+      dirty = true;
+      return true;
+    }
+    const slot = allocSlot();
+    if (slot < 0) return false;
+    const mixed = (id * 2654435761) >>> 0;
+    heads.set(id, {
+      x,
+      y: groundYAt(x, z) + 2.15,
+      z,
+      growT: 0,
+      shrinkT: 0,
+      age: 0,
+      killed: !!killed,
+      slot,
+      yaw: ((mixed % 628) / 100),
+      scale: killed ? 1.7 : 1.35,
+    });
+    dirty = true;
+    return true;
+  }
+
+  function noteHeadPose(entity, x, y, z) {
+    const h = heads.get(entity | 0);
+    if (!h) return;
+    h.x = x;
+    h.y = y;
+    h.z = z;
+    dirty = true;
+  }
+
+  function releaseHead(h) {
+    freeSlots.push(h.slot);
+  }
+
   function clearGrown(tick) {
     if (Number.isFinite(tick)) simTick = tick;
   }
@@ -214,6 +279,11 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       const shrinkEase = 1 - (1 - Math.min(1, c.shrinkT)) ** 3;
       const size = (0.2 + 0.8 * growEase) * (1 - shrinkEase);
       if (size > 0.001) needed += c.instances.length;
+    }
+    for (const h of heads.values()) {
+      const growEase = 1 - (1 - Math.min(1, h.growT)) ** 3;
+      const shrinkEase = 1 - (1 - Math.min(1, h.shrinkT)) ** 3;
+      if ((0.15 + 0.85 * growEase) * (1 - shrinkEase) > 0.001) needed += 1;
     }
     ensureCapacity(needed);
 
@@ -240,6 +310,16 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
         }
         drawCount++;
       }
+    }
+    for (const h of heads.values()) {
+      const growEase = 1 - (1 - Math.min(1, h.growT)) ** 3;
+      const shrinkEase = 1 - (1 - Math.min(1, h.shrinkT)) ** 3;
+      const size = (0.15 + 0.85 * growEase) * (1 - shrinkEase) * h.scale;
+      if (size <= 0.001) continue;
+      for (let b = 0; b < batches.length; b++) {
+        writeMatrix(batches[b].matrices, drawCount, h.x, h.y, h.z, h.yaw, size);
+      }
+      drawCount++;
     }
     for (let b = 0; b < batches.length; b++) {
       for (let s = drawCount; s < previousDraw; s++) {
@@ -271,6 +351,26 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
         }
       }
     }
+    for (const [id, h] of heads) {
+      h.age += dt;
+      if (h.growT < 1) {
+        h.growT = Math.min(1, h.growT + dt / HEAD_GROW_MS);
+        animating = true;
+      }
+      const hold = h.killed ? HEAD_KILL_HOLD_MS : HEAD_LIVE_HOLD_MS;
+      const fade = h.killed ? HEAD_KILL_FADE_MS : HEAD_LIVE_FADE_MS;
+      if (h.age >= hold) {
+        if (h.shrinkT < 1) {
+          h.shrinkT = Math.min(1, h.shrinkT + dt / fade);
+          animating = true;
+        }
+        if (h.shrinkT >= 1) {
+          releaseHead(h);
+          heads.delete(id);
+          dirty = true;
+        }
+      }
+    }
     if (animating || dirty) {
       rebuild();
       dirty = false;
@@ -286,6 +386,8 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   function clear() {
     for (const c of clusters.values()) releaseCluster(c);
     clusters.clear();
+    for (const h of heads.values()) releaseHead(h);
+    heads.clear();
     for (let i = 0; i < previousDraw; i++) {
       for (let b = 0; b < batches.length; b++) hideMatrix(batches[b].matrices, i);
     }
@@ -299,6 +401,8 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
 
   return {
     spawnCluster,
+    spawnHead,
+    noteHeadPose,
     clearGrown,
     clear,
     update,

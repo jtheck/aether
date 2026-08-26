@@ -3,15 +3,17 @@
 
 import * as fx from './fixed.js';
 import { TERRAIN, worldToTile, applyTerrainSlow } from './field.js';
-import { applyTableEdgeOccupancy } from './tableShape.js';
+import { applyTableEdgeOccupancy, refreshTableTerrain } from './tableShape.js';
 import {
   TREE_STAGE_MAX,
   TREE_STAGE_MIN,
   TREE_WOOD_PER_STAGE,
   ensureTreeArrays,
+  fellTreeAt,
+  growTreeAt,
 } from './trees.js';
 
-function initialTreeStock(tx, tz, seed) {
+export function defaultTreeStock(tx, tz, seed) {
   const h = sceneryTileHash(tx, tz, seed + 4000);
   // Bias toward the high end so big trees are common, saplings less so.
   const biased = 1 - (1 - h) * (1 - h);
@@ -128,7 +130,7 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
       sceneryType[i] = SCENERY.TREE;
       slowMask[i] = 1;
       occupied[i] = 1;
-      field.treeStock[i] = initialTreeStock(tx, tz, seed);
+      field.treeStock[i] = defaultTreeStock(tx, tz, seed);
     }
   }
 
@@ -252,6 +254,123 @@ function collectRockMask(field) {
     }
   }
   return mask;
+}
+
+function ensureSceneryArrays(field) {
+  const n = field.width * field.height;
+  if (!field.sceneryType || field.sceneryType.length !== n) field.sceneryType = new Uint8Array(n);
+  ensureTreeArrays(field);
+}
+
+function stampRockCenter(field, tx, tz, kind) {
+  const { width, height } = field;
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
+  const i = tz * width + tx;
+  if (field.activeMask?.[i] === 0) return false;
+  if (kind < SCENERY.ROCK_PLAIN || kind > SCENERY.ROCK_SNOW) return false;
+  const radius = rockFootprintRadius(kind);
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dz * dz > (radius + 0.5) ** 2) continue;
+      const x = tx + dx;
+      const z = tz + dz;
+      if (x < 0 || z < 0 || x >= width || z >= height) return false;
+      if (field.activeMask?.[z * width + x] === 0) return false;
+    }
+  }
+  if (field.sceneryType[i] === SCENERY.TREE) fellTreeAt(field, i);
+  field.sceneryType[i] = kind;
+  return true;
+}
+
+function stampClear(field, tx, tz) {
+  const i = tz * field.width + tx;
+  const kind = field.sceneryType?.[i] ?? SCENERY.NONE;
+  let changed = false;
+  if (kind === SCENERY.TREE || (field.treeStock?.[i] > 0)) {
+    fellTreeAt(field, i);
+    changed = true;
+  }
+  if (kind >= SCENERY.ROCK_PLAIN) {
+    field.sceneryType[i] = SCENERY.NONE;
+    changed = true;
+  }
+  return changed;
+}
+
+/** Plant a rock center and refresh occupancy. */
+export function placeRockAt(field, tx, tz, kind = SCENERY.ROCK_PLAIN) {
+  ensureSceneryArrays(field);
+  if (!stampRockCenter(field, tx, tz, kind)) return false;
+  applyAuthoredScenery(field);
+  return true;
+}
+
+/** Remove a tree or rock at a tile. */
+export function clearSceneryAt(field, tx, tz) {
+  const { width, height } = field;
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
+  ensureSceneryArrays(field);
+  if (!stampClear(field, tx, tz)) return false;
+  applyAuthoredScenery(field);
+  return true;
+}
+
+/** Recompute rock pass + tree slow from sceneryType / treeStock without regenerating. */
+export function applyAuthoredScenery(field) {
+  const { width, height } = field;
+  const n = width * height;
+  ensureSceneryArrays(field);
+  refreshTableTerrain(field);
+  const occupied = new Uint8Array(n);
+  for (let tz = 0; tz < height; tz++) {
+    for (let tx = 0; tx < width; tx++) {
+      const i = tz * width + tx;
+      const kind = field.sceneryType[i];
+      if (kind < SCENERY.ROCK_PLAIN) continue;
+      markFootprint(field, occupied, field.pass, tx, tz, rockFootprintRadius(kind));
+    }
+  }
+  applyRockSlowBorder(field, occupied);
+  for (let i = 0; i < n; i++) {
+    if (field.sceneryType[i] === SCENERY.TREE || (field.treeStock[i] > 0)) {
+      field.sceneryType[i] = SCENERY.TREE;
+      field.slowMask[i] = 1;
+    }
+  }
+  applyTerrainSlow(field);
+  applyTableEdgeOccupancy(field);
+  return field;
+}
+
+export function paintSceneryBrush(field, tx, tz, kind, radius = 0) {
+  ensureSceneryArrays(field);
+  const r = Math.max(0, radius | 0);
+  const r2 = r * r;
+  const dirty = [];
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx * dx + dz * dz > r2) continue;
+      const x = tx + dx;
+      const z = tz + dz;
+      if (x < 0 || z < 0 || x >= field.width || z >= field.height) continue;
+      const i = z * field.width + x;
+      if (field.activeMask?.[i] === 0) continue;
+      if (kind === SCENERY.NONE) {
+        if (stampClear(field, x, z)) dirty.push({ x, z });
+        continue;
+      }
+      if (kind === SCENERY.TREE) {
+        if (field.sceneryType[i] >= SCENERY.ROCK_PLAIN) continue;
+        const stock = defaultTreeStock(x, z, field.seed);
+        if (growTreeAt(field, i, stock)) dirty.push({ x, z });
+        continue;
+      }
+      if (stampRockCenter(field, x, z, kind)) dirty.push({ x, z });
+    }
+  }
+  if (dirty.length) applyAuthoredScenery(field);
+  return dirty;
 }
 
 function hasRockNeighbor(mask, width, height, tx, tz) {

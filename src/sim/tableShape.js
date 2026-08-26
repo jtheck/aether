@@ -1,6 +1,7 @@
 // Table silhouette — 16-tile chunks with per-chunk corner radius.
+// Play / Forge boards use an odd chunk count so the origin sits in a center chunk.
 // A chunk's radius fillets its outside corners (convex) or inside corners
-// (concave / punched hole). Radius 0 stays sharp for a wooden corner block.
+// (concave / punched hole). Radius 0 stays sharp and plants a corner plinth.
 
 import {
   TILE_SIZE_F,
@@ -9,9 +10,34 @@ import {
 } from './field.js';
 
 export const DEFAULT_CELL_SIZE = 16;
-export const DEFAULT_CELL_RADIUS = 12;
-const ARC_SEGMENTS = 10;
+/** Sharp corners + plinths. Raise a chunk's radius in Forge to fillet it. */
+export const DEFAULT_CELL_RADIUS = 0;
+/** World size of the leftover r=0 closer on non-silhouette frames. */
+export const CORNER_BLOCK_SIZE = 11.55;
+const ARC_SEGMENTS = 16;
 const EPS = 1e-5;
+
+/** Half-extent of a chunk-sized bastion. Corner radius is a fraction of this (1 = circle). */
+export const BASTION_CORNER_T = 0.4;
+/** Center and rail plinths vs a full-chunk square. */
+export const PLINTH_SCALE = 0.62;
+
+export function bastionHalf(shape) {
+  const cell = Math.max(1, (shape?.cellSize ?? DEFAULT_CELL_SIZE) | 0);
+  return cell * TILE_SIZE_F * 0.5;
+}
+
+export function bastionCornerRadius(shape) {
+  return bastionHalf(shape) * BASTION_CORNER_T;
+}
+
+export function plinthHalf(shape) {
+  return bastionHalf(shape) * PLINTH_SCALE;
+}
+
+export function plinthCornerRadius(shape) {
+  return plinthHalf(shape) * BASTION_CORNER_T;
+}
 
 export function cellCounts(width, height, cellSize = DEFAULT_CELL_SIZE) {
   const size = Math.max(1, cellSize | 0);
@@ -369,6 +395,136 @@ export function tileInSharpTable(field, shape, tx, tz) {
   return isCellEnabled(shape, cx, cz);
 }
 
+/** Tile-grid vertex at the board origin (dead center on odd-chunk maps). */
+export function tableCenterVertex(field) {
+  const half = worldHalfFFromField(field);
+  const vx = Math.round(field.width / 2);
+  const vz = Math.round(field.height / 2);
+  return {
+    x: vx * TILE_SIZE_F - half,
+    z: vz * TILE_SIZE_F - half,
+    vx,
+    vz,
+  };
+}
+
+/** Odd×odd chunk boards get a center plinth at the origin. */
+export function tableHasCenterBlock(field, shape = field.tableShape) {
+  if (!shape || (shape.chunksX & 1) === 0 || (shape.chunksZ & 1) === 0) return false;
+  const { x, z } = tableCenterVertex(field);
+  return pointInTable(field, shape, x, z);
+}
+
+function pointInRoundedRect(px, pz, x, z, half, cornerR) {
+  const lx = Math.abs(px - x);
+  const lz = Math.abs(pz - z);
+  if (lx > half || lz > half) return false;
+  const inner = half - cornerR;
+  if (lx <= inner || lz <= inner) return true;
+  const dx = lx - inner;
+  const dz = lz - inner;
+  return dx * dx + dz * dz <= cornerR * cornerR;
+}
+
+function stampRoundedRectFootprint(field, edge, x, z, half, cornerR) {
+  const worldHalf = worldHalfFFromField(field);
+  const tx0 = Math.max(0, Math.floor((x - half + worldHalf) / TILE_SIZE_F));
+  const tz0 = Math.max(0, Math.floor((z - half + worldHalf) / TILE_SIZE_F));
+  const tx1 = Math.min(field.width - 1, Math.floor((x + half - EPS + worldHalf) / TILE_SIZE_F));
+  const tz1 = Math.min(field.height - 1, Math.floor((z + half - EPS + worldHalf) / TILE_SIZE_F));
+  for (let tz = tz0; tz <= tz1; tz++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const i = tz * field.width + tx;
+      if (!field.activeMask[i]) continue;
+      const cx = (tx + 0.5) * TILE_SIZE_F - worldHalf;
+      const cz = (tz + 0.5) * TILE_SIZE_F - worldHalf;
+      if (pointInRoundedRect(cx, cz, x, z, half, cornerR)) edge[i] = 1;
+    }
+  }
+}
+
+function enabledWorldBounds(field, shape) {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  let any = false;
+  for (let cz = 0; cz < shape.chunksZ; cz++) {
+    for (let cx = 0; cx < shape.chunksX; cx++) {
+      if (!isCellEnabled(shape, cx, cz)) continue;
+      const b = cellWorldBox(field, cx, cz, shape.cellSize);
+      any = true;
+      minX = Math.min(minX, b.x0);
+      maxX = Math.max(maxX, b.x1);
+      minZ = Math.min(minZ, b.z0);
+      maxZ = Math.max(maxZ, b.z1);
+    }
+  }
+  return any ? { minX, maxX, minZ, maxZ } : null;
+}
+
+function isOuterTableEdge(ax, az, bx, bz, ox, oz, bounds) {
+  const mx = (ax + bx) * 0.5 + ox * 0.4;
+  const mz = (az + bz) * 0.5 + oz * 0.4;
+  return mx < bounds.minX - 0.05 || mx > bounds.maxX + 0.05
+    || mz < bounds.minZ - 0.05 || mz > bounds.maxZ + 0.05;
+}
+
+/** r=0 convex corners get the same plinth as center / rail mids. Filleted corners skip it. */
+export function tableCornerPlinths(field, shape = field.tableShape) {
+  if (!field || !shape) return [];
+  return convexCorners(field, shape)
+    .filter((c) => c.r <= 0)
+    .map((c) => ({ x: c.x, z: c.z }));
+}
+
+/** Midpoints of outer table rails only — skips holes and internal cuts. */
+export function tableEdgeMidpoints(field, shape = field.tableShape) {
+  if (!field || !shape) return [];
+  const bounds = enabledWorldBounds(field, shape);
+  if (!bounds) return [];
+  const minLen = shape.cellSize * TILE_SIZE_F * 0.9;
+  const corners = silhouetteCorners(field, shape);
+  const out = [];
+  for (const loop of buildCellLoops(field, shape)) {
+    const closed = loop.length > 1
+      && Math.hypot(loop[0].x - loop[loop.length - 1].x, loop[0].z - loop[loop.length - 1].z) < 0.05;
+    const n = closed ? loop.length - 1 : loop.length;
+    for (let i = 0; i < n; i++) {
+      const a = loop[i];
+      const b = loop[(i + 1) % n];
+      if (Math.hypot(b.x - a.x, b.z - a.z) < minLen) continue;
+      const { ox, oz } = loopOutward(field, shape, a.x, a.z, b.x, b.z, corners);
+      if (!isOuterTableEdge(a.x, a.z, b.x, b.z, ox, oz, bounds)) continue;
+      out.push({
+        x: (a.x + b.x) * 0.5,
+        z: (a.z + b.z) * 0.5,
+        ox,
+        oz,
+      });
+    }
+  }
+  return out;
+}
+
+function stampTableBlocks(field, edge, shape) {
+  if (tableHasCenterBlock(field, shape)) {
+    const center = tableCenterVertex(field);
+    field.tableCenter = center;
+    stampRoundedRectFootprint(field, edge, center.x, center.z, plinthHalf(shape), plinthCornerRadius(shape));
+  } else {
+    field.tableCenter = null;
+  }
+  const mids = tableEdgeMidpoints(field, shape);
+  field.tableEdgeBlocks = mids;
+  const corners = tableCornerPlinths(field, shape);
+  field.tableCornerBlocks = corners;
+  const half = plinthHalf(shape);
+  const cornerR = plinthCornerRadius(shape);
+  for (const p of mids) stampRoundedRectFootprint(field, edge, p.x, p.z, half, cornerR);
+  for (const p of corners) stampRoundedRectFootprint(field, edge, p.x, p.z, half, cornerR);
+}
+
 /** Write activeMask / pass / slow from the silhouette. Red = edge, yellow = touches red. */
 export function applyTableSilhouette(field, opts = {}) {
   const shape = normalizeTableShape(field, opts);
@@ -399,6 +555,7 @@ export function applyTableSilhouette(field, opts = {}) {
     }
   }
 
+  stampTableBlocks(field, edge, shape);
   field.tableEdge = edge;
   refreshTableTerrain(field);
   return field;

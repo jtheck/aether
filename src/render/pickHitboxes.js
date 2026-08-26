@@ -75,8 +75,8 @@ export function createPickHitboxRenderer(engine, scene, capacity) {
     mesh = createSphere(engine, { diameter: 2, segments: 10 });
     mesh.pickable = false;
     material = createStandardMaterial();
-    material.diffuseColor = [1, 0.2, 0.95];
-    material.emissiveColor = [1, 0.2, 0.95];
+    material.diffuseColor = [0.82, 0.32, 0.4];
+    material.emissiveColor = [0.36, 0.1, 0.14];
     material.specularColor = [0, 0, 0];
     material.disableLighting = true;
     // Any alpha < 1 keeps Lite on the per-frame transparent path (not a frozen

@@ -3,13 +3,14 @@ import * as fx from './fixed.js';
 import { checksum } from './checksum.js';
 import { CMD } from './commands.js';
 import { kill } from './damage.js';
-import { createField, setBlocked, worldToTile } from './field.js';
+import { createField, setBlocked, worldToTile, TERRAIN } from './field.js';
 import {
   createProjectileStore,
   projectileSystem,
   spawnProjectile,
 } from './projectiles.js';
 import { PROJECTILE } from './projectileTypes.js';
+import { takeSporeBloomUpdates } from './sporeBloom.js';
 import { step } from './step.js';
 import { getUnitDef, UNIT } from './unitTypes.js';
 import { createWorld, spawn } from './world.js';
@@ -476,7 +477,7 @@ function fireballAimScatterGrowsWithRange() {
   void field;
 }
 
-function sporeStreamPathHitsSecondTarget() {
+function sporeStreamHitsOnlyTarget() {
   const field = openField();
   const w = createWorld(31);
   const myco = spawn(w, {
@@ -513,8 +514,63 @@ function sporeStreamPathHitsSecondTarget() {
   for (let t = 0; t < 40 && w.projectiles.activeCount; t++) {
     projectileSystem(w, field);
   }
-  assert.ok(w.hp[front] < frontHp, 'spore stream damages units in the path');
-  assert.ok(w.hp[back] < backHp, 'spore stream still reaches the aimed target');
+  assert.equal(w.hp[front], frontHp, 'head mushroom does not pierce the path');
+  assert.ok(w.hp[back] < backHp, 'aimed target still takes the hit');
+  const fx = takeSporeBloomUpdates(w);
+  assert.ok(fx?.headCount >= 1, 'hit publishes a head mushroom');
+  assert.equal(fx.headKill[0], 0);
+}
+
+function stampGrassAround(field, wx, wy, r = 4) {
+  const tx0 = worldToTile(wx);
+  const tz0 = worldToTile(wy);
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const tx = tx0 + dx;
+      const tz = tz0 + dz;
+      if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) continue;
+      const i = tz * field.width + tx;
+      field.terrainTypes[i] = TERRAIN.GRASS;
+      field.pass[i] = 1;
+      field.activeMask[i] = 1;
+      field.sceneryType[i] = 0;
+      field.treeStock[i] = 0;
+    }
+  }
+}
+
+function sporeHeadKillSeedsATree() {
+  const field = openField();
+  const w = createWorld(36);
+  const myco = spawn(w, { x: 0, y: 0, type: UNIT.MYCO, owner: 0 });
+  const foe = spawn(w, {
+    x: fx.fromInt(8),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  stampGrassAround(field, w.px[foe], w.py[foe]);
+  w.hp[foe] = 3;
+  spawnProjectile(w, {
+    type: PROJECTILE.SPORE_STREAM,
+    owner: 0,
+    source: myco,
+    target: foe,
+    x: 0,
+    y: 0,
+    aimX: w.px[foe],
+    aimY: w.py[foe],
+    damage: 5,
+  });
+  for (let t = 0; t < 40 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  assert.equal(w.alive[foe], 0, 'killing blow drops the unit');
+  assert.ok(w.treeGrowth.count >= 1, 'killing blow queues a tree seed');
+  const fx = takeSporeBloomUpdates(w);
+  assert.ok(fx?.headCount >= 1);
+  assert.equal(fx.headKill[0], 1);
+  assert.ok(fx.seedCount >= 1, 'death tile becomes a tree seed preview');
 }
 
 function shadowBoltAppliesDot() {
@@ -596,7 +652,7 @@ function locustSwarmDistracts() {
     aimY: w.py[foe],
     damage: 5,
   });
-  for (let t = 0; t < 20 && w.projectiles.activeCount; t++) {
+  for (let t = 0; t < 40 && w.projectiles.activeCount; t++) {
     projectileSystem(w, field);
   }
   assert.ok(w.distractCd[foe] > 0, 'locust swarm distracts');
@@ -643,7 +699,8 @@ fireballSplashBlastLobsUnits();
 fireballBlastDistanceIsRandom();
 castCommandSpawnsFireball();
 fireballAimScatterGrowsWithRange();
-sporeStreamPathHitsSecondTarget();
+sporeStreamHitsOnlyTarget();
+sporeHeadKillSeedsATree();
 shadowBoltAppliesDot();
 iceBoltAppliesFrost();
 locustSwarmDistracts();

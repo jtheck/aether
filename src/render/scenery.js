@@ -39,8 +39,15 @@ const TREE_SHRINK_MS = 2200;
 const TREE_FELL_MS = 1400;
 /** Hold full size while ink drips, then melt. */
 const TREE_FELL_DELAY_MS = 850;
-/** Match the terrain fog veil (~0.4 overlay) so trees/rocks don't pop bright. */
-const FOG_DIM = 0.58;
+/** Match leftover terrain after the 0.64 fog veil so trees/rocks don't stay sunlit. */
+const FOG_DIM = 0.38;
+/**
+ * Untextured PBR + outdoor key / 1.55 exposure reads as a chalk wash.
+ * Thin-instance color multiplies albedo (same path as fog), so this hits
+ * both the GLB/bake meshes and the atlas billboards.
+ */
+const TREE_ALBEDO_DIM = 0.24;
+const ROCK_ALBEDO_DIM = 0.30;
 const placementScratch = new Float64Array(16);
 
 function setThinInstanceCount(mesh, count) {
@@ -149,7 +156,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 
     const billboardMesh = createBillboardMesh(engine, variant, atlas);
     const billboardMatrices = new Float32Array(capacity * 16);
-    const colors = makeWhiteColors(capacity);
+    const colors = makeDimColors(capacity, albedoDimFor(variant.kind));
     setThinInstances(billboardMesh, billboardMatrices, capacity);
     setThinInstanceColors(billboardMesh, colors);
     setThinInstanceCount(billboardMesh, capacity);
@@ -237,7 +244,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     const oldCap = treeBatch.capacity;
     const billboardMatrices = new Float32Array(cap * 16);
     billboardMatrices.set(treeBatch.billboardMatrices.subarray(0, oldCap * 16));
-    const colors = makeWhiteColors(cap);
+    const colors = makeDimColors(cap, albedoDimFor(SCENERY.TREE));
     if (treeBatch.colors) colors.set(treeBatch.colors.subarray(0, oldCap * 4));
     setThinInstances(treeBatch.billboardMesh, billboardMatrices, cap);
     setThinInstanceColors(treeBatch.billboardMesh, colors);
@@ -457,7 +464,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (!colors) return;
     const p = batch.instances[index];
     const t = fogFactor ? fogFactor(p.x, p.z) : 0;
-    const c = 1 - t * (1 - FOG_DIM);
+    const c = albedoDimFor(batch.variant.kind) * (1 - t * (1 - FOG_DIM));
     const o = index * 4;
     colors[o] = c;
     colors[o + 1] = c;
@@ -557,11 +564,10 @@ async function loadModelParts(engine, variant) {
       // Prefer offline bake (geo + mats) — skips GLB parse on cold boot.
       if (await hasBakedMesh(variant.modelUrl)) {
         const meshes = await loadBakedUnitMeshParts(engine, variant.modelUrl);
-        const isTree = variant.kind === SCENERY.TREE;
         return meshes.map((mesh, index) => {
           // Must match GLB path + collectShadowCasters filter (`scenery-model-*`).
           mesh.name = `scenery-model-${variant.name}-${index}`;
-          mesh.material = prepareSceneryMaterial(mesh.material, isTree);
+          mesh.material = prepareSceneryMaterial(mesh.material);
           return { mesh, baseMatrix: identityMatrix(), matrices: null };
         });
       }
@@ -581,7 +587,6 @@ async function loadModelParts(engine, variant) {
           source,
           source.worldMatrix,
           `scenery-model-${variant.name}-${index}`,
-          variant.kind === SCENERY.TREE,
         );
         return { mesh, baseMatrix: identityMatrix(), matrices: null };
       });
@@ -591,7 +596,7 @@ async function loadModelParts(engine, variant) {
   return promise;
 }
 
-function bakeModelMesh(engine, source, world, name, isTree = false) {
+function bakeModelMesh(engine, source, world, name) {
   const srcPositions = source._cpuPositions;
   const srcIndices = source._cpuIndices;
   if (!srcPositions || !srcIndices) {
@@ -622,7 +627,7 @@ function bakeModelMesh(engine, source, world, name, isTree = false) {
     indices,
     source._cpuUvs ? new Float32Array(source._cpuUvs) : undefined,
   );
-  mesh.material = prepareSceneryMaterial(source.material, isTree);
+  mesh.material = prepareSceneryMaterial(source.material);
   mesh.pickable = false;
   // Recomputed normals assume CW fronts (Lite LH); show CW faces.
   mesh._reverseWinding = true;
@@ -630,20 +635,15 @@ function bakeModelMesh(engine, source, world, name, isTree = false) {
 }
 
 /**
- * Match v1: kill emissive. Untextured tree green blows out under outdoor sun
- * without tonemap — pull that albedo down harder than rock greys.
+ * Match v1: kill emissive. Albedo pull lives on thin-instance color so it
+ * cannot stack with TREE_ALBEDO_DIM / ROCK_ALBEDO_DIM.
  */
-function prepareSceneryMaterial(sourceMat, isTree) {
+function prepareSceneryMaterial(sourceMat) {
   if (!sourceMat) return sourceMat;
   const mat = sourceMat;
   if (mat._emissiveColor) setPbrEmissive(mat, [0, 0, 0]);
   if (mat.emissiveColor) mat.emissiveColor = [0, 0, 0];
   if (mat.emissiveIntensity != null) mat.emissiveIntensity = 0;
-  const f = mat.baseColorFactor;
-  if (isTree && Array.isArray(f) && f.length >= 3) {
-    const k = 0.42;
-    mat.baseColorFactor = [f[0] * k, f[1] * k, f[2] * k, f[3] ?? 1];
-  }
   mat._renderFeatures = undefined;
   mat._uboVersion = (mat._uboVersion ?? 0) + 1;
   return mat;
@@ -722,8 +722,8 @@ function createBillboardMesh(engine, variant, atlas) {
   mat.opacityFromRGB = false;
   mat.alphaCutOff = 0.35;
   mat.diffuseColor = [1, 1, 1];
-  mat.ambientColor = [0.7, 0.7, 0.65];
-  mat.emissiveColor = [0.12, 0.12, 0.1];
+  mat.ambientColor = [0.28, 0.28, 0.24];
+  mat.emissiveColor = [0, 0, 0];
   mat.specularColor = [0, 0, 0];
   mat.backFaceCulling = false;
   mesh.material = mat;
@@ -883,9 +883,19 @@ function deterministicPlacement(tx, tz, seed, kind) {
   return { offsetX, offsetZ, yaw: (hash % 628) / 100 };
 }
 
-function makeWhiteColors(cap) {
+function albedoDimFor(kind) {
+  return kind === SCENERY.TREE ? TREE_ALBEDO_DIM : ROCK_ALBEDO_DIM;
+}
+
+function makeDimColors(cap, dim) {
   const colors = new Float32Array(cap * 4);
-  colors.fill(1);
+  for (let i = 0; i < cap; i++) {
+    const o = i * 4;
+    colors[o] = dim;
+    colors[o + 1] = dim;
+    colors[o + 2] = dim;
+    colors[o + 3] = 1;
+  }
   return colors;
 }
 

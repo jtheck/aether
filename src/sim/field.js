@@ -9,17 +9,49 @@ export const TILE = fx.fromFloat(4);
 export const HALF_TILE = fx.div(TILE, fx.fromInt(2));
 export const TILE_SIZE_F = 4;
 
-/** Normal play board (keep MAP_* × TILE_SIZE_F === WORLD_HALF_F × 2). */
-export const DEFAULT_MAP_W = 200;
-export const DEFAULT_MAP_H = 200;
-/** Stress / animStress only — do not use as the global default. */
-export const STRESS_MAP_W = 480;
-export const STRESS_MAP_H = 480;
+/** Table silhouette chunks — keep in sync with tableShape.DEFAULT_CELL_SIZE. */
+export const TABLE_CHUNK_TILES = 16;
+
+/**
+ * Tile count for an odd number of table chunks.
+ * Odd sides put the world origin in the middle of a center chunk, not on a seam.
+ * Even `chunks` rounds up.
+ */
+export function tilesForOddChunks(chunks, cellSize = TABLE_CHUNK_TILES) {
+  const size = Math.max(1, cellSize | 0);
+  let n = Math.max(1, chunks | 0);
+  if ((n & 1) === 0) n += 1;
+  return n * size;
+}
+
+/** Snap a tile count onto the nearest odd chunk board (tie goes larger). */
+export function snapTilesToOddChunks(tiles, cellSize = TABLE_CHUNK_TILES) {
+  const size = Math.max(1, cellSize | 0);
+  const raw = Math.max(1, tiles | 0);
+  let n = Math.max(1, Math.round(raw / size) || 1);
+  if ((n & 1) === 0) {
+    const down = n - 1;
+    const up = n + 1;
+    n = down < 1 || Math.abs(raw - up * size) <= Math.abs(raw - down * size) ? up : down;
+  }
+  return n * size;
+}
+
+/** Normal play board — 13×13 chunks (odd). */
+export const DEFAULT_MAP_CHUNKS = 13;
+export const DEFAULT_MAP_W = tilesForOddChunks(DEFAULT_MAP_CHUNKS);
+export const DEFAULT_MAP_H = DEFAULT_MAP_W;
+/** Stress / animStress only — 31×31 chunks (odd). */
+export const STRESS_MAP_CHUNKS = 31;
+export const STRESS_MAP_W = tilesForOddChunks(STRESS_MAP_CHUNKS);
+export const STRESS_MAP_H = STRESS_MAP_W;
+/** Forge size picker — 5 / 9 / 13 chunks. */
+export const FORGE_MAP_SIZES = [5, 9, 13].map((chunks) => tilesForOddChunks(chunks));
 
 /** Default playable board in tiles (aliases for callers that want the normal size). */
 export const MAP_W = DEFAULT_MAP_W;
 export const MAP_H = DEFAULT_MAP_H;
-/** Ground is 800×800 centered on the origin (−400…400 world units) for default play. */
+/** Ground is 832×832 centered on the origin (−416…416 world units) for default play. */
 export const WORLD_HALF_F = (MAP_W * TILE_SIZE_F) / 2;
 export const WORLD_HALF = fx.fromInt(WORLD_HALF_F);
 
@@ -184,6 +216,13 @@ export function fieldSnapshot(field) {
       ?? new Uint8Array(field.width * field.height),
     tableEdge: field.tableEdge?.slice?.()
       ?? new Uint8Array(field.width * field.height),
+    tableCenter: field.tableCenter ? { ...field.tableCenter } : null,
+    tableEdgeBlocks: Array.isArray(field.tableEdgeBlocks)
+      ? field.tableEdgeBlocks.map((p) => ({ x: p.x, z: p.z, ox: p.ox ?? 0, oz: p.oz ?? 0 }))
+      : [],
+    tableCornerBlocks: Array.isArray(field.tableCornerBlocks)
+      ? field.tableCornerBlocks.map((p) => ({ x: p.x, z: p.z }))
+      : [],
     sceneryType: field.sceneryType.slice(),
     treeStock: field.treeStock?.slice?.() ?? new Uint8Array(field.width * field.height),
     treeBurn: field.treeBurn instanceof Uint16Array

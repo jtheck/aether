@@ -21,6 +21,7 @@ import {
   buildingFootprintBounds,
   snapBuildingWorld,
   BUILDING_FOOTPRINTS,
+  getBuildingDisplayName,
 } from './buildings.js';
 import { createAgoras } from './agora.js';
 import { UNIT } from './unitTypes.js';
@@ -413,5 +414,14 @@ describe('buildings place', () => {
       delete BUILDING_FOOTPRINTS.__wall;
       delete BUILDING_FOOTPRINTS.__keep;
     }
+  });
+});
+
+describe('getBuildingDisplayName', () => {
+  it('names agora and placeables, and falls back to the type id', () => {
+    assert.equal(getBuildingDisplayName('agora'), 'Agora');
+    assert.equal(getBuildingDisplayName('moonwell'), 'Moon Well');
+    assert.equal(getBuildingDisplayName('camp'), 'Camp');
+    assert.equal(getBuildingDisplayName('unknown-keep'), 'unknown-keep');
   });
 });

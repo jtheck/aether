@@ -15,17 +15,10 @@ import { loadBakedUnitMeshParts } from './unitModels.js';
 import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
+import { OWNER_TINTS } from './ownerTints.js';
 
 /** Start small; grow by powers of two when place() needs more. */
 const INITIAL_CAPACITY = 32;
-/** Matches unit OWNER_TINTS in main.js (blue / red / green / gold / purple). */
-const OWNER_TINTS = [
-  [0.25, 0.55, 1.0],
-  [1.0, 0.32, 0.25],
-  [0.4, 1.0, 0.45],
-  [0.95, 0.8, 0.25],
-  [0.75, 0.45, 1.0],
-];
 const GHOST_ALPHA = 0.62;
 const GHOST_VALID_EMISSIVE = [0.15, 0.55, 0.22];
 const GHOST_INVALID_EMISSIVE = [1.0, 0.05, 0.02];

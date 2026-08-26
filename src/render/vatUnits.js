@@ -116,7 +116,7 @@ function prepareTeamColorMaterial(engine, mesh, donorMat) {
     _uboVersion: 0,
   };
   // v1 used ~0.25 unlit emissive of the team color; small lift only.
-  setPbrEmissive(mesh.material, [0.18, 0.18, 0.18]);
+  setPbrEmissive(mesh.material, [0.28, 0.28, 0.28]);
 }
 
 /** @type {Map<string, { bakedList: object[], bakeClipName: string, idleName: string, walkName: string, idleClip: object, walkClip: object }>} */

@@ -1,9 +1,17 @@
-// .garden v3 — cell mask + per-chunk radii + terrain RLE.
+// .garden v4 — table + terrain + optional scenery / placements.
+// v3 files still decode (no scenery / placements).
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
-import { buildField, createField, refreshTerrainDerived } from './field.js';
+import { buildField, createField, refreshTerrainDerived, tileCenterX, tileCenterY } from './field.js';
+import { applyAuthoredScenery, SCENERY } from './scenery.js';
+import { spawn } from './world.js';
+import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
+import { createAgoras } from './agora.js';
+import * as fx from './fixed.js';
 
-export const GARDEN_VERSION = 3;
+export const GARDEN_VERSION = 4;
+export const GARDEN_VERSION_MIN = 3;
+export const GARDEN_SESSION_KEY = 'aeg.garden';
 
 export function encodeRle(arr) {
   if (!arr || arr.length === 0) return '';
@@ -56,9 +64,53 @@ function decodeCellBits(str, expected) {
   return mask;
 }
 
+function hasAuthoredScenery(field) {
+  if (!field?.sceneryType) return false;
+  for (let i = 0; i < field.sceneryType.length; i++) {
+    if (field.sceneryType[i]) return true;
+  }
+  return false;
+}
+
+function normalizeUnits(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((u) => {
+    if (Array.isArray(u)) return { owner: u[0] | 0, type: u[1] | 0, tx: u[2] | 0, tz: u[3] | 0 };
+    return { owner: u.owner | 0, type: u.type | 0, tx: u.tx | 0, tz: u.tz | 0 };
+  });
+}
+
+function normalizeBuildings(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((b) => {
+    if (Array.isArray(b)) {
+      return { owner: b[0] | 0, type: String(b[1]), x: Number(b[2]) || 0, z: Number(b[3]) || 0, yaw: Number(b[4]) || 0 };
+    }
+    return {
+      owner: b.owner | 0,
+      type: String(b.type),
+      x: Number(b.x) || 0,
+      z: Number(b.z) || 0,
+      yaw: Number(b.yaw) || 0,
+    };
+  });
+}
+
+function normalizeAgoras(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map((g) => {
+    if (Array.isArray(g)) return { owner: g[0] | 0, x: Number(g[1]) || 0, z: Number(g[2]) || 0 };
+    return { owner: g.owner | 0, x: Number(g.x) || 0, z: Number(g.z) || 0 };
+  });
+}
+
 export function encodeGarden(field, extras = {}) {
   const shape = normalizeTableShape(field, field.tableShape ?? {});
-  return {
+  const units = normalizeUnits(extras.units);
+  const buildings = normalizeBuildings(extras.buildings);
+  const agoras = normalizeAgoras(extras.agoras);
+  const authored = extras.authoredScenery === true || hasAuthoredScenery(field);
+  const out = {
     v: GARDEN_VERSION,
     n: extras.name || undefined,
     w: field.width,
@@ -69,11 +121,22 @@ export function encodeGarden(field, extras = {}) {
     rr: encodeRle(shape.cellRadius),
     t: encodeRle(field.terrainTypes),
   };
+  if (authored) {
+    out.sc = encodeRle(field.sceneryType);
+    out.ts = encodeRle(field.treeStock);
+  }
+  if (units.length) out.u = units.map((u) => [u.owner, u.type, u.tx, u.tz]);
+  if (buildings.length) out.b = buildings.map((b) => [b.owner, b.type, b.x, b.z, b.yaw]);
+  if (agoras.length) out.g = agoras.map((g) => [g.owner, g.x, g.z]);
+  return out;
 }
 
 export function decodeGarden(data) {
   if (!data || typeof data !== 'object') throw new Error('Invalid garden');
-  if ((data.v | 0) !== GARDEN_VERSION) throw new Error(`Unsupported garden version ${data.v}`);
+  const version = data.v | 0;
+  if (version < GARDEN_VERSION_MIN || version > GARDEN_VERSION) {
+    throw new Error(`Unsupported garden version ${data.v}`);
+  }
   const width = data.w | 0;
   const height = data.h | 0;
   if (width < 1 || height < 1) throw new Error('Invalid garden size');
@@ -81,7 +144,9 @@ export function decodeGarden(data) {
   const chunksX = Math.ceil(width / cellSize);
   const chunksZ = Math.ceil(height / cellSize);
   const expected = chunksX * chunksZ;
+  const n = width * height;
   return {
+    version,
     name: data.n || '',
     width,
     height,
@@ -93,7 +158,13 @@ export function decodeGarden(data) {
     cellRadius: data.rr
       ? decodeRle(data.rr, expected)
       : createFullCellRadius(width, height, cellSize, Number(data.cr) || 0),
-    terrainTypes: decodeRle(data.t, width * height),
+    terrainTypes: decodeRle(data.t, n),
+    sceneryType: data.sc ? decodeRle(data.sc, n) : null,
+    treeStock: data.ts ? decodeRle(data.ts, n) : null,
+    units: normalizeUnits(data.u),
+    buildings: normalizeBuildings(data.b),
+    agoras: normalizeAgoras(data.g),
+    authoredScenery: !!data.sc,
   };
 }
 
@@ -114,7 +185,43 @@ export function fieldFromGarden(data) {
   if (g.terrainTypes.length !== field.terrainTypes.length) {
     refreshTerrainDerived(field);
   }
+  if (g.authoredScenery) {
+    if (g.sceneryType?.length === field.sceneryType.length) field.sceneryType.set(g.sceneryType);
+    if (g.treeStock?.length === field.treeStock.length) field.treeStock.set(g.treeStock);
+    applyAuthoredScenery(field);
+  }
   return field;
+}
+
+export function applyGardenPlacements(world, field, garden) {
+  if (!world || !garden) return world;
+  if (!world.buildings) world.buildings = [];
+  if (!world.agoras) world.agoras = [];
+  for (const u of garden.units ?? []) {
+    spawn(world, {
+      owner: u.owner,
+      type: u.type,
+      x: tileCenterX(u.tx),
+      y: tileCenterY(u.tz),
+    });
+  }
+  for (const b of garden.buildings ?? []) {
+    const snapped = snapBuildingWorld(b.type, fx.fromFloat(b.x), fx.fromFloat(b.z));
+    world.buildings.push(createBuilding({
+      owner: b.owner,
+      type: b.type,
+      x: fx.toFloat(snapped.x),
+      z: fx.toFloat(snapped.z),
+      yaw: b.yaw,
+    }));
+  }
+  if (garden.agoras?.length) {
+    world.agoras = createAgoras(garden.agoras.map((g) => ({ owner: g.owner, x: g.x, z: g.z })));
+  }
+  if ((garden.buildings?.length || garden.agoras?.length) && field) {
+    applyWorldStructureOccupancy(field, world);
+  }
+  return world;
 }
 
 export function stringifyGarden(field, extras = {}) {

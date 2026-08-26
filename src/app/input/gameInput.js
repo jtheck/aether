@@ -172,6 +172,8 @@ export function createGameInput(opts) {
   let boxDragging = false;
   /** Pointer-down started on the build radial — never box-select this gesture. */
   let radialGesture = false;
+  /** Pointer-down started on a bottom selection-strip chip — select that type on up. */
+  let selHudGesture = false;
   /** @type {{ x: number, z: number } | null} */
   let placeAnchor = null;
   let placeRotating = false;
@@ -507,7 +509,7 @@ export function createGameInput(opts) {
    * Select every own building matching typeKey (agora or placeable type).
    * @param {string} typeKey
    * @param {boolean} add
-   * @param {{ kind: 'agora' | 'building', index: number }} primary
+   * @param {{ kind: 'agora' | 'building', index: number } | null | undefined} [primary]
    * @param {{ clientX: number, clientY: number } | undefined} [ptr]
    */
   function selectAllBuildingsOfType(typeKey, add, primary, ptr) {
@@ -529,9 +531,10 @@ export function createGameInput(opts) {
       }
     }
     if (matched.length === 0) {
-      notifyBuildingSelected(primary, ptr, [primary]);
+      if (primary) notifyBuildingSelected(primary, ptr, [primary]);
       return;
     }
+    const head = primary ?? matched[0];
     if (add && selectedBuildings.length > 0) {
       const seen = new Set(selectedBuildings.map((s) => `${s.kind}:${s.index}`));
       const merged = selectedBuildings.slice();
@@ -542,10 +545,25 @@ export function createGameInput(opts) {
         seen.add(k);
         merged.push(s);
       }
-      notifyBuildingSelected(primary, ptr, merged);
+      notifyBuildingSelected(head, ptr, merged);
       return;
     }
-    notifyBuildingSelected(primary, ptr, matched);
+    notifyBuildingSelected(head, ptr, matched);
+  }
+
+  /**
+   * Selection-strip chip — units and buildings use the same click-to-select-all.
+   * @param {{ kind?: string, typeId?: number, typeKey?: string } | number | null} slot
+   * @param {boolean} add
+   */
+  function selectHudSlot(slot, add) {
+    if (slot == null) return;
+    if (typeof slot === 'object' && slot.kind === 'building' && slot.typeKey) {
+      selectAllBuildingsOfType(slot.typeKey, add);
+      return;
+    }
+    const typeId = typeof slot === 'number' ? slot : slot.typeId;
+    if (typeId != null) selectAllOfType(typeId, add);
   }
 
   /**
@@ -851,6 +869,11 @@ export function createGameInput(opts) {
     abilityHoldFired = false;
     hideSelectionBox();
 
+    // Bottom selection strip acts as on-screen buttons: a press on a chip owns
+    // the gesture (no box-select / ability-hold); the type is selected on up.
+    selHudGesture = renderer.pickSelectionHud?.(e.clientX, e.clientY) != null;
+    if (selHudGesture) return true;
+
     // Placement: LMB down locks anchor; drag past threshold rotates (30° snaps).
     // Radial stays usable so you can switch building type without canceling.
     // Rally mode: click-to-set (no rotate).
@@ -881,6 +904,9 @@ export function createGameInput(opts) {
 
   function handlePointerMove(e) {
     if (!canUseInput()) return false;
+
+    // Chip press holds the gesture — ignore drags so no box-select starts.
+    if (selHudGesture) return true;
 
     if (isPlacing()) {
       if (isRadialOpen?.()) void onRadialHover?.(e.clientX, e.clientY);
@@ -1082,9 +1108,11 @@ export function createGameInput(opts) {
     const wasDragging = boxDragging;
     const holdCast = abilityHoldFired;
     const wasRadialGesture = radialGesture;
+    const wasSelHud = selHudGesture;
     boxDragging = false;
     abilityHoldFired = false;
     radialGesture = false;
+    selHudGesture = false;
     abilityHoldGen++;
     clearAbilityHold();
 
@@ -1092,7 +1120,13 @@ export function createGameInput(opts) {
     const prevTap = lastTap;
 
     if (canUseInput() && e.type !== 'pointercancel') {
-      if (isPlacing()) {
+      if (wasSelHud) {
+        // Release on the same chip → select every own unit of that type
+        // (shift adds to the current selection), like v1's selection panel.
+        const slot = renderer.pickSelectionHud?.(e.clientX, e.clientY);
+        if (slot != null) selectHudSlot(slot, e.shiftKey);
+        lastTap = null;
+      } else if (isPlacing()) {
         let radialHandled = false;
         if (isRadialOpen?.() || wasRadialGesture) {
           const picked = await pickRadialOption?.(e.clientX, e.clientY);
@@ -1187,6 +1221,7 @@ export function createGameInput(opts) {
     clearAbilityHold();
     abilityHoldFired = false;
     radialGesture = false;
+    selHudGesture = false;
     resetPlaceGesture();
     hideSelectionBox();
     boxStart = null;

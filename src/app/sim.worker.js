@@ -1,8 +1,9 @@
 // Web Worker — deterministic sim authority (one commitTick = one lockstep step).
 
-import { buildField, fieldSnapshot, mapSizeForConfig } from '../sim/field.js';
+import { buildField, fieldSnapshot, mapSizeForConfig, TILE_SIZE_F } from '../sim/field.js';
 import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
+import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
 import { buildWorldFromConfig, kothBases } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { generateAiCommands } from '../sim/ai.js';
@@ -78,16 +79,38 @@ self.onmessage = (e) => {
     if (msg.type === 'init') {
       views = mapSharedState(msg.sab);
       aiPlayers = msg.config.aiPlayers ?? [];
-      const size = mapSizeForConfig(msg.config);
-      field = buildField(msg.config.seed, { width: size.mapW, height: size.mapH });
-      world = buildWorldFromConfig({ ...msg.config, mapW: size.mapW, mapH: size.mapH });
+      const garden = msg.config.garden ? decodeGarden(msg.config.garden) : null;
+      const size = garden
+        ? { mapW: garden.width, mapH: garden.height }
+        : mapSizeForConfig(msg.config);
+      field = garden
+        ? fieldFromGarden(msg.config.garden)
+        : buildField(msg.config.seed, { width: size.mapW, height: size.mapH });
+      world = buildWorldFromConfig({
+        ...msg.config,
+        mapW: field.width,
+        mapH: field.height,
+        skipDefaultSpawns: !!(garden?.units?.length),
+      });
       // Stress / explicit flag — timing never feeds gameplay.
       world.profileSim = msg.config.profileSim === true
         || (msg.config.stressPerSide | 0) > 0
         || (msg.config.animStressPerSide | 0) > 0;
-      // Felt + red/yellow rim (same pass gardens will reuse).
-      applyTableSilhouette(field);
-      populateScenery(field, world, kothBases(field.worldHalfF));
+      if (garden) applyGardenPlacements(world, field, garden);
+      if (!garden) applyTableSilhouette(field);
+      if (!garden?.authoredScenery) {
+        const reserved = kothBases(field.worldHalfF);
+        if (garden) {
+          const half = field.worldHalfF;
+          for (const u of garden.units) {
+            reserved.push([
+              (u.tx + 0.5) * TILE_SIZE_F - half,
+              (u.tz + 0.5) * TILE_SIZE_F - half,
+            ]);
+          }
+        }
+        populateScenery(field, world, reserved);
+      }
       applyWorldStructureOccupancy(field, world);
       beginSharedPublish(views);
       publishType(world, views);

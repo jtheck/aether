@@ -7,8 +7,13 @@ import {
   getOrCreateSampler,
   loadTexture2D as loadLiteTexture2D,
   createStandardMaterial,
+  createShaderMaterial,
   addToScene,
   setSubtreeVisible,
+  setStandardSpecularTexture,
+  setShaderTexture,
+  setShaderUniform,
+  markMaterialUboDirty,
 } from '../vendor/lite/liteVendor.js';
 import {
   ATLAS,
@@ -17,7 +22,18 @@ import {
   TILE_SIZE_F,
   worldHalfFFromField,
 } from '../sim/field.js';
-import { loopOutward, silhouetteCorners, silhouetteLoops } from '../sim/tableShape.js';
+import {
+  CORNER_BLOCK_SIZE,
+  plinthCornerRadius,
+  plinthHalf,
+  loopOutward,
+  silhouetteCorners,
+  silhouetteLoops,
+  tableCenterVertex,
+  tableCornerPlinths,
+  tableEdgeMidpoints,
+  tableHasCenterBlock,
+} from '../sim/tableShape.js';
 import { createSceneryFromField } from './scenery.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
@@ -29,13 +45,79 @@ const ATLAS_URLS = {
 const ATLAS_GRID = 4;
 const UV_SCALE = 1 / ATLAS_GRID;
 const UV_INSET = 0.01;
+/** Same upsample + bilinear as fog — spec fades across tile borders. */
+const SPEC_TEX_SCALE = 2;
+const SPEC_TEXEL_ALIGN = 64;
+const SPEC_OVERLAY_LIFT = 0.14;
+/** Atlas + terrain pairs that actually appear on the board. */
+const ATLAS_TERRAIN_PAIRS = [
+  [ATLAS.GRASS_DIRT, TERRAIN.GRASS],
+  [ATLAS.GRASS_DIRT, TERRAIN.DIRT],
+  [ATLAS.GRASS_WATER, TERRAIN.GRASS],
+  [ATLAS.GRASS_WATER, TERRAIN.WATER],
+];
+/**
+ * Per-ground look. Spec RGB is painted into a world-space map (UV2) so pond
+ * and grass/dirt edges fade; the atlas on UV1 stays sharp.
+ */
+const TERRAIN_LOOK = {
+  [TERRAIN.DIRT]: {
+    diffuseColor: [1.42, 1.14, 0.86],
+    ambientColor: [0.38, 0.28, 0.18],
+    specularColor: [0.008, 0.006, 0.004],
+    specularPower: 4,
+  },
+  [TERRAIN.GRASS]: {
+    diffuseColor: [1.12, 1.38, 1.08],
+    ambientColor: [0.26, 0.38, 0.22],
+    // Soft sheen only — shore atlas cells already look tiled; spec must not flash them.
+    specularColor: [0.032, 0.048, 0.022],
+    specularPower: 10,
+  },
+  [TERRAIN.WATER]: {
+    diffuseColor: [1.02, 1.16, 1.36],
+    ambientColor: [0.26, 0.32, 0.36],
+    // Glint is the additive welded sheet — tile spec makes pond squares.
+    specularColor: [0, 0, 0],
+    specularPower: 1,
+  },
+};
+
+function terrainBucketKey(atlasId, terrain) {
+  return (atlasId << 4) | terrain;
+}
+
+function terrainKind(type) {
+  if (type === TERRAIN.WATER) return TERRAIN.WATER;
+  if (type === TERRAIN.DIRT) return TERRAIN.DIRT;
+  return TERRAIN.GRASS;
+}
+
+function specRgb8(terrain) {
+  const c = TERRAIN_LOOK[terrain]?.specularColor ?? [0, 0, 0];
+  return [
+    Math.round(c[0] * 255),
+    Math.round(c[1] * 255),
+    Math.round(c[2] * 255),
+  ];
+}
+
+const SPEC_RGB_WATER = specRgb8(TERRAIN.WATER);
+const SPEC_RGB_GRASS = specRgb8(TERRAIN.GRASS);
+const SPEC_RGB_DIRT = specRgb8(TERRAIN.DIRT);
+const SPEC_RGB_NONE = [0, 0, 0];
 const FRAME_THICKNESS = 5.5;
+const FRAME_INNER_OVERLAP = 2.4;
 const FRAME_BOTTOM_Y = -9;
 const FRAME_TOP_RISE = 0.8;
-const FRAME_UV_WORLD_SIZE = 18;
+const PLINTH_TOP_EXTRA = FRAME_TOP_RISE * 2.25;
+const FRAME_UV_WORLD_SIZE = 28;
+const FRAME_ARC_MATCH = 0.9;
 
 /** @type {WeakMap<object, object>} */
 const woodTextures = new WeakMap();
+/** @type {WeakMap<object, object>} */
+const endgrainTextures = new WeakMap();
 /** @type {WeakMap<object, Map<number, object>>} */
 const atlasTextureCache = new WeakMap();
 
@@ -54,18 +136,23 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     : 0;
   /** @type {Map<string, object[]>} */
   const atlasByChunk = new Map();
-  const atlasMaterials = createAtlasMaterials(textures);
+  const specMap = createGroundSpecMap(engine);
+  specMap.rebuild(field);
+  const atlasMaterials = createAtlasMaterials(textures, specMap.texture);
+  const specGlint = createGroundSpecGlint(engine, scene);
+  specGlint.rebuild(field, active, specMap.texture, specMap.uv, { addToScene: false });
   let atlasRev = 0;
   const atlasMeshes = chunkSize
-    ? buildChunkedAtlasMeshes(engine, field, atlasMaterials, active, chunkSize, atlasByChunk, atlasRev)
-    : buildAtlasMeshes(engine, field, atlasMaterials, active);
+    ? buildChunkedAtlasMeshes(engine, field, atlasMaterials, active, chunkSize, atlasByChunk, atlasRev, specMap.uv)
+    : buildAtlasMeshes(engine, field, atlasMaterials, active, specMap.uv);
   const built = [
     ...buildEnvironmentMeshes(engine, field),
     ...buildTableFrameMeshes(engine, field, active),
     ...atlasMeshes,
+    ...(specGlint.mesh ? [specGlint.mesh] : []),
   ];
   let disposed = false;
-  const scenery = opts.skipScenery
+  let scenery = opts.skipScenery
     ? { meshes: [], modelsReady: Promise.resolve(), update() {}, dispose() {} }
     : await createSceneryFromField(
       engine,
@@ -87,6 +174,8 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     );
   if (opts.signal?.aborted) {
     disposed = true;
+    specGlint.dispose();
+    specMap.dispose();
     scenery.dispose?.();
     for (const mesh of built) softDetachMesh(scene, mesh);
     built.length = 0;
@@ -108,7 +197,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     /** Resolves when 3D tree/rock models have replaced billboards (or failed). */
     modelsReady: scenery.modelsReady ?? Promise.resolve(),
     update(activeCamera, deltaMs) {
-      if (!disposed) scenery.update(activeCamera, deltaMs);
+      if (disposed) return;
+      specGlint.update();
+      scenery.update(activeCamera, deltaMs);
     },
     applyTreeUpdates(updates) {
       if (!disposed) scenery.applyTreeUpdates?.(updates);
@@ -120,6 +211,13 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       if (disposed || !chunkSize) return false;
       const keys = chunkKeys instanceof Set ? chunkKeys : new Set(chunkKeys ?? []);
       if (!keys.size) return false;
+      specMap.rebuild(nextField);
+      bindSpecMap(atlasMaterials, specMap.texture);
+      const prevGlint = specGlint.mesh;
+      if (prevGlint) {
+        const gidx = built.indexOf(prevGlint);
+        if (gidx >= 0) built.splice(gidx, 1);
+      }
       const nextActive = createActiveCellLookup(nextField);
       atlasRev += 1;
       for (const key of keys) {
@@ -140,6 +238,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
           Math.min(nextField.width, (cx + 1) * chunkSize),
           Math.min(nextField.height, (cz + 1) * chunkSize),
           `-${cx}-${cz}-r${atlasRev}`,
+          specMap.uv,
         );
         for (const mesh of next) {
           addToScene(scene, mesh);
@@ -147,16 +246,52 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
         }
         atlasByChunk.set(key, next);
       }
+      specGlint.rebuild(nextField, nextActive, specMap.texture, specMap.uv, { addToScene: true });
+      if (specGlint.mesh) built.push(specGlint.mesh);
+      return true;
+    },
+    async rebuildScenery(nextField, nextCamera) {
+      if (disposed || opts.skipScenery) return false;
+      const prev = scenery;
+      const prevSet = new Set(prev.meshes ?? []);
+      prev.dispose?.();
+      for (let i = built.length - 1; i >= 0; i--) {
+        if (prevSet.has(built[i])) built.splice(i, 1);
+      }
+      scenery = await createSceneryFromField(
+        engine,
+        nextField,
+        surfaceHeightAt,
+        nextCamera ?? camera,
+        {
+          ...opts,
+          scene,
+          onModelMesh(mesh) {
+            if (disposed) {
+              softDetachMesh(scene, mesh);
+              return;
+            }
+            if (built.indexOf(mesh) < 0) built.push(mesh);
+            opts.onModelMesh?.(mesh);
+          },
+        },
+      );
+      for (const mesh of scenery.meshes) {
+        if (built.indexOf(mesh) < 0) built.push(mesh);
+        addToScene(scene, mesh);
+      }
       return true;
     },
     dispose() {
       if (disposed) return;
       disposed = true;
+      specGlint.dispose();
+      specMap.dispose();
       // Scenery owns its meshes (and late model jobs); don't double-detach.
       const scenerySet = new Set(scenery.meshes ?? []);
       scenery.dispose?.();
       for (const mesh of built) {
-        if (!mesh || scenerySet.has(mesh)) continue;
+        if (!mesh || scenerySet.has(mesh) || mesh === specGlint.mesh) continue;
         softDetachMesh(scene, mesh);
       }
       built.length = 0;
@@ -178,21 +313,360 @@ async function loadAtlasTextures(engine) {
   return out;
 }
 
-function createAtlasMaterials(textures) {
+function bindSpecMap(materials, texture) {
+  if (!texture || !materials) return;
+  for (const mat of materials.values()) {
+    mat.specularCoordIndex = 1;
+    setStandardSpecularTexture(mat, texture);
+    markMaterialUboDirty?.(mat);
+  }
+}
+
+function createAtlasMaterials(textures, specTexture) {
   /** @type {Map<number, object>} */
   const materials = new Map();
-  for (const aid of [ATLAS.GRASS_DIRT, ATLAS.GRASS_WATER]) {
+  for (const [atlasId, terrain] of ATLAS_TERRAIN_PAIRS) {
+    const look = TERRAIN_LOOK[terrain];
     const mat = createStandardMaterial();
-    mat.diffuseColor = [1.2, 1.2, 1.14];
-    mat.ambientColor = [0.12, 0.12, 0.1];
-    mat.emissiveColor = [0.01, 0.01, 0.008];
-    mat.specularColor = [0.06, 0.06, 0.05];
-    mat.specularPower = 32;
-    mat.diffuseTexture = textures.get(aid) ?? null;
+    mat.diffuseColor = look.diffuseColor;
+    mat.ambientColor = look.ambientColor;
+    // Floor so dirt/grass still read when the key is behind the camera.
+    mat.emissiveColor = [0.075, 0.085, 0.06];
+    mat.specularColor = look.specularColor;
+    mat.specularPower = look.specularPower;
+    mat.specularCoordIndex = 1;
+    mat.diffuseTexture = textures.get(atlasId) ?? null;
     mat.backFaceCulling = true;
-    materials.set(aid, mat);
+    materials.set(terrainBucketKey(atlasId, terrain), mat);
   }
+  bindSpecMap(materials, specTexture);
   return materials;
+}
+
+export function specLookAt(types, width, height, tx, tz) {
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return SPEC_RGB_NONE;
+  const t = types[tz * width + tx];
+  if (t === TERRAIN.WATER) return SPEC_RGB_WATER;
+  if (t === TERRAIN.GRASS) return SPEC_RGB_GRASS;
+  if (t === TERRAIN.DIRT) return SPEC_RGB_DIRT;
+  return SPEC_RGB_NONE;
+}
+
+export function sampleSpecLook(types, width, height, fx, fz) {
+  const x0 = Math.floor(fx);
+  const z0 = Math.floor(fz);
+  const tx = fx - x0;
+  const tz = fz - z0;
+  const c00 = specLookAt(types, width, height, x0, z0);
+  const c10 = specLookAt(types, width, height, x0 + 1, z0);
+  const c01 = specLookAt(types, width, height, x0, z0 + 1);
+  const c11 = specLookAt(types, width, height, x0 + 1, z0 + 1);
+  const w00 = (1 - tx) * (1 - tz);
+  const w10 = tx * (1 - tz);
+  const w01 = (1 - tx) * tz;
+  const w11 = tx * tz;
+  return [
+    c00[0] * w00 + c10[0] * w10 + c01[0] * w01 + c11[0] * w11,
+    c00[1] * w00 + c10[1] * w10 + c01[1] * w01 + c11[1] * w11,
+    c00[2] * w00 + c10[2] * w10 + c01[2] * w01 + c11[2] * w11,
+  ];
+}
+
+/** Water cover 0–255. Overlay alpha; land stays dry so grass spec stays on the atlas. */
+export function wetnessAt(types, width, height, tx, tz) {
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return 0;
+  return types[tz * width + tx] === TERRAIN.WATER ? 255 : 0;
+}
+
+export function sampleWetness(types, width, height, fx, fz) {
+  const x0 = Math.floor(fx);
+  const z0 = Math.floor(fz);
+  const tx = fx - x0;
+  const tz = fz - z0;
+  const c00 = wetnessAt(types, width, height, x0, z0);
+  const c10 = wetnessAt(types, width, height, x0 + 1, z0);
+  const c01 = wetnessAt(types, width, height, x0, z0 + 1);
+  const c11 = wetnessAt(types, width, height, x0 + 1, z0 + 1);
+  return (c00 * (1 - tx) + c10 * tx) * (1 - tz) + (c01 * (1 - tx) + c11 * tx) * tz;
+}
+
+function tileNeedsWaterGlint(active, types, width, height, tx, tz) {
+  if (wetnessAt(types, width, height, tx, tz) > 0) return true;
+  for (let dz = -1; dz <= 1; dz++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dz === 0) continue;
+      const x = tx + dx;
+      const z = tz + dz;
+      if (!active(x, z)) continue;
+      if (wetnessAt(types, width, height, x, z) > 0) return true;
+    }
+  }
+  return false;
+}
+
+function gpuTextureOf(tex) {
+  return tex?._gpu?.texture ?? tex?._gpuTexture ?? tex?.gpuTexture ?? tex?.texture ?? null;
+}
+
+function disposeGpuTexture(tex) {
+  if (!tex) return;
+  try {
+    tex.dispose?.();
+  } catch { /* vendor shape drift */ }
+  try {
+    gpuTextureOf(tex)?.destroy?.();
+  } catch { /* vendor shape drift */ }
+}
+
+function padSpecTexWidth(w) {
+  return Math.max(SPEC_TEXEL_ALIGN, Math.ceil(w / SPEC_TEXEL_ALIGN) * SPEC_TEXEL_ALIGN);
+}
+
+function tryWriteTexture(engine, texture, pixels, w, h) {
+  const device = engine?._device;
+  const gpuTex = gpuTextureOf(texture);
+  if (!device?.queue?.writeTexture || !gpuTex) return false;
+  try {
+    device.queue.writeTexture(
+      { texture: gpuTex },
+      pixels,
+      { bytesPerRow: w * 4, rowsPerImage: h },
+      { width: w, height: h, depthOrArrayLayers: 1 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * World-space spec map. RGB is the Phong color; bilinear upsample fades
+ * water/grass/dirt so glint is not a stair of tiles. Sampled on UV2.
+ */
+function createGroundSpecMap(engine) {
+  let texture = null;
+  let pixels = null;
+  let texW = 0;
+  let texH = 0;
+
+  function detach() {
+    disposeGpuTexture(texture);
+    texture = null;
+    pixels = null;
+    texW = 0;
+    texH = 0;
+  }
+
+  function paintPixels(field) {
+    if (!pixels) return;
+    pixels.fill(0);
+    const { width, height, terrainTypes } = field;
+    const srcH = height * SPEC_TEX_SCALE;
+    const srcW = width * SPEC_TEX_SCALE;
+    for (let sz = 0; sz < srcH; sz++) {
+      const dstRow = sz * texW;
+      const fz = (sz + 0.5) / SPEC_TEX_SCALE - 0.5;
+      for (let sx = 0; sx < srcW; sx++) {
+        const fx = (sx + 0.5) / SPEC_TEX_SCALE - 0.5;
+        const rgb = sampleSpecLook(terrainTypes, width, height, fx, fz);
+        const o = (dstRow + sx) * 4;
+        pixels[o] = rgb[0];
+        pixels[o + 1] = rgb[1];
+        pixels[o + 2] = rgb[2];
+        pixels[o + 3] = sampleWetness(terrainTypes, width, height, fx, fz);
+      }
+    }
+  }
+
+  function rebuild(field) {
+    if (!field) {
+      detach();
+      return;
+    }
+    const nextW = padSpecTexWidth(field.width * SPEC_TEX_SCALE);
+    const nextH = Math.max(1, field.height * SPEC_TEX_SCALE);
+    if (!pixels || nextW !== texW || nextH !== texH) {
+      disposeGpuTexture(texture);
+      texture = null;
+      texW = nextW;
+      texH = nextH;
+      pixels = new Uint8Array(texW * texH * 4);
+    }
+    paintPixels(field);
+    if (texture && tryWriteTexture(engine, texture, pixels, texW, texH)) return;
+    const next = createTexture2DFromPixels(engine, pixels, texW, texH, {
+      minFilter: 'linear',
+      magFilter: 'linear',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+    });
+    next.sampler = getOrCreateSampler(engine, {
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+      minFilter: 'linear',
+      magFilter: 'linear',
+    });
+    disposeGpuTexture(texture);
+    texture = next;
+  }
+
+  return {
+    get texture() {
+      return texture;
+    },
+    get uv() {
+      return {
+        invW: texW ? 1 / texW : 0,
+        invH: texH ? 1 / texH : 0,
+      };
+    },
+    rebuild,
+    dispose: detach,
+  };
+}
+
+function readSunDir(scene) {
+  const lights = scene?.lights;
+  if (!lights?.length) return [0.45, -0.72, 0.35];
+  let best = null;
+  let bestI = -1;
+  for (const light of lights) {
+    if (light.lightType && light.lightType !== 'directional') continue;
+    const intensity = Number(light.intensity) || 0;
+    if (intensity < bestI) continue;
+    const d = light.direction;
+    if (!d) continue;
+    bestI = intensity;
+    best = [d.x ?? d[0] ?? 0, d.y ?? d[1] ?? -1, d.z ?? d[2] ?? 0];
+  }
+  return best ?? [0.45, -0.72, 0.35];
+}
+
+/**
+ * Additive water glint on a welded sheet. Atlas stays on the tile mesh;
+ * this pass only adds Phong so pond squares and milky film both stay off.
+ */
+function createGroundSpecGlint(engine, scene) {
+  let mesh = null;
+  let material = null;
+
+  function detach() {
+    if (mesh) softDetachMesh(scene, mesh);
+    mesh = null;
+    material = null;
+  }
+
+  function rebuild(field, active, texture, specUv, opts = {}) {
+    detach();
+    if (!field || !texture) return;
+    const { width, height, terrainTypes } = field;
+    const half = worldHalfFFromField(field);
+    const positions = [];
+    const uvs = [];
+    const indices = [];
+    const cornerAt = new Map();
+    const corner = (tx, tz) => {
+      const key = tx + ',' + tz;
+      let i = cornerAt.get(key);
+      if (i != null) return i;
+      const x = tx * TILE_SIZE_F - half;
+      const z = tz * TILE_SIZE_F - half;
+      i = positions.length / 3;
+      positions.push(x, surfaceHeightAt(field, x, z) + SPEC_OVERLAY_LIFT, z);
+      uvs.push(tx * SPEC_TEX_SCALE * (specUv?.invW ?? 0), tz * SPEC_TEX_SCALE * (specUv?.invH ?? 0));
+      cornerAt.set(key, i);
+      return i;
+    };
+    let count = 0;
+    for (let tz = 0; tz < height; tz++) {
+      for (let tx = 0; tx < width; tx++) {
+        if (!active(tx, tz)) continue;
+        if (!tileNeedsWaterGlint(active, terrainTypes, width, height, tx, tz)) continue;
+        const a = corner(tx, tz);
+        const b = corner(tx + 1, tz);
+        const c = corner(tx + 1, tz + 1);
+        const d = corner(tx, tz + 1);
+        indices.push(a, b, c, a, c, d);
+        count++;
+      }
+    }
+    if (count === 0) return;
+    const pos = new Float32Array(positions);
+    mesh = createMeshFromData(
+      engine,
+      'terrain-water-glint',
+      pos,
+      flatUpNormals(pos.length / 3),
+      new Uint32Array(indices),
+      new Float32Array(uvs),
+    );
+    material = createShaderMaterial({
+      name: 'terrain-water-glint',
+      attributes: ['position', 'normal', 'uv'],
+      uniforms: [
+        'world',
+        'viewProjection',
+        'cameraPosition',
+        { name: 'sunDir', type: 'vec3<f32>', defaultValue: [0.45, -0.72, 0.35] },
+        { name: 'specColor', type: 'vec3<f32>', defaultValue: [0.38, 0.50, 0.62] },
+        { name: 'specPower', type: 'f32', defaultValue: 28 },
+        { name: 'specGain', type: 'f32', defaultValue: 0.42 },
+      ],
+      samplers: ['wetness'],
+      needAlphaBlending: true,
+      blendMode: 'additive',
+      depthWrite: false,
+      backFaceCulling: true,
+      vertexSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) uv: vec2<f32>,
+};
+@vertex fn mainVertex(input: VertexInput) -> VertexOutput {
+  var out: VertexOutput;
+  let worldPos4 = shaderSystem.world * vec4<f32>(input.position, 1.0);
+  out.worldPos = worldPos4.xyz;
+  out.position = shaderSystem.viewProjection * worldPos4;
+  out.uv = input.uv;
+  return out;
+}`,
+      fragmentSource: `struct VertexOutput {
+  @builtin(position) position: vec4<f32>,
+  @location(0) worldPos: vec3<f32>,
+  @location(1) uv: vec2<f32>,
+};
+@fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
+  let w = textureSample(wetness, wetnessSampler, input.uv).a;
+  if (w < 0.004) { discard; }
+  let N = vec3<f32>(0.0, 1.0, 0.0);
+  let L = normalize(-shaderUniforms.sunDir);
+  let V = normalize(shaderSystem.cameraPosition - input.worldPos);
+  let H = normalize(V + L);
+  let spec = pow(max(dot(N, H), 0.0), max(shaderUniforms.specPower, 1.0)) * shaderUniforms.specGain;
+  return vec4<f32>(shaderUniforms.specColor * spec, w);
+}`,
+    });
+    setShaderTexture(material, 'wetness', texture);
+    setShaderUniform(material, 'sunDir', readSunDir(scene));
+    mesh.material = material;
+    mesh.pickable = false;
+    mesh.receiveShadows = false;
+    if (opts.addToScene) addToScene(scene, mesh);
+  }
+
+  function update() {
+    if (!material) return;
+    setShaderUniform(material, 'sunDir', readSunDir(scene));
+  }
+
+  return {
+    get mesh() {
+      return mesh;
+    },
+    rebuild,
+    update,
+    dispose: detach,
+  };
 }
 
 async function loadTexture2D(engine, url) {
@@ -218,7 +692,7 @@ async function loadTexture2D(engine, url) {
   return texture;
 }
 
-function buildAtlasMeshes(engine, field, materials, active) {
+function buildAtlasMeshes(engine, field, materials, active, specUv) {
   return buildAtlasMeshesInRect(
     engine,
     field,
@@ -229,10 +703,11 @@ function buildAtlasMeshes(engine, field, materials, active) {
     field.width,
     field.height,
     '',
+    specUv,
   );
 }
 
-function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, atlasByChunk, atlasRev) {
+function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, atlasByChunk, atlasRev, specUv) {
   const meshes = [];
   const chunksX = Math.ceil(field.width / chunkSize);
   const chunksZ = Math.ceil(field.height / chunkSize);
@@ -249,6 +724,7 @@ function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, at
         Math.min(field.width, (cx + 1) * chunkSize),
         Math.min(field.height, (cz + 1) * chunkSize),
         `-${cx}-${cz}-r${atlasRev}`,
+        specUv,
       );
       atlasByChunk.set(key, chunkMeshes);
       for (const mesh of chunkMeshes) meshes.push(mesh);
@@ -257,34 +733,48 @@ function buildChunkedAtlasMeshes(engine, field, materials, active, chunkSize, at
   return meshes;
 }
 
-function buildAtlasMeshesInRect(engine, field, materials, active, tx0, tz0, tx1, tz1, nameSuffix) {
+function buildAtlasMeshesInRect(engine, field, materials, active, tx0, tz0, tx1, tz1, nameSuffix, specUv) {
   const { width, height, heightMap, terrainTypes, tileType, atlasId } = field;
-  const buckets = {
-    [ATLAS.GRASS_DIRT]: emptyBucket(),
-    [ATLAS.GRASS_WATER]: emptyBucket(),
-  };
+  /** @type {Map<number, ReturnType<typeof emptyBucket>>} */
+  const buckets = new Map();
   const half = worldHalfFFromField(field);
 
   for (let tz = tz0; tz < tz1; tz++) {
     for (let tx = tx0; tx < tx1; tx++) {
       if (!active(tx, tz)) continue;
       const i = tz * width + tx;
-      const aid = atlasId[i];
-      const bucket = buckets[aid] ?? buckets[ATLAS.GRASS_DIRT];
-      pushTileQuad(bucket, tx, tz, tileType[i], heightMap, terrainTypes, width, height, half);
+      const kind = terrainKind(terrainTypes[i]);
+      const aid = kind === TERRAIN.WATER
+        ? ATLAS.GRASS_WATER
+        : (atlasId[i] === ATLAS.GRASS_WATER ? ATLAS.GRASS_WATER : ATLAS.GRASS_DIRT);
+      const key = terrainBucketKey(aid, kind);
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = emptyBucket();
+        buckets.set(key, bucket);
+      }
+      pushTileQuad(bucket, tx, tz, tileType[i], heightMap, terrainTypes, width, height, half, specUv);
     }
   }
 
   const meshes = [];
-  for (const aid of [ATLAS.GRASS_DIRT, ATLAS.GRASS_WATER]) {
-    const b = buckets[aid];
+  for (const [key, b] of buckets) {
     if (b.count === 0) continue;
     const positions = new Float32Array(b.positions);
     const uvs = new Float32Array(b.uvs);
+    const specUvs = new Float32Array(b.specUvs);
     const indices = new Uint32Array(b.indices);
     const normals = flatUpNormals(positions.length / 3);
-    const mesh = createMeshFromData(engine, `terrain-${aid}${nameSuffix}`, positions, normals, indices, uvs);
-    mesh.material = materials.get(aid) ?? materials.get(ATLAS.GRASS_DIRT);
+    const mesh = createMeshFromData(
+      engine,
+      `terrain-${key}${nameSuffix}`,
+      positions,
+      normals,
+      indices,
+      uvs,
+      specUvs,
+    );
+    mesh.material = materials.get(key) ?? materials.get(terrainBucketKey(ATLAS.GRASS_DIRT, TERRAIN.GRASS));
     mesh.pickable = false;
     mesh.receiveShadows = true;
     meshes.push(mesh);
@@ -332,6 +822,10 @@ function buildSilhouetteFrameMeshes(engine, field) {
   const cornerNormals = [];
   const cornerUvs = [];
   const cornerIndices = [];
+  const endgrainPositions = [];
+  const endgrainNormals = [];
+  const endgrainUvs = [];
+  const endgrainIndices = [];
   const { heightMap, terrainTypes, width, height } = field;
   let highestBoundary = 0;
   for (const pts of loops) {
@@ -347,23 +841,40 @@ function buildSilhouetteFrameMeshes(engine, field) {
   }
   const frameInnerY = highestBoundary + 0.12;
   for (const pts of loops) {
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i];
-      const b = pts[i + 1];
-      if (Math.hypot(b.x - a.x, b.z - a.z) < 1e-4) continue;
-      const o = loopOutward(field, shape, a.x, a.z, b.x, b.z, corners);
-      pushFrameSegment(
-        positions, normals, uvs, indices,
-        a.x, a.z, b.x, b.z, o.ox, o.oz, frameInnerY,
-      );
-    }
+    extrudeFrameLoop(positions, normals, uvs, indices, pts, field, shape, corners, frameInnerY);
   }
   const top = frameInnerY + FRAME_TOP_RISE * 1.35;
-  for (const c of corners) {
-    if (c.r > 0) continue;
-    pushBox(
+  const keepHalf = plinthHalf(shape);
+  const keepCorner = plinthCornerRadius(shape);
+  const plinthTop = top + PLINTH_TOP_EXTRA;
+  const endgrain = {
+    pos: endgrainPositions,
+    norm: endgrainNormals,
+    uv: endgrainUvs,
+    idx: endgrainIndices,
+  };
+  const cornerPlinths = tableCornerPlinths(field, shape);
+  for (const p of cornerPlinths) {
+    pushRoundedPrism(
       cornerPositions, cornerNormals, cornerUvs, cornerIndices,
-      c.x, c.z, FRAME_THICKNESS * 2.1, top, FRAME_BOTTOM_Y,
+      p.x, p.z, keepHalf, keepCorner, plinthTop, FRAME_BOTTOM_Y,
+      endgrain,
+    );
+  }
+  if (tableHasCenterBlock(field, shape)) {
+    const mid = field.tableCenter ?? tableCenterVertex(field);
+    pushRoundedPrism(
+      cornerPositions, cornerNormals, cornerUvs, cornerIndices,
+      mid.x, mid.z, keepHalf, keepCorner, plinthTop, FRAME_BOTTOM_Y,
+      endgrain,
+    );
+  }
+  const edgeBlocks = field.tableEdgeBlocks ?? tableEdgeMidpoints(field, shape);
+  for (const p of edgeBlocks) {
+    pushRoundedPrism(
+      cornerPositions, cornerNormals, cornerUvs, cornerIndices,
+      p.x, p.z, keepHalf, keepCorner, plinthTop, FRAME_BOTTOM_Y,
+      endgrain,
     );
   }
 
@@ -392,6 +903,19 @@ function buildSilhouetteFrameMeshes(engine, field) {
       new Float32Array(cornerUvs),
     );
     mesh.material = createWoodMaterial(wood, true);
+    mesh.pickable = false;
+    meshes.push(mesh);
+  }
+  if (endgrainPositions.length > 0) {
+    const mesh = createMeshFromData(
+      engine,
+      'table-frame-endgrain',
+      new Float32Array(endgrainPositions),
+      new Float32Array(endgrainNormals),
+      new Uint32Array(endgrainIndices),
+      new Float32Array(endgrainUvs),
+    );
+    mesh.material = createEndgrainMaterial(getEndgrainTexture(engine));
     mesh.pickable = false;
     meshes.push(mesh);
   }
@@ -449,8 +973,11 @@ function buildTableFrameMeshes(engine, field, active) {
 
   // A pool-table frame is rigid: every rail and corner shares one horizontal top.
   const frameInnerY = highestBoundary + 0.12;
+  let uCursor = 0;
   for (const edge of mergeBoundaryEdges(boundaryEdges)) {
-    pushFrameSegment(positions, normals, uvs, indices, ...edge, frameInnerY);
+    const len = Math.hypot(edge[2] - edge[0], edge[3] - edge[1]);
+    pushFrameSegment(positions, normals, uvs, indices, ...edge, frameInnerY, uCursor);
+    uCursor += len / FRAME_UV_WORLD_SIZE;
   }
 
   // Distinct corner blocks retain v1's board-game silhouette and close rail joins.
@@ -467,7 +994,7 @@ function buildTableFrameMeshes(engine, field, active) {
       const top = frameInnerY + FRAME_TOP_RISE * 1.35;
       pushBox(
         cornerPositions, cornerNormals, cornerUvs, cornerIndices,
-        x, z, FRAME_THICKNESS * 2.1, top, FRAME_BOTTOM_Y,
+        x, z, CORNER_BLOCK_SIZE, top, FRAME_BOTTOM_Y,
       );
     }
   }
@@ -550,29 +1077,133 @@ function mergeBoundaryEdges(edges) {
   return merged;
 }
 
-function pushFrameSegment(pos, norm, uv, idx, ax, az, bx, bz, ox, oz, topY) {
-  const base = pos.length / 3;
-  const len = Math.hypot(bx - ax, bz - az);
-  const outerTop = topY + FRAME_TOP_RISE;
-  const aox = ax + ox * FRAME_THICKNESS;
-  const aoz = az + oz * FRAME_THICKNESS;
-  const box = boxLikeSegmentVertices(
-    ax, topY, az, bx, topY, bz,
-    aox, outerTop, aoz, bx + ox * FRAME_THICKNESS, outerTop, bz + oz * FRAME_THICKNESS,
-  );
-  pos.push(...box);
+function cleanClosedLoop(pts) {
+  const loop = [];
+  const n = pts.length - (pts.length > 1
+    && Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].z - pts[pts.length - 1].z) < 1e-4
+    ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const a = pts[i];
+    const b = pts[(i + 1) % n];
+    if (Math.hypot(b.x - a.x, b.z - a.z) < 1e-4) continue;
+    loop.push(a);
+  }
+  return loop;
+}
 
-  // Four independent quads: bevel top, outer wall, inner wall, underside.
+function loopPointOnCorner(x, z, corners) {
+  let best = null;
+  let bestErr = FRAME_ARC_MATCH;
+  for (let i = 0; i < corners.length; i++) {
+    const c = corners[i];
+    if (c.r <= 0) continue;
+    const err = Math.abs(Math.hypot(x - c.cx, z - c.cz) - c.r);
+    if (err < bestErr) {
+      bestErr = err;
+      best = c;
+    }
+  }
+  return best;
+}
+
+function offsetLoopPoint(x, z, mx, mz, align, corners, signedOut) {
+  const corner = loopPointOnCorner(x, z, corners);
+  if (corner) {
+    const dx = x - corner.cx;
+    const dz = z - corner.cz;
+    const d = Math.hypot(dx, dz) || 1;
+    const sign = corner.kind === 'convex' ? 1 : -1;
+    const nextR = Math.max(0.45, d + sign * signedOut);
+    return { x: corner.cx + (dx / d) * nextR, z: corner.cz + (dz / d) * nextR };
+  }
+  const scale = signedOut / align;
+  return { x: x + mx * scale, z: z + mz * scale };
+}
+
+function extrudeFrameLoop(pos, norm, uv, idx, pts, field, shape, corners, topY) {
+  const loop = cleanClosedLoop(pts);
+  if (loop.length < 3) return;
+  const edgeOut = [];
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i];
+    const b = loop[(i + 1) % loop.length];
+    edgeOut.push(loopOutward(field, shape, a.x, a.z, b.x, b.z, corners));
+  }
+  const inner = [];
+  const outer = [];
+  const uAt = [];
+  let u = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const prev = (i + loop.length - 1) % loop.length;
+    let mx = edgeOut[prev].ox + edgeOut[i].ox;
+    let mz = edgeOut[prev].oz + edgeOut[i].oz;
+    const ml = Math.hypot(mx, mz);
+    if (ml < 1e-5) {
+      mx = edgeOut[i].ox;
+      mz = edgeOut[i].oz;
+    } else {
+      mx /= ml;
+      mz /= ml;
+    }
+    const align = Math.max(0.28, mx * edgeOut[i].ox + mz * edgeOut[i].oz);
+    inner.push(offsetLoopPoint(
+      loop[i].x, loop[i].z, mx, mz, align, corners, -FRAME_INNER_OVERLAP,
+    ));
+    outer.push(offsetLoopPoint(
+      loop[i].x, loop[i].z, mx, mz, align, corners, FRAME_THICKNESS,
+    ));
+    if (i > 0) u += Math.hypot(loop[i].x - loop[i - 1].x, loop[i].z - loop[i - 1].z) / FRAME_UV_WORLD_SIZE;
+    uAt.push(u);
+  }
+  const closeLen = Math.hypot(loop[0].x - loop[loop.length - 1].x, loop[0].z - loop[loop.length - 1].z);
+  const uEnd = u + closeLen / FRAME_UV_WORLD_SIZE;
+  for (let i = 0; i < loop.length; i++) {
+    const j = (i + 1) % loop.length;
+    const u0 = uAt[i];
+    const u1 = i + 1 === loop.length ? uEnd : uAt[j];
+    pushFrameSpan(
+      pos, norm, uv, idx,
+      inner[i].x, inner[i].z, inner[j].x, inner[j].z,
+      outer[i].x, outer[i].z, outer[j].x, outer[j].z,
+      topY, u0, u1,
+    );
+  }
+}
+
+function pushFrameSegment(pos, norm, uv, idx, ax, az, bx, bz, ox, oz, topY, uStart = 0) {
+  const len = Math.hypot(bx - ax, bz - az);
+  pushFrameSpan(
+    pos, norm, uv, idx,
+    ax, az, bx, bz,
+    ax + ox * FRAME_THICKNESS, az + oz * FRAME_THICKNESS,
+    bx + ox * FRAME_THICKNESS, bz + oz * FRAME_THICKNESS,
+    topY, uStart, uStart + len / FRAME_UV_WORLD_SIZE,
+  );
+}
+
+function pushFrameSpan(pos, norm, uv, idx, ax, az, bx, bz, aox, aoz, box, boz, topY, u0, u1) {
+  const base = pos.length / 3;
+  const outerTop = topY + FRAME_TOP_RISE;
+  const verts = boxLikeSegmentVertices(
+    ax, topY, az, bx, topY, bz,
+    aox, outerTop, aoz, box, outerTop, boz,
+  );
+  pos.push(...verts);
+  const ox = aox - ax;
+  const oz = aoz - az;
+  const ol = Math.hypot(ox, oz) || 1;
   pushFaceNormals(norm, 0, 1, 0);
-  pushFaceNormals(norm, ox, 0, oz);
-  pushFaceNormals(norm, -ox, 0, -oz);
+  pushFaceNormals(norm, ox / ol, 0, oz / ol);
+  pushFaceNormals(norm, -ox / ol, 0, -oz / ol);
   pushFaceNormals(norm, 0, -1, 0);
-  const uLen = len / FRAME_UV_WORLD_SIZE;
+  const vWall = (outerTop - FRAME_BOTTOM_Y) / FRAME_UV_WORLD_SIZE;
+  const v0 = Math.hypot(aox - ax, aoz - az) / FRAME_UV_WORLD_SIZE;
+  const v1 = Math.hypot(box - bx, boz - bz) / FRAME_UV_WORLD_SIZE;
   uv.push(
-    0, 0, uLen, 0, uLen, 1, 0, 1,
-    0, 0, uLen, 0, uLen, 0.65, 0, 0.65,
-    0, 0, uLen, 0, uLen, 0.65, 0, 0.65,
-    0, 0, uLen, 0, uLen, 1, 0, 1,
+    u0, 0, u1, 0, u1, v1, u0, v0,
+    u0, 0, u1, 0, u1, vWall, u0, vWall,
+    u0, 0, u1, 0, u1, vWall, u0, vWall,
+    u0, 0, u1, 0, u1, v1, u0, v0,
   );
   for (let face = 0; face < 4; face++) {
     const o = base + face * 4;
@@ -596,6 +1227,72 @@ function boxLikeSegmentVertices(ax, ay, az, bx, by, bz, aox, aoy, aoz, box, boy,
 
 function pushFaceNormals(normals, x, y, z) {
   for (let i = 0; i < 4; i++) normals.push(x, y, z);
+}
+
+function roundedRectOutline(x, z, half, cornerR, segs = 8) {
+  const r = Math.max(0.05, Math.min(half - 0.05, cornerR));
+  const inner = half - r;
+  const pts = [];
+  const add = (px, pz, nx, nz) => pts.push({ x: px, z: pz, nx, nz });
+  const arc = (cx, cz, a0, a1) => {
+    for (let i = 1; i <= segs; i++) {
+      const a = a0 + (a1 - a0) * (i / segs);
+      const nx = Math.cos(a);
+      const nz = Math.sin(a);
+      add(cx + nx * r, cz + nz * r, nx, nz);
+    }
+  };
+  add(x + half, z - inner, 1, 0);
+  add(x + half, z + inner, 1, 0);
+  arc(x + inner, z + inner, 0, Math.PI * 0.5);
+  add(x - inner, z + half, 0, 1);
+  arc(x - inner, z + inner, Math.PI * 0.5, Math.PI);
+  add(x - half, z - inner, -1, 0);
+  arc(x - inner, z - inner, Math.PI, Math.PI * 1.5);
+  add(x + inner, z - half, 0, -1);
+  arc(x + inner, z - inner, Math.PI * 1.5, Math.PI * 2);
+  const first = pts[0];
+  const last = pts[pts.length - 1];
+  if (first && last && Math.hypot(first.x - last.x, first.z - last.z) < 1e-4) pts.pop();
+  return pts;
+}
+
+function pushRoundedPrism(pos, norm, uv, idx, x, z, half, cornerR, top, bottom, topDisc) {
+  const ring = roundedRectOutline(x, z, half, cornerR);
+  const n = ring.length;
+  if (n < 4) return;
+  const h = top - bottom;
+  const disc = topDisc ?? { pos, norm, uv, idx };
+  const uvScale = 1 / (half * 2);
+  const discBase = disc.pos.length / 3;
+  disc.pos.push(x, top, z);
+  disc.norm.push(0, 1, 0);
+  disc.uv.push(0.5, 0.5);
+  for (let i = 0; i < n; i++) {
+    const p = ring[i];
+    disc.pos.push(p.x, top, p.z);
+    disc.norm.push(0, 1, 0);
+    disc.uv.push(0.5 + (p.x - x) * uvScale, 0.5 + (p.z - z) * uvScale);
+  }
+  for (let i = 0; i < n; i++) {
+    disc.idx.push(discBase, discBase + 1 + i, discBase + 1 + ((i + 1) % n));
+  }
+  const v = h / FRAME_UV_WORLD_SIZE;
+  let u = 0;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    const len = Math.hypot(b.x - a.x, b.z - a.z);
+    if (len < 1e-5) continue;
+    const u0 = u / FRAME_UV_WORLD_SIZE;
+    const u1 = (u + len) / FRAME_UV_WORLD_SIZE;
+    const o = pos.length / 3;
+    pos.push(a.x, top, a.z, b.x, top, b.z, b.x, bottom, b.z, a.x, bottom, a.z);
+    norm.push(a.nx, 0, a.nz, b.nx, 0, b.nz, b.nx, 0, b.nz, a.nx, 0, a.nz);
+    uv.push(u0, 0, u1, 0, u1, v, u0, v);
+    idx.push(o, o + 1, o + 2, o, o + 2, o + 3);
+    u += len;
+  }
 }
 
 function pushBox(pos, norm, uv, idx, x, z, size, top, bottom) {
@@ -634,16 +1331,15 @@ function getWoodTexture(engine) {
     const v = (y / size) * Math.PI * 2;
     for (let x = 0; x < size; x++) {
       const u = (x / size) * Math.PI * 2;
-      const broad = Math.sin(v * 5 + Math.sin(u) * 1.4 + Math.sin(u * 3) * 0.35);
-      const fine = Math.sin(v * 17 + Math.sin(u * 2) * 2.2) * 0.28;
-      const knot = Math.exp(-18 * (
-        Math.sin(u * 0.5) ** 2 + Math.sin(v * 0.5 - u * 0.12) ** 2
-      ));
-      const grain = broad * 0.55 + fine - knot * 0.8;
+      // Plank grain along U (rail length). Low-frequency V so a thin rail looks like one board.
+      const broad = Math.sin(v * 2.2 + Math.sin(u * 1.15) * 0.35);
+      const fine = Math.sin(v * 5.4 + u * 0.55) * 0.16;
+      const wander = Math.sin(u * 0.85 + v * 1.6) * 0.08;
+      const grain = broad * 0.82 + fine + wander;
       const o = (y * size + x) * 4;
-      pixels[o] = Math.max(0, Math.min(255, 126 + grain * 34));
-      pixels[o + 1] = Math.max(0, Math.min(255, 67 + grain * 20));
-      pixels[o + 2] = Math.max(0, Math.min(255, 31 + grain * 11));
+      pixels[o] = Math.max(0, Math.min(255, 132 + grain * 28));
+      pixels[o + 1] = Math.max(0, Math.min(255, 74 + grain * 16));
+      pixels[o + 2] = Math.max(0, Math.min(255, 36 + grain * 9));
       pixels[o + 3] = 255;
     }
   }
@@ -664,6 +1360,67 @@ function getWoodTexture(engine) {
   });
   woodTextures.set(engine, texture);
   return texture;
+}
+
+function getEndgrainTexture(engine) {
+  let texture = endgrainTextures.get(engine);
+  if (texture) return texture;
+  const size = 256;
+  const pixels = new Uint8Array(size * size * 4);
+  const pithX = 0.04;
+  const pithZ = -0.03;
+  for (let y = 0; y < size; y++) {
+    const v = y / (size - 1) * 2 - 1;
+    for (let x = 0; x < size; x++) {
+      const u = x / (size - 1) * 2 - 1;
+      const dx = (u - pithX) * 1.06;
+      const dy = (v - pithZ) * 0.94;
+      const ang = Math.atan2(dy, dx);
+      const r = Math.hypot(dx, dy);
+      const wobble = Math.sin(ang * 3.0) * 0.045 + Math.sin(ang * 7.0 + r * 4) * 0.022;
+      const rr = r + wobble;
+      const latewood = 0.5 + 0.5 * Math.sin(rr * 46 + Math.sin(ang * 2) * 0.35);
+      const band = Math.pow(latewood, 2.4);
+      const pith = Math.max(0, 1 - rr * 9);
+      const ray = Math.pow(Math.abs(Math.sin(ang * 9 + rr * 1.8)), 18) * 0.12 * Math.min(1, rr * 3);
+      const bark = rr > 0.93 ? Math.min(1, (rr - 0.93) * 14) : 0;
+      const grain = (1 - band * 0.55) - pith * 0.22 + ray - bark * 0.35;
+      const o = (y * size + x) * 4;
+      pixels[o] = Math.max(0, Math.min(255, 118 + grain * 48));
+      pixels[o + 1] = Math.max(0, Math.min(255, 72 + grain * 28));
+      pixels[o + 2] = Math.max(0, Math.min(255, 38 + grain * 14));
+      pixels[o + 3] = 255;
+    }
+  }
+  texture = createTexture2DFromPixels(engine, pixels, size, size, {
+    srgb: true,
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+    minFilter: 'linear',
+    magFilter: 'linear',
+  });
+  texture.sampler = getOrCreateSampler(engine, {
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+    minFilter: 'linear',
+    magFilter: 'linear',
+    mipmapFilter: 'linear',
+    maxAnisotropy: 8,
+  });
+  endgrainTextures.set(engine, texture);
+  return texture;
+}
+
+function createEndgrainMaterial(texture) {
+  const mat = createStandardMaterial();
+  mat.diffuseTexture = texture;
+  mat.diffuseColor = [0.82, 0.62, 0.4];
+  mat.ambientColor = [0.28, 0.18, 0.1];
+  mat.emissiveColor = [0.03, 0.016, 0.008];
+  mat.specularColor = [0.12, 0.08, 0.05];
+  mat.specularPower = 36;
+  mat.backFaceCulling = false;
+  return mat;
 }
 
 function createWoodMaterial(texture, dark) {
@@ -729,9 +1486,9 @@ function buildMountainRing(engine, seed, boardRadius) {
     new Float32Array(uvs),
   );
   const mat = createStandardMaterial();
-  mat.diffuseColor = [0.11, 0.18, 0.19];
-  mat.ambientColor = [0.09, 0.15, 0.17];
-  mat.emissiveColor = [0.018, 0.04, 0.045];
+  mat.diffuseColor = [0.16, 0.18, 0.16];
+  mat.ambientColor = [0.12, 0.14, 0.12];
+  mat.emissiveColor = [0.03, 0.034, 0.028];
   mat.specularColor = [0.025, 0.04, 0.045];
   mat.backFaceCulling = false;
   mesh.material = mat;
@@ -772,10 +1529,10 @@ function computeSmoothNormals(positions, indices) {
 }
 
 function emptyBucket() {
-  return { positions: [], uvs: [], indices: [], count: 0 };
+  return { positions: [], uvs: [], specUvs: [], indices: [], count: 0 };
 }
 
-function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width, height, worldHalfF) {
+function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width, height, worldHalfF, specUv) {
   const col = atlasCell % ATLAS_GRID;
   const row = (atlasCell / ATLAS_GRID) | 0;
   // Image-space UVs: row 0 is top of PNG (V=0), matching pixel upload.
@@ -798,6 +1555,11 @@ function pushTileQuad(bucket, tx, tz, atlasCell, heightMap, terrainTypes, width,
   // BL, BR, TR, TL — CW from +Y (Lite left-handed front faces).
   bucket.positions.push(x1, y00, z1, x2, y10, z1, x2, y11, z2, x1, y01, z2);
   bucket.uvs.push(u1, vBot, u2, vBot, u2, vTop, u1, vTop);
+  const su0 = tx * SPEC_TEX_SCALE * (specUv?.invW ?? 0);
+  const su1 = (tx + 1) * SPEC_TEX_SCALE * (specUv?.invW ?? 0);
+  const sv0 = tz * SPEC_TEX_SCALE * (specUv?.invH ?? 0);
+  const sv1 = (tz + 1) * SPEC_TEX_SCALE * (specUv?.invH ?? 0);
+  bucket.specUvs.push(su0, sv0, su1, sv0, su1, sv1, su0, sv1);
   bucket.indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
   bucket.count++;
 }
@@ -845,8 +1607,16 @@ const SLOW_LIFT = 0.05;
 const GRID_HALF = 0.05;
 const BLOCK_INSET = 0.15;
 
+/** Debug-only. Neon on purpose so it never reads as part of the world grade. */
+const GRID_INK = {
+  edge: { diffuse: [0.15, 0.9, 1], emissive: [0.05, 0.35, 0.4], alpha: 0.5 },
+  blocked: { diffuse: [1, 0.08, 0.1], emissive: [0.55, 0.02, 0.04], alpha: 0.42 },
+  structure: { diffuse: [1, 0.82, 0.05], emissive: [0.5, 0.35, 0], alpha: 0.4 },
+  slow: { diffuse: [1, 0.95, 0.15], emissive: [0.45, 0.4, 0], alpha: 0.36 },
+};
+
 /**
- * Dev overlay: cyan edges, magenta blocked, orange structure-slow, amber tree/shore slow.
+ * Dev overlay: teal edges, rose blocked, ochre structure-slow, gold tree/shore slow.
  * Edges are static; occupancy fills refresh from live pass/slow/structureSlow masks.
  * @returns {{
  *   setVisible: (on: boolean) => void,
@@ -936,8 +1706,7 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
       'tile-grid',
       edgePos,
       edgeIdx,
-      [0.15, 0.9, 1],
-      [0.35, 0.95, 1],
+      GRID_INK.edge,
     )
     : null;
   if (edgeMesh) {
@@ -1000,34 +1769,31 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
         'tile-blocked',
         blockPos,
         blockIdx,
-        [1, 0.15, 0.55],
-        [1, 0.2, 0.65],
+        GRID_INK.blocked,
       );
       addToScene(scene, blockMesh);
       setSubtreeVisible(blockMesh, visible);
     }
     if (uv > 0) {
-      // Orange — farm / agora / slow buildings (blocks placement).
+      // Ochre — farm / agora / slow buildings (blocks placement).
       structureSlowMesh = makeDevMesh(
         engine,
         'tile-structure-slow',
         structPos,
         structIdx,
-        [1, 0.45, 0.08],
-        [1, 0.55, 0.12],
+        GRID_INK.structure,
       );
       addToScene(scene, structureSlowMesh);
       setSubtreeVisible(structureSlowMesh, visible);
     }
     if (sv > 0) {
-      // Amber — trees / shore / rock border (pathing slow, placement OK).
+      // Gold — trees / shore / rock border (pathing slow, placement OK).
       slowMesh = makeDevMesh(
         engine,
         'tile-slow',
         slowPos,
         slowIdx,
-        [1, 0.85, 0.2],
-        [1, 0.95, 0.35],
+        GRID_INK.slow,
       );
       addToScene(scene, slowMesh);
       setSubtreeVisible(slowMesh, visible);
@@ -1054,17 +1820,18 @@ export function createTileGridOverlay(engine, scene, field, opts = {}) {
   };
 }
 
-function makeDevMesh(engine, name, positions, indices, diffuse, emissive) {
+function makeDevMesh(engine, name, positions, indices, ink) {
   const pos = new Float32Array(positions);
   const idx = new Uint32Array(indices);
   const normals = flatUpNormals(pos.length / 3);
   const mesh = createMeshFromData(engine, name, pos, normals, idx);
   const mat = createStandardMaterial();
-  mat.diffuseColor = diffuse;
-  mat.emissiveColor = emissive;
-  mat.ambientColor = emissive;
+  mat.diffuseColor = ink.diffuse;
+  mat.emissiveColor = ink.emissive;
+  mat.ambientColor = ink.emissive;
   mat.specularColor = [0, 0, 0];
   mat.disableLighting = true;
+  mat.alpha = ink.alpha ?? 1;
   mat.backFaceCulling = false;
   mesh.material = mat;
   mesh.pickable = false;

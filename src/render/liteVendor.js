@@ -26,6 +26,8 @@ export {
   getOrCreateSampler,
   createStandardMaterial,
   createShaderMaterial,
+  setShaderTexture,
+  setShaderUniform,
   createPbrMaterial,
   addToScene,
   removeFromScene,
@@ -86,6 +88,7 @@ export {
   setStandardOpacityTexture,
   setStandardEmissiveTexture,
   setStandardAmbientTexture,
+  setStandardSpecularTexture,
   enableStandardVertexColors,
   // babylon-lite-explorer (F9) imports these via import map → this bundle.
   StandardToneMapping,

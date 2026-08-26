@@ -11,6 +11,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { USE_GPU_PICK } from './pickMode.js';
+import { OWNER_TINTS } from './ownerTints.js';
 
 const AGORA_MODEL_URL = '/assets/models/agora.glb';
 const FLAG_MODEL_URL = '/assets/models/flag.glb';
@@ -20,11 +21,13 @@ const MAX_RALLY_FLAGS = 32;
 const MAX_RALLY_LINE_SEGS = 512;
 const MAX_GHOST_LINE_SEGS = 256;
 const AGORA_SCALE = 1;
-/** Base flag size before camera-distance scaling. */
+/** Rally / ghost flags still scale from eye distance. */
 const FLAG_BASE_SCALE = 2.15;
 const FLAG_DIST_REF = 110;
 const FLAG_SCALE_MIN = 1.35;
 const FLAG_SCALE_MAX = 3.4;
+/** Fallback if the camera has not published radius limits yet. */
+const FLAG_RADIUS_MIN = 40;
 /** Dashed rally stroke (world units). */
 const RALLY_DASH = 1.55;
 const RALLY_GAP = 1.05;
@@ -35,14 +38,6 @@ const RALLY_ARROW_LEN = 0.95;
 const RALLY_LINE_Y = 1.15;
 /** Positive = dashes crawl building → flag. */
 const RALLY_FLOW_SPEED = 0.0045;
-/** Matches unit / building OWNER_TINTS. */
-const OWNER_TINTS = [
-  [0.25, 0.55, 1.0],
-  [1.0, 0.32, 0.25],
-  [0.4, 1.0, 0.45],
-  [0.95, 0.8, 0.25],
-  [0.75, 0.45, 1.0],
-];
 
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
@@ -102,6 +97,16 @@ function flagScaleForDist(dist) {
   return Math.max(FLAG_SCALE_MIN, Math.min(FLAG_SCALE_MAX, FLAG_BASE_SCALE * t));
 }
 
+/** Agora ownership flag: min at closest zoom, max at max camera radius. */
+function flagScaleForCamera(camera) {
+  const r = camera?.radius;
+  if (!Number.isFinite(r)) return FLAG_SCALE_MIN;
+  const minR = camera.lowerRadiusLimit ?? FLAG_RADIUS_MIN;
+  const maxR = camera.upperRadiusLimit ?? r;
+  const t = (r - minR) / Math.max(1e-6, maxR - minR);
+  return FLAG_SCALE_MIN + Math.max(0, Math.min(1, t)) * (FLAG_SCALE_MAX - FLAG_SCALE_MIN);
+}
+
 function cameraEye(camera) {
   const wm = camera?.worldMatrix;
   if (wm && Number.isFinite(wm[12])) {
@@ -142,8 +147,12 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   let lastFlagEyeX = NaN;
   let lastFlagEyeY = NaN;
   let lastFlagEyeZ = NaN;
-  /** ~3 world-units of eye motion before flag scales are rewritten. */
+  let lastFlagRadius = NaN;
+  /** @type {object | null} */
+  let lastFlagCamera = null;
+  /** ~3 world-units of eye motion before rally flag scales are rewritten. */
   const FLAG_EYE_MOVE_SQ = 9;
+  const FLAG_RADIUS_EPS = 0.35;
 
   const emptyApi = {
     place() {},
@@ -235,7 +244,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   rallyLine = makeLineBatch(MAX_RALLY_LINE_SEGS);
   ghostLine = makeLineBatch(MAX_GHOST_LINE_SEGS);
 
-  function writeFlagBatch(batchLayers, list, eye) {
+  function writeFlagBatch(batchLayers, list, eye, scaleFor) {
     const n = list.length;
     for (let i = 0; i < n; i++) {
       const a = list[i];
@@ -245,7 +254,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       const yaw = a.yaw != null ? a.yaw : Math.atan2(-x, -z);
       const owner = a.owner | 0;
       const dist = Math.hypot(eye.x - x, eye.y - y, eye.z - z) || FLAG_DIST_REF;
-      const scale = flagScaleForDist(dist);
+      const scale = scaleFor ? scaleFor(dist) : flagScaleForDist(dist);
       for (const layer of batchLayers) {
         writeMatrix(layer.matrices, i, x, y, z, yaw, scale);
         if (layer.isTeamColor) writeOwnerColor(layer.colors, i, owner);
@@ -466,12 +475,16 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   }
 
   function rewriteFlags(camera) {
-    const eye = cameraEye(camera);
+    if (camera) lastFlagCamera = camera;
+    const cam = camera ?? lastFlagCamera;
+    const eye = cameraEye(cam);
     // Force a fresh latch so the next update() doesn't skip after place/rally.
     lastFlagEyeX = eye.x;
     lastFlagEyeY = eye.y;
     lastFlagEyeZ = eye.z;
-    writeFlagBatch(agoraFlagLayers, agoraCache, eye);
+    if (cam && Number.isFinite(cam.radius)) lastFlagRadius = cam.radius;
+    const agoraScale = flagScaleForCamera(cam);
+    writeFlagBatch(agoraFlagLayers, agoraCache, eye, () => agoraScale);
     writeFlagBatch(rallyFlagLayers, rallyCache, eye);
     if (rallyGhost) {
       writeFlagBatch(ghostFlagLayers, [rallyGhost], eye);
@@ -567,17 +580,18 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       rewriteRallyLines();
       rewriteGhostLine();
     }
-    // Flags only need a rewrite when the eye moves enough to change scale, or
-    // when place/rally mutated the cache (rewriteFlags(null) resets the latch).
+    // Agora flags track camera radius; rally flags still track eye distance.
+    // place/rally calls rewriteFlags(null), which resets the latch.
     const eye = cameraEye(camera);
     const movedSq =
       (eye.x - lastFlagEyeX) ** 2 +
       (eye.y - lastFlagEyeY) ** 2 +
       (eye.z - lastFlagEyeZ) ** 2;
-    if (!Number.isFinite(lastFlagEyeX) || movedSq >= FLAG_EYE_MOVE_SQ) {
-      lastFlagEyeX = eye.x;
-      lastFlagEyeY = eye.y;
-      lastFlagEyeZ = eye.z;
+    const r = camera?.radius;
+    const zoomed =
+      Number.isFinite(r) &&
+      (!Number.isFinite(lastFlagRadius) || Math.abs(r - lastFlagRadius) >= FLAG_RADIUS_EPS);
+    if (!Number.isFinite(lastFlagEyeX) || movedSq >= FLAG_EYE_MOVE_SQ || zoomed) {
       rewriteFlags(camera);
     }
   }

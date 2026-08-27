@@ -41,7 +41,7 @@ export const CHIP_SCREEN_UP_PX = 8;
 export const CHIP_SCREEN_UP_TILT_PX = 20;
 /** Size after the look-down tilt (close-in → play), before the half-zoom vanish. */
 export const LOOK_DOWN_SCALE_MIN = 0.55;
-/** Start the final vanish at this normalized zoom (0 = closest, 1 = farthest). */
+/** Start shrinking toward vanish (size only; chips stay opaque). */
 export const HORIZON_FADE_START = 0.5;
 /** Hide at max zoom-out. */
 export const HORIZON_HIDE = 1;
@@ -71,7 +71,7 @@ function writeSoftRoundedSquare(pixels, ox, size) {
   // Stay inside the atlas cell so linear filter doesn't pick up the next frame.
   const half = size * 0.36;
   const corner = half * 0.36;
-  const feather = size * 0.04;
+  const feather = size * 0.02;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const d = sdRoundBox(x + 0.5 - cx, y + 0.5 - cy, half, corner);
@@ -79,9 +79,12 @@ function writeSoftRoundedSquare(pixels, ox, size) {
       if (d <= 0) a = 1;
       else if (d < feather) a = 1 - d / feather;
       const i = ((y * size * 3) + ox + x) * 4;
-      pixels[i] = 255;
-      pixels[i + 1] = 255;
-      pixels[i + 2] = 255;
+      // Premult-safe: keep RGB 0 when the texel is empty so filtered
+      // edges don't pick up a white fringe over the scene.
+      const rgb = a > 0 ? 255 : 0;
+      pixels[i] = rgb;
+      pixels[i + 1] = rgb;
+      pixels[i + 2] = rgb;
       pixels[i + 3] = Math.round(a * 255);
     }
   }
@@ -101,9 +104,9 @@ function writeRoundedRing(pixels, ox, size, alpha) {
       const dy = y + 0.5 - cy;
       const on = sdRoundBox(dx, dy, half, corner) <= 0 && sdRoundBox(dx, dy, inner, innerCorner) > 0;
       const i = ((y * size * 3) + ox + x) * 4;
-      pixels[i] = 255;
-      pixels[i + 1] = 255;
-      pixels[i + 2] = 255;
+      pixels[i] = on ? 255 : 0;
+      pixels[i + 1] = on ? 255 : 0;
+      pixels[i + 2] = on ? 255 : 0;
       pixels[i + 3] = on ? aByte : 0;
     }
   }
@@ -404,7 +407,6 @@ export function createHealthBars(engine, scene, opts = {}) {
         ? worldSizeForScreenPx(TARGET_DOT_PX, dist, viewH, fov)
         : NORMAL_DOT_DIAMETER;
       const normalDot = baseDot * sizeScale;
-      const fade = horizonScale;
       const spacing = normalDot * DOT_SPACING_MUL;
       const totalWidth = (DOT_COUNT - 1) * spacing;
       const [rx, rz] = cameraRight();
@@ -430,7 +432,7 @@ export function createHealthBars(engine, scene, opts = {}) {
           spr.color[0] = 0.07;
           spr.color[1] = 0.07;
           spr.color[2] = 0.08;
-          spr.color[3] = 0.94 * fade;
+          spr.color[3] = 1;
           showSprite(system, spr, FRAME_RING_ARMOR);
         } else {
           hideSprite(slot.armor[ri]);
@@ -447,7 +449,7 @@ export function createHealthBars(engine, scene, opts = {}) {
           spr.color[0] = 1;
           spr.color[1] = 1;
           spr.color[2] = 1;
-          spr.color[3] = 0.92 * fade;
+          spr.color[3] = 1;
           showSprite(system, spr, FRAME_RING_HOLY);
         } else {
           hideSprite(slot.holy[ri]);
@@ -468,12 +470,13 @@ export function createHealthBars(engine, scene, opts = {}) {
           spr.color[0] = rgb[0];
           spr.color[1] = rgb[1];
           spr.color[2] = rgb[2];
-          spr.color[3] = fade;
+          spr.color[3] = 1;
         } else {
-          spr.color[0] = 0.14;
-          spr.color[1] = 0.14;
-          spr.color[2] = 0.14;
-          spr.color[3] = 0.5 * fade;
+          // Solid dark — half-alpha was picking up sunlit ground as a highlight.
+          spr.color[0] = 0.16;
+          spr.color[1] = 0.16;
+          spr.color[2] = 0.16;
+          spr.color[3] = 1;
         }
         showSprite(system, spr, FRAME_SOFT);
       }

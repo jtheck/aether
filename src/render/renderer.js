@@ -1789,6 +1789,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     registerLabels() {},
     disposeLabels() {},
     setUtilityAvailability() {},
+    setPaused() {},
     setResearchedUpgrades() {},
     setTrackDisplay() {},
     setArmed() {},
@@ -3421,6 +3422,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       actionRadial.setUtilityAvailability?.(avail);
     },
 
+    /** Hold / resume look on the Pause pad. */
+    setActionRadialPaused(on) {
+      actionRadial.setPaused?.(Boolean(on));
+    },
+
     /**
      * Queue/progress display for action pads.
      * Keys: `unit:id` / `upgrade:id` → `{ progress: 0..1, count }`.
@@ -3466,7 +3472,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * Pick a radial option (CPU disc hit — pie / pad / icon; agora pie only). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
-     * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'cancel', id?: string } | null>}
+     * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null>}
      */
     async pickBuildingRadial(clientX, clientY) {
       const ray = radialPickingRay(clientX, clientY);

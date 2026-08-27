@@ -889,6 +889,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       };
     }
     renderer.setActionRadialTracks?.(tracks);
+    renderer.setActionRadialPaused?.(!!b?.prodPaused);
     syncActionRadialResearch();
   }
 
@@ -1120,6 +1121,22 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           playerId: localPlayerId,
           buildingIndex: actionBuildingIndex,
           techId,
+        });
+        return;
+      }
+      if (picked.kind === 'pause') {
+        const tracks = renderer.getActionRadialTracks?.() ?? {};
+        const hasWork = Object.values(tracks).some(
+          (t) => (t?.count | 0) > 0 || (t?.progress ?? 0) > 0,
+        );
+        if (!hasWork || actionBuildingIndex < 0 || localPlayerId < 0) return;
+        renderer.setActionRadialArmed?.(null);
+        const b = session.buildings?.[actionBuildingIndex];
+        session.submitCommand({
+          type: CMD.PAUSE_TRAIN,
+          playerId: localPlayerId,
+          buildingIndex: actionBuildingIndex,
+          paused: b?.prodPaused ? 0 : 1,
         });
         return;
       }

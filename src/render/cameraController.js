@@ -1,7 +1,9 @@
 // v1-style RTS camera: velocity + momentum for pan/zoom/yaw.
-// Touch/gamepad later call nudgePan / nudgeZoom / nudgeRotate.
+// Pointer pan is grab-the-ground: the world point under the plant stays
+// under the cursor/finger. Keys / wheel / flick still use velocity.
 
 import { WORLD_HALF_F, TILE_SIZE_F } from '../sim/field.js';
+import { getViewProjectionMatrix, mat4Invert } from '../vendor/lite/liteVendor.js';
 
 const ZOOM_WHEEL = 0.025;
 const ROT_WHEEL = 0.0003;
@@ -21,20 +23,28 @@ const PAN_THRESHOLD = 0.001;
 const KEY_ROT_SPEED = 0.2;
 const KEY_ZOOM_SPEED = 0.2;
 const KEY_PAN_BASE = 5 * 1.2;
-const RMB_PAN_BASE = 5;
-const PAN_DRAG_THRESHOLD = 5;
+// Click-vs-pan grace. Must match LMB `DRAG_THRESHOLD_PX` — v1 used 5px on
+// *per-event* deltas, which almost never tripped. Cumulative travel from
+// pointer-down (what we measure) hits 5px on an ordinary click, so RMB
+// move was getting eaten by a "pan".
+const PAN_DRAG_THRESHOLD = 25;
 
-// Beta: 0 = straight down, π/2 = horizon. Zoomed out looks up; play looks down;
-// the last stretch of zoom-in tilts back toward the horizon.
+// Beta: 0 = straight down, π/2 = horizon. Horizon at both ends; play sits in
+// a look-down trough. Smoothstep both legs so zoom never slams pitch.
 const MIN_BETA = 0.82;
 const MAX_BETA = 1.2;
 const CLOSE_BETA = 1.2;
-/** Close-in tilt toward the horizon; after this, zoom-out lifts beta again. */
-export const CAMERA_CLOSE_SPAN = 0.12;
+/** Normalized zoom where the look-down trough bottoms (0 = closest). */
+export const CAMERA_CLOSE_SPAN = 0.32;
 const CLOSE_SPAN = CAMERA_CLOSE_SPAN;
 /** Gentle, centered bowl — small mid/edge gap so the whole range feels even. */
 const ZOOM_MID_SPEED = 0.72;
 const ZOOM_EDGE_SPEED = 1.06;
+
+function smooth01(t) {
+  const x = Math.max(0, Math.min(1, t));
+  return x * x * (3 - 2 * x);
+}
 
 /** Zoom 0 = closest, 1 = farthest. */
 export function cameraZoomNormalized(radius, minR, maxR) {
@@ -53,15 +63,13 @@ export function farHorizonAmount(normalizedZoom) {
   return (n - CLOSE_SPAN) / (1 - CLOSE_SPAN);
 }
 
-/** @param {number} normalized 0 = closest, 1 = farthest — linear so angle and distance stay locked. */
+/** @param {number} normalized 0 = closest, 1 = farthest */
 function betaForNormalizedZoom(normalized) {
   const n = Math.max(0, Math.min(1, normalized));
   if (n < CLOSE_SPAN) {
-    const t = n / CLOSE_SPAN;
-    return CLOSE_BETA + t * (MIN_BETA - CLOSE_BETA);
+    return CLOSE_BETA + smooth01(n / CLOSE_SPAN) * (MIN_BETA - CLOSE_BETA);
   }
-  const t = (n - CLOSE_SPAN) / (1 - CLOSE_SPAN);
-  return MIN_BETA + t * (MAX_BETA - MIN_BETA);
+  return MIN_BETA + smooth01((n - CLOSE_SPAN) / (1 - CLOSE_SPAN)) * (MAX_BETA - MIN_BETA);
 }
 
 /** Centered cosine: slowest at mid-zoom, barely quicker at either extreme. */
@@ -75,8 +83,6 @@ function zoomSpeedForNormalized(normalized) {
 const DEFAULT_ALPHA = -Math.PI / 2.1;
 const DEFAULT_BETA = Math.PI / 3.2;
 const LOWER_RADIUS = 50;
-/** v1's typical play radius; used to remap (60/r)^1.5 onto v2's larger default zoom. */
-const V1_REF_RADIUS = 80;
 
 /**
  * @param {object} camera Lite ArcRotateCamera
@@ -99,6 +105,13 @@ export function createCameraController(camera, canvas, opts = {}) {
   let rmbLastScreen = { x: 0, y: 0 };
   let rmbDownScreen = { x: 0, y: 0 };
   let rmbPointerId = null;
+
+  /** World XZ under the plant — pointer pan keeps this pixel locked. */
+  let grabWorld = null;
+  let grabPanActive = false;
+  let grabLastScreen = { x: 0, y: 0 };
+  /** Pointer that owns the grab. A new pan mid-press must not inherit this. */
+  let grabPointerId = null;
 
   camera.lowerRadiusLimit = LOWER_RADIUS;
   camera.upperRadiusLimit = UPPER_RADIUS;
@@ -234,23 +247,79 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (!rmbPanActive) return false;
     rmbPanActive = false;
     rmbPointerId = null;
+    endGrabPan();
     return rmbDidPan;
+  }
+
+  function stopPanCoast() {
+    velocity.panX = 0;
+    velocity.panZ = 0;
+  }
+
+  function dropGrab() {
+    grabPanActive = false;
+    grabWorld = null;
+    grabPointerId = null;
   }
 
   function handlePointerDown(e) {
     if (e.pointerType === 'touch') return false;
     if (e.button !== 2) return false;
 
+    // New press takes over. If the old plant stays live, the first move of
+    // the next pan rubber-bands back to that world point.
+    stopPanCoast();
+    dropGrab();
+
     rmbPanActive = true;
     rmbDidPan = false;
     rmbPointerId = e.pointerId;
     rmbLastScreen = { x: e.clientX, y: e.clientY };
     rmbDownScreen = { x: e.clientX, y: e.clientY };
+    // Don't activate the grab until the drag commits — otherwise 1–10px of
+    // click jitter starts a pan and (with the old 5px latch) cancels MOVE.
     e.preventDefault();
     return true;
   }
 
-  /** Screen-space px delta → ground-plane world delta (camera-relative axes, current zoom). */
+  function unproject(inv, ndcX, ndcY, depth) {
+    const x = inv[0] * ndcX + inv[4] * ndcY + inv[8] * depth + inv[12];
+    const y = inv[1] * ndcX + inv[5] * ndcY + inv[9] * depth + inv[13];
+    const z = inv[2] * ndcX + inv[6] * ndcY + inv[10] * depth + inv[14];
+    const w = inv[3] * ndcX + inv[7] * ndcY + inv[11] * depth + inv[15];
+    const iw = 1 / w;
+    return [x * iw, y * iw, z * iw];
+  }
+
+  /** Ray × look-at plane (usually y=0). Same unproject as gameplay picks. */
+  function screenToGround(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width || canvas.clientWidth || 1;
+    const h = rect.height || canvas.clientHeight || 1;
+    let vp;
+    try {
+      vp = getViewProjectionMatrix(camera, w / h);
+    } catch {
+      return null;
+    }
+    const inv = mat4Invert(vp);
+    if (!inv) return null;
+    const ndcX = (2 * (clientX - rect.left)) / w - 1;
+    const ndcY = 1 - (2 * (clientY - rect.top)) / h;
+    const near = unproject(inv, ndcX, ndcY, 1);
+    const far = unproject(inv, ndcX, ndcY, 0);
+    const dy = far[1] - near[1];
+    if (Math.abs(dy) < 1e-8) return null;
+    const planeY = getTarget().y;
+    const t = (planeY - near[1]) / dy;
+    if (t < 0) return null;
+    return {
+      x: near[0] + (far[0] - near[0]) * t,
+      z: near[2] + (far[2] - near[2]) * t,
+    };
+  }
+
+  /** Screen-space px delta → ground-plane world delta (fallback when the ray misses). */
   function screenDeltaToGroundPan(screenDx, screenDy) {
     const cam = camera;
     const rect = canvas.getBoundingClientRect();
@@ -264,34 +333,79 @@ export function createCameraController(camera, canvas, opts = {}) {
     };
   }
 
-  /** v1: basePanSens * min(1, (60/r)^1.5), with r remapped so DEFAULT_RADIUS ≈ v1's ~80. */
-  function panZoomFactor() {
-    const r = Math.max(1, camera.radius || DEFAULT_RADIUS);
-    const effectiveR = r * (V1_REF_RADIUS / DEFAULT_RADIUS);
-    return Math.min(1.0, Math.pow(60 / effectiveR, 1.5));
+  function beginGrabPan(clientX, clientY, pointerId = null) {
+    grabPanActive = true;
+    grabPointerId = pointerId;
+    grabLastScreen = { x: clientX, y: clientY };
+    grabWorld = screenToGround(clientX, clientY);
+    stopPanCoast();
+    markNudged();
   }
 
-  /** Shared by RMB drag and touch centroid-pan — same feel, one formula. */
-  function panByScreenDelta(screenDx, screenDy, sensBase) {
-    const { wx, wz } = screenDeltaToGroundPan(screenDx, screenDy);
-    const panSens = sensBase * panZoomFactor();
+  function relockGrab() {
+    const hit = screenToGround(grabLastScreen.x, grabLastScreen.y);
+    if (hit && grabWorld) {
+      const t = getTarget();
+      clampTargetPan(t.x + grabWorld.x - hit.x, t.z + grabWorld.z - hit.z);
+      return;
+    }
+    if (hit) grabWorld = hit;
+  }
+
+  /**
+   * Slide the target so `grabWorld` stays under this screen pixel.
+   * Shared by RMB, 1-finger hold-pan, and pinch-centroid.
+   */
+  function grabPanTo(clientX, clientY, pointerId = null) {
+    if (grabPointerId != null && pointerId != null && pointerId !== grabPointerId) {
+      return false;
+    }
+    if (!grabPanActive) beginGrabPan(clientX, clientY, pointerId);
     markNudged();
-    velocity.panX += wx * panSens;
-    velocity.panZ += wz * panSens;
+    const prev = grabLastScreen;
+    grabLastScreen = { x: clientX, y: clientY };
+    if (grabWorld && screenToGround(clientX, clientY)) {
+      relockGrab();
+      return true;
+    }
+    const { wx, wz } = screenDeltaToGroundPan(clientX - prev.x, clientY - prev.y);
+    const t = getTarget();
+    clampTargetPan(t.x + wx, t.z + wz);
+    grabWorld = screenToGround(clientX, clientY);
+    return true;
+  }
+
+  function endGrabPan() {
+    if (rmbPanActive) return;
+    grabPanActive = false;
+    grabWorld = null;
+    grabPointerId = null;
+  }
+
+  /** Fallback 1:1 screen-delta pan (sky miss / callers without a plant). */
+  function panByScreenDelta(screenDx, screenDy, sensBase = 1) {
+    const { wx, wz } = screenDeltaToGroundPan(screenDx, screenDy);
+    const s = Number.isFinite(sensBase) ? sensBase : 1;
+    markNudged();
+    const t = getTarget();
+    clampTargetPan(t.x + wx * s, t.z + wz * s);
   }
 
   function handlePointerMove(e) {
     if (!rmbPanActive) return false;
     if (rmbPointerId != null && e.pointerId !== rmbPointerId) return false;
 
-    const screenDx = e.clientX - rmbLastScreen.x;
-    const screenDy = e.clientY - rmbLastScreen.y;
     // Cumulative from pointer-down — per-event deltas are often < threshold.
     const totalDist = Math.hypot(e.clientX - rmbDownScreen.x, e.clientY - rmbDownScreen.y);
-    if (totalDist > PAN_DRAG_THRESHOLD) rmbDidPan = true;
+    if (totalDist > PAN_DRAG_THRESHOLD) {
+      if (!rmbDidPan) {
+        rmbDidPan = true;
+        beginGrabPan(e.clientX, e.clientY, e.pointerId);
+      } else {
+        grabPanTo(e.clientX, e.clientY, e.pointerId);
+      }
+    }
     rmbLastScreen = { x: e.clientX, y: e.clientY };
-
-    panByScreenDelta(screenDx, screenDy, RMB_PAN_BASE);
     return true;
   }
 
@@ -300,6 +414,10 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (e.type !== 'pointercancel' && e.button !== 2) return false;
     if (rmbPointerId != null && e.pointerId !== rmbPointerId && e.type !== 'pointercancel') {
       return false;
+    }
+    if (e.type !== 'pointercancel') {
+      const totalDist = Math.hypot(e.clientX - rmbDownScreen.x, e.clientY - rmbDownScreen.y);
+      if (totalDist > PAN_DRAG_THRESHOLD) rmbDidPan = true;
     }
     return endRmbPan();
   }
@@ -434,8 +552,13 @@ export function createCameraController(camera, canvas, opts = {}) {
 
     camera.alpha += velocity.alpha;
 
-    const t = getTarget();
-    clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
+    if (!grabPanActive) {
+      const t = getTarget();
+      clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
+    } else {
+      velocity.panX = 0;
+      velocity.panZ = 0;
+    }
 
     camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
     if (camera.radius <= minR) {
@@ -451,6 +574,9 @@ export function createCameraController(camera, canvas, opts = {}) {
     const hiB = camera.upperBetaLimit ?? 1.5;
     camera.beta = Math.max(loB, Math.min(hiB, betaForNormalizedZoom(nAfter)));
 
+    // After zoom/rotate, put the planted world point back under the finger.
+    if (grabPanActive) relockGrab();
+
     // Clear Lite inertial leftovers so they never fight us.
     camera.inertialPanningX = 0;
     camera.inertialPanningY = 0;
@@ -458,7 +584,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     camera.inertialBetaOffset = 0;
     camera.inertialRadiusOffset = 0;
 
-    if (!rmbPanActive && !anyKeyHeld() && velocitiesIdle()) {
+    if (!rmbPanActive && !grabPanActive && !anyKeyHeld() && velocitiesIdle()) {
       nudged = false;
     }
   }
@@ -482,7 +608,12 @@ export function createCameraController(camera, canvas, opts = {}) {
     camera.inertialBetaOffset = 0;
     camera.inertialRadiusOffset = 0;
     nudged = false;
-    endRmbPan();
+    rmbPanActive = false;
+    rmbDidPan = false;
+    rmbPointerId = null;
+    grabPanActive = false;
+    grabWorld = null;
+    grabPointerId = null;
   }
 
   if (camera.radius == null) camera.radius = DEFAULT_RADIUS;
@@ -500,6 +631,10 @@ export function createCameraController(camera, canvas, opts = {}) {
     nudgePan,
     nudgeZoom,
     nudgeRotate,
+    beginGrabPan,
+    grabPanTo,
+    endGrabPan,
+    stopPanCoast,
     panByScreenDelta,
     getRadius: () => camera.radius,
     tick,

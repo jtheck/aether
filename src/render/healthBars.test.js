@@ -93,7 +93,7 @@ describe('health chip look-down shrink', () => {
 });
 
 describe('health chip horizon fade', () => {
-  it('stays full until half zoom, then vanishes', () => {
+  it('stays full until half zoom, then vanishes (size only)', () => {
     assert.equal(chipHorizonScale(0), 1);
     assert.equal(chipHorizonScale(HORIZON_FADE_START), 1);
     assert.equal(HORIZON_FADE_START, 0.5);

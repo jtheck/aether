@@ -326,6 +326,7 @@ function exportBuildings(buildings) {
     rallyX: b.rallyX | 0,
     rallyZ: b.rallyZ | 0,
     rallyOrder: b.rallyOrder | 0,
+    prodPaused: b.prodPaused | 0,
   }));
 }
 
@@ -354,6 +355,7 @@ function importBuildings(w, data) {
         hasRally && (b.rallyOrder | 0) === ORDER.ATTACK_MOVE
           ? ORDER.ATTACK_MOVE
           : ORDER.MOVE,
+      prodPaused: b.prodPaused | 0,
       tracks: [],
     };
   });

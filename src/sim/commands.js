@@ -37,6 +37,7 @@ import {
   applyQueueTrain,
   applyQueueResearch,
   applyCancelTrain,
+  applyPauseTrain,
   applySetRally,
 } from './buildings.js';
 
@@ -62,6 +63,8 @@ export const CMD = {
   SET_RALLY: 13,
   /** Queue research on a building (completes via production tick). */
   RESEARCH: 14,
+  /** Hold / resume production tracks on a building. */
+  PAUSE_TRAIN: 15,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -113,6 +116,9 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.CANCEL_TRAIN:
         applyCancelTrain(world, cmd);
+        break;
+      case CMD.PAUSE_TRAIN:
+        applyPauseTrain(world, cmd);
         break;
       case CMD.SET_RALLY:
         applySetRally(world, cmd);

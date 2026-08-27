@@ -128,39 +128,6 @@ export const PLAYER_COLORS = [
   { hex: '#B82880', name: 'Pink' },
 ];
 
-/** Older CSS / bright-SC2 hexes → the deep swatch of the same name. */
-const LEGACY_COLOR_HEX = {
-  '#FFFFFF': '#C8CBD0',
-  '#FF0000': '#951018',
-  '#B4141E': '#951018',
-  '#0000FF': '#0A38B8',
-  '#0042FF': '#0A38B8',
-  '#00FFFF': '#127088',
-  '#1CA7EA': '#127088',
-  '#800080': '#4E0078',
-  '#540081': '#4E0078',
-  '#FFFF00': '#C4A810',
-  '#EBE129': '#C4A810',
-  '#FFA500': '#C8600C',
-  '#FE8A0E': '#C8600C',
-  '#008000': '#147000',
-  '#168000': '#147000',
-  '#FFB6C1': '#B850B0',
-  '#CCA6FC': '#B850B0',
-  '#8A2BE2': '#1C08A0',
-  '#1F01C9': '#1C08A0',
-  '#D3D3D3': '#4A4C72',
-  '#525494': '#4A4C72',
-  '#006400': '#0C4E38',
-  '#106246': '#0C4E38',
-  '#A52A2A': '#4E2A04',
-  '#00FF00': '#3CB038',
-  '#96FF91': '#3CB038',
-  '#696969': '#232323',
-  '#FFC0CB': '#B82880',
-  '#E55BB0': '#B82880',
-};
-
 function normalizeHex(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? '').trim());
   return m ? `#${m[1].toUpperCase()}` : null;
@@ -358,11 +325,6 @@ export function setPlayerName(name) {
 export function getPlayerColor() {
   const saved = normalizeHex(read(COLOR_KEY));
   if (saved && PLAYER_COLORS.some((c) => c.hex === saved)) return saved;
-  const migrated = saved ? LEGACY_COLOR_HEX[saved] : null;
-  if (migrated) {
-    write(COLOR_KEY, migrated);
-    return migrated;
-  }
   const rolled = randomOf(PLAYER_COLORS).hex;
   write(COLOR_KEY, rolled);
   return rolled;
@@ -372,7 +334,6 @@ export function setPlayerColor(hex) {
   const normalized = normalizeHex(hex);
   const next =
     (normalized && PLAYER_COLORS.some((c) => c.hex === normalized) && normalized) ||
-    (normalized && LEGACY_COLOR_HEX[normalized]) ||
     PLAYER_COLORS[0].hex;
   write(COLOR_KEY, next);
   return next;

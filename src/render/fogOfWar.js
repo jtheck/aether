@@ -115,6 +115,7 @@ function cloneBuilding(b) {
     rallyX: b.rallyX ?? 0,
     rallyZ: b.rallyZ ?? 0,
     rallyOrder: b.rallyOrder ?? 0,
+    prodPaused: b.prodPaused | 0,
     tracks: (b.tracks ?? []).map((t) => ({ ...t })),
   };
 }

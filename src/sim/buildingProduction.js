@@ -95,9 +95,11 @@ export function buildingProductionSystem(w, field) {
     }
     if (active === 0) {
       b.tracks = [];
+      if (b.prodPaused) b.prodPaused = 0;
       w.buildingsDirty = 1;
       continue;
     }
+    if (b.prodPaused) continue;
     let dirty = false;
     for (let ti = tracks.length - 1; ti >= 0; ti--) {
       const t = tracks[ti];

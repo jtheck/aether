@@ -514,3 +514,78 @@ describe('building rally order', () => {
     assert.equal(w.buildings[0].rallyOrder, ORDER.MOVE);
   });
 });
+
+describe('building production pause', () => {
+  function placeCamp(w, field) {
+    clearClaim(field, 'camp', 32, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'camp',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    applyCommands(w, field, [
+      {
+        type: CMD.QUEUE_TRAIN,
+        playerId: 0,
+        buildingIndex: 0,
+        unitKey: 'myco',
+      },
+    ]);
+  }
+
+  it('PAUSE_TRAIN freezes progress until resumed', () => {
+    const w = createWorld(23);
+    w.buildings = [];
+    const field = buildField(23, { width: 64, height: 64 });
+    placeCamp(w, field);
+    const before = w.count;
+    applyCommands(w, field, [
+      {
+        type: CMD.PAUSE_TRAIN,
+        playerId: 0,
+        buildingIndex: 0,
+        paused: 1,
+      },
+    ]);
+    assert.equal(w.buildings[0].prodPaused, 1);
+    assert.equal(serializeBuildings(w.buildings)[0].prodPaused, 1);
+    for (let i = 0; i < TRAIN_TICKS + 4; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before);
+    assert.ok((w.buildings[0].tracks?.[0]?.count | 0) >= 1);
+    applyCommands(w, field, [
+      {
+        type: CMD.PAUSE_TRAIN,
+        playerId: 0,
+        buildingIndex: 0,
+        paused: 0,
+      },
+    ]);
+    assert.equal(w.buildings[0].prodPaused, 0);
+    for (let i = 0; i < TRAIN_TICKS + 4; i++) buildingProductionSystem(w, field);
+    assert.ok(w.count > before);
+  });
+
+  it('CANCEL_TRAIN clears a paused queue', () => {
+    const w = createWorld(24);
+    w.buildings = [];
+    const field = buildField(24, { width: 64, height: 64 });
+    placeCamp(w, field);
+    applyCommands(w, field, [
+      {
+        type: CMD.PAUSE_TRAIN,
+        playerId: 0,
+        buildingIndex: 0,
+        paused: 1,
+      },
+    ]);
+    applyCommands(w, field, [
+      { type: CMD.CANCEL_TRAIN, playerId: 0, buildingIndex: 0 },
+    ]);
+    assert.equal(w.buildings[0].tracks.length, 0);
+    assert.equal(w.buildings[0].prodPaused, 0);
+  });
+});

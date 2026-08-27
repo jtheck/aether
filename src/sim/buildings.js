@@ -506,6 +506,8 @@ export function createBuilding(opts) {
     rallyZ: 0,
     /** ORDER.MOVE or ORDER.ATTACK_MOVE for trained units walking to the rally. */
     rallyOrder: ORDER.MOVE,
+    /** 1 = hold production tracks (queue stays, progress freezes). */
+    prodPaused: 0,
     /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
     tracks: [],
   };
@@ -745,6 +747,7 @@ export function applyPlaceBuilding(w, field, cmd) {
     rallyX: 0,
     rallyZ: 0,
     rallyOrder: ORDER.MOVE,
+    prodPaused: 0,
     tracks: [],
   });
   if (field) {
@@ -876,6 +879,37 @@ export function applyCancelTrain(w, cmd) {
   if ((b.owner | 0) !== playerId) return;
   if (!b.tracks?.length) return;
   b.tracks = [];
+  b.prodPaused = 0;
+  w.buildingsDirty = 1;
+}
+
+function buildingHasProduction(b) {
+  const tracks = b?.tracks;
+  if (!tracks?.length) return false;
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    if ((t.count | 0) > 0 || (Number(t.progress) || 0) > 0) return true;
+  }
+  return false;
+}
+
+/**
+ * Hold or resume production on a building. Queue stays; progress freezes.
+ * @param {object} w
+ * @param {{ playerId?: number, buildingIndex: number, paused?: number }} cmd
+ */
+export function applyPauseTrain(w, cmd) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const bi = cmd.buildingIndex | 0;
+  if (bi < 0 || bi >= buildings.length) return;
+  const b = buildings[bi];
+  const playerId = (cmd.playerId ?? -1) | 0;
+  if ((b.owner | 0) !== playerId) return;
+  if (!buildingHasProduction(b)) return;
+  const next = cmd.paused != null ? ((cmd.paused | 0) ? 1 : 0) : b.prodPaused ? 0 : 1;
+  if ((b.prodPaused | 0) === next) return;
+  b.prodPaused = next;
   w.buildingsDirty = 1;
 }
 
@@ -898,6 +932,7 @@ export function serializeBuildings(buildings) {
         ? ORDER.ATTACK_MOVE
         : ORDER.MOVE
       : ORDER.MOVE,
+    prodPaused: b.prodPaused | 0,
     tracks: (b.tracks ?? []).map((t) => ({
       kind: t.kind,
       id: t.id,
@@ -928,6 +963,7 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.rallyX | 0);
     mix(b.rallyZ | 0);
     mix(b.rallyOrder | 0);
+    mix(b.prodPaused | 0);
     const tracks = b.tracks ?? [];
     mix(tracks.length);
     for (let ti = 0; ti < tracks.length; ti++) {

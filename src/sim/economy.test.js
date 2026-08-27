@@ -54,6 +54,9 @@ function trainingChargesGatesAndRefunds() {
     { type: CMD.PLACE_BUILDING, playerId: 0, buildingType: 'village', tx: fx32(32), ty: fx32(32) },
   ]);
   assert.equal(w.buildings.length, 1, 'village placed');
+  // Buildings place as construction sites; raise it so training is allowed.
+  w.buildings[0].built = 1;
+  w.buildings[0].buildProgress = w.buildings[0].buildTime | 0;
 
   // Villager costs food; owner has none → training rejected, no track.
   applyCommands(w, field, [

@@ -3,6 +3,7 @@
   "bakeClipName": "idle",
   "idleName": "idle",
   "walkName": "walk_cycle",
+  "carryName": "carry",
   "idleClip": {
     "fromRow": 0,
     "frameCount": 101,
@@ -13,10 +14,25 @@
     "frameCount": 63,
     "fps": 60
   },
+  "carryClip": {
+    "fromRow": 165,
+    "frameCount": 101,
+    "fps": 60
+  },
+  "carryIdleClip": {
+    "fromRow": 165,
+    "frameCount": 101,
+    "fps": 60
+  },
+  "carryWalkClip": {
+    "fromRow": 266,
+    "frameCount": 63,
+    "fps": 60
+  },
   "prims": [
     {
       "boneCount": 10,
-      "frameCount": 164,
+      "frameCount": 329,
       "clips": {
         "idle": {
           "fromRow": 0,
@@ -25,16 +41,31 @@
         },
         "walk_cycle": {
           "fromRow": 101,
+          "frameCount": 63,
+          "fps": 60
+        },
+        "carry": {
+          "fromRow": 164,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "carry_idle": {
+          "fromRow": 165,
+          "frameCount": 101,
+          "fps": 60
+        },
+        "carry_walk": {
+          "fromRow": 266,
           "frameCount": 63,
           "fps": 60
         }
       },
       "byteOffset": 0,
-      "floatCount": 26240
+      "floatCount": 52640
     },
     {
       "boneCount": 10,
-      "frameCount": 164,
+      "frameCount": 329,
       "clips": {
         "idle": {
           "fromRow": 0,
@@ -45,14 +76,29 @@
           "fromRow": 101,
           "frameCount": 63,
           "fps": 60
+        },
+        "carry": {
+          "fromRow": 164,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "carry_idle": {
+          "fromRow": 165,
+          "frameCount": 101,
+          "fps": 60
+        },
+        "carry_walk": {
+          "fromRow": 266,
+          "frameCount": 63,
+          "fps": 60
         }
       },
-      "byteOffset": 104960,
-      "floatCount": 26240
+      "byteOffset": 210560,
+      "floatCount": 52640
     },
     {
       "boneCount": 10,
-      "frameCount": 164,
+      "frameCount": 329,
       "clips": {
         "idle": {
           "fromRow": 0,
@@ -63,14 +109,29 @@
           "fromRow": 101,
           "frameCount": 63,
           "fps": 60
+        },
+        "carry": {
+          "fromRow": 164,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "carry_idle": {
+          "fromRow": 165,
+          "frameCount": 101,
+          "fps": 60
+        },
+        "carry_walk": {
+          "fromRow": 266,
+          "frameCount": 63,
+          "fps": 60
         }
       },
-      "byteOffset": 209920,
-      "floatCount": 26240
+      "byteOffset": 421120,
+      "floatCount": 52640
     },
     {
       "boneCount": 10,
-      "frameCount": 164,
+      "frameCount": 329,
       "clips": {
         "idle": {
           "fromRow": 0,
@@ -81,10 +142,25 @@
           "fromRow": 101,
           "frameCount": 63,
           "fps": 60
+        },
+        "carry": {
+          "fromRow": 164,
+          "frameCount": 1,
+          "fps": 60
+        },
+        "carry_idle": {
+          "fromRow": 165,
+          "frameCount": 101,
+          "fps": 60
+        },
+        "carry_walk": {
+          "fromRow": 266,
+          "frameCount": 63,
+          "fps": 60
         }
       },
-      "byteOffset": 314880,
-      "floatCount": 26240
+      "byteOffset": 631680,
+      "floatCount": 52640
     }
   ]
 }

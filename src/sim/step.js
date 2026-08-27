@@ -29,7 +29,7 @@ import {
   wpBase,
   MAX_REPATHS,
 } from './path.js';
-import { getUnitDef, UNIT_DEFS, unitFootprint, unitSteer, unitAccel, unitDecel, isFlyer } from './unitTypes.js';
+import { getUnitDef, UNIT_DEFS, UNIT, unitFootprint, unitSteer, unitAccel, unitDecel, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { worldToTile, isPassable, isSlowTile } from './field.js';
 import { SLOW_MULTIPLIER } from './scenery.js';
@@ -48,7 +48,14 @@ import {
   isCarried,
 } from './transport.js';
 import { repairSystem } from './repair.js';
-import { gatherSystem, campAutoAssignSystem } from './gather.js';
+import {
+  gatherSystem,
+  campAutoAssignSystem,
+  gatherDefenseSystem,
+  gatherNodeNear,
+  beginGather,
+} from './gather.js';
+import { constructionSystem, constructionAssignSystem } from './construction.js';
 import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
@@ -147,7 +154,10 @@ export function step(world, field, commands) {
   phase('transport', () => transportAutoLoadSystem(world));
   phase('repair', () => repairSystem(world));
   phase('autoGather', () => campAutoAssignSystem(world, field));
+  phase('gatherDefense', () => gatherDefenseSystem(world, field));
   phase('gather', () => gatherSystem(world, field));
+  phase('constructAssign', () => constructionAssignSystem(world, field));
+  phase('construct', () => constructionSystem(world, field));
   phase('combat', () => combatSystem(world, field));
   phase('projectiles', () => projectileSystem(world, field));
   phase('status', () => tickCombatStatus(world));
@@ -223,12 +233,30 @@ function movementSystem(w, field) {
       }
     }
 
+    // Villager holding at a construction site — constructionSystem owns cadence.
+    if (order === ORDER.BUILD) {
+      if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
+        w.vx[i] = 0;
+        w.vy[i] = 0;
+        continue;
+      }
+    }
+
     // Final destination reached — settle the order (v1 arrivalRadius).
     if (
       (order === ORDER.MOVE || order === ORDER.ATTACK_MOVE) &&
       w.hasTarget[i] &&
       atFinalDest(w, i)
     ) {
+      // Attack-moved a villager onto a resource? Put it to work — defensively, so
+      // it fends off anything that wanders in and then goes back to the node.
+      if (
+        order === ORDER.ATTACK_MOVE &&
+        w.type[i] === UNIT.VILLAGER &&
+        tryBeginArrivalGather(w, field, i)
+      ) {
+        continue;
+      }
       finishMove(w, i);
       continue;
     }
@@ -258,12 +286,26 @@ function movementSystem(w, field) {
         // Path exhausted — repath or seek final dest (do not go IDLE early).
         onPathExhausted(w, field, i);
         if (atFinalDest(w, i)) {
+          if (
+            order === ORDER.ATTACK_MOVE &&
+            w.type[i] === UNIT.VILLAGER &&
+            tryBeginArrivalGather(w, field, i)
+          ) {
+            continue;
+          }
           finishMove(w, i);
           continue;
         }
         if (w.navWpCount[i] === 0) {
           // Gave up after max repaths — stop cleanly.
           if (w.repathCount[i] >= MAX_REPATHS && w.pathRequest[i] === 0) {
+            if (
+              order === ORDER.ATTACK_MOVE &&
+              w.type[i] === UNIT.VILLAGER &&
+              tryBeginArrivalGather(w, field, i)
+            ) {
+              continue;
+            }
             finishMove(w, i);
             continue;
           }
@@ -388,6 +430,18 @@ function movementSystem(w, field) {
     const my = fx.mul(dirY, stepSpeed);
     applyMoveWithSlide(w, field, i, mx, my);
   }
+}
+
+/**
+ * A villager that attack-moved onto (or beside) a node starts gathering it in
+ * defensive mode. Returns true when a gather was started. Kept here so the two
+ * arrival sites share one policy.
+ */
+function tryBeginArrivalGather(w, field, i) {
+  if (!field || (w.carriedAmt[i] | 0) > 0) return false; // don't ditch a haul
+  const tile = gatherNodeNear(field, w.px[i], w.py[i]);
+  if (tile < 0) return false;
+  return beginGather(w, field, i, tile, 1);
 }
 
 function finishMove(w, i) {

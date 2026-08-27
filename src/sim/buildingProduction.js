@@ -87,6 +87,7 @@ export function buildingProductionSystem(w, field) {
   if (!buildings?.length) return;
   for (let bi = 0; bi < buildings.length; bi++) {
     const b = buildings[bi];
+    if (b.built === 0) continue; // a construction site produces nothing
     const tracks = b.tracks;
     if (!tracks?.length) continue;
     let active = 0;

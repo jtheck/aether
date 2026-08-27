@@ -14,9 +14,35 @@ import { tileCenterX, tileCenterY, snapToPassable, worldToTile, TILE_SIZE_F } fr
 import { addResource, RESOURCE_KINDS, RESOURCE_INDEX } from './resources.js';
 import { UNIT } from './unitTypes.js';
 import { SCENERY, rockFootprintRadius, rockResourceKind, damageRock } from './scenery.js';
+import { isHostile } from './teams.js';
 
 const WOOD_CODE = RESOURCE_INDEX.wood + 1;
 const FOOD_CODE = RESOURCE_INDEX.food + 1;
+
+/** Node "class" a drop-off recruits for — keeps mines on rock and camps on wood. */
+const NODE_WOOD = 0;
+const NODE_ROCK = 1;
+const NODE_FOOD = 2;
+
+/** Which node class a harvestable tile belongs to (see nodeAt). */
+function nodeClass(node) {
+  if (!node) return -1;
+  if (node.tree) return NODE_WOOD;
+  if (node.food) return NODE_FOOD;
+  return NODE_ROCK;
+}
+
+/**
+ * Which node class a drop-off building recruits villagers for. Camps work wood,
+ * mines work stone/mineral, farms work their own food node. Anything else (agora)
+ * recruits nothing — it's only a deposit point.
+ */
+function dropOffNodeClass(type) {
+  if (type === 'camp') return NODE_WOOD;
+  if (type === 'mine') return NODE_ROCK;
+  if (type === 'farm') return NODE_FOOD;
+  return -1;
+}
 
 /**
  * What (if anything) is harvestable at a tile. Trees carry stock on their own
@@ -82,6 +108,23 @@ export const ENGINEER_ASSIST_RANGE_F = 28;
 export const ENGINEER_BONUS_CAP = 3;
 /** Max villagers a single drop-off will pull to work. */
 export const CAMP_MAX_WORKERS = 8;
+/** Farms are small plots — keep them to a 1–2 person crew so workers spread out. */
+export const FARM_MAX_WORKERS = 2;
+
+/** Per-type worker cap so farms stay tiny while camps/mines field a full crew. */
+function maxWorkersFor(type) {
+  return type === 'farm' ? FARM_MAX_WORKERS : CAMP_MAX_WORKERS;
+}
+
+// --- Defensive farming --------------------------------------------------------
+// A villager that reaches a node via attack-move gathers "defensively": it swings
+// at any hostile that wanders into arm's reach, then goes back to work. Kept short
+// so villagers never chase — they only defend the plot they're standing on.
+/** How close a hostile must be for a defensive gatherer to retaliate (world units). */
+const DEFEND_RANGE = fx.fromFloat(11);
+const DEFEND_RANGE_SQ = fx.mul(DEFEND_RANGE, DEFEND_RANGE);
+/** Stagger threat scans across ticks (deterministic on entity id + world.tick). */
+const DEFEND_PHASE = 6;
 
 const CAMP_WORK_RADIUS = fx.fromFloat(CAMP_WORK_RADIUS_F);
 const ENGINEER_RADIUS_BONUS = fx.fromFloat(ENGINEER_RADIUS_BONUS_F);
@@ -96,8 +139,9 @@ const AUTO_ASSIGN_INTERVAL = 20;
  * @param {object} field
  * @param {number} i entity id
  * @param {number} tile tile index of the node
+ * @param {number} [defensive] 1 = fight back if a hostile closes in, then resume
  */
-export function beginGather(w, field, i, tile) {
+export function beginGather(w, field, i, tile, defensive = 0) {
   if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) return false;
   w.order[i] = ORDER.GATHER;
   w.gatherTile[i] = tile | 0;
@@ -105,6 +149,7 @@ export function beginGather(w, field, i, tile) {
   w.transportTarget[i] = -1;
   w.hasTarget[i] = 0;
   w.gatherCd[i] = 0;
+  if (w.gatherDefensive) w.gatherDefensive[i] = defensive ? 1 : 0;
   clearEngagement(w, i);
   clearPath(w, i);
   return true;
@@ -121,6 +166,7 @@ function endGather(w, i) {
   w.gatherTile[i] = -1;
   w.gatherCd[i] = 0;
   w.hasTarget[i] = 0;
+  if (w.gatherDefensive) w.gatherDefensive[i] = 0;
   w.vx[i] = 0;
   w.vy[i] = 0;
   clearPath(w, i);
@@ -166,6 +212,7 @@ export function nearestDropOff(w, owner, px, py) {
   if (buildings) {
     for (let b = 0; b < buildings.length; b++) {
       const bd = buildings[b];
+      if (bd.built === 0) continue; // sites can't accept drop-offs yet
       if (bd.owner === owner && DROP_OFF_TYPES.has(bd.type)) consider(bd.x, bd.z);
     }
   }
@@ -266,8 +313,11 @@ export function campWorkRadius(w, b) {
   return CAMP_WORK_RADIUS + eng * ENGINEER_RADIUS_BONUS;
 }
 
-/** Nearest harvestable node (tree or rock) within a drop-off's reach, closest to (fromX, fromY). */
-function nearestNodeWithinRadius(field, b, radius, fromX, fromY) {
+/**
+ * Nearest node of the drop-off's own class within reach, closest to (fromX, fromY).
+ * `wantClass` keeps mines on rock and camps on wood; -1 accepts any node.
+ */
+function nearestNodeWithinRadius(field, b, radius, fromX, fromY, wantClass) {
   const width = field.width | 0;
   const height = field.height | 0;
   const radiusSq = fx.mul(radius, radius);
@@ -283,7 +333,9 @@ function nearestNodeWithinRadius(field, b, radius, fromX, fromY) {
   for (let tz = z0; tz <= z1; tz++) {
     for (let tx = x0; tx <= x1; tx++) {
       const tile = tz * width + tx;
-      if (!nodeAt(field, tile)) continue;
+      const node = nodeAt(field, tile);
+      if (!node) continue;
+      if (wantClass >= 0 && nodeClass(node) !== wantClass) continue;
       const cx = tileCenterX(tx);
       const cy = tileCenterY(tz);
       if (fx.dist2(b.x, b.z, cx, cy) > radiusSq) continue;
@@ -308,27 +360,129 @@ export function campAutoAssignSystem(w, field) {
   if (w.tick % AUTO_ASSIGN_INTERVAL !== 0) return;
   for (let bIdx = 0; bIdx < w.buildings.length; bIdx++) {
     const b = w.buildings[bIdx];
+    if (b.built === 0) continue; // a site can't recruit gatherers yet
     if (!DROP_OFF_TYPES.has(b.type)) continue;
+    const wantClass = dropOffNodeClass(b.type);
+    if (wantClass < 0) continue; // agora-like: deposit only, never recruits
     const owner = b.owner;
     const radius = campWorkRadius(w, b);
     const radiusSq = fx.mul(radius, radius);
+    const cap = maxWorkersFor(b.type);
 
+    // Only count crew already working THIS drop-off's resource class, so a wood
+    // chopper passing a farm doesn't count against the farm's tiny food crew.
     let workers = 0;
     for (let i = 0; i < w.count; i++) {
       if (!w.alive[i] || w.owner[i] !== owner || w.type[i] !== UNIT.VILLAGER) continue;
       if (w.order[i] !== ORDER.GATHER) continue;
+      if (nodeClass(nodeAt(field, w.gatherTile[i])) !== wantClass) continue;
       if (fx.dist2(w.px[i], w.py[i], b.x, b.z) <= radiusSq) workers++;
     }
-    if (workers >= CAMP_MAX_WORKERS) continue;
+    if (workers >= cap) continue;
 
-    for (let i = 0; i < w.count && workers < CAMP_MAX_WORKERS; i++) {
+    for (let i = 0; i < w.count && workers < cap; i++) {
       if (!w.alive[i] || w.owner[i] !== owner || w.type[i] !== UNIT.VILLAGER) continue;
       if (w.order[i] !== ORDER.IDLE) continue;
       if (fx.dist2(w.px[i], w.py[i], b.x, b.z) > radiusSq) continue;
-      const tile = nearestNodeWithinRadius(field, b, radius, w.px[i], w.py[i]);
-      if (tile < 0) break; // no nodes in reach — nothing to recruit for
+      const tile = nearestNodeWithinRadius(field, b, radius, w.px[i], w.py[i], wantClass);
+      if (tile < 0) break; // no matching nodes in reach — nothing to recruit for
       beginGather(w, field, i, tile);
       workers++;
     }
+  }
+}
+
+/**
+ * Resolve a world position to a harvestable node tile at or beside it. A click /
+ * arrival can land on a rock footprint or just off a farm center, so we sweep a
+ * small window and take the nearest node. Returns -1 if nothing is harvestable.
+ * @returns {number} tile index or -1
+ */
+export function gatherNodeNear(field, px, py) {
+  if (!field) return -1;
+  const width = field.width | 0;
+  const height = field.height | 0;
+  const cxTile = worldToTile(px);
+  const czTile = worldToTile(py);
+  const center = czTile * width + cxTile;
+  if (nodeAt(field, center)) return center;
+  // Rocks are up to a 2-tile footprint; farms/trees are on their own tile.
+  let best = -1;
+  let bestD = 0x7fffffffffff;
+  for (let dz = -2; dz <= 2; dz++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const tx = cxTile + dx;
+      const tz = czTile + dz;
+      if (tx < 0 || tz < 0 || tx >= width || tz >= height) continue;
+      const tile = tz * width + tx;
+      if (!nodeAt(field, tile)) continue;
+      const d = dx * dx + dz * dz;
+      if (d < bestD) {
+        bestD = d;
+        best = tile;
+      }
+    }
+  }
+  return best;
+}
+
+/** Nearest living hostile to entity i within rangeSq, or -1. */
+function nearestHostile(w, i, rangeSq) {
+  const owner = w.owner[i];
+  let best = -1;
+  let bestD = rangeSq;
+  for (let j = 0; j < w.count; j++) {
+    if (j === i || !w.alive[j]) continue;
+    if (w.carriedBy && w.carriedBy[j] >= 0) continue;
+    if (!isHostile(owner, w.owner[j])) continue;
+    const d2 = fx.dist2(w.px[i], w.py[i], w.px[j], w.py[j]);
+    if (d2 <= bestD) {
+      if (d2 < bestD || (best < 0 || j < best)) {
+        bestD = d2;
+        best = j;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Defensive farming — villagers that reached a node via attack-move hold their
+ * ground: if a hostile closes in they drop the tool, swing, then return to work.
+ * Runs before combat so the retaliation resolves the same tick; runs before the
+ * gather phase so a resumed order is driven immediately. Deterministic (phased on
+ * entity id + world.tick, no allocations).
+ * @param {object} w
+ * @param {object} field
+ */
+export function gatherDefenseSystem(w, field) {
+  if (!field || !w.gatherDefensive) return;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER || !w.gatherDefensive[i]) continue;
+    const order = w.order[i];
+    if (order === ORDER.GATHER) {
+      // Threat check on this entity's phase so cost stays bounded and stable.
+      if (i % DEFEND_PHASE !== w.tick % DEFEND_PHASE) continue;
+      const foe = nearestHostile(w, i, DEFEND_RANGE_SQ);
+      if (foe >= 0) {
+        // Interrupt to fight; keep gatherTile as the resume marker (see below).
+        w.targetEntity[i] = foe;
+        w.order[i] = ORDER.ATTACK;
+        w.hasTarget[i] = 0;
+        clearPath(w, i);
+        queuePath(w, i, w.px[foe], w.py[foe]);
+      }
+    } else if (order === ORDER.IDLE) {
+      // Combat ended (endAttack -> IDLE) — resume the plot if it still stands,
+      // otherwise drop the defensive tag so the villager truly idles.
+      const tile = w.gatherTile[i];
+      if (tile >= 0 && nodeAt(field, tile)) {
+        beginGather(w, field, i, tile, 1);
+      } else {
+        w.gatherDefensive[i] = 0;
+        w.gatherTile[i] = -1;
+      }
+    }
+    // ORDER.ATTACK: leave the swing to combat; it flips back to IDLE when done.
   }
 }

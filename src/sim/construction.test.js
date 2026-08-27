@@ -1,0 +1,173 @@
+// Building construction — placed buildings start as inert sites that villagers
+// raise. Verifies: placement makes a site, nearby villagers auto-build it (up to
+// two, faster with two), it pulls a gatherer when no idle hand is free, finishing
+// turns on the building's effects, and the whole loop is deterministic.
+
+import assert from 'node:assert/strict';
+import * as fx from './fixed.js';
+import { createWorld, spawn, ORDER } from './world.js';
+import { UNIT } from './unitTypes.js';
+import { step } from './step.js';
+import { CMD, applyCommands } from './commands.js';
+import { buildField, createField, worldToTile } from './field.js';
+import { growTreeAt } from './trees.js';
+import { getResource, grantStartingResources } from './resources.js';
+import { getBuildTime } from './buildings.js';
+import { checksum } from './checksum.js';
+
+function siteBuilding(type, xF, zF, owner = 0) {
+  return {
+    owner,
+    type,
+    x: fx.fromFloat(xF),
+    z: fx.fromFloat(zF),
+    yaw: 0,
+    hasRally: 0,
+    rallyX: 0,
+    rallyZ: 0,
+    rallyOrder: ORDER.MOVE,
+    prodPaused: 0,
+    built: 0,
+    buildProgress: 0,
+    buildTime: getBuildTime(type),
+    tracks: [],
+  };
+}
+
+function openField(seed) {
+  const field = createField(seed);
+  field.pass.fill(1);
+  return field;
+}
+
+function ticksToBuild(field, w, maxTicks = 400) {
+  for (let t = 0; t < maxTicks; t++) {
+    step(w, field, []);
+    if (w.buildings[0].built) return t;
+  }
+  return -1;
+}
+
+function placementMakesASite() {
+  const field = openField(1);
+  field.activeMask?.fill(1);
+  const w = createWorld(1);
+  w.buildings = [];
+  grantStartingResources(w, 0, { wood: 500, stone: 500, mineral: 500, food: 500 });
+  applyCommands(w, field, [
+    { type: CMD.PLACE_BUILDING, playerId: 0, buildingType: 'camp', tx: fx.fromFloat(0), ty: fx.fromFloat(0) },
+  ]);
+  assert.equal(w.buildings.length, 1, 'camp placed');
+  assert.equal(w.buildings[0].built, 0, 'placed as an unbuilt site');
+  assert.equal(w.buildings[0].buildProgress, 0, 'no progress yet');
+  assert.ok(w.buildings[0].buildTime > 0, 'has a build time');
+}
+
+function siteIsInertUntilRaised() {
+  // A camp site must not act as a drop-off: a villager can gather but has nowhere
+  // to bank until the camp is built.
+  const field = openField(2);
+  const w = createWorld(2);
+  const treeTile = worldToTile(0) * field.width + worldToTile(fx.fromFloat(6));
+  growTreeAt(field, treeTile, 200);
+  w.buildings = [siteBuilding('camp', 0, 0)];
+  const vill = spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  // Manually gather (bypass auto-assign, which would pull it to build instead).
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: treeTile }]);
+  for (let t = 0; t < 120; t++) step(w, field, []);
+  assert.equal(getResource(w, 0, 'wood'), 0, 'nothing banked at an unbuilt camp');
+}
+
+function villagersRaiseTheSite() {
+  const field = openField(3);
+  const w = createWorld(3);
+  w.buildings = [siteBuilding('camp', 0, 0)];
+  spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  spawn(w, { x: fx.fromFloat(-6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  const t = ticksToBuild(field, w);
+  assert.ok(t >= 0, 'camp gets raised by nearby villagers');
+  assert.equal(w.buildings[0].built, 1, 'built flag set');
+  assert.equal(w.buildings[0].buildProgress, w.buildings[0].buildTime, 'progress capped at build time');
+}
+
+function twoBuildersBeatOne() {
+  const solo = openField(4);
+  const wSolo = createWorld(4);
+  wSolo.buildings = [siteBuilding('village', 0, 0)];
+  spawn(wSolo, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const tSolo = ticksToBuild(solo, wSolo, 600);
+
+  const duo = openField(4);
+  const wDuo = createWorld(4);
+  wDuo.buildings = [siteBuilding('village', 0, 0)];
+  spawn(wDuo, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  spawn(wDuo, { x: fx.fromFloat(-6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const tDuo = ticksToBuild(duo, wDuo, 600);
+
+  assert.ok(tSolo > 0 && tDuo > 0, 'both finish');
+  assert.ok(tDuo < tSolo, `two builders finish sooner (duo ${tDuo} < solo ${tSolo})`);
+}
+
+function pullsAGathererWhenNoIdle() {
+  const field = openField(5);
+  const w = createWorld(5);
+  const treeTile = worldToTile(fx.fromFloat(-6)) * field.width + worldToTile(fx.fromFloat(-6));
+  growTreeAt(field, treeTile, 200);
+  // A working camp so the lone villager can actually gather (no site yet).
+  w.buildings = [
+    { owner: 0, type: 'camp', x: fx.fromFloat(-6), z: fx.fromFloat(-6), built: 1, buildProgress: 1, buildTime: 1, hasRally: 0, rallyX: 0, rallyZ: 0, rallyOrder: ORDER.MOVE, prodPaused: 0, tracks: [] },
+  ];
+  const vill = spawn(w, { x: fx.fromFloat(-6), y: fx.fromFloat(-4), type: UNIT.VILLAGER, owner: 0 });
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: treeTile }]);
+  for (let t = 0; t < 30; t++) step(w, field, []);
+  assert.equal(w.order[vill], ORDER.GATHER, 'the lone villager is busy gathering');
+
+  // Now a site appears with no idle hand free — construction must pull the gatherer.
+  w.buildings.push(siteBuilding('village', 8, 8));
+  let pulled = false;
+  for (let t = 0; t < 220; t++) {
+    step(w, field, []);
+    if (w.order[vill] === ORDER.BUILD) pulled = true;
+    if (w.buildings[1].built) break;
+  }
+  assert.ok(pulled, 'a gatherer was pulled to build when no idle hand was free');
+  assert.equal(w.buildings[1].built, 1, 'and the site got raised');
+}
+
+function finishingTurnsOnTheFarm() {
+  const field = openField(6);
+  const w = createWorld(6);
+  const center = worldToTile(0) * field.width + worldToTile(0);
+  w.buildings = [siteBuilding('farm', 0, 0)];
+  spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  spawn(w, { x: fx.fromFloat(-6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  assert.equal(field.foodNode?.[center] ?? 0, 0, 'no food node while under construction');
+  const t = ticksToBuild(field, w);
+  assert.ok(t >= 0, 'farm raised');
+  assert.equal(field.foodNode[center], 1, 'food node switches on once the farm is built');
+}
+
+function deterministic() {
+  const run = (seed) => {
+    const field = openField(seed);
+    const w = createWorld(seed);
+    w.buildings = [siteBuilding('mine', 0, 0)];
+    spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+    spawn(w, { x: fx.fromFloat(-6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+    for (let t = 0; t < 200; t++) step(w, field, []);
+    return checksum(w, field);
+  };
+  assert.equal(run(9), run(9), 'construction is deterministic across identical runs');
+}
+
+placementMakesASite();
+siteIsInertUntilRaised();
+villagersRaiseTheSite();
+twoBuildersBeatOne();
+pullsAGathererWhenNoIdle();
+finishingTurnsOnTheFarm();
+deterministic();
+console.log('construction.test.js: ok (site + auto-build + speed + pull + complete + deterministic)');

@@ -66,6 +66,7 @@ export function checksum(w, field = null) {
     if (w.carriedKind) mix(w.carriedKind[i]);
     if (w.carriedAmt) mix(w.carriedAmt[i]);
     if (w.gatherCd) mix(w.gatherCd[i]);
+    if (w.gatherDefensive) mix(w.gatherDefensive[i]);
   }
 
   const p = w.projectiles;

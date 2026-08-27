@@ -8,7 +8,6 @@
 
 import {
   attachVat,
-  bakeVatMany,
   debugPbrExtIds,
   loadGltf,
   stopAnimation,
@@ -21,8 +20,24 @@ import {
   tryFetch,
 } from './bakedAssets.js';
 import { isTeamColorName, prepareTeamColorMaterial } from './teamColor.js';
+import {
+  appendCarryLocomotion,
+  CARRY_IDLE_CLIP,
+  CARRY_OVERLAY,
+  CARRY_WALK_CLIP,
+  sampleVatGroups,
+} from './vatBakeCpu.js';
 
-/** @type {Readonly<Record<number, { url: string, scale: number, idleClip: string, walkClip: string }>>} */
+/** Per-instance VAT clip id (low 7 bits). High bit = frozen (fps=0). */
+export const VAT_CLIP = {
+  IDLE: 0,
+  WALK: 1,
+  CARRY: 3,
+  CARRY_WALK: 4,
+};
+export const VAT_FROZEN = 0x80;
+
+/** @type {Readonly<Record<number, { url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string }>>} */
 export const VAT_UNIT_DEFS = {
   [UNIT.VILLAGER]: {
     url: '/assets/models/villager.glb',
@@ -30,6 +45,7 @@ export const VAT_UNIT_DEFS = {
     scale: 1,
     idleClip: 'idle',
     walkClip: 'walk_cycle',
+    carryClip: 'carry',
   },
 };
 
@@ -55,11 +71,77 @@ function collectSkinnedMeshes(node, out = []) {
 }
 
 function findGroup(groups, name) {
-  if (!groups?.length) return null;
+  if (!groups?.length || !name) return null;
   const lower = name.toLowerCase();
   return groups.find((g) => (g.name || '').toLowerCase() === lower)
     ?? groups.find((g) => (g.name || '').toLowerCase().includes(lower))
     ?? null;
+}
+
+/**
+ * Resolve idle / walk / carry animation groups for a VAT bake.
+ * @param {object[]} groups
+ * @param {{ idleClip: string, walkClip: string, carryClip?: string }} def
+ */
+export function collectVatBakeGroups(groups, def) {
+  const idle = findGroup(groups, def.idleClip);
+  const walk = findGroup(groups, def.walkClip) ?? findGroup(groups, 'walk');
+  const carry = def.carryClip ? findGroup(groups, def.carryClip) : null;
+  const bakeGroups = [];
+  const seen = new Set();
+  for (const g of [idle, walk, carry]) {
+    if (!g || seen.has(g)) continue;
+    seen.add(g);
+    bakeGroups.push(g);
+  }
+  return { idle, walk, carry, bakeGroups };
+}
+
+export function vatWant(moving, carrying, animate) {
+  let clip = VAT_CLIP.IDLE;
+  if (carrying && moving) clip = VAT_CLIP.CARRY_WALK;
+  else if (carrying) clip = VAT_CLIP.CARRY;
+  else if (moving) clip = VAT_CLIP.WALK;
+  return animate ? clip : (clip | VAT_FROZEN);
+}
+
+/**
+ * @param {{ idleClip: object, walkClip: object, carryClip?: object | null, carryWalkClip?: object | null }} clips
+ * @param {number} state
+ */
+export function clipForVatState(clips, state) {
+  const id = state === 2 ? VAT_CLIP.IDLE : (state & ~VAT_FROZEN);
+  if (id === VAT_CLIP.WALK) return clips.walkClip;
+  if (id === VAT_CLIP.CARRY_WALK) {
+    return clips.carryWalkClip ?? clips.walkClip ?? clips.idleClip;
+  }
+  if (id === VAT_CLIP.CARRY) return clips.carryClip ?? clips.idleClip;
+  return clips.idleClip;
+}
+
+function clipNameSet(meta) {
+  const names = new Set();
+  for (const n of [meta?.idleName, meta?.walkName, meta?.carryName]) {
+    if (n) names.add(String(n).toLowerCase());
+  }
+  const clips = meta?.prims?.[0]?.clips;
+  if (clips) {
+    for (const k of Object.keys(clips)) names.add(k.toLowerCase());
+  }
+  return names;
+}
+
+function offlineCoversDef(meta, def) {
+  const names = clipNameSet(meta);
+  const need = [def.idleClip, def.walkClip].filter(Boolean);
+  if (def.carryClip) {
+    if (meta.carryOverlay !== CARRY_OVERLAY) return false;
+    need.push(CARRY_IDLE_CLIP, CARRY_WALK_CLIP);
+  }
+  return need.every((n) => {
+    const lower = n.toLowerCase();
+    return [...names].some((x) => x === lower || x.includes(lower));
+  });
 }
 
 function materialName(mesh) {
@@ -70,7 +152,7 @@ function isTeamColorPart(mesh) {
   return isTeamColorName(materialName(mesh));
 }
 
-/** @type {Map<string, { bakedList: object[], bakeClipName: string, idleName: string, walkName: string, idleClip: object, walkClip: object }>} */
+/** @type {Map<string, { bakedList: object[], bakeClipName: string, idleName: string, walkName: string, carryName: string | null, idleClip: object, walkClip: object, carryClip: object | null, carryWalkClip: object | null }>} */
 const vatBakeCache = new Map();
 
 /**
@@ -108,14 +190,82 @@ function vatBakedListFromDump(engine, meta, bin) {
   return bakedList;
 }
 
-async function tryLoadOfflineVatBake(engine, url) {
-  if (!(await hasBakedVat(url))) return null;
+function uploadCpuVat(engine, prims, clips) {
+  const device = engine._device;
+  const bakedList = [];
+  for (const prim of prims) {
+    const texWidth = prim.boneCount * 4;
+    const texture = device.createTexture({
+      size: [texWidth, prim.frameCount],
+      format: 'rgba32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    device.queue.writeTexture(
+      { texture },
+      prim.data.buffer,
+      { offset: prim.data.byteOffset, bytesPerRow: texWidth * 16, rowsPerImage: prim.frameCount },
+      { width: texWidth, height: prim.frameCount },
+    );
+    bakedList.push({
+      texture,
+      boneCount: prim.boneCount,
+      frameCount: prim.frameCount,
+      clips: { ...clips },
+      _textureResource: { texture, _refCount: 0 },
+    });
+  }
+  return bakedList;
+}
+
+function bakeLiveVat(_root, skinned, groups, def) {
+  const { idle, walk, carry, bakeGroups } = collectVatBakeGroups(groups, def);
+  const loco = [];
+  if (idle) loco.push(idle);
+  if (walk && walk !== idle) loco.push(walk);
+  const sampleGroups = loco.length ? loco : bakeGroups;
+  if (sampleGroups.length === 0) {
+    throw new Error(`no idle/walk clips in ${def.url}`);
+  }
+  const { prims, clips } = sampleVatGroups(skinned, sampleGroups, stopAnimation);
+  const bakeClipName = sampleGroups[0].name;
+  const idleName = idle?.name ?? bakeClipName;
+  const walkName = walk?.name ?? idleName;
+  const carryName = carry?.name ?? null;
+  const idleClip = clips[idleName];
+  const walkClip = clips[walkName] ?? idleClip;
+  if (!idleClip) throw new Error(`VAT missing clip ${idleName} in ${def.url}`);
+
+  let carryClip = null;
+  let carryWalkClip = null;
+  if (carry) {
+    const stamped = appendCarryLocomotion(prims, clips, skinned, idle, walk, carry);
+    if (stamped.idle) carryClip = stamped.idle;
+    if (stamped.walk) carryWalkClip = stamped.walk;
+  }
+
+  return {
+    prims,
+    clips,
+    bakeClipName,
+    idleName,
+    walkName,
+    carryName,
+    idleClip,
+    walkClip,
+    carryClip,
+    carryWalkClip,
+  };
+}
+
+async function tryLoadOfflineVatBake(engine, def) {
+  if (!(await hasBakedVat(def.url))) return null;
   const [jsonRes, binRes] = await Promise.all([
-    tryFetch(bakedVatJsonUrl(url)),
-    tryFetch(bakedVatBinUrl(url)),
+    tryFetch(bakedVatJsonUrl(def.url)),
+    tryFetch(bakedVatBinUrl(def.url)),
   ]);
   if (!jsonRes || !binRes) return null;
   const meta = await jsonRes.json();
+  if (!offlineCoversDef(meta, def)) return null;
   const bin = await binRes.arrayBuffer();
   const bakedList = vatBakedListFromDump(engine, meta, bin);
   return {
@@ -123,13 +273,16 @@ async function tryLoadOfflineVatBake(engine, url) {
     bakeClipName: meta.bakeClipName,
     idleName: meta.idleName,
     walkName: meta.walkName,
+    carryName: meta.carryName ?? null,
     idleClip: meta.idleClip,
     walkClip: meta.walkClip,
+    carryClip: meta.carryIdleClip ?? meta.carryClip ?? null,
+    carryWalkClip: meta.carryWalkClip ?? null,
   };
 }
 
 /**
- * Load glTF, bake idle+walk for every skinned primitive, attach VAT.
+ * Load glTF, bake idle/walk/carry for every skinned primitive, attach VAT.
  * Keeps the glTF hierarchy (required for correct skin space).
  * Caller must setThinInstances + handle.setInstances before registerScene,
  * and addToScene the returned `root` (so parent transforms stay valid).
@@ -139,7 +292,7 @@ async function tryLoadOfflineVatBake(engine, url) {
  * Prefers /assets/baked/vat/* when present.
  *
  * @param {object} engine
- * @param {{ url: string, scale: number, idleClip: string, walkClip: string }} def
+ * @param {{ url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string }} def
  */
 export async function loadVatUnitTemplate(engine, def) {
   const container = await loadGltf(engine, def.url);
@@ -154,42 +307,23 @@ export async function loadVatUnitTemplate(engine, def) {
 
   let cached = vatBakeCache.get(def.url);
   if (!cached) {
-    const offline = await tryLoadOfflineVatBake(engine, def.url);
+    const offline = await tryLoadOfflineVatBake(engine, def);
     if (offline) {
       cached = offline;
       vatBakeCache.set(def.url, cached);
     } else {
-      const idle = findGroup(groups, def.idleClip);
-      const walk = findGroup(groups, def.walkClip) ?? findGroup(groups, 'walk');
-      const bakeGroups = [];
-      if (idle) bakeGroups.push(idle);
-      if (walk && walk !== idle) bakeGroups.push(walk);
-      if (bakeGroups.length === 0) {
-        throw new Error(`no idle/walk clips in ${def.url}`);
-      }
-
-      const bakedList = bakeVatMany(
-        engine,
-        skinned.map((mesh) => ({ mesh })),
-        bakeGroups,
-      );
-      const bakeClipName = bakeGroups[0].name;
-      const idleName = idle?.name ?? bakeClipName;
-      const walkName = walk?.name ?? idleName;
-
-      let idleClip = bakedList[0].clips[idleName];
-      const walkClip = bakedList[0].clips[walkName] ?? idleClip;
-      if (!idleClip) throw new Error(`VAT missing clip ${idleName} in ${def.url}`);
-      // villager.glb "idle" is a single key at t=0 (bind/T-pose).
-      if (idleClip.frameCount <= 1 && walkClip && walkClip.frameCount > 1) {
-        idleClip = {
-          fromRow: walkClip.fromRow,
-          frameCount: walkClip.frameCount,
-          fps: Math.max(8, Math.round(walkClip.fps * 0.25)),
-        };
-      }
-
-      cached = { bakedList, bakeClipName, idleName, walkName, idleClip, walkClip };
+      const live = bakeLiveVat(root, skinned, groups, def);
+      cached = {
+        bakedList: uploadCpuVat(engine, live.prims, live.clips),
+        bakeClipName: live.bakeClipName,
+        idleName: live.idleName,
+        walkName: live.walkName,
+        carryName: live.carryName,
+        idleClip: live.idleClip,
+        walkClip: live.walkClip,
+        carryClip: live.carryClip,
+        carryWalkClip: live.carryWalkClip,
+      };
       vatBakeCache.set(def.url, cached);
     }
 
@@ -228,8 +362,11 @@ export async function loadVatUnitTemplate(engine, def) {
       parts,
       idleName: cached.idleName,
       walkName: cached.walkName,
+      carryName: cached.carryName ?? null,
       idleClip: cached.idleClip,
       walkClip: cached.walkClip,
+      carryClip: cached.carryClip ?? null,
+      carryWalkClip: cached.carryWalkClip ?? null,
       instanceScale: Math.abs(def.scale),
       footLift: 0.08,
     };
@@ -269,23 +406,28 @@ export async function loadVatUnitTemplate(engine, def) {
     parts,
     idleName: cached.idleName,
     walkName: cached.walkName,
+    carryName: cached.carryName ?? null,
     idleClip: cached.idleClip,
     walkClip: cached.walkClip,
+    carryClip: cached.carryClip ?? null,
+    carryWalkClip: cached.carryWalkClip ?? null,
     instanceScale: Math.abs(def.scale),
     footLift: 0.08,
   };
 }
 
 /** Fill per-instance VAT params: (fromRow, toRow, timeOffset, fps). */
-export function fillVatInstanceParams(params, capacity, idleClip, walkClip, movingFlags) {
+export function fillVatInstanceParams(params, capacity, idleClip, walkClip, movingFlags, carryClip = null, carryWalkClip = null) {
+  const clips = { idleClip, walkClip, carryClip, carryWalkClip };
   for (let s = 0; s < capacity; s++) {
-    const moving = movingFlags ? movingFlags[s] : 0;
-    const clip = moving === 1 ? walkClip : idleClip;
+    const state = movingFlags ? movingFlags[s] : 0;
+    const clip = clipForVatState(clips, state);
+    const frozen = state === 2 || (state & VAT_FROZEN) !== 0;
     const o = s * 4;
     params[o] = clip.fromRow;
     params[o + 1] = clip.fromRow + clip.frameCount - 1;
     params[o + 2] = (s * 17 + 3) % Math.max(1, clip.frameCount);
-    params[o + 3] = moving === 2 ? 0 : clip.fps;
+    params[o + 3] = frozen ? 0 : clip.fps;
   }
 }
 

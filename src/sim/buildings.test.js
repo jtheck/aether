@@ -46,6 +46,15 @@ function snapFloat(type, xF, zF) {
   return { x: fx.toFloat(s.x), z: fx.toFloat(s.z), xFixed: s.x, zFixed: s.z };
 }
 
+// Buildings now place as construction sites; these production/rally tests are
+// about what a *finished* building does, so raise them instantly.
+function finishAllBuildings(w) {
+  for (const b of w.buildings ?? []) {
+    b.built = 1;
+    b.buildProgress = b.buildTime | 0;
+  }
+}
+
 function clearClaim(field, type, xF, zF) {
   const { xFixed, zFixed } = snapFloat(type, xF, zF);
   const b = buildingFootprintBounds(type, xFixed, zFixed);
@@ -465,6 +474,7 @@ describe('building rally order', () => {
       },
     ]);
     assert.equal(w.buildings.length, 1);
+    finishAllBuildings(w);
     const b = w.buildings[0];
     const rx = fx.fromFloat(fx.toFloat(b.x) + 16);
     const rz = fx.fromFloat(fx.toFloat(b.z) + 16);
@@ -537,6 +547,7 @@ describe('building production pause', () => {
         ty: fx.fromFloat(32),
       },
     ]);
+    finishAllBuildings(w);
     applyCommands(w, field, [
       {
         type: CMD.QUEUE_TRAIN,

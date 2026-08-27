@@ -196,6 +196,39 @@ export function getBuildingCost(typeId) {
 }
 
 /**
+ * Construction time in builder-ticks (work by ONE villager). Two builders halve
+ * the wall-clock (progress accrues at the number of on-site builders, capped at
+ * MAX_BUILDERS). Roughly scales with cost/tier. See construction.js.
+ */
+export const BUILD_TIME = Object.freeze({
+  // basic
+  camp: 80,
+  village: 120,
+  farm: 60,
+  silo: 60,
+  mine: 100,
+  // advanced
+  tower: 120,
+  tavern: 140,
+  barracks: 160,
+  workshop: 160,
+  lab: 140,
+  // elemental
+  factory: 200,
+  church: 180,
+  moonwell: 160,
+  perch: 180,
+  grove: 160,
+});
+
+const DEFAULT_BUILD_TIME = 100;
+
+/** Builder-ticks to raise a building type (single-worker baseline). */
+export function getBuildTime(typeId) {
+  return BUILD_TIME[typeId] ?? DEFAULT_BUILD_TIME;
+}
+
+/**
  * Menu unit keys → sim unit type ids. Add entries here as buildings gain train options.
  * @type {Readonly<Record<string, number>>}
  */
@@ -468,7 +501,7 @@ export function canPlaceBuildingAt(field, typeId, xFixed, zFixed) {
  * @param {number} xFixed Q16.16
  * @param {number} zFixed Q16.16
  */
-export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed) {
+export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built = true) {
   if (!field?.pass || !getBuildingFootprint(typeId)) return;
   const structureSlow = ensureStructureSlowMask(field);
   if (!field.slowMask || field.slowMask.length !== structureSlow.length) {
@@ -484,9 +517,10 @@ export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed) {
     }
   });
   // A farm is a food worksite: mark its center tile as an infinite food node so
-  // villagers gather/deposit food in place (see gather.js). Rebuilds/checkpoints
+  // villagers gather/deposit food in place (see gather.js). Only once the farm
+  // is raised — a construction site produces nothing. Rebuilds/checkpoints
   // re-stamp occupancy, so this stays in sync with the building set.
-  if (typeId === 'farm') {
+  if (typeId === 'farm' && built) {
     const n = field.width * field.height;
     if (!field.foodNode || field.foodNode.length !== n) field.foodNode = new Uint8Array(n);
     const tx = worldToTile(xFixed);
@@ -515,7 +549,7 @@ export function applyWorldStructureOccupancy(field, world) {
   if (buildings?.length) {
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
-      applyStructureOccupancyAt(field, b.type, b.x, b.z);
+      applyStructureOccupancyAt(field, b.type, b.x, b.z, b.built != null ? b.built : 1);
     }
   }
 }
@@ -529,7 +563,13 @@ export function applySerializedBuildingOccupancy(field, buildings) {
   if (!field || !buildings?.length) return;
   for (let i = 0; i < buildings.length; i++) {
     const b = buildings[i];
-    applyStructureOccupancyAt(field, b.type, fx.fromFloat(b.x), fx.fromFloat(b.z));
+    applyStructureOccupancyAt(
+      field,
+      b.type,
+      fx.fromFloat(b.x),
+      fx.fromFloat(b.z),
+      b.built != null ? b.built : 1,
+    );
   }
 }
 
@@ -542,6 +582,10 @@ export function createBuilding(opts) {
   const x = fx.fromFloat(opts.x);
   const z = fx.fromFloat(opts.z);
   const yaw = opts.yaw != null ? fx.fromFloat(opts.yaw) : 0;
+  const buildTime = getBuildTime(type);
+  // Defaults to complete — staging showcase, checkpoints, and tests want live
+  // buildings. Placement (applyPlaceBuilding) opts into an under-construction site.
+  const built = opts.built != null ? opts.built | 0 : 1;
   return {
     owner: opts.owner | 0,
     type,
@@ -556,6 +600,12 @@ export function createBuilding(opts) {
     rallyOrder: ORDER.MOVE,
     /** 1 = hold production tracks (queue stays, progress freezes). */
     prodPaused: 0,
+    /** 0 = under construction (inert); 1 = raised and functional. */
+    built,
+    /** Builder-ticks accrued (see construction.js). */
+    buildProgress: built ? buildTime : 0,
+    /** Builder-ticks required to raise this building. */
+    buildTime,
     /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
     tracks: [],
   };
@@ -797,10 +847,16 @@ export function applyPlaceBuilding(w, field, cmd) {
     rallyZ: 0,
     rallyOrder: ORDER.MOVE,
     prodPaused: 0,
+    // Placed as an inert construction site — villagers raise it (construction.js).
+    built: 0,
+    buildProgress: 0,
+    buildTime: getBuildTime(type),
     tracks: [],
   });
   if (field) {
-    applyStructureOccupancyAt(field, type, x, z);
+    // Block tiles now (the foundation occupies space) but defer the farm food
+    // node until the build completes.
+    applyStructureOccupancyAt(field, type, x, z, /* built */ false);
     ejectUnitsFromFootprint(w, field, type, x, z);
   }
   w.buildingsDirty = 1;
@@ -863,6 +919,7 @@ export function applyQueueTrain(w, cmd) {
   const b = buildings[bi];
   const playerId = (cmd.playerId ?? -1) | 0;
   if ((b.owner | 0) !== playerId) return;
+  if (b.built === 0) return; // can't train from a site under construction
   const unitKey = String(cmd.unitKey ?? '');
   const unitType = BUILDING_MENU_UNITS[unitKey];
   if (unitType == null) return;
@@ -900,6 +957,7 @@ export function applyQueueResearch(w, cmd) {
   const b = buildings[bi];
   const playerId = (cmd.playerId ?? -1) | 0;
   if ((b.owner | 0) !== playerId) return;
+  if (b.built === 0) return; // can't research from a site under construction
   const techId = String(cmd.techId ?? '');
   if (!TECH_BY_ID[techId]) return;
   const menu = BUILDING_MENUS[b.type];
@@ -997,6 +1055,9 @@ export function serializeBuildings(buildings) {
         : ORDER.MOVE
       : ORDER.MOVE,
     prodPaused: b.prodPaused | 0,
+    built: b.built != null ? b.built | 0 : 1,
+    buildProgress: b.buildProgress | 0,
+    buildTime: b.buildTime != null ? b.buildTime | 0 : getBuildTime(b.type),
     tracks: (b.tracks ?? []).map((t) => ({
       kind: t.kind,
       id: t.id,
@@ -1028,6 +1089,8 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.rallyZ | 0);
     mix(b.rallyOrder | 0);
     mix(b.prodPaused | 0);
+    mix(b.built != null ? b.built | 0 : 1);
+    mix(b.buildProgress | 0);
     const tracks = b.tracks ?? [];
     mix(tracks.length);
     for (let ti = 0; ti < tracks.length; ti++) {

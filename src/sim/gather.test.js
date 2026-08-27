@@ -203,14 +203,118 @@ function farmAutoAssignsIdleVillagers() {
   assert.ok(getResource(w, 0, 'food') > 0, 'farm economy banks food without orders');
 }
 
+function mineRecruitsRockNotWood() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(30);
+  // A mine with BOTH a tree and a rock in reach must send workers to the rock.
+  const rockTile = plantRockAt(field, worldToTile(fx.fromFloat(4)), worldToTile(0), SCENERY.ROCK_PLAIN, 120, 0);
+  plantTreeAt(field, -4, 0, 120);
+  w.buildings = [{ owner: 0, type: 'mine', x: 0, z: 0 }];
+  const vill = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  for (let t = 0; t < 320; t++) step(w, field, []);
+
+  assert.equal(w.order[vill], ORDER.GATHER, 'mine recruits the idle villager');
+  assert.ok(field.rockStock[rockTile] < 120, 'the rock is being mined');
+  assert.ok(getResource(w, 0, 'mineral') > 0, 'mine banks mineral from the rock');
+  assert.equal(getResource(w, 0, 'wood'), 0, 'mine never sends workers to chop wood');
+}
+
+function campRecruitsWoodNotRock() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(31);
+  // Mirror image: a camp beside a rock must still only work wood.
+  plantRockAt(field, worldToTile(fx.fromFloat(4)), worldToTile(0), SCENERY.ROCK_PLAIN, 120, 0);
+  plantTreeAt(field, -4, 0, 120);
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0 }];
+  const vill = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  for (let t = 0; t < 320; t++) step(w, field, []);
+
+  assert.equal(w.order[vill], ORDER.GATHER, 'camp recruits the idle villager');
+  assert.ok(getResource(w, 0, 'wood') > 0, 'camp banks wood from the tree');
+  assert.equal(getResource(w, 0, 'mineral'), 0, 'camp never sends workers to mine');
+}
+
+function farmCapsAtTwoWorkers() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(32);
+  const farmTile = worldToTile(0) * field.width + worldToTile(0);
+  field.foodNode[farmTile] = 1;
+  w.buildings = [{ owner: 0, type: 'farm', x: fx.fromFloat(0), z: 0 }];
+  // Three idle villagers all sit inside the farm's reach.
+  const villagers = [
+    spawn(w, { x: fx.fromFloat(3), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+    spawn(w, { x: fx.fromFloat(5), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+    spawn(w, { x: fx.fromFloat(7), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+  ];
+
+  for (let t = 0; t < 220; t++) step(w, field, []);
+
+  const working = villagers.filter((v) => w.order[v] === ORDER.GATHER).length;
+  assert.equal(working, 2, 'a farm keeps at most a 2-person crew');
+}
+
+function attackMoveStartsDefensiveGather() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(33);
+  const tile = plantTreeAt(field, fx.fromFloat(6), 0, 120);
+  w.agoras = [{ owner: 0, x: fx.fromFloat(0), z: 0 }];
+  const vill = spawn(w, { x: fx.fromFloat(-4), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  // Left-click / attack-move onto the tree — the villager should mine on arrival.
+  step(w, field, [
+    { type: CMD.ATTACK_MOVE, entities: [vill], tx: [fx.fromFloat(6)], ty: [fx.fromFloat(0)] },
+  ]);
+  for (let t = 0; t < 220; t++) step(w, field, []);
+
+  assert.equal(w.order[vill], ORDER.GATHER, 'attack-move villager gathers on arrival');
+  assert.equal(w.gatherDefensive[vill], 1, 'the arrival gather is defensive');
+  assert.ok(field.treeStock[tile] < 120, 'the node is actually being worked');
+  assert.ok(getResource(w, 0, 'wood') > 0, 'defensive farmer still banks its load');
+}
+
+function defensiveFarmerRetaliatesThenResumes() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(34);
+  const tile = plantTreeAt(field, 0, 0, 80);
+  w.agoras = [{ owner: 0, x: fx.fromFloat(8), z: 0 }];
+  const vill = spawn(w, { x: fx.fromFloat(-3), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  step(w, field, [
+    { type: CMD.ATTACK_MOVE, entities: [vill], tx: [fx.fromFloat(0)], ty: [fx.fromFloat(0)] },
+  ]);
+  for (let t = 0; t < 40; t++) step(w, field, []);
+  assert.equal(w.gatherDefensive[vill], 1, 'villager is farming defensively');
+
+  // A fragile intruder wanders onto the plot.
+  const foe = spawn(w, { x: fx.fromFloat(1), y: 0, type: UNIT.VILLAGER, owner: 1 });
+  w.hp[foe] = 4;
+  for (let t = 0; t < 240; t++) step(w, field, []);
+
+  assert.equal(w.alive[foe], 0, 'defensive farmer cuts down the intruder');
+  assert.equal(w.order[vill], ORDER.GATHER, 'and goes back to work afterward');
+  assert.equal(w.gatherDefensive[vill], 1, 'still flagged defensive after the fight');
+}
+
 gathersAndDeposits();
 minesPlainRockForMineral();
 minesMossRockForStone();
 farmsFoodInPlace();
 farmAutoAssignsIdleVillagers();
+mineRecruitsRockNotWood();
+campRecruitsWoodNotRock();
+farmCapsAtTwoWorkers();
+attackMoveStartsDefensiveGather();
+defensiveFarmerRetaliatesThenResumes();
 onlyVillagersGather();
 depletesThenIdles();
 needsADropOff();
 campAutoAssignsIdleVillagers();
 engineerExtendsCampRadius();
-console.log('gather.test.js: ok (wood + stone + mineral + food)');
+console.log('gather.test.js: ok (wood + stone + mineral + food + specialize + defend)');

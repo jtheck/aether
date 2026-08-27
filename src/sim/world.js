@@ -36,6 +36,8 @@ export const ORDER = {
   REPAIR: 4,
   /** Villager harvesting a resource node + hauling to a drop-off. */
   GATHER: 5,
+  /** Villager raising a building under construction (see construction.js). */
+  BUILD: 6,
 };
 
 export function createWorld(seed) {
@@ -45,6 +47,8 @@ export function createWorld(seed) {
   engagementSlot.fill(-1);
   const gatherTile = new Int32Array(MAX_ENTITIES);
   gatherTile.fill(-1);
+  const buildTarget = new Int32Array(MAX_ENTITIES);
+  buildTarget.fill(-1);
   return {
     tick: 0,
     count: 0,
@@ -108,6 +112,10 @@ export function createWorld(seed) {
     carriedAmt: new Int32Array(MAX_ENTITIES),
     /** Ticks until the next harvest bite. */
     gatherCd: new Int16Array(MAX_ENTITIES),
+    /** 1 = gather defensively (retaliate on a nearby hostile, then resume). */
+    gatherDefensive: new Uint8Array(MAX_ENTITIES),
+    /** Building index this villager is constructing (ORDER.BUILD), or -1. */
+    buildTarget,
 
     // pathfinding
     navDestX: new Int32Array(MAX_ENTITIES),
@@ -206,6 +214,8 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.carriedKind[i] = 0;
   w.carriedAmt[i] = 0;
   w.gatherCd[i] = 0;
+  w.gatherDefensive[i] = 0;
+  w.buildTarget[i] = -1;
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;
   w.pathRequest[i] = 0;

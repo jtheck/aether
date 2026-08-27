@@ -28,11 +28,12 @@ export function allMeshBakeUrls() {
   return [...urls].sort();
 }
 
-/** @returns {{ url: string, idleClip: string, walkClip: string }[]} */
+/** @returns {{ url: string, idleClip: string, walkClip: string, carryClip?: string }[]} */
 export function allVatBakeDefs() {
   return Object.values(VAT_UNIT_DEFS).map((d) => ({
     url: d.url,
     idleClip: d.idleClip,
     walkClip: d.walkClip,
+    carryClip: d.carryClip,
   }));
 }

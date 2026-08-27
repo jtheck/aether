@@ -1,10 +1,16 @@
 // Browser-side prebake: mesh packages, sockets, VAT dumps.
 // Driven by prebake.mjs via Playwright (or open /prebake/prebake.html manually).
 
-import { createEngine, createSceneContext, bakeVatMany, loadGltf, stopAnimation } from '../vendor/lite/liteVendor.js';
+import { createEngine, createSceneContext, loadGltf, stopAnimation } from '../vendor/lite/liteVendor.js';
 import { bakeGltfParts, UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { packBinary, bakedMeshStem } from '../render/bakedAssets.js';
 import { allMeshBakeUrls, allVatBakeDefs } from './bakeUrls.js';
+import { collectVatBakeGroups } from '../render/vatUnits.js';
+import {
+  appendCarryLocomotion,
+  CARRY_OVERLAY,
+  sampleVatGroups,
+} from '../render/vatBakeCpu.js';
 import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { serializeGeneratedTransportSeats, spawnSeatsFromSockets } from '../render/transportSeats.js';
 import { extractGlbMaterials } from './glbMaterials.js';
@@ -29,14 +35,6 @@ function collectSkinnedMeshes(node, out = []) {
   if (node?.skeleton) out.push(node);
   for (const child of node?.children ?? []) collectSkinnedMeshes(child, out);
   return out;
-}
-
-function findGroup(groups, name) {
-  if (!groups?.length) return null;
-  const lower = name.toLowerCase();
-  return groups.find((g) => (g.name || '').toLowerCase() === lower)
-    ?? groups.find((g) => (g.name || '').toLowerCase().includes(lower))
-    ?? null;
 }
 
 /**
@@ -113,7 +111,7 @@ async function bakeMeshPackage(engine, url, filesOut) {
  * CPU-sample bone matrices the same way Lite's bakeVatMany does, without relying
  * on GPU texture readback (Lite textures are CopyDst|TextureBinding only).
  * @param {object} engine
- * @param {{ url: string, idleClip: string, walkClip: string }} def
+ * @param {{ url: string, idleClip: string, walkClip: string, carryClip?: string }} def
  */
 async function bakeVatPackage(engine, def) {
   const container = await loadGltf(engine, def.url);
@@ -122,87 +120,30 @@ async function bakeVatPackage(engine, def) {
   if (skinned.length === 0) throw new Error(`no skinned mesh in ${def.url}`);
   const groups = container.animationGroups ?? [];
   for (const g of groups) stopAnimation(g);
-  const idle = findGroup(groups, def.idleClip);
-  const walk = findGroup(groups, def.walkClip) ?? findGroup(groups, 'walk');
-  const bakeGroups = [];
-  if (idle) bakeGroups.push(idle);
-  if (walk && walk !== idle) bakeGroups.push(walk);
+  const { idle, walk, carry, bakeGroups } = collectVatBakeGroups(groups, def);
   if (bakeGroups.length === 0) throw new Error(`no clips in ${def.url}`);
 
-  // Still run bakeVatMany so clip metadata / validation match runtime.
-  const bakedList = bakeVatMany(
-    engine,
-    skinned.map((mesh) => ({ mesh })),
-    bakeGroups,
-  );
-  const bakeClipName = bakeGroups[0].name;
+  const loco = [];
+  if (idle) loco.push(idle);
+  if (walk && walk !== idle) loco.push(walk);
+  const sampleGroups = loco.length ? loco : bakeGroups;
+  const { prims: primData, clips } = sampleVatGroups(skinned, sampleGroups, stopAnimation);
+  const bakeClipName = sampleGroups[0].name;
   const idleName = idle?.name ?? bakeClipName;
   const walkName = walk?.name ?? idleName;
-  let idleClip = { ...bakedList[0].clips[idleName] };
-  let walkClip = { ...(bakedList[0].clips[walkName] ?? idleClip) };
-  if (idleClip.frameCount <= 1 && walkClip.frameCount > 1) {
-    idleClip = {
-      fromRow: walkClip.fromRow,
-      frameCount: walkClip.frameCount,
-      fps: Math.max(8, Math.round(walkClip.fps * 0.25)),
-    };
-  }
-
-  // Re-sample CPU bone matrices into dumps (mirror Lite vat-baker sampling).
-  const DEFAULT_FRAME_RATE = 60;
-  function clipFrameCount(group) {
-    const fps = group.frameRate || DEFAULT_FRAME_RATE;
-    return Math.max(1, Math.round(group.duration * fps) + 1);
-  }
-  function goToFrameCpu(group, frame) {
-    const ctrl = group._ctrl;
-    group.currentTime = frame / (group.frameRate || DEFAULT_FRAME_RATE);
-    group.isPlaying = false;
-    if (!ctrl) return;
-    ctrl.time = group.currentTime;
-    ctrl.playing = false;
-    ctrl.speedRatio = group.speedRatio;
-    ctrl.loop = group.loopAnimation;
-    ctrl._setMask?.(group.mask ?? null);
-    ctrl._tickCpu?.(0);
-    group.currentTime = ctrl.time;
-  }
-  function bindingOf(group, mesh) {
-    const skeleton = mesh.skeleton;
-    if (!skeleton) return null;
-    const bindings = group._gltfMixer?.[2];
-    return bindings?.find(
-      (binding) => binding.runtimeSkeleton === skeleton || binding.boneTexture === skeleton.boneTexture,
-    ) ?? null;
-  }
-
-  let frameCount = 0;
-  for (const group of bakeGroups) frameCount += clipFrameCount(group);
-  frameCount = Math.max(1, frameCount);
-
-  const primData = skinned.map((mesh) => {
-    const boneCount = mesh.skeleton.boneCount;
-    return {
-      boneCount,
-      data: new Float32Array(frameCount * boneCount * 16),
-    };
-  });
-
-  let row = 0;
-  for (let gi = 0; gi < bakeGroups.length; gi++) {
-    const group = bakeGroups[gi];
-    const frames = clipFrameCount(group);
-    for (let frame = 0; frame < frames; frame++) {
-      goToFrameCpu(group, frame);
-      for (let mi = 0; mi < skinned.length; mi++) {
-        const binding = bindingOf(group, skinned[mi]);
-        if (!binding) throw new Error(`VAT binding missing for prim ${mi} clip ${group.name}`);
-        const floatsPerFrame = primData[mi].boneCount * 16;
-        primData[mi].data.set(binding.boneMatrices.subarray(0, floatsPerFrame), row * floatsPerFrame);
-      }
-      row++;
+  const carryName = carry?.name ?? null;
+  const idleClip = { ...clips[idleName] };
+  const walkClip = { ...(clips[walkName] ?? idleClip) };
+  let carryClip = null;
+  let carryIdleClip = null;
+  let carryWalkClip = null;
+  if (carry) {
+    const stamped = appendCarryLocomotion(primData, clips, skinned, idle, walk, carry);
+    if (stamped.idle) {
+      carryIdleClip = { ...stamped.idle };
+      carryClip = carryIdleClip;
     }
-    stopAnimation(group);
+    if (stamped.walk) carryWalkClip = { ...stamped.walk };
   }
 
   const prims = [];
@@ -211,8 +152,8 @@ async function bakeVatPackage(engine, def) {
     byteOffset = align4(byteOffset);
     prims.push({
       boneCount: primData[i].boneCount,
-      frameCount,
-      clips: bakedList[i].clips,
+      frameCount: primData[i].frameCount,
+      clips: { ...clips },
       byteOffset,
       floatCount: primData[i].data.length,
     });
@@ -236,8 +177,13 @@ async function bakeVatPackage(engine, def) {
       bakeClipName,
       idleName,
       walkName,
+      carryName,
       idleClip,
       walkClip,
+      carryClip,
+      carryIdleClip,
+      carryWalkClip,
+      carryOverlay: carryIdleClip || carryWalkClip ? CARRY_OVERLAY : undefined,
       prims,
     },
     bin,

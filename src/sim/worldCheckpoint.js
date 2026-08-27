@@ -5,7 +5,7 @@ import { MAX_WAYPOINTS } from './path.js';
 import { MAX_PATH_HITS } from './projectiles.js';
 import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
-import { applyWorldStructureOccupancy, defaultRallyWorld } from './buildings.js';
+import { applyWorldStructureOccupancy, defaultRallyWorld, getBuildTime } from './buildings.js';
 import { ORDER } from './world.js';
 import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
@@ -32,6 +32,7 @@ const ENTITY_U16 = ['engagementMask', 'targetLoad'];
 const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
   'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
+  'gatherDefensive',
 ];
 
 /**
@@ -332,6 +333,8 @@ function exportBuildings(buildings) {
     rallyZ: b.rallyZ | 0,
     rallyOrder: b.rallyOrder | 0,
     prodPaused: b.prodPaused | 0,
+    built: b.built != null ? b.built | 0 : 1,
+    buildProgress: b.buildProgress | 0,
   }));
 }
 
@@ -361,6 +364,9 @@ function importBuildings(w, data) {
           ? ORDER.ATTACK_MOVE
           : ORDER.MOVE,
       prodPaused: b.prodPaused | 0,
+      built: b.built != null ? b.built | 0 : 1,
+      buildProgress: b.buildProgress != null ? b.buildProgress | 0 : getBuildTime(type),
+      buildTime: getBuildTime(type),
       tracks: [],
     };
   });

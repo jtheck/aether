@@ -4,7 +4,7 @@
 import { MAX_ENTITIES } from './world.js';
 import { MAX_PROJECTILES } from './projectiles.js';
 
-export const SHARED_LAYOUT_VERSION = 7;
+export const SHARED_LAYOUT_VERSION = 8;
 const HEADER_I32 = 6; // version, unitCount, tick, projectileActive, publishSeq, projectileHighWater
 
 export function simSharedByteSize() {
@@ -23,6 +23,7 @@ export function simSharedByteSize() {
     MAX_ENTITIES + // type (written once at init)
     MAX_ENTITIES + // order (IDLE / MOVE / ATTACK / ATTACK_MOVE / REPAIR)
     MAX_ENTITIES * 4 + // carriedBy (−1 = free)
+    MAX_ENTITIES * 4 + // carriedAmt (gather load)
     MAX_PROJECTILES * 4 * 4 + // projectile px, py, vx, vy
     MAX_PROJECTILES * 4 + // projectile generation
     MAX_PROJECTILES * 2 * 2 + // projectile age, lifetime
@@ -59,6 +60,8 @@ export function mapSharedState(sab) {
   const order = new Uint8Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES;
   const carriedBy = new Int32Array(sab, o, MAX_ENTITIES);
+  o += MAX_ENTITIES * 4;
+  const carriedAmt = new Int32Array(sab, o, MAX_ENTITIES);
   o += MAX_ENTITIES * 4;
 
   const projectilePx = new Int32Array(sab, o, MAX_PROJECTILES);
@@ -102,6 +105,7 @@ export function mapSharedState(sab) {
     type,
     order,
     carriedBy,
+    carriedAmt,
     projectiles: {
       px: projectilePx,
       py: projectilePy,
@@ -141,6 +145,9 @@ export function publishWorld(w, s) {
   s.order.set(w.order.subarray(0, n));
   if (w.carriedBy && s.carriedBy) {
     s.carriedBy.set(w.carriedBy.subarray(0, n));
+  }
+  if (w.carriedAmt && s.carriedAmt) {
+    s.carriedAmt.set(w.carriedAmt.subarray(0, n));
   }
 }
 
@@ -192,6 +199,7 @@ export function simViewFacade(s) {
     type: s.type,
     order: s.order,
     carriedBy: s.carriedBy,
+    carriedAmt: s.carriedAmt,
     projectiles: {
       get activeCount() {
         return s.header[3];

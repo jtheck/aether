@@ -127,6 +127,7 @@ function rebuildRendererEntities(renderer, session) {
   const stillUnmapped = renderer.syncInstances(count, world.type, worldPositionsForSync(world, count), {
     alive: world.alive,
     owners: world.owner,
+    carrying: world.carriedAmt,
   });
   // Progressive boot leaves units unmapped until templates arrive — don't warn.
   if (!(unmapped.length || stillUnmapped) && livingByOwner(world, 1) > 0) {
@@ -573,6 +574,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     poseSize: new Float32Array(CAP),
     poseLoft: new Float32Array(CAP),
     poseMoving: new Uint8Array(CAP),
+    poseCarrying: new Uint8Array(CAP),
     poseValid: new Uint8Array(CAP),
     /** Cached terrain height for unchanged xz. */
     cacheGx: new Float32Array(CAP),
@@ -1445,7 +1447,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       selected, wasSelected, deathFade, facingYaw, selSpinYaw, selSpinVel,
       ringX, ringZ, ringSize, ringTint,
       colors, renderX, renderY, renderZ,
-      poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseValid,
+      poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseCarrying, poseValid,
       cacheGx, cacheGz, cacheGy,
       fogHidden,
     } = bufs;
@@ -1481,9 +1483,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return gy;
     };
 
-    const poseDirty = (i, x, z, yaw, size, loft, movingBit) => {
+    const poseDirty = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0) => {
       if (!poseValid[i]) return true;
       if (movingBit !== poseMoving[i]) return true;
+      if (carryingBit !== poseCarrying[i]) return true;
       const pdx = x - poseX[i];
       const pdz = z - poseZ[i];
       if (pdx * pdx + pdz * pdz > POSE_XZ_EPS_SQ) return true;
@@ -1493,13 +1496,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return false;
     };
 
-    const commitPose = (i, x, z, yaw, size, loft, movingBit) => {
+    const commitPose = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0) => {
       poseX[i] = x;
       poseZ[i] = z;
       poseYaw[i] = yaw;
       poseSize[i] = size;
       poseLoft[i] = loft;
       poseMoving[i] = movingBit;
+      poseCarrying[i] = carryingBit;
       poseValid[i] = 1;
     };
 
@@ -1733,13 +1737,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         colorsDirty = true;
       }
       const movingBit = moving && world.alive[i] ? 1 : 0;
+      const carryingBit = (world.carriedAmt?.[i] | 0) > 0 ? 1 : 0;
       const forcePose = fade > 0 || loft > 0.01 || pitch !== 0 || roll !== 0;
-      if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit)) {
-        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy)) {
+      if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit, carryingBit)) {
+        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy, !!carryingBit)) {
           if (world.owner[i] === 0) drawStats.p0++;
           else if (world.owner[i] === 1) drawStats.p1++;
         } else drawStats.unmapped++;
-        commitPose(i, x, z, yaw, size, loft, movingBit);
+        commitPose(i, x, z, yaw, size, loft, movingBit, carryingBit);
       } else if (world.owner[i] === 0) drawStats.p0++;
       else if (world.owner[i] === 1) drawStats.p1++;
       const isSel = !!selected[i] && !!world.alive[i];

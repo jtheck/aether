@@ -246,6 +246,7 @@ function sharedProjectilePublication() {
     aimY: w.py[target],
     damage: 8,
   });
+  w.carriedAmt[source] = 10;
   const views = mapSharedState(new SharedArrayBuffer(simSharedByteSize()));
   beginSharedPublish(views);
   publishWorld(w, views);
@@ -253,6 +254,7 @@ function sharedProjectilePublication() {
   endSharedPublish(views);
   const facade = simViewFacade(views);
   assert.equal(Atomics.load(views.header, 4) & 1, 0);
+  assert.equal(facade.carriedAmt[source], 10);
   assert.equal(facade.projectiles.activeCount, 1);
   assert.equal(facade.projectiles.highWater, 1);
   assert.equal(facade.projectiles.generation[slot], w.projectiles.generation[slot]);

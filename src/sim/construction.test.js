@@ -163,6 +163,32 @@ function deterministic() {
   assert.equal(run(9), run(9), 'construction is deterministic across identical runs');
 }
 
+function twoOwnersRaiseIndependently() {
+  const field = openField(7);
+  const w = createWorld(7);
+  w.buildings = [
+    siteBuilding('camp', -10, 0, 0),
+    siteBuilding('camp', 10, 0, 1),
+  ];
+  spawn(w, { x: fx.fromFloat(-14), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  spawn(w, { x: fx.fromFloat(-6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 1 });
+  spawn(w, { x: fx.fromFloat(14), y: 0, type: UNIT.VILLAGER, owner: 1 });
+
+  let t0 = -1;
+  let t1 = -1;
+  for (let t = 0; t < 400; t++) {
+    step(w, field, []);
+    if (t0 < 0 && w.buildings[0].built) t0 = t;
+    if (t1 < 0 && w.buildings[1].built) t1 = t;
+    if (t0 >= 0 && t1 >= 0) break;
+  }
+  assert.ok(t0 >= 0 && t1 >= 0, 'both owners raise their own sites');
+  assert.equal(w.buildings[0].owner, 0);
+  assert.equal(w.buildings[1].owner, 1);
+  assert.equal(w.buildings.length, 2, 'neither site ate the other');
+}
+
 placementMakesASite();
 siteIsInertUntilRaised();
 villagersRaiseTheSite();
@@ -170,4 +196,5 @@ twoBuildersBeatOne();
 pullsAGathererWhenNoIdle();
 finishingTurnsOnTheFarm();
 deterministic();
-console.log('construction.test.js: ok (site + auto-build + speed + pull + complete + deterministic)');
+twoOwnersRaiseIndependently();
+console.log('construction.test.js: ok (site + auto-build + speed + pull + complete + two-owner + deterministic)');

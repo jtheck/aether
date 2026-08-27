@@ -517,7 +517,7 @@ export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built =
     }
   });
   // A farm is a food worksite: mark its center tile as an infinite food node so
-  // villagers gather/deposit food in place (see gather.js). Only once the farm
+  // villagers work food in place (see gather.js). Only once the farm
   // is raised — a construction site produces nothing. Rebuilds/checkpoints
   // re-stamp occupancy, so this stays in sync with the building set.
   if (typeId === 'farm' && built) {

@@ -111,7 +111,7 @@ describe('fogOfWar last-known buildings', () => {
     const scouted = { ...enemy, x: 0, z: 0, tracks: [{ id: 'warrior', count: 1 }] };
     fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [scouted], agoras: [] });
     assert.equal(fog.filterBuildings([scouted]).length, 1);
-    assert.equal(structureKey(scouted), structureKey({ type: 'camp', x: 0, z: 0 }));
+    assert.equal(structureKey(scouted), structureKey({ owner: 1, type: 'camp', x: 0, z: 0 }));
 
     const movedAway = { ...scouted, tracks: [{ id: 'warrior', count: 9 }] };
     const farWorld = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: -36, z: -36 }]);

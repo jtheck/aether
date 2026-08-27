@@ -43,6 +43,12 @@ function resolvePath(urlPath) {
   const safe = normalize(urlPath).replace(/^(\.\.[/\\])+/, '').replace(/\\/g, '/');
   // Shared asset library lives at repo root (forge <base href="../"> → /assets/).
   if (safe.startsWith('assets/')) return join(REPO, ...safe.split('/'));
+  // House maps live at repo-root maps/; fall back to src/maps/ for an un-restarted serve.
+  if (safe.startsWith('maps/')) {
+    const repoPath = join(REPO, ...safe.split('/'));
+    if (existsSync(repoPath)) return repoPath;
+    return join(ROOT, ...safe.split('/'));
+  }
   // Soft-landing for no-WebGPU — serve src/axiom/ at /axiom/
   const axiomPath = resolveSrcDir(safe, 'axiom');
   if (axiomPath) return axiomPath;

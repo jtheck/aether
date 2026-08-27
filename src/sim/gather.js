@@ -1,5 +1,7 @@
 // Villager gathering — harvest a resource node, haul the load to the nearest
 // owned drop-off (agora / camp / mine), deposit into the owner's bank, repeat.
+// Farms are the exception: food is banked in place while the villager wanders
+// the plot (no haul, no carry visual).
 //
 // Modeled on repair.js: a per-tick system drives locomotion via queuePath and
 // holds the unit in range while it works. All state lives on the world (SoA +
@@ -47,7 +49,7 @@ function dropOffNodeClass(type) {
 /**
  * What (if anything) is harvestable at a tile. Trees carry stock on their own
  * tile; rocks carry stock on the CENTER tile (footprint tiles are blockers);
- * farms are infinite food nodes worked in place.
+ * farms are infinite food nodes worked in place (wander, no haul).
  * @returns {{ stock: number, code: number, foot: number, tree: boolean, food: boolean } | null}
  */
 function nodeAt(field, tile) {
@@ -89,12 +91,27 @@ export const GATHER_BITE = 2;
 export const GATHER_CARRY_CAP = 10;
 
 const NODE_RANGE = fx.fromFloat(6);
-const DROP_RANGE = fx.fromFloat(16);
+/** Must reach the building itself — ~1 tile from center, on a camp/mine footprint. */
+const DROP_RANGE = fx.fromFloat(4.5);
 const DROP_RANGE_SQ = fx.mul(DROP_RANGE, DROP_RANGE);
 
-/** Building types that accept resource drop-offs (agora handled separately).
- *  Farms are included so in-place food workers bank at the farm itself. */
-const DROP_OFF_TYPES = new Set(['camp', 'mine', 'farm']);
+/** How close a villager must get before it starts wandering a farm plot. */
+const FARM_ENTER_RANGE = fx.fromFloat(13);
+const FARM_ENTER_RANGE_SQ = fx.mul(FARM_ENTER_RANGE, FARM_ENTER_RANGE);
+/** Wander around the 3×3 farm and a bit of the grass beyond it. */
+const FARM_WANDER_HALF = fx.fromFloat(10);
+const FARM_ARRIVE = fx.fromFloat(1.6);
+const FARM_ARRIVE_SQ = fx.mul(FARM_ARRIVE, FARM_ARRIVE);
+/** Ticks to stand after arriving before picking the next stroll dest. */
+const FARM_PAUSE_TICKS = 36;
+/** Cap while pottering on the plot — full villager speed reads as a sprint. */
+export const FARM_STROLL_SPEED = fx.fromFloat(0.38);
+
+/** Buildings that recruit gatherers (and show a work-radius ring). Farms work
+ *  food in place; they are not haul drop-offs. */
+export const DROP_OFF_TYPES = new Set(['camp', 'mine', 'farm']);
+/** Buildings that accept a hauled load (agora is handled separately). */
+const DEPOSIT_TYPES = new Set(['camp', 'mine']);
 
 // --- Auto-assign (camps/mines recruit idle villagers) -----------------------
 // World-unit bases are exported so the HUD ring can mirror the sim reach exactly.
@@ -172,6 +189,75 @@ function endGather(w, i) {
   clearPath(w, i);
 }
 
+/** Deterministic wander point on the farm plot (hash of id + cycle, no rng). */
+function farmWanderTarget(field, cx, cy, entityId, cycle) {
+  const h = (
+    Math.imul((entityId + 1) | 0, 2654435761) ^
+    Math.imul((cycle + 1) | 0, 1597334677)
+  ) >>> 0;
+  const ox = (h & 0xff) - 128;
+  const oy = ((h >>> 8) & 0xff) - 128;
+  const x = cx + ((ox * FARM_WANDER_HALF) / 128) | 0;
+  const y = cy + ((oy * FARM_WANDER_HALF) / 128) | 0;
+  const snapped = snapToPassable(field, x, y);
+  return snapped ? snapped : { x, y };
+}
+
+/** True while a villager is pottering a farm plot (not commuting to it). */
+export function isFarmStroll(w, field, i) {
+  if (!field || w.order[i] !== ORDER.GATHER) return false;
+  const tile = w.gatherTile[i];
+  if (tile < 0) return false;
+  const node = nodeAt(field, tile);
+  if (!node?.food) return false;
+  const width = field.width | 0;
+  const cx = tileCenterX(tile % width);
+  const cy = tileCenterY((tile / width) | 0);
+  return fx.dist2(w.px[i], w.py[i], cx, cy) <= FARM_ENTER_RANGE_SQ;
+}
+
+/**
+ * Bank farm food on the gather cadence and stroll place-to-place.
+ * Carry stays empty so render never shows a hauled resource.
+ */
+function workFarm(w, field, i, tile, width) {
+  const tx = tile % width;
+  const tz = (tile / width) | 0;
+  const cx = tileCenterX(tx);
+  const cy = tileCenterY(tz);
+
+  if (fx.dist2(w.px[i], w.py[i], cx, cy) > FARM_ENTER_RANGE_SQ) {
+    const snapped = snapToPassable(field, cx, cy);
+    seekTo(w, i, snapped ? snapped.x : cx, snapped ? snapped.y : cy);
+    return;
+  }
+
+  if (w.gatherCd[i] > 0) {
+    w.gatherCd[i]--;
+  } else {
+    addResource(w, w.owner[i], 'food', GATHER_BITE);
+    w.gatherCd[i] = GATHER_INTERVAL;
+  }
+
+  const destX = w.navDestX[i];
+  const destY = w.navDestY[i];
+  const walking = (w.navWpCount[i] | 0) > 0 || (w.pathRequest[i] | 0) !== 0;
+  const arrived = fx.dist2(w.px[i], w.py[i], destX, destY) <= FARM_ARRIVE_SQ;
+
+  if (walking && !arrived) return;
+
+  if (arrived) {
+    w.vx[i] = 0;
+    w.vy[i] = 0;
+    clearPath(w, i);
+    // Stand a beat, then pick a new spot. Phase is per-villager so crews don't sync.
+    if ((w.tick + i * 13) % FARM_PAUSE_TICKS !== 0) return;
+  }
+  const dest = farmWanderTarget(field, cx, cy, i, w.tick + i);
+  if (fx.dist2(w.px[i], w.py[i], dest.x, dest.y) <= FARM_ARRIVE_SQ) return;
+  seekTo(w, i, dest.x, dest.y);
+}
+
 /** Repath toward a target only when it changed or no path is active. */
 function seekTo(w, i, tx, ty) {
   if (
@@ -213,7 +299,7 @@ export function nearestDropOff(w, owner, px, py) {
     for (let b = 0; b < buildings.length; b++) {
       const bd = buildings[b];
       if (bd.built === 0) continue; // sites can't accept drop-offs yet
-      if (bd.owner === owner && DROP_OFF_TYPES.has(bd.type)) consider(bd.x, bd.z);
+      if (bd.owner === owner && DEPOSIT_TYPES.has(bd.type)) consider(bd.x, bd.z);
     }
   }
   return found ? { x: bestX, y: bestY } : null;
@@ -234,6 +320,12 @@ export function gatherSystem(w, field) {
     const node = nodeAt(field, tile);
     const nodeStock = node ? node.stock : 0;
     const carrying = w.carriedAmt[i] | 0;
+
+    // Farms: bank in place and potter around the plot. No haul, no carry prop.
+    if (node && node.food && carrying <= 0) {
+      workFarm(w, field, i, tile, width);
+      continue;
+    }
 
     // Return-and-deposit when full, or when the node is spent.
     if (carrying >= GATHER_CARRY_CAP || nodeStock <= 0) {
@@ -311,6 +403,24 @@ export function campWorkRadius(w, b) {
     }
   }
   return CAMP_WORK_RADIUS + eng * ENGINEER_RADIUS_BONUS;
+}
+
+/**
+ * Gather reach in world units for a serialized (float xyz) drop-off.
+ * Same engineer bonus as campWorkRadius; used by the HUD ring.
+ * @param {object} w
+ * @param {{ x: number, z: number, owner: number }} b
+ */
+export function campWorkRadiusWorld(w, b) {
+  let eng = 0;
+  const rangeSq = ENGINEER_ASSIST_RANGE_F * ENGINEER_ASSIST_RANGE_F;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.ENGINEER) continue;
+    const dx = fx.toFloat(w.px[i]) - b.x;
+    const dz = fx.toFloat(w.py[i]) - b.z;
+    if (dx * dx + dz * dz <= rangeSq && ++eng >= ENGINEER_BONUS_CAP) break;
+  }
+  return CAMP_WORK_RADIUS_F + eng * ENGINEER_RADIUS_BONUS_F;
 }
 
 /**

@@ -47,6 +47,12 @@ const VISITED_DIM = 0.50;
 const VISITED_FOG_T = 110 / 255;
 /** Extra albedo in the live vision hole so current sight reads brighter than visited. */
 const SIGHT_LIFT = 1.4;
+/** How long a gather-click flash lasts on the targeted tree / rock. */
+const HARVEST_PING_MS = 1050;
+/** Pulses inside that window. */
+const HARVEST_PULSES = 3;
+/** Peak albedo scale on top of fog dim (trees sit at ~0.24). */
+const HARVEST_PEAK = 2.15;
 
 function fogAlbedoScale(t) {
   if (t <= 0) return SIGHT_LIFT;
@@ -140,6 +146,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       modelsReady: Promise.resolve(),
       update() {},
       applyTreeUpdates() {},
+      applyFogDim() {},
+      pingHarvest() { return false; },
       dispose() {},
     };
   }
@@ -152,6 +160,12 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   let disposed = false;
   /** @type {Map<number, { batch: object, index: number }>} */
   const treeByTile = new Map();
+  /** Trees + rocks, for gather-click flashes. */
+  /** @type {Map<number, { batch: object, index: number }>} */
+  const instanceByTile = new Map();
+  /** tile → start time (ms). */
+  /** @type {Map<number, number>} */
+  const harvestPings = new Map();
   /** @type {number[]} unused tree instance indices (headroom). */
   const treeFreeSlots = [];
   /** @type {object | null} */
@@ -195,7 +209,9 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (isTree) {
       treeBatch = batch;
       for (let i = 0; i < live.length; i++) {
-        treeByTile.set(instances[i].tileIndex, { batch, index: i });
+        const ref = { batch, index: i };
+        treeByTile.set(instances[i].tileIndex, ref);
+        instanceByTile.set(instances[i].tileIndex, ref);
       }
       for (let i = live.length; i < capacity; i++) {
         writeHiddenMatrix(billboardMatrices, i);
@@ -205,6 +221,10 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       // Kept in descending order for that reason.
       for (let i = capacity - 1; i >= live.length; i--) {
         treeFreeSlots.push(i);
+      }
+    } else {
+      for (let i = 0; i < live.length; i++) {
+        instanceByTile.set(instances[i].tileIndex, { batch, index: i });
       }
     }
 
@@ -345,6 +365,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     placeTreeInstance(p, tileIndex, stock, burn);
     const ref = { batch: treeBatch, index };
     treeByTile.set(tileIndex, ref);
+    instanceByTile.set(tileIndex, ref);
     treeBatch.dirty = true;
     writeFogColor(treeBatch, index);
     flushBatchColors(treeBatch);
@@ -416,7 +437,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         batch.dirty = false;
       }
     }
-    if (opts.emitFire && fireElapsed >= 48) {
+      if (opts.emitFire && fireElapsed >= 48) {
       fireElapsed = 0;
       for (const batch of batches) {
         if (batch.variant.kind !== SCENERY.TREE) continue;
@@ -427,6 +448,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         }
       }
     }
+    tickHarvestPings();
   }
 
   function applyTreeUpdates(updates) {
@@ -474,18 +496,56 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
 
   update(camera, LOD_UPDATE_MS, true);
 
+  function harvestBoost(tile, now) {
+    const started = harvestPings.get(tile);
+    if (started == null) return 1;
+    const t = now - started;
+    if (t >= HARVEST_PING_MS) return 1;
+    const u = t / HARVEST_PING_MS;
+    const wave = Math.abs(Math.cos(u * Math.PI * HARVEST_PULSES));
+    return 1 + wave * wave * HARVEST_PEAK;
+  }
+
   function writeFogColor(batch, index) {
     const colors = batch.colors;
     if (!colors) return;
     const p = batch.instances[index];
     const t = fogFactor ? fogFactor(p.x, p.z) : 0;
     const scale = fogFactor ? fogAlbedoScale(t) : 1;
-    const c = albedoDimFor(batch.variant.kind) * scale;
+    const boost = harvestBoost(p.tileIndex, performance.now());
+    const c = albedoDimFor(batch.variant.kind) * scale * boost;
     const o = index * 4;
     colors[o] = c;
     colors[o + 1] = c;
     colors[o + 2] = c;
     colors[o + 3] = 1;
+  }
+
+  function tickHarvestPings() {
+    if (harvestPings.size === 0) return;
+    const now = performance.now();
+    const flushed = new Set();
+    for (const [tile, started] of harvestPings) {
+      const expired = now - started >= HARVEST_PING_MS;
+      const ref = instanceByTile.get(tile);
+      if (ref) {
+        writeFogColor(ref.batch, ref.index);
+        flushed.add(ref.batch);
+      }
+      if (expired) harvestPings.delete(tile);
+    }
+    for (const batch of flushed) flushBatchColors(batch);
+  }
+
+  function pingHarvest(tile) {
+    const t = tile | 0;
+    if (t < 0) return false;
+    harvestPings.set(t, performance.now());
+    const ref = instanceByTile.get(t);
+    if (!ref) return false;
+    writeFogColor(ref.batch, ref.index);
+    flushBatchColors(ref.batch);
+    return true;
   }
 
   function flushBatchColors(batch) {
@@ -516,11 +576,13 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     meshes.length = 0;
     batches.length = 0;
     treeByTile.clear();
+    instanceByTile.clear();
+    harvestPings.clear();
     treeFreeSlots.length = 0;
     treeBatch = null;
   }
 
-  return { meshes, modelsReady, update, applyTreeUpdates, applyFogDim, dispose };
+  return { meshes, modelsReady, update, applyTreeUpdates, applyFogDim, pingHarvest, dispose };
 }
 
 function makeEmptyTreeInstance() {

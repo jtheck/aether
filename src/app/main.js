@@ -1,12 +1,10 @@
 // app/ — SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
-import { UNIT, UNIT_DEFS, getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
+import { getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
 import {
-  CAMP_WORK_RADIUS_F,
-  ENGINEER_RADIUS_BONUS_F,
-  ENGINEER_ASSIST_RANGE_F,
-  ENGINEER_BONUS_CAP,
+  DROP_OFF_TYPES,
+  campWorkRadiusWorld,
 } from '../sim/gather.js';
 import * as fx from '../sim/fixed.js';
 import {
@@ -22,6 +20,7 @@ import {
 import { STRESS_AI_PROFILES } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
 import { GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
 import {
   applySerializedBuildingOccupancy,
   BUILDING_FOOTPRINTS,
@@ -71,8 +70,24 @@ import { createKothShard, kothModeFromSearch } from './kothShard.js';
 
 const SEED = 0x1234;
 
+function loadTesterGarden() {
+  return fetch(TESTER_GARDEN_URL).then((res) => {
+    if (!res.ok) throw new Error(`tester garden ${res.status}`);
+    return res.json();
+  });
+}
+
 async function loadGardenFromSearch(search) {
-  const raw = new URLSearchParams(search).get('garden');
+  const params = new URLSearchParams(search);
+  const raw = params.get('garden');
+  if (!raw && params.get('tester') === '1') {
+    try {
+      return await loadTesterGarden();
+    } catch (err) {
+      console.error('Could not load tester garden', err);
+      return null;
+    }
+  }
   if (!raw) return null;
   try {
     if (raw === 'session' || raw === 'local') {
@@ -232,6 +247,20 @@ async function main() {
         fog: false,
       };
     }
+  }
+
+  if (new URLSearchParams(location.search).get('tester') === '1') {
+    bootCfg = {
+      ...bootCfg,
+      mode: 'sandbox',
+      localSolo: true,
+      role: 'player',
+      localPlayerId: PLAYER,
+      humanPlayers: [PLAYER],
+      activeSlots: [PLAYER, AI_OWNER],
+      aiPlayers: [{ owner: AI_OWNER, temperament: 'passive' }],
+      fog: false,
+    };
   }
 
   ctx = await bootGame(canvas, bootCfg, { stress, animStress, armyPerSide: bootCfg.armyPerSide ?? armyPerSide, kothShard, solo });
@@ -533,6 +562,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const sideMenu = setupMenu({
     renderer,
     onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
+    onStartUnitTester: () => startUnitTesterMatch(ctxRef.current),
     onPlayerColorChange: (hex) => {
       setLocalOwnerTint(localPlayerId, hex);
       updateColors();
@@ -778,27 +808,31 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   /**
-   * Ground ring showing a selected camp/mine's gather reach (engineers extend it).
-   * Mirrors the sim's campWorkRadius so the visible ring matches actual behavior.
+   * Ground rings showing gather reach for every drop-off of the selected type
+   * (same owner). Engineers extend each ring independently, matching the sim.
    */
   function syncWorkRadiusRing() {
-    const sel = selectedBuildings.find((s) => s.kind === 'building');
-    const b = sel ? session.buildings?.[sel.index] : null;
-    if (!b || (b.type !== 'camp' && b.type !== 'mine' && b.type !== 'farm')) {
+    const buildings = session.buildings;
+    const keys = new Set();
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (sel.kind !== 'building') continue;
+      const b = buildings?.[sel.index];
+      if (!b || b.built === 0 || !DROP_OFF_TYPES.has(b.type)) continue;
+      keys.add(`${b.owner}:${b.type}`);
+    }
+    if (keys.size === 0) {
       renderer.setWorkRadiusRing?.(null);
       return;
     }
     const st = session.state;
-    const rangeSq = ENGINEER_ASSIST_RANGE_F * ENGINEER_ASSIST_RANGE_F;
-    let eng = 0;
-    for (let i = 0; i < st.count; i++) {
-      if (st.owner[i] !== b.owner || st.type[i] !== UNIT.ENGINEER) continue;
-      const dx = fx.toFloat(st.px[i]) - b.x;
-      const dz = fx.toFloat(st.py[i]) - b.z;
-      if (dx * dx + dz * dz <= rangeSq && ++eng >= ENGINEER_BONUS_CAP) break;
+    const rings = [];
+    for (let i = 0; i < (buildings?.length ?? 0); i++) {
+      const b = buildings[i];
+      if (!b || b.built === 0 || !keys.has(`${b.owner}:${b.type}`)) continue;
+      rings.push({ x: b.x, z: b.z, radius: campWorkRadiusWorld(st, b) });
     }
-    const radius = CAMP_WORK_RADIUS_F + eng * ENGINEER_RADIUS_BONUS_F;
-    renderer.setWorkRadiusRing?.({ x: b.x, z: b.z, radius });
+    renderer.setWorkRadiusRing?.(rings);
   }
 
   updateColors();
@@ -1048,7 +1082,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     enqueueCommand: (cmd) => session.submitCommand(cmd),
     onSelectionChanged: updateColors,
-    onOrder: (x, z, y, cmdType) => {
+    onOrder: (x, z, y, cmdType, tile) => {
+      if (cmdType === CMD.GATHER) {
+        renderer.pingHarvestTarget?.(tile);
+        return;
+      }
       const tint = cmdType === CMD.ATTACK_MOVE ? 'red' : 'white';
       renderer.pingOrderMarker?.(x, z, y, tint, { forceMove: cmdType === CMD.MOVE });
     },
@@ -1901,6 +1939,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         { fromStatus: true, skip: fogHidden },
       );
     }
+    if (renderer.syncCarryLoads) {
+      renderer.syncCarryLoads(n, {
+        x: renderX,
+        y: renderY,
+        z: renderZ,
+        yaw: facingYaw,
+        amt: world.carriedAmt,
+        kind: world.carriedKind,
+        alive: world.alive,
+        skip: fogHidden,
+      });
+    }
     if (renderer.syncHolyShields) {
       const shieldSpheres = [];
       for (let i = 0; i < n; i++) {
@@ -2091,8 +2141,10 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       mode: simMode,
       activeSlots,
       armyPerSide: cfg.armyPerSide ?? 0,
+      garden: cfg.garden,
     });
-    // onWorldRebuilt awaited setField; wait for scenery models too.
+    // Terrain is enough to unlock — 3D scenery/building GLBs finish in the
+    // background. Waiting on modelsReady here was a ~12s tab stall.
     await Promise.race([
       ctx.renderer.whenFieldReady?.() ?? Promise.resolve(),
       new Promise((r) => setTimeout(r, 12000)),
@@ -2131,20 +2183,26 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
  * Offline 1v1 vs AI — same two-army KOTH spawn as a real match, no P2P.
  * Exercises the hardened match teardown/rebuild path from the menu.
  * @param {object | null} ctx
- * @param {{ temperament?: string, fog?: boolean, statusLabel?: string }} [opts]
+ * @param {{ temperament?: string, fog?: boolean, statusLabel?: string, garden?: object, mode?: string }} [opts]
  */
 async function startSoloAiMatch(ctx, opts = {}) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
-  const { temperament = 'steady', fog = true, statusLabel = '1v1 vs AI' } = opts;
+  const {
+    temperament = 'steady',
+    fog = true,
+    statusLabel = '1v1 vs AI',
+    garden = null,
+    mode = 'koth',
+  } = opts;
   ctx._soloStarting = true;
   ctx.localSoloHold = true;
   try {
-    const armyPerSide = ctx.session.state?.armyPerSide ?? 0;
+    const armyPerSide = garden ? 0 : (ctx.session.state?.armyPerSide ?? 0);
     await applyLiveConfig(ctx, {
-      mode: 'koth',
+      mode,
       localSolo: true,
-      seed: (Math.random() * 0xffffffff) >>> 0,
+      seed: garden?.s ?? (Math.random() * 0xffffffff) >>> 0,
       localPlayerId: PLAYER,
       humanPlayers: [PLAYER],
       activeSlots: [PLAYER, AI_OWNER],
@@ -2153,6 +2211,7 @@ async function startSoloAiMatch(ctx, opts = {}) {
       reset: true,
       inputEnabled: true,
       armyPerSide,
+      garden,
       matchId: `solo-${Date.now().toString(36)}`,
     }, ctx.kothShard);
     ctx.setMatchMeta?.({ mode: 'solo' });
@@ -2164,6 +2223,29 @@ async function startSoloAiMatch(ctx, opts = {}) {
   } finally {
     ctx._soloStarting = false;
   }
+}
+
+/**
+ * Offline 2-player sandbox on the authored unit-tester garden.
+ * Fog off so every unit and building is visible.
+ */
+async function startUnitTesterMatch(ctx) {
+  if (!ctx?.session || !ctx.renderer) return;
+  let garden;
+  try {
+    garden = await loadTesterGarden();
+  } catch (err) {
+    console.error('[tester] garden load failed', err);
+    setStatusText('Unit tester map failed to load');
+    return;
+  }
+  await startSoloAiMatch(ctx, {
+    temperament: 'passive',
+    fog: false,
+    statusLabel: 'Unit tester',
+    garden,
+    mode: 'sandbox',
+  });
 }
 
 function syncPresentation(ctx, cfg, options = {}) {

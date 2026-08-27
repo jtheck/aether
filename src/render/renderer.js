@@ -35,7 +35,7 @@ import { USE_GPU_PICK } from './pickMode.js';
 import { getUnitDef } from '../sim/unitTypes.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
-import { HEIGHT_AMPLITUDE, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
+import { HEIGHT_AMPLITUDE, TILE_SIZE_F, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
 import { capacityFor } from '../sim/capacity.js';
 import {
   UNIT_MODEL_URLS,
@@ -61,6 +61,7 @@ import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createHolyShieldMaterial } from './holyShields.js';
+import { createWorkRadiusRings } from './workRadiusRings.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
 import { createLightningBolts } from './lightningBolts.js';
@@ -70,6 +71,7 @@ import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
 import { createLocustFx } from './locustFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
+import { createCarryLoads } from './carryLoads.js';
 import { createAgoraProps } from './agoras.js';
 import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
@@ -1206,21 +1208,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Alternate pop spin direction each new ping. */
   let nextOrderSpinDir = 1;
 
-  // Flat ground ring for a selected camp/mine's gather reach (see setWorkRadiusRing).
-  let workRing;
-  {
-    workRing = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 48 });
-    const workMat = createStandardMaterial();
-    workMat.diffuseColor = [0.95, 0.85, 0.32];
-    workMat.emissiveColor = [0.6, 0.5, 0.16];
-    workMat.alpha = 0.5;
-    workRing.material = workMat;
-  }
-  const workRingMatrices = new Float32Array(16);
-  setThinInstances(workRing, workRingMatrices, 1);
-  addToScene(scene, workRing);
-  setThinInstanceCount(workRing, 0);
-  let workRingShown = false;
+  // Flat rim-fade rings for selected camp/mine/farm gather reach.
+  const workRadiusRings = createWorkRadiusRings(engine, scene, groundYAt);
+  const carryLoads = createCarryLoads(engine, scene);
 
   // +64 headroom so agora/building debug spheres fit on top of unit caps.
   const pickHitboxes = createPickHitboxRenderer(
@@ -2189,6 +2179,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const count = mesh.thinInstances?.count ?? 0;
       mesh.visible = unitsEnabled && count > 0;
     }
+    carryLoads.setVisible(unitsEnabled);
   }
 
   onBeforeRender(scene, (deltaMs) => {
@@ -2921,14 +2912,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // Build menu: screen-anchored HUD (project agora, edge-clamp, fixed depth).
     if (buildingRadial.isOpen()) {
       buildingRadial.update?.(camera);
-      agoraProps.setHubFlagPose?.(buildingRadial.hubFlagPose ?? null);
-    } else {
-      agoraProps.setHubFlagPose?.(null);
     }
     if (actionRadial.isOpen()) {
       actionRadial.update?.(camera);
     }
     selectionHud.update?.(camera);
+    buildingProps.updateHarvestPing?.();
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
       // Unit matrices: markThinInstanceSlotDirty on write — do not flushThinInstances
@@ -2941,6 +2930,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // Selection / order matrices marked dirty on write.
     pickHitboxes.commit();
     holyShields.commit();
+    workRadiusRings.commit();
+    carryLoads.commit();
     projectileRenderer.commit();
     frogRenderer.sync();
     frogRenderer.commit();
@@ -3262,6 +3253,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         pendingAgoras = null;
         pendingRallyFlags = null;
         pendingBuildings = null;
+        // Warm every placeable so a tester / showcase board does not hitch
+        // on first place() of 15 unseen GLBs. Do not await — interactive first.
+        void buildingProps.preloadAll?.();
         // Late PBR props: receive + cast after color-pass materialize.
         agoraProps.forEachShadowMesh?.(noteShadowMesh);
         buildingProps.forEachShadowMesh?.(noteShadowMesh);
@@ -3349,7 +3343,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     refreshOwnerTints() {
       buildingProps?.refreshTeamColors?.();
       agoraProps?.refreshTeamColors?.();
-      buildingRadial?.refreshHubFlagOwner?.();
     },
 
     /** Place constructed buildings. */
@@ -3374,23 +3367,37 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Draw (or clear with null) a flat ground ring for a drop-off's work radius.
-     * @param {{ x: number, z: number, radius: number } | null} spec radius in world units
+     * Draw (or clear with null / []) flat ground rings for drop-off work radii.
+     * @param {{ x: number, z: number, radius: number } | { x: number, z: number, radius: number }[] | null} spec
      */
     setWorkRadiusRing(spec) {
-      if (!spec || !(spec.radius > 0)) {
-        if (workRingShown) {
-          setThinInstanceCount(workRing, 0);
-          workRingShown = false;
-        }
+      if (!spec) {
+        workRadiusRings.clear();
         return;
       }
-      const gy = groundYAt(spec.x, spec.z) || 0;
-      writeFlatRing(workRingMatrices, 0, spec.x, spec.z, spec.radius * 2, RING_DIAM, RING_H, gy);
-      setThinInstances(workRing, workRingMatrices, 1);
-      setThinInstanceCount(workRing, 1);
-      markThinInstanceSlotDirty(workRing, 0);
-      workRingShown = true;
+      const list = Array.isArray(spec) ? spec : [spec];
+      workRadiusRings.sync(list);
+    },
+
+    /**
+     * Flash the harvestable a gather click landed on (tree / rock / farm).
+     * @param {number} tile
+     */
+    pingHarvestTarget(tile) {
+      const t = tile | 0;
+      if (t < 0) return false;
+      if (fieldSnap?.foodNode?.[t]) {
+        const w = fieldSnap.width | 0;
+        if (w <= 0) return false;
+        const tz = Math.floor(t / w);
+        const tx = t - tz * w;
+        const half = worldHalfFFromField(fieldSnap);
+        const x = (tx + 0.5) * TILE_SIZE_F - half;
+        const z = (tz + 0.5) * TILE_SIZE_F - half;
+        buildingProps.pingHarvestAt?.(x, z);
+        return true;
+      }
+      return terrain?.pingHarvest?.(t) ?? false;
     },
 
     /**
@@ -3421,12 +3428,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     showBuildingRadial(x, z, owner = 0) {
       actionRadial.hide();
       buildingRadial.showAt(x, z, camera, owner);
-      agoraProps.setHubFlagPose?.(buildingRadial.hubFlagPose ?? null);
     },
 
     hideBuildingRadial() {
       buildingRadial.hide();
-      agoraProps.setHubFlagPose?.(null);
     },
 
     isBuildingRadialOpen() {
@@ -3441,7 +3446,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      */
     showActionRadial(x, z, buildingType) {
       buildingRadial.hide();
-      agoraProps.setHubFlagPose?.(null);
       actionRadial.showAt(x, z, buildingType, camera);
     },
 
@@ -3494,7 +3498,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return actionRadial.getArmed?.() ?? null;
     },
 
-    /** Shrink the open radial (~50%, animated) while ghost-placing so it stays out of the way. */
+    /** Shrink the open radial while ghost-placing so it stays out of the way. */
     setBuildingRadialCompact(on) {
       buildingRadial.setCompact?.(Boolean(on));
     },
@@ -3659,9 +3663,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return p;
     },
 
-    /** Resolves when the latest setField terrain (and scenery models) is ready. */
-    whenFieldReady() {
-      return setFieldChain.then(() => sceneryModelsReady);
+    /**
+     * Resolves when the latest setField terrain is ready.
+     * Pass `{ models: true }` to also wait for 3D tree/rock GLBs (boot only).
+     */
+    whenFieldReady(opts) {
+      if (opts?.models) return setFieldChain.then(() => sceneryModelsReady);
+      return setFieldChain;
     },
 
     applySceneryFog(isVisible) {
@@ -3985,6 +3993,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return holyShields.debug();
     },
 
+    /**
+     * Comically large haul props over villagers' heads.
+     * @param {number} count
+     * @param {{ x: Float32Array, y: Float32Array, z: Float32Array, yaw?: Float32Array, amt: Int32Array, kind?: Uint8Array, alive?: Uint8Array, skip?: Uint8Array }} opts
+     */
+    syncCarryLoads(count, opts) {
+      carryLoads.sync(count, opts);
+    },
+
     resetCamera() {
       cameraController.reset();
     },
@@ -4118,6 +4135,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       locustFx.clear();
       mushrooms?.clear?.();
       holyShields.clear();
+      carryLoads.clear();
       groundFires.clear();
       trailGenerations.fill(0);
       trailLastEmitMs.fill(0);

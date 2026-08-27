@@ -44,7 +44,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {(i: number, out: {x:number,y:number,z:number}) => {x:number,y:number,z:number}} opts.getUnitWorldPos
  * @param {(cmd: object) => void} opts.enqueueCommand
  * @param {() => void} [opts.onSelectionChanged]
- * @param {(x: number, z: number, y?: number) => void} [opts.onOrder]
+ * @param {(x: number, z: number, y?: number, cmdType?: number, tile?: number) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
  * @param {() => { owner: number, x: number, z: number }[]} [opts.getAgoras]
@@ -1374,7 +1374,7 @@ export function createGameInput(opts) {
     }
     if (villagers.length === 0) return false;
     enqueueCommand({ type: CMD.GATHER, entities: villagers, tile });
-    onOrder?.(g.x, g.z, g.y);
+    onOrder?.(g.x, g.z, g.y, CMD.GATHER, tile);
     return true;
   }
 

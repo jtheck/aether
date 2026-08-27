@@ -183,8 +183,6 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   let lastFlagRadius = NaN;
   /** @type {object | null} */
   let lastFlagCamera = null;
-  /** @type {{ anchorX: number, anchorZ: number } | null} */
-  let hubFlagPose = null;
   /** ~3 world-units of eye motion before rally flag scales are rewritten. */
   const FLAG_EYE_MOVE_SQ = 9;
   const FLAG_RADIUS_EPS = 0.35;
@@ -193,7 +191,6 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     place() {},
     placeRallyFlags() {},
     setRallyGhost() {},
-    setHubFlagPose() {},
     update() {},
     clear() {},
     isPickMesh() {
@@ -287,24 +284,17 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   rallyLine = makeLineBatch(MAX_RALLY_LINE_SEGS);
   ghostLine = makeLineBatch(MAX_GHOST_LINE_SEGS);
 
-  function writeFlagBatch(batchLayers, list, eye, scaleFor, hideAt) {
+  function writeFlagBatch(batchLayers, list, eye, scaleFor) {
     const n = list.length;
     for (let i = 0; i < n; i++) {
       const a = list[i];
       const owner = a.owner | 0;
-      const hide =
-        hideAt &&
-        (a.x - hideAt.anchorX) ** 2 + (a.z - hideAt.anchorZ) ** 2 < 4;
       const yaw = a.yaw != null ? a.yaw : Math.atan2(-a.x, -a.z);
       const x = a.x;
       const z = a.z;
       const y = groundYAt(a.x, a.z);
       const dist = Math.hypot(eye.x - x, eye.y - y, eye.z - z) || FLAG_DIST_REF;
-      const scale = hide
-        ? 0
-        : scaleFor
-          ? scaleFor(dist)
-          : flagScaleForDist(dist);
+      const scale = scaleFor ? scaleFor(dist) : flagScaleForDist(dist);
       for (const layer of batchLayers) {
         writeMatrix(layer.matrices, i, x, y, z, yaw, scale);
         if (layer.isTeamColor) writeRallyColor(layer.colors, i, owner, 1, a.attackMove);
@@ -537,7 +527,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     lastFlagEyeZ = eye.z;
     if (cam && Number.isFinite(cam.radius)) lastFlagRadius = cam.radius;
     const agoraScale = flagScaleForCamera(cam);
-    writeFlagBatch(agoraFlagLayers, agoraCache, eye, () => agoraScale, hubFlagPose);
+    writeFlagBatch(agoraFlagLayers, agoraCache, eye, () => agoraScale);
     writeFlagBatch(rallyFlagLayers, rallyCache, eye);
     if (rallyGhost) {
       writeFlagBatch(ghostFlagLayers, [rallyGhost], eye);
@@ -626,22 +616,6 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     rewriteFlags(null);
   }
 
-  /**
-   * Hide the world standard at this agora while the radial draws its HUD copy.
-   * @param {{ anchorX: number, anchorZ: number } | null | undefined} pose
-   */
-  function setHubFlagPose(pose) {
-    const next =
-      pose &&
-      Number.isFinite(pose.anchorX) &&
-      Number.isFinite(pose.anchorZ)
-        ? pose
-        : null;
-    if (!hubFlagPose && !next) return;
-    hubFlagPose = next;
-    rewriteFlags(null);
-  }
-
   function update(camera) {
     const showLines = rallyCache.length > 0 || rallyGhost;
     if (!agoraCache.length && !showLines) return;
@@ -664,7 +638,6 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       Number.isFinite(r) &&
       (!Number.isFinite(lastFlagRadius) || Math.abs(r - lastFlagRadius) >= FLAG_RADIUS_EPS);
     if (
-      hubFlagPose ||
       !Number.isFinite(lastFlagEyeX) ||
       movedSq >= FLAG_EYE_MOVE_SQ ||
       zoomed
@@ -711,7 +684,6 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     refreshTeamColors,
     placeRallyFlags,
     setRallyGhost,
-    setHubFlagPose,
     update,
     clear,
     isPickMesh,

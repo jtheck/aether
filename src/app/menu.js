@@ -27,9 +27,10 @@ import {
  *   particleStats?: () => { active?: number, capacity?: number, hardMax?: number },
  * }} opts.renderer
  * @param {() => unknown} [opts.onStartSoloAi]
+ * @param {() => unknown} [opts.onStartUnitTester]
  * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
  */
-export function setupMenu({ renderer, onStartSoloAi, onPlayerColorChange }) {
+export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayerColorChange }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload.
   const bootMode = resolveShadowMode();
@@ -58,6 +59,7 @@ export function setupMenu({ renderer, onStartSoloAi, onPlayerColorChange }) {
     }),
   );
   const soloBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#solo_ai_b'));
+  const testerBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#unit_tester_b'));
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
 
   function showPage(name) {
@@ -127,9 +129,21 @@ export function setupMenu({ renderer, onStartSoloAi, onPlayerColorChange }) {
     }
   });
 
+  testerBtn?.addEventListener('click', async () => {
+    if (!onStartUnitTester || testerBtn.disabled) return;
+    testerBtn.disabled = true;
+    setOpen(false);
+    try {
+      await onStartUnitTester();
+    } finally {
+      testerBtn.disabled = false;
+    }
+  });
+
   // The camera and hotkeys listen on window with no target check, so typing a
   // name would otherwise pan the board and trip B/G/H.
-  for (const field of [nameInput, colorPicker, slider, fxSlider, soloBtn]) {
+  const keyStop = [nameInput, colorPicker, slider, fxSlider, soloBtn, testerBtn].filter(Boolean);
+  for (const field of keyStop) {
     field.addEventListener('keydown', (e) => e.stopPropagation());
     field.addEventListener('keyup', (e) => e.stopPropagation());
   }

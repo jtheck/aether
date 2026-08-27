@@ -1,6 +1,5 @@
 // Agora build menu — tilted annulus framing the agora (EDGE_PIN_HUD gates
-// screen-edge placement; currently off). Hub hole stays on the building;
-// the player's standard is pulled in front of the category pie.
+// screen-edge placement; currently off). Hub hole stays on the building.
 // Option angles stay screen-stable; hover/click uses CPU disc/sphere hits.
 
 import {
@@ -25,7 +24,6 @@ import {
   PLACEABLE_BUILDINGS,
 } from '../sim/buildings.js';
 import { poseRadialFramingBuilding } from './radialPose.js';
-import { ownerTint } from './ownerTints.js';
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
@@ -85,17 +83,13 @@ const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 1;
 const HUD_SCALE_MIN = 0.35;
 /** While ghost-placing, shrink the open radial so it stays out of the way. */
-const COMPACT_SCALE = 0.7;
+const COMPACT_SCALE = 0.38;
 const LABEL_FONT_SIZE = 28;
 const LABEL_SCREEN_SCALE = 1.17;
 const LABEL_DOWN = 4.32;
 const LABEL_LIFT = 1.25;
 /** Exp approach rate for compact scale (higher = snappier; ~30 ≈ 0.1s). */
 const COMPACT_LERP_SPEED = 30;
-/** Hub standard — planted in the pie hole, in front of the category wedges. */
-const FLAG_HUB_LIFT = 1.35;
-const FLAG_HUB_SCALE = 1.15;
-const FLAG_MODEL_URL = '/assets/models/flag.glb';
 /** Inset so the whole ring stays inside the viewport when edge-pinned. */
 const HUD_EDGE_MARGIN_FRAC = 0.2;
 const MAX_OPTIONS = 5;
@@ -493,22 +487,6 @@ function makeIconPreviewMaterial(source) {
   return mat;
 }
 
-/** Unlit HUD copy of the ownership standard — opaque, same pass as the pie. */
-function makeHubFlagMaterial(source, isTeamColor) {
-  const color = isTeamColor ? [1, 1, 1] : previewColorFromMaterial(source);
-  const mat = createStandardMaterial();
-  mat.name = `${source?.name ?? 'flag'}-radial`;
-  mat.diffuseColor = color;
-  mat.emissiveColor = isTeamColor ? [0.22, 0.22, 0.22] : [0.16, 0.16, 0.16];
-  mat.alpha = 1;
-  if (mat.specularColor) mat.specularColor = [0, 0, 0];
-  if ('disableLighting' in mat) mat.disableLighting = true;
-  if ('unlit' in mat) mat.unlit = true;
-  if ('backFaceCulling' in mat) mat.backFaceCulling = false;
-  markMaterialUboDirty(mat);
-  return mat;
-}
-
 /**
  * Ray × plane. Plane through (px,py,pz) with unit normal (nx,ny,nz).
  * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
@@ -695,29 +673,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }),
   );
 
-  /** @type {{ mesh: object, isTeamColor: boolean }[]} */
-  const hubFlagLayers = [];
-  try {
-    const parts = await loadBakedUnitMeshParts(engine, FLAG_MODEL_URL);
-    for (const mesh of parts) {
-      mesh.position.x = 0;
-      mesh.position.y = 0;
-      mesh.position.z = 0;
-      mesh.pickable = false;
-      // After the opaque category pie (215).
-      mesh.renderOrder = 226;
-      const isTeamColor = String(mesh.material?.name ?? '')
-        .toLowerCase()
-        .includes('teamcolor');
-      mesh.material = makeHubFlagMaterial(mesh.material, isTeamColor);
-      addToScene(scene, mesh);
-      hideMesh(mesh);
-      hubFlagLayers.push({ mesh, isTeamColor });
-    }
-  } catch (err) {
-    console.warn('[buildingRadial] hub flag failed', err);
-  }
-
   /** @type {{ data: object, layer: object, text: string }[]} */
   const labels = [];
   let textRenderer = null;
@@ -803,57 +758,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   // Horizontal toward-camera (for upright icon facing).
   let hx = 0;
   let hz = 1;
-
-  let hubOwner = 0;
-
-  function applyHubFlagOwner(owner) {
-    hubOwner = owner | 0;
-    const tint = ownerTint(hubOwner);
-    for (const layer of hubFlagLayers) {
-      if (!layer.isTeamColor) continue;
-      const mat = layer.mesh.material;
-      if (!mat) continue;
-      mat.diffuseColor = [tint[0], tint[1], tint[2]];
-      mat.emissiveColor = [tint[0] * 0.32, tint[1] * 0.32, tint[2] * 0.32];
-      markMaterialUboDirty(mat);
-    }
-  }
-
-  function hideHubFlag() {
-    for (const layer of hubFlagLayers) hideMesh(layer.mesh);
-  }
-
-  function redrawHubFlag() {
-    if (!open || !hubFlagLayers.length) {
-      hideHubFlag();
-      return;
-    }
-    const lift = FLAG_HUB_LIFT * hudScale;
-    const scale = Math.max(0.9, FLAG_HUB_SCALE * hudScale);
-    const x = centerX + nx * lift;
-    const y = centerY + ny * lift;
-    const z = centerZ + nz * lift;
-    // Upright, yawed toward camera — same basis as ring icons.
-    for (const layer of hubFlagLayers) {
-      placeMeshOriented(
-        layer.mesh,
-        x,
-        y,
-        z,
-        scale,
-        -bx,
-        0,
-        -bz,
-        0,
-        1,
-        0,
-        -hx,
-        0,
-        -hz,
-      );
-      if (layer.mesh.visible === false) layer.mesh.visible = true;
-    }
-  }
 
   function hideLabel(label) {
     if (!label) return;
@@ -1399,22 +1303,19 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       redrawSlot(i);
       redrawLabel(i);
     }
-    redrawHubFlag();
   }
 
   /**
    * @param {number} x
    * @param {number} z
    * @param {object | null} [camera]
-   * @param {number} [owner]
    */
-  function showAt(x, z, camera = null, owner = 0) {
+  function showAt(x, z, camera = null) {
     anchorX = x;
     anchorZ = z;
     hoverIndex = -1;
     pieHoverId = null;
     categoryLocked = false;
-    applyHubFlagOwner(owner);
     syncPose(camera);
     rebuildSlots();
     open = true;
@@ -1440,7 +1341,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       applyPadHover(i, false);
     }
     hideAllIcons();
-    hideHubFlag();
     for (const label of labels) hideLabel(label);
     slots = [];
     hoverIndex = -1;
@@ -1680,13 +1580,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
   }
 
-  function refreshHubFlagOwner() {
-    if (open) applyHubFlagOwner(hubOwner);
-  }
-
   return {
     showAt,
-    refreshHubFlagOwner,
     update,
     hide,
     isOpen,
@@ -1711,11 +1606,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     },
     get center() {
       return open ? { x: centerX, y: centerY, z: centerZ } : null;
-    },
-    /** World agora flag to hide while the HUD standard is up. */
-    get hubFlagPose() {
-      if (!open) return null;
-      return { anchorX, anchorZ };
     },
     get scale() {
       return hudScale;

@@ -7,6 +7,7 @@ import { applyAuthoredScenery, SCENERY } from './scenery.js';
 import { spawn } from './world.js';
 import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
 import { createAgoras } from './agora.js';
+import { grantStartingResources } from './resources.js';
 import * as fx from './fixed.js';
 
 export const GARDEN_VERSION = 4;
@@ -220,6 +221,13 @@ export function applyGardenPlacements(world, field, garden) {
   }
   if ((garden.buildings?.length || garden.agoras?.length) && field) {
     applyWorldStructureOccupancy(field, world);
+  }
+  const owners = new Set();
+  for (const u of garden.units ?? []) owners.add(u.owner | 0);
+  for (const b of garden.buildings ?? []) owners.add(b.owner | 0);
+  for (const g of garden.agoras ?? []) owners.add(g.owner | 0);
+  for (const owner of owners) {
+    if (owner >= 0) grantStartingResources(world, owner);
   }
   return world;
 }

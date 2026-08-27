@@ -13,7 +13,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { meshRoofY, roofChipLift, DEFAULT_BUILDING_ROOF } from './healthBars.js';
-import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
+import { BUILDING_MODEL_URLS, PLACEABLE_BUILDINGS } from '../sim/buildings.js';
 import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
@@ -33,6 +33,8 @@ const FOOT_CLEARANCE = 0.06;
 const COLLAR_Y_SCALE = 0.32;
 const COLLAR_Y_LIFT = 0.9;
 const COLLAR_ALPHA = 0.82;
+/** Unfinished sites sit smaller until villagers raise them. */
+const SITE_SCALE = 0.58;
 
 /** Building selection sizes — same idea as unit S / caster / vehicle collars. */
 export const BUILDING_SEL_SIZE = /** @type {const} */ ({
@@ -194,8 +196,6 @@ function resolveSelScale(size) {
 export async function createBuildingProps(engine, scene, groundYAt) {
   /** @type {Map<string, { parts: object[], fxSockets: { name: string, x: number, y: number, z: number }[] }>} typeId → template */
   const templates = new Map();
-  /** Types whose template meshes were claimed by the first owner batch. */
-  const templateClaimed = new Set();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[], capacity: number, typeId: string, owner: number, fxSockets: { name: string, x: number, y: number, z: number }[] }>} */
   const byKey = new Map();
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array }[] }>} */
@@ -206,6 +206,8 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   const slotToIndex = new Map();
   /** @type {Map<string, Promise<boolean>>} */
   const typeInflight = new Map();
+  /** @type {Map<string, { x: number, z: number, started: number }>} */
+  const harvestPings = new Map();
 
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array | null }[]} */
   let selParts = [];
@@ -425,12 +427,12 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     const layers = [];
     const ownerColors = makeOwnerColors(INITIAL_CAPACITY, owner);
     const whiteColors = makeWhiteColors(INITIAL_CAPACITY);
-    const claimTemplate = !templateClaimed.has(typeId);
-    if (claimTemplate) templateClaimed.add(typeId);
     for (let i = 0; i < parts.length; i++) {
       const src = parts[i];
-      // First owner batch for this type reuses the template mesh; later owners clone.
-      const mesh = claimTemplate ? src : cloneTransformNode(src);
+      // Always clone. Lite's cloneTransformNode shares thinInstances with the
+      // source, so claiming the template for owner A means owner B's clone
+      // stomps both buffers — one side's buildings vanish.
+      const mesh = cloneTransformNode(src);
       mesh.pickable = USE_GPU_PICK;
       const isTeamColor = isTeamColorMaterial(mesh.material);
       const colors = isTeamColor ? ownerColors : whiteColors;
@@ -476,10 +478,10 @@ export async function createBuildingProps(engine, scene, groundYAt) {
   }
 
   /**
-   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number }[]} list
+   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number, built?: number }[]} list
    */
   function applyPlace(list) {
-    /** @type {Map<string, { globalIndex: number, x: number, z: number, yaw: number, owner: number }[]>} */
+    /** @type {Map<string, { globalIndex: number, x: number, z: number, yaw: number, owner: number, scale: number }[]>} */
     const groups = new Map();
     for (const key of byKey.keys()) {
       slotToIndex.set(key, []);
@@ -500,6 +502,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
         z: b.z,
         yaw: b.yaw ?? 0,
         owner,
+        scale: b.built === 0 ? SITE_SCALE : 1,
       });
     }
 
@@ -519,7 +522,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
         slots.push(b.globalIndex);
         const y = groundYAt(b.x, b.z);
         for (const layer of batch.layers) {
-          writeMatrix(layer.matrices, i, b.x, y, b.z, b.yaw, 1);
+          writeMatrix(layer.matrices, i, b.x, y, b.z, b.yaw, b.scale);
         }
       }
       slotToIndex.set(key, slots);
@@ -543,7 +546,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
 
   /**
    * Ensure types then place. Stale generations drop if a newer place() wins.
-   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number }[]} list
+   * @param {{ type: string, x: number, z: number, yaw?: number, owner?: number, built?: number }[]} list
    */
   async function place(list) {
     const snapshot = list ?? [];
@@ -670,12 +673,87 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     return roofChipLift(roof, DEFAULT_BUILDING_ROOF);
   }
 
+  const HARVEST_PING_MS = 1050;
+  const HARVEST_PULSES = 3;
+  const HARVEST_PEAK = 1.35;
+  const HARVEST_RANGE2 = 10 * 10;
+
+  function harvestBoost(started, now) {
+    const t = now - started;
+    if (t >= HARVEST_PING_MS) return 1;
+    const u = t / HARVEST_PING_MS;
+    const wave = Math.abs(Math.cos(u * Math.PI * HARVEST_PULSES));
+    return 1 + wave * wave * HARVEST_PEAK;
+  }
+
+  function writeHarvestSlot(batch, slot, boost) {
+    for (const layer of batch.layers) {
+      if (!layer.colors) continue;
+      const tint = layer.isTeamColor ? ownerTint(batch.owner) : [1, 1, 1];
+      const o = slot * 4;
+      layer.colors[o] = tint[0] * boost;
+      layer.colors[o + 1] = tint[1] * boost;
+      layer.colors[o + 2] = tint[2] * boost;
+      layer.colors[o + 3] = 1;
+      setThinInstanceColors(layer.mesh, layer.colors);
+    }
+  }
+
+  function findFarmSlot(x, z) {
+    let best = null;
+    let bestD = HARVEST_RANGE2;
+    for (const batch of byKey.values()) {
+      if (batch.typeId !== 'farm') continue;
+      const layer = batch.layers[0];
+      if (!layer?.matrices) continue;
+      const count = layer.mesh?.thinInstances?.count ?? 0;
+      const m = layer.matrices;
+      for (let slot = 0; slot < count; slot++) {
+        const o = slot * 16;
+        const dx = m[o + 12] - x;
+        const dz = m[o + 14] - z;
+        const d = dx * dx + dz * dz;
+        if (d < bestD) {
+          bestD = d;
+          best = { batch, slot };
+        }
+      }
+    }
+    return best;
+  }
+
+  function pingHarvestAt(x, z) {
+    const found = findFarmSlot(x, z);
+    if (!found) return;
+    const id = `${Math.round(x * 10)}_${Math.round(z * 10)}`;
+    harvestPings.set(id, { x, z, started: performance.now() });
+    writeHarvestSlot(found.batch, found.slot, 1 + HARVEST_PEAK);
+  }
+
+  function updateHarvestPing() {
+    if (harvestPings.size === 0) return;
+    const now = performance.now();
+    for (const [id, ping] of harvestPings) {
+      const boost = harvestBoost(ping.started, now);
+      const found = findFarmSlot(ping.x, ping.z);
+      if (found) writeHarvestSlot(found.batch, found.slot, boost);
+      if (boost <= 1) harvestPings.delete(id);
+    }
+  }
+
+  function preloadAll() {
+    return Promise.all(PLACEABLE_BUILDINGS.map((b) => ensureType(b.id)));
+  }
+
   return {
     place,
+    preloadAll,
     refreshTeamColors,
     setGhost,
     setSelectionHighlight,
     updateSelectionHighlight,
+    pingHarvestAt,
+    updateHarvestPing,
     clear,
     isPickMesh,
     resolvePick,

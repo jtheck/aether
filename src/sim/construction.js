@@ -114,8 +114,8 @@ export function constructionSystem(w, field) {
       b.built = 1;
       // Turn on the finished building's live effects (e.g. farm food node).
       if (field) applyStructureOccupancyAt(field, b.type, b.x, b.z, /* built */ true);
+      w.buildingsDirty = 1;
     }
-    w.buildingsDirty = 1;
   }
 }
 

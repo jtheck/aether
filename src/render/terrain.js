@@ -187,6 +187,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       update() {},
       applyTreeUpdates() {},
       applyFogDim() {},
+      pingHarvest() { return false; },
       dispose() {},
     };
   }
@@ -205,6 +206,10 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     },
     applyTreeUpdates(updates) {
       if (!disposed) scenery.applyTreeUpdates?.(updates);
+    },
+    pingHarvest(tile) {
+      if (disposed) return false;
+      return scenery.pingHarvest?.(tile) ?? false;
     },
     applyFogDim(isVisible) {
       if (!disposed) scenery.applyFogDim?.(isVisible);

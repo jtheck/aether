@@ -4,7 +4,7 @@ import { createWorld, spawn, ORDER } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { step } from './step.js';
 import { CMD } from './commands.js';
-import { createField, worldToTile } from './field.js';
+import { createField, worldToTile, tileCenterX, tileCenterY } from './field.js';
 import { growTreeAt } from './trees.js';
 import { SCENERY } from './scenery.js';
 import { getResource } from './resources.js';
@@ -50,6 +50,32 @@ function gathersAndDeposits() {
   assert.ok(
     getResource(w, 0, 'wood') >= GATHER_CARRY_CAP,
     `owner banked at least one load (got ${getResource(w, 0, 'wood')})`,
+  );
+}
+
+function returnsAllTheWayToTheDropOff() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(36);
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const tile = plantTreeAt(field, 0, 0, 40);
+  const dropX = fx.fromFloat(20);
+  w.agoras = [{ owner: 0, x: dropX, z: 0 }];
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile }]);
+  let depositDist = -1;
+  for (let t = 0; t < 280; t++) {
+    const had = getResource(w, 0, 'wood');
+    step(w, field, []);
+    if (had === 0 && getResource(w, 0, 'wood') > 0) {
+      depositDist = fx.dist2(w.px[vill], w.py[vill], dropX, 0);
+      break;
+    }
+  }
+  assert.ok(depositDist >= 0, 'villager banks a load at the agora');
+  assert.ok(
+    depositDist <= fx.mul(fx.fromFloat(5), fx.fromFloat(5)),
+    `deposited at the building (dist2=${depositDist}), not from 16 units away`,
   );
 }
 
@@ -184,6 +210,7 @@ function farmsFoodInPlace() {
   assert.ok(getResource(w, 0, 'food') > 0, 'farm banks food worked in place');
   assert.equal(getResource(w, 0, 'wood'), 0, 'no wood from a farm');
   assert.ok(field.foodNode[farmTile] === 1, 'food node never depletes');
+  assert.equal(w.carriedAmt[vill], 0, 'farm workers never haul a load');
 }
 
 function farmAutoAssignsIdleVillagers() {
@@ -236,6 +263,35 @@ function campRecruitsWoodNotRock() {
   assert.equal(w.order[vill], ORDER.GATHER, 'camp recruits the idle villager');
   assert.ok(getResource(w, 0, 'wood') > 0, 'camp banks wood from the tree');
   assert.equal(getResource(w, 0, 'mineral'), 0, 'camp never sends workers to mine');
+}
+
+function farmWorkersWanderThePlot() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(35);
+  const farmTile = worldToTile(0) * field.width + worldToTile(0);
+  field.foodNode[farmTile] = 1;
+  w.buildings = [{ owner: 0, type: 'farm', x: fx.fromFloat(0), z: 0 }];
+  const vill = spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: farmTile }]);
+  const cx = tileCenterX(worldToTile(0));
+  const cz = tileCenterY(worldToTile(0));
+  let sawMove = false;
+  let maxD = 0;
+  for (let t = 0; t < 280; t++) {
+    const px = w.px[vill];
+    const py = w.py[vill];
+    step(w, field, []);
+    if (w.px[vill] !== px || w.py[vill] !== py) sawMove = true;
+    const d = fx.dist2(w.px[vill], w.py[vill], cx, cz);
+    if (d > maxD) maxD = d;
+  }
+
+  assert.ok(sawMove, 'farm worker walks around the plot');
+  assert.ok(maxD <= fx.mul(fx.fromFloat(14), fx.fromFloat(14)), 'wander stays around the farm');
+  assert.equal(w.carriedAmt[vill], 0, 'no carry visual on a farm');
+  assert.ok(getResource(w, 0, 'food') > 0, 'food still banks while wandering');
 }
 
 function farmCapsAtTwoWorkers() {
@@ -303,9 +359,11 @@ function defensiveFarmerRetaliatesThenResumes() {
 }
 
 gathersAndDeposits();
+returnsAllTheWayToTheDropOff();
 minesPlainRockForMineral();
 minesMossRockForStone();
 farmsFoodInPlace();
+farmWorkersWanderThePlot();
 farmAutoAssignsIdleVillagers();
 mineRecruitsRockNotWood();
 campRecruitsWoodNotRock();
@@ -317,4 +375,4 @@ depletesThenIdles();
 needsADropOff();
 campAutoAssignsIdleVillagers();
 engineerExtendsCampRadius();
-console.log('gather.test.js: ok (wood + stone + mineral + food + specialize + defend)');
+console.log('gather.test.js: ok (wood + stone + mineral + food + wander + specialize + defend)');

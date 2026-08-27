@@ -54,6 +54,8 @@ import {
   gatherDefenseSystem,
   gatherNodeNear,
   beginGather,
+  isFarmStroll,
+  FARM_STROLL_SPEED,
 } from './gather.js';
 import { constructionSystem, constructionAssignSystem } from './construction.js';
 import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
@@ -342,6 +344,7 @@ function movementSystem(w, field) {
     }
     if (w.distractCd[i] > 0) speed = fx.mul(speed, DISTRACT_MOVE_MUL);
     if (w.frostTicks?.[i] > 0) speed = fx.mul(speed, FROST_MOVE_MUL);
+    if (isFarmStroll(w, field, i) && speed > FARM_STROLL_SPEED) speed = FARM_STROLL_SPEED;
 
     const typeId = w.type[i];
     const wantX = fx.div(dx, dist);

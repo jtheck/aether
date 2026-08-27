@@ -35,6 +35,10 @@ import {
 } from './tableShape.js';
 import { encodeGarden, decodeGarden, fieldFromGarden, applyGardenPlacements } from './garden.js';
 import { populateScenery } from './scenery.js';
+import { buildTesterGarden } from './testerGarden.js';
+import { UNIT_DEFS } from './unitTypes.js';
+import { PLACEABLE_BUILDINGS } from './buildings.js';
+import { getResource } from './resources.js';
 
 function makeLMask(width, height, cellSize = 16) {
   const { chunksX, chunksZ } = cellCounts(width, height, cellSize);
@@ -345,5 +349,42 @@ describe('garden codec', () => {
     assert.equal(tilesForOddChunks(12), 13 * TABLE_CHUNK_TILES);
     assert.equal(snapTilesToOddChunks(192), 13 * TABLE_CHUNK_TILES);
     assert.equal(snapTilesToOddChunks(128), 9 * TABLE_CHUNK_TILES);
+  });
+
+  it('builds a mirrored 2-player tester garden with one of everything', () => {
+    const json = buildTesterGarden();
+    const g = decodeGarden(json);
+    assert.equal(g.name, 'unit tester');
+    assert.equal(g.width, 144);
+    assert.equal(g.height, 144);
+    const unitTypes = new Set(UNIT_DEFS.map((d) => d.id));
+    const buildingTypes = new Set(PLACEABLE_BUILDINGS.map((b) => b.id));
+    const byOwnerUnits = { 0: new Set(), 1: new Set() };
+    const byOwnerBuildings = { 0: new Set(), 1: new Set() };
+    for (const u of g.units) {
+      byOwnerUnits[u.owner]?.add(u.type);
+    }
+    for (const b of g.buildings) {
+      byOwnerBuildings[b.owner]?.add(b.type);
+    }
+    assert.deepEqual([...byOwnerUnits[0]].sort((a, b) => a - b), [...unitTypes].sort((a, b) => a - b));
+    assert.deepEqual([...byOwnerUnits[1]].sort((a, b) => a - b), [...unitTypes].sort((a, b) => a - b));
+    assert.deepEqual([...byOwnerBuildings[0]].sort(), [...buildingTypes].sort());
+    assert.deepEqual([...byOwnerBuildings[1]].sort(), [...buildingTypes].sort());
+    assert.equal(g.agoras.length, 2);
+    assert.ok(g.agoras.some((a) => a.owner === 0));
+    assert.ok(g.agoras.some((a) => a.owner === 1));
+    const last = g.width - 1;
+    for (const u of g.units.filter((x) => x.owner === 0)) {
+      assert.ok(g.units.some((o) => o.owner === 1 && o.type === u.type && o.tx === last - u.tx && o.tz === u.tz));
+    }
+
+    const field = fieldFromGarden(json);
+    const world = createWorld(g.seed);
+    applyGardenPlacements(world, field, g);
+    assert.equal(world.count, UNIT_DEFS.length * 2);
+    assert.equal(world.buildings.length, PLACEABLE_BUILDINGS.length * 2);
+    assert.ok(getResource(world, 0, 'wood') > 0);
+    assert.ok(getResource(world, 1, 'wood') > 0);
   });
 });

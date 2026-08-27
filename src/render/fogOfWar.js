@@ -87,7 +87,7 @@ export function visionTilesForBuilding(type) {
  * @returns {string}
  */
 export function structureKey(b) {
-  return `${b.type ?? 'agora'}:${Math.round(b.x * 4)}:${Math.round(b.z * 4)}`;
+  return `${b.owner | 0}:${b.type ?? 'agora'}:${Math.round(b.x * 4)}:${Math.round(b.z * 4)}`;
 }
 
 /**
@@ -116,6 +116,9 @@ function cloneBuilding(b) {
     rallyZ: b.rallyZ ?? 0,
     rallyOrder: b.rallyOrder ?? 0,
     prodPaused: b.prodPaused | 0,
+    built: b.built != null ? b.built | 0 : 1,
+    buildProgress: b.buildProgress | 0,
+    buildTime: b.buildTime | 0,
     tracks: (b.tracks ?? []).map((t) => ({ ...t })),
   };
 }
@@ -125,7 +128,7 @@ function displaySig(list) {
   let s = String(list.length);
   for (let i = 0; i < list.length; i++) {
     const b = list[i];
-    s += `|${b.type ?? 'agora'}:${b.owner}:${b.x}:${b.z}`;
+    s += `|${b.type ?? 'agora'}:${b.owner}:${b.x}:${b.z}:${b.built ?? 1}`;
   }
   return s;
 }

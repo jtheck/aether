@@ -394,12 +394,17 @@ export function applyAuthoredScenery(field) {
   ensureSceneryArrays(field);
   refreshTableTerrain(field);
   const occupied = new Uint8Array(n);
+  if (!field.rockStock || field.rockStock.length !== n) field.rockStock = new Uint8Array(n);
+  field.rockStock.fill(0);
+  field.rockStockHash = 0;
   for (let tz = 0; tz < height; tz++) {
     for (let tx = 0; tx < width; tx++) {
       const i = tz * width + tx;
       const kind = field.sceneryType[i];
       if (kind < SCENERY.ROCK_PLAIN) continue;
       markFootprint(field, occupied, field.pass, tx, tz, rockFootprintRadius(kind));
+      field.rockStock[i] = rockYield(kind);
+      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
     }
   }
   applyRockSlowBorder(field, occupied);

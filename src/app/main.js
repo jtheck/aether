@@ -567,6 +567,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       setLocalOwnerTint(localPlayerId, hex);
       updateColors();
       renderer.refreshOwnerTints?.();
+      syncWorkRadiusRing();
     },
   });
   const liteExplorer = createLiteExplorerToggle({
@@ -830,7 +831,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     for (let i = 0; i < (buildings?.length ?? 0); i++) {
       const b = buildings[i];
       if (!b || b.built === 0 || !keys.has(`${b.owner}:${b.type}`)) continue;
-      rings.push({ x: b.x, z: b.z, radius: campWorkRadiusWorld(st, b) });
+      rings.push({ x: b.x, z: b.z, radius: campWorkRadiusWorld(st, b), owner: b.owner });
     }
     renderer.setWorkRadiusRing?.(rings);
   }
@@ -2090,6 +2091,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       refreshFoggedProps();
       updateColors();
       renderer.refreshOwnerTints?.();
+      syncWorkRadiusRing();
     },
     matchMeta,
     setMatchMeta(m) {

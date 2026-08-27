@@ -1,15 +1,17 @@
 // Gather-reach rings — terrain-draped annulus with a priest-bubble rim fade.
-// Additive so the band glows instead of milking the dirt; empty center so it
-// never reads as a filled disc. Vertices sample ground height so the ribbon
-// sits on the terrain instead of burying through it.
+// White outer hairline, owner color on the inward wash. Additive but quieter
+// than the original cyan/gold film. Vertices sample ground height so the
+// ribbon sits on the terrain instead of burying through it.
 
 import {
   addToScene,
   createMeshFromData,
   createShaderMaterial,
   invalidateRenderBundles,
+  setShaderUniform,
   updateMeshPositions,
 } from '../vendor/lite/liteVendor.js';
+import { ownerTint } from './ownerTints.js';
 
 /** How far inward the film fades, in world units. */
 const FADE_WU = 4.4;
@@ -26,7 +28,12 @@ function createRingMaterial() {
   return createShaderMaterial({
     name: 'work-radius-ring',
     attributes: ['position', 'normal', 'uv'],
-    uniforms: ['world', 'viewProjection', 'cameraPosition'],
+    uniforms: [
+      'world',
+      'viewProjection',
+      'cameraPosition',
+      { name: 'tint', type: 'vec3<f32>', defaultValue: [0.38, 0.64, 1.0] },
+    ],
     needAlphaBlending: true,
     blendMode: 'additive',
     depthWrite: false,
@@ -47,15 +54,17 @@ function createRingMaterial() {
   @location(0) uv: vec2<f32>,
 };
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
-  // uv.y = 1 at the outer rim, 0 at the inner fade. Same film curve as the
-  // holy-shield bubble, mapped to radial distance instead of view angle.
+  // uv.y = 1 at the outer rim, 0 at the inner fade.
   let t = 1.0 - input.uv.y;
   let rim = pow(1.0 - t, 1.55);
   let edge = pow(1.0 - t, 4.8);
-  let alpha = clamp(rim * 0.55 + edge * 0.85, 0.0, 1.0);
+  let alpha = clamp(rim * 0.48 + edge * 0.70, 0.0, 1.0);
   if (alpha < 0.02) { discard; }
-  let film = mix(vec3<f32>(0.42, 0.84, 1.0), vec3<f32>(1.0, 0.93, 0.52), edge);
-  let rgb = film * (rim * 1.35 + edge * 2.4);
+  let white = vec3<f32>(0.97, 0.97, 0.99);
+  let tint = shaderUniforms.tint;
+  // Hairline stays white at play zoom; player color only on the inner wash.
+  let film = mix(white, tint, t * t * 0.85);
+  let rgb = film * (rim * 1.00 + edge * 1.50);
   return vec4<f32>(rgb, alpha);
 }`,
   });
@@ -157,7 +166,7 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
 
   return {
     /**
-     * @param {{ x: number, z: number, radius: number }[] | null | undefined} rings
+     * @param {{ x: number, z: number, radius: number, owner?: number }[] | null | undefined} rings
      */
     sync(rings) {
       const list = rings ?? [];
@@ -167,9 +176,11 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
         return;
       }
       let drawn = 0;
+      let tintOwner = 0;
       for (let i = 0; i < n; i++) {
         const spec = list[i];
         if (!(spec?.radius > 0)) continue;
+        if (drawn === 0 && spec.owner != null) tintOwner = spec.owner | 0;
         writeRing(drawn, spec);
         drawn++;
       }
@@ -177,6 +188,8 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
         clear();
         return;
       }
+      const tint = ownerTint(tintOwner);
+      setShaderUniform(mesh.material, 'tint', [tint[0], tint[1], tint[2]]);
       updateMeshPositions(engine, mesh, positions, 0, drawn * VERTS_PER_RING);
       setIndexCount(drawn);
     },

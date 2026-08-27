@@ -18,6 +18,7 @@ import {
   radialClickKind,
   screenPosInRect,
 } from './buildingSelect.js';
+import { pickGatherNodeOnRay, rayTToPoint } from './gatherPick.js';
 
 /** Debug-sphere-equivalent minimum pick height for buildings/agoras (world units). */
 const BUILDING_PICK_MIN_Y = 2.5;
@@ -868,6 +869,36 @@ export function createGameInput(opts) {
     // order onto them (caller should have re-selected instead).
     if (hit >= 0 && world.owner[hit] === localPlayerId) return;
 
+    // Attack-move onto a tree / rock: villagers gather (same volume pick as RMB).
+    if (cmdType === CMD.ATTACK_MOVE) {
+      const node = resolveGatherClick(clientX, clientY);
+      if (node) {
+        const villagers = [];
+        const rest = [];
+        for (let k = 0; k < moveIds.length; k++) {
+          const id = moveIds[k];
+          if (world.owner[id] === localPlayerId && world.type[id] === UNIT.VILLAGER) {
+            villagers.push(id);
+          } else {
+            rest.push(id);
+          }
+        }
+        if (villagers.length > 0) {
+          enqueueCommand({ type: CMD.GATHER, entities: villagers, tile: node.tile });
+          if (epoch !== undefined && !clickCurrent(epoch)) return;
+          onOrder?.(node.x, node.z, node.y, CMD.GATHER, node.tile);
+          if (rest.length === 0) {
+            playVillagerMove();
+            return;
+          }
+          const { tx, ty } = moveDestinations(rest, node.x, node.z);
+          enqueueCommand({ type: cmdType, entities: rest, tx, ty });
+          playVillagerMove();
+          return;
+        }
+      }
+    }
+
     const g = renderer.screenToGround(clientX, clientY);
     if (!g) return;
     if (epoch !== undefined && !clickCurrent(epoch)) return;
@@ -1348,22 +1379,40 @@ export function createGameInput(opts) {
   }
 
   /**
-   * RMB over a tree tile with villagers selected → send them to gather.
+   * Harvestable node under the cursor: tree/rock/farm volume along the click
+   * ray, else the ground tile. CPU AABBs — not GPU mesh pick.
+   * @returns {{ tile: number, x: number, z: number, y: number } | null}
+   */
+  function resolveGatherClick(clientX, clientY) {
+    const field = getField?.();
+    if (!field?.treeStock) return null;
+    const ray = renderer.clientPickingRay?.(clientX, clientY);
+    const g = renderer.screenToGround?.(clientX, clientY);
+    const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
+    const heightAt = (x, z) => renderer.groundYAt?.(x, z) ?? 0;
+    const maxT = ray && g ? Math.max(8, rayTToPoint(ray, g.x, g.y, g.z) + 2) : 400;
+    let tile = pickGatherNodeOnRay(field, ray, { maxT, heightAt });
+    if (tile < 0 && g) {
+      const tx = Math.floor((g.x + half) / TILE_SIZE_F);
+      const tz = Math.floor((g.z + half) / TILE_SIZE_F);
+      if (tx >= 0 && tz >= 0 && tx < field.width && tz < field.height) {
+        tile = gatherNodeTileAt(field, tx, tz);
+      }
+    }
+    if (tile < 0) return null;
+    const w = field.width | 0;
+    const x = ((tile % w) + 0.5) * TILE_SIZE_F - half;
+    const z = (((tile / w) | 0) + 0.5) * TILE_SIZE_F - half;
+    return { tile, x, z, y: heightAt(x, z) };
+  }
+
+  /**
+   * RMB on a tree / rock with villagers selected → gather.
    * Returns true when a GATHER command was issued (skips the force-move).
    */
   function tryGatherAt(clientX, clientY) {
-    const field = getField?.();
-    if (!field?.treeStock) return false;
-    const g = renderer.screenToGround?.(clientX, clientY);
-    if (!g) return false;
-    // Tile from the snapshot's own half-extent — robust to any board size
-    // (the main thread never calls setActiveMapSize).
-    const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
-    const tx = Math.floor((g.x + half) / TILE_SIZE_F);
-    const tz = Math.floor((g.z + half) / TILE_SIZE_F);
-    if (tx < 0 || tx >= field.width || tz < 0) return false;
-    const tile = gatherNodeTileAt(field, tx, tz);
-    if (tile < 0) return false;
+    const node = resolveGatherClick(clientX, clientY);
+    if (!node) return false;
     const world = getWorld();
     const villagers = [];
     for (let k = 0; k < selCount; k++) {
@@ -1373,8 +1422,8 @@ export function createGameInput(opts) {
       }
     }
     if (villagers.length === 0) return false;
-    enqueueCommand({ type: CMD.GATHER, entities: villagers, tile });
-    onOrder?.(g.x, g.z, g.y, CMD.GATHER, tile);
+    enqueueCommand({ type: CMD.GATHER, entities: villagers, tile: node.tile });
+    onOrder?.(node.x, node.z, node.y, CMD.GATHER, node.tile);
     return true;
   }
 

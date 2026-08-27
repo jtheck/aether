@@ -7,11 +7,13 @@ import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/gar
 import { buildWorldFromConfig, kothBases } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { generateAiCommands } from '../sim/ai.js';
+import { generateEconomyCommands } from '../sim/aiEconomy.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
 import { serializeAgoras } from '../sim/agora.js';
 import { serializeBuildings, applyWorldStructureOccupancy } from '../sim/buildings.js';
 import { serializeTech } from '../sim/tech.js';
+import { serializeResources } from '../sim/resources.js';
 import { takeTreeUpdates } from '../sim/trees.js';
 import { takeFireZoneUpdates } from '../sim/fireZones.js';
 import { takeFrogUpdates } from '../sim/frogs.js';
@@ -55,6 +57,8 @@ function commandsForTick(frames) {
     const entry = aiPlayers[p];
     const ai = generateAiCommands(world, entry);
     if (ai.length) cmds = cmds ? [...cmds, ...ai] : ai;
+    const eco = generateEconomyCommands(world, field, entry);
+    if (eco.length) cmds = cmds ? [...cmds, ...eco] : eco;
   }
   return cmds;
 }
@@ -69,6 +73,8 @@ function commandsForTickTimed(frames) {
     const entry = aiPlayers[p];
     const ai = generateAiCommands(world, entry);
     if (ai.length) cmds = cmds ? [...cmds, ...ai] : ai;
+    const eco = generateEconomyCommands(world, field, entry);
+    if (eco.length) cmds = cmds ? [...cmds, ...eco] : eco;
   }
   return { cmds, mergeMs, aiMs: performance.now() - t1 };
 }
@@ -97,7 +103,10 @@ self.onmessage = (e) => {
         || (msg.config.stressPerSide | 0) > 0
         || (msg.config.animStressPerSide | 0) > 0;
       if (garden) applyGardenPlacements(world, field, garden);
-      if (!garden) applyTableSilhouette(field);
+      if (!garden) {
+        field.suppressCenterBlock = !!msg.config.noCenterBlock;
+        applyTableSilhouette(field);
+      }
       if (!garden?.authoredScenery) {
         const reserved = kothBases(field.worldHalfF);
         if (garden) {
@@ -126,6 +135,7 @@ self.onmessage = (e) => {
         agoras: serializeAgoras(world.agoras),
         buildings: serializeBuildings(world.buildings),
         tech: serializeTech(world),
+        resources: serializeResources(world),
         profileSim: !!world.profileSim,
       });
     } else if (msg.type === 'setProfileSim') {
@@ -170,6 +180,8 @@ self.onmessage = (e) => {
       if (world.buildingsDirty) world.buildingsDirty = 0;
       const techChanged = !!world.techDirty;
       if (world.techDirty) world.techDirty = 0;
+      const resourcesChanged = !!world.resourcesDirty;
+      if (world.resourcesDirty) world.resourcesDirty = 0;
       const metrics = { ...world.metrics };
       if (world.profileSim) {
         metrics.timing = {
@@ -192,6 +204,8 @@ self.onmessage = (e) => {
         buildingsChanged,
         tech: serializeTech(world),
         techChanged,
+        resources: serializeResources(world),
+        resourcesChanged,
         treeUpdates,
         fireZoneUpdates,
         frogUpdates,

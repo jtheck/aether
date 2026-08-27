@@ -1,5 +1,7 @@
-// Health chips: five soft rounded squares + optional armor/holy rings on the small tiles.
-// Agora capture recolor is intentionally omitted.
+// Health chips: unit row is 7 (4 big / 3 small, big on the ends), buildings
+// add one more on each end (9). Each HP third is its own full bar — green,
+// then yellow, then red.
+// Optional armor/holy rings sit on the inner small tiles.
 
 import {
   addBillboardSprite,
@@ -14,7 +16,9 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
 
-const DOT_COUNT = 5;
+export const UNIT_CHIP_COUNT = 7;
+export const BUILDING_CHIP_COUNT = 9;
+const CHIP_COUNT_MAX = BUILDING_CHIP_COUNT;
 const TEX = 64;
 const FRAME_SOFT = 0;
 const FRAME_RING_HOLY = 1;
@@ -48,8 +52,8 @@ export const HORIZON_HIDE = 1;
 /** Skip draws when the horizon scale is at or below this. */
 export const HORIZON_HIDE_EPS = 0.04;
 
-/** Max sprites per unit: 5 dots + 2 holy rings + 2 armor rings. */
-const SPRITES_PER_SLOT = 9;
+/** Max sprites per slot: 9 dots + 2 holy rings + 2 armor rings. */
+const SPRITES_PER_SLOT = CHIP_COUNT_MAX + 4;
 /**
  * Toward-camera pull so chips win depth against terrain and unit meshes.
  * (Billboard API always depth-tests; bias is the HUD-style always-visible path.)
@@ -226,10 +230,44 @@ export function chipScreenUpPixels(beta) {
   return CHIP_SCREEN_UP_PX + CHIP_SCREEN_UP_TILT_PX * down;
 }
 
-function fillRgb(ratio) {
-  if (ratio > 0.66) return [0.12, 0.92, 0.2];
-  if (ratio > 0.33) return [0.95, 0.78, 0.12];
-  return [0.92, 0.18, 0.12];
+const RGB_GREEN = [0.12, 0.92, 0.2];
+const RGB_YELLOW = [0.95, 0.78, 0.12];
+const RGB_RED = [0.92, 0.18, 0.12];
+const CHIP_BAND = 1 / 3;
+
+/**
+ * One full bar per HP third. Green empties to 1, then yellow refills, then red.
+ * @param {number} ratio 0..1
+ * @param {number} count chips in this row
+ */
+export function chipBarState(ratio, count) {
+  const n = Math.max(1, count | 0);
+  const r = Math.max(0, Math.min(1, ratio));
+  if (r <= 0) return { filled: 0, rgb: RGB_RED, band: 2 };
+  let band;
+  let t;
+  if (r > CHIP_BAND * 2) {
+    band = 0;
+    t = (r - CHIP_BAND * 2) / CHIP_BAND;
+  } else if (r > CHIP_BAND) {
+    band = 1;
+    t = (r - CHIP_BAND) / CHIP_BAND;
+  } else {
+    band = 2;
+    t = r / CHIP_BAND;
+  }
+  const filled = Math.max(1, Math.min(n, Math.ceil(t * n - 1e-6)));
+  const rgb = band === 0 ? RGB_GREEN : band === 1 ? RGB_YELLOW : RGB_RED;
+  return { filled, rgb, band };
+}
+
+/** Size vs the normal chip. Even = big, odd = small. 7: N S N S N S N. 9: + N S. */
+export function chipSizeMul(index, _count) {
+  return index % 2 === 1 ? DOT_DIAMETER_ALTERNATE_MUL : 1;
+}
+
+function ringDotIndices(count) {
+  return count === BUILDING_CHIP_COUNT ? [3, 5] : [1, 5];
 }
 
 function makeSpriteState() {
@@ -247,11 +285,11 @@ function makeSpriteState() {
 
 function makeSlot() {
   const dots = [];
-  for (let i = 0; i < DOT_COUNT; i++) dots.push(makeSpriteState());
+  for (let i = 0; i < CHIP_COUNT_MAX; i++) dots.push(makeSpriteState());
   return {
     active: false,
     dots,
-    /** Rings only on alternate (small) dots — indices 1 and 3. */
+    /** Rings on the two small chips nearest the center of the inner 7. */
     holy: [makeSpriteState(), makeSpriteState()],
     armor: [makeSpriteState(), makeSpriteState()],
     showHoly: false,
@@ -307,7 +345,7 @@ export function createHealthBars(engine, scene, opts = {}) {
 
   function hide(slot) {
     if (!slot.active) return;
-    for (let i = 0; i < DOT_COUNT; i++) hideSprite(slot.dots[i]);
+    for (let i = 0; i < CHIP_COUNT_MAX; i++) hideSprite(slot.dots[i]);
     for (let i = 0; i < 2; i++) {
       hideSprite(slot.holy[i]);
       hideSprite(slot.armor[i]);
@@ -388,7 +426,7 @@ export function createHealthBars(engine, scene, opts = {}) {
      * @param {number} z
      * @param {number} _unitSize unused — chips are a fixed small size for all units
      * @param {number} ratio 0..1
-     * @param {{ armor?: boolean, holy?: boolean }} [flags]
+     * @param {{ armor?: boolean, holy?: boolean, building?: boolean }} [flags]
      */
     write(x, y, z, _unitSize, ratio, flags = {}) {
       if (used >= capacity) return;
@@ -397,6 +435,7 @@ export function createHealthBars(engine, scene, opts = {}) {
       const r = Math.max(0, Math.min(1, ratio));
       const armor = !!flags.armor;
       const holy = !!flags.holy;
+      const count = flags.building ? BUILDING_CHIP_COUNT : UNIT_CHIP_COUNT;
 
       const [bx, by, bz] = placeChipAnchor(x, y, z);
       const eye = cameraEye();
@@ -408,14 +447,14 @@ export function createHealthBars(engine, scene, opts = {}) {
         : NORMAL_DOT_DIAMETER;
       const normalDot = baseDot * sizeScale;
       const spacing = normalDot * DOT_SPACING_MUL;
-      const totalWidth = (DOT_COUNT - 1) * spacing;
+      const totalWidth = (count - 1) * spacing;
       const [rx, rz] = cameraRight();
-      const rgb = fillRgb(r);
-      const filled = Math.min(DOT_COUNT, Math.ceil(r * DOT_COUNT - 1e-6));
+      const { rgb, filled } = chipBarState(r, count);
+      const ringAt = ringDotIndices(count);
 
       // Armor behind, then holy, then chips (draw order ≈ add/update order).
       for (let ri = 0; ri < 2; ri++) {
-        const dotIndex = ri === 0 ? 1 : 3;
+        const dotIndex = ringAt[ri];
         const along = (dotIndex * spacing) - (totalWidth * 0.5);
         const px = bx + rx * along;
         const pz = bz + rz * along;
@@ -456,10 +495,13 @@ export function createHealthBars(engine, scene, opts = {}) {
         }
       }
 
-      for (let i = 0; i < DOT_COUNT; i++) {
+      for (let i = 0; i < CHIP_COUNT_MAX; i++) {
         const spr = slot.dots[i];
-        const d =
-          i === 1 || i === 3 ? normalDot * DOT_DIAMETER_ALTERNATE_MUL : normalDot;
+        if (i >= count) {
+          hideSprite(spr);
+          continue;
+        }
+        const d = normalDot * chipSizeMul(i, count);
         const along = (i * spacing) - (totalWidth * 0.5);
         spr.position[0] = bx + rx * along;
         spr.position[1] = by;
@@ -494,7 +536,7 @@ export function createHealthBars(engine, scene, opts = {}) {
       clearBillboardSprites(system);
       for (let s = 0; s < capacity; s++) {
         const slot = slots[s];
-        for (let i = 0; i < DOT_COUNT; i++) slot.dots[i].handle = null;
+        for (let i = 0; i < CHIP_COUNT_MAX; i++) slot.dots[i].handle = null;
         for (let i = 0; i < 2; i++) {
           slot.holy[i].handle = null;
           slot.armor[i].handle = null;

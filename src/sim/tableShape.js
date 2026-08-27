@@ -508,7 +508,9 @@ export function tableEdgeMidpoints(field, shape = field.tableShape) {
 }
 
 function stampTableBlocks(field, edge, shape) {
-  if (tableHasCenterBlock(field, shape)) {
+  // `suppressCenterBlock` lets a scenario (e.g. the skirmish table) drop the
+  // KOTH-style center plinth while keeping the rounded rails/corners.
+  if (tableHasCenterBlock(field, shape) && !field.suppressCenterBlock) {
     const center = tableCenterVertex(field);
     field.tableCenter = center;
     stampRoundedRectFootprint(field, edge, center.x, center.z, plinthHalf(shape), plinthCornerRadius(shape));

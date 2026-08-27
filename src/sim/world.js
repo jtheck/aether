@@ -20,6 +20,7 @@ import {
   createSporeGrowthStore,
 } from './sporeBloom.js';
 import { createMonkKickFxStore } from './monkKick.js';
+import { MAX_RESOURCE_OWNERS, RESOURCE_COUNT } from './resources.js';
 
 // Storage headroom is intentionally above the supported 50k stress target.
 // Keep this centralized: world state and the SharedArrayBuffer derive from it.
@@ -33,6 +34,8 @@ export const ORDER = {
   ATTACK_MOVE: 3,
   /** Engineer repairing a mechanical ally (or future building). */
   REPAIR: 4,
+  /** Villager harvesting a resource node + hauling to a drop-off. */
+  GATHER: 5,
 };
 
 export function createWorld(seed) {
@@ -40,6 +43,8 @@ export function createWorld(seed) {
   const engagementSlot = new Int16Array(MAX_ENTITIES);
   engagementTarget.fill(-1);
   engagementSlot.fill(-1);
+  const gatherTile = new Int32Array(MAX_ENTITIES);
+  gatherTile.fill(-1);
   return {
     tick: 0,
     count: 0,
@@ -96,6 +101,14 @@ export function createWorld(seed) {
     engagementMask: new Uint16Array(MAX_ENTITIES),
     targetLoad: new Uint16Array(MAX_ENTITIES),
 
+    // villager gathering (see gather.js) — tile being harvested + carried load
+    gatherTile,
+    /** 0 = empty; otherwise (resource kind index + 1), see resources.js RESOURCE_KINDS. */
+    carriedKind: new Uint8Array(MAX_ENTITIES),
+    carriedAmt: new Int32Array(MAX_ENTITIES),
+    /** Ticks until the next harvest bite. */
+    gatherCd: new Int16Array(MAX_ENTITIES),
+
     // pathfinding
     navDestX: new Int32Array(MAX_ENTITIES),
     navDestY: new Int32Array(MAX_ENTITIES),
@@ -112,6 +125,10 @@ export function createWorld(seed) {
     tech: new Uint32Array(16),
     /** Set when tech bits change; worker publishes then clears. */
     techDirty: 0,
+    /** Per-owner resource banks — wood/stone/mineral/food (see resources.js). */
+    resources: new Int32Array(MAX_RESOURCE_OWNERS * RESOURCE_COUNT),
+    /** Set when a bank changes; worker publishes then clears. */
+    resourcesDirty: 0,
     lastPx: new Int32Array(MAX_ENTITIES),
     lastPy: new Int32Array(MAX_ENTITIES),
 
@@ -185,6 +202,10 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.engagementSlot[i] = -1;
   w.engagementMask[i] = 0;
   w.targetLoad[i] = 0;
+  w.gatherTile[i] = -1;
+  w.carriedKind[i] = 0;
+  w.carriedAmt[i] = 0;
+  w.gatherCd[i] = 0;
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;
   w.pathRequest[i] = 0;

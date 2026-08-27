@@ -15,16 +15,17 @@ import {
   snapToPassable,
 } from './field.js';
 import { fellTreeAt } from './trees.js';
-import { UNIT, getUnitDef, isFlyer } from './unitTypes.js';
+import { UNIT, getUnitDef, isFlyer, getUnitCost } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { MAX_WAYPOINTS, queuePath } from './path.js';
+import { spendResources, addResource } from './resources.js';
 
 /** Scratch buffers for render-side rally A* (main thread only). */
 const _rallyWx = new Int32Array(MAX_WAYPOINTS);
 const _rallyWy = new Int32Array(MAX_WAYPOINTS);
 import { clearEngagement } from './engagement.js';
 import { isCarried } from './transport.js';
-import { ownerHasTech, TECH_BY_ID } from './tech.js';
+import { ownerHasTech, TECH_BY_ID, getTechCost } from './tech.js';
 import { GENERATED_BUILDING_SPAWN_LOCAL } from './buildingSpawnLocal.generated.js';
 
 /** @typedef {'basic' | 'advanced' | 'elemental'} BuildingCategoryId */
@@ -157,6 +158,41 @@ const BUILDING_DISPLAY_NAMES = Object.freeze({
 /** Display name for agora / placeable type ids (selection HUD, menus). */
 export function getBuildingDisplayName(typeId) {
   return BUILDING_DISPLAY_NAMES[typeId] ?? String(typeId ?? '');
+}
+
+/**
+ * Placement cost per building (wood/stone/mineral/food). Charged on placement,
+ * no refund (see applyPlaceBuilding). v1's building prices were placeholder
+ * single-digits; re-priced here into a real curve against the ~90-wood start:
+ *   basic  — affordable early from wood alone (econ/expansion),
+ *   advanced — needs a stone economy first (military/tech),
+ *   elemental — mineral-gated premium tier.
+ * @type {Readonly<Record<string, Record<string, number>>>}
+ */
+export const BUILDING_COST = Object.freeze({
+  // basic
+  camp: { wood: 40 },
+  village: { wood: 60 },
+  farm: { wood: 30 },
+  silo: { wood: 25 },
+  mine: { wood: 40, stone: 10 },
+  // advanced
+  tower: { wood: 30, stone: 40 },
+  tavern: { wood: 50, stone: 20 },
+  barracks: { wood: 60, stone: 25 },
+  workshop: { wood: 60, stone: 40 },
+  lab: { wood: 30, stone: 40, mineral: 10 },
+  // elemental
+  factory: { wood: 40, stone: 60, mineral: 25 },
+  church: { wood: 40, stone: 30, mineral: 15 },
+  moonwell: { stone: 50, mineral: 20 },
+  perch: { wood: 60, stone: 20, mineral: 15 },
+  grove: { wood: 50, stone: 20, mineral: 15 },
+});
+
+/** Resource cost to place a building type ({} when free/undefined). */
+export function getBuildingCost(typeId) {
+  return BUILDING_COST[typeId] ?? {};
 }
 
 /**
@@ -447,6 +483,18 @@ export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed) {
       field.slowMask[i] = 1;
     }
   });
+  // A farm is a food worksite: mark its center tile as an infinite food node so
+  // villagers gather/deposit food in place (see gather.js). Rebuilds/checkpoints
+  // re-stamp occupancy, so this stays in sync with the building set.
+  if (typeId === 'farm') {
+    const n = field.width * field.height;
+    if (!field.foodNode || field.foodNode.length !== n) field.foodNode = new Uint8Array(n);
+    const tx = worldToTile(xFixed);
+    const tz = worldToTile(zFixed);
+    if (tx >= 0 && tz >= 0 && tx < field.width && tz < field.height) {
+      field.foodNode[tz * field.width + tx] = 1;
+    }
+  }
 }
 
 /**
@@ -737,6 +785,7 @@ export function applyPlaceBuilding(w, field, cmd) {
   const z = snapped.z;
   const yaw = cmd.yaw != null ? cmd.yaw | 0 : 0;
   if (field && !canPlaceBuildingAt(field, type, x, z)) return -1;
+  if (!spendResources(w, owner, getBuildingCost(type))) return -1;
   w.buildings.push({
     owner,
     type,
@@ -819,6 +868,7 @@ export function applyQueueTrain(w, cmd) {
   if (unitType == null) return;
   const menu = BUILDING_MENUS[b.type];
   if (!menu?.units?.includes(unitKey)) return;
+  if (!spendResources(w, b.owner | 0, getUnitCost(unitType))) return;
   if (!b.tracks) b.tracks = [];
   let track = null;
   for (let i = 0; i < b.tracks.length; i++) {
@@ -860,6 +910,7 @@ export function applyQueueResearch(w, cmd) {
     const t = b.tracks[i];
     if (t.kind === 'upgrade' && t.id === techId && (t.count | 0) > 0) return;
   }
+  if (!spendResources(w, playerId, getTechCost(techId))) return;
   b.tracks.push({ kind: 'upgrade', id: techId, count: 1, progress: 0 });
   w.buildingsDirty = 1;
 }
@@ -878,9 +929,22 @@ export function applyCancelTrain(w, cmd) {
   const playerId = (cmd.playerId ?? -1) | 0;
   if ((b.owner | 0) !== playerId) return;
   if (!b.tracks?.length) return;
+  refundTracks(w, b);
   b.tracks = [];
   b.prodPaused = 0;
   w.buildingsDirty = 1;
+}
+
+/** Return resources for every queued-but-unspawned unit / cancelled upgrade. */
+function refundTracks(w, b) {
+  const owner = b.owner | 0;
+  for (let i = 0; i < b.tracks.length; i++) {
+    const t = b.tracks[i];
+    const count = t.count | 0;
+    if (count <= 0) continue;
+    const cost = t.kind === 'upgrade' ? getTechCost(t.id) : getUnitCost(t.unitType);
+    for (const kind in cost) addResource(w, owner, kind, (cost[kind] | 0) * count);
+  }
 }
 
 function buildingHasProduction(b) {

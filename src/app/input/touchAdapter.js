@@ -37,6 +37,8 @@ const CHORD_MAX_STAGGER_MS = 90;
 const PINCH_ZOOM_SENS = 0.0012;
 /** nudgeRotate multiplier per radian of finger-pair rotation. */
 const PINCH_ROTATE_SENS = 0.16;
+/** Same feel as RMB drag-pan (cameraController.panByScreenDelta, RMB_PAN_BASE). */
+const TOUCH_PAN_BASE = 5.0;
 /** Total span/angle/centroid change before a chord engages that axis (tap vs gesture). */
 const PINCH_DIST_DEADZONE_PX = 10;
 /** ~0.45° — engage twist almost immediately (cumulative |dangle| also counts). */
@@ -76,8 +78,6 @@ const CENTER_PAN_HOLD_MS = 95;
 const CENTER_PAN_HOLD_MAX_MOVE_PX = 10;
 const CENTER_PAN_HOLD_MAX_MOVE_SQ = CENTER_PAN_HOLD_MAX_MOVE_PX * CENTER_PAN_HOLD_MAX_MOVE_PX;
 const BOX_DRAG_THRESHOLD_SQ = DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX;
-/** Synthetic grab owner for a two-finger chord (not a real pointerId). */
-const PINCH_GRAB_ID = -1;
 
 /**
  * @param {object} opts
@@ -183,15 +183,13 @@ export function createTouchAdapter({ canvas, camera, game }) {
     clearPanHoldTimerFor(id);
     // Single gameplay seat — take over if another finger was boxing/tapping.
     if (soloId != null && soloId !== id) {
-      const prevId = soloId;
-      const prev = touches.get(prevId);
+      const prev = touches.get(soloId);
       soloId = null;
       game.cancelDrag();
       if (prev && prev.role === 'solo') {
         prev.role = 'pan';
         prev.lastX = prev.x;
         prev.lastY = prev.y;
-        camera.beginGrabPan(prev.x, prev.y, prevId);
       }
     }
     soloId = id;
@@ -234,7 +232,6 @@ export function createTouchAdapter({ canvas, camera, game }) {
       t.role = 'pan';
       t.lastX = t.x;
       t.lastY = t.y;
-      camera.beginGrabPan(t.x, t.y, id);
     }, delay);
     panHoldTimers.set(id, timeoutId);
   }
@@ -262,10 +259,13 @@ export function createTouchAdapter({ canvas, camera, game }) {
     armCenterFinger(id, t);
   }
 
-  function applyCenterPan(id, t) {
+  function applyCenterPan(t) {
+    const dx = t.x - t.lastX;
+    const dy = t.y - t.lastY;
     t.lastX = t.x;
     t.lastY = t.y;
-    camera.grabPanTo(t.x, t.y, id);
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    camera.panByScreenDelta(dx, dy, TOUCH_PAN_BASE);
   }
 
   function updatePendingMove(id, t) {
@@ -411,7 +411,6 @@ export function createTouchAdapter({ canvas, camera, game }) {
     b.role = 'pinch';
     pinchIds = [idA, idB];
     const c0 = centroidOf(a, b);
-    camera.beginGrabPan(c0.x, c0.y, PINCH_GRAB_ID);
     pinchBaseline = {
       startTime: performance.now(),
       movedPx: 0,
@@ -563,10 +562,12 @@ export function createTouchAdapter({ canvas, camera, game }) {
     if (b0.engagedRotate && Math.abs(dangle) > 1e-4) {
       camera.nudgeRotate(dangle * PINCH_ROTATE_SENS * w.rotate);
     }
-    // Keep the planted centroid world point under the fingers (also recenters
-    // zoom/rotate onto that plant so the chord doesn't drift).
-    if (b0.engagedPan || b0.engagedZoom || b0.engagedRotate) {
-      camera.grabPanTo(centroid.x, centroid.y, PINCH_GRAB_ID);
+    // Pan: full 1-finger strength when slide leads; only soften when zoom/twist dominate.
+    if (b0.engagedPan && panPxRaw > 0.05) {
+      const panLeads =
+        b0.emaPan >= b0.emaZoom * 0.85 && b0.emaPan >= b0.emaRotate * 0.85;
+      const panScale = panLeads ? 1 : w.pan;
+      camera.panByScreenDelta(cdx * panScale, cdy * panScale, TOUCH_PAN_BASE);
     }
 
     b0.lastCentroid = centroid;
@@ -600,8 +601,6 @@ export function createTouchAdapter({ canvas, camera, game }) {
 
   function handlePointerDown(e) {
     const id = e.pointerId;
-    // New contact kills leftover throw so a chained pan doesn't rubber-band.
-    camera.stopPanCoast();
     // Replace any ghost with the same id (OS reuse after a missed up).
     if (touches.has(id)) releasePointer(id, 'pointercancel', /*emitTap*/ false);
 
@@ -651,7 +650,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
         applyEdgeCamera(t);
         return;
       case 'pan':
-        applyCenterPan(id, t);
+        applyCenterPan(t);
         return;
       case 'pending':
         updatePendingMove(id, t);
@@ -697,7 +696,6 @@ export function createTouchAdapter({ canvas, camera, game }) {
         // Keep camera control if they stay down; lift will not a-move (suppressTap).
         armSurvivor(otherId, other);
       }
-      adoptPanGrabOrEnd(cancelled);
       return;
     }
 
@@ -724,23 +722,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
       soloId = null;
       game.cancelDrag();
     }
-    const wasPan = t.role === 'pan';
     touches.delete(id);
-    if (wasPan) adoptPanGrabOrEnd(cancelled);
-    else endGrabIfIdle(cancelled);
-  }
-
-  function nextPanFinger() {
-    for (const [id, t] of touches) {
-      if (t.role === 'pan') return { id, t };
-    }
-    return null;
-  }
-
-  function adoptPanGrabOrEnd(cancelled) {
-    const other = nextPanFinger();
-    if (other) camera.beginGrabPan(other.t.x, other.t.y, other.id);
-    else endGrabIfIdle(cancelled);
   }
 
   function handlePointerUp(e) {
@@ -750,17 +732,6 @@ export function createTouchAdapter({ canvas, camera, game }) {
   }
 
   /** Blur / focus loss / visibility — hard clear so no ghost blocks future gestures. */
-  function anyGrabTouch() {
-    for (const t of touches.values()) {
-      if (t.role === 'pan' || t.role === 'pinch') return true;
-    }
-    return false;
-  }
-
-  function endGrabIfIdle(cancelled = false) {
-    if (!anyGrabTouch()) camera.endGrabPan();
-  }
-
   function reset() {
     clearAllPanHoldTimers();
     if (soloId != null) {
@@ -772,7 +743,6 @@ export function createTouchAdapter({ canvas, camera, game }) {
     tapChordIds = null;
     tapChordBaseline = null;
     touches.clear();
-    camera.endGrabPan();
   }
 
   return {

@@ -129,22 +129,22 @@
       "reverseWinding": true,
       "positions": {
         "offset": 1672,
-        "length": 3585,
+        "length": 3555,
         "type": "f32"
       },
       "normals": {
-        "offset": 16012,
-        "length": 3585,
+        "offset": 15892,
+        "length": 3555,
         "type": "f32"
       },
       "indices": {
-        "offset": 30352,
-        "length": 1842,
+        "offset": 30112,
+        "length": 1794,
         "type": "u32"
       },
       "uvs": {
-        "offset": 37720,
-        "length": 2390,
+        "offset": 37288,
+        "length": 2370,
         "type": "f32"
       }
     },
@@ -153,22 +153,22 @@
       "materialIndex": 2,
       "reverseWinding": true,
       "positions": {
-        "offset": 47280,
+        "offset": 46768,
         "length": 468,
         "type": "f32"
       },
       "normals": {
-        "offset": 49152,
+        "offset": 48640,
         "length": 468,
         "type": "f32"
       },
       "indices": {
-        "offset": 51024,
+        "offset": 50512,
         "length": 234,
         "type": "u32"
       },
       "uvs": {
-        "offset": 51960,
+        "offset": 51448,
         "length": 312,
         "type": "f32"
       }
@@ -178,22 +178,22 @@
       "materialIndex": 3,
       "reverseWinding": true,
       "positions": {
-        "offset": 53208,
+        "offset": 52696,
         "length": 168,
         "type": "f32"
       },
       "normals": {
-        "offset": 53880,
+        "offset": 53368,
         "length": 168,
         "type": "f32"
       },
       "indices": {
-        "offset": 54552,
+        "offset": 54040,
         "length": 84,
         "type": "u32"
       },
       "uvs": {
-        "offset": 54888,
+        "offset": 54376,
         "length": 112,
         "type": "f32"
       }
@@ -203,22 +203,22 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "positions": {
-        "offset": 55336,
+        "offset": 54824,
         "length": 462,
         "type": "f32"
       },
       "normals": {
-        "offset": 57184,
+        "offset": 56672,
         "length": 462,
         "type": "f32"
       },
       "indices": {
-        "offset": 59032,
+        "offset": 58520,
         "length": 240,
         "type": "u32"
       },
       "uvs": {
-        "offset": 59992,
+        "offset": 59480,
         "length": 308,
         "type": "f32"
       }

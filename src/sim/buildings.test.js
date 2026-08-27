@@ -1,7 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorld, spawn, ORDER } from './world.js';
+import { createWorld as _createWorld, spawn, ORDER } from './world.js';
 import { applyCommands, CMD } from './commands.js';
+import { grantStartingResources } from './resources.js';
 import {
   buildField,
   isPassable,
@@ -30,6 +31,15 @@ import { createAgoras } from './agora.js';
 import { UNIT } from './unitTypes.js';
 import { planPathBudget } from './path.js';
 import { step } from './step.js';
+
+// Placement/training now charge resources — fund every test world generously so
+// these mechanics tests stay about footprints/production, not affordability.
+function createWorld(seed) {
+  const w = _createWorld(seed);
+  const rich = { wood: 5000, stone: 5000, mineral: 5000, food: 5000 };
+  for (const owner of [0, 1, 2]) grantStartingResources(w, owner, rich);
+  return w;
+}
 
 function snapFloat(type, xF, zF) {
   const s = snapBuildingWorld(type, fx.fromFloat(xF), fx.fromFloat(zF));

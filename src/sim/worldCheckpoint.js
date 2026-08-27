@@ -9,6 +9,7 @@ import { applyWorldStructureOccupancy, defaultRallyWorld } from './buildings.js'
 import { ORDER } from './world.js';
 import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
+import { applySerializedResources, serializeResources } from './resources.js';
 import { ensureFrogCapacity } from './frogs.js';
 import { ensureFireZoneCapacity } from './fireZones.js';
 import { capacityFor } from './capacity.js';
@@ -20,15 +21,17 @@ const ENTITY_I32 = [
   'px', 'py', 'vx', 'vy', 'faceX', 'faceY', 'tx', 'ty', 'speed', 'targetEntity', 'engagementTarget',
   'navDestX', 'navDestY', 'lastPx', 'lastPy', 'hp', 'carriedBy', 'transportTarget',
   'dotSource', 'lobFromX', 'lobFromY', 'lobToX', 'lobToY', 'squadId',
+  'gatherTile', 'carriedAmt',
 ];
 const ENTITY_I16 = [
   'engagementSlot', 'attackCd', 'abilityCd', 'distractCd', 'shieldHp', 'shieldTicks',
   'dotTicks', 'dotDamage', 'dotPeriod', 'dotAcc', 'frostTicks', 'lobTicks', 'lobDur', 'lobPeak',
+  'gatherCd',
 ];
 const ENTITY_U16 = ['engagementMask', 'targetLoad'];
 const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
-  'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive',
+  'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
 ];
 
 /**
@@ -91,6 +94,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     agoras: exportAgoras(w.agoras),
     buildings: exportBuildings(w.buildings),
     tech: serializeTech(w),
+    resources: serializeResources(w),
     field: exportFieldMutable(field),
   };
 }
@@ -171,6 +175,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   importAgoras(w, checkpoint.agoras);
   importBuildings(w, checkpoint.buildings);
   applySerializedTech(w, checkpoint.tech);
+  applySerializedResources(w, checkpoint.resources);
   importFieldMutable(field, checkpoint.field);
   // pass is not checkpointed; re-stamp building/agora footprints (rocks stay from init).
   applyWorldStructureOccupancy(field, w);
@@ -369,6 +374,8 @@ function exportFieldMutable(field) {
     treeStockHash: field.treeStockHash | 0,
     treeStock: encodeTA(field.treeStock, n),
     treeBurn: encodeTA(field.treeBurn, n),
+    rockStockHash: field.rockStockHash | 0,
+    rockStock: encodeTA(field.rockStock, n),
     sceneryType: encodeTA(field.sceneryType, n),
     slowMask: encodeTA(field.slowMask, n),
     burningTrees: Array.from(field.burningTrees ?? []),
@@ -385,6 +392,11 @@ function importFieldMutable(field, data) {
   decodeTAInto(field.sceneryType, data.sceneryType);
   decodeTAInto(field.slowMask, data.slowMask);
   field.treeStockHash = data.treeStockHash | 0;
+  if (!field.rockStock || field.rockStock.length !== field.width * field.height) {
+    field.rockStock = new Uint8Array(field.width * field.height);
+  }
+  decodeTAInto(field.rockStock, data.rockStock);
+  field.rockStockHash = data.rockStockHash | 0;
   field.burningTrees = Array.from(data.burningTrees ?? []);
   if (Array.isArray(field.treeDirty)) field.treeDirty.length = 0;
 }

@@ -864,11 +864,17 @@ function buildSilhouetteFrameMeshes(engine, field) {
       endgrain,
     );
   }
-  if (tableHasCenterBlock(field, shape)) {
-    const mid = field.tableCenter ?? tableCenterVertex(field);
+  // Follow the sim's decision — field.tableCenter is set when a plinth was
+  // stamped and null when the board has none or a scenario suppressed it
+  // (e.g. the skirmish table). Fall back to recompute only when unset (older
+  // snapshots / raw fields that never ran stampTableBlocks).
+  const centerBlock = field.tableCenter !== undefined
+    ? field.tableCenter
+    : (tableHasCenterBlock(field, shape) ? tableCenterVertex(field) : null);
+  if (centerBlock) {
     pushRoundedPrism(
       cornerPositions, cornerNormals, cornerUvs, cornerIndices,
-      mid.x, mid.z, keepHalf, keepCorner, plinthTop, FRAME_BOTTOM_Y,
+      centerBlock.x, centerBlock.z, keepHalf, keepCorner, plinthTop, FRAME_BOTTOM_Y,
       endgrain,
     );
   }

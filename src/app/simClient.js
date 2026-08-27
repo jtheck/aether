@@ -149,12 +149,14 @@ export class SimClient {
       this._agoras = msg.agoras ?? [];
       this._buildings = msg.buildings ?? [];
       this._tech = msg.tech ?? [];
+      this._resources = msg.resources ?? [];
       this._initResolve?.({
         count: msg.count,
         field: this._field,
         agoras: this._agoras,
         buildings: this._buildings,
         tech: this._tech,
+        resources: this._resources,
       });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {
@@ -166,6 +168,8 @@ export class SimClient {
         buildingsChanged: !!msg.buildingsChanged,
         tech: msg.tech,
         techChanged: !!msg.techChanged,
+        resources: msg.resources,
+        resourcesChanged: !!msg.resourcesChanged,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,
         fireZoneUpdates: msg.fireZoneUpdates ?? null,

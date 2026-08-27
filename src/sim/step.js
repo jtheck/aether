@@ -48,6 +48,7 @@ import {
   isCarried,
 } from './transport.js';
 import { repairSystem } from './repair.js';
+import { gatherSystem, campAutoAssignSystem } from './gather.js';
 import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
@@ -145,6 +146,8 @@ export function step(world, field, commands) {
   phase('buildings', () => buildingProductionSystem(world, field));
   phase('transport', () => transportAutoLoadSystem(world));
   phase('repair', () => repairSystem(world));
+  phase('autoGather', () => campAutoAssignSystem(world, field));
+  phase('gather', () => gatherSystem(world, field));
   phase('combat', () => combatSystem(world, field));
   phase('projectiles', () => projectileSystem(world, field));
   phase('status', () => tickCombatStatus(world));
@@ -204,6 +207,15 @@ function movementSystem(w, field) {
     // Engineer holding repair range — repairSystem owns cadence.
     if (order === ORDER.REPAIR) {
       // Still allow movement toward target when out of range (path active).
+      if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
+        w.vx[i] = 0;
+        w.vy[i] = 0;
+        continue;
+      }
+    }
+
+    // Villager holding at a node / drop-off — gatherSystem owns cadence.
+    if (order === ORDER.GATHER) {
       if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
         w.vx[i] = 0;
         w.vy[i] = 0;

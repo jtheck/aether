@@ -79,6 +79,104 @@ export function defaultCelestialState() {
   };
 }
 
+/**
+ * Curated lighting moods. Body 0 is always the directional key (casts shadows);
+ * body 1 is the fill, kept ~opposite so camera yaw never collapses to black.
+ * Mood comes from kind (sun = warm, moon = cool-neutral), the key/fill ratio,
+ * and the exposure / contrast / clearColor grade (exposure is the all-angle
+ * brightness lift, matching the default rig). Single source of truth: the game
+ * renderer and the forge both build from createCelestialRig, so these render
+ * identically in-game.
+ * @type {{ id: string, name: string, state: ReturnType<typeof defaultCelestialState> }[]}
+ */
+export const CELESTIAL_PRESETS = [
+  { id: 'default', name: 'Studio (default)', state: defaultCelestialState() },
+  {
+    id: 'noon',
+    name: 'High Noon',
+    state: {
+      exposure: 1.5,
+      contrast: 1.0,
+      clearColor: [0.21, 0.25, 0.23],
+      bodies: [
+        { kind: BODY.SUN, azimuth: 120, elevation: 76, intensity: 1.85 },
+        { kind: BODY.HEMI, azimuth: 300, elevation: 70, intensity: 0.5 },
+      ],
+    },
+  },
+  {
+    id: 'golden',
+    name: 'Golden Hour',
+    state: {
+      exposure: 1.62,
+      contrast: 1.16,
+      clearColor: [0.26, 0.19, 0.12],
+      bodies: [
+        { kind: BODY.SUN, azimuth: 95, elevation: 12, intensity: 1.9 },
+        { kind: BODY.HEMI, azimuth: 275, elevation: 52, intensity: 0.4 },
+      ],
+    },
+  },
+  {
+    id: 'dusk',
+    name: 'Blue Dusk',
+    state: {
+      exposure: 1.42,
+      contrast: 1.12,
+      clearColor: [0.12, 0.15, 0.21],
+      bodies: [
+        { kind: BODY.MOON, azimuth: 68, elevation: 12, intensity: 1.3 },
+        { kind: BODY.HEMI, azimuth: 248, elevation: 64, intensity: 0.6 },
+      ],
+    },
+  },
+  {
+    id: 'night',
+    name: 'Moonlit Night',
+    state: {
+      exposure: 1.22,
+      contrast: 1.18,
+      clearColor: [0.06, 0.09, 0.13],
+      bodies: [
+        { kind: BODY.MOON, azimuth: 210, elevation: 58, intensity: 1.05 },
+        { kind: BODY.HEMI, azimuth: 30, elevation: 70, intensity: 0.34 },
+      ],
+    },
+  },
+  {
+    id: 'overcast',
+    name: 'Overcast',
+    state: {
+      exposure: 1.5,
+      contrast: 0.9,
+      clearColor: [0.24, 0.25, 0.24],
+      bodies: [
+        { kind: BODY.SUN, azimuth: 140, elevation: 80, intensity: 0.9 },
+        { kind: BODY.HEMI, azimuth: 320, elevation: 72, intensity: 0.95 },
+      ],
+    },
+  },
+  {
+    id: 'rim',
+    name: 'Rim Light',
+    state: {
+      exposure: 1.5,
+      contrast: 1.3,
+      clearColor: [0.11, 0.12, 0.11],
+      bodies: [
+        { kind: BODY.SUN, azimuth: 205, elevation: 9, intensity: 2.1 },
+        { kind: BODY.EMIT, azimuth: 25, elevation: 60, intensity: 0.22 },
+      ],
+    },
+  },
+];
+
+/** @param {string} id @returns {ReturnType<typeof defaultCelestialState> | null} */
+export function celestialPresetState(id) {
+  const found = CELESTIAL_PRESETS.find((p) => p.id === id);
+  return found ? cloneState(found.state) : null;
+}
+
 function cloneState(src) {
   const base = defaultCelestialState();
   if (!src) return base;

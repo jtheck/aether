@@ -227,6 +227,7 @@ function needsPath(w, i) {
   if (order === ORDER.MOVE || order === ORDER.ATTACK_MOVE) return w.hasTarget[i] !== 0;
   if (order === ORDER.ATTACK) return w.targetEntity[i] >= 0;
   if (order === ORDER.REPAIR) return w.targetEntity[i] >= 0;
+  if (order === ORDER.GATHER) return w.gatherTile[i] >= 0;
   return false;
 }
 

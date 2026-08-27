@@ -18,6 +18,10 @@ import {
   roofChipLift,
   unitChipLift,
   worldSizeForScreenPx,
+  UNIT_CHIP_COUNT,
+  BUILDING_CHIP_COUNT,
+  chipBarState,
+  chipSizeMul,
 } from './healthBars.js';
 import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
 
@@ -101,5 +105,53 @@ describe('health chip horizon fade', () => {
     assert.ok(playN > HORIZON_FADE_START);
     assert.ok(chipHorizonScale(playN) > 0 && chipHorizonScale(playN) < 1);
     assert.equal(chipHorizonScale(1), 0);
+  });
+});
+
+describe('health chip bars', () => {
+  it('gives each HP third its own full bar', () => {
+    const full = chipBarState(1, UNIT_CHIP_COUNT);
+    assert.equal(full.filled, 7);
+    assert.equal(full.band, 0);
+
+    const lastGreen = chipBarState(2 / 3 + 1e-4, UNIT_CHIP_COUNT);
+    assert.equal(lastGreen.filled, 1);
+    assert.equal(lastGreen.band, 0);
+
+    const yellowFull = chipBarState(2 / 3, UNIT_CHIP_COUNT);
+    assert.equal(yellowFull.filled, 7);
+    assert.equal(yellowFull.band, 1);
+
+    const lastYellow = chipBarState(1 / 3 + 1e-4, UNIT_CHIP_COUNT);
+    assert.equal(lastYellow.filled, 1);
+    assert.equal(lastYellow.band, 1);
+
+    const redFull = chipBarState(1 / 3, UNIT_CHIP_COUNT);
+    assert.equal(redFull.filled, 7);
+    assert.equal(redFull.band, 2);
+
+    const lastRed = chipBarState(0.01, UNIT_CHIP_COUNT);
+    assert.equal(lastRed.filled, 1);
+    assert.equal(lastRed.band, 2);
+
+    assert.equal(chipBarState(0, UNIT_CHIP_COUNT).filled, 0);
+    assert.equal(chipBarState(1, BUILDING_CHIP_COUNT).filled, 9);
+  });
+
+  it('puts big chips on the ends (4 big / 3 small on units)', () => {
+    assert.equal(chipSizeMul(0, UNIT_CHIP_COUNT), 1);
+    assert.equal(chipSizeMul(6, UNIT_CHIP_COUNT), 1);
+    assert.ok(chipSizeMul(1, UNIT_CHIP_COUNT) < 1);
+    let big = 0;
+    let small = 0;
+    for (let i = 0; i < UNIT_CHIP_COUNT; i++) {
+      if (chipSizeMul(i, UNIT_CHIP_COUNT) < 1) small++;
+      else big++;
+    }
+    assert.equal(big, 4);
+    assert.equal(small, 3);
+    assert.equal(chipSizeMul(0, BUILDING_CHIP_COUNT), 1);
+    assert.equal(chipSizeMul(8, BUILDING_CHIP_COUNT), 1);
+    assert.ok(chipSizeMul(1, BUILDING_CHIP_COUNT) < 1);
   });
 });

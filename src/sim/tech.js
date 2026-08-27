@@ -1,7 +1,27 @@
-// Owner-wide researched tech bits (minimal — no cost / research time yet).
+// Owner-wide researched tech bits. Research is charged on queue (see buildings.js).
 
 /** Cap owners that can hold tech masks (staging + koth headroom). */
 export const MAX_TECH_OWNERS = 16;
+
+/**
+ * Research cost per upgrade id (v1 template — mineral-heavy on the power techs).
+ * Charged on queue, refunded on cancel.
+ * @type {Readonly<Record<string, Record<string, number>>>}
+ */
+export const TECH_COST = Object.freeze({
+  patronage: { food: 50, mineral: 25 },
+  armor: { stone: 40, mineral: 20 },
+  artillery: { stone: 60, mineral: 40 },
+  drayage: { wood: 40, stone: 20 },
+  prospecting: { food: 25, stone: 20 },
+  scribes: { food: 30, mineral: 15 },
+  stewardship: { food: 35, wood: 25 },
+});
+
+/** Resource cost to research a tech ({} when free/undefined). */
+export function getTechCost(techId) {
+  return TECH_COST[techId] ?? {};
+}
 
 /**
  * Bit flags per upgrade id (matches UPGRADE_DEFS / radial pads).

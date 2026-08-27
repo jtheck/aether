@@ -326,6 +326,33 @@ export function getUnitDef(typeId) {
 }
 
 /**
+ * Training cost per unit (wood/stone/mineral/food). Charged on queue, refunded
+ * on cancel (see buildings.js). Values follow the v1 template — food-heavy for
+ * living units, wood/stone for mechanical, with a mineral touch on the flyer.
+ * @type {Readonly<Record<number, Record<string, number>>>}
+ */
+export const UNIT_COST = Object.freeze({
+  [UNIT.VILLAGER]: { food: 15 },
+  [UNIT.WARRIOR]: { food: 25, wood: 15 },
+  [UNIT.ARCHER]: { food: 20, wood: 25 },
+  [UNIT.WARLOCK]: { food: 35, wood: 30 },
+  [UNIT.PRIEST]: { food: 25, wood: 40 },
+  [UNIT.MYCO]: { food: 30, wood: 30 },
+  [UNIT.SHAMAN]: { food: 25, wood: 30 },
+  [UNIT.WIZARD]: { food: 30, wood: 20 },
+  [UNIT.MONK]: { food: 20, wood: 10 },
+  [UNIT.ENGINEER]: { food: 35, stone: 20 },
+  [UNIT.WAGON]: { wood: 40, stone: 10 },
+  [UNIT.DIRIGIBLE]: { wood: 70, mineral: 5 },
+  [UNIT.APC]: { wood: 30, stone: 40 },
+});
+
+/** Resource cost to train a unit type ({} when free/undefined). */
+export function getUnitCost(typeId) {
+  return UNIT_COST[typeId] ?? {};
+}
+
+/**
  * Heading blend per tick (0–1). Higher = snappier turn.
  * Override with `def.steer`; else scales with size (big = slower).
  */

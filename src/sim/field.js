@@ -41,6 +41,10 @@ export function snapTilesToOddChunks(tiles, cellSize = TABLE_CHUNK_TILES) {
 export const DEFAULT_MAP_CHUNKS = 13;
 export const DEFAULT_MAP_W = tilesForOddChunks(DEFAULT_MAP_CHUNKS);
 export const DEFAULT_MAP_H = DEFAULT_MAP_W;
+/** Small skirmish board — one step down from default (matches Forge's 9-chunk size). */
+export const SKIRMISH_MAP_CHUNKS = 9;
+export const SKIRMISH_MAP_W = tilesForOddChunks(SKIRMISH_MAP_CHUNKS);
+export const SKIRMISH_MAP_H = SKIRMISH_MAP_W;
 /** Stress / animStress only — 31×31 chunks (odd). */
 export const STRESS_MAP_CHUNKS = 31;
 export const STRESS_MAP_W = tilesForOddChunks(STRESS_MAP_CHUNKS);
@@ -167,6 +171,11 @@ export function createField(seed = 0, dims = {}) {
     burningTrees: [],
     treeDirty: [],
     treeStockHash: 0,
+    // Per-tile stone/mineral remaining on rock CENTER tiles (0 otherwise).
+    rockStock: new Uint8Array(n),
+    rockStockHash: 0,
+    // 1 on a farm's CENTER tile — an infinite food node villagers work in place.
+    foodNode: new Uint8Array(n),
     heightMap: new Float32Array(n),
     terrainTypes: new Uint8Array(n),
     tileType: new Uint8Array(n),
@@ -228,6 +237,9 @@ export function fieldSnapshot(field) {
     treeBurn: field.treeBurn instanceof Uint16Array
       ? field.treeBurn.slice()
       : new Uint16Array(field.treeBurn ?? field.width * field.height),
+    rockStock: field.rockStock?.slice?.() ?? new Uint8Array(field.width * field.height),
+    rockStockHash: field.rockStockHash | 0,
+    foodNode: field.foodNode?.slice?.() ?? new Uint8Array(field.width * field.height),
   };
   const tileMask = field.activeMask ?? field.tileMask ?? field.enabledMask;
   if (tileMask?.slice) snapshot.activeMask = tileMask.slice();

@@ -10,6 +10,7 @@ import { mixKothChecksum } from './kothMeta.js';
 import { mixAgoraChecksum } from './agora.js';
 import { mixBuildingChecksum } from './buildings.js';
 import { mixTreeChecksum } from './trees.js';
+import { mixRockChecksum } from './scenery.js';
 import { mixFireZoneChecksum } from './fireZones.js';
 import { mixFrogChecksum } from './frogs.js';
 import { mixHolyArmorChecksum } from './holyArmor.js';
@@ -17,6 +18,7 @@ import { mixSporeGrowthChecksum } from './sporeBloom.js';
 import { mixMonkLobChecksum } from './monkKick.js';
 import { mixCombatStatusChecksum } from './combatStatus.js';
 import { mixTechChecksum } from './tech.js';
+import { mixResourceChecksum } from './resources.js';
 
 export function checksum(w, field = null) {
   let h = 0x811c9dc5 | 0;
@@ -60,6 +62,10 @@ export function checksum(w, field = null) {
     mix(w.owner[i]);
     if (w.carriedBy) mix(w.carriedBy[i]);
     if (w.transportTarget) mix(w.transportTarget[i]);
+    if (w.gatherTile) mix(w.gatherTile[i]);
+    if (w.carriedKind) mix(w.carriedKind[i]);
+    if (w.carriedAmt) mix(w.carriedAmt[i]);
+    if (w.gatherCd) mix(w.gatherCd[i]);
   }
 
   const p = w.projectiles;
@@ -94,7 +100,9 @@ export function checksum(w, field = null) {
   h = mixAgoraChecksum(h, mix, w.agoras);
   h = mixBuildingChecksum(h, mix, w.buildings);
   mixTechChecksum(h, mix, w);
+  mixResourceChecksum(h, mix, w);
   if (field) mixTreeChecksum(mix, field);
+  if (field) mixRockChecksum(mix, field);
   mixFireZoneChecksum(mix, w);
   mixFrogChecksum(mix, w);
   mixHolyArmorChecksum(mix, w);

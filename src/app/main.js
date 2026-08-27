@@ -1,7 +1,13 @@
 // app/ — SimSession (lockstep) + Lite renderer + input.
 
 import { livingByOwner, ORDER, MAX_ENTITIES } from '../sim/world.js';
-import { UNIT_DEFS, getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
+import { UNIT, UNIT_DEFS, getUnitDef, isFlyer, isTransport, FLY_HEIGHT } from '../sim/unitTypes.js';
+import {
+  CAMP_WORK_RADIUS_F,
+  ENGINEER_RADIUS_BONUS_F,
+  ENGINEER_ASSIST_RANGE_F,
+  ENGINEER_BONUS_CAP,
+} from '../sim/gather.js';
 import * as fx from '../sim/fixed.js';
 import {
   PLAYER_ARMY,
@@ -27,7 +33,8 @@ import {
   snapBuildingYaw,
   snapBuildingWorld,
 } from '../sim/buildings.js';
-import { TILE_SIZE_F, worldToTile } from '../sim/field.js';
+import { TILE_SIZE_F, worldToTile, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
+import { ownerResourcesFrom } from '../sim/resources.js';
 import { ownerTint, setLocalOwnerTint } from '../render/ownerTints.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
@@ -209,6 +216,21 @@ async function main() {
     });
     bootCfg = await kothShard.waitForBoot();
     if (bootCfg.armyPerSide == null) bootCfg.armyPerSide = armyPerSide;
+    if (shouldBootLoadingScreenMatch(bootCfg)) {
+      // The loading screen IS the match: build a small 1v1-vs-passive-AI board
+      // directly (single build, fog off), instead of the staging unit-tester.
+      bootCfg = {
+        ...bootCfg,
+        mode: 'skirmish',
+        localSolo: true,
+        role: 'player',
+        localPlayerId: PLAYER,
+        humanPlayers: [PLAYER],
+        activeSlots: [PLAYER, AI_OWNER],
+        aiPlayers: [{ owner: AI_OWNER, temperament: 'passive' }],
+        fog: false,
+      };
+    }
   }
 
   ctx = await bootGame(canvas, bootCfg, { stress, animStress, armyPerSide: bootCfg.armyPerSide ?? armyPerSide, kothShard, solo });
@@ -219,8 +241,25 @@ async function main() {
   }
 }
 
+/**
+ * True for the plain default cold boot (KOTH staging lobby, local player, no
+ * authored map) — the case we replace with the small 1v1 loading-screen match.
+ * Live joins, spectators, ?garden= maps, and ?tester=1 (unit-tester) opt out.
+ */
+function shouldBootLoadingScreenMatch(bootCfg) {
+  if (bootCfg.mode !== 'staging' && bootCfg.mode !== 'sandbox') return false;
+  if ((bootCfg.role ?? 'player') !== 'player') return false;
+  const params = new URLSearchParams(location.search);
+  if (params.get('garden')) return false;
+  if (params.get('tester') === '1') return false;
+  return true;
+}
+
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
-  const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox';
+  const skirmish = bootCfg.mode === 'skirmish';
+  // GPU capacity is sized like a full KOTH match so the shard can still stomp us
+  // into a live match. The skirmish backdrop otherwise boots like staging.
+  const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox' || skirmish;
   const army = bootCfg.armyPerSide ?? armyPerSide ?? 0;
 
   const session = new SimSession({
@@ -239,16 +278,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     armyPerSide: army,
     profileSim: new URLSearchParams(location.search).has('profileSim'),
     garden,
-    mode:
-      bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox'
+    mode: skirmish
+      ? 'skirmish'
+      : bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox'
         ? 'staging'
         : bootCfg.mode === 'koth'
           ? 'koth'
           : 'legacy',
     activeSlots: bootCfg.activeSlots ?? [bootCfg.localPlayerId],
+    // Skirmish backdrop: smaller Forge-style board with no KOTH center plinth.
+    ...(skirmish ? { mapW: SKIRMISH_MAP_W, mapH: SKIRMISH_MAP_H, noCenterBlock: true } : {}),
   };
 
   const { count, agoras, buildings } = await session.start(simConfig);
+  // The sim worker sizes its own field module; the main thread has a separate
+  // copy, so mirror the active map dims here or worldToTile / building snap /
+  // tile pathability all offset when the board isn't the default size.
+  if (session.field) setActiveMapSize(session.field.width, session.field.height);
   if (kothShard) kothShard.attachSession(session);
 
   // Main-thread army size for KOTH GPU prealloc (worker has its own copy).
@@ -291,7 +337,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     agoras: session.agoras ?? agoras,
     field: session.field,
     localPlayerId: bootCfg.localPlayerId,
-    enabled: (bootCfg.role ?? 'player') === 'player' && bootCfg.localPlayerId >= 0,
+    enabled: bootCfg.fog !== false && (bootCfg.role ?? 'player') === 'player' && bootCfg.localPlayerId >= 0,
   });
   renderer.attachFogOfWar?.(fog);
   renderer.setVisionDraw?.((x, z, owner) => !fog.hidesHostile(owner, x, z));
@@ -562,8 +608,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let matchOverShown = false;
   let lastRenderDebugAt = 0;
 
+  // User/scenario override — the loading-screen 1v1 backdrop runs with fog off.
+  let fogUserEnabled = bootCfg.fog !== false;
   function fogActive() {
-    return session.role === 'player' && localPlayerId >= 0;
+    return fogUserEnabled && session.role === 'player' && localPlayerId >= 0;
+  }
+  function setFogEnabled(v) {
+    fogUserEnabled = !!v;
+    if (session.resetting) return;
+    stampFog();
+    refreshFoggedProps();
   }
 
   function stampFog() {
@@ -618,6 +672,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   session.onWorldRebuilt = async (entityCount) => {
     if (session._pendingWorldGen != null && session._pendingWorldGen !== liveConfigGeneration) return;
+    // Map dims may change across a rebuild (skirmish ↔ koth) — mirror them before
+    // any main-thread tile math (fog, snap, pathability) runs.
+    if (session.field) setActiveMapSize(session.field.width, session.field.height);
     renderer.setCount(entityCount);
     renderEntityCount = rebuildRendererEntities(renderer, session);
     renderer.clearProjectiles?.();
@@ -675,7 +732,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const matchTime = formatMatchTime(matchSecondsFromTick(session.confirmedTick));
     let line = `You P${localPlayerId}: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`;
     if (matchMeta.mode === 'staging' || matchMeta.mode === 'sandbox') line = `Staging  ·  ${line}`;
-    else if (matchMeta.mode === 'solo') line = `1v1 AI  ·  ${line}`;
+    else if (matchMeta.mode === 'solo' || matchMeta.mode === 'skirmish') line = `1v1 AI  ·  ${line}`;
     if (matchMeta.mode === 'koth') {
       const k = session.koth;
       if (k) {
@@ -708,6 +765,38 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (matchMeta.matchId) line += `  ·  …${matchMeta.matchId.slice(-8)}`;
     el.textContent = line;
     updateKothControls(kothShard);
+    paintResources();
+  }
+
+  function paintResources() {
+    const rEl = document.getElementById('resources');
+    if (!rEl) return;
+    const r = ownerResourcesFrom(session.resources, localPlayerId);
+    rEl.textContent = `Wood ${r.wood}  ·  Stone ${r.stone}  ·  Mineral ${r.mineral}  ·  Food ${r.food}`;
+  }
+
+  /**
+   * Ground ring showing a selected camp/mine's gather reach (engineers extend it).
+   * Mirrors the sim's campWorkRadius so the visible ring matches actual behavior.
+   */
+  function syncWorkRadiusRing() {
+    const sel = selectedBuildings.find((s) => s.kind === 'building');
+    const b = sel ? session.buildings?.[sel.index] : null;
+    if (!b || (b.type !== 'camp' && b.type !== 'mine' && b.type !== 'farm')) {
+      renderer.setWorkRadiusRing?.(null);
+      return;
+    }
+    const st = session.state;
+    const rangeSq = ENGINEER_ASSIST_RANGE_F * ENGINEER_ASSIST_RANGE_F;
+    let eng = 0;
+    for (let i = 0; i < st.count; i++) {
+      if (st.owner[i] !== b.owner || st.type[i] !== UNIT.ENGINEER) continue;
+      const dx = fx.toFloat(st.px[i]) - b.x;
+      const dz = fx.toFloat(st.py[i]) - b.z;
+      if (dx * dx + dz * dz <= rangeSq && ++eng >= ENGINEER_BONUS_CAP) break;
+    }
+    const radius = CAMP_WORK_RADIUS_F + eng * ENGINEER_RADIUS_BONUS_F;
+    renderer.setWorkRadiusRing?.({ x: b.x, z: b.z, radius });
   }
 
   updateColors();
@@ -966,11 +1055,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       session.role === 'player' && localPlayerId >= 0 && !session.pauseLockstep,
     getAgoras: () => session.agoras ?? [],
     getBuildings: () => session.buildings ?? [],
+    getField: () => session.field ?? null,
     onBuildingSelected: (sel, _ptr, all) => {
       const list = all ?? (sel ? [sel] : null);
       selectedBuildings = list ? list.slice() : [];
       syncBuildingHighlight(list);
       syncRallyFlagMarkers();
+      syncWorkRadiusRing();
       // Action / build radials only for a single selection.
       if (sel && list && list.length === 1) {
         if (sel.kind === 'agora') {
@@ -1265,7 +1356,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       liteExplorer.toggle();
     }
   });
-  setupKothControls(kothShard);
+  setupKothControls(kothShard, ctxRef);
 
   // Walk everyone so idle→walk skinning is under load (not just idle poses).
   if (animStress > 0) {
@@ -1318,6 +1409,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setFxPaused?.(session.pauseLockstep);
     renderer.cameraController?.tick?.(deltaMs);
     session.pump(deltaMs);
+    syncWorkRadiusRing();
 
     if (session.replayingCatchUp) {
       paintStatus();
@@ -1770,7 +1862,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         lift = renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
       }
       if (fog.hidesHostile(owner, x, z)) continue;
-      renderer.writeHealthBar?.(x, z, lift, 1, { armor: false, holy: false });
+      renderer.writeHealthBar?.(x, z, lift, 1, { armor: false, holy: false, building: true });
     }
     renderer.endHealthBars?.();
     if (renderer.setSelectionGroups) {
@@ -1925,7 +2017,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     setInteractive,
     kothShard,
     /** When true, ignore KOTH presentation/live stomps (local 1v1 AI). */
-    localSoloHold: false,
+    localSoloHold: !!bootCfg.localSolo,
     get matchOverShown() {
       return matchOverShown;
     },
@@ -1952,6 +2044,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     updateColors,
     stampFog,
     refreshFoggedProps,
+    setFogEnabled,
   };
   ctxRef.current = ctx;
   return ctx;
@@ -2033,10 +2126,12 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
  * Offline 1v1 vs AI — same two-army KOTH spawn as a real match, no P2P.
  * Exercises the hardened match teardown/rebuild path from the menu.
  * @param {object | null} ctx
+ * @param {{ temperament?: string, fog?: boolean, statusLabel?: string }} [opts]
  */
-async function startSoloAiMatch(ctx) {
+async function startSoloAiMatch(ctx, opts = {}) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
+  const { temperament = 'steady', fog = true, statusLabel = '1v1 vs AI' } = opts;
   ctx._soloStarting = true;
   ctx.localSoloHold = true;
   try {
@@ -2048,7 +2143,7 @@ async function startSoloAiMatch(ctx) {
       localPlayerId: PLAYER,
       humanPlayers: [PLAYER],
       activeSlots: [PLAYER, AI_OWNER],
-      aiPlayers: [AI_OWNER],
+      aiPlayers: [{ owner: AI_OWNER, temperament }],
       role: 'player',
       reset: true,
       inputEnabled: true,
@@ -2056,7 +2151,8 @@ async function startSoloAiMatch(ctx) {
       matchId: `solo-${Date.now().toString(36)}`,
     }, ctx.kothShard);
     ctx.setMatchMeta?.({ mode: 'solo' });
-    setStatusText('1v1 vs AI');
+    ctx.setFogEnabled?.(fog);
+    setStatusText(statusLabel);
   } catch (err) {
     ctx.localSoloHold = false;
     console.error('[solo] start failed', err);
@@ -2152,6 +2248,7 @@ function showMatchOver(session) {
 function useKothAi(bootCfg, stress, animStress, solo) {
   if (animStress > 0) return [];
   if (stress > 0) return STRESS_AI_PROFILES.map((p) => ({ ...p }));
+  if (bootCfg.aiPlayers) return bootCfg.aiPlayers;
   if (solo) return [AI_OWNER];
   if (bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox') {
     return [{ owner: AI_OWNER, temperament: 'cautious' }];
@@ -2165,7 +2262,7 @@ function setStatusText(text) {
   if (el) el.textContent = text;
 }
 
-function setupKothControls(kothShard) {
+function setupKothControls(kothShard, ctxRef) {
   const start = document.getElementById('koth-start');
   const join = document.getElementById('koth-join');
   if (!start || !join || !kothShard) {
@@ -2173,11 +2270,21 @@ function setupKothControls(kothShard) {
     if (join) join.hidden = true;
     return;
   }
+  // Leaving the loading-screen 1v1 for a real match: drop the solo hold so the
+  // shard's live config can take over, and restore fog for the human player.
+  const leaveSoloBackdrop = () => {
+    const ctx = ctxRef?.current;
+    if (!ctx) return;
+    ctx.localSoloHold = false;
+    ctx.setFogEnabled?.(true);
+  };
   start.addEventListener('click', () => {
+    leaveSoloBackdrop();
     kothShard.startOrJoinLive?.();
     updateKothControls(kothShard);
   });
   join.addEventListener('click', () => {
+    leaveSoloBackdrop();
     kothShard.requestJoin?.();
     updateKothControls(kothShard);
   });

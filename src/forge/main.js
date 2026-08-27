@@ -45,7 +45,12 @@ import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } fro
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
 import { createCameraController } from '../render/cameraController.js';
-import { createCelestialRig, defaultCelestialState } from '../render/celestial.js';
+import {
+  CELESTIAL_PRESETS,
+  celestialPresetState,
+  createCelestialRig,
+  defaultCelestialState,
+} from '../render/celestial.js';
 import { createTerrainFromField, createTileGridOverlay } from '../render/terrain.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
 
@@ -705,6 +710,11 @@ function mountUi() {
     </div>
     <div id="panel-light" class="panel" style="display:none">
       <p class="hint">Body 1 casts shadows. Hemi / emit fill the olive board; moon is a cool second sun.</p>
+      <label>Preset</label>
+      <select id="light-preset">
+        <option value="">— pick a mood —</option>
+        ${CELESTIAL_PRESETS.map((p) => `<option value="${p.id}">${p.name}</option>`).join('')}
+      </select>
       ${[0, 1].map((i) => `
         <p class="hint">${i === 0 ? 'Body 1' : 'Body 2'}</p>
         <label>Kind</label>
@@ -868,6 +878,17 @@ function readLightUi() {
   }
   celestial.apply(s);
   persistCelestial();
+  // Hand-tuning diverges from the preset — drop the label so it is not misleading.
+  const presetSel = document.getElementById('light-preset');
+  if (presetSel) presetSel.value = '';
+  syncLightUi();
+}
+
+function applyCelestialPreset(id) {
+  const state = celestialPresetState(id);
+  if (!state) return;
+  celestial.apply(state);
+  persistCelestial();
   syncLightUi();
 }
 
@@ -877,9 +898,14 @@ function bindLightUi() {
       document.getElementById(id).addEventListener('input', readLightUi);
     }
   }
+  document.getElementById('light-preset').addEventListener('change', (e) => {
+    const id = e.currentTarget.value;
+    if (id) applyCelestialPreset(id);
+  });
   document.getElementById('btn-light-reset').addEventListener('click', () => {
     celestial.apply(defaultCelestialState());
     persistCelestial();
+    document.getElementById('light-preset').value = 'default';
     syncLightUi();
   });
   document.getElementById('btn-light-spin').addEventListener('click', (e) => {

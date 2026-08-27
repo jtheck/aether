@@ -10,6 +10,7 @@ import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
 import { TILE_SIZE_F } from '../../sim/field.js';
+import { SCENERY } from '../../sim/scenery.js';
 import { USE_GPU_PICK } from '../../render/pickMode.js';
 import {
   boxSelectWinner,
@@ -104,6 +105,7 @@ export function createGameInput(opts) {
     hitRadial,
     hitRadialHub,
     isUnitVisible,
+    getField,
   } = opts;
 
   let localPlayerId = initialPlayerId;
@@ -1339,9 +1341,86 @@ export function createGameInput(opts) {
     }
     if (!hasOrderableSelection()) return false;
     lastTap = null;
+    if (tryGatherAt(clientX, clientY)) return true;
     const epoch = ++worldClickEpoch;
     void orderAt(clientX, clientY, CMD.MOVE, -1, epoch);
     return true;
+  }
+
+  /**
+   * RMB over a tree tile with villagers selected → send them to gather.
+   * Returns true when a GATHER command was issued (skips the force-move).
+   */
+  function tryGatherAt(clientX, clientY) {
+    const field = getField?.();
+    if (!field?.treeStock) return false;
+    const g = renderer.screenToGround?.(clientX, clientY);
+    if (!g) return false;
+    // Tile from the snapshot's own half-extent — robust to any board size
+    // (the main thread never calls setActiveMapSize).
+    const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
+    const tx = Math.floor((g.x + half) / TILE_SIZE_F);
+    const tz = Math.floor((g.z + half) / TILE_SIZE_F);
+    if (tx < 0 || tx >= field.width || tz < 0) return false;
+    const tile = gatherNodeTileAt(field, tx, tz);
+    if (tile < 0) return false;
+    const world = getWorld();
+    const villagers = [];
+    for (let k = 0; k < selCount; k++) {
+      const id = selIds[k];
+      if (world.owner[id] === localPlayerId && world.type[id] === UNIT.VILLAGER) {
+        villagers.push(id);
+      }
+    }
+    if (villagers.length === 0) return false;
+    enqueueCommand({ type: CMD.GATHER, entities: villagers, tile });
+    onOrder?.(g.x, g.z, g.y);
+    return true;
+  }
+
+  /**
+   * Harvestable tile under a click: the tile itself for a tree, or the nearest
+   * rock CENTER (within a big rock's footprint) for a rock. -1 if neither.
+   */
+  function gatherNodeTileAt(field, tx, tz) {
+    const w = field.width;
+    const inTile = tz * w + tx;
+    if (inTile < 0 || inTile >= field.treeStock.length) return -1;
+    if ((field.treeStock[inTile] | 0) > 0) return inTile;
+    // Farm food node (may be a neighbor tile if the click landed off-center).
+    const foodNode = field.foodNode;
+    if (foodNode) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const x = tx + dx;
+          const z = tz + dz;
+          if (x < 0 || z < 0 || x >= w || z >= field.height) continue;
+          if (foodNode[z * w + x]) return z * w + x;
+        }
+      }
+    }
+    const rockStock = field.rockStock;
+    const sceneryType = field.sceneryType;
+    if (!rockStock || !sceneryType) return -1;
+    // Clicking a large rock hits a footprint tile — search out to max radius (2).
+    let best = -1;
+    let bestD = Infinity;
+    for (let dz = -2; dz <= 2; dz++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const x = tx + dx;
+        const z = tz + dz;
+        if (x < 0 || z < 0 || x >= w || z >= field.height) continue;
+        const t = z * w + x;
+        if ((sceneryType[t] | 0) < SCENERY.ROCK_PLAIN) continue;
+        if ((rockStock[t] | 0) <= 0) continue;
+        const d = dx * dx + dz * dz;
+        if (d < bestD) {
+          bestD = d;
+          best = t;
+        }
+      }
+    }
+    return best;
   }
 
   function cancelDrag() {

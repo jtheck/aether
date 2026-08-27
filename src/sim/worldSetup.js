@@ -17,10 +17,13 @@ import {
   worldHalfFFromMap,
 } from './field.js';
 import { setTeamAssignments } from './teams.js';
+import { grantStartingResources } from './resources.js';
 import * as fx from './fixed.js';
 
 /** Staging AI cold start. */
 const STAGING_AI_VILLAGERS = 5;
+/** Skirmish match start — a few villagers per side, no army. */
+const SKIRMISH_START_VILLAGERS = 3;
 /** Army block sits this far toward map center from the agora. */
 const ARMY_FORWARD = 36;
 /** Building showcase sits this far behind the agora (away from army). */
@@ -350,7 +353,7 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth' | 'skirmish', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean }} config
  */
 export function buildWorldFromConfig({
   seed,
@@ -428,6 +431,23 @@ export function buildWorldFromConfig({
       spawnArmyOriented(w, PLAYER_ARMY, PLAYER, px, pz, ARMY_FORWARD);
     }
     spawnVillagersAround(w, AI_OWNER, ax, az, STAGING_AI_VILLAGERS);
+    grantStartingResources(w, PLAYER);
+    grantStartingResources(w, AI_OWNER);
+    return w;
+  }
+
+  // Skirmish — a real 1v1 opening: each side gets an agora and a few villagers,
+  // no army, no building showcase, and no KOTH center plinth / scoring.
+  if (mode === 'skirmish') {
+    const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
+    const agoraSpecs = [];
+    for (const slot of slots) {
+      const [bx, bz] = bases[slot] ?? bases[0];
+      agoraSpecs.push({ owner: slot, x: bx, z: bz });
+      spawnVillagersAround(w, slot, bx, bz, SKIRMISH_START_VILLAGERS);
+      grantStartingResources(w, slot);
+    }
+    w.agoras = createAgoras(agoraSpecs);
     return w;
   }
 
@@ -436,6 +456,7 @@ export function buildWorldFromConfig({
     for (const slot of slots) {
       const base = bases[slot] ?? bases[0];
       spawnConfiguredArmy(w, slot, base[0], base[1]);
+      grantStartingResources(w, slot);
     }
     w.koth = createKothMeta(slots);
     return w;
@@ -447,5 +468,7 @@ export function buildWorldFromConfig({
   } else {
     spawnArmy(w, ENEMY_ARMY, AI_OWNER, bases[1][0], bases[1][1]);
   }
+  grantStartingResources(w, PLAYER);
+  grantStartingResources(w, AI_OWNER);
   return w;
 }

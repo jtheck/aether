@@ -40,6 +40,7 @@ import {
   applyPauseTrain,
   applySetRally,
 } from './buildings.js';
+import { applyGather } from './gather.js';
 
 export const CMD = {
   MOVE: 1,
@@ -65,6 +66,8 @@ export const CMD = {
   RESEARCH: 14,
   /** Hold / resume production tracks on a building. */
   PAUSE_TRAIN: 15,
+  /** Send villagers to harvest a resource tile + haul to a drop-off. */
+  GATHER: 16,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -122,6 +125,9 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.SET_RALLY:
         applySetRally(world, cmd);
+        break;
+      case CMD.GATHER:
+        applyGather(world, field, cmd.entities, cmd.tile);
         break;
       case CMD.RESEARCH:
         applyQueueResearch(world, cmd);

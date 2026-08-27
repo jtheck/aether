@@ -2,7 +2,9 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   BODY,
+  CELESTIAL_PRESETS,
   azElFromDirection,
+  celestialPresetState,
   defaultCelestialState,
   directionFromAzEl,
 } from './celestial.js';
@@ -24,4 +26,33 @@ describe('celestial angles', () => {
     assert.ok(state.bodies[1].intensity > 0.3);
     assert.ok(state.bodies[1].intensity < 0.55);
   });
+});
+
+describe('celestial presets', () => {
+  const DIRECTIONAL = new Set([BODY.SUN, BODY.MOON]);
+
+  it('exposes a default preset that clones the default state', () => {
+    const def = CELESTIAL_PRESETS.find((p) => p.id === 'default');
+    assert.ok(def, 'default preset exists');
+    assert.deepEqual(celestialPresetState('default'), defaultCelestialState());
+  });
+
+  it('returns null for unknown ids', () => {
+    assert.equal(celestialPresetState('nope'), null);
+  });
+
+  for (const preset of CELESTIAL_PRESETS) {
+    it(`"${preset.name}" stays within the forge slider + shadow-key ranges`, () => {
+      const s = celestialPresetState(preset.id);
+      assert.ok(s, 'preset resolves');
+      // Body 0 must be directional so it drives the CSM shadow generator.
+      assert.ok(DIRECTIONAL.has(s.bodies[0].kind), 'body 0 is a directional key');
+      for (const b of s.bodies) {
+        assert.ok(b.elevation >= 5 && b.elevation <= 85, `elevation ${b.elevation} in [5,85]`);
+        assert.ok(b.intensity >= 0 && b.intensity <= 2.5, `intensity ${b.intensity} in [0,2.5]`);
+        const az = ((b.azimuth % 360) + 360) % 360;
+        assert.ok(az >= 0 && az <= 360, `azimuth ${az} in [0,360]`);
+      }
+    });
+  }
 });

@@ -57,6 +57,61 @@ export function rockFootprintRadius(kind) {
   return 0;
 }
 
+// Rock nodes yield stone/mineral (v1-grounded). Small plain rocks give the rarer
+// mineral; larger moss/snow rocks give bulk stone. Stock lives on the rock's
+// CENTER tile only (footprint tiles are pass-blockers with no stock).
+const ROCK_YIELD = {
+  [SCENERY.ROCK_PLAIN]: 12,
+  [SCENERY.ROCK_MOSS]: 56,
+  [SCENERY.ROCK_SNOW]: 84,
+};
+
+/** Resource kind a rock of this scenery kind yields. */
+export function rockResourceKind(kind) {
+  return kind === SCENERY.ROCK_PLAIN ? 'mineral' : 'stone';
+}
+
+/** Opening stock for a freshly placed rock center (0 if not a rock). */
+export function rockYield(kind) {
+  return ROCK_YIELD[kind] ?? 0;
+}
+
+function mixRockHash(hash, tile, stock) {
+  return Math.imul((hash ^ tile ^ (stock << 8)) | 0, 0x01000193);
+}
+
+/**
+ * Chip stock off a rock center tile. Returns stone/mineral actually removed.
+ * Depleted rocks stay as inert blockers for now (no render / pass change).
+ */
+export function damageRock(field, tile, amount) {
+  if (!field.rockStock || amount <= 0) return 0;
+  const stock = field.rockStock[tile] | 0;
+  if (stock <= 0) return 0;
+  const next = stock > amount ? stock - amount : 0;
+  const removed = stock - next;
+  field.rockStock[tile] = next;
+  field.rockStockHash = mixRockHash(field.rockStockHash | 0, tile, next);
+  return removed;
+}
+
+/** Recompute the incremental rock-stock hash from scratch (checkpoint restore). */
+export function rehashRockStock(field) {
+  let h = 0;
+  const stock = field.rockStock;
+  if (stock) {
+    for (let i = 0; i < stock.length; i++) {
+      if (stock[i]) h = mixRockHash(h, i, stock[i]);
+    }
+  }
+  field.rockStockHash = h | 0;
+}
+
+/** Checksum contribution for rock stock (mirrors mixTreeChecksum). */
+export function mixRockChecksum(mix, field) {
+  mix(field?.rockStock ? field.rockStockHash | 0 : 0);
+}
+
 /**
  * Populate scenery after terrain and initial world spawns exist.
  * @param {object} field
@@ -81,6 +136,12 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
   } else {
     field.rockSlowMask.fill(0);
   }
+  if (!field.rockStock || field.rockStock.length !== n) {
+    field.rockStock = new Uint8Array(n);
+  } else {
+    field.rockStock.fill(0);
+  }
+  field.rockStockHash = 0;
   ensureTreeArrays(field);
   field.treeStock.fill(0);
   field.treeBurn.fill(0);
@@ -111,6 +172,8 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
       if (!footprintAvailable(field, occupied, reserved, tx, tz, radius)) continue;
 
       sceneryType[i] = kind;
+      field.rockStock[i] = rockYield(kind);
+      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
       markFootprint(field, occupied, pass, tx, tz, radius);
     }
   }
@@ -280,6 +343,10 @@ function stampRockCenter(field, tx, tz, kind) {
   }
   if (field.sceneryType[i] === SCENERY.TREE) fellTreeAt(field, i);
   field.sceneryType[i] = kind;
+  if (field.rockStock) {
+    field.rockStock[i] = rockYield(kind);
+    field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, field.rockStock[i]);
+  }
   return true;
 }
 
@@ -293,6 +360,10 @@ function stampClear(field, tx, tz) {
   }
   if (kind >= SCENERY.ROCK_PLAIN) {
     field.sceneryType[i] = SCENERY.NONE;
+    if (field.rockStock) {
+      field.rockStock[i] = 0;
+      field.rockStockHash = mixRockHash(field.rockStockHash | 0, i, 0);
+    }
     changed = true;
   }
   return changed;

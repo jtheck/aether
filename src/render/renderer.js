@@ -1201,6 +1201,22 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Alternate pop spin direction each new ping. */
   let nextOrderSpinDir = 1;
 
+  // Flat ground ring for a selected camp/mine's gather reach (see setWorkRadiusRing).
+  let workRing;
+  {
+    workRing = createCylinder(engine, { diameter: RING_DIAM, height: RING_H, tessellation: 48 });
+    const workMat = createStandardMaterial();
+    workMat.diffuseColor = [0.95, 0.85, 0.32];
+    workMat.emissiveColor = [0.6, 0.5, 0.16];
+    workMat.alpha = 0.5;
+    workRing.material = workMat;
+  }
+  const workRingMatrices = new Float32Array(16);
+  setThinInstances(workRing, workRingMatrices, 1);
+  addToScene(scene, workRing);
+  setThinInstanceCount(workRing, 0);
+  let workRingShown = false;
+
   // +64 headroom so agora/building debug spheres fit on top of unit caps.
   const pickHitboxes = createPickHitboxRenderer(
     engine,
@@ -3350,6 +3366,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         ? { type: pos.type, x: pos.x, z: pos.z, valid: pos.valid !== false }
         : null;
       syncPlacementGrid();
+    },
+
+    /**
+     * Draw (or clear with null) a flat ground ring for a drop-off's work radius.
+     * @param {{ x: number, z: number, radius: number } | null} spec radius in world units
+     */
+    setWorkRadiusRing(spec) {
+      if (!spec || !(spec.radius > 0)) {
+        if (workRingShown) {
+          setThinInstanceCount(workRing, 0);
+          workRingShown = false;
+        }
+        return;
+      }
+      const gy = groundYAt(spec.x, spec.z) || 0;
+      writeFlatRing(workRingMatrices, 0, spec.x, spec.z, spec.radius * 2, RING_DIAM, RING_H, gy);
+      setThinInstances(workRing, workRingMatrices, 1);
+      setThinInstanceCount(workRing, 1);
+      markThinInstanceSlotDirty(workRing, 0);
+      workRingShown = true;
     },
 
     /**

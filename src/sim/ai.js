@@ -13,6 +13,9 @@ import { ABILITY } from './abilities.js';
 
 /** @type {Record<string, AiTemperament>} */
 export const AI_TEMPERAMENTS = {
+  // Turtle — sits on its base and only counter-attacks when hostiles are
+  // basically on top of the army. "Defend as a last resort", never pushes out.
+  passive: { interval: 120, castChance: 6, reissue: false, engageRangeF: 44, castCap: 2 },
   // Mostly idle until hostiles are nearby; infrequent push + rare casts.
   cautious: { interval: 80, castChance: 12, reissue: false, engageRangeF: 90, castCap: 4 },
   // Current baseline attack-move cadence.

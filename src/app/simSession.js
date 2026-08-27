@@ -96,6 +96,8 @@ export class SimSession {
     this.buildings = [];
     /** Owner tech bitmasks from the worker (see sim/tech.js). */
     this.tech = [];
+    /** Per-owner resource banks from the worker (see sim/resources.js). */
+    this.resources = [];
     this.simMetrics = null;
     /** EMA of worker metrics.timing (ms). */
     this.simTimingEma = null;
@@ -117,6 +119,8 @@ export class SimSession {
     this.onBuildingsChanged = null;
     /** Fired when owner tech bits change (e.g. Drayage researched). */
     this.onTechChanged = null;
+    /** Fired when owner resource banks change. */
+    this.onResourcesChanged = null;
     /** Tile field snapshot from worker (tree stock/burn mutate in place). */
     this.field = null;
     /** @type {Array<{ tiles: Uint32Array, stock: Uint8Array, burn: Uint8Array }> | null} */
@@ -126,7 +130,7 @@ export class SimSession {
   }
 
   async start(config) {
-    const { count, field, agoras, buildings, tech } = await this.client.init({
+    const { count, field, agoras, buildings, tech, resources } = await this.client.init({
       ...config,
       aiPlayers: this.aiPlayers,
     });
@@ -135,6 +139,7 @@ export class SimSession {
     this.agoras = agoras ?? this.client._agoras ?? [];
     this.buildings = buildings ?? this.client._buildings ?? [];
     this.tech = tech ?? this.client._tech ?? [];
+    this.resources = resources ?? this.client._resources ?? [];
     this.kothMatchOver = 0;
     this.matchWinner = -1;
     this._bindStepHandler();
@@ -146,6 +151,7 @@ export class SimSession {
       agoras: this.agoras,
       buildings: this.buildings,
       tech: this.tech,
+      resources: this.resources,
     };
   }
 
@@ -554,6 +560,10 @@ export class SimSession {
       if (extra?.tech) {
         this.tech = extra.tech;
         if (extra.techChanged) this.onTechChanged?.(this.tech);
+      }
+      if (extra?.resources) {
+        this.resources = extra.resources;
+        if (extra.resourcesChanged) this.onResourcesChanged?.(this.resources);
       }
       if (extra?.metrics) {
         this.simMetrics = extra.metrics;

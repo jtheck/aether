@@ -10,6 +10,7 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { meshRoofY, roofChipLift, DEFAULT_AGORA_ROOF } from './healthBars.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
@@ -58,7 +59,7 @@ function setThinInstanceCount(mesh, count) {
   mesh.visible = count > 0;
 }
 
-/** Attack-move rally stroke / teamcolor — same red as unit a-move pings. */
+/** Attack-move small ants / flag — same red as unit a-move pings. */
 const ATTACK_MOVE_TINT = [0.95, 0.22, 0.18];
 
 function writeRallyColor(colors, slot, owner, alpha, attackMove) {
@@ -71,6 +72,24 @@ function writeRallyColor(colors, slot, owner, alpha, attackMove) {
     return;
   }
   writeOwnerColor(colors, slot, owner, alpha);
+}
+
+function writeWhiteColor(colors, slot, alpha) {
+  const o = slot * 4;
+  colors[o] = 1;
+  colors[o + 1] = 1;
+  colors[o + 2] = 1;
+  colors[o + 3] = alpha;
+}
+
+/** Small ants: white (move) or red (a-move). Big ants: TeamColor only. */
+function writeRallyStrokeColor(colors, slot, owner, alpha, attackMove, bigAnts) {
+  if (bigAnts) {
+    writeOwnerColor(colors, slot, owner, alpha);
+    return;
+  }
+  if (attackMove) writeRallyColor(colors, slot, owner, alpha, true);
+  else writeWhiteColor(colors, slot, alpha);
 }
 
 function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
@@ -184,10 +203,15 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       return null;
     },
     forEachShadowMesh() {},
+    chipHeight() {
+      return roofChipLift(0, DEFAULT_AGORA_ROOF);
+    },
   };
 
+  let agoraRoofY = 0;
   try {
     const parts = await loadBakedUnitMeshParts(engine, AGORA_MODEL_URL);
+    agoraRoofY = meshRoofY(parts);
     for (let p = 0; p < parts.length; p++) {
       const mesh = parts[p];
       // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
@@ -375,6 +399,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
    * Flowing dashed polyline (dashes + arrowheads) along world XZ points.
    * Dashes and chevrons share the polyline but march at different speeds
    * (big ants run ahead) — both crawl building → flag.
+   * Small ants are white (move) or red (a-move); big ants are TeamColor only.
    * @returns {number} next free slot
    */
   function writeDashedPath(batch, points, owner, startSlot, maxSlot, phase, ghost, attackMove) {
@@ -406,7 +431,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     const baseAlpha = ghost ? 0.7 : 0.95;
     let segI = 0;
 
-    const emit = (s0, s1, radius, pulse) => {
+    const emit = (s0, s1, radius, pulse, bigAnts) => {
       if (slot >= maxSlot || s1 - s0 < 0.12) return;
       while (segI < segs.length && segs[segI].s0 + segs[segI].len < s0 - 1e-6) segI++;
       for (let i = segI; i < segs.length && slot < maxSlot; i++) {
@@ -428,8 +453,8 @@ export async function createAgoraProps(engine, scene, groundYAt) {
         if (!writeSegmentMatrix(batch.matrices, slot, x0, y0, z0, x1, y1, z1, radius)) {
           continue;
         }
-        writeRallyColor(batch.colors, slot, owner, baseAlpha * pulse, attackMove);
-        if (pulse > 0.95) {
+        writeRallyStrokeColor(batch.colors, slot, owner, baseAlpha * pulse, attackMove, bigAnts);
+        if (bigAnts) {
           const o = slot * 4;
           batch.colors[o] = Math.min(1, batch.colors[o] * 1.25);
           batch.colors[o + 1] = Math.min(1, batch.colors[o + 1] * 1.25);
@@ -441,13 +466,13 @@ export async function createAgoraProps(engine, scene, groundYAt) {
 
     forEachRallyDash(total, phase, RALLY_DASH, period, (a, b) => {
       if (slot >= maxSlot) return;
-      emit(a, b, RALLY_LINE_RADIUS, 0.82);
+      emit(a, b, RALLY_LINE_RADIUS, 0.82, false);
     });
     // Chevrons are a second, faster march — reset the segment cursor.
     segI = 0;
     forEachRallyDash(total, arrowPhase, RALLY_ARROW_LEN, RALLY_ARROW_PERIOD, (a, b) => {
       if (slot >= maxSlot) return;
-      emit(a, b, RALLY_ARROW_RADIUS, 1);
+      emit(a, b, RALLY_ARROW_RADIUS, 1, true);
     });
     return slot;
   }
@@ -692,5 +717,8 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     isPickMesh,
     resolvePick,
     forEachShadowMesh,
+    chipHeight() {
+      return roofChipLift(agoraRoofY, DEFAULT_AGORA_ROOF);
+    },
   };
 }

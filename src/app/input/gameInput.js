@@ -965,7 +965,7 @@ export function createGameInput(opts) {
     abilityHoldFired = false;
     hideSelectionBox();
 
-    // Bottom selection strip acts as on-screen buttons: a press on a chip owns
+    // Top selection strip acts as on-screen buttons: a press on a chip owns
     // the gesture (no box-select / ability-hold); the type is selected on up.
     selHudGesture = renderer.pickSelectionHud?.(e.clientX, e.clientY) != null;
     if (selHudGesture) return true;

@@ -104,24 +104,67 @@ export const PLAYER_NAMES = [
   'Lodestar', 'Keystone', 'Player',
 ];
 
+/**
+ * SC2 melee / versus lobby colours, deepened so they read as jewel tones
+ * on TeamColor meshes instead of the chalky in-game picker swatches.
+ * White is first so a missing preference falls back to a readable default.
+ */
 export const PLAYER_COLORS = [
-  { hex: '#FFFFFF', name: 'White' },
-  { hex: '#FF0000', name: 'Red' },
-  { hex: '#0000FF', name: 'Blue' },
-  { hex: '#00FFFF', name: 'Teal' },
-  { hex: '#800080', name: 'Purple' },
-  { hex: '#FFFF00', name: 'Yellow' },
-  { hex: '#FFA500', name: 'Orange' },
-  { hex: '#008000', name: 'Green' },
-  { hex: '#FFB6C1', name: 'Light Pink' },
-  { hex: '#8A2BE2', name: 'Violet' },
-  { hex: '#D3D3D3', name: 'Light Grey' },
-  { hex: '#006400', name: 'Dark Green' },
-  { hex: '#A52A2A', name: 'Brown' },
-  { hex: '#00FF00', name: 'Light Green' },
-  { hex: '#696969', name: 'Dark Grey' },
-  { hex: '#FFC0CB', name: 'Pink' },
+  { hex: '#C8CBD0', name: 'White' },
+  { hex: '#951018', name: 'Red' },
+  { hex: '#0A38B8', name: 'Blue' },
+  { hex: '#127088', name: 'Teal' },
+  { hex: '#4E0078', name: 'Purple' },
+  { hex: '#C4A810', name: 'Yellow' },
+  { hex: '#C8600C', name: 'Orange' },
+  { hex: '#147000', name: 'Green' },
+  { hex: '#B850B0', name: 'Light Pink' },
+  { hex: '#1C08A0', name: 'Violet' },
+  { hex: '#4A4C72', name: 'Light Grey' },
+  { hex: '#0C4E38', name: 'Dark Green' },
+  { hex: '#4E2A04', name: 'Brown' },
+  { hex: '#3CB038', name: 'Light Green' },
+  { hex: '#232323', name: 'Dark Grey' },
+  { hex: '#B82880', name: 'Pink' },
 ];
+
+/** Older CSS / bright-SC2 hexes → the deep swatch of the same name. */
+const LEGACY_COLOR_HEX = {
+  '#FFFFFF': '#C8CBD0',
+  '#FF0000': '#951018',
+  '#B4141E': '#951018',
+  '#0000FF': '#0A38B8',
+  '#0042FF': '#0A38B8',
+  '#00FFFF': '#127088',
+  '#1CA7EA': '#127088',
+  '#800080': '#4E0078',
+  '#540081': '#4E0078',
+  '#FFFF00': '#C4A810',
+  '#EBE129': '#C4A810',
+  '#FFA500': '#C8600C',
+  '#FE8A0E': '#C8600C',
+  '#008000': '#147000',
+  '#168000': '#147000',
+  '#FFB6C1': '#B850B0',
+  '#CCA6FC': '#B850B0',
+  '#8A2BE2': '#1C08A0',
+  '#1F01C9': '#1C08A0',
+  '#D3D3D3': '#4A4C72',
+  '#525494': '#4A4C72',
+  '#006400': '#0C4E38',
+  '#106246': '#0C4E38',
+  '#A52A2A': '#4E2A04',
+  '#00FF00': '#3CB038',
+  '#96FF91': '#3CB038',
+  '#696969': '#232323',
+  '#FFC0CB': '#B82880',
+  '#E55BB0': '#B82880',
+};
+
+function normalizeHex(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex ?? '').trim());
+  return m ? `#${m[1].toUpperCase()}` : null;
+}
 
 /** Storage throws in private-mode Safari and when cookies are blocked. */
 function read(key) {
@@ -313,15 +356,24 @@ export function setPlayerName(name) {
 }
 
 export function getPlayerColor() {
-  const saved = read(COLOR_KEY);
+  const saved = normalizeHex(read(COLOR_KEY));
   if (saved && PLAYER_COLORS.some((c) => c.hex === saved)) return saved;
+  const migrated = saved ? LEGACY_COLOR_HEX[saved] : null;
+  if (migrated) {
+    write(COLOR_KEY, migrated);
+    return migrated;
+  }
   const rolled = randomOf(PLAYER_COLORS).hex;
   write(COLOR_KEY, rolled);
   return rolled;
 }
 
 export function setPlayerColor(hex) {
-  const next = PLAYER_COLORS.some((c) => c.hex === hex) ? hex : PLAYER_COLORS[0].hex;
+  const normalized = normalizeHex(hex);
+  const next =
+    (normalized && PLAYER_COLORS.some((c) => c.hex === normalized) && normalized) ||
+    (normalized && LEGACY_COLOR_HEX[normalized]) ||
+    PLAYER_COLORS[0].hex;
   write(COLOR_KEY, next);
   return next;
 }

@@ -1,6 +1,7 @@
 // Client-only fog of war. Vision is a 20 Hz tile stamp — not in lockstep/checksums.
-// Three overlay levels: current sight, visited, never-seen. Hostile units hide
-// outside the live circle. Enemy buildings hide until seen, then last-known while fogged.
+// Three overlay levels: current sight, visited, never-seen. Hostile units stay
+// through the overlay trail and hide when that veil is most opaque. Enemy
+// buildings hide until seen, then last-known while fogged.
 
 import {
   addToScene,
@@ -36,7 +37,7 @@ const SIGHT_LIFT_ALPHA = 0.30;
 const SIGHT_LIFT_DIFFUSE = [0.46, 0.50, 0.36];
 const OVERLAY_LIFT = 0.18;
 const TEXEL_ALIGN = 64;
-/** Overlay-only skirt past the hard vision circle. Gameplay hide stays binary. */
+/** Soft overlay + hide skirt past the hard explored circle. */
 const EDGE_FADE_TILES = 3;
 /** Overlay pixel alpha on explored tiles that are no longer in sight. */
 export const VISITED_ALPHA = 110;
@@ -180,6 +181,7 @@ function tryWriteTexture(engine, texture, pixels, w, h) {
  *   isEnabled: () => boolean,
  *   isWorldVisible: (x: number, z: number) => boolean,
  *   isWorldExplored: (x: number, z: number) => boolean,
+ *   isWorldSight: (x: number, z: number) => boolean,
  *   hidesHostile: (owner: number, x: number, z: number) => boolean,
  *   filterBuildings: (list: object[] | null | undefined) => object[],
  *   filterAgoras: (list: object[] | null | undefined) => object[],
@@ -198,7 +200,10 @@ export function createFogOfWar() {
   let half = 0;
   /** @type {Uint32Array | null} */
   let visible = null;
-  /** Overlay coverage 0–255 (255 = fully seen). Soft edge only — not used to hide. */
+  /** Current sight including the fade skirt. */
+  /** @type {Uint32Array | null} */
+  let sight = null;
+  /** Overlay coverage 0–255 (255 = fully seen). Hide waits until this hits the floor. */
   /** @type {Uint8Array | null} */
   let cover = null;
   /** Hard-circle memory. Once seen, overlay never returns to unexplored. */
@@ -251,6 +256,8 @@ export function createFogOfWar() {
     const n = width * height;
     if (!visible || visible.length !== n) visible = n ? new Uint32Array(n) : null;
     else visible.fill(0);
+    if (!sight || sight.length !== n) sight = n ? new Uint32Array(n) : null;
+    else sight.fill(0);
     if (!cover || cover.length !== n) cover = n ? new Uint8Array(n) : null;
     else cover.fill(0);
     if (!explored || explored.length !== n) explored = n ? new Uint8Array(n) : null;
@@ -318,15 +325,36 @@ export function createFogOfWar() {
     return explored[tz * width + tx] !== 0;
   }
 
+  function isWorldSight(x, z) {
+    if (!enabled) return true;
+    if (!sight || !field) return true;
+    const tx = Math.floor((x + half) / TILE_SIZE_F);
+    const tz = Math.floor((z + half) / TILE_SIZE_F);
+    if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
+    return sight[tz * width + tx] === gen;
+  }
+
+  /** True while leftover cover is still decaying toward visited / unseen. */
+  function trailOpen(x, z) {
+    if (!cover || !field) return false;
+    const tx = Math.floor((x + half) / TILE_SIZE_F);
+    const tz = Math.floor((z + half) / TILE_SIZE_F);
+    if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
+    const i = tz * width + tx;
+    const floor = explored && explored[i] ? VISITED_COVER : 0;
+    return cover[i] > floor;
+  }
+
   function hidesHostile(owner, x, z) {
     if (!enabled) return false;
     if (localPlayerId < 0) return false;
     if (isAlly(localPlayerId, owner)) return false;
-    return !isWorldVisible(x, z);
+    if (isWorldSight(x, z)) return false;
+    return !trailOpen(x, z);
   }
 
   function stampCircle(cx, cz, radiusTiles) {
-    if (!visible) return;
+    if (!visible && !sight) return;
     const fade = EDGE_FADE_TILES;
     const outer = radiusTiles + fade;
     const r = Math.ceil(outer);
@@ -345,8 +373,9 @@ export function createFogOfWar() {
         const dx = tx - cx;
         const d2 = dx * dx + dz * dz;
         if (d2 > outer2) continue;
+        if (sight) sight[row + tx] = gen;
         if (d2 <= hardR2) {
-          visible[row + tx] = gen;
+          if (visible) visible[row + tx] = gen;
           if (explored) explored[row + tx] = 1;
         }
         if (!cover) continue;
@@ -394,6 +423,7 @@ export function createFogOfWar() {
     gen++;
     if (gen === 0xffffffff) {
       visible.fill(0);
+      if (sight) sight.fill(0);
       gen = 1;
     }
     const world = input.world;
@@ -737,6 +767,7 @@ export function createFogOfWar() {
     isEnabled: () => enabled,
     isWorldVisible,
     isWorldExplored,
+    isWorldSight,
     hidesHostile,
     filterBuildings,
     filterAgoras,

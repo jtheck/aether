@@ -1,4 +1,4 @@
-// v1-style health chips: five soft circles + optional armor/holy rings on the small dots.
+// Health chips: five soft rounded squares + optional armor/holy rings on the small tiles.
 // Agora capture recolor is intentionally omitted.
 
 import {
@@ -12,6 +12,7 @@ import {
   removeBillboardSprite,
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
+import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
 
 const DOT_COUNT = 5;
 const TEX = 64;
@@ -19,12 +20,33 @@ const FRAME_SOFT = 0;
 const FRAME_RING_HOLY = 1;
 const FRAME_RING_ARMOR = 2;
 
-/** Fixed chip size for every unit (world units). Alternate dots stay a bit smaller for rhythm. */
-const NORMAL_DOT_DIAMETER = 0.4;
-const DOT_DIAMETER_ALTERNATE_MUL = 0.2;
-const DOT_SPACING_MUL = 1.06;
+/** Fallback world diameter if the camera eye is unknown. */
+export const NORMAL_DOT_DIAMETER = 0.4;
+/** Main-dot size in CSS pixels — world size scales with distance to hold this. */
+export const TARGET_DOT_PX = 8;
+const DOT_DIAMETER_ALTERNATE_MUL = 0.4;
+const DOT_SPACING_MUL = 0.72;
 const HOLY_RING_VS_NORMAL = 1.04;
 const ARMOR_RING_VS_NORMAL = 1.26;
+/** Lift above pick-sphere chest so the row sits over the head. */
+export const HEAD_HEIGHT_MUL = 2.2;
+export const CHIP_ABOVE_HEAD = 0.55;
+export const CHIP_ABOVE_ROOF = 0.75;
+export const DEFAULT_UNIT_CHIP_LIFT = 1.1 * HEAD_HEIGHT_MUL + CHIP_ABOVE_HEAD;
+export const DEFAULT_BUILDING_ROOF = 8;
+export const DEFAULT_AGORA_ROOF = 12;
+/** Always push this many CSS pixels toward screen-up. */
+export const CHIP_SCREEN_UP_PX = 8;
+/** Extra screen-up pixels when looking straight down (cos β). */
+export const CHIP_SCREEN_UP_TILT_PX = 20;
+/** Size after the look-down tilt (close-in → play), before the half-zoom vanish. */
+export const LOOK_DOWN_SCALE_MIN = 0.55;
+/** Start the final vanish at this normalized zoom (0 = closest, 1 = farthest). */
+export const HORIZON_FADE_START = 0.5;
+/** Hide at max zoom-out. */
+export const HORIZON_HIDE = 1;
+/** Skip draws when the horizon scale is at or below this. */
+export const HORIZON_HIDE_EPS = 0.04;
 
 /** Max sprites per unit: 5 dots + 2 holy rings + 2 armor rings. */
 const SPRITES_PER_SLOT = 9;
@@ -33,26 +55,29 @@ const SPRITES_PER_SLOT = 9;
  * (Billboard API always depth-tests; bias is the HUD-style always-visible path.)
  */
 const CAMERA_DEPTH_BIAS = 10;
-/** Toward-camera XZ offset — reads as "below the unit" on a typical RTS view. */
-const BELOW_SCREEN_OFFSET = 2.4;
 
-function writeSoftCircle(pixels, ox, size) {
+/** Signed distance to a rounded box centered at the origin. */
+function sdRoundBox(px, py, half, corner) {
+  const ax = Math.abs(px) - half + corner;
+  const ay = Math.abs(py) - half + corner;
+  const ox = Math.max(ax, 0);
+  const oy = Math.max(ay, 0);
+  return Math.hypot(ox, oy) + Math.min(Math.max(ax, ay), 0) - corner;
+}
+
+function writeSoftRoundedSquare(pixels, ox, size) {
   const cx = size * 0.5;
   const cy = size * 0.5;
-  const r = size * 0.48;
+  // Stay inside the atlas cell so linear filter doesn't pick up the next frame.
+  const half = size * 0.36;
+  const corner = half * 0.36;
+  const feather = size * 0.04;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const dx = x + 0.5 - cx;
-      const dy = y + 0.5 - cy;
-      const d = Math.hypot(dx, dy) / r;
+      const d = sdRoundBox(x + 0.5 - cx, y + 0.5 - cy, half, corner);
       let a = 0;
-      if (d <= 0.79) a = 0.84;
-      else if (d < 1) {
-        // Feather outer ~21% like v1 DynamicTexture stops.
-        const t = (d - 0.79) / 0.21;
-        a = t < 0.48 ? 0.84 + (0.38 - 0.84) * (t / 0.48) : 0.38 * (1 - (t - 0.48) / 0.52);
-        a = Math.max(0, a);
-      }
+      if (d <= 0) a = 1;
+      else if (d < feather) a = 1 - d / feather;
       const i = ((y * size * 3) + ox + x) * 4;
       pixels[i] = 255;
       pixels[i + 1] = 255;
@@ -62,18 +87,19 @@ function writeSoftCircle(pixels, ox, size) {
   }
 }
 
-function writeRing(pixels, ox, size, alpha) {
+function writeRoundedRing(pixels, ox, size, alpha) {
   const cx = size * 0.5;
   const cy = size * 0.5;
-  const ir = size * 0.34;
-  const or = size * 0.485;
+  const half = size * 0.44;
+  const corner = half * 0.36;
+  const inner = half * 0.68;
+  const innerCorner = corner * 0.68;
   const aByte = Math.round(alpha * 255);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const dx = x + 0.5 - cx;
       const dy = y + 0.5 - cy;
-      const d = Math.hypot(dx, dy);
-      const on = d <= or && d >= ir;
+      const on = sdRoundBox(dx, dy, half, corner) <= 0 && sdRoundBox(dx, dy, inner, innerCorner) > 0;
       const i = ((y * size * 3) + ox + x) * 4;
       pixels[i] = 255;
       pixels[i + 1] = 255;
@@ -87,9 +113,9 @@ function createHealthChipAtlas(engine) {
   const w = TEX * 3;
   const h = TEX;
   const pixels = new Uint8Array(w * h * 4);
-  writeSoftCircle(pixels, 0, TEX);
-  writeRing(pixels, TEX, TEX, 0.92);
-  writeRing(pixels, TEX * 2, TEX, 0.94);
+  writeSoftRoundedSquare(pixels, 0, TEX);
+  writeRoundedRing(pixels, TEX, TEX, 0.92);
+  writeRoundedRing(pixels, TEX * 2, TEX, 0.94);
   const texture = createTexture2DFromPixels(engine, pixels, w, h, {
     minFilter: 'linear',
     magFilter: 'linear',
@@ -100,6 +126,101 @@ function createHealthChipAtlas(engine) {
     columns: 3,
     rows: 1,
   });
+}
+
+/** World-Y lift from ground to the chip row (includes flyer / lob loft). */
+export function unitChipLift(loft, pickHeight) {
+  return (Number(loft) || 0) + (pickHeight ?? 1.1) * HEAD_HEIGHT_MUL + CHIP_ABOVE_HEAD;
+}
+
+/** Mesh-local max Y from baked `boundMax`, or 0 if unknown. */
+export function meshRoofY(parts) {
+  let maxY = 0;
+  for (const p of parts ?? []) {
+    const y = p?.boundMax?.[1];
+    if (Number.isFinite(y) && y > maxY) maxY = y;
+  }
+  return maxY;
+}
+
+/** Chip lift above ground for a building / agora roof. */
+export function roofChipLift(roofY, fallback = DEFAULT_BUILDING_ROOF) {
+  const y = Number.isFinite(roofY) && roofY > 0.5 ? roofY : fallback;
+  return y + CHIP_ABOVE_ROOF;
+}
+
+/**
+ * Perspective size of a world-diameter sprite in CSS pixels.
+ * @param {number} worldDiameter
+ * @param {number} distance
+ * @param {number} viewportHeight
+ * @param {number} fov vertical FOV in radians
+ */
+export function chipScreenPixels(worldDiameter, distance, viewportHeight, fov) {
+  const d = Math.max(1e-3, distance);
+  const vh = Math.max(1, viewportHeight);
+  const f = fov > 1e-3 ? fov : 0.8;
+  return (worldDiameter * vh) / (2 * d * Math.tan(f * 0.5));
+}
+
+/**
+ * World diameter that covers `screenPx` at `distance` (inverse of chipScreenPixels).
+ * @param {number} screenPx
+ * @param {number} distance
+ * @param {number} viewportHeight
+ * @param {number} fov vertical FOV in radians
+ */
+export function worldSizeForScreenPx(screenPx, distance, viewportHeight, fov) {
+  const d = Math.max(1e-3, distance);
+  const vh = Math.max(1, viewportHeight);
+  const f = fov > 1e-3 ? fov : 0.8;
+  return (screenPx * 2 * d * Math.tan(f * 0.5)) / vh;
+}
+
+/**
+ * 1 until half zoom, then smoothstep to 0 at max zoom-out.
+ * @param {number} normalizedZoom 0 = closest, 1 = farthest
+ */
+export function chipHorizonScale(normalizedZoom) {
+  const n = Math.max(0, Math.min(1, normalizedZoom));
+  if (n <= HORIZON_FADE_START) return 1;
+  if (n >= HORIZON_HIDE) return 0;
+  const u = (n - HORIZON_FADE_START) / (HORIZON_HIDE - HORIZON_FADE_START);
+  return 1 - u * u * (3 - 2 * u);
+}
+
+/**
+ * Shrink as the camera tilts down from closest zoom; holds at the play size
+ * after that so the half-zoom fade is a second, later shrink.
+ * @param {number} normalizedZoom 0 = closest, 1 = farthest
+ */
+export function chipLookDownScale(normalizedZoom) {
+  const n = Math.max(0, Math.min(1, normalizedZoom));
+  const span = CAMERA_CLOSE_SPAN > 1e-3 ? CAMERA_CLOSE_SPAN : 0.12;
+  const t = Math.min(1, n / span);
+  const u = t * t * (3 - 2 * t);
+  return 1 - u * (1 - LOOK_DOWN_SCALE_MIN);
+}
+
+/**
+ * Screen-up in world space (look × camera-right). Horizon → +Y; top-down → XZ.
+ * @param {number} alpha
+ * @param {number} beta
+ * @returns {[number, number, number]}
+ */
+export function chipScreenUpDir(alpha, beta) {
+  const a = Number.isFinite(alpha) ? alpha : 0;
+  const b = Number.isFinite(beta) ? beta : 0.82;
+  const cb = Math.cos(b);
+  const sb = Math.sin(b);
+  return [-Math.cos(a) * cb, sb, -Math.sin(a) * cb];
+}
+
+/** Extra screen-up pixels: a base gap plus more when the camera looks down. */
+export function chipScreenUpPixels(beta) {
+  const b = Number.isFinite(beta) ? beta : 0.82;
+  const down = Math.max(0, Math.cos(b));
+  return CHIP_SCREEN_UP_PX + CHIP_SCREEN_UP_TILT_PX * down;
 }
 
 function fillRgb(ratio) {
@@ -159,7 +280,7 @@ function hideSprite(spr) {
 /**
  * @param {object} engine
  * @param {object} scene
- * @param {{ capacity?: number }} [opts]
+ * @param {{ capacity?: number, getViewportHeight?: () => number }} [opts]
  */
 export function createHealthBars(engine, scene, opts = {}) {
   const capacity = Math.max(1, opts.capacity ?? 256);
@@ -176,6 +297,10 @@ export function createHealthBars(engine, scene, opts = {}) {
   const slots = [];
   for (let i = 0; i < capacity; i++) slots.push(makeSlot());
   let used = 0;
+  let viewH = 720;
+  let fov = 0.8;
+  let horizonScale = 1;
+  let sizeScale = 1;
 
   function hide(slot) {
     if (!slot.active) return;
@@ -203,35 +328,60 @@ export function createHealthBars(engine, scene, opts = {}) {
   }
 
   /**
-   * Place chips: above ground, shifted toward camera on XZ (below unit on screen),
-   * then pulled along the view ray so terrain/units don't occlude them.
+   * Place chips above the unit on screen (tilt-aware), then pull along the
+   * view ray so terrain/meshes don't occlude them.
    */
   function placeChipAnchor(x, y, z) {
+    const cam = scene?.camera;
+    const a = cam?.alpha ?? 0;
+    const beta = cam?.beta ?? 0.82;
+    const [ux, uy, uz] = chipScreenUpDir(a, beta);
     const eye = cameraEye();
-    if (!eye) return [x, y, z];
-    const dx = eye[0] - x;
-    const dy = eye[1] - y;
-    const dz = eye[2] - z;
+    const dist = eye
+      ? Math.max(1e-3, Math.hypot(eye[0] - x, eye[1] - y, eye[2] - z))
+      : 80;
+    const upW = worldSizeForScreenPx(chipScreenUpPixels(beta), dist, viewH, fov);
+    const lx = x + ux * upW;
+    const ly = y + uy * upW;
+    const lz = z + uz * upW;
+    if (!eye) return [lx, ly, lz];
+    const dx = eye[0] - lx;
+    const dy = eye[1] - ly;
+    const dz = eye[2] - lz;
     const len = Math.hypot(dx, dy, dz);
-    if (len < 1e-6) return [x, y, z];
+    if (len < 1e-6) return [lx, ly, lz];
     const inv = 1 / len;
-    const xzLen = Math.hypot(dx, dz) || 1;
-    const ox = x + (dx / xzLen) * BELOW_SCREEN_OFFSET;
-    const oz = z + (dz / xzLen) * BELOW_SCREEN_OFFSET;
     // Cap so we never pull past the camera; scale up a bit when the cam is far.
-    const b = Math.min(len * 0.45, Math.max(CAMERA_DEPTH_BIAS, len * 0.08));
-    return [ox + dx * inv * b, y + dy * inv * b, oz + dz * inv * b];
+    const pull = Math.min(len * 0.45, Math.max(CAMERA_DEPTH_BIAS, len * 0.08));
+    return [lx + dx * inv * pull, ly + dy * inv * pull, lz + dz * inv * pull];
+  }
+
+  function viewportHeight() {
+    const fromOpts = opts.getViewportHeight?.();
+    if (Number.isFinite(fromOpts) && fromOpts > 1) return fromOpts;
+    const c = engine?.canvas;
+    const h = c?.clientHeight || c?.height;
+    return Number.isFinite(h) && h > 1 ? h : 720;
   }
 
   return {
     begin() {
       used = 0;
+      viewH = viewportHeight();
+      const cam = scene?.camera;
+      const camFov = cam?.fov;
+      fov = Number.isFinite(camFov) && camFov > 1e-3 ? camFov : 0.8;
+      const minR = cam?.lowerRadiusLimit ?? 50;
+      const maxR = cam?.upperRadiusLimit ?? cam?.radius ?? 900;
+      const zoomN = cameraZoomNormalized(cam?.radius, minR, maxR);
+      horizonScale = chipHorizonScale(zoomN);
+      sizeScale = chipLookDownScale(zoomN) * horizonScale;
     },
 
     /**
-     * Place one v1-style chip row (fixed size; unitSize kept for call-site compat).
+     * Place one v1-style chip row above the entity (constant screen size).
      * @param {number} x
-     * @param {number} y
+     * @param {number} y chip-row world Y (above head / roof)
      * @param {number} z
      * @param {number} _unitSize unused — chips are a fixed small size for all units
      * @param {number} ratio 0..1
@@ -239,18 +389,27 @@ export function createHealthBars(engine, scene, opts = {}) {
      */
     write(x, y, z, _unitSize, ratio, flags = {}) {
       if (used >= capacity) return;
+      if (horizonScale <= HORIZON_HIDE_EPS) return;
       const slot = slots[used++];
       const r = Math.max(0, Math.min(1, ratio));
       const armor = !!flags.armor;
       const holy = !!flags.holy;
 
-      const normalDot = NORMAL_DOT_DIAMETER;
+      const [bx, by, bz] = placeChipAnchor(x, y, z);
+      const eye = cameraEye();
+      const dist = eye
+        ? Math.hypot(eye[0] - bx, eye[1] - by, eye[2] - bz)
+        : 0;
+      const baseDot = dist > 1e-3
+        ? worldSizeForScreenPx(TARGET_DOT_PX, dist, viewH, fov)
+        : NORMAL_DOT_DIAMETER;
+      const normalDot = baseDot * sizeScale;
+      const fade = horizonScale;
       const spacing = normalDot * DOT_SPACING_MUL;
       const totalWidth = (DOT_COUNT - 1) * spacing;
       const [rx, rz] = cameraRight();
       const rgb = fillRgb(r);
       const filled = Math.min(DOT_COUNT, Math.ceil(r * DOT_COUNT - 1e-6));
-      const [bx, by, bz] = placeChipAnchor(x, y, z);
 
       // Armor behind, then holy, then chips (draw order ≈ add/update order).
       for (let ri = 0; ri < 2; ri++) {
@@ -271,7 +430,7 @@ export function createHealthBars(engine, scene, opts = {}) {
           spr.color[0] = 0.07;
           spr.color[1] = 0.07;
           spr.color[2] = 0.08;
-          spr.color[3] = 0.94;
+          spr.color[3] = 0.94 * fade;
           showSprite(system, spr, FRAME_RING_ARMOR);
         } else {
           hideSprite(slot.armor[ri]);
@@ -288,7 +447,7 @@ export function createHealthBars(engine, scene, opts = {}) {
           spr.color[0] = 1;
           spr.color[1] = 1;
           spr.color[2] = 1;
-          spr.color[3] = 0.92;
+          spr.color[3] = 0.92 * fade;
           showSprite(system, spr, FRAME_RING_HOLY);
         } else {
           hideSprite(slot.holy[ri]);
@@ -309,12 +468,12 @@ export function createHealthBars(engine, scene, opts = {}) {
           spr.color[0] = rgb[0];
           spr.color[1] = rgb[1];
           spr.color[2] = rgb[2];
-          spr.color[3] = 1;
+          spr.color[3] = fade;
         } else {
           spr.color[0] = 0.14;
           spr.color[1] = 0.14;
           spr.color[2] = 0.14;
-          spr.color[3] = 0.5;
+          spr.color[3] = 0.5 * fade;
         }
         showSprite(system, spr, FRAME_SOFT);
       }

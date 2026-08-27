@@ -87,6 +87,7 @@ describe('fogOfWar stamp + hide', () => {
     fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [] });
     assert.equal(fog.isEnabled(), true);
     assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.isWorldSight(0, 0), true);
     assert.equal(fog.hidesHostile(1, 0, 0), false);
     assert.equal(fog.hidesHostile(1, half - 2, half - 2), true);
     assert.equal(fog.hidesHostile(0, half - 2, half - 2), false);
@@ -129,7 +130,7 @@ describe('fogOfWar last-known buildings', () => {
 });
 
 describe('fogOfWar overlay decay', () => {
-  it('hides immediately and fades overlay from sight to visited, not black', () => {
+  it('keeps hostiles up until the trail is most opaque, then hides', () => {
     const field = fakeField(40, 40);
     const fog = createFogOfWar();
     fog.reset(field);
@@ -146,6 +147,7 @@ describe('fogOfWar overlay decay', () => {
     assert.equal(fog.isWorldVisible(0, 0), true);
     assert.equal(fog.isWorldExplored(0, 0), true);
     assert.equal(fog.overlayAlphaAt(0, 0), 0);
+    assert.equal(fog.hidesHostile(1, 0, 0), false);
 
     const far = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: -36, z: -36 }]);
     fog.stamp({
@@ -158,9 +160,11 @@ describe('fogOfWar overlay decay', () => {
       now: 1400,
     });
     assert.equal(fog.isWorldVisible(0, 0), false);
+    assert.equal(fog.isWorldSight(0, 0), false);
     assert.equal(fog.isWorldExplored(0, 0), true);
     const mid = fog.overlayAlphaAt(0, 0);
     assert.ok(mid > 0 && mid < VISITED_ALPHA, `expected a fading trail, got ${mid}`);
+    assert.equal(fog.hidesHostile(1, 0, 0), false);
 
     fog.stamp({
       world: far,
@@ -173,7 +177,9 @@ describe('fogOfWar overlay decay', () => {
     });
     assert.equal(fog.isWorldVisible(0, 0), false);
     assert.equal(fog.overlayAlphaAt(0, 0), VISITED_ALPHA);
+    assert.equal(fog.hidesHostile(1, 0, 0), true);
     assert.equal(fog.overlayAlphaAt(64, 0), 255);
+    assert.equal(fog.hidesHostile(1, 64, 0), true);
   });
 });
 
@@ -209,6 +215,7 @@ describe('fogOfWar three levels', () => {
     assert.equal(fog.isWorldVisible(-36, -36), true);
     assert.equal(fog.isWorldVisible(0, 0), false);
     assert.equal(fog.isWorldExplored(0, 0), true);
+    assert.equal(fog.hidesHostile(1, 0, 0), true);
     assert.equal(fog.isWorldExplored(64, 0), false);
     assert.equal(sight, 0);
     assert.equal(visited, VISITED_ALPHA);
@@ -221,7 +228,7 @@ describe('fogOfWar three levels', () => {
 });
 
 describe('fogOfWar overlay edge', () => {
-  it('keeps hide binary and fades overlay alpha just past the stamp', () => {
+  it('hides with the fade skirt, not the hard vision circle', () => {
     const field = fakeField(40, 40);
     const fog = createFogOfWar();
     fog.reset(field);
@@ -230,11 +237,22 @@ describe('fogOfWar overlay edge', () => {
 
     assert.equal(fog.isWorldVisible(0, 0), true);
     assert.equal(fog.overlayAlphaAt(0, 0), 0);
+    assert.equal(fog.hidesHostile(1, 0, 0), false);
 
-    // Civilian radius is 8 tiles (32wu). 36wu is one tile past the hard circle.
+    // Civilian radius is 8 tiles (32wu). 36wu is one tile past the hard circle
+    // but still inside the 3-tile fade — units stay up with the overlay.
     assert.equal(fog.isWorldVisible(36, 0), false);
+    assert.equal(fog.isWorldSight(36, 0), true);
+    assert.equal(fog.hidesHostile(1, 36, 0), false);
     const skirt = fog.overlayAlphaAt(36, 0);
     assert.ok(skirt > 0 && skirt < 255, `expected a fade skirt, got ${skirt}`);
+    assert.equal(fog.isWorldExplored(36, 0), false);
+
+    // 48wu is past the fade (8+3 tiles). Overlay is fully on; hostiles hide.
+    assert.equal(fog.isWorldVisible(48, 0), false);
+    assert.equal(fog.isWorldSight(48, 0), false);
+    assert.equal(fog.hidesHostile(1, 48, 0), true);
+    assert.equal(fog.overlayAlphaAt(48, 0), 255);
 
     assert.equal(fog.isWorldVisible(64, 0), false);
     assert.equal(fog.overlayAlphaAt(64, 0), 255);

@@ -12,6 +12,7 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { meshRoofY, roofChipLift, DEFAULT_BUILDING_ROOF } from './healthBars.js';
 import { BUILDING_MODEL_URLS } from '../sim/buildings.js';
 import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
@@ -280,7 +281,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
           z: s.z,
           scale: Number.isFinite(s.scale) && s.scale > 1e-6 ? s.scale : 1,
         }));
-        templates.set(typeId, { parts, fxSockets });
+        templates.set(typeId, { parts, fxSockets, roofY: meshRoofY(parts) });
 
         /** @type {{ mesh: object, matrices: Float32Array }[]} */
         const layers = [];
@@ -664,6 +665,11 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     }
   }
 
+  function chipHeight(typeId) {
+    const roof = templates.get(typeId)?.roofY;
+    return roofChipLift(roof, DEFAULT_BUILDING_ROOF);
+  }
+
   return {
     place,
     refreshTeamColors,
@@ -675,6 +681,7 @@ export async function createBuildingProps(engine, scene, groundYAt) {
     resolvePick,
     forEachFxInstance,
     forEachShadowMesh,
+    chipHeight,
     BUILDING_SEL_SIZE,
     get ghostVisible() {
       return ghostVisible;

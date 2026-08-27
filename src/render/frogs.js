@@ -28,17 +28,23 @@ const BODY_HEIGHT = 0.15;
 /** Match sim tick length for local hop playback. */
 const TICK_MS = 50;
 
-function setThinInstanceCount(mesh, count) {
+/**
+ * Keep GPU draw count at buffer capacity. Lite records opaque thin-instance
+ * draws into render bundles using the first `ti.count`; growing from 0 after
+ * that first upload drops later frogs (sparkles still fire from sim pulses).
+ * Unused slots stay at a zero matrix, same as unit / pick-hitbox pools.
+ */
+function pinThinInstanceCapacity(mesh) {
   const ti = mesh.thinInstances;
   if (!ti) return;
-  if (count > ti._capacity) {
-    throw new Error(`thin-instance count ${count} exceeds capacity ${ti._capacity}`);
+  const cap = ti._capacity | 0;
+  if (cap > 0 && ti.count !== cap) {
+    ti.count = cap;
+    ti._version++;
+    ti._dirtyMin = 0;
+    ti._dirtyMax = cap;
   }
-  ti.count = count;
-  ti._version++;
-  ti._dirtyMin = 0;
-  ti._dirtyMax = count;
-  mesh.visible = count > 0;
+  mesh.visible = true;
 }
 
 function capacityForFrogs(needed) {
@@ -112,7 +118,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
       mesh.pickable = false;
       const matrices = new Float32Array(capacity * 16);
       setThinInstances(mesh, matrices, capacity);
-      setThinInstanceCount(mesh, 0);
+      pinThinInstanceCapacity(mesh);
       addToScene(scene, mesh);
       batches.push({ mesh, matrices, colors: null });
     }
@@ -137,7 +143,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
     }
     setThinInstances(mesh, matrices, capacity);
     setThinInstanceColors(mesh, colors);
-    setThinInstanceCount(mesh, 0);
+    pinThinInstanceCapacity(mesh);
     addToScene(scene, mesh);
     batches.push({ mesh, matrices, colors });
   }
@@ -161,6 +167,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
     for (const batch of batches) {
       const matrices = new Float32Array(cap * 16);
       setThinInstances(batch.mesh, matrices, cap);
+      pinThinInstanceCapacity(batch.mesh);
       batch.matrices = matrices;
       if (batch.colors) {
         const colors = new Float32Array(cap * 4);
@@ -241,7 +248,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
     }
     previousCount = count;
     for (let b = 0; b < batches.length; b++) {
-      setThinInstanceCount(batches[b].mesh, count);
+      pinThinInstanceCapacity(batches[b].mesh);
     }
   }
 
@@ -311,15 +318,6 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
   function clear() {
     active.clear();
     hopping = false;
-    for (let slot = 0; slot < previousCount; slot++) {
-      for (let b = 0; b < batches.length; b++) {
-        hideMatrix(batches[b].matrices, slot);
-      }
-    }
-    previousCount = 0;
-    for (let b = 0; b < batches.length; b++) {
-      setThinInstanceCount(batches[b].mesh, 0);
-    }
     dirty = true;
   }
 
@@ -337,7 +335,7 @@ export async function createFrogRenderer(engine, scene, groundYAt, onLand) {
       return { active: active.size, capacity };
     },
     commit() {
-      if (active.size === 0 && previousCount === 0) return;
+      if (!dirty && !hopping) return;
       if (dirty || hopping) {
         rebuild();
         dirty = false;

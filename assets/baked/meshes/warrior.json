@@ -27,6 +27,29 @@
       "emissiveImage": null
     },
     {
+      "name": "Material",
+      "baseColorFactor": [
+        0.49010899662971497,
+        0.5274291634559631,
+        0.48143452405929565,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
       "name": "TeamColor",
       "baseColorFactor": [
         0.800000011920929,
@@ -78,7 +101,7 @@
       }
     },
     {
-      "materialName": "part1",
+      "materialName": "Material",
       "materialIndex": 1,
       "reverseWinding": true,
       "positions": {
@@ -104,7 +127,7 @@
     },
     {
       "materialName": "TeamColor",
-      "materialIndex": 1,
+      "materialIndex": 2,
       "reverseWinding": true,
       "positions": {
         "offset": 26496,

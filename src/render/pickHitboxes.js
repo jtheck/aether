@@ -76,6 +76,7 @@ function writeSphere(matrices, slot, x, y, z, radius) {
  *   diffuseColor?: [number, number, number],
  *   emissiveColor?: [number, number, number],
  *   alpha?: number,
+ *   createMaterial?: () => object,
  * }} [opts]
  */
 export function createPickHitboxRenderer(engine, scene, capacity, opts = {}) {
@@ -100,16 +101,20 @@ export function createPickHitboxRenderer(engine, scene, capacity, opts = {}) {
     mesh.pickable = false;
     if (opts.name) mesh.name = opts.name;
     if (Number.isFinite(opts.renderOrder)) mesh.renderOrder = opts.renderOrder;
-    material = createStandardMaterial();
-    material.diffuseColor = diffuseColor;
-    material.emissiveColor = emissiveColor;
-    material.specularColor = [0, 0, 0];
-    material.disableLighting = true;
-    // Any alpha < 1 keeps Lite on the per-frame transparent path (not a frozen
-    // opaque bundle). Instance color alpha stays 1 so this doesn't stack down.
-    material.alpha = alpha;
-    material.backFaceCulling = false;
-    if (opts.depthWrite === false) material.depthWrite = false;
+    if (opts.createMaterial) {
+      material = opts.createMaterial();
+    } else {
+      material = createStandardMaterial();
+      material.diffuseColor = diffuseColor;
+      material.emissiveColor = emissiveColor;
+      material.specularColor = [0, 0, 0];
+      material.disableLighting = true;
+      // Any alpha < 1 keeps Lite on the per-frame transparent path (not a frozen
+      // opaque bundle). Instance color alpha stays 1 so this doesn't stack down.
+      material.alpha = alpha;
+      material.backFaceCulling = false;
+      if (opts.depthWrite === false) material.depthWrite = false;
+    }
     mesh.material = material;
 
     matrices = new Float32Array(cap * 16);

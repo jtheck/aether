@@ -6,9 +6,9 @@
     {
       "name": "TeamColor",
       "baseColorFactor": [
-        0.800000011920929,
-        0.800000011920929,
-        0.800000011920929,
+        0.8000156879425049,
+        0,
+        0.0032691003289073706,
         1
       ],
       "metallicFactor": 0,
@@ -103,8 +103,8 @@
       }
     },
     {
-      "materialName": "part2",
-      "materialIndex": 1,
+      "materialName": "TeamColor",
+      "materialIndex": 0,
       "reverseWinding": true,
       "positions": {
         "offset": 37900,

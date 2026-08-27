@@ -51,6 +51,12 @@ import {
   overlayCameraRef,
 } from '../render/overlayLod.js';
 import { posePassengerOnTransport, seatsForUnitType } from '../render/transportSeats.js';
+import {
+  DEFAULT_AGORA_ROOF,
+  DEFAULT_BUILDING_ROOF,
+  roofChipLift,
+  unitChipLift,
+} from '../render/healthBars.js';
 import { setupInput } from './input.js';
 import { init as initAudio, playThunder } from './audio.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
@@ -526,7 +532,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     cacheGx: new Float32Array(CAP),
     cacheGz: new Float32Array(CAP),
     cacheGy: new Float32Array(CAP),
-    /** Deferred health chips: [x, z, size, ratio] × N (selected first at flush). */
+    /** Deferred health chips: [x, z, lift, ratio] × N (selected first at flush). */
     hbSelected: new Float32Array(CAP * 4),
     hbHurt: new Float32Array(CAP * 4),
     /** Passenger deck packing for carried units. */
@@ -1707,7 +1713,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         const o = slot * 4;
         buf[o] = x;
         buf[o + 1] = z;
-        buf[o + 2] = size;
+        buf[o + 2] = unitChipLift(loft, def.pickHeight);
         buf[o + 3] = hp / maxHp;
       }
     }
@@ -1724,6 +1730,30 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         armor: false,
         holy: false,
       });
+    }
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      let x;
+      let z;
+      let owner;
+      let lift;
+      if (sel.kind === 'agora') {
+        const a = session.agoras?.[sel.index];
+        if (!a) continue;
+        x = a.x;
+        z = a.z;
+        owner = a.owner;
+        lift = renderer.agoraChipHeight?.() ?? roofChipLift(0, DEFAULT_AGORA_ROOF);
+      } else {
+        const b = session.buildings?.[sel.index];
+        if (!b) continue;
+        x = b.x;
+        z = b.z;
+        owner = b.owner;
+        lift = renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
+      }
+      if (fog.hidesHostile(owner, x, z)) continue;
+      renderer.writeHealthBar?.(x, z, lift, 1, { armor: false, holy: false });
     }
     renderer.endHealthBars?.();
     if (renderer.setSelectionGroups) {

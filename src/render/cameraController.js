@@ -29,10 +29,29 @@ const PAN_DRAG_THRESHOLD = 5;
 const MIN_BETA = 0.82;
 const MAX_BETA = 1.2;
 const CLOSE_BETA = 1.2;
-const CLOSE_SPAN = 0.12;
+/** Close-in tilt toward the horizon; after this, zoom-out lifts beta again. */
+export const CAMERA_CLOSE_SPAN = 0.12;
+const CLOSE_SPAN = CAMERA_CLOSE_SPAN;
 /** Gentle, centered bowl — small mid/edge gap so the whole range feels even. */
 const ZOOM_MID_SPEED = 0.72;
 const ZOOM_EDGE_SPEED = 1.06;
+
+/** Zoom 0 = closest, 1 = farthest. */
+export function cameraZoomNormalized(radius, minR, maxR) {
+  const span = Math.max(1e-3, (maxR ?? 0) - (minR ?? 0));
+  return Math.max(0, Math.min(1, ((radius ?? 0) - (minR ?? 0)) / span));
+}
+
+/**
+ * 0 at play-down / close-in, 1 at max zoom-out look-up.
+ * Close-in horizon tilt does not count.
+ * @param {number} normalizedZoom
+ */
+export function farHorizonAmount(normalizedZoom) {
+  const n = Math.max(0, Math.min(1, normalizedZoom));
+  if (n <= CLOSE_SPAN) return 0;
+  return (n - CLOSE_SPAN) / (1 - CLOSE_SPAN);
+}
 
 /** @param {number} normalized 0 = closest, 1 = farthest — linear so angle and distance stay locked. */
 function betaForNormalizedZoom(normalized) {

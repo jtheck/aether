@@ -15,11 +15,80 @@
   ],
   "materials": [
     {
+      "name": "Material",
+      "baseColorFactor": [
+        0.23202931880950928,
+        0.23202931880950928,
+        0.23202931880950928,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
       "name": "TeamColor",
       "baseColorFactor": [
-        0.800000011920929,
-        0.800000011920929,
-        0.800000011920929,
+        0.8000074625015259,
+        0.045979198068380356,
+        0.031131621450185776,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.001",
+      "baseColorFactor": [
+        0.06690794974565506,
+        0.07941550016403198,
+        0.185903862118721,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material.002",
+      "baseColorFactor": [
+        0.1031326949596405,
+        0.0072420816868543625,
+        0.00121331459376961,
         1
       ],
       "metallicFactor": 0,
@@ -41,52 +110,102 @@
   "images": [],
   "parts": [
     {
-      "materialName": "TeamColor",
+      "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
       "positions": {
         "offset": 0,
-        "length": 3135,
+        "length": 2508,
         "type": "f32"
       },
       "normals": {
-        "offset": 12540,
-        "length": 3135,
+        "offset": 10032,
+        "length": 2508,
         "type": "f32"
       },
       "indices": {
-        "offset": 25080,
-        "length": 1629,
+        "offset": 20064,
+        "length": 1332,
         "type": "u32"
       },
       "uvs": {
-        "offset": 31596,
-        "length": 2090,
+        "offset": 25392,
+        "length": 1672,
         "type": "f32"
       }
     },
     {
-      "materialName": "part1",
-      "materialIndex": 0,
+      "materialName": "TeamColor",
+      "materialIndex": 1,
       "reverseWinding": true,
       "positions": {
-        "offset": 39956,
-        "length": 72,
+        "offset": 32080,
+        "length": 132,
         "type": "f32"
       },
       "normals": {
-        "offset": 40244,
-        "length": 72,
+        "offset": 32608,
+        "length": 132,
         "type": "f32"
       },
       "indices": {
-        "offset": 40532,
-        "length": 36,
+        "offset": 33136,
+        "length": 66,
         "type": "u32"
       },
       "uvs": {
-        "offset": 40676,
-        "length": 48,
+        "offset": 33400,
+        "length": 88,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.001",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 33752,
+        "length": 495,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 35732,
+        "length": 495,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 37712,
+        "length": 231,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 38636,
+        "length": 330,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.002",
+      "materialIndex": 3,
+      "reverseWinding": true,
+      "positions": {
+        "offset": 39956,
+        "length": 198,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 40748,
+        "length": 198,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 41540,
+        "length": 108,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 41972,
+        "length": 132,
         "type": "f32"
       }
     }

@@ -7,6 +7,7 @@ import {
   getFxMode,
   getPlayerColor,
   getPlayerName,
+  PLAYER_COLORS,
   getShadowMode,
   resolveShadowMode,
   setFxMode,
@@ -48,6 +49,14 @@ export function setupMenu({ renderer, onStartSoloAi, onPlayerColorChange }) {
   const fxNote = /** @type {HTMLElement} */ (drawer.querySelector('#fx_note'));
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
   const colorPicker = /** @type {HTMLSelectElement} */ (drawer.querySelector('#color_picker'));
+  colorPicker.replaceChildren(
+    ...PLAYER_COLORS.map((c) => {
+      const opt = document.createElement('option');
+      opt.value = c.hex;
+      opt.textContent = c.name;
+      return opt;
+    }),
+  );
   const soloBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#solo_ai_b'));
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
 

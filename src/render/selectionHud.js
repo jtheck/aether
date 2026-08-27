@@ -1,4 +1,4 @@
-// Selection HUD — a camera-locked row of chips across the bottom of the screen
+// Selection HUD — a camera-locked row of chips across the top of the screen
 // (v1's 3D selection panel, reimagined for Lite/WebGPU). Each distinct selected
 // unit or building type shows a small 3D model icon plus a native-text
 // "Name ×N" label. The icons are real scene meshes placed on a screen ray at a
@@ -13,6 +13,7 @@ import {
   disposeTextRenderer,
   registerTextRenderer,
   createShaderMaterial,
+  setShaderUniform,
   setSubtreeVisible,
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
@@ -29,8 +30,8 @@ const MAX_SLOTS = 14;
 /**
  * Depth from the camera eye the icons sit at (world units). The scene's
  * reverse-Z compare overrides per-material "always", so chips have to sit
- * nearer than terrain / trees / buildings or they lose the depth test. A
- * bottom-screen ray dips toward the ground — keep this shallow.
+ * nearer than terrain / trees / buildings or they lose the depth test. Keep
+ * this shallow so a downward glance still clears the ground.
  */
 const ICON_DEPTH = 0.8;
 /**
@@ -44,13 +45,17 @@ const UNIT_ICON_WORLD = 1.55 * (0.8 / 28);
 const SLOT_PX = 112;
 /** Keep the whole row inside the viewport with this side inset (CSS px). */
 const EDGE_MARGIN = 44;
-/** Icon center rises this far off the bottom edge (CSS px). */
-const BOTTOM_MARGIN = 92;
+/** Icon center sits this far below the top edge (CSS px). */
+const TOP_MARGIN = 72;
 /** Label baseline below the icon center (CSS px). */
 const LABEL_DY = 34;
 /** Clickable rect half-height above/below the icon center (CSS px). */
 const HIT_UP_PX = 48;
 const HIT_DOWN_PX = 46;
+/** Hover: slight scale-up, lift toward the top, and a brighter wash. */
+const HOVER_SCALE = 0.1;
+const HOVER_LIFT_PX = 5;
+const HOVER_LERP = 14;
 const LABEL_FONT_SIZE = 26;
 const LABEL_SCREEN_SCALE = 0.84;
 const LABEL_COLOR = [0.92, 0.96, 1, 1];
@@ -173,7 +178,7 @@ function makeIconMaterial(source) {
   return vec4<f32>(shaderUniforms.iconColor * lit, 1.0);
 }`,
   });
-  return mat;
+  return { mat, color };
 }
 
 /** Static or VAT unit GLB for the chip icon. */
@@ -277,14 +282,17 @@ function cameraEye(camera) {
  * @param {{
  *   rayFromCanvas?: (x: number, y: number) => { ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null,
  *   getViewport?: () => { width: number, height: number, pixelWidth?: number, pixelHeight?: number },
+ *   getPointerCanvas?: () => { x: number, y: number } | null,
+ *   canvas?: HTMLCanvasElement,
  *   font?: object | null,
  * }} [screen]
  */
 export async function createSelectionHud(engine, scene, screen = {}) {
   /**
    * @type {Map<string, {
-   *   layers: { mesh: object }[],
+   *   layers: { mesh: object, baseColor: number[] }[],
    *   visible: boolean,
+   *   hoverT: number,
    *   normScale: number,
    *   cx: number, cy: number, cz: number,
    * }>}
@@ -310,11 +318,12 @@ export async function createSelectionHud(engine, scene, screen = {}) {
         mesh.position.z = 0;
         mesh.pickable = false;
         if ('receiveShadows' in mesh) mesh.receiveShadows = false;
-        mesh.material = makeIconMaterial(mesh.material);
+        const { mat, color } = makeIconMaterial(mesh.material);
+        mesh.material = mat;
         mesh.renderOrder = HUD_RENDER_ORDER;
         addToScene(scene, mesh);
         setSubtreeVisible(mesh, false);
-        layers.push({ mesh });
+        layers.push({ mesh, baseColor: color });
       }
       const spanX = Number.isFinite(max[0] - min[0]) ? max[0] - min[0] : 1;
       const spanY = Number.isFinite(max[1] - min[1]) ? max[1] - min[1] : 1;
@@ -323,6 +332,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       icons.set(key, {
         layers,
         visible: false,
+        hoverT: 0,
         normScale: UNIT_ICON_WORLD / extent,
         cx: Number.isFinite(min[0]) ? (min[0] + max[0]) * 0.5 : 0,
         cy: Number.isFinite(min[1]) ? (min[1] + max[1]) * 0.5 : 0,
@@ -372,11 +382,27 @@ export async function createSelectionHud(engine, scene, screen = {}) {
   /** Clickable chip rects in canvas CSS px, refreshed each frame. */
   /** @type {{ slot: { kind: string, typeId?: number, typeKey?: string }, x: number, y: number, w: number, h: number }[]} */
   let hitRects = [];
+  let lastHoverMs = 0;
 
-  function showIcon(key, ax, ay, az, rx, ry, rz, fx, fy, fz, compress) {
+  function applyIconHover(batch, hoverT) {
+    const lift = 1 + hoverT * 0.16;
+    const add = hoverT * 0.05;
+    for (const layer of batch.layers) {
+      const base = layer.baseColor;
+      const mat = layer.mesh.material;
+      if (!base || !mat) continue;
+      setShaderUniform(mat, 'iconColor', [
+        Math.min(1, base[0] * lift + add),
+        Math.min(1, base[1] * lift + add),
+        Math.min(1, base[2] * lift + add),
+      ]);
+    }
+  }
+
+  function showIcon(key, ax, ay, az, rx, ry, rz, fx, fy, fz, compress, hoverT) {
     const batch = icons.get(key);
     if (!batch) return;
-    const s = batch.normScale * compress;
+    const s = batch.normScale * compress * (1 + hoverT * HOVER_SCALE);
     // Anchor the model's bounding-box center on the slot (up = world +Y).
     const ox = ax - s * (rx * batch.cx + fx * batch.cz);
     const oy = ay - s * (ry * batch.cx + batch.cy + fy * batch.cz);
@@ -384,10 +410,15 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     for (const layer of batch.layers) {
       placeIconMesh(layer.mesh, ox, oy, oz, rx, ry, rz, fx, fy, fz, s);
     }
+    applyIconHover(batch, hoverT);
     batch.visible = true;
   }
 
   function hideIcon(batch) {
+    if (batch.hoverT) {
+      applyIconHover(batch, 0);
+      batch.hoverT = 0;
+    }
     if (!batch.visible) return;
     for (const layer of batch.layers) {
       setSubtreeVisible(layer.mesh, false);
@@ -408,6 +439,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     for (const batch of icons.values()) hideIcon(batch);
     for (const label of labels) hideLabel(label);
     hitRects = [];
+    if (screen.canvas) screen.canvas.style.cursor = '';
   }
 
   /**
@@ -454,7 +486,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     const compress = Math.min(1, pitch / SLOT_PX);
     const rowW = (n - 1) * pitch;
     const startX = vw * 0.5 - rowW * 0.5;
-    const iconPy = vh - BOTTOM_MARGIN;
+    const iconPy = TOP_MARGIN;
 
     /** @type {Set<string>} */
     const shownKeys = new Set();
@@ -464,18 +496,47 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       const g = groups[i];
       const px = startX + i * pitch;
       const slot = selectionHudSlot(g);
-      const iconKey = selectionHudIconKey(g);
       if (slot) {
         hitRects.push({
           slot,
+          groupIndex: i,
           x: px - pitch * 0.5,
           y: iconPy - HIT_UP_PX,
           w: pitch,
           h: HIT_UP_PX + HIT_DOWN_PX,
         });
       }
+    }
 
-      const ray = screen.rayFromCanvas(px, iconPy);
+    const now = performance.now();
+    const dt = lastHoverMs ? Math.min(0.05, (now - lastHoverMs) * 0.001) : 0.016;
+    lastHoverMs = now;
+    const ptr = screen.getPointerCanvas?.();
+    let hoverIdx = -1;
+    if (ptr) {
+      for (let i = 0; i < hitRects.length; i++) {
+        const r = hitRects[i];
+        if (ptr.x >= r.x && ptr.x <= r.x + r.w && ptr.y >= r.y && ptr.y <= r.y + r.h) {
+          hoverIdx = r.groupIndex;
+          break;
+        }
+      }
+    }
+    const canvas = screen.canvas;
+    if (canvas) canvas.style.cursor = hoverIdx >= 0 ? 'pointer' : '';
+
+    for (let i = 0; i < n; i++) {
+      const g = groups[i];
+      const px = startX + i * pitch;
+      const iconKey = selectionHudIconKey(g);
+      const batch = iconKey ? icons.get(iconKey) : null;
+      const target = i === hoverIdx ? 1 : 0;
+      const hoverT = batch
+        ? (batch.hoverT += (target - batch.hoverT) * Math.min(1, dt * HOVER_LERP))
+        : 0;
+      const py = iconPy - hoverT * HOVER_LIFT_PX;
+
+      const ray = screen.rayFromCanvas(px, py);
       if (ray && iconKey) {
         const wx = ray.ox + ray.dx * ICON_DEPTH;
         const wy = ray.oy + ray.dy * ICON_DEPTH;
@@ -487,7 +548,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
         thx /= hlen;
         thz /= hlen;
         // right = (-screenRight); forward = -towardCameraHorizontal.
-        showIcon(iconKey, wx, wy, wz, -thz, 0, thx, -thx, 0, -thz, compress);
+        showIcon(iconKey, wx, wy, wz, -thz, 0, thx, -thx, 0, -thz, compress, hoverT);
         shownKeys.add(iconKey);
       }
 
@@ -498,13 +559,13 @@ export async function createSelectionHud(engine, scene, screen = {}) {
           updateDefaultTextData(label.data, text, LABEL_COLOR);
           label.text = text;
         }
-        const scale = LABEL_SCREEN_SCALE * pixelRatio * compress;
+        const scale = LABEL_SCREEN_SCALE * pixelRatio * compress * (1 + hoverT * 0.06);
         const centerOffset = label.data.width * scale * 0.5;
         label.layer.positionPx.x = px * sx - centerOffset;
-        label.layer.positionPx.y = (iconPy + LABEL_DY) * sy;
+        label.layer.positionPx.y = (py + LABEL_DY) * sy;
         label.layer.rotationRad = 0;
         label.layer.scale = scale;
-        label.layer.opacity = 1;
+        label.layer.opacity = 0.92 + hoverT * 0.08;
         label.layer.visible = true;
         label.layer._version++;
       }

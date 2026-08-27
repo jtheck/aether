@@ -57,6 +57,7 @@ import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverl
 import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
+import { createHolyShieldMaterial } from './holyShields.js';
 import { createFrogRenderer } from './frogs.js';
 import { createArrowTrails } from './arrowTrails.js';
 import { createLightningBolts } from './lightningBolts.js';
@@ -76,7 +77,13 @@ import {
   LOD_ENABLED,
   VAT_DISTANCE_SQ,
 } from './lodDistances.js';
-import { createHealthBars } from './healthBars.js';
+import {
+  createHealthBars,
+  DEFAULT_AGORA_ROOF,
+  DEFAULT_BUILDING_ROOF,
+  DEFAULT_UNIT_CHIP_LIFT,
+  roofChipLift,
+} from './healthBars.js';
 import { LIGHTNING_HIT } from '../sim/lightning.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
@@ -1208,12 +1215,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     {
       startVisible: true,
       name: 'holy-shield',
-      segments: 16,
+      segments: 24,
       renderOrder: 190,
-      depthWrite: false,
-      diffuseColor: [0.78, 0.9, 1],
-      emissiveColor: [0.7, 0.84, 1],
-      alpha: 0.5,
+      createMaterial: createHolyShieldMaterial,
     },
   );
   const particles = createParticleSystem(engine, scene, {
@@ -1359,6 +1363,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   // on the first N entity indices (later selected units looked "unhealthy-less").
   const healthBars = createHealthBars(engine, scene, {
     capacity: Math.max(capacity, gpuCapacity, 1),
+    getViewportHeight: () => canvasCoords(0, 0).height,
   });
   const trailGenerations = new Uint32Array(MAX_PROJECTILES);
   const trailLastEmitMs = new Float64Array(MAX_PROJECTILES);
@@ -1726,13 +1731,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     });
   };
 
+  /** @type {any[]} */
+  let pendingFrogUpdates = [];
   /** @type {any} */
   let frogRenderer = {
     advance() {},
     sync() {},
     commit() {},
-    applyUpdates() {},
-    clear() {},
+    applyUpdates(list) {
+      if (list?.length) pendingFrogUpdates.push(...list);
+    },
+    clear() {
+      pendingFrogUpdates.length = 0;
+    },
     stats: () => null,
   };
   /** Queued placements until Phase B props are ready. */
@@ -3215,6 +3226,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         upgradeHudMeshes(),
       ]).then(async ([frogs, shrooms, agoras, buildings]) => {
         frogRenderer = frogs;
+        if (pendingFrogUpdates.length) {
+          frogRenderer.applyUpdates(pendingFrogUpdates);
+          pendingFrogUpdates.length = 0;
+        }
         mushrooms = shrooms;
         agoraProps = agoras;
         buildingProps = buildings;
@@ -3912,7 +3927,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * White absorb bubbles on living units with shieldHp.
+     * Rim-lit absorb bubbles on living units with shieldHp.
      * Same `{ x, y, z, r }` shape as pick hitboxes.
      */
     syncHolyShields(spheres) {
@@ -4169,24 +4184,28 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       healthBars.begin();
     },
 
-    /** v1-style chips below the selection collar. flags: { armor?, holy? }. */
-    writeHealthBar(x, z, unitSize, ratio, flags) {
+    /** v1-style chips above the unit / building. `lift` is world-Y above ground. */
+    writeHealthBar(x, z, lift, ratio, flags) {
+      const gy = groundYAt(x, z);
+      const above = Number.isFinite(lift) && lift > 0.05 ? lift : DEFAULT_UNIT_CHIP_LIFT;
+      const y = gy + above;
       if (LOD_ENABLED) {
         const eye = cameraEyePos();
         const dx = eye.x - x;
+        const dy = eye.y - y;
         const dz = eye.z - z;
         if (dx * dx + dz * dz > FX_DISTANCE_SQ) return;
-        const gy = groundYAt(x, z);
-        const dy = eye.y - gy;
         if (dx * dx + dy * dy + dz * dz > FX_DISTANCE_SQ) return;
-        const y = gy + FOOT_CLEARANCE + 0.04;
-        healthBars.write(x, y, z, unitSize, ratio, flags);
-        return;
       }
-      const gy = groundYAt(x, z);
-      // Just above terrain; screen-space "below unit" is the toward-camera XZ offset.
-      const y = gy + FOOT_CLEARANCE + 0.04;
-      healthBars.write(x, y, z, unitSize, ratio, flags);
+      healthBars.write(x, y, z, lift, ratio, flags);
+    },
+
+    buildingChipHeight(typeId) {
+      return buildingProps.chipHeight?.(typeId) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
+    },
+
+    agoraChipHeight() {
+      return agoraProps.chipHeight?.() ?? roofChipLift(0, DEFAULT_AGORA_ROOF);
     },
 
     endHealthBars() {

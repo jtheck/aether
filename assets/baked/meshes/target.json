@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/target.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,6 +33,16 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.12909847497940063,
+        0.07903746515512466,
+        -0.4910143315792084
+      ],
+      "boundMax": [
+        0.12909847497940063,
+        1.648153305053711,
+        0.4910143315792084
+      ],
       "positions": {
         "offset": 0,
         "length": 126,

@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/tower.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "fire_anchor",
@@ -44,6 +44,16 @@
       "materialName": "Material.003",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -3.7439866065979004,
+        0.07671821117401123,
+        -3.793484687805176
+      ],
+      "boundMax": [
+        3.4251410961151123,
+        8.519264221191406,
+        4.058891773223877
+      ],
       "positions": {
         "offset": 0,
         "length": 312,

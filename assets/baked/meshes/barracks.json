@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/barracks.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "smoke_anchor",
@@ -89,29 +89,6 @@
     },
     {
       "name": "Material.019",
-      "baseColorFactor": [
-        0.4262715280056,
-        0.4853590428829193,
-        0.6450870037078857,
-        1
-      ],
-      "metallicFactor": 0.19014084339141846,
-      "roughnessFactor": 0.5845070481300354,
-      "emissiveFactor": [
-        0,
-        0,
-        0
-      ],
-      "doubleSided": true,
-      "alphaMode": "OPAQUE",
-      "alphaCutoff": 0.5,
-      "baseColorImage": null,
-      "normalImage": null,
-      "ormImage": null,
-      "emissiveImage": null
-    },
-    {
-      "name": "Material.020",
       "baseColorFactor": [
         0.4262715280056,
         0.4853590428829193,
@@ -232,6 +209,16 @@
       "materialName": "Material.018",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        0.2623750567436218,
+        0.10095641016960144,
+        -2.9656834602355957
+      ],
+      "boundMax": [
+        2.3935344219207764,
+        2.2800240516662598,
+        1.7754275798797607
+      ],
       "positions": {
         "offset": 0,
         "length": 90,
@@ -257,56 +244,51 @@
       "materialName": "Material.019",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -3.7875723838806152,
+        0.17184382677078247,
+        -4.207399368286133
+      ],
+      "boundMax": [
+        4.818635940551758,
+        2.7094192504882812,
+        2.292172908782959
+      ],
       "positions": {
         "offset": 1152,
-        "length": 90,
+        "length": 180,
         "type": "f32"
       },
       "normals": {
-        "offset": 1512,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
         "offset": 1872,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 2064,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.020",
-      "materialIndex": 2,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 2304,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 2664,
-        "length": 90,
+        "length": 180,
         "type": "f32"
       },
       "indices": {
-        "offset": 3024,
-        "length": 48,
+        "offset": 2592,
+        "length": 96,
         "type": "u32"
       },
       "uvs": {
-        "offset": 3216,
-        "length": 60,
+        "offset": 2976,
+        "length": 120,
         "type": "f32"
       }
     },
     {
       "materialName": "Material.001",
-      "materialIndex": 3,
+      "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        -8.197315216064453,
+        -0.07200489193201065,
+        -7.001910209655762
+      ],
+      "boundMax": [
+        -3.407388210296631,
+        0.44073066115379333,
+        -2.1380913257598877
+      ],
       "positions": {
         "offset": 3456,
         "length": 216,
@@ -330,8 +312,18 @@
     },
     {
       "materialName": "Material.016",
-      "materialIndex": 4,
+      "materialIndex": 3,
       "reverseWinding": true,
+      "boundMin": [
+        4.3524250984191895,
+        -0.05889490991830826,
+        0.8839897513389587
+      ],
+      "boundMax": [
+        9.142352104187012,
+        0.4538406431674957,
+        5.747808933258057
+      ],
       "positions": {
         "offset": 6192,
         "length": 216,
@@ -355,8 +347,18 @@
     },
     {
       "materialName": "TeamColor",
-      "materialIndex": 5,
+      "materialIndex": 4,
       "reverseWinding": true,
+      "boundMin": [
+        -1.9429172277450562,
+        -0.07200489193201065,
+        2.7138586044311523
+      ],
+      "boundMax": [
+        2.8470096588134766,
+        0.44073066115379333,
+        7.5776777267456055
+      ],
       "positions": {
         "offset": 8928,
         "length": 216,
@@ -380,8 +382,18 @@
     },
     {
       "materialName": "Material.022",
-      "materialIndex": 6,
+      "materialIndex": 5,
       "reverseWinding": true,
+      "boundMin": [
+        -8.349613189697266,
+        -0.15170980989933014,
+        0.07874531298875809
+      ],
+      "boundMax": [
+        -3.5596861839294434,
+        0.36102575063705444,
+        4.942564487457275
+      ],
       "positions": {
         "offset": 11664,
         "length": 216,

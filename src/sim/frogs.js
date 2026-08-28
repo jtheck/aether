@@ -318,6 +318,7 @@ export function applyDistract(w, i, ticks = FROG_DISTRACT_TICKS) {
   if (w.distractCd[i] < ticks) w.distractCd[i] = ticks;
   if (w.order[i] === ORDER.ATTACK || w.targetEntity[i] >= 0) {
     w.targetEntity[i] = -1;
+    if (w.targetBuilding) w.targetBuilding[i] = -1;
     clearEngagement(w, i);
     clearPath(w, i);
     if (w.hasTarget[i]) {
@@ -353,6 +354,7 @@ export function maybeConfuseAlly(w, i) {
   if (best < 0) return false;
 
   w.targetEntity[i] = best;
+  if (w.targetBuilding) w.targetBuilding[i] = -1;
   w.order[i] = ORDER.ATTACK;
   claimEngagement(w, i, best);
   const stand = attackStandPoint(w, i, best);
@@ -509,10 +511,15 @@ export function spawnFrogPlague(w, {
   aimY,
   damage,
   count = FROG_COUNT,
+  rangeScale = fx.ONE,
 }) {
   const store = w.frogs;
   if (!store) return 0;
   const rng = w.rng;
+  const scale = rangeScale > 0 ? rangeScale : fx.ONE;
+  const hopNear = fx.mul(FIRST_HOP_NEAR, scale);
+  const hopFar = fx.mul(FIRST_HOP_FAR, scale);
+  const clusterLateral = fx.mul(CLUSTER_LATERAL, scale);
 
   let adx = aimX - x;
   let ady = aimY - y;
@@ -532,8 +539,8 @@ export function spawnFrogPlague(w, {
   const clusterY = new Int32Array(clusterN);
   for (let c = 0; c < clusterN; c++) {
     const depthT = (c + 1) / (clusterN + 1);
-    const depth = FIRST_HOP_NEAR + fx.mul(FIRST_HOP_FAR - FIRST_HOP_NEAR, fx.fromFloat(depthT));
-    const lateral = rngSigned(rng, CLUSTER_LATERAL);
+    const depth = hopNear + fx.mul(hopFar - hopNear, fx.fromFloat(depthT));
+    const lateral = rngSigned(rng, clusterLateral);
     clusterX[c] = x + fx.mul(base.x, depth) + fx.mul(perpX, lateral);
     clusterY[c] = y + fx.mul(base.y, depth) + fx.mul(perpY, lateral);
   }

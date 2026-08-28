@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/scribes.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,74 +33,34 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.5997467041015625,
+        -0.5819506049156189,
+        -0.14727649092674255
+      ],
+      "boundMax": [
+        0.5758082270622253,
+        0.7586784362792969,
+        0.14636699855327606
+      ],
       "positions": {
         "offset": 0,
-        "length": 156,
+        "length": 924,
         "type": "f32"
       },
       "normals": {
-        "offset": 624,
-        "length": 156,
+        "offset": 3696,
+        "length": 924,
         "type": "f32"
       },
       "indices": {
-        "offset": 1248,
-        "length": 84,
+        "offset": 7392,
+        "length": 654,
         "type": "u32"
       },
       "uvs": {
-        "offset": 1584,
-        "length": 104,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part1",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 2000,
-        "length": 378,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 3512,
-        "length": 378,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 5024,
-        "length": 198,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 5816,
-        "length": 252,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part2",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 6824,
-        "length": 390,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 8384,
-        "length": 390,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 9944,
-        "length": 372,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 11432,
-        "length": 260,
+        "offset": 10008,
+        "length": 616,
         "type": "f32"
       }
     }

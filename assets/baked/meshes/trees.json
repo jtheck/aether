@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/trees.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,6 +33,16 @@
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -3.0329251289367676,
+        0.32617971301078796,
+        -3.537687063217163
+      ],
+      "boundMax": [
+        2.1788439750671387,
+        4.920431137084961,
+        3.7076563835144043
+      ],
       "positions": {
         "offset": 0,
         "length": 1680,

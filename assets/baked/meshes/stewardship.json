@@ -1,33 +1,10 @@
 {
   "sourceUrl": "/assets/models/stewardship.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
       "name": "Yellow.001",
-      "baseColorFactor": [
-        0.44797465205192566,
-        0.3547384738922119,
-        0.11264380812644958,
-        1
-      ],
-      "metallicFactor": 0,
-      "roughnessFactor": 0.5,
-      "emissiveFactor": [
-        0,
-        0,
-        0
-      ],
-      "doubleSided": true,
-      "alphaMode": "OPAQUE",
-      "alphaCutoff": 0.5,
-      "baseColorImage": null,
-      "normalImage": null,
-      "ormImage": null,
-      "emissiveImage": null
-    },
-    {
-      "name": "Yellow.002",
       "baseColorFactor": [
         0.44797465205192566,
         0.3547384738922119,
@@ -56,49 +33,34 @@
       "materialName": "Yellow.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.9182410836219788,
+        -0.9570765495300293,
+        -0.5735173225402832
+      ],
+      "boundMax": [
+        0.6357869505882263,
+        1.5479108095169067,
+        0.4598916471004486
+      ],
       "positions": {
         "offset": 0,
-        "length": 2358,
+        "length": 4716,
         "type": "f32"
       },
       "normals": {
-        "offset": 9432,
-        "length": 2358,
-        "type": "f32"
-      },
-      "indices": {
         "offset": 18864,
-        "length": 1224,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 23760,
-        "length": 1572,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Yellow.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 30048,
-        "length": 2358,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 39480,
-        "length": 2358,
+        "length": 4716,
         "type": "f32"
       },
       "indices": {
-        "offset": 48912,
-        "length": 1224,
+        "offset": 37728,
+        "length": 2448,
         "type": "u32"
       },
       "uvs": {
-        "offset": 53808,
-        "length": 1572,
+        "offset": 47520,
+        "length": 3144,
         "type": "f32"
       }
     }

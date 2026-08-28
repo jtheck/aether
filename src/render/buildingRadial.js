@@ -22,8 +22,12 @@ import { loadBakedUnitMeshParts } from './unitModels.js';
 import {
   BUILDING_MODEL_URLS,
   PLACEABLE_BUILDINGS,
+  getBuildingCost,
+  getBuildingRequires,
 } from '../sim/buildings.js';
 import { poseRadialFramingBuilding } from './radialPose.js';
+import { formatResourceCost } from '../sim/resources.js';
+import { menuGateState } from '../sim/menuGate.js';
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
@@ -80,14 +84,35 @@ const HUD_PLACE_DIST = 70;
 const HUD_PLACE_MIN = 24;
 const HUD_PLACE_FRAC = 0.82;
 const HUD_REF_DIST = 110;
-const HUD_BASE_SCALE = 1;
-const HUD_SCALE_MIN = 0.35;
+const HUD_BASE_SCALE = 0.6;
+const HUD_SCALE_MIN = 0.21;
 /** While ghost-placing, shrink the open radial so it stays out of the way. */
-const COMPACT_SCALE = 0.38;
+const COMPACT_SCALE = 0.68;
 const LABEL_FONT_SIZE = 28;
 const LABEL_SCREEN_SCALE = 1.17;
 const LABEL_DOWN = 4.32;
 const LABEL_LIFT = 1.25;
+const PRICE_FONT_SIZE = 16;
+const PRICE_SCREEN_SCALE = 0.78;
+const PRICE_DOWN = 6.35;
+const PRICE_TEXT_COLOR = [0.72, 0.86, 0.92, 1];
+const LABEL_TEXT_COLOR = [0.86, 0.96, 1, 1];
+/** Resting icon wash — white, slightly red if broke, slightly black if locked. */
+const ICON_WASH = {
+  ok: [0.82, 0.82, 0.82],
+  unafford: [0.9, 0.5, 0.48],
+  locked: [0.3, 0.3, 0.32],
+};
+const LABEL_WASH = {
+  ok: LABEL_TEXT_COLOR,
+  unafford: [0.95, 0.62, 0.58, 1],
+  locked: [0.3, 0.32, 0.34, 1],
+};
+const PRICE_WASH = {
+  ok: PRICE_TEXT_COLOR,
+  unafford: [0.92, 0.55, 0.52, 1],
+  locked: [0.28, 0.3, 0.32, 1],
+};
 /** Exp approach rate for compact scale (higher = snappier; ~30 ≈ 0.1s). */
 const COMPACT_LERP_SPEED = 30;
 /** Inset so the whole ring stays inside the viewport when edge-pinned. */
@@ -632,10 +657,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
 
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[] }>} */
   const icons = new Map();
+  /** @type {Map<string, Promise<void>>} */
+  const iconInflight = new Map();
 
-  await Promise.all(
-    PLACEABLE_BUILDINGS.map(async (def) => {
-      const url = MODEL_URLS[def.id];
+  async function ensureIcon(typeId) {
+    if (icons.has(typeId)) return;
+    let pending = iconInflight.get(typeId);
+    if (pending) return pending;
+    pending = (async () => {
+      const url = MODEL_URLS[typeId];
       if (!url) return;
       try {
         const parts = await loadBakedUnitMeshParts(engine, url);
@@ -645,7 +675,6 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
           mesh.position.x = 0;
           mesh.position.y = 0;
           mesh.position.z = 0;
-          // Hover/click uses CPU pad discs — icons need not be GPU-pickable.
           mesh.pickable = false;
           mesh.material = makeIconPreviewMaterial(mesh.material);
           const mat = mesh.material;
@@ -666,19 +695,34 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
           setSubtreeVisible(mesh, false);
           layers.push({ mesh, matrices, baseEmissive, baseDiffuse, visible: false });
         }
-        icons.set(def.id, { layers });
+        icons.set(typeId, { layers });
       } catch (err) {
-        console.warn(`[buildingRadial] icon ${def.id} failed`, err);
+        console.warn(`[buildingRadial] icon ${typeId} failed`, err);
       }
-    }),
-  );
+    })();
+    iconInflight.set(typeId, pending);
+    try {
+      await pending;
+    } finally {
+      iconInflight.delete(typeId);
+    }
+  }
+
+  async function ensureCategoryIcons(catId) {
+    const items = PLACEABLE_BUILDINGS.filter((b) => b.category === catId);
+    for (const b of items) await ensureIcon(b.id);
+  }
 
   /** @type {{ data: object, layer: object, text: string }[]} */
   const labels = [];
+  /** @type {{ data: object, layer: object, text: string }[]} */
+  const prices = [];
   let textRenderer = null;
   let textRendererRegistered = false;
   if (screen.font) {
     try {
+      /** @type {object[]} */
+      const layers = [];
       for (let i = 0; i < MAX_OPTIONS; i++) {
         const data = createDefaultTextData(
           screen.font,
@@ -692,19 +736,36 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
           visible: false,
         });
         labels.push({ data, layer, text: 'Building' });
+        layers.push(layer);
+      }
+      for (let i = 0; i < MAX_OPTIONS; i++) {
+        const data = createDefaultTextData(
+          screen.font,
+          PRICE_FONT_SIZE,
+          '0 Wood',
+          PRICE_TEXT_COLOR,
+          { align: 'center' },
+        );
+        const layer = createTextLayer(data, {
+          order: MAX_OPTIONS + i,
+          opacity: 0,
+          visible: false,
+        });
+        prices.push({ data, layer, text: '' });
+        layers.push(layer);
       }
       // A separate load-op text pass cannot leak its bind group into the
       // scene render pass, unlike world-space TextRenderable.
       textRenderer = createTextRenderer(engine, {
-        layers: labels.map((label) => label.layer),
+        layers,
         clear: false,
       });
     } catch (err) {
       console.warn('[buildingRadial] native labels unavailable', err);
-      for (const label of labels) {
-        disposeDefaultTextData(label.data);
-      }
+      for (const label of labels) disposeDefaultTextData(label.data);
+      for (const price of prices) disposeDefaultTextData(price.data);
       labels.length = 0;
+      prices.length = 0;
       textRenderer = null;
     }
   }
@@ -723,13 +784,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   function itemsForCategory(catId) {
-    return PLACEABLE_BUILDINGS.filter(
-      (b) => b.category === catId && icons.has(b.id),
-    );
+    return PLACEABLE_BUILDINGS.filter((b) => b.category === catId);
   }
 
-  /** @type {{ type: string, name: string, ang: number, x: number, y: number, z: number }[]} */
+  /** @type {{ type: string, name: string, costText: string, gate: string, ang: number, x: number, y: number, z: number }[]} */
   let slots = [];
+  /** @type {Record<string, number> | null} */
+  let menuBank = null;
+  /** @type {Set<string>} */
+  let ownedTypes = new Set();
   let open = false;
   let anchorX = 0;
   let anchorZ = 0;
@@ -932,6 +995,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       slots.push({
         type: items[i].id,
         name: items[i].name,
+        costText: formatResourceCost(getBuildingCost(items[i].id)),
+        gate: gateForType(items[i].id),
         ang,
         x: 0,
         y: centerY,
@@ -943,10 +1008,12 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       const text = slots[i]?.name;
       hideLabel(label);
       if (text && text !== label.text) {
-        updateDefaultTextData(label.data, text, [0.86, 0.96, 1, 1]);
+        updateDefaultTextData(label.data, text, LABEL_WASH.ok);
         label.text = text;
+        label.gate = 'ok';
       }
     }
+    for (const price of prices) hideLabel(price);
     applyRingColor();
     applyPieAppearance();
     for (let i = 0; i < pads.length; i++) applyPadHover(i, false);
@@ -964,6 +1031,13 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     activeCategory = /** @type {CategoryId} */ (catId);
     rebuildSlots();
     if (open) layout();
+    const want = activeCategory;
+    void ensureCategoryIcons(want).then(() => {
+      if (open && activeCategory === want) {
+        rebuildSlots();
+        layout();
+      }
+    });
   }
 
   /** Allow pie hover to switch pages again (e.g. after canceling a building ghost). */
@@ -972,9 +1046,23 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     categoryLocked = false;
   }
 
+  function gateForType(typeId) {
+    return menuGateState({
+      cost: getBuildingCost(typeId),
+      requires: getBuildingRequires(typeId),
+      bank: menuBank,
+      ownedTypes,
+    });
+  }
+
+  function restWash(gate) {
+    return ICON_WASH[gate] ?? ICON_WASH.ok;
+  }
+
   function applyIconHover(type, hovered) {
     const batch = icons.get(type);
     if (!batch) return;
+    const wash = restWash(gateForType(type));
     for (const layer of batch.layers) {
       const mat = layer.mesh.material;
       if (!mat) continue;
@@ -992,8 +1080,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         }
         if (mat.specularColor) mat.specularColor = [0.12, 0.14, 0.16];
       } else {
-        if (mat.emissiveColor && layer.baseEmissive) {
-          mat.emissiveColor = [...layer.baseEmissive];
+        if (mat.emissiveColor) {
+          mat.emissiveColor = [...wash];
         }
         if (mat.diffuseColor && layer.baseDiffuse) {
           mat.diffuseColor = [...layer.baseDiffuse];
@@ -1004,15 +1092,28 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
   }
 
+  function setMenuGate(snapshot) {
+    menuBank = snapshot?.bank ?? null;
+    ownedTypes = snapshot?.ownedTypes instanceof Set
+      ? snapshot.ownedTypes
+      : new Set(snapshot?.ownedTypes ?? []);
+    for (const slot of slots) slot.gate = gateForType(slot.type);
+    if (!open) return;
+    for (let i = 0; i < slots.length; i++) {
+      if (labels[i]) labels[i].gate = undefined;
+      if (prices[i]) prices[i].gate = undefined;
+      applyIconHover(slots[i].type, i === hoverIndex);
+    }
+  }
+
   /** World scale for a given camera depth (∝ depth → steady on-screen size). */
   function scaleForPlaceDist(placeDist) {
-    if (!Number.isFinite(placeDist) || placeDist < 1e-3) {
-      return HUD_BASE_SCALE * compactMul;
-    }
-    return (
-      Math.max(HUD_SCALE_MIN, HUD_BASE_SCALE * (placeDist / HUD_REF_DIST)) *
-      compactMul
-    );
+    const distScale =
+      !Number.isFinite(placeDist) || placeDist < 1e-3
+        ? HUD_BASE_SCALE
+        : HUD_BASE_SCALE * (placeDist / HUD_REF_DIST);
+    // Floor after compact so placement shrink cannot drop below HUD_SCALE_MIN.
+    return Math.max(HUD_SCALE_MIN, distScale * compactMul);
   }
 
   /**
@@ -1199,6 +1300,12 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       return;
     }
     const hovered = i === hoverIndex;
+    const gate = slot.gate ?? 'ok';
+    if (label.gate !== gate || (label.text && label.text !== slot.name)) {
+      updateDefaultTextData(label.data, slot.name, LABEL_WASH[gate] ?? LABEL_WASH.ok);
+      label.text = slot.name;
+      label.gate = gate;
+    }
     const down = LABEL_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
     const worldX = slot.x + tx * down + nx * lift;
@@ -1221,7 +1328,50 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     layer.positionPx.y = origin.y * sy;
     layer.rotationRad = 0;
     layer.scale = scale;
-    layer.opacity = hovered ? 1 : 0.88;
+    layer.opacity = gate === 'locked' ? 0.78 : hovered ? 1 : 0.88;
+    layer.visible = true;
+    layer._version++;
+  }
+
+  function redrawPrice(i) {
+    const price = prices[i];
+    const slot = slots[i];
+    const worldToScreen = screen.worldToScreen;
+    const getViewport = screen.getViewport;
+    if (!price || !slot?.costText || !open || !worldToScreen || !getViewport) {
+      hideLabel(price);
+      return;
+    }
+    const gate = slot.gate ?? 'ok';
+    if (price.text !== slot.costText || price.gate !== gate) {
+      updateDefaultTextData(price.data, slot.costText, PRICE_WASH[gate] ?? PRICE_WASH.ok);
+      price.text = slot.costText;
+      price.gate = gate;
+    }
+    const hovered = i === hoverIndex;
+    const down = PRICE_DOWN * hudScale;
+    const lift = LABEL_LIFT * hudScale;
+    const worldX = slot.x + tx * down + nx * lift;
+    const worldY = slot.y + ty * down + ny * lift;
+    const worldZ = slot.z + tz * down + nz * lift;
+    const origin = worldToScreen(worldX, worldY, worldZ);
+    const viewport = getViewport();
+    if (!origin || !viewport?.width || !viewport?.height) {
+      hideLabel(price);
+      return;
+    }
+    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
+    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
+    const pixelRatio = (sx + sy) * 0.5;
+    const scale =
+      PRICE_SCREEN_SCALE * pixelRatio * compactMul * (hovered ? 1.05 : 1);
+    const centerOffset = price.data.width * scale * 0.5;
+    const layer = price.layer;
+    layer.positionPx.x = origin.x * sx - centerOffset;
+    layer.positionPx.y = origin.y * sy;
+    layer.rotationRad = 0;
+    layer.scale = scale;
+    layer.opacity = hovered ? 0.95 : 0.8;
     layer.visible = true;
     layer._version++;
   }
@@ -1275,6 +1425,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         hideMesh(pads[i].mesh);
         applyPadHover(i, false);
         hideLabel(labels[i]);
+        hideLabel(prices[i]);
         continue;
       }
       const slot = slots[i];
@@ -1302,6 +1453,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       );
       redrawSlot(i);
       redrawLabel(i);
+      redrawPrice(i);
     }
   }
 
@@ -1320,6 +1472,13 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     rebuildSlots();
     open = true;
     layout();
+    const want = activeCategory;
+    void ensureCategoryIcons(want).then(() => {
+      if (open && activeCategory === want) {
+        rebuildSlots();
+        layout();
+      }
+    });
   }
 
   /**
@@ -1342,6 +1501,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
     hideAllIcons();
     for (const label of labels) hideLabel(label);
+    for (const price of prices) hideLabel(price);
     slots = [];
     hoverIndex = -1;
     pieHoverId = null;
@@ -1366,11 +1526,13 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       applyIconHover(slots[prev].type, false);
       applyPadHover(prev, false);
       redrawLabel(prev);
+      redrawPrice(prev);
     }
     if (hoverIndex >= 0) {
       applyIconHover(slots[hoverIndex].type, true);
       applyPadHover(hoverIndex, true);
       redrawLabel(hoverIndex);
+      redrawPrice(hoverIndex);
     }
   }
 
@@ -1575,9 +1737,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     if (textRenderer) disposeTextRenderer(textRenderer);
     textRenderer = null;
     textRendererRegistered = false;
-    for (const label of labels) {
-      disposeDefaultTextData(label.data);
-    }
+    for (const label of labels) disposeDefaultTextData(label.data);
+    for (const price of prices) disposeDefaultTextData(price.data);
   }
 
   return {
@@ -1598,6 +1759,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     hitHubHoleAtRay,
     registerLabels,
     disposeLabels,
+    setMenuGate,
     get category() {
       return activeCategory;
     },

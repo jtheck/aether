@@ -33,6 +33,45 @@ export const STRESS_AI_PROFILES = [
   { owner: 4, temperament: 'reckless' },
 ];
 
+/** Owner id for an aiPlayers entry (number or `{ owner }`). */
+export function aiOwnerOf(entry) {
+  if (typeof entry === 'number') return entry | 0;
+  if (entry && typeof entry === 'object') return entry.owner | 0;
+  return -1;
+}
+
+/**
+ * Drop AI entries that would puppet a human lockstep slot.
+ * Slot 1 is both the loading-screen AI_OWNER and the first KOTH joiner.
+ * @param {Array<number | { owner: number }>} [aiPlayers]
+ * @param {number[]} [humanPlayers]
+ */
+export function excludeHumanAiPlayers(aiPlayers, humanPlayers) {
+  const humans = new Set((humanPlayers ?? []).map((id) => id | 0));
+  const out = [];
+  for (const entry of aiPlayers ?? []) {
+    const owner = aiOwnerOf(entry);
+    if (owner < 0 || humans.has(owner)) continue;
+    out.push(entry);
+  }
+  return out;
+}
+
+/**
+ * Resolve the AI list for a session (re)start.
+ * Live P2P KOTH defaults to no AI so the loading-screen passive opponent
+ * cannot survive into the match and drive the first joiner (owner 1).
+ * @param {{ mode?: string, localSolo?: boolean, aiPlayers?: Array|undefined, humanPlayers?: number[] }} [cfg]
+ * @param {Array} [current]
+ */
+export function resolveSessionAiPlayers(cfg = {}, current = []) {
+  let list;
+  if (cfg.aiPlayers !== undefined) list = cfg.aiPlayers ?? [];
+  else if (cfg.mode === 'koth' && !cfg.localSolo) list = [];
+  else list = current ?? [];
+  return excludeHumanAiPlayers(list, cfg.humanPlayers);
+}
+
 function resolveTemperament(name) {
   return AI_TEMPERAMENTS[name] || AI_TEMPERAMENTS.steady;
 }

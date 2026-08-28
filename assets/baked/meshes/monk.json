@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/monk.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -56,6 +56,16 @@
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.7489238977432251,
+        -0.006860711146146059,
+        -0.38930660486221313
+      ],
+      "boundMax": [
+        0.6739506721496582,
+        2.1346523761749268,
+        0.4705016613006592
+      ],
       "positions": {
         "offset": 0,
         "length": 1920,
@@ -81,6 +91,16 @@
       "materialName": "TeamColor",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -0.6683028936386108,
+        -0.35780131816864014,
+        -0.04161110147833824
+      ],
+      "boundMax": [
+        -0.4734043776988983,
+        3.5138978958129883,
+        0.6442211866378784
+      ],
       "positions": {
         "offset": 24368,
         "length": 72,

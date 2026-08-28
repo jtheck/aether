@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/workshop.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "smoke_anchor",
@@ -77,49 +77,34 @@
       "materialName": "Material.017",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -6.64633846282959,
+        -0.030065184459090233,
+        -2.908552408218384
+      ],
+      "boundMax": [
+        6.244536876678467,
+        5.289200305938721,
+        7.7794108390808105
+      ],
       "positions": {
         "offset": 0,
-        "length": 90,
+        "length": 228,
         "type": "f32"
       },
       "normals": {
-        "offset": 360,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 720,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
         "offset": 912,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.017",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 1152,
-        "length": 138,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 1704,
-        "length": 138,
+        "length": 228,
         "type": "f32"
       },
       "indices": {
-        "offset": 2256,
-        "length": 72,
+        "offset": 1824,
+        "length": 120,
         "type": "u32"
       },
       "uvs": {
-        "offset": 2544,
-        "length": 92,
+        "offset": 2304,
+        "length": 152,
         "type": "f32"
       }
     },
@@ -127,6 +112,16 @@
       "materialName": "Material.018",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -6.381343364715576,
+        -0.3794749081134796,
+        -8.135252952575684
+      ],
+      "boundMax": [
+        0.3247818350791931,
+        2.4897642135620117,
+        -5.099388599395752
+      ],
       "positions": {
         "offset": 2912,
         "length": 90,

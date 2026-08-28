@@ -2,7 +2,7 @@
 // Sim owns the layout because rocks affect passability and trees affect speed.
 
 import * as fx from './fixed.js';
-import { TERRAIN, worldToTile, applyTerrainSlow } from './field.js';
+import { TERRAIN, worldToTile, applyTerrainSlow, isTerrainSlowTile } from './field.js';
 import { applyTableEdgeOccupancy, refreshTableTerrain } from './tableShape.js';
 import {
   TREE_STAGE_MAX,
@@ -57,13 +57,16 @@ export function rockFootprintRadius(kind) {
   return 0;
 }
 
-// Rock nodes yield stone/mineral (v1-grounded). Small plain rocks give the rarer
-// mineral; larger moss/snow rocks give bulk stone. Stock lives on the rock's
-// CENTER tile only (footprint tiles are pass-blockers with no stock).
+export const ROCK_STAGE_MAX = 6;
+
+// Rock nodes yield stone/mineral. Small plain rocks give the rarer mineral;
+// larger moss/snow rocks give bulk stone. Stock lives on the CENTER tile only
+// (footprint tiles are pass-blockers with no stock). Yields are multiples of
+// ROCK_STAGE_MAX so each visual/collision stage is a clean bite of the pile.
 const ROCK_YIELD = {
-  [SCENERY.ROCK_PLAIN]: 12,
-  [SCENERY.ROCK_MOSS]: 56,
-  [SCENERY.ROCK_SNOW]: 84,
+  [SCENERY.ROCK_PLAIN]: 90,
+  [SCENERY.ROCK_MOSS]: 180,
+  [SCENERY.ROCK_SNOW]: 300,
 };
 
 /** Resource kind a rock of this scenery kind yields. */
@@ -76,23 +79,249 @@ export function rockYield(kind) {
   return ROCK_YIELD[kind] ?? 0;
 }
 
+export function rockStockPerStage(kind) {
+  return Math.max(1, (rockYield(kind) / ROCK_STAGE_MAX) | 0);
+}
+
+export function rockStageFromStock(kind, stock) {
+  if (stock <= 0) return 0;
+  return Math.min(ROCK_STAGE_MAX, Math.ceil(stock / rockStockPerStage(kind)));
+}
+
+/** Visual scale multiplier for a stage (1..6). Stage 0 → hidden. */
+export function rockScaleForStage(stage) {
+  if (stage <= 0) return 0;
+  if (stage === 1) return 0.40;
+  if (stage === 2) return 0.52;
+  if (stage === 3) return 0.64;
+  if (stage === 4) return 0.76;
+  if (stage === 5) return 0.88;
+  return 1;
+}
+
+/**
+ * Collision radius for a remaining stage. Shrinks as the pile is mined so
+ * villagers walk in and the mesh is free to show exhaustion.
+ * @returns {number} tile radius, or -1 when the rock is gone
+ */
+export function rockFootprintRadiusForStage(kind, stage) {
+  if (stage <= 0) return -1;
+  const maxR = rockFootprintRadius(kind);
+  if (maxR <= 0) return 0;
+  if (maxR === 1) return stage >= 4 ? 1 : 0;
+  if (stage >= 5) return 2;
+  if (stage >= 3) return 1;
+  return 0;
+}
+
+export function rockFootprintRadiusForStock(kind, stock) {
+  return rockFootprintRadiusForStage(kind, rockStageFromStock(kind, stock));
+}
+
+export function ensureRockArrays(field) {
+  const n = field.width * field.height;
+  if (!(field.rockStock instanceof Uint16Array) || field.rockStock.length !== n) {
+    const next = new Uint16Array(n);
+    if (field.rockStock?.length) next.set(field.rockStock.subarray(0, Math.min(field.rockStock.length, n)));
+    field.rockStock = next;
+  }
+  if (!Array.isArray(field.rockDirty)) field.rockDirty = [];
+  if (field.rockStockHash == null) field.rockStockHash = 0;
+  return field;
+}
+
+function markRockDirty(field, tileIndex) {
+  const dirty = field.rockDirty;
+  for (let i = 0; i < dirty.length; i++) {
+    if (dirty[i] === tileIndex) return;
+  }
+  dirty.push(tileIndex);
+}
+
 function mixRockHash(hash, tile, stock) {
-  return Math.imul((hash ^ tile ^ (stock << 8)) | 0, 0x01000193);
+  return Math.imul((hash ^ tile ^ stock ^ (stock << 13)) | 0, 0x01000193);
+}
+
+function inRockDisc(dx, dz, radius) {
+  if (radius < 0) return false;
+  return dx * dx + dz * dz <= (radius + 0.5) ** 2;
+}
+
+function tileCenterOf(field, tile) {
+  const width = field.width;
+  const tz = (tile / width) | 0;
+  return { tx: tile - tz * width, tz };
+}
+
+function isSolidWaterTile(field, i) {
+  return field.terrainTypes?.[i] === TERRAIN.WATER && field.tileType?.[i] === 12;
+}
+
+function otherRockCovers(field, tx, tz, exceptTile) {
+  const { width, height, sceneryType, rockStock } = field;
+  for (let dz = -2; dz <= 2; dz++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const cx = tx + dx;
+      const cz = tz + dz;
+      if (cx < 0 || cz < 0 || cx >= width || cz >= height) continue;
+      const i = cz * width + cx;
+      if (i === exceptTile) continue;
+      const kind = sceneryType[i];
+      if (kind < SCENERY.ROCK_PLAIN) continue;
+      const r = rockFootprintRadiusForStock(kind, rockStock[i] | 0);
+      if (inRockDisc(dx, dz, r)) return true;
+    }
+  }
+  return false;
+}
+
+function forEachDiscTile(field, cx, cz, radius, visit) {
+  if (radius < 0) return;
+  const { width, height } = field;
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (!inRockDisc(dx, dz, radius)) continue;
+      const tx = cx + dx;
+      const tz = cz + dz;
+      if (tx < 0 || tz < 0 || tx >= width || tz >= height) continue;
+      visit(tx, tz, tz * width + tx);
+    }
+  }
+}
+
+function canUnblockRockTile(field, i, tx, tz, exceptTile) {
+  if (field.activeMask && field.activeMask[i] === 0) return false;
+  if (isSolidWaterTile(field, i)) return false;
+  if (field.tableEdge?.[i]) return false;
+  if (otherRockCovers(field, tx, tz, exceptTile)) return false;
+  return true;
+}
+
+/** Open tiles that left this rock's disc. Never unblocks water / table / other rocks. */
+function shrinkRockFootprint(field, tile, prevRadius, nextRadius) {
+  if (nextRadius >= prevRadius) return;
+  const { tx, tz } = tileCenterOf(field, tile);
+  forEachDiscTile(field, tx, tz, prevRadius, (x, z, i) => {
+    if (inRockDisc(x - tx, z - tz, nextRadius)) return;
+    if (!canUnblockRockTile(field, i, x, z, tile)) return;
+    field.pass[i] = 1;
+  });
+}
+
+function tileKeepsSlowWithoutRock(field, i) {
+  return !!(
+    isTerrainSlowTile(field, i)
+    || field.structureSlowMask?.[i]
+    || field.tableSlowMask?.[i]
+    || field.sceneryType?.[i] === SCENERY.TREE
+    || (field.treeStock?.[i] | 0) > 0
+  );
+}
+
+function refreshRockSlow(field) {
+  const n = field.width * field.height;
+  const old = field.rockSlowMask;
+  if (old) {
+    for (let i = 0; i < n; i++) {
+      if (!old[i]) continue;
+      field.slowMask[i] = tileKeepsSlowWithoutRock(field, i) ? 1 : 0;
+    }
+  }
+  applyRockSlowBorder(field);
+}
+
+/**
+ * Re-fit every rock's collision disc to remaining stock. Safe after checkpoint
+ * restore (pass is not serialized; rocks would otherwise keep their spawn size).
+ */
+export function applyRockOccupancyFromStock(field) {
+  if (!field?.sceneryType) return field;
+  ensureRockArrays(field);
+  const { sceneryType, rockStock } = field;
+  let changed = false;
+  for (let i = 0; i < sceneryType.length; i++) {
+    const kind = sceneryType[i];
+    if (kind < SCENERY.ROCK_PLAIN) continue;
+    const stock = rockStock[i] | 0;
+    const maxR = rockFootprintRadius(kind);
+    const nextR = rockFootprintRadiusForStock(kind, stock);
+    if (stock <= 0) sceneryType[i] = SCENERY.NONE;
+    if (nextR !== maxR) {
+      shrinkRockFootprint(field, i, maxR, nextR);
+      changed = true;
+    }
+  }
+  if (changed) refreshRockSlow(field);
+  return field;
 }
 
 /**
  * Chip stock off a rock center tile. Returns stone/mineral actually removed.
- * Depleted rocks stay as inert blockers for now (no render / pass change).
+ * Crossing a stage shrinks the collision disc so exhaustion can show.
  */
 export function damageRock(field, tile, amount) {
-  if (!field.rockStock || amount <= 0) return 0;
+  ensureRockArrays(field);
+  if (amount <= 0) return 0;
   const stock = field.rockStock[tile] | 0;
   if (stock <= 0) return 0;
+  const kind = field.sceneryType?.[tile] ?? 0;
+  const prevR = rockFootprintRadiusForStock(kind, stock);
   const next = stock > amount ? stock - amount : 0;
   const removed = stock - next;
   field.rockStock[tile] = next;
   field.rockStockHash = mixRockHash(field.rockStockHash | 0, tile, next);
+  if (next === 0 && kind >= SCENERY.ROCK_PLAIN) {
+    field.sceneryType[tile] = SCENERY.NONE;
+  }
+  const nextR = rockFootprintRadiusForStock(kind, next);
+  if (nextR !== prevR) {
+    shrinkRockFootprint(field, tile, prevR, nextR);
+    refreshRockSlow(field);
+  }
+  markRockDirty(field, tile);
   return removed;
+}
+
+/** Drain dirty rock tiles for worker → main publish. */
+export function takeRockUpdates(field) {
+  ensureRockArrays(field);
+  const dirty = field.rockDirty;
+  if (dirty.length === 0) return null;
+  const n = dirty.length;
+  const tiles = new Uint32Array(n);
+  const stock = new Uint16Array(n);
+  for (let i = 0; i < n; i++) {
+    const ti = dirty[i];
+    tiles[i] = ti;
+    stock[i] = field.rockStock[ti];
+  }
+  field.rockDirty = [];
+  return { tiles, stock };
+}
+
+export function applyRockUpdatesToField(field, updates) {
+  if (!field || !updates?.tiles?.length) return;
+  ensureRockArrays(field);
+  const { tiles, stock } = updates;
+  let occupancy = false;
+  for (let i = 0; i < tiles.length; i++) {
+    const ti = tiles[i];
+    if (ti < 0 || ti >= field.rockStock.length) continue;
+    const kind = field.sceneryType?.[ti] ?? 0;
+    const prev = field.rockStock[ti] | 0;
+    const next = stock[i] | 0;
+    const prevR = rockFootprintRadiusForStock(kind, prev);
+    field.rockStock[ti] = next;
+    if (next === 0 && kind >= SCENERY.ROCK_PLAIN) {
+      field.sceneryType[ti] = SCENERY.NONE;
+    }
+    const nextR = rockFootprintRadiusForStock(kind, next);
+    if (nextR !== prevR) {
+      shrinkRockFootprint(field, ti, prevR, nextR);
+      occupancy = true;
+    }
+  }
+  if (occupancy) refreshRockSlow(field);
 }
 
 /** Recompute the incremental rock-stock hash from scratch (checkpoint restore). */
@@ -136,11 +365,9 @@ export function populateScenery(field, world = null, reservedWorldPoints = []) {
   } else {
     field.rockSlowMask.fill(0);
   }
-  if (!field.rockStock || field.rockStock.length !== n) {
-    field.rockStock = new Uint8Array(n);
-  } else {
-    field.rockStock.fill(0);
-  }
+  ensureRockArrays(field);
+  field.rockStock.fill(0);
+  field.rockDirty.length = 0;
   field.rockStockHash = 0;
   ensureTreeArrays(field);
   field.treeStock.fill(0);
@@ -304,7 +531,11 @@ function collectRockMask(field) {
     for (let tx = 0; tx < width; tx++) {
       const kind = sceneryType[tz * width + tx];
       if (kind < SCENERY.ROCK_PLAIN) continue;
-      const radius = rockFootprintRadius(kind);
+      const stock = field.rockStock?.[tz * width + tx] | 0;
+      const radius = stock > 0
+        ? rockFootprintRadiusForStock(kind, stock)
+        : rockFootprintRadius(kind);
+      if (radius < 0) continue;
       for (let dz = -radius; dz <= radius; dz++) {
         for (let dx = -radius; dx <= radius; dx++) {
           if (dx * dx + dz * dz > (radius + 0.5) ** 2) continue;
@@ -323,6 +554,7 @@ function ensureSceneryArrays(field) {
   const n = field.width * field.height;
   if (!field.sceneryType || field.sceneryType.length !== n) field.sceneryType = new Uint8Array(n);
   ensureTreeArrays(field);
+  ensureRockArrays(field);
 }
 
 function stampRockCenter(field, tx, tz, kind) {
@@ -394,7 +626,7 @@ export function applyAuthoredScenery(field) {
   ensureSceneryArrays(field);
   refreshTableTerrain(field);
   const occupied = new Uint8Array(n);
-  if (!field.rockStock || field.rockStock.length !== n) field.rockStock = new Uint8Array(n);
+  ensureRockArrays(field);
   field.rockStock.fill(0);
   field.rockStockHash = 0;
   for (let tz = 0; tz < height; tz++) {

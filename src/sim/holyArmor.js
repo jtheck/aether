@@ -4,6 +4,19 @@ import * as fx from './fixed.js';
 import { TILE_SIZE_F } from './field.js';
 import { getUnitDef, isMechanical, UNIT } from './unitTypes.js';
 
+/** Rank 1–4 pulse scale (authoring). Rank 1 is the current huddle. */
+const HOLY_RADIUS_MUL = [
+  fx.ONE,
+  fx.fromFloat(1.45),
+  fx.fromFloat(1.85),
+  fx.fromFloat(2.25),
+];
+
+export function holyArmorRadius(rank = 1) {
+  const r = Math.max(1, Math.min(4, rank | 0));
+  return fx.mul(HOLY_ARMOR_RADIUS, HOLY_RADIUS_MUL[r - 1]);
+}
+
 /**
  * Friendly absorb radius (~6 tiles / 24 world).
  * Army grid is 16–22 apart, so 3 tiles only ever hit the caster + a stacked ally.

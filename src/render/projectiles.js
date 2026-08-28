@@ -257,7 +257,15 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
         dropped++;
         continue;
       }
-      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], def.scale);
+      let scale = def.scale;
+      if (def.id === PROJECTILE.FIREBALL) {
+        const spd = Math.hypot(cur.vx[i], cur.vz[i]);
+        if (spd > 0.08) {
+          const mul = Math.min(2.85, Math.max(1, 5 / spd));
+          scale = [def.scale[0] * mul, def.scale[1] * mul, def.scale[2] * mul];
+        }
+      }
+      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], scale);
       active++;
     }
 

@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/drayage.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,74 +33,34 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -1.7073974609375,
+        -0.9620182514190674,
+        -0.3376608192920685
+      ],
+      "boundMax": [
+        1.7270586490631104,
+        0.6109263896942139,
+        0.3574451804161072
+      ],
       "positions": {
         "offset": 0,
-        "length": 72,
+        "length": 324,
         "type": "f32"
       },
       "normals": {
-        "offset": 288,
-        "length": 72,
+        "offset": 1296,
+        "length": 324,
         "type": "f32"
       },
       "indices": {
-        "offset": 576,
-        "length": 36,
+        "offset": 2592,
+        "length": 180,
         "type": "u32"
       },
       "uvs": {
-        "offset": 720,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part1",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 912,
-        "length": 126,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 1416,
-        "length": 126,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 1920,
-        "length": 72,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 2208,
-        "length": 84,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part2",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 2544,
-        "length": 126,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 3048,
-        "length": 126,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 3552,
-        "length": 72,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 3840,
-        "length": 84,
+        "offset": 3312,
+        "length": 216,
         "type": "f32"
       }
     }

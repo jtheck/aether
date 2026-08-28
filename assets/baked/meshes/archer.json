@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/archer.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -56,6 +56,16 @@
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.7489238977432251,
+        -0.006860711146146059,
+        -0.38930660486221313
+      ],
+      "boundMax": [
+        0.6739506721496582,
+        2.1346523761749268,
+        0.4705016613006592
+      ],
       "positions": {
         "offset": 0,
         "length": 1920,
@@ -78,52 +88,37 @@
       }
     },
     {
-      "materialName": "part1",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 24368,
-        "length": 264,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 25424,
-        "length": 264,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 26480,
-        "length": 132,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 27008,
-        "length": 176,
-        "type": "f32"
-      }
-    },
-    {
       "materialName": "TeamColor",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -0.6343340873718262,
+        -0.08968894928693771,
+        -0.5339890122413635
+      ],
+      "boundMax": [
+        0.2749553620815277,
+        2.5297110080718994,
+        0.5580735206604004
+      ],
       "positions": {
-        "offset": 27712,
-        "length": 72,
+        "offset": 24368,
+        "length": 336,
         "type": "f32"
       },
       "normals": {
-        "offset": 28000,
-        "length": 72,
+        "offset": 25712,
+        "length": 336,
         "type": "f32"
       },
       "indices": {
-        "offset": 28288,
-        "length": 36,
+        "offset": 27056,
+        "length": 168,
         "type": "u32"
       },
       "uvs": {
-        "offset": 28432,
-        "length": 48,
+        "offset": 27728,
+        "length": 224,
         "type": "f32"
       }
     }

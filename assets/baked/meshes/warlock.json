@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/warlock.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "hex_anchor",
@@ -67,6 +67,16 @@
       "materialName": "TeamColor",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -1.2900245189666748,
+        0.8855640888214111,
+        -0.37957119941711426
+      ],
+      "boundMax": [
+        1.1855777502059937,
+        1.788184404373169,
+        0.36641979217529297
+      ],
       "positions": {
         "offset": 0,
         "length": 120,
@@ -92,49 +102,34 @@
       "materialName": "Material",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -1.5865261554718018,
+        -0.008870285004377365,
+        -0.7968024015426636
+      ],
+      "boundMax": [
+        1.1855777502059937,
+        3.9765336513519287,
+        1.876407504081726
+      ],
       "positions": {
         "offset": 1520,
-        "length": 2847,
+        "length": 2919,
         "type": "f32"
       },
       "normals": {
-        "offset": 12908,
-        "length": 2847,
+        "offset": 13196,
+        "length": 2919,
         "type": "f32"
       },
       "indices": {
-        "offset": 24296,
-        "length": 1503,
+        "offset": 24872,
+        "length": 1539,
         "type": "u32"
       },
       "uvs": {
-        "offset": 30308,
-        "length": 1898,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part2",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 37900,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 38188,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 38476,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 38620,
-        "length": 48,
+        "offset": 31028,
+        "length": 1946,
         "type": "f32"
       }
     }

@@ -1,7 +1,7 @@
 // Rule-based economic AI — a passive, rule-bound player that only macros.
 //
 // Runs in the sim worker before step() and emits the SAME command objects a
-// human would (GATHER / QUEUE_TRAIN / PLACE_BUILDING), so it pays every cost and
+// human would (GATHER / PLACE_BUILDING), so it pays every cost and
 // obeys every rule. No military: this is the "as passive as possible" opponent.
 //
 // Determinism: pure functions of (world, field, tick) — index-order scans, no
@@ -31,8 +31,6 @@ import {
 const DECIDE_INTERVAL = 30;
 /** Idle villagers dispatched to gather per decision tick (spreads path spam). */
 const MAX_ASSIGN_PER_TICK = 4;
-/** Villager population the AI grows toward. */
-const VILLAGER_CAP = 14;
 /** Food bank below which the AI treats food as urgent. */
 const FOOD_LOW = 40;
 /** Desired standing stock per resource — drives demand-based worker routing. */
@@ -91,17 +89,7 @@ export function generateEconomyCommands(w, field, entry) {
     }
   }
 
-  // ── Step 2: grow population (village trains villagers, food-gated) ────────
-  if (inv.villageIndex >= 0 && villagers.total < VILLAGER_CAP && bank.food >= 15) {
-    cmds.push({
-      type: CMD.QUEUE_TRAIN,
-      playerId: owner,
-      buildingIndex: inv.villageIndex,
-      unitKey: 'villager',
-    });
-  }
-
-  // ── Step 3: build one thing on the priority ladder ───────────────────────
+  // ── Step 2: build one thing on the priority ladder ───────────────────────
   const build = chooseBuild(bank, inv, villagers.total, order);
   if (build) {
     const around = buildAnchor(field, build, base, w.px, w.py, villagers);
@@ -142,16 +130,14 @@ function ownerBase(w, owner) {
 }
 
 function countBuildings(w, owner) {
-  const inv = { village: 0, villageIndex: -1, farm: 0, camp: 0, mine: 0 };
+  const inv = { village: 0, farm: 0, camp: 0, mine: 0 };
   const buildings = w.buildings;
   if (!buildings) return inv;
   for (let b = 0; b < buildings.length; b++) {
     const bd = buildings[b];
     if (bd.owner !== owner) continue;
-    if (bd.type === 'village') {
-      inv.village++;
-      if (inv.villageIndex < 0) inv.villageIndex = b;
-    } else if (bd.type === 'farm') inv.farm++;
+    if (bd.type === 'village') inv.village++;
+    else if (bd.type === 'farm') inv.farm++;
     else if (bd.type === 'camp') inv.camp++;
     else if (bd.type === 'mine') inv.mine++;
   }

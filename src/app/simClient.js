@@ -172,6 +172,7 @@ export class SimClient {
         resourcesChanged: !!msg.resourcesChanged,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,
+        rockUpdates: msg.rockUpdates ?? null,
         fireZoneUpdates: msg.fireZoneUpdates ?? null,
         frogUpdates: msg.frogUpdates ?? null,
         lightningUpdates: msg.lightningUpdates ?? null,

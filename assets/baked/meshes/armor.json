@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/armor.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,6 +33,16 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.999109148979187,
+        -1.170009732246399,
+        -0.11099326610565186
+      ],
+      "boundMax": [
+        1.0338298082351685,
+        1.0774022340774536,
+        0.12330973148345947
+      ],
       "positions": {
         "offset": 0,
         "length": 126,

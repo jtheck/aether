@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/collar.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -79,24 +79,34 @@
       "materialName": "red.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -1.6125537157058716,
+        0.15538135170936584,
+        -1.612553596496582
+      ],
+      "boundMax": [
+        1.6125537157058716,
+        0.3166995048522949,
+        1.612553596496582
+      ],
       "positions": {
         "offset": 0,
-        "length": 360,
+        "length": 720,
         "type": "f32"
       },
       "normals": {
-        "offset": 1440,
-        "length": 360,
+        "offset": 2880,
+        "length": 720,
         "type": "f32"
       },
       "indices": {
-        "offset": 2880,
-        "length": 168,
+        "offset": 5760,
+        "length": 336,
         "type": "u32"
       },
       "uvs": {
-        "offset": 3552,
-        "length": 240,
+        "offset": 7104,
+        "length": 480,
         "type": "f32"
       }
     },
@@ -104,49 +114,34 @@
       "materialName": "white",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -1.5188376903533936,
+        0.26774758100509644,
+        -1.518837571144104
+      ],
+      "boundMax": [
+        1.5188376903533936,
+        0.3166995048522949,
+        1.518837571144104
+      ],
       "positions": {
-        "offset": 4512,
+        "offset": 9024,
         "length": 72,
         "type": "f32"
       },
       "normals": {
-        "offset": 4800,
+        "offset": 9312,
         "length": 72,
         "type": "f32"
       },
       "indices": {
-        "offset": 5088,
+        "offset": 9600,
         "length": 24,
         "type": "u32"
       },
       "uvs": {
-        "offset": 5184,
+        "offset": 9696,
         "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "red.001",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 5376,
-        "length": 360,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 6816,
-        "length": 360,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 8256,
-        "length": 168,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 8928,
-        "length": 240,
         "type": "f32"
       }
     },
@@ -154,6 +149,16 @@
       "materialName": "yellow",
       "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        -1.6125537157058716,
+        0.24611568450927734,
+        -1.612553596496582
+      ],
+      "boundMax": [
+        1.6125537157058716,
+        0.3153741955757141,
+        1.612553596496582
+      ],
       "positions": {
         "offset": 9888,
         "length": 360,

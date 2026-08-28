@@ -3,7 +3,7 @@
 // tiles along the click ray is cheap and lets canopy / boulder clicks work.
 
 import { TILE_SIZE_F } from '../../sim/field.js';
-import { SCENERY, rockFootprintRadius } from '../../sim/scenery.js';
+import { SCENERY, rockFootprintRadiusForStock, rockScaleForStage, rockStageFromStock } from '../../sim/scenery.js';
 import { treeScaleForStage, treeStageFromStock } from '../../sim/trees.js';
 
 const TREE_RADIUS = 2.4;
@@ -29,7 +29,7 @@ function tileCenter(tx, tz, half) {
   };
 }
 
-function rayHitAabb(ray, minX, minY, minZ, maxX, maxY, maxZ) {
+export function rayHitAabb(ray, minX, minY, minZ, maxX, maxY, maxZ) {
   let tEnter = 0;
   let tExit = Infinity;
   const o = [ray.ox, ray.oy, ray.oz];
@@ -70,9 +70,11 @@ function nodeVolume(field, tile, half, heightAt) {
   }
   const kind = field.sceneryType?.[tile] | 0;
   if (kind >= SCENERY.ROCK_PLAIN && (field.rockStock?.[tile] | 0) > 0) {
-    const foot = rockFootprintRadius(kind);
-    const r = (foot + 0.55) * TILE_SIZE_F + 0.6;
-    return { cx, cz, gy, r, h: ROCK_HEIGHT[kind] ?? 3.4 };
+    const stock = field.rockStock[tile] | 0;
+    const foot = Math.max(0, rockFootprintRadiusForStock(kind, stock));
+    const s = Math.max(0.4, rockScaleForStage(rockStageFromStock(kind, stock)));
+    const r = (foot + 0.55) * TILE_SIZE_F * s + 0.6;
+    return { cx, cz, gy, r, h: (ROCK_HEIGHT[kind] ?? 3.4) * s };
   }
   if (field.foodNode?.[tile]) {
     return { cx, cz, gy, r: FARM_RADIUS, h: FARM_HEIGHT };
@@ -164,6 +166,34 @@ export function pickGatherNodeOnRay(field, ray, opts = {}) {
   });
 
   return best;
+}
+
+/**
+ * Ray vs a yawed XZ box (world Y unrotated). Used for building footprints —
+ * there are too few to need the unit sphere path.
+ * @returns {number | null} enter t, or null
+ */
+export function rayHitYawBox(ray, x, z, yaw, halfW, y0, halfD, y1) {
+  const c = Math.cos(-yaw);
+  const s = Math.sin(-yaw);
+  const ox = ray.ox - x;
+  const oz = ray.oz - z;
+  return rayHitAabb(
+    {
+      ox: ox * c - oz * s,
+      oy: ray.oy,
+      oz: ox * s + oz * c,
+      dx: ray.dx * c - ray.dz * s,
+      dy: ray.dy,
+      dz: ray.dx * s + ray.dz * c,
+    },
+    -halfW,
+    y0,
+    -halfD,
+    halfW,
+    y1,
+    halfD,
+  );
 }
 
 /** Distance along a (normalized) ray to a world point. */

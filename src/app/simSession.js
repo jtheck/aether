@@ -5,6 +5,8 @@
 import * as fx from '../sim/fixed.js';
 import { bufferFrame, collectFramesForTick, pruneLedger } from '../sim/commandFrame.js';
 import { applyTreeUpdatesToField } from '../sim/trees.js';
+import { applyRockUpdatesToField } from '../sim/scenery.js';
+import { excludeHumanAiPlayers } from '../sim/ai.js';
 import { SimClient } from './simClient.js';
 
 const TICK_HZ = 20;
@@ -125,14 +127,20 @@ export class SimSession {
     this.field = null;
     /** @type {Array<{ tiles: Uint32Array, stock: Uint8Array, burn: Uint8Array }> | null} */
     this.pendingTreeUpdates = null;
+    /** @type {Array<{ tiles: Uint32Array, stock: Uint16Array }> | null} */
+    this.pendingRockUpdates = null;
     /** @type {Array<object> | null} */
     this.pendingFireZoneUpdates = null;
   }
 
   async start(config) {
+    if (config.aiPlayers !== undefined) this.aiPlayers = config.aiPlayers ?? [];
+    if (config.humanPlayers) this.setHumanPlayers(config.humanPlayers);
+    this.aiPlayers = excludeHumanAiPlayers(this.aiPlayers, this.humanPlayers);
     const { count, field, agoras, buildings, tech, resources } = await this.client.init({
       ...config,
       aiPlayers: this.aiPlayers,
+      humanPlayers: this.humanPlayers,
     });
     this._count = count;
     this.field = field ?? this.client.field;
@@ -585,6 +593,11 @@ export class SimSession {
         if (!this.pendingTreeUpdates) this.pendingTreeUpdates = [];
         this.pendingTreeUpdates.push(extra.treeUpdates);
       }
+      if (extra?.rockUpdates) {
+        applyRockUpdatesToField(this.field, extra.rockUpdates);
+        if (!this.pendingRockUpdates) this.pendingRockUpdates = [];
+        this.pendingRockUpdates.push(extra.rockUpdates);
+      }
       if (extra?.fireZoneUpdates) {
         if (!this.pendingFireZoneUpdates) this.pendingFireZoneUpdates = [];
         this.pendingFireZoneUpdates.push(extra.fireZoneUpdates);
@@ -641,6 +654,13 @@ export class SimSession {
   takePendingTreeUpdates() {
     const out = this.pendingTreeUpdates;
     this.pendingTreeUpdates = null;
+    return out;
+  }
+
+  /** Drain rock stock patches for the renderer (since last call). */
+  takePendingRockUpdates() {
+    const out = this.pendingRockUpdates;
+    this.pendingRockUpdates = null;
     return out;
   }
 

@@ -41,6 +41,7 @@ import {
 } from '../sim/tableShape.js';
 import { TERRAIN } from '../sim/field.js';
 import { decodeGarden, encodeGarden, fieldFromGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
@@ -73,6 +74,7 @@ const state = {
   units: [],
   buildings: [],
   agoras: [],
+  startingResources: { ...STARTING_RESOURCES },
 };
 
 const CELESTIAL_STORE_KEY = 'aether.forge.celestial';
@@ -498,6 +500,7 @@ function gardenExtras() {
     units: state.units,
     buildings: state.buildings,
     agoras: state.agoras,
+    startingResources: state.startingResources,
   };
 }
 
@@ -529,6 +532,7 @@ function importFile(file) {
     state.units = g.units;
     state.buildings = g.buildings;
     state.agoras = g.agoras;
+    state.startingResources = { ...(g.startingResources || STARTING_RESOURCES) };
     state.selected = [];
     syncFormFromField();
     rebuildTerrain();
@@ -602,6 +606,10 @@ function syncFormFromField() {
   }
   if (seedEl) seedEl.value = String(field.seed);
   if (nameEl) nameEl.value = state.mapName;
+  for (const kind of RESOURCE_KINDS) {
+    const el = document.getElementById(`start-${kind}`);
+    if (el) el.value = String(state.startingResources[kind] | 0);
+  }
   updateStats();
   updateSelectUi();
 }
@@ -647,6 +655,14 @@ function mountUi() {
     <div id="panel-file" class="panel" style="display:none">
       <label>Name</label>
       <input id="map-name" type="text" placeholder="Map name">
+      <label>Starting wood</label>
+      <input id="start-wood" type="number" min="0" value="${STARTING_RESOURCES.wood}">
+      <label>Starting stone</label>
+      <input id="start-stone" type="number" min="0" value="${STARTING_RESOURCES.stone}">
+      <label>Starting mineral</label>
+      <input id="start-mineral" type="number" min="0" value="${STARTING_RESOURCES.mineral}">
+      <label>Starting food</label>
+      <input id="start-food" type="number" min="0" value="${STARTING_RESOURCES.food}">
       <label>Size</label>
       <select id="map-size">${SIZES.map((s) => `<option value="${s}"${s === DEFAULT_SIZE ? ' selected' : ''}>${s}×${s}</option>`).join('')}</select>
       <label>Seed</label>
@@ -658,7 +674,7 @@ function mountUi() {
         <button id="btn-play">Play</button>
       </div>
       <input id="import-file" type="file" accept=".garden,.json" style="display:none">
-      <p class="hint">v4 .garden: table, terrain, scenery, units, buildings, agoras. Play opens a solo match from this map.</p>
+      <p class="hint">v4 .garden: table, terrain, scenery, units, buildings, agoras, starting resources. Play opens a solo match from this map.</p>
     </div>
     <div id="panel-table" class="panel">
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
@@ -784,6 +800,12 @@ function mountUi() {
   document.getElementById('map-name').addEventListener('input', (e) => {
     state.mapName = e.target.value;
   });
+  for (const kind of RESOURCE_KINDS) {
+    document.getElementById(`start-${kind}`).addEventListener('input', (e) => {
+      const n = Number(e.target.value);
+      state.startingResources[kind] = Number.isFinite(n) && n > 0 ? n | 0 : 0;
+    });
+  }
   document.getElementById('chunk-enabled').addEventListener('change', (e) => {
     if (!state.selected.length || !field.tableShape) return;
     for (const s of state.selected) setCellEnabled(field.tableShape, s.cx, s.cz, e.target.checked);

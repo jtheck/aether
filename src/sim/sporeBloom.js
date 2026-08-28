@@ -19,6 +19,8 @@ import { capacityFor } from './capacity.js';
 
 /** Blast clears trees out to this radius. */
 export const SPORE_OUTER_RADIUS = fx.fromFloat(TILE_SIZE_F * 3.5);
+/** Building / crop hit inside the bloom. Farms take FARM_SPORE_DAMAGE_MUL. */
+export const SPORE_BLOOM_DAMAGE = 50;
 /** (v1 wood credit zone — unused in v2, kept for parity.) */
 export const SPORE_INNER_RADIUS = fx.fromFloat(TILE_SIZE_F * 1.75);
 /** Ticks before another bloom (~6s at 20Hz). */
@@ -39,6 +41,91 @@ export const SPORE_SEED_ARC_HALF = Math.acos(SPORE_SEED_ARC_COS);
 const SPORE_SEED_CASTER_CLEAR_F = TILE_SIZE_F * 2;
 /** Aim closer than this uses facing for the outward axis. */
 const AIM_DIR_MIN = fx.fromFloat(TILE_SIZE_F * 0.5);
+/** Slight grow so a 4-stack reads bigger without becoming one disk. */
+const BLOOM_CIRCLE_MUL = [
+  fx.ONE,
+  fx.fromFloat(1.06),
+  fx.fromFloat(1.10),
+  fx.fromFloat(1.14),
+];
+/** Hex / 120° unit offsets (authoring) for Flower-of-Life / Metatron overlaps. */
+const HEX_COS = [
+  fx.ONE,
+  fx.fromFloat(0.5),
+  fx.fromFloat(-0.5),
+  fx.fromFloat(-1),
+  fx.fromFloat(-0.5),
+  fx.fromFloat(0.5),
+];
+const HEX_SIN = [
+  0,
+  fx.fromFloat(0.8660254),
+  fx.fromFloat(0.8660254),
+  0,
+  fx.fromFloat(-0.8660254),
+  fx.fromFloat(-0.8660254),
+];
+const TRIAD_OFF_MUL = fx.fromFloat(0.57735027);
+
+export function bloomCircleRadius(rank = 1) {
+  const r = Math.max(1, Math.min(4, rank | 0));
+  return fx.mul(SPORE_OUTER_RADIUS, BLOOM_CIRCLE_MUL[r - 1]);
+}
+
+/** @deprecated Prefer bloomCircleRadius — same-size overlapping rings. */
+export function bloomOuterRadius(rank = 1) {
+  return bloomCircleRadius(rank);
+}
+
+function bloomLocalToWorld(cx, cy, dirX, dirY, lx, ly) {
+  const perpX = -dirY;
+  const perpY = dirX;
+  return {
+    x: cx + fx.mul(dirX, lx) + fx.mul(perpX, ly),
+    y: cy + fx.mul(dirY, lx) + fx.mul(perpY, ly),
+  };
+}
+
+function bloomDir(dirX, dirY) {
+  const len = fx.len(dirX, dirY);
+  return {
+    nx: len > 0 ? fx.div(dirX, len) : fx.ONE,
+    ny: len > 0 ? fx.div(dirY, len) : 0,
+  };
+}
+
+/**
+ * Same-size overlapping circles (vesica / triad / 1+6 flower), not nested disks.
+ * Local +X faces the aim dir.
+ */
+export function bloomPatternCenters(rank, cx, cy, dirX, dirY) {
+  const r = Math.max(1, Math.min(4, rank | 0));
+  const radius = bloomCircleRadius(r);
+  const { nx, ny } = bloomDir(dirX, dirY);
+  const centers = [];
+  const push = (lx, ly) => {
+    centers.push(bloomLocalToWorld(cx, cy, nx, ny, lx, ly));
+  };
+  if (r <= 1) {
+    push(0, 0);
+  } else if (r === 2) {
+    const half = fx.mul(radius, fx.HALF);
+    push(0, half);
+    push(0, -half);
+  } else if (r === 3) {
+    // 1/√3 so the three centers sit a radius apart (vesica triad, not a sparse ring).
+    const off = fx.mul(radius, TRIAD_OFF_MUL);
+    push(fx.mul(off, HEX_COS[0]), fx.mul(off, HEX_SIN[0]));
+    push(fx.mul(off, HEX_COS[2]), fx.mul(off, HEX_SIN[2]));
+    push(fx.mul(off, HEX_COS[4]), fx.mul(off, HEX_SIN[4]));
+  } else {
+    push(0, 0);
+    for (let h = 0; h < 6; h++) {
+      push(fx.mul(radius, HEX_COS[h]), fx.mul(radius, HEX_SIN[h]));
+    }
+  }
+  return { radius, centers };
+}
 
 /** Initial delayed-sprout queue; grows by powers of two. */
 export const SPORE_PENDING_INITIAL = 512;
@@ -298,6 +385,13 @@ function seedOnOutwardArc(wx, wz, cxF, cyF, d2, arc) {
   return (adx * dirX + adz * dirY) / mag >= SPORE_SEED_ARC_COS;
 }
 
+/** Wired from buildingCombat so this file stays off the buildings → world cycle. */
+let damageBuildingsInBloom = null;
+
+export function setBloomBuildingDamage(fn) {
+  damageBuildingsInBloom = fn;
+}
+
 function bloomAimDir(w, caster, aimX, aimY) {
   const dx = aimX - w.px[caster];
   const dy = aimY - w.py[caster];
@@ -439,21 +533,39 @@ export function queueSporeSeeds(w, field, cx, cy, {
 
 /**
  * Point-cast Spore Bloom at aim. Always consumes cast if myco is valid.
+ * `rank` (1–4) adds overlapping same-size rings (Metatron / flower), not nested disks.
  */
-export function castSporeBloom(w, field, caster, aimX, aimY) {
+export function castSporeBloom(w, field, caster, aimX, aimY, opts = {}) {
   if (caster < 0 || caster >= w.count || !w.alive[caster]) return false;
   if (w.type[caster] !== UNIT.MYCO) return false;
   if (!field) return false;
 
-  fellTreesInRadius(w, field, aimX, aimY, SPORE_OUTER_RADIUS);
+  const rank = Math.max(1, Math.min(4, opts.rank | 0 || 1));
+  const originX = opts.originX ?? w.px[caster];
+  const originY = opts.originY ?? w.py[caster];
   const aimDir = bloomAimDir(w, caster, aimX, aimY);
-  pushSporeArcFx(w, aimX, aimY, aimDir.dirX, aimDir.dirY, SPORE_OUTER_RADIUS);
-  queueSporeSeeds(w, field, aimX, aimY, {
-    originX: w.px[caster],
-    originY: w.py[caster],
-    dirX: aimDir.dirX,
-    dirY: aimDir.dirY,
-  });
+  const { radius, centers } = bloomPatternCenters(
+    rank,
+    aimX,
+    aimY,
+    aimDir.dirX,
+    aimDir.dirY,
+  );
+
+  for (let c = 0; c < centers.length; c++) {
+    const cx = centers[c].x;
+    const cy = centers[c].y;
+    fellTreesInRadius(w, field, cx, cy, radius);
+    damageBuildingsInBloom?.(w, field, w.owner[caster], cx, cy, radius);
+    pushSporeArcFx(w, cx, cy, aimDir.dirX, aimDir.dirY, radius);
+    queueSporeSeeds(w, field, cx, cy, {
+      outerRadius: radius,
+      originX,
+      originY,
+      dirX: aimDir.dirX,
+      dirY: aimDir.dirY,
+    });
+  }
   return true;
 }
 

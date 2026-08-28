@@ -186,6 +186,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       modelsReady: Promise.resolve(),
       update() {},
       applyTreeUpdates() {},
+      applyRockUpdates() {},
       applyFogDim() {},
       pingHarvest() { return false; },
       dispose() {},
@@ -206,6 +207,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     },
     applyTreeUpdates(updates) {
       if (!disposed) scenery.applyTreeUpdates?.(updates);
+    },
+    applyRockUpdates(updates) {
+      if (!disposed) scenery.applyRockUpdates?.(updates);
     },
     pingHarvest(tile) {
       if (disposed) return false;

@@ -6,7 +6,7 @@ import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
 import { buildWorldFromConfig, kothBases } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
-import { generateAiCommands } from '../sim/ai.js';
+import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
 import { generateEconomyCommands } from '../sim/aiEconomy.js';
 import { mergeFrames } from '../sim/commandFrame.js';
 import { checksum } from '../sim/checksum.js';
@@ -15,6 +15,7 @@ import { serializeBuildings, applyWorldStructureOccupancy } from '../sim/buildin
 import { serializeTech } from '../sim/tech.js';
 import { serializeResources } from '../sim/resources.js';
 import { takeTreeUpdates } from '../sim/trees.js';
+import { takeRockUpdates } from '../sim/scenery.js';
 import { takeFireZoneUpdates } from '../sim/fireZones.js';
 import { takeFrogUpdates } from '../sim/frogs.js';
 import { takeLightningUpdates } from '../sim/lightning.js';
@@ -84,7 +85,10 @@ self.onmessage = (e) => {
   try {
     if (msg.type === 'init') {
       views = mapSharedState(msg.sab);
-      aiPlayers = msg.config.aiPlayers ?? [];
+      aiPlayers = excludeHumanAiPlayers(
+        msg.config.aiPlayers ?? [],
+        msg.config.humanPlayers ?? [],
+      );
       const garden = msg.config.garden ? decodeGarden(msg.config.garden) : null;
       const size = garden
         ? { mapW: garden.width, mapH: garden.height }
@@ -170,6 +174,7 @@ self.onmessage = (e) => {
       endSharedPublish(views);
       const publishMs = performance.now() - tPub0;
       const treeUpdates = takeTreeUpdates(field);
+      const rockUpdates = takeRockUpdates(field);
       const fireZoneUpdates = takeFireZoneUpdates(world);
       const frogUpdates = takeFrogUpdates(world);
       const lightningUpdates = takeLightningUpdates(world);
@@ -207,6 +212,7 @@ self.onmessage = (e) => {
         resources: serializeResources(world),
         resourcesChanged,
         treeUpdates,
+        rockUpdates,
         fireZoneUpdates,
         frogUpdates,
         lightningUpdates,

@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/agora.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -79,6 +79,16 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -9.835338592529297,
+        -4.536106109619141,
+        -9.680841445922852
+      ],
+      "boundMax": [
+        9.888211250305176,
+        0.7873742580413818,
+        9.881367683410645
+      ],
       "positions": {
         "offset": 0,
         "length": 312,
@@ -104,6 +114,16 @@
       "materialName": "Material.001",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -3.4234180450439453,
+        0.4918674826622009,
+        -6.266019344329834
+      ],
+      "boundMax": [
+        3.4762918949127197,
+        1.3051475286483765,
+        -1.916710615158081
+      ],
       "positions": {
         "offset": 3976,
         "length": 204,
@@ -129,6 +149,16 @@
       "materialName": "Material.002",
       "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        -7.605112552642822,
+        0.7813676595687866,
+        -7.512424945831299
+      ],
+      "boundMax": [
+        7.657985210418701,
+        1.2196904420852661,
+        7.625820636749268
+      ],
       "positions": {
         "offset": 6560,
         "length": 48,

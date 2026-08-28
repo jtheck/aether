@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/prospecting.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,49 +33,34 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.8225143551826477,
+        -0.5659031867980957,
+        -0.1800459921360016
+      ],
+      "boundMax": [
+        0.769782304763794,
+        1.0906970500946045,
+        0.1522429883480072
+      ],
       "positions": {
         "offset": 0,
-        "length": 72,
+        "length": 540,
         "type": "f32"
       },
       "normals": {
-        "offset": 288,
-        "length": 72,
+        "offset": 2160,
+        "length": 540,
         "type": "f32"
       },
       "indices": {
-        "offset": 576,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 720,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part1",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 912,
-        "length": 468,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 2784,
-        "length": 468,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 4656,
-        "length": 276,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 5760,
+        "offset": 4320,
         "length": 312,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 5568,
+        "length": 360,
         "type": "f32"
       }
     }

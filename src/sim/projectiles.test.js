@@ -13,6 +13,8 @@ import { PROJECTILE } from './projectileTypes.js';
 import { takeSporeBloomUpdates } from './sporeBloom.js';
 import { step } from './step.js';
 import { getUnitDef, UNIT } from './unitTypes.js';
+import { createBuilding } from './buildings.js';
+import { FARM_FIRE_DAMAGE_MUL } from './buildingCombat.js';
 import { createWorld, spawn } from './world.js';
 import { buildWorldFromConfig } from './worldSetup.js';
 import {
@@ -688,6 +690,40 @@ function holySlashDamages() {
   assert.equal(w.hp[foe], hp - 6);
 }
 
+function fireballSplashHitsFarmHarder() {
+  const field = openField();
+  const w = createWorld(28);
+  const caster = spawn(w, {
+    x: fx.fromInt(0),
+    y: fx.fromInt(0),
+    type: UNIT.WARLOCK,
+    owner: 0,
+  });
+  const farm = createBuilding({ owner: 1, type: 'farm', x: 20, z: 0, hp: 200 });
+  const camp = createBuilding({ owner: 1, type: 'camp', x: 20, z: 0, hp: 200 });
+  const allyFarm = createBuilding({ owner: 0, type: 'farm', x: 20, z: 0, hp: 200 });
+  w.buildings.push(farm, camp, allyFarm);
+  const damage = 12;
+  spawnProjectile(w, {
+    type: PROJECTILE.FIREBALL,
+    owner: 0,
+    source: caster,
+    target: -1,
+    x: 0,
+    y: 0,
+    aimX: fx.fromInt(20),
+    aimY: 0,
+    damage,
+  });
+  for (let tick = 0; tick < 16 && w.projectiles.activeCount; tick++) {
+    projectileSystem(w, field);
+  }
+  assert.equal(w.projectiles.activeCount, 0);
+  assert.equal(farm.hp, 200 - damage * FARM_FIRE_DAMAGE_MUL, 'farm takes fire splash × farm mul');
+  assert.equal(camp.hp, 200 - damage, 'other buildings take base fire splash');
+  assert.equal(allyFarm.hp, 200 - damage * FARM_FIRE_DAMAGE_MUL, 'friendly farm takes fire splash too');
+}
+
 archerTravelAndCooldown();
 deadTargetMisses();
 poolReuseAndOverflow();
@@ -697,6 +733,7 @@ engagementSlotsAndRangedSpacing();
 sharedProjectilePublication();
 kothEliminationAfterImpact();
 fireballSplashDamagesAndFriendlyFire();
+fireballSplashHitsFarmHarder();
 fireballSplashBlastLobsUnits();
 fireballBlastDistanceIsRandom();
 castCommandSpawnsFireball();

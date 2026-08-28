@@ -10,6 +10,7 @@ import {
 import { ensureTreeArrays, igniteTree } from './trees.js';
 import { rngFrac, rngRange } from './rng.js';
 import { isHostile } from './teams.js';
+import { applyDamage } from './damage.js';
 
 /** Strike picks a random hostile inside this radius of the aim point. */
 export const LIGHTNING_STRIKE_RADIUS = fx.fromFloat(26);
@@ -20,6 +21,8 @@ export const LIGHTNING_STRIKE_RADIUS = fx.fromFloat(26);
 export const LIGHTNING_IMPACT_SCATTER = fx.fromFloat(10);
 /** Ticks before another bolt (~5.5s at 20Hz). */
 export const LIGHTNING_COOLDOWN = 110;
+/** Delay between compound follow-up strikes (~0.5s at 20Hz). */
+export const LIGHTNING_FOLLOWUP_GAP = 10;
 
 export const LIGHTNING_HIT = {
   UNIT: 1,
@@ -30,6 +33,74 @@ export const LIGHTNING_HIT = {
 const CANDIDATE_CAP = 512;
 const unitCandidates = new Int32Array(CANDIDATE_CAP);
 const treeCandidates = new Int32Array(CANDIDATE_CAP);
+
+export function createPendingLightningStore() {
+  return {
+    count: 0,
+    strikeAt: [],
+    owner: [],
+    source: [],
+    aimX: [],
+    aimY: [],
+    damage: [],
+    radius: [],
+  };
+}
+
+export function queueLightningStrike(w, {
+  strikeAt,
+  owner,
+  source,
+  aimX,
+  aimY,
+  damage,
+  radius = LIGHTNING_STRIKE_RADIUS,
+}) {
+  const store = w.pendingLightning;
+  if (!store) return;
+  store.strikeAt.push(strikeAt | 0);
+  store.owner.push(owner & 0xff);
+  store.source.push(source | 0);
+  store.aimX.push(aimX | 0);
+  store.aimY.push(aimY | 0);
+  store.damage.push(damage | 0);
+  store.radius.push(radius | 0);
+  store.count++;
+}
+
+function removePendingAt(store, i) {
+  const last = store.count - 1;
+  store.strikeAt[i] = store.strikeAt[last];
+  store.owner[i] = store.owner[last];
+  store.source[i] = store.source[last];
+  store.aimX[i] = store.aimX[last];
+  store.aimY[i] = store.aimY[last];
+  store.damage[i] = store.damage[last];
+  store.radius[i] = store.radius[last];
+  store.strikeAt.pop();
+  store.owner.pop();
+  store.source.pop();
+  store.aimX.pop();
+  store.aimY.pop();
+  store.damage.pop();
+  store.radius.pop();
+  store.count = last;
+}
+
+export function mixPendingLightningChecksum(mix, w) {
+  const store = w.pendingLightning;
+  if (!store) return;
+  mix(store.count);
+  for (let i = 0; i < store.count; i++) {
+    mix(store.strikeAt[i]);
+    mix(store.owner[i]);
+    mix(store.source[i]);
+    mix(store.aimX[i]);
+    mix(store.aimY[i]);
+    mix(store.damage[i]);
+    mix(store.radius?.[i] ?? 0);
+  }
+}
 
 export function createLightningFxStore() {
   return {
@@ -164,4 +235,44 @@ export function resolveLightningStrike(w, field, owner, aimX, aimY, radius = LIG
     y: landed.y,
     target: -1,
   };
+}
+
+export function deliverLightningStrike(
+  w,
+  field,
+  owner,
+  source,
+  aimX,
+  aimY,
+  damage,
+  radius = LIGHTNING_STRIKE_RADIUS,
+) {
+  if (!field) return null;
+  const hit = resolveLightningStrike(w, field, owner, aimX, aimY, radius);
+  if (hit.kind === LIGHTNING_HIT.UNIT && hit.target >= 0 && damage > 0) {
+    applyDamage(w, hit.target, damage, source);
+  }
+  pushLightningFx(w, hit.x, hit.y, hit.kind);
+  return hit;
+}
+
+/** Fire queued follow-up bolts whose strikeAt tick has arrived. */
+export function pendingLightningSystem(w, field) {
+  const store = w.pendingLightning;
+  if (!store || store.count === 0 || !field) return;
+  const tick = w.tick;
+  for (let i = store.count - 1; i >= 0; i--) {
+    if (store.strikeAt[i] > tick) continue;
+    deliverLightningStrike(
+      w,
+      field,
+      store.owner[i],
+      store.source[i],
+      store.aimX[i],
+      store.aimY[i],
+      store.damage[i],
+      store.radius[i] || LIGHTNING_STRIKE_RADIUS,
+    );
+    removePendingAt(store, i);
+  }
 }

@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/mushroom.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,6 +33,16 @@
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.23021146655082703,
+        -0.0004972672322764993,
+        -0.2311476618051529
+      ],
+      "boundMax": [
+        0.2303089052438736,
+        0.3675590455532074,
+        0.24175526201725006
+      ],
       "positions": {
         "offset": 0,
         "length": 1098,

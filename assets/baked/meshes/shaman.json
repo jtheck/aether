@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/shaman.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -102,24 +102,34 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -1.3753596544265747,
+        0.016535727307200432,
+        -0.6607242822647095
+      ],
+      "boundMax": [
+        0.761156439781189,
+        3.653010368347168,
+        1.238101840019226
+      ],
       "positions": {
         "offset": 0,
-        "length": 132,
+        "length": 594,
         "type": "f32"
       },
       "normals": {
-        "offset": 528,
-        "length": 132,
+        "offset": 2376,
+        "length": 594,
         "type": "f32"
       },
       "indices": {
-        "offset": 1056,
-        "length": 66,
+        "offset": 4752,
+        "length": 306,
         "type": "u32"
       },
       "uvs": {
-        "offset": 1320,
-        "length": 88,
+        "offset": 5976,
+        "length": 396,
         "type": "f32"
       }
     },
@@ -127,23 +137,33 @@
       "materialName": "Material.002",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -1.2587913274765015,
+        -0.05441039055585861,
+        -0.6607242822647095
+      ],
+      "boundMax": [
+        0.8412926197052002,
+        3.143272638320923,
+        0.6296881437301636
+      ],
       "positions": {
-        "offset": 1672,
+        "offset": 7560,
         "length": 3555,
         "type": "f32"
       },
       "normals": {
-        "offset": 15892,
+        "offset": 21780,
         "length": 3555,
         "type": "f32"
       },
       "indices": {
-        "offset": 30112,
+        "offset": 36000,
         "length": 1794,
         "type": "u32"
       },
       "uvs": {
-        "offset": 37288,
+        "offset": 43176,
         "length": 2370,
         "type": "f32"
       }
@@ -152,23 +172,33 @@
       "materialName": "Material.003",
       "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        -0.8526045083999634,
+        2.130098342895508,
+        -0.6607242822647095
+      ],
+      "boundMax": [
+        0.761156439781189,
+        3.653010368347168,
+        0.1802338808774948
+      ],
       "positions": {
-        "offset": 46768,
+        "offset": 52656,
         "length": 468,
         "type": "f32"
       },
       "normals": {
-        "offset": 48640,
+        "offset": 54528,
         "length": 468,
         "type": "f32"
       },
       "indices": {
-        "offset": 50512,
+        "offset": 56400,
         "length": 234,
         "type": "u32"
       },
       "uvs": {
-        "offset": 51448,
+        "offset": 57336,
         "length": 312,
         "type": "f32"
       }
@@ -177,49 +207,34 @@
       "materialName": "TeamColor",
       "materialIndex": 3,
       "reverseWinding": true,
+      "boundMin": [
+        -1.2944469451904297,
+        0.26501473784446716,
+        -0.3343002200126648
+      ],
+      "boundMax": [
+        -0.005334655754268169,
+        1.560472846031189,
+        1.0232555866241455
+      ],
       "positions": {
-        "offset": 52696,
+        "offset": 58584,
         "length": 168,
         "type": "f32"
       },
       "normals": {
-        "offset": 53368,
+        "offset": 59256,
         "length": 168,
         "type": "f32"
       },
       "indices": {
-        "offset": 54040,
+        "offset": 59928,
         "length": 84,
         "type": "u32"
       },
       "uvs": {
-        "offset": 54376,
+        "offset": 60264,
         "length": 112,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 54824,
-        "length": 462,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 56672,
-        "length": 462,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 58520,
-        "length": 240,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 59480,
-        "length": 308,
         "type": "f32"
       }
     }

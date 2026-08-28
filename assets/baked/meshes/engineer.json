@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/engineer.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -56,6 +56,16 @@
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.6843329071998596,
+        -0.013004442676901817,
+        -0.11790403723716736
+      ],
+      "boundMax": [
+        0.7596445083618164,
+        2.1285085678100586,
+        0.5165542960166931
+      ],
       "positions": {
         "offset": 0,
         "length": 1920,
@@ -81,6 +91,16 @@
       "materialName": "TeamColor",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        0.33437904715538025,
+        0.6331608295440674,
+        -0.7396729588508606
+      ],
+      "boundMax": [
+        0.7322348952293396,
+        1.1848024129867554,
+        1.2143155336380005
+      ],
       "positions": {
         "offset": 24368,
         "length": 72,

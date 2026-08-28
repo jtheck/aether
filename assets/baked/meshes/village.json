@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/village.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "smoke_anchor.001",
@@ -100,74 +100,69 @@
       "materialName": "Material.017",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -2.6545939445495605,
+        -0.2941895127296448,
+        -5.304478645324707
+      ],
+      "boundMax": [
+        4.081186294555664,
+        2.7100307941436768,
+        -0.08675090223550797
+      ],
       "positions": {
         "offset": 0,
-        "length": 90,
+        "length": 228,
         "type": "f32"
       },
       "normals": {
-        "offset": 360,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 720,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
         "offset": 912,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.018",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 1152,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 1512,
-        "length": 90,
+        "length": 228,
         "type": "f32"
       },
       "indices": {
-        "offset": 1872,
-        "length": 48,
+        "offset": 1824,
+        "length": 120,
         "type": "u32"
       },
       "uvs": {
-        "offset": 2064,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.018",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
         "offset": 2304,
-        "length": 114,
+        "length": 152,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.018",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -6.256739139556885,
+        -0.3208027482032776,
+        -0.15793147683143616
+      ],
+      "boundMax": [
+        6.600016117095947,
+        3.13364577293396,
+        4.883492946624756
+      ],
+      "positions": {
+        "offset": 2912,
+        "length": 294,
         "type": "f32"
       },
       "normals": {
-        "offset": 2760,
-        "length": 114,
+        "offset": 4088,
+        "length": 294,
         "type": "f32"
       },
       "indices": {
-        "offset": 3216,
-        "length": 60,
+        "offset": 5264,
+        "length": 156,
         "type": "u32"
       },
       "uvs": {
-        "offset": 3456,
-        "length": 76,
+        "offset": 5888,
+        "length": 196,
         "type": "f32"
       }
     },
@@ -175,74 +170,34 @@
       "materialName": "TeamColor",
       "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        2.77165150642395,
+        2.4672718048095703,
+        1.2973124980926514
+      ],
+      "boundMax": [
+        6.600016117095947,
+        3.13364577293396,
+        4.883492946624756
+      ],
       "positions": {
-        "offset": 3760,
+        "offset": 6672,
         "length": 24,
         "type": "f32"
       },
       "normals": {
-        "offset": 3856,
+        "offset": 6768,
         "length": 24,
         "type": "f32"
       },
       "indices": {
-        "offset": 3952,
+        "offset": 6864,
         "length": 12,
         "type": "u32"
       },
       "uvs": {
-        "offset": 4000,
+        "offset": 6912,
         "length": 16,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.017",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 4064,
-        "length": 138,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 4616,
-        "length": 138,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 5168,
-        "length": 72,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 5456,
-        "length": 92,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.018",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 5824,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 6184,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 6544,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 6736,
-        "length": 60,
         "type": "f32"
       }
     }

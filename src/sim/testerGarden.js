@@ -17,6 +17,7 @@ import { SCENERY, defaultTreeStock } from './scenery.js';
 export const TESTER_GARDEN_NAME = 'unit tester';
 export const TESTER_GARDEN_URL = '/maps/tester.garden';
 export const TESTER_SEED = 0x7e57e5;
+export const TESTER_STARTING_RESOURCES = Object.freeze({ wood: 9999, stone: 9999, mineral: 9999, food: 9999 });
 
 const W = SKIRMISH_MAP_W;
 const H = SKIRMISH_MAP_H;
@@ -170,6 +171,7 @@ function buildTesterGardenInner() {
   return encodeGarden(field, {
     name: TESTER_GARDEN_NAME,
     authoredScenery: true,
+    startingResources: TESTER_STARTING_RESOURCES,
     units,
     buildings,
     agoras: [

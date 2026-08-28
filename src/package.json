@@ -16,10 +16,13 @@
     "test:gather": "node sim/gather.test.js",
     "test:economy": "node sim/economy.test.js",
     "test:aiEconomy": "node sim/aiEconomy.test.js",
+    "test:ai": "node sim/ai.test.js",
     "test:construction": "node sim/construction.test.js",
     "test:separation": "node sim/separation.test.js",
     "test:garden": "node sim/garden.test.js",
     "test:vatBake": "node render/vatBakeCpu.test.js",
+    "test:vatUnits": "node render/vatUnits.test.js",
+    "test:bakeMerge": "node render/bakeMerge.test.js",
     "bench:scale": "node sim/scale.bench.js",
     "bench:scale:50k": "node sim/scale.bench.js --acceptance --enforce",
     "build:lite": "node build-lite.mjs",
@@ -27,6 +30,7 @@
     "build:howler": "node build-howler.mjs",
     "serve": "node serve.mjs",
     "prebake": "node prebake.mjs",
+    "prebake:repack": "node prebake/repackMeshes.mjs",
     "package": "node package.mjs"
   },
   "dependencies": {

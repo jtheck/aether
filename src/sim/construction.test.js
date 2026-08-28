@@ -1,7 +1,8 @@
 // Building construction — placed buildings start as inert sites that villagers
-// raise. Verifies: placement makes a site, nearby villagers auto-build it (up to
-// two, faster with two), it pulls a gatherer when no idle hand is free, finishing
-// turns on the building's effects, and the whole loop is deterministic.
+// and engineers raise. Verifies: placement makes a site, nearby workers auto-build
+// it (up to two, faster with two), engineers take a slot at half speed, it pulls
+// a gatherer when no idle hand is free, finishing turns on the building's
+// effects, and the whole loop is deterministic.
 
 import assert from 'node:assert/strict';
 import * as fx from './fixed.js';
@@ -90,6 +91,57 @@ function villagersRaiseTheSite() {
   assert.ok(t >= 0, 'camp gets raised by nearby villagers');
   assert.equal(w.buildings[0].built, 1, 'built flag set');
   assert.equal(w.buildings[0].buildProgress, w.buildings[0].buildTime, 'progress capped at build time');
+}
+
+function engineerTakesABuildSlot() {
+  const field = openField(11);
+  const w = createWorld(11);
+  w.buildings = [siteBuilding('camp', 0, 0)];
+  const eng = spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.ENGINEER, owner: 0 });
+  spawn(w, { x: fx.fromFloat(80), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  let claimed = false;
+  for (let t = 0; t < 40; t++) {
+    step(w, field, []);
+    if (w.order[eng] === ORDER.BUILD && w.buildTarget[eng] === 0) claimed = true;
+  }
+  assert.ok(claimed, 'idle engineer is recruited on the call-for-workers');
+}
+
+function engineerBuildsAtHalfSpeed() {
+  const villField = openField(12);
+  const wVill = createWorld(12);
+  wVill.buildings = [siteBuilding('camp', 0, 0)];
+  spawn(wVill, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const tVill = ticksToBuild(villField, wVill, 400);
+
+  const engField = openField(12);
+  const wEng = createWorld(12);
+  wEng.buildings = [siteBuilding('camp', 0, 0)];
+  spawn(wEng, { x: fx.fromFloat(6), y: 0, type: UNIT.ENGINEER, owner: 0 });
+  const tEng = ticksToBuild(engField, wEng, 800);
+
+  assert.ok(tVill > 0 && tEng > 0, 'both finish');
+  assert.ok(tEng > tVill, `engineer is slower than a villager (eng ${tEng} > vill ${tVill})`);
+  assert.ok(tEng < tVill * 2.4, `engineer is about half speed, not stalled (eng ${tEng}, vill ${tVill})`);
+}
+
+function villagerPlusEngineerBeatsSoloVillager() {
+  const solo = openField(13);
+  const wSolo = createWorld(13);
+  wSolo.buildings = [siteBuilding('village', 0, 0)];
+  spawn(wSolo, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const tSolo = ticksToBuild(solo, wSolo, 600);
+
+  const mixed = openField(13);
+  const wMixed = createWorld(13);
+  wMixed.buildings = [siteBuilding('village', 0, 0)];
+  spawn(wMixed, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  spawn(wMixed, { x: fx.fromFloat(-6), y: 0, type: UNIT.ENGINEER, owner: 0 });
+  const tMixed = ticksToBuild(mixed, wMixed, 600);
+
+  assert.ok(tSolo > 0 && tMixed > 0, 'both finish');
+  assert.ok(tMixed < tSolo, `villager + half-speed engineer beats solo (mixed ${tMixed} < solo ${tSolo})`);
 }
 
 function twoBuildersBeatOne() {
@@ -192,9 +244,12 @@ function twoOwnersRaiseIndependently() {
 placementMakesASite();
 siteIsInertUntilRaised();
 villagersRaiseTheSite();
+engineerTakesABuildSlot();
+engineerBuildsAtHalfSpeed();
+villagerPlusEngineerBeatsSoloVillager();
 twoBuildersBeatOne();
 pullsAGathererWhenNoIdle();
 finishingTurnsOnTheFarm();
 deterministic();
 twoOwnersRaiseIndependently();
-console.log('construction.test.js: ok (site + auto-build + speed + pull + complete + two-owner + deterministic)');
+console.log('construction.test.js: ok (site + auto-build + engineer + speed + pull + complete + two-owner + deterministic)');

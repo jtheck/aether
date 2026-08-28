@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/church.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,74 +33,34 @@
       "materialName": "white",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -2.786015033721924,
+        -0.25735604763031006,
+        -4.715902328491211
+      ],
+      "boundMax": [
+        3.0173139572143555,
+        8.47232723236084,
+        4.655633926391602
+      ],
       "positions": {
         "offset": 0,
-        "length": 90,
+        "length": 252,
         "type": "f32"
       },
       "normals": {
-        "offset": 360,
-        "length": 90,
+        "offset": 1008,
+        "length": 252,
         "type": "f32"
       },
       "indices": {
-        "offset": 720,
-        "length": 48,
+        "offset": 2016,
+        "length": 132,
         "type": "u32"
       },
       "uvs": {
-        "offset": 912,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "white",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 1152,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 1512,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 1872,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 2064,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "white",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 2304,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 2592,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 2880,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 3024,
-        "length": 48,
+        "offset": 2544,
+        "length": 168,
         "type": "f32"
       }
     }

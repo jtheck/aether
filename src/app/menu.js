@@ -60,6 +60,9 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
   );
   const soloBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#solo_ai_b'));
   const testerBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#unit_tester_b'));
+  const menuKothStart = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-start'));
+  const menuKothClaim = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-claim'));
+  const menuKothLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-leave'));
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
 
   function showPage(name) {
@@ -142,7 +145,10 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
 
   // The camera and hotkeys listen on window with no target check, so typing a
   // name would otherwise pan the board and trip B/G/H.
-  const keyStop = [nameInput, colorPicker, slider, fxSlider, soloBtn, testerBtn].filter(Boolean);
+  const keyStop = [
+    nameInput, colorPicker, slider, fxSlider, soloBtn, testerBtn,
+    menuKothStart, menuKothClaim, menuKothLeave,
+  ].filter(Boolean);
   for (const field of keyStop) {
     field.addEventListener('keydown', (e) => e.stopPropagation());
     field.addEventListener('keyup', (e) => e.stopPropagation());
@@ -163,10 +169,21 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
 
   function setOpen(open) {
     drawer.classList.toggle('is-open', open);
+    button.classList.toggle('is-open', open);
+    drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+    button.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    button.title = open ? 'Close' : 'Menu';
     if (open) syncFromState();
   }
 
   button.addEventListener('click', () => setOpen(!drawer.classList.contains('is-open')));
+  button.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      button.click();
+    }
+  });
   gear.addEventListener('click', () => {
     const onSettings = drawer.querySelector('.page.is-active')?.dataset.page === 'settings';
     showPage(onSettings ? 'main' : 'settings');

@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/silo.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,6 +33,16 @@
       "materialName": "Material.017",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -2.9973676204681396,
+        -0.23736238479614258,
+        -3.100847005844116
+      ],
+      "boundMax": [
+        3.193068265914917,
+        9.172666549682617,
+        3.6697847843170166
+      ],
       "positions": {
         "offset": 0,
         "length": 555,

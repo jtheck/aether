@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/flag.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -102,6 +102,16 @@
       "materialName": "Material.008",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -2.218348503112793,
+        3.306399345397949,
+        -0.00927858054637909
+      ],
+      "boundMax": [
+        -1.32432222366333,
+        6.448505878448486,
+        -0.00927822943776846
+      ],
       "positions": {
         "offset": 0,
         "length": 24,
@@ -127,6 +137,16 @@
       "materialName": "TeamColor",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        0.403472363948822,
+        2.867945432662964,
+        -0.03336138650774956
+      ],
+      "boundMax": [
+        1.673668622970581,
+        6.5032877922058105,
+        -0.03336096927523613
+      ],
       "positions": {
         "offset": 328,
         "length": 24,
@@ -152,6 +172,16 @@
       "materialName": "Material.006",
       "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        -2.5394954681396484,
+        -0.07269172370433807,
+        -0.2603117525577545
+      ],
+      "boundMax": [
+        2.507610321044922,
+        7.946923732757568,
+        0.18791399896144867
+      ],
       "positions": {
         "offset": 656,
         "length": 252,
@@ -177,6 +207,16 @@
       "materialName": "Material.001",
       "materialIndex": 3,
       "reverseWinding": true,
+      "boundMin": [
+        -0.8942872881889343,
+        3.8528623580932617,
+        -0.2846478819847107
+      ],
+      "boundMax": [
+        -0.37517085671424866,
+        6.160907745361328,
+        0.39378857612609863
+      ],
       "positions": {
         "offset": 3680,
         "length": 360,

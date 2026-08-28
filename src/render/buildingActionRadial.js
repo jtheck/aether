@@ -27,6 +27,8 @@ import {
   getBuildingMenu,
 } from '../sim/buildings.js';
 import { poseRadialFramingBuilding } from './radialPose.js';
+import { formatResourceCost } from '../sim/resources.js';
+import { menuGateState } from '../sim/menuGate.js';
 
 /** Static or VAT unit GLB for radial icons. */
 function unitMenuModelUrl(typeId) {
@@ -49,7 +51,8 @@ const PAD_H = 0.22;
 const PAD_LIFT = 1.35;
 const ICON_LIFT = 0.85;
 const OPTION_SCALE = 1.8;
-const ICON_PICK_R = 9.36;
+/** Tight to the visible pad / unit — not a pie-slice halo into the yard. */
+const ICON_PICK_R = 5.2;
 /** Min arc for units/upgrades when sharing the usable band (~100°). */
 const MIN_ARC = (Math.PI * 2 * 100) / 360;
 /** Bottom utility band split Pause (left) | Cancel (right). */
@@ -63,12 +66,31 @@ const CANCEL_SPAN = UTILITY_SPAN * 0.5;
 const ARC_GAP = 2.3;
 const MENU_TILT = 0.56;
 const HUD_REF_DIST = 110;
-const HUD_BASE_SCALE = 1;
-const HUD_SCALE_MIN = 0.35;
+const HUD_BASE_SCALE = 0.8;
+const HUD_SCALE_MIN = 0.28;
 const LABEL_FONT_SIZE = 28;
 const LABEL_SCREEN_SCALE = 1.17;
 const LABEL_DOWN = 4.32;
 const LABEL_LIFT = 1.25;
+const PRICE_FONT_SIZE = 16;
+const PRICE_SCREEN_SCALE = 0.78;
+const PRICE_DOWN = 6.35;
+const PRICE_TEXT_COLOR = [0.78, 0.76, 0.7, 1];
+const ICON_WASH = {
+  ok: [0.82, 0.82, 0.82],
+  unafford: [0.9, 0.5, 0.48],
+  locked: [0.3, 0.3, 0.32],
+};
+const LABEL_WASH = {
+  ok: [0.96, 0.94, 0.88, 1],
+  unafford: [0.95, 0.62, 0.58, 1],
+  locked: [0.3, 0.32, 0.34, 1],
+};
+const PRICE_WASH = {
+  ok: PRICE_TEXT_COLOR,
+  unafford: [0.92, 0.55, 0.52, 1],
+  locked: [0.28, 0.3, 0.32, 1],
+};
 const BADGE_FONT_SIZE = 34;
 const BADGE_SCREEN_SCALE = 0.95;
 const BADGE_OUT = 2.8;
@@ -911,8 +933,23 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    */
   const icons = new Map();
 
+  /** @type {Map<string, Promise<void>>} */
+  const iconInflight = new Map();
+
   async function loadIcon(key, url) {
     if (icons.has(key) || !url) return;
+    let pending = iconInflight.get(key);
+    if (pending) return pending;
+    pending = loadIconInner(key, url);
+    iconInflight.set(key, pending);
+    try {
+      await pending;
+    } finally {
+      iconInflight.delete(key);
+    }
+  }
+
+  async function loadIconInner(key, url) {
     try {
       const parts = await loadBakedUnitMeshParts(engine, url);
       /** @type {{ mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[]} */
@@ -947,23 +984,22 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
   }
 
-  const unitKeys = new Set();
-  const upgradeKeys = new Set(Object.keys(UPGRADE_MODEL_URLS));
-  for (const menu of Object.values(BUILDING_MENUS)) {
-    for (const k of menu.units ?? []) unitKeys.add(k);
-    for (const k of menu.upgrades ?? []) upgradeKeys.add(k);
-  }
-  await Promise.all([
-    ...[...unitKeys].map((key) => {
-      const typeId = BUILDING_MENU_UNITS[key];
+  async function ensureMenuIcons(menu) {
+    if (!menu) return;
+    for (const item of menu.units ?? []) {
+      const typeId = item.unitType ?? BUILDING_MENU_UNITS[item.id];
       const url = typeId != null ? unitMenuModelUrl(typeId) : null;
-      return loadIcon(`unit:${key}`, url);
-    }),
-    ...[...upgradeKeys].map((key) => loadIcon(`upgrade:${key}`, UPGRADE_MODEL_URLS[key])),
-  ]);
+      await loadIcon(`unit:${item.id}`, url);
+    }
+    for (const item of menu.upgrades ?? []) {
+      await loadIcon(`upgrade:${item.id}`, UPGRADE_MODEL_URLS[item.id]);
+    }
+  }
 
   /** @type {{ data: object, layer: object, text: string }[]} */
   const labels = [];
+  /** @type {{ data: object, layer: object, text: string }[]} */
+  const prices = [];
   /** @type {{ data: object, layer: object, text: string }[]} */
   const badges = [];
   /** @type {{ data: object, layer: object, text: string } | null} */
@@ -995,12 +1031,28 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       for (let i = 0; i < MAX_OPTIONS; i++) {
         const data = createDefaultTextData(
           screen.font,
+          PRICE_FONT_SIZE,
+          '0 Wood',
+          PRICE_TEXT_COLOR,
+          { align: 'center' },
+        );
+        const layer = createTextLayer(data, {
+          order: MAX_OPTIONS + i,
+          opacity: 0,
+          visible: false,
+        });
+        prices.push({ data, layer, text: '' });
+        layers.push(layer);
+      }
+      for (let i = 0; i < MAX_OPTIONS; i++) {
+        const data = createDefaultTextData(
+          screen.font,
           BADGE_FONT_SIZE,
           '0',
           [1, 0.95, 0.55, 1],
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS + i,
+          order: MAX_OPTIONS * 2 + i,
           opacity: 0,
           visible: false,
         });
@@ -1015,7 +1067,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           CANCEL_LABEL_TEXT_COLOR,
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 2,
+          order: MAX_OPTIONS * 3,
           opacity: 0,
           visible: false,
         });
@@ -1030,7 +1082,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           PAUSE_LABEL_TEXT_COLOR,
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 2 + 1,
+          order: MAX_OPTIONS * 3 + 1,
           opacity: 0,
           visible: false,
         });
@@ -1044,10 +1096,12 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     } catch (err) {
       console.warn('[buildingActionRadial] native labels unavailable', err);
       for (const label of labels) disposeDefaultTextData(label.data);
+      for (const price of prices) disposeDefaultTextData(price.data);
       for (const badge of badges) disposeDefaultTextData(badge.data);
       if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
       if (pauseLabel) disposeDefaultTextData(pauseLabel.data);
       labels.length = 0;
+      prices.length = 0;
       badges.length = 0;
       cancelLabel = null;
       pauseLabel = null;
@@ -1060,6 +1114,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    *   kind: 'unit' | 'upgrade' | 'pause' | 'cancel',
    *   id: string,
    *   name: string,
+   *   costText: string,
    *   iconKey: string | null,
    *   ang: number,
    *   x: number,
@@ -1069,6 +1124,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    * }[]}
    */
   let slots = [];
+  /** @type {Record<string, number> | null} */
+  let menuBank = null;
+  /** @type {Set<string>} */
+  let ownedTypes = new Set();
   /** @type {{
    *   units: { start: number, span: number } | null,
    *   upgrades: { start: number, span: number } | null,
@@ -1269,6 +1328,34 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return slot?.kind === 'upgrade' && researchedUpgrades.has(slot.id);
   }
 
+  function gateForSlot(slot) {
+    if (!slot || slotResearched(slot)) return 'ok';
+    return menuGateState({
+      cost: slot.cost,
+      requires: slot.requires,
+      bank: menuBank,
+      ownedTypes,
+    });
+  }
+
+  function restWash(gate) {
+    return ICON_WASH[gate] ?? ICON_WASH.ok;
+  }
+
+  function setMenuGate(snapshot) {
+    menuBank = snapshot?.bank ?? null;
+    ownedTypes = snapshot?.ownedTypes instanceof Set
+      ? snapshot.ownedTypes
+      : new Set(snapshot?.ownedTypes ?? []);
+    for (const slot of slots) slot.gate = gateForSlot(slot);
+    if (!open) return;
+    for (let i = 0; i < slots.length; i++) {
+      if (labels[i]) labels[i].gate = undefined;
+      if (prices[i]) prices[i].gate = undefined;
+      if (slots[i]?.iconKey) applyIconHover(slots[i].iconKey, i === hoverIndex);
+    }
+  }
+
   function applyPadHover(index, hovered) {
     const pad = pads[index];
     if (!pad) return;
@@ -1391,11 +1478,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       const item = items[i];
       const ang = arc.start + ((i + 0.5) / n) * arc.span;
       const iconKey = `${category}:${item.id}`;
-      if (!icons.has(iconKey)) continue;
       slots.push({
         kind: category,
         id: item.id,
         name: item.name,
+        costText: formatResourceCost(item.cost),
+        cost: item.cost,
+        requires: item.requires,
+        gate: 'ok',
         iconKey,
         ang,
         x: 0,
@@ -1422,6 +1512,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     arcs = computeArcs(menu.units.length, menu.upgrades.length);
     pushSlotsForArc(menu.units, 'unit', arcs.units);
     pushSlotsForArc(menu.upgrades, 'upgrade', arcs.upgrades);
+    for (const slot of slots) slot.gate = gateForSlot(slot);
     if (arcs.pause) {
       pauseSlot = {
         ang: arcs.pause.start + arcs.pause.span * 0.5,
@@ -1449,6 +1540,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         label.dull = false;
       }
     }
+    for (const price of prices) hideLabel(price);
     for (const badge of badges) hideLabel(badge);
     hideLabel(cancelLabel);
     hideLabel(pauseLabel);
@@ -1464,6 +1556,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   function applyIconHover(iconKey, hovered) {
     const batch = icons.get(iconKey);
     if (!batch) return;
+    const slot = slots.find((s) => s.iconKey === iconKey);
+    const wash = restWash(slot?.gate ?? 'ok');
     for (const layer of batch.layers) {
       const mat = layer.mesh.material;
       if (!mat) continue;
@@ -1480,8 +1574,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         }
         if (mat.specularColor) mat.specularColor = [0.12, 0.14, 0.16];
       } else {
-        if (mat.emissiveColor && layer.baseEmissive) {
-          mat.emissiveColor = [...layer.baseEmissive];
+        if (mat.emissiveColor) {
+          mat.emissiveColor = [...wash];
         }
         if (mat.diffuseColor && layer.baseDiffuse) {
           mat.diffuseColor = [...layer.baseDiffuse];
@@ -1650,13 +1744,14 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
     const hovered = i === hoverIndex;
     const owned = slotResearched(slot);
-    if (label.dull !== owned) {
-      updateDefaultTextData(
-        label.data,
-        label.text || slot.name,
-        owned ? DULL_TEXT_COLOR : LABEL_TEXT_COLOR,
-      );
+    const gate = owned ? 'owned' : (slot.gate ?? 'ok');
+    if (label.dull !== owned || label.gate !== gate) {
+      const color = owned
+        ? DULL_TEXT_COLOR
+        : (LABEL_WASH[gate] ?? LABEL_WASH.ok);
+      updateDefaultTextData(label.data, label.text || slot.name, color);
       label.dull = owned;
+      label.gate = gate;
     }
     const down = LABEL_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
@@ -1667,6 +1762,38 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       slot.z + tz * down + nz * lift,
       LABEL_SCREEN_SCALE * (hovered ? 1.05 : 1),
       owned ? 0.82 : hovered ? 1 : 0.88,
+    );
+  }
+
+  function redrawPrice(i) {
+    const price = prices[i];
+    const slot = slots[i];
+    if (!price || !slot?.costText) {
+      hideLabel(price);
+      return;
+    }
+    const hovered = i === hoverIndex;
+    const owned = slotResearched(slot);
+    const gate = owned ? 'owned' : (slot.gate ?? 'ok');
+    if (price.text !== slot.costText || price.dull !== owned || price.gate !== gate) {
+      updateDefaultTextData(
+        price.data,
+        slot.costText,
+        owned ? DULL_TEXT_COLOR : (PRICE_WASH[gate] ?? PRICE_WASH.ok),
+      );
+      price.text = slot.costText;
+      price.dull = owned;
+      price.gate = gate;
+    }
+    const down = PRICE_DOWN * hudScale;
+    const lift = LABEL_LIFT * hudScale;
+    placeScreenText(
+      price,
+      slot.x + tx * down + nx * lift,
+      slot.y + ty * down + ny * lift,
+      slot.z + tz * down + nz * lift,
+      PRICE_SCREEN_SCALE * (hovered ? 1.05 : 1),
+      owned ? 0.72 : hovered ? 0.95 : 0.8,
     );
   }
 
@@ -1809,6 +1936,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         disposeProgressMesh(progressPads[i]);
         applyPadHover(i, false);
         hideLabel(labels[i]);
+        hideLabel(prices[i]);
         hideLabel(badges[i]);
         continue;
       }
@@ -1836,6 +1964,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       );
       redrawSlot(i);
       redrawLabel(i);
+      redrawPrice(i);
       redrawBadge(i);
     }
 
@@ -1972,6 +2101,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     rebuildSlots(menu);
     open = true;
     layout();
+    const want = buildingType;
+    void ensureMenuIcons(menu).then(() => {
+      if (open && activeBuildingType === want) {
+        rebuildSlots(getBuildingMenu(want));
+        layout();
+      }
+    });
   }
 
   function update(camera) {
@@ -1993,6 +2129,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     hideAllProgress();
     hideAllIcons();
     for (const label of labels) hideLabel(label);
+    for (const price of prices) hideLabel(price);
     for (const badge of badges) hideLabel(badge);
     hideLabel(cancelLabel);
     hideLabel(pauseLabel);
@@ -2084,6 +2221,61 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     };
   }
 
+  function wrapAngFrom(ang, start) {
+    let a = ang;
+    while (a < start) a += Math.PI * 2;
+    while (a >= start + Math.PI * 2) a -= Math.PI * 2;
+    return a;
+  }
+
+  function arcContainsAng(arc, ang, edgeInsetAng) {
+    if (!arc) return false;
+    const a = wrapAngFrom(ang, arc.start);
+    return a >= arc.start + edgeInsetAng && a < arc.start + arc.span - edgeInsetAng;
+  }
+
+  /**
+   * Visible colored ring band only — not the empty pie inside.
+   * @param {{ x: number, y: number, z: number, t: number }} hit
+   */
+  function pickVisibleArcAtPlaneHit(hit) {
+    const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
+    const outer = MENU_RING_OUTER * hudScale;
+    const inner = MENU_RING_INNER * hudScale;
+    if (d < inner || d > outer) return null;
+    const dx = hit.x - centerX;
+    const dy = hit.y - centerY;
+    const dz = hit.z - centerZ;
+    const ang = Math.atan2(dx * tx + dy * ty + dz * tz, dx * bx + dy * by + dz * bz);
+    const edgeInsetAng = Math.asin(
+      Math.min(0.95, (ARC_GAP * 0.5 * hudScale) / Math.max(d, 1e-4)),
+    );
+    if (arcContainsAng(arcs.pause, ang, edgeInsetAng)) {
+      return { kind: /** @type {const} */ ('pause') };
+    }
+    if (arcContainsAng(arcs.cancel, ang, edgeInsetAng)) {
+      return { kind: /** @type {const} */ ('cancel') };
+    }
+    const kind = arcContainsAng(arcs.units, ang, edgeInsetAng)
+      ? 'unit'
+      : arcContainsAng(arcs.upgrades, ang, edgeInsetAng)
+        ? 'upgrade'
+        : null;
+    if (!kind) return null;
+    let best = null;
+    let bestDa = Infinity;
+    for (const s of slots) {
+      if (s.kind !== kind) continue;
+      let da = Math.abs(ang - s.ang);
+      if (da > Math.PI) da = Math.PI * 2 - da;
+      if (da < bestDa) {
+        bestDa = da;
+        best = { kind: s.kind, id: s.id };
+      }
+    }
+    return best;
+  }
+
   /**
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    * @returns {{ kind: 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null}
@@ -2140,53 +2332,19 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         best = { kind: s.kind, id: s.id };
       }
     }
-    return best;
+    if (best) return best;
+
+    const planeHit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
+    return planeHit ? pickVisibleArcAtPlaneHit(planeHit) : null;
   }
 
-  function hitHubHoleAtRay(ray) {
-    if (!open || !ray) return false;
-    const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
-    if (!hit) return false;
-    const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
-    return d < MENU_RING_INNER * hudScale;
+  function hitHubHoleAtRay() {
+    // Empty yard inside the ring is world (terrain / building), not a hub disc.
+    return false;
   }
 
   function hitAtRay(ray) {
-    if (!open || !ray) return false;
-    if (pickOptionAtRay(ray)) return true;
-    // Empty hub — gesture so box-select does not start on the building.
-    if (hitHubHoleAtRay(ray)) return true;
-    const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
-    if (!hit) return false;
-    const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
-    const outer = MENU_RING_OUTER * hudScale;
-    const inner = MENU_RING_INNER * hudScale;
-    if (d < inner || d > outer) return false;
-
-    const dx = hit.x - centerX;
-    const dy = hit.y - centerY;
-    const dz = hit.z - centerZ;
-    const alongB = dx * bx + dy * by + dz * bz;
-    const alongT = dx * tx + dy * ty + dz * tz;
-    let ang = Math.atan2(alongT, alongB);
-    const edgeInsetAng = Math.asin(
-      Math.min(0.95, (ARC_GAP * 0.5 * hudScale) / Math.max(d, 1e-4)),
-    );
-    const inArc = (arc) => {
-      if (!arc) return false;
-      let a = ang;
-      while (a < arc.start) a += Math.PI * 2;
-      while (a >= arc.start + Math.PI * 2) a -= Math.PI * 2;
-      return (
-        a >= arc.start + edgeInsetAng && a < arc.start + arc.span - edgeInsetAng
-      );
-    };
-    return (
-      inArc(arcs.units) ||
-      inArc(arcs.upgrades) ||
-      inArc(arcs.pause) ||
-      inArc(arcs.cancel)
-    );
+    return !!pickOptionAtRay(ray);
   }
 
   /**
@@ -2291,6 +2449,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     textRenderer = null;
     textRendererRegistered = false;
     for (const label of labels) disposeDefaultTextData(label.data);
+    for (const price of prices) disposeDefaultTextData(price.data);
     for (const badge of badges) disposeDefaultTextData(badge.data);
     if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
     if (pauseLabel) disposeDefaultTextData(pauseLabel.data);
@@ -2311,6 +2470,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     setUtilityAvailability,
     setPaused,
     setResearchedUpgrades,
+    setMenuGate,
     setTrackDisplay,
     setArmed,
     clearTracks,

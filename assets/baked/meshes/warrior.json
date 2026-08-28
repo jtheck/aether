@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/warrior.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -79,6 +79,16 @@
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.6843329071998596,
+        -0.013004422187805176,
+        -0.11790403723716736
+      ],
+      "boundMax": [
+        0.7596445083618164,
+        2.1285085678100586,
+        0.5165543556213379
+      ],
       "positions": {
         "offset": 0,
         "length": 1920,
@@ -104,6 +114,16 @@
       "materialName": "Material",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        0.21290278434753418,
+        0.5797704458236694,
+        -0.06809306144714355
+      ],
+      "boundMax": [
+        0.698889970779419,
+        1.5443085432052612,
+        2.396728515625
+      ],
       "positions": {
         "offset": 24368,
         "length": 168,
@@ -129,6 +149,16 @@
       "materialName": "TeamColor",
       "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        -1.1869583129882812,
+        0.2497544288635254,
+        0.10990436375141144
+      ],
+      "boundMax": [
+        -0.27342331409454346,
+        1.3727271556854248,
+        0.560347318649292
+      ],
       "positions": {
         "offset": 26496,
         "length": 72,

@@ -28,12 +28,13 @@ export function allMeshBakeUrls() {
   return [...urls].sort();
 }
 
-/** @returns {{ url: string, idleClip: string, walkClip: string, carryClip?: string }[]} */
+/** @returns {{ url: string, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }[]} */
 export function allVatBakeDefs() {
   return Object.values(VAT_UNIT_DEFS).map((d) => ({
     url: d.url,
     idleClip: d.idleClip,
     walkClip: d.walkClip,
     carryClip: d.carryClip,
+    chopClip: d.chopClip,
   }));
 }

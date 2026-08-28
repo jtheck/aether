@@ -70,6 +70,7 @@ export function loadUnit(w, rider, transport) {
   w.transportTarget[rider] = -1;
   w.order[rider] = ORDER.IDLE;
   w.targetEntity[rider] = -1;
+  if (w.targetBuilding) w.targetBuilding[rider] = -1;
   clearEngagement(w, rider);
   w.hasTarget[rider] = 0;
   w.vx[rider] = 0;
@@ -107,6 +108,7 @@ export function unloadPassengers(w, transport, walkTx = null, walkTy = null) {
     w.vy[rider] = 0;
     clearEngagement(w, rider);
     w.targetEntity[rider] = -1;
+    if (w.targetBuilding) w.targetBuilding[rider] = -1;
 
     if (walkTx != null && walkTy != null) {
       const destX = walkTx + fx.mul(cos, TRANSPORT_UNLOAD_WALK_SPREAD);
@@ -149,6 +151,7 @@ export function applyTransportAssignments(w, assignments) {
     w.transportTarget[rider] = transport;
     w.order[rider] = ORDER.MOVE;
     w.targetEntity[rider] = -1;
+    if (w.targetBuilding) w.targetBuilding[rider] = -1;
     clearEngagement(w, rider);
     w.tx[rider] = w.px[transport];
     w.ty[rider] = w.py[transport];

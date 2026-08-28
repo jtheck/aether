@@ -19,8 +19,13 @@ import {
   TERRAIN,
   isSlowTile,
 } from './field.js';
+import { createBuilding } from './buildings.js';
+import {
+  FARM_SPORE_DAMAGE_MUL,
+} from './buildingCombat.js';
 import {
   SPORE_BLOOM_COOLDOWN,
+  SPORE_BLOOM_DAMAGE,
   SPORE_GROWTH_DELAY,
   SPORE_MIN_SEEDS,
   SPORE_OUTER_RADIUS,
@@ -288,10 +293,55 @@ function seedsFormOutwardArcAwayFromMyco() {
   assert.ok(fxPatch?.arcCount >= 1, 'outward arc flash published');
 }
 
+function bloomHitsFarmHardWithInk() {
+  const field = createField(1);
+  stampGrass(field, 70, 70, 90, 90);
+  const aim = tileWorld(80, 80);
+  const w = createWorld(94);
+  const myco = spawn(w, {
+    x: aim.x - fx.fromInt(16),
+    y: aim.y,
+    type: UNIT.MYCO,
+    owner: 0,
+  });
+  const farm = createBuilding({
+    owner: 1,
+    type: 'farm',
+    x: fx.toFloat(aim.x),
+    z: fx.toFloat(aim.y),
+    hp: 400,
+  });
+  const camp = createBuilding({
+    owner: 1,
+    type: 'camp',
+    x: fx.toFloat(aim.x),
+    z: fx.toFloat(aim.y) + 4,
+    hp: 400,
+  });
+  const allyFarm = createBuilding({
+    owner: 0,
+    type: 'farm',
+    x: fx.toFloat(aim.x) + 4,
+    z: fx.toFloat(aim.y),
+    hp: 400,
+  });
+  w.buildings.push(farm, camp, allyFarm);
+
+  assert.ok(castSporeBloom(w, field, myco, aim.x, aim.y));
+  assert.equal(farm.hp, 400 - SPORE_BLOOM_DAMAGE * FARM_SPORE_DAMAGE_MUL, 'farm takes bloom × farm mul');
+  assert.equal(camp.hp, 400 - SPORE_BLOOM_DAMAGE, 'other buildings take base bloom');
+  assert.equal(allyFarm.hp, 400 - SPORE_BLOOM_DAMAGE * FARM_SPORE_DAMAGE_MUL, 'friendly farm takes bloom too');
+
+  const fxPatch = takeSporeBloomUpdates(w);
+  assert.ok(fxPatch);
+  assert.ok(fxPatch.dripCount >= 10, 'hit farms publish inky drips across the plot');
+}
+
 growTreeAtPlantsAndPublishes();
 castFellsTreesAndQueuesSeeds();
 delayedGrowthSproutsTrees();
 castsAreDeterministic();
 emptyGroundStillCasts();
 seedsFormOutwardArcAwayFromMyco();
+bloomHitsFarmHardWithInk();
 console.log('sporeBloom.test.js: ok');

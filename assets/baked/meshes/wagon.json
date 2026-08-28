@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/wagon.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "spawn_anchor",
@@ -91,127 +91,37 @@
   "images": [],
   "parts": [
     {
-      "materialName": "part0",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 0,
-        "length": 216,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 864,
-        "length": 216,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 1728,
-        "length": 108,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 2160,
-        "length": 144,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part1",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 2736,
-        "length": 720,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 5616,
-        "length": 720,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 8496,
-        "length": 240,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 9456,
-        "length": 480,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part2",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 11376,
-        "length": 720,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 14256,
-        "length": 720,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 17136,
-        "length": 240,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 18096,
-        "length": 480,
-        "type": "f32"
-      }
-    },
-    {
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -2.5797231197357178,
+        -0.36012914776802063,
+        -3.132317543029785
+      ],
+      "boundMax": [
+        2.536830186843872,
+        1.881195306777954,
+        3.2522950172424316
+      ],
       "positions": {
-        "offset": 20016,
-        "length": 720,
+        "offset": 0,
+        "length": 3096,
         "type": "f32"
       },
       "normals": {
-        "offset": 22896,
-        "length": 720,
+        "offset": 12384,
+        "length": 3096,
         "type": "f32"
       },
       "indices": {
-        "offset": 25776,
-        "length": 240,
+        "offset": 24768,
+        "length": 1068,
         "type": "u32"
       },
       "uvs": {
-        "offset": 26736,
-        "length": 480,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part4",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 28656,
-        "length": 720,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 31536,
-        "length": 720,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 34416,
-        "length": 240,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 35376,
-        "length": 480,
+        "offset": 29040,
+        "length": 2064,
         "type": "f32"
       }
     }

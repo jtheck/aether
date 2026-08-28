@@ -31,6 +31,10 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
     mode: 'koth',
     activeSlots: matchConfig.activeSlots,
     armyPerSide: matchConfig.armyPerSide ?? 0,
+    // Live P2P never carries the loading-screen AI. Replaying with leftover
+    // owner-1 economy commands desyncs the spectator checksum from the host.
+    aiPlayers: matchConfig.aiPlayers ?? [],
+    humanPlayers: matchConfig.humanPlayers ?? [],
   });
   session.setHumanPlayers(matchConfig.humanPlayers ?? []);
   session.setLocalPlayerId(-1);

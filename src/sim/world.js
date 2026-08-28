@@ -13,7 +13,7 @@ import { createSpatialGrid } from './spatialGrid.js';
 import { createProjectileStore } from './projectiles.js';
 import { createFireZoneStore } from './fireZones.js';
 import { createFrogStore } from './frogs.js';
-import { createLightningFxStore } from './lightning.js';
+import { createLightningFxStore, createPendingLightningStore } from './lightning.js';
 import { createHolyArmorFxStore } from './holyArmor.js';
 import {
   createSporeBloomFxStore,
@@ -36,9 +36,15 @@ export const ORDER = {
   REPAIR: 4,
   /** Villager harvesting a resource node + hauling to a drop-off. */
   GATHER: 5,
-  /** Villager raising a building under construction (see construction.js). */
+  /** Villager or engineer raising a building under construction (see construction.js). */
   BUILD: 6,
 };
+
+/** Drop unit / building attack focus (move, stop, gather, death, …). */
+export function clearAttackFocus(w, i) {
+  w.targetEntity[i] = -1;
+  if (w.targetBuilding) w.targetBuilding[i] = -1;
+}
 
 export function createWorld(seed) {
   const engagementTarget = new Int32Array(MAX_ENTITIES);
@@ -61,6 +67,7 @@ export function createWorld(seed) {
     fireZones: createFireZoneStore(),
     frogs: createFrogStore(),
     lightningFx: createLightningFxStore(),
+    pendingLightning: createPendingLightningStore(),
     holyArmorFx: createHolyArmorFxStore(),
     sporeBloomFx: createSporeBloomFxStore(),
     treeGrowth: createSporeGrowthStore(),
@@ -100,6 +107,10 @@ export function createWorld(seed) {
     // orders
     order: new Uint8Array(MAX_ENTITIES),
     targetEntity: new Int32Array(MAX_ENTITIES), // -1 = none
+    /** Placeable building index, or -1. Mutually exclusive with targetEntity. */
+    targetBuilding: new Int32Array(MAX_ENTITIES).fill(-1),
+    buildings: [],
+    buildingsDirty: 0,
     engagementTarget,
     engagementSlot,
     engagementMask: new Uint16Array(MAX_ENTITIES),
@@ -114,6 +125,8 @@ export function createWorld(seed) {
     gatherCd: new Int16Array(MAX_ENTITIES),
     /** 1 = gather defensively (retaliate on a nearby hostile, then resume). */
     gatherDefensive: new Uint8Array(MAX_ENTITIES),
+    /** 0 none / 1 chop at node / 2 haul load back (see gather.js GATHER_ACT). */
+    gatherAct: new Uint8Array(MAX_ENTITIES),
     /** Building index this villager is constructing (ORDER.BUILD), or -1. */
     buildTarget,
 
@@ -206,6 +219,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.speed[i] = speed ?? def.speed;
   w.order[i] = ORDER.IDLE;
   w.targetEntity[i] = -1;
+  if (w.targetBuilding) w.targetBuilding[i] = -1;
   w.engagementTarget[i] = -1;
   w.engagementSlot[i] = -1;
   w.engagementMask[i] = 0;
@@ -215,6 +229,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.carriedAmt[i] = 0;
   w.gatherCd[i] = 0;
   w.gatherDefensive[i] = 0;
+  if (w.gatherAct) w.gatherAct[i] = 0;
   w.buildTarget[i] = -1;
   w.navWpCount[i] = 0;
   w.navWpIndex[i] = 0;

@@ -10,6 +10,7 @@ import {
   setThinInstances,
 } from '../vendor/lite/liteVendor.js';
 import { RESOURCE_INDEX } from '../sim/resources.js';
+import { GATHER_ACT } from '../sim/gather.js';
 
 const WOOD = RESOURCE_INDEX.wood + 1;
 const STONE = RESOURCE_INDEX.stone + 1;
@@ -214,6 +215,8 @@ export function createCarryLoads(engine, scene) {
       if ((amt[i] | 0) <= 0) continue;
       if (alive && !alive[i]) continue;
       if (skip && skip[i]) continue;
+      // Props only on the haul home — chop with a partial load stays empty-handed.
+      if (opts.act && (opts.act[i] | 0) !== GATHER_ACT.HAUL) continue;
       const code = kind ? (kind[i] | 0) : WOOD;
       const batch = batchForKind(code) ?? batches.wood;
       const slot = batch.count++;

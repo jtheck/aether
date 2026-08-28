@@ -2,6 +2,13 @@
 
 import * as fx from './fixed.js';
 import { applyDamage } from './damage.js';
+import {
+  applyDamageBuilding,
+  buildingFootprintHalf,
+  FARM_FIRE_DAMAGE_MUL,
+  scaleFarmHazardDamage,
+} from './buildingCombat.js';
+import { isBuildingAlive } from './buildings.js';
 import { lineClear } from './field.js';
 import { getProjectileDef } from './projectileTypes.js';
 import { isHostile } from './teams.js';
@@ -25,6 +32,14 @@ import { pushSporeHeadFx, queueTreeSeedAt } from './sporeBloom.js';
 export const MAX_PROJECTILES = 32768;
 /** Max unique entities a path-hit projectile can damage. */
 export const MAX_PATH_HITS = 8;
+
+/** Rank 1–4 splash scale for compounded fireballs (authoring). */
+const FIREBALL_SPLASH_MUL = [
+  fx.ONE,
+  fx.fromFloat(1.28),
+  fx.fromFloat(1.58),
+  fx.fromFloat(1.90),
+];
 
 export const PROJECTILE_DESPAWN = {
   NONE: 0,
@@ -51,6 +66,7 @@ export function createProjectileStore(capacity = MAX_PROJECTILES) {
     generation: new Uint32Array(capacity),
     source: new Int32Array(capacity),
     target: new Int32Array(capacity),
+    targetBuilding: new Int32Array(capacity).fill(-1),
     px: new Int32Array(capacity),
     py: new Int32Array(capacity),
     vx: new Int32Array(capacity),
@@ -60,6 +76,9 @@ export function createProjectileStore(capacity = MAX_PROJECTILES) {
     wanderOx: new Int32Array(capacity),
     wanderOy: new Int32Array(capacity),
     damage: new Int32Array(capacity),
+    speed: new Int32Array(capacity),
+    power: new Uint8Array(capacity),
+    launchWait: new Uint8Array(capacity),
     age: new Uint16Array(capacity),
     lifetime: new Uint16Array(capacity),
     hitCount: new Uint8Array(capacity),
@@ -73,11 +92,16 @@ export function spawnProjectile(w, {
   owner,
   source,
   target,
+  targetBuilding = -1,
   x,
   y,
   aimX,
   aimY,
   damage,
+  speed,
+  power = 1,
+  aimScatter,
+  launchWait = 0,
 }) {
   const store = w.projectiles;
   if (store.freeTop <= 0) {
@@ -97,14 +121,20 @@ export function spawnProjectile(w, {
   store.owner[slot] = owner;
   store.source[slot] = source;
   store.target[slot] = target;
+  store.targetBuilding[slot] = targetBuilding | 0;
   store.px[slot] = x;
   store.py[slot] = y;
-  const aimed = applyAimScatter(w, x, y, aimX, aimY, def.aimScatter);
+  const scatter = aimScatter !== undefined ? aimScatter : def.aimScatter;
+  const aimed = applyAimScatter(w, x, y, aimX, aimY, scatter);
   store.aimX[slot] = aimed.aimX;
   store.aimY[slot] = aimed.aimY;
   store.wanderOx[slot] = 0;
   store.wanderOy[slot] = 0;
   store.damage[slot] = damage;
+  const flySpeed = speed != null && speed > 0 ? speed : def.speed;
+  store.speed[slot] = flySpeed;
+  store.power[slot] = Math.max(1, Math.min(4, power | 0));
+  store.launchWait[slot] = Math.max(0, launchWait | 0);
   store.age[slot] = 0;
   store.hitCount[slot] = 0;
   store.despawnReason[slot] = PROJECTILE_DESPAWN.NONE;
@@ -114,9 +144,10 @@ export function spawnProjectile(w, {
   const dx = aimed.aimX - x;
   const dy = aimed.aimY - y;
   const dist = fx.len(dx, dy);
-  setVelocity(store, slot, dx, dy, dist, def.speed);
-  const travelTicks = dist > 0 ? Math.ceil(dist / Math.max(1, def.speed)) + 2 : 1;
-  store.lifetime[slot] = Math.min(def.maxTicks, Math.max(1, travelTicks));
+  setVelocity(store, slot, dx, dy, dist, flySpeed);
+  const travelTicks = dist > 0 ? Math.ceil(dist / Math.max(1, flySpeed)) + 2 : 1;
+  const maxTicks = flySpeed < def.speed ? Math.max(def.maxTicks, 140) : def.maxTicks;
+  store.lifetime[slot] = Math.min(maxTicks, Math.max(1, travelTicks));
   store.activeCount++;
   w.metrics.projectileSpawned++;
   return slot;
@@ -200,9 +231,18 @@ function hitEntity(w, store, slot, def, entity, field) {
 }
 
 /** Splash at impact point; hostiles take full damage, friendlies use multiplier. */
+function projectileSpeed(store, slot, def) {
+  const stored = store.speed?.[slot];
+  return stored > 0 ? stored : def.speed;
+}
+
 function applySplash(w, slot, impactX, impactY, def, field) {
   const store = w.projectiles;
-  const radius = def.splashRadius;
+  const power = store.power?.[slot] || 1;
+  const splashMul = def.leavesGroundFire
+    ? (FIREBALL_SPLASH_MUL[power - 1] ?? fx.ONE)
+    : fx.ONE;
+  const radius = fx.mul(def.splashRadius, splashMul);
   if (!radius || radius <= 0) return false;
   const radius2 = fx.mul(radius, radius);
   const baseDamage = store.damage[slot];
@@ -220,6 +260,19 @@ function applySplash(w, slot, impactX, impactY, def, field) {
       dmg = Math.max(1, Math.round(baseDamage * friendlyMul));
     }
     if (applyDamage(w, i, dmg, source)) hit = true;
+  }
+  const buildings = w.buildings;
+  if (buildings?.length) {
+    for (let bi = 0; bi < buildings.length; bi++) {
+      const b = buildings[bi];
+      if (!isBuildingAlive(b)) continue;
+      const reach = radius + buildingFootprintHalf(b.type);
+      if (fx.dist2(impactX, impactY, b.x, b.z) > fx.mul(reach, reach)) continue;
+      const dmg = def.leavesGroundFire
+        ? scaleFarmHazardDamage(b.type, baseDamage, FARM_FIRE_DAMAGE_MUL)
+        : baseDamage;
+      if (applyDamageBuilding(w, field, bi, dmg) > 0) hit = true;
+    }
   }
   if (def.ignitesTrees && field && applyTreeSplash(field, impactX, impactY, radius)) {
     hit = true;
@@ -305,13 +358,23 @@ export function projectileSystem(w, field) {
 
   for (let slot = 0; slot < store.capacity; slot++) {
     if (!store.alive[slot]) continue;
+    if (store.launchWait?.[slot] > 0) {
+      store.launchWait[slot]--;
+      if (store.launchWait[slot] > 0) continue;
+    }
     const def = getProjectileDef(store.type[slot]);
     const target = store.target[slot];
     const targetAlive = target >= 0 && target < w.count && w.alive[target];
+    const bi = store.targetBuilding?.[slot] ?? -1;
+    const b = bi >= 0 ? w.buildings?.[bi] : null;
+    const buildingAlive = isBuildingAlive(b);
 
     if (targetAlive && def.homing) {
       store.aimX[slot] = w.px[target];
       store.aimY[slot] = w.py[target];
+    } else if (buildingAlive && def.homing) {
+      store.aimX[slot] = b.x;
+      store.aimY[slot] = b.z;
     }
 
     refreshWander(w, store, slot, def);
@@ -321,7 +384,8 @@ export function projectileSystem(w, field) {
     const dx = aimX - store.px[slot];
     const dy = aimY - store.py[slot];
     const dist = fx.len(dx, dy);
-    setVelocity(store, slot, dx, dy, dist, def.speed);
+    const flySpeed = projectileSpeed(store, slot, def);
+    setVelocity(store, slot, dx, dy, dist, flySpeed);
     const nextX = store.px[slot] + store.vx[slot];
     const nextY = store.py[slot] + store.vy[slot];
 
@@ -359,13 +423,23 @@ export function projectileSystem(w, field) {
             continue;
           }
         }
+      } else if (buildingAlive) {
+        const reach = def.hitRadius + buildingFootprintHalf(b.type);
+        if (fx.dist2(nextX, nextY, b.x, b.z) <= fx.mul(reach, reach)) {
+          applyDamageBuilding(w, field, bi, store.damage[slot]);
+          store.hitCount[slot]++;
+          if (store.hitCount[slot] >= def.pierce) {
+            freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
+            continue;
+          }
+        }
       }
     }
 
-    const reachedAim = dist <= def.speed;
+    const reachedAim = dist <= flySpeed;
     if (
       store.age[slot] >= store.lifetime[slot] ||
-      (reachedAim && (!targetAlive || !def.homing || def.splashRadius > 0))
+      (reachedAim && ((!targetAlive && !buildingAlive) || !def.homing || def.splashRadius > 0))
     ) {
       if (def.splashRadius > 0) {
         const ix = reachedAim ? store.aimX[slot] : nextX;
@@ -373,6 +447,10 @@ export function projectileSystem(w, field) {
         const hit = applySplash(w, slot, ix, iy, def, field);
         freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
       } else {
+        if (buildingAlive && store.hitCount[slot] === 0 && reachedAim) {
+          applyDamageBuilding(w, field, bi, store.damage[slot]);
+          store.hitCount[slot]++;
+        }
         const hadHit = store.hitCount[slot] > 0;
         freeProjectile(w, slot, hadHit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
       }

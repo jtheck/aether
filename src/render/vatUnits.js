@@ -34,10 +34,11 @@ export const VAT_CLIP = {
   WALK: 1,
   CARRY: 3,
   CARRY_WALK: 4,
+  CHOP: 5,
 };
 export const VAT_FROZEN = 0x80;
 
-/** @type {Readonly<Record<number, { url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string }>>} */
+/** @type {Readonly<Record<number, { url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }>>} */
 export const VAT_UNIT_DEFS = {
   [UNIT.VILLAGER]: {
     url: '/assets/models/villager.glb',
@@ -46,6 +47,7 @@ export const VAT_UNIT_DEFS = {
     idleClip: 'idle',
     walkClip: 'walk_cycle',
     carryClip: 'carry',
+    chopClip: 'chop',
   },
 };
 
@@ -64,6 +66,42 @@ export function maxVatInstancesPerBatch(engine) {
   return Math.max(1, Math.floor(Number(dim) / 2));
 }
 
+/** Width of Lite's VAT instance-param texture for `instanceCount` slots. */
+export function vatInstanceTexelWidth(instanceCount) {
+  return Math.max(2, (instanceCount | 0) * 2);
+}
+
+/**
+ * Allocate Lite's instance-param texture at `reserved` slots on first upload.
+ * Later `setInstances` with fewer slots only writeTexture — they must not grow,
+ * because grow `destroy()`s the old GPUTexture while PBR still holds a cached
+ * bind group (WebGPU: "Destroyed texture 64x1 RGBA32Float used in a submit").
+ *
+ * @param {{ setInstances: (params: Float32Array) => void }} handle
+ * @param {number} reservedInstances
+ */
+export function primeVatInstanceCapacity(handle, reservedInstances) {
+  const reserved = Math.max(1, reservedInstances | 0);
+  const orig = handle.setInstances.bind(handle);
+  const primed = new Float32Array(reserved * 4);
+  orig(primed);
+  handle.setInstances = (params) => {
+    const n = params.length >> 2;
+    if (n <= reserved) {
+      orig(params);
+      return;
+    }
+    primed.set(params.subarray(0, reserved * 4));
+    orig(primed);
+  };
+}
+
+function attachVatReserved(engine, mesh, baked, clip) {
+  const handle = attachVat(engine, mesh, baked, clip);
+  primeVatInstanceCapacity(handle, maxVatInstancesPerBatch(engine));
+  return handle;
+}
+
 function collectSkinnedMeshes(node, out = []) {
   if (node?.skeleton) out.push(node);
   for (const child of node?.children ?? []) collectSkinnedMeshes(child, out);
@@ -79,34 +117,36 @@ function findGroup(groups, name) {
 }
 
 /**
- * Resolve idle / walk / carry animation groups for a VAT bake.
+ * Resolve idle / walk / carry / chop animation groups for a VAT bake.
  * @param {object[]} groups
- * @param {{ idleClip: string, walkClip: string, carryClip?: string }} def
+ * @param {{ idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }} def
  */
 export function collectVatBakeGroups(groups, def) {
   const idle = findGroup(groups, def.idleClip);
   const walk = findGroup(groups, def.walkClip) ?? findGroup(groups, 'walk');
   const carry = def.carryClip ? findGroup(groups, def.carryClip) : null;
+  const chop = def.chopClip ? findGroup(groups, def.chopClip) : null;
   const bakeGroups = [];
   const seen = new Set();
-  for (const g of [idle, walk, carry]) {
+  for (const g of [idle, walk, carry, chop]) {
     if (!g || seen.has(g)) continue;
     seen.add(g);
     bakeGroups.push(g);
   }
-  return { idle, walk, carry, bakeGroups };
+  return { idle, walk, carry, chop, bakeGroups };
 }
 
-export function vatWant(moving, carrying, animate) {
+export function vatWant(moving, carrying, animate, chopping = false) {
   let clip = VAT_CLIP.IDLE;
   if (carrying && moving) clip = VAT_CLIP.CARRY_WALK;
   else if (carrying) clip = VAT_CLIP.CARRY;
+  else if (chopping) clip = VAT_CLIP.CHOP;
   else if (moving) clip = VAT_CLIP.WALK;
   return animate ? clip : (clip | VAT_FROZEN);
 }
 
 /**
- * @param {{ idleClip: object, walkClip: object, carryClip?: object | null, carryWalkClip?: object | null }} clips
+ * @param {{ idleClip: object, walkClip: object, carryClip?: object | null, carryWalkClip?: object | null, chopClip?: object | null }} clips
  * @param {number} state
  */
 export function clipForVatState(clips, state) {
@@ -116,12 +156,13 @@ export function clipForVatState(clips, state) {
     return clips.carryWalkClip ?? clips.walkClip ?? clips.idleClip;
   }
   if (id === VAT_CLIP.CARRY) return clips.carryClip ?? clips.idleClip;
+  if (id === VAT_CLIP.CHOP) return clips.chopClip ?? clips.idleClip;
   return clips.idleClip;
 }
 
 function clipNameSet(meta) {
   const names = new Set();
-  for (const n of [meta?.idleName, meta?.walkName, meta?.carryName]) {
+  for (const n of [meta?.idleName, meta?.walkName, meta?.carryName, meta?.chopName]) {
     if (n) names.add(String(n).toLowerCase());
   }
   const clips = meta?.prims?.[0]?.clips;
@@ -138,6 +179,7 @@ function offlineCoversDef(meta, def) {
     if (meta.carryOverlay !== CARRY_OVERLAY) return false;
     need.push(CARRY_IDLE_CLIP, CARRY_WALK_CLIP);
   }
+  if (def.chopClip) need.push(def.chopClip);
   return need.every((n) => {
     const lower = n.toLowerCase();
     return [...names].some((x) => x === lower || x.includes(lower));
@@ -152,7 +194,7 @@ function isTeamColorPart(mesh) {
   return isTeamColorName(materialName(mesh));
 }
 
-/** @type {Map<string, { bakedList: object[], bakeClipName: string, idleName: string, walkName: string, carryName: string | null, idleClip: object, walkClip: object, carryClip: object | null, carryWalkClip: object | null }>} */
+/** @type {Map<string, { bakedList: object[], bakeClipName: string, idleName: string, walkName: string, carryName: string | null, chopName: string | null, idleClip: object, walkClip: object, carryClip: object | null, carryWalkClip: object | null, chopClip: object | null }>} */
 const vatBakeCache = new Map();
 
 /**
@@ -218,10 +260,11 @@ function uploadCpuVat(engine, prims, clips) {
 }
 
 function bakeLiveVat(_root, skinned, groups, def) {
-  const { idle, walk, carry, bakeGroups } = collectVatBakeGroups(groups, def);
+  const { idle, walk, carry, chop, bakeGroups } = collectVatBakeGroups(groups, def);
   const loco = [];
   if (idle) loco.push(idle);
   if (walk && walk !== idle) loco.push(walk);
+  if (chop && chop !== idle && chop !== walk) loco.push(chop);
   const sampleGroups = loco.length ? loco : bakeGroups;
   if (sampleGroups.length === 0) {
     throw new Error(`no idle/walk clips in ${def.url}`);
@@ -231,6 +274,7 @@ function bakeLiveVat(_root, skinned, groups, def) {
   const idleName = idle?.name ?? bakeClipName;
   const walkName = walk?.name ?? idleName;
   const carryName = carry?.name ?? null;
+  const chopName = chop?.name ?? null;
   const idleClip = clips[idleName];
   const walkClip = clips[walkName] ?? idleClip;
   if (!idleClip) throw new Error(`VAT missing clip ${idleName} in ${def.url}`);
@@ -250,10 +294,12 @@ function bakeLiveVat(_root, skinned, groups, def) {
     idleName,
     walkName,
     carryName,
+    chopName,
     idleClip,
     walkClip,
     carryClip,
     carryWalkClip,
+    chopClip: chopName ? (clips[chopName] ?? null) : null,
   };
 }
 
@@ -278,6 +324,8 @@ async function tryLoadOfflineVatBake(engine, def) {
     walkClip: meta.walkClip,
     carryClip: meta.carryIdleClip ?? meta.carryClip ?? null,
     carryWalkClip: meta.carryWalkClip ?? null,
+    chopName: meta.chopName ?? null,
+    chopClip: meta.chopClip ?? null,
   };
 }
 
@@ -292,7 +340,7 @@ async function tryLoadOfflineVatBake(engine, def) {
  * Prefers /assets/baked/vat/* when present.
  *
  * @param {object} engine
- * @param {{ url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string }} def
+ * @param {{ url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }} def
  */
 export async function loadVatUnitTemplate(engine, def) {
   const container = await loadGltf(engine, def.url);
@@ -323,6 +371,8 @@ export async function loadVatUnitTemplate(engine, def) {
         walkClip: live.walkClip,
         carryClip: live.carryClip,
         carryWalkClip: live.carryWalkClip,
+        chopName: live.chopName,
+        chopClip: live.chopClip,
       };
       vatBakeCache.set(def.url, cached);
     }
@@ -337,7 +387,7 @@ export async function loadVatUnitTemplate(engine, def) {
     const parts = [];
     for (let i = 0; i < skinned.length; i++) {
       const mesh = skinned[i];
-      const handle = attachVat(engine, mesh, cached.bakedList[i], cached.bakeClipName);
+      const handle = attachVatReserved(engine, mesh, cached.bakedList[i], cached.bakeClipName);
       const team = isTeamColorPart(mesh);
       if (mesh.material) {
         mesh.material.doubleSided = true;
@@ -367,6 +417,7 @@ export async function loadVatUnitTemplate(engine, def) {
       walkClip: cached.walkClip,
       carryClip: cached.carryClip ?? null,
       carryWalkClip: cached.carryWalkClip ?? null,
+      chopClip: cached.chopClip ?? null,
       instanceScale: Math.abs(def.scale),
       footLift: 0.08,
     };
@@ -386,7 +437,7 @@ export async function loadVatUnitTemplate(engine, def) {
   const parts = [];
   for (let i = 0; i < skinned.length; i++) {
     const mesh = skinned[i];
-    const handle = attachVat(engine, mesh, cached.bakedList[i], cached.bakeClipName);
+    const handle = attachVatReserved(engine, mesh, cached.bakedList[i], cached.bakeClipName);
     const team = isTeamColorPart(mesh);
     if (mesh.material) {
       mesh.material.doubleSided = true;
@@ -411,14 +462,15 @@ export async function loadVatUnitTemplate(engine, def) {
     walkClip: cached.walkClip,
     carryClip: cached.carryClip ?? null,
     carryWalkClip: cached.carryWalkClip ?? null,
+    chopClip: cached.chopClip ?? null,
     instanceScale: Math.abs(def.scale),
     footLift: 0.08,
   };
 }
 
 /** Fill per-instance VAT params: (fromRow, toRow, timeOffset, fps). */
-export function fillVatInstanceParams(params, capacity, idleClip, walkClip, movingFlags, carryClip = null, carryWalkClip = null) {
-  const clips = { idleClip, walkClip, carryClip, carryWalkClip };
+export function fillVatInstanceParams(params, capacity, idleClip, walkClip, movingFlags, carryClip = null, carryWalkClip = null, chopClip = null) {
+  const clips = { idleClip, walkClip, carryClip, carryWalkClip, chopClip };
   for (let s = 0; s < capacity; s++) {
     const state = movingFlags ? movingFlags[s] : 0;
     const clip = clipForVatState(clips, state);

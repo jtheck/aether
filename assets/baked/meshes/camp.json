@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/camp.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "fire_anchor",
@@ -36,29 +36,6 @@
       "normalImage": null,
       "ormImage": null,
       "emissiveImage": null
-    },
-    {
-      "name": "Material.002",
-      "baseColorFactor": [
-        0.0422445572912693,
-        0.02459133416414261,
-        0.004401430021971464,
-        1
-      ],
-      "metallicFactor": 0,
-      "roughnessFactor": 0.5,
-      "emissiveFactor": [
-        0,
-        0,
-        0
-      ],
-      "doubleSided": true,
-      "alphaMode": "OPAQUE",
-      "alphaCutoff": 0.5,
-      "baseColorImage": null,
-      "normalImage": null,
-      "ormImage": null,
-      "emissiveImage": null
     }
   ],
   "images": [],
@@ -67,349 +44,34 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -4.3716349601745605,
+        -0.2156873196363449,
+        -4.28480339050293
+      ],
+      "boundMax": [
+        3.8420040607452393,
+        5.345317840576172,
+        8.74995231628418
+      ],
       "positions": {
         "offset": 0,
-        "length": 72,
+        "length": 1050,
         "type": "f32"
       },
       "normals": {
-        "offset": 288,
-        "length": 72,
+        "offset": 4200,
+        "length": 1050,
         "type": "f32"
       },
       "indices": {
-        "offset": 576,
-        "length": 36,
+        "offset": 8400,
+        "length": 552,
         "type": "u32"
       },
       "uvs": {
-        "offset": 720,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 912,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 1200,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 1488,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 1632,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 1824,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 2112,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 2400,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 2544,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 2736,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 3024,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 3312,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 3456,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 3648,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 3936,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 4224,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 4368,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 4560,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 4848,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 5136,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 5280,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 5472,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 5760,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 6048,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 6192,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 6384,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 6672,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 6960,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 7104,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 7296,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 7584,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 7872,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 8016,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 8208,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 8568,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 8928,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 9120,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 9360,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 9720,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 10080,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 10272,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 10512,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 10872,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 11232,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 11424,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material.002",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 11664,
-        "length": 90,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 12024,
-        "length": 90,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 12384,
-        "length": 48,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 12576,
-        "length": 60,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "Material",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 12816,
-        "length": 42,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 12984,
-        "length": 42,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 13152,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 13296,
-        "length": 28,
+        "offset": 10608,
+        "length": 700,
         "type": "f32"
       }
     }

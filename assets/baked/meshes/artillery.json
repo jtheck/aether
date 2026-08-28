@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/artillery.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,49 +33,34 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -1.2811247110366821,
+        -0.8771284222602844,
+        -0.4378352165222168
+      ],
+      "boundMax": [
+        1.1365879774093628,
+        0.966446578502655,
+        0.46803557872772217
+      ],
       "positions": {
         "offset": 0,
-        "length": 168,
+        "length": 630,
         "type": "f32"
       },
       "normals": {
-        "offset": 672,
-        "length": 168,
+        "offset": 2520,
+        "length": 630,
         "type": "f32"
       },
       "indices": {
-        "offset": 1344,
-        "length": 84,
+        "offset": 5040,
+        "length": 324,
         "type": "u32"
       },
       "uvs": {
-        "offset": 1680,
-        "length": 112,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part1",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 2128,
-        "length": 462,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 3976,
-        "length": 462,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 5824,
-        "length": 240,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 6784,
-        "length": 308,
+        "offset": 6336,
+        "length": 420,
         "type": "f32"
       }
     }

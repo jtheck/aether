@@ -172,7 +172,8 @@ export function createField(seed = 0, dims = {}) {
     treeDirty: [],
     treeStockHash: 0,
     // Per-tile stone/mineral remaining on rock CENTER tiles (0 otherwise).
-    rockStock: new Uint8Array(n),
+    rockStock: new Uint16Array(n),
+    rockDirty: [],
     rockStockHash: 0,
     // 1 on a farm's CENTER tile — an infinite food node villagers work in place.
     foodNode: new Uint8Array(n),
@@ -237,7 +238,7 @@ export function fieldSnapshot(field) {
     treeBurn: field.treeBurn instanceof Uint16Array
       ? field.treeBurn.slice()
       : new Uint16Array(field.treeBurn ?? field.width * field.height),
-    rockStock: field.rockStock?.slice?.() ?? new Uint8Array(field.width * field.height),
+    rockStock: field.rockStock?.slice?.() ?? new Uint16Array(field.width * field.height),
     rockStockHash: field.rockStockHash | 0,
     foodNode: field.foodNode?.slice?.() ?? new Uint8Array(field.width * field.height),
   };
@@ -839,15 +840,26 @@ export function applyTerrainSlow(field) {
 }
 
 function nearestPassable(field, tx, tz, radius) {
+  // First Chebyshev ring with a free tile, then the Euclidean-nearest on that
+  // ring. Corners of a ring are ~√2 farther than cardinals — old first-hit
+  // order parked miners on a diagonal outside harvest reach of moss/snow rocks.
   for (let r = 1; r <= radius; r++) {
+    let best = null;
+    let bestD = Infinity;
     for (let dz = -r; dz <= r; dz++) {
       for (let dx = -r; dx <= r; dx++) {
         if (Math.abs(dx) !== r && Math.abs(dz) !== r) continue;
         const nx = tx + dx;
         const nz = tz + dz;
-        if (isPassable(field, nx, nz)) return { tx: nx, tz: nz };
+        if (!isPassable(field, nx, nz)) continue;
+        const d = dx * dx + dz * dz;
+        if (d < bestD) {
+          bestD = d;
+          best = { tx: nx, tz: nz };
+        }
       }
     }
+    if (best) return best;
   }
   return null;
 }

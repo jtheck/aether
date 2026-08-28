@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/wizard.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "sparkle_anchor",
@@ -113,6 +113,16 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -1.574005365371704,
+        -0.1865331381559372,
+        -0.8947868347167969
+      ],
+      "boundMax": [
+        1.4512852430343628,
+        3.0562069416046143,
+        0.936023473739624
+      ],
       "positions": {
         "offset": 0,
         "length": 2508,
@@ -138,6 +148,16 @@
       "materialName": "TeamColor",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -0.37056830525398254,
+        3.030726432800293,
+        -0.5297753214836121
+      ],
+      "boundMax": [
+        0.31205978989601135,
+        3.3164122104644775,
+        0.33889275789260864
+      ],
       "positions": {
         "offset": 32080,
         "length": 132,
@@ -163,6 +183,16 @@
       "materialName": "Material.001",
       "materialIndex": 2,
       "reverseWinding": true,
+      "boundMin": [
+        -0.8607199192047119,
+        2.7875194549560547,
+        -0.8480819463729858
+      ],
+      "boundMax": [
+        0.8940494656562805,
+        3.9769909381866455,
+        0.8180515170097351
+      ],
       "positions": {
         "offset": 33752,
         "length": 495,
@@ -188,6 +218,16 @@
       "materialName": "Material.002",
       "materialIndex": 3,
       "reverseWinding": true,
+      "boundMin": [
+        -1.670166015625,
+        -0.12945838272571564,
+        0.05860242247581482
+      ],
+      "boundMax": [
+        -1.2060195207595825,
+        4.34174919128418,
+        0.528120756149292
+      ],
       "positions": {
         "offset": 39956,
         "length": 198,

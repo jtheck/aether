@@ -14,14 +14,19 @@ import { SCENERY } from '../../sim/scenery.js';
 import { USE_GPU_PICK } from '../../render/pickMode.js';
 import {
   boxSelectWinner,
+  inspectForeignOnClick,
   mergeBuildingSels,
   radialClickKind,
+  radialHubFramedBuilding,
   screenPosInRect,
+  twoFingerConsumesBuildUi,
 } from './buildingSelect.js';
-import { pickGatherNodeOnRay, rayTToPoint } from './gatherPick.js';
+import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js';
 
-/** Debug-sphere-equivalent minimum pick height for buildings/agoras (world units). */
-const BUILDING_PICK_MIN_Y = 2.5;
+/** Footprint box height — tall enough for a tower, not a circumcircle. */
+const BUILDING_PICK_HEIGHT = 10;
+/** Slight pad so a click on the eaves still counts. */
+const BUILDING_PICK_HALO = 0.35;
 /** Reused empty hit list — never mutate. */
 const EMPTY_HITS = Object.freeze([]);
 
@@ -45,7 +50,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {(i: number, out: {x:number,y:number,z:number}) => {x:number,y:number,z:number}} opts.getUnitWorldPos
  * @param {(cmd: object) => void} opts.enqueueCommand
  * @param {() => void} [opts.onSelectionChanged]
- * @param {(x: number, z: number, y?: number, cmdType?: number, tile?: number) => void} [opts.onOrder]
+ * @param {(x: number, z: number, y?: number, cmdType?: number, tile?: number, extra?: { arrow?: number }) => void} [opts.onOrder]
  * @param {(x: number, z: number, y?: number) => void} [opts.onAbilityHold]
  * @param {() => boolean} [opts.canInteract]
  * @param {() => { owner: number, x: number, z: number }[]} [opts.getAgoras]
@@ -70,6 +75,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadial]
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadialHub]
  * @param {(i: number) => boolean} [opts.isUnitVisible] — skip fog-hidden hostiles
+ * @param {(owner: number, x: number, z: number) => boolean} [opts.isStructureVisible] — skip fog-hidden hostiles
  */
 export function createGameInput(opts) {
   const {
@@ -106,6 +112,7 @@ export function createGameInput(opts) {
     hitRadial,
     hitRadialHub,
     isUnitVisible,
+    isStructureVisible,
     getField,
   } = opts;
 
@@ -121,7 +128,9 @@ export function createGameInput(opts) {
   let selCount = 0;
 
   function selectEntity(i) {
-    if (i < 0 || selSlot[i] >= 0) return;
+    if (i < 0) return;
+    renderer.pingUnit?.(i);
+    if (selSlot[i] >= 0) return;
     selSlot[i] = selCount;
     selIds[selCount++] = i;
     selectedBuf[i] = 1;
@@ -277,8 +286,8 @@ export function createGameInput(opts) {
   // --- CPU pick scratch (no per-click allocations on the live path) ---
   /** @type {{ id: number, x: number, y: number, z: number, r: number }[]} */
   const unitSpherePool = [];
-  /** @type {{ id: { kind: 'agora' | 'building', index: number }, x: number, y: number, z: number, r: number }[]} */
-  const buildingSpherePool = [];
+  /** @type {{ id: { kind: 'agora' | 'building', index: number }, x: number, y: number, z: number }[]} */
+  const buildingPickPool = [];
   const unitHitIds = new Int32Array(MAX_ENTITIES);
   const unitHitTs = new Float32Array(MAX_ENTITIES);
   const resolvedHitIds = [];
@@ -316,63 +325,66 @@ export function createGameInput(opts) {
     return n;
   }
 
-  /** Half the footprint diagonal (world units) — a tight-ish circle around the pad. */
-  function buildingPickRadius(typeKey) {
+  function buildingFootHalf(typeKey) {
     const fp = BUILDING_FOOTPRINTS[typeKey];
-    if (!fp) return 3;
-    return 0.5 * Math.hypot(fp.w, fp.h) * TILE_SIZE_F;
+    const w = fp?.w ?? 2;
+    const h = fp?.h ?? 2;
+    return {
+      halfW: w * TILE_SIZE_F * 0.5 + BUILDING_PICK_HALO,
+      halfD: h * TILE_SIZE_F * 0.5 + BUILDING_PICK_HALO,
+    };
   }
 
-  /** Fill buildingSpherePool (own structures only); returns live count. */
-  function fillBuildingPickSpheres() {
+  /** Own structures always; hostiles only when fog is not hiding them. */
+  function structurePickable(owner, x, z) {
+    return !isStructureVisible || isStructureVisible(owner | 0, x, z);
+  }
+
+  /** Fill buildingPickPool with own structure centers (box-select). */
+  function fillBuildingPickCenters() {
     let n = 0;
+    const gy = (x, z) => renderer.groundYAt?.(x, z) ?? 0;
     const agoras = getAgoras?.() ?? [];
     for (let i = 0; i < agoras.length; i++) {
       const a = agoras[i];
       if ((a.owner | 0) !== localPlayerId) continue;
-      const r = buildingPickRadius('agora');
-      let sp = buildingSpherePool[n];
+      let sp = buildingPickPool[n];
       if (!sp) {
-        buildingSpherePool[n] = sp = {
-          id: { kind: 'agora', index: 0 },
-          x: 0,
-          y: 0,
-          z: 0,
-          r: 0,
-        };
+        buildingPickPool[n] = sp = { id: { kind: 'agora', index: 0 }, x: 0, y: 0, z: 0 };
       }
       sp.id.kind = 'agora';
       sp.id.index = i;
       sp.x = a.x;
-      sp.y = Math.max(BUILDING_PICK_MIN_Y, r * 0.6);
+      sp.y = gy(a.x, a.z) + 2.5;
       sp.z = a.z;
-      sp.r = r;
       n++;
     }
     const buildings = getBuildings?.() ?? [];
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
       if ((b.owner | 0) !== localPlayerId) continue;
-      const r = buildingPickRadius(b.type);
-      let sp = buildingSpherePool[n];
+      let sp = buildingPickPool[n];
       if (!sp) {
-        buildingSpherePool[n] = sp = {
-          id: { kind: 'building', index: 0 },
-          x: 0,
-          y: 0,
-          z: 0,
-          r: 0,
-        };
+        buildingPickPool[n] = sp = { id: { kind: 'building', index: 0 }, x: 0, y: 0, z: 0 };
       }
       sp.id.kind = 'building';
       sp.id.index = i;
       sp.x = b.x;
-      sp.y = Math.max(BUILDING_PICK_MIN_Y, r * 0.6);
+      sp.y = gy(b.x, b.z) + 2.5;
       sp.z = b.z;
-      sp.r = r;
       n++;
     }
     return n;
+  }
+
+  function considerBuildingHit(ray, x, z, yaw, typeKey, kind, index, best) {
+    const { halfW, halfD } = buildingFootHalf(typeKey);
+    const gy = renderer.groundYAt?.(x, z) ?? 0;
+    const t = rayHitYawBox(ray, x, z, yaw || 0, halfW, gy - 0.2, halfD, gy + BUILDING_PICK_HEIGHT);
+    if (t == null || t >= best.t) return;
+    best.t = t;
+    best.kind = kind;
+    best.index = index;
   }
 
   /**
@@ -445,7 +457,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * GPU mesh pick → own agora / placeable under the cursor, or null.
+   * GPU mesh pick → visible agora / placeable under the cursor, or null.
    * Kept for USE_GPU_PICK — not the live path.
    */
   async function pickBuildingAtGpu(clientX, clientY) {
@@ -454,26 +466,38 @@ export function createGameInput(opts) {
     if (!hit) return null;
     if (hit.kind === 'agora') {
       const a = getAgoras?.()?.[hit.index];
-      if (!a || (a.owner | 0) !== localPlayerId) return null;
+      if (!a || !structurePickable(a.owner, a.x, a.z)) return null;
       return hit;
     }
     const b = getBuildings?.()?.[hit.index];
-    if (!b || (b.owner | 0) !== localPlayerId) return null;
+    if (!b || (b.hp != null && (b.hp | 0) <= 0) || !structurePickable(b.owner, b.x, b.z)) return null;
     return hit;
   }
 
   /**
-   * CPU ray-vs-sphere → own agora / placeable, or null.
+   * CPU ray vs footprint box → visible agora / placeable, or null.
+   * Buildings are few; no need for the unit bounding-sphere path.
    * @param {object | null} ray
    * @returns {{ kind: 'agora' | 'building', index: number } | null}
    */
   function pickBuildingAtRay(ray) {
-    if (!ray || !renderer.rayHitSpheresNearest) return null;
-    const n = fillBuildingPickSpheres();
-    const hit = renderer.rayHitSpheresNearest(ray, buildingSpherePool, n);
-    // Copy out of the pool — pooled id objects are reused on the next pick.
-    if (!hit || hit === -1) return null;
-    return { kind: hit.kind, index: hit.index };
+    if (!ray) return null;
+    const best = { t: Infinity, kind: '', index: -1 };
+    const agoras = getAgoras?.() ?? [];
+    for (let i = 0; i < agoras.length; i++) {
+      const a = agoras[i];
+      if (!structurePickable(a.owner, a.x, a.z)) continue;
+      considerBuildingHit(ray, a.x, a.z, a.yaw, 'agora', 'agora', i, best);
+    }
+    const buildings = getBuildings?.() ?? [];
+    for (let i = 0; i < buildings.length; i++) {
+      const b = buildings[i];
+      if (b.hp != null && (b.hp | 0) <= 0) continue;
+      if (!structurePickable(b.owner, b.x, b.z)) continue;
+      considerBuildingHit(ray, b.x, b.z, b.yaw, b.type, 'building', i, best);
+    }
+    if (best.index < 0) return null;
+    return { kind: best.kind, index: best.index };
   }
 
   /** @returns {{ kind: 'agora' | 'building', index: number } | null | Promise<...>} */
@@ -488,10 +512,24 @@ export function createGameInput(opts) {
    * @param {{ clientX: number, clientY: number } | undefined} [ptr]
    * @param {{ kind: 'agora' | 'building', index: number }[] | null | undefined} [all]
    */
+  function pingStructure(sel) {
+    if (!sel) return;
+    if (sel.kind === 'agora') {
+      renderer.pingAgora?.(sel.index);
+      return;
+    }
+    const b = getBuildings?.()?.[sel.index];
+    if (b) renderer.pingBuilding?.(b.x, b.z);
+  }
+
   function notifyBuildingSelected(sel, ptr, all) {
     selectedBuilding = sel;
     selectedBuildings = all ?? (sel ? [sel] : []);
     onBuildingSelected?.(sel, ptr, selectedBuildings);
+    if (!sel) return;
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      pingStructure(selectedBuildings[i]);
+    }
   }
 
   function clearBuildingSelection() {
@@ -516,9 +554,15 @@ export function createGameInput(opts) {
     return b?.type ?? null;
   }
 
+  function buildingOwnerOf(sel) {
+    if (!sel) return -1;
+    if (sel.kind === 'agora') return getAgoras?.()?.[sel.index]?.owner | 0;
+    return getBuildings?.()?.[sel.index]?.owner | 0;
+  }
+
   /**
    * Replace or shift-add buildings. Empty `list` is a no-op unless replacing
-   * (`add` false), which clears.
+   * (`add` false), which clears. Shift-add refuses mixed owners.
    * @param {{ kind: 'agora' | 'building', index: number }[]} list
    * @param {boolean} add
    * @param {{ kind: 'agora' | 'building', index: number } | null | undefined} [primary]
@@ -529,7 +573,13 @@ export function createGameInput(opts) {
       if (!add) clearBuildingSelection();
       return;
     }
-    if (add && selectedBuildings.length > 0) {
+    let adding = add && selectedBuildings.length > 0;
+    if (adding) {
+      const have = buildingOwnerOf(selectedBuildings[0]);
+      const next = buildingOwnerOf(primary ?? list[0]);
+      if (have !== next) adding = false;
+    }
+    if (adding) {
       notifyBuildingSelected(primary ?? list[0], ptr, mergeBuildingSels(selectedBuildings, list));
       return;
     }
@@ -538,15 +588,15 @@ export function createGameInput(opts) {
 
   /**
    * Own agora / placeable centers whose pick height projects into the canvas
-   * rect. Copies ids out of the sphere pool.
+   * rect. Copies ids out of the center pool.
    * @returns {{ kind: 'agora' | 'building', index: number }[]}
    */
   function buildingsInScreenRect(minX, maxX, minY, maxY) {
     /** @type {{ kind: 'agora' | 'building', index: number }[]} */
     const matched = [];
-    const n = fillBuildingPickSpheres();
+    const n = fillBuildingPickCenters();
     for (let i = 0; i < n; i++) {
-      const sp = buildingSpherePool[i];
+      const sp = buildingPickPool[i];
       const p = renderer.worldToScreen(sp.x, sp.y, sp.z);
       if (!screenPosInRect(p, minX, maxX, minY, maxY)) continue;
       matched.push({ kind: sp.id.kind, index: sp.id.index });
@@ -554,28 +604,47 @@ export function createGameInput(opts) {
     return matched;
   }
 
+  function selectionOwnerForBuildingType(typeKey, primary) {
+    if (primary) return buildingOwnerOf(primary);
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (typeKey === 'agora' && sel.kind === 'agora') return buildingOwnerOf(sel);
+      if (sel.kind === 'building') {
+        const b = getBuildings?.()?.[sel.index];
+        if (b?.type === typeKey) return b.owner | 0;
+      }
+    }
+    return localPlayerId;
+  }
+
   /**
-   * Select every own building matching typeKey (agora or placeable type).
+   * Select every visible building matching typeKey for one owner.
    * @param {string} typeKey
    * @param {boolean} add
    * @param {{ kind: 'agora' | 'building', index: number } | null | undefined} [primary]
    * @param {{ clientX: number, clientY: number } | undefined} [ptr]
+   * @param {number} [ownerId]
    */
-  function selectAllBuildingsOfType(typeKey, add, primary, ptr) {
+  function selectAllBuildingsOfType(typeKey, add, primary, ptr, ownerId) {
+    const owner = ownerId ?? selectionOwnerForBuildingType(typeKey, primary);
     clearUnitSelection();
     /** @type {{ kind: 'agora' | 'building', index: number }[]} */
     const matched = [];
     if (typeKey === 'agora') {
       const agoras = getAgoras?.() ?? [];
       for (let i = 0; i < agoras.length; i++) {
-        if ((agoras[i].owner | 0) === localPlayerId) matched.push({ kind: 'agora', index: i });
+        const a = agoras[i];
+        if ((a.owner | 0) !== owner) continue;
+        if (!structurePickable(a.owner, a.x, a.z)) continue;
+        matched.push({ kind: 'agora', index: i });
       }
     } else {
       const buildings = getBuildings?.() ?? [];
       for (let i = 0; i < buildings.length; i++) {
         const b = buildings[i];
-        if ((b.owner | 0) !== localPlayerId) continue;
+        if ((b.owner | 0) !== owner) continue;
         if (b.type !== typeKey) continue;
+        if (!structurePickable(b.owner, b.x, b.z)) continue;
         matched.push({ kind: 'building', index: i });
       }
     }
@@ -611,6 +680,7 @@ export function createGameInput(opts) {
     const ids = [];
     for (let k = 0; k < selCount; k++) {
       const i = selIds[k];
+      if (world.owner[i] !== localPlayerId) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0 && !includeCarried?.has(i)) continue;
       ids.push(i);
     }
@@ -622,9 +692,19 @@ export function createGameInput(opts) {
     const world = getWorld();
     for (let k = 0; k < selCount; k++) {
       const i = selIds[k];
+      if (world.owner[i] !== localPlayerId) continue;
       if (!(world.carriedBy && world.carriedBy[i] >= 0)) return true;
     }
     return false;
+  }
+
+  function dropUnitsNotOwnedBy(owner) {
+    compactSelection();
+    const world = getWorld();
+    for (let k = selCount - 1; k >= 0; k--) {
+      const i = selIds[k];
+      if (world.owner[i] !== owner) deselectEntity(i);
+    }
   }
 
   /** Own selected production buildings that can take a train rally. */
@@ -704,11 +784,38 @@ export function createGameInput(opts) {
     clearBuildingSelection();
   }
 
-  function selectAllOfType(typeId, add) {
+  function selectionOwnerForType(typeId) {
+    compactSelection();
+    const world = getWorld();
+    for (let k = 0; k < selCount; k++) {
+      const i = selIds[k];
+      if (world.alive[i] && world.type[i] === typeId) return world.owner[i] | 0;
+    }
+    return localPlayerId;
+  }
+
+  /** Packed hits under one tap — keep one owner's units, never mix armies. */
+  function applyUnitHits(hits, owner, add) {
     const world = getWorld();
     if (!add) clearUnitSelectionBits();
+    else dropUnitsNotOwnedBy(owner);
+    for (let k = 0; k < hits.length; k++) {
+      const id = hits[k];
+      if (world.owner[id] === owner) selectEntity(id);
+    }
+    clearBuildingSelection();
+    syncSelectionSquad();
+    onSelectionChanged?.();
+  }
+
+  function selectAllOfType(typeId, add, ownerId) {
+    const world = getWorld();
+    const owner = ownerId ?? selectionOwnerForType(typeId);
+    if (!add) clearUnitSelectionBits();
+    else dropUnitsNotOwnedBy(owner);
     for (let i = 0; i < world.count; i++) {
-      if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
+      if (!world.alive[i] || world.owner[i] !== owner) continue;
+      if (owner !== localPlayerId && isUnitVisible && !isUnitVisible(i)) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
       if (world.type[i] === typeId) selectEntity(i);
     }
@@ -727,6 +834,7 @@ export function createGameInput(opts) {
     const minY = Math.min(y0, y1) - rect.top;
     const maxY = Math.max(y0, y1) - rect.top;
     if (!add) clearUnitSelectionBits();
+    else dropUnitsNotOwnedBy(localPlayerId);
     const world = getWorld();
     let unitHits = 0;
     for (let i = 0; i < world.count; i++) {
@@ -785,8 +893,9 @@ export function createGameInput(opts) {
    * @param {number} cmdType
    * @param {number} [preHit] entity id from an earlier pick this click, or -1
    * @param {number} [epoch] worldClickEpoch snapshot — drop if superseded
+   * @param {{ kind: 'agora' | 'building', index: number } | null} [preBld]
    */
-  async function orderAt(clientX, clientY, cmdType, preHit, epoch) {
+  async function orderAt(clientX, clientY, cmdType, preHit, epoch, preBld) {
     if (!canUseInput() || isPlacing()) return;
     const ids = selectedIds();
     if (ids.length === 0) return;
@@ -804,7 +913,28 @@ export function createGameInput(opts) {
     ) {
       if (epoch !== undefined && !clickCurrent(epoch)) return;
       enqueueCommand({ type: CMD.ATTACK, entities: ids, target: hit });
+      renderer.pingUnit?.(hit);
       return;
+    }
+
+    // Hostile placeable — same hard attack + flash as a unit click.
+    if (cmdType === CMD.ATTACK_MOVE && preBld?.kind === 'building') {
+      const b = getBuildings?.()?.[preBld.index];
+      const hostile =
+        b &&
+        (b.hp == null || (b.hp | 0) > 0) &&
+        buildingOwnerOf(preBld) !== localPlayerId;
+      if (hostile) {
+        if (epoch !== undefined && !clickCurrent(epoch)) return;
+        enqueueCommand({
+          type: CMD.ATTACK,
+          entities: ids,
+          target: -1,
+          buildingIndex: preBld.index,
+        });
+        pingStructure(preBld);
+        return;
+      }
     }
 
     // Click a friendly transport → nearest selected riders embark (up to capacity).
@@ -857,6 +987,7 @@ export function createGameInput(opts) {
       if (engineers.length > 0) {
         if (epoch !== undefined && !clickCurrent(epoch)) return;
         enqueueCommand({ type: CMD.ATTACK, entities: engineers, target: hit });
+        renderer.pingUnit?.(hit);
         moveIds = ids.filter((id) => world.type[id] !== UNIT.ENGINEER);
         if (moveIds.length === 0) {
           playVillagerMove();
@@ -886,7 +1017,7 @@ export function createGameInput(opts) {
         if (villagers.length > 0) {
           enqueueCommand({ type: CMD.GATHER, entities: villagers, tile: node.tile });
           if (epoch !== undefined && !clickCurrent(epoch)) return;
-          onOrder?.(node.x, node.z, node.y, CMD.GATHER, node.tile);
+          pingGatherOrder(node, cmdType);
           if (rest.length === 0) {
             playVillagerMove();
             return;
@@ -1155,49 +1286,68 @@ export function createGameInput(opts) {
         if (!clickCurrent(epoch)) return;
         lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'unit', typeId };
         if (selectAll) {
-          selectAllOfType(typeId, e.shiftKey);
+          selectAllOfType(typeId, e.shiftKey, localPlayerId);
         } else {
-          // Packed-tight units under the same tap all come back from pickUnitsAt —
-          // select every own one instead of just the nearest. Degrades to a normal
-          // single select when hits is just [hit].
-          if (!e.shiftKey) clearUnitSelectionBits();
-          for (let k = 0; k < hits.length; k++) {
-            const id = hits[k];
-            if (world.owner[id] === localPlayerId) selectEntity(id);
-          }
-          clearBuildingSelection();
-          syncSelectionSquad();
-          onSelectionChanged?.();
+          applyUnitHits(hits, localPlayerId, e.shiftKey);
         }
       }
       return;
     }
 
+    // Idle click on a visible foreign unit → inspect (collar + HP). With own
+    // troops selected this stays an attack-move so combat LMB is unchanged.
+    if (hit >= 0 && inspectForeignOnClick(hasOrderableSelection())) {
+      const owner = world.owner[hit];
+      const typeId = world.type[hit];
+      const selectAll =
+        e.ctrlKey ||
+        e.metaKey ||
+        (!!prevTap &&
+          prevTap.kind === 'unit' &&
+          prevTap.typeId === typeId &&
+          tapAt - prevTap.t <= DOUBLE_MS &&
+          Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX);
+      if (!clickCurrent(epoch)) return;
+      lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'unit', typeId };
+      if (selectAll) selectAllOfType(typeId, e.shiftKey, owner);
+      else applyUnitHits(hits, owner, e.shiftKey);
+      return;
+    }
+
     if (USE_GPU_PICK) bld = await pickBuildingAt(e.clientX, e.clientY);
     if (!clickCurrent(epoch)) return;
+    if (!bld && click.hubPassThrough) {
+      bld = radialHubFramedBuilding(
+        { picked: false, onHub: true },
+        selectedBuilding,
+      );
+    }
     if (bld) {
-      const typeKey = buildingTypeKeyOf(bld);
-      const selectAll =
-        !!typeKey &&
-        (e.ctrlKey ||
-          e.metaKey ||
-          (!!prevTap &&
-            prevTap.kind === 'building' &&
-            prevTap.buildingTypeKey === typeKey &&
-            tapAt - prevTap.t <= DOUBLE_MS &&
-            Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX));
-      if (!clickCurrent(epoch)) return;
-      lastTap = typeKey
-        ? { t: tapAt, x: e.clientX, y: e.clientY, kind: 'building', buildingTypeKey: typeKey }
-        : null;
-      const ptr = { clientX: e.clientX, clientY: e.clientY };
-      if (selectAll && typeKey) {
-        selectAllBuildingsOfType(typeKey, e.shiftKey, bld, ptr);
-      } else {
-        clearUnitSelection();
-        setBuildingSelection([bld], e.shiftKey, bld, ptr);
+      const ownBld = buildingOwnerOf(bld) === localPlayerId;
+      if (ownBld || inspectForeignOnClick(hasOrderableSelection())) {
+        const typeKey = buildingTypeKeyOf(bld);
+        const selectAll =
+          !!typeKey &&
+          (e.ctrlKey ||
+            e.metaKey ||
+            (!!prevTap &&
+              prevTap.kind === 'building' &&
+              prevTap.buildingTypeKey === typeKey &&
+              tapAt - prevTap.t <= DOUBLE_MS &&
+              Math.hypot(e.clientX - prevTap.x, e.clientY - prevTap.y) <= DOUBLE_PX));
+        if (!clickCurrent(epoch)) return;
+        lastTap = typeKey
+          ? { t: tapAt, x: e.clientX, y: e.clientY, kind: 'building', buildingTypeKey: typeKey }
+          : null;
+        const ptr = { clientX: e.clientX, clientY: e.clientY };
+        if (selectAll && typeKey) {
+          selectAllBuildingsOfType(typeKey, e.shiftKey, bld, ptr, buildingOwnerOf(bld));
+        } else {
+          clearUnitSelection();
+          setBuildingSelection([bld], e.shiftKey, bld, ptr);
+        }
+        return;
       }
-      return;
     }
 
     // Hub frames the selected building — a miss must not rally / deselect.
@@ -1216,9 +1366,13 @@ export function createGameInput(opts) {
         castAbilityAt(e.clientX, e.clientY);
         return;
       }
+      const hostileBld =
+        bld?.kind === 'building' && buildingOwnerOf(bld) !== localPlayerId;
       const orderKind =
-        hit >= 0 && world.owner[hit] !== localPlayerId ? 'enemy' : 'ground';
-      await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch);
+        (hit >= 0 && world.owner[hit] !== localPlayerId) || hostileBld
+          ? 'enemy'
+          : 'ground';
+      await orderAt(e.clientX, e.clientY, CMD.ATTACK_MOVE, hit, epoch, bld);
       if (!clickCurrent(epoch)) return;
       lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: orderKind };
       return;
@@ -1234,7 +1388,7 @@ export function createGameInput(opts) {
 
     if (!clickCurrent(epoch)) return;
     lastTap = null;
-    clearBuildingSelection();
+    clearSelection();
   }
 
   async function handlePointerUp(e) {
@@ -1262,8 +1416,8 @@ export function createGameInput(opts) {
 
     if (canUseInput() && e.type !== 'pointercancel') {
       if (wasSelHud) {
-        // Release on the same chip → select every own unit/building of that type
-        // (shift adds to the current selection), like v1's selection panel.
+        // Release on the same chip → select every unit/building of that type
+        // for the current owner (shift adds), like v1's selection panel.
         const slot = renderer.pickSelectionHud?.(e.clientX, e.clientY);
         if (slot != null) selectHudSlot(slot, e.shiftKey);
         lastTap = null;
@@ -1359,7 +1513,7 @@ export function createGameInput(opts) {
   }
 
   /**
-   * RMB tap (no pan) / touch 2-finger later — force MOVE to ground.
+   * RMB tap (no pan) / touch 2-finger when no build UI — force MOVE to ground.
    * No unit pick; ignores enemies. Drag pan is filtered by the camera controller.
    */
   function forceMoveAt(clientX, clientY) {
@@ -1423,8 +1577,17 @@ export function createGameInput(opts) {
     }
     if (villagers.length === 0) return false;
     enqueueCommand({ type: CMD.GATHER, entities: villagers, tile: node.tile });
-    onOrder?.(node.x, node.z, node.y, CMD.GATHER, node.tile);
+    pingGatherOrder(node, CMD.MOVE);
     return true;
+  }
+
+  /**
+   * Tree/rock flash always; attack/move arrow too when the selection isn't a
+   * lone villager (group or mixed click).
+   */
+  function pingGatherOrder(node, sourceCmd) {
+    const extra = selCount > 1 ? { arrow: sourceCmd } : undefined;
+    onOrder?.(node.x, node.z, node.y, CMD.GATHER, node.tile, extra);
   }
 
   /**
@@ -1522,6 +1685,26 @@ export function createGameInput(opts) {
     return true;
   }
 
+  function hasBuildUi() {
+    return twoFingerConsumesBuildUi(
+      isPlacing(),
+      selectedBuilding != null || selectedBuildings.length > 0,
+      Boolean(isRadialOpen?.()),
+    );
+  }
+
+  /**
+   * Touch 2-finger tap — leave placement and building selection (including
+   * rally). Unlike dismissMenus, this does not spare production buildings
+   * for a force-move rally.
+   */
+  function backOutBuildUi() {
+    if (!canUseInput() || !hasBuildUi()) return false;
+    lastTap = null;
+    clearBuildingSelection();
+    return true;
+  }
+
   return {
     handlePointerDown,
     handlePointerMove,
@@ -1533,6 +1716,8 @@ export function createGameInput(opts) {
     deselectEntity,
     cancelPlacement,
     dismissMenus,
+    backOutBuildUi,
+    hasBuildUi,
     isPlacing,
     getSelectedBuilding: () => selectedBuilding,
     setSelectedBuilding(sel) {

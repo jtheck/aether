@@ -5,6 +5,17 @@ import { findPath, lineClear, worldToTile, TILE } from './field.js';
 import { getUnitDef, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { effectiveAttackRange, engagementPoint } from './engagement.js';
+import {
+  attackBuildingInRange,
+  attackBuildingStandPoint,
+} from './buildingCombat.js';
+
+function liveBuilding(w, bi) {
+  const b = w.buildings?.[bi];
+  if (!b) return null;
+  if (b.hp == null) return b;
+  return (b.hp | 0) > 0 ? b : null;
+}
 
 export const MAX_WAYPOINTS = 64;
 export const MAX_REPATHS = 8;
@@ -51,19 +62,24 @@ export function clearPath(w, i) {
 }
 
 export function attackInRange(w, i) {
-  if (w.order[i] !== ORDER.ATTACK || w.targetEntity[i] < 0) return false;
-  const t = w.targetEntity[i];
-  if (!w.alive[t]) return false;
-  const def = getUnitDef(w.type[i]);
-  const range = effectiveAttackRange(w, i, t);
-  const range2 = fx.mul(range, range);
-  const d2 = fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]);
-  if (d2 > range2) return false;
-  if (def.minRange > 0) {
-    const min2 = fx.mul(def.minRange, def.minRange);
-    if (d2 < min2) return false;
+  if (w.order[i] !== ORDER.ATTACK) return false;
+  if (w.targetEntity[i] >= 0) {
+    const t = w.targetEntity[i];
+    if (!w.alive[t]) return false;
+    const def = getUnitDef(w.type[i]);
+    const range = effectiveAttackRange(w, i, t);
+    const range2 = fx.mul(range, range);
+    const d2 = fx.dist2(w.px[i], w.py[i], w.px[t], w.py[t]);
+    if (d2 > range2) return false;
+    if (def.minRange > 0) {
+      const min2 = fx.mul(def.minRange, def.minRange);
+      if (d2 < min2) return false;
+    }
+    return true;
   }
-  return true;
+  const bi = w.targetBuilding?.[i] ?? -1;
+  if (bi >= 0) return attackBuildingInRange(w, i, liveBuilding(w, bi));
+  return false;
 }
 
 /** Stand just inside attack range of a target — avoids dog-piling on its center. */
@@ -215,8 +231,17 @@ function processPathRequests(w, field, requestType, limit, cursor) {
 }
 
 function refreshAttackDestination(w, i) {
-  if (w.order[i] !== ORDER.ATTACK || w.targetEntity[i] < 0 || !w.alive[w.targetEntity[i]]) return;
-  const stand = attackStandPoint(w, i, w.targetEntity[i]);
+  if (w.order[i] !== ORDER.ATTACK) return;
+  if (w.targetEntity[i] >= 0 && w.alive[w.targetEntity[i]]) {
+    const stand = attackStandPoint(w, i, w.targetEntity[i]);
+    w.navDestX[i] = stand.x;
+    w.navDestY[i] = stand.y;
+    return;
+  }
+  const bi = w.targetBuilding?.[i] ?? -1;
+  const b = liveBuilding(w, bi);
+  if (!b) return;
+  const stand = attackBuildingStandPoint(w, i, b);
   w.navDestX[i] = stand.x;
   w.navDestY[i] = stand.y;
 }
@@ -225,9 +250,13 @@ function needsPath(w, i) {
   const order = w.order[i];
   if (order === ORDER.IDLE) return false;
   if (order === ORDER.MOVE || order === ORDER.ATTACK_MOVE) return w.hasTarget[i] !== 0;
-  if (order === ORDER.ATTACK) return w.targetEntity[i] >= 0;
+  if (order === ORDER.ATTACK) {
+    return w.targetEntity[i] >= 0 || (w.targetBuilding?.[i] ?? -1) >= 0;
+  }
   if (order === ORDER.REPAIR) return w.targetEntity[i] >= 0;
-  if (order === ORDER.GATHER) return w.gatherTile[i] >= 0;
+  if (order === ORDER.GATHER) {
+    return w.gatherTile[i] >= 0 || (w.carriedAmt?.[i] | 0) > 0;
+  }
   if (order === ORDER.BUILD) return w.buildTarget[i] >= 0;
   return false;
 }
@@ -285,6 +314,21 @@ export function movementGoal(w, field, i) {
         return null;
       }
       const stand = attackStandPoint(w, i, t);
+      w.navDestX[i] = stand.x;
+      w.navDestY[i] = stand.y;
+      if (w.navWpCount[i] === 0 && w.pathRequest[i] === PATH_REQUEST.NONE) {
+        w.pathRequest[i] =
+          w.stuckTicks[i] > 10 ? PATH_REQUEST.ASTAR : PATH_REQUEST.LOS;
+      }
+    }
+  } else if (w.order[i] === ORDER.ATTACK && (w.targetBuilding?.[i] ?? -1) >= 0) {
+    const b = liveBuilding(w, w.targetBuilding[i]);
+    if (b) {
+      if (attackInRange(w, i)) {
+        clearPath(w, i);
+        return null;
+      }
+      const stand = attackBuildingStandPoint(w, i, b);
       w.navDestX[i] = stand.x;
       w.navDestY[i] = stand.y;
       if (w.navWpCount[i] === 0 && w.pathRequest[i] === PATH_REQUEST.NONE) {

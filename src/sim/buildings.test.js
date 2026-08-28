@@ -25,7 +25,14 @@ import {
   getBuildingDisplayName,
   buildingCanRally,
   TRAIN_TICKS,
+  VILLAGE_VILLAGER_TICKS,
+  BUILDING_MENUS,
+  getBuildingMenu,
+  createBuilding,
+  getBuildingRequires,
 } from './buildings.js';
+import { menuGateState } from './menuGate.js';
+import { POP_PER_VILLAGE } from './pop.js';
 import { buildingProductionSystem } from './buildingProduction.js';
 import { createAgoras } from './agora.js';
 import { UNIT } from './unitTypes.js';
@@ -39,6 +46,10 @@ function createWorld(seed) {
   const rich = { wood: 5000, stone: 5000, mineral: 5000, food: 5000 };
   for (const owner of [0, 1, 2]) grantStartingResources(w, owner, rich);
   return w;
+}
+
+function seedOwned(w, type) {
+  w.buildings.push(createBuilding({ owner: 0, type, x: -80, z: -80 }));
 }
 
 function snapFloat(type, xF, zF) {
@@ -92,6 +103,7 @@ describe('buildings place', () => {
     const hitX = 10.7;
     const hitZ = 20.2;
     clearClaim(field, 'barracks', hitX, hitZ);
+    seedOwned(w, 'village');
     const expected = snapFloat('barracks', hitX, hitZ);
     applyCommands(w, field, [
       {
@@ -103,10 +115,10 @@ describe('buildings place', () => {
         yaw: 0,
       },
     ]);
-    assert.equal(w.buildings.length, 1);
-    assert.equal(w.buildings[0].type, 'barracks');
-    assert.equal(w.buildings[0].owner, 0);
-    const ser = serializeBuildings(w.buildings);
+    assert.equal(w.buildings.length, 2);
+    assert.equal(w.buildings[1].type, 'barracks');
+    assert.equal(w.buildings[1].owner, 0);
+    const ser = serializeBuildings([w.buildings[1]]);
     assert.ok(Math.abs(ser[0].x - expected.x) < 1e-4);
     assert.ok(Math.abs(ser[0].z - expected.z) < 1e-4);
     // Odd snap lands on tile centers (… + 2 mod 4).
@@ -146,6 +158,34 @@ describe('buildings place', () => {
     assert.equal(footprintTiles('mine', hitX, hitZ).length, 4);
   });
 
+  it('rejects advanced buildings until the required building exists', () => {
+    const w = createWorld(4);
+    w.buildings = [];
+    const field = buildField(4, { width: 64, height: 64 });
+    clearClaim(field, 'tower', 32, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'tower',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    assert.equal(w.buildings.length, 0);
+    seedOwned(w, 'camp');
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'tower',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    assert.equal(w.buildings.some((b) => b.type === 'tower'), true);
+  });
+
   it('rejects unknown types', () => {
     assert.equal(isPlaceableBuilding('nope'), false);
     const w = createWorld(2);
@@ -170,6 +210,7 @@ describe('buildings place', () => {
     const x = 32;
     const z = 32;
     clearClaim(field, 'barracks', x, z);
+    seedOwned(w, 'village');
     applyCommands(w, field, [
       {
         type: CMD.PLACE_BUILDING,
@@ -213,6 +254,7 @@ describe('buildings place', () => {
     const x = 32;
     const z = 32;
     clearClaim(field, 'tower', x, z);
+    seedOwned(w, 'camp');
     const tiles = footprintTiles('tower', x, z);
     assert.ok(tiles.length >= 1);
     const stand = tiles[0];
@@ -231,7 +273,8 @@ describe('buildings place', () => {
         ty: fx.fromFloat(z),
       },
     ]);
-    assert.equal(w.buildings.length, 1);
+    assert.equal(w.buildings.length, 2);
+    assert.equal(w.buildings[1].type, 'tower');
     assert.equal(w.order[u], ORDER.MOVE);
     assert.equal(w.hasTarget[u], 1);
     // Path + a few steps should leave the blocked core.
@@ -448,6 +491,26 @@ describe('getBuildingDisplayName', () => {
   });
 });
 
+describe('menu gate', () => {
+  it('locks on missing building requires, then marks unaffordable', () => {
+    assert.deepEqual(getBuildingRequires('tower'), ['camp']);
+    assert.deepEqual(getBuildingRequires('barracks'), ['village']);
+    assert.deepEqual(getBuildingRequires('camp'), []);
+    assert.equal(
+      menuGateState({ cost: { wood: 30 }, requires: ['camp'], bank: { wood: 200 }, ownedTypes: new Set() }),
+      'locked',
+    );
+    assert.equal(
+      menuGateState({ cost: { wood: 30 }, requires: ['camp'], bank: { wood: 5 }, ownedTypes: new Set(['camp']) }),
+      'unafford',
+    );
+    assert.equal(
+      menuGateState({ cost: { wood: 30 }, requires: ['camp'], bank: { wood: 40 }, ownedTypes: new Set(['camp']) }),
+      'ok',
+    );
+  });
+});
+
 describe('building rally order', () => {
   it('only production buildings that train units can rally', () => {
     assert.equal(buildingCanRally('camp'), true);
@@ -608,5 +671,109 @@ describe('building production pause', () => {
     ]);
     assert.equal(w.buildings[0].tracks.length, 0);
     assert.equal(w.buildings[0].prodPaused, 0);
+  });
+});
+
+describe('village and workshop menus', () => {
+  it('trains engineers and monks at the village, wagons at the workshop', () => {
+    assert.deepEqual(BUILDING_MENUS.village.units, ['engineer', 'monk']);
+    assert.deepEqual(BUILDING_MENUS.workshop.units, ['wagon']);
+    assert.ok(!BUILDING_MENUS.village.units.includes('villager'));
+    assert.ok(!BUILDING_MENUS.workshop.units.includes('engineer'));
+  });
+
+  it('trickles a free villager from a completed village', () => {
+    const w = createWorld(25);
+    w.buildings = [];
+    const field = buildField(25, { width: 64, height: 64 });
+    clearClaim(field, 'village', 32, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'village',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    finishAllBuildings(w);
+    const before = w.count;
+    for (let i = 0; i < VILLAGE_VILLAGER_TICKS - 1; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before, 'no villager before the interval');
+    buildingProductionSystem(w, field);
+    assert.equal(w.count, before + 1, 'village spawns a free villager');
+    assert.equal(w.type[before], UNIT.VILLAGER);
+    assert.equal(w.owner[before], 0);
+  });
+
+  it('rejects training villagers or workshop engineers', () => {
+    const w = createWorld(26);
+    w.buildings = [];
+    const field = buildField(26, { width: 64, height: 64 });
+    clearClaim(field, 'village', 24, 32);
+    clearClaim(field, 'workshop', 40, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'village',
+        tx: fx.fromFloat(24),
+        ty: fx.fromFloat(32),
+      },
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'workshop',
+        tx: fx.fromFloat(40),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    finishAllBuildings(w);
+    applyCommands(w, field, [
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'villager' },
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'engineer' },
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 1, unitKey: 'engineer' },
+    ]);
+    const village = w.buildings[0];
+    const workshop = w.buildings[1];
+    assert.equal(village.tracks?.length | 0, 1);
+    assert.equal(village.tracks[0].id, 'engineer');
+    assert.equal(workshop.tracks?.length | 0, 0);
+  });
+
+  it('shows pop on village engineer and monk costs', () => {
+    const menu = getBuildingMenu('village');
+    assert.equal(menu.units.find((u) => u.id === 'engineer')?.cost.pop, 1);
+    assert.equal(menu.units.find((u) => u.id === 'monk')?.cost.pop, 1);
+  });
+
+  it('slows the villager trickle at the soft cap but still trains', () => {
+    const w = createWorld(27);
+    w.buildings = [];
+    const field = buildField(27, { width: 64, height: 64 });
+    clearClaim(field, 'village', 32, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'village',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    finishAllBuildings(w);
+    for (let i = 0; i < POP_PER_VILLAGE; i++) {
+      spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+    }
+    const before = w.count;
+    for (let i = 0; i < VILLAGE_VILLAGER_TICKS; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before, 'over-cap trickle is not full speed');
+    for (let i = 0; i < VILLAGE_VILLAGER_TICKS; i++) buildingProductionSystem(w, field);
+    assert.equal(w.count, before + 1, 'over-cap trickle still arrives at half speed');
+    applyCommands(w, field, [
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'engineer' },
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'monk' },
+    ]);
+    assert.equal(w.buildings[0].tracks?.length | 0, 2, 'village still trains past the soft cap');
   });
 });

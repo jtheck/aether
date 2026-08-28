@@ -226,6 +226,7 @@ export function startUnitLob(w, field, victim, ox, oy, opts = {}) {
   clearPath(w, victim);
   clearEngagement(w, victim);
   w.targetEntity[victim] = -1;
+  if (w.targetBuilding) w.targetBuilding[victim] = -1;
   w.hasTarget[victim] = 0;
   w.order[victim] = ORDER.IDLE;
   applyDistract(w, victim, flightTicks + stunTicks);
@@ -312,6 +313,7 @@ export function tickMonkLobs(w) {
       w.lobTicks[i] = 0;
       w.order[i] = ORDER.IDLE;
       w.targetEntity[i] = -1;
+      if (w.targetBuilding) w.targetBuilding[i] = -1;
       w.hasTarget[i] = 0;
       pushLandFx(w, w.px[i], w.py[i], trail);
     }

@@ -216,6 +216,8 @@ export function createFogOfWar() {
   let gen = 1;
   let enabled = false;
   let localPlayerId = 0;
+  /** Extra owners whose units/buildings stamp vision (combat stays hostile). */
+  const shareVision = new Set();
   let lastStampAt = 0;
   /** @type {Map<string, object>} */
   const lastBuildings = new Map();
@@ -349,10 +351,20 @@ export function createFogOfWar() {
     return cover[i] > floor;
   }
 
+  function isVisionAlly(owner) {
+    if (isAlly(localPlayerId, owner)) return true;
+    return shareVision.has(owner | 0);
+  }
+
+  function adoptShareVision(list) {
+    shareVision.clear();
+    if (!list) return;
+    for (let i = 0; i < list.length; i++) shareVision.add(list[i] | 0);
+  }
+
   function hidesHostile(owner, x, z) {
     if (!enabled) return false;
-    if (localPlayerId < 0) return false;
-    if (isAlly(localPlayerId, owner)) return false;
+    if (isVisionAlly(owner)) return false;
     if (isWorldSight(x, z)) return false;
     return !trailOpen(x, z);
   }
@@ -405,6 +417,7 @@ export function createFogOfWar() {
    *   field?: object,
    *   localPlayerId?: number,
    *   enabled?: boolean,
+   *   shareVisionWith?: number[],
    *   now?: number,
    * }} input
    */
@@ -412,7 +425,13 @@ export function createFogOfWar() {
     const nextPlayer = input.localPlayerId ?? localPlayerId;
     if (nextPlayer !== localPlayerId) forgetOverlay();
     localPlayerId = nextPlayer;
-    enabled = input.enabled !== false && localPlayerId >= 0;
+    if (input.shareVisionWith !== undefined) adoptShareVision(input.shareVisionWith);
+    // Spectators (localPlayerId < 0) still run fog when the caller asks, so
+    // shared-owner stamps can veil wilderness instead of revealing the map.
+    enabled =
+      input.enabled === false
+        ? false
+        : localPlayerId >= 0 || shareVision.size > 0 || input.enabled === true;
     if (input.field) adoptField(input.field);
     if (!enabled || !field || !visible) {
       forgetOverlay();
@@ -437,7 +456,7 @@ export function createFogOfWar() {
       for (let i = 0; i < n; i++) {
         if (!world.alive[i]) continue;
         if (carried && carried[i] >= 0) continue;
-        if (!isAlly(localPlayerId, world.owner[i])) continue;
+        if (!isVisionAlly(world.owner[i])) continue;
         stampWorld(
           fx.toFloat(world.px[i]),
           fx.toFloat(world.py[i]),
@@ -449,7 +468,7 @@ export function createFogOfWar() {
     if (buildings) {
       for (let i = 0; i < buildings.length; i++) {
         const b = buildings[i];
-        if (!isAlly(localPlayerId, b.owner)) continue;
+        if (!isVisionAlly(b.owner)) continue;
         stampWorld(b.x, b.z, visionTilesForBuilding(b.type));
       }
     }
@@ -457,7 +476,7 @@ export function createFogOfWar() {
     if (agoras) {
       for (let i = 0; i < agoras.length; i++) {
         const a = agoras[i];
-        if (!isAlly(localPlayerId, a.owner)) continue;
+        if (!isVisionAlly(a.owner)) continue;
         stampWorld(a.x, a.z, visionTilesForBuilding('agora'));
       }
     }
@@ -473,7 +492,7 @@ export function createFogOfWar() {
       const item = src[i];
       const key = structureKey(kind === 'agora' ? { ...item, type: 'agora' } : item);
       liveKeys.add(key);
-      const ally = isAlly(localPlayerId, item.owner);
+      const ally = isVisionAlly(item.owner);
       if (ally || isWorldVisible(item.x, item.z)) {
         lastKnown.set(key, cloneBuilding(item));
         out.push(item);
@@ -484,7 +503,7 @@ export function createFogOfWar() {
         if (!liveKeys.has(key)) lastKnown.delete(key);
         continue;
       }
-      if (liveKeys.has(key) && isAlly(localPlayerId, ghost.owner)) continue;
+      if (liveKeys.has(key) && isVisionAlly(ghost.owner)) continue;
       if (out.some((item) => structureKey(kind === 'agora' ? { ...item, type: 'agora' } : item) === key)) {
         continue;
       }

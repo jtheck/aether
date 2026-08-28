@@ -20,6 +20,7 @@ import {
 } from './bakedAssets.js';
 import { materialsFromBakeMeta } from './bakedMaterials.js';
 import { yawPitchRollFromWorldMatrix } from './transportSeats.js';
+import { BAKE_MESH_VERSION, boundsOfPositions, mergeSlicedParts } from './bakeMerge.js';
 
 /** Static (non-VAT) thin-instance templates. */
 /** @type {Readonly<Record<number, string>>} */
@@ -273,19 +274,36 @@ async function loadCpuMeshPackage(engine, url) {
           const bin = await binRes.arrayBuffer();
 
           // v2+: materials + textures in bake — no GLB load.
+          // v3 already merged one part per visual material; older dumps merge here.
           if ((meta.version | 0) >= 2 && Array.isArray(meta.materials)) {
-            const materials = await materialsFromBakeMeta(engine, url, meta);
-            const parts = (meta.parts ?? []).map((part) => {
-              const mi = part.materialIndex ?? 0;
-              return {
-                positions: float32Slice(bin, part.positions),
-                normals: float32Slice(bin, part.normals),
-                indices: uint32Slice(bin, part.indices),
-                uvs: part.uvs ? float32Slice(bin, part.uvs) : null,
-                material: materials[mi] ?? materials[0] ?? null,
-                reverseWinding: part.reverseWinding !== false,
-              };
+            const sliced = (meta.parts ?? []).map((part) => ({
+              positions: float32Slice(bin, part.positions),
+              normals: float32Slice(bin, part.normals),
+              indices: uint32Slice(bin, part.indices),
+              uvs: part.uvs ? float32Slice(bin, part.uvs) : null,
+              reverseWinding: part.reverseWinding !== false,
+              materialIndex: part.materialIndex ?? 0,
+              materialName: part.materialName,
+              boundMin: part.boundMin,
+              boundMax: part.boundMax,
+            }));
+            const packed = (meta.version | 0) >= BAKE_MESH_VERSION
+              ? { materials: meta.materials, parts: sliced }
+              : mergeSlicedParts(sliced, meta.materials);
+            const materials = await materialsFromBakeMeta(engine, url, {
+              ...meta,
+              materials: packed.materials,
             });
+            const parts = packed.parts.map((part) => ({
+              positions: part.positions,
+              normals: part.normals,
+              indices: part.indices,
+              uvs: part.uvs,
+              material: materials[part.materialIndex] ?? materials[0] ?? null,
+              reverseWinding: part.reverseWinding !== false,
+              boundMin: part.boundMin,
+              boundMax: part.boundMax,
+            }));
             return {
               parts,
               sockets: (meta.sockets ?? []).map(normalizeSocket),
@@ -294,7 +312,7 @@ async function loadCpuMeshPackage(engine, url) {
 
           // Legacy bake: geo only — pull materials from GLB.
           const sources = await loadMaterialSources(engine, url);
-          const parts = (meta.parts ?? []).map((part, index) => {
+          const raw = (meta.parts ?? []).map((part, index) => {
             const src = sources[part.materialIndex] ?? sources[index] ?? sources[0];
             return {
               positions: float32Slice(bin, part.positions),
@@ -303,8 +321,10 @@ async function loadCpuMeshPackage(engine, url) {
               uvs: part.uvs ? float32Slice(bin, part.uvs) : null,
               material: src?.material ?? null,
               reverseWinding: part.reverseWinding !== false,
+              materialName: src?.material?.name,
             };
           });
+          const { parts } = mergeSlicedParts(raw, raw.map((p) => p.material ?? {}));
           return {
             parts,
             sockets: (meta.sockets ?? []).map(normalizeSocket),
@@ -335,15 +355,19 @@ function normalizeSocket(s) {
 }
 
 function cpuPackageFromLive(baked, sockets) {
+  const raw = baked.map((p) => ({
+    positions: p.positions,
+    normals: p.normals,
+    indices: p.indices instanceof Uint32Array ? p.indices : new Uint32Array(p.indices),
+    uvs: p.uvs,
+    material: p.material,
+    reverseWinding: p.reverseWinding,
+    materialName: p.material?.name,
+  }));
+  const mats = raw.map((p) => p.material ?? {});
+  const { parts } = mergeSlicedParts(raw, mats);
   return {
-    parts: baked.map((p) => ({
-      positions: p.positions,
-      normals: p.normals,
-      indices: p.indices instanceof Uint32Array ? p.indices : new Uint32Array(p.indices),
-      uvs: p.uvs,
-      material: p.material,
-      reverseWinding: p.reverseWinding,
-    })),
+    parts,
     sockets: (sockets ?? []).map(normalizeSocket),
   };
 }
@@ -361,7 +385,9 @@ function meshesFromCpuPackage(engine, url, pkg) {
     mesh.material = part.material;
     mesh.pickable = false;
     mesh._reverseWinding = part.reverseWinding;
-    const b = boundsOfPositions(part.positions);
+    const b = part.boundMin && part.boundMax
+      ? { min: part.boundMin, max: part.boundMax }
+      : boundsOfPositions(part.positions);
     mesh.boundMin = b.min;
     mesh.boundMax = b.max;
     mesh.scaling.x = 1;
@@ -378,21 +404,6 @@ function meshesFromCpuPackage(engine, url, pkg) {
   return meshes;
 }
 
-function boundsOfPositions(positions) {
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i], y = positions[i + 1], z = positions[i + 2];
-    if (x < minX) minX = x;
-    if (y < minY) minY = y;
-    if (z < minZ) minZ = z;
-    if (x > maxX) maxX = x;
-    if (y > maxY) maxY = y;
-    if (z > maxZ) maxZ = z;
-  }
-  return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
-}
-
 /**
  * Load a glTF, bake hierarchy world matrices into verts, one mesh per source
  * primitive (preserves multi-material). Authored origin and scale are kept —
@@ -403,6 +414,14 @@ function boundsOfPositions(positions) {
 export async function loadBakedUnitMeshParts(engine, url) {
   const pkg = await loadCpuMeshPackage(engine, url);
   return meshesFromCpuPackage(engine, url, pkg);
+}
+
+/**
+ * Decode a baked mesh package without creating scene meshes.
+ * Use on the loading-screen match so a later place() only has to clone.
+ */
+export async function prefetchBakedMesh(engine, url) {
+  await loadCpuMeshPackage(engine, url);
 }
 
 /**

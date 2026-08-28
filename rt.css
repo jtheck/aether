@@ -95,7 +95,6 @@ body {
   padding: 4px;
   fill: White;
   cursor: pointer;
-  opacity: .42;
 }
 #menu_b:hover {
   fill: aqua;

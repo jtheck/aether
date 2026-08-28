@@ -35,10 +35,10 @@ import {
 } from './tableShape.js';
 import { encodeGarden, decodeGarden, fieldFromGarden, applyGardenPlacements } from './garden.js';
 import { populateScenery } from './scenery.js';
-import { buildTesterGarden } from './testerGarden.js';
+import { buildTesterGarden, TESTER_STARTING_RESOURCES } from './testerGarden.js';
 import { UNIT_DEFS } from './unitTypes.js';
 import { PLACEABLE_BUILDINGS } from './buildings.js';
-import { getResource } from './resources.js';
+import { getResource, STARTING_RESOURCES } from './resources.js';
 
 function makeLMask(width, height, cellSize = 16) {
   const { chunksX, chunksZ } = cellCounts(width, height, cellSize);
@@ -319,6 +319,7 @@ describe('garden codec', () => {
       units: [{ owner: 0, type: 1, tx: 10, tz: 10 }],
       buildings: [{ owner: 0, type: 'camp', x: 4, z: -4, yaw: 0 }],
       agoras: [{ owner: 0, x: 0, z: 0 }],
+      startingResources: { wood: 400, stone: 50, mineral: 12, food: 80 },
     });
     assert.equal(json.v, 4);
     const g = decodeGarden(json);
@@ -327,6 +328,8 @@ describe('garden codec', () => {
     assert.equal(g.units.length, 1);
     assert.equal(g.buildings[0].type, 'camp');
     assert.equal(g.agoras.length, 1);
+    assert.deepEqual(json.sr, [400, 50, 12, 80]);
+    assert.deepEqual(g.startingResources, { wood: 400, stone: 50, mineral: 12, food: 80 });
     const again = fieldFromGarden(json);
     assert.equal(again.sceneryType[8 * 32 + 8], 1);
 
@@ -335,6 +338,25 @@ describe('garden codec', () => {
     assert.equal(world.count, 1);
     assert.equal(world.buildings.length, 1);
     assert.equal(world.agoras.length, 1);
+    assert.equal(getResource(world, 0, 'wood'), 400);
+    assert.equal(getResource(world, 0, 'mineral'), 12);
+  });
+
+  it('omits sr and uses the default opening bank', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, { agoras: [{ owner: 0, x: 0, z: 0 }] });
+    assert.equal(json.sr, undefined);
+    const g = decodeGarden(json);
+    assert.equal(g.startingResources, null);
+    const world = createWorld(3);
+    applyGardenPlacements(world, field, g);
+    assert.equal(getResource(world, 0, 'wood'), STARTING_RESOURCES.wood);
+    assert.equal(getResource(world, 0, 'food'), STARTING_RESOURCES.food);
   });
 
   it('keeps live boards on odd 16-tile chunk counts', () => {
@@ -384,7 +406,8 @@ describe('garden codec', () => {
     applyGardenPlacements(world, field, g);
     assert.equal(world.count, UNIT_DEFS.length * 2);
     assert.equal(world.buildings.length, PLACEABLE_BUILDINGS.length * 2);
-    assert.ok(getResource(world, 0, 'wood') > 0);
-    assert.ok(getResource(world, 1, 'wood') > 0);
+    assert.deepEqual(json.sr, [9999, 9999, 9999, 9999]);
+    assert.equal(getResource(world, 0, 'wood'), TESTER_STARTING_RESOURCES.wood);
+    assert.equal(getResource(world, 1, 'mineral'), TESTER_STARTING_RESOURCES.mineral);
   });
 });

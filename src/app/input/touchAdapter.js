@@ -7,11 +7,15 @@
 //     short lift → tap. Each center contact runs its own pan-hold / pan /
 //     action stream so one hand can pan while the other selects / a-moves.
 //   - Camera chord: two *uncommitted* center fingers within CHORD_MAX_STAGGER_MS
-//     → pinch/rotate/pan. A finger already panning/soloing/edge never joins.
+//     → pinch/rotate/pan. A finger already panning/soloing/edge never joins,
+//     except with build UI up: a second center finger may pull the solo into a
+//     chord so a 2-finger tap can cancel placement / building selection.
+//   - Stationary 2-finger tap → back out of placement / building selection;
+//     otherwise force-move.
 //   - Parallel orders while camera-chording:
 //       • 1 extra finger tap → a-move / select (same as with 1-finger pan)
 //       • 1 extra finger drag → box-select
-//       • 2 extra fingers (simultaneous, stationary) → force-move tap chord
+//       • 2 extra fingers (simultaneous, stationary) → same as 2-finger tap
 //         (second pair; does not steal the camera chord)
 //   - Gameplay LMB is a single seat (gameInput): at most one solo stream;
 //     a new solo take over cancels the previous. Camera pan has no such limit.
@@ -56,8 +60,9 @@ const PINCH_EMPHASIS_POWER = 1.75;
 /** Floor so a non-dominant engaged axis still contributes a little (blend, not either/or). */
 const PINCH_WEIGHT_FLOOR = 0.18;
 /**
- * Two-finger tap → force-move. Judged from total motion, not engage latches
- * (rotate/pan latch on tiny jitter and were killing legitimate taps).
+ * Two-finger tap → back out of build UI, else force-move. Judged from total
+ * motion, not engage latches (rotate/pan latch on tiny jitter and were killing
+ * legitimate taps).
  */
 const TWO_FINGER_TAP_MAX_MS = 420;
 /** Cumulative centroid path while both fingers down. */
@@ -385,9 +390,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
       centroidDrift < TWO_FINGER_TAP_MAX_CENTROID_PX &&
       spanDelta < TWO_FINGER_TAP_MAX_SPAN_DELTA_PX &&
       b0.angleAccum < TWO_FINGER_TAP_MAX_ANGLE_RAD;
-    if (wasTap) {
-      if (!game.dismissMenus?.()) game.forceMoveAt?.(c.x, c.y);
-    }
+    if (wasTap) emitTwoFingerTap(c.x, c.y);
   }
 
   function centroidOf(a, b) {
@@ -467,8 +470,8 @@ export function createTouchAdapter({ canvas, camera, game }) {
         b0.angleAccum < TWO_FINGER_TAP_MAX_ANGLE_RAD;
       if (wasTap) {
         const c = centroidOf(a, b);
-        // Stationary 2-finger tap — force-move, not synth LMB a-move.
-        if (!game.dismissMenus?.()) game.forceMoveAt?.(c.x, c.y);
+        // Stationary 2-finger tap — back out of build UI, else force-move.
+        emitTwoFingerTap(c.x, c.y);
       }
     }
     return wasTap;
@@ -599,6 +602,23 @@ export function createTouchAdapter({ canvas, camera, game }) {
     return null;
   }
 
+  /**
+   * Placement (and radial presses) solo the first finger immediately.
+   * A second center finger may still join it into a chord so a 2-finger tap
+   * can cancel instead of stealing the solo and confirming a place / order.
+   */
+  function findPlaceChordPartner(id, t) {
+    if (!(game.hasBuildUi?.() || game.isPlacing?.()) || pinchIds != null) return null;
+    if (t.isEdge || soloId == null || soloId === id) return null;
+    const other = touches.get(soloId);
+    if (!other || other.isEdge || other.role !== 'solo') return null;
+    return soloId;
+  }
+
+  function emitTwoFingerTap(clientX, clientY) {
+    if (!game.backOutBuildUi?.()) game.forceMoveAt?.(clientX, clientY);
+  }
+
   function handlePointerDown(e) {
     const id = e.pointerId;
     // Replace any ghost with the same id (OS reuse after a missed up).
@@ -622,8 +642,9 @@ export function createTouchAdapter({ canvas, camera, game }) {
 
     if (t.isEdge) return;
 
-    // First free pair → camera chord. Second free pair while camera chords → force-move tap.
-    const partnerId = findChordPartner(id, t);
+    // First free pair → camera chord. While placing, a solo finger can still join.
+    // Second free pair while camera chords → force-move / back-out tap.
+    const partnerId = findChordPartner(id, t) ?? findPlaceChordPartner(id, t);
     if (partnerId != null) {
       beginPinch(partnerId, id);
       return;

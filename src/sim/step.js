@@ -17,6 +17,7 @@ import * as fx from './fixed.js';
 import { applyCommands } from './commands.js';
 import { buildingProductionSystem } from './buildingProduction.js';
 import { combatSystem } from './combat.js';
+import { towerCombatSystem } from './towerCombat.js';
 import {
   movementGoal,
   advanceWaypoint,
@@ -39,6 +40,8 @@ import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
 import { projectileSystem } from './projectiles.js';
 import { treeBurnSystem } from './trees.js';
 import { fireZoneSystem } from './fireZones.js';
+import { pendingLightningSystem } from './lightning.js';
+import { pulseFireZoneBuildings } from './buildingCombat.js';
 import { frogSystem } from './frogs.js';
 import { sporeGrowthSystem } from './sporeBloom.js';
 import { monkKickSystem, isLobbing } from './monkKick.js';
@@ -51,6 +54,7 @@ import { repairSystem } from './repair.js';
 import {
   gatherSystem,
   campAutoAssignSystem,
+  refreshEngineerAssists,
   gatherDefenseSystem,
   gatherNodeNear,
   beginGather,
@@ -155,12 +159,15 @@ export function step(world, field, commands) {
   phase('buildings', () => buildingProductionSystem(world, field));
   phase('transport', () => transportAutoLoadSystem(world));
   phase('repair', () => repairSystem(world));
+  phase('engineerAssist', () => refreshEngineerAssists(world));
   phase('autoGather', () => campAutoAssignSystem(world, field));
   phase('gatherDefense', () => gatherDefenseSystem(world, field));
   phase('gather', () => gatherSystem(world, field));
   phase('constructAssign', () => constructionAssignSystem(world, field));
   phase('construct', () => constructionSystem(world, field));
   phase('combat', () => combatSystem(world, field));
+  phase('lightning', () => pendingLightningSystem(world, field));
+  phase('towers', () => towerCombatSystem(world));
   phase('projectiles', () => projectileSystem(world, field));
   phase('status', () => tickCombatStatus(world));
   phase('frogs', () => frogSystem(world, field));
@@ -175,7 +182,10 @@ export function step(world, field, commands) {
   phase('avoidance', () => movingAvoidanceSystem(world, field));
   phase('separation', () => separationSystem(world, field));
   // After movement so standing/walking through the patch uses current positions.
-  phase('fireZones', () => fireZoneSystem(world));
+  phase('fireZones', () => {
+    fireZoneSystem(world);
+    pulseFireZoneBuildings(world, field);
+  });
   world.tick++;
   if (profile) timing.step = performance.now() - tAll;
 }
@@ -235,7 +245,7 @@ function movementSystem(w, field) {
       }
     }
 
-    // Villager holding at a construction site — constructionSystem owns cadence.
+    // Builder holding at a construction site — constructionSystem owns cadence.
     if (order === ORDER.BUILD) {
       if (w.navWpCount[i] === 0 && !w.pathRequest[i]) {
         w.vx[i] = 0;

@@ -11,6 +11,29 @@ export const MAX_RESOURCE_OWNERS = 16;
 export const RESOURCE_KINDS = /** @type {const} */ (['wood', 'stone', 'mineral', 'food']);
 export const RESOURCE_COUNT = RESOURCE_KINDS.length;
 
+const RESOURCE_LABELS = Object.freeze({
+  wood: 'Wood',
+  stone: 'Stone',
+  mineral: 'Mineral',
+  food: 'Food',
+});
+
+/**
+ * Compact HUD string, e.g. "25 Food · 15 Wood". Empty when free / missing.
+ * @param {Record<string, number> | null | undefined} cost
+ */
+export function formatResourceCost(cost) {
+  if (!cost) return '';
+  const parts = [];
+  for (const kind of RESOURCE_KINDS) {
+    const n = cost[kind] | 0;
+    if (n > 0) parts.push(`${n} ${RESOURCE_LABELS[kind]}`);
+  }
+  const pop = cost.pop | 0;
+  if (pop > 0) parts.push(`${pop} Pop`);
+  return parts.join(' · ');
+}
+
 /** @type {Readonly<Record<string, number>>} kind → slot index */
 export const RESOURCE_INDEX = Object.freeze(
   RESOURCE_KINDS.reduce((m, k, i) => {
@@ -94,7 +117,22 @@ export function spendResources(w, owner, cost) {
 export function canAfford(w, owner, cost) {
   if (!cost) return true;
   for (const kind in cost) {
+    if (RESOURCE_INDEX[kind] == null) continue;
     if (getResource(w, owner, kind) < (cost[kind] | 0)) return false;
+  }
+  return true;
+}
+
+/**
+ * Same check against a HUD bank `{ wood, stone, mineral, food }` (skips pop).
+ * @param {Record<string, number> | null | undefined} bank
+ * @param {Record<string, number> | null | undefined} cost
+ */
+export function canAffordBank(bank, cost) {
+  if (!cost) return true;
+  for (const kind of RESOURCE_KINDS) {
+    const need = cost[kind] | 0;
+    if (need > 0 && (bank?.[kind] | 0) < need) return false;
   }
   return true;
 }

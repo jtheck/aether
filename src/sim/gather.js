@@ -1,7 +1,8 @@
 // Villager gathering — harvest a resource node, haul the load to the nearest
 // owned drop-off (agora / camp / mine), deposit into the owner's bank, repeat.
 // Farms are the exception: food is banked in place while the villager wanders
-// the plot (no haul, no carry visual).
+// the plot (no haul, no carry visual). Wood/rock harvest plays chop; carry
+// (VAT + overhead prop) starts only on the walk back.
 //
 // Modeled on repair.js: a per-tick system drives locomotion via queuePath and
 // holds the unit in range while it works. All state lives on the world (SoA +
@@ -12,10 +13,10 @@ import { ORDER } from './world.js';
 import { queuePath, clearPath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { damageTree } from './trees.js';
-import { tileCenterX, tileCenterY, snapToPassable, worldToTile, TILE_SIZE_F } from './field.js';
+import { tileCenterX, tileCenterY, snapToPassable, worldToTile, TILE_SIZE_F, isPassable } from './field.js';
 import { addResource, RESOURCE_KINDS, RESOURCE_INDEX } from './resources.js';
 import { UNIT } from './unitTypes.js';
-import { SCENERY, rockFootprintRadius, rockResourceKind, damageRock } from './scenery.js';
+import { SCENERY, rockFootprintRadiusForStock, rockResourceKind, damageRock } from './scenery.js';
 import { isHostile } from './teams.js';
 
 const WOOD_CODE = RESOURCE_INDEX.wood + 1;
@@ -65,7 +66,7 @@ function nodeAt(field, tile) {
     return {
       stock: rockStock[tile] | 0,
       code: RESOURCE_INDEX[res] + 1,
-      foot: rockFootprintRadius(kind),
+      foot: Math.max(0, rockFootprintRadiusForStock(kind, rockStock[tile] | 0)),
       tree: false,
       food: false,
     };
@@ -82,6 +83,13 @@ function nodeRangeSq(foot) {
   const r = NODE_RANGE + fx.fromInt(foot * TILE_SIZE_F);
   return fx.mul(r, r);
 }
+
+/** Render/VAT pose: chop at the node, carry only while hauling the load back. */
+export const GATHER_ACT = {
+  NONE: 0,
+  CHOP: 1,
+  HAUL: 2,
+};
 
 /** Ticks between harvest bites. */
 export const GATHER_INTERVAL = 15;
@@ -123,6 +131,8 @@ export const ENGINEER_RADIUS_BONUS_F = 8;
 export const ENGINEER_ASSIST_RANGE_F = 28;
 /** Most engineers that can stack a reach bonus. */
 export const ENGINEER_BONUS_CAP = 3;
+/** Keep the last stacked bonus after engineers walk off (~6s at 20 Hz). */
+export const ENGINEER_BONUS_LINGER_TICKS = 120;
 /** Max villagers a single drop-off will pull to work. */
 export const CAMP_MAX_WORKERS = 8;
 /** Farms are small plots — keep them to a 1–2 person crew so workers spread out. */
@@ -163,10 +173,12 @@ export function beginGather(w, field, i, tile, defensive = 0) {
   w.order[i] = ORDER.GATHER;
   w.gatherTile[i] = tile | 0;
   w.targetEntity[i] = -1;
+  if (w.targetBuilding) w.targetBuilding[i] = -1;
   w.transportTarget[i] = -1;
   w.hasTarget[i] = 0;
   w.gatherCd[i] = 0;
   if (w.gatherDefensive) w.gatherDefensive[i] = defensive ? 1 : 0;
+  if (w.gatherAct) w.gatherAct[i] = GATHER_ACT.NONE;
   clearEngagement(w, i);
   clearPath(w, i);
   return true;
@@ -184,9 +196,16 @@ function endGather(w, i) {
   w.gatherCd[i] = 0;
   w.hasTarget[i] = 0;
   if (w.gatherDefensive) w.gatherDefensive[i] = 0;
+  if (w.gatherAct) {
+    w.gatherAct[i] = (w.carriedAmt[i] | 0) > 0 ? GATHER_ACT.HAUL : GATHER_ACT.NONE;
+  }
   w.vx[i] = 0;
   w.vy[i] = 0;
   clearPath(w, i);
+}
+
+function setGatherAct(w, i, act) {
+  if (w.gatherAct) w.gatherAct[i] = act;
 }
 
 /** Deterministic wander point on the farm plot (hash of id + cycle, no rng). */
@@ -258,6 +277,39 @@ function workFarm(w, field, i, tile, width) {
   seekTo(w, i, dest.x, dest.y);
 }
 
+/**
+ * Stand on the near-side rim of a blocked node (rocks). Prefers a passable
+ * tile still inside harvest range and closest to the villager so a crew does
+ * not all path to the same far corner.
+ */
+function snapToHarvestStand(field, cx, cy, fromX, fromY, rangeSq) {
+  const ctx = worldToTile(cx);
+  const ctz = worldToTile(cy);
+  let bestX = 0;
+  let bestY = 0;
+  let bestFrom = 0x7fffffffffff;
+  let found = false;
+  for (let dz = -6; dz <= 6; dz++) {
+    for (let dx = -6; dx <= 6; dx++) {
+      const tx = ctx + dx;
+      const tz = ctz + dz;
+      if (!isPassable(field, tx, tz)) continue;
+      const x = tileCenterX(tx);
+      const y = tileCenterY(tz);
+      if (fx.dist2(x, y, cx, cy) > rangeSq) continue;
+      const d = fx.dist2(fromX, fromY, x, y);
+      if (!found || d < bestFrom) {
+        found = true;
+        bestFrom = d;
+        bestX = x;
+        bestY = y;
+      }
+    }
+  }
+  if (found) return { x: bestX, y: bestY };
+  return snapToPassable(field, cx, cy);
+}
+
 /** Repath toward a target only when it changed or no path is active. */
 function seekTo(w, i, tx, ty) {
   if (
@@ -299,6 +351,7 @@ export function nearestDropOff(w, owner, px, py) {
     for (let b = 0; b < buildings.length; b++) {
       const bd = buildings[b];
       if (bd.built === 0) continue; // sites can't accept drop-offs yet
+      if (bd.hp != null && (bd.hp | 0) <= 0) continue;
       if (bd.owner === owner && DEPOSIT_TYPES.has(bd.type)) consider(bd.x, bd.z);
     }
   }
@@ -314,15 +367,23 @@ export function gatherSystem(w, field) {
   if (!field) return;
   const width = field.width | 0;
   for (let i = 0; i < w.count; i++) {
-    if (!w.alive[i] || w.order[i] !== ORDER.GATHER) continue;
+    if (!w.alive[i]) {
+      setGatherAct(w, i, GATHER_ACT.NONE);
+      continue;
+    }
+    if (w.order[i] !== ORDER.GATHER) {
+      setGatherAct(w, i, (w.carriedAmt[i] | 0) > 0 ? GATHER_ACT.HAUL : GATHER_ACT.NONE);
+      continue;
+    }
 
     const tile = w.gatherTile[i];
     const node = nodeAt(field, tile);
     const nodeStock = node ? node.stock : 0;
     const carrying = w.carriedAmt[i] | 0;
 
-    // Farms: bank in place and potter around the plot. No haul, no carry prop.
+    // Farms: bank in place and potter around the plot. No haul, no carry / chop.
     if (node && node.food && carrying <= 0) {
+      setGatherAct(w, i, GATHER_ACT.NONE);
       workFarm(w, field, i, tile, width);
       continue;
     }
@@ -333,6 +394,7 @@ export function gatherSystem(w, field) {
         endGather(w, i);
         continue;
       }
+      setGatherAct(w, i, GATHER_ACT.HAUL);
       const drop = nearestDropOff(w, w.owner[i], w.px[i], w.py[i]);
       if (!drop) {
         // Nowhere to deposit — idle holding the load until re-tasked.
@@ -348,6 +410,7 @@ export function gatherSystem(w, field) {
         addResource(w, w.owner[i], kind, carrying);
         w.carriedAmt[i] = 0;
         w.carriedKind[i] = 0;
+        setGatherAct(w, i, GATHER_ACT.NONE);
         w.vx[i] = 0;
         w.vy[i] = 0;
         clearPath(w, i);
@@ -365,6 +428,7 @@ export function gatherSystem(w, field) {
     const cx = tileCenterX(tx);
     const cy = tileCenterY(tz);
     if (fx.dist2(w.px[i], w.py[i], cx, cy) <= nodeRangeSq(node.foot)) {
+      setGatherAct(w, i, GATHER_ACT.CHOP);
       w.vx[i] = 0;
       w.vy[i] = 0;
       clearPath(w, i);
@@ -382,9 +446,57 @@ export function gatherSystem(w, field) {
         w.gatherCd[i] = GATHER_INTERVAL;
       }
     } else {
-      // Rock centers are blocked — stand on the nearest passable rim tile.
-      const snapped = node.tree ? null : snapToPassable(field, cx, cy);
+      // Rock centers are blocked — stand on a near-side passable rim tile.
+      setGatherAct(w, i, GATHER_ACT.NONE);
+      const snapped = node.tree
+        ? null
+        : snapToHarvestStand(field, cx, cy, w.px[i], w.py[i], nodeRangeSq(node.foot));
       seekTo(w, i, snapped ? snapped.x : cx, snapped ? snapped.y : cy);
+    }
+  }
+}
+
+function nearbyEngineerCount(w, b) {
+  let eng = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.ENGINEER) continue;
+    if (fx.dist2(w.px[i], w.py[i], b.x, b.z) <= ENGINEER_ASSIST_RANGE_SQ) {
+      if (++eng >= ENGINEER_BONUS_CAP) break;
+    }
+  }
+  return eng;
+}
+
+function nearbyEngineerCountWorld(w, b) {
+  let eng = 0;
+  const rangeSq = ENGINEER_ASSIST_RANGE_F * ENGINEER_ASSIST_RANGE_F;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.ENGINEER) continue;
+    const dx = fx.toFloat(w.px[i]) - b.x;
+    const dz = fx.toFloat(w.py[i]) - b.z;
+    if (dx * dx + dz * dz <= rangeSq && ++eng >= ENGINEER_BONUS_CAP) break;
+  }
+  return eng;
+}
+
+function lingeringEngineerBonus(w, b) {
+  return (b.engBonusUntil | 0) > (w.tick | 0) ? (b.engBonus | 0) : 0;
+}
+
+/**
+ * Refresh per-drop-off engineer stacks so the extra reach lingers after they leave.
+ */
+export function refreshEngineerAssists(w) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const tick = w.tick | 0;
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.built | 0) === 0 || !DROP_OFF_TYPES.has(b.type)) continue;
+    const live = nearbyEngineerCount(w, b);
+    if (live > 0) {
+      b.engBonus = live;
+      b.engBonusUntil = tick + ENGINEER_BONUS_LINGER_TICKS;
     }
   }
 }
@@ -395,13 +507,9 @@ export function gatherSystem(w, field) {
  * @returns {number} fixed-point radius
  */
 export function campWorkRadius(w, b) {
-  let eng = 0;
-  for (let i = 0; i < w.count; i++) {
-    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.ENGINEER) continue;
-    if (fx.dist2(w.px[i], w.py[i], b.x, b.z) <= ENGINEER_ASSIST_RANGE_SQ) {
-      if (++eng >= ENGINEER_BONUS_CAP) break;
-    }
-  }
+  const live = nearbyEngineerCount(w, b);
+  const linger = lingeringEngineerBonus(w, b);
+  const eng = live > linger ? live : linger;
   return CAMP_WORK_RADIUS + eng * ENGINEER_RADIUS_BONUS;
 }
 
@@ -409,17 +517,12 @@ export function campWorkRadius(w, b) {
  * Gather reach in world units for a serialized (float xyz) drop-off.
  * Same engineer bonus as campWorkRadius; used by the HUD ring.
  * @param {object} w
- * @param {{ x: number, z: number, owner: number }} b
+ * @param {{ x: number, z: number, owner: number, engBonus?: number, engBonusUntil?: number }} b
  */
 export function campWorkRadiusWorld(w, b) {
-  let eng = 0;
-  const rangeSq = ENGINEER_ASSIST_RANGE_F * ENGINEER_ASSIST_RANGE_F;
-  for (let i = 0; i < w.count; i++) {
-    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.ENGINEER) continue;
-    const dx = fx.toFloat(w.px[i]) - b.x;
-    const dz = fx.toFloat(w.py[i]) - b.z;
-    if (dx * dx + dz * dz <= rangeSq && ++eng >= ENGINEER_BONUS_CAP) break;
-  }
+  const live = nearbyEngineerCountWorld(w, b);
+  const linger = lingeringEngineerBonus(w, b);
+  const eng = live > linger ? live : linger;
   return CAMP_WORK_RADIUS_F + eng * ENGINEER_RADIUS_BONUS_F;
 }
 
@@ -460,17 +563,37 @@ function nearestNodeWithinRadius(field, b, radius, fromX, fromY, wantClass) {
 }
 
 /**
+ * Idle villagers holding a load walk it to the nearest agora / camp / mine.
+ * Called from the same cadence as worker recruitment so a drop-off appearing
+ * (or a villager wandering into range) doesn't leave them carrying forever.
+ */
+function sendIdleCarriersHome(w, field) {
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) continue;
+    if (w.order[i] !== ORDER.IDLE) continue;
+    if ((w.carriedAmt[i] | 0) <= 0) continue;
+    if (!nearestDropOff(w, w.owner[i], w.px[i], w.py[i])) continue;
+    // gatherTile -1: gatherSystem treats a spent/missing node as "haul then idle".
+    beginGather(w, field, i, -1);
+  }
+}
+
+/**
  * Camps/mines pull nearby idle villagers to harvest nodes in reach. Runs on a
  * fixed cadence; only recruits IDLE villagers so player/manual orders are safe.
+ * Idle carriers are sent home first (including to an agora-only base).
  * @param {object} w
  * @param {object} field
  */
 export function campAutoAssignSystem(w, field) {
-  if (!field || !w.buildings) return;
+  if (!field) return;
   if (w.tick % AUTO_ASSIGN_INTERVAL !== 0) return;
+  sendIdleCarriersHome(w, field);
+  if (!w.buildings?.length) return;
   for (let bIdx = 0; bIdx < w.buildings.length; bIdx++) {
     const b = w.buildings[bIdx];
     if (b.built === 0) continue; // a site can't recruit gatherers yet
+    if (b.hp != null && (b.hp | 0) <= 0) continue;
     if (!DROP_OFF_TYPES.has(b.type)) continue;
     const wantClass = dropOffNodeClass(b.type);
     if (wantClass < 0) continue; // agora-like: deposit only, never recruits
@@ -493,6 +616,7 @@ export function campAutoAssignSystem(w, field) {
     for (let i = 0; i < w.count && workers < cap; i++) {
       if (!w.alive[i] || w.owner[i] !== owner || w.type[i] !== UNIT.VILLAGER) continue;
       if (w.order[i] !== ORDER.IDLE) continue;
+      if ((w.carriedAmt[i] | 0) > 0) continue; // sendIdleCarriersHome owns these
       if (fx.dist2(w.px[i], w.py[i], b.x, b.z) > radiusSq) continue;
       const tile = nearestNodeWithinRadius(field, b, radius, w.px[i], w.py[i], wantClass);
       if (tile < 0) break; // no matching nodes in reach — nothing to recruit for
@@ -577,6 +701,7 @@ export function gatherDefenseSystem(w, field) {
       if (foe >= 0) {
         // Interrupt to fight; keep gatherTile as the resume marker (see below).
         w.targetEntity[i] = foe;
+        if (w.targetBuilding) w.targetBuilding[i] = -1;
         w.order[i] = ORDER.ATTACK;
         w.hasTarget[i] = 0;
         clearPath(w, i);

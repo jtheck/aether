@@ -6,9 +6,18 @@ import { step } from './step.js';
 import { CMD } from './commands.js';
 import { createField, worldToTile, tileCenterX, tileCenterY } from './field.js';
 import { growTreeAt } from './trees.js';
-import { SCENERY } from './scenery.js';
+import { SCENERY, rockFootprintRadius, rockYield } from './scenery.js';
 import { getResource } from './resources.js';
-import { GATHER_CARRY_CAP } from './gather.js';
+import {
+  GATHER_ACT,
+  GATHER_CARRY_CAP,
+  campWorkRadius,
+  refreshEngineerAssists,
+  CAMP_WORK_RADIUS_F,
+  ENGINEER_RADIUS_BONUS_F,
+  ENGINEER_BONUS_LINGER_TICKS,
+} from './gather.js';
+import { createBuilding } from './buildings.js';
 
 function plantRockAt(field, tx, tz, kind, stock, footRadius) {
   const tile = tz * field.width + tx;
@@ -122,6 +131,42 @@ function needsADropOff() {
   assert.ok(w.carriedAmt[vill] > 0, 'villager still holds its load');
 }
 
+function idleCarrierReturnsToNearestDropOff() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(36);
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 8;
+  w.carriedKind[vill] = 1; // wood
+  w.agoras = [{ owner: 0, x: fx.fromFloat(12), z: 0 }];
+
+  for (let t = 0; t < 120; t++) step(w, field, []);
+
+  assert.equal(w.carriedAmt[vill], 0, 'idle carrier banks at the nearest agora');
+  assert.equal(getResource(w, 0, 'wood'), 8, 'the load lands in the bank');
+  assert.equal(w.order[vill], ORDER.IDLE, 'idles after the drop-off');
+}
+
+function campDoesNotRecruitIdleCarriers() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(37);
+  const vill = spawn(w, { x: fx.fromFloat(8), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 7;
+  w.carriedKind[vill] = 1;
+  plantTreeAt(field, 4, 0, 30);
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0, built: 1 }];
+
+  let banked = 0;
+  for (let t = 0; t < 80; t++) {
+    step(w, field, []);
+    banked = getResource(w, 0, 'wood');
+    if (banked >= 7) break;
+  }
+
+  assert.ok(banked >= 7, 'camp check sends the carrier home before recruiting a new chop');
+}
+
 function campAutoAssignsIdleVillagers() {
   const field = createField(1);
   field.pass.fill(1);
@@ -155,13 +200,32 @@ function engineerExtendsCampRadius() {
   assert.ok(getResource(w, 0, 'wood') > 0, 'engineer-extended reach recruits the villager');
 }
 
+function engineerRadiusBonusLingers() {
+  const w = createWorld(4);
+  w.buildings = [createBuilding({ owner: 0, type: 'camp', x: 0, z: 0 })];
+  const camp = w.buildings[0];
+  const eng = spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.ENGINEER, owner: 0 });
+
+  refreshEngineerAssists(w);
+  const boosted = fx.toFloat(campWorkRadius(w, camp));
+  assert.equal(boosted, CAMP_WORK_RADIUS_F + ENGINEER_RADIUS_BONUS_F, 'nearby engineer extends reach');
+
+  w.px[eng] = fx.fromFloat(200);
+  refreshEngineerAssists(w);
+  assert.equal(fx.toFloat(campWorkRadius(w, camp)), boosted, 'bonus holds after the engineer walks off');
+
+  w.tick = ENGINEER_BONUS_LINGER_TICKS + 1;
+  refreshEngineerAssists(w);
+  assert.equal(fx.toFloat(campWorkRadius(w, camp)), CAMP_WORK_RADIUS_F, 'bonus drops after the linger window');
+}
+
 function minesPlainRockForMineral() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(26);
   const cx = worldToTile(0);
   const cz = worldToTile(0);
-  const rockTile = plantRockAt(field, cx, cz, SCENERY.ROCK_PLAIN, 12, 0);
+  const rockTile = plantRockAt(field, cx, cz, SCENERY.ROCK_PLAIN, rockYield(SCENERY.ROCK_PLAIN), 0);
   const vill = spawn(w, { x: fx.fromFloat(4), y: 0, type: UNIT.VILLAGER, owner: 0 });
   w.agoras = [{ owner: 0, x: fx.fromFloat(10), z: 0 }];
 
@@ -169,7 +233,7 @@ function minesPlainRockForMineral() {
   assert.equal(w.order[vill], ORDER.GATHER, 'villager takes the mine order');
   for (let t = 0; t < 320; t++) step(w, field, []);
 
-  assert.ok(field.rockStock[rockTile] < 12, 'rock is being chipped');
+  assert.ok(field.rockStock[rockTile] < rockYield(SCENERY.ROCK_PLAIN), 'rock is being chipped');
   assert.ok(getResource(w, 0, 'mineral') > 0, 'plain rock banks mineral');
   assert.equal(getResource(w, 0, 'wood'), 0, 'no wood from a rock');
 }
@@ -181,7 +245,11 @@ function minesMossRockForStone() {
   const cx = worldToTile(0);
   const cz = worldToTile(0);
   // Moss rock has a radius-1 footprint — the villager must mine from the rim.
-  const rockTile = plantRockAt(field, cx, cz, SCENERY.ROCK_MOSS, 56, 1);
+  const rockTile = plantRockAt(
+    field, cx, cz, SCENERY.ROCK_MOSS,
+    rockYield(SCENERY.ROCK_MOSS),
+    rockFootprintRadius(SCENERY.ROCK_MOSS),
+  );
   const vill = spawn(w, { x: fx.fromFloat(8), y: 0, type: UNIT.VILLAGER, owner: 0 });
   w.agoras = [{ owner: 0, x: fx.fromFloat(14), z: 0 }];
 
@@ -190,6 +258,50 @@ function minesMossRockForStone() {
 
   assert.ok(getResource(w, 0, 'stone') > 0, 'moss rock banks stone');
   assert.equal(getResource(w, 0, 'mineral'), 0, 'no mineral from a moss rock');
+}
+
+function minesMossRockFromFarAway() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(42);
+  const cx = worldToTile(0);
+  const cz = worldToTile(0);
+  const rockTile = plantRockAt(
+    field, cx, cz, SCENERY.ROCK_MOSS,
+    rockYield(SCENERY.ROCK_MOSS),
+    rockFootprintRadius(SCENERY.ROCK_MOSS),
+  );
+  // Far enough that they must walk to a rim stand — the old Chebyshev-corner
+  // snap sat ~11.3 units out, past the 10-unit moss harvest reach.
+  const vill = spawn(w, { x: fx.fromFloat(24), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.agoras = [{ owner: 0, x: fx.fromFloat(32), z: 0 }];
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: rockTile }]);
+  for (let t = 0; t < 400; t++) step(w, field, []);
+
+  assert.ok(field.rockStock[rockTile] < rockYield(SCENERY.ROCK_MOSS), 'far villager still reaches the moss rim');
+  assert.ok(getResource(w, 0, 'stone') > 0, 'banks stone after walking in');
+}
+
+function minesSnowRockFromFarAway() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(43);
+  const cx = worldToTile(0);
+  const cz = worldToTile(0);
+  const rockTile = plantRockAt(
+    field, cx, cz, SCENERY.ROCK_SNOW,
+    rockYield(SCENERY.ROCK_SNOW),
+    rockFootprintRadius(SCENERY.ROCK_SNOW),
+  );
+  const vill = spawn(w, { x: fx.fromFloat(28), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.agoras = [{ owner: 0, x: fx.fromFloat(36), z: 0 }];
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: rockTile }]);
+  for (let t = 0; t < 480; t++) step(w, field, []);
+
+  assert.ok(field.rockStock[rockTile] < rockYield(SCENERY.ROCK_SNOW), 'far villager still reaches the snow rim');
+  assert.ok(getResource(w, 0, 'stone') > 0, 'banks stone from a snow rock');
 }
 
 function farmsFoodInPlace() {
@@ -278,11 +390,13 @@ function farmWorkersWanderThePlot() {
   const cx = tileCenterX(worldToTile(0));
   const cz = tileCenterY(worldToTile(0));
   let sawMove = false;
+  let sawChop = false;
   let maxD = 0;
   for (let t = 0; t < 280; t++) {
     const px = w.px[vill];
     const py = w.py[vill];
     step(w, field, []);
+    if (w.gatherAct[vill] === GATHER_ACT.CHOP) sawChop = true;
     if (w.px[vill] !== px || w.py[vill] !== py) sawMove = true;
     const d = fx.dist2(w.px[vill], w.py[vill], cx, cz);
     if (d > maxD) maxD = d;
@@ -291,7 +405,40 @@ function farmWorkersWanderThePlot() {
   assert.ok(sawMove, 'farm worker walks around the plot');
   assert.ok(maxD <= fx.mul(fx.fromFloat(14), fx.fromFloat(14)), 'wander stays around the farm');
   assert.equal(w.carriedAmt[vill], 0, 'no carry visual on a farm');
+  assert.ok(!sawChop, 'farm workers never chop');
+  assert.equal(w.gatherAct[vill], GATHER_ACT.NONE, 'farm pose stays idle/walk');
   assert.ok(getResource(w, 0, 'food') > 0, 'food still banks while wandering');
+}
+
+function chopsAtTheNodeThenHauls() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(41);
+  const vill = spawn(w, { x: fx.fromFloat(14), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  const tile = plantTreeAt(field, 0, 0, 40);
+  w.agoras = [{ owner: 0, x: fx.fromFloat(28), z: 0 }];
+
+  step(w, field, [{ type: CMD.GATHER, entities: [vill], tile }]);
+  assert.equal(w.gatherAct[vill], GATHER_ACT.NONE, 'walk-up is not a chop');
+
+  let sawChop = false;
+  let sawChopWithLoad = false;
+  let sawHaul = false;
+  for (let t = 0; t < 240; t++) {
+    step(w, field, []);
+    const act = w.gatherAct[vill];
+    if (act === GATHER_ACT.CHOP) {
+      sawChop = true;
+      if ((w.carriedAmt[vill] | 0) > 0) sawChopWithLoad = true;
+    }
+    if (act === GATHER_ACT.HAUL && (w.carriedAmt[vill] | 0) >= GATHER_CARRY_CAP) {
+      sawHaul = true;
+      break;
+    }
+  }
+  assert.ok(sawChop, 'chops at the tree');
+  assert.ok(sawChopWithLoad, 'keeps chopping after the first bite');
+  assert.ok(sawHaul, 'switches to haul when the load is full');
 }
 
 function farmCapsAtTwoWorkers() {
@@ -360,8 +507,11 @@ function defensiveFarmerRetaliatesThenResumes() {
 
 gathersAndDeposits();
 returnsAllTheWayToTheDropOff();
+chopsAtTheNodeThenHauls();
 minesPlainRockForMineral();
 minesMossRockForStone();
+minesMossRockFromFarAway();
+minesSnowRockFromFarAway();
 farmsFoodInPlace();
 farmWorkersWanderThePlot();
 farmAutoAssignsIdleVillagers();
@@ -373,6 +523,9 @@ defensiveFarmerRetaliatesThenResumes();
 onlyVillagersGather();
 depletesThenIdles();
 needsADropOff();
+idleCarrierReturnsToNearestDropOff();
+campDoesNotRecruitIdleCarriers();
 campAutoAssignsIdleVillagers();
 engineerExtendsCampRadius();
+engineerRadiusBonusLingers();
 console.log('gather.test.js: ok (wood + stone + mineral + food + wander + specialize + defend)');

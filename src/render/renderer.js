@@ -33,6 +33,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { getUnitDef } from '../sim/unitTypes.js';
+import { GATHER_ACT } from '../sim/gather.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
 import { HEIGHT_AMPLITUDE, TILE_SIZE_F, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
@@ -41,6 +42,7 @@ import {
   UNIT_MODEL_URLS,
   hasUnitModel,
   loadBakedUnitMeshParts,
+  prefetchBakedMesh,
 } from './unitModels.js';
 import { spawnSeatsFromSockets } from './transportSeats.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
@@ -555,7 +557,7 @@ function growTypeBatchCapacity(batch, newCap) {
       for (let s = oldCap; s < newCap; s++) {
         vatPhase[s] = (s * 17 + 3) % frameCount;
       }
-      fillVatInstanceParams(vatParams, newCap, batch.idleClip, batch.walkClip, vatMoving, batch.carryClip, batch.carryWalkClip);
+      fillVatInstanceParams(vatParams, newCap, batch.idleClip, batch.walkClip, vatMoving, batch.carryClip, batch.carryWalkClip, batch.chopClip);
       for (const part of batch.vatParts) {
         setThinInstances(part.mesh, matrices, newCap);
         setThinInstanceColors(part.mesh, part.isTeamColor ? colors : white);
@@ -626,7 +628,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
     for (let s = 0; s < cap; s++) {
       vatPhase[s] = (s * 17 + 3) % Math.max(1, vat.idleClip.frameCount);
     }
-    fillVatInstanceParams(vatParams, cap, vat.idleClip, vat.walkClip, vatMoving, vat.carryClip, vat.carryWalkClip);
+    fillVatInstanceParams(vatParams, cap, vat.idleClip, vat.walkClip, vatMoving, vat.carryClip, vat.carryWalkClip, vat.chopClip);
 
     // Shared matrices across primitives; TeamColor part alone takes owner tint.
     // setInstances must run before registerScene for the thin-instance VAT path.
@@ -657,6 +659,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
       walkClip: vat.walkClip,
       carryClip: vat.carryClip ?? null,
       carryWalkClip: vat.carryWalkClip ?? null,
+      chopClip: vat.chopClip ?? null,
       vatScale: vat.instanceScale,
       vatFootLift: vat.footLift,
       vatDirty: false,
@@ -703,6 +706,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!bootDebug) return;
     console.info(`[boot] ${label} +${(performance.now() - bootT0).toFixed(0)}ms`);
   };
+  /** Yield a painted frame so sequential GLB / pipeline work cannot pin the tab. */
+  function afterPaint() {
+    return new Promise((resolve) => {
+      const raf = globalThis.requestAnimationFrame ?? ((cb) => setTimeout(cb, 16));
+      raf(() => setTimeout(resolve, 0));
+    });
+  }
   const types = opts.types;
   const gpuCapacity = opts.gpuCapacity ?? capacity;
   const preallocKoth = gpuCapacity > capacity;
@@ -929,6 +939,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Per-entity batch map key (VAT shards use `${typeId}#${shard}`). */
   /** @type {(string | number | null)[]} */
   const entityBatchKey = new Array(entitySlot.length).fill(null);
+  const UNIT_PING_MS = 280;
+  const UNIT_PING_PULSES = 0.5;
+  const UNIT_PING_PEAK = 1.35;
+  /** @type {Map<number, { started: number, r: number, g: number, b: number, a: number }>} */
+  const unitPings = new Map();
 
   /** @type {Map<string | number, object>} */
   const typeBatches = new Map();
@@ -1091,17 +1106,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     // Start ensures only after scenery — building the job list must not call
     // ensureTypeOwnerBatch early (that raced past the gate).
-    return sceneryModelsReady.then(() => {
-      /** @type {Promise<unknown>[]} */
-      const jobs = [];
+    return sceneryModelsReady.then(async () => {
       for (const [key, entityIds] of groups) {
         const colon = key.lastIndexOf(':');
         const typeId = Number(key.slice(0, colon));
         const owner = Number(key.slice(colon + 1));
-        jobs.push(ensureTypeOwnerBatch(typeId, owner, entityIds));
+        await ensureTypeOwnerBatch(typeId, owner, entityIds);
+        await afterPaint();
       }
-      return Promise.all(jobs);
-    }).then(() => {});
+    });
   }
 
   const BASE_DIAMETER = 6;
@@ -1781,6 +1794,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     forEachFxInstance() {},
     clear() {},
     updateSelectionHighlight() {},
+    update() {},
   };
   const radialStub = {
     showAt() {},
@@ -2189,6 +2203,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     terrain?.update?.(camera, deltaMs);
     // Freeze FX aging while sim is paused so bolts/trails don't burn out.
     const fxDt = fxPaused ? 0 : deltaMs;
+    buildingProps.update?.(fxDt);
     particleClockMs += Math.min(100, Math.max(0, fxDt));
     if (fxEnabled) {
       // Quality slider scales all socket cadences (default unitFxIntervalMs=80 → 1×).
@@ -2907,6 +2922,62 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     orderMarkerShown = true;
   }
 
+  function unitPingBoost(started, now) {
+    const t = now - started;
+    if (t >= UNIT_PING_MS) return 1;
+    const u = t / UNIT_PING_MS;
+    const wave = Math.abs(Math.cos(u * Math.PI * UNIT_PING_PULSES));
+    return 1 + wave * wave * UNIT_PING_PEAK;
+  }
+
+  function writeUnitPing(i, ping, boost) {
+    const slot = entitySlot[i];
+    if (slot < 0) return;
+    const key = entityBatchKey[i];
+    const batch = (key != null ? typeBatches.get(key) : null) ?? fallback;
+    if (!batch) return;
+    const r = ping.r * boost;
+    const g = ping.g * boost;
+    const b = ping.b * boost;
+    const parts = tintableParts(batch);
+    if (parts?.length) {
+      for (const part of parts) {
+        if (part.isTeamColor) {
+          setThinInstanceColor(part.mesh, slot, r, g, b, ping.a);
+        } else {
+          setThinInstanceColor(part.mesh, slot, boost, boost, boost, ping.a);
+        }
+        markThinInstanceSlotDirty(part.mesh, slot);
+      }
+      return;
+    }
+    if (batch.mesh) {
+      setThinInstanceColor(batch.mesh, slot, r, g, b, ping.a);
+      markThinInstanceSlotDirty(batch.mesh, slot);
+    }
+  }
+
+  function snapshotUnitPing(i) {
+    const slot = entitySlot[i];
+    if (slot < 0) return null;
+    const key = entityBatchKey[i];
+    const batch = (key != null ? typeBatches.get(key) : null) ?? fallback;
+    const c = batch?.colors;
+    const o = slot * 4;
+    if (!c || o + 3 >= c.length) return { started: performance.now(), r: 1, g: 1, b: 1, a: 1 };
+    return { started: performance.now(), r: c[o], g: c[o + 1], b: c[o + 2], a: c[o + 3] };
+  }
+
+  function updateUnitPings() {
+    if (unitPings.size === 0) return;
+    const now = performance.now();
+    for (const [i, ping] of unitPings) {
+      const boost = unitPingBoost(ping.started, now);
+      writeUnitPing(i, ping, boost);
+      if (now - ping.started >= UNIT_PING_MS) unitPings.delete(i);
+    }
+  }
+
   function flushAllBatches() {
     updateOrderMarker();
     // Build menu: screen-anchored HUD (project agora, edge-clamp, fixed depth).
@@ -2918,6 +2989,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     selectionHud.update?.(camera);
     buildingProps.updateHarvestPing?.();
+    updateUnitPings();
     for (const batch of typeBatches.values()) {
       flushVatParams(batch);
       // Unit matrices: markThinInstanceSlotDirty on write — do not flushThinInstances
@@ -2950,7 +3022,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false) {
+  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false) {
     const slot = entitySlot[i];
     if (slot < 0) return false;
     const key = entityBatchKey[i] ?? batchKey(typeId, owner);
@@ -2958,7 +3030,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!batch) return false;
     const tiCount = batch.mesh.thinInstances?.count ?? 0;
     if (slot >= tiCount) return false;
-    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying);
+    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping);
     if (monkLobFx.isFlying(i)) monkLobFx.notePose(i, x, z);
     if (diameter > 0.05) {
       const def = getUnitDef(typeId);
@@ -3074,7 +3146,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return getViewProjectionMatrix(camera, aspect);
   }
 
-  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false) {
+  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false) {
     const baseGy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
     const gy = baseGy + (loft || 0);
     let animateVat = diameter > 0;
@@ -3091,7 +3163,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const o = slot * 16;
       if (scale <= 0) {
         for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
-        syncVatSlot(batch, slot, false, false, false);
+        syncVatSlot(batch, slot, false, false, false, false);
         for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
         return;
       }
@@ -3139,14 +3211,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift, pitch, roll);
     }
 
-    syncVatSlot(batch, slot, diameter > 0 && moving, animateVat, carrying);
+    syncVatSlot(batch, slot, diameter > 0 && moving, animateVat, carrying, chopping);
     for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
   }
 
-  /** VAT state: idle / walk / carry, high bit frozen (fps=0) beyond VAT distance. */
-  function syncVatSlot(batch, slot, moving, animate, carrying = false) {
+  /** VAT state: idle / walk / carry / chop, high bit frozen (fps=0) beyond VAT distance. */
+  function syncVatSlot(batch, slot, moving, animate, carrying = false, chopping = false) {
     if (!batch.vatHandle || slot >= batch.vatMoving.length) return;
-    const want = vatWant(!!moving, !!carrying, !!animate);
+    const want = vatWant(!!moving, !!carrying, !!animate, !!chopping);
     if (batch.vatMoving[slot] === want) return;
     batch.vatMoving[slot] = want;
     const clip = clipForVatState(batch, want);
@@ -3221,21 +3293,48 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     resolveInteractive = resolve;
   });
 
+  /**
+   * After the board is playable, decode remaining unit / building GLBs one
+   * asset per frame — no scene meshes. Instantiating them here would pin the
+   * loading-screen 1v1 (hidden thin-instances still hit writeBuffer). A later
+   * match place() / batch create hits the CPU cache and writes owner colors.
+   */
+  async function warmRoster() {
+    try {
+      if (buildingProps?.prefetchProgressive) {
+        await buildingProps.prefetchProgressive();
+        bootLog('roster buildings');
+      }
+      for (const url of Object.values(UNIT_MODEL_URLS)) {
+        await prefetchBakedMesh(engine, url);
+        await afterPaint();
+      }
+      bootLog('roster units');
+    } catch (err) {
+      console.warn('[boot] roster warm failed', err);
+    }
+  }
+
   // Phase B — background loads; do not gate start()/first paint.
   // World scenery (3D trees/rocks) finishes before unit templates so the board
-  // reads as place-first. Interactive waits on units+buildings; radials later.
+  // reads as place-first. Interactive unlocks once agora/building systems exist
+  // and live units have started loading — remaining roster warms on the
+  // loading-screen match, one asset per frame.
   void (async () => {
     try {
       await sceneryModelsReady;
       bootLog('scenery models');
 
-      const unitsP = scheduleBatchesForTypes(capacity, types, opts.owners);
+      void scheduleBatchesForTypes(capacity, types, opts.owners);
 
       const propsP = Promise.all([
         createFrogRenderer(engine, scene, groundYAt, frogLandBurst),
         createMushroomPreviews(engine, scene, groundYAt),
         createAgoraProps(engine, scene, groundYAt),
-        createBuildingProps(engine, scene, groundYAt),
+        createBuildingProps(engine, scene, groundYAt, {
+          emit: (init) => particles.emit(init),
+          emitBurst: (init) => particles.emitBurst(init),
+        }),
         upgradeHudMeshes(),
       ]).then(async ([frogs, shrooms, agoras, buildings]) => {
         frogRenderer = frogs;
@@ -3248,15 +3347,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         buildingProps = buildings;
         if (pendingAgoras) agoraProps.place(pendingAgoras);
         if (pendingRallyFlags) agoraProps.placeRallyFlags?.(pendingRallyFlags);
-        // Lazy building templates — only types in this list are fetched.
-        if (pendingBuildings) await buildingProps.place(pendingBuildings);
+        // Progressive place — do not await every type before unlocking.
+        if (pendingBuildings) {
+          void buildingProps.place(pendingBuildings).then(() => {
+            buildingProps.forEachShadowMesh?.(noteShadowMesh);
+            if (shadowsEnabled) applyShadowState();
+          });
+        }
         pendingAgoras = null;
         pendingRallyFlags = null;
         pendingBuildings = null;
-        // Warm every placeable so a tester / showcase board does not hitch
-        // on first place() of 15 unseen GLBs. Do not await — interactive first.
-        void buildingProps.preloadAll?.();
-        // Late PBR props: receive + cast after color-pass materialize.
         agoraProps.forEachShadowMesh?.(noteShadowMesh);
         buildingProps.forEachShadowMesh?.(noteShadowMesh);
         if (shadowsEnabled) applyShadowState();
@@ -3284,14 +3384,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         }
       })();
 
-      await Promise.all([propsP, unitsP]);
+      await propsP;
       bootLog('phase B core complete');
     } catch (err) {
       console.error('[boot] phase B failed', err);
     } finally {
-      // Assets are in — don't wait on rAF (can stall ~1s under upload jank).
       bootLog('interactive');
       resolveInteractive();
+      void warmRoster();
     }
   })();
 
@@ -3383,6 +3483,24 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * Flash the harvestable a gather click landed on (tree / rock / farm).
      * @param {number} tile
      */
+    pingUnit(i) {
+      const id = i | 0;
+      if (id < 0) return false;
+      const ping = snapshotUnitPing(id);
+      if (!ping) return false;
+      unitPings.set(id, ping);
+      writeUnitPing(id, ping, 1 + UNIT_PING_PEAK);
+      return true;
+    },
+
+    pingBuilding(x, z) {
+      return buildingProps.pingAt?.(x, z) ?? false;
+    },
+
+    pingAgora(index) {
+      return agoraProps.pingAt?.(index) ?? false;
+    },
+
     pingHarvestTarget(tile) {
       const t = tile | 0;
       if (t < 0) return false;
@@ -3460,6 +3578,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /** Mark researched upgrade pads (dull + full progress ring). */
     setActionRadialResearched(ids) {
       actionRadial.setResearchedUpgrades?.(ids);
+    },
+
+    setRadialMenuGate(snapshot) {
+      buildingRadial.setMenuGate?.(snapshot);
+      actionRadial.setMenuGate?.(snapshot);
     },
 
     /** Dull / enable Cancel on the open action radial. */
@@ -3560,7 +3683,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Sync gesture test: over an option disc, hub hole, or the main ring band.
+     * Sync gesture test: over a visible option (pad / icon / ring band).
+     * Action radials do not claim the empty yard inside the ring.
      * Must not await GPU (pointerdown latch).
      * Always ray-test — a stale hover must not claim the whole screen.
      */
@@ -3682,6 +3806,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         terrain?.applyTreeUpdates?.(updatesList[i]);
       }
       // Field slowMask is already synced on session.field (= fieldSnap).
+      if (tileGridVisible) refreshTileGridOccupancy();
+      else tileGridOccupancyDirty = true;
+      syncPlacementGrid();
+    },
+
+    applyRockUpdates(updatesList) {
+      if (!updatesList?.length) return;
+      for (let i = 0; i < updatesList.length; i++) {
+        terrain?.applyRockUpdates?.(updatesList[i]);
+      }
       if (tileGridVisible) refreshTileGridOccupancy();
       else tileGridOccupancyDirty = true;
       syncPlacementGrid();
@@ -4023,6 +4157,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const alive = options.alive;
       const owners = options.owners;
       const carrying = options.carrying;
+      const gatherAct = options.gatherAct;
       let unmapped = 0;
       for (let i = 0; i < count; i++) {
         const owner = owners ? owners[i] : 0;
@@ -4031,8 +4166,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           writeInstanceAt(i, typesArr[i], owner, 0, 0, 0);
           continue;
         }
-        const load = carrying ? (carrying[i] | 0) > 0 : false;
-        if (!writeInstanceAt(i, typesArr[i], owner, positions.x[i], positions.z[i], def.size, 0, false, 0, 0, 0, NaN, load)) unmapped++;
+        const act = gatherAct ? (gatherAct[i] | 0) : 0;
+        const load = act === GATHER_ACT.HAUL || (!gatherAct && carrying && (carrying[i] | 0) > 0);
+        const chop = act === GATHER_ACT.CHOP;
+        if (!writeInstanceAt(i, typesArr[i], owner, positions.x[i], positions.z[i], def.size, 0, false, 0, 0, 0, NaN, load, chop)) unmapped++;
       }
       flushAllBatches();
       return unmapped;
@@ -4061,8 +4198,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     },
 
-    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false) {
-      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying);
+    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false) {
+      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying, chopping);
     },
 
     /**

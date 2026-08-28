@@ -69,7 +69,7 @@ describe('fogOfWar vision radii', () => {
 });
 
 describe('fogOfWar stamp + hide', () => {
-  it('dims nothing for spectators and hides hostiles outside the stamp', () => {
+  it('hides hostiles outside the stamp and shows everything when fog is off', () => {
     const field = fakeField(20, 20);
     const half = (20 * 4) / 2;
     const fog = createFogOfWar();
@@ -259,6 +259,78 @@ describe('fogOfWar overlay edge', () => {
     assert.equal(fog.fogFactorAt(0, 0), 0);
     assert.ok(fog.fogFactorAt(36, 0) > 0 && fog.fogFactorAt(36, 0) < 1);
     assert.equal(fog.fogFactorAt(64, 0), 1);
+  });
+});
+
+describe('fogOfWar shared vision', () => {
+  it('lets spectators stamp every listed owner without revealing wilderness', () => {
+    const field = fakeField(20, 20);
+    const half = (20 * 4) / 2;
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: half - 2, z: half - 2 },
+    ]);
+
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: -1,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      shareVisionWith: [0, 1],
+    });
+    assert.equal(fog.isEnabled(), true);
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.isWorldVisible(half - 2, half - 2), true);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), false);
+    assert.equal(fog.isWorldExplored(-36, -36), false);
+    assert.equal(fog.overlayAlphaAt(-36, -36), 255);
+
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: -1,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      shareVisionWith: [],
+    });
+    assert.equal(fog.isEnabled(), true);
+    assert.equal(fog.isWorldVisible(0, 0), false);
+    assert.equal(fog.isWorldExplored(-36, -36), false);
+  });
+
+  it('stamps listed hostiles without turning fog off', () => {
+    const field = fakeField(20, 20);
+    const half = (20 * 4) / 2;
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: half - 2, z: half - 2 },
+    ]);
+
+    fog.stamp({ world, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [] });
+    assert.equal(fog.isWorldVisible(half - 2, half - 2), false);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), true);
+
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      shareVisionWith: [1],
+    });
+    assert.equal(fog.isWorldVisible(half - 2, half - 2), true);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), false);
+    assert.equal(fog.isEnabled(), true);
+    assert.equal(fog.isWorldExplored(-36, -36), false);
+    assert.equal(fog.overlayAlphaAt(-36, -36), 255);
   });
 });
 

@@ -16,6 +16,7 @@ import { mixFrogChecksum } from './frogs.js';
 import { mixHolyArmorChecksum } from './holyArmor.js';
 import { mixSporeGrowthChecksum } from './sporeBloom.js';
 import { mixMonkLobChecksum } from './monkKick.js';
+import { mixPendingLightningChecksum } from './lightning.js';
 import { mixCombatStatusChecksum } from './combatStatus.js';
 import { mixTechChecksum } from './tech.js';
 import { mixResourceChecksum } from './resources.js';
@@ -44,6 +45,7 @@ export function checksum(w, field = null) {
     if (w.faceY) mix(w.faceY[i]);
     mix(w.order[i]);
     mix(w.targetEntity[i]);
+    if (w.targetBuilding) mix(w.targetBuilding[i]);
     mix(w.engagementTarget[i]);
     mix(w.engagementSlot[i]);
     mix(w.targetLoad[i]);
@@ -82,6 +84,7 @@ export function checksum(w, field = null) {
     mix(p.owner[i]);
     mix(p.source[i]);
     mix(p.target[i]);
+    if (p.targetBuilding) mix(p.targetBuilding[i]);
     mix(p.px[i]);
     mix(p.py[i]);
     mix(p.vx[i]);
@@ -91,6 +94,9 @@ export function checksum(w, field = null) {
     if (p.wanderOx) mix(p.wanderOx[i]);
     if (p.wanderOy) mix(p.wanderOy[i]);
     mix(p.damage[i]);
+    if (p.speed) mix(p.speed[i]);
+    if (p.power) mix(p.power[i]);
+    if (p.launchWait) mix(p.launchWait[i]);
     mix(p.age[i]);
     mix(p.lifetime[i]);
     mix(p.hitCount[i]);
@@ -110,6 +116,7 @@ export function checksum(w, field = null) {
   mixCombatStatusChecksum(mix, w);
   mixSporeGrowthChecksum(mix, w);
   mixMonkLobChecksum(mix, w);
+  mixPendingLightningChecksum(mix, w);
   if (w.squadId) {
     mix(w.nextSquadId | 0);
     for (let i = 0; i < w.count; i++) {

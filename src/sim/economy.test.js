@@ -58,28 +58,38 @@ function trainingChargesGatesAndRefunds() {
   w.buildings[0].built = 1;
   w.buildings[0].buildProgress = w.buildings[0].buildTime | 0;
 
-  // Villager costs food; owner has none → training rejected, no track.
+  // Villagers trickle from the village — they are not a train option.
+  addResource(w, 0, 'food', 100);
   applyCommands(w, field, [
     { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'villager' },
   ]);
-  assert.equal((w.buildings[0].tracks?.length | 0), 0, 'no villager queued without food');
+  assert.equal((w.buildings[0].tracks?.length | 0), 0, 'village no longer trains villagers');
+  addResource(w, 0, 'food', -getResource(w, 0, 'food'));
+
+  // Monk costs food; owner has none → training rejected, no track.
+  applyCommands(w, field, [
+    { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'monk' },
+  ]);
+  assert.equal((w.buildings[0].tracks?.length | 0), 0, 'no monk queued without food');
 
   // Give food → queue succeeds and charges; cancel refunds it.
   addResource(w, 0, 'food', 100);
   const foodBefore = getResource(w, 0, 'food');
-  const vCost = getUnitCost(UNIT.VILLAGER);
+  const woodBefore = getResource(w, 0, 'wood');
+  const mCost = getUnitCost(UNIT.MONK);
   applyCommands(w, field, [
-    { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'villager' },
-    { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'villager' },
+    { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'monk' },
+    { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'monk' },
   ]);
-  assert.equal(getResource(w, 0, 'food'), foodBefore - 2 * (vCost.food | 0), 'two villagers charged');
+  assert.equal(getResource(w, 0, 'food'), foodBefore - 2 * (mCost.food | 0), 'two monks charged food');
+  assert.equal(getResource(w, 0, 'wood'), woodBefore - 2 * (mCost.wood | 0), 'two monks charged wood');
   const trackCount = w.buildings[0].tracks[0].count | 0;
-  assert.equal(trackCount, 2, 'two villagers queued');
+  assert.equal(trackCount, 2, 'two monks queued');
 
   applyCommands(w, field, [
     { type: CMD.CANCEL_TRAIN, playerId: 0, buildingIndex: 0 },
   ]);
-  assert.equal(getResource(w, 0, 'food'), foodBefore, 'cancel refunds unspawned villagers');
+  assert.equal(getResource(w, 0, 'food'), foodBefore, 'cancel refunds unspawned monks');
   assert.equal(w.buildings[0].tracks.length, 0, 'queue cleared on cancel');
 }
 

@@ -174,6 +174,9 @@ cpSync(join(REPO, 'assets'), join(DEPLOY, 'assets'), { recursive: true });
   cpSync(join(REPO, 'maps', 'tester.garden'), join(DEPLOY, 'maps', 'tester.garden'));
 }
 cpSync(join(ROOT, 'icons'), join(DEPLOY, 'icons'), { recursive: true });
+if (existsSync(join(ROOT, 'graffiti.png'))) {
+  cpSync(join(ROOT, 'graffiti.png'), join(DEPLOY, 'graffiti.png'));
+}
 mkdirSync(join(DEPLOY, 'config'), { recursive: true });
 cpSync(join(ROOT, 'config', 'offline.html'), join(DEPLOY, 'config', 'offline.html'));
 mkdirSync(join(DEPLOY, 'vendor'), { recursive: true });

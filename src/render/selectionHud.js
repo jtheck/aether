@@ -21,7 +21,6 @@ import { loadBakedUnitMeshParts, UNIT_MODEL_URLS } from './unitModels.js';
 import { VAT_UNIT_DEFS } from './vatUnits.js';
 import {
   BUILDING_MODEL_URLS,
-  PLACEABLE_BUILDINGS,
   getBuildingDisplayName,
 } from '../sim/buildings.js';
 
@@ -298,9 +297,29 @@ export async function createSelectionHud(engine, scene, screen = {}) {
    * }>}
    */
   const icons = new Map();
+  /** @type {Map<string, Promise<void>>} */
+  const iconInflight = new Map();
+
+  function urlForIconKey(key) {
+    if (key.startsWith('u:')) return unitIconModelUrl(Number(key.slice(2)));
+    if (key.startsWith('b:')) return BUILDING_ICON_URLS[key.slice(2)] ?? null;
+    return null;
+  }
 
   async function loadIcon(key, url) {
     if (!url || icons.has(key)) return;
+    let pending = iconInflight.get(key);
+    if (pending) return pending;
+    pending = loadIconInner(key, url);
+    iconInflight.set(key, pending);
+    try {
+      await pending;
+    } finally {
+      iconInflight.delete(key);
+    }
+  }
+
+  async function loadIconInner(key, url) {
     try {
       const parts = await loadBakedUnitMeshParts(engine, url);
       const layers = [];
@@ -342,16 +361,6 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       console.warn(`[selectionHud] icon ${key} failed`, err);
     }
   }
-
-  const unitIds = Object.keys(UNIT_MODEL_URLS)
-    .map(Number)
-    .concat(Object.keys(VAT_UNIT_DEFS).map(Number))
-    .filter((id, i, arr) => arr.indexOf(id) === i);
-  const buildingIds = ['agora', ...PLACEABLE_BUILDINGS.map((b) => b.id)];
-  await Promise.all([
-    ...unitIds.map((typeId) => loadIcon(`u:${typeId}`, unitIconModelUrl(typeId))),
-    ...buildingIds.map((id) => loadIcon(`b:${id}`, BUILDING_ICON_URLS[id])),
-  ]);
 
   /** @type {{ data: object, layer: object, text: string }[]} */
   const labels = [];
@@ -459,6 +468,10 @@ export async function createSelectionHud(engine, scene, screen = {}) {
   /** @param {{ kind?: string, typeId?: number, typeKey?: string, name: string, count: number }[]} next */
   function setGroups(next) {
     groups = Array.isArray(next) ? next : [];
+    for (const g of groups) {
+      const key = selectionHudIconKey(g);
+      if (key) void loadIcon(key, urlForIconKey(key));
+    }
   }
 
   function update(camera) {

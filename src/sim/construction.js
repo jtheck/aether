@@ -1,11 +1,10 @@
 // Building construction — placed buildings start as inert sites (built = 0) and
-// are raised by villagers. Mirrors the gather loop: a per-tick driver walks
-// builders to the site and holds them in reach; progress accrues at the number
-// of on-site builders (capped at MAX_BUILDERS) so two workers build twice as
-// fast. A separate assign pass recruits up to MAX_BUILDERS villagers per site —
-// nearest first, idle preferred, but it will pull gatherers from anywhere so a
-// site never stalls for lack of hands. All state lives on the building object /
-// SoA, so it stays deterministic and checkpoints cleanly.
+// are raised by villagers and engineers. Mirrors the gather loop: a per-tick
+// driver walks builders to the site and holds them in reach; progress accrues
+// from on-site workers (capped at MAX_BUILDERS slots). A villager is one
+// builder-tick; an engineer is half. A separate assign pass fills those slots —
+// nearest first, idle preferred, pulling gatherers / repairing engineers when
+// no idle hand is free. All state lives on the building object / SoA.
 
 import * as fx from './fixed.js';
 import { ORDER } from './world.js';
@@ -16,8 +15,13 @@ import { UNIT } from './unitTypes.js';
 import { isCarried } from './transport.js';
 import { getBuildingFootprint, applyStructureOccupancyAt } from './buildings.js';
 
-/** Most villagers that can work a single site (also the progress-per-tick cap). */
+/** Most workers that can claim a single site. */
 export const MAX_BUILDERS = 2;
+/** Half-ticks of work a villager contributes each tick on-site. */
+const VILLAGER_BUILD_HALVES = 2;
+/** Engineers take a slot but add half a villager's speed. */
+const ENGINEER_BUILD_HALVES = 1;
+const MAX_BUILD_HALVES = MAX_BUILDERS * VILLAGER_BUILD_HALVES;
 /** Re-scan cadence for builder recruitment (deterministic on world.tick). */
 const ASSIGN_INTERVAL = 20;
 /** Extra reach past the footprint edge so builders don't fight for the exact rim. */
@@ -34,14 +38,23 @@ function buildReachSq(b) {
   return fx.mul(reach, reach);
 }
 
-/** Put a villager on a BUILD order for a building index. Keeps any carried load. */
+function canBuild(type) {
+  return type === UNIT.VILLAGER || type === UNIT.ENGINEER;
+}
+
+function buildHalvesFor(type) {
+  return type === UNIT.ENGINEER ? ENGINEER_BUILD_HALVES : VILLAGER_BUILD_HALVES;
+}
+
+/** Put a villager or engineer on a BUILD order for a building index. */
 export function beginBuild(w, i, bi) {
-  if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) return false;
+  if (!w.alive[i] || !canBuild(w.type[i])) return false;
   w.order[i] = ORDER.BUILD;
   w.buildTarget[i] = bi | 0;
   w.gatherTile[i] = -1;
   if (w.gatherDefensive) w.gatherDefensive[i] = 0;
   w.targetEntity[i] = -1;
+  if (w.targetBuilding) w.targetBuilding[i] = -1;
   w.transportTarget[i] = -1;
   w.hasTarget[i] = 0;
   clearEngagement(w, i);
@@ -87,7 +100,7 @@ export function constructionSystem(w, field) {
     const bi = w.buildTarget[i];
     const b = bi >= 0 && bi < buildings.length ? buildings[bi] : null;
     // Only explicit sites (built === 0) are under construction; undefined = done.
-    if (!b || b.built !== 0 || w.type[i] !== UNIT.VILLAGER || w.owner[i] !== b.owner) {
+    if (!b || (b.hp != null && (b.hp | 0) <= 0) || b.built !== 0 || !canBuild(w.type[i]) || w.owner[i] !== b.owner) {
       endBuild(w, i);
       continue;
     }
@@ -95,7 +108,7 @@ export function constructionSystem(w, field) {
       w.vx[i] = 0;
       w.vy[i] = 0;
       clearPath(w, i);
-      _present[bi]++;
+      _present[bi] += buildHalvesFor(w.type[i]);
     } else {
       const spot = snapToPassable(field, b.x, b.z);
       seekTo(w, i, spot ? spot.x : b.x, spot ? spot.y : b.z);
@@ -105,10 +118,12 @@ export function constructionSystem(w, field) {
   // Accrue progress (capped) and finish sites that reach their build time.
   for (let bi = 0; bi < buildings.length; bi++) {
     const b = buildings[bi];
-    if (b.built !== 0) continue;
-    const n = _present[bi];
-    if (n <= 0) continue;
-    b.buildProgress = (b.buildProgress | 0) + Math.min(n, MAX_BUILDERS);
+    if (b.built !== 0 || (b.hp != null && (b.hp | 0) <= 0)) continue;
+    const halves = _present[bi];
+    if (halves <= 0) continue;
+    const total = (b.buildHalfAcc | 0) + Math.min(halves, MAX_BUILD_HALVES);
+    b.buildProgress = (b.buildProgress | 0) + (total >> 1);
+    b.buildHalfAcc = total & 1;
     if (b.buildProgress >= (b.buildTime | 0)) {
       b.buildProgress = b.buildTime | 0;
       b.built = 1;
@@ -121,16 +136,19 @@ export function constructionSystem(w, field) {
 
 /** Rank key for a build candidate: idle beats gathering, then nearest, then id. */
 function candidateEligible(w, i, owner) {
-  if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER || w.owner[i] !== owner) return false;
+  if (!w.alive[i] || !canBuild(w.type[i]) || w.owner[i] !== owner) return false;
   if (isCarried(w, i)) return false;
   const order = w.order[i];
-  return order === ORDER.IDLE || order === ORDER.GATHER;
+  if (order === ORDER.IDLE) return true;
+  if (w.type[i] === UNIT.VILLAGER && order === ORDER.GATHER) return true;
+  if (w.type[i] === UNIT.ENGINEER && order === ORDER.REPAIR) return true;
+  return false;
 }
 
 /**
- * Recruit up to MAX_BUILDERS villagers per unfinished site. Nearest first, idle
- * preferred; will pull gatherers when no idle hands are free so a site always
- * makes progress. Runs on a fixed cadence.
+ * Recruit up to MAX_BUILDERS villagers/engineers per unfinished site. Nearest
+ * first, idle preferred; will pull gatherers or repairing engineers when no idle
+ * hands are free. Runs on a fixed cadence.
  * @param {object} w
  * @param {object} field
  */
@@ -140,7 +158,7 @@ export function constructionAssignSystem(w, field) {
   if (w.tick % ASSIGN_INTERVAL !== 0) return;
   for (let bi = 0; bi < buildings.length; bi++) {
     const b = buildings[bi];
-    if (b.built !== 0) continue;
+    if (b.built !== 0 || (b.hp != null && (b.hp | 0) <= 0)) continue;
     const owner = b.owner;
 
     let builders = 0;

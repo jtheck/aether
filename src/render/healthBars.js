@@ -1,6 +1,6 @@
 // Health chips: unit row is 7 (4 big / 3 small, big on the ends), buildings
-// add one more on each end (9). Each HP third is its own full bar — green,
-// then yellow, then red.
+// add one more on each end (9). One bar for full HP — green above 66%,
+// yellow above 33%, then red.
 // Optional armor/holy rings sit on the inner small tiles.
 
 import {
@@ -28,6 +28,7 @@ const FRAME_RING_ARMOR = 2;
 export const NORMAL_DOT_DIAMETER = 0.4;
 /** Main-dot size in CSS pixels — world size scales with distance to hold this. */
 export const TARGET_DOT_PX = 8;
+const DOT_DIAMETER_MAIN_MUL = 0.82;
 const DOT_DIAMETER_ALTERNATE_MUL = 0.4;
 const DOT_SPACING_MUL = 0.72;
 const HOLY_RING_VS_NORMAL = 1.04;
@@ -236,34 +237,22 @@ const RGB_RED = [0.92, 0.18, 0.12];
 const CHIP_BAND = 1 / 3;
 
 /**
- * One full bar per HP third. Green empties to 1, then yellow refills, then red.
+ * One bar for full HP. Color flips at 66% (green→yellow) and 33% (yellow→red).
  * @param {number} ratio 0..1
  * @param {number} count chips in this row
  */
 export function chipBarState(ratio, count) {
   const n = Math.max(1, count | 0);
   const r = Math.max(0, Math.min(1, ratio));
-  if (r <= 0) return { filled: 0, rgb: RGB_RED, band: 2 };
-  let band;
-  let t;
-  if (r > CHIP_BAND * 2) {
-    band = 0;
-    t = (r - CHIP_BAND * 2) / CHIP_BAND;
-  } else if (r > CHIP_BAND) {
-    band = 1;
-    t = (r - CHIP_BAND) / CHIP_BAND;
-  } else {
-    band = 2;
-    t = r / CHIP_BAND;
-  }
-  const filled = Math.max(1, Math.min(n, Math.ceil(t * n - 1e-6)));
+  const band = r > CHIP_BAND * 2 ? 0 : r > CHIP_BAND ? 1 : 2;
+  const filled = r <= 0 ? 0 : Math.max(1, Math.min(n, Math.ceil(r * n - 1e-6)));
   const rgb = band === 0 ? RGB_GREEN : band === 1 ? RGB_YELLOW : RGB_RED;
   return { filled, rgb, band };
 }
 
 /** Size vs the normal chip. Even = big, odd = small. 7: N S N S N S N. 9: + N S. */
 export function chipSizeMul(index, _count) {
-  return index % 2 === 1 ? DOT_DIAMETER_ALTERNATE_MUL : 1;
+  return index % 2 === 1 ? DOT_DIAMETER_ALTERNATE_MUL : DOT_DIAMETER_MAIN_MUL;
 }
 
 function ringDotIndices(count) {

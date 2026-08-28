@@ -115,6 +115,22 @@ function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
   matrices[o + 15] = 1;
 }
 
+function writeAgoraBodyColor(layer, slot, owner, boost = 1) {
+  if (!layer.colors) return;
+  const o = slot * 4;
+  if (layer.isTeamColor) {
+    const tint = ownerTint(owner);
+    layer.colors[o] = tint[0] * boost;
+    layer.colors[o + 1] = tint[1] * boost;
+    layer.colors[o + 2] = tint[2] * boost;
+  } else {
+    layer.colors[o] = boost;
+    layer.colors[o + 1] = boost;
+    layer.colors[o + 2] = boost;
+  }
+  layer.colors[o + 3] = 1;
+}
+
 function writeOwnerColor(colors, slot, owner, alpha = 1) {
   const tint = ownerTint(owner);
   const o = slot * 4;
@@ -154,7 +170,7 @@ function cameraEye(camera) {
  * @param {(x: number, z: number) => number} groundYAt
  */
 export async function createAgoraProps(engine, scene, groundYAt) {
-  /** @type {{ mesh: object, matrices: Float32Array }[]} */
+  /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[]} */
   const layers = [];
   /** @type {{ mesh: object, matrices: Float32Array, colors: Float32Array, isTeamColor: boolean }[]} */
   const agoraFlagLayers = [];
@@ -200,6 +216,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       return null;
     },
     forEachShadowMesh() {},
+    pingAt() {},
     chipHeight() {
       return roofChipLift(0, DEFAULT_AGORA_ROOF);
     },
@@ -213,12 +230,16 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       const mesh = parts[p];
       // GPU pick path kept; CPU ray-vs-sphere is live (see pickMode.js).
       mesh.pickable = USE_GPU_PICK;
-      if (isTeamColorMaterial(mesh.material)) prepareTeamColorMaterial(engine, mesh);
+      const isTeamColor = isTeamColorMaterial(mesh.material);
+      if (isTeamColor) prepareTeamColorMaterial(engine, mesh);
       const matrices = new Float32Array(MAX_AGORAS * 16);
+      const colors = new Float32Array(MAX_AGORAS * 4);
+      colors.fill(1);
       setThinInstances(mesh, matrices, MAX_AGORAS);
+      setThinInstanceColors(mesh, colors);
       setThinInstanceCount(mesh, 0);
       addToScene(scene, mesh);
-      layers.push({ mesh, matrices });
+      layers.push({ mesh, matrices, colors, isTeamColor });
       pickMeshes.add(mesh);
     }
   } catch (err) {
@@ -555,10 +576,12 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       agoraCache.push({ x, z, yaw, owner: a.owner | 0 });
       for (const layer of layers) {
         writeMatrix(layer.matrices, i, x, y, z, yaw, AGORA_SCALE);
+        writeAgoraBodyColor(layer, i, a.owner | 0, 1);
       }
     }
     for (const layer of layers) {
       setThinInstanceCount(layer.mesh, n);
+      setThinInstanceColors(layer.mesh, layer.colors);
       flushThinInstances(layer.mesh);
     }
     rewriteFlags(null);
@@ -616,7 +639,48 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     rewriteFlags(null);
   }
 
+  const CLICK_PING_MS = 280;
+  const CLICK_PING_PULSES = 0.5;
+  const CLICK_PING_PEAK = 1.35;
+  /** @type {Map<number, number>} index → started */
+  const clickPings = new Map();
+
+  function clickPingBoost(started, now) {
+    const t = now - started;
+    if (t >= CLICK_PING_MS) return 1;
+    const u = t / CLICK_PING_MS;
+    const wave = Math.abs(Math.cos(u * Math.PI * CLICK_PING_PULSES));
+    return 1 + wave * wave * CLICK_PING_PEAK;
+  }
+
+  function writeAgoraPing(index, boost) {
+    const owner = agoraCache[index]?.owner ?? 0;
+    for (const layer of layers) {
+      writeAgoraBodyColor(layer, index, owner, boost);
+      setThinInstanceColors(layer.mesh, layer.colors);
+    }
+  }
+
+  function pingAt(index) {
+    const i = index | 0;
+    if (i < 0 || i >= placedCount) return false;
+    clickPings.set(i, performance.now());
+    writeAgoraPing(i, 1 + CLICK_PING_PEAK);
+    return true;
+  }
+
+  function updateClickPings() {
+    if (clickPings.size === 0) return;
+    const now = performance.now();
+    for (const [index, started] of clickPings) {
+      const boost = clickPingBoost(started, now);
+      if (index < placedCount) writeAgoraPing(index, boost);
+      if (now - started >= CLICK_PING_MS) clickPings.delete(index);
+    }
+  }
+
   function update(camera) {
+    updateClickPings();
     const showLines = rallyCache.length > 0 || rallyGhost;
     if (!agoraCache.length && !showLines) return;
     if (showLines) {
@@ -647,6 +711,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   }
 
   function clear() {
+    clickPings.clear();
     place([]);
     placeRallyFlags([]);
     setRallyGhost(null);
@@ -689,6 +754,7 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     isPickMesh,
     resolvePick,
     forEachShadowMesh,
+    pingAt,
     chipHeight() {
       return roofChipLift(agoraRoofY, DEFAULT_AGORA_ROOF);
     },

@@ -46,3 +46,34 @@ export function radialClickKind(h) {
   if (h.onChrome) return 'chrome';
   return 'world';
 }
+
+/**
+ * Empty hub around a framed building still counts as that building when the
+ * footprint pick misses (yard inside a village ring, etc.).
+ * @param {{ picked?: boolean, onHub?: boolean }} h
+ * @param {{ kind: string, index: number } | null | undefined} framed
+ */
+export function radialHubFramedBuilding(h, framed) {
+  if (h.picked || !h.onHub) return null;
+  return framed ?? null;
+}
+
+/**
+ * LMB on a foreign unit/building: inspect (collar + HP) when idle;
+ * keep attack / a-move when the player already has orderable troops.
+ * @param {boolean} hasOwnOrderableSelection
+ */
+export function inspectForeignOnClick(hasOwnOrderableSelection) {
+  return !hasOwnOrderableSelection;
+}
+
+/**
+ * Mobile 2-finger tap leaves build UI instead of force-moving.
+ * Rally selections are included — RMB dismissMenus leaves those for force-move.
+ * @param {boolean} placing
+ * @param {boolean} hasBuildingSelection
+ * @param {boolean} radialOpen
+ */
+export function twoFingerConsumesBuildUi(placing, hasBuildingSelection, radialOpen) {
+  return Boolean(placing || hasBuildingSelection || radialOpen);
+}

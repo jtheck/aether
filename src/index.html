@@ -60,9 +60,44 @@
       position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
       overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
     }
-    #status { position: fixed; left: 12px; top: 12px; z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; }
+    #status { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; white-space: nowrap; }
     #resources { position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-    #koth-controls { position: fixed; left: 12px; top: 40px; display: flex; gap: 8px; z-index: 10001; }
+    #koth-controls {
+      position: fixed; left: 12px; top: 168px; z-index: 10001;
+      display: flex; flex-direction: column; gap: 6px;
+      width: min(236px, calc(100vw - 24px));
+      padding: 8px; box-sizing: border-box;
+      background: rgba(186, 244, 252, 0.78);
+      border: 1px solid rgba(210, 252, 255, 0.88);
+      border-radius: 8px;
+      color: #0a3d46;
+      font: 13px/1.3 system-ui, sans-serif;
+    }
+    #koth-controls[hidden] { display: none; }
+    #koth-lobby { display: flex; flex-direction: column; gap: 6px; }
+    #koth-lobby[hidden] { display: none; }
+    #koth-lobby-list {
+      display: flex; flex-direction: column; gap: 4px;
+      max-height: 40vh; overflow-y: auto;
+    }
+    #koth-lobby-empty { margin: 2px 4px 4px; opacity: .72; font-size: 12px; }
+    #koth-lobby-empty[hidden] { display: none; }
+    #koth-controls button {
+      display: block; width: 100%; box-sizing: border-box;
+      padding: 8px 10px; margin: 0;
+      background: rgba(255, 255, 255, 0.32);
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      border-radius: 6px;
+      color: inherit; font: inherit; text-align: left; cursor: pointer;
+    }
+    #koth-controls button[hidden] { display: none; }
+    #koth-controls button:hover { background: rgba(255, 255, 255, 0.5); border-color: aqua; }
+    #koth-controls button:active { background: rgba(255, 255, 255, 0.62); }
+    #koth-controls button:disabled { opacity: .45; cursor: default; }
+    #koth-controls .koth-lobby-row { display: flex; flex-direction: column; gap: 2px; }
+    #koth-controls .koth-lobby-name { font-weight: 600; }
+    #koth-controls .koth-lobby-meta { opacity: .78; font-size: 12px; font-variant-numeric: tabular-nums; }
+    #koth-start, #koth-join { margin-top: 2px; text-align: center; }
     /* Transparent hit-layer eats mouse/touch; logo only is visible over the scene. */
     #boot-splash {
       position: fixed;
@@ -87,19 +122,47 @@
       -webkit-user-drag: none;
     }
     /* Side menu — accent colours match v1's rt.css (aqua hover, darkmagenta active). */
-    #menu_b { position: fixed; top: 0; left: 0; width: 24px; height: 24px; padding: 4px; fill: #fff; opacity: .42; cursor: pointer; z-index: 10003; }
+    #header { position: absolute; top: 0; left: 0; right: 0; z-index: 10004; padding: 15px; text-align: center; pointer-events: none; }
+    #header h3 { margin: 0; position: absolute; left: 50%; transform: translateX(-50%); transition: left 0.25s ease-out, transform 0.25s ease-out; pointer-events: none; user-select: none; }
+    #header.map-ready h3 { left: 100px; transform: none; }
+    #header img { width: 150px; height: auto; max-height: 120px; user-select: none; pointer-events: none; -webkit-user-drag: none; }
+    #menu_b { position: fixed; top: 14px; left: 12px; width: 48px; height: 48px; fill: #fff; cursor: pointer; z-index: 10003; }
     #menu_b:hover { fill: aqua; opacity: 1; }
     #menu_b:active { fill: darkmagenta; }
-    #side_menu { position: fixed; top: 0; left: 0; bottom: 0; width: 260px; z-index: 10002; display: none; flex-direction: column; box-sizing: border-box; padding: 34px 14px 44px; background: #0c0f14; border-right: 1px solid #2a3140; font-size: 13px; }
-    #side_menu.is-open { display: flex; }
+    #menu_b .close-icon, #menu_b.is-open .menu-icon { display: none; }
+    #menu_b.is-open .close-icon { display: block; transform: scale(1.35); transform-origin: center; }
+    #side_menu { --range: #1b69df; position: fixed; top: 0; left: 0; bottom: 0; width: min(300px, 86vw); z-index: 10002; display: flex; flex-direction: column; box-sizing: border-box; padding: 140px 18px 52px; background: #0c0f14; border-right: 1px solid #2a3140; font-size: 13px; transform: translateX(-105%); transition: transform 0.1s ease-out; }
+    #side_menu.is-open { transform: translateX(0); }
     #side_menu h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
-    #side_menu .page { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; }
+    #side_menu .page { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 5px;}
     #side_menu .page.is-active { display: block; }
     #side_menu .row { margin-bottom: 14px; }
     #side_menu label { display: block; margin-bottom: 4px; opacity: .8; }
     #side_menu input, #side_menu select { margin: 0; }
     #side_menu input[type="text"], #side_menu select { width: 100%; box-sizing: border-box; padding: 4px 6px; background: #161b24; color: inherit; border: 1px solid #2a3140; border-radius: 3px; font: inherit; }
-    #side_menu input[type="range"] { width: 100%; }
+    #side_menu input[type="range"] { width: 100%; accent-color: var(--range); }
+    /* Scrollbars match range inputs: thin dark track, accent pill, no buttons. */
+    #side_menu .page,
+    #side_menu #privacy_poli {
+      scrollbar-width: thin;
+      scrollbar-color: var(--range) #111;
+    }
+    #side_menu .page::-webkit-scrollbar,
+    #side_menu #privacy_poli::-webkit-scrollbar { width: 10px; height: 10px; }
+    #side_menu .page::-webkit-scrollbar-button,
+    #side_menu #privacy_poli::-webkit-scrollbar-button,
+    #side_menu .page::-webkit-scrollbar-button:start:decrement,
+    #side_menu .page::-webkit-scrollbar-button:end:increment,
+    #side_menu #privacy_poli::-webkit-scrollbar-button:start:decrement,
+    #side_menu #privacy_poli::-webkit-scrollbar-button:end:increment {
+      display: none; width: 0; height: 0; background: none; border: 0;
+    }
+    #side_menu .page::-webkit-scrollbar-track,
+    #side_menu #privacy_poli::-webkit-scrollbar-track { background: #111; border-radius: 99px; }
+    #side_menu .page::-webkit-scrollbar-thumb,
+    #side_menu #privacy_poli::-webkit-scrollbar-thumb { background: var(--range); border-radius: 99px; }
+    #side_menu .page::-webkit-scrollbar-corner,
+    #side_menu #privacy_poli::-webkit-scrollbar-corner { background: transparent; }
     #side_menu .value { float: right; opacity: .7; }
     #side_menu .note { min-height: 15px; font-size: 11px; color: #e0b050; }
     #side_menu .btn {
@@ -110,6 +173,13 @@
     #side_menu .btn:hover { border-color: aqua; color: aqua; }
     #side_menu .btn:active { border-color: darkmagenta; color: darkmagenta; }
     #side_menu .btn:disabled { opacity: .45; cursor: default; border-color: #2a3140; color: inherit; }
+    #side_menu .btn[hidden],
+    #side_menu #menu-koth[hidden],
+    #side_menu #menu-koth-browse[hidden],
+    #side_menu #menu-koth-live[hidden] { display: none; }
+    #side_menu .koth-lobby-row { display: flex; flex-direction: column; gap: 2px; }
+    #side_menu .koth-lobby-meta { opacity: .7; font-size: 12px; font-variant-numeric: tabular-nums; }
+    #side_menu #menu-koth-status { font-weight: 600; margin-bottom: 4px; }
     #settings_b { position: absolute; right: 10px; bottom: 8px; width: 28px; height: 28px; stroke: #fff; fill: none; opacity: .55; cursor: pointer; }
     #settings_b:hover { stroke: aqua; opacity: 1; }
     #settings_b:active { stroke: darkmagenta; }
@@ -141,16 +211,39 @@
   <canvas id="canvas"></canvas>
   <div id="status"></div>
   <div id="resources"></div>
-  <div id="koth-controls">
-    <button id="koth-start">Start or Join Lobby</button>
-    <button id="koth-join" hidden>Join Match</button>
+  <div id="koth-controls" hidden>
+    <div id="koth-lobby">
+      <div id="koth-lobby-list" role="list"></div>
+      <div id="koth-lobby-empty">Listening for lobbies…</div>
+      <button type="button" id="koth-start">Start a lobby</button>
+    </div>
+    <button type="button" id="koth-join" hidden>Join Match</button>
   </div>
-  <div id="menu_b" title="Menu" hidden>
-    <svg width="100%" height="100%" viewBox="0 0 26 26"><path style="fill-opacity:1;stroke:none;stroke-width:.260162;stroke-dasharray:none;stroke-opacity:.998532" d="M13.834 7.576s9.03-.316 9.707-.854c.676-.539 1.076-1.46 1.076-1.46s-.348 2.096-.35 3.038c0 .94.495 2.816.495 2.816s-.975-1.292-1.452-1.603c-.476-.31-8.693-.457-8.693-.457l-1.67-.002s-9.018.19-9.7.37c-.68.181-1.988 1.51-1.988 1.51s.51-1.739.63-2.693c.12-.953-.65-2.89-.65-2.89s1.323 1.115 2.314 1.701c.99.586 8.564.506 8.564.506zM1.121 14.024s.755 1.26 1.838 1.938c1.082.676 9.677.33 9.677.33l1.674.038s8.009-.135 8.81-.38c.798-.244 1.669-1.478 1.669-1.478s-.375 2.046-.353 2.954c.02.907.443 2.919.443 2.919s-.649-1.273-1.469-1.968c-.822-.696-9.916-.591-9.916-.591l-1.711-.004s-7.573.677-8.35 1.154c-.776.477-2.09 1.801-2.09 1.801s.819-2.034.668-3.154c-.15-1.12-.89-3.559-.89-3.559z"/></svg>
+  <header id="header">
+    <h3>
+      <img src="./graffiti.png" alt="" width="100" height="100">
+    </h3>
+  </header>
+  <div id="menu_b" title="Menu" hidden role="button" tabindex="0" aria-label="Open menu" aria-expanded="false" aria-controls="side_menu">
+    <svg class="menu-icon" width="100%" height="100%" viewBox="0 0 26 26" aria-hidden="true"><path d="M13.834 7.576s9.03-.316 9.707-.854c.676-.539 1.076-1.46 1.076-1.46s-.348 2.096-.35 3.038c0 .94.495 2.816.495 2.816s-.975-1.292-1.452-1.603c-.476-.31-8.693-.457-8.693-.457l-1.67-.002s-9.018.19-9.7.37c-.68.181-1.988 1.51-1.988 1.51s.51-1.739.63-2.693c.12-.953-.65-2.89-.65-2.89s1.323 1.115 2.314 1.701c.99.586 8.564.506 8.564.506zM1.121 14.024s.755 1.26 1.838 1.938c1.082.676 9.677.33 9.677.33l1.674.038s8.009-.135 8.81-.38c.798-.244 1.669-1.478 1.669-1.478s-.375 2.046-.353 2.954c.02.907.443 2.919.443 2.919s-.649-1.273-1.469-1.968c-.822-.696-9.916-.591-9.916-.591l-1.711-.004s-7.573.677-8.35 1.154c-.776.477-2.09 1.801-2.09 1.801s.819-2.034.668-3.154c-.15-1.12-.89-3.559-.89-3.559z"/></svg>
+    <svg class="close-icon" width="100%" height="100%" viewBox="0 0 26 26" aria-hidden="true"><path d="M19.14 6.972s-.032 1.038-.467 1.829c-.435.79-5.86 3.536-5.86 3.536S7.497 8.797 7.29 8.222c-.207-.575-.106-1.277-.106-1.277s-.568 1.39-.917 1.957c-.348.566-1.342 1.511-1.342 1.511s1.066-.416 1.468-.426c.402-.01 5.4 2.95 5.4 2.95s-4.99 2.675-5.568 2.8c-.577.124-1.54-.338-1.54-.338s.936 1.134 1.235 1.702c.3.567.732 1.954.732 1.954s-.038-1.009.229-1.72c.268-.713 5.917-3.78 5.917-3.78s5.356 3.46 5.699 3.822c.342.361.636 1.645.636 1.645s.338-1.235.62-1.853c.282-.618 1.464-1.498 1.464-1.498s-1.21.18-2.024.165c-.813-.015-5.34-2.873-5.34-2.873s4.908-2.19 5.552-2.163c.643.027 1.91.392 1.91.392s-1.206-.974-1.499-1.717c-.293-.743-.676-2.503-.676-2.503z"/></svg>
   </div>
-  <div id="side_menu">
+  <div id="side_menu" aria-hidden="true">
     <div class="page is-active" data-page="main">
-      <h2>Æther.Garden</h2>
+      <!-- <h2>Æther.Garden</h2> -->
+      <div class="row" id="menu-koth" hidden>
+        <div id="menu-koth-browse">
+          <div id="menu-koth-list" role="list"></div>
+          <div id="menu-koth-empty" class="note">Listening for lobbies…</div>
+          <button type="button" class="btn" id="menu-koth-start">Start a lobby</button>
+        </div>
+        <div id="menu-koth-live" hidden>
+          <div id="menu-koth-status"></div>
+          <div id="menu-koth-live-meta" class="note"></div>
+          <button type="button" class="btn" id="menu-koth-claim" hidden>Claim Seat</button>
+          <button type="button" class="btn" id="menu-koth-leave">Leave lobby</button>
+        </div>
+      </div>
       <div class="row" data-profile></div>
       <div class="row">
         <button type="button" class="btn" id="solo_ai_b">1v1 vs AI</button>
@@ -162,7 +255,7 @@
       </div>
     </div>
     <div class="page" data-page="settings">
-      <h2>Settings</h2>
+      <!-- <h2>Settings</h2> -->
       <div class="row">
         <label for="shadow_slider">Shadows <span class="value" id="shadow_value"></span></label>
         <input type="range" id="shadow_slider" min="0" max="3" step="1">
@@ -182,12 +275,13 @@
         <select id="color_picker"></select>
       </div>
       <div class="about">
-        <hr>
-        <h4>About</h4>
-        Play Aether Garden free in your browser • multiplayer RTS with King of the Hill, 1v1, teams, and co-op adventure • click to play.
         <br><br>
-        <a href="https://aether.garden/forge" target="_blank" title="Field Editor">Forge</a>
-        <br><br><br>
+        <hr>
+        <h6>
+          About
+          <br>
+          Play Aether Garden free in your browser • multiplayer RTS with King of the Hill, 1v1, teams, and co-op adventure • click to play.
+        </h6>
         Privacy
         <div id="privacy_poli"><br>
           This Privacy Policy governs the manner in which Aether.Garden collects, uses, maintains and discloses information collected from users (each, a "User") of the <a href="https://aether.garden">Aether.Garden</a> website ("Site"). This privacy policy applies to the Site and all products and services offered by Aether.Garden.
@@ -231,6 +325,8 @@
         </div>
         <a href="mailto:aethergarden123@pm.me" title="Contact e-mail">Contact</a>
         <hr>
+        <a href="https://aether.garden/forge" target="_blank" title="Field Editor">Forge</a>
+        <br>
         ÆæXi0m
         <span class="credit">©'26 Aether.Garden</span>
       </div>

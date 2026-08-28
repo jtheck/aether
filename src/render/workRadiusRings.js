@@ -1,7 +1,6 @@
-// Gather-reach rings — terrain-draped annulus with a priest-bubble rim fade.
-// White outer hairline, owner color on the inward wash. Additive but quieter
-// than the original cyan/gold film. Vertices sample ground height so the
-// ribbon sits on the terrain instead of burying through it.
+// Gather-reach rings — terrain-draped annulus.
+// White outer rim fading through owner color into transparency. Vertices
+// sample ground height so the ribbon sits on the terrain instead of burying.
 
 import {
   addToScene,
@@ -14,11 +13,13 @@ import {
 import { ownerTint } from './ownerTints.js';
 
 /** How far inward the film fades, in world units. */
-const FADE_WU = 4.4;
+const FADE_WU = 7.2;
 /** Sit this far above the sampled ground at each rim vertex. */
 const LIFT = 0.75;
 const SEGMENTS = 64;
 const MAX_RINGS = 64;
+/** Hold a grown ring after the engineer bonus drops (~6s). */
+const RADIUS_LINGER_MS = 6000;
 const VERTS_PER_RING = SEGMENTS * 2;
 const IDX_PER_RING = SEGMENTS * 6;
 const MAX_VERTS = MAX_RINGS * VERTS_PER_RING;
@@ -35,7 +36,7 @@ function createRingMaterial() {
       { name: 'tint', type: 'vec3<f32>', defaultValue: [0.38, 0.64, 1.0] },
     ],
     needAlphaBlending: true,
-    blendMode: 'additive',
+    blendMode: 'alpha',
     depthWrite: false,
     backFaceCulling: false,
     vertexSource: `struct VertexOutput {
@@ -56,16 +57,15 @@ function createRingMaterial() {
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
   // uv.y = 1 at the outer rim, 0 at the inner fade.
   let t = 1.0 - input.uv.y;
-  let rim = pow(1.0 - t, 1.55);
-  let edge = pow(1.0 - t, 4.8);
-  let alpha = clamp(rim * 0.48 + edge * 0.70, 0.0, 1.0);
-  if (alpha < 0.02) { discard; }
-  let white = vec3<f32>(0.97, 0.97, 0.99);
+  let white = vec3<f32>(1.0, 1.0, 1.0);
   let tint = shaderUniforms.tint;
-  // Hairline stays white at play zoom; player color only on the inner wash.
-  let film = mix(white, tint, t * t * 0.85);
-  let rgb = film * (rim * 1.00 + edge * 1.50);
-  return vec4<f32>(rgb, alpha);
+  // Outer third stays white (the bright rim). Then team color, then gone.
+  let film = mix(white, tint, smoothstep(0.28, 0.72, t));
+  let fade = pow(1.0 - t, 1.15);
+  let edge = pow(1.0 - t, 4.2);
+  let alpha = clamp(fade * 0.72 + edge * 0.28, 0.0, 1.0);
+  if (alpha < 0.02) { discard; }
+  return vec4<f32>(film, alpha);
 }`,
   });
 }
@@ -124,6 +124,35 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
   addToScene(scene, mesh);
   mesh.visible = false;
   if (mesh._gpu) mesh._gpu.indexCount = 0;
+  /** @type {Map<string, { radius: number, until: number }>} */
+  const lingerByKey = new Map();
+
+  function lingerKey(spec) {
+    return `${spec.owner | 0}:${spec.x.toFixed(2)},${spec.z.toFixed(2)}`;
+  }
+
+  function lingeredRadius(spec, now) {
+    const live = spec.radius;
+    const key = lingerKey(spec);
+    const prev = lingerByKey.get(key);
+    if (!(live > 0)) {
+      lingerByKey.delete(key);
+      return live;
+    }
+    if (!prev || live >= prev.radius) {
+      if (prev) {
+        prev.radius = live;
+        prev.until = now + RADIUS_LINGER_MS;
+      } else {
+        lingerByKey.set(key, { radius: live, until: now + RADIUS_LINGER_MS });
+      }
+      return live;
+    }
+    if (now < prev.until) return prev.radius;
+    prev.radius = live;
+    prev.until = now;
+    return live;
+  }
 
   function setIndexCount(n) {
     const idx = n * IDX_PER_RING;
@@ -134,8 +163,7 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
     mesh.visible = n > 0;
   }
 
-  function writeRing(slot, spec) {
-    const radius = spec.radius;
+  function writeRing(slot, spec, radius = spec.radius) {
     const innerR = Math.max(radius - FADE_WU, radius * 0.55);
     const vb = slot * VERTS_PER_RING;
     const cx = spec.x;
@@ -175,14 +203,21 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
         clear();
         return;
       }
+      const now = performance.now();
+      const seen = new Set();
       let drawn = 0;
       let tintOwner = 0;
       for (let i = 0; i < n; i++) {
         const spec = list[i];
         if (!(spec?.radius > 0)) continue;
         if (drawn === 0 && spec.owner != null) tintOwner = spec.owner | 0;
-        writeRing(drawn, spec);
+        const radius = lingeredRadius(spec, now);
+        seen.add(lingerKey(spec));
+        writeRing(drawn, spec, radius);
         drawn++;
+      }
+      for (const key of lingerByKey.keys()) {
+        if (!seen.has(key)) lingerByKey.delete(key);
       }
       if (drawn === 0) {
         clear();

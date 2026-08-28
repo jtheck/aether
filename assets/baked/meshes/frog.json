@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/frog.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -33,6 +33,16 @@
       "materialName": "Material",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.37450823187828064,
+        -0.0016549406573176384,
+        -0.11316216737031937
+      ],
+      "boundMax": [
+        0.2793600857257843,
+        0.4652792513370514,
+        0.46885690093040466
+      ],
       "positions": {
         "offset": 0,
         "length": 3096,

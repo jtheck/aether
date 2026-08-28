@@ -9,7 +9,7 @@
 // A command is plain, serializable data (no object references), so the same
 // command can be applied locally, sent over the wire, or replayed from a log.
 
-import { ORDER } from './world.js';
+import { ORDER, clearAttackFocus } from './world.js';
 import * as fx from './fixed.js';
 import {
   clearPath,
@@ -24,7 +24,7 @@ import { kothRegisterJoin } from './kothMeta.js';
 import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
-import { tryCast } from './abilities.js';
+import { applyCasts } from './abilities.js';
 import { getUnitDef, isFlyer, isMechanical, UNIT } from './unitTypes.js';
 import {
   applyTransportAssignments,
@@ -32,6 +32,8 @@ import {
   unloadPassengers,
 } from './transport.js';
 import { beginRepair } from './repair.js';
+import { attackBuildingStandPointOnField } from './buildingCombat.js';
+import { isBuildingAlive } from './buildings.js';
 import {
   applyPlaceBuilding,
   applyQueueTrain,
@@ -85,7 +87,7 @@ export function applyCommands(world, field, commands) {
         }
         break;
       case CMD.ATTACK:
-        applyAttack(world, field, cmd.entities, cmd.target);
+        applyAttack(world, field, cmd.entities, cmd.target, cmd.buildingIndex);
         break;
       case CMD.ATTACK_MOVE:
         applyMove(world, field, cmd.entities, cmd.tx, cmd.ty, ORDER.ATTACK_MOVE);
@@ -103,7 +105,7 @@ export function applyCommands(world, field, commands) {
         applyForceEliminate(world, cmd.playerId);
         break;
       case CMD.CAST:
-        applyCast(world, field, cmd.entities, cmd.abilityId, cmd.tx, cmd.ty);
+        applyCasts(world, field, cmd.entities, cmd.abilityId, cmd.tx, cmd.ty);
         break;
       case CMD.SELECT:
         applySelect(world, cmd.playerId, cmd.entities);
@@ -234,7 +236,7 @@ function applyMove(world, field, ids, tx, ty, order) {
     }
     world.tx[i] = destX;
     world.ty[i] = destY;
-    world.targetEntity[i] = -1;
+    clearAttackFocus(world, i);
     clearEngagement(world, i);
 
     // Already inside the soft gather disk around the click — stay put.
@@ -267,7 +269,26 @@ function applyMove(world, field, ids, tx, ty, order) {
   }
 }
 
-function applyAttack(world, field, ids, target) {
+function applyAttack(world, field, ids, target, buildingIndex) {
+  const bi = buildingIndex != null ? buildingIndex | 0 : -1;
+  if (bi >= 0) {
+    const b = world.buildings?.[bi];
+    if (!isBuildingAlive(b)) return;
+    stampSquadGroup(world, ids);
+    for (let k = 0; k < ids.length; k++) {
+      const i = ids[k];
+      if (!world.alive[i] || isCarried(world, i)) continue;
+      world.transportTarget[i] = -1;
+      world.order[i] = ORDER.ATTACK;
+      world.targetEntity[i] = -1;
+      world.targetBuilding[i] = bi;
+      clearEngagement(world, i);
+      world.hasTarget[i] = 0;
+      const stand = attackBuildingStandPointOnField(world, field, i, b);
+      queuePath(world, i, stand.x, stand.y);
+    }
+    return;
+  }
   if (target < 0 || !world.alive[target]) return;
   stampSquadGroup(world, ids);
   for (let k = 0; k < ids.length; k++) {
@@ -285,6 +306,7 @@ function applyAttack(world, field, ids, target) {
     }
     world.order[i] = ORDER.ATTACK;
     world.targetEntity[i] = target;
+    if (world.targetBuilding) world.targetBuilding[i] = -1;
     clearEngagement(world, i);
     world.hasTarget[i] = 0;
     const stand = attackStandPoint(world, i, target);
@@ -299,7 +321,7 @@ function applyStop(world, ids) {
     if (!world.alive[i] || isCarried(world, i)) continue;
     world.transportTarget[i] = -1;
     world.order[i] = ORDER.IDLE;
-    world.targetEntity[i] = -1;
+    clearAttackFocus(world, i);
     clearEngagement(world, i);
     world.hasTarget[i] = 0;
     world.vx[i] = 0;
@@ -320,7 +342,7 @@ function applyUnload(world, field, ids, tx, ty) {
     unloadPassengers(world, i, walkTx, walkTy);
     // Transport idles after spilling.
     world.order[i] = ORDER.IDLE;
-    world.targetEntity[i] = -1;
+    clearAttackFocus(world, i);
     clearEngagement(world, i);
     world.hasTarget[i] = 0;
     world.vx[i] = 0;
@@ -344,23 +366,4 @@ function applyForceEliminate(world, playerId) {
   }
 }
 
-/**
- * Point-cast primary (or named) ability for each entity.
- * `tx`/`ty` may be a single fixed-point aim or per-entity arrays.
- */
-function applyCast(world, field, ids, abilityId, tx, ty) {
-  if (!ids || ids.length === 0) return;
-  const sharedAim = typeof tx === 'number' && typeof ty === 'number';
-  for (let k = 0; k < ids.length; k++) {
-    const i = ids[k];
-    if (!world.alive[i] || isCarried(world, i)) continue;
-    const aimX = sharedAim ? tx : tx?.[k];
-    const aimY = sharedAim ? ty : ty?.[k];
-    if (aimX == null || aimY == null) continue;
-    const def = getUnitDef(world.type[i]);
-    const id = abilityId || def.primaryAbility;
-    if (!id) continue;
-    tryCast(world, i, id, aimX, aimY, field);
-  }
-}
 

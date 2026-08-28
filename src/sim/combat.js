@@ -18,6 +18,13 @@ import {
   spatialCellId,
 } from './spatialGrid.js';
 import { tickHolyArmorShields } from './holyArmor.js';
+import {
+  applyDamageBuilding,
+  attackBuildingStandPointOnField,
+  buildingFootprintHalf,
+} from './buildingCombat.js';
+import { isBuildingAlive } from './buildings.js';
+import { clearAttackFocus } from './world.js';
 
 export const ACQUIRE_PHASES = 5;
 /** Squared-distance penalty per existing attacker — spreads fire without ignoring nearer threats. */
@@ -29,7 +36,7 @@ export function combatSystem(w, field) {
   rebuildSpatialGrid(w.spatial, w);
   rebuildEngagementClaims(w);
   acquireTargets(w, field);
-  resolveAttacks(w);
+  resolveAttacks(w, field);
 }
 
 export { kill };
@@ -109,28 +116,59 @@ export function acquireTargets(w, field) {
       }
     }
 
-    if (best < 0) continue;
-    if (wasAttack && prev === best) continue;
-    if (wasAttack && prev >= 0 && w.alive[prev]) {
-      const prevD2 = fx.dist2(w.px[i], w.py[i], w.px[prev], w.py[prev]);
-      if (prevD2 <= aggro2) {
-        const prevScore = targetScore(w, i, prev, prevD2);
-        if (bestScore + REBALANCE_MARGIN >= prevScore) continue;
+    if (best >= 0) {
+      if (wasAttack && prev === best) continue;
+      if (wasAttack && prev >= 0 && w.alive[prev]) {
+        const prevD2 = fx.dist2(w.px[i], w.py[i], w.px[prev], w.py[prev]);
+        if (prevD2 <= aggro2) {
+          const prevScore = targetScore(w, i, prev, prevD2);
+          if (bestScore + REBALANCE_MARGIN >= prevScore) continue;
+        }
+        w.targetLoad[prev] = Math.max(0, w.targetLoad[prev] - 1);
       }
-      w.targetLoad[prev] = Math.max(0, w.targetLoad[prev] - 1);
+
+      w.targetEntity[i] = best;
+      if (w.targetBuilding) w.targetBuilding[i] = -1;
+      w.order[i] = w.ORDER.ATTACK;
+      claimEngagement(w, i, best);
+      const stand = attackStandPoint(w, i, best);
+      queuePath(w, i, stand.x, stand.y);
+      continue;
     }
 
-    w.targetEntity[i] = best;
+    const buildings = w.buildings;
+    if (!buildings?.length) continue;
+    const prevB = w.targetBuilding?.[i] ?? -1;
+    if (wasAttack && prevB >= 0 && isBuildingAlive(buildings[prevB])) continue;
+
+    let bestBi = -1;
+    let bestBd2 = 0x7fffffff;
+    for (let bi = 0; bi < buildings.length; bi++) {
+      const b = buildings[bi];
+      if (!isBuildingAlive(b) || !isHostile(w.owner[i], b.owner)) continue;
+      w.metrics.combatCandidates++;
+      const d2 = fx.dist2(w.px[i], w.py[i], b.x, b.z);
+      const reach = def.aggroRange + buildingFootprintHalf(b.type);
+      if (d2 > fx.mul(reach, reach)) continue;
+      if (d2 < bestBd2 || (d2 === bestBd2 && (bestBi < 0 || bi < bestBi))) {
+        bestBd2 = d2;
+        bestBi = bi;
+      }
+    }
+    if (bestBi < 0) continue;
+
+    w.targetEntity[i] = -1;
+    w.targetBuilding[i] = bestBi;
     w.order[i] = w.ORDER.ATTACK;
-    claimEngagement(w, i, best);
-    const stand = attackStandPoint(w, i, best);
+    clearEngagement(w, i);
+    const stand = attackBuildingStandPointOnField(w, field, i, buildings[bestBi]);
     queuePath(w, i, stand.x, stand.y);
   }
 }
 
 /** After a fight: resume attack-move destination if one remains, else idle. */
 function endAttack(w, i) {
-  w.targetEntity[i] = -1;
+  clearAttackFocus(w, i);
   clearEngagement(w, i);
   clearPath(w, i);
   if (w.hasTarget[i]) {
@@ -141,7 +179,7 @@ function endAttack(w, i) {
   }
 }
 
-function resolveAttacks(w) {
+function resolveAttacks(w, field) {
   for (let i = 0; i < w.count; i++) {
     if (!w.alive[i]) continue;
     if (w.carriedBy?.[i] >= 0) continue;
@@ -150,7 +188,11 @@ function resolveAttacks(w) {
     // already be locked onto an ally — let that swing through.
 
     const target = w.targetEntity[i];
-    if (target < 0 || !w.alive[target] || w.carriedBy?.[target] >= 0) {
+    const bi = w.targetBuilding?.[i] ?? -1;
+    const b = bi >= 0 ? w.buildings?.[bi] : null;
+    const unitOk = target >= 0 && w.alive[target] && !(w.carriedBy?.[target] >= 0);
+    const buildingOk = isBuildingAlive(b);
+    if (!unitOk && !buildingOk) {
       endAttack(w, i);
       continue;
     }
@@ -163,23 +205,44 @@ function resolveAttacks(w) {
       // Keep hasTarget — it marks a pending attack-move destination to resume.
       clearPath(w, i);
       if (w.attackCd[i] <= 0) {
-        if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
-          spawnProjectile(w, {
-            type: def.projectileType,
-            owner: w.owner[i],
-            source: i,
-            target,
-            x: w.px[i],
-            y: w.py[i],
-            aimX: w.px[target],
-            aimY: w.py[target],
-            damage: def.attackDamage,
-          });
+        if (unitOk) {
+          if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
+            spawnProjectile(w, {
+              type: def.projectileType,
+              owner: w.owner[i],
+              source: i,
+              target,
+              x: w.px[i],
+              y: w.py[i],
+              aimX: w.px[target],
+              aimY: w.py[target],
+              damage: def.attackDamage,
+            });
+          } else {
+            applyDamage(w, target, def.attackDamage, i);
+          }
+          w.attackCd[i] = def.attackCooldown;
+          if (!w.alive[target]) endAttack(w, i);
         } else {
-          applyDamage(w, target, def.attackDamage, i);
+          if (def.attackDelivery === ATTACK_DELIVERY.PROJECTILE) {
+            spawnProjectile(w, {
+              type: def.projectileType,
+              owner: w.owner[i],
+              source: i,
+              target: -1,
+              targetBuilding: bi,
+              x: w.px[i],
+              y: w.py[i],
+              aimX: b.x,
+              aimY: b.z,
+              damage: def.attackDamage,
+            });
+          } else {
+            applyDamageBuilding(w, field, bi, def.attackDamage);
+          }
+          w.attackCd[i] = def.attackCooldown;
+          if (!isBuildingAlive(w.buildings?.[bi])) endAttack(w, i);
         }
-        w.attackCd[i] = def.attackCooldown;
-        if (!w.alive[target]) endAttack(w, i);
       }
     }
   }

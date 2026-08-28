@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/priest.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [],
   "materials": [
     {
@@ -56,24 +56,34 @@
       "materialName": "TeamColor",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -0.9814094305038452,
+        -0.012187187559902668,
+        -1.3297215700149536
+      ],
+      "boundMax": [
+        0.652759313583374,
+        1.9065732955932617,
+        1.2355384826660156
+      ],
       "positions": {
         "offset": 0,
-        "length": 60,
+        "length": 468,
         "type": "f32"
       },
       "normals": {
-        "offset": 240,
-        "length": 60,
+        "offset": 1872,
+        "length": 468,
         "type": "f32"
       },
       "indices": {
-        "offset": 480,
-        "length": 30,
+        "offset": 3744,
+        "length": 234,
         "type": "u32"
       },
       "uvs": {
-        "offset": 600,
-        "length": 40,
+        "offset": 4680,
+        "length": 312,
         "type": "f32"
       }
     },
@@ -81,74 +91,34 @@
       "materialName": "Material",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -0.7112056612968445,
+        -0.012187187559902668,
+        -0.6872208118438721
+      ],
+      "boundMax": [
+        0.9060445427894592,
+        2.011561632156372,
+        2.202274799346924
+      ],
       "positions": {
-        "offset": 760,
-        "length": 2907,
+        "offset": 5928,
+        "length": 2949,
         "type": "f32"
       },
       "normals": {
-        "offset": 12388,
-        "length": 2907,
+        "offset": 17724,
+        "length": 2949,
         "type": "f32"
       },
       "indices": {
-        "offset": 24016,
-        "length": 1533,
+        "offset": 29520,
+        "length": 1569,
         "type": "u32"
       },
       "uvs": {
-        "offset": 30148,
-        "length": 1938,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "TeamColor",
-      "materialIndex": 0,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 37900,
-        "length": 408,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 39532,
-        "length": 408,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 41164,
-        "length": 204,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 41980,
-        "length": 272,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "part3",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 43068,
-        "length": 42,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 43236,
-        "length": 42,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 43404,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 43548,
-        "length": 28,
+        "offset": 35796,
+        "length": 1966,
         "type": "f32"
       }
     }

@@ -14,7 +14,7 @@ import {
   setThinInstances,
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
-import { SCENERY } from '../sim/scenery.js';
+import { SCENERY, rockScaleForStage, rockStageFromStock } from '../sim/scenery.js';
 import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 import { treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
 import { capacityFor } from '../sim/capacity.js';
@@ -22,6 +22,7 @@ import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.
 import { hasBakedMesh } from './bakedAssets.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
 import { softDetachMesh } from './meshLifecycle.js';
+import { SCALE_BOUNCE_MS, stageDropScale } from './scaleBounce.js';
 
 const ATLAS_URL = '/assets/textures/atlas-hd.png';
 const ATLAS_GRID = 8;
@@ -33,8 +34,8 @@ const LOD_MOVE_THRESHOLD_SQ = 16;
 const SCENERY_INITIAL = 32;
 /** Grow-in from sapling (spore / revive). */
 const TREE_GROW_IN_MS = 1600;
-/** Stage-to-stage shrink (fire / chip) — matches burn cadence feel. */
-const TREE_SHRINK_MS = 2200;
+/** Stage-to-stage shrink (fire / chip) — bump, undershoot, settle. */
+const TREE_SHRINK_MS = SCALE_BOUNCE_MS;
 /** Full fell → vanish (after drip beat). */
 const TREE_FELL_MS = 1400;
 /** Hold full size while ink drips, then melt. */
@@ -48,9 +49,9 @@ const VISITED_FOG_T = 110 / 255;
 /** Extra albedo in the live vision hole so current sight reads brighter than visited. */
 const SIGHT_LIFT = 1.4;
 /** How long a gather-click flash lasts on the targeted tree / rock. */
-const HARVEST_PING_MS = 1050;
-/** Pulses inside that window. */
-const HARVEST_PULSES = 3;
+const HARVEST_PING_MS = 280;
+/** 0.5 → one peak then rest. */
+const HARVEST_PULSES = 0.5;
 /** Peak albedo scale on top of fog dim (trees sit at ~0.24). */
 const HARVEST_PEAK = 2.15;
 
@@ -146,6 +147,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       modelsReady: Promise.resolve(),
       update() {},
       applyTreeUpdates() {},
+      applyRockUpdates() {},
       applyFogDim() {},
       pingHarvest() { return false; },
       dispose() {},
@@ -315,17 +317,42 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   let lastCameraY = Infinity;
   let lastCameraZ = Infinity;
 
-  function beginScaleAnim(p, nextTarget, durationMs) {
+  function beginScaleAnim(p, nextTarget, durationMs, mode = 'lerp') {
     // Compare against visible scale — targetScale may already be set during fell delay.
     if (Math.abs((p.stockScale ?? 0) - nextTarget) < 0.001 && !p.scaling) {
       p.targetScale = nextTarget;
+      p.scaleMode = mode;
       return;
     }
     p.scaleFrom = p.stockScale ?? 0;
     p.targetScale = nextTarget;
     p.scaleT = 0;
     p.scaleDur = Math.max(1, durationMs);
+    p.scaleMode = mode;
     p.scaling = true;
+  }
+
+  function advanceInstanceScale(p, dt) {
+    if (p.fellDelayMs > 0) {
+      p.fellDelayMs -= dt;
+      if (p.fellDelayMs <= 0) {
+        p.fellDelayMs = 0;
+        beginScaleAnim(p, 0, TREE_FELL_MS, 'lerp');
+      }
+      return true;
+    }
+    if (!p.scaling) return false;
+    p.scaleT = Math.min(1, p.scaleT + dt / (p.scaleDur || TREE_SHRINK_MS));
+    const from = p.scaleFrom ?? 0;
+    const to = p.targetScale ?? 0;
+    p.stockScale = p.scaleMode === 'stageDrop'
+      ? stageDropScale(from, to, p.scaleT)
+      : from + (to - from) * (1 - (1 - p.scaleT) ** 3);
+    if (p.scaleT >= 1) {
+      p.scaling = false;
+      p.stockScale = to;
+    }
+    return true;
   }
 
   function placeTreeInstance(p, tileIndex, stock, burn) {
@@ -350,6 +377,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     p.targetScale = targetScale;
     p.scaleT = 0;
     p.scaleDur = TREE_GROW_IN_MS;
+    p.scaleMode = 'lerp';
     p.scaling = targetScale > 0;
     p.fellDelayMs = 0;
   }
@@ -378,35 +406,18 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     fireElapsed += deltaMs;
     growElapsed += deltaMs;
 
-    // Advance scale lerps (sprout, fire shrink, fell melt).
-    if (treeBatch && growElapsed > 0) {
+    // Advance scale (sprout, stage-drop, fire shrink, fell melt) on every batch.
+    if (growElapsed > 0) {
       const dt = Math.min(100, growElapsed);
       growElapsed = 0;
-      let moved = false;
-      for (let i = 0; i < treeBatch.instances.length; i++) {
-        const p = treeBatch.instances[i];
-        if (p.fellDelayMs > 0) {
-          p.fellDelayMs -= dt;
-          if (p.fellDelayMs <= 0) {
-            p.fellDelayMs = 0;
-            beginScaleAnim(p, 0, TREE_FELL_MS);
-          }
-          moved = true;
-          continue;
+      for (let b = 0; b < batches.length; b++) {
+        const batch = batches[b];
+        let moved = false;
+        for (let i = 0; i < batch.instances.length; i++) {
+          if (advanceInstanceScale(batch.instances[i], dt)) moved = true;
         }
-        if (!p.scaling) continue;
-        p.scaleT = Math.min(1, p.scaleT + dt / (p.scaleDur || TREE_SHRINK_MS));
-        const ease = 1 - (1 - p.scaleT) ** 3;
-        const from = p.scaleFrom ?? 0;
-        const to = p.targetScale ?? 0;
-        p.stockScale = from + (to - from) * ease;
-        if (p.scaleT >= 1) {
-          p.scaling = false;
-          p.stockScale = to;
-        }
-        moved = true;
+        if (moved) batch.dirty = true;
       }
-      if (moved) treeBatch.dirty = true;
     }
 
     const cameraPos = cameraPosition(activeCamera);
@@ -486,6 +497,34 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
           p,
           nextTarget,
           nextTarget < prevScale ? TREE_SHRINK_MS : TREE_GROW_IN_MS,
+          nextTarget < prevScale ? 'stageDrop' : 'lerp',
+        );
+      } else {
+        p.targetScale = nextTarget;
+      }
+      ref.batch.dirty = true;
+    }
+  }
+
+  function applyRockUpdates(updates) {
+    if (!updates?.tiles?.length) return;
+    const { tiles, stock } = updates;
+    for (let i = 0; i < tiles.length; i++) {
+      const ref = instanceByTile.get(tiles[i]);
+      if (!ref) continue;
+      const p = ref.batch.instances[ref.index];
+      const kind = ref.batch.variant.kind;
+      const nextStock = stock[i] | 0;
+      const prevScale = p.stockScale ?? 0;
+      p.stock = nextStock;
+      const nextTarget = rockScaleForStage(rockStageFromStock(kind, nextStock));
+      if (Math.abs(nextTarget - (p.targetScale ?? prevScale)) > 0.001) {
+        p.fellDelayMs = 0;
+        beginScaleAnim(
+          p,
+          nextTarget,
+          nextTarget < prevScale ? TREE_SHRINK_MS : TREE_GROW_IN_MS,
+          nextTarget < prevScale ? 'stageDrop' : 'lerp',
         );
       } else {
         p.targetScale = nextTarget;
@@ -582,7 +621,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     treeBatch = null;
   }
 
-  return { meshes, modelsReady, update, applyTreeUpdates, applyFogDim, pingHarvest, dispose };
+  return { meshes, modelsReady, update, applyTreeUpdates, applyRockUpdates, applyFogDim, pingHarvest, dispose };
 }
 
 function makeEmptyTreeInstance() {
@@ -599,6 +638,7 @@ function makeEmptyTreeInstance() {
     scaleFrom: 0,
     scaleT: 1,
     scaleDur: TREE_SHRINK_MS,
+    scaleMode: 'lerp',
     scaling: false,
     fellDelayMs: 0,
   };
@@ -821,10 +861,10 @@ function collectInstances(field, variant, surfaceHeightAt) {
       const groundY = surfaceHeightAt(field, x, z);
       const stock = variant.kind === SCENERY.TREE
         ? (treeStock?.[i] ?? TREE_STAGE_FALLBACK_STOCK)
-        : 0;
+        : (field.rockStock?.[i] | 0);
       const stockScale = variant.kind === SCENERY.TREE
         ? treeScaleForStage(treeStageFromStock(stock))
-        : 1;
+        : rockScaleForStage(rockStageFromStock(variant.kind, stock));
       out.push({
         tileIndex: i,
         x,
@@ -838,6 +878,7 @@ function collectInstances(field, variant, surfaceHeightAt) {
         scaleFrom: stockScale,
         scaleT: 1,
         scaleDur: TREE_SHRINK_MS,
+        scaleMode: 'lerp',
         scaling: false,
         fellDelayMs: 0,
       });
@@ -866,7 +907,7 @@ function updateBatchLod(batch, cameraPos) {
   for (let i = 0; i < instances.length; i++) {
     const p = instances[i];
     const stockScale = p.stockScale ?? 1;
-    if (variant.kind === SCENERY.TREE && stockScale <= 0) {
+    if (stockScale <= 0) {
       for (const part of modelParts) writeHiddenMatrix(part.matrices, i);
       writeHiddenMatrix(billboardMatrices, i);
       continue;

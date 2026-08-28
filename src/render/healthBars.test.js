@@ -109,26 +109,26 @@ describe('health chip horizon fade', () => {
 });
 
 describe('health chip bars', () => {
-  it('gives each HP third its own full bar', () => {
+  it('uses one bar and changes color at 66% and 33%', () => {
     const full = chipBarState(1, UNIT_CHIP_COUNT);
     assert.equal(full.filled, 7);
     assert.equal(full.band, 0);
 
     const lastGreen = chipBarState(2 / 3 + 1e-4, UNIT_CHIP_COUNT);
-    assert.equal(lastGreen.filled, 1);
+    assert.equal(lastGreen.filled, 5);
     assert.equal(lastGreen.band, 0);
 
-    const yellowFull = chipBarState(2 / 3, UNIT_CHIP_COUNT);
-    assert.equal(yellowFull.filled, 7);
-    assert.equal(yellowFull.band, 1);
+    const yellowAtTwoThirds = chipBarState(2 / 3, UNIT_CHIP_COUNT);
+    assert.equal(yellowAtTwoThirds.filled, 5);
+    assert.equal(yellowAtTwoThirds.band, 1);
 
     const lastYellow = chipBarState(1 / 3 + 1e-4, UNIT_CHIP_COUNT);
-    assert.equal(lastYellow.filled, 1);
+    assert.equal(lastYellow.filled, 3);
     assert.equal(lastYellow.band, 1);
 
-    const redFull = chipBarState(1 / 3, UNIT_CHIP_COUNT);
-    assert.equal(redFull.filled, 7);
-    assert.equal(redFull.band, 2);
+    const redAtOneThird = chipBarState(1 / 3, UNIT_CHIP_COUNT);
+    assert.equal(redAtOneThird.filled, 3);
+    assert.equal(redAtOneThird.band, 2);
 
     const lastRed = chipBarState(0.01, UNIT_CHIP_COUNT);
     assert.equal(lastRed.filled, 1);
@@ -139,19 +139,20 @@ describe('health chip bars', () => {
   });
 
   it('puts big chips on the ends (4 big / 3 small on units)', () => {
-    assert.equal(chipSizeMul(0, UNIT_CHIP_COUNT), 1);
-    assert.equal(chipSizeMul(6, UNIT_CHIP_COUNT), 1);
-    assert.ok(chipSizeMul(1, UNIT_CHIP_COUNT) < 1);
+    assert.ok(chipSizeMul(0, UNIT_CHIP_COUNT) > chipSizeMul(1, UNIT_CHIP_COUNT));
+    assert.equal(chipSizeMul(6, UNIT_CHIP_COUNT), chipSizeMul(0, UNIT_CHIP_COUNT));
+    assert.ok(chipSizeMul(0, UNIT_CHIP_COUNT) < 1);
+    const bigMul = chipSizeMul(0, UNIT_CHIP_COUNT);
     let big = 0;
     let small = 0;
     for (let i = 0; i < UNIT_CHIP_COUNT; i++) {
-      if (chipSizeMul(i, UNIT_CHIP_COUNT) < 1) small++;
+      if (chipSizeMul(i, UNIT_CHIP_COUNT) < bigMul) small++;
       else big++;
     }
     assert.equal(big, 4);
     assert.equal(small, 3);
-    assert.equal(chipSizeMul(0, BUILDING_CHIP_COUNT), 1);
-    assert.equal(chipSizeMul(8, BUILDING_CHIP_COUNT), 1);
+    assert.equal(chipSizeMul(0, BUILDING_CHIP_COUNT), chipSizeMul(0, UNIT_CHIP_COUNT));
+    assert.equal(chipSizeMul(8, BUILDING_CHIP_COUNT), chipSizeMul(0, UNIT_CHIP_COUNT));
     assert.ok(chipSizeMul(1, BUILDING_CHIP_COUNT) < 1);
   });
 });

@@ -3,9 +3,12 @@
 
 import { MAX_WAYPOINTS } from './path.js';
 import { MAX_PATH_HITS } from './projectiles.js';
+import { getProjectileDef } from './projectileTypes.js';
+import { createPendingLightningStore } from './lightning.js';
 import { rebuildSpatialGrid } from './spatialGrid.js';
 import { ensureTreeArrays } from './trees.js';
-import { applyWorldStructureOccupancy, defaultRallyWorld, getBuildTime } from './buildings.js';
+import { applyRockOccupancyFromStock } from './scenery.js';
+import { applyWorldStructureOccupancy, defaultRallyWorld, getBuildTime, getBuildingHp } from './buildings.js';
 import { ORDER } from './world.js';
 import * as fx from './fixed.js';
 import { applySerializedTech, serializeTech } from './tech.js';
@@ -18,7 +21,7 @@ import { SPORE_PENDING_INITIAL } from './sporeBloom.js';
 export const CHECKPOINT_FORMAT = 1;
 
 const ENTITY_I32 = [
-  'px', 'py', 'vx', 'vy', 'faceX', 'faceY', 'tx', 'ty', 'speed', 'targetEntity', 'engagementTarget',
+  'px', 'py', 'vx', 'vy', 'faceX', 'faceY', 'tx', 'ty', 'speed', 'targetEntity', 'targetBuilding', 'engagementTarget',
   'navDestX', 'navDestY', 'lastPx', 'lastPy', 'hp', 'carriedBy', 'transportTarget',
   'dotSource', 'lobFromX', 'lobFromY', 'lobToX', 'lobToY', 'squadId',
   'gatherTile', 'carriedAmt',
@@ -32,7 +35,7 @@ const ENTITY_U16 = ['engagementMask', 'targetLoad'];
 const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
   'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
-  'gatherDefensive',
+  'gatherDefensive', 'gatherAct',
 ];
 
 /**
@@ -66,12 +69,12 @@ export function exportWorldCheckpoint(w, field, checksum) {
     checksum: checksum >>> 0,
     entities,
     projectiles: exportPoolStore(w.projectiles, {
-      u8: ['alive', 'type', 'owner', 'hitCount', 'despawnReason'],
+      u8: ['alive', 'type', 'owner', 'hitCount', 'despawnReason', 'power', 'launchWait'],
       u16: ['age', 'lifetime'],
       u32: ['generation'],
       i32: [
-        'source', 'target', 'px', 'py', 'vx', 'vy', 'aimX', 'aimY',
-        'wanderOx', 'wanderOy', 'damage',
+        'source', 'target', 'targetBuilding', 'px', 'py', 'vx', 'vy', 'aimX', 'aimY',
+        'wanderOx', 'wanderOy', 'damage', 'speed',
       ],
       pathHits: true,
     }),
@@ -97,6 +100,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     tech: serializeTech(w),
     resources: serializeResources(w),
     field: exportFieldMutable(field),
+    pendingLightning: exportPendingLightning(w.pendingLightning),
   };
 }
 
@@ -126,17 +130,33 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   }
   // Older checkpoints omit pathSlowAware — clear so restore stays geometric.
   if (!ent.arrays.pathSlowAware && w.pathSlowAware) w.pathSlowAware.fill(0);
+  if (!ent.arrays.gatherAct && w.gatherAct) w.gatherAct.fill(0);
+  if (!ent.arrays.targetBuilding && w.targetBuilding) w.targetBuilding.fill(-1);
 
   importPoolStore(w.projectiles, checkpoint.projectiles, {
-    u8: ['alive', 'type', 'owner', 'hitCount', 'despawnReason'],
+    u8: ['alive', 'type', 'owner', 'hitCount', 'despawnReason', 'power', 'launchWait'],
     u16: ['age', 'lifetime'],
     u32: ['generation'],
     i32: [
-      'source', 'target', 'px', 'py', 'vx', 'vy', 'aimX', 'aimY',
-      'wanderOx', 'wanderOy', 'damage',
+      'source', 'target', 'targetBuilding', 'px', 'py', 'vx', 'vy', 'aimX', 'aimY',
+      'wanderOx', 'wanderOy', 'damage', 'speed',
     ],
     pathHits: true,
   });
+  if (!checkpoint.projectiles?.arrays?.targetBuilding && w.projectiles.targetBuilding) {
+    w.projectiles.targetBuilding.fill(-1);
+  }
+  if (w.projectiles.speed && !checkpoint.projectiles?.arrays?.speed) {
+    for (let i = 0; i < w.projectiles.highWater; i++) {
+      if (!w.projectiles.alive[i]) continue;
+      w.projectiles.speed[i] = getProjectileDef(w.projectiles.type[i]).speed;
+      if (w.projectiles.power) w.projectiles.power[i] = 1;
+    }
+  }
+  if (w.projectiles.launchWait && !checkpoint.projectiles?.arrays?.launchWait) {
+    w.projectiles.launchWait.fill(0);
+  }
+  importPendingLightning(w, checkpoint.pendingLightning);
   if (w.fireZones && checkpoint.fireZones) {
     const need = Math.max(
       checkpoint.fireZones.highWater | 0,
@@ -178,7 +198,8 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   applySerializedTech(w, checkpoint.tech);
   applySerializedResources(w, checkpoint.resources);
   importFieldMutable(field, checkpoint.field);
-  // pass is not checkpointed; re-stamp building/agora footprints (rocks stay from init).
+  // pass is not checkpointed; shrink rock discs to remaining stock, then OR buildings.
+  applyRockOccupancyFromStock(field);
   applyWorldStructureOccupancy(field, w);
 
   // Render-only queues — empty after restore.
@@ -189,6 +210,46 @@ export function importWorldCheckpoint(w, field, checkpoint) {
 
   rebuildSpatialGrid(w.spatial, w);
   return w.tick;
+}
+
+function exportPendingLightning(store) {
+  if (!store?.count) return null;
+  return {
+    count: store.count | 0,
+    strikeAt: store.strikeAt.slice(0, store.count),
+    owner: store.owner.slice(0, store.count),
+    source: store.source.slice(0, store.count),
+    aimX: store.aimX.slice(0, store.count),
+    aimY: store.aimY.slice(0, store.count),
+    damage: store.damage.slice(0, store.count),
+    radius: (store.radius ?? []).slice(0, store.count),
+  };
+}
+
+function importPendingLightning(w, data) {
+  const store = w.pendingLightning ?? createPendingLightningStore();
+  w.pendingLightning = store;
+  store.count = 0;
+  store.strikeAt.length = 0;
+  store.owner.length = 0;
+  store.source.length = 0;
+  store.aimX.length = 0;
+  store.aimY.length = 0;
+  store.damage.length = 0;
+  if (store.radius) store.radius.length = 0;
+  else store.radius = [];
+  if (!data?.count) return;
+  const n = data.count | 0;
+  for (let i = 0; i < n; i++) {
+    store.strikeAt.push(data.strikeAt[i] | 0);
+    store.owner.push(data.owner[i] & 0xff);
+    store.source.push(data.source[i] | 0);
+    store.aimX.push(data.aimX[i] | 0);
+    store.aimY.push(data.aimY[i] | 0);
+    store.damage.push(data.damage[i] | 0);
+    store.radius.push((data.radius?.[i] ?? 0) | 0);
+  }
+  store.count = n;
 }
 
 function exportPoolStore(store, spec) {
@@ -335,6 +396,13 @@ function exportBuildings(buildings) {
     prodPaused: b.prodPaused | 0,
     built: b.built != null ? b.built | 0 : 1,
     buildProgress: b.buildProgress | 0,
+    buildHalfAcc: b.buildHalfAcc | 0,
+    villageSpawnAcc: b.villageSpawnAcc | 0,
+    engBonus: b.engBonus | 0,
+    engBonusUntil: b.engBonusUntil | 0,
+    attackCd: b.attackCd | 0,
+    maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type),
+    hp: b.hp != null ? b.hp | 0 : getBuildingHp(b.type),
   }));
 }
 
@@ -366,8 +434,15 @@ function importBuildings(w, data) {
       prodPaused: b.prodPaused | 0,
       built: b.built != null ? b.built | 0 : 1,
       buildProgress: b.buildProgress != null ? b.buildProgress | 0 : getBuildTime(type),
+      buildHalfAcc: b.buildHalfAcc | 0,
       buildTime: getBuildTime(type),
       tracks: [],
+      villageSpawnAcc: b.villageSpawnAcc | 0,
+      engBonus: b.engBonus | 0,
+      engBonusUntil: b.engBonusUntil | 0,
+      attackCd: b.attackCd | 0,
+      maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(type),
+      hp: b.hp != null ? b.hp | 0 : getBuildingHp(type),
     };
   });
 }
@@ -398,11 +473,19 @@ function importFieldMutable(field, data) {
   decodeTAInto(field.sceneryType, data.sceneryType);
   decodeTAInto(field.slowMask, data.slowMask);
   field.treeStockHash = data.treeStockHash | 0;
-  if (!field.rockStock || field.rockStock.length !== field.width * field.height) {
-    field.rockStock = new Uint8Array(field.width * field.height);
+  const nTiles = field.width * field.height;
+  if (!(field.rockStock instanceof Uint16Array) || field.rockStock.length !== nTiles) {
+    field.rockStock = new Uint16Array(nTiles);
   }
-  decodeTAInto(field.rockStock, data.rockStock);
+  if (data.rockStock?.t === 'Uint8Array') {
+    const legacy = new Uint8Array(nTiles);
+    decodeTAInto(legacy, data.rockStock);
+    field.rockStock.set(legacy);
+  } else {
+    decodeTAInto(field.rockStock, data.rockStock);
+  }
   field.rockStockHash = data.rockStockHash | 0;
+  if (Array.isArray(field.rockDirty)) field.rockDirty.length = 0;
   field.burningTrees = Array.from(data.burningTrees ?? []);
   if (Array.isArray(field.treeDirty)) field.treeDirty.length = 0;
 }

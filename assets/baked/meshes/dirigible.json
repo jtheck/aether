@@ -1,6 +1,6 @@
 {
   "sourceUrl": "/assets/models/dirigible.glb",
-  "version": 2,
+  "version": 3,
   "sockets": [
     {
       "name": "spawn_anchor",
@@ -117,6 +117,16 @@
       "materialName": "Material.001",
       "materialIndex": 0,
       "reverseWinding": true,
+      "boundMin": [
+        -3.104067325592041,
+        1.8279874324798584,
+        -6.31956672668457
+      ],
+      "boundMax": [
+        2.6336545944213867,
+        8.223297119140625,
+        7.172504901885986
+      ],
       "positions": {
         "offset": 0,
         "length": 2880,
@@ -139,77 +149,37 @@
       }
     },
     {
-      "materialName": "part1",
+      "materialName": "TeamColor",
       "materialIndex": 1,
       "reverseWinding": true,
+      "boundMin": [
+        -3.2748217582702637,
+        1.3786300420761108,
+        -2.6061296463012695
+      ],
+      "boundMax": [
+        2.737846612930298,
+        8.299886703491211,
+        2.798508882522583
+      ],
       "positions": {
         "offset": 34560,
-        "length": 72,
+        "length": 468,
         "type": "f32"
       },
       "normals": {
-        "offset": 34848,
-        "length": 72,
+        "offset": 36432,
+        "length": 468,
         "type": "f32"
       },
       "indices": {
-        "offset": 35136,
-        "length": 36,
+        "offset": 38304,
+        "length": 276,
         "type": "u32"
       },
       "uvs": {
-        "offset": 35280,
-        "length": 48,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "TeamColor",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 35472,
-        "length": 198,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 36264,
-        "length": 198,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 37056,
-        "length": 120,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 37536,
-        "length": 132,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "TeamColor",
-      "materialIndex": 1,
-      "reverseWinding": true,
-      "positions": {
-        "offset": 38064,
-        "length": 198,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 38856,
-        "length": 198,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 39648,
-        "length": 120,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 40128,
-        "length": 132,
+        "offset": 39408,
+        "length": 312,
         "type": "f32"
       }
     }

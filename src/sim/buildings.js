@@ -6,6 +6,7 @@ import {
   TILE,
   HALF_TILE,
   TILE_SIZE_F,
+  TERRAIN,
   worldToTile,
   tileCenterX,
   tileCenterY,
@@ -13,16 +14,19 @@ import {
   isPassable,
   findPath,
   snapToPassable,
+  isTerrainSlowTile,
 } from './field.js';
 import { fellTreeAt } from './trees.js';
+import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
 import { UNIT, getUnitDef, isFlyer, getUnitCost } from './unitTypes.js';
+import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
 import { MAX_WAYPOINTS, queuePath } from './path.js';
 import { spendResources, addResource } from './resources.js';
 
 /** Scratch buffers for render-side rally A* (main thread only). */
-const _rallyWx = new Int32Array(MAX_WAYPOINTS);
-const _rallyWy = new Int32Array(MAX_WAYPOINTS);
+const _rallyWx = new Int32Array(64);
+const _rallyWy = new Int32Array(64);
 import { clearEngagement } from './engagement.js';
 import { isCarried } from './transport.js';
 import { ownerHasTech, TECH_BY_ID, getTechCost } from './tech.js';
@@ -56,6 +60,8 @@ export const BUILDING_SPAWN_LOCAL = Object.freeze({
 export const TRAIN_TICKS = 50;
 /** Research time per upgrade (~same as one unit; shares multi-track slowdown). */
 export const RESEARCH_TICKS = 50;
+/** Free villager from a completed village (~24s at 20 Hz). */
+export const VILLAGE_VILLAGER_TICKS = 480;
 
 /**
  * Rotate a model-local XZ offset into world XZ (Y-up yaw, matches render writeMatrix).
@@ -195,10 +201,54 @@ export function getBuildingCost(typeId) {
   return BUILDING_COST[typeId] ?? {};
 }
 
+/** v1 building `requires` — own one of each listed type (construction sites count). */
+export const BUILDING_REQUIRES = Object.freeze({
+  tower: Object.freeze(['camp']),
+  tavern: Object.freeze(['camp']),
+  lab: Object.freeze(['camp']),
+  barracks: Object.freeze(['village']),
+  workshop: Object.freeze(['village']),
+});
+
+const NO_REQUIRES = Object.freeze([]);
+
+/** @param {string} typeId */
+export function getBuildingRequires(typeId) {
+  return BUILDING_REQUIRES[typeId] ?? NO_REQUIRES;
+}
+
 /**
- * Construction time in builder-ticks (work by ONE villager). Two builders halve
- * the wall-clock (progress accrues at the number of on-site builders, capped at
- * MAX_BUILDERS). Roughly scales with cost/tier. See construction.js.
+ * @param {{ owner?: number, type?: string }[] | null | undefined} buildings
+ * @param {number} owner
+ * @param {string} typeId
+ */
+export function ownerHasBuildingType(buildings, owner, typeId) {
+  if (!buildings?.length) return false;
+  const o = owner | 0;
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) === o && b.type === typeId) return true;
+  }
+  return false;
+}
+
+/**
+ * @param {{ owner?: number, type?: string }[] | null | undefined} buildings
+ * @param {number} owner
+ * @param {string} typeId
+ */
+export function ownerMeetsBuildingRequires(buildings, owner, typeId) {
+  const reqs = getBuildingRequires(typeId);
+  for (let i = 0; i < reqs.length; i++) {
+    if (!ownerHasBuildingType(buildings, owner, reqs[i])) return false;
+  }
+  return true;
+}
+
+/**
+ * Construction time in builder-ticks (work by ONE villager). Two villagers
+ * halve the wall-clock; an engineer counts as a slot at half speed. See
+ * construction.js.
  */
 export const BUILD_TIME = Object.freeze({
   // basic
@@ -222,6 +272,38 @@ export const BUILD_TIME = Object.freeze({
 });
 
 const DEFAULT_BUILD_TIME = 100;
+
+/** Hit points by type — a warrior (10 dmg) should take a while on a camp. */
+export const BUILDING_HP = Object.freeze({
+  camp: 280,
+  village: 420,
+  farm: 220,
+  silo: 200,
+  mine: 300,
+  tower: 380,
+  tavern: 320,
+  barracks: 480,
+  workshop: 450,
+  lab: 340,
+  factory: 560,
+  church: 400,
+  moonwell: 280,
+  perch: 280,
+  grove: 360,
+});
+
+const DEFAULT_BUILDING_HP = 300;
+
+export function getBuildingHp(typeId) {
+  return BUILDING_HP[typeId] ?? DEFAULT_BUILDING_HP;
+}
+
+export function isBuildingAlive(b) {
+  if (!b) return false;
+  // Older checkpoints / tests omit hp — treat as standing.
+  if (b.hp == null) return true;
+  return (b.hp | 0) > 0;
+}
 
 /** Builder-ticks to raise a building type (single-worker baseline). */
 export function getBuildTime(typeId) {
@@ -276,12 +358,12 @@ export const UPGRADE_DEFS = /** @type {const} */ ({
  */
 export const BUILDING_MENUS = {
   camp: { units: ['myco'] },
-  village: { units: ['villager', 'monk'] },
+  village: { units: ['engineer', 'monk'] },
   tower: { units: ['wizard'] },
   tavern: { units: ['warlock'], upgrades: ['patronage'] },
   lab: { upgrades: ['artillery'] },
   barracks: { units: ['warrior', 'archer'], upgrades: ['drayage'] },
-  workshop: { units: ['wagon', 'engineer'], upgrades: ['armor', 'scribes'] },
+  workshop: { units: ['wagon'], upgrades: ['armor', 'scribes'] },
   factory: { units: ['apc'] },
   church: { units: ['priest'] },
   moonwell: { upgrades: ['prospecting', 'stewardship'] },
@@ -292,27 +374,34 @@ export const BUILDING_MENUS = {
 /**
  * Resolved menu items for a building type (icons + labels for the action radial).
  * @param {string} typeId
- * @returns {{ units: { id: string, name: string, unitType: number }[], upgrades: { id: string, name: string }[] } | null}
+ * @returns {{ units: { id: string, name: string, unitType: number, cost: Record<string, number> }[], upgrades: { id: string, name: string, cost: Record<string, number> }[] } | null}
  */
 export function getBuildingMenu(typeId) {
   const raw = BUILDING_MENUS[typeId];
   if (!raw) return null;
 
-  /** @type {{ id: string, name: string, unitType: number }[]} */
+  /** @type {{ id: string, name: string, unitType: number, cost: Record<string, number> }[]} */
   const units = [];
   for (const key of raw.units ?? []) {
     const unitType = BUILDING_MENU_UNITS[key];
     if (unitType == null) continue;
     const def = getUnitDef(unitType);
-    units.push({ id: key, name: def?.name ?? key, unitType });
+    const pop = unitPopCost(unitType);
+    const cost = pop > 0 ? { ...getUnitCost(unitType), pop } : getUnitCost(unitType);
+    units.push({
+      id: key,
+      name: def?.name ?? key,
+      unitType,
+      cost,
+    });
   }
 
-  /** @type {{ id: string, name: string }[]} */
+  /** @type {{ id: string, name: string, cost: Record<string, number> }[]} */
   const upgrades = [];
   for (const key of raw.upgrades ?? []) {
     if (!(key in UPGRADE_MODEL_URLS)) continue;
     const def = UPGRADE_DEFS[/** @type {keyof typeof UPGRADE_DEFS} */ (key)];
-    upgrades.push({ id: key, name: def?.name ?? key });
+    upgrades.push({ id: key, name: def?.name ?? key, cost: getTechCost(key) });
   }
 
   if (!units.length && !upgrades.length) return null;
@@ -531,6 +620,83 @@ export function applyStructureOccupancyAt(field, typeId, xFixed, zFixed, built =
   }
 }
 
+function isSolidWater(field, i) {
+  return field.terrainTypes?.[i] === TERRAIN.WATER && field.tileType?.[i] === 12;
+}
+
+function otherLiveBuildingCovers(field, buildings, i, exceptIndex, coordsAreFloat) {
+  if (!buildings) return false;
+  for (let bi = 0; bi < buildings.length; bi++) {
+    if (bi === exceptIndex) continue;
+    const b = buildings[bi];
+    if (!isBuildingAlive(b)) continue;
+    const bx = coordsAreFloat ? fx.fromFloat(b.x) : b.x;
+    const bz = coordsAreFloat ? fx.fromFloat(b.z) : b.z;
+    let hit = false;
+    forEachFootprintTile(field, b.type, bx, bz, (_tx, _tz, ti) => {
+      if (ti === i) hit = true;
+    });
+    if (hit) return true;
+  }
+  return false;
+}
+
+function rockCovers(field, tx, tz) {
+  const { width, height, sceneryType, rockStock } = field;
+  if (!sceneryType) return false;
+  for (let dz = -2; dz <= 2; dz++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const cx = tx + dx;
+      const cz = tz + dz;
+      if (cx < 0 || cz < 0 || cx >= width || cz >= height) continue;
+      const ti = cz * width + cx;
+      const kind = sceneryType[ti];
+      if (kind < SCENERY.ROCK_PLAIN) continue;
+      const r = rockFootprintRadiusForStock(kind, rockStock?.[ti] | 0);
+      if (r < 0) continue;
+      if (dx * dx + dz * dz <= (r + 0.5) ** 2) return true;
+    }
+  }
+  return false;
+}
+
+function tileKeepsSlow(field, i) {
+  return !!(
+    isTerrainSlowTile(field, i)
+    || field.rockSlowMask?.[i]
+    || field.tableSlowMask?.[i]
+    || field.sceneryType?.[i] === SCENERY.TREE
+    || (field.treeStock?.[i] | 0) > 0
+  );
+}
+
+/**
+ * Open a ruined building's tiles. Never unblocks water / table / rocks / other
+ * live buildings. Incremental — does not restamp the whole map.
+ */
+export function clearStructureOccupancyAt(field, typeId, xFixed, zFixed, opts = {}) {
+  if (!field?.pass || !getBuildingFootprint(typeId)) return;
+  const buildings = opts.buildings;
+  const exceptIndex = opts.exceptIndex ?? -1;
+  const coordsAreFloat = !!opts.coordsAreFloat;
+  forEachFootprintTile(field, typeId, xFixed, zFixed, (tx, tz, i, mode) => {
+    if (mode === 'block') {
+      if (
+        !(field.activeMask && field.activeMask[i] === 0)
+        && !isSolidWater(field, i)
+        && !field.tableEdge?.[i]
+        && !rockCovers(field, tx, tz)
+        && !otherLiveBuildingCovers(field, buildings, i, exceptIndex, coordsAreFloat)
+      ) {
+        field.pass[i] = 1;
+      }
+    }
+    if (field.structureSlowMask) field.structureSlowMask[i] = 0;
+    if (field.foodNode) field.foodNode[i] = 0;
+    field.slowMask[i] = tileKeepsSlow(field, i) ? 1 : 0;
+  });
+}
+
 /**
  * Apply occupancy for every agora + placed building (OR into field).
  * @param {object} field
@@ -549,6 +715,7 @@ export function applyWorldStructureOccupancy(field, world) {
   if (buildings?.length) {
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
+      if (!isBuildingAlive(b)) continue;
       applyStructureOccupancyAt(field, b.type, b.x, b.z, b.built != null ? b.built : 1);
     }
   }
@@ -563,11 +730,21 @@ export function applySerializedBuildingOccupancy(field, buildings) {
   if (!field || !buildings?.length) return;
   for (let i = 0; i < buildings.length; i++) {
     const b = buildings[i];
+    const x = fx.fromFloat(b.x);
+    const z = fx.fromFloat(b.z);
+    if (!isBuildingAlive(b)) {
+      clearStructureOccupancyAt(field, b.type, x, z, {
+        buildings,
+        exceptIndex: i,
+        coordsAreFloat: true,
+      });
+      continue;
+    }
     applyStructureOccupancyAt(
       field,
       b.type,
-      fx.fromFloat(b.x),
-      fx.fromFloat(b.z),
+      x,
+      z,
       b.built != null ? b.built : 1,
     );
   }
@@ -604,10 +781,21 @@ export function createBuilding(opts) {
     built,
     /** Builder-ticks accrued (see construction.js). */
     buildProgress: built ? buildTime : 0,
+    /** Leftover half-tick from engineer work (0 or 1). */
+    buildHalfAcc: 0,
     /** Builder-ticks required to raise this building. */
     buildTime,
     /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
     tracks: [],
+    /** Ticks accrued toward the next free village villager (0 while a site). */
+    villageSpawnAcc: 0,
+    /** Last engineer stack on this drop-off, held until engBonusUntil. */
+    engBonus: 0,
+    engBonusUntil: 0,
+    /** Ticks until a watchtower may fire again. */
+    attackCd: 0,
+    maxHp: getBuildingHp(type),
+    hp: opts.hp != null ? opts.hp | 0 : getBuildingHp(type),
   };
 }
 
@@ -809,6 +997,7 @@ export function ejectUnitsFromFootprint(w, field, typeId, xFixed, zFixed) {
     w.tx[i] = destX;
     w.ty[i] = destY;
     w.targetEntity[i] = -1;
+    if (w.targetBuilding) w.targetBuilding[i] = -1;
     clearEngagement(w, i);
     w.hasTarget[i] = 1;
     w.vx[i] = 0;
@@ -835,6 +1024,7 @@ export function applyPlaceBuilding(w, field, cmd) {
   const z = snapped.z;
   const yaw = cmd.yaw != null ? cmd.yaw | 0 : 0;
   if (field && !canPlaceBuildingAt(field, type, x, z)) return -1;
+  if (!ownerMeetsBuildingRequires(w.buildings, owner, type)) return -1;
   if (!spendResources(w, owner, getBuildingCost(type))) return -1;
   w.buildings.push({
     owner,
@@ -850,8 +1040,15 @@ export function applyPlaceBuilding(w, field, cmd) {
     // Placed as an inert construction site — villagers raise it (construction.js).
     built: 0,
     buildProgress: 0,
+    buildHalfAcc: 0,
     buildTime: getBuildTime(type),
     tracks: [],
+    villageSpawnAcc: 0,
+    engBonus: 0,
+    engBonusUntil: 0,
+    attackCd: 0,
+    maxHp: getBuildingHp(type),
+    hp: getBuildingHp(type),
   });
   if (field) {
     // Block tiles now (the foundation occupies space) but defer the farm food
@@ -1065,6 +1262,8 @@ export function serializeBuildings(buildings) {
       count: t.count | 0,
       progress: Number(t.progress) || 0,
     })),
+    maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type),
+    hp: b.hp != null ? b.hp | 0 : getBuildingHp(b.type),
   }));
 }
 
@@ -1091,6 +1290,13 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.prodPaused | 0);
     mix(b.built != null ? b.built | 0 : 1);
     mix(b.buildProgress | 0);
+    mix(b.buildHalfAcc | 0);
+    mix(b.villageSpawnAcc | 0);
+    mix(b.engBonus | 0);
+    mix(b.engBonusUntil | 0);
+    mix(b.attackCd | 0);
+    mix(b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type));
+    mix(b.hp != null ? b.hp | 0 : getBuildingHp(b.type));
     const tracks = b.tracks ?? [];
     mix(tracks.length);
     for (let ti = 0; ti < tracks.length; ti++) {

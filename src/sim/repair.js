@@ -61,6 +61,7 @@ export function beginRepair(w, engineer, target) {
   }
   w.order[engineer] = ORDER.REPAIR;
   w.targetEntity[engineer] = target;
+  if (w.targetBuilding) w.targetBuilding[engineer] = -1;
   clearEngagement(w, engineer);
   w.hasTarget[engineer] = 0;
   w.transportTarget[engineer] = -1;
@@ -70,6 +71,7 @@ export function beginRepair(w, engineer, target) {
 
 function endRepair(w, i) {
   w.targetEntity[i] = -1;
+  if (w.targetBuilding) w.targetBuilding[i] = -1;
   clearEngagement(w, i);
   clearPath(w, i);
   w.order[i] = ORDER.IDLE;

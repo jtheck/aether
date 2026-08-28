@@ -1,5 +1,5 @@
 // Economic AI — a passive, rule-bound player that gathers, expands drop-offs,
-// farms, and trains villagers, all while paying real costs. Verified headless +
+// and farms (villagers trickle from the village). Verified headless +
 // deterministic (two runs must land on the same checksum).
 
 import assert from 'node:assert/strict';
@@ -76,7 +76,7 @@ function macrosAnEconomy() {
   const { w } = run(101, 1200);
   assert.ok(countType(w, 'village') >= 1, 'AI built a village');
   assert.ok(countType(w, 'farm') >= 1, 'AI built at least one farm');
-  assert.ok(countVillagers(w) > 3, `AI trained villagers (have ${countVillagers(w)})`);
+  assert.ok(countVillagers(w) > 3, `village trickled villagers (have ${countVillagers(w)})`);
   const gathered =
     getResource(w, AI, 'wood') +
     getResource(w, AI, 'stone') +

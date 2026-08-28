@@ -13,6 +13,7 @@
 // - Commands and tick confirms must be owned by the userId for their playerId.
 
 import { p2pDevModeFromLocation } from './net.js';
+import { getPlayerName } from './settings.js';
 import { replayCatchUp, formatMatchTime, matchSecondsFromTick } from './catchup.js';
 import {
   createChunkAssembler,
@@ -171,6 +172,9 @@ export function createKothShard(options = {}) {
   // Host and spectators all announce the same matchId with different active
   // counts, so we keep the MAX active count (the host's view) per match.
   const liveMatches = new Map();
+  // Set when the player picks a listed lobby or starts their own. Stops
+  // convergeToBestMatch from yanking them onto a "stronger" match.
+  let pinnedMatchId = null;
   /** matchId -> Set<userId> everyone who has announced that live match */
   const matchAnnouncers = new Map();
   /** userIds seen in the current match lobby (player_join / player_rejoin). */
@@ -202,6 +206,8 @@ export function createKothShard(options = {}) {
   /** @type {string[]} */
   let offerEligible = [];
   let localOfferEligible = false;
+  /** Last offer HUD string — presence heartbeats must not retrigger it. */
+  let lastOfferStatus = '';
   let offerExpandTimer = null;
   let lastCheckpointTickPublished = 0;
   const checkpointAssembler = createChunkAssembler();
@@ -223,6 +229,7 @@ export function createKothShard(options = {}) {
       appState,
       roster: cloneSlots(roster),
       humanPlayers: [...matchHumanPlayers],
+      aiPlayers: [],
       role,
       matchId,
       phase,
@@ -342,6 +349,7 @@ export function createKothShard(options = {}) {
         activeCount: countActive(roster),
         tick: session?.confirmedTick ?? 0,
         from: localUserId,
+        name: getPlayerName(),
         role,
         appState,
         v: KOTH_PROTOCOL_VERSION,
@@ -488,7 +496,10 @@ export function createKothShard(options = {}) {
       (appState === KOTH_APP_STATE.QUEUED || appState === KOTH_APP_STATE.SPECTATOR) &&
       catchUpReady
     ) {
-      onStatus(reason === 'full' ? 'Match full — spectating' : 'Seat claimed — spectating');
+      lastOfferStatus = reason === 'full' ? 'Match full — spectating' : 'Seat claimed — spectating';
+      onStatus(lastOfferStatus);
+    } else {
+      lastOfferStatus = '';
     }
   }
 
@@ -497,23 +508,26 @@ export function createKothShard(options = {}) {
     offerEligible = Array.isArray(eligible) ? [...eligible] : [];
     localOfferEligible = offerEligible.some((id) => userIdsMatch(id, localUserId));
     if (role === 'spectator' && catchUpReady && !pendingLocalJoin) {
+      let nextStatus = '';
       if (countActive(roster) >= MAX_ACTIVE_PLAYERS) {
         appState = KOTH_APP_STATE.QUEUED;
-        onStatus('Match full — waiting for a seat…');
+        nextStatus = 'Match full — waiting for a seat…';
       } else if (localOfferEligible) {
         appState = KOTH_APP_STATE.SPECTATOR;
-        onStatus(
+        nextStatus =
           observerDepth > 1
             ? `Seat offered (L${observerDepth}) — J to claim`
-            : 'Seat offered — J to claim',
-        );
+            : 'Seat offered — J to claim';
       } else {
         appState = KOTH_APP_STATE.QUEUED;
-        onStatus(
+        nextStatus =
           observerDepth > 0
             ? `Waiting for offer (L${observerDepth})…`
-            : 'Waiting for seat offer…',
-        );
+            : 'Waiting for seat offer…';
+      }
+      if (nextStatus !== lastOfferStatus) {
+        lastOfferStatus = nextStatus;
+        onStatus(nextStatus);
       }
       emitShard();
     }
@@ -698,7 +712,13 @@ export function createKothShard(options = {}) {
   }
 
   function recordLiveMatch(data) {
-    if (!data?.matchId || data.phase !== SHARD_PHASE.LIVE) return;
+    if (!data?.matchId) return;
+    if (data.gone) {
+      liveMatches.delete(data.matchId);
+      matchAnnouncers.delete(data.matchId);
+      return;
+    }
+    if (data.phase !== SHARD_PHASE.LIVE) return;
     if (data.from) noteMatchAnnouncer(data.matchId, data.from);
     const now = Date.now();
     const active = data.activeCount ?? 0;
@@ -708,6 +728,7 @@ export function createKothShard(options = {}) {
       liveMatches.set(data.matchId, {
         matchId: data.matchId,
         from: data.from ?? null,
+        hostName: typeof data.name === 'string' ? data.name : '',
         activeCount: active,
         tick,
         ts: now,
@@ -725,9 +746,39 @@ export function createKothShard(options = {}) {
     if (active >= prev.activeCount) {
       prev.activeCount = active;
       if (data.from) prev.from = data.from;
+      if (typeof data.name === 'string' && data.name) prev.hostName = data.name;
     } else if (!prev.from && data.from) {
       prev.from = data.from;
     }
+  }
+
+  function pruneLiveMatches(now = Date.now()) {
+    for (const [id, m] of [...liveMatches]) {
+      if (now - m.ts > LIVE_MATCH_TTL_MS) {
+        liveMatches.delete(id);
+        matchAnnouncers.delete(id);
+      }
+    }
+  }
+
+  function listLiveLobbies() {
+    const now = Date.now();
+    pruneLiveMatches(now);
+    const out = [];
+    for (const m of liveMatches.values()) {
+      if (!m.from) continue;
+      if (isStaleGhostMatch(m, now)) continue;
+      out.push({
+        matchId: m.matchId,
+        from: m.from,
+        hostName: m.hostName ?? '',
+        activeCount: m.activeCount,
+        tick: m.tick,
+        seats: MAX_ACTIVE_PLAYERS,
+      });
+    }
+    out.sort((a, b) => compareLiveMatches(b, a));
+    return out;
   }
 
   // Best live match to belong to: most active armies, then highest tick (live
@@ -788,6 +839,7 @@ export function createKothShard(options = {}) {
   // peer stranded on a host that has since yielded re-converges to the real one.
   function convergeToBestMatch() {
     if (phase !== SHARD_PHASE.LIVE) return false;
+    if (pinnedMatchId && matchId === pinnedMatchId) return false;
     const myActive = role === 'spectator' ? 0 : countActive(roster);
     if (role === 'player' && myActive >= MIN_LIVE_PLAYERS) return false;
     // Never tear down a live match that already has a P2P link or running sim.
@@ -1493,6 +1545,7 @@ export function createKothShard(options = {}) {
     localPlayerId = 0;
     role = 'player';
     appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
+    pinnedMatchId = null;
     catchUpReady = true;
     onStatus(`${reason} — new staging …${shortId(matchId)}`);
     onLiveStart({
@@ -1509,6 +1562,117 @@ export function createKothShard(options = {}) {
     });
     emitShard();
     broadcastPresence();
+  }
+
+  function returnToPrivateSandbox() {
+    cancelDiscoverStart();
+    clearCatchupOfferTimer();
+    if (offerExpandTimer) {
+      clearTimeout(offerExpandTimer);
+      offerExpandTimer = null;
+    }
+    if (catchupRetryTimer) {
+      clearTimeout(catchupRetryTimer);
+      catchupRetryTimer = null;
+    }
+    if (broadcastCatchupTimer) {
+      clearTimeout(broadcastCatchupTimer);
+      broadcastCatchupTimer = null;
+    }
+    if (bootstrapTimer) {
+      clearInterval(bootstrapTimer);
+      bootstrapTimer = null;
+    }
+    resetDialState();
+    pinnedMatchId = null;
+    matchHostUserId = null;
+    liveStartKey = '';
+    activeCatchupRequestId = '';
+    catchupInFlight = false;
+    pendingLocalJoin = null;
+    pendingAcceptedJoins.clear();
+    pendingPresentationJoinTicks.clear();
+    offerEpoch = 0;
+    offerEligible = [];
+    localOfferEligible = false;
+    assignedSponsorId = null;
+    observerDepth = 0;
+    observerTree.nodes.clear();
+    observerTree.childrenOf.clear();
+    lobbyPeers.clear();
+    clearSavedMatch();
+    matchId = generateMatchId();
+    seed = 0x1234;
+    roster = createEmptyRoster();
+    roster[0] = { userId: localUserId, state: 'active', playerId: 0 };
+    localPlayerId = 0;
+    role = 'player';
+    appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
+    phase = SHARD_PHASE.SANDBOX;
+    catchUpReady = true;
+    session?.setLocalPlayerId?.(0);
+    session?.setRole?.('player');
+    if (session) session.pauseLockstep = false;
+    joinMatchmakingLobby();
+    emitShard();
+    broadcastPresence();
+    onStatus('Left lobby');
+  }
+
+  function leaveLiveLobby() {
+    if (appState === KOTH_APP_STATE.PRIVATE_SANDBOX && phase !== SHARD_PHASE.LIVE) {
+      return false;
+    }
+    const leavingId = matchId;
+    const wasLive = phase === SHARD_PHASE.LIVE;
+    const wasPlayer = wasLive && role === 'player';
+    const othersRemain = wasPlayer && countActive(roster) > 1;
+
+    if (wasPlayer && othersRemain && localPlayerId >= 0) {
+      const tick = (session?.confirmedTick ?? 0) + 2;
+      const pid = localPlayerId;
+      roster = releaseUser(roster, localUserId, true);
+      sendAll({ type: MSG.SLOT_DEFEAT, matchId: leavingId, playerId: pid, userId: localUserId, tick });
+    } else if (wasLive && wasPlayer) {
+      sendAll({ type: MSG.SHARD_GONE, matchId: leavingId });
+      broadcastPresence({ gone: true });
+    }
+
+    liveMatches.delete(leavingId);
+    matchAnnouncers.delete(leavingId);
+    leaveShardLobby(shardLobbyName(leavingId));
+    returnToPrivateSandbox();
+    return true;
+  }
+
+  function getLobbyPresence() {
+    const browsing = appState === KOTH_APP_STATE.PRIVATE_SANDBOX && phase !== SHARD_PHASE.LIVE;
+    const live = liveMatches.get(matchId);
+    const hosting = phase === SHARD_PHASE.LIVE && role === 'player';
+    return {
+      browsing,
+      inLobby: !browsing,
+      matchId,
+      phase,
+      role,
+      appState,
+      hosting,
+      hostName: hosting ? getPlayerName() : (live?.hostName ?? ''),
+      activeCount: hosting || phase === SHARD_PHASE.LIVE
+        ? countActive(roster)
+        : (live?.activeCount ?? 0),
+      seats: MAX_ACTIVE_PLAYERS,
+      tick: session?.confirmedTick ?? live?.tick ?? 0,
+      canJoin: (
+        catchUpReady &&
+        !activeCatchupRequestId &&
+        role === 'spectator' &&
+        appState !== KOTH_APP_STATE.JOINING
+      ),
+      joinLabel: countActive(roster) >= MAX_ACTIVE_PLAYERS
+        ? 'Match Full'
+        : localOfferEligible ? 'Claim Seat' : 'Waiting for Offer',
+    };
   }
 
   function reconcileMatchId(incomingMatchId, incomingPhase = SHARD_PHASE.SANDBOX) {
@@ -1563,6 +1727,7 @@ export function createKothShard(options = {}) {
       mode: 'koth',
       activeSlots: matchStartSlots,
       humanPlayers: [...matchHumanPlayers],
+      aiPlayers: [],
       armyPerSide,
     };
   }
@@ -2057,8 +2222,8 @@ export function createKothShard(options = {}) {
   // very next player, discovers this match, spectates, and joins through the
   // normal pipeline; the first join flips solo→2 and resets to a fresh two-army
   // game (see resetForJoin). This is the ONLY path that creates a public match.
-  async function startSoloLive() {
-    const existing = bestLiveMatch();
+  async function startSoloLive(opts = {}) {
+    const existing = opts.forceNew ? null : bestLiveMatch();
     if (existing?.matchId && existing.from && existing.matchId !== matchId) {
       if (DEBUG_KOTH) {
         console.info('[KOTH] solo-live aborted — joining existing match', {
@@ -2364,11 +2529,11 @@ export function createKothShard(options = {}) {
       appState = countActive(roster) >= MAX_ACTIVE_PLAYERS
         ? KOTH_APP_STATE.QUEUED
         : KOTH_APP_STATE.SPECTATOR;
-      onStatus(
+      lastOfferStatus =
         countActive(roster) >= MAX_ACTIVE_PLAYERS
           ? 'Match full — waiting for a seat…'
-          : 'Seat taken — waiting for next offer…',
-      );
+          : 'Seat taken — waiting for next offer…';
+      onStatus(lastOfferStatus);
       emitShard();
     }
   }
@@ -3477,6 +3642,34 @@ export function createKothShard(options = {}) {
 
       sendTickConfirm(1);
     },
+
+    listLiveLobbies,
+
+    joinLiveLobby(id, from) {
+      if (!id) return false;
+      const live = liveMatches.get(id);
+      const host = live?.from || from;
+      if (!host) return false;
+      pinnedMatchId = id;
+      return followLivePresence({
+        matchId: id,
+        from: host,
+        phase: SHARD_PHASE.LIVE,
+      });
+    },
+
+    startLiveLobby() {
+      if (phase === SHARD_PHASE.LIVE) return;
+      cancelDiscoverStart();
+      clearSavedMatch();
+      matchId = generateMatchId();
+      seed = hashSeed(matchId);
+      pinnedMatchId = matchId;
+      return startSoloLive({ forceNew: true });
+    },
+
+    leaveLiveLobby,
+    getLobbyPresence,
 
     startOrJoinLive() {
       if (phase === SHARD_PHASE.LIVE) return;

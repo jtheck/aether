@@ -4,6 +4,11 @@
 import { createEngine, createSceneContext, loadGltf, stopAnimation } from '../vendor/lite/liteVendor.js';
 import { bakeGltfParts, UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { packBinary, bakedMeshStem } from '../render/bakedAssets.js';
+import {
+  BAKE_MESH_VERSION,
+  compactImages,
+  mergeSlicedParts,
+} from '../render/bakeMerge.js';
 import { allMeshBakeUrls, allVatBakeDefs } from './bakeUrls.js';
 import { collectVatBakeGroups } from '../render/vatUnits.js';
 import {
@@ -52,9 +57,30 @@ async function bakeMeshPackage(engine, url, filesOut) {
     }),
   ]);
   const { parts, sockets, sources } = bakeResult;
-  const { materials, images } = extractGlbMaterials(glbBuf);
+  const extracted = extractGlbMaterials(glbBuf);
 
-  const imageFiles = images.map((img, idx) => {
+  /** @type {{ positions: Float32Array, normals: Float32Array, indices: Uint32Array, uvs: Float32Array | null, reverseWinding: boolean, materialIndex: number, materialName: string }[]} */
+  const sliced = [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    const src = sources[i];
+    const matName = String(src?.material?.name || '').replace(/_clone$/i, '');
+    let materialIndex = extracted.materials.findIndex((m) => m.name === matName);
+    if (materialIndex < 0) materialIndex = Math.min(i, Math.max(0, extracted.materials.length - 1));
+    sliced.push({
+      positions: p.positions,
+      normals: p.normals,
+      indices: p.indices instanceof Uint32Array ? p.indices : new Uint32Array(p.indices),
+      uvs: p.uvs,
+      reverseWinding: p.reverseWinding !== false,
+      materialIndex,
+      materialName: matName || `part${i}`,
+    });
+  }
+  const merged = mergeSlicedParts(sliced, extracted.materials);
+  const compacted = compactImages(merged.materials, extracted.images);
+
+  const imageFiles = compacted.images.map((img, idx) => {
     if (!img.bytes?.length) return null;
     const file = `img-${idx}.${mimeExt(img.mimeType)}`;
     filesOut[`meshes/${stem}/${file}`] = img.bytes.buffer.slice(
@@ -65,40 +91,36 @@ async function bakeMeshPackage(engine, url, filesOut) {
   });
 
   const entries = [];
-  const partMetas = [];
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i];
-    const indices = p.indices instanceof Uint32Array ? p.indices : new Uint32Array(p.indices);
+  for (let i = 0; i < merged.parts.length; i++) {
+    const p = merged.parts[i];
     const prefix = `p${i}`;
     entries.push({ key: `${prefix}_pos`, data: p.positions });
     entries.push({ key: `${prefix}_nrm`, data: p.normals });
-    entries.push({ key: `${prefix}_idx`, data: indices });
+    entries.push({ key: `${prefix}_idx`, data: p.indices });
     if (p.uvs) entries.push({ key: `${prefix}_uvs`, data: p.uvs });
   }
   const { buffer, spans } = packBinary(entries);
-  for (let i = 0; i < parts.length; i++) {
+  const partMetas = merged.parts.map((p, i) => {
     const prefix = `p${i}`;
-    const src = sources[i];
-    const matName = String(src?.material?.name || '').replace(/_clone$/i, '');
-    let materialIndex = materials.findIndex((m) => m.name === matName);
-    if (materialIndex < 0) materialIndex = Math.min(i, Math.max(0, materials.length - 1));
-    partMetas.push({
-      materialName: matName || `part${i}`,
-      materialIndex,
-      reverseWinding: true,
+    return {
+      materialName: p.materialName,
+      materialIndex: p.materialIndex,
+      reverseWinding: p.reverseWinding,
+      boundMin: p.boundMin,
+      boundMax: p.boundMax,
       positions: spans[`${prefix}_pos`],
       normals: spans[`${prefix}_nrm`],
       indices: spans[`${prefix}_idx`],
       uvs: spans[`${prefix}_uvs`] || null,
-    });
-  }
+    };
+  });
   return {
     stem,
     json: {
       sourceUrl: url,
-      version: 2,
+      version: BAKE_MESH_VERSION,
       sockets,
-      materials,
+      materials: compacted.materials,
       images: imageFiles,
       parts: partMetas,
     },
@@ -111,7 +133,7 @@ async function bakeMeshPackage(engine, url, filesOut) {
  * CPU-sample bone matrices the same way Lite's bakeVatMany does, without relying
  * on GPU texture readback (Lite textures are CopyDst|TextureBinding only).
  * @param {object} engine
- * @param {{ url: string, idleClip: string, walkClip: string, carryClip?: string }} def
+ * @param {{ url: string, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }} def
  */
 async function bakeVatPackage(engine, def) {
   const container = await loadGltf(engine, def.url);
@@ -120,20 +142,23 @@ async function bakeVatPackage(engine, def) {
   if (skinned.length === 0) throw new Error(`no skinned mesh in ${def.url}`);
   const groups = container.animationGroups ?? [];
   for (const g of groups) stopAnimation(g);
-  const { idle, walk, carry, bakeGroups } = collectVatBakeGroups(groups, def);
+  const { idle, walk, carry, chop, bakeGroups } = collectVatBakeGroups(groups, def);
   if (bakeGroups.length === 0) throw new Error(`no clips in ${def.url}`);
 
   const loco = [];
   if (idle) loco.push(idle);
   if (walk && walk !== idle) loco.push(walk);
+  if (chop && chop !== idle && chop !== walk) loco.push(chop);
   const sampleGroups = loco.length ? loco : bakeGroups;
   const { prims: primData, clips } = sampleVatGroups(skinned, sampleGroups, stopAnimation);
   const bakeClipName = sampleGroups[0].name;
   const idleName = idle?.name ?? bakeClipName;
   const walkName = walk?.name ?? idleName;
   const carryName = carry?.name ?? null;
+  const chopName = chop?.name ?? null;
   const idleClip = { ...clips[idleName] };
   const walkClip = { ...(clips[walkName] ?? idleClip) };
+  const chopClip = chopName && clips[chopName] ? { ...clips[chopName] } : null;
   let carryClip = null;
   let carryIdleClip = null;
   let carryWalkClip = null;
@@ -178,8 +203,10 @@ async function bakeVatPackage(engine, def) {
       idleName,
       walkName,
       carryName,
+      chopName,
       idleClip,
       walkClip,
+      chopClip,
       carryClip,
       carryIdleClip,
       carryWalkClip,

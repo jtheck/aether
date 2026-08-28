@@ -7,7 +7,7 @@ import { applyAuthoredScenery, SCENERY } from './scenery.js';
 import { spawn } from './world.js';
 import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
 import { createAgoras } from './agora.js';
-import { grantStartingResources } from './resources.js';
+import { grantStartingResources, RESOURCE_KINDS, STARTING_RESOURCES } from './resources.js';
 import * as fx from './fixed.js';
 
 export const GARDEN_VERSION = 4;
@@ -105,6 +105,33 @@ function normalizeAgoras(list) {
   });
 }
 
+/** Opening bank for every owner on the map. Missing kinds fall back to STARTING_RESOURCES. */
+export function normalizeStartingResources(raw) {
+  if (raw == null) return null;
+  const out = { ...STARTING_RESOURCES };
+  if (Array.isArray(raw)) {
+    for (let i = 0; i < RESOURCE_KINDS.length; i++) {
+      if (raw[i] != null) out[RESOURCE_KINDS[i]] = raw[i] | 0;
+    }
+    return out;
+  }
+  if (typeof raw !== 'object') return null;
+  let any = false;
+  for (const k of RESOURCE_KINDS) {
+    if (raw[k] != null) {
+      out[k] = raw[k] | 0;
+      any = true;
+    }
+  }
+  return any ? out : null;
+}
+
+function encodeStartingResources(raw) {
+  const n = normalizeStartingResources(raw);
+  if (!n) return null;
+  return RESOURCE_KINDS.map((k) => n[k] | 0);
+}
+
 export function encodeGarden(field, extras = {}) {
   const shape = normalizeTableShape(field, field.tableShape ?? {});
   const units = normalizeUnits(extras.units);
@@ -129,6 +156,8 @@ export function encodeGarden(field, extras = {}) {
   if (units.length) out.u = units.map((u) => [u.owner, u.type, u.tx, u.tz]);
   if (buildings.length) out.b = buildings.map((b) => [b.owner, b.type, b.x, b.z, b.yaw]);
   if (agoras.length) out.g = agoras.map((g) => [g.owner, g.x, g.z]);
+  const sr = encodeStartingResources(extras.startingResources);
+  if (sr) out.sr = sr;
   return out;
 }
 
@@ -165,6 +194,7 @@ export function decodeGarden(data) {
     units: normalizeUnits(data.u),
     buildings: normalizeBuildings(data.b),
     agoras: normalizeAgoras(data.g),
+    startingResources: normalizeStartingResources(data.sr ?? data.startingResources),
     authoredScenery: !!data.sc,
   };
 }
@@ -226,8 +256,9 @@ export function applyGardenPlacements(world, field, garden) {
   for (const u of garden.units ?? []) owners.add(u.owner | 0);
   for (const b of garden.buildings ?? []) owners.add(b.owner | 0);
   for (const g of garden.agoras ?? []) owners.add(g.owner | 0);
+  const bank = garden.startingResources || STARTING_RESOURCES;
   for (const owner of owners) {
-    if (owner >= 0) grantStartingResources(world, owner);
+    if (owner >= 0) grantStartingResources(world, owner, bank);
   }
   return world;
 }

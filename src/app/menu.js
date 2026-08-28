@@ -4,12 +4,14 @@ import {
   FX_LABELS,
   SHADOW_LABELS,
   fxTier,
+  getExtraControlGroups,
   getFxMode,
   getPlayerColor,
   getPlayerName,
   PLAYER_COLORS,
   getShadowMode,
   resolveShadowMode,
+  setExtraControlGroups,
   setFxMode,
   setPlayerColor,
   setPlayerName,
@@ -49,6 +51,7 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
   const fxValue = /** @type {HTMLElement} */ (drawer.querySelector('#fx_value'));
   const fxNote = /** @type {HTMLElement} */ (drawer.querySelector('#fx_note'));
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
+  const extraGroups = /** @type {HTMLInputElement | null} */ (drawer.querySelector('#extra_groups'));
   const colorPicker = /** @type {HTMLSelectElement} */ (drawer.querySelector('#color_picker'));
   colorPicker.replaceChildren(
     ...PLAYER_COLORS.map((c) => {
@@ -63,6 +66,10 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
   const menuKothStart = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-start'));
   const menuKothClaim = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-claim'));
   const menuKothLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-leave'));
+  const menuMatchReady = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-match-ready'));
+  const menuMatchStart = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-match-start'));
+  const menuMatchLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-match-leave'));
+  const lobbyDrawerToggles = [...drawer.querySelectorAll('.lobby-drawer-toggle, .lobby-create')];
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
 
   function showPage(name) {
@@ -121,6 +128,10 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
     onPlayerColorChange?.(hex);
   });
 
+  extraGroups?.addEventListener('change', () => {
+    renderer.setExtraControlGroups?.(setExtraControlGroups(extraGroups.checked));
+  });
+
   soloBtn.addEventListener('click', async () => {
     if (!onStartSoloAi || soloBtn.disabled) return;
     soloBtn.disabled = true;
@@ -146,8 +157,10 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
   // The camera and hotkeys listen on window with no target check, so typing a
   // name would otherwise pan the board and trip B/G/H.
   const keyStop = [
-    nameInput, colorPicker, slider, fxSlider, soloBtn, testerBtn,
+    nameInput, colorPicker, extraGroups, slider, fxSlider, soloBtn, testerBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
+    menuMatchReady, menuMatchStart, menuMatchLeave,
+    ...lobbyDrawerToggles,
   ].filter(Boolean);
   for (const field of keyStop) {
     field.addEventListener('keydown', (e) => e.stopPropagation());
@@ -164,6 +177,10 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
     paintFx(fx);
     nameInput.value = getPlayerName();
     colorPicker.value = getPlayerColor();
+    if (extraGroups) {
+      extraGroups.checked = getExtraControlGroups();
+      renderer.setExtraControlGroups?.(extraGroups.checked);
+    }
     paintProfile();
   }
 

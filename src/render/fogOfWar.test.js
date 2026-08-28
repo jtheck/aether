@@ -227,6 +227,53 @@ describe('fogOfWar three levels', () => {
   });
 });
 
+describe('fogOfWar vision union', () => {
+  it('matches circle hide/skirt when many overlapping sources share a blob', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const units = [];
+    for (let z = 0; z < 3; z++) {
+      for (let x = 0; x < 3; x++) units.push({ owner: 0, type: UNIT.VILLAGER, x: x * 4, z: z * 4 });
+    }
+    fog.stamp({
+      world: fakeWorld(units),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(4, 4), true);
+    assert.equal(fog.hidesHostile(1, 4, 4), false);
+    // Easternmost villager at x=8. 36wu past that is the fade skirt; 48wu is outside.
+    assert.equal(fog.isWorldVisible(8 + 36, 0), false);
+    assert.equal(fog.isWorldSight(8 + 36, 0), true);
+    assert.equal(fog.hidesHostile(1, 8 + 36, 0), false);
+    const skirt = fog.overlayAlphaAt(8 + 36, 0);
+    assert.ok(skirt > 0 && skirt < 255, `expected a fade skirt, got ${skirt}`);
+    assert.equal(fog.isWorldSight(8 + 48, 0), false);
+    assert.equal(fog.hidesHostile(1, 8 + 48, 0), true);
+    assert.equal(fog.overlayAlphaAt(8 + 48, 0), 255);
+  });
+});
+
+describe('fogOfWar stacked stamps', () => {
+  it('keeps the larger radius when two allies share a tile', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const stacked = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 0, type: UNIT.WIZARD, x: 0, z: 0 },
+    ]);
+    fog.stamp({ world: stacked, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [] });
+    // Wizard / caster hard circle is 18 tiles (72wu). A villager-only stamp would miss this.
+    assert.equal(fog.isWorldVisible(64, 0), true);
+    assert.equal(fog.hidesHostile(1, 64, 0), false);
+  });
+});
+
 describe('fogOfWar overlay edge', () => {
   it('hides with the fade skirt, not the hard vision circle', () => {
     const field = fakeField(40, 40);
@@ -331,6 +378,62 @@ describe('fogOfWar shared vision', () => {
     assert.equal(fog.isEnabled(), true);
     assert.equal(fog.isWorldExplored(-36, -36), false);
     assert.equal(fog.overlayAlphaAt(-36, -36), 255);
+  });
+});
+
+describe('fogOfWar vision identity', () => {
+  it('forgets explored tiles and last-known buildings when shared vision drops', () => {
+    const field = fakeField(20, 20);
+    const half = (20 * 4) / 2;
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const world = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: half - 2, z: half - 2 },
+    ]);
+    const enemyCamp = { owner: 1, type: 'camp', x: half - 2, z: half - 2, tracks: [{ id: 'warrior', count: 1 }] };
+
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [enemyCamp],
+      agoras: [],
+      shareVisionWith: [1],
+    });
+    assert.equal(fog.isWorldExplored(half - 2, half - 2), true);
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 1);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), false);
+
+    fog.stamp({
+      world,
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [enemyCamp],
+      agoras: [],
+      shareVisionWith: [],
+    });
+    assert.equal(fog.isWorldExplored(half - 2, half - 2), false);
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 0);
+    assert.equal(fog.hidesHostile(1, half - 2, half - 2), true);
+    assert.equal(fog.isWorldVisible(0, 0), true);
+  });
+
+  it('forgets last-known buildings when the local player id changes', () => {
+    const field = fakeField(20, 20);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const p0 = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    const enemyCamp = { owner: 1, type: 'camp', x: 0, z: 0, tracks: [{ id: 'warrior', count: 1 }] };
+    fog.stamp({ world: p0, field, localPlayerId: 0, enabled: true, buildings: [enemyCamp], agoras: [] });
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 1);
+
+    const p2 = fakeWorld([{ owner: 2, type: UNIT.VILLAGER, x: -36, z: -36 }]);
+    fog.stamp({ world: p2, field, localPlayerId: 2, enabled: true, buildings: [enemyCamp], agoras: [] });
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 0);
+    assert.equal(fog.isWorldExplored(0, 0), false);
   });
 });
 

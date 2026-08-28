@@ -1,8 +1,17 @@
 // Overlay-only LOD for health chips + collar *spin* (collars always draw).
 // Independent of legacy lodDistances.LOD_ENABLED (VAT / scenery / FX).
 
-/** Max health chips written per frame. */
+/** Max unit health chips written per frame (nearest-N to look-at). */
 export const OVERLAY_MAX_BARS = 256;
+/** Selected + damaged buildings sit on top of the unit nearest-N budget. */
+export const OVERLAY_MAX_BUILDING_BARS = 128;
+/**
+ * Billboard slot pool. Must stay overlay-sized — never entity / KOTH / stress
+ * count. Each slot is up to 13 alpha-sorted sprites.
+ */
+export const HEALTH_BAR_CAPACITY = OVERLAY_MAX_BARS + OVERLAY_MAX_BUILDING_BARS;
+/** Packed holy-shield spheres (not entity-indexed). */
+export const OVERLAY_MAX_SHIELDS = 256;
 /** Collar burst + idle spin within this XZ distance of the camera eye. */
 export const OVERLAY_COLLAR_SPIN_DISTANCE = 320;
 export const OVERLAY_COLLAR_SPIN_DISTANCE_SQ =

@@ -79,6 +79,7 @@ import { createBuildingProps } from './buildings.js';
 import { createBuildingRadialMenu } from './buildingRadial.js';
 import { createBuildingActionRadial } from './buildingActionRadial.js';
 import { createSelectionHud } from './selectionHud.js';
+import { createControlGroupHud } from './controlGroupHud.js';
 import {
   FX_DISTANCE_SQ,
   LOD_ENABLED,
@@ -91,6 +92,7 @@ import {
   DEFAULT_UNIT_CHIP_LIFT,
   roofChipLift,
 } from './healthBars.js';
+import { HEALTH_BAR_CAPACITY, OVERLAY_MAX_SHIELDS } from './overlayLod.js';
 import { LIGHTNING_HIT } from '../sim/lightning.js';
 import { softDetachMesh } from './meshLifecycle.js';
 
@@ -1231,11 +1233,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     scene,
     Math.max(capacity, gpuCapacity, 1) + 64,
   );
-  // Same thin-instance spheres as H-key pick volumes — always on for holy armor.
+  // Packed overlay — not entity-indexed. Matching entity count made stress
+  // draw tens of thousands of hidden 24-seg spheres (Lite keeps ti.count at cap).
   const holyShields = createPickHitboxRenderer(
     engine,
     scene,
-    capacityFor(Math.max(capacity, gpuCapacity, 1), { initial: 256 }),
+    OVERLAY_MAX_SHIELDS,
     {
       startVisible: true,
       name: 'holy-shield',
@@ -1383,10 +1386,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       });
     }
   };
-  // Match entity capacity — a 512 cap made mass-select / stress only show chips
-  // on the first N entity indices (later selected units looked "unhealthy-less").
+  // Overlay nearest-N + building slack. Matching entity count allocated
+  // capacity × 13 alpha-sorted billboards (50k stress → ~650k sprites).
   const healthBars = createHealthBars(engine, scene, {
-    capacity: Math.max(capacity, gpuCapacity, 1),
+    capacity: HEALTH_BAR_CAPACITY,
     getViewportHeight: () => canvasCoords(0, 0).height,
   });
   const trailGenerations = new Uint32Array(MAX_PROJECTILES);
@@ -1837,6 +1840,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     disposeLabels() {},
   };
 
+  /** Canvas-local pointer for HUD hover (CSS px). */
+  let hudPointer = null;
   const radialScreen = {
     worldToScreen(x, y, z) {
       const { width, height } = canvasCoords(0, 0);
@@ -1870,12 +1875,39 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       };
     },
     font: null,
+    canvas,
+    getPointerCanvas() {
+      return hudPointer;
+    },
   };
+  canvas.addEventListener('pointermove', (e) => {
+    const cc = canvasCoords(e.clientX, e.clientY);
+    hudPointer = { x: cc.x, y: cc.y };
+  }, { passive: true });
+  canvas.addEventListener('pointerleave', () => {
+    hudPointer = null;
+  }, { passive: true });
+
+  /** @type {any} Side control-group pads (camera-locked). */
+  let controlGroupHud = {
+    update() {},
+    pick() { return null; },
+    setExtra() {},
+    setFilled() {},
+    setHold() {},
+    clear() {},
+  };
+  try {
+    controlGroupHud = createControlGroupHud(engine, scene, radialScreen);
+  } catch (err) {
+    console.warn('[controlGroupHud] init failed', err);
+  }
 
   onSceneDispose(scene, () => {
     buildingRadial.disposeLabels?.();
     actionRadial.disposeLabels?.();
     selectionHud.disposeLabels?.();
+    controlGroupHud.clear?.();
   });
 
   function radialPickingRay(clientX, clientY) {
@@ -2988,6 +3020,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       actionRadial.update?.(camera);
     }
     selectionHud.update?.(camera);
+    controlGroupHud.update?.(camera);
     buildingProps.updateHarvestPing?.();
     updateUnitPings();
     for (const batch of typeBatches.values()) {
@@ -4158,11 +4191,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const owners = options.owners;
       const carrying = options.carrying;
       const gatherAct = options.gatherAct;
+      const hideUnit = options.hideUnit;
       let unmapped = 0;
       for (let i = 0; i < count; i++) {
         const owner = owners ? owners[i] : 0;
         const def = getUnitDef(typesArr[i]);
         if (alive && !alive[i]) {
+          writeInstanceAt(i, typesArr[i], owner, 0, 0, 0);
+          continue;
+        }
+        if (hideUnit?.(i, positions.x[i], positions.z[i], owner)) {
           writeInstanceAt(i, typesArr[i], owner, 0, 0, 0);
           continue;
         }
@@ -4382,6 +4420,33 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     pickSelectionHud(clientX, clientY) {
       const cc = canvasCoords(clientX, clientY);
       return selectionHud.pickSlot?.(cc.x, cc.y) ?? null;
+    },
+
+    /** Extra black + white pads (three per side). */
+    setExtraControlGroups(on) {
+      controlGroupHud.setExtra?.(!!on);
+    },
+
+    /**
+     * Control-group pad under a client point → group id 0..5, or null.
+     * Id 0 is red — callers must use `!= null`, not truthiness.
+     */
+    pickControlGroupHud(clientX, clientY) {
+      const cc = canvasCoords(clientX, clientY);
+      const id = controlGroupHud.pick?.(cc.x, cc.y);
+      return id == null ? null : id;
+    },
+
+    setControlGroupFilled(id, on) {
+      controlGroupHud.setFilled?.(id, on);
+    },
+
+    setControlGroupCount(id, n) {
+      controlGroupHud.setCount?.(id, n);
+    },
+
+    setControlGroupHold(id) {
+      controlGroupHud.setHold?.(id);
     },
 
     beginHealthBars() {

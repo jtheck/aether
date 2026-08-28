@@ -48,6 +48,7 @@ import {
   ensureFxModeDefault,
   ensureShadowModeDefault,
   fxTier,
+  getExtraControlGroups,
   getPlayerColor,
   resolveFxMode,
   resolveShadowMode,
@@ -71,6 +72,12 @@ import { init as initAudio, playThunder } from './audio.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { setupKothLobby } from './kothLobby.js';
+import { createGameLobby } from './gameLobby.js';
+import { createMatchLobby } from './matchLobby.js';
+import { setupLobbyUi } from './lobbyUi.js';
+import { isLobbyPlayMode } from '../lobby/modes.js';
+import { liveConfigFromLobby } from '../lobby/startConfig.js';
+import { setTeamAssignments } from '../sim/teams.js';
 
 const SEED = 0x1234;
 
@@ -147,7 +154,10 @@ function worldPositionsForSync(state, count) {
   return { x, z };
 }
 
-function rebuildRendererEntities(renderer, session) {
+/**
+ * @param {(i: number, x: number, z: number, owner: number) => boolean} [hideUnit]
+ */
+function rebuildRendererEntities(renderer, session, hideUnit) {
   const count = session.count;
   const world = session.state;
   const unmapped = renderer.rebuildFromTypes(count, world.type, world.owner);
@@ -156,6 +166,7 @@ function rebuildRendererEntities(renderer, session) {
     owners: world.owner,
     carrying: world.carriedAmt,
     gatherAct: world.gatherAct,
+    hideUnit,
   });
   // Progressive boot leaves units unmapped until templates arrive — don't warn.
   if (!(unmapped.length || stillUnmapped) && livingByOwner(world, 1) > 0) {
@@ -303,6 +314,7 @@ function shouldBootLoadingScreenMatch(bootCfg) {
 async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide = 0, kothShard, solo = false }) {
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
+  let lobbyUi = { refresh() {} };
   // GPU capacity is sized like a full KOTH match so the shard can still stomp us
   // into a live match. The skirmish backdrop otherwise boots like staging.
   const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox' || skirmish;
@@ -376,6 +388,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   renderer.setCount(count);
   const fog = createFogOfWar();
+  /** Set by dumpFrameProfile — times stamp/upload + the pose frame. */
+  let frameProf = null;
   fog.reset(session.field);
   fog.stamp({
     world: session.state,
@@ -391,6 +405,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   renderer.attachFogOfWar?.(fog);
   renderer.setVisionDraw?.((x, z, owner) => !fog.hidesHostile(owner, x, z));
+  const hideUnitForSync = (_i, x, z, owner) => fog.hidesHostile(owner, x, z);
   {
     const shownA = fog.filterAgoras(agoras ?? session.agoras);
     const shownB = fog.filterBuildings(livingBuildingList(buildings ?? session.buildings));
@@ -400,7 +415,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
   // First paint ASAP — props/units/radials continue loading in the background.
   await renderer.start();
-  rebuildRendererEntities(renderer, session);
+  rebuildRendererEntities(renderer, session, hideUnitForSync);
   setStatusText('');
   // Console: renderer.toggleShadows() / renderer.setShadowsEnabled(false)
   window.renderer = renderer;
@@ -484,6 +499,29 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     });
     return { rows, ema, last, metrics: m };
   };
+  window.dumpFrameProfile = (frames = 40) => {
+    frameProf = { left: Math.max(1, frames | 0), acc: Object.create(null), n: 0, nFog: 0 };
+    console.log('[dumpFrameProfile] sampling', frameProf.left, 'frames… then console.table');
+    return frameProf;
+  };
+  function finishFrameProf(t0) {
+    if (!frameProf) return;
+    frameProf.acc.frame = (frameProf.acc.frame ?? 0) + (performance.now() - t0);
+    frameProf.n++;
+    frameProf.left--;
+    if (frameProf.left > 0) return;
+    const n = Math.max(1, frameProf.n);
+    const nFog = Math.max(1, frameProf.nFog || n);
+    const rows = Object.entries(frameProf.acc)
+      .map(([phase, ms]) => ({
+        phase,
+        meanMs: +(ms / (phase.startsWith('fog') ? nFog : n)).toFixed(2),
+      }))
+      .sort((a, b) => b.meanMs - a.meanMs);
+    console.table(rows);
+    console.log('[dumpFrameProfile]', { frames: n, fogStamps: frameProf.nFog, fps: fpsDisplay });
+    frameProf = null;
+  }
   /**
    * GPU pixel-perfect pick (renderer.pickUnit) vs CPU ray-vs-sphere (renderer.rayPickSpheres)
    * latency + accuracy, sampled against currently on-screen units. Aim the camera at your
@@ -577,6 +615,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   if (bootShadowMode === 0) {
     renderer.setShadowsEnabled?.(false);
   }
+  renderer.setExtraControlGroups?.(getExtraControlGroups());
   /** Filled just before return so the menu callback can reach the live ctx. */
   const ctxRef = { current: null };
   const sideMenu = setupMenu({
@@ -595,7 +634,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     scene: renderer.scene,
     canvas,
   });
-  let renderEntityCount = rebuildRendererEntities(renderer, session);
+  let renderEntityCount = rebuildRendererEntities(renderer, session, hideUnitForSync);
 
   // Match sim SoA: fixed MAX_ENTITIES. Never realloc on spawn — selection/pose
   // state stays stable for the whole match; only live `count` moves.
@@ -684,7 +723,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     refreshFoggedProps();
   }
 
+  const sceneryFogAt = (x, z) => fog.fogFactorAt(x, z);
+  let sceneryFogOn = null;
   function stampFog() {
+    const t0 = frameProf ? performance.now() : 0;
     fog.stamp({
       world: session.state,
       buildings: livingBuildingList(session.buildings),
@@ -694,8 +736,25 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       shareVisionWith: fogShareVisionWith,
       enabled: fogActive(),
     });
+    const t1 = frameProf ? performance.now() : 0;
     fog.syncOverlay();
-    renderer.applySceneryFog?.(fog.isEnabled() ? (x, z) => fog.fogFactorAt(x, z) : null);
+    const t2 = frameProf ? performance.now() : 0;
+    const on = fog.isEnabled();
+    if (on !== sceneryFogOn) {
+      sceneryFogOn = on;
+      renderer.applySceneryFog?.(on ? sceneryFogAt : null);
+    }
+    if (frameProf) {
+      frameProf.acc.fogStamp = (frameProf.acc.fogStamp ?? 0) + (t1 - t0);
+      frameProf.acc.fogUpload = (frameProf.acc.fogUpload ?? 0) + (t2 - t1);
+      frameProf.nFog = (frameProf.nFog ?? 0) + 1;
+    }
+  }
+
+  function syncDrawnEntities() {
+    const n = rebuildRendererEntities(renderer, session, hideUnitForSync);
+    bufs.poseValid.fill(0);
+    return n;
   }
 
   function livingBuildingList(list) {
@@ -746,14 +805,20 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     // any main-thread tile math (fog, snap, pathability) runs.
     if (session.field) setActiveMapSize(session.field.width, session.field.height);
     renderer.setCount(entityCount);
-    renderEntityCount = rebuildRendererEntities(renderer, session);
+    renderEntityCount = syncDrawnEntities();
     renderer.clearProjectiles?.();
     renderer.clearParticles?.();
     fog.reset(session.field);
+    sceneryFogOn = null;
     stampFog();
     placeFoggedProps();
     syncRallyFlagMarkers();
     if (session.field) await renderer.setField?.(session.field);
+    sceneryFogOn = null;
+    if (fog.isEnabled()) {
+      sceneryFogOn = true;
+      renderer.applySceneryFog?.(sceneryFogAt);
+    }
     updateColors();
   };
 
@@ -806,6 +871,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         ? `You P${localPlayerId}: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`
         : `Selected: ${sel}  ·  Tick ${world.tick}`;
     if (matchMeta.mode === 'staging' || matchMeta.mode === 'sandbox') line = `Staging  ·  ${line}`;
+    else if (matchMeta.mode === 'onevsone') line = `1v1  ·  ${line}`;
+    else if (matchMeta.mode === 'teams') line = `Teams  ·  ${line}`;
+    else if (matchMeta.mode === 'adventure') line = `Adventure  ·  ${line}`;
     else if (matchMeta.mode === 'solo' || matchMeta.mode === 'skirmish') line = `1v1 AI  ·  ${line}`;
     if (matchMeta.mode === 'koth') {
       const k = session.koth;
@@ -842,6 +910,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (matchMeta.matchId) line += `  ·  …${matchMeta.matchId.slice(-8)}`;
     el.textContent = line;
     kothLobbyUi.refresh();
+    lobbyUi.refresh();
     paintResources();
   }
 
@@ -1154,6 +1223,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       menuUnlocked = true;
       sideMenu.setAvailable?.(true);
       document.getElementById('header')?.classList.add('map-ready');
+      setGraffitiHeaderVisible(isLobbyGraffitiScene(bootCfg.mode));
     }
   };
   let inputApi = setupInput({
@@ -1409,6 +1479,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
 
   window.addEventListener('keydown', (e) => {
+    if (inputApi.handleControlGroupKeyDown?.(e)) return;
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.code === 'Escape') {
       e.preventDefault();
@@ -1494,6 +1565,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       liteExplorer.toggle();
     }
   });
+  window.addEventListener('keyup', (e) => {
+    inputApi.handleControlGroupKeyUp?.(e);
+  });
   kothLobbyUi = setupKothLobby({
     kothShard,
     onLeaveSolo: () => {
@@ -1517,6 +1591,48 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     onCloseMenu: () => sideMenu.close(),
   });
+
+  if (kothShard) {
+    const gameLobby = createGameLobby({
+      getP2p: () => kothShard.getP2p(),
+      subscribeBroadcast: (fn) => kothShard.subscribeBroadcast(fn),
+      onChange: () => lobbyUi.refresh(),
+    });
+    const matchLobby = createMatchLobby({
+      getP2p: () => kothShard.getP2p(),
+      getUserId: () => kothShard.getUserId(),
+      gameLobby,
+      subscribeBroadcast: (fn) => kothShard.subscribeBroadcast(fn),
+      subscribeLobbyMessage: (fn) => kothShard.subscribeLobbyMessage(fn),
+      subscribeDataMessage: (fn) => kothShard.subscribeDataMessage(fn),
+      subscribePeerConnected: (fn) => kothShard.subscribePeerConnected(fn),
+      subscribePeerDisconnected: (fn) => kothShard.subscribePeerDisconnected(fn),
+      subscribeMatchLobbyConnected: (fn) => kothShard.subscribeMatchLobbyConnected(fn),
+      onChange: () => lobbyUi.refresh(),
+      onStartMatch: (snap) => startLobbyMatch(ctxRef.current, snap, kothShard, matchLobby, sideMenu),
+      onLeaveMatch: () => {
+        matchLobby.detachSession();
+        kothShard.setLobbyMatchHold?.(false);
+        const ctx = ctxRef.current;
+        if (!ctx) return;
+        ctx.localSoloHold = false;
+        return startSoloAiMatch(ctx, {
+          temperament: 'passive',
+          fog: fogOverrideFromSearch() ?? true,
+          sharedVision: true,
+          statusLabel: '1v1 AI',
+          mode: 'skirmish',
+          armyPerSide: 0,
+        });
+      },
+    });
+    lobbyUi = setupLobbyUi({
+      gameLobby,
+      matchLobby,
+      isKothLive: () => kothShard.getLobbyPresence?.()?.browsing === false,
+      getUserId: () => kothShard.getUserId(),
+    });
+  }
 
   // Walk everyone so idle→walk skinning is under load (not just idle poses).
   if (animStress > 0) {
@@ -1549,7 +1665,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (session.count !== renderEntityCount) {
       renderEntityCount = session.count;
       renderer.setCount(renderEntityCount);
-      rebuildRendererEntities(renderer, session);
+      syncDrawnEntities();
     }
     if (session.kothMatchOver && !matchOverShown) {
       matchOverShown = true;
@@ -1565,6 +1681,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const selCountByType = new Map();
 
   renderer.onFrame((deltaMs) => {
+    const frameT0 = frameProf ? performance.now() : 0;
     // Keep FX clocks in sync with pause (catch-up / KOTH also toggle pauseLockstep).
     renderer.setFxPaused?.(session.pauseLockstep);
     renderer.cameraController?.tick?.(deltaMs);
@@ -1587,11 +1704,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
     const alpha = session.displayAlpha;
     const { prev, cur } = session.displaySnapshots();
-    if (!prev || !cur) return;
+    if (!prev || !cur) {
+      finishFrameProf(frameT0);
+      return;
+    }
 
     // A/B: skip pose loop + health/auras when units are hidden.
     if (renderer.getUnitsEnabled && !renderer.getUnitsEnabled()) {
       renderer.commit();
+      finishFrameProf(frameT0);
       return;
     }
 
@@ -1668,13 +1789,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     };
 
     if (renderer.consumePoseResync?.()) {
-      bufs.poseValid.fill(0);
-      renderEntityCount = rebuildRendererEntities(renderer, session);
+      renderEntityCount = syncDrawnEntities();
     }
     if (n !== renderEntityCount) {
       renderEntityCount = n;
       renderer.setCount(n);
-      rebuildRendererEntities(renderer, session);
+      syncDrawnEntities();
     }
     // Apply lob flight snapshot before drawing so loft/trail match this frame.
     const monkKickUpdates = session.takePendingMonkKickUpdates?.();
@@ -1745,10 +1865,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
 
     const hideDrawnUnit = (i) => {
-      if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
-        if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
-        commitPose(i, 0, 0, 0, 0, 0, 0);
-      }
+      // Always rewrite — rebuild/sync can stomp GPU slots while pose still says hidden.
+      if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
+      commitPose(i, 0, 0, 0, 0, 0, 0);
       if (wasSelected[i]) {
         renderer.writeSelectionRing(i, 0, 0, 0);
         wasSelected[i] = 0;
@@ -2072,6 +2191,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         renderer.setSelectionGroups(groups);
       }
     }
+    inputApi.syncControlGroupMarks?.();
     if (renderer.syncUnitAuras) {
       renderer.syncUnitAuras(
         n,
@@ -2127,8 +2247,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (drawStats.unmapped > 0 && performance.now() - lastUnmappedRebuild > 400) {
       lastUnmappedRebuild = performance.now();
-      renderEntityCount = rebuildRendererEntities(renderer, session);
-      bufs.poseValid.fill(0);
+      renderEntityCount = syncDrawnEntities();
     }
     if (colorsDirty) renderer.setColors(colors);
     if (renderer.getPickHitboxesVisible?.()) {
@@ -2194,6 +2313,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     syncActionRadialTracksFromSim();
     renderer.commit();
+    finishFrameProf(frameT0);
   });
 
   // Engine already started after createRenderer for progressive first paint.
@@ -2215,7 +2335,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer,
     bufs,
     syncRenderer: () => {
-      renderEntityCount = rebuildRendererEntities(renderer, session);
+      renderEntityCount = syncDrawnEntities();
       return renderEntityCount;
     },
     inputApi,
@@ -2266,6 +2386,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     if (gen !== liveConfigGeneration) return;
     ctx.setMatchMeta({ mode: 'staging', matchId: cfg.matchId });
     ctx.session.setRole(cfg.role ?? 'spectator');
+    setGraffitiHeaderVisible(true);
     setStatusText('Looking for live shard…');
     return;
   }
@@ -2282,10 +2403,12 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   // Cover the teardown/rebuild — same splash as cold boot.
   showMatchSplash();
   ctx.setInteractive?.(false);
+  setGraffitiHeaderVisible(isLobbyGraffitiScene(cfg.mode));
   setStatusText(localSolo ? 'Starting 1v1…' : 'Loading match…');
 
-  const simMode = cfg.mode === 'staging' || cfg.mode === 'sandbox' ? 'staging' : 'koth';
+  const simMode = workerSimMode(cfg.mode);
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
+  setTeamAssignments(cfg.teamByOwner ?? null);
   // Set humans before reset so the new worker never inherits the loading-screen
   // passive AI (owner 1 = first KOTH joiner) as a fake computer player.
   ctx.session.setHumanPlayers(humanPlayers);
@@ -2293,6 +2416,13 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     { ...cfg, humanPlayers, localSolo },
     ctx.session.aiPlayers,
   );
+  // Stamp fog as the incoming player *before* reset so onWorldRebuilt does not
+  // briefly adopt the loading-screen owner (usually 0) and freeze enemy ghosts.
+  ctx.session.setRole(cfg.role ?? 'player');
+  if (cfg.localPlayerId != null) {
+    ctx.localPlayerId = cfg.localPlayerId;
+    ctx.session.setLocalPlayerId?.(cfg.localPlayerId);
+  }
   ctx.setFogEnabled?.(cfg.fog !== false);
   ctx.setShareVisionWith?.(shareVisionOwnersFromCfg(cfg));
   ctx.session._pendingWorldGen = gen;
@@ -2305,6 +2435,11 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       garden: cfg.garden,
       aiPlayers: ctx.session.aiPlayers,
       humanPlayers,
+      mapW: cfg.mapW ?? (cfg.mode === 'skirmish' ? SKIRMISH_MAP_W : undefined),
+      mapH: cfg.mapH ?? (cfg.mode === 'skirmish' ? SKIRMISH_MAP_H : undefined),
+      noCenterBlock: cfg.noCenterBlock ?? (simMode === 'skirmish'),
+      teamByOwner: cfg.teamByOwner ?? null,
+      laneBases: !!cfg.laneBases,
     });
     // Terrain is enough to unlock — 3D scenery/building GLBs finish in the
     // background. Waiting on modelsReady here was a ~12s tab stall.
@@ -2433,10 +2568,15 @@ function syncPresentation(ctx, cfg, options = {}) {
   ctx.refreshFoggedProps?.();
   if (cfg.inputEnabled != null) ctx.inputApi?.setInputEnabled?.(Boolean(cfg.inputEnabled));
   if ((cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
-  ctx.session.inputDelayTicks = cfg.localSolo ? 0 : cfg.mode === 'koth' ? 1 : 0;
+  ctx.session.inputDelayTicks = cfg.localSolo
+    ? 0
+    : (cfg.inputDelayTicks ?? (cfg.mode === 'koth' || isLobbyPlayMode(cfg.mode) ? 1 : 0));
   // Only snap the camera on a real match reset — presentation syncs (join/role)
   // used to call this every time and yank the view back to origin.
-  if ((cfg.mode === 'koth' || cfg.localSolo) && cfg.reset) ctx.renderer.resetCamera?.();
+  if (cfg.reset) ctx.inputApi?.clearControlGroups?.();
+  if (cfg.reset && (cfg.mode === 'koth' || cfg.localSolo || isLobbyPlayMode(cfg.mode))) {
+    ctx.renderer.resetCamera?.();
+  }
 
   const overEl = document.getElementById('match-over');
   if (overEl) overEl.style.display = 'none';
@@ -2603,6 +2743,54 @@ function isWebGpuFailure(err) {
 const SPLASH_FADE_MS = 550;
 const SPLASH_SETTLE_FRAMES = 14;
 const SPLASH_SETTLE_MAX_MS = 900;
+
+function workerSimMode(mode) {
+  if (mode === 'staging' || mode === 'sandbox') return 'staging';
+  if (mode === 'skirmish' || isLobbyPlayMode(mode)) return 'skirmish';
+  return 'koth';
+}
+
+async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
+  if (!ctx?.session) return;
+  const cfg = liveConfigFromLobby(snapshot, kothShard?.getUserId?.() ?? null);
+  if (cfg.localPlayerId < 0) {
+    setStatusText('Not seated — cannot start');
+    return;
+  }
+  ctx.localSoloHold = true;
+  kothShard?.setLobbyMatchHold?.(true);
+  try {
+    await applyLiveConfig(ctx, {
+      ...cfg,
+      reset: true,
+      inputEnabled: true,
+      armyPerSide: 0,
+    }, kothShard);
+    ctx.setMatchMeta?.({ mode: snapshot.mode, matchId: snapshot.roomId });
+    if (!cfg.localSolo) matchLobby?.attachSession?.(ctx.session);
+    sideMenu?.close?.();
+    const label = snapshot.mode === 'teams'
+      ? 'Teams'
+      : snapshot.mode === 'adventure'
+        ? 'Adventure'
+        : '1v1';
+    setStatusText(`${label} — match on`);
+  } catch (err) {
+    ctx.localSoloHold = false;
+    kothShard?.setLobbyMatchHold?.(false);
+    matchLobby?.detachSession?.();
+    throw err;
+  }
+}
+
+/** Graffiti logo is lobby/loading chrome — hide it once a real match is up. */
+function isLobbyGraffitiScene(mode) {
+  return mode === 'skirmish' || mode === 'staging';
+}
+
+function setGraffitiHeaderVisible(on) {
+  document.getElementById('header')?.classList.toggle('in-match', !on);
+}
 
 function showMatchSplash() {
   let el = document.getElementById('boot-splash');

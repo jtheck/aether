@@ -4,7 +4,7 @@ import { buildField, fieldSnapshot, mapSizeForConfig, TILE_SIZE_F } from '../sim
 import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
-import { buildWorldFromConfig, kothBases } from '../sim/worldSetup.js';
+import { buildWorldFromConfig, kothBases, laneBases } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
 import { generateEconomyCommands } from '../sim/aiEconomy.js';
@@ -112,7 +112,9 @@ self.onmessage = (e) => {
         applyTableSilhouette(field);
       }
       if (!garden?.authoredScenery) {
-        const reserved = kothBases(field.worldHalfF);
+        const reserved = msg.config.laneBases
+          ? laneBases(field.worldHalfF)
+          : kothBases(field.worldHalfF);
         if (garden) {
           const half = field.worldHalfF;
           for (const u of garden.units) {

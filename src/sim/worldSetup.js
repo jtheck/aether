@@ -50,6 +50,17 @@ export function kothBases(worldHalfF = activeWorldHalfF()) {
   ];
 }
 
+/** Team lanes — south pair (A), north pair (B). */
+export function laneBases(worldHalfF = activeWorldHalfF()) {
+  const m = worldHalfF * 0.6;
+  return [
+    [-m, -m],
+    [m, -m],
+    [-m, m],
+    [m, m],
+  ];
+}
+
 /** Default-map bases (tests / importers that expect a stable export). */
 export const KOTH_BASES = kothBases(WORLD_HALF_F);
 
@@ -353,7 +364,7 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth' | 'skirmish', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth' | 'skirmish', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean, teamByOwner?: ArrayLike<number> | null, laneBases?: boolean }} config
  */
 export function buildWorldFromConfig({
   seed,
@@ -365,12 +376,14 @@ export function buildWorldFromConfig({
   mapW,
   mapH,
   skipDefaultSpawns = false,
+  teamByOwner = null,
+  laneBases: useLaneBases = false,
 }) {
   setArmyPerSide(armyPerSide);
   const size = mapSizeForConfig({ stressPerSide, animStressPerSide, armyPerSide, mapW, mapH });
   setActiveMapSize(size.mapW, size.mapH);
   const half = worldHalfFFromMap(size.mapW);
-  const bases = kothBases(half);
+  const bases = useLaneBases ? laneBases(half) : kothBases(half);
 
   const w = createWorld(seed);
   w.kothMatchOver = 0;
@@ -384,7 +397,7 @@ export function buildWorldFromConfig({
   w.armyPerSide = _armyPerSide;
 
   // Default FFA until a mode opts into alliances via setTeamAssignments.
-  setTeamAssignments(null);
+  setTeamAssignments(teamByOwner);
 
   if (skipDefaultSpawns) {
     if (mode === 'koth') {

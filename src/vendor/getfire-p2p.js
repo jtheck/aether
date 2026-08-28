@@ -675,6 +675,14 @@
     GETFIREP2P.joinBroadcast = function(channelName) {
       return joinBroadcastChannel(channelName);
     };
+
+    GETFIREP2P.leaveBroadcast = function(channelName) {
+      const channel = broadcastChannels.get(channelName);
+      if (!channel) return;
+      try { channel.unsubscribe(); } catch { /* already gone */ }
+      broadcastChannels.delete(channelName);
+      currentBroadcastChannels.delete(channelName);
+    };
     
     GETFIREP2P.broadcast = function(data, channelName) {
       if (!channelName && currentBroadcastChannels.size === 1) {

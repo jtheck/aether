@@ -24,6 +24,20 @@ import {
   chipSizeMul,
 } from './healthBars.js';
 import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
+import {
+  HEALTH_BAR_CAPACITY,
+  OVERLAY_MAX_BARS,
+  OVERLAY_MAX_BUILDING_BARS,
+  OVERLAY_MAX_SHIELDS,
+} from './overlayLod.js';
+
+describe('health chip overlay budget', () => {
+  it('keeps the billboard pool overlay-sized, not entity-scaled', () => {
+    assert.equal(HEALTH_BAR_CAPACITY, OVERLAY_MAX_BARS + OVERLAY_MAX_BUILDING_BARS);
+    assert.ok(HEALTH_BAR_CAPACITY <= 512);
+    assert.ok(OVERLAY_MAX_SHIELDS <= 256);
+  });
+});
 
 describe('health chip placement', () => {
   it('lifts the row above pick-height (over the head, not the feet)', () => {

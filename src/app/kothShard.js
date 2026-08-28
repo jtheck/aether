@@ -96,6 +96,18 @@ function unwrapMessage(data) {
   return msg;
 }
 
+function addListener(set, fn) {
+  if (typeof fn !== 'function') return () => {};
+  set.add(fn);
+  return () => { set.delete(fn); };
+}
+
+function emitListeners(set, ...args) {
+  for (const fn of set) {
+    try { fn(...args); } catch (err) { console.error(err); }
+  }
+}
+
 function userIdsMatch(a, b) {
   if (!a || !b) return false;
   if (a === b) return true;
@@ -122,8 +134,16 @@ export function createKothShard(options = {}) {
   }
 
   let p2p = null;
+  const broadcastListeners = new Set();
+  const lobbyMessageListeners = new Set();
+  const dataListeners = new Set();
+  const peerConnectedListeners = new Set();
+  const peerDisconnectedListeners = new Set();
+  const matchLobbyConnectedListeners = new Set();
   let localUserId = null;
   let session = null;
+  /** 1v1 / teams / adventure hold — don't wrap commands as KOTH lockstep. */
+  let lobbyMatchHold = false;
 
   let matchId = generateMatchId();
   let phase = SHARD_PHASE.SANDBOX;
@@ -1420,6 +1440,7 @@ export function createKothShard(options = {}) {
   }
 
   function onMatchLobbyConnected(lobbyName) {
+    emitListeners(matchLobbyConnectedListeners, lobbyName);
     if (phase !== SHARD_PHASE.LIVE || lobbyName !== shardLobbyName(matchId)) return;
     if (DEBUG_KOTH) console.info('[KOTH] match lobby ready', lobbyName.slice(LOBBY.length + 1));
     p2p?.announcePresence?.(lobbyName);
@@ -2897,6 +2918,7 @@ export function createKothShard(options = {}) {
     } catch {
       return;
     }
+    emitListeners(dataListeners, msg, fromPeerId);
     if (!msg?.type) return;
     if (msg.v !== KOTH_PROTOCOL_VERSION) return;
     if (msg._mid) {
@@ -3312,6 +3334,7 @@ export function createKothShard(options = {}) {
   }
 
   function onPeerConnected(peerId) {
+    emitListeners(peerConnectedListeners, peerId);
     if (DEBUG_KOTH) console.info('[KOTH] peer connected', shortId(peerId));
     activeDialTarget = null;
     clearConnectFallbackTimer();
@@ -3346,10 +3369,13 @@ export function createKothShard(options = {}) {
   }
 
   function onPeerDisconnected(peerId) {
+    emitListeners(peerDisconnectedListeners, peerId);
     const uid = peerUserIds.get(peerId);
     peerUserIds.delete(peerId);
     readyPeerIds.delete(peerId);
-    onStatus(`Peer …${shortId(uid ?? peerId)} link lost — waiting for mesh gossip`);
+    if (phase === SHARD_PHASE.LIVE) {
+      onStatus(`Peer …${shortId(uid ?? peerId)} link lost — waiting for mesh gossip`);
+    }
   }
 
   function processPresenceBroadcast(data) {
@@ -3479,6 +3505,7 @@ export function createKothShard(options = {}) {
 
   function onBroadcastMessage(raw) {
     const data = raw && raw.type === 'broadcast' && raw.content ? raw.content : raw;
+    emitListeners(broadcastListeners, data, raw);
     if (!data?.type) return;
     if (data.type !== MSG.SHARD_PRESENCE) {
       onGameBroadcastMessage(data);
@@ -3488,6 +3515,7 @@ export function createKothShard(options = {}) {
   }
 
   function onGameLobbyMessage(data, lobbyName) {
+    emitListeners(lobbyMessageListeners, data, lobbyName);
     if (!data?.type) return;
     // Discovery lobby — track nothing, never RTC here.
     if (lobbyName === MATCHMAKING_LOBBY) return;
@@ -3614,6 +3642,7 @@ export function createKothShard(options = {}) {
 
       const prevSubmit = session.submitCommand.bind(session);
       session.submitCommand = (command) => {
+        if (lobbyMatchHold) return prevSubmit(command);
         if (role !== 'player') return null;
         if (userForPlayerId(session.localPlayerId) !== localUserId) return null;
         const frame = prevSubmit(command);
@@ -3626,6 +3655,10 @@ export function createKothShard(options = {}) {
 
       const prevCommit = session.onCommit;
       session.onCommit = (tick, checksum) => {
+        if (lobbyMatchHold) {
+          prevCommit?.(tick, checksum);
+          return;
+        }
         activateAcceptedJoinsAtTick(tick);
         promoteLocalJoinIfReady(tick);
         syncJoinedPresentationIfReady(tick);
@@ -3642,6 +3675,19 @@ export function createKothShard(options = {}) {
 
       sendTickConfirm(1);
     },
+
+    setLobbyMatchHold(on) {
+      lobbyMatchHold = !!on;
+    },
+
+    getP2p: () => p2p,
+    getUserId: () => localUserId,
+    subscribeBroadcast: (fn) => addListener(broadcastListeners, fn),
+    subscribeLobbyMessage: (fn) => addListener(lobbyMessageListeners, fn),
+    subscribeDataMessage: (fn) => addListener(dataListeners, fn),
+    subscribePeerConnected: (fn) => addListener(peerConnectedListeners, fn),
+    subscribePeerDisconnected: (fn) => addListener(peerDisconnectedListeners, fn),
+    subscribeMatchLobbyConnected: (fn) => addListener(matchLobbyConnectedListeners, fn),
 
     listLiveLobbies,
 

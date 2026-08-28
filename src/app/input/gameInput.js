@@ -3,7 +3,15 @@
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
-import { snapBuildingYaw, BUILDING_FOOTPRINTS, buildingCanRally, isRallyBeyondBuilding } from '../../sim/buildings.js';
+import { snapBuildingYaw, BUILDING_FOOTPRINTS, buildingCanRally, isBuildingAlive, isRallyBeyondBuilding } from '../../sim/buildings.js';
+import {
+  CONTROL_GROUP_HOLD_MS,
+  assignControlGroup,
+  controlGroupFilled,
+  controlGroupIdFromCode,
+  createEmptyControlGroups,
+  livingControlGroup,
+} from './controlGroups.js';
 import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
 import { isMechanical, isTransport, UNIT, getUnitDef } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
@@ -194,6 +202,13 @@ export function createGameInput(opts) {
   let radialGesture = false;
   /** Pointer-down started on a bottom selection-strip chip — select that type on up. */
   let selHudGesture = false;
+  /** Pad id (0..5) when pointer-down started on a control-group button. */
+  let ctrlGroupGesture = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let ctrlGroupHoldTimer = null;
+  let ctrlGroupHoldFired = false;
+  /** @type {{ units: number[], buildings: { kind: string, index: number }[] }[]} */
+  let controlGroups = createEmptyControlGroups();
   /** @type {{ x: number, z: number } | null} */
   let placeAnchor = null;
   let placeRotating = false;
@@ -281,6 +296,168 @@ export function createGameInput(opts) {
       clearTimeout(abilityHoldTimer);
       abilityHoldTimer = null;
     }
+  }
+
+  function clearCtrlGroupHold() {
+    if (ctrlGroupHoldTimer != null) {
+      clearTimeout(ctrlGroupHoldTimer);
+      ctrlGroupHoldTimer = null;
+    }
+    renderer.setControlGroupHold?.(null);
+  }
+
+  function markControlGroupFilled(id) {
+    const live = livingControlGroup(
+      controlGroups[id],
+      getWorld(),
+      localPlayerId,
+      getBuildings?.(),
+      getAgoras?.(),
+    );
+    renderer.setControlGroupCount?.(id, live.units.length + live.buildings.length);
+    return live;
+  }
+
+  function syncControlGroupMarks() {
+    for (let i = 0; i < controlGroups.length; i++) {
+      const g = controlGroups[i];
+      if (!g.units.length && !g.buildings.length) {
+        renderer.setControlGroupCount?.(i, 0);
+        continue;
+      }
+      markControlGroupFilled(i);
+    }
+  }
+
+  function snapshotControlGroupSelection() {
+    compactSelection();
+    const world = getWorld();
+    /** @type {number[]} */
+    const units = [];
+    for (let k = 0; k < selCount; k++) {
+      const i = selIds[k];
+      if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
+      units.push(i);
+    }
+    /** @type {{ kind: string, index: number }[]} */
+    const buildings = [];
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (buildingOwnerOf(sel) !== localPlayerId) continue;
+      if (sel.kind === 'building') {
+        const b = getBuildings?.()?.[sel.index];
+        if (!isBuildingAlive(b)) continue;
+      } else if (sel.kind === 'agora') {
+        if (!getAgoras?.()?.[sel.index]) continue;
+      }
+      buildings.push({ kind: sel.kind, index: sel.index });
+    }
+    return { units, buildings };
+  }
+
+  function assignCurrentToControlGroup(id) {
+    const snap = snapshotControlGroupSelection();
+    if (!assignControlGroup(controlGroups, id, snap.units, snap.buildings)) return;
+    markControlGroupFilled(id);
+  }
+
+  function selectControlGroup(id) {
+    const live = markControlGroupFilled(id);
+    if (!controlGroupFilled(live)) return;
+    abandonPlacement();
+    if (live.units.length > 0) {
+      clearUnitSelectionBits();
+      for (let k = 0; k < live.units.length; k++) selectEntity(live.units[k]);
+      clearBuildingSelection();
+      syncSelectionSquad();
+      onSelectionChanged?.();
+      return;
+    }
+    clearUnitSelection();
+    setBuildingSelection(live.buildings, false, live.buildings[0]);
+  }
+
+  function resetControlGroups() {
+    controlGroups = createEmptyControlGroups();
+    for (let i = 0; i < controlGroups.length; i++) {
+      renderer.setControlGroupCount?.(i, 0);
+    }
+  }
+
+  function armCtrlGroupHold(id) {
+    clearCtrlGroupHold();
+    ctrlGroupHoldFired = false;
+    renderer.setControlGroupHold?.(id);
+    ctrlGroupHoldTimer = setTimeout(() => {
+      ctrlGroupHoldTimer = null;
+      if (ctrlGroupGesture !== id || dragPointerId == null) return;
+      ctrlGroupHoldFired = true;
+      assignCurrentToControlGroup(id);
+    }, CONTROL_GROUP_HOLD_MS);
+  }
+
+  function hitControlGroupHud(clientX, clientY) {
+    return renderer.pickControlGroupHud?.(clientX, clientY) != null;
+  }
+
+  /** Number-key hold (1-6) — separate from the pad pointer gesture. */
+  let ctrlGroupKeyId = null;
+  let ctrlGroupKeyAssigned = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let ctrlGroupKeyTimer = null;
+
+  function clearCtrlGroupKeyHold() {
+    if (ctrlGroupKeyTimer != null) {
+      clearTimeout(ctrlGroupKeyTimer);
+      ctrlGroupKeyTimer = null;
+    }
+    if (ctrlGroupGesture == null) renderer.setControlGroupHold?.(null);
+  }
+
+  /**
+   * Digit / numpad 1-6: tap selects, hold assigns (same as the pads).
+   * Ctrl/Cmd+number assigns immediately.
+   * @param {KeyboardEvent} e
+   */
+  function handleControlGroupKeyDown(e) {
+    if (e.altKey) return false;
+    const id = controlGroupIdFromCode(e.code);
+    if (id == null || !canUseInput()) return false;
+    e.preventDefault();
+    if (e.repeat) return true;
+
+    if (e.ctrlKey || e.metaKey) {
+      clearCtrlGroupKeyHold();
+      ctrlGroupKeyId = id;
+      ctrlGroupKeyAssigned = true;
+      assignCurrentToControlGroup(id);
+      renderer.setControlGroupHold?.(id);
+      return true;
+    }
+
+    clearCtrlGroupKeyHold();
+    ctrlGroupKeyId = id;
+    ctrlGroupKeyAssigned = false;
+    renderer.setControlGroupHold?.(id);
+    ctrlGroupKeyTimer = setTimeout(() => {
+      ctrlGroupKeyTimer = null;
+      if (ctrlGroupKeyId !== id) return;
+      ctrlGroupKeyAssigned = true;
+      assignCurrentToControlGroup(id);
+    }, CONTROL_GROUP_HOLD_MS);
+    return true;
+  }
+
+  /** @param {KeyboardEvent} e */
+  function handleControlGroupKeyUp(e) {
+    const id = controlGroupIdFromCode(e.code);
+    if (id == null || ctrlGroupKeyId !== id) return false;
+    const assigned = ctrlGroupKeyAssigned;
+    ctrlGroupKeyId = null;
+    ctrlGroupKeyAssigned = false;
+    clearCtrlGroupKeyHold();
+    if (!assigned && canUseInput()) selectControlGroup(id);
+    return true;
   }
 
   // --- CPU pick scratch (no per-click allocations on the live path) ---
@@ -1127,12 +1304,22 @@ export function createGameInput(opts) {
     dragPointerId = e.pointerId;
     boxDragging = false;
     abilityHoldFired = false;
+    ctrlGroupGesture = null;
+    ctrlGroupHoldFired = false;
+    clearCtrlGroupHold();
     hideSelectionBox();
 
     // Top selection strip acts as on-screen buttons: a press on a chip owns
     // the gesture (no box-select / ability-hold); the type is selected on up.
     selHudGesture = renderer.pickSelectionHud?.(e.clientX, e.clientY) != null;
     if (selHudGesture) return true;
+
+    const ctrlId = renderer.pickControlGroupHud?.(e.clientX, e.clientY);
+    if (ctrlId != null) {
+      ctrlGroupGesture = ctrlId;
+      armCtrlGroupHold(ctrlId);
+      return true;
+    }
 
     // Placement: LMB down locks anchor; drag past threshold rotates (30° snaps).
     // Radial stays usable so you can switch building type without canceling.
@@ -1165,8 +1352,8 @@ export function createGameInput(opts) {
   function handlePointerMove(e) {
     if (!canUseInput()) return false;
 
-    // Chip press holds the gesture — ignore drags so no box-select starts.
-    if (selHudGesture) return true;
+    // Chip / control-group press holds the gesture — no box-select.
+    if (selHudGesture || ctrlGroupGesture != null) return true;
 
     if (isPlacing()) {
       if (isRadialOpen?.()) void onRadialHover?.(e.clientX, e.clientY);
@@ -1404,18 +1591,26 @@ export function createGameInput(opts) {
     const holdCast = abilityHoldFired;
     const wasRadialGesture = radialGesture;
     const wasSelHud = selHudGesture;
+    const wasCtrlGroup = ctrlGroupGesture;
+    const ctrlHoldAssigned = ctrlGroupHoldFired;
     boxDragging = false;
     abilityHoldFired = false;
     radialGesture = false;
     selHudGesture = false;
+    ctrlGroupGesture = null;
+    ctrlGroupHoldFired = false;
     abilityHoldGen++;
     clearAbilityHold();
+    clearCtrlGroupHold();
 
     // Snapshot before this click mutates lastTap (unit/building double-select-all).
     const prevTap = lastTap;
 
     if (canUseInput() && e.type !== 'pointercancel') {
-      if (wasSelHud) {
+      if (wasCtrlGroup != null) {
+        if (!ctrlHoldAssigned) selectControlGroup(wasCtrlGroup);
+        lastTap = null;
+      } else if (wasSelHud) {
         // Release on the same chip → select every unit/building of that type
         // for the current owner (shift adds), like v1's selection panel.
         const slot = renderer.pickSelectionHud?.(e.clientX, e.clientY);
@@ -1639,9 +1834,12 @@ export function createGameInput(opts) {
     worldClickEpoch++;
     abilityHoldGen++;
     clearAbilityHold();
+    clearCtrlGroupHold();
     abilityHoldFired = false;
     radialGesture = false;
     selHudGesture = false;
+    ctrlGroupGesture = null;
+    ctrlGroupHoldFired = false;
     resetPlaceGesture();
     hideSelectionBox();
     boxStart = null;
@@ -1736,6 +1934,10 @@ export function createGameInput(opts) {
       if (!inputEnabled) {
         abilityHoldGen++;
         clearAbilityHold();
+        clearCtrlGroupHold();
+        ctrlGroupKeyId = null;
+        ctrlGroupKeyAssigned = false;
+        clearCtrlGroupKeyHold();
         clearSelection();
       }
     },
@@ -1744,8 +1946,19 @@ export function createGameInput(opts) {
       if (!inputEnabled) {
         abilityHoldGen++;
         clearAbilityHold();
+        clearCtrlGroupHold();
+        ctrlGroupKeyId = null;
+        ctrlGroupKeyAssigned = false;
+        clearCtrlGroupKeyHold();
         clearSelection();
       }
     },
+    hitControlGroupHud,
+    handleControlGroupKeyDown,
+    handleControlGroupKeyUp,
+    clearControlGroups() {
+      resetControlGroups();
+    },
+    syncControlGroupMarks,
   };
 }

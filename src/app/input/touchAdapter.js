@@ -135,6 +135,8 @@ export function createTouchAdapter({ canvas, camera, game }) {
     const dBottom = r.height - ly;
     const dist = Math.min(dLeft, dRight, dTop, dBottom);
     // Rim only — no inward blend band while edge zoom is disabled.
+    // Control-group pads sit on the sides; they are buttons, not orbit.
+    if (game.hitControlGroupHud?.(clientX, clientY)) return null;
     if (dist >= EDGE_ZONE_PX) return null;
     if (dist === dLeft) return 'left';
     if (dist === dRight) return 'right';
@@ -250,7 +252,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
   }
 
   function armCenterFinger(id, t) {
-    if (game.isPlacing?.()) {
+    if (game.isPlacing?.() || game.hitControlGroupHud?.(t.startX, t.startY)) {
       beginSolo(id, t);
       return;
     }

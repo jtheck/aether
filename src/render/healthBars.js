@@ -15,6 +15,7 @@ import {
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
 import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
+import { HEALTH_BAR_CAPACITY } from './overlayLod.js';
 
 export const UNIT_CHIP_COUNT = 7;
 export const BUILDING_CHIP_COUNT = 9;
@@ -313,7 +314,7 @@ function hideSprite(spr) {
  * @param {{ capacity?: number, getViewportHeight?: () => number }} [opts]
  */
 export function createHealthBars(engine, scene, opts = {}) {
-  const capacity = Math.max(1, opts.capacity ?? 256);
+  const capacity = Math.max(1, opts.capacity ?? HEALTH_BAR_CAPACITY);
   const atlas = createHealthChipAtlas(engine);
   const system = createFacingBillboardSystem(atlas, {
     capacity: capacity * SPRITES_PER_SLOT,
@@ -327,6 +328,8 @@ export function createHealthBars(engine, scene, opts = {}) {
   const slots = [];
   for (let i = 0; i < capacity; i++) slots.push(makeSlot());
   let used = 0;
+  /** Highest slot that was live last frame — `end()` only hides this tail. */
+  let prevUsed = 0;
   let viewH = 720;
   let fov = 0.8;
   let horizonScale = 1;
@@ -518,7 +521,8 @@ export function createHealthBars(engine, scene, opts = {}) {
     },
 
     end() {
-      for (let s = used; s < capacity; s++) hide(slots[s]);
+      for (let s = used; s < prevUsed; s++) hide(slots[s]);
+      prevUsed = used;
     },
 
     clear() {
@@ -535,6 +539,7 @@ export function createHealthBars(engine, scene, opts = {}) {
         slot.active = false;
       }
       used = 0;
+      prevUsed = 0;
     },
   };
 }

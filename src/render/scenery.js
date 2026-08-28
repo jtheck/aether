@@ -596,7 +596,11 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   }
 
   function applyFogDim(factorAt) {
-    fogFactor = typeof factorAt === 'function' ? factorAt : null;
+    const next = typeof factorAt === 'function' ? factorAt : null;
+    // stampFog used to pass a new closure every sim tick — full tree/rock
+    // recolor + color-buffer upload on the stress board.
+    if (next === fogFactor) return;
+    fogFactor = next;
     for (let b = 0; b < batches.length; b++) {
       const batch = batches[b];
       if (!batch.colors) continue;

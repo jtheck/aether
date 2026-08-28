@@ -7,6 +7,7 @@ const SHADOW_KEY = 'shadowMode';
 const FX_KEY = 'fxMode';
 const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
+const EXTRA_GROUPS_KEY = 'extraControlGroups';
 
 /** v1 label set, kept verbatim so the slider reads the same in both versions. */
 export const SHADOW_LABELS = ['Off', 'Low', 'Med', 'Full'];
@@ -336,5 +337,16 @@ export function setPlayerColor(hex) {
     (normalized && PLAYER_COLORS.some((c) => c.hex === normalized) && normalized) ||
     PLAYER_COLORS[0].hex;
   write(COLOR_KEY, next);
+  return next;
+}
+
+/** Extra black + white control-group pads (six total). Off by default. */
+export function getExtraControlGroups() {
+  return read(EXTRA_GROUPS_KEY) === '1';
+}
+
+export function setExtraControlGroups(on) {
+  const next = !!on;
+  write(EXTRA_GROUPS_KEY, next ? '1' : '0');
   return next;
 }

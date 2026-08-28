@@ -2,6 +2,8 @@
 // Three overlay levels: current sight, visited, never-seen. Hostile units stay
 // through the overlay trail and hide when that veil is most opaque. Enemy
 // buildings hide until seen, then last-known while fogged.
+// Changing local player or shared-vision owners wipes explored tiles and
+// last-known buildings so spectator / loading-screen vision cannot leak.
 
 import {
   addToScene,
@@ -45,8 +47,11 @@ export const VISITED_ALPHA = 110;
 const VISITED_COVER = 255 - VISITED_ALPHA;
 /** Time for leftover overlay cover to fade from current sight to its floor. */
 export const COVER_DECAY_MS = 3200;
-/** Upsample the cover field so bilinear has more than one texel per tile. */
-const FOG_TEX_SCALE = 2;
+/**
+ * One texel per tile. GPU linear filter does the fade — a CPU 2× bilinear
+ * resample was ~5ms on the play board and ~24ms + 12MB uploads on stress.
+ */
+const FOG_TEX_SCALE = 1;
 
 const UNIT_VISION_TILES = UNIT_DEFS.map((def) => visionTilesForDef(def));
 
@@ -161,16 +166,96 @@ function padTexWidth(w) {
   return Math.max(TEXEL_ALIGN, Math.ceil(w / TEXEL_ALIGN) * TEXEL_ALIGN);
 }
 
-function tryWriteTexture(engine, texture, pixels, w, h) {
+const EDT_INF = 1 << 28;
+const EDT_MAX_R = 48;
+/** Enough overlapping sources that per-circle raster is slower than one union EDT. */
+const UNION_SOURCE_MIN = 6;
+
+/** @type {Int32Array | null} */
+let edtGrid = null;
+/** @type {Int32Array | null} */
+let edtLine = null;
+/** @type {Int32Array | null} */
+let edtDist = null;
+/** @type {Int32Array | null} */
+let edtV = null;
+/** @type {Float64Array | null} */
+let edtZ = null;
+
+function ensureEdtScratch(bw, bh) {
+  const n = bw * bh;
+  if (!edtGrid || edtGrid.length < n) edtGrid = new Int32Array(n);
+  const m = bw > bh ? bw : bh;
+  if (!edtLine || edtLine.length < m) {
+    edtLine = new Int32Array(m);
+    edtDist = new Int32Array(m);
+    edtV = new Int32Array(m);
+    edtZ = new Float64Array(m + 1);
+  }
+}
+
+/** Felzenszwalb 1D squared distance transform. `f` / `d` are length `n`. */
+function edt1d(f, n, d) {
+  const v = edtV;
+  const z = edtZ;
+  v[0] = 0;
+  z[0] = -1e20;
+  z[1] = 1e20;
+  let k = 0;
+  for (let q = 1; q < n; q++) {
+    const fq = f[q];
+    const q2 = q * q;
+    let s;
+    for (;;) {
+      const vk = v[k];
+      s = (fq + q2 - (f[vk] + vk * vk)) / (2 * (q - vk));
+      if (s > z[k]) break;
+      k--;
+    }
+    k++;
+    v[k] = q;
+    z[k] = s;
+    z[k + 1] = 1e20;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) {
+    while (z[k + 1] < q) k++;
+    const vk = v[k];
+    const dq = q - vk;
+    d[q] = dq * dq + f[vk];
+  }
+}
+
+function edt2d(grid, bw, bh) {
+  for (let x = 0; x < bw; x++) {
+    for (let y = 0; y < bh; y++) edtLine[y] = grid[y * bw + x];
+    edt1d(edtLine, bh, edtDist);
+    for (let y = 0; y < bh; y++) grid[y * bw + x] = edtDist[y];
+  }
+  for (let y = 0; y < bh; y++) {
+    const row = y * bw;
+    for (let x = 0; x < bw; x++) edtLine[x] = grid[row + x];
+    edt1d(edtLine, bw, edtDist);
+    for (let x = 0; x < bw; x++) grid[row + x] = edtDist[x];
+  }
+}
+
+/** `bytesPerRow` is `w*4`; origin.x must stay 256-byte aligned (w is 64-texel padded). */
+function tryWriteTextureRect(engine, texture, pixels, texW, texH, x, y, rw, rh) {
   const device = engine?._device;
   const gpuTex = gpuTextureOf(texture);
   if (!device?.queue?.writeTexture || !gpuTex) return false;
+  const ox = Math.max(0, x | 0);
+  const oy = Math.max(0, y | 0);
+  const bw = Math.min(texW - ox, rw | 0);
+  const bh = Math.min(texH - oy, rh | 0);
+  if (bw <= 0 || bh <= 0) return true;
   try {
     device.queue.writeTexture(
-      { texture: gpuTex },
+      { texture: gpuTex, origin: { x: ox, y: oy } },
       pixels,
-      { bytesPerRow: w * 4, rowsPerImage: h },
-      { width: w, height: h, depthOrArrayLayers: 1 },
+      { offset: (oy * texW + ox) * 4, bytesPerRow: texW * 4, rowsPerImage: bh },
+      { width: bw, height: bh, depthOrArrayLayers: 1 },
     );
     return true;
   } catch {
@@ -254,6 +339,62 @@ export function createFogOfWar() {
   let liftPixels = null;
   let texW = 0;
   let texH = 0;
+  /** Tiles with cover above the explored/unseen floor — decay walks only these. */
+  /** @type {Int32Array | null} */
+  let hot = null;
+  let hotN = 0;
+  /** @type {Uint8Array | null} */
+  let inHot = null;
+  /** Cover changed this stamp — overlay paint / GPU upload. */
+  /** @type {Int32Array | null} */
+  let dirtyList = null;
+  let dirtyN = 0;
+  /** @type {Uint8Array | null} */
+  let dirty = null;
+  let paintedOnce = false;
+  /** Largest vision already stamped from this tile this gen. */
+  /** @type {Uint8Array | null} */
+  let tileStampR = null;
+  /** @type {Uint32Array | null} */
+  let tileStampGen = null;
+  /** Unique source tiles this stamp (same-tile max radius). */
+  /** @type {Int32Array | null} */
+  let srcTiles = null;
+  let srcN = 0;
+  /** @type {Uint8Array | null} */
+  let hasRad = null;
+
+  function resetOverlayScratch(n) {
+    if (!inHot || inHot.length !== n) {
+      inHot = n ? new Uint8Array(n) : null;
+      hot = n ? new Int32Array(n) : null;
+      dirty = n ? new Uint8Array(n) : null;
+      dirtyList = n ? new Int32Array(n) : null;
+      tileStampR = n ? new Uint8Array(n) : null;
+      tileStampGen = n ? new Uint32Array(n) : null;
+      srcTiles = n ? new Int32Array(n) : null;
+    } else {
+      inHot.fill(0);
+      dirty.fill(0);
+    }
+    if (!hasRad) hasRad = new Uint8Array(EDT_MAX_R + 1);
+    hotN = 0;
+    dirtyN = 0;
+    srcN = 0;
+    paintedOnce = false;
+  }
+
+  function markHot(i) {
+    if (!inHot || inHot[i]) return;
+    inHot[i] = 1;
+    hot[hotN++] = i;
+  }
+
+  function markDirty(i) {
+    if (!dirty || dirty[i]) return;
+    dirty[i] = 1;
+    dirtyList[dirtyN++] = i;
+  }
 
   function clearVision() {
     width = field?.width | 0;
@@ -268,6 +409,7 @@ export function createFogOfWar() {
     else cover.fill(0);
     if (!explored || explored.length !== n) explored = n ? new Uint8Array(n) : null;
     else explored.fill(0);
+    resetOverlayScratch(n);
     gen = 1;
     lastStampAt = 0;
   }
@@ -275,19 +417,51 @@ export function createFogOfWar() {
   function forgetOverlay() {
     if (cover) cover.fill(0);
     if (explored) explored.fill(0);
+    resetOverlayScratch(width * height);
+    lastBuildings.clear();
     lastStampAt = 0;
   }
 
+  function sameShareVision(list) {
+    if (list == null) return true;
+    const n = list.length;
+    if (n !== shareVision.size) return false;
+    for (let i = 0; i < n; i++) {
+      if (!shareVision.has(list[i] | 0)) return false;
+    }
+    return true;
+  }
+
   function decayCover(dtMs) {
-    if (!cover || dtMs <= 0) return;
-    for (let i = 0; i < cover.length; i++) {
+    if (!cover || dtMs <= 0 || hotN <= 0) return;
+    const dropOpen = Math.max(1, Math.round((255 * dtMs) / COVER_DECAY_MS));
+    const dropVisited = Math.max(1, Math.round(((255 - VISITED_COVER) * dtMs) / COVER_DECAY_MS));
+    let w = 0;
+    for (let h = 0; h < hotN; h++) {
+      const i = hot[h];
+      if (sight && sight[i] === gen) {
+        hot[w++] = i;
+        continue;
+      }
       const floor = explored && explored[i] ? VISITED_COVER : 0;
       const v = cover[i];
-      if (v <= floor) continue;
-      const span = 255 - floor;
-      const drop = Math.max(1, Math.round((span * dtMs) / COVER_DECAY_MS));
-      cover[i] = v - drop > floor ? v - drop : floor;
+      if (v <= floor) {
+        inHot[i] = 0;
+        continue;
+      }
+      const drop = floor ? dropVisited : dropOpen;
+      const next = v - drop > floor ? v - drop : floor;
+      if (next !== v) {
+        cover[i] = next;
+        markDirty(i);
+      }
+      if (next <= floor) {
+        inHot[i] = 0;
+        continue;
+      }
+      hot[w++] = i;
     }
+    hotN = w;
   }
 
   function adoptField(nextField) {
@@ -369,44 +543,157 @@ export function createFogOfWar() {
     return !trailOpen(x, z);
   }
 
-  function stampCircle(cx, cz, radiusTiles) {
+  function applyStamp(i, hard, d2, hardR2, fadeDen) {
+    const first = !sight || sight[i] !== gen;
+    if (sight) sight[i] = gen;
+    if (hard) {
+      if (visible) visible[i] = gen;
+      if (explored) explored[i] = 1;
+    }
+    if (!cover) return;
+    const c = hard ? 255 : ((fadeDen - (d2 - hardR2)) * 255 / fadeDen) | 0;
+    if (first) {
+      if (c !== cover[i]) {
+        cover[i] = c;
+        markDirty(i);
+      }
+    } else if (c > cover[i]) {
+      cover[i] = c;
+      markDirty(i);
+    }
+    markHot(i);
+  }
+
+  function stampCircle(cx, cz, radiusTiles, mask) {
     if (!visible && !sight) return;
-    const fade = EDGE_FADE_TILES;
-    const outer = radiusTiles + fade;
-    const r = Math.ceil(outer);
+    const outer = radiusTiles + EDGE_FADE_TILES;
     const hardR2 = radiusTiles * radiusTiles;
     const outer2 = outer * outer;
-    const inner = radiusTiles;
-    const fadeSpan = Math.max(0.001, outer - inner);
-    const active = tileActiveLookup(field);
-    for (let tz = cz - r; tz <= cz + r; tz++) {
-      if (tz < 0 || tz >= height) continue;
+    const fadeDen = outer2 - hardR2 || 1;
+    const z0 = cz - outer < 0 ? 0 : cz - outer;
+    const z1 = cz + outer >= height ? height - 1 : cz + outer;
+    for (let tz = z0; tz <= z1; tz++) {
       const dz = tz - cz;
+      const dz2 = dz * dz;
+      const remO = outer2 - dz2;
+      if (remO < 0) continue;
+      const xrO = Math.sqrt(remO) | 0;
+      let xa = cx - xrO;
+      let xb = cx + xrO;
+      if (xa < 0) xa = 0;
+      if (xb >= width) xb = width - 1;
+      const remH = hardR2 - dz2;
+      const xh0 = remH >= 0 ? cx - (Math.sqrt(remH) | 0) : xa;
+      const xh1 = remH >= 0 ? cx + (Math.sqrt(remH) | 0) : xa - 1;
       const row = tz * width;
-      for (let tx = cx - r; tx <= cx + r; tx++) {
-        if (tx < 0 || tx >= width) continue;
-        if (!active(tx, tz)) continue;
-        const dx = tx - cx;
-        const d2 = dx * dx + dz * dz;
-        if (d2 > outer2) continue;
-        if (sight) sight[row + tx] = gen;
-        if (d2 <= hardR2) {
-          if (visible) visible[row + tx] = gen;
-          if (explored) explored[row + tx] = 1;
-        }
-        if (!cover) continue;
-        const d = Math.sqrt(d2);
-        let c = 255;
-        if (d > inner) c = Math.round(255 * (1 - (d - inner) / fadeSpan));
+      for (let tx = xa; tx <= xb; tx++) {
         const i = row + tx;
-        if (c > cover[i]) cover[i] = c;
+        if (mask && mask[i] === 0) continue;
+        const hard = tx >= xh0 && tx <= xh1;
+        const d2 = hard ? 0 : (tx - cx) * (tx - cx) + dz2;
+        applyStamp(i, hard, d2, hardR2, fadeDen);
       }
     }
   }
 
-  function stampWorld(x, z, radiusTiles) {
-    const t = worldToTileF(field, x, z);
-    stampCircle(t.tx, t.tz, radiusTiles);
+  function addSource(x, z, radiusTiles, mask) {
+    const cx = Math.floor((x + half) / TILE_SIZE_F);
+    const cz = Math.floor((z + half) / TILE_SIZE_F);
+    if (cx < 0 || cz < 0 || cx >= width || cz >= height || radiusTiles > EDT_MAX_R) {
+      stampCircle(cx, cz, radiusTiles, mask);
+      return;
+    }
+    const ti = cz * width + cx;
+    if (tileStampGen[ti] === gen) {
+      if (radiusTiles > tileStampR[ti]) tileStampR[ti] = radiusTiles;
+      return;
+    }
+    tileStampGen[ti] = gen;
+    tileStampR[ti] = radiusTiles;
+    srcTiles[srcN++] = ti;
+  }
+
+  function stampUnionEdt(x0, z0, bw, bh, radMin, radMax, mask) {
+    ensureEdtScratch(bw, bh);
+    const grid = edtGrid;
+    const n = bw * bh;
+    for (let r = radMin; r <= radMax; r++) {
+      if (!hasRad[r]) continue;
+      const hardR2 = r * r;
+      const outer = r + EDGE_FADE_TILES;
+      const outer2 = outer * outer;
+      const fadeDen = outer2 - hardR2 || 1;
+      grid.fill(EDT_INF, 0, n);
+      for (let s = 0; s < srcN; s++) {
+        const ti = srcTiles[s];
+        if (tileStampR[ti] !== r) continue;
+        const tz = (ti / width) | 0;
+        const tx = ti - tz * width;
+        grid[(tz - z0) * bw + (tx - x0)] = 0;
+      }
+      edt2d(grid, bw, bh);
+      for (let lz = 0; lz < bh; lz++) {
+        const tz = z0 + lz;
+        const row = tz * width;
+        const grow = lz * bw;
+        for (let lx = 0; lx < bw; lx++) {
+          const d2 = grid[grow + lx];
+          if (d2 > outer2) continue;
+          const i = row + x0 + lx;
+          if (mask && mask[i] === 0) continue;
+          applyStamp(i, d2 <= hardR2, d2, hardR2, fadeDen);
+        }
+      }
+    }
+  }
+
+  function flushSources(mask) {
+    if (srcN <= 0) return;
+    let x0 = width;
+    let z0 = height;
+    let x1 = -1;
+    let z1 = -1;
+    let radMin = EDT_MAX_R;
+    let radMax = 0;
+    let circleWork = 0;
+    hasRad.fill(0);
+    let nRad = 0;
+    for (let s = 0; s < srcN; s++) {
+      const ti = srcTiles[s];
+      const tz = (ti / width) | 0;
+      const tx = ti - tz * width;
+      const r = tileStampR[ti];
+      const o = r + EDGE_FADE_TILES;
+      circleWork += (2 * o + 1) * (2 * o + 1);
+      if (tx - o < x0) x0 = tx - o;
+      if (tz - o < z0) z0 = tz - o;
+      if (tx + o > x1) x1 = tx + o;
+      if (tz + o > z1) z1 = tz + o;
+      if (r < radMin) radMin = r;
+      if (r > radMax) radMax = r;
+      if (!hasRad[r]) {
+        hasRad[r] = 1;
+        nRad++;
+      }
+    }
+    if (x0 < 0) x0 = 0;
+    if (z0 < 0) z0 = 0;
+    if (x1 >= width) x1 = width - 1;
+    if (z1 >= height) z1 = height - 1;
+    const bw = x1 - x0 + 1;
+    const bh = z1 - z0 + 1;
+    const useUnion = srcN >= UNION_SOURCE_MIN && circleWork > bw * bh * nRad * 3;
+    if (!useUnion) {
+      for (let s = 0; s < srcN; s++) {
+        const ti = srcTiles[s];
+        const tz = (ti / width) | 0;
+        stampCircle(ti - tz * width, tz, tileStampR[ti], mask);
+      }
+      srcN = 0;
+      return;
+    }
+    stampUnionEdt(x0, z0, bw, bh, radMin, radMax, mask);
+    srcN = 0;
   }
 
   /**
@@ -423,7 +710,11 @@ export function createFogOfWar() {
    */
   function stamp(input) {
     const nextPlayer = input.localPlayerId ?? localPlayerId;
-    if (nextPlayer !== localPlayerId) forgetOverlay();
+    // Spectator catch-up and loading-screen shared vision stamp every army.
+    // Dropping that set (or swapping local player) must wipe explored tiles
+    // and last-known buildings — otherwise the joiner keeps a second map.
+    const shareChanged = input.shareVisionWith !== undefined && !sameShareVision(input.shareVisionWith);
+    if (nextPlayer !== localPlayerId || shareChanged) forgetOverlay();
     localPlayerId = nextPlayer;
     if (input.shareVisionWith !== undefined) adoptShareVision(input.shareVisionWith);
     // Spectators (localPlayerId < 0) still run fog when the caller asks, so
@@ -439,9 +730,7 @@ export function createFogOfWar() {
       return;
     }
     const now = input.now ?? Date.now();
-    if (lastStampAt > 0) {
-      decayCover(Math.min(COVER_DECAY_MS, Math.max(0, now - lastStampAt)));
-    }
+    const dt = lastStampAt > 0 ? Math.min(COVER_DECAY_MS, Math.max(0, now - lastStampAt)) : 0;
     lastStampAt = now;
     gen++;
     if (gen === 0xffffffff) {
@@ -449,6 +738,9 @@ export function createFogOfWar() {
       if (sight) sight.fill(0);
       gen = 1;
     }
+    const maskSrc = field.activeMask ?? field.tileMask ?? field.enabledMask;
+    const mask = maskSrc && maskSrc.length >= width * height ? maskSrc : null;
+    srcN = 0;
     const world = input.world;
     if (world) {
       const n = world.count | 0;
@@ -457,10 +749,11 @@ export function createFogOfWar() {
         if (!world.alive[i]) continue;
         if (carried && carried[i] >= 0) continue;
         if (!isVisionAlly(world.owner[i])) continue;
-        stampWorld(
+        addSource(
           fx.toFloat(world.px[i]),
           fx.toFloat(world.py[i]),
           visionTilesForUnitType(world.type[i]),
+          mask,
         );
       }
     }
@@ -469,7 +762,7 @@ export function createFogOfWar() {
       for (let i = 0; i < buildings.length; i++) {
         const b = buildings[i];
         if (!isVisionAlly(b.owner)) continue;
-        stampWorld(b.x, b.z, visionTilesForBuilding(b.type));
+        addSource(b.x, b.z, visionTilesForBuilding(b.type), mask);
       }
     }
     const agoras = input.agoras;
@@ -477,9 +770,11 @@ export function createFogOfWar() {
       for (let i = 0; i < agoras.length; i++) {
         const a = agoras[i];
         if (!isVisionAlly(a.owner)) continue;
-        stampWorld(a.x, a.z, visionTilesForBuilding('agora'));
+        addSource(a.x, a.z, visionTilesForBuilding('agora'), mask);
       }
     }
+    flushSources(mask);
+    if (dt > 0) decayCover(dt);
     if (mesh) mesh.visible = true;
   }
 
@@ -562,25 +857,6 @@ export function createFogOfWar() {
     return (c00 * (1 - tx) + c10 * tx) * (1 - tz) + (c01 * (1 - tx) + c11 * tx) * tz;
   }
 
-  function layerAlphas(seen) {
-    if (seen <= 0) return { unseen: 255, visited: 0, lift: 0 };
-    if (seen >= 255) return { unseen: 0, visited: 0, lift: 255 };
-    if (seen <= VISITED_COVER) {
-      const t = seen / VISITED_COVER;
-      return {
-        unseen: Math.round(255 * (1 - t)),
-        visited: Math.round(255 * t),
-        lift: 0,
-      };
-    }
-    const t = (seen - VISITED_COVER) / (255 - VISITED_COVER);
-    return {
-      unseen: 0,
-      visited: Math.round(255 * (1 - t)),
-      lift: Math.round(255 * t),
-    };
-  }
-
   function writeLayer(buf, o, alpha) {
     buf[o] = 255;
     buf[o + 1] = 255;
@@ -588,32 +864,91 @@ export function createFogOfWar() {
     buf[o + 3] = alpha;
   }
 
-  function paintPixels() {
+  function paintTexel(tx, tz) {
+    const o = (tz * texW + tx) * 4;
+    const seen = cover
+      ? coverAt(tx, tz)
+      : visible && visible[tz * width + tx] === gen
+        ? 255
+        : 0;
+    let unseen;
+    let visitedA;
+    let lift;
+    if (seen <= 0) {
+      unseen = 255;
+      visitedA = 0;
+      lift = 0;
+    } else if (seen >= 255) {
+      unseen = 0;
+      visitedA = 0;
+      lift = 255;
+    } else if (seen <= VISITED_COVER) {
+      const t = seen / VISITED_COVER;
+      unseen = Math.round(255 * (1 - t));
+      visitedA = Math.round(255 * t);
+      lift = 0;
+    } else {
+      const t = (seen - VISITED_COVER) / (255 - VISITED_COVER);
+      unseen = 0;
+      visitedA = Math.round(255 * (1 - t));
+      lift = Math.round(255 * t);
+    }
+    writeLayer(pixels, o, unseen);
+    writeLayer(visitedPixels, o, visitedA);
+    writeLayer(liftPixels, o, lift);
+  }
+
+  function paintPixels(incremental) {
     if (!pixels || !visitedPixels || !liftPixels) return;
+    if (incremental) {
+      for (let d = 0; d < dirtyN; d++) {
+        const i = dirtyList[d];
+        const tz = (i / width) | 0;
+        paintTexel(i - tz * width, tz);
+      }
+      return;
+    }
     pixels.fill(0);
     visitedPixels.fill(0);
     liftPixels.fill(0);
     if (!cover && !visible) return;
-    const scale = FOG_TEX_SCALE;
-    const srcH = height * scale;
-    const srcW = width * scale;
-    for (let sz = 0; sz < srcH; sz++) {
-      const dstRow = sz * texW;
-      const fz = (sz + 0.5) / scale - 0.5;
-      for (let sx = 0; sx < srcW; sx++) {
-        const o = (dstRow + sx) * 4;
-        const fx = (sx + 0.5) / scale - 0.5;
-        const seen = cover
-          ? sampleCover(fx, fz)
-          : visible && visible[Math.round(fz) * width + Math.round(fx)] === gen
-            ? 255
-            : 0;
-        const layers = layerAlphas(seen);
-        writeLayer(pixels, o, layers.unseen);
-        writeLayer(visitedPixels, o, layers.visited);
-        writeLayer(liftPixels, o, layers.lift);
-      }
+    for (let tz = 0; tz < height; tz++) {
+      for (let tx = 0; tx < width; tx++) paintTexel(tx, tz);
     }
+    paintedOnce = true;
+  }
+
+  function clearDirty() {
+    if (!dirty || dirtyN <= 0) {
+      dirtyN = 0;
+      return;
+    }
+    for (let d = 0; d < dirtyN; d++) dirty[dirtyList[d]] = 0;
+    dirtyN = 0;
+  }
+
+  function dirtyTexBounds() {
+    if (dirtyN <= 0) return null;
+    let x0 = width;
+    let z0 = height;
+    let x1 = -1;
+    let z1 = -1;
+    for (let d = 0; d < dirtyN; d++) {
+      const i = dirtyList[d];
+      const tz = (i / width) | 0;
+      const tx = i - tz * width;
+      if (tx < x0) x0 = tx;
+      if (tz < z0) z0 = tz;
+      if (tx > x1) x1 = tx;
+      if (tz > z1) z1 = tz;
+    }
+    if (x1 < 0) return null;
+    x0 -= x0 % TEXEL_ALIGN;
+    const xEnd = Math.min(texW, Math.ceil((x1 + 1) / TEXEL_ALIGN) * TEXEL_ALIGN);
+    const w = xEnd - x0;
+    const h = z1 - z0 + 1;
+    if (w * h * 2 >= texW * texH) return null;
+    return { x: x0, y: z0, w, h };
   }
 
   function bindOneOpacity(mat, next) {
@@ -625,7 +960,14 @@ export function createFogOfWar() {
     markMaterialUboDirty?.(mat);
   }
 
-  function writeOpacityTexture(prev, data) {
+  function writeOpacityTexture(prev, data, rect) {
+    if (
+      prev &&
+      rect &&
+      tryWriteTextureRect(engine, prev, data, texW, texH, rect.x, rect.y, rect.w, rect.h)
+    ) {
+      return prev;
+    }
     if (prev && tryWriteTexture(engine, prev, data, texW, texH)) return prev;
     const next = createTexture2DFromPixels(engine, data, texW, texH, {
       minFilter: 'linear',
@@ -645,13 +987,17 @@ export function createFogOfWar() {
 
   function uploadTexture() {
     if (!engine || !pixels || !visitedPixels || !liftPixels || !texW || !texH) return;
-    paintPixels();
-    texture = writeOpacityTexture(texture, pixels);
-    visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels);
-    liftTexture = writeOpacityTexture(liftTexture, liftPixels);
+    if (paintedOnce && dirtyN === 0) return;
+    const incremental = paintedOnce && dirtyN > 0;
+    paintPixels(incremental);
+    const rect = incremental ? dirtyTexBounds() : null;
+    texture = writeOpacityTexture(texture, pixels, rect);
+    visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels, rect);
+    liftTexture = writeOpacityTexture(liftTexture, liftPixels, rect);
     bindOneOpacity(material, texture);
     bindOneOpacity(visitedMaterial, visitedTexture);
     bindOneOpacity(liftMaterial, liftTexture);
+    clearDirty();
   }
 
   function buildOverlayMesh() {

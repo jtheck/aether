@@ -437,6 +437,29 @@ describe('fogOfWar vision identity', () => {
   });
 });
 
+describe('fogOfWar dirty tiles', () => {
+  it('lists cover-changed tiles so scenery can retint without a full pass', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    fog.stamp({
+      world: fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+      now: 1000,
+    });
+    const dirty = new Set();
+    fog.forEachDirtyTile((i) => dirty.add(i));
+    const origin = worldToTileF(field, 0, 0);
+    assert.ok(dirty.size > 0);
+    assert.ok(dirty.has(origin.tz * field.width + origin.tx));
+    assert.equal(fog.overlayNeedsFullPaint(), true);
+  });
+});
+
 describe('fogOfWar agoras', () => {
   it('keeps enemy agoras visible even when their tile is fogged', () => {
     const field = fakeField(20, 20);

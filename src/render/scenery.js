@@ -16,7 +16,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { SCENERY, rockScaleForStage, rockStageFromStock } from '../sim/scenery.js';
 import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
-import { treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
+import { TREE_STAGE_MAX, treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
 import { capacityFor } from '../sim/capacity.js';
 import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
 import { hasBakedMesh } from './bakedAssets.js';
@@ -46,8 +46,8 @@ const FOG_DIM = 0.16;
 const VISITED_DIM = 0.50;
 /** Matches fogOfWar VISITED_ALPHA / 255 so the mid step lands on explored tiles. */
 const VISITED_FOG_T = 110 / 255;
-/** Extra albedo in the live vision hole so current sight reads brighter than visited. */
-const SIGHT_LIFT = 1.4;
+/** Current sight matches unfogged albedo — the overlay hole is already clear. */
+const SIGHT_LIFT = 1;
 /** How long a gather-click flash lasts on the targeted tree / rock. */
 const HARVEST_PING_MS = 280;
 /** 0.5 → one peak then rest. */
@@ -63,6 +63,23 @@ function fogAlbedoScale(t) {
   }
   return VISITED_DIM + ((t - VISITED_FOG_T) / (1 - VISITED_FOG_T)) * (FOG_DIM - VISITED_DIM);
 }
+
+/** 1 = full leaf color (current sight), 0 = gray (visited / unseen). */
+function fogChroma(t) {
+  if (t <= 0) return 1;
+  if (t >= VISITED_FOG_T) return 0;
+  return 1 - t / VISITED_FOG_T;
+}
+
+/**
+ * Dark (never-seen) tiles still read leafy — gray instance color × green albedo.
+ * Mid/visited stays as-is; peak the green-kill on the shroud.
+ */
+function unseenGreenKill(t) {
+  if (t <= VISITED_FOG_T) return 0;
+  if (t >= 1) return 1;
+  return (t - VISITED_FOG_T) / (1 - VISITED_FOG_T);
+}
 /**
  * Untextured PBR + outdoor key / 1.55 exposure reads as a chalk wash.
  * Thin-instance color multiplies albedo (same path as fog), so this hits
@@ -70,6 +87,29 @@ function fogAlbedoScale(t) {
  */
 const TREE_ALBEDO_DIM = 0.24;
 const ROCK_ALBEDO_DIM = 0.30;
+/** Sapling — brighter leaf green. Same multiply range as TREE_ALBEDO_DIM. */
+const TREE_TINT_SMALL = [0.26, 0.48, 0.16];
+/** Mature canopy — same green, much darker. */
+const TREE_TINT_BIG = [0.07, 0.12, 0.045];
+/** Same-stage trees scatter this far along the size→tint axis (0–1). */
+const TREE_TINT_JITTER = 0.55;
+const TREE_SCALE_LO = treeScaleForStage(1);
+const TREE_SCALE_HI = treeScaleForStage(TREE_STAGE_MAX);
+
+function treeTintHash(tileIndex) {
+  return ((Math.imul(tileIndex | 0, 1103515245) + 12345) >>> 16) / 65535;
+}
+
+function treeTintRgb(scale, tileIndex) {
+  const span = TREE_SCALE_HI - TREE_SCALE_LO || 1;
+  const jitter = (treeTintHash(tileIndex) - 0.5) * TREE_TINT_JITTER;
+  const t = Math.min(1, Math.max(0, (scale - TREE_SCALE_LO) / span + jitter));
+  return [
+    TREE_TINT_SMALL[0] + (TREE_TINT_BIG[0] - TREE_TINT_SMALL[0]) * t,
+    TREE_TINT_SMALL[1] + (TREE_TINT_BIG[1] - TREE_TINT_SMALL[1]) * t,
+    TREE_TINT_SMALL[2] + (TREE_TINT_BIG[2] - TREE_TINT_SMALL[2]) * t,
+  ];
+}
 const placementScratch = new Float64Array(16);
 
 function setThinInstanceCount(mesh, count) {
@@ -149,6 +189,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       applyTreeUpdates() {},
       applyRockUpdates() {},
       applyFogDim() {},
+      applyFogTiles() {},
       pingHarvest() { return false; },
       dispose() {},
     };
@@ -413,10 +454,18 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       for (let b = 0; b < batches.length; b++) {
         const batch = batches[b];
         let moved = false;
+        const tintTrees = batch.variant.kind === SCENERY.TREE;
+        let tinted = false;
         for (let i = 0; i < batch.instances.length; i++) {
-          if (advanceInstanceScale(batch.instances[i], dt)) moved = true;
+          if (!advanceInstanceScale(batch.instances[i], dt)) continue;
+          moved = true;
+          if (tintTrees) {
+            writeFogColor(batch, i);
+            tinted = true;
+          }
         }
         if (moved) batch.dirty = true;
+        if (tinted) flushBatchColors(batch);
       }
     }
 
@@ -550,13 +599,27 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (!colors) return;
     const p = batch.instances[index];
     const t = fogFactor ? fogFactor(p.x, p.z) : 0;
-    const scale = fogFactor ? fogAlbedoScale(t) : 1;
-    const boost = harvestBoost(p.tileIndex, performance.now());
-    const c = albedoDimFor(batch.variant.kind) * scale * boost;
+    const fogMul = (fogFactor ? fogAlbedoScale(t) : 1) * harvestBoost(p.tileIndex, performance.now());
     const o = index * 4;
-    colors[o] = c;
-    colors[o + 1] = c;
-    colors[o + 2] = c;
+    if (batch.variant.kind === SCENERY.TREE) {
+      let [r, g, b] = treeTintRgb(p.stockScale ?? 0, p.tileIndex);
+      if (fogFactor) {
+        const chroma = fogChroma(t);
+        const luma = r * 0.3 + g * 0.59 + b * 0.11;
+        r = luma + (r - luma) * chroma;
+        g = luma + (g - luma) * chroma;
+        b = luma + (b - luma) * chroma;
+        g *= 1 - 0.62 * unseenGreenKill(t);
+      }
+      colors[o] = r * fogMul;
+      colors[o + 1] = g * fogMul;
+      colors[o + 2] = b * fogMul;
+    } else {
+      const c = ROCK_ALBEDO_DIM * fogMul;
+      colors[o] = c;
+      colors[o + 1] = c;
+      colors[o + 2] = c;
+    }
     colors[o + 3] = 1;
   }
 
@@ -595,18 +658,31 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     }
   }
 
-  function applyFogDim(factorAt) {
-    const next = typeof factorAt === 'function' ? factorAt : null;
-    // stampFog used to pass a new closure every sim tick — full tree/rock
-    // recolor + color-buffer upload on the stress board.
-    if (next === fogFactor) return;
-    fogFactor = next;
+  function recolorAllFog() {
     for (let b = 0; b < batches.length; b++) {
       const batch = batches[b];
       if (!batch.colors) continue;
       for (let i = 0; i < batch.instances.length; i++) writeFogColor(batch, i);
       flushBatchColors(batch);
     }
+  }
+
+  function applyFogDim(factorAt) {
+    const next = typeof factorAt === 'function' ? factorAt : null;
+    fogFactor = next;
+    recolorAllFog();
+  }
+
+  function applyFogTiles(forEachTile) {
+    if (!fogFactor || typeof forEachTile !== 'function') return;
+    const flushed = new Set();
+    forEachTile((tileIndex) => {
+      const ref = instanceByTile.get(tileIndex);
+      if (!ref) return;
+      writeFogColor(ref.batch, ref.index);
+      flushed.add(ref.batch);
+    });
+    for (const batch of flushed) flushBatchColors(batch);
   }
 
   function dispose() {
@@ -625,7 +701,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     treeBatch = null;
   }
 
-  return { meshes, modelsReady, update, applyTreeUpdates, applyRockUpdates, applyFogDim, pingHarvest, dispose };
+  return { meshes, modelsReady, update, applyTreeUpdates, applyRockUpdates, applyFogDim, applyFogTiles, pingHarvest, dispose };
 }
 
 function makeEmptyTreeInstance() {

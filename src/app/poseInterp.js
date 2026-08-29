@@ -5,7 +5,7 @@
  */
 
 /** Tight enough to stay glued, slow enough to soak a 50ms pose corner. */
-export const FOLLOW_POSE_RATE = 10;
+export const FOLLOW_POSE_RATE = 9;
 
 const _xz = { x: 0, z: 0 };
 

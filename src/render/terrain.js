@@ -189,6 +189,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       applyTreeUpdates() {},
       applyRockUpdates() {},
       applyFogDim() {},
+      applyFogTiles() {},
       pingHarvest() { return false; },
       dispose() {},
     };
@@ -218,6 +219,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     },
     applyFogDim(isVisible) {
       if (!disposed) scenery.applyFogDim?.(isVisible);
+    },
+    applyFogTiles(forEachTile) {
+      if (!disposed) scenery.applyFogTiles?.(forEachTile);
     },
     rebuildAtlasChunks(nextField, chunkKeys) {
       if (disposed || !chunkSize) return false;

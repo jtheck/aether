@@ -3836,6 +3836,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       terrain?.applyFogDim?.(isVisible);
     },
 
+    applySceneryFogTiles(forEachTile) {
+      terrain?.applyFogTiles?.(forEachTile);
+    },
+
     applyTreeUpdates(updatesList) {
       if (!updatesList?.length) return;
       for (let i = 0; i < updatesList.length; i++) {

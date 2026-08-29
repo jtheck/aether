@@ -1,7 +1,7 @@
 // Client-only fog of war. Vision is a 20 Hz tile stamp — not in lockstep/checksums.
-// Three overlay levels: current sight, visited, never-seen. Hostile units stay
-// through the overlay trail and hide when that veil is most opaque. Enemy
-// buildings hide until seen, then last-known while fogged.
+// Two overlay veils: visited and never-seen. Current sight is a hole — no wash.
+// Hostile units stay through the overlay trail and hide when that veil is most
+// opaque. Enemy buildings hide until seen, then last-known while fogged.
 // Changing local player or shared-vision owners wipes explored tiles and
 // last-known buildings so spectator / loading-screen vision cannot leak.
 
@@ -34,9 +34,6 @@ const UNSEEN_DIFFUSE = [0.01, 0.016, 0.028];
 /** Visited veil — darker than daylight, still lighter than the shroud. */
 const VISITED_MESH_ALPHA = 0.50;
 const VISITED_DIFFUSE = [0.045, 0.058, 0.072];
-/** Unlit olive wash on current sight only — lifts the hole without a second sun. */
-const SIGHT_LIFT_ALPHA = 0.30;
-const SIGHT_LIFT_DIFFUSE = [0.46, 0.50, 0.36];
 const OVERLAY_LIFT = 0.18;
 const TEXEL_ALIGN = 64;
 /** Soft overlay + hide skirt past the hard explored circle. */
@@ -295,6 +292,8 @@ function tryWriteTextureRect(engine, texture, pixels, texW, texH, x, y, rw, rh) 
  *   attachOverlay: (engine: object, scene: object, field: object) => void,
  *   syncOverlay: () => void,
  *   detachOverlay: () => void,
+ *   overlayNeedsFullPaint: () => boolean,
+ *   forEachDirtyTile: (fn: (tileIndex: number) => void) => void,
  *   overlayAlphaAt: (x: number, z: number) => number,
  *   fogFactorAt: (x: number, z: number) => number,
  * }}
@@ -339,21 +338,13 @@ export function createFogOfWar() {
   /** @type {object | null} */
   let visitedMaterial = null;
   /** @type {object | null} */
-  let liftMesh = null;
-  /** @type {object | null} */
-  let liftMaterial = null;
-  /** @type {object | null} */
   let texture = null;
   /** @type {object | null} */
   let visitedTexture = null;
-  /** @type {object | null} */
-  let liftTexture = null;
   /** @type {Uint8Array | null} */
   let pixels = null;
   /** @type {Uint8Array | null} */
   let visitedPixels = null;
-  /** @type {Uint8Array | null} */
-  let liftPixels = null;
   let texW = 0;
   let texH = 0;
   /** Tiles with cover above the explored/unseen floor — decay walks only these. */
@@ -884,33 +875,27 @@ export function createFogOfWar() {
         : 0;
     let unseen;
     let visitedA;
-    let lift;
     if (seen <= 0) {
       unseen = 255;
       visitedA = 0;
-      lift = 0;
     } else if (seen >= 255) {
       unseen = 0;
       visitedA = 0;
-      lift = 255;
     } else if (seen <= VISITED_COVER) {
       const t = seen / VISITED_COVER;
       unseen = Math.round(255 * (1 - t));
       visitedA = Math.round(255 * t);
-      lift = 0;
     } else {
       const t = (seen - VISITED_COVER) / (255 - VISITED_COVER);
       unseen = 0;
       visitedA = Math.round(255 * (1 - t));
-      lift = Math.round(255 * t);
     }
     writeLayer(pixels, o, unseen);
     writeLayer(visitedPixels, o, visitedA);
-    writeLayer(liftPixels, o, lift);
   }
 
   function paintPixels(incremental) {
-    if (!pixels || !visitedPixels || !liftPixels) return;
+    if (!pixels || !visitedPixels) return;
     if (incremental) {
       for (let d = 0; d < dirtyN; d++) {
         const i = dirtyList[d];
@@ -921,7 +906,6 @@ export function createFogOfWar() {
     }
     pixels.fill(0);
     visitedPixels.fill(0);
-    liftPixels.fill(0);
     if (!cover && !visible) return;
     for (let tz = 0; tz < height; tz++) {
       for (let tx = 0; tx < width; tx++) paintTexel(tx, tz);
@@ -1001,20 +985,18 @@ export function createFogOfWar() {
   }
 
   function uploadTexture() {
-    if (!engine || !pixels || !visitedPixels || !liftPixels || !texW || !texH) return;
+    if (!engine || !pixels || !visitedPixels || !texW || !texH) return;
     // After detach/attach the pixel buffers are new but paintedOnce can still
     // be true — a dirty-only upload then writes a hole into a zeroed shroud
     // (wilderness stays transparent = inverted mask).
-    if (paintedOnce && dirtyN === 0 && texture && visitedTexture && liftTexture) return;
-    const incremental = !!(paintedOnce && dirtyN > 0 && texture && visitedTexture && liftTexture);
+    if (paintedOnce && dirtyN === 0 && texture && visitedTexture) return;
+    const incremental = !!(paintedOnce && dirtyN > 0 && texture && visitedTexture);
     paintPixels(incremental);
     const rect = incremental ? dirtyTexBounds() : null;
     texture = writeOpacityTexture(texture, pixels, rect);
     visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels, rect);
-    liftTexture = writeOpacityTexture(liftTexture, liftPixels, rect);
     bindOneOpacity(material, texture);
     bindOneOpacity(visitedMaterial, visitedTexture);
-    bindOneOpacity(liftMaterial, liftTexture);
     clearDirty();
   }
 
@@ -1055,7 +1037,6 @@ export function createFogOfWar() {
     const uv = new Float32Array(uvs);
     material = createOverlayMaterial(UNSEEN_DIFFUSE, UNSEEN_MESH_ALPHA);
     visitedMaterial = createOverlayMaterial(VISITED_DIFFUSE, VISITED_MESH_ALPHA);
-    liftMaterial = createOverlayMaterial(SIGHT_LIFT_DIFFUSE, SIGHT_LIFT_ALPHA);
     mesh = addOverlayMesh('fog-of-war', pos, normals, idx, uv, material);
     visitedMesh = addOverlayMesh(
       'fog-visited',
@@ -1065,16 +1046,7 @@ export function createFogOfWar() {
       uv.slice(),
       visitedMaterial,
     );
-    liftMesh = addOverlayMesh(
-      'fog-sight-lift',
-      pos.slice(),
-      normals.slice(),
-      idx.slice(),
-      uv.slice(),
-      liftMaterial,
-    );
     if (visitedMesh.position) visitedMesh.position.y = 0.03;
-    if (liftMesh.position) liftMesh.position.y = 0.05;
     uploadTexture();
   }
 
@@ -1103,22 +1075,16 @@ export function createFogOfWar() {
   function detachOverlay() {
     if (mesh) softDetachMesh(scene, mesh);
     if (visitedMesh) softDetachMesh(scene, visitedMesh);
-    if (liftMesh) softDetachMesh(scene, liftMesh);
     mesh = null;
     material = null;
     visitedMesh = null;
     visitedMaterial = null;
-    liftMesh = null;
-    liftMaterial = null;
     disposeTexture(texture);
     disposeTexture(visitedTexture);
-    disposeTexture(liftTexture);
     texture = null;
     visitedTexture = null;
-    liftTexture = null;
     pixels = null;
     visitedPixels = null;
-    liftPixels = null;
     texW = 0;
     texH = 0;
     paintedOnce = false;
@@ -1136,7 +1102,6 @@ export function createFogOfWar() {
     texH = Math.max(1, height * FOG_TEX_SCALE);
     pixels = new Uint8Array(texW * texH * 4);
     visitedPixels = new Uint8Array(texW * texH * 4);
-    liftPixels = new Uint8Array(texW * texH * 4);
     paintedOnce = false;
     buildOverlayMesh();
   }
@@ -1145,9 +1110,17 @@ export function createFogOfWar() {
     if (!mesh || !material) return;
     mesh.visible = enabled;
     if (visitedMesh) visitedMesh.visible = enabled;
-    if (liftMesh) liftMesh.visible = enabled;
     if (!enabled) return;
     uploadTexture();
+  }
+
+  function overlayNeedsFullPaint() {
+    return !paintedOnce;
+  }
+
+  function forEachDirtyTile(fn) {
+    if (!fn || dirtyN <= 0) return;
+    for (let d = 0; d < dirtyN; d++) fn(dirtyList[d]);
   }
 
   return {
@@ -1164,6 +1137,8 @@ export function createFogOfWar() {
     attachOverlay,
     syncOverlay,
     detachOverlay,
+    overlayNeedsFullPaint,
+    forEachDirtyTile,
     overlayAlphaAt,
     fogFactorAt,
   };

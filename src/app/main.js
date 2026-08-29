@@ -749,17 +749,21 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return;
     }
     const t1 = frameProf ? performance.now() : 0;
+    // Recolor trees/rocks before syncOverlay — that upload clears the dirty list
+    // and marks the overlay painted.
+    const on = fog.isEnabled();
+    if (on !== sceneryFogOn || (on && fog.overlayNeedsFullPaint?.())) {
+      sceneryFogOn = on;
+      renderer.applySceneryFog?.(on ? sceneryFogAt : null);
+    } else if (on) {
+      renderer.applySceneryFogTiles?.(fog.forEachDirtyTile);
+    }
     try {
       fog.syncOverlay();
     } catch (err) {
       console.warn('[fog] overlay upload failed', err);
     }
     const t2 = frameProf ? performance.now() : 0;
-    const on = fog.isEnabled();
-    if (on !== sceneryFogOn) {
-      sceneryFogOn = on;
-      renderer.applySceneryFog?.(on ? sceneryFogAt : null);
-    }
     if (frameProf) {
       frameProf.acc.fogStamp = (frameProf.acc.fogStamp ?? 0) + (t1 - t0);
       frameProf.acc.fogUpload = (frameProf.acc.fogUpload ?? 0) + (t2 - t1);

@@ -81,7 +81,7 @@ function fireballSplashIgnitesNearbyTree() {
   const hit = applyTreeSplash(field, x, y, fx.fromFloat(5));
   assert.equal(hit, true);
   assert.ok(field.treeBurn[i] > 0);
-  assert.equal(field.treeStock[i], before - TREE_IGNITE_DAMAGE, 'ignite does not delete stock');
+  assert.equal(field.treeStock[i], before - TREE_IGNITE_DAMAGE, 'splash chips two stages on ignite');
 }
 
 function fireballProjectileBurnsTreesThroughStep() {

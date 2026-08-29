@@ -21,8 +21,8 @@ export const TREE_WOOD_PER_STAGE = 7;
 export const TREE_STAGE_MIN = 2;
 export const TREE_STAGE_MAX = 6;
 
-/** Ignite only — stock burns away over time, not on the initial blast. */
-export const TREE_IGNITE_DAMAGE = 0;
+/** Immediate chip on fireball splash — two visual stages, then the tree keeps burning. */
+export const TREE_IGNITE_DAMAGE = TREE_WOOD_PER_STAGE * 2;
 /** Ticks a tree stays lit after ignite / re-ignite (~45s at 20Hz). Uint16. */
 export const TREE_BURN_TICKS = 900;
 /** While burning, lose one stage on this cadence (~2.5s at 20Hz). */

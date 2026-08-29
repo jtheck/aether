@@ -13,7 +13,7 @@ import {
   livingControlGroup,
 } from './controlGroups.js';
 import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
-import { isMechanical, isTransport, UNIT, getUnitDef } from '../../sim/unitTypes.js';
+import { isMechanical, isTransport, UNIT, getUnitDef, unitAttacksBuildings } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
@@ -1095,6 +1095,8 @@ export function createGameInput(opts) {
     }
 
     // Hostile placeable — same hard attack + flash as a unit click.
+    // Units that cannot hit buildings (priests) keep the ground attack-move.
+    let moveIds = ids;
     if (cmdType === CMD.ATTACK_MOVE && preBld?.kind === 'building') {
       const b = getBuildings?.()?.[preBld.index];
       const hostile =
@@ -1102,15 +1104,25 @@ export function createGameInput(opts) {
         (b.hp == null || (b.hp | 0) > 0) &&
         buildingOwnerOf(preBld) !== localPlayerId;
       if (hostile) {
-        if (epoch !== undefined && !clickCurrent(epoch)) return;
-        enqueueCommand({
-          type: CMD.ATTACK,
-          entities: ids,
-          target: -1,
-          buildingIndex: preBld.index,
-        });
-        pingStructure(preBld);
-        return;
+        const attackers = [];
+        const rest = [];
+        for (let k = 0; k < ids.length; k++) {
+          const id = ids[k];
+          if (unitAttacksBuildings(world.type[id])) attackers.push(id);
+          else rest.push(id);
+        }
+        if (attackers.length > 0) {
+          if (epoch !== undefined && !clickCurrent(epoch)) return;
+          enqueueCommand({
+            type: CMD.ATTACK,
+            entities: attackers,
+            target: -1,
+            buildingIndex: preBld.index,
+          });
+          pingStructure(preBld);
+        }
+        if (rest.length === 0) return;
+        moveIds = rest;
       }
     }
 
@@ -1154,7 +1166,6 @@ export function createGameInput(opts) {
 
     // Engineers on a mechanical ally → repair. Mixed selections: only engineers
     // repair; everyone else still gets the ground order (old path returned early).
-    let moveIds = ids;
     if (
       hit >= 0 &&
       world.owner[hit] === localPlayerId &&

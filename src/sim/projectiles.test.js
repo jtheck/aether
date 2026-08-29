@@ -14,7 +14,7 @@ import { takeSporeBloomUpdates } from './sporeBloom.js';
 import { step } from './step.js';
 import { getUnitDef, UNIT } from './unitTypes.js';
 import { createBuilding } from './buildings.js';
-import { FARM_FIRE_DAMAGE_MUL } from './buildingCombat.js';
+import { FARM_FIRE_DAMAGE_MUL, FARM_LOCUST_DAMAGE_MUL } from './buildingCombat.js';
 import { createWorld, spawn } from './world.js';
 import { buildWorldFromConfig } from './worldSetup.js';
 import {
@@ -662,6 +662,43 @@ function locustSwarmDistracts() {
   assert.ok(w.distractCd[foe] > 0, 'locust swarm distracts');
 }
 
+function locustHitsFarm(type, hp = 200) {
+  const field = openField();
+  const w = createWorld(37);
+  const shaman = spawn(w, { x: 0, y: 0, type: UNIT.SHAMAN, owner: 0 });
+  const building = createBuilding({ owner: 1, type, x: 16, z: 0, hp });
+  w.buildings.push(building);
+  const damage = 5;
+  spawnProjectile(w, {
+    type: PROJECTILE.LOCUST_SWARM,
+    owner: 0,
+    source: shaman,
+    target: -1,
+    targetBuilding: 0,
+    x: 0,
+    y: 0,
+    aimX: building.x,
+    aimY: building.z,
+    damage,
+  });
+  for (let t = 0; t < 50 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  assert.equal(w.projectiles.activeCount, 0);
+  return { building, damage };
+}
+
+function locustSwarmHitsFarmHarder() {
+  const farm = locustHitsFarm('farm');
+  assert.equal(
+    farm.building.hp,
+    200 - farm.damage * FARM_LOCUST_DAMAGE_MUL,
+    'farm takes locust × farm mul',
+  );
+  const camp = locustHitsFarm('camp');
+  assert.equal(camp.building.hp, 200 - camp.damage, 'other buildings take base locust damage');
+}
+
 function holySlashDamages() {
   const field = openField();
   const w = createWorld(35);
@@ -743,5 +780,6 @@ sporeHeadKillSeedsATree();
 shadowBoltAppliesDot();
 iceBoltAppliesFrost();
 locustSwarmDistracts();
+locustSwarmHitsFarmHarder();
 holySlashDamages();
 console.log('[PASS] authoritative projectile behavior and pooling');

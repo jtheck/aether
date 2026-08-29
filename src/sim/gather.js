@@ -112,8 +112,8 @@ const FARM_ARRIVE = fx.fromFloat(1.6);
 const FARM_ARRIVE_SQ = fx.mul(FARM_ARRIVE, FARM_ARRIVE);
 /** Ticks to stand after arriving before picking the next stroll dest. */
 const FARM_PAUSE_TICKS = 36;
-/** Cap while pottering on the plot — full villager speed reads as a sprint. */
-export const FARM_STROLL_SPEED = fx.fromFloat(0.38);
+/** Cap while pottering on the plot — a walk, not the gather run. */
+export const FARM_STROLL_SPEED = fx.fromFloat(0.80);
 
 /** Buildings that recruit gatherers (and show a work-radius ring). Farms work
  *  food in place; they are not haul drop-offs. */

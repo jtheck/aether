@@ -79,6 +79,23 @@ function zoomSpeedForNormalized(normalized) {
   return ZOOM_MID_SPEED + t * (ZOOM_EDGE_SPEED - ZOOM_MID_SPEED);
 }
 
+/** Exponential chase while Space is held — rushes in from far, then sticks. */
+export const FOLLOW_ZIP_RATE = 18;
+
+/**
+ * Frame-rate-independent chase. `rate` is the exponential time-constant.
+ * @param {number} x
+ * @param {number} z
+ * @param {number} tx
+ * @param {number} tz
+ * @param {number} dtSec
+ * @param {number} [rate]
+ */
+export function chaseToward(x, z, tx, tz, dtSec, rate = FOLLOW_ZIP_RATE) {
+  const u = 1 - Math.exp(-rate * Math.max(0, dtSec));
+  return { x: x + (tx - x) * u, z: z + (tz - z) * u };
+}
+
 const DEFAULT_ALPHA = -Math.PI / 2.1;
 const DEFAULT_BETA = Math.PI / 3.2;
 const LOWER_RADIUS = 50;
@@ -100,6 +117,9 @@ export function createCameraController(camera, canvas, opts = {}) {
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
+  let followActive = false;
+  let followX = 0;
+  let followZ = 0;
 
   let rmbPanActive = false;
   let rmbDidPan = false;
@@ -187,7 +207,26 @@ export function createCameraController(camera, canvas, opts = {}) {
     setTargetXZ(x, z);
   }
 
+  function followXZ(x, z) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    followActive = true;
+    followX = x;
+    followZ = z;
+    velocity.panX = 0;
+    velocity.panZ = 0;
+    markNudged();
+  }
+
+  function stopFollow() {
+    followActive = false;
+  }
+
+  function isFollowing() {
+    return followActive;
+  }
+
   function nudgePan(dx, dz) {
+    if (followActive) return;
     markNudged();
     velocity.panX += dx;
     velocity.panZ += dz;
@@ -280,6 +319,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   /** Shared by RMB drag and touch centroid-pan — same feel, one formula. */
   function panByScreenDelta(screenDx, screenDy, sensBase) {
+    if (followActive) return;
     const { wx, wz } = screenDeltaToGroundPan(screenDx, screenDy);
     const panSens = sensBase * panZoomFactor();
     markNudged();
@@ -374,6 +414,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (keyStates.q) applyZoomInput(KEY_ZOOM_SPEED);
     if (keyStates.t) applyZoomInput(-KEY_ZOOM_SPEED);
 
+    if (followActive) return;
+
     let panX = 0;
     let panZ = 0;
     if (keyStates.e) panZ += 1.0;
@@ -417,8 +459,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     return false;
   }
 
-  function tick(_dtMs) {
-    if (!nudged) return;
+  function tick(dtMs) {
+    if (!nudged && !followActive) return;
 
     applyHeldKeys();
 
@@ -427,12 +469,17 @@ export function createCameraController(camera, canvas, opts = {}) {
 
     velocity.alpha *= MOMENTUM;
     velocity.radius *= MOMENTUM;
-    velocity.panX *= PAN_DECAY;
-    velocity.panZ *= PAN_DECAY;
+    if (followActive) {
+      velocity.panX = 0;
+      velocity.panZ = 0;
+    } else {
+      velocity.panX *= PAN_DECAY;
+      velocity.panZ *= PAN_DECAY;
+      velocity.panX *= PAN_DAMP;
+      velocity.panZ *= PAN_DAMP;
+    }
     velocity.alpha *= DAMPING;
     velocity.radius *= DAMPING;
-    velocity.panX *= PAN_DAMP;
-    velocity.panZ *= PAN_DAMP;
 
     if (Math.abs(velocity.alpha) < ROT_THRESHOLD) velocity.alpha = 0;
     if (Math.abs(velocity.radius) < ZOOM_THRESHOLD) velocity.radius = 0;
@@ -442,7 +489,13 @@ export function createCameraController(camera, canvas, opts = {}) {
     camera.alpha += velocity.alpha;
 
     const t = getTarget();
-    clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
+    if (followActive) {
+      const dt = Math.min(0.05, Math.max(0, (Number(dtMs) || 16) / 1000));
+      const next = chaseToward(t.x, t.z, followX, followZ, dt);
+      clampTargetPan(next.x, next.z);
+    } else {
+      clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
+    }
 
     camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
     if (camera.radius <= minR) {
@@ -465,12 +518,13 @@ export function createCameraController(camera, canvas, opts = {}) {
     camera.inertialBetaOffset = 0;
     camera.inertialRadiusOffset = 0;
 
-    if (!rmbPanActive && !anyKeyHeld() && velocitiesIdle()) {
+    if (!followActive && !rmbPanActive && !anyKeyHeld() && velocitiesIdle()) {
       nudged = false;
     }
   }
 
   function reset() {
+    followActive = false;
     velocity.alpha = 0;
     velocity.radius = 0;
     velocity.panX = 0;
@@ -504,6 +558,9 @@ export function createCameraController(camera, canvas, opts = {}) {
     clearKeyStates,
     clearVelocity,
     isRmbPanning,
+    followXZ,
+    stopFollow,
+    isFollowing,
     nudgePan,
     nudgeZoom,
     nudgeRotate,

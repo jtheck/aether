@@ -53,6 +53,8 @@ import {
   loadVatUnitTemplate,
   maxVatInstancesPerBatch,
   vatWant,
+  vatWalkFps,
+  VAT_CLIP,
   VAT_FROZEN,
   VAT_UNIT_DEFS,
   writeVatSlotParams,
@@ -72,6 +74,7 @@ import { createUnitAuras, AURA } from './unitAuras.js';
 import { createMonkLobFx } from './monkLobFx.js';
 import { createSporeBloomFx } from './sporeBloomFx.js';
 import { createLocustFx } from './locustFx.js';
+import { createFireballFx } from './fireballFx.js';
 import { createMushroomPreviews } from './mushrooms.js';
 import { createCarryLoads } from './carryLoads.js';
 import { createAgoraProps } from './agoras.js';
@@ -858,6 +861,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return fxEmitChance >= 1 || Math.random() < fxEmitChance;
   }
 
+  /** v1 fire/smoke: explosion.png sprite + random spin. */
+  function puffSprite(spin = 1.4) {
+    return {
+      sprite: 'puff',
+      rotation: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * spin,
+    };
+  }
+
   function sceneryOpts() {
     return {
       emitFire(x, y, z, scale) {
@@ -1247,7 +1259,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       createMaterial: createHolyShieldMaterial,
     },
   );
-  const particles = createParticleSystem(engine, scene, {
+  const particles = await createParticleSystem(engine, scene, {
     getEye: cameraEyePos,
     capacity: Math.max(1, fxQuality.initial | 0),
     hardMax: Math.max(1, fxQuality.hardMax | 0),
@@ -1321,6 +1333,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     mushroomBridge,
   );
   const locustFx = createLocustFx((init) => particles.emit(init));
+  const fireballFx = createFireballFx((init) => particles.emit(init));
   /** Scratch bitfield when syncing auras from shieldHp. */
   let auraScratch = null;
   /** Latest sim tick for time-based FX (spore seed expiry). */
@@ -1351,6 +1364,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const pull = 0.55 + Math.random() * 0.45;
       const life = 1.1 + Math.random() * 0.7 + (1.1 - Math.min(1, rad / (1.7 * s))) * 0.8;
       particles.emit({
+        ...puffSprite(),
         position: [px, py, pz],
         velocity: [
           -ox * pull,
@@ -1428,6 +1442,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const speed = 6 + Math.random() * 8;
         const roll = Math.random();
         particles.emit({
+          ...puffSprite(),
           position: [x, y + Math.random() * 0.55, z],
           velocity: [
             Math.cos(ang) * speed,
@@ -1468,6 +1483,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       // Soft bloom at the impact point.
       particles.emit({
+        ...puffSprite(0.4),
         position: [x, y + 0.4, z],
         velocity: [0, 3.5, 0],
         gravity: [0, 1.2, 0],
@@ -1921,7 +1937,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     engine,
     scene,
     groundYAt,
-    (slot, generation, x, y, z, vx, vz, def, vy = 0) => {
+    (slot, generation, x, y, z, vx, vz, def, vy = 0, age = 0) => {
       const isFireball = def.id === PROJECTILE.FIREBALL;
       const isArrow = def.mesh === PROJECTILE_MESH.ARROW;
       const isShadow = def.id === PROJECTILE.SHADOW_BOLT;
@@ -1930,14 +1946,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         locustFx.track(slot, generation, x, y, z, vx, vz);
         return;
       }
+      if (isFireball) {
+        fireballFx.track(slot, generation, x, y, z, vx, vy, vz, age === 0);
+        return;
+      }
       if (def.id === PROJECTILE.SPORE_STREAM) return;
-      const emitGapMs = isFireball
-        ? 18
-        : isShadow
-          ? 20
-          : isArrow
-            ? 22
-            : 32;
+      const emitGapMs = isShadow ? 20 : isArrow ? 22 : 32;
       if (
         trailGenerations[slot] === generation &&
         particleClockMs - trailLastEmitMs[slot] < emitGapMs
@@ -1968,31 +1982,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const offset = speed > 1e-6 ? 0.55 / speed : 0;
       const px = x - vx * offset;
       const pz = z - vz * offset;
-      if (isFireball) {
-        // Fat near the ball, taper off behind — trail shrink handles the fade.
-        const trailVy = -vy * 0.35 + 0.15;
-        particles.emit({
-          position: [px, y, pz],
-          velocity: speed > 1e-6 ? [-vx * 0.18, trailVy, -vz * 0.18] : [0, trailVy, 0],
-          gravity: [0, -1.2, 0],
-          color: [1, 0.42, 0.05, 0.9],
-          lifetime: 0.32,
-          startSize: 3.4,
-          endSize: 0.4,
-          drag: 1.1,
-        });
-        particles.emit({
-          position: [px, y, pz],
-          velocity: speed > 1e-6 ? [-vx * 0.1, trailVy + 0.35, -vz * 0.1] : [0, trailVy + 0.35, 0],
-          gravity: [0, -0.4, 0],
-          color: [1, 0.78, 0.2, 0.8],
-          lifetime: 0.24,
-          startSize: 2.2,
-          endSize: 0.12,
-          drag: 0.6,
-        });
-        return;
-      }
       if (isShadow) {
         // Purple inky star beads trailing the round black bolt.
         for (let n = 0; n < 2; n++) {
@@ -2294,6 +2283,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     }
     if (frameCb) frameCb(deltaMs);
+    // After sync so helix puffs spawn on this frame's orb, not last frame's.
+    fireballFx.update(fxDt);
   });
 
   function emitGroundFirePatches() {
@@ -2315,6 +2306,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const oz = Math.sin(ang) * rad;
         const roll = Math.random();
         particles.emit({
+          ...puffSprite(),
           position: [fire.x + ox, gy + 0.1 + Math.random() * 0.35, fire.z + oz],
           velocity: [
             (Math.random() - 0.5) * 0.6,
@@ -2513,6 +2505,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (Math.random() < FIRE_BASE_CHANCE * dens) {
       const bSize = (0.32 + Math.random() * 0.22) * s;
       particles.emit({
+        ...puffSprite(0.6),
         // Sunk by a fraction of the disc's own width, so only the top of the
         // pool shows and discs surface into the flame instead of appearing in
         // mid-air. Tied to bSize so resizing cannot bury or float the pool.
@@ -2565,6 +2558,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       // is only visible while the flame stands several diameters tall.
       const size = (0.11 + Math.random() * 0.12) * s;
       particles.emit({
+        ...puffSprite(),
         position: [x + cs * rad, y + Math.random() * 0.06 * s, z + sn * rad],
         // Mostly tangential with a little outward drift — drag bleeds the
         // swirl off early, leaving a curved kick rather than an orbit.
@@ -2665,6 +2659,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const start = (0.28 + Math.random() * 0.22) * s;
       const end = (1.0 + Math.random() * 0.8) * s;
       particles.emit({
+        ...puffSprite(0.9),
         blend: 'alpha',
         fadeOut: true,
         position: [
@@ -2690,6 +2685,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     if (Math.random() < 0.2 * dens) {
       particles.emit({
+        ...puffSprite(0.9),
         blend: 'alpha',
         fadeOut: true,
         position: [x, y + 0.04 * s, z],
@@ -3055,7 +3051,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false) {
+  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1) {
     const slot = entitySlot[i];
     if (slot < 0) return false;
     const key = entityBatchKey[i] ?? batchKey(typeId, owner);
@@ -3063,7 +3059,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!batch) return false;
     const tiCount = batch.mesh.thinInstances?.count ?? 0;
     if (slot >= tiCount) return false;
-    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping);
+    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate);
     if (monkLobFx.isFlying(i)) monkLobFx.notePose(i, x, z);
     if (diameter > 0.05) {
       const def = getUnitDef(typeId);
@@ -3179,7 +3175,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return getViewProjectionMatrix(camera, aspect);
   }
 
-  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false) {
+  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1) {
     const baseGy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
     const gy = baseGy + (loft || 0);
     let animateVat = diameter > 0;
@@ -3196,7 +3192,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const o = slot * 16;
       if (scale <= 0) {
         for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
-        syncVatSlot(batch, slot, false, false, false, false);
+        syncVatSlot(batch, slot, false, false, false, false, 1);
         for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
         return;
       }
@@ -3244,18 +3240,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift, pitch, roll);
     }
 
-    syncVatSlot(batch, slot, diameter > 0 && moving, animateVat, carrying, chopping);
+    syncVatSlot(batch, slot, diameter > 0 && moving, animateVat, carrying, chopping, walkRate);
     for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
   }
 
   /** VAT state: idle / walk / carry / chop, high bit frozen (fps=0) beyond VAT distance. */
-  function syncVatSlot(batch, slot, moving, animate, carrying = false, chopping = false) {
+  function syncVatSlot(batch, slot, moving, animate, carrying = false, chopping = false, walkRate = 1) {
     if (!batch.vatHandle || slot >= batch.vatMoving.length) return;
     const want = vatWant(!!moving, !!carrying, !!animate, !!chopping);
-    if (batch.vatMoving[slot] === want) return;
-    batch.vatMoving[slot] = want;
     const clip = clipForVatState(batch, want);
-    const fps = (want & VAT_FROZEN) !== 0 ? 0 : clip.fps;
+    const clipId = want & ~VAT_FROZEN;
+    const walkClip = clipId === VAT_CLIP.WALK || clipId === VAT_CLIP.CARRY_WALK;
+    const fps = (want & VAT_FROZEN) !== 0
+      ? 0
+      : walkClip
+        ? vatWalkFps(clip.fps, walkRate)
+        : clip.fps;
+    const prevFps = batch.vatParams[slot * 4 + 3];
+    if (batch.vatMoving[slot] === want && Math.abs(prevFps - fps) < 0.08) return;
+    batch.vatMoving[slot] = want;
     writeVatSlotParams(batch.vatParams, slot, clip, batch.vatPhase[slot], fps);
     batch.vatDirty = true;
   }
@@ -4236,8 +4239,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     },
 
-    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false) {
-      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying, chopping);
+    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1) {
+      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate);
     },
 
     /**
@@ -4288,13 +4291,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     syncProjectiles(prev, cur, alpha) {
       if (!cur) {
         locustFx.clear();
+        fireballFx.clear();
         return projectileRenderer.sync(prev, cur, alpha);
       }
       locustFx.beginFrame();
+      fireballFx.beginFrame();
       emitFireballGroundSplashes(prev, cur);
       emitHolySlashImpacts(prev, cur);
       const result = projectileRenderer.sync(prev, cur, alpha);
       locustFx.endFrame();
+      fireballFx.endFrame();
       return result;
     },
 
@@ -4308,6 +4314,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       monkLobFx.clear();
       sporeBloomFx.clear();
       locustFx.clear();
+      fireballFx.clear();
       mushrooms?.clear?.();
       holyShields.clear();
       carryLoads.clear();

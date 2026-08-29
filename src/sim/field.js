@@ -37,6 +37,10 @@ export function snapTilesToOddChunks(tiles, cellSize = TABLE_CHUNK_TILES) {
   return n * size;
 }
 
+/** Smallest lobby / Forge board — 5×5 chunks (odd). */
+export const TINY_MAP_CHUNKS = 5;
+export const TINY_MAP_W = tilesForOddChunks(TINY_MAP_CHUNKS);
+export const TINY_MAP_H = TINY_MAP_W;
 /** Normal play board — 13×13 chunks (odd). */
 export const DEFAULT_MAP_CHUNKS = 13;
 export const DEFAULT_MAP_W = tilesForOddChunks(DEFAULT_MAP_CHUNKS);
@@ -50,7 +54,8 @@ export const STRESS_MAP_CHUNKS = 31;
 export const STRESS_MAP_W = tilesForOddChunks(STRESS_MAP_CHUNKS);
 export const STRESS_MAP_H = STRESS_MAP_W;
 /** Forge size picker — 5 / 9 / 13 chunks. */
-export const FORGE_MAP_SIZES = [5, 9, 13].map((chunks) => tilesForOddChunks(chunks));
+export const FORGE_MAP_SIZES = [TINY_MAP_CHUNKS, SKIRMISH_MAP_CHUNKS, DEFAULT_MAP_CHUNKS]
+  .map((chunks) => tilesForOddChunks(chunks));
 
 /** Default playable board in tiles (aliases for callers that want the normal size). */
 export const MAP_W = DEFAULT_MAP_W;
@@ -124,8 +129,17 @@ export const ATLAS = {
   GRASS_WATER: 1,
 };
 
-/** World-Y scale for heightMap (0–1) — restrained tabletop relief. */
-export const HEIGHT_AMPLITUDE = 6.5;
+/** World-Y scale for heightMap (0–1) — tile ripples plus edge-locked region lift. */
+export const HEIGHT_AMPLITUDE = 14;
+/** Shallow dish under water — follows the local felt instead of a 0.35× cliff. */
+export const WATER_RECESS = 0.45;
+/** Tiles from the table rim before painted / chunk lift is allowed to reach full height. */
+export const EDGE_LOCK_TILES = 8;
+const DETAIL_WEIGHT = 0.4;
+const LIFT_WEIGHT = 0.6;
+export const REGION_LIFT_STEP = 0.07;
+export const REGION_LIFT_MIN = 0;
+export const REGION_LIFT_MAX = 1;
 
 // Diagonal step cost in fixed-point (sqrt(2) ≈ 1.414 * ONE).
 const DIAG_COST = fx.fromFloat(1.414);
@@ -178,6 +192,10 @@ export function createField(seed = 0, dims = {}) {
     // 1 on a farm's CENTER tile — an infinite food node villagers work in place.
     foodNode: new Uint8Array(n),
     heightMap: new Float32Array(n),
+    /** Natural per-tile ripples (0–1). Region lift is composed on top. */
+    detailHeight: new Float32Array(n),
+    /** Paintable / seeded lift (0–1). Multiplied by the edge lock at compose. */
+    regionLift: new Float32Array(n),
     terrainTypes: new Uint8Array(n),
     tileType: new Uint8Array(n),
     atlasId: new Uint8Array(n),
@@ -195,6 +213,8 @@ export function buildField(seed = 0, dims = {}) {
   const field = createField(seed, dims);
   generateHeightMap(field);
   assignTerrainByElevation(field);
+  seedRegionLift(field);
+  composeHeightMap(field);
   applyTerrainTransitions(field);
   updatePassFromWater(field);
   return field;
@@ -263,9 +283,17 @@ export function fieldSnapshot(field) {
 
 /** World Y at a grid corner (cx, cz in 0…MAP inclusive). */
 export function cornerHeightWorld(field, cx, cz) {
-  const tx = cx < 0 ? 0 : cx >= field.width ? field.width - 1 : cx;
-  const tz = cz < 0 ? 0 : cz >= field.height ? field.height - 1 : cz;
-  return field.heightMap[tz * field.width + tx] * HEIGHT_AMPLITUDE;
+  return tileHeightWorld(field, cx, cz);
+}
+
+/** World Y for a tile, matching render `sampleHeight` (water is a small recess). */
+export function tileHeightWorld(field, tx, tz) {
+  const x = tx < 0 ? 0 : tx >= field.width ? field.width - 1 : tx;
+  const z = tz < 0 ? 0 : tz >= field.height ? field.height - 1 : tz;
+  const i = z * field.width + x;
+  const y = field.heightMap[i] * HEIGHT_AMPLITUDE;
+  if (field.terrainTypes[i] === TERRAIN.WATER) return y - WATER_RECESS;
+  return y;
 }
 
 export function tileKey(tx, tz) {
@@ -649,8 +677,60 @@ export function snapToPassable(field, x, y, radius = 8) {
 
 // --- generation -----------------------------------------------------------
 
-function generateHeightMap(field) {
-  const { width, height, heightMap, seed } = field;
+function u32Hash(n) {
+  n = Math.imul(n ^ (n >>> 16), 2246822519);
+  n = Math.imul(n ^ (n >>> 13), 3266489917);
+  return (n ^ (n >>> 16)) >>> 0;
+}
+
+function fade01(t) {
+  return t * t * (3 - 2 * t);
+}
+
+/** Discrete terrace for one table chunk. Rim chunks stay off the basin floor. */
+function chunkReliefValue(cx, cz, seed, chunksX, chunksZ) {
+  const h = u32Hash(((cx + 17) * 73856093) ^ ((cz + 31) * 19349663) ^ ((seed + 1) * 83492791));
+  const t = h / 4294967296;
+  let v;
+  if (t < 0.16) v = -1;
+  else if (t < 0.38) v = -0.35;
+  else if (t < 0.62) v = 0.1;
+  else if (t < 0.82) v = 0.5;
+  else v = 1;
+  const rim = cx <= 0 || cz <= 0 || cx >= chunksX - 1 || cz >= chunksZ - 1;
+  if (rim) v = Math.max(v, 0.1);
+  return v;
+}
+
+function sampleChunkRelief(x, z, seed, width, height, cellSize) {
+  const chunksX = Math.max(1, Math.ceil(width / cellSize));
+  const chunksZ = Math.max(1, Math.ceil(height / cellSize));
+  const px = (x + 0.5) / cellSize - 0.5;
+  const pz = (z + 0.5) / cellSize - 0.5;
+  const cx0 = Math.floor(px);
+  const cz0 = Math.floor(pz);
+  const tx = fade01(px - cx0);
+  const tz = fade01(pz - cz0);
+  const clampC = (c, max) => (c < 0 ? 0 : c >= max ? max - 1 : c);
+  const v00 = chunkReliefValue(clampC(cx0, chunksX), clampC(cz0, chunksZ), seed, chunksX, chunksZ);
+  const v10 = chunkReliefValue(clampC(cx0 + 1, chunksX), clampC(cz0, chunksZ), seed, chunksX, chunksZ);
+  const v01 = chunkReliefValue(clampC(cx0, chunksX), clampC(cz0 + 1, chunksZ), seed, chunksX, chunksZ);
+  const v11 = chunkReliefValue(clampC(cx0 + 1, chunksX), clampC(cz0 + 1, chunksZ), seed, chunksX, chunksZ);
+  const a = v00 + (v10 - v00) * tx;
+  const b = v01 + (v11 - v01) * tx;
+  return a + (b - a) * tz;
+}
+
+function ensureHeightLayers(field) {
+  const n = field.width * field.height;
+  if (!field.detailHeight || field.detailHeight.length !== n) field.detailHeight = new Float32Array(n);
+  if (!field.regionLift || field.regionLift.length !== n) field.regionLift = new Float32Array(n);
+}
+
+/** Tile-ripple height (0–1). Terrain bands read this; region lift is composed after. */
+export function generateHeightMap(field) {
+  ensureHeightLayers(field);
+  const { width, height, heightMap, detailHeight, seed } = field;
   const seed1 = seed * 0.01;
   const seed2 = seed * 0.02;
   const seed3 = seed * 0.03;
@@ -672,8 +752,124 @@ function generateHeightMap(field) {
 
   const range = maxH - minH || 1;
   for (let i = 0; i < heightMap.length; i++) {
-    heightMap[i] = (heightMap[i] - minH) / range;
+    const h = (heightMap[i] - minH) / range;
+    heightMap[i] = h;
+    detailHeight[i] = h;
   }
+}
+
+function seedRegionLift(field) {
+  ensureHeightLayers(field);
+  const { width, height, regionLift, seed } = field;
+  const cellSize = TABLE_CHUNK_TILES;
+  for (let z = 0; z < height; z++) {
+    for (let x = 0; x < width; x++) {
+      const relief = sampleChunkRelief(x, z, seed, width, height, cellSize);
+      regionLift[z * width + x] = relief * 0.5 + 0.5;
+    }
+  }
+}
+
+function isEdgeLockedTile(field, tx, tz) {
+  const { width, height, activeMask, tableEdge } = field;
+  if (tx < 0 || tz < 0 || tx >= width || tz >= height) return true;
+  const i = tz * width + tx;
+  if (activeMask && activeMask[i] === 0) return true;
+  if (tableEdge && tableEdge[i]) return true;
+  if (!tableEdge && (tx === 0 || tz === 0 || tx === width - 1 || tz === height - 1)) return true;
+  return false;
+}
+
+/** 0 on the table rim, 1 inward — keeps extra lift from spilling off the rails. */
+export function computeEdgeLock(field) {
+  const { width, height } = field;
+  const n = width * height;
+  const dist = new Float32Array(n);
+  const q = new Int32Array(n);
+  let qh = 0;
+  let qt = 0;
+  for (let z = 0; z < height; z++) {
+    for (let x = 0; x < width; x++) {
+      const i = z * width + x;
+      if (isEdgeLockedTile(field, x, z)) {
+        dist[i] = 0;
+        q[qt++] = i;
+      } else {
+        dist[i] = 1e9;
+      }
+    }
+  }
+  while (qh < qt) {
+    const i = q[qh++];
+    const x = i % width;
+    const z = (i / width) | 0;
+    const nd = dist[i] + 1;
+    if (x > 0 && nd < dist[i - 1]) { dist[i - 1] = nd; q[qt++] = i - 1; }
+    if (x + 1 < width && nd < dist[i + 1]) { dist[i + 1] = nd; q[qt++] = i + 1; }
+    if (z > 0 && nd < dist[i - width]) { dist[i - width] = nd; q[qt++] = i - width; }
+    if (z + 1 < height && nd < dist[i + width]) { dist[i + width] = nd; q[qt++] = i + width; }
+  }
+  const lock = new Float32Array(n);
+  const span = Math.max(1, EDGE_LOCK_TILES);
+  for (let i = 0; i < n; i++) {
+    const t = dist[i] >= span ? 1 : dist[i] / span;
+    lock[i] = t * t * (3 - 2 * t);
+  }
+  field.edgeLock = lock;
+  return lock;
+}
+
+/**
+ * Bake display height: tile ripples everywhere, extra lift only away from the rails.
+ * Does not re-normalize, so water/land keep their relative dish.
+ */
+export function composeHeightMap(field) {
+  ensureHeightLayers(field);
+  const lock = computeEdgeLock(field);
+  const { heightMap, detailHeight, regionLift } = field;
+  for (let i = 0; i < heightMap.length; i++) {
+    const detail = detailHeight[i];
+    const e = lock[i];
+    const h = detail * DETAIL_WEIGHT
+      + regionLift[i] * e * LIFT_WEIGHT
+      + detail * (1 - DETAIL_WEIGHT) * (1 - e);
+    heightMap[i] = h < 0 ? 0 : h > 1 ? 1 : h;
+  }
+}
+
+/** Raise / lower the felt as-is. Terrain types stay put; rim lock is reapplied. */
+export function paintRegionLift(field, tx, tz, delta, radius = 0) {
+  ensureHeightLayers(field);
+  const r = Math.max(0, radius | 0);
+  const dirty = [];
+  const { width, height, regionLift, activeMask } = field;
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const d2 = dx * dx + dz * dz;
+      if (d2 > r * r) continue;
+      const x = tx + dx;
+      const z = tz + dz;
+      if (x < 0 || z < 0 || x >= width || z >= height) continue;
+      const i = z * width + x;
+      if (activeMask && activeMask[i] === 0) continue;
+      const falloff = r === 0 ? 1 : 1 - Math.sqrt(d2) / (r + 0.001);
+      let next = regionLift[i] + delta * falloff;
+      if (next < REGION_LIFT_MIN) next = REGION_LIFT_MIN;
+      if (next > REGION_LIFT_MAX) next = REGION_LIFT_MAX;
+      if (next === regionLift[i]) continue;
+      regionLift[i] = next;
+      dirty.push({ x, z });
+    }
+  }
+  if (dirty.length) composeHeightMap(field);
+  return dirty;
+}
+
+/** Garden files omit baked height — rebuild ripples + seeded lift from the seed. */
+export function applySeededHeight(field) {
+  generateHeightMap(field);
+  seedRegionLift(field);
+  composeHeightMap(field);
 }
 
 function assignTerrainByElevation(field) {

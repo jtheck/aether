@@ -9,12 +9,15 @@ import {
   createFacingBillboardSystem,
   createGridSpriteAtlas,
   createTexture2DFromPixels,
+  loadTexture2D,
   removeBillboardSprite,
   updateBillboardSprite,
 } from '../vendor/lite/liteVendor.js';
 import { capacityFor } from '../sim/capacity.js';
 
 const TEXTURE_SIZE = 32;
+/** v1 Babylon fire/smoke sprite (`game/fx.js` ParticlePresets). */
+export const PUFF_SPRITE_URL = '/assets/images/explosion.png';
 /** Lean boot; grows by powers of two (Lite billboard buffers grow on add). */
 export const PARTICLE_INITIAL_CAPACITY = 8192;
 /** Absolute ceiling so a runaway emitter cannot OOM. */
@@ -121,7 +124,7 @@ function makeParticle() {
     position,
     sizeWorld,
     drawColor,
-    patch: { position, sizeWorld, color: drawColor },
+    patch: { position, sizeWorld, color: drawColor, rotation: 0 },
     vx: 0,
     vy: 0,
     vz: 0,
@@ -143,7 +146,27 @@ function makeParticle() {
     startAlpha: 1,
     noCull: false,
     cullSize: 1,
+    rotation: 0,
+    spin: 0,
   };
+}
+
+async function atlasFromPuffSprite(engine) {
+  const texture = await loadTexture2D(engine, PUFF_SPRITE_URL, {
+    srgb: false,
+    mipMaps: true,
+    invertY: false,
+    addressModeU: 'clamp-to-edge',
+    addressModeV: 'clamp-to-edge',
+    minFilter: 'linear',
+    magFilter: 'linear',
+  });
+  return createGridSpriteAtlas(texture, {
+    cellWidthPx: texture.width,
+    cellHeightPx: texture.height,
+    columns: 1,
+    rows: 1,
+  });
 }
 
 function cullRange(size, scale = 1) {
@@ -167,7 +190,7 @@ function cullRange(size, scale = 1) {
  *   getEye?: () => { x: number, y: number, z: number } | null,
  * }} [options]
  */
-export function createParticleSystem(engine, scene, options = {}) {
+export async function createParticleSystem(engine, scene, options = {}) {
   const bootInitial = Math.max(1, options.capacity ?? PARTICLE_INITIAL_CAPACITY);
   let capacity = bootInitial;
   let hardMax = Math.max(1, options.hardMax ?? PARTICLE_HARD_MAX);
@@ -178,6 +201,12 @@ export function createParticleSystem(engine, scene, options = {}) {
   const softAtlas = atlasFromAlphaDisk(engine, true);
   const hardAtlas = atlasFromAlphaDisk(engine, false);
   const starAtlas = atlasFromAlphaStar(engine);
+  let puffAtlas = softAtlas;
+  try {
+    puffAtlas = await atlasFromPuffSprite(engine);
+  } catch (err) {
+    console.warn('[particles] puff sprite failed, using disk', err);
+  }
   const systems = {
     additive: createFacingBillboardSystem(softAtlas, {
       capacity,
@@ -195,11 +224,21 @@ export function createParticleSystem(engine, scene, options = {}) {
       capacity,
       blendMode: billboardBlendAlpha,
     }),
+    puffAdditive: createFacingBillboardSystem(puffAtlas, {
+      capacity,
+      blendMode: billboardBlendAdditive,
+    }),
+    puffAlpha: createFacingBillboardSystem(puffAtlas, {
+      capacity,
+      blendMode: billboardBlendAlpha,
+    }),
   };
   addFacingBillboardSystem(scene, systems.additive);
   addFacingBillboardSystem(scene, systems.alpha);
   addFacingBillboardSystem(scene, systems.alphaHard);
   addFacingBillboardSystem(scene, systems.alphaHardStar);
+  addFacingBillboardSystem(scene, systems.puffAdditive);
+  addFacingBillboardSystem(scene, systems.puffAlpha);
 
   const active = [];
   const free = [];
@@ -291,20 +330,28 @@ export function createParticleSystem(engine, scene, options = {}) {
     particle.sizeWorld[1] = particle.startSizeH;
     particle.noCull = noCull;
     particle.cullSize = sizeHint;
+    particle.rotation = init.rotation ?? 0;
+    particle.spin = init.spin ?? 0;
+    particle.patch.rotation = particle.rotation;
+    const puff = init.sprite === 'puff';
     const system =
       init.shape === 'star' && init.blend === 'alpha'
         ? systems.alphaHardStar
         : init.hard && init.blend === 'alpha'
           ? systems.alphaHard
           : init.blend === 'alpha'
-            ? systems.alpha
-            : systems.additive;
+            ? puff
+              ? systems.puffAlpha
+              : systems.alpha
+            : puff
+              ? systems.puffAdditive
+              : systems.additive;
     // Lite doubles billboard capacity when count exceeds current _capacity.
     particle.handle = addBillboardSprite(system, {
       position: particle.position,
       sizeWorld: particle.sizeWorld,
       color: particle.drawColor,
-      rotation: init.rotation ?? 0,
+      rotation: particle.rotation,
       frame: 0,
     });
     active.push(particle);
@@ -411,6 +458,10 @@ export function createParticleSystem(engine, scene, options = {}) {
       particle.drawColor[3] = particle.fadeOut
         ? particle.startAlpha * (1 - particle.age / particle.lifetime)
         : particle.startAlpha;
+      if (particle.spin) {
+        particle.rotation += particle.spin * dt;
+        particle.patch.rotation = particle.rotation;
+      }
       updateBillboardSprite(particle.handle, particle.patch);
     }
   }
@@ -420,6 +471,8 @@ export function createParticleSystem(engine, scene, options = {}) {
     clearBillboardSprites(systems.alpha);
     clearBillboardSprites(systems.alphaHard);
     clearBillboardSprites(systems.alphaHardStar);
+    clearBillboardSprites(systems.puffAdditive);
+    clearBillboardSprites(systems.puffAlpha);
     while (active.length) {
       const particle = active.pop();
       particle.handle = null;

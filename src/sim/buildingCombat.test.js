@@ -102,6 +102,110 @@ describe('building combat', () => {
     assert.ok(w.buildings[bi].hp < startHp);
   });
 
+  it('priests ignore building ATTACK orders and do not auto-acquire placeables', () => {
+    const w = richWorld(11);
+    const field = buildField(11, { width: 64, height: 64 });
+    const bi = placeFinished(w, field, { owner: 1, type: 'camp', x: 12, z: 0, hp: 80 });
+    const startHp = w.buildings[bi].hp;
+    const priest = spawn(w, {
+      x: fx.fromInt(0),
+      y: fx.fromInt(0),
+      type: UNIT.PRIEST,
+      owner: 0,
+    });
+    applyCommands(w, field, [
+      { type: CMD.ATTACK, entities: [priest], target: -1, buildingIndex: bi },
+    ]);
+    assert.equal(w.order[priest], ORDER.IDLE);
+    assert.equal(w.targetBuilding[priest], -1);
+    for (let t = 0; t < 12; t++) {
+      combatSystem(w, field);
+      w.tick++;
+    }
+    assert.equal(w.targetBuilding[priest], -1);
+    assert.equal(w.order[priest], ORDER.IDLE);
+    for (let t = 0; t < 40; t++) step(w, field);
+    assert.equal(w.buildings[bi].hp, startHp);
+    assert.equal(w.projectiles.activeCount, 0);
+  });
+
+  it('monks ignore buildings and only fight on a pointed target or grouped attack-move', () => {
+    const w = richWorld(12);
+    const field = buildField(12, { width: 64, height: 64 });
+    field.pass.fill(1);
+    const bi = placeFinished(w, field, { owner: 1, type: 'camp', x: 16, z: 0, hp: 80 });
+    const startHp = w.buildings[bi].hp;
+    const monk = spawn(w, {
+      x: fx.fromInt(0),
+      y: fx.fromInt(0),
+      type: UNIT.MONK,
+      owner: 0,
+    });
+    const foe = spawn(w, {
+      x: fx.fromInt(8),
+      y: fx.fromInt(0),
+      type: UNIT.WARRIOR,
+      owner: 1,
+    });
+
+    applyCommands(w, field, [
+      { type: CMD.ATTACK, entities: [monk], target: -1, buildingIndex: bi },
+    ]);
+    assert.equal(w.order[monk], ORDER.IDLE);
+    assert.equal(w.targetBuilding[monk], -1);
+
+    for (let t = 0; t < 12; t++) {
+      combatSystem(w, field);
+      w.tick++;
+    }
+    assert.equal(w.order[monk], ORDER.IDLE);
+    assert.equal(w.targetEntity[monk], -1);
+    assert.equal(w.targetBuilding[monk], -1);
+
+    const dest = fx.fromInt(40);
+    applyCommands(w, field, [
+      { type: CMD.ATTACK_MOVE, entities: [monk], tx: [dest], ty: [0] },
+    ]);
+    for (let t = 0; t < 12; t++) {
+      combatSystem(w, field);
+      w.tick++;
+    }
+    assert.equal(w.order[monk], ORDER.ATTACK_MOVE);
+    assert.equal(w.targetEntity[monk], -1);
+    assert.equal(w.targetBuilding[monk], -1);
+
+    const buddy = spawn(w, {
+      x: fx.fromInt(-4),
+      y: fx.fromInt(0),
+      type: UNIT.MONK,
+      owner: 0,
+    });
+    applyCommands(w, field, [
+      {
+        type: CMD.ATTACK_MOVE,
+        entities: [monk, buddy],
+        tx: [dest, dest],
+        ty: [0, 0],
+      },
+    ]);
+    for (let t = 0; t < 12; t++) {
+      combatSystem(w, field);
+      w.tick++;
+    }
+    assert.equal(w.order[monk], ORDER.ATTACK);
+    assert.equal(w.targetEntity[monk], foe);
+    assert.equal(w.targetBuilding[monk], -1);
+
+    applyCommands(w, field, [
+      { type: CMD.STOP, entities: [monk, buddy] },
+      { type: CMD.ATTACK, entities: [monk], target: foe },
+    ]);
+    assert.equal(w.order[monk], ORDER.ATTACK);
+    assert.equal(w.targetEntity[monk], foe);
+    for (let t = 0; t < 40; t++) step(w, field);
+    assert.equal(w.buildings[bi].hp, startHp);
+  });
+
   it('idle military auto-acquires a nearby hostile building', () => {
     const w = richWorld(6);
     const field = buildField(6, { width: 64, height: 64 });

@@ -25,14 +25,14 @@ export const ATTACK_DELIVERY = {
   PROJECTILE: 1,
 };
 
-/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, steer?: number, accel?: number, decel?: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean }>} */
+/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, steer?: number, accel?: number, decel?: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean, attacksBuildings?: boolean, idleHunt?: boolean }>} */
 export const UNIT_DEFS = [
   {
     id: UNIT.VILLAGER,
     name: 'Villager',
     category: 'civilian',
     hp: 50,
-    speed: fx.fromFloat(2.0),
+    speed: fx.fromFloat(2.4),
     size: 4.5,
     pickRadius: 1.4,
     pickHeight: 0.95,
@@ -131,6 +131,7 @@ export const UNIT_DEFS = [
     minRange: fx.fromFloat(4),
     preferredRange: fx.fromFloat(35),
     primaryAbility: 'holy_armor',
+    attacksBuildings: false,
   },
   {
     id: UNIT.MYCO,
@@ -211,6 +212,8 @@ export const UNIT_DEFS = [
     minRange: 0,
     preferredRange: fx.fromFloat(2.2),
     primaryAbility: null,
+    attacksBuildings: false,
+    idleHunt: false,
   },
   {
     id: UNIT.ENGINEER,
@@ -409,6 +412,16 @@ export function isMechanical(typeId) {
 
 export function isFlyer(typeId) {
   return !!getUnitDef(typeId).fly;
+}
+
+/** Basic attack can lock onto placeables. Default yes; priests and monks do not. */
+export function unitAttacksBuildings(typeId) {
+  return getUnitDef(typeId).attacksBuildings !== false;
+}
+
+/** Idle / solo attack-move aggro. Default yes; monks only pick fights on a pointed target or a grouped attack-move. */
+export function unitIdleHunts(typeId) {
+  return getUnitDef(typeId).idleHunt !== false;
 }
 
 /** World-Y loft for flying units (v1 air altitude). */

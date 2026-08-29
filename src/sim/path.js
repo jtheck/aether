@@ -249,7 +249,9 @@ function refreshAttackDestination(w, i) {
 function needsPath(w, i) {
   const order = w.order[i];
   if (order === ORDER.IDLE) return false;
-  if (order === ORDER.MOVE || order === ORDER.ATTACK_MOVE) return w.hasTarget[i] !== 0;
+  if (order === ORDER.MOVE || order === ORDER.WANDER || order === ORDER.ATTACK_MOVE) {
+    return w.hasTarget[i] !== 0;
+  }
   if (order === ORDER.ATTACK) {
     return w.targetEntity[i] >= 0 || (w.targetBuilding?.[i] ?? -1) >= 0;
   }

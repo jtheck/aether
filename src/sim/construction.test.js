@@ -74,9 +74,11 @@ function siteIsInertUntilRaised() {
   w.buildings = [siteBuilding('camp', 0, 0)];
   const vill = spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
 
-  // Manually gather (bypass auto-assign, which would pull it to build instead).
   step(w, field, [{ type: CMD.GATHER, entities: [vill], tile: treeTile }]);
-  for (let t = 0; t < 120; t++) step(w, field, []);
+  // Chop a load but finish before construction assign (tick 20) steals the hand.
+  for (let t = 0; t < 18; t++) step(w, field, []);
+  assert.equal(w.buildings[0].built, 0, 'site still unbuilt');
+  assert.ok((w.carriedAmt[vill] | 0) > 0, 'villager picked up wood');
   assert.equal(getResource(w, 0, 'wood'), 0, 'nothing banked at an unbuilt camp');
 }
 

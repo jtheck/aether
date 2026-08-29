@@ -6,6 +6,7 @@ import {
   CONTROL_GROUP_SIZE_PX,
   layoutControlGroups,
   pickControlGroupAt,
+  tallyGlyphs,
   tallyMarkLayout,
   visibleControlGroupDefs,
 } from './controlGroupHud.js';
@@ -49,6 +50,16 @@ describe('control group HUD layout', () => {
     assert.ok(six.find((r) => r.name === 'white')?.x > vw * 0.5);
   });
 
+  it('carries every sixteen into an X and caps at XX', () => {
+    assert.deepEqual(tallyGlyphs(0), { xCount: 0, hashes: 0 });
+    assert.deepEqual(tallyGlyphs(15), { xCount: 0, hashes: 15 });
+    assert.deepEqual(tallyGlyphs(16), { xCount: 1, hashes: 0 });
+    assert.deepEqual(tallyGlyphs(17), { xCount: 1, hashes: 1 });
+    assert.deepEqual(tallyGlyphs(31), { xCount: 1, hashes: 15 });
+    assert.deepEqual(tallyGlyphs(32), { xCount: 2, hashes: 0 });
+    assert.deepEqual(tallyGlyphs(99), { xCount: 2, hashes: 0 });
+  });
+
   it('lays out prison tallies as four uprights plus a slash per five', () => {
     assert.deepEqual(tallyMarkLayout(0), []);
     assert.equal(tallyMarkLayout(4).at(-1)?.stroke, 3);
@@ -60,9 +71,14 @@ describe('control group HUD layout', () => {
     assert.deepEqual(tallyMarkLayout(6).at(-1), {
       group: 1, stroke: 0, row: 0, col: 1, inGroup: 1,
     });
-    assert.equal(tallyMarkLayout(11).at(-1)?.col, 0.5);
-    assert.equal(tallyMarkLayout(20).length, 20);
-    assert.equal(tallyMarkLayout(40).length, 20);
+    assert.equal(tallyMarkLayout(11).at(-1)?.col, 0);
+    assert.equal(tallyMarkLayout(11).at(-1)?.row, 1);
+    assert.equal(tallyMarkLayout(15).length, 15);
+    assert.equal(tallyMarkLayout(16).length, 0);
+    assert.equal(tallyMarkLayout(17)[0]?.col, 0);
+    assert.equal(tallyMarkLayout(17)[0]?.row, 0);
+    assert.equal(tallyMarkLayout(20).length, 4);
+    assert.equal(tallyMarkLayout(40).length, 0);
   });
 
   it('picks the pad under a canvas point (including slop)', () => {

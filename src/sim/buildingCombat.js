@@ -85,9 +85,10 @@ export function applyDamageBuilding(w, field, bi, amount) {
   return dealt;
 }
 
-/** Crops rot and catch fire — farms take extra from spore bloom and fire. */
+/** Crops rot, burn, and get eaten — farms take extra from spore, fire, and locusts. */
 export const FARM_SPORE_DAMAGE_MUL = 5;
 export const FARM_FIRE_DAMAGE_MUL = 5;
+export const FARM_LOCUST_DAMAGE_MUL = 5;
 
 export function scaleFarmHazardDamage(type, amount, mul) {
   const base = amount | 0;

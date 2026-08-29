@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { createField } from './field.js';
+import { createField, TERRAIN } from './field.js';
 import {
   SCENERY,
   ROCK_STAGE_MAX,
+  TREE_PAINT_CLEARANCE,
   applyRockOccupancyFromStock,
   damageRock,
+  paintSceneryBrush,
   placeRockAt,
+  populateScenery,
   rockFootprintRadius,
   rockFootprintRadiusForStock,
   rockStageFromStock,
@@ -101,4 +104,79 @@ stagesMatchYield();
 stageFromRemainingStock();
 snowFootprintShrinksWithStock();
 damageRockPublishesAndShrinks();
-console.log('scenery.test.js: ok (rock yield + stages + collision shrink)');
+paintBrushRespectsFootprints();
+console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing)');
+
+function blankLand() {
+  const field = createField(1);
+  field.pass.fill(1);
+  field.terrainTypes.fill(TERRAIN.GRASS);
+  return field;
+}
+
+function countKind(field, kind, x0, z0, x1, z1) {
+  const found = [];
+  for (let z = z0; z <= z1; z++) {
+    for (let x = x0; x <= x1; x++) {
+      if (field.sceneryType[z * field.width + x] === kind) found.push({ x, z });
+    }
+  }
+  return found;
+}
+
+function paintBrushRespectsFootprints() {
+  const trees = blankLand();
+  const dirtyTrees = paintSceneryBrush(trees, 40, 40, SCENERY.TREE, 3);
+  const planted = countKind(trees, SCENERY.TREE, 37, 37, 43, 43);
+  assert.ok(dirtyTrees.length > 0, 'tree brush plants something');
+  assert.ok(planted.length < dirtyTilesInDisc(3), 'tree brush is sparser than every tile');
+  for (let i = 0; i < planted.length; i++) {
+    for (let j = i + 1; j < planted.length; j++) {
+      const dx = Math.abs(planted[i].x - planted[j].x);
+      const dz = Math.abs(planted[i].z - planted[j].z);
+      assert.ok(Math.max(dx, dz) > TREE_PAINT_CLEARANCE, 'painted trees keep a Chebyshev moat');
+    }
+  }
+
+  const { field, tx, tz } = plant(SCENERY.ROCK_MOSS);
+  field.terrainTypes.fill(TERRAIN.GRASS);
+  assert.equal(placeRockAt(field, tx + 1, tz, SCENERY.ROCK_MOSS), false, 'moss footprints do not overlap');
+  const stacked = paintSceneryBrush(field, tx + 1, tz, SCENERY.ROCK_MOSS, 0);
+  assert.equal(stacked.length, 0, 'paint refuses a rock that would overlap');
+
+  const rocks = blankLand();
+  paintSceneryBrush(rocks, 40, 40, SCENERY.ROCK_MOSS, 3);
+  const moss = countKind(rocks, SCENERY.ROCK_MOSS, 37, 37, 43, 43);
+  assert.ok(moss.length >= 1, 'moss brush plants at least one rock');
+  for (let i = 0; i < moss.length; i++) {
+    for (let j = i + 1; j < moss.length; j++) {
+      const dist = Math.hypot(moss[i].x - moss[j].x, moss[i].z - moss[j].z);
+      assert.ok(dist >= 4, 'painted moss rocks keep their footprints');
+    }
+  }
+
+  const snow = blankLand();
+  assert.ok(placeRockAt(snow, 40, 40, SCENERY.ROCK_SNOW));
+  const erased = paintSceneryBrush(snow, 42, 40, SCENERY.NONE, 0);
+  assert.ok(erased.length > 0, 'erase on a footprint tile clears the rock');
+  assert.equal(snow.sceneryType[40 * snow.width + 40], SCENERY.NONE);
+
+  const authored = blankLand();
+  authored.terrainTypes[tileAt(authored, 41, 40)] = TERRAIN.DIRT;
+  paintSceneryBrush(authored, 40, 40, SCENERY.TREE, 0);
+  assert.ok(placeRockAt(authored, 50, 50, SCENERY.ROCK_MOSS));
+  populateScenery(authored, null, [], { keepExisting: true });
+  assert.equal(authored.sceneryType[tileAt(authored, 40, 40)], SCENERY.TREE, 'generate keeps painted trees');
+  assert.equal(authored.sceneryType[tileAt(authored, 50, 50)], SCENERY.ROCK_MOSS, 'generate keeps painted rocks');
+}
+
+function dirtyTilesInDisc(radius) {
+  const r2 = radius * radius;
+  let n = 0;
+  for (let dz = -radius; dz <= radius; dz++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      if (dx * dx + dz * dz <= r2) n++;
+    }
+  }
+  return n;
+}

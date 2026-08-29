@@ -19,9 +19,10 @@ export const CONTROL_GROUP_DEFS = Object.freeze([
   { id: 5, name: 'white', rgb: [0.93, 0.93, 0.95], side: 'right', extra: true },
 ]);
 
-export const CONTROL_GROUP_SIZE_PX = 42;
-/** Tally marks drawn in the pad (4 upright + a slash per 5). Extra members are omitted. */
-export const CONTROL_GROUP_TALLY_MAX = 20;
+export const CONTROL_GROUP_SIZE_PX = 54;
+/** One X carries sixteen. Two overlapping X's is the display cap. */
+export const TALLY_X_VALUE = 16;
+export const CONTROL_GROUP_TALLY_MAX = 32;
 export const CONTROL_GROUP_GAP_PX = 12;
 export const CONTROL_GROUP_EDGE_PX = 26;
 /** Extra pick slop around the square (CSS px). */
@@ -73,35 +74,44 @@ export function layoutControlGroups(vw, vh, extra) {
 }
 
 /**
- * Prison-tally layout used by the pad shader: 2×2 pentads, 4 upright + slash.
+ * Prison-tally glyphs: hashes through 15, then an X (16) that clears them.
+ * A second X at 32 is the cap (XX for anything above).
  * @param {number} count
- * @returns {{ group: number, stroke: number, row: number, col: number }[]}
+ * @returns {{ xCount: number, hashes: number }}
  */
-/** Which 2×2 cell a pentad occupies so the used groups stay centered. */
-export function tallyGroupCell(group, groupsUsed) {
-  if (groupsUsed <= 1) return { row: 0, col: 0 };
-  if (groupsUsed === 2) return { row: 0, col: group };
-  if (groupsUsed === 3) {
-    if (group < 2) return { row: 0, col: group };
-    return { row: 1, col: 0.5 };
-  }
-  return { row: (group / 2) | 0, col: group & 1 };
+export function tallyGlyphs(count) {
+  const n = Math.max(0, count | 0);
+  if (n >= CONTROL_GROUP_TALLY_MAX) return { xCount: 2, hashes: 0 };
+  return {
+    xCount: (n / TALLY_X_VALUE) | 0,
+    hashes: n % TALLY_X_VALUE,
+  };
 }
 
+/**
+ * Hash pentads walk TL, TR, BL. The first X sits in BR until XX.
+ * `groupsUsed` / `xCount` are kept so callers can pass either signature.
+ */
+export function tallyGroupCell(group, _groupsUsed, _xCount = 0) {
+  const q = group | 0;
+  return { row: (q / 2) | 0, col: q & 1 };
+}
+
+/** Hash strokes for the remainder after X carries (max three pentads). */
 export function tallyMarkLayout(count) {
-  const n = Math.max(0, Math.min(CONTROL_GROUP_TALLY_MAX, count | 0));
-  const groupsUsed = n === 0 ? 0 : Math.ceil(n / 5);
+  const { hashes, xCount } = tallyGlyphs(count);
+  const groupsUsed = hashes === 0 ? 0 : Math.ceil(hashes / 5);
   /** @type {{ group: number, stroke: number, row: number, col: number, inGroup: number }[]} */
   const marks = [];
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < hashes; i++) {
     const group = (i / 5) | 0;
-    const cell = tallyGroupCell(group, groupsUsed);
+    const cell = tallyGroupCell(group, groupsUsed, xCount);
     marks.push({
       group,
       stroke: i % 5,
       row: cell.row,
       col: cell.col,
-      inGroup: Math.min(5, n - group * 5),
+      inGroup: Math.min(5, hashes - group * 5),
     });
   }
   return marks;
@@ -201,7 +211,7 @@ function makePadMesh(engine, id) {
 
 function makePadMaterial(rgb) {
   return createShaderMaterial({
-    name: 'ctrl-group-pad',
+    name: 'ctrl-group-pad-scrawl2',
     attributes: ['position', 'normal', 'uv'],
     uniforms: [
       'world',
@@ -244,71 +254,88 @@ fn sdSeg(p: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> f32 {
 fn hash21(n: f32) -> vec2<f32> {
   return fract(sin(vec2<f32>(n, n + 1.7)) * vec2<f32>(43758.5453, 22578.1459)) * 2.0 - 1.0;
 }
-fn pentadOrigin(group: i32, used: i32) -> vec2<f32> {
-  let cw = 0.32;
-  let ch = 0.30;
-  let mid = 0.50;
-  if (used <= 1) {
-    return vec2<f32>(mid - cw * 0.5, mid - ch * 0.5);
-  }
-  if (used == 2) {
-    let gap = 0.04;
-    let total = cw * 2.0 + gap;
-    return vec2<f32>(mid - total * 0.5 + f32(group) * (cw + gap), mid - ch * 0.5);
-  }
-  if (used == 3) {
-    let gap = 0.04;
-    let total = cw * 2.0 + gap;
-    if (group < 2) {
-      return vec2<f32>(mid - total * 0.5 + f32(group) * (cw + gap), mid - ch - 0.02);
-    }
-    return vec2<f32>(mid - cw * 0.5, mid + 0.02);
-  }
-  let gap = 0.04;
-  let col = group % 2;
-  let row = group / 2;
-  let total = cw * 2.0 + gap;
-  return vec2<f32>(
-    mid - total * 0.5 + f32(col) * (cw + gap),
-    mid - total * 0.5 + f32(row) * (ch + gap),
-  );
+fn quadCell() -> vec2<f32> {
+  let inset = 0.168;
+  let gap = 0.036;
+  let s = (1.0 - inset * 2.0 - gap) * 0.5;
+  return vec2<f32>(s, s);
 }
-// Handmade prison tally: centered pentads, 4 upright + a slash. Caps at 20.
-fn tallyInk(uv: vec2<f32>, count: f32) -> f32 {
-  var ink = 0.0;
-  let n = i32(clamp(count, 0.0, 20.0) + 0.5);
-  if (n <= 0) { return 0.0; }
-  let used = (n + 4) / 5;
-  for (var i = 0; i < 20; i++) {
+fn quadOrigin(q: i32) -> vec2<f32> {
+  let inset = 0.168;
+  let gap = 0.036;
+  let cell = quadCell();
+  let col = q % 2;
+  let row = q / 2;
+  return vec2<f32>(inset + f32(col) * (cell.x + gap), inset + f32(row) * (cell.y + gap));
+}
+fn hashStrokeDist(local: vec2<f32>, stroke: i32, inGroup: i32, seed: f32, cell: vec2<f32>) -> f32 {
+  let wob = hash21(seed);
+  var d = 1.0;
+  if (stroke < 4) {
+    let uCount = min(4, inGroup);
+    let span = 0.88;
+    let x0 = 0.50 - span * 0.5;
+    let step = select(0.0, span / max(f32(uCount - 1), 1.0), uCount > 1);
+    let x = x0 + f32(stroke) * step + wob.x * 0.014;
+    let y0 = 0.06 + wob.y * 0.02;
+    let y1 = 0.94 + wob.x * 0.016;
+    let lean = wob.y * 0.02;
+    d = sdSeg(local, vec2<f32>(x + lean, y0), vec2<f32>(x - lean, y1));
+  } else {
+    d = sdSeg(
+      local,
+      vec2<f32>(0.04, 0.10) + wob * 0.012,
+      vec2<f32>(0.96, 0.90) + vec2<f32>(wob.y, -wob.x) * 0.012,
+    );
+  }
+  return d * min(cell.x, cell.y);
+}
+fn hashDistQuads(uv: vec2<f32>, n: i32) -> f32 {
+  var best = 1e3;
+  if (n <= 0) { return best; }
+  let cell = quadCell();
+  for (var i = 0; i < 15; i++) {
     if (i >= n) { break; }
     let group = i / 5;
-    let stroke = i % 5;
-    let inGroup = min(5, n - group * 5);
-    let origin = pentadOrigin(group, used);
-    let cell = vec2<f32>(0.32, 0.30);
-    let local = (uv - origin) / cell;
-    let wob = hash21(f32(i) * 3.17);
-    var d = 1.0;
-    if (stroke < 4) {
-      let uCount = min(4, inGroup);
-      let span = 0.58;
-      let x0 = 0.50 - span * 0.5;
-      let step = select(0.0, span / max(f32(uCount - 1), 1.0), uCount > 1);
-      let x = x0 + f32(stroke) * step + wob.x * 0.025;
-      let y0 = 0.10 + wob.y * 0.05;
-      let y1 = 0.90 + wob.x * 0.04;
-      let lean = wob.y * 0.045;
-      d = sdSeg(local, vec2<f32>(x + lean, y0), vec2<f32>(x - lean, y1));
-    } else {
-      d = sdSeg(
-        local,
-        vec2<f32>(0.04, 0.14) + wob * 0.03,
-        vec2<f32>(0.96, 0.86) + vec2<f32>(wob.y, -wob.x) * 0.03,
-      );
-    }
-    ink = max(ink, 1.0 - smoothstep(0.10, 0.17, d));
+    let cellO = quadOrigin(group);
+    let local = (uv - cellO) / cell;
+    best = min(best, hashStrokeDist(local, i % 5, min(5, n - group * 5), f32(i) * 3.17, cell));
   }
-  return ink;
+  return best;
+}
+fn oneXDist(uv: vec2<f32>, center: vec2<f32>, size: f32, rot: f32, seed: f32) -> f32 {
+  let w1 = hash21(seed * 7.1) * 0.012;
+  let w2 = hash21(seed * 9.3 + 2.0) * 0.012;
+  let c = cos(rot);
+  let s = sin(rot);
+  let p = uv - center;
+  let q = vec2<f32>(c * p.x - s * p.y, s * p.x + c * p.y);
+  let half = size * 0.46;
+  let d1 = sdSeg(q, vec2<f32>(-half, -half) + w1, vec2<f32>(half, half) + w2);
+  let d2 = sdSeg(q, vec2<f32>(half, -half) + vec2<f32>(w2.y, w1.x), vec2<f32>(-half, half) + vec2<f32>(w1.y, w2.x));
+  return min(d1, d2);
+}
+fn xxDist(uv: vec2<f32>) -> f32 {
+  let a = oneXDist(uv, vec2<f32>(0.365, 0.50), 0.48, 0.0, 1.0);
+  let b = oneXDist(vec2<f32>(1.0 - uv.x, uv.y), vec2<f32>(0.365, 0.50), 0.48, 0.0, 1.0);
+  return min(a, b);
+}
+// Hashes in TL/TR/BL. First X sits in BR (16), hashes restart around it. XX at 32.
+fn tallyDist(uv: vec2<f32>, count: f32) -> f32 {
+  let raw = i32(max(count, 0.0) + 0.5);
+  if (raw <= 0) { return 1e3; }
+  let xCount = select(2, raw / 16, raw < 32);
+  let hashes = select(0, raw % 16, raw < 32);
+  if (xCount >= 2) {
+    return xxDist(uv);
+  }
+  var best = hashDistQuads(uv, hashes);
+  if (xCount == 1) {
+    let cell = quadCell();
+    let q3 = quadOrigin(3);
+    best = min(best, oneXDist(uv, q3 + cell * 0.5, min(cell.x, cell.y) * 0.78, 0.0, 1.0));
+  }
+  return best;
 }
 @fragment fn mainFragment(input: VertexOutput) -> @location(0) vec4<f32> {
   let p = input.uv * 2.0 - 1.0;
@@ -318,8 +345,8 @@ fn tallyInk(uv: vec2<f32>, count: f32) -> f32 {
   let halo = 1.0 - smoothstep(stroke * 0.5, stroke * 0.5 + 0.06, abs(d));
   let frame = edge * (0.42 + shaderUniforms.fill * 0.4 + shaderUniforms.glow * 0.18)
     + halo * 0.16;
-  let tally = tallyInk(input.uv, shaderUniforms.count);
-  let alpha = max(frame, tally * (0.78 + shaderUniforms.glow * 0.16));
+  let tally = 1.0 - smoothstep(0.014, 0.030, tallyDist(input.uv, shaderUniforms.count));
+  let alpha = max(frame, tally * (0.88 + shaderUniforms.glow * 0.1));
   if (alpha < 0.02) { discard; }
   let lift = 0.12 + shaderUniforms.glow * 0.2;
   let rgb = shaderUniforms.tint * (0.88 + lift) + vec3<f32>(lift * 0.15);

@@ -5,6 +5,10 @@ import {
   primeVatInstanceCapacity,
   vatInstanceTexelWidth,
   vatWant,
+  vatWalkFps,
+  vatWalkGait,
+  VAT_WALK_RATE_MIN,
+  VAT_WALK_RATE_MAX,
   VAT_CLIP,
   VAT_FROZEN,
 } from './vatUnits.js';
@@ -39,6 +43,16 @@ function maxInstancesUsesTextureLimit() {
   assert.equal(maxVatInstancesPerBatch({}), 4096);
 }
 
+function vatWalkFpsScalesWithRate() {
+  assert.equal(vatWalkGait(0), 0);
+  assert.equal(vatWalkGait(0.1), VAT_WALK_RATE_MIN);
+  assert.ok(vatWalkGait(0.28) >= VAT_WALK_RATE_MIN);
+  assert.ok(vatWalkGait(0.28) <= VAT_WALK_RATE_MIN + 1e-6, 'stroll stays a walk');
+  assert.ok(vatWalkGait(1) >= VAT_WALK_RATE_MAX - 1e-6, 'full speed is a run');
+  assert.equal(vatWalkFps(24, 1), 24 * VAT_WALK_RATE_MAX);
+  assert.equal(vatWalkFps(24, 0), 0);
+}
+
 function vatWantPrefersChopOverIdle() {
   assert.equal(vatWant(false, false, true, true), VAT_CLIP.CHOP);
   assert.equal(vatWant(true, false, true, true), VAT_CLIP.CHOP);
@@ -60,6 +74,7 @@ function clipForVatStateUsesChop() {
 }
 
 texelWidthMatchesLitePacking();
+vatWalkFpsScalesWithRate();
 vatWantPrefersChopOverIdle();
 clipForVatStateUsesChop();
 defaultBatchCapIsTheDestroyedSize();

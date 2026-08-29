@@ -262,6 +262,9 @@ export function createMonkLobFx(emit, groundYAt) {
   function emitFireBead(px, py, pz) {
     const life = 0.45 + Math.random() * 0.3;
     emit({
+      sprite: 'puff',
+      rotation: Math.random() * Math.PI * 2,
+      spin: (Math.random() - 0.5) * 1.4,
       position: [px, py, pz],
       velocity: [
         (Math.random() - 0.5) * 0.35,
@@ -279,6 +282,9 @@ export function createMonkLobFx(emit, groundYAt) {
     });
     if (Math.random() > 0.45) {
       emit({
+        sprite: 'puff',
+        rotation: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 1.4,
         position: [px, py + 0.15, pz],
         velocity: [0, 0.8 + Math.random() * 0.6, 0],
         gravity: [0, -0.4, 0],

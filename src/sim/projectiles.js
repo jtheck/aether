@@ -6,11 +6,12 @@ import {
   applyDamageBuilding,
   buildingFootprintHalf,
   FARM_FIRE_DAMAGE_MUL,
+  FARM_LOCUST_DAMAGE_MUL,
   scaleFarmHazardDamage,
 } from './buildingCombat.js';
 import { isBuildingAlive } from './buildings.js';
 import { lineClear } from './field.js';
-import { getProjectileDef } from './projectileTypes.js';
+import { getProjectileDef, PROJECTILE } from './projectileTypes.js';
 import { isHostile } from './teams.js';
 import { applyTreeSplash } from './trees.js';
 import { spawnFireZone } from './fireZones.js';
@@ -219,6 +220,26 @@ function applyHitEffects(w, def, entity, source) {
   if (def.appliesDistract) applyDistract(w, entity, LOCUST_DISTRACT_TICKS);
 }
 
+function projectileBuildingDamage(def, buildingType, amount) {
+  if (def.id === PROJECTILE.LOCUST_SWARM) {
+    return scaleFarmHazardDamage(buildingType, amount, FARM_LOCUST_DAMAGE_MUL);
+  }
+  if (def.leavesGroundFire) {
+    return scaleFarmHazardDamage(buildingType, amount, FARM_FIRE_DAMAGE_MUL);
+  }
+  return amount | 0;
+}
+
+function hitBuilding(w, field, bi, def, amount) {
+  const b = w.buildings?.[bi];
+  return applyDamageBuilding(
+    w,
+    field,
+    bi,
+    projectileBuildingDamage(def, b?.type, amount),
+  );
+}
+
 function hitEntity(w, store, slot, def, entity, field) {
   const wasAlive = !!w.alive[entity];
   applyDamage(w, entity, store.damage[slot], store.source[slot]);
@@ -268,9 +289,7 @@ function applySplash(w, slot, impactX, impactY, def, field) {
       if (!isBuildingAlive(b)) continue;
       const reach = radius + buildingFootprintHalf(b.type);
       if (fx.dist2(impactX, impactY, b.x, b.z) > fx.mul(reach, reach)) continue;
-      const dmg = def.leavesGroundFire
-        ? scaleFarmHazardDamage(b.type, baseDamage, FARM_FIRE_DAMAGE_MUL)
-        : baseDamage;
+      const dmg = projectileBuildingDamage(def, b.type, baseDamage);
       if (applyDamageBuilding(w, field, bi, dmg) > 0) hit = true;
     }
   }
@@ -426,7 +445,7 @@ export function projectileSystem(w, field) {
       } else if (buildingAlive) {
         const reach = def.hitRadius + buildingFootprintHalf(b.type);
         if (fx.dist2(nextX, nextY, b.x, b.z) <= fx.mul(reach, reach)) {
-          applyDamageBuilding(w, field, bi, store.damage[slot]);
+          hitBuilding(w, field, bi, def, store.damage[slot]);
           store.hitCount[slot]++;
           if (store.hitCount[slot] >= def.pierce) {
             freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
@@ -448,7 +467,7 @@ export function projectileSystem(w, field) {
         freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
       } else {
         if (buildingAlive && store.hitCount[slot] === 0 && reachedAim) {
-          applyDamageBuilding(w, field, bi, store.damage[slot]);
+          hitBuilding(w, field, bi, def, store.damage[slot]);
           store.hitCount[slot]++;
         }
         const hadHit = store.hitCount[slot] > 0;

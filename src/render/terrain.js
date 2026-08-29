@@ -18,6 +18,7 @@ import {
 import {
   ATLAS,
   HEIGHT_AMPLITUDE,
+  WATER_RECESS,
   TERRAIN,
   TILE_SIZE_F,
   worldHalfFFromField,
@@ -1586,9 +1587,10 @@ function sampleHeight(heightMap, terrainTypes, width, height, cx, cz) {
   const tx = cx <= 0 ? 0 : cx >= width ? width - 1 : cx;
   const tz = cz <= 0 ? 0 : cz >= height ? height - 1 : cz;
   const i = tz * width + tx;
-  // Keep water slightly lower so shore reads clearly without v1 shoreline snap.
-  if (terrainTypes[i] === TERRAIN.WATER) return heightMap[i] * HEIGHT_AMPLITUDE * 0.35;
-  return heightMap[i] * HEIGHT_AMPLITUDE;
+  const y = heightMap[i] * HEIGHT_AMPLITUDE;
+  // Shallow dish — same regional lift as the shore, not a scaled-down cliff.
+  if (terrainTypes[i] === TERRAIN.WATER) return y - WATER_RECESS;
+  return y;
 }
 
 /** World-space surface Y matching terrain mesh corners (bilinear). */

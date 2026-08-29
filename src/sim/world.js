@@ -38,6 +38,8 @@ export const ORDER = {
   GATHER: 5,
   /** Villager or engineer raising a building under construction (see construction.js). */
   BUILD: 6,
+  /** Idle amble — path-follows like MOVE, but at stroll speed. */
+  WANDER: 7,
 };
 
 /** Drop unit / building attack focus (move, stop, gather, death, …). */

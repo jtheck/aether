@@ -16,6 +16,7 @@ import {
   getProjectileDef,
 } from '../sim/projectileTypes.js';
 import { MAX_PROJECTILES } from '../sim/projectiles.js';
+import { createFireballCoreMaterial } from './holyShields.js';
 
 // Kept modest — was 5 while debugging visibility and arrows looked gigantic.
 const PROJECTILE_VISIBILITY_SCALE = 5 / 3;
@@ -73,7 +74,7 @@ function createArchetypeMesh(engine, def) {
     return createArrowMesh(engine, `projectile-${def.name.toLowerCase()}`);
   }
   const segments =
-    def.id === PROJECTILE.FIREBALL ? 14 :
+    def.id === PROJECTILE.FIREBALL ? 20 :
     def.mesh === PROJECTILE_MESH.ROCK ? 6 :
     8;
   return createSphere(engine, {
@@ -162,28 +163,30 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
   for (const def of PROJECTILE_DEFS) {
     const mesh = createArchetypeMesh(engine, def);
     mesh.pickable = false;
-    const material = createStandardMaterial();
     const isFireball = def.id === PROJECTILE.FIREBALL;
     const isShadow = def.id === PROJECTILE.SHADOW_BOLT;
     const isHoly = def.id === PROJECTILE.HOLY_SLASH;
     const isIce = def.id === PROJECTILE.ICE_BOLT;
-    material.diffuseColor = isFireball ? [1, 0.55, 0.12] : def.color;
-    material.emissiveColor = isFireball
-      ? [1, 0.38, 0.04]
-      : isShadow
+    if (isFireball) {
+      mesh.material = createFireballCoreMaterial();
+    } else {
+      const material = createStandardMaterial();
+      material.diffuseColor = def.color;
+      material.emissiveColor = isShadow
         ? [0.12, 0.04, 0.22]
         : isHoly
           ? [1, 0.95, 0.75]
           : isIce
             ? [0.35, 0.65, 0.95]
             : def.color.map((v) => v * 0.3);
-    material.specularColor = [0, 0, 0];
-    if (isFireball || isShadow || isHoly || isIce) material.disableLighting = true;
-    // Lite caches opaque draws in a render bundle before dynamic projectile
-    // instances exist. Keep these on its per-frame path so matrices upload.
-    material.alpha = 0.99;
-    material.backFaceCulling = false;
-    mesh.material = material;
+      material.specularColor = [0, 0, 0];
+      if (isShadow || isHoly || isIce) material.disableLighting = true;
+      // Lite caches opaque draws in a render bundle before dynamic projectile
+      // instances exist. Keep these on its per-frame path so matrices upload.
+      material.alpha = 0.99;
+      material.backFaceCulling = false;
+      mesh.material = material;
+    }
 
     const capacity = def.renderCapacity;
     const matrices = new Float32Array(capacity * 16);
@@ -247,7 +250,7 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
         loftPeak,
       );
       const vy = projectileArcVy(def, progress, life, loftPeak);
-      onProjectile?.(i, cur.generation[i], x, y, z, cur.vx[i], cur.vz[i], def, vy);
+      onProjectile?.(i, cur.generation[i], x, y, z, cur.vx[i], cur.vz[i], def, vy, cur.age[i]);
       if (def.hidden) {
         active++;
         continue;
@@ -257,15 +260,7 @@ export function createProjectileRenderer(engine, scene, groundYAt, onProjectile,
         dropped++;
         continue;
       }
-      let scale = def.scale;
-      if (def.id === PROJECTILE.FIREBALL) {
-        const spd = Math.hypot(cur.vx[i], cur.vz[i]);
-        if (spd > 0.08) {
-          const mul = Math.min(2.85, Math.max(1, 5 / spd));
-          scale = [def.scale[0] * mul, def.scale[1] * mul, def.scale[2] * mul];
-        }
-      }
-      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], scale);
+      writeMatrix(batch.matrices, slot, x, y, z, cur.vx[i], vy, cur.vz[i], def.scale);
       active++;
     }
 

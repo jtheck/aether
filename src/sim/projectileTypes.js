@@ -117,8 +117,8 @@ export const PROJECTILE_DEFS = [
     // Aim drift as a fraction of throw range (longer shots wander more).
     aimScatter: fx.fromFloat(0.12),
     mesh: PROJECTILE_MESH.ORB,
-    scale: [0.95, 0.95, 0.95],
-    color: [1, 0.42, 0.06],
+    scale: [1.45, 1.45, 1.45],
+    color: [1, 0.55, 0.16],
     // Thrown from the hand, crashes into the ground (not a dolphin hop).
     lob: 1,
     launchHeight: 4.2,

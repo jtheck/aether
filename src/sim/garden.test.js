@@ -68,7 +68,8 @@ describe('table silhouette', () => {
   });
 
   it('marks edge-intersect tiles blocked and their neighbors slow', () => {
-    const field = buildField(1, { width: 32, height: 32 });
+    const field = createField(1, { width: 32, height: 32 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
     applyTableSilhouette(field, {
       cellSize: 16,
       cellMask: createFullCellMask(32, 32, 16),
@@ -144,7 +145,8 @@ describe('table silhouette', () => {
   });
 
   it('keeps table-edge red/yellow after scenery populate', () => {
-    const field = buildField(1, { width: 32, height: 32 });
+    const field = createField(1, { width: 32, height: 32 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
     applyTableSilhouette(field, {
       cellSize: 16,
       cellMask: createFullCellMask(32, 32, 16),
@@ -303,6 +305,8 @@ describe('garden codec', () => {
     assert.equal(json2.cm, json.cm);
     assert.equal(json2.rr, json.rr);
     assert.equal(json2.t, json.t);
+    assert.equal(typeof json.rl, 'string');
+    assert.equal(json2.rl, json.rl);
   });
 
   it('roundtrips authored scenery and placements', () => {

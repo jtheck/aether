@@ -62,6 +62,7 @@ import {
   FARM_STROLL_SPEED,
 } from './gather.js';
 import { constructionSystem, constructionAssignSystem } from './construction.js';
+import { idleWanderSystem, isIdleWander, IDLE_WANDER_SPEED } from './idleWander.js';
 import { tickCombatStatus, FROST_MOVE_MUL } from './combatStatus.js';
 
 /** Extra slow while gawking at frogs (stacks with terrain slow). */
@@ -166,6 +167,7 @@ export function step(world, field, commands) {
   phase('constructAssign', () => constructionAssignSystem(world, field));
   phase('construct', () => constructionSystem(world, field));
   phase('combat', () => combatSystem(world, field));
+  phase('idleWander', () => idleWanderSystem(world, field));
   phase('lightning', () => pendingLightningSystem(world, field));
   phase('towers', () => towerCombatSystem(world));
   phase('projectiles', () => projectileSystem(world, field));
@@ -256,7 +258,7 @@ function movementSystem(w, field) {
 
     // Final destination reached — settle the order (v1 arrivalRadius).
     if (
-      (order === ORDER.MOVE || order === ORDER.ATTACK_MOVE) &&
+      (order === ORDER.MOVE || order === ORDER.WANDER || order === ORDER.ATTACK_MOVE) &&
       w.hasTarget[i] &&
       atFinalDest(w, i)
     ) {
@@ -355,6 +357,7 @@ function movementSystem(w, field) {
     if (w.distractCd[i] > 0) speed = fx.mul(speed, DISTRACT_MOVE_MUL);
     if (w.frostTicks?.[i] > 0) speed = fx.mul(speed, FROST_MOVE_MUL);
     if (isFarmStroll(w, field, i) && speed > FARM_STROLL_SPEED) speed = FARM_STROLL_SPEED;
+    if (isIdleWander(w, i) && speed > IDLE_WANDER_SPEED) speed = IDLE_WANDER_SPEED;
 
     const typeId = w.type[i];
     const wantX = fx.div(dx, dist);

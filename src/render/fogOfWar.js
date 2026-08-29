@@ -240,6 +240,23 @@ function edt2d(grid, bw, bh) {
   }
 }
 
+function tryWriteTexture(engine, texture, pixels, w, h) {
+  const device = engine?._device;
+  const gpuTex = gpuTextureOf(texture);
+  if (!device?.queue?.writeTexture || !gpuTex) return false;
+  try {
+    device.queue.writeTexture(
+      { texture: gpuTex },
+      pixels,
+      { bytesPerRow: w * 4, rowsPerImage: h },
+      { width: w, height: h, depthOrArrayLayers: 1 },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** `bytesPerRow` is `w*4`; origin.x must stay 256-byte aligned (w is 64-texel padded). */
 function tryWriteTextureRect(engine, texture, pixels, texW, texH, x, y, rw, rh) {
   const device = engine?._device;
@@ -544,7 +561,6 @@ export function createFogOfWar() {
   }
 
   function applyStamp(i, hard, d2, hardR2, fadeDen) {
-    const first = !sight || sight[i] !== gen;
     if (sight) sight[i] = gen;
     if (hard) {
       if (visible) visible[i] = gen;
@@ -552,12 +568,7 @@ export function createFogOfWar() {
     }
     if (!cover) return;
     const c = hard ? 255 : ((fadeDen - (d2 - hardR2)) * 255 / fadeDen) | 0;
-    if (first) {
-      if (c !== cover[i]) {
-        cover[i] = c;
-        markDirty(i);
-      }
-    } else if (c > cover[i]) {
+    if (c > cover[i]) {
       cover[i] = c;
       markDirty(i);
     }
@@ -961,14 +972,18 @@ export function createFogOfWar() {
   }
 
   function writeOpacityTexture(prev, data, rect) {
-    if (
-      prev &&
-      rect &&
-      tryWriteTextureRect(engine, prev, data, texW, texH, rect.x, rect.y, rect.w, rect.h)
-    ) {
-      return prev;
+    try {
+      if (
+        prev &&
+        rect &&
+        tryWriteTextureRect(engine, prev, data, texW, texH, rect.x, rect.y, rect.w, rect.h)
+      ) {
+        return prev;
+      }
+      if (prev && tryWriteTexture(engine, prev, data, texW, texH)) return prev;
+    } catch (err) {
+      console.warn('[fog] texture write failed', err);
     }
-    if (prev && tryWriteTexture(engine, prev, data, texW, texH)) return prev;
     const next = createTexture2DFromPixels(engine, data, texW, texH, {
       minFilter: 'linear',
       magFilter: 'linear',
@@ -987,8 +1002,11 @@ export function createFogOfWar() {
 
   function uploadTexture() {
     if (!engine || !pixels || !visitedPixels || !liftPixels || !texW || !texH) return;
-    if (paintedOnce && dirtyN === 0) return;
-    const incremental = paintedOnce && dirtyN > 0;
+    // After detach/attach the pixel buffers are new but paintedOnce can still
+    // be true — a dirty-only upload then writes a hole into a zeroed shroud
+    // (wilderness stays transparent = inverted mask).
+    if (paintedOnce && dirtyN === 0 && texture && visitedTexture && liftTexture) return;
+    const incremental = !!(paintedOnce && dirtyN > 0 && texture && visitedTexture && liftTexture);
     paintPixels(incremental);
     const rect = incremental ? dirtyTexBounds() : null;
     texture = writeOpacityTexture(texture, pixels, rect);
@@ -1103,6 +1121,7 @@ export function createFogOfWar() {
     liftPixels = null;
     texW = 0;
     texH = 0;
+    paintedOnce = false;
     engine = null;
     scene = null;
   }
@@ -1118,6 +1137,7 @@ export function createFogOfWar() {
     pixels = new Uint8Array(texW * texH * 4);
     visitedPixels = new Uint8Array(texW * texH * 4);
     liftPixels = new Uint8Array(texW * texH * 4);
+    paintedOnce = false;
     buildOverlayMesh();
   }
 

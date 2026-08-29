@@ -2,7 +2,7 @@
 // v3 files still decode (no scenery / placements).
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
-import { buildField, createField, refreshTerrainDerived, tileCenterX, tileCenterY } from './field.js';
+import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, refreshTerrainDerived, tileCenterX, tileCenterY } from './field.js';
 import { applyAuthoredScenery, SCENERY } from './scenery.js';
 import { spawn } from './world.js';
 import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
@@ -126,6 +126,21 @@ export function normalizeStartingResources(raw) {
   return any ? out : null;
 }
 
+function encodeQuantized01(arr) {
+  const u8 = new Uint8Array(arr.length);
+  for (let i = 0; i < arr.length; i++) {
+    u8[i] = Math.max(0, Math.min(255, Math.round(arr[i] * 255)));
+  }
+  return encodeRle(u8);
+}
+
+function decodeQuantized01(str, n) {
+  const u8 = decodeRle(str, n);
+  const out = new Float32Array(n);
+  for (let i = 0; i < n; i++) out[i] = (u8[i] || 0) / 255;
+  return out;
+}
+
 function encodeStartingResources(raw) {
   const n = normalizeStartingResources(raw);
   if (!n) return null;
@@ -149,6 +164,9 @@ export function encodeGarden(field, extras = {}) {
     rr: encodeRle(shape.cellRadius),
     t: encodeRle(field.terrainTypes),
   };
+  if (field.regionLift?.length === field.width * field.height) {
+    out.rl = encodeQuantized01(field.regionLift);
+  }
   if (authored) {
     out.sc = encodeRle(field.sceneryType);
     out.ts = encodeRle(field.treeStock);
@@ -196,16 +214,25 @@ export function decodeGarden(data) {
     agoras: normalizeAgoras(data.g),
     startingResources: normalizeStartingResources(data.sr ?? data.startingResources),
     authoredScenery: !!data.sc,
+    regionLift: data.rl ? decodeQuantized01(data.rl, n) : null,
   };
 }
 
 /** Build a live field from garden JSON (or generate from seed if no terrain). */
 export function fieldFromGarden(data) {
   const g = decodeGarden(data);
-  const field = g.terrainTypes.length === g.width * g.height
+  const authored = g.terrainTypes.length === g.width * g.height;
+  const field = authored
     ? createField(g.seed, { width: g.width, height: g.height })
     : buildField(g.seed, { width: g.width, height: g.height });
-  if (g.terrainTypes.length === field.terrainTypes.length) {
+  if (authored) {
+    if (g.regionLift) {
+      generateHeightMap(field);
+      field.regionLift.set(g.regionLift);
+      composeHeightMap(field);
+    } else {
+      applySeededHeight(field);
+    }
     field.terrainTypes.set(g.terrainTypes);
   }
   applyTableSilhouette(field, {

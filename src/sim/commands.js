@@ -25,7 +25,7 @@ import { kill } from './combat.js';
 import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
 import { applyCasts } from './abilities.js';
-import { getUnitDef, isFlyer, isMechanical, UNIT } from './unitTypes.js';
+import { isFlyer, isMechanical, UNIT, unitAttacksBuildings } from './unitTypes.js';
 import {
   applyTransportAssignments,
   isCarried,
@@ -278,6 +278,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
     for (let k = 0; k < ids.length; k++) {
       const i = ids[k];
       if (!world.alive[i] || isCarried(world, i)) continue;
+      if (!unitAttacksBuildings(world.type[i])) continue;
       world.transportTarget[i] = -1;
       world.order[i] = ORDER.ATTACK;
       world.targetEntity[i] = -1;

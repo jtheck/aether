@@ -19,6 +19,11 @@ export function setTeamAssignments(teamByOwner) {
   _teamOf = next;
 }
 
+/** Copy of the current owner→team table, or null for FFA. */
+export function getTeamAssignments() {
+  return _teamOf ? new Uint8Array(_teamOf) : null;
+}
+
 /** Team id for an owner (identity when no assignment table is set). */
 export function teamOf(owner) {
   if (!_teamOf || owner < 0 || owner >= _teamOf.length) return owner & 0xff;

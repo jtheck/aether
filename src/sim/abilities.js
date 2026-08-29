@@ -53,6 +53,8 @@ const FIREBALL_EXTRA_LATERAL = [
   fx.fromFloat(-10),
   fx.fromFloat(13),
 ];
+/** Ticks the first ball sits at the caster while fire gathers (20Hz). */
+export const FIREBALL_WINDUP = 16;
 /** Ticks between staggered throws — short so the volley still reads as one burst. */
 export const FIREBALL_STAGGER = 2;
 const FROG_RANGE_MUL = [
@@ -272,7 +274,7 @@ function castWarlockFireballGroup(w, casters, aimX, aimY) {
       speed,
       power: rank,
       aimScatter: scatter,
-      launchWait: throwIndex * FIREBALL_STAGGER,
+      launchWait: FIREBALL_WINDUP + throwIndex * FIREBALL_STAGGER,
     });
     throwIndex++;
     if (slot >= 0) spawned++;
@@ -299,7 +301,7 @@ function castWarlockFireballGroup(w, casters, aimX, aimY) {
       speed,
       power: rank,
       aimScatter: 0,
-      launchWait: throwIndex * FIREBALL_STAGGER,
+      launchWait: FIREBALL_WINDUP + throwIndex * FIREBALL_STAGGER,
     });
     throwIndex++;
     if (slot >= 0) spawned++;

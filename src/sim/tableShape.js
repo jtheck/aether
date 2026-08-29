@@ -7,6 +7,7 @@ import {
   TILE_SIZE_F,
   worldHalfFFromField,
   refreshTerrainDerived,
+  composeHeightMap,
 } from './field.js';
 
 export const DEFAULT_CELL_SIZE = 16;
@@ -559,6 +560,7 @@ export function applyTableSilhouette(field, opts = {}) {
 
   stampTableBlocks(field, edge, shape);
   field.tableEdge = edge;
+  if (field.detailHeight) composeHeightMap(field);
   refreshTableTerrain(field);
   return field;
 }

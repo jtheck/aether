@@ -11,6 +11,8 @@ import {
 } from './buildings.js';
 import {
   WORLD_HALF_F,
+  TINY_MAP_W,
+  activeMapW,
   activeWorldHalfF,
   mapSizeForConfig,
   setActiveMapSize,
@@ -38,27 +40,68 @@ export const AI_OWNER = 1;
 export const STRESS_AI_OWNERS = [1, 2, 3, 4];
 export const STRESS_ARMY_COUNT = 1 + STRESS_AI_OWNERS.length;
 
+/**
+ * Inset of the side-midline bases. Corner spawns sit at those two midlines'
+ * intersection — not the map corner itself.
+ */
+export const SPAWN_BASE_INSET = 0.6;
+
 /** Pentagonal spawn bases — scale with the active board half-extent. */
 export function kothBases(worldHalfF = activeWorldHalfF()) {
   const H = worldHalfF;
+  const m = H * SPAWN_BASE_INSET;
   return [
-    [-H * 0.6, 0],
-    [H * 0.6, 0],
-    [0, -H * 0.6],
-    [0, H * 0.6],
+    [-m, 0],
+    [m, 0],
+    [0, -m],
+    [0, m],
     [-H * 0.425, H * 0.425],
   ];
 }
 
 /** Team lanes — south pair (A), north pair (B). */
 export function laneBases(worldHalfF = activeWorldHalfF()) {
-  const m = worldHalfF * 0.6;
+  const m = worldHalfF * SPAWN_BASE_INSET;
   return [
     [-m, -m],
     [m, -m],
     [-m, m],
     [m, m],
   ];
+}
+
+/** Opposite corners first (1v1), then the remaining pair. Same inset as the sides. */
+export function cornerBases(worldHalfF = activeWorldHalfF()) {
+  const m = worldHalfF * SPAWN_BASE_INSET;
+  return [
+    [-m, -m],
+    [m, m],
+    [-m, m],
+    [m, -m],
+    [0, -m],
+  ];
+}
+
+export function usesCornerSpawnBases(mapW) {
+  return (mapW | 0) === TINY_MAP_W;
+}
+
+/** Match / Forge spawn points — corners on the 5-chunk board, sides otherwise. */
+export function spawnBases(worldHalfF = activeWorldHalfF(), opts = {}) {
+  if (opts.laneBases) return laneBases(worldHalfF);
+  if (usesCornerSpawnBases(opts.mapW ?? activeMapW())) return cornerBases(worldHalfF);
+  return kothBases(worldHalfF);
+}
+
+/** Default 1v1 agoras for a generated field (Forge + procedural matches). */
+export function defaultMatchAgoras(worldHalfF, mapW, count = 2) {
+  const bases = spawnBases(worldHalfF, { mapW });
+  const n = Math.max(0, Math.min(count | 0, bases.length));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    out.push({ owner: i, x: bases[i][0], z: bases[i][1] });
+  }
+  return out;
 }
 
 /** Default-map bases (tests / importers that expect a stable export). */
@@ -180,7 +223,8 @@ function spawnConfiguredArmy(w, owner, baseX, baseZ) {
 
 /** Spawn one KOTH army at a slot base (mid-game join). */
 export function spawnKothSlot(w, slot) {
-  const bases = kothBases(w.worldHalfF ?? activeWorldHalfF());
+  const half = w.worldHalfF ?? activeWorldHalfF();
+  const bases = spawnBases(half, { mapW: w.mapW });
   const base = bestKothSpawnPoint(w, slot, bases);
   spawnConfiguredArmy(w, slot, base[0], base[1]);
 }
@@ -383,7 +427,7 @@ export function buildWorldFromConfig({
   const size = mapSizeForConfig({ stressPerSide, animStressPerSide, armyPerSide, mapW, mapH });
   setActiveMapSize(size.mapW, size.mapH);
   const half = worldHalfFFromMap(size.mapW);
-  const bases = useLaneBases ? laneBases(half) : kothBases(half);
+  const bases = spawnBases(half, { laneBases: useLaneBases, mapW: size.mapW });
 
   const w = createWorld(seed);
   w.kothMatchOver = 0;

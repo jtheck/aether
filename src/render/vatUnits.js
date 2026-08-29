@@ -136,6 +136,28 @@ export function collectVatBakeGroups(groups, def) {
   return { idle, walk, carry, chop, bakeGroups };
 }
 
+/** Floor for pottering — short legs, keep the farm walk from sliding. */
+export const VAT_WALK_RATE_MIN = 0.51;
+/** Full-speed orders play faster than the walk clip so they read as a run. */
+export const VAT_WALK_RATE_MAX = 2.04;
+/** Below this speed ratio, keep a walk; above it, ease toward a run. */
+const VAT_WALK_RUN_START = 0.45;
+
+/** Map step/nominal (0–1) onto stroll…run playback. */
+export function vatWalkGait(walkRate) {
+  if (!(walkRate > 0)) return 0;
+  const r = walkRate > 1 ? 1 : walkRate;
+  const stroll = r < VAT_WALK_RATE_MIN ? VAT_WALK_RATE_MIN : r;
+  const t = r <= VAT_WALK_RUN_START ? 0 : (r - VAT_WALK_RUN_START) / (1 - VAT_WALK_RUN_START);
+  return stroll + (VAT_WALK_RATE_MAX - stroll) * t * t;
+}
+
+/** Walk / carry-walk playback vs clip fps. Stroll stays a walk; full speed runs. */
+export function vatWalkFps(clipFps, walkRate = 1) {
+  if (!(clipFps > 0)) return 0;
+  return clipFps * vatWalkGait(walkRate);
+}
+
 export function vatWant(moving, carrying, animate, chopping = false) {
   let clip = VAT_CLIP.IDLE;
   if (carrying && moving) clip = VAT_CLIP.CARRY_WALK;

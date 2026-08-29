@@ -68,6 +68,8 @@ import {
   unitChipLift,
 } from '../render/healthBars.js';
 import { setupInput } from './input.js';
+import { isCameraFollowTypingTarget, selectionCentroidXZ } from './input/cameraFollow.js';
+import { chasePoseXZ } from './poseInterp.js';
 import { init as initAudio, playThunder } from './audio.js';
 import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
@@ -77,7 +79,7 @@ import { createMatchLobby } from './matchLobby.js';
 import { setupLobbyUi } from './lobbyUi.js';
 import { isLobbyPlayMode } from '../lobby/modes.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
-import { setTeamAssignments } from '../sim/teams.js';
+import { getTeamAssignments, setTeamAssignments } from '../sim/teams.js';
 
 const SEED = 0x1234;
 
@@ -143,6 +145,8 @@ const DEBUG_KOTH = new URLSearchParams(location.search).get('debug') === 'koth';
 
 /** Drops stale applyLiveConfig completions (solo reset finishing after join reset). */
 let liveConfigGeneration = 0;
+/** Skip fog stamps that would run on the outgoing world during a live config swap. */
+let liveConfigQuietFog = false;
 
 function worldPositionsForSync(state, count) {
   const x = new Float32Array(count);
@@ -666,6 +670,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     poseMoving: new Uint8Array(CAP),
     poseCarrying: new Uint8Array(CAP),
     poseChopping: new Uint8Array(CAP),
+    /** Quantized walk-cycle rate (0.05 steps) so slow strolls refresh VAT fps. */
+    poseWalkQ: new Uint8Array(CAP),
     poseValid: new Uint8Array(CAP),
     /** Cached terrain height for unchanged xz. */
     cacheGx: new Float32Array(CAP),
@@ -726,18 +732,28 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const sceneryFogAt = (x, z) => fog.fogFactorAt(x, z);
   let sceneryFogOn = null;
   function stampFog() {
+    if (liveConfigQuietFog) return;
     const t0 = frameProf ? performance.now() : 0;
-    fog.stamp({
-      world: session.state,
-      buildings: livingBuildingList(session.buildings),
-      agoras: session.agoras,
-      field: session.field,
-      localPlayerId,
-      shareVisionWith: fogShareVisionWith,
-      enabled: fogActive(),
-    });
+    try {
+      fog.stamp({
+        world: session.state,
+        buildings: livingBuildingList(session.buildings),
+        agoras: session.agoras,
+        field: session.field,
+        localPlayerId,
+        shareVisionWith: fogShareVisionWith,
+        enabled: fogActive(),
+      });
+    } catch (err) {
+      console.warn('[fog] stamp failed', err);
+      return;
+    }
     const t1 = frameProf ? performance.now() : 0;
-    fog.syncOverlay();
+    try {
+      fog.syncOverlay();
+    } catch (err) {
+      console.warn('[fog] overlay upload failed', err);
+    }
     const t2 = frameProf ? performance.now() : 0;
     const on = fog.isEnabled();
     if (on !== sceneryFogOn) {
@@ -993,6 +1009,36 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let placingRally = false;
   /** @type {{ kind: 'agora' | 'building', index: number }[]} */
   let selectedBuildings = [];
+  /** Space held: camera zips to / locks on the current selection. */
+  let spaceFollowHeld = false;
+
+  function selectionFollowPoint() {
+    return selectionCentroidXZ({
+      count: session.count,
+      selected: bufs.selected,
+      alive: session.state?.alive,
+      renderX: bufs.renderX,
+      renderZ: bufs.renderZ,
+      selectedBuildings,
+      buildings: session.buildings,
+      agoras: session.agoras,
+    });
+  }
+
+  function pushSelectionFollow() {
+    if (!spaceFollowHeld) return;
+    const c = selectionFollowPoint();
+    if (!c) {
+      renderer.cameraController?.stopFollow?.();
+      return;
+    }
+    renderer.cameraController?.followXZ?.(c.x, c.z);
+  }
+
+  function releaseSpaceFollow() {
+    spaceFollowHeld = false;
+    renderer.cameraController?.stopFollow?.();
+  }
   /** Ghost A* cache — repath only when the cursor enters a new tile. */
   let ghostPathTileKey = -1;
   /** @type {{ x: number, z: number }[] | null} */
@@ -1480,6 +1526,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   window.addEventListener('keydown', (e) => {
     if (inputApi.handleControlGroupKeyDown?.(e)) return;
+    if (e.code === 'Space') {
+      if (isCameraFollowTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (!bootInteractive) return;
+      spaceFollowHeld = true;
+      pushSelectionFollow();
+      renderer.cameraController?.tick?.(16);
+      return;
+    }
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
     if (e.code === 'Escape') {
       e.preventDefault();
@@ -1567,6 +1623,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   window.addEventListener('keyup', (e) => {
     inputApi.handleControlGroupKeyUp?.(e);
+    if (e.code === 'Space') releaseSpaceFollow();
+  });
+  window.addEventListener('blur', releaseSpaceFollow);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') releaseSpaceFollow();
   });
   kothLobbyUi = setupKothLobby({
     kothShard,
@@ -1711,6 +1772,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
     // A/B: skip pose loop + health/auras when units are hidden.
     if (renderer.getUnitsEnabled && !renderer.getUnitsEnabled()) {
+      pushSelectionFollow();
       renderer.commit();
       finishFrameProf(frameT0);
       return;
@@ -1726,7 +1788,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       selected, wasSelected, deathFade, facingYaw, selSpinYaw, selSpinVel,
       ringX, ringZ, ringSize, ringTint,
       colors, renderX, renderY, renderZ,
-      poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseCarrying, poseChopping, poseValid,
+      poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseCarrying, poseChopping, poseWalkQ, poseValid,
       cacheGx, cacheGz, cacheGy,
       fogHidden,
     } = bufs;
@@ -1762,11 +1824,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return gy;
     };
 
-    const poseDirty = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0) => {
+    const poseDirty = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0, walkQ = 20) => {
       if (!poseValid[i]) return true;
       if (movingBit !== poseMoving[i]) return true;
       if (carryingBit !== poseCarrying[i]) return true;
       if (choppingBit !== poseChopping[i]) return true;
+      if (walkQ !== poseWalkQ[i]) return true;
       const pdx = x - poseX[i];
       const pdz = z - poseZ[i];
       if (pdx * pdx + pdz * pdz > POSE_XZ_EPS_SQ) return true;
@@ -1776,7 +1839,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return false;
     };
 
-    const commitPose = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0) => {
+    const commitPose = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0, walkQ = 20) => {
       poseX[i] = x;
       poseZ[i] = z;
       poseYaw[i] = yaw;
@@ -1785,6 +1848,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       poseMoving[i] = movingBit;
       poseCarrying[i] = carryingBit;
       poseChopping[i] = choppingBit;
+      poseWalkQ[i] = walkQ;
       poseValid[i] = 1;
     };
 
@@ -1939,8 +2003,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           slot,
           total,
         });
-        const x = posed.x;
-        const z = posed.z;
+        let x = posed.x;
+        let z = posed.z;
+        const followSmooth = spaceFollowHeld && (!!selected[i] || !!selected[t]) && !!poseValid[i];
+        if (followSmooth) {
+          const s = chasePoseXZ(poseX[i], poseZ[i], x, z, dt);
+          x = s.x;
+          z = s.z;
+        }
         const loft = posed.loft;
         const yaw = posed.yaw;
         let size = def.size * 0.85;
@@ -1954,7 +2024,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           colors[i * 4 + 3] = fade;
           colorsDirty = true;
         }
-        const forcePose = fade > 0 || posed.pitch !== 0 || posed.roll !== 0;
+        const forcePose = followSmooth || fade > 0 || posed.pitch !== 0 || posed.roll !== 0;
         if (forcePose || poseDirty(i, x, z, yaw, size, loft, 0)) {
           if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, false, loft, posed.pitch, posed.roll, gy)) {
             if (world.owner[i] === 0) drawStats.p0++;
@@ -1973,15 +2043,21 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
 
       const def = getUnitDef(world.type[i]);
-      const x = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
-      const z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
+      let x = prev.x[i] + (cur.x[i] - prev.x[i]) * alpha;
+      let z = prev.z[i] + (cur.z[i] - prev.z[i]) * alpha;
+      const followSmooth = spaceFollowHeld && !!selected[i] && !!poseValid[i];
+      if (followSmooth) {
+        const s = chasePoseXZ(poseX[i], poseZ[i], x, z, dt);
+        x = s.x;
+        z = s.z;
+      }
       const dx = cur.x[i] - prev.x[i];
       const dz = cur.z[i] - prev.z[i];
       // Soft-separation nudges positions without an order — don't spin facing / walk.
       // MOVE/ATTACK_MOVE keep walk/rings even while path is pending (zero dx).
       const ord = world.order?.[i] ?? ORDER.IDLE;
       const orderedMove = ord !== ORDER.IDLE;
-      const orderedMarch = ord === ORDER.MOVE || ord === ORDER.ATTACK_MOVE;
+      const orderedMarch = ord === ORDER.MOVE || ord === ORDER.WANDER || ord === ORDER.ATTACK_MOVE;
       const displacing = dx * dx + dz * dz > 0.0004;
       // Interpolated sim face — shows turn-in-place (XZ snapshots alone looked frozen).
       let faceDx = dx;
@@ -2019,13 +2095,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const gatherAct = world.gatherAct?.[i] | 0;
       const carryingBit = gatherAct === GATHER_ACT.HAUL ? 1 : 0;
       const choppingBit = gatherAct === GATHER_ACT.CHOP ? 1 : 0;
-      const forcePose = fade > 0 || loft > 0.01 || pitch !== 0 || roll !== 0;
-      if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit)) {
-        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy, !!carryingBit, !!choppingBit)) {
+      const stepLen = Math.hypot(dx, dz);
+      const nominal = fx.toFloat(def.speed) || 2;
+      const walkRate = movingBit ? Math.min(1, stepLen / nominal) : 1;
+      const walkQ = Math.round(Math.max(0, Math.min(1, walkRate)) * 20);
+      const forcePose = followSmooth || fade > 0 || loft > 0.01 || pitch !== 0 || roll !== 0;
+      if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ)) {
+        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy, !!carryingBit, !!choppingBit, walkRate)) {
           if (world.owner[i] === 0) drawStats.p0++;
           else if (world.owner[i] === 1) drawStats.p1++;
         } else drawStats.unmapped++;
-        commitPose(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit);
+        commitPose(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ);
       } else if (world.owner[i] === 0) drawStats.p0++;
       else if (world.owner[i] === 1) drawStats.p1++;
       const isSel = !!selected[i] && !!world.alive[i];
@@ -2065,7 +2145,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           if (ord === ORDER.ATTACK_MOVE) {
             tintName = 'red';
             tintCode = RING_TINT_RED;
-          } else if (ord === ORDER.MOVE) {
+          } else if (ord === ORDER.MOVE || ord === ORDER.WANDER) {
             tintName = 'yellow';
             tintCode = RING_TINT_YELLOW;
           }
@@ -2312,6 +2392,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setFxSimTick?.(world.tick);
     }
     syncActionRadialTracksFromSim();
+    pushSelectionFollow();
     renderer.commit();
     finishFrameProf(frameT0);
   });
@@ -2408,32 +2489,38 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 
   const simMode = workerSimMode(cfg.mode);
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
-  setTeamAssignments(cfg.teamByOwner ?? null);
-  // Set humans before reset so the new worker never inherits the loading-screen
-  // passive AI (owner 1 = first KOTH joiner) as a fake computer player.
-  ctx.session.setHumanPlayers(humanPlayers);
-  ctx.session.aiPlayers = resolveSessionAiPlayers(
+  const aiPlayers = resolveSessionAiPlayers(
     { ...cfg, humanPlayers, localSolo },
     ctx.session.aiPlayers,
   );
-  // Stamp fog as the incoming player *before* reset so onWorldRebuilt does not
-  // briefly adopt the loading-screen owner (usually 0) and freeze enemy ghosts.
-  ctx.session.setRole(cfg.role ?? 'player');
-  if (cfg.localPlayerId != null) {
-    ctx.localPlayerId = cfg.localPlayerId;
-    ctx.session.setLocalPlayerId?.(cfg.localPlayerId);
-  }
-  ctx.setFogEnabled?.(cfg.fog !== false);
-  ctx.setShareVisionWith?.(shareVisionOwnersFromCfg(cfg));
-  ctx.session._pendingWorldGen = gen;
+  const prevHumans = [...(ctx.session.humanPlayers ?? [])];
+  const prevAi = ctx.session.aiPlayers;
+  const prevRole = ctx.session.role;
+  const prevLocal = ctx.localPlayerId;
+  const prevTeams = getTeamAssignments();
+  let worldReset = false;
+  // Don't stamp/upload fog on the outgoing solo/skirmish world — a failed
+  // overlay write used to abort start and freeze the current session.
+  liveConfigQuietFog = true;
   try {
+    setTeamAssignments(cfg.teamByOwner ?? null);
+    ctx.session.setRole(cfg.role ?? 'player');
+    if (cfg.localPlayerId != null) {
+      ctx.localPlayerId = cfg.localPlayerId;
+      ctx.session.setLocalPlayerId?.(cfg.localPlayerId);
+    }
+    ctx.setFogEnabled?.(cfg.fog !== false);
+    ctx.setShareVisionWith?.(shareVisionOwnersFromCfg(cfg));
+    ctx.session._pendingWorldGen = gen;
+    liveConfigQuietFog = false;
+    worldReset = true;
     await ctx.session.reset({
       seed: cfg.seed,
       mode: simMode,
       activeSlots,
       armyPerSide: cfg.armyPerSide ?? 0,
       garden: cfg.garden,
-      aiPlayers: ctx.session.aiPlayers,
+      aiPlayers,
       humanPlayers,
       mapW: cfg.mapW ?? (cfg.mode === 'skirmish' ? SKIRMISH_MAP_W : undefined),
       mapH: cfg.mapH ?? (cfg.mode === 'skirmish' ? SKIRMISH_MAP_H : undefined),
@@ -2448,11 +2535,22 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       new Promise((r) => setTimeout(r, 12000)),
     ]);
   } catch (err) {
+    if (!worldReset) {
+      setTeamAssignments(prevTeams);
+      ctx.session.setHumanPlayers(prevHumans);
+      ctx.session.aiPlayers = prevAi;
+      ctx.session.setRole(prevRole);
+      ctx.localPlayerId = prevLocal;
+      ctx.session.setLocalPlayerId?.(prevLocal);
+    }
     console.error('[live] match rebuild failed', err);
     setStatusText('Match load failed');
     ctx.setInteractive?.(true);
     dismissBootSplash({ immediate: true });
+    if (err && typeof err === 'object') err.worldReset = worldReset;
     throw err;
+  } finally {
+    liveConfigQuietFog = false;
   }
   setArmyPerSide(cfg.armyPerSide ?? 0);
   if (gen !== liveConfigGeneration) {
@@ -2757,6 +2855,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
     setStatusText('Not seated — cannot start');
     return;
   }
+  const heldSolo = ctx.localSoloHold;
   ctx.localSoloHold = true;
   kothShard?.setLobbyMatchHold?.(true);
   try {
@@ -2776,10 +2875,10 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
         : '1v1';
     setStatusText(`${label} — match on`);
   } catch (err) {
-    ctx.localSoloHold = false;
+    ctx.localSoloHold = heldSolo;
     kothShard?.setLobbyMatchHold?.(false);
     matchLobby?.detachSession?.();
-    throw err;
+    console.error('[lobby] match start failed', err);
   }
 }
 

@@ -21,7 +21,7 @@ export function simSharedByteSize() {
     MAX_ENTITIES + // alive
     MAX_ENTITIES + // owner
     MAX_ENTITIES + // type (written once at init)
-    MAX_ENTITIES + // order (IDLE / MOVE / ATTACK / ATTACK_MOVE / REPAIR)
+    MAX_ENTITIES + // order (IDLE / MOVE / ATTACK / ATTACK_MOVE / REPAIR / BUILD / WANDER)
     MAX_ENTITIES * 4 + // carriedBy (−1 = free)
     MAX_ENTITIES * 4 + // carriedAmt (gather load)
     MAX_ENTITIES + // carriedKind (0 = empty, else resource index + 1)

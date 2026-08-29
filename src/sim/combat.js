@@ -1,7 +1,7 @@
 // Combat — acquire targets, chase, deal damage on cooldown.
 
 import * as fx from './fixed.js';
-import { ATTACK_DELIVERY, getUnitDef } from './unitTypes.js';
+import { ATTACK_DELIVERY, getUnitDef, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { attackInRange, clearPath, queuePath, attackStandPoint } from './path.js';
 import { applyDamage, kill } from './damage.js';
@@ -41,6 +41,16 @@ export function combatSystem(w, field) {
 
 export { kill };
 
+function hasSquadMates(w, i) {
+  const sid = w.squadId?.[i] | 0;
+  if (sid === 0) return false;
+  for (let j = 0; j < w.count; j++) {
+    if (j === i || !w.alive[j]) continue;
+    if ((w.squadId[j] | 0) === sid) return true;
+  }
+  return false;
+}
+
 function canAutoAcquire(w, i) {
   // Frogs underfoot — too busy gawking to pick a fight.
   if (w.distractCd[i] > 0) return false;
@@ -48,8 +58,9 @@ function canAutoAcquire(w, i) {
   const order = w.order[i];
   // ATTACK: periodic rebalance off dogpiled targets when alternatives exist.
   if (order === w.ORDER.ATTACK) return true;
-  if (order === w.ORDER.ATTACK_MOVE) return true;
-  if (order === w.ORDER.IDLE) return true;
+  const hunts = unitIdleHunts(w.type[i]);
+  if (order === w.ORDER.ATTACK_MOVE) return hunts || hasSquadMates(w, i);
+  if (order === w.ORDER.IDLE) return hunts;
   return false;
 }
 
@@ -136,6 +147,7 @@ export function acquireTargets(w, field) {
       continue;
     }
 
+    if (!unitAttacksBuildings(w.type[i])) continue;
     const buildings = w.buildings;
     if (!buildings?.length) continue;
     const prevB = w.targetBuilding?.[i] ?? -1;
@@ -191,7 +203,7 @@ function resolveAttacks(w, field) {
     const bi = w.targetBuilding?.[i] ?? -1;
     const b = bi >= 0 ? w.buildings?.[bi] : null;
     const unitOk = target >= 0 && w.alive[target] && !(w.carriedBy?.[target] >= 0);
-    const buildingOk = isBuildingAlive(b);
+    const buildingOk = isBuildingAlive(b) && unitAttacksBuildings(w.type[i]);
     if (!unitOk && !buildingOk) {
       endAttack(w, i);
       continue;

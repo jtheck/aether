@@ -12,7 +12,7 @@ import {
 import { rebuildSpatialGrid } from './spatialGrid.js';
 import { isHostile } from './teams.js';
 import { WORLD_HALF_F } from './field.js';
-import { getUnitDef, UNIT } from './unitTypes.js';
+import { getUnitDef, UNIT, unitIdleHunts } from './unitTypes.js';
 import { createWorld, MAX_ENTITIES, ORDER, spawn } from './world.js';
 
 const LOAD_SPREAD = fx.mul(fx.fromInt(10), fx.fromInt(10));
@@ -26,6 +26,7 @@ function expectedTargets(w) {
     if (i % ACQUIRE_PHASES !== w.tick % ACQUIRE_PHASES) continue;
     const def = getUnitDef(w.type[i]);
     if (def.category !== 'military' || def.aggroRange === 0) continue;
+    if (w.order[i] === ORDER.IDLE && !unitIdleHunts(w.type[i])) continue;
     const aggro2 = fx.mul(def.aggroRange, def.aggroRange);
     let best = -1;
     let bestScore = 0x7fffffff;

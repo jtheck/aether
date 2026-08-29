@@ -17,6 +17,8 @@ import {
 import {
   buildField,
   FORGE_MAP_SIZES,
+  paintRegionLift,
+  REGION_LIFT_STEP,
   snapTilesToOddChunks,
   TABLE_CHUNK_TILES,
   TILE_SIZE_F,
@@ -45,6 +47,7 @@ import { RESOURCE_KINDS, STARTING_RESOURCES } from '../sim/resources.js';
 import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } from '../sim/scenery.js';
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
+import { defaultMatchAgoras } from '../sim/worldSetup.js';
 import { createCameraController } from '../render/cameraController.js';
 import {
   CELESTIAL_PRESETS,
@@ -52,7 +55,7 @@ import {
   createCelestialRig,
   defaultCelestialState,
 } from '../render/celestial.js';
-import { createTerrainFromField, createTileGridOverlay } from '../render/terrain.js';
+import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from '../render/terrain.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
 
 const SIZES = FORGE_MAP_SIZES;
@@ -62,6 +65,7 @@ const DEFAULT_SEED = 12345;
 const state = {
   layer: 'table',
   terrain: TERRAIN.GRASS,
+  lift: 0,
   scenery: SCENERY.TREE,
   placeKind: 'unit',
   placeType: 1,
@@ -88,6 +92,10 @@ let celestial = null;
 let terrain = null;
 let grid = null;
 let selectMesh = null;
+let brushMesh = null;
+let brushKey = '';
+let lastBrushWorld = null;
+let lastPaintKey = '';
 let placeMeshes = [];
 let fieldGen = 0;
 let rebuildTimer = 0;
@@ -146,8 +154,7 @@ function cancelPendingPaint() {
   if (paintRaf) cancelAnimationFrame(paintRaf);
   paintRaf = 0;
   pendingPaintTiles.length = 0;
-  if (sceneryRaf) cancelAnimationFrame(sceneryRaf);
-  sceneryRaf = 0;
+  sceneryPending = false;
 }
 
 function atlasChunkSize(snap = field) {
@@ -176,11 +183,22 @@ function queueTerrainPaint(tiles) {
   paintRaf = requestAnimationFrame(flushTerrainPaint);
 }
 
-let sceneryRaf = 0;
+let sceneryBusy = false;
+let sceneryPending = false;
+
 function queueSceneryPaint() {
-  if (sceneryRaf) return;
-  sceneryRaf = requestAnimationFrame(async () => {
-    sceneryRaf = 0;
+  sceneryPending = true;
+  if (sceneryBusy) return;
+  if (state.painting) return;
+  flushSceneryPaint();
+}
+
+async function flushSceneryPaint() {
+  if (!sceneryPending || sceneryBusy) return;
+  sceneryPending = false;
+  sceneryBusy = true;
+  applyAuthoredScenery(field);
+  try {
     if (!terrain?.rebuildScenery) {
       scheduleRebuild();
       return;
@@ -188,7 +206,10 @@ function queueSceneryPaint() {
     await terrain.rebuildScenery(field, camera);
     grid?.refreshOccupancy(field);
     if (sceneRegistered) invalidateRenderBundles(engine);
-  });
+  } finally {
+    sceneryBusy = false;
+    if (sceneryPending) queueSceneryPaint();
+  }
 }
 
 function reservedFromPlacements() {
@@ -307,12 +328,15 @@ function updatePlaceMarkers() {
     addToScene(scene, mesh);
     placeMeshes.push(mesh);
   };
+  const groundY = (x, z, lift) => (field ? surfaceHeightAt(field, x, z) : 0) + lift;
   const byOwner = new Map();
   for (const u of state.units) {
     const key = u.owner | 0;
     if (!byOwner.has(key)) byOwner.set(key, { pos: [], idx: [] });
     const b = byOwner.get(key);
-    pushBoxMarker(b.pos, b.idx, (u.tx + 0.5) * TILE_SIZE_F - half, 1.2, (u.tz + 0.5) * TILE_SIZE_F - half, 3.2, 6, 3.2);
+    const wx = (u.tx + 0.5) * TILE_SIZE_F - half;
+    const wz = (u.tz + 0.5) * TILE_SIZE_F - half;
+    pushBoxMarker(b.pos, b.idx, wx, groundY(wx, wz, 1.2), wz, 3.2, 6, 3.2);
   }
   for (const [owner, b] of byOwner) addMarker(`forge-units-${owner}`, b.pos, b.idx, ownerColor(owner));
   const bBy = new Map();
@@ -320,12 +344,14 @@ function updatePlaceMarkers() {
     const key = building.owner | 0;
     if (!bBy.has(key)) bBy.set(key, { pos: [], idx: [] });
     const b = bBy.get(key);
-    pushBoxMarker(b.pos, b.idx, building.x, 0.4, building.z, 10, 8, 10);
+    pushBoxMarker(b.pos, b.idx, building.x, groundY(building.x, building.z, 0.4), building.z, 10, 8, 10);
   }
   for (const [owner, b] of bBy) addMarker(`forge-buildings-${owner}`, b.pos, b.idx, ownerColor(owner));
   const gPos = [];
   const gIdx = [];
-  for (const g of state.agoras) pushBoxMarker(gPos, gIdx, g.x, 0.2, g.z, 16, 3, 16);
+  for (const g of state.agoras) {
+    pushBoxMarker(gPos, gIdx, g.x, groundY(g.x, g.z, 0.4), g.z, 16, 4, 16);
+  }
   addMarker('forge-agoras', gPos, gIdx, [0.95, 0.85, 0.25]);
   if (sceneRegistered) invalidateRenderBundles(engine);
 }
@@ -404,6 +430,120 @@ function updateSelectIndicator() {
   updateSelectUi();
 }
 
+function brushColor() {
+  if (state.layer === 'terrain') {
+    if (state.lift > 0) return [0.95, 0.78, 0.28];
+    if (state.lift < 0) return [0.40, 0.72, 1.0];
+    if (state.terrain === TERRAIN.DIRT) return [0.78, 0.55, 0.30];
+    if (state.terrain === TERRAIN.WATER) return [0.28, 0.62, 0.98];
+    return [0.35, 0.88, 0.42];
+  }
+  if (state.scenery === SCENERY.NONE) return [0.95, 0.32, 0.28];
+  if (state.scenery === SCENERY.ROCK_PLAIN) return [0.78, 0.74, 0.68];
+  if (state.scenery === SCENERY.ROCK_MOSS) return [0.48, 0.78, 0.42];
+  if (state.scenery === SCENERY.ROCK_SNOW) return [0.78, 0.86, 0.96];
+  return [0.32, 0.92, 0.40];
+}
+
+function hideBrushCursor() {
+  if (brushMesh) {
+    softDetachMesh(scene, brushMesh);
+    brushMesh = null;
+  }
+  brushKey = '';
+}
+
+function refreshBrushCursor() {
+  brushKey = '';
+  if (lastBrushWorld) updateBrushCursor(lastBrushWorld);
+}
+
+function updateBrushCursor(pos) {
+  lastBrushWorld = pos;
+  if (!engine || !scene || !field) {
+    hideBrushCursor();
+    return;
+  }
+  if (state.layer !== 'terrain' && state.layer !== 'scenery') {
+    hideBrushCursor();
+    return;
+  }
+  if (!pos) {
+    hideBrushCursor();
+    return;
+  }
+  const half = worldHalfFFromField(field);
+  const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
+  const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
+  const key = `${tx},${tz},${state.brush},${state.layer},${state.lift},${state.terrain},${state.scenery}`;
+  if (key === brushKey && brushMesh) return;
+  brushKey = key;
+
+  if (brushMesh) {
+    softDetachMesh(scene, brushMesh);
+    brushMesh = null;
+  }
+  const r = Math.max(0, state.brush | 0);
+  const r2 = r * r;
+  const pad = 0.16;
+  const lift = 0.14;
+  const edgeHalf = 0.2;
+  const posArr = [];
+  const idx = [];
+  const inBrush = (x, z) => {
+    const dx = x - tx;
+    const dz = z - tz;
+    return dx * dx + dz * dz <= r2;
+  };
+  for (let dz = -r; dz <= r; dz++) {
+    for (let dx = -r; dx <= r; dx++) {
+      if (dx * dx + dz * dz > r2) continue;
+      const x = tx + dx;
+      const z = tz + dz;
+      if (x < 0 || z < 0 || x >= field.width || z >= field.height) continue;
+      if (field.activeMask?.[z * field.width + x] === 0) continue;
+      const x0 = x * TILE_SIZE_F - half + pad;
+      const x1 = (x + 1) * TILE_SIZE_F - half - pad;
+      const z0 = z * TILE_SIZE_F - half + pad;
+      const z1 = (z + 1) * TILE_SIZE_F - half - pad;
+      const y00 = surfaceHeightAt(field, x0, z0) + lift;
+      const y10 = surfaceHeightAt(field, x1, z0) + lift;
+      const y11 = surfaceHeightAt(field, x1, z1) + lift;
+      const y01 = surfaceHeightAt(field, x0, z1) + lift;
+      const base = posArr.length / 3;
+      posArr.push(x0, y00, z0, x1, y10, z0, x1, y11, z1, x0, y01, z1);
+      idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+      const wx0 = x * TILE_SIZE_F - half;
+      const wx1 = wx0 + TILE_SIZE_F;
+      const wz0 = z * TILE_SIZE_F - half;
+      const wz1 = wz0 + TILE_SIZE_F;
+      const yMid = (y00 + y11) * 0.5;
+      if (!inBrush(x, z - 1)) pushSelectEdge(posArr, idx, wx0, wz0, wx1, wz0, yMid, edgeHalf);
+      if (!inBrush(x + 1, z)) pushSelectEdge(posArr, idx, wx1, wz0, wx1, wz1, yMid, edgeHalf);
+      if (!inBrush(x, z + 1)) pushSelectEdge(posArr, idx, wx1, wz1, wx0, wz1, yMid, edgeHalf);
+      if (!inBrush(x - 1, z)) pushSelectEdge(posArr, idx, wx0, wz1, wx0, wz0, yMid, edgeHalf);
+    }
+  }
+  if (!posArr.length) return;
+  const positions = new Float32Array(posArr);
+  const normals = new Float32Array(positions.length);
+  for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
+  const mesh = createMeshFromData(engine, 'forge-brush', positions, normals, new Uint32Array(idx));
+  const mat = createStandardMaterial();
+  const color = brushColor();
+  mat.diffuseColor = color;
+  mat.emissiveColor = color;
+  mat.ambientColor = color;
+  mat.specularColor = [0, 0, 0];
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  mesh.material = mat;
+  mesh.pickable = false;
+  addToScene(scene, mesh);
+  brushMesh = mesh;
+  if (sceneRegistered) invalidateRenderBundles(engine);
+}
+
 async function rebuildTerrain() {
   cancelPendingPaint();
   const gen = ++fieldGen;
@@ -433,6 +573,7 @@ async function rebuildTerrain() {
   }
   updateSelectIndicator();
   updatePlaceMarkers();
+  refreshBrushCursor();
   updateStats();
 }
 
@@ -479,15 +620,26 @@ function applyAt(pos, { add = false } = {}) {
     const half = worldHalfFFromField(field);
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
     const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
-    const dirty = paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
-    if (dirty.length) queueTerrainPaint(dirty);
+    const key = `terrain:${tx}:${tz}:${state.brush}:${state.lift}:${state.terrain}:${add ? 1 : 0}`;
+    if (key === lastPaintKey) return;
+    lastPaintKey = key;
+    const dirty = state.lift
+      ? paintRegionLift(field, tx, tz, (add ? -state.lift : state.lift) * REGION_LIFT_STEP, state.brush)
+      : paintTerrainBrush(field, tx, tz, state.terrain, state.brush);
+    if (dirty.length) {
+      queueTerrainPaint(dirty);
+      if (state.lift) refreshBrushCursor();
+    }
     return;
   }
   if (state.layer === 'scenery') {
     const half = worldHalfFFromField(field);
     const tx = Math.floor((pos.x + half) / TILE_SIZE_F);
     const tz = Math.floor((pos.z + half) / TILE_SIZE_F);
-    const dirty = paintSceneryBrush(field, tx, tz, state.scenery, state.brush);
+    const key = `scenery:${tx}:${tz}:${state.brush}:${state.scenery}`;
+    if (key === lastPaintKey) return;
+    lastPaintKey = key;
+    const dirty = paintSceneryBrush(field, tx, tz, state.scenery, state.brush, { refresh: false });
     if (dirty.length) queueSceneryPaint();
     return;
   }
@@ -629,13 +781,27 @@ function setLayer(layer) {
   document.getElementById('panel-scenery').style.display = layer === 'scenery' ? 'block' : 'none';
   document.getElementById('panel-place').style.display = layer === 'place' ? 'block' : 'none';
   document.getElementById('panel-light').style.display = layer === 'light' ? 'block' : 'none';
+  lastPaintKey = '';
+  refreshBrushCursor();
 }
 
 function setTerrain(type) {
   state.terrain = type;
+  state.lift = 0;
   document.querySelectorAll('[data-terrain]').forEach((b) => {
     b.classList.toggle('active', Number(b.dataset.terrain) === type);
   });
+  document.querySelectorAll('[data-lift]').forEach((b) => b.classList.remove('active'));
+  refreshBrushCursor();
+}
+
+function setLift(dir) {
+  state.lift = dir;
+  document.querySelectorAll('[data-terrain]').forEach((b) => b.classList.remove('active'));
+  document.querySelectorAll('[data-lift]').forEach((b) => {
+    b.classList.toggle('active', Number(b.dataset.lift) === dir);
+  });
+  refreshBrushCursor();
 }
 
 function mountUi() {
@@ -692,9 +858,12 @@ function mountUi() {
         <button data-terrain="${TERRAIN.GRASS}" class="active">Grass</button>
         <button data-terrain="${TERRAIN.DIRT}">Dirt</button>
         <button data-terrain="${TERRAIN.WATER}">Water</button>
+        <button data-lift="1">Raise</button>
+        <button data-lift="-1">Lower</button>
       </div>
       <label>Brush <span id="brush-label">1</span></label>
       <input id="brush-size" type="range" min="0" max="6" value="1">
+      <p class="hint">Raise / lower moves the felt as-is. The table rim stays locked so hills cannot spill off the rails.</p>
     </div>
     <div id="panel-scenery" class="panel" style="display:none">
       <div class="row">
@@ -704,11 +873,13 @@ function mountUi() {
         <button data-scenery="${SCENERY.ROCK_SNOW}">Big rock</button>
         <button data-scenery="${SCENERY.NONE}">Erase</button>
       </div>
+      <label>Brush <span id="scenery-brush-label">1</span></label>
+      <input id="scenery-brush-size" type="range" min="0" max="6" value="1">
       <div class="row">
         <button id="btn-gen-scenery">Generate trees / rocks</button>
         <button id="btn-clear-scenery">Clear scenery</button>
       </div>
-      <p class="hint">Uses the File seed. Generation keeps units and buildings clear.</p>
+      <p class="hint">Uses the File seed. Generate fills around what you painted. Clear wipes the board. Units and buildings stay clear.</p>
     </div>
     <div id="panel-place" class="panel" style="display:none">
       <label>Owner</label>
@@ -764,12 +935,16 @@ function mountUi() {
   ui.querySelectorAll('[data-terrain]').forEach((b) => {
     b.addEventListener('click', () => setTerrain(Number(b.dataset.terrain)));
   });
+  ui.querySelectorAll('[data-lift]').forEach((b) => {
+    b.addEventListener('click', () => setLift(Number(b.dataset.lift)));
+  });
   ui.querySelectorAll('[data-scenery]').forEach((b) => {
     b.addEventListener('click', () => {
       state.scenery = Number(b.dataset.scenery);
       ui.querySelectorAll('[data-scenery]').forEach((x) => {
         x.classList.toggle('active', Number(x.dataset.scenery) === state.scenery);
       });
+      refreshBrushCursor();
     });
   });
   ui.querySelectorAll('[data-place]').forEach((b) => {
@@ -786,7 +961,7 @@ function mountUi() {
     state.owner = Math.max(0, Math.min(4, Number(e.target.value) || 0));
   });
   document.getElementById('btn-gen-scenery').addEventListener('click', () => {
-    populateScenery(field, null, reservedFromPlacements());
+    populateScenery(field, null, reservedFromPlacements(), { keepExisting: true });
     queueSceneryPaint();
     grid?.refreshOccupancy(field);
   });
@@ -818,9 +993,24 @@ function mountUi() {
     for (const s of state.selected) setCellRadius(field.tableShape, s.cx, s.cz, r);
     applySelectedShape();
   });
+  function setBrush(n) {
+    state.brush = Math.max(0, n | 0);
+    const label = String(state.brush);
+    const brushLabel = document.getElementById('brush-label');
+    const sceneryLabel = document.getElementById('scenery-brush-label');
+    const brushSize = document.getElementById('brush-size');
+    const scenerySize = document.getElementById('scenery-brush-size');
+    if (brushLabel) brushLabel.textContent = label;
+    if (sceneryLabel) sceneryLabel.textContent = label;
+    if (brushSize) brushSize.value = label;
+    if (scenerySize) scenerySize.value = label;
+    refreshBrushCursor();
+  }
   document.getElementById('brush-size').addEventListener('input', (e) => {
-    state.brush = Number(e.target.value) || 0;
-    document.getElementById('brush-label').textContent = String(state.brush);
+    setBrush(Number(e.target.value) || 0);
+  });
+  document.getElementById('scenery-brush-size').addEventListener('input', (e) => {
+    setBrush(Number(e.target.value) || 0);
   });
   document.getElementById('show-grid').addEventListener('change', (e) => {
     state.showGrid = e.target.checked;
@@ -841,7 +1031,7 @@ function mountUi() {
     state.selected = [];
     state.units = [];
     state.buildings = [];
-    state.agoras = [];
+    state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
     celestial?.setWorldHalfF(worldHalfFFromField(field));
     rebuildTerrain();
   });
@@ -945,6 +1135,7 @@ async function main() {
   scene = createSceneContext(engine);
 
   field = newField(DEFAULT_SIZE, DEFAULT_SEED);
+  state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
   const worldHalfF = worldHalfFFromField(field);
   camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, worldHalfF * 1.55, {
     x: 0, y: 0, z: 0,
@@ -982,13 +1173,24 @@ async function main() {
   });
   canvas.addEventListener('pointermove', (e) => {
     cam.handlePointerMove(e);
+    const pos = pickGround(e.clientX, e.clientY);
     if (state.painting && (state.layer === 'terrain' || state.layer === 'scenery') && e.buttons & 1) {
-      applyAt(pickGround(e.clientX, e.clientY));
+      applyAt(pos);
     }
+    updateBrushCursor(pos);
   });
   canvas.addEventListener('pointerup', (e) => {
     cam.handlePointerUp(e);
+  });
+  window.addEventListener('pointerup', () => {
+    if (!state.painting && !sceneryPending) return;
     state.painting = false;
+    lastPaintKey = '';
+    if (sceneryPending) flushSceneryPaint();
+  });
+  canvas.addEventListener('pointerleave', () => {
+    lastBrushWorld = null;
+    hideBrushCursor();
   });
   window.addEventListener('keydown', (e) => cam.handleKeyDown(e));
   window.addEventListener('keyup', (e) => cam.handleKeyUp(e));

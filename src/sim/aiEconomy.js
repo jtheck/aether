@@ -26,6 +26,15 @@ import {
   getBuildingCost,
   BUILDING_FOOTPRINTS,
 } from './buildings.js';
+import {
+  MAX_RESOURCE_SLOTS,
+  SILO_ATTACH_RANGE_F,
+  SILO_SOURCE_TYPE,
+  ownerResourceCap,
+  ownerSlotCount,
+  unpairedSiloSource,
+  withinSiloAttach,
+} from './storage.js';
 
 /** How often (ticks) the economy AI re-plans. Phased per owner. */
 const DECIDE_INTERVAL = 30;
@@ -90,10 +99,15 @@ export function generateEconomyCommands(w, field, entry) {
   }
 
   // ── Step 2: build one thing on the priority ladder ───────────────────────
-  const build = chooseBuild(bank, inv, villagers.total, order);
+  const siloAt = chooseSiloAnchor(w, owner, bank, order);
+  const build = siloAt ? 'silo' : chooseBuild(bank, inv, villagers.total, order);
   if (build) {
-    const around = buildAnchor(field, build, base, w.px, w.py, villagers);
-    const spot = findBuildSpot(field, w, build, around.x, around.y);
+    const around = siloAt
+      ? { x: siloAt.x, y: siloAt.z }
+      : buildAnchor(field, build, base, w.px, w.py, villagers);
+    const spot = build === 'silo'
+      ? findSiloAttachSpot(field, around.x, around.y)
+      : findBuildSpot(field, w, build, around.x, around.y);
     if (spot) {
       cmds.push({
         type: CMD.PLACE_BUILDING,
@@ -212,6 +226,64 @@ function nearestNode(field, kind, px, py) {
     }
   }
   return best;
+}
+
+/**
+ * When a bank is at its unlocked cap, plant a silo beside an unpaired source
+ * so the next three icons unlock. Pending sites already next to that source
+ * wait — no spam.
+ */
+function chooseSiloAnchor(w, owner, bank, order) {
+  if (!affordable(bank, getBuildingCost('silo'))) return null;
+  const buildings = w.buildings;
+  const kinds = order?.length ? order : ['wood', 'food', 'stone', 'mineral'];
+  for (let i = 0; i < kinds.length; i++) {
+    const kind = kinds[i];
+    const cap = ownerResourceCap(buildings, owner, kind);
+    if ((bank[kind] | 0) < cap) continue;
+    if (ownerSlotCount(buildings, owner, kind) >= MAX_RESOURCE_SLOTS) continue;
+    const sourceType = SILO_SOURCE_TYPE[kind];
+    const source = unpairedSiloSource(buildings, owner, sourceType);
+    if (!source) continue;
+    if (pendingSiloBeside(buildings, owner, source)) continue;
+    return source;
+  }
+  return null;
+}
+
+function pendingSiloBeside(buildings, owner, source) {
+  if (!buildings) return false;
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) !== (owner | 0) || b.type !== 'silo') continue;
+    if (b.hp != null && (b.hp | 0) <= 0) continue;
+    if (withinSiloAttach(b, source, 'fixed')) return true;
+  }
+  return false;
+}
+
+/** Dense ring search that stays inside silo attach range of (aroundX, aroundY). */
+function findSiloAttachSpot(field, aroundX, aroundY) {
+  const type = 'silo';
+  const maxRing = (SILO_ATTACH_RANGE_F / TILE_SIZE_F) | 0;
+  for (let ring = 2; ring <= maxRing; ring++) {
+    const r = ring * TILE_SIZE_F;
+    const offsets = [
+      [0, -r], [r, 0], [0, r], [-r, 0],
+      [r, -r], [r, r], [-r, r], [-r, -r],
+    ];
+    for (let o = 0; o < offsets.length; o++) {
+      const cx = aroundX + fx.fromInt(offsets[o][0] | 0);
+      const cy = aroundY + fx.fromInt(offsets[o][1] | 0);
+      const snapped = snapBuildingWorld(type, cx, cy);
+      if (!canPlaceBuildingAt(field, type, snapped.x, snapped.z)) continue;
+      if (!withinSiloAttach({ x: snapped.x, z: snapped.z }, { x: aroundX, z: aroundY }, 'fixed')) {
+        continue;
+      }
+      return { x: snapped.x, y: snapped.z };
+    }
+  }
+  return null;
 }
 
 /** Priority ladder → which building to place this tick (or null). */

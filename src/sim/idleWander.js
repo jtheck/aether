@@ -1,4 +1,5 @@
-// Idle amble — leftover civilians / mycos pick a heading and walk; engineers
+// Idle amble — leftover civilians / mycos pick a heading and walk (mycos
+// weave through trees); engineers
 // who have stood around long enough hop to another owned building. Work
 // assignment (gather / construct / repair) runs first so a free hand can still
 // get a job. Wander is a short MOVE that settles back to IDLE on arrival.
@@ -8,7 +9,7 @@ import { ORDER, clearAttackFocus } from './world.js';
 import { UNIT } from './unitTypes.js';
 import { queuePath } from './path.js';
 import { clearEngagement } from './engagement.js';
-import { snapToPassable } from './field.js';
+import { countTreesAlongLine, snapToPassable } from './field.js';
 import { isCarried } from './transport.js';
 import { isBuildingAlive } from './buildings.js';
 
@@ -65,7 +66,7 @@ function snapDest(field, x, y) {
   return snapped ? { x: snapped.x, y: snapped.y } : { x, y };
 }
 
-function beginWanderMove(w, i, destX, destY) {
+function beginWanderMove(w, i, destX, destY, opts = null) {
   if (fx.dist2(w.px[i], w.py[i], destX, destY) <= MIN_STEP_SQ) return false;
   clearAttackFocus(w, i);
   clearEngagement(w, i);
@@ -74,14 +75,45 @@ function beginWanderMove(w, i, destX, destY) {
   w.tx[i] = destX;
   w.ty[i] = destY;
   w.transportTarget[i] = -1;
-  queuePath(w, i, destX, destY);
+  queuePath(w, i, destX, destY, opts);
   return true;
 }
 
-function wanderHeading(w, field, i, minF, maxF) {
+function wanderHeading(w, field, i, minF, maxF, opts = null) {
   const raw = headingPoint(w.px[i], w.py[i], hash2(w.tick, i), minF, maxF);
   const dest = snapDest(field, raw.x, raw.y);
-  return beginWanderMove(w, i, dest.x, dest.y);
+  return beginWanderMove(w, i, dest.x, dest.y, opts);
+}
+
+/** Same hop length as the hashed heading; pick the direction that crosses the most trees. */
+function wanderMycoHeading(w, field, i) {
+  const h = hash2(w.tick, i);
+  const span = (MYCO_WANDER_MAX_F - MYCO_WANDER_MIN_F) | 0;
+  const dist = MYCO_WANDER_MIN_F + (h % (span + 1));
+  const preferred = (h >>> 8) & 15;
+  let bestX = 0;
+  let bestY = 0;
+  let bestScore = -1;
+  for (let k = 0; k < 16; k++) {
+    const raw = headingAlong(w.px[i], w.py[i], k, dist);
+    const dest = snapDest(field, raw.x, raw.y);
+    const score = countTreesAlongLine(field, w.px[i], w.py[i], dest.x, dest.y);
+    if (score > bestScore || (score === bestScore && k === preferred)) {
+      bestScore = score;
+      bestX = dest.x;
+      bestY = dest.y;
+    }
+  }
+  return beginWanderMove(w, i, bestX, bestY, { treeSeek: true });
+}
+
+function headingAlong(px, py, dirIndex, dist) {
+  const dir = HEADINGS[dirIndex & 15];
+  const len = Math.hypot(dir[0], dir[1]) || 1;
+  return {
+    x: px + fx.fromFloat((dir[0] / len) * dist),
+    y: py + fx.fromFloat((dir[1] / len) * dist),
+  };
 }
 
 function pickEngineerBuilding(w, i) {
@@ -153,7 +185,7 @@ export function idleWanderSystem(w, field) {
     }
     if (type === UNIT.MYCO) {
       if (!wanderDue(w.tick, i, MYCO_WANDER_PERIOD, 13)) continue;
-      wanderHeading(w, field, i, MYCO_WANDER_MIN_F, MYCO_WANDER_MAX_F);
+      wanderMycoHeading(w, field, i);
       continue;
     }
     if (type === UNIT.ENGINEER) {

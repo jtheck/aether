@@ -14,7 +14,8 @@ import { queuePath, clearPath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { damageTree } from './trees.js';
 import { tileCenterX, tileCenterY, snapToPassable, worldToTile, TILE_SIZE_F, isPassable } from './field.js';
-import { addResource, RESOURCE_KINDS, RESOURCE_INDEX } from './resources.js';
+import { RESOURCE_KINDS, RESOURCE_INDEX } from './resources.js';
+import { addGatherIncome } from './storage.js';
 import { UNIT } from './unitTypes.js';
 import { SCENERY, rockFootprintRadiusForStock, rockResourceKind, damageRock } from './scenery.js';
 import { isHostile } from './teams.js';
@@ -170,6 +171,7 @@ const AUTO_ASSIGN_INTERVAL = 20;
  */
 export function beginGather(w, field, i, tile, defensive = 0) {
   if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) return false;
+  if (w.rallyHopCount) w.rallyHopCount[i] = 0;
   w.order[i] = ORDER.GATHER;
   w.gatherTile[i] = tile | 0;
   w.targetEntity[i] = -1;
@@ -254,7 +256,7 @@ function workFarm(w, field, i, tile, width) {
   if (w.gatherCd[i] > 0) {
     w.gatherCd[i]--;
   } else {
-    addResource(w, w.owner[i], 'food', GATHER_BITE);
+    addGatherIncome(w, w.owner[i], 'food', GATHER_BITE);
     w.gatherCd[i] = GATHER_INTERVAL;
   }
 
@@ -407,7 +409,7 @@ export function gatherSystem(w, field) {
       }
       if (fx.dist2(w.px[i], w.py[i], drop.x, drop.y) <= DROP_RANGE_SQ) {
         const kind = RESOURCE_KINDS[(w.carriedKind[i] | 0) - 1] ?? 'wood';
-        addResource(w, w.owner[i], kind, carrying);
+        addGatherIncome(w, w.owner[i], kind, carrying, true);
         w.carriedAmt[i] = 0;
         w.carriedKind[i] = 0;
         setGatherAct(w, i, GATHER_ACT.NONE);

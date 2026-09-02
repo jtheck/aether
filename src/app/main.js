@@ -17,10 +17,12 @@ import {
   setArmyPerSide,
   PLAYER,
   AI_OWNER,
+  STRESS_AI_OWNERS,
+  STRESS_MENU_PER_SIDE,
 } from '../sim/worldSetup.js';
-import { resolveSessionAiPlayers, STRESS_AI_PROFILES } from '../sim/ai.js';
+import { resolveSessionAiPlayers, STRESS_AI_PROFILES, stressShareVisionOwners } from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
-import { GARDEN_SESSION_KEY } from '../sim/garden.js';
+import { decodeGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
 import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
 import {
   applySerializedBuildingOccupancy,
@@ -29,13 +31,26 @@ import {
   canPlaceBuildingAt,
   defaultRallyWorld,
   isRallyBeyondBuilding,
+  listRallyFlags,
+  buildingTrainsOnlyFlyers,
   rallyPathWorldPoints,
+  rallySegmentWorldPoints,
   snapBuildingYaw,
   snapBuildingWorld,
+  ownedFinishedBuildingTypes,
+  getBuildingCost,
+  getBuildingRequires,
 } from '../sim/buildings.js';
+import { menuGateState } from '../sim/menuGate.js';
 import { TILE_SIZE_F, worldToTile, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
+import { agoraOverlayActive } from '../sim/agora.js';
 import { ownerResourcesFrom } from '../sim/resources.js';
-import { ownerPopCap, ownerPopUsed } from '../sim/pop.js';
+import { createResourceBank } from './resourceBank.js';
+import {
+  createObserverData,
+  namesFromLobbySeats,
+  observerSheetOwners,
+} from './observerData.js';
 import { ownerTint, setLocalOwnerTint } from '../render/ownerTints.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
@@ -57,7 +72,8 @@ import {
 import {
   OVERLAY_COLLAR_SPIN_DISTANCE_SQ,
   OVERLAY_MAX_BARS,
-  markNearestN,
+  markSelectedThenNearest,
+  overlayBarIsFar,
   overlayCameraRef,
 } from '../render/overlayLod.js';
 import { posePassengerOnTransport, seatsForUnitType } from '../render/transportSeats.js';
@@ -69,17 +85,30 @@ import {
 } from '../render/healthBars.js';
 import { setupInput } from './input.js';
 import { isCameraFollowTypingTarget, selectionCentroidXZ } from './input/cameraFollow.js';
+import {
+  aggregateBuildingTracks,
+  buildingHasWork,
+  groupHasUpgradeQueued,
+  pickFirstBuiltIndex,
+  pickLeastLoadedIndex,
+  sameOwnedBuildingType,
+} from './input/buildingSelect.js';
 import { chasePoseXZ } from './poseInterp.js';
 import { init as initAudio, playThunder } from './audio.js';
-import { SimSession, formatMatchTime, matchSecondsFromTick } from './simSession.js';
+import { SimSession, formatHudMatchClock, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { setupKothLobby } from './kothLobby.js';
 import { createGameLobby } from './gameLobby.js';
 import { createMatchLobby } from './matchLobby.js';
 import { setupLobbyUi } from './lobbyUi.js';
-import { isLobbyPlayMode } from '../lobby/modes.js';
+import { gardenUrlForChapter, isLobbyPlayMode } from '../lobby/modes.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
+import { createMatchStory } from '../story/matchPlay.js';
+import { castIndexFromUnits, normalizeSpeaker } from '../story/cast.js';
 import { getTeamAssignments, setTeamAssignments } from '../sim/teams.js';
+import { aetherSteam } from './steam.js';
+import { SCREENSHOT_HUD_CLASS, createScreenshotHud } from './screenshotHud.js';
+import { installNavGuard } from './navGuard.js';
 
 const SEED = 0x1234;
 
@@ -91,11 +120,25 @@ function fogOverrideFromSearch(search = location.search) {
   return null;
 }
 
-function loadTesterGarden() {
-  return fetch(TESTER_GARDEN_URL).then((res) => {
-    if (!res.ok) throw new Error(`tester garden ${res.status}`);
+function loadGardenJson(url) {
+  return fetch(url).then((res) => {
+    if (!res.ok) throw new Error(`garden ${res.status}`);
     return res.json();
   });
+}
+
+function storyCastFromGarden(garden) {
+  if (!garden) return [];
+  try {
+    const units = Array.isArray(garden.units) ? garden.units : decodeGarden(garden).units;
+    return castIndexFromUnits(units);
+  } catch {
+    return [];
+  }
+}
+
+function loadTesterGarden() {
+  return loadGardenJson(TESTER_GARDEN_URL);
 }
 
 async function loadGardenFromSearch(search) {
@@ -195,6 +238,7 @@ function forceRendererSync(ctx) {
 
 async function main() {
   console.log("©'26 Aether.Garden");
+  installNavGuard();
   const canvas = document.getElementById('canvas');
   initAudio();
 
@@ -290,6 +334,16 @@ async function main() {
       aiPlayers: [{ owner: AI_OWNER, temperament: 'passive' }],
       fog: fogOverrideFromSearch() ?? true,
       sharedVision: true,
+    };
+  }
+
+  // ?stress= — FFA combat, but stamp the three attacking AIs onto our fog.
+  // The cautious/passive seat stays veiled so we can still see fog work.
+  if (stress > 0) {
+    bootCfg = {
+      ...bootCfg,
+      shareVisionWith: stressShareVisionOwners(),
+      fog: fogOverrideFromSearch() ?? true,
     };
   }
 
@@ -392,8 +446,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   });
   renderer.setCount(count);
   const fog = createFogOfWar();
-  /** Set by dumpFrameProfile — times stamp/upload + the pose frame. */
+  /**
+   * Set by dumpFrameProfile. Fog used to run on worker onCommit (outside rAF),
+   * so `frame` ignored the hitch. Stamp is now once-per-frame after pump.
+   */
   let frameProf = null;
+  let fogStampDue = false;
   fog.reset(session.field);
   fog.stamp({
     world: session.state,
@@ -466,7 +524,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const ema = session.simTimingEma;
     const last = session.simTimingLast ?? session.simMetrics?.timing;
     if (!ema && !last) {
-      console.warn('[dumpSimProfile] no timing yet — stress/?profileSim=1 enables worker profiling');
+      console.warn('[dumpSimProfile] no timing yet — stress, ?profileSim=1, or setProfileSim(true)');
       return null;
     }
     const keys = new Set([
@@ -504,26 +562,51 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return { rows, ema, last, metrics: m };
   };
   window.dumpFrameProfile = (frames = 40) => {
-    frameProf = { left: Math.max(1, frames | 0), acc: Object.create(null), n: 0, nFog: 0 };
+    frameProf = {
+      left: Math.max(1, frames | 0),
+      acc: Object.create(null),
+      n: 0,
+      nFog: 0,
+      inFrame: false,
+      pendingOutside: 0,
+    };
     console.log('[dumpFrameProfile] sampling', frameProf.left, 'frames… then console.table');
     return frameProf;
   };
+  window.setProfileSim = (enabled = true) => {
+    session.client?.setProfileSim?.(enabled);
+    console.log('[setProfileSim]', enabled ? 'on' : 'off', '— dumpSimProfile() after a few ticks');
+  };
+  function profAdd(phase, ms) {
+    if (!frameProf || !Number.isFinite(ms)) return;
+    frameProf.acc[phase] = (frameProf.acc[phase] ?? 0) + ms;
+    if (!frameProf.inFrame) frameProf.pendingOutside = (frameProf.pendingOutside ?? 0) + ms;
+  }
   function finishFrameProf(t0) {
     if (!frameProf) return;
-    frameProf.acc.frame = (frameProf.acc.frame ?? 0) + (performance.now() - t0);
+    frameProf.inFrame = false;
+    const now = performance.now();
+    const outside = frameProf.pendingOutside ?? 0;
+    frameProf.pendingOutside = 0;
+    frameProf.acc.frame = (frameProf.acc.frame ?? 0) + (now - t0);
+    frameProf.acc.main = (frameProf.acc.main ?? 0) + (now - t0) + outside;
     frameProf.n++;
     frameProf.left--;
     if (frameProf.left > 0) return;
     const n = Math.max(1, frameProf.n);
-    const nFog = Math.max(1, frameProf.nFog || n);
     const rows = Object.entries(frameProf.acc)
       .map(([phase, ms]) => ({
         phase,
-        meanMs: +(ms / (phase.startsWith('fog') ? nFog : n)).toFixed(2),
+        meanMs: +(ms / n).toFixed(2),
       }))
       .sort((a, b) => b.meanMs - a.meanMs);
     console.table(rows);
-    console.log('[dumpFrameProfile]', { frames: n, fogStamps: frameProf.nFog, fps: fpsDisplay });
+    console.log('[dumpFrameProfile]', {
+      frames: n,
+      fogStamps: frameProf.nFog,
+      fps: fpsDisplay,
+      note: 'means are per display frame. fog* nest inside frame when stamped after pump.',
+    });
     frameProf = null;
   }
   /**
@@ -626,6 +709,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer,
     onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
     onStartUnitTester: () => startUnitTesterMatch(ctxRef.current),
+    onStartStressful: () => startStressfulSituation(ctxRef.current),
     onPlayerColorChange: (hex) => {
       setLocalOwnerTint(localPlayerId, hex);
       updateColors();
@@ -680,11 +764,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     /** Deferred health chips: [x, z, lift, ratio] × N (selected first at flush). */
     hbSelected: new Float32Array(CAP * 4),
     hbHurt: new Float32Array(CAP * 4),
+    hbSelectedOwner: new Int32Array(CAP),
+    hbHurtOwner: new Int32Array(CAP),
+    hbSelectedHp: new Int32Array(CAP),
+    hbHurtHp: new Int32Array(CAP),
     /** Passenger deck packing for carried units. */
     passengerSlot: new Int32Array(CAP),
     passengerTotalOf: new Int32Array(CAP),
     passengerNextSlot: new Int32Array(CAP),
-    /** Overlay LOD: spin allow mask + nearest-N health-bar pick. */
+    /** Overlay LOD: spin allow mask + selected-then-nearest health-bar pick. */
     overlaySpinAllow: new Uint8Array(CAP),
     overlayBarIds: new Int32Array(CAP),
     overlayBarD2: new Float32Array(CAP),
@@ -758,17 +846,25 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     } else if (on) {
       renderer.applySceneryFogTiles?.(fog.forEachDirtyTile);
     }
+    const t2 = frameProf ? performance.now() : 0;
     try {
       fog.syncOverlay();
     } catch (err) {
       console.warn('[fog] overlay upload failed', err);
     }
-    const t2 = frameProf ? performance.now() : 0;
+    const t3 = frameProf ? performance.now() : 0;
     if (frameProf) {
-      frameProf.acc.fogStamp = (frameProf.acc.fogStamp ?? 0) + (t1 - t0);
-      frameProf.acc.fogUpload = (frameProf.acc.fogUpload ?? 0) + (t2 - t1);
+      profAdd('fogStamp', t1 - t0);
+      profAdd('fogScenery', t2 - t1);
+      profAdd('fogUpload', t3 - t2);
       frameProf.nFog = (frameProf.nFog ?? 0) + 1;
     }
+  }
+
+  function stampFogIfDue() {
+    if (!fogStampDue) return;
+    fogStampDue = false;
+    stampFog();
   }
 
   function syncDrawnEntities() {
@@ -796,6 +892,21 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (!fog.commitDisplayLists(shownB, shownA)) return;
     renderer.placeAgoras?.(shownA);
     void renderer.placeBuildings?.(shownB);
+  }
+
+  let agoraOwnerPaintSig = '';
+  function syncAgoraOwnerPaint() {
+    const list = session.agoras;
+    let sig = '';
+    if (list) {
+      for (let i = 0; i < list.length; i++) {
+        const a = list[i];
+        sig += `${a.owner}:${a.founder ?? a.owner}|`;
+      }
+    }
+    if (sig === agoraOwnerPaintSig) return;
+    agoraOwnerPaintSig = sig;
+    placeFoggedProps();
   }
 
   const updateColors = () => {
@@ -830,6 +941,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.clearParticles?.();
     fog.reset(session.field);
     sceneryFogOn = null;
+    agoraOwnerPaintSig = '';
     stampFog();
     placeFoggedProps();
     syncRallyFlagMarkers();
@@ -852,6 +964,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.placeBuildings?.(shownB);
     syncRallyFlagMarkers(list);
     syncRadialMenuGate();
+    if (actionBuildingIndex >= 0) {
+      const live = liveActionIndices(list);
+      if (!live.length) closeRadial();
+      else if (!live.includes(actionBuildingIndex)) {
+        openActionRadialForBuilding(live[0], actionBuildingIndices);
+      }
+    }
   };
 
   function ownerTechBits(owner = localPlayerId) {
@@ -878,95 +997,98 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setActionRadialResearched?.(researchedUpgradeIdsFor(localPlayerId));
   }
 
-  function paintStatus() {
-    const world = session.state;
-    const el = document.getElementById('status');
+  function paintStatusClock() {
+    const timeEl = document.getElementById('status-time');
+    if (!timeEl) return;
+    const clock = formatHudMatchClock(matchSecondsFromTick(session.confirmedTick));
+    if (timeEl.textContent !== clock) timeEl.textContent = clock;
+  }
+
+  function paintStatusPop() {
+    const el = document.getElementById('status-pop');
     if (!el) return;
-    const p = livingByOwner(world, localPlayerId);
-    let sel = 0;
-    for (let i = 0; i < session.count; i++) if (bufs.selected[i]) sel++;
-    const matchTime = formatMatchTime(matchSecondsFromTick(session.confirmedTick));
-    let line =
-      localPlayerId >= 0
-        ? `You P${localPlayerId}: ${p}  ·  Selected: ${sel}  ·  Tick ${world.tick}`
-        : `Selected: ${sel}  ·  Tick ${world.tick}`;
-    if (matchMeta.mode === 'staging' || matchMeta.mode === 'sandbox') line = `Staging  ·  ${line}`;
-    else if (matchMeta.mode === 'onevsone') line = `1v1  ·  ${line}`;
-    else if (matchMeta.mode === 'teams') line = `Teams  ·  ${line}`;
-    else if (matchMeta.mode === 'adventure') line = `Adventure  ·  ${line}`;
-    else if (matchMeta.mode === 'solo' || matchMeta.mode === 'skirmish') line = `1v1 AI  ·  ${line}`;
-    if (matchMeta.mode === 'koth') {
-      const k = session.koth;
-      if (k) {
-        const players = k.active?.reduce?.((n, v) => n + (v ? 1 : 0), 0) ?? 0;
-        const p0 = livingByOwner(world, 0);
-        const p1 = livingByOwner(world, 1);
-        line = `KOTH  ·  ⏱ ${matchTime}  ·  👑 P${k.kingOwner}  ·  Players ${players}  ·  Units ${world.count} P0 ${p0} P1 ${p1}  ·  Score ${k.scores[localPlayerId] ?? 0}  ·  ${line}`;
-      } else line = `KOTH  ·  ⏱ ${matchTime}  ·  ${line}`;
-    }
-    if (session.role === 'spectator') {
-      const depth = kothShard?.getObserverDepth?.() ?? 0;
-      const offered = kothShard?.isOfferEligible?.();
-      if (offered) line = `Press J to claim  ·  ${line}`;
-      else if (depth > 0) line = `Observing L${depth}  ·  ${line}`;
-      else line = `Spectating  ·  ${line}`;
-    }
-    if (statusHint && !statusHintIsHudOwned(statusHint)) {
-      line = `${statusHint}  ·  ${line}`;
-    }
-    if (session.replayingCatchUp && session.catchupProgress) {
-      const { tick, targetTick } = session.catchupProgress;
-      const elapsed = formatMatchTime(matchSecondsFromTick(tick));
-      const total = formatMatchTime(matchSecondsFromTick(targetTick));
-      line = `Catch-up ${elapsed} / ${total}  ·  ${line}`;
-    } else if (session.pauseLockstep) {
-      line = `PAUSED  ·  ${line}`;
-    }
-    if (fpsDisplay > 0) line += `  ·  ${fpsDisplay} fps`;
+    const observing = session.role === 'spectator' || localPlayerId < 0;
+    const next = observing ? '' : String(livingByOwner(session.state, localPlayerId));
+    if (el.textContent !== next) el.textContent = next;
+  }
+
+  function paintStatusSide() {
+    const sideEl = document.getElementById('status-side');
+    if (!sideEl) return;
+    const bits = [];
+    if (fpsDisplay > 0) bits.push(`${fpsDisplay}ƒ`);
     const rtt = kothShard?.getRttMs?.();
-    if (rtt != null) line += `  ·  ${rtt} ms`;
-    if (stress > 0) line += `  ·  stress ${world.count} units`;
-    if (animStress > 0) line += `  ·  animStress ${world.count} VAT`;
-    if (matchMeta.matchId) line += `  ·  …${matchMeta.matchId.slice(-8)}`;
-    el.textContent = line;
+    if (rtt != null) bits.push(`${rtt}∾`);
+    const next = bits.join(' ');
+    if (sideEl.textContent !== next) sideEl.textContent = next;
+  }
+
+  function paintStatus() {
+    paintStatusClock();
+    paintStatusPop();
+    paintStatusSide();
     kothLobbyUi.refresh();
     lobbyUi.refresh();
     paintResources();
   }
 
-  function formatResourceBank(r, owner) {
-    const used = ownerPopUsed(session.state, owner, session.buildings);
-    const cap = ownerPopCap(session.buildings, session.agoras, owner);
-    return `Wood ${r.wood}  ·  Stone ${r.stone}  ·  Mineral ${r.mineral}  ·  Food ${r.food}  ·  Pop ${used}/${cap}`;
+  const resourceBank = createResourceBank();
+  resourceBank.mount().catch((err) => {
+    console.warn('resource bank icons failed', err);
+  });
+  const observerData = createObserverData();
+  observerData.mount().then(() => paintResources()).catch((err) => {
+    console.warn('observer data failed', err);
+  });
+  let observerLobby = null;
+
+  function formatResourceBank(r) {
+    return `Wood ${r.wood}  ·  Stone ${r.stone}  ·  Mineral ${r.mineral}  ·  Food ${r.food}`;
   }
 
   function paintResources() {
     const rEl = document.getElementById('resources');
     if (!rEl) return;
-    const others = [];
-    for (let i = 0; i < fogShareVisionWith.length; i++) {
-      const id = fogShareVisionWith[i];
-      const label = id === AI_OWNER ? 'AI' : `P${id}`;
-      others.push(`${label}  ${formatResourceBank(ownerResourcesFrom(session.resources, id), id)}`);
+    const localBank = ownerResourcesFrom(session.resources, localPlayerId);
+    const observing = session.role === 'spectator' || localPlayerId < 0;
+    const sheetOwners = observerSheetOwners({
+      observing,
+      localId: localPlayerId,
+      session,
+      shareWith: fogShareVisionWith,
+    });
+    const showSheet = sheetOwners.length > 0;
+    const showIcons = resourceBank.ready && !observing;
+    if (showIcons) {
+      resourceBank.paint({
+        bank: localBank,
+        buildings: session.buildings,
+        owner: localPlayerId,
+      });
+    } else {
+      resourceBank.paint({ hidden: true, bank: localBank, buildings: session.buildings, owner: localPlayerId });
     }
-    if (session.role === 'spectator' || localPlayerId < 0) {
-      rEl.textContent = others.join('  |  ');
-      return;
+    observerData.paint({
+      hidden: !showSheet,
+      resources: session.resources,
+      buildings: session.buildings,
+      agoras: session.agoras,
+      world: session.state,
+      owners: sheetOwners,
+      names: namesFromLobbySeats(observerLobby?.getState?.()?.seats),
+      computers: session.aiPlayers,
+    });
+    // Observer sheet owns other-army banks. The old bottom dump is gone
+    // whenever the sheet is up (shared-vision AI / spectator).
+    let next = '';
+    if (!showSheet && !observing && !showIcons) {
+      next = formatResourceBank(localBank);
     }
-    const mine = formatResourceBank(ownerResourcesFrom(session.resources, localPlayerId), localPlayerId);
-    if (!others.length) {
-      rEl.textContent = mine;
-      return;
-    }
-    rEl.textContent = `You  ${mine}  |  ${others.join('  |  ')}`;
+    if (rEl.textContent !== next) rEl.textContent = next;
   }
 
   function ownedBuildingTypesFor(owner = localPlayerId) {
-    const set = new Set();
-    for (const b of session.buildings ?? []) {
-      if ((b.owner | 0) === (owner | 0) && b.type) set.add(b.type);
-    }
-    return set;
+    return ownedFinishedBuildingTypes(session.buildings, owner);
   }
 
   function syncRadialMenuGate() {
@@ -1053,6 +1175,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     syncRadialMenuGate();
   };
 
+  session.onStorageOverflow = (events) => {
+    if (session.role === 'spectator' || localPlayerId < 0) return;
+    resourceBank.flashOverflow(events, localPlayerId);
+  };
+
   session.onTechChanged = () => {
     ghostPathTileKey = -1;
     ghostPathPoints = null;
@@ -1065,23 +1192,50 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return ownerHasDrayage(owner) ? { slowAware: true } : null;
   }
 
-  function rallyMarkerFor(b, rx, rz) {
+  function rallyMarkerFor(b, rx, rz, fromX, fromZ, points, attackMove) {
     return {
       x: rx,
       z: rz,
-      fromX: b.x,
-      fromZ: b.z,
-      points: rallyPathWorldPoints(
-        session.field,
-        b,
-        rx,
-        rz,
-        rallyPathOptsForOwner(b.owner),
-      ),
+      fromX: fromX ?? b.x,
+      fromZ: fromZ ?? b.z,
+      points,
       yaw: b.yaw ?? 0,
       owner: b.owner | 0,
-      attackMove: (b.rallyOrder | 0) === ORDER.ATTACK_MOVE,
+      attackMove: !!attackMove,
     };
+  }
+
+  function rallyChainMarkers(b) {
+    const flags = listRallyFlags(b);
+    if (!flags.length) return [];
+    const pathOpts = rallyPathOptsForOwner(b.owner);
+    const air = buildingTrainsOnlyFlyers(b.type);
+    /** @type {ReturnType<typeof rallyMarkerFor>[]} */
+    const markers = [];
+    for (let i = 0; i < flags.length; i++) {
+      const f = flags[i];
+      const fromX = i === 0 ? b.x : flags[i - 1].x;
+      const fromZ = i === 0 ? b.z : flags[i - 1].z;
+      const points =
+        i === 0
+          ? rallyPathWorldPoints(session.field, b, f.x, f.z, pathOpts)
+          : rallySegmentWorldPoints(session.field, fromX, fromZ, f.x, f.z, {
+              ...pathOpts,
+              air,
+            });
+      markers.push(
+        rallyMarkerFor(
+          b,
+          f.x,
+          f.z,
+          fromX,
+          fromZ,
+          points,
+          (f.order | 0) === ORDER.ATTACK_MOVE,
+        ),
+      );
+    }
+    return markers;
   }
 
   function setRallyGhostAt(b, x, z) {
@@ -1112,13 +1266,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   function syncRallyFlagMarkers(list = session.buildings) {
     const markers = [];
     const buildings = list ?? [];
+    const seen = new Set();
     for (let i = 0; i < selectedBuildings.length; i++) {
       const sel = selectedBuildings[i];
-      if (sel?.kind !== 'building') continue;
-      const b = buildings[sel.index];
+      if (sel?.kind !== 'building' && sel?.kind !== 'rally') continue;
+      const bi = sel.index | 0;
+      if (seen.has(bi)) continue;
+      seen.add(bi);
+      const b = buildings[bi];
       if (!b?.hasRally || (b.owner | 0) !== localPlayerId) continue;
-      if (!isRallyBeyondBuilding(b.type, b.x, b.z, b.rallyX, b.rallyZ)) continue;
-      markers.push(rallyMarkerFor(b, b.rallyX, b.rallyZ));
+      const chain = rallyChainMarkers(b);
+      for (let k = 0; k < chain.length; k++) markers.push(chain[k]);
     }
     renderer.placeRallyFlags?.(markers);
   }
@@ -1170,6 +1328,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const a = session.agoras?.[sel.index];
       return a ? { x: a.x, z: a.z, size: /** @type {const} */ ('m') } : null;
     }
+    if (sel.kind === 'rally') {
+      const b = session.buildings?.[sel.index];
+      if (!b) return null;
+      const flags = listRallyFlags(b);
+      const f = flags.find((x) => x.hop === (sel.hop | 0));
+      return f ? { x: f.x, z: f.z, size: /** @type {const} */ ('s') } : null;
+    }
     const b = session.buildings?.[sel.index];
     // Placeables: S for 2×2 footprints, M otherwise.
     if (!b) return null;
@@ -1204,34 +1369,108 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.showBuildingRadial?.(a.x, a.z, a.owner);
   }
 
+  function pickOwnedAgoraIndex(preferred = lastAgoraIndex) {
+    const list = session.agoras ?? [];
+    let fallback = -1;
+    for (let i = 0; i < list.length; i++) {
+      if ((list[i]?.owner | 0) !== localPlayerId) continue;
+      if (i === preferred) return i;
+      if (fallback < 0) fallback = i;
+    }
+    return fallback;
+  }
+
+  function openOwnAgoraMenu() {
+    if (!bootInteractive) return;
+    if ((session.role ?? 'player') !== 'player' || localPlayerId < 0) return;
+    const index = pickOwnedAgoraIndex();
+    if (index < 0) return;
+    if (placingType) applyPlacingType(null);
+    if (renderer.isBuildingRadialOpen?.() && lastAgoraIndex === index) {
+      closeRadial();
+      return;
+    }
+    inputApi.setSelectedBuilding?.({ kind: 'agora', index });
+  }
+
   /** Selected placeable driving the action radial (for train / cancel cmds). */
   let actionBuildingIndex = -1;
+  /** Same-type group the open action radial represents. */
+  /** @type {number[]} */
+  let actionBuildingIndices = [];
+
+  function liveActionIndices(list = session.buildings) {
+    const src = actionBuildingIndices.length
+      ? actionBuildingIndices
+      : actionBuildingIndex >= 0
+        ? [actionBuildingIndex]
+        : [];
+    /** @type {number[]} */
+    const out = [];
+    const seen = new Set();
+    for (let k = 0; k < src.length; k++) {
+      const i = src[k] | 0;
+      if (seen.has(i)) continue;
+      const b = list?.[i];
+      if (!b || (b.hp != null && (b.hp | 0) <= 0)) continue;
+      seen.add(i);
+      out.push(i);
+    }
+    return out;
+  }
 
   /** Push sim building tracks onto the open action radial. */
   function syncActionRadialTracksFromSim() {
     if (!renderer.isActionRadialOpen?.() || actionBuildingIndex < 0) return;
-    const b = session.buildings?.[actionBuildingIndex];
-    /** @type {Record<string, { progress: number, count: number }>} */
-    const tracks = {};
-    for (const t of b?.tracks ?? []) {
-      if (!t?.id || (t.count | 0) < 1) continue;
-      tracks[`${t.kind}:${t.id}`] = {
-        progress: Number(t.progress) || 0,
-        count: t.count | 0,
-      };
+    const indices = liveActionIndices();
+    if (!indices.length) {
+      closeRadial();
+      return;
     }
+    if (!indices.includes(actionBuildingIndex)) {
+      actionBuildingIndex = indices[0];
+      const next = session.buildings?.[actionBuildingIndex];
+      if (next) renderer.showActionRadial?.(next.x, next.z, next.type);
+    }
+    const b = session.buildings?.[actionBuildingIndex];
+    if (!b) {
+      closeRadial();
+      return;
+    }
+    const tracks = aggregateBuildingTracks(
+      indices,
+      session.buildings,
+      actionBuildingIndex,
+    );
     renderer.setActionRadialTracks?.(tracks);
-    renderer.setActionRadialPaused?.(!!b?.prodPaused);
+    let anyWork = false;
+    let anyUnpaused = false;
+    let anySite = false;
+    for (let k = 0; k < indices.length; k++) {
+      const site = session.buildings?.[indices[k]];
+      if (!site) continue;
+      if (site.built === 0) anySite = true;
+      if (buildingHasWork(site)) {
+        anyWork = true;
+        if (!site.prodPaused) anyUnpaused = true;
+      }
+    }
+    renderer.setActionRadialPaused?.(anyWork && !anyUnpaused);
+    renderer.setActionRadialUtilityAvailability?.({
+      cancel: anyWork || anySite,
+      pause: anyWork,
+    });
     syncActionRadialResearch();
   }
 
-  function openActionRadialForBuilding(index) {
+  function openActionRadialForBuilding(index, indices) {
     const b = session.buildings?.[index];
-    if (!b || !buildingHasMenu(b.type)) {
+    if (!b || (!buildingHasMenu(b.type) && b.built !== 0)) {
       closeRadial();
       return;
     }
     actionBuildingIndex = index;
+    actionBuildingIndices = (indices?.length ? indices : [index]).slice();
     renderer.hideBuildingRadial?.();
     syncRadialMenuGate();
     renderer.showActionRadial?.(b.x, b.z, b.type);
@@ -1240,6 +1479,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   function closeRadial() {
     actionBuildingIndex = -1;
+    actionBuildingIndices = [];
     renderer.setActionRadialArmed?.(null);
     renderer.hideBuildingRadial?.();
     renderer.hideActionRadial?.();
@@ -1276,10 +1516,45 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       setGraffitiHeaderVisible(isLobbyGraffitiScene(bootCfg.mode));
     }
   };
+  let storyCast = storyCastFromGarden(garden);
+  const SPEECH_LIFT = 2.4;
+  function getStorySpeakerPos(name) {
+    const key = normalizeSpeaker(name);
+    if (!key) return null;
+    const entry = storyCast.find((c) => normalizeSpeaker(c.name) === key);
+    if (!entry) return null;
+    const i = entry.index | 0;
+    const world = session.state;
+    const n = world?.count | 0;
+    if (world && i >= 0 && i < n) {
+      const live = bufs.poseValid?.[i];
+      const x = live ? bufs.renderX[i] : fx.toFloat(world.px[i]);
+      const z = live ? bufs.renderZ[i] : fx.toFloat(world.py[i]);
+      const y = live ? bufs.renderY[i] + SPEECH_LIFT : SPEECH_LIFT;
+      if (Number.isFinite(x) && Number.isFinite(z)) return { x, y, z };
+    }
+    const field = session.field;
+    if (field && Number.isFinite(entry.tx)) {
+      const half = field.worldHalfF ?? (field.width * TILE_SIZE_F) / 2;
+      return {
+        x: (entry.tx + 0.5) * TILE_SIZE_F - half,
+        y: SPEECH_LIFT,
+        z: (entry.tz + 0.5) * TILE_SIZE_F - half,
+      };
+    }
+    return null;
+  }
+  const matchStory = createMatchStory({
+    getCamera: () => renderer.cameraController,
+    getField: () => session.field,
+    getSpeakerPos: getStorySpeakerPos,
+    worldToScreen: (x, y, z) => renderer.worldToScreen?.(x, y, z) ?? null,
+  });
+  if (garden?.story) matchStory.playIntro(garden.story);
   let inputApi = setupInput({
     canvas,
     renderer,
-    inputActive: () => bootInteractive,
+    inputActive: () => bootInteractive && !matchStory.driving(),
     world: () => session.state,
     selected: bufs.selected,
     localPlayerId,
@@ -1293,6 +1568,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     enqueueCommand: (cmd) => session.submitCommand(cmd),
     onSelectionChanged: updateColors,
+    onControlGroupJump: () => {
+      const c = selectionFollowPoint();
+      if (!c) return;
+      renderer.cameraController?.lookAtXZ?.(c.x, c.z);
+    },
     onOrder: (x, z, y, cmdType, tile, extra) => {
       if (cmdType === CMD.GATHER) {
         renderer.pingHarvestTarget?.(tile);
@@ -1315,20 +1595,22 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncBuildingHighlight(list);
       syncRallyFlagMarkers();
       syncWorkRadiusRing();
-      // Action / build radials only for a single selection.
-      if (sel && list && list.length === 1) {
-        if (sel.kind === 'agora') {
-          const a = session.agoras?.[sel.index];
-          if (a && (a.owner | 0) === localPlayerId) {
-            openRadialForAgora(sel.index);
-            return;
-          }
-        } else if (sel.kind === 'building') {
-          const b = session.buildings?.[sel.index];
-          if (b && (b.owner | 0) === localPlayerId) {
-            openActionRadialForBuilding(sel.index);
-            return;
-          }
+      if (sel && list && list.length === 1 && sel.kind === 'agora') {
+        const a = session.agoras?.[sel.index];
+        if (a && (a.owner | 0) === localPlayerId) {
+          openRadialForAgora(sel.index);
+          return;
+        }
+      }
+      if (sel && list) {
+        const group = sameOwnedBuildingType(list, session.buildings, localPlayerId);
+        if (group) {
+          const primary =
+            sel.kind === 'building' && group.indices.includes(sel.index | 0)
+              ? sel.index | 0
+              : group.indices[0];
+          openActionRadialForBuilding(primary, group.indices);
+          return;
         }
       }
       closeRadial();
@@ -1355,12 +1637,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         type: CMD.SET_RALLY,
         playerId: localPlayerId,
         buildingIndex: actionBuildingIndex,
+        buildingIndices: liveActionIndices(),
         tx: fx.fromFloat(x),
         ty: fx.fromFloat(z),
         order: ORDER.ATTACK_MOVE,
       });
       endRallyPlacement();
-      openActionRadialForBuilding(actionBuildingIndex);
+      openActionRadialForBuilding(actionBuildingIndex, actionBuildingIndices);
       renderer.pingOrderMarker?.(x, z, undefined, 'red', { forceMove: false });
     },
     clearRallyPlacement: () => {
@@ -1368,8 +1651,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     },
     onRallyCancel: () => {
       const bi = actionBuildingIndex;
+      const group = actionBuildingIndices.slice();
       endRallyPlacement();
-      if (bi >= 0) openActionRadialForBuilding(bi);
+      if (bi >= 0) openActionRadialForBuilding(bi, group);
     },
     getPlacementYaw: () => placingYaw,
     setPlacementYaw: (yaw) => {
@@ -1450,10 +1734,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (picked.kind === 'unit') {
         renderer.setActionRadialArmed?.(null);
         if (actionBuildingIndex < 0 || localPlayerId < 0) return;
+        const target = pickLeastLoadedIndex(liveActionIndices(), session.buildings);
+        if (target < 0) return;
         session.submitCommand({
           type: CMD.QUEUE_TRAIN,
           playerId: localPlayerId,
-          buildingIndex: actionBuildingIndex,
+          buildingIndex: target,
           unitKey: picked.id,
         });
         return;
@@ -1465,43 +1751,83 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         if (!techId) return;
         // Already owned — pad is dull; ignore re-queue.
         if (researchedUpgradeIdsFor(localPlayerId).includes(techId)) return;
+        const group = liveActionIndices();
+        if (groupHasUpgradeQueued(group, session.buildings, techId)) return;
+        const target = pickFirstBuiltIndex(group, session.buildings);
+        if (target < 0) return;
         session.submitCommand({
           type: CMD.RESEARCH,
           playerId: localPlayerId,
-          buildingIndex: actionBuildingIndex,
+          buildingIndex: target,
           techId,
         });
         return;
       }
       if (picked.kind === 'pause') {
-        const tracks = renderer.getActionRadialTracks?.() ?? {};
-        const hasWork = Object.values(tracks).some(
-          (t) => (t?.count | 0) > 0 || (t?.progress ?? 0) > 0,
-        );
-        if (!hasWork || actionBuildingIndex < 0 || localPlayerId < 0) return;
+        const group = liveActionIndices();
+        let anyWork = false;
+        let anyUnpaused = false;
+        for (let k = 0; k < group.length; k++) {
+          const site = session.buildings?.[group[k]];
+          if (!buildingHasWork(site)) continue;
+          anyWork = true;
+          if (!site.prodPaused) anyUnpaused = true;
+        }
+        if (!anyWork || localPlayerId < 0) return;
         renderer.setActionRadialArmed?.(null);
-        const b = session.buildings?.[actionBuildingIndex];
-        session.submitCommand({
-          type: CMD.PAUSE_TRAIN,
-          playerId: localPlayerId,
-          buildingIndex: actionBuildingIndex,
-          paused: b?.prodPaused ? 0 : 1,
-        });
+        const paused = anyUnpaused ? 1 : 0;
+        for (let k = 0; k < group.length; k++) {
+          const i = group[k];
+          if (!buildingHasWork(session.buildings?.[i])) continue;
+          session.submitCommand({
+            type: CMD.PAUSE_TRAIN,
+            playerId: localPlayerId,
+            buildingIndex: i,
+            paused,
+          });
+        }
         return;
       }
       if (picked.kind === 'cancel') {
+        const group = liveActionIndices();
         const tracks = renderer.getActionRadialTracks?.() ?? {};
         const hasWork = Object.values(tracks).some(
-          (t) => (t?.count | 0) > 0 || (t?.progress ?? 0) > 0,
+          (t) =>
+            (t?.count | 0) > 0 ||
+            (t?.extra | 0) > 0 ||
+            (t?.progress ?? 0) > 0,
         );
-        if (!hasWork) return;
+        let anySite = false;
+        for (let k = 0; k < group.length; k++) {
+          const site = session.buildings?.[group[k]];
+          if (site?.built === 0 && (site.hp == null || (site.hp | 0) > 0)) {
+            anySite = true;
+            break;
+          }
+        }
+        if (!hasWork && !anySite) return;
         if (renderer.getActionRadialArmed?.() === 'cancel') {
-          if (actionBuildingIndex >= 0 && localPlayerId >= 0) {
-            session.submitCommand({
-              type: CMD.CANCEL_TRAIN,
-              playerId: localPlayerId,
-              buildingIndex: actionBuildingIndex,
-            });
+          if (localPlayerId >= 0) {
+            for (let k = 0; k < group.length; k++) {
+              const i = group[k];
+              const site = session.buildings?.[i];
+              if (!site) continue;
+              const isSite =
+                site.built === 0 && (site.hp == null || (site.hp | 0) > 0);
+              if (isSite) {
+                session.submitCommand({
+                  type: CMD.CANCEL_CONSTRUCTION,
+                  playerId: localPlayerId,
+                  buildingIndex: i,
+                });
+              } else if (buildingHasWork(site)) {
+                session.submitCommand({
+                  type: CMD.CANCEL_TRAIN,
+                  playerId: localPlayerId,
+                  buildingIndex: i,
+                });
+              }
+            }
           }
           renderer.setActionRadialArmed?.(null);
         } else {
@@ -1516,6 +1842,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         return;
       }
       if (picked.kind === 'building') {
+        if (
+          menuGateState({
+            cost: getBuildingCost(picked.id),
+            requires: getBuildingRequires(picked.id),
+            bank: ownerResourcesFrom(session.resources, localPlayerId),
+            ownedTypes: ownedBuildingTypesFor(localPlayerId),
+          }) === 'locked'
+        ) {
+          return;
+        }
         // Keep the agora radial open while ghost-placing / switching types.
         applyPlacingType(picked.id);
         placingYaw = 0;
@@ -1526,6 +1862,23 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.hoverBuildingRadial?.(cx, cy, !placingType),
     hitRadial: (cx, cy) => renderer.hitBuildingRadial?.(cx, cy) ?? false,
     hitRadialHub: (cx, cy) => renderer.hitBuildingRadialHub?.(cx, cy) ?? false,
+  });
+
+  const screenshotHud = createScreenshotHud({
+    onPress: () => {
+      sideMenu.close();
+      closeRadial();
+      inputApi.cancelPlacement?.();
+      applyPlacingType(null);
+    },
+    onChange: (hidden) => {
+      document.body.classList.toggle(SCREENSHOT_HUD_CLASS, hidden);
+      renderer.setScreenshotHudHidden?.(hidden);
+      if (!hidden) {
+        syncWorkRadiusRing();
+        syncBuildingHighlight(selectedBuildings.length ? selectedBuildings : null);
+      }
+    },
   });
 
   window.addEventListener('keydown', (e) => {
@@ -1541,8 +1894,15 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return;
     }
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.code === 'KeyO') {
+      if (isCameraFollowTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      screenshotHud.press();
+      return;
+    }
     if (e.code === 'Escape') {
       e.preventDefault();
+      if (screenshotHud.isHidden()) return;
       if (placingType) {
         inputApi.cancelPlacement?.();
         return;
@@ -1551,12 +1911,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         closeRadial();
         return;
       }
-      inputApi.clearSelection?.();
-      renderer.setBuildingSelectionHighlight?.(null);
+      void sideMenu.handleEscape?.();
       return;
     }
     if (e.code === 'KeyJ') {
       kothShard?.requestJoin?.();
+      return;
+    }
+    if (e.code === 'KeyB' || e.code === 'Backquote') {
+      if (isCameraFollowTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      openOwnAgoraMenu();
       return;
     }
     if (e.code === 'KeyG') {
@@ -1573,14 +1938,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       return;
     }
-    if (e.code === 'KeyB') {
+    if (e.code === 'KeyN') {
       e.preventDefault();
       const on = renderer.toggleShadows?.();
       if (typeof on === 'boolean') setStatusText(on ? 'Shadows on' : 'Shadows off');
       sideMenu.refresh();
       return;
     }
-    if (e.code === 'KeyF') {
+    if (e.code === 'KeyX') {
       e.preventDefault();
       const on = renderer.toggleFx?.();
       if (typeof on === 'boolean') {
@@ -1628,10 +1993,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   window.addEventListener('keyup', (e) => {
     inputApi.handleControlGroupKeyUp?.(e);
     if (e.code === 'Space') releaseSpaceFollow();
+    if (e.code === 'KeyO') screenshotHud.release();
   });
-  window.addEventListener('blur', releaseSpaceFollow);
+  window.addEventListener('blur', () => {
+    releaseSpaceFollow();
+    screenshotHud.release();
+  });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') releaseSpaceFollow();
+    if (document.visibilityState === 'hidden') {
+      releaseSpaceFollow();
+      screenshotHud.release();
+    }
   });
   kothLobbyUi = setupKothLobby({
     kothShard,
@@ -1691,6 +2063,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         });
       },
     });
+    observerLobby = matchLobby;
     lobbyUi = setupLobbyUi({
       gameLobby,
       matchLobby,
@@ -1736,8 +2109,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       matchOverShown = true;
       showMatchOver(session);
     }
-    stampFog();
+    fogStampDue = true;
     refreshFoggedProps();
+    syncAgoraOwnerPaint();
     updateColors();
   };
 
@@ -1747,10 +2121,22 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   renderer.onFrame((deltaMs) => {
     const frameT0 = frameProf ? performance.now() : 0;
+    if (frameProf) frameProf.inFrame = true;
+    let profT = frameT0;
+    const profSplit = (name) => {
+      if (!frameProf) return;
+      const now = performance.now();
+      profAdd(name, now - profT);
+      profT = now;
+    };
     // Keep FX clocks in sync with pause (catch-up / KOTH also toggle pauseLockstep).
     renderer.setFxPaused?.(session.pauseLockstep);
-    renderer.cameraController?.tick?.(deltaMs);
+    matchStory.tick(deltaMs);
+    if (!matchStory.driving()) renderer.cameraController?.tick?.(deltaMs);
     session.pump(deltaMs);
+    profSplit('pump');
+    stampFogIfDue();
+    if (frameProf) profT = performance.now();
     syncWorkRadiusRing();
 
     if (session.replayingCatchUp) {
@@ -1764,8 +2150,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       fpsDisplay = Math.round((fpsFrames * 1000) / fpsAcc);
       fpsAcc = 0;
       fpsFrames = 0;
-      paintStatus();
     }
+    paintStatusClock();
+    paintStatusPop();
+    paintStatusSide();
+    paintResources();
 
     const alpha = session.displayAlpha;
     const { prev, cur } = session.displaySnapshots();
@@ -1874,8 +2263,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     let hbHurtCount = 0;
     const hbSel = bufs.hbSelected;
     const hbHurt = bufs.hbHurt;
+    const hbSelOwner = bufs.hbSelectedOwner;
+    const hbHurtOwner = bufs.hbHurtOwner;
+    const hbSelHp = bufs.hbSelectedHp;
+    const hbHurtHp = bufs.hbHurtHp;
 
-    // Overlay LOD: collar spin by eye distance; health bars nearest-N to look-at.
+    // Overlay LOD: collar spin by eye distance; bars selected-first, then nearest hurt.
     const overlay = overlayCameraRef(renderer);
     const overlaySpinAllow = bufs.overlaySpinAllow;
     const overlayBarAllow = bufs.overlayBarAllow;
@@ -1909,7 +2302,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       barD2[barCand] = dx * dx + dz * dz;
       barCand++;
     }
-    markNearestN(barIds, barD2, barCand, OVERLAY_MAX_BARS, overlayBarAllow);
+    markSelectedThenNearest(barIds, barD2, barCand, OVERLAY_MAX_BARS, selected, overlayBarAllow);
 
     // Pack passengers into transport seats (`spawn_anchor*`) or the v1 deck grid.
     const passengerSlot = bufs.passengerSlot;
@@ -2189,18 +2582,26 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (maxHp > 0 && (isSel || hp < maxHp) && overlayBarAllow[i]) {
         const slot = isSel ? hbSelCount++ : hbHurtCount++;
         const buf = isSel ? hbSel : hbHurt;
+        const owners = isSel ? hbSelOwner : hbHurtOwner;
+        const hps = isSel ? hbSelHp : hbHurtHp;
         const o = slot * 4;
         buf[o] = x;
         buf[o + 1] = z;
         buf[o + 2] = unitChipLift(loft, def.pickHeight);
         buf[o + 3] = hp / maxHp;
+        owners[slot] = world.owner[i];
+        hps[slot] = hp | 0;
       }
     }
+    profSplit('pose');
     for (let s = 0; s < hbSelCount; s++) {
       const o = s * 4;
       renderer.writeHealthBar?.(hbSel[o], hbSel[o + 1], hbSel[o + 2], hbSel[o + 3], {
         armor: false,
         holy: false,
+        far: overlayBarIsFar(hbSel[o] - refX, hbSel[o + 1] - refZ),
+        owner: hbSelOwner[s],
+        hp: hbSelHp[s],
       });
     }
     for (let s = 0; s < hbHurtCount; s++) {
@@ -2208,9 +2609,30 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.writeHealthBar?.(hbHurt[o], hbHurt[o + 1], hbHurt[o + 2], hbHurt[o + 3], {
         armor: false,
         holy: false,
+        far: overlayBarIsFar(hbHurt[o] - refX, hbHurt[o + 1] - refZ),
+        owner: hbHurtOwner[s],
+        hp: hbHurtHp[s],
       });
     }
     const markedB = new Set();
+    const markedA = new Set();
+    const agoraLift = renderer.agoraChipHeight?.() ?? roofChipLift(0, DEFAULT_AGORA_ROOF);
+    const writeAgoraChips = (a, index) => {
+      if (!a || fog.hidesHostile(a.owner, a.x, a.z)) return;
+      markedA.add(index);
+      renderer.writeHealthBar?.(a.x, a.z, agoraLift, 1, {
+        armor: false,
+        holy: false,
+        agora: true,
+        far: overlayBarIsFar(a.x - refX, a.z - refZ),
+        owner: a.owner,
+        founder: a.founder ?? a.owner,
+        capturer: a.capturer,
+        progress: a.progress,
+        tug: a.tug,
+        phase: a.phase,
+      });
+    };
     for (let i = 0; i < selectedBuildings.length; i++) {
       const sel = selectedBuildings[i];
       let x;
@@ -2218,27 +2640,41 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       let owner;
       let lift;
       let ratio = 1;
+      let hpLeft;
+      if (sel.kind === 'rally') continue;
       if (sel.kind === 'agora') {
-        const a = session.agoras?.[sel.index];
-        if (!a) continue;
-        x = a.x;
-        z = a.z;
-        owner = a.owner;
-        lift = renderer.agoraChipHeight?.() ?? roofChipLift(0, DEFAULT_AGORA_ROOF);
-      } else {
-        const b = session.buildings?.[sel.index];
-        if (!b || (b.hp != null && (b.hp | 0) <= 0)) continue;
-        x = b.x;
-        z = b.z;
-        owner = b.owner;
-        lift = renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
-        const maxHp = b.maxHp != null ? b.maxHp | 0 : 0;
-        const hp = b.hp != null ? b.hp | 0 : maxHp;
-        if (maxHp > 0) ratio = hp / maxHp;
-        markedB.add(sel.index);
+        writeAgoraChips(session.agoras?.[sel.index], sel.index);
+        continue;
       }
+      const b = session.buildings?.[sel.index];
+      if (!b || (b.hp != null && (b.hp | 0) <= 0)) continue;
+      x = b.x;
+      z = b.z;
+      owner = b.owner;
+      lift = renderer.buildingChipHeight?.(b.type) ?? roofChipLift(0, DEFAULT_BUILDING_ROOF);
+      const maxHp = b.maxHp != null ? b.maxHp | 0 : 0;
+      const hp = b.hp != null ? b.hp | 0 : maxHp;
+      hpLeft = hp;
+      if (maxHp > 0) ratio = hp / maxHp;
+      markedB.add(sel.index);
       if (fog.hidesHostile(owner, x, z)) continue;
-      renderer.writeHealthBar?.(x, z, lift, ratio, { armor: false, holy: false, building: true });
+      renderer.writeHealthBar?.(x, z, lift, ratio, {
+        armor: false,
+        holy: false,
+        building: true,
+        far: overlayBarIsFar(x - refX, z - refZ),
+        owner,
+        hp: hpLeft,
+      });
+    }
+    const allA = session.agoras;
+    if (allA) {
+      for (let i = 0; i < allA.length; i++) {
+        if (markedA.has(i)) continue;
+        const a = allA[i];
+        if (!agoraOverlayActive(a)) continue;
+        writeAgoraChips(a, i);
+      }
     }
     const allB = session.buildings;
     if (allB) {
@@ -2254,6 +2690,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           armor: false,
           holy: false,
           building: true,
+          far: overlayBarIsFar(b.x - refX, b.z - refZ),
+          owner: b.owner,
+          hp,
         });
       }
     }
@@ -2276,6 +2715,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     }
     inputApi.syncControlGroupMarks?.();
+    profSplit('overlay');
     if (renderer.syncUnitAuras) {
       renderer.syncUnitAuras(
         n,
@@ -2289,6 +2729,13 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         renderZ,
         { fromStatus: true, skip: fogHidden },
       );
+    }
+    if (renderer.syncLocustDots) {
+      renderer.syncLocustDots(n, world.locustStacks, renderX, renderY, renderZ, {
+        skip: fogHidden,
+        buildings: session.buildings,
+        hideBuilding: (b) => fog.hidesHostile(b.owner, b.x, b.z),
+      });
     }
     if (renderer.syncCarryLoads) {
       renderer.syncCarryLoads(n, {
@@ -2321,6 +2768,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
       renderer.syncHolyShields(shieldSpheres);
     }
+    profSplit('fx');
     if (DEBUG_KOTH && matchMeta.mode === 'koth' && performance.now() - lastRenderDebugAt > 3000) {
       lastRenderDebugAt = performance.now();
       console.info('[KOTH] render frame', {
@@ -2397,7 +2845,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     syncActionRadialTracksFromSim();
     pushSelectionFollow();
+    profSplit('worldFx');
     renderer.commit();
+    profSplit('commit');
     finishFrameProf(frameT0);
   });
 
@@ -2409,6 +2859,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (bootInteractive) return;
     setInteractive(true);
     dismissBootSplash();
+    aetherSteam.notifyPlayReady();
   };
   void Promise.race([
     renderer.whenInteractive?.() ?? Promise.resolve(),
@@ -2424,6 +2875,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return renderEntityCount;
     },
     inputApi,
+    matchStory,
+    setStoryCast(cast) {
+      storyCast = Array.isArray(cast) ? cast : [];
+    },
     setInteractive,
     kothShard,
     /** When true, ignore KOTH presentation/live stomps (local 1v1 AI). */
@@ -2485,11 +2940,14 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   }
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', { gen, activeSlots, localSolo });
 
+  ctx.matchStory?.stop();
+  ctx.setStoryCast?.([]);
+
   // Cover the teardown/rebuild — same splash as cold boot.
   showMatchSplash();
   ctx.setInteractive?.(false);
   setGraffitiHeaderVisible(isLobbyGraffitiScene(cfg.mode));
-  setStatusText(localSolo ? 'Starting 1v1…' : 'Loading match…');
+  setStatusText(cfg.loadingLabel ?? (localSolo ? 'Starting 1v1…' : 'Loading match…'));
 
   const simMode = workerSimMode(cfg.mode);
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
@@ -2523,7 +2981,15 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       mode: simMode,
       activeSlots,
       armyPerSide: cfg.armyPerSide ?? 0,
+      stressPerSide: cfg.stressPerSide ?? 0,
+      animStressPerSide: cfg.animStressPerSide ?? 0,
+      profileSim: cfg.profileSim === true
+        || (cfg.stressPerSide | 0) > 0
+        || (cfg.animStressPerSide | 0) > 0
+        || new URLSearchParams(location.search).has('profileSim'),
       garden: cfg.garden,
+      skipDefaultSpawns: cfg.skipDefaultSpawns
+        ?? Boolean(cfg.garden?.story || (cfg.garden?.u && cfg.garden.u.length)),
       aiPlayers,
       humanPlayers,
       mapW: cfg.mapW ?? (cfg.mode === 'skirmish' ? SKIRMISH_MAP_W : undefined),
@@ -2567,6 +3033,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   ctx.session.setHumanPlayers(humanPlayers);
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] sim after reset', ownerStats(ctx.session.state));
 
+  ctx.setStoryCast?.(storyCastFromGarden(cfg.garden));
   forceRendererSync(ctx);
   syncPresentation(ctx, cfg, { skipRenderSync: true });
 
@@ -2577,6 +3044,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 
   ctx.setInteractive?.(true);
   dismissBootSplash();
+  aetherSteam.notifyPlayReady();
 }
 
 /**
@@ -2654,6 +3122,44 @@ async function startUnitTesterMatch(ctx) {
   });
 }
 
+/**
+ * Offline 5-way FFA stress test — pie-ring armies, same AI mix as `?stress=N`.
+ */
+async function startStressfulSituation(ctx) {
+  if (!ctx?.session || !ctx.renderer) return;
+  if (ctx._soloStarting) return;
+  ctx._soloStarting = true;
+  ctx.localSoloHold = true;
+  try {
+    await applyLiveConfig(ctx, {
+      mode: 'legacy',
+      localSolo: true,
+      seed: (Math.random() * 0xffffffff) >>> 0,
+      localPlayerId: PLAYER,
+      humanPlayers: [PLAYER],
+      activeSlots: [PLAYER, ...STRESS_AI_OWNERS],
+      aiPlayers: STRESS_AI_PROFILES.map((p) => ({ ...p })),
+      role: 'player',
+      reset: true,
+      inputEnabled: true,
+      armyPerSide: 0,
+      stressPerSide: STRESS_MENU_PER_SIDE,
+      shareVisionWith: stressShareVisionOwners(),
+      fog: fogOverrideFromSearch() ?? true,
+      loadingLabel: 'Starting stressful situation…',
+      matchId: `stress-${Date.now().toString(36)}`,
+    }, ctx.kothShard);
+    ctx.setMatchMeta?.({ mode: 'stress' });
+    ctx.setFogEnabled?.(fogOverrideFromSearch() ?? true);
+    setStatusText('Stressful Situation');
+  } catch (err) {
+    ctx.localSoloHold = false;
+    console.error('[stress] start failed', err);
+  } finally {
+    ctx._soloStarting = false;
+  }
+}
+
 function syncPresentation(ctx, cfg, options = {}) {
   if (!options.skipRenderSync && !ctx.session.resetting) forceRendererSync(ctx);
   ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
@@ -2723,6 +3229,7 @@ function showMatchOver(session) {
       winner === (session.localPlayerId ?? 0)
         ? 'Victory — agora captured'
         : `Defeat — Player ${winner} captured the agora`;
+    aetherSteam.notifyKothDefeat(session);
   } else if (k) {
     let best = 0;
     let bestScore = -1;
@@ -2777,7 +3284,7 @@ function setStatusText(text) {
       return;
     }
   }
-  const el = document.getElementById('status');
+  const el = document.getElementById('status-time') || document.getElementById('status');
   if (el) el.textContent = statusHint || next;
 }
 
@@ -2859,12 +3366,29 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
     setStatusText('Not seated — cannot start');
     return;
   }
+  let garden = null;
+  if (snapshot.mode === 'adventure') {
+    const url = cfg.gardenUrl || gardenUrlForChapter(cfg.chapter);
+    if (!url) {
+      setStatusText('That chapter is not ready yet');
+      throw new Error('chapter garden missing');
+    }
+    try {
+      garden = await loadGardenJson(url);
+    } catch (err) {
+      console.error('[lobby] chapter garden failed', err);
+      setStatusText('Chapter map failed to load');
+      throw err;
+    }
+  }
   const heldSolo = ctx.localSoloHold;
   ctx.localSoloHold = true;
   kothShard?.setLobbyMatchHold?.(true);
   try {
     await applyLiveConfig(ctx, {
       ...cfg,
+      garden,
+      ...(garden ? { seed: garden.s, mapW: garden.w, mapH: garden.h } : {}),
       reset: true,
       inputEnabled: true,
       armyPerSide: 0,
@@ -2872,6 +3396,7 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
     ctx.setMatchMeta?.({ mode: snapshot.mode, matchId: snapshot.roomId });
     if (!cfg.localSolo) matchLobby?.attachSession?.(ctx.session);
     sideMenu?.close?.();
+    ctx.matchStory?.playIntro(garden?.story);
     const label = snapshot.mode === 'teams'
       ? 'Teams'
       : snapshot.mode === 'adventure'

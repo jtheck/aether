@@ -1,4 +1,14 @@
+
+
+
+
+∾∾∾∾∾∾∾∾
+
+
+
 Classic with a Twist
+
+
 "Kill the thing… but it runs"
 Target tries to flee to a safe zone → turns into an escort intercept mission.
 Trigger trick: On unit health < 30%, change owner to neutral, give it insane speed, and enable new trigger for "if it reaches escape region".

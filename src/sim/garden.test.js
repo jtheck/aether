@@ -346,6 +346,22 @@ describe('garden codec', () => {
     assert.equal(getResource(world, 0, 'mineral'), 12);
   });
 
+  it('roundtrips named story units as a 5-tuple', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, {
+      units: [{ owner: 0, type: 5, tx: 4, tz: 6, name: 'Stumpey' }],
+    });
+    assert.deepEqual(json.u[0], [0, 5, 4, 6, 'Stumpey']);
+    const g = decodeGarden(json);
+    assert.equal(g.units[0].name, 'Stumpey');
+    assert.deepEqual(encodeGarden(field, { units: g.units }).u[0], json.u[0]);
+  });
+
   it('omits sr and uses the default opening bank', () => {
     const field = buildField(3, { width: 32, height: 32 });
     applyTableSilhouette(field, {
@@ -361,6 +377,47 @@ describe('garden codec', () => {
     applyGardenPlacements(world, field, g);
     assert.equal(getResource(world, 0, 'wood'), STARTING_RESOURCES.wood);
     assert.equal(getResource(world, 0, 'food'), STARTING_RESOURCES.food);
+  });
+
+  it('roundtrips an optional story reel', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const story = {
+      reels: [{
+        id: 'intro',
+        when: 'start',
+        clips: [
+          { id: 'cam-a', kind: 'camera', t: 0, dur: 2, tx: 4, tz: 5, radius: 90, alpha: 0.2 },
+          { id: 'line-a', kind: 'line', t: 0, dur: 2, speaker: 'Doc', text: 'Move.', style: 'command' },
+        ],
+      }],
+    };
+    const json = encodeGarden(field, { story });
+    assert.equal(json.story.reels[0].clips.length, 2);
+    const g = decodeGarden(json);
+    assert.equal(g.story.reels[0].clips[1].speaker, 'Doc');
+    assert.equal(encodeGarden(field).story, undefined);
+  });
+
+  it('roundtrips a custom camera bound and omits a full-table one', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, { cameraHalfF: 40 });
+    assert.equal(json.ch, 40);
+    const g = decodeGarden(json);
+    assert.equal(g.cameraHalfF, 40);
+    const live = fieldFromGarden(json);
+    assert.equal(live.cameraHalfF, 40);
+    assert.equal(encodeGarden(field, { cameraHalfF: 64 }).ch, undefined);
+    assert.equal(decodeGarden(encodeGarden(field)).cameraHalfF, 0);
   });
 
   it('keeps live boards on odd 16-tile chunk counts', () => {

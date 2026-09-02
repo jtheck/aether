@@ -23,17 +23,20 @@ export const CHECKPOINT_FORMAT = 1;
 const ENTITY_I32 = [
   'px', 'py', 'vx', 'vy', 'faceX', 'faceY', 'tx', 'ty', 'speed', 'targetEntity', 'targetBuilding', 'engagementTarget',
   'navDestX', 'navDestY', 'lastPx', 'lastPy', 'hp', 'carriedBy', 'transportTarget',
-  'dotSource', 'lobFromX', 'lobFromY', 'lobToX', 'lobToY', 'squadId',
+  'rallyHop1X', 'rallyHop1Y', 'rallyHop2X', 'rallyHop2Y',
+  'dotSource', 'locustSource', 'lobFromX', 'lobFromY', 'lobToX', 'lobToY', 'squadId',
   'gatherTile', 'carriedAmt',
 ];
 const ENTITY_I16 = [
   'engagementSlot', 'attackCd', 'abilityCd', 'distractCd', 'shieldHp', 'shieldTicks',
-  'dotTicks', 'dotDamage', 'dotPeriod', 'dotAcc', 'frostTicks', 'lobTicks', 'lobDur', 'lobPeak',
+  'dotTicks', 'dotDamage', 'dotPeriod', 'dotAcc', 'locustTicks', 'locustStacks', 'locustAcc', 'locustHops',
+  'frostTicks', 'lobTicks', 'lobDur', 'lobPeak',
   'gatherCd',
 ];
 const ENTITY_U16 = ['engagementMask', 'targetLoad'];
 const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
+  'rallyHopCount', 'rallyHop1Order', 'rallyHop2Order',
   'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
   'gatherDefensive', 'gatherAct',
 ];
@@ -54,6 +57,7 @@ export function exportWorldCheckpoint(w, field, checksum) {
     rng: w.rng.s >>> 0,
     kothMatchOver: w.kothMatchOver | 0,
     matchWinner: w.matchWinner ?? -1,
+    agoraOccupyEndsMatch: w.agoraOccupyEndsMatch ?? 1,
     arrays: {},
   };
   for (const key of ENTITY_I32) entities.arrays[key] = encodeTA(w[key], n);
@@ -124,6 +128,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   w.rng.s = ent.rng >>> 0;
   w.kothMatchOver = ent.kothMatchOver | 0;
   w.matchWinner = ent.matchWinner ?? -1;
+  if (ent.agoraOccupyEndsMatch != null) w.agoraOccupyEndsMatch = ent.agoraOccupyEndsMatch | 0;
 
   for (const key of Object.keys(ent.arrays)) {
     if (w[key]) decodeTAInto(w[key], ent.arrays[key]);
@@ -132,6 +137,11 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   if (!ent.arrays.pathSlowAware && w.pathSlowAware) w.pathSlowAware.fill(0);
   if (!ent.arrays.gatherAct && w.gatherAct) w.gatherAct.fill(0);
   if (!ent.arrays.targetBuilding && w.targetBuilding) w.targetBuilding.fill(-1);
+  if (!ent.arrays.locustTicks && w.locustTicks) w.locustTicks.fill(0);
+  if (!ent.arrays.locustStacks && w.locustStacks) w.locustStacks.fill(0);
+  if (!ent.arrays.locustAcc && w.locustAcc) w.locustAcc.fill(0);
+  if (!ent.arrays.locustHops && w.locustHops) w.locustHops.fill(0);
+  if (!ent.arrays.locustSource && w.locustSource) w.locustSource.fill(-1);
 
   importPoolStore(w.projectiles, checkpoint.projectiles, {
     u8: ['alive', 'type', 'owner', 'hitCount', 'despawnReason', 'power', 'launchWait'],
@@ -358,10 +368,13 @@ function exportAgoras(agoras) {
     owner: a.owner | 0,
     x: a.x | 0,
     z: a.z | 0,
+    founder: a.founder | 0,
     progress: a.progress | 0,
+    tug: a.tug | 0,
     capturer: a.capturer | 0,
     contested: a.contested | 0,
     captured: a.captured | 0,
+    phase: a.phase | 0,
   }));
 }
 
@@ -372,12 +385,15 @@ function importAgoras(w, data) {
   }
   w.agoras = data.map((a) => ({
     owner: a.owner | 0,
+    founder: (a.founder ?? a.owner) | 0,
     x: a.x | 0,
     z: a.z | 0,
     progress: a.progress | 0,
+    tug: a.tug | 0,
     capturer: a.capturer | 0,
     contested: a.contested | 0,
     captured: a.captured | 0,
+    phase: a.phase | 0,
   }));
 }
 
@@ -393,6 +409,13 @@ function exportBuildings(buildings) {
     rallyX: b.rallyX | 0,
     rallyZ: b.rallyZ | 0,
     rallyOrder: b.rallyOrder | 0,
+    rallyHopCount: b.rallyHopCount | 0,
+    rallyHop1X: b.rallyHop1X | 0,
+    rallyHop1Z: b.rallyHop1Z | 0,
+    rallyHop1Order: b.rallyHop1Order | 0,
+    rallyHop2X: b.rallyHop2X | 0,
+    rallyHop2Z: b.rallyHop2Z | 0,
+    rallyHop2Order: b.rallyHop2Order | 0,
     prodPaused: b.prodPaused | 0,
     built: b.built != null ? b.built | 0 : 1,
     buildProgress: b.buildProgress | 0,
@@ -403,6 +426,11 @@ function exportBuildings(buildings) {
     attackCd: b.attackCd | 0,
     maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type),
     hp: b.hp != null ? b.hp | 0 : getBuildingHp(b.type),
+    locustTicks: b.locustTicks | 0,
+    locustStacks: b.locustStacks | 0,
+    locustAcc: b.locustAcc | 0,
+    locustHops: b.locustHops | 0,
+    locustSource: b.locustSource ?? -1,
   }));
 }
 
@@ -431,6 +459,15 @@ function importBuildings(w, data) {
         hasRally && (b.rallyOrder | 0) === ORDER.ATTACK_MOVE
           ? ORDER.ATTACK_MOVE
           : ORDER.MOVE,
+      rallyHopCount: b.rallyHopCount | 0,
+      rallyHop1X: b.rallyHop1X | 0,
+      rallyHop1Z: b.rallyHop1Z | 0,
+      rallyHop1Order:
+        (b.rallyHop1Order | 0) === ORDER.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE,
+      rallyHop2X: b.rallyHop2X | 0,
+      rallyHop2Z: b.rallyHop2Z | 0,
+      rallyHop2Order:
+        (b.rallyHop2Order | 0) === ORDER.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE,
       prodPaused: b.prodPaused | 0,
       built: b.built != null ? b.built | 0 : 1,
       buildProgress: b.buildProgress != null ? b.buildProgress | 0 : getBuildTime(type),
@@ -443,6 +480,11 @@ function importBuildings(w, data) {
       attackCd: b.attackCd | 0,
       maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(type),
       hp: b.hp != null ? b.hp | 0 : getBuildingHp(type),
+      locustTicks: b.locustTicks | 0,
+      locustStacks: b.locustStacks | 0,
+      locustAcc: b.locustAcc | 0,
+      locustHops: b.locustHops | 0,
+      locustSource: b.locustSource != null ? b.locustSource | 0 : -1,
     };
   });
 }
@@ -505,8 +547,12 @@ function clearSporeFx(store) {
   store.seedCount = 0;
   store.arcCount = 0;
   store.headCount = 0;
+  store.deathCount = 0;
   store.dripX.length = 0;
   store.dripY.length = 0;
+  if (store.dripKind) store.dripKind.length = 0;
+  if (store.deathX) store.deathX.length = 0;
+  if (store.deathY) store.deathY.length = 0;
   store.seedX.length = 0;
   store.seedY.length = 0;
   store.seedGrowAt.length = 0;

@@ -30,10 +30,10 @@ import {
   wpBase,
   MAX_REPATHS,
 } from './path.js';
-import { getUnitDef, UNIT_DEFS, UNIT, unitFootprint, unitSteer, unitAccel, unitDecel, isFlyer } from './unitTypes.js';
+import { getUnitDef, UNIT_DEFS, UNIT, unitFootprint, unitSteer, unitAccel, unitDecel, unitSlowMul, isFlyer } from './unitTypes.js';
 import { ORDER } from './world.js';
+import { continueRallyHop } from './buildings.js';
 import { worldToTile, isPassable, isSlowTile } from './field.js';
-import { SLOW_MULTIPLIER } from './scenery.js';
 import { kothMetaStep } from './kothMeta.js';
 import { agoraCaptureSystem } from './agora.js';
 import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
@@ -43,7 +43,7 @@ import { fireZoneSystem } from './fireZones.js';
 import { pendingLightningSystem } from './lightning.js';
 import { pulseFireZoneBuildings } from './buildingCombat.js';
 import { frogSystem } from './frogs.js';
-import { sporeGrowthSystem } from './sporeBloom.js';
+import { flushMycoDeathBursts, sporeGrowthSystem } from './sporeBloom.js';
 import { monkKickSystem, isLobbing } from './monkKick.js';
 import {
   transportAutoLoadSystem,
@@ -171,7 +171,7 @@ export function step(world, field, commands) {
   phase('lightning', () => pendingLightningSystem(world, field));
   phase('towers', () => towerCombatSystem(world));
   phase('projectiles', () => projectileSystem(world, field));
-  phase('status', () => tickCombatStatus(world));
+  phase('status', () => tickCombatStatus(world, field));
   phase('frogs', () => frogSystem(world, field));
   phase('monkKick', () => monkKickSystem(world, field));
   phase('trees', () => treeBurnSystem(field));
@@ -188,6 +188,8 @@ export function step(world, field, commands) {
     fireZoneSystem(world);
     pulseFireZoneBuildings(world, field);
   });
+  // Late deaths (fire, etc.) after the spore phase still plant this tick.
+  flushMycoDeathBursts(world, field);
   world.tick++;
   if (profile) timing.step = performance.now() - tAll;
 }
@@ -264,6 +266,7 @@ function movementSystem(w, field) {
     ) {
       // Attack-moved a villager onto a resource? Put it to work — defensively, so
       // it fends off anything that wanders in and then goes back to the node.
+      if (continueRallyHop(w, field, i)) continue;
       if (
         order === ORDER.ATTACK_MOVE &&
         w.type[i] === UNIT.VILLAGER &&
@@ -300,6 +303,7 @@ function movementSystem(w, field) {
         // Path exhausted — repath or seek final dest (do not go IDLE early).
         onPathExhausted(w, field, i);
         if (atFinalDest(w, i)) {
+          if (continueRallyHop(w, field, i)) continue;
           if (
             order === ORDER.ATTACK_MOVE &&
             w.type[i] === UNIT.VILLAGER &&
@@ -313,6 +317,7 @@ function movementSystem(w, field) {
         if (w.navWpCount[i] === 0) {
           // Gave up after max repaths — stop cleanly.
           if (w.repathCount[i] >= MAX_REPATHS && w.pathRequest[i] === 0) {
+            if (continueRallyHop(w, field, i)) continue;
             if (
               order === ORDER.ATTACK_MOVE &&
               w.type[i] === UNIT.VILLAGER &&
@@ -352,7 +357,7 @@ function movementSystem(w, field) {
     let speed = w.speed[i];
     // Trees / mud only snag ground units.
     if (!isFlyer(w.type[i]) && isSlowTile(field, currentTx, currentTz)) {
-      speed = fx.mul(speed, SLOW_MULTIPLIER);
+      speed = fx.mul(speed, unitSlowMul(w.type[i]));
     }
     if (w.distractCd[i] > 0) speed = fx.mul(speed, DISTRACT_MOVE_MUL);
     if (w.frostTicks?.[i] > 0) speed = fx.mul(speed, FROST_MOVE_MUL);

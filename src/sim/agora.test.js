@@ -7,8 +7,11 @@ import { step } from './step.js';
 import {
   createAgoras,
   agoraCaptureSystem,
+  agoraOverlayActive,
   AGORA_CAPTURE_TICKS,
   AGORA_OCCUPATION_RADIUS,
+  AGORA_PHASE_LOCK,
+  AGORA_PHASE_TUG,
 } from './agora.js';
 import * as fx from './fixed.js';
 
@@ -26,9 +29,7 @@ describe('agora capture', () => {
     const w = createWorld(1);
     w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
     w.kothMatchOver = 0;
-    const field = buildField(1, { width: 64, height: 64 });
 
-    // Pack attackers on the point (owner 1).
     for (let i = 0; i < 4; i++) {
       spawnNear(w, 1, 0, 0);
     }
@@ -38,6 +39,7 @@ describe('agora capture', () => {
     }
     assert.equal(w.agoras[0].progress, 10);
     assert.equal(w.agoras[0].capturer, 1);
+    assert.equal(w.agoras[0].phase, AGORA_PHASE_LOCK);
     assert.equal(w.kothMatchOver, 0);
   });
 
@@ -48,7 +50,7 @@ describe('agora capture', () => {
 
     spawnNear(w, 0, 0, 0);
     spawnNear(w, 0, 0, 0);
-    spawnNear(w, 1, 0, 0); // only 1 attacker vs 2 defenders — blocked
+    spawnNear(w, 1, 0, 0);
     spawnNear(w, 1, 0, 0);
 
     agoraCaptureSystem(w);
@@ -56,7 +58,7 @@ describe('agora capture', () => {
     assert.equal(w.agoras[0].contested, 1);
   });
 
-  it('ends the match on full capture', () => {
+  it('unlocks a tug after a full invade without ending the match', () => {
     const w = createWorld(3);
     w.agoras = createAgoras([{ owner: 0, x: 40, z: 0 }]);
     w.kothMatchOver = 0;
@@ -67,18 +69,110 @@ describe('agora capture', () => {
 
     w.agoras[0].progress = AGORA_CAPTURE_TICKS - 1;
     agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].phase, AGORA_PHASE_TUG);
+    assert.equal(w.agoras[0].progress, 0);
+    assert.equal(w.agoras[0].tug, 0);
+    assert.equal(w.agoras[0].owner, 0);
+    assert.equal(w.agoras[0].founder, 0);
+    assert.equal(w.agoras[0].captured, 0);
+    assert.equal(w.kothMatchOver, 0);
+    assert.equal(agoraOverlayActive(w.agoras[0]), true);
+  });
+
+  it('occupying the tug ends the match when the mode says so', () => {
+    const w = createWorld(3);
+    w.agoraOccupyEndsMatch = 1;
+    w.agoras = createAgoras([{ owner: 0, x: 40, z: 0 }]);
+    w.kothMatchOver = 0;
+    const ax = w.agoras[0].x;
+    const az = w.agoras[0].z;
+    for (let i = 0; i < 3; i++) spawnNear(w, 1, ax, az);
+
+    w.agoras[0].phase = AGORA_PHASE_TUG;
+    w.agoras[0].tug = AGORA_CAPTURE_TICKS - 1;
+    agoraCaptureSystem(w);
     assert.equal(w.agoras[0].captured, 1);
     assert.equal(w.agoras[0].owner, 1);
+    assert.equal(w.agoras[0].founder, 1);
     assert.equal(w.matchWinner, 1);
     assert.equal(w.kothMatchOver, 1);
+  });
+
+  it('occupying transfers ownership without ending KOTH-style matches', () => {
+    const w = createWorld(3);
+    w.agoraOccupyEndsMatch = 0;
+    w.agoras = createAgoras([{ owner: 0, x: 40, z: 0 }]);
+    w.kothMatchOver = 0;
+    const ax = w.agoras[0].x;
+    const az = w.agoras[0].z;
+    for (let i = 0; i < 3; i++) spawnNear(w, 1, ax, az);
+
+    w.agoras[0].phase = AGORA_PHASE_TUG;
+    w.agoras[0].tug = AGORA_CAPTURE_TICKS - 1;
+    agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].owner, 1);
+    assert.equal(w.agoras[0].phase, AGORA_PHASE_LOCK);
+    assert.equal(w.agoras[0].captured, 0);
+    assert.equal(w.kothMatchOver, 0);
+  });
+
+  it('founder can retake the tug and lock the agora again', () => {
+    const w = createWorld(8);
+    w.kothMatchOver = 0;
+    w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
+    w.agoras[0].phase = AGORA_PHASE_TUG;
+    w.agoras[0].tug = AGORA_CAPTURE_TICKS - 1;
+    spawnNear(w, 0, 0, 0);
+    spawnNear(w, 0, 0, 0);
+
+    agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].phase, AGORA_PHASE_LOCK);
+    assert.equal(w.agoras[0].owner, 0);
+    assert.equal(w.agoras[0].tug, 0);
+    assert.equal(w.kothMatchOver, 0);
+  });
+
+  it('tug drains to neutral then trades sides', () => {
+    const w = createWorld(9);
+    w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
+    w.agoras[0].phase = AGORA_PHASE_TUG;
+    w.agoras[0].tug = 3;
+    w.agoras[0].capturer = 1;
+    spawnNear(w, 0, 0, 0);
+    spawnNear(w, 0, 0, 0);
+
+    agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].tug, 2);
+    assert.equal(w.agoras[0].capturer, 1);
+
+    agoraCaptureSystem(w);
+    agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].tug, 0);
+    assert.equal(w.agoras[0].capturer, -1);
+
+    agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].capturer, 0);
+    assert.equal(w.agoras[0].tug, 1);
   });
 
   it('decays when attackers leave', () => {
     const w = createWorld(4);
     w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
     w.agoras[0].progress = 20;
+    w.agoras[0].capturer = 1;
     agoraCaptureSystem(w);
     assert.equal(w.agoras[0].progress, 19);
+    assert.equal(w.agoras[0].capturer, 1);
+  });
+
+  it('clears capturer once decay finishes', () => {
+    const w = createWorld(4);
+    w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
+    w.agoras[0].progress = 1;
+    w.agoras[0].capturer = 1;
+    agoraCaptureSystem(w);
+    assert.equal(w.agoras[0].progress, 0);
+    assert.equal(w.agoras[0].capturer, -1);
   });
 
   it('occupation radius is finite', () => {

@@ -1,7 +1,7 @@
 // Demo spawn layouts — used by the sim worker at init.
 
 import { createWorld, spawn, STRESS_ENTITY_LIMIT } from './world.js';
-import { UNIT, UNIT_DEFS, isTransport } from './unitTypes.js';
+import { UNIT, UNIT_DEFS, isMilitary, isTransport } from './unitTypes.js';
 import { createKothMeta } from './kothMeta.js';
 import { createAgoras } from './agora.js';
 import {
@@ -142,21 +142,44 @@ const ENEMY_ARMY = [
 const COL_SPACING = 22;
 const ROW_SPACING = 16;
 
-/** Relative stress mix: baseline 10, casters 5, transports/vehicles 1. */
+/** Relative combat mix for the pie-ring mass: baseline 10, casters 5. */
 function stressTypeWeight(def) {
-  if (isTransport(def.id)) return 1;
   if (def.primaryAbility) return 5;
   return 10;
 }
 
-/** Weighted bag cycled under `?stress=N`. VAT villagers: `?animStress=N`. */
-const STRESS_TYPES = [];
+/** Combat bag for the pie-ring mass — no monks, civilians, or vehicles. */
+const STRESS_COMBAT_TYPES = [];
 for (const def of UNIT_DEFS) {
+  if (def.id === UNIT.MONK) continue;
+  if (!isMilitary(def.id) || isTransport(def.id)) continue;
   const weight = stressTypeWeight(def);
-  for (let i = 0; i < weight; i++) STRESS_TYPES.push(def.id);
+  for (let i = 0; i < weight; i++) STRESS_COMBAT_TYPES.push(def.id);
 }
 
-/** Soft cap on stress packing; shrinks automatically so both armies fit the board. */
+/** One of each, parked just outside the combat ring. */
+const STRESS_SUPPORT_TYPES = [
+  UNIT.VILLAGER,
+  UNIT.ENGINEER,
+  UNIT.WAGON,
+  UNIT.DIRIGIBLE,
+  UNIT.APC,
+];
+
+/** Menu button / documented default (`?stress=1000`). */
+export const STRESS_MENU_PER_SIDE = 1000;
+
+/** Inner hole of the 5-slice pie — a good ways from origin. */
+export const STRESS_RING_INNER_FRAC = 0.30;
+/** Unused fraction of each 72° slice so neighboring ranks don't kiss. */
+const STRESS_SLICE_GAP_FRAC = 0.16;
+const STRESS_RING_SPACING_MAX = 10;
+const STRESS_RING_SPACING_MIN = 5;
+const STRESS_SUPPORT_BACK = 32;
+const STRESS_SUPPORT_SPACING = 16;
+const STRESS_MAX_RADIUS_FRAC = 0.90;
+
+/** Soft cap on square packing (animStress / large `?army=`). */
 const STRESS_SPACING_MAX = 14;
 const STRESS_SPACING_MIN = 4;
 
@@ -383,6 +406,116 @@ function spawnClearanceScore(w, x, z, owner, bases) {
   return nearest;
 }
 
+/** Mid-angle of pie slice `i` — player 0 faces west, then CCW. */
+export function stressSliceMidAngle(slice) {
+  return Math.PI + (slice | 0) * ((Math.PI * 2) / STRESS_ARMY_COUNT);
+}
+
+function stressUsableAngle() {
+  return ((Math.PI * 2) / STRESS_ARMY_COUNT) * (1 - STRESS_SLICE_GAP_FRAC);
+}
+
+function stressRankCount(radius, usableAngle, spacing) {
+  const arc = Math.max(0, radius) * usableAngle;
+  return Math.max(1, Math.floor(arc / spacing) + 1);
+}
+
+function stressCombatFits(count, innerR, maxR, usable, spacing) {
+  const supportN = Math.min(STRESS_SUPPORT_TYPES.length, count);
+  const monks = Math.min(
+    stressRankCount(innerR, usable, spacing),
+    Math.max(0, count - supportN),
+  );
+  let left = count - supportN - monks;
+  let r = innerR + spacing;
+  while (left > 0) {
+    if (r > maxR + 1e-6) return false;
+    const n = Math.min(left, stressRankCount(r, usable, spacing));
+    left -= n;
+    r += spacing;
+  }
+  return true;
+}
+
+function stressRingSpacing(count, half) {
+  const innerR = half * STRESS_RING_INNER_FRAC;
+  const maxR = half * STRESS_MAX_RADIUS_FRAC - STRESS_SUPPORT_BACK;
+  const usable = stressUsableAngle();
+  for (let spacing = STRESS_RING_SPACING_MAX; spacing >= STRESS_RING_SPACING_MIN; spacing--) {
+    if (stressCombatFits(count, innerR, maxR, usable, spacing)) return spacing;
+  }
+  return STRESS_RING_SPACING_MIN;
+}
+
+function spawnAlongArc(w, owner, midAngle, usable, radius, n, typeAt) {
+  if (n <= 0) return;
+  const halfSpan = usable / 2;
+  const lim = activeWorldHalfF() * 0.96;
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0.5 : i / (n - 1);
+    const a = midAngle - halfSpan + t * usable;
+    const wx = Math.max(-lim, Math.min(lim, Math.cos(a) * radius));
+    const wz = Math.max(-lim, Math.min(lim, Math.sin(a) * radius));
+    spawn(w, {
+      x: fx.fromFloat(wx),
+      y: fx.fromFloat(wz),
+      type: typeAt(i),
+      owner,
+    });
+  }
+}
+
+/**
+ * One 72° pie slice: inner monk rank, combat mass outward, support parked behind.
+ */
+function spawnStressPieSlice(w, owner, slice, count) {
+  const half = activeWorldHalfF();
+  const innerR = half * STRESS_RING_INNER_FRAC;
+  const usable = stressUsableAngle();
+  const mid = stressSliceMidAngle(slice);
+  const spacing = stressRingSpacing(count, half);
+  const supportN = Math.min(STRESS_SUPPORT_TYPES.length, count);
+  const monks = Math.min(stressRankCount(innerR, usable, spacing), count - supportN);
+  const combat = count - supportN - monks;
+
+  spawnAlongArc(w, owner, mid, usable, innerR, monks, () => UNIT.MONK);
+
+  let r = innerR + spacing;
+  let placed = 0;
+  let combatK = 0;
+  while (placed < combat) {
+    const n = Math.min(combat - placed, stressRankCount(r, usable, spacing));
+    const base = combatK;
+    spawnAlongArc(w, owner, mid, usable, r, n, (i) => (
+      STRESS_COMBAT_TYPES[(base + i) % STRESS_COMBAT_TYPES.length]
+    ));
+    combatK += n;
+    placed += n;
+    r += spacing;
+  }
+
+  const supportR = (combat > 0 || monks > 0 ? r - spacing : innerR) + STRESS_SUPPORT_BACK;
+  const supportSpan = supportN <= 1
+    ? 0
+    : (supportN - 1) * STRESS_SUPPORT_SPACING / Math.max(supportR, 1);
+  spawnAlongArc(w, owner, mid, supportSpan, supportR, supportN, (i) => STRESS_SUPPORT_TYPES[i]);
+}
+
+/** Points covering the hollow center so scenery stays out of the arena. */
+export function stressReservedPoints(worldHalfF = activeWorldHalfF()) {
+  const innerR = worldHalfF * STRESS_RING_INNER_FRAC;
+  const step = 20;
+  const points = [[0, 0]];
+  for (let r = step; r <= innerR + 8; r += step) {
+    const n = Math.max(6, Math.ceil((Math.PI * 2 * r) / step));
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2;
+      points.push([Math.cos(a) * r, Math.sin(a) * r]);
+    }
+  }
+  return points;
+}
+
 /** Pack `count` units in a square grid centered on (baseX, baseZ). */
 function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
   const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
@@ -432,6 +565,7 @@ export function buildWorldFromConfig({
   const w = createWorld(seed);
   w.kothMatchOver = 0;
   w.matchWinner = -1;
+  w.agoraOccupyEndsMatch = mode === 'koth' ? 0 : 1;
   w.agoras = [];
   w.buildings = [];
   w.buildingsDirty = 0;
@@ -462,12 +596,9 @@ export function buildWorldFromConfig({
   if (stressPerSide > 0) {
     const perArmyCap = (STRESS_ENTITY_LIMIT / STRESS_ARMY_COUNT) | 0;
     const count = Math.min(Math.floor(stressPerSide), perArmyCap);
-    // Player + 4 AIs at pentagon bases — FFA stress load.
-    spawnStressSide(w, PLAYER, bases[0][0], bases[0][1], count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
-    for (let s = 0; s < STRESS_AI_OWNERS.length; s++) {
-      const owner = STRESS_AI_OWNERS[s];
-      const base = bases[owner] ?? bases[1];
-      spawnStressSide(w, owner, base[0], base[1], count, (k) => STRESS_TYPES[k % STRESS_TYPES.length]);
+    // Player + 4 AIs in a 5-slice pie ring around the center.
+    for (let slice = 0; slice < STRESS_ARMY_COUNT; slice++) {
+      spawnStressPieSlice(w, slice, slice, count);
     }
     return w;
   }

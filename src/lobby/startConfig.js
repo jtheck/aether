@@ -1,5 +1,5 @@
 import { sameUserId } from './ids.js';
-import { getMode, mapTilesForField } from './modes.js';
+import { gardenUrlForChapter, getMode, mapTilesForField } from './modes.js';
 
 /**
  * Team id per owner index. Null = FFA (1v1). Adventure is one allied team.
@@ -71,6 +71,7 @@ export function liveConfigFromLobby(state, localUserId) {
     fog: true,
     fieldSize: state.settings?.fieldSize ?? '',
     chapter: state.settings?.chapter ?? '',
+    gardenUrl: gardenUrlForChapter(state.settings?.chapter),
     localSolo,
     inputDelayTicks: localSolo ? 0 : 1,
     ...vision,

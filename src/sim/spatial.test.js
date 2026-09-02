@@ -5,6 +5,7 @@ import { createField } from './field.js';
 import {
   ASTAR_PATH_BUDGET,
   LOS_PATH_BUDGET,
+  LOS_PATH_BUDGET_MAX,
   PATH_REQUEST,
   planPathBudget,
   queuePath,
@@ -122,7 +123,11 @@ function pathBudgetsAreHardLimits() {
   configurePathRequests(los, LOS_PATH_BUDGET + 904, PATH_REQUEST.LOS);
   planPathBudget(los, field, pinned);
   assert.equal(los.metrics.losAttempts, LOS_PATH_BUDGET);
-  planPathBudget(los, field, pinned);
+  let guard = 0;
+  while (los.pathRequest.subarray(0, los.count).some((v) => v !== PATH_REQUEST.NONE)) {
+    planPathBudget(los, field, pinned);
+    if (++guard > 32) throw new Error('LOS budget did not drain');
+  }
   assert.equal(los.metrics.losAttempts, LOS_PATH_BUDGET + 904);
   assert.equal(los.pathRequest.subarray(0, los.count).some((v) => v !== PATH_REQUEST.NONE), false);
 
@@ -132,6 +137,12 @@ function pathBudgetsAreHardLimits() {
   assert.equal(astar.metrics.astarSearches, ASTAR_PATH_BUDGET);
   planPathBudget(astar, field, pinned);
   assert.equal(astar.metrics.astarSearches, ASTAR_PATH_BUDGET + 4);
+
+  const mass = createWorld(4);
+  configurePathRequests(mass, LOS_PATH_BUDGET_MAX + 800, PATH_REQUEST.LOS);
+  planPathBudget(mass, field);
+  assert.ok(mass.metrics.losAttempts <= LOS_PATH_BUDGET_MAX);
+  assert.ok(mass.metrics.losAttempts >= LOS_PATH_BUDGET);
 }
 
 combatSpatialMatchesBrute();

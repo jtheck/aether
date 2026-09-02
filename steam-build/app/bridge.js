@@ -82,10 +82,35 @@
   }
 
   document.addEventListener('keydown', function (e) {
-    if (e.key !== 'F12') return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    postJson('/devtools/toggle', {});
+    if (e.key === 'F12') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      postJson('/devtools/toggle', {});
+      return;
+    }
+    if (e.key === 'F11') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      postJson('/window/toggle-fullscreen', {});
+      return;
+    }
+    if (e.key === 'F5') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      postJson('/window/reload', {});
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'r' || e.key === 'R')) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      postJson('/window/reload', { hard: e.shiftKey });
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'I' || e.key === 'i')) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      postJson('/devtools/toggle', {});
+    }
   }, true);
 
   function lockDocumentTitle() {
@@ -118,6 +143,28 @@
       try {
         if (typeof nw !== 'undefined' && nw.App) nw.App.quit();
       } catch (_err) { /* ignore */ }
+    },
+
+    isFullscreen: function () {
+      try {
+        var win = typeof nw !== 'undefined' && nw.Window ? nw.Window.get() : null;
+        return !!(win && (win.isFullscreen || win.fullscreen));
+      } catch (_err) {
+        return false;
+      }
+    },
+
+    leaveFullscreen: function () {
+      try {
+        var win = typeof nw !== 'undefined' && nw.Window ? nw.Window.get() : null;
+        if (win && (win.isFullscreen || win.fullscreen)) {
+          win.leaveFullscreen();
+          return Promise.resolve(true);
+        }
+      } catch (_err) { /* isolated page — fall through to the HTTP bridge */ }
+      return postJson('/window/leave-fullscreen', {}).then(function (data) {
+        return !!(data && data.ok);
+      });
     },
   };
 })();

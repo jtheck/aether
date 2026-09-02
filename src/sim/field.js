@@ -74,6 +74,9 @@ export function worldHalfFFromMap(mapW) {
   return (mapW * TILE_SIZE_F) / 2;
 }
 
+/** Stress play-camera box — a bit past the 9-chunk loading-screen clamp. */
+export const STRESS_CAMERA_HALF_F = worldHalfFFromMap(tilesForOddChunks(11));
+
 export function worldHalfFFromField(field) {
   return worldHalfFFromMap(field.width);
 }
@@ -149,6 +152,14 @@ const CARD_COST = fx.ONE;
  * Matches move slow ≈ 0.45 → path pays ~1/0.45 so detours can win.
  */
 export const SLOW_PATH_COST_MUL = fx.fromFloat(1 / 0.45);
+/**
+ * Extra A* edge cost when entering a non-tree tile (myco wander).
+ * Trees stay at CARD/DIAG so the octile heuristic stays admissible;
+ * open ground is expensive enough that a nearby grove wins a detour.
+ */
+export const TREE_SEEK_OPEN_MUL = fx.fromFloat(4);
+/** Matches scenery.SCENERY.TREE — field.js cannot import scenery (cycle). */
+const SCENERY_TREE = 1;
 
 /** Marching-squares case (0–15) → atlas cell index (matches v1 atlas art). */
 const CASE_TO_ATLAS = new Uint8Array([
@@ -231,6 +242,7 @@ export function fieldSnapshot(field) {
     width: field.width,
     height: field.height,
     worldHalfF: field.worldHalfF ?? worldHalfFFromField(field),
+    cameraHalfF: field.cameraHalfF > 0 ? field.cameraHalfF : 0,
     seed: field.seed,
     heightMap: field.heightMap.slice(),
     terrainTypes: field.terrainTypes.slice(),
@@ -319,6 +331,40 @@ export function isSlowTile(field, tx, tz) {
   return field.slowMask?.[tileKey(tx, tz)] !== 0;
 }
 
+/** Living tree (stock) or scenery tree mark — not farm/rock/table yellow. */
+export function isTreeTile(field, tx, tz) {
+  if (!inBounds(tx, tz)) return false;
+  const i = tileKey(tx, tz);
+  return (field.treeStock?.[i] | 0) > 0 || field.sceneryType?.[i] === SCENERY_TREE;
+}
+
+/** Count living-tree tiles on a Bresenham walk (same grid walk as lineClear). */
+export function countTreesAlongLine(field, x0, z0, x1, z1) {
+  let tx0 = worldToTile(x0);
+  let tz0 = worldToTile(z0);
+  const tx1 = worldToTile(x1);
+  const tz1 = worldToTile(z1);
+  let dx = Math.abs(tx1 - tx0);
+  let dz = Math.abs(tz1 - tz0);
+  const sx = tx0 < tx1 ? 1 : -1;
+  const sz = tz0 < tz1 ? 1 : -1;
+  let err = dx - dz;
+  let n = 0;
+  while (true) {
+    if (isTreeTile(field, tx0, tz0)) n++;
+    if (tx0 === tx1 && tz0 === tz1) return n;
+    const e2 = err << 1;
+    if (e2 > -dz) {
+      err -= dz;
+      tx0 += sx;
+    }
+    if (e2 < dx) {
+      err += dx;
+      tz0 += sz;
+    }
+  }
+}
+
 /** Apply a v1-compatible enabled/disabled chunk map to sim and render authority. */
 export function applyChunkMask(field, chunkMask, chunkSize = 16) {
   if (!field?.activeMask || !chunkMask || typeof chunkMask.get !== 'function') return;
@@ -388,7 +434,8 @@ export function lineClear(field, x0, z0, x1, z1, opts = null) {
  * Returns 0 if no path.
  *
  * @param {object} [opts]
- * @param {boolean} [opts.slowAware] — charge extra to enter slowMask tiles (rally / Drayage).
+ * @param {boolean} [opts.slowAware] — charge extra to enter slowMask tiles (rally / Drayage / monk).
+ * @param {boolean} [opts.treeSeek] — charge extra to enter non-tree tiles (myco wander).
  */
 // Reused A* scratch — sized for the largest supported board (stress), not default MAP_*.
 const ASTAR_CELLS = STRESS_MAP_W * STRESS_MAP_H;
@@ -417,6 +464,7 @@ function astarTouch(key) {
 
 export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null) {
   const slowAware = !!opts?.slowAware;
+  const treeSeek = !!opts?.treeSeek && !slowAware;
   let stx = worldToTile(sx);
   let stz = worldToTile(sy);
   let etx = worldToTile(ex);
@@ -451,8 +499,8 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
     return 1;
   }
 
-  // Geometric LOS shortcut — skip when costing slow tiles (trees are "clear" but expensive).
-  if (!slowAware && lineClear(field, startX, startY, ex, ey)) {
+  // Geometric LOS shortcut — skip when costing slow / preferring trees.
+  if (!slowAware && !treeSeek && lineClear(field, startX, startY, ex, ey)) {
     wx[0] = ex;
     wy[0] = ey;
     return 1;
@@ -529,6 +577,8 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
       let step = neighbors[n][2];
       if (slowAware && isSlowTile(field, nx, nz)) {
         step = fx.mul(step, SLOW_PATH_COST_MUL);
+      } else if (treeSeek && !isTreeTile(field, nx, nz)) {
+        step = fx.mul(step, TREE_SEEK_OPEN_MUL);
       }
       const tentative = (gHere + step) | 0;
       if (_gScore[nKey] !== -1 && tentative >= _gScore[nKey]) continue;
@@ -562,7 +612,7 @@ export function findPath(field, sx, sy, ex, ey, wx, wy, maxWp = 32, opts = null)
     maxWp,
     reachedGoal,
     field,
-    slowAware,
+    opts,
   );
 }
 
@@ -593,9 +643,11 @@ function buildWaypoints(
   maxWp,
   reachedGoal,
   field,
-  slowAware = false,
+  pathOpts = null,
 ) {
   const W = field.width;
+  const slowAware = !!pathOpts?.slowAware;
+  const treeSeek = !!pathOpts?.treeSeek && !slowAware;
   const pullOpts = slowAware ? { avoidSlow: true } : null;
   // Collect end→start keys.
   let raw = 0;
@@ -628,6 +680,15 @@ function buildWaypoints(
     return tileCenterY((key / W) | 0);
   };
 
+  const treesOnPath = (from, to) => {
+    let n = 0;
+    for (let k = from; k <= to; k++) {
+      const key = _tilePath[k];
+      if (isTreeTile(field, key % W, (key / W) | 0)) n++;
+    }
+    return n;
+  };
+
   let out = 0;
   let ax = startX;
   let ay = startY;
@@ -635,10 +696,12 @@ function buildWaypoints(
   while (i < nPts && out < maxWp) {
     let best = i;
     for (let j = nPts - 1; j > i; j--) {
-      if (lineClear(field, ax, ay, ptX(j), ptY(j), pullOpts)) {
-        best = j;
-        break;
+      if (!lineClear(field, ax, ay, ptX(j), ptY(j), pullOpts)) continue;
+      if (treeSeek && countTreesAlongLine(field, ax, ay, ptX(j), ptY(j)) < treesOnPath(i, j)) {
+        continue;
       }
+      best = j;
+      break;
     }
     wx[out] = ptX(best);
     wy[out] = ptY(best);

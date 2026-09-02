@@ -14,6 +14,7 @@ import {
   RESEARCH_TICKS,
   VILLAGE_VILLAGER_TICKS,
   buildingLocalToWorld,
+  stampUnitRallyHops,
 } from './buildings.js';
 import { grantTech, ownerHasTech, TECH } from './tech.js';
 
@@ -78,6 +79,7 @@ function spawnTrainedUnit(w, field, b, unitType) {
       !flyer && ownerHasTech(w, b.owner | 0, TECH.DRAYAGE);
     queuePath(w, i, rx, rz, slowAware ? { slowAware: true } : null);
   }
+  stampUnitRallyHops(w, i, b);
 }
 
 /** Completed villages trickle a free villager; half speed at/over the soft cap. */

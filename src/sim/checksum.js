@@ -54,6 +54,15 @@ export function checksum(w, field = null) {
     mix(w.navWpIndex[i]);
     mix(w.pathRequest[i]);
     if (w.pathSlowAware) mix(w.pathSlowAware[i]);
+    if (w.rallyHopCount) {
+      mix(w.rallyHopCount[i]);
+      mix(w.rallyHop1X[i]);
+      mix(w.rallyHop1Y[i]);
+      mix(w.rallyHop1Order[i]);
+      mix(w.rallyHop2X[i]);
+      mix(w.rallyHop2Y[i]);
+      mix(w.rallyHop2Order[i]);
+    }
     mix(w.navDestX[i]);
     mix(w.navDestY[i]);
     mix(w.attackCd[i]);
@@ -103,6 +112,7 @@ export function checksum(w, field = null) {
   }
   mix(w.kothMatchOver ?? 0);
   mix(w.matchWinner ?? -1);
+  mix(w.agoraOccupyEndsMatch ?? 1);
   h = mixKothChecksum(h, mix, w.koth);
   h = mixAgoraChecksum(h, mix, w.agoras);
   h = mixBuildingChecksum(h, mix, w.buildings);

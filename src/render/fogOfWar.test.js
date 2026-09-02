@@ -256,6 +256,29 @@ describe('fogOfWar vision union', () => {
     assert.equal(fog.hidesHostile(1, 8 + 48, 0), true);
     assert.equal(fog.overlayAlphaAt(8 + 48, 0), 255);
   });
+
+  it('keeps two distant blobs correct when the AABB is most of the board', () => {
+    const field = fakeField(80, 80);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const units = [];
+    for (let i = 0; i < 16; i++) {
+      units.push({ owner: 0, type: UNIT.VILLAGER, x: -140 + (i % 4) * 4, z: -140 + ((i / 4) | 0) * 4 });
+      units.push({ owner: 0, type: UNIT.VILLAGER, x: 140 + (i % 4) * 4, z: 140 + ((i / 4) | 0) * 4 });
+    }
+    fog.stamp({
+      world: fakeWorld(units),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(-140, -140), true);
+    assert.equal(fog.isWorldVisible(140, 140), true);
+    assert.equal(fog.hidesHostile(1, 0, 0), true);
+    assert.equal(fog.isWorldSight(0, 0), false);
+  });
 });
 
 describe('fogOfWar stacked stamps', () => {

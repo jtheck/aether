@@ -31,6 +31,18 @@ export function formatMatchTime(totalSec) {
   return `${h}:${String(rm).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
+/** Top-bar clock — grows `S` → `M:SS` → `H:MM:SS`. */
+export function formatHudMatchClock(totalSec) {
+  const s = Math.max(0, Math.floor(totalSec));
+  if (s < 60) return `${s}`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  if (m < 60) return `${m}:${String(r).padStart(2, '0')}`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h}:${String(rm).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+}
+
 export class SimSession {
   /**
    * @param {object} options
@@ -123,6 +135,8 @@ export class SimSession {
     this.onTechChanged = null;
     /** Fired when owner resource banks change. */
     this.onResourcesChanged = null;
+    /** Fired when a haul return lost income to a full bank. */
+    this.onStorageOverflow = null;
     /** Tile field snapshot from worker (tree stock/burn mutate in place). */
     this.field = null;
     /** @type {Array<{ tiles: Uint32Array, stock: Uint8Array, burn: Uint8Array }> | null} */
@@ -244,7 +258,7 @@ export class SimSession {
   }
 
   _drainPendingCommits() {
-    if (this.pauseLockstep) return;
+    if (this.pauseLockstep || this.resetting || this.replayingCatchUp) return;
     while (this.simAcc >= TICK_MS && !this.waitingForWorker) {
       this.simAcc -= TICK_MS;
       if (!this._tryCommitNextTick()) break;
@@ -565,6 +579,7 @@ export class SimSession {
         this.buildings = extra.buildings;
         if (extra.buildingsChanged) this.onBuildingsChanged?.(this.buildings);
       }
+      if (extra?.agoras) this.agoras = extra.agoras;
       if (extra?.tech) {
         this.tech = extra.tech;
         if (extra.techChanged) this.onTechChanged?.(this.tech);
@@ -573,6 +588,7 @@ export class SimSession {
         this.resources = extra.resources;
         if (extra.resourcesChanged) this.onResourcesChanged?.(this.resources);
       }
+      if (extra?.storageOverflow?.length) this.onStorageOverflow?.(extra.storageOverflow);
       if (extra?.metrics) {
         this.simMetrics = extra.metrics;
         const timing = extra.metrics.timing;

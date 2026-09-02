@@ -2,7 +2,7 @@
 
 import * as fx from './fixed.js';
 import { findPath, lineClear, worldToTile, TILE } from './field.js';
-import { getUnitDef, isFlyer } from './unitTypes.js';
+import { getUnitDef, isFlyer, unitAvoidsSlow } from './unitTypes.js';
 import { ORDER } from './world.js';
 import { effectiveAttackRange, engagementPoint } from './engagement.js';
 import {
@@ -24,7 +24,15 @@ export const PATH_REQUEST = {
   LOS: 1,
   ASTAR: 2,
 };
-export const LOS_PATH_BUDGET = 1024;
+/** Stored on world.pathSlowAware (0/1/2). Geometric vs cost-aware A*. */
+export const PATH_STYLE = {
+  GEOMETRIC: 0,
+  SLOW_AWARE: 1,
+  TREE_SEEK: 2,
+};
+/** Floor / hard cap when auto-scaling LOS. Never drain a 5k queue in one tick. */
+export const LOS_PATH_BUDGET = 256;
+export const LOS_PATH_BUDGET_MAX = 1024;
 export const ASTAR_PATH_BUDGET = 4;
 /** Soft ceiling when auto-scaling A* for mass move backlogs. */
 export const ASTAR_PATH_BUDGET_MAX = 128;
@@ -92,7 +100,7 @@ export function attackStandPoint(w, i, target) {
  * @param {number} i
  * @param {number} destX
  * @param {number} destY
- * @param {{ slowAware?: boolean }} [opts]
+ * @param {{ slowAware?: boolean, treeSeek?: boolean }} [opts]
  */
 export function queuePath(w, i, destX, destY, opts = null) {
   w.navDestX[i] = destX;
@@ -100,10 +108,22 @@ export function queuePath(w, i, destX, destY, opts = null) {
   w.repathCount[i] = 0;
   w.stuckTicks[i] = 0;
   clearPath(w, i);
-  const slowAware = !!opts?.slowAware;
-  if (w.pathSlowAware) w.pathSlowAware[i] = slowAware ? 1 : 0;
-  // Slow-aware skips LOS shortcut (trees are passable but expensive).
-  w.pathRequest[i] = slowAware ? PATH_REQUEST.ASTAR : PATH_REQUEST.LOS;
+  let style = PATH_STYLE.GEOMETRIC;
+  if (opts?.treeSeek) style = PATH_STYLE.TREE_SEEK;
+  else if (opts?.slowAware || unitAvoidsSlow(w.type[i])) style = PATH_STYLE.SLOW_AWARE;
+  if (w.pathSlowAware) w.pathSlowAware[i] = style;
+  // Cost-aware styles skip LOS (trees are passable but priced).
+  w.pathRequest[i] = style === PATH_STYLE.GEOMETRIC ? PATH_REQUEST.LOS : PATH_REQUEST.ASTAR;
+}
+
+export function pathStyleOf(w, i) {
+  return w.pathSlowAware?.[i] | 0;
+}
+
+function findPathOptsForStyle(style) {
+  if (style === PATH_STYLE.SLOW_AWARE) return { slowAware: true };
+  if (style === PATH_STYLE.TREE_SEEK) return { treeSeek: true };
+  return null;
 }
 
 /** One straight-line waypoint if LOS is clear (always for flyers). */
@@ -134,14 +154,14 @@ function setSingleWaypoint(w, i, x, y) {
 export function planPath(w, field, i, destX, destY, forceAstar = false) {
   w.navDestX[i] = destX;
   w.navDestY[i] = destY;
-  const slowAware = !!w.pathSlowAware?.[i];
+  const style = pathStyleOf(w, i);
   // Air units fly straight — never A* around ground blockers.
   if (isFlyer(w.type[i])) {
     setSingleWaypoint(w, i, destX, destY);
     w.stuckTicks[i] = 0;
     return;
   }
-  if (!forceAstar && !slowAware && tryQuickPath(w, field, i)) {
+  if (!forceAstar && style === PATH_STYLE.GEOMETRIC && tryQuickPath(w, field, i)) {
     w.stuckTicks[i] = 0;
     return;
   }
@@ -156,7 +176,7 @@ export function planPath(w, field, i, destX, destY, forceAstar = false) {
     w.navWx.subarray(base, base + MAX_WAYPOINTS),
     w.navWy.subarray(base, base + MAX_WAYPOINTS),
     MAX_WAYPOINTS,
-    slowAware ? { slowAware: true } : null,
+    findPathOptsForStyle(style),
   );
   w.stuckTicks[i] = 0;
   if (count > 0) {
@@ -179,12 +199,16 @@ function countPathRequests(w, requestType) {
 
 /**
  * Spread path work across ticks so mass move orders don't spike CPU.
- * When limits are omitted, scale with the pending backlog: LOS is cheap so the
- * whole queue clears in one tick; A* rises with demand up to ASTAR_PATH_BUDGET_MAX.
+ * When limits are omitted, both LOS and A* scale with the pending backlog and
+ * cap at *_MAX. Units already slide toward dest while a request is queued.
  * Pass explicit `{ losLimit, astarLimit }` to pin hard caps (tests / determinism).
  */
 export function planPathBudget(w, field, opts = {}) {
-  const losLimit = opts.losLimit ?? Math.max(LOS_PATH_BUDGET, countPathRequests(w, PATH_REQUEST.LOS));
+  const pendingLos = opts.losLimit == null ? countPathRequests(w, PATH_REQUEST.LOS) : 0;
+  const losLimit = opts.losLimit ?? Math.min(
+    LOS_PATH_BUDGET_MAX,
+    Math.max(LOS_PATH_BUDGET, Math.ceil(pendingLos / 2)),
+  );
   const pendingAstar = opts.astarLimit == null ? countPathRequests(w, PATH_REQUEST.ASTAR) : 0;
   const astarLimit = opts.astarLimit ?? Math.min(
     ASTAR_PATH_BUDGET_MAX,
@@ -302,8 +326,15 @@ export function ensurePath(w, field, i) {
     w.repathCount[i] < MAX_REPATHS &&
     w.pathRequest[i] === PATH_REQUEST.NONE
   ) {
-    w.pathRequest[i] = PATH_REQUEST.LOS;
+    w.pathRequest[i] = nextPathRequest(w, i);
   }
+}
+
+function nextPathRequest(w, i) {
+  if (pathStyleOf(w, i) !== PATH_STYLE.GEOMETRIC || w.stuckTicks[i] > 10) {
+    return PATH_REQUEST.ASTAR;
+  }
+  return PATH_REQUEST.LOS;
 }
 
 /** Current movement goal — waypoint or final destination. Returns { x, y } fixed. */
@@ -319,8 +350,7 @@ export function movementGoal(w, field, i) {
       w.navDestX[i] = stand.x;
       w.navDestY[i] = stand.y;
       if (w.navWpCount[i] === 0 && w.pathRequest[i] === PATH_REQUEST.NONE) {
-        w.pathRequest[i] =
-          w.stuckTicks[i] > 10 ? PATH_REQUEST.ASTAR : PATH_REQUEST.LOS;
+        w.pathRequest[i] = nextPathRequest(w, i);
       }
     }
   } else if (w.order[i] === ORDER.ATTACK && (w.targetBuilding?.[i] ?? -1) >= 0) {
@@ -334,8 +364,7 @@ export function movementGoal(w, field, i) {
       w.navDestX[i] = stand.x;
       w.navDestY[i] = stand.y;
       if (w.navWpCount[i] === 0 && w.pathRequest[i] === PATH_REQUEST.NONE) {
-        w.pathRequest[i] =
-          w.stuckTicks[i] > 10 ? PATH_REQUEST.ASTAR : PATH_REQUEST.LOS;
+        w.pathRequest[i] = nextPathRequest(w, i);
       }
     }
   } else if (needsPath(w, i)) {

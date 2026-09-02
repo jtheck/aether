@@ -1,10 +1,10 @@
 // Web Worker — deterministic sim authority (one commitTick = one lockstep step).
 
-import { buildField, fieldSnapshot, mapSizeForConfig, TILE_SIZE_F } from '../sim/field.js';
+import { buildField, fieldSnapshot, mapSizeForConfig, STRESS_CAMERA_HALF_F, TILE_SIZE_F } from '../sim/field.js';
 import { applyTableSilhouette } from '../sim/tableShape.js';
 import { populateScenery } from '../sim/scenery.js';
 import { applyGardenPlacements, decodeGarden, fieldFromGarden } from '../sim/garden.js';
-import { buildWorldFromConfig, spawnBases } from '../sim/worldSetup.js';
+import { buildWorldFromConfig, spawnBases, stressReservedPoints } from '../sim/worldSetup.js';
 import { step } from '../sim/step.js';
 import { excludeHumanAiPlayers, generateAiCommands } from '../sim/ai.js';
 import { generateEconomyCommands } from '../sim/aiEconomy.js';
@@ -14,6 +14,7 @@ import { serializeAgoras } from '../sim/agora.js';
 import { serializeBuildings, applyWorldStructureOccupancy } from '../sim/buildings.js';
 import { serializeTech } from '../sim/tech.js';
 import { serializeResources } from '../sim/resources.js';
+import { takeStorageOverflow } from '../sim/storage.js';
 import { takeTreeUpdates } from '../sim/trees.js';
 import { takeRockUpdates } from '../sim/scenery.js';
 import { takeFireZoneUpdates } from '../sim/fireZones.js';
@@ -96,11 +97,18 @@ self.onmessage = (e) => {
       field = garden
         ? fieldFromGarden(msg.config.garden)
         : buildField(msg.config.seed, { width: size.mapW, height: size.mapH });
+      if (!garden && (msg.config.stressPerSide | 0) > 0) {
+        field.cameraHalfF = STRESS_CAMERA_HALF_F;
+      }
       world = buildWorldFromConfig({
         ...msg.config,
         mapW: field.width,
         mapH: field.height,
-        skipDefaultSpawns: !!(garden?.units?.length),
+        skipDefaultSpawns: !!(
+          msg.config.skipDefaultSpawns
+          || garden?.units?.length
+          || garden?.story
+        ),
       });
       // Stress / explicit flag — timing never feeds gameplay.
       world.profileSim = msg.config.profileSim === true
@@ -116,6 +124,9 @@ self.onmessage = (e) => {
           laneBases: !!msg.config.laneBases,
           mapW: field.width,
         });
+        if ((msg.config.stressPerSide | 0) > 0) {
+          reserved.push(...stressReservedPoints(field.worldHalfF));
+        }
         if (garden) {
           const half = field.worldHalfF;
           for (const u of garden.units) {
@@ -190,6 +201,7 @@ self.onmessage = (e) => {
       if (world.techDirty) world.techDirty = 0;
       const resourcesChanged = !!world.resourcesDirty;
       if (world.resourcesDirty) world.resourcesDirty = 0;
+      const storageOverflow = takeStorageOverflow(world);
       const metrics = { ...world.metrics };
       if (world.profileSim) {
         metrics.timing = {
@@ -210,10 +222,12 @@ self.onmessage = (e) => {
         koth: serializeKoth(world.koth),
         buildings: serializeBuildings(world.buildings),
         buildingsChanged,
+        agoras: serializeAgoras(world.agoras),
         tech: serializeTech(world),
         techChanged,
         resources: serializeResources(world),
         resourcesChanged,
+        storageOverflow,
         treeUpdates,
         rockUpdates,
         fireZoneUpdates,

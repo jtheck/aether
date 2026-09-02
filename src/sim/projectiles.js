@@ -26,6 +26,7 @@ import {
   applyFrost,
   applyShadowDot,
   LOCUST_DISTRACT_TICKS,
+  spreadLocust,
 } from './combatStatus.js';
 import { applyDistract } from './frogs.js';
 import { pushSporeHeadFx, queueTreeSeedAt } from './sporeBloom.js';
@@ -230,20 +231,39 @@ function projectileBuildingDamage(def, buildingType, amount) {
   return amount | 0;
 }
 
-function hitBuilding(w, field, bi, def, amount) {
+function hitBuilding(w, field, bi, def, amount, source = -1, owner = 0) {
   const b = w.buildings?.[bi];
-  return applyDamageBuilding(
+  const dealt = applyDamageBuilding(
     w,
     field,
     bi,
     projectileBuildingDamage(def, b?.type, amount),
   );
+  if (dealt > 0 && def.appliesLocustDot) {
+    spreadLocust(w, {
+      owner,
+      source,
+      x: b.x,
+      y: b.z,
+      building: bi,
+    });
+  }
+  return dealt;
 }
 
 function hitEntity(w, store, slot, def, entity, field) {
   const wasAlive = !!w.alive[entity];
   applyDamage(w, entity, store.damage[slot], store.source[slot]);
   applyHitEffects(w, def, entity, store.source[slot]);
+  if (def.appliesLocustDot && w.alive[entity]) {
+    spreadLocust(w, {
+      owner: store.owner[slot],
+      source: store.source[slot],
+      x: w.px[entity],
+      y: w.py[entity],
+      unit: entity,
+    });
+  }
   if (def.growsHeadMushroom) {
     const killed = wasAlive && !w.alive[entity];
     pushSporeHeadFx(w, entity, w.px[entity], w.py[entity], killed);
@@ -445,7 +465,7 @@ export function projectileSystem(w, field) {
       } else if (buildingAlive) {
         const reach = def.hitRadius + buildingFootprintHalf(b.type);
         if (fx.dist2(nextX, nextY, b.x, b.z) <= fx.mul(reach, reach)) {
-          hitBuilding(w, field, bi, def, store.damage[slot]);
+          hitBuilding(w, field, bi, def, store.damage[slot], store.source[slot], store.owner[slot]);
           store.hitCount[slot]++;
           if (store.hitCount[slot] >= def.pierce) {
             freeProjectile(w, slot, PROJECTILE_DESPAWN.HIT);
@@ -467,7 +487,7 @@ export function projectileSystem(w, field) {
         freeProjectile(w, slot, hit ? PROJECTILE_DESPAWN.HIT : PROJECTILE_DESPAWN.MISS);
       } else {
         if (buildingAlive && store.hitCount[slot] === 0 && reachedAim) {
-          hitBuilding(w, field, bi, def, store.damage[slot]);
+          hitBuilding(w, field, bi, def, store.damage[slot], store.source[slot], store.owner[slot]);
           store.hitCount[slot]++;
         }
         const hadHit = store.hitCount[slot] > 0;

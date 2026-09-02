@@ -138,8 +138,16 @@ export function createWorld(seed) {
     navWpCount: new Uint8Array(MAX_ENTITIES),
     navWpIndex: new Uint8Array(MAX_ENTITIES),
     pathRequest: new Uint8Array(MAX_ENTITIES),
-    /** 1 = use slow-aware A* for this entity's path requests (rally / Drayage). */
+    /** PATH_STYLE: 0 geometric, 1 slow-aware (rally / Drayage / monk / engineer), 2 tree-seek (myco wander). */
     pathSlowAware: new Uint8Array(MAX_ENTITIES),
+    /** Remaining extra rally hops after the current dest (trained units). */
+    rallyHopCount: new Uint8Array(MAX_ENTITIES),
+    rallyHop1X: new Int32Array(MAX_ENTITIES),
+    rallyHop1Y: new Int32Array(MAX_ENTITIES),
+    rallyHop1Order: new Uint8Array(MAX_ENTITIES),
+    rallyHop2X: new Int32Array(MAX_ENTITIES),
+    rallyHop2Y: new Int32Array(MAX_ENTITIES),
+    rallyHop2Order: new Uint8Array(MAX_ENTITIES),
     navWx: new Int32Array(MAX_ENTITIES * MAX_WAYPOINTS),
     navWy: new Int32Array(MAX_ENTITIES * MAX_WAYPOINTS),
     stuckTicks: new Uint8Array(MAX_ENTITIES),
@@ -170,6 +178,12 @@ export function createWorld(seed) {
     dotPeriod: new Int16Array(MAX_ENTITIES),
     dotAcc: new Int16Array(MAX_ENTITIES),
     dotSource: new Int32Array(MAX_ENTITIES),
+    /** Stacking shaman locust chew. */
+    locustTicks: new Int16Array(MAX_ENTITIES),
+    locustStacks: new Int16Array(MAX_ENTITIES),
+    locustAcc: new Int16Array(MAX_ENTITIES),
+    locustHops: new Int16Array(MAX_ENTITIES),
+    locustSource: new Int32Array(MAX_ENTITIES).fill(-1),
     /** Wizard frost slow remaining ticks. */
     frostTicks: new Int16Array(MAX_ENTITIES),
     /** Monk stick-bonk lob: ticks remaining in air (0 = grounded). */
@@ -237,6 +251,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.navWpIndex[i] = 0;
   w.pathRequest[i] = 0;
   if (w.pathSlowAware) w.pathSlowAware[i] = 0;
+  if (w.rallyHopCount) w.rallyHopCount[i] = 0;
   w.navDestX[i] = x;
   w.navDestY[i] = y;
   w.stuckTicks[i] = 0;
@@ -253,6 +268,13 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.dotPeriod[i] = 0;
   w.dotAcc[i] = 0;
   w.dotSource[i] = -1;
+  if (w.locustTicks) {
+    w.locustTicks[i] = 0;
+    w.locustStacks[i] = 0;
+    w.locustAcc[i] = 0;
+    w.locustHops[i] = 0;
+    w.locustSource[i] = -1;
+  }
   w.frostTicks[i] = 0;
   w.lobTicks[i] = 0;
   w.lobDur[i] = 0;

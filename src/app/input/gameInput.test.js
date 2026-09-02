@@ -4,6 +4,7 @@ import {
   boxSelectWinner,
   inspectForeignOnClick,
   mergeBuildingSels,
+  placementTapKind,
   radialClickKind,
   radialHubFramedBuilding,
   screenPosInRect,
@@ -44,6 +45,15 @@ describe('building multi / box select helpers', () => {
     assert.equal(radialClickKind({ picked: false, onHub: true, onChrome: true }), 'hub');
     assert.equal(radialClickKind({ picked: false, onHub: false, onChrome: true }), 'chrome');
     assert.equal(radialClickKind({ picked: false, onHub: false, onChrome: false }), 'world');
+  });
+
+  it('agora tap while placing exits; option / chrome / ground stay as they are', () => {
+    assert.equal(placementTapKind('pick', null), 'pick');
+    assert.equal(placementTapKind('hub', null), 'exit');
+    assert.equal(placementTapKind('chrome', { kind: 'agora' }), 'chrome');
+    assert.equal(placementTapKind('world', { kind: 'agora' }), 'exit');
+    assert.equal(placementTapKind('world', { kind: 'building' }), 'confirm');
+    assert.equal(placementTapKind('world', null), 'confirm');
   });
 
   it('hub miss still picks the framed building', () => {

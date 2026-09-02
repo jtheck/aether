@@ -1,4 +1,5 @@
-// Local RTS control groups — coloured side pads assign on hold, select on click.
+// Local RTS control groups — coloured side pads assign on hold, select on
+// click, jump the camera on a second tap of the same pad / number key.
 // Entity indices are stable within a match (spawn is append-only); a new world
 // must call clearControlGroups() so stale ids cannot select the next match.
 
@@ -7,6 +8,8 @@ import { isBuildingAlive } from '../../sim/buildings.js';
 export const CONTROL_GROUP_COUNT = 6;
 /** Hold this long on a pad to assign the current selection (click selects). */
 export const CONTROL_GROUP_HOLD_MS = 400;
+/** Second tap of the same group within this window centers the camera. */
+export const CONTROL_GROUP_DOUBLE_MS = 350;
 
 const KEY_TO_GROUP = {
   Digit1: 0, Numpad1: 0,
@@ -89,4 +92,15 @@ export function livingControlGroup(group, world, localPlayerId, buildings, agora
 
 export function controlGroupFilled(members) {
   return (members?.units?.length ?? 0) > 0 || (members?.buildings?.length ?? 0) > 0;
+}
+
+/**
+ * Same pad / number key again inside the double-tap window.
+ * @param {{ id: number, t: number } | null | undefined} prev
+ * @param {number} id
+ * @param {number} now
+ * @param {number} [windowMs]
+ */
+export function isControlGroupDoubleTap(prev, id, now, windowMs = CONTROL_GROUP_DOUBLE_MS) {
+  return !!prev && prev.id === id && now - prev.t <= windowMs;
 }

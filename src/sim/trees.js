@@ -194,6 +194,16 @@ export function applyTreeSplash(field, impactX, impactY, radius) {
   return hit;
 }
 
+/**
+ * Remaining interval chips will consume this stock before the timer expires.
+ * Fireball-lit trees are always in this bucket with current burn timings.
+ */
+export function treeBurnsToDeath(stock, burn) {
+  if (stock <= 0 || burn <= 0) return false;
+  const hits = Math.floor((burn - 1) / TREE_BURN_DAMAGE_INTERVAL);
+  return hits * TREE_BURN_DAMAGE >= stock;
+}
+
 /** Advance burning trees; depletes stock on a fixed cadence. */
 export function treeBurnSystem(field) {
   ensureTreeArrays(field);

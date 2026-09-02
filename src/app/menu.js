@@ -18,6 +18,7 @@ import {
   setShadowMode,
   shadowTier,
 } from './settings.js';
+import { escapeMenuStep, isPageFullscreen, subscribeFullscreen, tryExitFullscreen } from './fullscreen.js';
 
 /**
  * @param {object} opts
@@ -30,9 +31,10 @@ import {
  * }} opts.renderer
  * @param {() => unknown} [opts.onStartSoloAi]
  * @param {() => unknown} [opts.onStartUnitTester]
+ * @param {() => unknown} [opts.onStartStressful]
  * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
  */
-export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayerColorChange }) {
+export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartStressful, onPlayerColorChange }) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload.
   const bootMode = resolveShadowMode();
@@ -63,6 +65,7 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
   );
   const soloBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#solo_ai_b'));
   const testerBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#unit_tester_b'));
+  const stressBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#stressful_b'));
   const menuKothStart = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-start'));
   const menuKothClaim = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-claim'));
   const menuKothLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-leave'));
@@ -71,6 +74,10 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
   const menuMatchLeave = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-match-leave'));
   const lobbyDrawerToggles = [...drawer.querySelectorAll('.lobby-drawer-toggle, .lobby-create')];
   const gear = /** @type {HTMLElement} */ (drawer.querySelector('#settings_b'));
+  const graffiti = /** @type {HTMLElement | null} */ (
+    document.getElementById('graffiti_b') || document.querySelector('#header img')
+  );
+  const exitBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#fullscreen_exit_b'));
 
   function showPage(name) {
     for (const page of pages) page.classList.toggle('is-active', page.dataset.page === name);
@@ -154,10 +161,21 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
     }
   });
 
+  stressBtn?.addEventListener('click', async () => {
+    if (!onStartStressful || stressBtn.disabled) return;
+    stressBtn.disabled = true;
+    setOpen(false);
+    try {
+      await onStartStressful();
+    } finally {
+      stressBtn.disabled = false;
+    }
+  });
+
   // The camera and hotkeys listen on window with no target check, so typing a
   // name would otherwise pan the board and trip B/G/H.
   const keyStop = [
-    nameInput, colorPicker, extraGroups, slider, fxSlider, soloBtn, testerBtn,
+    nameInput, colorPicker, extraGroups, slider, fxSlider, soloBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
     menuMatchReady, menuMatchStart, menuMatchLeave,
     ...lobbyDrawerToggles,
@@ -168,7 +186,7 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
   }
 
   function syncFromState() {
-    // B / F toggle outside the menu; reflect that rather than fighting it.
+    // N / X toggle outside the menu; reflect that rather than fighting it.
     const mode = renderer.getShadowsEnabled?.() === false ? 0 : getShadowMode();
     slider.value = String(mode);
     paintShadow(mode);
@@ -184,6 +202,14 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
     paintProfile();
   }
 
+  function isOpen() {
+    return drawer.classList.contains('is-open');
+  }
+
+  function activePage() {
+    return drawer.querySelector('.page.is-active')?.dataset.page ?? 'main';
+  }
+
   function setOpen(open) {
     drawer.classList.toggle('is-open', open);
     button.classList.toggle('is-open', open);
@@ -194,30 +220,79 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onPlayer
     if (open) syncFromState();
   }
 
-  button.addEventListener('click', () => setOpen(!drawer.classList.contains('is-open')));
+  function openMain() {
+    showPage('main');
+    setOpen(true);
+  }
+
+  function paintExit(on = isPageFullscreen()) {
+    if (!exitBtn) return;
+    exitBtn.hidden = !on;
+  }
+
+  button.addEventListener('click', () => setOpen(!isOpen()));
   button.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       button.click();
     }
   });
+  graffiti?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openMain();
+  });
+  graffiti?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openMain();
+    }
+  });
   gear.addEventListener('click', () => {
-    const onSettings = drawer.querySelector('.page.is-active')?.dataset.page === 'settings';
+    const onSettings = activePage() === 'settings';
     showPage(onSettings ? 'main' : 'settings');
     if (!onSettings) syncFromState();
   });
+  exitBtn?.addEventListener('click', async () => {
+    await tryExitFullscreen();
+    paintExit();
+  });
+
+  const unsubFullscreen = subscribeFullscreen(paintExit);
 
   syncFromState();
 
   return {
     open: () => setOpen(true),
     close: () => setOpen(false),
+    openMain,
+    isOpen,
+    /** Escape: open menu → settings → try leave F11 / fullscreen. */
+    async handleEscape() {
+      if (button.hidden) return false;
+      const step = escapeMenuStep({ menuOpen: isOpen(), page: activePage() });
+      if (step === 'open-menu') {
+        openMain();
+        return true;
+      }
+      if (step === 'open-settings') {
+        showPage('settings');
+        syncFromState();
+        return true;
+      }
+      const left = await tryExitFullscreen();
+      paintExit();
+      return left;
+    },
     /** Keep the sliders honest when B/F toggle outside the menu. */
     refresh: syncFromState,
     /** Show/hide the menu button; closes the drawer when locking. */
     setAvailable(on) {
       button.hidden = !on;
       if (!on) setOpen(false);
+    },
+    dispose() {
+      unsubFullscreen?.();
     },
   };
 }

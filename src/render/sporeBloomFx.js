@@ -1,7 +1,7 @@
 // Render-only Spore Bloom FX.
 // Stage order: inky drips → colorful seed wisps → trees shrink → mushrooms → trees.
 
-import { SPORE_SEED_ARC_HALF } from '../sim/sporeBloom.js';
+import { SPORE_DRIP_FOUNTAIN, SPORE_SEED_ARC_HALF } from '../sim/sporeBloom.js';
 
 /**
  * @param {(init: object) => unknown} emit
@@ -110,16 +110,22 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
     }
   }
 
-  function queueTreeDrips(worldX, worldZ) {
+  function queueTreeDrips(worldX, worldZ, kind = 0) {
+    const fountain = kind === SPORE_DRIP_FOUNTAIN;
     drips.push({
       x: worldX,
       z: worldZ,
       age: 0,
-      life: DRIP_LIFE,
-      emitAcc: 0.04,
+      life: fountain ? 1.85 : DRIP_LIFE,
+      emitAcc: fountain ? 0 : 0.04,
       dropped: 0,
-      budget: 10 + Math.floor(Math.random() * 5),
+      budget: fountain ? 48 + Math.floor(Math.random() * 16) : 10 + Math.floor(Math.random() * 5),
+      fountain,
     });
+    if (fountain) {
+      const gy = groundYAt(worldX, worldZ);
+      for (let n = 0; n < 22; n++) emitFountainDroplet(worldX, worldZ, gy);
+    }
   }
 
   /**
@@ -155,16 +161,65 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
     });
   }
 
+  /** Tall ink jet: shoot up from the body, then fall as drips. */
+  function emitFountainDroplet(x, z, gy) {
+    const ang = Math.random() * Math.PI * 2;
+    const rad = Math.random() * 0.38;
+    const ox = Math.cos(ang) * rad;
+    const oz = Math.sin(ang) * rad;
+    const peak = 0.48 + Math.random() * 0.38;
+    if (Math.random() > 0.28) {
+      const vy = 18 + Math.random() * 16;
+      emit({
+        blend: 'alpha',
+        hard: true,
+        fadeOut: false,
+        killY: gy - 2.5,
+        position: [x + ox, gy + 0.4 + Math.random() * 1.3, z + oz],
+        velocity: [ox * 2.2, vy, oz * 2.2],
+        gravity: [0, -16 - Math.random() * 8, 0],
+        color: [0, 0, 0, 1],
+        hangTime: 0,
+        lifetime: 2.6,
+        startSize: 0.16 + Math.random() * 0.14,
+        peakSize: peak,
+        endSize: peak,
+        drag: 0.12,
+      });
+      return;
+    }
+    const hang = 0.18 + Math.random() * 0.28;
+    emit({
+      blend: 'alpha',
+      hard: true,
+      fadeOut: false,
+      killY: gy - 2.5,
+      position: [x + ox * 0.55, gy + 8 + Math.random() * 8, z + oz * 0.55],
+      velocity: [0, -0.12 - Math.random() * 0.18, 0],
+      gravity: [0, -22 - Math.random() * 10, 0],
+      color: [0, 0, 0, 1],
+      hangTime: hang,
+      lifetime: hang + 2.6,
+      startSize: 0.18 + Math.random() * 0.14,
+      peakSize: peak,
+      endSize: peak,
+      drag: 0.08,
+    });
+  }
+
   function updateDrips(dt) {
     for (let i = drips.length - 1; i >= 0; i--) {
       const d = drips[i];
       d.age += dt;
       d.emitAcc += dt;
       const gy = groundYAt(d.x, d.z);
-      const gap = 0.1 + (d.dropped / Math.max(1, d.budget)) * 0.12;
+      const gap = d.fountain
+        ? 0.035 + (d.dropped / Math.max(1, d.budget)) * 0.05
+        : 0.1 + (d.dropped / Math.max(1, d.budget)) * 0.12;
       while (d.emitAcc >= gap && d.dropped < d.budget && d.age < d.life) {
         d.emitAcc -= gap;
-        emitOneDroplet(d.x, d.z, gy);
+        if (d.fountain) emitFountainDroplet(d.x, d.z, gy);
+        else emitOneDroplet(d.x, d.z, gy);
         d.dropped++;
       }
       if (d.age >= d.life + 0.9) drips.splice(i, 1);
@@ -238,7 +293,7 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
       const patch = updatesList[u];
       const dn = patch?.dripCount ?? 0;
       for (let i = 0; i < dn; i++) {
-        queueTreeDrips(patch.dripX[i], patch.dripY[i]);
+        queueTreeDrips(patch.dripX[i], patch.dripY[i], patch.dripKind?.[i] ?? 0);
       }
       const sn = patch?.seedCount ?? 0;
       for (let i = 0; i < sn; i++) {

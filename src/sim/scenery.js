@@ -3,6 +3,7 @@
 
 import * as fx from './fixed.js';
 import { TERRAIN, worldToTile, applyTerrainSlow, isTerrainSlowTile } from './field.js';
+import { DEFAULT_SLOW_MUL } from './unitTypes.js';
 import { applyTableEdgeOccupancy, refreshTableTerrain } from './tableShape.js';
 import {
   TREE_STAGE_MAX,
@@ -31,7 +32,7 @@ export const SCENERY = {
 };
 
 /** Speed scale on slowMask tiles (trees + partial water + rock borders). */
-export const SLOW_MULTIPLIER = fx.fromFloat(0.45);
+export const SLOW_MULTIPLIER = fx.fromFloat(DEFAULT_SLOW_MUL);
 /** @deprecated Use {@link SLOW_MULTIPLIER} */
 export const TREE_SLOW_MULTIPLIER = SLOW_MULTIPLIER;
 export const SPAWN_CLEAR_RADIUS_TILES = 6;

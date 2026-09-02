@@ -37,6 +37,7 @@ import { GATHER_ACT } from '../sim/gather.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
 import { PROJECTILE, PROJECTILE_MESH } from '../sim/projectileTypes.js';
 import { HEIGHT_AMPLITUDE, TILE_SIZE_F, WORLD_HALF_F, worldHalfFFromField } from '../sim/field.js';
+import { createCameraController, resolveCameraHalfF } from './cameraController.js';
 import { capacityFor } from '../sim/capacity.js';
 import {
   UNIT_MODEL_URLS,
@@ -61,7 +62,6 @@ import {
 } from './vatUnits.js';
 import { createCelestialRig } from './celestial.js';
 import { createTerrainFromField, createTileGridOverlay, createPlacementGridOverlay, surfaceHeightAt } from './terrain.js';
-import { createCameraController } from './cameraController.js';
 import { createProjectileRenderer } from './projectiles.js';
 import { createPickHitboxRenderer } from './pickHitboxes.js';
 import { createHolyShieldMaterial } from './holyShields.js';
@@ -728,9 +728,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     console.warn('Building menu labels disabled: Roboto font failed to load.', err);
     return null;
   });
-  const worldHalfF = opts.field ? worldHalfFFromField(opts.field) : WORLD_HALF_F;
+  const tableHalfF = opts.field ? worldHalfFFromField(opts.field) : WORLD_HALF_F;
+  const cameraHalfF = resolveCameraHalfF(tableHalfF, opts.field?.cameraHalfF);
 
-  const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, worldHalfF * 1.55, {
+  const camera = createArcRotateCamera(-Math.PI / 2.1, Math.PI / 3.2, cameraHalfF * 1.55, {
     x: 0,
     y: 0,
     z: 0,
@@ -741,9 +742,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   scene.camera = camera;
   // Camera input is owned by cameraController (v1 mouse/keyboard). Do not attachControl —
   // Lite would still register wheel/touch handlers that fight our hub.
-  const cameraController = createCameraController(camera, canvas, { worldHalfF });
+  const cameraController = createCameraController(camera, canvas, { worldHalfF: cameraHalfF });
 
-  const celestial = createCelestialRig(scene, { worldHalfF });
+  const celestial = createCelestialRig(scene, { worldHalfF: tableHalfF });
   const sun = celestial.shadowLight;
   const sky = celestial.fillLight;
   const skyBaseIntensity = celestial.fillBaseIntensity;
@@ -763,7 +764,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     lambda: 0.85,
     cascadeBlendPercentage: 0.08,
     stabilizeCascades: true,
-    shadowMaxZ: worldHalfF * 2.75,
+    shadowMaxZ: tableHalfF * 2.75,
     worldSpaceBias: 0.02,
     // 0 = black in shadow, 1 = no shadow (PCF mixes darkness→1 by lit factor).
     darkness: 0.16,
@@ -806,7 +807,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    */
   const SOCKET_FX_CADENCE = {
     fire: 70,
-    smoke: 320,
+    smoke: 240,
     sparkle: 210,
   };
   let socketFireElapsed = Math.random() * SOCKET_FX_CADENCE.fire;
@@ -847,6 +848,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let tileGridVisible = false;
   /** Occupancy fills lag behind field while grid is hidden; refresh on show. */
   let tileGridOccupancyDirty = false;
+  /** O-key screenshot chrome — HUD / collars / grids off, world stays. */
+  let screenshotHudHidden = false;
+  /** @type {{ x: number, z: number, radius: number, owner?: number }[] | { x: number, z: number, radius: number, owner?: number } | null} */
+  let lastWorkRadiusSpec = null;
+  /** @type {unknown} */
+  let lastBuildingHighlight = null;
   /** @type {{ setFocus: Function, dispose: () => void } | null} */
   let placementGrid = null;
   /** @type {{ type: string, x: number, z: number, valid?: boolean } | null} */
@@ -869,6 +876,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       spin: (Math.random() - 0.5) * spin,
     };
   }
+
+  // Must exist before `await createTerrainFromField` — cached tree/rock GLBs can
+  // fire onModelMesh as a microtask before the later shadow-setup consts run.
+  /** Meshes already queued/deferred at least once (avoid re-defer on every place()). */
+  const shadowCasterNoted = new WeakSet();
+  /** @type {object[]} */
+  const pendingShadowNotes = [];
+  let shadowNotesReady = false;
 
   function sceneryOpts() {
     return {
@@ -927,11 +942,45 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Local G-grid around the placement ghost. Hidden while the full G overlay is on. */
   function syncPlacementGrid() {
     if (!placementGrid) return;
-    if (tileGridVisible || !placementFocus || !fieldSnap) {
+    if (screenshotHudHidden || tileGridVisible || !placementFocus || !fieldSnap) {
       placementGrid.setFocus(null);
       return;
     }
     placementGrid.setFocus(fieldSnap, placementFocus);
+  }
+
+  function applyWorkRadiusSpec(spec) {
+    if (!spec) {
+      workRadiusRings.clear();
+      return;
+    }
+    const list = Array.isArray(spec) ? spec : [spec];
+    workRadiusRings.sync(list);
+  }
+
+  function hideScreenshotHudChrome() {
+    buildingRadial.hide();
+    actionRadial.hide();
+    selectionHud.clear();
+    controlGroupHud.clear();
+    healthBars.begin();
+    healthBars.end();
+    workRadiusRings.clear();
+    tileGrid?.setVisible(false);
+    placementGrid?.setFocus(null);
+    for (const mesh of selRingParts) mesh.visible = false;
+    if (orderMarker) orderMarker.visible = false;
+    buildingProps.setSelectionHighlight?.(null);
+    pickHitboxes.clear();
+  }
+
+  function restoreScreenshotHudChrome() {
+    applyWorkRadiusSpec(lastWorkRadiusSpec);
+    buildingProps.setSelectionHighlight?.(lastBuildingHighlight);
+    if (tileGridVisible && tileGridOccupancyDirty) refreshTileGridOccupancy();
+    tileGrid?.setVisible(tileGridVisible);
+    syncPlacementGrid();
+    applyUnitMeshVisibility();
   }
 
   /** Unit templates wait on this so 3D trees/rocks win the first pop-in. */
@@ -943,16 +992,27 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   } else {
     const groundMat = createStandardMaterial();
     groundMat.diffuseColor = [0.18, 0.28, 0.16];
-    ground = createGround(engine, { width: worldHalfF * 2, height: worldHalfF * 2 });
+    ground = createGround(engine, { width: tableHalfF * 2, height: tableHalfF * 2 });
     ground.material = groundMat;
     addToScene(scene, ground);
   }
 
-  const entitySlot = new Int32Array(Math.max(capacity, gpuCapacity));
+  let entitySlot = new Int32Array(Math.max(capacity, gpuCapacity));
   entitySlot.fill(-1);
   /** Per-entity batch map key (VAT shards use `${typeId}#${shard}`). */
   /** @type {(string | number | null)[]} */
   const entityBatchKey = new Array(entitySlot.length).fill(null);
+
+  function ensureEntityCapacity(needed) {
+    const n = Math.max(0, needed | 0);
+    if (n <= entitySlot.length) return;
+    const nextLen = capacityFor(n, { initial: entitySlot.length });
+    const next = new Int32Array(nextLen);
+    next.fill(-1);
+    next.set(entitySlot);
+    entitySlot = next;
+    while (entityBatchKey.length < nextLen) entityBatchKey.push(null);
+  }
   const UNIT_PING_MS = 280;
   const UNIT_PING_PULSES = 0.5;
   const UNIT_PING_PEAK = 1.35;
@@ -1156,7 +1216,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   const RING_DIAM = 1;
   const RING_H = 0.12;
-  const ringCap = Math.max(capacity, gpuCapacity, 1);
+  let ringCap = Math.max(capacity, gpuCapacity, 1);
+  let selRingLiveCount = capacity;
   /** @type {object[]} */
   let selRingParts = [];
   let useCollar = false;
@@ -1174,7 +1235,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     selRingParts = [selRing];
     collarBandColors = [];
   }
-  const ringMatrices = new Float32Array(ringCap * 16);
+  let ringMatrices = new Float32Array(ringCap * 16);
   /** One color buffer per part — idle needs different band colors per draw. */
   const ringColorBufs = selRingParts.map(() => new Float32Array(ringCap * 4));
 
@@ -1400,8 +1461,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       });
     }
   };
-  // Overlay nearest-N + building slack. Matching entity count allocated
-  // capacity × 13 alpha-sorted billboards (50k stress → ~650k sprites).
+  // Overlay selected-then-nearest + building slack. Matching entity count
+  // allocated capacity × 13 alpha-sorted billboards (50k stress → ~650k sprites).
   const healthBars = createHealthBars(engine, scene, {
     capacity: HEALTH_BAR_CAPACITY,
     getViewportHeight: () => canvasCoords(0, 0).height,
@@ -2041,11 +2102,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    * @type {WeakSet<object>}
    */
   const shadowCasterDefer = new WeakSet();
-  /** Meshes already queued/deferred at least once (avoid re-defer on every place()). */
-  const shadowCasterNoted = new WeakSet();
-  /** @type {object[]} */
-  const pendingShadowNotes = [];
-  let shadowNotesReady = false;
 
   function isBackdropMesh(mesh) {
     return (mesh?.name || '') === 'distant-mountains';
@@ -2212,7 +2268,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
     for (const mesh of selRingParts) {
       const count = mesh.thinInstances?.count ?? 0;
-      mesh.visible = unitsEnabled && count > 0;
+      mesh.visible = unitsEnabled && !screenshotHudHidden && count > 0;
     }
     carryLoads.setVisible(unitsEnabled);
   }
@@ -2471,14 +2527,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   /** Wisps per fire tick — density is what separates a body of flame from a streamer. */
-  const FIRE_WISPS_PER_TICK = 3;
+  const FIRE_WISPS_PER_TICK = 5;
   /**
    * Wide discs pooled at the socket. Wisps are born inside this pool rather
    * than in empty air, which is what stops each one reading as a circle
-   * popping into existence at the base. Roughly one every other tick against
-   * a multi-second life: churn rate is what reads as boiling, not population.
+   * popping into existence at the base. Roughly two of every three ticks
+   * against a multi-second life: churn rate is what reads as boiling, not
+   * population.
    */
-  const FIRE_BASE_CHANCE = 0.5;
+  const FIRE_BASE_CHANCE = 0.7;
   /** Ember rolls per fire tick — see the loop for the per-roll chance. */
   const FIRE_EMBERS_PER_TICK = 2;
 
@@ -2571,7 +2628,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         // near the top instead of streaming off it.
         gravity: [0, hex ? 0.12 : 0.18, 0],
         color,
-        // Lifetime × wisps-per-tick sets the live count (~60 per socket).
+        // Lifetime × wisps-per-tick sets the live count (~100 per socket).
         lifetime: 1.2 + Math.random() * 0.9,
         startSize: size,
         endSize: size * (0.35 + Math.random() * 0.25),
@@ -2641,18 +2698,19 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     });
   }
 
-  /** Puff rolls per chimney tick; the second one is a coin flip, see the loop. */
-  const SMOKE_PUFFS_PER_TICK = 2;
+  /** Puff rolls per chimney tick; later rolls are coin flips, see the loop. */
+  const SMOKE_PUFFS_PER_TICK = 3;
   /** Stars per sparkle tick — short-lived, so the live count tracks this closely. */
   const SPARKLE_PER_TICK = 4;
 
   function emitSocketSmoke(x, y, z, s) {
     const dens = Math.min(1, fxEmitChance);
-    // Slow chimney rhythm: a puff every ~320ms tick, often doubled. Thickness
-    // comes from puffs overlapping each other, not from raising their alpha,
-    // which would only darken the column rather than fill it out.
+    // Slow chimney rhythm: a puff every ~240ms tick, often doubled or
+    // tripled. Thickness comes from puffs overlapping each other, not from
+    // raising their alpha, which would only darken the column rather than
+    // fill it out.
     for (let i = 0; i < SMOKE_PUFFS_PER_TICK; i++) {
-      if (Math.random() > (i === 0 ? 1 : 0.6) * dens) continue;
+      if (Math.random() > (i === 0 ? 1 : i === 1 ? 0.75 : 0.5) * dens) continue;
       const ang = Math.random() * Math.PI * 2;
       const rad = Math.random() * 0.1 * s;
       const drift = 0.08 + Math.random() * 0.2;
@@ -3008,15 +3066,21 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function flushAllBatches() {
     updateOrderMarker();
-    // Build menu: screen-anchored HUD (project agora, edge-clamp, fixed depth).
-    if (buildingRadial.isOpen()) {
-      buildingRadial.update?.(camera);
+    if (screenshotHudHidden) {
+      if (buildingRadial.isOpen()) buildingRadial.hide();
+      if (actionRadial.isOpen()) actionRadial.hide();
+      selectionHud.clear();
+      controlGroupHud.clear();
+    } else {
+      if (buildingRadial.isOpen()) {
+        buildingRadial.update?.(camera);
+      }
+      if (actionRadial.isOpen()) {
+        actionRadial.update?.(camera);
+      }
+      selectionHud.update?.(camera);
+      controlGroupHud.update?.(camera);
     }
-    if (actionRadial.isOpen()) {
-      actionRadial.update?.(camera);
-    }
-    selectionHud.update?.(camera);
-    controlGroupHud.update?.(camera);
     buildingProps.updateHarvestPing?.();
     updateUnitPings();
     for (const batch of typeBatches.values()) {
@@ -3027,6 +3091,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (ringColorsDirty) {
       pushSelRingColors();
       ringColorsDirty = false;
+    }
+    if (screenshotHudHidden) {
+      for (const mesh of selRingParts) mesh.visible = false;
+      if (orderMarker) orderMarker.visible = false;
+      workRadiusRings.clear();
     }
     // Selection / order matrices marked dirty on write.
     pickHitboxes.commit();
@@ -3041,8 +3110,32 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (shadowsEnabled) applyShadowState();
   }
 
+  function ensureSelRingCapacity(needed) {
+    const n = Math.max(0, needed | 0);
+    if (n <= ringCap) return;
+    const oldCap = ringCap;
+    const newCap = capacityFor(n, { initial: oldCap });
+    const nextMatrices = new Float32Array(newCap * 16);
+    nextMatrices.set(ringMatrices.subarray(0, oldCap * 16));
+    ringMatrices = nextMatrices;
+    for (let p = 0; p < ringColorBufs.length; p++) {
+      const next = new Float32Array(newCap * 4);
+      next.set(ringColorBufs[p].subarray(0, oldCap * 4));
+      ringColorBufs[p] = next;
+    }
+    ringCap = newCap;
+    for (let p = 0; p < selRingParts.length; p++) {
+      const mesh = selRingParts[p];
+      setThinInstances(mesh, ringMatrices, newCap);
+      setThinInstanceColors(mesh, ringColorBufs[p]);
+    }
+  }
+
   function setSelRingCount(n) {
-    for (const mesh of selRingParts) setThinInstanceCount(mesh, n);
+    const count = Math.max(0, n | 0);
+    ensureSelRingCapacity(count);
+    selRingLiveCount = count;
+    for (const mesh of selRingParts) setThinInstanceCount(mesh, count);
   }
 
   function pushSelRingColors() {
@@ -3078,6 +3171,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     lastMapCount = count;
     lastMapTypes = typesArr;
     lastMapOwners = ownersArr ?? null;
+    ensureEntityCapacity(count);
     scheduleBatchesForTypes(count, typesArr, ownersArr);
 
     entitySlot.fill(-1);
@@ -3278,13 +3372,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         collarBandColors.push(authoredCollarBandColor(mesh.material));
         mesh.material = makeCollarTintMaterial();
         setThinInstances(mesh, ringMatrices, ringCap);
-        setThinInstanceCount(mesh, capacity);
+        setThinInstanceCount(mesh, selRingLiveCount);
         addToScene(scene, mesh);
       }
       while (ringColorBufs.length < selRingParts.length) {
         ringColorBufs.push(new Float32Array(ringCap * 4));
       }
-      writeSelRingColors(capacity, 'white');
+      writeSelRingColors(selRingLiveCount, 'white');
       pushSelRingColors();
       ringColorsDirty = true;
     } catch (err) {
@@ -3443,6 +3537,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     setCount(n) {
+      ensureEntityCapacity(n);
       setSelRingCount(n);
       writeSelRingColors(n, useCollar ? 'white' : 'cyan');
       pushSelRingColors();
@@ -3490,7 +3585,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** Building selection collar(s) — fixed S/M/L world size (not the build menu). */
     setBuildingSelectionHighlight(pos) {
-      buildingProps.setSelectionHighlight?.(pos ?? null);
+      lastBuildingHighlight = pos ?? null;
+      if (screenshotHudHidden) {
+        buildingProps.setSelectionHighlight?.(null);
+        return;
+      }
+      buildingProps.setSelectionHighlight?.(lastBuildingHighlight);
     },
 
     /** Placement ghost (translucent building mesh). */
@@ -3507,12 +3607,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * @param {{ x: number, z: number, radius: number } | { x: number, z: number, radius: number }[] | null} spec
      */
     setWorkRadiusRing(spec) {
-      if (!spec) {
+      lastWorkRadiusSpec = spec ?? null;
+      if (screenshotHudHidden) {
         workRadiusRings.clear();
         return;
       }
-      const list = Array.isArray(spec) ? spec : [spec];
-      workRadiusRings.sync(list);
+      applyWorkRadiusSpec(lastWorkRadiusSpec);
     },
 
     /**
@@ -3580,6 +3680,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** Build menu (tilted ring + pads + icons). Screen-stable size via eye distance. */
     showBuildingRadial(x, z, owner = 0) {
+      if (screenshotHudHidden) return;
       actionRadial.hide();
       buildingRadial.showAt(x, z, camera, owner);
     },
@@ -3599,12 +3700,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * @param {string} buildingType
      */
     showActionRadial(x, z, buildingType) {
+      if (screenshotHudHidden) return;
       buildingRadial.hide();
       actionRadial.showAt(x, z, buildingType, camera);
     },
 
     hideActionRadial() {
       actionRadial.hide();
+    },
+
+    setScreenshotHudHidden(on) {
+      const next = !!on;
+      if (screenshotHudHidden === next) return screenshotHudHidden;
+      screenshotHudHidden = next;
+      if (screenshotHudHidden) hideScreenshotHudChrome();
+      else restoreScreenshotHudChrome();
+      return screenshotHudHidden;
+    },
+
+    getScreenshotHudHidden() {
+      return screenshotHudHidden;
     },
 
     isActionRadialOpen() {
@@ -3719,7 +3834,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Sync gesture test: over a visible option (pad / icon / ring band).
+     * Sync gesture test: over a visible option (pad / icon) or ring chrome.
      * Action radials do not claim the empty yard inside the ring.
      * Must not await GPU (pointerdown latch).
      * Always ray-test — a stale hover must not claim the whole screen.
@@ -3785,6 +3900,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         // buffers — otherwise shadow/submit keeps WriteBuffer'ing dead TI mats.
         terrain = null;
         fieldSnap = snap ?? null;
+        const tableHalf = snap ? worldHalfFFromField(snap) : WORLD_HALF_F;
+        cameraController.setWorldHalfF?.(resolveCameraHalfF(tableHalf, snap?.cameraHalfF));
+        celestial.setWorldHalfF?.(tableHalf);
         fogApi?.detachOverlay?.();
         applyShadowState();
         prev?.dispose?.();
@@ -3986,10 +4104,42 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       unitAuras.sync(count, maskOrStatus, x, y, z);
     },
 
+    /**
+     * Keep circling locust packs on units/buildings while stacks are up.
+     * @param {number} count
+     * @param {Int16Array|null|undefined} stacks
+     * @param {Float32Array} x
+     * @param {Float32Array} y
+     * @param {Float32Array} z
+     * @param {{ skip?: Uint8Array, buildings?: { x: number, z: number, locustStacks?: number }[], hideBuilding?: (b: object) => boolean }} [opts]
+     */
+    syncLocustDots(count, stacks, x, y, z, opts = {}) {
+      locustFx.beginDots();
+      const n = count | 0;
+      if (stacks) {
+        for (let i = 0; i < n; i++) {
+          if (opts.skip?.[i]) continue;
+          const s = stacks[i] | 0;
+          if (s > 0) locustFx.sustain(`u:${i}`, x[i], y[i], z[i], s);
+        }
+      }
+      const buildings = opts.buildings;
+      if (buildings) {
+        for (let i = 0; i < buildings.length; i++) {
+          const b = buildings[i];
+          const s = b?.locustStacks | 0;
+          if (s <= 0) continue;
+          if (opts.hideBuilding?.(b)) continue;
+          locustFx.sustain(`b:${i}`, b.x, groundYAt(b.x, b.z) + 1.7, b.z, s);
+        }
+      }
+      locustFx.endDots();
+    },
+
     setTileGridVisible(on) {
       tileGridVisible = !!on;
       if (tileGridVisible && tileGridOccupancyDirty) refreshTileGridOccupancy();
-      tileGrid?.setVisible(tileGridVisible);
+      tileGrid?.setVisible(tileGridVisible && !screenshotHudHidden);
       syncPlacementGrid();
       return tileGridVisible;
     },
@@ -4152,6 +4302,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
      * `{ x, y, z, r }[]` with center at pickHeight and radius pickRadius.
      */
     syncPickHitboxes(spheres) {
+      if (screenshotHudHidden) {
+        pickHitboxes.clear();
+        return;
+      }
       pickHitboxes.sync(spheres);
     },
 
@@ -4466,6 +4620,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /** v1-style chips above the unit / building. `lift` is world-Y above ground. */
     writeHealthBar(x, z, lift, ratio, flags) {
+      if (screenshotHudHidden) return;
       const gy = groundYAt(x, z);
       const above = Number.isFinite(lift) && lift > 0.05 ? lift : DEFAULT_UNIT_CHIP_LIFT;
       const y = gy + above;

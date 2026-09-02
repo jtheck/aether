@@ -45,6 +45,28 @@ export function selectionCentroidXZ(src) {
       n++;
       continue;
     }
+    if (sel?.kind === 'rally') {
+      const b = buildings?.[sel.index];
+      if (!isBuildingAlive(b)) continue;
+      const hop = sel.hop | 0;
+      let x;
+      let z;
+      if (hop <= 0) {
+        x = b.rallyX;
+        z = b.rallyZ;
+      } else if (hop === 1) {
+        x = b.rallyHop1X;
+        z = b.rallyHop1Z;
+      } else {
+        x = b.rallyHop2X;
+        z = b.rallyHop2Z;
+      }
+      if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+      sx += x;
+      sz += z;
+      n++;
+      continue;
+    }
     const b = buildings?.[sel.index];
     if (!isBuildingAlive(b) || !Number.isFinite(b.x) || !Number.isFinite(b.z)) continue;
     sx += b.x;

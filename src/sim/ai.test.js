@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   excludeHumanAiPlayers,
   resolveSessionAiPlayers,
+  stressShareVisionOwners,
 } from './ai.js';
 
 const loadingScreenAi = [{ owner: 1, temperament: 'passive' }];
@@ -70,8 +71,17 @@ function neverOverlapsHumans() {
   );
 }
 
+function stressHackVisionSkipsTurtle() {
+  assert.deepEqual(
+    stressShareVisionOwners(),
+    [2, 3, 4],
+    'stress fog-share is the three attacking AIs, not the cautious/passive seat',
+  );
+}
+
 dropsHumanSlots();
 liveKothClearsLeftoverAi();
 soloKeepsExplicitAi();
 neverOverlapsHumans();
+stressHackVisionSkipsTurtle();
 console.log('ai.test.js: ok (human slots never get leftover AI)');

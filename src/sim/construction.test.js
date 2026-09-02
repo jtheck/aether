@@ -13,8 +13,9 @@ import { CMD, applyCommands } from './commands.js';
 import { buildField, createField, worldToTile } from './field.js';
 import { growTreeAt } from './trees.js';
 import { getResource, grantStartingResources } from './resources.js';
-import { getBuildTime } from './buildings.js';
+import { getBuildTime, getBuildingCost } from './buildings.js';
 import { checksum } from './checksum.js';
+import { constructionVisualStage, CONSTRUCT_NEAR_NUM, CONSTRUCT_NEAR_DEN } from './construction.js';
 
 function siteBuilding(type, xF, zF, owner = 0) {
   return {
@@ -217,6 +218,72 @@ function deterministic() {
   assert.equal(run(9), run(9), 'construction is deterministic across identical runs');
 }
 
+function visualStagesAtStartAndTwoThirds() {
+  assert.equal(constructionVisualStage(0, 90), 0, 'no work yet');
+  assert.equal(constructionVisualStage(1, 90), 1, 'first work pops');
+  const near = Math.ceil((90 * CONSTRUCT_NEAR_NUM) / CONSTRUCT_NEAR_DEN);
+  assert.equal(constructionVisualStage(near - 1, 90), 1, 'still the mid stage');
+  assert.equal(constructionVisualStage(near, 90), 2, '2/3 is the late bump');
+  assert.equal(constructionVisualStage(90, 90), 2, 'finished-but-unflagged stays late');
+}
+
+function cancelConstructionRefundsAndClears() {
+  const field = openField(8);
+  field.activeMask?.fill(1);
+  const w = createWorld(8);
+  w.buildings = [];
+  grantStartingResources(w, 0, { wood: 500, stone: 500, mineral: 500, food: 500 });
+  const woodBefore = getResource(w, 0, 'wood');
+  applyCommands(w, field, [
+    { type: CMD.PLACE_BUILDING, playerId: 0, buildingType: 'camp', tx: fx.fromFloat(0), ty: fx.fromFloat(0) },
+  ]);
+  assert.equal(w.buildings.length, 1, 'camp placed');
+  assert.equal(w.buildings[0].built, 0, 'still a site');
+  const cost = getBuildingCost('camp');
+  assert.equal(getResource(w, 0, 'wood'), woodBefore - (cost.wood | 0), 'placement charged');
+  const vill = spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 });
+  for (let t = 0; t < 30; t++) step(w, field, []);
+  assert.ok((w.buildings[0].buildProgress | 0) > 0, 'builders made some progress');
+
+  let occupied = -1;
+  for (let i = 0; i < (field.structureSlowMask?.length ?? 0); i++) {
+    if (field.structureSlowMask[i]) {
+      occupied = i;
+      break;
+    }
+  }
+  assert.ok(occupied >= 0, 'site occupies tiles');
+
+  applyCommands(w, field, [
+    { type: CMD.CANCEL_CONSTRUCTION, playerId: 0, buildingIndex: 0 },
+  ]);
+  assert.equal(w.buildings[0].hp, 0, 'site is ruined');
+  assert.equal(getResource(w, 0, 'wood'), woodBefore, 'placement cost refunded');
+  assert.equal(field.structureSlowMask[occupied], 0, 'footprint tiles reopen');
+
+  step(w, field, []);
+  assert.notEqual(w.order[vill], ORDER.BUILD, 'builder is released');
+}
+
+function cancelConstructionIgnoresFinished() {
+  const field = openField(10);
+  field.activeMask?.fill(1);
+  const w = createWorld(10);
+  w.buildings = [];
+  grantStartingResources(w, 0, { wood: 500, stone: 0, mineral: 0, food: 0 });
+  applyCommands(w, field, [
+    { type: CMD.PLACE_BUILDING, playerId: 0, buildingType: 'camp', tx: fx.fromFloat(0), ty: fx.fromFloat(0) },
+  ]);
+  w.buildings[0].built = 1;
+  w.buildings[0].buildProgress = w.buildings[0].buildTime | 0;
+  const wood = getResource(w, 0, 'wood');
+  applyCommands(w, field, [
+    { type: CMD.CANCEL_CONSTRUCTION, playerId: 0, buildingIndex: 0 },
+  ]);
+  assert.ok((w.buildings[0].hp | 0) > 0, 'finished camp is not torn down');
+  assert.equal(getResource(w, 0, 'wood'), wood, 'no refund on a finished building');
+}
+
 function twoOwnersRaiseIndependently() {
   const field = openField(7);
   const w = createWorld(7);
@@ -253,5 +320,8 @@ twoBuildersBeatOne();
 pullsAGathererWhenNoIdle();
 finishingTurnsOnTheFarm();
 deterministic();
+visualStagesAtStartAndTwoThirds();
+cancelConstructionRefundsAndClears();
+cancelConstructionIgnoresFinished();
 twoOwnersRaiseIndependently();
-console.log('construction.test.js: ok (site + auto-build + engineer + speed + pull + complete + two-owner + deterministic)');
+console.log('construction.test.js: ok (site + auto-build + engineer + speed + pull + complete + cancel + stages + two-owner + deterministic)');

@@ -30,12 +30,16 @@ import {
   getBuildingMenu,
   createBuilding,
   getBuildingRequires,
+  ownerHasBuildingType,
+  ownerMeetsBuildingRequires,
+  ownedFinishedBuildingTypes,
 } from './buildings.js';
 import { menuGateState } from './menuGate.js';
 import { POP_PER_VILLAGE } from './pop.js';
 import { buildingProductionSystem } from './buildingProduction.js';
 import { createAgoras } from './agora.js';
 import { UNIT } from './unitTypes.js';
+import { grantTech } from './tech.js';
 import { planPathBudget } from './path.js';
 import { step } from './step.js';
 
@@ -184,6 +188,38 @@ describe('buildings place', () => {
       },
     ]);
     assert.equal(w.buildings.some((b) => b.type === 'tower'), true);
+  });
+
+  it('rejects advanced buildings until the required building is finished', () => {
+    const w = createWorld(5);
+    w.buildings = [];
+    const field = buildField(5, { width: 64, height: 64 });
+    clearClaim(field, 'barracks', 32, 32);
+    w.buildings.push(createBuilding({ owner: 0, type: 'village', x: -80, z: -80, built: 0 }));
+    assert.equal(ownerHasBuildingType(w.buildings, 0, 'village'), false);
+    assert.equal(ownerMeetsBuildingRequires(w.buildings, 0, 'barracks'), false);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'barracks',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    assert.equal(w.buildings.some((b) => b.type === 'barracks'), false);
+    w.buildings[0].built = 1;
+    assert.equal(ownerMeetsBuildingRequires(w.buildings, 0, 'barracks'), true);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'barracks',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    assert.equal(w.buildings.some((b) => b.type === 'barracks'), true);
   });
 
   it('rejects unknown types', () => {
@@ -509,6 +545,15 @@ describe('menu gate', () => {
       'ok',
     );
   });
+
+  it('finished-only ownership ignores construction sites', () => {
+    const site = [createBuilding({ owner: 0, type: 'village', x: 0, z: 0, built: 0 })];
+    const raised = [createBuilding({ owner: 0, type: 'village', x: 0, z: 0, built: 1 })];
+    assert.equal(ownerHasBuildingType(site, 0, 'village'), false);
+    assert.equal(ownerHasBuildingType(raised, 0, 'village'), true);
+    assert.deepEqual([...ownedFinishedBuildingTypes(site, 0)], []);
+    assert.deepEqual([...ownedFinishedBuildingTypes(raised, 0)], ['village']);
+  });
 });
 
 describe('building rally order', () => {
@@ -595,6 +640,121 @@ describe('building rally order', () => {
       },
     ]);
     assert.equal(w.buildings[0].rallyOrder, ORDER.MOVE);
+  });
+
+  it('SET_RALLY hopFrom plants one extra hop, and a second only with Drayage', () => {
+    const w = createWorld(40);
+    w.buildings = [];
+    const field = buildField(40, { width: 64, height: 64 });
+    clearClaim(field, 'camp', 32, 32);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'camp',
+        tx: fx.fromFloat(32),
+        ty: fx.fromFloat(32),
+      },
+    ]);
+    finishAllBuildings(w);
+    const b = w.buildings[0];
+    const r0x = fx.fromFloat(fx.toFloat(b.x) + 16);
+    const r0z = fx.fromFloat(fx.toFloat(b.z));
+    const r1x = fx.fromFloat(fx.toFloat(b.x) + 32);
+    const r1z = fx.fromFloat(fx.toFloat(b.z));
+    const r2x = fx.fromFloat(fx.toFloat(b.x) + 48);
+    const r2z = fx.fromFloat(fx.toFloat(b.z));
+    applyCommands(w, field, [
+      { type: CMD.SET_RALLY, playerId: 0, buildingIndex: 0, tx: r0x, ty: r0z },
+      {
+        type: CMD.SET_RALLY,
+        playerId: 0,
+        buildingIndex: 0,
+        tx: r1x,
+        ty: r1z,
+        hopFrom: 0,
+        order: ORDER.ATTACK_MOVE,
+      },
+    ]);
+    assert.equal(w.buildings[0].rallyHopCount, 1, 'one extra hop without Drayage');
+    assert.equal(w.buildings[0].rallyHop1Order, ORDER.ATTACK_MOVE);
+    applyCommands(w, field, [
+      {
+        type: CMD.SET_RALLY,
+        playerId: 0,
+        buildingIndex: 0,
+        tx: r2x,
+        ty: r2z,
+        hopFrom: 1,
+      },
+    ]);
+    assert.equal(w.buildings[0].rallyHopCount, 1, 'second hop rejected without Drayage');
+    grantTech(w, 0, 'drayage');
+    applyCommands(w, field, [
+      {
+        type: CMD.SET_RALLY,
+        playerId: 0,
+        buildingIndex: 0,
+        tx: r2x,
+        ty: r2z,
+        hopFrom: 1,
+      },
+    ]);
+    assert.equal(w.buildings[0].rallyHopCount, 2, 'Drayage unlocks the second hop');
+    applyCommands(w, field, [
+      { type: CMD.SET_RALLY, playerId: 0, buildingIndex: 0, tx: r0x, ty: r0z },
+    ]);
+    assert.equal(w.buildings[0].rallyHopCount, 0, 're-rally from the building clears hops');
+  });
+
+  it('trained units walk extra rally hops after the first flag', () => {
+    const w = createWorld(41);
+    w.buildings = [];
+    const field = buildField(41, { width: 64, height: 64 });
+    field.pass.fill(1);
+    clearClaim(field, 'camp', 16, 16);
+    applyCommands(w, field, [
+      {
+        type: CMD.PLACE_BUILDING,
+        playerId: 0,
+        buildingType: 'camp',
+        tx: fx.fromFloat(16),
+        ty: fx.fromFloat(16),
+      },
+    ]);
+    finishAllBuildings(w);
+    const b = w.buildings[0];
+    const r0x = fx.fromFloat(fx.toFloat(b.x) + 12);
+    const r0z = fx.fromFloat(fx.toFloat(b.z));
+    const r1x = fx.fromFloat(fx.toFloat(b.x) + 28);
+    const r1z = fx.fromFloat(fx.toFloat(b.z));
+    applyCommands(w, field, [
+      { type: CMD.SET_RALLY, playerId: 0, buildingIndex: 0, tx: r0x, ty: r0z },
+      {
+        type: CMD.SET_RALLY,
+        playerId: 0,
+        buildingIndex: 0,
+        tx: r1x,
+        ty: r1z,
+        hopFrom: 0,
+      },
+    ]);
+    applyCommands(w, field, [
+      { type: CMD.QUEUE_TRAIN, playerId: 0, buildingIndex: 0, unitKey: 'myco' },
+    ]);
+    for (let i = 0; i < TRAIN_TICKS + 2; i++) buildingProductionSystem(w, field);
+    const u = w.count - 1;
+    assert.ok(u >= 0);
+    assert.equal(w.rallyHopCount[u], 1, 'spawn stamps the extra hop');
+    let reachedHop = false;
+    for (let t = 0; t < 400; t++) {
+      step(w, field, []);
+      if (fx.dist2(w.px[u], w.py[u], r1x, r1z) < fx.mul(fx.fromFloat(4), fx.fromFloat(4))) {
+        reachedHop = true;
+        break;
+      }
+    }
+    assert.ok(reachedHop, 'unit walks past the first flag to the extra hop');
   });
 });
 
@@ -720,6 +880,9 @@ describe('village and workshop menus', () => {
         tx: fx.fromFloat(24),
         ty: fx.fromFloat(32),
       },
+    ]);
+    finishAllBuildings(w);
+    applyCommands(w, field, [
       {
         type: CMD.PLACE_BUILDING,
         playerId: 0,

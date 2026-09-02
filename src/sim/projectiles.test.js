@@ -15,6 +15,15 @@ import { step } from './step.js';
 import { getUnitDef, UNIT } from './unitTypes.js';
 import { createBuilding } from './buildings.js';
 import { FARM_FIRE_DAMAGE_MUL, FARM_LOCUST_DAMAGE_MUL } from './buildingCombat.js';
+import {
+  LOCUST_DOT_DAMAGE,
+  LOCUST_DOT_DURATION,
+  LOCUST_DOT_MAX_STACKS,
+  LOCUST_DOT_PERIOD,
+  LOCUST_FADE_TICKS,
+  LOCUST_FRESH_HOPS,
+  tickCombatStatus,
+} from './combatStatus.js';
 import { createWorld, spawn } from './world.js';
 import { buildWorldFromConfig } from './worldSetup.js';
 import {
@@ -660,6 +669,8 @@ function locustSwarmDistracts() {
     projectileSystem(w, field);
   }
   assert.ok(w.distractCd[foe] > 0, 'locust swarm distracts');
+  assert.equal(w.locustStacks[foe], 1, 'locust swarm applies a chew stack');
+  assert.equal(w.locustTicks[foe], LOCUST_DOT_DURATION);
 }
 
 function locustHitsFarm(type, hp = 200) {
@@ -695,8 +706,120 @@ function locustSwarmHitsFarmHarder() {
     200 - farm.damage * FARM_LOCUST_DAMAGE_MUL,
     'farm takes locust × farm mul',
   );
+  assert.equal(farm.building.locustStacks, 1, 'farm keeps a locust stack after impact');
   const camp = locustHitsFarm('camp');
   assert.equal(camp.building.hp, 200 - camp.damage, 'other buildings take base locust damage');
+}
+
+function fireLocust(w, field, shaman, target) {
+  spawnProjectile(w, {
+    type: PROJECTILE.LOCUST_SWARM,
+    owner: 0,
+    source: shaman,
+    target,
+    x: w.px[shaman],
+    y: w.py[shaman],
+    aimX: w.px[target],
+    aimY: w.py[target],
+    damage: 5,
+  });
+  for (let t = 0; t < 50 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+}
+
+function locustSwarmStacksAndPulses() {
+  const field = openField();
+  const w = createWorld(38);
+  const shaman = spawn(w, { x: 0, y: 0, type: UNIT.SHAMAN, owner: 0 });
+  const foe = spawn(w, {
+    x: fx.fromInt(8),
+    y: 0,
+    type: UNIT.WARRIOR,
+    owner: 1,
+  });
+  fireLocust(w, field, shaman, foe);
+  assert.equal(w.locustStacks[foe], 1);
+  const afterHit = w.hp[foe];
+  for (let t = 0; t < LOCUST_DOT_PERIOD; t++) tickCombatStatus(w, field);
+  assert.equal(w.hp[foe], afterHit - LOCUST_DOT_DAMAGE, 'one stack pulses base chew');
+
+  fireLocust(w, field, shaman, foe);
+  fireLocust(w, field, shaman, foe);
+  assert.equal(w.locustStacks[foe], LOCUST_DOT_MAX_STACKS, 'chew stacks cap at 3');
+  const stacked = w.hp[foe];
+  for (let t = 0; t < LOCUST_DOT_PERIOD; t++) tickCombatStatus(w, field);
+  assert.equal(
+    w.hp[foe],
+    stacked - LOCUST_DOT_DAMAGE * LOCUST_DOT_MAX_STACKS,
+    'three stacks pulse triple chew',
+  );
+}
+
+function locustHopsToNearbyUnitAndBuilding() {
+  const field = openField();
+  const w = createWorld(40);
+  const shaman = spawn(w, { x: 0, y: 0, type: UNIT.SHAMAN, owner: 0 });
+  const a = spawn(w, { x: fx.fromInt(8), y: 0, type: UNIT.WARRIOR, owner: 1 });
+  const b = spawn(w, { x: fx.fromInt(12), y: 0, type: UNIT.WARRIOR, owner: 1 });
+  const camp = createBuilding({ owner: 1, type: 'camp', x: 10, z: 4, hp: 200 });
+  w.buildings.push(camp);
+  fireLocust(w, field, shaman, a);
+  assert.equal(w.locustStacks[a], 1, 'impact target is chewed');
+  assert.equal(w.locustStacks[b], 1, 'nearby unit gets a hop circle');
+  assert.equal(camp.locustStacks, 1, 'nearby building gets a hop circle');
+}
+
+function locustOldHopsFadeOnNewCircles() {
+  const field = openField();
+  const w = createWorld(41);
+  const shaman = spawn(w, { x: 0, y: 0, type: UNIT.SHAMAN, owner: 0 });
+  const a = spawn(w, { x: fx.fromInt(8), y: 0, type: UNIT.WARRIOR, owner: 1 });
+  const b = spawn(w, { x: fx.fromInt(14), y: 0, type: UNIT.WARRIOR, owner: 1 });
+  const c = spawn(w, { x: fx.fromInt(20), y: 0, type: UNIT.WARRIOR, owner: 1 });
+  const d = spawn(w, { x: fx.fromInt(24), y: 0, type: UNIT.WARRIOR, owner: 1 });
+  fireLocust(w, field, shaman, a);
+  assert.ok(w.locustStacks[b] > 0, 'first hop lands on a neighbor');
+  fireLocust(w, field, shaman, a);
+  fireLocust(w, field, shaman, a);
+  assert.ok(
+    w.locustTicks[b] <= LOCUST_FADE_TICKS,
+    'oldest hop site fades after a hop or two',
+  );
+  assert.ok(w.locustHops[b] >= LOCUST_FRESH_HOPS);
+  assert.equal(w.locustTicks[a], LOCUST_DOT_DURATION, 'fresh impact stays full duration');
+  assert.ok(w.locustTicks[d] > LOCUST_FADE_TICKS, 'newer hop stays fresh');
+}
+
+function locustDotChewsFarmHarder() {
+  const field = openField();
+  const w = createWorld(39);
+  const shaman = spawn(w, { x: 0, y: 0, type: UNIT.SHAMAN, owner: 0 });
+  const farm = createBuilding({ owner: 1, type: 'farm', x: 16, z: 0, hp: 400 });
+  w.buildings.push(farm);
+  spawnProjectile(w, {
+    type: PROJECTILE.LOCUST_SWARM,
+    owner: 0,
+    source: shaman,
+    target: -1,
+    targetBuilding: 0,
+    x: 0,
+    y: 0,
+    aimX: farm.x,
+    aimY: farm.z,
+    damage: 5,
+  });
+  for (let t = 0; t < 50 && w.projectiles.activeCount; t++) {
+    projectileSystem(w, field);
+  }
+  const afterHit = farm.hp;
+  assert.equal(farm.locustStacks, 1);
+  for (let t = 0; t < LOCUST_DOT_PERIOD; t++) tickCombatStatus(w, field);
+  assert.equal(
+    farm.hp,
+    afterHit - LOCUST_DOT_DAMAGE * FARM_LOCUST_DAMAGE_MUL,
+    'farm chew pulses × farm mul',
+  );
 }
 
 function holySlashDamages() {
@@ -781,5 +904,9 @@ shadowBoltAppliesDot();
 iceBoltAppliesFrost();
 locustSwarmDistracts();
 locustSwarmHitsFarmHarder();
+locustSwarmStacksAndPulses();
+locustHopsToNearbyUnitAndBuilding();
+locustOldHopsFadeOnNewCircles();
+locustDotChewsFarmHarder();
 holySlashDamages();
 console.log('[PASS] authoritative projectile behavior and pooling');

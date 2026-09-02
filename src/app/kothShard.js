@@ -6,15 +6,22 @@
 // Hard KOTH invariants:
 // - Page load creates a private staging and never claims a public live slot.
 // - Public live state is entered by applying one complete MATCH_SNAPSHOT.
-// - Mid-match sync uses checkpoint + ledger delta (or full replay before the
-//   first checkpoint); L2+ observers only pull from their sponsor observer.
+// - Mid-match sync uses a world checkpoint + ledger delta. Solo live (one
+//   king in a public sandbox) attaches at the tip — no ledger replay — because
+//   the first join resets the match. L2+ observers only pull from their sponsor.
 // - Open seats use cascading SLOT_OFFER / opt-in SLOT_CLAIM (no auto-promote).
 // - Roster changes after live start flow through JOIN_ACCEPT or SLOT_DEFEAT.
 // - Commands and tick confirms must be owned by the userId for their playerId.
 
 import { p2pDevModeFromLocation } from './net.js';
 import { getPlayerName } from './settings.js';
-import { replayCatchUp, formatMatchTime, matchSecondsFromTick } from './catchup.js';
+import { aetherSteam } from './steam.js';
+import {
+  replayCatchUp,
+  formatMatchTime,
+  matchSecondsFromTick,
+  shouldExportFreshCatchupCheckpoint,
+} from './catchup.js';
 import {
   createChunkAssembler,
   createLedgerAssembler,
@@ -174,7 +181,11 @@ export function createKothShard(options = {}) {
   let activeCatchupRequestId = '';
   /** True while replayCatchUp is awaited — blocks overlapping offers/retries. */
   let catchupInFlight = false;
+  /** Bumped when the live match is replaced so an in-flight replay cannot apply. */
+  let catchupEpoch = 0;
   let catchupRetryTimer = null;
+  /** Shared in-flight host checkpoint export (multiple spectators can request at once). */
+  let catchupExportInFlight = null;
   let catchupOfferTimer = null;
   let catchupRequestStartedAt = 0;
   let catchupRetryAttempt = 0;
@@ -944,8 +955,7 @@ export function createKothShard(options = {}) {
     const prevMatchId = matchId;
     matchId = presence.matchId;
     if (prevMatchId !== matchId) {
-      activeCatchupRequestId = '';
-      clearCatchupOfferTimer();
+      invalidateInFlightCatchup();
       resetDialState();
       switchToMatchLobby(matchId);
     }
@@ -2305,6 +2315,7 @@ export function createKothShard(options = {}) {
     if (localSnapshotSlot?.state !== 'active') {
       // Late spectators must not apply the tick-0 start snapshot to the visible sim.
       // They need to replay from a live sponsor to the current tick first.
+      invalidateInFlightCatchup();
       roster = nextRoster;
       seed = nextSeed;
       if (msg.armyPerSide != null) armyPerSide = msg.armyPerSide | 0;
@@ -2346,6 +2357,7 @@ export function createKothShard(options = {}) {
     // solo→2 reset that promotes this spectator into player 1 with a brand-new
     // start key. Adopt it; the old anti-split-brain key bail is now subsumed by
     // isCanonicalResetSender (only the recognized host can author a re-key).
+    invalidateInFlightCatchup();
     roster = cloneSlots(msg.roster ?? roster);
     seed = msg.seed ?? seed;
     if (msg.armyPerSide != null) armyPerSide = msg.armyPerSide | 0;
@@ -2668,13 +2680,45 @@ export function createKothShard(options = {}) {
       return;
     }
 
+    const tipTick = session.confirmedTick;
+    let cached = session.getCachedCheckpoint?.();
+    const soloLive = countActive(roster) <= 1;
+    if (
+      shouldExportFreshCatchupCheckpoint({
+        activeCount: countActive(roster),
+        cachedTick: cached?.tick ?? 0,
+        tipTick,
+      })
+    ) {
+      try {
+        if (!catchupExportInFlight) {
+          catchupExportInFlight = session.exportCheckpoint().finally(() => {
+            catchupExportInFlight = null;
+          });
+        }
+        await catchupExportInFlight;
+        cached = session.getCachedCheckpoint?.();
+        lastCheckpointTickPublished = Math.max(
+          lastCheckpointTickPublished,
+          cached?.tick ?? 0,
+        );
+      } catch (err) {
+        console.warn('[KOTH] catch-up checkpoint export failed', err);
+      }
+    }
+
     const tick = session.confirmedTick;
-    const cached = session.getCachedCheckpoint?.();
     const checkpointTick = cached?.tick ?? 0;
-    const useCheckpoint = checkpointTick > 0 && checkpointTick < tick;
+    // Solo sandbox: attach at the tip. The first join resets the match anyway,
+    // so shipping a full command ledger is wasted work (and times out).
+    const useCheckpoint = checkpointTick > 0 && checkpointTick <= tick;
     const ledger = useCheckpoint
-      ? session.exportLedger(checkpointTick, tick)
+      ? (soloLive ? [] : session.exportLedger(checkpointTick, tick))
       : session.exportLedger(0, tick);
+    const offerTick = soloLive && useCheckpoint ? checkpointTick : tick;
+    const offerChecksum = soloLive && useCheckpoint
+      ? (cached.checksum ?? session._lastChecksum)
+      : session._lastChecksum;
 
     const responsePeerId = fromPeerId && connectedPeerIds().includes(fromPeerId)
       ? fromPeerId
@@ -2709,8 +2753,8 @@ export function createKothShard(options = {}) {
       matchId,
       to: msg.from,
       requestId: msg.requestId,
-      tick,
-      checksum: session._lastChecksum,
+      tick: offerTick,
+      checksum: offerChecksum,
       ledger: useCheckpoint ? [] : ledger,
       ledgerFrameCount: ledger.length,
       ledgerTransferId: useCheckpoint ? transferId : undefined,
@@ -2719,6 +2763,7 @@ export function createKothShard(options = {}) {
       matchConfig: matchConfig(),
       roster: authoritativeRoster(),
       viaBroadcast: !!msg.viaBroadcast,
+      soloLive,
     };
     if (msg.viaBroadcast || !responsePeerId) {
       // Broadcast path: include ledger inline (no chunk assembly over broadcast).
@@ -2760,9 +2805,11 @@ export function createKothShard(options = {}) {
     catchupInFlight = true;
     clearCatchupOfferTimer();
     const acceptedRequestId = activeCatchupRequestId;
+    const epoch = catchupEpoch;
     activeCatchupRequestId = '';
     catchUpReady = false;
-    onStatus('Replaying catch-up…');
+    const attachLive = !!(msg.soloLive || (msg.checkpointTick > 0 && !(ledger?.length)));
+    onStatus(attachLive ? 'Attaching to live match…' : 'Replaying catch-up…');
     try {
       await replayCatchUp(
         session,
@@ -2776,10 +2823,15 @@ export function createKothShard(options = {}) {
           onProgress: ({ tick, targetTick }) => {
             const elapsed = formatMatchTime(matchSecondsFromTick(tick));
             const total = formatMatchTime(matchSecondsFromTick(targetTick));
-            onStatus(`Replaying ${elapsed} / ${total}…`);
+            onStatus(
+              attachLive
+                ? `Attaching at ${elapsed}…`
+                : `Replaying ${elapsed} / ${total}…`,
+            );
           },
         },
       );
+      if (epoch !== catchupEpoch) return;
       catchUpReady = true;
       phase = SHARD_PHASE.LIVE;
       appState = KOTH_APP_STATE.SPECTATOR;
@@ -2821,6 +2873,7 @@ export function createKothShard(options = {}) {
       catchupRetryAttempt = 0;
       if (isKing()) refreshSlotOffer();
     } catch (err) {
+      if (epoch !== catchupEpoch) return;
       console.warn('[KOTH] catch-up failed', err);
       clearCatchupOfferTimer();
       activeCatchupRequestId = '';
@@ -2840,6 +2893,10 @@ export function createKothShard(options = {}) {
       scheduleCatchupRetry(msg.tick ?? 0);
     } finally {
       catchupInFlight = false;
+    }
+    if (epoch !== catchupEpoch && !catchUpReady && role === 'spectator' && phase === SHARD_PHASE.LIVE) {
+      const sponsor = pickSponsorUserId();
+      if (sponsor) beginCatchup(sponsor, session?.confirmedTick ?? 0);
     }
   }
 
@@ -3166,6 +3223,12 @@ export function createKothShard(options = {}) {
       default:
         break;
     }
+  }
+
+  function invalidateInFlightCatchup() {
+    catchupEpoch += 1;
+    activeCatchupRequestId = '';
+    clearCatchupOfferTimer();
   }
 
   function clearCatchupOfferTimer() {
@@ -3711,6 +3774,7 @@ export function createKothShard(options = {}) {
       matchId = generateMatchId();
       seed = hashSeed(matchId);
       pinnedMatchId = matchId;
+      aetherSteam.notifyKothLobbyCreated();
       return startSoloLive({ forceNew: true });
     },
 

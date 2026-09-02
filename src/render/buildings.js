@@ -16,6 +16,7 @@ import { meshRoofY, roofChipLift, DEFAULT_BUILDING_ROOF } from './healthBars.js'
 import { BUILDING_FOOTPRINTS, BUILDING_MODEL_URLS, PLACEABLE_BUILDINGS } from '../sim/buildings.js';
 import { TILE_SIZE_F } from '../sim/field.js';
 import { SCALE_RISE_MS, stageRiseScale } from './scaleBounce.js';
+import { constructionVisualStage } from '../sim/construction.js';
 import { capacityFor } from '../sim/capacity.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
@@ -37,6 +38,11 @@ const COLLAR_Y_LIFT = 0.9;
 const COLLAR_ALPHA = 0.82;
 /** Unfinished sites sit smaller until villagers raise them. */
 const SITE_SCALE = 0.58;
+/** First work — a small pop off the foundation. */
+const WORK_START_SCALE = 0.70;
+/** Near-done (~2/3 progress) — most of the way to full size. */
+const NEAR_DONE_SCALE = 0.88;
+const CONSTRUCT_STAGE_SCALE = [SITE_SCALE, WORK_START_SCALE, NEAR_DONE_SCALE];
 /** Collapse when a building leaves the sim list. */
 const FALL_MS = 520;
 
@@ -507,8 +513,20 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     batch.capacity = cap;
   }
 
+  function constructScale(b) {
+    if (b.built !== 0) return 1;
+    return CONSTRUCT_STAGE_SCALE[constructionVisualStage(b.buildProgress, b.buildTime)] ?? SITE_SCALE;
+  }
+
+  function constructStage(b) {
+    if (b.built !== 0) return 3;
+    return constructionVisualStage(b.buildProgress, b.buildTime);
+  }
+
   function makeVisual(b, gi) {
     const built = b.built === 0 ? 0 : 1;
+    const stage = constructStage(b);
+    const scale = constructScale(b);
     return {
       key: buildingKey(b.type, b.x, b.z),
       type: b.type,
@@ -518,9 +536,10 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
       owner: b.owner | 0,
       globalIndex: gi,
       built,
-      visScale: built === 0 ? SITE_SCALE : 1,
-      scaleFrom: built === 0 ? SITE_SCALE : 1,
-      targetScale: built === 0 ? SITE_SCALE : 1,
+      scaleStage: stage,
+      visScale: scale,
+      scaleFrom: scale,
+      targetScale: scale,
       scaleT: 1,
       scaleDur: SCALE_RISE_MS,
       rising: false,
@@ -529,9 +548,9 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
     };
   }
 
-  function beginRise(s) {
+  function beginRise(s, target = 1) {
     s.scaleFrom = s.visScale;
-    s.targetScale = 1;
+    s.targetScale = target;
     s.scaleT = 0;
     s.scaleDur = SCALE_RISE_MS;
     s.rising = true;
@@ -634,9 +653,13 @@ export async function createBuildingProps(engine, scene, groundYAt, opts = {}) {
         s.yaw = b.yaw ?? 0;
         s.owner = b.owner | 0;
         const built = b.built === 0 ? 0 : 1;
-        if (s.built === 0 && built === 1 && !s.falling) beginRise(s);
+        const stage = constructStage(b);
+        if (s.built === 0 && built === 1 && !s.falling) beginRise(s, 1);
+        else if (built === 0 && stage > (s.scaleStage | 0) && !s.falling) {
+          beginRise(s, constructScale(b));
+        }
         s.built = built;
-        if (built === 0 && !s.rising && !s.falling) s.visScale = SITE_SCALE;
+        s.scaleStage = Math.max(s.scaleStage | 0, stage);
       }
     }
     for (const [key, s] of visuals) {

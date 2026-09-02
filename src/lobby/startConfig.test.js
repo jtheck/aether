@@ -52,5 +52,7 @@ describe('lobby start config', () => {
     }, 'host-id');
     assert.equal(cfg.localSolo, true);
     assert.equal(cfg.sharedVision, true);
+    assert.equal(cfg.chapter, 'ch1');
+    assert.equal(cfg.gardenUrl, '/maps/chapter1.garden');
   });
 });

@@ -11,27 +11,27 @@ export const MAX_RESOURCE_OWNERS = 16;
 export const RESOURCE_KINDS = /** @type {const} */ (['wood', 'stone', 'mineral', 'food']);
 export const RESOURCE_COUNT = RESOURCE_KINDS.length;
 
-const RESOURCE_LABELS = Object.freeze({
-  wood: 'Wood',
-  stone: 'Stone',
-  mineral: 'Mineral',
-  food: 'Food',
-});
-
 /**
- * Compact HUD string, e.g. "25 Food · 15 Wood". Empty when free / missing.
+ * Resource amounts on a cost (skips pop — every train is 1 pop).
  * @param {Record<string, number> | null | undefined} cost
+ * @returns {{ kind: string, amount: number }[]}
  */
-export function formatResourceCost(cost) {
-  if (!cost) return '';
+export function resourceCostParts(cost) {
+  if (!cost) return [];
   const parts = [];
   for (const kind of RESOURCE_KINDS) {
     const n = cost[kind] | 0;
-    if (n > 0) parts.push(`${n} ${RESOURCE_LABELS[kind]}`);
+    if (n > 0) parts.push({ kind, amount: n });
   }
-  const pop = cost.pop | 0;
-  if (pop > 0) parts.push(`${pop} Pop`);
-  return parts.join(' · ');
+  return parts;
+}
+
+/**
+ * Compact HUD string, e.g. "25 · 15". Empty when free / missing. Pop omitted.
+ * @param {Record<string, number> | null | undefined} cost
+ */
+export function formatResourceCost(cost) {
+  return resourceCostParts(cost).map((p) => String(p.amount)).join(' · ');
 }
 
 /** @type {Readonly<Record<string, number>>} kind → slot index */
@@ -135,6 +135,20 @@ export function canAffordBank(bank, cost) {
     if (need > 0 && (bank?.[kind] | 0) < need) return false;
   }
   return true;
+}
+
+/**
+ * Resource kinds on a cost the bank cannot cover (skips pop).
+ * @param {Record<string, number> | null | undefined} bank
+ * @param {Record<string, number> | null | undefined} cost
+ * @returns {string[]}
+ */
+export function lackingCostKinds(bank, cost) {
+  const lack = [];
+  for (const p of resourceCostParts(cost)) {
+    if ((bank?.[p.kind] | 0) < p.amount) lack.push(p.kind);
+  }
+  return lack;
 }
 
 /**

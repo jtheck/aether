@@ -8,10 +8,13 @@ import {
   tileCenterY,
   worldToTile,
 } from './field.js';
-import { createWorld } from './world.js';
+import { createWorld, spawn } from './world.js';
 import { applyCommands, CMD } from './commands.js';
 import { ownerHasTech, TECH, serializeTech, grantTech } from './tech.js';
-import { MAX_WAYPOINTS } from './path.js';
+import { addResource } from './resources.js';
+import { MAX_WAYPOINTS, PATH_STYLE, queuePath, planPath } from './path.js';
+import { UNIT } from './unitTypes.js';
+import { growTreeAt } from './trees.js';
 import {
   rallyPathWorldPoints,
   createBuilding,
@@ -75,6 +78,8 @@ describe('drayage slow-aware rally pathing', () => {
       }),
     ];
     assert.equal(ownerHasTech(w, 0, TECH.DRAYAGE), false);
+    addResource(w, 0, 'wood', 40);
+    addResource(w, 0, 'stone', 20);
     applyCommands(w, field, [
       {
         type: CMD.RESEARCH,
@@ -153,5 +158,60 @@ describe('drayage slow-aware rally pathing', () => {
       if (worldToTile(fx.fromFloat(p.z)) !== 8) smartLeft = true;
     }
     assert.ok(smartLeft, 'Drayage rally preview should detour off the slow belt');
+  });
+});
+
+describe('unit path styles', () => {
+  for (const type of [UNIT.MONK, UNIT.ENGINEER]) {
+    const name = type === UNIT.MONK ? 'monk' : 'engineer';
+    it(`${name} queuePath is slow-aware and detours a slow belt`, () => {
+      const field = openField();
+      for (let tx = 3; tx <= 12; tx++) {
+        field.slowMask[8 * field.width + tx] = 1;
+      }
+      const sx = tileCenterX(2);
+      const sy = tileCenterY(8);
+      const ex = tileCenterX(13);
+      const ey = tileCenterY(8);
+      const w = createWorld(1);
+      const id = spawn(w, { x: sx, y: sy, type, owner: 0 });
+      queuePath(w, id, ex, ey);
+      assert.equal(w.pathSlowAware[id], PATH_STYLE.SLOW_AWARE);
+      planPath(w, field, id, ex, ey, true);
+      assert.ok(w.navWpCount[id] > 0, `${name} found a path`);
+      let leftRow = false;
+      for (let i = 0; i < w.navWpCount[id]; i++) {
+        if (worldToTile(w.navWy[i]) !== 8) leftRow = true;
+      }
+      assert.ok(leftRow, `${name} should leave the slow row`);
+    });
+  }
+
+  it('treeSeek A* prefers a tree corridor over a clear parallel', () => {
+    const field = openField();
+    for (let tx = 3; tx <= 12; tx++) {
+      growTreeAt(field, 6 * field.width + tx, 40);
+    }
+    const sx = tileCenterX(2);
+    const sy = tileCenterY(8);
+    const ex = tileCenterX(13);
+    const ey = tileCenterY(8);
+    const wx = new Int32Array(MAX_WAYPOINTS);
+    const wy = new Int32Array(MAX_WAYPOINTS);
+    const nGeom = findPath(field, sx, sy, ex, ey, wx, wy, MAX_WAYPOINTS);
+    assert.ok(nGeom > 0);
+    assert.equal(worldToTile(wy[0]), 8);
+
+    const wx2 = new Int32Array(MAX_WAYPOINTS);
+    const wy2 = new Int32Array(MAX_WAYPOINTS);
+    const nSeek = findPath(field, sx, sy, ex, ey, wx2, wy2, MAX_WAYPOINTS, {
+      treeSeek: true,
+    });
+    assert.ok(nSeek > 0, 'treeSeek path exists');
+    let hitTrees = false;
+    for (let i = 0; i < nSeek; i++) {
+      if (worldToTile(wy2[i]) === 6) hitTrees = true;
+    }
+    assert.ok(hitTrees, 'treeSeek path should visit the tree row');
   });
 });

@@ -6,6 +6,7 @@ import { step } from './step.js';
 import { createField, worldToTile } from './field.js';
 import { growTreeAt } from './trees.js';
 import { getBuildTime } from './buildings.js';
+import { PATH_STYLE } from './path.js';
 import {
   VILLAGER_WANDER_PERIOD,
   VILLAGER_WANDER_MAX_F,
@@ -82,6 +83,23 @@ function idleEngineerWalksToAnotherBuilding() {
   assert.ok(dVill < dCamp, 'hop aims at the other building, not the one they stood on');
 }
 
+function idleMycoAimsAtTrees() {
+  const field = openField(5);
+  const ox = worldToTile(0);
+  const oz = worldToTile(0);
+  for (let dx = 2; dx <= 22; dx++) {
+    for (let dz = -3; dz <= 3; dz++) {
+      growTreeAt(field, (oz + dz) * field.width + (ox + dx), 40);
+    }
+  }
+  const w = createWorld(5);
+  const myco = spawn(w, { x: 0, y: 0, type: UNIT.MYCO, owner: 0 });
+  const t = waitForMove(field, w, myco, VILLAGER_WANDER_PERIOD + 8);
+  assert.ok(t >= 0, 'idle myco eventually wanders');
+  assert.equal(w.pathSlowAware[myco], PATH_STYLE.TREE_SEEK, 'wander uses tree-seeking A*');
+  assert.ok(w.tx[myco] > w.px[myco], 'heading prefers the eastern grove');
+}
+
 function wanderDoesNotBlockAssign() {
   const field = openField(4);
   const w = createWorld(4);
@@ -94,6 +112,7 @@ function wanderDoesNotBlockAssign() {
 
 idleVillagerAmbles();
 idleMycoAmblesFarther();
+idleMycoAimsAtTrees();
 idleEngineerWalksToAnotherBuilding();
 wanderDoesNotBlockAssign();
 console.log('idleWander.test.js: ok (villager + myco + engineer + assign)');

@@ -38,4 +38,22 @@ describe('shareVisionOwnersFromCfg', () => {
       [1],
     );
   });
+
+  it('honors an explicit share list without allying every AI', () => {
+    assert.deepEqual(
+      shareVisionOwnersFromCfg({
+        role: 'player',
+        localPlayerId: 0,
+        shareVisionWith: [2, 3, 4],
+        sharedVision: false,
+        aiPlayers: [
+          { owner: 1, temperament: 'cautious' },
+          { owner: 2, temperament: 'steady' },
+          { owner: 3, temperament: 'aggressive' },
+          { owner: 4, temperament: 'reckless' },
+        ],
+      }),
+      [2, 3, 4],
+    );
+  });
 });

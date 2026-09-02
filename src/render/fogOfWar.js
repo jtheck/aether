@@ -167,6 +167,17 @@ const EDT_INF = 1 << 28;
 const EDT_MAX_R = 48;
 /** Enough overlapping sources that per-circle raster is slower than one union EDT. */
 const UNION_SOURCE_MIN = 6;
+/** Partition a hollow full-map AABB (stress ring) into per-cell EDTs. */
+const FOG_EDT_CELL = 32;
+/** Cluster when the source AABB covers this fraction of the board. */
+const FOG_CLUSTER_BBOX_FRAC = 0.28;
+
+/** @type {Int32Array | null} */
+let fogSrcKeys = null;
+/** @type {Int32Array | null} */
+let fogSrcCopy = null;
+/** Reused index list for clustering — length is srcN, not capacity. */
+const fogSrcSort = [];
 
 /** @type {Int32Array | null} */
 let edtGrid = null;
@@ -360,6 +371,12 @@ export function createFogOfWar() {
   /** @type {Uint8Array | null} */
   let dirty = null;
   let paintedOnce = false;
+  /** Occupied 64×64 upload cells this dirty pass. */
+  /** @type {Uint16Array | null} */
+  let fogCellUsed = null;
+  let fogCellGen = 0;
+  /** @type {{ x: number, y: number, w: number, h: number }[]} */
+  const fogUploadRects = [];
   /** Largest vision already stamped from this tile this gen. */
   /** @type {Uint8Array | null} */
   let tileStampR = null;
@@ -649,8 +666,7 @@ export function createFogOfWar() {
     }
   }
 
-  function flushSources(mask) {
-    if (srcN <= 0) return;
+  function measureSources() {
     let x0 = width;
     let z0 = height;
     let x1 = -1;
@@ -682,19 +698,67 @@ export function createFogOfWar() {
     if (z0 < 0) z0 = 0;
     if (x1 >= width) x1 = width - 1;
     if (z1 >= height) z1 = height - 1;
-    const bw = x1 - x0 + 1;
-    const bh = z1 - z0 + 1;
-    const useUnion = srcN >= UNION_SOURCE_MIN && circleWork > bw * bh * nRad * 3;
+    return { x0, z0, x1, z1, radMin, radMax, nRad, circleWork };
+  }
+
+  /** Raster current `srcTiles[0..srcN)` — union EDT or per-circle. */
+  function stampSourceGroup(mask) {
+    if (srcN <= 0) return;
+    const m = measureSources();
+    const bw = m.x1 - m.x0 + 1;
+    const bh = m.z1 - m.z0 + 1;
+    const useUnion = srcN >= UNION_SOURCE_MIN && m.circleWork > bw * bh * m.nRad * 3;
     if (!useUnion) {
       for (let s = 0; s < srcN; s++) {
         const ti = srcTiles[s];
         const tz = (ti / width) | 0;
         stampCircle(ti - tz * width, tz, tileStampR[ti], mask);
       }
-      srcN = 0;
       return;
     }
-    stampUnionEdt(x0, z0, bw, bh, radMin, radMax, mask);
+    stampUnionEdt(m.x0, m.z0, bw, bh, m.radMin, m.radMax, mask);
+  }
+
+  function flushSourcesClustered(mask) {
+    const n = srcN;
+    if (!fogSrcKeys || fogSrcKeys.length < n) {
+      fogSrcKeys = new Int32Array(n);
+      fogSrcCopy = new Int32Array(n);
+    }
+    const cell = FOG_EDT_CELL;
+    const cols = (width + cell - 1) / cell | 0;
+    fogSrcSort.length = n;
+    for (let s = 0; s < n; s++) {
+      const ti = srcTiles[s];
+      const tz = (ti / width) | 0;
+      const tx = ti - tz * width;
+      fogSrcKeys[s] = (tz / cell | 0) * cols + (tx / cell | 0);
+      fogSrcCopy[s] = ti;
+      fogSrcSort[s] = s;
+    }
+    fogSrcSort.sort((a, b) => fogSrcKeys[a] - fogSrcKeys[b]);
+    let i = 0;
+    while (i < n) {
+      const key = fogSrcKeys[fogSrcSort[i]];
+      let j = i + 1;
+      while (j < n && fogSrcKeys[fogSrcSort[j]] === key) j++;
+      srcN = 0;
+      for (let k = i; k < j; k++) srcTiles[srcN++] = fogSrcCopy[fogSrcSort[k]];
+      stampSourceGroup(mask);
+      i = j;
+    }
+  }
+
+  function flushSources(mask) {
+    if (srcN <= 0) return;
+    const m = measureSources();
+    const bw = m.x1 - m.x0 + 1;
+    const bh = m.z1 - m.z0 + 1;
+    const cluster = srcN >= UNION_SOURCE_MIN
+      && bw * bh > width * height * FOG_CLUSTER_BBOX_FRAC
+      && srcN >= FOG_EDT_CELL;
+    if (cluster) flushSourcesClustered(mask);
+    else stampSourceGroup(mask);
     srcN = 0;
   }
 
@@ -894,6 +958,13 @@ export function createFogOfWar() {
     writeLayer(visitedPixels, o, visitedA);
   }
 
+  /** Full unseen shroud — no per-tile cover walk. */
+  function paintShroud() {
+    if (!pixels || !visitedPixels) return;
+    pixels.fill(255);
+    visitedPixels.fill(0);
+  }
+
   function paintPixels(incremental) {
     if (!pixels || !visitedPixels) return;
     if (incremental) {
@@ -904,13 +975,56 @@ export function createFogOfWar() {
       }
       return;
     }
-    pixels.fill(0);
-    visitedPixels.fill(0);
+    paintShroud();
     if (!cover && !visible) return;
     for (let tz = 0; tz < height; tz++) {
       for (let tx = 0; tx < width; tx++) paintTexel(tx, tz);
     }
-    paintedOnce = true;
+  }
+
+  /**
+   * Dirty tiles as 64-aligned cells. A ring of armies dirties a huge AABB
+   * but only a fraction of cells — one rect per occupied cell beats a full upload.
+   */
+  function dirtyCellRects() {
+    if (dirtyN <= 0 || !texW || !texH) return null;
+    const cw = TEXEL_ALIGN;
+    const cols = Math.ceil(texW / cw);
+    const rows = Math.ceil(texH / cw);
+    const nCells = cols * rows;
+    if (!fogCellUsed || fogCellUsed.length < nCells) fogCellUsed = new Uint16Array(nCells);
+    fogCellGen = (fogCellGen + 1) & 0xffff;
+    if (fogCellGen === 0) {
+      fogCellUsed.fill(0);
+      fogCellGen = 1;
+    }
+    let marked = 0;
+    for (let d = 0; d < dirtyN; d++) {
+      const i = dirtyList[d];
+      const tz = (i / width) | 0;
+      const tx = i - tz * width;
+      const id = ((tz / cw) | 0) * cols + ((tx / cw) | 0);
+      if (fogCellUsed[id] === fogCellGen) continue;
+      fogCellUsed[id] = fogCellGen;
+      marked++;
+    }
+    if (marked <= 0) return null;
+    if (marked * cw * cw * 2 >= texW * texH) return null;
+    fogUploadRects.length = 0;
+    for (let cz = 0; cz < rows; cz++) {
+      for (let cx = 0; cx < cols; cx++) {
+        if (fogCellUsed[cz * cols + cx] !== fogCellGen) continue;
+        const x = cx * cw;
+        const y = cz * cw;
+        fogUploadRects.push({
+          x,
+          y,
+          w: Math.min(cw, texW - x),
+          h: Math.min(cw, texH - y),
+        });
+      }
+    }
+    return fogUploadRects.length ? fogUploadRects : null;
   }
 
   function clearDirty() {
@@ -920,30 +1034,6 @@ export function createFogOfWar() {
     }
     for (let d = 0; d < dirtyN; d++) dirty[dirtyList[d]] = 0;
     dirtyN = 0;
-  }
-
-  function dirtyTexBounds() {
-    if (dirtyN <= 0) return null;
-    let x0 = width;
-    let z0 = height;
-    let x1 = -1;
-    let z1 = -1;
-    for (let d = 0; d < dirtyN; d++) {
-      const i = dirtyList[d];
-      const tz = (i / width) | 0;
-      const tx = i - tz * width;
-      if (tx < x0) x0 = tx;
-      if (tz < z0) z0 = tz;
-      if (tx > x1) x1 = tx;
-      if (tz > z1) z1 = tz;
-    }
-    if (x1 < 0) return null;
-    x0 -= x0 % TEXEL_ALIGN;
-    const xEnd = Math.min(texW, Math.ceil((x1 + 1) / TEXEL_ALIGN) * TEXEL_ALIGN);
-    const w = xEnd - x0;
-    const h = z1 - z0 + 1;
-    if (w * h * 2 >= texW * texH) return null;
-    return { x: x0, y: z0, w, h };
   }
 
   function bindOneOpacity(mat, next) {
@@ -990,11 +1080,28 @@ export function createFogOfWar() {
     // be true — a dirty-only upload then writes a hole into a zeroed shroud
     // (wilderness stays transparent = inverted mask).
     if (paintedOnce && dirtyN === 0 && texture && visitedTexture) return;
-    const incremental = !!(paintedOnce && dirtyN > 0 && texture && visitedTexture);
-    paintPixels(incremental);
-    const rect = incremental ? dirtyTexBounds() : null;
-    texture = writeOpacityTexture(texture, pixels, rect);
-    visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels, rect);
+    if (!paintedOnce) {
+      paintShroud();
+      if (dirtyN > 0) paintPixels(true);
+      texture = writeOpacityTexture(texture, pixels, null);
+      visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels, null);
+      paintedOnce = true;
+      bindOneOpacity(material, texture);
+      bindOneOpacity(visitedMaterial, visitedTexture);
+      clearDirty();
+      return;
+    }
+    paintPixels(true);
+    const rects = dirtyCellRects();
+    if (!rects) {
+      texture = writeOpacityTexture(texture, pixels, null);
+      visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels, null);
+    } else {
+      for (let r = 0; r < rects.length; r++) {
+        texture = writeOpacityTexture(texture, pixels, rects[r]);
+        visitedTexture = writeOpacityTexture(visitedTexture, visitedPixels, rects[r]);
+      }
+    }
     bindOneOpacity(material, texture);
     bindOneOpacity(visitedMaterial, visitedTexture);
     clearDirty();

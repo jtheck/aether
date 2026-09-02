@@ -10,6 +10,7 @@ import { step } from './step.js';
 import {
   TREE_BURN_DAMAGE,
   TREE_BURN_DAMAGE_INTERVAL,
+  TREE_BURN_TICKS,
   TREE_IGNITE_DAMAGE,
   TREE_WOOD_PER_STAGE,
   applyTreeSplash,
@@ -21,6 +22,7 @@ import {
   takeTreeUpdates,
   treeScaleForStage,
   treeStageFromStock,
+  treeBurnsToDeath,
   treeBurnSystem,
 } from './trees.js';
 import { TERRAIN } from './field.js';
@@ -63,6 +65,14 @@ function damageShrinksThenFells() {
   assert.equal(field.treeStock[i], 0);
   assert.equal(field.sceneryType[i], SCENERY.NONE);
   assert.equal(field.slowMask[i], 0);
+}
+
+function destinedTreesBurnDown() {
+  assert.equal(treeBurnsToDeath(0, TREE_BURN_TICKS), false);
+  assert.equal(treeBurnsToDeath(7, 0), false);
+  assert.equal(treeBurnsToDeath(42, TREE_BURN_TICKS), true, 'fresh ignite always consumes a living tree');
+  assert.equal(treeBurnsToDeath(7, 40), false, 'no interval left');
+  assert.equal(treeBurnsToDeath(7, 51), true, 'one remaining chip fells a stage');
 }
 
 function burnConsumesStages() {
@@ -217,6 +227,7 @@ function growTreeAtAndMainFieldSync() {
 
 stagesAndScales();
 damageShrinksThenFells();
+destinedTreesBurnDown();
 burnConsumesStages();
 fireballSplashIgnitesNearbyTree();
 fireballProjectileBurnsTreesThroughStep();

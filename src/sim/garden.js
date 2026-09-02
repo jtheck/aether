@@ -2,12 +2,13 @@
 // v3 files still decode (no scenery / placements).
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
-import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, refreshTerrainDerived, tileCenterX, tileCenterY } from './field.js';
+import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY } from './field.js';
 import { applyAuthoredScenery, SCENERY } from './scenery.js';
 import { spawn } from './world.js';
 import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
 import { createAgoras } from './agora.js';
 import { grantStartingResources, RESOURCE_KINDS, STARTING_RESOURCES } from './resources.js';
+import { encodeStory, normalizeStory } from '../story/timeline.js';
 import * as fx from './fixed.js';
 
 export const GARDEN_VERSION = 4;
@@ -76,8 +77,22 @@ function hasAuthoredScenery(field) {
 function normalizeUnits(list) {
   if (!Array.isArray(list)) return [];
   return list.map((u) => {
-    if (Array.isArray(u)) return { owner: u[0] | 0, type: u[1] | 0, tx: u[2] | 0, tz: u[3] | 0 };
-    return { owner: u.owner | 0, type: u.type | 0, tx: u.tx | 0, tz: u.tz | 0 };
+    if (Array.isArray(u)) {
+      return {
+        owner: u[0] | 0,
+        type: u[1] | 0,
+        tx: u[2] | 0,
+        tz: u[3] | 0,
+        name: u[4] ? String(u[4]) : '',
+      };
+    }
+    return {
+      owner: u.owner | 0,
+      type: u.type | 0,
+      tx: u.tx | 0,
+      tz: u.tz | 0,
+      name: u.name ? String(u.name) : '',
+    };
   });
 }
 
@@ -171,11 +186,24 @@ export function encodeGarden(field, extras = {}) {
     out.sc = encodeRle(field.sceneryType);
     out.ts = encodeRle(field.treeStock);
   }
-  if (units.length) out.u = units.map((u) => [u.owner, u.type, u.tx, u.tz]);
+  if (units.length) {
+    out.u = units.map((u) => (
+      u.name
+        ? [u.owner, u.type, u.tx, u.tz, u.name]
+        : [u.owner, u.type, u.tx, u.tz]
+    ));
+  }
   if (buildings.length) out.b = buildings.map((b) => [b.owner, b.type, b.x, b.z, b.yaw]);
   if (agoras.length) out.g = agoras.map((g) => [g.owner, g.x, g.z]);
   const sr = encodeStartingResources(extras.startingResources);
   if (sr) out.sr = sr;
+  const story = encodeStory(extras.story);
+  if (story) out.story = story;
+  const tableHalf = (field.width * TILE_SIZE_F) / 2;
+  const cameraHalf = Number(extras.cameraHalfF ?? field.cameraHalfF);
+  if (Number.isFinite(cameraHalf) && cameraHalf > 0 && cameraHalf < tableHalf - 0.5) {
+    out.ch = Math.round(cameraHalf * 100) / 100;
+  }
   return out;
 }
 
@@ -215,6 +243,8 @@ export function decodeGarden(data) {
     startingResources: normalizeStartingResources(data.sr ?? data.startingResources),
     authoredScenery: !!data.sc,
     regionLift: data.rl ? decodeQuantized01(data.rl, n) : null,
+    story: data.story ? normalizeStory(data.story) : null,
+    cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
   };
 }
 
@@ -248,6 +278,7 @@ export function fieldFromGarden(data) {
     if (g.treeStock?.length === field.treeStock.length) field.treeStock.set(g.treeStock);
     applyAuthoredScenery(field);
   }
+  if (g.cameraHalfF > 0) field.cameraHalfF = g.cameraHalfF;
   return field;
 }
 

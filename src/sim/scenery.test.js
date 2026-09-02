@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { createField, TERRAIN } from './field.js';
+import { UNIT, unitSlowMul, DEFAULT_SLOW_MUL } from './unitTypes.js';
+import * as fx from './fixed.js';
 import {
   SCENERY,
   ROCK_STAGE_MAX,
@@ -100,11 +102,18 @@ function damageRockPublishesAndShrinks() {
   assert.equal(passAt(field, tx, tz), 1, 'gone rock leaves no blocker');
 }
 
+function archerAndApcKeepMoreTreeSpeed() {
+  assert.ok(Math.abs(fx.toFloat(unitSlowMul(UNIT.VILLAGER)) - DEFAULT_SLOW_MUL) < 0.001);
+  assert.ok(fx.toFloat(unitSlowMul(UNIT.ARCHER)) > 0.7, 'archer woods snag is light');
+  assert.ok(fx.toFloat(unitSlowMul(UNIT.APC)) > 0.75, 'APC pushes through brush');
+}
+
 stagesMatchYield();
 stageFromRemainingStock();
 snowFootprintShrinksWithStock();
 damageRockPublishesAndShrinks();
 paintBrushRespectsFootprints();
+archerAndApcKeepMoreTreeSpeed();
 console.log('scenery.test.js: ok (rock yield + stages + collision shrink + paint spacing)');
 
 function blankLand() {

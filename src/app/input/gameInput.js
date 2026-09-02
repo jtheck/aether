@@ -3,13 +3,22 @@
 
 import * as fx from '../../sim/fixed.js';
 import { CMD } from '../../sim/commands.js';
-import { snapBuildingYaw, BUILDING_FOOTPRINTS, buildingCanRally, isBuildingAlive, isRallyBeyondBuilding } from '../../sim/buildings.js';
+import {
+  snapBuildingYaw,
+  BUILDING_FOOTPRINTS,
+  buildingCanRally,
+  isBuildingAlive,
+  isRallyBeyondBuilding,
+  isRallyBeyondPoint,
+  listRallyFlags,
+} from '../../sim/buildings.js';
 import {
   CONTROL_GROUP_HOLD_MS,
   assignControlGroup,
   controlGroupFilled,
   controlGroupIdFromCode,
   createEmptyControlGroups,
+  isControlGroupDoubleTap,
   livingControlGroup,
 } from './controlGroups.js';
 import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
@@ -24,6 +33,7 @@ import {
   boxSelectWinner,
   inspectForeignOnClick,
   mergeBuildingSels,
+  placementTapKind,
   radialClickKind,
   radialHubFramedBuilding,
   screenPosInRect,
@@ -35,6 +45,9 @@ import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js'
 const BUILDING_PICK_HEIGHT = 10;
 /** Slight pad so a click on the eaves still counts. */
 const BUILDING_PICK_HALO = 0.35;
+/** Click volume for a planted rally flag. */
+const RALLY_FLAG_PICK_R = 2.8;
+const RALLY_FLAG_PICK_H = 5.2;
 /** Reused empty hit list — never mutate. */
 const EMPTY_HITS = Object.freeze([]);
 
@@ -84,6 +97,7 @@ const ABILITY_HOLD_MS = 400;
  * @param {(clientX: number, clientY: number) => boolean} [opts.hitRadialHub]
  * @param {(i: number) => boolean} [opts.isUnitVisible] — skip fog-hidden hostiles
  * @param {(owner: number, x: number, z: number) => boolean} [opts.isStructureVisible] — skip fog-hidden hostiles
+ * @param {(id: number) => void} [opts.onControlGroupJump] — second tap of the same group
  */
 export function createGameInput(opts) {
   const {
@@ -122,6 +136,7 @@ export function createGameInput(opts) {
     isUnitVisible,
     isStructureVisible,
     getField,
+    onControlGroupJump,
   } = opts;
 
   let localPlayerId = initialPlayerId;
@@ -209,6 +224,8 @@ export function createGameInput(opts) {
   let ctrlGroupHoldFired = false;
   /** @type {{ units: number[], buildings: { kind: string, index: number }[] }[]} */
   let controlGroups = createEmptyControlGroups();
+  /** Last short tap on a pad / number key — second tap jumps the camera. */
+  let lastCtrlGroupTap = null;
   /** @type {{ x: number, z: number } | null} */
   let placeAnchor = null;
   let placeRotating = false;
@@ -349,6 +366,8 @@ export function createGameInput(opts) {
         if (!isBuildingAlive(b)) continue;
       } else if (sel.kind === 'agora') {
         if (!getAgoras?.()?.[sel.index]) continue;
+      } else {
+        continue;
       }
       buildings.push({ kind: sel.kind, index: sel.index });
     }
@@ -363,7 +382,7 @@ export function createGameInput(opts) {
 
   function selectControlGroup(id) {
     const live = markControlGroupFilled(id);
-    if (!controlGroupFilled(live)) return;
+    if (!controlGroupFilled(live)) return false;
     abandonPlacement();
     if (live.units.length > 0) {
       clearUnitSelectionBits();
@@ -371,14 +390,24 @@ export function createGameInput(opts) {
       clearBuildingSelection();
       syncSelectionSquad();
       onSelectionChanged?.();
-      return;
+      return true;
     }
     clearUnitSelection();
     setBuildingSelection(live.buildings, false, live.buildings[0]);
+    return true;
+  }
+
+  function tapControlGroup(id) {
+    const now = performance.now();
+    const jump = isControlGroupDoubleTap(lastCtrlGroupTap, id, now);
+    lastCtrlGroupTap = { id, t: now };
+    if (!selectControlGroup(id)) return;
+    if (jump) onControlGroupJump?.(id);
   }
 
   function resetControlGroups() {
     controlGroups = createEmptyControlGroups();
+    lastCtrlGroupTap = null;
     for (let i = 0; i < controlGroups.length; i++) {
       renderer.setControlGroupCount?.(i, 0);
     }
@@ -415,8 +444,8 @@ export function createGameInput(opts) {
   }
 
   /**
-   * Digit / numpad 1-6: tap selects, hold assigns (same as the pads).
-   * Ctrl/Cmd+number assigns immediately.
+   * Digit / numpad 1-6: tap selects, second tap jumps the camera, hold assigns
+   * (same as the pads). Ctrl/Cmd+number assigns immediately.
    * @param {KeyboardEvent} e
    */
   function handleControlGroupKeyDown(e) {
@@ -456,7 +485,7 @@ export function createGameInput(opts) {
     ctrlGroupKeyId = null;
     ctrlGroupKeyAssigned = false;
     clearCtrlGroupKeyHold();
-    if (!assigned && canUseInput()) selectControlGroup(id);
+    if (!assigned && canUseInput()) tapControlGroup(id);
     return true;
   }
 
@@ -695,6 +724,12 @@ export function createGameInput(opts) {
       renderer.pingAgora?.(sel.index);
       return;
     }
+    if (sel.kind === 'rally') {
+      const b = getBuildings?.()?.[sel.index];
+      const f = b ? listRallyFlags(b).find((x) => x.hop === (sel.hop | 0)) : null;
+      if (f) renderer.pingBuilding?.(f.x, f.z);
+      return;
+    }
     const b = getBuildings?.()?.[sel.index];
     if (b) renderer.pingBuilding?.(b.x, b.z);
   }
@@ -735,6 +770,57 @@ export function createGameInput(opts) {
     if (!sel) return -1;
     if (sel.kind === 'agora') return getAgoras?.()?.[sel.index]?.owner | 0;
     return getBuildings?.()?.[sel.index]?.owner | 0;
+  }
+
+  function visibleRallyFlags() {
+    const buildings = getBuildings?.() ?? [];
+    const seen = new Set();
+    /** @type {{ kind: 'rally', index: number, hop: number, x: number, z: number }[]} */
+    const out = [];
+    for (let i = 0; i < selectedBuildings.length; i++) {
+      const sel = selectedBuildings[i];
+      if (sel?.kind !== 'building' && sel?.kind !== 'rally') continue;
+      const bi = sel.index | 0;
+      if (seen.has(bi)) continue;
+      seen.add(bi);
+      const b = buildings[bi];
+      if (!b || (b.owner | 0) !== localPlayerId) continue;
+      const flags = listRallyFlags(b);
+      for (let k = 0; k < flags.length; k++) {
+        const f = flags[k];
+        out.push({ kind: 'rally', index: bi, hop: f.hop, x: f.x, z: f.z });
+      }
+    }
+    return out;
+  }
+
+  function pickRallyFlagAtRay(ray) {
+    if (!ray) return null;
+    const flags = visibleRallyFlags();
+    const best = { t: Infinity, flag: /** @type {typeof flags[0] | null} */ (null) };
+    for (let i = 0; i < flags.length; i++) {
+      const f = flags[i];
+      const gy = renderer.groundYAt?.(f.x, f.z) ?? 0;
+      const t = rayHitYawBox(
+        ray,
+        f.x,
+        f.z,
+        0,
+        RALLY_FLAG_PICK_R,
+        gy - 0.2,
+        RALLY_FLAG_PICK_R,
+        gy + RALLY_FLAG_PICK_H,
+      );
+      if (t == null || t >= best.t) continue;
+      best.t = t;
+      best.flag = f;
+    }
+    return best.flag;
+  }
+
+  function pickRallyFlagAt(clientX, clientY) {
+    const ray = renderer.clientPickingRay?.(clientX, clientY) ?? null;
+    return pickRallyFlagAtRay(ray);
   }
 
   /**
@@ -887,15 +973,31 @@ export function createGameInput(opts) {
   /** Own selected production buildings that can take a train rally. */
   function rallyCapableBuildings() {
     const buildings = getBuildings?.() ?? [];
-    /** @type {{ index: number, type: string, x: number, z: number }[]} */
+    /** @type {{ index: number, type: string, x: number, z: number, hopFrom: number }[]} */
     const out = [];
     for (let i = 0; i < selectedBuildings.length; i++) {
       const sel = selectedBuildings[i];
+      if (sel.kind === 'rally') {
+        const b = buildings[sel.index];
+        if (!b || (b.owner | 0) !== localPlayerId) continue;
+        if (!buildingCanRally(b.type)) continue;
+        const flags = listRallyFlags(b);
+        const f = flags.find((x) => x.hop === (sel.hop | 0));
+        if (!f) continue;
+        out.push({
+          index: sel.index,
+          type: b.type,
+          x: f.x,
+          z: f.z,
+          hopFrom: sel.hop | 0,
+        });
+        continue;
+      }
       if (sel.kind !== 'building') continue;
       const b = buildings[sel.index];
       if (!b || (b.owner | 0) !== localPlayerId) continue;
       if (!buildingCanRally(b.type)) continue;
-      out.push({ index: sel.index, type: b.type, x: b.x, z: b.z });
+      out.push({ index: sel.index, type: b.type, x: b.x, z: b.z, hopFrom: -1 });
     }
     return out;
   }
@@ -916,7 +1018,11 @@ export function createGameInput(opts) {
     let any = false;
     for (let i = 0; i < list.length; i++) {
       const b = list[i];
-      if (!isRallyBeyondBuilding(b.type, b.x, b.z, x, z)) continue;
+      const beyond =
+        (b.hopFrom | 0) < 0
+          ? isRallyBeyondBuilding(b.type, b.x, b.z, x, z)
+          : isRallyBeyondPoint(b.x, b.z, x, z);
+      if (!beyond) continue;
       enqueueCommand({
         type: CMD.SET_RALLY,
         playerId: localPlayerId,
@@ -924,6 +1030,7 @@ export function createGameInput(opts) {
         tx: fx.fromFloat(x),
         ty: fx.fromFloat(z),
         order,
+        hopFrom: b.hopFrom | 0,
       });
       any = true;
     }
@@ -1189,33 +1296,10 @@ export function createGameInput(opts) {
     if (hit >= 0 && world.owner[hit] === localPlayerId) return;
 
     // Attack-move onto a tree / rock: villagers gather (same volume pick as RMB).
+    // Soldiers never mine — leftover army still gets the ground order.
     if (cmdType === CMD.ATTACK_MOVE) {
       const node = resolveGatherClick(clientX, clientY);
-      if (node) {
-        const villagers = [];
-        const rest = [];
-        for (let k = 0; k < moveIds.length; k++) {
-          const id = moveIds[k];
-          if (world.owner[id] === localPlayerId && world.type[id] === UNIT.VILLAGER) {
-            villagers.push(id);
-          } else {
-            rest.push(id);
-          }
-        }
-        if (villagers.length > 0) {
-          enqueueCommand({ type: CMD.GATHER, entities: villagers, tile: node.tile });
-          if (epoch !== undefined && !clickCurrent(epoch)) return;
-          pingGatherOrder(node, cmdType);
-          if (rest.length === 0) {
-            playVillagerMove();
-            return;
-          }
-          const { tx, ty } = moveDestinations(rest, node.x, node.z);
-          enqueueCommand({ type: cmdType, entities: rest, tx, ty });
-          playVillagerMove();
-          return;
-        }
-      }
+      if (node && issueGatherAtNode(moveIds, node, cmdType, epoch)) return;
     }
 
     const g = renderer.screenToGround(clientX, clientY);
@@ -1514,11 +1598,22 @@ export function createGameInput(opts) {
 
     if (USE_GPU_PICK) bld = await pickBuildingAt(e.clientX, e.clientY);
     if (!clickCurrent(epoch)) return;
+    if (!hasOrderableSelection()) {
+      const flag = pickRallyFlagAt(e.clientX, e.clientY);
+      if (flag) bld = flag;
+    }
     if (!bld && click.hubPassThrough) {
       bld = radialHubFramedBuilding(
         { picked: false, onHub: true },
         selectedBuilding,
       );
+    }
+    if (bld?.kind === 'rally') {
+      lastTap = { t: tapAt, x: e.clientX, y: e.clientY, kind: 'rally' };
+      const ptr = { clientX: e.clientX, clientY: e.clientY };
+      clearUnitSelection();
+      setBuildingSelection([bld], false, bld, ptr);
+      return;
     }
     if (bld) {
       const ownBld = buildingOwnerOf(bld) === localPlayerId;
@@ -1619,7 +1714,7 @@ export function createGameInput(opts) {
 
     if (canUseInput() && e.type !== 'pointercancel') {
       if (wasCtrlGroup != null) {
-        if (!ctrlHoldAssigned) selectControlGroup(wasCtrlGroup);
+        if (!ctrlHoldAssigned) tapControlGroup(wasCtrlGroup);
         lastTap = null;
       } else if (wasSelHud) {
         // Release on the same chip → select every unit/building of that type
@@ -1629,20 +1724,26 @@ export function createGameInput(opts) {
         lastTap = null;
       } else if (isPlacing()) {
         let radialHandled = false;
+        let radialKind = 'world';
+        let picked = null;
         if (isRadialOpen?.() || wasRadialGesture) {
-          const picked = await pickRadialOption?.(e.clientX, e.clientY);
-          if (picked) {
+          picked = await pickRadialOption?.(e.clientX, e.clientY);
+          radialKind = radialClickKind({
+            picked: !!picked,
+            onHub: hitRadialHub?.(e.clientX, e.clientY),
+            onChrome: wasRadialGesture || !!hitRadial?.(e.clientX, e.clientY),
+          });
+        }
+        if (isPlacingRally?.()) {
+          if (radialKind === 'pick') {
             lastTap = null;
             onRadialPick?.(picked);
             radialHandled = true;
-          } else if (wasRadialGesture || hitRadial?.(e.clientX, e.clientY)) {
+          } else if (radialKind === 'hub' || radialKind === 'chrome') {
             lastTap = null;
             radialHandled = true;
           }
-        }
-        if (!radialHandled) {
-          // Placement owns LMB — never steal the click for unit selection.
-          if (isPlacingRally?.()) {
+          if (!radialHandled) {
             if (
               d &&
               Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
@@ -1650,14 +1751,32 @@ export function createGameInput(opts) {
               const g = renderer.screenToGround?.(e.clientX, e.clientY);
               if (g) onRallyConfirm?.(g.x, g.z);
             }
+          }
+        } else {
+          const yaw = currentYaw();
+          if (placeRotating && placeAnchor) {
+            onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
           } else {
-            const yaw = currentYaw();
-            if (placeRotating && placeAnchor) {
-              onPlacementConfirm?.(placeAnchor.x, placeAnchor.z, yaw);
-            } else if (
+            const tap =
               d &&
-              Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX
-            ) {
+              Math.hypot(e.clientX - d.x, e.clientY - d.y) <= DRAG_THRESHOLD_PX;
+            const ray = tap
+              ? renderer.clientPickingRay?.(e.clientX, e.clientY) ?? null
+              : null;
+            // Agora hub / mesh tap leaves place mode (same as Esc).
+            const tapKind = placementTapKind(
+              radialKind,
+              tap ? pickBuildingAtRay(ray) : null,
+            );
+            if (tapKind === 'pick') {
+              lastTap = null;
+              onRadialPick?.(picked);
+            } else if (tapKind === 'exit') {
+              lastTap = null;
+              cancelPlacement();
+            } else if (tapKind === 'chrome') {
+              lastTap = null;
+            } else if (tap) {
               const g =
                 placeAnchor ??
                 renderer.screenToGround?.(e.clientX, e.clientY);
@@ -1720,7 +1839,7 @@ export function createGameInput(opts) {
 
   /**
    * RMB tap (no pan) / touch 2-finger when no build UI — force MOVE to ground.
-   * No unit pick; ignores enemies. Drag pan is filtered by the camera controller.
+   * No unit pick; ignores enemies. Camera latches pan + click on the same travel.
    */
   function forceMoveAt(clientX, clientY) {
     if (!canUseInput() || isPlacing()) return false;
@@ -1767,23 +1886,47 @@ export function createGameInput(opts) {
   }
 
   /**
-   * RMB on a tree / rock with villagers selected → gather.
-   * Returns true when a GATHER command was issued (skips the force-move).
+   * RMB on a tree / rock: villagers gather; everyone else still force-moves.
+   * Returns true when any command was issued (skips the terrain force-move).
    */
   function tryGatherAt(clientX, clientY) {
     const node = resolveGatherClick(clientX, clientY);
     if (!node) return false;
+    return issueGatherAtNode(selectedIds(), node, CMD.MOVE);
+  }
+
+  /** Villagers vs everyone else. Soldiers never take GATHER. */
+  function splitGatherSelection(ids) {
     const world = getWorld();
     const villagers = [];
-    for (let k = 0; k < selCount; k++) {
-      const id = selIds[k];
+    const rest = [];
+    for (let k = 0; k < ids.length; k++) {
+      const id = ids[k];
       if (world.owner[id] === localPlayerId && world.type[id] === UNIT.VILLAGER) {
         villagers.push(id);
+      } else {
+        rest.push(id);
       }
     }
+    return { villagers, rest };
+  }
+
+  /**
+   * Harvest the node with selected villagers. Non-villagers keep `cmdType` to
+   * the node (mixed RMB used to return after gather and drop the army move).
+   * @returns {boolean} true when a command was issued
+   */
+  function issueGatherAtNode(ids, node, cmdType, epoch) {
+    const { villagers, rest } = splitGatherSelection(ids);
     if (villagers.length === 0) return false;
+    if (epoch !== undefined && !clickCurrent(epoch)) return true;
     enqueueCommand({ type: CMD.GATHER, entities: villagers, tile: node.tile });
-    pingGatherOrder(node, CMD.MOVE);
+    pingGatherOrder(node, cmdType);
+    if (rest.length > 0) {
+      const { tx, ty } = moveDestinations(rest, node.x, node.z);
+      enqueueCommand({ type: cmdType, entities: rest, tx, ty });
+    }
+    playVillagerMove();
     return true;
   }
 

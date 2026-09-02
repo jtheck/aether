@@ -28,6 +28,12 @@ import {
 import { poseRadialFramingBuilding } from './radialPose.js';
 import { formatResourceCost } from '../sim/resources.js';
 import { menuGateState } from '../sim/menuGate.js';
+import {
+  ensureRadialPriceHud,
+  hideRadialPrice,
+  hideRadialPricesWithPrefix,
+  setRadialPrice,
+} from './radialPriceHud.js';
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
@@ -35,8 +41,8 @@ const MENU_Y = 2.4;
  * Outer option ring — fixed band width, pushed out from the center pie
  * (pads move out; pie + pad size stay put).
  */
-const MENU_RING_OUTER = 19.3;
-const MENU_RING_INNER = 16.5;
+const MENU_RING_OUTER = 18.25;
+const MENU_RING_INNER = 17.55;
 const MENU_RING_H = 0.35;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
 const PAD_OUTER = 4.68;
@@ -84,12 +90,12 @@ const HUD_PLACE_DIST = 70;
 const HUD_PLACE_MIN = 24;
 const HUD_PLACE_FRAC = 0.82;
 const HUD_REF_DIST = 110;
-const HUD_BASE_SCALE = 0.6;
-const HUD_SCALE_MIN = 0.21;
+const HUD_BASE_SCALE = 0.9;
+const HUD_SCALE_MIN = 0.315;
 /** While ghost-placing, shrink the open radial so it stays out of the way. */
 const COMPACT_SCALE = 0.68;
-const LABEL_FONT_SIZE = 28;
-const LABEL_SCREEN_SCALE = 1.17;
+const LABEL_FONT_SIZE = 24;
+const LABEL_SCREEN_SCALE = 1.1;
 const LABEL_DOWN = 4.32;
 const LABEL_LIFT = 1.25;
 const PRICE_FONT_SIZE = 16;
@@ -123,6 +129,15 @@ const MAX_OPTIONS = 5;
 const MENU_RING_ALPHA = 0.55;
 const PAD_HOVER_COLOR = [1, 0.85, 0.25];
 const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
+/** 🚫 bar through a locked (missing prereq) building icon. */
+const LOCK_SLASH_LEN = 1.62;
+const LOCK_SLASH_WIDTH = 0.36;
+const LOCK_SLASH_H = 0.14;
+const LOCK_SLASH_LIFT = 0.45;
+const LOCK_SLASH_UP = 1.15;
+const LOCK_SLASH_ANG = -Math.PI / 4;
+const LOCK_SLASH_COLOR = [0.9, 0.4, 0.35];
+const LOCK_SLASH_EMISSIVE = [0.5, 0.15, 0.12];
 
 /** @typedef {'basic' | 'advanced' | 'elemental'} CategoryId */
 
@@ -394,6 +409,44 @@ function createPieSliceMesh(engine, name, opts = {}) {
   );
 }
 
+/**
+ * Thin bar in XZ (Y up) for the locked 🚫 slash. Length along +X.
+ * @param {object} engine
+ * @param {string} name
+ * @param {{ length?: number, width?: number, height?: number }} [opts]
+ */
+function createSlashBarMesh(engine, name, opts = {}) {
+  const len = opts.length ?? LOCK_SLASH_LEN;
+  const width = opts.width ?? LOCK_SLASH_WIDTH;
+  const h = opts.height ?? LOCK_SLASH_H;
+  const hx = len * 0.5;
+  const hz = width * 0.5;
+  const hy = h * 0.5;
+  const positions = new Float32Array([
+    -hx, hy, -hz, hx, hy, -hz, hx, hy, hz, -hx, hy, hz,
+    -hx, -hy, -hz, -hx, -hy, hz, hx, -hy, hz, hx, -hy, -hz,
+    -hx, -hy, hz, -hx, hy, hz, hx, hy, hz, hx, -hy, hz,
+    -hx, -hy, -hz, hx, -hy, -hz, hx, hy, -hz, -hx, hy, -hz,
+    hx, -hy, -hz, hx, -hy, hz, hx, hy, hz, hx, hy, -hz,
+    -hx, -hy, -hz, -hx, hy, -hz, -hx, hy, hz, -hx, -hy, hz,
+  ]);
+  const normals = new Float32Array([
+    0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0,
+    0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,
+    0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1,
+    0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,
+    1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,
+    -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
+  ]);
+  /** @type {number[]} */
+  const indices = [];
+  for (let f = 0; f < 6; f++) {
+    const b = f * 4;
+    indices.push(b, b + 1, b + 2, b, b + 2, b + 3);
+  }
+  return createMeshFromData(engine, name, positions, normals, new Uint32Array(indices));
+}
+
 function setThinInstanceCount(mesh, count) {
   const ti = mesh.thinInstances;
   if (!ti) return;
@@ -596,6 +649,7 @@ function hideMesh(mesh) {
  * }} [screen]
  */
 export async function createBuildingRadialMenu(engine, scene, groundYAt, screen = {}) {
+  void ensureRadialPriceHud();
   const basicCat = CATEGORIES[0];
   const ringMat = makeRingMaterial(basicCat.color, basicCat.emissive, MENU_RING_ALPHA);
 
@@ -653,6 +707,19 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     hideMesh(pad);
     addToScene(scene, pad);
     pads.push({ mesh: pad, mat });
+  }
+
+  /** Locked-prereq 🚫 bars — one per pad, shown only when that slot is gated. */
+  /** @type {object[]} */
+  const lockSlashes = [];
+  for (let i = 0; i < MAX_OPTIONS; i++) {
+    const slash = createSlashBarMesh(engine, `build-menu-lock-slash-${i}`);
+    slash.material = makeRingMaterial(LOCK_SLASH_COLOR, LOCK_SLASH_EMISSIVE);
+    slash.pickable = false;
+    slash.renderOrder = 230;
+    hideMesh(slash);
+    addToScene(scene, slash);
+    lockSlashes.push(slash);
   }
 
   /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[] }>} */
@@ -829,6 +896,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     label.layer._version++;
   }
 
+  function hidePrice(i) {
+    hideLabel(prices[i]);
+    hideRadialPrice(`build-${i}`);
+  }
+
   function cameraEye(camera) {
     const wm = camera?.worldMatrix;
     if (
@@ -996,6 +1068,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         type: items[i].id,
         name: items[i].name,
         costText: formatResourceCost(getBuildingCost(items[i].id)),
+        cost: getBuildingCost(items[i].id),
         gate: gateForType(items[i].id),
         ang,
         x: 0,
@@ -1013,7 +1086,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         label.gate = 'ok';
       }
     }
-    for (const price of prices) hideLabel(price);
+    for (let i = 0; i < prices.length; i++) hidePrice(i);
     applyRingColor();
     applyPieAppearance();
     for (let i = 0; i < pads.length; i++) applyPadHover(i, false);
@@ -1338,15 +1411,10 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const slot = slots[i];
     const worldToScreen = screen.worldToScreen;
     const getViewport = screen.getViewport;
-    if (!price || !slot?.costText || !open || !worldToScreen || !getViewport) {
-      hideLabel(price);
+    hideLabel(price);
+    if (!slot?.costText || !open || !worldToScreen || !getViewport) {
+      hidePrice(i);
       return;
-    }
-    const gate = slot.gate ?? 'ok';
-    if (price.text !== slot.costText || price.gate !== gate) {
-      updateDefaultTextData(price.data, slot.costText, PRICE_WASH[gate] ?? PRICE_WASH.ok);
-      price.text = slot.costText;
-      price.gate = gate;
     }
     const hovered = i === hoverIndex;
     const down = PRICE_DOWN * hudScale;
@@ -1357,23 +1425,21 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const origin = worldToScreen(worldX, worldY, worldZ);
     const viewport = getViewport();
     if (!origin || !viewport?.width || !viewport?.height) {
-      hideLabel(price);
+      hidePrice(i);
       return;
     }
     const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
     const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
-    const pixelRatio = (sx + sy) * 0.5;
-    const scale =
-      PRICE_SCREEN_SCALE * pixelRatio * compactMul * (hovered ? 1.05 : 1);
-    const centerOffset = price.data.width * scale * 0.5;
-    const layer = price.layer;
-    layer.positionPx.x = origin.x * sx - centerOffset;
-    layer.positionPx.y = origin.y * sy;
-    layer.rotationRad = 0;
-    layer.scale = scale;
-    layer.opacity = hovered ? 0.95 : 0.8;
-    layer.visible = true;
-    layer._version++;
+    setRadialPrice(`build-${i}`, {
+      cost: slot.cost,
+      x: origin.x * sx,
+      y: origin.y * sy,
+      opacity: hovered ? 0.95 : 0.8,
+      wash: PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok,
+      okWash: PRICE_WASH.ok,
+      gate: slot.gate ?? 'ok',
+      bank: menuBank,
+    });
   }
 
   function layout() {
@@ -1423,9 +1489,10 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     for (let i = 0; i < pads.length; i++) {
       if (i >= n) {
         hideMesh(pads[i].mesh);
+        hideMesh(lockSlashes[i]);
         applyPadHover(i, false);
         hideLabel(labels[i]);
-        hideLabel(prices[i]);
+        hidePrice(i);
         continue;
       }
       const slot = slots[i];
@@ -1454,7 +1521,46 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       redrawSlot(i);
       redrawLabel(i);
       redrawPrice(i);
+      placeLockSlash(i);
     }
+  }
+
+  /** 🚫 through the building when the slot is prereq-locked. */
+  function placeLockSlash(i) {
+    const mesh = lockSlashes[i];
+    const slot = slots[i];
+    if (!mesh) return;
+    if (!slot || slot.gate !== 'locked') {
+      hideMesh(mesh);
+      return;
+    }
+    const s = hudScale;
+    const sc = Math.cos(LOCK_SLASH_ANG);
+    const ss = Math.sin(LOCK_SLASH_ANG);
+    const srx = bx * sc + tx * ss;
+    const sry = by * sc + ty * ss;
+    const srz = bz * sc + tz * ss;
+    const stx = -bx * ss + tx * sc;
+    const sty = -by * ss + ty * sc;
+    const stz = -bz * ss + tz * sc;
+    const lift = (ICON_LIFT + LOCK_SLASH_LIFT) * s;
+    const up = LOCK_SLASH_UP * s;
+    placeMeshOriented(
+      mesh,
+      slot.x + nx * lift,
+      slot.y + ny * lift + up,
+      slot.z + nz * lift,
+      PAD_OUTER * s,
+      srx,
+      sry,
+      srz,
+      nx,
+      ny,
+      nz,
+      stx,
+      sty,
+      stz,
+    );
   }
 
   /**
@@ -1497,11 +1603,13 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     for (const slice of pieSlices) hideMesh(slice.mesh);
     for (let i = 0; i < pads.length; i++) {
       hideMesh(pads[i].mesh);
+      hideMesh(lockSlashes[i]);
       applyPadHover(i, false);
     }
     hideAllIcons();
     for (const label of labels) hideLabel(label);
-    for (const price of prices) hideLabel(price);
+    for (let i = 0; i < prices.length; i++) hidePrice(i);
+    hideRadialPricesWithPrefix('build-');
     slots = [];
     hoverIndex = -1;
     pieHoverId = null;

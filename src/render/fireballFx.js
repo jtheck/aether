@@ -16,11 +16,20 @@ const HOT = [
   [0.92, 0.12, 0.02, 0.72],
 ];
 
-function puff(spin = 1.8) {
+/** Mostly still; a few slow rolls. Fast whirl reads as a spinner, not fire. */
+function puffSpin() {
+  const dir = Math.random() < 0.5 ? -1 : 1;
+  const roll = Math.random();
+  if (roll < 0.6) return dir * Math.random() * 0.16;
+  if (roll < 0.9) return dir * (0.18 + Math.random() * 0.28);
+  return dir * (0.42 + Math.random() * 0.28);
+}
+
+function puff() {
   return {
     sprite: 'puff',
     rotation: Math.random() * Math.PI * 2,
-    spin: (Math.random() - 0.5) * spin,
+    spin: puffSpin(),
   };
 }
 
@@ -93,7 +102,7 @@ export function createFireballFx(emit) {
       const swirl = 2.4 + gatherT * 2.2;
       const c = tint();
       emit({
-        ...puff(2.2),
+        ...puff(),
         position: [ball.cx + ox, ball.cy + oy, ball.cz + oz],
         velocity: [
           -ox * inv - oz * swirl * 0.12,
@@ -111,7 +120,7 @@ export function createFireballFx(emit) {
     if (gatherT > 0.28) {
       const c = tint();
       emit({
-        ...puff(1.1),
+        ...puff(),
         position: [
           ball.cx + (Math.random() - 0.5) * 0.7,
           ball.cy + (Math.random() - 0.5) * 0.5,
@@ -147,7 +156,7 @@ export function createFireballFx(emit) {
         const ride = 0.22;
         const swirl = 1.05;
         emit({
-          ...puff(2.4),
+          ...puff(),
           position: [px, py, pz],
           velocity: [
             ball.vx * TICK_HZ * ride + (-b.rx * sn + b.ux * cs) * swirl - b.fx * 3.4,
@@ -170,7 +179,7 @@ export function createFireballFx(emit) {
       const ang = (i / 10) * Math.PI * 2;
       const c = tint();
       emit({
-        ...puff(2.6),
+        ...puff(),
         position: [ball.cx, ball.cy, ball.cz],
         velocity: [
           Math.cos(ang) * (1.4 + Math.random() * 1.1),

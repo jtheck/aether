@@ -26,6 +26,23 @@ const MAX_BUILD_HALVES = MAX_BUILDERS * VILLAGER_BUILD_HALVES;
 const ASSIGN_INTERVAL = 20;
 /** Extra reach past the footprint edge so builders don't fight for the exact rim. */
 const BUILD_MARGIN_F = 6;
+/** Late construction scale bump at 2/3 progress (integer compare: p * den >= time * num). */
+export const CONSTRUCT_NEAR_NUM = 2;
+export const CONSTRUCT_NEAR_DEN = 3;
+
+/**
+ * Visual growth stage for an unfinished site.
+ * 0 = foundation (no work yet), 1 = first work, 2 = near-done.
+ * @param {number} progress
+ * @param {number} buildTime
+ */
+export function constructionVisualStage(progress, buildTime) {
+  const p = progress | 0;
+  if (p <= 0) return 0;
+  const time = Math.max(1, buildTime | 0);
+  if (p * CONSTRUCT_NEAR_DEN >= time * CONSTRUCT_NEAR_NUM) return 2;
+  return 1;
+}
 
 /** Presence tally per building index, reused across ticks (sim thread only). */
 let _present = new Int32Array(0);
@@ -121,14 +138,22 @@ export function constructionSystem(w, field) {
     if (b.built !== 0 || (b.hp != null && (b.hp | 0) <= 0)) continue;
     const halves = _present[bi];
     if (halves <= 0) continue;
+    const prevProg = b.buildProgress | 0;
+    const time = b.buildTime | 0;
     const total = (b.buildHalfAcc | 0) + Math.min(halves, MAX_BUILD_HALVES);
-    b.buildProgress = (b.buildProgress | 0) + (total >> 1);
+    b.buildProgress = prevProg + (total >> 1);
     b.buildHalfAcc = total & 1;
-    if (b.buildProgress >= (b.buildTime | 0)) {
-      b.buildProgress = b.buildTime | 0;
+    if (b.buildProgress >= time) {
+      b.buildProgress = time;
       b.built = 1;
       // Turn on the finished building's live effects (e.g. farm food node).
       if (field) applyStructureOccupancyAt(field, b.type, b.x, b.z, /* built */ true);
+      w.buildingsDirty = 1;
+    } else if (
+      constructionVisualStage(prevProg, time) !==
+      constructionVisualStage(b.buildProgress, time)
+    ) {
+      // Renderer grows the mesh on stage crossings — not every work tick.
       w.buildingsDirty = 1;
     }
   }

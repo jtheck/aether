@@ -7,7 +7,8 @@ import { CMD } from './commands.js';
 import { createField, worldToTile, tileCenterX, tileCenterY } from './field.js';
 import { growTreeAt } from './trees.js';
 import { SCENERY, rockFootprintRadius, rockYield } from './scenery.js';
-import { getResource } from './resources.js';
+import { addResource, getResource } from './resources.js';
+import { overflowCredit, ownerResourceCap } from './storage.js';
 import {
   GATHER_ACT,
   GATHER_CARRY_CAP,
@@ -528,4 +529,51 @@ campDoesNotRecruitIdleCarriers();
 campAutoAssignsIdleVillagers();
 engineerExtendsCampRadius();
 engineerRadiusBonusLingers();
-console.log('gather.test.js: ok (wood + stone + mineral + food + wander + specialize + defend)');
+overflowCutsIncomeWithoutASilo();
+siloBesideCampBanksTheFullLoad();
+console.log('gather.test.js: ok (wood + stone + mineral + food + wander + specialize + defend + storage)');
+
+function overflowCutsIncomeWithoutASilo() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(50);
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 10;
+  w.carriedKind[vill] = 1;
+  w.agoras = [{ owner: 0, x: fx.fromFloat(6), z: 0 }];
+  const cap = ownerResourceCap(w.buildings, 0, 'wood');
+  addResource(w, 0, 'wood', cap);
+  const tickAtDrop = w.tick;
+  for (let t = 0; t < 160; t++) {
+    if ((w.carriedAmt[vill] | 0) === 0) break;
+    step(w, field, []);
+  }
+  const got = getResource(w, 0, 'wood');
+  assert.ok(got > cap, 'overflow still trickles');
+  assert.ok(got < cap + 10, `overflow is not a full load (got ${got}, cap ${cap})`);
+  assert.ok(
+    got <= cap + overflowCredit(10, tickAtDrop) + 3,
+    'credited amount stays near 25%',
+  );
+}
+
+function siloBesideCampBanksTheFullLoad() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(51);
+  const vill = spawn(w, { x: 0, y: 0, type: UNIT.VILLAGER, owner: 0 });
+  w.carriedAmt[vill] = 10;
+  w.carriedKind[vill] = 1;
+  w.buildings = [
+    createBuilding({ owner: 0, type: 'camp', x: 0, z: 0 }),
+    createBuilding({ owner: 0, type: 'silo', x: 8, z: 0 }),
+  ];
+  const baseCap = ownerResourceCap([], 0, 'wood');
+  addResource(w, 0, 'wood', baseCap);
+  for (let t = 0; t < 80; t++) {
+    if ((w.carriedAmt[vill] | 0) === 0) break;
+    step(w, field, []);
+  }
+  assert.equal(w.carriedAmt[vill], 0, 'carrier emptied');
+  assert.equal(getResource(w, 0, 'wood'), baseCap + 10, 'silo pair banks the load in full');
+}

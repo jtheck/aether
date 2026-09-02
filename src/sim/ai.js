@@ -33,6 +33,17 @@ export const STRESS_AI_PROFILES = [
   { owner: 4, temperament: 'reckless' },
 ];
 
+/** Fog overlay only — combat stays FFA. Skip the turtle so its base stays dark. */
+export function stressShareVisionOwners() {
+  const out = [];
+  for (let i = 0; i < STRESS_AI_PROFILES.length; i++) {
+    const p = STRESS_AI_PROFILES[i];
+    if (p.temperament === 'passive' || p.temperament === 'cautious') continue;
+    out.push(p.owner | 0);
+  }
+  return out;
+}
+
 /** Owner id for an aiPlayers entry (number or `{ owner }`). */
 export function aiOwnerOf(entry) {
   if (typeof entry === 'number') return entry | 0;

@@ -1,6 +1,7 @@
 // Building action menu — tilted ring framing a selected placeable
-// (empty hub stays on the building). Outer arcs for units, upgrades, and a
-// fixed bottom Pause | Cancel pair. Pad rings show progress; badges show queue counts.
+// (empty hub stays on the building). Thin outer chrome for units, upgrades,
+// and a fixed bottom Pause | Cancel pair; options pick on pads/icons only.
+// Pad rings show progress; badges show queue counts.
 
 import {
   addToScene,
@@ -28,6 +29,12 @@ import {
 } from '../sim/buildings.js';
 import { poseRadialFramingBuilding } from './radialPose.js';
 import { formatResourceCost } from '../sim/resources.js';
+import {
+  ensureRadialPriceHud,
+  hideRadialPrice,
+  hideRadialPricesWithPrefix,
+  setRadialPrice,
+} from './radialPriceHud.js';
 import { menuGateState } from '../sim/menuGate.js';
 
 /** Static or VAT unit GLB for radial icons. */
@@ -38,11 +45,11 @@ function unitMenuModelUrl(typeId) {
 /** Layout at HUD scale = 1 (ring outer radius in world units). */
 const MENU_Y = 2.4;
 /**
- * Outer option ring — kept a fixed band width; pushed out so pads sit farther
- * from the empty hub without scaling the whole menu up.
+ * Outer chrome ring — thin decorative band. Pads stay on the midpoint;
+ * the ring itself is not a pick target for options.
  */
-const MENU_RING_OUTER = 17.4;
-const MENU_RING_INNER = 14.8;
+const MENU_RING_OUTER = 16.3;
+const MENU_RING_INNER = 15.9;
 const MENU_RING_H = 0.35;
 const RIM_R = (MENU_RING_OUTER + MENU_RING_INNER) * 0.5;
 const PAD_OUTER = 4.32;
@@ -68,8 +75,8 @@ const MENU_TILT = 0.56;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 0.8;
 const HUD_SCALE_MIN = 0.28;
-const LABEL_FONT_SIZE = 28;
-const LABEL_SCREEN_SCALE = 1.17;
+const LABEL_FONT_SIZE = 24;
+const LABEL_SCREEN_SCALE = 1.1;
 const LABEL_DOWN = 4.32;
 const LABEL_LIFT = 1.25;
 const PRICE_FONT_SIZE = 16;
@@ -96,6 +103,9 @@ const BADGE_SCREEN_SCALE = 0.95;
 const BADGE_OUT = 2.8;
 const BADGE_SIDE = 2.6;
 const BADGE_LIFT = 1.4;
+const EXTRA_FONT_SIZE = 30;
+const EXTRA_SCREEN_SCALE = 0.88;
+const EXTRA_TEXT_COLOR = [0.78, 0.86, 0.72, 1];
 const MAX_OPTIONS = 8;
 const MENU_RING_ALPHA = 0.55;
 const PAD_HOVER_COLOR = [1, 0.85, 0.25];
@@ -679,13 +689,13 @@ function hideMesh(mesh) {
 function computeArcs(unitCount, upgradeCount) {
   const hasU = unitCount > 0;
   const hasG = upgradeCount > 0;
-  if (!hasU && !hasG) {
-    return { units: null, upgrades: null, pause: null, cancel: null };
-  }
 
   const utilStart = Math.PI / 2 - UTILITY_SPAN * 0.5;
   const pause = { start: utilStart, span: PAUSE_SPAN };
   const cancel = { start: utilStart + PAUSE_SPAN, span: CANCEL_SPAN };
+  if (!hasU && !hasG) {
+    return { units: null, upgrades: null, pause, cancel };
+  }
   const usableStart = utilStart + UTILITY_SPAN;
   const usableSpan = Math.PI * 2 - UTILITY_SPAN;
 
@@ -735,6 +745,7 @@ function trackKey(kind, id) {
  * }} [screen]
  */
 export async function createBuildingActionRadial(engine, scene, groundYAt, screen = {}) {
+  void ensureRadialPriceHud();
   /** @type {Map<'unit' | 'upgrade' | 'pause' | 'cancel', { mesh: object | null, mat: object, startAng: number, endAng: number }>} */
   const arcRings = new Map([
     [
@@ -1002,6 +1013,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   const prices = [];
   /** @type {{ data: object, layer: object, text: string }[]} */
   const badges = [];
+  /** @type {{ data: object, layer: object, text: string }[]} */
+  const extras = [];
   /** @type {{ data: object, layer: object, text: string } | null} */
   let cancelLabel = null;
   /** @type {{ data: object, layer: object, text: string, dull: boolean } | null} */
@@ -1059,6 +1072,21 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         badges.push({ data, layer, text: '0' });
         layers.push(layer);
       }
+      for (let i = 0; i < MAX_OPTIONS; i++) {
+        const data = createDefaultTextData(
+          screen.font,
+          EXTRA_FONT_SIZE,
+          '+00',
+          EXTRA_TEXT_COLOR,
+        );
+        const layer = createTextLayer(data, {
+          order: MAX_OPTIONS * 3 + i,
+          opacity: 0,
+          visible: false,
+        });
+        extras.push({ data, layer, text: '' });
+        layers.push(layer);
+      }
       {
         const data = createDefaultTextData(
           screen.font,
@@ -1067,7 +1095,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           CANCEL_LABEL_TEXT_COLOR,
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 3,
+          order: MAX_OPTIONS * 4,
           opacity: 0,
           visible: false,
         });
@@ -1082,7 +1110,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
           PAUSE_LABEL_TEXT_COLOR,
         );
         const layer = createTextLayer(data, {
-          order: MAX_OPTIONS * 3 + 1,
+          order: MAX_OPTIONS * 4 + 1,
           opacity: 0,
           visible: false,
         });
@@ -1098,11 +1126,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       for (const label of labels) disposeDefaultTextData(label.data);
       for (const price of prices) disposeDefaultTextData(price.data);
       for (const badge of badges) disposeDefaultTextData(badge.data);
+      for (const extra of extras) disposeDefaultTextData(extra.data);
       if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
       if (pauseLabel) disposeDefaultTextData(pauseLabel.data);
       labels.length = 0;
       prices.length = 0;
       badges.length = 0;
+      extras.length = 0;
       cancelLabel = null;
       pauseLabel = null;
       textRenderer = null;
@@ -1171,7 +1201,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   /** @type {string | null} */
   let activeBuildingType = null;
 
-  /** Pause / Cancel pads are live only while a queue/research track is running. */
+  /** Pause is live while a queue/research track is running; Cancel also for sites. */
   let utilityAvailable = {
     pause: false,
     cancel: false,
@@ -1182,7 +1212,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   const researchedUpgrades = new Set();
   /** @type {ArmedId} */
   let armed = null;
-  /** @type {Map<string, { progress: number, count: number }>} */
+  /** @type {Map<string, { progress: number, count: number, extra: number }>} */
   const tracks = new Map();
 
   function hideLabel(label) {
@@ -1190,6 +1220,11 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     label.layer.opacity = 0;
     label.layer.visible = false;
     label.layer._version++;
+  }
+
+  function hidePrice(i) {
+    hideLabel(prices[i]);
+    hideRadialPrice(`action-${i}`);
   }
 
   function cameraEye(camera) {
@@ -1304,7 +1339,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   function anyTracksActive() {
     for (const t of tracks.values()) {
-      if ((t.count | 0) > 0 || t.progress > 0) return true;
+      if ((t.count | 0) > 0 || (t.extra | 0) > 0 || t.progress > 0) return true;
     }
     return false;
   }
@@ -1540,8 +1575,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         label.dull = false;
       }
     }
-    for (const price of prices) hideLabel(price);
+    for (let i = 0; i < prices.length; i++) hidePrice(i);
     for (const badge of badges) hideLabel(badge);
+    for (const extra of extras) hideLabel(extra);
     hideLabel(cancelLabel);
     hideLabel(pauseLabel);
     for (let i = 0; i < pads.length; i++) {
@@ -1768,33 +1804,40 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   function redrawPrice(i) {
     const price = prices[i];
     const slot = slots[i];
-    if (!price || !slot?.costText) {
-      hideLabel(price);
+    hideLabel(price);
+    const worldToScreen = screen.worldToScreen;
+    const getViewport = screen.getViewport;
+    if (!slot?.costText || !open || !worldToScreen || !getViewport) {
+      hidePrice(i);
       return;
     }
     const hovered = i === hoverIndex;
     const owned = slotResearched(slot);
-    const gate = owned ? 'owned' : (slot.gate ?? 'ok');
-    if (price.text !== slot.costText || price.dull !== owned || price.gate !== gate) {
-      updateDefaultTextData(
-        price.data,
-        slot.costText,
-        owned ? DULL_TEXT_COLOR : (PRICE_WASH[gate] ?? PRICE_WASH.ok),
-      );
-      price.text = slot.costText;
-      price.dull = owned;
-      price.gate = gate;
-    }
     const down = PRICE_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
-    placeScreenText(
-      price,
+    const origin = worldToScreen(
       slot.x + tx * down + nx * lift,
       slot.y + ty * down + ny * lift,
       slot.z + tz * down + nz * lift,
-      PRICE_SCREEN_SCALE * (hovered ? 1.05 : 1),
-      owned ? 0.72 : hovered ? 0.95 : 0.8,
     );
+    const viewport = getViewport();
+    if (!origin || !viewport?.width || !viewport?.height) {
+      hidePrice(i);
+      return;
+    }
+    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
+    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
+    const wash = owned ? DULL_TEXT_COLOR : (PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok);
+    setRadialPrice(`action-${i}`, {
+      cost: slot.cost,
+      x: origin.x * sx,
+      y: origin.y * sy,
+      opacity: owned ? 0.72 : hovered ? 0.95 : 0.8,
+      wash,
+      okWash: PRICE_WASH.ok,
+      gate: owned ? 'owned' : (slot.gate ?? 'ok'),
+      bank: menuBank,
+    });
   }
 
   function redrawBadge(i) {
@@ -1826,6 +1869,38 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       slot.z - tz * out + bz * side + nz * lift,
       BADGE_SCREEN_SCALE,
       1,
+    );
+  }
+
+  function redrawExtra(i) {
+    const extra = extras[i];
+    const slot = slots[i];
+    if (!extra || !slot) {
+      hideLabel(extra);
+      return;
+    }
+    const track = tracks.get(trackKey(slot.kind, slot.id));
+    const n = track?.extra | 0;
+    if (n < 1) {
+      hideLabel(extra);
+      return;
+    }
+    const text = `+${n}`;
+    if (text !== extra.text) {
+      updateDefaultTextData(extra.data, text, EXTRA_TEXT_COLOR);
+      extra.text = text;
+    }
+    const out = BADGE_OUT * hudScale;
+    const side = BADGE_SIDE * hudScale;
+    const lift = BADGE_LIFT * hudScale;
+    // Opposite corner from the local queue badge, just outside the pad.
+    placeScreenText(
+      extra,
+      slot.x - tx * out - bx * side + nx * lift,
+      slot.y - ty * out - by * side + ny * lift,
+      slot.z - tz * out - bz * side + nz * lift,
+      EXTRA_SCREEN_SCALE,
+      0.92,
     );
   }
 
@@ -1936,8 +2011,9 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         disposeProgressMesh(progressPads[i]);
         applyPadHover(i, false);
         hideLabel(labels[i]);
-        hideLabel(prices[i]);
+        hidePrice(i);
         hideLabel(badges[i]);
+        hideLabel(extras[i]);
         continue;
       }
       const slot = slots[i];
@@ -1966,6 +2042,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       redrawLabel(i);
       redrawPrice(i);
       redrawBadge(i);
+      redrawExtra(i);
     }
 
     if (pauseSlot && arcs.pause) {
@@ -2079,11 +2156,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    * @param {object | null} [camera]
    */
   function showAt(x, z, buildingType, camera = null) {
-    const menu = getBuildingMenu(buildingType);
-    if (!menu) {
-      hide();
-      return;
-    }
+    const menu = getBuildingMenu(buildingType) ?? { units: [], upgrades: [] };
     anchorX = x;
     anchorZ = z;
     activeBuildingType = buildingType;
@@ -2104,7 +2177,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const want = buildingType;
     void ensureMenuIcons(menu).then(() => {
       if (open && activeBuildingType === want) {
-        rebuildSlots(getBuildingMenu(want));
+        rebuildSlots(getBuildingMenu(want) ?? { units: [], upgrades: [] });
         layout();
       }
     });
@@ -2129,8 +2202,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     hideAllProgress();
     hideAllIcons();
     for (const label of labels) hideLabel(label);
-    for (const price of prices) hideLabel(price);
+    for (let i = 0; i < prices.length; i++) hidePrice(i);
+    hideRadialPricesWithPrefix('action-');
     for (const badge of badges) hideLabel(badge);
+    for (const extra of extras) hideLabel(extra);
     hideLabel(cancelLabel);
     hideLabel(pauseLabel);
     slots = [];
@@ -2202,6 +2277,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       return;
     }
     if (pick.kind === 'cancel' || pick.kind === 'pause') {
+      if (!utilityAvailable[pick.kind]) {
+        clearHover();
+        return;
+      }
       setHover(-1);
       setUtilityHover(pick.kind);
       return;
@@ -2221,62 +2300,17 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     };
   }
 
-  function wrapAngFrom(ang, start) {
-    let a = ang;
-    while (a < start) a += Math.PI * 2;
-    while (a >= start + Math.PI * 2) a -= Math.PI * 2;
-    return a;
-  }
-
-  function arcContainsAng(arc, ang, edgeInsetAng) {
-    if (!arc) return false;
-    const a = wrapAngFrom(ang, arc.start);
-    return a >= arc.start + edgeInsetAng && a < arc.start + arc.span - edgeInsetAng;
+  function padDiscHit(slot, padHit, padR2) {
+    if (!slot || !padHit) return false;
+    const dx = padHit.x - slot.x;
+    const dy = padHit.y - slot.y;
+    const dz = padHit.z - slot.z;
+    return dx * dx + dy * dy + dz * dz <= padR2;
   }
 
   /**
-   * Visible colored ring band only — not the empty pie inside.
-   * @param {{ x: number, y: number, z: number, t: number }} hit
-   */
-  function pickVisibleArcAtPlaneHit(hit) {
-    const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
-    const outer = MENU_RING_OUTER * hudScale;
-    const inner = MENU_RING_INNER * hudScale;
-    if (d < inner || d > outer) return null;
-    const dx = hit.x - centerX;
-    const dy = hit.y - centerY;
-    const dz = hit.z - centerZ;
-    const ang = Math.atan2(dx * tx + dy * ty + dz * tz, dx * bx + dy * by + dz * bz);
-    const edgeInsetAng = Math.asin(
-      Math.min(0.95, (ARC_GAP * 0.5 * hudScale) / Math.max(d, 1e-4)),
-    );
-    if (arcContainsAng(arcs.pause, ang, edgeInsetAng)) {
-      return { kind: /** @type {const} */ ('pause') };
-    }
-    if (arcContainsAng(arcs.cancel, ang, edgeInsetAng)) {
-      return { kind: /** @type {const} */ ('cancel') };
-    }
-    const kind = arcContainsAng(arcs.units, ang, edgeInsetAng)
-      ? 'unit'
-      : arcContainsAng(arcs.upgrades, ang, edgeInsetAng)
-        ? 'upgrade'
-        : null;
-    if (!kind) return null;
-    let best = null;
-    let bestDa = Infinity;
-    for (const s of slots) {
-      if (s.kind !== kind) continue;
-      let da = Math.abs(ang - s.ang);
-      if (da > Math.PI) da = Math.PI * 2 - da;
-      if (da < bestDa) {
-        bestDa = da;
-        best = { kind: s.kind, id: s.id };
-      }
-    }
-    return best;
-  }
-
-  /**
+   * Pads and icons only — the outer ring is decorative chrome, not an option.
+   * Dull Pause / Cancel do not pick so the world stays clickable under them.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    * @returns {{ kind: 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null}
    */
@@ -2293,23 +2327,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     let best = null;
     let bestT = Infinity;
 
-    if (pauseSlot && padHit) {
-      const dx = padHit.x - pauseSlot.x;
-      const dy = padHit.y - pauseSlot.y;
-      const dz = padHit.z - pauseSlot.z;
-      if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
-        bestT = padHit.t;
-        best = { kind: /** @type {const} */ ('pause') };
-      }
+    if (utilityAvailable.pause && padDiscHit(pauseSlot, padHit, padR2) && padHit.t < bestT) {
+      bestT = padHit.t;
+      best = { kind: /** @type {const} */ ('pause') };
     }
-    if (cancelSlot && padHit) {
-      const dx = padHit.x - cancelSlot.x;
-      const dy = padHit.y - cancelSlot.y;
-      const dz = padHit.z - cancelSlot.z;
-      if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
-        bestT = padHit.t;
-        best = { kind: /** @type {const} */ ('cancel') };
-      }
+    if (utilityAvailable.cancel && padDiscHit(cancelSlot, padHit, padR2) && padHit.t < bestT) {
+      bestT = padHit.t;
+      best = { kind: /** @type {const} */ ('cancel') };
     }
 
     for (let i = 0; i < slots.length; i++) {
@@ -2332,10 +2356,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         best = { kind: s.kind, id: s.id };
       }
     }
-    if (best) return best;
-
-    const planeHit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
-    return planeHit ? pickVisibleArcAtPlaneHit(planeHit) : null;
+    return best;
   }
 
   function hitHubHoleAtRay() {
@@ -2343,8 +2364,33 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     return false;
   }
 
+  /** Thin outer ring is chrome (keeps the menu) but does not pick an option. */
+  function hitRingBandAtRay(ray) {
+    if (!open || !ray) return false;
+    const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
+    if (!hit) return false;
+    const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
+    const outer = MENU_RING_OUTER * hudScale;
+    const inner = MENU_RING_INNER * hudScale;
+    return d >= inner && d <= outer;
+  }
+
+  /** Dull Pause / Cancel pads click through, including the ring strip under them. */
+  function hitUnavailableUtilityPadAtRay(ray) {
+    if (!open || !ray) return false;
+    const pp = padPlanePoint();
+    const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
+    if (!padHit) return false;
+    const padR2 = (PAD_OUTER * hudScale) ** 2;
+    if (!utilityAvailable.pause && padDiscHit(pauseSlot, padHit, padR2)) return true;
+    if (!utilityAvailable.cancel && padDiscHit(cancelSlot, padHit, padR2)) return true;
+    return false;
+  }
+
   function hitAtRay(ray) {
-    return !!pickOptionAtRay(ray);
+    if (pickOptionAtRay(ray)) return true;
+    if (hitUnavailableUtilityPadAtRay(ray)) return false;
+    return hitRingBandAtRay(ray);
   }
 
   /**
@@ -2391,7 +2437,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   }
 
   /**
-   * @param {Record<string, { progress?: number, count?: number }> | Map<string, { progress?: number, count?: number }>} next
+   * @param {Record<string, { progress?: number, count?: number, extra?: number }> | Map<string, { progress?: number, count?: number, extra?: number }>} next
    */
   function setTrackDisplay(next) {
     tracks.clear();
@@ -2402,6 +2448,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       tracks.set(key, {
         progress: Math.max(0, Math.min(1, Number(val.progress) || 0)),
         count: Math.max(0, val.count | 0),
+        extra: Math.max(0, val.extra | 0),
       });
     }
     syncCancelAvailability();
@@ -2425,7 +2472,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   }
 
   function getTracks() {
-    /** @type {Record<string, { progress: number, count: number }>} */
+    /** @type {Record<string, { progress: number, count: number, extra: number }>} */
     const out = {};
     for (const [k, v] of tracks) out[k] = { ...v };
     return out;
@@ -2451,6 +2498,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const label of labels) disposeDefaultTextData(label.data);
     for (const price of prices) disposeDefaultTextData(price.data);
     for (const badge of badges) disposeDefaultTextData(badge.data);
+    for (const extra of extras) disposeDefaultTextData(extra.data);
     if (cancelLabel) disposeDefaultTextData(cancelLabel.data);
     if (pauseLabel) disposeDefaultTextData(pauseLabel.data);
     hideAllProgress();

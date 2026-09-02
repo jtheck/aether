@@ -2,9 +2,10 @@
 
 import { clearPath, queuePath, attackStandPoint } from './path.js';
 import { claimEngagement } from './engagement.js';
-import { getUnitDef, isTransport } from './unitTypes.js';
+import { getUnitDef, isTransport, UNIT } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { unloadPassengers } from './transport.js';
+import { onMycoDeath } from './sporeBloom.js';
 
 /**
  * @param {object} w
@@ -59,6 +60,9 @@ function tryRetaliate(w, victim, attacker) {
 
 export function kill(w, i) {
   if (i < 0 || i >= w.count || !w.alive[i]) return;
+  const deathType = w.type[i];
+  const deathX = w.px[i];
+  const deathY = w.py[i];
   // Spill passengers alive before clearing the hull.
   if (isTransport(w.type[i])) {
     unloadPassengers(w, i, null, null);
@@ -75,7 +79,13 @@ export function kill(w, i) {
   w.vy[i] = 0;
   if (w.shieldHp) w.shieldHp[i] = 0;
   if (w.shieldTicks) w.shieldTicks[i] = 0;
+  if (w.locustTicks) w.locustTicks[i] = 0;
+  if (w.locustStacks) w.locustStacks[i] = 0;
+  if (w.locustHops) w.locustHops[i] = 0;
+  if (w.locustAcc) w.locustAcc[i] = 0;
+  if (w.locustSource) w.locustSource[i] = -1;
   if (w.engagementTarget) w.engagementTarget[i] = -1;
   if (w.engagementSlot) w.engagementSlot[i] = -1;
   clearPath(w, i);
+  if (deathType === UNIT.MYCO) onMycoDeath(w, deathX, deathY);
 }

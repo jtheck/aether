@@ -16,7 +16,14 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import { SCENERY, rockScaleForStage, rockStageFromStock } from '../sim/scenery.js';
 import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
-import { TREE_STAGE_MAX, treeScaleForStage, treeStageFromStock } from '../sim/trees.js';
+import {
+  TREE_BURN_DAMAGE,
+  TREE_BURN_DAMAGE_INTERVAL,
+  TREE_STAGE_MAX,
+  treeBurnsToDeath,
+  treeScaleForStage,
+  treeStageFromStock,
+} from '../sim/trees.js';
 import { capacityFor } from '../sim/capacity.js';
 import { LOD_ENABLED, SCENERY_LOD_ROCK, SCENERY_LOD_TREE } from './lodDistances.js';
 import { hasBakedMesh } from './bakedAssets.js';
@@ -54,6 +61,10 @@ const HARVEST_PING_MS = 280;
 const HARVEST_PULSES = 0.5;
 /** Peak albedo scale on top of fog dim (trees sit at ~0.24). */
 const HARVEST_PEAK = 2.15;
+/** Time to full lean + char once a tree will burn down. */
+const TREE_BURN_CHAR_MS = 6200;
+/** Near-black charcoal (keep a hair of warmth so they don't vanish). */
+const TREE_CHAR_RGB = [0.032, 0.02, 0.016];
 
 function fogAlbedoScale(t) {
   if (t <= 0) return SIGHT_LIFT;
@@ -98,6 +109,63 @@ const TREE_SCALE_HI = treeScaleForStage(TREE_STAGE_MAX);
 
 function treeTintHash(tileIndex) {
   return ((Math.imul(tileIndex | 0, 1103515245) + 12345) >>> 16) / 65535;
+}
+
+function resetBurnVisual(p) {
+  p.lean = 0;
+  p.char = 0;
+  p.burnT = 0;
+  p.burnLeanSign = 0;
+  p.burnLeanMax = 0;
+  p.burnDurMs = 0;
+  p.burnFlushLean = 0;
+  p.burnFlushChar = 0;
+}
+
+function burnDownMs(stock, burn) {
+  const hits = Math.floor((burn - 1) / TREE_BURN_DAMAGE_INTERVAL);
+  const need = Math.ceil(stock / TREE_BURN_DAMAGE);
+  const left = Math.min(hits, need);
+  return Math.max(1600, left * TREE_BURN_DAMAGE_INTERVAL * 50);
+}
+
+function initBurnVisual(p) {
+  const h = treeTintHash(p.tileIndex);
+  const h2 = treeTintHash((p.tileIndex | 0) ^ 0x9e3779b9);
+  p.burnLeanSign = h < 0.5 ? -1 : 1;
+  p.burnLeanMax = ((30 + h2 * 10) * Math.PI) / 180;
+  p.burnDurMs = Math.min(TREE_BURN_CHAR_MS, burnDownMs(p.stock, p.burn));
+}
+
+function treeDoomed(p) {
+  return p.burn > 0 && treeBurnsToDeath(p.stock, p.burn);
+}
+
+/** Ease-in so they stay upright at first, then list as they charcoal. */
+function advanceBurnVisual(p, dt) {
+  if (treeDoomed(p)) {
+    if (!p.burnLeanSign) initBurnVisual(p);
+    const nextT = Math.min(1, (p.burnT ?? 0) + dt / (p.burnDurMs || TREE_BURN_CHAR_MS));
+    if (nextT === (p.burnT ?? 0)) return false;
+    p.burnT = nextT;
+    const ease = nextT * nextT;
+    p.lean = ease * p.burnLeanMax * p.burnLeanSign;
+    p.char = ease;
+    const moved =
+      Math.abs(p.lean - (p.burnFlushLean ?? 0)) > 0.012
+      || Math.abs(p.char - (p.burnFlushChar ?? 0)) > 0.025;
+    if (moved) {
+      p.burnFlushLean = p.lean;
+      p.burnFlushChar = p.char;
+    }
+    return moved;
+  }
+  if ((p.char ?? 0) > 0 && p.stock <= 0) return false;
+  if ((p.char ?? 0) > 0 && p.burn === 0 && p.stock > 0) {
+    resetBurnVisual(p);
+    return true;
+  }
+  return false;
 }
 
 function treeTintRgb(scale, tileIndex) {
@@ -421,6 +489,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     p.scaleMode = 'lerp';
     p.scaling = targetScale > 0;
     p.fellDelayMs = 0;
+    resetBurnVisual(p);
+    if (treeDoomed(p)) initBurnVisual(p);
   }
 
   function claimTreeSlot(tileIndex, stock, burn) {
@@ -457,7 +527,10 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         const tintTrees = batch.variant.kind === SCENERY.TREE;
         let tinted = false;
         for (let i = 0; i < batch.instances.length; i++) {
-          if (!advanceInstanceScale(batch.instances[i], dt)) continue;
+          const p = batch.instances[i];
+          const scaled = advanceInstanceScale(p, dt);
+          const burned = tintTrees && advanceBurnVisual(p, dt);
+          if (!scaled && !burned) continue;
           moved = true;
           if (tintTrees) {
             writeFogColor(batch, i);
@@ -527,18 +600,32 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       const p = ref.batch.instances[ref.index];
       const wasDead = !(p.stock > 0);
       const prevScale = p.stockScale ?? 0;
+      const prevBurn = p.burn;
       p.stock = nextStock;
       p.burn = nextBurn;
+      if (treeDoomed(p)) {
+        if (!p.burnLeanSign) initBurnVisual(p);
+      } else if (nextStock > 0 && nextBurn === 0) {
+        resetBurnVisual(p);
+      }
       const stage = treeStageFromStock(p.stock);
       const nextTarget = treeScaleForStage(stage);
       if (nextStock <= 0) {
         // Ink drips first, then melt — don't snap-hide under the blobs.
+        if (prevBurn > 0 || (p.char ?? 0) > 0) {
+          if (!p.burnLeanSign) initBurnVisual(p);
+          p.burnT = 1;
+          p.lean = p.burnLeanMax * p.burnLeanSign;
+          p.char = 1;
+        }
         p.scaling = false;
         p.fellDelayMs = TREE_FELL_DELAY_MS;
         p.targetScale = 0;
       } else if (wasDead) {
         p.fellDelayMs = 0;
         p.stockScale = nextTarget * 0.12;
+        resetBurnVisual(p);
+        if (treeDoomed(p)) initBurnVisual(p);
         beginScaleAnim(p, nextTarget, TREE_GROW_IN_MS);
       } else if (Math.abs(nextTarget - (p.targetScale ?? prevScale)) > 0.001) {
         p.fellDelayMs = 0;
@@ -610,6 +697,12 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         g = luma + (g - luma) * chroma;
         b = luma + (b - luma) * chroma;
         g *= 1 - 0.62 * unseenGreenKill(t);
+      }
+      const ch = p.char ?? 0;
+      if (ch > 0) {
+        r = r * (1 - ch) + TREE_CHAR_RGB[0] * ch;
+        g = g * (1 - ch) + TREE_CHAR_RGB[1] * ch;
+        b = b * (1 - ch) + TREE_CHAR_RGB[2] * ch;
       }
       colors[o] = r * fogMul;
       colors[o + 1] = g * fogMul;
@@ -721,6 +814,12 @@ function makeEmptyTreeInstance() {
     scaleMode: 'lerp',
     scaling: false,
     fellDelayMs: 0,
+    lean: 0,
+    char: 0,
+    burnT: 0,
+    burnLeanSign: 0,
+    burnLeanMax: 0,
+    burnDurMs: 0,
   };
 }
 
@@ -961,6 +1060,12 @@ function collectInstances(field, variant, surfaceHeightAt) {
         scaleMode: 'lerp',
         scaling: false,
         fellDelayMs: 0,
+        lean: 0,
+        char: 0,
+        burnT: 0,
+        burnLeanSign: 0,
+        burnLeanMax: 0,
+        burnDurMs: 0,
       });
     }
   }
@@ -1009,6 +1114,7 @@ function updateBatchLod(batch, cameraPos) {
           p.yaw,
           modelScale,
           part.baseMatrix,
+          p.lean ?? 0,
         );
       }
       writeHiddenMatrix(billboardMatrices, i);
@@ -1023,6 +1129,7 @@ function updateBatchLod(batch, cameraPos) {
         p.z,
         p.yaw,
         billboardScale,
+        p.lean ?? 0,
       );
       lastBillboardSlot = i;
     }
@@ -1112,8 +1219,9 @@ function writeModelInstanceMatrix(
   yaw,
   scale,
   baseMatrix,
+  lean = 0,
 ) {
-  writeInstanceMatrix(placementScratch, 0, x, y, z, yaw, scale);
+  writeInstanceMatrix(placementScratch, 0, x, y, z, yaw, scale, lean);
   const o = slot * 16;
   // Column-major placement × authored GLB transform. This keeps negative/model
   // scales on geometry without mirroring the world-space instance translation.
@@ -1128,17 +1236,20 @@ function writeModelInstanceMatrix(
   }
 }
 
-function writeInstanceMatrix(matrices, slot, x, y, z, yaw, scale) {
+function writeInstanceMatrix(matrices, slot, x, y, z, yaw, scale, lean = 0) {
   const o = slot * 16;
   const c = Math.cos(yaw);
   const s = Math.sin(yaw);
-  matrices[o] = c * scale;
-  matrices[o + 1] = 0;
-  matrices[o + 2] = -s * scale;
+  const cl = Math.cos(lean);
+  const sl = Math.sin(lean);
+  // Ry(yaw) * Rz(lean) * scale — lean is a local tip, yaw scatters fall direction.
+  matrices[o] = c * cl * scale;
+  matrices[o + 1] = sl * scale;
+  matrices[o + 2] = -s * cl * scale;
   matrices[o + 3] = 0;
-  matrices[o + 4] = 0;
-  matrices[o + 5] = scale;
-  matrices[o + 6] = 0;
+  matrices[o + 4] = -c * sl * scale;
+  matrices[o + 5] = cl * scale;
+  matrices[o + 6] = s * sl * scale;
   matrices[o + 7] = 0;
   matrices[o + 8] = s * scale;
   matrices[o + 9] = 0;

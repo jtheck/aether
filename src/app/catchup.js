@@ -9,6 +9,28 @@ import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
  *  worker cost — late joiners can treadmill if the live match outruns replay. */
 export const CATCHUP_TICKS_PER_FRAME = 80;
 
+/** Replay more than this many ticks? Host should mint a fresh world checkpoint. */
+export const CATCHUP_MAX_REPLAY_TICKS = 240;
+
+/**
+ * Solo kings are in a public sandbox until the first challenger resets the
+ * match. Spectators should attach to the live tip, not replay that sandbox.
+ * Multi-army matches also need a checkpoint whenever the cached one is missing
+ * or too far behind — full ledger replay from tick 0 is what times out
+ * (`commitTick N timeout`) around ~100s of match time.
+ */
+export function shouldExportFreshCatchupCheckpoint({
+  activeCount = 0,
+  cachedTick = 0,
+  tipTick = 0,
+} = {}) {
+  if ((activeCount | 0) <= 1) return true;
+  const cached = cachedTick | 0;
+  const tip = tipTick | 0;
+  if (cached <= 0) return true;
+  return tip - cached > CATCHUP_MAX_REPLAY_TICKS;
+}
+
 export { formatMatchTime, matchSecondsFromTick };
 
 /**
@@ -26,53 +48,70 @@ export { formatMatchTime, matchSecondsFromTick };
  * }} [options]
  */
 export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
-  await session.reset({
-    seed: matchConfig.seed,
-    mode: 'koth',
-    activeSlots: matchConfig.activeSlots,
-    armyPerSide: matchConfig.armyPerSide ?? 0,
-    // Live P2P never carries the loading-screen AI. Replaying with leftover
-    // owner-1 economy commands desyncs the spectator checksum from the host.
-    aiPlayers: matchConfig.aiPlayers ?? [],
-    humanPlayers: matchConfig.humanPlayers ?? [],
-  });
-  session.setHumanPlayers(matchConfig.humanPlayers ?? []);
-  session.setLocalPlayerId(-1);
-  session.setRole('spectator');
+  // Freeze lockstep before teardown. reset() + importCheckpoint() are async;
+  // the render pump would otherwise commit ticks on the fresh worker and the
+  // first replay commitTickAsync then waits forever (or hits expect-mismatch).
+  session.pauseLockstep = true;
+  session.replayingCatchUp = true;
+  session.simAcc = 0;
 
-  const checkpoint = options.checkpoint ?? null;
-  const checkpointTick = (options.checkpointTick ?? checkpoint?.tick ?? 0) | 0;
+  try {
+    await session.reset({
+      seed: matchConfig.seed,
+      mode: 'koth',
+      activeSlots: matchConfig.activeSlots,
+      armyPerSide: matchConfig.armyPerSide ?? 0,
+      // Live P2P never carries the loading-screen AI. Replaying with leftover
+      // owner-1 economy commands desyncs the spectator checksum from the host.
+      aiPlayers: matchConfig.aiPlayers ?? [],
+      humanPlayers: matchConfig.humanPlayers ?? [],
+    });
+    session.pauseLockstep = true;
+    session.replayingCatchUp = true;
+    session.setHumanPlayers(matchConfig.humanPlayers ?? []);
+    session.setLocalPlayerId(-1);
+    session.setRole('spectator');
 
-  if (checkpoint && checkpointTick > 0) {
-    const imported = await session.importCheckpoint(checkpoint, checkpoint.checksum);
-    session.confirmedTick = imported.tick;
-    session._lastChecksum = imported.checksum;
-    if (imported.koth) session.koth = imported.koth;
-    if (imported.kothMatchOver != null) session.kothMatchOver = imported.kothMatchOver;
-    session._captureSnapshot?.(imported.tick);
+    const checkpoint = options.checkpoint ?? null;
+    const checkpointTick = (options.checkpointTick ?? checkpoint?.tick ?? 0) | 0;
+
+    if (checkpoint && checkpointTick > 0) {
+      const imported = await session.importCheckpoint(checkpoint, checkpoint.checksum);
+      session.confirmedTick = imported.tick;
+      session._lastChecksum = imported.checksum;
+      if (imported.koth) session.koth = imported.koth;
+      if (imported.kothMatchOver != null) session.kothMatchOver = imported.kothMatchOver;
+      session._captureSnapshot?.(imported.tick);
+    }
+
+    // Prefer the worker's actual tick after import. A stale checkpointTick
+    // argument (or pump ticks that slipped through) must not replay from 0.
+    const fromTick = (session.confirmedTick | 0) || (checkpoint && checkpointTick > 0 ? checkpointTick : 0);
+
+    const checksum = await replayCatchUpInto(
+      session,
+      matchConfig,
+      ledgerFrames,
+      targetTick,
+      expectedChecksum,
+      {
+        ...options,
+        fromTick,
+      },
+    );
+
+    const base = options.baseLedger ?? [];
+    const merged = checkpoint && checkpointTick > 0
+      ? [...base, ...ledgerFrames]
+      : ledgerFrames;
+    session.replaceFullLedger?.(merged);
+    if (checkpoint && checkpointTick > 0) {
+      session.cacheCheckpoint?.(checkpoint, checkpoint.checksum >>> 0);
+    }
+    return checksum;
+  } finally {
+    session.replayingCatchUp = false;
   }
-
-  const checksum = await replayCatchUpInto(
-    session,
-    matchConfig,
-    ledgerFrames,
-    targetTick,
-    expectedChecksum,
-    {
-      ...options,
-      fromTick: checkpoint && checkpointTick > 0 ? checkpointTick : 0,
-    },
-  );
-
-  const base = options.baseLedger ?? [];
-  const merged = checkpoint && checkpointTick > 0
-    ? [...base, ...ledgerFrames]
-    : ledgerFrames;
-  session.replaceFullLedger?.(merged);
-  if (checkpoint && checkpointTick > 0) {
-    session.cacheCheckpoint?.(checkpoint, checkpoint.checksum >>> 0);
-  }
-  return checksum;
 }
 
 /**

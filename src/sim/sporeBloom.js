@@ -39,6 +39,13 @@ export const SPORE_SEED_ARC_COS = -0.9397;
 export const SPORE_SEED_ARC_HALF = Math.acos(SPORE_SEED_ARC_COS);
 /** World-unit keep-off so seeds never land next to the caster. */
 const SPORE_SEED_CASTER_CLEAR_F = TILE_SIZE_F * 2;
+/** Death ring — adjacent tile + diagonals, not the ability blast. */
+export const MYCO_DEATH_SEED_RADIUS_F = TILE_SIZE_F * 1.5;
+export const MYCO_DEATH_MAX_SEEDS = 8;
+export const MYCO_DEATH_MIN_SEEDS = 4;
+/** Tree-fell ink vs myco-death fountain (render). */
+export const SPORE_DRIP_TREE = 0;
+export const SPORE_DRIP_FOUNTAIN = 1;
 /** Aim closer than this uses facing for the outward axis. */
 const AIM_DIR_MIN = fx.fromFloat(TILE_SIZE_F * 0.5);
 /** Slight grow so a 4-stack reads bigger without becoming one disk. */
@@ -161,6 +168,7 @@ export function createSporeBloomFxStore() {
     dripCount: 0,
     dripX: [],
     dripY: [],
+    dripKind: [],
     seedCount: 0,
     seedX: [],
     seedY: [],
@@ -176,14 +184,19 @@ export function createSporeBloomFxStore() {
     headX: [],
     headY: [],
     headKill: [],
+    deathCount: 0,
+    deathX: [],
+    deathY: [],
   };
 }
 
-export function pushSporeDripFx(w, x, y) {
+export function pushSporeDripFx(w, x, y, kind = SPORE_DRIP_TREE) {
   const store = w.sporeBloomFx;
   if (!store) return;
+  if (!store.dripKind) store.dripKind = [];
   store.dripX.push(fx.toFloat(x));
   store.dripY.push(fx.toFloat(y));
+  store.dripKind.push(kind | 0);
   store.dripCount++;
 }
 
@@ -231,10 +244,12 @@ export function takeSporeBloomUpdates(w) {
   const sn = store.seedCount;
   const an = store.arcCount || 0;
   const hn = store.headCount || 0;
+  const kinds = store.dripKind || [];
   const patch = {
     dripCount: dn,
     dripX: store.dripX.slice(0, dn),
     dripY: store.dripY.slice(0, dn),
+    dripKind: kinds.slice(0, dn),
     seedCount: sn,
     seedX: store.seedX.slice(0, sn),
     seedY: store.seedY.slice(0, sn),
@@ -253,6 +268,7 @@ export function takeSporeBloomUpdates(w) {
   };
   store.dripX.length = 0;
   store.dripY.length = 0;
+  if (store.dripKind) store.dripKind.length = 0;
   store.dripCount = 0;
   store.seedX.length = 0;
   store.seedY.length = 0;
@@ -335,6 +351,93 @@ function tileCenterFixed(tx, tz) {
     x: fx.fromFloat((tx + 0.5) * TILE_SIZE_F - activeWorldHalfF()),
     y: fx.fromFloat((tz + 0.5) * TILE_SIZE_F - activeWorldHalfF()),
   };
+}
+
+/**
+ * Myco corpse: inky fountain now, tiny mushroom→tree ring after flush.
+ * Seeds wait for field (same-tick flush from sporeGrowth / end of step).
+ */
+export function onMycoDeath(w, x, y) {
+  const store = w.sporeBloomFx;
+  if (!store) return;
+  if (!store.deathX) {
+    store.deathX = [];
+    store.deathY = [];
+    store.deathCount = 0;
+  }
+  pushSporeDripFx(w, x, y, SPORE_DRIP_FOUNTAIN);
+  store.deathX.push(x);
+  store.deathY.push(y);
+  store.deathCount++;
+}
+
+/**
+ * Plant a tight full circle of delayed trees around a death point.
+ * @returns {number} seeds queued
+ */
+export function queueMycoDeathSeeds(w, field, cx, cy) {
+  const store = w.treeGrowth;
+  if (!store || !field) return 0;
+  const pending = pendingTileSet(store);
+  const radius2 = MYCO_DEATH_SEED_RADIUS_F * MYCO_DEATH_SEED_RADIUS_F;
+  const cxF = fx.toFloat(cx);
+  const cyF = fx.toFloat(cy);
+  const tx0 = worldToTile(cx);
+  const tz0 = worldToTile(cy);
+  const standTi = tz0 * field.width + tx0;
+  const half = activeWorldHalfF();
+  const rTiles = 2;
+  const found = [];
+  for (let tz = tz0 - rTiles; tz <= tz0 + rTiles; tz++) {
+    for (let tx = tx0 - rTiles; tx <= tx0 + rTiles; tx++) {
+      if (!canGrowTreeAt(field, tx, tz, pending)) continue;
+      const ti = tz * field.width + tx;
+      if (ti === standTi) continue;
+      const wx = (tx + 0.5) * TILE_SIZE_F - half;
+      const wz = (tz + 0.5) * TILE_SIZE_F - half;
+      const dx = wx - cxF;
+      const dz = wz - cyF;
+      if (dx * dx + dz * dz > radius2) continue;
+      found.push(ti);
+    }
+  }
+  for (let i = 1; i < found.length; i++) {
+    const t = found[i];
+    let j = i - 1;
+    while (j >= 0 && found[j] > t) {
+      found[j + 1] = found[j];
+      j--;
+    }
+    found[j + 1] = t;
+  }
+  const take = Math.min(MYCO_DEATH_MAX_SEEDS, found.length);
+  const baseTick = w.tick + SPORE_GROWTH_DELAY;
+  let queued = 0;
+  for (let i = 0; i < take; i++) {
+    const ti = found[i];
+    const growAt = baseTick + (i % 3) * 4;
+    if (!queueGrowth(store, ti, growAt, SPORE_TREE_STOCK)) break;
+    const tz = Math.floor(ti / field.width);
+    const tx = ti - tz * field.width;
+    const c = tileCenterFixed(tx, tz);
+    pushSporeSeedFx(w, c.x, c.y, growAt);
+    queued++;
+  }
+  return queued;
+}
+
+/** Drain pending myco-death seed rings. Idempotent. */
+export function flushMycoDeathBursts(w, field) {
+  const store = w.sporeBloomFx;
+  if (!store?.deathCount || !field) return 0;
+  let n = 0;
+  for (let i = 0; i < store.deathCount; i++) {
+    n += queueMycoDeathSeeds(w, field, store.deathX[i], store.deathY[i]);
+  }
+  store.deathX.length = 0;
+  store.deathY.length = 0;
+  store.deathCount = 0;
+  return n;
 }
 
 /** Fell every living tree inside radius of (cx, cy). Publishes drip FX per tree. */
@@ -571,6 +674,7 @@ export function castSporeBloom(w, field, caster, aimX, aimY, opts = {}) {
 
 /** Sprout queued trees whose growAtTick has arrived. */
 export function sporeGrowthSystem(w, field) {
+  flushMycoDeathBursts(w, field);
   const store = w.treeGrowth;
   if (!store || store.count === 0 || !field) return;
   const tick = w.tick;
@@ -590,11 +694,19 @@ export function sporeGrowthSystem(w, field) {
 
 export function mixSporeGrowthChecksum(mix, w) {
   const store = w.treeGrowth;
-  if (!store) return;
-  mix(store.count);
-  for (let i = 0; i < store.count; i++) {
-    mix(store.tile[i]);
-    mix(store.growAtTick[i]);
-    mix(store.stock[i]);
+  if (store) {
+    mix(store.count);
+    for (let i = 0; i < store.count; i++) {
+      mix(store.tile[i]);
+      mix(store.growAtTick[i]);
+      mix(store.stock[i]);
+    }
+  }
+  const deaths = w.sporeBloomFx;
+  if (!deaths) return;
+  mix(deaths.deathCount || 0);
+  for (let i = 0; i < (deaths.deathCount || 0); i++) {
+    mix(deaths.deathX[i]);
+    mix(deaths.deathY[i]);
   }
 }

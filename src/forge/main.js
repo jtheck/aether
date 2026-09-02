@@ -48,7 +48,22 @@ import { applyAuthoredScenery, populateScenery, paintSceneryBrush, SCENERY } fro
 import { UNIT_DEFS } from '../sim/unitTypes.js';
 import { PLACEABLE_BUILDINGS, snapBuildingWorld } from '../sim/buildings.js';
 import { defaultMatchAgoras } from '../sim/worldSetup.js';
-import { createCameraController } from '../render/cameraController.js';
+import { createCameraController, resolveCameraHalfF } from '../render/cameraController.js';
+import {
+  CLIP_CAMERA,
+  CLIP_LINE,
+  LINE_STYLES,
+  activeReel,
+  emptyStory,
+  lineDuration,
+  newClipId,
+  replaceReel,
+} from '../story/timeline.js';
+import { createStoryPlayer } from '../story/player.js';
+import { createStoryHud } from '../story/hud.js';
+import { createStorySpeech, narratorLines } from '../story/speech.js';
+import { findNamedUnit, namedUnits } from '../story/cast.js';
+import { createStorySheet } from './storySheet.js';
 import {
   CELESTIAL_PRESETS,
   celestialPresetState,
@@ -79,6 +94,10 @@ const state = {
   buildings: [],
   agoras: [],
   startingResources: { ...STARTING_RESOURCES },
+  story: emptyStory(),
+  storyClipId: null,
+  /** 0 = follow the table. Positive world half-extent = custom pan/zoom box. */
+  cameraHalfF: 0,
 };
 
 const CELESTIAL_STORE_KEY = 'aether.forge.celestial';
@@ -92,6 +111,7 @@ let celestial = null;
 let terrain = null;
 let grid = null;
 let selectMesh = null;
+let cameraBoundMesh = null;
 let brushMesh = null;
 let brushKey = '';
 let lastBrushWorld = null;
@@ -102,6 +122,10 @@ let rebuildTimer = 0;
 let sceneRegistered = false;
 let paintRaf = 0;
 const pendingPaintTiles = [];
+let storyPlayer = null;
+let storyHud = null;
+let storySpeech = null;
+let storySheet = null;
 
 function matVecUnproject(inv, ndcX, ndcY, depth) {
   const x = inv[0] * ndcX + inv[4] * ndcY + inv[8] * depth + inv[12];
@@ -235,7 +259,8 @@ function applyPlace(pos, { remove = false } = {}) {
   if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return;
   if (field.activeMask?.[tz * field.width + tx] === 0) return;
   if (state.placeKind === 'unit') {
-    state.units.push({ owner: state.owner, type: state.placeType | 0, tx, tz });
+    const name = String(document.getElementById('place-name')?.value || '').trim();
+    state.units.push({ owner: state.owner, type: state.placeType | 0, tx, tz, name });
   } else if (state.placeKind === 'agora') {
     state.agoras.push({ owner: state.owner, x: pos.x, z: pos.z });
   } else {
@@ -573,6 +598,7 @@ async function rebuildTerrain() {
   }
   updateSelectIndicator();
   updatePlaceMarkers();
+  updateCameraBoundMesh();
   refreshBrushCursor();
   updateStats();
 }
@@ -643,7 +669,81 @@ function applyAt(pos, { add = false } = {}) {
     if (dirty.length) queueSceneryPaint();
     return;
   }
+  if (state.layer === 'story') {
+    aimStoryCamera(pos);
+    return;
+  }
   if (state.layer === 'place') applyPlace(pos, { remove: add });
+}
+
+function tableHalfF() {
+  return field ? worldHalfFFromField(field) : 0;
+}
+
+function authoredCameraHalfF() {
+  return resolveCameraHalfF(tableHalfF(), state.cameraHalfF);
+}
+
+function cameraBoundPct() {
+  const table = tableHalfF();
+  if (!(table > 0)) return 100;
+  return Math.max(20, Math.min(100, Math.round((authoredCameraHalfF() / table) * 100)));
+}
+
+function applyCameraBound() {
+  cam?.setWorldHalfF?.(authoredCameraHalfF());
+  updateCameraBoundMesh();
+  syncCameraBoundUi();
+}
+
+function syncCameraBoundUi() {
+  const slider = document.getElementById('camera-bound');
+  const label = document.getElementById('camera-bound-label');
+  const pct = cameraBoundPct();
+  if (slider) slider.value = String(pct);
+  if (label) label.textContent = `${pct}%`;
+}
+
+function setCameraBoundPct(pct) {
+  const table = tableHalfF();
+  const frac = Math.max(0.2, Math.min(1, (Number(pct) || 100) / 100));
+  state.cameraHalfF = frac >= 0.995 || !(table > 0) ? 0 : table * frac;
+  applyCameraBound();
+}
+
+function updateCameraBoundMesh() {
+  if (cameraBoundMesh) {
+    softDetachMesh(scene, cameraBoundMesh);
+    cameraBoundMesh = null;
+  }
+  if (!engine || !scene || !field) return;
+  const table = tableHalfF();
+  const half = authoredCameraHalfF();
+  if (!(half > 0) || half >= table - 0.5) return;
+  const y = 5;
+  const rim = 1.8;
+  const pos = [];
+  const idx = [];
+  pushSelectEdge(pos, idx, -half, -half, half, -half, y, rim);
+  pushSelectEdge(pos, idx, half, -half, half, half, y, rim);
+  pushSelectEdge(pos, idx, half, half, -half, half, y, rim);
+  pushSelectEdge(pos, idx, -half, half, -half, -half, y, rim);
+  const positions = new Float32Array(pos);
+  const normals = new Float32Array(positions.length);
+  for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
+  const mesh = createMeshFromData(engine, 'camera-bound', positions, normals, new Uint32Array(idx));
+  const mat = createStandardMaterial();
+  mat.diffuseColor = [0.95, 0.72, 0.2];
+  mat.emissiveColor = [0.85, 0.55, 0.1];
+  mat.ambientColor = [0.7, 0.45, 0.08];
+  mat.specularColor = [0, 0, 0];
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  mesh.material = mat;
+  mesh.pickable = false;
+  addToScene(scene, mesh);
+  cameraBoundMesh = mesh;
+  if (sceneRegistered) invalidateRenderBundles(engine);
 }
 
 function gardenExtras() {
@@ -653,11 +753,358 @@ function gardenExtras() {
     buildings: state.buildings,
     agoras: state.agoras,
     startingResources: state.startingResources,
+    story: state.story,
+    cameraHalfF: state.cameraHalfF,
   };
 }
 
 function gardenPayload() {
   return encodeGarden(field, gardenExtras());
+}
+
+function currentReel() {
+  return activeReel(state.story, 'intro');
+}
+
+function worldFromTile(tx, tz) {
+  const half = worldHalfFFromField(field);
+  return {
+    x: (tx + 0.5) * TILE_SIZE_F - half,
+    z: (tz + 0.5) * TILE_SIZE_F - half,
+  };
+}
+
+function tileFromWorld(x, z) {
+  const half = worldHalfFFromField(field);
+  return {
+    tx: Math.floor((x + half) / TILE_SIZE_F),
+    tz: Math.floor((z + half) / TILE_SIZE_F),
+  };
+}
+
+function speakerWorldPos(name) {
+  const u = findNamedUnit(state.units, name);
+  if (!u || !field) return null;
+  const { x, z } = worldFromTile(u.tx, u.tz);
+  return { x, y: 2.6, z };
+}
+
+function forgeWorldToScreen(x, y, z) {
+  if (!camera || !canvas) return null;
+  const w = canvas.clientWidth || 1;
+  const h = canvas.clientHeight || 1;
+  const vp = getViewProjectionMatrix(camera, w / h);
+  if (!vp) return null;
+  const c0 = vp[0] * x + vp[4] * y + vp[8] * z + vp[12];
+  const c1 = vp[1] * x + vp[5] * y + vp[9] * z + vp[13];
+  const c3 = vp[3] * x + vp[7] * y + vp[11] * z + vp[15];
+  if (Math.abs(c3) < 1e-8) return null;
+  const iw = 1 / c3;
+  const ndcX = c0 * iw;
+  const ndcY = c1 * iw;
+  return { x: (ndcX * 0.5 + 0.5) * w, y: (1 - ndcY) * 0.5 * h };
+}
+
+function applyStorySample(s) {
+  if (!s) return;
+  if (s.camera && cam && field) {
+    const live = s.camera.char ? speakerWorldPos(s.camera.char) : null;
+    const tile = worldFromTile(s.camera.tx, s.camera.tz);
+    cam.setPose({
+      x: live?.x ?? tile.x,
+      z: live?.z ?? tile.z,
+      radius: s.camera.radius,
+      alpha: s.camera.alpha,
+    }, { unclamped: true });
+  }
+  const lines = s.lines ?? (s.line ? [s.line] : []);
+  if (state.layer === 'story') {
+    const narrated = narratorLines(lines);
+    if (narrated.length) storyHud?.show(narrated);
+    else storyHud?.hide();
+    storySpeech?.show(lines);
+  } else {
+    storyHud?.hide();
+    storySpeech?.hide();
+  }
+}
+
+function refreshStorySheet() {
+  storySheet?.render(currentReel(), storyPlayer?.time() ?? 0, state.storyClipId);
+}
+
+function selectedStoryClip() {
+  return currentReel().clips.find((c) => c.id === state.storyClipId) || null;
+}
+
+function commitReel(reel) {
+  state.story = replaceReel(state.story, reel);
+  storyPlayer?.setReel(currentReel());
+  syncStoryEditor();
+}
+
+function aimStoryCamera(pos) {
+  if (!pos || !field || storyPlayer?.rate()) return;
+  const { tx, tz } = tileFromWorld(pos.x, pos.z);
+  const clip = selectedStoryClip();
+  if (clip?.kind !== CLIP_CAMERA) return;
+  const reel = currentReel();
+  const next = reel.clips.map((c) => (c.id === clip.id ? { ...c, tx, tz } : c));
+  commitReel({ ...reel, clips: next });
+}
+
+function captureViewPose() {
+  const pose = cam.getPose();
+  const tile = tileFromWorld(pose.x, pose.z);
+  return { tx: tile.tx, tz: tile.tz, radius: pose.radius, alpha: pose.alpha };
+}
+
+function addStoryCamera() {
+  if (!cam || !field) return;
+  const pose = captureViewPose();
+  const reel = currentReel();
+  const clip = {
+    id: newClipId(),
+    kind: CLIP_CAMERA,
+    t: storyPlayer?.time() ?? 0,
+    dur: 2,
+    tx: pose.tx,
+    tz: pose.tz,
+    radius: pose.radius,
+    alpha: pose.alpha,
+    fromTx: pose.tx,
+    fromTz: pose.tz,
+    fromRadius: pose.radius,
+    fromAlpha: pose.alpha,
+  };
+  state.storyClipId = clip.id;
+  commitReel({ ...reel, clips: [...reel.clips, clip] });
+}
+
+function setCameraWaypoint(which) {
+  if (!cam || !field || storyPlayer?.rate()) return;
+  const clip = selectedStoryClip();
+  if (clip?.kind !== CLIP_CAMERA) return;
+  const pose = captureViewPose();
+  if (which === 'start') {
+    patchSelectedClip({
+      fromTx: pose.tx,
+      fromTz: pose.tz,
+      fromRadius: pose.radius,
+      fromAlpha: pose.alpha,
+    });
+  } else {
+    patchSelectedClip({
+      tx: pose.tx,
+      tz: pose.tz,
+      radius: pose.radius,
+      alpha: pose.alpha,
+    });
+  }
+  const next = selectedStoryClip();
+  if (!next || !storyPlayer) return;
+  storyPlayer.seek(which === 'start' ? next.t : next.t + next.dur);
+}
+
+function addStoryLine() {
+  const reel = currentReel();
+  const clip = {
+    id: newClipId(),
+    kind: CLIP_LINE,
+    t: storyPlayer?.time() ?? 0,
+    dur: lineDuration('New line'),
+    speaker: '',
+    text: 'New line',
+    style: 'normal',
+  };
+  state.storyClipId = clip.id;
+  commitReel({ ...reel, clips: [...reel.clips, clip] });
+}
+
+function deleteStoryClip() {
+  if (!state.storyClipId) return;
+  const reel = currentReel();
+  commitReel({ ...reel, clips: reel.clips.filter((c) => c.id !== state.storyClipId) });
+  state.storyClipId = null;
+  syncStoryEditor();
+}
+
+function patchSelectedClip(patch) {
+  const clip = selectedStoryClip();
+  if (!clip) return;
+  const reel = currentReel();
+  const next = { ...clip, ...patch };
+  if (next.kind === CLIP_LINE && patch.text != null && patch.dur == null) {
+    next.dur = lineDuration(next.text);
+  }
+  commitReel({
+    ...reel,
+    clips: reel.clips.map((c) => (c.id === clip.id ? next : c)),
+  });
+}
+
+function syncStoryEditor() {
+  const clip = selectedStoryClip();
+  const empty = document.getElementById('story-clip-empty');
+  const camFields = document.getElementById('story-clip-camera');
+  const lineFields = document.getElementById('story-clip-line');
+  if (empty) empty.style.display = clip ? 'none' : 'block';
+  if (camFields) camFields.style.display = clip?.kind === CLIP_CAMERA ? 'block' : 'none';
+  if (lineFields) lineFields.style.display = clip?.kind === CLIP_LINE ? 'block' : 'none';
+  if (clip?.kind === CLIP_CAMERA) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el && el !== document.activeElement) el.value = String(v); };
+    set('story-cam-t', clip.t);
+    set('story-cam-dur', clip.dur);
+    set('story-cam-tx', clip.tx);
+    set('story-cam-tz', clip.tz);
+    set('story-cam-radius', Math.round(clip.radius));
+    set('story-cam-alpha', clip.alpha.toFixed(2));
+    const hint = document.getElementById('story-cam-waypoints');
+    if (hint) {
+      const who = clip.char ? ` ${clip.char}` : '';
+      const end = `${clip.tx | 0},${clip.tz | 0} r${Math.round(clip.radius)}`;
+      if (Number.isFinite(clip.fromTx)) {
+        hint.textContent = `Start ${clip.fromTx | 0},${clip.fromTz | 0} r${Math.round(clip.fromRadius)} → End${who} ${end}`;
+      } else {
+        hint.textContent = `Start (previous shot) → End${who} ${end}`;
+      }
+    }
+    const aim = document.getElementById('story-cam-char');
+    if (aim && aim !== document.activeElement) aim.value = clip.char || '';
+  }
+  if (clip?.kind === CLIP_LINE) {
+    const set = (id, v) => { const el = document.getElementById(id); if (el && el !== document.activeElement) el.value = String(v); };
+    set('story-line-t', clip.t);
+    set('story-line-dur', clip.dur);
+    set('story-line-speaker', clip.speaker);
+    set('story-line-text', clip.text);
+    set('story-line-style', clip.style);
+  }
+  fillCastControls();
+  const playBtn = document.getElementById('story-play');
+  if (playBtn && storyPlayer) playBtn.textContent = storyPlayer.rate() === 0 ? 'Play' : 'Stop';
+  refreshStorySheet();
+}
+
+function fillCastControls() {
+  const names = namedUnits(state.units);
+  const row = document.getElementById('story-cast');
+  if (row) {
+    row.replaceChildren();
+    if (!names.length) {
+      const hint = document.createElement('p');
+      hint.className = 'hint';
+      hint.textContent = 'Name a placed unit to jump, follow, or aim a camera at them.';
+      row.appendChild(hint);
+    } else {
+      for (const u of names) {
+        const line = document.createElement('div');
+        line.className = 'row';
+        const label = document.createElement('span');
+        label.className = 'hint';
+        label.textContent = u.name;
+        const jump = document.createElement('button');
+        jump.type = 'button';
+        jump.dataset.castJump = u.name;
+        jump.textContent = 'Jump';
+        const follow = document.createElement('button');
+        follow.type = 'button';
+        follow.dataset.castFollow = u.name;
+        follow.textContent = 'Follow';
+        line.append(label, jump, follow);
+        row.appendChild(line);
+      }
+    }
+  }
+  const aim = document.getElementById('story-cam-char');
+  if (aim && aim !== document.activeElement) {
+    const cur = selectedStoryClip()?.char || aim.value;
+    aim.replaceChildren(
+      ...[{ name: '', label: 'Tile' }, ...names.map((u) => ({ name: u.name, label: u.name }))].map((opt) => {
+        const el = document.createElement('option');
+        el.value = opt.name;
+        el.textContent = opt.label;
+        return el;
+      }),
+    );
+    aim.value = names.some((u) => u.name === cur) ? cur : '';
+  }
+  const list = document.getElementById('story-cast-names');
+  if (list) {
+    list.replaceChildren(...names.map((u) => {
+      const el = document.createElement('option');
+      el.value = u.name;
+      return el;
+    }));
+  }
+}
+
+function jumpToCharacter(name) {
+  const pos = speakerWorldPos(name);
+  if (!pos || !cam) return;
+  cam.lookAtXZ(pos.x, pos.z);
+}
+
+function followCharacter(name) {
+  const pos = speakerWorldPos(name);
+  if (!pos || !cam) return;
+  cam.followXZ(pos.x, pos.z);
+}
+
+function aimClipAtCharacter(name) {
+  const u = findNamedUnit(state.units, name);
+  if (!u) {
+    patchSelectedClip({ char: '' });
+    return;
+  }
+  patchSelectedClip({ char: u.name, tx: u.tx, tz: u.tz });
+}
+
+function bindStoryUi() {
+  const num = (id) => Number(document.getElementById(id)?.value);
+  document.getElementById('story-to-start')?.addEventListener('click', () => storyPlayer?.toStart());
+  document.getElementById('story-rew')?.addEventListener('click', () => storyPlayer?.rewind());
+  document.getElementById('story-play')?.addEventListener('click', () => storyPlayer?.toggle());
+  document.getElementById('story-ff')?.addEventListener('click', () => storyPlayer?.fastForward());
+  document.getElementById('story-to-end')?.addEventListener('click', () => storyPlayer?.skipForward());
+  document.getElementById('story-prev')?.addEventListener('click', () => storyPlayer?.prevClip());
+  document.getElementById('story-next')?.addEventListener('click', () => storyPlayer?.nextClip());
+  document.getElementById('story-add-camera')?.addEventListener('click', addStoryCamera);
+  document.getElementById('story-add-line')?.addEventListener('click', addStoryLine);
+  document.getElementById('story-delete')?.addEventListener('click', deleteStoryClip);
+  document.getElementById('story-cam-set-start')?.addEventListener('click', () => setCameraWaypoint('start'));
+  document.getElementById('story-cam-set-end')?.addEventListener('click', () => setCameraWaypoint('end'));
+  document.getElementById('story-cam-char')?.addEventListener('change', (e) => {
+    aimClipAtCharacter(e.target.value);
+  });
+  document.getElementById('story-cast')?.addEventListener('click', (e) => {
+    const jump = e.target?.closest?.('[data-cast-jump]');
+    const follow = e.target?.closest?.('[data-cast-follow]');
+    if (jump) jumpToCharacter(jump.dataset.castJump);
+    if (follow) followCharacter(follow.dataset.castFollow);
+  });
+  const camMap = [
+    ['story-cam-t', 't'],
+    ['story-cam-dur', 'dur'],
+    ['story-cam-tx', 'tx'],
+    ['story-cam-tz', 'tz'],
+    ['story-cam-radius', 'radius'],
+    ['story-cam-alpha', 'alpha'],
+  ];
+  for (const [id, key] of camMap) {
+    document.getElementById(id)?.addEventListener('change', () => patchSelectedClip({ [key]: num(id) }));
+  }
+  document.getElementById('story-line-t')?.addEventListener('change', () => patchSelectedClip({ t: num('story-line-t') }));
+  document.getElementById('story-line-dur')?.addEventListener('change', () => patchSelectedClip({ dur: num('story-line-dur') }));
+  document.getElementById('story-line-speaker')?.addEventListener('input', (e) => {
+    patchSelectedClip({ speaker: e.target.value });
+  });
+  document.getElementById('story-line-text')?.addEventListener('input', (e) => {
+    patchSelectedClip({ text: e.target.value });
+  });
+  document.getElementById('story-line-style')?.addEventListener('change', (e) => {
+    patchSelectedClip({ style: e.target.value });
+  });
 }
 
 function exportMap() {
@@ -675,23 +1122,46 @@ function playMap() {
   window.open('/?garden=session&solo=1', '_blank');
 }
 
+function applyGardenJson(json) {
+  const g = decodeGarden(json);
+  field = fieldFromGarden(json);
+  state.mapName = g.name || '';
+  state.units = g.units;
+  state.buildings = g.buildings;
+  state.agoras = g.agoras;
+  state.startingResources = { ...(g.startingResources || STARTING_RESOURCES) };
+  state.story = g.story || emptyStory();
+  state.storyClipId = null;
+  state.cameraHalfF = g.cameraHalfF || 0;
+  storyPlayer?.setReel(currentReel());
+  state.selected = [];
+  celestial?.setWorldHalfF(worldHalfFFromField(field));
+  applyCameraBound();
+  syncFormFromField();
+  syncStoryEditor();
+  rebuildTerrain();
+}
+
 function importFile(file) {
   file.text().then((text) => {
-    const json = JSON.parse(text);
-    const g = decodeGarden(json);
-    field = fieldFromGarden(json);
-    state.mapName = g.name || '';
-    state.units = g.units;
-    state.buildings = g.buildings;
-    state.agoras = g.agoras;
-    state.startingResources = { ...(g.startingResources || STARTING_RESOURCES) };
-    state.selected = [];
-    syncFormFromField();
-    rebuildTerrain();
+    applyGardenJson(JSON.parse(text));
   }).catch((err) => {
     console.error(err);
     alert('Could not import that .garden file.');
   });
+}
+
+async function loadGardenFromSearch() {
+  const raw = new URLSearchParams(location.search).get('garden');
+  if (!raw) return;
+  try {
+    const res = await fetch(raw);
+    if (!res.ok) throw new Error(`garden ${res.status}`);
+    applyGardenJson(await res.json());
+  } catch (err) {
+    console.error(err);
+    alert('Could not load that garden URL.');
+  }
 }
 
 function updateStats() {
@@ -758,6 +1228,7 @@ function syncFormFromField() {
   }
   if (seedEl) seedEl.value = String(field.seed);
   if (nameEl) nameEl.value = state.mapName;
+  syncCameraBoundUi();
   for (const kind of RESOURCE_KINDS) {
     const el = document.getElementById(`start-${kind}`);
     if (el) el.value = String(state.startingResources[kind] | 0);
@@ -781,6 +1252,18 @@ function setLayer(layer) {
   document.getElementById('panel-scenery').style.display = layer === 'scenery' ? 'block' : 'none';
   document.getElementById('panel-place').style.display = layer === 'place' ? 'block' : 'none';
   document.getElementById('panel-light').style.display = layer === 'light' ? 'block' : 'none';
+  const storyPanel = document.getElementById('panel-story');
+  if (storyPanel) storyPanel.style.display = layer === 'story' ? 'block' : 'none';
+  storySheet?.setOpen(layer === 'story');
+  if (layer === 'story') {
+    storyPlayer?.setReel(currentReel());
+    applyStorySample(storyPlayer?.sample());
+    syncStoryEditor();
+  } else {
+    storyPlayer?.stop();
+    storyHud?.hide();
+    storySpeech?.hide();
+  }
   lastPaintKey = '';
   refreshBrushCursor();
 }
@@ -815,6 +1298,7 @@ function mountUi() {
       <button data-layer="terrain">Terrain</button>
       <button data-layer="scenery">Scenery</button>
       <button data-layer="place">Place</button>
+      <button data-layer="story">Story</button>
       <button data-layer="light">Light</button>
     </div>
     <div id="stats" class="hint"></div>
@@ -840,7 +1324,7 @@ function mountUi() {
         <button id="btn-play">Play</button>
       </div>
       <input id="import-file" type="file" accept=".garden,.json" style="display:none">
-      <p class="hint">v4 .garden: table, terrain, scenery, units, buildings, agoras, starting resources. Play opens a solo match from this map.</p>
+      <p class="hint">v4 .garden files live in repo-root maps/ (chapter1, tester). Legacy adventure is maps/adventure/. Play opens a solo match from this map.</p>
     </div>
     <div id="panel-table" class="panel">
       <p id="select-hint" class="hint">Click to select. Shift-click to add. Double-click to toggle on/off.</p>
@@ -848,6 +1332,9 @@ function mountUi() {
       <label>Radius <span id="radius-label">${DEFAULT_CELL_RADIUS}</span></label>
       <input id="chunk-radius" type="range" min="0" max="32" value="${DEFAULT_CELL_RADIUS}" disabled>
       <p class="hint">0 = sharp corner + plinth. Raise radius to fillet that corner. Odd boards get a center plinth. Outer rails get matching side plinths.</p>
+      <label>Camera bound <span id="camera-bound-label">100%</span></label>
+      <input id="camera-bound" type="range" min="20" max="100" value="100">
+      <p class="hint">Pan and zoom stay inside this box. 100% is the full table — lower it to keep a vista rim the camera cannot cross.</p>
       <div class="row">
         <button id="btn-enable-all">Enable all chunks</button>
       </div>
@@ -884,6 +1371,8 @@ function mountUi() {
     <div id="panel-place" class="panel" style="display:none">
       <label>Owner</label>
       <input id="place-owner" type="number" min="0" max="4" value="0">
+      <label>Unit name</label>
+      <input id="place-name" type="text" placeholder="Stumpey">
       <label>Units</label>
       <div class="row">
         ${UNIT_DEFS.map((u) => `<button data-place="unit" data-type="${u.id}">${u.name}</button>`).join('')}
@@ -894,6 +1383,54 @@ function mountUi() {
         ${PLACEABLE_BUILDINGS.map((b) => `<button data-place="building" data-type="${b.id}">${b.name}</button>`).join('')}
       </div>
       <p class="hint">Click to place. Shift-click to remove the nearest of that kind.</p>
+    </div>
+    <div id="panel-story" class="panel" style="display:none">
+      <div class="row">
+        <button id="story-to-start" type="button">|&lt;</button>
+        <button id="story-rew" type="button">&lt;&lt;</button>
+        <button id="story-play" type="button">Play</button>
+        <button id="story-ff" type="button">&gt;&gt;</button>
+        <button id="story-to-end" type="button">&gt;|</button>
+        <button id="story-prev" type="button">Prev</button>
+        <button id="story-next" type="button">Next</button>
+      </div>
+      <div class="row">
+        <button id="story-add-camera" type="button">Add camera</button>
+        <button id="story-add-line" type="button">Add line</button>
+        <button id="story-delete" type="button">Delete clip</button>
+      </div>
+      <p id="story-clip-empty" class="hint">Add a camera from the current view, or a line. Orbit, then Set start / Set end to confirm waypoints. Jump / Follow a named unit, or aim a camera clip at them. Click the map to aim the selected end look-at. Scrub the sheet to seek.</p>
+      <div id="story-cast"></div>
+      <div id="story-clip-camera" style="display:none">
+        <div class="row">
+          <button id="story-cam-set-start" type="button">Set start from view</button>
+          <button id="story-cam-set-end" type="button">Set end from view</button>
+        </div>
+        <p id="story-cam-waypoints" class="hint"></p>
+        <label>Aim at
+          <select id="story-cam-char">
+            <option value="">Tile</option>
+          </select>
+        </label>
+        <label>Start <input id="story-cam-t" type="number" min="0" step="0.1"></label>
+        <label>Duration <input id="story-cam-dur" type="number" min="0.05" step="0.1"></label>
+        <label>Tile X <input id="story-cam-tx" type="number" step="1"></label>
+        <label>Tile Z <input id="story-cam-tz" type="number" step="1"></label>
+        <label>Radius <input id="story-cam-radius" type="number" min="8" step="1"></label>
+        <label>Alpha <input id="story-cam-alpha" type="number" step="0.05"></label>
+      </div>
+      <div id="story-clip-line" style="display:none">
+        <label>Start <input id="story-line-t" type="number" min="0" step="0.1"></label>
+        <label>Duration <input id="story-line-dur" type="number" min="0.05" step="0.1"></label>
+        <label>Speaker <input id="story-line-speaker" type="text" list="story-cast-names"></label>
+        <datalist id="story-cast-names"></datalist>
+        <label>Line <input id="story-line-text" type="text"></label>
+        <label>Style
+          <select id="story-line-style">
+            ${LINE_STYLES.map((s) => `<option value="${s}">${s}</option>`).join('')}
+          </select>
+        </label>
+      </div>
     </div>
     <div id="panel-light" class="panel" style="display:none">
       <p class="hint">Body 1 casts shadows. Hemi / emit fill the olive board; moon is a cool second sun.</p>
@@ -1016,6 +1553,9 @@ function mountUi() {
     state.showGrid = e.target.checked;
     grid?.setVisible(state.showGrid);
   });
+  document.getElementById('camera-bound').addEventListener('input', (e) => {
+    setCameraBoundPct(Number(e.target.value) || 100);
+  });
   document.getElementById('btn-enable-all').addEventListener('click', () => {
     applyTableSilhouette(field, {
       ...field.tableShape,
@@ -1031,8 +1571,10 @@ function mountUi() {
     state.selected = [];
     state.units = [];
     state.buildings = [];
+    state.cameraHalfF = 0;
     state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
     celestial?.setWorldHalfF(worldHalfFFromField(field));
+    applyCameraBound();
     rebuildTerrain();
   });
   document.getElementById('btn-export').addEventListener('click', exportMap);
@@ -1144,6 +1686,33 @@ async function main() {
   scene.camera = camera;
   cam = createCameraController(camera, canvas, { worldHalfF });
 
+  storyHud = createStoryHud(document.body);
+  storySpeech = createStorySpeech({
+    host: document.body,
+    getSpeakerPos: (name) => speakerWorldPos(name),
+    worldToScreen: (x, y, z) => forgeWorldToScreen(x, y, z),
+  });
+  storySheet = createStorySheet({
+    onSeek: (t) => storyPlayer?.seek(t),
+    onSelect: (id) => {
+      state.storyClipId = id;
+      syncStoryEditor();
+    },
+  });
+  document.body.appendChild(storySheet.el);
+  storySheet.setOpen(state.layer === 'story');
+  storyPlayer = createStoryPlayer({
+    reel: currentReel(),
+    onSample: applyStorySample,
+  });
+  storyPlayer.subscribe(() => {
+    refreshStorySheet();
+    const playBtn = document.getElementById('story-play');
+    if (playBtn) playBtn.textContent = storyPlayer.rate() === 0 ? 'Play' : 'Stop';
+  });
+  bindStoryUi();
+  refreshStorySheet();
+
   celestial = createCelestialRig(scene, {
     worldHalfF,
     state: loadForgeCelestial(),
@@ -1151,12 +1720,16 @@ async function main() {
   bindLightUi();
 
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  function storyDriving() {
+    return state.layer === 'story' && storyPlayer && storyPlayer.rate() !== 0;
+  }
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    if (storyDriving()) return;
     cam.handleWheel(e);
   }, { passive: false });
   canvas.addEventListener('pointerdown', (e) => {
-    cam.handlePointerDown(e);
+    if (!storyDriving()) cam.handlePointerDown(e);
     if (e.button === 0 && !cam.isRmbPanning()) {
       state.painting = true;
       applyAt(pickGround(e.clientX, e.clientY), { add: e.shiftKey });
@@ -1172,7 +1745,7 @@ async function main() {
     toggleSelectedChunks();
   });
   canvas.addEventListener('pointermove', (e) => {
-    cam.handlePointerMove(e);
+    if (!storyDriving()) cam.handlePointerMove(e);
     const pos = pickGround(e.clientX, e.clientY);
     if (state.painting && (state.layer === 'terrain' || state.layer === 'scenery') && e.buttons & 1) {
       applyAt(pos);
@@ -1192,17 +1765,31 @@ async function main() {
     lastBrushWorld = null;
     hideBrushCursor();
   });
-  window.addEventListener('keydown', (e) => cam.handleKeyDown(e));
+  window.addEventListener('keydown', (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName);
+    if (state.layer === 'story' && !typing && e.code === 'Space') {
+      e.preventDefault();
+      storyPlayer?.toggle();
+      return;
+    }
+    if (storyDriving()) return;
+    cam.handleKeyDown(e);
+  });
   window.addEventListener('keyup', (e) => cam.handleKeyUp(e));
 
   onBeforeRender(scene, (deltaMs) => {
-    cam.tick(deltaMs);
+    if (state.layer === 'story') {
+      storyPlayer?.tick(deltaMs);
+      storySpeech?.tick();
+    }
+    if (!storyDriving()) cam.tick(deltaMs);
     celestial?.update?.(deltaMs);
     terrain?.update?.(camera, deltaMs);
   });
 
   await rebuildTerrain();
   syncFormFromField();
+  await loadGardenFromSearch();
   await startEngine(engine);
 }
 

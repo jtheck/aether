@@ -23,9 +23,13 @@ import { createBuilding } from './buildings.js';
 import {
   FARM_SPORE_DAMAGE_MUL,
 } from './buildingCombat.js';
+import { applyDamage } from './damage.js';
 import {
+  MYCO_DEATH_MIN_SEEDS,
+  MYCO_DEATH_SEED_RADIUS_F,
   SPORE_BLOOM_COOLDOWN,
   SPORE_BLOOM_DAMAGE,
+  SPORE_DRIP_FOUNTAIN,
   SPORE_GROWTH_DELAY,
   SPORE_MIN_SEEDS,
   SPORE_OUTER_RADIUS,
@@ -337,6 +341,60 @@ function bloomHitsFarmHardWithInk() {
   assert.ok(fxPatch.dripCount >= 10, 'hit farms publish inky drips across the plot');
 }
 
+function mycoDeathFountainsInkAndSeedsATinyRing() {
+  const field = createField(1);
+  const tx0 = 80;
+  const tz0 = 80;
+  stampGrass(field, tx0 - 4, tz0 - 4, tx0 + 4, tz0 + 4);
+  const pos = tileWorld(tx0, tz0);
+  const w = createWorld(95);
+  const myco = spawn(w, { x: pos.x, y: pos.y, type: UNIT.MYCO, owner: 0 });
+  applyDamage(w, myco, 999);
+  assert.equal(w.alive[myco], 0, 'myco dies');
+  step(w, field, []);
+
+  const fxPatch = takeSporeBloomUpdates(w);
+  assert.ok(fxPatch);
+  assert.ok(fxPatch.dripCount >= 1, 'death publishes ink');
+  assert.equal(fxPatch.dripKind[0], SPORE_DRIP_FOUNTAIN, 'ink is a fountain, not a tree drip');
+  assert.ok(fxPatch.seedCount >= MYCO_DEATH_MIN_SEEDS, 'tiny ring seeds around the corpse');
+
+  const standTi = tz0 * field.width + tx0;
+  const mycoXF = fx.toFloat(pos.x);
+  const mycoYF = fx.toFloat(pos.y);
+  const radius2 = MYCO_DEATH_SEED_RADIUS_F * MYCO_DEATH_SEED_RADIUS_F;
+  for (let i = 0; i < w.treeGrowth.count; i++) {
+    const ti = w.treeGrowth.tile[i];
+    assert.notEqual(ti, standTi, 'no tree on the corpse tile');
+    const tz = Math.floor(ti / field.width);
+    const tx = ti - tz * field.width;
+    const c = tileWorld(tx, tz);
+    const dx = fx.toFloat(c.x) - mycoXF;
+    const dz = fx.toFloat(c.y) - mycoYF;
+    assert.ok(dx * dx + dz * dz <= radius2 + 0.01, 'seeds stay in the tiny ring');
+  }
+
+  const seedTi = w.treeGrowth.tile[0];
+  for (let t = 0; t < SPORE_GROWTH_DELAY + 20; t++) step(w, field, []);
+  assert.ok(field.treeStock[seedTi] > 0, 'death seeds sprout');
+}
+
+function mycoDeathBurstIsDeterministic() {
+  function run(seed) {
+    const field = createField(seed);
+    stampGrass(field, 70, 70, 90, 90);
+    const pos = tileWorld(80, 80);
+    const w = createWorld(seed);
+    const myco = spawn(w, { x: pos.x, y: pos.y, type: UNIT.MYCO, owner: 0 });
+    applyDamage(w, myco, 999);
+    for (let t = 0; t < SPORE_GROWTH_DELAY + 20; t++) step(w, field, []);
+    takeSporeBloomUpdates(w);
+    takeTreeUpdates(field);
+    return checksum(w, field);
+  }
+  assert.equal(run(17), run(17));
+}
+
 growTreeAtPlantsAndPublishes();
 castFellsTreesAndQueuesSeeds();
 delayedGrowthSproutsTrees();
@@ -344,4 +402,6 @@ castsAreDeterministic();
 emptyGroundStillCasts();
 seedsFormOutwardArcAwayFromMyco();
 bloomHitsFarmHardWithInk();
+mycoDeathFountainsInkAndSeedsATinyRing();
+mycoDeathBurstIsDeterministic();
 console.log('sporeBloom.test.js: ok');

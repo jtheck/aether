@@ -12,8 +12,6 @@ const ALLOWED_ORIGINS = new Set([
   'https://www.aether.garden',
 ]);
 
-const registeredShortcuts = [];
-
 function isLocalDevOrigin(origin) {
   return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
@@ -97,50 +95,45 @@ function toggleDevTools() {
   }
 }
 
-function toggleFullscreen() {
+function isWindowFullscreen(win) {
+  return !!(win && (win.isFullscreen || win.fullscreen));
+}
+
+function leaveFullscreen() {
   const win = activeWindow();
-  if (!win) return;
+  if (!win || !isWindowFullscreen(win)) return false;
   try {
-    var fs = win.isFullscreen || win.fullscreen;
-    if (fs) win.leaveFullscreen();
-    else win.enterFullscreen();
+    win.leaveFullscreen();
+    return true;
   } catch (err) {
-    console.warn('[steam-build] Fullscreen toggle failed:', err.message);
+    console.warn('[steam-build] Leave fullscreen failed:', err.message);
+    return false;
   }
 }
 
-function registerGlobalShortcut(key, handler) {
-  const shortcut = new nw.Shortcut({
-    key: key,
-    active: handler,
-    failed: function () {
-      console.warn('[steam-build] Failed to register shortcut:', key);
-    },
-  });
-  nw.App.registerGlobalHotKey(shortcut);
-  registeredShortcuts.push(shortcut);
+function toggleFullscreen() {
+  const win = activeWindow();
+  if (!win) return false;
+  try {
+    if (isWindowFullscreen(win)) win.leaveFullscreen();
+    else win.enterFullscreen();
+    return true;
+  } catch (err) {
+    console.warn('[steam-build] Fullscreen toggle failed:', err.message);
+    return false;
+  }
 }
 
-function registerGlobalShortcuts() {
-  if (registeredShortcuts.length) return;
-
-  registerGlobalShortcut('F5', function () {
-    const win = activeWindow();
-    if (win) win.reload();
-  });
-
-  registerGlobalShortcut('Ctrl+R', function () {
-    const win = activeWindow();
-    if (win) win.reload();
-  });
-
-  registerGlobalShortcut('Ctrl+Shift+R', function () {
-    const win = activeWindow();
-    if (win) win.reload(true);
-  });
-
-  registerGlobalShortcut('F11', toggleFullscreen);
-  registerGlobalShortcut('Ctrl+Shift+I', toggleDevTools);
+function reloadWindow(hard) {
+  const win = activeWindow();
+  if (!win) return false;
+  try {
+    win.reload(!!hard);
+    return true;
+  } catch (err) {
+    console.warn('[steam-build] Reload failed:', err.message);
+    return false;
+  }
 }
 
 function lockTitle(win) {
@@ -195,7 +188,12 @@ function ensureSteam() {
 
 function ensureBridgeServer() {
   try {
-    require('./bridge-server').start({ onDevToolsToggle: toggleDevTools });
+    require('./bridge-server').start({
+      onDevToolsToggle: toggleDevTools,
+      onLeaveFullscreen: leaveFullscreen,
+      onToggleFullscreen: toggleFullscreen,
+      onReload: reloadWindow,
+    });
   } catch (err) {
     console.warn('[steam-build] Bridge server failed:', err.message);
   }
@@ -219,9 +217,6 @@ function ensureSteamDeferred() {
 
 function attachToCurrentWindow() {
   ensureBridgeServer();
-  try {
-    registerGlobalShortcuts();
-  } catch (_err) { /* NW not ready */ }
   try {
     wireWindow(nw.Window.get());
   } catch (_err) { /* window not ready */ }

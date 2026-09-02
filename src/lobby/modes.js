@@ -3,9 +3,15 @@
 export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
 export const ADVENTURE_CHAPTERS = [
-  { id: 'ch1', name: 'Chapter 1' },
+  { id: 'ch1', name: 'Chapter 1', garden: '/maps/chapter1.garden' },
   { id: 'ch2', name: 'Chapter 2' },
 ];
+
+/** @param {string} [chapterId] */
+export function gardenUrlForChapter(chapterId) {
+  const ch = ADVENTURE_CHAPTERS.find((c) => c.id === chapterId);
+  return ch?.garden || '';
+}
 
 /** @typedef {'onevsone' | 'teams' | 'adventure'} LobbyModeId */
 

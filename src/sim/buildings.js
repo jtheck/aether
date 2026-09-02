@@ -21,7 +21,7 @@ import { SCENERY, rockFootprintRadiusForStock } from './scenery.js';
 import { UNIT, getUnitDef, isFlyer, getUnitCost } from './unitTypes.js';
 import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
-import { MAX_WAYPOINTS, queuePath } from './path.js';
+import { MAX_WAYPOINTS, PATH_STYLE, queuePath } from './path.js';
 import { spendResources, addResource } from './resources.js';
 
 /** Scratch buffers for render-side rally A* (main thread only). */
@@ -29,7 +29,7 @@ const _rallyWx = new Int32Array(64);
 const _rallyWy = new Int32Array(64);
 import { clearEngagement } from './engagement.js';
 import { isCarried } from './transport.js';
-import { ownerHasTech, TECH_BY_ID, getTechCost } from './tech.js';
+import { ownerHasTech, TECH, TECH_BY_ID, getTechCost } from './tech.js';
 import { GENERATED_BUILDING_SPAWN_LOCAL } from './buildingSpawnLocal.generated.js';
 
 /** @typedef {'basic' | 'advanced' | 'elemental'} BuildingCategoryId */
@@ -168,7 +168,7 @@ export function getBuildingDisplayName(typeId) {
 
 /**
  * Placement cost per building (wood/stone/mineral/food). Charged on placement,
- * no refund (see applyPlaceBuilding). v1's building prices were placeholder
+ * refunded if the unfinished site is cancelled. v1's building prices were placeholder
  * single-digits; re-priced here into a real curve against the ~90-wood start:
  *   basic  — affordable early from wood alone (econ/expansion),
  *   advanced — needs a stone economy first (military/tech),
@@ -201,7 +201,7 @@ export function getBuildingCost(typeId) {
   return BUILDING_COST[typeId] ?? {};
 }
 
-/** v1 building `requires` — own one of each listed type (construction sites count). */
+/** Building `requires` — own a finished building of each listed type. */
 export const BUILDING_REQUIRES = Object.freeze({
   tower: Object.freeze(['camp']),
   tavern: Object.freeze(['camp']),
@@ -217,8 +217,28 @@ export function getBuildingRequires(typeId) {
   return BUILDING_REQUIRES[typeId] ?? NO_REQUIRES;
 }
 
+/** Raised and functional. `undefined` built = done (garden / checkpoint). */
+export function buildingIsFinished(b) {
+  return !!b && (b.built != null ? b.built | 0 : 1) === 1;
+}
+
 /**
- * @param {{ owner?: number, type?: string }[] | null | undefined} buildings
+ * @param {{ owner?: number, type?: string, built?: number }[] | null | undefined} buildings
+ * @param {number} owner
+ */
+export function ownedFinishedBuildingTypes(buildings, owner) {
+  const set = new Set();
+  if (!buildings?.length) return set;
+  const o = owner | 0;
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) === o && b.type && buildingIsFinished(b)) set.add(b.type);
+  }
+  return set;
+}
+
+/**
+ * @param {{ owner?: number, type?: string, built?: number }[] | null | undefined} buildings
  * @param {number} owner
  * @param {string} typeId
  */
@@ -227,7 +247,7 @@ export function ownerHasBuildingType(buildings, owner, typeId) {
   const o = owner | 0;
   for (let i = 0; i < buildings.length; i++) {
     const b = buildings[i];
-    if ((b.owner | 0) === o && b.type === typeId) return true;
+    if ((b.owner | 0) === o && b.type === typeId && buildingIsFinished(b)) return true;
   }
   return false;
 }
@@ -416,6 +436,142 @@ export function buildingHasMenu(typeId) {
 /** Production buildings that spawn units can take a train rally. */
 export function buildingCanRally(typeId) {
   return (BUILDING_MENUS[typeId]?.units?.length ?? 0) > 0;
+}
+
+/** Extra rally flags after the first planted point (building → flag). */
+export const RALLY_EXTRA_HOP_MAX = 1;
+/** Drayage unlocks one more hop (building → flag → flag). */
+export const RALLY_EXTRA_HOP_MAX_DRAYAGE = 2;
+
+/** How many extra rally hops this owner may plant. */
+export function rallyExtraHopCap(w, owner) {
+  return ownerHasTech(w, owner, TECH.DRAYAGE)
+    ? RALLY_EXTRA_HOP_MAX_DRAYAGE
+    : RALLY_EXTRA_HOP_MAX;
+}
+
+export function clearBuildingRallyHops(b) {
+  if (!b) return;
+  b.rallyHopCount = 0;
+  b.rallyHop1X = 0;
+  b.rallyHop1Z = 0;
+  b.rallyHop1Order = ORDER.MOVE;
+  b.rallyHop2X = 0;
+  b.rallyHop2Z = 0;
+  b.rallyHop2Order = ORDER.MOVE;
+}
+
+/** Min world-float distance between successive rally flags. */
+const RALLY_HOP_MIN_DIST = 2.5;
+
+export function isRallyBeyondPoint(ax, az, bx, bz, minDist = RALLY_HOP_MIN_DIST) {
+  const dx = bx - ax;
+  const dz = bz - az;
+  return dx * dx + dz * dz > minDist * minDist;
+}
+
+/**
+ * Visible planted flags on a serialized (world-float) building.
+ * hop 0 = primary rally, 1–2 = extra hops.
+ * @returns {{ hop: number, x: number, z: number, order: number }[]}
+ */
+export function listRallyFlags(b) {
+  if (!b?.hasRally) return [];
+  if (!isRallyBeyondBuilding(b.type, b.x, b.z, b.rallyX, b.rallyZ)) return [];
+  /** @type {{ hop: number, x: number, z: number, order: number }[]} */
+  const out = [
+    { hop: 0, x: b.rallyX, z: b.rallyZ, order: b.rallyOrder | 0 },
+  ];
+  const n = b.rallyHopCount | 0;
+  if (n >= 1) {
+    out.push({
+      hop: 1,
+      x: b.rallyHop1X,
+      z: b.rallyHop1Z,
+      order: b.rallyHop1Order | 0,
+    });
+  }
+  if (n >= 2) {
+    out.push({
+      hop: 2,
+      x: b.rallyHop2X,
+      z: b.rallyHop2Z,
+      order: b.rallyHop2Order | 0,
+    });
+  }
+  return out;
+}
+
+export function clearUnitRallyHops(w, i) {
+  if (w.rallyHopCount) w.rallyHopCount[i] = 0;
+}
+
+/** Copy remaining hops from a building onto a newly trained unit. */
+export function stampUnitRallyHops(w, i, b) {
+  if (!w.rallyHopCount) return;
+  const n = Math.min(2, b.rallyHopCount | 0);
+  w.rallyHopCount[i] = n;
+  if (n >= 1) {
+    w.rallyHop1X[i] = b.rallyHop1X | 0;
+    w.rallyHop1Y[i] = b.rallyHop1Z | 0;
+    w.rallyHop1Order[i] = (b.rallyHop1Order | 0) === ORDER.ATTACK_MOVE
+      ? ORDER.ATTACK_MOVE
+      : ORDER.MOVE;
+  }
+  if (n >= 2) {
+    w.rallyHop2X[i] = b.rallyHop2X | 0;
+    w.rallyHop2Y[i] = b.rallyHop2Z | 0;
+    w.rallyHop2Order[i] = (b.rallyHop2Order | 0) === ORDER.ATTACK_MOVE
+      ? ORDER.ATTACK_MOVE
+      : ORDER.MOVE;
+  }
+}
+
+/**
+ * Arrive at the current rally dest → walk the next stamped hop.
+ * @returns {boolean} true when a hop was started (caller should not idle).
+ */
+export function continueRallyHop(w, field, i) {
+  const n = w.rallyHopCount?.[i] | 0;
+  if (n <= 0) return false;
+  let rx = w.rallyHop1X[i];
+  let rz = w.rallyHop1Y[i];
+  const hopOrder =
+    (w.rallyHop1Order[i] | 0) === ORDER.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE;
+  if (n >= 2) {
+    w.rallyHop1X[i] = w.rallyHop2X[i];
+    w.rallyHop1Y[i] = w.rallyHop2Y[i];
+    w.rallyHop1Order[i] = w.rallyHop2Order[i];
+    w.rallyHopCount[i] = 1;
+  } else {
+    w.rallyHopCount[i] = 0;
+  }
+  if (field && !isFlyer(w.type[i])) {
+    const snapped = snapToPassable(field, rx, rz);
+    if (snapped) {
+      rx = snapped.x;
+      rz = snapped.y;
+    }
+  }
+  w.order[i] = hopOrder;
+  w.tx[i] = rx;
+  w.ty[i] = rz;
+  w.hasTarget[i] = 1;
+  if (field) {
+    const style = w.pathSlowAware?.[i] | 0;
+    queuePath(
+      w,
+      i,
+      rx,
+      rz,
+      style === PATH_STYLE.TREE_SEEK
+        ? { treeSeek: true }
+        : style === PATH_STYLE.SLOW_AWARE
+          ? { slowAware: true }
+          : null,
+    );
+  }
+  return true;
 }
 
 /**
@@ -775,6 +931,14 @@ export function createBuilding(opts) {
     rallyZ: 0,
     /** ORDER.MOVE or ORDER.ATTACK_MOVE for trained units walking to the rally. */
     rallyOrder: ORDER.MOVE,
+    /** Extra hops after the first planted flag (0–2). */
+    rallyHopCount: 0,
+    rallyHop1X: 0,
+    rallyHop1Z: 0,
+    rallyHop1Order: ORDER.MOVE,
+    rallyHop2X: 0,
+    rallyHop2Z: 0,
+    rallyHop2Order: ORDER.MOVE,
     /** 1 = hold production tracks (queue stays, progress freezes). */
     prodPaused: 0,
     /** 0 = under construction (inert); 1 = raised and functional. */
@@ -796,6 +960,11 @@ export function createBuilding(opts) {
     attackCd: 0,
     maxHp: getBuildingHp(type),
     hp: opts.hp != null ? opts.hp | 0 : getBuildingHp(type),
+    locustTicks: 0,
+    locustStacks: 0,
+    locustAcc: 0,
+    locustHops: 0,
+    locustSource: -1,
   };
 }
 
@@ -908,6 +1077,62 @@ export function rallyPathWorldPoints(field, b, rx, rz, opts = null) {
   if (Math.hypot(sxf - last.x, szf - last.z) > 0.35) {
     pts.push({ x: sxf, z: szf });
   }
+  appendRallyAstarPoints(pts, n, rx, rz);
+  return pts;
+}
+
+/**
+ * World-float polyline between two points (flag → next flag / ghost tip).
+ * Straight if `air` or the field is missing.
+ * @param {object | null | undefined} field
+ * @param {number} ax
+ * @param {number} az
+ * @param {number} bx
+ * @param {number} bz
+ * @param {{ slowAware?: boolean, air?: boolean }} [opts]
+ * @returns {{ x: number, z: number }[]}
+ */
+export function rallySegmentWorldPoints(field, ax, az, bx, bz, opts = null) {
+  /** @type {{ x: number, z: number }[]} */
+  const pts = [{ x: ax, z: az }];
+  if (opts?.air || !field) {
+    pts.push({ x: bx, z: bz });
+    return pts;
+  }
+  let sx = fx.fromFloat(ax);
+  let sz = fx.fromFloat(az);
+  let dx = fx.fromFloat(bx);
+  let dz = fx.fromFloat(bz);
+  const snappedS = snapToPassable(field, sx, sz);
+  if (snappedS) {
+    sx = snappedS.x;
+    sz = snappedS.y;
+  }
+  const snappedE = snapToPassable(field, dx, dz);
+  if (snappedE) {
+    dx = snappedE.x;
+    dz = snappedE.y;
+  }
+  const n = findPath(
+    field,
+    sx,
+    sz,
+    dx,
+    dz,
+    _rallyWx,
+    _rallyWy,
+    MAX_WAYPOINTS,
+    opts?.slowAware ? { slowAware: true } : null,
+  );
+  if (n <= 0) {
+    pts.push({ x: bx, z: bz });
+    return pts;
+  }
+  appendRallyAstarPoints(pts, n, bx, bz);
+  return pts;
+}
+
+function appendRallyAstarPoints(pts, n, ex, ez) {
   for (let i = 0; i < n; i++) {
     const x = fx.toFloat(_rallyWx[i]);
     const z = fx.toFloat(_rallyWy[i]);
@@ -916,10 +1141,9 @@ export function rallyPathWorldPoints(field, b, rx, rz, opts = null) {
     pts.push({ x, z });
   }
   const end = pts[pts.length - 1];
-  if (Math.hypot(rx - end.x, rz - end.z) > 0.2) {
-    pts.push({ x: rx, z: rz });
+  if (Math.hypot(ex - end.x, ez - end.z) > 0.2) {
+    pts.push({ x: ex, z: ez });
   }
-  return pts;
 }
 
 /**
@@ -1036,6 +1260,13 @@ export function applyPlaceBuilding(w, field, cmd) {
     rallyX: 0,
     rallyZ: 0,
     rallyOrder: ORDER.MOVE,
+    rallyHopCount: 0,
+    rallyHop1X: 0,
+    rallyHop1Z: 0,
+    rallyHop1Order: ORDER.MOVE,
+    rallyHop2X: 0,
+    rallyHop2Z: 0,
+    rallyHop2Order: ORDER.MOVE,
     prodPaused: 0,
     // Placed as an inert construction site — villagers raise it (construction.js).
     built: 0,
@@ -1062,8 +1293,10 @@ export function applyPlaceBuilding(w, field, cmd) {
 
 /**
  * Set a building's train rally point (world Q16.16 xz) and walk-out order.
+ * hopFrom -1 (default) = first flag from the building (clears extra hops).
+ * hopFrom 0 = extra hop from the first flag; hopFrom 1 = second extra (Drayage).
  * @param {object} w
- * @param {{ playerId?: number, buildingIndex?: number, buildingIndices?: number[], tx: number, ty: number, order?: number }} cmd
+ * @param {{ playerId?: number, buildingIndex?: number, buildingIndices?: number[], tx: number, ty: number, order?: number, hopFrom?: number }} cmd
  */
 export function applySetRally(w, cmd) {
   const buildings = w.buildings;
@@ -1083,22 +1316,68 @@ export function applySetRally(w, cmd) {
     if (!buildingCanRally(b.type)) continue;
     const rx = cmd.tx | 0;
     const rz = cmd.ty | 0;
-    if (
-      !isRallyBeyondBuilding(
-        b.type,
-        fx.toFloat(b.x),
-        fx.toFloat(b.z),
-        fx.toFloat(rx),
-        fx.toFloat(rz),
-      )
-    ) {
+    const hopFrom = cmd.hopFrom != null ? cmd.hopFrom | 0 : -1;
+    const cap = rallyExtraHopCap(w, b.owner);
+    if (hopFrom < 0) {
+      if (
+        !isRallyBeyondBuilding(
+          b.type,
+          fx.toFloat(b.x),
+          fx.toFloat(b.z),
+          fx.toFloat(rx),
+          fx.toFloat(rz),
+        )
+      ) {
+        continue;
+      }
+      b.hasRally = 1;
+      b.rallyX = rx;
+      b.rallyZ = rz;
+      b.rallyOrder = order;
+      clearBuildingRallyHops(b);
+      dirty = true;
       continue;
     }
-    b.hasRally = 1;
-    b.rallyX = rx;
-    b.rallyZ = rz;
-    b.rallyOrder = order;
-    dirty = true;
+    if (hopFrom === 0) {
+      if (!b.hasRally || cap < 1) continue;
+      if (
+        !isRallyBeyondPoint(
+          fx.toFloat(b.rallyX),
+          fx.toFloat(b.rallyZ),
+          fx.toFloat(rx),
+          fx.toFloat(rz),
+        )
+      ) {
+        continue;
+      }
+      b.rallyHop1X = rx;
+      b.rallyHop1Z = rz;
+      b.rallyHop1Order = order;
+      b.rallyHopCount = 1;
+      b.rallyHop2X = 0;
+      b.rallyHop2Z = 0;
+      b.rallyHop2Order = ORDER.MOVE;
+      dirty = true;
+      continue;
+    }
+    if (hopFrom === 1) {
+      if ((b.rallyHopCount | 0) < 1 || cap < 2) continue;
+      if (
+        !isRallyBeyondPoint(
+          fx.toFloat(b.rallyHop1X),
+          fx.toFloat(b.rallyHop1Z),
+          fx.toFloat(rx),
+          fx.toFloat(rz),
+        )
+      ) {
+        continue;
+      }
+      b.rallyHop2X = rx;
+      b.rallyHop2Z = rz;
+      b.rallyHop2Order = order;
+      b.rallyHopCount = 2;
+      dirty = true;
+    }
   }
   if (dirty) w.buildingsDirty = 1;
 }
@@ -1167,6 +1446,35 @@ export function applyQueueResearch(w, cmd) {
   }
   if (!spendResources(w, playerId, getTechCost(techId))) return;
   b.tracks.push({ kind: 'upgrade', id: techId, count: 1, progress: 0 });
+  w.buildingsDirty = 1;
+}
+
+/**
+ * Tear down an unfinished construction site and refund its placement cost.
+ * Finished buildings are unchanged (use combat / CANCEL_TRAIN for those).
+ * @param {object} w
+ * @param {object} [field]
+ * @param {{ playerId?: number, buildingIndex: number }} cmd
+ */
+export function applyCancelConstruction(w, field, cmd) {
+  const buildings = w.buildings;
+  if (!buildings?.length) return;
+  const bi = cmd.buildingIndex | 0;
+  if (bi < 0 || bi >= buildings.length) return;
+  const b = buildings[bi];
+  const playerId = (cmd.playerId ?? -1) | 0;
+  if ((b.owner | 0) !== playerId) return;
+  if (b.built !== 0) return;
+  if (!isBuildingAlive(b)) return;
+  const cost = getBuildingCost(b.type);
+  for (const kind in cost) addResource(w, playerId, kind, cost[kind] | 0);
+  b.hp = 0;
+  if (field) {
+    clearStructureOccupancyAt(field, b.type, b.x, b.z, {
+      buildings: w.buildings,
+      exceptIndex: bi,
+    });
+  }
   w.buildingsDirty = 1;
 }
 
@@ -1251,6 +1559,15 @@ export function serializeBuildings(buildings) {
         ? ORDER.ATTACK_MOVE
         : ORDER.MOVE
       : ORDER.MOVE,
+    rallyHopCount: b.rallyHopCount | 0,
+    rallyHop1X: (b.rallyHopCount | 0) >= 1 ? fx.toFloat(b.rallyHop1X) : 0,
+    rallyHop1Z: (b.rallyHopCount | 0) >= 1 ? fx.toFloat(b.rallyHop1Z) : 0,
+    rallyHop1Order:
+      (b.rallyHop1Order | 0) === ORDER.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE,
+    rallyHop2X: (b.rallyHopCount | 0) >= 2 ? fx.toFloat(b.rallyHop2X) : 0,
+    rallyHop2Z: (b.rallyHopCount | 0) >= 2 ? fx.toFloat(b.rallyHop2Z) : 0,
+    rallyHop2Order:
+      (b.rallyHop2Order | 0) === ORDER.ATTACK_MOVE ? ORDER.ATTACK_MOVE : ORDER.MOVE,
     prodPaused: b.prodPaused | 0,
     built: b.built != null ? b.built | 0 : 1,
     buildProgress: b.buildProgress | 0,
@@ -1264,6 +1581,7 @@ export function serializeBuildings(buildings) {
     })),
     maxHp: b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type),
     hp: b.hp != null ? b.hp | 0 : getBuildingHp(b.type),
+    locustStacks: b.locustStacks | 0,
   }));
 }
 
@@ -1287,6 +1605,13 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.rallyX | 0);
     mix(b.rallyZ | 0);
     mix(b.rallyOrder | 0);
+    mix(b.rallyHopCount | 0);
+    mix(b.rallyHop1X | 0);
+    mix(b.rallyHop1Z | 0);
+    mix(b.rallyHop1Order | 0);
+    mix(b.rallyHop2X | 0);
+    mix(b.rallyHop2Z | 0);
+    mix(b.rallyHop2Order | 0);
     mix(b.prodPaused | 0);
     mix(b.built != null ? b.built | 0 : 1);
     mix(b.buildProgress | 0);
@@ -1297,6 +1622,11 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.attackCd | 0);
     mix(b.maxHp != null ? b.maxHp | 0 : getBuildingHp(b.type));
     mix(b.hp != null ? b.hp | 0 : getBuildingHp(b.type));
+    mix(b.locustTicks | 0);
+    mix(b.locustStacks | 0);
+    mix(b.locustAcc | 0);
+    mix(b.locustHops | 0);
+    mix(b.locustSource | 0);
     const tracks = b.tracks ?? [];
     mix(tracks.length);
     for (let ti = 0; ti < tracks.length; ti++) {

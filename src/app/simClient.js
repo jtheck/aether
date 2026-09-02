@@ -53,6 +53,11 @@ export class SimClient {
     this.worker.postMessage({ type: 'commitTick', tick, frames });
   }
 
+  /** Toggle worker phase timing without a reload. */
+  setProfileSim(enabled) {
+    this.worker.postMessage({ type: 'setProfileSim', enabled: !!enabled });
+  }
+
   /** Await one tick commit (catch-up replay). */
   commitTickAsync(tick, frames) {
     return new Promise((resolve, reject) => {
@@ -60,30 +65,24 @@ export class SimClient {
         reject(new Error(`commitTick ${tick} busy (waiting on ${this._tickWait.tick})`));
         return;
       }
-      const prev = this._stepDoneHandler;
       let settled = false;
       const finish = (fn) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
         this._tickWait = null;
-        this._stepDoneHandler = prev;
         fn();
       };
       const timeout = setTimeout(() => {
         finish(() => reject(new Error(`commitTick ${tick} timeout`)));
       }, 30_000);
-      this._tickWait = { tick, reject: (err) => finish(() => reject(err)) };
-      this._stepDoneHandler = (doneTick, checksum, extra) => {
-        // Ignore stale completions from a prior in-flight tick (e.g. after reset).
-        if (doneTick < tick) return;
-        if (doneTick !== tick) {
-          finish(() =>
-            reject(new Error(`commitTick expected ${tick}, got ${doneTick}`)),
-          );
-          return;
-        }
-        finish(() => resolve({ tick: doneTick, checksum, extra }));
+      // Waiter is resolved from _onMessage — do not replace _stepDoneHandler.
+      // Rebinding the session handler mid-replay used to swallow stepDone and
+      // surface as `commitTick N timeout` after 30s.
+      this._tickWait = {
+        tick,
+        resolve: (checksum, extra) => finish(() => resolve({ tick, checksum, extra })),
+        reject: (err) => finish(() => reject(err)),
       };
       this.worker.postMessage({ type: 'commitTick', tick, frames });
     });
@@ -132,6 +131,9 @@ export class SimClient {
   }
 
   terminate() {
+    if (this._tickWait) {
+      this._tickWait.reject(new Error('sim worker terminated'));
+    }
     this.worker.terminate();
   }
 
@@ -160,16 +162,18 @@ export class SimClient {
       });
       this._initResolve = null;
     } else if (msg.type === 'stepDone') {
-      this._stepDoneHandler?.(msg.tick, msg.checksum, {
+      const extra = {
         koth: msg.koth,
         kothMatchOver: msg.kothMatchOver,
         matchWinner: msg.matchWinner,
         buildings: msg.buildings,
         buildingsChanged: !!msg.buildingsChanged,
+        agoras: msg.agoras,
         tech: msg.tech,
         techChanged: !!msg.techChanged,
         resources: msg.resources,
         resourcesChanged: !!msg.resourcesChanged,
+        storageOverflow: msg.storageOverflow ?? null,
         metrics: msg.metrics,
         treeUpdates: msg.treeUpdates ?? null,
         rockUpdates: msg.rockUpdates ?? null,
@@ -179,7 +183,18 @@ export class SimClient {
         holyArmorUpdates: msg.holyArmorUpdates ?? null,
         sporeBloomUpdates: msg.sporeBloomUpdates ?? null,
         monkKickUpdates: msg.monkKickUpdates ?? null,
-      });
+      };
+      const wait = this._tickWait;
+      if (wait) {
+        if (msg.tick < wait.tick) return;
+        if (msg.tick !== wait.tick) {
+          wait.reject(new Error(`commitTick expected ${wait.tick}, got ${msg.tick}`));
+          return;
+        }
+        wait.resolve(msg.checksum, extra);
+        return;
+      }
+      this._stepDoneHandler?.(msg.tick, msg.checksum, extra);
     } else if (msg.type === 'checkpoint' || msg.type === 'checkpointImported') {
       // Handled by _requestWorker listeners.
     } else if (msg.type === 'error') {

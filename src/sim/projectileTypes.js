@@ -210,6 +210,7 @@ export const PROJECTILE_DEFS = [
     pierce: 1,
     splashRadius: 0,
     appliesDistract: 1,
+    appliesLocustDot: 1,
     wanderPeriod: 2,
     wanderAmount: fx.fromFloat(1.85),
     mesh: PROJECTILE_MESH.ORB,

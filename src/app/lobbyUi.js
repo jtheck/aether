@@ -306,7 +306,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId }) {
 
     const hostControls = state.hosting && state.phase === 'waiting';
     fillSelect(fieldSelect, FIELD_SIZES, state.settings.fieldSize);
-    fillSelect(chapterSelect, ADVENTURE_CHAPTERS, state.settings.chapter);
+    fillSelect(chapterSelect, ADVENTURE_CHAPTERS.filter((c) => c.garden), state.settings.chapter);
     if (seedInput && document.activeElement !== seedInput && String(seedInput.value) !== String(state.settings.seed)) {
       seedInput.value = String(state.settings.seed);
     }

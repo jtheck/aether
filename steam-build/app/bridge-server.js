@@ -8,6 +8,9 @@ const HOST = '127.0.0.1';
 
 let server = null;
 let onDevToolsToggle = null;
+let onLeaveFullscreen = null;
+let onToggleFullscreen = null;
+let onReload = null;
 
 function readBody(req) {
   return new Promise(function (resolve, reject) {
@@ -88,11 +91,30 @@ async function handle(req, res) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (req.method === 'POST' && req.url === '/window/leave-fullscreen') {
+    var left = onLeaveFullscreen ? !!onLeaveFullscreen() : false;
+    return sendJson(res, 200, { ok: left });
+  }
+
+  if (req.method === 'POST' && req.url === '/window/toggle-fullscreen') {
+    var toggled = onToggleFullscreen ? !!onToggleFullscreen() : false;
+    return sendJson(res, 200, { ok: toggled });
+  }
+
+  if (req.method === 'POST' && req.url === '/window/reload') {
+    var reloadBody = await readBody(req);
+    var reloaded = onReload ? !!onReload(!!reloadBody.hard) : false;
+    return sendJson(res, 200, { ok: reloaded });
+  }
+
   sendJson(res, 404, { error: 'not found' });
 }
 
 function start(opts) {
   if (opts && opts.onDevToolsToggle) onDevToolsToggle = opts.onDevToolsToggle;
+  if (opts && opts.onLeaveFullscreen) onLeaveFullscreen = opts.onLeaveFullscreen;
+  if (opts && opts.onToggleFullscreen) onToggleFullscreen = opts.onToggleFullscreen;
+  if (opts && opts.onReload) onReload = opts.onReload;
   if (server) return server;
   server = http.createServer(function (req, res) {
     handle(req, res).catch(function (err) {

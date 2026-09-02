@@ -22,11 +22,11 @@ const KEY_ROT_SPEED = 0.2;
 const KEY_ZOOM_SPEED = 0.2;
 const KEY_PAN_BASE = 5 * 1.2;
 const RMB_PAN_BASE = 5;
-// Click-vs-pan grace. Must match LMB `DRAG_THRESHOLD_PX` — v1 used 5px on
-// *per-event* deltas, which almost never tripped. Cumulative travel from
-// pointer-down (what we measure) hits 5px on an ordinary click, so RMB
-// move was getting eaten by a "pan". Pan itself still starts immediately.
-const PAN_DRAG_THRESHOLD = 25;
+// Click-vs-pan: same latch for camera motion and the force-move. Pan used
+// to start on the first pixel while the click still fired until 25px, so a
+// short drag both panned and issued an order. 5px cumulative ate ordinary
+// clicks; this sits between jitter and an intentional drag.
+export const RMB_PAN_DRAG_THRESHOLD_PX = 10;
 
 // Beta: 0 = straight down, π/2 = horizon. Horizon at both ends; play sits in
 // a look-down trough. Smoothstep both legs so zoom never slams pitch.
@@ -36,6 +36,14 @@ const CLOSE_BETA = 1.2;
 /** Normalized zoom where the look-down trough bottoms (0 = closest). */
 export const CAMERA_CLOSE_SPAN = 0.32;
 const CLOSE_SPAN = CAMERA_CLOSE_SPAN;
+/** Quiet ms after the last zoom impulse before a toss may home into the trough. */
+export const ZOOM_TEND_IDLE_MS = 100;
+/** Normalized band: finish a near-miss, ignore tosses that stop far short. */
+export const ZOOM_TEND_HOME = 0.26;
+/** Normalized: already-there, or a tiny overshoot we may settle. Beyond this, fly-through. */
+export const ZOOM_TEND_NEAR = 0.045;
+/** Exponential chase once a toss is allowed to tend — slower than follow-zip. */
+export const ZOOM_TEND_RATE = 4;
 /** Gentle, centered bowl — small mid/edge gap so the whole range feels even. */
 const ZOOM_MID_SPEED = 0.72;
 const ZOOM_EDGE_SPEED = 1.06;
@@ -49,6 +57,25 @@ function smooth01(t) {
 export function cameraZoomNormalized(radius, minR, maxR) {
   const span = Math.max(1e-3, (maxR ?? 0) - (minR ?? 0));
   return Math.max(0, Math.min(1, ((radius ?? 0) - (minR ?? 0)) / span));
+}
+
+/** Radius at the look-down trough (play gaze). */
+export function cameraPlayRadius(minR, maxR) {
+  const lo = minR ?? 0;
+  return lo + CLOSE_SPAN * Math.max(1e-3, (maxR ?? 0) - lo);
+}
+
+/**
+ * After a toward-trough toss goes idle: finish a near-miss, never yank a fly-through.
+ * `predicted` is where current zoom momentum would rest.
+ */
+export function zoomTendCatch(radius, dest, predicted, home, near) {
+  const toDest = dest - radius;
+  if (!Number.isFinite(toDest) || Math.abs(toDest) <= near) return false;
+  const overshoot = (predicted - dest) * Math.sign(toDest);
+  if (overshoot > near) return false;
+  const closest = Math.min(Math.abs(radius - dest), Math.abs(predicted - dest));
+  return closest <= home;
 }
 
 /**
@@ -103,20 +130,36 @@ const LOWER_RADIUS = 50;
 const V1_REF_RADIUS = 80;
 
 /**
+ * Pan/zoom half-extent. Missing / 0 follows the table; authored values clamp inside it.
+ * @param {number} tableHalfF
+ * @param {number} [authoredHalfF]
+ */
+export function resolveCameraHalfF(tableHalfF, authoredHalfF) {
+  const table = Math.max(1, Number(tableHalfF) || 0);
+  const authored = Number(authoredHalfF);
+  if (!Number.isFinite(authored) || authored <= 0) return table;
+  return Math.min(table, Math.max(TILE_SIZE_F * 2, authored));
+}
+
+/**
  * @param {object} camera Lite ArcRotateCamera
  * @param {HTMLCanvasElement} canvas
  * @param {{ worldHalfF?: number }} [opts]
  */
 export function createCameraController(camera, canvas, opts = {}) {
-  const worldHalfF = opts.worldHalfF ?? WORLD_HALF_F;
+  let worldHalfF = opts.worldHalfF ?? WORLD_HALF_F;
   // Zoom / pan clamp tracks the active board half-extent.
-  const DEFAULT_RADIUS = worldHalfF * 1.55;
-  const RESET_RADIUS = worldHalfF * 1.8;
+  let DEFAULT_RADIUS = worldHalfF * 1.55;
+  let RESET_RADIUS = worldHalfF * 1.8;
   /** Max zoom-out — keep the look-up view near the table, not a wide pullback. */
-  const UPPER_RADIUS = worldHalfF * 2.15;
+  let UPPER_RADIUS = worldHalfF * 2.15;
   const velocity = { alpha: 0, radius: 0, panX: 0, panZ: 0 };
   const keyStates = Object.create(null);
   let nudged = false;
+  let zoomIdleMs = 0;
+  let zoomInputThisTick = false;
+  let lastZoomSign = 0;
+  let zoomTend = false;
   let followActive = false;
   let followX = 0;
   let followZ = 0;
@@ -131,6 +174,33 @@ export function createCameraController(camera, canvas, opts = {}) {
   camera.upperRadiusLimit = UPPER_RADIUS;
   camera.lowerBetaLimit ??= 0.1;
   camera.upperBetaLimit ??= 1.5;
+
+  function applyWorldHalf(next) {
+    const half = Number(next);
+    if (!Number.isFinite(half) || half <= 0) return;
+    worldHalfF = half;
+    DEFAULT_RADIUS = worldHalfF * 1.55;
+    RESET_RADIUS = worldHalfF * 1.8;
+    UPPER_RADIUS = worldHalfF * 2.15;
+    camera.upperRadiusLimit = UPPER_RADIUS;
+  }
+
+  /** Live board swap (skirmish → stress, etc.) — pan + zoom limits follow the table. */
+  function setWorldHalfF(next) {
+    applyWorldHalf(next);
+    const { minR, maxR } = radiusLimits();
+    if (Number.isFinite(camera.radius)) {
+      camera.radius = Math.max(minR, Math.min(maxR, camera.radius));
+    }
+    const t = getTarget();
+    const margin = 2 * TILE_SIZE_F;
+    const lo = -worldHalfF + margin;
+    const hi = worldHalfF - margin;
+    setTargetXZ(
+      Math.max(lo, Math.min(hi, t.x)),
+      Math.max(lo, Math.min(hi, t.z)),
+    );
+  }
 
   function markNudged() {
     nudged = true;
@@ -217,6 +287,52 @@ export function createCameraController(camera, canvas, opts = {}) {
     markNudged();
   }
 
+  /** Instant cinematic pose. `unclamped` keeps authored story radii. */
+  function setPose(pose = {}, opts = {}) {
+    followActive = false;
+    velocity.alpha = 0;
+    velocity.radius = 0;
+    velocity.panX = 0;
+    velocity.panZ = 0;
+    zoomTend = false;
+    lastZoomSign = 0;
+    zoomIdleMs = 0;
+    zoomInputThisTick = false;
+    if (Number.isFinite(pose.x) && Number.isFinite(pose.z)) setTargetXZ(pose.x, pose.z);
+    if (Number.isFinite(pose.alpha)) camera.alpha = pose.alpha;
+    if (Number.isFinite(pose.radius)) {
+      if (opts.unclamped) camera.radius = Math.max(8, pose.radius);
+      else {
+        const { minR, maxR } = radiusLimits();
+        camera.radius = Math.max(minR, Math.min(maxR, pose.radius));
+      }
+    }
+    markNudged();
+  }
+
+  function getPose() {
+    const t = getTarget();
+    return {
+      x: t.x,
+      z: t.z,
+      radius: camera.radius ?? DEFAULT_RADIUS,
+      alpha: camera.alpha ?? 0,
+    };
+  }
+
+  /** Instant snap to a ground point (control-group double-tap). */
+  function lookAtXZ(x, z) {
+    if (!Number.isFinite(x) || !Number.isFinite(z)) return;
+    velocity.panX = 0;
+    velocity.panZ = 0;
+    clampTargetPan(x, z);
+    if (followActive) {
+      followX = x;
+      followZ = z;
+    }
+    markNudged();
+  }
+
   function stopFollow() {
     followActive = false;
   }
@@ -238,8 +354,31 @@ export function createCameraController(camera, canvas, opts = {}) {
     return { minR, maxR, span: Math.max(1e-6, maxR - minR) };
   }
 
+  function playRadius() {
+    const { minR, maxR } = radiusLimits();
+    return cameraPlayRadius(minR, maxR);
+  }
+
+  function predictZoomRestRadius() {
+    const { minR, maxR, span } = radiusLimits();
+    let r = camera.radius;
+    let v = velocity.radius;
+    for (let i = 0; i < 80 && Math.abs(v) >= ZOOM_THRESHOLD; i++) {
+      const n = Math.max(0, Math.min(1, (r - minR) / span));
+      r += v * zoomSpeedForNormalized(n);
+      v *= MOMENTUM * DAMPING;
+      if (r <= minR) return minR;
+      if (r >= maxR) return maxR;
+    }
+    return r;
+  }
+
   function applyZoomInput(delta) {
     markNudged();
+    zoomTend = false;
+    zoomIdleMs = 0;
+    zoomInputThisTick = true;
+    if (delta !== 0) lastZoomSign = Math.sign(delta);
     const { minR, maxR } = radiusLimits();
     const r = camera.radius;
     // At a zoom stop, drop momentum into the wall instead of banking it.
@@ -327,18 +466,26 @@ export function createCameraController(camera, canvas, opts = {}) {
     velocity.panZ += wz * panSens;
   }
 
+  function rmbTravelPx(clientX, clientY) {
+    return Math.hypot(clientX - rmbDownScreen.x, clientY - rmbDownScreen.y);
+  }
+
+  /** Apply pan only after the click-vs-drag latch; catch up from pointer-down. */
+  function applyRmbPanTo(clientX, clientY) {
+    if (!rmbDidPan && rmbTravelPx(clientX, clientY) <= RMB_PAN_DRAG_THRESHOLD_PX) return;
+    rmbDidPan = true;
+    const screenDx = clientX - rmbLastScreen.x;
+    const screenDy = clientY - rmbLastScreen.y;
+    rmbLastScreen = { x: clientX, y: clientY };
+    if (screenDx !== 0 || screenDy !== 0) {
+      panByScreenDelta(screenDx, screenDy, RMB_PAN_BASE);
+    }
+  }
+
   function handlePointerMove(e) {
     if (!rmbPanActive) return false;
     if (rmbPointerId != null && e.pointerId !== rmbPointerId) return false;
-
-    const screenDx = e.clientX - rmbLastScreen.x;
-    const screenDy = e.clientY - rmbLastScreen.y;
-    // Cumulative from pointer-down — per-event deltas are often < threshold.
-    const totalDist = Math.hypot(e.clientX - rmbDownScreen.x, e.clientY - rmbDownScreen.y);
-    if (totalDist > PAN_DRAG_THRESHOLD) rmbDidPan = true;
-    rmbLastScreen = { x: e.clientX, y: e.clientY };
-
-    panByScreenDelta(screenDx, screenDy, RMB_PAN_BASE);
+    applyRmbPanTo(e.clientX, e.clientY);
     return true;
   }
 
@@ -347,6 +494,10 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (e.type !== 'pointercancel' && e.button !== 2) return false;
     if (rmbPointerId != null && e.pointerId !== rmbPointerId && e.type !== 'pointercancel') {
       return false;
+    }
+    // Last sample — a flick can skip moves and land past the latch only on up.
+    if (e.type !== 'pointercancel' && e.clientX != null && e.clientY != null) {
+      applyRmbPanTo(e.clientX, e.clientY);
     }
     return endRmbPan();
   }
@@ -361,6 +512,10 @@ export function createCameraController(camera, canvas, opts = {}) {
     velocity.radius = 0;
     velocity.panX = 0;
     velocity.panZ = 0;
+    zoomTend = false;
+    lastZoomSign = 0;
+    zoomIdleMs = 0;
+    zoomInputThisTick = false;
     camera.inertialPanningX = 0;
     camera.inertialPanningY = 0;
     camera.inertialAlphaOffset = 0;
@@ -376,7 +531,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (e.repeat) return;
     // Let browser shortcuts through (e.g. Ctrl+Shift+R hard reload).
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    const active = document.activeElement;
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
     if (active && ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(active.tagName)) return;
     const key = e.key.toLowerCase();
     const cameraKeys = new Set([
@@ -386,10 +541,10 @@ export function createCameraController(camera, canvas, opts = {}) {
     ]);
     if (cameraKeys.has(key)) e.preventDefault();
     keyStates[key] = true;
-    if (key === 'w' || key === 'pageup') {
+    if (key === 's' || key === 'pageup') {
       markNudged();
       camera.alpha += KEY_ROT_SPEED;
-    } else if (key === 'r' || key === 'pagedown') {
+    } else if (key === 'f' || key === 'pagedown') {
       markNudged();
       camera.alpha -= KEY_ROT_SPEED;
     } else if (key === 'q') {
@@ -404,10 +559,10 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function applyHeldKeys() {
-    if (keyStates.w || keyStates.pageup) {
+    if (keyStates.s || keyStates.pageup) {
       markNudged();
       camera.alpha += KEY_ROT_SPEED;
-    } else if (keyStates.r || keyStates.pagedown) {
+    } else if (keyStates.f || keyStates.pagedown) {
       markNudged();
       camera.alpha -= KEY_ROT_SPEED;
     }
@@ -419,9 +574,9 @@ export function createCameraController(camera, canvas, opts = {}) {
     let panX = 0;
     let panZ = 0;
     if (keyStates.e) panZ += 1.0;
-    if (keyStates.s) panX += 1.0;
     if (keyStates.d) panZ -= 1.0;
-    if (keyStates.f) panX -= 1.0;
+    if (keyStates.w) panX -= 1.0;
+    if (keyStates.r) panX += 1.0;
     if (keyStates.a) panX -= 0.7;
     if (keyStates.arrowup) panZ += 1.0;
     if (keyStates.arrowdown) panZ -= 1.0;
@@ -464,6 +619,10 @@ export function createCameraController(camera, canvas, opts = {}) {
 
     applyHeldKeys();
 
+    const dt = Math.min(0.05, Math.max(0, (Number(dtMs) || 16) / 1000));
+    if (!zoomInputThisTick) zoomIdleMs += Number(dtMs) || 16;
+    zoomInputThisTick = false;
+
     const { minR, maxR, span } = radiusLimits();
     const normalized = Math.max(0, Math.min(1, (camera.radius - minR) / span));
 
@@ -486,18 +645,43 @@ export function createCameraController(camera, canvas, opts = {}) {
     if (Math.abs(velocity.panX) < PAN_THRESHOLD) velocity.panX = 0;
     if (Math.abs(velocity.panZ) < PAN_THRESHOLD) velocity.panZ = 0;
 
+    if (!zoomTend && lastZoomSign !== 0 && zoomIdleMs >= ZOOM_TEND_IDLE_MS) {
+      const destR = playRadius();
+      const toDest = destR - camera.radius;
+      const tossedToward = lastZoomSign * toDest > 0;
+      const homeR = ZOOM_TEND_HOME * span;
+      const nearR = ZOOM_TEND_NEAR * span;
+      if (tossedToward && zoomTendCatch(camera.radius, destR, predictZoomRestRadius(), homeR, nearR)) {
+        zoomTend = true;
+      } else {
+        lastZoomSign = 0;
+      }
+    }
+
     camera.alpha += velocity.alpha;
 
     const t = getTarget();
     if (followActive) {
-      const dt = Math.min(0.05, Math.max(0, (Number(dtMs) || 16) / 1000));
       const next = chaseToward(t.x, t.z, followX, followZ, dt);
       clampTargetPan(next.x, next.z);
     } else {
       clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
     }
 
-    camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
+    if (zoomTend) {
+      const destR = playRadius();
+      const u = 1 - Math.exp(-ZOOM_TEND_RATE * dt);
+      camera.radius += (destR - camera.radius) * u;
+      velocity.radius *= 0.8;
+      if (Math.abs(velocity.radius) < ZOOM_THRESHOLD) velocity.radius = 0;
+      if (Math.abs(camera.radius - destR) < 0.4 && velocity.radius === 0) {
+        camera.radius = destR;
+        zoomTend = false;
+        lastZoomSign = 0;
+      }
+    } else {
+      camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
+    }
     if (camera.radius <= minR) {
       camera.radius = minR;
       if (velocity.radius < 0) velocity.radius = 0;
@@ -518,7 +702,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     camera.inertialBetaOffset = 0;
     camera.inertialRadiusOffset = 0;
 
-    if (!followActive && !rmbPanActive && !anyKeyHeld() && velocitiesIdle()) {
+    if (!followActive && !rmbPanActive && !anyKeyHeld() && velocitiesIdle() && !zoomTend && lastZoomSign === 0) {
       nudged = false;
     }
   }
@@ -529,6 +713,10 @@ export function createCameraController(camera, canvas, opts = {}) {
     velocity.radius = 0;
     velocity.panX = 0;
     velocity.panZ = 0;
+    zoomTend = false;
+    lastZoomSign = 0;
+    zoomIdleMs = 0;
+    zoomInputThisTick = false;
     camera.alpha = DEFAULT_ALPHA;
     camera.radius = RESET_RADIUS;
     {
@@ -559,6 +747,9 @@ export function createCameraController(camera, canvas, opts = {}) {
     clearVelocity,
     isRmbPanning,
     followXZ,
+    lookAtXZ,
+    setPose,
+    getPose,
     stopFollow,
     isFollowing,
     nudgePan,
@@ -566,6 +757,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     nudgeRotate,
     panByScreenDelta,
     getRadius: () => camera.radius,
+    setWorldHalfF,
     tick,
     reset,
     markNudged,

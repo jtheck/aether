@@ -20,6 +20,7 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm',
   '.glb': 'model/gltf-binary',
+  '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -30,6 +31,7 @@ const MIME = {
   '.wav': 'audio/wav',
   '.m4a': 'audio/mp4',
   '.garden': 'application/octet-stream',
+  '.ttf': 'font/ttf',
 };
 
 function resolveSrcDir(safe, dir) {

@@ -25,7 +25,7 @@ export const ATTACK_DELIVERY = {
   PROJECTILE: 1,
 };
 
-/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, steer?: number, accel?: number, decel?: number, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean, attacksBuildings?: boolean, idleHunt?: boolean }>} */
+/** @type {ReadonlyArray<{ id: number, name: string, category: string, hp: number, speed: number, size: number, footprint?: number, steer?: number, accel?: number, decel?: number, slowMul?: number, avoidSlow?: boolean, pickRadius: number, pickHeight: number, color: [number, number, number], attackDamage: number, attackRange: number, attackCooldown: number, aggroRange: number, attackDelivery: number, projectileType: number, minRange: number, preferredRange: number, primaryAbility: string | null, transportCapacity?: number, mechanical?: boolean, fly?: boolean, canHaul?: boolean, attacksBuildings?: boolean, idleHunt?: boolean }>} */
 export const UNIT_DEFS = [
   {
     id: UNIT.VILLAGER,
@@ -91,6 +91,8 @@ export const UNIT_DEFS = [
     minRange: fx.fromFloat(5),
     preferredRange: fx.fromFloat(57.5),
     primaryAbility: null,
+    /** Woods are a snag, not a slog. */
+    slowMul: 0.75,
   },
   {
     id: UNIT.WARLOCK,
@@ -214,6 +216,7 @@ export const UNIT_DEFS = [
     primaryAbility: null,
     attacksBuildings: false,
     idleHunt: false,
+    avoidSlow: true,
   },
   {
     id: UNIT.ENGINEER,
@@ -234,6 +237,7 @@ export const UNIT_DEFS = [
     minRange: 0,
     preferredRange: fx.fromFloat(3.5),
     primaryAbility: null,
+    avoidSlow: true,
   },
   {
     id: UNIT.WAGON,
@@ -321,6 +325,8 @@ export const UNIT_DEFS = [
     primaryAbility: null,
     transportCapacity: 6,
     mechanical: true,
+    /** Armored hull pushes through brush. */
+    slowMul: 0.80,
   },
 ];
 
@@ -398,6 +404,16 @@ export function unitFootprint(typeId) {
   return Math.max(1.0, def.size / 6);
 }
 
+/** Default speed scale on slow tiles (trees / mud / rock rims). */
+export const DEFAULT_SLOW_MUL = 0.45;
+
+/** Speed fraction on slow terrain. Override with `def.slowMul`. */
+export function unitSlowMul(typeId) {
+  const def = getUnitDef(typeId);
+  const f = def.slowMul != null ? def.slowMul : DEFAULT_SLOW_MUL;
+  return fx.fromFloat(f);
+}
+
 export function isMilitary(typeId) {
   return getUnitDef(typeId).category === 'military';
 }
@@ -412,6 +428,11 @@ export function isMechanical(typeId) {
 
 export function isFlyer(typeId) {
   return !!getUnitDef(typeId).fly;
+}
+
+/** A* prices slow tiles so the unit walks around woods / mud (monk, engineer). */
+export function unitAvoidsSlow(typeId) {
+  return !!getUnitDef(typeId).avoidSlow;
 }
 
 /** Basic attack can lock onto placeables. Default yes; priests and monks do not. */

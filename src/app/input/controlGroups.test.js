@@ -2,10 +2,12 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CONTROL_GROUP_COUNT,
+  CONTROL_GROUP_DOUBLE_MS,
   assignControlGroup,
   controlGroupFilled,
   controlGroupIdFromCode,
   createEmptyControlGroups,
+  isControlGroupDoubleTap,
   livingControlGroup,
 } from './controlGroups.js';
 
@@ -74,5 +76,13 @@ describe('control groups', () => {
       [],
     );
     assert.deepEqual(live.buildings, [{ kind: 'building', index: 0 }]);
+  });
+
+  it('treats a second tap of the same group as a camera jump', () => {
+    const prev = { id: 2, t: 1000 };
+    assert.equal(isControlGroupDoubleTap(prev, 2, 1000 + CONTROL_GROUP_DOUBLE_MS), true);
+    assert.equal(isControlGroupDoubleTap(prev, 2, 1000 + CONTROL_GROUP_DOUBLE_MS + 1), false);
+    assert.equal(isControlGroupDoubleTap(prev, 3, 1100), false);
+    assert.equal(isControlGroupDoubleTap(null, 2, 1100), false);
   });
 });

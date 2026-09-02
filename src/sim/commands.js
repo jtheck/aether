@@ -39,8 +39,10 @@ import {
   applyQueueTrain,
   applyQueueResearch,
   applyCancelTrain,
+  applyCancelConstruction,
   applyPauseTrain,
   applySetRally,
+  clearUnitRallyHops,
 } from './buildings.js';
 import { applyGather } from './gather.js';
 
@@ -70,6 +72,8 @@ export const CMD = {
   PAUSE_TRAIN: 15,
   /** Send villagers to harvest a resource tile + haul to a drop-off. */
   GATHER: 16,
+  /** Cancel an unfinished construction site and refund its placement cost. */
+  CANCEL_CONSTRUCTION: 17,
 };
 
 /** @typedef {{ type: number, entities: number[], tx?: number[]|number, ty?: number[]|number, target?: number, abilityId?: string, transportAssignments?: { riderId: number, transportId: number }[] }} Command */
@@ -121,6 +125,9 @@ export function applyCommands(world, field, commands) {
         break;
       case CMD.CANCEL_TRAIN:
         applyCancelTrain(world, cmd);
+        break;
+      case CMD.CANCEL_CONSTRUCTION:
+        applyCancelConstruction(world, field, cmd);
         break;
       case CMD.PAUSE_TRAIN:
         applyPauseTrain(world, cmd);
@@ -253,6 +260,7 @@ function applyMove(world, field, ids, tx, ty, order) {
         world.order[i] === ORDER.REPAIR);
     const stayR2 = busy ? FINAL_ARRIVE_SQ : arriveR2;
     if (fx.dist2(world.px[i], world.py[i], clickX, clickY) <= stayR2) {
+      clearUnitRallyHops(world, i);
       world.order[i] = ORDER.IDLE;
       world.hasTarget[i] = 0;
       world.vx[i] = 0;
@@ -262,9 +270,10 @@ function applyMove(world, field, ids, tx, ty, order) {
       continue;
     }
 
+    clearUnitRallyHops(world, i);
     world.order[i] = order;
     world.hasTarget[i] = 1;
-    // Player orders always use geometric pathing (clears rally slowAware).
+    // Player orders drop rally tree-seek; monk / engineer still path slow-aware.
     queuePath(world, i, destX, destY);
   }
 }
@@ -280,6 +289,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
       if (!world.alive[i] || isCarried(world, i)) continue;
       if (!unitAttacksBuildings(world.type[i])) continue;
       world.transportTarget[i] = -1;
+      clearUnitRallyHops(world, i);
       world.order[i] = ORDER.ATTACK;
       world.targetEntity[i] = -1;
       world.targetBuilding[i] = bi;
@@ -305,6 +315,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
       beginRepair(world, i, target);
       continue;
     }
+    clearUnitRallyHops(world, i);
     world.order[i] = ORDER.ATTACK;
     world.targetEntity[i] = target;
     if (world.targetBuilding) world.targetBuilding[i] = -1;
@@ -321,6 +332,7 @@ function applyStop(world, ids) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
     world.transportTarget[i] = -1;
+    clearUnitRallyHops(world, i);
     world.order[i] = ORDER.IDLE;
     clearAttackFocus(world, i);
     clearEngagement(world, i);

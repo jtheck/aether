@@ -50,6 +50,19 @@ describe('selectionCentroidXZ', () => {
     assert.deepEqual(c, { x: 3, z: 5 });
   });
 
+  it('uses the planted flag position for a rally selection', () => {
+    const c = selectionCentroidXZ({
+      count: 0,
+      selected: [],
+      alive: [],
+      renderX: [],
+      renderZ: [],
+      selectedBuildings: [{ kind: 'rally', index: 0, hop: 0 }],
+      buildings: [{ x: 2, z: 2, hp: 10, rallyX: 20, rallyZ: 8 }],
+    });
+    assert.deepEqual(c, { x: 20, z: 8 });
+  });
+
   it('returns null when nothing selected is alive', () => {
     assert.equal(selectionCentroidXZ({
       count: 1,

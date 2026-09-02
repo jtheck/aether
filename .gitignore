@@ -23,3 +23,9 @@ yarn-error.log*
 .env.*
 
 # Note: src/vendor/lite/ is intentionally tracked (prebuilt Lite bake).
+
+# Recovery / disk images (do not commit)
+*.img
+*.img.bz2
+*.img.gz
+*.iso

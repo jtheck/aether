@@ -207,10 +207,12 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
       const seen = new Set();
       let drawn = 0;
       let tintOwner = 0;
+      let tintRgb = null;
       for (let i = 0; i < n; i++) {
         const spec = list[i];
         if (!(spec?.radius > 0)) continue;
         if (drawn === 0 && spec.owner != null) tintOwner = spec.owner | 0;
+        if (drawn === 0 && spec.tint) tintRgb = spec.tint;
         const radius = lingeredRadius(spec, now);
         seen.add(lingerKey(spec));
         writeRing(drawn, spec, radius);
@@ -223,7 +225,7 @@ export function createWorkRadiusRings(engine, scene, groundYAt) {
         clear();
         return;
       }
-      const tint = ownerTint(tintOwner);
+      const tint = tintRgb || ownerTint(tintOwner);
       setShaderUniform(mesh.material, 'tint', [tint[0], tint[1], tint[2]]);
       updateMeshPositions(engine, mesh, positions, 0, drawn * VERTS_PER_RING);
       setIndexCount(drawn);

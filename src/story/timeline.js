@@ -267,6 +267,7 @@ export function sample(reel, time) {
       } else {
         camera = { ...to };
       }
+      camera.id = clip.id;
       prev = to;
     }
   }
@@ -275,6 +276,17 @@ export function sample(reel, time) {
   const line = lines.length ? lines[lines.length - 1] : null;
 
   return { t, duration, camera, line, lines };
+}
+
+/** Latest clip start at or before `time` — a dialogue / camera beat. */
+export function clipBeatTime(reel, time) {
+  const t = Number(time) || 0;
+  let beat = 0;
+  for (const start of clipStartTimes(reel)) {
+    if (start <= t + 1e-4) beat = start;
+    else break;
+  }
+  return beat;
 }
 
 export function clipStartTimes(reel) {

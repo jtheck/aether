@@ -10,9 +10,11 @@ import {
   getPlayerName,
   PLAYER_COLORS,
   getShadowMode,
+  getVolumeLevel,
   resolveShadowMode,
   setExtraControlGroups,
   setFxMode,
+  setVolumeLevel,
   setPlayerColor,
   setPlayerName,
   setShadowMode,
@@ -20,6 +22,7 @@ import {
   getUnitSkins,
   shadowTier,
 } from './settings.js';
+import { setVolume } from './audio.js';
 import { aetherSteam } from './steam.js';
 import {
   DEFAULT_SKIN_ID,
@@ -82,6 +85,8 @@ export function setupMenu({
   const fxSlider = /** @type {HTMLInputElement} */ (drawer.querySelector('#fx_slider'));
   const fxValue = /** @type {HTMLElement} */ (drawer.querySelector('#fx_value'));
   const fxNote = /** @type {HTMLElement} */ (drawer.querySelector('#fx_note'));
+  const volumeSlider = /** @type {HTMLInputElement} */ (drawer.querySelector('#volume_slider'));
+  const volumeValue = /** @type {HTMLElement} */ (drawer.querySelector('#volume_value'));
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
   const extraGroups = /** @type {HTMLInputElement | null} */ (drawer.querySelector('#extra_groups'));
   const hideHudBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#hide_hud_b'));
@@ -143,6 +148,10 @@ export function setupMenu({
     }
   }
 
+  function paintVolume(level) {
+    volumeValue.textContent = `${level}%`;
+  }
+
   slider.addEventListener('input', () => {
     const mode = setShadowMode(Number(slider.value));
     paintShadow(mode);
@@ -155,6 +164,12 @@ export function setupMenu({
     const mode = setFxMode(Number(fxSlider.value));
     renderer.setFxMode?.(mode, fxTier(mode));
     paintFx(mode);
+  });
+
+  volumeSlider.addEventListener('input', () => {
+    const level = setVolumeLevel(Number(volumeSlider.value));
+    setVolume(level);
+    paintVolume(level);
   });
 
   nameInput.addEventListener('change', () => {
@@ -257,7 +272,7 @@ export function setupMenu({
   // Camera/hotkeys listen on window. Stop keydown so typing a name does not
   // pan or trip B/G/H. Leave keyup alone so a held pan key still releases.
   const keyStop = [
-    nameInput, colorPicker, extraGroups, hideHudBtn, slider, fxSlider, soloBtn, testerBtn, stressBtn,
+    nameInput, colorPicker, extraGroups, hideHudBtn, slider, fxSlider, volumeSlider, soloBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
     menuMatchReady, menuMatchStart, menuMatchLeave,
     ...lobbyDrawerToggles,
@@ -274,6 +289,9 @@ export function setupMenu({
     const fx = renderer.getFxMode?.() ?? getFxMode();
     fxSlider.value = String(fx);
     paintFx(fx);
+    const volume = getVolumeLevel();
+    volumeSlider.value = String(volume);
+    paintVolume(volume);
     nameInput.value = getPlayerName();
     colorPicker.value = getPlayerColor();
     if (extraGroups) {

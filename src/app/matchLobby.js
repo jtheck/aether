@@ -24,6 +24,8 @@ import {
 import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
 import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
 import { aetherSteam } from './steam.js';
+import { CMD } from '../sim/commands.js';
+import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
 
 /**
  * @param {object} opts
@@ -53,6 +55,7 @@ export function createMatchLobby({
   onChange,
   onStartMatch,
   onLeaveMatch,
+  onChapter,
 } = {}) {
   let mode = null;
   let roomId = null;
@@ -74,6 +77,8 @@ export function createMatchLobby({
   let prevCommit = null;
   let bootstrapTimer = null;
   let lockstepOn = false;
+  /** Bumped on each chapter reset so leftover FRAME/CONFIRM from the old map are dropped. */
+  let lockstepEpoch = 0;
 
   function emit() {
     onChange?.();
@@ -221,7 +226,11 @@ export function createMatchLobby({
 
   function sendTickConfirm(tick) {
     if (!lockstepOn || !session) return;
-    sendData({ type: MSG.CONFIRM, tick, playerId: session.localPlayerId });
+    sendData({ type: MSG.CONFIRM, tick, playerId: session.localPlayerId, epoch: lockstepEpoch });
+  }
+
+  function sameEpoch(msg) {
+    return (msg?.epoch | 0) === lockstepEpoch;
   }
 
   function kickstartLockstep() {
@@ -247,7 +256,7 @@ export function createMatchLobby({
     session.submitCommand = (command) => {
       if (session.role !== 'player') return null;
       const frame = prevSubmit(command);
-      if (frame) sendData({ type: MSG.FRAME, frame });
+      if (frame) sendData({ type: MSG.FRAME, frame, epoch: lockstepEpoch });
       return frame;
     };
     prevCommit = session.onCommit;
@@ -442,10 +451,37 @@ export function createMatchLobby({
     return true;
   }
 
+  function applyPlayLeave(userId, msg = {}) {
+    if (phase !== 'playing' && phase !== 'starting') return false;
+    const seat = seatOf(seats, userId);
+    if (!seat || seat.kind !== 'human') return false;
+    const playerId = msg.playerId != null ? (msg.playerId | 0) : seat.index;
+    seats = releaseSeat(seats, userId);
+    session?.removeHumanPlayer?.(playerId);
+    const tick = (msg.tick | 0) || ((session?.confirmedTick ?? 0) + 2);
+    const eventId = `forfeit:${roomId}:${playerId}`;
+    const frame = session?.submitAtTick?.(
+      tick,
+      { type: CMD.FORCE_ELIMINATE, playerId },
+      { commandId: eventId },
+    );
+    if (frame) sendData({ type: MSG.FRAME, frame, epoch: lockstepEpoch });
+    emit();
+    return true;
+  }
+
   function leaveRoom() {
     if (phase === 'idle') return;
     const wasPlaying = phase === 'playing' || phase === 'starting';
-    if (hosting) {
+    if (wasPlaying) {
+      const me = localId();
+      const seat = seatOf(seats, me);
+      const playerId = session?.localPlayerId ?? seat?.index ?? -1;
+      const tick = (session?.confirmedTick ?? 0) + 2;
+      const payload = { type: MSG.LEAVE, playerId, tick };
+      sendType(payload);
+      sendData(payload);
+    } else if (hosting) {
       gameLobby?.announce?.(announcePayload(MSG.CLOSED));
     } else {
       sendType({ type: MSG.LEAVE });
@@ -499,20 +535,25 @@ export function createMatchLobby({
       applyState(data);
       return;
     }
-    if (!hosting) return;
-    if (phase === 'starting' || phase === 'playing') return;
-    if (data.type === MSG.JOIN) {
-      if (phase === 'countdown') return;
-      if (hostClaim(data)) {
+    if (data.type === MSG.LEAVE) {
+      if (phase === 'starting' || phase === 'playing') {
+        applyPlayLeave(senderUserId(data), data);
+        return;
+      }
+      if (!hosting) return;
+      if (hostRelease(data)) {
+        if (phase === 'countdown') abortCountdown(true);
         startAnnounce();
         sendData(snapshot());
         emit();
       }
       return;
     }
-    if (data.type === MSG.LEAVE) {
-      if (hostRelease(data)) {
-        if (phase === 'countdown') abortCountdown(true);
+    if (!hosting) return;
+    if (phase === 'starting' || phase === 'playing') return;
+    if (data.type === MSG.JOIN) {
+      if (phase === 'countdown') return;
+      if (hostClaim(data)) {
         startAnnounce();
         sendData(snapshot());
         emit();
@@ -594,13 +635,32 @@ export function createMatchLobby({
       return;
     }
     if (msg.type === MSG.FRAME && msg.frame) {
-      session?.bufferRemoteFrame(msg.frame);
+      if (sameEpoch(msg)) session?.bufferRemoteFrame(msg.frame);
       return;
     }
     if (msg.type === MSG.CONFIRM && msg.tick != null) {
+      if (!sameEpoch(msg)) return;
       const pid = msg.playerId;
       if (session && pid != null && pid !== session.localPlayerId) {
         session.setPeerConfirmedTick(pid, msg.tick);
+      }
+      return;
+    }
+    if (msg.type === MSG.CHAPTER) {
+      onChapter?.(msg);
+      return;
+    }
+    if (msg.type === MSG.LEAVE) {
+      if (phase === 'starting' || phase === 'playing') {
+        applyPlayLeave(senderUserId(msg), msg);
+        return;
+      }
+      if (!hosting) return;
+      if (hostRelease(msg)) {
+        if (phase === 'countdown') abortCountdown(true);
+        sendData(snapshot());
+        startAnnounce();
+        emit();
       }
       return;
     }
@@ -610,15 +670,6 @@ export function createMatchLobby({
     if (msg.type === MSG.JOIN) {
       if (phase === 'countdown') return;
       if (hostClaim(msg)) {
-        sendData(snapshot());
-        startAnnounce();
-        emit();
-      }
-      return;
-    }
-    if (msg.type === MSG.LEAVE) {
-      if (hostRelease(msg)) {
-        if (phase === 'countdown') abortCountdown(true);
         sendData(snapshot());
         startAnnounce();
         emit();
@@ -643,6 +694,18 @@ export function createMatchLobby({
     requestStart,
     attachSession,
     detachSession,
+    sendChapter(payload) {
+      sendData({ type: MSG.CHAPTER, ...payload });
+    },
+    setLockstepEpoch(n) {
+      lockstepEpoch = n | 0;
+    },
+    getLockstepEpoch: () => lockstepEpoch,
+    kickstartLockstep,
+    lockstepStalled() {
+      if (!lockstepOn || !session || (phase !== 'playing' && phase !== 'starting')) return false;
+      return (session.lockstepBlockedMs?.() ?? 0) >= LOCKSTEP_STALL_UI_MS;
+    },
     getState: snapshot,
     isActive: () => phase !== 'idle',
     isHosting: () => hosting,

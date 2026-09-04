@@ -36,6 +36,12 @@ export function formatSeatName(seat, localId) {
   return `${name} · ${tag}${you}`;
 }
 
+/** @param {string} modeId */
+export function formatCreateLobbyLabel(modeId) {
+  const mode = getMode(modeId);
+  return mode ? `Create ${mode.name} lobby` : 'Create lobby';
+}
+
 /** @param {number} ms */
 export function formatCountdown(ms) {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -173,8 +179,9 @@ function fillSelect(select, values, current, labelOf = (v) => v) {
  * @param {object} opts.matchLobby
  * @param {() => boolean} [opts.isKothLive]
  * @param {() => string | null} [opts.getUserId]
+ * @param {() => void} [opts.onCloseMenu]
  */
-export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId }) {
+export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onCloseMenu }) {
   const drawersRoot = document.getElementById('menu-lobbies');
   const sidebar = document.getElementById('menu-match');
   const overlay = document.getElementById('match-lobby-overlay');
@@ -193,6 +200,8 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId }) {
       empty: el.querySelector('.lobby-type-empty'),
       create: el.querySelector('.lobby-create'),
     });
+    const create = drawers.get(mode)?.create;
+    if (create) create.textContent = formatCreateLobbyLabel(mode);
   }
 
   const sideStatus = document.getElementById('menu-match-status');
@@ -230,6 +239,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId }) {
     const sig = [
       live, active, open, lists,
       state?.phase, state?.playerCount, state?.countdownEndsAt,
+      Boolean(matchLobby.lockstepStalled?.()),
       Math.ceil((matchLobby.countdownMs?.() ?? 0) / 200),
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
       JSON.stringify(state?.seats ?? []),
@@ -253,8 +263,12 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId }) {
     }
 
     const inPlay = state?.phase === 'playing';
+    const stalled = Boolean(matchLobby.lockstepStalled?.());
+    const showOverlay = active && (!inPlay || stalled);
+    const overlayOpening = Boolean(overlay?.hidden && showOverlay);
     setHidden(sidebar, !active);
-    setHidden(overlay, !active || inPlay);
+    setHidden(overlay, !showOverlay);
+    if (overlayOpening) onCloseMenu?.();
     if (!active || !state) return;
 
     const mode = getMode(state.mode);
@@ -297,7 +311,9 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId }) {
       setText(panelStart, startLabel);
     }
 
-    const note = inPlay
+    const note = inPlay && stalled
+      ? 'Waiting for players…'
+      : inPlay
       ? 'Match running.'
       : state.phase === 'countdown' || state.phase === 'starting'
         ? formatCountdown(matchLobby.countdownMs())

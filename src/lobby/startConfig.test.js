@@ -1,5 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { chapterLabelFor } from './modes.js';
 import { liveConfigFromLobby, teamByOwnerForMode } from './startConfig.js';
 
 const seats = [
@@ -55,5 +56,13 @@ describe('lobby start config', () => {
     assert.equal(cfg.sharedVision, true);
     assert.equal(cfg.chapter, 'ch1');
     assert.equal(cfg.gardenUrl, '/maps/chapter1.garden');
+  });
+});
+
+describe('chapterLabelFor', () => {
+  it('names a chapter from id, garden url, or garden title', () => {
+    assert.equal(chapterLabelFor({ chapter: 'ch2' }), 'Ch 2');
+    assert.equal(chapterLabelFor({ gardenUrl: '/maps/chapter3.garden' }), 'Ch 3');
+    assert.equal(chapterLabelFor({ name: 'Chapter 1' }), 'Ch 1');
   });
 });

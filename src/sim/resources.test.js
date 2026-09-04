@@ -8,7 +8,7 @@ describe('formatResourceCost', () => {
       resourceCostParts({ wood: 25, food: 10, pop: 1, stone: 0 }),
       [{ kind: 'wood', amount: 25 }, { kind: 'food', amount: 10 }],
     );
-    assert.equal(formatResourceCost({ wood: 25, food: 10, pop: 1 }), '25 · 10');
+    assert.equal(formatResourceCost({ wood: 25, food: 10, pop: 1 }), '19 · a');
     assert.equal(formatResourceCost({ pop: 1 }), '');
   });
 

@@ -19,6 +19,7 @@ import {
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
 import {
   BUILDING_MODEL_URLS,
@@ -624,7 +625,7 @@ export async function createSelectionHud(engine, scene, screen = {}) {
         const scale = LABEL_SCREEN_SCALE * pixelRatio * compress * (1 + hoverT * 0.06);
         const opacity = LABEL_OPACITY + hoverT * 0.12;
         placeCaption(label.name, g.name, px, py + NAME_DY, scale, opacity, sx, sy);
-        placeCaption(label.count, String(g.count | 0), px, py + COUNT_DY, scale, opacity, sx, sy);
+        placeCaption(label.count, formatGameNumber(g.count | 0), px, py + COUNT_DY, scale, opacity, sx, sy);
       }
     }
 

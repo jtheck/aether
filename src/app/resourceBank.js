@@ -3,6 +3,7 @@
 // groups into bank order, and fade icons as the bank fills. A wasted haul
 // return pops the next locked slot (7 or a) yellow once, then fades it out.
 
+import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { RESOURCE_KINDS } from '../sim/resources.js';
 import {
   RESOURCE_SLOT_LABELS,
@@ -85,7 +86,7 @@ export function createResourceBank(host) {
       }
       const countEl = counts?.[kind];
       if (countEl) {
-        const next = String(row.amount);
+        const next = formatGameNumber(row.amount);
         if (countEl.textContent !== next) countEl.textContent = next;
       }
     }

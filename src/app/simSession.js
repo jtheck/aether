@@ -12,6 +12,8 @@ import { SimClient } from './simClient.js';
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
 const LEDGER_KEEP = 7200;
+/** Show the in-match lobby once lockstep has waited this long for a peer. */
+export const LOCKSTEP_STALL_UI_MS = 1500;
 
 export { TICK_HZ, TICK_MS };
 
@@ -142,6 +144,10 @@ export class SimSession {
     this.simTimingLast = null;
     /** @type {Map<number, number[]>} tick -> playerIds joining lockstep */
     this.pendingJoins = new Map();
+    /** @type {Map<number, number[]>} tick -> playerIds leaving lockstep */
+    this.pendingLeaves = new Map();
+    /** Wall time when `_canAdvance` first failed, or 0 when unblocked. */
+    this._lockstepBlockedAt = 0;
     this.matchConfig = null;
     this._resetChain = Promise.resolve();
     /** When set, onWorldRebuilt ignores stale resets (see applyLiveConfig). */
@@ -282,6 +288,8 @@ export class SimSession {
       this._bgPumpTimer = null;
     }
     if (!enabled) return;
+    // rAF is paused; do not keep lightning FX (or their thunder) for catch-up.
+    this.pendingLightningUpdates = null;
     let last = performance.now();
     this._bgPumpTimer = setInterval(() => {
       const now = performance.now();
@@ -289,6 +297,13 @@ export class SimSession {
       last = now;
       this.pump(dt);
     }, TICK_MS);
+  }
+
+  /** Ephemeral strike FX — skip while the tab is background-pumped. */
+  queueLightningUpdates(patch) {
+    if (!patch || this._bgPumpTimer != null) return;
+    if (!this.pendingLightningUpdates) this.pendingLightningUpdates = [];
+    this.pendingLightningUpdates.push(patch);
   }
 
   _drainPendingCommits() {
@@ -360,6 +375,21 @@ export class SimSession {
 
   setHumanPlayers(playerIds) {
     this.humanPlayers = [...playerIds].sort((a, b) => a - b);
+    for (const id of [...this.peerConfirmedTick.keys()]) {
+      if (!this.humanPlayers.includes(id)) this.peerConfirmedTick.delete(id);
+    }
+  }
+
+  /** Drop a player from lockstep quorum immediately (leave / forfeit). */
+  removeHumanPlayer(playerId) {
+    const id = playerId | 0;
+    this.humanPlayers = this.humanPlayers.filter((p) => p !== id);
+    this.peerConfirmedTick.delete(id);
+    for (const [tick, list] of this.pendingJoins) {
+      const next = list.filter((p) => p !== id);
+      if (next.length) this.pendingJoins.set(tick, next);
+      else this.pendingJoins.delete(tick);
+    }
   }
 
   setLocalPlayerId(playerId) {
@@ -389,6 +419,41 @@ export class SimSession {
       this.pendingJoins.set(tick, list);
     }
     if (!list.includes(playerId)) list.push(playerId);
+  }
+
+  /** Schedule a player to leave lockstep quorum at a future tick. */
+  scheduleLeave(tick, playerId) {
+    const id = playerId | 0;
+    let list = this.pendingLeaves.get(tick);
+    if (!list) {
+      list = [];
+      this.pendingLeaves.set(tick, list);
+    }
+    if (!list.includes(id)) list.push(id);
+  }
+
+  /** Peers whose tick confirm is still missing for `tick`. */
+  lockstepWaiters(tick = this.confirmedTick + 1) {
+    const waiting = [];
+    for (const playerId of this.humanPlayers) {
+      if (playerId === this.localPlayerId) continue;
+      if ((this.peerConfirmedTick.get(playerId) ?? 0) < tick) waiting.push(playerId);
+    }
+    return waiting;
+  }
+
+  /** How long lockstep has been blocked waiting for a peer, in ms. */
+  lockstepBlockedMs(now = performance.now()) {
+    if (this.pauseLockstep || this.resetting || this.replayingCatchUp) {
+      this._lockstepBlockedAt = 0;
+      return 0;
+    }
+    if (this.humanPlayers.length <= 1 || this.lockstepWaiters().length === 0) {
+      this._lockstepBlockedAt = 0;
+      return 0;
+    }
+    if (!this._lockstepBlockedAt) this._lockstepBlockedAt = now;
+    return now - this._lockstepBlockedAt;
   }
 
   /** Convene peer: inject a command at a specific tick (spawn slot, etc.). */
@@ -509,6 +574,8 @@ export class SimSession {
     this.projectileSnapshots.clear();
     this.peerConfirmedTick.clear();
     this.pendingJoins.clear();
+    this.pendingLeaves.clear();
+    this._lockstepBlockedAt = 0;
     this._seenFrameIds.clear();
     this.confirmedTick = 0;
     this.simAcc = 0;
@@ -555,6 +622,8 @@ export class SimSession {
     this.projectileSnapshotRing = other.projectileSnapshotRing;
     this.peerConfirmedTick = other.peerConfirmedTick;
     this.pendingJoins = other.pendingJoins;
+    this.pendingLeaves = other.pendingLeaves ?? new Map();
+    this._lockstepBlockedAt = 0;
     this._seenFrameIds = other._seenFrameIds;
     this.confirmedTick = other.confirmedTick;
     this.simAcc = 0;
@@ -661,10 +730,7 @@ export class SimSession {
         if (!this.pendingFrogUpdates) this.pendingFrogUpdates = [];
         this.pendingFrogUpdates.push(extra.frogUpdates);
       }
-      if (extra?.lightningUpdates) {
-        if (!this.pendingLightningUpdates) this.pendingLightningUpdates = [];
-        this.pendingLightningUpdates.push(extra.lightningUpdates);
-      }
+      if (extra?.lightningUpdates) this.queueLightningUpdates(extra.lightningUpdates);
       if (extra?.holyArmorUpdates) {
         if (!this.pendingHolyArmorUpdates) this.pendingHolyArmorUpdates = [];
         this.pendingHolyArmorUpdates.push(extra.holyArmorUpdates);
@@ -770,17 +836,25 @@ export class SimSession {
     return true;
   }
 
-  _tryCommitNextTick() {
-    const next = this.confirmedTick + 1;
-
-    const joining = this.pendingJoins.get(next);
+  _applyPendingRoster(tick) {
+    const joining = this.pendingJoins.get(tick);
     if (joining?.length) {
       for (const pid of joining) {
         if (!this.humanPlayers.includes(pid)) this.humanPlayers.push(pid);
       }
       this.humanPlayers.sort((a, b) => a - b);
-      this.pendingJoins.delete(next);
+      this.pendingJoins.delete(tick);
     }
+    const leaving = this.pendingLeaves.get(tick);
+    if (leaving?.length) {
+      for (const pid of leaving) this.removeHumanPlayer(pid);
+      this.pendingLeaves.delete(tick);
+    }
+  }
+
+  _tryCommitNextTick() {
+    const next = this.confirmedTick + 1;
+    this._applyPendingRoster(next);
 
     if (!this._canAdvance(next)) return false;
 

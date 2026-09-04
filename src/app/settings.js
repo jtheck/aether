@@ -7,6 +7,7 @@ import { DEFAULT_SKIN_ID, isDlcPackId, sanitizeSkins } from './dlcCatalog.js';
 
 const SHADOW_KEY = 'shadowMode';
 const FX_KEY = 'fxMode';
+const VOLUME_KEY = 'volumeLevel';
 const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
 const EXTRA_GROUPS_KEY = 'extraControlGroups';
@@ -90,6 +91,9 @@ export const FX_TIERS = [
 
 /** Fallback when the GPU is unrecognised or storage is unavailable. */
 export const DEFAULT_FX_MODE = 3;
+
+/** Master volume 0–100. Same key and default as v1. */
+export const DEFAULT_VOLUME_LEVEL = 25;
 
 export const PLAYER_NAMES = [
   'Cultivator', 'Gardener', 'Bloomwarden',
@@ -209,6 +213,19 @@ export function resolveFxMode() {
 
 export function fxTier(mode) {
   return FX_TIERS[Math.max(0, Math.min(FX_TIERS.length - 1, mode | 0))];
+}
+
+/** @returns {number} 0..100 */
+export function getVolumeLevel() {
+  const raw = Number.parseInt(read(VOLUME_KEY) ?? '', 10);
+  if (!Number.isInteger(raw)) return DEFAULT_VOLUME_LEVEL;
+  return Math.max(0, Math.min(100, raw));
+}
+
+export function setVolumeLevel(level) {
+  const clamped = Math.max(0, Math.min(100, level | 0));
+  write(VOLUME_KEY, String(clamped));
+  return clamped;
 }
 
 /**

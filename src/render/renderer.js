@@ -1012,6 +1012,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     healthBars.begin();
     healthBars.end();
     workRadiusRings.clear();
+    objectiveRings.clear();
     tileGrid?.setVisible(false);
     placementGrid?.setFocus(null);
     for (const mesh of selRingParts) mesh.visible = false;
@@ -1022,6 +1023,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function restoreScreenshotHudChrome() {
     applyWorkRadiusSpec(lastWorkRadiusSpec);
+    if (lastObjectiveRingSpec) objectiveRings.sync(lastObjectiveRingSpec);
     buildingProps.setSelectionHighlight?.(lastBuildingHighlight);
     if (tileGridVisible && tileGridOccupancyDirty) refreshTileGridOccupancy();
     tileGrid?.setVisible(tileGridVisible);
@@ -1344,6 +1346,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   // Flat rim-fade rings for selected camp/mine/farm gather reach.
   const workRadiusRings = createWorkRadiusRings(engine, scene, groundYAt);
+  const objectiveRings = createWorkRadiusRings(engine, scene, groundYAt);
+  let lastObjectiveRingSpec = null;
   const carryLoads = createCarryLoads(engine, scene);
 
   // +64 headroom so agora/building debug spheres fit on top of unit caps.
@@ -3148,11 +3152,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (const mesh of selRingParts) mesh.visible = false;
       if (orderMarker) orderMarker.visible = false;
       workRadiusRings.clear();
+      objectiveRings.clear();
     }
     // Selection / order matrices marked dirty on write.
     pickHitboxes.commit();
     holyShields.commit();
     workRadiusRings.commit();
+    objectiveRings.commit();
     carryLoads.commit();
     projectileRenderer.commit();
     frogRenderer.sync();
@@ -3677,6 +3683,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         return;
       }
       applyWorkRadiusSpec(lastWorkRadiusSpec);
+    },
+
+    /** Gold chapter-exit pads. Clear with null / []. */
+    setObjectiveRings(spec) {
+      const list = !spec ? [] : (Array.isArray(spec) ? spec : [spec]);
+      lastObjectiveRingSpec = list;
+      if (screenshotHudHidden) {
+        objectiveRings.clear();
+        return;
+      }
+      objectiveRings.sync(list);
     },
 
     /**

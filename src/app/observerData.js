@@ -1,6 +1,7 @@
 // Roster sheet — spectators see every army; players see shared-vision
 // others (AI / allies). Replaces the old bottom #resources dump.
 
+import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { RESOURCE_KINDS, ownerResourcesFrom } from '../sim/resources.js';
 import { livingByOwner } from '../sim/world.js';
 import { AI_OWNER } from '../sim/worldSetup.js';
@@ -103,7 +104,7 @@ export function observerOwnerName(owner, names, computers) {
   const named = names?.[o];
   if (named) return named;
   if (isComputerOwner(o, computers)) return 'Auto';
-  return `P${o}`;
+  return `P${formatGameNumber(o)}`;
 }
 
 /**
@@ -179,10 +180,10 @@ export function createObserverData(host) {
         const kind = RESOURCE_KINDS[k];
         const el = rec.counts[kind];
         if (!el) continue;
-        const next = String(bank[kind] | 0);
+        const next = formatGameNumber(bank[kind] | 0);
         if (el.textContent !== next) el.textContent = next;
       }
-      const army = String(state.world ? livingByOwner(state.world, owner) : 0);
+      const army = formatGameNumber(state.world ? livingByOwner(state.world, owner) : 0);
       if (rec.pop.textContent !== army) rec.pop.textContent = army;
     }
   }

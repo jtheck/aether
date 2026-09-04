@@ -1,6 +1,7 @@
 // Screen-space menu prices: amount + per-kind resource icon. No pop — every
 // train is 1 pop, so it is not worth listing.
 
+import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { lackingCostKinds, resourceCostParts } from '../sim/resources.js';
 import { loadPriceIcons } from './resourceIconSheet.js';
 
@@ -85,7 +86,7 @@ function fillRow(el, spec) {
     }
     const amt = document.createElement('span');
     amt.className = 'radial-price-amt';
-    amt.textContent = String(parts[i].amount);
+    amt.textContent = formatGameNumber(parts[i].amount);
     el.appendChild(amt);
     const src = icons[parts[i].kind];
     const icon = src ? src.cloneNode(true) : null;

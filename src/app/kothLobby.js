@@ -2,13 +2,26 @@
 
 import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
 import { shortId } from '../koth/protocol.js';
+import { resolveLobbyName } from '../koth/lobbyName.js';
 
 /**
  * @param {object} lobby
  * @returns {string}
  */
 export function lobbyRowSignature(lobby) {
-  return `${lobby.matchId}:${lobby.activeCount}:${lobby.tick}:${lobby.hostName ?? ''}`;
+  const name = resolveLobbyName(lobby);
+  return `${lobby.matchId}:${lobby.activeCount}:${lobby.tick}:${name}:${lobby.spectatorCount ?? 0}`;
+}
+
+function lobbyMetaLine(source) {
+  const seats = source.seats || 5;
+  const players = `${source.activeCount ?? 0}/${seats}`;
+  const watching = source.spectatorCount
+    ?? (Array.isArray(source.spectators) ? source.spectators.length : 0);
+  const time = formatMatchTime(matchSecondsFromTick(source.tick ?? 0));
+  return watching > 0
+    ? `${players}  ·  ${watching} watching  ·  ${time}`
+    : `${players}  ·  ${time}`;
 }
 
 /**
@@ -16,11 +29,10 @@ export function lobbyRowSignature(lobby) {
  * @returns {{ title: string, meta: string, label: string }}
  */
 export function formatLobbyRow(lobby) {
-  const title = (lobby.hostName ?? '').trim() || `…${shortId(lobby.matchId)}`;
+  const title = resolveLobbyName(lobby) || `…${shortId(lobby.matchId)}`;
   const seats = lobby.seats || 5;
   const players = `${lobby.activeCount}/${seats}`;
-  const time = formatMatchTime(matchSecondsFromTick(lobby.tick ?? 0));
-  const meta = `${players}  ·  ${time}`;
+  const meta = lobbyMetaLine(lobby);
   return { title, meta, label: `Join ${title}, ${players}` };
 }
 
@@ -29,16 +41,73 @@ export function formatLobbyRow(lobby) {
  * @returns {{ title: string, meta: string }}
  */
 export function formatInLobbyStatus(presence) {
-  const seats = presence.seats || 5;
-  const players = `${presence.activeCount ?? 0}/${seats}`;
-  const time = formatMatchTime(matchSecondsFromTick(presence.tick ?? 0));
-  const meta = `${players}  ·  ${time}`;
-  const name = (presence.hostName ?? '').trim();
+  const meta = lobbyMetaLine(presence);
+  const name = resolveLobbyName(presence);
+  if (presence.stalled) return { title: 'Waiting for players…', meta };
+  if (presence.appState === 'matchmaking') return { title: 'Looking for a match…', meta };
+  if (name) return { title: name, meta };
   if (presence.hosting) return { title: 'Your lobby', meta };
-  if (presence.role === 'spectator') {
-    return { title: name ? `Spectating ${name}` : 'Spectating', meta };
+  if (presence.role === 'spectator') return { title: 'Spectating', meta };
+  return { title: 'In lobby', meta };
+}
+
+/** Seated players first, then spectators, for the in-match roster. */
+export function lobbyPeople(presence) {
+  const players = Array.isArray(presence?.players) ? presence.players : [];
+  const spectators = Array.isArray(presence?.spectators) ? presence.spectators : [];
+  return [...players, ...spectators];
+}
+
+/** Hide the KOTH browser while another game type is live. Courtesy maps keep it. */
+export function shouldShowKothBrowser(presence) {
+  if (!presence) return false;
+  return !presence.parked;
+}
+
+/** Center the HUD browser while waiting; keep it cornered while browsing. */
+export function shouldCenterKothLobby(presence) {
+  if (!presence || presence.browsing) return false;
+  if (presence.stalled) return true;
+  if (presence.canJoin) return true;
+  if (presence.role === 'spectator') return true;
+  const state = presence.appState;
+  if (state === 'spectator' || state === 'queued' || state === 'joining' || state === 'matchmaking') {
+    return true;
   }
-  return { title: name ? `In ${name}'s lobby` : 'In lobby', meta };
+  if (presence.waiting != null) return Boolean(presence.waiting);
+  const playing = presence.role === 'player' && (presence.activeCount ?? 0) >= 2;
+  return !playing;
+}
+
+/** @param {{ name?: string, playerId?: number, you?: boolean, spectator?: boolean }} player */
+export function formatLobbyPlayerLine(player) {
+  const name = (player?.name ?? '').trim()
+    || (player?.spectator ? 'Spectator' : `Player ${(player?.playerId ?? 0) + 1}`);
+  const bits = [];
+  if (player?.you) bits.push('you');
+  if (player?.spectator) bits.push('watching');
+  if (player?.lagging) bits.push('lagging');
+  return bits.length ? `${name} (${bits.join(', ')})` : name;
+}
+
+/**
+ * @param {HTMLElement | null} listEl
+ * @param {{ name?: string, playerId?: number, you?: boolean }[]} [players]
+ */
+export function syncLobbyPlayers(listEl, players) {
+  if (!listEl) return;
+  const rows = Array.isArray(players) ? players : [];
+  listEl.hidden = rows.length === 0;
+  while (listEl.childElementCount > rows.length) listEl.lastElementChild?.remove();
+  while (listEl.childElementCount < rows.length) {
+    const line = document.createElement('div');
+    line.className = 'koth-lobby-player';
+    listEl.append(line);
+  }
+  for (let i = 0; i < rows.length; i++) {
+    const text = formatLobbyPlayerLine(rows[i]);
+    if (listEl.children[i].textContent !== text) listEl.children[i].textContent = text;
+  }
 }
 
 /**
@@ -98,6 +167,10 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
   const lobbyEl = document.getElementById('koth-lobby');
   const listEl = document.getElementById('koth-lobby-list');
   const emptyEl = document.getElementById('koth-lobby-empty');
+  const waitingEl = document.getElementById('koth-waiting');
+  const waitingTitle = document.getElementById('koth-waiting-title');
+  const waitingMeta = document.getElementById('koth-waiting-meta');
+  const waitingPlayers = document.getElementById('koth-waiting-players');
   const start = document.getElementById('koth-start');
   const join = document.getElementById('koth-join');
   const menuKoth = document.getElementById('menu-koth');
@@ -108,6 +181,7 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
   const menuStart = document.getElementById('menu-koth-start');
   const menuStatus = document.getElementById('menu-koth-status');
   const menuMeta = document.getElementById('menu-koth-live-meta');
+  const menuPlayers = document.getElementById('menu-koth-players');
   const menuClaim = document.getElementById('menu-koth-claim');
   const menuLeave = document.getElementById('menu-koth-leave');
 
@@ -140,6 +214,11 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
     const row = formatInLobbyStatus(presence);
     setText(menuStatus, row.title);
     setText(menuMeta, row.meta);
+    setText(waitingTitle, row.title);
+    setText(waitingMeta, row.meta);
+    const people = lobbyPeople(presence);
+    syncLobbyPlayers(waitingPlayers, people);
+    syncLobbyPlayers(menuPlayers, people);
     if (menuClaim) {
       setHidden(menuClaim, !presence.canJoin);
       setText(menuClaim, presence.joinLabel || 'Claim Seat');
@@ -150,10 +229,21 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
     const presence = kothShard.getLobbyPresence?.() ?? { browsing: kothShard.canStartOrJoinLive?.() };
     const browsing = Boolean(presence.browsing ?? kothShard.canStartOrJoinLive?.());
     const canJoin = Boolean(presence.canJoin ?? kothShard.canJoin?.());
+    const waiting = shouldCenterKothLobby(presence);
 
-    if (browsing) {
+    if (!shouldShowKothBrowser(presence)) {
+      setHidden(controls, true);
+      setHidden(menuKoth, true);
+      return;
+    }
+    if (menuKoth) setHidden(menuKoth, false);
+
+    controls.classList.toggle('koth-controls-center', waiting);
+
+    if (browsing && !canJoin && !waiting) {
       setHidden(controls, false);
       setHidden(lobbyEl, false);
+      setHidden(waitingEl, true);
       setHidden(join, true);
       paintLists(kothShard.listLiveLobbies?.() ?? []);
       setHidden(menuBrowse, false);
@@ -161,11 +251,12 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
       return;
     }
 
-    if (canJoin) {
+    if (waiting || canJoin) {
       setHidden(controls, false);
       setHidden(lobbyEl, true);
-      setHidden(join, false);
-      setText(join, presence.joinLabel || kothShard.joinActionLabel?.() || 'Join Match');
+      setHidden(waitingEl, false);
+      setHidden(join, !canJoin);
+      if (canJoin) setText(join, presence.joinLabel || kothShard.joinActionLabel?.() || 'Join Match');
     } else {
       setHidden(controls, true);
     }

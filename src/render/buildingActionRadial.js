@@ -20,6 +20,7 @@ import {
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
+import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
 import {
   BUILDING_MENUS,
@@ -1853,7 +1854,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       hideLabel(badge);
       return;
     }
-    const text = String(count);
+    const text = formatGameNumber(count);
     if (text !== badge.text) {
       updateDefaultTextData(badge.data, text, [1, 0.95, 0.55, 1]);
       badge.text = text;
@@ -1885,7 +1886,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       hideLabel(extra);
       return;
     }
-    const text = `+${n}`;
+    const text = `+${formatGameNumber(n)}`;
     if (text !== extra.text) {
       updateDefaultTextData(extra.data, text, EXTRA_TEXT_COLOR);
       extra.text = text;

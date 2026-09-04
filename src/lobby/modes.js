@@ -4,13 +4,31 @@ export const FIELD_SIZES = ['tiny', 'small', 'medium', 'large', 'huge'];
 
 export const ADVENTURE_CHAPTERS = [
   { id: 'ch1', name: 'Chapter 1', garden: '/maps/chapter1.garden' },
-  { id: 'ch2', name: 'Chapter 2' },
+  { id: 'ch2', name: 'Chapter 2', garden: '/maps/chapter2.garden' },
+  { id: 'ch3', name: 'Chapter 3', garden: '/maps/chapter3.garden' },
 ];
 
 /** @param {string} [chapterId] */
 export function gardenUrlForChapter(chapterId) {
   const ch = ADVENTURE_CHAPTERS.find((c) => c.id === chapterId);
   return ch?.garden || '';
+}
+
+export function chapterIdForGardenUrl(url) {
+  return ADVENTURE_CHAPTERS.find((c) => c.garden === url)?.id || '';
+}
+
+/** Corner mark for story mode — "Ch 1" from id, garden url, or name. */
+export function chapterLabelFor(ref = {}) {
+  const id = String(ref.chapter || '');
+  const url = String(ref.gardenUrl || ref.url || '');
+  const name = String(ref.name || ref.n || '');
+  const ch = ADVENTURE_CHAPTERS.find((c) => c.id === id || (url && c.garden === url));
+  const num = ch?.id.match(/\d+/)?.[0]
+    || name.match(/chapter\s*(\d+)/i)?.[1]
+    || url.match(/chapter(\d+)/i)?.[1];
+  if (num) return `Ch ${num}`;
+  return name.trim();
 }
 
 /** @typedef {'onevsone' | 'teams' | 'adventure'} LobbyModeId */

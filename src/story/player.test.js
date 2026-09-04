@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { CHAT_KEEP, CLIP_CAMERA, CLIP_LINE } from './timeline.js';
-import { RATE_SKIP, createStoryPlayer } from './player.js';
+import { RATE_SKIP, RATES, createStoryPlayer, stepStoryRate } from './player.js';
 
 const reel = {
   id: 'intro',
@@ -33,6 +33,30 @@ describe('createStoryPlayer', () => {
     assert.equal(player.time(), 4);
     player.prevClip();
     assert.equal(player.time(), 2);
+  });
+
+  it('<< and >> step every listed speed including pause and 1×', () => {
+    assert.deepEqual(
+      [0, 1, 2, 3, 4].map((i) => {
+        let r = 0;
+        for (let n = 0; n < i; n++) r = stepStoryRate(r, 1);
+        return r;
+      }),
+      [0, 1, 2, 4, 4],
+    );
+    assert.equal(stepStoryRate(1, -1), 0);
+    assert.equal(stepStoryRate(0, -1), -2);
+    assert.equal(stepStoryRate(-2, -1), -2);
+    assert.equal(stepStoryRate(4, 1), 4);
+    assert.equal(stepStoryRate(RATE_SKIP, -1), 4);
+    assert.equal(stepStoryRate(RATE_SKIP, 1), 4);
+    const player = createStoryPlayer({ reel });
+    const seen = [];
+    for (let i = 0; i < RATES.length; i++) {
+      player.fastForward();
+      seen.push(player.rate());
+    }
+    assert.deepEqual(seen, [1, 2, 4, 4, 4]);
   });
 
   it('>| sprints instead of jumping to the end', () => {

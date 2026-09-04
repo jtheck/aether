@@ -11,6 +11,23 @@ import {
 /** Timeline seconds per wall second. `>|` sprints so the chat stack can catch up. */
 export const RATE_SKIP = 24;
 
+/** Speeds `<<` / `>>` walk, including pause and 1×. */
+export const RATES = [-2, 0, 1, 2, 4];
+
+export function stepStoryRate(current, dir) {
+  const n = Number(current) || 0;
+  if (dir > 0) {
+    for (const r of RATES) {
+      if (r > n) return r;
+    }
+    return RATES[RATES.length - 1];
+  }
+  for (let i = RATES.length - 1; i >= 0; i--) {
+    if (RATES[i] < n) return RATES[i];
+  }
+  return RATES[0];
+}
+
 /**
  * Playhead over a reel. Play / stop / rewind / ff all sample(t) so camera
  * matches the sheet. Chat can linger for each line's authored `dur` (wall time)
@@ -112,15 +129,15 @@ export function createStoryPlayer(opts = {}) {
       emit('play');
     },
     toggle() {
-      if (rate === 0) api.play();
-      else api.stop();
+      if (rate === 1) api.stop();
+      else api.play();
     },
     rewind() {
-      rate = -2;
+      rate = stepStoryRate(rate, -1);
       emit('play');
     },
     fastForward() {
-      rate = rate >= 2 ? 4 : 2;
+      rate = stepStoryRate(rate, 1);
       emit('play');
     },
     seek(next) {

@@ -373,6 +373,38 @@ describe('garden codec', () => {
     assert.deepEqual(encodeGarden(field, { units: g.units }).u[0], json.u[0]);
   });
 
+  it('roundtrips carried hp on a named unit', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, {
+      units: [{ owner: 0, type: 5, tx: 4, tz: 6, name: 'Stumpey', hp: 17 }],
+    });
+    assert.deepEqual(json.u[0], [0, 5, 4, 6, 'Stumpey', 17]);
+    const g = decodeGarden(json);
+    assert.equal(g.units[0].hp, 17);
+    const world = createWorld(3);
+    applyGardenPlacements(world, fieldFromGarden(json), g);
+    assert.equal(world.hp[0], 17);
+  });
+
+  it('roundtrips carried hp on an unnamed extra', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, {
+      units: [{ owner: 0, type: 1, tx: 5, tz: 6, hp: 44 }],
+    });
+    assert.deepEqual(json.u[0], [0, 1, 5, 6, '', 44]);
+    assert.equal(decodeGarden(json).units[0].hp, 44);
+  });
+
   it('omits sr and uses the default opening bank', () => {
     const field = buildField(3, { width: 32, height: 32 });
     applyTableSilhouette(field, {
@@ -412,6 +444,32 @@ describe('garden codec', () => {
     const g = decodeGarden(json);
     assert.equal(g.story.reels[0].clips[1].speaker, 'Doc');
     assert.equal(encodeGarden(field).story, undefined);
+  });
+
+  it('roundtrips adventure objectives', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, {
+      objectives: [{
+        id: 'road',
+        kind: 'escape',
+        tx: 8,
+        tz: 4,
+        r: 5,
+        label: 'North',
+        message: 'Go.',
+        next: '/maps/chapter2.garden',
+      }],
+    });
+    assert.equal(json.obj[0][3], 'escape');
+    const g = decodeGarden(json);
+    assert.equal(g.objectives[0].id, 'road');
+    assert.equal(g.objectives[0].next, '/maps/chapter2.garden');
+    assert.deepEqual(encodeGarden(field, { objectives: g.objectives }).obj, json.obj);
   });
 
   it('roundtrips world-space unit coords and omits terrain when asked', () => {

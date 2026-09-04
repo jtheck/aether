@@ -14,9 +14,11 @@ import {
 } from './timeline.js';
 import {
   CHAPTER1_GARDEN_NAME,
+  CHAPTER1_NEXT_URL,
   CHAPTER1_SEED,
   buildChapter1Garden,
   chapter1IntroReel,
+  chapter1Objectives,
   chapter1Story,
   chapter1WinReel,
 } from './chapter1.js';
@@ -31,9 +33,9 @@ describe('chapter 1 story', () => {
     assert.equal(cameras.length, 2);
     assert.equal(lines.length, 6);
     assert.equal(cameras[0].tx, 30);
-    assert.equal(cameras[0].tz, 18);
-    assert.equal(cameras[1].tz, 43);
-    assert.equal(cameras[1].char, 'Stumpey');
+    assert.equal(cameras[0].tz, 28);
+    assert.equal(cameras[1].tz, 42);
+    assert.equal(cameras[1].char, undefined);
     assert.equal(lines[1].speaker, 'Stumpey');
     assert.equal(lines[lines.length - 1].style, 'command');
   });
@@ -43,8 +45,8 @@ describe('chapter 1 story', () => {
     const grove = reel.clips.find((c) => c.kind === CLIP_LINE);
     const atStart = sample(reel, 0);
     assert.equal(atStart.camera.tx, 30);
-    assert.equal(atStart.camera.tz, 18);
-    assert.equal(atStart.camera.radius, 200);
+    assert.equal(atStart.camera.tz, 28);
+    assert.equal(atStart.camera.radius, 160);
     assert.equal(atStart.line, null);
 
     const duringGrove = sample(reel, grove.t + 0.1);
@@ -53,17 +55,17 @@ describe('chapter 1 story', () => {
 
     sample(reel, reel.duration);
     const back = sample(reel, 0);
-    assert.equal(back.camera.tz, 18);
+    assert.equal(back.camera.tz, 28);
     assert.equal(back.line, null);
   });
 
   it('lerps the push-in and times out lines after their duration', () => {
     const reel = chapter1IntroReel();
-    const move = reel.clips.find((c) => c.kind === CLIP_CAMERA && c.tz === 43);
+    const move = reel.clips.find((c) => c.kind === CLIP_CAMERA && c.tz === 42);
     const mid = sample(reel, move.t + move.dur / 2);
     assert.equal(mid.camera.tx, 30);
-    assert.ok(mid.camera.tz > 18 && mid.camera.tz < 43);
-    assert.ok(mid.camera.radius < 200 && mid.camera.radius > 45);
+    assert.ok(mid.camera.tz > 28 && mid.camera.tz < 42);
+    assert.ok(mid.camera.radius < 160 && mid.camera.radius > 95);
 
     const last = reel.clips.filter((c) => c.kind === CLIP_LINE).at(-1);
     const duringLast = sample(reel, last.t + 0.1);
@@ -71,15 +73,15 @@ describe('chapter 1 story', () => {
     assert.equal(duringLast.line.text, last.text);
     const past = sample(reel, 99);
     assert.equal(past.t, reel.duration);
-    assert.equal(past.camera.tz, 43);
-    assert.equal(past.camera.radius, 45);
+    assert.equal(past.camera.tz, 42);
+    assert.equal(past.camera.radius, 95);
     assert.equal(past.line, null);
     assert.deepEqual(past.lines, []);
   });
 
   it('steps prev/next across intro clip starts', () => {
     const reel = chapter1IntroReel();
-    const move = reel.clips.find((c) => c.kind === CLIP_CAMERA && c.tz === 43);
+    const move = reel.clips.find((c) => c.kind === CLIP_CAMERA && c.tz === 42);
     assert.equal(prevClipTime(reel, move.t + 0.2), move.t);
     assert.ok(nextClipTime(reel, move.t) > move.t);
   });
@@ -91,7 +93,7 @@ describe('chapter 1 story', () => {
     player.seek(last.t + 0.1);
     assert.equal(player.sample().line.speaker, 'Stumpey');
     player.toStart();
-    assert.equal(player.sample().camera.tz, 18);
+    assert.equal(player.sample().camera.tz, 28);
     player.play();
     player.tick(50);
     assert.ok(player.time() > 0 && player.time() < 0.2);
@@ -103,7 +105,7 @@ describe('chapter 1 story', () => {
     const win = chapter1WinReel();
     assert.equal(win.when, 'win');
     const s = sample(win, 0);
-    assert.equal(s.camera.tz, 11);
+    assert.equal(s.camera.tz, 40);
     const last = win.clips.filter((c) => c.kind === 'line').at(-1);
     const end = sample(win, last.t + 0.1);
     assert.match(end.line.text, /corrupted grove/);
@@ -119,18 +121,25 @@ describe('chapter 1 story', () => {
     assert.equal(json.story.reels.length, 2);
     const g = decodeGarden(json);
     assert.equal(g.story.reels[0].clips.filter((c) => c.kind === CLIP_LINE).length, 6);
-    assert.equal(g.agoras.length, 1);
+    assert.equal(g.agoras.length, 0);
+    assert.equal(json.g, undefined);
     assert.equal(g.units.length, 4);
     assert.deepEqual(g.units.map((u) => u.name), ['Stumpey', 'Goblin', 'Lady', 'Doc']);
     assert.equal(g.units[0].type, 5);
     assert.equal(g.units[1].type, 3);
     assert.equal(g.units[2].type, 4);
     assert.equal(g.units[3].type, 6);
+    assert.equal(g.objectives.length, 1);
+    assert.equal(g.objectives[0].kind, 'escape');
+    assert.equal(g.objectives[0].next, CHAPTER1_NEXT_URL);
+    assert.deepEqual(g.objectives[0].next, chapter1Objectives()[0].next);
 
     const onDisk = JSON.parse(readFileSync(join(here, '../../maps/chapter1.garden'), 'utf8'));
     assert.deepEqual(onDisk.story, JSON.parse(JSON.stringify(json.story)));
     assert.equal(onDisk.n, json.n);
     assert.equal(onDisk.w, json.w);
     assert.deepEqual(onDisk.u, json.u);
+    assert.deepEqual(onDisk.obj, json.obj);
+    assert.equal(onDisk.g, undefined);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { clearSessionTableState } from './simSession.js';
+import { SimSession, clearSessionTableState } from './simSession.js';
 
 describe('clearSessionTableState', () => {
   it('drops KOTH leftovers and queued FX so a new board cannot inherit them', () => {
@@ -44,5 +44,26 @@ describe('clearSessionTableState', () => {
 
   it('is a no-op on null', () => {
     clearSessionTableState(null);
+  });
+});
+
+describe('background lightning FX', () => {
+  it('drops a pending chorus when the tab starts background-pumping', () => {
+    const session = Object.create(SimSession.prototype);
+    session._bgPumpTimer = null;
+    session.pendingLightningUpdates = [{ count: 40 }, { count: 12 }];
+    session.setBackgroundPump(true);
+    assert.equal(session.pendingLightningUpdates, null);
+    session.queueLightningUpdates({ count: 8 });
+    assert.equal(session.pendingLightningUpdates, null);
+    session.setBackgroundPump(false);
+  });
+
+  it('queues strike FX again once the tab is foreground', () => {
+    const session = Object.create(SimSession.prototype);
+    session._bgPumpTimer = null;
+    session.pendingLightningUpdates = null;
+    session.queueLightningUpdates({ count: 2 });
+    assert.deepEqual(session.pendingLightningUpdates, [{ count: 2 }]);
   });
 });

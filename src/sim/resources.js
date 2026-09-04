@@ -1,3 +1,5 @@
+import { formatGameNumber } from './formatGameNumber.js';
+
 // Per-owner resource banks (wood / stone / mineral / food).
 //
 // Deterministic sim state — mirrors tech.js: fixed-size per-owner storage,
@@ -27,11 +29,11 @@ export function resourceCostParts(cost) {
 }
 
 /**
- * Compact HUD string, e.g. "25 · 15". Empty when free / missing. Pop omitted.
+ * Compact HUD string, e.g. "19 · f". Empty when free / missing. Pop omitted.
  * @param {Record<string, number> | null | undefined} cost
  */
 export function formatResourceCost(cost) {
-  return resourceCostParts(cost).map((p) => String(p.amount)).join(' · ');
+  return resourceCostParts(cost).map((p) => formatGameNumber(p.amount)).join(' · ');
 }
 
 /** @type {Readonly<Record<string, number>>} kind → slot index */

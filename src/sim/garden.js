@@ -9,6 +9,7 @@ import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from 
 import { createAgoras } from './agora.js';
 import { grantStartingResources, RESOURCE_KINDS, STARTING_RESOURCES } from './resources.js';
 import { encodeStory, normalizeStory } from '../story/timeline.js';
+import { encodeObjectives, normalizeObjectives } from '../story/objectives.js';
 import * as fx from './fixed.js';
 
 export const GARDEN_VERSION = 4;
@@ -100,15 +101,23 @@ function normalizeUnits(list) {
       let tz = u[3] | 0;
       let name = '';
       let world = null;
-      if (u.length >= 7) {
+      let hp;
+      if (u.length >= 8) {
+        name = u[4] ? String(u[4]) : '';
+        world = unitWorldCoords(u[5], u[6]);
+        hp = u[7] | 0;
+      } else if (u.length >= 7) {
         name = u[4] ? String(u[4]) : '';
         world = unitWorldCoords(u[5], u[6]);
       } else if (u.length === 6 && typeof u[4] === 'number') {
         world = unitWorldCoords(u[4], u[5]);
+      } else if (u.length === 6 && typeof u[4] === 'string' && Number.isFinite(Number(u[5]))) {
+        name = u[4];
+        hp = u[5] | 0;
       } else if (u[4]) {
         name = String(u[4]);
       }
-      return { owner, type, tx, tz, name, ...(world || {}) };
+      return { owner, type, tx, tz, name, ...(world || {}), ...(hp != null ? { hp } : {}) };
     }
     const world = unitWorldCoords(u.x, u.z);
     let tx = u.tx | 0;
@@ -125,15 +134,26 @@ function normalizeUnits(list) {
       tz,
       name: u.name ? String(u.name) : '',
       ...(world || {}),
+      ...(Number.isFinite(Number(u.hp)) ? { hp: u.hp | 0 } : {}),
     };
   });
 }
 
 function encodeUnitTuple(u) {
   const hasWorld = Number.isFinite(u.x) && Number.isFinite(u.z);
-  if (u.name && hasWorld) return [u.owner, u.type, u.tx, u.tz, u.name, u.x, u.z];
+  const hp = Number.isFinite(Number(u.hp)) ? u.hp | 0 : null;
+  if (u.name && hasWorld) {
+    return hp != null
+      ? [u.owner, u.type, u.tx, u.tz, u.name, u.x, u.z, hp]
+      : [u.owner, u.type, u.tx, u.tz, u.name, u.x, u.z];
+  }
   if (hasWorld) return [u.owner, u.type, u.tx, u.tz, u.x, u.z];
-  if (u.name) return [u.owner, u.type, u.tx, u.tz, u.name];
+  if (u.name) {
+    return hp != null
+      ? [u.owner, u.type, u.tx, u.tz, u.name, hp]
+      : [u.owner, u.type, u.tx, u.tz, u.name];
+  }
+  if (hp != null) return [u.owner, u.type, u.tx, u.tz, '', hp];
   return [u.owner, u.type, u.tx, u.tz];
 }
 
@@ -238,12 +258,36 @@ export function encodeGarden(field, extras = {}) {
   if (sr) out.sr = sr;
   const story = encodeStory(extras.story);
   if (story) out.story = story;
+  const objectives = encodeObjectives(extras.objectives);
+  if (objectives) out.obj = objectives;
   const tableHalf = (field.width * TILE_SIZE_F) / 2;
   const cameraHalf = Number(extras.cameraHalfF ?? field.cameraHalfF);
   if (Number.isFinite(cameraHalf) && cameraHalf > 0 && cameraHalf < tableHalf - 0.5) {
     out.ch = Math.round(cameraHalf * 100) / 100;
   }
   return out;
+}
+
+/** Swap units / opening bank on an already-encoded garden without rebuilding terrain. */
+export function patchGarden(data, extras = {}) {
+  if (!data || typeof data !== 'object') return data;
+  const next = { ...data };
+  if (extras.units) {
+    const units = normalizeUnits(extras.units);
+    if (units.length) next.u = units.map(encodeUnitTuple);
+    else delete next.u;
+  }
+  if (extras.startingResources != null) {
+    const sr = encodeStartingResources(extras.startingResources);
+    if (sr) next.sr = sr;
+    else delete next.sr;
+  }
+  if (extras.agoras) {
+    const agoras = normalizeAgoras(extras.agoras);
+    if (agoras.length) next.g = agoras.map((g) => [g.owner, g.x, g.z]);
+    else delete next.g;
+  }
+  return next;
 }
 
 export function decodeGarden(data) {
@@ -283,6 +327,7 @@ export function decodeGarden(data) {
     authoredScenery: !!data.sc,
     regionLift: data.rl ? decodeQuantized01(data.rl, n) : null,
     story: data.story ? normalizeStory(data.story) : null,
+    objectives: normalizeObjectives(data.obj),
     cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
   };
 }
@@ -332,6 +377,7 @@ export function applyGardenPlacements(world, field, garden) {
       type: u.type,
       x: hasWorld ? fx.fromFloat(u.x) : tileCenterX(u.tx),
       y: hasWorld ? fx.fromFloat(u.z) : tileCenterY(u.tz),
+      hp: Number.isFinite(Number(u.hp)) ? u.hp | 0 : undefined,
     });
   }
   for (const b of garden.buildings ?? []) {

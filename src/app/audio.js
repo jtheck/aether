@@ -1,6 +1,7 @@
 // Howler-backed audio for Lite (no Babylon audio in @babylonjs/lite).
 
 import { Howl, Howler } from 'howler';
+import { getVolumeLevel } from './settings.js';
 
 const sounds = new Map();
 let masterVolume = 0.25;
@@ -53,9 +54,27 @@ export function load(name, src, opts = {}) {
   return howl;
 }
 
+/**
+ * Howler does not drop play() while the AudioContext is parked.
+ * Hidden tabs and `interrupted` contexts queue each call onto `resume`,
+ * so a lockstep catch-up (or a long alt-tab) comes back as a stacked chorus.
+ */
+export function playbackBlocked({ hidden, ctxState } = {}) {
+  const isHidden = hidden ?? (typeof document !== 'undefined' && !!document.hidden);
+  if (isHidden) return true;
+  const state = ctxState ?? Howler.ctx?.state;
+  return state === 'interrupted';
+}
+
+/** One clap even if many bolts landed in the same drained frame. */
+export function thunderPlaysForStrikes(count) {
+  return (count | 0) > 0 ? 1 : 0;
+}
+
 export function play(name, opts = {}) {
   const howl = sounds.get(name);
   if (!howl || masterVolume <= 0) return null;
+  if (playbackBlocked()) return null;
   unlock();
   if (opts.volume != null) howl.volume(clamp01(opts.volume));
   const id = howl.play();
@@ -90,8 +109,7 @@ export function playThunder() {
 }
 
 export function init() {
-  const saved = localStorage.getItem('volumeLevel');
-  setVolume(saved != null ? parseInt(saved, 10) : 25);
+  setVolume(getVolumeLevel());
   loadDefaults();
 
   if (typeof window !== 'undefined') {

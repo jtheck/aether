@@ -23,13 +23,13 @@ import {
   applyTableSilhouette,
   createFullCellMask,
   createFullCellRadius,
-  tileCenterWorld,
 } from '../sim/tableShape.js';
 import { encodeGarden } from '../sim/garden.js';
 import { UNIT } from '../sim/unitTypes.js';
 import { unitsFromCast } from './cast.js';
+import { markChapterExit } from './exits.js';
 
-/** v1 party: Myco / Warlock / Priest / Shaman around the grove agora. */
+/** v1 party: Myco / Warlock / Priest / Shaman around the grove. */
 export const CHAPTER1_CAST = [
   { name: 'Stumpey', type: UNIT.MYCO, tx: 30, tz: 44 },
   { name: 'Goblin', type: UNIT.WARLOCK, tx: 27, tz: 44 },
@@ -39,7 +39,22 @@ export const CHAPTER1_CAST = [
 
 export const CHAPTER1_GARDEN_NAME = 'Chapter 1';
 export const CHAPTER1_GARDEN_URL = '/maps/chapter1.garden';
+export const CHAPTER1_NEXT_URL = '/maps/chapter2.garden';
 export const CHAPTER1_SEED = 22049;
+
+/** Walk north off the grove to load Chapter 2. */
+export function chapter1Objectives() {
+  return [{
+    id: 'road',
+    kind: 'escape',
+    tx: 30,
+    tz: 34,
+    r: 6,
+    label: 'Reach the old road (north)',
+    message: 'The old road. Nobody\'s used it in ages.',
+    next: CHAPTER1_NEXT_URL,
+  }];
+}
 
 function styleOf(raw) {
   return LINE_STYLES.includes(raw) ? raw : 'normal';
@@ -85,16 +100,16 @@ function reelFromSteps(id, when, steps) {
   return { id, when, clips, duration: t };
 }
 
-/** Opening take: grove wide, then push in, then the party talks their way north. */
+/** Opening take: wide grove, then a medium group hold while they talk north. */
 export function chapter1IntroReel() {
   return reelFromSteps('intro', 'start', [
-    { kind: CLIP_CAMERA, tx: 30, tz: 18, radius: 200, alpha: -2.5, dur: 0.05 },
+    { kind: CLIP_CAMERA, tx: 30, tz: 28, radius: 160, alpha: -2.2, dur: 1.4 },
     {
       kind: CLIP_LINE,
       text: 'The ancient grove shudders. A darkness creeps through the roots, twisting all it touches.',
     },
-    { kind: CLIP_CAMERA, tx: 30, tz: 43, radius: 45, alpha: 0.6416, dur: 4, char: 'Stumpey' },
-    { kind: CLIP_HOLD, dur: 0.5 },
+    { kind: CLIP_CAMERA, tx: 30, tz: 42, radius: 95, alpha: 0.35, dur: 2.2 },
+    { kind: CLIP_HOLD, dur: 0.4 },
     { kind: CLIP_LINE, speaker: 'Stumpey', text: 'Big problems... we oughtta get outta here.', style: 'scared' },
     { kind: CLIP_LINE, speaker: 'Lady', text: 'What is happening to the forest? I can feel it dying.', style: 'whisper' },
     { kind: CLIP_LINE, speaker: 'Doc', text: 'Something has poisoned the heartwood. There is no curing this from here.', style: 'think' },
@@ -103,19 +118,19 @@ export function chapter1IntroReel() {
   ]);
 }
 
-/** Victory take. Adventure start plays `intro`; this reel waits for win wiring. */
+/** Victory take. Two looks — the party, then the road north. */
 export function chapter1WinReel() {
   return reelFromSteps('ending', 'win', [
-    { kind: CLIP_CAMERA, tx: 30, tz: 11, radius: 50, dur: 0.05 },
+    { kind: CLIP_CAMERA, tx: 30, tz: 40, radius: 100, alpha: 0.3, dur: 1.2 },
     { kind: CLIP_LINE, speaker: 'Stumpey', text: 'We made it...', style: 'whisper' },
     { kind: CLIP_LINE, speaker: 'Lady', text: 'But look behind us...', style: 'scared' },
-    { kind: CLIP_CAMERA, tx: 18, tz: 35, radius: 120, dur: 1.7 },
+    { kind: CLIP_CAMERA, tx: 30, tz: 24, radius: 145, alpha: -2.15, dur: 2.6 },
     { kind: CLIP_LINE, speaker: 'Doc', text: 'All those towers... everything we built. Gone.', style: 'think' },
-    { kind: CLIP_HOLD, dur: 1 },
+    { kind: CLIP_HOLD, dur: 0.8 },
     { kind: CLIP_LINE, speaker: 'Goblin', text: "No use cryin' about it. What's ahead?" },
-    { kind: CLIP_CAMERA, tx: 30, tz: 5, radius: 80, dur: 1.6 },
     { kind: CLIP_LINE, speaker: 'Stumpey', text: "The old road. Nobody's used it in ages." },
     { kind: CLIP_LINE, text: 'The party turns north, leaving the corrupted grove behind.' },
+    { kind: CLIP_HOLD, dur: 1.8 },
   ]);
 }
 
@@ -139,12 +154,12 @@ export function buildChapter1Garden() {
       cellMask: createFullCellMask(TINY_MAP_W, TINY_MAP_H, TABLE_CHUNK_TILES),
       cellRadius: createFullCellRadius(TINY_MAP_W, TINY_MAP_H, TABLE_CHUNK_TILES, 0),
     });
-    const agora = tileCenterWorld(field, 30, 43);
+    markChapterExit(field, 30, 43, chapter1Objectives()[0]);
     return encodeGarden(field, {
       name: CHAPTER1_GARDEN_NAME,
       story: chapter1Story(),
+      objectives: chapter1Objectives(),
       units: unitsFromCast(CHAPTER1_CAST),
-      agoras: [{ owner: 0, x: agora.x, z: agora.z }],
     });
   } finally {
     setActiveMapSize(prevW, prevH);

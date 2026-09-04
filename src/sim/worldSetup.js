@@ -541,7 +541,7 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth' | 'skirmish', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean, teamByOwner?: ArrayLike<number> | null, laneBases?: boolean }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth' | 'skirmish', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean, teamByOwner?: ArrayLike<number> | null, laneBases?: boolean, agoraOccupyEndsMatch?: number }} config
  */
 export function buildWorldFromConfig({
   seed,
@@ -555,6 +555,7 @@ export function buildWorldFromConfig({
   skipDefaultSpawns = false,
   teamByOwner = null,
   laneBases: useLaneBases = false,
+  agoraOccupyEndsMatch,
 }) {
   setArmyPerSide(armyPerSide);
   const size = mapSizeForConfig({ stressPerSide, animStressPerSide, armyPerSide, mapW, mapH });
@@ -565,7 +566,9 @@ export function buildWorldFromConfig({
   const w = createWorld(seed);
   w.kothMatchOver = 0;
   w.matchWinner = -1;
-  w.agoraOccupyEndsMatch = mode === 'koth' ? 0 : 1;
+  w.agoraOccupyEndsMatch = agoraOccupyEndsMatch != null
+    ? agoraOccupyEndsMatch | 0
+    : (mode === 'koth' ? 0 : 1);
   w.agoras = [];
   w.buildings = [];
   w.buildingsDirty = 0;

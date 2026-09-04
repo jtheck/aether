@@ -15,6 +15,7 @@ import {
   ZOOM_TEND_NEAR,
   cameraPlayRadius,
   chaseToward,
+  STORY_EASE_MS,
   createCameraController,
   resolveCameraHalfF,
   zoomTendCatch,
@@ -55,6 +56,26 @@ describe('chaseToward', () => {
     const a = chaseToward(5, 7, 5, 7, 0.016, FOLLOW_ZIP_RATE);
     assert.equal(a.x, 5);
     assert.equal(a.z, 7);
+  });
+});
+
+describe('easePose', () => {
+  it('eases toward a beat without snapping, then lets the player keep the offset', () => {
+    const cam = fakeCamera();
+    cam.target.set(0, 0, 0);
+    cam.radius = 80;
+    cam.alpha = 0;
+    const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
+    ctrl.easePose({ x: 40, z: -20, radius: 200, alpha: 1 }, { unclamped: true, ms: STORY_EASE_MS });
+    ctrl.tick(16);
+    assert.ok(cam.target.x > 0 && cam.target.x < 40);
+    assert.ok(cam.radius > 80 && cam.radius < 200);
+    for (let i = 0; i < 80; i++) ctrl.tick(16);
+    assert.ok(Math.abs(cam.target.x - 40) < 1);
+    assert.ok(Math.abs(cam.radius - 200) < 2);
+    ctrl.nudgePan(8, 0);
+    ctrl.tick(16);
+    assert.ok(cam.target.x > 40);
   });
 });
 

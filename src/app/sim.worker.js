@@ -108,7 +108,11 @@ self.onmessage = (e) => {
           msg.config.skipDefaultSpawns
           || garden?.units?.length
           || garden?.story
+          || garden?.objectives?.length
         ),
+        agoraOccupyEndsMatch: msg.config.agoraOccupyEndsMatch != null
+          ? msg.config.agoraOccupyEndsMatch
+          : (garden?.story || garden?.objectives?.length ? 0 : undefined),
       });
       // Stress / explicit flag — timing never feeds gameplay.
       world.profileSim = msg.config.profileSim === true

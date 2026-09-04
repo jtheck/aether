@@ -63,6 +63,7 @@ import { createStoryPlayer } from '../story/player.js';
 import { createStoryHud } from '../story/hud.js';
 import { createStorySpeech, narratorLines } from '../story/speech.js';
 import { findNamedUnit, namedUnits } from '../story/cast.js';
+import { OBJ_KINDS, normalizeObjectives } from '../story/objectives.js';
 import { createStorySheet } from './storySheet.js';
 import {
   CELESTIAL_PRESETS,
@@ -93,6 +94,7 @@ const state = {
   units: [],
   buildings: [],
   agoras: [],
+  objectives: [],
   startingResources: { ...STARTING_RESOURCES },
   story: emptyStory(),
   storyClipId: null,
@@ -242,6 +244,9 @@ function reservedFromPlacements() {
   for (const u of state.units) {
     pts.push([(u.tx + 0.5) * TILE_SIZE_F - half, (u.tz + 0.5) * TILE_SIZE_F - half]);
   }
+  for (const o of state.objectives) {
+    pts.push([(o.tx + 0.5) * TILE_SIZE_F - half, (o.tz + 0.5) * TILE_SIZE_F - half]);
+  }
   for (const b of state.buildings) pts.push([b.x, b.z]);
   for (const g of state.agoras) pts.push([g.x, g.z]);
   return pts;
@@ -261,6 +266,13 @@ function applyPlace(pos, { remove = false } = {}) {
   if (state.placeKind === 'unit') {
     const name = String(document.getElementById('place-name')?.value || '').trim();
     state.units.push({ owner: state.owner, type: state.placeType | 0, tx, tz, name });
+  } else if (state.placeKind === 'objective') {
+    const kind = String(document.getElementById('place-obj-kind')?.value || 'reach');
+    const r = Math.max(0.5, Number(document.getElementById('place-obj-r')?.value) || 4);
+    const label = String(document.getElementById('place-obj-label')?.value || '').trim();
+    const message = String(document.getElementById('place-obj-message')?.value || '').trim();
+    const next = String(document.getElementById('place-obj-next')?.value || '').trim();
+    state.objectives.push({ id: `obj-${state.objectives.length}`, kind, tx, tz, r, label, message, next });
   } else if (state.placeKind === 'agora') {
     state.agoras.push({ owner: state.owner, x: pos.x, z: pos.z });
   } else {
@@ -295,6 +307,11 @@ function removeNearestPlacement(pos) {
     pickNear(state.units, (u) => ({
       x: (u.tx + 0.5) * TILE_SIZE_F - half,
       z: (u.tz + 0.5) * TILE_SIZE_F - half,
+    }));
+  } else if (state.placeKind === 'objective') {
+    pickNear(state.objectives, (o) => ({
+      x: (o.tx + 0.5) * TILE_SIZE_F - half,
+      z: (o.tz + 0.5) * TILE_SIZE_F - half,
     }));
   } else if (state.placeKind === 'agora') {
     pickNear(state.agoras, (g) => ({ x: g.x, z: g.z }));
@@ -378,6 +395,15 @@ function updatePlaceMarkers() {
     pushBoxMarker(gPos, gIdx, g.x, groundY(g.x, g.z, 0.4), g.z, 16, 4, 16);
   }
   addMarker('forge-agoras', gPos, gIdx, [0.95, 0.85, 0.25]);
+  const oPos = [];
+  const oIdx = [];
+  for (const obj of state.objectives) {
+    const wx = (obj.tx + 0.5) * TILE_SIZE_F - half;
+    const wz = (obj.tz + 0.5) * TILE_SIZE_F - half;
+    const span = Math.max(4, (obj.r || 4) * TILE_SIZE_F * 2);
+    pushBoxMarker(oPos, oIdx, wx, groundY(wx, wz, 0.2), wz, span, 1.2, span);
+  }
+  addMarker('forge-objectives', oPos, oIdx, [0.35, 0.85, 1]);
   if (sceneRegistered) invalidateRenderBundles(engine);
 }
 
@@ -752,6 +778,7 @@ function gardenExtras() {
     units: state.units,
     buildings: state.buildings,
     agoras: state.agoras,
+    objectives: state.objectives,
     startingResources: state.startingResources,
     story: state.story,
     cameraHalfF: state.cameraHalfF,
@@ -1129,6 +1156,7 @@ function applyGardenJson(json) {
   state.units = g.units;
   state.buildings = g.buildings;
   state.agoras = g.agoras;
+  state.objectives = normalizeObjectives(g.objectives);
   state.startingResources = { ...(g.startingResources || STARTING_RESOURCES) };
   state.story = g.story || emptyStory();
   state.storyClipId = null;
@@ -1382,7 +1410,20 @@ function mountUi() {
         <button data-place="agora" data-type="agora">Agora</button>
         ${PLACEABLE_BUILDINGS.map((b) => `<button data-place="building" data-type="${b.id}">${b.name}</button>`).join('')}
       </div>
-      <p class="hint">Click to place. Shift-click to remove the nearest of that kind.</p>
+      <label>Objectives</label>
+      <div class="row">
+        <button data-place="objective" data-type="objective">Zone</button>
+      </div>
+      <label>Kind
+        <select id="place-obj-kind">
+          ${OBJ_KINDS.map((k) => `<option value="${k}">${k}</option>`).join('')}
+        </select>
+      </label>
+      <label>Radius (tiles) <input id="place-obj-r" type="number" min="1" step="1" value="5"></label>
+      <label>Label <input id="place-obj-label" type="text" placeholder="Reach the old road"></label>
+      <label>Message <input id="place-obj-message" type="text"></label>
+      <label>Next garden <input id="place-obj-next" type="text" placeholder="/maps/chapter2.garden"></label>
+      <p class="hint">Click to place. Shift-click to remove the nearest of that kind. Escape / advance loads Next garden when a party unit enters the zone.</p>
     </div>
     <div id="panel-story" class="panel" style="display:none">
       <div class="row">
@@ -1571,6 +1612,7 @@ function mountUi() {
     state.selected = [];
     state.units = [];
     state.buildings = [];
+    state.objectives = [];
     state.cameraHalfF = 0;
     state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
     celestial?.setWorldHalfF(worldHalfFFromField(field));

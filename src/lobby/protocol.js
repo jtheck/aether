@@ -17,6 +17,7 @@ export const MSG = {
   ABORT: 'lobby_abort',
   FRAME: 'lobby_frame',
   CONFIRM: 'lobby_confirm',
+  CHAPTER: 'lobby_chapter',
 };
 
 /** @param {string} mode */

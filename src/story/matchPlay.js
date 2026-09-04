@@ -4,10 +4,12 @@ import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
 import { createStoryHud } from './hud.js';
 import { createStoryPlayer } from './player.js';
 import { createStorySpeech, narratorLines } from './speech.js';
+import { createStoryTransport } from './transport.js';
 import { activeReel, normalizeStory } from './timeline.js';
 
-function reelForStart(story) {
+function reelForWhen(story, when = 'start') {
   const s = normalizeStory(story);
+  if (when === 'win') return s.reels.find((r) => r.when === 'win') || null;
   return s.reels.find((r) => r.when === 'start') || activeReel(s, 'intro');
 }
 
@@ -20,16 +22,16 @@ function worldFromTile(field, tx, tz) {
 }
 
 function skipEvent(e) {
-  return e.code === 'Escape' || e.code === 'Space' || e.code === 'Enter';
+  return e.code === 'Escape' || e.code === 'Enter';
 }
 
 function skipTarget(el) {
-  return el?.closest?.('#side_menu, #header, button, a, input, select, textarea, label');
+  return el?.closest?.('#side_menu, #header, #story-transport, #story-narration-bar, button, a, input, select, textarea, label');
 }
 
 /**
  * @param {{
- *   getCamera?: () => { setPose?: Function, stopFollow?: Function } | null,
+ *   getCamera?: () => { setPose?: Function, easePose?: Function, stopFollow?: Function } | null,
  *   getField?: () => { worldHalfF?: number, width?: number } | null,
  *   getSpeakerPos?: (name: string) => { x: number, y: number, z: number } | null,
  *   worldToScreen?: (x: number, y: number, z: number) => { x: number, y: number } | null,
@@ -48,20 +50,31 @@ export function createMatchStory(opts = {}) {
       getSpeakerPos: (name) => opts.getSpeakerPos?.(name) ?? null,
     })
     : { show() {}, hide() {}, tick() {}, dispose() {} };
+  const transport = createStoryTransport(opts.host ?? (typeof document !== 'undefined' ? document.body : null));
 
   let player = null;
   let playing = false;
+  let lastShot = null;
 
   function applySample(s) {
     const cam = opts.getCamera?.();
     const field = opts.getField?.();
     if (s?.camera && cam && field) {
-      const live = s.camera.char ? opts.getSpeakerPos?.(s.camera.char) : null;
-      const tile = worldFromTile(field, s.camera.tx, s.camera.tz);
-      const x = live?.x ?? tile.x;
-      const z = live?.z ?? tile.z;
-      cam.stopFollow?.();
-      cam.setPose?.({ x, z, radius: s.camera.radius, alpha: s.camera.alpha }, { unclamped: true });
+      const shot = s.camera.id || `${s.camera.tx}|${s.camera.tz}|${s.camera.radius}`;
+      if (shot !== lastShot) {
+        lastShot = shot;
+        const live = s.camera.char ? opts.getSpeakerPos?.(s.camera.char) : null;
+        const tile = worldFromTile(field, s.camera.tx, s.camera.tz);
+        const pose = {
+          x: live?.x ?? tile.x,
+          z: live?.z ?? tile.z,
+          radius: s.camera.radius,
+          alpha: s.camera.alpha,
+        };
+        cam.stopFollow?.();
+        if (cam.easePose) cam.easePose(pose, { unclamped: true });
+        else cam.setPose?.(pose, { unclamped: true });
+      }
     }
     const lines = s?.lines ?? (s?.line ? [s.line] : []);
     const narrated = narratorLines(lines);
@@ -73,34 +86,35 @@ export function createMatchStory(opts = {}) {
   function unbindSkip() {
     if (typeof window === 'undefined') return;
     window.removeEventListener('keydown', onKey, true);
-    window.removeEventListener('pointerdown', onPointer, true);
   }
 
   function bindSkip() {
     if (typeof window === 'undefined') return;
     window.addEventListener('keydown', onKey, true);
-    window.addEventListener('pointerdown', onPointer, true);
   }
 
   function stop() {
     if (!playing) return;
     playing = false;
+    lastShot = null;
     unbindSkip();
     player?.stop();
+    transport.detach();
     hud.hide();
     speech.hide();
   }
 
   function onKey(e) {
-    if (!playing || !skipEvent(e)) return;
-    if (skipTarget(e.target)) return;
+    if (!playing || skipTarget(e.target)) return;
+    if (e.code === 'Space') {
+      e.preventDefault();
+      e.stopPropagation();
+      player?.toggle();
+      return;
+    }
+    if (!skipEvent(e)) return;
     e.preventDefault();
     e.stopPropagation();
-    skip();
-  }
-
-  function onPointer(e) {
-    if (!playing || skipTarget(e.target)) return;
     skip();
   }
 
@@ -110,10 +124,10 @@ export function createMatchStory(opts = {}) {
     stop();
   }
 
-  function playIntro(story) {
+  function playReel(story, when = 'start') {
     stop();
     if (!story) return false;
-    const reel = reelForStart(story);
+    const reel = reelForWhen(story, when);
     if (!reel?.clips?.length || !(reel.duration > 0)) return false;
     player = createStoryPlayer({
       reel,
@@ -125,9 +139,18 @@ export function createMatchStory(opts = {}) {
       },
     });
     playing = true;
+    transport.attach(player);
     bindSkip();
     player.play();
     return true;
+  }
+
+  function playIntro(story) {
+    return playReel(story, 'start');
+  }
+
+  function playWin(story) {
+    return playReel(story, 'win');
   }
 
   function tick(deltaMs) {
@@ -137,6 +160,7 @@ export function createMatchStory(opts = {}) {
 
   return {
     playIntro,
+    playWin,
     skip,
     stop,
     tick,

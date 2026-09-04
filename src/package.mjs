@@ -1,4 +1,6 @@
-// Fill ../DEPLOY/ for S3/CloudFront upload: hashed+minified+obfuscated JS,
+// Fill ../DEPLOY/ for S3/CloudFront upload: hashed+minified JS.
+// Extra javascript-obfuscator is off (stringArray wrecks tick/pose). Opt in:
+// PACKAGE_OBFUSCATE=1 npm run package
 // assets (incl. baked), PWA bits, index derived from src/index.html.
 // Also copies src/axiom/ raw. Forge is an esbuild entry (forge-*.js + forge/index.html).
 // Does NOT rebuild vendor lite/howler — uses whatever is already in vendor/.
@@ -110,12 +112,12 @@ const mainHash = mainFile.replace(/^main-/, '').replace(/\.js$/, '');
   console.log(`worker URL → ./${workerFile}`);
 }
 
-// On by default. Opt out: PACKAGE_OBFUSCATE=0 npm run package
-// Safe on both bundles because splitting:false fully inlines them (no import/export
-// left for the obfuscator to put a preamble in front of). Module workers only reject
-// statements-before-import; import-free scripts are fine.
-const obfEnv = (process.env.PACKAGE_OBFUSCATE ?? '1').toLowerCase();
-const doObfuscate = !(obfEnv === '0' || obfEnv === 'false' || obfEnv === 'off' || obfEnv === 'no');
+// Off by default. Opt in: PACKAGE_OBFUSCATE=1 npm run package
+// Safe because splitting:false fully inlines them (no import/export left for
+// the obfuscator to put a preamble in front of). Never run this on the worker
+// — stringArray + base64 turned 11ms ticks into 150–500ms.
+const obfEnv = (process.env.PACKAGE_OBFUSCATE ?? '0').toLowerCase();
+const doObfuscate = obfEnv === '1' || obfEnv === 'true' || obfEnv === 'on' || obfEnv === 'yes';
 if (doObfuscate) {
   const obfuscateOpts = {
     compact: true,
@@ -132,10 +134,9 @@ if (doObfuscate) {
     ignoreImports: true,
   };
   for (const name of readdirSync(DEPLOY)) {
-    if (!/^(main|sim\.worker)-.+\.js$/.test(name)) continue;
+    if (!/^main-.+\.js$/.test(name)) continue;
     const path = join(DEPLOY, name);
     const src = readFileSync(path, 'utf8');
-    // Statement-boundary ESM only (avoid matching "export" inside string literals).
     if (/(?:^|[;\n])\s*import\s*[\*{'"']|(?:^|[;\n])\s*export\s/.test(src)) {
       throw new Error(
         `${name} still has import/export — obfuscation would break module loading; fix the bundle first`,
@@ -146,7 +147,7 @@ if (doObfuscate) {
     console.log('obfuscated', name);
   }
 } else {
-  console.log('skip obfuscate (PACKAGE_OBFUSCATE=0)');
+  console.log('skip extra obfuscate (main + worker minify-only)');
 }
 
 // Ensure baked manifest exists (avoids per-mesh 404 probes at runtime).
@@ -170,9 +171,13 @@ if (doObfuscate) {
 // Static copies
 cpSync(join(REPO, 'assets'), join(DEPLOY, 'assets'), { recursive: true });
 {
-  mkdirSync(join(DEPLOY, 'maps'), { recursive: true });
-  cpSync(join(REPO, 'maps', 'tester.garden'), join(DEPLOY, 'maps', 'tester.garden'));
-  cpSync(join(REPO, 'maps', 'stress.garden'), join(DEPLOY, 'maps', 'stress.garden'));
+  const mapsSrc = join(REPO, 'maps');
+  const mapsDst = join(DEPLOY, 'maps');
+  mkdirSync(mapsDst, { recursive: true });
+  for (const name of readdirSync(mapsSrc)) {
+    if (!name.endsWith('.garden')) continue;
+    cpSync(join(mapsSrc, name), join(mapsDst, name));
+  }
 }
 cpSync(join(ROOT, 'icons'), join(DEPLOY, 'icons'), { recursive: true });
 if (existsSync(join(ROOT, 'graffiti.png'))) {

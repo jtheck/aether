@@ -28,6 +28,7 @@ import {
   matchSecondsFromTick,
   shouldExportFreshCatchupCheckpoint,
 } from './catchup.js';
+import { LOCKSTEP_STALL_UI_MS } from './simSession.js';
 import {
   createChunkAssembler,
   createLedgerAssembler,
@@ -51,6 +52,7 @@ import {
 import {
   createObserverTree,
   upsertNode,
+  removeNode,
   assignSponsor,
   promoteObserverToPlayer,
   offerEligibleUserIds,
@@ -65,6 +67,8 @@ import {
   touchSavedMatch,
   clearSavedMatch,
 } from '../koth/matchId.js';
+import { generateLobbyName } from '../koth/lobbyName.js';
+import { isLiveMatchMember, isMatchLeavePresence, isSpectatorMember } from '../koth/presence.js';
 import {
   createEmptyRoster,
   rosterFromPeers,
@@ -169,6 +173,8 @@ export function createKothShard(options = {}) {
   let catchUpReady = true;
   let matchStartSlots = [0];
   let matchHumanPlayers = [0];
+  /** Player ids already eliminated this match — don't submit FORCE_ELIMINATE twice. */
+  const defeatedPlayers = new Set();
   /** @type {Map<string, string>} peerId -> userId */
   const peerUserIds = new Map();
   /** @type {Set<string>} peerIds that exchanged this KOTH protocol version */
@@ -209,6 +215,8 @@ export function createKothShard(options = {}) {
   // Host and spectators all announce the same matchId with different active
   // counts, so we keep the MAX active count (the host's view) per match.
   const liveMatches = new Map();
+  /** userId -> display name from presence. */
+  const peerNames = new Map();
   // Set when the player picks a listed lobby or starts their own. Stops
   // convergeToBestMatch from yanking them onto a "stronger" match.
   let pinnedMatchId = null;
@@ -216,6 +224,11 @@ export function createKothShard(options = {}) {
   const matchAnnouncers = new Map();
   /** userIds seen in the current match lobby (player_join / player_rejoin). */
   const lobbyPeers = new Set();
+  /** Spectators who announced THIS live match — not browsers on the firehose. */
+  const matchLobbySpectators = new Set();
+  /** userId -> last live presence / match-lobby join for this shard. */
+  const matchMemberSeenAt = new Map();
+  const MATCH_MEMBER_TTL_MS = SHARD_ANNOUNCE_MS * 3 + 2000;
   /** @type {Map<string, number>} userId -> last nudge timestamp */
   const lastNudgeAt = new Map();
   /** @type {Map<string, string>} userId -> role from last broadcast presence */
@@ -408,6 +421,7 @@ export function createKothShard(options = {}) {
   }
 
   function broadcastPresence(extra = {}) {
+    if (lobbyMatchHold) return;
     if (!p2p?.broadcast) return;
     if (appState !== KOTH_APP_STATE.PRIVATE_SANDBOX) touchSavedMatch();
     p2p.broadcast(
@@ -419,6 +433,7 @@ export function createKothShard(options = {}) {
         tick: session?.confirmedTick ?? 0,
         from: localUserId,
         name: getPlayerName(),
+        lobbyName: generateLobbyName(matchId),
         dlc: localDlc(),
         skins: localSkins(),
         role,
@@ -736,6 +751,8 @@ export function createKothShard(options = {}) {
   function switchToMatchLobby(nextMatchId) {
     const nextLobby = shardLobbyName(nextMatchId);
     lobbyPeers.clear();
+    matchLobbySpectators.clear();
+    matchMemberSeenAt.clear();
     activeDialTarget = null;
     for (const lobby of [...joinedLobbies]) {
       if (lobby === MATCHMAKING_LOBBY || lobby === nextLobby) continue;
@@ -757,14 +774,214 @@ export function createKothShard(options = {}) {
   // presence so a client can find the actual match lobby — it never sets up P2P.
   // RTC is established exclusively inside the real match lobby.
   function joinMatchmakingLobby() {
+    if (lobbyMatchHold) return;
     joinLobby(MATCHMAKING_LOBBY, false);
+  }
+
+  function leaveMatchmakingLobby() {
+    if (!joinedLobbies.has(MATCHMAKING_LOBBY)) return;
+    joinedLobbies.delete(MATCHMAKING_LOBBY);
+    p2p?.leaveMatchLobby?.(MATCHMAKING_LOBBY);
+  }
+
+  // Park KOTH discovery while another game type is live. Broadcast stays up so
+  // 1v1 / teams / adventure can still use the same P2P instance; we just leave
+  // the KOTH catalog and stop announcing.
+  function parkKothDiscovery() {
+    cancelDiscoverStart();
+    leaveShardLobby(shardLobbyName(matchId));
+    leaveMatchmakingLobby();
   }
 
   // The actual match lobby — this is where P2P/RTC is established. Joined in
   // addition to the discovery lobby.
   function joinShardLobby() {
+    if (lobbyMatchHold) return;
     joinMatchmakingLobby();
     joinLobby(shardLobbyName(), true);
+  }
+
+  function notePeerName(userId, name) {
+    if (!userId || typeof name !== 'string') return;
+    const trimmed = name.trim();
+    if (trimmed) peerNames.set(userId, trimmed);
+  }
+
+  function nameForUser(userId) {
+    if (!userId) return '';
+    if (userIdsMatch(userId, localUserId)) return getPlayerName();
+    const direct = peerNames.get(userId);
+    if (direct) return direct;
+    for (const [id, name] of peerNames) {
+      if (userIdsMatch(id, userId)) return name;
+    }
+    const live = liveMatches.get(matchId);
+    if (live?.hostName && live.from && userIdsMatch(live.from, userId)) return live.hostName;
+    return '';
+  }
+
+  function lobbyPlayers() {
+    const stalled = (session?.lockstepBlockedMs?.() ?? 0) >= LOCKSTEP_STALL_UI_MS;
+    const waitingOn = new Set(stalled ? (session?.lockstepWaiters?.() ?? []) : []);
+    const out = [];
+    for (const slot of roster) {
+      if (slot.state !== 'active' || !slot.userId) continue;
+      const you = userIdsMatch(slot.userId, localUserId);
+      out.push({
+        playerId: slot.playerId,
+        userId: slot.userId,
+        name: nameForUser(slot.userId) || `Player ${(slot.playerId | 0) + 1}`,
+        you,
+        lagging: waitingOn.has(slot.playerId),
+      });
+    }
+    if (out.length) return out;
+    const live = liveMatches.get(matchId);
+    if (live?.from || live?.hostName) {
+      out.push({
+        playerId: 0,
+        userId: live.from ?? '',
+        name: live.hostName || nameForUser(live.from) || 'Host',
+        you: !!(live.from && userIdsMatch(live.from, localUserId)),
+      });
+    }
+    return out;
+  }
+
+  function isSeatedUser(userId) {
+    if (!userId) return false;
+    for (const slot of roster) {
+      if (slot.state === 'active' && slot.userId && userIdsMatch(slot.userId, userId)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function alreadyListedUser(seen, userId) {
+    if (!userId) return true;
+    if (seen.has(userId)) return true;
+    for (const id of seen) {
+      if (userIdsMatch(id, userId)) return true;
+    }
+    return false;
+  }
+
+  function lobbySpectators() {
+    const seen = new Set();
+    const out = [];
+    const add = (userId) => {
+      if (!userId || isSeatedUser(userId) || alreadyListedUser(seen, userId)) return;
+      seen.add(userId);
+      out.push({
+        userId,
+        name: nameForUser(userId) || 'Spectator',
+        you: userIdsMatch(userId, localUserId),
+        spectator: true,
+      });
+    };
+    // Membership is the match lobby + live presence for this matchId.
+    // Global broadcast / observer-tree gossip is discovery, not a seat.
+    if (role === 'spectator' && phase === SHARD_PHASE.LIVE) add(localUserId);
+    for (const uid of matchLobbySpectators) add(uid);
+    for (const uid of lobbyPeers) add(uid);
+    return out;
+  }
+
+  function dropMatchingIds(collection, userId) {
+    if (!userId || !collection) return;
+    if (collection instanceof Map) {
+      for (const id of [...collection.keys()]) {
+        if (userIdsMatch(id, userId)) collection.delete(id);
+      }
+      return;
+    }
+    for (const id of [...collection]) {
+      if (userIdsMatch(id, userId)) collection.delete(id);
+    }
+  }
+
+  function touchMatchMember(userId) {
+    if (!userId || userIdsMatch(userId, localUserId)) return;
+    matchMemberSeenAt.set(userId, Date.now());
+  }
+
+  function forgetMatchMember(userId) {
+    if (!userId || userIdsMatch(userId, localUserId)) return;
+    dropMatchingIds(lobbyPeers, userId);
+    dropMatchingIds(matchLobbySpectators, userId);
+    dropMatchingIds(peerPresenceRole, userId);
+    dropMatchingIds(matchMemberSeenAt, userId);
+    dropMatchingIds(matchAnnouncers.get(matchId), userId);
+    const live = liveMatches.get(matchId);
+    dropMatchingIds(live?.spectatorIds, userId);
+    let treeId = observerTree.nodes.has(userId) ? userId : '';
+    if (!treeId) {
+      for (const id of observerTree.nodes.keys()) {
+        if (userIdsMatch(id, userId)) {
+          treeId = id;
+          break;
+        }
+      }
+    }
+    if (treeId) {
+      const orphans = removeNode(observerTree, treeId);
+      if (isKing() && phase === SHARD_PHASE.LIVE) {
+        for (const oid of orphans) kingAssignObserver(oid);
+        refreshSlotOffer();
+      }
+    }
+  }
+
+  function lastSeenMatchMember(userId) {
+    if (!userId) return null;
+    if (matchMemberSeenAt.has(userId)) return matchMemberSeenAt.get(userId);
+    for (const [id, ts] of matchMemberSeenAt) {
+      if (userIdsMatch(id, userId)) return ts;
+    }
+    return null;
+  }
+
+  function pruneStaleMatchMembers(now = Date.now()) {
+    if (phase !== SHARD_PHASE.LIVE) return;
+    const ids = new Set([...lobbyPeers, ...matchLobbySpectators]);
+    for (const uid of ids) {
+      const seen = lastSeenMatchMember(uid);
+      if (seen == null || now - seen > MATCH_MEMBER_TTL_MS) forgetMatchMember(uid);
+    }
+  }
+
+  function broadcastMatchLeave(leavingId) {
+    if (!p2p?.broadcast || !leavingId || !localUserId) return;
+    p2p.broadcast(
+      {
+        type: MSG.SHARD_PRESENCE,
+        matchId: leavingId,
+        left: true,
+        from: localUserId,
+        name: getPlayerName(),
+        role,
+        appState,
+        phase: SHARD_PHASE.SANDBOX,
+        v: KOTH_PROTOCOL_VERSION,
+      },
+      BROADCAST,
+    );
+  }
+
+  function pickLobbyName(data, prev) {
+    const announced = typeof data?.lobbyName === 'string' ? data.lobbyName.trim() : '';
+    if (announced) return announced;
+    if (prev?.lobbyName) return prev.lobbyName;
+    return generateLobbyName(data?.matchId);
+  }
+
+  function isPlayerAnnounce(data) {
+    return data?.role === 'player' || data?.appState === KOTH_APP_STATE.LIVE_PLAYER;
+  }
+
+  function isSpectatorAnnounce(data) {
+    return data?.role === 'spectator' || data?.appState === KOTH_APP_STATE.SPECTATOR;
   }
 
   function noteMatchAnnouncer(id, userId) {
@@ -789,17 +1006,28 @@ export function createKothShard(options = {}) {
       matchAnnouncers.delete(data.matchId);
       return;
     }
+    if (data.left && data.from) {
+      const prev = liveMatches.get(data.matchId);
+      dropMatchingIds(prev?.spectatorIds, data.from);
+      return;
+    }
     if (data.phase !== SHARD_PHASE.LIVE) return;
     if (data.from) noteMatchAnnouncer(data.matchId, data.from);
+    if (data.from && typeof data.name === 'string') notePeerName(data.from, data.name);
     const now = Date.now();
     const active = data.activeCount ?? 0;
     const prev = liveMatches.get(data.matchId);
     const tick = data.tick ?? 0;
+    const lobbyName = pickLobbyName(data, prev);
     if (!prev) {
+      const spectatorIds = new Set();
+      if (data.from && isSpectatorAnnounce(data)) spectatorIds.add(data.from);
       liveMatches.set(data.matchId, {
         matchId: data.matchId,
         from: data.from ?? null,
-        hostName: typeof data.name === 'string' ? data.name : '',
+        hostName: isPlayerAnnounce(data) && typeof data.name === 'string' ? data.name : '',
+        lobbyName,
+        spectatorIds,
         activeCount: active,
         tick,
         ts: now,
@@ -808,16 +1036,22 @@ export function createKothShard(options = {}) {
       return;
     }
     prev.ts = now;
+    prev.lobbyName = lobbyName;
+    if (!prev.spectatorIds) prev.spectatorIds = new Set();
+    if (data.from && isSpectatorAnnounce(data)) prev.spectatorIds.add(data.from);
+    if (data.from && isPlayerAnnounce(data)) prev.spectatorIds.delete(data.from);
     if (tick > prev.tick) {
       prev.tick = tick;
       prev.lastTickAt = now;
     }
-    // Keep the strongest announcer as the peer to connect to (the host reports
-    // the highest active count; spectators report 0).
+    // Keep the strongest announcer as the peer to connect to. Lobby titles come
+    // from lobbyName, not the announcer's player name.
     if (active >= prev.activeCount) {
       prev.activeCount = active;
       if (data.from) prev.from = data.from;
-      if (typeof data.name === 'string' && data.name) prev.hostName = data.name;
+      if (isPlayerAnnounce(data) && typeof data.name === 'string' && data.name) {
+        prev.hostName = data.name;
+      }
     } else if (!prev.from && data.from) {
       prev.from = data.from;
     }
@@ -842,8 +1076,10 @@ export function createKothShard(options = {}) {
       out.push({
         matchId: m.matchId,
         from: m.from,
+        lobbyName: m.lobbyName || generateLobbyName(m.matchId),
         hostName: m.hostName ?? '',
         activeCount: m.activeCount,
+        spectatorCount: m.spectatorIds?.size ?? 0,
         tick: m.tick,
         seats: MAX_ACTIVE_PLAYERS,
       });
@@ -1073,6 +1309,8 @@ export function createKothShard(options = {}) {
       msg.type === MSG.MATCH_RESET ||
       msg.type === MSG.TICK_CONFIRM ||
       msg.type === MSG.COMMAND_FRAME ||
+      msg.type === MSG.SLOT_DEFEAT ||
+      msg.type === MSG.SHARD_GONE ||
       (msg.type === MSG.JOIN_INTENT && connectedPeerIds().length === 0)
     ) {
       sendBroadcastMsg(stamped);
@@ -1521,6 +1759,7 @@ export function createKothShard(options = {}) {
   }
 
   function pumpDiscovery() {
+    if (lobbyMatchHold) return;
     if (!p2p || !localUserId) return;
     if (phase === SHARD_PHASE.LIVE) p2p.announcePresence?.(shardLobbyName(matchId));
     else if (appState === KOTH_APP_STATE.MATCHMAKING) p2p.announcePresence?.();
@@ -1673,11 +1912,16 @@ export function createKothShard(options = {}) {
     observerTree.nodes.clear();
     observerTree.childrenOf.clear();
     lobbyPeers.clear();
+    matchLobbySpectators.clear();
+    matchMemberSeenAt.clear();
     clearSavedMatch();
     matchId = generateMatchId();
     seed = 0x1234;
     roster = createEmptyRoster();
     roster[0] = { userId: localUserId, state: 'active', playerId: 0 };
+    matchStartSlots = [0];
+    matchHumanPlayers = [0];
+    defeatedPlayers.clear();
     localPlayerId = 0;
     role = 'player';
     appState = KOTH_APP_STATE.PRIVATE_SANDBOX;
@@ -1710,6 +1954,7 @@ export function createKothShard(options = {}) {
       sendAll({ type: MSG.SHARD_GONE, matchId: leavingId });
       broadcastPresence({ gone: true });
     }
+    if (wasLive) broadcastMatchLeave(leavingId);
 
     liveMatches.delete(leavingId);
     matchAnnouncers.delete(leavingId);
@@ -1722,14 +1967,23 @@ export function createKothShard(options = {}) {
     const browsing = appState === KOTH_APP_STATE.PRIVATE_SANDBOX && phase !== SHARD_PHASE.LIVE;
     const live = liveMatches.get(matchId);
     const hosting = phase === SHARD_PHASE.LIVE && role === 'player';
+    const playing = phase === SHARD_PHASE.LIVE && role === 'player' && countActive(roster) >= 2;
+    const stalled = playing && (session?.lockstepBlockedMs?.() ?? 0) >= LOCKSTEP_STALL_UI_MS;
+    pruneStaleMatchMembers();
+    const spectators = lobbySpectators();
     return {
+      parked: lobbyMatchHold,
       browsing,
       inLobby: !browsing,
+      waiting: !browsing && (!playing || stalled),
+      playing,
+      stalled,
       matchId,
       phase,
       role,
       appState,
       hosting,
+      lobbyName: live?.lobbyName || generateLobbyName(matchId),
       hostName: hosting ? getPlayerName() : (live?.hostName ?? ''),
       activeCount: hosting || phase === SHARD_PHASE.LIVE
         ? countActive(roster)
@@ -1745,6 +1999,9 @@ export function createKothShard(options = {}) {
       joinLabel: countActive(roster) >= MAX_ACTIVE_PLAYERS
         ? 'Match Full'
         : localOfferEligible ? 'Claim Seat' : 'Waiting for Offer',
+      players: lobbyPlayers(),
+      spectators,
+      spectatorCount: spectators.length,
     };
   }
 
@@ -1979,6 +2236,41 @@ export function createKothShard(options = {}) {
     sendTickConfirm(session.confirmedTick + 1);
   }
 
+  function slotForKnownUser(userId) {
+    if (!userId) return null;
+    return slotForUser(roster, userId)
+      ?? roster.find((s) => s.userId && userIdsMatch(s.userId, userId))
+      ?? null;
+  }
+
+  function removePlayerFromQuorum(playerId) {
+    if (playerId == null || playerId < 0) return;
+    matchHumanPlayers = matchHumanPlayers.filter((id) => id !== playerId);
+    session?.removeHumanPlayer?.(playerId);
+    playerLastConfirm.delete(playerId);
+  }
+
+  /**
+   * Presence / gone said an active player left. Drop them from lockstep now so
+   * remaining clients do not wait on their confirms. The king authors SLOT_DEFEAT
+   * when the leaver's own message was missed (RTC already torn down).
+   */
+  function dropSeatedLeaver(userId) {
+    const slot = slotForKnownUser(userId);
+    if (phase !== SHARD_PHASE.LIVE || slot?.state !== 'active' || slot.playerId < 0) return false;
+    roster = releaseUser(roster, slot.userId, true);
+    removePlayerFromQuorum(slot.playerId);
+    if (isKing()) {
+      const tick = (session?.confirmedTick ?? 0) + 2;
+      sendAll({ type: MSG.SLOT_DEFEAT, matchId, playerId: slot.playerId, userId: slot.userId, tick });
+      applySlotDefeat(slot.playerId, tick);
+    }
+    emitShard();
+    if (isKing()) refreshSlotOffer();
+    checkShardEmpty();
+    return true;
+  }
+
   function forceDefeatPlayer(playerId, userId) {
     const tick = (session?.confirmedTick ?? 0) + 2;
     roster = releaseUser(roster, userId, true);
@@ -1987,17 +2279,31 @@ export function createKothShard(options = {}) {
     checkShardEmpty();
   }
 
+  function handleSlotDefeat(msg) {
+    if (msg.matchId !== matchId) return;
+    const slot = slotForKnownUser(msg.userId) ?? roster[msg.playerId];
+    roster = releaseUser(roster, slot?.userId ?? msg.userId, true);
+    applySlotDefeat(msg.playerId, msg.tick);
+    emitShard();
+    if (isKing()) refreshSlotOffer();
+    checkShardEmpty();
+  }
+
   function applySlotDefeat(playerId, tick) {
-    const eventId = `defeat:${matchId}:${playerId}:${tick}`;
-    const source = eventSourcePlayerId();
-    const frame = session?.submitAtTick(
-      tick,
-      { type: CMD.FORCE_ELIMINATE, playerId },
-      { playerId: source, commandId: eventId },
-    );
-    if (frame) {
-      frame.userId = userForPlayerId(frame.playerId);
-      sendAll({ type: MSG.COMMAND_FRAME, frame });
+    removePlayerFromQuorum(playerId);
+    if (!defeatedPlayers.has(playerId)) {
+      defeatedPlayers.add(playerId);
+      const eventId = `defeat:${matchId}:${playerId}:${tick}`;
+      const source = eventSourcePlayerId();
+      const frame = session?.submitAtTick(
+        tick,
+        { type: CMD.FORCE_ELIMINATE, playerId },
+        { playerId: source, commandId: eventId },
+      );
+      if (frame) {
+        frame.userId = userForPlayerId(frame.playerId);
+        sendAll({ type: MSG.COMMAND_FRAME, frame });
+      }
     }
     if (playerId === localPlayerId) {
       setRole('spectator');
@@ -2027,6 +2333,7 @@ export function createKothShard(options = {}) {
     matchId = generateMatchId();
     matchStartSlots = [0];
     matchHumanPlayers = [0];
+    defeatedPlayers.clear();
     roster = createEmptyRoster();
     roster[0] = { userId: localUserId, state: 'active', playerId: 0 };
     localPlayerId = 0;
@@ -2276,6 +2583,7 @@ export function createKothShard(options = {}) {
     seed = hashSeed(matchId);
     matchStartSlots = [0];
     matchHumanPlayers = [0];
+    defeatedPlayers.clear();
     liveStartKey = matchStartKey(matchId, roster, seed);
     notePlayerConfirm(0);
     session?.setLocalPlayerId?.(0);
@@ -2316,6 +2624,7 @@ export function createKothShard(options = {}) {
     seed = hashSeed(matchId);
     matchStartSlots = [0];
     matchHumanPlayers = [0];
+    defeatedPlayers.clear();
     liveStartKey = matchStartKey(matchId, roster, seed);
     catchUpReady = true;
     notePlayerConfirm(0);
@@ -2363,7 +2672,8 @@ export function createKothShard(options = {}) {
       if (msg.armyPerSide != null) armyPerSide = msg.armyPerSide | 0;
       liveStartKey = nextKey;
       matchStartSlots = msg.activeSlots ?? activePlayerIds(roster);
-      matchHumanPlayers = msg.humanPlayers ?? [...matchStartSlots];
+      matchHumanPlayers = (msg.humanPlayers ?? [...matchStartSlots])
+        .filter((id) => nextRoster[id]?.state === 'active');
       phase = SHARD_PHASE.LIVE;
       role = 'spectator';
       appState = KOTH_APP_STATE.SPECTATOR;
@@ -2388,7 +2698,8 @@ export function createKothShard(options = {}) {
     if (phase === SHARD_PHASE.LIVE && liveStartKey === nextKey) {
       roster = nextRoster;
       matchStartSlots = msg.activeSlots ?? activePlayerIds(roster);
-      matchHumanPlayers = msg.humanPlayers ?? [...matchStartSlots];
+      matchHumanPlayers = (msg.humanPlayers ?? [...matchStartSlots])
+        .filter((id) => roster[id]?.state === 'active' && !defeatedPlayers.has(id));
       session?.setHumanPlayers?.(matchHumanPlayers);
       applyLocalRosterSlot();
       emitShard();
@@ -2406,6 +2717,7 @@ export function createKothShard(options = {}) {
     liveStartKey = nextKey;
     matchStartSlots = msg.activeSlots ?? activePlayerIds(roster);
     matchHumanPlayers = msg.humanPlayers ?? [...matchStartSlots];
+    defeatedPlayers.clear();
     applyLocalRosterSlot();
     appState = role === 'player' ? KOTH_APP_STATE.LIVE_PLAYER : KOTH_APP_STATE.SPECTATOR;
     setPhase(SHARD_PHASE.LIVE);
@@ -2437,6 +2749,7 @@ export function createKothShard(options = {}) {
     seed = hashSeed(matchId);
     matchStartSlots = [0, 1];
     matchHumanPlayers = [0, 1];
+    defeatedPlayers.clear();
     liveStartKey = matchStartKey(matchId, roster, seed);
     localPlayerId = 0;
     role = 'player';
@@ -2697,6 +3010,7 @@ export function createKothShard(options = {}) {
       });
     }
     roster = reserveSlot(roster, msg.playerId, msg.userId);
+    defeatedPlayers.delete(msg.playerId);
     commitJoinAtTick(msg);
     joinIntents.delete(msg.userId);
     if (userIdsMatch(msg.userId, localUserId)) {
@@ -2880,10 +3194,11 @@ export function createKothShard(options = {}) {
       localPlayerId = -1;
       session.pauseLockstep = false;
       matchStartSlots = msg.matchConfig.activeSlots ?? matchStartSlots;
-      matchHumanPlayers = msg.matchConfig.humanPlayers ?? matchHumanPlayers;
+      if (msg.roster && countActive(msg.roster) > 0) roster = cloneSlots(msg.roster);
+      matchHumanPlayers = (msg.matchConfig.humanPlayers ?? matchHumanPlayers)
+        .filter((id) => roster[id]?.state === 'active' && !defeatedPlayers.has(id));
       if (msg.matchConfig.armyPerSide != null) armyPerSide = msg.matchConfig.armyPerSide | 0;
       session.setHumanPlayers?.(matchHumanPlayers);
-      if (msg.roster && countActive(msg.roster) > 0) roster = cloneSlots(msg.roster);
       session.setLocalPlayerId?.(-1);
       setRole('spectator');
       saveMatch({ matchId, userId: localUserId, slot: null });
@@ -3254,11 +3569,7 @@ export function createKothShard(options = {}) {
         break;
 
       case MSG.SLOT_DEFEAT:
-        if (msg.matchId !== matchId) return;
-        roster = releaseUser(roster, msg.userId, true);
-        applySlotDefeat(msg.playerId, msg.tick);
-        emitShard();
-        if (isKing()) refreshSlotOffer();
+        handleSlotDefeat(msg);
         break;
 
       case MSG.SHARD_GONE:
@@ -3523,31 +3834,47 @@ export function createKothShard(options = {}) {
       }
     }
     if (data.from) {
+      if (typeof data.name === 'string') notePeerName(data.from, data.name);
       if (data.skins && typeof data.skins === 'object' && !Array.isArray(data.skins)) {
         rememberUserSkins(data.from, data.skins);
       } else if (Array.isArray(data.dlc)) {
         rememberUserDlc(data.from, data.dlc);
       }
-      if (data.role) peerPresenceRole.set(data.from, data.role);
-      else if (data.appState === KOTH_APP_STATE.SPECTATOR) peerPresenceRole.set(data.from, 'spectator');
-      if (data.sponsorId != null || data.observerDepth != null) {
-        applySponsorAssignment(data.from, data.sponsorId ?? null, data.observerDepth ?? 0);
-      }
-      if (data.role === 'spectator' || data.appState === KOTH_APP_STATE.SPECTATOR) {
-        upsertNode(observerTree, data.from, {
-          role: 'observer',
-          joinedAt: observerTree.nodes.get(data.from)?.joinedAt ?? Date.now(),
-        });
-        if (isKing() && phase === SHARD_PHASE.LIVE) {
-          if (!observerTree.nodes.get(data.from)?.sponsorId) kingAssignObserver(data.from);
-          if (countActive(roster) < MAX_ACTIVE_PLAYERS) refreshSlotOffer();
+      // Broadcast is a global firehose. Only peers live on THIS match count as
+      // in-lobby; browsers and other shards stay in the discovery registry.
+      if (isMatchLeavePresence(data, matchId) || data.gone) {
+        dropSeatedLeaver(data.from);
+        forgetMatchMember(data.from);
+      } else if (isLiveMatchMember(data, matchId)) {
+        touchMatchMember(data.from);
+        if (data.role) peerPresenceRole.set(data.from, data.role);
+        else if (data.appState === KOTH_APP_STATE.SPECTATOR) peerPresenceRole.set(data.from, 'spectator');
+        if (isSpectatorMember(data, matchId)) {
+          matchLobbySpectators.add(data.from);
+          if (data.sponsorId != null || (data.observerDepth | 0) > 0) {
+            applySponsorAssignment(data.from, data.sponsorId ?? null, data.observerDepth ?? 0);
+          }
+          upsertNode(observerTree, data.from, {
+            role: 'observer',
+            joinedAt: observerTree.nodes.get(data.from)?.joinedAt ?? Date.now(),
+          });
+          if (isKing() && phase === SHARD_PHASE.LIVE) {
+            if (!observerTree.nodes.get(data.from)?.sponsorId) kingAssignObserver(data.from);
+            if (countActive(roster) < MAX_ACTIVE_PLAYERS) refreshSlotOffer();
+          }
+        } else {
+          matchLobbySpectators.delete(data.from);
         }
-      }
-      if (data.offerEpoch && Array.isArray(data.offerEligible)) {
-        applyLocalOfferState(data.offerEpoch, data.offerEligible);
+        if (data.offerEpoch && Array.isArray(data.offerEligible)) {
+          applyLocalOfferState(data.offerEpoch, data.offerEligible);
+        }
+      } else {
+        dropSeatedLeaver(data.from);
+        forgetMatchMember(data.from);
       }
     }
     recordLiveMatch(data);
+    if (data.left || data.gone) return;
     if (appState === KOTH_APP_STATE.PRIVATE_SANDBOX) return;
     if (data.phase === SHARD_PHASE.LIVE && phase !== SHARD_PHASE.LIVE) {
       const best = bestLiveMatch();
@@ -3629,6 +3956,12 @@ export function createKothShard(options = {}) {
       case MSG.COMMAND_FRAME:
         if (validateCommandFrame(msg.frame)) session?.bufferRemoteFrame(msg.frame);
         break;
+      case MSG.SLOT_DEFEAT:
+        handleSlotDefeat(msg);
+        break;
+      case MSG.SHARD_GONE:
+        if (msg.matchId === matchId && phase === SHARD_PHASE.LIVE) windDownShard();
+        break;
       default:
         break;
     }
@@ -3657,6 +3990,7 @@ export function createKothShard(options = {}) {
       }
       if (phase === SHARD_PHASE.LIVE && lobbyName === shardLobbyName(matchId)) {
         lobbyPeers.add(data.from);
+        touchMatchMember(data.from);
         if (role === 'spectator') return;
         if (role === 'player' && data.type === 'player_join') {
           p2p?.announcePresence?.(lobbyName);
@@ -3808,7 +4142,17 @@ export function createKothShard(options = {}) {
     },
 
     setLobbyMatchHold(on) {
-      lobbyMatchHold = !!on;
+      const next = !!on;
+      if (next === lobbyMatchHold) return;
+      if (next) {
+        if (phase === SHARD_PHASE.LIVE) leaveLiveLobby();
+        lobbyMatchHold = true;
+        parkKothDiscovery();
+        return;
+      }
+      lobbyMatchHold = false;
+      joinMatchmakingLobby();
+      broadcastPresence();
     },
 
     getP2p: () => p2p,

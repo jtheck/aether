@@ -129,6 +129,17 @@ export function chaseToward(x, z, tx, tz, dtSec, rate = FOLLOW_ZIP_RATE) {
   return { x: x + (tx - x) * u, z: z + (tz - z) * u };
 }
 
+/** Soft story nudge — slower than Space-follow so the player can still steer. */
+export const STORY_EASE_RATE = 5;
+export const STORY_EASE_MS = 900;
+
+function lerpAngle(a, b, u) {
+  let d = (Number(b) || 0) - (Number(a) || 0);
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return (Number(a) || 0) + d * u;
+}
+
 const DEFAULT_ALPHA = -Math.PI / 2.1;
 const DEFAULT_BETA = Math.PI / 3.2;
 const LOWER_RADIUS = 50;
@@ -169,6 +180,8 @@ export function createCameraController(camera, canvas, opts = {}) {
   let followActive = false;
   let followX = 0;
   let followZ = 0;
+  /** @type {{ x?: number, z?: number, radius?: number, alpha?: number, unclamped?: boolean, left: number, rate: number } | null} */
+  let ease = null;
 
   let rmbPanActive = false;
   let rmbDidPan = false;
@@ -295,6 +308,7 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   /** Instant cinematic pose. `unclamped` keeps authored story radii. */
   function setPose(pose = {}, opts = {}) {
+    ease = null;
     followActive = false;
     velocity.alpha = 0;
     velocity.radius = 0;
@@ -313,6 +327,22 @@ export function createCameraController(camera, canvas, opts = {}) {
         camera.radius = Math.max(minR, Math.min(maxR, pose.radius));
       }
     }
+    markNudged();
+  }
+
+  /** Soft pull toward a story beat. Player pan/zoom still applies on top. */
+  function easePose(pose = {}, opts = {}) {
+    followActive = false;
+    const ms = Number.isFinite(opts.ms) ? Math.max(0, opts.ms) : STORY_EASE_MS;
+    ease = {
+      x: pose.x,
+      z: pose.z,
+      radius: pose.radius,
+      alpha: pose.alpha,
+      unclamped: !!opts.unclamped,
+      left: ms,
+      rate: Number.isFinite(opts.rate) ? opts.rate : STORY_EASE_RATE,
+    };
     markNudged();
   }
 
@@ -618,7 +648,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function tick(dtMs) {
-    if (!nudged && !followActive && !anyKeyHeld()) return;
+    if (!nudged && !followActive && !anyKeyHeld() && !ease) return;
 
     applyHeldKeys();
 
@@ -685,12 +715,33 @@ export function createCameraController(camera, canvas, opts = {}) {
     } else {
       camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
     }
-    if (camera.radius <= minR) {
-      camera.radius = minR;
-      if (velocity.radius < 0) velocity.radius = 0;
-    } else if (camera.radius >= maxR) {
-      camera.radius = maxR;
-      if (velocity.radius > 0) velocity.radius = 0;
+    if (ease) {
+      const u = 1 - Math.exp(-ease.rate * dt);
+      const now = getTarget();
+      if (Number.isFinite(ease.x) && Number.isFinite(ease.z)) {
+        clampTargetPan(now.x + (ease.x - now.x) * u, now.z + (ease.z - now.z) * u);
+      }
+      if (Number.isFinite(ease.alpha)) camera.alpha = lerpAngle(camera.alpha, ease.alpha, u);
+      if (Number.isFinite(ease.radius)) {
+        const dest = ease.unclamped
+          ? Math.max(8, ease.radius)
+          : Math.max(minR, Math.min(maxR, ease.radius));
+        camera.radius += (dest - camera.radius) * u;
+      }
+      ease.left -= Number(dtMs) || 16;
+      if (ease.left <= 0) ease = null;
+    }
+
+    if (!ease?.unclamped) {
+      if (camera.radius <= minR) {
+        camera.radius = minR;
+        if (velocity.radius < 0) velocity.radius = 0;
+      } else if (camera.radius >= maxR) {
+        camera.radius = maxR;
+        if (velocity.radius > 0) velocity.radius = 0;
+      }
+    } else if (camera.radius < 8) {
+      camera.radius = 8;
     }
 
     const nAfter = Math.max(0, Math.min(1, (camera.radius - minR) / span));
@@ -705,12 +756,13 @@ export function createCameraController(camera, canvas, opts = {}) {
     camera.inertialBetaOffset = 0;
     camera.inertialRadiusOffset = 0;
 
-    if (!followActive && !rmbPanActive && !anyKeyHeld() && velocitiesIdle() && !zoomTend && lastZoomSign === 0) {
+    if (!followActive && !rmbPanActive && !anyKeyHeld() && velocitiesIdle() && !zoomTend && lastZoomSign === 0 && !ease) {
       nudged = false;
     }
   }
 
   function reset() {
+    ease = null;
     followActive = false;
     velocity.alpha = 0;
     velocity.radius = 0;
@@ -752,6 +804,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     followXZ,
     lookAtXZ,
     setPose,
+    easePose,
     getPose,
     stopFollow,
     isFollowing,

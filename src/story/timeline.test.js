@@ -7,6 +7,7 @@ import {
   lineDuration,
   nextClipTime,
   normalizeStory,
+  clipBeatTime,
   prevClipTime,
   sample,
 } from './timeline.js';
@@ -52,6 +53,14 @@ describe('sample', () => {
     assert.equal(midMove.line.speaker, 'Lady');
     assert.equal(midMove.lines.length, 1);
     assert.equal(midMove.lines[0].speaker, 'Lady');
+  });
+
+  it('names the current clip-start beat', () => {
+    assert.equal(clipBeatTime(reel(), 0), 0);
+    assert.equal(clipBeatTime(reel(), 0.2), 0.2);
+    assert.equal(clipBeatTime(reel(), 3.9), 0.2);
+    assert.equal(clipBeatTime(reel(), 4), 4);
+    assert.equal(clipBeatTime(reel(), 6), 5);
   });
 
   it('hides a line after its authored duration', () => {

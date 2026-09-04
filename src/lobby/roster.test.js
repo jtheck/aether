@@ -22,11 +22,19 @@ describe('lobby roster', () => {
 
   it('updates an already seated player', () => {
     let { seats } = claimSeat(createRoster('teams'), { userId: 'u1', name: 'A' });
-    const next = claimSeat(seats, { userId: 'u1', name: 'Renamed', color: '#f00' });
+    const next = claimSeat(seats, {
+      userId: 'u1',
+      name: 'Renamed',
+      color: '#f00',
+      dlc: ['first_responder'],
+      skins: { 4: 'first_responder' },
+    });
     assert.equal(next.ok, true);
     assert.equal(next.index, 0);
     assert.equal(countHumans(next.seats), 1);
     assert.equal(next.seats[0].name, 'Renamed');
+    assert.deepEqual(next.seats[0].dlc, ['first_responder']);
+    assert.deepEqual(next.seats[0].skins, { 4: 'first_responder' });
   });
 
   it('gates start on min humans and ready', () => {

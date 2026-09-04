@@ -367,7 +367,6 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId }) {
 
   for (const el of drawersRoot.querySelectorAll('button, input, select')) {
     el.addEventListener('keydown', (e) => e.stopPropagation());
-    el.addEventListener('keyup', (e) => e.stopPropagation());
   }
   overlay?.addEventListener('keydown', (e) => e.stopPropagation());
 

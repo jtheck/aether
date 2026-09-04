@@ -25,6 +25,29 @@
       "normalImage": null,
       "ormImage": null,
       "emissiveImage": null
+    },
+    {
+      "name": "wood",
+      "baseColorFactor": [
+        0.06019771844148636,
+        0.02194969728589058,
+        0.012174591422080994,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
     }
   ],
   "images": [],
@@ -34,33 +57,68 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -2.9973676204681396,
-        -0.23736238479614258,
-        -3.100847005844116
+        -3.759312629699707,
+        -0.2086254507303238,
+        -3.8922786712646484
       ],
       "boundMax": [
-        3.193068265914917,
-        9.172666549682617,
-        3.6697847843170166
+        3.8165628910064697,
+        7.272006988525391,
+        3.566159725189209
       ],
       "positions": {
         "offset": 0,
-        "length": 555,
+        "length": 468,
         "type": "f32"
       },
       "normals": {
-        "offset": 2220,
-        "length": 555,
+        "offset": 1872,
+        "length": 468,
         "type": "f32"
       },
       "indices": {
-        "offset": 4440,
-        "length": 288,
+        "offset": 3744,
+        "length": 243,
         "type": "u32"
       },
       "uvs": {
-        "offset": 5592,
-        "length": 370,
+        "offset": 4716,
+        "length": 312,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "wood",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -1.1380301713943481,
+        -0.196316197514534,
+        -2.92574143409729
+      ],
+      "boundMax": [
+        1.2350881099700928,
+        4.636599063873291,
+        4.393642425537109
+      ],
+      "positions": {
+        "offset": 5964,
+        "length": 87,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 6312,
+        "length": 87,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 6660,
+        "length": 45,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 6840,
+        "length": 58,
         "type": "f32"
       }
     }

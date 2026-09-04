@@ -1,0 +1,184 @@
+{
+  "sourceUrl": "/assets/models/dlc/first_responder/priest-DLC1.glb",
+  "version": 3,
+  "sockets": [],
+  "materials": [
+    {
+      "name": "TeamColor",
+      "baseColorFactor": [
+        0.8000156879425049,
+        0,
+        0.0032691003289073706,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.6543563604354858,
+        0.6543563604354858,
+        0.6543563604354858,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Antler",
+      "baseColorFactor": [
+        0.40763038396835327,
+        0.105702243745327,
+        0.026033654808998108,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    }
+  ],
+  "images": [],
+  "parts": [
+    {
+      "materialName": "TeamColor",
+      "materialIndex": 0,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.6139575242996216,
+        -0.012187187559902668,
+        -0.5152333974838257
+      ],
+      "boundMax": [
+        0.652759313583374,
+        1.9065732955932617,
+        0.34977713227272034
+      ],
+      "positions": {
+        "offset": 0,
+        "length": 468,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 1872,
+        "length": 468,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 3744,
+        "length": 234,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 4680,
+        "length": 312,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.7112056612968445,
+        -0.012187187559902668,
+        -0.6872208118438721
+      ],
+      "boundMax": [
+        0.76706862449646,
+        2.011561632156372,
+        0.38438910245895386
+      ],
+      "positions": {
+        "offset": 5928,
+        "length": 2883,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 17460,
+        "length": 2883,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 28992,
+        "length": 1521,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 35076,
+        "length": 1922,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Antler",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.5259510278701782,
+        1.8530155420303345,
+        -0.33728501200675964
+      ],
+      "boundMax": [
+        0.5898225903511047,
+        2.3353207111358643,
+        -0.04682363197207451
+      ],
+      "positions": {
+        "offset": 42764,
+        "length": 504,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 44780,
+        "length": 504,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 46796,
+        "length": 252,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 47804,
+        "length": 336,
+        "type": "f32"
+      }
+    }
+  ]
+}

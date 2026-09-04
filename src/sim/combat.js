@@ -57,7 +57,8 @@ function canAutoAcquire(w, i) {
   if (w.carriedBy?.[i] >= 0) return false;
   const order = w.order[i];
   // ATTACK: periodic rebalance off dogpiled targets when alternatives exist.
-  if (order === w.ORDER.ATTACK) return true;
+  // CMD.ATTACK sets attackFocus so a clicked target is not stolen by nearest-foe.
+  if (order === w.ORDER.ATTACK) return !w.attackFocus?.[i];
   const hunts = unitIdleHunts(w.type[i]);
   if (order === w.ORDER.ATTACK_MOVE) return hunts || hasSquadMates(w, i);
   if (order === w.ORDER.IDLE) return hunts;
@@ -140,6 +141,7 @@ export function acquireTargets(w, field) {
 
       w.targetEntity[i] = best;
       if (w.targetBuilding) w.targetBuilding[i] = -1;
+      if (w.attackFocus) w.attackFocus[i] = 0;
       w.order[i] = w.ORDER.ATTACK;
       claimEngagement(w, i, best);
       const stand = attackStandPoint(w, i, best);
@@ -171,6 +173,7 @@ export function acquireTargets(w, field) {
 
     w.targetEntity[i] = -1;
     w.targetBuilding[i] = bestBi;
+    if (w.attackFocus) w.attackFocus[i] = 0;
     w.order[i] = w.ORDER.ATTACK;
     clearEngagement(w, i);
     const stand = attackBuildingStandPointOnField(w, field, i, buildings[bestBi]);

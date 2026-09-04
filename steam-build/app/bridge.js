@@ -166,5 +166,18 @@
         return !!(data && data.ok);
       });
     },
+
+    enterFullscreen: function () {
+      try {
+        var win = typeof nw !== 'undefined' && nw.Window ? nw.Window.get() : null;
+        if (win) {
+          if (!(win.isFullscreen || win.fullscreen)) win.enterFullscreen();
+          return Promise.resolve(true);
+        }
+      } catch (_err) { /* isolated page — fall through to the HTTP bridge */ }
+      return postJson('/window/enter-fullscreen', {}).then(function (data) {
+        return !!(data && data.ok);
+      });
+    },
   };
 })();

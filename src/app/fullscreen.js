@@ -16,6 +16,14 @@ function exitDocumentFullscreen(doc) {
   return exit ? exit.call(doc) : null;
 }
 
+function requestDocumentFullscreen(doc) {
+  const el = doc?.documentElement;
+  const enter = el?.requestFullscreen
+    || el?.webkitRequestFullscreen
+    || el?.mozRequestFullScreen;
+  return enter ? enter.call(el) : null;
+}
+
 /** F11 / kiosk: the viewport fills the screen (not a maximized window with a taskbar). */
 export function isFilledWindow(root = globalThis) {
   const win = root.window ?? root;
@@ -29,6 +37,10 @@ export function isPageFullscreen(root = globalThis) {
   if (documentFullscreenElement(root.document)) return true;
   if (root.aetherDesktop?.isFullscreen?.()) return true;
   return isFilledWindow(root);
+}
+
+export function fullscreenButtonLabel(on) {
+  return on ? 'Exit [F11]' : 'Fullscreen [F11]';
 }
 
 /**
@@ -55,6 +67,36 @@ export async function tryExitFullscreen(root = globalThis) {
     }
   }
   return false;
+}
+
+/**
+ * Enter Fullscreen API or desktop (NW.js) window fullscreen.
+ * @returns {Promise<boolean>}
+ */
+export async function tryEnterFullscreen(root = globalThis) {
+  if (isPageFullscreen(root)) return true;
+  const enter = root.aetherDesktop?.enterFullscreen;
+  if (typeof enter === 'function') {
+    try {
+      return !!(await enter());
+    } catch {
+      return false;
+    }
+  }
+  const asked = requestDocumentFullscreen(root.document);
+  if (!asked) return false;
+  try {
+    await asked;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Side-menu button: leave if full, otherwise enter. */
+export async function toggleFullscreen(root = globalThis) {
+  if (isPageFullscreen(root)) return tryExitFullscreen(root);
+  return tryEnterFullscreen(root);
 }
 
 export function subscribeFullscreen(onChange, root = globalThis) {

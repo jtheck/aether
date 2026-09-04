@@ -46,6 +46,7 @@ export function checksum(w, field = null) {
     mix(w.order[i]);
     mix(w.targetEntity[i]);
     if (w.targetBuilding) mix(w.targetBuilding[i]);
+    if (w.attackFocus) mix(w.attackFocus[i]);
     mix(w.engagementTarget[i]);
     mix(w.engagementSlot[i]);
     mix(w.targetLoad[i]);

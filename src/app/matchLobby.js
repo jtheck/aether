@@ -21,7 +21,9 @@ import {
   setSeatReady,
   startBlockReason,
 } from '../lobby/roster.js';
-import { getPlayerColor, getPlayerName } from './settings.js';
+import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
+import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
+import { aetherSteam } from './steam.js';
 
 /**
  * @param {object} opts
@@ -82,7 +84,13 @@ export function createMatchLobby({
   }
 
   function profile() {
-    return { userId: localId(), name: getPlayerName(), color: getPlayerColor() };
+    return {
+      userId: localId(),
+      name: getPlayerName(),
+      color: getPlayerColor(),
+      dlc: localOwnedPacks(aetherSteam.ownedPacks()),
+      skins: selectedSkins(localOwnedPacks(aetherSteam.ownedPacks()), getUnitSkins()),
+    };
   }
 
   function channel() {
@@ -348,6 +356,8 @@ export function createMatchLobby({
       userId,
       name: msg.name,
       color: msg.color,
+      dlc: msg.dlc,
+      skins: msg.skins,
       ready: Boolean(extra.ready ?? msg.ready),
     });
     seats = claimed.seats;
@@ -426,7 +436,7 @@ export function createMatchLobby({
     seats = claimSeat(seats, { ...me, ready: false }).seats;
     gameLobby?.hold?.(nextMode);
     joinMatchChannel();
-    sendType({ type: MSG.JOIN, name: me.name, color: me.color, ready: false });
+    sendType({ type: MSG.JOIN, name: me.name, color: me.color, dlc: me.dlc, skins: me.skins, ready: false });
     if (from) dial(from);
     emit();
     return true;
@@ -540,7 +550,14 @@ export function createMatchLobby({
     if (hosting) sendData(snapshot(), peerId);
     else {
       const me = profile();
-      sendData({ type: MSG.JOIN, name: me.name, color: me.color, ready: Boolean(seatOf(seats, me.userId)?.ready) }, peerId);
+      sendData({
+        type: MSG.JOIN,
+        name: me.name,
+        color: me.color,
+        dlc: me.dlc,
+        skins: me.skins,
+        ready: Boolean(seatOf(seats, me.userId)?.ready),
+      }, peerId);
     }
   });
 

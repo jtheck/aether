@@ -1,9 +1,17 @@
 import { describe, it } from 'node:test';
-import { SKIRMISH_MAP_W, STRESS_CAMERA_HALF_F, worldHalfFFromMap } from '../sim/field.js';
+import {
+  SKIRMISH_MAP_W,
+  STRESS_CAMERA_CHUNKS,
+  STRESS_CAMERA_HALF_F,
+  STRESS_MAP_W,
+  tilesForOddChunks,
+  worldHalfFFromMap,
+} from '../sim/field.js';
 import assert from 'node:assert/strict';
 import {
   FOLLOW_ZIP_RATE,
   RMB_PAN_DRAG_THRESHOLD_PX,
+  ZOOM_TEND_HOME,
   ZOOM_TEND_NEAR,
   cameraPlayRadius,
   chaseToward,
@@ -75,10 +83,12 @@ describe('resolveCameraHalfF', () => {
     assert.equal(resolveCameraHalfF(200, 800), 200);
   });
 
-  it('gives stress a play box a bit past the 9-chunk clamp', () => {
+  it('gives stress a play box that covers the pie ring', () => {
     const loading = worldHalfFFromMap(SKIRMISH_MAP_W);
+    const table = worldHalfFFromMap(STRESS_MAP_W);
+    assert.equal(STRESS_CAMERA_HALF_F, worldHalfFFromMap(tilesForOddChunks(STRESS_CAMERA_CHUNKS)));
     assert.ok(STRESS_CAMERA_HALF_F > loading);
-    assert.ok(STRESS_CAMERA_HALF_F < loading * 1.35);
+    assert.ok(STRESS_CAMERA_HALF_F < table);
   });
 });
 
@@ -142,6 +152,32 @@ describe('camera keys', () => {
     ctrl.handleKeyUp(keyEvent('w'));
     assert.equal(cam.alpha, afterRot);
     assert.ok(cam.target.x !== startX || cam.target.z !== startZ);
+  });
+
+  it('pans from a cold idle without a prior rotate or zoom', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
+    const startX = cam.target.x;
+    const startZ = cam.target.z;
+    ctrl.handleKeyDown(keyEvent('e'));
+    ctrl.tick(16);
+    ctrl.handleKeyUp(keyEvent('e'));
+    assert.ok(cam.target.x !== startX || cam.target.z !== startZ);
+  });
+
+  it('wakes pan after the camera has coasted idle', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
+    ctrl.handleKeyDown(keyEvent('e'));
+    ctrl.tick(16);
+    ctrl.handleKeyUp(keyEvent('e'));
+    for (let i = 0; i < 180; i++) ctrl.tick(16);
+    const restX = cam.target.x;
+    const restZ = cam.target.z;
+    ctrl.handleKeyDown(keyEvent('w'));
+    ctrl.tick(16);
+    ctrl.handleKeyUp(keyEvent('w'));
+    assert.ok(cam.target.x !== restX || cam.target.z !== restZ);
   });
 });
 
@@ -222,23 +258,27 @@ describe('RMB click vs pan', () => {
 
 describe('zoomTendCatch', () => {
   const dest = 170;
-  const home = 60;
+  const home = 12;
   const near = 10;
 
-  it('finishes a stop-short that already sits in the home band', () => {
-    assert.equal(zoomTendCatch(dest + 40, dest, dest + 22, home, near), true);
+  it('does not pull a stop-short toward the dest', () => {
+    assert.equal(zoomTendCatch(dest + 40, dest, dest + 22, home, near), false);
+  });
+
+  it('holds a landing that is already on the dest', () => {
+    assert.equal(zoomTendCatch(dest + 8, dest, dest + 4, home, near), true);
   });
 
   it('lets a fly-through keep going', () => {
-    assert.equal(zoomTendCatch(dest + 40, dest, dest - 80, home, near), false);
+    assert.equal(zoomTendCatch(dest + 8, dest, dest - 80, home, near), false);
   });
 
   it('ignores a toss that would stop far short of the trough', () => {
     assert.equal(zoomTendCatch(dest + 200, dest, dest + 160, home, near), false);
   });
 
-  it('does not catch when already on the trough', () => {
-    assert.equal(zoomTendCatch(dest, dest, dest, home, near), false);
+  it('holds when already on the trough if leftover would only drift', () => {
+    assert.equal(zoomTendCatch(dest, dest, dest + 6, home, near), true);
   });
 });
 
@@ -252,14 +292,14 @@ describe('zoom tend to play gaze', () => {
     for (let i = 0; i < steps; i++) ctrl.tick(16);
   }
 
-  it('homes a near-miss toss toward the look-down trough', () => {
+  it('does not pull a stop-short toward the look-down trough', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
     const dest = playDest(cam);
     cam.radius = dest + 45;
     ctrl.nudgeZoom(-1.2);
     coast(ctrl, 1200);
-    assert.ok(Math.abs(cam.radius - dest) < 1, `radius ${cam.radius} should settle at ${dest}`);
+    assert.ok(cam.radius > dest + 5, `radius ${cam.radius} should stay short of ${dest}`);
   });
 
   it('does not pull back a toss that flies through the trough', () => {
@@ -296,13 +336,24 @@ describe('zoom tend to play gaze', () => {
     assert.ok(Math.abs(cam.radius - dest) > ZOOM_TEND_NEAR * (cam.upperRadiusLimit - cam.lowerRadiusLimit));
   });
 
-  it('homes a near-miss from the close-in side', () => {
+  it('does not pull a short zoom-out onto the trough', () => {
     const cam = fakeCamera();
     const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
     const dest = playDest(cam);
     cam.radius = dest - 45;
     ctrl.nudgeZoom(1.2);
     coast(ctrl, 1200);
-    assert.ok(Math.abs(cam.radius - dest) < 1, `radius ${cam.radius} should settle at ${dest}`);
+    assert.ok(cam.radius < dest - 5, `radius ${cam.radius} should stay short of ${dest}`);
+  });
+
+  it('holds a toss that actually lands on the trough', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, {}, { worldHalfF: 200 });
+    const dest = playDest(cam);
+    const span = cam.upperRadiusLimit - cam.lowerRadiusLimit;
+    cam.radius = dest + ZOOM_TEND_HOME * span * 0.5;
+    ctrl.nudgeZoom(-0.25);
+    coast(ctrl, 800);
+    assert.ok(Math.abs(cam.radius - dest) < 1, `radius ${cam.radius} should stay on ${dest}`);
   });
 });

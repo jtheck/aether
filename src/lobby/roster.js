@@ -8,10 +8,26 @@ import { getMode } from './modes.js';
  *   userId: string | null,
  *   name: string,
  *   color: string,
+ *   dlc?: string[],
+ *   skins?: Record<number, string>,
  *   ready: boolean,
  *   kind: 'empty' | 'human',
  * }} LobbySeat
  */
+
+function copyDlc(list) {
+  return Array.isArray(list) ? list.filter((id) => typeof id === 'string' && id) : [];
+}
+
+function copySkins(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  /** @type {Record<number | string, string>} */
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === 'string') out[key] = value;
+  }
+  return out;
+}
 
 /** @param {string} modeId @returns {LobbySeat[]} */
 export function createRoster(modeId) {
@@ -24,6 +40,8 @@ export function createRoster(modeId) {
     userId: null,
     name: '',
     color: '',
+    dlc: [],
+    skins: {},
     ready: false,
     kind: 'empty',
   }));
@@ -31,7 +49,7 @@ export function createRoster(modeId) {
 
 /** @param {LobbySeat[]} seats */
 export function cloneRoster(seats) {
-  return seats.map((s) => ({ ...s }));
+  return seats.map((s) => ({ ...s, dlc: copyDlc(s.dlc), skins: copySkins(s.skins) }));
 }
 
 /** @param {LobbySeat[]} seats */
@@ -49,7 +67,7 @@ export function seatOf(seats, userId) {
 
 /**
  * @param {LobbySeat[]} seats
- * @param {{ userId: string, name?: string, color?: string, ready?: boolean }} player
+ * @param {{ userId: string, name?: string, color?: string, dlc?: string[], skins?: Record<number, string>, ready?: boolean }} player
  */
 export function claimSeat(seats, player) {
   const next = cloneRoster(seats);
@@ -60,6 +78,8 @@ export function claimSeat(seats, player) {
   if (existing) {
     if (player.name != null) existing.name = player.name;
     if (player.color != null) existing.color = player.color;
+    if (player.dlc != null) existing.dlc = copyDlc(player.dlc);
+    if (player.skins != null) existing.skins = copySkins(player.skins);
     if (player.ready != null) existing.ready = player.ready;
     return { seats: next, index: existing.index, ok: true };
   }
@@ -68,6 +88,8 @@ export function claimSeat(seats, player) {
   empty.userId = player.userId;
   empty.name = player.name ?? '';
   empty.color = player.color ?? '';
+  empty.dlc = copyDlc(player.dlc);
+  empty.skins = copySkins(player.skins);
   empty.ready = Boolean(player.ready);
   empty.kind = 'human';
   return { seats: next, index: empty.index, ok: true };
@@ -81,6 +103,8 @@ export function releaseSeat(seats, userId) {
   s.userId = null;
   s.name = '';
   s.color = '';
+  s.dlc = [];
+  s.skins = {};
   s.ready = false;
   s.kind = 'empty';
   return next;

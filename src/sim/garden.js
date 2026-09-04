@@ -2,7 +2,7 @@
 // v3 files still decode (no scenery / placements).
 
 import { applyTableSilhouette, createFullCellMask, createFullCellRadius, normalizeTableShape } from './tableShape.js';
-import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY } from './field.js';
+import { applySeededHeight, buildField, composeHeightMap, createField, generateHeightMap, refreshTerrainDerived, TILE_SIZE_F, tileCenterX, tileCenterY, worldToTile } from './field.js';
 import { applyAuthoredScenery, SCENERY } from './scenery.js';
 import { spawn } from './world.js';
 import { createBuilding, snapBuildingWorld, applyWorldStructureOccupancy } from './buildings.js';
@@ -74,26 +74,67 @@ function hasAuthoredScenery(field) {
   return false;
 }
 
+function quantizeWorld(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
+function unitWorldCoords(x, z) {
+  if (!Number.isFinite(x) || !Number.isFinite(z)) return null;
+  return { x: quantizeWorld(x), z: quantizeWorld(z) };
+}
+
+function tilesForWorld(x, z) {
+  return {
+    tx: worldToTile(fx.fromFloat(x)),
+    tz: worldToTile(fx.fromFloat(z)),
+  };
+}
+
 function normalizeUnits(list) {
   if (!Array.isArray(list)) return [];
   return list.map((u) => {
     if (Array.isArray(u)) {
-      return {
-        owner: u[0] | 0,
-        type: u[1] | 0,
-        tx: u[2] | 0,
-        tz: u[3] | 0,
-        name: u[4] ? String(u[4]) : '',
-      };
+      const owner = u[0] | 0;
+      const type = u[1] | 0;
+      let tx = u[2] | 0;
+      let tz = u[3] | 0;
+      let name = '';
+      let world = null;
+      if (u.length >= 7) {
+        name = u[4] ? String(u[4]) : '';
+        world = unitWorldCoords(u[5], u[6]);
+      } else if (u.length === 6 && typeof u[4] === 'number') {
+        world = unitWorldCoords(u[4], u[5]);
+      } else if (u[4]) {
+        name = String(u[4]);
+      }
+      return { owner, type, tx, tz, name, ...(world || {}) };
+    }
+    const world = unitWorldCoords(u.x, u.z);
+    let tx = u.tx | 0;
+    let tz = u.tz | 0;
+    if (world && (u.tx == null || u.tz == null)) {
+      const tiles = tilesForWorld(world.x, world.z);
+      tx = tiles.tx;
+      tz = tiles.tz;
     }
     return {
       owner: u.owner | 0,
       type: u.type | 0,
-      tx: u.tx | 0,
-      tz: u.tz | 0,
+      tx,
+      tz,
       name: u.name ? String(u.name) : '',
+      ...(world || {}),
     };
   });
+}
+
+function encodeUnitTuple(u) {
+  const hasWorld = Number.isFinite(u.x) && Number.isFinite(u.z);
+  if (u.name && hasWorld) return [u.owner, u.type, u.tx, u.tz, u.name, u.x, u.z];
+  if (hasWorld) return [u.owner, u.type, u.tx, u.tz, u.x, u.z];
+  if (u.name) return [u.owner, u.type, u.tx, u.tz, u.name];
+  return [u.owner, u.type, u.tx, u.tz];
 }
 
 function normalizeBuildings(list) {
@@ -177,21 +218,19 @@ export function encodeGarden(field, extras = {}) {
     cs: shape.cellSize,
     cm: encodeCellBits(shape.cellMask),
     rr: encodeRle(shape.cellRadius),
-    t: encodeRle(field.terrainTypes),
   };
-  if (field.regionLift?.length === field.width * field.height) {
-    out.rl = encodeQuantized01(field.regionLift);
+  if (extras.omitTerrain !== true) {
+    out.t = encodeRle(field.terrainTypes);
+    if (field.regionLift?.length === field.width * field.height) {
+      out.rl = encodeQuantized01(field.regionLift);
+    }
   }
   if (authored) {
     out.sc = encodeRle(field.sceneryType);
     out.ts = encodeRle(field.treeStock);
   }
   if (units.length) {
-    out.u = units.map((u) => (
-      u.name
-        ? [u.owner, u.type, u.tx, u.tz, u.name]
-        : [u.owner, u.type, u.tx, u.tz]
-    ));
+    out.u = units.map(encodeUnitTuple);
   }
   if (buildings.length) out.b = buildings.map((b) => [b.owner, b.type, b.x, b.z, b.yaw]);
   if (agoras.length) out.g = agoras.map((g) => [g.owner, g.x, g.z]);
@@ -234,7 +273,7 @@ export function decodeGarden(data) {
     cellRadius: data.rr
       ? decodeRle(data.rr, expected)
       : createFullCellRadius(width, height, cellSize, Number(data.cr) || 0),
-    terrainTypes: decodeRle(data.t, n),
+    terrainTypes: data.t != null && data.t !== '' ? decodeRle(data.t, n) : new Uint8Array(0),
     sceneryType: data.sc ? decodeRle(data.sc, n) : null,
     treeStock: data.ts ? decodeRle(data.ts, n) : null,
     units: normalizeUnits(data.u),
@@ -287,11 +326,12 @@ export function applyGardenPlacements(world, field, garden) {
   if (!world.buildings) world.buildings = [];
   if (!world.agoras) world.agoras = [];
   for (const u of garden.units ?? []) {
+    const hasWorld = Number.isFinite(u.x) && Number.isFinite(u.z);
     spawn(world, {
       owner: u.owner,
       type: u.type,
-      x: tileCenterX(u.tx),
-      y: tileCenterY(u.tz),
+      x: hasWorld ? fx.fromFloat(u.x) : tileCenterX(u.tx),
+      y: hasWorld ? fx.fromFloat(u.z) : tileCenterY(u.tz),
     });
   }
   for (const b of garden.buildings ?? []) {

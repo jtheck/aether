@@ -3,8 +3,17 @@
 
 /** @param {string} glbUrl e.g. /assets/models/tavern.glb */
 export function bakedMeshStem(glbUrl) {
-  const base = glbUrl.split('/').pop() || 'mesh.glb';
-  return base.replace(/\.glb$/i, '');
+  // /assets/models/priest.glb → priest
+  // /assets/models/dlc/first_responder/priest-DLC1.glb → dlc_first_responder_priest-DLC1
+  const clean = String(glbUrl || '').split('?')[0];
+  const parts = clean.split('/').filter(Boolean);
+  const file = (parts.pop() || 'mesh.glb').replace(/\.glb$/i, '');
+  const modelsAt = parts.lastIndexOf('models');
+  if (modelsAt >= 0) {
+    const extra = parts.slice(modelsAt + 1);
+    if (extra.length) return [...extra, file].join('_');
+  }
+  return file;
 }
 
 /** @param {string} glbUrl */

@@ -7,6 +7,7 @@ import {
   createAetherSteam,
   isKothAgoraDefeat,
 } from './steam.js';
+import { DLC_FIRST_RESPONDER, DLC_FIRST_RESPONDER_APP_ID } from './dlcCatalog.js';
 
 function fakeSteam(opts = {}) {
   const unlocked = [];
@@ -17,7 +18,11 @@ function fakeSteam(opts = {}) {
     presence,
     api: {
       isAvailable: () => opts.available !== false,
-      getInfo: () => ({ available: opts.available !== false, appId: 5043860 }),
+      getInfo: () => ({
+        available: opts.available !== false,
+        appId: 5043860,
+        dlc: opts.dlc ?? [],
+      }),
       unlockAchievement: (name) => {
         unlocked.push(name);
         return true;
@@ -39,6 +44,17 @@ describe('createAetherSteam', () => {
     assert.equal(steam.notifyKothLobbyCreated(), false);
     assert.equal(steam.notifyKothDefeat({ matchWinner: 1, localPlayerId: 0 }), false);
     assert.equal(steam.unlockAchievement(ACH_FIRST_LAUNCH), false);
+    assert.deepEqual(steam.ownedPacks(), []);
+    assert.equal(steam.ownsPack(DLC_FIRST_RESPONDER), false);
+  });
+
+  it('maps owned Steam DLC app ids onto catalog packs', () => {
+    const stub = fakeSteam({
+      dlc: [{ appId: DLC_FIRST_RESPONDER_APP_ID, owned: true }],
+    });
+    const steam = createAetherSteam({ steam: () => stub.api });
+    assert.deepEqual(steam.ownedPacks(), [DLC_FIRST_RESPONDER]);
+    assert.equal(steam.ownsPack(DLC_FIRST_RESPONDER), true);
   });
 
   it('unlocks first launch once, and retries if Steam is late', () => {

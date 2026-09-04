@@ -14,8 +14,14 @@
 // - Commands and tick confirms must be owned by the userId for their playerId.
 
 import { p2pDevModeFromLocation } from './net.js';
-import { getPlayerName } from './settings.js';
+import { getPlayerName, getUnitSkins } from './settings.js';
 import { aetherSteam } from './steam.js';
+import {
+  localOwnedPacks,
+  ownerSkinsFromRoster,
+  sanitizeSkins,
+  selectedSkins,
+} from './dlcCatalog.js';
 import {
   replayCatchUp,
   formatMatchTime,
@@ -251,6 +257,37 @@ export function createKothShard(options = {}) {
     bootResolve = r;
   });
 
+  /** userId → per-unit cosmetic pack ids (render-only, not hashed into sim). */
+  const userSkins = new Map();
+
+  function localDlc() {
+    return localOwnedPacks(aetherSteam.ownedPacks());
+  }
+
+  function localSkins() {
+    return selectedSkins(localDlc(), getUnitSkins());
+  }
+
+  function rememberUserSkins(userId, skins) {
+    if (!userId || !skins || typeof skins !== 'object' || Array.isArray(skins)) return;
+    userSkins.set(String(userId), sanitizeSkins(skins));
+  }
+
+  function rememberUserDlc(userId, dlc) {
+    if (!userId || !Array.isArray(dlc)) return;
+    rememberUserSkins(userId, selectedSkins(dlc, {}));
+  }
+
+  function ownerSkinsNow() {
+    if (localUserId) rememberUserSkins(localUserId, localSkins());
+    const fromRoster = ownerSkinsFromRoster(roster, userSkins);
+    if (localPlayerId >= 0 && fromRoster[localPlayerId] == null) {
+      const skins = localSkins();
+      if (Object.keys(skins).length) fromRoster[localPlayerId] = skins;
+    }
+    return fromRoster;
+  }
+
   function liveConfig(reset = false) {
     return {
       mode: 'koth',
@@ -268,6 +305,7 @@ export function createKothShard(options = {}) {
       armyPerSide,
       startKey: liveStartKey,
       tick: session?.confirmedTick ?? 0,
+      ownerSkins: ownerSkinsNow(),
       reset,
     };
   }
@@ -381,6 +419,8 @@ export function createKothShard(options = {}) {
         tick: session?.confirmedTick ?? 0,
         from: localUserId,
         name: getPlayerName(),
+        dlc: localDlc(),
+        skins: localSkins(),
         role,
         appState,
         v: KOTH_PROTOCOL_VERSION,
@@ -1520,6 +1560,8 @@ export function createKothShard(options = {}) {
         matchId,
         from: localUserId,
         phase,
+        dlc: localDlc(),
+        skins: localSkins(),
       });
     }
     if (appState === KOTH_APP_STATE.MATCHMAKING) {
@@ -2985,6 +3027,24 @@ export function createKothShard(options = {}) {
     }
     if (msg.from) peerUserIds.set(fromPeerId, msg.from);
     if (msg.userId && msg.userId !== localUserId) presencePeers.set(msg.userId, msg.userId);
+    if (msg.from && msg.skins && typeof msg.skins === 'object' && !Array.isArray(msg.skins)) {
+      rememberUserSkins(msg.from, msg.skins);
+    } else if (msg.from && Array.isArray(msg.dlc)) {
+      rememberUserDlc(msg.from, msg.dlc);
+    }
+    if (msg.ownerSkins && typeof msg.ownerSkins === 'object') {
+      for (const s of roster) {
+        if (s.state !== 'active' || !s.userId || userSkins.has(s.userId)) continue;
+        const skins = msg.ownerSkins[s.playerId] ?? msg.ownerSkins[String(s.playerId)];
+        if (skins) rememberUserSkins(s.userId, skins);
+      }
+    } else if (msg.ownerPacks && typeof msg.ownerPacks === 'object') {
+      for (const s of roster) {
+        if (s.state !== 'active' || !s.userId || userSkins.has(s.userId)) continue;
+        const pack = msg.ownerPacks[s.playerId] ?? msg.ownerPacks[String(s.playerId)];
+        if (typeof pack === 'string') rememberUserDlc(s.userId, [pack]);
+      }
+    }
 
     switch (msg.type) {
       case MSG.SHARD_HELLO:
@@ -3006,6 +3066,9 @@ export function createKothShard(options = {}) {
           matchStartSlots,
           matchHumanPlayers,
           startKey: liveStartKey,
+          dlc: localDlc(),
+          skins: localSkins(),
+          ownerSkins: ownerSkinsNow(),
         });
         if (phase === SHARD_PHASE.SANDBOX) maybeStartLive();
         else if (phase === SHARD_PHASE.LIVE && role === 'spectator' && !catchUpReady) {
@@ -3460,6 +3523,11 @@ export function createKothShard(options = {}) {
       }
     }
     if (data.from) {
+      if (data.skins && typeof data.skins === 'object' && !Array.isArray(data.skins)) {
+        rememberUserSkins(data.from, data.skins);
+      } else if (Array.isArray(data.dlc)) {
+        rememberUserDlc(data.from, data.dlc);
+      }
       if (data.role) peerPresenceRole.set(data.from, data.role);
       else if (data.appState === KOTH_APP_STATE.SPECTATOR) peerPresenceRole.set(data.from, 'spectator');
       if (data.sponsorId != null || data.observerDepth != null) {

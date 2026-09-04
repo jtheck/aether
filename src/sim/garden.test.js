@@ -1,5 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import {
   buildField,
   createField,
@@ -10,6 +13,7 @@ import {
   DEFAULT_MAP_H,
   STRESS_MAP_W,
   STRESS_MAP_H,
+  STRESS_CAMERA_HALF_F,
   TABLE_CHUNK_TILES,
   tilesForOddChunks,
   snapTilesToOddChunks,
@@ -36,7 +40,14 @@ import {
 import { encodeGarden, decodeGarden, fieldFromGarden, applyGardenPlacements } from './garden.js';
 import { populateScenery } from './scenery.js';
 import { buildTesterGarden, TESTER_STARTING_RESOURCES } from './testerGarden.js';
+import {
+  buildStressGarden,
+  STRESS_GARDEN_NAME,
+  STRESS_GARDEN_SEED,
+} from './stressGarden.js';
+import { STRESS_ARMY_COUNT, STRESS_MENU_PER_SIDE } from './worldSetup.js';
 import { UNIT_DEFS } from './unitTypes.js';
+import * as fx from './fixed.js';
 import { PLACEABLE_BUILDINGS } from './buildings.js';
 import { getResource, STARTING_RESOURCES } from './resources.js';
 
@@ -403,6 +414,36 @@ describe('garden codec', () => {
     assert.equal(encodeGarden(field).story, undefined);
   });
 
+  it('roundtrips world-space unit coords and omits terrain when asked', () => {
+    const field = buildField(3, { width: 32, height: 32 });
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(32, 32, 16),
+      cellRadius: createFullCellRadius(32, 32, 16, 0),
+    });
+    const json = encodeGarden(field, {
+      omitTerrain: true,
+      cameraHalfF: 40,
+      units: [{ owner: 0, type: 1, tx: 10, tz: 10, x: 12.5, z: -8.25 }],
+    });
+    assert.equal(json.t, undefined);
+    assert.equal(json.rl, undefined);
+    assert.deepEqual(json.u[0], [0, 1, 10, 10, 12.5, -8.25]);
+    const g = decodeGarden(json);
+    assert.equal(g.terrainTypes.length, 0);
+    assert.equal(g.units[0].x, 12.5);
+    assert.equal(g.units[0].z, -8.25);
+    const live = fieldFromGarden(json);
+    assert.equal(live.width, 32);
+    assert.ok(live.terrainTypes.some((t) => t > 0));
+    assert.equal(live.cameraHalfF, 40);
+    const world = createWorld(3);
+    applyGardenPlacements(world, live, g);
+    assert.equal(world.count, 1);
+    assert.ok(Math.abs(fx.toFloat(world.px[0]) - 12.5) < 0.02);
+    assert.ok(Math.abs(fx.toFloat(world.py[0]) + 8.25) < 0.02);
+  });
+
   it('roundtrips a custom camera bound and omits a full-table one', () => {
     const field = buildField(3, { width: 32, height: 32 });
     applyTableSilhouette(field, {
@@ -470,5 +511,27 @@ describe('garden codec', () => {
     assert.deepEqual(json.sr, [9999, 9999, 9999, 9999]);
     assert.equal(getResource(world, 0, 'wood'), TESTER_STARTING_RESOURCES.wood);
     assert.equal(getResource(world, 1, 'mineral'), TESTER_STARTING_RESOURCES.mineral);
+  });
+
+  it('builds a stress garden that mirrors the menu FFA', () => {
+    const json = buildStressGarden();
+    assert.equal(json.n, STRESS_GARDEN_NAME);
+    assert.equal(json.s, STRESS_GARDEN_SEED);
+    assert.equal(json.w, STRESS_MAP_W);
+    assert.equal(json.h, STRESS_MAP_H);
+    assert.equal(json.ch, STRESS_CAMERA_HALF_F);
+    assert.equal(json.t, undefined);
+    const g = decodeGarden(json);
+    assert.equal(g.units.length, STRESS_MENU_PER_SIDE * STRESS_ARMY_COUNT);
+    for (let owner = 0; owner < STRESS_ARMY_COUNT; owner++) {
+      assert.equal(g.units.filter((u) => u.owner === owner).length, STRESS_MENU_PER_SIDE);
+    }
+    assert.ok(g.units.every((u) => Number.isFinite(u.x) && Number.isFinite(u.z)));
+    const live = fieldFromGarden(json);
+    assert.equal(live.cameraHalfF, STRESS_CAMERA_HALF_F);
+    assert.equal(live.width, STRESS_MAP_W);
+    const here = dirname(fileURLToPath(import.meta.url));
+    const onDisk = JSON.parse(readFileSync(join(here, '../../maps/stress.garden'), 'utf8'));
+    assert.deepEqual(onDisk, json);
   });
 });

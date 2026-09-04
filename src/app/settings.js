@@ -1,3 +1,5 @@
+import { DEFAULT_SKIN_ID, isDlcPackId, sanitizeSkins } from './dlcCatalog.js';
+
 // Player + graphics preferences, following v1's paradigm: one localStorage key
 // per setting holding a plain string, read back through a getter with a default.
 // Keys are kept identical to v1 (`shadowMode`, `playerName`, `playerColor`) so a
@@ -8,6 +10,7 @@ const FX_KEY = 'fxMode';
 const NAME_KEY = 'playerName';
 const COLOR_KEY = 'playerColor';
 const EXTRA_GROUPS_KEY = 'extraControlGroups';
+const UNIT_SKINS_KEY = 'unitSkins';
 
 /** v1 label set, kept verbatim so the slider reads the same in both versions. */
 export const SHADOW_LABELS = ['Off', 'Low', 'Med', 'Full'];
@@ -348,5 +351,25 @@ export function getExtraControlGroups() {
 export function setExtraControlGroups(on) {
   const next = !!on;
   write(EXTRA_GROUPS_KEY, next ? '1' : '0');
+  return next;
+}
+
+/** Saved per-unit cosmetic picks. Explicit Default is `''`. */
+export function getUnitSkins() {
+  try {
+    return sanitizeSkins(JSON.parse(read(UNIT_SKINS_KEY) || '{}'));
+  } catch {
+    return {};
+  }
+}
+
+/** @param {number} typeId @param {string} packId */
+export function setUnitSkin(typeId, packId) {
+  const next = { ...getUnitSkins() };
+  const id = typeId | 0;
+  if (packId === DEFAULT_SKIN_ID || packId === 'default') next[id] = DEFAULT_SKIN_ID;
+  else if (isDlcPackId(packId)) next[id] = packId;
+  else delete next[id];
+  write(UNIT_SKINS_KEY, JSON.stringify(next));
   return next;
 }

@@ -1,3 +1,5 @@
+import { isCameraFollowTypingTarget } from './cameraFollow.js';
+
 // Sole pointer/wheel surface for mouse and touch.
 // Document-level move/up like v1 — no pointer capture.
 // Touch is fully owned by the touch adapter (its own multi-finger bookkeeping);
@@ -202,8 +204,16 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
   }
 
   function onKeyUp(e) {
-    if (!syncActive().active) return;
+    syncActive();
+    // Always release, even while splash/story has input locked — otherwise a
+    // keyup during the lock leaves keyStates stuck on.
     camera.handleKeyUp(e);
+  }
+
+  function onFocusIn(e) {
+    if (!isCameraFollowTypingTarget(e.target)) return;
+    camera.clearKeyStates();
+    camera.clearVelocity?.();
   }
 
   function hardClearTouch() {
@@ -240,7 +250,9 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
   canvas.addEventListener('wheel', onWheel, { passive: false });
   document.addEventListener('contextmenu', onContextMenu);
   window.addEventListener('keydown', onKeyDown);
-  window.addEventListener('keyup', onKeyUp);
+  // Capture so menu/lobby field stopPropagation cannot swallow a release.
+  window.addEventListener('keyup', onKeyUp, true);
+  document.addEventListener('focusin', onFocusIn);
   window.addEventListener('blur', onBlur);
   document.addEventListener('visibilitychange', onVisibilityChange);
 
@@ -254,7 +266,8 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
       canvas.removeEventListener('wheel', onWheel);
       document.removeEventListener('contextmenu', onContextMenu);
       window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('keyup', onKeyUp, true);
+      document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     },

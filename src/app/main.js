@@ -65,6 +65,7 @@ import {
   fxTier,
   getExtraControlGroups,
   getPlayerColor,
+  getUnitSkins,
   resolveFxMode,
   resolveShadowMode,
   shadowTier,
@@ -85,6 +86,7 @@ import {
 } from '../render/healthBars.js';
 import { setupInput } from './input.js';
 import { isCameraFollowTypingTarget, selectionCentroidXZ } from './input/cameraFollow.js';
+import { isControlGroupDoubleTap } from './input/controlGroups.js';
 import {
   aggregateBuildingTracks,
   buildingHasWork,
@@ -107,6 +109,11 @@ import { createMatchStory } from '../story/matchPlay.js';
 import { castIndexFromUnits, normalizeSpeaker } from '../story/cast.js';
 import { getTeamAssignments, setTeamAssignments } from '../sim/teams.js';
 import { aetherSteam } from './steam.js';
+import {
+  localOwnedPacks,
+  selectedSkins,
+  setLocalHudSkins,
+} from './dlcCatalog.js';
 import { SCREENSHOT_HUD_CLASS, createScreenshotHud } from './screenshotHud.js';
 import { installNavGuard } from './navGuard.js';
 
@@ -234,6 +241,24 @@ function forceRendererSync(ctx) {
   ctx.renderer.setCount(count);
   if (ctx.syncRenderer) return ctx.syncRenderer();
   return rebuildRendererEntities(ctx.renderer, ctx.session);
+}
+
+function localSelectedSkins() {
+  return selectedSkins(localOwnedPacks(aetherSteam.ownedPacks()), getUnitSkins());
+}
+
+function applyOwnerPacksToRenderer(renderer, cfg, localPlayerId) {
+  const fromCfg = {};
+  const src = cfg?.ownerSkins ?? cfg?.ownerPacks;
+  if (src && typeof src === 'object') {
+    for (const [owner, value] of Object.entries(src)) fromCfg[owner] = value;
+  }
+  const local = localSelectedSkins();
+  if (localPlayerId >= 0 && fromCfg[localPlayerId] == null && fromCfg[String(localPlayerId)] == null) {
+    fromCfg[localPlayerId] = local;
+  }
+  renderer?.setOwnerSkins?.(fromCfg);
+  setLocalHudSkins(fromCfg[localPlayerId] ?? fromCfg[String(localPlayerId)] ?? local);
 }
 
 async function main() {
@@ -428,12 +453,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   await ensureFxModeDefault();
   const bootShadowMode = resolveShadowMode();
   const bootFxMode = resolveFxMode();
+  const bootLocalSkins = localSelectedSkins();
+  setLocalHudSkins(bootLocalSkins);
   const renderer = await createRenderer(canvas, count, {
     shadowQuality: shadowTier(bootShadowMode),
     fxMode: bootFxMode,
     fxQuality: fxTier(bootFxMode),
     types: session.state.type,
     owners: session.state.owner,
+    ownerSkins: bootCfg.localPlayerId >= 0
+      ? { [bootCfg.localPlayerId]: bootLocalSkins }
+      : {},
     gpuCapacity: useNet ? kothMaxEntities(army) : count,
     field: session.field,
     onAnimLoadProgress: animStress > 0
@@ -705,6 +735,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   renderer.setExtraControlGroups?.(getExtraControlGroups());
   /** Filled just before return so the menu callback can reach the live ctx. */
   const ctxRef = { current: null };
+  /** Filled when screenshot HUD is created — settings can lock chrome off. */
+  const screenshotHudRef = { current: null };
   const sideMenu = setupMenu({
     renderer,
     onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
@@ -716,6 +748,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.refreshOwnerTints?.();
       syncWorkRadiusRing();
     },
+    onUnitSkinsChange: () => {
+      applyOwnerPacksToRenderer(renderer, {}, localPlayerId);
+    },
+    getHudLocked: () => screenshotHudRef.current?.isLocked() ?? false,
+    setHudLocked: (on) => screenshotHudRef.current?.setLocked(on),
   });
   const liteExplorer = createLiteExplorerToggle({
     engine: renderer.engine,
@@ -806,21 +843,21 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
   function setFogEnabled(v) {
     fogUserEnabled = !!v;
-    if (session.resetting) return;
+    if (session.resetting || liveConfigQuietFog) return;
     stampFog();
     refreshFoggedProps();
   }
   function setShareVisionWith(owners) {
     fogShareVisionWith = Array.isArray(owners) ? owners.map((id) => id | 0) : [];
-    if (session.resetting) return;
+    if (session.resetting || liveConfigQuietFog) return;
     stampFog();
     refreshFoggedProps();
   }
 
   const sceneryFogAt = (x, z) => fog.fogFactorAt(x, z);
   let sceneryFogOn = null;
-  function stampFog() {
-    if (liveConfigQuietFog) return;
+  function stampFog(opts) {
+    if (liveConfigQuietFog && !opts?.force) return;
     const t0 = frameProf ? performance.now() : 0;
     try {
       fog.stamp({
@@ -930,22 +967,65 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     paintStatus();
   };
 
+  function resetTableClient() {
+    matchOverShown = false;
+    const overEl = document.getElementById('match-over');
+    if (overEl) overEl.style.display = 'none';
+    releaseSpaceFollow();
+    applyPlacingType(null);
+    endRallyPlacement();
+    closeRadial();
+    selectedBuildings = [];
+    lastAgoraIndex = -1;
+    lastAgoraHotkeyTap = null;
+    ghostPathTileKey = -1;
+    ghostPathPoints = null;
+    agoraOwnerPaintSig = '';
+    sceneryFogOn = null;
+    inputApi?.clearSelection?.();
+    inputApi?.clearControlGroups?.();
+    renderer.clearSelectionRings?.();
+    renderer.setSelectionGroups?.([]);
+    syncBuildingHighlight(null);
+    renderer.setWorkRadiusRing?.(null);
+    renderer.setBuildingGhost?.(null);
+    renderer.setRallyGhost?.(null);
+    renderer.placeRallyFlags?.([]);
+    bufs.selected.fill(0);
+    bufs.wasSelected.fill(0);
+    bufs.wasAlive.fill(1);
+    bufs.deathFade.fill(0);
+    bufs.facingYaw.fill(0);
+    bufs.selSpinYaw.fill(0);
+    bufs.selSpinVel.fill(0);
+    bufs.poseValid.fill(0);
+    bufs.cacheGx.fill(NaN);
+    bufs.cacheGz.fill(NaN);
+    bufs.cacheGy.fill(NaN);
+    bufs.ringX.fill(NaN);
+    bufs.ringZ.fill(NaN);
+    bufs.ringSize.fill(0);
+    bufs.ringTint.fill(0);
+    bufs.fogHidden.fill(0);
+  }
+
   session.onWorldRebuilt = async (entityCount) => {
     if (session._pendingWorldGen != null && session._pendingWorldGen !== liveConfigGeneration) return;
     // Map dims may change across a rebuild (skirmish ↔ koth) — mirror them before
     // any main-thread tile math (fog, snap, pathability) runs.
     if (session.field) setActiveMapSize(session.field.width, session.field.height);
     renderer.setCount(entityCount);
-    renderEntityCount = syncDrawnEntities();
     renderer.clearProjectiles?.();
     renderer.clearParticles?.();
+    resetTableClient();
     fog.reset(session.field);
-    sceneryFogOn = null;
-    agoraOwnerPaintSig = '';
-    stampFog();
+    // Stamp only after setField rebuilds the overlay — uploading a 208-tile
+    // 1v1 veil into the outgoing stress texture is what made the swap look insane.
+    if (session.field) await renderer.setField?.(session.field);
+    stampFog({ force: true });
+    renderEntityCount = syncDrawnEntities();
     placeFoggedProps();
     syncRallyFlagMarkers();
-    if (session.field) await renderer.setField?.(session.field);
     sceneryFogOn = null;
     if (fog.isEnabled()) {
       sceneryFogOn = true;
@@ -1380,12 +1460,32 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return fallback;
   }
 
+  /** Last B / ~ tap — second press in the control-group window jumps the camera. */
+  let lastAgoraHotkeyTap = null;
+
+  function jumpCameraToOwnedAgora(index) {
+    const a = session.agoras?.[index];
+    if (!a || !Number.isFinite(a.x) || !Number.isFinite(a.z)) return;
+    renderer.cameraController?.lookAtXZ?.(a.x, a.z);
+  }
+
   function openOwnAgoraMenu() {
     if (!bootInteractive) return;
     if ((session.role ?? 'player') !== 'player' || localPlayerId < 0) return;
     const index = pickOwnedAgoraIndex();
     if (index < 0) return;
     if (placingType) applyPlacingType(null);
+
+    const now = performance.now();
+    const jump = isControlGroupDoubleTap(lastAgoraHotkeyTap, 'agora', now);
+    lastAgoraHotkeyTap = { id: 'agora', t: now };
+
+    if (jump) {
+      inputApi.setSelectedBuilding?.({ kind: 'agora', index });
+      jumpCameraToOwnedAgora(index);
+      return;
+    }
+
     if (renderer.isBuildingRadialOpen?.() && lastAgoraIndex === index) {
       closeRadial();
       return;
@@ -1880,6 +1980,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       }
     },
   });
+  screenshotHudRef.current = screenshotHud;
 
   window.addEventListener('keydown', (e) => {
     if (inputApi.handleControlGroupKeyDown?.(e)) return;
@@ -1897,6 +1998,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (e.code === 'KeyO') {
       if (isCameraFollowTypingTarget(document.activeElement)) return;
       e.preventDefault();
+      if (screenshotHud.isLocked()) {
+        screenshotHud.setLocked(false);
+        return;
+      }
       screenshotHud.press();
       return;
     }
@@ -1994,6 +2099,9 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     inputApi.handleControlGroupKeyUp?.(e);
     if (e.code === 'Space') releaseSpaceFollow();
     if (e.code === 'KeyO') screenshotHud.release();
+  }, true);
+  document.addEventListener('focusin', (e) => {
+    if (isCameraFollowTypingTarget(e.target)) releaseSpaceFollow();
   });
   window.addEventListener('blur', () => {
     releaseSpaceFollow();
@@ -2254,8 +2362,10 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       syncDrawnEntities();
     }
     // Apply lob flight snapshot before drawing so loft/trail match this frame.
-    const monkKickUpdates = session.takePendingMonkKickUpdates?.();
-    if (monkKickUpdates?.length) renderer.applyMonkKickUpdates?.(monkKickUpdates);
+    if (!session.resetting) {
+      const monkKickUpdates = session.takePendingMonkKickUpdates?.();
+      if (monkKickUpdates?.length) renderer.applyMonkKickUpdates?.(monkKickUpdates);
+    }
     renderer.setMonkLobDisplayAlpha?.(alpha);
     renderer.beginHealthBars?.();
     // Defer chip writes so selected units win if the bar pool is ever capped again.
@@ -2819,29 +2929,31 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       projectileSnapshots.cur,
       alpha,
     );
-    const treeUpdates = session.takePendingTreeUpdates?.();
-    if (treeUpdates?.length) renderer.applyTreeUpdates?.(treeUpdates);
-    const rockUpdates = session.takePendingRockUpdates?.();
-    if (rockUpdates?.length) renderer.applyRockUpdates?.(rockUpdates);
-    const fireZoneUpdates = session.takePendingFireZoneUpdates?.();
-    if (fireZoneUpdates?.length) renderer.applyFireZoneUpdates?.(fireZoneUpdates);
-    const frogUpdates = session.takePendingFrogUpdates?.();
-    if (frogUpdates?.length) renderer.applyFrogUpdates?.(frogUpdates);
-    const lightningUpdates = session.takePendingLightningUpdates?.();
-    if (lightningUpdates?.length) {
-      renderer.applyLightningUpdates?.(lightningUpdates);
-      for (let u = 0; u < lightningUpdates.length; u++) {
-        const n = lightningUpdates[u]?.count ?? 0;
-        for (let i = 0; i < n; i++) playThunder();
+    if (!session.resetting) {
+      const treeUpdates = session.takePendingTreeUpdates?.();
+      if (treeUpdates?.length) renderer.applyTreeUpdates?.(treeUpdates);
+      const rockUpdates = session.takePendingRockUpdates?.();
+      if (rockUpdates?.length) renderer.applyRockUpdates?.(rockUpdates);
+      const fireZoneUpdates = session.takePendingFireZoneUpdates?.();
+      if (fireZoneUpdates?.length) renderer.applyFireZoneUpdates?.(fireZoneUpdates);
+      const frogUpdates = session.takePendingFrogUpdates?.();
+      if (frogUpdates?.length) renderer.applyFrogUpdates?.(frogUpdates);
+      const lightningUpdates = session.takePendingLightningUpdates?.();
+      if (lightningUpdates?.length) {
+        renderer.applyLightningUpdates?.(lightningUpdates);
+        for (let u = 0; u < lightningUpdates.length; u++) {
+          const n = lightningUpdates[u]?.count ?? 0;
+          for (let i = 0; i < n; i++) playThunder();
+        }
       }
-    }
-    const holyArmorUpdates = session.takePendingHolyArmorUpdates?.();
-    if (holyArmorUpdates?.length) renderer.applyHolyArmorUpdates?.(holyArmorUpdates);
-    const sporeBloomUpdates = session.takePendingSporeBloomUpdates?.();
-    if (sporeBloomUpdates?.length) {
-      renderer.applySporeBloomUpdates?.(sporeBloomUpdates, world.tick);
-    } else {
-      renderer.setFxSimTick?.(world.tick);
+      const holyArmorUpdates = session.takePendingHolyArmorUpdates?.();
+      if (holyArmorUpdates?.length) renderer.applyHolyArmorUpdates?.(holyArmorUpdates);
+      const sporeBloomUpdates = session.takePendingSporeBloomUpdates?.();
+      if (sporeBloomUpdates?.length) {
+        renderer.applySporeBloomUpdates?.(sporeBloomUpdates, world.tick);
+      } else {
+        renderer.setFxSimTick?.(world.tick);
+      }
     }
     syncActionRadialTracksFromSim();
     pushSelectionFollow();
@@ -2942,6 +3054,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 
   ctx.matchStory?.stop();
   ctx.setStoryCast?.([]);
+  applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
 
   // Cover the teardown/rebuild — same splash as cold boot.
   showMatchSplash();
@@ -2961,8 +3074,8 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   const prevLocal = ctx.localPlayerId;
   const prevTeams = getTeamAssignments();
   let worldReset = false;
-  // Don't stamp/upload fog on the outgoing solo/skirmish world — a failed
-  // overlay write used to abort start and freeze the current session.
+  // Don't stamp/upload fog on the outgoing world (stress 496 → 1v1 208).
+  // Stay quiet through session.reset; onWorldRebuilt force-stamps after setField.
   liveConfigQuietFog = true;
   try {
     setTeamAssignments(cfg.teamByOwner ?? null);
@@ -2974,7 +3087,6 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
     ctx.setFogEnabled?.(cfg.fog !== false);
     ctx.setShareVisionWith?.(shareVisionOwnersFromCfg(cfg));
     ctx.session._pendingWorldGen = gen;
-    liveConfigQuietFog = false;
     worldReset = true;
     await ctx.session.reset({
       seed: cfg.seed,
@@ -3161,6 +3273,7 @@ async function startStressfulSituation(ctx) {
 }
 
 function syncPresentation(ctx, cfg, options = {}) {
+  applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
   if (!options.skipRenderSync && !ctx.session.resetting) forceRendererSync(ctx);
   ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
   if (cfg.localPlayerId != null) ctx.localPlayerId = cfg.localPlayerId;
@@ -3175,12 +3288,12 @@ function syncPresentation(ctx, cfg, options = {}) {
   ctx.stampFog?.();
   ctx.refreshFoggedProps?.();
   if (cfg.inputEnabled != null) ctx.inputApi?.setInputEnabled?.(Boolean(cfg.inputEnabled));
-  if ((cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
   ctx.session.inputDelayTicks = cfg.localSolo
     ? 0
     : (cfg.inputDelayTicks ?? (cfg.mode === 'koth' || isLobbyPlayMode(cfg.mode) ? 1 : 0));
-  // Only snap the camera on a real match reset — presentation syncs (join/role)
-  // used to call this every time and yank the view back to origin.
+  // New table: drop selection / groups so stress entity ids cannot pick 1v1 units.
+  // Camera snap only on a real match reset — join/role used to yank the view.
+  if (cfg.reset || (cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
   if (cfg.reset) ctx.inputApi?.clearControlGroups?.();
   if (cfg.reset && (cfg.mode === 'koth' || cfg.localSolo || isLobbyPlayMode(cfg.mode))) {
     ctx.renderer.resetCamera?.();

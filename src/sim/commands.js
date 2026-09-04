@@ -9,7 +9,7 @@
 // A command is plain, serializable data (no object references), so the same
 // command can be applied locally, sent over the wire, or replayed from a log.
 
-import { ORDER, clearAttackFocus } from './world.js';
+import { ORDER, clearAttackFocus, lockAttackFocus } from './world.js';
 import * as fx from './fixed.js';
 import {
   clearPath,
@@ -293,6 +293,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
       world.order[i] = ORDER.ATTACK;
       world.targetEntity[i] = -1;
       world.targetBuilding[i] = bi;
+      lockAttackFocus(world, i);
       clearEngagement(world, i);
       world.hasTarget[i] = 0;
       const stand = attackBuildingStandPointOnField(world, field, i, b);
@@ -319,6 +320,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
     world.order[i] = ORDER.ATTACK;
     world.targetEntity[i] = target;
     if (world.targetBuilding) world.targetBuilding[i] = -1;
+    lockAttackFocus(world, i);
     clearEngagement(world, i);
     world.hasTarget[i] = 0;
     const stand = attackStandPoint(world, i, target);

@@ -96,6 +96,24 @@ describe('fogOfWar stamp + hide', () => {
     assert.equal(fog.isEnabled(), false);
     assert.equal(fog.hidesHostile(1, half - 2, half - 2), false);
   });
+
+  it('keeps sight when nobody changes tile, and drops it after they leave', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    const stay = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]);
+    fog.stamp({ world: stay, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [], now: 1000 });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    fog.stamp({ world: stay, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [], now: 1100 });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.isWorldSight(0, 0), true);
+
+    const gone = fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 60, z: 60 }]);
+    fog.stamp({ world: gone, field, localPlayerId: 0, enabled: true, buildings: [], agoras: [], now: 1200 });
+    assert.equal(fog.isWorldVisible(0, 0), false);
+    assert.equal(fog.isWorldSight(0, 0), false);
+    assert.equal(fog.isWorldVisible(60, 60), true);
+  });
 });
 
 describe('fogOfWar last-known buildings', () => {
@@ -480,6 +498,83 @@ describe('fogOfWar dirty tiles', () => {
     assert.ok(dirty.size > 0);
     assert.ok(dirty.has(origin.tz * field.width + origin.tx));
     assert.equal(fog.overlayNeedsFullPaint(), true);
+  });
+});
+
+describe('fogOfWar field reset', () => {
+  it('clears explored tiles on reset even when the board size is unchanged', () => {
+    const field = fakeField(20, 20);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    fog.stamp({
+      world: fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldExplored(0, 0), true);
+
+    fog.reset(field);
+    assert.equal(fog.isWorldExplored(0, 0), false);
+    assert.equal(fog.isWorldVisible(0, 0), false);
+  });
+
+  it('drops explored tiles, last-known buildings, and shared vision across a board resize', () => {
+    const large = fakeField(40, 40);
+    const small = fakeField(20, 20);
+    const halfLarge = (40 * 4) / 2;
+    const fog = createFogOfWar();
+    fog.reset(large);
+    const world = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: halfLarge - 2, z: halfLarge - 2 },
+    ]);
+    const enemyCamp = {
+      owner: 1,
+      type: 'camp',
+      x: halfLarge - 2,
+      z: halfLarge - 2,
+      tracks: [{ id: 'warrior', count: 1 }],
+    };
+    fog.stamp({
+      world,
+      field: large,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [enemyCamp],
+      agoras: [],
+      shareVisionWith: [1],
+    });
+    assert.equal(fog.isWorldExplored(halfLarge - 2, halfLarge - 2), true);
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 1);
+    assert.equal(fog.hidesHostile(1, halfLarge - 2, halfLarge - 2), false);
+
+    fog.reset(small);
+    assert.equal(fog.isWorldExplored(0, 0), false);
+    assert.equal(fog.isWorldExplored(halfLarge - 2, halfLarge - 2), false);
+    assert.equal(fog.filterBuildings([enemyCamp]).length, 0);
+
+    const smallHalf = (20 * 4) / 2;
+    const far = smallHalf - 2;
+    const smallWorld = fakeWorld([
+      { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+      { owner: 1, type: UNIT.WARRIOR, x: far, z: far },
+    ]);
+    // Omit shareVisionWith — a field reset is a new match; leftover FFA share
+    // must not keep stamping the old allies.
+    fog.stamp({
+      world: smallWorld,
+      field: small,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.hidesHostile(1, far, far), true);
+    assert.equal(fog.isWorldExplored(far, far), false);
   });
 });
 

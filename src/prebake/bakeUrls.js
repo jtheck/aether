@@ -3,6 +3,7 @@
 import { UNIT_MODEL_URLS } from '../render/unitModels.js';
 import { VAT_UNIT_DEFS } from '../render/vatUnits.js';
 import { BUILDING_MODEL_URLS, UPGRADE_MODEL_URLS } from '../sim/buildings.js';
+import { allDlcMeshUrls, allDlcVatDefs } from '../app/dlcCatalog.js';
 
 const EXTRA = [
   '/assets/models/collar.glb',
@@ -21,6 +22,7 @@ const EXTRA = [
 export function allMeshBakeUrls() {
   const urls = new Set([
     ...Object.values(UNIT_MODEL_URLS),
+    ...allDlcMeshUrls(),
     ...Object.values(BUILDING_MODEL_URLS),
     ...Object.values(UPGRADE_MODEL_URLS),
     ...EXTRA,
@@ -30,11 +32,14 @@ export function allMeshBakeUrls() {
 
 /** @returns {{ url: string, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }[]} */
 export function allVatBakeDefs() {
-  return Object.values(VAT_UNIT_DEFS).map((d) => ({
-    url: d.url,
-    idleClip: d.idleClip,
-    walkClip: d.walkClip,
-    carryClip: d.carryClip,
-    chopClip: d.chopClip,
-  }));
+  return [
+    ...Object.values(VAT_UNIT_DEFS).map((d) => ({
+      url: d.url,
+      idleClip: d.idleClip,
+      walkClip: d.walkClip,
+      carryClip: d.carryClip,
+      chopClip: d.chopClip,
+    })),
+    ...allDlcVatDefs(),
+  ];
 }

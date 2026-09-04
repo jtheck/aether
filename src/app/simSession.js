@@ -43,6 +43,29 @@ export function formatHudMatchClock(totalSec) {
   return `${h}:${String(rm).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
+/**
+ * Drop per-table sim leftovers before a new board boots.
+ * Stress FFA fire/frogs/lightning patches and KOTH scores must not land on 1v1.
+ * @param {object} session
+ */
+export function clearSessionTableState(session) {
+  if (!session) return;
+  session.koth = null;
+  session.kothMatchOver = 0;
+  session.matchWinner = -1;
+  session._checkpoint = null;
+  session._checkpointTick = 0;
+  session._checkpointChecksum = 0;
+  session.pendingTreeUpdates = null;
+  session.pendingRockUpdates = null;
+  session.pendingFireZoneUpdates = null;
+  session.pendingFrogUpdates = null;
+  session.pendingLightningUpdates = null;
+  session.pendingHolyArmorUpdates = null;
+  session.pendingSporeBloomUpdates = null;
+  session.pendingMonkKickUpdates = null;
+}
+
 export class SimSession {
   /**
    * @param {object} options
@@ -145,6 +168,16 @@ export class SimSession {
     this.pendingRockUpdates = null;
     /** @type {Array<object> | null} */
     this.pendingFireZoneUpdates = null;
+    /** @type {Array<object> | null} */
+    this.pendingFrogUpdates = null;
+    /** @type {Array<object> | null} */
+    this.pendingLightningUpdates = null;
+    /** @type {Array<object> | null} */
+    this.pendingHolyArmorUpdates = null;
+    /** @type {Array<object> | null} */
+    this.pendingSporeBloomUpdates = null;
+    /** @type {Array<object> | null} */
+    this.pendingMonkKickUpdates = null;
   }
 
   async start(config) {
@@ -162,6 +195,7 @@ export class SimSession {
     this.buildings = buildings ?? this.client._buildings ?? [];
     this.tech = tech ?? this.client._tech ?? [];
     this.resources = resources ?? this.client._resources ?? [];
+    this.koth = null;
     this.kothMatchOver = 0;
     this.matchWinner = -1;
     this._bindStepHandler();
@@ -465,6 +499,9 @@ export class SimSession {
 
   async _resetInner(config) {
     this.resetting = true;
+    // Drop the outgoing worker before it can enqueue another FX patch.
+    this.client.onStepDone?.(null);
+    this.client.terminate();
     this.ledger.clear();
     this.fullLedgerFrames = [];
     this.committedLedgerFrames = [];
@@ -478,10 +515,11 @@ export class SimSession {
     this.waitingForWorker = false;
     this.inFlightTick = 0;
     this.inFlightFrames = [];
-    this.client.terminate();
+    this._commandSeq = 0;
+    this._displayBlendMs = TICK_MS;
+    clearSessionTableState(this);
     this.client = new SimClient();
     this.state = this.client.state;
-    this._displayBlendMs = TICK_MS;
     try {
       const result = await this.start(config);
       const rebuilt = this.onWorldRebuilt?.(this.count);
@@ -570,6 +608,7 @@ export class SimSession {
 
   _bindStepHandler() {
     this.client.onStepDone((tick, checksum, extra) => {
+      if (this.resetting) return;
       this.confirmedTick = tick;
       this._lastChecksum = checksum;
       if (extra?.koth) this.koth = extra.koth;

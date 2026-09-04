@@ -16,9 +16,27 @@ import {
   setPlayerColor,
   setPlayerName,
   setShadowMode,
+  setUnitSkin,
+  getUnitSkins,
   shadowTier,
 } from './settings.js';
-import { escapeMenuStep, isPageFullscreen, subscribeFullscreen, tryExitFullscreen } from './fullscreen.js';
+import { aetherSteam } from './steam.js';
+import {
+  DEFAULT_SKIN_ID,
+  localOwnedPacks,
+  selectedSkins,
+  skinChoicesForUnit,
+  unitSkinLabel,
+  unitsWithUnlockedSkins,
+} from './dlcCatalog.js';
+import {
+  escapeMenuStep,
+  fullscreenButtonLabel,
+  isPageFullscreen,
+  subscribeFullscreen,
+  toggleFullscreen,
+  tryExitFullscreen,
+} from './fullscreen.js';
 
 /**
  * @param {object} opts
@@ -33,8 +51,20 @@ import { escapeMenuStep, isPageFullscreen, subscribeFullscreen, tryExitFullscree
  * @param {() => unknown} [opts.onStartUnitTester]
  * @param {() => unknown} [opts.onStartStressful]
  * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
+ * @param {() => unknown} [opts.onUnitSkinsChange]
+ * @param {() => boolean} [opts.getHudLocked]
+ * @param {(on: boolean) => unknown} [opts.setHudLocked]
  */
-export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartStressful, onPlayerColorChange }) {
+export function setupMenu({
+  renderer,
+  onStartSoloAi,
+  onStartUnitTester,
+  onStartStressful,
+  onPlayerColorChange,
+  onUnitSkinsChange,
+  getHudLocked,
+  setHudLocked,
+}) {
   // Shadow dimensions are locked in at renderer construction, so anything other
   // than the tier we booted with only takes effect on reload.
   const bootMode = resolveShadowMode();
@@ -54,6 +84,9 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartS
   const fxNote = /** @type {HTMLElement} */ (drawer.querySelector('#fx_note'));
   const nameInput = /** @type {HTMLInputElement} */ (drawer.querySelector('#name_input'));
   const extraGroups = /** @type {HTMLInputElement | null} */ (drawer.querySelector('#extra_groups'));
+  const hideHudBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#hide_hud_b'));
+  const unitSkinsRow = /** @type {HTMLElement | null} */ (drawer.querySelector('#unit_skins_row'));
+  const unitSkinsHost = /** @type {HTMLElement | null} */ (drawer.querySelector('#unit_skins'));
   const colorPicker = /** @type {HTMLSelectElement} */ (drawer.querySelector('#color_picker'));
   colorPicker.replaceChildren(
     ...PLAYER_COLORS.map((c) => {
@@ -135,8 +168,57 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartS
     onPlayerColorChange?.(hex);
   });
 
+  unitSkinsHost?.addEventListener('keydown', (e) => e.stopPropagation());
+
   extraGroups?.addEventListener('change', () => {
     renderer.setExtraControlGroups?.(setExtraControlGroups(extraGroups.checked));
+  });
+
+  function paintUnitSkins() {
+    if (!unitSkinsRow || !unitSkinsHost) return;
+    const owned = localOwnedPacks(aetherSteam.ownedPacks());
+    const units = unitsWithUnlockedSkins(owned);
+    unitSkinsRow.hidden = units.length === 0;
+    if (!units.length) {
+      unitSkinsHost.replaceChildren();
+      return;
+    }
+    const prefs = getUnitSkins();
+    const auto = selectedSkins(owned, {});
+    const frag = document.createDocumentFragment();
+    for (const typeId of units) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const selectId = `unit_skin_${typeId}`;
+      const label = document.createElement('label');
+      label.htmlFor = selectId;
+      label.textContent = unitSkinLabel(typeId);
+      const select = document.createElement('select');
+      select.id = selectId;
+      select.dataset.unitType = String(typeId);
+      for (const choice of skinChoicesForUnit(typeId, owned)) {
+        const opt = document.createElement('option');
+        opt.value = choice.id;
+        opt.textContent = choice.label;
+        select.appendChild(opt);
+      }
+      select.value = Object.prototype.hasOwnProperty.call(prefs, typeId)
+        ? prefs[typeId]
+        : (auto[typeId] ?? DEFAULT_SKIN_ID);
+      select.addEventListener('change', () => {
+        setUnitSkin(typeId, select.value);
+        onUnitSkinsChange?.();
+      });
+      row.append(label, select);
+      frag.appendChild(row);
+    }
+    unitSkinsHost.replaceChildren(frag);
+  }
+
+  hideHudBtn?.addEventListener('click', () => {
+    const next = !getHudLocked?.();
+    setHudLocked?.(next);
+    if (next) setOpen(false);
   });
 
   soloBtn.addEventListener('click', async () => {
@@ -172,17 +254,16 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartS
     }
   });
 
-  // The camera and hotkeys listen on window with no target check, so typing a
-  // name would otherwise pan the board and trip B/G/H.
+  // Camera/hotkeys listen on window. Stop keydown so typing a name does not
+  // pan or trip B/G/H. Leave keyup alone so a held pan key still releases.
   const keyStop = [
-    nameInput, colorPicker, extraGroups, slider, fxSlider, soloBtn, testerBtn, stressBtn,
+    nameInput, colorPicker, extraGroups, hideHudBtn, slider, fxSlider, soloBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
     menuMatchReady, menuMatchStart, menuMatchLeave,
     ...lobbyDrawerToggles,
   ].filter(Boolean);
   for (const field of keyStop) {
     field.addEventListener('keydown', (e) => e.stopPropagation());
-    field.addEventListener('keyup', (e) => e.stopPropagation());
   }
 
   function syncFromState() {
@@ -199,6 +280,7 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartS
       extraGroups.checked = getExtraControlGroups();
       renderer.setExtraControlGroups?.(extraGroups.checked);
     }
+    paintUnitSkins();
     paintProfile();
   }
 
@@ -227,7 +309,8 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartS
 
   function paintExit(on = isPageFullscreen()) {
     if (!exitBtn) return;
-    exitBtn.hidden = !on;
+    exitBtn.hidden = false;
+    exitBtn.textContent = fullscreenButtonLabel(on);
   }
 
   button.addEventListener('click', () => setOpen(!isOpen()));
@@ -254,7 +337,7 @@ export function setupMenu({ renderer, onStartSoloAi, onStartUnitTester, onStartS
     if (!onSettings) syncFromState();
   });
   exitBtn?.addEventListener('click', async () => {
-    await tryExitFullscreen();
+    await toggleFullscreen();
     paintExit();
   });
 

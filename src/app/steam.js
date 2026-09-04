@@ -1,6 +1,8 @@
 // Desktop Steam API (NW.js shell only). No-ops in the browser.
 // Requires aetherDesktop.steam from steam-build bridge.js.
 
+import { packsOwnedFromSteamDlc } from './dlcCatalog.js';
+
 export const ACH_FIRST_LAUNCH = 'ACH_FIRST_LAUNCH';
 export const ACH_FIRST_MATCH = 'ACH_FIRST_MATCH';
 export const ACH_KOTH_DEFEAT = 'ACH_KOTH_DEFEAT';
@@ -47,6 +49,16 @@ export function createAetherSteam(opts = {}) {
     getInfo() {
       const s = steam();
       return s && s.getInfo ? s.getInfo() : { available: false };
+    },
+
+    /** Catalog pack ids owned on this Steam account. Empty in the browser. */
+    ownedPacks() {
+      const info = api.getInfo();
+      return packsOwnedFromSteamDlc(info?.dlc);
+    },
+
+    ownsPack(id) {
+      return api.ownedPacks().includes(id);
     },
 
     isAchievementUnlocked(name) {

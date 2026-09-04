@@ -4,6 +4,8 @@
 // opaque. Enemy buildings hide until seen, then last-known while fogged.
 // Changing local player or shared-vision owners wipes explored tiles and
 // last-known buildings so spectator / loading-screen vision cannot leak.
+// Field reset (new board / match) also drops shared vision and refuses to
+// upload into an overlay sized for the outgoing map.
 
 import {
   addToScene,
@@ -314,9 +316,10 @@ export function createFogOfWar() {
   let width = 0;
   let height = 0;
   let half = 0;
+  /** Occupancy count — hard vision circle. */
   /** @type {Uint32Array | null} */
   let visible = null;
-  /** Current sight including the fade skirt. */
+  /** Occupancy count — sight including the fade skirt. */
   /** @type {Uint32Array | null} */
   let sight = null;
   /** Overlay coverage 0–255 (255 = fully seen). Hide waits until this hits the floor. */
@@ -386,6 +389,13 @@ export function createFogOfWar() {
   /** @type {Int32Array | null} */
   let srcTiles = null;
   let srcN = 0;
+  /** Previous unique source tiles — skip raster when the set is unchanged. */
+  /** @type {Int32Array | null} */
+  let lastSrcTiles = null;
+  let lastSrcN = 0;
+  /** Radius last stamped from this tile (0 = not a source). */
+  /** @type {Uint8Array | null} */
+  let lastSourceR = null;
   /** @type {Uint8Array | null} */
   let hasRad = null;
 
@@ -398,14 +408,18 @@ export function createFogOfWar() {
       tileStampR = n ? new Uint8Array(n) : null;
       tileStampGen = n ? new Uint32Array(n) : null;
       srcTiles = n ? new Int32Array(n) : null;
+      lastSrcTiles = n ? new Int32Array(n) : null;
+      lastSourceR = n ? new Uint8Array(n) : null;
     } else {
       inHot.fill(0);
       dirty.fill(0);
+      if (lastSourceR) lastSourceR.fill(0);
     }
     if (!hasRad) hasRad = new Uint8Array(EDT_MAX_R + 1);
     hotN = 0;
     dirtyN = 0;
     srcN = 0;
+    lastSrcN = 0;
     paintedOnce = false;
   }
 
@@ -442,6 +456,12 @@ export function createFogOfWar() {
   function forgetOverlay() {
     if (cover) cover.fill(0);
     if (explored) explored.fill(0);
+    if (visible) visible.fill(0);
+    if (sight) sight.fill(0);
+    if (lastSourceR && lastSrcN) {
+      for (let s = 0; s < lastSrcN; s++) lastSourceR[lastSrcTiles[s]] = 0;
+    }
+    lastSrcN = 0;
     resetOverlayScratch(width * height);
     lastBuildings.clear();
     lastStampAt = 0;
@@ -464,7 +484,7 @@ export function createFogOfWar() {
     let w = 0;
     for (let h = 0; h < hotN; h++) {
       const i = hot[h];
-      if (sight && sight[i] === gen) {
+      if (sight && sight[i] > 0) {
         hot[w++] = i;
         continue;
       }
@@ -489,10 +509,36 @@ export function createFogOfWar() {
     hotN = w;
   }
 
+  function overlayFitsField() {
+    if (!field || !texW || !texH) return false;
+    return texW === padTexWidth(width * FOG_TEX_SCALE)
+      && texH === Math.max(1, height * FOG_TEX_SCALE);
+  }
+
+  /** Block uploads into an outgoing board's veil (stress 496 → play 208). */
+  function invalidateOverlayUpload() {
+    paintedOnce = false;
+    if (overlayFitsField()) return;
+    pixels = null;
+    visitedPixels = null;
+    texW = 0;
+    texH = 0;
+    if (mesh) mesh.visible = false;
+    if (visitedMesh) visitedMesh.visible = false;
+  }
+
+  function forgetKnown() {
+    lastBuildings.clear();
+    buildingSig = '';
+    agoraSig = '';
+  }
+
   function adoptField(nextField) {
     if (!nextField) {
       field = null;
+      forgetKnown();
       clearVision();
+      invalidateOverlayUpload();
       return;
     }
     const same = field && field.width === nextField.width && field.height === nextField.height;
@@ -501,15 +547,21 @@ export function createFogOfWar() {
       half = worldHalfFFromField(field);
       return;
     }
+    forgetKnown();
     clearVision();
+    invalidateOverlayUpload();
   }
 
+  /**
+   * New board / match — drop explored tiles, last-known buildings, and shared
+   * vision so a stress FFA cannot leak onto 1v1 (or the reverse).
+   */
   function reset(nextField) {
     field = nextField ?? null;
-    lastBuildings.clear();
-    buildingSig = '';
-    agoraSig = '';
+    forgetKnown();
+    shareVision.clear();
     clearVision();
+    invalidateOverlayUpload();
   }
 
   function isWorldVisible(x, z) {
@@ -518,7 +570,7 @@ export function createFogOfWar() {
     const tx = Math.floor((x + half) / TILE_SIZE_F);
     const tz = Math.floor((z + half) / TILE_SIZE_F);
     if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
-    return visible[tz * width + tx] === gen;
+    return visible[tz * width + tx] > 0;
   }
 
   function isWorldExplored(x, z) {
@@ -536,7 +588,7 @@ export function createFogOfWar() {
     const tx = Math.floor((x + half) / TILE_SIZE_F);
     const tz = Math.floor((z + half) / TILE_SIZE_F);
     if (tx < 0 || tz < 0 || tx >= width || tz >= height) return false;
-    return sight[tz * width + tx] === gen;
+    return sight[tz * width + tx] > 0;
   }
 
   /** True while leftover cover is still decaying toward visited / unseen. */
@@ -569,9 +621,9 @@ export function createFogOfWar() {
   }
 
   function applyStamp(i, hard, d2, hardR2, fadeDen) {
-    if (sight) sight[i] = gen;
+    if (sight) sight[i] = 1;
     if (hard) {
-      if (visible) visible[i] = gen;
+      if (visible) visible[i] = 1;
       if (explored) explored[i] = 1;
     }
     if (!cover) return;
@@ -615,21 +667,117 @@ export function createFogOfWar() {
     }
   }
 
-  function addSource(x, z, radiusTiles, mask) {
+  function addSource(x, z, radiusTiles) {
     const cx = Math.floor((x + half) / TILE_SIZE_F);
     const cz = Math.floor((z + half) / TILE_SIZE_F);
-    if (cx < 0 || cz < 0 || cx >= width || cz >= height || radiusTiles > EDT_MAX_R) {
-      stampCircle(cx, cz, radiusTiles, mask);
-      return;
-    }
+    if (cx < 0 || cz < 0 || cx >= width || cz >= height) return;
+    let r = radiusTiles | 0;
+    if (r > EDT_MAX_R) r = EDT_MAX_R;
+    if (r < 1) return;
     const ti = cz * width + cx;
     if (tileStampGen[ti] === gen) {
-      if (radiusTiles > tileStampR[ti]) tileStampR[ti] = radiusTiles;
+      if (r > tileStampR[ti]) tileStampR[ti] = r;
       return;
     }
     tileStampGen[ti] = gen;
-    tileStampR[ti] = radiusTiles;
+    tileStampR[ti] = r;
     srcTiles[srcN++] = ti;
+  }
+
+  /** Walk a vision circle. `sign` +1 adds occupancy, -1 removes. */
+  function applyCircle(cx, cz, radiusTiles, mask, sign) {
+    if (!visible && !sight) return;
+    const outer = radiusTiles + EDGE_FADE_TILES;
+    const hardR2 = radiusTiles * radiusTiles;
+    const outer2 = outer * outer;
+    const fadeDen = outer2 - hardR2 || 1;
+    const z0 = cz - outer < 0 ? 0 : cz - outer;
+    const z1 = cz + outer >= height ? height - 1 : cz + outer;
+    for (let tz = z0; tz <= z1; tz++) {
+      const dz = tz - cz;
+      const dz2 = dz * dz;
+      const remO = outer2 - dz2;
+      if (remO < 0) continue;
+      const xrO = Math.sqrt(remO) | 0;
+      let xa = cx - xrO;
+      let xb = cx + xrO;
+      if (xa < 0) xa = 0;
+      if (xb >= width) xb = width - 1;
+      const remH = hardR2 - dz2;
+      const xh0 = remH >= 0 ? cx - (Math.sqrt(remH) | 0) : xa;
+      const xh1 = remH >= 0 ? cx + (Math.sqrt(remH) | 0) : xa - 1;
+      const row = tz * width;
+      for (let tx = xa; tx <= xb; tx++) {
+        const i = row + tx;
+        if (mask && mask[i] === 0) continue;
+        const hard = tx >= xh0 && tx <= xh1;
+        if (sign > 0) {
+          const d2 = hard ? 0 : (tx - cx) * (tx - cx) + dz2;
+          if (sight) sight[i] += 1;
+          if (hard) {
+            if (visible) visible[i] += 1;
+            if (explored) explored[i] = 1;
+          }
+          if (cover) {
+            const c = hard ? 255 : ((fadeDen - (d2 - hardR2)) * 255 / fadeDen) | 0;
+            if (c > cover[i]) {
+              cover[i] = c;
+              markDirty(i);
+            }
+          }
+          markHot(i);
+        } else {
+          if (sight && sight[i] > 0) sight[i] -= 1;
+          if (hard && visible && visible[i] > 0) visible[i] -= 1;
+          markHot(i);
+        }
+      }
+    }
+  }
+
+  function rememberSources() {
+    lastSrcN = srcN;
+    for (let s = 0; s < srcN; s++) {
+      const ti = srcTiles[s];
+      lastSrcTiles[s] = ti;
+      lastSourceR[ti] = tileStampR[ti];
+    }
+  }
+
+  function clearLastSources() {
+    if (lastSourceR) {
+      for (let s = 0; s < lastSrcN; s++) lastSourceR[lastSrcTiles[s]] = 0;
+    }
+    lastSrcN = 0;
+  }
+
+  function rebuildVision(mask) {
+    if (visible) visible.fill(0);
+    if (sight) sight.fill(0);
+    clearLastSources();
+    rememberSources();
+    flushSources(mask);
+  }
+
+  function incrementalVision(mask) {
+    for (let s = 0; s < lastSrcN; s++) {
+      const ti = lastSrcTiles[s];
+      const oldR = lastSourceR[ti];
+      if (tileStampGen[ti] === gen && tileStampR[ti] === oldR) continue;
+      const tz = (ti / width) | 0;
+      applyCircle(ti - tz * width, tz, oldR, mask, -1);
+      lastSourceR[ti] = 0;
+    }
+    for (let s = 0; s < srcN; s++) {
+      const ti = srcTiles[s];
+      const r = tileStampR[ti];
+      if (lastSourceR[ti] === r) continue;
+      const tz = (ti / width) | 0;
+      applyCircle(ti - tz * width, tz, r, mask, 1);
+      lastSourceR[ti] = r;
+    }
+    lastSrcN = srcN;
+    for (let s = 0; s < srcN; s++) lastSrcTiles[s] = srcTiles[s];
   }
 
   function stampUnionEdt(x0, z0, bw, bh, radMin, radMax, mask) {
@@ -799,11 +947,7 @@ export function createFogOfWar() {
     const dt = lastStampAt > 0 ? Math.min(COVER_DECAY_MS, Math.max(0, now - lastStampAt)) : 0;
     lastStampAt = now;
     gen++;
-    if (gen === 0xffffffff) {
-      visible.fill(0);
-      if (sight) sight.fill(0);
-      gen = 1;
-    }
+    if (gen === 0) gen = 1;
     const maskSrc = field.activeMask ?? field.tileMask ?? field.enabledMask;
     const mask = maskSrc && maskSrc.length >= width * height ? maskSrc : null;
     srcN = 0;
@@ -819,7 +963,6 @@ export function createFogOfWar() {
           fx.toFloat(world.px[i]),
           fx.toFloat(world.py[i]),
           visionTilesForUnitType(world.type[i]),
-          mask,
         );
       }
     }
@@ -828,7 +971,7 @@ export function createFogOfWar() {
       for (let i = 0; i < buildings.length; i++) {
         const b = buildings[i];
         if (!isVisionAlly(b.owner)) continue;
-        addSource(b.x, b.z, visionTilesForBuilding(b.type), mask);
+        addSource(b.x, b.z, visionTilesForBuilding(b.type));
       }
     }
     const agoras = input.agoras;
@@ -836,12 +979,29 @@ export function createFogOfWar() {
       for (let i = 0; i < agoras.length; i++) {
         const a = agoras[i];
         if (!isVisionAlly(a.owner)) continue;
-        addSource(a.x, a.z, visionTilesForBuilding('agora'), mask);
+        addSource(a.x, a.z, visionTilesForBuilding('agora'));
       }
     }
-    flushSources(mask);
+    let removes = 0;
+    let adds = 0;
+    for (let s = 0; s < lastSrcN; s++) {
+      const ti = lastSrcTiles[s];
+      const oldR = lastSourceR[ti];
+      if (tileStampGen[ti] !== gen || tileStampR[ti] !== oldR) removes++;
+    }
+    for (let s = 0; s < srcN; s++) {
+      if (lastSourceR[srcTiles[s]] !== tileStampR[srcTiles[s]]) adds++;
+    }
+    const churn = adds + removes;
+    if (churn === 0 && lastSrcN > 0) {
+      // Same unique source tiles — overlay occupancy is unchanged.
+    } else if (lastSrcN === 0 || churn > Math.max(12, ((srcN + lastSrcN) * 0.35) | 0)) {
+      rebuildVision(mask);
+    } else {
+      incrementalVision(mask);
+    }
     if (dt > 0) decayCover(dt);
-    if (mesh) mesh.visible = true;
+    if (mesh) mesh.visible = enabled && overlayFitsField();
   }
 
   function filterStructures(live, lastKnown, kind) {
@@ -934,7 +1094,7 @@ export function createFogOfWar() {
     const o = (tz * texW + tx) * 4;
     const seen = cover
       ? coverAt(tx, tz)
-      : visible && visible[tz * width + tx] === gen
+      : visible && visible[tz * width + tx] > 0
         ? 255
         : 0;
     let unseen;
@@ -1075,7 +1235,7 @@ export function createFogOfWar() {
   }
 
   function uploadTexture() {
-    if (!engine || !pixels || !visitedPixels || !texW || !texH) return;
+    if (!engine || !pixels || !visitedPixels || !overlayFitsField()) return;
     // After detach/attach the pixel buffers are new but paintedOnce can still
     // be true — a dirty-only upload then writes a hole into a zeroed shroud
     // (wilderness stays transparent = inverted mask).
@@ -1215,9 +1375,10 @@ export function createFogOfWar() {
 
   function syncOverlay() {
     if (!mesh || !material) return;
-    mesh.visible = enabled;
-    if (visitedMesh) visitedMesh.visible = enabled;
-    if (!enabled) return;
+    const fitted = overlayFitsField();
+    mesh.visible = enabled && fitted;
+    if (visitedMesh) visitedMesh.visible = enabled && fitted;
+    if (!enabled || !fitted) return;
     uploadTexture();
   }
 

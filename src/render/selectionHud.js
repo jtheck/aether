@@ -1,8 +1,9 @@
 // Selection HUD — a camera-locked row of chips across the top of the screen
 // (v1's 3D selection panel, reimagined for Lite/WebGPU). Each distinct selected
-// unit or building type shows a small 3D model icon plus a native-text
-// "Name ×N" label. The icons are real scene meshes placed on a screen ray at a
-// fixed depth, so the strip reads as a rigid HUD without living in the DOM.
+// unit or building type shows a small 3D model icon plus a native-text name
+// with the count on the line above. The icons are real scene meshes placed on
+// a screen ray at a fixed depth, so the strip reads as a rigid HUD without
+// living in the DOM.
 
 import {
   addToScene,
@@ -17,8 +18,8 @@ import {
   setSubtreeVisible,
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
-import { loadBakedUnitMeshParts, UNIT_MODEL_URLS } from './unitModels.js';
-import { VAT_UNIT_DEFS } from './vatUnits.js';
+import { loadBakedUnitMeshParts } from './unitModels.js';
+import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
 import {
   BUILDING_MODEL_URLS,
   getBuildingDisplayName,
@@ -46,18 +47,23 @@ const SLOT_PX = 112;
 const EDGE_MARGIN = 44;
 /** Icon center sits this far below the top edge (CSS px). */
 const TOP_MARGIN = 72;
-/** Label baseline below the icon center (CSS px). */
-const LABEL_DY = 34;
-/** Clickable rect half-height above/below the icon center (CSS px). */
-const HIT_UP_PX = 48;
-const HIT_DOWN_PX = 46;
+/** Count sits in the icon (CSS px below the icon center). */
+const COUNT_DY = 14;
+/** Name just under the model (CSS px). */
+const NAME_DY = 32;
+/** Clickable rect around the icon + labels (CSS px). Narrower than slot pitch. */
+const HIT_W_PX = 56;
+const HIT_UP_PX = 36;
+const HIT_DOWN_PX = 48;
 /** Hover: slight scale-up, lift toward the top, and a brighter wash. */
 const HOVER_SCALE = 0.1;
 const HOVER_LIFT_PX = 5;
 const HOVER_LERP = 14;
-const LABEL_FONT_SIZE = 26;
-const LABEL_SCREEN_SCALE = 0.84;
-const LABEL_COLOR = [0.92, 0.96, 1, 1];
+const LABEL_FONT_SIZE = 18;
+const LABEL_SCREEN_SCALE = 0.72;
+/** A little brighter than `--pop-ink` (`#b8c0cc`). */
+const LABEL_COLOR = [212 / 255, 219 / 255, 228 / 255, 1];
+const LABEL_OPACITY = 0.92;
 /** After radials (~225) so the strip paints last. */
 const HUD_RENDER_ORDER = 420;
 const AGORA_MODEL_URL = '/assets/models/agora.glb';
@@ -182,7 +188,7 @@ function makeIconMaterial(source) {
 
 /** Static or VAT unit GLB for the chip icon. */
 function unitIconModelUrl(typeId) {
-  return UNIT_MODEL_URLS[typeId] ?? VAT_UNIT_DEFS[typeId]?.url ?? null;
+  return resolveUnitModelUrl(typeId, localHudSkin(typeId));
 }
 
 /**
@@ -362,25 +368,40 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     }
   }
 
-  /** @type {{ data: object, layer: object, text: string }[]} */
+  /** @type {{ name: { data: object, layer: object, text: string }, count: { data: object, layer: object, text: string } }[]} */
   const labels = [];
   let textRenderer = null;
   let textRendererRegistered = false;
   let labelsDisposed = false;
   if (screen.font) {
     try {
+      /** @type {object[]} */
+      const layers = [];
       for (let i = 0; i < MAX_SLOTS; i++) {
-        const data = createDefaultTextData(screen.font, LABEL_FONT_SIZE, 'Unit', LABEL_COLOR);
-        const layer = createTextLayer(data, { order: i, opacity: 0, visible: false });
-        labels.push({ data, layer, text: 'Unit' });
+        const nameData = createDefaultTextData(screen.font, LABEL_FONT_SIZE, 'Unit', LABEL_COLOR);
+        const nameLayer = createTextLayer(nameData, { order: i, opacity: 0, visible: false });
+        const countData = createDefaultTextData(screen.font, LABEL_FONT_SIZE, '0', LABEL_COLOR);
+        const countLayer = createTextLayer(countData, {
+          order: MAX_SLOTS + i,
+          opacity: 0,
+          visible: false,
+        });
+        labels.push({
+          name: { data: nameData, layer: nameLayer, text: 'Unit' },
+          count: { data: countData, layer: countLayer, text: '0' },
+        });
+        layers.push(nameLayer, countLayer);
       }
       textRenderer = createTextRenderer(engine, {
-        layers: labels.map((l) => l.layer),
+        layers,
         clear: false,
       });
     } catch (err) {
       console.warn('[selectionHud] native labels unavailable', err);
-      for (const l of labels) disposeDefaultTextData(l.data);
+      for (const l of labels) {
+        disposeDefaultTextData(l.name.data);
+        disposeDefaultTextData(l.count.data);
+      }
       labels.length = 0;
       textRenderer = null;
     }
@@ -437,11 +458,17 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     batch.visible = false;
   }
 
+  function hideCaption(cap) {
+    if (!cap || !cap.layer.visible) return;
+    cap.layer.opacity = 0;
+    cap.layer.visible = false;
+    cap.layer._version++;
+  }
+
   function hideLabel(label) {
-    if (!label || !label.layer.visible) return;
-    label.layer.opacity = 0;
-    label.layer.visible = false;
-    label.layer._version++;
+    if (!label) return;
+    hideCaption(label.name);
+    hideCaption(label.count);
   }
 
   function hideAll() {
@@ -449,6 +476,32 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     for (const label of labels) hideLabel(label);
     hitRects = [];
     if (screen.canvas) screen.canvas.style.cursor = '';
+  }
+
+  /**
+   * @param {{ data: object, layer: object, text: string }} cap
+   * @param {string} text
+   * @param {number} px
+   * @param {number} py
+   * @param {number} scale
+   * @param {number} opacity
+   * @param {number} sx
+   * @param {number} sy
+   */
+  function placeCaption(cap, text, px, py, scale, opacity, sx, sy) {
+    if (!cap) return;
+    if (text !== cap.text) {
+      updateDefaultTextData(cap.data, text, LABEL_COLOR);
+      cap.text = text;
+    }
+    const centerOffset = cap.data.width * scale * 0.5;
+    cap.layer.positionPx.x = px * sx - centerOffset;
+    cap.layer.positionPx.y = py * sy;
+    cap.layer.rotationRad = 0;
+    cap.layer.scale = scale;
+    cap.layer.opacity = opacity;
+    cap.layer.visible = true;
+    cap.layer._version++;
   }
 
   /**
@@ -510,12 +563,13 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       const px = startX + i * pitch;
       const slot = selectionHudSlot(g);
       if (slot) {
+        const hitW = Math.min(HIT_W_PX, pitch * 0.7);
         hitRects.push({
           slot,
           groupIndex: i,
-          x: px - pitch * 0.5,
+          x: px - hitW * 0.5,
           y: iconPy - HIT_UP_PX,
-          w: pitch,
+          w: hitW,
           h: HIT_UP_PX + HIT_DOWN_PX,
         });
       }
@@ -567,20 +621,10 @@ export async function createSelectionHud(engine, scene, screen = {}) {
 
       const label = labels[i];
       if (label) {
-        const text = g.count > 1 ? `${g.name} ×${g.count}` : g.name;
-        if (text !== label.text) {
-          updateDefaultTextData(label.data, text, LABEL_COLOR);
-          label.text = text;
-        }
         const scale = LABEL_SCREEN_SCALE * pixelRatio * compress * (1 + hoverT * 0.06);
-        const centerOffset = label.data.width * scale * 0.5;
-        label.layer.positionPx.x = px * sx - centerOffset;
-        label.layer.positionPx.y = (py + LABEL_DY) * sy;
-        label.layer.rotationRad = 0;
-        label.layer.scale = scale;
-        label.layer.opacity = 0.92 + hoverT * 0.08;
-        label.layer.visible = true;
-        label.layer._version++;
+        const opacity = LABEL_OPACITY + hoverT * 0.12;
+        placeCaption(label.name, g.name, px, py + NAME_DY, scale, opacity, sx, sy);
+        placeCaption(label.count, String(g.count | 0), px, py + COUNT_DY, scale, opacity, sx, sy);
       }
     }
 
@@ -602,7 +646,10 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     if (textRenderer) disposeTextRenderer(textRenderer);
     textRenderer = null;
     textRendererRegistered = false;
-    for (const label of labels) disposeDefaultTextData(label.data);
+    for (const label of labels) {
+      disposeDefaultTextData(label.name.data);
+      disposeDefaultTextData(label.count.data);
+    }
   }
 
   return { setGroups, update, pickSlot, clear: hideAll, registerLabels, disposeLabels };

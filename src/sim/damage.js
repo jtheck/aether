@@ -74,6 +74,7 @@ export function kill(w, i) {
   w.order[i] = w.ORDER.IDLE;
   w.targetEntity[i] = -1;
   if (w.targetBuilding) w.targetBuilding[i] = -1;
+  if (w.attackFocus) w.attackFocus[i] = 0;
   w.hasTarget[i] = 0;
   w.vx[i] = 0;
   w.vy[i] = 0;

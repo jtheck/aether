@@ -199,16 +199,16 @@ function countPathRequests(w, requestType) {
 
 /**
  * Spread path work across ticks so mass move orders don't spike CPU.
- * When limits are omitted, both LOS and A* scale with the pending backlog and
- * cap at *_MAX. Units already slide toward dest while a request is queued.
+ * When limits are omitted, LOS drains at up to LOS_PATH_BUDGET_MAX per tick
+ * (flat cap). A* still scales with the backlog up to ASTAR_PATH_BUDGET_MAX.
+ * Units already slide toward dest while a request is queued.
  * Pass explicit `{ losLimit, astarLimit }` to pin hard caps (tests / determinism).
  */
 export function planPathBudget(w, field, opts = {}) {
   const pendingLos = opts.losLimit == null ? countPathRequests(w, PATH_REQUEST.LOS) : 0;
-  const losLimit = opts.losLimit ?? Math.min(
-    LOS_PATH_BUDGET_MAX,
-    Math.max(LOS_PATH_BUDGET, Math.ceil(pendingLos / 2)),
-  );
+  // Flat cap — do not decay with pending/2. That dribbled the last half of a
+  // mass order over extra ticks and read as stop-and-go on the stress ring.
+  const losLimit = opts.losLimit ?? Math.min(LOS_PATH_BUDGET_MAX, pendingLos);
   const pendingAstar = opts.astarLimit == null ? countPathRequests(w, PATH_REQUEST.ASTAR) : 0;
   const astarLimit = opts.astarLimit ?? Math.min(
     ASTAR_PATH_BUDGET_MAX,

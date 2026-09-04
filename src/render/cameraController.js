@@ -21,6 +21,11 @@ const PAN_THRESHOLD = 0.001;
 const KEY_ROT_SPEED = 0.2;
 const KEY_ZOOM_SPEED = 0.2;
 const KEY_PAN_BASE = 5 * 1.2;
+const CAMERA_KEYS = new Set([
+  'w', 'r', 'q', 't', 'e', 's', 'd', 'f', 'a',
+  'pageup', 'pagedown',
+  'arrowup', 'arrowdown', 'arrowleft', 'arrowright',
+]);
 const RMB_PAN_BASE = 5;
 // Click-vs-pan: same latch for camera motion and the force-move. Pan used
 // to start on the first pixel while the click still fired until 25px, so a
@@ -36,13 +41,13 @@ const CLOSE_BETA = 1.2;
 /** Normalized zoom where the look-down trough bottoms (0 = closest). */
 export const CAMERA_CLOSE_SPAN = 0.32;
 const CLOSE_SPAN = CAMERA_CLOSE_SPAN;
-/** Quiet ms after the last zoom impulse before a toss may home into the trough. */
+/** Quiet ms after the last zoom impulse before a landing may stick on the trough. */
 export const ZOOM_TEND_IDLE_MS = 100;
-/** Normalized band: finish a near-miss, ignore tosses that stop far short. */
-export const ZOOM_TEND_HOME = 0.26;
+/** Normalized: must already be on the dest to hold. Never reach out and pull. */
+export const ZOOM_TEND_HOME = 0.05;
 /** Normalized: already-there, or a tiny overshoot we may settle. Beyond this, fly-through. */
 export const ZOOM_TEND_NEAR = 0.045;
-/** Exponential chase once a toss is allowed to tend — slower than follow-zip. */
+/** Exponential settle once we are on the dest — slower than follow-zip. */
 export const ZOOM_TEND_RATE = 4;
 /** Gentle, centered bowl — small mid/edge gap so the whole range feels even. */
 const ZOOM_MID_SPEED = 0.72;
@@ -66,16 +71,17 @@ export function cameraPlayRadius(minR, maxR) {
 }
 
 /**
- * After a toward-trough toss goes idle: finish a near-miss, never yank a fly-through.
- * `predicted` is where current zoom momentum would rest.
+ * After a toward-trough toss goes idle: hold only if we are already on the dest.
+ * Never pull a stop-short in. `predicted` is where current zoom momentum would rest.
  */
 export function zoomTendCatch(radius, dest, predicted, home, near) {
   const toDest = dest - radius;
-  if (!Number.isFinite(toDest) || Math.abs(toDest) <= near) return false;
-  const overshoot = (predicted - dest) * Math.sign(toDest);
+  if (!Number.isFinite(toDest) || !Number.isFinite(predicted)) return false;
+  if (Math.abs(radius - dest) > home) return false;
+  const dir = toDest !== 0 ? Math.sign(toDest) : Math.sign(predicted - dest) || 1;
+  const overshoot = (predicted - dest) * dir;
   if (overshoot > near) return false;
-  const closest = Math.min(Math.abs(radius - dest), Math.abs(predicted - dest));
-  return closest <= home;
+  return Math.abs(predicted - dest) <= home;
 }
 
 /**
@@ -532,20 +538,17 @@ export function createCameraController(camera, canvas, opts = {}) {
     // Let browser shortcuts through (e.g. Ctrl+Shift+R hard reload).
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const active = typeof document !== 'undefined' ? document.activeElement : null;
-    if (active && ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(active.tagName)) return;
+    // BUTTON stays eligible — HUD clicks leave buttons focused and used to
+    // freeze pan until the canvas was clicked.
+    if (active && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) return;
     const key = e.key.toLowerCase();
-    const cameraKeys = new Set([
-      'w', 'r', 'q', 't', 'e', 's', 'd', 'f', 'a',
-      'pageup', 'pagedown',
-      'arrowup', 'arrowdown', 'arrowleft', 'arrowright',
-    ]);
-    if (cameraKeys.has(key)) e.preventDefault();
+    if (!CAMERA_KEYS.has(key)) return;
+    e.preventDefault();
     keyStates[key] = true;
+    markNudged();
     if (key === 's' || key === 'pageup') {
-      markNudged();
       camera.alpha += KEY_ROT_SPEED;
     } else if (key === 'f' || key === 'pagedown') {
-      markNudged();
       camera.alpha -= KEY_ROT_SPEED;
     } else if (key === 'q') {
       applyZoomInput(2.0);
@@ -575,13 +578,13 @@ export function createCameraController(camera, canvas, opts = {}) {
     let panZ = 0;
     if (keyStates.e) panZ += 1.0;
     if (keyStates.d) panZ -= 1.0;
-    if (keyStates.w) panX -= 1.0;
-    if (keyStates.r) panX += 1.0;
-    if (keyStates.a) panX -= 0.7;
+    if (keyStates.w) panX += 1.0;
+    if (keyStates.r) panX -= 1.0;
+    if (keyStates.a) panX += 0.7;
     if (keyStates.arrowup) panZ += 1.0;
     if (keyStates.arrowdown) panZ -= 1.0;
-    if (keyStates.arrowleft) panX += 1.0;
-    if (keyStates.arrowright) panX -= 1.0;
+    if (keyStates.arrowleft) panX -= 1.0;
+    if (keyStates.arrowright) panX += 1.0;
 
     if (panX !== 0 || panZ !== 0) {
       markNudged();
@@ -615,7 +618,7 @@ export function createCameraController(camera, canvas, opts = {}) {
   }
 
   function tick(dtMs) {
-    if (!nudged && !followActive) return;
+    if (!nudged && !followActive && !anyKeyHeld()) return;
 
     applyHeldKeys();
 

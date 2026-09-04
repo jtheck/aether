@@ -45,6 +45,14 @@ import {
   loadBakedUnitMeshParts,
   prefetchBakedMesh,
 } from './unitModels.js';
+import {
+  allDlcMeshUrls,
+  packForUnit,
+  resolveUnitModelUrl,
+  resolveVatDef,
+  sanitizeSkins,
+  selectedSkins,
+} from '../app/dlcCatalog.js';
 import { spawnSeatsFromSockets } from './transportSeats.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
 import {
@@ -601,6 +609,21 @@ async function loadStaticUnitParts(engine, url) {
   return parts;
 }
 
+async function loadStaticUnitPartsForType(engine, typeId, packId) {
+  const url = resolveUnitModelUrl(typeId, packId);
+  if (!url) throw new Error(`no mesh parts for unit type ${typeId}`);
+  try {
+    return await loadStaticUnitParts(engine, url);
+  } catch (err) {
+    const base = UNIT_MODEL_URLS[typeId];
+    if (base && base !== url) {
+      console.warn(`[dlc] ${url} failed, using base mesh`, err);
+      return loadStaticUnitParts(engine, base);
+    }
+    throw err;
+  }
+}
+
 /**
  * @param {object} engine
  * @param {number} typeId
@@ -608,9 +631,9 @@ async function loadStaticUnitParts(engine, url) {
  * @param {number} gpuCap
  */
 /** VAT when registered; otherwise static mesh bake (interim until all units are skinned). */
-async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
+async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = null) {
   if (isVatUnitType(typeId)) {
-    const def = VAT_UNIT_DEFS[typeId];
+    const def = resolveVatDef(typeId, packId) ?? VAT_UNIT_DEFS[typeId];
     const vat = await loadVatUnitTemplate(engine, def);
     const cap = Math.max(activeCount, gpuCap, 1);
     const matrices = new Float32Array(cap * 16);
@@ -671,7 +694,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
     };
   }
 
-  const staticParts = await loadStaticUnitParts(engine, UNIT_MODEL_URLS[typeId]);
+  const staticParts = await loadStaticUnitPartsForType(engine, typeId, packId);
   if (!staticParts.length) throw new Error(`no mesh parts for unit type ${typeId}`);
   const mesh = staticParts[0].mesh;
   const cap = Math.max(activeCount, gpuCap, 1);
@@ -704,6 +727,22 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap) {
  * @param {number} capacity
  * @param {{ types?: Int8Array | Uint8Array | number[], owners?: Uint8Array | number[], gpuCapacity?: number, field?: object | null, onAnimLoadProgress?: (done: number, total: number) => void }} [opts]
  */
+function normalizeOwnerSkins(raw) {
+  /** @type {Record<string, Record<number, string>>} */
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [owner, value] of Object.entries(raw)) {
+    if (typeof value === 'string') {
+      const skins = selectedSkins([value], {});
+      if (Object.keys(skins).length) out[owner] = skins;
+      continue;
+    }
+    const skins = sanitizeSkins(value);
+    if (Object.keys(skins).length) out[owner] = skins;
+  }
+  return out;
+}
+
 export async function createRenderer(canvas, capacity, opts = {}) {
   const bootT0 = performance.now();
   const bootDebug = new URLSearchParams(location.search).get('debug') === 'boot';
@@ -721,6 +760,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   const types = opts.types;
   const gpuCapacity = opts.gpuCapacity ?? capacity;
   const preallocKoth = gpuCapacity > capacity;
+  /** @type {Record<number | string, Record<number, string>>} */
+  let ownerSkins = normalizeOwnerSkins(opts.ownerSkins ?? opts.ownerPacks);
+
+  function packForOwnerType(owner, typeId) {
+    const skins = ownerSkins[owner] ?? ownerSkins[String(owner)];
+    return packForUnit(skins, typeId);
+  }
   const engine = await createEngine(canvas, { msaaSamples: 1 });
   bootLog('engine');
   const scene = createSceneContext(engine);
@@ -1046,7 +1092,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const slice = chunks[shard];
       const key = chunks.length === 1 ? base : vatShardKey(base, shard);
       const gpuCap = capacityFor(slice.length, { initial: UNIT_BATCH_INITIAL });
-      const batch = await createTypeBatch(engine, typeId, slice.length, gpuCap);
+      const batch = await createTypeBatch(engine, typeId, slice.length, gpuCap, packForOwnerType(owner, typeId));
       batch.entityIds = slice;
       batch.mappedSize = slice.length;
       batch.vatShard = shard;
@@ -1091,7 +1137,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   async function createAndRegisterStaticBatch(typeId, entityIds, owner) {
     const batchSize = entityIds.length;
     const gpuCap = capacityFor(Math.max(batchSize, 1), { initial: UNIT_BATCH_INITIAL });
-    const batch = await createTypeBatch(engine, typeId, Math.max(batchSize, 1), gpuCap);
+    const batch = await createTypeBatch(engine, typeId, Math.max(batchSize, 1), gpuCap, packForOwnerType(owner, typeId));
     const key = batchKey(typeId, owner);
     batch.entityIds = entityIds;
     batch.mappedSize = batchSize;
@@ -1334,6 +1380,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     getEye: cameraEyePos,
     muted: !fxEnabled,
   });
+  const locustFx = createLocustFx((init) => particles.emit(init), {
+    getEye: cameraEyePos,
+    cullRangeScale: fxQuality.cullRangeScale ?? 1,
+  });
 
   function applyFxQuality(mode, quality) {
     fxMode = Math.max(0, mode | 0);
@@ -1358,6 +1408,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       maxSparkleDistSq: fxDistanceSq > 0 ? fxDistanceSq : 0,
       sparkleIntervalMs: fxQuality.sparkleIntervalMs,
       muted: !fxEnabled,
+    });
+    locustFx.configure?.({
+      cullRangeScale: fxQuality.cullRangeScale ?? 1,
     });
     if (!fxEnabled) {
       socketFireElapsed = 0;
@@ -1393,7 +1446,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     groundYAt,
     mushroomBridge,
   );
-  const locustFx = createLocustFx((init) => particles.emit(init));
   const fireballFx = createFireballFx((init) => particles.emit(init));
   /** Scratch bitfield when syncing auras from shieldHp. */
   let auraScratch = null;
@@ -3138,6 +3190,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     for (const mesh of selRingParts) setThinInstanceCount(mesh, count);
   }
 
+  /** Hide every unit collar — table reset zeros CPU selection without a deselect edge. */
+  function clearSelectionRings() {
+    ringMatrices.fill(0);
+    for (const mesh of selRingParts) {
+      setThinInstances(mesh, ringMatrices, ringCap);
+      setThinInstanceCount(mesh, selRingLiveCount);
+    }
+    selectionHud.setGroups?.([]);
+  }
+
   function pushSelRingColors() {
     for (let p = 0; p < selRingParts.length; p++) {
       setThinInstanceColors(selRingParts[p], ringColorBufs[p]);
@@ -3435,7 +3497,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         await buildingProps.prefetchProgressive();
         bootLog('roster buildings');
       }
-      for (const url of Object.values(UNIT_MODEL_URLS)) {
+      for (const url of [...Object.values(UNIT_MODEL_URLS), ...allDlcMeshUrls()]) {
         await prefetchBakedMesh(engine, url);
         await afterPaint();
       }
@@ -3542,6 +3604,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       writeSelRingColors(n, useCollar ? 'white' : 'cyan');
       pushSelRingColors();
     },
+
+    clearSelectionRings,
 
     /**
      * True when a late unit batch remapped slots — clear pose cache and rewrite instances.
@@ -3887,7 +3951,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     /**
      * Swap flat ground for atlas terrain (or rebuild after world reset).
      * Serialized + generation-gated so overlapping match starts can't leave
-     * two forests in the scene.
+     * two forests in the scene. Fog CPU state resets with the board so a
+     * stress FFA veil cannot leak onto 1v1 (and the overlay resizes with it).
      */
     setField(snap) {
       const gen = ++fieldGen;
@@ -3903,6 +3968,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const tableHalf = snap ? worldHalfFFromField(snap) : WORLD_HALF_F;
         cameraController.setWorldHalfF?.(resolveCameraHalfF(tableHalf, snap?.cameraHalfF));
         celestial.setWorldHalfF?.(tableHalf);
+        fogApi?.reset?.(snap ?? null);
         fogApi?.detachOverlay?.();
         applyShadowState();
         prev?.dispose?.();
@@ -4106,6 +4172,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     /**
      * Keep circling locust packs on units/buildings while stacks are up.
+     * New sites steal insects from the incoming shot / nearby packs so the
+     * swarm jumps forward instead of cloning a full pack on every victim.
      * @param {number} count
      * @param {Int16Array|null|undefined} stacks
      * @param {Float32Array} x
@@ -4334,6 +4402,15 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       cameraController.reset();
     },
 
+    /** Per-owner per-unit cosmetic packs. Existing batches keep their mesh until remade. */
+    setOwnerSkins(next) {
+      ownerSkins = normalizeOwnerSkins(next);
+    },
+
+    setOwnerPacks(next) {
+      ownerSkins = normalizeOwnerSkins(next);
+    },
+
     groundYAt(x, z) {
       return groundYAt(x, z);
     },
@@ -4477,6 +4554,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       holyShields.clear();
       carryLoads.clear();
       groundFires.clear();
+      unitPings.clear();
+      orderPing = null;
+      hideOrderMarker();
       trailGenerations.fill(0);
       trailLastEmitMs.fill(0);
       fireballSplashSeen.fill(0);

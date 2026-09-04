@@ -49,6 +49,9 @@ import {
   CHIP_BIG_CORNER_MUL,
   CHIP_LEAD_CORNER_MUL,
   CHIP_BASELINE_MUL,
+  CHIP_BASELINE_ALPHA,
+  CHIP_BODY_ALPHA,
+  CHIP_EDGE_ALPHA,
   CHIP_SMALL_CORNER_MUL,
   DOT_DIAMETER_ALTERNATE_MUL,
   DOT_DIAMETER_FIRST_MUL,
@@ -199,14 +202,14 @@ describe('health chip bars', () => {
   });
 
   it('uses health alpha on big chips and keeps team squares opaque', () => {
-    assert.equal(CHIP_FILL_ALPHA_GREEN, 0.42);
-    assert.equal(CHIP_FILL_ALPHA_RED, 0.89);
+    assert.equal(CHIP_FILL_ALPHA_GREEN, 0.5);
+    assert.equal(CHIP_FILL_ALPHA_RED, 1);
     assert.equal(chipFillAlpha(1), CHIP_FILL_ALPHA_GREEN);
     assert.equal(chipFillAlpha(0), CHIP_FILL_ALPHA_RED);
     assert.equal(chipDotAlpha(0, true, 1), CHIP_FILL_ALPHA_GREEN);
     assert.equal(chipDotAlpha(0, true, 0), CHIP_FILL_ALPHA_RED);
     assert.equal(chipDotAlpha(1, true, 0), CHIP_TEAM_FILL_ALPHA);
-    assert.equal(CHIP_TEAM_FILL_ALPHA, 0.95);
+    assert.equal(CHIP_TEAM_FILL_ALPHA, 1);
     assert.equal(chipDotAlpha(0, false, 0), 1);
     assert.equal(chipIsLeadingTeam(9), true);
     assert.equal(chipIsLeadingTeam(0), false);
@@ -215,15 +218,20 @@ describe('health chip bars', () => {
     assert.equal(chipDotVisible(0, 0), false);
   });
 
-  it('rounds small and big chips the same; lead pip is a circle', () => {
+  it('rounds HP chips; team pips are circles', () => {
     assert.equal(CHIP_SMALL_CORNER_MUL, CHIP_BIG_CORNER_MUL);
     assert.equal(CHIP_LEAD_CORNER_MUL, 1);
     assert.ok(CHIP_BIG_CORNER_MUL > 0.36);
     assert.ok(CHIP_BIG_CORNER_MUL < 0.7);
     assert.equal(chipDotFrame(0), 0);
-    assert.equal(chipDotFrame(1), 1);
+    assert.equal(chipDotFrame(1), 2);
     assert.equal(chipDotFrame(2), 0);
     assert.ok(CHIP_BASELINE_MUL > 0.05 && CHIP_BASELINE_MUL < 0.12);
+    assert.equal(CHIP_BASELINE_ALPHA, 0.5);
+    assert.equal(CHIP_BODY_ALPHA, 0.85);
+    assert.ok(CHIP_BODY_ALPHA < CHIP_EDGE_ALPHA);
+    assert.ok(CHIP_BASELINE_ALPHA < CHIP_BODY_ALPHA);
+    assert.equal(CHIP_EDGE_ALPHA, 1);
   });
 
   it('tints the small interstitial chips with team color', () => {
@@ -253,8 +261,8 @@ describe('health chip bars', () => {
     assert.equal(chipSizeMul(8, BUILDING_CHIP_COUNT), chipSizeMul(2, UNIT_CHIP_COUNT));
     assert.ok(chipSizeMul(1, BUILDING_CHIP_COUNT) < 1);
     assert.equal(DOT_DIAMETER_ALTERNATE_MUL, 0.58);
-    assert.ok(DOT_ALTERNATE_WIDTH_MUL > 1);
-    assert.equal(chipWidthMul(1), DOT_ALTERNATE_WIDTH_MUL);
+    assert.equal(DOT_ALTERNATE_WIDTH_MUL, 1);
+    assert.equal(chipWidthMul(1), 1);
     assert.equal(chipWidthMul(0), 1);
     assert.ok(DOT_DIAMETER_LEAD_MUL > DOT_DIAMETER_ALTERNATE_MUL);
     assert.ok(DOT_DIAMETER_LEAD_MUL < chipSizeMul(2, UNIT_CHIP_COUNT));

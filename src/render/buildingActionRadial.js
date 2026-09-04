@@ -19,8 +19,8 @@ import {
   setSubtreeVisible,
   updateDefaultTextData,
 } from '../vendor/lite/liteVendor.js';
-import { loadBakedUnitMeshParts, UNIT_MODEL_URLS } from './unitModels.js';
-import { VAT_UNIT_DEFS } from './vatUnits.js';
+import { loadBakedUnitMeshParts } from './unitModels.js';
+import { localHudSkin, resolveUnitModelUrl } from '../app/dlcCatalog.js';
 import {
   BUILDING_MENUS,
   BUILDING_MENU_UNITS,
@@ -39,7 +39,7 @@ import { menuGateState } from '../sim/menuGate.js';
 
 /** Static or VAT unit GLB for radial icons. */
 function unitMenuModelUrl(typeId) {
-  return UNIT_MODEL_URLS[typeId] ?? VAT_UNIT_DEFS[typeId]?.url ?? null;
+  return resolveUnitModelUrl(typeId, localHudSkin(typeId));
 }
 
 /** Layout at HUD scale = 1 (ring outer radius in world units). */

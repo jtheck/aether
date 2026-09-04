@@ -46,6 +46,12 @@ export const ORDER = {
 export function clearAttackFocus(w, i) {
   w.targetEntity[i] = -1;
   if (w.targetBuilding) w.targetBuilding[i] = -1;
+  if (w.attackFocus) w.attackFocus[i] = 0;
+}
+
+/** Mark a CMD.ATTACK so combat will not steal the clicked target. */
+export function lockAttackFocus(w, i) {
+  if (w.attackFocus) w.attackFocus[i] = 1;
 }
 
 export function createWorld(seed) {
@@ -111,6 +117,8 @@ export function createWorld(seed) {
     targetEntity: new Int32Array(MAX_ENTITIES), // -1 = none
     /** Placeable building index, or -1. Mutually exclusive with targetEntity. */
     targetBuilding: new Int32Array(MAX_ENTITIES).fill(-1),
+    /** 1 = CMD.ATTACK focus — acquireTargets must not rebalance off this target. */
+    attackFocus: new Uint8Array(MAX_ENTITIES),
     buildings: [],
     buildingsDirty: 0,
     engagementTarget,
@@ -236,6 +244,7 @@ export function spawn(w, { x = 0, y = 0, type = 0, owner = 0, hp, speed } = {}) 
   w.order[i] = ORDER.IDLE;
   w.targetEntity[i] = -1;
   if (w.targetBuilding) w.targetBuilding[i] = -1;
+  if (w.attackFocus) w.attackFocus[i] = 0;
   w.engagementTarget[i] = -1;
   w.engagementSlot[i] = -1;
   w.engagementMask[i] = 0;

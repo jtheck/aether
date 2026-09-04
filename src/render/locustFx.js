@@ -1,15 +1,27 @@
-// Render-only locust swarm: orbiting insects that swerve with the shot, then
-// peel off and circle a nearby spot at full intensity while the DoT is up.
+// Render-only locust swarm: insects follow the shot, then the same bugs
+// peel forward onto new chew sites. Matches sim hop (new circles, old fade)
+// instead of cloning a full pack on every victim.
 
 const INSECTS = 8;
 /** Incoming swarm keeps flying for this long after the shot dies. */
 const HANDOFF_SEC = 0.55;
 const FADE_SEC = 0.85;
-const EMIT_GAP = 0.034;
+/** One sprite per insect, not a 20-wide ribbon (old gap 0.034 / life ~0.75s). */
+const EMIT_GAP = 0.07;
 const FOLLOW = 0.38;
 const PEEL_SEC = 0.42;
 const HOP_SEC = 0.38;
 const ORBIT_SPEED = 1.55;
+/** Must cover sim LOCUST_HOP_RANGE (22) plus a building footprint. */
+const HOP_RANGE2 = 28 * 28;
+/** Leave a couple of chewers if the donor is still being eaten. */
+const REMNANT = 2;
+/** One landing is impact + 2 hops; extra sites share that swarm. */
+const LANDING_SITES = 3;
+/** Hard cap across shots + chew sites so a saturated blob cannot fill the particle pool. */
+const MAX_INSECTS = 200;
+/** Tighter than particle size-cull (~660): far swarms stay in sync, they just do not emit. */
+const CULL_RANGE = 280;
 
 const BODY = [
   [0.46, 0.5, 0.14, 0.92],
@@ -18,9 +30,9 @@ const BODY = [
   [0.2, 0.26, 0.09, 0.85],
 ];
 
-function makeInsects() {
+function makeInsects(n = INSECTS) {
   const list = [];
-  for (let i = 0; i < INSECTS; i++) {
+  for (let i = 0; i < n; i++) {
     list.push({
       phase: Math.random() * Math.PI * 2,
       radius: 0.5 + Math.random() * 1.45,
@@ -54,19 +66,37 @@ function makeClump(angle, spread, insects, fromX, fromY, fromZ) {
   };
 }
 
-function visualCount(stacks) {
-  return Math.max(0, stacks | 0);
+function dist2(ax, az, bx, bz) {
+  const dx = ax - bx;
+  const dz = az - bz;
+  return dx * dx + dz * dz;
+}
+
+function insectCount(pack) {
+  let n = 0;
+  for (let i = 0; i < pack.clumps.length; i++) n += pack.clumps[i].insects.length;
+  return n;
+}
+
+function peelFromList(list, n) {
+  if (n <= 0 || !list.length) return [];
+  const take = Math.min(n, list.length);
+  return list.splice(list.length - take, take);
 }
 
 /**
  * @param {(init: object) => unknown} emit
+ * @param {{ getEye?: () => { x: number, y: number, z: number } | null, cullRangeScale?: number }} [opts]
  */
-export function createLocustFx(emit) {
+export function createLocustFx(emit, opts = {}) {
+  let getEye = opts.getEye ?? null;
+  let cullRangeScale = Math.max(0.05, opts.cullRangeScale ?? 1);
   /** @type {Map<string, {
    *   cx: number, cy: number, cz: number,
    *   vx: number, vz: number,
    *   insects: ReturnType<typeof makeInsects>,
    *   seen: boolean,
+   *   key: string,
    * }>} */
   const live = new Map();
   /** @type {Array<{
@@ -84,9 +114,22 @@ export function createLocustFx(emit) {
    *   dying: number,
    * }>} */
   const dots = new Map();
+  /** @type {Array<{ key: string, x: number, y: number, z: number }>} */
+  const pending = [];
 
   function keyOf(slot, generation) {
     return `${slot}:${generation}`;
+  }
+
+  function tooFar(x, y, z) {
+    if (!getEye) return false;
+    const eye = getEye();
+    if (!eye) return false;
+    const range = CULL_RANGE * cullRangeScale;
+    const dx = x - eye.x;
+    const dy = y - eye.y;
+    const dz = z - eye.z;
+    return dx * dx + dy * dy + dz * dz > range * range;
   }
 
   function emitInsect(swarm, insect, fade) {
@@ -111,7 +154,7 @@ export function createLocustFx(emit) {
       ],
       gravity: [0, -0.85, 0],
       color: [c[0], c[1], c[2], c[3] * a],
-      lifetime: 0.55 + Math.random() * 0.4,
+      lifetime: 0.26 + Math.random() * 0.18,
       startSize: [0.7 + Math.random() * 0.28, 0.2 + Math.random() * 0.1],
       endSize: [0.14, 0.05],
       drag: 1.15,
@@ -129,6 +172,7 @@ export function createLocustFx(emit) {
 
   function pulse(swarm, dt, fade) {
     stepInsects(swarm.insects, dt);
+    if (tooFar(swarm.cx, swarm.cy, swarm.cz)) return;
     for (let i = 0; i < swarm.insects.length; i++) {
       const bug = swarm.insects[i];
       bug.emitAcc += dt;
@@ -138,48 +182,257 @@ export function createLocustFx(emit) {
     }
   }
 
-  function nearestHopOrigin(x, y, z) {
-    let best = null;
-    let bestD = Infinity;
+  function flyingInsects() {
+    let n = 0;
+    for (const swarm of live.values()) n += swarm.insects.length;
+    for (let i = 0; i < handoff.length; i++) n += handoff[i].insects.length;
+    return n;
+  }
+
+  function totalInsects() {
+    let n = flyingInsects();
+    for (const pack of dots.values()) n += insectCount(pack);
+    return n;
+  }
+
+  function roomFor(want) {
+    return Math.max(0, Math.min(want, MAX_INSECTS - totalInsects()));
+  }
+
+  function trimList(list, n) {
+    if (n <= 0 || !list.length) return 0;
+    const take = Math.min(n, list.length);
+    list.length -= take;
+    return take;
+  }
+
+  function trimBudget() {
+    let extra = totalInsects() - MAX_INSECTS;
+    if (extra <= 0) return;
+    const eye = getEye?.() ?? null;
+    const scored = [];
     for (const pack of dots.values()) {
-      const dx = pack.tx - x;
-      const dz = pack.tz - z;
-      const d = dx * dx + dz * dz;
-      if (d > 0.4 && d < bestD) {
-        bestD = d;
-        best = { x: pack.tx, y: pack.ty, z: pack.tz };
+      const n = insectCount(pack);
+      if (n <= 0) continue;
+      let hopping = false;
+      for (let c = 0; c < pack.clumps.length; c++) {
+        if (pack.clumps[c].hop < 1) {
+          hopping = true;
+          break;
+        }
       }
+      if (hopping) continue;
+      const d = eye ? dist2(pack.tx, pack.tz, eye.x, eye.z) : 0;
+      scored.push({ kind: 'pack', pack, d, n });
+    }
+    for (const swarm of live.values()) {
+      if (!swarm.insects.length) continue;
+      const d = eye ? dist2(swarm.cx, swarm.cz, eye.x, eye.z) : 0;
+      scored.push({ kind: 'live', swarm, d, n: swarm.insects.length });
     }
     for (let i = 0; i < handoff.length; i++) {
       const swarm = handoff[i];
-      const dx = swarm.cx - x;
-      const dz = swarm.cz - z;
-      const d = dx * dx + dz * dz;
-      if (d < bestD) {
-        bestD = d;
-        best = { x: swarm.cx, y: swarm.cy, z: swarm.cz };
+      if (!swarm.insects.length) continue;
+      const d = eye ? dist2(swarm.cx, swarm.cz, eye.x, eye.z) : 0;
+      scored.push({ kind: 'handoff', swarm, d, n: swarm.insects.length });
+    }
+    scored.sort((a, b) => b.d - a.d);
+    for (let i = 0; i < scored.length && extra > 0; i++) {
+      const row = scored[i];
+      if (row.kind === 'pack') {
+        const keep = row.pack.seen ? 1 : 0;
+        extra -= peelFromPack(row.pack, Math.min(extra, Math.max(0, row.n - keep))).length;
+      } else {
+        extra -= trimList(row.swarm.insects, extra);
       }
     }
-    return best;
   }
 
-  function ensureClumps(pack, want, hopFrom) {
-    while (pack.clumps.length < want) {
-      const i = pack.clumps.length;
-      const angle = (i * Math.PI * 2) / Math.max(3, want) + Math.random() * 0.4;
-      const from = hopFrom ?? (pack.clumps[0]
-        ? { x: pack.clumps[0].cx, y: pack.clumps[0].cy, z: pack.clumps[0].cz }
-        : null);
+  function peelFromPack(pack, n) {
+    const taken = [];
+    for (let c = pack.clumps.length - 1; c >= 0 && taken.length < n; c--) {
+      const more = peelFromList(pack.clumps[c].insects, n - taken.length);
+      for (let i = 0; i < more.length; i++) taken.push(more[i]);
+      if (!pack.clumps[c].insects.length) pack.clumps.splice(c, 1);
+    }
+    return taken;
+  }
+
+  function nearestHandoff(x, z) {
+    let best = null;
+    let bestD = Infinity;
+    for (let i = 0; i < handoff.length; i++) {
+      const swarm = handoff[i];
+      if (!swarm.insects.length) continue;
+      const d = dist2(swarm.cx, swarm.cz, x, z);
+      if (d < bestD) {
+        bestD = d;
+        best = swarm;
+      }
+    }
+    if (!best || bestD > HOP_RANGE2) return null;
+    return { kind: 'handoff', swarm: best, x: best.cx, y: best.cy, z: best.cz };
+  }
+
+  function nearestPack(x, z) {
+    let best = null;
+    let bestKey = null;
+    let bestD = Infinity;
+    for (const [key, pack] of dots) {
+      if (insectCount(pack) <= 0) continue;
+      const d = dist2(pack.tx, pack.tz, x, z);
+      if (d <= 0.4 || d >= bestD) continue;
+      bestD = d;
+      best = pack;
+      bestKey = key;
+    }
+    if (!best || bestD > HOP_RANGE2) return null;
+    return { kind: 'pack', pack: best, key: bestKey, x: best.tx, y: best.ty, z: best.tz };
+  }
+
+  function nearestLive(x, z) {
+    let best = null;
+    let bestD = Infinity;
+    for (const swarm of live.values()) {
+      if (!swarm.seen) continue;
+      const d = dist2(swarm.cx, swarm.cz, x, z);
+      if (d < bestD) {
+        bestD = d;
+        best = swarm;
+      }
+    }
+    if (!best || bestD > HOP_RANGE2) return null;
+    return { kind: 'live', swarm: best, x: best.cx, y: best.cy, z: best.cz };
+  }
+
+  function nearestDonor(x, z) {
+    return nearestHandoff(x, z) ?? nearestPack(x, z) ?? nearestLive(x, z);
+  }
+
+  function spawnDot(key, x, y, z, insects, hopFrom) {
+    const ang = Math.random() * Math.PI * 2;
+    const pack = {
+      tx: x,
+      ty: y,
+      tz: z,
+      driftX: Math.cos(ang) * 2.35,
+      driftZ: Math.sin(ang) * 2.35,
+      clumps: [],
+      seen: true,
+      dying: 0,
+    };
+    if (insects.length) {
       pack.clumps.push(makeClump(
-        angle,
-        0.35 + i * 0.28,
-        null,
-        from?.x,
-        from?.y,
-        from?.z,
+        Math.random() * Math.PI * 2,
+        0.35,
+        insects,
+        hopFrom?.x,
+        hopFrom?.y,
+        hopFrom?.z,
       ));
     }
-    if (pack.clumps.length > want) pack.clumps.length = want;
+    dots.set(key, pack);
+    return pack;
+  }
+
+  function donorId(donor) {
+    if (donor.kind === 'handoff') return `h:${handoff.indexOf(donor.swarm)}`;
+    if (donor.kind === 'pack') return `p:${donor.key}`;
+    return `l:${donor.swarm.key}`;
+  }
+
+  function settleNew(dests, donor) {
+    const from = { x: donor.x, y: donor.y, z: donor.z };
+    if (donor.kind === 'pack') {
+      const have = insectCount(donor.pack);
+      const keep = donor.pack.seen ? REMNANT : 0;
+      let remain = Math.max(0, have - keep);
+      for (let i = 0; i < dests.length; i++) {
+        const take = Math.ceil(remain / (dests.length - i));
+        remain -= take;
+        const dest = dests[i];
+        spawnDot(dest.key, dest.x, dest.y, dest.z, peelFromPack(donor.pack, take), from);
+      }
+      return;
+    }
+    // Incoming shot: split the same insects across impact + hops. Do not mint
+    // a full pack per site — that is what blew the particle pool to 65k.
+    const ordered = dests.slice();
+    ordered.sort((a, b) => dist2(a.x, a.z, from.x, from.z) - dist2(b.x, b.z, from.x, from.z));
+    const lush = ordered.slice(0, LANDING_SITES);
+    const rest = ordered.slice(LANDING_SITES);
+    const keepOnShot = donor.kind === 'live' ? REMNANT : 0;
+    const available = Math.max(0, donor.swarm.insects.length - keepOnShot);
+    const pool = peelFromList(donor.swarm.insects, available);
+    for (let i = 0; i < lush.length; i++) {
+      const share = [];
+      for (let k = i; k < pool.length; k += lush.length) share.push(pool[k]);
+      const dest = lush[i];
+      spawnDot(dest.key, dest.x, dest.y, dest.z, share, from);
+    }
+    if (!rest.length) return;
+    const seed = dots.get(lush[0].key);
+    if (!seed) return;
+    settleNew(rest, {
+      kind: 'pack',
+      pack: seed,
+      key: lush[0].key,
+      x: seed.tx,
+      y: seed.ty,
+      z: seed.tz,
+    });
+  }
+
+  function settleOrphans(orphans) {
+    const left = orphans.slice();
+    while (left.length) {
+      const seed = left.shift();
+      const pack = spawnDot(seed.key, seed.x, seed.y, seed.z, makeInsects(Math.max(1, roomFor(INSECTS))), null);
+      const nearby = [];
+      for (let i = left.length - 1; i >= 0; i--) {
+        if (dist2(left[i].x, left[i].z, seed.x, seed.z) > HOP_RANGE2) continue;
+        nearby.push(left[i]);
+        left.splice(i, 1);
+      }
+      if (!nearby.length) continue;
+      settleNew(nearby, {
+        kind: 'pack',
+        pack,
+        key: seed.key,
+        x: seed.x,
+        y: seed.y,
+        z: seed.z,
+      });
+    }
+  }
+
+  function resolvePending() {
+    if (!pending.length) return;
+    /** @type {Map<string, { donor: ReturnType<typeof nearestDonor>, dests: typeof pending }>} */
+    const groups = new Map();
+    const orphans = [];
+    for (let i = 0; i < pending.length; i++) {
+      const dest = pending[i];
+      const donor = nearestDonor(dest.x, dest.z);
+      if (!donor) {
+        orphans.push(dest);
+        continue;
+      }
+      const id = donorId(donor);
+      let group = groups.get(id);
+      if (!group) {
+        group = { donor, dests: [] };
+        groups.set(id, group);
+      }
+      group.dests.push(dest);
+    }
+    for (const group of groups.values()) settleNew(group.dests, group.donor);
+    settleOrphans(orphans);
+    for (let i = handoff.length - 1; i >= 0; i--) {
+      if (!handoff[i].insects.length) handoff.splice(i, 1);
+    }
+    pending.length = 0;
+    trimBudget();
   }
 
   function stepClump(pack, clump, dt) {
@@ -212,16 +465,17 @@ export function createLocustFx(emit) {
     let swarm = live.get(key);
     if (!swarm) {
       swarm = {
+        key,
         cx: x,
         cy: y,
         cz: z,
         vx,
         vz,
-        insects: makeInsects(),
+        insects: makeInsects(roomFor(INSECTS)),
         seen: true,
       };
       live.set(key, swarm);
-      pulse(swarm, EMIT_GAP, 1);
+      if (swarm.insects.length) pulse(swarm, EMIT_GAP, 1);
       return;
     }
     swarm.seen = true;
@@ -250,38 +504,31 @@ export function createLocustFx(emit) {
 
   function beginDots() {
     for (const pack of dots.values()) pack.seen = false;
+    pending.length = 0;
   }
 
   function sustain(key, x, y, z, stacks) {
-    const want = visualCount(stacks);
-    if (want <= 0) return;
-    let pack = dots.get(key);
-    const hopFrom = pack ? null : nearestHopOrigin(x, y, z);
-    if (!pack) {
-      const ang = Math.random() * Math.PI * 2;
-      pack = {
-        tx: x,
-        ty: y,
-        tz: z,
-        driftX: Math.cos(ang) * 2.35,
-        driftZ: Math.sin(ang) * 2.35,
-        clumps: [],
-        seen: true,
-        dying: 0,
-      };
-      dots.set(key, pack);
+    if ((stacks | 0) <= 0) return;
+    const pack = dots.get(key);
+    if (pack) {
+      pack.seen = true;
+      pack.dying = 0;
+      pack.tx += (x - pack.tx) * 0.28;
+      pack.ty += (y - pack.ty) * 0.28;
+      pack.tz += (z - pack.tz) * 0.28;
+      return;
     }
-    pack.seen = true;
-    pack.dying = 0;
-    pack.tx += (x - pack.tx) * 0.28;
-    pack.ty += (y - pack.ty) * 0.28;
-    pack.tz += (z - pack.tz) * 0.28;
-    ensureClumps(pack, want, hopFrom);
+    pending.push({ key, x, y, z });
   }
 
   function endDots() {
+    resolvePending();
     for (const [key, pack] of dots) {
       if (pack.seen) continue;
+      if (insectCount(pack) <= 0) {
+        dots.delete(key);
+        continue;
+      }
       if (pack.dying <= 0) pack.dying = 1e-6;
     }
   }
@@ -289,6 +536,7 @@ export function createLocustFx(emit) {
   function update(deltaMs) {
     const dt = Math.min(0.08, Math.max(0, deltaMs / 1000));
     if (dt <= 0) return;
+    trimBudget();
     for (const swarm of live.values()) pulse(swarm, dt, 1);
     for (let i = handoff.length - 1; i >= 0; i--) {
       const swarm = handoff[i];
@@ -297,8 +545,8 @@ export function createLocustFx(emit) {
       swarm.cz += swarm.vz * dt;
       swarm.vx *= Math.exp(-dt * 1.6);
       swarm.vz *= Math.exp(-dt * 1.6);
-      pulse(swarm, dt, 1);
-      if (swarm.age >= HANDOFF_SEC) handoff.splice(i, 1);
+      if (swarm.insects.length) pulse(swarm, dt, 1);
+      if (swarm.age >= HANDOFF_SEC || !swarm.insects.length) handoff.splice(i, 1);
     }
     for (const [key, pack] of dots) {
       if (pack.dying > 0) pack.dying += dt;
@@ -322,6 +570,31 @@ export function createLocustFx(emit) {
     live.clear();
     handoff.length = 0;
     dots.clear();
+    pending.length = 0;
+  }
+
+  function configure(next = {}) {
+    if (next.getEye !== undefined) getEye = next.getEye;
+    if (next.cullRangeScale != null) cullRangeScale = Math.max(0.05, next.cullRangeScale);
+  }
+
+  function snapshot() {
+    const packs = [];
+    for (const [key, pack] of dots) {
+      packs.push({
+        key,
+        insects: insectCount(pack),
+        dying: pack.dying,
+        x: pack.tx,
+        z: pack.tz,
+      });
+    }
+    return {
+      live: live.size,
+      handoff: handoff.length,
+      packs,
+      insects: totalInsects(),
+    };
   }
 
   return {
@@ -333,5 +606,11 @@ export function createLocustFx(emit) {
     endDots,
     update,
     clear,
+    configure,
+    snapshot,
   };
 }
+
+export const LOCUST_FX_INSECTS = INSECTS;
+export const LOCUST_FX_REMNANT = REMNANT;
+export const LOCUST_FX_MAX_INSECTS = MAX_INSECTS;

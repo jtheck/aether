@@ -429,6 +429,10 @@ export function createGameInput(opts) {
     return renderer.pickControlGroupHud?.(clientX, clientY) != null;
   }
 
+  function hitSelectionHud(clientX, clientY) {
+    return renderer.pickSelectionHud?.(clientX, clientY) != null;
+  }
+
   /** Number-key hold (1-6) — separate from the pad pointer gesture. */
   let ctrlGroupKeyId = null;
   let ctrlGroupKeyAssigned = false;
@@ -2108,6 +2112,7 @@ export function createGameInput(opts) {
       }
     },
     hitControlGroupHud,
+    hitSelectionHud,
     handleControlGroupKeyDown,
     handleControlGroupKeyUp,
     clearControlGroups() {

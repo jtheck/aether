@@ -9,6 +9,7 @@ const HOST = '127.0.0.1';
 let server = null;
 let onDevToolsToggle = null;
 let onLeaveFullscreen = null;
+let onEnterFullscreen = null;
 let onToggleFullscreen = null;
 let onReload = null;
 
@@ -96,6 +97,11 @@ async function handle(req, res) {
     return sendJson(res, 200, { ok: left });
   }
 
+  if (req.method === 'POST' && req.url === '/window/enter-fullscreen') {
+    var entered = onEnterFullscreen ? !!onEnterFullscreen() : false;
+    return sendJson(res, 200, { ok: entered });
+  }
+
   if (req.method === 'POST' && req.url === '/window/toggle-fullscreen') {
     var toggled = onToggleFullscreen ? !!onToggleFullscreen() : false;
     return sendJson(res, 200, { ok: toggled });
@@ -113,6 +119,7 @@ async function handle(req, res) {
 function start(opts) {
   if (opts && opts.onDevToolsToggle) onDevToolsToggle = opts.onDevToolsToggle;
   if (opts && opts.onLeaveFullscreen) onLeaveFullscreen = opts.onLeaveFullscreen;
+  if (opts && opts.onEnterFullscreen) onEnterFullscreen = opts.onEnterFullscreen;
   if (opts && opts.onToggleFullscreen) onToggleFullscreen = opts.onToggleFullscreen;
   if (opts && opts.onReload) onReload = opts.onReload;
   if (server) return server;

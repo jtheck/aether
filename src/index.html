@@ -49,7 +49,7 @@
       font-style: normal;
       font-display: swap;
     }
-    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0f14; color: #cdd6e4; font-family: system-ui, sans-serif; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0f14; color: #cdd6e4; font-family: system-ui, sans-serif; --pop-ink: #b8c0cc; }
     #canvas { display: block; width: 100%; height: 100%; touch-action: none; }
     #fallback {
       display: none;
@@ -68,7 +68,7 @@
       overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
     }
     #status { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
-    #status-pop { position: absolute; right: 100%; top: 0; margin-right: 1.4em; white-space: nowrap; opacity: 0.68; color: #a4adbd; }
+    #status-pop { position: absolute; right: 100%; top: 0; margin-right: 1.4em; white-space: nowrap; opacity: 0.68; color: var(--pop-ink); }
     #status-side { position: absolute; left: 100%; top: 0; margin-left: 1.4em; white-space: nowrap; word-spacing: 0.9em; opacity: 0.46; color: #7a8496; }
     #resources { position: fixed; left: 50%; bottom: 8px; transform: translateX(-50%); z-index: 10001; font-size: 13px; opacity: 0.9; pointer-events: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
     #resource-bank {
@@ -115,6 +115,7 @@
       white-space: nowrap;
     }
     #observer-data[hidden] { display: none; }
+    #observer-data .obs-pop { color: var(--pop-ink); opacity: 0.68; }
     #radial-prices { position: fixed; inset: 0; z-index: 10002; pointer-events: none; }
     #radial-prices .radial-price {
       position: absolute; left: 0; top: 0;
@@ -203,7 +204,7 @@
     #side_menu.is-open { transform: translateX(0); }
     #side_menu h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
     #side_menu h4 { margin: 0 0 12px; font-size: 13px; font-weight: 600; }
-    #side_menu .skinny-header { display: block; width: 100%; height: auto; margin: 0 0 10px; }
+    #side_menu .skinny-header { display: block; width: 100%; height: auto; margin: 0 0 10px; user-select: none;}
     #side_menu .page { display: none; flex: 1; overflow-y: auto; overflow-x: hidden; padding: 5px;}
     #side_menu .page.is-active { display: block; }
     #side_menu .row { margin-bottom: 14px; }
@@ -297,7 +298,10 @@
     #match-lobby-overlay .btn:disabled { opacity: .45; cursor: default; border-color: #2a3140; color: inherit; }
     #match-lobby-overlay .btn[hidden] { display: none; }
     #match-lobby-overlay .note { margin-top: 8px; font-size: 11px; color: #e0b050; }
-    #fullscreen_exit_b { position: absolute; left: 18px; right: 48px; bottom: 10px; width: auto; margin: 0; text-align: center; }
+    #side_menu #fullscreen_exit_b {
+      position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%);
+      display: inline-block; width: fit-content; margin: 0; text-align: center;
+    }
     #settings_b { position: absolute; right: 10px; bottom: 8px; width: 28px; height: 28px; stroke: #fff; fill: none; opacity: .55; cursor: pointer; }
     #settings_b:hover { stroke: aqua; opacity: 1; }
     #settings_b:active { stroke: darkmagenta; }
@@ -321,7 +325,7 @@
     body.screenshot-hud :is(
       #status, #resources, #resource-bank, #observer-data, #radial-prices,
       #koth-controls, #match-lobby-overlay, #header, #menu_b, #side_menu,
-      #boot-splash, #match-over
+      #boot-splash, #match-over, #version
     ),
     body.screenshot-hud .ble-root {
       visibility: hidden !important;
@@ -484,6 +488,15 @@
         <label for="extra_groups"><input type="checkbox" id="extra_groups"> Extra control groups</label>
         <div class="note">Adds black and white pads (six total).</div>
       </div>
+      <div id="unit_skins_row" hidden>
+        <div class="note">Unit looks</div>
+        <div id="unit_skins"></div>
+        <div class="note">Unlocked cosmetics. New matches use this look.</div>
+      </div>
+      <div class="row">
+        <button type="button" class="btn" id="hide_hud_b">Hide HUD</button>
+        <div class="note">Stays off for recording. Press O to show again.</div>
+      </div>
       <div class="about">
         <br><br>
         <hr>
@@ -541,7 +554,7 @@
         <span class="credit">©'26 Aether.Garden</span>
       </div>
     </div>
-    <button type="button" class="btn" id="fullscreen_exit_b" hidden>Exit [F11]</button>
+    <button type="button" class="btn" id="fullscreen_exit_b">Fullscreen [F11]</button>
     <div id="settings_b" title="Settings">
       <svg width="100%" height="100%" viewBox="0 0 99 99"><path style="fill:none;stroke-width:5.7247;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1" d="M19.848 32.659c-1.806-1.905-4.302-3.979-3.715-6.864.587-2.886 3.377-4.255 5.047-6.328 2.445-2.1 4.659-5.56 7.23-6.445 2.572-.885 4.303.334 5.625 2.136 1.444 2.713 4.159.962 5.743-.022 1.584-.983.24-3.364.553-4.91.847-2.783 3.137-3.896 6.53-3.612 3.393.285 8.163-.171 12.152.131 2.662.855 3.88 3.565 3.551 6.178-.847 2.877 2.343 3.544 4.249 3.831 1.906.287 2.703-3.106 4.718-3.6 2.318-.704 4.694.416 6.074 2.332 2.76 2.844 5.757 5.526 8.373 8.47 1.432 2.208.843 5.306-1.37 6.84-2.75 1.304-.863 3.523-.202 5.424.56 1.77 3.223.504 4.69.965 2.867.574 4.58 3.565 4.027 6.362-.087 4.144.173 8.37-.129 12.463-.903 2.728-3.739 3.794-6.36 3.4-2.815-.855-3.66 2.272-3.701 4.4-.044 2.129 3.832 3.143 3.715 6.158-.116 3.015-3.148 4.714-4.856 6.902-2.183 2.054-4.186 4.389-6.481 6.268-2.39 1.178-5.253.166-6.771-1.984-1.428-2.729-3.793.123-5.917.4M19.98 80.1c-5.245 1.61-7.395.366-8.912-3.324-1.517-3.69-5.408-9.343-.99-11.256 4.418-1.913 1.252-5.106-2.313-5.849-3.565-.743-1.383-5.87-.649-8.652.595-3.907 3.17-8.828 7.766-7.428 4.596 1.401 2.93-3.363 1.658-6.44-1.272-3.076 3.584-4.967 6.12-6.444 2.633-1.203 6.81-5.717 8.635-2.048 1.825 3.669 6.523 4.471 7.034.12.512-4.351 5.305-2.722 7.898-1.583 2.61.841 5.56 1.053 7.88 2.547 2.932 2.642-.63 8.371 3.075 8.724 3.705.354 5.675-3.05 7.805-.139 1.775 3.475 4.201 6.704 5.57 10.36.73 4.216-6.377 5.791-3.895 8.755 2.481 2.963 6.003 1.783 5.552 5.261-1.079 3.69-1.956 7.472-3.179 11.132-2.418 3.981-8.885-.369-9.17 3.624-.287 3.992 3.078 6.539-.7 8.185-3.041 1.654-6.004 3.484-9.102 5.008-4.584 1.5-6.762-6.63-9.566-3.565-2.803 3.065-1.815 5.694-4.947 5.31-3.62-.996-7.274-1.972-11.295-3.579-4.021-1.606.97-10.329-4.275-8.72zm30.24-22.711c.178 1.042.34 2.142.14 3.18-.377 1.97-.998 3.998-2.263 5.56-.794.98-1.716 1.896-2.78 2.576-2.67 1.707-6.104 2.281-9.212 1.467h0c-1.337-.451-2.836-.829-3.865-1.813-1.038-.991-2.251-1.885-2.992-3.108-1.627-2.687-2.132-6.068-1.269-9.143 1.01-3.593 3.887-6.46 7.381-7.759 1.176-.437 2.344-.556 3.568-.529 1.275.03 2.572.092 3.785.513"/></svg>
     </div>

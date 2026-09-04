@@ -5,6 +5,7 @@ import {
   SCREENSHOT_HUD_HOLD_ADD_EVERY_MS,
   SCREENSHOT_HUD_MAX_LINGER_MS,
   SCREENSHOT_HUD_TAP_MS,
+  createScreenshotHud,
   createScreenshotHudClock,
 } from './screenshotHud.js';
 
@@ -71,5 +72,37 @@ describe('screenshot HUD clock', () => {
     const second = clock.press(20);
     assert.equal(first.lingerMs, SCREENSHOT_HUD_TAP_MS);
     assert.equal(second.lingerMs, SCREENSHOT_HUD_TAP_MS);
+  });
+});
+
+describe('screenshot HUD lock', () => {
+  function makeHud(onChange) {
+    return createScreenshotHud({
+      now: () => 0,
+      requestFrame: () => 0,
+      cancelFrame: () => {},
+      onChange,
+    });
+  }
+
+  it('stays hidden while locked', () => {
+    const hud = makeHud();
+    hud.setLocked(true);
+    assert.equal(hud.isLocked(), true);
+    assert.equal(hud.isHidden(), true);
+    hud.release();
+    assert.equal(hud.isHidden(), true);
+    hud.setLocked(false);
+    assert.equal(hud.isLocked(), false);
+    assert.equal(hud.isHidden(), false);
+  });
+
+  it('notifies onChange when lock flips hide', () => {
+    const seen = [];
+    const hud = makeHud((hidden) => seen.push(hidden));
+    hud.setLocked(true);
+    hud.setLocked(true);
+    hud.setLocked(false);
+    assert.deepEqual(seen, [true, false]);
   });
 });

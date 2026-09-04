@@ -1,5 +1,6 @@
 import { sameUserId } from './ids.js';
 import { gardenUrlForChapter, getMode, mapTilesForField } from './modes.js';
+import { ownerSkinsFromSeats } from '../app/dlcCatalog.js';
 
 /**
  * Team id per owner index. Null = FFA (1v1). Adventure is one allied team.
@@ -74,6 +75,7 @@ export function liveConfigFromLobby(state, localUserId) {
     gardenUrl: gardenUrlForChapter(state.settings?.chapter),
     localSolo,
     inputDelayTicks: localSolo ? 0 : 1,
+    ownerSkins: ownerSkinsFromSeats(state.seats),
     ...vision,
   };
 }

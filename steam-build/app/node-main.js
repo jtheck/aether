@@ -111,6 +111,19 @@ function leaveFullscreen() {
   }
 }
 
+function enterFullscreen() {
+  const win = activeWindow();
+  if (!win) return false;
+  if (isWindowFullscreen(win)) return true;
+  try {
+    win.enterFullscreen();
+    return true;
+  } catch (err) {
+    console.warn('[steam-build] Enter fullscreen failed:', err.message);
+    return false;
+  }
+}
+
 function toggleFullscreen() {
   const win = activeWindow();
   if (!win) return false;
@@ -191,6 +204,7 @@ function ensureBridgeServer() {
     require('./bridge-server').start({
       onDevToolsToggle: toggleDevTools,
       onLeaveFullscreen: leaveFullscreen,
+      onEnterFullscreen: enterFullscreen,
       onToggleFullscreen: toggleFullscreen,
       onReload: reloadWindow,
     });

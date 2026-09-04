@@ -9,7 +9,7 @@ export const CONTROL_GROUP_COUNT = 6;
 /** Hold this long on a pad to assign the current selection (click selects). */
 export const CONTROL_GROUP_HOLD_MS = 400;
 /** Second tap of the same group within this window centers the camera. */
-export const CONTROL_GROUP_DOUBLE_MS = 350;
+export const CONTROL_GROUP_DOUBLE_MS = 429;
 
 const KEY_TO_GROUP = {
   Digit1: 0, Numpad1: 0,

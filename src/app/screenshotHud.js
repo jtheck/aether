@@ -105,14 +105,16 @@ export function createScreenshotHud(opts = {}) {
 
   let handle = 0;
   let lastHidden = false;
+  let locked = false;
 
   function flush() {
     const snap = clock.tick(nowFn());
-    if (snap.hidden !== lastHidden) {
-      lastHidden = snap.hidden;
+    const hidden = locked || snap.hidden;
+    if (hidden !== lastHidden) {
+      lastHidden = hidden;
       opts.onChange?.(lastHidden);
     }
-    if (snap.hidden || snap.holding) {
+    if (!locked && (snap.hidden || snap.holding)) {
       if (!handle) {
         handle = raf(() => {
           handle = 0;
@@ -120,7 +122,15 @@ export function createScreenshotHud(opts = {}) {
         });
       }
     }
-    return snap;
+    return { ...snap, hidden, locked };
+  }
+
+  function setLocked(on) {
+    const next = !!on;
+    if (next === locked) return flush();
+    locked = next;
+    if (locked) opts.onPress?.();
+    return flush();
   }
 
   return {
@@ -132,6 +142,13 @@ export function createScreenshotHud(opts = {}) {
     release() {
       clock.release(nowFn());
       return flush();
+    },
+    setLocked,
+    toggleLocked() {
+      return setLocked(!locked);
+    },
+    isLocked() {
+      return locked;
     },
     isHidden() {
       return lastHidden;

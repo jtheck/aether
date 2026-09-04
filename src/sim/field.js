@@ -74,8 +74,12 @@ export function worldHalfFFromMap(mapW) {
   return (mapW * TILE_SIZE_F) / 2;
 }
 
-/** Stress play-camera box — a bit past the 9-chunk loading-screen clamp. */
-export const STRESS_CAMERA_HALF_F = worldHalfFFromMap(tilesForOddChunks(11));
+/**
+ * Stress play-camera box — 19 chunks covers the pie ring
+ * (inner ~0.30·table … support ~0.90·table − 32) and still leaves a vista rim.
+ */
+export const STRESS_CAMERA_CHUNKS = 19;
+export const STRESS_CAMERA_HALF_F = worldHalfFFromMap(tilesForOddChunks(STRESS_CAMERA_CHUNKS));
 
 export function worldHalfFFromField(field) {
   return worldHalfFFromMap(field.width);

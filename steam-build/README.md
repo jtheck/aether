@@ -81,6 +81,8 @@ if (window.aetherDesktop?.steam?.isAvailable()) {
 
 Game code uses `window.aetherSteam` (`src/app/steam.js`). No-ops in the browser.
 
+DLC ownership is on `getInfo().dlc` (`{ appId, owned }`). First Responder is App ID **5217980**. The game maps that to pack `first_responder` via `aetherSteam.ownedPacks()`. Local art iteration (loopback only): `http://127.0.0.1:5173/?dlc=first_responder`. Ignored on aether.garden.
+
 | API name | When |
 |---|---|
 | `ACH_FIRST_LAUNCH` | First time the garden is playable (splash down) |

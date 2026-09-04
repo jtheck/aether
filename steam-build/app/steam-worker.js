@@ -102,6 +102,48 @@ function readBody(req) {
   });
 }
 
+// Keep in sync with src/app/dlcCatalog.js DLC_PACKS steamAppId values.
+const KNOWN_DLC_APP_IDS = [5217980];
+
+function listOwnedDlc() {
+  var out = [];
+  var seen = {};
+  function pushRow(appId, name, owned) {
+    var id = Number(appId);
+    if (!Number.isFinite(id) || seen[id]) return;
+    seen[id] = true;
+    out.push({ appId: id, name: name || '', owned: !!owned });
+  }
+  try {
+    var all = sdk.apps && sdk.apps.getAllDLC && sdk.apps.getAllDLC();
+    if (Array.isArray(all)) {
+      for (var i = 0; i < all.length; i++) {
+        var row = all[i] || {};
+        var appId = row.appId != null ? row.appId : row.appid;
+        var installed = false;
+        try {
+          installed = !!(sdk.apps.isDlcInstalled && sdk.apps.isDlcInstalled(appId));
+        } catch (_err) {
+          installed = !!(row.available || row.owned);
+        }
+        pushRow(appId, row.name, installed || row.available || row.owned);
+      }
+    }
+  } catch (_errAll) { /* getAllDLC missing or failed */ }
+  for (var k = 0; k < KNOWN_DLC_APP_IDS.length; k++) {
+    var known = KNOWN_DLC_APP_IDS[k];
+    if (seen[known]) continue;
+    var owned = false;
+    try {
+      owned = !!(sdk.apps && sdk.apps.isDlcInstalled && sdk.apps.isDlcInstalled(known));
+    } catch (_errKnown) {
+      owned = false;
+    }
+    pushRow(known, '', owned);
+  }
+  return out;
+}
+
 function sendJson(res, code, data) {
   var body = JSON.stringify(data);
   res.writeHead(code, {
@@ -130,6 +172,7 @@ async function handle(req, res) {
         available: true,
         appId: readAppId(),
         name: sdk.friends.getPersonaName(),
+        dlc: listOwnedDlc(),
       });
     } catch (err) {
       return sendJson(res, 200, { available: false, error: err.message });

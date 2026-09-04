@@ -209,6 +209,7 @@ function makeHeader(icons) {
 
 function makeRow() {
   const pop = document.createElement('span');
+  pop.className = 'obs-pop';
   pop.style.justifySelf = 'end';
   const name = document.createElement('span');
   name.style.justifySelf = 'start';

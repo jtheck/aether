@@ -38,7 +38,7 @@ const ENTITY_U8 = [
   'hasTarget', 'order', 'navWpCount', 'navWpIndex', 'pathRequest', 'pathSlowAware',
   'rallyHopCount', 'rallyHop1Order', 'rallyHop2Order',
   'stuckTicks', 'repathCount', 'lobTrail', 'type', 'owner', 'alive', 'carriedKind',
-  'gatherDefensive', 'gatherAct',
+  'gatherDefensive', 'gatherAct', 'attackFocus',
 ];
 
 /**
@@ -135,6 +135,7 @@ export function importWorldCheckpoint(w, field, checkpoint) {
   }
   // Older checkpoints omit pathSlowAware — clear so restore stays geometric.
   if (!ent.arrays.pathSlowAware && w.pathSlowAware) w.pathSlowAware.fill(0);
+  if (!ent.arrays.attackFocus && w.attackFocus) w.attackFocus.fill(0);
   if (!ent.arrays.gatherAct && w.gatherAct) w.gatherAct.fill(0);
   if (!ent.arrays.targetBuilding && w.targetBuilding) w.targetBuilding.fill(-1);
   if (!ent.arrays.locustTicks && w.locustTicks) w.locustTicks.fill(0);

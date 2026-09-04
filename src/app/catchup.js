@@ -9,6 +9,16 @@ import { formatMatchTime, matchSecondsFromTick } from './simSession.js';
  *  worker cost — late joiners can treadmill if the live match outruns replay. */
 export const CATCHUP_TICKS_PER_FRAME = 80;
 
+/** Live tuning knob: `?catchup=N` overrides ticks-per-frame (N > 0). Higher is
+ *  faster (fewer visible frames), lower is slower/smoother to watch the bar. */
+function catchupTicksPerFrameOverride() {
+  if (typeof location === 'undefined' || !location.search) return null;
+  const raw = new URLSearchParams(location.search).get('catchup');
+  if (raw == null) return null;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /** Replay more than this many ticks? Host should mint a fresh world checkpoint. */
 export const CATCHUP_MAX_REPLAY_TICKS = 240;
 
@@ -118,7 +128,7 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
  * @param {import('./simSession.js').SimSession} session — must already be reset/started for this match
  */
 export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
-  const ticksPerFrame = options.ticksPerFrame ?? CATCHUP_TICKS_PER_FRAME;
+  const ticksPerFrame = options.ticksPerFrame ?? catchupTicksPerFrameOverride() ?? CATCHUP_TICKS_PER_FRAME;
   const onProgress = options.onProgress;
   const fromTick = (options.fromTick ?? 0) | 0;
   const byTick = groupFramesByTick(ledgerFrames);

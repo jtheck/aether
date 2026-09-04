@@ -115,6 +115,7 @@ import {
   stepObjectives,
 } from '../story/objectives.js';
 import { createExitMarks } from '../story/exits.js';
+import { liveConfigKeepsAdventure, resetAdventureRuntime } from '../story/adventureRuntime.js';
 import { CHAPTER_FLUSH_MS, chapterVotesReady, pickCanonicalChapter } from '../story/chapterSync.js';
 import { getTeamAssignments, setTeamAssignments } from '../sim/teams.js';
 import { aetherSteam } from './steam.js';
@@ -1006,6 +1007,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     renderer.setBuildingGhost?.(null);
     renderer.setRallyGhost?.(null);
     renderer.placeRallyFlags?.([]);
+    renderer.setObjectiveRings?.(null);
     bufs.selected.fill(0);
     bufs.wasSelected.fill(0);
     bufs.wasAlive.fill(1);
@@ -1727,7 +1729,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     return ctxRef.current?.matchLobby || observerLobby;
   }
 
+  function adventureSessionLive() {
+    return Boolean(ctxRef.current?.adventureLive);
+  }
+
   function tryFlushChapter() {
+    if (!adventureSessionLive()) return;
     const humans = session.humanPlayers?.length ? session.humanPlayers : [localPlayerId];
     if (!chapterVotesReady(chapterVotes, humans) || chapterAdvanceBusy || chapterFlushTimer) return;
     const picked = pickCanonicalChapter(chapterVotes);
@@ -1747,6 +1754,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   }
 
   function proposeChapterAdvance(url) {
+    if (!adventureSessionLive()) return;
     if (!url) {
       setStatusText('Adventure complete');
       return;
@@ -1798,6 +1806,41 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       gardenUrl: live?.gardenUrl,
       name: g?.n || g?.name,
     }) || 'Ch');
+  }
+
+  function endAdventure() {
+    const next = resetAdventureRuntime({
+      story: adventureStory,
+      objectives: adventureObjectives,
+      carriedParty,
+      carriedBank,
+      chapterWon,
+      chapterAdvanceBusy,
+      pendingChapterUrl,
+      objectivesArmedAt,
+      chapterVotes,
+      chapterVoteUrl,
+      chapterProposeSent,
+      chapterFlushTimer,
+    });
+    adventureStory = next.story;
+    adventureObjectives = next.objectives;
+    carriedParty = next.carriedParty;
+    carriedBank = next.carriedBank;
+    chapterWon = next.chapterWon;
+    chapterAdvanceBusy = next.chapterAdvanceBusy;
+    pendingChapterUrl = next.pendingChapterUrl;
+    objectivesArmedAt = next.objectivesArmedAt;
+    chapterVoteUrl = next.chapterVoteUrl;
+    chapterProposeSent = next.chapterProposeSent;
+    chapterFlushTimer = next.chapterFlushTimer;
+    matchStory.stop();
+    storyCast = [];
+    objectiveHud.hide();
+    exitMarks.hide();
+    renderer.setObjectiveRings?.(null);
+    if (ctxRef.current) ctxRef.current.adventureLive = null;
+    paintCornerMark('');
   }
 
   function collectObjectiveUnits() {
@@ -2370,6 +2413,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         kothShard.setLobbyMatchHold?.(false);
         const ctx = ctxRef.current;
         if (!ctx) return;
+        ctx.endAdventure?.();
         ctx.localSoloHold = false;
         return startSoloAiMatch(ctx, {
           temperament: 'passive',
@@ -2468,7 +2512,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (frameProf) profT = performance.now();
     syncWorkRadiusRing();
 
-    updateCatchupOverlay(session);
+    updateCatchupProgress(session);
     if (session.replayingCatchUp) {
       paintStatus();
       updateColors();
@@ -3215,10 +3259,11 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       storyCast = Array.isArray(cast) ? cast : [];
     },
     beginAdventure,
+    endAdventure,
     captureAdventureParty,
     takeCarriedParty,
     onChapterVote(msg) {
-      if (!msg?.url) return;
+      if (!adventureSessionLive() || !msg?.url) return;
       const from = msg.playerId | 0;
       if (from === (localPlayerId | 0)) {
         tryFlushChapter();
@@ -3292,7 +3337,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     setShareVisionWith,
   };
   ctxAdvanceChapter = async (url, handoff = null) => {
-    if (chapterAdvanceBusy) return;
+    if (!adventureSessionLive() || chapterAdvanceBusy) return;
     chapterAdvanceBusy = true;
     try {
       await loadAdventureGardenUrl(ctx, url, kothShard, {
@@ -3339,6 +3384,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
 
   ctx.matchStory?.stop();
   ctx.setStoryCast?.([]);
+  if (!liveConfigKeepsAdventure(cfg)) ctx.endAdventure?.();
   applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
 
   // Cover the teardown/rebuild — same splash as cold boot.
@@ -3892,6 +3938,8 @@ async function startLobbyMatch(ctx, snapshot, kothShard, matchLobby, sideMenu) {
       ctx.adventureLive = { ...cfg };
       ctx.matchLobby = matchLobby;
       ctx.beginAdventure?.(garden);
+    } else {
+      ctx.endAdventure?.();
     }
     if (!cfg.localSolo) matchLobby?.attachSession?.(ctx.session);
     sideMenu?.close?.();
@@ -3920,12 +3968,12 @@ function setGraffitiHeaderVisible(on) {
 }
 
 /**
- * Cover the scene with a progress bar while a late joiner catches up, so the
- * fast-forward replay and world rebuild are never shown. The joiner sees the
- * lobby, then this bar, then the live match — no throwaway mini-match flicker.
+ * Drive the catch-up progress bar inside the KOTH lobby menu while a late joiner
+ * replays to the live tick, so the load is visible in the lobby the player is
+ * already looking at rather than as a separate screen.
  */
-function updateCatchupOverlay(session) {
-  const el = document.getElementById('catchup-overlay');
+function updateCatchupProgress(session) {
+  const el = document.getElementById('koth-catchup');
   if (!el) return;
   const active = !!session?.replayingCatchUp;
   if (!active) {
@@ -3933,17 +3981,14 @@ function updateCatchupOverlay(session) {
     return;
   }
   if (el.hidden) el.hidden = false;
+  const fill = document.getElementById('koth-catchup-fill');
+  if (!fill) return;
   const progress = session.catchupProgress;
-  const fill = document.getElementById('catchup-fill');
-  const meta = document.getElementById('catchup-meta');
-  if (progress && progress.targetTick > 0) {
-    const pct = Math.max(0, Math.min(100, Math.round((progress.tick / progress.targetTick) * 100)));
-    if (fill) fill.style.width = `${pct}%`;
-    if (meta) meta.textContent = `${pct}%`;
-  } else {
-    if (fill) fill.style.width = '0%';
-    if (meta) meta.textContent = '';
-  }
+  const pct = progress && progress.targetTick > 0
+    ? Math.max(0, Math.min(100, Math.round((progress.tick / progress.targetTick) * 100)))
+    : 0;
+  const width = `${pct}%`;
+  if (fill.style.width !== width) fill.style.width = width;
 }
 
 function showMatchSplash() {

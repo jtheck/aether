@@ -114,6 +114,24 @@ function zoomSpeedForNormalized(normalized) {
 
 /** Exponential chase while Space is held — rushes in from far, then sticks. */
 export const FOLLOW_ZIP_RATE = 18;
+/** Zoom-center chase toward the cursor / pinch — slower than Space-follow so it drifts, not snaps. */
+export const ZOOM_FOCUS_RATE = 8;
+
+/**
+ * Look-target shift that keeps `aim` under the zoom this frame.
+ * Positive `k` (zoom in) pulls toward aim; zoom out pushes away.
+ * @param {number} targetX
+ * @param {number} targetZ
+ * @param {number} aimX
+ * @param {number} aimZ
+ * @param {number} oldRadius
+ * @param {number} newRadius
+ */
+export function zoomFocusShift(targetX, targetZ, aimX, aimZ, oldRadius, newRadius) {
+  const oldR = Math.max(1e-3, Number(oldRadius) || 0);
+  const k = 1 - (Number(newRadius) || 0) / oldR;
+  return { x: (aimX - targetX) * k, z: (aimZ - targetZ) * k };
+}
 
 /**
  * Frame-rate-independent chase. `rate` is the exponential time-constant.
@@ -177,6 +195,12 @@ export function createCameraController(camera, canvas, opts = {}) {
   let zoomInputThisTick = false;
   let lastZoomSign = 0;
   let zoomTend = false;
+  /** @type {{ x: number, z: number } | null} */
+  let zoomFocus = null;
+  /** @type {{ x: number, z: number } | null} */
+  let zoomAim = null;
+  /** @type {{ x: number, y: number } | null} */
+  let zoomFocusScreen = null;
   let followActive = false;
   let followX = 0;
   let followZ = 0;
@@ -318,6 +342,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     lastZoomSign = 0;
     zoomIdleMs = 0;
     zoomInputThisTick = false;
+    clearZoomFocus();
     if (Number.isFinite(pose.x) && Number.isFinite(pose.z)) setTargetXZ(pose.x, pose.z);
     if (Number.isFinite(pose.alpha)) camera.alpha = pose.alpha;
     if (Number.isFinite(pose.radius)) {
@@ -409,12 +434,103 @@ export function createCameraController(camera, canvas, opts = {}) {
     return r;
   }
 
-  function applyZoomInput(delta) {
+  function clearZoomFocus() {
+    zoomFocus = null;
+    zoomAim = null;
+    zoomFocusScreen = null;
+  }
+
+  /**
+   * Ground hit under a screen point, using the same orbit as pan (Y=target plane).
+   * @param {number} clientX
+   * @param {number} clientY
+   * @returns {{ x: number, z: number } | null}
+   */
+  function screenToGround(clientX, clientY) {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    if (typeof canvas.getBoundingClientRect !== 'function') return null;
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width || 1;
+    const h = rect.height || 1;
+    const ndcX = (2 * (clientX - (rect.left || 0))) / w - 1;
+    const ndcY = 1 - (2 * (clientY - (rect.top || 0))) / h;
+    const p = cameraPosition();
+    const t = getTarget();
+    let lx = t.x - p.x;
+    let ly = (t.y ?? 0) - p.y;
+    let lz = t.z - p.z;
+    const llen = Math.hypot(lx, ly, lz) || 1;
+    lx /= llen;
+    ly /= llen;
+    lz /= llen;
+    // right = worldUp × look; camera-up = look × right. NDC +Y is the top of the screen.
+    let rx = lz;
+    let rz = -lx;
+    const rlen = Math.hypot(rx, rz);
+    if (rlen < 1e-8) return null;
+    rx /= rlen;
+    rz /= rlen;
+    const ux = ly * rz;
+    const uy = lz * rx - lx * rz;
+    const uz = -ly * rx;
+    const fov = camera.fov ?? 0.8;
+    const tanY = Math.tan(fov / 2);
+    const tanX = tanY * (w / h);
+    const dx = lx + rx * ndcX * tanX + ux * ndcY * tanY;
+    const dy = ly + uy * ndcY * tanY;
+    const dz = lz + rz * ndcX * tanX + uz * ndcY * tanY;
+    if (Math.abs(dy) < 1e-8) return null;
+    const s = ((t.y ?? 0) - p.y) / dy;
+    if (s < 0) return null;
+    return { x: p.x + dx * s, z: p.z + dz * s };
+  }
+
+  function setZoomFocusFromScreen(clientX, clientY) {
+    if (followActive) return;
+    const moved =
+      !zoomFocusScreen ||
+      Math.hypot(clientX - zoomFocusScreen.x, clientY - zoomFocusScreen.y) > 4;
+    zoomFocusScreen = { x: clientX, y: clientY };
+    if (!moved && zoomFocus) return;
+    const g = screenToGround(clientX, clientY);
+    if (!g) return;
+    zoomFocus = g;
+    if (!zoomAim) {
+      const t = getTarget();
+      zoomAim = { x: t.x, z: t.z };
+    }
+  }
+
+  function applyZoomFocusPan(rBefore, rAfter, dt) {
+    if (!zoomFocus || followActive) return;
+    const zooming =
+      Math.abs(rAfter - rBefore) > 1e-4 ||
+      zoomTend ||
+      Math.abs(velocity.radius) >= ZOOM_THRESHOLD;
+    if (!zooming) {
+      clearZoomFocus();
+      return;
+    }
+    const t = getTarget();
+    if (!zoomAim) zoomAim = { x: t.x, z: t.z };
+    const next = chaseToward(zoomAim.x, zoomAim.z, zoomFocus.x, zoomFocus.z, dt, ZOOM_FOCUS_RATE);
+    zoomAim.x = next.x;
+    zoomAim.z = next.z;
+    const shift = zoomFocusShift(t.x, t.z, zoomAim.x, zoomAim.z, rBefore, rAfter);
+    if (Math.abs(shift.x) < 1e-8 && Math.abs(shift.z) < 1e-8) return;
+    clampTargetPan(t.x + shift.x, t.z + shift.z);
+  }
+
+  /** @param {{ x: number, y: number }} [screen] client coords (cursor or pinch centroid) */
+  function applyZoomInput(delta, screen) {
     markNudged();
     zoomTend = false;
     zoomIdleMs = 0;
     zoomInputThisTick = true;
     if (delta !== 0) lastZoomSign = Math.sign(delta);
+    if (screen && Number.isFinite(screen.x) && Number.isFinite(screen.y)) {
+      setZoomFocusFromScreen(screen.x, screen.y);
+    }
     const { minR, maxR } = radiusLimits();
     const r = camera.radius;
     // At a zoom stop, drop momentum into the wall instead of banking it.
@@ -429,8 +545,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     velocity.radius += delta;
   }
 
-  function nudgeZoom(delta) {
-    applyZoomInput(delta);
+  function nudgeZoom(delta, screen) {
+    applyZoomInput(delta, screen);
   }
 
   function nudgeRotate(deltaAlpha) {
@@ -447,7 +563,7 @@ export function createCameraController(camera, canvas, opts = {}) {
       const impulse = INVERSE_ROT * delta * ROT_WHEEL;
       velocity.alpha += Math.max(-ROT_WHEEL_MAX, Math.min(ROT_WHEEL_MAX, impulse));
     } else {
-      applyZoomInput(INVERSE_ZOOM * delta * ZOOM_WHEEL);
+      applyZoomInput(INVERSE_ZOOM * delta * ZOOM_WHEEL, { x: e.clientX, y: e.clientY });
     }
   }
 
@@ -552,6 +668,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     lastZoomSign = 0;
     zoomIdleMs = 0;
     zoomInputThisTick = false;
+    clearZoomFocus();
     camera.inertialPanningX = 0;
     camera.inertialPanningY = 0;
     camera.inertialAlphaOffset = 0;
@@ -701,6 +818,7 @@ export function createCameraController(camera, canvas, opts = {}) {
       clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
     }
 
+    const rBefore = camera.radius;
     if (zoomTend) {
       const destR = playRadius();
       const u = 1 - Math.exp(-ZOOM_TEND_RATE * dt);
@@ -715,6 +833,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     } else {
       camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
     }
+    applyZoomFocusPan(rBefore, camera.radius, dt);
     if (ease) {
       const u = 1 - Math.exp(-ease.rate * dt);
       const now = getTarget();
@@ -772,6 +891,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     lastZoomSign = 0;
     zoomIdleMs = 0;
     zoomInputThisTick = false;
+    clearZoomFocus();
     camera.alpha = DEFAULT_ALPHA;
     camera.radius = RESET_RADIUS;
     {

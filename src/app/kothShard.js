@@ -1743,6 +1743,12 @@ export function createKothShard(options = {}) {
     if (!linked) {
       const n = matchAnnouncers.get(matchId)?.size ?? 0;
       onStatus(`Connecting to match …${shortId(matchId)}${n ? ` (${n} players heard)` : ''}`);
+      // WebRTC to a sponsor can fail to open entirely (common with several tabs on
+      // one machine). This pump runs every few seconds, so fall back to a relayed
+      // catch-up rather than sitting on the backdrop forever — otherwise the first
+      // join is stuck whenever the one-shot lobby-connected broadcast timer is
+      // missed. If a P2P link opens meanwhile, the timer's own guard defers to it.
+      if (!activeCatchupRequestId && !catchupInFlight) scheduleBroadcastCatchup(2000);
       return;
     }
     if (!activeCatchupRequestId) {

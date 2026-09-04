@@ -18,6 +18,7 @@ import {
   STORY_EASE_MS,
   createCameraController,
   resolveCameraHalfF,
+  zoomFocusShift,
   zoomTendCatch,
 } from './cameraController.js';
 
@@ -376,5 +377,81 @@ describe('zoom tend to play gaze', () => {
     ctrl.nudgeZoom(-0.25);
     coast(ctrl, 800);
     assert.ok(Math.abs(cam.radius - dest) < 1, `radius ${cam.radius} should stay on ${dest}`);
+  });
+});
+
+describe('zoomFocusShift', () => {
+  it('pulls toward the aim when zooming in and away when zooming out', () => {
+    const inn = zoomFocusShift(0, 0, 40, -10, 100, 80);
+    assert.ok(inn.x > 0 && inn.x < 40);
+    assert.ok(inn.z < 0);
+    const out = zoomFocusShift(0, 0, 40, -10, 80, 100);
+    assert.ok(out.x < 0);
+    assert.ok(out.z > 0);
+  });
+});
+
+function wheel(partial = {}) {
+  return {
+    deltaY: -120,
+    buttons: 0,
+    shiftKey: false,
+    clientX: 400,
+    clientY: 300,
+    preventDefault() {},
+    ...partial,
+  };
+}
+
+describe('zoom toward cursor', () => {
+  it('eases the look target toward the cursor while zooming in, without snapping', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const startX = cam.target.x;
+    const startZ = cam.target.z;
+    for (let i = 0; i < 10; i++) {
+      ctrl.handleWheel(wheel({ clientX: 700, clientY: 300, deltaY: -160 }));
+      ctrl.tick(16);
+    }
+    const dx = cam.target.x - startX;
+    const dz = cam.target.z - startZ;
+    const moved = Math.hypot(dx, dz);
+    assert.ok(moved > 1, `target should drift toward the cursor (moved ${moved})`);
+    assert.ok(moved < 80, `target should not snap onto the cursor (moved ${moved})`);
+  });
+
+  it('does not pan when the wheel is at screen center', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    for (let i = 0; i < 8; i++) {
+      ctrl.handleWheel(wheel({ clientX: 400, clientY: 300, deltaY: -160 }));
+      ctrl.tick(16);
+    }
+    assert.ok(Math.abs(cam.target.x) < 0.2);
+    assert.ok(Math.abs(cam.target.z) < 0.2);
+  });
+
+  it('keyboard zoom stays on the current look target', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    ctrl.handleKeyDown(keyEvent('t'));
+    for (let i = 0; i < 8; i++) ctrl.tick(16);
+    ctrl.handleKeyUp(keyEvent('t'));
+    assert.ok(Math.abs(cam.target.x) < 0.2);
+    assert.ok(Math.abs(cam.target.z) < 0.2);
+  });
+
+  it('pinch-style nudgeZoom uses the gesture centroid', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const startX = cam.target.x;
+    const startZ = cam.target.z;
+    for (let i = 0; i < 10; i++) {
+      ctrl.nudgeZoom(-2.4, { x: 700, y: 300 });
+      ctrl.tick(16);
+    }
+    const moved = Math.hypot(cam.target.x - startX, cam.target.z - startZ);
+    assert.ok(moved > 1, `pinch zoom should drift toward the centroid (moved ${moved})`);
+    assert.ok(moved < 80, `pinch zoom should not snap (moved ${moved})`);
   });
 });

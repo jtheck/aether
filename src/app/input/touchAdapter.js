@@ -624,7 +624,10 @@ export function createTouchAdapter({ canvas, camera, game }) {
     const w = chordAxisWeights(b0);
 
     if (b0.engagedZoom && Math.abs(ddist) > 0.05) {
-      camera.nudgeZoom(-ddist * PINCH_ZOOM_SENS * camera.getRadius() * w.zoom);
+      camera.nudgeZoom(-ddist * PINCH_ZOOM_SENS * camera.getRadius() * w.zoom, {
+        x: centroid.x,
+        y: centroid.y,
+      });
     }
     if (b0.engagedRotate && Math.abs(dangle) > 1e-4) {
       camera.nudgeRotate(dangle * PINCH_ROTATE_SENS * w.rotate);

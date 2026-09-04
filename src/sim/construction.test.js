@@ -15,7 +15,7 @@ import { growTreeAt } from './trees.js';
 import { getResource, grantStartingResources } from './resources.js';
 import { getBuildTime, getBuildingCost } from './buildings.js';
 import { checksum } from './checksum.js';
-import { constructionVisualStage, CONSTRUCT_NEAR_NUM, CONSTRUCT_NEAR_DEN } from './construction.js';
+import { constructionVisualStage, CONSTRUCT_NEAR_NUM, CONSTRUCT_NEAR_DEN, IDLE_VILLAGE_DEN } from './construction.js';
 
 function siteBuilding(type, xF, zF, owner = 0) {
   return {
@@ -284,6 +284,31 @@ function cancelConstructionIgnoresFinished() {
   assert.equal(getResource(w, 0, 'wood'), wood, 'no refund on a finished building');
 }
 
+function villageTricklesWithoutWorkers() {
+  const field = openField(14);
+  const w = createWorld(14);
+  w.buildings = [siteBuilding('village', 0, 0)];
+
+  for (let t = 0; t < IDLE_VILLAGE_DEN - 1; t++) step(w, field, []);
+  assert.equal(w.buildings[0].buildProgress | 0, 0, 'no full builder-tick yet');
+  step(w, field, []);
+  assert.equal(w.buildings[0].buildProgress | 0, 1, '0.1× one villager with no hands');
+
+  const time = w.buildings[0].buildTime | 0;
+  const t = ticksToBuild(field, w, time * IDLE_VILLAGE_DEN + 40);
+  assert.ok(t >= 0, 'unattended village still finishes');
+  assert.equal(w.buildings[0].built, 1, 'built flag set');
+}
+
+function campStaysIdleWithoutWorkers() {
+  const field = openField(15);
+  const w = createWorld(15);
+  w.buildings = [siteBuilding('camp', 0, 0)];
+  for (let t = 0; t < IDLE_VILLAGE_DEN * 8; t++) step(w, field, []);
+  assert.equal(w.buildings[0].built, 0, 'camp stays a site');
+  assert.equal(w.buildings[0].buildProgress | 0, 0, 'camps still need workers');
+}
+
 function twoOwnersRaiseIndependently() {
   const field = openField(7);
   const w = createWorld(7);
@@ -324,4 +349,6 @@ visualStagesAtStartAndTwoThirds();
 cancelConstructionRefundsAndClears();
 cancelConstructionIgnoresFinished();
 twoOwnersRaiseIndependently();
-console.log('construction.test.js: ok (site + auto-build + engineer + speed + pull + complete + cancel + stages + two-owner + deterministic)');
+villageTricklesWithoutWorkers();
+campStaysIdleWithoutWorkers();
+console.log('construction.test.js: ok (site + auto-build + engineer + speed + pull + complete + cancel + stages + two-owner + idle-village + deterministic)');

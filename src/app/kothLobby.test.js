@@ -8,6 +8,7 @@ import {
   lobbyRowSignature,
   shouldCenterKothLobby,
   shouldShowKothBrowser,
+  shouldShowKothWaitingHud,
 } from './kothLobby.js';
 import { generateLobbyName } from '../koth/lobbyName.js';
 
@@ -108,7 +109,7 @@ describe('koth lobby rows', () => {
     assert.equal(shouldShowKothBrowser({ parked: true, browsing: true }), false);
   });
 
-  it('centers the HUD while waiting, not while browsing or playing', () => {
+  it('centers the HUD while waiting, not while browsing, playing, or lagging', () => {
     assert.equal(shouldCenterKothLobby({ browsing: true }), false);
     assert.equal(shouldCenterKothLobby({ waiting: true, browsing: false }), true);
     assert.equal(shouldCenterKothLobby({ role: 'player', activeCount: 1, browsing: false }), true);
@@ -119,8 +120,23 @@ describe('koth lobby rows', () => {
       activeCount: 2,
       browsing: false,
       stalled: true,
-    }), true);
+      waiting: true,
+    }), false);
     assert.equal(shouldCenterKothLobby({ browsing: false, waiting: false, canJoin: true }), true);
+  });
+
+  it('keeps the waiting HUD up for mid-match lag without centering it', () => {
+    const lag = {
+      role: 'player',
+      activeCount: 3,
+      browsing: false,
+      stalled: true,
+      waiting: true,
+    };
+    assert.equal(shouldShowKothWaitingHud(lag), true);
+    assert.equal(shouldCenterKothLobby(lag), false);
+    assert.equal(shouldShowKothWaitingHud({ role: 'player', activeCount: 3, browsing: false }), false);
+    assert.equal(shouldShowKothWaitingHud({ waiting: true, browsing: false }), true);
   });
 
   it('labels seated players and spectators', () => {

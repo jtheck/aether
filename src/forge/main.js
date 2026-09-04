@@ -113,6 +113,7 @@ let celestial = null;
 let terrain = null;
 let grid = null;
 let selectMesh = null;
+let chunkGridMesh = null;
 let cameraBoundMesh = null;
 let brushMesh = null;
 let brushKey = '';
@@ -124,6 +125,9 @@ let rebuildTimer = 0;
 let sceneRegistered = false;
 let paintRaf = 0;
 const pendingPaintTiles = [];
+let sceneryRaf = 0;
+const pendingSceneryTiles = [];
+let sceneryFullRebuild = false;
 let storyPlayer = null;
 let storyHud = null;
 let storySpeech = null;
@@ -180,7 +184,11 @@ function cancelPendingPaint() {
   if (paintRaf) cancelAnimationFrame(paintRaf);
   paintRaf = 0;
   pendingPaintTiles.length = 0;
+  if (sceneryRaf) cancelAnimationFrame(sceneryRaf);
+  sceneryRaf = 0;
   sceneryPending = false;
+  sceneryFullRebuild = false;
+  pendingSceneryTiles.length = 0;
 }
 
 function atlasChunkSize(snap = field) {
@@ -212,24 +220,38 @@ function queueTerrainPaint(tiles) {
 let sceneryBusy = false;
 let sceneryPending = false;
 
-function queueSceneryPaint() {
+function queueSceneryPaint(tiles, { full = false } = {}) {
+  if (full) sceneryFullRebuild = true;
+  if (tiles?.length) {
+    for (const t of tiles) pendingSceneryTiles.push(t);
+  }
   sceneryPending = true;
   if (sceneryBusy) return;
-  if (state.painting) return;
-  flushSceneryPaint();
+  if (sceneryRaf) return;
+  sceneryRaf = requestAnimationFrame(() => {
+    sceneryRaf = 0;
+    flushSceneryPaint();
+  });
 }
 
 async function flushSceneryPaint() {
   if (!sceneryPending || sceneryBusy) return;
   sceneryPending = false;
   sceneryBusy = true;
+  const full = sceneryFullRebuild;
+  sceneryFullRebuild = false;
+  const tiles = pendingSceneryTiles.splice(0);
   applyAuthoredScenery(field);
   try {
     if (!terrain?.rebuildScenery) {
       scheduleRebuild();
       return;
     }
-    await terrain.rebuildScenery(field, camera);
+    if (full || !terrain.applyAuthoredSceneryTiles) {
+      await terrain.rebuildScenery(field, camera);
+    } else if (tiles.length) {
+      terrain.applyAuthoredSceneryTiles(field, tiles);
+    }
     grid?.refreshOccupancy(field);
     if (sceneRegistered) invalidateRenderBundles(engine);
   } finally {
@@ -421,7 +443,7 @@ function flushTerrainPaint() {
   scheduleRebuild();
 }
 
-function pushSelectEdge(pos, idx, ax, az, bx, bz, y, half) {
+function pushSelectEdge(pos, idx, ax, ay, az, bx, by, bz, half) {
   const dx = bx - ax;
   const dz = bz - az;
   const len = Math.hypot(dx, dz) || 1;
@@ -429,12 +451,52 @@ function pushSelectEdge(pos, idx, ax, az, bx, bz, y, half) {
   const pz = (dx / len) * half;
   const base = pos.length / 3;
   pos.push(
-    ax + px, y, az + pz,
-    bx + px, y, bz + pz,
-    bx - px, y, bz - pz,
-    ax - px, y, az - pz,
+    ax + px, ay, az + pz,
+    bx + px, by, bz + pz,
+    bx - px, by, bz - pz,
+    ax - px, ay, az - pz,
   );
   idx.push(base, base + 1, base + 2, base, base + 2, base + 3);
+}
+
+function chunkCornerY(x, z, lift) {
+  return (field ? surfaceHeightAt(field, x, z) : 0) + lift;
+}
+
+function pushCellRim(pos, idx, box, lift, half) {
+  const y00 = chunkCornerY(box.x0, box.z0, lift);
+  const y10 = chunkCornerY(box.x1, box.z0, lift);
+  const y11 = chunkCornerY(box.x1, box.z1, lift);
+  const y01 = chunkCornerY(box.x0, box.z1, lift);
+  pushSelectEdge(pos, idx, box.x0, y00, box.z0, box.x1, y10, box.z0, half);
+  pushSelectEdge(pos, idx, box.x1, y10, box.z0, box.x1, y11, box.z1, half);
+  pushSelectEdge(pos, idx, box.x1, y11, box.z1, box.x0, y01, box.z1, half);
+  pushSelectEdge(pos, idx, box.x0, y01, box.z1, box.x0, y00, box.z0, half);
+}
+
+function makeOverlayMesh(name, pos, idx, color) {
+  if (!pos.length || !engine || !scene) return null;
+  const positions = new Float32Array(pos);
+  const normals = new Float32Array(positions.length);
+  for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
+  const mesh = createMeshFromData(engine, name, positions, normals, new Uint32Array(idx));
+  const mat = createStandardMaterial();
+  mat.diffuseColor = color;
+  mat.emissiveColor = color;
+  mat.ambientColor = color;
+  mat.specularColor = [0, 0, 0];
+  mat.disableLighting = true;
+  mat.backFaceCulling = false;
+  mesh.material = mat;
+  mesh.pickable = false;
+  addToScene(scene, mesh);
+  return mesh;
+}
+
+function dropOverlay(mesh) {
+  if (!mesh) return null;
+  softDetachMesh(scene, mesh);
+  return null;
 }
 
 function isSelected(cx, cz) {
@@ -442,41 +504,27 @@ function isSelected(cx, cz) {
 }
 
 function updateSelectIndicator() {
-  if (selectMesh) {
-    softDetachMesh(scene, selectMesh);
-    selectMesh = null;
-  }
+  selectMesh = dropOverlay(selectMesh);
+  chunkGridMesh = dropOverlay(chunkGridMesh);
   const shape = field?.tableShape;
-  if (!state.selected.length || !shape || !engine || !scene) {
+  if (state.layer !== 'table' || !shape || !engine || !scene) {
     updateSelectUi();
     return;
   }
-  const y = 6;
-  const half = 2.2;
-  const pos = [];
-  const idx = [];
-  for (const sel of state.selected) {
-    const box = cellWorldBox(field, sel.cx, sel.cz, shape.cellSize);
-    pushSelectEdge(pos, idx, box.x0, box.z0, box.x1, box.z0, y, half);
-    pushSelectEdge(pos, idx, box.x1, box.z0, box.x1, box.z1, y, half);
-    pushSelectEdge(pos, idx, box.x1, box.z1, box.x0, box.z1, y, half);
-    pushSelectEdge(pos, idx, box.x0, box.z1, box.x0, box.z0, y, half);
+  const gridPos = [];
+  const gridIdx = [];
+  const selPos = [];
+  const selIdx = [];
+  for (let cz = 0; cz < shape.chunksZ; cz++) {
+    for (let cx = 0; cx < shape.chunksX; cx++) {
+      const box = cellWorldBox(field, cx, cz, shape.cellSize);
+      const on = isCellEnabled(shape, cx, cz);
+      if (isSelected(cx, cz)) pushCellRim(selPos, selIdx, box, 5.5, 5.2);
+      else pushCellRim(gridPos, gridIdx, box, on ? 3.2 : 2.4, on ? 1.6 : 1.1);
+    }
   }
-  const positions = new Float32Array(pos);
-  const normals = new Float32Array(positions.length);
-  for (let i = 0; i < normals.length; i += 3) normals[i + 1] = 1;
-  const mesh = createMeshFromData(engine, 'chunk-select', positions, normals, new Uint32Array(idx));
-  const mat = createStandardMaterial();
-  mat.diffuseColor = [0.2, 0.95, 1];
-  mat.emissiveColor = [0.15, 0.85, 1];
-  mat.ambientColor = [0.15, 0.85, 1];
-  mat.specularColor = [0, 0, 0];
-  mat.disableLighting = true;
-  mat.backFaceCulling = false;
-  mesh.material = mat;
-  mesh.pickable = false;
-  addToScene(scene, mesh);
-  selectMesh = mesh;
+  chunkGridMesh = makeOverlayMesh('chunk-grid', gridPos, gridIdx, [0.95, 0.82, 0.22]);
+  selectMesh = makeOverlayMesh('chunk-select', selPos, selIdx, [0.15, 1, 1]);
   if (sceneRegistered) invalidateRenderBundles(engine);
   updateSelectUi();
 }
@@ -692,7 +740,15 @@ function applyAt(pos, { add = false } = {}) {
     if (key === lastPaintKey) return;
     lastPaintKey = key;
     const dirty = paintSceneryBrush(field, tx, tz, state.scenery, state.brush, { refresh: false });
-    if (dirty.length) queueSceneryPaint();
+    if (dirty.length) {
+      if (terrain?.applyAuthoredSceneryTiles) {
+        terrain.applyAuthoredSceneryTiles(field, dirty);
+        if (sceneRegistered) invalidateRenderBundles(engine);
+        queueSceneryPaint();
+      } else {
+        queueSceneryPaint(dirty);
+      }
+    }
     return;
   }
   if (state.layer === 'story') {
@@ -832,9 +888,11 @@ function forgeWorldToScreen(x, y, z) {
   return { x: (ndcX * 0.5 + 0.5) * w, y: (1 - ndcY) * 0.5 * h };
 }
 
+let holdStoryCamera = false;
+
 function applyStorySample(s) {
   if (!s) return;
-  if (s.camera && cam && field) {
+  if (s.camera && cam && field && !holdStoryCamera) {
     const live = s.camera.char ? speakerWorldPos(s.camera.char) : null;
     const tile = worldFromTile(s.camera.tx, s.camera.tz);
     cam.setPose({
@@ -1283,6 +1341,7 @@ function setLayer(layer) {
   const storyPanel = document.getElementById('panel-story');
   if (storyPanel) storyPanel.style.display = layer === 'story' ? 'block' : 'none';
   storySheet?.setOpen(layer === 'story');
+  holdStoryCamera = true;
   if (layer === 'story') {
     storyPlayer?.setReel(currentReel());
     applyStorySample(storyPlayer?.sample());
@@ -1292,8 +1351,10 @@ function setLayer(layer) {
     storyHud?.hide();
     storySpeech?.hide();
   }
+  holdStoryCamera = false;
   lastPaintKey = '';
   refreshBrushCursor();
+  updateSelectIndicator();
 }
 
 function setTerrain(type) {
@@ -1540,14 +1601,14 @@ function mountUi() {
   });
   document.getElementById('btn-gen-scenery').addEventListener('click', () => {
     populateScenery(field, null, reservedFromPlacements(), { keepExisting: true });
-    queueSceneryPaint();
+    queueSceneryPaint(null, { full: true });
     grid?.refreshOccupancy(field);
   });
   document.getElementById('btn-clear-scenery').addEventListener('click', () => {
     if (field.sceneryType) field.sceneryType.fill(0);
     if (field.treeStock) field.treeStock.fill(0);
     applyAuthoredScenery(field);
-    queueSceneryPaint();
+    queueSceneryPaint(null, { full: true });
     grid?.refreshOccupancy(field);
   });
   document.getElementById('map-name').addEventListener('input', (e) => {

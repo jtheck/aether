@@ -3164,7 +3164,36 @@ export function createKothShard(options = {}) {
     const epoch = catchupEpoch;
     activeCatchupRequestId = '';
     catchUpReady = false;
-    const attachLive = !!(msg.soloLive || (msg.checkpointTick > 0 && !(ledger?.length)));
+
+    // Solo sandbox: the first challenger's claim resets the whole match to a fresh
+    // two-army tick 0 (resetForJoin), so replaying the king's lone-army sandbox is
+    // throwaway work plus a visible rebuild. Mark ready without touching the sim and
+    // let the seat claim drive the single tick-0 rebuild. If another player beats us
+    // in, the host's MATCH_SNAPSHOT re-enters us as a spectator and a real catch-up
+    // runs for the now-multi-army match.
+    if (msg.soloLive && countActive(msg.roster ?? roster) <= 1) {
+      catchUpReady = true;
+      phase = SHARD_PHASE.LIVE;
+      appState = KOTH_APP_STATE.SPECTATOR;
+      localPlayerId = -1;
+      if (msg.roster && countActive(msg.roster) > 0) roster = cloneSlots(msg.roster);
+      if (msg.matchConfig?.armyPerSide != null) armyPerSide = msg.matchConfig.armyPerSide | 0;
+      matchStartSlots = msg.matchConfig?.activeSlots ?? matchStartSlots;
+      session?.setLocalPlayerId?.(-1);
+      setRole('spectator');
+      saveMatch({ matchId, userId: localUserId, slot: null });
+      noteObserverCaughtUp(localUserId);
+      pendingCatchupParts.delete(acceptedRequestId);
+      catchupInFlight = false;
+      catchupRetryAttempt = 0;
+      onStatus(localOfferEligible ? 'Seat offered — J to claim' : 'Live match found — waiting for a seat…');
+      notifyPresentationSync({ mode: 'koth', role: 'spectator', reset: false, inputEnabled: false });
+      sendAll({ type: MSG.CATCHUP_READY, matchId, userId: localUserId, tick: msg.tick ?? 0 });
+      if (isKing()) refreshSlotOffer();
+      return;
+    }
+
+    const attachLive = !!(msg.checkpointTick > 0 && !(ledger?.length));
     onStatus(attachLive ? 'Attaching to live match…' : 'Replaying catch-up…');
     try {
       await replayCatchUp(

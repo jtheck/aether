@@ -256,6 +256,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       update() {},
       applyTreeUpdates() {},
       applyRockUpdates() {},
+      applyAuthoredTiles() {},
       applyFogDim() {},
       applyFogTiles() {},
       pingHarvest() { return false; },
@@ -265,6 +266,8 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   const atlas = await getAtlas(engine);
   const meshes = [];
   const batches = [];
+  /** @type {Map<number, object>} */
+  const batchByKind = new Map();
   /** @type {Promise<void>[]} */
   const modelJobs = [];
   /** Set by dispose() so late GLB jobs never re-add to the scene. */
@@ -282,12 +285,44 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
   /** @type {object | null} */
   let treeBatch = null;
 
-  for (const variant of VARIANTS) {
-    const live = collectInstances(field, variant, surfaceHeightAt);
-    const isTree = variant.kind === SCENERY.TREE;
-    // Trees always get a batch (even if empty) so spore growth can claim slots.
-    if (live.length === 0 && !isTree) continue;
+  function attachModelParts(batch) {
+    modelJobs.push(
+      loadModelParts(engine, batch.variant)
+        .then((parts) => {
+          if (disposed) {
+            for (const part of parts) softDetachMesh(opts.scene, part.mesh);
+            return;
+          }
+          for (const part of parts) {
+            if (disposed) {
+              softDetachMesh(opts.scene, part.mesh);
+              continue;
+            }
+            const cap = batch.capacity;
+            part.matrices = new Float32Array(cap * 16);
+            setThinInstances(part.mesh, part.matrices, cap);
+            setThinInstanceColors(part.mesh, batch.colors);
+            setThinInstanceCount(part.mesh, cap);
+            part.mesh.pickable = false;
+            if (opts.scene) addToScene(opts.scene, part.mesh);
+            meshes.push(part.mesh);
+            batch.modelParts.push(part);
+            for (let i = 0; i < cap; i++) {
+              if ((batch.instances[i].stockScale ?? 0) <= 0) writeHiddenMatrix(part.matrices, i);
+            }
+            // terrain.meshes is a snapshot unless it listens — notify so CSM can catch up.
+            opts.onModelMesh?.(part.mesh);
+          }
+          if (!disposed) batch.dirty = true;
+        })
+        .catch((err) => {
+          if (!disposed) console.warn(`[scenery] model ${batch.variant.modelUrl} failed`, err);
+        }),
+    );
+  }
 
+  function createBatch(variant, live, { notify = false } = {}) {
+    const isTree = variant.kind === SCENERY.TREE;
     const capacity = capacityFor(live.length, { initial: SCENERY_INITIAL });
     const instances = live.slice();
     while (instances.length < capacity) {
@@ -303,7 +338,16 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     billboardMesh.pickable = false;
     meshes.push(billboardMesh);
 
-    // Billboards first for early paint; 3D models pop in when bake/GLB resolves.
+    const freeSlots = isTree ? treeFreeSlots : [];
+    for (let i = live.length; i < capacity; i++) {
+      writeHiddenMatrix(billboardMatrices, i);
+    }
+    // Slots are claimed with pop(), and the draw count is the highest occupied
+    // slot — so hand out the lowest index first to keep the range compact.
+    for (let i = capacity - 1; i >= live.length; i--) {
+      freeSlots.push(i);
+    }
+
     /** @type {{ mesh: object, baseMatrix: Float32Array, matrices: Float32Array | null }[]} */
     const modelParts = [];
     const batch = {
@@ -313,10 +357,12 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       billboardMatrices,
       colors,
       modelParts,
+      freeSlots,
       dirty: true,
       capacity,
     };
     batches.push(batch);
+    batchByKind.set(variant.kind, batch);
     if (isTree) {
       treeBatch = batch;
       for (let i = 0; i < live.length; i++) {
@@ -324,55 +370,24 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
         treeByTile.set(instances[i].tileIndex, ref);
         instanceByTile.set(instances[i].tileIndex, ref);
       }
-      for (let i = live.length; i < capacity; i++) {
-        writeHiddenMatrix(billboardMatrices, i);
-      }
-      // Slots are claimed with pop(), and the draw count is the highest occupied
-      // slot — so hand out the lowest index first to keep the range compact.
-      // Kept in descending order for that reason.
-      for (let i = capacity - 1; i >= live.length; i--) {
-        treeFreeSlots.push(i);
-      }
     } else {
       for (let i = 0; i < live.length; i++) {
         instanceByTile.set(instances[i].tileIndex, { batch, index: i });
       }
     }
+    if (notify) {
+      if (opts.scene) addToScene(opts.scene, billboardMesh);
+      opts.onModelMesh?.(billboardMesh);
+    }
+    attachModelParts(batch);
+    return batch;
+  }
 
-    modelJobs.push(
-      loadModelParts(engine, variant)
-        .then((parts) => {
-          if (disposed) {
-            for (const part of parts) softDetachMesh(opts.scene, part.mesh);
-            return;
-          }
-          for (const part of parts) {
-            if (disposed) {
-              softDetachMesh(opts.scene, part.mesh);
-              continue;
-            }
-            part.matrices = new Float32Array(capacity * 16);
-            setThinInstances(part.mesh, part.matrices, capacity);
-            setThinInstanceColors(part.mesh, batch.colors);
-            setThinInstanceCount(part.mesh, capacity);
-            part.mesh.pickable = false;
-            if (opts.scene) addToScene(opts.scene, part.mesh);
-            meshes.push(part.mesh);
-            modelParts.push(part);
-            if (isTree) {
-              for (let i = live.length; i < capacity; i++) {
-                writeHiddenMatrix(part.matrices, i);
-              }
-            }
-            // terrain.meshes is a snapshot unless it listens — notify so CSM can catch up.
-            opts.onModelMesh?.(part.mesh);
-          }
-          if (!disposed) batch.dirty = true;
-        })
-        .catch((err) => {
-          if (!disposed) console.warn(`[scenery] model ${variant.modelUrl} failed`, err);
-        }),
-    );
+  for (const variant of VARIANTS) {
+    const live = collectInstances(field, variant, surfaceHeightAt);
+    // Trees always get a batch (even if empty) so spore growth can claim slots.
+    if (live.length === 0 && variant.kind !== SCENERY.TREE) continue;
+    createBatch(variant, live);
   }
 
   // After 3D models land, force a LOD rewrite — the boot pass (LOD off) hides
@@ -384,20 +399,20 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     if (fogFactor) applyFogDim(fogFactor);
   });
 
-  function ensureTreeCapacity(needed) {
-    if (!treeBatch || needed <= treeBatch.capacity) return;
+  function growBatch(batch, needed) {
+    if (!batch || needed <= batch.capacity) return;
     const cap = capacityFor(needed, { initial: SCENERY_INITIAL });
-    const oldCap = treeBatch.capacity;
+    const oldCap = batch.capacity;
     const billboardMatrices = new Float32Array(cap * 16);
-    billboardMatrices.set(treeBatch.billboardMatrices.subarray(0, oldCap * 16));
-    const colors = makeDimColors(cap, albedoDimFor(SCENERY.TREE));
-    if (treeBatch.colors) colors.set(treeBatch.colors.subarray(0, oldCap * 4));
-    setThinInstances(treeBatch.billboardMesh, billboardMatrices, cap);
-    setThinInstanceColors(treeBatch.billboardMesh, colors);
-    setThinInstanceCount(treeBatch.billboardMesh, cap);
-    treeBatch.billboardMatrices = billboardMatrices;
-    treeBatch.colors = colors;
-    for (const part of treeBatch.modelParts) {
+    billboardMatrices.set(batch.billboardMatrices.subarray(0, oldCap * 16));
+    const colors = makeDimColors(cap, albedoDimFor(batch.variant.kind));
+    if (batch.colors) colors.set(batch.colors.subarray(0, oldCap * 4));
+    setThinInstances(batch.billboardMesh, billboardMatrices, cap);
+    setThinInstanceColors(batch.billboardMesh, colors);
+    setThinInstanceCount(batch.billboardMesh, cap);
+    batch.billboardMatrices = billboardMatrices;
+    batch.colors = colors;
+    for (const part of batch.modelParts) {
       const matrices = new Float32Array(cap * 16);
       matrices.set(part.matrices.subarray(0, oldCap * 16));
       setThinInstances(part.mesh, matrices, cap);
@@ -406,15 +421,147 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
       part.matrices = matrices;
     }
     for (let i = oldCap; i < cap; i++) {
-      treeBatch.instances.push(makeEmptyTreeInstance());
-      treeFreeSlots.push(i);
+      batch.instances.push(makeEmptyTreeInstance());
+      batch.freeSlots.push(i);
       writeHiddenMatrix(billboardMatrices, i);
-      for (const part of treeBatch.modelParts) writeHiddenMatrix(part.matrices, i);
+      for (const part of batch.modelParts) writeHiddenMatrix(part.matrices, i);
     }
-    treeFreeSlots.sort((a, b) => b - a);
-    treeBatch.capacity = cap;
-    treeBatch.dirty = true;
+    batch.freeSlots.sort((a, b) => b - a);
+    batch.capacity = cap;
+    batch.dirty = true;
     if (fogFactor) applyFogDim(fogFactor);
+  }
+
+  function ensureTreeCapacity(needed) {
+    growBatch(treeBatch, needed);
+  }
+
+  function variantForKind(kind) {
+    for (let i = 0; i < VARIANTS.length; i++) {
+      if (VARIANTS[i].kind === kind) return VARIANTS[i];
+    }
+    return null;
+  }
+
+  function authoredKindAt(tileIndex) {
+    const kind = field.sceneryType?.[tileIndex] ?? SCENERY.NONE;
+    if (kind === SCENERY.TREE) {
+      return (field.treeStock?.[tileIndex] | 0) > 0 ? SCENERY.TREE : SCENERY.NONE;
+    }
+    if (kind >= SCENERY.ROCK_PLAIN) return kind;
+    return SCENERY.NONE;
+  }
+
+  function authoredStockAt(tileIndex, kind) {
+    if (kind === SCENERY.TREE) return field.treeStock?.[tileIndex] | 0;
+    return field.rockStock?.[tileIndex] | 0;
+  }
+
+  function placeAuthoredInstance(p, kind, tileIndex, stock) {
+    const width = field.width;
+    const tz = Math.floor(tileIndex / width);
+    const tx = tileIndex - tz * width;
+    const placement = deterministicPlacement(tx, tz, field.seed, kind);
+    const x = (tx + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetX;
+    const z = (tz + 0.5) * TILE_SIZE_F - worldHalfFFromField(field) + placement.offsetZ;
+    const groundY = surfaceHeightAt(field, x, z);
+    const stockScale = kind === SCENERY.TREE
+      ? treeScaleForStage(treeStageFromStock(stock))
+      : rockScaleForStage(rockStageFromStock(kind, stock));
+    p.tileIndex = tileIndex;
+    p.x = x;
+    p.y = groundY;
+    p.z = z;
+    p.yaw = placement.yaw;
+    p.stock = stock;
+    p.burn = 0;
+    p.stockScale = stockScale;
+    p.targetScale = stockScale;
+    p.scaleFrom = stockScale;
+    p.scaleT = 1;
+    p.scaleDur = TREE_SHRINK_MS;
+    p.scaleMode = 'lerp';
+    p.scaling = false;
+    p.fellDelayMs = 0;
+    resetBurnVisual(p);
+  }
+
+  function releaseAuthoredInstance(ref) {
+    if (!ref) return;
+    const { batch, index } = ref;
+    const p = batch.instances[index];
+    const tile = p.tileIndex;
+    if (tile >= 0) {
+      instanceByTile.delete(tile);
+      if (batch.variant.kind === SCENERY.TREE) treeByTile.delete(tile);
+    }
+    const blank = makeEmptyTreeInstance();
+    for (const key of Object.keys(blank)) p[key] = blank[key];
+    writeHiddenMatrix(batch.billboardMatrices, index);
+    for (const part of batch.modelParts) writeHiddenMatrix(part.matrices, index);
+    batch.freeSlots.push(index);
+    batch.freeSlots.sort((a, b) => b - a);
+    batch.dirty = true;
+  }
+
+  function claimAuthoredSlot(kind, tileIndex, stock) {
+    const variant = variantForKind(kind);
+    if (!variant || disposed) return null;
+    let batch = batchByKind.get(kind);
+    if (!batch) batch = createBatch(variant, [], { notify: true });
+    if (batch.freeSlots.length === 0) growBatch(batch, batch.capacity + 1);
+    if (batch.freeSlots.length === 0) return null;
+    const index = batch.freeSlots.pop();
+    const p = batch.instances[index];
+    placeAuthoredInstance(p, kind, tileIndex, stock);
+    const ref = { batch, index };
+    instanceByTile.set(tileIndex, ref);
+    if (kind === SCENERY.TREE) treeByTile.set(tileIndex, ref);
+    writeFogColor(batch, index);
+    flushBatchColors(batch);
+    batch.dirty = true;
+    return ref;
+  }
+
+  function syncAuthoredTile(tileIndex) {
+    const kind = authoredKindAt(tileIndex);
+    let ref = instanceByTile.get(tileIndex);
+    if (kind === SCENERY.NONE) {
+      releaseAuthoredInstance(ref);
+      return;
+    }
+    if (ref && ref.batch.variant.kind !== kind) {
+      releaseAuthoredInstance(ref);
+      ref = null;
+    }
+    const stock = authoredStockAt(tileIndex, kind);
+    if (!ref) {
+      claimAuthoredSlot(kind, tileIndex, stock);
+      return;
+    }
+    placeAuthoredInstance(ref.batch.instances[ref.index], kind, tileIndex, stock);
+    writeFogColor(ref.batch, ref.index);
+    flushBatchColors(ref.batch);
+    ref.batch.dirty = true;
+  }
+
+  function applyAuthoredTiles(nextField, tiles) {
+    if (disposed || !nextField || !tiles?.length) return;
+    field = nextField;
+    const width = field.width;
+    const height = field.height;
+    const seen = new Set();
+    for (let i = 0; i < tiles.length; i++) {
+      const t = tiles[i];
+      const x = t.x ?? t.tx ?? 0;
+      const z = t.z ?? t.tz ?? 0;
+      if (x < 0 || z < 0 || x >= width || z >= height) continue;
+      const tileIndex = z * width + x;
+      if (seen.has(tileIndex)) continue;
+      seen.add(tileIndex);
+      syncAuthoredTile(tileIndex);
+    }
+    update(camera, 0, true);
   }
 
   let elapsed = LOD_UPDATE_MS;
@@ -794,7 +941,7 @@ export async function createSceneryFromField(engine, field, surfaceHeightAt, cam
     treeBatch = null;
   }
 
-  return { meshes, modelsReady, update, applyTreeUpdates, applyRockUpdates, applyFogDim, applyFogTiles, pingHarvest, dispose };
+  return { meshes, modelsReady, update, applyTreeUpdates, applyRockUpdates, applyAuthoredTiles, applyFogDim, applyFogTiles, pingHarvest, dispose };
 }
 
 function makeEmptyTreeInstance() {
@@ -1103,7 +1250,7 @@ function updateBatchLod(batch, cameraPos) {
     const dy = cameraPos.y - p.y;
     const dz = cameraPos.z - p.z;
     const near = dx * dx + dy * dy + dz * dz <= lodDistanceSq;
-    if (near) {
+    if (near && modelParts.length) {
       for (const part of modelParts) {
         writeModelInstanceMatrix(
           part.matrices,

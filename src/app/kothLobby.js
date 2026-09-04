@@ -64,10 +64,10 @@ export function shouldShowKothBrowser(presence) {
   return !presence.parked;
 }
 
-/** Center the HUD browser while waiting; keep it cornered while browsing. */
+/** Center the HUD while forming a match; keep it cornered while browsing or mid-match lag. */
 export function shouldCenterKothLobby(presence) {
   if (!presence || presence.browsing) return false;
-  if (presence.stalled) return true;
+  if (presence.stalled) return false;
   if (presence.canJoin) return true;
   if (presence.role === 'spectator') return true;
   const state = presence.appState;
@@ -77,6 +77,14 @@ export function shouldCenterKothLobby(presence) {
   if (presence.waiting != null) return Boolean(presence.waiting);
   const playing = presence.role === 'player' && (presence.activeCount ?? 0) >= 2;
   return !playing;
+}
+
+/** Show the in-scene roster while waiting to start, joining, or a peer is stalled. */
+export function shouldShowKothWaitingHud(presence) {
+  if (!presence || presence.browsing) return false;
+  if (presence.stalled || presence.canJoin) return true;
+  if (presence.waiting != null) return Boolean(presence.waiting);
+  return shouldCenterKothLobby(presence);
 }
 
 /** @param {{ name?: string, playerId?: number, you?: boolean, spectator?: boolean }} player */
@@ -229,7 +237,8 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
     const presence = kothShard.getLobbyPresence?.() ?? { browsing: kothShard.canStartOrJoinLive?.() };
     const browsing = Boolean(presence.browsing ?? kothShard.canStartOrJoinLive?.());
     const canJoin = Boolean(presence.canJoin ?? kothShard.canJoin?.());
-    const waiting = shouldCenterKothLobby(presence);
+    const center = shouldCenterKothLobby(presence);
+    const showWaiting = shouldShowKothWaitingHud(presence);
 
     if (!shouldShowKothBrowser(presence)) {
       setHidden(controls, true);
@@ -238,9 +247,9 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
     }
     if (menuKoth) setHidden(menuKoth, false);
 
-    controls.classList.toggle('koth-controls-center', waiting);
+    controls.classList.toggle('koth-controls-center', center);
 
-    if (browsing && !canJoin && !waiting) {
+    if (browsing && !canJoin && !showWaiting) {
       setHidden(controls, false);
       setHidden(lobbyEl, false);
       setHidden(waitingEl, true);
@@ -251,7 +260,7 @@ export function setupKothLobby({ kothShard, onLeaveSolo, onRestoreBackdrop, onCl
       return;
     }
 
-    if (waiting || canJoin) {
+    if (showWaiting || canJoin) {
       setHidden(controls, false);
       setHidden(lobbyEl, true);
       setHidden(waitingEl, false);

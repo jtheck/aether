@@ -703,7 +703,7 @@ export function createMatchLobby({
     getLockstepEpoch: () => lockstepEpoch,
     kickstartLockstep,
     lockstepStalled() {
-      if (!lockstepOn || !session || (phase !== 'playing' && phase !== 'starting')) return false;
+      if (!lockstepOn || !session || phase !== 'playing') return false;
       return (session.lockstepBlockedMs?.() ?? 0) >= LOCKSTEP_STALL_UI_MS;
     },
     getState: snapshot,

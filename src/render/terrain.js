@@ -156,7 +156,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
   ];
   let disposed = false;
   let scenery = opts.skipScenery
-    ? { meshes: [], modelsReady: Promise.resolve(), update() {}, dispose() {} }
+    ? { meshes: [], modelsReady: Promise.resolve(), update() {}, applyAuthoredTiles() {}, dispose() {} }
     : await createSceneryFromField(
       engine,
       field,
@@ -188,6 +188,7 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
       update() {},
       applyTreeUpdates() {},
       applyRockUpdates() {},
+      applyAuthoredSceneryTiles() {},
       applyFogDim() {},
       applyFogTiles() {},
       pingHarvest() { return false; },
@@ -212,6 +213,9 @@ export async function createTerrainFromField(engine, scene, field, camera, opts 
     },
     applyRockUpdates(updates) {
       if (!disposed) scenery.applyRockUpdates?.(updates);
+    },
+    applyAuthoredSceneryTiles(nextField, tiles) {
+      if (!disposed) scenery.applyAuthoredTiles?.(nextField, tiles);
     },
     pingHarvest(tile) {
       if (disposed) return false;

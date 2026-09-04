@@ -266,6 +266,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     const stalled = Boolean(matchLobby.lockstepStalled?.());
     const showOverlay = active && (!inPlay || stalled);
     const overlayOpening = Boolean(overlay?.hidden && showOverlay);
+    overlay?.classList.toggle('is-lag', Boolean(showOverlay && inPlay && stalled));
     setHidden(sidebar, !active);
     setHidden(overlay, !showOverlay);
     if (overlayOpening) onCloseMenu?.();

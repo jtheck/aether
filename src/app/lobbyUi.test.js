@@ -271,7 +271,7 @@ describe('match lobby overlay', () => {
     }
   });
 
-  it('shows the center lobby again when lockstep stalls mid-match', () => {
+  it('shows the lobby in the corner when lockstep stalls mid-match', () => {
     const dom = lobbyDom();
     const restore = dom.install();
     try {
@@ -298,9 +298,34 @@ describe('match lobby overlay', () => {
         getUserId: () => 'u1',
       });
       assert.equal(dom.overlay.hidden, true);
+      assert.equal(dom.overlay.className.includes('is-lag'), false);
       stalled = true;
       ui.refresh();
       assert.equal(dom.overlay.hidden, false);
+      assert.equal(dom.overlay.className.includes('is-lag'), true);
+    } finally {
+      restore();
+    }
+  });
+
+  it('keeps a new-match lobby centered', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => waitingState(),
+          canStart: () => true,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.overlay.hidden, false);
+      assert.equal(dom.overlay.className.includes('is-lag'), false);
     } finally {
       restore();
     }

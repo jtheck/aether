@@ -173,6 +173,28 @@
     #koth-controls .koth-lobby-name { font-weight: 600; }
     #koth-controls .koth-lobby-meta { opacity: .78; font-size: 12px; font-variant-numeric: tabular-nums; }
     #koth-start, #koth-join { margin-top: 2px; text-align: center; }
+    /* Opaque cover over the scene during catch-up so the fast-forward replay and
+       world rebuild are never visible — the joiner just sees a progress bar. */
+    #catchup-overlay {
+      position: fixed; inset: 0; z-index: 10002;
+      display: flex; align-items: center; justify-content: center;
+      background: #05161a;
+    }
+    #catchup-overlay[hidden] { display: none; }
+    #catchup-panel {
+      display: flex; flex-direction: column; gap: 10px; align-items: center;
+      width: min(320px, 72vw);
+      color: #d2fcff; font: 14px/1.3 system-ui, sans-serif;
+    }
+    #catchup-bar {
+      width: 100%; height: 8px; border-radius: 4px; overflow: hidden;
+      background: rgba(210, 252, 255, 0.18);
+    }
+    #catchup-fill {
+      height: 100%; width: 0%; border-radius: 4px;
+      background: aqua; transition: width 120ms linear;
+    }
+    #catchup-meta { opacity: .72; font-variant-numeric: tabular-nums; }
     /* Transparent hit-layer eats mouse/touch; logo only is visible over the scene. */
     #boot-splash {
       position: fixed;
@@ -278,6 +300,11 @@
       display: flex; align-items: center; justify-content: center;
       pointer-events: none;
     }
+    #match-lobby-overlay.is-lag {
+      align-items: flex-start;
+      justify-content: flex-start;
+      padding: 12px;
+    }
     #match-lobby-overlay[hidden] { display: none; }
     #match-lobby-overlay .match-lobby-panel {
       pointer-events: auto;
@@ -349,6 +376,13 @@
   <div id="version" style="position:absolute;bottom: 9px;left: 9px;color: #9999;z-index: 9;font-size: 9px;user-select: none;font-family: georgia;">v 0.4</div>
   <div id="boot-splash" aria-hidden="true">
     <img src="./icons/splash.png" alt="" width="512" height="512" decoding="sync" fetchpriority="high" />
+  </div>
+  <div id="catchup-overlay" aria-hidden="true" hidden>
+    <div id="catchup-panel">
+      <div id="catchup-title">Catching up…</div>
+      <div id="catchup-bar"><div id="catchup-fill"></div></div>
+      <div id="catchup-meta"></div>
+    </div>
   </div>
   <canvas id="canvas"></canvas>
   <div id="status"><span id="status-pop"></span><span id="status-time"></span><span id="status-side"></span></div>

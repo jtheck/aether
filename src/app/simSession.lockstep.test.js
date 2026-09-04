@@ -57,4 +57,30 @@ describe('simSession lockstep leave', () => {
     assert.deepEqual(session.lockstepWaiters(), []);
     assert.equal(session.lockstepBlockedMs(4_000), 0);
   });
+
+  it('disarms the stall clock when a tick commits (healthy lockstep)', () => {
+    const session = sessionTwoPlayer();
+    session.confirmedTick = 2;
+    // Peer is one tick behind — the common steady state when we render ahead of
+    // the 20 Hz sim, so a UI sample sees tick 3's confirm still outstanding.
+    session.setPeerConfirmedTick(1, 2);
+    let stepHandler = null;
+    session.client = { onStepDone(cb) { stepHandler = cb; } };
+    session.ledger = new Map();
+    session.inFlightFrames = [];
+    session._captureSnapshot = () => {};
+    session._drainPendingCommits = () => {};
+    session._recordCommittedTick = () => {};
+    session._bindStepHandler();
+
+    // A UI sample arms the stall clock because the next confirm is missing.
+    session.lockstepBlockedMs(1_000);
+    assert.notEqual(session._lockstepBlockedAt, 0);
+
+    // The worker commits tick 3: lockstep advanced, so the stall clock resets and
+    // the "waiting for players" card never fires during healthy play.
+    stepHandler(3, 0);
+    assert.equal(session.confirmedTick, 3);
+    assert.equal(session._lockstepBlockedAt, 0);
+  });
 });

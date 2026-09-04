@@ -12,8 +12,9 @@ import { SimClient } from './simClient.js';
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
 const LEDGER_KEEP = 7200;
-/** Show the in-match lobby once lockstep has waited this long for a peer. */
-export const LOCKSTEP_STALL_UI_MS = 1500;
+/** Show the in-match stall card once lockstep has been blocked this long.
+ *  Brief WebRTC / GC hitches should not count as a player lagging. */
+export const LOCKSTEP_STALL_UI_MS = 4000;
 
 export { TICK_HZ, TICK_MS };
 
@@ -679,6 +680,14 @@ export class SimSession {
     this.client.onStepDone((tick, checksum, extra) => {
       if (this.resetting) return;
       this.confirmedTick = tick;
+      // A committed tick means lockstep is advancing, so disarm the stall clock.
+      // The stall card should only appear when confirmedTick is truly frozen for
+      // LOCKSTEP_STALL_UI_MS. `_lockstepBlockedAt` is armed lazily by
+      // lockstepBlockedMs() whenever a sample sees a non-empty waiter set — and a
+      // client rendering ahead of a 20 Hz sim almost always has the next tick's
+      // confirm outstanding at sample time, so without this reset the timer
+      // accumulates during perfectly healthy play and pops the lag card at ~1-2ms.
+      this._lockstepBlockedAt = 0;
       this._lastChecksum = checksum;
       if (extra?.koth) this.koth = extra.koth;
       if (extra?.kothMatchOver != null) this.kothMatchOver = extra.kothMatchOver;

@@ -2468,6 +2468,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (frameProf) profT = performance.now();
     syncWorkRadiusRing();
 
+    updateCatchupOverlay(session);
     if (session.replayingCatchUp) {
       paintStatus();
       updateColors();
@@ -3916,6 +3917,33 @@ function isLobbyGraffitiScene(mode) {
 
 function setGraffitiHeaderVisible(on) {
   document.getElementById('header')?.classList.toggle('in-match', !on);
+}
+
+/**
+ * Cover the scene with a progress bar while a late joiner catches up, so the
+ * fast-forward replay and world rebuild are never shown. The joiner sees the
+ * lobby, then this bar, then the live match — no throwaway mini-match flicker.
+ */
+function updateCatchupOverlay(session) {
+  const el = document.getElementById('catchup-overlay');
+  if (!el) return;
+  const active = !!session?.replayingCatchUp;
+  if (!active) {
+    if (!el.hidden) el.hidden = true;
+    return;
+  }
+  if (el.hidden) el.hidden = false;
+  const progress = session.catchupProgress;
+  const fill = document.getElementById('catchup-fill');
+  const meta = document.getElementById('catchup-meta');
+  if (progress && progress.targetTick > 0) {
+    const pct = Math.max(0, Math.min(100, Math.round((progress.tick / progress.targetTick) * 100)));
+    if (fill) fill.style.width = `${pct}%`;
+    if (meta) meta.textContent = `${pct}%`;
+  } else {
+    if (fill) fill.style.width = '0%';
+    if (meta) meta.textContent = '';
+  }
 }
 
 function showMatchSplash() {

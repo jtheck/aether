@@ -2,9 +2,11 @@
 // are raised by villagers and engineers. Mirrors the gather loop: a per-tick
 // driver walks builders to the site and holds them in reach; progress accrues
 // from on-site workers (capped at MAX_BUILDERS slots). A villager is one
-// builder-tick; an engineer is half. A separate assign pass fills those slots —
-// nearest first, idle preferred, pulling gatherers / repairing engineers when
-// no idle hand is free. All state lives on the building object / SoA.
+// builder-tick; an engineer is half. Unattended villages still trickle at
+// IDLE_VILLAGE_DEN (0.1× one villager) so a site can finish with no hands.
+// A separate assign pass fills those slots — nearest first, idle preferred,
+// pulling gatherers / repairing engineers when no idle hand is free. All
+// state lives on the building object / SoA.
 
 import * as fx from './fixed.js';
 import { ORDER } from './world.js';
@@ -22,6 +24,8 @@ const VILLAGER_BUILD_HALVES = 2;
 /** Engineers take a slot but add half a villager's speed. */
 const ENGINEER_BUILD_HALVES = 1;
 const MAX_BUILD_HALVES = MAX_BUILDERS * VILLAGER_BUILD_HALVES;
+/** Idle village trickle: one villager-tick every N ticks with no on-site builders. */
+export const IDLE_VILLAGE_DEN = 10;
 /** Re-scan cadence for builder recruitment (deterministic on world.tick). */
 const ASSIGN_INTERVAL = 20;
 /** Extra reach past the footprint edge so builders don't fight for the exact rim. */
@@ -137,12 +141,25 @@ export function constructionSystem(w, field) {
     const b = buildings[bi];
     if (b.built !== 0 || (b.hp != null && (b.hp | 0) <= 0)) continue;
     const halves = _present[bi];
-    if (halves <= 0) continue;
     const prevProg = b.buildProgress | 0;
     const time = b.buildTime | 0;
-    const total = (b.buildHalfAcc | 0) + Math.min(halves, MAX_BUILD_HALVES);
-    b.buildProgress = prevProg + (total >> 1);
-    b.buildHalfAcc = total & 1;
+    if (halves > 0) {
+      const total = (b.buildHalfAcc | 0) + Math.min(halves, MAX_BUILD_HALVES);
+      b.buildProgress = prevProg + (total >> 1);
+      b.buildHalfAcc = total & 1;
+    } else if (b.type === 'village') {
+      // 0.1× one villager while no one is on-site. Remainder stays on the
+      // building so a worker arriving mid-cycle doesn't drop the trickle.
+      const acc = (b.buildIdleAcc | 0) + 1;
+      if (acc < IDLE_VILLAGE_DEN) {
+        b.buildIdleAcc = acc;
+        continue;
+      }
+      b.buildIdleAcc = 0;
+      b.buildProgress = prevProg + 1;
+    } else {
+      continue;
+    }
     if (b.buildProgress >= time) {
       b.buildProgress = time;
       b.built = 1;

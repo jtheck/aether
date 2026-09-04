@@ -267,8 +267,8 @@ export function ownerMeetsBuildingRequires(buildings, owner, typeId) {
 
 /**
  * Construction time in builder-ticks (work by ONE villager). Two villagers
- * halve the wall-clock; an engineer counts as a slot at half speed. See
- * construction.js.
+ * halve the wall-clock; an engineer counts as a slot at half speed. An
+ * unattended village still trickles at 0.1× that baseline. See construction.js.
  */
 export const BUILD_TIME = Object.freeze({
   // basic
@@ -947,6 +947,8 @@ export function createBuilding(opts) {
     buildProgress: built ? buildTime : 0,
     /** Leftover half-tick from engineer work (0 or 1). */
     buildHalfAcc: 0,
+    /** Remainder toward the next idle-village builder-tick (0..IDLE_VILLAGE_DEN-1). */
+    buildIdleAcc: 0,
     /** Builder-ticks required to raise this building. */
     buildTime,
     /** @type {{ kind: 'unit' | 'upgrade', id: string, unitType?: number, count: number, progress: number }[]} */
@@ -1272,6 +1274,7 @@ export function applyPlaceBuilding(w, field, cmd) {
     built: 0,
     buildProgress: 0,
     buildHalfAcc: 0,
+    buildIdleAcc: 0,
     buildTime: getBuildTime(type),
     tracks: [],
     villageSpawnAcc: 0,
@@ -1616,6 +1619,7 @@ export function mixBuildingChecksum(h, mix, buildings) {
     mix(b.built != null ? b.built | 0 : 1);
     mix(b.buildProgress | 0);
     mix(b.buildHalfAcc | 0);
+    mix(b.buildIdleAcc | 0);
     mix(b.villageSpawnAcc | 0);
     mix(b.engBonus | 0);
     mix(b.engBonusUntil | 0);

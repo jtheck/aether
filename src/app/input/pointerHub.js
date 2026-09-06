@@ -270,6 +270,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
       document.removeEventListener('focusin', onFocusIn);
       window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      touch?.dispose?.();
     },
   };
 }

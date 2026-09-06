@@ -64,3 +64,42 @@ spawnSync(process.execPath, ['copy-steam-redist.mjs', distRoot, plat], {
   stdio: 'inherit',
   cwd: __dirname,
 });
+
+if (plat === 'linux') {
+  const launcherSrc = path.join(__dirname, 'Aether.sh');
+  const launcherDest = path.join(distRoot, 'Aether.sh');
+  if (fs.existsSync(launcherSrc)) {
+    fs.copyFileSync(launcherSrc, launcherDest);
+    try { fs.chmodSync(launcherDest, 0o755); } catch (_err) { /* cross-build on Windows */ }
+    console.log('[steam-build] Copied Aether.sh →', distRoot);
+  }
+
+  // nw-builder on Windows writes host paths into the .desktop file.
+  fs.writeFileSync(
+    path.join(distRoot, 'Aether.desktop'),
+    `[Desktop Entry]
+Type=Application
+Version=1.5
+Name=Aether
+Comment=Aether.Garden
+Exec=Aether.sh
+Icon=package.nw/build/icon.png
+Path=.
+Terminal=false
+Categories=Game;
+`,
+  );
+  console.log('[steam-build] Rewrote Aether.desktop for Linux');
+
+  const manifestPath = path.join(distRoot, 'package.nw', 'package.json');
+  if (fs.existsSync(manifestPath)) {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const extra = '--no-sandbox --disable-gpu-sandbox --ozone-platform=x11 --enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE --use-angle=vulkan --ignore-gpu-blocklist';
+    const args = typeof manifest['chromium-args'] === 'string' ? manifest['chromium-args'] : '';
+    if (!args.includes('--enable-unsafe-webgpu')) {
+      manifest['chromium-args'] = (args + ' ' + extra).trim();
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+      console.log('[steam-build] Added Linux Chromium sandbox/WebGPU flags');
+    }
+  }
+}

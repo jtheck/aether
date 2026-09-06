@@ -156,6 +156,14 @@ function lockTitle(win) {
   } catch (_err) { /* window tearing down */ }
 }
 
+function teardownAndQuit() {
+  if (teardownAndQuit._done) return;
+  teardownAndQuit._done = true;
+  try { require('./steam-client').shutdown(); } catch (_e) { /* ignore */ }
+  try { require('./bridge-server').stop(); } catch (_e2) { /* ignore */ }
+  try { nw.App.quit(); } catch (_e3) { /* ignore */ }
+}
+
 function wireWindow(win) {
   if (!win || win._aetherWired) return;
   win._aetherWired = true;
@@ -172,6 +180,16 @@ function wireWindow(win) {
   if (!win._aetherTitleTimer) {
     win._aetherTitleTimer = setInterval(function () { lockTitle(win); }, 1000);
   }
+
+  win.on('close', function () {
+    if (win._aetherTitleTimer) {
+      clearInterval(win._aetherTitleTimer);
+      win._aetherTitleTimer = null;
+    }
+    teardownAndQuit();
+    try { this.close(true); } catch (_close) { /* already closing */ }
+  });
+  win.on('closed', teardownAndQuit);
 
   win.on('new-win-policy', function (_frame, url, policy) {
     if (isAllowedUrl(url)) {
@@ -241,8 +259,7 @@ nw.App.on('open', attachToCurrentWindow);
 nw.App.on('reopen', attachToCurrentWindow);
 
 nw.App.on('quit', function () {
-  try { require('./steam-client').shutdown(); } catch (_e) { /* ignore */ }
-  try { require('./bridge-server').stop(); } catch (_e) { /* ignore */ }
+  teardownAndQuit();
 });
 
 setTimeout(attachToCurrentWindow, 0);

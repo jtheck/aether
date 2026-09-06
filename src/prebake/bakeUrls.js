@@ -30,7 +30,7 @@ export function allMeshBakeUrls() {
   return [...urls].sort();
 }
 
-/** @returns {{ url: string, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }[]} */
+/** @returns {{ url: string, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string, attackClip?: string }[]} */
 export function allVatBakeDefs() {
   return [
     ...Object.values(VAT_UNIT_DEFS).map((d) => ({
@@ -39,6 +39,7 @@ export function allVatBakeDefs() {
       walkClip: d.walkClip,
       carryClip: d.carryClip,
       chopClip: d.chopClip,
+      attackClip: d.attackClip,
     })),
     ...allDlcVatDefs(),
   ];

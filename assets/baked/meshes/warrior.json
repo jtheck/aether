@@ -27,11 +27,11 @@
       "emissiveImage": null
     },
     {
-      "name": "Material",
+      "name": "Material.002",
       "baseColorFactor": [
-        0.49010899662971497,
-        0.5274291634559631,
-        0.48143452405929565,
+        0.004591120406985283,
+        0,
+        0.0014808839187026024,
         1
       ],
       "metallicFactor": 0,
@@ -50,11 +50,34 @@
       "emissiveImage": null
     },
     {
-      "name": "TeamColor",
+      "name": "Material.003",
       "baseColorFactor": [
-        0.800000011920929,
-        0.800000011920929,
-        0.800000011920929,
+        0.042449064552783966,
+        0.015671517699956894,
+        0.004653186071664095,
+        1
+      ],
+      "metallicFactor": 0,
+      "roughnessFactor": 0.5,
+      "emissiveFactor": [
+        0,
+        0,
+        0
+      ],
+      "doubleSided": true,
+      "alphaMode": "OPAQUE",
+      "alphaCutoff": 0.5,
+      "baseColorImage": null,
+      "normalImage": null,
+      "ormImage": null,
+      "emissiveImage": null
+    },
+    {
+      "name": "Material",
+      "baseColorFactor": [
+        0.49010899662971497,
+        0.5274291634559631,
+        0.48143452405929565,
         1
       ],
       "metallicFactor": 0,
@@ -80,103 +103,138 @@
       "materialIndex": 0,
       "reverseWinding": true,
       "boundMin": [
-        -0.6843329071998596,
-        -0.013004422187805176,
-        -0.11790403723716736
+        -1.3490904569625854,
+        0.9561943411827087,
+        -0.22010120749473572
       ],
       "boundMax": [
-        0.7596445083618164,
+        1.3077400922775269,
         2.1285085678100586,
-        0.5165543556213379
+        0.2765235900878906
       ],
       "positions": {
         "offset": 0,
-        "length": 1920,
+        "length": 1452,
         "type": "f32"
       },
       "normals": {
-        "offset": 7680,
-        "length": 1920,
+        "offset": 5808,
+        "length": 1452,
         "type": "f32"
       },
       "indices": {
-        "offset": 15360,
-        "length": 972,
+        "offset": 11616,
+        "length": 732,
         "type": "u32"
       },
       "uvs": {
-        "offset": 19248,
-        "length": 1280,
+        "offset": 14544,
+        "length": 968,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.002",
+      "materialIndex": 1,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.3850521147251129,
+        -0.013004422187805176,
+        -0.18900784850120544
+      ],
+      "boundMax": [
+        0.3747960925102234,
+        0.1848675012588501,
+        0.42121267318725586
+      ],
+      "positions": {
+        "offset": 18416,
+        "length": 246,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 19400,
+        "length": 246,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 20384,
+        "length": 126,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 20888,
+        "length": 164,
+        "type": "f32"
+      }
+    },
+    {
+      "materialName": "Material.003",
+      "materialIndex": 2,
+      "reverseWinding": true,
+      "boundMin": [
+        -0.3383331298828125,
+        0.15846145153045654,
+        -0.16546331346035004
+      ],
+      "boundMax": [
+        0.3380482792854309,
+        0.9723973870277405,
+        0.21233509480953217
+      ],
+      "positions": {
+        "offset": 21544,
+        "length": 342,
+        "type": "f32"
+      },
+      "normals": {
+        "offset": 22912,
+        "length": 342,
+        "type": "f32"
+      },
+      "indices": {
+        "offset": 24280,
+        "length": 174,
+        "type": "u32"
+      },
+      "uvs": {
+        "offset": 24976,
+        "length": 228,
         "type": "f32"
       }
     },
     {
       "materialName": "Material",
-      "materialIndex": 1,
+      "materialIndex": 3,
       "reverseWinding": true,
       "boundMin": [
-        0.21290278434753418,
-        0.5797704458236694,
-        -0.06809306144714355
+        0.9226871132850647,
+        1.4277950525283813,
+        -0.07291202247142792
       ],
       "boundMax": [
-        0.698889970779419,
-        1.5443085432052612,
-        2.396728515625
+        1.3687899112701416,
+        1.8520097732543945,
+        2.471642255783081
       ],
       "positions": {
-        "offset": 24368,
+        "offset": 25888,
         "length": 168,
         "type": "f32"
       },
       "normals": {
-        "offset": 25040,
+        "offset": 26560,
         "length": 168,
         "type": "f32"
       },
       "indices": {
-        "offset": 25712,
+        "offset": 27232,
         "length": 84,
         "type": "u32"
       },
       "uvs": {
-        "offset": 26048,
+        "offset": 27568,
         "length": 112,
-        "type": "f32"
-      }
-    },
-    {
-      "materialName": "TeamColor",
-      "materialIndex": 2,
-      "reverseWinding": true,
-      "boundMin": [
-        -1.1869583129882812,
-        0.2497544288635254,
-        0.10990436375141144
-      ],
-      "boundMax": [
-        -0.27342331409454346,
-        1.3727271556854248,
-        0.560347318649292
-      ],
-      "positions": {
-        "offset": 26496,
-        "length": 72,
-        "type": "f32"
-      },
-      "normals": {
-        "offset": 26784,
-        "length": 72,
-        "type": "f32"
-      },
-      "indices": {
-        "offset": 27072,
-        "length": 36,
-        "type": "u32"
-      },
-      "uvs": {
-        "offset": 27216,
-        "length": 48,
         "type": "f32"
       }
     }

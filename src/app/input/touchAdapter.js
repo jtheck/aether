@@ -3,8 +3,10 @@
 //
 // Parallel by default (per pointerId), with one narrow merge exception:
 //   - Edge band: a rim *start* is a candidate, not a commit. A still lift is a
-//     tap (units / HUD near the bezel). A mostly-tangential drag orbits;
-//     a mostly-inward drag falls through to center play. Rotate-only for now.
+//     tap (units / HUD near the bezel). A still hold → pan (same as center).
+//     A mostly-tangential drag: left/right zoom, top/bottom orbit. Full
+//     strength in the rim, then a 2× fade so it does not carry into the field.
+//     A mostly-inward drag falls through to play.
 //   - Center finger: brief still hold → pan; early drag → synth LMB (box);
 //     short lift → tap. Each center contact runs its own pan-hold / pan /
 //     action stream so one hand can pan while the other selects / a-moves.
@@ -26,27 +28,90 @@
 
 import { DRAG_THRESHOLD_PX } from './gameInput.js';
 
-/** Screen-rim band that *candidates* a finger for orbit (commit on drag). */
+/** Screen-rim band that *candidates* a finger for camera (commit on drag). */
 export const EDGE_ZONE_PX = 64;
-/** Keep a committed orbit if the finger slides a bit off the bezel. */
-const EDGE_FOLLOW_PX = 110;
+/** After the full-strength rim, fade over this many px (2× zone). */
+export const EDGE_FADE_PX = EDGE_ZONE_PX * 2;
+/** Follow while the fade still has weight — not into the open field. */
+const EDGE_FOLLOW_PX = EDGE_ZONE_PX + EDGE_FADE_PX;
 /** v1 cameraFingerDragThreshold — move this far before rim vs tap is decided. */
 export const EDGE_COMMIT_PX = 10;
 const EDGE_COMMIT_SQ = EDGE_COMMIT_PX * EDGE_COMMIT_PX;
 /**
- * |tangential| / path at or above this (≈63° from inward) commits orbit.
- * Sloppier rim swipes still rotate; a mostly-inward stroke stays a play drag.
+ * |tangential| / path at or above this (≈63° from inward) commits camera.
+ * Sloppier rim swipes still grab; a mostly-inward stroke stays a play drag.
  */
 export const EDGE_ROTATE_ALIGN = 0.45;
-/** Edge-drag ramps from this to 100% — short so a real orbit isn't mushy. */
+/** Edge-drag ramps from this to 100% — short so a real grab isn't mushy. */
 const EDGE_RAMP_MS = 140;
 const EDGE_RAMP_START = 0.55;
 /**
- * nudgeRotate feeds cameraController's velocity (~19x steady-state gain).
- * Pre-gain-corrected so held edge-drag turns at roughly v1's rate.
+ * Direct yaw per tangential px (v1 zoneRotateSensitivity).
+ * The old 0.00093 fed the ~19× velocity integrator; sub-threshold moves
+ * died, then coalesced pointer jumps landed as steps.
  */
-const EDGE_ROTATE_SENS = 0.00093;
-// Edge inward-zoom intentionally omitted while tuning — rim drag is rotate-only.
+const EDGE_ROTATE_SENS = 0.018;
+/** Direct radius per px × current radius (v1 zoneZoomSensitivity). */
+const EDGE_ZOOM_SENS = 0.015;
+
+/**
+ * Full in the rim, then a smoothstep drop across the fade buffer.
+ * @param {number} distPx distance to the active screen edge
+ */
+export function edgeCommandWeight(distPx, zonePx = EDGE_ZONE_PX, fadePx = EDGE_FADE_PX) {
+  if (!(distPx > zonePx)) return 1;
+  if (!(fadePx > 0) || distPx >= zonePx + fadePx) return 0;
+  const t = (distPx - zonePx) / fadePx;
+  return 1 - t * t * (3 - 2 * t);
+}
+
+function edgeAxisZooms(axis) {
+  return axis === 'left' || axis === 'right';
+}
+
+function mountEdgeZoneGuides(canvas) {
+  if (typeof document === 'undefined' || !document.body) return () => {};
+  if (!canvas || typeof canvas.getBoundingClientRect !== 'function') return () => {};
+
+  const layer = document.createElement('div');
+  layer.id = 'edge-zone-guides';
+  layer.setAttribute('aria-hidden', 'true');
+  // Above the WebGPU canvas; below HUD (10001+). pointer-events stay off.
+  layer.style.cssText = 'position:fixed;pointer-events:none;z-index:10000;';
+
+  const fade =
+    'linear-gradient(to bottom,transparent,rgba(244,240,228,0.08) 28%,rgba(244,240,228,0.32) 50%,rgba(244,240,228,0.08) 72%,transparent)';
+
+  function makeRail() {
+    const el = document.createElement('div');
+    el.style.cssText = `position:absolute;top:0;bottom:0;width:2px;background:${fade};`;
+    layer.appendChild(el);
+    return el;
+  }
+  const left = makeRail();
+  const right = makeRail();
+  document.body.appendChild(layer);
+
+  function layout() {
+    const r = canvas.getBoundingClientRect();
+    layer.style.left = `${r.left}px`;
+    layer.style.top = `${r.top}px`;
+    layer.style.width = `${r.width}px`;
+    layer.style.height = `${r.height}px`;
+    left.style.left = `${EDGE_ZONE_PX}px`;
+    right.style.right = `${EDGE_ZONE_PX}px`;
+  }
+  layout();
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(layout) : null;
+  if (ro && canvas instanceof Element) ro.observe(canvas);
+  window.addEventListener('resize', layout);
+
+  return () => {
+    window.removeEventListener('resize', layout);
+    ro?.disconnect();
+    layer.remove();
+  };
+}
 
 /** Second center finger must land within this long of the first to chord into pinch (v1: twoFingerChordMaxStaggerMs). */
 const CHORD_MAX_STAGGER_MS = 90;
@@ -91,7 +156,7 @@ const ANOMALY_CENTROID_PX = 140;
 const ANOMALY_DIST_PX = 80;
 
 /** v1 centerPanHoldMs — still this long → commit one-finger pan. */
-const CENTER_PAN_HOLD_MS = 95;
+export const CENTER_PAN_HOLD_MS = 95;
 /** v1 centerPanHoldMaxMovePx — move farther before hold fires → cancel pan arm. */
 const CENTER_PAN_HOLD_MAX_MOVE_PX = 10;
 const CENTER_PAN_HOLD_MAX_MOVE_SQ = CENTER_PAN_HOLD_MAX_MOVE_PX * CENTER_PAN_HOLD_MAX_MOVE_PX;
@@ -104,6 +169,8 @@ const BOX_DRAG_THRESHOLD_SQ = DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX;
  * @param {ReturnType<import('./gameInput.js').createGameInput>} opts.game
  */
 export function createTouchAdapter({ canvas, camera, game }) {
+  const unmountGuides = mountEdgeZoneGuides(canvas);
+
   /**
    * role:
    *   edge     — rim camera
@@ -188,7 +255,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
     return best;
   }
 
-  function edgeDragIsRotate(axis, dx, dy) {
+  function edgeDragIsCamera(axis, dx, dy) {
     if (!axis) return false;
     const path = Math.hypot(dx, dy);
     if (path < 1e-6) return false;
@@ -278,6 +345,8 @@ export function createTouchAdapter({ canvas, camera, game }) {
       const mdy = t.y - t.startY;
       if (mdx * mdx + mdy * mdy > CENTER_PAN_HOLD_MAX_MOVE_SQ) return;
       t.role = 'pan';
+      t.startedInEdge = false;
+      t.edgeAxis = null;
       t.lastX = t.x;
       t.lastY = t.y;
     }, delay);
@@ -328,7 +397,8 @@ export function createTouchAdapter({ canvas, camera, game }) {
     if (t.startedInEdge && t.role === 'pending') {
       if (movedSq < EDGE_COMMIT_SQ) return;
       const axis = bestAxisForDelta(t.x, t.y, mdx, mdy, EDGE_FOLLOW_PX) ?? t.edgeAxis;
-      if (edgeDragIsRotate(axis, mdx, mdy)) {
+      if (edgeDragIsCamera(axis, mdx, mdy)) {
+        clearPanHoldTimerFor(id);
         t.role = 'edge';
         t.isEdge = true;
         t.edgeAxis = axis;
@@ -630,7 +700,10 @@ export function createTouchAdapter({ canvas, camera, game }) {
       });
     }
     if (b0.engagedRotate && Math.abs(dangle) > 1e-4) {
-      camera.nudgeRotate(dangle * PINCH_ROTATE_SENS * w.rotate);
+      camera.nudgeRotate(dangle * PINCH_ROTATE_SENS * w.rotate, {
+        x: centroid.x,
+        y: centroid.y,
+      });
     }
     // Pan: full 1-finger strength when slide leads; only soften when zoom/twist dominate.
     if (b0.engagedPan && panPxRaw > 0.05) {
@@ -648,19 +721,30 @@ export function createTouchAdapter({ canvas, camera, game }) {
   function applyEdgeCamera(t) {
     const dx = t.x - t.lastX;
     const dy = t.y - t.lastY;
+    // Don't eat sub-pixel samples — they must accumulate or the rim feels stepped.
+    if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4) return;
     t.lastX = t.x;
     t.lastY = t.y;
-    if (Math.abs(dx) < 0.4 && Math.abs(dy) < 0.4) return;
 
     const follow = bestAxisForDelta(t.x, t.y, dx, dy, EDGE_FOLLOW_PX);
     if (follow) t.edgeAxis = follow;
+
+    const axis = t.edgeAxis;
+    if (!axis) return;
+    const weight = edgeCommandWeight(edgeDists(t.x, t.y)[axis]);
+    if (weight <= 1e-4) return;
 
     const ramp = Math.min(
       1,
       EDGE_RAMP_START + (1 - EDGE_RAMP_START) * ((performance.now() - t.startTime) / EDGE_RAMP_MS),
     );
-    const tangential = tangentialDelta(t.edgeAxis, dx, dy);
-    camera.nudgeRotate(tangential * EDGE_ROTATE_SENS * ramp);
+    const gain = ramp * weight;
+    if (edgeAxisZooms(axis)) {
+      camera.zoomBy(-dy * EDGE_ZOOM_SENS * camera.getRadius() * gain);
+      return;
+    }
+    const tangential = tangentialDelta(axis, dx, dy);
+    camera.rotateBy(tangential * EDGE_ROTATE_SENS * gain);
   }
 
   /** Find another pending center finger that can chord with `id` (simultaneous, uncommitted). */
@@ -714,8 +798,11 @@ export function createTouchAdapter({ canvas, camera, game }) {
     };
     touches.set(id, t);
 
-    // Candidate only — a still lift must remain a tap. No pan-hold / pinch from the rim.
-    if (t.startedInEdge) return;
+    // Candidate only — still lift is a tap, still hold is pan. No pinch from the rim.
+    if (t.startedInEdge) {
+      startPanHoldTimer(id);
+      return;
+    }
 
     // First free pair → camera chord. While placing, a solo finger can still join.
     // Second free pair while camera chords → force-move / back-out tap.
@@ -841,10 +928,16 @@ export function createTouchAdapter({ canvas, camera, game }) {
     touches.clear();
   }
 
+  function dispose() {
+    reset();
+    unmountGuides();
+  }
+
   return {
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
     reset,
+    dispose,
   };
 }

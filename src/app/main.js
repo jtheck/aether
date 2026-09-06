@@ -807,6 +807,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     poseMoving: new Uint8Array(CAP),
     poseCarrying: new Uint8Array(CAP),
     poseChopping: new Uint8Array(CAP),
+    poseAttacking: new Uint8Array(CAP),
     /** Quantized walk-cycle rate (0.05 steps) so slow strolls refresh VAT fps. */
     poseWalkQ: new Uint8Array(CAP),
     poseValid: new Uint8Array(CAP),
@@ -2555,7 +2556,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       selected, wasSelected, deathFade, facingYaw, selSpinYaw, selSpinVel,
       ringX, ringZ, ringSize, ringTint,
       colors, renderX, renderY, renderZ,
-      poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseCarrying, poseChopping, poseWalkQ, poseValid,
+      poseX, poseZ, poseYaw, poseSize, poseLoft, poseMoving, poseCarrying, poseChopping, poseAttacking, poseWalkQ, poseValid,
       cacheGx, cacheGz, cacheGy,
       fogHidden,
     } = bufs;
@@ -2591,11 +2592,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return gy;
     };
 
-    const poseDirty = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0, walkQ = 20) => {
+    const poseDirty = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0, walkQ = 20, attackingBit = 0) => {
       if (!poseValid[i]) return true;
       if (movingBit !== poseMoving[i]) return true;
       if (carryingBit !== poseCarrying[i]) return true;
       if (choppingBit !== poseChopping[i]) return true;
+      if (attackingBit !== poseAttacking[i]) return true;
       if (walkQ !== poseWalkQ[i]) return true;
       const pdx = x - poseX[i];
       const pdz = z - poseZ[i];
@@ -2606,7 +2608,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       return false;
     };
 
-    const commitPose = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0, walkQ = 20) => {
+    const commitPose = (i, x, z, yaw, size, loft, movingBit, carryingBit = 0, choppingBit = 0, walkQ = 20, attackingBit = 0) => {
       poseX[i] = x;
       poseZ[i] = z;
       poseYaw[i] = yaw;
@@ -2615,6 +2617,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       poseMoving[i] = movingBit;
       poseCarrying[i] = carryingBit;
       poseChopping[i] = choppingBit;
+      poseAttacking[i] = attackingBit;
       poseWalkQ[i] = walkQ;
       poseValid[i] = 1;
     };
@@ -2868,17 +2871,18 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       const gatherAct = world.gatherAct?.[i] | 0;
       const carryingBit = gatherAct === GATHER_ACT.HAUL ? 1 : 0;
       const choppingBit = gatherAct === GATHER_ACT.CHOP ? 1 : 0;
+      const attackingBit = ord === ORDER.ATTACK && !displacing ? 1 : 0;
       const stepLen = Math.hypot(dx, dz);
       const nominal = fx.toFloat(def.speed) || 2;
       const walkRate = movingBit ? Math.min(1, stepLen / nominal) : 1;
       const walkQ = Math.round(Math.max(0, Math.min(1, walkRate)) * 20);
       const forcePose = followSmooth || fade > 0 || loft > 0.01 || pitch !== 0 || roll !== 0;
-      if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ)) {
-        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy, !!carryingBit, !!choppingBit, walkRate)) {
+      if (forcePose || poseDirty(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ, attackingBit)) {
+        if (renderer.writeInstance(i, world.type[i], world.owner[i], x, z, size, yaw, !!movingBit, loft, pitch, roll, gy, !!carryingBit, !!choppingBit, walkRate, !!attackingBit)) {
           if (world.owner[i] === 0) drawStats.p0++;
           else if (world.owner[i] === 1) drawStats.p1++;
         } else drawStats.unmapped++;
-        commitPose(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ);
+        commitPose(i, x, z, yaw, size, loft, movingBit, carryingBit, choppingBit, walkQ, attackingBit);
       } else if (world.owner[i] === 0) drawStats.p0++;
       else if (world.owner[i] === 1) drawStats.p1++;
       const isSel = !!selected[i] && !!world.alive[i];
@@ -3672,6 +3676,15 @@ function ownerStats(world) {
   };
 }
 
+function matchEndedByAgora(session) {
+  const list = session.agoras;
+  if (!list?.length) return false;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].captured) return true;
+  }
+  return false;
+}
+
 function showMatchOver(session) {
   const el = document.getElementById('match-over');
   if (!el) return;
@@ -3679,11 +3692,14 @@ function showMatchOver(session) {
   let text = 'Match over';
   if (session.matchWinner != null && session.matchWinner >= 0) {
     const winner = session.matchWinner;
-    text =
-      winner === (session.localPlayerId ?? 0)
+    const agora = matchEndedByAgora(session);
+    const localWin = winner === (session.localPlayerId ?? 0);
+    text = agora
+      ? (localWin
         ? 'Victory — agora captured'
-        : `Defeat — Player ${formatGameNumber(winner)} captured the agora`;
-    aetherSteam.notifyKothDefeat(session);
+        : `Defeat — Player ${formatGameNumber(winner)} captured the agora`)
+      : (localWin ? 'Victory — last standing' : 'Defeat — no pop');
+    if (agora) aetherSteam.notifyKothDefeat(session);
   } else if (k) {
     let best = 0;
     let bestScore = -1;

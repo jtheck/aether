@@ -18,6 +18,7 @@ import {
   STORY_EASE_MS,
   createCameraController,
   resolveCameraHalfF,
+  rotateFocusShift,
   zoomFocusShift,
   zoomTendCatch,
 } from './cameraController.js';
@@ -391,6 +392,21 @@ describe('zoomFocusShift', () => {
   });
 });
 
+describe('rotateFocusShift', () => {
+  it('is zero when yaw is unchanged or the target is the pivot', () => {
+    assert.deepEqual(rotateFocusShift(4, -2, 40, 10, 0), { x: 0, z: 0 });
+    const onPivot = rotateFocusShift(12, -8, 12, -8, 0.4);
+    assert.ok(Math.abs(onPivot.x) < 1e-12);
+    assert.ok(Math.abs(onPivot.z) < 1e-12);
+  });
+
+  it('yaws the look target around the pivot with Lite alpha', () => {
+    const q = rotateFocusShift(0, 0, 40, 0, Math.PI / 2);
+    assert.ok(Math.abs(q.x - 40) < 1e-9);
+    assert.ok(Math.abs(q.z + 40) < 1e-9);
+  });
+});
+
 function wheel(partial = {}) {
   return {
     deltaY: -120,
@@ -453,5 +469,122 @@ describe('zoom toward cursor', () => {
     const moved = Math.hypot(cam.target.x - startX, cam.target.z - startZ);
     assert.ok(moved > 1, `pinch zoom should drift toward the centroid (moved ${moved})`);
     assert.ok(moved < 80, `pinch zoom should not snap (moved ${moved})`);
+  });
+});
+
+describe('rotate toward cursor', () => {
+  it('orbits the look target around the cursor without snapping', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const startX = cam.target.x;
+    const startZ = cam.target.z;
+    const startR = cam.radius;
+    for (let i = 0; i < 10; i++) {
+      ctrl.handleWheel(wheel({ clientX: 700, clientY: 300, deltaY: -160, shiftKey: true }));
+      ctrl.tick(16);
+    }
+    const moved = Math.hypot(cam.target.x - startX, cam.target.z - startZ);
+    assert.ok(moved > 1, `target should orbit around the cursor (moved ${moved})`);
+    assert.ok(moved < 80, `target should not snap onto the cursor (moved ${moved})`);
+    assert.ok(Math.abs(cam.radius - startR) < 1e-6, 'shift+wheel should not zoom');
+    assert.notEqual(cam.alpha, 0);
+  });
+
+  it('does not pan when the rotate wheel is at screen center', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    for (let i = 0; i < 8; i++) {
+      ctrl.handleWheel(wheel({ clientX: 400, clientY: 300, deltaY: -160, shiftKey: true }));
+      ctrl.tick(16);
+    }
+    assert.ok(Math.abs(cam.target.x) < 0.2);
+    assert.ok(Math.abs(cam.target.z) < 0.2);
+  });
+
+  it('keyboard rotate stays on the current look target', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    ctrl.handleKeyDown(keyEvent('s'));
+    for (let i = 0; i < 8; i++) ctrl.tick(16);
+    ctrl.handleKeyUp(keyEvent('s'));
+    assert.ok(Math.abs(cam.target.x) < 0.2);
+    assert.ok(Math.abs(cam.target.z) < 0.2);
+    assert.notEqual(cam.alpha, 0);
+  });
+
+  it('pinch-style nudgeRotate uses the gesture centroid', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const startX = cam.target.x;
+    const startZ = cam.target.z;
+    for (let i = 0; i < 10; i++) {
+      ctrl.nudgeRotate(0.12, { x: 700, y: 300 });
+      ctrl.tick(16);
+    }
+    const moved = Math.hypot(cam.target.x - startX, cam.target.z - startZ);
+    assert.ok(moved > 1, `pinch rotate should drift around the centroid (moved ${moved})`);
+    assert.ok(moved < 80, `pinch rotate should not snap (moved ${moved})`);
+  });
+
+  it('nudgeRotate without a screen point stays on the current look target', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    for (let i = 0; i < 8; i++) {
+      ctrl.nudgeRotate(0.12);
+      ctrl.tick(16);
+    }
+    assert.ok(Math.abs(cam.target.x) < 0.2);
+    assert.ok(Math.abs(cam.target.z) < 0.2);
+  });
+
+  it('rotateBy yaws immediately without banking coast', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const a0 = cam.alpha;
+    ctrl.rotateBy(0.2);
+    assert.ok(Math.abs(cam.alpha - (a0 + 0.2)) < 1e-9);
+    const after = cam.alpha;
+    for (let i = 0; i < 8; i++) ctrl.tick(16);
+    assert.ok(Math.abs(cam.alpha - after) < 1e-6);
+  });
+});
+
+describe('zoomBy', () => {
+  it('changes radius immediately without banking coast', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    const r0 = cam.radius;
+    ctrl.zoomBy(12);
+    assert.ok(Math.abs(cam.radius - (r0 + 12)) < 1e-9);
+    const after = cam.radius;
+    for (let i = 0; i < 8; i++) ctrl.tick(16);
+    assert.ok(Math.abs(cam.radius - after) < 1e-6);
+  });
+});
+
+describe('pointer focus stays with pan', () => {
+  it('does not yank zoom back to the pre-pan world point', () => {
+    const cam = fakeCamera();
+    const ctrl = createCameraController(cam, fakeCanvas(), { worldHalfF: 200 });
+    for (let i = 0; i < 6; i++) {
+      ctrl.handleWheel(wheel({ clientX: 700, clientY: 300, deltaY: -160 }));
+      ctrl.tick(16);
+    }
+    const pulledX = cam.target.x;
+    const pulledZ = cam.target.z;
+    const pulled = Math.hypot(pulledX, pulledZ);
+    assert.ok(pulled > 1, `setup should have pulled toward the cursor (moved ${pulled})`);
+    const s = 40 / pulled;
+    ctrl.nudgePan(-pulledX * s, -pulledZ * s);
+    ctrl.tick(16);
+    const afterPanX = cam.target.x;
+    const afterPanZ = cam.target.z;
+    for (let i = 0; i < 10; i++) ctrl.tick(16);
+    const backToOld = Math.hypot(cam.target.x - pulledX, cam.target.z - pulledZ);
+    const stayWithPan = Math.hypot(cam.target.x - afterPanX, cam.target.z - afterPanZ);
+    assert.ok(
+      stayWithPan < backToOld,
+      `coast should stay with the pan (from pan ${stayWithPan}, from old focus ${backToOld})`,
+    );
   });
 });

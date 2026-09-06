@@ -32,16 +32,22 @@ function depotMapping(localFolder) {
 }
 
 function linuxExecProps(localFolder) {
-  return `\t\t"FileProperties"
+  const bins = [
+    `${localFolder}/Aether`,
+    `${localFolder}/Aether.sh`,
+    `${localFolder}/chrome_crashpad_handler`,
+    `${localFolder}/chrome-sandbox`,
+    `${localFolder}/nacl_helper`,
+    `${localFolder}/nacl_helper_bootstrap`,
+    `${localFolder}/package.nw/node-steam/node`,
+  ];
+  return bins.map(function (p) {
+    return `\t\t"FileProperties"
 \t\t{
-\t\t\t"LocalPath" "${localFolder}/Aether"
-\t\t\t"Attributes" "unix|0755"
-\t\t}
-\t\t"FileProperties"
-\t\t{
-\t\t\t"LocalPath" "${localFolder}/package.nw/node-steam/node"
+\t\t\t"LocalPath" "${p}"
 \t\t\t"Attributes" "unix|0755"
 \t\t}`;
+  }).join('\n');
 }
 
 if (!fs.existsSync(configPath)) {
@@ -146,3 +152,6 @@ if (run.status !== 0) {
 }
 
 console.log('[steam-upload] Done. Set the build live: https://partner.steamgames.com/apps/builds/' + appId);
+if (platforms.includes('linux')) {
+  console.log('[steam-upload] Linux launch option must be Aether (ELF, OS: Linux). Aether.exe is Windows/Proton only.');
+}

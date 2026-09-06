@@ -76,6 +76,11 @@ function initSteam() {
     available = true;
     startCallbacks();
     console.log('[steam-worker] ready appId', appId);
+    if (process.platform === 'linux') {
+      Promise.resolve(sdk.achievements.unlockAchievement('ACH_LINUX_LAUNCH')).catch(function (err) {
+        console.warn('[steam-worker] ACH_LINUX_LAUNCH:', err.message);
+      });
+    }
     return true;
   } catch (err) {
     initError = err;
@@ -172,6 +177,7 @@ async function handle(req, res) {
         available: true,
         appId: readAppId(),
         name: sdk.friends.getPersonaName(),
+        platform: process.platform,
         dlc: listOwnedDlc(),
       });
     } catch (err) {
@@ -227,6 +233,12 @@ async function handle(req, res) {
     } catch (err) {
       return sendJson(res, 200, { ok: false, error: err.message });
     }
+  }
+
+  if (req.method === 'POST' && req.url === '/quit') {
+    sendJson(res, 200, { ok: true });
+    setTimeout(function () { process.exit(0); }, 10);
+    return;
   }
 
   sendJson(res, 404, { error: 'not found' });

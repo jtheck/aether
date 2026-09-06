@@ -114,8 +114,6 @@ function zoomSpeedForNormalized(normalized) {
 
 /** Exponential chase while Space is held — rushes in from far, then sticks. */
 export const FOLLOW_ZIP_RATE = 18;
-/** Zoom-center chase toward the cursor / pinch — slower than Space-follow so it drifts, not snaps. */
-export const ZOOM_FOCUS_RATE = 8;
 
 /**
  * Look-target shift that keeps `aim` under the zoom this frame.
@@ -131,6 +129,28 @@ export function zoomFocusShift(targetX, targetZ, aimX, aimZ, oldRadius, newRadiu
   const oldR = Math.max(1e-3, Number(oldRadius) || 0);
   const k = 1 - (Number(newRadius) || 0) / oldR;
   return { x: (aimX - targetX) * k, z: (aimZ - targetZ) * k };
+}
+
+/**
+ * Yaw the look-target around a ground pivot. Same CCW XZ as Lite alpha
+ * (`(cos α, sin α)`), so the rig orbits the pointer instead of the old look-at.
+ * @param {number} targetX
+ * @param {number} targetZ
+ * @param {number} pivotX
+ * @param {number} pivotZ
+ * @param {number} dAlpha
+ */
+export function rotateFocusShift(targetX, targetZ, pivotX, pivotZ, dAlpha) {
+  const a = Number(dAlpha) || 0;
+  if (Math.abs(a) < 1e-12) return { x: 0, z: 0 };
+  const dx = targetX - pivotX;
+  const dz = targetZ - pivotZ;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  return {
+    x: pivotX + dx * c - dz * s - targetX,
+    z: pivotZ + dx * s + dz * c - targetZ,
+  };
 }
 
 /**
@@ -195,12 +215,9 @@ export function createCameraController(camera, canvas, opts = {}) {
   let zoomInputThisTick = false;
   let lastZoomSign = 0;
   let zoomTend = false;
+  /** Ground under the pointer — zoom and rotate share this pivot. */
   /** @type {{ x: number, z: number } | null} */
   let zoomFocus = null;
-  /** @type {{ x: number, z: number } | null} */
-  let zoomAim = null;
-  /** @type {{ x: number, y: number } | null} */
-  let zoomFocusScreen = null;
   let followActive = false;
   let followX = 0;
   let followZ = 0;
@@ -436,8 +453,14 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function clearZoomFocus() {
     zoomFocus = null;
-    zoomAim = null;
-    zoomFocusScreen = null;
+  }
+
+  /** Keep the pointer pivot under the cursor when the look-at pans. */
+  function carryPointerFocus(dx, dz) {
+    if (!zoomFocus) return;
+    if (Math.abs(dx) < 1e-8 && Math.abs(dz) < 1e-8) return;
+    zoomFocus.x += dx;
+    zoomFocus.z += dz;
   }
 
   /**
@@ -487,38 +510,39 @@ export function createCameraController(camera, canvas, opts = {}) {
 
   function setZoomFocusFromScreen(clientX, clientY) {
     if (followActive) return;
-    const moved =
-      !zoomFocusScreen ||
-      Math.hypot(clientX - zoomFocusScreen.x, clientY - zoomFocusScreen.y) > 4;
-    zoomFocusScreen = { x: clientX, y: clientY };
-    if (!moved && zoomFocus) return;
     const g = screenToGround(clientX, clientY);
     if (!g) return;
     zoomFocus = g;
-    if (!zoomAim) {
-      const t = getTarget();
-      zoomAim = { x: t.x, z: t.z };
-    }
   }
 
-  function applyZoomFocusPan(rBefore, rAfter, dt) {
+  function applyPointerFocusPan(rBefore, rAfter, dAlpha) {
     if (!zoomFocus || followActive) return;
     const zooming =
       Math.abs(rAfter - rBefore) > 1e-4 ||
       zoomTend ||
       Math.abs(velocity.radius) >= ZOOM_THRESHOLD;
-    if (!zooming) {
+    const rotating =
+      Math.abs(dAlpha) > 1e-8 ||
+      Math.abs(velocity.alpha) >= ROT_THRESHOLD;
+    if (!zooming && !rotating) {
       clearZoomFocus();
       return;
     }
     const t = getTarget();
-    if (!zoomAim) zoomAim = { x: t.x, z: t.z };
-    const next = chaseToward(zoomAim.x, zoomAim.z, zoomFocus.x, zoomFocus.z, dt, ZOOM_FOCUS_RATE);
-    zoomAim.x = next.x;
-    zoomAim.z = next.z;
-    const shift = zoomFocusShift(t.x, t.z, zoomAim.x, zoomAim.z, rBefore, rAfter);
-    if (Math.abs(shift.x) < 1e-8 && Math.abs(shift.z) < 1e-8) return;
-    clampTargetPan(t.x + shift.x, t.z + shift.z);
+    let x = t.x;
+    let z = t.z;
+    // Scale and yaw around the same live pointer — no extra chase, or the
+    // ground under the cursor walks and pan/rotate stop agreeing.
+    const zoomShift = zoomFocusShift(x, z, zoomFocus.x, zoomFocus.z, rBefore, rAfter);
+    x += zoomShift.x;
+    z += zoomShift.z;
+    if (Math.abs(dAlpha) > 1e-8) {
+      const yawAround = rotateFocusShift(x, z, zoomFocus.x, zoomFocus.z, dAlpha);
+      x += yawAround.x;
+      z += yawAround.z;
+    }
+    if (Math.abs(x - t.x) < 1e-8 && Math.abs(z - t.z) < 1e-8) return;
+    clampTargetPan(x, z);
   }
 
   /** @param {{ x: number, y: number }} [screen] client coords (cursor or pinch centroid) */
@@ -549,9 +573,39 @@ export function createCameraController(camera, canvas, opts = {}) {
     applyZoomInput(delta, screen);
   }
 
-  function nudgeRotate(deltaAlpha) {
+  /** @param {{ x: number, y: number }} [screen] client coords (cursor or pinch centroid) */
+  function applyRotateInput(deltaAlpha, screen) {
     markNudged();
+    if (screen && Number.isFinite(screen.x) && Number.isFinite(screen.y)) {
+      setZoomFocusFromScreen(screen.x, screen.y);
+    }
     velocity.alpha += deltaAlpha;
+  }
+
+  function nudgeRotate(deltaAlpha, screen) {
+    applyRotateInput(deltaAlpha, screen);
+  }
+
+  /** Immediate yaw — rim drag tracks the finger. Does not bank coast velocity. */
+  function rotateBy(deltaAlpha) {
+    if (!deltaAlpha) return;
+    markNudged();
+    camera.alpha += deltaAlpha;
+  }
+
+  /** Immediate radius — rim drag tracks the finger. Does not bank coast velocity. */
+  function zoomBy(delta) {
+    if (!delta) return;
+    markNudged();
+    zoomTend = false;
+    zoomIdleMs = 0;
+    zoomInputThisTick = true;
+    lastZoomSign = Math.sign(delta);
+    const { minR, maxR } = radiusLimits();
+    const r = camera.radius;
+    if (delta < 0 && r <= minR + 1e-3) return;
+    if (delta > 0 && r >= maxR - 1e-3) return;
+    camera.radius = Math.max(minR, Math.min(maxR, r + delta));
   }
 
   function handleWheel(e) {
@@ -559,11 +613,12 @@ export function createCameraController(camera, canvas, opts = {}) {
     markNudged();
     e.preventDefault();
     const delta = e.deltaY;
+    const screen = { x: e.clientX, y: e.clientY };
     if ((e.buttons & 2) !== 0 || e.shiftKey) {
       const impulse = INVERSE_ROT * delta * ROT_WHEEL;
-      velocity.alpha += Math.max(-ROT_WHEEL_MAX, Math.min(ROT_WHEEL_MAX, impulse));
+      applyRotateInput(Math.max(-ROT_WHEEL_MAX, Math.min(ROT_WHEEL_MAX, impulse)), screen);
     } else {
-      applyZoomInput(INVERSE_ZOOM * delta * ZOOM_WHEEL, { x: e.clientX, y: e.clientY });
+      applyZoomInput(INVERSE_ZOOM * delta * ZOOM_WHEEL, screen);
     }
   }
 
@@ -808,7 +863,8 @@ export function createCameraController(camera, canvas, opts = {}) {
       }
     }
 
-    camera.alpha += velocity.alpha;
+    const dAlpha = velocity.alpha;
+    camera.alpha += dAlpha;
 
     const t = getTarget();
     if (followActive) {
@@ -816,6 +872,8 @@ export function createCameraController(camera, canvas, opts = {}) {
       clampTargetPan(next.x, next.z);
     } else {
       clampTargetPan(t.x + velocity.panX, t.z + velocity.panZ);
+      const after = getTarget();
+      carryPointerFocus(after.x - t.x, after.z - t.z);
     }
 
     const rBefore = camera.radius;
@@ -833,7 +891,7 @@ export function createCameraController(camera, canvas, opts = {}) {
     } else {
       camera.radius += velocity.radius * zoomSpeedForNormalized(normalized);
     }
-    applyZoomFocusPan(rBefore, camera.radius, dt);
+    applyPointerFocusPan(rBefore, camera.radius, dAlpha);
     if (ease) {
       const u = 1 - Math.exp(-ease.rate * dt);
       const now = getTarget();
@@ -931,6 +989,8 @@ export function createCameraController(camera, canvas, opts = {}) {
     nudgePan,
     nudgeZoom,
     nudgeRotate,
+    rotateBy,
+    zoomBy,
     panByScreenDelta,
     getRadius: () => camera.radius,
     setWorldHalfF,

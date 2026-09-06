@@ -35,10 +35,13 @@ export const VAT_CLIP = {
   CARRY: 3,
   CARRY_WALK: 4,
   CHOP: 5,
+  ATTACK: 6,
 };
 export const VAT_FROZEN = 0x80;
 
-/** @type {Readonly<Record<number, { url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }>>} */
+/** @typedef {{ url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string, attackClip?: string }} VatUnitDef */
+
+/** @type {Readonly<Record<number, VatUnitDef>>} */
 export const VAT_UNIT_DEFS = {
   [UNIT.VILLAGER]: {
     url: '/assets/models/villager.glb',
@@ -48,6 +51,13 @@ export const VAT_UNIT_DEFS = {
     walkClip: 'walk_cycle',
     carryClip: 'carry',
     chopClip: 'chop',
+  },
+  [UNIT.WARRIOR]: {
+    url: '/assets/models/warrior.glb',
+    scale: 1,
+    idleClip: 'Idle',
+    walkClip: 'Run',
+    attackClip: 'Attack_Swing',
   },
 };
 
@@ -108,6 +118,18 @@ function collectSkinnedMeshes(node, out = []) {
   return out;
 }
 
+/** VAT only instances skinned prims — hide leftover rigid meshes (e.g. unskinned sword). */
+function hideUnskinnedProps(root, skinned) {
+  const keep = new Set(skinned);
+  const visit = (node) => {
+    if (node?.material && !keep.has(node) && !node.skeleton) {
+      if ('visible' in node) node.visible = false;
+    }
+    for (const child of node?.children ?? []) visit(child);
+  };
+  visit(root);
+}
+
 function findGroup(groups, name) {
   if (!groups?.length || !name) return null;
   const lower = name.toLowerCase();
@@ -117,23 +139,35 @@ function findGroup(groups, name) {
 }
 
 /**
- * Resolve idle / walk / carry / chop animation groups for a VAT bake.
+ * Resolve idle / walk / carry / chop / attack animation groups for a VAT bake.
  * @param {object[]} groups
- * @param {{ idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }} def
+ * @param {VatUnitDef} def
  */
 export function collectVatBakeGroups(groups, def) {
   const idle = findGroup(groups, def.idleClip);
   const walk = findGroup(groups, def.walkClip) ?? findGroup(groups, 'walk');
   const carry = def.carryClip ? findGroup(groups, def.carryClip) : null;
   const chop = def.chopClip ? findGroup(groups, def.chopClip) : null;
+  const attack = def.attackClip ? findGroup(groups, def.attackClip) : null;
   const bakeGroups = [];
   const seen = new Set();
-  for (const g of [idle, walk, carry, chop]) {
+  for (const g of [idle, walk, carry, chop, attack]) {
     if (!g || seen.has(g)) continue;
     seen.add(g);
     bakeGroups.push(g);
   }
-  return { idle, walk, carry, chop, bakeGroups };
+  return { idle, walk, carry, chop, attack, bakeGroups };
+}
+
+/** Full-body clips to sample (carry is an arm overlay, not a loco row). */
+export function vatSampleGroups(resolved) {
+  const { idle, walk, chop, attack, bakeGroups } = resolved;
+  const loco = [];
+  if (idle) loco.push(idle);
+  if (walk && walk !== idle) loco.push(walk);
+  if (chop && chop !== idle && chop !== walk) loco.push(chop);
+  if (attack && attack !== idle && attack !== walk && attack !== chop) loco.push(attack);
+  return loco.length ? loco : bakeGroups;
 }
 
 /** Floor for pottering — short legs, keep the farm walk from sliding. */
@@ -158,17 +192,18 @@ export function vatWalkFps(clipFps, walkRate = 1) {
   return clipFps * vatWalkGait(walkRate);
 }
 
-export function vatWant(moving, carrying, animate, chopping = false) {
+export function vatWant(moving, carrying, animate, chopping = false, attacking = false) {
   let clip = VAT_CLIP.IDLE;
   if (carrying && moving) clip = VAT_CLIP.CARRY_WALK;
   else if (carrying) clip = VAT_CLIP.CARRY;
   else if (chopping) clip = VAT_CLIP.CHOP;
+  else if (attacking) clip = VAT_CLIP.ATTACK;
   else if (moving) clip = VAT_CLIP.WALK;
   return animate ? clip : (clip | VAT_FROZEN);
 }
 
 /**
- * @param {{ idleClip: object, walkClip: object, carryClip?: object | null, carryWalkClip?: object | null, chopClip?: object | null }} clips
+ * @param {{ idleClip: object, walkClip: object, carryClip?: object | null, carryWalkClip?: object | null, chopClip?: object | null, attackClip?: object | null }} clips
  * @param {number} state
  */
 export function clipForVatState(clips, state) {
@@ -179,12 +214,13 @@ export function clipForVatState(clips, state) {
   }
   if (id === VAT_CLIP.CARRY) return clips.carryClip ?? clips.idleClip;
   if (id === VAT_CLIP.CHOP) return clips.chopClip ?? clips.idleClip;
+  if (id === VAT_CLIP.ATTACK) return clips.attackClip ?? clips.idleClip;
   return clips.idleClip;
 }
 
 function clipNameSet(meta) {
   const names = new Set();
-  for (const n of [meta?.idleName, meta?.walkName, meta?.carryName, meta?.chopName]) {
+  for (const n of [meta?.idleName, meta?.walkName, meta?.carryName, meta?.chopName, meta?.attackName]) {
     if (n) names.add(String(n).toLowerCase());
   }
   const clips = meta?.prims?.[0]?.clips;
@@ -202,6 +238,7 @@ function offlineCoversDef(meta, def) {
     need.push(CARRY_IDLE_CLIP, CARRY_WALK_CLIP);
   }
   if (def.chopClip) need.push(def.chopClip);
+  if (def.attackClip) need.push(def.attackClip);
   return need.every((n) => {
     const lower = n.toLowerCase();
     return [...names].some((x) => x === lower || x.includes(lower));
@@ -282,12 +319,9 @@ function uploadCpuVat(engine, prims, clips) {
 }
 
 function bakeLiveVat(_root, skinned, groups, def) {
-  const { idle, walk, carry, chop, bakeGroups } = collectVatBakeGroups(groups, def);
-  const loco = [];
-  if (idle) loco.push(idle);
-  if (walk && walk !== idle) loco.push(walk);
-  if (chop && chop !== idle && chop !== walk) loco.push(chop);
-  const sampleGroups = loco.length ? loco : bakeGroups;
+  const resolved = collectVatBakeGroups(groups, def);
+  const { idle, walk, carry, chop, attack } = resolved;
+  const sampleGroups = vatSampleGroups(resolved);
   if (sampleGroups.length === 0) {
     throw new Error(`no idle/walk clips in ${def.url}`);
   }
@@ -297,6 +331,7 @@ function bakeLiveVat(_root, skinned, groups, def) {
   const walkName = walk?.name ?? idleName;
   const carryName = carry?.name ?? null;
   const chopName = chop?.name ?? null;
+  const attackName = attack?.name ?? null;
   const idleClip = clips[idleName];
   const walkClip = clips[walkName] ?? idleClip;
   if (!idleClip) throw new Error(`VAT missing clip ${idleName} in ${def.url}`);
@@ -317,11 +352,13 @@ function bakeLiveVat(_root, skinned, groups, def) {
     walkName,
     carryName,
     chopName,
+    attackName,
     idleClip,
     walkClip,
     carryClip,
     carryWalkClip,
     chopClip: chopName ? (clips[chopName] ?? null) : null,
+    attackClip: attackName ? (clips[attackName] ?? null) : null,
   };
 }
 
@@ -348,6 +385,8 @@ async function tryLoadOfflineVatBake(engine, def) {
     carryWalkClip: meta.carryWalkClip ?? null,
     chopName: meta.chopName ?? null,
     chopClip: meta.chopClip ?? null,
+    attackName: meta.attackName ?? null,
+    attackClip: meta.attackClip ?? null,
   };
 }
 
@@ -362,7 +401,7 @@ async function tryLoadOfflineVatBake(engine, def) {
  * Prefers /assets/baked/vat/* when present.
  *
  * @param {object} engine
- * @param {{ url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }} def
+ * @param {VatUnitDef} def
  */
 export async function loadVatUnitTemplate(engine, def) {
   const container = await loadGltf(engine, def.url);
@@ -371,6 +410,7 @@ export async function loadVatUnitTemplate(engine, def) {
 
   const skinned = collectSkinnedMeshes(root);
   if (skinned.length === 0) throw new Error(`no skinned mesh in ${def.url}`);
+  hideUnskinnedProps(root, skinned);
 
   const groups = container.animationGroups ?? [];
   for (const g of groups) stopAnimation(g);
@@ -395,6 +435,8 @@ export async function loadVatUnitTemplate(engine, def) {
         carryWalkClip: live.carryWalkClip,
         chopName: live.chopName,
         chopClip: live.chopClip,
+        attackName: live.attackName,
+        attackClip: live.attackClip,
       };
       vatBakeCache.set(def.url, cached);
     }
@@ -440,6 +482,7 @@ export async function loadVatUnitTemplate(engine, def) {
       carryClip: cached.carryClip ?? null,
       carryWalkClip: cached.carryWalkClip ?? null,
       chopClip: cached.chopClip ?? null,
+      attackClip: cached.attackClip ?? null,
       instanceScale: Math.abs(def.scale),
       footLift: 0.08,
     };
@@ -485,14 +528,15 @@ export async function loadVatUnitTemplate(engine, def) {
     carryClip: cached.carryClip ?? null,
     carryWalkClip: cached.carryWalkClip ?? null,
     chopClip: cached.chopClip ?? null,
+    attackClip: cached.attackClip ?? null,
     instanceScale: Math.abs(def.scale),
     footLift: 0.08,
   };
 }
 
 /** Fill per-instance VAT params: (fromRow, toRow, timeOffset, fps). */
-export function fillVatInstanceParams(params, capacity, idleClip, walkClip, movingFlags, carryClip = null, carryWalkClip = null, chopClip = null) {
-  const clips = { idleClip, walkClip, carryClip, carryWalkClip, chopClip };
+export function fillVatInstanceParams(params, capacity, idleClip, walkClip, movingFlags, carryClip = null, carryWalkClip = null, chopClip = null, attackClip = null) {
+  const clips = { idleClip, walkClip, carryClip, carryWalkClip, chopClip, attackClip };
   for (let s = 0; s < capacity; s++) {
     const state = movingFlags ? movingFlags[s] : 0;
     const clip = clipForVatState(clips, state);

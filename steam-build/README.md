@@ -4,8 +4,8 @@ Desktop shell that loads [https://aether.garden](https://aether.garden).
 
 ## Prerequisites
 
-1. App ID is **5043860** (`app/steam_appid.txt`). Windows depot **5043861**.
-   - Add a Linux depot on the partner site when you want `upload:linux` / full `upload:steam`.
+1. App ID is **5043860** (`app/steam_appid.txt`). Windows depot **5043861**. Linux depot **5043862** (`Aether.Garden Depot Linux`).
+   - Installation → Launch Options: Linux executable **`Aether`**. Arguments (WebGPU on Linux): `--enable-unsafe-webgpu --enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE --use-angle=vulkan --ignore-gpu-blocklist --ozone-platform=x11`
 2. Optional Steam redistributables: set `STEAMWORKS_SDK` to your SDK root before `dist` / upload.
 
 ## Run locally
@@ -42,8 +42,10 @@ npm run zip:win
 # → dist-win/Aether.exe  and  Aether-win64.zip
 
 npm run zip:linux
-# → dist-linux/Aether  and  Aether-linux64.zip
+# → dist-linux/Aether  +  dist-linux/Aether.sh  and  Aether-linux64.zip
 ```
+
+Steam Linux / Deck “Play does nothing” is usually the Windows depot + Proton, or a Linux launch option pointing at `Aether.exe` / `Aether.sh`. After the Linux depot is live, the Linux launch executable must be **`Aether`**. To force the wrapper: executable `/bin/sh`, arguments `Aether.sh`.
 
 Local shipped exe (outside Steam library):
 
@@ -88,6 +90,7 @@ DLC ownership is on `getInfo().dlc` (`{ appId, owned }`). First Responder is App
 | `ACH_FIRST_LAUNCH` | First time the garden is playable (splash down) |
 | `ACH_FIRST_MATCH` | First time the player creates a KOTH lobby (not join / claim) |
 | `ACH_KOTH_DEFEAT` | First agora-capture loss (not a score wipe or spectator) |
+| `ACH_LINUX_LAUNCH` | First splash-down on the native Linux shell (not Proton / Windows) |
 
 Publish those exact names on the Steamworks partner site (drafts do nothing). Smoke test in the NW shell DevTools:
 
@@ -96,6 +99,7 @@ aetherSteam.getInfo()
 aetherSteam.test()
 aetherSteam.test('ACH_FIRST_MATCH')
 aetherSteam.test('ACH_KOTH_DEFEAT')
+aetherSteam.test('ACH_LINUX_LAUNCH')
 ```
 
 Reset on your account via Steam console (`steam://open/console`):
@@ -104,6 +108,7 @@ Reset on your account via Steam console (`steam://open/console`):
 achievement_clear 5043860 ACH_FIRST_LAUNCH
 achievement_clear 5043860 ACH_FIRST_MATCH
 achievement_clear 5043860 ACH_KOTH_DEFEAT
+achievement_clear 5043860 ACH_LINUX_LAUNCH
 ```
 
 Then clear the session flags or they will not re-fire:

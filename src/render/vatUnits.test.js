@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { UNIT } from '../sim/unitTypes.js';
 import {
   clipForVatState,
   maxVatInstancesPerBatch,
@@ -11,6 +12,7 @@ import {
   VAT_WALK_RATE_MAX,
   VAT_CLIP,
   VAT_FROZEN,
+  VAT_UNIT_DEFS,
 } from './vatUnits.js';
 
 function texelWidthMatchesLitePacking() {
@@ -61,6 +63,13 @@ function vatWantPrefersChopOverIdle() {
   assert.equal(vatWant(false, false, false, true), VAT_CLIP.CHOP | VAT_FROZEN);
 }
 
+function vatWantPrefersAttackOverWalk() {
+  assert.equal(vatWant(false, false, true, false, true), VAT_CLIP.ATTACK);
+  assert.equal(vatWant(true, false, true, false, true), VAT_CLIP.ATTACK);
+  assert.equal(vatWant(true, false, true, true, true), VAT_CLIP.CHOP);
+  assert.equal(vatWant(false, false, false, false, true), VAT_CLIP.ATTACK | VAT_FROZEN);
+}
+
 function clipForVatStateUsesChop() {
   const clips = {
     idleClip: { name: 'idle' },
@@ -68,14 +77,26 @@ function clipForVatStateUsesChop() {
     carryClip: { name: 'carry' },
     carryWalkClip: { name: 'carry_walk' },
     chopClip: { name: 'chop' },
+    attackClip: { name: 'Attack_Swing' },
   };
   assert.equal(clipForVatState(clips, VAT_CLIP.CHOP), clips.chopClip);
   assert.equal(clipForVatState(clips, VAT_CLIP.CARRY), clips.carryClip);
+  assert.equal(clipForVatState(clips, VAT_CLIP.ATTACK), clips.attackClip);
+}
+
+function warriorHooksAuthoredClipNames() {
+  const def = VAT_UNIT_DEFS[UNIT.WARRIOR];
+  assert.equal(def.url, '/assets/models/warrior.glb');
+  assert.equal(def.idleClip, 'Idle');
+  assert.equal(def.walkClip, 'Run');
+  assert.equal(def.attackClip, 'Attack_Swing');
 }
 
 texelWidthMatchesLitePacking();
+warriorHooksAuthoredClipNames();
 vatWalkFpsScalesWithRate();
 vatWantPrefersChopOverIdle();
+vatWantPrefersAttackOverWalk();
 clipForVatStateUsesChop();
 defaultBatchCapIsTheDestroyedSize();
 primeUploadsReservedSlots();

@@ -35,6 +35,7 @@ import { ORDER } from './world.js';
 import { continueRallyHop } from './buildings.js';
 import { worldToTile, isPassable, isSlowTile } from './field.js';
 import { kothMetaStep } from './kothMeta.js';
+import { matchWipeStep } from './matchEnd.js';
 import { agoraCaptureSystem } from './agora.js';
 import { rebuildSpatialGrid, spatialCellId } from './spatialGrid.js';
 import { projectileSystem } from './projectiles.js';
@@ -177,6 +178,7 @@ export function step(world, field, commands) {
   phase('trees', () => treeBurnSystem(field));
   phase('spore', () => sporeGrowthSystem(world, field));
   phase('koth', () => kothMetaStep(world));
+  phase('matchEnd', () => matchWipeStep(world));
   phase('agora', () => agoraCaptureSystem(world));
   phase('pathBudget', () => planPathBudget(world, field));
   phase('movement', () => movementSystem(world, field));

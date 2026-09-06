@@ -17,6 +17,34 @@ function nodeSteamPath() {
   return path.join(__dirname, 'node-steam', bin);
 }
 
+function ensureNodeSteamExecutable() {
+  if (process.platform === 'win32') return;
+  try { fs.chmodSync(nodeSteamPath(), 0o755); } catch (_err) { /* ignore */ }
+}
+
+function askWorkerQuit() {
+  return new Promise(function (resolve) {
+    var req = http.request({
+      host: HOST,
+      port: PORT,
+      path: '/quit',
+      method: 'POST',
+    }, function (res) {
+      res.resume();
+      resolve();
+    });
+    req.on('error', function () { resolve(); });
+    req.setTimeout(400, function () { req.destroy(); resolve(); });
+    req.end();
+  });
+}
+
+function killWorkerPid(pid) {
+  if (!pid) return;
+  try { process.kill(pid, 'SIGTERM'); } catch (_err) { /* already gone */ }
+  try { process.kill(pid, 'SIGKILL'); } catch (_err2) { /* already gone */ }
+}
+
 function workerScriptPath() {
   return path.join(__dirname, 'steam-worker.js');
 }
@@ -74,19 +102,18 @@ function ensureWorkerProcess() {
     console.warn('[steam-build] node-steam binary missing:', nodeBin);
     return Promise.resolve(false);
   }
+  ensureNodeSteamExecutable();
 
   workerStarting = true;
-  return pingHealth().then(function (health) {
-    if (health.ok) {
-      workerStarting = false;
-      return true;
-    }
-
+  return askWorkerQuit().then(function () {
+    return new Promise(function (resolve) { setTimeout(resolve, 150); });
+  }).then(function () {
     worker = spawn(nodeBin, [workerScriptPath()], {
       cwd: __dirname,
       env: process.env,
       stdio: 'ignore',
       windowsHide: true,
+      detached: false,
     });
 
     worker.on('exit', function (code) {
@@ -150,8 +177,14 @@ module.exports = {
     }).catch(function () { return false; });
   },
   shutdown: function () {
-    if (worker && !worker.killed) worker.kill();
+    var pid = worker && worker.pid;
     worker = null;
+    try {
+      var req = http.request({ host: HOST, port: PORT, path: '/quit', method: 'POST' });
+      req.on('error', function () {});
+      req.end();
+    } catch (_err) { /* ignore */ }
+    killWorkerPid(pid);
   },
   setOnSteamRestartRequired: function (fn) {
     onSteamRestartRequired = fn;

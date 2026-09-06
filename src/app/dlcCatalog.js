@@ -8,7 +8,7 @@ import { VAT_UNIT_DEFS } from '../render/vatUnits.js';
 export const DLC_FIRST_RESPONDER = 'first_responder';
 export const DLC_FIRST_RESPONDER_APP_ID = 5217980;
 
-/** @typedef {{ url: string, scale?: number, idleClip?: string, walkClip?: string, carryClip?: string, chopClip?: string }} DlcSkin */
+/** @typedef {{ url: string, scale?: number, idleClip?: string, walkClip?: string, carryClip?: string, chopClip?: string, attackClip?: string }} DlcSkin */
 
 /** @type {Readonly<Record<string, { steamAppId: number, name: string, skins: Record<number, DlcSkin> }>>} */
 export const DLC_PACKS = {
@@ -278,6 +278,7 @@ export function resolveVatDef(typeId, packId) {
     walkClip: skin.walkClip ?? base.walkClip,
     carryClip: skin.carryClip ?? base.carryClip,
     chopClip: skin.chopClip ?? base.chopClip,
+    attackClip: skin.attackClip ?? base.attackClip,
   };
 }
 
@@ -304,6 +305,7 @@ export function allDlcVatDefs() {
         walkClip: skin.walkClip,
         carryClip: skin.carryClip,
         chopClip: skin.chopClip,
+        attackClip: skin.attackClip,
       });
     }
   }

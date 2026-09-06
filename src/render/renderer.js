@@ -570,7 +570,7 @@ function growTypeBatchCapacity(batch, newCap) {
       for (let s = oldCap; s < newCap; s++) {
         vatPhase[s] = (s * 17 + 3) % frameCount;
       }
-      fillVatInstanceParams(vatParams, newCap, batch.idleClip, batch.walkClip, vatMoving, batch.carryClip, batch.carryWalkClip, batch.chopClip);
+      fillVatInstanceParams(vatParams, newCap, batch.idleClip, batch.walkClip, vatMoving, batch.carryClip, batch.carryWalkClip, batch.chopClip, batch.attackClip);
       for (const part of batch.vatParts) {
         setThinInstances(part.mesh, matrices, newCap);
         setThinInstanceColors(part.mesh, part.isTeamColor ? colors : white);
@@ -656,7 +656,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = nul
     for (let s = 0; s < cap; s++) {
       vatPhase[s] = (s * 17 + 3) % Math.max(1, vat.idleClip.frameCount);
     }
-    fillVatInstanceParams(vatParams, cap, vat.idleClip, vat.walkClip, vatMoving, vat.carryClip, vat.carryWalkClip, vat.chopClip);
+    fillVatInstanceParams(vatParams, cap, vat.idleClip, vat.walkClip, vatMoving, vat.carryClip, vat.carryWalkClip, vat.chopClip, vat.attackClip);
 
     // Shared matrices across primitives; TeamColor part alone takes owner tint.
     // setInstances must run before registerScene for the thin-instance VAT path.
@@ -688,6 +688,7 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = nul
       carryClip: vat.carryClip ?? null,
       carryWalkClip: vat.carryWalkClip ?? null,
       chopClip: vat.chopClip ?? null,
+      attackClip: vat.attackClip ?? null,
       vatScale: vat.instanceScale,
       vatFootLift: vat.footLift,
       vatDirty: false,
@@ -3212,7 +3213,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     }
   }
 
-  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1) {
+  function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
     const slot = entitySlot[i];
     if (slot < 0) return false;
     const key = entityBatchKey[i] ?? batchKey(typeId, owner);
@@ -3220,7 +3221,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!batch) return false;
     const tiCount = batch.mesh.thinInstances?.count ?? 0;
     if (slot >= tiCount) return false;
-    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate);
+    writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, batch === fallback, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking);
     if (monkLobFx.isFlying(i)) monkLobFx.notePose(i, x, z);
     if (diameter > 0.05) {
       const def = getUnitDef(typeId);
@@ -3337,7 +3338,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return getViewProjectionMatrix(camera, aspect);
   }
 
-  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1) {
+  function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
     const baseGy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
     const gy = baseGy + (loft || 0);
     let animateVat = diameter > 0;
@@ -3354,7 +3355,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       const o = slot * 16;
       if (scale <= 0) {
         for (let k = 0; k < 16; k++) batch.matrices[o + k] = 0;
-        syncVatSlot(batch, slot, false, false, false, false, 1);
+        syncVatSlot(batch, slot, false, false, false, false, 1, false);
         for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
         return;
       }
@@ -3402,14 +3403,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       writeUnitMatrix(batch.matrices, slot, x, z, scale, yaw, false, gy + lift, pitch, roll);
     }
 
-    syncVatSlot(batch, slot, diameter > 0 && moving, animateVat, carrying, chopping, walkRate);
+    syncVatSlot(batch, slot, diameter > 0 && moving, animateVat, carrying, chopping, walkRate, attacking);
     for (const mesh of vatPartMeshes(batch)) markThinInstanceSlotDirty(mesh, slot);
   }
 
-  /** VAT state: idle / walk / carry / chop, high bit frozen (fps=0) beyond VAT distance. */
-  function syncVatSlot(batch, slot, moving, animate, carrying = false, chopping = false, walkRate = 1) {
+  /** VAT state: idle / walk / carry / chop / attack, high bit frozen (fps=0) beyond VAT distance. */
+  function syncVatSlot(batch, slot, moving, animate, carrying = false, chopping = false, walkRate = 1, attacking = false) {
     if (!batch.vatHandle || slot >= batch.vatMoving.length) return;
-    const want = vatWant(!!moving, !!carrying, !!animate, !!chopping);
+    const want = vatWant(!!moving, !!carrying, !!animate, !!chopping, !!attacking);
     const clip = clipForVatState(batch, want);
     const clipId = want & ~VAT_FROZEN;
     const walkClip = clipId === VAT_CLIP.WALK || clipId === VAT_CLIP.CARRY_WALK;
@@ -3418,8 +3419,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       : walkClip
         ? vatWalkFps(clip.fps, walkRate)
         : clip.fps;
+    const prev = batch.vatMoving[slot];
     const prevFps = batch.vatParams[slot * 4 + 3];
-    if (batch.vatMoving[slot] === want && Math.abs(prevFps - fps) < 0.08) return;
+    if (prev === want && Math.abs(prevFps - fps) < 0.08) return;
+    if (clipId === VAT_CLIP.ATTACK && (prev & ~VAT_FROZEN) !== VAT_CLIP.ATTACK) {
+      batch.vatPhase[slot] = 0;
+    }
     batch.vatMoving[slot] = want;
     writeVatSlotParams(batch.vatParams, slot, clip, batch.vatPhase[slot], fps);
     batch.vatDirty = true;
@@ -4491,8 +4496,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
     },
 
-    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1) {
-      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate);
+    writeInstance(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
+      return writeInstanceAt(i, typeId, owner, x, z, diameter, yaw, moving, loft, pitch, roll, groundYOverride, carrying, chopping, walkRate, attacking);
     },
 
     /**

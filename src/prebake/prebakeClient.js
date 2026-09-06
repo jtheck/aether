@@ -10,7 +10,7 @@ import {
   mergeSlicedParts,
 } from '../render/bakeMerge.js';
 import { allMeshBakeUrls, allVatBakeDefs } from './bakeUrls.js';
-import { collectVatBakeGroups } from '../render/vatUnits.js';
+import { collectVatBakeGroups, vatSampleGroups } from '../render/vatUnits.js';
 import {
   appendCarryLocomotion,
   CARRY_OVERLAY,
@@ -133,7 +133,7 @@ async function bakeMeshPackage(engine, url, filesOut) {
  * CPU-sample bone matrices the same way Lite's bakeVatMany does, without relying
  * on GPU texture readback (Lite textures are CopyDst|TextureBinding only).
  * @param {object} engine
- * @param {{ url: string, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string }} def
+ * @param {{ url: string, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string, attackClip?: string }} def
  */
 async function bakeVatPackage(engine, def) {
   const container = await loadGltf(engine, def.url);
@@ -142,23 +142,22 @@ async function bakeVatPackage(engine, def) {
   if (skinned.length === 0) throw new Error(`no skinned mesh in ${def.url}`);
   const groups = container.animationGroups ?? [];
   for (const g of groups) stopAnimation(g);
-  const { idle, walk, carry, chop, bakeGroups } = collectVatBakeGroups(groups, def);
+  const resolved = collectVatBakeGroups(groups, def);
+  const { idle, walk, carry, chop, attack, bakeGroups } = resolved;
   if (bakeGroups.length === 0) throw new Error(`no clips in ${def.url}`);
 
-  const loco = [];
-  if (idle) loco.push(idle);
-  if (walk && walk !== idle) loco.push(walk);
-  if (chop && chop !== idle && chop !== walk) loco.push(chop);
-  const sampleGroups = loco.length ? loco : bakeGroups;
+  const sampleGroups = vatSampleGroups(resolved);
   const { prims: primData, clips } = sampleVatGroups(skinned, sampleGroups, stopAnimation);
   const bakeClipName = sampleGroups[0].name;
   const idleName = idle?.name ?? bakeClipName;
   const walkName = walk?.name ?? idleName;
   const carryName = carry?.name ?? null;
   const chopName = chop?.name ?? null;
+  const attackName = attack?.name ?? null;
   const idleClip = { ...clips[idleName] };
   const walkClip = { ...(clips[walkName] ?? idleClip) };
   const chopClip = chopName && clips[chopName] ? { ...clips[chopName] } : null;
+  const attackClip = attackName && clips[attackName] ? { ...clips[attackName] } : null;
   let carryClip = null;
   let carryIdleClip = null;
   let carryWalkClip = null;
@@ -204,9 +203,11 @@ async function bakeVatPackage(engine, def) {
       walkName,
       carryName,
       chopName,
+      attackName,
       idleClip,
       walkClip,
       chopClip,
+      attackClip,
       carryClip,
       carryIdleClip,
       carryWalkClip,

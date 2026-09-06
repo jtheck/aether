@@ -12,6 +12,10 @@ const checks = [
   path.join(pkgNw, 'steam_appid.txt'),
   path.join(pkgNw, 'node-steam', nodeBin),
 ];
+if (isLinux) {
+  checks.push(path.join(distRoot, 'Aether'));
+  checks.push(path.join(distRoot, 'Aether.sh'));
+}
 
 for (const file of checks) {
   if (!fs.existsSync(file)) {

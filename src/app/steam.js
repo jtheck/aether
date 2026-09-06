@@ -6,6 +6,28 @@ import { packsOwnedFromSteamDlc } from './dlcCatalog.js';
 export const ACH_FIRST_LAUNCH = 'ACH_FIRST_LAUNCH';
 export const ACH_FIRST_MATCH = 'ACH_FIRST_MATCH';
 export const ACH_KOTH_DEFEAT = 'ACH_KOTH_DEFEAT';
+export const ACH_LINUX_LAUNCH = 'ACH_LINUX_LAUNCH';
+
+/** Native Linux desktop shell (Steam worker) or a browser-like Linux UA. */
+export function isLinuxRuntime(info, root) {
+  if (info && info.platform === 'linux') return true;
+  const nav = root && root.navigator;
+  if (!nav) return false;
+  const ua = String(nav.userAgent || '');
+  if (/android/i.test(ua)) return false;
+  if (!/mozilla|chrome|chromium|nwjs/i.test(ua)) return false;
+  const platform = String((nav.userAgentData && nav.userAgentData.platform) || nav.platform || '');
+  return /linux/i.test(platform) || /linux/i.test(ua);
+}
+
+function sessionHasCapturedAgora(session) {
+  const list = session?.agoras;
+  if (!list?.length) return false;
+  for (let i = 0; i < list.length; i++) {
+    if (list[i].captured) return true;
+  }
+  return false;
+}
 
 /** Agora occupy loss — not a score wipe, not a spectator. */
 export function isKothAgoraDefeat(session) {
@@ -13,7 +35,8 @@ export function isKothAgoraDefeat(session) {
   if ((session.role ?? 'player') !== 'player') return false;
   const winner = session.matchWinner;
   if (winner == null || winner < 0) return false;
-  return winner !== (session.localPlayerId ?? 0);
+  if (winner === (session.localPlayerId ?? 0)) return false;
+  return sessionHasCapturedAgora(session);
 }
 
 function steamFrom(root) {
@@ -37,6 +60,7 @@ export function createAetherSteam(opts = {}) {
     ACH_FIRST_LAUNCH,
     ACH_FIRST_MATCH,
     ACH_KOTH_DEFEAT,
+    ACH_LINUX_LAUNCH,
     _firstLaunchHandled: false,
     _firstMatchHandled: false,
     _kothDefeatHandled: false,
@@ -82,6 +106,7 @@ export function createAetherSteam(opts = {}) {
       if (!api.isAvailable()) return false;
       api._firstLaunchHandled = true;
       api.unlockAchievement(ACH_FIRST_LAUNCH);
+      if (isLinuxRuntime(api.getInfo(), root)) api.unlockAchievement(ACH_LINUX_LAUNCH);
       api.setPresence('status', 'In Garden');
       return true;
     },

@@ -39,6 +39,7 @@ import {
   screenPosInRect,
   twoFingerConsumesBuildUi,
 } from './buildingSelect.js';
+import { projectWorldToCanvas } from '../../render/screenProject.js';
 import { pickGatherNodeOnRay, rayHitYawBox, rayTToPoint } from './gatherPick.js';
 
 /** Footprint box height — tall enough for a tower, not a circumcircle. */
@@ -150,9 +151,9 @@ export function createGameInput(opts) {
   selSlot.fill(-1);
   let selCount = 0;
 
-  function selectEntity(i) {
+  function selectEntity(i, ping = true) {
     if (i < 0) return;
-    renderer.pingUnit?.(i);
+    if (ping) renderer.pingUnit?.(i);
     if (selSlot[i] >= 0) return;
     selSlot[i] = selCount;
     selIds[selCount++] = i;
@@ -229,7 +230,10 @@ export function createGameInput(opts) {
   /** @type {{ x: number, z: number } | null} */
   let placeAnchor = null;
   let placeRotating = false;
-  let selectionBox = null;
+  let boxLastL = NaN;
+  let boxLastT = NaN;
+  let boxLastW = NaN;
+  let boxLastH = NaN;
   /** @type {{ t: number, x: number, y: number, kind: 'unit' | 'ground' | 'enemy' | 'building', typeId?: number, buildingTypeKey?: string } | null} */
   let lastTap = null;
   /** @type {ReturnType<typeof setTimeout> | null} */
@@ -245,8 +249,6 @@ export function createGameInput(opts) {
    * re-issue attack-move — epoch checks drop those stale completions.
    */
   let worldClickEpoch = 0;
-
-  ensureSelectionBox();
 
   function clickCurrent(epoch) {
     return epoch === worldClickEpoch;
@@ -286,26 +288,25 @@ export function createGameInput(opts) {
     placeRotating = false;
   }
 
-  function ensureSelectionBox() {
-    if (selectionBox) return;
-    selectionBox = document.createElement('div');
-    selectionBox.id = 'selection-box';
-    selectionBox.style.cssText =
-      'position:fixed;display:none;border:1px solid rgba(255,230,80,0.9);background:rgba(255,230,80,0.12);pointer-events:none;z-index:10;';
-    document.body.appendChild(selectionBox);
-  }
-
   function showSelectionBox(x0, y0, x1, y1) {
-    ensureSelectionBox();
-    selectionBox.style.left = `${Math.min(x0, x1)}px`;
-    selectionBox.style.top = `${Math.min(y0, y1)}px`;
-    selectionBox.style.width = `${Math.abs(x1 - x0)}px`;
-    selectionBox.style.height = `${Math.abs(y1 - y0)}px`;
-    selectionBox.style.display = 'block';
+    const l = Math.min(x0, x1);
+    const t = Math.min(y0, y1);
+    const w = Math.abs(x1 - x0);
+    const h = Math.abs(y1 - y0);
+    if (l === boxLastL && t === boxLastT && w === boxLastW && h === boxLastH) return;
+    boxLastL = l;
+    boxLastT = t;
+    boxLastW = w;
+    boxLastH = h;
+    renderer.setSelectionBox?.(x0, y0, x1, y1);
   }
 
   function hideSelectionBox() {
-    if (selectionBox) selectionBox.style.display = 'none';
+    boxLastL = NaN;
+    boxLastT = NaN;
+    boxLastW = NaN;
+    boxLastH = NaN;
+    renderer.setSelectionBox?.(null);
   }
 
   function clearAbilityHold() {
@@ -502,6 +503,7 @@ export function createGameInput(opts) {
   const unitHitTs = new Float32Array(MAX_ENTITIES);
   const resolvedHitIds = [];
   const posScratch = { x: 0, y: 0, z: 0 };
+  const screenScratch = { x: 0, y: 0 };
   const seenStamp = new Uint32Array(MAX_ENTITIES);
   let seenGen = 1;
 
@@ -858,14 +860,22 @@ export function createGameInput(opts) {
    * rect. Copies ids out of the center pool.
    * @returns {{ kind: 'agora' | 'building', index: number }[]}
    */
-  function buildingsInScreenRect(minX, maxX, minY, maxY) {
+  function buildingsInScreenRect(minX, maxX, minY, maxY, proj) {
     /** @type {{ kind: 'agora' | 'building', index: number }[]} */
     const matched = [];
+    const screen = proj ?? renderer.captureScreenProjection?.();
     const n = fillBuildingPickCenters();
     for (let i = 0; i < n; i++) {
       const sp = buildingPickPool[i];
-      const p = renderer.worldToScreen(sp.x, sp.y, sp.z);
-      if (!screenPosInRect(p, minX, maxX, minY, maxY)) continue;
+      if (screen) {
+        if (!projectWorldToCanvas(screen.vp, sp.x, sp.y, sp.z, screen.width, screen.height, screenScratch)) {
+          continue;
+        }
+        if (!screenPosInRect(screenScratch, minX, maxX, minY, maxY)) continue;
+      } else {
+        const p = renderer.worldToScreen(sp.x, sp.y, sp.z);
+        if (!screenPosInRect(p, minX, maxX, minY, maxY)) continue;
+      }
       matched.push({ kind: sp.id.kind, index: sp.id.index });
     }
     return matched;
@@ -1121,6 +1131,7 @@ export function createGameInput(opts) {
     const maxX = Math.max(x0, x1) - rect.left;
     const minY = Math.min(y0, y1) - rect.top;
     const maxY = Math.max(y0, y1) - rect.top;
+    const proj = renderer.captureScreenProjection?.(rect.width, rect.height);
     if (!add) clearUnitSelectionBits();
     else dropUnitsNotOwnedBy(localPlayerId);
     const world = getWorld();
@@ -1129,14 +1140,25 @@ export function createGameInput(opts) {
       if (!world.alive[i] || world.owner[i] !== localPlayerId) continue;
       if (world.carriedBy && world.carriedBy[i] >= 0) continue;
       getUnitWorldPos(i, posScratch);
-      const p = renderer.worldToScreen(posScratch.x, posScratch.y, posScratch.z);
-      if (!p) continue;
-      if (screenPosInRect(p, minX, maxX, minY, maxY)) {
-        selectEntity(i);
-        unitHits++;
+      if (proj) {
+        if (!projectWorldToCanvas(
+          proj.vp,
+          posScratch.x,
+          posScratch.y,
+          posScratch.z,
+          proj.width,
+          proj.height,
+          screenScratch,
+        )) continue;
+        if (!screenPosInRect(screenScratch, minX, maxX, minY, maxY)) continue;
+      } else {
+        const p = renderer.worldToScreen(posScratch.x, posScratch.y, posScratch.z);
+        if (!p || !screenPosInRect(p, minX, maxX, minY, maxY)) continue;
       }
+      selectEntity(i, false);
+      unitHits++;
     }
-    const buildings = unitHits > 0 ? [] : buildingsInScreenRect(minX, maxX, minY, maxY);
+    const buildings = unitHits > 0 ? [] : buildingsInScreenRect(minX, maxX, minY, maxY, proj);
     const winner = boxSelectWinner(unitHits, buildings.length);
     if (winner === 'units') {
       clearBuildingSelection();

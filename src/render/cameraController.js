@@ -677,10 +677,19 @@ export function createCameraController(camera, canvas, opts = {}) {
     return Math.hypot(clientX - rmbDownScreen.x, clientY - rmbDownScreen.y);
   }
 
-  /** Apply pan only after the click-vs-drag latch; catch up from pointer-down. */
+  /** Apply pan only after the click-vs-drag latch, from the latch — not pointer-down. */
   function applyRmbPanTo(clientX, clientY) {
-    if (!rmbDidPan && rmbTravelPx(clientX, clientY) <= RMB_PAN_DRAG_THRESHOLD_PX) return;
-    rmbDidPan = true;
+    const travel = rmbTravelPx(clientX, clientY);
+    if (!rmbDidPan) {
+      if (travel <= RMB_PAN_DRAG_THRESHOLD_PX) return;
+      if (travel > 1e-6) {
+        const dx0 = clientX - rmbDownScreen.x;
+        const dy0 = clientY - rmbDownScreen.y;
+        const s = RMB_PAN_DRAG_THRESHOLD_PX / travel;
+        rmbLastScreen = { x: rmbDownScreen.x + dx0 * s, y: rmbDownScreen.y + dy0 * s };
+      }
+      rmbDidPan = true;
+    }
     const screenDx = clientX - rmbLastScreen.x;
     const screenDy = clientY - rmbLastScreen.y;
     rmbLastScreen = { x: clientX, y: clientY };

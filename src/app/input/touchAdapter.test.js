@@ -4,9 +4,14 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import {
   CENTER_PAN_HOLD_MS,
   createTouchAdapter,
+  EDGE_COMMIT_PX,
   EDGE_FADE_PX,
+  EDGE_PAN_HOLD_MS,
   EDGE_ZONE_PX,
   edgeCommandWeight,
+  PINCH_ANGLE_DEADZONE_RAD,
+  PINCH_DIST_DEADZONE_PX,
+  PINCH_PAN_DEADZONE_PX,
 } from './touchAdapter.js';
 
 function fakeCanvas(w = 800, h = 600) {
@@ -78,6 +83,16 @@ describe('touch edge band', () => {
     assert.equal(zooms.length, 0);
     assert.equal(downs.length, 1);
     assert.equal(ups.length, 1);
+  });
+
+  it('a rim swipe after the center pan delay still zooms', async () => {
+    const { touch, zooms, pans, downs } = makeHarness();
+    touch.handlePointerDown(ptr({ clientX: 16, clientY: 280 }));
+    await sleep(CENTER_PAN_HOLD_MS + 15);
+    touch.handlePointerMove(ptr({ type: 'pointermove', clientX: 16, clientY: 220 }));
+    assert.ok(zooms.length > 0);
+    assert.equal(pans.length, 0);
+    assert.equal(downs.length, 0);
   });
 
   it('a vertical drag on the left rim zooms', () => {
@@ -156,7 +171,7 @@ describe('touch edge band', () => {
   it('a still hold on the rim becomes pan, not a tap or camera grab', async () => {
     const { touch, rotates, zooms, pans, downs, ups } = makeHarness();
     touch.handlePointerDown(ptr({ clientX: 16, clientY: 300 }));
-    await sleep(CENTER_PAN_HOLD_MS + 20);
+    await sleep(EDGE_PAN_HOLD_MS + 20);
     touch.handlePointerMove(ptr({ type: 'pointermove', clientX: 48, clientY: 318 }));
     assert.ok(pans.length > 0);
     assert.equal(rotates.length, 0);
@@ -165,6 +180,38 @@ describe('touch edge band', () => {
     touch.handlePointerUp(ptr({ type: 'pointerup', clientX: 48, clientY: 318 }));
     assert.equal(downs.length, 0);
     assert.equal(ups.length, 0);
+  });
+
+  it('mouse drag on the left rim zooms', () => {
+    const { touch, zooms, downs } = makeHarness();
+    const claimed = touch.handlePointerDown(ptr({
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 16,
+      clientY: 280,
+    }));
+    assert.equal(claimed, true);
+    touch.handlePointerMove(ptr({
+      pointerType: 'mouse',
+      type: 'pointermove',
+      clientX: 16,
+      clientY: 220,
+    }));
+    assert.ok(zooms.length > 0);
+    assert.equal(downs.length, 0);
+  });
+
+  it('mouse down in the field is not claimed', () => {
+    const { touch, zooms, downs } = makeHarness();
+    const claimed = touch.handlePointerDown(ptr({
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 400,
+      clientY: 300,
+    }));
+    assert.equal(claimed, false);
+    assert.equal(zooms.length, 0);
+    assert.equal(downs.length, 0);
   });
 
   it('a start just inside the band is still a tap', () => {
@@ -176,5 +223,102 @@ describe('touch edge band', () => {
     assert.equal(zooms.length, 0);
     assert.equal(downs.length, 1);
     assert.equal(ups.length, 1);
+  });
+
+  it('rim zoom applies from the commit, not pointer-down', () => {
+    const { touch, zooms } = makeHarness();
+    touch.handlePointerDown(ptr({ clientX: 16, clientY: 300 }));
+    touch.handlePointerMove(ptr({
+      type: 'pointermove',
+      clientX: 16,
+      clientY: 300 - (EDGE_COMMIT_PX + 2),
+    }));
+    const first = Math.abs(zooms.reduce((s, d) => s + d, 0));
+    zooms.length = 0;
+    touch.handlePointerMove(ptr({
+      type: 'pointermove',
+      clientX: 16,
+      clientY: 300 - (EDGE_COMMIT_PX + 2) - 20,
+    }));
+    const follow = Math.abs(zooms.reduce((s, d) => s + d, 0));
+    assert.ok(first > 0);
+    assert.ok(follow > first * 4);
+  });
+
+  it('rim orbit applies from the commit, not pointer-down', () => {
+    const { touch, rotates } = makeHarness();
+    touch.handlePointerDown(ptr({ clientX: 400, clientY: 18 }));
+    touch.handlePointerMove(ptr({
+      type: 'pointermove',
+      clientX: 400 + EDGE_COMMIT_PX + 2,
+      clientY: 18,
+    }));
+    const first = Math.abs(rotates.reduce((s, d) => s + d, 0));
+    rotates.length = 0;
+    touch.handlePointerMove(ptr({
+      type: 'pointermove',
+      clientX: 400 + EDGE_COMMIT_PX + 2 + 20,
+      clientY: 18,
+    }));
+    const follow = Math.abs(rotates.reduce((s, d) => s + d, 0));
+    assert.ok(first > 0);
+    assert.ok(follow > first * 4);
+  });
+});
+
+describe('touch camera chord latch', () => {
+  it('pinch zoom applies from the deadzone, not chord start', () => {
+    const { touch, zooms } = makeHarness();
+    touch.handlePointerDown(ptr({ pointerId: 1, clientX: 300, clientY: 300 }));
+    touch.handlePointerDown(ptr({ pointerId: 2, clientX: 400, clientY: 300 }));
+    touch.handlePointerMove(ptr({
+      pointerId: 2,
+      type: 'pointermove',
+      clientX: 400 + PINCH_DIST_DEADZONE_PX + 2,
+      clientY: 300,
+    }));
+    const first = Math.abs(zooms.reduce((s, d) => s + d, 0));
+    zooms.length = 0;
+    touch.handlePointerMove(ptr({
+      pointerId: 2,
+      type: 'pointermove',
+      clientX: 400 + PINCH_DIST_DEADZONE_PX + 2 + 20,
+      clientY: 300,
+    }));
+    const follow = Math.abs(zooms.reduce((s, d) => s + d, 0));
+    assert.ok(first > 0);
+    assert.ok(follow > first * 4);
+  });
+
+  it('pinch pan applies from the deadzone, not chord start', () => {
+    const { touch, pans } = makeHarness();
+    touch.handlePointerDown(ptr({ pointerId: 1, clientX: 300, clientY: 300 }));
+    touch.handlePointerDown(ptr({ pointerId: 2, clientX: 400, clientY: 300 }));
+    const slide = (dy) => {
+      touch.handlePointerMove(ptr({ pointerId: 1, type: 'pointermove', clientX: 300, clientY: 300 + dy }));
+      touch.handlePointerMove(ptr({ pointerId: 2, type: 'pointermove', clientX: 400, clientY: 300 + dy }));
+    };
+    slide(PINCH_PAN_DEADZONE_PX + 2);
+    const first = pans.reduce((s, p) => s + Math.hypot(p.dx, p.dy), 0);
+    pans.length = 0;
+    slide(PINCH_PAN_DEADZONE_PX + 2 + 20);
+    const follow = pans.reduce((s, p) => s + Math.hypot(p.dx, p.dy), 0);
+    assert.ok(first > 0);
+    assert.ok(follow > first * 2);
+  });
+
+  it('pinch rotate applies from the deadzone, not chord start', () => {
+    const { touch, rotates } = makeHarness();
+    touch.handlePointerDown(ptr({ pointerId: 1, clientX: 300, clientY: 300 }));
+    touch.handlePointerDown(ptr({ pointerId: 2, clientX: 400, clientY: 300 }));
+    // ~0.12 rad around the centroid, then another ~0.12 — latch overshoot stays tiny.
+    touch.handlePointerMove(ptr({ pointerId: 2, type: 'pointermove', clientX: 399, clientY: 312 }));
+    const first = Math.abs(rotates.reduce((s, d) => s + d, 0));
+    rotates.length = 0;
+    touch.handlePointerMove(ptr({ pointerId: 2, type: 'pointermove', clientX: 396, clientY: 324 }));
+    const follow = Math.abs(rotates.reduce((s, d) => s + d, 0));
+    assert.ok(first > 0);
+    assert.ok(follow > first);
+    assert.ok(first < PINCH_ANGLE_DEADZONE_RAD * 4);
   });
 });

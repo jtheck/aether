@@ -476,7 +476,9 @@ export async function createSelectionHud(engine, scene, screen = {}) {
     for (const batch of icons.values()) hideIcon(batch);
     for (const label of labels) hideLabel(label);
     hitRects = [];
-    if (screen.canvas) screen.canvas.style.cursor = '';
+    if (screen.canvas && screen.canvas.style.cursor !== 'none') {
+      screen.canvas.style.cursor = '';
+    }
   }
 
   /**
@@ -591,7 +593,9 @@ export async function createSelectionHud(engine, scene, screen = {}) {
       }
     }
     const canvas = screen.canvas;
-    if (canvas) canvas.style.cursor = hoverIdx >= 0 ? 'pointer' : '';
+    if (canvas && canvas.style.cursor !== 'none') {
+      canvas.style.cursor = hoverIdx >= 0 ? 'pointer' : '';
+    }
 
     for (let i = 0; i < n; i++) {
       const g = groups[i];

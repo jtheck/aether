@@ -277,6 +277,25 @@ describe('RMB click vs pan', () => {
       true,
     );
   });
+
+  it('pans from the latch, not the pointer-down backlog', () => {
+    const smallCam = fakeCamera();
+    const small = createCameraController(smallCam, fakeCanvas(), { worldHalfF: 200 });
+    small.handlePointerDown(rmb());
+    small.handlePointerMove(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX + 2, clientY: 300 }));
+    for (let i = 0; i < 24; i++) small.tick(16);
+    const first = Math.hypot(smallCam.target.x, smallCam.target.z);
+
+    const followCam = fakeCamera();
+    const follow = createCameraController(followCam, fakeCanvas(), { worldHalfF: 200 });
+    follow.handlePointerDown(rmb());
+    follow.handlePointerMove(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX + 2, clientY: 300 }));
+    follow.handlePointerMove(rmb({ clientX: 400 + RMB_PAN_DRAG_THRESHOLD_PX + 22, clientY: 300 }));
+    for (let i = 0; i < 24; i++) follow.tick(16);
+    const after = Math.hypot(followCam.target.x, followCam.target.z);
+    assert.ok(first > 0);
+    assert.ok(after > first * 3);
+  });
 });
 
 describe('zoomTendCatch', () => {

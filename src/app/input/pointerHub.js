@@ -99,7 +99,8 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
         camera.handlePointerDown(synthFromHeld(h, id, 'pointerdown', 2));
       }
       if (h.buttons & 1) {
-        game.handlePointerDown(synthFromHeld(h, id, 'pointerdown', 0));
+        const ev = synthFromHeld(h, id, 'pointerdown', 0);
+        if (!touch?.handlePointerDown(ev)) game.handlePointerDown(ev);
       }
     }
   }
@@ -141,6 +142,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
       return;
     }
     if (e.button === 0) {
+      if (touch?.handlePointerDown(e)) return;
       game.handlePointerDown(e);
     }
   }
@@ -149,7 +151,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     noteHeldMove(e);
     const { active: on } = syncActive();
     if (!on) return;
-    if (e.pointerType === 'touch') {
+    if (e.pointerType === 'touch' || touch?.owns?.(e.pointerId)) {
       touch?.handlePointerMove(e);
       return;
     }
@@ -162,7 +164,7 @@ export function setupPointerHub({ canvas, camera, game, touch, active }) {
     const { active: on, justUnlocked } = syncActive();
     // If we just unlocked on an up, resume already ran with this id removed — nothing to end.
     if (!on || justUnlocked) return;
-    if (e.pointerType === 'touch') {
+    if (e.pointerType === 'touch' || touch?.owns?.(e.pointerId)) {
       touch?.handlePointerUp(e);
       return;
     }

@@ -32,6 +32,7 @@ import {
   setPbrUnlit,
 } from '../vendor/lite/liteVendor.js';
 import { USE_GPU_PICK } from './pickMode.js';
+import { projectWorldToCanvas } from './screenProject.js';
 import { getUnitDef } from '../sim/unitTypes.js';
 import { GATHER_ACT } from '../sim/gather.js';
 import { MAX_PROJECTILES, PROJECTILE_DESPAWN } from '../sim/projectiles.js';
@@ -91,6 +92,7 @@ import { createBuildingRadialMenu } from './buildingRadial.js';
 import { createBuildingActionRadial } from './buildingActionRadial.js';
 import { createSelectionHud } from './selectionHud.js';
 import { createControlGroupHud } from './controlGroupHud.js';
+import { createSelectionBoxOverlay } from './selectionBox.js';
 import {
   FX_DISTANCE_SQ,
   LOD_ENABLED,
@@ -897,6 +899,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let tileGridOccupancyDirty = false;
   /** O-key screenshot chrome — HUD / collars / grids off, world stays. */
   let screenshotHudHidden = false;
+  /** @type {{ hide: () => void, showCanvasRect: Function }} */
+  let selectionBoxOverlay = { hide() {}, showCanvasRect() {} };
+  /** @type {{ x0: number, y0: number, x1: number, y1: number } | null} */
+  let selectionBoxClient = null;
   /** @type {{ x: number, z: number, radius: number, owner?: number }[] | { x: number, z: number, radius: number, owner?: number } | null} */
   let lastWorkRadiusSpec = null;
   /** @type {unknown} */
@@ -2037,6 +2043,65 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     console.warn('[controlGroupHud] init failed', err);
   }
 
+  try {
+    selectionBoxOverlay = createSelectionBoxOverlay(engine, scene);
+  } catch (err) {
+    console.warn('[selectionBox] init failed', err);
+  }
+
+  let boxCursorOn = false;
+  let boxCanvasLeft = 0;
+  let boxCanvasTop = 0;
+  let boxCanvasW = 0;
+  let boxCanvasH = 0;
+  let boxClientW = -1;
+  let boxClientH = -1;
+
+  function setSelectionBoxCursor(on) {
+    if (on) {
+      if (canvas.style.cursor !== 'none') canvas.style.cursor = 'none';
+      boxCursorOn = true;
+      return;
+    }
+    if (!boxCursorOn) return;
+    boxCursorOn = false;
+    if (canvas.style.cursor === 'none') canvas.style.cursor = '';
+  }
+
+  function refreshBoxCanvasRect() {
+    const rect = canvas.getBoundingClientRect();
+    boxCanvasLeft = rect.left;
+    boxCanvasTop = rect.top;
+    boxClientW = canvas.clientWidth;
+    boxClientH = canvas.clientHeight;
+    boxCanvasW = rect.width || boxClientW;
+    boxCanvasH = rect.height || boxClientH;
+  }
+
+  function syncSelectionBoxOverlay() {
+    if (screenshotHudHidden || !selectionBoxClient) {
+      selectionBoxOverlay.hide();
+      setSelectionBoxCursor(false);
+      return;
+    }
+    if (canvas.clientWidth !== boxClientW || canvas.clientHeight !== boxClientH) {
+      refreshBoxCanvasRect();
+    }
+    const { x0, y0, x1, y1 } = selectionBoxClient;
+    selectionBoxOverlay.showCanvasRect(
+      Math.min(x0, x1) - boxCanvasLeft,
+      Math.min(y0, y1) - boxCanvasTop,
+      Math.max(x0, x1) - boxCanvasLeft,
+      Math.max(y0, y1) - boxCanvasTop,
+      boxCanvasW,
+      boxCanvasH,
+      x1 - boxCanvasLeft,
+      y1 - boxCanvasTop,
+      camera,
+    );
+    setSelectionBoxCursor(true);
+  }
+
   onSceneDispose(scene, () => {
     buildingRadial.disposeLabels?.();
     actionRadial.disposeLabels?.();
@@ -3138,6 +3203,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       selectionHud.update?.(camera);
       controlGroupHud.update?.(camera);
     }
+    syncSelectionBoxOverlay();
     buildingProps.updateHarvestPing?.();
     updateUnitPings();
     for (const batch of typeBatches.values()) {
@@ -3337,6 +3403,24 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     const { aspect } = canvasCoords(0, 0);
     return getViewProjectionMatrix(camera, aspect);
   }
+
+  /** One rect + one VP — reuse across a box-select sweep. */
+  function screenProjection(width, height) {
+    let w = width;
+    let h = height;
+    if (!(w > 0) || !(h > 0)) {
+      const cc = canvasCoords(0, 0);
+      w = cc.width;
+      h = cc.height;
+    }
+    return {
+      vp: getViewProjectionMatrix(camera, w / h),
+      width: w,
+      height: h,
+    };
+  }
+
+  const screenOut = { x: 0, y: 0 };
 
   function writeBatchInstance(batch, slot, x, z, diameter, yaw, moving, useSphereY, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
     const baseGy = Number.isFinite(groundYOverride) ? groundYOverride : groundYAt(x, z);
@@ -4670,6 +4754,26 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
+     * Drag-select marquee in client pixels. Null / omitted hides it.
+     * Latched for the next GPU frame — not a DOM overlay.
+     * @param {number | null} [x0]
+     * @param {number} [y0]
+     * @param {number} [x1]
+     * @param {number} [y1]
+     */
+    setSelectionBox(x0, y0, x1, y1) {
+      if (x0 == null) {
+        selectionBoxClient = null;
+        selectionBoxOverlay.hide();
+        setSelectionBoxCursor(false);
+        return;
+      }
+      if (!selectionBoxClient) refreshBoxCanvasRect();
+      selectionBoxClient = { x0, y0, x1, y1 };
+      setSelectionBoxCursor(true);
+    },
+
+    /**
      * Feed the bottom-of-screen selection strip. `entries` is one row per
      * distinct selected type: units `{ kind:'unit', typeId, name, count }` or
      * buildings `{ kind:'building', typeKey, name, count }`. Empty/undefined
@@ -4854,17 +4958,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       frameCb = cb;
     },
 
+    captureScreenProjection(width, height) {
+      return screenProjection(width, height);
+    },
+
     worldToScreen(x, y, z) {
-      const { width, height } = canvasCoords(0, 0);
-      const c = matVec4(viewProjection(), x, y, z, 1);
-      if (Math.abs(c[3]) < 1e-8) return null;
-      const iw = 1 / c[3];
-      const ndcX = c[0] * iw;
-      const ndcY = c[1] * iw;
-      return {
-        x: (ndcX * 0.5 + 0.5) * width,
-        y: (1 - ndcY) * 0.5 * height,
-      };
+      const proj = screenProjection();
+      if (!projectWorldToCanvas(proj.vp, x, y, z, proj.width, proj.height, screenOut)) {
+        return null;
+      }
+      return { x: screenOut.x, y: screenOut.y };
     },
 
     /**

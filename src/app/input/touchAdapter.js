@@ -6,7 +6,8 @@
 //     tap (units / HUD near the bezel). A still hold → pan (same as center).
 //     A mostly-tangential drag: left/right zoom, top/bottom orbit. Full
 //     strength in the rim, then a 2× fade so it does not carry into the field.
-//     A mostly-inward drag falls through to play.
+//     A mostly-inward drag falls through to play. Mouse LMB on the rim uses
+//     this same path; field LMB stays on gameInput.
 //   - Center finger: brief still hold → pan; early drag → synth LMB (box);
 //     short lift → tap. Each center contact runs its own pan-hold / pan /
 //     action stream so one hand can pan while the other selects / a-moves.
@@ -29,7 +30,7 @@
 import { DRAG_THRESHOLD_PX } from './gameInput.js';
 
 /** Screen-rim band that *candidates* a finger for camera (commit on drag). */
-export const EDGE_ZONE_PX = 64;
+export const EDGE_ZONE_PX = 47;
 /** After the full-strength rim, fade over this many px (2× zone). */
 export const EDGE_FADE_PX = EDGE_ZONE_PX * 2;
 /** Follow while the fade still has weight — not into the open field. */
@@ -67,6 +68,23 @@ export function edgeCommandWeight(distPx, zonePx = EDGE_ZONE_PX, fadePx = EDGE_F
 
 function edgeAxisZooms(axis) {
   return axis === 'left' || axis === 'right';
+}
+
+/** Point on start→current at the latch — later deltas start here, not at pointer-down. */
+function pointAtThreshold(startX, startY, x, y, thresholdPx) {
+  const dx = x - startX;
+  const dy = y - startY;
+  const path = Math.hypot(dx, dy);
+  if (!(path > 1e-6) || !(thresholdPx > 0)) return { x, y };
+  const s = Math.min(1, thresholdPx / path);
+  return { x: startX + dx * s, y: startY + dy * s };
+}
+
+function overshoot1d(current, start, deadzone) {
+  const delta = current - start;
+  const mag = Math.abs(delta);
+  if (!(mag > deadzone)) return 0;
+  return Math.sign(delta) * (mag - deadzone);
 }
 
 function mountEdgeZoneGuides(canvas) {
@@ -122,13 +140,13 @@ const PINCH_ROTATE_SENS = 0.16;
 /** Same feel as RMB drag-pan (cameraController.panByScreenDelta, RMB_PAN_BASE). */
 const TOUCH_PAN_BASE = 5.0;
 /** Total span/angle/centroid change before a chord engages that axis (tap vs gesture). */
-const PINCH_DIST_DEADZONE_PX = 10;
+export const PINCH_DIST_DEADZONE_PX = 10;
 /** ~0.45° — engage twist almost immediately (cumulative |dangle| also counts). */
-const PINCH_ANGLE_DEADZONE_RAD = 0.008;
+export const PINCH_ANGLE_DEADZONE_RAD = 0.008;
 /** Per-frame twist that counts even before total-from-start crosses the deadzone. */
 const PINCH_ANGLE_FRAME_ENGAGE_RAD = 0.0035;
 /** 2-finger pan engage distance — keep low so chord pan feels as immediate as 1-finger hold-pan. */
-const PINCH_PAN_DEADZONE_PX = 8;
+export const PINCH_PAN_DEADZONE_PX = 8;
 /** 1 rad of twist ≈ this many px of "emphasis" when ranking pan/zoom/rotate. */
 const PINCH_ROT_EMPHASIS_PX = 380;
 /** EMA blend for per-frame emphasis scores (higher = snappier handoff). */
@@ -157,6 +175,8 @@ const ANOMALY_DIST_PX = 80;
 
 /** v1 centerPanHoldMs — still this long → commit one-finger pan. */
 export const CENTER_PAN_HOLD_MS = 95;
+/** Rim hold waits longer so a zoom/rotate swipe can start. */
+export const EDGE_PAN_HOLD_MS = 180;
 /** v1 centerPanHoldMaxMovePx — move farther before hold fires → cancel pan arm. */
 const CENTER_PAN_HOLD_MAX_MOVE_PX = 10;
 const CENTER_PAN_HOLD_MAX_MOVE_SQ = CENTER_PAN_HOLD_MAX_MOVE_PX * CENTER_PAN_HOLD_MAX_MOVE_PX;
@@ -334,16 +354,19 @@ export function createTouchAdapter({ canvas, camera, game }) {
     game.cancelDrag();
   }
 
-  function startPanHoldTimer(id) {
+  function startPanHoldTimer(id, delayMs = CENTER_PAN_HOLD_MS) {
     clearPanHoldTimerFor(id);
-    const delay = Math.max(1, CENTER_PAN_HOLD_MS);
+    const delay = Math.max(1, delayMs);
     const timeoutId = setTimeout(() => {
       panHoldTimers.delete(id);
       const t = touches.get(id);
       if (!t || t.role !== 'pending') return;
       const mdx = t.x - t.startX;
       const mdy = t.y - t.startY;
-      if (mdx * mdx + mdy * mdy > CENTER_PAN_HOLD_MAX_MOVE_SQ) return;
+      const movedSq = mdx * mdx + mdy * mdy;
+      if (movedSq > CENTER_PAN_HOLD_MAX_MOVE_SQ) return;
+      // Wind-up along the rim is a camera grab, not a pan hold.
+      if (t.startedInEdge && movedSq >= 16 && edgeDragIsCamera(t.edgeAxis, mdx, mdy)) return;
       t.role = 'pan';
       t.startedInEdge = false;
       t.edgeAxis = null;
@@ -395,6 +418,9 @@ export function createTouchAdapter({ canvas, camera, game }) {
     const movedSq = mdx * mdx + mdy * mdy;
 
     if (t.startedInEdge && t.role === 'pending') {
+      if (movedSq >= 16 && edgeDragIsCamera(t.edgeAxis, mdx, mdy)) {
+        clearPanHoldTimerFor(id);
+      }
       if (movedSq < EDGE_COMMIT_SQ) return;
       const axis = bestAxisForDelta(t.x, t.y, mdx, mdy, EDGE_FOLLOW_PX) ?? t.edgeAxis;
       if (edgeDragIsCamera(axis, mdx, mdy)) {
@@ -402,6 +428,10 @@ export function createTouchAdapter({ canvas, camera, game }) {
         t.role = 'edge';
         t.isEdge = true;
         t.edgeAxis = axis;
+        // last* is still pointer-down; apply only the travel past the commit.
+        const origin = pointAtThreshold(t.startX, t.startY, t.x, t.y, EDGE_COMMIT_PX);
+        t.lastX = origin.x;
+        t.lastY = origin.y;
         applyEdgeCamera(t);
         return;
       }
@@ -662,25 +692,22 @@ export function createTouchAdapter({ canvas, camera, game }) {
 
     // Latch engagement — once an axis has proven intent, it stays available
     // for the rest of the chord (no restart needed to switch).
-    if (!b0.engagedZoom && Math.abs(dist - b0.dist) > PINCH_DIST_DEADZONE_PX) b0.engagedZoom = true;
     let totalAngle = angle - b0.angle;
     if (totalAngle > Math.PI) totalAngle -= 2 * Math.PI;
     if (totalAngle < -Math.PI) totalAngle += 2 * Math.PI;
-    if (
+    const justZoom = !b0.engagedZoom && Math.abs(dist - b0.dist) > PINCH_DIST_DEADZONE_PX;
+    if (justZoom) b0.engagedZoom = true;
+    const justRotate =
       !b0.engagedRotate &&
       (Math.abs(totalAngle) > PINCH_ANGLE_DEADZONE_RAD ||
         b0.angleAccum > PINCH_ANGLE_DEADZONE_RAD ||
-        absDangle > PINCH_ANGLE_FRAME_ENGAGE_RAD)
-    ) {
-      b0.engagedRotate = true;
-    }
-    if (
+        absDangle > PINCH_ANGLE_FRAME_ENGAGE_RAD);
+    if (justRotate) b0.engagedRotate = true;
+    const justPan =
       !b0.engagedPan &&
       Math.hypot(centroid.x - b0.startCentroid.x, centroid.y - b0.startCentroid.y) >
-        PINCH_PAN_DEADZONE_PX
-    ) {
-      b0.engagedPan = true;
-    }
+        PINCH_PAN_DEADZONE_PX;
+    if (justPan) b0.engagedPan = true;
 
     // Twist always drifts the centroid a bit — don't let that steal emphasis from rotate.
     const rotPx = absDangle * PINCH_ROT_EMPHASIS_PX;
@@ -693,24 +720,47 @@ export function createTouchAdapter({ canvas, camera, game }) {
     b0.emaPan += (panPx - b0.emaPan) * aEma;
     const w = chordAxisWeights(b0);
 
-    if (b0.engagedZoom && Math.abs(ddist) > 0.05) {
-      camera.nudgeZoom(-ddist * PINCH_ZOOM_SENS * camera.getRadius() * w.zoom, {
-        x: centroid.x,
-        y: centroid.y,
-      });
+    if (b0.engagedZoom) {
+      const applyDist = justZoom ? overshoot1d(dist, b0.dist, PINCH_DIST_DEADZONE_PX) : ddist;
+      if (Math.abs(applyDist) > 0.05) {
+        camera.nudgeZoom(-applyDist * PINCH_ZOOM_SENS * camera.getRadius() * w.zoom, {
+          x: centroid.x,
+          y: centroid.y,
+        });
+      }
     }
-    if (b0.engagedRotate && Math.abs(dangle) > 1e-4) {
-      camera.nudgeRotate(dangle * PINCH_ROTATE_SENS * w.rotate, {
-        x: centroid.x,
-        y: centroid.y,
-      });
+    if (b0.engagedRotate) {
+      const applyAngle = justRotate
+        ? overshoot1d(totalAngle, 0, PINCH_ANGLE_DEADZONE_RAD)
+        : dangle;
+      if (Math.abs(applyAngle) > 1e-4) {
+        camera.nudgeRotate(applyAngle * PINCH_ROTATE_SENS * w.rotate, {
+          x: centroid.x,
+          y: centroid.y,
+        });
+      }
     }
     // Pan: full 1-finger strength when slide leads; only soften when zoom/twist dominate.
-    if (b0.engagedPan && panPxRaw > 0.05) {
+    if (b0.engagedPan) {
+      let applyCdx = cdx;
+      let applyCdy = cdy;
+      if (justPan) {
+        const origin = pointAtThreshold(
+          b0.startCentroid.x,
+          b0.startCentroid.y,
+          centroid.x,
+          centroid.y,
+          PINCH_PAN_DEADZONE_PX,
+        );
+        applyCdx = centroid.x - origin.x;
+        applyCdy = centroid.y - origin.y;
+      }
       const panLeads =
         b0.emaPan >= b0.emaZoom * 0.85 && b0.emaPan >= b0.emaRotate * 0.85;
       const panScale = panLeads ? 1 : w.pan;
-      camera.panByScreenDelta(cdx * panScale, cdy * panScale, TOUCH_PAN_BASE);
+      if (Math.hypot(applyCdx, applyCdy) > 0.05) {
+        camera.panByScreenDelta(applyCdx * panScale, applyCdy * panScale, TOUCH_PAN_BASE);
+      }
     }
 
     b0.lastCentroid = centroid;
@@ -778,10 +828,13 @@ export function createTouchAdapter({ canvas, camera, game }) {
 
   function handlePointerDown(e) {
     const id = e.pointerId;
+    const isTouch = e.pointerType === 'touch';
+    const edgeAxis = edgeAxisAt(e.clientX, e.clientY);
+    // Mouse/pen only claim the rim — field LMB stays with gameInput.
+    if (!isTouch && !edgeAxis) return false;
+
     // Replace any ghost with the same id (OS reuse after a missed up).
     if (touches.has(id)) releasePointer(id, 'pointercancel', /*emitTap*/ false);
-
-    const edgeAxis = edgeAxisAt(e.clientX, e.clientY);
     /** @type {TouchState} */
     const t = {
       x: e.clientX,
@@ -800,8 +853,8 @@ export function createTouchAdapter({ canvas, camera, game }) {
 
     // Candidate only — still lift is a tap, still hold is pan. No pinch from the rim.
     if (t.startedInEdge) {
-      startPanHoldTimer(id);
-      return;
+      startPanHoldTimer(id, EDGE_PAN_HOLD_MS);
+      return true;
     }
 
     // First free pair → camera chord. While placing, a solo finger can still join.
@@ -809,16 +862,17 @@ export function createTouchAdapter({ canvas, camera, game }) {
     const partnerId = findChordPartner(id, t) ?? findPlaceChordPartner(id, t);
     if (partnerId != null) {
       beginPinch(partnerId, id);
-      return;
+      return true;
     }
     const tapPartnerId = findTapChordPartner(id, t);
     if (tapPartnerId != null) {
       beginTapChord(tapPartnerId, id);
-      return;
+      return true;
     }
 
     // Single extra finger: a-move / select / box (works alongside 1-finger pan or camera chord).
     armCenterFinger(id, t);
+    return true;
   }
 
   function handlePointerMove(e) {
@@ -937,6 +991,7 @@ export function createTouchAdapter({ canvas, camera, game }) {
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
+    owns: (id) => touches.has(id),
     reset,
     dispose,
   };

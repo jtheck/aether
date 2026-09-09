@@ -14,7 +14,8 @@
 // - Commands and tick confirms must be owned by the userId for their playerId.
 
 import { p2pDevModeFromLocation } from './net.js';
-import { getPlayerName, getUnitSkins } from './settings.js';
+import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
+import { ownerColorsFromRoster, sanitizeOwnerColor } from '../render/ownerTints.js';
 import { aetherSteam } from './steam.js';
 import {
   localOwnedPacks,
@@ -272,6 +273,8 @@ export function createKothShard(options = {}) {
 
   /** userId → per-unit cosmetic pack ids (render-only, not hashed into sim). */
   const userSkins = new Map();
+  /** userId → profile hex (render-only; every client must paint the same army). */
+  const userColors = new Map();
 
   function localDlc() {
     return localOwnedPacks(aetherSteam.ownedPacks());
@@ -301,6 +304,24 @@ export function createKothShard(options = {}) {
     return fromRoster;
   }
 
+  function localColor() {
+    return sanitizeOwnerColor(getPlayerColor());
+  }
+
+  function rememberUserColor(userId, hex) {
+    const clean = sanitizeOwnerColor(hex);
+    if (!userId || !clean) return false;
+    const key = String(userId);
+    if (userColors.get(key) === clean) return false;
+    userColors.set(key, clean);
+    return true;
+  }
+
+  function ownerColorsNow() {
+    if (localUserId) rememberUserColor(localUserId, localColor());
+    return ownerColorsFromRoster(roster, userColors);
+  }
+
   function liveConfig(reset = false) {
     return {
       mode: 'koth',
@@ -319,6 +340,7 @@ export function createKothShard(options = {}) {
       startKey: liveStartKey,
       tick: session?.confirmedTick ?? 0,
       ownerSkins: ownerSkinsNow(),
+      ownerColors: ownerColorsNow(),
       reset,
     };
   }
@@ -436,6 +458,7 @@ export function createKothShard(options = {}) {
         lobbyName: generateLobbyName(matchId),
         dlc: localDlc(),
         skins: localSkins(),
+        color: localColor(),
         role,
         appState,
         v: KOTH_PROTOCOL_VERSION,
@@ -1807,6 +1830,7 @@ export function createKothShard(options = {}) {
         phase,
         dlc: localDlc(),
         skins: localSkins(),
+        color: localColor(),
       });
     }
     if (appState === KOTH_APP_STATE.MATCHMAKING) {
@@ -3382,6 +3406,18 @@ export function createKothShard(options = {}) {
     } else if (msg.from && Array.isArray(msg.dlc)) {
       rememberUserDlc(msg.from, msg.dlc);
     }
+    if (msg.from && typeof msg.color === 'string' && rememberUserColor(msg.from, msg.color)) {
+      if (phase === SHARD_PHASE.LIVE) notifyPresentationSync();
+    }
+    if (msg.ownerColors && typeof msg.ownerColors === 'object') {
+      let learned = false;
+      for (const s of roster) {
+        if (s.state !== 'active' || !s.userId || userColors.has(s.userId)) continue;
+        const hex = msg.ownerColors[s.playerId] ?? msg.ownerColors[String(s.playerId)];
+        if (hex && rememberUserColor(s.userId, hex)) learned = true;
+      }
+      if (learned && phase === SHARD_PHASE.LIVE) notifyPresentationSync();
+    }
     if (msg.ownerSkins && typeof msg.ownerSkins === 'object') {
       for (const s of roster) {
         if (s.state !== 'active' || !s.userId || userSkins.has(s.userId)) continue;
@@ -3418,7 +3454,9 @@ export function createKothShard(options = {}) {
           startKey: liveStartKey,
           dlc: localDlc(),
           skins: localSkins(),
+          color: localColor(),
           ownerSkins: ownerSkinsNow(),
+          ownerColors: ownerColorsNow(),
         });
         if (phase === SHARD_PHASE.SANDBOX) maybeStartLive();
         else if (phase === SHARD_PHASE.LIVE && role === 'spectator' && !catchUpReady) {
@@ -3874,6 +3912,9 @@ export function createKothShard(options = {}) {
         rememberUserSkins(data.from, data.skins);
       } else if (Array.isArray(data.dlc)) {
         rememberUserDlc(data.from, data.dlc);
+      }
+      if (typeof data.color === 'string' && rememberUserColor(data.from, data.color)) {
+        if (phase === SHARD_PHASE.LIVE) notifyPresentationSync();
       }
       // Broadcast is a global firehose. Only peers live on THIS match count as
       // in-lobby; browsers and other shards stay in the discovery registry.

@@ -329,16 +329,19 @@ export function createSporeBloomFx(emit, groundYAt, mushrooms = null) {
       for (let i = 0; i < hn; i++) {
         const hx = patch.headX[i];
         const hz = patch.headY[i];
-        mushrooms?.spawnHead?.(patch.headEntity[i], hx, hz, !!patch.headKill[i]);
+        const spawned = mushrooms?.spawnHead?.(patch.headEntity[i], hx, hz, !!patch.headKill[i]);
         const gy = groundYAt(hx, hz);
+        const px = spawned?.x ?? hx;
+        const py = spawned?.y ?? gy + 1.2;
+        const pz = spawned?.z ?? hz;
         for (let n = 0; n < 5; n++) {
           emit({
             blend: 'alpha',
             fadeOut: true,
             position: [
-              hx + (Math.random() - 0.5) * 0.7,
-              gy + 1.8 + Math.random() * 0.8,
-              hz + (Math.random() - 0.5) * 0.7,
+              px + (Math.random() - 0.5) * 0.55,
+              py + Math.random() * 0.45,
+              pz + (Math.random() - 0.5) * 0.55,
             ],
             velocity: [
               (Math.random() - 0.5) * 1.4,

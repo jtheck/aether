@@ -1,6 +1,9 @@
-// Agora build menu — tilted annulus framing the agora (EDGE_PIN_HUD gates
-// screen-edge placement; currently off). Hub hole stays on the building.
-// Option angles stay screen-stable; hover/click uses CPU disc/sphere hits.
+// Agora build menu — tilted annulus framing the agora. Hub hole stays on the
+// building; near the screen edge the disc slides off the building, then
+// shrinks, then fades.
+// Option angles stay screen-stable; hover/click uses CPU pad discs (the
+// circles under icons). While ghost-placing, chrome hides and the chosen
+// building sits in the hub.
 
 import {
   addToScene,
@@ -25,9 +28,18 @@ import {
   getBuildingCost,
   getBuildingRequires,
 } from '../sim/buildings.js';
-import { poseRadialFramingBuilding } from './radialPose.js';
+import {
+  fitRadialInViewport,
+  poseRadialFramingBuilding,
+  stepRadialEdgeOpacity,
+  RADIAL_EDGE_PICK_ALPHA,
+  RADIAL_HUD_BLEND_ALPHA,
+  radialHudFadeAlpha,
+  radialHudPremulRgba,
+} from './radialPose.js';
 import { formatResourceCost } from '../sim/resources.js';
 import { menuGateState } from '../sim/menuGate.js';
+import { applyGhostValidityTint } from './buildings.js';
 import {
   ensureRadialPriceHud,
   hideRadialPrice,
@@ -53,8 +65,8 @@ const PAD_LIFT = 1.35;
 /** Extra lift of icons along the menu normal above their pad ring. */
 const ICON_LIFT = 0.85;
 const OPTION_SCALE = 0.468;
-/** Pick sphere around each icon (covers the mini building, not just the pad). */
-const ICON_PICK_R = 9.9;
+/** Hub preview while ghost-placing (a bit larger than a pad icon). */
+const PLACE_ICON_SCALE = OPTION_SCALE * 1.6;
 /** Center category pie — fixed size (not tied to ring radius). */
 const PIE_OUTER = 11.6;
 const PIE_INNER = 6.6;
@@ -62,6 +74,11 @@ const PIE_H = 0.4;
 const PIE_LIFT = 0.25;
 /** Constant-width channels between slices (parallel opposing edges). */
 const PIE_SLICE_GAP = 0.8;
+/** World-unit rim around each category wedge (outside the fill). */
+const PIE_BORDER = 0.22;
+/** Sit the fill slightly above the outline so the rim does not z-fight. */
+const PIE_FILL_LIFT = 0.05;
+const PAD_BORDER = PIE_BORDER;
 /** Slight deliberate skew so the center control is not cardinally aligned. */
 const PIE_ROTATION = 0.13;
 /** Three five-button pages interleave at exactly one-third of a 72° slot. */
@@ -92,8 +109,6 @@ const HUD_PLACE_FRAC = 0.82;
 const HUD_REF_DIST = 110;
 const HUD_BASE_SCALE = 0.9;
 const HUD_SCALE_MIN = 0.315;
-/** While ghost-placing, shrink the open radial so it stays out of the way. */
-const COMPACT_SCALE = 0.68;
 const LABEL_FONT_SIZE = 24;
 const LABEL_SCREEN_SCALE = 1.1;
 const LABEL_DOWN = 4.32;
@@ -101,6 +116,9 @@ const LABEL_LIFT = 1.25;
 const PRICE_FONT_SIZE = 16;
 const PRICE_SCREEN_SCALE = 0.78;
 const PRICE_DOWN = 6.35;
+/** Pads + prices around the hub — used to keep the disc on-screen. */
+const SCREEN_FIT_RADIUS =
+  RIM_R + Math.max(PAD_OUTER + PAD_BORDER, PRICE_DOWN) + 2.8;
 const PRICE_TEXT_COLOR = [0.72, 0.86, 0.92, 1];
 const LABEL_TEXT_COLOR = [0.86, 0.96, 1, 1];
 /** Resting icon wash — white, slightly red if broke, slightly black if locked. */
@@ -119,16 +137,12 @@ const PRICE_WASH = {
   unafford: [0.92, 0.55, 0.52, 1],
   locked: [0.28, 0.3, 0.32, 1],
 };
-/** Exp approach rate for compact scale (higher = snappier; ~30 ≈ 0.1s). */
-const COMPACT_LERP_SPEED = 30;
 /** Inset so the whole ring stays inside the viewport when edge-pinned. */
 const HUD_EDGE_MARGIN_FRAC = 0.2;
 const MAX_OPTIONS = 5;
 
 /** Main ring only — sits above the world, so let terrain/units read through a bit. */
 const MENU_RING_ALPHA = 0.55;
-const PAD_HOVER_COLOR = [1, 0.85, 0.25];
-const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
 /** 🚫 bar through a locked (missing prereq) building icon. */
 const LOCK_SLASH_LEN = 1.62;
 const LOCK_SLASH_WIDTH = 0.36;
@@ -527,11 +541,22 @@ function makeRingMaterial(diffuse, emissive, alpha = 1) {
   const mat = createStandardMaterial();
   mat.diffuseColor = [...diffuse];
   mat.emissiveColor = [...emissive];
-  mat.alpha = alpha;
+  mat._radialBaseAlpha = alpha;
+  mat.alpha = alpha >= 1 ? RADIAL_HUD_BLEND_ALPHA : alpha;
   if ('disableLighting' in mat) mat.disableLighting = true;
   if ('unlit' in mat) mat.unlit = true;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
   return mat;
+}
+
+/** Keep hue, pull toward white. `t` 0 = original, 1 = white. */
+function liftRgb(c, t) {
+  const a = Math.max(0, Math.min(1, t));
+  return [
+    Math.min(1, c[0] + (1 - c[0]) * a),
+    Math.min(1, c[1] + (1 - c[1]) * a),
+    Math.min(1, c[2] + (1 - c[2]) * a),
+  ];
 }
 
 function previewColorFromMaterial(mat) {
@@ -559,7 +584,8 @@ function makeIconPreviewMaterial(source) {
   mat.name = `${source?.name ?? 'building'}-radial`;
   mat.diffuseColor = color;
   mat.emissiveColor = [0.82, 0.82, 0.82];
-  mat.alpha = 1;
+  mat.alpha = RADIAL_HUD_BLEND_ALPHA;
+  mat._radialBaseAlpha = 1;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
   markMaterialUboDirty(mat);
   return mat;
@@ -580,25 +606,6 @@ function rayHitPlane(ray, px, py, pz, nx, ny, nz) {
     z: ray.oz + ray.dz * t,
     t,
   };
-}
-
-/**
- * Nearest positive ray–sphere hit distance, or null.
- * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number }} ray
- */
-function rayHitSphereT(ray, cx, cy, cz, radius) {
-  const lx = ray.ox - cx;
-  const ly = ray.oy - cy;
-  const lz = ray.oz - cz;
-  const b = ray.dx * lx + ray.dy * ly + ray.dz * lz;
-  const c = lx * lx + ly * ly + lz * lz - radius * radius;
-  const disc = b * b - c;
-  if (disc < 0) return null;
-  const root = Math.sqrt(disc);
-  const t0 = -b - root;
-  if (t0 >= 0) return t0;
-  const t1 = -b + root;
-  return t1 >= 0 ? t1 : null;
 }
 
 /**
@@ -668,8 +675,11 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   /** Center category pie — 3 wedges. Angles match rim coords (−π/2 = screen-top). */
   const sliceSpan = (Math.PI * 2) / CATEGORIES.length;
   const sliceStart0 = -Math.PI / 2 - sliceSpan * 0.5 + PIE_ROTATION;
-  /** @type {{ id: CategoryId, mesh: object, mat: object, startAng: number, endAng: number }[]} */
+  /** @type {{ id: CategoryId, mesh: object, mat: object, outline: object, outlineMat: object, startAng: number, endAng: number }[]} */
   const pieSlices = [];
+  const outlineOuter = PIE_OUTER + PIE_BORDER;
+  const outlineInner = Math.max(0.5, PIE_INNER - PIE_BORDER);
+  const outlineGap = Math.max(0.05, PIE_SLICE_GAP - 2 * PIE_BORDER);
   for (let i = 0; i < CATEGORIES.length; i++) {
     const cat = CATEGORIES[i];
     const startAng = sliceStart0 + i * sliceSpan;
@@ -688,12 +698,28 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     mesh.renderOrder = 215;
     hideMesh(mesh);
     addToScene(scene, mesh);
-    pieSlices.push({ id: cat.id, mesh, mat, startAng, endAng });
+    const outline = createPieSliceMesh(engine, `build-menu-pie-outline-${cat.id}`, {
+      startAng,
+      endAng,
+      inner: outlineInner / outlineOuter,
+      height: PIE_H / outlineOuter,
+      segments: 18,
+      gap: outlineGap / outlineOuter,
+    });
+    const outlineMat = makeRingMaterial(cat.color, cat.emissive, 0.95);
+    outline.material = outlineMat;
+    outline.pickable = false;
+    outline.renderOrder = 214;
+    hideMesh(outline);
+    addToScene(scene, outline);
+    pieSlices.push({ id: cat.id, mesh, mat, outline, outlineMat, startAng, endAng });
   }
 
   /** Pad rings under each option — own material so hover can recolor. */
-  /** @type {{ mesh: object, mat: object }[]} */
+  /** @type {{ mesh: object, mat: object, outline: object, outlineMat: object }[]} */
   const pads = [];
+  const padOutlineOuter = PAD_OUTER + PAD_BORDER;
+  const padOutlineInner = Math.max(0.4, PAD_INNER - PAD_BORDER);
   for (let i = 0; i < MAX_OPTIONS; i++) {
     const pad = createAnnulusMesh(engine, `build-menu-pad-${i}`, {
       inner: PAD_INNER / PAD_OUTER,
@@ -706,7 +732,18 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     pad.renderOrder = 220;
     hideMesh(pad);
     addToScene(scene, pad);
-    pads.push({ mesh: pad, mat });
+    const outline = createAnnulusMesh(engine, `build-menu-pad-outline-${i}`, {
+      inner: padOutlineInner / padOutlineOuter,
+      height: PAD_H / padOutlineOuter,
+      segments: 28,
+    });
+    const outlineMat = makeRingMaterial(basicCat.color, basicCat.emissive, 0.95);
+    outline.material = outlineMat;
+    outline.pickable = false;
+    outline.renderOrder = 219;
+    hideMesh(outline);
+    addToScene(scene, outline);
+    pads.push({ mesh: pad, mat, outline, outlineMat });
   }
 
   /** Locked-prereq 🚫 bars — one per pad, shown only when that slot is gated. */
@@ -867,10 +904,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   let centerZ = 0;
   let centerY = 0;
   let hudScale = 1;
-  /** Animated scale mul (1 full → COMPACT_SCALE while placing). */
-  let compactMul = 1;
-  let compactTarget = 1;
-  let compactLastMs = 0;
+  /** Displayed edge fade (0 = gone). Menu stays logically open. */
+  let edgeOpacity = 1;
+  let lastFadeAt = 0;
+  let snapEdgeFade = false;
+  /** Placeable id shown in the hub while ghost-placing; null = full menu. */
+  let placingPreviewType = null;
+  /** World-ghost valid flag; null = fall back to the bank gate. */
+  /** @type {boolean | null} */
+  let placingPreviewValid = null;
   let hoverIndex = -1;
   // Menu basis: right (screen X), normal (tilted up), planeZ (−planeUp), planeUp.
   let bx = 1;
@@ -899,6 +941,98 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   function hidePrice(i) {
     hideLabel(prices[i]);
     hideRadialPrice(`build-${i}`);
+  }
+
+  function hideMenuChrome() {
+    hideMesh(menuRing);
+    for (const slice of pieSlices) {
+      hideMesh(slice.mesh);
+      hideMesh(slice.outline);
+    }
+    for (let i = 0; i < pads.length; i++) {
+      hideMesh(pads[i].mesh);
+      hideMesh(pads[i].outline);
+      hideMesh(lockSlashes[i]);
+      applyPadHover(i, false);
+      hideLabel(labels[i]);
+      hidePrice(i);
+    }
+  }
+
+  function hideMenuVisuals() {
+    hideMenuChrome();
+    hideAllIcons();
+    hideRadialPricesWithPrefix('build-');
+  }
+
+  function fadeAlpha(base) {
+    return (base ?? 1) * edgeOpacity;
+  }
+
+  function setMatAlpha(mat, base) {
+    if (!mat) return;
+    mat._radialBaseAlpha = base;
+    mat.alpha = radialHudFadeAlpha(base, edgeOpacity);
+    markMaterialUboDirty(mat);
+  }
+
+  function refreshMatAlpha(mat) {
+    if (!mat) return;
+    if (mat._radialBaseAlpha == null) mat._radialBaseAlpha = mat.alpha ?? 1;
+    mat.alpha = radialHudFadeAlpha(mat._radialBaseAlpha, edgeOpacity);
+    markMaterialUboDirty(mat);
+  }
+
+  function applyEdgeFade() {
+    refreshMatAlpha(ringMat);
+    for (const slice of pieSlices) {
+      refreshMatAlpha(slice.mat);
+      refreshMatAlpha(slice.outlineMat);
+    }
+    for (const pad of pads) {
+      refreshMatAlpha(pad.mat);
+      refreshMatAlpha(pad.outlineMat);
+    }
+    for (const mesh of lockSlashes) refreshMatAlpha(mesh.material);
+    for (const batch of icons.values()) {
+      for (const layer of batch.layers) refreshMatAlpha(layer.mesh.material);
+    }
+  }
+
+  function applyViewportFit(fitted) {
+    hudScale = fitted.hudScale;
+    centerX = fitted.x;
+    centerY = fitted.y;
+    centerZ = fitted.z;
+    const target = fitted.opacity ?? (fitted.hidden ? 0 : 1);
+    if (snapEdgeFade) {
+      edgeOpacity = target;
+      lastFadeAt = 0;
+      snapEdgeFade = false;
+    } else {
+      const now = performance.now();
+      const dt = lastFadeAt ? Math.min(0.05, (now - lastFadeAt) / 1000) : 1 / 60;
+      lastFadeAt = now;
+      edgeOpacity = stepRadialEdgeOpacity(edgeOpacity, target, dt);
+    }
+  }
+
+  function edgePickable() {
+    return edgeOpacity >= RADIAL_EDGE_PICK_ALPHA;
+  }
+
+  function hideIconsExcept(keepType) {
+    for (const [id, batch] of icons) {
+      if (id === keepType) continue;
+      for (const layer of batch.layers) {
+        if (layer.visible) {
+          setSubtreeVisible(layer.mesh, false);
+          layer.visible = false;
+        }
+        setThinInstanceCount(layer.mesh, 0);
+        flushThinInstances(layer.mesh);
+      }
+    }
   }
 
   function cameraEye(camera) {
@@ -1017,13 +1151,17 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const cat = categoryDef(activeCategory);
     const mat = pad.mat;
     if (hovered) {
-      mat.diffuseColor = [...PAD_HOVER_COLOR];
-      mat.emissiveColor = [...PAD_HOVER_EMISSIVE];
+      mat.diffuseColor = liftRgb(cat.pad, 0.42);
+      mat.emissiveColor = liftRgb(cat.padEm, 0.5);
     } else {
       mat.diffuseColor = [...cat.pad];
       mat.emissiveColor = [...cat.padEm];
     }
     markMaterialUboDirty(mat);
+    pad.outlineMat.diffuseColor = liftRgb(cat.color, hovered ? 0.62 : 0.28);
+    pad.outlineMat.emissiveColor = liftRgb(cat.emissive, hovered ? 0.7 : 0.2);
+    setMatAlpha(pad.mat, 1);
+    setMatAlpha(pad.outlineMat, hovered ? 1 : 0.85);
   }
 
   function applyPieAppearance() {
@@ -1043,8 +1181,21 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         cat.emissive[1] * (selected || hovered ? 1.15 : 0.75),
         cat.emissive[2] * (selected || hovered ? 1.15 : 0.75),
       ];
-      slice.mat.alpha = selected ? 0.95 : hovered ? 0.88 : 0.72;
-      markMaterialUboDirty(slice.mat);
+      setMatAlpha(slice.mat, selected ? 0.95 : hovered ? 0.88 : 0.72);
+      if (selected) {
+        slice.outlineMat.diffuseColor = liftRgb(cat.color, 0.72);
+        slice.outlineMat.emissiveColor = liftRgb(cat.emissive, 0.78);
+        setMatAlpha(slice.outlineMat, 1);
+      } else if (hovered) {
+        slice.outlineMat.diffuseColor = liftRgb(cat.color, 0.45);
+        slice.outlineMat.emissiveColor = liftRgb(cat.emissive, 0.5);
+        setMatAlpha(slice.outlineMat, 0.95);
+      } else {
+        slice.outlineMat.diffuseColor = liftRgb(cat.color, 0.18);
+        slice.outlineMat.emissiveColor = [...cat.emissive];
+        setMatAlpha(slice.outlineMat, 0.7);
+      }
+      markMaterialUboDirty(slice.outlineMat);
     }
   }
 
@@ -1052,7 +1203,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const cat = categoryDef(activeCategory);
     ringMat.diffuseColor = [...cat.color];
     ringMat.emissiveColor = [...cat.emissive];
-    markMaterialUboDirty(ringMat);
+    setMatAlpha(ringMat, MENU_RING_ALPHA);
   }
 
   function rebuildSlots() {
@@ -1161,7 +1312,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         }
         if (mat.specularColor) mat.specularColor = [0, 0, 0];
       }
-      markMaterialUboDirty(mat);
+      setMatAlpha(mat, 1);
     }
   }
 
@@ -1172,6 +1323,10 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       : new Set(snapshot?.ownedTypes ?? []);
     for (const slot of slots) slot.gate = gateForType(slot.type);
     if (!open) return;
+    if (placingPreviewType) {
+      applyPlacingPreviewTint();
+      return;
+    }
     for (let i = 0; i < slots.length; i++) {
       if (labels[i]) labels[i].gate = undefined;
       if (prices[i]) prices[i].gate = undefined;
@@ -1185,33 +1340,40 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       !Number.isFinite(placeDist) || placeDist < 1e-3
         ? HUD_BASE_SCALE
         : HUD_BASE_SCALE * (placeDist / HUD_REF_DIST);
-    // Floor after compact so placement shrink cannot drop below HUD_SCALE_MIN.
-    return Math.max(HUD_SCALE_MIN, distScale * compactMul);
+    return Math.max(HUD_SCALE_MIN, distScale);
   }
 
   /**
-   * Shrink (or restore) the open radial while placing.
-   * Target is approached smoothly in `update`.
-   * @param {boolean} on
+   * Hide ring/pie/pads while ghost-placing, and show `typeId` in the hub.
+   * Pass null to restore the full menu.
+   * @param {string | null | undefined} typeId
    */
-  function setCompact(on) {
-    compactTarget = on ? COMPACT_SCALE : 1;
+  function setCompact(typeId) {
+    const next = typeof typeId === 'string' && typeId ? typeId : null;
+    if (placingPreviewType === next) return;
+    placingPreviewType = next;
+    placingPreviewValid = null;
+    if (next) {
+      hoverIndex = -1;
+      pieHoverId = null;
+      applyPieAppearance();
+      const want = next;
+      void ensureIcon(want).then(() => {
+        if (open && placingPreviewType === want) layout();
+      });
+    }
+    if (open) layout();
   }
 
-  /** Ease compactMul toward compactTarget (frame-rate independent). */
-  function tickCompact() {
-    const now = performance.now();
-    const dt =
-      compactLastMs > 0
-        ? Math.min(0.05, Math.max(0, (now - compactLastMs) / 1000))
-        : 0;
-    compactLastMs = now;
-    const err = compactTarget - compactMul;
-    if (Math.abs(err) < 1e-4) {
-      compactMul = compactTarget;
-      return;
-    }
-    compactMul += err * (1 - Math.exp(-COMPACT_LERP_SPEED * dt));
+  /**
+   * Match the world ghost tint while placing. `null` falls back to the bank gate.
+   * @param {boolean | null | undefined} valid
+   */
+  function setPlacingValid(valid) {
+    const next = valid == null ? null : valid !== false;
+    if (placingPreviewValid === next) return;
+    placingPreviewValid = next;
+    if (open && placingPreviewType) applyPlacingPreviewTint();
   }
 
   /** Frame the agora in the hub hole; scale from the posed center. */
@@ -1225,10 +1387,17 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       RIM_R,
       MENU_TILT,
     );
-    hudScale = posed.hudScale;
-    centerX = posed.x;
-    centerY = posed.y;
-    centerZ = posed.z;
+    const fitted = fitRadialInViewport({
+      eye,
+      x: posed.x,
+      y: posed.y,
+      z: posed.z,
+      hudScale: posed.hudScale,
+      worldRadius: SCREEN_FIT_RADIUS,
+      worldToScreen: screen.worldToScreen,
+      getViewport: screen.getViewport,
+    });
+    applyViewportFit(fitted);
     updateBasis(camera);
   }
 
@@ -1328,12 +1497,29 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     if (!s) return;
     const iconScale = OPTION_SCALE * hudScale;
     const lift = ICON_LIFT * hudScale;
-    const iconX = s.x + nx * lift;
-    const iconY = s.y + ny * lift;
-    const iconZ = s.z + nz * lift;
-    const batch = icons.get(s.type);
+    poseIcon(
+      s.type,
+      s.x + nx * lift,
+      s.y + ny * lift,
+      s.z + nz * lift,
+      iconScale,
+      i === hoverIndex,
+    );
+    applyPadHover(i, i === hoverIndex);
+  }
+
+  /**
+   * Upright icon, yawed toward camera (right-handed: X×Y=Z, −Z toward camera).
+   * @param {string} type
+   * @param {number} iconX
+   * @param {number} iconY
+   * @param {number} iconZ
+   * @param {number} iconScale
+   * @param {boolean} hovered
+   */
+  function poseIcon(type, iconX, iconY, iconZ, iconScale, hovered) {
+    const batch = icons.get(type);
     if (!batch) return;
-    // Upright icons, yawed toward camera (right-handed: X×Y=Z, −Z toward camera).
     for (const layer of batch.layers) {
       writeFacingMatrix(
         layer.matrices,
@@ -1359,8 +1545,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
         layer.visible = true;
       }
     }
-    applyIconHover(s.type, i === hoverIndex);
-    applyPadHover(i, i === hoverIndex);
+    applyIconHover(type, hovered);
   }
 
   function redrawLabel(i) {
@@ -1374,10 +1559,20 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     }
     const hovered = i === hoverIndex;
     const gate = slot.gate ?? 'ok';
-    if (label.gate !== gate || (label.text && label.text !== slot.name)) {
-      updateDefaultTextData(label.data, slot.name, LABEL_WASH[gate] ?? LABEL_WASH.ok);
+    const faded = fadeAlpha(gate === 'locked' ? 0.78 : hovered ? 1 : 0.88);
+    if (
+      label.gate !== gate ||
+      label.text !== slot.name ||
+      Math.abs((label.fadeA ?? -1) - faded) > 0.02
+    ) {
+      updateDefaultTextData(
+        label.data,
+        slot.name,
+        radialHudPremulRgba(LABEL_WASH[gate] ?? LABEL_WASH.ok, faded),
+      );
       label.text = slot.name;
       label.gate = gate;
+      label.fadeA = faded;
     }
     const down = LABEL_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
@@ -1393,15 +1588,14 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
     const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
     const pixelRatio = (sx + sy) * 0.5;
-    const scale =
-      LABEL_SCREEN_SCALE * pixelRatio * compactMul * (hovered ? 1.05 : 1);
+    const scale = LABEL_SCREEN_SCALE * pixelRatio * (hovered ? 1.05 : 1);
     const centerOffset = label.data.width * scale * 0.5;
     const layer = label.layer;
     layer.positionPx.x = origin.x * sx - centerOffset;
     layer.positionPx.y = origin.y * sy;
     layer.rotationRad = 0;
     layer.scale = scale;
-    layer.opacity = gate === 'locked' ? 0.78 : hovered ? 1 : 0.88;
+    layer.opacity = 1;
     layer.visible = true;
     layer._version++;
   }
@@ -1428,13 +1622,12 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       hidePrice(i);
       return;
     }
-    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
-    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
     setRadialPrice(`build-${i}`, {
       cost: slot.cost,
-      x: origin.x * sx,
-      y: origin.y * sy,
-      opacity: hovered ? 0.95 : 0.8,
+      x: origin.x,
+      y: origin.y,
+      canvas: screen.canvas,
+      opacity: fadeAlpha(hovered ? 0.95 : 0.8),
       wash: PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok,
       okWash: PRICE_WASH.ok,
       gate: slot.gate ?? 'ok',
@@ -1442,7 +1635,51 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     });
   }
 
+  function placingTintValid() {
+    if (placingPreviewValid != null) return placingPreviewValid;
+    return !placingPreviewType || gateForType(placingPreviewType) === 'ok';
+  }
+
+  function applyPlacingPreviewTint() {
+    if (!placingPreviewType) return;
+    const batch = icons.get(placingPreviewType);
+    if (!batch) return;
+    const valid = placingTintValid();
+    for (const layer of batch.layers) {
+      applyGhostValidityTint(layer.mesh.material, valid);
+      if (layer.mesh.material) {
+        layer.mesh.material._radialBaseAlpha = layer.mesh.material.alpha;
+      }
+    }
+  }
+
+  function layoutPlacingPreview() {
+    hideMenuChrome();
+    hideIconsExcept(placingPreviewType);
+    const lift = (PAD_LIFT + ICON_LIFT) * hudScale;
+    poseIcon(
+      placingPreviewType,
+      centerX + nx * lift,
+      centerY + ny * lift,
+      centerZ + nz * lift,
+      PLACE_ICON_SCALE * hudScale,
+      false,
+    );
+    applyPlacingPreviewTint();
+  }
+
   function layout() {
+    if (edgeOpacity <= 0.001) {
+      hoverIndex = -1;
+      pieHoverId = null;
+      hideMenuVisuals();
+      return;
+    }
+    if (placingPreviewType) {
+      layoutPlacingPreview();
+      applyEdgeFade();
+      return;
+    }
     const s = hudScale;
     // Annulus mesh outerR=1 → world outer = MENU_RING_OUTER * s
     placeMeshOriented(
@@ -1463,13 +1700,31 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     );
 
     const pieLift = PIE_LIFT * s;
+    const fillLift = pieLift + PIE_FILL_LIFT * s;
     const pieScale = PIE_OUTER * s;
+    const outlineScale = (PIE_OUTER + PIE_BORDER) * s;
     for (const slice of pieSlices) {
       placeMeshOriented(
-        slice.mesh,
+        slice.outline,
         centerX + nx * pieLift,
         centerY + ny * pieLift,
         centerZ + nz * pieLift,
+        outlineScale,
+        bx,
+        by,
+        bz,
+        nx,
+        ny,
+        nz,
+        tx,
+        ty,
+        tz,
+      );
+      placeMeshOriented(
+        slice.mesh,
+        centerX + nx * fillLift,
+        centerY + ny * fillLift,
+        centerZ + nz * fillLift,
         pieScale,
         bx,
         by,
@@ -1489,6 +1744,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     for (let i = 0; i < pads.length; i++) {
       if (i >= n) {
         hideMesh(pads[i].mesh);
+        hideMesh(pads[i].outline);
         hideMesh(lockSlashes[i]);
         applyPadHover(i, false);
         hideLabel(labels[i]);
@@ -1502,11 +1758,28 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       slot.x = centerX + (ca * bx + sa * tx) * rimR + nx * padLift;
       slot.y = centerY + (ca * by + sa * ty) * rimR + ny * padLift;
       slot.z = centerZ + (ca * bz + sa * tz) * rimR + nz * padLift;
+      const fillLift = PIE_FILL_LIFT * s;
       placeMeshOriented(
-        pads[i].mesh,
+        pads[i].outline,
         slot.x,
         slot.y,
         slot.z,
+        (PAD_OUTER + PAD_BORDER) * s,
+        bx,
+        by,
+        bz,
+        nx,
+        ny,
+        nz,
+        tx,
+        ty,
+        tz,
+      );
+      placeMeshOriented(
+        pads[i].mesh,
+        slot.x + nx * fillLift,
+        slot.y + ny * fillLift,
+        slot.z + nz * fillLift,
         PAD_OUTER * s,
         bx,
         by,
@@ -1523,6 +1796,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       redrawPrice(i);
       placeLockSlash(i);
     }
+    applyEdgeFade();
   }
 
   /** 🚫 through the building when the slot is prereq-locked. */
@@ -1574,6 +1848,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     hoverIndex = -1;
     pieHoverId = null;
     categoryLocked = false;
+    snapEdgeFade = true;
     syncPose(camera);
     rebuildSlots();
     open = true;
@@ -1592,31 +1867,19 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
    */
   function update(camera) {
     if (!open) return;
-    tickCompact();
     syncPose(camera);
     layout();
   }
 
   function hide() {
     if (!open) return;
-    hideMesh(menuRing);
-    for (const slice of pieSlices) hideMesh(slice.mesh);
-    for (let i = 0; i < pads.length; i++) {
-      hideMesh(pads[i].mesh);
-      hideMesh(lockSlashes[i]);
-      applyPadHover(i, false);
-    }
-    hideAllIcons();
-    for (const label of labels) hideLabel(label);
-    for (let i = 0; i < prices.length; i++) hidePrice(i);
-    hideRadialPricesWithPrefix('build-');
+    hideMenuVisuals();
     slots = [];
     hoverIndex = -1;
     pieHoverId = null;
     categoryLocked = false;
-    compactMul = 1;
-    compactTarget = 1;
-    compactLastMs = 0;
+    edgeOpacity = 1;
+    lastFadeAt = 0;
     open = false;
   }
 
@@ -1698,8 +1961,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     };
   }
 
-  function piePlanePoint() {
-    const lift = PIE_LIFT * hudScale;
+  function piePlanePoint(extraLift = 0) {
+    const lift = (PIE_LIFT + extraLift) * hudScale;
     return {
       x: centerX + nx * lift,
       y: centerY + ny * lift,
@@ -1708,16 +1971,15 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   /**
-   * Normalize atan2 angle into [startAng, startAng+2π) then test slice span.
-   * @param {number} ang
-   * @param {number} startAng
-   * @param {number} endAng
+   * Shortest signed-angle distance.
+   * @param {number} a
+   * @param {number} b
    */
-  function angInSlice(ang, startAng, endAng) {
-    let a = ang;
-    while (a < startAng) a += Math.PI * 2;
-    while (a >= startAng + Math.PI * 2) a -= Math.PI * 2;
-    return a >= startAng && a < endAng;
+  function angDelta(a, b) {
+    let d = a - b;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return Math.abs(d);
   }
 
   /**
@@ -1725,43 +1987,45 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
    * @returns {{ kind: 'category', id: CategoryId } | null}
    */
   function pickCategoryAtRay(ray) {
-    const pp = piePlanePoint();
+    // Hit the fill plane (the colored wedges), not the slightly lower outline.
+    const pp = piePlanePoint(PIE_FILL_LIFT);
     const hit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
     if (!hit) return null;
     const dx = hit.x - pp.x;
     const dy = hit.y - pp.y;
     const dz = hit.z - pp.z;
     const dist = Math.hypot(dx, dy, dz);
-    const outer = PIE_OUTER * hudScale;
-    const inner = PIE_INNER * hudScale;
+    // Extra radial slop so a shrunken pie still catches the pointer; keep it
+    // inside the pad ring (pads start ~1.6 past pie outer at scale 1).
+    const slop = (PIE_OUTER * 0.1 + PIE_BORDER) * hudScale;
+    const outer = (PIE_OUTER + PIE_BORDER) * hudScale + slop;
+    const inner = Math.max(0, (PIE_INNER - PIE_BORDER) * hudScale);
     if (dist > outer || dist < inner) return null;
     const alongB = dx * bx + dy * by + dz * bz;
     const alongT = dx * tx + dy * ty + dz * tz;
     const ang = Math.atan2(alongT, alongB);
-    const edgeInsetAng = Math.asin(
-      Math.min(0.95, (PIE_SLICE_GAP * 0.5 * hudScale) / Math.max(dist, 1e-4)),
-    );
+    // Visual gaps are constant-width channels, not click dead zones. Assign
+    // the whole annulus to the nearest wedge so small-scale clicks still land.
+    let best = null;
+    let bestD = Infinity;
     for (const slice of pieSlices) {
-      if (
-        angInSlice(
-          ang,
-          slice.startAng + edgeInsetAng,
-          slice.endAng - edgeInsetAng,
-        )
-      ) {
-        return { kind: 'category', id: slice.id };
+      const mid = slice.startAng + (slice.endAng - slice.startAng) * 0.5;
+      const d = angDelta(ang, mid);
+      if (d < bestD) {
+        bestD = d;
+        best = slice;
       }
     }
-    return null;
+    return best ? { kind: 'category', id: best.id } : null;
   }
 
   /**
-   * Option under the cursor: category pie, then pad disc / icon sphere.
+   * Option under the cursor: category pie, then pad discs (circles under icons).
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    * @returns {{ kind: 'building' | 'category', id: string } | null}
    */
   function pickOptionAtRay(ray) {
-    if (!open || !ray) return null;
+    if (!open || !ray || placingPreviewType || !edgePickable()) return null;
 
     const catPick = pickCategoryAtRay(ray);
     if (catPick) return catPick;
@@ -1769,35 +2033,20 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     if (!slots.length) return null;
     const pp = padPlanePoint();
     const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
-    const padR = PAD_OUTER * hudScale;
+    if (!padHit) return null;
+    const padR = (PAD_OUTER + PAD_BORDER) * hudScale;
     const padR2 = padR * padR;
-    const iconR = ICON_PICK_R * hudScale;
-    const iconLift = ICON_LIFT * hudScale;
 
     let bestType = null;
     let bestT = Infinity;
 
     for (let i = 0; i < slots.length; i++) {
       const s = slots[i];
-
-      // Pad disc on the tilted menu plane (full disc including hole).
-      if (padHit) {
-        const dx = padHit.x - s.x;
-        const dy = padHit.y - s.y;
-        const dz = padHit.z - s.z;
-        if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
-          bestT = padHit.t;
-          bestType = s.type;
-        }
-      }
-
-      // Icon volume — models sit above the pad and are larger than PAD_OUTER.
-      const ix = s.x + nx * iconLift;
-      const iy = s.y + ny * iconLift;
-      const iz = s.z + nz * iconLift;
-      const iconT = rayHitSphereT(ray, ix, iy, iz, iconR);
-      if (iconT != null && iconT < bestT) {
-        bestT = iconT;
+      const dx = padHit.x - s.x;
+      const dy = padHit.y - s.y;
+      const dz = padHit.z - s.z;
+      if (dx * dx + dy * dy + dz * dz <= padR2 && padHit.t < bestT) {
+        bestT = padHit.t;
         bestType = s.type;
       }
     }
@@ -1805,7 +2054,8 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   }
 
   function hitHubHoleAtRay(ray) {
-    if (!open || !ray) return false;
+    // Hidden placing preview is not a click target — agora mesh pick still exits.
+    if (!open || !ray || placingPreviewType || !edgePickable()) return false;
     const pp = piePlanePoint();
     const hit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
     if (!hit) return false;
@@ -1816,11 +2066,12 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   /**
    * Sync gesture: over an option, category pie, hub hole, or the main ring band.
    * Hub is a gesture so box-select does not start on the building; pointer-up
-   * click-through is decided in gameInput.
+   * click-through is decided in gameInput. While placing, chrome is gone so
+   * hits fail closed — ground confirms, agora mesh cancels.
    * @param {{ ox: number, oy: number, oz: number, dx: number, dy: number, dz: number } | null | undefined} ray
    */
   function hitAtRay(ray) {
-    if (!open || !ray) return false;
+    if (!open || !ray || placingPreviewType || !edgePickable()) return false;
     if (pickOptionAtRay(ray)) return true;
     // Empty hub — gesture so box-select does not start on the agora.
     if (hitHubHoleAtRay(ray)) return true;
@@ -1855,6 +2106,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     hide,
     isOpen,
     setCompact,
+    setPlacingValid,
     setCategory,
     unlockCategory,
     setHover,

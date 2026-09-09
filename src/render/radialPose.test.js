@@ -4,6 +4,12 @@ import {
   frameRadialCenterOnAnchor,
   poseRadialFramingBuilding,
   radialNearRingLift,
+  fitRadialInViewport,
+  apparentScreenRadius,
+  stepRadialEdgeOpacity,
+  radialHudFadeAlpha,
+  radialHudPremulRgba,
+  RADIAL_HUD_BLEND_ALPHA,
 } from './radialPose.js';
 
 function colinear(a, b, c, eps = 1e-5) {
@@ -57,5 +63,139 @@ describe('radialPose framing', () => {
         scaleForDist(Math.hypot(eye.x, eye.y - 2.4, eye.z)),
     );
     assert.ok(radialNearRingLift(0.56, 16.1, 1, 1.2) > 8);
+  });
+});
+
+describe('fitRadialInViewport', () => {
+  const vw = 400;
+  const vh = 400;
+  const worldToScreen = (x, y) => ({ x: vw * 0.5 + x, y: vh * 0.5 - y });
+  const getViewport = () => ({ width: vw, height: vh });
+  const eyeAt = (x) => ({ x, y: 0, z: -100 });
+
+  it('leaves a centered disc alone', () => {
+    const out = fitRadialInViewport({
+      eye: eyeAt(0),
+      x: 0,
+      y: 0,
+      z: 0,
+      hudScale: 1,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+      marginPx: 10,
+    });
+    assert.equal(out.hudScale, 1);
+    assert.equal(out.opacity, 1);
+    assert.equal(out.hidden, false);
+    assert.equal(out.x, 0);
+    assert.equal(out.y, 0);
+  });
+
+  it('slides inward before shrinking', () => {
+    const out = fitRadialInViewport({
+      eye: eyeAt(-122),
+      x: -122,
+      y: 0,
+      z: 0,
+      hudScale: 1,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+      marginPx: 10,
+    });
+    // Screen x = 78. Need = 12. Slide-only budget ≈ 20.
+    assert.equal(out.hudScale, 1);
+    assert.equal(out.opacity, 1);
+    assert.ok(Math.abs(out.x - (-110)) < 0.6);
+  });
+
+  it('mixes in shrink after the slide-only band', () => {
+    const out = fitRadialInViewport({
+      eye: eyeAt(-144),
+      x: -144,
+      y: 0,
+      z: 0,
+      hudScale: 1,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+      marginPx: 10,
+    });
+    // Screen x = 56. Need = 34. Past slide-only, into the mix.
+    assert.ok(out.hudScale < 0.98);
+    assert.ok(out.hudScale > 0.78);
+    assert.ok(out.x > -144);
+    assert.equal(out.opacity, 1);
+    assert.equal(out.hidden, false);
+  });
+
+  it('stops sliding and fades after max slide and shrink', () => {
+    const out = fitRadialInViewport({
+      eye: eyeAt(-190),
+      x: -190,
+      y: 0,
+      z: 0,
+      hudScale: 1,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+      marginPx: 10,
+    });
+    assert.equal(out.hudScale, 0.78);
+    assert.ok(out.x > -190);
+    assert.ok(out.x < -190 + 40);
+    assert.equal(out.opacity, 0);
+    assert.equal(out.hidden, true);
+  });
+
+  it('lets the disc hang past the viewport before sliding', () => {
+    const tight = fitRadialInViewport({
+      eye: eyeAt(-118),
+      x: -118,
+      y: 0,
+      z: 0,
+      hudScale: 1,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+      marginPx: 10,
+    });
+    const hang = fitRadialInViewport({
+      eye: eyeAt(-118),
+      x: -118,
+      y: 0,
+      z: 0,
+      hudScale: 1,
+      worldRadius: 80,
+      worldToScreen,
+      getViewport,
+    });
+    assert.equal(hang.hudScale, 1);
+    assert.equal(hang.x, -118);
+    assert.equal(tight.hudScale, 1);
+    assert.ok(tight.x > -118);
+  });
+
+  it('keeps HUD mesh alpha below 1 so Lite enables blending', () => {
+    assert.equal(radialHudFadeAlpha(1, 1), RADIAL_HUD_BLEND_ALPHA);
+    assert.equal(radialHudFadeAlpha(1, 0.5), 0.5);
+    assert.equal(radialHudFadeAlpha(0.62, 1), 0.62);
+    assert.equal(radialHudFadeAlpha(1, 0), 0);
+    assert.deepEqual(radialHudPremulRgba([0.8, 1, 1, 1], 0.5), [0.4, 0.5, 0.5, 0.5]);
+    assert.deepEqual(radialHudPremulRgba([1, 1, 1, 0.5], 0.5), [0.25, 0.25, 0.25, 0.25]);
+  });
+
+  it('eases displayed opacity toward the target', () => {
+    const mid = stepRadialEdgeOpacity(1, 0, 0.05);
+    assert.ok(mid < 1);
+    assert.ok(mid > 0.6);
+    assert.equal(stepRadialEdgeOpacity(0.4, 0.4, 0.016), 0.4);
+    assert.equal(stepRadialEdgeOpacity(1, 0, 1), 0);
+  });
+
+  it('reports a positive apparent radius along camera right', () => {
+    const r = apparentScreenRadius(eyeAt(0), 0, 0, 0, 40, worldToScreen);
+    assert.ok(Math.abs(r - 40) < 1e-6);
   });
 });

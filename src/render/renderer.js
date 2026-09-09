@@ -851,17 +851,17 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let socketFireEnabled = fxMode !== 0 && !!fxQuality.socketFire;
   /**
    * Per-style cadences (not one global pulse). Classic recipe:
-   * fire = steady rate-over-time, smoke = slow puffs, sparkle = intermittent twinkles.
+   * fire = steady rate-over-time, smoke = slow puffs, sparkle = one star
+   * dripped on a golden-ratio phase so staffs don't burst in lockstep.
    * unitFxIntervalMs remains a quality scale factor (~1 at default 80).
    */
   const SOCKET_FX_CADENCE = {
     fire: 70,
     smoke: 240,
-    sparkle: 210,
+    sparkle: 52,
   };
   let socketFireElapsed = Math.random() * SOCKET_FX_CADENCE.fire;
   let socketSmokeElapsed = Math.random() * SOCKET_FX_CADENCE.smoke;
-  let socketSparkleElapsed = Math.random() * SOCKET_FX_CADENCE.sparkle;
   let groundFireElapsed = 0;
   /** VAT clock advance — A/B with V key. */
   let vatEnabled = true;
@@ -1426,7 +1426,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (!fxEnabled) {
       socketFireElapsed = 0;
       socketSmokeElapsed = 0;
-      socketSparkleElapsed = 0;
       groundFireElapsed = 0;
     }
   }
@@ -1440,7 +1439,25 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return ok !== false;
     },
     spawnHead(entity, x, z, killed) {
-      return mushrooms?.spawnHead?.(entity, x, z, killed) === true;
+      const typeId = lastMapTypes?.[entity];
+      const def = getUnitDef(Number.isFinite(typeId) ? typeId : 0);
+      const slot = entitySlot[entity] ?? -1;
+      const key = entityBatchKey[entity];
+      const batch = key != null ? typeBatches.get(key) : null;
+      const m = batch?.matrices;
+      const o = slot * 16;
+      let yaw = 0;
+      let y = groundYAt(x, z);
+      if (m && slot >= 0 && m[o + 15] > 0) {
+        yaw = Math.atan2(m[o + 8], m[o + 10]);
+        if (Number.isFinite(m[o + 13])) y = m[o + 13];
+      }
+      return mushrooms?.spawnHead?.(entity, x, z, killed, {
+        y,
+        yaw,
+        radius: Math.max(0.7, (def.size ?? 6) * 0.3),
+        height: (def.pickHeight ?? 1.1) * 1.85,
+      }) ?? false;
     },
     clearGrown(tick) {
       mushrooms?.clearGrown?.(tick);
@@ -1945,6 +1962,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     hide() {},
     isOpen() { return false; },
     setCompact() {},
+    setPlacingValid() {},
     setCategory() {},
     unlockCategory() {},
     setHover() {},
@@ -2403,13 +2421,13 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     // Freeze FX aging while sim is paused so bolts/trails don't burn out.
     const fxDt = fxPaused ? 0 : deltaMs;
     buildingProps.update?.(fxDt);
-    particleClockMs += Math.min(100, Math.max(0, fxDt));
+    const fxStep = Math.min(100, Math.max(0, fxDt));
+    particleClockMs += fxStep;
     if (fxEnabled) {
       // Quality slider scales all socket cadences (default unitFxIntervalMs=80 → 1×).
       const cadenceScale = Math.max(0.5, (unitFxIntervalMs || 80) / 80);
       socketFireElapsed += fxDt;
       socketSmokeElapsed += fxDt;
-      socketSparkleElapsed += fxDt;
       if (socketFireElapsed >= SOCKET_FX_CADENCE.fire * cadenceScale) {
         socketFireElapsed = 0;
         emitUnitSocketFire('fire');
@@ -2420,10 +2438,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         emitUnitSocketFire('smoke');
         emitBuildingSocketFx('smoke');
       }
-      if (socketSparkleElapsed >= SOCKET_FX_CADENCE.sparkle * cadenceScale) {
-        socketSparkleElapsed = 0;
-        emitUnitSocketFire('sparkle');
-        emitBuildingSocketFx('sparkle');
+      // Sparkle is sampled every frame so each staff can sit on its own phase.
+      if (fxStep > 0) {
+        emitUnitSocketFire('sparkle', fxStep);
+        emitBuildingSocketFx('sparkle', fxStep);
       }
       groundFireElapsed += fxDt;
       if (groundFireElapsed >= groundFireIntervalMs) {
@@ -2550,15 +2568,43 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return style === 'hex' || style === 'torch';
   }
 
+  function socketsHaveGroup(sockets, group) {
+    for (let s = 0; s < sockets.length; s++) {
+      const kind = socketFxKind(sockets[s].name);
+      if (kind && socketMatchesGroup(kind.style, group)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * How many times this socket's sparkle clock wrapped in `dtMs`.
+   * Weyl (golden-ratio) offset so consecutive slots land evenly around the
+   * period instead of bursting on the same frame.
+   */
+  function socketPhaseHits(slot, sockIndex, periodMs, dtMs, salt = 0) {
+    if (!(dtMs > 0) || !(periodMs > 0)) return 0;
+    const x = (slot + 1) * 0.6180339887498949 + (sockIndex + 1) * 0.41421356237 + salt;
+    const u = x - Math.floor(x);
+    const t1 = particleClockMs + u * periodMs;
+    const hits = Math.floor(t1 / periodMs) - Math.floor((t1 - dtMs) / periodMs);
+    return hits > 0 ? Math.min(hits, 3) : 0;
+  }
+
+  function sparklePeriodMs() {
+    return SOCKET_FX_CADENCE.sparkle * Math.max(0.5, (unitFxIntervalMs || 80) / 80);
+  }
+
   /** Constant FX at unit empties for one cadence group. */
-  function emitUnitSocketFire(group) {
+  function emitUnitSocketFire(group, dtMs = 0) {
     if (!socketFireEnabled) return;
     // Always camera-gate continuous FX (scenery LOD_ENABLED is a separate switch).
     const eye = cameraEyePos();
     const distSq = fxDistanceSq;
+    const staggerSparkle = group === 'sparkle';
+    const period = staggerSparkle ? sparklePeriodMs() : 0;
     for (const batch of typeBatches.values()) {
       const sockets = batch.fxSockets;
-      if (!sockets?.length) continue;
+      if (!sockets?.length || !socketsHaveGroup(sockets, group)) continue;
       const count = batch.mesh?.thinInstances?.count ?? 0;
       const m = batch.matrices;
       for (let slot = 0; slot < count; slot++) {
@@ -2576,6 +2622,10 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           const sock = sockets[s];
           const kind = socketFxKind(sock.name);
           if (!kind || !socketMatchesGroup(kind.style, group)) continue;
+          const hits = staggerSparkle
+            ? socketPhaseHits(slot, s, period, dtMs)
+            : 1;
+          if (!hits) continue;
           // Socket x/y/z is the empty origin (world translation from bake).
           const lx = sock.x;
           const ly = sock.y;
@@ -2584,22 +2634,22 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           const wy = m[o + 13] + m[o + 5] * ly;
           const wz = m[o + 14] + m[o + 2] * lx + m[o + 10] * lz;
           const sockScale = Number.isFinite(sock.scale) && sock.scale > 1e-6 ? sock.scale : 1;
-          emitSocketFlame(
-            wx, wy, wz,
-            SOCKET_FX_INHERENT * kind.base * sockScale * instScale,
-            kind.style,
-          );
+          const scale = SOCKET_FX_INHERENT * kind.base * sockScale * instScale;
+          for (let h = 0; h < hits; h++) emitSocketFlame(wx, wy, wz, scale, kind.style);
         }
       }
     }
   }
 
   /** Building empties for one cadence group (spawn_* ignored). */
-  function emitBuildingSocketFx(group) {
+  function emitBuildingSocketFx(group, dtMs = 0) {
     if (!socketFireEnabled) return;
     const eye = cameraEyePos();
     const distSq = fxDistanceSq;
+    const staggerSparkle = group === 'sparkle';
+    const period = staggerSparkle ? sparklePeriodMs() : 0;
     buildingProps.forEachFxInstance?.((_typeId, m, slot, sockets) => {
+      if (staggerSparkle && !socketsHaveGroup(sockets, group)) return;
       const o = slot * 16;
       if (eye && distSq > 0) {
         const dx = eye.x - m[o + 12];
@@ -2609,11 +2659,18 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       }
       if (!allowContinuousFx()) return;
       const instScale = instanceUniformScale(m, o);
+      const typeSalt = typeof _typeId === 'string'
+        ? _typeId.length * 0.173 + (_typeId.charCodeAt(0) || 0) * 0.011
+        : (_typeId | 0) * 0.173;
       for (let s = 0; s < sockets.length; s++) {
         const sock = sockets[s];
         const kind = socketFxKind(sock.name);
         if (!kind) continue;
         if (!socketMatchesGroup(kind.style, group)) continue;
+        const hits = staggerSparkle
+          ? socketPhaseHits(slot, s, period, dtMs, typeSalt)
+          : 1;
+        if (!hits) continue;
         const lx = sock.x;
         const ly = sock.y;
         const lz = sock.z;
@@ -2621,11 +2678,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         const wy = m[o + 13] + m[o + 5] * ly;
         const wz = m[o + 14] + m[o + 2] * lx + m[o + 10] * lz;
         const sockScale = Number.isFinite(sock.scale) && sock.scale > 1e-6 ? sock.scale : 1;
-        emitSocketFlame(
-          wx, wy, wz,
-          SOCKET_FX_INHERENT * kind.base * sockScale * instScale,
-          kind.style,
-        );
+        const scale = SOCKET_FX_INHERENT * kind.base * sockScale * instScale;
+        for (let h = 0; h < hits; h++) emitSocketFlame(wx, wy, wz, scale, kind.style);
       }
     });
   }
@@ -2822,8 +2876,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   /** Puff rolls per chimney tick; later rolls are coin flips, see the loop. */
   const SMOKE_PUFFS_PER_TICK = 3;
-  /** Stars per sparkle tick — short-lived, so the live count tracks this closely. */
-  const SPARKLE_PER_TICK = 4;
 
   function emitSocketSmoke(x, y, z, s) {
     const dens = Math.min(1, fxEmitChance);
@@ -2886,10 +2938,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
   function emitSocketSparkle(x, y, z, s) {
     const dens = Math.min(1, fxEmitChance);
-    // A handful of stars per ~210ms tick, each free to skip its beat so the
-    // cloud keeps twinkling irregularly instead of pulsing with the cadence.
-    for (let i = 0; i < SPARKLE_PER_TICK; i++) {
-      if (Math.random() > 0.85 * dens) continue;
+    // One star per due tick (phase-hashed upstream). A rest or extra spit
+    // keeps the cloud from reading as a metronome.
+    const extra = Math.random() < 0.18 * dens ? 1 : 0;
+    const n = extra + (Math.random() < 0.9 * dens ? 1 : 0);
+    for (let i = 0; i < n; i++) {
       const ang = Math.random() * Math.PI * 2;
       const rad = Math.random() * 0.18 * s;
       const roll = Math.random();
@@ -2914,10 +2967,12 @@ export async function createRenderer(canvas, capacity, opts = {}) {
             : roll > 0.33
               ? [0.75, 0.55, 1, 0.85]
               : [0.55, 0.9, 1, 0.85],
-        lifetime: 0.5 + Math.random() * 0.45,
+        lifetime: 0.35 + Math.random() * 0.7,
         startSize: (0.14 + Math.random() * 0.16) * s,
         endSize: 0.02 * s,
         drag: 0.7,
+        rotation: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 3.2,
       });
     }
   }
@@ -3295,8 +3350,11 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       mushrooms?.noteHeadPose?.(
         i,
         x,
-        gy + loft + (def.pickHeight ?? 1.1) * 1.85,
+        gy + loft,
         z,
+        yaw,
+        Math.max(0.7, diameter * 0.3),
+        (def.pickHeight ?? 1.1) * 1.85,
       );
     }
     return true;
@@ -3942,9 +4000,14 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       return actionRadial.getArmed?.() ?? null;
     },
 
-    /** Shrink the open radial while ghost-placing so it stays out of the way. */
-    setBuildingRadialCompact(on) {
-      buildingRadial.setCompact?.(Boolean(on));
+    /** Hide the open radial while ghost-placing; `typeId` is shown in the hub. */
+    setBuildingRadialCompact(typeId) {
+      buildingRadial.setCompact?.(typeId || null);
+    },
+
+    /** Green/red hub placeholder — matches the world ghost while placing. */
+    setBuildingRadialPlacingValid(valid) {
+      buildingRadial.setPlacingValid?.(valid);
     },
 
     /** Switch Basic / Advanced / Elemental page on the open radial. */
@@ -3958,7 +4021,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Pick a radial option (CPU disc hit — pie / pad / icon; agora pie only). Sync-friendly.
+     * Pick a radial option (CPU disc hit — pie / pad; agora pie only). Sync-friendly.
      * @param {number} clientX
      * @param {number} clientY
      * @returns {Promise<{ kind: 'building' | 'category' | 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null>}
@@ -4004,7 +4067,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /**
-     * Sync gesture test: over a visible option (pad / icon) or ring chrome.
+     * Sync gesture test: over a visible option (pad disc) or ring chrome.
      * Action radials do not claim the empty yard inside the ring.
      * Must not await GPU (pointerdown latch).
      * Always ray-test — a stale hover must not claim the whole screen.
@@ -4350,7 +4413,6 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         unitAuras.configure?.({ muted: true });
         socketFireElapsed = 0;
         socketSmokeElapsed = 0;
-        socketSparkleElapsed = 0;
         groundFireElapsed = 0;
       }
       return fxEnabled;

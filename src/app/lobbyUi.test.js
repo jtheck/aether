@@ -173,9 +173,11 @@ function lobbyDom() {
     drawers.append(drawer);
   }
   put('match-lobby-overlay', new FakeEl('div', { hidden: true }));
+  put('match-lobby-min', new FakeEl('button'));
   return {
     drawers,
     overlay: byId.get('match-lobby-overlay'),
+    min: byId.get('match-lobby-min'),
     create(mode) {
       return drawers.querySelector(`[data-mode="${mode}"]`).querySelector('.lobby-create');
     },
@@ -326,6 +328,58 @@ describe('match lobby overlay', () => {
       });
       assert.equal(dom.overlay.hidden, false);
       assert.equal(dom.overlay.className.includes('is-lag'), false);
+    } finally {
+      restore();
+    }
+  });
+
+  it('parks the match lobby to the corner', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => waitingState(),
+          canStart: () => true,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+        },
+        getUserId: () => 'u1',
+      });
+      assert.equal(dom.overlay.hidden, false);
+      assert.equal(dom.overlay.className.includes('is-parked'), false);
+      dom.min.click();
+      assert.equal(dom.overlay.className.includes('is-parked'), true);
+      assert.equal(dom.min.getAttribute('aria-label'), 'Expand lobby');
+      dom.min.click();
+      assert.equal(dom.overlay.className.includes('is-parked'), false);
+      assert.equal(dom.min.getAttribute('aria-label'), 'Minimize lobby');
+    } finally {
+      restore();
+    }
+  });
+
+  it('can park the overlay from the controller', () => {
+    const dom = lobbyDom();
+    const restore = dom.install();
+    try {
+      const ui = setupLobbyUi({
+        gameLobby: { listLobbies: () => [], listen() {}, unlisten() {} },
+        matchLobby: {
+          isActive: () => true,
+          getState: () => waitingState(),
+          canStart: () => true,
+          startBlockReason: () => '',
+          countdownMs: () => 0,
+          lockstepStalled: () => false,
+        },
+        getUserId: () => 'u1',
+      });
+      ui.setOverlayParked(true);
+      assert.equal(dom.overlay.className.includes('is-parked'), true);
     } finally {
       restore();
     }

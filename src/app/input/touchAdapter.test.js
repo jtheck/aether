@@ -266,6 +266,41 @@ describe('touch edge band', () => {
   });
 });
 
+describe('center tap vs pan hold', () => {
+  it('a still center lift after the pan-hold delay is still a tap', async () => {
+    const { touch, pans, downs, ups } = makeHarness();
+    touch.handlePointerDown(ptr({ clientX: 400, clientY: 300 }));
+    await sleep(CENTER_PAN_HOLD_MS + 40);
+    touch.handlePointerUp(ptr({ type: 'pointerup', clientX: 401, clientY: 301 }));
+    assert.equal(downs.length, 1);
+    assert.equal(ups.length, 1);
+    assert.equal(pans.length, 0);
+  });
+
+  it('a rim still-hold lift without a swipe is a tap', async () => {
+    const { touch, pans, rotates, zooms, downs, ups } = makeHarness();
+    touch.handlePointerDown(ptr({ clientX: 16, clientY: 300 }));
+    await sleep(EDGE_PAN_HOLD_MS + 20);
+    touch.handlePointerUp(ptr({ type: 'pointerup', clientX: 17, clientY: 301 }));
+    assert.equal(downs.length, 1);
+    assert.equal(ups.length, 1);
+    assert.equal(pans.length, 0);
+    assert.equal(rotates.length, 0);
+    assert.equal(zooms.length, 0);
+  });
+
+  it('a real center pan then lift is not a tap', async () => {
+    const { touch, pans, downs, ups } = makeHarness();
+    touch.handlePointerDown(ptr({ clientX: 400, clientY: 300 }));
+    await sleep(CENTER_PAN_HOLD_MS + 15);
+    touch.handlePointerMove(ptr({ type: 'pointermove', clientX: 400, clientY: 340 }));
+    assert.ok(pans.length > 0);
+    touch.handlePointerUp(ptr({ type: 'pointerup', clientX: 400, clientY: 340 }));
+    assert.equal(downs.length, 0);
+    assert.equal(ups.length, 0);
+  });
+});
+
 describe('touch camera chord latch', () => {
   it('pinch zoom applies from the deadzone, not chord start', () => {
     const { touch, zooms } = makeHarness();

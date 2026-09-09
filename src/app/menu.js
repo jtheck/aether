@@ -53,6 +53,7 @@ import {
  * @param {() => unknown} [opts.onStartSoloAi]
  * @param {() => unknown} [opts.onStartUnitTester]
  * @param {() => unknown} [opts.onStartStressful]
+ * @param {() => unknown} [opts.onOpenReplay]
  * @param {(hex: string) => unknown} [opts.onPlayerColorChange]
  * @param {() => unknown} [opts.onUnitSkinsChange]
  * @param {() => boolean} [opts.getHudLocked]
@@ -63,6 +64,7 @@ export function setupMenu({
   onStartSoloAi,
   onStartUnitTester,
   onStartStressful,
+  onOpenReplay,
   onPlayerColorChange,
   onUnitSkinsChange,
   getHudLocked,
@@ -102,6 +104,7 @@ export function setupMenu({
     }),
   );
   const soloBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#solo_ai_b'));
+  const openReplayBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#open_replay_b'));
   const testerBtn = /** @type {HTMLButtonElement} */ (drawer.querySelector('#unit_tester_b'));
   const stressBtn = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#stressful_b'));
   const menuKothStart = /** @type {HTMLButtonElement | null} */ (drawer.querySelector('#menu-koth-start'));
@@ -247,6 +250,17 @@ export function setupMenu({
     }
   });
 
+  openReplayBtn?.addEventListener('click', async () => {
+    if (!onOpenReplay || openReplayBtn.disabled) return;
+    openReplayBtn.disabled = true;
+    setOpen(false);
+    try {
+      await onOpenReplay();
+    } finally {
+      openReplayBtn.disabled = false;
+    }
+  });
+
   testerBtn?.addEventListener('click', async () => {
     if (!onStartUnitTester || testerBtn.disabled) return;
     testerBtn.disabled = true;
@@ -272,7 +286,7 @@ export function setupMenu({
   // Camera/hotkeys listen on window. Stop keydown so typing a name does not
   // pan or trip B/G/H. Leave keyup alone so a held pan key still releases.
   const keyStop = [
-    nameInput, colorPicker, extraGroups, hideHudBtn, slider, fxSlider, volumeSlider, soloBtn, testerBtn, stressBtn,
+    nameInput, colorPicker, extraGroups, hideHudBtn, slider, fxSlider, volumeSlider, soloBtn, openReplayBtn, testerBtn, stressBtn,
     menuKothStart, menuKothClaim, menuKothLeave,
     menuMatchReady, menuMatchStart, menuMatchLeave,
     ...lobbyDrawerToggles,

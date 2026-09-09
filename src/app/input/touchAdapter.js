@@ -9,8 +9,9 @@
 //     A mostly-inward drag falls through to play. Mouse LMB on the rim uses
 //     this same path; field LMB stays on gameInput.
 //   - Center finger: brief still hold → pan; early drag → synth LMB (box);
-//     short lift → tap. Each center contact runs its own pan-hold / pan /
-//     action stream so one hand can pan while the other selects / a-moves.
+//     still lift (even after the pan-hold timer) → tap. Each center contact
+//     runs its own pan-hold / pan / action stream so one hand can pan while
+//     the other selects / a-moves.
 //   - Camera chord: two *uncommitted* center fingers within CHORD_MAX_STAGGER_MS
 //     → pinch/rotate/pan. A finger already panning/soloing/edge never joins,
 //     except with build UI up: a second center finger may pull the solo into a
@@ -180,6 +181,13 @@ export const EDGE_PAN_HOLD_MS = 180;
 /** v1 centerPanHoldMaxMovePx — move farther before hold fires → cancel pan arm. */
 const CENTER_PAN_HOLD_MAX_MOVE_PX = 10;
 const CENTER_PAN_HOLD_MAX_MOVE_SQ = CENTER_PAN_HOLD_MAX_MOVE_PX * CENTER_PAN_HOLD_MAX_MOVE_PX;
+/**
+ * Pan-role lift within this of pointer-down is still a tap. Real fingers and
+ * the device simulator often stay down longer than CENTER_PAN_HOLD_MS with
+ * a couple px of jitter — that used to become a zero-travel pan and drop.
+ */
+const PAN_LIFT_TAP_MAX_PX = 16;
+const PAN_LIFT_TAP_MAX_SQ = PAN_LIFT_TAP_MAX_PX * PAN_LIFT_TAP_MAX_PX;
 const BOX_DRAG_THRESHOLD_SQ = DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX;
 
 /**
@@ -954,7 +962,18 @@ export function createTouchAdapter({ canvas, camera, game }) {
       return;
     }
 
-    // pan / edge / cancelled pending — drop quietly
+    // Pan hold without a real pan (slow tap / simulator click).
+    if (t.role === 'pan' && emitTap && !cancelled) {
+      const mdx = t.x - t.startX;
+      const mdy = t.y - t.startY;
+      if (mdx * mdx + mdy * mdy <= PAN_LIFT_TAP_MAX_SQ) {
+        fireTap(id, t, false);
+        touches.delete(id);
+        return;
+      }
+    }
+
+    // Moved pan / edge / cancelled pending — drop quietly
     if (soloId === id) {
       soloId = null;
       game.cancelDrag();

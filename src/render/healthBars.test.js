@@ -41,8 +41,15 @@ import {
   AGORA_TINT_NEUTRAL,
   agoraChipFilled,
   agoraChipIsSmall,
+  agoraChipLeadIndex,
+  agoraChipPulseMul,
+  agoraChipRgb,
   agoraChipSizeMul,
   agoraChipTintOwner,
+  agoraCaptureMix,
+  agoraPropTint,
+  AGORA_CAPTURER_LIFT,
+  AGORA_CAPTURER_PULSE_MUL,
   DOT_DIAMETER_AGORA_LARGE_MUL,
   DOT_DIAMETER_AGORA_SMALL_MUL,
   DOT_SPACING_AGORA_MUL,
@@ -289,5 +296,28 @@ describe('health chip bars', () => {
     assert.equal(agoraChipTintOwner(0, tug), 1);
     assert.equal(agoraChipTintOwner(2, tug), AGORA_TINT_NEUTRAL);
     assert.equal(agoraChipTintOwner(3, tug), 0);
+    const invadeLead = { progress: 1, capturer: 1, owner: 0, count: 9 };
+    assert.equal(agoraChipLeadIndex(invadeLead), 8);
+    const tugLead = { phase: 1, tug: 1, capturer: 1, owner: 0, founder: 0 };
+    assert.equal(agoraChipLeadIndex(tugLead), 0);
+    assert.equal(agoraChipPulseMul(2, tugLead, 0), 1);
+    assert.ok(agoraChipPulseMul(0, tugLead, 0) > 1);
+    assert.ok(agoraChipPulseMul(0, tugLead, 99) > agoraChipPulseMul(0, tugLead, 0));
+    const invadeRow = { progress: 100, capturer: 1, owner: 0, count: 9 };
+    assert.equal(agoraChipLeadIndex(invadeRow), 6);
+    assert.ok(agoraChipPulseMul(6, invadeRow, 0) > agoraChipPulseMul(7, invadeRow, 0));
+    assert.ok(agoraChipPulseMul(7, invadeRow, 0) > 1);
+    assert.equal(agoraChipPulseMul(0, invadeRow, 0), 1);
+    const lifted = agoraChipRgb(8, { progress: 1, capturer: 1, owner: 0, count: 9 });
+    const base = ownerTint(1);
+    assert.ok(lifted[1] > base[1]);
+    assert.ok(agoraCaptureMix({ capturer: 1, progress: 150 }) > 0.4);
+    assert.equal(agoraCaptureMix({ owner: 0, progress: 150 }), 0);
+    const idle = agoraPropTint({ owner: 0 });
+    const mixed = agoraPropTint({ owner: 0, capturer: 1, progress: 300 });
+    assert.deepEqual(idle, ownerTint(0));
+    assert.ok(Math.abs(mixed[0] - ownerTint(1)[0]) < Math.abs(idle[0] - ownerTint(1)[0]));
+    assert.ok(AGORA_CAPTURER_LIFT > 0);
+    assert.ok(AGORA_CAPTURER_PULSE_MUL > 0);
   });
 });

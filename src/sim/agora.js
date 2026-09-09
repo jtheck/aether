@@ -7,8 +7,10 @@ import * as fx from './fixed.js';
 export const AGORA_OCCUPATION_RADIUS = fx.fromFloat(20);
 const OCC_R2 = fx.mul(AGORA_OCCUPATION_RADIUS, AGORA_OCCUPATION_RADIUS);
 
-/** ~15s at 20 Hz while continuously capturing. */
+/** ~15s at 20 Hz while continuously invading (lock phase). */
 export const AGORA_CAPTURE_TICKS = 300;
+/** Tug / occupy is shorter so the last phase feels decisive. */
+export const AGORA_TUG_TICKS = 180;
 
 /** Locked home — enemy color invades from the right. */
 export const AGORA_PHASE_LOCK = 0;
@@ -150,13 +152,13 @@ function stepTug(w, a, counts) {
   const pusher = lead.best;
   if (a.capturer === pusher || a.capturer < 0 || a.tug <= 0) {
     a.capturer = pusher;
-    a.tug = Math.min(AGORA_CAPTURE_TICKS, a.tug + 1);
+    a.tug = Math.min(AGORA_TUG_TICKS, a.tug + 1);
   } else {
     a.tug = Math.max(0, a.tug - 1);
     if (a.tug <= 0) a.capturer = -1;
   }
 
-  if (a.tug < AGORA_CAPTURE_TICKS || a.capturer < 0) return;
+  if (a.tug < AGORA_TUG_TICKS || a.capturer < 0) return;
 
   if (a.capturer === (a.founder | 0)) {
     retakeAgora(a);

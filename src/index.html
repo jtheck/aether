@@ -287,10 +287,12 @@
     #side_menu .lobby-seat-status { opacity: .7; font-size: 12px; }
     #match-lobby-overlay {
       position: fixed; inset: 0; z-index: 10001;
-      display: flex; align-items: center; justify-content: center;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px;
       pointer-events: none;
     }
-    #match-lobby-overlay.is-lag {
+    #match-lobby-overlay.is-lag,
+    #match-lobby-overlay.is-parked {
       align-items: flex-start;
       justify-content: flex-start;
       padding: 12px;
@@ -298,14 +300,76 @@
     #match-lobby-overlay[hidden] { display: none; }
     #match-lobby-overlay .match-lobby-panel {
       pointer-events: auto;
-      width: min(420px, 92vw);
+      position: relative;
+      width: min(280px, 92vw);
       padding: 16px 18px;
       background: #0c0f14;
       border: 1px solid #2a3140;
       color: #fff;
       font: 13px/1.35 system-ui, sans-serif;
     }
-    #match-lobby-overlay h3 { margin: 0 0 10px; font-size: 15px; }
+    #match-lobby-overlay.is-parked .match-lobby-setting { display: none; }
+    #match-lobby-overlay .btn.match-lobby-min {
+      position: absolute; top: 6px; right: 8px;
+      width: auto; margin: 0; padding: 2px 8px;
+    }
+    #match-lobby-overlay .match-replay-row {
+      display: flex; gap: 8px; margin: 8px 0 0;
+    }
+    #match-lobby-overlay .match-replay-row .btn {
+      flex: 1; width: auto; margin: 0; text-align: center;
+    }
+    #match-lobby-overlay.is-parked .match-replay-row,
+    #match-lobby-overlay .match-replay-row:not(:has(button:not([hidden]))) { display: none; }
+    #replay-watch {
+      position: fixed;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      z-index: 10002;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      width: min(280px, 92vw);
+      box-sizing: border-box;
+      padding: 8px 10px;
+      background: #0c0f14;
+      border: 1px solid #2a3140;
+      color: #fff;
+      font: 13px/1.3 system-ui, sans-serif;
+    }
+    #replay-watch[hidden] { display: none; }
+    #replay-watch button {
+      background: #161b24;
+      color: inherit;
+      border: 1px solid #2a3140;
+      border-radius: 3px;
+      padding: 4px 8px;
+      font: inherit;
+      cursor: pointer;
+    }
+    #replay-watch button:disabled { opacity: .45; cursor: default; }
+    #replay-watch input[type=range] { flex: 1 1 100%; width: 100%; min-width: 0; }
+    #replay-watch #replay-clock {
+      font-variant-numeric: tabular-nums;
+      opacity: .85;
+      margin-left: auto;
+    }
+    #match-lobby-overlay h3 { margin: 0 28px 10px 0; font-size: 15px; }
+    #match-over {
+      margin: 0 28px 8px 0;
+      text-align: left;
+      font: 600 16px/1.25 system-ui, sans-serif;
+      color: #f2fbff;
+    }
+    #match-over[hidden],
+    #match-lobby-overlay.is-parked #match-over { display: none; }
+    #match-over-sub {
+      margin-top: 2px;
+      font: 500 12px/1.3 system-ui, sans-serif;
+      opacity: .75;
+    }
     #match-lobby-overlay .lobby-seat-group { margin-bottom: 10px; }
     #match-lobby-overlay .lobby-seat-group-title { opacity: .7; margin-bottom: 4px; }
     #match-lobby-overlay .lobby-seat { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
@@ -352,7 +416,7 @@
     body.screenshot-hud :is(
       #status, #resources, #resource-bank, #observer-data, #radial-prices,
       #koth-controls, #match-lobby-overlay, #header, #menu_b, #side_menu,
-      #boot-splash, #match-over, #version
+      #boot-splash, #match-over, #version, #replay-watch
     ),
     body.screenshot-hud .ble-root {
       visibility: hidden !important;
@@ -382,7 +446,16 @@
   </div>
   <div id="match-lobby-overlay" hidden>
     <div class="match-lobby-panel">
+      <button type="button" class="btn match-lobby-min" id="match-lobby-min" aria-label="Minimize lobby">×</button>
+      <div id="match-over" hidden>
+        <div id="match-over-title"></div>
+        <div id="match-over-sub"></div>
+      </div>
       <h3 id="match-lobby-title">Lobby</h3>
+      <div class="match-replay-row">
+        <button type="button" class="btn" id="match-replay-save" hidden>Save replay</button>
+        <button type="button" class="btn" id="match-replay-watch" hidden>Watch</button>
+      </div>
       <div id="match-lobby-seats"></div>
       <div id="match-lobby-field-row" class="match-lobby-setting">
         <label for="match-lobby-field">Field</label>
@@ -499,6 +572,10 @@
         <button type="button" class="btn" id="stressful_b">Stressful Situation</button>
         <div class="note">Five-way FFA — 1000 units per player.</div>
       </div>
+      <div class="row">
+        <button type="button" class="btn" id="open_replay_b">Open replay</button>
+        <div class="note">Watch a saved .gecho — a garden echo of a match.</div>
+      </div>
     </div>
     <div class="page" data-page="settings">
       <h4>Settings</h4>
@@ -539,6 +616,8 @@
       </div>
       <div class="about">
         <br><br>
+        <hr>
+        <a href="https://aether.garden/forge" target="_blank" title="Field Editor">Forge Field Editor</a>
         <hr>
         <h6>
           About
@@ -588,8 +667,6 @@
         </div>
         <a href="mailto:aethergarden123@pm.me" title="Contact e-mail">Contact</a>
         <hr>
-        <a href="https://aether.garden/forge" target="_blank" title="Field Editor">Forge</a>
-        <br>
         ÆæXi0m
         <span class="credit">©'26 Aether.Garden</span>
       </div>
@@ -599,7 +676,15 @@
       <svg width="100%" height="100%" viewBox="0 0 99 99"><path style="fill:none;stroke-width:5.7247;stroke-linecap:round;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1" d="M19.848 32.659c-1.806-1.905-4.302-3.979-3.715-6.864.587-2.886 3.377-4.255 5.047-6.328 2.445-2.1 4.659-5.56 7.23-6.445 2.572-.885 4.303.334 5.625 2.136 1.444 2.713 4.159.962 5.743-.022 1.584-.983.24-3.364.553-4.91.847-2.783 3.137-3.896 6.53-3.612 3.393.285 8.163-.171 12.152.131 2.662.855 3.88 3.565 3.551 6.178-.847 2.877 2.343 3.544 4.249 3.831 1.906.287 2.703-3.106 4.718-3.6 2.318-.704 4.694.416 6.074 2.332 2.76 2.844 5.757 5.526 8.373 8.47 1.432 2.208.843 5.306-1.37 6.84-2.75 1.304-.863 3.523-.202 5.424.56 1.77 3.223.504 4.69.965 2.867.574 4.58 3.565 4.027 6.362-.087 4.144.173 8.37-.129 12.463-.903 2.728-3.739 3.794-6.36 3.4-2.815-.855-3.66 2.272-3.701 4.4-.044 2.129 3.832 3.143 3.715 6.158-.116 3.015-3.148 4.714-4.856 6.902-2.183 2.054-4.186 4.389-6.481 6.268-2.39 1.178-5.253.166-6.771-1.984-1.428-2.729-3.793.123-5.917.4M19.98 80.1c-5.245 1.61-7.395.366-8.912-3.324-1.517-3.69-5.408-9.343-.99-11.256 4.418-1.913 1.252-5.106-2.313-5.849-3.565-.743-1.383-5.87-.649-8.652.595-3.907 3.17-8.828 7.766-7.428 4.596 1.401 2.93-3.363 1.658-6.44-1.272-3.076 3.584-4.967 6.12-6.444 2.633-1.203 6.81-5.717 8.635-2.048 1.825 3.669 6.523 4.471 7.034.12.512-4.351 5.305-2.722 7.898-1.583 2.61.841 5.56 1.053 7.88 2.547 2.932 2.642-.63 8.371 3.075 8.724 3.705.354 5.675-3.05 7.805-.139 1.775 3.475 4.201 6.704 5.57 10.36.73 4.216-6.377 5.791-3.895 8.755 2.481 2.963 6.003 1.783 5.552 5.261-1.079 3.69-1.956 7.472-3.179 11.132-2.418 3.981-8.885-.369-9.17 3.624-.287 3.992 3.078 6.539-.7 8.185-3.041 1.654-6.004 3.484-9.102 5.008-4.584 1.5-6.762-6.63-9.566-3.565-2.803 3.065-1.815 5.694-4.947 5.31-3.62-.996-7.274-1.972-11.295-3.579-4.021-1.606.97-10.329-4.275-8.72zm30.24-22.711c.178 1.042.34 2.142.14 3.18-.377 1.97-.998 3.998-2.263 5.56-.794.98-1.716 1.896-2.78 2.576-2.67 1.707-6.104 2.281-9.212 1.467h0c-1.337-.451-2.836-.829-3.865-1.813-1.038-.991-2.251-1.885-2.992-3.108-1.627-2.687-2.132-6.068-1.269-9.143 1.01-3.593 3.887-6.46 7.381-7.759 1.176-.437 2.344-.556 3.568-.529 1.275.03 2.572.092 3.785.513"/></svg>
     </div>
   </div>
-  <div id="match-over" style="display:none;position:fixed;inset:0;place-content:center;background:rgba(0,0,0,0.55);font-size:1.4rem;pointer-events:none;"></div>
+  <div id="replay-watch" hidden>
+    <button type="button" id="replay-rew">Rewind</button>
+    <button type="button" id="replay-play">Play</button>
+    <input type="range" id="replay-scrub" min="0" max="0" value="0" step="1">
+    <span id="replay-clock">0 / 0</span>
+    <button type="button" id="replay-speed">1×</button>
+    <button type="button" id="replay-close" aria-label="Hide replay controls">×</button>
+  </div>
+  <input type="file" id="replay-file" accept=".gecho,.json,application/json" hidden>
   <div id="fallback">
     <div>
       <p><strong>WebGPU required</strong></p>

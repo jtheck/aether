@@ -19,6 +19,7 @@ import {
   applyStructureOccupancyAt,
   applyWorldStructureOccupancy,
   canPlaceBuildingAt,
+  canPreviewPlaceBuilding,
   buildingFootprintBounds,
   snapBuildingWorld,
   BUILDING_FOOTPRINTS,
@@ -515,6 +516,22 @@ describe('buildings place', () => {
       delete BUILDING_FOOTPRINTS.__wall;
       delete BUILDING_FOOTPRINTS.__keep;
     }
+  });
+
+  it('preview is red when the bank cannot pay, even on a clear tile', () => {
+    const field = buildField(12, { width: 64, height: 64 });
+    const x = 20;
+    const z = 20;
+    clearClaim(field, 'lab', x, z);
+    const snap = snapFloat('lab', x, z);
+    assert.equal(canPlaceBuildingAt(field, 'lab', snap.xFixed, snap.zFixed), true);
+    const broke = { wood: 200, stone: 200, mineral: 0, food: 200 };
+    const funded = { wood: 200, stone: 200, mineral: 10, food: 200 };
+    assert.equal(canPreviewPlaceBuilding(field, 'lab', snap.xFixed, snap.zFixed, broke), false);
+    assert.equal(canPreviewPlaceBuilding(field, 'lab', snap.xFixed, snap.zFixed, funded), true);
+    const tile = footprintTiles('lab', x, z)[0];
+    field.pass[tile.tz * field.width + tile.tx] = 0;
+    assert.equal(canPreviewPlaceBuilding(field, 'lab', snap.xFixed, snap.zFixed, funded), false);
   });
 });
 

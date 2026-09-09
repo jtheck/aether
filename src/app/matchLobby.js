@@ -79,6 +79,8 @@ export function createMatchLobby({
   let lockstepOn = false;
   /** Bumped on each chapter reset so leftover FRAME/CONFIRM from the old map are dropped. */
   let lockstepEpoch = 0;
+  /** True after a match table was loaded — Leave must restore the sandbox. */
+  let hadMatch = false;
 
   function emit() {
     onChange?.();
@@ -284,9 +286,51 @@ export function createMatchLobby({
   function enterPlaying() {
     if (phase !== 'starting') return;
     phase = 'playing';
+    hadMatch = true;
     stopAnnounce();
     if (hosting) gameLobby?.announce?.(announcePayload(MSG.CLOSED));
     emit();
+  }
+
+  function unreadyGuests() {
+    seats = cloneRoster(seats);
+    for (const seat of seats) {
+      if (seat.kind === 'human' && !sameUserId(seat.userId, hostId)) seat.ready = false;
+    }
+  }
+
+  /** Frozen board stays up; room goes back to ready-up and type-channel browse. */
+  function returnToWaiting() {
+    if (phase !== 'playing') return false;
+    detachSession();
+    clearCountdown();
+    lockstepEpoch = (lockstepEpoch + 1) | 0;
+    phase = 'waiting';
+    unreadyGuests();
+    if (hosting) {
+      startAnnounce();
+      sendData(snapshot());
+    } else {
+      const me = profile();
+      sendType({
+        type: MSG.JOIN,
+        name: me.name,
+        color: me.color,
+        dlc: me.dlc,
+        skins: me.skins,
+        ready: false,
+      });
+      sendData({
+        type: MSG.JOIN,
+        name: me.name,
+        color: me.color,
+        dlc: me.dlc,
+        skins: me.skins,
+        ready: false,
+      });
+    }
+    emit();
+    return true;
   }
 
   function finishCountdown() {
@@ -405,6 +449,7 @@ export function createMatchLobby({
     hostFromHint = null;
     peerUser.clear();
     settings = defaultSettings('onevsone');
+    hadMatch = false;
     emit();
   }
 
@@ -473,6 +518,7 @@ export function createMatchLobby({
   function leaveRoom() {
     if (phase === 'idle') return;
     const wasPlaying = phase === 'playing' || phase === 'starting';
+    const restoreWorld = hadMatch || wasPlaying;
     if (wasPlaying) {
       const me = localId();
       const seat = seatOf(seats, me);
@@ -488,7 +534,7 @@ export function createMatchLobby({
       sendData({ type: MSG.LEAVE });
     }
     resetRoom();
-    if (wasPlaying) onLeaveMatch?.();
+    if (restoreWorld) onLeaveMatch?.();
   }
 
   function setReady(ready) {
@@ -527,7 +573,9 @@ export function createMatchLobby({
     if (phase === 'idle' || !roomId || data.roomId !== roomId) return;
     if (data.type === MSG.CLOSED && !hosting) {
       if (phase === 'countdown' || phase === 'starting' || phase === 'playing') return;
+      const restoreWorld = hadMatch;
       resetRoom();
+      if (restoreWorld) onLeaveMatch?.();
       return;
     }
     if (data.type === MSG.ANNOUNCE && !hosting) {
@@ -694,6 +742,7 @@ export function createMatchLobby({
     requestStart,
     attachSession,
     detachSession,
+    returnToWaiting,
     sendChapter(payload) {
       sendData({ type: MSG.CHAPTER, ...payload });
     },

@@ -185,6 +185,9 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
   const drawersRoot = document.getElementById('menu-lobbies');
   const sidebar = document.getElementById('menu-match');
   const overlay = document.getElementById('match-lobby-overlay');
+  const overlayPanel = overlay?.querySelector?.('.match-lobby-panel');
+  const overlayMin = document.getElementById('match-lobby-min');
+  const matchOverEl = document.getElementById('match-over');
   if (!drawersRoot || !gameLobby || !matchLobby) return { refresh() {} };
   drawersRoot.hidden = false;
 
@@ -229,6 +232,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
   }
 
   let lastSig = '';
+  let overlayParked = false;
 
   function refresh() {
     const live = kothLive();
@@ -236,6 +240,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
     const state = active ? matchLobby.getState() : null;
     const open = [...drawers].map(([m, ui]) => `${m}:${ui.toggle?.getAttribute('aria-expanded')}`).join();
     const lists = MODE_IDS.map((m) => gameLobby.listLobbies(m).map((l) => `${l.roomId}:${l.playerCount}`).join(',')).join('|');
+    const matchOverOn = Boolean(matchOverEl) && !matchOverEl.hidden;
     const sig = [
       live, active, open, lists,
       state?.phase, state?.playerCount, state?.countdownEndsAt,
@@ -243,6 +248,7 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
       Math.ceil((matchLobby.countdownMs?.() ?? 0) / 200),
       state?.settings?.fieldSize, state?.settings?.seed, state?.settings?.chapter,
       JSON.stringify(state?.seats ?? []),
+      overlayParked, matchOverOn,
     ].join('/');
     if (sig === lastSig) return;
     lastSig = sig;
@@ -264,11 +270,17 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
 
     const inPlay = state?.phase === 'playing';
     const stalled = Boolean(matchLobby.lockstepStalled?.());
-    const showOverlay = active && (!inPlay || stalled);
+    const showOverlay = (active && (!inPlay || stalled)) || matchOverOn;
     const overlayOpening = Boolean(overlay?.hidden && showOverlay);
+    if (overlayOpening) overlayParked = false;
     overlay?.classList.toggle('is-lag', Boolean(showOverlay && inPlay && stalled));
+    overlay?.classList.toggle('is-parked', Boolean(showOverlay && overlayParked && !(inPlay && stalled)));
     setHidden(sidebar, !active);
     setHidden(overlay, !showOverlay);
+    setHidden(overlayPanel, !active);
+    if (overlayMin) {
+      overlayMin.setAttribute('aria-label', overlayParked ? 'Expand lobby' : 'Minimize lobby');
+    }
     if (overlayOpening) onCloseMenu?.();
     if (!active || !state) return;
 
@@ -318,7 +330,9 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
       ? 'Match running.'
       : state.phase === 'countdown' || state.phase === 'starting'
         ? formatCountdown(matchLobby.countdownMs())
-        : (state.hosting ? 'Ready up, then start.' : 'Waiting for host.');
+        : matchOverOn
+          ? (state.hosting ? 'Ready up to play again.' : 'Ready up for another round.')
+          : (state.hosting ? 'Ready up, then start.' : 'Waiting for host.');
     setText(panelNote, note);
 
     const hostControls = state.hosting && state.phase === 'waiting';
@@ -377,6 +391,10 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
   panelStart?.addEventListener('click', () => { matchLobby.requestStart(); refresh(); });
   sideLeave?.addEventListener('click', () => { matchLobby.leaveRoom(); refresh(); });
   panelLeave?.addEventListener('click', () => { matchLobby.leaveRoom(); refresh(); });
+  overlayMin?.addEventListener('click', () => {
+    overlayParked = !overlayParked;
+    refresh();
+  });
 
   fieldSelect?.addEventListener('change', () => matchLobby.setSetting('fieldSize', fieldSelect.value));
   chapterSelect?.addEventListener('change', () => matchLobby.setSetting('chapter', chapterSelect.value));
@@ -388,5 +406,11 @@ export function setupLobbyUi({ gameLobby, matchLobby, isKothLive, getUserId, onC
   overlay?.addEventListener('keydown', (e) => e.stopPropagation());
 
   refresh();
-  return { refresh };
+  return {
+    refresh,
+    setOverlayParked(on) {
+      overlayParked = Boolean(on);
+      refresh();
+    },
+  };
 }

@@ -55,6 +55,7 @@ export { formatMatchTime, matchSecondsFromTick };
  *   checkpoint?: object | null,
  *   checkpointTick?: number,
  *   baseLedger?: import('../sim/commandFrame.js').CommandFrame[],
+ *   stayPaused?: boolean,
  * }} [options]
  */
 export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
@@ -126,6 +127,16 @@ export async function replayCatchUp(session, matchConfig, ledgerFrames, targetTi
 
 /**
  * @param {import('./simSession.js').SimSession} session — must already be reset/started for this match
+ * @param {object} matchConfig
+ * @param {import('../sim/commandFrame.js').CommandFrame[]} ledgerFrames
+ * @param {number} targetTick
+ * @param {number} [expectedChecksum]
+ * @param {{
+ *   ticksPerFrame?: number,
+ *   onProgress?: (p: { tick: number, targetTick: number }) => void,
+ *   fromTick?: number,
+ *   stayPaused?: boolean,
+ * }} [options]
  */
 export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targetTick, expectedChecksum, options = {}) {
   const ticksPerFrame = options.ticksPerFrame ?? catchupTicksPerFrameOverride() ?? CATCHUP_TICKS_PER_FRAME;
@@ -155,9 +166,9 @@ export async function replayCatchUpInto(session, matchConfig, ledgerFrames, targ
         `Catch-up checksum mismatch: got ${session._lastChecksum?.toString(16)}, expected ${expectedChecksum.toString(16)}`,
       );
     }
-    // Resume lockstep only after a clean replay. Failures leave pauseLockstep
-    // set so pump() cannot free-run a half-caught-up world during retry.
-    session.pauseLockstep = false;
+    // Resume lockstep only after a clean live catch-up. VOD / post-match seek
+    // keeps the table paused so pump() cannot free-run the tape.
+    if (!options.stayPaused) session.pauseLockstep = false;
     session.catchupProgress = null;
     return session._lastChecksum;
   } finally {
@@ -204,7 +215,7 @@ function waitAnimationFrame() {
 }
 
 /** @param {import('../sim/commandFrame.js').CommandFrame[]} frames */
-function groupFramesByTick(frames) {
+export function groupFramesByTick(frames) {
   /** @type {Map<number, Map<number, import('../sim/commandFrame.js').SimCommand[]>>} */
   const ledger = new Map();
   for (const frame of frames) {

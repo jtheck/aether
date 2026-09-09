@@ -12,6 +12,7 @@ import {
   AGORA_OCCUPATION_RADIUS,
   AGORA_PHASE_LOCK,
   AGORA_PHASE_TUG,
+  AGORA_TUG_TICKS,
 } from './agora.js';
 import * as fx from './fixed.js';
 
@@ -89,7 +90,7 @@ describe('agora capture', () => {
     for (let i = 0; i < 3; i++) spawnNear(w, 1, ax, az);
 
     w.agoras[0].phase = AGORA_PHASE_TUG;
-    w.agoras[0].tug = AGORA_CAPTURE_TICKS - 1;
+    w.agoras[0].tug = AGORA_TUG_TICKS - 1;
     agoraCaptureSystem(w);
     assert.equal(w.agoras[0].captured, 1);
     assert.equal(w.agoras[0].owner, 1);
@@ -108,7 +109,7 @@ describe('agora capture', () => {
     for (let i = 0; i < 3; i++) spawnNear(w, 1, ax, az);
 
     w.agoras[0].phase = AGORA_PHASE_TUG;
-    w.agoras[0].tug = AGORA_CAPTURE_TICKS - 1;
+    w.agoras[0].tug = AGORA_TUG_TICKS - 1;
     agoraCaptureSystem(w);
     assert.equal(w.agoras[0].owner, 1);
     assert.equal(w.agoras[0].phase, AGORA_PHASE_LOCK);
@@ -121,7 +122,7 @@ describe('agora capture', () => {
     w.kothMatchOver = 0;
     w.agoras = createAgoras([{ owner: 0, x: 0, z: 0 }]);
     w.agoras[0].phase = AGORA_PHASE_TUG;
-    w.agoras[0].tug = AGORA_CAPTURE_TICKS - 1;
+    w.agoras[0].tug = AGORA_TUG_TICKS - 1;
     spawnNear(w, 0, 0, 0);
     spawnNear(w, 0, 0, 0);
 
@@ -179,6 +180,10 @@ describe('agora capture', () => {
     assert.ok(AGORA_OCCUPATION_RADIUS > 0);
     const r = fx.toFloat(AGORA_OCCUPATION_RADIUS);
     assert.ok(r >= 19 && r <= 21);
+  });
+
+  it('occupies faster than the invade', () => {
+    assert.ok(AGORA_TUG_TICKS < AGORA_CAPTURE_TICKS);
   });
 
   it('step advances capture when wired', () => {

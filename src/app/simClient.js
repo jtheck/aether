@@ -192,6 +192,11 @@ export class SimClient {
           return;
         }
         wait.resolve(msg.checksum, extra);
+        try {
+          this._stepDoneHandler?.(msg.tick, msg.checksum, extra);
+        } catch (err) {
+          console.error('[sim] step handler', err);
+        }
         return;
       }
       this._stepDoneHandler?.(msg.tick, msg.checksum, extra);

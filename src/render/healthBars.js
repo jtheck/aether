@@ -19,7 +19,7 @@ import {
 import { CAMERA_CLOSE_SPAN, cameraZoomNormalized } from './cameraController.js';
 import { HEALTH_BAR_CAPACITY } from './overlayLod.js';
 import { ownerTint } from './ownerTints.js';
-import { AGORA_CAPTURE_TICKS, AGORA_PHASE_TUG } from '../sim/agora.js';
+import { AGORA_CAPTURE_TICKS, AGORA_PHASE_TUG, AGORA_TUG_TICKS } from '../sim/agora.js';
 
 export const UNIT_CHIP_COUNT = 7;
 export const BUILDING_CHIP_COUNT = 9;
@@ -60,6 +60,8 @@ export const CHIP_TEAM_FILL_ALPHA = 1;
 export const NORMAL_DOT_DIAMETER = 0.4;
 /** Main-dot size in CSS pixels — world size scales with distance to hold this. */
 export const TARGET_DOT_PX = 8;
+/** Agora capture chips stay a bit larger than unit HP pips. */
+export const TARGET_AGORA_DOT_PX = 14;
 /** Half size past the look-at near radius. */
 export const TARGET_DOT_PX_FAR = TARGET_DOT_PX * 0.5;
 const DOT_DIAMETER_MAIN_MUL = 0.88;
@@ -74,9 +76,15 @@ export const DOT_DIAMETER_LEAD_MUL = 0.80;
 /** Center gap — visual tiles are smaller than the billboard, so this can sit under 0.72. */
 const DOT_SPACING_MUL = 0.54;
 /** Agora circles — large on even slots, smaller on odd, with air between. */
-export const DOT_DIAMETER_AGORA_LARGE_MUL = 1.42;
-export const DOT_DIAMETER_AGORA_SMALL_MUL = 0.86;
-export const DOT_SPACING_AGORA_MUL = 1.45;
+export const DOT_DIAMETER_AGORA_LARGE_MUL = 2.15;
+export const DOT_DIAMETER_AGORA_SMALL_MUL = 1.22;
+export const DOT_SPACING_AGORA_MUL = 1.72;
+/** Extra scale on the chip currently filling. */
+export const AGORA_LEAD_PULSE_MUL = 0.58;
+/** Smaller pulse on already-filled capturer chips. */
+export const AGORA_CAPTURER_PULSE_MUL = 0.2;
+/** Mix capturer chip RGB toward white so occupy reads hotter than the owner row. */
+export const AGORA_CAPTURER_LIFT = 0.28;
 const HOLY_RING_VS_NORMAL = 1.04;
 const ARMOR_RING_VS_NORMAL = 1.26;
 /** Lift above pick-sphere chest so the row sits over the head. */
@@ -388,6 +396,68 @@ export function agoraChipIsSmall(index) {
   return (index & 1) === 1;
 }
 
+/** Chip that just filled — invade from the right, tug large chips from the left. */
+export function agoraChipLeadIndex(state = {}) {
+  if ((state.capturer | 0) < 0) return -1;
+  if ((state.phase | 0) === AGORA_PHASE_TUG) {
+    const filled = agoraChipFilled(state.tug, AGORA_LARGE_CHIP_COUNT, AGORA_TUG_TICKS);
+    if (filled <= 0) return -1;
+    return (filled - 1) * 2;
+  }
+  const count = state.count ?? AGORA_CHIP_COUNT;
+  const filled = agoraChipFilled(state.progress, count, AGORA_CAPTURE_TICKS);
+  if (filled <= 0) return -1;
+  return count - filled;
+}
+
+export function agoraChipPulseMul(index, state = {}, nowMs = 0) {
+  const capturer = state.capturer;
+  if (capturer == null || (capturer | 0) < 0) return 1;
+  if (agoraChipTintOwner(index, state) !== (capturer | 0)) return 1;
+  const wave = 0.5 + 0.5 * Math.sin((nowMs | 0) * 0.016);
+  const lead = index === agoraChipLeadIndex(state);
+  return 1 + (lead ? AGORA_LEAD_PULSE_MUL : AGORA_CAPTURER_PULSE_MUL) * wave;
+}
+
+export function agoraChipRgb(index, state = {}) {
+  const tint = agoraChipTintOwner(index, state);
+  if (tint === AGORA_TINT_NEUTRAL) return AGORA_NEUTRAL_RGB;
+  const rgb = ownerTint(tint);
+  const capturer = state.capturer;
+  if (capturer == null || (capturer | 0) < 0 || tint !== (capturer | 0)) return rgb;
+  const t = AGORA_CAPTURER_LIFT;
+  return [
+    rgb[0] + (1 - rgb[0]) * t,
+    rgb[1] + (1 - rgb[1]) * t,
+    rgb[2] + (1 - rgb[2]) * t,
+  ];
+}
+
+/** 0..1 occupy mix for flag / agora TeamColor (idle stays the owner swatch). */
+export function agoraCaptureMix(state = {}) {
+  const capturer = state.capturer;
+  if (capturer == null || (capturer | 0) < 0) return 0;
+  if ((state.phase | 0) === AGORA_PHASE_TUG) {
+    return Math.min(1, Math.max(0, (state.tug | 0) / AGORA_TUG_TICKS));
+  }
+  if ((state.progress | 0) <= 0) return 0;
+  return Math.min(1, Math.max(0, (state.progress | 0) / AGORA_CAPTURE_TICKS));
+}
+
+/** Flag / agora body RGB — pulls toward the capturer as the meter fills. */
+export function agoraPropTint(state = {}) {
+  const ownerRgb = ownerTint(state.owner | 0);
+  const mix = agoraCaptureMix(state);
+  if (mix <= 0) return ownerRgb;
+  const capRgb = ownerTint(state.capturer | 0);
+  const t = 0.2 + 0.72 * mix;
+  return [
+    ownerRgb[0] + (capRgb[0] - ownerRgb[0]) * t,
+    ownerRgb[1] + (capRgb[1] - ownerRgb[1]) * t,
+    ownerRgb[2] + (capRgb[2] - ownerRgb[2]) * t,
+  ];
+}
+
 /**
  * Lock: capturer invades from the right.
  * Tug: small chips stay founder; large chips fill from the left (or stay neutral).
@@ -401,12 +471,12 @@ export function agoraChipTintOwner(index, state = {}) {
   const capturer = state.capturer | 0;
   if ((state.phase | 0) === AGORA_PHASE_TUG) {
     if (agoraChipIsSmall(index)) return founder;
-    const filled = agoraChipFilled(state.tug, AGORA_LARGE_CHIP_COUNT);
+    const filled = agoraChipFilled(state.tug, AGORA_LARGE_CHIP_COUNT, AGORA_TUG_TICKS);
     const largeIndex = index >> 1;
     if (capturer >= 0 && largeIndex < filled) return capturer;
     return AGORA_TINT_NEUTRAL;
   }
-  const filled = agoraChipFilled(state.progress, count);
+  const filled = agoraChipFilled(state.progress, count, AGORA_CAPTURE_TICKS);
   if (capturer >= 0 && index >= count - filled) return capturer;
   return owner;
 }
@@ -489,6 +559,7 @@ export function createHealthBars(engine, scene, opts = {}) {
   let fov = 0.8;
   let horizonScale = 1;
   let sizeScale = 1;
+  let chipNow = 0;
 
   function hide(slot) {
     if (!slot.active) return;
@@ -555,6 +626,7 @@ export function createHealthBars(engine, scene, opts = {}) {
   return {
     begin() {
       used = 0;
+      chipNow = typeof performance !== 'undefined' ? performance.now() : 0;
       viewH = viewportHeight();
       const cam = scene?.camera;
       const camFov = cam?.fov;
@@ -584,7 +656,9 @@ export function createHealthBars(engine, scene, opts = {}) {
       const holy = !!flags.holy;
       const agora = !!flags.agora;
       const count = agora ? AGORA_CHIP_COUNT : flags.building ? BUILDING_CHIP_COUNT : UNIT_CHIP_COUNT;
-      const targetPx = flags.far ? TARGET_DOT_PX_FAR : TARGET_DOT_PX;
+      const targetPx = agora
+        ? TARGET_AGORA_DOT_PX
+        : flags.far ? TARGET_DOT_PX_FAR : TARGET_DOT_PX;
 
       const [bx, by, bz] = placeChipAnchor(x, y, z);
       const eye = cameraEye();
@@ -690,10 +764,9 @@ export function createHealthBars(engine, scene, opts = {}) {
             hideSprite(spr);
             continue;
           }
-          const d = normalDot * agoraChipSizeMul(i);
+          const d = normalDot * agoraChipSizeMul(i) * agoraChipPulseMul(i, flags, chipNow);
           const along = (i * spacing) - (totalWidth * 0.5);
-          const tint = agoraChipTintOwner(i, flags);
-          const rgb = tint === AGORA_TINT_NEUTRAL ? AGORA_NEUTRAL_RGB : ownerTint(tint);
+          const rgb = agoraChipRgb(i, flags);
           placeAlong(spr, along, d, rgb, CHIP_TEAM_FILL_ALPHA, FRAME_LEAD_ROUND, 0);
         }
       } else {

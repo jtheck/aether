@@ -319,4 +319,114 @@ describe('match lobby', () => {
     assert.equal(frames[0].tick, 12);
     room.leaveRoom();
   });
+
+  it('reopens ready-up and browse announce when the match ends', async () => {
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      onStartMatch: () => {},
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    assert.equal(room.requestStart(), true);
+    dataFn({ v: 1, type: MSG.START, countdownEndsAt: Date.now() - 1, roomId, mode });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(room.getState().phase, 'playing');
+    const before = p2p.broadcasts.length;
+    assert.equal(room.returnToWaiting(), true);
+    const state = room.getState();
+    assert.equal(state.phase, 'waiting');
+    assert.equal(state.seats.find((s) => s.userId === 'guest')?.ready, false);
+    assert.equal(state.seats.find((s) => s.userId === 'host')?.ready, true);
+    assert.ok(p2p.broadcasts.slice(before).some((row) => row.data.type === MSG.ANNOUNCE));
+    assert.equal(room.returnToWaiting(), false);
+    room.leaveRoom();
+  });
+
+  it('restores the sandbox if you leave the rematch lobby', async () => {
+    const p2p = fakeP2p('host');
+    let dataFn = null;
+    let left = 0;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      onStartMatch: () => {},
+      onLeaveMatch: () => { left += 1; },
+    });
+    room.createRoom('onevsone');
+    const { roomId, mode } = room.getState();
+    dataFn({ v: 1, type: MSG.JOIN, userId: 'guest', name: 'Guest', color: '#0f0', roomId, mode });
+    dataFn({ v: 1, type: MSG.READY, userId: 'guest', ready: true, roomId, mode });
+    room.requestStart();
+    dataFn({ v: 1, type: MSG.START, countdownEndsAt: Date.now() - 1, roomId, mode });
+    await new Promise((r) => setTimeout(r, 0));
+    room.returnToWaiting();
+    assert.equal(left, 0);
+    room.leaveRoom();
+    assert.equal(left, 1);
+  });
+
+  it('guest pings the host after returning to the rematch lobby', async () => {
+    const p2p = fakeP2p('guest-id');
+    let dataFn = null;
+    const guest = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'guest-id',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      onStartMatch: () => {},
+    });
+    guest.joinRoom('onevsone', 'lobby-1', 'host-id');
+    dataFn({
+      v: 1,
+      type: MSG.START,
+      countdownEndsAt: Date.now() - 1,
+      roomId: 'lobby-1',
+      mode: 'onevsone',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(guest.getState().phase, 'playing');
+    const before = p2p.sent.length;
+    assert.equal(guest.returnToWaiting(), true);
+    assert.equal(guest.getState().phase, 'waiting');
+    const join = p2p.sent.slice(before).find((row) => row.msg.type === MSG.JOIN);
+    assert.equal(join?.msg.ready, false);
+    guest.leaveRoom();
+  });
+
+  it('guest leaves the frozen board if the host closes the rematch lobby', async () => {
+    let onBroadcast = null;
+    let dataFn = null;
+    let left = 0;
+    const guest = createMatchLobby({
+      getP2p: () => fakeP2p('guest-id'),
+      getUserId: () => 'guest-id',
+      gameLobby: createGameLobby({ getP2p: () => fakeP2p('guest-id') }),
+      subscribeBroadcast: (fn) => { onBroadcast = fn; return () => {}; },
+      subscribeDataMessage: (fn) => { dataFn = fn; return () => {}; },
+      onStartMatch: () => {},
+      onLeaveMatch: () => { left += 1; },
+    });
+    guest.joinRoom('onevsone', 'lobby-1', 'host-id');
+    dataFn({
+      v: 1,
+      type: MSG.START,
+      countdownEndsAt: Date.now() - 1,
+      roomId: 'lobby-1',
+      mode: 'onevsone',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    guest.returnToWaiting();
+    onBroadcast({ v: 1, type: MSG.CLOSED, mode: 'onevsone', roomId: 'lobby-1' });
+    assert.equal(guest.isActive(), false);
+    assert.equal(left, 1);
+  });
 });

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CATCHUP_MAX_REPLAY_TICKS,
+  replayCatchUpInto,
   shouldExportFreshCatchupCheckpoint,
 } from './catchup.js';
 
@@ -40,3 +41,43 @@ test('multi-army exports when the cached checkpoint is too far behind', () => {
     true,
   );
 });
+
+test('stayPaused leaves lockstep paused after replayCatchUpInto', async () => {
+  const session = {
+    pauseLockstep: true,
+    replayingCatchUp: false,
+    setHumanPlayers() {},
+    setRole() {},
+    catchupProgress: null,
+    _lastChecksum: 1,
+    confirmedTick: 5,
+    client: { commitTickAsync: async () => ({ checksum: 1, extra: {} }) },
+    _captureSnapshot() {},
+  };
+  await replayCatchUpInto(session, { humanPlayers: [0] }, [], 5, null, {
+    stayPaused: true,
+    fromTick: 5,
+    ticksPerFrame: 0,
+  });
+  assert.equal(session.pauseLockstep, true);
+});
+
+test('live catch-up unpauses lockstep after replayCatchUpInto', async () => {
+  const session = {
+    pauseLockstep: true,
+    replayingCatchUp: false,
+    setHumanPlayers() {},
+    setRole() {},
+    catchupProgress: null,
+    _lastChecksum: 1,
+    confirmedTick: 5,
+    client: { commitTickAsync: async () => ({ checksum: 1, extra: {} }) },
+    _captureSnapshot() {},
+  };
+  await replayCatchUpInto(session, { humanPlayers: [0] }, [], 5, null, {
+    fromTick: 5,
+    ticksPerFrame: 0,
+  });
+  assert.equal(session.pauseLockstep, false);
+});
+

@@ -48,8 +48,8 @@ export function radialClickKind(h) {
 }
 
 /**
- * While ghost-placing, an agora click (hub hole or mesh) exits place mode.
- * Option picks and ring chrome stay as they are; everything else confirms.
+ * While ghost-placing, an agora mesh click exits place mode. Hub / chrome
+ * only apply if a radial is still claiming hits (rally). Everything else confirms.
  * @param {'pick' | 'hub' | 'chrome' | 'world'} radialKind
  * @param {{ kind?: string } | null | undefined} buildingHit
  * @returns {'pick' | 'chrome' | 'exit' | 'confirm'}

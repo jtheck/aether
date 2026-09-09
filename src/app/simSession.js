@@ -8,6 +8,7 @@ import { applyTreeUpdatesToField } from '../sim/trees.js';
 import { applyRockUpdatesToField } from '../sim/scenery.js';
 import { excludeHumanAiPlayers } from '../sim/ai.js';
 import { SimClient } from './simClient.js';
+import { cloneReplayFrame } from './replay.js';
 
 const TICK_HZ = 20;
 const TICK_MS = 1000 / TICK_HZ;
@@ -93,6 +94,12 @@ export class SimSession {
     this.fullLedgerFrames = [];
     /** @type {import('../sim/commandFrame.js').CommandFrame[]} frames proven by committed worker ticks */
     this.committedLedgerFrames = [];
+    /** Unpruned command tape for post-match save. Catch-up still prunes the live ledgers. */
+    this.replayFrames = [];
+    this.replayFrameIds = new Set();
+    this.replayConfig = null;
+    this.replayGarden = null;
+    this.watchingReplay = false;
     /** @type {Map<number, { x: Float32Array, z: Float32Array }>} */
     this.snapshots = new Map();
     this.snapshotRing = new Array(Math.max(4, this.inputDelayTicks + 3));
@@ -308,7 +315,7 @@ export class SimSession {
   }
 
   _drainPendingCommits() {
-    if (this.pauseLockstep || this.resetting || this.replayingCatchUp) return;
+    if (this.pauseLockstep || this.resetting || this.replayingCatchUp || this.watchingReplay) return;
     while (this.simAcc >= TICK_MS && !this.waitingForWorker) {
       this.simAcc -= TICK_MS;
       if (!this._tryCommitNextTick()) break;
@@ -445,7 +452,7 @@ export class SimSession {
 
   /** How long lockstep has been blocked waiting for a peer, in ms. */
   lockstepBlockedMs(now = performance.now()) {
-    if (this.pauseLockstep || this.resetting || this.replayingCatchUp) {
+    if (this.pauseLockstep || this.resetting || this.replayingCatchUp || this.watchingReplay) {
       this._lockstepBlockedAt = 0;
       return 0;
     }
@@ -480,9 +487,16 @@ export class SimSession {
     return frame;
   }
 
-  /** Full ledger for catch-up export (not pruned by retention). */
+  /** Full ledger for catch-up export (not the save tape — this one is pruned). */
   exportFullLedger() {
     return this.committedLedgerFrames
+      .map((frame) => ({ ...frame, commands: frame.commands?.map((cmd) => ({ ...cmd })) ?? [] }))
+      .sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
+  }
+
+  /** Unpruned command log for a downloadable replay. */
+  exportReplayLedger() {
+    return this.replayFrames
       .map((frame) => ({ ...frame, commands: frame.commands?.map((cmd) => ({ ...cmd })) ?? [] }))
       .sort((a, b) => a.tick - b.tick || a.playerId - b.playerId);
   }
@@ -527,7 +541,7 @@ export class SimSession {
     return msg;
   }
 
-  /** Drop committed ledger frames at/before checkpointTick (keep frames after). */
+  /** Drop catch-up ledger frames at/before checkpointTick. Replay tape is kept. */
   pruneCommittedBefore(checkpointTick) {
     const keepFrom = checkpointTick | 0;
     this.committedLedgerFrames = this.committedLedgerFrames.filter((f) => (f.tick | 0) > keepFrom);
@@ -549,6 +563,8 @@ export class SimSession {
   replaceFullLedger(frames) {
     this.fullLedgerFrames = [];
     this.committedLedgerFrames = [];
+    this.replayFrames = [];
+    this.replayFrameIds = new Set();
     this._seenFrameIds.clear();
     for (const frame of frames ?? []) {
       this._recordFullFrame(frame);
@@ -571,6 +587,9 @@ export class SimSession {
     this.ledger.clear();
     this.fullLedgerFrames = [];
     this.committedLedgerFrames = [];
+    this.replayFrames = [];
+    this.replayFrameIds = new Set();
+    this.replayConfig = null;
     this.snapshots.clear();
     this.projectileSnapshots.clear();
     this.peerConfirmedTick.clear();
@@ -578,6 +597,7 @@ export class SimSession {
     this.pendingLeaves.clear();
     this._lockstepBlockedAt = 0;
     this._seenFrameIds.clear();
+    this.pauseLockstep = false;
     this.confirmedTick = 0;
     this.simAcc = 0;
     this.waitingForWorker = false;
@@ -617,6 +637,9 @@ export class SimSession {
     pruneLedger(this.ledger, other.confirmedTick, 0);
     this.fullLedgerFrames = other.fullLedgerFrames;
     this.committedLedgerFrames = other.committedLedgerFrames;
+    this.replayFrames = other.replayFrames ?? this.replayFrames;
+    this.replayFrameIds = other.replayFrameIds ?? this.replayFrameIds;
+    this.replayConfig = other.replayConfig ?? this.replayConfig;
     this.snapshots = other.snapshots;
     this.snapshotRing = other.snapshotRing;
     this.projectileSnapshots = other.projectileSnapshots;
@@ -670,6 +693,17 @@ export class SimSession {
       ...frame,
       commands: frame.commands.map((cmd) => ({ ...cmd })),
     });
+    this._recordReplayFrame(frame);
+  }
+
+  _recordReplayFrame(frame) {
+    if (!frame || !frame.commands?.length) return;
+    const id = frame.commandId ?? `${frame.tick}:${frame.playerId}:${JSON.stringify(frame.commands)}`;
+    if (this.replayFrameIds.has(id)) return;
+    const cloned = cloneReplayFrame(frame);
+    if (!cloned) return;
+    this.replayFrameIds.add(id);
+    this.replayFrames.push(cloned);
   }
 
   _recordCommittedTick(tick, framesUsed) {

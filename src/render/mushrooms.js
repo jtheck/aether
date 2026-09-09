@@ -141,18 +141,27 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
    */
   const clusters = new Map();
   /**
-   * @type {Map<number, {
+   * Attack sprouts follow a host. One hit used to reuse a single head-slot;
+   * now each hit plants a new shroom at a random body offset.
+   * @type {Array<{
+   *   entity: number,
+   *   ox: number, oy: number, oz: number,
    *   x: number, y: number, z: number,
    *   growT: number, shrinkT: number, age: number, killed: boolean,
    *   slot: number, yaw: number, scale: number,
    * }>}
    */
-  const heads = new Map();
+  const heads = [];
+  /** @type {Map<number, { x: number, y: number, z: number, yaw: number, radius: number, height: number }>} */
+  const hostPoses = new Map();
   const HEAD_GROW_MS = 380;
   const HEAD_LIVE_HOLD_MS = 720;
   const HEAD_LIVE_FADE_MS = 560;
   const HEAD_KILL_HOLD_MS = 1650;
   const HEAD_KILL_FADE_MS = 900;
+  const HEAD_MAX_PER_HOST = 8;
+  const DEFAULT_BODY_RADIUS = 1.25;
+  const DEFAULT_BODY_HEIGHT = 2.05;
   let dirty = true;
   let simTick = 0;
   let previousDraw = 0;
@@ -222,44 +231,144 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
     return freeSlots.length ? freeSlots.pop() : -1;
   }
 
-  function spawnHead(entity, x, z, killed) {
+  function poseWorld(pose, ox, oy, oz) {
+    const c = Math.cos(pose.yaw);
+    const s = Math.sin(pose.yaw);
+    return {
+      x: pose.x + c * ox + s * oz,
+      y: pose.y + oy,
+      z: pose.z - s * ox + c * oz,
+    };
+  }
+
+  function applyHostPose(h) {
+    const pose = hostPoses.get(h.entity);
+    if (!pose) return;
+    const w = poseWorld(pose, h.ox, h.oy, h.oz);
+    h.x = w.x;
+    h.y = w.y;
+    h.z = w.z;
+  }
+
+  function randomBodyOffset(radius, height, avoid) {
+    const r = Math.max(0.45, radius);
+    const h = Math.max(0.8, height);
+    let best = null;
+    let bestSep = -1;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const ang = Math.random() * Math.PI * 2;
+      // Area-uniform in the footprint, kept off the exact spine.
+      const rad = r * Math.sqrt(0.15 + Math.random() * 0.85);
+      const ox = Math.cos(ang) * rad;
+      const oz = Math.sin(ang) * rad;
+      const oy = h * (0.08 + Math.random() * 0.86);
+      let sep = 99;
+      for (let i = 0; i < avoid.length; i++) {
+        const a = avoid[i];
+        const dx = ox - a.ox;
+        const dy = oy - a.oy;
+        const dz = oz - a.oz;
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < sep) sep = d;
+      }
+      if (sep > bestSep) {
+        bestSep = sep;
+        best = { ox, oy, oz };
+        if (sep > r * 0.45) break;
+      }
+    }
+    return best ?? { ox: r * 0.4, oy: h * 0.55, oz: 0 };
+  }
+
+  function hostHeads(entity) {
+    const out = [];
+    for (let i = 0; i < heads.length; i++) {
+      if (heads[i].entity === entity) out.push(heads[i]);
+    }
+    return out;
+  }
+
+  function hostStillHas(entity) {
+    for (let i = 0; i < heads.length; i++) {
+      if (heads[i].entity === entity) return true;
+    }
+    return false;
+  }
+
+  function expireOldestHostHead(entity) {
+    let oldest = -1;
+    let oldestAge = -1;
+    for (let i = 0; i < heads.length; i++) {
+      const h = heads[i];
+      if (h.entity !== entity) continue;
+      if (h.age > oldestAge) {
+        oldestAge = h.age;
+        oldest = i;
+      }
+    }
+    if (oldest < 0) return;
+    releaseHead(heads[oldest]);
+    heads.splice(oldest, 1);
+  }
+
+  function spawnHead(entity, x, z, killed, body) {
     const id = entity | 0;
-    const existing = heads.get(id);
-    if (existing) {
-      existing.growT = Math.min(existing.growT, 0.2);
-      existing.shrinkT = 0;
-      existing.age = 0;
-      existing.killed = existing.killed || !!killed;
-      existing.x = x;
-      existing.z = z;
-      dirty = true;
-      return true;
+    let existing = hostHeads(id);
+    if (existing.length >= HEAD_MAX_PER_HOST) {
+      expireOldestHostHead(id);
+      existing = hostHeads(id);
     }
     const slot = allocSlot();
     if (slot < 0) return false;
-    const mixed = (id * 2654435761) >>> 0;
-    heads.set(id, {
-      x,
-      y: groundYAt(x, z) + 2.15,
-      z,
+    let pose = hostPoses.get(id);
+    if (!pose) {
+      pose = {
+        x,
+        y: body?.y ?? groundYAt(x, z),
+        z,
+        yaw: body?.yaw ?? 0,
+        radius: body?.radius ?? DEFAULT_BODY_RADIUS,
+        height: body?.height ?? DEFAULT_BODY_HEIGHT,
+      };
+      hostPoses.set(id, pose);
+    }
+    const off = randomBodyOffset(pose.radius, pose.height, existing);
+    const mixed = (
+      Math.imul(id + 1, 2654435761) ^
+      Math.imul(heads.length + 1, 1597334677) ^
+      (Math.random() * 0xffffffff)
+    ) >>> 0;
+    const world = poseWorld(pose, off.ox, off.oy, off.oz);
+    const h = {
+      entity: id,
+      ox: off.ox,
+      oy: off.oy,
+      oz: off.oz,
+      x: world.x,
+      y: world.y,
+      z: world.z,
       growT: 0,
       shrinkT: 0,
       age: 0,
       killed: !!killed,
       slot,
       yaw: ((mixed % 628) / 100),
-      scale: killed ? 1.7 : 1.35,
-    });
+      scale: killed ? 1.55 + Math.random() * 0.35 : 0.72 + Math.random() * 0.7,
+    };
+    heads.push(h);
     dirty = true;
-    return true;
+    return { x: h.x, y: h.y, z: h.z };
   }
 
-  function noteHeadPose(entity, x, y, z) {
-    const h = heads.get(entity | 0);
-    if (!h) return;
-    h.x = x;
-    h.y = y;
-    h.z = z;
+  function noteHeadPose(entity, x, y, z, yaw = 0, radius = DEFAULT_BODY_RADIUS, height = DEFAULT_BODY_HEIGHT) {
+    const pose = hostPoses.get(entity | 0);
+    if (!pose) return;
+    pose.x = x;
+    pose.y = y;
+    pose.z = z;
+    pose.yaw = yaw || 0;
+    if (radius > 0.1) pose.radius = radius;
+    if (height > 0.1) pose.height = height;
     dirty = true;
   }
 
@@ -280,7 +389,8 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
       const size = (0.2 + 0.8 * growEase) * (1 - shrinkEase);
       if (size > 0.001) needed += c.instances.length;
     }
-    for (const h of heads.values()) {
+    for (let i = 0; i < heads.length; i++) {
+      const h = heads[i];
       const growEase = 1 - (1 - Math.min(1, h.growT)) ** 3;
       const shrinkEase = 1 - (1 - Math.min(1, h.shrinkT)) ** 3;
       if ((0.15 + 0.85 * growEase) * (1 - shrinkEase) > 0.001) needed += 1;
@@ -311,7 +421,9 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
         drawCount++;
       }
     }
-    for (const h of heads.values()) {
+    for (let i = 0; i < heads.length; i++) {
+      const h = heads[i];
+      applyHostPose(h);
       const growEase = 1 - (1 - Math.min(1, h.growT)) ** 3;
       const shrinkEase = 1 - (1 - Math.min(1, h.shrinkT)) ** 3;
       const size = (0.15 + 0.85 * growEase) * (1 - shrinkEase) * h.scale;
@@ -351,7 +463,8 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
         }
       }
     }
-    for (const [id, h] of heads) {
+    for (let i = heads.length - 1; i >= 0; i--) {
+      const h = heads[i];
       h.age += dt;
       if (h.growT < 1) {
         h.growT = Math.min(1, h.growT + dt / HEAD_GROW_MS);
@@ -365,8 +478,10 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
           animating = true;
         }
         if (h.shrinkT >= 1) {
+          const ent = h.entity;
           releaseHead(h);
-          heads.delete(id);
+          heads.splice(i, 1);
+          if (!hostStillHas(ent)) hostPoses.delete(ent);
           dirty = true;
         }
       }
@@ -386,8 +501,9 @@ export async function createMushroomPreviews(engine, scene, groundYAt) {
   function clear() {
     for (const c of clusters.values()) releaseCluster(c);
     clusters.clear();
-    for (const h of heads.values()) releaseHead(h);
-    heads.clear();
+    for (let i = 0; i < heads.length; i++) releaseHead(heads[i]);
+    heads.length = 0;
+    hostPoses.clear();
     for (let i = 0; i < previousDraw; i++) {
       for (let b = 0; b < batches.length; b++) hideMatrix(batches[b].matrices, i);
     }

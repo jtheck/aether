@@ -188,10 +188,11 @@ function makeGhostMaterial() {
 }
 
 /**
+ * Shared by the world ghost and the agora hub placeholder while placing.
  * @param {object | null | undefined} mat
  * @param {boolean} valid
  */
-function applyGhostValidityTint(mat, valid) {
+export function applyGhostValidityTint(mat, valid) {
   if (!mat) return;
   if (valid) {
     mat.alpha = GHOST_ALPHA;

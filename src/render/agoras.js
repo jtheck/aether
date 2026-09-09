@@ -10,7 +10,7 @@ import {
   setThinInstanceColors,
 } from '../vendor/lite/liteVendor.js';
 import { loadBakedUnitMeshParts } from './unitModels.js';
-import { meshRoofY, roofChipLift, DEFAULT_AGORA_ROOF } from './healthBars.js';
+import { meshRoofY, roofChipLift, DEFAULT_AGORA_ROOF, agoraPropTint } from './healthBars.js';
 import { USE_GPU_PICK } from './pickMode.js';
 import { ownerTint } from './ownerTints.js';
 import { isTeamColorMaterial, prepareTeamColorMaterial } from './teamColor.js';
@@ -115,14 +115,13 @@ function writeMatrix(matrices, slot, x, y, z, yaw, scale) {
   matrices[o + 15] = 1;
 }
 
-function writeAgoraBodyColor(layer, slot, owner, boost = 1) {
+function writeAgoraBodyColor(layer, slot, rgb, boost = 1) {
   if (!layer.colors) return;
   const o = slot * 4;
   if (layer.isTeamColor) {
-    const tint = ownerTint(owner);
-    layer.colors[o] = tint[0] * boost;
-    layer.colors[o + 1] = tint[1] * boost;
-    layer.colors[o + 2] = tint[2] * boost;
+    layer.colors[o] = Math.min(1, rgb[0] * boost);
+    layer.colors[o + 1] = Math.min(1, rgb[1] * boost);
+    layer.colors[o + 2] = Math.min(1, rgb[2] * boost);
   } else {
     layer.colors[o] = boost;
     layer.colors[o + 1] = boost;
@@ -131,13 +130,16 @@ function writeAgoraBodyColor(layer, slot, owner, boost = 1) {
   layer.colors[o + 3] = 1;
 }
 
-function writeOwnerColor(colors, slot, owner, alpha = 1) {
-  const tint = ownerTint(owner);
+function writeTint(colors, slot, rgb, alpha = 1) {
   const o = slot * 4;
-  colors[o] = tint[0];
-  colors[o + 1] = tint[1];
-  colors[o + 2] = tint[2];
+  colors[o] = rgb[0];
+  colors[o + 1] = rgb[1];
+  colors[o + 2] = rgb[2];
   colors[o + 3] = alpha;
+}
+
+function writeOwnerColor(colors, slot, owner, alpha = 1) {
+  writeTint(colors, slot, ownerTint(owner), alpha);
 }
 
 function flagScaleForDist(dist) {
@@ -318,8 +320,10 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       const scale = scaleFor ? scaleFor(dist) : flagScaleForDist(dist);
       for (const layer of batchLayers) {
         writeMatrix(layer.matrices, i, x, y, z, yaw, scale);
-        if (layer.isTeamColor) writeRallyColor(layer.colors, i, owner, 1, a.attackMove);
-        else {
+        if (layer.isTeamColor) {
+          if (a.attackMove) writeRallyColor(layer.colors, i, owner, 1, true);
+          else writeTint(layer.colors, i, agoraPropTint(a), 1);
+        } else {
           const o = i * 4;
           if (a.attackMove) {
             layer.colors[o] = ATTACK_MOVE_TINT[0];
@@ -573,10 +577,20 @@ export async function createAgoraProps(engine, scene, groundYAt) {
       const z = a.z;
       const y = groundYAt(x, z);
       const yaw = a.yaw != null ? a.yaw : Math.atan2(-x, -z);
-      agoraCache.push({ x, z, yaw, owner: a.owner | 0 });
+      agoraCache.push({
+        x,
+        z,
+        yaw,
+        owner: a.owner | 0,
+        capturer: a.capturer,
+        progress: a.progress | 0,
+        tug: a.tug | 0,
+        phase: a.phase | 0,
+      });
+      const bodyTint = agoraPropTint(a);
       for (const layer of layers) {
         writeMatrix(layer.matrices, i, x, y, z, yaw, AGORA_SCALE);
-        writeAgoraBodyColor(layer, i, a.owner | 0, 1);
+        writeAgoraBodyColor(layer, i, bodyTint, 1);
       }
     }
     for (const layer of layers) {
@@ -654,9 +668,9 @@ export async function createAgoraProps(engine, scene, groundYAt) {
   }
 
   function writeAgoraPing(index, boost) {
-    const owner = agoraCache[index]?.owner ?? 0;
+    const rgb = agoraPropTint(agoraCache[index] ?? { owner: 0 });
     for (const layer of layers) {
-      writeAgoraBodyColor(layer, index, owner, boost);
+      writeAgoraBodyColor(layer, index, rgb, boost);
       setThinInstanceColors(layer.mesh, layer.colors);
     }
   }
@@ -740,7 +754,22 @@ export async function createAgoraProps(engine, scene, groundYAt) {
     }
   }
 
+  function rewriteAgoraBodies() {
+    const now = performance.now();
+    for (let i = 0; i < agoraCache.length; i++) {
+      const ping = clickPings.get(i);
+      const boost = ping != null ? clickPingBoost(ping, now) : 1;
+      const rgb = agoraPropTint(agoraCache[i]);
+      for (const layer of layers) writeAgoraBodyColor(layer, i, rgb, boost);
+    }
+    for (const layer of layers) {
+      setThinInstanceColors(layer.mesh, layer.colors);
+      flushThinInstances(layer.mesh);
+    }
+  }
+
   function refreshTeamColors() {
+    rewriteAgoraBodies();
     rewriteFlags(null);
   }
 

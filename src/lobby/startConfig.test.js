@@ -4,8 +4,8 @@ import { chapterLabelFor } from './modes.js';
 import { liveConfigFromLobby, teamByOwnerForMode } from './startConfig.js';
 
 const seats = [
-  { index: 0, kind: 'human', userId: 'host-id', name: 'H', ready: true, dlc: ['first_responder'] },
-  { index: 1, kind: 'human', userId: 'guest-id', name: 'G', ready: true },
+  { index: 0, kind: 'human', userId: 'host-id', name: 'H', ready: true, dlc: ['first_responder'], color: '#ff0000' },
+  { index: 1, kind: 'human', userId: 'guest-id', name: 'G', ready: true, color: '#00ff00' },
   { index: 2, kind: 'empty', userId: null, name: '', ready: false },
   { index: 3, kind: 'empty', userId: null, name: '', ready: false },
 ];
@@ -27,6 +27,7 @@ describe('lobby start config', () => {
     assert.equal(cfg.localSolo, false);
     assert.deepEqual(cfg.shareVisionWith, []);
     assert.deepEqual(cfg.ownerSkins, { 0: { 4: 'first_responder' } });
+    assert.deepEqual(cfg.ownerColors, { 0: '#FF0000', 1: '#00FF00' });
   });
 
   it('assigns 2v2 lanes for teams', () => {

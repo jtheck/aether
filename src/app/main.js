@@ -28,7 +28,7 @@ import {
   applySerializedBuildingOccupancy,
   BUILDING_FOOTPRINTS,
   buildingHasMenu,
-  canPlaceBuildingAt,
+  canPreviewPlaceBuilding,
   defaultRallyWorld,
   isRallyBeyondBuilding,
   listRallyFlags,
@@ -43,7 +43,7 @@ import {
 } from '../sim/buildings.js';
 import { menuGateState } from '../sim/menuGate.js';
 import { TILE_SIZE_F, worldToTile, setActiveMapSize, SKIRMISH_MAP_W, SKIRMISH_MAP_H } from '../sim/field.js';
-import { agoraOverlayActive } from '../sim/agora.js';
+import { agoraOverlayActive, AGORA_CAPTURE_TICKS, AGORA_TUG_TICKS } from '../sim/agora.js';
 import { ownerResourcesFrom } from '../sim/resources.js';
 import { formatGameNumber } from '../sim/formatGameNumber.js';
 import { createResourceBank } from './resourceBank.js';
@@ -52,7 +52,7 @@ import {
   namesFromLobbySeats,
   observerSheetOwners,
 } from './observerData.js';
-import { ownerTint, setLocalOwnerTint } from '../render/ownerTints.js';
+import { ownerTint, setLocalOwnerTint, setOwnerTints } from '../render/ownerTints.js';
 import { TECH, TECH_BY_ID } from '../sim/tech.js';
 import { createRenderer } from '../render/renderer.js';
 import { createFogOfWar } from '../render/fogOfWar.js';
@@ -80,6 +80,9 @@ import {
 } from '../render/overlayLod.js';
 import { posePassengerOnTransport, seatsForUnitType } from '../render/transportSeats.js';
 import {
+  AGORA_CHIP_COUNT,
+  AGORA_LARGE_CHIP_COUNT,
+  agoraChipFilled,
   DEFAULT_AGORA_ROOF,
   DEFAULT_BUILDING_ROOF,
   roofChipLift,
@@ -104,6 +107,14 @@ import { setupKothLobby } from './kothLobby.js';
 import { createGameLobby } from './gameLobby.js';
 import { createMatchLobby } from './matchLobby.js';
 import { setupLobbyUi } from './lobbyUi.js';
+import {
+  buildReplayFile,
+  formatReplayBytes,
+  jsonByteLength,
+  replayConfigFromLive,
+  saveReplayToDisk,
+} from './replay.js';
+import { createReplayController } from './replayWatch.js';
 import { chapterIdForGardenUrl, chapterLabelFor, gardenUrlForChapter, isLobbyPlayMode } from '../lobby/modes.js';
 import { liveConfigFromLobby } from '../lobby/startConfig.js';
 import { createMatchStory } from '../story/matchPlay.js';
@@ -128,6 +139,16 @@ import { SCREENSHOT_HUD_CLASS, createScreenshotHud } from './screenshotHud.js';
 import { installNavGuard } from './navGuard.js';
 
 const SEED = 0x1234;
+
+let replayCtl = {
+  bind() {},
+  hide() {},
+  paint() {},
+  armFromSession() {},
+  openFromMenu() {},
+  togglePlay() { return false; },
+  isWatching() { return false; },
+};
 
 /** `?fog=0` keeps the old no-overlay look; omit to use the scene default. */
 function fogOverrideFromSearch(search = location.search) {
@@ -269,6 +290,12 @@ function applyOwnerPacksToRenderer(renderer, cfg, localPlayerId) {
   }
   renderer?.setOwnerSkins?.(fromCfg);
   setLocalHudSkins(fromCfg[localPlayerId] ?? fromCfg[String(localPlayerId)] ?? local);
+}
+
+function applyOwnerTintsFromCfg(renderer, cfg, localPlayerId) {
+  setOwnerTints(cfg?.ownerColors);
+  setLocalOwnerTint(localPlayerId | 0, getPlayerColor());
+  renderer?.refreshOwnerTints?.();
 }
 
 async function main() {
@@ -758,6 +785,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     onStartSoloAi: () => startSoloAiMatch(ctxRef.current),
     onStartUnitTester: () => startUnitTesterMatch(ctxRef.current),
     onStartStressful: () => startStressfulSituation(ctxRef.current),
+    onOpenReplay: () => replayCtl.openFromMenu(),
     onPlayerColorChange: (hex) => {
       setLocalOwnerTint(localPlayerId, hex);
       updateColors();
@@ -844,7 +872,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   let fpsAcc = 0;
   let fpsFrames = 0;
   let localPlayerId = bootCfg.localPlayerId;
-  setLocalOwnerTint(localPlayerId, getPlayerColor());
+  applyOwnerTintsFromCfg(renderer, bootCfg, localPlayerId);
   let matchMeta = { mode: bootCfg.mode, matchId: bootCfg.matchId };
   let matchOverShown = false;
   let lastRenderDebugAt = 0;
@@ -955,12 +983,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (list) {
       for (let i = 0; i < list.length; i++) {
         const a = list[i];
-        sig += `${a.owner}:${a.founder ?? a.owner}|`;
+        const invade = agoraChipFilled(a.progress, AGORA_CHIP_COUNT, AGORA_CAPTURE_TICKS);
+        const tug = agoraChipFilled(a.tug, AGORA_LARGE_CHIP_COUNT, AGORA_TUG_TICKS);
+        sig += `${a.owner}:${a.founder ?? a.owner}:${a.capturer}:${a.phase}:${invade}:${tug}|`;
       }
     }
     if (sig === agoraOwnerPaintSig) return;
     agoraOwnerPaintSig = sig;
-    placeFoggedProps();
+    renderer.placeAgoras?.(fog.filterAgoras(list));
   }
 
   const updateColors = () => {
@@ -987,7 +1017,8 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   function resetTableClient() {
     matchOverShown = false;
     const overEl = document.getElementById('match-over');
-    if (overEl) overEl.style.display = 'none';
+    if (overEl) overEl.hidden = true;
+    if (!session.watchingReplay) hideReplaySave();
     releaseSpaceFollow();
     applyPlacingType(null);
     endRallyPlacement();
@@ -1229,6 +1260,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
   /** @type {string | null} */
   let placingType = null;
+  /** Last snapped ghost world pos so bank changes can retint without a mouse move. */
+  /** @type {number | null} */
+  let placingGhostX = null;
+  /** @type {number | null} */
+  let placingGhostZ = null;
+  let placingGhostValid = true;
   /** True while setting a production building's train rally with the flag cursor. */
   let placingRally = false;
   /** @type {{ kind: 'agora' | 'building', index: number }[]} */
@@ -1271,6 +1308,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   session.onResourcesChanged = () => {
     paintResources();
     syncRadialMenuGate();
+    refreshPlacementGhostFromBank();
   };
 
   session.onStorageOverflow = (events) => {
@@ -1614,11 +1652,76 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   function applyPlacingType(t) {
     if (t) endRallyPlacement();
     placingType = t ?? null;
+    placingGhostX = null;
+    placingGhostZ = null;
     if (!placingType) {
       placingYaw = 0;
       renderer.setBuildingGhost?.(null);
     }
-    renderer.setBuildingRadialCompact?.(Boolean(placingType));
+    renderer.setBuildingRadialCompact?.(placingType);
+  }
+
+  /**
+   * Ghost / claim grid are green only when the footprint is clear *and* the
+   * local bank can pay. Broke uses the same red as a blocked tile.
+   * @param {string} type
+   * @param {number} xFixed
+   * @param {number} zFixed
+   */
+  function placementGhostValid(type, xFixed, zFixed) {
+    return canPreviewPlaceBuilding(
+      session.field,
+      type,
+      xFixed,
+      zFixed,
+      ownerResourcesFrom(session.resources, localPlayerId),
+    );
+  }
+
+  /**
+   * @param {number} worldX
+   * @param {number} worldZ
+   * @param {number} yawRad
+   * @returns {{ snapped: { x: number, z: number }, valid: boolean } | null}
+   */
+  function syncPlacementGhost(worldX, worldZ, yawRad) {
+    if (!placingType) return null;
+    const snapped = snapBuildingWorld(placingType, fx.fromFloat(worldX), fx.fromFloat(worldZ));
+    const sx = fx.toFloat(snapped.x);
+    const sz = fx.toFloat(snapped.z);
+    const valid = placementGhostValid(placingType, snapped.x, snapped.z);
+    placingGhostX = sx;
+    placingGhostZ = sz;
+    placingGhostValid = valid;
+    renderer.setBuildingGhost?.({
+      type: placingType,
+      x: sx,
+      z: sz,
+      yaw: yawRad,
+      valid,
+    });
+    renderer.setBuildingRadialPlacingValid?.(valid);
+    return { snapped, valid };
+  }
+
+  function refreshPlacementGhostFromBank() {
+    if (!placingType || placingGhostX == null || placingGhostZ == null) return;
+    const snapped = snapBuildingWorld(
+      placingType,
+      fx.fromFloat(placingGhostX),
+      fx.fromFloat(placingGhostZ),
+    );
+    const valid = placementGhostValid(placingType, snapped.x, snapped.z);
+    if (valid === placingGhostValid) return;
+    placingGhostValid = valid;
+    renderer.setBuildingGhost?.({
+      type: placingType,
+      x: fx.toFloat(snapped.x),
+      z: fx.toFloat(snapped.z),
+      yaw: placingYaw,
+      valid,
+    });
+    renderer.setBuildingRadialPlacingValid?.(valid);
   }
 
   // Locked until boot/match ready — camera + commands stay quiet together.
@@ -2016,53 +2119,31 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       if (!placingType) return;
       const yawRad = snapBuildingYaw(yaw ?? placingYaw);
       placingYaw = yawRad;
-      const snapped = snapBuildingWorld(
-        placingType,
-        fx.fromFloat(x),
-        fx.fromFloat(z),
-      );
-      const sx = fx.toFloat(snapped.x);
-      const sz = fx.toFloat(snapped.z);
-      const valid = session.field
-        ? canPlaceBuildingAt(session.field, placingType, snapped.x, snapped.z)
-        : true;
-      renderer.setBuildingGhost?.({
-        type: placingType,
-        x: sx,
-        z: sz,
-        yaw: yawRad,
-        valid,
-      });
+      syncPlacementGhost(x, z, yawRad);
     },
     onPlacementConfirm: (x, z, yaw = placingYaw) => {
       if (!placingType) return;
       const type = placingType;
       const yawRad = snapBuildingYaw(yaw ?? placingYaw);
       placingYaw = yawRad;
-      const snapped = snapBuildingWorld(type, fx.fromFloat(x), fx.fromFloat(z));
-      const sx = fx.toFloat(snapped.x);
-      const sz = fx.toFloat(snapped.z);
-      if (session.field && !canPlaceBuildingAt(session.field, type, snapped.x, snapped.z)) {
-        // Stay in placement mode; ghost already shows invalid.
-        renderer.setBuildingGhost?.({
-          type,
-          x: sx,
-          z: sz,
-          yaw: yawRad,
-          valid: false,
-        });
+      const preview = syncPlacementGhost(x, z, yawRad);
+      if (!preview?.valid) {
+        // Stay in placement mode; ghost is red for blocked tiles or unaffordable cost.
         return;
       }
       session.submitCommand({
         type: CMD.PLACE_BUILDING,
         playerId: localPlayerId,
         buildingType: type,
-        tx: snapped.x,
-        ty: snapped.z,
+        tx: preview.snapped.x,
+        ty: preview.snapped.z,
         yaw: fx.fromFloat(yawRad),
       });
       // Multi-place: keep type + yaw; ghost follows on next move.
       renderer.setBuildingGhost?.(null);
+      placingGhostX = null;
+      placingGhostZ = null;
+      renderer.setBuildingRadialPlacingValid?.(null);
       if (lastAgoraIndex >= 0) {
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
       }
@@ -2074,7 +2155,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         inputApi.setSelectedBuilding?.({ kind: 'agora', index: lastAgoraIndex });
       }
     },
-    isRadialOpen: () => isAnyRadialOpen(),
+    isRadialOpen: () => !placingType && isAnyRadialOpen(),
     pickRadialOption: (cx, cy) => renderer.pickBuildingRadial?.(cx, cy) ?? null,
     onRadialPick: (picked) => {
       if (!picked) return;
@@ -2205,7 +2286,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
         ) {
           return;
         }
-        // Keep the agora radial open while ghost-placing / switching types.
+        // Hide the agora radial while ghost-placing; hub shows this type.
         applyPlacingType(picked.id);
         placingYaw = 0;
         renderer.setBuildingGhost?.(null);
@@ -2337,6 +2418,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     }
     if (e.code === 'KeyP') {
       e.preventDefault();
+      if (replayCtl.togglePlay()) return;
       session.pauseLockstep = !session.pauseLockstep;
       if (session.pauseLockstep) session.simAcc = 0;
       renderer.setFxPaused?.(session.pauseLockstep);
@@ -2436,6 +2518,16 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     });
   }
 
+  replayCtl = createReplayController({
+    getCtx: () => ctxRef.current,
+    applyLiveConfig,
+    loadGarden: loadGardenJson,
+    setStatus: setStatusText,
+    parkLobby: () => lobbyUi.setOverlayParked?.(true),
+    getKothShard: () => kothShard,
+  });
+  replayCtl.bind();
+
   // Walk everyone so idle→walk skinning is under load (not just idle poses).
   if (animStress > 0) {
     const world = session.state;
@@ -2469,9 +2561,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       renderer.setCount(renderEntityCount);
       syncDrawnEntities();
     }
-    if (session.kothMatchOver && !matchOverShown) {
+    if (session.kothMatchOver && !matchOverShown && !session.watchingReplay && !session.replayingCatchUp) {
       matchOverShown = true;
       showMatchOver(session);
+      const shareWith = enterPostGameObserve(session);
+      renderer.setFxPaused?.(true);
+      inputApi?.setRole?.('spectator');
+      setShareVisionWith(shareWith);
+      observerLobby?.returnToWaiting?.();
+      armReplaySave(session, namesFromLobbySeats(observerLobby?.getState?.()?.seats));
+      lobbyUi.refresh();
+      paintResources();
     }
     fogStampDue = true;
     refreshFoggedProps();
@@ -2514,6 +2614,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     syncWorkRadiusRing();
 
     updateCatchupProgress(session);
+    if (replayCtl.isWatching()) replayCtl.paint();
     if (session.replayingCatchUp) {
       paintStatus();
       updateColors();
@@ -3386,16 +3487,24 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   }
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] applying live config', { gen, activeSlots, localSolo });
 
+  if (!cfg.watchingReplay) {
+    ctx.session.watchingReplay = false;
+    replayCtl.hide();
+  } else {
+    ctx.session.watchingReplay = true;
+  }
+
   ctx.matchStory?.stop();
   ctx.setStoryCast?.([]);
   if (!liveConfigKeepsAdventure(cfg)) ctx.endAdventure?.();
   applyOwnerPacksToRenderer(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
 
-  // Cover the teardown/rebuild — same splash as cold boot.
-  showMatchSplash();
-  ctx.setInteractive?.(false);
+  if (!cfg.skipSplash) {
+    showMatchSplash();
+    ctx.setInteractive?.(false);
+    setStatusText(cfg.loadingLabel ?? (localSolo ? 'Starting 1v1…' : 'Loading match…'));
+  }
   setGraffitiHeaderVisible(isLobbyGraffitiScene(cfg.mode));
-  setStatusText(cfg.loadingLabel ?? (localSolo ? 'Starting 1v1…' : 'Loading match…'));
 
   const simMode = workerSimMode(cfg.mode);
   const humanPlayers = cfg.humanPlayers ?? activeSlots;
@@ -3480,6 +3589,13 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   }
   ctx.session._pendingWorldGen = null;
   ctx.session.setHumanPlayers(humanPlayers);
+  ctx.session.replayConfig = replayConfigFromLive(cfg);
+  ctx.session.replayGarden = cfg.garden ?? null;
+  if (cfg.watchingReplay) {
+    ctx.session.watchingReplay = true;
+    ctx.session.pauseLockstep = true;
+    ctx.session.simAcc = 0;
+  }
   if (cfg.mode === 'koth' && DEBUG_KOTH) console.info('[KOTH] sim after reset', ownerStats(ctx.session.state));
 
   ctx.setStoryCast?.(storyCastFromGarden(cfg.garden));
@@ -3500,7 +3616,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   if (cfg.mode === 'koth' && !localSolo) kothShard?.notifyLiveSessionReady?.();
 
   ctx.setInteractive?.(true);
-  dismissBootSplash();
+  if (!cfg.skipSplash) dismissBootSplash();
   aetherSteam.notifyPlayReady();
 }
 
@@ -3623,6 +3739,7 @@ function syncPresentation(ctx, cfg, options = {}) {
   ctx.setMatchMeta({ mode: cfg.mode ?? 'koth', matchId: cfg.matchId });
   if (cfg.localPlayerId != null) ctx.localPlayerId = cfg.localPlayerId;
   if (cfg.localPlayerId != null) ctx.session.setLocalPlayerId?.(cfg.localPlayerId);
+  applyOwnerTintsFromCfg(ctx.renderer, cfg, cfg.localPlayerId ?? ctx.localPlayerId);
   if (cfg.humanPlayers && (cfg.reset || cfg.updateHumanPlayers || options.updateHumanPlayers)) {
     ctx.session.setHumanPlayers(cfg.humanPlayers);
   }
@@ -3640,13 +3757,16 @@ function syncPresentation(ctx, cfg, options = {}) {
   // Camera snap only on a real match reset — join/role used to yank the view.
   if (cfg.reset || (cfg.role ?? 'player') !== 'player') ctx.inputApi?.clearSelection?.();
   if (cfg.reset) ctx.inputApi?.clearControlGroups?.();
-  if (cfg.reset && (cfg.mode === 'koth' || cfg.localSolo || isLobbyPlayMode(cfg.mode))) {
+  if (cfg.reset && (cfg.mode === 'koth' || cfg.localSolo || isLobbyPlayMode(cfg.mode)) && !cfg.skipSplash && !cfg.watchingReplay) {
     ctx.renderer.resetCamera?.();
   }
 
   const overEl = document.getElementById('match-over');
-  if (overEl) overEl.style.display = 'none';
-  ctx.matchOverShown = false;
+  if (overEl) overEl.hidden = true;
+  if (!cfg.watchingReplay) {
+    hideReplaySave();
+    ctx.matchOverShown = false;
+  }
 
   ctx.updateColors();
   ctx.paintStatus?.();
@@ -3687,18 +3807,24 @@ function matchEndedByAgora(session) {
 
 function showMatchOver(session) {
   const el = document.getElementById('match-over');
+  const titleEl = document.getElementById('match-over-title');
+  const subEl = document.getElementById('match-over-sub');
   if (!el) return;
   const k = session.koth;
-  let text = 'Match over';
+  let title = 'Match over';
+  let sub = '';
   if (session.matchWinner != null && session.matchWinner >= 0) {
     const winner = session.matchWinner;
     const agora = matchEndedByAgora(session);
     const localWin = winner === (session.localPlayerId ?? 0);
-    text = agora
-      ? (localWin
-        ? 'Victory — agora captured'
-        : `Defeat — Player ${formatGameNumber(winner)} captured the agora`)
-      : (localWin ? 'Victory — last standing' : 'Defeat — no pop');
+    title = localWin ? 'Victory' : 'Defeat';
+    if (agora) {
+      sub = localWin
+        ? 'Agora captured'
+        : `Player ${formatGameNumber(winner)} captured the agora`;
+    } else {
+      sub = localWin ? 'Last standing' : 'No pop remaining';
+    }
     if (agora) aetherSteam.notifyKothDefeat(session);
   } else if (k) {
     let best = 0;
@@ -3709,10 +3835,54 @@ function showMatchOver(session) {
         best = i;
       }
     }
-    text = `Match over — Player ${formatGameNumber(best)} wins (${formatGameNumber(bestScore)} pts)`;
+    sub = `Player ${formatGameNumber(best)} wins (${formatGameNumber(bestScore)} pts)`;
   }
-  el.textContent = text;
-  el.style.display = 'block';
+  if (titleEl) titleEl.textContent = title;
+  else el.textContent = sub ? `${title} — ${sub}` : title;
+  if (subEl) subEl.textContent = sub;
+  el.hidden = false;
+}
+
+function enterPostGameObserve(session) {
+  session.pauseLockstep = true;
+  session.simAcc = 0;
+  session.setRole('spectator');
+  const owners = shareVisionOwnersFromCfg({
+    role: 'spectator',
+    localPlayerId: session.localPlayerId,
+    humanPlayers: session.humanPlayers,
+    activeSlots: session.humanPlayers,
+    aiPlayers: session.aiPlayers,
+  });
+  return owners;
+}
+
+let pendingReplayFile = null;
+
+function hideReplaySave() {
+  pendingReplayFile = null;
+  const btn = document.getElementById('match-replay-save');
+  if (btn) btn.hidden = true;
+  replayCtl.hide();
+}
+
+function armReplaySave(session, names) {
+  const btn = document.getElementById('match-replay-save');
+  if (!btn) return;
+  if (!session?.replayConfig) {
+    hideReplaySave();
+    return;
+  }
+  pendingReplayFile = buildReplayFile(session, { names });
+  btn.hidden = false;
+  btn.textContent = `Save replay · ${formatReplayBytes(jsonByteLength(pendingReplayFile))}`;
+  if (btn.dataset.bound !== '1') {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      if (pendingReplayFile) saveReplayToDisk(pendingReplayFile);
+    });
+  }
+  replayCtl.armFromSession(session, names);
 }
 
 function useKothAi(bootCfg, stress, animStress, solo) {
@@ -3991,7 +4161,7 @@ function setGraffitiHeaderVisible(on) {
 function updateCatchupProgress(session) {
   const el = document.getElementById('koth-catchup');
   if (!el) return;
-  const active = !!session?.replayingCatchUp;
+  const active = !!session?.replayingCatchUp && !session?.watchingReplay;
   if (!active) {
     if (!el.hidden) el.hidden = true;
     return;

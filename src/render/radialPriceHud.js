@@ -46,6 +46,24 @@ export function ensureRadialPriceHud() {
   return mounting;
 }
 
+/**
+ * worldToScreen is canvas CSS px. The price overlay is viewport-fixed, so add
+ * the canvas rect. Never multiply by devicePixelRatio — that is GPU-text space.
+ * @param {number} canvasX
+ * @param {number} canvasY
+ * @param {HTMLElement | null | undefined} [canvas]
+ */
+export function priceOverlayPos(canvasX, canvasY, canvas) {
+  const el =
+    canvas
+    ?? (typeof document !== 'undefined' ? document.getElementById('canvas') : null);
+  if (!el || typeof el.getBoundingClientRect !== 'function') {
+    return { x: canvasX, y: canvasY };
+  }
+  const r = el.getBoundingClientRect();
+  return { x: canvasX + r.left, y: canvasY + r.top };
+}
+
 function washCss(wash) {
   const r = Math.round((wash?.[0] ?? 0.8) * 255);
   const g = Math.round((wash?.[1] ?? 0.8) * 255);
@@ -105,6 +123,7 @@ function fillRow(el, spec) {
  *   cost: Record<string, number> | null | undefined,
  *   x: number,
  *   y: number,
+ *   canvas?: HTMLElement | null,
  *   opacity?: number,
  *   wash?: number[],
  *   okWash?: number[],
@@ -140,7 +159,8 @@ export function setRadialPrice(id, spec) {
     el.dataset.key = key;
   }
   el.style.opacity = spec.opacity == null ? '0.85' : String(spec.opacity);
-  el.style.transform = `translate(${spec.x}px, ${spec.y}px) translate(-50%, 0)`;
+  const pos = priceOverlayPos(spec.x, spec.y, spec.canvas);
+  el.style.transform = `translate(${pos.x}px, ${pos.y}px) translate(-50%, 0)`;
   el.hidden = false;
 }
 

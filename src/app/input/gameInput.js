@@ -1443,7 +1443,7 @@ export function createGameInput(opts) {
     }
 
     // Placement: LMB down locks anchor; drag past threshold rotates (30° snaps).
-    // Radial stays usable so you can switch building type without canceling.
+    // Agora build radial is hidden while placing (clicks pass through).
     // Rally mode: click-to-set (no rotate).
     if (isPlacing()) {
       radialGesture = Boolean(isRadialOpen?.() && hitRadial?.(e.clientX, e.clientY));

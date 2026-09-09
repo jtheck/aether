@@ -22,7 +22,7 @@ import { UNIT, getUnitDef, isFlyer, getUnitCost } from './unitTypes.js';
 import { unitPopCost } from './pop.js';
 import { ORDER } from './world.js';
 import { MAX_WAYPOINTS, PATH_STYLE, queuePath } from './path.js';
-import { spendResources, addResource } from './resources.js';
+import { spendResources, addResource, canAffordBank } from './resources.js';
 
 /** Scratch buffers for render-side rally A* (main thread only). */
 const _rallyWx = new Int32Array(64);
@@ -736,6 +736,21 @@ export function canPlaceBuildingAt(field, typeId, xFixed, zFixed) {
     else if (field.structureSlowMask?.[i]) ok = false;
   });
   return complete && ok && n > 0;
+}
+
+/**
+ * Ghost / claim-grid preview: footprint is clear and `bank` can pay.
+ * Missing field is treated as site-ok (same as the live placement cursor).
+ * Sim still re-checks occupancy + spend on CMD.PLACE_BUILDING.
+ * @param {object | null | undefined} field
+ * @param {string} typeId
+ * @param {number} xFixed
+ * @param {number} zFixed
+ * @param {Record<string, number> | null | undefined} bank
+ */
+export function canPreviewPlaceBuilding(field, typeId, xFixed, zFixed, bank) {
+  if (field && !canPlaceBuildingAt(field, typeId, xFixed, zFixed)) return false;
+  return canAffordBank(bank, getBuildingCost(typeId));
 }
 
 /**

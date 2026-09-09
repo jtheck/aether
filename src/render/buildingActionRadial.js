@@ -28,7 +28,15 @@ import {
   UPGRADE_MODEL_URLS,
   getBuildingMenu,
 } from '../sim/buildings.js';
-import { poseRadialFramingBuilding } from './radialPose.js';
+import {
+  fitRadialInViewport,
+  poseRadialFramingBuilding,
+  stepRadialEdgeOpacity,
+  RADIAL_EDGE_PICK_ALPHA,
+  RADIAL_HUD_BLEND_ALPHA,
+  radialHudFadeAlpha,
+  radialHudPremulRgba,
+} from './radialPose.js';
 import { formatResourceCost } from '../sim/resources.js';
 import {
   ensureRadialPriceHud,
@@ -83,6 +91,7 @@ const LABEL_LIFT = 1.25;
 const PRICE_FONT_SIZE = 16;
 const PRICE_SCREEN_SCALE = 0.78;
 const PRICE_DOWN = 6.35;
+const SCREEN_FIT_RADIUS = RIM_R + Math.max(PAD_OUTER, PRICE_DOWN) + 2.8;
 const PRICE_TEXT_COLOR = [0.78, 0.76, 0.7, 1];
 const ICON_WASH = {
   ok: [0.82, 0.82, 0.82],
@@ -104,13 +113,14 @@ const BADGE_SCREEN_SCALE = 0.95;
 const BADGE_OUT = 2.8;
 const BADGE_SIDE = 2.6;
 const BADGE_LIFT = 1.4;
+const BADGE_TEXT_COLOR = [1, 0.95, 0.55, 1];
 const EXTRA_FONT_SIZE = 30;
 const EXTRA_SCREEN_SCALE = 0.88;
 const EXTRA_TEXT_COLOR = [0.78, 0.86, 0.72, 1];
 const MAX_OPTIONS = 8;
 const MENU_RING_ALPHA = 0.55;
-const PAD_HOVER_COLOR = [1, 0.85, 0.25];
-const PAD_HOVER_EMISSIVE = [0.95, 0.7, 0.15];
+const PAD_HOVER_COLOR = [0.82, 0.96, 1];
+const PAD_HOVER_EMISSIVE = [0.4, 0.78, 0.95];
 const PROGRESS_COLOR = [1, 0.92, 0.35];
 const PROGRESS_EMISSIVE = [0.95, 0.75, 0.2];
 const ARMED_COLOR = [1, 0.45, 0.35];
@@ -586,7 +596,8 @@ function makeRingMaterial(diffuse, emissive, alpha = 1) {
   const mat = createStandardMaterial();
   mat.diffuseColor = [...diffuse];
   mat.emissiveColor = [...emissive];
-  mat.alpha = alpha;
+  mat._radialBaseAlpha = alpha;
+  mat.alpha = alpha >= 1 ? RADIAL_HUD_BLEND_ALPHA : alpha;
   if ('disableLighting' in mat) mat.disableLighting = true;
   if ('unlit' in mat) mat.unlit = true;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
@@ -614,7 +625,8 @@ function makeIconPreviewMaterial(source) {
   mat.name = `${source?.name ?? 'action'}-radial`;
   mat.diffuseColor = color;
   mat.emissiveColor = [0.82, 0.82, 0.82];
-  mat.alpha = 1;
+  mat.alpha = RADIAL_HUD_BLEND_ALPHA;
+  mat._radialBaseAlpha = 1;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
   markMaterialUboDirty(mat);
   return mat;
@@ -1182,6 +1194,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   let centerZ = 0;
   let centerY = 0;
   let hudScale = 1;
+  /** Displayed edge fade (0 = gone). Menu stays logically open. */
+  let edgeOpacity = 1;
+  let lastFadeAt = 0;
+  let snapEdgeFade = false;
   let hoverIndex = -1;
   let cancelHovered = false;
   let pauseHovered = false;
@@ -1326,6 +1342,59 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
   }
 
+  function fadeAlpha(base) {
+    return (base ?? 1) * edgeOpacity;
+  }
+
+  function setMatAlpha(mat, base) {
+    if (!mat) return;
+    mat._radialBaseAlpha = base;
+    mat.alpha = radialHudFadeAlpha(base, edgeOpacity);
+    markMaterialUboDirty(mat);
+  }
+
+  function refreshMatAlpha(mat) {
+    if (!mat) return;
+    if (mat._radialBaseAlpha == null) mat._radialBaseAlpha = mat.alpha ?? 1;
+    mat.alpha = radialHudFadeAlpha(mat._radialBaseAlpha, edgeOpacity);
+    markMaterialUboDirty(mat);
+  }
+
+  function applyEdgeFade() {
+    for (const entry of arcRings.values()) refreshMatAlpha(entry.mat);
+    for (const pad of pads) refreshMatAlpha(pad.mat);
+    for (const prog of progressPads) refreshMatAlpha(prog.mat);
+    refreshMatAlpha(cancelPadMat);
+    refreshMatAlpha(cancelSlashMat);
+    refreshMatAlpha(pausePadMat);
+    refreshMatAlpha(pauseBarsMat);
+    for (const batch of icons.values()) {
+      for (const layer of batch.layers) refreshMatAlpha(layer.mesh.material);
+    }
+  }
+
+  function applyViewportFit(fitted) {
+    hudScale = fitted.hudScale;
+    centerX = fitted.x;
+    centerY = fitted.y;
+    centerZ = fitted.z;
+    const target = fitted.opacity ?? (fitted.hidden ? 0 : 1);
+    if (snapEdgeFade) {
+      edgeOpacity = target;
+      lastFadeAt = 0;
+      snapEdgeFade = false;
+    } else {
+      const now = performance.now();
+      const dt = lastFadeAt ? Math.min(0.05, (now - lastFadeAt) / 1000) : 1 / 60;
+      lastFadeAt = now;
+      edgeOpacity = stepRadialEdgeOpacity(edgeOpacity, target, dt);
+    }
+  }
+
+  function edgePickable() {
+    return edgeOpacity >= RADIAL_EDGE_PICK_ALPHA;
+  }
+
   function disposeProgressMesh(entry) {
     if (!entry?.mesh) return;
     hideMesh(entry.mesh);
@@ -1398,112 +1467,109 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const cat = CATEGORIES[pad.category] ?? CATEGORIES.unit;
     const mat = pad.mat;
     const owned = slotResearched(slots[index]);
+    let base = 0.92;
     if (owned && !hovered) {
       mat.diffuseColor = [...DULL_COLOR];
       mat.emissiveColor = [...DULL_EMISSIVE];
-      mat.alpha = DULL_ALPHA;
+      base = DULL_ALPHA;
     } else if (hovered) {
       mat.diffuseColor = [...PAD_HOVER_COLOR];
       mat.emissiveColor = [...PAD_HOVER_EMISSIVE];
-      mat.alpha = 0.95;
+      base = 0.95;
     } else {
       mat.diffuseColor = [...cat.pad];
       mat.emissiveColor = [...cat.padEm];
-      mat.alpha = 0.92;
     }
-    markMaterialUboDirty(mat);
+    setMatAlpha(mat, base);
   }
 
   function applyCancelPadAppearance() {
     const mat = cancelPadMat;
     const available = utilityAvailable.cancel;
+    let padBase = 0.92;
     if (!available) {
       mat.diffuseColor = [...DULL_COLOR];
       mat.emissiveColor = [...DULL_EMISSIVE];
-      mat.alpha = DULL_ALPHA;
+      padBase = DULL_ALPHA;
     } else if (armed === 'cancel') {
       mat.diffuseColor = [...ARMED_COLOR];
       mat.emissiveColor = [...ARMED_EMISSIVE];
-      mat.alpha = 0.98;
+      padBase = 0.98;
     } else if (cancelHovered) {
       mat.diffuseColor = [...PAD_HOVER_COLOR];
       mat.emissiveColor = [...PAD_HOVER_EMISSIVE];
-      mat.alpha = 0.95;
+      padBase = 0.95;
     } else {
       mat.diffuseColor = [...CATEGORIES.cancel.pad];
       mat.emissiveColor = [...CATEGORIES.cancel.padEm];
-      mat.alpha = 0.92;
     }
-    markMaterialUboDirty(mat);
+    setMatAlpha(mat, padBase);
 
-    // Same color/state as the cancel pad.
     cancelSlashMat.diffuseColor = [...mat.diffuseColor];
     cancelSlashMat.emissiveColor = [...mat.emissiveColor];
-    cancelSlashMat.alpha = mat.alpha;
-    markMaterialUboDirty(cancelSlashMat);
+    setMatAlpha(cancelSlashMat, padBase);
 
     const arcMat = arcRings.get('cancel')?.mat;
     if (arcMat) {
+      let arcBase = MENU_RING_ALPHA;
       if (!available) {
         arcMat.diffuseColor = [...DULL_COLOR];
         arcMat.emissiveColor = [...DULL_EMISSIVE];
-        arcMat.alpha = DULL_ALPHA;
+        arcBase = DULL_ALPHA;
       } else if (armed === 'cancel') {
         arcMat.diffuseColor = [...ARMED_COLOR];
         arcMat.emissiveColor = [...ARMED_EMISSIVE];
-        arcMat.alpha = 0.85;
+        arcBase = 0.85;
       } else {
         arcMat.diffuseColor = [...CATEGORIES.cancel.color];
         arcMat.emissiveColor = [...CATEGORIES.cancel.emissive];
-        arcMat.alpha = MENU_RING_ALPHA;
       }
-      markMaterialUboDirty(arcMat);
+      setMatAlpha(arcMat, arcBase);
     }
   }
 
   function applyPausePadAppearance() {
     const mat = pausePadMat;
     const available = utilityAvailable.pause;
+    let padBase = 0.92;
     if (!available) {
       mat.diffuseColor = [...DULL_COLOR];
       mat.emissiveColor = [...DULL_EMISSIVE];
-      mat.alpha = DULL_ALPHA;
+      padBase = DULL_ALPHA;
     } else if (pauseHovered) {
       mat.diffuseColor = [...PAD_HOVER_COLOR];
       mat.emissiveColor = [...PAD_HOVER_EMISSIVE];
-      mat.alpha = 0.95;
+      padBase = 0.95;
     } else if (prodPaused) {
       mat.diffuseColor = [...PAUSED_PAD];
       mat.emissiveColor = [...PAUSED_PAD_EM];
-      mat.alpha = 0.98;
+      padBase = 0.98;
     } else {
       mat.diffuseColor = [...CATEGORIES.pause.pad];
       mat.emissiveColor = [...CATEGORIES.pause.padEm];
-      mat.alpha = 0.92;
     }
-    markMaterialUboDirty(mat);
+    setMatAlpha(mat, padBase);
 
     pauseBarsMat.diffuseColor = [...mat.diffuseColor];
     pauseBarsMat.emissiveColor = [...mat.emissiveColor];
-    pauseBarsMat.alpha = mat.alpha;
-    markMaterialUboDirty(pauseBarsMat);
+    setMatAlpha(pauseBarsMat, padBase);
 
     const arcMat = arcRings.get('pause')?.mat;
     if (arcMat) {
+      let arcBase = MENU_RING_ALPHA;
       if (!available) {
         arcMat.diffuseColor = [...DULL_COLOR];
         arcMat.emissiveColor = [...DULL_EMISSIVE];
-        arcMat.alpha = DULL_ALPHA;
+        arcBase = DULL_ALPHA;
       } else if (prodPaused) {
         arcMat.diffuseColor = [...PAUSED_COLOR];
         arcMat.emissiveColor = [...PAUSED_EMISSIVE];
-        arcMat.alpha = 0.85;
+        arcBase = 0.85;
       } else {
         arcMat.diffuseColor = [...CATEGORIES.pause.color];
         arcMat.emissiveColor = [...CATEGORIES.pause.emissive];
-        arcMat.alpha = MENU_RING_ALPHA;
       }
-      markMaterialUboDirty(arcMat);
+      setMatAlpha(arcMat, arcBase);
     }
   }
 
@@ -1619,7 +1685,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         }
         if (mat.specularColor) mat.specularColor = [0, 0, 0];
       }
-      markMaterialUboDirty(mat);
+      setMatAlpha(mat, 1);
     }
   }
 
@@ -1641,10 +1707,17 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       RIM_R,
       MENU_TILT,
     );
-    hudScale = posed.hudScale;
-    centerX = posed.x;
-    centerY = posed.y;
-    centerZ = posed.z;
+    const fitted = fitRadialInViewport({
+      eye,
+      x: posed.x,
+      y: posed.y,
+      z: posed.z,
+      hudScale: posed.hudScale,
+      worldRadius: SCREEN_FIT_RADIUS,
+      worldToScreen: screen.worldToScreen,
+      getViewport: screen.getViewport,
+    });
+    applyViewportFit(fitted);
     updateBasis(camera);
   }
 
@@ -1744,7 +1817,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     }
   }
 
-  function placeScreenText(label, worldX, worldY, worldZ, scaleMul, opacity) {
+  function placeScreenText(label, worldX, worldY, worldZ, scaleMul, opacity, wash) {
     const worldToScreen = screen.worldToScreen;
     const getViewport = screen.getViewport;
     if (!label || !open || !worldToScreen || !getViewport) {
@@ -1757,6 +1830,22 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       hideLabel(label);
       return;
     }
+    const faded = fadeAlpha(opacity);
+    if (
+      wash &&
+      (label.wash !== wash ||
+        Math.abs((label.fadeA ?? -1) - faded) > 0.02 ||
+        label.paintedText !== label.text)
+    ) {
+      updateDefaultTextData(
+        label.data,
+        label.text || '',
+        radialHudPremulRgba(wash, faded),
+      );
+      label.wash = wash;
+      label.fadeA = faded;
+      label.paintedText = label.text;
+    }
     const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
     const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
     const pixelRatio = (sx + sy) * 0.5;
@@ -1767,7 +1856,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     layer.positionPx.y = origin.y * sy;
     layer.rotationRad = 0;
     layer.scale = scale;
-    layer.opacity = opacity;
+    layer.opacity = 1;
     layer.visible = true;
     layer._version++;
   }
@@ -1782,14 +1871,10 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const hovered = i === hoverIndex;
     const owned = slotResearched(slot);
     const gate = owned ? 'owned' : (slot.gate ?? 'ok');
-    if (label.dull !== owned || label.gate !== gate) {
-      const color = owned
-        ? DULL_TEXT_COLOR
-        : (LABEL_WASH[gate] ?? LABEL_WASH.ok);
-      updateDefaultTextData(label.data, label.text || slot.name, color);
-      label.dull = owned;
-      label.gate = gate;
-    }
+    const wash = owned
+      ? DULL_TEXT_COLOR
+      : (LABEL_WASH[gate] ?? LABEL_WASH.ok);
+    label.text = slot.name;
     const down = LABEL_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
     placeScreenText(
@@ -1799,6 +1884,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       slot.z + tz * down + nz * lift,
       LABEL_SCREEN_SCALE * (hovered ? 1.05 : 1),
       owned ? 0.82 : hovered ? 1 : 0.88,
+      wash,
     );
   }
 
@@ -1826,14 +1912,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       hidePrice(i);
       return;
     }
-    const sx = (viewport.pixelWidth ?? viewport.width) / viewport.width;
-    const sy = (viewport.pixelHeight ?? viewport.height) / viewport.height;
     const wash = owned ? DULL_TEXT_COLOR : (PRICE_WASH[slot.gate ?? 'ok'] ?? PRICE_WASH.ok);
     setRadialPrice(`action-${i}`, {
       cost: slot.cost,
-      x: origin.x * sx,
-      y: origin.y * sy,
-      opacity: owned ? 0.72 : hovered ? 0.95 : 0.8,
+      x: origin.x,
+      y: origin.y,
+      canvas: screen.canvas,
+      opacity: fadeAlpha(owned ? 0.72 : hovered ? 0.95 : 0.8),
       wash,
       okWash: PRICE_WASH.ok,
       gate: owned ? 'owned' : (slot.gate ?? 'ok'),
@@ -1855,10 +1940,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       return;
     }
     const text = formatGameNumber(count);
-    if (text !== badge.text) {
-      updateDefaultTextData(badge.data, text, [1, 0.95, 0.55, 1]);
-      badge.text = text;
-    }
+    badge.text = text;
     const out = BADGE_OUT * hudScale;
     const side = BADGE_SIDE * hudScale;
     const lift = BADGE_LIFT * hudScale;
@@ -1870,6 +1952,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       slot.z - tz * out + bz * side + nz * lift,
       BADGE_SCREEN_SCALE,
       1,
+      BADGE_TEXT_COLOR,
     );
   }
 
@@ -1887,10 +1970,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       return;
     }
     const text = `+${formatGameNumber(n)}`;
-    if (text !== extra.text) {
-      updateDefaultTextData(extra.data, text, EXTRA_TEXT_COLOR);
-      extra.text = text;
-    }
+    extra.text = text;
     const out = BADGE_OUT * hudScale;
     const side = BADGE_SIDE * hudScale;
     const lift = BADGE_LIFT * hudScale;
@@ -1902,6 +1982,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       slot.z - tz * out - bz * side + nz * lift,
       EXTRA_SCREEN_SCALE,
       0.92,
+      EXTRA_TEXT_COLOR,
     );
   }
 
@@ -1913,12 +1994,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const down = LABEL_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
     const dull = !utilityAvailable.pause;
-    const text = pauseLabelText();
-    if (pauseLabel.text !== text || pauseLabel.dull !== dull) {
-      updateDefaultTextData(pauseLabel.data, text, pauseLabelColor(dull));
-      pauseLabel.text = text;
-      pauseLabel.dull = dull;
-    }
+    pauseLabel.text = pauseLabelText();
     const opacity = dull ? 0.82 : pauseHovered || prodPaused ? 1 : 0.88;
     placeScreenText(
       pauseLabel,
@@ -1927,6 +2003,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       pauseSlot.z + tz * down + nz * lift,
       LABEL_SCREEN_SCALE * (pauseHovered || prodPaused ? 1.05 : 1),
       opacity,
+      pauseLabelColor(dull),
     );
   }
 
@@ -1938,14 +2015,6 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     const down = LABEL_DOWN * hudScale;
     const lift = LABEL_LIFT * hudScale;
     const dull = !utilityAvailable.cancel;
-    if (cancelLabel.dull !== dull) {
-      updateDefaultTextData(
-        cancelLabel.data,
-        cancelLabel.text,
-        dull ? DULL_TEXT_COLOR : CANCEL_LABEL_TEXT_COLOR,
-      );
-      cancelLabel.dull = dull;
-    }
     const opacity = dull
       ? 0.82
       : cancelHovered || armed === 'cancel'
@@ -1958,6 +2027,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       cancelSlot.z + tz * down + nz * lift,
       LABEL_SCREEN_SCALE * (cancelHovered || armed === 'cancel' ? 1.05 : 1),
       opacity,
+      dull ? DULL_TEXT_COLOR : CANCEL_LABEL_TEXT_COLOR,
     );
   }
 
@@ -2000,6 +2070,13 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
   }
 
   function layout() {
+    if (edgeOpacity <= 0.001) {
+      hoverIndex = -1;
+      cancelHovered = false;
+      pauseHovered = false;
+      hideMenuVisuals();
+      return;
+    }
     const s = hudScale;
     layoutRings(s);
 
@@ -2148,6 +2225,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       hideMesh(cancelSlashMesh);
       hideLabel(cancelLabel);
     }
+    applyEdgeFade();
   }
 
   /**
@@ -2167,6 +2245,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     armed = null;
     prodPaused = false;
     tracks.clear();
+    snapEdgeFade = true;
     utilityAvailable = {
       pause: false,
       cancel: false,
@@ -2190,17 +2269,17 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     layout();
   }
 
-  function hide() {
+  function hideMenuVisuals() {
     hideArcRings();
     for (let i = 0; i < pads.length; i++) {
       hideMesh(pads[i].mesh);
       applyPadHover(i, false);
+      if (progressPads[i]?.mesh) hideMesh(progressPads[i].mesh);
     }
     hideMesh(cancelPadMesh);
     hideMesh(cancelSlashMesh);
     hideMesh(pausePadMesh);
     hideMesh(pauseBarsMesh);
-    hideAllProgress();
     hideAllIcons();
     for (const label of labels) hideLabel(label);
     for (let i = 0; i < prices.length; i++) hidePrice(i);
@@ -2209,6 +2288,11 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     for (const extra of extras) hideLabel(extra);
     hideLabel(cancelLabel);
     hideLabel(pauseLabel);
+  }
+
+  function hide() {
+    hideMenuVisuals();
+    hideAllProgress();
     slots = [];
     cancelSlot = null;
     pauseSlot = null;
@@ -2220,6 +2304,8 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     prodPaused = false;
     tracks.clear();
     activeBuildingType = null;
+    edgeOpacity = 1;
+    lastFadeAt = 0;
     open = false;
   }
 
@@ -2316,7 +2402,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
    * @returns {{ kind: 'unit' | 'upgrade' | 'pause' | 'cancel', id?: string } | null}
    */
   function pickOptionAtRay(ray) {
-    if (!open || !ray) return null;
+    if (!open || !ray || !edgePickable()) return null;
 
     const pp = padPlanePoint();
     const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
@@ -2367,7 +2453,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   /** Thin outer ring is chrome (keeps the menu) but does not pick an option. */
   function hitRingBandAtRay(ray) {
-    if (!open || !ray) return false;
+    if (!open || !ray || !edgePickable()) return false;
     const hit = rayHitPlane(ray, centerX, centerY, centerZ, nx, ny, nz);
     if (!hit) return false;
     const d = Math.hypot(hit.x - centerX, hit.y - centerY, hit.z - centerZ);
@@ -2378,7 +2464,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   /** Dull Pause / Cancel pads click through, including the ring strip under them. */
   function hitUnavailableUtilityPadAtRay(ray) {
-    if (!open || !ray) return false;
+    if (!open || !ray || !edgePickable()) return false;
     const pp = padPlanePoint();
     const padHit = rayHitPlane(ray, pp.x, pp.y, pp.z, nx, ny, nz);
     if (!padHit) return false;

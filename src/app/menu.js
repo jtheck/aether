@@ -368,6 +368,10 @@ export function setupMenu({
     showPage(onSettings ? 'main' : 'settings');
     if (!onSettings) syncFromState();
   });
+  const forgeLink = drawer.querySelector('#forge_editor_a');
+  forgeLink?.addEventListener('click', () => {
+    aetherSteam.notifyForgeOpened();
+  });
   exitBtn?.addEventListener('click', async () => {
     await toggleFullscreen();
     paintExit();

@@ -42,6 +42,7 @@ import { createCameraController, resolveCameraHalfF } from './cameraController.j
 import { capacityFor } from '../sim/capacity.js';
 import {
   UNIT_MODEL_URLS,
+  collectFxSockets,
   hasUnitModel,
   loadBakedUnitMeshParts,
   prefetchBakedMesh,
@@ -632,6 +633,12 @@ async function loadStaticUnitPartsForType(engine, typeId, packId) {
  * @param {number} activeCount
  * @param {number} gpuCap
  */
+function vatBatchSockets(vat, def) {
+  const authored = vat?.root ? collectFxSockets(vat.root) : [];
+  if (authored.length) return authored;
+  return [...(def?.extraSockets ?? [])];
+}
+
 /** VAT when registered; otherwise static mesh bake (interim until all units are skinned). */
 async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = null) {
   if (isVatUnitType(typeId)) {
@@ -694,6 +701,8 @@ async function createTypeBatch(engine, typeId, activeCount, gpuCap, packId = nul
       vatScale: vat.instanceScale,
       vatFootLift: vat.footLift,
       vatDirty: false,
+      // Authored empties win. extraSockets is only a stand-in until the GLB has them.
+      fxSockets: vatBatchSockets(vat, def),
     };
   }
 
@@ -1057,6 +1066,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   /** Per-entity batch map key (VAT shards use `${typeId}#${shard}`). */
   /** @type {(string | number | null)[]} */
   const entityBatchKey = new Array(entitySlot.length).fill(null);
+  /** Entities deliberately left out of the batches by mapEntitySlots (faded corpses). */
+  let entityRetired = new Uint8Array(entitySlot.length);
+  let retiredEntities = 0;
 
   function ensureEntityCapacity(needed) {
     const n = Math.max(0, needed | 0);
@@ -1066,6 +1078,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     next.fill(-1);
     next.set(entitySlot);
     entitySlot = next;
+    const nextRetired = new Uint8Array(nextLen);
+    nextRetired.set(entityRetired);
+    entityRetired = nextRetired;
     while (entityBatchKey.length < nextLen) entityBatchKey.push(null);
   }
   const UNIT_PING_MS = 280;
@@ -1139,6 +1154,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   let lastMapTypes = null;
   /** @type {Uint8Array | number[] | null} */
   let lastMapOwners = null;
+  /** @type {Uint8Array | number[] | null} */
+  let lastMapDrawable = null;
   let firstUnitLogged = false;
   let poseResyncGeneration = 0;
   let lastConsumedPoseResync = 0;
@@ -1194,7 +1211,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
         }
         opts.onAnimLoadProgress?.(typeBatches.size, typeBatches.size);
         if (lastMapTypes) {
-          mapEntitySlots(lastMapCount, lastMapTypes, lastMapOwners);
+          mapEntitySlots(lastMapCount, lastMapTypes, lastMapOwners, lastMapDrawable);
           // New slots need a full pose rewrite — mark dirty + ask main to drop pose cache.
           for (const batch of typeBatches.values()) {
             for (const mesh of vatPartMeshes(batch)) {
@@ -2535,8 +2552,8 @@ export async function createRenderer(canvas, capacity, opts = {}) {
    * thing that picks a style; nothing downstream rewrites it based on what the
    * socket is attached to. Add a style here rather than branching at the
    * emitter, and keep new names clear of the words already matched below.
-   * Supported: smoke_anchor*, fire_anchor*, hex_anchor*, sparkle_anchor*
-   * (spawn_* ignored).
+   * Supported: smoke_anchor*, fire_anchor*, torch_anchor*, hex_anchor*,
+   * sparkle_anchor* (spawn_* ignored).
    * Final size = inherent × styleBase × emptyScale × instanceScale.
    * @returns {{ style: string, base: number } | null}
    */
@@ -2545,7 +2562,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     if (/smoke/i.test(name)) return { style: 'smoke', base: 1.15 };
     if (/sparkle/i.test(name)) return { style: 'sparkle', base: 1.0 };
     if (/hex/i.test(name)) return { style: 'hex', base: 0.8 };
-    if (/fire/i.test(name)) return { style: 'torch', base: 1.0 };
+    if (/fire|torch/i.test(name)) return { style: 'torch', base: 1.0 };
     return null;
   }
 
@@ -3335,6 +3352,9 @@ export async function createRenderer(canvas, capacity, opts = {}) {
   }
 
   function writeInstanceAt(i, typeId, owner, x, z, diameter, yaw = 0, moving = false, loft = 0, pitch = 0, roll = 0, groundYOverride = NaN, carrying = false, chopping = false, walkRate = 1, attacking = false) {
+    // Retired entities have no slot on purpose. Report success so the caller's
+    // unmapped tally does not read this as a broken mapping and force a rebuild.
+    if (entityRetired[i]) return true;
     const slot = entitySlot[i];
     if (slot < 0) return false;
     const key = entityBatchKey[i] ?? batchKey(typeId, owner);
@@ -3360,17 +3380,31 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     return true;
   }
 
-  function mapEntitySlots(count, typesArr, ownersArr) {
+  /**
+   * @param {Uint8Array | number[] | null} [drawable] 0 = entity is retired: it keeps its
+   *   id for the rest of the match but must not hold a thin-instance slot. Sim entity ids
+   *   are never recycled, so without this every corpse stays in the color pass and in
+   *   every shadow cascade for the rest of the match.
+   */
+  function mapEntitySlots(count, typesArr, ownersArr, drawable) {
     lastMapCount = count;
     lastMapTypes = typesArr;
     lastMapOwners = ownersArr ?? null;
+    lastMapDrawable = drawable ?? null;
     ensureEntityCapacity(count);
     scheduleBatchesForTypes(count, typesArr, ownersArr);
 
     entitySlot.fill(-1);
     entityBatchKey.fill(null);
+    entityRetired.fill(0);
+    retiredEntities = 0;
     const nextByBase = new Map();
     for (let i = 0; i < count; i++) {
+      if (drawable && !drawable[i]) {
+        entityRetired[i] = 1;
+        retiredEntities++;
+        continue;
+      }
       const type = Number(typesArr[i]);
       const owner = ownersArr ? Number(ownersArr[i]) : 0;
       const key = batchKey(type, owner);
@@ -3437,6 +3471,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
 
     const unmapped = [];
     for (let i = 0; i < count; i++) {
+      if (entityRetired[i]) continue;
       if (entitySlot[i] < 0) unmapped.push(i);
     }
 
@@ -4584,11 +4619,16 @@ export async function createRenderer(canvas, capacity, opts = {}) {
     },
 
     /** Rebuild type-batch mapping when entity count/types change (e.g. staging → live). */
-    rebuildFromTypes(count, typesArr, ownersArr) {
+    rebuildFromTypes(count, typesArr, ownersArr, drawable) {
       setSelRingCount(count);
-      const stillUnmapped = mapEntitySlots(count, typesArr, ownersArr);
+      const stillUnmapped = mapEntitySlots(count, typesArr, ownersArr, drawable);
       flushAllBatches();
       return stillUnmapped;
+    },
+
+    /** Entities dropped from the batches at the last rebuild (see mapEntitySlots). */
+    retiredEntityCount() {
+      return retiredEntities;
     },
 
     /** Write instance transforms from sim/world positions (avoids origin flash after rebuild). */
@@ -4667,7 +4707,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
       for (let i = 0; i < count; i++) {
         const type = typesArr[i];
         byType[type] = (byType[type] ?? 0) + 1;
-        if (entitySlot[i] < 0) unmapped.push(i);
+        if (!entityRetired[i] && entitySlot[i] < 0) unmapped.push(i);
       }
       const batches = {};
       for (const [key, batch] of typeBatches) {
@@ -4684,7 +4724,7 @@ export async function createRenderer(canvas, capacity, opts = {}) {
           tiCount: fallback.mesh.thinInstances?.count ?? 0,
         };
       }
-      return { count, byType, batches, unmapped };
+      return { count, byType, batches, unmapped, retired: retiredEntities };
     },
 
     commit() {

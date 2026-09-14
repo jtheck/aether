@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { UNIT } from '../sim/unitTypes.js';
 import {
+  BRIGAND_TORCH_SOCKET,
   clipForVatState,
   maxVatInstancesPerBatch,
   primeVatInstanceCapacity,
@@ -92,8 +93,22 @@ function warriorHooksAuthoredClipNames() {
   assert.equal(def.attackClip, 'Attack_Swing');
 }
 
+function brigandKeepsVillagerBakeAndATorch() {
+  const def = VAT_UNIT_DEFS[UNIT.BRIGAND];
+  const vill = VAT_UNIT_DEFS[UNIT.VILLAGER];
+  assert.equal(def.url, vill.url);
+  assert.equal(def.idleClip, vill.idleClip);
+  assert.equal(def.walkClip, vill.walkClip);
+  assert.deepEqual(def.extraSockets, [BRIGAND_TORCH_SOCKET]);
+  // Idle Arm.R tip — not bind T-pose, not a guessed hip offset.
+  assert.ok(BRIGAND_TORCH_SOCKET.x > 0.4);
+  assert.ok(BRIGAND_TORCH_SOCKET.y > 1.1);
+  assert.ok(BRIGAND_TORCH_SOCKET.y < 1.3);
+}
+
 texelWidthMatchesLitePacking();
 warriorHooksAuthoredClipNames();
+brigandKeepsVillagerBakeAndATorch();
 vatWalkFpsScalesWithRate();
 vatWantPrefersChopOverIdle();
 vatWantPrefersAttackOverWalk();

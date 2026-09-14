@@ -212,8 +212,8 @@ export function assignHeroOwners(units, playerIds, seed = 0) {
 
 /**
  * Patch an encoded garden so the worker spawns the right owners.
- * Solo: every unit belongs to the one player.
- * 2–4p: shuffle the four heroes every map; extras keep who trained them.
+ * Solo and 2–4p: deal the four heroes. Unnamed extras (enemy camps, trained
+ * leftovers) keep the owner they already have.
  * Adventure maps do not carry an agora.
  */
 export function prepareAdventureGarden(gardenJson, {
@@ -226,8 +226,7 @@ export function prepareAdventureGarden(gardenJson, {
   const players = normalizePlayerIds(humanPlayers);
   let units = unitsFromGardenJson(gardenJson);
   if (party?.length) units = mergePartyUnits(units, party);
-  if (players.length <= 1) units = stampUnitOwners(units, players[0]);
-  else units = assignHeroOwners(units, players, seed);
+  units = assignHeroOwners(units, players, seed);
 
   const extras = { units, agoras: [] };
   if (bank) extras.startingResources = bank;

@@ -5,6 +5,7 @@ import {
   ACH_FIRST_MATCH,
   ACH_KOTH_DEFEAT,
   ACH_LINUX_LAUNCH,
+  ACH_FORGE_OPEN,
   createAetherSteam,
   isKothAgoraDefeat,
   isLinuxRuntime,
@@ -45,6 +46,7 @@ describe('createAetherSteam', () => {
     assert.equal(steam.isAvailable(), false);
     assert.equal(steam.notifyPlayReady(), false);
     assert.equal(steam.notifyKothLobbyCreated(), false);
+    assert.equal(steam.notifyForgeOpened(), false);
     assert.equal(steam.notifyKothDefeat({ matchWinner: 1, localPlayerId: 0 }), false);
     assert.equal(steam.unlockAchievement(ACH_FIRST_LAUNCH), false);
     assert.deepEqual(steam.ownedPacks(), []);
@@ -100,6 +102,20 @@ describe('createAetherSteam', () => {
     });
     assert.equal(steam.notifyPlayReady(), true);
     assert.deepEqual(stub.unlocked, [ACH_FIRST_LAUNCH]);
+  });
+
+  it('unlocks forge open once, and retries if Steam is late', () => {
+    const stub = fakeSteam({ available: false });
+    const steam = createAetherSteam({ steam: () => stub.api });
+    assert.equal(steam.notifyForgeOpened(), false);
+    assert.deepEqual(stub.unlocked, []);
+    stub.available = true;
+    stub.api.isAvailable = () => true;
+    stub.api.getInfo = () => ({ available: true });
+    assert.equal(steam.notifyForgeOpened(), true);
+    assert.equal(steam.notifyForgeOpened(), false);
+    assert.deepEqual(stub.unlocked, [ACH_FORGE_OPEN]);
+    assert.deepEqual(stub.presence, [['status', 'In Forge']]);
   });
 
   it('unlocks first KOTH lobby create once', () => {

@@ -17,8 +17,10 @@ import { tileCenterX, tileCenterY, snapToPassable, worldToTile, TILE_SIZE_F, isP
 import { RESOURCE_KINDS, RESOURCE_INDEX } from './resources.js';
 import { addGatherIncome } from './storage.js';
 import { UNIT } from './unitTypes.js';
+import { revertBrigand } from './brigand.js';
 import { SCENERY, rockFootprintRadiusForStock, rockResourceKind, damageRock } from './scenery.js';
 import { isHostile } from './teams.js';
+import { buildingIsFinished } from './buildings.js';
 
 const WOOD_CODE = RESOURCE_INDEX.wood + 1;
 const FOOD_CODE = RESOURCE_INDEX.food + 1;
@@ -126,6 +128,8 @@ const DEPOSIT_TYPES = new Set(['camp', 'mine']);
 // World-unit bases are exported so the HUD ring can mirror the sim reach exactly.
 /** Base gather reach of a camp/mine in world units (≈7 tiles, matching legacy). */
 export const CAMP_WORK_RADIUS_F = 28;
+/** Farm plots only recruit from the 3×3 and a tile of grass around it. */
+export const FARM_WORK_RADIUS_F = 16;
 /** Reach added per engineer loitering near the drop-off (world units). */
 export const ENGINEER_RADIUS_BONUS_F = 8;
 /** How close an engineer must be to a drop-off to extend it (world units). */
@@ -134,13 +138,18 @@ export const ENGINEER_ASSIST_RANGE_F = 28;
 export const ENGINEER_BONUS_CAP = 3;
 /** Keep the last stacked bonus after engineers walk off (~6s at 20 Hz). */
 export const ENGINEER_BONUS_LINGER_TICKS = 120;
-/** Max villagers a single drop-off will pull to work. */
+/** Crew-size radius: every 4 villagers on a camp/mine add this much reach. */
+export const CREW_RADIUS_TIER = 4;
+export const CREW_RADIUS_BONUS_F = 8;
+/** Cap stacked crew-radius tiers (4 workers → +8, 8 workers → +16). */
+export const CREW_RADIUS_TIER_CAP = 2;
+/** Max villagers a single camp/mine will pull to work. */
 export const CAMP_MAX_WORKERS = 8;
-/** Farms are small plots — keep them to a 1–2 person crew so workers spread out. */
-export const FARM_MAX_WORKERS = 2;
+/** One farmer per plot — extra villagers pile up and the yield does not scale. */
+export const FARM_MAX_WORKERS = 1;
 
 /** Per-type worker cap so farms stay tiny while camps/mines field a full crew. */
-function maxWorkersFor(type) {
+export function maxWorkersFor(type) {
   return type === 'farm' ? FARM_MAX_WORKERS : CAMP_MAX_WORKERS;
 }
 
@@ -155,7 +164,9 @@ const DEFEND_RANGE_SQ = fx.mul(DEFEND_RANGE, DEFEND_RANGE);
 const DEFEND_PHASE = 6;
 
 const CAMP_WORK_RADIUS = fx.fromFloat(CAMP_WORK_RADIUS_F);
+const FARM_WORK_RADIUS = fx.fromFloat(FARM_WORK_RADIUS_F);
 const ENGINEER_RADIUS_BONUS = fx.fromFloat(ENGINEER_RADIUS_BONUS_F);
+const CREW_RADIUS_BONUS = fx.fromFloat(CREW_RADIUS_BONUS_F);
 const ENGINEER_ASSIST_RANGE = fx.fromFloat(ENGINEER_ASSIST_RANGE_F);
 const ENGINEER_ASSIST_RANGE_SQ = fx.mul(ENGINEER_ASSIST_RANGE, ENGINEER_ASSIST_RANGE);
 /** Re-scan cadence for auto-assign (deterministic on world.tick). */
@@ -171,6 +182,11 @@ const AUTO_ASSIGN_INTERVAL = 20;
  */
 export function beginGather(w, field, i, tile, defensive = 0) {
   if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) return false;
+  const node = tile >= 0 ? nodeAt(field, tile) : null;
+  if (node?.food) {
+    const already = w.order[i] === ORDER.GATHER && (w.gatherTile[i] | 0) === (tile | 0);
+    if (!already && countFarmCrewOnTile(w, tile) >= FARM_MAX_WORKERS) return false;
+  }
   if (w.rallyHopCount) w.rallyHopCount[i] = 0;
   w.order[i] = ORDER.GATHER;
   w.gatherTile[i] = tile | 0;
@@ -189,7 +205,10 @@ export function beginGather(w, field, i, tile, defensive = 0) {
 /** @param {object} w @param {object} field @param {number[]} ids @param {number} tile */
 export function applyGather(w, field, ids, tile) {
   if (!ids || ids.length === 0 || tile == null || tile < 0) return;
-  for (let k = 0; k < ids.length; k++) beginGather(w, field, ids[k], tile);
+  for (let k = 0; k < ids.length; k++) {
+    revertBrigand(w, ids[k]);
+    beginGather(w, field, ids[k], tile);
+  }
 }
 
 function endGather(w, i) {
@@ -458,6 +477,106 @@ export function gatherSystem(w, field) {
   }
 }
 
+function buildingCenterTile(field, b) {
+  if (!field) return -1;
+  const tx = worldToTile(b.x);
+  const tz = worldToTile(b.z);
+  if (tx < 0 || tz < 0 || tx >= field.width || tz >= field.height) return -1;
+  return tz * (field.width | 0) + tx;
+}
+
+/** Villagers already tasked to this farm's food tile (commuting or pottering). */
+function countFarmCrewOnTile(w, tile) {
+  if (tile < 0 || !w.gatherTile) return 0;
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.type[i] !== UNIT.VILLAGER) continue;
+    if (w.order[i] !== ORDER.GATHER) continue;
+    if ((w.gatherTile[i] | 0) === (tile | 0)) n++;
+  }
+  return n;
+}
+
+function dropOffFinished(b) {
+  if (!buildingIsFinished(b)) return false;
+  if (b.hp != null && (b.hp | 0) <= 0) return false;
+  return true;
+}
+
+/** True when `b` is this owner's closest finished building of the same type. */
+function isNearestSameType(w, b, px, py) {
+  let bestD = fx.dist2(px, py, b.x, b.z);
+  const buildings = w.buildings;
+  if (!buildings) return true;
+  for (let i = 0; i < buildings.length; i++) {
+    const o = buildings[i];
+    if (o === b) continue;
+    if (!dropOffFinished(o)) continue;
+    if (o.owner !== b.owner || o.type !== b.type) continue;
+    if (fx.dist2(px, py, o.x, o.z) < bestD) return false;
+  }
+  return true;
+}
+
+function isNearestSameTypeWorld(buildings, b, x, z) {
+  if (!buildings?.length) return true;
+  const bestD = (x - b.x) * (x - b.x) + (z - b.z) * (z - b.z);
+  for (let i = 0; i < buildings.length; i++) {
+    const o = buildings[i];
+    if (o === b) continue;
+    if (!dropOffFinished(o)) continue;
+    if (o.owner !== b.owner || o.type !== b.type) continue;
+    const dx = x - o.x;
+    const dz = z - o.z;
+    if (dx * dx + dz * dz < bestD) return false;
+  }
+  return true;
+}
+
+/**
+ * Crew that belongs to this drop-off: same resource class, nearest same type.
+ * Farms count by their food tile so two plots never share a slot.
+ */
+function countAssignedCrew(w, field, b) {
+  const wantClass = dropOffNodeClass(b.type);
+  if (wantClass < 0) return 0;
+  if (wantClass === NODE_FOOD) {
+    return countFarmCrewOnTile(w, buildingCenterTile(field, b));
+  }
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.VILLAGER) continue;
+    if (w.order[i] !== ORDER.GATHER) continue;
+    if (field && w.gatherTile) {
+      if (nodeClass(nodeAt(field, w.gatherTile[i])) !== wantClass) continue;
+    }
+    if (!isNearestSameType(w, b, w.px[i], w.py[i])) continue;
+    n++;
+  }
+  return n;
+}
+
+function countAssignedCrewWorld(w, b, buildings) {
+  const wantClass = dropOffNodeClass(b.type);
+  if (wantClass < 0) return 0;
+  const list = buildings ?? w.buildings;
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (!w.alive[i] || w.owner[i] !== b.owner || w.type[i] !== UNIT.VILLAGER) continue;
+    if (w.order[i] !== ORDER.GATHER) continue;
+    if (!isNearestSameTypeWorld(list, b, fx.toFloat(w.px[i]), fx.toFloat(w.py[i]))) continue;
+    n++;
+  }
+  return n;
+}
+
+function crewRadiusTiers(crew) {
+  const n = crew | 0;
+  if (n < CREW_RADIUS_TIER) return 0;
+  const tiers = (n / CREW_RADIUS_TIER) | 0;
+  return tiers > CREW_RADIUS_TIER_CAP ? CREW_RADIUS_TIER_CAP : tiers;
+}
+
 function nearbyEngineerCount(w, b) {
   let eng = 0;
   for (let i = 0; i < w.count; i++) {
@@ -504,28 +623,34 @@ export function refreshEngineerAssists(w) {
 }
 
 /**
- * Effective work radius of a drop-off — base reach plus a bonus for each engineer
- * loitering nearby (capped). Exposed so the HUD can draw the same ring.
+ * Effective work radius of a drop-off — farm plots stay tight; camps/mines add
+ * engineer assist plus a crew-size bonus (4 / 8 workers). HUD uses the world
+ * variant so the ring matches.
  * @returns {number} fixed-point radius
  */
-export function campWorkRadius(w, b) {
+export function campWorkRadius(w, b, field) {
   const live = nearbyEngineerCount(w, b);
   const linger = lingeringEngineerBonus(w, b);
   const eng = live > linger ? live : linger;
-  return CAMP_WORK_RADIUS + eng * ENGINEER_RADIUS_BONUS;
+  const base = b.type === 'farm' ? FARM_WORK_RADIUS : CAMP_WORK_RADIUS;
+  const crew = b.type === 'farm' ? 0 : crewRadiusTiers(countAssignedCrew(w, field, b));
+  return base + eng * ENGINEER_RADIUS_BONUS + crew * CREW_RADIUS_BONUS;
 }
 
 /**
  * Gather reach in world units for a serialized (float xyz) drop-off.
- * Same engineer bonus as campWorkRadius; used by the HUD ring.
+ * Same engineer + crew bonus as campWorkRadius; used by the HUD ring.
  * @param {object} w
- * @param {{ x: number, z: number, owner: number, engBonus?: number, engBonusUntil?: number }} b
+ * @param {{ x: number, z: number, owner: number, type?: string, engBonus?: number, engBonusUntil?: number }} b
+ * @param {object[] | null} [buildings] serialized building list (HUD has no w.buildings)
  */
-export function campWorkRadiusWorld(w, b) {
+export function campWorkRadiusWorld(w, b, buildings) {
   const live = nearbyEngineerCountWorld(w, b);
   const linger = lingeringEngineerBonus(w, b);
   const eng = live > linger ? live : linger;
-  return CAMP_WORK_RADIUS_F + eng * ENGINEER_RADIUS_BONUS_F;
+  const base = b.type === 'farm' ? FARM_WORK_RADIUS_F : CAMP_WORK_RADIUS_F;
+  const crew = b.type === 'farm' ? 0 : crewRadiusTiers(countAssignedCrewWorld(w, b, buildings));
+  return base + eng * ENGINEER_RADIUS_BONUS_F + crew * CREW_RADIUS_BONUS_F;
 }
 
 /**
@@ -600,19 +725,13 @@ export function campAutoAssignSystem(w, field) {
     const wantClass = dropOffNodeClass(b.type);
     if (wantClass < 0) continue; // agora-like: deposit only, never recruits
     const owner = b.owner;
-    const radius = campWorkRadius(w, b);
+    const radius = campWorkRadius(w, b, field);
     const radiusSq = fx.mul(radius, radius);
     const cap = maxWorkersFor(b.type);
 
-    // Only count crew already working THIS drop-off's resource class, so a wood
-    // chopper passing a farm doesn't count against the farm's tiny food crew.
-    let workers = 0;
-    for (let i = 0; i < w.count; i++) {
-      if (!w.alive[i] || w.owner[i] !== owner || w.type[i] !== UNIT.VILLAGER) continue;
-      if (w.order[i] !== ORDER.GATHER) continue;
-      if (nodeClass(nodeAt(field, w.gatherTile[i])) !== wantClass) continue;
-      if (fx.dist2(w.px[i], w.py[i], b.x, b.z) <= radiusSq) workers++;
-    }
+    // Crew is per-building (farm tile / nearest camp or mine), not "anyone
+    // gathering this class inside the ring" — two farms no longer share a cap.
+    let workers = countAssignedCrew(w, field, b);
     if (workers >= cap) continue;
 
     for (let i = 0; i < w.count && workers < cap; i++) {

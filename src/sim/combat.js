@@ -2,6 +2,7 @@
 
 import * as fx from './fixed.js';
 import { ATTACK_DELIVERY, getUnitDef, unitAttacksBuildings, unitIdleHunts } from './unitTypes.js';
+import { revertBrigand } from './brigand.js';
 import { isHostile } from './teams.js';
 import { attackInRange, clearPath, queuePath, attackStandPoint } from './path.js';
 import { applyDamage, kill } from './damage.js';
@@ -22,6 +23,7 @@ import {
   applyDamageBuilding,
   attackBuildingStandPointOnField,
   buildingFootprintHalf,
+  isEconomyCombatBuilding,
 } from './buildingCombat.js';
 import { isBuildingAlive } from './buildings.js';
 import { clearAttackFocus } from './world.js';
@@ -155,8 +157,13 @@ export function acquireTargets(w, field) {
     const prevB = w.targetBuilding?.[i] ?? -1;
     if (wasAttack && prevB >= 0 && isBuildingAlive(buildings[prevB])) continue;
 
+    // Prefer military / production buildings. Economy (camp/mine/farm/silo) is
+    // fallback only — and attack-move keeps marching instead of peeling off.
+    const allowEconomy = w.order[i] !== w.ORDER.ATTACK_MOVE;
     let bestBi = -1;
     let bestBd2 = 0x7fffffff;
+    let bestEcon = -1;
+    let bestEconD2 = 0x7fffffff;
     for (let bi = 0; bi < buildings.length; bi++) {
       const b = buildings[bi];
       if (!isBuildingAlive(b) || !isHostile(w.owner[i], b.owner)) continue;
@@ -164,11 +171,20 @@ export function acquireTargets(w, field) {
       const d2 = fx.dist2(w.px[i], w.py[i], b.x, b.z);
       const reach = def.aggroRange + buildingFootprintHalf(b.type);
       if (d2 > fx.mul(reach, reach)) continue;
+      if (isEconomyCombatBuilding(b.type)) {
+        if (!allowEconomy) continue;
+        if (d2 < bestEconD2 || (d2 === bestEconD2 && (bestEcon < 0 || bi < bestEcon))) {
+          bestEconD2 = d2;
+          bestEcon = bi;
+        }
+        continue;
+      }
       if (d2 < bestBd2 || (d2 === bestBd2 && (bestBi < 0 || bi < bestBi))) {
         bestBd2 = d2;
         bestBi = bi;
       }
     }
+    if (bestBi < 0) bestBi = bestEcon;
     if (bestBi < 0) continue;
 
     w.targetEntity[i] = -1;
@@ -192,6 +208,7 @@ function endAttack(w, i) {
   } else {
     w.order[i] = w.ORDER.IDLE;
   }
+  revertBrigand(w, i);
 }
 
 function resolveAttacks(w, field) {

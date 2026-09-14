@@ -10,6 +10,9 @@ import {
   radialHudFadeAlpha,
   radialHudPremulRgba,
   RADIAL_HUD_BLEND_ALPHA,
+  RADIAL_ICON_RENDER_ORDER,
+  radialIconBounds,
+  radialIconAnchor,
 } from './radialPose.js';
 
 function colinear(a, b, c, eps = 1e-5) {
@@ -197,5 +200,31 @@ describe('fitRadialInViewport', () => {
   it('reports a positive apparent radius along camera right', () => {
     const r = apparentScreenRadius(eyeAt(0), 0, 0, 0, 40, worldToScreen);
     assert.ok(Math.abs(r - 40) < 1e-6);
+  });
+});
+
+describe('radial icon pose', () => {
+  it('paints icons after pad hit circles', () => {
+    assert.ok(RADIAL_ICON_RENDER_ORDER > 220);
+    assert.ok(RADIAL_ICON_RENDER_ORDER < 230);
+  });
+
+  it('plants a mesh whose geometry hangs below the authored origin', () => {
+    const b = radialIconBounds([
+      { boundMin: [-2, -4, -1], boundMax: [2, 0, 1] },
+    ]);
+    assert.equal(b.cx, 0);
+    assert.equal(b.cy, -4);
+    assert.equal(b.cz, 0);
+    const at = radialIconAnchor(10, 5, 0, 1, 0, 0, 0, 0, 1, 2, b.cx, b.cy, b.cz);
+    assert.equal(at.x, 10);
+    assert.equal(at.y, 13);
+    assert.equal(at.z, 0);
+  });
+
+  it('falls back to the authored origin when bounds are missing', () => {
+    assert.deepEqual(radialIconBounds([]), { cx: 0, cy: 0, cz: 0 });
+    const at = radialIconAnchor(3, 4, 5, 1, 0, 0, 0, 0, 1, 1, 0, 0, 0);
+    assert.deepEqual(at, { x: 3, y: 4, z: 5 });
   });
 });

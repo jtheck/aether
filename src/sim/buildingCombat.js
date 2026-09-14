@@ -16,6 +16,13 @@ import {
 } from './sporeBloom.js';
 import { FIRE_ZONE_DAMAGE_INTERVAL } from './fireZones.js';
 
+/** Gather / storage buildings — smash these last, and don't peel off a march for them. */
+const ECONOMY_BUILDING_TYPES = new Set(['camp', 'mine', 'farm', 'silo']);
+
+export function isEconomyCombatBuilding(typeId) {
+  return ECONOMY_BUILDING_TYPES.has(typeId);
+}
+
 export function buildingFootprintHalf(typeId) {
   const fp = getBuildingFootprint(typeId);
   const tiles = Math.max(fp?.w ?? 2, fp?.h ?? 2);

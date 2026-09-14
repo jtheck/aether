@@ -1,12 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fx from '../sim/fixed.js';
+import { PLACEABLE_BUILDINGS } from '../sim/buildings.js';
 import { UNIT } from '../sim/unitTypes.js';
 import {
   COVER_DECAY_MS,
   VISITED_ALPHA,
   createFogOfWar,
   structureKey,
+  structureTouchesVision,
   visionTilesForBuilding,
   visionTilesForDef,
   visionTilesForUnitType,
@@ -49,7 +51,17 @@ describe('fogOfWar vision radii', () => {
   it('gives civilians a short circle and military a larger one', () => {
     assert.equal(visionTilesForDef({ category: 'civilian', aggroRange: 0 }), 8);
     assert.ok(visionTilesForUnitType(UNIT.WARRIOR) >= 10);
-    assert.equal(visionTilesForBuilding('camp'), 7);
+    assert.ok(visionTilesForBuilding('camp') > visionTilesForUnitType(UNIT.VILLAGER));
+  });
+
+  it('gives every placeable a hole bigger than a villager', () => {
+    const civ = visionTilesForUnitType(UNIT.VILLAGER);
+    for (const b of PLACEABLE_BUILDINGS) {
+      assert.ok(
+        visionTilesForBuilding(b.id) > civ,
+        `${b.id} should out-see a villager (got ${visionTilesForBuilding(b.id)} vs ${civ})`,
+      );
+    }
   });
 
   it('gives casters extra range, dirigibles more, and mirrors those on tower/agora', () => {
@@ -65,6 +77,46 @@ describe('fogOfWar vision radii', () => {
     assert.equal(visionTilesForBuilding('tower'), caster);
     assert.equal(visionTilesForBuilding('perch'), caster);
     assert.equal(visionTilesForBuilding('agora'), dirigible);
+  });
+});
+
+describe('fogOfWar building stamps', () => {
+  it('holds a hole from a lone farm with no units', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    fog.stamp({
+      world: fakeWorld([]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [{ owner: 0, type: 'farm', x: 0, z: 0 }],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    // 9 tiles out (36wu) used to sit past the old 7-tile camp circle.
+    assert.equal(fog.isWorldVisible(36, 0), true);
+    assert.equal(fog.hidesHostile(1, 36, 0), false);
+  });
+
+  it('reveals a large enemy hall when any footprint tile is in sight', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    // Villager hard circle is 8 tiles (32wu). A 3×3 village at x=36 has its
+    // center outside that circle and its west wall inside.
+    const village = { owner: 1, type: 'village', x: 36, z: 0 };
+    fog.stamp({
+      world: fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [village],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(36, 0), false);
+    assert.equal(structureTouchesVision(village.x, village.z, village.type, (x, z) => fog.isWorldVisible(x, z)), true);
+    assert.equal(fog.filterBuildings([village]).length, 1);
   });
 });
 

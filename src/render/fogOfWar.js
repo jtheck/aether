@@ -18,6 +18,7 @@ import {
 } from '../vendor/lite/liteVendor.js';
 import * as fx from '../sim/fixed.js';
 import { TILE_SIZE_F, worldHalfFFromField } from '../sim/field.js';
+import { BUILDING_FOOTPRINTS } from '../sim/buildings.js';
 import { isAlly } from '../sim/teams.js';
 import { UNIT_DEFS, getUnitDef } from '../sim/unitTypes.js';
 import { surfaceHeightAt } from './terrain.js';
@@ -29,7 +30,6 @@ const MIL_VISION_MIN = 10;
 const CASTER_VISION_TILES = 18;
 /** Airships see farther still; agoras share this radius. */
 const DIRIGIBLE_VISION_TILES = 24;
-const BUILDING_VISION_TILES = 7;
 /** Never-seen shroud — heavier than visited so wilderness is a third step. */
 const UNSEEN_MESH_ALPHA = 0.90;
 const UNSEEN_DIFFUSE = [0.01, 0.016, 0.028];
@@ -76,6 +76,13 @@ export function visionTilesForUnitType(typeId) {
   return UNIT_VISION_TILES[typeId] ?? visionTilesForDef(getUnitDef(typeId));
 }
 
+/** Half-footprint in tiles so the hole always clears the walls. */
+function buildingVisionPad(type) {
+  const fp = BUILDING_FOOTPRINTS[type];
+  if (!fp) return 1;
+  return (Math.max(fp.w, fp.h) + 1) >> 1;
+}
+
 /**
  * @param {string | undefined} type
  * @returns {number}
@@ -83,7 +90,30 @@ export function visionTilesForUnitType(typeId) {
 export function visionTilesForBuilding(type) {
   if (type === 'tower' || type === 'perch') return CASTER_VISION_TILES;
   if (type === 'agora') return DIRIGIBLE_VISION_TILES;
-  return BUILDING_VISION_TILES;
+  // Camps used to sit at 7 — shorter than a villager — so leaving a farm or
+  // barracks looked like the building had no sight at all.
+  return MIL_VISION_MIN + buildingVisionPad(type);
+}
+
+/**
+ * True when `test` hits the center or any footprint tile (large halls hide
+ * their center a tile or two behind the walls).
+ * @param {number} x
+ * @param {number} z
+ * @param {string | undefined} type
+ * @param {(x: number, z: number) => boolean} test
+ */
+export function structureTouchesVision(x, z, type, test) {
+  if (test(x, z)) return true;
+  const fp = BUILDING_FOOTPRINTS[type] ?? { w: 2, h: 2 };
+  const x0 = x - fp.w * TILE_SIZE_F * 0.5 + TILE_SIZE_F * 0.5;
+  const z0 = z - fp.h * TILE_SIZE_F * 0.5 + TILE_SIZE_F * 0.5;
+  for (let tz = 0; tz < fp.h; tz++) {
+    for (let tx = 0; tx < fp.w; tx++) {
+      if (test(x0 + tx * TILE_SIZE_F, z0 + tz * TILE_SIZE_F)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1014,13 +1044,14 @@ export function createFogOfWar() {
       const key = structureKey(kind === 'agora' ? { ...item, type: 'agora' } : item);
       liveKeys.add(key);
       const ally = isVisionAlly(item.owner);
-      if (ally || isWorldVisible(item.x, item.z)) {
+      const seen = structureTouchesVision(item.x, item.z, item.type ?? kind, isWorldVisible);
+      if (ally || seen) {
         lastKnown.set(key, cloneBuilding(item));
         out.push(item);
       }
     }
     for (const [key, ghost] of lastKnown) {
-      if (isWorldVisible(ghost.x, ghost.z)) {
+      if (structureTouchesVision(ghost.x, ghost.z, ghost.type ?? kind, isWorldVisible)) {
         if (!liveKeys.has(key)) lastKnown.delete(key);
         continue;
       }

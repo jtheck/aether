@@ -91,6 +91,7 @@ DLC ownership is on `getInfo().dlc` (`{ appId, owned }`). First Responder is App
 | `ACH_FIRST_MATCH` | First time the player creates a KOTH lobby (not join / claim) |
 | `ACH_KOTH_DEFEAT` | First agora-capture loss (not a score wipe or spectator) |
 | `ACH_LINUX_LAUNCH` | First splash-down on the native Linux shell (not Proton / Windows) |
+| `ACH_FORGE_OPEN` | First time the Forge Field Editor is opened (settings link or /forge) |
 
 Publish those exact names on the Steamworks partner site (drafts do nothing). Smoke test in the NW shell DevTools:
 
@@ -100,6 +101,7 @@ aetherSteam.test()
 aetherSteam.test('ACH_FIRST_MATCH')
 aetherSteam.test('ACH_KOTH_DEFEAT')
 aetherSteam.test('ACH_LINUX_LAUNCH')
+aetherSteam.test('ACH_FORGE_OPEN')
 ```
 
 Reset on your account via Steam console (`steam://open/console`):
@@ -109,6 +111,7 @@ achievement_clear 5043860 ACH_FIRST_LAUNCH
 achievement_clear 5043860 ACH_FIRST_MATCH
 achievement_clear 5043860 ACH_KOTH_DEFEAT
 achievement_clear 5043860 ACH_LINUX_LAUNCH
+achievement_clear 5043860 ACH_FORGE_OPEN
 ```
 
 Then clear the session flags or they will not re-fire:
@@ -117,4 +120,5 @@ Then clear the session flags or they will not re-fire:
 aetherSteam._firstLaunchHandled = false
 aetherSteam._firstMatchHandled = false
 aetherSteam._kothDefeatHandled = false
+aetherSteam._forgeOpenedHandled = false
 ```

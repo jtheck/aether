@@ -93,7 +93,7 @@ describe('adventure party', () => {
     assert.deepEqual([...four].sort((a, b) => a - b), [0, 1, 2, 3]);
   });
 
-  it('stamps a solo garden onto the local player', () => {
+  it('stamps a solo garden onto the local player and leaves enemy extras', () => {
     const garden = {
       v: 4,
       w: 32,
@@ -104,11 +104,16 @@ describe('adventure party', () => {
         [0, 3, 9, 8, 'Goblin'],
         [0, 4, 8, 7, 'Lady'],
         [0, 6, 10, 7, 'Doc'],
+        [4, 1, 14, 12],
       ],
       g: [[0, 1, 2]],
     };
     const solo = prepareAdventureGarden(garden, { humanPlayers: [2], seed: 1 });
-    assert.ok(solo.u.every((u) => u[0] === 2));
+    const heroes = solo.u.filter((u) => u[4]);
+    const extras = solo.u.filter((u) => !u[4]);
+    assert.ok(heroes.every((u) => u[0] === 2));
+    assert.equal(extras.length, 1);
+    assert.equal(extras[0][0], 4);
     assert.equal(solo.g, undefined);
   });
 

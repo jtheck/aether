@@ -115,6 +115,23 @@ describe('table silhouette', () => {
     assert.equal(isPassable(field, 8, 8), true);
   });
 
+  it('can suppress the center plinth on odd-chunk boards', () => {
+    const field = createField(1, { width: 48, height: 48 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(48, 48, 16),
+      cellRadius: createFullCellRadius(48, 48, 16, 0),
+      suppressCenterBlock: true,
+    });
+    assert.equal(tableHasCenterBlock(field), true);
+    assert.equal(field.suppressCenterBlock, true);
+    assert.equal(field.tableCenter, null);
+    assert.equal(isPassable(field, 24, 24), true);
+    assert.equal(isPassable(field, 24, 0), false);
+    assert.equal(field.tableCornerBlocks.length, 4);
+  });
+
   it('places a block halfway along each table edge', () => {
     const field = createField(1, { width: 48, height: 48 });
     field.terrainTypes.fill(TERRAIN.GRASS);
@@ -500,6 +517,34 @@ describe('garden codec', () => {
     assert.equal(world.count, 1);
     assert.ok(Math.abs(fx.toFloat(world.px[0]) - 12.5) < 0.02);
     assert.ok(Math.abs(fx.toFloat(world.py[0]) + 8.25) < 0.02);
+  });
+
+  it('roundtrips a suppressed center plinth and omits the default', () => {
+    const field = createField(1, { width: 48, height: 48 });
+    field.terrainTypes.fill(TERRAIN.GRASS);
+    applyTableSilhouette(field, {
+      cellSize: 16,
+      cellMask: createFullCellMask(48, 48, 16),
+      cellRadius: createFullCellRadius(48, 48, 16, 0),
+      suppressCenterBlock: true,
+    });
+    const json = encodeGarden(field);
+    assert.equal(json.ncb, 1);
+    const g = decodeGarden(json);
+    assert.equal(g.suppressCenterBlock, true);
+    const live = fieldFromGarden(json);
+    assert.equal(live.suppressCenterBlock, true);
+    assert.equal(live.tableCenter, null);
+    assert.equal(isPassable(live, 24, 24), true);
+    const on = createField(1, { width: 48, height: 48 });
+    on.terrainTypes.fill(TERRAIN.GRASS);
+    applyTableSilhouette(on, {
+      cellSize: 16,
+      cellMask: createFullCellMask(48, 48, 16),
+      cellRadius: createFullCellRadius(48, 48, 16, 0),
+    });
+    assert.equal(encodeGarden(on).ncb, undefined);
+    assert.equal(decodeGarden(encodeGarden(on)).suppressCenterBlock, false);
   });
 
   it('roundtrips a custom camera bound and omits a full-table one', () => {

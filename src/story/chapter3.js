@@ -15,17 +15,11 @@ import {
   activeMapW,
   buildField,
   setActiveMapSize,
-  TABLE_CHUNK_TILES,
 } from '../sim/field.js';
-import {
-  applyTableSilhouette,
-  createFullCellMask,
-  createFullCellRadius,
-} from '../sim/tableShape.js';
 import { encodeGarden } from '../sim/garden.js';
 import { UNIT } from '../sim/unitTypes.js';
 import { unitsFromCast } from './cast.js';
-import { markChapterExit } from './exits.js';
+import { dressChapter3 } from './chapterLand.js';
 
 export const CHAPTER3_CAST = [
   { name: 'Stumpey', type: UNIT.MYCO, tx: 48, tz: 42 },
@@ -130,17 +124,14 @@ export function buildChapter3Garden() {
   const prevH = activeMapH();
   try {
     const field = buildField(CHAPTER3_SEED, { width: TINY_MAP_W, height: TINY_MAP_H });
-    applyTableSilhouette(field, {
-      cellSize: TABLE_CHUNK_TILES,
-      cellMask: createFullCellMask(TINY_MAP_W, TINY_MAP_H, TABLE_CHUNK_TILES),
-      cellRadius: createFullCellRadius(TINY_MAP_W, TINY_MAP_H, TABLE_CHUNK_TILES, 0),
-    });
-    markChapterExit(field, 48, 41, chapter3Objectives()[0]);
+    const camps = dressChapter3(field, CHAPTER3_CAST, chapter3Objectives()[0]);
     return encodeGarden(field, {
       name: CHAPTER3_GARDEN_NAME,
+      authoredScenery: true,
       story: chapter3Story(),
       objectives: chapter3Objectives(),
-      units: unitsFromCast(CHAPTER3_CAST),
+      units: [...unitsFromCast(CHAPTER3_CAST), ...camps.units],
+      buildings: camps.buildings,
     });
   } finally {
     setActiveMapSize(prevW, prevH);

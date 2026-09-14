@@ -15,6 +15,7 @@ import {
   campWorkRadius,
   refreshEngineerAssists,
   CAMP_WORK_RADIUS_F,
+  CREW_RADIUS_BONUS_F,
   ENGINEER_RADIUS_BONUS_F,
   ENGINEER_BONUS_LINGER_TICKS,
 } from './gather.js';
@@ -442,7 +443,7 @@ function chopsAtTheNodeThenHauls() {
   assert.ok(sawHaul, 'switches to haul when the load is full');
 }
 
-function farmCapsAtTwoWorkers() {
+function farmCapsAtOneWorker() {
   const field = createField(1);
   field.pass.fill(1);
   const w = createWorld(32);
@@ -459,7 +460,51 @@ function farmCapsAtTwoWorkers() {
   for (let t = 0; t < 220; t++) step(w, field, []);
 
   const working = villagers.filter((v) => w.order[v] === ORDER.GATHER).length;
-  assert.equal(working, 2, 'a farm keeps at most a 2-person crew');
+  assert.equal(working, 1, 'a farm keeps a single farmer');
+}
+
+function farmManualGatherHonorsCap() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(38);
+  const farmTile = worldToTile(0) * field.width + worldToTile(0);
+  field.foodNode[farmTile] = 1;
+  w.buildings = [{ owner: 0, type: 'farm', x: fx.fromFloat(0), z: 0 }];
+  const villagers = [
+    spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+    spawn(w, { x: fx.fromFloat(4), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+    spawn(w, { x: fx.fromFloat(6), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+  ];
+
+  step(w, field, [{ type: CMD.GATHER, entities: villagers, tile: farmTile }]);
+  const working = villagers.filter((v) => w.order[v] === ORDER.GATHER).length;
+  assert.equal(working, 1, 'right-clicking a farm does not pile the whole group on it');
+}
+
+function campCrewExtendsRadius() {
+  const field = createField(1);
+  field.pass.fill(1);
+  const w = createWorld(44);
+  const nearTree = plantTreeAt(field, fx.fromFloat(4), 0, 240);
+  plantTreeAt(field, fx.fromFloat(32), 0, 80);
+  w.buildings = [{ owner: 0, type: 'camp', x: 0, z: 0, built: 1 }];
+  const crew = [
+    spawn(w, { x: fx.fromFloat(2), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+    spawn(w, { x: fx.fromFloat(3), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+    spawn(w, { x: fx.fromFloat(4), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+    spawn(w, { x: fx.fromFloat(5), y: 0, type: UNIT.VILLAGER, owner: 0 }),
+  ];
+  const far = spawn(w, { x: fx.fromFloat(34), y: 0, type: UNIT.VILLAGER, owner: 0 });
+
+  step(w, field, [{ type: CMD.GATHER, entities: crew, tile: nearTree }]);
+  assert.equal(
+    fx.toFloat(campWorkRadius(w, w.buildings[0], field)),
+    CAMP_WORK_RADIUS_F + CREW_RADIUS_BONUS_F,
+    'four gatherers add one radius tier',
+  );
+
+  for (let t = 0; t < 220; t++) step(w, field, []);
+  assert.equal(w.order[far], ORDER.GATHER, 'staffed camp recruits past the base ring');
 }
 
 function attackMoveStartsDefensiveGather() {
@@ -518,7 +563,9 @@ farmWorkersWanderThePlot();
 farmAutoAssignsIdleVillagers();
 mineRecruitsRockNotWood();
 campRecruitsWoodNotRock();
-farmCapsAtTwoWorkers();
+farmCapsAtOneWorker();
+farmManualGatherHonorsCap();
+campCrewExtendsRadius();
 attackMoveStartsDefensiveGather();
 defensiveFarmerRetaliatesThenResumes();
 onlyVillagersGather();

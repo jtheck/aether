@@ -97,6 +97,7 @@ export function loadDefaults() {
   load('villager_move_1', 'assets/sounds/units/villager.ogg', { volume: 1 });
   load('villager_move_2', 'assets/sounds/units/villager2.ogg', { volume: 0.85 });
   load('thunder', 'assets/sounds/thunder.ogg', { volume: 0.9 });
+  load('match_start', 'assets/sounds/match_start.ogg', { volume: 1 });
 }
 
 export function playVillagerMove() {
@@ -106,6 +107,11 @@ export function playVillagerMove() {
 
 export function playThunder() {
   return play('thunder');
+}
+
+/** Stinger once lockstep leaves tick 0 — both sides hear it on the same commit. */
+export function playMatchStart() {
+  return play('match_start');
 }
 
 export function init() {

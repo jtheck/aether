@@ -265,6 +265,7 @@ export function encodeGarden(field, extras = {}) {
   if (Number.isFinite(cameraHalf) && cameraHalf > 0 && cameraHalf < tableHalf - 0.5) {
     out.ch = Math.round(cameraHalf * 100) / 100;
   }
+  if (field.suppressCenterBlock) out.ncb = 1;
   return out;
 }
 
@@ -326,6 +327,7 @@ export function decodeGarden(data) {
     startingResources: normalizeStartingResources(data.sr ?? data.startingResources),
     authoredScenery: !!data.sc,
     regionLift: data.rl ? decodeQuantized01(data.rl, n) : null,
+    suppressCenterBlock: !!data.ncb,
     story: data.story ? normalizeStory(data.story) : null,
     objectives: normalizeObjectives(data.obj),
     cameraHalfF: Number(data.ch) > 0 ? Number(data.ch) : 0,
@@ -353,6 +355,7 @@ export function fieldFromGarden(data) {
     cellSize: g.cellSize,
     cellMask: g.cellMask,
     cellRadius: g.cellRadius,
+    suppressCenterBlock: g.suppressCenterBlock,
   });
   if (g.terrainTypes.length !== field.terrainTypes.length) {
     refreshTerrainDerived(field);

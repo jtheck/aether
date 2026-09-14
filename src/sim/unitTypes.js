@@ -18,6 +18,8 @@ export const UNIT = {
   WAGON: 10,
   DIRIGIBLE: 11,
   APC: 12,
+  /** Villager combat form — pointed CMD.ATTACK only. */
+  BRIGAND: 13,
 };
 
 export const ATTACK_DELIVERY = {
@@ -329,6 +331,27 @@ export const UNIT_DEFS = [
     /** Armored hull pushes through brush. */
     slowMul: 0.80,
   },
+  {
+    id: UNIT.BRIGAND,
+    name: 'Brigand',
+    category: 'civilian',
+    hp: 65,
+    speed: fx.fromFloat(2.6),
+    size: 5.0,
+    pickRadius: 1.5,
+    pickHeight: 1.0,
+    color: [0.78, 0.32, 0.20],
+    attackDamage: 6,
+    attackRange: fx.fromFloat(2.5),
+    attackCooldown: 30,
+    aggroRange: fx.fromFloat(0),
+    attackDelivery: ATTACK_DELIVERY.MELEE,
+    projectileType: -1,
+    minRange: 0,
+    preferredRange: fx.fromFloat(2.5),
+    primaryAbility: null,
+    idleHunt: false,
+  },
 ];
 
 export function getUnitDef(typeId) {
@@ -417,6 +440,12 @@ export function unitSlowMul(typeId) {
 
 export function isMilitary(typeId) {
   return getUnitDef(typeId).category === 'military';
+}
+
+/** Villager or its pointed-attack form. */
+export function isVillagerLine(typeId) {
+  const t = typeId | 0;
+  return t === UNIT.VILLAGER || t === UNIT.BRIGAND;
 }
 
 export function isTransport(typeId) {

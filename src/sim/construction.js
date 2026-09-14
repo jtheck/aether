@@ -14,6 +14,7 @@ import { queuePath, clearPath } from './path.js';
 import { clearEngagement } from './engagement.js';
 import { snapToPassable, TILE_SIZE_F } from './field.js';
 import { UNIT } from './unitTypes.js';
+import { revertBrigand } from './brigand.js';
 import { isCarried } from './transport.js';
 import { getBuildingFootprint, applyStructureOccupancyAt } from './buildings.js';
 
@@ -60,7 +61,7 @@ function buildReachSq(b) {
 }
 
 function canBuild(type) {
-  return type === UNIT.VILLAGER || type === UNIT.ENGINEER;
+  return type === UNIT.VILLAGER || type === UNIT.BRIGAND || type === UNIT.ENGINEER;
 }
 
 function buildHalvesFor(type) {
@@ -69,6 +70,7 @@ function buildHalvesFor(type) {
 
 /** Put a villager or engineer on a BUILD order for a building index. */
 export function beginBuild(w, i, bi) {
+  revertBrigand(w, i);
   if (!w.alive[i] || !canBuild(w.type[i])) return false;
   w.order[i] = ORDER.BUILD;
   w.buildTarget[i] = bi | 0;

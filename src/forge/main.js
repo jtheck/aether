@@ -73,6 +73,7 @@ import {
 } from '../render/celestial.js';
 import { createTerrainFromField, createTileGridOverlay, surfaceHeightAt } from '../render/terrain.js';
 import { softDetachMesh } from '../render/meshLifecycle.js';
+import { aetherSteam } from '../app/steam.js';
 
 const SIZES = FORGE_MAP_SIZES;
 const DEFAULT_SIZE = SIZES[1];
@@ -170,6 +171,7 @@ function newField(width, seed, extras = {}) {
     cellSize: TABLE_CHUNK_TILES,
     cellMask: extras.cellMask ?? createFullCellMask(size, size, TABLE_CHUNK_TILES),
     cellRadius: extras.cellRadius ?? createFullCellRadius(size, size, TABLE_CHUNK_TILES, extras.radius ?? DEFAULT_CELL_RADIUS),
+    suppressCenterBlock: extras.suppressCenterBlock === true,
   });
   return next;
 }
@@ -762,6 +764,23 @@ function tableHalfF() {
   return field ? worldHalfFFromField(field) : 0;
 }
 
+function syncCenterPlinthUi() {
+  const el = document.getElementById('center-plinth');
+  if (el) el.checked = !field?.suppressCenterBlock;
+}
+
+function setCenterPlinth(on) {
+  if (!field) return;
+  applyTableSilhouette(field, {
+    cellSize: field.tableShape?.cellSize,
+    cellMask: field.tableShape?.cellMask,
+    cellRadius: field.tableShape?.cellRadius,
+    suppressCenterBlock: !on,
+  });
+  syncCenterPlinthUi();
+  scheduleRebuild();
+}
+
 function authoredCameraHalfF() {
   return resolveCameraHalfF(tableHalfF(), state.cameraHalfF);
 }
@@ -1314,6 +1333,7 @@ function syncFormFromField() {
   }
   if (seedEl) seedEl.value = String(field.seed);
   if (nameEl) nameEl.value = state.mapName;
+  syncCenterPlinthUi();
   syncCameraBoundUi();
   for (const kind of RESOURCE_KINDS) {
     const el = document.getElementById(`start-${kind}`);
@@ -1420,7 +1440,8 @@ function mountUi() {
       <label><input id="chunk-enabled" type="checkbox" checked disabled> Chunk enabled</label>
       <label>Radius <span id="radius-label">${DEFAULT_CELL_RADIUS}</span></label>
       <input id="chunk-radius" type="range" min="0" max="32" value="${DEFAULT_CELL_RADIUS}" disabled>
-      <p class="hint">0 = sharp corner + plinth. Raise radius to fillet that corner. Odd boards get a center plinth. Outer rails get matching side plinths.</p>
+      <label><input id="center-plinth" type="checkbox" checked> Center plinth</label>
+      <p class="hint">0 = sharp corner + plinth. Raise radius to fillet that corner. Outer rails get matching side plinths. Odd boards can also plant a center plinth — uncheck to leave the middle open.</p>
       <label>Camera bound <span id="camera-bound-label">100%</span></label>
       <input id="camera-bound" type="range" min="20" max="100" value="100">
       <p class="hint">Pan and zoom stay inside this box. 100% is the full table — lower it to keep a vista rim the camera cannot cross.</p>
@@ -1632,6 +1653,9 @@ function mountUi() {
     for (const s of state.selected) setCellRadius(field.tableShape, s.cx, s.cz, r);
     applySelectedShape();
   });
+  document.getElementById('center-plinth').addEventListener('change', (e) => {
+    setCenterPlinth(e.target.checked);
+  });
   function setBrush(n) {
     state.brush = Math.max(0, n | 0);
     const label = String(state.brush);
@@ -1669,7 +1693,7 @@ function mountUi() {
   document.getElementById('btn-generate').addEventListener('click', () => {
     const size = snapTilesToOddChunks(Number(document.getElementById('map-size').value) || DEFAULT_SIZE);
     const seed = Number(document.getElementById('map-seed').value) || 0;
-    field = newField(size, seed);
+    field = newField(size, seed, { suppressCenterBlock: field?.suppressCenterBlock === true });
     state.selected = [];
     state.units = [];
     state.buildings = [];
@@ -1678,6 +1702,7 @@ function mountUi() {
     state.agoras = defaultMatchAgoras(worldHalfFFromField(field), field.width);
     celestial?.setWorldHalfF(worldHalfFFromField(field));
     applyCameraBound();
+    syncCenterPlinthUi();
     rebuildTerrain();
   });
   document.getElementById('btn-export').addEventListener('click', exportMap);
@@ -1894,6 +1919,15 @@ async function main() {
   syncFormFromField();
   await loadGardenFromSearch();
   await startEngine(engine);
+  notifyForgeOpened();
+}
+
+function notifyForgeOpened() {
+  if (aetherSteam.notifyForgeOpened()) return;
+  let tries = 0;
+  const id = setInterval(() => {
+    if (aetherSteam.notifyForgeOpened() || ++tries >= 15) clearInterval(id);
+  }, 1000);
 }
 
 main().catch((err) => {

@@ -15,7 +15,7 @@ export const POP_PER_AGORA = 5;
  */
 export function unitPopCost(typeId) {
   const t = typeId | 0;
-  return t === UNIT.VILLAGER || t === UNIT.ENGINEER || t === UNIT.MONK ? 1 : 0;
+  return t === UNIT.VILLAGER || t === UNIT.BRIGAND || t === UNIT.ENGINEER || t === UNIT.MONK ? 1 : 0;
 }
 
 /**

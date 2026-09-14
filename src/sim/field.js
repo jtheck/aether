@@ -263,6 +263,7 @@ export function fieldSnapshot(field) {
     tableEdge: field.tableEdge?.slice?.()
       ?? new Uint8Array(field.width * field.height),
     tableCenter: field.tableCenter ? { ...field.tableCenter } : null,
+    suppressCenterBlock: !!field.suppressCenterBlock,
     tableEdgeBlocks: Array.isArray(field.tableEdgeBlocks)
       ? field.tableEdgeBlocks.map((p) => ({ x: p.x, z: p.z, ox: p.ox ?? 0, oz: p.oz ?? 0 }))
       : [],

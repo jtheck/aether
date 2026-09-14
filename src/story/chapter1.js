@@ -17,17 +17,11 @@ import {
   activeMapW,
   buildField,
   setActiveMapSize,
-  TABLE_CHUNK_TILES,
 } from '../sim/field.js';
-import {
-  applyTableSilhouette,
-  createFullCellMask,
-  createFullCellRadius,
-} from '../sim/tableShape.js';
 import { encodeGarden } from '../sim/garden.js';
 import { UNIT } from '../sim/unitTypes.js';
 import { unitsFromCast } from './cast.js';
-import { markChapterExit } from './exits.js';
+import { dressChapter1 } from './chapterLand.js';
 
 /** v1 party: Myco / Warlock / Priest / Shaman around the grove. */
 export const CHAPTER1_CAST = [
@@ -141,7 +135,7 @@ export function chapter1Story() {
 }
 
 /**
- * Tiny v4 board + Chapter 1 reels. Terrain is a seeded placeholder — paint the real map in Forge.
+ * Tiny v4 board + Chapter 1 reels. Landscape is dressed in chapterLand.js.
  * Write with: node --input-type=module -e "import { writeFileSync } from 'fs'; import { buildChapter1Garden } from './story/chapter1.js'; const j=JSON.stringify(buildChapter1Garden()); writeFileSync('../maps/chapter1.garden', j); writeFileSync('maps/chapter1.garden', j);"
  */
 export function buildChapter1Garden() {
@@ -149,17 +143,14 @@ export function buildChapter1Garden() {
   const prevH = activeMapH();
   try {
     const field = buildField(CHAPTER1_SEED, { width: TINY_MAP_W, height: TINY_MAP_H });
-    applyTableSilhouette(field, {
-      cellSize: TABLE_CHUNK_TILES,
-      cellMask: createFullCellMask(TINY_MAP_W, TINY_MAP_H, TABLE_CHUNK_TILES),
-      cellRadius: createFullCellRadius(TINY_MAP_W, TINY_MAP_H, TABLE_CHUNK_TILES, 0),
-    });
-    markChapterExit(field, 30, 43, chapter1Objectives()[0]);
+    const camps = dressChapter1(field, CHAPTER1_CAST, chapter1Objectives()[0]);
     return encodeGarden(field, {
       name: CHAPTER1_GARDEN_NAME,
+      authoredScenery: true,
       story: chapter1Story(),
       objectives: chapter1Objectives(),
-      units: unitsFromCast(CHAPTER1_CAST),
+      units: [...unitsFromCast(CHAPTER1_CAST), ...camps.units],
+      buildings: camps.buildings,
     });
   } finally {
     setActiveMapSize(prevW, prevH);

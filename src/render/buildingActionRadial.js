@@ -34,8 +34,12 @@ import {
   stepRadialEdgeOpacity,
   RADIAL_EDGE_PICK_ALPHA,
   RADIAL_HUD_BLEND_ALPHA,
+  RADIAL_ICON_RENDER_ORDER,
+  disableRadialHudDepthWrite,
   radialHudFadeAlpha,
   radialHudPremulRgba,
+  radialIconAnchor,
+  radialIconBounds,
 } from './radialPose.js';
 import { formatResourceCost } from '../sim/resources.js';
 import {
@@ -628,6 +632,7 @@ function makeIconPreviewMaterial(source) {
   mat.alpha = RADIAL_HUD_BLEND_ALPHA;
   mat._radialBaseAlpha = 1;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
+  disableRadialHudDepthWrite(mat);
   markMaterialUboDirty(mat);
   return mat;
 }
@@ -874,15 +879,18 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
       segments: 28,
     });
     const mat = makeRingMaterial(CATEGORIES.unit.pad, CATEGORIES.unit.padEm);
+    disableRadialHudDepthWrite(mat);
     pad.material = mat;
     pad.pickable = false;
     pad.renderOrder = 220;
     hideMesh(pad);
     addToScene(scene, pad);
     pads.push({ mesh: pad, mat, category: 'unit' });
+    const progressMat = makeRingMaterial(PROGRESS_COLOR, PROGRESS_EMISSIVE, 0.95);
+    disableRadialHudDepthWrite(progressMat);
     progressPads.push({
       mesh: null,
-      mat: makeRingMaterial(PROGRESS_COLOR, PROGRESS_EMISSIVE, 0.95),
+      mat: progressMat,
       q: -1,
     });
   }
@@ -897,6 +905,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     CATEGORIES.cancel.pad,
     CATEGORIES.cancel.padEm,
   );
+  disableRadialHudDepthWrite(cancelPadMat);
   cancelPadMesh.material = cancelPadMat;
   cancelPadMesh.pickable = false;
   cancelPadMesh.renderOrder = 220;
@@ -928,6 +937,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     CATEGORIES.pause.pad,
     CATEGORIES.pause.padEm,
   );
+  disableRadialHudDepthWrite(pausePadMat);
   pausePadMesh.material = pausePadMat;
   pausePadMesh.pickable = false;
   pausePadMesh.renderOrder = 220;
@@ -953,7 +963,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
 
   /**
    * Icon key: `unit:warlock` / `upgrade:patronage`
-   * @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[] }>}
+   * @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[], cx: number, cy: number, cz: number }>}
    */
   const icons = new Map();
 
@@ -983,6 +993,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         mesh.position.y = 0;
         mesh.position.z = 0;
         mesh.pickable = false;
+        mesh.renderOrder = RADIAL_ICON_RENDER_ORDER;
         mesh.material = makeIconPreviewMaterial(mesh.material);
         const mat = mesh.material;
         let baseEmissive = null;
@@ -1002,7 +1013,7 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
         setSubtreeVisible(mesh, false);
         layers.push({ mesh, matrices, baseEmissive, baseDiffuse, visible: false });
       }
-      icons.set(key, { layers });
+      icons.set(key, { layers, ...radialIconBounds(layers.map((l) => l.mesh)) });
     } catch (err) {
       console.warn(`[buildingActionRadial] icon ${key} failed`, err);
     }
@@ -1762,13 +1773,28 @@ export async function createBuildingActionRadial(engine, scene, groundYAt, scree
     if (s.iconKey) {
       const batch = icons.get(s.iconKey);
       if (batch) {
+        const at = radialIconAnchor(
+          iconX,
+          iconY,
+          iconZ,
+          bx,
+          0,
+          bz,
+          hx,
+          0,
+          hz,
+          iconScale,
+          batch.cx ?? 0,
+          batch.cy ?? 0,
+          batch.cz ?? 0,
+        );
         for (const layer of batch.layers) {
           writeFacingMatrix(
             layer.matrices,
             0,
-            iconX,
-            iconY,
-            iconZ,
+            at.x,
+            at.y,
+            at.z,
             bx,
             0,
             bz,

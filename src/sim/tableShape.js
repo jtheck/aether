@@ -509,7 +509,7 @@ export function tableEdgeMidpoints(field, shape = field.tableShape) {
 }
 
 function stampTableBlocks(field, edge, shape) {
-  // `suppressCenterBlock` lets a scenario (e.g. the skirmish table) drop the
+  // `suppressCenterBlock` lets a scenario or authored garden drop the
   // KOTH-style center plinth while keeping the rounded rails/corners.
   if (tableHasCenterBlock(field, shape) && !field.suppressCenterBlock) {
     const center = tableCenterVertex(field);
@@ -530,6 +530,9 @@ function stampTableBlocks(field, edge, shape) {
 
 /** Write activeMask / pass / slow from the silhouette. Red = edge, yellow = touches red. */
 export function applyTableSilhouette(field, opts = {}) {
+  if (opts.suppressCenterBlock != null) {
+    field.suppressCenterBlock = !!opts.suppressCenterBlock;
+  }
   const shape = normalizeTableShape(field, opts);
   field.tableShape = shape;
   field.chunkSize = shape.cellSize;

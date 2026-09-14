@@ -34,8 +34,12 @@ import {
   stepRadialEdgeOpacity,
   RADIAL_EDGE_PICK_ALPHA,
   RADIAL_HUD_BLEND_ALPHA,
+  RADIAL_ICON_RENDER_ORDER,
+  disableRadialHudDepthWrite,
   radialHudFadeAlpha,
   radialHudPremulRgba,
+  radialIconAnchor,
+  radialIconBounds,
 } from './radialPose.js';
 import { formatResourceCost } from '../sim/resources.js';
 import { menuGateState } from '../sim/menuGate.js';
@@ -587,6 +591,7 @@ function makeIconPreviewMaterial(source) {
   mat.alpha = RADIAL_HUD_BLEND_ALPHA;
   mat._radialBaseAlpha = 1;
   if (mat.specularColor) mat.specularColor = [0, 0, 0];
+  disableRadialHudDepthWrite(mat);
   markMaterialUboDirty(mat);
   return mat;
 }
@@ -727,6 +732,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       segments: 28,
     });
     const mat = makeRingMaterial(basicCat.pad, basicCat.padEm);
+    disableRadialHudDepthWrite(mat);
     pad.material = mat;
     pad.pickable = false;
     pad.renderOrder = 220;
@@ -738,6 +744,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
       segments: 28,
     });
     const outlineMat = makeRingMaterial(basicCat.color, basicCat.emissive, 0.95);
+    disableRadialHudDepthWrite(outlineMat);
     outline.material = outlineMat;
     outline.pickable = false;
     outline.renderOrder = 219;
@@ -759,7 +766,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
     lockSlashes.push(slash);
   }
 
-  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[] }>} */
+  /** @type {Map<string, { layers: { mesh: object, matrices: Float32Array, baseEmissive: number[] | null, baseDiffuse: number[] | null, visible: boolean }[], cx: number, cy: number, cz: number }>} */
   const icons = new Map();
   /** @type {Map<string, Promise<void>>} */
   const iconInflight = new Map();
@@ -780,6 +787,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
           mesh.position.y = 0;
           mesh.position.z = 0;
           mesh.pickable = false;
+          mesh.renderOrder = RADIAL_ICON_RENDER_ORDER;
           mesh.material = makeIconPreviewMaterial(mesh.material);
           const mat = mesh.material;
           let baseEmissive = null;
@@ -799,7 +807,7 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
           setSubtreeVisible(mesh, false);
           layers.push({ mesh, matrices, baseEmissive, baseDiffuse, visible: false });
         }
-        icons.set(typeId, { layers });
+        icons.set(typeId, { layers, ...radialIconBounds(layers.map((l) => l.mesh)) });
       } catch (err) {
         console.warn(`[buildingRadial] icon ${typeId} failed`, err);
       }
@@ -1520,13 +1528,28 @@ export async function createBuildingRadialMenu(engine, scene, groundYAt, screen 
   function poseIcon(type, iconX, iconY, iconZ, iconScale, hovered) {
     const batch = icons.get(type);
     if (!batch) return;
+    const at = radialIconAnchor(
+      iconX,
+      iconY,
+      iconZ,
+      -bx,
+      0,
+      -bz,
+      -hx,
+      0,
+      -hz,
+      iconScale,
+      batch.cx ?? 0,
+      batch.cy ?? 0,
+      batch.cz ?? 0,
+    );
     for (const layer of batch.layers) {
       writeFacingMatrix(
         layer.matrices,
         0,
-        iconX,
-        iconY,
-        iconZ,
+        at.x,
+        at.y,
+        at.z,
         -bx,
         0,
         -bz,

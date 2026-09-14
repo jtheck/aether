@@ -39,19 +39,36 @@ export const VAT_CLIP = {
 };
 export const VAT_FROZEN = 0x80;
 
-/** @typedef {{ url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string, attackClip?: string }} VatUnitDef */
+/** @typedef {{ name: string, x: number, y: number, z: number, scale?: number }} VatExtraSocket */
+/** @typedef {{ url: string, scale: number, idleClip: string, walkClip: string, carryClip?: string, chopClip?: string, attackClip?: string, extraSockets?: readonly VatExtraSocket[] }} VatUnitDef */
+
+/**
+ * Stand-in until a brigand GLB has a hand-parented `torch_anchor` empty.
+ * Idle `Arm.R` tip (Lite X-mirror). Yields to authored sockets on the mesh.
+ */
+export const BRIGAND_TORCH_SOCKET = Object.freeze({
+  name: 'torch_anchor',
+  x: 0.5118,
+  y: 1.1828,
+  z: -0.0934,
+  scale: 0.18,
+});
+
+const VILLAGER_VAT = {
+  url: '/assets/models/villager.glb',
+  // Raw glTF scale — no aftermarket resize (instance matrix only).
+  scale: 1,
+  idleClip: 'idle',
+  walkClip: 'walk_cycle',
+  carryClip: 'carry',
+  chopClip: 'chop',
+};
 
 /** @type {Readonly<Record<number, VatUnitDef>>} */
 export const VAT_UNIT_DEFS = {
-  [UNIT.VILLAGER]: {
-    url: '/assets/models/villager.glb',
-    // Raw glTF scale — no aftermarket resize (instance matrix only).
-    scale: 1,
-    idleClip: 'idle',
-    walkClip: 'walk_cycle',
-    carryClip: 'carry',
-    chopClip: 'chop',
-  },
+  [UNIT.VILLAGER]: VILLAGER_VAT,
+  // Same villager bake + a hand torch. brigand.glb is three cubes, no clips.
+  [UNIT.BRIGAND]: { ...VILLAGER_VAT, extraSockets: [BRIGAND_TORCH_SOCKET] },
   [UNIT.WARRIOR]: {
     url: '/assets/models/warrior.glb',
     scale: 1,

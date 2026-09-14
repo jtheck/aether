@@ -226,6 +226,49 @@ describe('building combat', () => {
     assert.equal(w.targetEntity[warrior], -1);
   });
 
+  it('idle military prefers a farther barracks over a closer camp', () => {
+    const w = richWorld(13);
+    const field = buildField(13, { width: 64, height: 64 });
+    const camp = placeFinished(w, field, { owner: 1, type: 'camp', x: 10, z: 0 });
+    const barracks = placeFinished(w, field, { owner: 1, type: 'barracks', x: 28, z: 0 });
+    const warrior = spawn(w, {
+      x: fx.fromInt(0),
+      y: fx.fromInt(0),
+      type: UNIT.WARRIOR,
+      owner: 0,
+    });
+    for (let t = 0; t < 8; t++) {
+      combatSystem(w, field);
+      w.tick++;
+    }
+    assert.equal(w.order[warrior], ORDER.ATTACK);
+    assert.equal(w.targetBuilding[warrior], barracks);
+    assert.notEqual(w.targetBuilding[warrior], camp);
+  });
+
+  it('attack-move does not peel off to smash a camp', () => {
+    const w = richWorld(14);
+    const field = buildField(14, { width: 64, height: 64 });
+    placeFinished(w, field, { owner: 1, type: 'camp', x: 12, z: 0 });
+    const warrior = spawn(w, {
+      x: fx.fromInt(0),
+      y: fx.fromInt(0),
+      type: UNIT.WARRIOR,
+      owner: 0,
+    });
+    applyCommands(w, field, [
+      { type: CMD.ATTACK_MOVE, entities: [warrior], tx: [fx.fromInt(48)], ty: [0] },
+    ]);
+    assert.equal(w.order[warrior], ORDER.ATTACK_MOVE);
+    for (let t = 0; t < 8; t++) {
+      combatSystem(w, field);
+      w.tick++;
+    }
+    assert.equal(w.order[warrior], ORDER.ATTACK_MOVE);
+    assert.equal(w.targetBuilding[warrior], -1);
+    assert.equal(w.targetEntity[warrior], -1);
+  });
+
   it('finished towers fire arrows at hostiles in range', () => {
     const w = richWorld(7);
     const field = buildField(7, { width: 64, height: 64 });

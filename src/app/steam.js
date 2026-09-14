@@ -7,6 +7,7 @@ export const ACH_FIRST_LAUNCH = 'ACH_FIRST_LAUNCH';
 export const ACH_FIRST_MATCH = 'ACH_FIRST_MATCH';
 export const ACH_KOTH_DEFEAT = 'ACH_KOTH_DEFEAT';
 export const ACH_LINUX_LAUNCH = 'ACH_LINUX_LAUNCH';
+export const ACH_FORGE_OPEN = 'ACH_FORGE_OPEN';
 
 /** Native Linux desktop shell (Steam worker) or a browser-like Linux UA. */
 export function isLinuxRuntime(info, root) {
@@ -61,9 +62,11 @@ export function createAetherSteam(opts = {}) {
     ACH_FIRST_MATCH,
     ACH_KOTH_DEFEAT,
     ACH_LINUX_LAUNCH,
+    ACH_FORGE_OPEN,
     _firstLaunchHandled: false,
     _firstMatchHandled: false,
     _kothDefeatHandled: false,
+    _forgeOpenedHandled: false,
 
     isAvailable() {
       const s = steam();
@@ -118,6 +121,16 @@ export function createAetherSteam(opts = {}) {
       api._firstMatchHandled = true;
       api.unlockAchievement(ACH_FIRST_MATCH);
       api.setPresence('status', 'Hosting KOTH');
+      return true;
+    },
+
+    /** First time the Forge Field Editor is opened (settings link or /forge). */
+    notifyForgeOpened() {
+      if (api._forgeOpenedHandled) return false;
+      if (!api.isAvailable()) return false;
+      api._forgeOpenedHandled = true;
+      api.unlockAchievement(ACH_FORGE_OPEN);
+      api.setPresence('status', 'In Forge');
       return true;
     },
 

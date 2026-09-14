@@ -26,6 +26,7 @@ import { livingByOwner } from './world.js';
 import { clearEngagement } from './engagement.js';
 import { applyCasts } from './abilities.js';
 import { isFlyer, isMechanical, UNIT, unitAttacksBuildings } from './unitTypes.js';
+import { becomeBrigand, revertBrigand } from './brigand.js';
 import {
   applyTransportAssignments,
   isCarried,
@@ -220,6 +221,7 @@ function applyMove(world, field, ids, tx, ty, order) {
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
+    revertBrigand(world, i);
     world.transportTarget[i] = -1;
     const clickX = tx[k];
     const clickY = ty[k];
@@ -287,6 +289,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
     for (let k = 0; k < ids.length; k++) {
       const i = ids[k];
       if (!world.alive[i] || isCarried(world, i)) continue;
+      becomeBrigand(world, i);
       if (!unitAttacksBuildings(world.type[i])) continue;
       world.transportTarget[i] = -1;
       clearUnitRallyHops(world, i);
@@ -306,6 +309,7 @@ function applyAttack(world, field, ids, target, buildingIndex) {
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
+    becomeBrigand(world, i);
     world.transportTarget[i] = -1;
     // Engineers convert ally-mechanical attacks into repair orders.
     if (
@@ -333,6 +337,7 @@ function applyStop(world, ids) {
   for (let k = 0; k < ids.length; k++) {
     const i = ids[k];
     if (!world.alive[i] || isCarried(world, i)) continue;
+    revertBrigand(world, i);
     world.transportTarget[i] = -1;
     clearUnitRallyHops(world, i);
     world.order[i] = ORDER.IDLE;

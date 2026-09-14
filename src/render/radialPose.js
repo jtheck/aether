@@ -191,6 +191,49 @@ export const RADIAL_EDGE_PICK_ALPHA = 0.22;
  * later fade must stay strictly below 1 or they pop off instead of fading.
  */
 export const RADIAL_HUD_BLEND_ALPHA = 0.999;
+/** After pad rings (~220) / progress (~225), before lock slashes (~230). */
+export const RADIAL_ICON_RENDER_ORDER = 226;
+
+/**
+ * Pad-local anchor for a baked icon. XZ is the AABB center so the mesh sits
+ * in the disc; Y is the lowest bound so feet (or a low origin) don't hang
+ * under the hit circle.
+ * @param {Iterable<{ boundMin?: number[], boundMax?: number[] } | null | undefined>} meshes
+ */
+export function radialIconBounds(meshes) {
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (const mesh of meshes ?? []) {
+    if (!mesh?.boundMin || !mesh?.boundMax) continue;
+    for (let a = 0; a < 3; a++) {
+      if (mesh.boundMin[a] < min[a]) min[a] = mesh.boundMin[a];
+      if (mesh.boundMax[a] > max[a]) max[a] = mesh.boundMax[a];
+    }
+  }
+  if (!Number.isFinite(min[0])) return { cx: 0, cy: 0, cz: 0 };
+  return {
+    cx: (min[0] + max[0]) * 0.5,
+    cy: min[1],
+    cz: (min[2] + max[2]) * 0.5,
+  };
+}
+
+/**
+ * Thin-instance translation so local (cx,cy,cz) lands at (ax,ay,az).
+ * Basis is Y-up facing: right, +Y, forward.
+ */
+export function radialIconAnchor(ax, ay, az, rx, ry, rz, fx, fy, fz, scale, cx, cy, cz) {
+  return {
+    x: ax - scale * (rx * cx + fx * cz),
+    y: ay - scale * (ry * cx + cy + fy * cz),
+    z: az - scale * (rz * cx + fz * cz),
+  };
+}
+
+/** Pad discs write depth; icons must not lose reverse-Z to those hit circles. */
+export function disableRadialHudDepthWrite(mat) {
+  if (mat) mat.depthWrite = false;
+}
 
 /**
  * Mesh fade alpha. Text/DOM can use `base * edgeOpacity` directly.

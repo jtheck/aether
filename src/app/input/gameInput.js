@@ -22,7 +22,7 @@ import {
   livingControlGroup,
 } from './controlGroups.js';
 import { MAX_ENTITIES, ORDER } from '../../sim/world.js';
-import { isMechanical, isTransport, UNIT, getUnitDef, unitAttacksBuildings } from '../../sim/unitTypes.js';
+import { isMechanical, isTransport, UNIT, getUnitDef, isVillagerLine, unitAttacksBuildings } from '../../sim/unitTypes.js';
 import { isHostile } from '../../sim/teams.js';
 import { canRideTransport, passengerCount, assignNearestRidersToTransport, listPassengers, transportCapacityOf } from '../../sim/transport.js';
 import { playVillagerMove } from '../audio.js';
@@ -1928,7 +1928,7 @@ export function createGameInput(opts) {
     const rest = [];
     for (let k = 0; k < ids.length; k++) {
       const id = ids[k];
-      if (world.owner[id] === localPlayerId && world.type[id] === UNIT.VILLAGER) {
+      if (world.owner[id] === localPlayerId && isVillagerLine(world.type[id])) {
         villagers.push(id);
       } else {
         rest.push(id);

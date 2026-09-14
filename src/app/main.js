@@ -100,7 +100,7 @@ import {
   sameOwnedBuildingType,
 } from './input/buildingSelect.js';
 import { chasePoseXZ } from './poseInterp.js';
-import { init as initAudio, playThunder, thunderPlaysForStrikes } from './audio.js';
+import { init as initAudio, playMatchStart, playThunder, thunderPlaysForStrikes } from './audio.js';
 import { SimSession, formatHudMatchClock, matchSecondsFromTick } from './simSession.js';
 import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { setupKothLobby } from './kothLobby.js';
@@ -241,11 +241,12 @@ function worldPositionsForSync(state, count) {
 
 /**
  * @param {(i: number, x: number, z: number, owner: number) => boolean} [hideUnit]
+ * @param {Uint8Array} [drawable] 0 = entity should not hold a GPU slot (faded corpse).
  */
-function rebuildRendererEntities(renderer, session, hideUnit) {
+function rebuildRendererEntities(renderer, session, hideUnit, drawable) {
   const count = session.count;
   const world = session.state;
-  const unmapped = renderer.rebuildFromTypes(count, world.type, world.owner);
+  const unmapped = renderer.rebuildFromTypes(count, world.type, world.owner, drawable);
   const stillUnmapped = renderer.syncInstances(count, world.type, worldPositionsForSync(world, count), {
     alive: world.alive,
     owners: world.owner,
@@ -860,6 +861,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     overlayBarD2: new Float32Array(CAP),
     overlayBarAllow: new Uint8Array(CAP),
     fogHidden: new Uint8Array(CAP),
+    drawable: new Uint8Array(CAP),
   };
   bufs.wasAlive.fill(1);
   bufs.cacheGx.fill(NaN);
@@ -949,8 +951,25 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     stampFog();
   }
 
+  /**
+   * Sim entity ids are never recycled, so a corpse holds its slot for the rest of the
+   * match. Once its fade is done it is drawn as a zero-scale instance — invisible, but
+   * still vertex work in the color pass and again in every shadow cascade.
+   *
+   * Must stay a function of `alive` alone (which never flips back on within a match):
+   * the renderer silently skips writes for retired entities, so folding in something
+   * reversible like fog would leave a unit unrendered until the next rebuild.
+   */
+  function drawableEntities() {
+    const { drawable, deathFade } = bufs;
+    const world = session.state;
+    const n = session.count;
+    for (let i = 0; i < n; i++) drawable[i] = world.alive[i] || deathFade[i] > 0 ? 1 : 0;
+    return drawable;
+  }
+
   function syncDrawnEntities() {
-    const n = rebuildRendererEntities(renderer, session, hideUnitForSync);
+    const n = rebuildRendererEntities(renderer, session, hideUnitForSync, drawableEntities());
     bufs.poseValid.fill(0);
     return n;
   }
@@ -1251,7 +1270,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     for (let i = 0; i < (buildings?.length ?? 0); i++) {
       const b = buildings[i];
       if (!b || b.built === 0 || !keys.has(`${b.owner}:${b.type}`)) continue;
-      rings.push({ x: b.x, z: b.z, radius: campWorkRadiusWorld(st, b), owner: b.owner });
+      rings.push({ x: b.x, z: b.z, radius: campWorkRadiusWorld(st, b, buildings), owner: b.owner });
     }
     renderer.setWorkRadiusRing?.(rings);
   }
@@ -2550,6 +2569,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const prevCommit = session.onCommit;
   session.onCommit = (tick, checksum) => {
     prevCommit?.(tick, checksum);
+    const live = ctxRef.current;
+    if (live?.pendingMatchStartCue && !session.replayingCatchUp && !session.watchingReplay) {
+      live.pendingMatchStartCue = false;
+      // Fresh table only — late-join catch-up lands on a high tick.
+      if ((tick | 0) <= 2) playMatchStart();
+    }
     const world = session.state;
     const { wasAlive, deathFade } = bufs;
     for (let i = 0; i < session.count; i++) {
@@ -2580,6 +2605,12 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   };
 
   let lastUnmappedRebuild = 0;
+  // Compacting corpses out of the batches costs a full remap + pose rewrite, so let a
+  // few accumulate first. A remap already happens on every spawn (count change).
+  const CORPSE_COMPACT_MIN = 64;
+  const CORPSE_COMPACT_FRACTION = 0.08;
+  const CORPSE_COMPACT_MS = 1000;
+  let lastCorpseCompact = 0;
   /** Reused per-frame: selected unit count keyed by sim type id. */
   const selCountByType = new Map();
 
@@ -2650,6 +2681,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     const dt = Math.min(0.05, deltaMs / 1000);
 
     let colorsDirty = false;
+    let corpses = 0;
     const drawStats = { p0: 0, p1: 0, unmapped: 0 };
     const n = session.count;
     const world = session.state;
@@ -2817,12 +2849,17 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
 
     for (let i = 0; i < n; i++) {
       if (fogHidden[i]) {
+        // Keep the fade running while hidden. Skipping it leaves a unit that died in
+        // fog at deathFade 1 forever, so it never becomes eligible for compaction.
+        if (deathFade[i] > 0) deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
+        if (!world.alive[i] && deathFade[i] <= 0) corpses++;
         hideDrawnUnit(i);
         continue;
       }
       if (deathFade[i] > 0) {
         deathFade[i] = Math.max(0, deathFade[i] - deltaMs / DEATH_FADE_MS);
         if (deathFade[i] <= 0 && !world.alive[i]) {
+          corpses++;
           if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
             if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
             commitPose(i, 0, 0, 0, 0, 0, 0);
@@ -2836,6 +2873,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
           continue;
         }
       } else if (!world.alive[i]) {
+        corpses++;
         if (poseDirty(i, 0, 0, 0, 0, 0, 0)) {
           if (!renderer.writeInstance(i, world.type[i], world.owner[i], 0, 0, 0)) drawStats.unmapped++;
           commitPose(i, 0, 0, 0, 0, 0, 0);
@@ -3261,6 +3299,14 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     if (drawStats.unmapped > 0 && performance.now() - lastUnmappedRebuild > 400) {
       lastUnmappedRebuild = performance.now();
       renderEntityCount = syncDrawnEntities();
+    } else {
+      // Corpses the renderer has not dropped yet still cost a draw per shadow cascade.
+      const held = corpses - (renderer.retiredEntityCount?.() ?? corpses);
+      if (held >= Math.max(CORPSE_COMPACT_MIN, n * CORPSE_COMPACT_FRACTION)
+        && performance.now() - lastCorpseCompact > CORPSE_COMPACT_MS) {
+        lastCorpseCompact = performance.now();
+        renderEntityCount = syncDrawnEntities();
+      }
     }
     if (colorsDirty) renderer.setColors(colors);
     if (renderer.getPickHitboxesVisible?.()) {
@@ -3471,6 +3517,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   const localSolo = !!cfg.localSolo;
   if ((cfg.mode === 'staging' || cfg.mode === 'sandbox') && activeSlots.length === 0) {
     if (gen !== liveConfigGeneration) return;
+    ctx.pendingMatchStartCue = false;
     ctx.setMatchMeta({ mode: 'staging', matchId: cfg.matchId });
     ctx.session.setRole(cfg.role ?? 'spectator');
     setGraffitiHeaderVisible(true);
@@ -3482,6 +3529,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   // opponent is slain. Only a zero-slot koth config is meaningless here.
   if (cfg.mode === 'koth' && activeSlots.length < 1) {
     console.warn('[KOTH] ignoring live config with no active slots', cfg);
+    ctx.pendingMatchStartCue = false;
     setStatusText('Waiting for roster sync…');
     return;
   }
@@ -3556,6 +3604,8 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       teamByOwner: cfg.teamByOwner ?? null,
       laneBases: !!cfg.laneBases,
     });
+    // Same turn as reset return — solo (delay 0) can commit during whenFieldReady.
+    ctx.pendingMatchStartCue = wantsMatchStartCue(cfg);
     // Terrain is enough to unlock — 3D scenery/building GLBs finish in the
     // background. Waiting on modelsReady here was a ~12s tab stall.
     await Promise.race([
@@ -3572,6 +3622,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
       ctx.session.setLocalPlayerId?.(prevLocal);
     }
     console.error('[live] match rebuild failed', err);
+    ctx.pendingMatchStartCue = false;
     setStatusText('Match load failed');
     ctx.setInteractive?.(true);
     dismissBootSplash({ immediate: true });
@@ -3584,7 +3635,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   if (gen !== liveConfigGeneration) {
     if (ctx.session._pendingWorldGen === gen) ctx.session._pendingWorldGen = null;
     if (DEBUG_KOTH) console.info('[KOTH] stale live config ignored after reset', { gen, current: liveConfigGeneration });
-    // A newer applyLiveConfig owns the splash / input gate.
+    // A newer applyLiveConfig owns the splash / input gate / stinger.
     return;
   }
   ctx.session._pendingWorldGen = null;
@@ -3618,6 +3669,15 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
   ctx.setInteractive?.(true);
   if (!cfg.skipSplash) dismissBootSplash();
   aetherSteam.notifyPlayReady();
+}
+
+/** Stinger on the first lockstep commit of a real match — not lobby / replay / sandbox. */
+function wantsMatchStartCue(cfg) {
+  if (!cfg || cfg.watchingReplay) return false;
+  if (cfg.mode === 'staging' || cfg.mode === 'sandbox' || cfg.mode === 'legacy') return false;
+  // Post-leave skirmish backdrop is not a match start.
+  if (cfg.mode === 'skirmish') return false;
+  return cfg.mode === 'koth' || isLobbyPlayMode(cfg.mode);
 }
 
 /**

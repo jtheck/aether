@@ -25,7 +25,9 @@ describe('chapter 3 story', () => {
     const g = decodeGarden(json);
     assert.equal(g.agoras.length, 0);
     assert.equal(json.g, undefined);
-    assert.equal(g.units.length, 4);
+    assert.deepEqual(g.units.filter((u) => u.name).map((u) => u.name), ['Stumpey', 'Goblin', 'Lady', 'Doc']);
+    assert.ok(g.units.some((u) => u.owner === 4 && !u.name));
+    assert.ok(g.buildings.some((b) => b.owner === 4 && b.type === 'camp'));
     assert.equal(g.objectives.length, 1);
     assert.equal(g.objectives[0].kind, 'escape');
     assert.equal(g.objectives[0].next, '');
@@ -35,5 +37,10 @@ describe('chapter 3 story', () => {
     assert.deepEqual(onDisk.obj, json.obj);
     assert.deepEqual(onDisk.u, json.u);
     assert.equal(onDisk.g, undefined);
+    assert.equal(json.ncb, 1);
+    assert.equal(onDisk.ncb, 1);
+    assert.ok(json.sc);
+    assert.ok(g.sceneryType.some((v) => v === 1));
+    assert.deepEqual(onDisk.sc, json.sc);
   });
 });

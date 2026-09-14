@@ -24,7 +24,7 @@ describe('replayConfigFromLive', () => {
       fieldSize: 'tiny',
       humanPlayers: [0, 1],
       activeSlots: [0, 1],
-      aiPlayers: [{ owner: 1, temperament: 'steady' }],
+      aiPlayers: [{ owner: 1, temperament: 'steady', difficulty: 3 }],
       noCenterBlock: true,
       agoraOccupyEndsMatch: 1,
       garden: { s: 99, u: [1, 2, 3] },
@@ -44,6 +44,7 @@ describe('replayConfigFromLive', () => {
     assert.equal(cfg.noCenterBlock, true);
     assert.equal(cfg.matchId, 'lobby-1');
     assert.deepEqual(cfg.ownerColors, { 0: '#FF0000', 1: '#00FF00' });
+    assert.deepEqual(cfg.aiPlayers, [{ owner: 1, temperament: 'steady', difficulty: 3 }]);
   });
 
   it('does not invent noCenterBlock for KOTH', () => {
@@ -57,6 +58,20 @@ describe('replayConfigFromLive', () => {
     assert.equal(cfg.noCenterBlock, undefined);
     assert.equal(cfg.mode, 'koth');
     assert.deepEqual(cfg.activeSlots, [0, 2]);
+    assert.equal(cfg.homeAgoras, undefined);
+  });
+
+  it('keeps homeAgoras for 1vAI replays', () => {
+    const cfg = replayConfigFromLive({
+      seed: 4,
+      mode: 'koth',
+      activeSlots: [0, 1],
+      humanPlayers: [0],
+      homeAgoras: true,
+      agoraOccupyEndsMatch: 1,
+    });
+    assert.equal(cfg.homeAgoras, true);
+    assert.equal(cfg.agoraOccupyEndsMatch, 1);
   });
 });
 

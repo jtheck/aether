@@ -30,6 +30,11 @@ function copyAiPlayers(ai) {
     if (!raw || typeof raw !== 'object') return 0;
     const row = { owner: raw.owner | 0 };
     if (raw.temperament) row.temperament = String(raw.temperament);
+    if (raw.difficulty != null) {
+      row.difficulty = typeof raw.difficulty === 'number'
+        ? raw.difficulty | 0
+        : String(raw.difficulty);
+    }
     return row;
   });
 }
@@ -89,6 +94,7 @@ export function replayConfigFromLive(cfg) {
   if (cfg.mapH) out.mapH = cfg.mapH | 0;
   if (cfg.noCenterBlock != null) out.noCenterBlock = Boolean(cfg.noCenterBlock);
   if (cfg.agoraOccupyEndsMatch != null) out.agoraOccupyEndsMatch = cfg.agoraOccupyEndsMatch | 0;
+  if (cfg.homeAgoras) out.homeAgoras = true;
   return out;
 }
 

@@ -62,6 +62,70 @@ describe('spawn bases', () => {
   });
 });
 
+describe('1vAI home agoras', () => {
+  it('does not place agoras on a plain KOTH board', () => {
+    const w = buildWorldFromConfig({ seed: 2, mode: 'koth', activeSlots: [0, 1] });
+    assert.equal(w.agoras.length, 0);
+  });
+
+  it('camps the usual mix around a home agora for each seat', () => {
+    const w = buildWorldFromConfig({
+      seed: 3,
+      mode: 'koth',
+      homeAgoras: true,
+      agoraOccupyEndsMatch: 1,
+      activeSlots: [0, 1],
+    });
+    const half = w.worldHalfF;
+    const expected = defaultMatchAgoras(half, w.mapW);
+    assert.equal(w.agoras.length, 2);
+    assert.equal(w.agoraOccupyEndsMatch, 1);
+    assert.equal(w.agoras[0].owner, expected[0].owner);
+    assert.equal(w.agoras[1].owner, expected[1].owner);
+    assert.ok(Math.hypot(fx.toFloat(w.agoras[0].x) - expected[0].x, fx.toFloat(w.agoras[0].z) - expected[0].z) < 0.01);
+    assert.ok(Math.hypot(fx.toFloat(w.agoras[1].x) - expected[1].x, fx.toFloat(w.agoras[1].z) - expected[1].z) < 0.01);
+
+    const plain = buildWorldFromConfig({ seed: 3, mode: 'koth', activeSlots: [0, 1] });
+    for (const owner of [0, 1]) {
+      const camp = livingOf(w, owner);
+      const stock = livingOf(plain, owner);
+      assert.equal(camp.length, stock.length);
+      const types = new Map();
+      for (const i of camp) types.set(w.type[i], (types.get(w.type[i]) ?? 0) + 1);
+      for (const i of stock) {
+        const t = plain.type[i];
+        types.set(t, (types.get(t) ?? 0) - 1);
+      }
+      for (const n of types.values()) assert.equal(n, 0);
+
+      const ax = fx.toFloat(w.agoras[owner].x);
+      const az = fx.toFloat(w.agoras[owner].z);
+      let villR = 0;
+      let villN = 0;
+      let warR = 0;
+      let warN = 0;
+      let warDot = 0;
+      for (const i of camp) {
+        const x = fx.toFloat(w.px[i]) - ax;
+        const z = fx.toFloat(w.py[i]) - az;
+        const r = Math.hypot(x, z);
+        assert.ok(r > 8, `owner ${owner} unit stacked on the agora`);
+        if (w.type[i] === UNIT.VILLAGER) {
+          villR += r;
+          villN++;
+        } else if (w.type[i] === UNIT.WARRIOR) {
+          warR += r;
+          warN++;
+          warDot += x * -ax + z * -az;
+        }
+      }
+      assert.ok(villN > 0 && warN > 0);
+      assert.ok(villR / villN < warR / warN, 'villagers should hug the agora');
+      assert.ok(warDot > 0, 'warriors should stand toward map center');
+    }
+  });
+});
+
 const STRESS_SUPPORT = new Set([
   UNIT.VILLAGER,
   UNIT.ENGINEER,

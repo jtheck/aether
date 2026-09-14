@@ -754,6 +754,21 @@
       }
     };
 
+    // Send an app message on a joined match lobby's socket room (server-relayed
+    // to every subscriber — players AND spectators — no WebRTC required). The
+    // payload is spread into a `speak` so it arrives via onGameLobbyMessage.
+    GETFIREP2P.sendLobbyMessage = function(lobbyName, payload) {
+      const entry = gameLobbyChannels.get(lobbyName);
+      if (!entry || !payload) return false;
+      entry.channel.perform('speak', {
+        game_lobby: lobbyName,
+        from: localUserId,
+        room_type: roomType,
+        ...payload,
+      });
+      return true;
+    };
+
     GETFIREP2P.sendData = function(data, targetPeerId = null) {
       const message = {
         type: 'game_data',

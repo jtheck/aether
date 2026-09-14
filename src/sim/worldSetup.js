@@ -1,7 +1,7 @@
 // Demo spawn layouts — used by the sim worker at init.
 
 import { createWorld, spawn, STRESS_ENTITY_LIMIT } from './world.js';
-import { UNIT, UNIT_DEFS, isMilitary, isTransport } from './unitTypes.js';
+import { UNIT, UNIT_DEFS, isFlyer, isMilitary, isTransport } from './unitTypes.js';
 import { createKothMeta } from './kothMeta.js';
 import { createAgoras } from './agora.js';
 import {
@@ -28,6 +28,18 @@ const STAGING_AI_VILLAGERS = 5;
 const SKIRMISH_START_VILLAGERS = 3;
 /** Army block sits this far toward map center from the agora. */
 const ARMY_FORWARD = 36;
+/** Compact camp ranks in front of a home agora (1vAI). */
+const AGORA_VILLAGER_RING = 18;
+const AGORA_ARMY_FORWARD = 32;
+const AGORA_RANK_SPACING = 14;
+const AGORA_FILE_SPACING = 11;
+const AGORA_MAX_FILES = 8;
+const AGORA_ENGINEER_BACK = 16;
+const AGORA_ENGINEER_SIDE = 16;
+const AGORA_PARK_BACK = 26;
+const AGORA_PARK_SPACING = 22;
+/** Packed `?army=` mixes stay on the old square grid past this count. */
+const AGORA_CAMP_PACKED_ABOVE = 120;
 /** Building showcase sits this far behind the agora (away from army). */
 const BUILDING_BACK = 40;
 const BUILDING_SPACING = 36;
@@ -244,6 +256,21 @@ function spawnConfiguredArmy(w, owner, baseX, baseZ) {
   }
 }
 
+function activeArmyLayout() {
+  return _armyPerSide > 0 ? scaledArmyLayout(_armyPerSide) : PLAYER_ARMY;
+}
+
+/** Home agora + the usual mix parked as a camp facing map center. */
+function spawnConfiguredArmyAtAgora(w, owner, baseX, baseZ) {
+  const layout = activeArmyLayout();
+  const total = layout.reduce((s, c) => s + c.count, 0);
+  if (total > AGORA_CAMP_PACKED_ABOVE) {
+    spawnArmyOriented(w, layout, owner, baseX, baseZ, ARMY_FORWARD);
+    return;
+  }
+  spawnArmyAroundAgora(w, layout, owner, baseX, baseZ);
+}
+
 /** Spawn one KOTH army at a slot base (mid-game join). */
 export function spawnKothSlot(w, slot) {
   const half = w.worldHalfF ?? activeWorldHalfF();
@@ -311,15 +338,117 @@ function spawnArmyOriented(w, layout, owner, baseX, baseZ, forward0) {
 
 /** Ring of villagers around the agora (AI cold start). */
 function spawnVillagersAround(w, owner, baseX, baseZ, count) {
-  const radius = 16;
+  spawnRing(w, owner, UNIT.VILLAGER, baseX, baseZ, 16, count);
+}
+
+function spawnRing(w, owner, type, baseX, baseZ, radius, count, angle0 = 0.35) {
   for (let i = 0; i < count; i++) {
-    const a = (i / Math.max(1, count)) * Math.PI * 2 + 0.35;
+    const a = (i / Math.max(1, count)) * Math.PI * 2 + angle0;
     spawn(w, {
       x: fx.fromFloat(baseX + Math.cos(a) * radius),
       y: fx.fromFloat(baseZ + Math.sin(a) * radius),
-      type: UNIT.VILLAGER,
+      type,
       owner,
     });
+  }
+}
+
+function facingCenter(baseX, baseZ) {
+  const len = Math.hypot(baseX, baseZ) || 1;
+  return {
+    fX: -baseX / len,
+    fZ: -baseZ / len,
+    rX: baseZ / len,
+    rZ: -baseX / len,
+  };
+}
+
+function typesMatching(layout, pred) {
+  const out = [];
+  for (const col of layout) {
+    if (!pred(col.type)) continue;
+    for (let i = 0; i < col.count; i++) out.push(col.type);
+  }
+  return out;
+}
+
+function spawnOffset(w, owner, type, baseX, baseZ, fX, fZ, rX, rZ, forward, lat) {
+  spawn(w, {
+    x: fx.fromFloat(baseX + rX * lat + fX * forward),
+    y: fx.fromFloat(baseZ + rZ * lat + fZ * forward),
+    type,
+    owner,
+  });
+}
+
+function spawnRank(w, owner, types, baseX, baseZ, fX, fZ, rX, rZ, forward, spacing) {
+  const n = types.length;
+  if (!n) return;
+  const half = ((n - 1) * spacing) / 2;
+  for (let i = 0; i < n; i++) {
+    spawnOffset(w, owner, types[i], baseX, baseZ, fX, fZ, rX, rZ, forward, i * spacing - half);
+  }
+}
+
+function spawnRanks(w, owner, types, baseX, baseZ, fX, fZ, rX, rZ, forward0) {
+  let row = 0;
+  for (let i = 0; i < types.length; i += AGORA_MAX_FILES) {
+    spawnRank(
+      w,
+      owner,
+      types.slice(i, i + AGORA_MAX_FILES),
+      baseX,
+      baseZ,
+      fX,
+      fZ,
+      rX,
+      rZ,
+      forward0 + row * AGORA_RANK_SPACING,
+      AGORA_FILE_SPACING,
+    );
+    row++;
+  }
+  return row;
+}
+
+/** Melee up front, missile middle, casters behind — villagers ring the agora. */
+function agoraCampRole(type) {
+  if (type === UNIT.VILLAGER) return 'villager';
+  if (type === UNIT.ENGINEER) return 'engineer';
+  if (isTransport(type) || isFlyer(type)) return 'park';
+  if (type === UNIT.WARRIOR || type === UNIT.MONK) return 'front';
+  if (type === UNIT.ARCHER || type === UNIT.MYCO) return 'mid';
+  return 'rear';
+}
+
+/**
+ * Camp facing map center: workers on the agora, army in compact ranks toward
+ * the enemy, transports parked behind.
+ */
+function spawnArmyAroundAgora(w, layout, owner, baseX, baseZ) {
+  const { fX, fZ, rX, rZ } = facingCenter(baseX, baseZ);
+  const villagers = typesMatching(layout, (t) => agoraCampRole(t) === 'villager');
+  spawnRing(w, owner, UNIT.VILLAGER, baseX, baseZ, AGORA_VILLAGER_RING, villagers.length);
+
+  const engineers = typesMatching(layout, (t) => agoraCampRole(t) === 'engineer');
+  const engHalf = ((engineers.length - 1) * AGORA_ENGINEER_SIDE) / 2;
+  for (let i = 0; i < engineers.length; i++) {
+    const lat = engineers.length === 1 ? 0 : i * AGORA_ENGINEER_SIDE - engHalf;
+    spawnOffset(w, owner, engineers[i], baseX, baseZ, fX, fZ, rX, rZ, -AGORA_ENGINEER_BACK, lat);
+  }
+
+  const park = typesMatching(layout, (t) => agoraCampRole(t) === 'park');
+  const parkHalf = ((park.length - 1) * AGORA_PARK_SPACING) / 2;
+  for (let i = 0; i < park.length; i++) {
+    const lat = park.length === 1 ? 0 : i * AGORA_PARK_SPACING - parkHalf;
+    spawnOffset(w, owner, park[i], baseX, baseZ, fX, fZ, rX, rZ, -AGORA_PARK_BACK, lat);
+  }
+
+  let forward = AGORA_ARMY_FORWARD;
+  for (const role of ['front', 'mid', 'rear']) {
+    const types = typesMatching(layout, (t) => agoraCampRole(t) === role);
+    const rows = spawnRanks(w, owner, types, baseX, baseZ, fX, fZ, rX, rZ, forward);
+    if (rows) forward += rows * AGORA_RANK_SPACING;
   }
 }
 
@@ -541,7 +670,7 @@ function spawnStressSide(w, owner, baseX, baseZ, count, typePicker) {
 }
 
 /**
- * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth' | 'skirmish', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean, teamByOwner?: ArrayLike<number> | null, laneBases?: boolean, agoraOccupyEndsMatch?: number }} config
+ * @param {{ seed: number, stressPerSide?: number, animStressPerSide?: number, armyPerSide?: number, mode?: 'legacy' | 'staging' | 'sandbox' | 'koth' | 'skirmish', activeSlots?: number[], mapW?: number, mapH?: number, skipDefaultSpawns?: boolean, teamByOwner?: ArrayLike<number> | null, laneBases?: boolean, agoraOccupyEndsMatch?: number, homeAgoras?: boolean }} config
  */
 export function buildWorldFromConfig({
   seed,
@@ -556,6 +685,7 @@ export function buildWorldFromConfig({
   teamByOwner = null,
   laneBases: useLaneBases = false,
   agoraOccupyEndsMatch,
+  homeAgoras = false,
 }) {
   setArmyPerSide(armyPerSide);
   const size = mapSizeForConfig({ stressPerSide, animStressPerSide, armyPerSide, mapW, mapH });
@@ -644,11 +774,18 @@ export function buildWorldFromConfig({
 
   if (mode === 'koth') {
     const slots = activeSlots?.length ? activeSlots : [PLAYER, AI_OWNER];
+    const agoraSpecs = [];
     for (const slot of slots) {
       const base = bases[slot] ?? bases[0];
-      spawnConfiguredArmy(w, slot, base[0], base[1]);
+      if (homeAgoras) {
+        agoraSpecs.push({ owner: slot, x: base[0], z: base[1] });
+        spawnConfiguredArmyAtAgora(w, slot, base[0], base[1]);
+      } else {
+        spawnConfiguredArmy(w, slot, base[0], base[1]);
+      }
       grantStartingResources(w, slot);
     }
+    if (homeAgoras) w.agoras = createAgoras(agoraSpecs);
     w.koth = createKothMeta(slots);
     return w;
   }

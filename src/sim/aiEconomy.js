@@ -1,18 +1,17 @@
-// Rule-based economic AI — a passive, rule-bound player that only macros.
+// Rule-based economic AI — the foundation of match AI.
 //
-// Runs in the sim worker before step() and emits the SAME command objects a
-// human would (GATHER / PLACE_BUILDING), so it pays every cost and
-// obeys every rule. No military: this is the "as passive as possible" opponent.
-//
-// Determinism: pure functions of (world, field, tick) — index-order scans, no
-// Math.random, no wall clock. Two peers running the same state emit the same
-// commands.
+// Baseline (path `eco`) is the opening-skirmish partner: village, farm rings
+// around the agora, camps / mines / silos. Army and tech paths take that
+// ladder first, then spend on barracks / lab. Difficulty decides whether a
+// full bank is spent (train / research / another source) or left to take
+// the 25% overflow hit. Same command objects a human would issue.
+// Deterministic (index-order scans, no Math.random).
 
 import * as fx from './fixed.js';
 import { CMD } from './commands.js';
 import { ORDER } from './world.js';
-import { UNIT } from './unitTypes.js';
-import { getResource } from './resources.js';
+import { getUnitCost, UNIT } from './unitTypes.js';
+import { canAffordBank, getResource, RESOURCE_KINDS } from './resources.js';
 import { SCENERY } from './scenery.js';
 import {
   worldToTile,
@@ -25,7 +24,12 @@ import {
   snapBuildingWorld,
   getBuildingCost,
   BUILDING_FOOTPRINTS,
+  BUILDING_MENUS,
+  buildingIsFinished,
+  ownerMeetsBuildingRequires,
 } from './buildings.js';
+import { getTechCost, ownerHasTech, TECH_BY_ID } from './tech.js';
+import { AI_DIFFICULTY, AI_PATH, captureIntent, resolveAiStrategy } from './aiStrategy.js';
 import {
   MAX_RESOURCE_SLOTS,
   SILO_ATTACH_RANGE_F,
@@ -43,18 +47,19 @@ const MAX_ASSIGN_PER_TICK = 4;
 /** Food bank below which the AI treats food as urgent. */
 const FOOD_LOW = 40;
 /** Desired standing stock per resource — drives demand-based worker routing. */
-const STOCK_TARGET = { wood: 120, food: 120, stone: 80, mineral: 30 };
+const STOCK_TARGET = { wood: 160, food: 150, stone: 90, mineral: 40 };
 /** Node search window around a villager / base (tiles). */
 const SCAN_TILES = 44;
 /** Soft caps on econ buildings for this first pass. */
-const CAMP_CAP = 2;
+const CAMP_CAP = 3;
 const MINE_CAP = 2;
-const FARM_PER_VILLAGERS = 6;
-
-/** Enable the economy loop for passive AIs (or an explicit economy flag). */
-function economyEnabled(entry) {
-  return !!entry && (entry.economy === true || entry.temperament === 'passive');
-}
+const FARM_PER_VILLAGERS = 5;
+const ECO_VILLAGE_CAP = 2;
+const ECO_VILLAGE_AT = 8;
+/** Don't flood 1vAI's opening army; skirmish (no troops) will train up to these. */
+const TRAIN_CAP = { warrior: 6, archer: 4 };
+const ARMY_FORWARD = 52;
+const TECH_SIDE = 48;
 
 /**
  * Emit this AI owner's economy commands for the current tick (possibly none).
@@ -64,9 +69,10 @@ function economyEnabled(entry) {
  * @returns {import('./commands.js').Command[]}
  */
 export function generateEconomyCommands(w, field, entry) {
-  if (!field || !economyEnabled(entry)) return [];
-  const owner = entry.owner | 0;
-  if (owner < 0) return [];
+  if (!field) return [];
+  const strategy = resolveAiStrategy(entry);
+  if (!strategy.economy || strategy.owner < 0) return [];
+  const owner = strategy.owner;
   const phase = (owner * 11) % DECIDE_INTERVAL;
   if (w.tick % DECIDE_INTERVAL !== phase) return [];
 
@@ -82,12 +88,23 @@ export function generateEconomyCommands(w, field, entry) {
 
   const inv = countBuildings(w, owner);
   const villagers = collectVillagers(w, owner);
+  const capture = captureIntent(w, strategy);
+  const pressure = bankPressure(w, owner, bank, strategy.difficulty);
 
   /** @type {import('./commands.js').Command[]} */
   const cmds = [];
 
+  // Capture ringing — hotter seats cut the farm queue and train first.
+  if (capture.urgent && strategy.heat >= 2) {
+    const train = chooseTrain(w, owner, bank, strategy, capture, pressure);
+    if (train) {
+      cmds.push(train);
+      return cmds;
+    }
+  }
+
   // ── Step 1: keep idle villagers working (demand-driven) ──────────────────
-  const order = demandOrder(bank);
+  const order = demandOrder(bank, pressure);
   let assigned = 0;
   for (let k = 0; k < villagers.idle.length && assigned < MAX_ASSIGN_PER_TICK; k++) {
     const i = villagers.idle[k];
@@ -98,9 +115,9 @@ export function generateEconomyCommands(w, field, entry) {
     }
   }
 
-  // ── Step 2: build one thing on the priority ladder ───────────────────────
+  // ── Step 2: place one building (eco ladder, then path) ───────────────────
   const siloAt = chooseSiloAnchor(w, owner, bank, order);
-  const build = siloAt ? 'silo' : chooseBuild(bank, inv, villagers.total, order);
+  const build = siloAt ? 'silo' : chooseBuild(w, owner, bank, inv, villagers.total, order, strategy, capture, pressure);
   if (build) {
     const around = siloAt
       ? { x: siloAt.x, y: siloAt.z }
@@ -116,9 +133,13 @@ export function generateEconomyCommands(w, field, entry) {
         tx: spot.x,
         ty: spot.y,
       });
+      return cmds;
     }
   }
 
+  // ── Step 3: research or train (eco path only when dumping a full bank) ───
+  const spend = chooseSpend(w, owner, bank, strategy, capture, pressure);
+  if (spend) cmds.push(spend);
   return cmds;
 }
 
@@ -144,16 +165,22 @@ function ownerBase(w, owner) {
 }
 
 function countBuildings(w, owner) {
-  const inv = { village: 0, farm: 0, camp: 0, mine: 0 };
+  const inv = {
+    village: 0,
+    farm: 0,
+    camp: 0,
+    mine: 0,
+    barracks: 0,
+    tavern: 0,
+    lab: 0,
+    moonwell: 0,
+  };
   const buildings = w.buildings;
   if (!buildings) return inv;
   for (let b = 0; b < buildings.length; b++) {
     const bd = buildings[b];
     if (bd.owner !== owner) continue;
-    if (bd.type === 'village') inv.village++;
-    else if (bd.type === 'farm') inv.farm++;
-    else if (bd.type === 'camp') inv.camp++;
-    else if (bd.type === 'mine') inv.mine++;
+    if (bd.type in inv) inv[bd.type]++;
   }
   return inv;
 }
@@ -169,11 +196,52 @@ function collectVillagers(w, owner) {
   return { idle, total };
 }
 
+/**
+ * How full each bank is vs the unlocked cap. At 1.0 incoming yields are cut
+ * to 25%. Higher difficulty starts spending before they kiss the cap.
+ */
+export function bankPressure(w, owner, bank, difficulty) {
+  const d = difficulty | 0;
+  // Stay above opening stock (food 100 / wood 90 on a 120 cap) so expert
+  // doesn't dump-spend the starting bank.
+  const start = d >= AI_DIFFICULTY.EXPERT ? 0.90 : d >= AI_DIFFICULTY.HARD ? 0.95 : 1;
+  /** @type {string[]} */
+  const overflowing = [];
+  /** @type {string[]} */
+  const pressured = [];
+  const buildings = w.buildings;
+  for (let i = 0; i < RESOURCE_KINDS.length; i++) {
+    const k = RESOURCE_KINDS[i];
+    const cap = ownerResourceCap(buildings, owner, k);
+    if (cap <= 0) continue;
+    const amt = bank[k] | 0;
+    if (amt >= cap) overflowing.push(k);
+    if (amt >= cap * start) pressured.push(k);
+  }
+  return {
+    overflowing,
+    pressured,
+    dump: d >= AI_DIFFICULTY.NORMAL && pressured.length > 0,
+  };
+}
+
+function kindSet(list) {
+  const s = Object.create(null);
+  if (!list) return s;
+  for (let i = 0; i < list.length; i++) s[list[i]] = true;
+  return s;
+}
+
 /** Resource kinds sorted by biggest deficit vs target (most-needed first). */
-function demandOrder(bank) {
+function demandOrder(bank, pressure) {
   const kinds = ['wood', 'food', 'stone', 'mineral'];
+  const avoid = pressure?.dump ? kindSet(pressure.overflowing) : null;
   return kinds
-    .map((k) => ({ k, d: (STOCK_TARGET[k] | 0) - (bank[k] | 0) }))
+    .map((k) => {
+      let d = (STOCK_TARGET[k] | 0) - (bank[k] | 0);
+      if (avoid?.[k]) d = -0x3fffffff;
+      return { k, d };
+    })
     .sort((a, b) => b.d - a.d)
     .map((e) => e.k);
 }
@@ -286,11 +354,26 @@ function findSiloAttachSpot(field, aroundX, aroundY) {
   return null;
 }
 
+function ecoBaselineReady(inv) {
+  return inv.village >= 1 && inv.farm >= 1;
+}
+
 /** Priority ladder → which building to place this tick (or null). */
-function chooseBuild(bank, inv, villagerCount, order) {
+function chooseBuild(w, owner, bank, inv, villagerCount, order, strategy, capture, pressure) {
   const need = order[0];
+  const dump = !!pressure?.dump;
+  const full = kindSet(pressure?.overflowing);
   // 1) A village first — the population engine.
   if (inv.village === 0 && affordable(bank, getBuildingCost('village'))) return 'village';
+  // Eco path: a second village once the first one has grown the pop.
+  if (
+    strategy.path === AI_PATH.ECO
+    && inv.village < ECO_VILLAGE_CAP
+    && villagerCount >= ECO_VILLAGE_AT
+    && affordable(bank, getBuildingCost('village'))
+  ) {
+    return 'village';
+  }
   // 2) Farm when food is scarce or population outgrows food capacity.
   const farmTarget = Math.floor(villagerCount / FARM_PER_VILLAGERS) + 1;
   if ((bank.food < FOOD_LOW || inv.farm < farmTarget) &&
@@ -306,8 +389,77 @@ function chooseBuild(bank, inv, villagerCount, order) {
       affordable(bank, getBuildingCost('mine'))) {
     return 'mine';
   }
-  // 5) Surplus → another farm to push more villagers.
-  if (affordable(bank, getBuildingCost('farm')) && bank.wood > STOCK_TARGET.wood) return 'farm';
+  // 5) Path spend — only after the farm-ring partner has a village + a farm.
+  if (ecoBaselineReady(inv) && strategy.path !== AI_PATH.ECO) {
+    const next = choosePathBuilding(w, owner, bank, inv, strategy.path);
+    if (next) return next;
+  }
+  // Full bank, no silo pair left — another source so a silo can attach.
+  if (dump) {
+    const relief = chooseCapRelief(w, owner, inv, full, bank);
+    if (relief) return relief;
+  }
+  // 6) Surplus → another farm to push more villagers.
+  // Dump seats skip this so the bank burn (train / research) can run.
+  if (capture?.urgent && strategy.heat >= 3) return null;
+  if (
+    !dump
+    && affordable(bank, getBuildingCost('farm'))
+    && bank.wood > STOCK_TARGET.wood
+  ) {
+    return 'farm';
+  }
+  // Eco seats with no army sink: burn overflowing wood into the farm ring.
+  if (
+    dump
+    && full.wood
+    && strategy.path === AI_PATH.ECO
+    && affordable(bank, getBuildingCost('farm'))
+    && inv.farm < farmTarget + 2 + (strategy.difficulty | 0)
+  ) {
+    return 'farm';
+  }
+  return null;
+}
+
+function canUnlockKind(w, owner, kind) {
+  return ownerSlotCount(w.buildings, owner, kind) < MAX_RESOURCE_SLOTS;
+}
+
+function chooseCapRelief(w, owner, inv, full, bank) {
+  if (
+    full.wood
+    && inv.camp < CAMP_CAP
+    && canUnlockKind(w, owner, 'wood')
+    && affordable(bank, getBuildingCost('camp'))
+  ) {
+    return 'camp';
+  }
+  if (full.food && canUnlockKind(w, owner, 'food') && affordable(bank, getBuildingCost('farm'))) {
+    return 'farm';
+  }
+  if (
+    (full.stone || full.mineral)
+    && inv.mine < MINE_CAP
+    && canUnlockKind(w, owner, 'stone')
+    && affordable(bank, getBuildingCost('mine'))
+  ) {
+    return 'mine';
+  }
+  return null;
+}
+
+function choosePathBuilding(w, owner, bank, inv, path) {
+  const want = path === AI_PATH.TECH
+    ? ['lab', 'moonwell']
+    : ['barracks', 'tavern'];
+  for (let i = 0; i < want.length; i++) {
+    const type = want[i];
+    if ((inv[type] | 0) > 0) continue;
+    if (!ownerMeetsBuildingRequires(w.buildings, owner, type)) continue;
+    if (!affordable(bank, getBuildingCost(type))) continue;
+    return type;
+  }
   return null;
 }
 
@@ -332,7 +484,146 @@ function buildAnchor(field, type, base, px, py, villagers) {
       return { x: tileCenterX(tile % w), y: tileCenterY((tile / w) | 0) };
     }
   }
+  if (type === 'barracks' || type === 'tavern' || type === 'lab' || type === 'moonwell') {
+    return pathBuildAnchor(base, type);
+  }
   return { x: base.x, y: base.y };
+}
+
+/** Keep army / tech halls off the farm ring — forward or beside the agora. */
+function pathBuildAnchor(base, type) {
+  const bx = fx.toFloat(base.x);
+  const bz = fx.toFloat(base.y);
+  const len = Math.hypot(bx, bz) || 1;
+  const fX = -bx / len;
+  const fZ = -bz / len;
+  const rX = -fZ;
+  const rZ = fX;
+  if (type === 'lab' || type === 'moonwell') {
+    return { x: fx.fromFloat(bx + rX * TECH_SIDE), y: fx.fromFloat(bz + rZ * TECH_SIDE) };
+  }
+  return { x: fx.fromFloat(bx + fX * ARMY_FORWARD), y: fx.fromFloat(bz + fZ * ARMY_FORWARD) };
+}
+
+function chooseSpend(w, owner, bank, strategy, capture, pressure) {
+  const dump = !!pressure?.dump;
+  if (strategy.path === AI_PATH.ECO && !dump) return null;
+  if (!(capture?.urgent && strategy.heat >= 3)) {
+    const research = chooseResearch(w, owner, bank, strategy.path, dump);
+    if (research) return research;
+  }
+  if (strategy.path === AI_PATH.ARMY || dump || (capture?.urgent && strategy.heat >= 2)) {
+    return chooseTrain(w, owner, bank, strategy, capture, pressure);
+  }
+  return null;
+}
+
+const DUMP_TECH = [
+  'drayage',
+  'stewardship',
+  'artillery',
+  'armor',
+  'patronage',
+  'prospecting',
+  'scribes',
+];
+
+function chooseResearch(w, owner, bank, path, dump) {
+  const ids = dump
+    ? DUMP_TECH
+    : path === AI_PATH.TECH ? ['artillery', 'stewardship'] : ['drayage'];
+  const techId = pickTech(w, owner, ids);
+  if (!techId) return null;
+  if (ownerHasTech(w, owner, TECH_BY_ID[techId])) return null;
+  if (!canAffordBank(bank, getTechCost(techId))) return null;
+  const bi = finishedBuildingWithUpgrade(w, owner, techId);
+  if (bi < 0) return null;
+  return { type: CMD.RESEARCH, playerId: owner, buildingIndex: bi, techId };
+}
+
+function pickTech(w, owner, ids) {
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
+    if (!TECH_BY_ID[id]) continue;
+    if (ownerHasTech(w, owner, TECH_BY_ID[id])) continue;
+    if (finishedBuildingWithUpgrade(w, owner, id) < 0) continue;
+    return id;
+  }
+  return null;
+}
+
+function finishedBuildingWithUpgrade(w, owner, techId) {
+  const buildings = w.buildings;
+  if (!buildings) return -1;
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) !== owner || !buildingIsFinished(b)) continue;
+    if (!BUILDING_MENUS[b.type]?.upgrades?.includes(techId)) continue;
+    if (hasUpgradeTrack(b, techId)) continue;
+    return i;
+  }
+  return -1;
+}
+
+function hasUpgradeTrack(b, techId) {
+  const tracks = b.tracks;
+  if (!tracks) return false;
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    if (t.kind === 'upgrade' && t.id === techId && (t.count | 0) > 0) return true;
+  }
+  return false;
+}
+
+function chooseTrain(w, owner, bank, strategy, capture, pressure) {
+  const keys = ['warrior', 'archer'];
+  const bonus = capture?.urgent
+    ? Math.max((strategy.heat | 0) * 2, (capture.shown | 0) * (strategy.heat | 0))
+    : 0;
+  const overflowBonus = pressure?.dump
+    ? 2 + (strategy.difficulty | 0) * 3
+    : 0;
+  for (let k = 0; k < keys.length; k++) {
+    const unitKey = keys[k];
+    const cap = (TRAIN_CAP[unitKey] | 0) + bonus + overflowBonus;
+    if (livingAndQueued(w, owner, unitKey) >= cap) continue;
+    const unitType = unitKey === 'warrior' ? UNIT.WARRIOR : UNIT.ARCHER;
+    if (!canAffordBank(bank, getUnitCost(unitType))) continue;
+    const bi = finishedBuildingWithUnit(w, owner, unitKey);
+    if (bi < 0) continue;
+    return { type: CMD.QUEUE_TRAIN, playerId: owner, buildingIndex: bi, unitKey };
+  }
+  return null;
+}
+
+function finishedBuildingWithUnit(w, owner, unitKey) {
+  const buildings = w.buildings;
+  if (!buildings) return -1;
+  for (let i = 0; i < buildings.length; i++) {
+    const b = buildings[i];
+    if ((b.owner | 0) !== owner || !buildingIsFinished(b)) continue;
+    if (BUILDING_MENUS[b.type]?.units?.includes(unitKey)) return i;
+  }
+  return -1;
+}
+
+function livingAndQueued(w, owner, unitKey) {
+  const unitType = unitKey === 'warrior' ? UNIT.WARRIOR : UNIT.ARCHER;
+  let n = 0;
+  for (let i = 0; i < w.count; i++) {
+    if (w.alive[i] && w.owner[i] === owner && w.type[i] === unitType) n++;
+  }
+  const buildings = w.buildings;
+  if (!buildings) return n;
+  for (let b = 0; b < buildings.length; b++) {
+    const bd = buildings[b];
+    if ((bd.owner | 0) !== owner || !bd.tracks) continue;
+    for (let t = 0; t < bd.tracks.length; t++) {
+      const tr = bd.tracks[t];
+      if (tr.kind === 'unit' && tr.id === unitKey) n += tr.count | 0;
+    }
+  }
+  return n;
 }
 
 /** Deterministic outward search for a legal placement near (aroundX, aroundY). */

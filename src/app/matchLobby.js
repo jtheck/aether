@@ -21,6 +21,7 @@ import {
   setSeatReady,
   startBlockReason,
 } from '../lobby/roster.js';
+import { CHAT_MIN_INTERVAL_MS, createChatLog, makeChatMessage } from '../lobby/chat.js';
 import { getPlayerColor, getPlayerName, getUnitSkins } from './settings.js';
 import { localOwnedPacks, selectedSkins } from './dlcCatalog.js';
 import { aetherSteam } from './steam.js';
@@ -56,6 +57,7 @@ export function createMatchLobby({
   onStartMatch,
   onLeaveMatch,
   onChapter,
+  onChat,
 } = {}) {
   let mode = null;
   let roomId = null;
@@ -81,6 +83,8 @@ export function createMatchLobby({
   let lockstepEpoch = 0;
   /** True after a match table was loaded — Leave must restore the sandbox. */
   let hadMatch = false;
+  const chatLog = createChatLog();
+  let lastChatSendAt = 0;
 
   function emit() {
     onChange?.();
@@ -166,6 +170,22 @@ export function createMatchLobby({
   function sendType(msg) {
     if (!mode || !roomId) return;
     gameLobby?.announce?.(stamp(msg));
+  }
+
+  /** Chat over the persistent match-room socket — reaches all subscribers. */
+  function sendChat(text) {
+    if (phase === 'idle') return false;
+    const now = Date.now();
+    if (now - lastChatSendAt < CHAT_MIN_INTERVAL_MS) return false;
+    const me = profile();
+    const msg = makeChatMessage({ from: me.userId, name: me.name, color: me.color, text });
+    if (!msg) return false;
+    const ch = channel();
+    const p2p = getP2p?.();
+    if (!ch || !p2p?.sendLobbyMessage) return false;
+    if (!p2p.sendLobbyMessage(ch, msg)) return false;
+    lastChatSendAt = now;
+    return true;
   }
 
   function notePeerUser(peerId, userId) {
@@ -450,6 +470,7 @@ export function createMatchLobby({
     peerUser.clear();
     settings = defaultSettings('onevsone');
     hadMatch = false;
+    chatLog.clear();
     emit();
   }
 
@@ -622,6 +643,10 @@ export function createMatchLobby({
     if (phase === 'idle') return;
     const ch = channel();
     if (!ch || lobbyName !== ch) return;
+    if (data?.type === MSG.CHAT) {
+      if (chatLog.add(data)) onChat?.();
+      return;
+    }
     if (data?.type !== 'player_join' && data?.type !== 'player_rejoin') return;
     if (data.from && !sameUserId(data.from, localId())) dial(data.from);
   });
@@ -746,6 +771,8 @@ export function createMatchLobby({
     sendChapter(payload) {
       sendData({ type: MSG.CHAPTER, ...payload });
     },
+    sendChat,
+    getChatLog: () => chatLog.list(),
     setLockstepEpoch(n) {
       lockstepEpoch = n | 0;
     },

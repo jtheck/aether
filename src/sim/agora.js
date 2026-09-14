@@ -51,6 +51,29 @@ export function agoraOverlayActive(a) {
 }
 
 /**
+ * How far a capture has gone: 0 quiet, 0–1 lock bar, 1–2 tug bar.
+ * Match AI uses this as the “how loud is the pad” signal.
+ */
+export function agoraCaptureScore(a) {
+  if (!a || (a.captured | 0)) return 0;
+  if ((a.phase | 0) === AGORA_PHASE_TUG) {
+    return 1 + ((a.tug | 0) / AGORA_TUG_TICKS);
+  }
+  return (a.progress | 0) / AGORA_CAPTURE_TICKS;
+}
+
+/** Home pad — current owner or original founder. */
+export function agoraForOwner(agoras, owner) {
+  if (!agoras) return null;
+  const o = owner | 0;
+  for (let i = 0; i < agoras.length; i++) {
+    const a = agoras[i];
+    if ((a.owner | 0) === o || (a.founder | 0) === o) return a;
+  }
+  return null;
+}
+
+/**
  * Serialize for worker→main (render placement). Floats for groundYAt.
  * @param {ReturnType<typeof createAgora>[] | null | undefined} agoras
  */

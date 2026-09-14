@@ -69,6 +69,12 @@ import {
   clearSavedMatch,
 } from '../koth/matchId.js';
 import { generateLobbyName } from '../koth/lobbyName.js';
+import {
+  CHAT_MIN_INTERVAL_MS,
+  CHAT_TYPE,
+  createChatLog,
+  makeChatMessage,
+} from '../lobby/chat.js';
 import { isLiveMatchMember, isMatchLeavePresence, isSpectatorMember } from '../koth/presence.js';
 import {
   createEmptyRoster,
@@ -158,10 +164,13 @@ export function createKothShard(options = {}) {
   const peerConnectedListeners = new Set();
   const peerDisconnectedListeners = new Set();
   const matchLobbyConnectedListeners = new Set();
+  const chatListeners = new Set();
   let localUserId = null;
   let session = null;
   /** 1v1 / teams / adventure hold — don't wrap commands as KOTH lockstep. */
   let lobbyMatchHold = false;
+  const chatLog = createChatLog();
+  let lastChatSendAt = 0;
 
   let matchId = generateMatchId();
   let phase = SHARD_PHASE.SANDBOX;
@@ -714,6 +723,29 @@ export function createKothShard(options = {}) {
 
   function shardLobbyName(id = matchId) {
     return `${LOBBY}:${id}`;
+  }
+
+  /** Chat is meaningful once we're in a shared shard (not the solo sandbox). */
+  function isChatActive() {
+    return appState !== KOTH_APP_STATE.PRIVATE_SANDBOX;
+  }
+
+  /** Chat over the shard's persistent socket room — reaches players + spectators. */
+  function sendChat(text) {
+    if (!isChatActive()) return false;
+    const now = Date.now();
+    if (now - lastChatSendAt < CHAT_MIN_INTERVAL_MS) return false;
+    const msg = makeChatMessage({
+      from: localUserId,
+      name: getPlayerName(),
+      color: getPlayerColor(),
+      text,
+    });
+    if (!msg) return false;
+    if (!p2p?.sendLobbyMessage) return false;
+    if (!p2p.sendLobbyMessage(shardLobbyName(matchId), msg)) return false;
+    lastChatSendAt = now;
+    return true;
   }
 
   function announcerCount(id) {
@@ -1944,6 +1976,7 @@ export function createKothShard(options = {}) {
     lobbyPeers.clear();
     matchLobbySpectators.clear();
     matchMemberSeenAt.clear();
+    chatLog.clear();
     clearSavedMatch();
     matchId = generateMatchId();
     seed = 0x1234;
@@ -4059,6 +4092,12 @@ export function createKothShard(options = {}) {
     if (!data?.type) return;
     // Discovery lobby — track nothing, never RTC here.
     if (lobbyName === MATCHMAKING_LOBBY) return;
+    if (data.type === CHAT_TYPE) {
+      if (lobbyName === shardLobbyName(matchId) && chatLog.add(data)) {
+        emitListeners(chatListeners);
+      }
+      return;
+    }
     if (data.type === 'player_join' || data.type === 'player_rejoin') {
       if (userIdsMatch(data.from, localUserId)) {
         broadcastPresence();
@@ -4233,6 +4272,10 @@ export function createKothShard(options = {}) {
 
     getP2p: () => p2p,
     getUserId: () => localUserId,
+    sendChat,
+    getChatLog: () => chatLog.list(),
+    isChatActive,
+    subscribeChat: (fn) => addListener(chatListeners, fn),
     subscribeBroadcast: (fn) => addListener(broadcastListeners, fn),
     subscribeLobbyMessage: (fn) => addListener(lobbyMessageListeners, fn),
     subscribeDataMessage: (fn) => addListener(dataListeners, fn),

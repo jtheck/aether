@@ -426,6 +426,11 @@ export function createFogOfWar() {
   /** Radius last stamped from this tile (0 = not a source). */
   /** @type {Uint8Array | null} */
   let lastSourceR = null;
+  /**
+   * True when visible/sight are per-source counts (circle raster). Union EDT
+   * writes a 0/1 veil — incremental remove would punch holes in sitters.
+   */
+  let countedOccupancy = false;
   /** @type {Uint8Array | null} */
   let hasRad = null;
 
@@ -450,6 +455,7 @@ export function createFogOfWar() {
     dirtyN = 0;
     srcN = 0;
     lastSrcN = 0;
+    countedOccupancy = false;
     paintedOnce = false;
   }
 
@@ -651,9 +657,9 @@ export function createFogOfWar() {
   }
 
   function applyStamp(i, hard, d2, hardR2, fadeDen) {
-    if (sight) sight[i] = 1;
+    if (sight) sight[i] += 1;
     if (hard) {
-      if (visible) visible[i] = 1;
+      if (visible) visible[i] += 1;
       if (explored) explored[i] = 1;
     }
     if (!cover) return;
@@ -881,7 +887,7 @@ export function createFogOfWar() {
 
   /** Raster current `srcTiles[0..srcN)` — union EDT or per-circle. */
   function stampSourceGroup(mask) {
-    if (srcN <= 0) return;
+    if (srcN <= 0) return true;
     const m = measureSources();
     const bw = m.x1 - m.x0 + 1;
     const bh = m.z1 - m.z0 + 1;
@@ -892,9 +898,10 @@ export function createFogOfWar() {
         const tz = (ti / width) | 0;
         stampCircle(ti - tz * width, tz, tileStampR[ti], mask);
       }
-      return;
+      return true;
     }
     stampUnionEdt(m.x0, m.z0, bw, bh, m.radMin, m.radMax, mask);
+    return false;
   }
 
   function flushSourcesClustered(mask) {
@@ -915,6 +922,7 @@ export function createFogOfWar() {
       fogSrcSort[s] = s;
     }
     fogSrcSort.sort((a, b) => fogSrcKeys[a] - fogSrcKeys[b]);
+    let counted = true;
     let i = 0;
     while (i < n) {
       const key = fogSrcKeys[fogSrcSort[i]];
@@ -922,21 +930,24 @@ export function createFogOfWar() {
       while (j < n && fogSrcKeys[fogSrcSort[j]] === key) j++;
       srcN = 0;
       for (let k = i; k < j; k++) srcTiles[srcN++] = fogSrcCopy[fogSrcSort[k]];
-      stampSourceGroup(mask);
+      counted = stampSourceGroup(mask) && counted;
       i = j;
     }
+    return counted;
   }
 
   function flushSources(mask) {
-    if (srcN <= 0) return;
+    if (srcN <= 0) {
+      countedOccupancy = true;
+      return;
+    }
     const m = measureSources();
     const bw = m.x1 - m.x0 + 1;
     const bh = m.z1 - m.z0 + 1;
     const cluster = srcN >= UNION_SOURCE_MIN
       && bw * bh > width * height * FOG_CLUSTER_BBOX_FRAC
       && srcN >= FOG_EDT_CELL;
-    if (cluster) flushSourcesClustered(mask);
-    else stampSourceGroup(mask);
+    countedOccupancy = cluster ? flushSourcesClustered(mask) : stampSourceGroup(mask);
     srcN = 0;
   }
 
@@ -1025,7 +1036,11 @@ export function createFogOfWar() {
     const churn = adds + removes;
     if (churn === 0 && lastSrcN > 0) {
       // Same unique source tiles — overlay occupancy is unchanged.
-    } else if (lastSrcN === 0 || churn > Math.max(12, ((srcN + lastSrcN) * 0.35) | 0)) {
+    } else if (
+      !countedOccupancy
+      || lastSrcN === 0
+      || churn > Math.max(12, ((srcN + lastSrcN) * 0.35) | 0)
+    ) {
       rebuildVision(mask);
     } else {
       incrementalVision(mask);

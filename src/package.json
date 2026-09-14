@@ -17,6 +17,7 @@
     "test:economy": "node sim/economy.test.js",
     "test:aiEconomy": "node sim/aiEconomy.test.js",
     "test:ai": "node sim/ai.test.js",
+    "test:aiStrategy": "node sim/aiStrategy.test.js",
     "test:construction": "node sim/construction.test.js",
     "test:separation": "node sim/separation.test.js",
     "test:garden": "node sim/garden.test.js",

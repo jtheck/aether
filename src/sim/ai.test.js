@@ -3,6 +3,8 @@
 import assert from 'node:assert/strict';
 import {
   excludeHumanAiPlayers,
+  MATCH_AI_TEMPERAMENTS,
+  pickMatchAiTemperament,
   resolveSessionAiPlayers,
   stressShareVisionOwners,
 } from './ai.js';
@@ -79,9 +81,24 @@ function stressHackVisionSkipsTurtle() {
   );
 }
 
+function pickTemperamentIsStable() {
+  assert.equal(pickMatchAiTemperament(0), MATCH_AI_TEMPERAMENTS[0]);
+  assert.equal(pickMatchAiTemperament(1), MATCH_AI_TEMPERAMENTS[1]);
+  assert.equal(pickMatchAiTemperament(0), pickMatchAiTemperament(0));
+  const seen = new Set();
+  for (let i = 0; i < MATCH_AI_TEMPERAMENTS.length; i++) {
+    seen.add(pickMatchAiTemperament(i));
+  }
+  assert.equal(seen.size, MATCH_AI_TEMPERAMENTS.length);
+  for (const name of seen) {
+    assert.ok(MATCH_AI_TEMPERAMENTS.includes(name));
+  }
+}
+
 dropsHumanSlots();
 liveKothClearsLeftoverAi();
 soloKeepsExplicitAi();
 neverOverlapsHumans();
 stressHackVisionSkipsTurtle();
+pickTemperamentIsStable();
 console.log('ai.test.js: ok (human slots never get leftover AI)');

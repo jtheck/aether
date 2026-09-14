@@ -1,6 +1,8 @@
-// Basic AI — generates commands for non-player owners.
+// Match / stress AI — roster helpers plus army-stance commands.
 //
-// Called from the sim worker before step(); produces the same command objects as input.
+// Economy and spend paths live in aiEconomy.js. This file only issues army
+// orders (hold / defend yard / opt-in attack). Unit sim does the rest.
+// Same command objects as input.
 
 import * as fx from './fixed.js';
 import { CMD } from './commands.js';
@@ -8,30 +10,45 @@ import { getUnitDef } from './unitTypes.js';
 import { isHostile } from './teams.js';
 import { rngU32 } from './rng.js';
 import { ABILITY } from './abilities.js';
+import { agoraForOwner } from './agora.js';
 
-/** @typedef {{ interval: number, castChance: number, reissue: boolean, engageRangeF: number | null, castCap: number }} AiTemperament */
+import {
+  AI_STANCE,
+  ARMY_DECIDE_INTERVAL,
+  captureIntent,
+  replyCount,
+  resolveAiStrategy,
+} from './aiStrategy.js';
 
-/** @type {Record<string, AiTemperament>} */
-export const AI_TEMPERAMENTS = {
-  // Turtle — sits on its base and only counter-attacks when hostiles are
-  // basically on top of the army. "Defend as a last resort", never pushes out.
-  passive: { interval: 120, castChance: 6, reissue: false, engageRangeF: 44, castCap: 2 },
-  // Mostly idle until hostiles are nearby; infrequent push + rare casts.
-  cautious: { interval: 80, castChance: 12, reissue: false, engageRangeF: 90, castCap: 4 },
-  // Current baseline attack-move cadence.
-  steady: { interval: 40, castChance: 22, reissue: false, engageRangeF: null, castCap: 6 },
-  // Shorter interval; re-issues even if already attack-moving.
-  aggressive: { interval: 24, castChance: 35, reissue: true, engageRangeF: null, castCap: 7 },
-  // Always pushes; casts more eagerly.
-  reckless: { interval: 16, castChance: 50, reissue: true, engageRangeF: null, castCap: 8 },
-};
+export {
+  AI_DIFFICULTY,
+  AI_PATH,
+  AI_STANCE,
+  AI_STRATEGIES,
+  ARMY_DECIDE_INTERVAL,
+  captureIntent,
+  parseAiDifficulty,
+  replyCount,
+  shownHostiles,
+  resolveAiStrategy,
+} from './aiStrategy.js';
 
+/** 1vAI pool — strategy labels, not a-move cadences. */
+export const MATCH_AI_TEMPERAMENTS = ['passive', 'cautious', 'steady', 'aggressive', 'reckless'];
+
+/** Stress FFA still pushes (no eco). Match AI does not inherit this. */
 export const STRESS_AI_PROFILES = [
-  { owner: 1, temperament: 'cautious' },
-  { owner: 2, temperament: 'steady' },
-  { owner: 3, temperament: 'aggressive' },
-  { owner: 4, temperament: 'reckless' },
+  { owner: 1, temperament: 'cautious', economy: false, stance: AI_STANCE.ATTACK },
+  { owner: 2, temperament: 'steady', economy: false, stance: AI_STANCE.ATTACK },
+  { owner: 3, temperament: 'aggressive', economy: false, stance: AI_STANCE.ATTACK },
+  { owner: 4, temperament: 'reckless', economy: false, stance: AI_STANCE.ATTACK },
 ];
+
+/** Deterministic pick from a match seed (or any u32). */
+export function pickMatchAiTemperament(u32 = 0) {
+  const i = (u32 >>> 0) % MATCH_AI_TEMPERAMENTS.length;
+  return MATCH_AI_TEMPERAMENTS[i];
+}
 
 /** Fog overlay only — combat stays FFA. Skip the turtle so its base stays dark. */
 export function stressShareVisionOwners() {
@@ -83,111 +100,154 @@ export function resolveSessionAiPlayers(cfg = {}, current = []) {
   return excludeHumanAiPlayers(list, cfg.humanPlayers);
 }
 
-function resolveTemperament(name) {
-  return AI_TEMPERAMENTS[name] || AI_TEMPERAMENTS.steady;
-}
-
 /**
  * @param {object} world
- * @param {number | { owner: number, temperament?: string }} aiConfig
+ * @param {number | { owner: number, temperament?: string, stance?: string }} aiConfig
  * @param {number | { temperament?: string }} [opts] — legacy 3rd arg was playerOwner (ignored)
  * @returns {import('./commands.js').Command[]}
  */
 export function generateAiCommands(world, aiConfig, opts = {}) {
-  let aiOwner;
-  let temperamentName = 'steady';
-  if (typeof aiConfig === 'number') {
-    aiOwner = aiConfig;
-    if (opts && typeof opts === 'object' && opts.temperament) {
-      temperamentName = opts.temperament;
-    }
-  } else if (aiConfig && typeof aiConfig === 'object') {
-    aiOwner = aiConfig.owner;
-    temperamentName = aiConfig.temperament || 'steady';
-  } else {
-    return [];
+  if (aiConfig == null) return [];
+  let entry = aiConfig;
+  if (typeof aiConfig === 'number' && opts && typeof opts === 'object' && opts.temperament) {
+    entry = { owner: aiConfig, temperament: opts.temperament };
   }
+  const strategy = resolveAiStrategy(entry);
+  const aiOwner = strategy.owner;
+  if (aiOwner < 0) return [];
+  const capture = captureIntent(world, strategy);
+  if (strategy.stance === AI_STANCE.HOLD && !capture.guard) return [];
 
-  const temper = resolveTemperament(temperamentName);
-  const interval = temper.interval;
+  const interval = capture.urgent ? strategy.reactInterval : ARMY_DECIDE_INTERVAL;
   const phase = (aiOwner * 7) % interval;
   if (world.tick % interval !== phase) return [];
 
-  let ex = 0;
-  let ey = 0;
-  let ec = 0;
-  for (let j = 0; j < world.count; j++) {
-    if (!world.alive[j] || !isHostile(aiOwner, world.owner[j])) continue;
-    ex += world.px[j];
-    ey += world.py[j];
-    ec++;
-  }
-  if (ec === 0) return [];
+  const army = militaryCentroid(world, aiOwner);
+  if (!army) return [];
 
-  const cx = fx.div(ex, fx.fromInt(ec));
-  const cy = fx.div(ey, fx.fromInt(ec));
+  const threat = pickArmyAim(world, aiOwner, strategy, army, capture);
+  if (!threat) return [];
 
-  // Army centroid for proximity / formation offsets.
-  let sx = 0;
-  let sy = 0;
-  let sc = 0;
-  for (let i = 0; i < world.count; i++) {
-    if (!world.alive[i] || world.owner[i] !== aiOwner) continue;
-    const def = getUnitDef(world.type[i]);
-    if (def.category !== 'military') continue;
-    sx += world.px[i];
-    sy += world.py[i];
-    sc++;
-  }
-  if (sc === 0) return [];
-
-  const scx = fx.div(sx, fx.fromInt(sc));
-  const scy = fx.div(sy, fx.fromInt(sc));
-
-  if (temper.engageRangeF != null) {
-    const rangeF = fx.fromFloat(temper.engageRangeF);
-    const range2 = fx.mul(rangeF, rangeF);
-    // Approximate: distance from army centroid to enemy centroid.
-    const adx = scx - cx;
-    const ady = scy - cy;
-    const aDist2 = fx.mul(adx, adx) + fx.mul(ady, ady);
-    if (aDist2 > range2) {
-      // Still allow occasional casts if somehow in range unit-wise — skip move.
-      return collectCasts(world, aiOwner, temper);
-    }
-  }
-
-  const ids = [];
-  for (let i = 0; i < world.count; i++) {
-    if (!world.alive[i] || world.owner[i] !== aiOwner) continue;
-    const def = getUnitDef(world.type[i]);
-    if (def.category !== 'military') continue;
-    if (!temper.reissue) {
-      if (world.order[i] === world.ORDER.ATTACK || world.order[i] === world.ORDER.ATTACK_MOVE) {
-        continue;
-      }
-    }
-    ids.push(i);
-  }
+  const want = strategy.stance === AI_STANCE.ATTACK
+    ? 0x7fffffff
+    : replyCount(Math.max(capture.shown, 1), 0x7fffffff, strategy.heat);
+  const ids = pickReplyIds(world, aiOwner, threat, want, capture.reissue);
+  const aim = militaryCentroidOf(world, ids) ?? army;
 
   /** @type {import('./commands.js').Command[]} */
   const cmds = [];
-
   if (ids.length > 0) {
     const n = ids.length;
     const tx = new Array(n);
     const ty = new Array(n);
     for (let k = 0; k < n; k++) {
       const i = ids[k];
-      tx[k] = cx + (world.px[i] - scx);
-      ty[k] = cy + (world.py[i] - scy);
+      tx[k] = threat.x + (world.px[i] - aim.x);
+      ty[k] = threat.y + (world.py[i] - aim.y);
     }
     cmds.push({ type: CMD.ATTACK_MOVE, entities: ids, tx, ty });
   }
 
-  const casts = collectCasts(world, aiOwner, temper);
+  const casts = collectCasts(world, aiOwner, strategy);
   for (let c = 0; c < casts.length; c++) cmds.push(casts[c]);
   return cmds;
+}
+
+function homePoint(world, owner) {
+  const a = agoraForOwner(world.agoras, owner);
+  return a ? { x: a.x, y: a.z } : null;
+}
+
+function pickArmyAim(world, aiOwner, strategy, army, capture) {
+  if (capture.guard && capture.home) {
+    return hostileCentroid(world, aiOwner, capture.home, 22)
+      ?? { x: capture.home.x, y: capture.home.z };
+  }
+  if (capture.contest) {
+    return hostileCentroid(world, aiOwner, capture.contest, 22)
+      ?? { x: capture.contest.x, y: capture.contest.z };
+  }
+  if (strategy.stance === AI_STANCE.ATTACK) {
+    return hostileCentroid(world, aiOwner, null, 0);
+  }
+  if (strategy.stance === AI_STANCE.HOLD) return null;
+  return hostileCentroid(world, aiOwner, homePoint(world, aiOwner) ?? army, strategy.defendRangeF);
+}
+
+function pickReplyIds(world, owner, aim, want, reissue) {
+  const pool = [];
+  for (let i = 0; i < world.count; i++) {
+    if (!world.alive[i] || world.owner[i] !== owner) continue;
+    if (getUnitDef(world.type[i]).category !== 'military') continue;
+    if (
+      !reissue
+      && (world.order[i] === world.ORDER.ATTACK || world.order[i] === world.ORDER.ATTACK_MOVE)
+    ) {
+      continue;
+    }
+    pool.push(i);
+  }
+  if (pool.length <= want) return pool;
+  pool.sort((a, b) => {
+    const da = fx.dist2(world.px[a], world.py[a], aim.x, aim.y);
+    const db = fx.dist2(world.px[b], world.py[b], aim.x, aim.y);
+    return da !== db ? da - db : a - b;
+  });
+  return pool.slice(0, want);
+}
+
+function militaryCentroidOf(world, ids) {
+  if (!ids.length) return null;
+  let sx = 0;
+  let sy = 0;
+  for (let k = 0; k < ids.length; k++) {
+    const i = ids[k];
+    sx += world.px[i];
+    sy += world.py[i];
+  }
+  return { x: fx.div(sx, fx.fromInt(ids.length)), y: fx.div(sy, fx.fromInt(ids.length)) };
+}
+
+function militaryCentroid(world, owner) {
+  let sx = 0;
+  let sy = 0;
+  let sc = 0;
+  for (let i = 0; i < world.count; i++) {
+    if (!world.alive[i] || world.owner[i] !== owner) continue;
+    const def = getUnitDef(world.type[i]);
+    if (def.category !== 'military') continue;
+    sx += world.px[i];
+    sy += world.py[i];
+    sc++;
+  }
+  if (sc === 0) return null;
+  return { x: fx.div(sx, fx.fromInt(sc)), y: fx.div(sy, fx.fromInt(sc)) };
+}
+
+/**
+ * @param {object} world
+ * @param {number} aiOwner
+ * @param {{ x: number, y: number } | null} origin
+ * @param {number} rangeF
+ */
+function hostileCentroid(world, aiOwner, origin, rangeF) {
+  const range2 = rangeF > 0 ? fx.mul(fx.fromFloat(rangeF), fx.fromFloat(rangeF)) : 0;
+  let ex = 0;
+  let ey = 0;
+  let ec = 0;
+  for (let j = 0; j < world.count; j++) {
+    if (!world.alive[j] || !isHostile(aiOwner, world.owner[j])) continue;
+    if (origin && rangeF > 0) {
+      const dx = world.px[j] - origin.x;
+      const dy = world.py[j] - origin.y;
+      if (fx.mul(dx, dx) + fx.mul(dy, dy) > range2) continue;
+    }
+    ex += world.px[j];
+    ey += world.py[j];
+    ec++;
+  }
+  if (ec === 0) return null;
+  return { x: fx.div(ex, fx.fromInt(ec)), y: fx.div(ey, fx.fromInt(ec)) };
 }
 
 /**
@@ -211,7 +271,7 @@ function castAimPoint(world, caster, aiOwner) {
 /**
  * @param {object} world
  * @param {number} aiOwner
- * @param {AiTemperament} temper
+ * @param {{ castChance: number, castCap: number }} temper
  * @returns {import('./commands.js').Command[]}
  */
 function collectCasts(world, aiOwner, temper) {

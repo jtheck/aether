@@ -10,9 +10,14 @@ import { step } from './step.js';
 import { createField } from './field.js';
 import { growTreeAt } from './trees.js';
 import { SCENERY, rockYield } from './scenery.js';
-import { getResource, grantStartingResources } from './resources.js';
+import { addResource, getResource, grantStartingResources } from './resources.js';
 import { checksum } from './checksum.js';
-import { generateEconomyCommands } from './aiEconomy.js';
+import { generateEconomyCommands, bankPressure } from './aiEconomy.js';
+import { createBuilding } from './buildings.js';
+import { CMD } from './commands.js';
+import { ownerResourceCap } from './storage.js';
+import { AI_DIFFICULTY } from './aiStrategy.js';
+import { ensureTech, TECH } from './tech.js';
 
 const AI = 1;
 
@@ -99,7 +104,166 @@ function deterministic() {
   assert.equal(checksum(a.w, a.field), checksum(b.w, b.field), 'two runs match exactly');
 }
 
+function armyPathPlacesBarracks() {
+  const { w, field } = makeScenario(201);
+  w.buildings.push(createBuilding({ owner: AI, type: 'village', x: -12, z: 0 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'farm', x: 12, z: 0 }));
+  w.buildings[0].built = 1;
+  w.buildings[1].built = 1;
+  addResource(w, AI, 'wood', 200);
+  addResource(w, AI, 'stone', 80);
+  const entry = { owner: AI, temperament: 'steady' };
+  for (let t = 0; t < 90; t++) {
+    w.tick = t;
+    const cmds = generateEconomyCommands(w, field, entry);
+    step(w, field, cmds);
+    if (w.buildings.some((b) => b.type === 'barracks')) return;
+  }
+  assert.fail('army-path AI should place a barracks after village + farm');
+}
+
+function captureRampsTraining() {
+  const { w, field } = makeScenario(77);
+  w.agoraOccupyEndsMatch = 1;
+  w.agoras[0].progress = 80;
+  w.agoras[0].founder = AI;
+  w.buildings.push(createBuilding({ owner: AI, type: 'barracks', x: 16, z: 0 }));
+  addResource(w, AI, 'food', 80);
+  addResource(w, AI, 'wood', 80);
+  spawn(w, { x: fx.fromFloat(0), y: fx.fromFloat(0), type: UNIT.WARRIOR, owner: 0 });
+  const entry = { owner: AI, temperament: 'steady' };
+  for (let t = 0; t < 90; t++) {
+    w.tick = t;
+    const cmds = generateEconomyCommands(w, field, entry);
+    if (cmds.some((c) => c.type === CMD.QUEUE_TRAIN && c.unitKey === 'warrior')) return;
+  }
+  assert.fail('steady should train when the home pad is ringing');
+}
+
+function firstEcoCmds(w, field, entry) {
+  for (let t = 0; t < 40; t++) {
+    w.tick = t;
+    const cmds = generateEconomyCommands(w, field, entry);
+    if (cmds.length) return cmds;
+  }
+  return [];
+}
+
+function fillToCap(w, kind) {
+  const cap = ownerResourceCap(w.buildings, AI, kind);
+  const have = getResource(w, AI, kind);
+  if (have < cap) addResource(w, AI, kind, cap - have);
+}
+
+function startingBankIsNotADump() {
+  const { w } = makeScenario(1);
+  const bank = {
+    wood: getResource(w, AI, 'wood'),
+    food: getResource(w, AI, 'food'),
+    stone: getResource(w, AI, 'stone'),
+    mineral: getResource(w, AI, 'mineral'),
+  };
+  assert.equal(
+    bankPressure(w, AI, bank, AI_DIFFICULTY.EXPERT).dump,
+    false,
+    'opening stock is not the 25% hit',
+  );
+}
+
+function overflowSpendsInsteadOfLeaking() {
+  const { w, field } = makeScenario(55);
+  w.buildings.push(createBuilding({ owner: AI, type: 'village', x: -12, z: 0 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'farm', x: 12, z: 0 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'silo', x: 20, z: 0 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'farm', x: 40, z: 0 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'silo', x: 48, z: 0 }));
+  for (let i = 0; i < 3; i++) {
+    const x = -40 - i * 20;
+    w.buildings.push(createBuilding({ owner: AI, type: 'camp', x, z: 20 }));
+    if (i < 2) {
+      w.buildings.push(createBuilding({ owner: AI, type: 'silo', x: x + 8, z: 20 }));
+    }
+  }
+  w.buildings.push(createBuilding({ owner: AI, type: 'mine', x: -8, z: 24 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'mine', x: 8, z: 24 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'barracks', x: 16, z: 16 }));
+  w.buildings.push(createBuilding({ owner: AI, type: 'tavern', x: -16, z: 16 }));
+  ensureTech(w);
+  w.tech[AI] |= TECH.DRAYAGE;
+  for (let i = 0; i < 6; i++) {
+    spawn(w, { x: fx.fromFloat(-20 - i), y: 0, type: UNIT.WARRIOR, owner: AI });
+  }
+  fillToCap(w, 'wood');
+  fillToCap(w, 'food');
+  const bank = {
+    wood: getResource(w, AI, 'wood'),
+    food: getResource(w, AI, 'food'),
+    stone: getResource(w, AI, 'stone'),
+    mineral: getResource(w, AI, 'mineral'),
+  };
+  assert.equal(bankPressure(w, AI, bank, AI_DIFFICULTY.EASY).dump, false);
+  assert.equal(bankPressure(w, AI, bank, AI_DIFFICULTY.EXPERT).dump, true);
+
+  const easy = firstEcoCmds(w, field, {
+    owner: AI,
+    temperament: 'steady',
+    difficulty: AI_DIFFICULTY.EASY,
+  });
+  assert.equal(
+    easy.some((c) => c.type === CMD.QUEUE_TRAIN),
+    false,
+    'easy sits on a full bank and takes the 25% hit',
+  );
+
+  const expert = firstEcoCmds(w, field, {
+    owner: AI,
+    temperament: 'steady',
+    difficulty: AI_DIFFICULTY.EXPERT,
+  });
+  assert.ok(
+    expert.some((c) => c.type === CMD.QUEUE_TRAIN || c.type === CMD.RESEARCH),
+    'expert burns a full bank instead of overflowing',
+  );
+}
+
+function overflowReroutesGather() {
+  const { w, field } = makeScenario(56);
+  fillToCap(w, 'wood');
+  addResource(w, AI, 'food', 80);
+  addResource(w, AI, 'stone', 40);
+  const cmds = firstEcoCmds(w, field, {
+    owner: AI,
+    temperament: 'steady',
+    difficulty: AI_DIFFICULTY.EXPERT,
+  });
+  const gathers = cmds.filter((c) => c.type === CMD.GATHER);
+  assert.ok(gathers.length > 0, 'expert still sends idle villagers');
+  for (const g of gathers) {
+    const tile = g.tile | 0;
+    assert.equal(
+      (field.treeStock?.[tile] | 0) > 0,
+      false,
+      'expert does not gather into a full wood bank',
+    );
+  }
+}
+
+function stressCanMuteEconomy() {
+  const { w, field } = makeScenario(9);
+  const entry = { owner: AI, temperament: 'steady', economy: false };
+  for (let t = 0; t < 60; t++) {
+    w.tick = t;
+    assert.deepEqual(generateEconomyCommands(w, field, entry), []);
+  }
+}
+
 macrosAnEconomy();
 staysPassive();
 deterministic();
-console.log('aiEconomy.test.js: ok (macro + passive + deterministic)');
+armyPathPlacesBarracks();
+captureRampsTraining();
+startingBankIsNotADump();
+overflowSpendsInsteadOfLeaking();
+overflowReroutesGather();
+stressCanMuteEconomy();
+console.log('aiEconomy.test.js: ok (macro + passive + path + overflow + deterministic)');

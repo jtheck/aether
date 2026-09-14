@@ -351,6 +351,65 @@ describe('fogOfWar vision union', () => {
   });
 });
 
+describe('fogOfWar occupancy after a move', () => {
+  it('keeps a sitting unit\'s hole when a neighbor walks away', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    fog.stamp({
+      world: fakeWorld([
+        { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+        { owner: 0, type: UNIT.VILLAGER, x: 4, z: 0 },
+      ]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    fog.stamp({
+      world: fakeWorld([
+        { owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 },
+        { owner: 0, type: UNIT.VILLAGER, x: 80, z: 80 },
+      ]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(0, 0), true);
+    assert.equal(fog.hidesHostile(1, 0, 0), false);
+  });
+
+  it('keeps a building hole after a unit walks off it', () => {
+    const field = fakeField(40, 40);
+    const fog = createFogOfWar();
+    fog.reset(field);
+    // Same-tile sources collapse to one radius; keep them on different tiles
+    // so incremental remove can punch the overlap.
+    fog.stamp({
+      world: fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 0, z: 0 }]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [{ owner: 0, type: 'factory', x: 16, z: 0 }],
+      agoras: [],
+    });
+    fog.stamp({
+      world: fakeWorld([{ owner: 0, type: UNIT.VILLAGER, x: 80, z: 80 }]),
+      field,
+      localPlayerId: 0,
+      enabled: true,
+      buildings: [{ owner: 0, type: 'factory', x: 16, z: 0 }],
+      agoras: [],
+    });
+    assert.equal(fog.isWorldVisible(16, 0), true);
+    assert.equal(fog.isWorldVisible(0, 0), true);
+  });
+});
+
 describe('fogOfWar stacked stamps', () => {
   it('keeps the larger radius when two allies share a tile', () => {
     const field = fakeField(40, 40);

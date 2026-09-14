@@ -8,6 +8,7 @@ import { CMD } from '../sim/commands.js';
 function fakeP2p(userId = 'host') {
   const broadcasts = [];
   const sent = [];
+  const lobbyMessages = [];
   const lobbies = new Set();
   return {
     getUserId: () => userId,
@@ -19,8 +20,14 @@ function fakeP2p(userId = 'host') {
     requestMatch() {},
     announcePresence() {},
     sendData(msg, peerId) { sent.push({ msg, peerId }); },
+    sendLobbyMessage(lobbyName, payload) {
+      if (!lobbies.has(lobbyName)) return false;
+      lobbyMessages.push({ lobbyName, payload });
+      return true;
+    },
     broadcasts,
     sent,
+    lobbyMessages,
     lobbies,
   };
 }
@@ -400,6 +407,61 @@ describe('match lobby', () => {
     const join = p2p.sent.slice(before).find((row) => row.msg.type === MSG.JOIN);
     assert.equal(join?.msg.ready, false);
     guest.leaveRoom();
+  });
+
+  it('sends chat on the match room and logs inbound messages, deduping by id', () => {
+    const p2p = fakeP2p('host');
+    let lobbyFn = null;
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+      subscribeLobbyMessage: (fn) => { lobbyFn = fn; return () => {}; },
+    });
+    room.createRoom('onevsone');
+    const ch = [...p2p.lobbies][0];
+
+    assert.equal(room.sendChat('  hello   world  '), true);
+    const outbound = p2p.lobbyMessages.find((m) => m.payload.type === MSG.CHAT);
+    assert.equal(outbound.lobbyName, ch);
+    assert.equal(outbound.payload.text, 'hello world');
+
+    lobbyFn({ type: MSG.CHAT, id: 'guest:1:aa', from: 'guest', name: 'Guest', text: 'hi there', ts: 1 }, ch);
+    lobbyFn({ type: MSG.CHAT, id: 'guest:1:aa', from: 'guest', name: 'Guest', text: 'hi there', ts: 1 }, ch);
+    const fromGuest = room.getChatLog().filter((m) => m.from === 'guest');
+    assert.equal(fromGuest.length, 1);
+    assert.equal(fromGuest[0].text, 'hi there');
+
+    // Messages on a different room are ignored.
+    lobbyFn({ type: MSG.CHAT, id: 'x:2:bb', from: 'other', text: 'nope', ts: 2 }, 'some-other-lobby');
+    assert.equal(room.getChatLog().some((m) => m.from === 'other'), false);
+    room.leaveRoom();
+  });
+
+  it('rate-limits chat and drops empty messages', () => {
+    const p2p = fakeP2p('host');
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+    });
+    room.createRoom('onevsone');
+    assert.equal(room.sendChat('first'), true);
+    assert.equal(room.sendChat('second too soon'), false);
+    assert.equal(room.sendChat('   '), false);
+    assert.equal(p2p.lobbyMessages.filter((m) => m.payload.type === MSG.CHAT).length, 1);
+    room.leaveRoom();
+  });
+
+  it('does not send chat outside a room', () => {
+    const p2p = fakeP2p('host');
+    const room = createMatchLobby({
+      getP2p: () => p2p,
+      getUserId: () => 'host',
+      gameLobby: createGameLobby({ getP2p: () => p2p }),
+    });
+    assert.equal(room.sendChat('hello'), false);
+    assert.equal(p2p.lobbyMessages.length, 0);
   });
 
   it('guest leaves the frozen board if the host closes the rematch lobby', async () => {

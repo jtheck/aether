@@ -20,7 +20,13 @@ import {
   STRESS_AI_OWNERS,
   STRESS_MENU_PER_SIDE,
 } from '../sim/worldSetup.js';
-import { resolveSessionAiPlayers, STRESS_AI_PROFILES, stressShareVisionOwners } from '../sim/ai.js';
+import {
+  parseAiDifficulty,
+  pickMatchAiTemperament,
+  resolveSessionAiPlayers,
+  STRESS_AI_PROFILES,
+  stressShareVisionOwners,
+} from '../sim/ai.js';
 import { CMD } from '../sim/commands.js';
 import { decodeGarden, GARDEN_SESSION_KEY } from '../sim/garden.js';
 import { TESTER_GARDEN_URL } from '../sim/testerGarden.js';
@@ -106,6 +112,7 @@ import { createKothShard, kothModeFromSearch } from './kothShard.js';
 import { setupKothLobby } from './kothLobby.js';
 import { createGameLobby } from './gameLobby.js';
 import { createMatchLobby } from './matchLobby.js';
+import { setupChatHud } from './chatHud.js';
 import { setupLobbyUi } from './lobbyUi.js';
 import {
   buildReplayFile,
@@ -436,6 +443,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
   const skirmish = bootCfg.mode === 'skirmish';
   let kothLobbyUi = { refresh() {} };
   let lobbyUi = { refresh() {} };
+  let chatHud = { refresh() {} };
   // GPU capacity is sized like a full KOTH match so the shard can still stomp us
   // into a live match. The skirmish backdrop otherwise boots like staging.
   const useNet = bootCfg.mode === 'koth' || bootCfg.mode === 'staging' || bootCfg.mode === 'sandbox' || skirmish;
@@ -1177,6 +1185,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
     paintStatusSide();
     kothLobbyUi.refresh();
     lobbyUi.refresh();
+    chatHud.refresh();
     paintResources();
   }
 
@@ -2508,6 +2517,7 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       subscribePeerDisconnected: (fn) => kothShard.subscribePeerDisconnected(fn),
       subscribeMatchLobbyConnected: (fn) => kothShard.subscribeMatchLobbyConnected(fn),
       onChange: () => lobbyUi.refresh(),
+      onChat: () => chatHud.refresh(),
       onStartMatch: (snap) => startLobbyMatch(ctxRef.current, snap, kothShard, matchLobby, sideMenu),
       onChapter: (msg) => ctxRef.current?.onChapterVote?.(msg),
       onLeaveMatch: () => {
@@ -2535,6 +2545,28 @@ async function bootGame(canvas, bootCfg, { stress, animStress = 0, armyPerSide =
       getUserId: () => kothShard.getUserId(),
       onCloseMenu: () => sideMenu.close(),
     });
+    chatHud = setupChatHud({
+      getUserId: () => kothShard.getUserId(),
+      // Prefer a custom 1v1/teams/adventure room; otherwise the KOTH shard.
+      resolveChat: () => {
+        if (matchLobby.isActive()) {
+          return {
+            active: true,
+            send: (text) => matchLobby.sendChat(text),
+            log: () => matchLobby.getChatLog(),
+          };
+        }
+        if (kothShard.isChatActive?.()) {
+          return {
+            active: true,
+            send: (text) => kothShard.sendChat(text),
+            log: () => kothShard.getChatLog(),
+          };
+        }
+        return null;
+      },
+    });
+    kothShard.subscribeChat(() => chatHud.refresh());
   }
 
   replayCtl = createReplayController({
@@ -3596,6 +3628,7 @@ async function applyLiveConfig(ctx, cfg, kothShard) {
         ?? Boolean(cfg.garden?.story || cfg.garden?.obj || (cfg.garden?.u && cfg.garden.u.length)),
       agoraOccupyEndsMatch: cfg.agoraOccupyEndsMatch
         ?? (cfg.mode === 'adventure' || !!(cfg.garden?.story || cfg.garden?.obj) ? 0 : undefined),
+      homeAgoras: cfg.homeAgoras === true,
       aiPlayers,
       humanPlayers,
       mapW: cfg.mapW ?? (cfg.mode === 'skirmish' ? SKIRMISH_MAP_W : undefined),
@@ -3680,41 +3713,57 @@ function wantsMatchStartCue(cfg) {
   return cfg.mode === 'koth' || isLobbyPlayMode(cfg.mode);
 }
 
+const SOLO_AI_DIFFICULTY_LABEL = ['Easy', 'Casual', 'Normal', 'Hard', 'Expert'];
+
+function soloAiStatusLabel(temperament, difficulty) {
+  const t = temperament.charAt(0).toUpperCase() + temperament.slice(1);
+  if (difficulty == null) return `1v1 vs AI · ${t}`;
+  const d = SOLO_AI_DIFFICULTY_LABEL[difficulty | 0] ?? String(difficulty);
+  return `1v1 vs AI · ${t} · ${d}`;
+}
+
 /**
- * Offline 1v1 vs AI — same two-army KOTH spawn as a real match, no P2P.
+ * Offline 1v1 vs AI — two home agoras, the usual army camped around them.
  * Exercises the hardened match teardown/rebuild path from the menu.
  * @param {object | null} ctx
- * @param {{ temperament?: string, fog?: boolean, sharedVision?: boolean, shareVisionWith?: number[], statusLabel?: string, garden?: object, mode?: string, armyPerSide?: number }} [opts]
+ * @param {{ temperament?: string, difficulty?: number | string, fog?: boolean, sharedVision?: boolean, shareVisionWith?: number[], statusLabel?: string, garden?: object, mode?: string, armyPerSide?: number }} [opts]
  */
 async function startSoloAiMatch(ctx, opts = {}) {
   if (!ctx?.session || !ctx.renderer) return;
   if (ctx._soloStarting) return;
   const {
-    temperament = 'steady',
     fog = true,
     sharedVision = false,
     shareVisionWith,
-    statusLabel = '1v1 vs AI',
     garden = null,
     mode = 'koth',
   } = opts;
+  const seed = garden?.s ?? (Math.random() * 0xffffffff) >>> 0;
+  const temperament = opts.temperament ?? pickMatchAiTemperament(seed);
+  const difficulty = opts.difficulty != null ? parseAiDifficulty(opts.difficulty) : undefined;
+  const statusLabel = opts.statusLabel
+    ?? soloAiStatusLabel(temperament, difficulty);
   ctx._soloStarting = true;
   ctx.localSoloHold = true;
   try {
     const armyPerSide = garden ? 0 : (opts.armyPerSide ?? ctx.session.state?.armyPerSide ?? 0);
+    const aiEntry = { owner: AI_OWNER, temperament };
+    if (difficulty != null) aiEntry.difficulty = difficulty;
     await applyLiveConfig(ctx, {
       mode,
       localSolo: true,
-      seed: garden?.s ?? (Math.random() * 0xffffffff) >>> 0,
+      seed,
       localPlayerId: PLAYER,
       humanPlayers: [PLAYER],
       activeSlots: [PLAYER, AI_OWNER],
-      aiPlayers: [{ owner: AI_OWNER, temperament }],
+      aiPlayers: [aiEntry],
       role: 'player',
       reset: true,
       inputEnabled: true,
       armyPerSide,
       garden,
+      homeAgoras: !garden && mode === 'koth',
+      agoraOccupyEndsMatch: garden || mode !== 'koth' ? undefined : 1,
       matchId: `solo-${Date.now().toString(36)}`,
       fog,
       sharedVision,
